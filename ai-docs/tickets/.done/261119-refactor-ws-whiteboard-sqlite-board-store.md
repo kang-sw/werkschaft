@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: a5a67f154108c7a6
 sage-review-completeness-reviewed: a5a67f154108c7a6
+completed: 2026-11-22
 ---
 
 # Whiteboard 2PC folder store -> one SQLite database per board
@@ -972,3 +973,8 @@ passed in 48.5 s. The dashboard suite reported the same five failures
 as `develop` at `fa3c2a039` (`TestBoardHoldPillBrowser`,
 `TestBoardStateFilterBrowser`, `TestBoardTopicUnitsBrowser`,
 `TestWhiteboardEffectsBrowser`, and `TestBoardHistoryHooksSurroundSSESwap`).
+
+
+## Resolution (2026-11-22)
+
+All three phases landed; Phase 3 measured result in b83c9b543 (steady update 63.651 ms -> 1.252 ms, 103 -> 19 file operations).
