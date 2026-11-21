@@ -998,6 +998,64 @@ func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
 	}
 }
 
+func TestCompactionWorkerAdvisoryPreservesHeldResult(t *testing.T) {
+	h, got := agentHarness(t, func(o *Options) {
+		reg := o.Backends[BackendClaude]
+		reg.NativeCompaction = &CompactionProtocol{WorkerCommand: true, Lifecycle: true}
+		o.Backends[BackendClaude] = reg
+	})
+	parent, _ := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "parent work", Tier: "large", Authority: "workdir-write"})
+	worker, proc := h.agentRunning(h.holderOf(parent), AgentSpawnRequest{Prompt: "worker task", Tier: "medium", Authority: "workdir-write"})
+	child, _ := h.agentRunning(h.holderOf(worker), AgentSpawnRequest{Prompt: "child task", Tier: "small", Authority: "workdir-write"})
+	c := h.runner.conv(worker)
+	c.do(func() { c.handle(compactionUsage(55000)) })
+	proc.reply("original worker result")
+	if turn := proc.nextSent(t); !strings.HasPrefix(turn, "Context usage is 55000 tokens") {
+		t.Fatalf("worker advisory turn = %q", turn)
+	}
+
+	// Closing the child releases the hold without generating a report turn.
+	// A parent's wait must still see a running turn until the advisory ends.
+	if _, err := h.runner.CloseConversation(child); err != nil {
+		t.Fatal(err)
+	}
+	if rec := h.record(worker); rec.HeldTurn == nil || rec.HeldTurn.Message != "original worker result" || rec.TurnOpen || rec.LastTurn != nil {
+		t.Fatalf("advisory changed the held worker result: held=%+v open=%v last=%+v", rec.HeldTurn, rec.TurnOpen, rec.LastTurn)
+	}
+	if res, err := h.runner.wait(context.Background(), worker, 0, true); err != nil || res.Status != TurnRunning || res.Message != "" {
+		t.Fatalf("parent wait during the advisory = %+v, %v", res, err)
+	}
+
+	type waitResult struct {
+		turn TurnResult
+		err  error
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	waited := make(chan waitResult, 1)
+	go func() {
+		turn, err := h.runner.wait(ctx, worker, 5*time.Second, true)
+		waited <- waitResult{turn, err}
+	}()
+	eventually(t, "parent wait registered", func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.parentWaits[c.sends] == 1
+	})
+	proc.reply("internal advisory reply")
+	wait := <-waited
+	if wait.err != nil || wait.turn.ID != worker || wait.turn.Status != TurnDone || wait.turn.Message != "original worker result" || wait.turn.Error != "" || wait.turn.n != 1 {
+		t.Fatalf("parent wait after the advisory = %+v, %v", wait.turn, wait.err)
+	}
+	c.do(func() {})
+	if rec := h.record(worker); rec.HeldTurn != nil || rec.TurnOpen || rec.LastTurn == nil || len(rec.PendingReports) != 0 {
+		t.Fatalf("worker state after the parent wait: held=%+v open=%v last=%+v pending=%+v", rec.HeldTurn, rec.TurnOpen, rec.LastTurn, rec.PendingReports)
+	}
+	if reports := got.list(); len(reports) != 1 || reports[0].Result != wait.turn {
+		t.Fatalf("worker published a different or duplicate result: %+v", reports)
+	}
+}
+
 func TestCompactionWorkerSelfResumeDefersParentSettle(t *testing.T) {
 	h, got := newFakePiRecoveryHarness(t)
 	reg := h.runner.opts.Backends[BackendPi]
