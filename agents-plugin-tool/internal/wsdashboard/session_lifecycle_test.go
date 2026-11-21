@@ -27,10 +27,10 @@ func TestSessionLifecycleDerivationContract(t *testing.T) {
 		{"hosted process exit", Registration{Hosted: true, HeartbeatAt: fresh, HostStopped: true, HostExitReason: "child_exited"}, false, SessionStopped},
 		{"hosted idle timeout", Registration{Hosted: true, HeartbeatAt: fresh, HostStopped: true, HostExitReason: "idle_timeout"}, false, SessionStopped},
 		{"hosted user stop", Registration{Hosted: true, HeartbeatAt: fresh, HostStopped: true, HostExitReason: "stop"}, false, SessionAsleep},
-		{"clean external exit", Registration{HeartbeatAt: fresh, EndedAt: fresh}, false, SessionStopped},
-		{"retired worker", Registration{Agent: true, HeartbeatAt: fresh, EndedAt: fresh}, false, SessionStopped},
+		{"clean external exit", Registration{HeartbeatAt: fresh, EndedAt: fresh}, false, SessionPendingDeletion},
+		{"retired worker", Registration{Agent: true, HeartbeatAt: fresh, EndedAt: fresh}, false, SessionPendingDeletion},
 		{"terminal retained sidecar", Registration{HeartbeatAt: fresh}, true, SessionActiveOn},
-		{"stale terminal retained sidecar", Registration{HeartbeatAt: stale}, true, SessionStopped},
+		{"stale terminal retained sidecar", Registration{HeartbeatAt: stale}, true, SessionPendingDeletion},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := DeriveSessionLifecycle(tc.reg, tc.hidden, testNow); got != tc.want {

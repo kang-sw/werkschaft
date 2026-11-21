@@ -77,7 +77,7 @@ func TestIndexViewListsLiveAndRecentlyInactiveSessions(t *testing.T) {
 		t.Fatalf("projects = %+v", view.Projects)
 	}
 	p := view.Projects[0]
-	if len(p.Sessions) != 3 || len(p.Ended) != 1 || p.HiddenEnded != 1 {
+	if len(p.Sessions) != 2 || len(p.Ended) != 2 || p.HiddenEnded != 1 {
 		t.Fatalf("project rows: regular %d deleted %d hidden %d", len(p.Sessions), len(p.Ended), p.HiddenEnded)
 	}
 	var busy IndexRow
@@ -88,9 +88,6 @@ func TestIndexViewListsLiveAndRecentlyInactiveSessions(t *testing.T) {
 		if r.ReplyID == "codex" && (r.Adapter || r.Phase != "") {
 			t.Errorf("a session without an adapter shows a phase: %+v", r)
 		}
-		if r.ReplyID == "lapsed" && r.Lifecycle != SessionStopped {
-			t.Errorf("lapsed session = %+v, want stopped", r)
-		}
 	}
 	if busy.Phase != wslive.PhaseTool || busy.Tool != "Edit" {
 		t.Errorf("busy row = %+v", busy)
@@ -98,8 +95,10 @@ func TestIndexViewListsLiveAndRecentlyInactiveSessions(t *testing.T) {
 	if view.Live != 2 || view.Busy != 1 {
 		t.Errorf("totals live %d busy %d", view.Live, view.Busy)
 	}
-	if r := p.Ended[0]; r.ReplyID != recent.ReplyID || r.Lifecycle != SessionPendingDeletion {
-		t.Errorf("deleted row = %+v, want %s pending deletion", r, recent.ReplyID)
+	for _, r := range p.Ended {
+		if (r.ReplyID != recent.ReplyID && r.ReplyID != "lapsed") || r.Lifecycle != SessionPendingDeletion {
+			t.Errorf("deleted row = %+v, want recent or lapsed pending deletion", r)
+		}
 	}
 }
 

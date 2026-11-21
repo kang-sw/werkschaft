@@ -97,8 +97,8 @@ func (a *fourStateAgents) Close()              {}
 
 // fourStateSession is one seeded rail row.
 type fourStateSession struct {
-	id, project, label, harness string
-	hosted, asleep, hidden      bool
+	id, project, label, harness     string
+	hosted, asleep, hidden, stopped bool
 	// endedAgo ends the session that long ago (zero: live).
 	endedAgo time.Duration
 	reply    string
@@ -120,6 +120,7 @@ func seedFourStateRail(t *testing.T, dir, devenv, game string) []fourStateSessio
 		Lead: wslive.Lead{Activity: wslive.Activity{Phase: wslive.PhasePermission, Permission: &wslive.Permission{ToolName: "Bash", ArgsPreview: "cargo build --release -p renderer"}}}}
 	rows := []fourStateSession{
 		{id: "mainlead", project: devenv, label: "메인", harness: "claude", hosted: true, snap: working, reply: "Whiteboard: 네 가지 상태 목업을 만들었습니다. 레일 화면 6장과 범례 카드를 붙였고, 승인 후 구현 티켓으로 옮기겠습니다."},
+		{id: "hostexit", project: devenv, label: "중단된 리드", harness: "claude", hosted: true, stopped: true},
 		{id: "reviewer", project: devenv, label: "리뷰어", harness: "claude", hosted: true, asleep: true},
 		{id: "sosterm", project: devenv, label: "비상복구", harness: "pi", reply: "플러그인을 다시 불러온 뒤에도 ws MCP가 응답하는 것을 확인했습니다."},
 		{id: "docaudit", project: devenv, label: "문서 감사", harness: "claude", hosted: true, asleep: true, hidden: true},
@@ -141,6 +142,9 @@ func seedFourStateRail(t *testing.T, dir, devenv, game string) []fourStateSessio
 		reg := Registration{ReplyID: s.id, Project: s.project, Harness: s.harness, Hosted: s.hosted, RegisteredAt: stampFor(at), HeartbeatAt: stampFor(now)}
 		if s.asleep {
 			reg.HostStopped, reg.HostExitReason = true, "stop"
+		}
+		if s.stopped {
+			reg.HostStopped, reg.HostExitReason = true, "child_exited"
 		}
 		if s.endedAgo > 0 {
 			ended := stampFor(now.Add(-s.endedAgo))
