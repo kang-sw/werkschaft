@@ -312,7 +312,7 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rdragging, .rdragging * { cursor: grabbing !important; }
 .rdragging #rail, .rdragging #rlist, .rdragging #rail .rs { touch-action: none; user-select: none; }
 .rdrop { position: fixed; z-index: 46; height: 2px; border-radius: 1px; background: var(--wb-primary); pointer-events: none; }
-/* a live row's grip, the only part of a row that drags (the rest is its
+/* an unfolded row's grip, the only part of a row that drags (the rest is its
    link): shown while the row is hovered or focused, always on a touch
    screen, where it takes the touch from scrolling; over a place the drop is
    refused the cursor says no and a hint beside the pointer says why */
@@ -404,6 +404,7 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rs .s1:has(.drinp) .drslot { visibility: visible; }
 .rail .rid { font-family: var(--wb-mono); font-size: 12.5px; font-weight: 700; color: var(--wb-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 .rail .rid.lbl { font-family: var(--wb-sans); font-weight: 600; }
+.rail .rstate { flex: none; color: var(--wb-muted-fg); font-size: 11px; white-space: nowrap; }
 .rail .rs.cur .rid { color: var(--wb-fg); }
 .rail .when { font-size: 11px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; white-space: nowrap; flex: none; }
 .rail .s2 { display: block; margin-top: 1px; font-size: 12px; color: var(--wb-muted-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

@@ -518,7 +518,7 @@ func railFactsOf(view RailView) railFacts {
 		group := ws + "\x00" + path
 		for _, list := range [][]RailRow{live, ended} {
 			for _, r := range list {
-				f.rows[r.ReplyID] = railFact{WS: ws, Group: group, Live: r.Live, Pos: len(f.groups[group])}
+				f.rows[r.ReplyID] = railFact{WS: ws, Group: group, Live: r.InSessionList(), Pos: len(f.groups[group])}
 				f.groups[group] = append(f.groups[group], r.ReplyID)
 			}
 		}

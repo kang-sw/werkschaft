@@ -942,7 +942,7 @@
       railPopClose(false);
       var gen = P.gen;
       if (message) {
-        if (!(await window.wsConfirm(message, { opener: opener }))) return;
+        if (!(await window.wsConfirm(message, { opener: opener, accept: action === "close" ? wsT("js.lead.close") : undefined }))) return;
         st = state();
         if (P.gen !== gen || P.rid !== target || rid !== page || !opener.isConnected ||
             leadGone(st) || !st.can_control || bgTasks() > n || (action === "stop" && !st.process) ||

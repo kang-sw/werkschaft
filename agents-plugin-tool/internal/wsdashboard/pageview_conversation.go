@@ -102,8 +102,8 @@ type IndexView struct {
 // ProjectGroup is one project root's sessions on /.
 type ProjectGroup struct {
 	Name, Path string
-	// Sessions are the live sessions; Ended the ended ones still inside
-	// endedSessionWindow; HiddenEnded counts the older ended ones.
+	// Sessions are live sessions and recent inactive sessions; Ended holds
+	// recent deletions. HiddenEnded counts older inactive or deleted sessions.
 	Sessions    []IndexRow
 	Ended       []IndexRow
 	HiddenEnded int
@@ -114,9 +114,10 @@ type IndexRow struct {
 	ReplyID string
 	// Label is the session's display label, shown in place of ReplyID;
 	// empty when it has none.
-	Label   string
-	Harness string
-	Live    bool
+	Label     string
+	Harness   string
+	Live      bool
+	Lifecycle SessionLifecycle
 	// Adapter, Phase, and Tool come from a live snapshot; Phase is empty
 	// without an adapter.
 	Adapter       bool
@@ -139,8 +140,8 @@ type indexInput struct {
 	Snapshot *wslive.Snapshot
 }
 
-// buildIndexView groups sessions by project. A live session is listed; an
-// ended one only while it was last seen within endedSessionWindow.
+// buildIndexView groups sessions by project. Inactive registrations are
+// listed only while they were last seen within endedSessionWindow.
 func buildIndexView(sessions []indexInput, now time.Time, version string) IndexView {
 	view := IndexView{Version: version}
 	byProject := map[string]*ProjectGroup{}
@@ -158,6 +159,7 @@ func buildIndexView(sessions []indexInput, now time.Time, version string) IndexV
 			Label:       in.Session.Label,
 			Harness:     reg.Harness,
 			Live:        reg.Live(now),
+			Lifecycle:   DeriveSessionLifecycle(reg, in.Session.Hidden, now),
 			HasBoard:    in.Session.HasBoard,
 			CountPolicy: in.Session.CountPolicy,
 			LastSeen:    reg.LastSeen().UnixMilli(),
@@ -195,7 +197,11 @@ func buildIndexView(sessions []indexInput, now time.Time, version string) IndexV
 				view.Busy++
 			}
 		case now.Sub(reg.LastSeen()) <= endedSessionWindow:
-			group.Ended = append(group.Ended, row)
+			if row.Lifecycle == SessionPendingDeletion {
+				group.Ended = append(group.Ended, row)
+			} else {
+				group.Sessions = append(group.Sessions, row)
+			}
 		default:
 			group.HiddenEnded++
 		}

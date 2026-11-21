@@ -217,6 +217,8 @@
   "hd.title": "Porteurs de session",
   "head.ended": "terminée",
   "head.ended.title": "cette session est terminée",
+  "head.stopped": "Arrêtée",
+  "head.stopped.title": "Cette session est arrêtée",
   "head.stores": "stockage seul",
   "head.stores.title": "aucun adaptateur d'hôte actif : seuls les stockages de la session sont affichés",
   "head.name.copy": "cliquer pour copier",

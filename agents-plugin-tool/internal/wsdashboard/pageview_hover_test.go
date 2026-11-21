@@ -12,7 +12,7 @@ import (
 
 func TestSessionHoverExistingEvidence(t *testing.T) {
 	now := testNow
-	reg := Registration{ReplyID: "lead1", Harness: "pi", RegisteredAt: stampFor(now.Add(-time.Hour))}
+	reg := Registration{ReplyID: "lead1", Harness: "pi", RegisteredAt: stampFor(now.Add(-time.Hour)), HeartbeatAt: stampFor(now)}
 	pct, cache, tokens := 62.0, 94.0, int64(123400)
 	snap := &wslive.Snapshot{Adapter: "pi", HeartbeatMs: 30000, UpdatedAt: now.UnixMilli(), Lead: wslive.Lead{
 		Activity: wslive.Activity{Phase: wslive.PhaseTool}, TurnStartedAt: now.Add(-time.Minute).UnixMilli(), PreviousTurnMs: 23000,
@@ -41,6 +41,8 @@ func TestSessionHoverExistingEvidence(t *testing.T) {
 		t.Error("idle hover ticks the last turn")
 	}
 
+	ended := reg
+	ended.EndedAt = stampFor(now)
 	for _, tc := range []struct {
 		name string
 		reg  Registration
@@ -49,7 +51,7 @@ func TestSessionHoverExistingEvidence(t *testing.T) {
 	}{
 		{"absent", reg, nil, true},
 		{"stale", reg, &wslive.Snapshot{Adapter: "pi", HeartbeatMs: 30000, UpdatedAt: now.Add(-time.Hour).UnixMilli(), Lead: snap.Lead, Usage: snap.Usage}, true},
-		{"ended", reg, snap, false},
+		{"ended", ended, snap, false},
 		{"stopped", Registration{ReplyID: "lead1", Hosted: true, HostStopped: true}, snap, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,7 +71,7 @@ func TestSessionHoverObservedIdentityAndLastTurnRate(t *testing.T) {
 	rate := 41.6
 	observed := &wslive.ObservedModel{Current: wslive.ModelObservation{ID: "answer", Model: `<physical>`, Source: "pi.assistant", At: at, Effort: "low", EffortSource: "message", OutputTps: &rate}, History: []wslive.ModelChange{{Model: "first-model", At: at - 2000}, {Previous: "first-model", Model: "previous-model", At: at - 1000}, {Previous: "previous-model", Model: `<physical>`, At: at}}}
 	snap := &wslive.Snapshot{Adapter: "pi", UpdatedAt: now.UnixMilli(), Lead: wslive.Lead{Activity: wslive.Activity{Phase: wslive.PhaseIdle}, Observed: observed, LastTurnOutput: &observed.Current}}
-	reg := Registration{ReplyID: "lead1", Harness: "pi"}
+	reg := Registration{ReplyID: "lead1", Harness: "pi", HeartbeatAt: stampFor(now)}
 	row := railRow(railInput{Session: Session{Registration: reg}, Snapshot: snap}, true, now)
 	html := renderNamed(t, "session-hover", row)
 	contains(t, "observed hover", html, "&lt;physical&gt;", "Last observed", "pi.assistant", `data-ms="`+fmt.Sprint(at)+`"`, "previous-model → &lt;physical&gt;", `class="tps">42`, "Last-turn output rate", "message")
@@ -83,7 +85,7 @@ func TestSessionHoverObservedIdentityAndLastTurnRate(t *testing.T) {
 	if row.Hover.Rate != 0 {
 		t.Fatal("new working turn borrowed last-turn rate")
 	}
-	reg.HostStopped = true
+	reg.Hosted, reg.HostStopped = true, true
 	row = railRow(railInput{Session: Session{Registration: reg}, Snapshot: snap}, true, now)
 	if row.Hover.Rate != 0 || row.Hover.Observed.Current.At != at {
 		t.Fatalf("stopped rate/evidence: %+v", row.Hover)
@@ -197,7 +199,7 @@ doc.activeElement=null;mutate([{target:{}}]);check("lost focus after SSE hides",
 func TestSessionHoverAgyOutputRateAndUnknownModel(t *testing.T) {
 	now := testNow
 	at := now.Add(-2 * time.Second).UnixMilli()
-	reg := Registration{ReplyID: "agychild", Harness: "agy", RegisteredAt: stampFor(now.Add(-time.Minute))}
+	reg := Registration{ReplyID: "agychild", Harness: "agy", RegisteredAt: stampFor(now.Add(-time.Minute)), HeartbeatAt: stampFor(now)}
 	snap := &wslive.Snapshot{
 		Adapter: "agy", HeartbeatMs: 30000, UpdatedAt: now.UnixMilli(),
 		Lead: wslive.Lead{
@@ -225,7 +227,7 @@ func TestSessionHoverAgyOutputRateAndUnknownModel(t *testing.T) {
 
 	// Stopped/stale agy session hides live rate.
 	stopped := reg
-	stopped.HostStopped = true
+	stopped.Hosted, stopped.HostStopped = true, true
 	row = railRow(railInput{Session: Session{Registration: stopped}, Snapshot: snap}, true, now)
 	if row.Hover.Rate != 0 {
 		t.Fatalf("stopped agy hover kept rate: %+v", row.Hover)

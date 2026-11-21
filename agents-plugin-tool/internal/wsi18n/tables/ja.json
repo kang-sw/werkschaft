@@ -217,6 +217,8 @@
   "hd.title": "セッションホルダー",
   "head.ended": "終了",
   "head.ended.title": "このセッションは終了しました",
+  "head.stopped": "停止中",
+  "head.stopped.title": "このセッションは停止しています",
   "head.stores": "ストアのみ",
   "head.stores.title": "ライブのホストアダプターがないため、セッションのストアのみ表示しています",
   "head.name.copy": "クリックでコピー",

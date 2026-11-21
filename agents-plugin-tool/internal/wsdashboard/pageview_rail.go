@@ -85,7 +85,7 @@ type RailWorkspace struct {
 	// them waiting on a tool approval.
 	Live, Approvals int
 	Worktrees       []RailWorktree
-	// Sessions are the live sessions, Ended the ended ones, of a plain
+	// Sessions are the unfolded sessions, Ended the deleted ones, of a plain
 	// folder; Archived its archived hosted leads (splitRailArchived).
 	Sessions, Ended, Archived []RailRow
 	newestRegisteredAt        time.Time
@@ -163,7 +163,7 @@ type RailWorktree struct {
 	// under a ws worktree pool (worktreePoolRoots). The delete routes check
 	// again; this only places the button.
 	Deletable bool
-	// Sessions are the live sessions, Ended the ended ones, Archived the
+	// Sessions are the unfolded sessions, Ended the deleted ones, Archived the
 	// archived hosted leads (splitRailArchived).
 	Sessions, Ended, Archived []RailRow
 }
@@ -179,6 +179,7 @@ type RailRow struct {
 	Hover            railHover
 	ReplyID, Harness string
 	Live             bool
+	Lifecycle        SessionLifecycle
 	// Label is the session's display label, shown in place of ReplyID;
 	// empty when it has none.
 	Label string
@@ -255,9 +256,8 @@ type RailRow struct {
 	// Archived marks an open hosted lead the user archived (the dashboard's
 	// visibility sidecar, SessionArchived): it is drawn asleep in the
 	// worktree's archived fold, never live, and offers unarchive instead of
-	// archive. DeleteAt is when the registry prune may delete an ended row's
-	// session (epoch ms; 0 when the prune exempts it): the existing
-	// RegistryRetention window measured from its last sighting, no new timer.
+	// archive. DeleteAt is the registry prune time displayed for a deleted
+	// session (epoch ms), using its last sighting and RegistryRetention.
 	Archived bool
 	DeleteAt int64
 }
@@ -382,11 +382,10 @@ type railWorktreeEntry struct {
 	AdmissionRepository, AdmissionPath, Revision string
 }
 
-// buildRailView groups the listed sessions by workspace and worktree. An
-// ended session stays listed as long as the index holds it (while its
-// registry directory and session record exist), past the index page's
-// endedSessionWindow: the ended list is where a session is brought back
-// from. repos holds the worktree lists read so far, by repository root; a
+// buildRailView groups the listed sessions by workspace and worktree. Stopped
+// and deleted sessions stay listed while the index holds them (while their
+// registry directories and session records exist). repos holds the worktree
+// lists read so far, by repository root; a
 // repository without one shows the worktrees its sessions are rooted in.
 //
 // stored are the stored workspaces. A session in a repository always sits
@@ -414,13 +413,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 	repoOf := map[string]bool{}
 	for _, in := range sessions {
 		reg := in.Session.Registration
-		// An archived lead is never live here, whatever its heartbeat: the
-		// layout then treats it as an ended row (no drag, no parent), and
-		// splitRailArchived moves it into its own fold after ordering.
-		archived := DeriveSessionLifecycle(reg, in.Session.Hidden, now) == SessionArchived
-		live := reg.Live(now) && !archived
-		row := railRow(in, live, now)
-		row.Archived = archived
+		row := railRow(in, reg.Live(now), now)
 		key := filepath.Clean(reg.Project)
 		if in.Repo != "" {
 			key = filepath.Clean(in.Repo)
@@ -445,7 +438,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			}
 		}
 		byWS[key] = append(byWS[key], member{in: in, row: row})
-		if live {
+		if row.Live {
 			view.Live++
 			view.CountPolicy += row.CountPolicy
 			if row.Approval != nil {
@@ -491,7 +484,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			regs := map[string]Registration{}
 			for _, m := range members {
 				regs[m.row.ReplyID] = m.in.Session.Registration
-				if m.row.Live {
+				if m.row.InSessionList() {
 					ws.Sessions = append(ws.Sessions, m.row)
 				} else {
 					ws.Ended = append(ws.Ended, m.row)
@@ -552,7 +545,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			} else {
 				a = addWT(railWorktreeEntry{Path: project})
 			}
-			if m.row.Live {
+			if m.row.InSessionList() {
 				a.wt.Sessions = append(a.wt.Sessions, m.row)
 			} else {
 				a.wt.Ended = append(a.wt.Ended, m.row)
@@ -682,7 +675,7 @@ func partitionRailWorkspaces(view *RailView, rejected []string) {
 	view.RejectedWorkspaces = rej
 }
 
-// sortRailRows orders live sessions by registration, oldest first: the
+// sortRailRows orders unfolded sessions by registration, oldest first: the
 // order does not move with heartbeats or activity, so a row stays where the
 // user last saw it (the rail layout orders the rows after it,
 // orderRailView).
@@ -710,12 +703,17 @@ func sortRailEnded(rows []RailRow, regs map[string]Registration) {
 // railRow is one session's row.
 func railRow(in railInput, live bool, now time.Time) RailRow {
 	reg := in.Session.Registration
+	lifecycle := DeriveSessionLifecycle(reg, in.Session.Hidden, now)
+	archived := lifecycle == SessionArchived
+	live = live && !archived
 	row := RailRow{
 		ReplyID:     reg.ReplyID,
 		Label:       in.Session.Label,
 		Project:     reg.Project,
 		Harness:     reg.Harness,
 		Live:        live,
+		Lifecycle:   lifecycle,
+		Archived:    archived,
 		CountPolicy: in.Session.CountPolicy,
 		OpenAskIDs:  in.Session.OpenAskIDs,
 		Message:     in.Message.Text,
@@ -726,13 +724,10 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 	}
 	if !live {
 		row.Revive, row.ReviveBlocked = railRevive(in)
-		// PruneRegistrations exempts Agent rows and a hosted lead the runner
-		// still serves (an open record, which an ended row without EndedAt
-		// has); every other row ages from its last sighting.
-		if !reg.Agent && !(reg.Hosted && reg.EndedAt == "") {
-			if seen := reg.LastSeen(); !seen.IsZero() {
-				row.DeleteAt = seen.Add(RegistryRetention).UnixMilli()
-			}
+	}
+	if lifecycle == SessionPendingDeletion {
+		if seen := reg.LastSeen(); !seen.IsZero() {
+			row.DeleteAt = seen.Add(RegistryRetention).UnixMilli()
 		}
 	}
 	snap := in.Snapshot
@@ -740,7 +735,7 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 		return row
 	}
 	row.LastTool = lastToolAt(snap.Lead)
-	if row.Exit == nil && adapterPresent(snap, now) {
+	if row.Exit == nil && lifecycle != SessionStopped && adapterPresent(snap, now) {
 		row.Working = leadWorking(snap.Lead.Phase)
 		row.Subagents = levelOneRunning(snap.Agents)
 		bg, mon := taskBadgeCounts(snap)
@@ -773,13 +768,15 @@ func railMailbox(rows []RailRow, root, branch string) {
 	}
 }
 
-// Stopped reports a hosted session with no harness process: the rail shows
-// it asleep (a muted title and a dimmed harness icon), whatever ended the
-// process. The runner keeps heartbeating such a row, so Live alone would
-// draw it as running. An ended row sleeps only when the user stopped it; an
-// archived row always sleeps.
+// InSessionList reports a row that keeps its normal order and nesting.
+// Heartbeat liveness is tracked separately for the live counters and controls.
+func (r RailRow) InSessionList() bool {
+	return r.Live || r.Lifecycle == SessionActiveOn || r.Lifecycle == SessionAsleep || r.Lifecycle == SessionStopped
+}
+
+// Stopped reports a row drawn with a muted title and harness icon.
 func (r RailRow) Stopped() bool {
-	return r.Archived || (r.Exit != nil && (r.Live || r.UserStopped()))
+	return r.Archived || r.Lifecycle == SessionAsleep || r.Lifecycle == SessionStopped
 }
 
 // splitRailArchived moves each archived row out of its group's ended list
@@ -804,12 +801,6 @@ func splitRailArchived(view *RailView) {
 			split(&w.Worktrees[j].Ended, &w.Worktrees[j].Archived)
 		}
 	}
-}
-
-// UserStopped reports a session the user stopped (the holder's "stop"
-// reason, or the kill a stop falls back to); an ended row sleeps only then.
-func (r RailRow) UserStopped() bool {
-	return r.Exit != nil && (r.Exit.Reason == "stop" || r.Exit.Reason == "killed")
 }
 
 // leadWorking reports a phase in which the lead works: anything but idle

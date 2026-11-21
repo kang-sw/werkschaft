@@ -217,6 +217,8 @@
   "hd.title": "Sitzungshalter",
   "head.ended": "beendet",
   "head.ended.title": "Diese Sitzung wurde beendet",
+  "head.stopped": "Gestoppt",
+  "head.stopped.title": "Diese Sitzung wurde gestoppt",
   "head.stores": "nur Speicher",
   "head.stores.title": "kein aktiver Host-Adapter: Es werden nur die Speicher der Sitzung angezeigt",
   "head.name.copy": "klicken zum Kopieren",
