@@ -1103,13 +1103,13 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .settings-page-link:hover { background: var(--wb-muted); }
 :root:not([data-can-control]) .rail .rfoot > .r-config-global { display: none; }
 
-/* The settings sheet keeps the dashboard rail alongside its category list. */
-@media (min-width: 1120px) {
-  :root[data-settings-shell] .dwrap > .top { margin-inline-start: 266px; }
+/* The settings sheet keeps the standard 340px docked rail from 1600px and uses the 340px overlay drawer below. */
+@media (min-width: 1600px) {
+  :root[data-settings-shell] .dwrap > .top { margin-inline-start: 356px; }
   :root[data-settings-shell] .dwrap > .top > .back { display: none; }
   :root[data-settings-shell] .dbody {
     display: grid;
-    grid-template-columns: 250px minmax(0, 1fr);
+    grid-template-columns: 340px minmax(0, 1fr);
     gap: 0 16px;
     flex: 1 1 0;
     min-height: 0;

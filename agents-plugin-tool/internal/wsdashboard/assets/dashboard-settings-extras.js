@@ -16,6 +16,16 @@
     return el;
   }
 
+  function undoIcon() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "i");
+    svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "#i-undo");
+    svg.append(use);
+    return svg;
+  }
+
   function action(name, label, className) {
     const button = node("button", "btn " + (className || ""), label);
     button.type = "button";
@@ -91,26 +101,43 @@
   function markDraft(row, operation, entry, selection) {
     row.toggleAttribute("data-settings-draft", !!operation);
     const prov = row.querySelector(".kprov");
-    let label = row.querySelector(".settings-draft-badge");
-    let discard = row.querySelector(".settings-draft-discard");
+    const pill = prov?.querySelector(".origin-pill");
+    const serverReset = prov?.querySelector(".reset-btn:not(.settings-draft-discard)");
+    let discard = prov?.querySelector(".settings-draft-discard");
     if (!operation) {
-      label?.remove();
       discard?.remove();
+      if (pill && pill.dataset.draftOrigLabel !== undefined) {
+        const lbl = pill.querySelector(".lbl");
+        if (lbl) lbl.textContent = pill.dataset.draftOrigLabel;
+        pill.className = pill.dataset.draftOrigClass || "origin-pill";
+        delete pill.dataset.draftOrigLabel;
+        delete pill.dataset.draftOrigClass;
+      }
+      if (serverReset) serverReset.hidden = false;
+      row._syncDrawer?.();
       return;
     }
-    if (!label && prov) {
-      label = node("span", "prov-pill draft settings-draft-badge");
-      prov.prepend(label);
+    if (pill) {
+      if (pill.dataset.draftOrigLabel === undefined) {
+        pill.dataset.draftOrigLabel = pill.querySelector(".lbl")?.textContent || "";
+        pill.dataset.draftOrigClass = pill.className;
+      }
+      const lbl = pill.querySelector(".lbl");
+      if (lbl) lbl.textContent = tr(operation.action === "reset" ? "js.settings.proposal.reset" : "js.settings.proposal.queued");
+      pill.className = "origin-pill draft";
     }
-    if (label) {
-      label.textContent = tr(operation.action === "reset" ? "js.settings.proposal.reset" : "js.settings.proposal.queued");
-    }
+    if (serverReset) serverReset.hidden = true;
     if (!discard && prov && entry && selection) {
-      discard = node("button", "reset-btn settings-draft-discard", tr("js.settings.proposal.discard"));
+      discard = node("button", "reset-icon-btn reset-btn settings-draft-discard");
       discard.type = "button";
+      const label = tr("js.settings.proposal.discard");
+      discard.title = label;
+      discard.setAttribute("aria-label", label);
+      discard.append(undoIcon());
       discard.addEventListener("click", () => discardEntryDraft(entry, selection));
-      label.after(discard);
+      prov.append(discard);
     }
+    row._syncDrawer?.();
   }
 
   function identity(operation) {
@@ -132,10 +159,32 @@
     }).join("\n");
   }
 
-  function renderRow({ entry, selection, row, control }) {
+  function profilePill(label, valueText, titleText) {
+    const pill = node("span", "ppill");
+    if (titleText) pill.title = titleText;
+    pill.append(node("b", "", label), node("code", "", valueText));
+    return pill;
+  }
+
+  function summarizeProfileField(key, raw) {
+    if (Array.isArray(raw)) {
+      return { text: String(raw.length), title: raw.join(", ") };
+    }
+    if (raw && typeof raw === "object") {
+      const keys = Object.keys(raw);
+      return { text: String(keys.length), title: JSON.stringify(raw) };
+    }
+    if (typeof raw === "boolean") {
+      return { text: tr(raw ? "js.settings.on" : "js.settings.off"), title: "" };
+    }
+    return { text: String(raw), title: "" };
+  }
+
+  function renderRow({ entry, selection, row, control, syncDrawer }) {
     row.dataset.settingsDraftIdentity = identity(entry);
     row._draftEntry = entry;
     row._draftSelection = selection;
+    row._syncDrawer = syncDrawer;
     markDraft(row, pending(entry, selection), entry, selection);
     if (entry.key.startsWith("prompt.")) {
       const editor = control.querySelector("textarea") || row.querySelector("textarea");
@@ -155,9 +204,9 @@
       editor.classList.add("prompt-ta");
       editor.dataset.settingsPromptEditor = "1";
       editor.setAttribute("aria-label", tr("js.settings.prompt.override"));
-      const parent = editor.parentNode;
       override.append(editor);
       layout.append(original, override);
+
       const diff = node("div", "pane-box settings-prompt-diff");
       const text = node("pre", "diff-box");
       text.dataset.settingsPromptDiff = "1";
@@ -181,23 +230,64 @@
         flush();
         text.replaceChildren(fragment);
       }
-      parent.prepend(layout, diff);
       editor.addEventListener("input", update);
       update();
+
+      const meta = row.querySelector(".kmeta");
+      const rail = row.querySelector(".sctl-rail");
+      const ctlWrap = row.querySelector(".kctl-wrap");
+      const prov = row.querySelector(".kprov");
+      const saveBtn = control.querySelector(".save-btn");
+      const status = ctlWrap?.querySelector(".hint");
+      const drawer = row.querySelector(".layer-drawer");
+
+      control.replaceChildren(layout, diff);
+      const headRight = node("div", "prompt-head-right");
+      if (saveBtn) {
+        if (!control.id) {
+          control.id = "prompt-form-" + identity(entry).replace(/[^a-z0-9_-]+/gi, "-");
+        }
+        saveBtn.setAttribute("form", control.id);
+        headRight.append(saveBtn);
+      }
+      if (status) headRight.append(status);
+      if (prov) headRight.append(prov);
+      const head = node("div", "prompt-head");
+      if (meta) head.append(meta);
+      head.append(headRight);
+      const body = node("div", "prompt-body");
+      body.append(control);
+      rail?.remove();
+      row.classList.remove("srow");
       row.classList.add("prompt-card");
+      row.replaceChildren(head);
+      if (drawer) row.append(drawer);
+      row.append(body);
     } else if (entry.key.startsWith("agent.profile.") || entry.key.startsWith("worktree.profile.")) {
       const profile = selection.scope === "builtin" ? entry.default : entry.value;
-      const box = node("div", "prof-kv");
+      const meta = row.querySelector(".kmeta");
+      const rail = row.querySelector(".sctl-rail");
+      const prov = row.querySelector(".kprov");
+      const drawer = row.querySelector(".layer-drawer");
+      const labelLine = meta?.querySelector(".klabel-line");
+      const descNode = meta?.querySelector(".kdesc");
+      const descText = (profile && typeof profile === "object" && typeof profile.description === "string") ? profile.description : descNode?.textContent;
+
+      const head = node("div", "prof-head");
+      const titleWrap = node("div", "prof-head-title");
+      if (labelLine) titleWrap.append(...labelLine.childNodes);
+      head.append(titleWrap);
+      if (prov) head.append(prov);
+
+      const pills = node("div", "prof-pills");
       if (profile && typeof profile === "object") {
         const fields = entry.key.startsWith("agent.profile.") ?
-          ["description", "backend", "model", "authority", "tools", "ws_tools"] :
-          ["description", "sparse", "preserve", "hooks"];
+          ["backend", "model", "authority", "tools", "ws_tools"] :
+          ["sparse", "preserve", "hooks"];
         for (const key of fields) {
           if (profile[key] === undefined) continue;
-          const item = node("div", "prof-kv-row");
-          const value = typeof profile[key] === "string" ? profile[key] : JSON.stringify(profile[key]);
-          item.append(node("span", "k", tr(profileLabels[key])), node("span", "v", value));
-          box.append(item);
+          const summary = summarizeProfileField(key, profile[key]);
+          pills.append(profilePill(tr(profileLabels[key]), summary.text, summary.title));
         }
       }
       const details = node("details", "prof-details");
@@ -205,8 +295,15 @@
       const summary = node("summary", "prof-json-btn", tr("js.settings.profile.json"));
       const raw = node("pre", "prof-json", JSON.stringify(profile, null, 2));
       details.append(summary, raw);
-      control.replaceChildren(box, details);
+
+      rail?.remove();
+      row.classList.remove("srow");
       row.classList.add("prof-card");
+      row.replaceChildren(head);
+      if (descText) row.append(node("p", "kdesc", descText));
+      if (pills.children.length) row.append(pills);
+      row.append(details);
+      if (drawer) row.append(drawer);
     }
   }
 
@@ -309,9 +406,9 @@
       footer.setAttribute("aria-label", tr("js.settings.proposal.title"));
       const top = node("div", "proposal-top");
       const title = node("div", "proposal-title");
-      title.append(node("span", "prov-pill draft", tr("js.settings.proposal.title")));
+      title.append(node("span", "origin-pill draft", tr("js.settings.proposal.title")));
       if (draft.size) {
-        const path = node("code", "key-chip", ".ws-workflow/config.json");
+        const path = node("code", "skey", ".ws-workflow/config.json");
         path.title = snapshot.path;
         title.append(path, node("span", "", tr("js.settings.proposal.count", draft.size)));
       }

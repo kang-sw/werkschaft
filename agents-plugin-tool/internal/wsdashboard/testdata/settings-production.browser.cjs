@@ -46,6 +46,9 @@ const [login, selectedSession, siblingSession] = process.argv.slice(2);
     assert.equal(await profile.locator('[data-settings-option=direct]').getAttribute('aria-pressed'), 'true');
 
     const gear = id => page.locator('[data-scope-entry=session][data-settings-target=' + JSON.stringify(id) + ']');
+    if (await page.locator('#railbtn').isVisible() && !await page.locator('html').evaluate(el => el.classList.contains('rail-open'))) {
+      await page.locator('#railbtn').click();
+    }
     await gear(selectedSession).click();
     await page.waitForURL(url => url.searchParams.get('target') === selectedSession);
     const worktree = new URL(page.url()).searchParams.get('worktree');
