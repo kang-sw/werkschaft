@@ -477,29 +477,28 @@ func (c *conv) consumeCompactionNudge() {
 }
 
 func (c *conv) compactionNudgeReady() bool {
+	// A worker may still be waiting for the harness to resume its held turn.
 	return c.compactNudge.standalone && c.compactUsageFresh && c.proc != nil &&
-		!c.compacting && !c.compactCommand && c.compactPending == nil &&
-		c.bgTasks == 0 && c.bgGraceTimer == nil
+		!c.compacting && !c.compactCommand && c.compactPending == nil && c.compactNote == "" &&
+		(c.rec.Lead || c.bgTasks == 0 && c.bgGraceTimer == nil)
 }
 
-func (c *conv) sendCompactionNudge() {
-	if !c.compactionNudgeReady() || c.hasActiveDescendants() {
-		return
+func (c *conv) sendCompactionNudge() bool {
+	if !c.compactionNudgeReady() {
+		return false
 	}
 	c.releaseHeld()
-	if c.heldRes != nil {
-		return
-	}
 	if err := c.proc.Send(c.compactNudge.text); err != nil {
-		// Keep the note for ordinary input. A failed internal send has no
-		// queued work to restart the harness for.
+		// Leave the crossing unconsumed for the next fresh usage sample.
+		// Ordinary input, if any, can restart the harness.
 		c.setStatus(func() { c.lastErr = "send compaction advisory: " + err.Error() })
 		c.stopProcess("")
-		return
+		return false
 	}
 	c.consumeCompactionNudge()
 	c.compactInternalTurn = true
 	c.beginTurn(false)
+	return true
 }
 
 func (c *conv) restartRestoreHasInput() bool {
@@ -587,7 +586,7 @@ func (c *conv) compactEvent(ev wslive.Event) {
 }
 
 func (c *conv) compactInput(text string) string {
-	if c.compactNudge.text != "" {
+	if !c.compactNudge.standalone && c.compactNudge.text != "" {
 		text = c.compactNudge.text + "\n\n" + text
 	}
 	if c.compactNote != "" {

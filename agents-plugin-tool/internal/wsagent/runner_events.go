@@ -68,14 +68,9 @@ func (c *conv) handle(ev Event) {
 		}
 		if !quiet && ev.Live.Kind == wslive.KindStatus {
 			c.checkUsageDropCompaction(*ev.Live)
-			if c.canKick() {
-				// Pi can report usage after settlement. Check the inbox on
-				// a new advisory crossing, rather than on every sample.
-				previous := c.compactNudge
-				if !c.compactIdle() && (c.compactNudge.level != previous.level || !previous.standalone) &&
-					c.compactionNudgeReady() && !c.hasActiveDescendants() {
-					c.kickInput()
-				}
+			// Pi can report usage after settlement.
+			if c.canKick() && !c.compactIdle() && c.compactionNudgeReady() {
+				c.kickInput()
 			}
 		}
 		if !quiet && ev.Live.Kind == wslive.KindCompact && ev.Live.Phase != wslive.CompactStart {

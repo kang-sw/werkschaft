@@ -609,7 +609,6 @@ func (c *conv) loop() {
 			if c.idleNow() {
 				c.armIdle()
 				c.restartIfDue()
-				c.kickCompactionNudge()
 			}
 		case <-spawnC:
 			c.spawnTimer, c.spawnNext = nil, time.Time{}
@@ -1186,23 +1185,14 @@ func (c *conv) kick() {
 }
 
 func (c *conv) kickCompactionNudge() {
-	if c.compactionNudgeReady() && !c.hasActiveDescendants() {
+	if c.compactionNudgeReady() {
 		c.kick()
 	}
 }
 
 func (c *conv) kickInput() {
-	if c.compactionNudgeReady() && len(c.rec.Mail) == 0 {
-		// Claim a mailbox wake already queued before deciding there is
-		// no ordinary input. mailChanged kicks when there is claimed mail.
-		select {
-		case <-c.mailC:
-			c.mailChanged()
-			if c.turn || c.proc == nil || len(c.rec.Mail) > 0 {
-				return
-			}
-		default:
-		}
+	if c.sendCompactionNudge() {
+		return
 	}
 	c.mu.Lock()
 	held, err := wsinbox.Held(c.inbox)
@@ -1216,9 +1206,6 @@ func (c *conv) kickInput() {
 	reports := c.rec.Reports
 	if (err != nil || len(held) == 0) && len(mail) == 0 && len(c.rec.Queued) == 0 && len(reports) == 0 {
 		c.voidCancelled()
-		if err == nil {
-			c.sendCompactionNudge()
-		}
 		return
 	}
 	if c.proc == nil {
@@ -1269,7 +1256,6 @@ func (c *conv) kickInput() {
 		// A cancel took the message after the start: the process waits for
 		// input like after a turn.
 		c.voidCancelled()
-		c.sendCompactionNudge()
 		if !c.turn {
 			c.armIdle()
 		}
@@ -1338,7 +1324,9 @@ func (c *conv) kickInput() {
 	}
 	if ordinary {
 		c.compactNote = ""
-		c.consumeCompactionNudge()
+		if !c.compactNudge.standalone {
+			c.consumeCompactionNudge()
+		}
 		c.compactResume = false
 		c.compactResumeInternal = false
 		c.startModelWait()
