@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsreview"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
@@ -159,7 +160,7 @@ func renderSessionState(rec sessionRecord) string {
 	return sb.String()
 }
 
-func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []HostedChild) string {
+func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []wsagent.AgentChild) string {
 	var sb strings.Builder
 	sb.WriteString("## Hosted Session Restore\n\n")
 	fmt.Fprintf(&sb, "Your ws session key is `%s`. ", key)
@@ -176,7 +177,8 @@ func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []
 	if len(children) == 0 {
 		sb.WriteString("none\n")
 	} else {
-		for _, child := range children {
+		view := summarizeAgentChildren(children)
+		for _, child := range view.Active {
 			fmt.Fprintf(&sb, "- %s", child.Address)
 			if child.Label != "" {
 				fmt.Fprintf(&sb, " (%s)", child.Label)
@@ -190,6 +192,10 @@ func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []
 			}
 			sb.WriteString("\n")
 		}
+		for _, name := range view.RecentInactive {
+			fmt.Fprintf(&sb, "- %s\n", name)
+		}
+		sb.WriteString(view.summary())
 	}
 	return strings.TrimSpace(sb.String()) + "\n"
 }

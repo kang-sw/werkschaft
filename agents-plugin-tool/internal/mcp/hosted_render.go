@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsrsrc"
 )
@@ -22,15 +23,6 @@ type HostedRender struct {
 	CallFallback     bool
 	DirectTools      []string
 	Boards           *WhiteboardStores
-}
-
-// HostedChild is the runner's agent.list projection without an internal/mcp
-// dependency on wsagent.
-type HostedChild struct {
-	Address, Label, Tier, Authority, State string
-	Model, Effort, Cwd, Error              string
-	Held                                   int
-	CreatedAt, LastReport                  string
 }
 
 // hostedRenderServer is a throwaway server that renders for the hosted lead
@@ -100,7 +92,7 @@ func RenderLeadManual(env []string, root string, render HostedRender, key string
 
 // RenderHostedRestoreBundle reads the current split session state and renders
 // the transient bundle used after native compaction and daemon restart.
-func RenderHostedRestoreBundle(env []string, root string, render HostedRender, key, cause string, children []HostedChild) (string, error) {
+func RenderHostedRestoreBundle(env []string, root string, render HostedRender, key, cause string, children []wsagent.AgentChild) (string, error) {
 	s, release, err := hostedRenderServer(env, root, render, key)
 	if err != nil {
 		return "", fmt.Errorf("restore bundle: %w", err)

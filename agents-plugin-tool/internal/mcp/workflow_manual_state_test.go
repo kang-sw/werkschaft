@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wsagent"
 )
 
 // --- Phase 3a: stripModeGatedRegion pure-logic tests (TDD) -------------------
@@ -711,14 +713,14 @@ func TestHostedRestoreBundleSessionStateTargetsAndChildren(t *testing.T) {
 	inlineTarget := json.RawMessage(`{"target":{"kind":"inline","label":"Inline restore plan"}}`)
 	noTarget := json.RawMessage(`{"target":{"kind":"ticket","ticket_path":"must-not-be-inferred.md"}}`)
 	todos := []todoItem{{Key: "restore", Title: "Restore state", Status: todoPending}}
-	children := []HostedChild{
+	children := []wsagent.AgentChild{
 		{Address: "id:child-a", Label: "alpha", Tier: "pi.small", Authority: "read-only", State: "running", LastReport: "done: alpha"},
 		{Address: "id:child-b", Label: "beta", Tier: "codex.large", Authority: "workdir-write", State: "waiting", Error: "fixture stopped"},
 	}
 	for _, tc := range []struct {
 		name       string
 		agenda     map[string]json.RawMessage
-		children   []HostedChild
+		children   []wsagent.AgentChild
 		wantTarget string
 		wantChild  []string
 	}{

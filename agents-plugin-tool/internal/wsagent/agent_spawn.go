@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsgit"
@@ -287,6 +288,13 @@ func (r *Runner) AgentList(caller AgentCaller) []AgentChild {
 	out := make([]AgentChild, 0, len(states))
 	for _, st := range states {
 		rec, _ := r.recordOf(st.ID)
+		activity := &AgentChildActivity{
+			LastActiveAt:   rec.LastActiveAt,
+			AwaitingReport: st.Status != StatusClosed && st.Status != StatusHandedOff && rec.TurnOpen || len(rec.PendingReports) > 0,
+		}
+		if closed, err := time.Parse(time.RFC3339, rec.ClosedAt); err == nil && closed.After(lastActive(rec)) {
+			activity.LastActiveAt = rec.ClosedAt
+		}
 		child := AgentChild{
 			Address:   AgentAddress(st.ID),
 			Label:     rec.Label,
@@ -299,17 +307,18 @@ func (r *Runner) AgentList(caller AgentCaller) []AgentChild {
 			Held:      st.Held,
 			Error:     st.Error,
 			CreatedAt: st.CreatedAt,
+			Activity:  activity,
 		}
 		if rec.Tier != "" {
 			child.Tier = st.Backend + "." + rec.Tier
 		}
 		if last := rec.LastTurn; last != nil {
 			child.LastReport = reportSummary(last.Result)
+			activity.AwaitingReport = activity.AwaitingReport || rec.ReportID != "" && rec.ReportID != rec.LastReportedTurn
+			// A settled interruption may leave its reason in State.Error.
+			activity.SettledInterruptError = last.Result.Status == TurnInterrupted && last.Result.Error == st.Error
 		}
 		out = append(out, child)
 	}
 	return out
 }
-
-// reportSummary is a settled turn's status and the first line of its
-// final message.
