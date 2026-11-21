@@ -170,7 +170,7 @@ func TestUserMessageComposerSendsBrowserOffset(t *testing.T) {
 	runNode(t, "browser offset", selectionCodecSource(t)+composerToastPrelude+composerSendSource(t, src)+`
 var sending=false, captured=null;
 Date.prototype.getTimezoneOffset=function(){return -345;};
-post=function(route,body,done){captured=body;done(true,{});};
+post=function(route,body,done){captured=body;done(true,{id:"20261122T000000.000000000Z-00000001"});};
 ctext.value="hello";sendMessage();check("offset east of UTC",captured.utcOffsetMinutes,345);
 process.stdout.write(bad.join("\n"));`)
 }

@@ -23,6 +23,9 @@ function fakeEl() {
     setAttribute: function (k, v) { el.attrs[k] = String(v); },
     getAttribute: function (k) { return k in el.attrs ? el.attrs[k] : null; },
     appendChild: function (c) { return el.insertBefore(c, null); },
+    append: function () { Array.prototype.forEach.call(arguments, function (c) { el.appendChild(c); }); },
+    replaceChildren: function () { while (el.children.length) el.removeChild(el.children[0]); el.append.apply(el, arguments); },
+    addEventListener: function () {},
     insertBefore: function (c, ref) {
       if (c.parentNode) c.parentNode.removeChild(c);
       var i = ref ? el.children.indexOf(ref) : -1;
@@ -58,7 +61,7 @@ var q = function (sel) {
   return out;
 };
 var posted = 0;
-post = function (route, body, done) { done(true, { id: "h" + (++posted) }); };
+post = function (route, body, done) { done(true, { id: "20261122T000000.000000000Z-0000000" + (++posted) }); };
 function bubbles() { return clive.children.filter(function (c) { return c.classList.contains("held"); }).map(function (c) { return c.getAttribute("data-entry"); }); }
 `
 
@@ -112,16 +115,16 @@ var rendered = `+string(js)+`;
 entriesHTML = rendered[0];
 ctext.value = "first of the batch"; sendMessage();
 ctext.value = "second of the batch"; sendMessage();
-check("both acknowledged sends show as bubbles", bubbles(), ["h1", "h2"]);
+check("both acknowledged sends show as bubbles", bubbles(), ["20261122T000000.000000000Z-00000001", "20261122T000000.000000000Z-00000002"]);
 outboxSync();
-check("a render before delivery keeps them", bubbles(), ["h1", "h2"]);
+check("a render before delivery keeps them", bubbles(), ["20261122T000000.000000000Z-00000001", "20261122T000000.000000000Z-00000002"]);
 entriesHTML = rendered[1];
 outboxSync();
 check("the delivered batch replaces both bubbles", bubbles(), []);
 ctext.value = "alone"; sendMessage();
-check("a single acknowledged send shows as a bubble", bubbles(), ["h3"]);
+check("a single acknowledged send shows as a bubble", bubbles(), ["20261122T000000.000000000Z-00000003"]);
 outboxSync();
-check("the earlier batch does not take the new bubble", bubbles(), ["h3"]);
+check("the earlier batch does not take the new bubble", bubbles(), ["20261122T000000.000000000Z-00000003"]);
 entriesHTML = rendered[2];
 outboxSync();
 check("the delivered message replaces its bubble", bubbles(), []);
@@ -183,7 +186,7 @@ check("request awaits its recovery record", typeof pendingPost, "undefined");
 check("the recovery row records posting", outbox[0].recoveryState, "posting");
 commit(true);
 check("the POST starts after commit", typeof pendingPost, "function");
-pendingPost(true, { id: "h1" });
+pendingPost(true, { id: "20261122T000000.000000000Z-00000001" });
 check("acknowledged send leaves the recovery queue", outboxUnsent(), false);
 ctext.value = "cancel during the write";
 sendMessage();
@@ -218,7 +221,7 @@ var calls = [], holding = false, held = [], cancelAnswer = [true, {}], restored 
 post = function (route, body, done) {
   calls.push(route === "cancel" ? [route, body.id] : [route, body.text]);
   if (route !== "message") { if (holdCancel) cancels.push(done); else done(cancelAnswer[0], cancelAnswer[1]); return; }
-  if (holding) held.push(done); else done(true, { id: "h" + (++posted) });
+  if (holding) held.push(done); else done(true, { id: "20261122T000000.000000000Z-0000000" + (++posted) });
 };
 restoreHeld = function (list) { restored.push(list.map(function (r) { return r.text; })); };
 var crow = fakeEl(), composer = fakeEl();
@@ -245,10 +248,10 @@ func TestComposerOutboxCancel(t *testing.T) {
 	}
 	runNode(t, "composer outbox cancel", selectionCodecSource(t)+composerToastPrelude+notes+"var sending = false;\n"+composerSendSource(t, src)+composerFunc(t, src, "cancelHeld")+outboxDOM+outboxActsDOM+`
 ctext.value = "one"; sendMessage();
-check("an acknowledged send's bubble carries the held buttons", actsOf(bubbleOf("h1").children[0]), [["btn mini hsteer", "h1"], ["btn mini hcancel", "h1"]]);
-cancelAnswer = [true, { id: "h1", text: "one" }];
-cancelHeld(cancelOf(bubbleOf("h1").children[0]));
-check("the bubble's cancel posts its id", calls.slice(-1), [["cancel", "h1"]]);
+check("an acknowledged send's bubble carries the held buttons", actsOf(bubbleOf("20261122T000000.000000000Z-00000001").children[0]), [["btn mini hsteer", "20261122T000000.000000000Z-00000001"], ["btn mini hcancel", "20261122T000000.000000000Z-00000001"]]);
+cancelAnswer = [true, { id: "20261122T000000.000000000Z-00000001", text: "one" }];
+cancelHeld(cancelOf(bubbleOf("20261122T000000.000000000Z-00000001").children[0]));
+check("the bubble's cancel posts its id", calls.slice(-1), [["cancel", "20261122T000000.000000000Z-00000001"]]);
 check("a cancelled bubble leaves", bubbles(), []);
 check("a cancelled bubble leaves the outbox", outbox.length, 0);
 check("a cancel restores the daemon's copy", restored.slice(-1), [["one"]]);
@@ -270,13 +273,13 @@ cancelOf(outbox[0].row).click();
 check("an in-flight row's cancel waits for the OK", calls, [["message", "first"]]);
 check("an in-flight row's cancel removes its row", rows(), []);
 holdCancel = true;
-held.shift()(true, { id: "h9" });
-check("the OK cancels the in-flight send by its id", calls, [["message", "first"], ["cancel", "h9"]]);
+held.shift()(true, { id: "20261122T000000.000000000Z-00000009" });
+check("the OK cancels the in-flight send by its id", calls, [["message", "first"], ["cancel", "20261122T000000.000000000Z-00000009"]]);
 check("an in-flight send whose cancel is out shows no bubble", bubbles(), []);
 outboxSync();
 check("no sync shows a bubble whose cancel is out", bubbles(), []);
 holdCancel = false;
-cancels.shift()(true, { id: "h9", text: "first" });
+cancels.shift()(true, { id: "20261122T000000.000000000Z-00000009", text: "first" });
 check("the cancelled in-flight send shows no bubble", bubbles(), []);
 check("the cancelled in-flight send leaves the outbox", outbox.length, 0);
 check("the cancelled in-flight send comes back", restored, [["second"], ["first"]]);
@@ -294,8 +297,8 @@ check("a refused cancel warns", toasts, [["js.cancel.fail:delivered", "warn"]]);
 holding = true; toasts = [];
 ctext.value = "three"; sendMessage();
 cancelOf(outbox[outbox.length - 1].row).click();
-held.shift()(true, { id: "h8" });
-check("an in-flight send whose cancel is refused shows its bubble", bubbles(), [two, "h8"]);
+held.shift()(true, { id: "20261122T000000.000000000Z-00000008" });
+check("an in-flight send whose cancel is refused shows its bubble", bubbles(), [two, "20261122T000000.000000000Z-00000008"]);
 check("an in-flight send whose cancel is refused warns", toasts, [["js.cancel.fail:delivered", "warn"]]);
 process.stdout.write(bad.join("\n"));
 `)
