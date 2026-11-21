@@ -91,11 +91,16 @@ mod tests {
         let moved = Url::parse("http://127.0.0.1:39418/").unwrap();
         assert_eq!(popup(&target, Some(&pin)), Popup::Secondary);
         assert_eq!(popup(&target, Some(&moved)), Popup::Browser);
+        assert_eq!(popup(&target, None), Popup::Browser);
         assert_eq!(
             popup(&Url::parse("https://example.com/").unwrap(), Some(&pin)),
             Popup::Browser
         );
-        for blocked in [local_view(CONNECT_VIEW), Url::parse("about:blank").unwrap()] {
+        for blocked in [
+            local_view(CONNECT_VIEW),
+            Url::parse("about:blank").unwrap(),
+            Url::parse("http://user@127.0.0.1:39417/s/session").unwrap(),
+        ] {
             assert_eq!(popup(&blocked, Some(&pin)), Popup::Block);
         }
     }

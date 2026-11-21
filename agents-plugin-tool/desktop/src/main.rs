@@ -157,20 +157,17 @@ fn install_webview(
 
 fn open_secondary(app: AppHandle, state: Arc<Connection>, pin: Url, url: Url) {
     static NEXT_WINDOW: AtomicUsize = AtomicUsize::new(1);
-    // Keep the renderer popup denied and give the target a guarded native window
-    // without a JavaScript opener. Build after the native callback returns.
+    // Let Tauri queue native creation and with_webview from this worker.
+    // On the UI thread with_webview runs inline with its window ID locked,
+    // and the macOS setup callback navigates using that same lock.
     std::thread::spawn(move || {
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            if state.pinned_url().as_ref() == Some(&pin) {
-                let number = NEXT_WINDOW.fetch_add(1, Ordering::Relaxed);
-                if build_webview(&handle, &format!("secondary-{number}"), state, Some((pin, url)))
-                    .is_err()
-                {
-                    eprintln!("Werkschaft: Could not open the secondary window");
-                }
+        if state.pinned_url().as_ref() == Some(&pin) {
+            let number = NEXT_WINDOW.fetch_add(1, Ordering::Relaxed);
+            let label = format!("secondary-{number}");
+            if build_webview(&app, &label, state, Some((pin, url))).is_err() {
+                eprintln!("Werkschaft: Could not open the secondary window");
             }
-        });
+        }
     });
 }
 
