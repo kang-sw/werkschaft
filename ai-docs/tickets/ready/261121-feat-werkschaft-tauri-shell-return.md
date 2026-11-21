@@ -457,7 +457,7 @@ installs the bundled version even over a newer Tauri canary, and subsequent
 shortcut launches preserve a Tauri self-update. Account
 for the possible Windows SmartScreen first-run warning.
 
-#### Phase 3 implementation handoff (17364c3c1) - 2026-11-21
+### Result (64fd7ebf6) - 2026-11-22
 
 - Settings uses the fixed native update operations on the verified
   top-level dashboard. Stable checks use GitHub latest. Canary selects the
@@ -490,13 +490,16 @@ for the possible Windows SmartScreen first-run warning.
   existing cross-minor daemon boundary remains T3.
 - The macOS release build and Windows x64 MSVC type check passed. The
   launchless arm64 app and updater/migration archive layouts matched the
-  expected app identity and all 113 prepared daemon files. The six updater
-  Rust regressions include the pinned plugin's signed fixture, corrupt and
-  truncated bytes, signature rejection, valid staging, reopen, channel
-  switch and retry. The 32 non-listener Rust tests, six Node packaging
-  tests, five build-slot tests, two launcher tests, 187 Electron tests
-  with four Windows-only skips, Go DashboardSourceAssembly, actionlint,
-  and dry-shell route and publication checks passed.
+  expected app identity and all 113 prepared daemon files. The updater
+  Rust regressions use the pinned plugin's signed fixture and cover corrupt
+  and truncated bytes, signature rejection, valid staging, reopen, channel
+  switch and retry. The lead passed all 37 Rust tests and the Go
+  `TestDesktopUpdateBrowser` on `fb79dccc0`. On `64fd7ebf6`, the seven
+  Node packaging and release tests, five build-slot tests, 32 non-listener
+  Rust tests, Windows MSVC type check and launchless macOS smoke package
+  passed. Two launcher tests, 187 Electron tests with four Windows-only
+  skips, Go `TestDashboardSourceAssembly`, actionlint, and dry-shell route
+  and publication checks also passed during implementation.
 - Chromium ran the dashboard update suite against intercepted real
   renderer assets. Compared captures in
   `/private/tmp/werkschaft-tauri-phase3.4BB1FT/tauri/` with
@@ -505,19 +508,69 @@ for the possible Windows SmartScreen first-run warning.
   The ten light and dark App update and toast regions match. The paired
   regions are in `/private/tmp/werkschaft-tauri-phase3.4BB1FT/update-detail/`.
   Branding and landing-page background differ from the historical captures.
-- The lite review found two state and release hazards. `17364c3c1` fixes
-  the superseded stage on reopen and publishes new stable tags only after
-  the verified native packages and both desktop payloads upload. The
-  signed fixture exercises the actual controller and on-disk stage path.
-  Real signed installer apply still requires the lead's acceptance.
-- Pending lead verification. The five Rust endpoint listener tests and
-  the Go dashboard browser listener test hit a sandbox bind restriction.
-  Run `cargo test --offline --locked --features custom-protocol` from the
-  desktop crate and `go test ./internal/wsdashboard -run '^TestDesktopUpdateBrowser$' -count=1 -v`
-  from the tooling module, with Playwright configured for the browser run.
-  The evaluation signing and non-publishing CI commands and the native
-  installer, channel, migration, bootstrapper, failure and recovery checklist
-  are in `agents-plugin-tool/desktop/RELEASE.md`. Phase 3 awaits that evidence.
+- Lite review fixes in `17364c3c1` discard a superseded stage before reopen
+  and publish new stable tags only after the verified native packages and
+  both desktop payloads upload. The first dry runs exposed Windows drive
+  prefix stripping in Tauri resource paths. `64fd7ebf6` stages resources
+  under the desktop crate and supplies crate-relative source paths. Its
+  Windows path regression verifies that the source resolves on the checkout
+  drive and the destination keeps its `daemon/` layout.
+- Non-publishing CI succeeded at `64fd7ebf6` for `0.50.8` and
+  `0.50.8-canary.1`. The lead verified the downloaded
+  `werkschaft-tauri-assets` using the evaluation public key and
+  `release.cjs --verify` for each exact version. Both contain the macOS arm64
+  updater archive and the Windows x64 NSIS and MSI packages with signatures
+  and feed. The stable artifact also contains both Electron migration ZIPs
+  and their SUMS, and both ZIPs passed `shasum -a 256 -c`. The canary
+  artifact contains the signed updater payloads and feed only.
+  [Stable run 44912630570](https://github.com/kang-sw/werkschaft/actions/runs/44912630570)
+  · [Canary run 44912637922](https://github.com/kang-sw/werkschaft/actions/runs/44912637922)
+- Under owner decision (2081)=a, the lead ran native acceptance in the smoke
+  host's existing account on Windows 11 with WebView2 Evergreen
+  `157.0.4341.60` present, from 00:17 to 00:30 KST on 2026-11-22.
+  `WS_CACHE_HOME`, `WS_CONFIG_HOME` and `WEBVIEW2_USER_DATA_FOLDER` pointed
+  under the run directory. Its dashboard used port 29517. The existing
+  owner daemon continued on 29417 throughout.
+- The canary NSIS installer exited 0 with `/S /D=<run>\app`. It created the
+  per-user uninstall entry at version `0.50.8-canary.1` and a Start Menu
+  shortcut. Launch staged the bundled daemon and brought up the isolated
+  dashboard. The scheduled check requested `releases/latest` and the
+  `v0.50.8` manifest, then offered Update and Skip. Settings showed
+  Back to stable on the canary build.
+- The fault feed refused a bad signature, a checksum mismatch and an
+  interrupted download with distinct messages. Missing SHA rejected the
+  manifest at check time with neither an offer nor a download request.
+  The refusal toasts offered the download page. Missing SHA showed a
+  generic Settings check failure without a reason, unlike the messages
+  for download-stage faults.
+- After the interruption, Settings offered the valid stable update in
+  the same running app. It verified and staged the package and offered
+  Restart now. The passive installer relaunched the app in about 40
+  seconds with the isolated environment. The executable and HKCU entry
+  showed `0.50.8` at the original install location. The same-core daemon
+  stayed on `0.50.8-canary.1` at port 29517, and the footer continued to
+  report the daemon version. On stable, Back to stable disappeared and
+  Check for updates reported the latest version. An explicit canary
+  lookup found no newer build and showed no visible feedback. Silent
+  uninstall exited 0 and removed the install folder, HKCU entry, shortcut
+  and local app data.
+- Native captures are under `/tmp/p3-caps/`, including `00-initial.png`,
+  `13-badsig-after.png`, `missing-sha-4-toast.png`, `bad-bytes-2-after.png`,
+  `interrupted-2-after.png`, `32-retry-check.png`, `33-staged.png`,
+  `41-stable-settings.png`, `42-footer.png` and `44-canary-state.png`.
+- Under (2081)=a, the remaining native checks await a disposable account
+  or VM. These include MSI install and equal-core MSI replacement,
+  Evergreen bootstrap on an image without the runtime, and stable-to-canary
+  opt-in and lower-stable return with a next-patch-core canary. Native
+  staged-update reopen after a channel switch, forced install or swap
+  failure, draft recovery through restart, and origin and frame refusal
+  also remain. The scratch profile used in this run had no composer or
+  session to exercise draft recovery. Packaged Electron migration on both
+  platforms remains pending, including first-launch defaults, retained profiles,
+  rollback and failure recovery, and the Windows forwarder, SmartScreen,
+  shared portable folder and second-account checks. Antivirus measurements
+  remain pending. The native checklist and evaluation commands are in
+  `agents-plugin-tool/desktop/RELEASE.md`. Phase 4 remains open.
 
 ### Phase 4: Pass the macOS and Windows verification and benchmark gate
 
