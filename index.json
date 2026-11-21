@@ -479,7 +479,17 @@
       "registered_at": "2026-11-19T14:04:32Z"
     },
     "261119-feat-ws-audit-policy-event-envelope": {
-      "registered_at": "2026-11-19T14:04:26Z"
+      "registered_at": "2026-11-19T14:04:26Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-21T23:53:28Z",
+        "impl": {
+          "branch": "impl/develop/spree-clip-plow"
+        }
+      }
     },
     "261119-feat-ws-audit-query-api": {
       "registered_at": "2026-11-19T14:04:43Z"
@@ -514,19 +524,6 @@
     },
     "261119-refactor-ws-config-drop-candidate-cleanup": {
       "registered_at": "2026-11-19T14:03:33Z"
-    },
-    "261119-refactor-ws-whiteboard-sqlite-board-store": {
-      "registered_at": "2026-11-19T14:14:02Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-20T03:49:27Z",
-        "impl": {
-          "branch": "impl/develop/cough-race-suave"
-        }
-      }
     },
     "261120-feat-ws-agy-timeout-process-respawn": {
       "registered_at": "2026-11-20T14:49:51Z"
