@@ -4,8 +4,10 @@ package wsagent
 
 import (
 	"encoding/json"
-	"github.com/kang-sw/devenv/internal/wslive"
+	"slices"
 	"strings"
+
+	"github.com/kang-sw/devenv/internal/wslive"
 )
 
 // claudeSeenUUIDs is how many recent assistant line uuids the mapper keeps
@@ -139,7 +141,7 @@ func (m *claudeMapper) resultTool(name string) string {
 func claudePluginServer(plugin, key string) string { return "plugin:" + plugin + ":" + key }
 
 func (m *claudeMapper) status() Event {
-	ev := wslive.Event{Kind: wslive.KindStatus, Cost: m.cost, LimitsAsOf: m.limitsAsOf}
+	ev := wslive.Event{Kind: wslive.KindStatus, Cost: m.cost, Limits: slices.Clone(m.limits), LimitsAsOf: m.limitsAsOf}
 	if m.context != nil {
 		c := *m.context
 		c.Window = m.window
@@ -147,11 +149,6 @@ func (m *claudeMapper) status() Event {
 			c.Window = m.compactWindow
 		}
 		ev.Context = &c
-	}
-	for _, kind := range []string{wslive.LimitFiveHour, wslive.LimitSevenDay} {
-		if l, ok := m.limits[kind]; ok {
-			ev.Limits = append(ev.Limits, l)
-		}
 	}
 	return Event{Live: &ev}
 }

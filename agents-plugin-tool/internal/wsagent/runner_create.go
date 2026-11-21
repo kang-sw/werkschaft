@@ -355,6 +355,9 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c.rec.Backend == BackendClaude && spec.Holder != nil && spec.Holder.id != "" {
+		spec.restoredClaudeUsage = c.live.st.Snapshot(c.live.now().UnixMilli()).Usage
+	}
 	proc, err := backend.Start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)
 }

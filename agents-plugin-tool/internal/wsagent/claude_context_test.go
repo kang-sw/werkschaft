@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -18,6 +19,49 @@ func TestClaudeRateLimitObservationTimeSurvivesOtherStatuses(t *testing.T) {
 	}
 	if later := m.status().Live; later == nil || later.LimitsAsOf != 1_234 {
 		t.Fatalf("later status refreshed limits observation: %+v", later)
+	}
+}
+
+func TestClaudeRateLimitHolderReplayPreservesObservation(t *testing.T) {
+	spec := leadSpec()
+	spec.restoredClaudeUsage = &wslive.Usage{
+		LimitsAsOf: 1_000,
+		Limits:     []wslive.UsageLimit{{Kind: wslive.LimitSevenDay, Percent: 69, ResetsAt: 2_000_000_000_000}},
+	}
+	m := newClaudeMapper(spec)
+	m.now = func() time.Time { return time.UnixMilli(2_000) }
+	p := newStreamProcess(m, claudeProtocol{})
+	h := &holderChild{proc: p, skipTo: 1, replaying: true}
+	p.child, p.holder = h, h
+	feed := func(seq uint64, line string) wslive.Event {
+		t.Helper()
+		h.event(wsholder.Event{Event: "output", Seq: seq, Stream: "stdout", Data: []byte(line)})
+		var evs []Event
+		for len(p.events) > 0 {
+			evs = append(evs, <-p.events)
+		}
+		got := statuses(evs)
+		if len(got) != 1 {
+			t.Fatalf("record %d: statuses = %+v", seq, got)
+		}
+		return got[0]
+	}
+	weekly := `{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":0.1,"resetsAt":2000000000}}}}`
+	for _, seq := range []uint64{1, 2} {
+		// Both an already applied record and one first seen on rejoin are historical.
+		got := feed(seq, weekly)
+		if got.LimitsAsOf != 1_000 || len(got.Limits) != 1 || got.Limits[0].Percent != 69 {
+			t.Fatalf("record %d changed the restored observation: %+v", seq, got)
+		}
+	}
+	h.replayUntil(1, 2)
+	if got := feed(3, `{"type":"result","total_cost_usd":0.1}`); got.LimitsAsOf != 1_000 {
+		t.Fatalf("status after rejoin changed the restored observation: %+v", got)
+	}
+	fiveHour := `{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.2,"resetsAt":2000000000}}}}`
+	got := feed(4, fiveHour)
+	if got.LimitsAsOf != 2_000 || len(got.Limits) != 1 || got.Limits[0].Kind != wslive.LimitFiveHour || got.Limits[0].Percent != 20 {
+		t.Fatalf("live report refreshed a window it did not include or lost its own window: %+v", got)
 	}
 }
 

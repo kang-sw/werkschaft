@@ -301,6 +301,17 @@ func (h *holderChild) seen(seq uint64) {
 	h.mu.Unlock()
 }
 
+// buffered reports whether the record predates completion of the rejoin.
+// A buffered record can be new to the runner and still lack an observation time.
+func (h *holderChild) buffered(seq uint64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.targetSet {
+		return seq <= h.target
+	}
+	return h.replaying
+}
+
 // replayUntil tells an attached process the first and the last record
 // sequence the holder held when the daemon attached: once the last has been
 // delivered the process sends ReplayDone, marked ReplayLost when the ring
