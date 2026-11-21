@@ -44,6 +44,8 @@ func composerSendSource(t *testing.T, src string) string {
 		t.Fatal("dashboard.js holds no outbox section ending in outboxSync")
 	}
 	return outboxDefaults + composerFunc(t, src, "sendMessage") + outbox + `
+// Most send fixtures use a detached textarea with no composer row.
+if (!ctext.closest) ctext.closest = function () { return null; };
 persistOutbox = function (done) { done(true); };
 `
 }
@@ -58,7 +60,7 @@ var window = { WsToast: { show: function (t, o) { toasts.push([t, (o && o.kind) 
 function wsT(k, a) { return a === undefined ? k : k + ":" + a; }
 var bselections = [], mpend = null;
 function allNums() { return {}; }
-var answer = [true, {}];
+var answer = [true, { id: "20261122T000000.000000000Z-00000001" }];
 function post(route, body, done) { done(answer[0], answer[1]); }
 var ctext = { value: "", focus: function () {} }, imgs = [], imgSeq = 0, bmentions = [], closeRequests = [], wpicks = [], wconsoles = [], chips = {}, interrupting = false, interruptedTurn = null, cmdSel = null;
 function sendText() { return ctext.value; }
@@ -96,7 +98,7 @@ sendMessage();
 check("an empty send warns", toasts, [["js.send.empty", "warn"]]);
 toasts = []; ctext.value = "hi"; answer = [false, "busy"]; sendMessage();
 check("a refused send warns", toasts, [["js.send.fail:busy", "warn"]]);
-toasts = []; ctext.value = "hi"; answer = [true, {}]; sendMessage();
+toasts = []; ctext.value = "hi"; answer = [true, { id: "20261122T000000.000000000Z-00000001" }]; sendMessage();
 check("a successful send shows no toast", toasts, []);
 toasts = []; answer = [false, "gone"]; cancelHeld(btn()); steerHeld(btn()); interruptTurn();
 check("cancel, steer and interrupt failures warn", toasts, [["js.cancel.fail:gone", "warn"], ["js.steer.fail:gone", "warn"], ["js.interrupt.fail:gone", "warn"]]);

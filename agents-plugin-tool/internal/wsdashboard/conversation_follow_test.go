@@ -48,7 +48,7 @@ function userScroll(top) { convo.scrollTop = top; stick = atBottom(); }
 function state() { return [convo.scrollTop, stick]; }
 
 // A button send starts from above the bottom and follows its reply.
-ctext.value = "button"; convo.scrollTop = 700; stick = false; answer = [true, {}];
+ctext.value = "button"; convo.scrollTop = 700; stick = false; answer = [true, { id: "20261122T000000.000000000Z-00000001" }];
 sendMessage();
 check("button send reaches bottom", state(), [1000, true]);
 incomingReply(1400);

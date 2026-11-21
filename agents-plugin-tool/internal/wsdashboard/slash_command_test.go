@@ -70,7 +70,7 @@ function pops() { return document.body.children.filter(function (c) { return c.c
 // dashboard.js: the cmds region, the capsule, the post, the toasts, and the
 // composer helpers.
 const slashPrelude = `
-var doc = document, rid = "sess1", imgSeq = 0, imgs = [], toasts = [], posted = [], answer = [true, { id: "h1", merged: false }];
+var doc = document, rid = "sess1", imgSeq = 0, imgs = [], toasts = [], posted = [], answer = [true, { id: "20261122T000000.000000000Z-00000001", merged: false }];
 var cmds = new El("div"), crow = new El("div"), ccmd = new El("span"), cname = new El("b"), cargs = new El("span");
 cname.className = "ccmd-name"; cargs.className = "ccmd-args"; ccmd.hidden = true;
 ccmd.appendChild(cname); ccmd.appendChild(cargs); crow.appendChild(ccmd);
