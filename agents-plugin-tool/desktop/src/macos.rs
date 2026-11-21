@@ -17,15 +17,16 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 use url::Url;
 
 use crate::{
-    navigation::{self, Destination},
+    close,
+    navigation::{self, Destination, Popup},
     shell::Connection,
-    updates,
+    updates, webview_setup_failed,
 };
 
 struct NavigationState {
     original: Weak<ProtocolObject<dyn WKNavigationDelegate>>,
     connection: std::sync::Weak<Connection>,
-    app: AppHandle,
+    dashboard: Option<(AppHandle, usize)>,
 }
 
 struct UpdateState {
@@ -173,12 +174,11 @@ impl NavigationDelegate {
         if target == Some(false) {
             return navigation::frame_allowed(&url, pin.as_ref());
         }
-        let destination = navigation::destination(&url, pin.as_ref());
         if target.is_none() {
             // WKUIDelegate handles these through the shared popup policy.
-            return matches!(destination, Destination::Dashboard | Destination::Browser);
+            return navigation::popup(&url, pin.as_ref()) != Popup::Block;
         }
-        match destination {
+        match navigation::destination(&url, pin.as_ref()) {
             Destination::Dashboard | Destination::Local => true,
             Destination::Browser => {
                 navigation::open_browser(url);
@@ -198,23 +198,31 @@ impl NavigationDelegate {
     }
 
     fn recover(&self, reason: &'static str) {
-        let Some(connection) = self.ivars().connection.upgrade() else {
+        let (Some(connection), Some((app, epoch))) = (
+            self.ivars().connection.upgrade(),
+            self.ivars().dashboard.clone(),
+        ) else {
             return;
         };
-        let app = self.ivars().app.clone();
         // Wait until WebKit returns from its delegate callback before loading.
         std::thread::spawn(move || {
             let target = app.clone();
             let _ = app.run_on_main_thread(move || {
-                if let Some(window) = target.get_webview_window("main") {
-                    connection.recover(window, reason);
+                if connection.window_epoch() == epoch {
+                    if let Some(window) = target.get_webview_window(close::MAIN_WINDOW) {
+                        connection.recover(window, reason);
+                    }
                 }
             });
         });
     }
 }
 
-pub fn install(window: &WebviewWindow, connection: Arc<Connection>) -> tauri::Result<()> {
+pub fn install(
+    window: &WebviewWindow,
+    connection: Arc<Connection>,
+    ready: impl FnOnce(WebviewWindow) + Send + 'static,
+) -> tauri::Result<()> {
     static DELEGATE_KEY: u8 = 0;
     let target = window.clone();
     window.with_webview(move |platform| {
@@ -222,15 +230,17 @@ pub fn install(window: &WebviewWindow, connection: Arc<Connection>) -> tauri::Re
         // The pinned Tauri runtime supplies a WKWebView on the main thread.
         let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
         let Some(original) = (unsafe { webview.navigationDelegate() }) else {
-            connection.setup_failed(&target);
+            webview_setup_failed(&target, &connection);
             return;
         };
+        let main = close::checks_draft(target.label());
+        let epoch = connection.window_epoch();
         let delegate = marker
             .alloc::<NavigationDelegate>()
             .set_ivars(NavigationState {
                 original: Weak::new(&original),
                 connection: Arc::downgrade(&connection),
-                app: target.app_handle().clone(),
+                dashboard: main.then(|| (target.app_handle().clone(), epoch)),
             });
         let delegate: objc2::rc::Retained<NavigationDelegate> =
             unsafe { msg_send![super(delegate), init] };
@@ -247,10 +257,10 @@ pub fn install(window: &WebviewWindow, connection: Arc<Connection>) -> tauri::Re
                 ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
             );
             webview.setNavigationDelegate(Some(protocol));
-            if target.try_state::<Arc<updates::Controller>>().is_some() {
+            if main && target.try_state::<Arc<updates::Controller>>().is_some() {
                 let messages = marker.alloc::<UpdateMessages>().set_ivars(UpdateState {
                     app: target.app_handle().clone(),
-                    epoch: connection.window_epoch(),
+                    epoch,
                 });
                 let messages: objc2::rc::Retained<UpdateMessages> =
                     msg_send![super(messages), init];
@@ -262,6 +272,6 @@ pub fn install(window: &WebviewWindow, connection: Arc<Connection>) -> tauri::Re
                 );
             }
         }
-        connection.start(target);
+        ready(target);
     })
 }

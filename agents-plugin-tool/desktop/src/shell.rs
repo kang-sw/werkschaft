@@ -14,6 +14,7 @@ use tauri::{
 use url::Url;
 
 use crate::{
+    close::MAIN_WINDOW,
     daemon::{self, Intent},
     endpoint::{BrowserCookie, Daemon},
     navigation::{self, destination, Destination, CONNECT_VIEW, PYTHON_VIEW},
@@ -81,6 +82,13 @@ impl Connection {
     pub fn start(self: &Arc<Self>, window: WebviewWindow) {
         *self.hooks.lock().unwrap() = Hooks::Ready;
         self.connect(window, Intent::Connect);
+    }
+
+    pub fn main_window_closed(&self) {
+        self.window_epoch.fetch_add(1, Ordering::AcqRel);
+        self.connecting.store(false, Ordering::Release);
+        self.closing.store(false, Ordering::Release);
+        *self.hooks.lock().unwrap() = Hooks::Installing;
     }
 
     pub fn connect(self: &Arc<Self>, window: WebviewWindow, intent: Intent) {
@@ -326,10 +334,17 @@ impl Connection {
             }
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || {
-                if state.daemon().as_ref() == Some(&daemon) {
-                    if let Some(window) = handle.get_webview_window("main") {
-                        state.recover(window, "Dashboard stopped responding");
-                    }
+                let mut pinned = state.daemon.lock().unwrap();
+                if pinned.as_ref() != Some(&daemon) {
+                    return;
+                }
+                if let Some(window) = handle.get_webview_window(MAIN_WINDOW) {
+                    drop(pinned);
+                    state.recover(window, "Dashboard stopped responding");
+                } else {
+                    // A secondary can outlive the dashboard. Retire the pin
+                    // on failure even when there is no main view to recover.
+                    *pinned = None;
                 }
             });
         });
@@ -424,5 +439,21 @@ mod tests {
         assert!(!connection.retry_hooks());
         *connection.hooks.lock().unwrap() = Hooks::Ready;
         assert!(!connection.retry_hooks());
+    }
+
+    #[test]
+    fn closing_main_releases_the_connection_for_a_later_window() {
+        let connection = Connection::default();
+        let old_epoch = connection.window_epoch();
+        *connection.hooks.lock().unwrap() = Hooks::Ready;
+        connection.closing.store(true, Ordering::Release);
+        connection.connecting.store(true, Ordering::Release);
+
+        connection.main_window_closed();
+
+        assert_ne!(connection.window_epoch(), old_epoch);
+        assert!(!connection.closing.load(Ordering::Acquire));
+        assert!(!connection.connecting.load(Ordering::Acquire));
+        assert!(*connection.hooks.lock().unwrap() == Hooks::Installing);
     }
 }

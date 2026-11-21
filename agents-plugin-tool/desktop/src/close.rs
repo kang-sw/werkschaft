@@ -14,6 +14,12 @@ use crate::{
     shell::Connection,
 };
 
+pub const MAIN_WINDOW: &str = "main";
+
+pub fn checks_draft(label: &str) -> bool {
+    label == MAIN_WINDOW
+}
+
 pub fn request(window: WebviewWindow, connection: Arc<Connection>) {
     if connection.closing.swap(true, Ordering::AcqRel) {
         return;
@@ -121,4 +127,14 @@ fn confirm_close(window: WebviewWindow, connection: Arc<Connection>) {
                 connection.closing.store(false, Ordering::Release);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_main_close_intercepts_the_native_close_event() {
+        assert!(super::checks_draft(super::MAIN_WINDOW));
+        assert!(!super::checks_draft("secondary-1"));
+        assert!(!super::checks_draft("secondary-2"));
+    }
 }

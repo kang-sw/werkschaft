@@ -14,17 +14,23 @@ use windows::{
     },
 };
 
-use crate::{accelerator, menu_action, navigation, shell::Connection, updates};
+use crate::{
+    accelerator, close, menu_action, navigation, shell::Connection, updates, webview_setup_failed,
+};
 
-pub fn install(window: &WebviewWindow, connection: Arc<Connection>) -> tauri::Result<()> {
+pub fn install(
+    window: &WebviewWindow,
+    connection: Arc<Connection>,
+    ready: impl FnOnce(WebviewWindow) + Send + 'static,
+) -> tauri::Result<()> {
     let window = window.clone();
     window.clone().with_webview(move |platform| {
         let result = unsafe { install_hooks(&platform.controller(), &window, &connection) };
         match result {
-            Ok(()) => queue(&window, move |target| connection.start(target)),
+            Ok(()) => queue(&window, ready),
             Err(_) => {
                 eprintln!("Could not install WebView2 hooks");
-                queue(&window, move |target| connection.setup_failed(&target));
+                queue(&window, move |target| webview_setup_failed(&target, &connection));
             }
         }
     })
@@ -69,6 +75,20 @@ unsafe fn install_hooks(
         &mut token,
     )?;
 
+    let settings = webview.Settings()?;
+    // Disable the control's built-in zoom keys and retain its Edit shortcuts.
+    settings.SetIsZoomControlEnabled(false)?;
+    let settings = settings.cast::<ICoreWebView2Settings2>()?;
+    let mut raw = PWSTR::null();
+    settings.UserAgent(&mut raw)?;
+    let default_agent = take_pwstr(raw);
+    let agent = format!(
+        "{default_agent} Werkschaft/{}",
+        window.app_handle().package_info().version
+    );
+    settings.SetUserAgent(&HSTRING::from(agent))?;
+    install_accelerators(controller, window.clone(), connection.clone())?;
+
     let permissions = connection.clone();
     webview.add_PermissionRequested(
         &PermissionRequestedEventHandler::create(Box::new(move |_, args| {
@@ -104,6 +124,10 @@ unsafe fn install_hooks(
         })),
         &mut token,
     )?;
+
+    if !close::checks_draft(window.label()) {
+        return Ok(());
+    }
 
     let failed = connection.clone();
     let epoch = failed.window_epoch();
@@ -183,19 +207,7 @@ unsafe fn install_hooks(
         &mut token,
     )?;
 
-    let settings = webview.Settings()?;
-    // Disable the control's built-in zoom keys and retain its Edit shortcuts.
-    settings.SetIsZoomControlEnabled(false)?;
-    let settings = settings.cast::<ICoreWebView2Settings2>()?;
-    let mut raw = PWSTR::null();
-    settings.UserAgent(&mut raw)?;
-    let default_agent = take_pwstr(raw);
-    let agent = format!(
-        "{default_agent} Werkschaft/{}",
-        window.app_handle().package_info().version
-    );
-    settings.SetUserAgent(&HSTRING::from(agent))?;
-    install_accelerators(controller, window.clone(), connection.clone())
+    Ok(())
 }
 
 unsafe fn install_accelerators(
@@ -236,7 +248,7 @@ unsafe fn install_accelerators(
                     // Dispatch after returning so Retry can safely navigate.
                     let connection = connection.clone();
                     queue(&window, move |target| {
-                        if connection.window_epoch() == epoch {
+                        if !close::checks_draft(target.label()) || connection.window_epoch() == epoch {
                             menu_action(target, &connection, id);
                         }
                     });

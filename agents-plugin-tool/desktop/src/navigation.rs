@@ -16,6 +16,21 @@ pub enum Destination {
     Block,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Popup {
+    Secondary,
+    Browser,
+    Block,
+}
+
+pub fn popup(url: &Url, dashboard: Option<&Url>) -> Popup {
+    match destination(url, dashboard) {
+        Destination::Dashboard => Popup::Secondary,
+        Destination::Browser => Popup::Browser,
+        Destination::Local | Destination::Block => Popup::Block,
+    }
+}
+
 pub fn local_view(path: &str) -> Url {
     Url::parse(&format!("{LOCAL_ORIGIN}{path}")).expect("valid bundled page")
 }
@@ -68,6 +83,22 @@ pub fn open_browser(url: Url) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popups_open_separately_only_at_the_current_dashboard_origin() {
+        let pin = Url::parse("http://127.0.0.1:39417/").unwrap();
+        let target = pin.join("/s/session?tab=terminal").unwrap();
+        let moved = Url::parse("http://127.0.0.1:39418/").unwrap();
+        assert_eq!(popup(&target, Some(&pin)), Popup::Secondary);
+        assert_eq!(popup(&target, Some(&moved)), Popup::Browser);
+        assert_eq!(
+            popup(&Url::parse("https://example.com/").unwrap(), Some(&pin)),
+            Popup::Browser
+        );
+        for blocked in [local_view(CONNECT_VIEW), Url::parse("about:blank").unwrap()] {
+            assert_eq!(popup(&blocked, Some(&pin)), Popup::Block);
+        }
+    }
 
     #[test]
     fn exact_origin_only_for_dashboard_and_frames() {

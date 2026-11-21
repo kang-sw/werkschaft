@@ -19,7 +19,10 @@ mod updates;
 mod windows;
 mod zoom;
 
-use std::sync::{atomic::Ordering, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -28,51 +31,63 @@ use tauri::{
 };
 
 use daemon::Intent;
-use navigation::{destination, Destination};
+use navigation::{destination, popup, Destination, Popup};
 use shell::Connection;
+use url::Url;
+use zoom::Zoom;
 
 #[cfg(target_os = "macos")]
 const USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Werkschaft/";
 
 fn build_window(app: &AppHandle, connection: Arc<Connection>) -> tauri::Result<()> {
+    build_webview(app, close::MAIN_WINDOW, connection, None)
+}
+
+fn build_webview(
+    app: &AppHandle,
+    label: &str,
+    connection: Arc<Connection>,
+    target: Option<(Url, Url)>,
+) -> tauri::Result<()> {
+    let main = close::checks_draft(label);
     let state = connection.clone();
     let notice = connection.clone();
     let popup_app = app.clone();
-    let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("Werkschaft — Connecting…")
+    let title = if main {
+        "Werkschaft — Connecting…"
+    } else {
+        "Werkschaft"
+    };
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+        .title(title)
+        .visible(main)
         .inner_size(1280.0, 860.0)
         .min_inner_size(760.0, 520.0)
         .disable_drag_drop_handler()
         .devtools(true)
         .on_page_load(move |window, payload| {
-            if payload.event() == tauri::webview::PageLoadEvent::Finished
-                && destination(payload.url(), notice.pinned_url().as_ref())
-                    == Destination::Dashboard
-            {
-                notice.show_refusal(&window);
-                updates::inject(&window, payload.url());
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let _ = window.set_zoom(window.state::<Zoom>().current());
+                if main
+                    && destination(payload.url(), notice.pinned_url().as_ref())
+                        == Destination::Dashboard
+                {
+                    notice.show_refusal(&window);
+                    updates::inject(&window, payload.url());
+                }
             }
         })
         .on_new_window(move |url, _features| {
             let pin = state.pinned_url();
-            match destination(&url, pin.as_ref()) {
-                Destination::Dashboard => {
-                    let app = popup_app.clone();
-                    let state = state.clone();
-                    std::thread::spawn(move || {
-                        let target = app.clone();
-                        let _ = app.run_on_main_thread(move || {
-                            if state.pinned_url() == pin {
-                                if let Some(window) = target.get_webview_window("main") {
-                                    let _ = window.navigate(url);
-                                }
-                            }
-                        });
-                    });
+            match popup(&url, pin.as_ref()) {
+                Popup::Secondary => {
+                    if let Some(pin) = pin {
+                        open_secondary(popup_app.clone(), state.clone(), pin, url);
+                    }
                 }
-                Destination::Browser => navigation::open_browser(url),
-                Destination::Local | Destination::Block => (),
+                Popup::Browser => navigation::open_browser(url),
+                Popup::Block => (),
             }
             NewWindowResponse::Deny
         });
@@ -99,21 +114,76 @@ fn build_window(app: &AppHandle, connection: Arc<Connection>) -> tauri::Result<(
             .build()?
     };
 
-    let close_window = window.clone();
-    let close_state = connection.clone();
-    window.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            close::request(close_window.clone(), close_state.clone());
-        }
-    });
-
-    #[cfg(target_os = "macos")]
-    macos::install(&window, connection)?;
-    #[cfg(windows)]
-    windows::install(&window, connection)?;
-
+    let _ = window.set_zoom(app.state::<Zoom>().current());
+    if let Err(error) = install_webview(&window, connection.clone(), target) {
+        webview_setup_failed(&window, &connection);
+        return Err(error);
+    }
     Ok(())
+}
+
+fn webview_setup_failed(window: &WebviewWindow, connection: &Connection) {
+    if close::checks_draft(window.label()) {
+        connection.setup_failed(window);
+    } else {
+        let _ = window.destroy();
+    }
+}
+
+fn install_webview(
+    window: &WebviewWindow,
+    connection: Arc<Connection>,
+    target: Option<(Url, Url)>,
+) -> tauri::Result<()> {
+    let state = connection.clone();
+    let ready = move |window: WebviewWindow| {
+        let Some((pin, url)) = target else {
+            state.start(window);
+            return;
+        };
+        // Both native guards are installed before the secondary can load a page.
+        if state.pinned_url().as_ref() == Some(&pin) && window.navigate(url).is_ok() {
+            let _ = window.show();
+            let _ = window.set_focus();
+        } else {
+            let _ = window.destroy();
+        }
+    };
+    #[cfg(target_os = "macos")]
+    return macos::install(window, connection, ready);
+    #[cfg(windows)]
+    return windows::install(window, connection, ready);
+}
+
+fn open_secondary(app: AppHandle, state: Arc<Connection>, pin: Url, url: Url) {
+    static NEXT_WINDOW: AtomicUsize = AtomicUsize::new(1);
+    // Keep the renderer popup denied and give the target a guarded native window
+    // without a JavaScript opener. Build after the native callback returns.
+    std::thread::spawn(move || {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if state.pinned_url().as_ref() == Some(&pin) {
+                let number = NEXT_WINDOW.fetch_add(1, Ordering::Relaxed);
+                if build_webview(&handle, &format!("secondary-{number}"), state, Some((pin, url)))
+                    .is_err()
+                {
+                    eprintln!("Werkschaft: Could not open the secondary window");
+                }
+            }
+        });
+    });
+}
+
+fn restore_main(app: &AppHandle, connection: &Arc<Connection>) {
+    if let Some(window) = app.get_webview_window(close::MAIN_WINDOW) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    } else if !connection.rebuilding.load(Ordering::Acquire) {
+        if build_window(app, connection.clone()).is_err() {
+            eprintln!("Werkschaft: Could not reopen the dashboard");
+        }
+    }
 }
 
 fn install_menu(app: &AppHandle) -> tauri::Result<()> {
@@ -176,13 +246,22 @@ fn install_menu(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-struct ZoomLevel(Mutex<f64>);
-
 fn menu_action(window: WebviewWindow, state: &Arc<Connection>, id: &str) {
+    let window = if matches!(id, "retry" | "replace_daemon" | "copy_login") {
+        let Some(main) = window.app_handle().get_webview_window(close::MAIN_WINDOW) else {
+            if id == "retry" {
+                restore_main(window.app_handle(), state);
+            }
+            return;
+        };
+        main
+    } else {
+        window
+    };
     match id {
         "retry" if state.retry_hooks() => {
             #[cfg(target_os = "macos")]
-            if macos::install(&window, state.clone()).is_err() {
+            if install_webview(&window, state.clone(), None).is_err() {
                 state.setup_failed(&window);
             }
             #[cfg(windows)]
@@ -201,11 +280,15 @@ fn menu_action(window: WebviewWindow, state: &Arc<Connection>, id: &str) {
         }
         _ => {
             if let Some(step) = zoom::Step::from_menu_id(id) {
-                let zoom = window.state::<ZoomLevel>();
-                let mut level = zoom.0.lock().unwrap();
-                let target = zoom::next(*level, step);
-                if window.set_zoom(target).is_ok() {
-                    *level = target;
+                if let Some(level) = window
+                    .state::<Zoom>()
+                    .change(step, |level| window.set_zoom(level).is_ok())
+                {
+                    for other in window.app_handle().webview_windows().into_values() {
+                        if other.label() != window.label() {
+                            let _ = other.set_zoom(level);
+                        }
+                    }
                 }
             }
         }
@@ -216,23 +299,36 @@ fn main() {
     let state = Arc::new(Connection::default());
     let menu_state = state.clone();
     let setup_state = state.clone();
+    let instance_state = state.clone();
     tauri::Builder::default()
-        .manage(ZoomLevel(Mutex::new(1.0)))
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+        .plugin(tauri_plugin_single_instance::init(move |app, _args, _cwd| {
+            let target = app.clone();
+            let state = instance_state.clone();
+            let _ = app.run_on_main_thread(move || restore_main(&target, &state));
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(move |app, event| {
-            if let Some(window) = app.get_webview_window("main") {
+            let window = app
+                .webview_windows()
+                .into_values()
+                .find(|window| window.is_focused().unwrap_or(false))
+                .or_else(|| app.get_webview_window(close::MAIN_WINDOW));
+            if let Some(window) = window {
                 menu_action(window, &menu_state, event.id().as_ref());
             }
         })
         .setup(move |app| {
+            let zoom = app
+                .path()
+                .app_local_data_dir()
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })
+                .and_then(|directory| Zoom::open(&directory))
+                .unwrap_or_else(|error| {
+                    eprintln!("Werkschaft: Could not restore the page zoom: {error}");
+                    Zoom::default()
+                });
+            app.manage(zoom);
             install_menu(app.handle())?;
             updates::Controller::start(app.handle(), setup_state.clone());
             build_window(app.handle(), setup_state.clone())?;
@@ -241,17 +337,34 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("Unable to initialize Werkschaft")
-        .run(move |_app, event| match event {
+        .run(move |app, event| match event {
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::CloseRequested { api, .. },
+                ..
+            } if close::checks_draft(&label) => {
+                if let Some(window) = app.get_webview_window(&label) {
+                    api.prevent_close();
+                    close::request(window, state.clone());
+                }
+            }
             RunEvent::ExitRequested { api, .. } if state.rebuilding.load(Ordering::Acquire) => {
                 api.prevent_exit();
+            }
+            RunEvent::Exit => app.state::<Zoom>().finish(),
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { has_visible_windows, .. }
+                if !has_visible_windows || app.get_webview_window(close::MAIN_WINDOW).is_none() =>
+            {
+                restore_main(app, &state);
             }
             #[cfg(windows)]
             RunEvent::WindowEvent {
                 label,
                 event: WindowEvent::Destroyed,
                 ..
-            } if label == "main" && state.rebuilding.load(Ordering::Acquire) => {
-                let app = _app.clone();
+            } if close::checks_draft(&label) && state.rebuilding.load(Ordering::Acquire) => {
+                let app = app.clone();
                 let state = state.clone();
                 // Defer until Tauri removes the destroyed window from its manager.
                 std::thread::spawn(move || {
@@ -265,6 +378,11 @@ fn main() {
                     });
                 });
             }
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::Destroyed,
+                ..
+            } if close::checks_draft(&label) => state.main_window_closed(),
             _ => (),
         });
 }
