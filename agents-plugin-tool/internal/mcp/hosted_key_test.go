@@ -333,11 +333,9 @@ func TestHostedSessionKeyLeavesOtherConnectionsAlone(t *testing.T) {
 	}
 }
 
-// TestRenderLeadManual: the daemon's render of a hosted lead's manual is
-// the manual workflow_manual serves for the lead's minted key, without the
-// read-full notice that tool result opens with. It never adopts the hosted
-// session of the environment it renders under, and a key with no record
-// is an error.
+// TestRenderLeadManual verifies the hosted prompt's manual uses its supplied
+// key even when the environment names another hosted lead. An unknown key
+// fails the render.
 func TestRenderLeadManual(t *testing.T) {
 	setupWorkflowManualNoteEnv(t)
 	root := t.TempDir()

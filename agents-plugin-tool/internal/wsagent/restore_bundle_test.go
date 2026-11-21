@@ -247,6 +247,29 @@ func TestRestartRestoreSleepingSessionWaitsForWake(t *testing.T) {
 	}
 }
 
+func TestRestartRestoreSupersedesLeadSessionState(t *testing.T) {
+	h := newLeadHarness(t)
+	h.start()
+	id, holder := h.runLead("one")
+	h.holders.out(holder, turnLines("sess-1", "u1", "done")...)
+	h.idle(id)
+	if _, err := h.runner.Stop(id); err != nil {
+		t.Fatal(err)
+	}
+	h.runner.Close()
+	h.holders.restart()
+	h.opts.LeadSessionState = func(string) (string, error) { return "STARTUP STATE", nil }
+	h.opts.RestoreBundle = (&restoreProbe{state: "## Session State"}).render
+	h.start()
+	h.send(id, "two")
+	wakeHolder := h.holder(id)
+	eventually(t, "the wake input with restore state", func() bool { return len(h.userInputs(wakeHolder)) == 1 })
+	got := h.userInputs(wakeHolder)[0]
+	if strings.Count(got, "## Session State") != 1 || !strings.Contains(got, "cause=restart") || !strings.Contains(got, h.envelope("two")) || strings.Contains(got, "STARTUP STATE") {
+		t.Fatalf("first input after restart = %q", got)
+	}
+}
+
 func TestRestoreProviderFailureInjectsKeyBearingDiagnostic(t *testing.T) {
 	probe := &restoreProbe{state: "partial state must not appear"}
 	probe.setError(errors.New("fixture provider unavailable"))

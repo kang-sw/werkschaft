@@ -322,7 +322,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
 		modelWaitSeconds = 0
 	}
-	keys := mcp.NewAgentKeyStore()
+	keys := mcp.NewAgentKeyStore(boards)
 	backends := wsagent.BuiltinBackendRegistrations()
 	return wsagent.NewRunner(wsagent.Options{
 		Dir:                        dir,
@@ -347,6 +347,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		LeadManual: func(backend, dir, key string) (string, error) {
 			return renderLeadManual(hostedRender(backends[backend], boards), dir, key)
 		},
+		LeadSessionState: keys.RenderHostedSessionState,
 		RestoreBundle: func(backend, dir, key string, cause wsagent.RestoreCause, children []wsagent.AgentChild) (string, error) {
 			return renderHostedRestoreBundle(hostedRender(backends[backend], boards), dir, key, cause, children)
 		},
