@@ -38,7 +38,7 @@ const (
 func DeriveSessionLifecycle(reg Registration, hidden bool, now time.Time) SessionLifecycle {
 	if !reg.Hosted {
 		if !reg.Live(now) {
-			return SessionStopped
+			return SessionPendingDeletion
 		}
 		return SessionActiveOn
 	}

@@ -104,8 +104,8 @@ func TestRailViewGroupsSessionsByWorkspaceAndWorktree(t *testing.T) {
 		t.Errorf("root worktree = %+v, want develop with oldroot then newroot", root)
 	}
 	feat := railWT(t, ws, "/w/feature")
-	if feat.Empty() || len(feat.Ended) != 0 || strings.Join(railIDs(feat.Sessions), " ") != "oldended endedfeat" {
-		t.Errorf("feature worktree = %+v, want both stopped terminal sessions in registration order", feat)
+	if feat.Empty() || len(feat.Sessions) != 0 || strings.Join(railIDs(feat.Ended), " ") != "endedfeat oldended" {
+		t.Errorf("feature worktree = %+v, want both terminal sessions folded newest first", feat)
 	}
 	if idle := railWT(t, ws, "/w/idle"); !idle.Empty() || !idle.Detached {
 		t.Errorf("idle worktree = %+v, want an empty detached row", idle)

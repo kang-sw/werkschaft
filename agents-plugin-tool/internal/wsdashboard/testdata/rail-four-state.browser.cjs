@@ -76,11 +76,12 @@ async function behaviour(browser) {
     assert.deepEqual(await openState(page), { halves: ['arch:false', 'del:false'], lists: [] }, 'ended closed again');
     const game = '#r-rail .rws[data-ws$="/gunpowder-odyssey"] .rfh[data-k="arch"]';
     assert.equal(await page.locator(game).isDisabled(), true, 'an empty archived half is disabled');
-    // A stopped terminal session stays in the regular list. The deleted
-    // fold shows the existing prune window, warned under a day.
-    assert.equal(await where(page, 'termtrial'), 'live', 'stopped terminal keeps its row');
-    assert.equal(await page.locator(row('termtrial') + ' .rstate').textContent(), '중단됨');
-    assert.equal(await page.locator(row('termtrial') + ' time.when.del').count(), 0);
+    // A stopped hosted lead stays in place; an ended terminal is folded.
+    assert.equal(await where(page, 'hostexit'), 'live', 'stopped hosted lead keeps its row');
+    assert.equal(await page.locator(row('hostexit') + ' .rstate').textContent(), '중단됨');
+    assert.equal(await page.locator(row('hostexit') + ' time.when.del').count(), 0);
+    assert.equal(await where(page, 'termtrial'), 'del', 'ended terminal is folded');
+    assert.equal(await page.locator(row('termtrial') + ' time.when.del').count(), 1);
     await half(page, 'del');
     assert.equal(await where(page, 'release49'), 'del', 'deleted lead is folded');
     assert.match(await page.locator(`${DEVENV} .rfh[data-k="del"]`).textContent(), /삭제됨/);

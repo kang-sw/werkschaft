@@ -43,14 +43,14 @@ func TestRailLifecycle(t *testing.T) {
 		}
 		return out
 	}
-	if got := strings.Join(ids(wt.Sessions), ","); got != "activeon,asleep,hostexit,openstale,terminal,terminalexit" {
+	if got := strings.Join(ids(wt.Sessions), ","); got != "activeon,asleep,hostexit,openstale" {
 		t.Errorf("unfolded rows = %s", got)
 	}
 	if got := strings.Join(ids(wt.Archived), ","); got != "archived,stalearch" {
 		t.Errorf("archived rows = %s, want archived,stalearch", got)
 	}
-	if got := strings.Join(ids(wt.Ended), ","); got != "deleted" {
-		t.Errorf("deleted rows = %s, want deleted", got)
+	if got := strings.Join(ids(wt.Ended), ","); got != "deleted,terminal,terminalexit" {
+		t.Errorf("deleted rows = %s, want deleted,terminal,terminalexit", got)
 	}
 	if view.Live != 3 || view.Workspaces[0].Live != 3 {
 		t.Errorf("live counts = %d/%d, want 3 live registrations", view.Live, view.Workspaces[0].Live)
@@ -71,21 +71,23 @@ func TestRailLifecycle(t *testing.T) {
 	if r := byID["deleted"]; r.Archived || r.Lifecycle != SessionPendingDeletion || r.DeleteAt != wantDel {
 		t.Errorf("deleted row = %+v, want pending deletion with prune time %d", r, wantDel)
 	}
-	for _, id := range []string{"terminal", "terminalexit", "hostexit"} {
-		if r := byID[id]; r.Lifecycle != SessionStopped || r.DeleteAt != 0 {
-			t.Errorf("%s = %+v, want stopped without a deletion countdown", id, r)
+	for _, id := range []string{"terminal", "terminalexit"} {
+		if r := byID[id]; r.Lifecycle != SessionPendingDeletion || r.DeleteAt != wantDel {
+			t.Errorf("%s = %+v, want pending deletion with countdown", id, r)
 		}
+	}
+	if r := byID["hostexit"]; r.Lifecycle != SessionStopped || r.DeleteAt != 0 {
+		t.Errorf("hostexit = %+v, want stopped without a deletion countdown", r)
 	}
 	if r := byID["openstale"]; r.Live || r.Lifecycle != SessionActiveOn || r.DeleteAt != 0 {
 		t.Errorf("stale hosted row = %+v, want active lifecycle without a live heartbeat", r)
 	}
 
-	// A terminal heartbeat refresh changes the marker within the same group
-	// and ordering position as the rows on either side of it.
+	// A terminal heartbeat refresh moves the session back to the regular list.
 	sessions[5].Session.HeartbeatAt = beat
 	recovered := buildRailView(sessions, repos, nil, now)
-	if got := strings.Join(ids(recovered.Workspaces[0].Worktrees[0].Sessions), ","); got != strings.Join(ids(wt.Sessions), ",") {
-		t.Errorf("unfolded row order changed after heartbeat recovery: %s", got)
+	if got := strings.Join(ids(recovered.Workspaces[0].Worktrees[0].Sessions), ","); got != "activeon,asleep,hostexit,openstale,terminal" {
+		t.Errorf("unfolded rows after heartbeat recovery: %s", got)
 	}
 
 	region, err := renderRailRegion(view, "ko")
@@ -96,10 +98,10 @@ func TestRailLifecycle(t *testing.T) {
 	for _, want := range []string{
 		`<div class="rfold" role="group" aria-label="접힌 세션" data-key="` + filepath.Clean("/w/repo") + `">`,
 		`class="rfh" data-k="arch" aria-expanded="false" title="보관된 세션 2개"><svg class="i" aria-hidden="true"><use href="#i-archive"/></svg>보관 <span class="d-n">2</span></button>`,
-		`class="rfh" data-k="del" aria-expanded="false" title="삭제된 세션 1개"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>삭제됨 <span class="d-n">1</span></button>`,
+		`class="rfh" data-k="del" aria-expanded="false" title="삭제된 세션 3개"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>삭제됨 <span class="d-n">3</span></button>`,
 		`<div class="rended" data-k="arch"><div class="rsessions"><div class="rs ended stopped archived hosted-row" data-rid="archived"`,
 		`<div class="rended" data-k="del"><div class="rsessions"><div class="rs ended" data-rid="deleted"`,
-		`<div class="rs stopped" data-rid="terminal"`,
+		`<div class="rs stopped hosted-row" data-rid="hostexit"`,
 		`<span class="rstate">중단됨</span>`,
 		`class="drarch unarch" data-act="unhide" title="보관 해제 · 잠듦으로 돌아감, 쌓인 메일 전달"`,
 		`<time class="when del" data-ms="` + strconv.FormatInt(wantDel, 10) + `" data-f="del"`,
