@@ -227,7 +227,7 @@ func TestAgentLeadPassesItsCallerAndMapsErrors(t *testing.T) {
 	}
 
 	agents.agent.children = []wsagent.AgentChild{{Address: "id:kid1", Label: "fixer", Tier: "pi.small", Authority: wsagent.PermissionReadOnly, State: wsagent.AgentWaiting, LastReport: "done: all green", Model: "m", Effort: "low", Cwd: root}}
-	if out := callToolWithKey(t, f.server, 9, f.key, "agent.list", nil); !strings.Contains(out, "id:kid1  waiting  pi.small  read-only  m/low  "+root+`  "fixer"`) || !strings.Contains(out, "last report: done: all green") {
+	if out := callToolWithKey(t, f.server, 9, f.key, "agent.list", map[string]any{"full": true}); !strings.Contains(out, "id:kid1  waiting  pi.small  read-only  m/low  "+root+`  "fixer"`) || !strings.Contains(out, "last report: done: all green") {
 		t.Fatalf("agent.list = %q", out)
 	}
 	agents.agent.tiers = wsagent.AgentTiers{Harness: "claude", Native: []wsagent.AgentTierEntry{{Tier: "small", Model: "haiku"}},
@@ -248,8 +248,9 @@ func TestAgentLeadPassesItsCallerAndMapsErrors(t *testing.T) {
 
 // fakeAgentRoute is the daemon's token route for the agent.* ops.
 type fakeAgentRoute struct {
-	mu    sync.Mutex
-	calls []fakeTokenCall
+	mu       sync.Mutex
+	calls    []fakeTokenCall
+	children []wsagent.AgentChild
 }
 
 func (f *fakeAgentRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +279,7 @@ func (f *fakeAgentRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		answer(http.StatusOK, wsagent.AgentInterruptResult{Address: "id:kid9", Status: wsagent.AgentIdle, Returned: []string{}})
 	case "agent.list":
-		answer(http.StatusOK, map[string]any{"agents": []wsagent.AgentChild{{Address: "id:kid9", State: wsagent.AgentRunning, Tier: "pi.small"}}})
+		answer(http.StatusOK, map[string]any{"agents": f.children})
 	case "agent.tiers":
 		answer(http.StatusOK, wsagent.AgentTiers{Harness: "pi", Native: []wsagent.AgentTierEntry{{Tier: "small", Model: "luna"}}})
 	default:
@@ -298,7 +299,11 @@ func (f *fakeAgentRoute) last() fakeTokenCall {
 // token; a daemon refusal reaches it as is.
 func TestAgentWorkerForwardsOnItsToken(t *testing.T) {
 	setupMailboxTestEnv(t)
-	route := &fakeAgentRoute{}
+	route := &fakeAgentRoute{children: []wsagent.AgentChild{
+		{Address: "id:kid9", State: wsagent.AgentRunning, Tier: "pi.small"},
+		{Address: "id:pending", State: wsagent.AgentWaiting, Tier: "pi.small", Activity: &wsagent.AgentChildActivity{AwaitingReport: true}},
+		{Address: "id:idle", State: wsagent.AgentWaiting, Tier: "pi.small", CreatedAt: "2026-01-01T00:00:00Z"},
+	}}
 	daemon := httptest.NewServer(route)
 	defer daemon.Close()
 	root := t.TempDir()
@@ -359,8 +364,12 @@ func TestAgentWorkerForwardsOnItsToken(t *testing.T) {
 	if out := callToolWithKey(t, s, 4, key, "agent.interrupt", map[string]any{"address": "id:kid9"}); !strings.Contains(out, "interrupted agent id:kid9 (idle)") || route.last().path != wsagent.RoutePrefix+"/by-token/agent.interrupt" {
 		t.Fatalf("agent.interrupt = %q", out)
 	}
-	if out := callToolWithKey(t, s, 5, key, "agent.list", nil); !strings.Contains(out, "id:kid9  running  pi.small") {
+	if out := callToolWithKey(t, s, 5, key, "agent.list", nil); !strings.Contains(out, "id:kid9  running  pi.small") ||
+		!strings.Contains(out, "id:pending  waiting  pi.small") || !strings.HasSuffix(out, "id:idle\n") {
 		t.Fatalf("agent.list = %q", out)
+	}
+	if out := callToolWithKey(t, s, 51, key, "agent.list", map[string]any{"full": true}); !strings.Contains(out, "id:idle  waiting  pi.small") || len(route.last().body) != 0 {
+		t.Fatalf("agent.list full = %q, token body = %v", out, route.last().body)
 	}
 	if out := callToolWithKey(t, s, 6, key, "agent.tiers", map[string]any{"format": "json"}); !strings.Contains(out, `"harness":"pi"`) || route.last().path != wsagent.RoutePrefix+"/by-token/agent.tiers" {
 		t.Fatalf("agent.tiers = %q", out)

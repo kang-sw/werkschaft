@@ -135,6 +135,14 @@ type AgentChild struct {
 	Held       int    `json:"held,omitempty"`
 	Error      string `json:"error,omitempty"`
 	CreatedAt  string `json:"created_at"`
+	// Activity carries the runner's compact-list inputs across the token route.
+	Activity *AgentChildActivity `json:"activity,omitempty"`
+}
+
+type AgentChildActivity struct {
+	LastActiveAt          string `json:"last_active_at,omitempty"`
+	AwaitingReport        bool   `json:"awaiting_report,omitempty"`
+	SettledInterruptError bool   `json:"settled_interrupt_error,omitempty"`
 }
 
 // AgentTierEntry is one spawnable tier and what it resolves to.
