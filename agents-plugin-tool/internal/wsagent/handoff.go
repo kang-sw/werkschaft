@@ -205,7 +205,7 @@ func (c *conv) handOff() error {
 		return badRequest("codex terminal handoff is not supported")
 	}
 	if resumeCommand(c.record(), c.dir) == "" {
-		return conflict("the session has no conversation yet, so there is nothing to resume in a terminal; close it instead")
+		return conflict("the session has no conversation to resume in a terminal. You can delete it from the dashboard")
 	}
 	c.stopProcess("")
 	// A holder an earlier stop could not end is tried once more: the
@@ -268,7 +268,7 @@ func (r *Runner) Reopen(id string) (State, error) {
 	}
 	if rowForeign(r.opts.Dir, id) {
 		unlock()
-		return State{}, conflict("the session runs in a terminal now; take it over from the ended list once that terminal session has exited")
+		return State{}, conflict("the session runs in a terminal now. Use Take over on its rail row after the terminal session exits")
 	}
 	r.mu.Lock()
 	if _, still := r.closed[id]; !still {

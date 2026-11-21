@@ -104,8 +104,8 @@ func TestRailViewGroupsSessionsByWorkspaceAndWorktree(t *testing.T) {
 		t.Errorf("root worktree = %+v, want develop with oldroot then newroot", root)
 	}
 	feat := railWT(t, ws, "/w/feature")
-	if feat.Empty() || len(feat.Sessions) != 0 || strings.Join(railIDs(feat.Ended), " ") != "endedfeat oldended" {
-		t.Errorf("feature worktree = %+v, want endedfeat then oldended (ended two days ago) folded as ended only", feat)
+	if feat.Empty() || len(feat.Ended) != 0 || strings.Join(railIDs(feat.Sessions), " ") != "oldended endedfeat" {
+		t.Errorf("feature worktree = %+v, want both stopped terminal sessions in registration order", feat)
 	}
 	if idle := railWT(t, ws, "/w/idle"); !idle.Empty() || !idle.Detached {
 		t.Errorf("idle worktree = %+v, want an empty detached row", idle)
@@ -1172,7 +1172,7 @@ func TestRailMarkupRevive(t *testing.T) {
 	const reason = `This session&#39;s harness reported no conversation to resume (it last ran with an older ws plugin)`
 	for id, want := range map[string]string{
 		"taken":  `</div><button type="button" class="rrev" data-revive="takeover" title="Continue this session in the dashboard">Take over</button></div>`,
-		"closed": `</div><button type="button" class="rrev" data-revive="reopen" title="Open this closed session again in the dashboard">Reopen</button></div>`,
+		"closed": `</div><button type="button" class="rrev" data-revive="reopen" title="Reopen this deleted session in the dashboard">Reopen</button></div>`,
 		"stuck":  `</div><button type="button" class="rrev" data-revive="takeover" aria-disabled="true" title="` + reason + `" aria-label="` + reason + `">Take over</button></div>`,
 	} {
 		if row := rowOf(id); !strings.Contains(row, want) {
@@ -1228,16 +1228,13 @@ func TestRailRowRevive(t *testing.T) {
 	}
 }
 
-// TestRailStoppedRowSleeps pins a hosted session with no harness process:
-// its row sleeps (the stopped class mutes its title and dims its harness
-// icon) whatever ended the process, with no moon, and the stopped class drops
-// its second line by style. An ended row sleeps only when the user stopped
-// it, and an unknown harness shows "?".
-func TestRailStoppedRowSleeps(t *testing.T) {
-	stopped := RailRow{ReplyID: "stopped", Harness: "claude", Live: true, Hosted: true, Exit: &HostExit{Reason: "stop"}, Message: "last reply"}
-	crashed := RailRow{ReplyID: "crashed", Harness: "claude", Live: true, Hosted: true, Exit: &HostExit{HasCode: true, Code: 1, Reason: "child_exited"}}
+// TestRailProcesslessRows pins muted styles for asleep and stopped rows,
+// the visible stopped marker, and a separate deleted row.
+func TestRailProcesslessRows(t *testing.T) {
+	stopped := RailRow{ReplyID: "stopped", Harness: "claude", Live: true, Hosted: true, Lifecycle: SessionAsleep, Exit: &HostExit{Reason: "stop"}, Message: "last reply"}
+	crashed := RailRow{ReplyID: "crashed", Harness: "claude", Live: true, Hosted: true, Lifecycle: SessionStopped, Exit: &HostExit{HasCode: true, Code: 1, Reason: "child_exited"}}
 	live := RailRow{ReplyID: "live", Live: true, Message: "hi"}
-	ended := RailRow{ReplyID: "ended", Harness: "claude", Hosted: true, Exit: &HostExit{Reason: "child_exited"}}
+	ended := RailRow{ReplyID: "ended", Harness: "claude", Hosted: true, Lifecycle: SessionPendingDeletion, Exit: &HostExit{Reason: "child_exited"}}
 	view := RailView{Workspaces: []RailWorkspace{{Name: "repo", Path: "/w/folder", Repo: true, Worktrees: []RailWorktree{{Path: "/w/folder", Sessions: []RailRow{stopped, crashed, live}, Ended: []RailRow{ended}}}}}}
 	region, err := renderRailRegion(view, "en")
 	if err != nil {
@@ -1255,14 +1252,14 @@ func TestRailStoppedRowSleeps(t *testing.T) {
 	if row := rowOf("stopped"); !strings.Contains(html, `class="rs stopped hosted-row" data-rid="stopped"`) || !strings.Contains(row, `></span></span><span class="rid">stopped</span>`) {
 		t.Errorf("the stopped row lacks its stopped class, or something sits between its icon and title:\n%s", row)
 	}
-	if row := rowOf("crashed"); !strings.Contains(html, `class="rs stopped hosted-row" data-rid="crashed"`) || !strings.Contains(row, "exit code 1") {
-		t.Errorf("a processless row whose child exited must sleep (the stopped rule hides its reason line):\n%s", row)
+	if row := rowOf("crashed"); !strings.Contains(html, `class="rs stopped hosted-row" data-rid="crashed"`) || !strings.Contains(row, `<span class="rstate">Stopped</span>`) || !strings.Contains(row, "exit code 1") {
+		t.Errorf("a row whose child exited must show the stopped marker and exit details:\n%s", row)
 	}
 	if row := rowOf("live"); !strings.Contains(html, `class="rs" data-rid="live"`) || !strings.Contains(row, `<span class="hb" data-h="" role="img" aria-label="? · lead waiting" title="? · lead waiting"></span>`) {
 		t.Errorf("the plain row = %s, want no stopped class and the unknown-harness icon", row)
 	}
 	if !strings.Contains(html, `class="rs ended" data-rid="ended"`) {
-		t.Errorf("an ended row whose child exited must stay a plain ended row:\n%s", rowOf("ended"))
+		t.Errorf("a deleted row keeps its folded styling:\n%s", rowOf("ended"))
 	}
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{".rail .rs.stopped .rid { color: var(--wb-muted-fg); }", ".rail .rs.stopped .hb { opacity: .55; }", ".rail .rs.stopped .s2 { display: none; }"} {

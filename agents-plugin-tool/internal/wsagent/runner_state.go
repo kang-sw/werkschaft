@@ -182,7 +182,9 @@ func (r *Runner) closedState(rec Record) State {
 func closedState(rec Record) State {
 	st := State{ID: rec.ReplyID, Profile: rec.Profile, Backend: rec.Backend, Root: rec.Root, Status: StatusClosed, Model: rec.Model, Effort: rec.Effort, Page: "/s/" + rec.ReplyID, CreatedAt: rec.CreatedAt, ClosedAt: rec.ClosedAt, Lead: rec.Lead, PermissionMode: rec.selectedPermissionMode(), Label: rec.Label, Tier: rec.Tier, ActiveMs: rec.ActiveMs}
 	if rec.Lead {
-		st.Lifecycle = wsdashboard.SessionPendingDeletion
+		if rec.ClosedAt != "" {
+			st.Lifecycle = wsdashboard.SessionPendingDeletion
+		}
 		st.PluginIsolation = leadPluginIsolation(rec.PluginIsolation)
 	}
 	st.PluginWarning = rec.PluginWarning
@@ -196,6 +198,9 @@ func closedState(rec Record) State {
 	}
 	if rec.ClosedAt == "" && rec.handedOff() {
 		st.Status, st.HandedOffAt = StatusHandedOff, rec.HandedOffAt
+		if rec.Lead {
+			st.Lifecycle = wsdashboard.SessionStopped
+		}
 	}
 	return st
 }

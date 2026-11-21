@@ -309,7 +309,7 @@ func TestHandOffGivesTheSessionToTheTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "cd " + shellQuote(h.root) + " && claude --resume sess-1"
-	if st.Status != StatusHandedOff || st.Process || st.ResumeCommand != want {
+	if st.Status != StatusHandedOff || st.Lifecycle != wsdashboard.SessionStopped || st.Process || st.ResumeCommand != want {
 		t.Fatalf("handed-off state = %+v, want the resume command %q", st, want)
 	}
 	found := false
@@ -346,7 +346,7 @@ func TestHandOffGivesTheSessionToTheTerminal(t *testing.T) {
 		if h.holders.opCount("spawn") != spawns || h.mail.drainCount() != drains {
 			t.Fatalf("%s: mail resumed a handed-off session: %v, %d claims", when, h.holders.opList(), h.mail.drainCount())
 		}
-		if st := h.state(id); st.Status != StatusHandedOff || st.ResumeCommand != want {
+		if st := h.state(id); st.Status != StatusHandedOff || st.Lifecycle != wsdashboard.SessionStopped || st.ResumeCommand != want {
 			t.Fatalf("%s: state %+v", when, st)
 		}
 	}
@@ -361,7 +361,7 @@ func TestHandOffGivesTheSessionToTheTerminal(t *testing.T) {
 	if st := decodeState(t, h.route(lanBrowser, http.MethodGet, "/agents/"+id, nil)); st.Status != StatusHandedOff || st.ResumeCommand != "" {
 		t.Fatalf("GET from another device: %+v", st)
 	}
-	if st := decodeState(t, h.route(localBrowser, http.MethodGet, "/agents/"+id, nil)); st.ResumeCommand != want {
+	if st := decodeState(t, h.route(localBrowser, http.MethodGet, "/agents/"+id, nil)); st.Lifecycle != wsdashboard.SessionStopped || st.ResumeCommand != want {
 		t.Fatalf("GET from this machine: %+v", st)
 	}
 
@@ -416,6 +416,9 @@ func TestReopenOpensAClosedHostedSession(t *testing.T) {
 	}
 	// Closed sessions stay closed over a daemon restart, and reopen there.
 	h.restart()
+	if st := h.state(id); st.Lifecycle != wsdashboard.SessionPendingDeletion {
+		t.Fatalf("closed session lifecycle = %q, want pending deletion", st.Lifecycle)
+	}
 	r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/reopen", nil)
 	st := decodeState(t, r)
 	if r.status != http.StatusOK || st.Status != StatusIdle || st.ClosedAt != "" || !st.CanControl {

@@ -76,13 +76,19 @@ async function behaviour(browser) {
     assert.deepEqual(await openState(page), { halves: ['arch:false', 'del:false'], lists: [] }, 'ended closed again');
     const game = '#r-rail .rws[data-ws$="/gunpowder-odyssey"] .rfh[data-k="arch"]';
     assert.equal(await page.locator(game).isDisabled(), true, 'an empty archived half is disabled');
-    // Ended rows show the existing prune window; under a day in warning ink.
+    // A stopped terminal session stays in the regular list. The deleted
+    // fold shows the existing prune window, warned under a day.
+    assert.equal(await where(page, 'termtrial'), 'live', 'stopped terminal keeps its row');
+    assert.equal(await page.locator(row('termtrial') + ' .rstate').textContent(), '중단됨');
+    assert.equal(await page.locator(row('termtrial') + ' time.when.del').count(), 0);
     await half(page, 'del');
+    assert.equal(await where(page, 'release49'), 'del', 'deleted lead is folded');
+    assert.match(await page.locator(`${DEVENV} .rfh[data-k="del"]`).textContent(), /삭제됨/);
     const del = await page.locator(row('release49') + ' time.when.del').textContent();
     assert.match(del, /^6일 후 삭제$/, 'pending-deletion time: ' + del);
     assert.equal(await page.locator(row('hotfixprobe') + ' time.when.del.soon').count(), 1, 'under a day is warned');
     await half(page, 'del');
-    // Four states are distinct: active, asleep, archived, pending deletion.
+    // Active, asleep, archived, and deleted keep their styling.
     assert.deepEqual(await page.evaluate(() => ['mainlead', 'reviewer', 'docaudit', 'release49'].map((id) => document.querySelector('#r-rail .rs[data-rid="' + id + '"]').className)),
       ['rs hosted-row', 'rs stopped hosted-row', 'rs ended stopped archived hosted-row', 'rs ended'], 'row classes');
 

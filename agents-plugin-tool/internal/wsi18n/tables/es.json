@@ -217,6 +217,8 @@
   "hd.title": "Contenedores de sesión",
   "head.ended": "finalizada",
   "head.ended.title": "esta sesión ha finalizado",
+  "head.stopped": "Detenida",
+  "head.stopped.title": "Esta sesión está detenida",
   "head.stores": "solo almacenes",
   "head.stores.title": "no hay adaptador de host en vivo: solo se muestran los almacenes de la sesión",
   "head.name.copy": "clic para copiar",

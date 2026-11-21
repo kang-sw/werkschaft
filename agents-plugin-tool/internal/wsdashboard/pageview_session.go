@@ -234,6 +234,7 @@ func buildSessionView(in pageInputs) SessionView {
 		ProjectName:      filepath.Base(reg.Project),
 		Harness:          reg.Harness,
 		Live:             reg.Live(in.Now),
+		Lifecycle:        DeriveSessionLifecycle(reg, in.Session.Hidden, in.Now),
 		ProcessRunning:   harnessRunning(reg, in.Now),
 		Adapter:          adapterPresent(in.Snapshot, in.Now),
 		Hosted:           reg.Hosted,

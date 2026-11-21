@@ -22,9 +22,15 @@ func TestSessionLifecycleDerivationContract(t *testing.T) {
 		{"archived", Registration{Hosted: true, HeartbeatAt: fresh, HostStopped: true}, true, SessionArchived},
 		{"stale open archived", Registration{Hosted: true, HeartbeatAt: stale, HostStopped: true}, true, SessionArchived},
 		{"ended archived", Registration{Hosted: true, HeartbeatAt: fresh, EndedAt: fresh}, true, SessionPendingDeletion},
-		{"stale visible", Registration{Hosted: true, HeartbeatAt: stale}, false, SessionPendingDeletion},
+		{"stale hosted running", Registration{Hosted: true, HeartbeatAt: stale, HostPID: 123}, false, SessionActiveOn},
+		{"stale hosted asleep", Registration{Hosted: true, HeartbeatAt: stale, HostStopped: true}, false, SessionAsleep},
+		{"hosted process exit", Registration{Hosted: true, HeartbeatAt: fresh, HostStopped: true, HostExitReason: "child_exited"}, false, SessionStopped},
+		{"hosted idle timeout", Registration{Hosted: true, HeartbeatAt: fresh, HostStopped: true, HostExitReason: "idle_timeout"}, false, SessionStopped},
+		{"hosted user stop", Registration{Hosted: true, HeartbeatAt: fresh, HostStopped: true, HostExitReason: "stop"}, false, SessionAsleep},
+		{"clean external exit", Registration{HeartbeatAt: fresh, EndedAt: fresh}, false, SessionStopped},
+		{"retired worker", Registration{Agent: true, HeartbeatAt: fresh, EndedAt: fresh}, false, SessionStopped},
 		{"terminal retained sidecar", Registration{HeartbeatAt: fresh}, true, SessionActiveOn},
-		{"stale terminal retained sidecar", Registration{HeartbeatAt: stale}, true, SessionPendingDeletion},
+		{"stale terminal retained sidecar", Registration{HeartbeatAt: stale}, true, SessionStopped},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := DeriveSessionLifecycle(tc.reg, tc.hidden, testNow); got != tc.want {
@@ -101,7 +107,7 @@ func TestSessionLifecycleIndexSidecarAndClockContract(t *testing.T) {
 	idx.Reread(reg.ReplyID)
 	idx.Settle()
 	visible, _ := idx.Session(reg.ReplyID)
-	if visible.Hidden || visible.Lifecycle != SessionPendingDeletion || visible.Rev <= archived.Rev {
+	if visible.Hidden || visible.Lifecycle != SessionAsleep || visible.Rev <= archived.Rev {
 		t.Fatalf("sidecar reread = %+v, previous = %+v", visible, archived)
 	}
 	now = testNow

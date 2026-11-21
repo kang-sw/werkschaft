@@ -59,6 +59,7 @@ func peerGroup(contacts []Contact, project string, lookup sessionLookup, now tim
 			if s, ok := lookup.get(row.ReplyID); ok {
 				row.Served = true
 				row.Live = s.Live
+				row.Lifecycle = DeriveSessionLifecycle(s.Registration, s.Hidden, now)
 				if !m.named {
 					row.Label = s.Label
 				}

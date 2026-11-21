@@ -29,7 +29,9 @@ func TestRailSequentialAdmission(t *testing.T) {
 				var inputs []railInput
 				add := func(id string, ended time.Time) {
 					registered := now.Add(-24 * time.Hour).Add(time.Duration(len(inputs)) * time.Minute)
-					inputs = append(inputs, railInput{Session: railSession(id, project, registered, ended), Repo: repo})
+					session := railSession(id, project, registered, ended)
+					session.Hosted = !ended.IsZero() // folded fixtures are deleted hosted leads
+					inputs = append(inputs, railInput{Session: session, Repo: repo})
 				}
 				for _, id := range []string{"first", "second", "parent", "child-one", "child-two", "star-old", "star-parent", "star-child"} {
 					add(id, time.Time{})
@@ -154,11 +156,13 @@ func TestRailAdmissionPreservesRevival(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ended := range []time.Time{now.Add(-time.Minute), {}} {
+		parent := railSession("parent", path, now.Add(-3*time.Hour), ended)
+		parent.Hosted = true
 		v := buildRailView([]railInput{
 			{Session: railSession("new", path, now, time.Time{})},
 			{Session: railSession("child", path, now.Add(-time.Hour), time.Time{})},
 			{Session: railSession("last", path, now.Add(-2*time.Hour), time.Time{})},
-			{Session: railSession("parent", path, now.Add(-3*time.Hour), ended)},
+			{Session: parent},
 			{Session: railSession("first", path, now.Add(-4*time.Hour), time.Time{})},
 		}, nil, nil, now)
 		orderRailView(&v, doc, railFactsOf(v))

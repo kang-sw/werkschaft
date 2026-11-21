@@ -49,7 +49,8 @@ type SessionView struct {
 	Project, ProjectName string
 	Harness              string
 	// Live is the served-session liveness rule (Registration.Live).
-	Live bool
+	Live      bool
+	Lifecycle SessionLifecycle
 	// ProcessRunning is the harness process state shown in the header.
 	ProcessRunning bool
 	// Adapter reports a live host adapter (a fresh snapshot naming one):
@@ -383,8 +384,9 @@ type PeerRow struct {
 	Label string
 	// Served reports that this daemon indexes the peer, so the row links to
 	// its page and shows its live state.
-	Served bool
-	Live   bool
+	Served    bool
+	Live      bool
+	Lifecycle SessionLifecycle
 	// LastExchange is the latest exchange over the merged addresses (epoch ms).
 	LastExchange int64
 	// Adapter reports that a served peer has a live host adapter; only then
