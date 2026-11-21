@@ -183,7 +183,12 @@ func (p *streamProcess) feed(line []byte, seq uint64, replay bool) {
 	if replay {
 		replies = silentReplies{}
 	}
-	evs := p.mapper.mapLine(line, replies)
+	var evs []Event
+	if m, ok := p.mapper.(*claudeMapper); ok && (replay || p.holder != nil && p.holder.buffered(seq)) {
+		evs = m.mapClaudeLine(line, replies, false)
+	} else {
+		evs = p.mapper.mapLine(line, replies)
+	}
 	if m, ok := p.mapper.(*piMapper); ok && m.pendingCommand != nil && m.pendingCommand.Seq == 0 {
 		m.pendingCommand.Seq, m.pendingCommand.Replay = seq, replay
 	}
