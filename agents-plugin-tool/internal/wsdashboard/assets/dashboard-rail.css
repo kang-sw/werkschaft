@@ -558,9 +558,12 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
    check's facts (the changed files in a scrolling list, the holders with a
    live one marked as blocking), the refusal note, the force notice, the
    typed-name confirmation, and a danger-coloured Delete */
-dialog.rdeldlg { width: min(460px, calc(100vw - 24px)); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px; border: 0; border-radius: 12px;
+dialog.rdeldlg { width: min(460px, calc(100vw - 24px)); height: fit-content; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px; border: 0; border-radius: 12px;
   background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line); font-size: 12.5px; }
-dialog.rdeldlg[open] { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+/* Flex column instead of display:grid so macOS WKWebView's top-layer dialog
+   grid sizing cannot stretch the modal and its action row to max-height. */
+dialog.rdeldlg[open] { display: flex; flex-direction: column; gap: 10px; }
+dialog.rdeldlg > * { flex: none; min-width: 0; }
 dialog.rdeldlg::backdrop { background: var(--scrim, rgb(0 0 0 / .35)); }
 dialog.rdeldlg [hidden] { display: none !important; }
 .rdeldlg .rdhd { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 14px; font-weight: 800; }
@@ -593,7 +596,7 @@ dialog.rdeldlg [hidden] { display: none !important; }
 .rdeldlg .rdq:focus-visible { outline: 1.5px solid var(--wb-fail); }
 .rdeldlg .rdmsg { margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); overflow-wrap: anywhere; }
 .rdeldlg .rdmsg.err { color: var(--wb-fail); }
-.rdeldlg .rdrow { display: flex; justify-content: flex-end; gap: 6px; }
+.rdeldlg .rdrow { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
 .rdeldlg .pbtn { white-space: nowrap; flex: none; font: inherit; font-size: 12px; font-weight: 700; border: 0; border-radius: 999px; padding: 4px 14px; cursor: pointer; background: var(--wb-muted); color: var(--wb-muted-fg); }
 .rdeldlg .pbtn.danger { background: var(--wb-fail); color: var(--wb-card); }
 .rdeldlg.rgitdlg .rdhd .i { color: var(--wb-primary); }
