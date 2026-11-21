@@ -123,9 +123,9 @@ func TestHostedLeadPlaybookCommands(t *testing.T) {
 		"Never use the native `Agent` tool. Start a subagent only with the ws `agent.spawn` tool, and continue one with the ws `mailbox.send` tool. " +
 		"This session has no ws skills: a `/<name>` reference such as `/lead-run` names a workflow playbook. " +
 		"The user runs one as that dashboard command, which sends you its playbook; you run one by reading it with the ws `playbook.read` tool and following it. " +
-		"The workflow manual below is binding; its session state is as of this session's start. " +
-		"It stays in this prompt, compactions included, so do not read it again with the workflow_manual tool: " +
-		"for fresh session state, and where the manual says to invoke `/lead-revive`, call the ws `workflow_state` tool with this key.\n\n" +
+		"The workflow manual below is binding and stays in this prompt across compaction. " +
+		"Use the session state delivered with your first turn or in a restore bundle. " +
+		"For fresh session state, and where the manual says to invoke `/lead-revive`, call the ws `workflow_state` tool with this key.\n\n" +
 		"# Workflow Manual\nrendered\n"
 	if prompt := appendedPrompt(t, h.holders.spawned(holder).Argv); prompt != wantPrompt {
 		t.Fatalf("lead prompt =\n%s\nwant\n%s", prompt, wantPrompt)

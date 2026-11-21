@@ -66,18 +66,15 @@ func hostedRenderServer(env []string, root string, render HostedRender, key stri
 	return s, release, nil
 }
 
-// RenderLeadManual renders the workflow manual of the hosted lead whose key
-// is key, as workflow_manual returns it on that session's own connection
-// (hostedRenderServer), without the read-full notice that tool result opens
-// with. The daemon appends it to the lead's system prompt at each launch,
-// so the session reads the manual from its first turn.
+// RenderLeadManual renders a hosted lead's workflow manual for its system
+// prompt. The daemon delivers the mutable session state in turn input.
 func RenderLeadManual(env []string, root string, render HostedRender, key string) (string, error) {
 	s, release, err := hostedRenderServer(env, root, render, key)
 	if err != nil {
 		return "", fmt.Errorf("workflow manual: %w", err)
 	}
 	defer release()
-	resp := s.handleWorkflowManual(nil, map[string]any{"session_key": key})
+	resp := s.renderWorkflowManual(nil, map[string]any{"session_key": key}, false)
 	text := ""
 	if result, ok := resp.Result.(map[string]any); ok {
 		if content, ok := result["content"].([]map[string]string); ok && len(content) > 0 {
@@ -88,6 +85,16 @@ func RenderLeadManual(env []string, root string, render HostedRender, key string
 		return "", fmt.Errorf("workflow manual: %s", text)
 	}
 	return strings.TrimSpace(strings.TrimPrefix(text, workflowManualReadFullNotice)), nil
+}
+
+// RenderHostedSessionState reads the current state for a hosted lead's first
+// turn, using the daemon's agent key and whiteboard stores.
+func (a *AgentKeyStore) RenderHostedSessionState(key string) (string, error) {
+	rec, err := a.store.readStateWithError(key, partAgenda|partTodos|partWhiteboard)
+	if err != nil {
+		return "", err
+	}
+	return renderSessionState(rec), nil
 }
 
 // RenderHostedRestoreBundle reads the current split session state and renders

@@ -486,6 +486,14 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		c.replaying, c.seq = true, rec.HolderSeq
 		return nil
 	}
+	// A pending restore already carries state. Queue startup state for the
+	// first model turn after a launch, including when the harness resumes.
+	if c.r.opts.LeadSessionState != nil &&
+		!strings.HasPrefix(c.compactNote, restartRestoreMarker) &&
+		!strings.HasPrefix(c.compactNote, compactionRestoreMarker) &&
+		!strings.HasPrefix(c.compactNote, leadStartStateMarker) {
+		c.compactNote = leadStartStateMarker + c.compactNote
+	}
 	c.dirtyModel, c.dirtyEffort, c.dirtyMode, c.dirtyPermission, c.reconcileMode = false, false, false, false, false
 	c.seq, c.seqDirty, c.live.ringDirty = 0, false, false
 	c.update(func(rec *Record) {
@@ -875,12 +883,12 @@ func composeLeadInstructions(dir string, rec Record, manual, steer string, comma
 			"The user runs one as that dashboard command, which sends you its playbook; you run one by reading it with the ws `playbook.read` tool and following it. "
 	}
 	if manual = strings.TrimSpace(manual); manual != "" && commands {
-		text += "The workflow manual below is binding; its session state is as of this session's start. " +
-			"It stays in this prompt, compactions included, so do not read it again with the workflow_manual tool: " +
-			"for fresh session state, and where the manual says to invoke `/lead-revive`, call the ws `workflow_state` tool with this key.\n\n" + manual
+		text += "The workflow manual below is binding and stays in this prompt across compaction. " +
+			"Use the session state delivered with your first turn or in a restore bundle. " +
+			"For fresh session state, and where the manual says to invoke `/lead-revive`, call the ws `workflow_state` tool with this key.\n\n" + manual
 	} else if manual != "" {
-		text += "The workflow manual below is binding; its session state is as of this session's start. " +
-			"After any compaction, or when you need fresh session state, call the workflow_state tool with this key; the manual stays in this prompt.\n\n" + manual
+		text += "The workflow manual below is binding and stays in this prompt across compaction. " +
+			"Use the session state delivered with your first turn or in a restore bundle. For fresh session state, call the workflow_state tool with this key.\n\n" + manual
 	} else {
 		text += "At session start, call the workflow_manual tool with this key and follow it; after any compaction, call workflow_state for fresh session state."
 	}
