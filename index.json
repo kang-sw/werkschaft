@@ -509,16 +509,6 @@
     "261119-feat-ws-named-custom-tiers": {
       "registered_at": "2026-11-19T08:32:19Z"
     },
-    "261119-feat-ws-tracker-cc-assign-picker-modal": {
-      "registered_at": "2026-11-19T01:41:01Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-20T08:13:05Z"
-      }
-    },
     "261119-feat-ws-whiteboard-frame-css-isolation": {
       "registered_at": "2026-11-19T06:59:13Z"
     },
