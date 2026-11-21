@@ -2,7 +2,6 @@
 // clients. No daemon option or production guard is changed for tests.
 const playwright = require(process.env.WS_PLAYWRIGHT_REAL_MODULE || process.env.WS_PLAYWRIGHT_MODULE);
 const cookies = JSON.parse(process.env.WS_DASHBOARD_TEST_COOKIES || '[]');
-const chromium = Object.create(playwright.chromium);
 function authenticatedPage(page) {
   const goto = page.goto.bind(page);
   page.goto = async (url, ...args) => {
@@ -29,7 +28,18 @@ function authenticatedBrowser(browser) {
   };
   return browser;
 }
-for (const method of ['launch', 'connect', 'connectOverCDP']) {
-  chromium[method] = async (...args) => authenticatedBrowser(await playwright.chromium[method](...args));
+function authenticatedBrowserType(type) {
+  if (!type) return type;
+  const wrapped = Object.create(type);
+  for (const method of ['launch', 'connect', 'connectOverCDP']) {
+    if (typeof type[method] === 'function') {
+      wrapped[method] = async (...args) => authenticatedBrowser(await type[method](...args));
+    }
+  }
+  return wrapped;
 }
-module.exports = { ...playwright, chromium };
+module.exports = {
+  ...playwright,
+  chromium: authenticatedBrowserType(playwright.chromium),
+  webkit: authenticatedBrowserType(playwright.webkit),
+};

@@ -5,20 +5,25 @@ package wsagent
 import (
 	"encoding/json"
 	"errors"
-	"github.com/kang-sw/devenv/internal/wslive"
 	"slices"
 	"strings"
+
+	"github.com/kang-sw/devenv/internal/wslive"
 )
 
 func (m *claudeMapper) mapLine(line []byte, replies lineReplies) []Event {
-	evs := m.mapEvents(line, replies)
+	return m.mapClaudeLine(line, replies, true)
+}
+
+func (m *claudeMapper) mapClaudeLine(line []byte, replies lineReplies, observeLimits bool) []Event {
+	evs := m.mapEvents(line, replies, observeLimits)
 	if slices.ContainsFunc(evs, func(ev Event) bool { return ev.TurnStart }) {
 		m.ended = false
 	}
 	return evs
 }
 
-func (m *claudeMapper) mapEvents(line []byte, replies lineReplies) []Event {
+func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits bool) []Event {
 	var l claudeLine
 	if json.Unmarshal(line, &l) != nil {
 		return nil
@@ -220,10 +225,15 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies) []Event {
 	case "rate_limit_event":
 		if l.RateLimit != nil {
 			m.rateLimit(*l.RateLimit)
-			for kind, w := range l.RateLimit.UnifiedWindows {
-				if (kind == wslive.LimitFiveHour || kind == wslive.LimitSevenDay) && w.Utilization != nil {
-					m.limits[kind] = wslive.UsageLimit{Kind: kind, Percent: *w.Utilization * 100, ResetsAt: w.ResetsAt * 1000}
-					m.limitsAsOf = now
+			if observeLimits {
+				var limits []wslive.UsageLimit
+				for _, kind := range []string{wslive.LimitFiveHour, wslive.LimitSevenDay} {
+					if w := l.RateLimit.UnifiedWindows[kind]; w.Utilization != nil {
+						limits = append(limits, wslive.UsageLimit{Kind: kind, Percent: *w.Utilization * 100, ResetsAt: w.ResetsAt * 1000})
+					}
+				}
+				if len(limits) > 0 {
+					m.limits, m.limitsAsOf = limits, now
 				}
 			}
 			return []Event{m.status()}

@@ -5,6 +5,10 @@ related:
   261119-feat-ws-audit-capture-harness-adapters: "consumer: maps each harness onto this envelope"
   261119-feat-ws-audit-ring-store: "consumer: persists this envelope"
   261114-feat-ws-conversation-audit-event-store: "superseded source of (545), (546), (595), (598) and the envelope-level parts of (599)"
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-completeness-reviewed: 2fdb23602abd9add
+sage-review-design-reviewed: 2fdb23602abd9add
 ---
 
 # Audit policy and common event envelope
@@ -19,19 +23,23 @@ It carries the policy and envelope decisions of the superseded
 
 Verified findings (codex.large read-only research, 2026-11-19):
 
-- All four registered harnesses (Claude, Codex, agy, Pi) use `wsagent` line
+- All four built-in harnesses (Claude, Codex, agy, Pi) use `wsagent` line
   mappers, but holder filtering drops some output before the mapper; full
   capture needs the pre-filter tap planned in child 2
   (agents-plugin-tool/internal/wsagent/registration.go#L92-L101,
+  agents-plugin-tool/internal/wsagent/claude.go#L483-L483,
+  agents-plugin-tool/internal/wsagent/codex.go#L117-L134,
+  agents-plugin-tool/internal/wsagent/pi_launch.go#L245-L246,
+  agents-plugin-tool/internal/wsagent/agy.go#L199-L202,
   agents-plugin-tool/internal/wsagent/stream.go#L169-L198,
   agents-plugin-tool/internal/wsagent/claude_protocol.go#L119-L124,
   agents-plugin-tool/internal/wsagent/agy.go#L122-L125).
 - Tool call IDs and argument and result content appear in harness output;
   the batch tracker retains IDs but its wire calls omit them, and `wslive`
   summaries retain argument previews without result content
-  (agents-plugin-tool/internal/wsagent/claude_protocol.go#L240-L251,
-  agents-plugin-tool/internal/wsagent/stream.go#L436-L443,
-  agents-plugin-tool/internal/wsagent/stream.go#L535-L555,
+  (agents-plugin-tool/internal/wsagent/claude_protocol.go#L246-L255,
+  agents-plugin-tool/internal/wsagent/stream.go#L443-L450,
+  agents-plugin-tool/internal/wsagent/stream.go#L542-L562,
   agents-plugin-tool/internal/wslive/toolsummary.go#L9-L15). The envelope
   must be built before that reduction (child 2 owns where).
 
@@ -75,8 +83,9 @@ Verified findings (codex.large read-only research, 2026-11-19):
      Claude's `tool_result` content vs the full `tool_use_result`). An absent
      `seen` means fully seen or unknown. This is per body, separate from
      `model_seen` ((599) additive field).
-   - `stored_trunc: {in?, out?}` marks a body the store kept only as head
-     plus tail ((1737)=b, child 3). Per body it records the original byte
+   - `stored_trunc: {in?, out?, raw?}` marks a body the store kept only as
+     head plus tail ((1737)=b, child 3). It covers every body the ring-store
+     per-body cap bounds (`in`, `out` and `raw`; ring-store Decision 9). Per body it records the original byte
      length and the kept head and tail lengths. It is separate from `seen`
      (what the model received) and from the read API's response-level
      `truncated` (a body too large for one response). Absent means the body
@@ -146,21 +155,24 @@ Verified findings (codex.large read-only research, 2026-11-19):
 - 261114-feat-ws-conversation-audit-event-store (2026-11-19, Resolution): "(545), (546), (595), (598) and the envelope-level parts of (599) go to `261119-feat-ws-audit-policy-event-envelope`." — bearing: supports
 - 261114-refactor-ws-common-session-interface (2026-11-14, Decisions): "Expose the session/event/adapter boundary audit needs without independently redefining audit's approved envelope, kinds, capture/redaction or call-ID contract (594–601)." — bearing: supports
 - 54b93bfb (2026-11-12, commit): "redaction is implemented now, in wslive, at the single choke point State.argsPreview" — bearing: constrains
+- 261119-epic-ws-conversation-audit (2026-11-19, Cross-Child Decisions): "The inferred compaction is the model-seen cut, labelled `meta.estimated: true`." — bearing: constrains
+- 261119-feat-ws-audit-ring-store (2026-11-21, commit): "audit store moved from SQLite to a per-session segment ring under the owner's storage-type rule (1960)=a and capacity policy (1970)=a" — bearing: constrains
+- 261119-feat-ws-dashboard-audit-view (2026-11-19, Decisions): "Every byte comes from the query API ((599))." — bearing: constrains
 
 ## Route Facts
 
 | fact | value | evidence |
 |---|---|---|
-| scope.span | multi-file | agents-plugin-tool/internal/wsagent/stream.go and agents-plugin-tool/internal/wslive/toolsummary.go are named; implementation paths are not fixed |
+| scope.span | multi-file | agents-plugin-tool/internal/wsagent/stream.go and agents-plugin-tool/internal/wslive/toolsummary.go are named; Phase 1 implementation paths are not fixed |
 | scope.surface | cross-module | Phase 1 provides a sink interface for capture and store children |
 | scope.new_public_symbol | yes | sink interface shared with capture and store children; name not specified |
 | scope.new_type_contract | yes | versioned envelope, kinds, policy gate and sink interface |
-| scope.test_surface | new-files | Phase 1 requests unit tests for the new envelope and gate; test paths are unspecified |
-| complexity.reuse_points | confirmed | wsagent line mapper and batch tracker and wslive tool summaries were read |
+| scope.test_surface | unknown | Phase 1 requires unit tests, but does not specify whether to extend existing tests or create files |
+| complexity.reuse_points | unconfirmed | Phase 1 specifies a new envelope, cut, gate and sink; it does not identify an existing implementation to reuse |
 | complexity.side_effect_risk | moderate | policy covers all hosted sessions and feeds capture and storage |
 | risk.correctness | high | cut and policy must classify every event and session correctly |
 | risk.fit | high | shared sink must support independently implemented capture and store children |
-| risk.test | high | every kind and hosted and non-hosted session need coverage across adapters |
+| risk.test | high | Phase 1 requires every kind across hosted and non-hosted sessions, plus serialization, raw and cut coverage |
 | risk.security_or_contract | high | versioned shared envelope carries potentially sensitive tool and hidden-event content |
 
 ## Phases
@@ -170,12 +182,23 @@ Verified findings (codex.large read-only research, 2026-11-19):
 Define the envelope (Decision 4) with its schema version and kind set, the
 model-seen cut rule (Decision 5) as a pure function over an event sequence,
 and one policy gate that answers "capture this event for this session?":
-every Decision 4 kind (Decision 6) for every daemon-hosted session
-(Decision 7), with no per-session switch. Provide the sink interface the capture child writes to and the store
-child implements, so children 2 and 3 can proceed in parallel.
+the Decision 6 scope (tool calls, hidden events and `other`) for every
+daemon-hosted session (Decision 7), with no per-session switch. The
+ordinary visible conversation kinds `user` and `assistant_text` stay in the
+kind set but the gate refuses them, because (1730)=b captures tool calls
+plus hidden events only and the display ring already carries visible text.
+The gate judges normalized events, not raw lines: one harness line can decode
+into several events (a Claude assistant line carrying text and tool-call
+blocks, a `user`-labelled line carrying a tool result), and the gate keeps
+each in-scope event and drops the ordinary conversation text. A recognized
+line whose events are all out of scope yields nothing, not `other`; `other`
+is only for lines no mapping recognizes. Provide the sink interface the
+capture child writes to and the store child implements, so children 2 and 3
+can proceed in parallel.
 
 Verification: unit tests for envelope JSON round-trip with the schema
 version present; an unknown line becomes `other` with `raw`; the cut marks
 earlier events false and falls back to the conversation start; a mapped kind
-never carries `raw`; the policy gate admits a lead and a `ws/agent.*` child
-and refuses a non-hosted (CLI-tier) session, for every kind.
+never carries `raw`; the policy gate admits every Decision 6 kind for a lead and a
+`ws/agent.*` child, refuses `user` and `assistant_text` for both, and
+refuses a non-hosted (CLI-tier) session for every kind.

@@ -217,6 +217,8 @@
   "hd.title": "Contenitori di sessione",
   "head.ended": "terminata",
   "head.ended.title": "questa sessione è terminata",
+  "head.stopped": "Arrestata",
+  "head.stopped.title": "Questa sessione è arrestata",
   "head.stores": "solo archivi",
   "head.stores.title": "nessun adattatore host attivo: vengono mostrati solo gli archivi della sessione",
   "head.name.copy": "clic per copiare",

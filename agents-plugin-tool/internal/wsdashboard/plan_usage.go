@@ -195,15 +195,13 @@ func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
 	if s == nil || snap == nil || snap.Adapter != "claude" || snap.Usage == nil {
 		return
 	}
-	// A status without limits is not a complete usage response. Invalid
-	// figures likewise cannot safely establish which windows are absent.
+	// Legacy snapshots can contain limits without an observation time.
+	// UpdatedAt tracks snapshot activity, including heartbeats for old limits.
 	observedAt := snap.Usage.LimitsAsOf
-	if observedAt <= 0 {
-		observedAt = snap.UpdatedAt
-	}
 	if observedAt <= 0 || len(snap.Usage.Limits) == 0 {
 		return
 	}
+	// Invalid figures cannot safely establish which windows are absent.
 	for _, v := range snap.Usage.Limits {
 		if (v.Kind != wslive.LimitFiveHour && v.Kind != wslive.LimitSevenDay) || !validUsage(v.Percent) {
 			return
@@ -238,13 +236,10 @@ func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
 	s.claude.Windows = kept
 	var samples []planUsageSample
 	for _, v := range snap.Usage.Limits {
-		if (v.Kind != wslive.LimitFiveHour && v.Kind != wslive.LimitSevenDay) || !validUsage(v.Percent) {
+		if !live(v.ResetsAt) {
 			continue
 		}
 		next := planUsageWindow{Kind: v.Kind, Percent: v.Percent, ResetsAt: v.ResetsAt, AsOf: observedAt}
-		if next.AsOf <= 0 || !live(next.ResetsAt) {
-			continue
-		}
 		i := 0
 		for i < len(s.claude.Windows) && s.claude.Windows[i].Kind != v.Kind {
 			i++

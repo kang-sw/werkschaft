@@ -142,7 +142,7 @@ func TestPlanUsageHistoryMissingCorruptNewerAndRepair(t *testing.T) {
 		if string(historyBytes(t, s)) != raw {
 			t.Fatal("corrupt/newer history destructively rewritten")
 		}
-		s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: now, Usage: &wslive.Usage{Limits: []wslive.UsageLimit{{Kind: "five_hour", Percent: 30, ResetsAt: now + 100000}}}})
+		s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: now, Usage: &wslive.Usage{LimitsAsOf: now, Limits: []wslive.UsageLimit{{Kind: "five_hour", Percent: 30, ResetsAt: now + 100000}}}})
 		if len(s.entries()) != 1 || s.entries()[0].Windows[0].Percent != 30 {
 			t.Fatal("bad history broke latest usage")
 		}
@@ -161,7 +161,7 @@ func TestPlanUsageHistoryClaudeAcceptanceAndCacheRereads(t *testing.T) {
 	now := time.Now().UnixMilli()
 	reset := now + 100000
 	push := func(at int64, p float64, r int64) {
-		s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: at, Usage: &wslive.Usage{Limits: []wslive.UsageLimit{{Kind: "five_hour", Percent: p, ResetsAt: r}}}})
+		s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: at, Usage: &wslive.Usage{LimitsAsOf: at, Limits: []wslive.UsageLimit{{Kind: "five_hour", Percent: p, ResetsAt: r}}}})
 	}
 	push(now, 20, reset)
 	push(now+1, 20, reset)

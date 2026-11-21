@@ -97,11 +97,7 @@ func (s *Server) handleAgentTool(ctx context.Context, id json.RawMessage, tool s
 		}
 		return toolTextResponse(id, formatAgentInterrupt(res), nil)
 	case "agent.list":
-		children := runner.AgentList(caller)
-		if wantsJSON(args) {
-			return toolJSONResponse(id, agentListJSON(children), nil)
-		}
-		return toolTextResponse(id, formatAgentList(children), nil)
+		return agentListResponse(id, runner.AgentList(caller), args)
 	case "agent.tiers":
 		res, err := runner.AgentTiers(caller)
 		if err != nil {
@@ -162,10 +158,7 @@ func (s *Server) handleAgentForward(ctx context.Context, id json.RawMessage, too
 		if err := s.piCall(ctx, tool, map[string]any{}, piForwardTimeout, &answer); err != nil {
 			return agentFailure(id, tool, err)
 		}
-		if wantsJSON(args) {
-			return toolJSONResponse(id, agentListJSON(answer.Agents), nil)
-		}
-		return toolTextResponse(id, formatAgentList(answer.Agents), nil)
+		return agentListResponse(id, answer.Agents, args)
 	case "agent.tiers":
 		var res wsagent.AgentTiers
 		if err := s.piCall(ctx, tool, map[string]any{}, piForwardTimeout, &res); err != nil {
@@ -243,13 +236,6 @@ func formatAgentInterrupt(res wsagent.AgentInterruptResult) string {
 		}
 	}
 	return b.String()
-}
-
-func agentListJSON(children []wsagent.AgentChild) []wsagent.AgentChild {
-	if children == nil {
-		return []wsagent.AgentChild{}
-	}
-	return children
 }
 
 func formatAgentList(children []wsagent.AgentChild) string {
@@ -368,12 +354,13 @@ func agentToolDefinitions() []map[string]any {
 		},
 		{
 			"name":        "agent.list",
-			"description": "List your direct child agents. State waiting means asleep with no turn; background means turn ended with background work running. Send follow-ups with mailbox.send to the child's address. Text by default; format=json for structured output.",
+			"description": "List active direct children, up to 10 recent inactive names, and counts for the rest. Send follow-ups with mailbox.send to the child's address.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_key": key,
-					"format":      format,
+					"format":      stringProperty(`"json" for the full array. Set full=false for a compact JSON summary.`),
+					"full":        boolProperty("Include all child details when true."),
 				},
 				"required": []string{"session_key"},
 			},

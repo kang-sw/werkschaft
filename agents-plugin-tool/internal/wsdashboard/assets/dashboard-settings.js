@@ -78,7 +78,7 @@
     context: {worktree: query.get("worktree") || "", session: query.get("session") || ""}
   };
   var snapshot = null, failure = "", activeSection = "workflow", adapter = "claude", filter = "all";
-  var buckets = new Map(), warnings = new Map();
+  var buckets = new Map(), warnings = new Map(), openLayers = new Set();
   var catalog = window.WsSettingsCatalog;
   var specs = new Map(catalog.map(function (spec) { return [spec.key, spec]; }));
   var families = catalog.filter(function (spec) { return spec.key.endsWith(".*"); });
@@ -151,6 +151,12 @@
     return "";
   }
 
+  function scopeHref(name) {
+    if (name === "synced") return "";
+    var rememberedProject = new URLSearchParams(window.parent.location.hash.slice(1)).get("project");
+    return window.WsShell.settingsScopeHref(name, selection, projectForWorktree, rememberedProject);
+  }
+
   function scopeName(name) {
     return scopes.includes(name) ? tr(scopeLabels[name]) : name;
   }
@@ -188,8 +194,7 @@
 
   function scopeButton(name) {
     var active = name === scope, planned = name === "synced";
-    var rememberedProject = new URLSearchParams(window.parent.location.hash.slice(1)).get("project");
-    var href = planned ? "" : window.WsShell.settingsScopeHref(name, selection, projectForWorktree, rememberedProject);
+    var href = scopeHref(name);
     var cls = "prec-node" + (planned ? " synced" : "") + (active ? " active " + name + "-mode" : "");
     var node = button(cls, scopeName(name), function () { send("nav", {href: href}); });
     node.dataset.settingsScope = name;
@@ -272,7 +277,12 @@
 
   function shownValue(value) {
     if (value === null || value === undefined || value === "") return tr("js.settings.empty_value");
-    if (typeof value === "object") return JSON.stringify(value, null, 2);
+    if (typeof value === "object") {
+      if ("backend" in value || "model" in value || "effort" in value) {
+        return [value.backend, value.model, value.effort].filter(Boolean).join(" · ") || tr("js.settings.empty_value");
+      }
+      return JSON.stringify(value);
+    }
     if (value === true || value === "on") return tr("js.settings.on");
     if (value === false || value === "off") return tr("js.settings.off");
     return String(value);
@@ -296,46 +306,151 @@
     throw err;
   }
 
-  function badge(text, style) { return el("span", "prov-pill" + (style ? " " + style : ""), text); }
-
-  function provenance(entry, canEdit, reset) {
-    var node = el("div", "kprov");
-    var here = selected(entry) !== undefined;
-    var bucketSuffix = entry.selectors.harness && entry.selectors.harness !== "default" ? bucketName(entry.selectors.harness) : "";
-    if (scope === "builtin") {
-      var lock = badge("", "lock");
-      lock.append(svgIcon("i-lock"), document.createTextNode(scopeName("builtin")));
-      node.append(lock);
-    } else if (here) {
-      var target = scopeName(scope) + (bucketSuffix ? " · " + bucketSuffix : "");
-      node.append(badge(tr("js.settings.override_scope", target), "here"));
-    } else {
-      node.append(badge(tr(entry.conditional ? "js.settings.source_conditional" : "js.settings.source", source(entry))));
-    }
-    if (shadowed(entry)) node.append(el("span", "shadow-note", tr(entry.conditional ? "js.settings.shadow_conditional" : "js.settings.shadow", source(entry))));
-    if (here && canEdit) node.append(button("reset-btn", tr("js.settings.reset"), reset));
-    var layers = el("details", "config-layers");
-    layers.append(el("summary", "", tr("js.settings.layers")));
-    var details = [el("li", "layer-summary", tr(entry.conditional ? "js.settings.value_conditional" : "js.settings.value_effective", shownValue(entry.value)))];
-    if (scope === "builtin") {
-      details.push(el("li", "layer-summary", tr("js.settings.builtin_value", shownValue(entry.default))));
-    } else if (here) {
-      details.push(el("li", "layer-summary", tr("js.settings.override", shownValue(selected(entry)))));
-    }
-    entry.layers.slice().reverse().forEach(function (layer) {
-      var value = layer.status === "context_missing" ? tr("js.settings.context_missing") :
-        !layer.evaluated ? tr("js.settings.not_applicable") : layer.present ? shownValue(layer.value) : tr("js.settings.no_override");
+  function buildLayerDrawer(entry, spec, drawerId) {
+    var drawer = el("div", "layer-drawer");
+    drawer.id = drawerId;
+    drawer.setAttribute("role", "region");
+    drawer.setAttribute("aria-label", tr("js.settings.layers") + " · " + entry.key);
+    drawer.append(el("span", "layer-drawer-lbl", tr("js.settings.layers")));
+    var chain = el("div", "layer-chain");
+    var ordered = entry.layers.slice().reverse();
+    var draft = scope === "repo" && extension.hasDraft && extension.hasDraft(entry, selection);
+    ordered.forEach(function (layer, idx) {
+      if (idx) {
+        var arrow = el("span", "larrow", "→");
+        arrow.setAttribute("aria-hidden", "true");
+        chain.append(arrow);
+      }
+      var chip = el("button", "lchip");
+      chip.type = "button";
+      chip.dataset.settingsLayer = layer.scope;
+      chip.dataset.layerStatus = layer.status;
       var from = layer.inherited ? tr("js.settings.inherited_session") : scopeName(layer.scope);
-      var text = from + (layer.bucket ? " · " + bucketName(layer.bucket) : "") + " — " + value;
-      if (layer.legacy) text += " · " + tr("js.settings.legacy_tier");
-      var item = el("li", "", text);
-      item.dataset.settingsLayer = layer.scope;
-      item.dataset.layerStatus = layer.status;
-      details.push(item);
+      if (layer.bucket && layer.bucket !== entry.selectors.harness) from += " · " + bucketShort(layer.bucket);
+      var isWinner = !draft && layer.scope === entry.source_scope && (!layer.bucket || layer.bucket === entry.source_bucket);
+      var isDraftLayer = draft && layer.scope === "repo";
+      var valText, isEmpty = false;
+      if (isDraftLayer) {
+        valText = draft.action === "reset" ? tr("js.settings.proposal.reset") : shownValue(draft.value);
+      } else if (layer.status === "context_missing") {
+        valText = tr("js.settings.context_missing_short");
+        isEmpty = true;
+      } else if (!layer.evaluated) {
+        valText = tr("js.settings.not_applicable");
+        isEmpty = true;
+      } else if (layer.present) {
+        valText = shownValue(layer.value);
+      } else {
+        valText = "—";
+        isEmpty = true;
+      }
+      if (isEmpty && !isWinner) chip.classList.add("is-empty");
+      if (isWinner) chip.classList.add("is-winner");
+      if (isDraftLayer) chip.classList.add("is-draft");
+      if (layer.scope === scope) chip.classList.add("is-active-scope");
+
+      chip.append(el("span", "lscope", from), el("span", "lsep", "·"), el("span", "lval", valText));
+      if (isWinner || isDraftLayer) {
+        var mark = el("span", "lmark", "✓");
+        mark.setAttribute("aria-hidden", "true");
+        chip.append(mark);
+      }
+      var href = layer.scope !== scope ? scopeHref(layer.scope) : "";
+      if (href) {
+        chip.title = (layer.status === "context_missing" ? tr("js.settings.context_missing") :
+          !layer.present && layer.evaluated ? tr("js.settings.no_override") : from + " · " + valText);
+        chip.addEventListener("click", function () { send("nav", {href: href}); });
+      } else {
+        chip.disabled = true;
+        chip.title = layer.status === "context_missing" ? tr("js.settings.context_missing") :
+          layer.legacy ? tr("js.settings.legacy_tier") :
+          (!layer.present && layer.evaluated ? tr("js.settings.no_override") : valText);
+      }
+      chain.append(chip);
     });
-    layers.append(append(el("ul"), ...details));
-    node.append(layers);
-    return node;
+    drawer.append(chain);
+    var noteText = draft ? tr("js.settings.proposal.queued") :
+      shadowed(entry) ? tr(entry.conditional ? "js.settings.shadow_conditional" : "js.settings.shadow", source(entry)) :
+      scope === "builtin" ? tr("js.settings.builtin_value", shownValue(entry.default)) :
+      selected(entry) !== undefined ? tr("js.settings.override", shownValue(selected(entry))) :
+      tr(entry.conditional ? "js.settings.value_conditional" : "js.settings.value_effective", shownValue(entry.value));
+    if (entry.layers.some(function (l) { return l.legacy && l.scope === scope; })) {
+      noteText = tr("js.settings.legacy_tier");
+    }
+    drawer.append(el("span", "layer-drawer-note", noteText));
+    return drawer;
+  }
+
+  function resetIconButton(cls, label, handler, hiddenPlaceholder) {
+    var btn = button("reset-icon-btn reset-btn" + (cls ? " " + cls : "") + (hiddenPlaceholder ? " placeholder" : ""), "", handler);
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.append(svgIcon("i-undo"));
+    if (hiddenPlaceholder) {
+      btn.disabled = true;
+      btn.tabIndex = -1;
+      btn.setAttribute("aria-hidden", "true");
+    }
+    return btn;
+  }
+
+  function originPillState(entry) {
+    var here = selected(entry) !== undefined;
+    var bucketSuffix = entry.selectors.harness && entry.selectors.harness !== "default" ? bucketShort(entry.selectors.harness) : "";
+    if (scope === "builtin") {
+      return {
+        text: scopeName("builtin"),
+        style: "lock",
+        title: tr("js.settings.layers") + " · " + tr("js.settings.builtin_value", shownValue(entry.default)),
+        lock: true
+      };
+    }
+    if (here) {
+      var target = scopeName(scope) + (bucketSuffix ? " · " + bucketSuffix : "");
+      return {
+        text: target,
+        style: shadowed(entry) ? "shadowed" : "here",
+        title: (shadowed(entry) ? tr(entry.conditional ? "js.settings.shadow_conditional" : "js.settings.shadow", source(entry)) : tr("js.settings.override_scope", target)) + " · " + tr("js.settings.layers"),
+        lock: false
+      };
+    }
+    var srcLabel = entry.source_inherited ? tr("js.settings.inherited_session") : scopeName(entry.source_scope);
+    if (entry.source_bucket && entry.source_bucket !== "default" && entry.source_bucket !== "*") {
+      srcLabel += " · " + bucketShort(entry.source_bucket);
+    }
+    return {
+      text: srcLabel,
+      style: shadowed(entry) ? "shadowed" : "",
+      title: tr(entry.conditional ? "js.settings.source_conditional" : "js.settings.source", source(entry)) + " · " + tr("js.settings.layers"),
+      lock: false
+    };
+  }
+
+  function provenance(entry, spec, canEdit, reset, onToggleLayer) {
+    var node = el("div", "kprov");
+    var id = entryID(entry);
+    var st = originPillState(entry);
+    var isOpen = openLayers.has(id);
+    var drawerId = "layer-" + id.replace(/[^a-z0-9_-]+/gi, "-");
+    var pill = button("origin-pill" + (st.style ? " " + st.style : ""), "", function () {
+      if (openLayers.has(id)) openLayers.delete(id);
+      else openLayers.add(id);
+      var expanded = openLayers.has(id);
+      pill.setAttribute("aria-expanded", String(expanded));
+      onToggleLayer(expanded, drawerId);
+    });
+    if (st.lock) pill.append(svgIcon("i-lock"));
+    pill.append(el("span", "lbl", st.text), el("span", "chev", isOpen ? "▴" : "▾"));
+    pill.title = st.title;
+    pill.setAttribute("aria-expanded", String(isOpen));
+    pill.setAttribute("aria-controls", drawerId);
+    pill.setAttribute("aria-label", st.text + " — " + tr("js.settings.layers"));
+    pill.dataset.settingsOriginPill = "1";
+    node.append(pill);
+
+    var here = selected(entry) !== undefined;
+    node.append(resetIconButton("", tr("js.settings.reset"), reset, !(here && canEdit)));
+    return {node: node, drawerId: drawerId, isOpen: isOpen, pill: pill};
   }
 
   function localizedWarning(warning) {
@@ -514,8 +629,9 @@
 
   function renderRow(entry, spec) {
     var canEdit = editable(entry, spec);
-    var row = el("article", "krow" + rowClass(entry, canEdit));
+    var row = el("article", "srow krow" + rowClass(entry, canEdit));
     row.dataset.configKey = entry.key;
+    var ctlWrap = el("div", "kctl-wrap");
     var form = el("form", "kctl");
     var status = el("span", "hint");
     status.setAttribute("role", "status");
@@ -527,15 +643,14 @@
         updated.focus({preventScroll: true});
       } else row.replaceWith(updated);
     });
-    var label = append(el("div", "klabel-line"), el("span", "klabel", window.wsT(spec.label)));
+    var bucket = entry.selectors.harness;
+    var keySuffix = bucket ? (bucket === "*" ? (entry.key.startsWith("compaction.") ? "" : ".all") : "." + bucket) : "";
+    var label = append(el("div", "klabel-line"), el("span", "klabel", window.wsT(spec.label)), el("code", "skey", entry.key + keySuffix));
     if (spec.selectors.includes("harness")) {
       label.append(el("span", "tag bucket", tr(activeSection === "compaction" ? "js.settings.layer_major_tag" : "js.settings.bucket.tag")));
     }
     if (!canEdit) label.append(el("span", "tag lock", tr(reasons[rowReason(entry, spec)] || reasons.scope_unsupported)));
-    var bucket = entry.selectors.harness;
-    var keySuffix = bucket ? (bucket === "*" ? (entry.key.startsWith("compaction.") ? "" : ".all") : "." + bucket) : "";
-    var meta = append(el("div", "kmeta"), label, append(el("div", "kkey"), el("code", "key-chip", entry.key + keySuffix)),
-      el("p", "kdesc", window.wsT(spec.description)));
+    var meta = append(el("div", "kmeta"), label, el("p", "kdesc", window.wsT(spec.description)));
     if (spec.selectors.includes("harness") && activeSection !== "compaction") {
       var choices = group(entry.key);
       meta.append(append(el("div", "bucket-bar"), el("span", "blbl", tr("js.settings.bucket.label")), bucketPicker(entry.key, choices, "seg bucket-seg")));
@@ -551,9 +666,36 @@
       form.append(field.node);
       if (canEdit) bindForm(form, form, field.read, submit, status);
     }
-    form.append(status);
-    row.append(meta, form, provenance(entry, canEdit, function () { submit("reset"); }));
-    if (extension.renderRow) extension.renderRow({entry, spec, selection, row, control: form, form, submit, editable: canEdit});
+    ctlWrap.append(form, status);
+
+    var drawerNode = null;
+    function syncDrawer(expanded, drawerId) {
+      prov.pill.querySelector(".chev").textContent = expanded ? "▴" : "▾";
+      if (expanded) {
+        if (!drawerNode) drawerNode = buildLayerDrawer(entry, spec, drawerId);
+        drawerNode.hidden = false;
+        if (!drawerNode.isConnected) row.append(drawerNode);
+      } else if (drawerNode) {
+        drawerNode.hidden = true;
+      }
+    }
+    var prov = provenance(entry, spec, canEdit, function () { submit("reset"); }, syncDrawer);
+    var rail = append(el("div", "sctl-rail"), ctlWrap, prov.node);
+    row.append(meta, rail);
+    if (prov.isOpen) syncDrawer(true, prov.drawerId);
+
+    if (extension.renderRow) extension.renderRow({
+      entry: entry, spec: spec, selection: selection, row: row,
+      control: form, form: form, submit: submit, editable: canEdit,
+      syncDrawer: function () {
+        if (drawerNode && drawerNode.isConnected) {
+          var fresh = buildLayerDrawer(entry, spec, prov.drawerId);
+          fresh.hidden = drawerNode.hidden;
+          drawerNode.replaceWith(fresh);
+          drawerNode = fresh;
+        }
+      }
+    });
     return row;
   }
 
@@ -561,7 +703,7 @@
     var canEdit = editable(entry, spec), group = el("tbody", "tier-entry" + rowClass(entry, canEdit));
     group.dataset.configKey = entry.key;
     group.dataset.settingsTier = entry.selectors.tier;
-    var row = el("tr"), secondary = el("tr");
+    var row = el("tr", "tier-main-row"), secondary = el("tr", "tier-secondary");
     var cell = el("td", "tname", entry.selectors.tier);
     var fields = ["backend", "model", "effort"];
     var value = (scope === "builtin" ? entry.default : selected(entry) ?? entry.value) || {};
@@ -577,12 +719,28 @@
     var submit = makeSubmit(entry, group, status, function (fresh) {
       group.replaceWith(tierRow(fresh, spec));
     });
-    row.append(append(el("td"), provenance(entry, canEdit, function () { submit("reset"); })));
-    var actions = append(el("td"), status, ...renderWarnings(entry));
-    actions.colSpan = 5;
+    var layerTr = null;
+    function syncTierDrawer(expanded, drawerId) {
+      prov.pill.querySelector(".chev").textContent = expanded ? "▴" : "▾";
+      if (expanded) {
+        if (!layerTr) {
+          layerTr = el("tr", "layer-tr");
+          var td = el("td");
+          td.colSpan = 5;
+          td.append(buildLayerDrawer(entry, spec, drawerId));
+          layerTr.append(td);
+        }
+        layerTr.hidden = false;
+        if (!layerTr.isConnected) row.after(layerTr);
+      } else if (layerTr) {
+        layerTr.hidden = true;
+      }
+    }
+    var prov = provenance(entry, spec, canEdit, function () { submit("reset"); }, syncTierDrawer);
+    var provCell = el("div", "tier-prov-cell");
     var save = null;
     function syncSecondary() {
-      secondary.hidden = !status.textContent && !secondary.querySelector(".inline-warn") && (!save || save.disabled);
+      secondary.hidden = !status.textContent && !secondary.querySelector(".inline-warn");
     }
     if (canEdit) {
       save = button("save-btn", tr("js.settings.save"), function () {
@@ -591,27 +749,34 @@
       save.disabled = true;
       group.addEventListener("input", function () {
         save.disabled = false;
-        syncSecondary();
       });
-      actions.prepend(save);
+      provCell.append(save);
     }
+    provCell.append(prov.node);
+    row.append(append(el("td"), provCell));
+
+    var actions = append(el("td"), status, ...renderWarnings(entry));
+    actions.colSpan = 5;
     secondary.append(actions);
     syncSecondary();
-    return append(group, row, secondary);
+    group.append(row);
+    if (prov.isOpen) syncTierDrawer(true, prov.drawerId);
+    group.append(secondary);
+    return group;
   }
 
   function renderTier(entries, spec) {
-    var card = el("div", "tier-card" + (!entries.some(function (e) { return editable(e, spec); }) ? " disabled" : "")), active = activeBucket(spec.key, entries);
-    var heading = append(el("div"), append(el("div", "klabel-line"), el("b", "klabel", window.wsT(spec.label)),
-      el("code", "key-chip", spec.key), el("span", "tag bucket", tr("js.settings.bucket.tag"))), el("p", "kdesc", window.wsT(spec.description)));
+    var card = el("div", "sgroup tier-group" + (!entries.some(function (e) { return editable(e, spec); }) ? " disabled" : "")), active = activeBucket(spec.key, entries);
+    var heading = append(el("div", "kmeta"), append(el("div", "klabel-line"), el("b", "klabel", window.wsT(spec.label)),
+      el("code", "skey", spec.key), el("span", "tag bucket", tr("js.settings.bucket.tag"))), el("p", "kdesc", window.wsT(spec.description)));
     var visible = entries.filter(function (entry) { return entry.selectors.harness === active && matches(entry, spec); });
-    var top = append(el("div", "tier-top"), heading, bucketPicker(spec.key, entries, "seg bucket-seg"));
+    var top = append(el("div", "tier-group-head"), heading, bucketPicker(spec.key, entries, "seg bucket-seg"));
     if (visible.length && !editable(visible[0], spec)) {
       heading.firstChild.append(el("span", "tag lock", tr(reasons[rowReason(visible[0], spec)] || reasons.scope_unsupported)));
     }
     var table = el("table", "tier-tbl");
     var colgroup = el("colgroup");
-    ["76px", "124px", "", "112px", "212px"].forEach(function (w) {
+    ["78px", "120px", "", "108px", "232px"].forEach(function (w) {
       var col = el("col");
       if (w) col.style.width = w;
       colgroup.append(col);
@@ -766,7 +931,7 @@
     var sync = button("btn", tr("js.settings.sync.disabled"));
     sync.disabled = true;
     return append(el("div", "sync-card"), append(el("div", "sync-card-left"),
-      append(el("div", "sync-card-title"), cloudIcon(), el("strong", "", tr("js.settings.sync.title")), badge(tr("js.settings.sync.planned"))),
+      append(el("div", "sync-card-title"), cloudIcon(), el("strong", "", tr("js.settings.sync.title")), el("span", "tag", tr("js.settings.sync.planned"))),
       el("div", "sync-card-desc", tr("js.settings.sync.description"))),
       append(el("div", "settings-sync-actions"), toggle, sync));
   }
@@ -818,18 +983,36 @@
       byKey.get(entry.key).push(entry);
     }
     var list = el("div", "klist");
+    var rowGroup = null;
+    function appendRow(node) {
+      if (!rowGroup) {
+        rowGroup = el("div", "sgroup");
+        list.append(rowGroup);
+      }
+      rowGroup.append(node);
+    }
     for (var spec of catalog) {
       if (spec.section !== (activeSection === "adapters" ? adapter : activeSection)) continue;
       for (var [key, rows] of byKey) {
         if (specFor(key) !== spec) continue;
         if (spec.control === "tier") {
-          if (rows.some(function (entry) { return matches(entry, spec); })) list.append(renderTier(rows, spec));
+          if (rows.some(function (entry) { return matches(entry, spec); })) {
+            rowGroup = null;
+            list.append(renderTier(rows, spec));
+          }
           continue;
         }
         var groupKey = activeSection === "compaction" ? "compaction" : key;
         var bucket = activeBucket(groupKey, rows);
         var selectedRow = rows.find(function (entry) { return entry.selectors.harness === bucket; });
-        if (selectedRow && matches(selectedRow, spec)) list.append(renderRow(selectedRow, spec));
+        if (selectedRow && matches(selectedRow, spec)) {
+          if (spec.control === "profile" || spec.control === "prompt") {
+            rowGroup = null;
+            list.append(renderRow(selectedRow, spec));
+          } else {
+            appendRow(renderRow(selectedRow, spec));
+          }
+        }
       }
     }
     if (extension.afterRender) extension.afterRender({section: activeSection, list, entries, bucketState, bucketTitle});

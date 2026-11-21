@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsreview"
 	"github.com/kang-sw/devenv/internal/wswhiteboard"
@@ -159,7 +160,7 @@ func renderSessionState(rec sessionRecord) string {
 	return sb.String()
 }
 
-func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []HostedChild) string {
+func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []wsagent.AgentChild) string {
 	var sb strings.Builder
 	sb.WriteString("## Hosted Session Restore\n\n")
 	fmt.Fprintf(&sb, "Your ws session key is `%s`. ", key)
@@ -176,7 +177,8 @@ func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []
 	if len(children) == 0 {
 		sb.WriteString("none\n")
 	} else {
-		for _, child := range children {
+		view := summarizeAgentChildren(children)
+		for _, child := range view.Active {
 			fmt.Fprintf(&sb, "- %s", child.Address)
 			if child.Label != "" {
 				fmt.Fprintf(&sb, " (%s)", child.Label)
@@ -190,6 +192,10 @@ func renderHostedRestoreBundle(key, cause string, rec sessionRecord, children []
 			}
 			sb.WriteString("\n")
 		}
+		for _, name := range view.RecentInactive {
+			fmt.Fprintf(&sb, "- %s\n", name)
+		}
+		sb.WriteString(view.summary())
 	}
 	return strings.TrimSpace(sb.String()) + "\n"
 }
@@ -374,6 +380,10 @@ func (s *Server) handleWorkflowState(id json.RawMessage, args map[string]any) re
 //   - syntactically valid but unresolvable, non-sentinel -> FAIL-LOUD: a minimal
 //     no-restore notice with NO manual body rendered (see below), never minting.
 func (s *Server) handleWorkflowManual(id json.RawMessage, args map[string]any) response {
+	return s.renderWorkflowManual(id, args, true)
+}
+
+func (s *Server) renderWorkflowManual(id json.RawMessage, args map[string]any, includeSessionState bool) response {
 	key, _ := args["session_key"].(string)
 	key = strings.TrimSpace(key)
 	root, _ := args["root"].(string)
@@ -401,7 +411,11 @@ func (s *Server) handleWorkflowManual(id json.RawMessage, args map[string]any) r
 	//    anything in it that names the lead bootstrap surface). Return only a
 	//    no-restore notice naming lead-revive (a skill, not the ferrule/sentinel
 	//    surface). NEVER mint.
-	rec, err := s.sessions.readStateWithError(key, partAgenda|partTodos|partWhiteboard)
+	parts := partKey
+	if includeSessionState {
+		parts = partAgenda | partTodos | partWhiteboard
+	}
+	rec, err := s.sessions.readStateWithError(key, parts)
 	if key != freshBootstrapKey && err != nil {
 		if !errors.Is(err, errSessionNotFound) || errors.Is(err, errSessionUnreadable) {
 			return toolTextResponse(id, "", fmt.Errorf("workflow_manual: %w", err))
@@ -550,7 +564,7 @@ func (s *Server) handleWorkflowManual(id json.RawMessage, args map[string]any) r
 			body = injectSkepticalPosture(body)
 		}
 	} else {
-		// 4. CONTINUE: strip both markers and inner content; append state.
+		// 4. CONTINUE: strip the gated region and add the key and applicable context.
 		body = stripModeGatedRegion(body, false)
 		if rec.Root != "" {
 			profilesBlock, err := worktreeProfilesForManual(s.sessionConfigOptions(key))
@@ -561,7 +575,9 @@ func (s *Server) handleWorkflowManual(id json.RawMessage, args map[string]any) r
 		}
 		body = injectSessionKeyLine(body, key)
 		body += "\n\n## Session Key\n" + key
-		body += "\n\n" + renderSessionState(rec)
+		if includeSessionState {
+			body += "\n\n" + renderSessionState(rec)
+		}
 		notes := computeNotesBlock(rec.Root, s.configOptions(), s.stateOptions())
 		body += "\n\n" + notes.Text
 		if skepticalPosture {

@@ -312,7 +312,7 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rdragging, .rdragging * { cursor: grabbing !important; }
 .rdragging #rail, .rdragging #rlist, .rdragging #rail .rs { touch-action: none; user-select: none; }
 .rdrop { position: fixed; z-index: 46; height: 2px; border-radius: 1px; background: var(--wb-primary); pointer-events: none; }
-/* a live row's grip, the only part of a row that drags (the rest is its
+/* an unfolded row's grip, the only part of a row that drags (the rest is its
    link): shown while the row is hovered or focused, always on a touch
    screen, where it takes the touch from scrolling; over a place the drop is
    refused the cursor says no and a hint beside the pointer says why */
@@ -404,6 +404,7 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .rs .s1:has(.drinp) .drslot { visibility: visible; }
 .rail .rid { font-family: var(--wb-mono); font-size: 12.5px; font-weight: 700; color: var(--wb-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 .rail .rid.lbl { font-family: var(--wb-sans); font-weight: 600; }
+.rail .rstate { flex: none; color: var(--wb-muted-fg); font-size: 11px; white-space: nowrap; }
 .rail .rs.cur .rid { color: var(--wb-fg); }
 .rail .when { font-size: 11px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; white-space: nowrap; flex: none; }
 .rail .s2 { display: block; margin-top: 1px; font-size: 12px; color: var(--wb-muted-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -558,9 +559,12 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
    check's facts (the changed files in a scrolling list, the holders with a
    live one marked as blocking), the refusal note, the force notice, the
    typed-name confirmation, and a danger-coloured Delete */
-dialog.rdeldlg { width: min(460px, calc(100vw - 24px)); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px; border: 0; border-radius: 12px;
+dialog.rdeldlg { width: min(460px, calc(100vw - 24px)); height: fit-content; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px; border: 0; border-radius: 12px;
   background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line); font-size: 12.5px; }
-dialog.rdeldlg[open] { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+/* Flex column instead of display:grid so macOS WKWebView's top-layer dialog
+   grid sizing cannot stretch the modal and its action row to max-height. */
+dialog.rdeldlg[open] { display: flex; flex-direction: column; gap: 10px; }
+dialog.rdeldlg > * { flex: none; min-width: 0; }
 dialog.rdeldlg::backdrop { background: var(--scrim, rgb(0 0 0 / .35)); }
 dialog.rdeldlg [hidden] { display: none !important; }
 .rdeldlg .rdhd { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 14px; font-weight: 800; }
@@ -593,7 +597,7 @@ dialog.rdeldlg [hidden] { display: none !important; }
 .rdeldlg .rdq:focus-visible { outline: 1.5px solid var(--wb-fail); }
 .rdeldlg .rdmsg { margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); overflow-wrap: anywhere; }
 .rdeldlg .rdmsg.err { color: var(--wb-fail); }
-.rdeldlg .rdrow { display: flex; justify-content: flex-end; gap: 6px; }
+.rdeldlg .rdrow { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
 .rdeldlg .pbtn { white-space: nowrap; flex: none; font: inherit; font-size: 12px; font-weight: 700; border: 0; border-radius: 999px; padding: 4px 14px; cursor: pointer; background: var(--wb-muted); color: var(--wb-muted-fg); }
 .rdeldlg .pbtn.danger { background: var(--wb-fail); color: var(--wb-card); }
 .rdeldlg.rgitdlg .rdhd .i { color: var(--wb-primary); }
@@ -1103,13 +1107,13 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .settings-page-link:hover { background: var(--wb-muted); }
 :root:not([data-can-control]) .rail .rfoot > .r-config-global { display: none; }
 
-/* The settings sheet keeps the dashboard rail alongside its category list. */
-@media (min-width: 1120px) {
-  :root[data-settings-shell] .dwrap > .top { margin-inline-start: 266px; }
+/* The settings sheet keeps the standard 340px docked rail from 1600px and uses the 340px overlay drawer below. */
+@media (min-width: 1600px) {
+  :root[data-settings-shell] .dwrap > .top { margin-inline-start: 356px; }
   :root[data-settings-shell] .dwrap > .top > .back { display: none; }
   :root[data-settings-shell] .dbody {
     display: grid;
-    grid-template-columns: 250px minmax(0, 1fr);
+    grid-template-columns: 340px minmax(0, 1fr);
     gap: 0 16px;
     flex: 1 1 0;
     min-height: 0;

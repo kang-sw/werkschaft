@@ -239,6 +239,44 @@ func TestAgentSpawnAndListDescribeTheChild(t *testing.T) {
 	}
 }
 
+func TestAgentListProjectsChildActivity(t *testing.T) {
+	parent := ParentRef{Kind: ParentConversation, ReplyID: "parent"}
+	const created = "2026-01-01T00:00:00Z"
+	const active = "2026-01-02T00:00:00Z"
+	const closed = "2026-01-03T00:00:00Z"
+	for _, tc := range []struct {
+		name       string
+		rec        Record
+		stateError string
+		want       AgentChildActivity
+	}{
+		{name: "undelivered", rec: Record{PendingReports: []PendingReport{{ID: "pending"}}}, want: AgentChildActivity{AwaitingReport: true}},
+		{name: "unpublished", rec: Record{LastTurn: &PendingReport{}, ReportID: "not-published"}, want: AgentChildActivity{AwaitingReport: true}},
+		{name: "open turn", rec: Record{TurnOpen: true}, want: AgentChildActivity{AwaitingReport: true}},
+		{name: "closed during turn", rec: Record{TurnOpen: true, ClosedAt: closed, LastActiveAt: active}, want: AgentChildActivity{LastActiveAt: closed}},
+		{
+			name: "reported interruption", stateError: "exited",
+			rec:  Record{LastActiveAt: active, LastTurn: &PendingReport{Result: TurnResult{Status: TurnInterrupted, Error: "exited"}}, ReportID: "sent", LastReportedTurn: "sent"},
+			want: AgentChildActivity{LastActiveAt: active, SettledInterruptError: true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const id = "child"
+			r := &Runner{opts: Options{Dir: t.TempDir()}}
+			tc.rec.ReplyID, tc.rec.Parent, tc.rec.CreatedAt = id, &parent, created
+			if tc.rec.ClosedAt != "" {
+				r.closed = map[string]Record{id: tc.rec}
+			} else {
+				r.convs = map[string]*conv{id: {r: r, rec: tc.rec, lastErr: tc.stateError}}
+			}
+			child := findAgent(t, r.AgentList(AgentCaller{Parent: parent}), id)
+			if child.Activity == nil || *child.Activity != tc.want || child.CreatedAt != created {
+				t.Errorf("activity = %+v, want %+v", child.Activity, tc.want)
+			}
+		})
+	}
+}
+
 func TestAgentInterruptKeepsTheChild(t *testing.T) {
 	h, _ := agentHarness(t, nil)
 	lead := h.leadCaller()

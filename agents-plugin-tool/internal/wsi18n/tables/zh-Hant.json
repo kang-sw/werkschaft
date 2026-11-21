@@ -217,6 +217,8 @@
   "hd.title": "工作階段持有程序",
   "head.ended": "已結束",
   "head.ended.title": "此工作階段已結束",
+  "head.stopped": "已停止",
+  "head.stopped.title": "此工作階段已停止",
   "head.stores": "僅儲存內容",
   "head.stores.title": "沒有即時主機轉接器：僅顯示該工作階段的儲存內容",
   "head.name.copy": "點擊複製",

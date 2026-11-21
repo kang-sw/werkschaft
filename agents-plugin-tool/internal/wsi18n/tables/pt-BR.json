@@ -217,6 +217,8 @@
   "hd.title": "Contêineres de sessão",
   "head.ended": "encerrada",
   "head.ended.title": "esta sessão foi encerrada",
+  "head.stopped": "Parada",
+  "head.stopped.title": "Esta sessão está parada",
   "head.stores": "somente armazenamentos",
   "head.stores.title": "sem adaptador de host ativo: apenas os armazenamentos da sessão são exibidos",
   "head.name.copy": "clique para copiar",

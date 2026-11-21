@@ -224,24 +224,33 @@ const leadManualOnly = "At session start, call the workflow_manual tool with thi
 // appended prompt holds its key sentence, the binding-manual sentence,
 // and the manual the daemon rendered for its harness, working directory,
 // and key. The render runs once per process start, a resume included: a
-// later turn and a rejoin render nothing.
+// later turn and a rejoin render nothing. The first input of each launched
+// process carries session state.
 func TestClaudeLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 	h := newLeadHarness(t)
 	manual := &leadManualRender{text: "\n# Workflow Manual\n\n## Session Key\nrendered\n\n"}
 	h.opts.LeadManual = manual.render
+	const sessionState = "## Session State\n\n### Todos\n- [ ] {first} Deliver first-turn state"
+	h.opts.LeadSessionState = func(string) (string, error) { return sessionState, nil }
 	h.start()
-	id, holder := h.runLead("one")
+	id := h.lead(BackendClaude, LeadOptions{}).ID
+	h.send(id, "one")
+	holder := h.holder(id)
+	eventually(t, "the first input", func() bool { return len(h.userInputs(holder)) == 1 })
 	key := h.record(id).WSKey
 	check := func(argv []string) {
 		t.Helper()
 		text := appendedPrompt(t, argv)
-		if !strings.HasPrefix(text, leadKeySentence(key)+"The workflow manual below is binding;") ||
-			!strings.Contains(text, "After any compaction, or when you need fresh session state, call the workflow_state tool with this key; the manual stays in this prompt.") ||
-			!strings.HasSuffix(text, ".\n\n# Workflow Manual\n\n## Session Key\nrendered\n") || strings.Contains(text, leadManualOnly) {
+		if !strings.HasPrefix(text, leadKeySentence(key)+"The workflow manual below is binding") ||
+			!strings.Contains(text, "Use the session state delivered with your first turn or in a restore bundle.") ||
+			!strings.HasSuffix(text, ".\n\n# Workflow Manual\n\n## Session Key\nrendered\n") || strings.Contains(text, "## Session State") {
 			t.Fatalf("the appended prompt is not the key sentence and the manual:\n%s", text)
 		}
 	}
 	check(h.holders.spawned(holder).Argv)
+	if got, want := h.userInputs(holder), []string{sessionState + "\n\n" + h.envelope("one")}; !slices.Equal(got, want) {
+		t.Fatalf("first input = %q, want %q", got, want)
+	}
 	calls := manual.list()
 	if len(calls) != 1 || calls[0][0] != BackendClaude || !sameDir(calls[0][1], h.root) || calls[0][2] != key {
 		t.Fatalf("the manual renders once, for the lead's harness, directory, and key: %v", calls)
@@ -255,6 +264,9 @@ func TestClaudeLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 	}
 	h.send(id, "two")
 	eventually(t, "the second message", func() bool { return len(h.userInputs(holder)) == 2 })
+	if got := h.userInputs(holder)[1]; got != h.envelope("two") {
+		t.Fatalf("second input repeated startup state: %q", got)
+	}
 	if n := len(manual.list()); n != 1 {
 		t.Fatalf("a rejoin or a turn rendered the manual again: %d renders", n)
 	}
@@ -268,6 +280,10 @@ func TestClaudeLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 	var second string
 	eventually(t, "a new holder", func() bool { second = h.record(id).HolderID; return second != "" && second != holder })
 	check(h.holders.spawned(second).Argv)
+	eventually(t, "the first input after resume", func() bool { return len(h.userInputs(second)) == 1 })
+	if got := h.userInputs(second)[0]; got != sessionState+"\n\n"+h.envelope("three") {
+		t.Fatalf("first input after resume lacks session state: %q", got)
+	}
 	if n := len(manual.list()); n != 2 {
 		t.Fatalf("the next process start renders the manual again: %d renders", n)
 	}

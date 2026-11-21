@@ -261,16 +261,18 @@ func TestRenderedPermissionWaitAndEndedSessions(t *testing.T) {
 
 	old := liveSession("oldend", "/a", now.Add(-48*time.Hour))
 	old.EndedAt = stampFor(now.Add(-48 * time.Hour))
+	deleted := endedSession("recentend", "/a", now)
+	deleted.Hosted = true
 	idx, err := renderIndexRegions(buildIndexView([]indexInput{
 		{Session: liveSession("livenow", "/a", now)},
-		{Session: endedSession("recentend", "/a", now)},
+		{Session: deleted},
 		{Session: old},
 	}, now, "1.0.0"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(idx[regionSessions].HTML)
-	for _, want := range []string{`href="/s/livenow"`, `<div class="endedhead">ended</div>`, `class="sess ended" href="/s/recentend"`, "1 sessions ended more than a day ago"} {
+	for _, want := range []string{`href="/s/livenow"`, `<div class="endedhead">Deleted</div>`, `class="sess ended" href="/s/recentend"`, "1 older inactive sessions hidden"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("index region lacks %q: %s", want, html)
 		}

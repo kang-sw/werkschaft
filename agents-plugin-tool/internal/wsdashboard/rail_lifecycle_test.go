@@ -8,12 +8,9 @@ import (
 	"time"
 )
 
-// TestRailFourStateLifecycle pins how the rail places the four session
-// states: an active or asleep hosted lead stays among the live rows, an
-// archived one (the dashboard's visibility sidecar) leaves them for the
-// archived fold and never counts as live, and an ended row shows when the
-// existing registry prune deletes it, unless the prune exempts it.
-func TestRailFourStateLifecycle(t *testing.T) {
+// TestRailLifecycle pins row placement and the distinction between
+// heartbeat liveness, a stopped process, and deletion by the user.
+func TestRailLifecycle(t *testing.T) {
 	now := testNow
 	beat := stampFor(now)
 	old := stampFor(now.Add(-36 * time.Hour))
@@ -28,9 +25,11 @@ func TestRailFourStateLifecycle(t *testing.T) {
 		// A stale archived lead stays archived; its open record exempts it
 		// from the prune.
 		in(Registration{ReplyID: "stalearch", Hosted: true, HeartbeatAt: old}, true),
-		in(Registration{ReplyID: "closed", Hosted: true, HeartbeatAt: old, EndedAt: old}, true),
+		in(Registration{ReplyID: "deleted", Hosted: true, HeartbeatAt: old, EndedAt: old}, true),
 		in(Registration{ReplyID: "terminal", HeartbeatAt: old}, false),
-		// An open hosted lead with a stale row is the runner's: no prune time.
+		in(Registration{ReplyID: "terminalexit", HeartbeatAt: old, EndedAt: old}, false),
+		in(Registration{ReplyID: "hostexit", Hosted: true, HeartbeatAt: beat, HostStopped: true, HostExitReason: "child_exited"}, false),
+		// The holder can keep running while its heartbeat ages during sleep.
 		in(Registration{ReplyID: "openstale", Hosted: true, HeartbeatAt: old}, false),
 	}
 	repos := map[string]railRepo{"/w/repo": {Read: true, Entries: []railWorktreeEntry{{Path: "/w/repo", Branch: "main"}}}}
@@ -44,17 +43,17 @@ func TestRailFourStateLifecycle(t *testing.T) {
 		}
 		return out
 	}
-	if got := strings.Join(ids(wt.Sessions), ","); got != "activeon,asleep" {
-		t.Errorf("live rows = %s, want activeon,asleep", got)
+	if got := strings.Join(ids(wt.Sessions), ","); got != "activeon,asleep,hostexit,openstale" {
+		t.Errorf("unfolded rows = %s", got)
 	}
 	if got := strings.Join(ids(wt.Archived), ","); got != "archived,stalearch" {
 		t.Errorf("archived rows = %s, want archived,stalearch", got)
 	}
-	if got := strings.Join(ids(wt.Ended), ","); got != "closed,terminal,openstale" && got != "closed,openstale,terminal" && got != "terminal,closed,openstale" {
-		t.Errorf("ended rows = %s, want closed, terminal and openstale", got)
+	if got := strings.Join(ids(wt.Ended), ","); got != "deleted,terminal,terminalexit" {
+		t.Errorf("deleted rows = %s, want deleted,terminal,terminalexit", got)
 	}
-	if view.Live != 2 || view.Workspaces[0].Live != 2 {
-		t.Errorf("live counts = %d/%d, want 2: an archived lead is not live", view.Live, view.Workspaces[0].Live)
+	if view.Live != 3 || view.Workspaces[0].Live != 3 {
+		t.Errorf("live counts = %d/%d, want 3 live registrations", view.Live, view.Workspaces[0].Live)
 	}
 	byID := map[string]RailRow{}
 	for _, list := range [][]RailRow{wt.Sessions, wt.Archived, wt.Ended} {
@@ -69,13 +68,26 @@ func TestRailFourStateLifecycle(t *testing.T) {
 		t.Errorf("asleep row = %+v, want stopped and not archived", r)
 	}
 	wantDel := now.Add(-36 * time.Hour).Add(RegistryRetention).UnixMilli()
-	for _, id := range []string{"closed", "terminal"} {
-		if r := byID[id]; r.Archived || r.DeleteAt != wantDel {
-			t.Errorf("%s DeleteAt = %d (archived %v), want %d: the existing 7-day window from its last sighting", id, r.DeleteAt, r.Archived, wantDel)
+	if r := byID["deleted"]; r.Archived || r.Lifecycle != SessionPendingDeletion || r.DeleteAt != wantDel {
+		t.Errorf("deleted row = %+v, want pending deletion with prune time %d", r, wantDel)
+	}
+	for _, id := range []string{"terminal", "terminalexit"} {
+		if r := byID[id]; r.Lifecycle != SessionPendingDeletion || r.DeleteAt != wantDel {
+			t.Errorf("%s = %+v, want pending deletion with countdown", id, r)
 		}
 	}
-	if r := byID["openstale"]; r.DeleteAt != 0 {
-		t.Errorf("an open hosted lead's stale row shows a prune time %d; the prune exempts it", r.DeleteAt)
+	if r := byID["hostexit"]; r.Lifecycle != SessionStopped || r.DeleteAt != 0 {
+		t.Errorf("hostexit = %+v, want stopped without a deletion countdown", r)
+	}
+	if r := byID["openstale"]; r.Live || r.Lifecycle != SessionActiveOn || r.DeleteAt != 0 {
+		t.Errorf("stale hosted row = %+v, want active lifecycle without a live heartbeat", r)
+	}
+
+	// A terminal heartbeat refresh moves the session back to the regular list.
+	sessions[5].Session.HeartbeatAt = beat
+	recovered := buildRailView(sessions, repos, nil, now)
+	if got := strings.Join(ids(recovered.Workspaces[0].Worktrees[0].Sessions), ","); got != "activeon,asleep,hostexit,openstale,terminal" {
+		t.Errorf("unfolded rows after heartbeat recovery: %s", got)
 	}
 
 	region, err := renderRailRegion(view, "ko")
@@ -86,9 +98,11 @@ func TestRailFourStateLifecycle(t *testing.T) {
 	for _, want := range []string{
 		`<div class="rfold" role="group" aria-label="접힌 세션" data-key="` + filepath.Clean("/w/repo") + `">`,
 		`class="rfh" data-k="arch" aria-expanded="false" title="보관된 세션 2개"><svg class="i" aria-hidden="true"><use href="#i-archive"/></svg>보관 <span class="d-n">2</span></button>`,
-		`class="rfh" data-k="del" aria-expanded="false" title="종료된 세션 3개"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>종료됨 <span class="d-n">3</span></button>`,
+		`class="rfh" data-k="del" aria-expanded="false" title="삭제된 세션 3개"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>삭제됨 <span class="d-n">3</span></button>`,
 		`<div class="rended" data-k="arch"><div class="rsessions"><div class="rs ended stopped archived hosted-row" data-rid="archived"`,
-		`<div class="rended" data-k="del">`,
+		`<div class="rended" data-k="del"><div class="rsessions"><div class="rs ended" data-rid="deleted"`,
+		`<div class="rs stopped hosted-row" data-rid="hostexit"`,
+		`<span class="rstate">중단됨</span>`,
 		`class="drarch unarch" data-act="unhide" title="보관 해제 · 잠듦으로 돌아감, 쌓인 메일 전달"`,
 		`<time class="when del" data-ms="` + strconv.FormatInt(wantDel, 10) + `" data-f="del"`,
 	} {
@@ -106,13 +120,13 @@ func TestRailFourStateLifecycle(t *testing.T) {
 		t.Errorf("a terminal row offers archive:\n%s", termRow)
 	}
 
-	// No archived rows: the archived half is disabled, the ended one is not.
+	// No archived rows: the archived half is disabled, the deleted one is not.
 	plain := RailView{Workspaces: []RailWorkspace{{Name: "repo", Path: "/w/repo", Repo: true, Worktrees: []RailWorktree{{Path: "/w/repo", Ended: []RailRow{{ReplyID: "gone"}}}}}}}
 	region, err = renderRailRegion(plain, "en")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if html := string(region.HTML); !strings.Contains(html, `data-k="arch" aria-expanded="false" title="0 archived" disabled>`) || strings.Contains(html, `data-k="del" aria-expanded="false" title="1 ended" disabled`) {
-		t.Errorf("an empty archived half must be disabled and the ended half enabled:\n%s", html)
+	if html := string(region.HTML); !strings.Contains(html, `data-k="arch" aria-expanded="false" title="0 archived" disabled>`) || strings.Contains(html, `data-k="del" aria-expanded="false" title="1 deleted" disabled`) {
+		t.Errorf("an empty archived half must be disabled and the deleted half enabled:\n%s", html)
 	}
 }

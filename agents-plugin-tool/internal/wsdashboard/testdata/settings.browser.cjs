@@ -48,25 +48,63 @@ const snapshot = '/api/config/snapshot';
     async function pickSection(name) {
       await frame().locator('[data-settings-section=' + name + ']').click();
     }
+    async function ensureRailOpen() {
+      const btn = page.locator('#railbtn');
+      const opened = await page.locator('html').evaluate(el => el.classList.contains('rail-open'));
+      if (await btn.isVisible() && !opened) {
+        await btn.click();
+        await page.locator('html.rail-open').waitFor();
+      }
+    }
+    async function closeRailIfOpen() {
+      const opened = await page.locator('html').evaluate(el => el.classList.contains('rail-open'));
+      if (opened) {
+        await page.keyboard.press('Escape');
+        await page.locator('html:not(.rail-open)').waitFor();
+      }
+    }
     async function capturePairs() {
       const reference = await context.newPage();
       for (const theme of ['dark', 'light']) {
+        await page.setViewportSize({ width: 1440, height: 960 });
         await context.addCookies([{name: 'ws_dashboard_theme', value: theme, url: base},
           {name: 'ws_dashboard_lang', value: 'ko', url: base}]);
         await page.goto(base + '/settings');
         await show('global');
         assert.equal(await frame().locator('[data-settings-modes]').count(), 0);
         assert.match(await frame().locator('[data-settings-precedence] .prec-hint').textContent(), /\S/);
+
+        // Verify <=1599.98px rail contract: overlay drawer closed on load, full stage width, zero overflow.
+        const railClosed = await page.evaluate(() => {
+          const rail = document.getElementById('rail');
+          const cs = getComputedStyle(rail);
+          return {
+            position: cs.position,
+            visibility: cs.visibility,
+            overflowX: document.documentElement.scrollWidth > window.innerWidth
+          };
+        });
+        assert.equal(railClosed.position, 'fixed');
+        assert.equal(railClosed.visibility, 'hidden');
+        assert.equal(railClosed.overflowX, false);
+        const stageRect = await frame().locator('[data-settings-view]').boundingBox();
+        assert(stageRect && stageRect.width >= 1380, 'expected full stage width on 1440x960, got ' + JSON.stringify(stageRect));
+
+        await ensureRailOpen();
+        const railOpenRect = await page.locator('#rail').boundingBox();
+        assert(railOpenRect && railOpenRect.width >= 335, 'expected 340px overlay rail on 1440x960, got ' + JSON.stringify(railOpenRect));
+
         const repoGear = gear('repo', root);
         assert.equal(await repoGear.evaluate(el => getComputedStyle(el).opacity), '0');
         await page.locator('.wthd', { has: repoGear }).hover();
         assert(Number(await repoGear.evaluate(el => getComputedStyle(el).opacity)) >= 0.7);
         if (theme === 'dark') {
-          await page.screenshot({path: path.join(captures, 'global-dark-rail-hover.png')});
+          await page.screenshot({path: path.join(captures, 'mbp-1440-dark-rail-open.png')});
           await page.mouse.move(720, 480);
           assert.equal(await repoGear.evaluate(el => getComputedStyle(el).opacity), '0');
         }
-        await gear('repo', linked).waitFor();
+        await closeRailIfOpen();
+        await gear('repo', linked).waitFor({ state: 'attached' });
         await row('workflow.whiteboard_enabled').locator('[data-settings-bucket=claude]').click();
         assert.equal(await row('workflow.whiteboard_enabled').locator('[data-settings-bucket=claude]').getAttribute('data-bucket-override'), 'other');
         await row('workflow.profile').locator('[data-settings-bucket=claude]').click();
@@ -78,13 +116,41 @@ const snapshot = '/api/config/snapshot';
         assert.equal((await configured).status(), 200);
         await profile.locator('.inline-warn').waitFor();
         assert.doesNotMatch(await profile.locator('.inline-warn').textContent(), /Unverified harness/);
-        await page.screenshot({path: path.join(captures, 'implementation-global-' + theme + '.png')});
+
+        // Expand workflow.lang full-width horizontal layer strip and verify width/height & zero dead void.
+        const langRow = row('workflow.lang');
+        await langRow.locator('[data-settings-origin-pill]').click();
+        const drawer = langRow.locator('.layer-drawer');
+        await drawer.waitFor({ state: 'visible' });
+        const langBox = await langRow.boundingBox();
+        const drawerBox = await drawer.boundingBox();
+        assert(drawerBox && langBox && drawerBox.width >= langBox.width * 0.9, 'expected full-width layer drawer');
+        assert(drawerBox.height <= 90, 'expected compact horizontal layer drawer height, got ' + drawerBox.height);
+        await page.screenshot({path: path.join(captures, 'mbp-1440-' + theme + '-workflow.png')});
+
         if (theme === 'dark') {
-          for (const sec of ['agents', 'compaction', 'adapters', 'profiles']) {
-            await pickSection(sec);
-            const shot = sec === 'agents' ? 'agents-tiers-dark.png' : sec + '-dark.png';
-            await page.screenshot({path: path.join(captures, shot)});
-          }
+          await pickSection('agents');
+          const mediumEntry = frame().locator('tbody.tier-entry[data-settings-tier=medium]');
+          await mediumEntry.locator('[data-settings-origin-pill]').click();
+          const tierDrawer = mediumEntry.locator('tr.layer-tr .layer-drawer');
+          await tierDrawer.waitFor({ state: 'visible' });
+          const tblBox = await frame().locator('.tier-tbl').boundingBox();
+          const tdBox = await tierDrawer.boundingBox();
+          assert(tdBox && tblBox && tdBox.width >= tblBox.width * 0.9, 'expected full-width tier layer drawer');
+          await page.screenshot({path: path.join(captures, 'mbp-1440-dark-tiers.png')});
+
+          await pickSection('compaction');
+          await pickSection('adapters');
+          await pickSection('profiles');
+          const claudeProfHead = await frame().locator('[data-config-key="agent.profile.agent-worker-claude"] .prof-head').evaluate(head => {
+            const hRect = head.getBoundingClientRect();
+            const pillRect = head.querySelector('.kprov').getBoundingClientRect();
+            return { topDelta: Math.abs(pillRect.top - hRect.top), pillRightDelta: Math.abs(hRect.right - pillRect.right) };
+          });
+          assert(claudeProfHead.topDelta <= 2, 'expected profile origin pill pinned top-right, topDelta=' + claudeProfHead.topDelta);
+          assert(claudeProfHead.pillRightDelta <= 2, 'expected profile origin pill flush right, pillRightDelta=' + claudeProfHead.pillRightDelta);
+          await page.screenshot({path: path.join(captures, 'mbp-1440-dark-profiles.png')});
+
           await pickSection('prompts');
           const prompt = row('prompt.UserPreferenceSection');
           await prompt.locator('[data-settings-bucket=claude]').click();
@@ -94,16 +160,33 @@ const snapshot = '/api/config/snapshot';
           assert.equal((await promptSet).status(), 200);
           assert.equal(await prompt.locator('[data-settings-bucket=claude]').getAttribute('data-bucket-override'), 'own');
           assert.equal(await frame().locator('[data-settings-prompt-point="prompt.UserPreferenceSection"]').getAttribute('data-bucket-override'), 'own');
-          await page.screenshot({path: path.join(captures, 'prompts-dark.png')});
+          await page.screenshot({path: path.join(captures, 'mbp-1440-dark-prompts.png')});
           const promptReset = page.waitForResponse(r => r.url().endsWith('/api/config/reset'));
           await prompt.locator('.reset-btn').click();
           assert.equal((await promptReset).status(), 200);
           await pickSection('workflow');
+
+          // Verify >=1600px docked 340px rail contract (never 250px squished rail).
+          await page.setViewportSize({ width: 1680, height: 1050 });
+          await page.locator('#railbtn').waitFor({ state: 'hidden' });
+          const docked = await page.evaluate(() => {
+            const rail = document.getElementById('rail');
+            return {
+              pos: getComputedStyle(rail).position,
+              width: rail.getBoundingClientRect().width,
+              overflowX: document.documentElement.scrollWidth > window.innerWidth
+            };
+          });
+          assert.equal(docked.pos, 'relative');
+          assert(docked.width >= 335, 'expected >=335px (340px) docked rail on 1680x1050, got ' + docked.width);
+          assert.equal(docked.overflowX, false);
+          await page.screenshot({path: path.join(captures, 'wide-1680-dark-workflow.png')});
+          await page.setViewportSize({ width: 1440, height: 960 });
         }
         await reference.goto(pathToFileURL(mockup).href + '?theme=' + theme);
         await reference.locator('#stage .sync-card').waitFor();
-        await reference.screenshot({path: path.join(captures, 'reference-global-' + theme + '.png')});
 
+        await ensureRailOpen();
         await gear('repo', root).click();
         await show('repo', root, root);
         await row('workflow.whiteboard_enabled').locator('[data-settings-bucket=claude]').click();
@@ -113,14 +196,27 @@ const snapshot = '/api/config/snapshot';
         await setLanguage('English', null, false);
         await proposal('toggle').click();
         await frame().locator('.proposal-patch').waitFor();
+        const repoAlign = await frame().locator('body').evaluate(() => {
+          const langRow = document.querySelector('[data-config-key="workflow.lang"]');
+          const profRow = document.querySelector('[data-config-key="workflow.profile"]');
+          const langCtl = langRow.querySelector('.kctl-wrap').getBoundingClientRect();
+          const profCtl = profRow.querySelector('.kctl-wrap').getBoundingClientRect();
+          const langResets = Array.from(langRow.querySelectorAll('.reset-btn')).filter(el => el.getBoundingClientRect().width > 0);
+          const langLbl = langRow.querySelector('.origin-pill > .lbl');
+          const profLbl = profRow.querySelector('.origin-pill > .lbl');
+          return {
+            ctlLeftDelta: Math.abs(langCtl.left - profCtl.left),
+            visibleResetCount: langResets.length,
+            langClipped: langLbl.scrollWidth > langLbl.clientWidth + 1,
+            profClipped: profLbl.scrollWidth > profLbl.clientWidth + 1
+          };
+        });
+        assert(repoAlign.ctlLeftDelta <= 1, 'expected aligned .kctl-wrap on repo draft rows, delta=' + repoAlign.ctlLeftDelta);
+        assert.equal(repoAlign.visibleResetCount, 1, 'expected single visible discard reset button on repo draft row');
+        assert.equal(repoAlign.langClipped, false, 'expected workflow.lang origin-pill text not clipped');
+        assert.equal(repoAlign.profClipped, false, 'expected workflow.profile origin-pill text not clipped');
         await page.screenshot({path: path.join(captures, 'implementation-repo-' + theme + '.png')});
         await proposal('clear').click();
-        await reference.locator('.rail-entry[data-scope-entry=repo]').click();
-        const input = reference.locator('input[data-act=input][data-knob="workflow.lang"]');
-        await input.fill('English');
-        await input.press('Tab');
-        await reference.locator('.proposal-bar').waitFor();
-        await reference.screenshot({path: path.join(captures, 'reference-repo-' + theme + '.png')});
       }
       await reference.close();
     }
@@ -147,12 +243,14 @@ const snapshot = '/api/config/snapshot';
     const localSnapshot = await (await page.request.get(base + snapshot)).json();
     const namespaces = localSnapshot.entries.map(e => e.key.split('.')[0]);
     for (const adapter of ['claude', 'pi', 'agy', 'dashboard']) assert(namespaces.includes(adapter));
+    await ensureRailOpen();
     await page.locator('#gear').click();
     for (const selector of ['[data-layout=split]', '[data-input=mod]', '[data-theme-set=dark]', '#glang', '#login-copy', 'a[href="/settings"]']) {
       assert(await page.locator('#gmenu ' + selector).isVisible(), selector);
     }
     await page.locator('#settings-close').click();
 
+    await ensureRailOpen();
     await gear('project', workspace).focus();
     await page.keyboard.press('Tab');
     await page.keyboard.press('Shift+Tab');
@@ -170,6 +268,7 @@ const snapshot = '/api/config/snapshot';
     await scopeButton('project').click();
     await show('project', workspace);
     assert(await row('workflow.prefer_subagent').locator('button.tg').isDisabled());
+    await ensureRailOpen();
     await gear('session', session).click();
     await show('session', session, root, session);
     await scopeButton('builtin').click();
@@ -178,6 +277,7 @@ const snapshot = '/api/config/snapshot';
     await page.goBack();
     await show('session', session, root, session);
 
+    await ensureRailOpen();
     await gear('repo', root).click();
     await show('repo', root, root);
     await scopeButton('builtin').click();
@@ -225,6 +325,7 @@ const snapshot = '/api/config/snapshot';
     assert.equal((await sent).status(), 200);
     await frame().locator('[data-settings-proposal-status=delivered]').waitFor();
 
+    await ensureRailOpen();
     await gear('repo', linked).click();
     await show('repo', linked, linked);
     await setLanguage('Manual draft', null, false);

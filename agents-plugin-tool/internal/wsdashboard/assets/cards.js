@@ -90,6 +90,7 @@
   var boardw = 0, convow = 0;
   var toolbar = null, overviewOn = false;
   var stateFilter = "all", stateUI = null;
+  var toolbarFit = { width: 0, probing: false, modes: ["", "compact-filter", "compact-actions", "dropdown", "tight"] };
   var filterValues = ["all", "asks", "researching", "discussing", "waiting", "implementing", "awaiting-confirmation", "closed", "cards"];
 
   function licon(name) { return '<svg class="li" aria-hidden="true"><use href="#l-' + name + '"/></svg>'; }
@@ -152,6 +153,18 @@
     var face = mk("div", "board-toolbar-face");
     face.appendChild(row);
     toolbar.appendChild(face);
+    toolbarFit.width = 0;
+    toolbarFit.probing = false;
+    window.addEventListener("resize", function () { fitToolbar(false); });
+    if (window.ResizeObserver) new window.ResizeObserver(function () { fitToolbar(false); }).observe(toolbar);
+    if (window.MutationObserver) {
+      new window.MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i++) {
+          if (!stateUI || !stateUI.root.contains(records[i].target)) { fitToolbar(true); return; }
+        }
+      }).observe(row, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
+    }
+    if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(function () { fitToolbar(true); });
   }
   // The sticky root keeps the original flex footprint. Only its face changes
   // height: no scroll writer, replacement controls, or transient measuring DOM.
@@ -278,11 +291,9 @@
     pop.addEventListener("keydown", function (e) {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(true); }
     });
-    root.addEventListener("focusout", function (e) { if (e.relatedTarget && !root.contains(e.relatedTarget)) close(false); });
+    root.addEventListener("focusout", function (e) { if (!toolbarFit.probing && e.relatedTarget && !root.contains(e.relatedTarget)) close(false); });
     doc.addEventListener("click", function (e) { if (!root.contains(e.target)) close(false); });
     doc.addEventListener("scroll", placeStatePop, { capture: true, passive: true });
-    window.addEventListener("resize", resizeStateFilter);
-    if (window.ResizeObserver) new window.ResizeObserver(resizeStateFilter).observe(toolbar);
     return root;
   }
   function selectFilter(value, focus, dismiss, after) {
@@ -291,7 +302,7 @@
       opt.save(opt.key + ".state-filter", value);
       countTopics();
       if (dismiss) stateUI.close(true);
-      else if (focus) focus.focus({ preventScroll: true });
+      else if (focus) (stateUI.inline.hidden && stateUI.inline.contains(focus) ? stateUI.trigger : focus).focus({ preventScroll: true });
       if (after) after();
     };
     // Let Overview finish restoring its anchor before visibility changes.
@@ -306,19 +317,67 @@
     pop.style.top = top + "px";
     pop.style.maxHeight = Math.max(0, window.innerHeight - top - 8) + "px";
   }
-  function resizeStateFilter() {
-    if (!stateUI) return;
+  function applyToolbarFit(mode) {
+    if (mode) toolbar.setAttribute("data-toolbar-fit", mode);
+    else toolbar.removeAttribute("data-toolbar-fit");
+    if (stateUI && stateUI.root.isConnected) {
+      var narrow = mode === "dropdown" || mode === "tight";
+      stateUI.inline.hidden = narrow;
+      stateUI.trigger.hidden = !narrow;
+    }
+  }
+  function toolbarRowFits(face, row) {
+    var faceRect = face.getBoundingClientRect();
+    if (!faceRect.width) return true;
+    var firstY = null;
+    for (var i = 0; i < row.children.length; i++) {
+      var r = row.children[i].getBoundingClientRect();
+      if (!r.width && !r.height) continue;
+      var cy = r.top + r.height / 2;
+      if (firstY === null) firstY = cy;
+      else if (Math.abs(cy - firstY) > 2) return false;
+      if (r.right > faceRect.right - 0.5) return false;
+    }
+    return true;
+  }
+  function fitToolbar(force) {
+    if (!toolbar || !toolbar.firstChild || !toolbar.firstChild.firstChild || toolbarFit.probing) return;
+    var face = toolbar.firstChild, row = face.firstChild;
     var width = toolbar.getBoundingClientRect().width;
     if (!width) return;
-    var narrow = width < 540, ui = stateUI, active = doc.activeElement;
-    if (ui.inline.hidden !== narrow) {
-      var transfer = active && (ui.inline.contains(active) || active === ui.trigger || ui.pop.contains(active));
-      ui.close(false);
-      ui.inline.hidden = narrow;
-      ui.trigger.hidden = !narrow;
-      if (transfer) (narrow ? ui.trigger : ui.inline.querySelector('[data-filter="' + stateFilter + '"]')).focus({ preventScroll: true });
+    if (!force && Math.abs(width - toolbarFit.width) < 0.25) {
+      placeStatePop();
+      return;
     }
-    placeStatePop();
+    toolbarFit.width = width;
+    var ui = stateUI && stateUI.root.isConnected ? stateUI : null;
+    var active = doc.activeElement;
+    var wasNarrow = !!(ui && ui.inline.hidden);
+    var inFilter = !!(ui && active && (ui.inline.contains(active) || active === ui.trigger || ui.pop.contains(active)));
+    var modes = ui ? toolbarFit.modes : ["", "compact-filter", "compact-actions", "tight"];
+    var chosen = modes[modes.length - 1];
+    toolbarFit.probing = true;
+    try {
+      for (var i = 0; i < modes.length; i++) {
+        applyToolbarFit(modes[i]);
+        if (i === modes.length - 1 || toolbarRowFits(face, row)) {
+          chosen = modes[i];
+          break;
+        }
+      }
+    } finally {
+      toolbarFit.probing = false;
+    }
+    if (ui) {
+      var narrow = chosen === "dropdown" || chosen === "tight";
+      if (narrow !== wasNarrow) {
+        ui.close(false);
+        if (inFilter) (narrow ? ui.trigger : ui.inline.querySelector('[data-filter="' + stateFilter + '"]')).focus({ preventScroll: true });
+      } else if (inFilter && active && active.isConnected && doc.activeElement !== active) {
+        active.focus({ preventScroll: true });
+      }
+      placeStatePop();
+    }
   }
   function filtered(n, hide) {
     if (hide) n.setAttribute("data-state-filtered", ""); else n.removeAttribute("data-state-filtered");
@@ -368,7 +427,7 @@
     trigger.appendChild(mk("span", "board-state-count", String(totals[stateFilter])));
     trigger.appendChild(mk("span", "term-arrow", "▾"));
     trigger.setAttribute("aria-label", wsT("js.board.filter.label") + ": " + stateUI.labels[i] + " " + totals[stateFilter]);
-    resizeStateFilter();
+    fitToolbar(true);
   }
   function topicName(n) {
     return n && n.nodeType === 1 && n.tagName === "SECTION" && n.classList.contains("topic") && n.hasAttribute("data-topic") ? n.getAttribute("data-topic") : null;

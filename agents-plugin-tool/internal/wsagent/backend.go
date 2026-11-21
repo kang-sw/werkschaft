@@ -87,7 +87,12 @@ type StartSpec struct {
 	// RecoveredSteers are the unconsumed worker steers persisted before a
 	// holder reattach. A backend may use them to map replayed acknowledgements
 	// back to the runner without persisting backend request ids.
-	RecoveredSteers []string
+	RecoveredSteers     []string
+	restoredClaudeUsage *wslive.Usage
+
+	// reattachedPromptAfter is the holder sequence before the worker's
+	// outstanding daemon-sent prompt. Nil means there is no such prompt.
+	reattachedPromptAfter *uint64
 }
 
 // LeadSpec is what a lead conversation's process starts with.

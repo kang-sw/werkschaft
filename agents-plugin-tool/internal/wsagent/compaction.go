@@ -28,6 +28,7 @@ const (
 
 	compactionRestoreMarker = "\x00ws-restore:compaction\x00"
 	restartRestoreMarker    = "\x00ws-restore:restart\x00"
+	leadStartStateMarker    = "\x00ws-lead-start-state\x00"
 )
 
 func (r BackendRegistration) CompactionProtocol() CompactionProtocol {
@@ -396,7 +397,7 @@ func (c *conv) compactIdle() bool {
 		return true
 	}
 	if c.compactResume && c.compactNote != "" && c.proc != nil {
-		text := c.renderRestoreNote(c.compactNote) + "\nContinue the work that was pending."
+		text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
 		c.compactResume = false
 		if err := c.proc.Send(text); err != nil {
 			c.compactResumeInternal = false
@@ -415,7 +416,7 @@ func (c *conv) compactIdle() bool {
 			// a standalone restore turn ahead of input that already waits.
 			return false
 		}
-		text := c.renderRestoreNote(c.compactNote)
+		text := c.renderPendingNote(c.compactNote)
 		if err := c.proc.Send(text); err != nil {
 			c.setStatus(func() { c.lastErr = err.Error() })
 			c.releaseHeld()
@@ -476,29 +477,28 @@ func (c *conv) consumeCompactionNudge() {
 }
 
 func (c *conv) compactionNudgeReady() bool {
+	// A worker may still be waiting for the harness to resume its held turn.
 	return c.compactNudge.standalone && c.compactUsageFresh && c.proc != nil &&
-		!c.compacting && !c.compactCommand && c.compactPending == nil &&
-		c.bgTasks == 0 && c.bgGraceTimer == nil
+		!c.compacting && !c.compactCommand && c.compactPending == nil && c.compactNote == "" &&
+		(c.rec.Lead || c.bgTasks == 0 && c.bgGraceTimer == nil)
 }
 
-func (c *conv) sendCompactionNudge() {
-	if !c.compactionNudgeReady() || c.hasActiveDescendants() {
-		return
+func (c *conv) sendCompactionNudge() bool {
+	if !c.compactionNudgeReady() {
+		return false
 	}
 	c.releaseHeld()
-	if c.heldRes != nil {
-		return
-	}
 	if err := c.proc.Send(c.compactNudge.text); err != nil {
-		// Keep the note for ordinary input. A failed internal send has no
-		// queued work to restart the harness for.
+		// Leave the crossing unconsumed for the next fresh usage sample.
+		// Ordinary input, if any, can restart the harness.
 		c.setStatus(func() { c.lastErr = "send compaction advisory: " + err.Error() })
 		c.stopProcess("")
-		return
+		return false
 	}
 	c.consumeCompactionNudge()
 	c.compactInternalTurn = true
 	c.beginTurn(false)
+	return true
 }
 
 func (c *conv) restartRestoreHasInput() bool {
@@ -586,11 +586,11 @@ func (c *conv) compactEvent(ev wslive.Event) {
 }
 
 func (c *conv) compactInput(text string) string {
-	if c.compactNudge.text != "" {
+	if !c.compactNudge.standalone && c.compactNudge.text != "" {
 		text = c.compactNudge.text + "\n\n" + text
 	}
 	if c.compactNote != "" {
-		text = strings.TrimSpace(c.renderRestoreNote(c.compactNote)) + "\n\n" + text
+		text = strings.TrimSpace(c.renderPendingNote(c.compactNote)) + "\n\n" + text
 	}
 	return text
 }
@@ -609,10 +609,18 @@ func (c *conv) queueRestore(cause RestoreCause) {
 	c.compactNote = marker
 }
 
-// renderRestoreNote resolves the marker at the last possible point before a
+// renderPendingNote resolves the marker at the last possible point before a
 // send. The marker stays in compactNote until that send succeeds, so a failed
-// send retries with newly read state instead of caching a partial bundle.
-func (c *conv) renderRestoreNote(note string) string {
+// send retries with newly read state.
+func (c *conv) renderPendingNote(note string) string {
+	if tail, ok := strings.CutPrefix(note, leadStartStateMarker); ok {
+		state, err := c.r.opts.LeadSessionState(c.rec.WSKey)
+		if err != nil {
+			fmt.Fprintf(c.r.opts.Log, "agent %s: first-turn session state: %v\n", c.rec.ReplyID, err)
+			state = "The hosted session state could not be rendered for this turn. Call workflow_state with your existing key before continuing."
+		}
+		return strings.TrimSpace(state) + "\n\n" + tail
+	}
 	cause, tail := RestoreCause(""), ""
 	switch {
 	case strings.HasPrefix(note, compactionRestoreMarker):

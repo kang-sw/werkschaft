@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wsagent"
 )
 
 // --- Phase 3a: stripModeGatedRegion pure-logic tests (TDD) -------------------
@@ -711,14 +713,14 @@ func TestHostedRestoreBundleSessionStateTargetsAndChildren(t *testing.T) {
 	inlineTarget := json.RawMessage(`{"target":{"kind":"inline","label":"Inline restore plan"}}`)
 	noTarget := json.RawMessage(`{"target":{"kind":"ticket","ticket_path":"must-not-be-inferred.md"}}`)
 	todos := []todoItem{{Key: "restore", Title: "Restore state", Status: todoPending}}
-	children := []HostedChild{
+	children := []wsagent.AgentChild{
 		{Address: "id:child-a", Label: "alpha", Tier: "pi.small", Authority: "read-only", State: "running", LastReport: "done: alpha"},
 		{Address: "id:child-b", Label: "beta", Tier: "codex.large", Authority: "workdir-write", State: "waiting", Error: "fixture stopped"},
 	}
 	for _, tc := range []struct {
 		name       string
 		agenda     map[string]json.RawMessage
-		children   []HostedChild
+		children   []wsagent.AgentChild
 		wantTarget string
 		wantChild  []string
 	}{
@@ -764,33 +766,58 @@ func TestHostedRestoreBundleSessionStateTargetsAndChildren(t *testing.T) {
 	}
 }
 
-func TestRenderHostedRestoreBundleReadsStateAtEachDelivery(t *testing.T) {
-	setupWorkflowManualNoteEnv(t)
-	root := t.TempDir()
-	initGit(t, root)
-	key, err := NewAgentKeyStore().MintLead(root)
+func TestHostedLeadManualAndTurnsReadSessionStateAtDelivery(t *testing.T) {
+	f := newWhiteboardFixture(t)
+	f.update(t, `<wb:topic name="startup"><wb:log>Current whiteboard summary</wb:log></wb:topic>`)
+	if response := f.call(t, "todo.add", map[string]any{"key": "startup", "title": "Current todo"}); isToolError(response) {
+		t.Fatal(response)
+	}
+	store := NewAgentKeyStore(f.s.sessions.boards)
+	setAgenda := func(version string) {
+		t.Helper()
+		if err := store.store.setAgenda(f.key, "freshness", json.RawMessage(fmt.Sprintf(`{"version":%q}`, version))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setAgenda("at-launch")
+	render := HostedRender{Harness: "claude", Boards: f.s.sessions.boards}
+	manual, err := RenderLeadManual(os.Environ(), f.root, render, f.key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := newSessionStore()
-	if err := store.setAgenda(key, "freshness", json.RawMessage(`{"version":"at-launch"}`)); err != nil {
-		t.Fatal(err)
+	for _, want := range []string{"**Session invariant:**", "> **Session key: `" + f.key + "`**", "## Session Key\n" + f.key} {
+		if !strings.Contains(manual, want) {
+			t.Fatalf("hosted manual lacks %q:\n%s", want, manual)
+		}
 	}
-	first, err := RenderHostedRestoreBundle(os.Environ(), root, HostedRender{Harness: "claude"}, key, "compaction", nil)
+	stateParts := []string{"## Session State", "### agenda: freshness", "### Whiteboard topics\n- startup: Current whiteboard summary", "### Todos\n- [ ] {startup} Current todo"}
+	for _, unwanted := range append(stateParts, "at-launch") {
+		if strings.Contains(manual, unwanted) {
+			t.Fatalf("hosted manual contains %q:\n%s", unwanted, manual)
+		}
+	}
+	assertState := func(text, version string) {
+		t.Helper()
+		for _, want := range append(stateParts, fmt.Sprintf(`"version": %q`, version)) {
+			if strings.Count(text, want) != 1 {
+				t.Fatalf("expected one %q in session state:\n%s", want, text)
+			}
+		}
+	}
+	assertState(toolText(t, f.call(t, "workflow_manual", map[string]any{})), "at-launch")
+
+	setAgenda("first-turn")
+	first, err := store.RenderHostedSessionState(f.key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(first, `"version": "at-launch"`) {
-		t.Fatalf("first restore did not read launch state:\n%s", first)
-	}
-	if err := store.setAgenda(key, "freshness", json.RawMessage(`{"version":"after-launch-before-delivery"}`)); err != nil {
-		t.Fatal(err)
-	}
-	second, err := RenderHostedRestoreBundle(os.Environ(), root, HostedRender{Harness: "claude"}, key, "restart", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(second, `"version": "after-launch-before-delivery"`) || strings.Contains(second, `"version": "at-launch"`) {
-		t.Fatalf("second restore reused cached state:\n%s", second)
+	assertState(first, "first-turn")
+	for _, cause := range []string{"compaction", "restart"} {
+		setAgenda(cause)
+		bundle, err := RenderHostedRestoreBundle(os.Environ(), f.root, render, f.key, cause, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertState(bundle, cause)
 	}
 }

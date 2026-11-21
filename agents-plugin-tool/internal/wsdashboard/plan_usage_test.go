@@ -2,6 +2,8 @@ package wsdashboard
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +49,45 @@ func TestPlanUsageClaudeLatestObservationWins(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(s.dir, planUsageCache))
 	if err != nil || !json.Valid(raw) {
 		t.Fatal("cache missing or invalid")
+	}
+}
+
+func TestPlanUsageClaudeGETIgnoresStaleSessionHeartbeats(t *testing.T) {
+	s := usageTestStore(t)
+	now := time.Now().UnixMilli()
+	reset := now + time.Hour.Milliseconds()
+	d := &Daemon{dir: s.dir, planUsage: s, index: NewIndex(IndexOptions{Dir: s.dir}), snapshots: &SnapshotCache{}}
+	writes := usageWriteCounter(s)
+	publish := func(id string, percent float64, observed, updated int64) {
+		d.index.sessions[id] = &indexEntry{session: Session{Registration: Registration{ReplyID: id, Harness: "claude"}}}
+		d.snapshots.setLive(s.dir, id, wslive.Snapshot{Adapter: "claude", UpdatedAt: updated, Usage: &wslive.Usage{
+			LimitsAsOf: observed,
+			Limits:     []wslive.UsageLimit{{Kind: wslive.LimitSevenDay, Percent: percent, ResetsAt: reset}},
+		}}, false)
+	}
+	publish("a-fresh", 69, now, now)
+	for i := int64(1); i <= 3; i++ {
+		publish("b-legacy", 5, 0, now+3*i)
+		publish("c-legacy", 91, 0, now+3*i+1)
+		publish("d-old", 64, now-1, now+3*i+2)
+		w := httptest.NewRecorder()
+		d.handlePlanUsage(w, httptest.NewRequest(http.MethodGet, "/rail/usage?history=1", nil))
+		var got struct {
+			Entries []planUsageEntry           `json:"entries"`
+			History planUsageHistoryProjection `json:"history"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); w.Code != http.StatusOK || err != nil {
+			t.Fatalf("GET %d: status %d, body %s, error %v", i, w.Code, w.Body, err)
+		}
+		if len(got.Entries) != 1 || len(got.Entries[0].Windows) != 1 || got.Entries[0].Windows[0].Percent != 69 || got.Entries[0].AsOf != now {
+			t.Fatalf("GET %d replaced the real observation: %+v", i, got.Entries)
+		}
+		if len(got.History.Samples) != 1 || got.History.Samples[0].AsOf != now || got.History.Samples[0].Percent != 69 {
+			t.Fatalf("GET %d added stale samples: %+v", i, got.History.Samples)
+		}
+		if writes[planUsageCache] != 1 || writes[planUsageHistoryCache] != 1 {
+			t.Fatalf("GET %d rewrote usage files: %v", i, writes)
+		}
 	}
 }
 
@@ -185,7 +226,7 @@ func TestPlanUsageClaudeNewerWindowReplacesAtBoundary(t *testing.T) {
 	s := usageTestStore(t)
 	now := time.Now().UnixMilli()
 	push := func(at int64, percent float64, reset int64) {
-		s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: at, Usage: &wslive.Usage{Limits: []wslive.UsageLimit{{Kind: wslive.LimitFiveHour, Percent: percent, ResetsAt: reset}}}})
+		s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: at, Usage: &wslive.Usage{LimitsAsOf: at, Limits: []wslive.UsageLimit{{Kind: wslive.LimitFiveHour, Percent: percent, ResetsAt: reset}}}})
 	}
 	first := now + 100000
 	push(now, 90, first)
@@ -211,7 +252,7 @@ func TestPlanUsageUnchangedPushWritesNothing(t *testing.T) {
 	now := time.Now().UnixMilli()
 	limits := []wslive.UsageLimit{{Kind: wslive.LimitFiveHour, Percent: 40, ResetsAt: now + 100000}, {Kind: wslive.LimitSevenDay, Percent: 20, ResetsAt: now + 200000}}
 	writes := usageWriteCounter(s)
-	s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: now, Usage: &wslive.Usage{Limits: limits}})
+	s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: now, Usage: &wslive.Usage{LimitsAsOf: now, Limits: limits}})
 	if writes[planUsageCache] != 1 || writes[planUsageHistoryCache] != 1 {
 		t.Fatalf("first push: %v", writes)
 	}
@@ -284,11 +325,11 @@ func TestPlanUsageDetection(t *testing.T) {
 func TestPlanUsageExpiredWindowAndPushedOnlyClaude(t *testing.T) {
 	s := usageTestStore(t)
 	now := time.Now().UnixMilli()
-	s.pushClaude(&wslive.Snapshot{Adapter: "pi", UpdatedAt: now, Usage: &wslive.Usage{Limits: []wslive.UsageLimit{{Kind: wslive.LimitSevenDay, Percent: 99, ResetsAt: now + 10000}}}})
+	s.pushClaude(&wslive.Snapshot{Adapter: "pi", UpdatedAt: now, Usage: &wslive.Usage{LimitsAsOf: now, Limits: []wslive.UsageLimit{{Kind: wslive.LimitSevenDay, Percent: 99, ResetsAt: now + 10000}}}})
 	if len(s.entries()) != 0 {
 		t.Fatal("Pi data treated as Claude")
 	}
-	s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: now, Usage: &wslive.Usage{Limits: []wslive.UsageLimit{{Kind: wslive.LimitSevenDay, Percent: 70, ResetsAt: now + 10000}}}})
+	s.pushClaude(&wslive.Snapshot{Adapter: "claude", UpdatedAt: now, Usage: &wslive.Usage{LimitsAsOf: now, Limits: []wslive.UsageLimit{{Kind: wslive.LimitSevenDay, Percent: 70, ResetsAt: now + 10000}}}})
 	if got := s.entries(); len(got) != 1 || got[0].Plan != "" || got[0].Harness != "claude" {
 		t.Fatal("pushed-only Claude missing")
 	}

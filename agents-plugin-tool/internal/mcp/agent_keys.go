@@ -19,9 +19,14 @@ type AgentKeyStore struct {
 	store *sessionStore
 }
 
-// NewAgentKeyStore returns a store over this machine's key directory.
-func NewAgentKeyStore() *AgentKeyStore {
-	return &AgentKeyStore{store: newSessionStore()}
+// NewAgentKeyStore returns a store over this machine's key directory. The
+// daemon supplies its held board store for hosted session-state rendering.
+func NewAgentKeyStore(boards ...*WhiteboardStores) *AgentKeyStore {
+	store := newSessionStore()
+	if len(boards) > 0 {
+		store.boards = boards[0]
+	}
+	return &AgentKeyStore{store: store}
 }
 
 // Root is the identity root config.get uses for this key's repo layer.

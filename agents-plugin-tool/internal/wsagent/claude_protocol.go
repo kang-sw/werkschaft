@@ -27,7 +27,7 @@ type claudeMapper struct {
 	wakeTasks map[string]claudeWakeTask
 
 	context *wslive.UsageContext
-	limits  map[string]wslive.UsageLimit
+	limits  []wslive.UsageLimit
 	// limitsAsOf is the last rate_limit_event observation. Other status
 	// events keep it, so context activity cannot make old limits look fresh.
 	limitsAsOf int64
@@ -130,8 +130,12 @@ type claudeSpawn struct {
 }
 
 func newClaudeMapper(spec StartSpec) *claudeMapper {
-	return &claudeMapper{spec: spec, now: time.Now, batches: newBatchTracker("c"), limits: map[string]wslive.UsageLimit{}, tasks: map[string]bool{}, approvals: map[string]string{},
+	m := &claudeMapper{spec: spec, now: time.Now, batches: newBatchTracker("c"), tasks: map[string]bool{}, approvals: map[string]string{},
 		rejected: map[string]int64{}, spawns: map[string]claudeSpawn{}, subs: map[string]*claudeSub{}, wakeTasks: map[string]claudeWakeTask{}, levers: map[string]bool{}}
+	if u := spec.restoredClaudeUsage; u != nil && u.LimitsAsOf > 0 {
+		m.limits, m.limitsAsOf = u.Limits, u.LimitsAsOf
+	}
+	return m
 }
 
 // lead reports a lead conversation's mapper.

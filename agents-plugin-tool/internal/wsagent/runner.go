@@ -130,14 +130,17 @@ type Options struct {
 	// environment; nil refuses profiles that allow ws tools.
 	WSMCP func(root string) (MCPCommand, error)
 	// LeadManual renders the workflow manual of a hosted lead for its lead
-	// key, as the session's own ws-mcp would serve it from the selected
-	// package: backend is the lead's harness, dir its working directory.
+	// key, from the selected package: backend is the lead's harness, dir
+	// its working directory. LeadSessionState supplies the mutable state.
 	// The lead's launch appends it to the harness's system prompt
 	// (composeLeadInstructions), so the session reads it from its first
 	// turn. internal/mcp renders the manual and imports this package, so the
 	// daemon supplies the function; nil, or an error, leaves the prompt
 	// with the key sentence alone.
 	LeadManual func(backend, dir, key string) (string, error)
+	// LeadSessionState renders current state for the first model-bound turn
+	// after a lead process launches. A pending restore serves that turn instead.
+	LeadSessionState func(key string) (string, error)
 	// RestoreBundle renders fresh hosted session state at the point it is
 	// delivered after compaction or daemon restart. children is the caller's
 	// direct agent.list projection; the daemon owns the renderer so this

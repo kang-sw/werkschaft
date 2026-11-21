@@ -57,13 +57,14 @@ func TestSavedConversationCarriesNoLiveState(t *testing.T) {
 	}
 }
 
-func TestIndexViewListsLiveAndRecentlyEndedSessions(t *testing.T) {
+func TestIndexViewListsLiveAndRecentlyInactiveSessions(t *testing.T) {
 	now := testNow
 	recent := endedSession("recentend", "/a", now)
+	recent.Hosted = true // user deletion of a hosted lead
 	old := liveSession("oldend", "/a", now.Add(-48*time.Hour))
 	old.EndedAt = stampFor(now.Add(-48 * time.Hour))
 	onlyOld := liveSession("onlyold", "/b", now.Add(-72*time.Hour))
-	lapsed := liveSession("lapsed", "/a", now.Add(-10*time.Minute)) // heartbeat stopped: ended
+	lapsed := liveSession("lapsed", "/a", now.Add(-10*time.Minute))
 	view := buildIndexView([]indexInput{
 		{Session: liveSession("busy", "/a", now), Snapshot: liveSnap(now, wslive.Lead{Activity: wslive.Activity{Phase: wslive.PhaseTool, Batches: []wslive.BatchView{{Running: &wslive.RunningView{ToolName: "Edit"}}}}})},
 		{Session: liveSession("codex", "/a", now)},
@@ -77,7 +78,7 @@ func TestIndexViewListsLiveAndRecentlyEndedSessions(t *testing.T) {
 	}
 	p := view.Projects[0]
 	if len(p.Sessions) != 2 || len(p.Ended) != 2 || p.HiddenEnded != 1 {
-		t.Fatalf("project rows: live %d ended %d hidden %d", len(p.Sessions), len(p.Ended), p.HiddenEnded)
+		t.Fatalf("project rows: regular %d deleted %d hidden %d", len(p.Sessions), len(p.Ended), p.HiddenEnded)
 	}
 	var busy IndexRow
 	for _, r := range p.Sessions {
@@ -95,8 +96,8 @@ func TestIndexViewListsLiveAndRecentlyEndedSessions(t *testing.T) {
 		t.Errorf("totals live %d busy %d", view.Live, view.Busy)
 	}
 	for _, r := range p.Ended {
-		if !strings.Contains("recentend lapsed", r.ReplyID) {
-			t.Errorf("unexpected ended row %s", r.ReplyID)
+		if (r.ReplyID != recent.ReplyID && r.ReplyID != "lapsed") || r.Lifecycle != SessionPendingDeletion {
+			t.Errorf("deleted row = %+v, want recent or lapsed pending deletion", r)
 		}
 	}
 }

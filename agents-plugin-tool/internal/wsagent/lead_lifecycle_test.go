@@ -3,6 +3,7 @@ package wsagent
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -593,14 +594,20 @@ func ringKinds(ring []wslive.RingEntry, kind string) int {
 // entry or turn line of its own, so its retry on a new process shows the
 // message once, in one turn.
 func TestLeadFailedSendShowsTheMessageOnce(t *testing.T) {
-	h := newLeadHarness(t).start()
+	h := newLeadHarness(t)
+	var reads int
+	h.opts.LeadSessionState = func(string) (string, error) {
+		reads++
+		return fmt.Sprintf("## Session State\n\nRead %d", reads), nil
+	}
+	h.start()
 	h.holders.failInputs("user", 1)
 	id := h.lead(BackendClaude, LeadOptions{}).ID
 	h.send(id, "one")
 	var second string
 	eventually(t, "the message on the retry's process", func() bool {
 		second = h.record(id).HolderID
-		return second != "" && slices.Equal(h.userInputs(second), h.envelopes("one"))
+		return second != "" && slices.Equal(h.userInputs(second), []string{"## Session State\n\nRead 2\n\n" + h.envelope("one")})
 	})
 	if n := h.holders.opCount("spawn"); n != 2 {
 		t.Fatalf("one failed start and one retry: %d spawns (%v)", n, h.holders.opList())

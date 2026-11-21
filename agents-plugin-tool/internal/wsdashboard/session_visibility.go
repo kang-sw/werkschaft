@@ -22,6 +22,7 @@ const (
 	SessionActiveOn        SessionLifecycle = "active_on"
 	SessionAsleep          SessionLifecycle = "asleep"
 	SessionArchived        SessionLifecycle = "archived"
+	SessionStopped         SessionLifecycle = "stopped"
 	SessionPendingDeletion SessionLifecycle = "pending_deletion"
 	// SessionChildWaiting is a spawned child agent asleep with no turn: mail
 	// wakes it, and it is deleted after agent.child_waiting_days without
@@ -30,24 +31,38 @@ const (
 	SessionChildWaiting SessionLifecycle = "child_waiting"
 )
 
-// DeriveSessionLifecycle preserves external ownership: a terminal row never
-// acquires archive controls from a retained sidecar. Explicitly ended rows
-// remain in the existing retention/prune domain, even with an archive sidecar.
-// An archived open lead stays archived across a daemon outage/stale heartbeat.
+// DeriveSessionLifecycle uses runner state for hosted leads: their heartbeat
+// can age while the machine sleeps and their holders keep running. EndedAt on
+// a hosted lead records its conversation close. Terminal handoff clears Hosted,
+// and an external MCP shutdown or worker retirement can also set EndedAt.
 func DeriveSessionLifecycle(reg Registration, hidden bool, now time.Time) SessionLifecycle {
+	if !reg.Hosted {
+		if !reg.Live(now) {
+			return SessionPendingDeletion
+		}
+		return SessionActiveOn
+	}
 	if reg.EndedAt != "" {
+		// A rolled-back hire also closes its uncommitted lead. Fold that
+		// cancelled creation with manually deleted leads.
 		return SessionPendingDeletion
 	}
-	if reg.Hosted && hidden {
+	if hidden {
 		return SessionArchived
 	}
-	if !reg.Live(now) {
-		return SessionPendingDeletion
+	if !reg.HostStopped {
+		return SessionActiveOn
 	}
-	if reg.Hosted && reg.HostStopped {
+	switch reg.HostExitReason {
+	case "stop", "killed":
 		return SessionAsleep
+	case "":
+		// A hosted lead can have no process before its first launch.
+		if reg.HostStoppedAt == "" && reg.HostExitCode == nil && reg.HostExitSignal == nil {
+			return SessionAsleep
+		}
 	}
-	return SessionActiveOn
+	return SessionStopped
 }
 
 // ReadSessionHidden restores archived visibility. Absence preserves legacy
