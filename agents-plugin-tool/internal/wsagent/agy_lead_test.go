@@ -811,3 +811,73 @@ func TestAgyLeadBackgroundTaskWakeupClosesAutomatically(t *testing.T) {
 		return st.Status == StatusIdle && st.BackgroundTasks == 0 && slices.Contains(ringTexts(h.ring(id), "reply"), "WAKEUP_DONE")
 	})
 }
+
+func TestAgyWorkerReattachWaitsForPromptResponse(t *testing.T) {
+	const usageQuiet = 20 * time.Millisecond
+	const idleQuiet = 80 * time.Millisecond
+	restoreUsage, restoreIdle := agyWakeUsageQuiet, agyWakeIdleQuiet
+	agyWakeUsageQuiet, agyWakeIdleQuiet = usageQuiet, idleQuiet
+	t.Cleanup(func() { agyWakeUsageQuiet, agyWakeIdleQuiet = restoreUsage, restoreIdle })
+
+	for _, tc := range []struct {
+		name  string
+		usage bool
+		quiet time.Duration
+	}{
+		{"usage quiet", true, usageQuiet},
+		{"idle quiet", false, idleQuiet},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, got := workerRecoveryHarness(t, BackendAgy)
+			id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+			before := h.record(id)
+			h.holders.out(holder,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","name":"read_file","status":"in_progress"}}}`,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}}`,
+			)
+			eventually(t, "the first tool call completed", func() bool { return h.record(id).HolderSeq >= before.HolderSeq+2 })
+			h.runner.Close()
+			h.holders.restart()
+			h.startAt("http://127.0.0.1:1")
+			eventually(t, "the worker rejoined its holder", func() bool {
+				c := h.runner.conv(id)
+				if c == nil {
+					return false
+				}
+				ready := false
+				c.do(func() { ready = c.proc != nil && !c.replaying })
+				return ready
+			})
+
+			if tc.usage {
+				h.holders.out(holder, `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":9404,"size":1048576}}}`)
+				eventually(t, "the resumed worker applied usage", func() bool {
+					used := h.state(id).ContextTokens
+					return used != nil && *used == 9404
+				})
+			}
+			time.Sleep(3 * tc.quiet)
+			if reports := got.list(); len(reports) != 0 || !h.record(id).TurnOpen {
+				t.Fatalf("worker turn ended during %s: reports=%+v open=%v", tc.name, reports, h.record(id).TurnOpen)
+			}
+			h.holders.out(holder,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"t2","name":"read_file","status":"completed"}}}`,
+			)
+			completeRecoveryWorker(t, h, BackendAgy, holder)
+			eventually(t, "one worker result after the prompt response", func() bool { return len(got.list()) == 1 })
+			if result := got.list()[0].Result; result.Status != TurnDone || result.Message != "held result" || h.record(id).TurnOpen {
+				t.Fatalf("worker turn did not settle on the prompt response: %+v", result)
+			}
+
+			// A later wakeup has no prompt response and still closes on quiet.
+			h.holders.out(holder,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"unsolicited wakeup"}}}}`,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":9500,"size":1048576}}}`,
+			)
+			eventually(t, "the unsolicited worker wakeup settled", func() bool { return len(got.list()) == 2 })
+			if result := got.list()[1].Result; result.Status != TurnDone || result.Message != "unsolicited wakeup" {
+				t.Fatalf("unsolicited wakeup result: %+v", result)
+			}
+		})
+	}
+}
