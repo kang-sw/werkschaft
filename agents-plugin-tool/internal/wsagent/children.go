@@ -876,23 +876,6 @@ func (r *Runner) descendants(id string) []string {
 	return out
 }
 
-func (c *conv) hasActiveDescendants() bool {
-	for _, id := range c.r.descendants(c.rec.ReplyID) {
-		child := c.r.conv(id)
-		if child == nil {
-			continue
-		}
-		child.mu.Lock()
-		active := !child.closed && (child.spawnPending || child.turn || child.rec.TurnOpen || child.bgTasks > 0 || child.holding ||
-			!child.wakeRefused && child.sends > max(child.settled.mark, child.voided))
-		child.mu.Unlock()
-		if active {
-			return true
-		}
-	}
-	return false
-}
-
 // waitChecked, set by tests alone, runs in a wait after its check found no
 // turn to answer it and before it blocks.
 var waitChecked func()

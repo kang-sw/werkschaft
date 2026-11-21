@@ -62,9 +62,8 @@ func (c *conv) refreshAmbient() {
 	c.ambient = block
 }
 
-// turnInput composes model-only turn input. compactInput consumes and prefixes
-// its one-shot note first; ambient stays last and is never recorded as user
-// text by the dashboard/history paths.
+// turnInput composes model-only turn input. Compaction notes go first, and
+// ambient stays last. Both are kept out of dashboard and history user text.
 func (c *conv) turnInput(text string) string {
 	text = c.compactInput(text)
 	if c.ambient == "" {
