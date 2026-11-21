@@ -198,6 +198,7 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 	}
 	m := newAgyMapper(spec.SessionID)
 	m.recoveredSteers = slices.Clone(spec.RecoveredSteers)
+	m.reattachedPromptAfter = spec.reattachedPromptAfter
 	sp, err := startChild(spec, cmd, m, agyProtocol{})
 	if err != nil {
 		return nil, err
@@ -625,13 +626,11 @@ type agyMapper struct {
 	initDemoted    []CapabilityItem
 	sessionDemoted []CapabilityItem
 
-	// outstanding are the prompts this process sent and agy has not
-	// answered; inTurn is set from a turn's first content to its end.
-	// Any turn opened without a tracked prompt in outstanding (a
-	// background-task wakeup, a replayed/rejoined prompt from an earlier
-	// daemon, or a steered prompt across --replace) sets unsolicitedTurn
-	// and is bounded by wakeTimer so a burst with no prompt response
-	// closes cleanly instead of wedging c.turn.
+	// reattachedPromptAfter marks the earlier daemon's open worker prompt.
+	reattachedPromptAfter *uint64
+
+	// outstanding tracks this daemon's prompt IDs. inTurn spans first
+	// content through the prompt response or the unsolicited wakeup timer.
 	outstanding     map[string]bool
 	steerText       map[string]string
 	steerOrder      []string
@@ -729,17 +728,15 @@ func (m *agyMapper) armWakeIfReadyLocked(replaying bool) {
 }
 
 // replayState runs from streamProcess.deliver before a holder replay marker
-// reaches the runner. If replay ended inside a turn this daemon did not send,
-// arm the quiet timer so a finished unsolicited/wakeup burst in the ring
-// closes cleanly while an in-flight prompt from the earlier daemon can still
-// stream and finish on its live prompt response.
+// reaches the runner. Arm the quiet timer for an open burst without a known
+// prompt so a replayed wakeup can finish.
 func (m *agyMapper) replayState(ev Event) []Event {
 	if !ev.ReplayDone {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.inTurn || len(m.outstanding) > 0 {
+	if !m.inTurn || len(m.outstanding) > 0 || m.reattachedPromptAfter != nil {
 		return nil
 	}
 	m.unsolicitedTurn = true
@@ -883,6 +880,10 @@ type agyMessage struct {
 }
 
 func (m *agyMapper) mapLine(line []byte, replies lineReplies) []Event {
+	return m.mapAgyLine(line, replies, 0)
+}
+
+func (m *agyMapper) mapAgyLine(line []byte, replies lineReplies, seq uint64) []Event {
 	var msg agyMessage
 	if json.Unmarshal(line, &msg) != nil {
 		return nil
@@ -913,7 +914,7 @@ func (m *agyMapper) mapLine(line []byte, replies lineReplies) []Event {
 		}
 		return out
 	case msg.Method == "" && hasID:
-		return m.response(msg, replies, now)
+		return m.response(msg, replies, now, seq)
 	}
 	return nil
 }
@@ -972,7 +973,7 @@ func compactRaw(raw json.RawMessage) json.RawMessage {
 // response maps the answer to a request ws wrote: a prompt's ends the turn
 // unless a later prompt took the run over; any other answers its waiter
 // and reports what the handshake learned.
-func (m *agyMapper) response(msg agyMessage, replies lineReplies, now int64) []Event {
+func (m *agyMapper) response(msg agyMessage, replies lineReplies, now int64, seq uint64) []Event {
 	var id string
 	if json.Unmarshal(msg.ID, &id) != nil {
 		return nil
@@ -985,6 +986,7 @@ func (m *agyMapper) response(msg agyMessage, replies lineReplies, now int64) []E
 		_, replaying := replies.(silentReplies)
 		ours := m.outstanding[id]
 		delete(m.outstanding, id)
+		reattached := m.reattachedPromptAfter != nil && seq > *m.reattachedPromptAfter
 		var steerEvents []Event
 		for i, steerID := range m.steerOrder {
 			if m.outstanding[steerID] {
@@ -995,7 +997,9 @@ func (m *agyMapper) response(msg agyMessage, replies lineReplies, now int64) []E
 				break
 			}
 		}
-		if len(steerEvents) == 0 && len(m.recoveredSteers) > 0 {
+		// Responses from before the open prompt cannot acknowledge its steers.
+		recoveredSteer := len(steerEvents) == 0 && len(m.recoveredSteers) > 0 && (m.reattachedPromptAfter == nil || reattached)
+		if recoveredSteer {
 			text := m.recoveredSteers[0]
 			m.recoveredSteers = m.recoveredSteers[1:]
 			steerEvents = append(steerEvents, Event{SteerAnswer: &SteerAnswer{}}, Event{UserTaken: text})
@@ -1010,11 +1014,14 @@ func (m *agyMapper) response(msg agyMessage, replies lineReplies, now int64) []E
 				OutputRate: &wslive.OutputRate{OutputTps: rateCopy, At: now},
 			}}
 		}
-		if len(m.outstanding) > 0 || (!ours && !m.inTurn) {
+		if len(m.outstanding) > 0 || (reattached && recoveredSteer) || (!ours && !reattached && !m.inTurn) {
 			if rateEv != nil {
 				return append(steerEvents, *rateEv)
 			}
 			return steerEvents
+		}
+		if reattached {
+			m.reattachedPromptAfter = nil
 		}
 		out := m.endTurn(msg, now)
 		if rateEv != nil {
@@ -1193,10 +1200,8 @@ func (m *agyMapper) configOptions(body json.RawMessage) {
 }
 
 // startTurn opens a turn at its first content: a turn ws's own prompt began
-// is already running in the runner, a replayed one is rebuilt here, and any
-// live turn with no tracked outstanding prompt opens an unsolicitedTurn
-// bounded by wakeTimer (covering background wakeups, rejoined/steered prompts
-// across --replace, and stray wakeups).
+// is already running in the runner and a replayed one is rebuilt here. Live
+// content without a known prompt opens an unsolicited turn bounded by wakeTimer.
 func (m *agyMapper) startTurn(out []Event, replaying bool) []Event {
 	if m.inTurn {
 		return out
@@ -1205,7 +1210,7 @@ func (m *agyMapper) startTurn(out []Event, replaying bool) []Event {
 	m.modelFailure = ""
 	m.wakeStepHadText = false
 	m.wakeSawUsage = false
-	if len(m.outstanding) == 0 && !replaying {
+	if len(m.outstanding) == 0 && m.reattachedPromptAfter == nil && !replaying {
 		m.unsolicitedTurn = true
 	}
 	m.turnSeq++

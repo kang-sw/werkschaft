@@ -772,6 +772,32 @@ func TestAgyMapperUnsolicitedAndRejoinTurnsAlwaysClose(t *testing.T) {
 	})
 }
 
+func TestAgyReattachedTrackedPromptEndsOnFinalResponse(t *testing.T) {
+	m := newAgyMapper("s")
+	start := uint64(2)
+	m.reattachedPromptAfter = &start
+	m.recoveredSteers = []string{"follow up"}
+	p := newStreamProcess(m, agyProtocol{})
+	p.feed([]byte(`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"old reply"}}}}`), 1, true)
+	p.feed([]byte(`{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"ws-p-prev-1"}`), 2, true)
+	p.feed([]byte(`{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"ws-p-prev-2"}`), 3, true)
+	p.feed([]byte(`{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"ws-p-prev-3"}`), 4, true)
+	p.deliver(Event{ReplayDone: true})
+	var ends, steers []uint64
+	for len(p.events) > 0 {
+		ev := <-p.events
+		if ev.TurnEnd {
+			ends = append(ends, ev.Seq)
+		}
+		if ev.SteerAnswer != nil {
+			steers = append(steers, ev.Seq)
+		}
+	}
+	if !slices.Equal(ends, []uint64{2, 4}) || !slices.Equal(steers, []uint64{3}) {
+		t.Fatalf("turn ends at %v and steer answers at %v, want [2 4] and [3]", ends, steers)
+	}
+}
+
 func TestAgyReattachedTurnStaysOpenDuringHostedThoughts(t *testing.T) {
 	const quiet = 100 * time.Millisecond
 	restoreIdle := agyWakeIdleQuiet

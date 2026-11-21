@@ -155,6 +155,12 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		RemoveSubagents: RemovesSubagents(rec),
 	}
 	if attach {
+		// Harness-initiated wakeups also set TurnOpen. Only a runner send
+		// saves the start time alongside it.
+		if rec.TurnOpen && rec.TurnStartedAt != 0 {
+			startSeq := rec.TurnStartSeq
+			spec.reattachedPromptAfter = &startSeq
+		}
 		for _, steer := range rec.Steered {
 			spec.RecoveredSteers = append(spec.RecoveredSteers, steer.Text)
 		}
