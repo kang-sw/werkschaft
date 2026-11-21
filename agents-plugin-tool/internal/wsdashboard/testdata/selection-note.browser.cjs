@@ -145,8 +145,10 @@ async function select(page, start, end = start) {
       assert((await backing.inputValue()).includes(text), 'ordinary edits survive draft restore');
       assert.equal(await chips.count(), 4);
       assert.equal(sent.length, 0);
+      const postPromise = tab.waitForRequest(r => r.method() === 'POST' && r.url().endsWith('/message'));
       await page.locator('#csend').click();
       await page.waitForFunction(() => document.querySelector('#ctext').value === '' && !document.querySelector('#ctext + .wsc-editor .wsc-mention'));
+      await postPromise;
       assert.equal(sent.length, 1);
       assert.deepEqual(sent[0].mentions || [], [], 'sources travel inside their selection groups');
       const groups = [...sent[0].text.matchAll(/<wb:selection>\n([\s\S]*?)<\/wb:selection>/g)].map(m => m[1]);

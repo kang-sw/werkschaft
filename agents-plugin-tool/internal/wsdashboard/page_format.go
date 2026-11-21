@@ -63,8 +63,9 @@ func pageFuncs(lang string, icons map[string]bool) template.FuncMap {
 			}
 			return template.JS(b), nil
 		},
-		"sinceText": func(at, ms int64) string { return spanText(max(at-ms+500, 0)) },
-		"marked":    func(text string) template.HTML { return markedText(lang, text) },
+		"sinceText":       func(at, ms int64) string { return spanText(max(at-ms+500, 0)) },
+		"marked":          func(text string) template.HTML { return markedText(lang, text) },
+		"renderSelection": func(s *SelectionView) template.HTML { return renderSelectionInlineHTML(lang, s, nil) },
 		// The tool summary's token and batch lines.
 		"tokenText":        func(requests int, u *wslive.TokenUsage) string { return tokenText(lang, requests, u) },
 		"tokenTitle":       func(requests int, u *wslive.TokenUsage) string { return tokenTitle(lang, requests, u) },
