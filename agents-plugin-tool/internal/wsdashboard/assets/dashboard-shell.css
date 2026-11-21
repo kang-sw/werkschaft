@@ -49,7 +49,7 @@ body.tk-paged .ixmain { display: none; }
 @media (min-width: 1600px) { :root[data-frame] .dash.index { --tkmaxw: none; } }
 :root[data-frame] .rail-ph { visibility: hidden; box-shadow: none; background: none; }
 
-@media (min-width: 1120px) {
+@media (min-width: 1600px) {
   :root[data-settings-shell] .dash > .dwrap { box-sizing: border-box; padding-top: 12px; }
   :root[data-settings-shell] .dwrap > .top { display: none; }
   :root[data-settings-shell] #rail {

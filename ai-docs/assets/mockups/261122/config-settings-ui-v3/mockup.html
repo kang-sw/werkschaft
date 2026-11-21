@@ -1,0 +1,2988 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ws 대시보드 · /settings 워크플로 설정 v3</title>
+<script>
+  (function () {
+    var m = /[?&]theme=(dark|light)/.exec(location.search);
+    document.documentElement.setAttribute("data-theme", m ? m[1] : "dark");
+  })();
+</script>
+<style>
+/* ==========================================================================
+   Authentic wswhiteboard / wsdashboard CSS tokens (Light + Dark)
+   ========================================================================== */
+:root {
+  --wb-bg: #f3f3f0;
+  --wb-fg: #1b1d21;
+  --wb-card: #ffffff;
+  --wb-muted: #e9e8e3;
+  --wb-muted-fg: #5f646b;
+  --wb-primary: #2b62d9;
+  --wb-primary-fg: #ffffff;
+  --wb-topic: #2c3038;
+  --wb-on-topic: #ffffff;
+  --wb-now: #2b62d9;
+  --wb-on-now: #ffffff;
+  --wb-line: color-mix(in srgb, var(--wb-fg) 14%, transparent);
+  --wb-wash: color-mix(in srgb, var(--wb-fg) 5%, transparent);
+  --wb-policy: #b25000;      --wb-on-policy: #ffffff;
+  --wb-technical: #2457c5;   --wb-on-technical: #ffffff;
+  --wb-ok: #1d7348;
+  --wb-fail: #a72e36;
+  --wb-warn: #986300;
+  --wb-warn-ink: #7a4c00;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .10), 0 2px 6px rgb(0 0 0 / .05);
+  --wb-shadow-hi: 0 4px 12px rgb(0 0 0 / .16), 0 12px 32px rgb(0 0 0 / .12);
+  --wb-radius: 12px;
+  --wb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --wb-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  --scrim: rgb(0 0 0 / .30);
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --wb-bg: #141518;
+  --wb-fg: #e7e7e4;
+  --wb-card: #1e2024;
+  --wb-muted: #2b2d32;
+  --wb-muted-fg: #a2a6ad;
+  --wb-primary: #7aa2ff;
+  --wb-primary-fg: #0c1424;
+  --wb-topic: #2a2d33;
+  --wb-on-topic: #e4e5e8;
+  --wb-now: #243457;
+  --wb-on-now: #d3defb;
+  --wb-policy: #5b3a1c;      --wb-on-policy: #f6d9bd;
+  --wb-technical: #26385e;   --wb-on-technical: #d2dcf6;
+  --wb-ok: #6cc39a;
+  --wb-fail: #f1888e;
+  --wb-warn: #e0a741;
+  --wb-warn-ink: #f6c76b;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .45), 0 2px 8px rgb(0 0 0 / .25);
+  --wb-shadow-hi: 0 6px 18px rgb(0 0 0 / .55), 0 14px 36px rgb(0 0 0 / .42);
+  --scrim: rgb(0 0 0 / .56);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--wb-fg) 22%, transparent) transparent;
+}
+*:hover { scrollbar-color: color-mix(in srgb, var(--wb-fg) 40%, transparent) transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--wb-bg);
+  color: var(--wb-fg);
+  font: 13px/1.45 var(--wb-sans);
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+code, .mono { font-family: var(--wb-mono); }
+
+.i {
+  width: 14px; height: 14px; flex: none; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* ==========================================================================
+   Authentic Dashboard Shell & Rail Contract (340px Docked >=1600px, Drawer <1600px)
+   ========================================================================== */
+.dash-shell {
+  height: 100vh;
+  height: 100dvh;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.dbody {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.rscrim { display: none; }
+
+.rail {
+  background: var(--wb-card);
+  border-radius: var(--wb-radius);
+  box-shadow: var(--wb-shadow);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 55%, transparent);
+}
+
+@media (min-width: 1600px) {
+  .dbody {
+    grid-template-columns: 340px minmax(0, 1fr);
+    gap: 0 14px;
+    align-items: stretch;
+  }
+  .rail { position: relative; grid-column: 1; grid-row: 1; }
+  .stage { grid-column: 2; grid-row: 1; }
+  .drawer-toggle { display: none !important; }
+  .rail-close-btn { display: none !important; }
+}
+
+@media (max-width: 1599.98px) {
+  .rail {
+    position: fixed;
+    z-index: 45;
+    top: 10px;
+    bottom: 10px;
+    left: 12px;
+    width: 340px;
+    max-width: calc(100vw - 24px);
+    box-shadow: var(--wb-shadow-hi);
+    transform: translateX(calc(-100% - 24px));
+    visibility: hidden;
+    transition: transform .2s cubic-bezier(.2, .7, .3, 1), visibility 0s linear .2s;
+  }
+  :root.rail-open .rail {
+    transform: none;
+    visibility: visible;
+    transition: transform .2s cubic-bezier(.2, .7, .3, 1);
+  }
+  .rscrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: var(--scrim);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s;
+  }
+  :root.rail-open .rscrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* ---- Session Rail Internals (340px authentic proportions) ---- */
+.rail .rhd {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 10px 9px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--wb-muted-fg);
+  border-bottom: 1px solid var(--wb-muted);
+}
+.rail .rhd .rt { color: var(--wb-fg); font-size: 12.5px; }
+.rail .rhd .rsp { flex: 1; }
+.rail-close-btn {
+  width: 24px; height: 24px;
+  display: inline-grid; place-items: center;
+  border: 0; border-radius: 6px; padding: 0;
+  background: transparent; color: var(--wb-muted-fg); cursor: pointer;
+}
+.rail-close-btn:hover { background: var(--wb-muted); color: var(--wb-fg); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 19px; padding: 0 7px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; line-height: 1;
+  background: var(--wb-muted); color: var(--wb-muted-fg);
+  white-space: nowrap; word-break: keep-all;
+}
+.chip.ok { background: color-mix(in srgb, var(--wb-ok) 15%, var(--wb-card)); color: var(--wb-ok); }
+.chip.pri { background: color-mix(in srgb, var(--wb-primary) 15%, var(--wb-card)); color: var(--wb-primary); }
+.chip.warn { background: color-mix(in srgb, var(--wb-warn) 18%, var(--wb-card)); color: var(--wb-warn-ink); }
+
+.rail .rlist {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rail .rws { display: flex; flex-direction: column; }
+.rail .wsbar {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 10px 5px 12px;
+  background: var(--wb-topic);
+  color: var(--wb-on-topic);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.rail .wsbar .nm { white-space: nowrap; }
+.rail .wsbar .pp {
+  font-family: var(--wb-mono); font-size: 11px; opacity: .68;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 auto; min-width: 0;
+}
+.rail .wsbar .ct {
+  font-size: 10.5px; font-weight: 700; padding: 0 6px; border-radius: 999px;
+  background: rgb(127 127 127 / .28); flex: none;
+}
+.rail .wsbar.dim { opacity: .68; }
+
+.rail .wsbody { padding: 4px 0 2px; display: grid; gap: 4px; }
+.rail .rwt { padding: 2px 0; }
+.rail .wthd {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 10px 3px 22px;
+  font-size: 11.5px; font-weight: 700; color: var(--wb-muted-fg);
+  min-width: 0;
+}
+.rail .wthd .br {
+  font-family: var(--wb-mono); color: var(--wb-fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 auto; min-width: 0;
+}
+.rail .wthd .gs {
+  font-size: 10.5px; font-weight: 600; color: var(--wb-muted-fg);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.rail .rsessions {
+  margin: 2px 8px 0 27px;
+  padding-left: 8px;
+  border-left: 2px solid var(--wb-muted);
+  display: grid; gap: 2px;
+}
+.rail .rs {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 5px 8px; border-radius: 7px;
+  min-width: 0;
+}
+.rail .rs:hover { background: color-mix(in srgb, var(--wb-primary) 6%, var(--wb-card)); }
+.rail .rs.cur { background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card)); }
+.rail .rs .s1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rail .rs .rid {
+  font-family: var(--wb-mono); font-size: 12px; font-weight: 700;
+  color: var(--wb-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 auto; min-width: 0;
+}
+.rail .rs.cur .rid { color: var(--wb-fg); }
+.rail .rs .when { font-size: 10.5px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rail .rs .s2 {
+  font-size: 11.5px; color: var(--wb-muted-fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding-left: 28px;
+}
+.rail .rs.child { padding: 3px 8px 3px 14px; opacity: .85; }
+.rail .rs.child .rid { font-size: 11px; font-weight: 600; color: var(--wb-muted-fg); }
+
+.hb {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  flex: none; width: 22px; height: 14px; border-radius: 4px;
+  font: 800 9px/1 var(--wb-sans); background: #3a3b3f; color: #fff;
+}
+.hb.sm { width: 18px; height: 12px; font-size: 8px; border-radius: 3px; }
+.hb::before { content: "??"; }
+.hb[data-h="claude"] { background: #d97757; color: #fff; }
+.hb[data-h="claude"]::before { content: "Cl"; }
+.hb[data-h="pi"] { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
+.hb[data-h="pi"]::before { content: "Pi"; }
+.hb[data-h="codex"] { background: #f2f2f2; color: #1e1f22; }
+.hb[data-h="codex"]::before { content: "Co"; }
+.hb[data-h="agy"] { background: #3b7be8; color: #fff; }
+.hb[data-h="agy"]::before { content: "Ag"; }
+
+/* Hover-only rail settings gears (reserving 21px so nothing shifts) */
+.r-config-gear {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 21px;
+  width: 21px;
+  height: 21px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--wb-muted-fg);
+  background: transparent;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity .12s, background .12s, color .12s;
+}
+.rail .wsbar .r-config-gear { color: inherit; }
+.rail :is(.wsbar, .wthd):hover > .r-config-gear,
+.rail :is(.wsbar, .wthd):focus-within > .r-config-gear,
+.rail .rs:hover .r-config-gear,
+.rail .rs:focus-within .r-config-gear { opacity: .82; }
+.r-config-gear:hover,
+.r-config-gear:focus-visible,
+.r-config-gear[aria-current="page"] { opacity: 1 !important; }
+.rail :is(.wthd, .rs) .r-config-gear:hover,
+.rail :is(.wthd, .rs) .r-config-gear[aria-current="page"] {
+  background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card));
+  color: var(--wb-primary);
+}
+.rail .wsbar .r-config-gear:hover,
+.rail .wsbar .r-config-gear[aria-current="page"] {
+  background: rgb(255 255 255 / .24);
+  color: var(--wb-on-topic);
+}
+
+.rail .rfoot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--wb-muted);
+  background: var(--wb-card);
+}
+.rail .rfoot-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+.rail .rfoot-btn:hover { background: var(--wb-muted); color: var(--wb-fg); }
+.rail .rfoot-btn[aria-current="page"] {
+  background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card));
+  border-color: color-mix(in srgb, var(--wb-primary) 45%, transparent);
+  color: var(--wb-primary);
+}
+.rail .rfoot-home { flex: 0 0 auto; width: 34px; padding: 0; }
+
+/* ==========================================================================
+   Main /settings Stage — High-Signal Compact Chrome
+   ========================================================================== */
+.stage {
+  background: var(--wb-card);
+  border-radius: var(--wb-radius);
+  box-shadow: var(--wb-shadow);
+  border: 1px solid color-mix(in srgb, var(--wb-line) 55%, transparent);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.shd { flex: none; background: var(--wb-card); }
+
+/* 42px compact header */
+.shd-top {
+  height: 42px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 80%, transparent);
+  min-width: 0;
+}
+.drawer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-wash);
+  color: var(--wb-fg);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  word-break: keep-all;
+  flex: none;
+}
+.drawer-toggle:hover { background: var(--wb-muted); border-color: var(--wb-muted-fg); }
+
+.shd-title {
+  display: flex; align-items: center; gap: 7px;
+  min-width: 0;
+}
+.shd-title h1 {
+  margin: 0; font-size: 14px; font-weight: 800; letter-spacing: -.01em;
+  white-space: nowrap; word-break: keep-all;
+}
+.route-pill {
+  font-family: var(--wb-mono); font-size: 10.5px; font-weight: 700;
+  padding: 2px 6px; border-radius: 5px;
+  background: var(--wb-wash); color: var(--wb-muted-fg);
+  white-space: nowrap;
+}
+.scope-target-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 700;
+  background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card));
+  color: var(--wb-primary);
+  min-width: 0; max-width: 44ch; white-space: nowrap; word-break: keep-all;
+}
+.scope-target-pill code { font-size: 10.5px; opacity: .9; overflow: hidden; text-overflow: ellipsis; }
+.scope-target-pill.repo {
+  background: color-mix(in srgb, var(--wb-warn) 16%, var(--wb-card));
+  color: var(--wb-warn-ink);
+}
+.scope-target-pill.builtin {
+  background: color-mix(in srgb, var(--wb-technical) 16%, var(--wb-card));
+  color: var(--wb-technical);
+}
+:root[data-theme="dark"] .scope-target-pill.builtin {
+  background: var(--wb-technical); color: var(--wb-on-technical);
+}
+
+.shd-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* Segmented Controls */
+.seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px; border-radius: 8px;
+  background: var(--wb-muted);
+  height: 28px;
+}
+.seg button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  border: 0; background: transparent; border-radius: 6px;
+  height: 24px; padding: 0 9px;
+  font-size: 11.5px; font-weight: 700;
+  color: var(--wb-muted-fg); cursor: pointer;
+  white-space: nowrap; word-break: keep-all;
+  transition: background .1s, color .1s;
+}
+.seg button:hover:not(:disabled) { color: var(--wb-fg); }
+.seg button[aria-checked="true"],
+.seg button[aria-selected="true"] {
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .12), inset 0 0 0 1px color-mix(in srgb, var(--wb-line) 70%, transparent);
+}
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+
+.seg.bucket-seg { height: 24px; padding: 2px; border-radius: 7px; }
+.seg.bucket-seg button { height: 20px; padding: 0 8px; font-size: 11px; border-radius: 5px; }
+
+.bdot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.bdot.own { background: var(--wb-primary); }
+.bdot.draft { background: var(--wb-warn); }
+.bdot.other { background: transparent; border: 1.5px solid var(--wb-muted-fg); opacity: .9; }
+
+/* 34px Precedence Bar */
+.prec-strip {
+  min-height: 34px;
+  padding: 4px 16px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  background: color-mix(in srgb, var(--wb-muted) 28%, var(--wb-card));
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent);
+  font-size: 11px;
+}
+.prec-lbl {
+  font-size: 10.5px; font-weight: 800; color: var(--wb-muted-fg);
+  margin-right: 3px; white-space: nowrap; word-break: keep-all;
+}
+.prec-arrow { color: var(--wb-muted-fg); opacity: .55; font-size: 11px; user-select: none; }
+.prec-node {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 22px; padding: 0 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 700;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 85%, transparent);
+  background: var(--wb-card); color: var(--wb-muted-fg);
+  cursor: pointer; white-space: nowrap; word-break: keep-all;
+  transition: border-color .1s, background .1s, color .1s;
+}
+.prec-node:hover:not(:disabled) { border-color: var(--wb-primary); color: var(--wb-fg); }
+.prec-node.synced { border-style: dashed; background: transparent; opacity: .66; cursor: default; }
+.prec-node.active {
+  background: var(--wb-primary); color: var(--wb-primary-fg);
+  border-color: var(--wb-primary);
+}
+.prec-node.active.repo-mode {
+  background: var(--wb-warn); color: #19140b; border-color: var(--wb-warn);
+}
+:root[data-theme="light"] .prec-node.active.repo-mode { color: #fff; }
+.prec-node.active.builtin-mode {
+  background: var(--wb-technical); color: var(--wb-on-technical); border-color: var(--wb-technical);
+}
+.prec-node .sub { font-size: 10px; font-weight: 600; opacity: .82; }
+.prec-hint {
+  margin-left: auto;
+  font-size: 11px; color: var(--wb-muted-fg);
+  white-space: nowrap; word-break: keep-all;
+}
+
+/* 36px Search + Filter Bar */
+.filter-bar {
+  flex: none;
+  min-height: 36px;
+  padding: 4px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--wb-muted);
+  background: var(--wb-card);
+}
+.search-wrap {
+  position: relative;
+  display: flex; align-items: center;
+  flex: 1 1 200px; max-width: 260px; min-width: 150px;
+}
+.search-wrap .i {
+  position: absolute; left: 9px; width: 13px; height: 13px;
+  color: var(--wb-muted-fg); pointer-events: none;
+}
+.search-input {
+  width: 100%; height: 26px;
+  padding: 0 24px 0 28px;
+  border: 1px solid var(--wb-line); border-radius: 7px;
+  background: var(--wb-bg); color: var(--wb-fg);
+  font-size: 12px;
+}
+.search-input:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: -1px; }
+.search-clear {
+  position: absolute; right: 4px; border: 0; background: none;
+  color: var(--wb-muted-fg); cursor: pointer; padding: 1px 5px; font-size: 13px; line-height: 1;
+}
+.fchips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.fchip {
+  height: 25px; padding: 0 10px; border-radius: 999px;
+  border: 1px solid var(--wb-line); background: transparent;
+  color: var(--wb-muted-fg); font-size: 11px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; word-break: keep-all;
+}
+.fchip:hover { color: var(--wb-fg); background: var(--wb-wash); }
+.fchip[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card));
+  border-color: color-mix(in srgb, var(--wb-primary) 48%, transparent);
+  color: var(--wb-primary);
+}
+.ov-counter {
+  margin-left: auto;
+  font-size: 11px; color: var(--wb-muted-fg);
+  white-space: nowrap; word-break: keep-all;
+}
+.ov-counter b { color: var(--wb-fg); font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   Inner Body: 172px Category Nav + Dense Content Scroller
+   ========================================================================== */
+.sbody {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 172px minmax(0, 1fr);
+}
+.snav {
+  border-right: 1px solid var(--wb-muted);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--wb-muted) 12%, var(--wb-card));
+}
+.snav-btn {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; text-align: left;
+  border: 0; border-radius: 7px; padding: 6px 8px;
+  background: transparent; color: var(--wb-muted-fg);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; word-break: keep-all;
+}
+.snav-btn:hover { background: var(--wb-wash); color: var(--wb-fg); }
+.snav-btn[aria-current="true"] {
+  background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card));
+  color: var(--wb-primary);
+  font-weight: 700;
+}
+.snav-btn .dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--wb-primary); flex: none;
+}
+.snav-btn .dot.none { background: transparent; }
+.snav-btn.repo-mode[aria-current="true"] .dot,
+.snav-btn.repo-mode .dot { background: var(--wb-warn); }
+.snav-btn .cnt {
+  margin-left: auto; font-size: 10.5px; font-weight: 700;
+  color: var(--wb-muted-fg); font-variant-numeric: tabular-nums;
+  padding: 0 5px; border-radius: 999px; background: var(--wb-wash);
+}
+.snav-btn[aria-current="true"] .cnt {
+  background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
+  color: var(--wb-primary);
+}
+.snav-note {
+  margin-top: auto;
+  padding: 10px 8px 2px;
+  font-size: 10.5px;
+  color: var(--wb-muted-fg);
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.scontent {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 18px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+/* Slim 1-line Scope / Sync Banners (34px) */
+.slim-banner {
+  min-height: 34px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  word-break: keep-all;
+}
+.slim-banner.sync {
+  border: 1px dashed var(--wb-line);
+  background: color-mix(in srgb, var(--wb-muted) 32%, var(--wb-card));
+  color: var(--wb-muted-fg);
+}
+.slim-banner.repo {
+  border: 1px solid color-mix(in srgb, var(--wb-warn) 42%, transparent);
+  background: color-mix(in srgb, var(--wb-warn) 9%, var(--wb-card));
+  color: var(--wb-fg);
+}
+.slim-banner.builtin {
+  border: 1px solid var(--wb-line);
+  background: color-mix(in srgb, var(--wb-muted) 36%, var(--wb-card));
+  color: var(--wb-muted-fg);
+}
+.slim-banner .ttl { font-weight: 700; color: var(--wb-fg); display: inline-flex; align-items: center; gap: 5px; }
+.slim-banner.repo .ttl { color: var(--wb-warn-ink); }
+.slim-banner code { font-size: 10.5px; padding: 1px 5px; border-radius: 4px; background: var(--wb-wash); }
+.slim-banner .right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+
+.sec-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 2px 2px 4px;
+}
+.sec-head h2 { margin: 0; font-size: 13px; font-weight: 800; letter-spacing: -.01em; word-break: keep-all; }
+.sec-head p { margin: 0; font-size: 11px; color: var(--wb-muted-fg); word-break: keep-all; }
+
+/* ==========================================================================
+   High-Density 2-Column Grouped List (.sgroup + .srow + .layer-drawer)
+   ========================================================================== */
+.sgroup {
+  border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent);
+  border-radius: 10px;
+  background: var(--wb-card);
+  overflow: hidden;
+}
+.srow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 356px;
+  gap: 0 18px;
+  align-items: center;
+  padding: 9px 16px;
+  background: var(--wb-card);
+  transition: background .1s;
+}
+.srow + .srow {
+  border-top: 1px solid color-mix(in srgb, var(--wb-muted) 82%, transparent);
+}
+.srow:hover {
+  background: color-mix(in srgb, var(--wb-fg) 2%, var(--wb-card));
+}
+.srow.overridden {
+  box-shadow: inset 3px 0 0 var(--wb-primary);
+  background: color-mix(in srgb, var(--wb-primary) 5%, var(--wb-card));
+}
+.srow.overridden:hover {
+  background: color-mix(in srgb, var(--wb-primary) 7.5%, var(--wb-card));
+}
+.srow.draft {
+  box-shadow: inset 3px 0 0 var(--wb-warn);
+  background: color-mix(in srgb, var(--wb-warn) 7%, var(--wb-card));
+}
+.srow.draft:hover {
+  background: color-mix(in srgb, var(--wb-warn) 10%, var(--wb-card));
+}
+.srow.disabled {
+  background: color-mix(in srgb, var(--wb-muted) 18%, var(--wb-card));
+}
+.srow.disabled .smeta { opacity: .74; }
+
+/* Left Column: Metadata */
+.smeta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.srow-hd {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.stitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--wb-fg);
+  word-break: keep-all;
+}
+.skey {
+  font-family: var(--wb-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--wb-muted-fg);
+  background: color-mix(in srgb, var(--wb-muted) 55%, transparent);
+  padding: 0 5px;
+  border-radius: 4px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+.stag {
+  display: inline-flex; align-items: center;
+  font-size: 10px; font-weight: 700; line-height: 16px;
+  padding: 0 6px; border-radius: 999px;
+  white-space: nowrap; word-break: keep-all;
+}
+.stag.lock {
+  background: color-mix(in srgb, var(--wb-policy) 14%, var(--wb-card));
+  color: var(--wb-policy);
+}
+:root[data-theme="dark"] .stag.lock {
+  background: var(--wb-policy); color: var(--wb-on-policy);
+}
+.stag.bucket {
+  background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card));
+  color: var(--wb-primary);
+}
+.sdesc {
+  font-size: 12px;
+  color: var(--wb-muted-fg);
+  line-height: 1.38;
+  word-break: keep-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+.bucket-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.inline-warn {
+  margin-top: 4px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wb-warn) 12%, var(--wb-card));
+  border: 1px solid color-mix(in srgb, var(--wb-warn) 36%, transparent);
+  color: var(--wb-warn-ink);
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: keep-all;
+}
+
+/* Right Column: Aligned Control (204px) + Origin Pill (auto) + Reset (28px) */
+.sctl-rail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 356px;
+  min-width: 0;
+}
+.ctl-slot {
+  flex: 0 0 204px;
+  width: 204px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.ctl-slot .inp,
+.ctl-slot .sel {
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  background: var(--wb-bg);
+  color: var(--wb-fg);
+  font-size: 12px;
+  min-width: 0;
+}
+.ctl-slot .inp.mono,
+.ctl-slot .sel.mono { font-family: var(--wb-mono); }
+.ctl-slot .inp:disabled,
+.ctl-slot .sel:disabled { opacity: .62; cursor: not-allowed; }
+.ctl-slot .inp:focus-visible,
+.ctl-slot .sel:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: -1px; }
+
+.ctl-slot .seg {
+  width: 100%;
+  height: 30px;
+  justify-content: stretch;
+}
+.ctl-slot .seg button {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 11.5px;
+}
+
+.ctl-toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 30px;
+  width: 100%;
+}
+.tg {
+  position: relative;
+  width: 36px; height: 20px;
+  border-radius: 999px;
+  border: 0; padding: 0; cursor: pointer; flex: none;
+  background: color-mix(in srgb, var(--wb-fg) 22%, var(--wb-card));
+  transition: background .12s;
+}
+.tg::after {
+  content: ""; position: absolute; top: 3px; left: 3px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--wb-card); box-shadow: 0 1px 2px rgb(0 0 0 / .32);
+  transition: left .12s;
+}
+.tg[aria-checked="true"] { background: var(--wb-primary); }
+.tg[aria-checked="true"]::after { left: 19px; }
+.tg:disabled { opacity: .45; cursor: not-allowed; }
+.tgl { font-size: 12px; font-weight: 600; color: var(--wb-fg); word-break: keep-all; }
+
+.ctl-num-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+}
+.stepper {
+  display: inline-flex; align-items: center; flex: 1 1 auto; min-width: 0;
+  height: 30px;
+  border: 1px solid var(--wb-line); border-radius: 7px;
+  background: var(--wb-bg); overflow: hidden;
+}
+.stepper button {
+  width: 26px; height: 28px; border: 0; background: transparent;
+  cursor: pointer; font-weight: 800; color: var(--wb-muted-fg); flex: none;
+}
+.stepper button:hover:not(:disabled) { background: var(--wb-muted); color: var(--wb-fg); }
+.stepper button:disabled { opacity: .4; cursor: not-allowed; }
+.stepper input {
+  flex: 1 1 auto; min-width: 0; width: 100%; height: 28px;
+  border: 0; border-left: 1px solid var(--wb-line); border-right: 1px solid var(--wb-line);
+  background: transparent; text-align: center; font-family: var(--wb-mono); font-size: 12px;
+}
+.unit { font-size: 11px; color: var(--wb-muted-fg); white-space: nowrap; flex: none; }
+
+/* Origin Pill Button (toggles full-width horizontal layer drawer) */
+.origin-pill {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent);
+  background: var(--wb-wash);
+  color: var(--wb-muted-fg);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  word-break: keep-all;
+  transition: border-color .1s, background .1s, color .1s;
+}
+.origin-pill span.lbl { overflow: hidden; text-overflow: ellipsis; }
+.origin-pill .chev { font-size: 9px; opacity: .8; flex: none; }
+.origin-pill:hover { border-color: var(--wb-primary); color: var(--wb-fg); }
+.origin-pill[aria-expanded="true"] {
+  border-color: var(--wb-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-primary) 18%, transparent);
+}
+.origin-pill.here {
+  background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card));
+  border-color: color-mix(in srgb, var(--wb-primary) 40%, transparent);
+  color: var(--wb-primary);
+}
+.origin-pill.draft {
+  background: color-mix(in srgb, var(--wb-warn) 18%, var(--wb-card));
+  border-color: color-mix(in srgb, var(--wb-warn) 48%, transparent);
+  color: var(--wb-warn-ink);
+}
+.origin-pill.shadowed {
+  background: color-mix(in srgb, var(--wb-warn) 13%, var(--wb-card));
+  border-color: color-mix(in srgb, var(--wb-warn) 38%, transparent);
+  color: var(--wb-warn-ink);
+}
+.origin-pill.lock {
+  background: color-mix(in srgb, var(--wb-policy) 13%, var(--wb-card));
+  border-color: color-mix(in srgb, var(--wb-policy) 32%, transparent);
+  color: var(--wb-policy);
+}
+:root[data-theme="dark"] .origin-pill.lock {
+  background: color-mix(in srgb, var(--wb-policy) 72%, var(--wb-card));
+  color: var(--wb-on-policy);
+}
+
+/* Fixed 28x28 Reset / Undo Slot */
+.reset-icon-btn {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 85%, transparent);
+  background: transparent;
+  color: var(--wb-primary);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background .1s, border-color .1s;
+}
+.reset-icon-btn:hover {
+  background: color-mix(in srgb, var(--wb-primary) 12%, var(--wb-card));
+  border-color: var(--wb-primary);
+}
+.reset-icon-btn.draft {
+  color: var(--wb-warn-ink);
+  border-color: color-mix(in srgb, var(--wb-warn) 45%, transparent);
+}
+.reset-icon-btn.draft:hover {
+  background: color-mix(in srgb, var(--wb-warn) 15%, var(--wb-card));
+  border-color: var(--wb-warn);
+}
+.reset-icon-btn.placeholder {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Full-Width Horizontal Layer Inheritance Strip (grid-column: 1 / -1)
+   ========================================================================== */
+.layer-drawer {
+  grid-column: 1 / -1;
+  margin: 8px -16px -9px;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--wb-muted) 42%, var(--wb-bg));
+  border-top: 1px solid color-mix(in srgb, var(--wb-line) 60%, transparent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.layer-drawer-lbl {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--wb-muted-fg);
+  white-space: nowrap;
+  word-break: keep-all;
+  margin-right: 2px;
+}
+.layer-chain {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.larrow { color: var(--wb-muted-fg); opacity: .55; font-size: 11px; user-select: none; }
+.lchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--wb-line) 80%, transparent);
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  word-break: keep-all;
+  transition: border-color .1s, background .1s;
+}
+.lchip:hover:not(:disabled) { border-color: var(--wb-primary); }
+.lchip:disabled { cursor: default; }
+.lchip .lscope { font-weight: 700; color: var(--wb-muted-fg); }
+.lchip .lsep { opacity: .45; }
+.lchip .lval { font-family: var(--wb-mono); font-size: 11px; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
+.lchip .lmark { font-weight: 800; font-size: 11px; color: var(--wb-ok); }
+.lchip .lcur {
+  font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-primary) 16%, transparent);
+  color: var(--wb-primary);
+}
+.lchip.is-empty { opacity: .58; background: color-mix(in srgb, var(--wb-card) 60%, transparent); }
+.lchip.is-winner {
+  border-color: color-mix(in srgb, var(--wb-ok) 55%, transparent);
+  background: color-mix(in srgb, var(--wb-ok) 9%, var(--wb-card));
+}
+.lchip.is-winner .lscope { color: var(--wb-ok); }
+.lchip.is-active-scope {
+  box-shadow: 0 0 0 1.5px var(--wb-primary);
+  border-color: var(--wb-primary);
+}
+.lchip.is-draft {
+  border-color: color-mix(in srgb, var(--wb-warn) 60%, transparent);
+  background: color-mix(in srgb, var(--wb-warn) 11%, var(--wb-card));
+}
+.lchip.is-draft .lscope,
+.lchip.is-draft .lmark { color: var(--wb-warn-ink); }
+
+/* ==========================================================================
+   Tab 2: Unified .sgroup Tier Matrix + Full-width Layer <tr>
+   ========================================================================== */
+.sgroup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 90%, transparent);
+  background: color-mix(in srgb, var(--wb-muted) 16%, var(--wb-card));
+}
+.tier-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.tier-tbl th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--wb-muted-fg);
+  padding: 7px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent);
+  white-space: nowrap;
+  word-break: keep-all;
+}
+.tier-tbl th:last-child { text-align: right; padding-right: 16px; }
+.tier-tbl th:first-child { padding-left: 16px; }
+.tier-tbl td {
+  padding: 7px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 70%, transparent);
+  vertical-align: middle;
+}
+.tier-tbl td:first-child { padding-left: 16px; }
+.tier-tbl td:last-child { padding-right: 16px; }
+.tier-tbl tr.tier-row:hover td { background: color-mix(in srgb, var(--wb-fg) 2%, transparent); }
+.tier-tbl tr.overridden td { background: color-mix(in srgb, var(--wb-primary) 5%, transparent); }
+.tier-tbl tr.overridden td:first-child { box-shadow: inset 3px 0 0 var(--wb-primary); }
+.tier-tbl td.tname { font-family: var(--wb-mono); font-weight: 800; width: 82px; }
+.tier-tbl .inp, .tier-tbl .sel {
+  width: 100%; height: 29px; padding: 0 8px;
+  border: 1px solid var(--wb-line); border-radius: 7px;
+  background: var(--wb-bg); color: var(--wb-fg); font-size: 12px;
+}
+.tier-tbl .inp:disabled, .tier-tbl .sel:disabled { opacity: .6; cursor: not-allowed; }
+.tier-prov-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.tier-prov-cell .origin-pill { flex: 0 1 130px; }
+.tier-tbl tr.layer-tr td {
+  padding: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-line) 65%, transparent);
+}
+.tier-tbl tr.layer-tr .layer-drawer {
+  margin: 0;
+  border-top: 0;
+}
+.tier-tbl tbody tr:last-child td { border-bottom: 0; }
+
+/* ==========================================================================
+   Tab 4: Adapter Sub-Tabs
+   ========================================================================== */
+.subtabs {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.subtab {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 11px; border-radius: 7px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-bg); color: var(--wb-muted-fg);
+  font-size: 11.5px; font-weight: 700; cursor: pointer;
+  white-space: nowrap; word-break: keep-all;
+}
+.subtab:hover { color: var(--wb-fg); border-color: var(--wb-muted-fg); }
+.subtab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card));
+  border-color: var(--wb-primary);
+  color: var(--wb-primary);
+}
+.subtab .scnt { font-family: var(--wb-mono); font-size: 10.5px; opacity: .82; }
+
+/* ==========================================================================
+   Tab 5: Profiles (Compact 2-Col Summary Cards)
+   ========================================================================== */
+.prof-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 960px) { .prof-grid { grid-template-columns: minmax(0, 1fr); } }
+.prof-card {
+  border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent);
+  border-radius: 10px;
+  padding: 11px 14px;
+  background: var(--wb-card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.prof-head {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+}
+.prof-name { font-family: var(--wb-mono); font-size: 12px; font-weight: 800; color: var(--wb-fg); }
+.prof-desc { font-size: 11.5px; color: var(--wb-muted-fg); word-break: keep-all; }
+.prof-pills { display: flex; flex-wrap: wrap; gap: 5px; }
+.ppill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 6px;
+  background: var(--wb-wash);
+  border: 1px solid color-mix(in srgb, var(--wb-line) 65%, transparent);
+  font-size: 11px; color: var(--wb-fg);
+  white-space: nowrap; word-break: keep-all;
+}
+.ppill b { color: var(--wb-muted-fg); font-weight: 700; }
+.ppill code { font-size: 10.5px; }
+.prof-foot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding-top: 6px; margin-top: auto;
+  border-top: 1px solid color-mix(in srgb, var(--wb-muted) 80%, transparent);
+}
+.prof-json-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 25px; padding: 0 9px;
+  border: 1px solid var(--wb-line); border-radius: 6px;
+  background: var(--wb-wash);
+  font-size: 11px; font-weight: 700; cursor: pointer;
+  white-space: nowrap; word-break: keep-all;
+}
+.prof-json-btn:hover { background: var(--wb-muted); }
+.prof-json {
+  margin: 0; padding: 8px 10px; border-radius: 7px;
+  background: var(--wb-bg); border: 1px solid var(--wb-line);
+  font-family: var(--wb-mono); font-size: 11px; line-height: 1.45;
+  overflow: auto; max-height: 200px; white-space: pre;
+}
+
+/* ==========================================================================
+   Tab 6: Prompt Overrides (Picker + Unified Header + Seed/Override + Diff)
+   ========================================================================== */
+.prompt-picker { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.prompt-picker .fchip { display: inline-flex; align-items: center; gap: 6px; border-radius: 7px; height: 27px; }
+.prompt-card {
+  border: 1px solid color-mix(in srgb, var(--wb-line) 75%, transparent);
+  border-radius: 10px;
+  background: var(--wb-card);
+  overflow: hidden;
+}
+.prompt-card.overridden { box-shadow: inset 3px 0 0 var(--wb-primary); }
+.prompt-card.draft { box-shadow: inset 3px 0 0 var(--wb-warn); }
+.prompt-head {
+  padding: 10px 16px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  border-bottom: 1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent);
+}
+.prompt-head-right {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.prompt-body { padding: 12px 16px; display: grid; gap: 10px; }
+.prompt-panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 900px) { .prompt-panes { grid-template-columns: minmax(0, 1fr); } }
+.pane-box { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pane-box .ptitle {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; font-weight: 800; color: var(--wb-muted-fg);
+}
+.seed-pre, .prompt-ta {
+  margin: 0; padding: 8px 10px; border-radius: 7px;
+  border: 1px solid var(--wb-line);
+  font-family: var(--wb-mono); font-size: 11px; line-height: 1.5;
+  min-height: 118px; width: 100%; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.seed-pre { background: var(--wb-wash); color: var(--wb-muted-fg); }
+.prompt-ta { background: var(--wb-bg); color: var(--wb-fg); resize: vertical; }
+.prompt-ta:focus-visible { outline: 1.5px solid var(--wb-primary); }
+.diff-box {
+  border-radius: 7px; border: 1px solid var(--wb-line); background: var(--wb-bg);
+  font-family: var(--wb-mono); font-size: 11px; line-height: 1.5;
+  max-height: 175px; overflow: auto;
+}
+.diff-line { padding: 1px 10px; white-space: pre-wrap; word-break: break-word; }
+.diff-line.add { background: color-mix(in srgb, var(--wb-ok) 17%, transparent); color: var(--wb-fg); }
+.diff-line.del { background: color-mix(in srgb, var(--wb-fail) 16%, transparent); color: var(--wb-fail); }
+.diff-line.ctx { color: var(--wb-muted-fg); }
+
+/* ==========================================================================
+   Sticky Bottom Repo Edit Proposal Bar
+   ========================================================================== */
+.proposal-bar {
+  flex: none;
+  border-top: 1px solid color-mix(in srgb, var(--wb-warn) 45%, transparent);
+  background: color-mix(in srgb, var(--wb-warn) 10%, var(--wb-card));
+  padding: 8px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.proposal-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.proposal-title {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; font-weight: 800; color: var(--wb-warn-ink);
+  word-break: keep-all;
+}
+.proposal-actions { margin-left: auto; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 28px; padding: 0 11px; border-radius: 7px;
+  border: 1px solid var(--wb-line); background: var(--wb-card);
+  color: var(--wb-fg); font-size: 11.5px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; word-break: keep-all;
+}
+.btn:hover:not(:disabled) { background: var(--wb-muted); }
+.btn.pri { background: var(--wb-primary); color: var(--wb-primary-fg); border-color: var(--wb-primary); }
+.btn.pri:hover:not(:disabled) { filter: brightness(1.06); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.proposal-patch {
+  margin: 0; padding: 8px 10px; border-radius: 7px;
+  border: 1px solid var(--wb-line); background: var(--wb-bg);
+  font-family: var(--wb-mono); font-size: 11px; line-height: 1.45;
+  max-height: 120px; overflow: auto; white-space: pre;
+}
+
+.toast {
+  position: fixed; right: 20px; bottom: 20px; z-index: 60;
+  padding: 8px 13px; border-radius: 8px;
+  background: var(--wb-fg); color: var(--wb-card);
+  font-size: 12px; font-weight: 700; box-shadow: var(--wb-shadow-hi);
+  opacity: 0; pointer-events: none; transform: translateY(6px);
+  transition: opacity .15s, transform .15s;
+}
+.toast.show { opacity: 1; transform: none; }
+
+@media (max-width: 960px) {
+  .sbody { display: flex; flex-direction: column; }
+  .snav { flex: none; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--wb-muted); }
+  .snav-note { display: none; }
+  .srow { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .sctl-rail { width: 100%; }
+  .ctl-slot { flex: 1 1 180px; width: auto; }
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-house" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></symbol>
+</svg>
+
+<div class="dash-shell">
+  <div class="rscrim" id="rscrim" aria-hidden="true"></div>
+  <div class="dbody">
+    <!-- Left Dashboard Session Rail (340px Docked >=1600px, 340px Overlay Drawer <1600px) -->
+    <aside class="rail" id="rail" aria-label="대시보드 세션 레일">
+      <div class="rhd">
+        <svg class="i"><use href="#i-sliders"/></svg>
+        <span class="rt">세션 레일</span>
+        <span class="rsp"></span>
+        <span class="chip ok">실시간 2</span>
+        <button type="button" class="rail-close-btn" id="railCloseBtn" aria-label="세션 레일 닫기">
+          <svg class="i"><use href="#i-x"/></svg>
+        </button>
+      </div>
+
+      <div class="rlist">
+        <div class="rws">
+          <div class="wsbar">
+            <svg class="i"><use href="#i-folder"/></svg>
+            <span class="nm">devenv</span>
+            <span class="pp">~/dev/devenv</span>
+            <span class="ct">3</span>
+            <button type="button" class="r-config-gear" data-scope-entry="project" aria-current="false" title="프로젝트 스코프 설정 열기 (~/.ws@devenv/config.json)" aria-label="프로젝트 스코프 설정">
+              <svg class="i"><use href="#i-gear"/></svg>
+            </button>
+          </div>
+          <div class="wsbody">
+            <div class="rwt">
+              <div class="wthd">
+                <svg class="i"><use href="#i-branch"/></svg>
+                <span class="br">develop</span>
+                <span class="gs">±0</span>
+                <button type="button" class="r-config-gear" data-scope-entry="repo" aria-current="false" title="저장소 스코프 설정 열기 (.ws-workflow/config.json)" aria-label="저장소 스코프 설정">
+                  <svg class="i"><use href="#i-gear"/></svg>
+                </button>
+              </div>
+              <div class="rsessions">
+                <div class="rs cur">
+                  <div class="s1">
+                    <span class="hb" data-h="claude" title="Claude"></span>
+                    <span class="rid">scariness-clerk-energy</span>
+                    <span class="when">방금</span>
+                    <button type="button" class="r-config-gear" data-scope-entry="session" aria-current="false" title="세션 스코프 설정 열기" aria-label="세션 스코프 설정">
+                      <svg class="i"><use href="#i-gear"/></svg>
+                    </button>
+                  </div>
+                  <div class="s2">config-settings-ui v3 레이아웃 검토 중</div>
+                </div>
+                <div class="rs child">
+                  <div class="s1">
+                    <span class="hb sm" data-h="pi" title="Pi"></span>
+                    <span class="rid">explore · haiku</span>
+                    <span class="when">1분</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="rwt">
+              <div class="wthd">
+                <svg class="i"><use href="#i-branch"/></svg>
+                <span class="br">feat/config-git-sync</span>
+                <span class="chip" style="height:16px;font-size:10px;padding:0 5px">대기</span>
+                <button type="button" class="r-config-gear" data-scope-entry="repo" aria-current="false" title="저장소 스코프 설정 열기" aria-label="저장소 스코프 설정">
+                  <svg class="i"><use href="#i-gear"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rws">
+          <div class="wsbar dim">
+            <svg class="i"><use href="#i-folder"/></svg>
+            <span class="nm">my-app</span>
+            <span class="pp">~/dev/my-app</span>
+            <span class="ct">1</span>
+            <button type="button" class="r-config-gear" data-scope-entry="project" aria-current="false" title="프로젝트 스코프 설정 열기" aria-label="프로젝트 스코프 설정">
+              <svg class="i"><use href="#i-gear"/></svg>
+            </button>
+          </div>
+          <div class="wsbody">
+            <div class="rwt">
+              <div class="wthd">
+                <svg class="i"><use href="#i-branch"/></svg>
+                <span class="br">main</span>
+                <span class="chip" style="height:16px;font-size:10px;padding:0 5px">유휴 1</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rfoot">
+        <button type="button" class="rfoot-btn" data-scope-entry="global" aria-current="page" title="전역 설정 열기 (~/.ws/config.json)">
+          <svg class="i"><use href="#i-gear"/></svg>설정 (전역)
+        </button>
+        <button type="button" class="rfoot-btn rfoot-home" id="homeBtn" title="대시보드 홈" aria-label="대시보드 홈">
+          <svg class="i"><use href="#i-house"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main /settings Stage -->
+    <main class="stage" id="stage" aria-label="워크플로 설정 패널"></main>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var PRECEDENCE = ["builtin", "synced", "global", "repo", "project", "session"];
+  var SCOPE_RANK = { builtin: 0, synced: 1, global: 2, repo: 3, project: 4, session: 5 };
+  var SCOPE_META = {
+    builtin: { label: "내장 기본값", short: "기본값", file: "내장 기본값" },
+    synced:  { label: "동기화",      short: "동기화", file: "~/.ws/config-sync/repo.git" },
+    global:  { label: "전역",        short: "전역",   file: "~/.ws/config.json" },
+    repo:    { label: "저장소",      short: "저장소", file: ".ws-workflow/config.json" },
+    project: { label: "프로젝트",    short: "프로젝트", file: "~/.ws@devenv/config.json" },
+    session: { label: "세션",        short: "세션",   file: "sessions/scariness-clerk-energy" }
+  };
+
+  var HARNESSES = ["*", "claude", "codex", "pi", "agy"];
+  var HARNESS_NAME = { "*": "*", claude: "Claude", codex: "Codex", pi: "Pi", agy: "AgY", "default": "기본" };
+
+  var SECTIONS = [
+    { id: "workflow",   label: "워크플로 · 리뷰" },
+    { id: "agents",     label: "에이전트 · 티어" },
+    { id: "compaction", label: "컴팩션 · 워크트리" },
+    { id: "adapters",   label: "하네스 어댑터" },
+    { id: "profiles",   label: "프로필" },
+    { id: "prompts",    label: "프롬프트 오버라이드" }
+  ];
+
+  var ADAPTER_TABS = [
+    { id: "claude",    label: "Claude",    count: 12 },
+    { id: "pi",        label: "Pi",        count: 15 },
+    { id: "agy",       label: "AgY",       count: 2  },
+    { id: "dashboard", label: "Dashboard", count: 5  }
+  ];
+
+  function K(o) {
+    o.scopes = o.scopes || ["global", "repo", "project", "session"];
+    o.layers = o.layers || {};
+    o.buckets = o.buckets || {};
+    return o;
+  }
+
+  var KNOBS = [
+    // ---- Tab 1: 워크플로 · 리뷰 (8 authentic rows) ----
+    K({
+      id: "workflow.lang", sec: "workflow",
+      label: "대화 언어",
+      desc: "리드 응답과 UserPreferenceSection 언어 지침에 주입되는 기본 언어입니다.",
+      type: "text", placeholder: "예: 한국어", builtin: "",
+      layers: { global: "한국어" }
+    }),
+    K({
+      id: "workflow.profile", sec: "workflow",
+      label: "워크플로 프로필",
+      desc: "리드 플레이북 프로필을 선택합니다 (direct 기본 · orchestrate 다단계).",
+      type: "seg", opts: ["direct", "orchestrate"], builtin: "direct",
+      bucketed: true,
+      buckets: {
+        "*": { global: "direct" },
+        claude: { global: "orchestrate" },
+        codex: {}, pi: {}, agy: {}
+      }
+    }),
+    K({
+      id: "workflow.prefer_subagent", sec: "workflow",
+      label: "기본 위임 성향",
+      desc: "조사·진단·초안처럼 범위가 분명한 일반 작업을 서브에이전트에 우선 위임합니다.",
+      type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "꺼짐",
+      globalOnly: true, scopes: ["global"],
+      layers: { global: "켜짐" }
+    }),
+    K({
+      id: "workflow.whiteboard_enabled", sec: "workflow",
+      label: "화이트보드 주 채널",
+      desc: "사용자에게 묻는 결정 사항과 진행 설명을 세션 화이트보드로 올립니다.",
+      type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "꺼짐",
+      bucketed: true,
+      buckets: {
+        "*": { global: "꺼짐", repo: "켜짐" },
+        claude: { global: "꺼짐", project: "켜짐" },
+        codex: {}, pi: {}, agy: {}
+      }
+    }),
+    K({
+      id: "workflow.tracker_enabled", sec: "workflow",
+      label: "트래커 기록 섹션",
+      desc: "리드가 등록된 트래커 스토어에 작업 경과를 기록하도록 안내합니다.",
+      type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "꺼짐",
+      bucketed: true,
+      buckets: { "*": { global: "꺼짐" }, claude: {}, codex: {}, pi: {}, agy: {} }
+    }),
+    K({
+      id: "sage_review", sec: "workflow",
+      label: "리뷰 게이트 정책",
+      desc: "티켓 ready/ 승격 시 완결성 리뷰 게이트를 강제하는 정책입니다.",
+      type: "seg", opts: ["off", "ask", "auto"], builtin: "auto",
+      layers: { repo: "auto" }
+    }),
+    K({
+      id: "review_phase", sec: "workflow",
+      label: "단계별 코드 리뷰",
+      desc: "구현 페이즈 종료 후 독립 코드 리뷰 깊이를 지정합니다.",
+      type: "seg", opts: ["off", "lite", "full"], builtin: "lite",
+      layers: { global: "lite", project: "full" }
+    }),
+    K({
+      id: "bootstrap_alarm", sec: "workflow",
+      label: "부트스트랩 템플릿 알림",
+      desc: "프로젝트 AGENTS.md Template Version이 뒤처질 때 세션 시작 경고를 띄웁니다.",
+      type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐",
+      globalOnly: true, scopes: ["global"],
+      layers: {}
+    }),
+
+    // ---- Tab 2: 에이전트 · 티어 ----
+    K({
+      id: "agent.tier_aliases", sec: "agents",
+      label: "사용자 티어 별칭",
+      desc: "agent.spawn에서 쓸 별칭 매핑 (공백 구분 name=<harness>.<tier>).",
+      type: "text", mono: true, placeholder: "mockup=pi.large quick=claude.small", builtin: "",
+      globalOnly: true, scopes: ["global"],
+      layers: { global: "mockup=pi.large quick=claude.small" }
+    }),
+    K({
+      id: "agent.child_waiting_days", sec: "agents",
+      label: "대기 자식 에이전트 보존 일수",
+      desc: "child-agent-waiting 상태로 유휴 대기 중인 자식 에이전트 정리 일수.",
+      type: "int", min: 1, unit: "일", builtin: "15",
+      globalOnly: true, scopes: ["global"],
+      layers: {}
+    }),
+    K({
+      id: "agent.git_search_roots", sec: "agents",
+      label: "git.search 추가 검색 경로",
+      desc: "읽기 전용 git.search가 최근 세션 루트 외에 추가로 읽을 절대 디렉터리.",
+      type: "text", mono: true, placeholder: "/Users/dev/shared-repos:/opt/refs", builtin: "",
+      globalOnly: true, scopes: ["global"],
+      layers: {}
+    }),
+
+    // ---- Tab 3: 컴팩션 · 워크트리 ----
+    K({
+      id: "compaction.lead_advisory", sec: "compaction",
+      label: "리드 컴팩션 권고 임계치",
+      desc: "리드 세션이 다음 안전한 경계에서 compact를 권고받는 컨텍스트 사용량.",
+      type: "text", mono: true, builtin: "50%",
+      layerMajorBucketed: true,
+      buckets: { "*": { global: "55%" }, claude: {}, codex: {}, pi: { project: "50%" }, agy: {} }
+    }),
+    K({
+      id: "compaction.lead_hard", sec: "compaction",
+      label: "리드 강제 컴팩션 임계치",
+      desc: "리드 세션이 다음 도구 경계에서 즉시 컴팩션 준비로 전환되는 상한선.",
+      type: "text", mono: true, builtin: "80%",
+      layerMajorBucketed: true,
+      buckets: { "*": {}, claude: {}, codex: {}, pi: {}, agy: {} }
+    }),
+    K({
+      id: "compaction.worker_advisory", sec: "compaction",
+      label: "워커 컴팩션 권고 임계치",
+      desc: "워커 세션에 컴팩션을 권고하기 시작하는 컨텍스트 임계치.",
+      type: "text", mono: true, builtin: "50%",
+      layerMajorBucketed: true,
+      buckets: { "*": {}, claude: {}, codex: {}, pi: {}, agy: {} }
+    }),
+    K({
+      id: "compaction.worker_hard", sec: "compaction",
+      label: "워커 강제 컴팩션 임계치",
+      desc: "워커 세션이 강제 컴팩션으로 진입하는 상한선.",
+      type: "text", mono: true, builtin: "80%",
+      layerMajorBucketed: true,
+      buckets: { "*": {}, claude: {}, codex: {}, pi: { repo: "70%" }, agy: {} }
+    }),
+    K({
+      id: "worktree.nudge_stale_days", sec: "compaction",
+      label: "오래된 워크트리 알림 기준",
+      desc: "활동이 없는 풀 워크트리를 정리 대상으로 표시하는 경과 일수.",
+      type: "int", min: 1, unit: "일", builtin: "7",
+      layers: { repo: "10" }
+    }),
+    K({
+      id: "worktree.nudge_preserved_gb", sec: "compaction",
+      label: "보존 산출물 용량 알림",
+      desc: "분리된 풀 워크트리의 보존된 무시 산출물 경고 용량 기준.",
+      type: "int", min: 1, unit: "GB", builtin: "1",
+      layers: {}
+    }),
+    K({
+      id: "worktree_pool", sec: "compaction",
+      label: "워크트리 풀 경로 템플릿",
+      desc: "worktree.acquire가 워커 워크트리를 생성·재활용하는 풀 디렉터리.",
+      type: "text", mono: true, builtin: "$(GitRoot)/../.ws-worktrees/$(GitRootDirName)",
+      scopes: ["global", "repo", "project"],
+      layers: {}
+    }),
+    K({
+      id: "git.merge_size_soft_lines", sec: "compaction",
+      label: "병합 파일 크기 경고 (소프트)",
+      desc: "git.merge가 소스 파일을 이 줄 수 초과로 밀어 올릴 때 경고합니다.",
+      type: "int", min: 0, unit: "줄", builtin: "1000",
+      layers: {}
+    }),
+    K({
+      id: "git.merge_size_hard_lines", sec: "compaction",
+      label: "병합 파일 크기 경고 (하드)",
+      desc: "git.merge 후 이 줄 수 이상인 파일을 수정했을 때 무조건 경고합니다.",
+      type: "int", min: 0, unit: "줄", builtin: "2000",
+      layers: {}
+    }),
+    K({
+      id: "git.merge_size_extensions", sec: "compaction",
+      label: "병합 크기 검사 확장자",
+      desc: "git.merge 크기 경고가 검사할 파일 확장자(공백 구분).",
+      type: "text", mono: true, builtin: "go js ts tsx py rs java kt c cpp",
+      layers: {}
+    }),
+
+    // ---- Tab 4A: Claude Adapter (12 keys) ----
+    K({ id: "claude.compaction_advisory_enabled", sec: "adapters", adapter: "claude", label: "컴팩션 권고 턴 실행", desc: "Claude 자동 컴팩션 전 권고 턴과 2회 리마인더를 실행합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐", scopes: ["global", "project"] }),
+    K({ id: "claude.compaction_advisory_percent", sec: "adapters", adapter: "claude", label: "컴팩션 권고 시점", desc: "컴팩션을 권고할 컨텍스트 사용률 또는 토큰 상한.", type: "text", mono: true, builtin: "50%", scopes: ["global", "project"], layers: { global: "60%" } }),
+    K({ id: "claude.manual_injection_enabled", sec: "adapters", adapter: "claude", label: "워크플로 매뉴얼 자동 주입", desc: "리드 시작 시 세션 키와 워크플로 매뉴얼을 자동 주입합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐", scopes: ["global", "project"] }),
+    K({ id: "claude.mailbox_drain", sec: "adapters", adapter: "claude", label: "메일박스 수신 전달 방식", desc: "direct는 푸시 즉시 전달, notice는 수신 도구 호출을 안내합니다.", type: "seg", opts: ["direct", "notice"], builtin: "direct", scopes: ["global", "project"] }),
+    K({ id: "claude.display_summary_enabled", sec: "adapters", adapter: "claude", label: "도구 행 캡션 요약", desc: "접힌 도구 호출 행에 요약 모델이 작성한 짧은 캡션을 표시합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "꺼짐", scopes: ["global", "project"], layers: { global: "켜짐" } }),
+    K({ id: "claude.status_band_enabled", sec: "adapters", adapter: "claude", label: "터미널 상태 밴드 표시", desc: "프롬프트 상단에 모델·브랜치·컨텍스트·비용 상태 밴드를 그립니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐", layers: { global: "켜짐" } }),
+    K({ id: "claude.dashboard_enabled", sec: "adapters", adapter: "claude", label: "대시보드 실시간 활동 전송", desc: "턴·도구 호출·사용량을 대시보드로 스트리밍합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐", scopes: ["global", "project"] }),
+    K({ id: "claude.display_summary_model", sec: "adapters", adapter: "claude", label: "캡션 요약 모델", desc: "도구 행 캡션을 작성할 모델 별칭 또는 전체 ID.", type: "text", mono: true, builtin: "haiku", scopes: ["global", "project"] }),
+    K({ id: "claude.display_summary_style", sec: "adapters", adapter: "claude", label: "캡션 스타일 지침", desc: "도구 행 캡션 프롬프트의 길이·어조·세부 수준 지침.", type: "text", builtin: "간결한 명사형 종결, 주석·추측 배제", scopes: ["global", "project"] }),
+    K({ id: "claude.display_summary_context_tokens", sec: "adapters", adapter: "claude", label: "캡션 모델 컨텍스트 크기", desc: "캡션 요청에 사용하는 모델의 컨텍스트 창 토큰 수.", type: "int", min: 1, unit: "토큰", builtin: "200000", scopes: ["global", "project"] }),
+    K({ id: "claude.mcp_watchdog_enabled", sec: "adapters", adapter: "claude", label: "MCP 연결 감시 (Watchdog)", desc: "세션 유휴 시 MCP 도구 목록 소실을 감지하고 자동 재연결합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐", scopes: ["global", "project"] }),
+    K({ id: "claude.mcp_watchdog_interval_minutes", sec: "adapters", adapter: "claude", label: "MCP 감시 확인 간격", desc: "MCP 감시가 도구 목록을 점검하는 주기(분).", type: "int", min: 1, unit: "분", builtin: "10", scopes: ["global", "project"] }),
+
+    // ---- Tab 4B: Pi Adapter (15 keys) ----
+    K({ id: "pi.agent_wait_animation", sec: "adapters", adapter: "pi", label: "대기 위젯 애니메이션", desc: "자식 대기 중 라이브 에이전트 위젯을 애니메이션으로 표시합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐", scopes: ["global", "project"] }),
+    K({ id: "pi.agent_widget_rows", sec: "adapters", adapter: "pi", label: "에이전트 위젯 표시 행 수", desc: "/agents 확장 모드에서 각 에이전트 아래 표시할 도구 행 수 (1~5).", type: "int", min: 1, max: 5, unit: "행", builtin: "3", scopes: ["global", "project"] }),
+    K({ id: "pi.agent_widget_batch_summary_enabled", sec: "adapters", adapter: "pi", label: "도구 배치 일괄 요약", desc: "완료된 도구 배치를 pi.display_summary_model로 요약합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "꺼짐", scopes: ["global", "project"] }),
+    K({ id: "pi.dashboard_enabled", sec: "adapters", adapter: "pi", label: "Pi 대시보드 연동", desc: "Pi 리드·서브에이전트 활동과 사용량을 ws 대시보드에 전송합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐", scopes: ["global", "project"] }),
+    K({ id: "pi.runaway_threshold", sec: "adapters", adapter: "pi", label: "목표 루프 폭주 임계치", desc: "도구 호출 없는 연속 목표 루프 리마인더 강제 중지 횟수.", type: "int", min: 1, unit: "회", builtin: "10" }),
+    K({ id: "pi.settle_delay_ms", sec: "adapters", adapter: "pi", label: "목표 루프 안정화 지연", desc: "리드 정착 후 다음 리마인더 재평가 전 대기 시간(ms).", type: "int", min: 1, unit: "ms", builtin: "5000" }),
+    K({ id: "pi.compaction_advisory_percent", sec: "adapters", adapter: "pi", label: "Pi 컴팩션 권고 시점", desc: "안전한 경계에서 컴팩션을 권고할 컨텍스트 임계치.", type: "text", mono: true, builtin: "50%", layers: { global: "55%" } }),
+    K({ id: "pi.compaction_hard_percent", sec: "adapters", adapter: "pi", label: "Pi 강제 컴팩션 시점", desc: "다음 도구 경계에서 컴팩션 준비로 강제 조향하는 임계치.", type: "text", mono: true, builtin: "80%" }),
+    K({ id: "pi.context_window_override", sec: "adapters", adapter: "pi", label: "컨텍스트 창 크기 재정의", desc: "사용률 계산용 컨텍스트 창 토큰 수 (0이면 모델 보고값 사용).", type: "int", min: 0, unit: "토큰", builtin: "0" }),
+    K({ id: "pi.compaction_dialog_budget_bytes", sec: "adapters", adapter: "pi", label: "컴팩션 대화 요약 예산", desc: "리드 컴팩션 요약의 대화 본문 섹션 UTF-8 바이트 예산.", type: "int", min: 1, unit: "B", builtin: "40960" }),
+    K({ id: "pi.compaction_reread_budget_bytes", sec: "adapters", adapter: "pi", label: "컴팩션 재읽기 인라인 예산", desc: "컴팩션 요약에 인라인할 필수 재읽기 파일 UTF-8 바이트 예산.", type: "int", min: 1, unit: "B", builtin: "40960" }),
+    K({ id: "pi.child_retention_ttl_days", sec: "adapters", adapter: "pi", label: "자식 홈 보관 기간", desc: "종료된 Pi 자식 디렉터리를 정리하기까지의 일수 (0은 비활성).", type: "int", min: 0, unit: "일", builtin: "30", scopes: ["global", "project"] }),
+    K({ id: "pi.display_summary_model", sec: "adapters", adapter: "pi", label: "Pi 캡션 요약 모델", desc: "접힌 도구·메시지 행을 요약할 provider/model-id.", type: "text", mono: true, placeholder: "openai/gpt-5-mini", builtin: "", scopes: ["global", "project"] }),
+    K({ id: "pi.display_summary_effort", sec: "adapters", adapter: "pi", label: "Pi 캡션 추론 강도", desc: "표시 요약 모델의 사고 강도.", type: "select", opts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"], builtin: "medium", scopes: ["global", "project"] }),
+    K({ id: "pi.display_summary_style", sec: "adapters", adapter: "pi", label: "Pi 캡션 스타일 지침", desc: "Pi 표시 요약 프롬프트의 길이·어조·상세도 지침.", type: "text", builtin: "1~2문장 요약, 핵심 결과 우선", scopes: ["global", "project"] }),
+
+    // ---- Tab 4C: AgY Adapter (2 keys) ----
+    K({ id: "agy.model_wait_timeout_seconds", sec: "adapters", adapter: "agy", label: "모델 응답 침묵 타임아웃", desc: "호스팅된 AgY 세션에서 raw ACP 업데이트 없을 때 복구 대기 초.", type: "int", min: 0, unit: "초", builtin: "120", scopes: ["global", "repo", "project"] }),
+    K({ id: "agy.model_wait_retries", sec: "adapters", adapter: "agy", label: "자동 재시도 최대 횟수", desc: "모델 대기 침묵 시 논리적 턴당 자동 재개(continue) 최대 횟수.", type: "int", min: 0, unit: "회", builtin: "3", scopes: ["global", "repo", "project"] }),
+
+    // ---- Tab 4D: Dashboard Adapter (5 keys) ----
+    K({ id: "dashboard.enabled", sec: "adapters", adapter: "dashboard", label: "대시보드 세션 노출", desc: "MCP 서버가 이 리드 세션을 머신 대시보드 목록에 올릴지 여부.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐" }),
+    K({ id: "dashboard.port", sec: "adapters", adapter: "dashboard", label: "대시보드 데몬 포트", desc: "루프백 TCP 포트 (0~65535, 0은 OS 자동 할당).", type: "int", min: 0, max: 65535, builtin: "29417", scopes: ["global", "project"] }),
+    K({ id: "dashboard.lan_enabled", sec: "adapters", adapter: "dashboard", label: "LAN 원격 접근 허용", desc: "네트워크 인터페이스에서도 리스닝해 액세스 토큰 접속을 허용합니다.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "꺼짐", globalOnly: true, scopes: ["global"] }),
+    K({ id: "dashboard.mailbox_undelivered_minutes", sec: "adapters", adapter: "dashboard", label: "미전달 메일 알림 시간", desc: "읽히지 않고 남은 메일박스 메시지에 대한 알림 대기 시간(분).", type: "int", min: 1, unit: "분", builtin: "3", globalOnly: true, scopes: ["global"] }),
+    K({ id: "dashboard.pi_spawn_enabled", sec: "adapters", adapter: "dashboard", label: "Pi 서브에이전트 도구 노출", desc: "데몬이 호스팅하는 헤드리스 Pi 서브에이전트 도구(pi.*) 노출 여부.", type: "toggle", opts: ["켜짐", "꺼짐"], builtin: "켜짐", scopes: ["global", "project"] })
+  ];
+
+  var TIER_LIST = ["small", "medium", "large", "xlarge"];
+  var TIER_HARNESSES = ["default", "claude", "codex", "pi", "agy"];
+  var TIER_DATA = {
+    "default": {
+      small:  { global: { backend: "claude", model: "haiku",  effort: "" } },
+      medium: { global: { backend: "claude", model: "sonnet", effort: "medium" } },
+      large:  { global: { backend: "claude", model: "sonnet", effort: "high" } },
+      xlarge: { global: { backend: "claude", model: "opus",   effort: "high" } }
+    },
+    claude: {
+      small:  { global: { backend: "claude", model: "haiku",  effort: "" } },
+      medium: { global: { backend: "claude", model: "sonnet", effort: "medium" } },
+      large:  { global: { backend: "claude", model: "opus",   effort: "high" }, project: { backend: "claude", model: "opus", effort: "max" } },
+      xlarge: {}
+    },
+    codex: {
+      small:  { global: { backend: "codex", model: "gpt-5-mini", effort: "low" } },
+      medium: { global: { backend: "codex", model: "gpt-5",      effort: "medium" } },
+      large:  { global: { backend: "codex", model: "gpt-5",      effort: "high" } },
+      xlarge: {}
+    },
+    pi: {
+      small:  {},
+      medium: { project: { backend: "pi", model: "anthropic/claude-sonnet-4-5", effort: "medium" } },
+      large:  {},
+      xlarge: {}
+    },
+    agy: {
+      small:  {},
+      medium: {},
+      large:  { global: { backend: "agy", model: "gemini-3-pro", effort: "high" } },
+      xlarge: {}
+    }
+  };
+
+  var PROFILES = {
+    worktree: [
+      {
+        name: "full", scope: "builtin",
+        desc: "전체 Git 트리 워크트리 체크아웃",
+        pills: [["모드", "전체 체크아웃"], ["sparse", "없음"], ["훅", "없음"]],
+        layers: { builtin: "전체 체크아웃" },
+        json: { description: "Plain full-tree Git worktree checkout", sparse: { mode: "none" } }
+      },
+      {
+        name: "housekeeping", scope: "builtin",
+        desc: "티켓·문서 정리용 최소 sparse 워크트리",
+        pills: [["모드", "cone sparse"], ["경로", "ai-docs/"], ["훅", "없음"]],
+        layers: { builtin: "cone (ai-docs/)" },
+        json: { description: "Sparse cone for ticket/docs housekeeping", sparse: { mode: "cone", paths: ["ai-docs"] } }
+      },
+      {
+        name: "frontend-sparse", scope: "repo",
+        desc: "웹 프론트엔드 의존성 캐시 보존 워크트리",
+        pills: [["모드", "cone sparse"], ["경로", "2개"], ["보존", "1개"], ["훅", "1개"]],
+        layers: { repo: "cone (web, ai-docs)" },
+        json: {
+          description: "Frontend workspace with cached dependencies",
+          sparse: { mode: "cone", paths: ["web", "ai-docs"] },
+          preserve: ["web/node_modules"],
+          hooks: { post_provision: [{ argv: ["npm", "ci"], cwd: "web" }] }
+        }
+      }
+    ],
+    agent: [
+      {
+        name: "reviewer-readonly", scope: "project",
+        desc: "코드·디프 읽기 전용 리뷰어 프로필",
+        pills: [["백엔드", "claude · sonnet"], ["권한", "read-only"], ["ws 도구", "4개"]],
+        layers: { project: "claude / read-only" },
+        json: {
+          description: "Read-only code & diff reviewer profile",
+          backend: "claude", model: "sonnet", authority: "read-only",
+          ws_tools: ["git.status", "git.diff", "git.log", "tickets.query"]
+        }
+      },
+      {
+        name: "explore", scope: "builtin",
+        desc: "빠른 로컬 코드베이스 탐색용 읽기 전용 Pi 워커",
+        pills: [["백엔드", "pi"], ["권한", "read-only"], ["도구", "4개"], ["ws 도구", "5개"]],
+        layers: { builtin: "pi / read-only" },
+        json: {
+          description: "Local read-only Pi researcher",
+          backend: "pi", authority: "read-only",
+          tools: ["read", "grep", "find", "ls"],
+          ws_tools: ["git.status", "git.diff", "git.log", "note.query", "tickets.query"]
+        }
+      },
+      {
+        name: "pi-worker", scope: "builtin",
+        desc: "구현·커밋·티켓 검증 권한을 가진 Pi 코딩 워커",
+        pills: [["백엔드", "pi"], ["권한", "workdir-write"], ["도구", "7개"], ["ws 도구", "6개"]],
+        layers: { builtin: "pi / workdir-write" },
+        json: {
+          description: "Pi coding worker with git.commit & ticket preflight",
+          backend: "pi", authority: "workdir-write",
+          tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
+          ws_tools: ["git.status", "git.diff", "git.log", "git.commit", "tickets.verify", "compact"]
+        }
+      }
+    ]
+  };
+
+  var PROMPTS = [
+    {
+      id: "prompt.UserPreferenceSection",
+      title: "UserPreferenceSection",
+      desc: "리드 매뉴얼 상단에 삽입되는 사용자 소통 방식·용어·행동 지침입니다.",
+      seed: [
+        "<!-- ws:override:UserPreferenceSection -->",
+        "Follow the project's AGENTS.md conventions.",
+        "Keep answers concise and cite verified file paths.",
+        "Prefer small, reversible edits before wide refactors.",
+        "<!-- ws:/override:UserPreferenceSection -->"
+      ].join("\n"),
+      buckets: {
+        "*": {
+          global: [
+            "<!-- ws:override:UserPreferenceSection -->",
+            "Follow the project's AGENTS.md conventions.",
+            "결론과 검증 결과를 먼저 한 줄로 보고하고 파일 경로를 링크한다.",
+            "Prefer small, reversible edits before wide refactors.",
+            "추측이나 기억에 의존한 불확실한 내용은 보고하지 않는다.",
+            "<!-- ws:/override:UserPreferenceSection -->"
+          ].join("\n")
+        },
+        claude: {
+          project: [
+            "<!-- ws:override:UserPreferenceSection -->",
+            "Follow the project's AGENTS.md conventions.",
+            "결론을 먼저 말하고 근거는 파일:줄로 짧게 붙인다.",
+            "작업 범위 밖의 수정은 제안만 하고 직접 고치지 않는다.",
+            "<!-- ws:/override:UserPreferenceSection -->"
+          ].join("\n")
+        },
+        codex: {}, pi: {}, agy: {}
+      }
+    },
+    {
+      id: "prompt.ReviewChecklistExtra",
+      title: "ReviewChecklistExtra",
+      desc: "단계별 코드 리뷰(review_phase) 프롬프트에 추가되는 검수 체크리스트입니다.",
+      seed: [
+        "<!-- ws:override:ReviewChecklistExtra -->",
+        "- Verify edge cases and error propagation.",
+        "- Confirm modified tests assert real behavior.",
+        "<!-- ws:/override:ReviewChecklistExtra -->"
+      ].join("\n"),
+      buckets: {
+        "*": {
+          repo: [
+            "<!-- ws:override:ReviewChecklistExtra -->",
+            "- Verify edge cases and error propagation.",
+            "- Confirm modified tests assert real behavior.",
+            "- Check AGENTS.md compatibility tier notes on MCP/config changes.",
+            "<!-- ws:/override:ReviewChecklistExtra -->"
+          ].join("\n")
+        },
+        claude: {}, codex: {}, pi: {}, agy: {}
+      }
+    },
+    {
+      id: "prompt.CommitStyle",
+      title: "CommitStyle",
+      desc: "git.commit 도구와 워커 커밋 지침에 전달되는 커밋 메시지 형식 규칙입니다.",
+      seed: [
+        "<!-- ws:override:CommitStyle -->",
+        "Use Conventional Commits: <type>(<scope>): <summary>.",
+        "Include ## AI Context with decision rationale.",
+        "<!-- ws:/override:CommitStyle -->"
+      ].join("\n"),
+      buckets: { "*": {}, claude: {}, codex: {}, pi: {}, agy: {} }
+    }
+  ];
+
+  // =========================================================================
+  // App State (pre-expand 대화 언어 & medium tier horizontal layer strips!)
+  // =========================================================================
+  var state = {
+    targetScope: "global",
+    section: "workflow",
+    adapterTab: "claude",
+    tierHarness: "claude",
+    promptId: "prompt.UserPreferenceSection",
+    promptBucket: "*",
+    compactionBucket: "*",
+    bucketPick: {
+      "workflow.profile": "claude",
+      "workflow.whiteboard_enabled": "claude",
+      "workflow.tracker_enabled": "*"
+    },
+    openLayers: {
+      "workflow.lang": true,
+      "tier:claude.medium": true
+    },
+    search: "",
+    filterMode: "all",
+    repoLeadActive: true,
+    proposalExpanded: true,
+    expandedProfiles: {},
+    repoDrafts: {
+      "workflow.profile.claude": "direct"
+    }
+  };
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function isScopeEditable(k, scope) {
+    if (scope === "builtin" || scope === "synced") return false;
+    if (k.globalOnly) return scope === "global";
+    return k.scopes.indexOf(scope) >= 0;
+  }
+
+  function getLayerMap(k, bucket) {
+    if (k.bucketed || k.layerMajorBucketed) return k.buckets[bucket || "*"] || {};
+    return k.layers;
+  }
+
+  function hasOverrideInScope(k, scope, bucket) {
+    var map = getLayerMap(k, bucket);
+    return map[scope] != null && map[scope] !== "";
+  }
+
+  function resolveKnob(k, bucket) {
+    var b = (k.bucketed || k.layerMajorBucketed) ? (bucket || "*") : null;
+    if (k.globalOnly) {
+      if (k.layers.global != null && k.layers.global !== "") return { value: k.layers.global, scope: "global", bucket: null };
+      return { value: k.builtin, scope: "builtin", bucket: null };
+    }
+    if (k.bucketed) {
+      var order = b === "*" ? ["*"] : [b, "*"];
+      for (var i = 0; i < order.length; i++) {
+        var bm = k.buckets[order[i]] || {};
+        for (var j = PRECEDENCE.length - 1; j >= 0; j--) {
+          var sc = PRECEDENCE[j];
+          if (bm[sc] != null && bm[sc] !== "") return { value: bm[sc], scope: sc, bucket: order[i] };
+        }
+      }
+      return { value: k.builtin, scope: "builtin", bucket: "*" };
+    }
+    if (k.layerMajorBucketed) {
+      var keysOrder = b === "*" ? ["*"] : [b, "*"];
+      for (var j2 = PRECEDENCE.length - 1; j2 >= 0; j2--) {
+        var sc2 = PRECEDENCE[j2];
+        for (var i2 = 0; i2 < keysOrder.length; i2++) {
+          var bm2 = k.buckets[keysOrder[i2]] || {};
+          if (bm2[sc2] != null && bm2[sc2] !== "") return { value: bm2[sc2], scope: sc2, bucket: keysOrder[i2] };
+        }
+      }
+      return { value: k.builtin, scope: "builtin", bucket: "*" };
+    }
+    for (var j3 = PRECEDENCE.length - 1; j3 >= 0; j3--) {
+      var sc3 = PRECEDENCE[j3];
+      if (k.layers[sc3] != null && k.layers[sc3] !== "") return { value: k.layers[sc3], scope: sc3, bucket: null };
+    }
+    return { value: k.builtin, scope: "builtin", bucket: null };
+  }
+
+  function higherShadow(k, targetScope, bucket) {
+    if (k.globalOnly) {
+      if (targetScope === "builtin" && k.layers.global != null && k.layers.global !== "") {
+        return { scope: "global", value: k.layers.global, bucket: null };
+      }
+      return null;
+    }
+    var rank = SCOPE_RANK[targetScope];
+    var b = (k.bucketed || k.layerMajorBucketed) ? (bucket || "*") : null;
+    if (k.bucketed) {
+      var order = targetScope === "builtin" && b !== "*" ? [b, "*"] : [b];
+      for (var bi = 0; bi < order.length; bi++) {
+        var bm = k.buckets[order[bi]] || {};
+        for (var j = PRECEDENCE.length - 1; j >= 0; j--) {
+          var sc = PRECEDENCE[j];
+          if (SCOPE_RANK[sc] > rank && bm[sc] != null && bm[sc] !== "") {
+            return { scope: sc, value: bm[sc], bucket: order[bi] };
+          }
+        }
+      }
+      return null;
+    }
+    if (k.layerMajorBucketed) {
+      var keysOrder = b === "*" ? ["*"] : [b, "*"];
+      for (var j2 = PRECEDENCE.length - 1; j2 >= 0; j2--) {
+        var sc2 = PRECEDENCE[j2];
+        if (SCOPE_RANK[sc2] <= rank) continue;
+        for (var i2 = 0; i2 < keysOrder.length; i2++) {
+          var bm2 = k.buckets[keysOrder[i2]] || {};
+          if (bm2[sc2] != null && bm2[sc2] !== "") return { scope: sc2, value: bm2[sc2], bucket: keysOrder[i2] };
+        }
+      }
+      return null;
+    }
+    for (var j3 = PRECEDENCE.length - 1; j3 >= 0; j3--) {
+      var sc3 = PRECEDENCE[j3];
+      if (SCOPE_RANK[sc3] > rank && k.layers[sc3] != null && k.layers[sc3] !== "") {
+        return { scope: sc3, value: k.layers[sc3], bucket: null };
+      }
+    }
+    return null;
+  }
+
+  function formatDisplayVal(v) {
+    if (v === "" || v == null) return "(미지정)";
+    return String(v);
+  }
+
+  function countScopeOverridesInSection(secId, scope) {
+    var count = 0;
+    if (secId === "agents") {
+      TIER_HARNESSES.forEach(function (h) {
+        TIER_LIST.forEach(function (t) {
+          if (TIER_DATA[h][t] && TIER_DATA[h][t][scope]) count++;
+        });
+      });
+    }
+    if (secId === "prompts") {
+      PROMPTS.forEach(function (p) {
+        HARNESSES.forEach(function (b) {
+          if (p.buckets[b] && p.buckets[b][scope] != null) count++;
+        });
+      });
+    }
+    KNOBS.forEach(function (k) {
+      if (k.sec !== secId) return;
+      if (k.bucketed || k.layerMajorBucketed) {
+        if (HARNESSES.some(function (b) { return hasOverrideInScope(k, scope, b); })) count++;
+      } else {
+        if (hasOverrideInScope(k, scope, null)) count++;
+      }
+    });
+    return count;
+  }
+
+  function totalOverridesInScope(scope) {
+    return SECTIONS.reduce(function (sum, s) { return sum + countScopeOverridesInSection(s.id, scope); }, 0);
+  }
+
+  function computeLineDiff(seedText, overrideText) {
+    var a = seedText.split("\n"), b = overrideText.split("\n");
+    var n = a.length, m = b.length, dp = [];
+    for (var i = 0; i <= n; i++) dp[i] = new Array(m + 1).fill(0);
+    for (var i2 = n - 1; i2 >= 0; i2--) {
+      for (var j2 = m - 1; j2 >= 0; j2--) {
+        dp[i2][j2] = a[i2] === b[j2] ? dp[i2 + 1][j2 + 1] + 1 : Math.max(dp[i2 + 1][j2], dp[i2][j2 + 1]);
+      }
+    }
+    var out = [], x = 0, y = 0;
+    while (x < n && y < m) {
+      if (a[x] === b[y]) { out.push({ type: "ctx", text: a[x] }); x++; y++; }
+      else if (dp[x + 1][y] >= dp[x][y + 1]) { out.push({ type: "del", text: a[x++] }); }
+      else { out.push({ type: "add", text: b[y++] }); }
+    }
+    while (x < n) out.push({ type: "del", text: a[x++] });
+    while (y < m) out.push({ type: "add", text: b[y++] });
+    return out;
+  }
+
+  function matchesSearch(k) {
+    var q = state.search.trim().toLowerCase();
+    if (!q) return true;
+    return k.id.toLowerCase().indexOf(q) >= 0 || k.label.toLowerCase().indexOf(q) >= 0 || k.desc.toLowerCase().indexOf(q) >= 0;
+  }
+
+  function matchesFilter(k, bucket) {
+    if (!matchesSearch(k)) return false;
+    if (state.filterMode === "editable") return isScopeEditable(k, state.targetScope);
+    if (state.filterMode === "overridden") {
+      if (state.targetScope === "repo") {
+        var dk = (k.bucketed || k.layerMajorBucketed) ? k.id + "." + (bucket === "*" ? "all" : bucket) : k.id;
+        if (state.repoDrafts[dk] !== undefined) return true;
+      }
+      if (k.bucketed || k.layerMajorBucketed) return HARNESSES.some(function (b) { return hasOverrideInScope(k, state.targetScope, b); });
+      return hasOverrideInScope(k, state.targetScope, bucket);
+    }
+    return true;
+  }
+
+  // =========================================================================
+  // Full-Width Horizontal Layer Inheritance Strip
+  // =========================================================================
+  function renderLayerDrawer(items, winnerScope) {
+    var html = '<div class="layer-drawer">' +
+      '<span class="layer-drawer-lbl">상속 경로</span>' +
+      '<div class="layer-chain">';
+    items.forEach(function (it, idx) {
+      if (idx > 0) html += '<span class="larrow">→</span>';
+      var cls = "lchip";
+      if (it.draft) cls += " is-draft";
+      else if (it.scope === winnerScope) cls += " is-winner";
+      else if (it.empty) cls += " is-empty";
+      if (it.scope === state.targetScope) cls += " is-active-scope";
+      var dis = it.switchable === false ? " disabled" : "";
+      var act = it.switchable === false ? "" : ' data-act="switch-scope" data-val="' + esc(it.scope) + '" title="' + esc(it.title || (it.label + " 스코프로 전환")) + '"';
+      html += '<button type="button" class="' + cls + '"' + act + dis + '>' +
+        '<span class="lscope">' + esc(it.label) + '</span>' +
+        '<span class="lsep">·</span>' +
+        '<span class="lval">' + esc(it.value) + '</span>' +
+        (it.draft ? '<span class="lmark">초안</span>' : (it.scope === winnerScope ? '<span class="lmark">✓</span>' : '')) +
+        (it.scope === state.targetScope ? '<span class="lcur">현재</span>' : '') +
+      '</button>';
+    });
+    html += '</div></div>';
+    return html;
+  }
+
+  function buildKnobLayerItems(k, bucket, resolved, draftKey, hasDraft) {
+    var map = getLayerMap(k, bucket);
+    var scopes = ["builtin", "global", "repo", "project", "session"];
+    return scopes.map(function (sc) {
+      var label = SCOPE_META[sc].label;
+      if (sc === "builtin") {
+        var bv = formatDisplayVal(k.builtin);
+        return { scope: sc, label: label, value: bv, empty: k.builtin === "" || k.builtin == null };
+      }
+      if (k.globalOnly && sc !== "global") {
+        return { scope: sc, label: label, value: "미지원", empty: true, switchable: true };
+      }
+      if (!isScopeEditable(k, sc)) {
+        return { scope: sc, label: label, value: "미지원", empty: true, switchable: true };
+      }
+      if (sc === "repo" && hasDraft) {
+        return { scope: sc, label: label, value: formatDisplayVal(state.repoDrafts[draftKey]), draft: true };
+      }
+      var v = map[sc];
+      if (v != null && v !== "") {
+        return { scope: sc, label: label, value: formatDisplayVal(v), empty: false };
+      }
+      // Match live evaluation behavior: narrower/unselected scopes read "미평가" or "—"
+      var unsetText = (sc === "repo" || sc === "session") && state.targetScope === "global" ? "미평가" : "—";
+      return { scope: sc, label: label, value: unsetText, empty: true };
+    });
+  }
+
+  // =========================================================================
+  // Control & Row Rendering (2-Column Razor-Aligned)
+  // =========================================================================
+  function renderControl(k, bucket, val, disabled) {
+    var disAttr = disabled ? " disabled" : "";
+    var data = ' data-knob="' + esc(k.id) + '" data-bucket="' + esc(bucket || "") + '"';
+    if (k.type === "toggle") {
+      var checked = val === k.opts[0];
+      return '<div class="ctl-toggle-wrap">' +
+        '<button type="button" class="tg" role="switch" aria-checked="' + checked + '" data-act="toggle"' + data + disAttr + ' aria-label="' + esc(k.label) + '"></button>' +
+        '<span class="tgl">' + esc(val) + '</span>' +
+      '</div>';
+    }
+    if (k.type === "seg") {
+      return '<div class="seg" role="radiogroup" aria-label="' + esc(k.label) + '">' +
+        k.opts.map(function (o) {
+          return '<button type="button" role="radio" aria-checked="' + (o === val) + '" data-act="set" data-val="' + esc(o) + '"' + data + disAttr + '>' + esc(o) + '</button>';
+        }).join("") +
+      '</div>';
+    }
+    if (k.type === "select") {
+      return '<select class="sel mono" data-act="input"' + data + disAttr + '>' +
+        k.opts.map(function (o) {
+          return '<option value="' + esc(o) + '"' + (o === val ? " selected" : "") + '>' + esc(o) + '</option>';
+        }).join("") +
+      '</select>';
+    }
+    if (k.type === "int") {
+      return '<div class="ctl-num-wrap">' +
+        '<div class="stepper">' +
+          '<button type="button" data-act="step" data-delta="-1"' + data + disAttr + ' aria-label="감소">−</button>' +
+          '<input type="number" value="' + esc(val) + '"' + (k.min != null ? ' min="' + k.min + '"' : '') + (k.max != null ? ' max="' + k.max + '"' : '') + ' data-act="input"' + data + disAttr + '>' +
+          '<button type="button" data-act="step" data-delta="1"' + data + disAttr + ' aria-label="증가">+</button>' +
+        '</div>' +
+        (k.unit ? '<span class="unit">' + esc(k.unit) + '</span>' : '') +
+      '</div>';
+    }
+    return '<input class="inp' + (k.mono ? ' mono' : '') + '" value="' + esc(val) + '" placeholder="' + esc(k.placeholder || '') + '" data-act="input"' + data + disAttr + '>';
+  }
+
+  function bucketDotInfo(k, bucketName) {
+    var bm = k.buckets[bucketName] || {};
+    var draftKey = k.id + "." + (bucketName === "*" ? "all" : bucketName);
+    if (state.targetScope === "repo" && state.repoDrafts[draftKey] !== undefined) {
+      return { cls: "draft", title: "저장소 초안 대기 중" };
+    }
+    if (bm[state.targetScope] != null && bm[state.targetScope] !== "") {
+      return { cls: "own", title: SCOPE_META[state.targetScope].label + " 스코프에서 오버라이드됨" };
+    }
+    for (var i = PRECEDENCE.length - 1; i >= 0; i--) {
+      var sc = PRECEDENCE[i];
+      if (bm[sc] != null && bm[sc] !== "") {
+        return { cls: "other", title: SCOPE_META[sc].label + " 스코프에 오버라이드 존재 (" + bm[sc] + ")" };
+      }
+    }
+    return null;
+  }
+
+  function renderKnobRow(k, bucketOverride) {
+    var bucket = bucketOverride || (k.bucketed ? (state.bucketPick[k.id] || "claude") : (k.layerMajorBucketed ? state.compactionBucket : null));
+    var editable = isScopeEditable(k, state.targetScope);
+    var resolved = resolveKnob(k, bucket);
+    var draftKey = (k.bucketed || k.layerMajorBucketed) ? k.id + "." + (bucket === "*" ? "all" : bucket) : k.id;
+    var hasDraft = state.targetScope === "repo" && state.repoDrafts[draftKey] !== undefined;
+    var layerMap = getLayerMap(k, bucket);
+    var hasOwnOverride = hasOverrideInScope(k, state.targetScope, bucket);
+
+    var displayVal = state.targetScope === "builtin"
+      ? k.builtin
+      : (hasDraft ? state.repoDrafts[draftKey] : (hasOwnOverride ? layerMap[state.targetScope] : resolved.value));
+
+    var shadow = !hasDraft ? higherShadow(k, state.targetScope, bucket) : null;
+    var layerOpenKey = k.id + (bucket ? ":" + bucket : "");
+    var isLayerOpen = !!state.openLayers[k.id] || !!state.openLayers[layerOpenKey];
+
+    var rowCls = "srow";
+    if (!editable) rowCls += " disabled";
+    else if (hasDraft) rowCls += " draft";
+    else if (hasOwnOverride) rowCls += " overridden";
+
+    var tags = "";
+    if (k.globalOnly) tags += '<span class="stag lock">전역 전용</span>';
+    if (k.bucketed) tags += '<span class="stag bucket">하네스 버킷</span>';
+
+    var bucketHtml = "";
+    if (k.bucketed) {
+      bucketHtml = '<div class="bucket-row"><div class="seg bucket-seg" role="radiogroup" aria-label="하네스 버킷 선택">' +
+        HARNESSES.map(function (b) {
+          var dot = bucketDotInfo(k, b);
+          return '<button type="button" role="radio" aria-checked="' + (b === bucket) + '" data-act="pick-bucket" data-knob="' + esc(k.id) + '" data-bucket="' + esc(b) + '"' + (dot ? ' title="' + esc(dot.title) + '"' : '') + '>' +
+            '<span>' + esc(HARNESS_NAME[b]) + '</span>' +
+            (dot ? '<span class="bdot ' + dot.cls + '"></span>' : '') +
+          '</button>';
+        }).join("") +
+      '</div></div>';
+    }
+
+    var warnHtml = "";
+    if (k.id === "workflow.profile" && displayVal === "orchestrate") {
+      var tLbl = bucket === "*" ? "모든 하네스" : HARNESS_NAME[bucket];
+      warnHtml = '<div class="inline-warn">⚠ <code>orchestrate</code> 프로필은 중첩 서브에이전트를 기본 설정에서 완주 검증한 하네스가 아직 없습니다 (' + esc(tLbl) + ').</div>';
+    }
+
+    // Origin pill text & class
+    var pillCls = "origin-pill";
+    var pillText = "";
+    if (hasDraft) {
+      pillCls += " draft";
+      pillText = "초안";
+    } else if (shadow) {
+      pillCls += " shadowed";
+      pillText = SCOPE_META[shadow.scope].label + " 우선";
+    } else if (!editable) {
+      pillCls += " lock";
+      pillText = k.globalOnly ? "전역 전용" : "읽기 전용";
+    } else if (hasOwnOverride) {
+      pillCls += " here";
+      pillText = SCOPE_META[state.targetScope].label;
+    } else {
+      pillText = SCOPE_META[resolved.scope].label;
+    }
+
+    // Icon-only reset button (or hidden placeholder to preserve razor vertical alignment)
+    var resetBtnHtml = "";
+    if (hasDraft) {
+      resetBtnHtml = '<button type="button" class="reset-icon-btn draft" data-act="discard-draft" data-draft-key="' + esc(draftKey) + '" title="초안 취소" aria-label="초안 취소"><svg class="i"><use href="#i-undo"/></svg></button>';
+    } else if (hasOwnOverride && editable && state.targetScope !== "repo") {
+      resetBtnHtml = '<button type="button" class="reset-icon-btn" data-act="reset-knob" data-knob="' + esc(k.id) + '" data-bucket="' + esc(bucket || "") + '" title="오버라이드 해제" aria-label="오버라이드 해제"><svg class="i"><use href="#i-undo"/></svg></button>';
+    } else {
+      resetBtnHtml = '<button type="button" class="reset-icon-btn placeholder" tabindex="-1" aria-hidden="true"><svg class="i"><use href="#i-undo"/></svg></button>';
+    }
+
+    var drawerHtml = "";
+    if (isLayerOpen) {
+      var items = buildKnobLayerItems(k, bucket, resolved, draftKey, hasDraft);
+      drawerHtml = renderLayerDrawer(items, resolved.scope);
+    }
+
+    return '<div class="' + rowCls + '">' +
+      '<div class="smeta">' +
+        '<div class="srow-hd">' +
+          '<span class="stitle">' + esc(k.label) + '</span>' +
+          '<code class="skey">' + esc(k.id) + (bucket ? '.' + esc(bucket === "*" ? "all" : bucket) : '') + '</code>' +
+          tags +
+        '</div>' +
+        '<div class="sdesc">' + esc(k.desc) + '</div>' +
+        bucketHtml +
+        warnHtml +
+      '</div>' +
+      '<div class="sctl-rail">' +
+        '<div class="ctl-slot">' + renderControl(k, bucket, displayVal, !editable) + '</div>' +
+        '<button type="button" class="' + pillCls + '" data-act="toggle-layer" data-layer-id="' + esc(k.id) + '" aria-expanded="' + isLayerOpen + '" title="상속 레이어 보기">' +
+          '<span class="lbl">' + esc(pillText) + '</span>' +
+          '<span class="chev">' + (isLayerOpen ? '▴' : '▾') + '</span>' +
+        '</button>' +
+        resetBtnHtml +
+      '</div>' +
+      drawerHtml +
+    '</div>';
+  }
+
+  // =========================================================================
+  // Section Renderers
+  // =========================================================================
+  function renderTopBanner() {
+    if (state.targetScope === "global") {
+      return '<div class="slim-banner sync">' +
+        '<span class="ttl"><svg class="i"><use href="#i-cloud"/></svg>Git 동기화 레이어</span>' +
+        '<span class="chip">준비 중</span>' +
+        '<span><code>~/.ws/config-sync/repo.git</code> 개인 설정 동기화 예정 · 로컬 전역 값이 항상 우선합니다.</span>' +
+        '<div class="right"><button type="button" class="btn" disabled style="height:24px;font-size:11px">연결 예정</button></div>' +
+      '</div>';
+    }
+    if (state.targetScope === "repo") {
+      return '<div class="slim-banner repo">' +
+        '<span class="ttl"><svg class="i"><use href="#i-lock"/></svg>저장소 편집 제안 모드</span>' +
+        '<span><code>.ws-workflow/config.json</code>은 Git 추적 파일이므로 변경 시 <b>초안</b>이 생성됩니다.</span>' +
+        '<div class="right">' +
+          '<div class="seg bucket-seg" role="radiogroup" aria-label="활성 리드 상태 전환">' +
+            '<button type="button" role="radio" aria-checked="' + state.repoLeadActive + '" data-act="repo-lead" data-val="true">리드 활성</button>' +
+            '<button type="button" role="radio" aria-checked="' + (!state.repoLeadActive) + '" data-act="repo-lead" data-val="false">리드 없음</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+    if (state.targetScope === "builtin") {
+      return '<div class="slim-banner builtin">' +
+        '<span class="ttl"><svg class="i"><use href="#i-lock"/></svg>내장 기본값 · 읽기 전용</span>' +
+        '<span>패키지 기본값 검사 모드입니다. 편집하려면 전역~세션 스코프를 선택하세요.</span>' +
+      '</div>';
+    }
+    return "";
+  }
+
+  function renderSectionWorkflow() {
+    var items = KNOBS.filter(function (k) { return k.sec === "workflow" && matchesFilter(k, state.bucketPick[k.id]); });
+    return '<div class="sec-head"><h2>워크플로 · 리뷰</h2><p>리드 플레이북·언어·채널·리뷰 게이트 (' + items.length + '개)</p></div>' +
+      (items.length
+        ? '<div class="sgroup">' + items.map(function (k) { return renderKnobRow(k); }).join("") + '</div>'
+        : '<div class="slim-banner builtin">현재 검색/필터 조건에 일치하는 항목이 없습니다.</div>');
+  }
+
+  function resolveTierCell(harness, tier) {
+    var own = (TIER_DATA[harness] && TIER_DATA[harness][tier]) || {};
+    var def = (TIER_DATA["default"] && TIER_DATA["default"][tier]) || {};
+    if (own.project) return { val: own.project, scope: "project", inheritedFrom: null };
+    if (own.global) return { val: own.global, scope: "global", inheritedFrom: null };
+    if (def.project) return { val: def.project, scope: "project", inheritedFrom: "default" };
+    if (def.global) return { val: def.global, scope: "global", inheritedFrom: "default" };
+    return { val: { backend: "", model: "", effort: "" }, scope: "builtin", inheritedFrom: null };
+  }
+
+  function renderSectionAgents() {
+    var isBuiltin = state.targetScope === "builtin";
+    var tierEditable = state.targetScope === "global" || state.targetScope === "project";
+    var h = state.tierHarness;
+
+    var rowsHtml = TIER_LIST.map(function (t) {
+      var ownScopeMap = (TIER_DATA[h] && TIER_DATA[h][t]) || {};
+      var hasOwn = !isBuiltin && !!ownScopeMap[state.targetScope];
+      var resolved = resolveTierCell(h, t);
+      var vals = isBuiltin ? { backend: "", model: "", effort: "" } : (hasOwn ? ownScopeMap[state.targetScope] : resolved.val);
+      var shadowProject = state.targetScope === "global" && ownScopeMap.project ? ownScopeMap.project : null;
+
+      var layerKey = "tier:" + h + "." + t;
+      var isLayerOpen = !!state.openLayers[layerKey];
+
+      var pillCls = "origin-pill";
+      var pillText = "";
+      if (!tierEditable) {
+        pillCls += " lock";
+        pillText = isBuiltin ? "읽기 전용" : SCOPE_META[state.targetScope].label + " 미지원";
+      } else if (shadowProject) {
+        pillCls += " shadowed";
+        pillText = "프로젝트 우선";
+      } else if (hasOwn) {
+        pillCls += " here";
+        pillText = SCOPE_META[state.targetScope].label;
+      } else if (resolved.inheritedFrom) {
+        pillText = "기본 상속";
+      } else if (resolved.scope !== "builtin") {
+        pillText = SCOPE_META[resolved.scope].label;
+      } else {
+        pillText = "미설정";
+      }
+
+      var resetHtml = (hasOwn && tierEditable)
+        ? '<button type="button" class="reset-icon-btn" data-act="reset-tier" data-h="' + esc(h) + '" data-t="' + esc(t) + '" title="오버라이드 해제" aria-label="오버라이드 해제"><svg class="i"><use href="#i-undo"/></svg></button>'
+        : '<button type="button" class="reset-icon-btn placeholder" tabindex="-1" aria-hidden="true"><svg class="i"><use href="#i-undo"/></svg></button>';
+
+      var dis = tierEditable ? "" : " disabled";
+      var mainRow = '<tr class="tier-row' + (hasOwn && tierEditable ? ' overridden' : '') + '">' +
+        '<td class="tname">' + esc(t) + '</td>' +
+        '<td><select class="sel mono" data-act="tier-edit" data-h="' + esc(h) + '" data-t="' + esc(t) + '" data-f="backend"' + dis + '>' +
+          ["", "claude", "codex", "pi", "agy"].map(function (b) {
+            return '<option value="' + b + '"' + (vals.backend === b ? " selected" : "") + '>' + (b || "(자동)") + '</option>';
+          }).join("") +
+        '</select></td>' +
+        '<td><input class="inp mono" value="' + esc(vals.model) + '" placeholder="모델 ID" data-act="tier-edit" data-h="' + esc(h) + '" data-t="' + esc(t) + '" data-f="model"' + dis + '></td>' +
+        '<td><select class="sel mono" data-act="tier-edit" data-h="' + esc(h) + '" data-t="' + esc(t) + '" data-f="effort"' + dis + '>' +
+          ["", "low", "medium", "high", "xhigh", "max"].map(function (ef) {
+            return '<option value="' + ef + '"' + (vals.effort === ef ? " selected" : "") + '>' + (ef || "(없음)") + '</option>';
+          }).join("") +
+        '</select></td>' +
+        '<td><div class="tier-prov-cell">' +
+          '<button type="button" class="' + pillCls + '" data-act="toggle-layer" data-layer-id="' + esc(layerKey) + '" aria-expanded="' + isLayerOpen + '">' +
+            '<span class="lbl">' + esc(pillText) + '</span><span class="chev">' + (isLayerOpen ? '▴' : '▾') + '</span>' +
+          '</button>' +
+          resetHtml +
+        '</div></td>' +
+      '</tr>';
+
+      var drawerTr = "";
+      if (isLayerOpen) {
+        var fmtTier = function (o) { return o ? (o.backend || "auto") + "/" + (o.model || "?") + (o.effort ? " (" + o.effort + ")" : "") : "—"; };
+        var defT = (TIER_DATA["default"] && TIER_DATA["default"][t]) || {};
+        var defVal = defT.project || defT.global || null;
+        var layerItems = [
+          { scope: "builtin", label: "기본 버킷", value: defVal ? fmtTier(defVal) : "(미지정)", empty: !defVal, switchable: false },
+          { scope: "global",  label: "전역", value: fmtTier(ownScopeMap.global), empty: !ownScopeMap.global },
+          { scope: "project", label: "프로젝트", value: fmtTier(ownScopeMap.project), empty: !ownScopeMap.project }
+        ];
+        var winner = resolved.inheritedFrom ? "builtin" : resolved.scope;
+        drawerTr = '<tr class="layer-tr"><td colspan="5">' + renderLayerDrawer(layerItems, winner) + '</td></tr>';
+      }
+      return mainRow + drawerTr;
+    }).join("");
+
+    var showTier = state.filterMode !== "editable" || tierEditable;
+    var tierGroupHtml = showTier ? (
+      '<div class="sgroup">' +
+        '<div class="sgroup-head">' +
+          '<div class="smeta">' +
+            '<div class="srow-hd">' +
+              '<span class="stitle">능력 티어 매트릭스</span>' +
+              '<code class="skey">agents.tier</code>' +
+              '<span class="stag bucket">하네스 버킷</span>' +
+              (tierEditable ? '' : '<span class="stag lock">전역 · 프로젝트 전용</span>') +
+            '</div>' +
+            '<div class="sdesc">각 능력 티어를 하네스별 백엔드·모델·추론 강도에 매핑합니다.</div>' +
+          '</div>' +
+          '<div class="seg bucket-seg" role="tablist" aria-label="agents.tier 하네스 선택">' +
+            TIER_HARNESSES.map(function (th) {
+              var hasAny = TIER_LIST.some(function (t) { return TIER_DATA[th][t] && TIER_DATA[th][t][state.targetScope]; });
+              var hasOther = !hasAny && TIER_LIST.some(function (t) { return TIER_DATA[th][t] && (TIER_DATA[th][t].global || TIER_DATA[th][t].project); });
+              return '<button type="button" role="tab" aria-selected="' + (th === h) + '" data-act="tier-harness" data-val="' + esc(th) + '">' +
+                '<span>' + esc(HARNESS_NAME[th]) + '</span>' +
+                (hasAny ? '<span class="bdot own"></span>' : (hasOther ? '<span class="bdot other"></span>' : '')) +
+              '</button>';
+            }).join("") +
+          '</div>' +
+        '</div>' +
+        '<table class="tier-tbl"><thead><tr><th>티어</th><th>백엔드</th><th>모델</th><th>추론 강도</th><th>출처 · 상태</th></tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
+      '</div>'
+    ) : "";
+
+    var otherKnobs = KNOBS.filter(function (k) { return k.sec === "agents" && matchesFilter(k, null); });
+    return '<div class="sec-head"><h2>에이전트 · 티어</h2><p>티어 모델 매트릭스 및 전역 에이전트 운영 정책</p></div>' +
+      tierGroupHtml +
+      (otherKnobs.length ? '<div class="sgroup">' + otherKnobs.map(function (k) { return renderKnobRow(k); }).join("") + '</div>' : '');
+  }
+
+  function renderSectionCompaction() {
+    var compItems = KNOBS.filter(function (k) { return k.sec === "compaction" && k.id.startsWith("compaction.") && matchesFilter(k, state.compactionBucket); });
+    var wtItems = KNOBS.filter(function (k) { return k.sec === "compaction" && !k.id.startsWith("compaction.") && matchesFilter(k, null); });
+
+    var barHtml = '<div class="slim-banner builtin">' +
+      '<span class="ttl">컴팩션 하네스 버킷</span>' +
+      '<span>각 레이어 안에서 하네스 버킷을 먼저 읽고, 없으면 공통(<code>*</code>)을 적용합니다.</span>' +
+      '<div class="right">' +
+        '<div class="seg bucket-seg" role="radiogroup" aria-label="컴팩션 버킷 선택">' +
+          HARNESSES.map(function (b) {
+            var hasOwn = compItems.some(function (k) { return hasOverrideInScope(k, state.targetScope, b); });
+            var hasOther = !hasOwn && compItems.some(function (k) { return Object.keys(k.buckets[b] || {}).length > 0; });
+            return '<button type="button" role="radio" aria-checked="' + (b === state.compactionBucket) + '" data-act="comp-bucket" data-val="' + esc(b) + '">' +
+              '<span>' + esc(HARNESS_NAME[b]) + '</span>' +
+              (hasOwn ? '<span class="bdot own"></span>' : (hasOther ? '<span class="bdot other"></span>' : '')) +
+            '</button>';
+          }).join("") +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+    return '<div class="sec-head"><h2>컴팩션 · 워크트리</h2><p>컨텍스트 임계치 · 풀 경로 · 병합 크기 경고</p></div>' +
+      barHtml +
+      (compItems.length ? '<div class="sgroup">' + compItems.map(function (k) { return renderKnobRow(k, state.compactionBucket); }).join("") + '</div>' : '') +
+      (wtItems.length ? '<div class="sgroup">' + wtItems.map(function (k) { return renderKnobRow(k); }).join("") + '</div>' : '');
+  }
+
+  function renderSectionAdapters() {
+    var activeTab = state.adapterTab;
+    var items = KNOBS.filter(function (k) { return k.sec === "adapters" && k.adapter === activeTab && matchesFilter(k, null); });
+    var subtabs = '<div class="subtabs" role="tablist" aria-label="어댑터 선택">' +
+      ADAPTER_TABS.map(function (t) {
+        return '<button type="button" class="subtab" role="tab" aria-selected="' + (t.id === activeTab) + '" data-act="adapter-tab" data-val="' + esc(t.id) + '">' +
+          '<span>' + esc(t.label) + '</span><span class="scnt">' + t.count + '</span>' +
+        '</button>';
+      }).join("") +
+    '</div>';
+
+    return '<div class="sec-head"><h2>하네스 어댑터</h2><p>4개 패키지 매니페스트 전체 (총 34키)</p></div>' +
+      subtabs +
+      (items.length
+        ? '<div class="sgroup">' + items.map(function (k) { return renderKnobRow(k); }).join("") + '</div>'
+        : '<div class="slim-banner builtin">현재 조건에 일치하는 어댑터 키가 없습니다.</div>');
+  }
+
+  function renderSectionProfiles() {
+    var renderCard = function (prefix, p) {
+      var fullId = prefix + p.name;
+      var isJsonOpen = !!state.expandedProfiles[fullId];
+      var isLayerOpen = !!state.openLayers["prof:" + fullId];
+      var pillCls = "origin-pill" + (p.scope === state.targetScope ? " here" : "");
+
+      var layerHtml = "";
+      if (isLayerOpen) {
+        var litems = ["builtin", "global", "repo", "project"].map(function (sc) {
+          return { scope: sc, label: SCOPE_META[sc].label, value: p.layers[sc] || "—", empty: !p.layers[sc] };
+        });
+        layerHtml = renderLayerDrawer(litems, p.scope);
+      }
+
+      return '<div class="prof-card">' +
+        '<div class="prof-head">' +
+          '<code class="skey">' + esc(fullId) + '</code>' +
+          '<span class="stag lock" style="margin-left:auto">읽기 전용</span>' +
+        '</div>' +
+        '<div class="prof-desc">' + esc(p.desc) + '</div>' +
+        '<div class="prof-pills">' +
+          p.pills.map(function (pair) {
+            return '<span class="ppill"><b>' + esc(pair[0]) + '</b> <code>' + esc(pair[1]) + '</code></span>';
+          }).join("") +
+        '</div>' +
+        '<div class="prof-foot">' +
+          '<button type="button" class="prof-json-btn" data-act="toggle-prof-json" data-prof="' + esc(fullId) + '">' + (isJsonOpen ? '원본 JSON 접기 ▾' : '원본 JSON 보기 ▸') + '</button>' +
+          '<button type="button" class="' + pillCls + '" style="flex:0 0 auto;margin-left:auto" data-act="toggle-layer" data-layer-id="prof:' + esc(fullId) + '" aria-expanded="' + isLayerOpen + '">' +
+            '<span class="lbl">' + esc(SCOPE_META[p.scope].label) + '</span><span class="chev">' + (isLayerOpen ? '▴' : '▾') + '</span>' +
+          '</button>' +
+        '</div>' +
+        (isJsonOpen ? '<pre class="prof-json">' + esc(JSON.stringify(p.json, null, 2)) + '</pre>' : '') +
+        (layerHtml ? '<div style="margin:0 -14px -11px">' + layerHtml.replace('margin: 8px -16px -9px;', 'margin:0;') + '</div>' : '') +
+      '</div>';
+    };
+
+    return '<div class="sec-head"><h2>프로필</h2><p>워크트리 · 에이전트 프로필 구조화 요약 (읽기 전용)</p></div>' +
+      '<div style="font-size:12px;font-weight:800">워크트리 프로필 (<code>worktree.profile.*</code>)</div>' +
+      '<div class="prof-grid">' + PROFILES.worktree.map(function (p) { return renderCard("worktree.profile.", p); }).join("") + '</div>' +
+      '<div style="font-size:12px;font-weight:800;margin-top:4px">에이전트 프로필 (<code>agent.profile.*</code>)</div>' +
+      '<div class="prof-grid">' + PROFILES.agent.map(function (p) { return renderCard("agent.profile.", p); }).join("") + '</div>';
+  }
+
+  function renderSectionPrompts() {
+    var pt = PROMPTS.find(function (p) { return p.id === state.promptId; }) || PROMPTS[0];
+    var b = state.promptBucket;
+    var bucketMap = pt.buckets[b] || {};
+    var draftKey = pt.id + "." + (b === "*" ? "all" : b);
+    var hasDraft = state.targetScope === "repo" && state.repoDrafts[draftKey] !== undefined;
+
+    var resolvedText = null, resolvedScope = "builtin", resolvedBucket = b;
+    var order = b === "*" ? ["*"] : [b, "*"];
+    for (var oi = 0; oi < order.length && resolvedText === null; oi++) {
+      var bm = pt.buckets[order[oi]] || {};
+      for (var si = PRECEDENCE.length - 1; si >= 0; si--) {
+        var sc = PRECEDENCE[si];
+        if (bm[sc] != null && bm[sc] !== "") { resolvedText = bm[sc]; resolvedScope = sc; resolvedBucket = order[oi]; break; }
+      }
+    }
+    var isBuiltin = state.targetScope === "builtin";
+    var hasOwn = !isBuiltin && bucketMap[state.targetScope] != null && bucketMap[state.targetScope] !== "";
+    var currentOverride = isBuiltin ? pt.seed : (hasDraft ? state.repoDrafts[draftKey] : (hasOwn ? bucketMap[state.targetScope] : (resolvedText != null ? resolvedText : pt.seed)));
+    var diffLines = computeLineDiff(pt.seed, currentOverride);
+
+    var pickerHtml = '<div class="prompt-picker">' +
+      PROMPTS.map(function (p) {
+        var anyOv = !isBuiltin && HARNESSES.some(function (hb) { return p.buckets[hb] && p.buckets[hb][state.targetScope]; });
+        return '<button type="button" class="fchip" aria-pressed="' + (p.id === pt.id) + '" data-act="pick-prompt" data-val="' + esc(p.id) + '">' +
+          '<code>' + esc(p.id) + '</code>' + (anyOv ? '<span class="bdot own"></span>' : '') +
+        '</button>';
+      }).join("") +
+    '</div>';
+
+    var bucketSeg = '<div class="seg bucket-seg" role="radiogroup" aria-label="프롬프트 하네스 버킷">' +
+      HARNESSES.map(function (hb) {
+        var ov = !isBuiltin && pt.buckets[hb] && pt.buckets[hb][state.targetScope];
+        return '<button type="button" role="radio" aria-checked="' + (hb === b) + '" data-act="prompt-bucket" data-val="' + esc(hb) + '">' +
+          '<span>' + esc(HARNESS_NAME[hb]) + '</span>' + (ov ? '<span class="bdot own"></span>' : '') +
+        '</button>';
+      }).join("") +
+    '</div>';
+
+    var isLayerOpen = !!state.openLayers["prompt:" + pt.id];
+    var pillCls = "origin-pill" + (hasDraft ? " draft" : (isBuiltin ? " lock" : (hasOwn ? " here" : "")));
+    var pillText = hasDraft ? "초안" : (isBuiltin ? "읽기 전용" : SCOPE_META[hasOwn ? state.targetScope : resolvedScope].label);
+
+    var resetBtn = hasDraft
+      ? '<button type="button" class="reset-icon-btn draft" data-act="discard-draft" data-draft-key="' + esc(draftKey) + '" title="초안 취소"><svg class="i"><use href="#i-undo"/></svg></button>'
+      : (hasOwn && !isBuiltin
+        ? '<button type="button" class="reset-icon-btn" data-act="reset-prompt" title="Seed 복원"><svg class="i"><use href="#i-undo"/></svg></button>'
+        : '<button type="button" class="reset-icon-btn placeholder" tabindex="-1" aria-hidden="true"><svg class="i"><use href="#i-undo"/></svg></button>');
+
+    var layerDrawerHtml = "";
+    if (isLayerOpen) {
+      var pItems = ["builtin", "global", "repo", "project", "session"].map(function (sc2) {
+        if (sc2 === "builtin") return { scope: sc2, label: "내장 Seed", value: pt.seed.split("\n").length + "줄", empty: false };
+        var txt = (pt.buckets[b] || {})[sc2];
+        return { scope: sc2, label: SCOPE_META[sc2].label, value: txt ? txt.split("\n").length + "줄 재정의" : "—", empty: !txt };
+      });
+      layerDrawerHtml = '<div style="border-bottom:1px solid color-mix(in srgb, var(--wb-muted) 85%, transparent)">' +
+        renderLayerDrawer(pItems, resolvedScope).replace('margin: 8px -16px -9px;', 'margin:0;') +
+      '</div>';
+    }
+
+    var diffHtml = diffLines.map(function (dl) {
+      var prefix = dl.type === "add" ? "+ " : (dl.type === "del" ? "- " : "  ");
+      return '<div class="diff-line ' + dl.type + '">' + esc(prefix + dl.text) + '</div>';
+    }).join("");
+
+    return '<div class="sec-head"><h2>프롬프트 오버라이드</h2><p>원본 Seed 비교 · 하네스별 재정의 · 실시간 Diff</p></div>' +
+      pickerHtml +
+      '<div class="prompt-card' + (hasDraft ? ' draft' : (hasOwn ? ' overridden' : '')) + '">' +
+        '<div class="prompt-head">' +
+          '<div class="smeta">' +
+            '<div class="srow-hd"><span class="stitle">' + esc(pt.title) + '</span><code class="skey">' + esc(pt.id) + '</code><span class="stag bucket">하네스 버킷</span></div>' +
+            '<div class="sdesc">' + esc(pt.desc) + '</div>' +
+          '</div>' +
+          '<div class="prompt-head-right">' +
+            bucketSeg +
+            '<button type="button" class="' + pillCls + '" data-act="toggle-layer" data-layer-id="prompt:' + esc(pt.id) + '" aria-expanded="' + isLayerOpen + '" style="flex:0 0 auto">' +
+              '<span class="lbl">' + esc(pillText) + '</span><span class="chev">' + (isLayerOpen ? '▴' : '▾') + '</span>' +
+            '</button>' +
+            resetBtn +
+          '</div>' +
+        '</div>' +
+        layerDrawerHtml +
+        '<div class="prompt-body">' +
+          '<div class="prompt-panes">' +
+            '<div class="pane-box">' +
+              '<div class="ptitle"><span>원본 Seed (읽기 전용)</span><span class="chip">builtin</span></div>' +
+              '<pre class="seed-pre">' + esc(pt.seed) + '</pre>' +
+            '</div>' +
+            '<div class="pane-box">' +
+              '<div class="ptitle"><span>오버라이드 (' + esc(SCOPE_META[state.targetScope].label) + ' · ' + esc(HARNESS_NAME[b]) + ')</span><span>' + currentOverride.split("\n").length + '줄</span></div>' +
+              '<textarea class="prompt-ta" id="promptEditor" data-act="prompt-edit"' + (isBuiltin ? ' disabled' : '') + '>' + esc(currentOverride) + '</textarea>' +
+            '</div>' +
+          '</div>' +
+          '<div class="pane-box">' +
+            '<div class="ptitle"><span>실시간 Seed ↔ Override Diff</span><span>녹색(+) 추가 · 빨강(−) 제거</span></div>' +
+            '<div class="diff-box" id="promptDiff">' + diffHtml + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function renderProposalBar() {
+    if (state.targetScope !== "repo") return "";
+    var keys = Object.keys(state.repoDrafts);
+    if (!keys.length) return "";
+    var patchObj = { overrides: {} };
+    keys.forEach(function (k) { patchObj.overrides[k] = state.repoDrafts[k]; });
+    var patchJson = JSON.stringify(patchObj, null, 2);
+
+    var actions = state.repoLeadActive
+      ? '<button type="button" class="btn pri" data-act="send-proposal"><svg class="i"><use href="#i-send"/></svg>활성 리드(scariness-clerk-energy)에 편집 제안 전송</button>' +
+        '<button type="button" class="btn" data-act="copy-proposal"><svg class="i"><use href="#i-copy"/></svg>JSON/diff 복사</button>'
+      : '<button type="button" class="btn pri" data-act="copy-proposal"><svg class="i"><use href="#i-copy"/></svg>JSON/diff 복사</button>' +
+        '<button type="button" class="btn" disabled>활성 리드 없음</button>';
+
+    return '<footer class="proposal-bar" aria-label="저장소 스코프 편집 제안 바">' +
+      '<div class="proposal-top">' +
+        '<div class="proposal-title">' +
+          '<span class="origin-pill draft" style="cursor:default">편집 제안</span>' +
+          '<span><code>.ws-workflow/config.json</code> 패치 초안 ' + keys.length + '건</span>' +
+        '</div>' +
+        '<button type="button" class="btn" data-act="toggle-patch">' + (state.proposalExpanded ? 'JSON diff 접기 ▾' : 'JSON diff 펼치기 ▸') + '</button>' +
+        '<button type="button" class="btn" data-act="clear-proposals">초안 모두 비우기</button>' +
+        '<div class="proposal-actions">' + actions + '</div>' +
+      '</div>' +
+      (state.proposalExpanded ? '<pre class="proposal-patch">' + esc(patchJson) + '</pre>' : '') +
+    '</footer>';
+  }
+
+  // =========================================================================
+  // Full Stage Render
+  // =========================================================================
+  function renderStage() {
+    var sm = SCOPE_META[state.targetScope];
+    var theme = document.documentElement.getAttribute("data-theme") || "dark";
+    var totalOv = totalOverridesInScope(state.targetScope);
+
+    document.querySelectorAll("[data-scope-entry]").forEach(function (btn) {
+      var match = btn.getAttribute("data-scope-entry") === state.targetScope;
+      btn.setAttribute("aria-current", match ? "page" : "false");
+    });
+
+    var targetCls = "scope-target-pill" + (state.targetScope === "repo" ? " repo" : (state.targetScope === "builtin" ? " builtin" : ""));
+    var headerHtml = '<header class="shd">' +
+      '<div class="shd-top">' +
+        '<button type="button" class="drawer-toggle" id="drawerToggleBtn" data-act="toggle-rail" aria-label="세션 레일 열기">' +
+          '<svg class="i"><use href="#i-menu"/></svg><span>세션</span>' +
+        '</button>' +
+        '<div class="shd-title">' +
+          '<svg class="i" style="color:var(--wb-primary)"><use href="#i-sliders"/></svg>' +
+          '<h1>워크플로 설정</h1>' +
+          '<span class="route-pill">/settings</span>' +
+          '<span class="' + targetCls + '">' +
+            '<span>' + esc(sm.label) + '</span>' +
+            '<code>' + esc(sm.file) + '</code>' +
+          '</span>' +
+        '</div>' +
+        '<div class="shd-actions">' +
+          '<div class="seg" role="radiogroup" aria-label="테마 전환">' +
+            '<button type="button" role="radio" aria-checked="' + (theme === "dark") + '" data-act="theme" data-val="dark">다크</button>' +
+            '<button type="button" role="radio" aria-checked="' + (theme === "light") + '" data-act="theme" data-val="light">라이트</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="prec-strip" aria-label="해석 우선순위">' +
+        '<span class="prec-lbl">해석 우선순위</span>' +
+        PRECEDENCE.map(function (sc, idx) {
+          var arrow = idx > 0 ? '<span class="prec-arrow">→</span>' : '';
+          if (sc === "synced") return arrow + '<span class="prec-node synced">(동기화) <span class="sub">예정</span></span>';
+          var isAct = sc === state.targetScope;
+          var cls = "prec-node" + (isAct ? " active" + (sc === "repo" ? " repo-mode" : (sc === "builtin" ? " builtin-mode" : "")) : "");
+          return arrow + '<button type="button" class="' + cls + '" data-act="switch-scope" data-val="' + sc + '">' +
+            esc(SCOPE_META[sc].label) + (isAct ? ' <span class="sub">' + (sc === "builtin" ? '조회 중' : '편집 중') + '</span>' : '') +
+          '</button>';
+        }).join("") +
+        '<span class="prec-hint">오른쪽 레이어가 왼쪽을 덮어씀</span>' +
+      '</div>' +
+    '</header>';
+
+    var filterHtml = '<div class="filter-bar">' +
+      '<div class="search-wrap">' +
+        '<svg class="i"><use href="#i-search"/></svg>' +
+        '<input class="search-input" id="searchInput" type="text" placeholder="키·설명 검색…" value="' + esc(state.search) + '" aria-label="설정 검색">' +
+        (state.search ? '<button type="button" class="search-clear" data-act="clear-search" aria-label="지우기">×</button>' : '') +
+      '</div>' +
+      '<div class="fchips" role="group" aria-label="빠른 필터">' +
+        '<button type="button" class="fchip" aria-pressed="' + (state.filterMode === "all") + '" data-act="filter" data-val="all">전체</button>' +
+        '<button type="button" class="fchip" aria-pressed="' + (state.filterMode === "overridden") + '" data-act="filter" data-val="overridden">이 스코프 오버라이드</button>' +
+        '<button type="button" class="fchip" aria-pressed="' + (state.filterMode === "editable") + '" data-act="filter" data-val="editable">편집 가능</button>' +
+      '</div>' +
+      '<div class="ov-counter">' + esc(sm.label) + ' 오버라이드 <b>' + totalOv + '건</b></div>' +
+    '</div>';
+
+    var navHtml = '<nav class="snav" aria-label="설정 카테고리">' +
+      SECTIONS.map(function (s) {
+        var ovCount = countScopeOverridesInSection(s.id, state.targetScope);
+        return '<button type="button" class="snav-btn' + (state.targetScope === "repo" ? ' repo-mode' : '') + '" data-act="section" data-val="' + s.id + '" aria-current="' + (state.section === s.id) + '">' +
+          '<span class="dot' + (ovCount ? '' : ' none') + '"></span>' +
+          '<span>' + esc(s.label) + '</span>' +
+          (ovCount ? '<span class="cnt">' + ovCount + '</span>' : '') +
+        '</button>';
+      }).join("") +
+      '<div class="snav-note">' +
+        (state.targetScope === "repo"
+          ? '저장소 설정은 <b>편집 제안 바</b>를 통해 활성 리드에 패치로 전달됩니다.'
+          : (state.targetScope === "builtin"
+            ? '내장 기본값은 읽기 전용입니다.'
+            : '변경 사항은 <code>TrustedWrite</code>로 즉시 저장됩니다.')) +
+      '</div>' +
+    '</nav>';
+
+    var bodyInner = renderTopBanner();
+    if (state.section === "workflow") bodyInner += renderSectionWorkflow();
+    else if (state.section === "agents") bodyInner += renderSectionAgents();
+    else if (state.section === "compaction") bodyInner += renderSectionCompaction();
+    else if (state.section === "adapters") bodyInner += renderSectionAdapters();
+    else if (state.section === "profiles") bodyInner += renderSectionProfiles();
+    else if (state.section === "prompts") bodyInner += renderSectionPrompts();
+
+    document.getElementById("stage").innerHTML = headerHtml + filterHtml +
+      '<div class="sbody">' + navHtml + '<div class="scontent" id="scontent">' + bodyInner + '</div></div>' +
+      renderProposalBar();
+  }
+
+  var toastTimer = null;
+  function showToast(msg) {
+    var t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2200);
+  }
+
+  function findKnob(id) { return KNOBS.find(function (k) { return k.id === id; }); }
+
+  function applyKnobValue(knobId, bucket, rawVal) {
+    var k = findKnob(knobId);
+    if (!k || !isScopeEditable(k, state.targetScope)) return;
+    var val = String(rawVal);
+    if (state.targetScope === "repo") {
+      var dk = (k.bucketed || k.layerMajorBucketed) ? k.id + "." + (bucket === "*" ? "all" : bucket) : k.id;
+      state.repoDrafts[dk] = val;
+      renderStage();
+      return;
+    }
+    if (k.bucketed || k.layerMajorBucketed) {
+      var b = bucket || "*";
+      if (!k.buckets[b]) k.buckets[b] = {};
+      k.buckets[b][state.targetScope] = val;
+    } else {
+      k.layers[state.targetScope] = val;
+    }
+    showToast("저장됨 · " + SCOPE_META[state.targetScope].label);
+    renderStage();
+  }
+
+  function resetKnobValue(knobId, bucket) {
+    var k = findKnob(knobId);
+    if (!k) return;
+    if (k.bucketed || k.layerMajorBucketed) {
+      var b = bucket || "*";
+      if (k.buckets[b]) delete k.buckets[b][state.targetScope];
+    } else {
+      delete k.layers[state.targetScope];
+    }
+    showToast("오버라이드 해제됨 (" + SCOPE_META[state.targetScope].label + ")");
+    renderStage();
+  }
+
+  document.addEventListener("click", function (e) {
+    if (e.target.id === "rscrim" || e.target.closest("#railCloseBtn")) {
+      document.documentElement.classList.remove("rail-open");
+      return;
+    }
+
+    var scopeEntry = e.target.closest("[data-scope-entry]");
+    if (scopeEntry) {
+      state.targetScope = scopeEntry.getAttribute("data-scope-entry");
+      document.documentElement.classList.remove("rail-open");
+      renderStage();
+      return;
+    }
+
+    var el = e.target.closest("[data-act]");
+    if (!el) return;
+    var act = el.getAttribute("data-act");
+
+    if (act === "toggle-rail") {
+      document.documentElement.classList.toggle("rail-open");
+    } else if (act === "toggle-layer") {
+      var lid = el.getAttribute("data-layer-id");
+      state.openLayers[lid] = !state.openLayers[lid];
+      renderStage();
+    } else if (act === "switch-scope") {
+      state.targetScope = el.getAttribute("data-val");
+      renderStage();
+    } else if (act === "theme") {
+      document.documentElement.setAttribute("data-theme", el.getAttribute("data-val"));
+      renderStage();
+    } else if (act === "section") {
+      state.section = el.getAttribute("data-val");
+      renderStage();
+    } else if (act === "filter") {
+      state.filterMode = el.getAttribute("data-val");
+      renderStage();
+    } else if (act === "clear-search") {
+      state.search = "";
+      renderStage();
+    } else if (act === "adapter-tab") {
+      state.adapterTab = el.getAttribute("data-val");
+      renderStage();
+    } else if (act === "tier-harness") {
+      state.tierHarness = el.getAttribute("data-val");
+      renderStage();
+    } else if (act === "comp-bucket") {
+      state.compactionBucket = el.getAttribute("data-val");
+      renderStage();
+    } else if (act === "pick-bucket") {
+      state.bucketPick[el.getAttribute("data-knob")] = el.getAttribute("data-bucket");
+      renderStage();
+    } else if (act === "toggle") {
+      var k = findKnob(el.getAttribute("data-knob"));
+      var cur = el.getAttribute("aria-checked") === "true";
+      applyKnobValue(k.id, el.getAttribute("data-bucket"), cur ? k.opts[1] : k.opts[0]);
+    } else if (act === "set") {
+      applyKnobValue(el.getAttribute("data-knob"), el.getAttribute("data-bucket"), el.getAttribute("data-val"));
+    } else if (act === "step") {
+      var k2 = findKnob(el.getAttribute("data-knob"));
+      var delta = parseInt(el.getAttribute("data-delta"), 10);
+      var inp = el.parentElement.querySelector("input");
+      var nxt = parseInt(inp.value || k2.builtin || "0", 10) + delta;
+      if (k2.min != null && nxt < k2.min) nxt = k2.min;
+      if (k2.max != null && nxt > k2.max) nxt = k2.max;
+      applyKnobValue(k2.id, el.getAttribute("data-bucket"), String(nxt));
+    } else if (act === "reset-knob") {
+      resetKnobValue(el.getAttribute("data-knob"), el.getAttribute("data-bucket"));
+    } else if (act === "discard-draft") {
+      delete state.repoDrafts[el.getAttribute("data-draft-key")];
+      showToast("초안을 취소했습니다.");
+      renderStage();
+    } else if (act === "reset-tier") {
+      var th = el.getAttribute("data-h"), tt = el.getAttribute("data-t");
+      if (TIER_DATA[th] && TIER_DATA[th][tt]) delete TIER_DATA[th][tt][state.targetScope];
+      showToast("agents.tier[" + th + "." + tt + "] 오버라이드 해제됨");
+      renderStage();
+    } else if (act === "toggle-prof-json") {
+      var pid = el.getAttribute("data-prof");
+      state.expandedProfiles[pid] = !state.expandedProfiles[pid];
+      renderStage();
+    } else if (act === "pick-prompt") {
+      state.promptId = el.getAttribute("data-val");
+      renderStage();
+    } else if (act === "prompt-bucket") {
+      state.promptBucket = el.getAttribute("data-val");
+      renderStage();
+    } else if (act === "reset-prompt") {
+      var pt = PROMPTS.find(function (p) { return p.id === state.promptId; });
+      if (pt && pt.buckets[state.promptBucket]) delete pt.buckets[state.promptBucket][state.targetScope];
+      showToast("원본 Seed로 복원됨");
+      renderStage();
+    } else if (act === "repo-lead") {
+      state.repoLeadActive = el.getAttribute("data-val") === "true";
+      renderStage();
+    } else if (act === "toggle-patch") {
+      state.proposalExpanded = !state.proposalExpanded;
+      renderStage();
+    } else if (act === "clear-proposals") {
+      state.repoDrafts = {};
+      showToast("저장소 초안을 비웠습니다.");
+      renderStage();
+    } else if (act === "send-proposal") {
+      showToast("활성 리드에 .ws-workflow/config.json 편집 제안을 전송했습니다.");
+    } else if (act === "copy-proposal") {
+      showToast("JSON/diff 패치를 복사했습니다.");
+    }
+  });
+
+  document.addEventListener("input", function (e) {
+    if (e.target.id === "searchInput") {
+      var pos = e.target.selectionStart;
+      state.search = e.target.value;
+      renderStage();
+      var ni = document.getElementById("searchInput");
+      if (ni) { ni.focus(); ni.setSelectionRange(pos, pos); }
+      return;
+    }
+    if (e.target.getAttribute("data-act") === "prompt-edit") {
+      var pt = PROMPTS.find(function (p) { return p.id === state.promptId; });
+      if (!pt) return;
+      var val = e.target.value;
+      if (state.targetScope === "repo") {
+        state.repoDrafts[pt.id + "." + (state.promptBucket === "*" ? "all" : state.promptBucket)] = val;
+      } else {
+        if (!pt.buckets[state.promptBucket]) pt.buckets[state.promptBucket] = {};
+        pt.buckets[state.promptBucket][state.targetScope] = val;
+      }
+      var diffBox = document.getElementById("promptDiff");
+      if (diffBox) {
+        diffBox.innerHTML = computeLineDiff(pt.seed, val).map(function (dl) {
+          var prefix = dl.type === "add" ? "+ " : (dl.type === "del" ? "- " : "  ");
+          return '<div class="diff-line ' + dl.type + '">' + esc(prefix + dl.text) + '</div>';
+        }).join("");
+      }
+    }
+  });
+
+  document.addEventListener("change", function (e) {
+    var act = e.target.getAttribute("data-act");
+    if (act === "input") {
+      applyKnobValue(e.target.getAttribute("data-knob"), e.target.getAttribute("data-bucket"), e.target.value);
+    } else if (act === "tier-edit") {
+      var h = e.target.getAttribute("data-h"), t = e.target.getAttribute("data-t"), f = e.target.getAttribute("data-f");
+      if (state.targetScope !== "global" && state.targetScope !== "project") return;
+      if (!TIER_DATA[h][t][state.targetScope]) {
+        var base = resolveTierCell(h, t).val;
+        TIER_DATA[h][t][state.targetScope] = { backend: base.backend, model: base.model, effort: base.effort };
+      }
+      TIER_DATA[h][t][state.targetScope][f] = e.target.value;
+      showToast("저장됨 · agents.tier[" + h + "." + t + "]");
+      renderStage();
+    }
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") document.documentElement.classList.remove("rail-open");
+  });
+
+  document.getElementById("homeBtn").addEventListener("click", function () {
+    showToast("대시보드 홈 전환 (목업)");
+  });
+
+  renderStage();
+})();
+</script>
+</body>
+</html>
