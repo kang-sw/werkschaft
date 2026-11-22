@@ -10,8 +10,10 @@ import (
 	"github.com/kang-sw/devenv/internal/wswake"
 )
 
-// mailbox_tools.go implements the three host-neutral MCP tools
-// (mailbox.send/mailbox.recv/mailbox.lookup_peers, Decision 5) and the
+// mailbox_tools.go implements the host-neutral MCP tools
+// (mailbox.send/mailbox.recv/mailbox.lookup_peers, Decision 5; the fan-out
+// send and mailbox.recipients live in mailbox_fanout.go and
+// mailbox_groups.go) and the
 // central response-piggyback wrapper (Decision: piggyback badge). Identity,
 // registration, gating, and stamping policy live in mailbox_runtime.go;
 // this file is the thin MCP-argument/response layer over it.
@@ -34,6 +36,13 @@ func (s *Server) handleMailboxSend(id json.RawMessage, args map[string]any) resp
 	if !found {
 		return toolTextResponse(id, "", mailboxUnknownSessionError(tool))
 	}
+	fanOut, err := parseMailboxFanOut(tool, args)
+	if err != nil {
+		return toolTextResponse(id, "", err)
+	}
+	if fanOut != nil {
+		return s.handleMailboxFanOut(id, args, sessionKey, entry, fanOut)
+	}
 	to, err := stringArg(tool, "to", args)
 	if err != nil {
 		return toolTextResponse(id, "", err)
@@ -47,21 +56,96 @@ func (s *Server) handleMailboxSend(id json.RawMessage, args map[string]any) resp
 		return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, err))
 	}
 
-	// The from: stamp claims this process's WS_MAILBOX/WS_MAILBOX_AUTO
-	// identity on the sender's behalf, so it is itself gated by the
-	// caller==owner check (Decision 3: "governs the named slug inbox (send
-	// to it, recv from it, and its piggyback badge)") — a non-owner caller
-	// sharing this process must not be able to claim the owner's slug
-	// identity when sending, only fall back to its own reply-id. An
-	// unbound owner pointer (no ferrule yet) also means nobody may claim it.
-	var from, ownNamed string
+	if entry.isTopLevelLead() {
+		content = stampPeerLeadNote(content, s.currentHarness(), s.runtimeNamespace())
+	}
+	now := mailboxNowString()
+	d, err := s.deliverMailboxCopy(sessionKey, entry, s.mailboxSendIdentity(sessionKey, entry), addr, content, now)
+	if err != nil {
+		return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, err))
+	}
+	s.markMailboxReplyOpened(sessionKey)
+
+	// The send is enqueued: wake the mailbox waits. One this process hosts
+	// (a daemon-hosted server) sees the in-process signal; on the direct
+	// path the daemon's waits learn of it only from the nudge.
+	wswake.Mailbox.Wake()
+	if s.live.host == nil {
+		s.dashboardMailNudge(sessionKey, entry.root)
+	}
+	s.recordLiveMail(sessionKey, d.history, d.historyNames)
+
+	replyID := s.mailboxReplyID(sessionKey)
+	stampLabel, stampValue := d.stamp()
+	result := map[string]any{
+		"to": to, "sent_at": now, "your_reply_id": wsmailbox.ReplyIDPrefix + replyID,
+		"stamp": stampLabel, "stamp_value": stampValue,
+	}
+	if wantsJSON(args) {
+		return toolJSONResponse(id, result, nil)
+	}
+	return toolTextResponse(id, fmt.Sprintf("sent to %s\n%s: %s\nyour_reply_id: %s%s\n", to, stampLabel, stampValue, wsmailbox.ReplyIDPrefix, replyID), nil)
+}
+
+// mailboxSendIdentity is what a send may claim for its sender: the named
+// inbox it owns, if any.
+type mailboxSendIdentity struct {
+	isOwner  bool
+	identity mailboxIdentity
+	ownNamed string
+}
+
+// mailboxSendIdentity resolves the sender's claimable identity once per send.
+// The from: stamp claims this process's WS_MAILBOX/WS_MAILBOX_AUTO identity
+// on the sender's behalf, so it is itself gated by the caller==owner check
+// (Decision 3: "governs the named slug inbox (send to it, recv from it, and
+// its piggyback badge)") — a non-owner caller sharing this process must not
+// be able to claim the owner's slug identity when sending, only fall back to
+// its own reply-id. An unbound owner pointer (no ferrule yet) also means
+// nobody may claim it.
+func (s *Server) mailboxSendIdentity(sessionKey string, entry sessionEntry) mailboxSendIdentity {
 	if isOwner, identity, oerr := s.mailboxOwnerCheck(sessionKey, entry.root); oerr == nil && isOwner {
-		ownNamed = identity.address()
+		return mailboxSendIdentity{isOwner: true, identity: identity, ownNamed: identity.address()}
+	}
+	return mailboxSendIdentity{}
+}
+
+// mailboxDelivery is one enqueued copy: the stamps it carried and the
+// sender's history entry recorded with it.
+type mailboxDelivery struct {
+	from, replyTo string
+	history       []mailboxHistoryEntry
+	historyNames  []string
+}
+
+// stamp is the label and value of the identity the copy carried.
+func (d mailboxDelivery) stamp() (string, string) {
+	if d.from != "" {
+		return "from", d.from
+	}
+	return "reply_to", d.replyTo
+}
+
+// mailboxAddressString is addr's canonical "to" form.
+func mailboxAddressString(addr wsmailbox.Address) string {
+	if addr.Kind == wsmailbox.AddressSlug {
+		return addr.Name + "@" + string(addr.Scope)
+	}
+	return wsmailbox.ReplyIDPrefix + addr.ReplyID
+}
+
+// deliverMailboxCopy enqueues one ordinary envelope carrying content for
+// addr, stamped for that route, and records it in the sender's history. It
+// is one store transaction, so a failed copy changes nothing and a fan-out's
+// other copies are unaffected by it.
+func (s *Server) deliverMailboxCopy(sessionKey string, entry sessionEntry, sender mailboxSendIdentity, addr wsmailbox.Address, content, now string) (mailboxDelivery, error) {
+	var from string
+	if sender.isOwner {
 		switch addr.Kind {
 		case wsmailbox.AddressSlug:
-			from = mailboxFromStamp(identity, addr.Scope, false)
+			from = mailboxFromStamp(sender.identity, addr.Scope, false)
 		case wsmailbox.AddressReplyID:
-			from = mailboxFromStamp(identity, "", true)
+			from = mailboxFromStamp(sender.identity, "", true)
 		}
 	}
 
@@ -70,26 +154,20 @@ func (s *Server) handleMailboxSend(id json.RawMessage, args map[string]any) resp
 	// also holds a durable slug, and records the target as one of the
 	// caller's correspondents. That, the enqueue, and the sender's history
 	// entry are one store transaction: one ring record.
-	counterparty := wsmailbox.ReplyIDPrefix + addr.ReplyID
+	counterparty := mailboxAddressString(addr)
 	var targetPath string
 	if addr.Kind == wsmailbox.AddressSlug {
-		counterparty = addr.Name + "@" + string(addr.Scope)
 		path, perr := s.mailboxPaths().ForScope(addr.Scope, entry.root)
 		if perr != nil {
-			return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, perr))
+			return mailboxDelivery{}, perr
 		}
 		targetPath = path
 	}
 	contact := mailboxContactFor(s.mailboxPaths(), counterparty, entry.root)
-	replyID := s.mailboxReplyID(sessionKey)
-	now := mailboxNowString()
 
 	replyTo := ""
 	if from == "" {
-		replyTo = wsmailbox.ReplyIDPrefix + replyID
-	}
-	if entry.isTopLevelLead() {
-		content = stampPeerLeadNote(content, s.currentHarness(), s.runtimeNamespace())
+		replyTo = wsmailbox.ReplyIDPrefix + s.mailboxReplyID(sessionKey)
 	}
 	envelope := wsmailbox.Envelope{From: from, ReplyTo: replyTo, Content: content, SentAt: now}
 	sent := []mailboxHistoryEntry{{Direction: mailboxHistorySent, Counterparty: counterparty, Body: envelope.Content}}
@@ -97,7 +175,7 @@ func (s *Server) handleMailboxSend(id json.RawMessage, args map[string]any) resp
 	var historyNames []string
 	werr := s.mailboxPaths().Store().Update("send", func(tx *wsmailbox.Tx) error {
 		reply := tx.Reply()
-		s.publishReplyEntry(reply, sessionKey, entry.root, ownNamed, contact)
+		s.publishReplyEntry(reply, sessionKey, entry.root, sender.ownNamed, contact)
 		switch addr.Kind {
 		case wsmailbox.AddressSlug:
 			store, err := tx.Named(targetPath)
@@ -117,31 +195,9 @@ func (s *Server) handleMailboxSend(id json.RawMessage, args map[string]any) resp
 		return nil
 	})
 	if werr != nil {
-		return toolTextResponse(id, "", fmt.Errorf("%s: %w", tool, werr))
+		return mailboxDelivery{}, werr
 	}
-	s.markMailboxReplyOpened(sessionKey)
-
-	// The send is enqueued: wake the mailbox waits. One this process hosts
-	// (a daemon-hosted server) sees the in-process signal; on the direct
-	// path the daemon's waits learn of it only from the nudge.
-	wswake.Mailbox.Wake()
-	if s.live.host == nil {
-		s.dashboardMailNudge(sessionKey, entry.root)
-	}
-	s.recordLiveMail(sessionKey, sent[:len(historyNames)], historyNames)
-
-	stampLabel, stampValue := "reply_to", replyTo
-	if from != "" {
-		stampLabel, stampValue = "from", from
-	}
-	result := map[string]any{
-		"to": to, "sent_at": now, "your_reply_id": wsmailbox.ReplyIDPrefix + replyID,
-		"stamp": stampLabel, "stamp_value": stampValue,
-	}
-	if wantsJSON(args) {
-		return toolJSONResponse(id, result, nil)
-	}
-	return toolTextResponse(id, fmt.Sprintf("sent to %s\n%s: %s\nyour_reply_id: %s%s\n", to, stampLabel, stampValue, wsmailbox.ReplyIDPrefix, replyID), nil)
+	return mailboxDelivery{from: from, replyTo: replyTo, history: sent[:len(historyNames)], historyNames: historyNames}, nil
 }
 
 func (s *Server) handleMailboxRecv(id json.RawMessage, args map[string]any) response {
@@ -162,12 +218,16 @@ func (s *Server) handleMailboxRecv(id json.RawMessage, args map[string]any) resp
 	s.recordLiveMail(sessionKey, history, keys)
 
 	if wantsJSON(args) {
-		return toolJSONResponse(id, drained, nil)
+		return toolJSONResponse(id, s.labelEnvelopes(drained, entry.root), nil)
 	}
 	if len(drained) == 0 {
 		return toolTextResponse(id, "no unread mail\n", nil)
 	}
 	var b strings.Builder
+	// The sender legend, when a sender has a label, is the first line.
+	if legend := s.mailLegendLine(s.envelopeLegendSenders(drained, entry.root)); legend != "" {
+		b.WriteString(legend + "\n")
+	}
 	for _, m := range drained {
 		fmt.Fprintf(&b, "[%s] %s: %s\n", m.SentAt, mailboxSender(m), m.Content)
 	}

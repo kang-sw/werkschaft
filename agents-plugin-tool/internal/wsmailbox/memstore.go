@@ -76,6 +76,18 @@ func (p Paths) Store() Store {
 	return Store{paths: p, ringDir: filepath.Join(root, RingDirName)}
 }
 
+// RingIdentity is the canonical identity of s: its restore ring's directory
+// under the resolved cache root, the one key by which every caller of that
+// cache root reaches the same named queues, reply-id registry, and queue
+// ownership. Two stores with different identities never share a queue,
+// whatever the queue's name. Empty when s did not resolve.
+func (s Store) RingIdentity() string {
+	if s.err != nil {
+		return ""
+	}
+	return s.ringDir
+}
+
 // rawCacheRoot is p's cache root as configured, before symlink resolution:
 // a scope path resolved while the root did not exist yet starts with it.
 func rawCacheRoot(p Paths) string {

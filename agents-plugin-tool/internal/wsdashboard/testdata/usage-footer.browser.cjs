@@ -54,7 +54,15 @@ function entries(variant) {
         await page.locator('.usage-number').first().waitFor();
         assert.equal(await page.locator('.usage-column').count(), variant === 'weekly' ? 1 : 3);
         assert.equal(await page.locator('.usage-clock').count(), variant === 'stale' ? 1 : 0);
-        assert.equal(await page.locator('.usage-pace').first().textContent(), variant === 'over' ? '+31%' : variant === 'weekly' ? '−7%' : '−13%');
+        if (variant === 'stale') {
+          const staleCols = page.locator('.usage-column.usage-stale');
+          assert.equal(await staleCols.count(), 2);
+          assert.deepEqual(await staleCols.locator('.usage-number').allTextContents(), ['—', '—']);
+          assert.equal(await staleCols.locator('.usage-pace').count(), 0);
+          assert.equal(await page.locator('.usage-pace').first().textContent(), '−7%');
+        } else {
+          assert.equal(await page.locator('.usage-pace').first().textContent(), variant === 'over' ? '+31%' : variant === 'weekly' ? '−7%' : '−13%');
+        }
         // One 34px handle row; each badge mark (with its stale clock) clear of its columns.
         const handle = await page.locator('.usage-toggle').boundingBox();
         assert.equal(handle.height, 34, `${theme}/${width}/${variant}: one 34px handle`);
@@ -64,8 +72,14 @@ function entries(variant) {
         }));
         assert.ok(clear, `${theme}/${width}/${variant}: marks clear of the columns`);
         if (variant === 'stale') {
-          const tones = await page.locator('.usage-column').first().evaluate(e => ({ current: getComputedStyle(e).color, pace: getComputedStyle(e.querySelector('.usage-pace')).color, dotted: getComputedStyle(e.querySelector('.usage-number')).textDecorationStyle }));
-          assert.equal(tones.current, tones.pace); assert.equal(tones.dotted, 'dotted');
+          const staleStyle = await page.locator('.usage-column.usage-stale').first().evaluate(e => ({
+            decorationLine: getComputedStyle(e.querySelector('.usage-number')).textDecorationLine,
+            decorationStyle: getComputedStyle(e.querySelector('.usage-number')).textDecorationStyle,
+            hasPace: !!e.querySelector('.usage-pace'),
+          }));
+          assert.equal(staleStyle.hasPace, false);
+          assert.equal(staleStyle.decorationLine, 'none');
+          assert.notEqual(staleStyle.decorationStyle, 'dotted');
         }
         const prefix = `${theme}-${width}-${variant}`;
         const expected = await reference.locator('.sr4-h[data-a="usage"]').screenshot({ path: path.join(output, `${prefix}-mockup.png`) });
@@ -82,6 +96,13 @@ function entries(variant) {
         await dialog.waitFor({ state: 'visible' });
         assert.equal(await button.getAttribute('aria-expanded'), 'true');
         assert.ok((await dialog.textContent()).includes(variant === 'weekly' ? 'Codex' : 'Claude')); // harness names, never the source
+        if (variant === 'stale') {
+          const staleCards = dialog.locator('.usage-window-card.usage-stale');
+          assert.equal(await staleCards.count(), 2);
+          assert.deepEqual(await staleCards.locator('.usage-number').allTextContents(), ['—', '—']);
+          assert.equal(await staleCards.locator('.usage-pace').count(), 0);
+          assert.equal(await staleCards.locator('.usage-no-report').count(), 2);
+        }
         await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'hidden' });
         assert.equal(await button.getAttribute('aria-expanded'), 'false');
         assert.equal(await button.evaluate(e => e === document.activeElement), true);

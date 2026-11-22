@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -71,6 +72,11 @@ type proxyHost struct {
 	exec   atomic.Pointer[execjob.Hosted]
 	boards *mcp.WhiteboardStores
 	notes  *wsnote.Cache
+	// mailLabels resolves mail sender labels for every hosted server
+	// (mcp.ServerOptions.MailLabels). The servers share the process's group
+	// store, so a recipient on one connection expands a group mail another
+	// connection sent.
+	mailLabels mcp.MailLabelFunc
 }
 
 // wait blocks until the replacement goroutine, if any, has ended.
@@ -100,6 +106,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 			OwnerPID:     hello.OwnerPID,
 			Harness:      hello.Harness,
 			Diag:         prefixedWriter{w: h.logw, prefix: fmt.Sprintf("dashboard: session pid %d: ", hello.OwnerPID)},
+			MailLabels:   h.mailLabels,
 		}
 		if d := h.live.Load(); d != nil {
 			opts.Live = d
@@ -380,15 +387,41 @@ func daemonStart(args []string) {
 	daemonStartWithEnsure(args, wsdashboard.Ensure)
 }
 
+func desktopPredecessor(input io.Reader) (*wsdashboard.DaemonIdentity, error) {
+	const limit = 4096
+	raw, err := io.ReadAll(io.LimitReader(input, limit+1))
+	var expected *wsdashboard.DaemonIdentity
+	if err != nil || len(raw) > limit || json.Unmarshal(raw, &expected) != nil {
+		return nil, fmt.Errorf("invalid desktop predecessor input")
+	}
+	if expected != nil {
+		hash, err := hex.DecodeString(expected.TokenHash)
+		if err != nil || len(hash) != 32 || expected.PID <= 0 || expected.Port <= 0 ||
+			expected.Port > 65535 || expected.Version == "" {
+			return nil, fmt.Errorf("incomplete desktop predecessor identity")
+		}
+	}
+	return expected, nil
+}
+
 func daemonStartWithEnsure(args []string, ensure func(context.Context, wsdashboard.EnsureOptions) (wsdashboard.Outcome, error)) {
 	fs := flag.NewFlagSet("daemon-start", flag.ExitOnError)
 	buildTime := fs.Int64("build-time", 0, "the build time of the ws-mcp this daemon stands for, in Unix milliseconds; 0 reads this executable's modification time")
 	startWait := fs.Duration("start-wait", 0, "how long to wait for a started daemon; 0 means the default")
 	replace := fs.Bool("replace", false, "explicitly replace an equal-core daemon once, even with identical content; never downgrade a newer core")
 	independent := fs.Bool("require-independent-lifetime", false, "Windows Electron: prestart before drain, preferring independent lifetime (explicit job-lifetime retry supported)")
+	desktop := fs.Bool("desktop-start", false, "prestart before drain, with an observed predecessor identity or null read from stdin")
 	_ = fs.Parse(args)
 	if *independent && runtime.GOOS != "windows" {
 		fatal("daemon-start", fmt.Errorf("--require-independent-lifetime is Windows-only"))
+	}
+	var predecessor *wsdashboard.DaemonIdentity
+	if *desktop {
+		var err error
+		predecessor, err = desktopPredecessor(os.Stdin)
+		if err != nil {
+			fatal("daemon-start", err)
+		}
 	}
 
 	server := mcp.NewServer(defaultRoot("."), version, sourceCommit)
@@ -423,7 +456,7 @@ func daemonStartWithEnsure(args []string, ensure func(context.Context, wsdashboa
 		*buildTime = wsdashboard.ExecutableBuildTime(exe)
 	}
 	spawn := func(args []string) error {
-		if *independent {
+		if *independent || *desktop {
 			// The child may wait on dashboard.lock while the old daemon drains.
 			return wsdashboard.SpawnDetachedStrict(exe, append(args, "--lock-wait", "8s"), dir)
 		}
@@ -433,20 +466,28 @@ func daemonStartWithEnsure(args []string, ensure func(context.Context, wsdashboa
 		}
 		return wsdashboard.SpawnDetached(launchExe, args, dir)
 	}
-	outcome, err := ensure(ctx, wsdashboard.EnsureOptions{
+	opts := wsdashboard.EnsureOptions{
 		Dir:                 dir,
 		Version:             version,
 		BuildTime:           *buildTime,
 		ContentHash:         wsdashboard.ExecutableContentHash(exe),
 		Replace:             *replace,
-		SpawnBeforeShutdown: *independent,
-		PreserveRunningLAN:  *independent,
+		SpawnBeforeShutdown: *independent || *desktop,
+		PreserveRunningLAN:  *independent || *desktop,
+		DesktopStart:        *desktop,
+		Predecessor:         predecessor,
 		Port:                settings.Port,
 		LAN:                 lan,
 		Spawn:               spawn,
 		StartWait:           *startWait,
 		Log:                 os.Stderr,
-	})
+	}
+	if *desktop && predecessor != nil {
+		opts.PrepareSuccessor = func(args []string) (func(bool) error, error) {
+			return wsdashboard.PrepareDetachedSuccessor(exe, append(args, "--lock-wait", "8s", "--desktop-preflight"), dir)
+		}
+	}
+	outcome, err := ensure(ctx, opts)
 	if err != nil {
 		fatal("daemon-start", err)
 	}

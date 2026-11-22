@@ -77,7 +77,7 @@ function fixture({ layout = 'auto', width = 1920, live = true, worktree = '', co
     vm.runInContext(readAssetSource('wsdashboard', 'preview.js'), context);
     context.window.WsPreview.open = (path, options) => events.push(['card', path, options]);
     // Execute the production constructor and its closed callback, not a source assertion.
-    vm.runInContext(block('    if (live && !worktree && window.WsPreview) {', '    window.WsCards.mount(cardBoard,'), context);
+    vm.runInContext(block('    if (live && !worktree && fpane && window.WsPreview) {', '    window.WsCards.mount(cardBoard,'), context);
     const pane = context.filePreview, open = pane.open, close = pane.close;
     pane.open = (path, options) => { events.push(['pane', path, options]); return open(path, options); };
     pane.close = () => { if (pane.current()) events.push('close'); return close(); };

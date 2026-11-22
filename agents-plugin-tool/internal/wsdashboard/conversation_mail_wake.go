@@ -28,6 +28,29 @@ func trimRelationLine(body string) string {
 	return body
 }
 
+// headLine is the first line of a wake's head region: the batch head
+// formatMailBatch writes. A delivery may add the sender legend as the
+// region's second line, so every batch-head match reads the first line
+// only.
+func headLine(head string) string {
+	line, _, _ := strings.Cut(head, "\n")
+	return line
+}
+
+// trimMailLegend mirrors mcp.trimMailLegend: a wake text whose submission
+// had no batch head may open with the sender legend as its own one-line
+// paragraph ahead of its "mail from" head; this is the text without it.
+func trimMailLegend(text string) string {
+	if !strings.HasPrefix(text, "[senders: ") {
+		return text
+	}
+	line, rest, ok := strings.Cut(text, "\n\n")
+	if !ok || strings.Contains(line, "\n") || !strings.HasSuffix(line, "]") || !strings.HasPrefix(rest, "mail from ") {
+		return text
+	}
+	return rest
+}
+
 // Present an unambiguous single-message wake as its stored mail. This is a
 // display association, not delivery identity: keep both keys and raw wake
 // diagnostics, but suppress the mail row at its original position. History
@@ -44,7 +67,7 @@ func linkMailWakes(entries []ConvEntry, self string) {
 		if !ok {
 			continue
 		}
-		batch := mailBatchHead.FindStringSubmatch(head)
+		batch := mailBatchHead.FindStringSubmatch(headLine(head))
 		if len(batch) != 2 || self == "" {
 			continue
 		}
@@ -107,10 +130,12 @@ func collapseBoardNudges(entries []ConvEntry) {
 			continue
 		}
 		head, _, _ := strings.Cut(e.Text, "\n\n")
-		if count := nudgeBatchSize(head); count > 0 {
+		if count := nudgeBatchSize(headLine(head)); count > 0 {
 			remaining = count
 			run, source = -1, e.Source
-		} else if e.Source != source || strings.HasPrefix(e.Text, "[") {
+		} else if e.Source != source || strings.HasPrefix(trimMailLegend(e.Text), "[") {
+			// A member's own sender legend (its steer had no batch head)
+			// is no new head.
 			remaining = 0
 		}
 		if remaining <= 0 {
@@ -136,7 +161,8 @@ func collapseBoardNudges(entries []ConvEntry) {
 }
 
 // Board nudges have no peer or retained ring mail. Each text is one envelope,
-// optionally preceded by the batch header; unfamiliar diagnostics stay raw.
+// optionally preceded by the batch header (with a sender legend as its second
+// line) or by a legend line alone; unfamiliar diagnostics stay raw.
 func (e ConvEntry) boardNudge() (reasons, topics []string) {
 	if !e.MailWake() || e.Truncated || e.Peer != "" {
 		return nil, nil
@@ -189,8 +215,8 @@ func nudgeBatchSize(head string) int {
 }
 
 func boardNudgeMail(text string) (reasons, topics []string) {
-	envelope := text
-	if head, rest, ok := strings.Cut(text, "\n\n"); ok && nudgeBatchSize(head) > 0 {
+	envelope := trimMailLegend(text)
+	if head, rest, ok := strings.Cut(text, "\n\n"); ok && nudgeBatchSize(headLine(head)) > 0 {
 		envelope = rest
 	}
 	from, body, ok := strings.Cut(envelope, ":\n")

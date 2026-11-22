@@ -1109,3 +1109,18 @@ func TestAgyWorkerReattachSuspendsNativeFailureForPendingToolOrApproval(t *testi
 		})
 	}
 }
+
+// TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt pins that agy's
+// direct tool list carries mailbox.recipients beside mailbox.send and
+// mailbox.recv: a fan-out copy's group marker tells its recipient to call it,
+// and a hosted agy lead lists only these tools directly.
+func TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt(t *testing.T) {
+	_, reg := (AgyBackend{}).registration()
+	for _, name := range []string{"mailbox.send", "mailbox.recv", "mailbox.recipients"} {
+		if n := slices.Index(reg.DirectTools, name); n < 0 {
+			t.Fatalf("agy DirectTools lacks %s: %v", name, reg.DirectTools)
+		} else if slices.Index(reg.DirectTools[n+1:], name) >= 0 {
+			t.Fatalf("agy DirectTools lists %s twice: %v", name, reg.DirectTools)
+		}
+	}
+}

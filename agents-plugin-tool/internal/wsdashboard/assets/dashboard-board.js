@@ -394,7 +394,7 @@
     // functions, and cchips is not yet assigned here.
     if (window.WsWeb) window.WsWeb.setup($("cchips") ? { post: post, toast: toast, rid: rid, addPick: addWebPick, addConsole: addWebConsole } : { post: post, toast: toast, rid: rid });
     var dbody = cardBoard.closest(".dbody");
-    if (live && !worktree && window.WsPreview) {
+    if (live && !worktree && fpane && window.WsPreview) {
       var previewPane = doc.createElement("section");
       previewPane.className = "file-preview-pane";
       previewPane.setAttribute("aria-label", fpane.getAttribute("aria-label"));

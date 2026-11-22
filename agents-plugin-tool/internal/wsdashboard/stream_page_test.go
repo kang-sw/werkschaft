@@ -103,6 +103,7 @@ function tlHold(name) { log.push("hold:" + name); }
 function modeChanged(m) { log.push("mode:" + m); }
 function syncBadge() {}
 function banner(text) { log.push("banner:" + text); }
+function CustomEvent(type, options) { this.type = type; this.detail = options.detail; }
 `+open+connect+`
 connect();
 check("one socket with the held hashes", sockets.map(function (s) { return s.url; }), ["ws://localhost:1234/s/rid1/events?h=" + encodeURIComponent("board.1,head.2") + "&topics=1&railrows=1&treerows=1&entryrows=1&panelrows=1&display=1"]);
@@ -147,9 +148,24 @@ check("the index stream", sockets[2].url, "ws://localhost:1234/events?h=" + enco
 shell = true;
 connect();
 check("the shell opts into rail rows", sockets[3].url, "ws://localhost:1234/rail/events?h=" + encodeURIComponent("board.3,head.4") + "&railrows=1&display=1");
+var companionUpdates = [], companion = {mode: "visual", director: "rules", pack: "auto", preset: "werkschaft-d1"};
+doc.addEventListener("ws-companion-config", function (e) { companionUpdates.push(e.detail); });
+sockets[3].msg("companion", companion);
+check("the shell publishes the live companion settings", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
 shell = false; framed = true; mode = "session";
 connect();
 check("the frame requests tree but not absent rail rows", sockets[4].url, "ws://localhost:1234/s/rid1/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&treerows=1&entryrows=1&panelrows=1&display=1");
+sockets[4].msg("companion", {mode: "off"});
+check("a frame leaves the shell companion settings alone", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
+var companionReads = [];
+// The empty panel region establishes the last keyed baseline on reconnect.
+doc.createElement = function () { return { childNodes: [], children: [], innerHTML: "" }; };
+companionRelay = { board: function (html) { companionReads.push(html); }, reconcile: function (ready) { companionReads.push(ready); } };
+sockets[4].msg("region", {name: "board", hash: "catch-up", html: "<p>reconciled board</p>"});
+sockets[4].msg("region", {name: "panels", hash: "held", html: ""});
+sockets[4].msg("region", {name: "panels", hash: "live", html: ""});
+check("companion baselines the canonical board at the first panel render", companionReads, ["<p>reconciled board</p>", true]);
+companionRelay = null;
 worktree = "/fixture";
 connect();
 check("worktree excludes tree rows", sockets[5].url, "ws://localhost:1234/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&display=1");

@@ -91,9 +91,13 @@
       if (sticky) offset = (parseFloat(style.top) || 0) + head.offsetHeight;
       var host = topic && (topic.closest('.gal-pane') || topic.closest('#bcol') || topic.closest('.wrap'));
       var wrap = host && host.querySelector('.oq-wrap.wb-oq-top'), pill = wrap && wrap.querySelector('.oq-pill');
-      if (pill && !pill.hidden) {
+      // The top pill hides only at the scroller's home with nothing above,
+      // so its slot counts while hidden too: a landing that reveals it must
+      // not move the destination (its CSS height reads while hidden).
+      var pillH = pill ? pill.offsetHeight || parseFloat(window.getComputedStyle(pill).height) || 0 : 0;
+      if (pillH) {
         var pillTop = parseFloat(window.getComputedStyle(wrap).top) || 0;
-        offset = Math.max(offset + (sticky ? 10 + pill.offsetHeight : 0), pillTop + pill.offsetHeight);
+        offset = Math.max(offset + (sticky ? 10 + pillH : 0), pillTop + pillH);
       }
       return offset;
     }

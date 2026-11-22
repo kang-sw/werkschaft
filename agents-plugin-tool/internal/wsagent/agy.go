@@ -61,7 +61,7 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		CallFallback:    true,
 		DirectTools: []string{
 			"workflow_manual", "workflow_state", "agenda.set", "agenda.list", "agenda.clear",
-			"whiteboard.update", "whiteboard.query", "mailbox.send", "mailbox.recv",
+			"whiteboard.update", "whiteboard.query", "mailbox.send", "mailbox.recv", "mailbox.recipients",
 			"agent.spawn", "agent.interrupt", "agent.list", "playbook.read", "playbook.render",
 			"tickets.query", "tickets.move", "git.status", "git.log", "git.commit", "git.merge",
 			"worktree.acquire", "worktree.release", "note.query", "note.write",

@@ -1,0 +1,929 @@
+---
+title: "Werkschaft 데스크톱 셸을 일렉트론에서 타우리로 전환"
+related:
+  261117-research-werkschaft-tauri-shell-revisit: "Phase 4 answers Questions 1–6"
+  261115-feat-werkschaft-electron-shell: "Shipping shell and unresolved Phases 2–4"
+  261115-feat-werkschaft-electron-daemon-override: "Bundled-daemon behavior and packaged acceptance reference"
+  261121-feat-ws-dashboard-inpage-dialogs: "Completed pre-Tauri work and existing close, DevTools, login-link, and refusal decisions"
+  261115-feat-ws-daemon-release-auto-update: "Separate release-download daemon updater"
+  261120-feat-desktop-canary-release-channel: "Shipped stable, canary opt-in, and stable-return behavior"
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: cc5b4b3b24146e2e
+sage-review-completeness-reviewed: cc5b4b3b24146e2e
+completed: 2026-11-22
+---
+
+# Return the Werkschaft desktop shell to Tauri
+
+## Background
+
+On 2026-11-21 at 20:05 KST, after merge `71957269a`, the owner treated the
+in-page dialogs as done and directed the team to move on to the Tauri shell.
+`261121-feat-ws-dashboard-inpage-dialogs` completed pre-study work units 1–3.
+This ticket covers units 4–7 in order. The older thin-shell sizing report
+describes an attach-only starting point. The release candidate needs the
+current packaged shell's daemon lifecycle and distribution behavior.
+
+## Decisions
+
+- Return Werkschaft to the retained Tauri shell for macOS and Windows, with
+  the shipped Electron build as the comparison baseline. Carry forward the
+  completed dashboard confirmations, draft recovery, and non-blocking
+  daemon-replacement refusal behavior. The prior owner decisions require
+  DevTools in release builds and prompt-free OS close when the draft can
+  recover. See `261121-feat-ws-dashboard-inpage-dialogs` (2020)–(2024).
+- The compatibility target for reusing the daemon contract and adding the
+  Tauri release path alongside Electron is **T0**. The existing cross-minor
+  daemon boundary remains **T3**.
+
+- (2049) Keep the separate release-download daemon updater on its own ticket.
+  See `261115-feat-ws-daemon-release-auto-update` and
+  `261115-feat-werkschaft-electron-daemon-override` decision (1201).
+- (2050) Carry forward explicit canary opt-in and stable return for shell
+  updates. See `261120-feat-desktop-canary-release-channel` Phases 2–3.
+- (2051) Include the Evergreen WebView2 bootstrapper in the Windows
+  installer. Windows 11 ships the runtime and most Windows 10 receives it
+  through Windows Update; it may be missing on Windows Server, LTSC/IoT,
+  update-blocked managed or offline images, and long-unpatched Windows 10.
+  Rejected: a portable build with a supported runtime prerequisite.
+- (2052) Enable Tauri's `devtools` Cargo feature explicitly in the release
+  build or default feature set; on Windows use Open Developer Tools because
+  WebView2 lacks the Wry toggle behavior. Decision (2021) in
+  `261121-feat-ws-dashboard-inpage-dialogs` requires the release menu and
+  shortcuts. Rejected: relying on Wry toggle behavior on Windows.
+- (2053) Use Windows `CloseRequested` as a fallback for legacy renderers or
+  failed recovery. Decision (2020) in
+  `261121-feat-ws-dashboard-inpage-dialogs` requires prompt-free close when
+  recovery is available. Rejected: leaving fallback cases to the webview.
+- (2054) Add a narrowly scoped WebView2 subframe navigation hook where the
+  existing sandbox and daemon policy cannot enforce Electron's frame boundary.
+  Rejected: relying on Tauri's top-level callback alone.
+- (2055) Keep update actions in Settings through an optional, pinned-main-frame
+  bridge with bounded operations. Rejected: moving them to native menus.
+- (2056) Use `tauri-plugin-updater` with signed NSIS/MSI and `.app.tar.gz`
+  update artifacts; Windows changes from portable zip to installer.
+  Rejected: porting the custom zip updater.
+- (2057) The owner accepted replacing the separate Electron bridge with
+  (2065)=a: the existing Electron updater swaps in Tauri-compatible payloads
+  from each stable release. With (2060)=b, Windows SmartScreen may show a
+  first-run warning the user must accept. Rejected: a separate Tauri install
+  that Electron only points to.
+- (2058) Keep `261115-feat-werkschaft-electron-shell` Phases 2–4 open until
+  Tauri passes P4, then re-home overlapping reliability and Windows delivery
+  work to Tauri. Its Phase 4 grant remains conditional on a need for new
+  shell-only HTTP authority; see that ticket's decision (859)=a and Phases
+  2–4. Rejected: keeping the phases open indefinitely.
+- (2059) Inherit Electron's automatic newer-core bundled-daemon replacement
+  across minors, consistent with
+  `261115-feat-werkschaft-electron-daemon-override` (1343)=a. Older plugins
+  at the minor boundary need updating and restarting. Rejected: requiring an
+  explicit action at the minor boundary.
+- (2060) P4 accepts signed updater artifacts plus documented OS signing
+  requirements. Defer OS code signing and macOS notarization to the Electron
+  retirement decision. Rejected: requiring OS signing and notarization in P4.
+- (2061) P4 records paired measurements and the owner decides from them;
+  no thresholds are set now. Rejected: fixed thresholds now.
+
+- (2065)=a [policy, owner-confirmed] Ship no separate Electron bridge release.
+  Every Tauri stable release attaches `Werkschaft-<platform>-<arch>.zip`
+  and `Werkschaft-desktop-SHA256SUMS`, with Tauri payloads. The existing
+  Electron updater reads only `releases/latest` for stable checks and canary
+  stable return (`agents-plugin-tool/desktop-electron/update.js:512-518`,
+  `554-562`), selects named assets using `browser_download_url` (73-92),
+  validates the SHA-256 and extracted `Werkschaft.exe` or
+  `Werkschaft.app/Contents/MacOS/Werkschaft` (185-197), swaps the folder or
+  app and relaunches the executable or opens the app (296, 257). Thus even
+  the first shipped Electron release and canary installs returning to stable
+  migrate in one update click. Rejected: a one-time Electron bridge plus
+  manual reinstall and a no-zip notice in the next Electron release; CI
+  re-uploading the approximately 200 MB bridge zip to each stable release
+  until the next minor, since GitHub has no cross-release asset reference.
+- (2068)=ok [technical, owner-acknowledged] The Windows zip contains a small
+  `Werkschaft.exe` launcher and the Tauri per-user NSIS installer. On the
+  first run of each delivered payload the launcher silently installs its
+  bundled Tauri version per-user, then launches it and exits. Subsequent runs
+  launch the installed app. The NSIS installer's built-in WebView2
+  install mode covers missing runtimes including the (2051) Server, LTSC,
+  and update-blocked scope. Keep the legacy Electron folder as the forwarding
+  launcher so old shortcuts work; the Tauri app carries no migration code.
+  The macOS zip contains the Tauri `Werkschaft.app` directly, using system
+  WKWebView; Tauri's macOS updater also replaces the app in place. Rejected:
+  Tauri self-relocation on first run, which cannot start without WebView2 and
+  breaks old shortcuts.
+- (2070)=a [policy, owner-confirmed] Refine (2068): the first run of a newly
+  delivered launcher payload installs exactly its bundled Tauri version,
+  including a downgrade, so Electron's Back to stable works even with a newer
+  Tauri canary installed (`desktop-electron/test/update-canary.test.js:141-171`).
+  A small per-user marker, keyed by the launcher payload and stored under the
+  current user's profile (not beside the shared portable launcher), records
+  the bundled version after a successful install, allowing a failed install
+  to be retried; another Windows account running the same portable launcher
+  therefore still gets its own per-user install. Every later
+  run only launches the installed app, preserving
+  updates installed by Tauri's own updater. Rejected: open any equal-or-newer
+  installed build, which defeats Back to stable.
+- (2066)=a [policy, owner-confirmed] Do not migrate draft-recovery
+  records, including IndexedDB image blobs and delivery-unknown records
+  (`agents-plugin-tool/internal/wsdashboard/assets/dashboard-lifecycle.js:90-112`,
+  `185-206`): Electron's origin-scoped IndexedDB cannot move to WebView2 or
+  WKWebView. Before swapping, the Electron side should warn about unsent
+  drafts and ask users to send or discard them first, but this warning exists
+  only if a future Electron release adds it. The existing updater performs
+  the (2065) swap without that warning, so installs updating directly from
+  older Electron versions migrate without warning. Retain the Electron
+  profile for rollback and delete it only in a later release; reinstalling
+  Electron reopens the retained profile. Rejected: export/import of draft
+  recovery data; deleting the profile immediately.
+- (2069)=b [policy, owner-confirmed] Supersede the settings part of (2066):
+  migrate no Electron shell settings. Electron persists only a development
+  daemon-selection file containing an absolute development-checkout root
+  (`agents-plugin-tool/desktop-electron/daemon-selection.js:130-145`); window
+  bounds use fixed launch defaults (`desktop-electron/main.js:100-108`) and
+  the channel follows the running version (`desktop-electron/main.js:509-514`,
+  `desktop-electron/update.js:756-758`). End users have no persisted settings
+  to carry. Tauri starts with default window settings and a channel derived
+  from the installed build's version; developers re-set any daemon override
+  in Tauri. Neither Tauri nor the launcher imports settings. Rejected: Tauri
+  first-launch import of the Electron daemon-selection file.
+
+## Constraints
+
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for `agents-plugin/`, `agents-plugin-wsflow/`, `agents-plugin-tool/`)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for `agents-plugin-tool/internal/`)
+- Convention: ai-docs/manuals/performance.md (declared for `agents-plugin-tool/`)
+- Electron keeps shipping until Phase 4 passes; publish the Tauri migration
+  assets after that gate. Retirement or deletion of
+  `agents-plugin-tool/desktop-electron/`, and removal of shipped
+  functionality, require a separate owner decision.
+- Reuse the daemon-served dashboard and exact verified loopback origin.
+  Keep the endpoint bearer native, preserve browser and preview boundaries,
+  and keep shell-only actions away from external pages and child frames.
+  A new scoped HTTP grant needs its own justified contract.
+- Apply (2069) defaults without a settings importer; retain the Electron
+  profile and exclude drafts under (2066). Apply (2070)'s per-payload marker
+  and exact first-run install, including downgrades, with later launcher runs
+  preserving Tauri self-updates. Electron's swap helper rolls back failed
+  file moves only: on Windows it records success before starting the forwarder
+  and does not wait for NSIS; on macOS it removes the backup before opening
+  Tauri (`desktop-electron/update.js:246-258, 283-307`). Post-swap installer
+  and first-launch failures need a retry or Electron reinstall recovery path.
+- Follow `ai-docs/manuals/shipped-surface-boundary.md` for shipped text,
+  `ai-docs/manuals/performance.md` for storage types, file-operation counts,
+  interactive I/O, and Windows antivirus costs, and
+  `ai-docs/manuals/release-compatibility.md` for daemon and updater surfaces.
+- **Compatibility gate.** P1/P2 target **T0** for reuse of the existing
+  endpoint, health, cookie, and daemon-start contracts and for any optional
+  shell hooks which old pages can ignore. The daemon writes the endpoint,
+  the shell reads it and requests the cookie under existing machine auth,
+  and neither shell rewrites the daemon's file through those calls
+  (`desktop-electron/endpoint.js` `readEndpoint` and `browserCookie`,
+  `internal/wsdashboard/localhost_auth.go` `machineAuth` and
+  `handleAuthCookie`, under `agents-plugin-tool/`). P3 targets **T0** for
+  parallel artifacts and optional update controls while the Electron
+  updater still finds its zip/SUMS and each shell reads its own updater
+  state. For existing installs, the old Electron updater reads the new stable
+  release zip and SUMS and swaps the payload in place (2065); Windows old
+  shortcuts read the retained launcher, which installs the exact bundled
+  version on the payload's first run and subsequently opens the installed
+  Tauri (2068, 2070). No Electron settings are imported (2069). The Electron
+  profile remains available when Electron is reinstalled (2066); draft
+  records do not cross webview origins. Failed moves have Electron rollback;
+  post-swap failures require retry or reinstall. Record the directional tier and
+  remaining old/new readers, writers and fallback evidence before promotion,
+  then verify the actual result in P4.
+  The existing cross-minor hello refusal is **T3**
+  (`agents-plugin-tool/internal/wsdashboard/proxy.go`, hello validation).
+  A new T3 boundary requires explicit owner approval and a minor bump.
+  T4 cannot ship.
+- Scope verification to owned test processes, disposable app profiles,
+  and isolated daemon endpoints and caches. Follow the Windows host limits
+  in `261117-research-werkschaft-tauri-shell-revisit`.
+
+## Prior Art
+
+- `agents-plugin-tool/desktop/` is the retained macOS attach-only baseline.
+  `agents-plugin-tool/desktop-electron/` is the packaged reference for
+  daemon selection and staging, native cookie and login-link flows,
+  recovery, navigation, and updater rollback.
+- `agents-plugin-tool/desktop-electron/scripts/assemble-daemon-input.cjs`
+  validates the native binary and runtime inventory and assembles resources
+  and skills with the matching daemon. `.github/workflows/ws-mcp-release.yml`
+  builds the darwin-arm64 and win32-x64 Electron archives and publishes
+  stable and canary assets for the native and desktop builds.
+
+## Prior Decisions
+
+- 0fcecf155 (2026-11-21, commit): "IndexedDB recovery preserves blob and delivery state through the old renderer's whole-record localStorage writes." — bearing: constrains
+- 261117-research-werkschaft-tauri-shell-revisit (2026-11-17, Confirmed Decisions): "(1279)=a, 2026-11-17: keep Electron for now. Prioritize performance and the auto-updater, then use this research to decide whether to return to Tauri." — bearing: supports
+- 261115-feat-ws-daemon-release-auto-update (2026-11-15, Decisions): "The user's apply click is the single exception" — bearing: contradiction-candidate
+- 261113-feat-werkschaft-thin-tauri-shell (2026-11-15, Resolution): "This ticket's unimplemented Phases 2-4 were re-homed to 261115-feat-werkschaft-electron-shell as its Phases 2-4, rewritten for Electron" — bearing: supports
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | agents-plugin-tool/desktop/, agents-plugin-tool/desktop-electron/, .github/workflows/ws-mcp-release.yml |
+| scope.surface | cross-module | Tauri host, daemon contracts, dashboard update bridge and release pipeline |
+| scope.new_public_symbol | unknown | Optional shell update bridge is planned but its exported names are not specified |
+| scope.new_type_contract | unknown | Update bridge operations and migration contracts are not specified as signatures |
+| scope.test_surface | existing | agents-plugin-tool/desktop/scripts/test_build_slot.py, agents-plugin-tool/desktop-electron/test/, agents-plugin-tool/internal/wsdashboard/testdata/desktop-update.browser.cjs |
+| complexity.reuse_points | confirmed | agents-plugin-tool/desktop/README.md; agents-plugin-tool/desktop-electron/endpoint.js and scripts/assemble-daemon-input.cjs |
+| complexity.side_effect_risk | high | Daemon replacement and installed-app migration affect live processes and user data |
+| risk.correctness | high | Cross-platform lifecycle, update recovery and migration must preserve existing sessions and data |
+| risk.fit | high | The retained attach-only host must match the packaged Electron shell and established dashboard behavior |
+| risk.test | high | Packaged macOS and Windows acceptance, runtime-absent images and paired measurements are required |
+| risk.security_or_contract | high | Authenticated loopback, frame isolation, signed updates and cross-version daemon boundaries are involved |
+
+## Phases
+
+### Phase 1: Refresh the Tauri baseline and deliver the cross-platform shell core
+
+Bring the retained `desktop/` host up on darwin and win32. Attach to a
+health-checked existing daemon using the cache-root override and the
+existing machine-authenticated cookie flow. Retain the login gate when
+cookie minting is unavailable. Handle daemon or renderer failure with
+rediscovery, Retry, and bounded redacted diagnostics. Provide local
+connection and Python-missing views, native menu and zoom actions,
+the Copy Browser Login Link action, and second-instance restore and
+focus. Preserve the `Werkschaft/` user-agent token and in-page dialog
+and draft behavior. Enable release DevTools, use Open Developer Tools on
+Windows, and provide the `CloseRequested` fallback for legacy renderers or
+failed recovery. Add the scoped WebView2 subframe hook where needed to
+enforce the frame boundary.
+
+Verify the exact dashboard origin, external link handoff, blocked schemes,
+popups, and subframes. Cover `tauri://localhost` on macOS and
+`http://tauri.localhost` on Windows, including which local pages may
+request shell actions. Keep HTML5 file drops and clipboard behavior
+working under WebView2's native drop handling and clipboard permission
+model. Exercise the approved release DevTools and close behavior on
+both platforms. Prove that failed health or cookie checks leave a
+usable retry or login surface and that close leaves the daemon running.
+
+### Result (4706360a9) - 2026-11-21
+
+The Tauri release shell attaches on macOS and targets Windows x64. It
+discovers the existing daemon, pins the health-checked origin, sets the
+browser cookie natively, and preserves the login gate when cookie setup is
+unavailable. Connection Retry, the Python guide, the native browser login
+link action, release DevTools and zoom, single-instance restore, and bounded
+failure recovery are implemented. The native navigation delegates gate
+top-level and subframe navigation separately. The WKWebView and WebView2
+paths admit the platform's bundled pages only at the top level. The
+dashboard and bundled pages have zero native command permissions.
+
+- T0. The daemon's existing machine authentication and browser-cookie route
+  remain the writers of auth state
+  (`agents-plugin-tool/internal/wsdashboard/localhost_auth.go:352,395`).
+  The shell reads and verifies the existing endpoint and health, requests
+  the existing credential or browser login link, and keeps the bearer
+  native (`agents-plugin-tool/desktop/src/endpoint.rs:122,165,204,244`).
+  A legacy shell ignores the optional renderer close-readiness function.
+  A new shell can show a native close fallback with a legacy renderer
+  (`agents-plugin-tool/desktop/src/close.rs:66-86` and
+  `agents-plugin-tool/internal/wsdashboard/assets/dashboard-lifecycle.js:1106-1119`).
+  The existing cross-minor boundary stays T3.
+- The shell introduces no persistent store. The existing shared endpoint
+  remains a Type 5 file. A successful authenticated attach or Retry makes
+  seven bounded logical reads of that file across discovery, auth and final
+  revalidation. Polling the cached identity uses HTTP health only. Native
+  browser-link copying makes four endpoint reads. Shell diagnostics write
+  to standard error and include fixed messages. Draft saves reuse the
+  dashboard's existing webview-local stores.
+- macOS passed 15 Rust tests and bundled the unsigned arm64 release app.
+  An MSVC x64 cross-target check of the Windows code and tests passed.
+  Five build-slot regressions and focused Go/Chromium asset, auth,
+  login-gate and draft-recovery checks passed. The Chromium checks exercised
+  ready and failed draft persistence through the new optional hook.
+- Lite review found that initialization failure could strand Retry.
+  `4706360a9` fixed that path and fenced callbacks from retired WebView2
+  instances. The 15 Rust tests include the hook-retry regression.
+- Headless connection, Python, login and draft screenshots are under
+  `/private/tmp/werkschaft-phase1.GoFgYN/captures/`. An earlier disposable
+  WKWebView smoke observed local views, authenticated attach, a single
+  instance, release DevTools and unchanged shared-daemon health. Native
+  acceptance on the final head is pending on both platforms, including
+  menu and fallback-dialog screenshots, actual accelerators, external and
+  frame behavior, native clipboard and drop, renderer recovery, and X-close
+  with a recoverable draft and with legacy or failed recovery. Windows
+  runtime execution awaits the smoke host. The native checklist and Windows
+  build commands are in
+  `/private/tmp/werkschaft-phase1.GoFgYN/native-checklist.md`.
+
+#### Edition (8a398a2b1) - 2026-11-21
+
+On Windows 11 build 26200, the lead smoke-tested `6bd531956` with
+WebView2. Authenticated attach, menu items, F12, mouse-driven zoom,
+second-instance restore and focus, legacy Stay and Close, and unchanged
+daemon PID after close passed. An empty scratch cache showed the
+connection view with a redacted status. Mouse-driven Retry reached the
+dashboard from a token-free endpoint in a profile that already held a
+cookie. The fresh-profile login gate remains pending.
+
+Ctrl+R, Ctrl+= and Ctrl+- failed with WebView2 focused. The controller now
+handles Retry, zoom, and DevTools from physical key-down events and
+dispatches those events through the same Rust actions as the native menus.
+macOS keeps its menu accelerators. The local guides remain in English.
+
+All 18 Rust tests passed on macOS, including three keyboard mapping tests.
+The MSVC x64 cross-target check of the Windows code and tests passed.
+The Windows host rerun remains pending for Ctrl+R, Ctrl+=, Ctrl+Shift+=,
+Ctrl+-, Ctrl+0, Ctrl+Shift+I and F12 with the webview focused.
+
+### Phase 2: Port the bundled daemon lifecycle to Rust
+
+Build on Phase 1's discovery, authentication and recovery. Assemble
+and bundle the matching binary, metadata, resources and skills. Port
+candidate validation, bundled and selected-development launch, safe
+staging, cache and launch environment handling, missing-daemon start,
+attach and automatic newer-core replacement across minors under (2059).
+Revalidate daemon identity before a drain and after staging or reconnect. Preserve session
+holders and show replacement refusal without interrupting a still-healthy
+connection. Handle the macOS Python prerequisite and preflight failure
+before draining.
+Developers re-set any Electron daemon override in Tauri; do not import it
+from Electron (2069).
+
+Verify standalone packaged start and newer-daemon attach. Exercise
+concurrent start, stale endpoints, candidate validation and staging
+failure, the automatic newer-core replacement across minors, and the version
+and explicit-replacement cases. On Windows,
+exercise strict independent-lifetime launch, the
+`WS_DAEMON_BREAKAWAY_DENIED=5` path and retry with
+`WS_MCP_DAEMON_JOB_LIFETIME=1`, and bounded settle under antivirus
+delays. Check that the daemon survives shell exit after both launch paths,
+independently of job teardown. On the fallback path it survives only while
+its containing job lives (owner-approved retry in `062f291f5`;
+`agents-plugin-tool/internal/wsdashboard/spawn_windows.go:30-54`). Check
+that holders retain their identities across a successful handoff.
+
+### Result (0aeef115b) - 2026-11-21
+
+- The validated package build embeds the matching daemon, metadata, resources,
+  skills and configuration manifests. The unsigned arm64 macOS app contains
+  all 113 input files, compared byte for byte. The Windows x64 daemon was
+  cross-built, stamped and validated. The Windows shell and its tests passed
+  an MSVC x64 cross-target check.
+- Rust selects and checks the prepared bundled or development input and
+  stages an independent copy outside the app. The development selector is
+  the Tauri launch environment's `WERKSCHAFT_DAEMON_ROOT`. Tests cover
+  version, hash, inventory, manifest, link, containment, staging failure and
+  same-core source mutation cases. Stages are Type 5 retained package files.
+  For an N-file package, selection fingerprints N files plus contract checks.
+  A successful stage copies and sets permissions on N files, then reads the
+  N files once from the stage and once from the source for fingerprints,
+  plus staged contract validation and metadata checks. These operations run
+  on a background thread. Windows antivirus tracing remains pending.
+- The connection tests cover missing-only startup, a concurrent winner,
+  newer-daemon attach, automatic previous-minor replacement, explicit
+  equal-core replacement and recovery. Listener tests cover stale endpoint
+  startup, concurrent daemon selection, same-port replacement, and an actual
+  prestarted subprocess whose gate denies startup when the predecessor
+  identity changes. The new starter revalidates before drain and preserves
+  the predecessor's LAN mode and preferred port. Holder and proxy tests
+  exercise unchanged holder and child identities, compatible reconnect and
+  previous-minor refusal.
+- macOS checks Python before launching or replacing. The tests exercise its
+  missing prerequisite and preservation of a healthy incumbent. Replacement
+  failures keep a verified live document and use the pinned dashboard's
+  warning toast, with the reason in the title when the renderer cannot show
+  it. A transient post-staging endpoint read also retains a healthy
+  incumbent. The Chromium test checks main-frame and origin scope, draft
+  preservation, the fallback acknowledgement and both local guides.
+- T0 for the additive starter. Old callers omit the flags and use the
+  original Ensure path. An older candidate that lacks the flag stops during
+  CLI parsing before it touches the daemon (`cmd/ws-mcp/proxy.go:393-417`).
+  The existing daemon writes the endpoint
+  (`internal/wsdashboard/endpoint.go:89`) and mints the browser cookie
+  (`internal/wsdashboard/localhost_auth.go:395`). Tauri reads the endpoint
+  and sends the observed identity and token digest in the starter's private input
+  (`desktop/src/endpoint.rs:74,199`). The guarded starter uses the existing
+  authenticated drain and admits the waiting child only after acceptance
+  (`internal/wsdashboard/ensure.go:261`). It changes no shared schema.
+  The previous-minor hello check remains T3
+  (`internal/wsdashboard/proxy.go:251`).
+- The lead's unrestricted macOS run passed all 31 Rust tests and 23 top-level
+  Go tests across daemon, CLI and holder suites. The Windows-only Go test
+  skipped on macOS. The packaging tests passed 2, build-slot tests passed 5,
+  and the headless Chromium test passed. The lite review's preflight race
+  and two test and recovery findings were fixed in `464771aa4`.
+- Captures and side-by-side comparisons are in
+  `/private/tmp/werkschaft-phase2.9krA6b/captures/`. The refusal toast
+  matches the Electron in-page reference at
+  `/private/tmp/inpage-dialogs-captures/settings-after-in-page-notice.png`.
+  The connection and Python views retain their Phase 1 layouts and now tell
+  the user that Retry can start the dashboard.
+- Windows native checks are assigned to the lead. The checklist is at
+  `/private/tmp/werkschaft-phase2.9krA6b/native-checklist.md` and the
+  prepared x64 daemon input is under its `final/` directory. Native coverage
+  includes packaged start and cookie, version and failure cases, menu and
+  title captures, strict breakaway and access-denied job-lifetime retry,
+  shell exit versus job teardown, antivirus settle and holder identity
+  across a real handoff. Native macOS execution remains for the packaged
+  platform gate.
+
+### Phase 3: Deliver shell updates and the CI release pipeline
+
+Package Phase 2 for darwin-arm64 and win32-x64 with the settled updater
+and installer strategy: `tauri-plugin-updater`, signed NSIS/MSI and
+`.app.tar.gz` update artifacts, and the Evergreen bootstrapper. Wire the
+platform artifacts, integrity and authenticity checks, feed metadata and CI
+into the existing release pipeline. Keep update actions in Settings through
+the optional pinned-main-frame bridge. Produce the (2065) Electron-named
+zip and SUMS assets for every Tauri stable release, with the Windows
+forwarding launcher and per-user NSIS installer or the macOS Tauri app as
+specified in (2068), with (2070)'s exact first-run install and marker and
+later launch-only behavior. Start with default window settings and the
+installed build's channel, without importing Electron shell settings (2069).
+Retain the Electron profile for rollback under (2066); do not migrate
+draft-recovery records. Keep native
+daemon artifacts available during evaluation. Preserve stable tag behavior
+and demonstrate prerelease isolation, opt-in canary and explicit stable return
+under the settled
+channel decision. Keep shell update and daemon replacement distinct.
+
+Verify staging and apply of a valid update, refusal on missing or invalid
+integrity data, interruption/retry, relaunch, and the recovery route for
+a failed install or swap. Exercise Windows runtime-present and
+runtime-missing bootstrapper behavior. Use a
+non-publishing pipeline run to check expected output names, platforms,
+versions and metadata before release. Verify migration from shipped Electron
+on a disposable profile, including the update action, Windows launcher
+installation or macOS app replacement, first-launch defaults, retained
+profile and exit. Separately exercise failed file moves, post-swap installer
+failure, and first-launch failure; verify retry or Electron reinstall with
+the retained profile for post-swap failures. Verify the first launcher run
+installs the bundled version even over a newer Tauri canary, and subsequent
+shortcut launches preserve a Tauri self-update. Account
+for the possible Windows SmartScreen first-run warning.
+
+### Result (64fd7ebf6) - 2026-11-22
+
+- Settings uses the fixed native update operations on the verified
+  top-level dashboard. Stable checks use GitHub latest. Canary selects the
+  highest eligible version on the first matching page. Explicit stable
+  return can select an older version. The updater verifies size, SHA-256,
+  and a Tauri signature bound to the chosen version before staging. Apply
+  saves the current dashboard draft and delegates install and relaunch to
+  the platform updater. The daemon follows its existing launch policy on
+  shell relaunch.
+- Skip is a Type 2 SQLite preference with one held connection and a WAL
+  commit on change. A verified update is a Type 5 package. A download opens
+  the bounded partial file, writes its header, metadata and payload, then
+  syncs and renames it. Reopen reads the header and the payload once and
+  verifies both. Changing the selected target discards a superseded stage
+  before the new selection appears. Settings reads phase and channel from
+  memory. Windows antivirus measurements remain part of native acceptance.
+- T0. Electron continues to read the same stable latest endpoint, zip and
+  SUMS (`desktop-electron/update.js:73,478,515,559`). With the rollout flag
+  unset, its existing tag and desktop dry-run jobs still write those assets.
+  With the flag set, an exact stable tag includes the same names in the
+  draft-backed complete release (`.github/workflows/ws-mcp-release.yml:184,238`
+  and `.github/workflows/werkschaft-tauri-build.yml:159-180`). Exact canary
+  tags remain prereleases and carry the separate Tauri manifest alongside
+  the Electron assets. The optional renderer event mounts the same update
+  controls (`internal/wsdashboard/assets/dashboard-lifecycle.js:1130,1230`).
+  The Windows forwarder reads and writes only its user-scoped marker and
+  opens the registered app on subsequent runs (`desktop/migration/main.rs:218-258`).
+  Electron's own profile remains available after reinstall. Tauri starts
+  with its own defaults and uses the installed build's channel. The
+  existing cross-minor daemon boundary remains T3.
+- The macOS release build and Windows x64 MSVC type check passed. The
+  launchless arm64 app and updater/migration archive layouts matched the
+  expected app identity and all 113 prepared daemon files. The updater
+  Rust regressions use the pinned plugin's signed fixture and cover corrupt
+  and truncated bytes, signature rejection, valid staging, reopen, channel
+  switch and retry. The lead passed all 37 Rust tests and the Go
+  `TestDesktopUpdateBrowser` on `fb79dccc0`. On `64fd7ebf6`, the seven
+  Node packaging and release tests, five build-slot tests, 32 non-listener
+  Rust tests, Windows MSVC type check and launchless macOS smoke package
+  passed. Two launcher tests, 187 Electron tests with four Windows-only
+  skips, Go `TestDashboardSourceAssembly`, actionlint, and dry-shell route
+  and publication checks also passed during implementation.
+- Chromium ran the dashboard update suite against intercepted real
+  renderer assets. Compared captures in
+  `/private/tmp/werkschaft-tauri-phase3.4BB1FT/tauri/` with
+  the approved PNGs recovered from
+  `e33dc16f8:ai-docs/assets/mockups/261120/canary-channel/`.
+  The ten light and dark App update and toast regions match. The paired
+  regions are in `/private/tmp/werkschaft-tauri-phase3.4BB1FT/update-detail/`.
+  Branding and landing-page background differ from the historical captures.
+- Lite review fixes in `17364c3c1` discard a superseded stage before reopen
+  and publish new stable tags only after the verified native packages and
+  both desktop payloads upload. The first dry runs exposed Windows drive
+  prefix stripping in Tauri resource paths. `64fd7ebf6` stages resources
+  under the desktop crate and supplies crate-relative source paths. Its
+  Windows path regression verifies that the source resolves on the checkout
+  drive and the destination keeps its `daemon/` layout.
+- Non-publishing CI succeeded at `64fd7ebf6` for `0.50.8` and
+  `0.50.8-canary.1`. The lead verified the downloaded
+  `werkschaft-tauri-assets` using the evaluation public key and
+  `release.cjs --verify` for each exact version. Both contain the macOS arm64
+  updater archive and the Windows x64 NSIS and MSI packages with signatures
+  and feed. The stable artifact also contains both Electron migration ZIPs
+  and their SUMS, and both ZIPs passed `shasum -a 256 -c`. The canary
+  artifact contains the signed updater payloads and feed only.
+  [Stable run 44912630570](https://github.com/kang-sw/werkschaft/actions/runs/44912630570)
+  · [Canary run 44912637922](https://github.com/kang-sw/werkschaft/actions/runs/44912637922)
+- Under owner decision (2081)=a, the lead ran native acceptance in the smoke
+  host's existing account on Windows 11 with WebView2 Evergreen
+  `157.0.4341.60` present, from 00:17 to 00:30 KST on 2026-11-22.
+  `WS_CACHE_HOME`, `WS_CONFIG_HOME` and `WEBVIEW2_USER_DATA_FOLDER` pointed
+  under the run directory. Its dashboard used port 29517. The existing
+  owner daemon continued on 29417 throughout.
+- The canary NSIS installer exited 0 with `/S /D=<run>\app`. It created the
+  per-user uninstall entry at version `0.50.8-canary.1` and a Start Menu
+  shortcut. Launch staged the bundled daemon and brought up the isolated
+  dashboard. The scheduled check requested `releases/latest` and the
+  `v0.50.8` manifest, then offered Update and Skip. Settings showed
+  Back to stable on the canary build.
+- The fault feed refused a bad signature, a checksum mismatch and an
+  interrupted download with distinct messages. Missing SHA rejected the
+  manifest at check time with neither an offer nor a download request.
+  The refusal toasts offered the download page. Missing SHA showed a
+  generic Settings check failure without a reason, unlike the messages
+  for download-stage faults.
+- After the interruption, Settings offered the valid stable update in
+  the same running app. It verified and staged the package and offered
+  Restart now. The passive installer relaunched the app in about 40
+  seconds with the isolated environment. The executable and HKCU entry
+  showed `0.50.8` at the original install location. The same-core daemon
+  stayed on `0.50.8-canary.1` at port 29517, and the footer continued to
+  report the daemon version. On stable, Back to stable disappeared and
+  Check for updates reported the latest version. An explicit canary
+  lookup found no newer build and showed no visible feedback. Silent
+  uninstall exited 0 and removed the install folder, HKCU entry, shortcut
+  and local app data.
+- Native captures are under `/tmp/p3-caps/`, including `00-initial.png`,
+  `13-badsig-after.png`, `missing-sha-4-toast.png`, `bad-bytes-2-after.png`,
+  `interrupted-2-after.png`, `32-retry-check.png`, `33-staged.png`,
+  `41-stable-settings.png`, `42-footer.png` and `44-canary-state.png`.
+- Under (2081)=a, the remaining native checks await a disposable account
+  or VM. These include MSI install and equal-core MSI replacement,
+  Evergreen bootstrap on an image without the runtime, and stable-to-canary
+  opt-in and lower-stable return with a next-patch-core canary. Native
+  staged-update reopen after a channel switch, forced install or swap
+  failure, draft recovery through restart, and origin and frame refusal
+  also remain. The scratch profile used in this run had no composer or
+  session to exercise draft recovery. Packaged Electron migration on both
+  platforms remains pending, including first-launch defaults, retained profiles,
+  rollback and failure recovery, and the Windows forwarder, SmartScreen,
+  shared portable folder and second-account checks. Antivirus measurements
+  remain pending. The native checklist and evaluation commands are in
+  `agents-plugin-tool/desktop/RELEASE.md`. Phase 4 remains open.
+
+### Phase 4: Pass the macOS and Windows verification and benchmark gate
+
+Run packaged Tauri and Electron on both platforms and record evidence
+against Questions 1–6 in
+`261117-research-werkschaft-tauri-shell-revisit`.
+
+1. **WKWebView viability.** Check in-page confirms, X-close and draft reopen,
+   zoom keys, external links, file and image handling, clipboard, Korean IME,
+   `:has()`, `content-visibility`, and container queries. Check dashboard
+   writes, terminals and live transports, isolated content frames, and
+   notification fallback. Verify pasted images and unsent input recover
+   after reopen and delivery-unknown sends await user action. List remaining
+   differences and the native work each would take.
+2. **Windows parity.** Record the Windows versions and Evergreen runtime
+   versions tested. Exercise the installer bootstrapper path,
+   including a supported Windows image where the runtime is absent.
+   Record a pass or fail for each row below.
+3. **Bundle size and memory.** On darwin and win32, report installed and
+   download bytes for Tauri and Electron, including and excluding the
+   bundled daemon. Record shell/webview process-tree idle and active
+   working-set memory in MiB with the same board and daemon build. Use the
+   same machine, workload and sampling points for each pair, and report
+   the daemon separately. Record absolute values and Tauri–Electron deltas.
+4. **Rendering performance.** Run the same scroll and typing scenario on
+   WKWebView, WebView2, and Electron Chromium. Record frame timings or
+   dropped frames and input latency, with the OS, webview version, board
+   content and scenario needed to reproduce the comparison.
+5. **Operations.** Verify release DevTools and the selected updater route
+   with a packaged release candidate. Compare signed Tauri updates and
+   installer options (NSIS/MSI and macOS DMG where applicable) with the
+   current Electron zip updater and document platform code-signing and
+   notarization requirements; OS code signing and notarization are deferred
+   to the Electron retirement decision, not required for P4. Test canary
+   opt-in and stable return. From the oldest shipped Electron release and
+   a canary Electron, verify the update button swaps to Tauri and relaunches.
+   On Windows verify first migration launch installs exactly the bundled
+   version, including Electron canary Back to stable with a newer Tauri
+   canary already installed; verify the per-user marker, including a second
+   Windows account launching the same portable launcher folder, and separately verify routine
+   old-shortcut launches preserve a later Tauri self-update. Verify the
+   installer installs WebView2 on a machine or VM without it. From a populated
+   Electron profile verify Tauri first launch uses default window settings and
+   the installed build's channel, and the retained profile reopens after
+   reinstalling Electron. Separately exercise a failed file move and its
+   Electron swap-helper rollback, post-swap installer failure, and
+   first-launch failure; for post-swap failures verify retry or Electron
+   reinstall with the retained profile. Record the no-warning residual for
+   older Electron versions.
+6. **Porting cost.** Record the native changes and remaining gaps for
+   bundled daemon autostart and breakaway, existing-daemon attach,
+   DevTools, request/navigation guards, cookie injection, and the
+   Python-missing guide.
+
+Windows pass list from pre-study Section D:
+
+- **(a)** Standalone daemon start, breakaway-denied retry and cookie injection
+  succeed. The daemon survives X-close independently of job teardown; the
+  fallback daemon survives only while its containing job lives.
+- **(b)** HTML5 drag/drop reaches the dashboard. Copy and paste work,
+  including the login clipboard path under WebView2 permissions.
+- **(c)** The local `tauri.localhost` origin and expected subframes work.
+  Unapproved subframe targets and popups enforce the agreed guard.
+- **(d)** The release menu bar and physical shortcuts work, including
+  DevTools and zoom. Confirm the approved `CloseRequested` behavior
+  with a recoverable draft and its fallback path.
+- **(e)** The selected Windows installer and updater flow works end to end
+  using NSIS/MSI. Exercise restart, failed-update recovery, and file locking
+  under antivirus.
+
+The gate requires the macOS and Windows packaged results, a pass for each
+Windows row, answers to all six research questions, and paired measurements
+for the owner to decide, without fixed thresholds. Record the evidence and
+the owner’s release decision in the phase Result. After P4 passes, re-home
+the overlapping reliability and Windows delivery work from
+`261115-feat-werkschaft-electron-shell` Phases 2–4 to Tauri.
+
+### Result (1aace4c5e) - 2026-11-22
+
+The owner adopted the Tauri shell ((2140)=b) and closed this phase with
+the unpassed gate rows deferred ((2141)=a). The branch merged into
+`develop` at `1aace4c5e`. The evidence subsections below hold the Windows
+smoke run, the rows (b)/(c) rerun, and the adoption inputs.
+
+- Passed: Windows rows (a), (b) targeted checks, and (c). Paired Windows
+  size, memory, and frame measurements are recorded. macOS crate tests and
+  a 79-minute dogfood run with stable WebContent memory are recorded.
+- Deviation: the gate asked for a pass on every Windows row and for macOS
+  paired measurements. Row (d), row (e), and the macOS Electron pair moved
+  to `261122-chore-werkschaft-tauri-deferred-verification`. The re-home of
+  `261115-feat-werkschaft-electron-shell` Phases 2-4 moved there as well.
+- Forward: the tray, notifications, and full-quit work in
+  `261122-feat-werkschaft-tray-notifications-full-quit` is unblocked.
+
+#### Windows smoke evidence - 2026-11-22
+
+**VERIFIED — Scope and host.** Owner decision (2082)=a authorized the
+existing Windows smoke account. The run used
+`C:\Users\ki608\ws-wintest\run-tauri-p4-20261122T083003KST` on
+`DESKTOP-3SUVUA9`. `Win32_OperatingSystem` and the Windows version
+registry values reported Windows 11 Pro 25H2, build 26200.9974, with
+16 logical CPUs. `msedgewebview2.exe` reported Evergreen 157.0.4341.60.
+CDP `/json/version` reported Edge 157.0.4341.60 in Tauri and Chromium
+152.0.7977.169 in Electron.
+
+**VERIFIED — Build and isolation.** The SSH Session 0 launch logged WebView2
+HRESULT `0x80070578`. The native checks ran in interactive Session 3 using
+temporary tasks with the existing account. `GetFolderPath('LocalApplicationData')`
+returned the real Local AppData even with `LOCALAPPDATA` and `USERPROFILE`
+overrides. The optimized Tauri benchmark build used `d9bcf101e`, Rust 1.95.0,
+and Tauri's `appDirectoriesOverride` directed into the run folder.
+`WEBVIEW2_USER_DATA_FOLDER` and Electron's `--user-data-dir` also pointed
+inside it. This was a non-release configuration with release-mode DevTools
+and unsigned installers. The comparison Electron executable came from the
+shipped win32 x64 v0.50.8 ZIP, verified against its accompanying SUMS.
+[Shipped Electron release](https://github.com/kang-sw/werkschaft/releases/tag/v0.50.8)
+
+The initial sandboxed probe,
+`ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes ki608@192.168.33.6 hostname`,
+exited 255 with `ssh: connect to host 192.168.33.6 port 22: Operation not permitted`.
+The identical command through the approved escalation returned
+`DESKTOP-3SUVUA9`. The first interactive task launch reported
+`0xC0000142`. Subsequent tasks specified Session 3 through Task Scheduler
+`RunEx`. [Microsoft Task Scheduler RunEx](https://learn.microsoft.com/en-us/windows/win32/taskschd/registeredtask-runex)
+
+**VERIFIED — Size, bytes.** Installed means logical app payload bytes with
+the daemon resources included or excluded. It excludes OS WebView2, user
+data, install registration, and installer-generated uninstaller files.
+NSIS payload counts came from `7z x` of the executable and daemon entries.
+Windows Installer's read-only `SELECT FileSize FROM File` agreed for MSI.
+The Electron without-daemon variant repacked the ASAR and the ZIP after
+removing the daemon. NSIS and MSI used the same Tauri binary and the same
+installer configuration in each pair, with the daemon resource mapping
+removed for the second bundle. Download numbers are file lengths, including
+the Evergreen bootstrapper where packaged.
+
+| Measure | Daemon | Tauri | Electron v0.50.8 | Tauri − Electron |
+|---|---|---:|---:|---:|
+| Installed app payload | Included | 67,232,265 | 424,880,653 | −357,648,388 |
+| Installed app payload | Excluded | 14,415,360 | 385,619,405 | −371,204,045 |
+| NSIS vs Electron ZIP download | Included | 24,523,509 | 173,635,745 | −149,112,236 |
+| NSIS vs Electron ZIP download | Excluded | 5,357,610 | 158,173,260 | −152,815,650 |
+| MSI vs Electron ZIP download | Included | 31,293,113 | 173,635,745 | −142,342,632 |
+| MSI vs Electron ZIP download | Excluded | 7,110,656 | 158,173,260 | −151,062,604 |
+
+The Tauri daemon resource tree contained 113 files totaling 52,816,905
+bytes. The shipped Electron daemon tree was 39,230,192 bytes. A second
+Electron build from the same source checkout and with the exact Tauri daemon
+tree gave 438,487,619 / 385,637,982 installed bytes and
+182,453,048 / 158,184,743 ZIP bytes with and without the daemon.
+Against that exact-daemon package, Tauri's installed deltas were
+−371,255,354 / −371,222,622 bytes. Its NSIS deltas were
+−157,929,539 / −152,827,133 bytes.
+
+**VERIFIED — Common runtime workload.** Both shells attached to the same
+loopback daemon on port 39517, PID 17212, created at
+`2026-11-21T23:44:47.8228590Z` with SHA-256
+`c892b3477b3906dfdd5e5e49c5b97f541e9e75aff93e0f15c9eaa409f60182ef`.
+The synthetic board contained eight topics with 12 formatted paragraphs
+each, 16 open checks, and 180 alternating conversation entries. The
+dashboard rendered 50 initial entries and reported the same asset ID
+`8af428b6d4e76a34` in both engines. The active same-origin session frame
+used an emulated 1080 × 650 CSS-pixel viewport at 1× scale. Both shells used
+the same three Chromium background-throttling switches and no open DevTools.
+Electron reported `document.hasFocus() === false` before composer focus and
+still delivered all 30 trusted input events.
+
+**VERIFIED — Working set, MiB.** For each shell, three CIM
+`Win32_Process.WorkingSetSize` snapshots began 0.9–1.0 s after the idle
+or active marker and continued about once per second. Idle followed 90
+baseline display-frame intervals. Active began with the first wheel input.
+The table uses the median across each three-snapshot series. Tauri's
+subtotal covers its app and associated WebView2 processes, seven total.
+Electron's subtotal covers its app and matching descendants, six total.
+The daemon appears separately. The sum of working sets can count shared
+resident pages in each process that maps them. The daemon values are
+observations of one continuing daemon, measured at different times.
+
+| Median working set | Tauri | Electron | Tauri − Electron |
+|---|---:|---:|---:|
+| Shell and webview, idle | 522.65 | 584.37 | −61.72 |
+| Shell and webview, active | 534.14 | 619.29 | −85.15 |
+| Daemon, idle | 75.69 | 92.10 | −16.41 |
+| Daemon, active | 75.60 | 92.15 | −16.55 |
+
+**VERIFIED — Rendering and input.** The CDP driver sent 60 mouse-wheel
+events at 100 ms intervals into the conversation pane, 30 at +80 CSS px
+and 30 at −64 CSS px. It entered one character from
+`phase four benchmark typing text` every other event into the composer
+without submitting. Each run received 30 trusted input events and ended
+480 CSS px below its initial scroll position. Frame intervals came from
+`requestAnimationFrame` in the session frame. Input latency measures the
+browser input event timestamp to its next animation-frame callback.
+
+| Measure | Tauri | Electron | Tauri − Electron |
+|---|---:|---:|---:|
+| Idle frame interval median / p95, ms | 17.8 / 18.3 | 17.7 / 18.2 | +0.1 / +0.1 |
+| Active frame interval median / p95, ms | 17.7 / 18.2 | 17.7 / 18.3 | 0.0 / −0.1 |
+| Longest active frame interval, ms | 338.2 | 139.8 | +198.4 |
+| Active gaps over 1.5× median idle interval | 2 of 329 | 1 of 348 | +1 gap |
+| Input-to-next-frame median / p95, ms | 14.8 / 15.5 | 14.9 / 15.8 | −0.1 / −0.3 |
+
+The raw records are in the run folder's `evidence/` directory.
+`OfficialPair.log` records the console session and launches.
+`{tauri,electron}-OfficialPair-memory.jsonl` records each process's path,
+creation time, and bytes. The matching `-render.json` files contain the
+individual frame intervals and input observations.
+
+**INFERRED — Measurement limits.** These are results from one sequential
+pair on one host. The comparable p95 values and isolated long gaps describe
+this workload. The input estimate does not measure hardware-to-display
+latency, and frame gaps do not provide a compositor dropped-frame count.
+
+**VERIFIED — Windows pass list.** `Parity2.log`, `Parity3.log`,
+`Parity4.log`, `job-check3.log`, and `job-check4.log` hold the run
+receipts. Each partial result applies to the isolated benchmark build.
+
+| Row | Status | Evidence and remaining prerequisites |
+|---|---|---|
+| (a) Daemon and cookie injection | **PASS** | Tauri's cold launch logged `WS_DAEMON_BREAKAWAY_DENIED=5`, retried, and opened the authenticated dashboard on port 39517. The same fallback PID survived several shell X-closes. In a controlled job the matching daemon start returned the same refusal, retried in the job, and the verified fallback exited when that job ended. The permissive job test started the independent daemon outside its launching job and it survived job termination. A separate independent start survived SSH exit, authenticated a fresh WebView2 profile, and kept serving after X-close. |
+| (b) Drag/drop and clipboard | **FAIL** | The dashboard received a trusted HTML5 drop with one PNG and rendered it. A synthetic clipboard image paste also rendered. The native Connection menu returned **Could not copy browser login link** and the clipboard still reported zero formats. The cause of the copy failure is unverified. Ordinary OS copy/paste is **DEFERRED** until the test window can safely receive physical input on an isolated clipboard. |
+| (c) Local origin, frame and popup guard | **FAIL** | The bundled `http://tauri.localhost/index.html` and pinned same-origin dashboard frame loaded. A blocked popup returned null and left the target count at one. With dashboard CSP active, the alternate listener returned 200 to its positive control and received no frame request. With CSP bypassed on the disposable fixture to test the native guard alone, the listener received an iframe request on `/p4-canary-native`. It recorded no frame commit or document execution. A repeated probe before this reproduced the network observation without recording the request path. |
+| (d) Menus, shortcuts, and X-close | **DEFERRED in part** | Native File, Edit, Window, Help, Connection and View menus were present. Menu zoom changed the reported ratio 1.25 → 1.375 → 1.25 and Actual Size restored 1.25. Opening DevTools from View created a DevTools target. A forced recovery refusal showed the native prompt and Stay dismissed it. Normal X-close exited and reopening recovered text and one image. Windows refused the harness's foreground ownership check for physical zoom and DevTools shortcuts. Those keys need a focused, attended console or disposable interactive account. |
+| (e) Installers and updater | **DEFERRED (2082)=a** | NSIS and MSI bundle generation and payload inspection passed. Signing, native install, updater restart, recovery and antivirus file-lock acceptance still need an isolated registered installation on a disposable account or VM. The exact signed executable uses Windows Known Folders for app-local data. Phase 3's signed NSIS exercise remains recorded above. |
+
+The independent and fallback job receipts exercised the same
+`daemon-start --desktop-start --start-wait 13s --require-independent-lifetime`
+entry point invoked by Tauri, supplying JSON `null` on stdin. The normal
+CSP frame probe and the native-only probe distinguish renderer policy from
+the native `FrameNavigationStarting` cancellation in
+`agents-plugin-tool/desktop/src/windows.rs:59`. The test established an
+HTTP request on one native-only attempt and no evidence of an alternate
+document commit. **INFERRED** — WebView2 may dispatch the request before
+native cancellation takes effect. Request and cancellation ordering remains
+unverified.
+[Microsoft WebView2 navigation events](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/navigation-events)
+
+**DEFERRED (2082)=a — Windows operations.** Use a disposable Windows
+account or VM for signed NSIS/MSI upgrade, restart, exact canary-to-stable
+downgrade, failed install and retry, and packaged Electron migration with
+a retained populated profile. Use a next-patch signed evaluation canary for
+stable opt-in and return. Check updater locking during those runs with
+antivirus enabled. Use a supported VM snapshot without Evergreen for the
+bootstrapper and a second account for shared portable-launcher marker
+isolation. The launch-only behavior after a Tauri self-update and the
+oldest Electron no-warning migration remain part of that same packaged
+exercise. For rollout signing requirements, see
+`agents-plugin-tool/desktop/RELEASE.md:157`.
+
+**VERIFIED — Native implementation reference.** Bundled daemon start,
+attach, and the numeric breakaway retry are in
+`agents-plugin-tool/desktop/src/daemon.rs:109` and `:352`. Windows
+navigation and clipboard permission checks are in
+`agents-plugin-tool/desktop/src/windows.rs:59` and `:93`. Native cookie
+validation and login-link handling are in
+`agents-plugin-tool/desktop/src/endpoint.rs:240` and
+`agents-plugin-tool/desktop/src/shell.rs:353`. The release-mode menu is in
+`agents-plugin-tool/desktop/src/main.rs:191`. The macOS Python
+requirement and bundled guide are documented in
+`agents-plugin-tool/desktop/README.md:11` and `:88`.
+
+**VERIFIED — Task cleanup.** The ten temporary task names used the prefix
+`WS-Werkschaft-P4-20261122T083003KST-`. Their suffixes were
+`Benchmark`, `BenchmarkS3`, `Diagnose`, `FrameCheck`, `Pair1`,
+`OfficialPair`, `Parity1`, `Parity2`, `Parity3`, and `Parity4`.
+`task-audit.txt` records registrations and the absent-task checks
+(`schtasks /query` exit 1). The cleanup receipt records the owned daemon
+paths and creation times. `cleanup-verified.txt` reports zero run processes,
+listeners, and scheduled tasks.
+
+The [macOS owner checklist](../assets/261121-feat-werkschaft-tauri-shell-return/phase-4-macos-owner-checklist.md)
+contains the pending WKWebView viability and paired measurement steps.
+Phase 4 remains open.
+
+#### Windows pass-list rows (b) and (c) rerun - 2026-11-22
+
+**VERIFIED — Scope and build.** The rerun used Windows 11 Pro 25H2
+build 26200.9974 on `DESKTOP-3SUVUA9` and WebView2 Evergreen
+157.0.4341.60. The fixture, profiles, build cache, and evidence lived under
+`C:\Users\ki608\ws-wintest\run-tauri-p4fix-20261122T091503KST`.
+Rust 1.95.0 built the optimized shell with `custom-protocol`. The
+`windows-build-online.log` binary exercised the document guard. The
+`windows-build-diagnostics.log` binary from `f2e2955fe` exercised the same
+native writer with numeric failure diagnostics. Its SHA-256 was
+`354ca5c625684d643fe6fa166fbd12dd3f84149a1b1e45c7628e7878a9534641`.
+Paths below are relative to the run folder's `evidence/` directory.
+
+| Row | Rerun status | Evidence |
+|---|---|---|
+| (b) Drag/drop and clipboard | **PASS for the targeted checks** | `attempt3/probe.log` records a trusted HTML5 drop with one PNG and a rendered image from a synthetic paste. After console unlock, `probe.log` and `rows-b-c.json` record the native menu reporting **Browser login link copied**, four OS clipboard formats, and a separate Win32 test window reading Unicode text owned by the shell's HWND. The URL kept the fixture origin, path, query, and fragment. Its one-time code exchanged with HTTP 200 and replay returned 401. The probe cleared the test content and kept the full link out of the logs. Ordinary physical text copy/paste remains **DEFERRED**. |
+| (c) Local origin, frame and popup guard | **PASS** | `attempt4/probe.log` records the bundled `http://tauri.localhost/index.html` and its stylesheet loading after reload. `attempt3/probe.log` records the pinned dashboard frame loading 50 entries before and after CSP bypass. A blocked popup returned null with the target count at one. With CSP bypassed, the alternate listener returned 200 to the before, renderer fetch, and after controls. It received zero requests for the unapproved iframe. WebView2 recorded a 403 followed by `net::ERR_ABORTED`, with zero alternate frame commits or script executions. |
+
+**VERIFIED — Clipboard path and console state.** The Connection menu minted
+the URL through the daemon and used `arboard` in native Rust. Its Windows
+implementation opened the clipboard with a null window handle. The new
+Windows writer supplies the shell HWND to `OpenClipboard`, empties it,
+and writes Unicode text. In the locked-console attempts, the independent
+Win32 control failed at `OpenClipboard` with error 5 and a test window
+also failed to open the clipboard. `attempt4/probe.log` records
+`WinSta0\Default` and scheduler job UI restrictions of zero. After the
+owner unlocked the console, the same ownerless control opened, emptied,
+and wrote one format. The HWND-bound menu write and independent read
+passed in the same task.
+[Microsoft OpenClipboard](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard)
+
+**INFERRED — Original clipboard failure.** The locked console best
+explains the access denial on this host. The original menu failure
+combined link minting and clipboard errors in one status, and its exact
+Win32 error went unrecorded. The unlocked ownerless control shows that
+this Windows build accepts that write when the clipboard is available.
+
+**VERIFIED — Document request guard.** Windows registers a WebView2
+`WebResourceRequested` filter for document requests originating from
+documents, which covers cross-origin iframes. It supplies a local 403 for
+unapproved destinations before transmission. `FrameNavigationStarting`
+still cancels unapproved frame navigation. The same destination classifier
+admits the two bundled top-level pages and the current dashboard origin.
+[Microsoft WebView2 request filtering](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_22?view=webview2-1.0.2849.39)
+
+**VERIFIED — macOS checks.** `cargo test --locked --features custom-protocol`
+passed 42 tests after loopback socket access was allowed. `cargo clippy
+--locked --features custom-protocol --all-targets` exited 0 with three
+existing warnings in `daemon_package.rs`, `updates.rs`, and `main.rs`.
+The stricter `-D warnings` invocation failed on those warnings. The macOS
+run consisted of crate checks and unit tests.
+
+**VERIFIED — Isolation and cleanup.** `task-audit.txt` records Session 3
+`RunEx` and deletions for seven unique temporary tasks. The final
+clipboard task ended with result 0. The first fixture archive carried
+AppleDouble entries and failed package validation. Repacking the same
+113 daemon files without those entries allowed the fixture to start.
+`Session3.log` and `cleanup-owned-ssh.log` record owned process identities
+and cleanup. The final `cleanup-census.jsonl` entry at 09:40:06 KST
+reports zero run processes, listeners, registered tasks, and running
+tasks.
+
+#### Owner adoption decision - 2026-11-22
+
+**VERIFIED — Decision.** The owner adopted the Tauri shell (whiteboard
+(2140)=b: adopt once rows (b) and (c) re-verify on Windows). The rerun above
+records both as PASS, so `impl/develop/basin-spray-cider` merged into
+`develop` at `1aace4c5e`. Inputs the owner weighed: Windows installed payload
+67,232,265 vs 424,880,653 bytes and NSIS download 24,523,509 vs 173,635,745
+bytes (daemon included), shell/webview memory −62 MiB idle and −85 MiB active,
+equal frame p95, and a macOS dogfood run with stable WebContent memory over
+79 minutes. An ad-hoc macOS zip of the installed app was 29,346,982 bytes
+against the shipped `Werkschaft-darwin-arm64.zip` of 142,176,148 bytes. That
+pair was not measured under this phase's paired-measurement rules.
+
+**Open — Gate rows not yet passed.** Row (d) needs physical shortcuts and
+ordinary copy/paste on a staffed Windows console. Row (e) needs a signed
+install, update, failed-update recovery, and antivirus lock check on a
+throwaway account or VM. The macOS paired Electron measurement stays
+unmeasured because this host does not launch Electron. Electron retirement
+and OS signing/notarization remain separate decisions.

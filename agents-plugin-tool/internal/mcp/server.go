@@ -34,6 +34,10 @@ type Server struct {
 	piDaemonAgents bool // initialize experimental capability, protected by rootMu
 	sessions       *sessionStore
 	mailbox        mailboxRuntimeState
+	// mailGroups keeps fan-out audiences (mailbox_groups.go); mailLabels
+	// resolves sender labels, nil for none.
+	mailGroups *MailGroupStore
+	mailLabels MailLabelFunc
 	// indexOpts configures the ticket ownership index client; zero values
 	// take the library defaults. Tests inject clocks and timeouts here.
 	indexOpts wsindex.Options

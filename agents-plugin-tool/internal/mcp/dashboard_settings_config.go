@@ -136,6 +136,9 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 	}
 	return &wsdashboard.ConfigBackend{
 		Catalog: catalog, Options: opts, Structured: structured,
+		LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
+			return dashboardCompanionConfig(catalog, opts)
+		},
 		Session:            src.settingsSession,
 		IsLead:             src.settingsLead,
 		OrchestrateWarning: orchestrateWhitelistWarning,
@@ -145,6 +148,28 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 				ambient()
 			}
 		},
+	}, nil
+}
+
+func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Options) (wsdashboard.CompanionConfig, error) {
+	overrides, err := wsconfig.GlobalOverrides(opts)
+	if err != nil {
+		return wsdashboard.CompanionConfig{}, err
+	}
+	value := func(key string) string {
+		if raw, ok := overrides[key]; ok {
+			mutation, err := catalog.Validate(wsconfig.ScopeGlobal, wsconfigservice.Operation{Key: key, Action: "set", Value: raw})
+			if err == nil {
+				return mutation.Scalar
+			}
+		}
+		entry := catalog.Entry(key, nil, wsconfig.ScopeGlobal, wsconfigservice.Layers{})
+		fallback, _ := entry.Default.(string)
+		return fallback
+	}
+	return wsdashboard.CompanionConfig{
+		Mode: value(wsdashboard.CompanionModeKey), Director: value(wsdashboard.CompanionDirectorKey),
+		Pack: value(wsdashboard.CompanionPackKey), Preset: value(wsdashboard.CompanionPresetKey),
 	}, nil
 }
 

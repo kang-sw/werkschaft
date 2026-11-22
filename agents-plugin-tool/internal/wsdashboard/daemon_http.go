@@ -52,6 +52,7 @@ func (d *Daemon) Handler() http.Handler {
 		}
 	}
 	mux.HandleFunc("/nudge", d.handleNudge)
+	mux.HandleFunc(companionChangedPath, d.handleCompanionConfigChange)
 	mux.HandleFunc("/events", d.handleIndexEvents)
 	mux.HandleFunc(pwaPrefix, handlePWA)
 	mux.HandleFunc("/s/", d.handleSessionRoutes)
@@ -61,6 +62,7 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("/api/config/set", d.handleConfigMutation)
 	mux.HandleFunc("/api/config/reset", d.handleConfigMutation)
 	mux.HandleFunc("/api/config/proposal", d.handleConfigProposal)
+	d.registerCompanionPackRoutes(mux)
 	mux.HandleFunc(railRoute, d.handleRailRefresh)
 	mux.HandleFunc(railLayoutRoute, d.handleRailLayout)
 	mux.HandleFunc(railAdmissionRoute, d.handleRailAdmission)

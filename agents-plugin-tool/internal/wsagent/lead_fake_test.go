@@ -745,6 +745,18 @@ func (m *fakeMail) deliverFrom(key, sender, text string) {
 	}
 }
 
+// deliverBatch puts mail in key's mailbox and tells its watcher once, so
+// one claim takes it all.
+func (m *fakeMail) deliverBatch(key string, mail ...ClaimedMail) {
+	m.mu.Lock()
+	m.queued[key] = append(m.queued[key], mail...)
+	changed := m.watches[key]
+	m.mu.Unlock()
+	if changed != nil {
+		changed()
+	}
+}
+
 func (m *fakeMail) stopped() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

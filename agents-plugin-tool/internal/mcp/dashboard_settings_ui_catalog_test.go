@@ -77,7 +77,11 @@ func TestDashboardSettingsUICatalog(t *testing.T) {
 						t.Errorf("%s: UI control %q for daemon type %s, want %s", row.Key, row.Control, entry.Type, want)
 					}
 				}
-				if prefix, _, _ := strings.Cut(row.Key, "."); slices.Contains([]string{"claude", "agy", "dashboard", "pi"}, prefix) && row.Section != prefix {
+				if strings.HasPrefix(row.Key, "dashboard.companion_") {
+					if row.Section != "companion" {
+						t.Errorf("%s: companion section = %s", row.Key, row.Section)
+					}
+				} else if prefix, _, _ := strings.Cut(row.Key, "."); slices.Contains([]string{"claude", "agy", "dashboard", "pi"}, prefix) && row.Section != prefix {
 					t.Errorf("%s: adapter section = %s", row.Key, row.Section)
 				}
 			}

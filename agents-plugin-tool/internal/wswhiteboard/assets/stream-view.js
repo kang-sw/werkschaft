@@ -125,7 +125,9 @@
       return y;
     }
     function scrollerTop(scroller) { return scroller === docScroller() ? 0 : scroller.getBoundingClientRect().top + (scroller.clientTop || 0); }
-    function viewport(scroller, read) {
+    // bare leaves out the sticky heads: their rects move with the scroll
+    // position, so a destination measured against them is too.
+    function viewport(scroller, read, bare) {
       read = read || function (n) { return n.getBoundingClientRect(); };
       var main = scroller === docScroller(), r = main ? { top: 0, bottom: win.innerHeight || scroller.clientHeight } : read(scroller);
       var top = Math.max(0, r.top + (main ? 0 : scroller.clientTop || 0));
@@ -133,7 +135,7 @@
       var style = win.getComputedStyle(scroller);
       top += parseFloat(style.scrollPaddingTop) || 0;
       // The rail publishes its clearance on sticky heads, not on the host.
-      Array.from((main ? doc : scroller).querySelectorAll('.tophead, .bc-hd, .wb-rail-wrap.up .wb-rail-stack')).filter(rendered).forEach(function (head) {
+      if (!bare) Array.from((main ? doc : scroller).querySelectorAll('.tophead, .bc-hd, .wb-rail-wrap.up .wb-rail-stack')).filter(rendered).forEach(function (head) {
         var hs = win.getComputedStyle(head), h = read(head);
         if ((hs.position === 'sticky' || head.matches('.wb-rail-stack')) && h.height && h.top <= top + (parseFloat(hs.top) || 0) + 1 && h.bottom > top)
           top = Math.max(top, h.bottom);
@@ -365,17 +367,41 @@
       s.cancel = function () { end('user'); };
       s.jump = function (node, opt) {
         if (s.follow) s.follow.off();
-        var block = opt.block || "center", raf = 0, cap = 0, stable = 0, quiet = 0, last, position;
+        var block = opt.block || "center", raf = 0, cap = 0, stable = 0, quiet = 0, last, position, held, rechecked = false, behavior;
         function off() {
           win.cancelAnimationFrame(raf);
           win.clearTimeout(cap);
+        }
+        // Centered navigation re-measures every frame, so what it clears must
+        // not follow the scroll it issues, or the two alternate: a sticky head
+        // crossing the line where it counts, rail capsules above, the top pill
+        // hiding at the scroller's home. It clears the scroller's own top
+        // (clip and scroll padding), never a sticky head's rect, and the
+        // caller's clearance as it stood when the jump started; later layout
+        // still moves the target and is followed. The rail's offsets at the
+        // destination differ from the origin's, so once the landing settles
+        // the clearance is read once more, and a change lands once, the way
+        // the jump began; then it holds.
+        function clearance() {
+          if (held === undefined) held = typeof opt.clearance === "function" ? opt.clearance() : opt.clearance || 0;
+          return held;
+        }
+        function recheck() {
+          if (!opt.centerVisible || rechecked || typeof opt.clearance !== "function") return false;
+          rechecked = true;
+          var was = held;
+          held = undefined;
+          if (Math.abs(clearance() - was) < 0.5) return false;
+          position = measure();
+          land(behavior);
+          return true;
         }
         function measure() {
           if (typeof opt.top === 'number') return opt.top;
           var r = node.getBoundingClientRect();
           if (opt.centerVisible) {
-            var view = viewport(scroller), clearance = typeof opt.clearance === "function" ? opt.clearance() : opt.clearance || 0;
-            var top = Math.max(view.top, scrollerTop(scroller) + clearance);
+            var view = viewport(scroller, null, true);
+            var top = Math.max(view.top, scrollerTop(scroller) + clearance());
             var height = Math.max(0, view.bottom - top);
             var desired = r.height > height ? top : top + (height - r.height) / 2;
             return Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + r.top - desired));
@@ -404,7 +430,10 @@
           var current = scroller.scrollTop;
           if (last !== undefined && Math.abs(current - last) < 0.5) {
             if (!stable++) quiet = t;
-            if (stable >= 5 && t - quiet >= 150) { end("settled"); return; }
+            if (stable >= 5 && t - quiet >= 150) {
+              if (recheck()) { stable = 0; quiet = t; last = undefined; raf = win.requestAnimationFrame(frame); return; }
+              end("settled"); return;
+            }
           } else { stable = 0; quiet = t; }
           last = current;
           raf = win.requestAnimationFrame(frame);
@@ -417,7 +446,8 @@
         s.follow = { align: align, off: off };
         position = measure();
         var reduced = win.matchMedia && win.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        land(reduced ? "instant" : opt.behavior || "instant");
+        behavior = reduced ? "instant" : opt.behavior || "instant";
+        land(behavior);
         cap = win.setTimeout(function () { end("cap"); }, 2000);
         raf = win.requestAnimationFrame(frame);
       };

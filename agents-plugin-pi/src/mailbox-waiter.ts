@@ -149,6 +149,48 @@ export function buildMailboxPushMessage(envelope: MailboxEnvelope): MailboxPushM
   };
 }
 
+const LEGEND_LABEL_MAX = 32;
+
+/** A label as the legend line carries it: one line, no `;` or `]`, at most 32 code points (the daemon's own cut). */
+function legendLabel(label: unknown): string {
+  if (typeof label !== "string") return "";
+  const clean = label.replace(/[;\]]/g, "").replace(/[\s\u0000-\u001f\u007f]+/g, " ").trim();
+  return [...clean].slice(0, LEGEND_LABEL_MAX).join("").trim();
+}
+
+/**
+ * The batch's sender legend, `[senders: <handle> = <label>; ...]`: one entry
+ * per distinct addressed sender (`from` or `reply_to`) whose envelope carries a
+ * `label`, in first-appearance order, under the handle the message head shows.
+ * A senderless envelope's `label` is its handle, not a legend entry. Empty
+ * when no sender has a label.
+ */
+export function mailboxLegend(envelopes: readonly MailboxEnvelope[]): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const envelope of envelopes) {
+    const handle = envelope.from?.trim() || envelope.reply_to?.trim();
+    if (!handle || seen.has(handle)) continue;
+    seen.add(handle);
+    const label = legendLabel(envelope.label);
+    if (label) parts.push(`${handle.replace(/[\s\u0000-\u001f\u007f]+/g, " ")} = ${label}`);
+  }
+  return parts.length > 0 ? `[senders: ${parts.join("; ")}]` : "";
+}
+
+/**
+ * The `ws-mailbox` messages of one drained batch. The batch's sender legend,
+ * when any sender has a label, goes once ahead of the first message's head,
+ * as a first line and a blank line; every head and body, and `details`, stay as
+ * `buildMailboxPushMessage` builds them.
+ */
+export function buildMailboxPushMessages(envelopes: readonly MailboxEnvelope[]): MailboxPushMessage[] {
+  const messages = envelopes.map(buildMailboxPushMessage);
+  const legend = mailboxLegend(envelopes);
+  if (legend && messages.length > 0) messages[0] = { ...messages[0]!, content: `${legend}\n\n${messages[0]!.content}` };
+  return messages;
+}
+
 /** The custom-message `customType` dashboard texts held for the user's next input ride under. */
 export const WS_WHITEBOARD_CUSTOM_TYPE = "ws-whiteboard";
 

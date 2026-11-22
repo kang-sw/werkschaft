@@ -220,6 +220,42 @@ func TestConversationBoardNudgeMixedBatchAndMalformedMember(t *testing.T) {
 	}
 }
 
+// A delivery's sender legend sits on the batch head's second line, or alone
+// ahead of a steered member that had no head; neither breaks the nudge
+// grouping of the batch around a labeled peer mail.
+func TestConversationBoardNudgeBatchSurvivesASenderLegend(t *testing.T) {
+	const peer = "mail from id:peer (2026-11-15T06:55:49Z):\nOrdinary peer mail"
+	const legend = "[senders: id:peer = Peer]"
+	first := boardNudgeBatchRing(peer, unblockedNudgeMail("One"), unblockedNudgeMail("Two"))
+	first[0].Text = strings.Replace(first[0].Text, "these.\n\n", "these.\n"+legend+"\n\n", 1)
+	middle := boardNudgeBatchRing(unblockedNudgeMail("One"), unblockedNudgeMail("Two"), legend+"\n\n"+peer, unblockedNudgeMail("Three"), unblockedNudgeMail("Four"))
+	for _, tc := range []struct {
+		name string
+		ring []wslive.RingRecord
+		want []string
+	}{
+		{"legend on the head", first, []string{"Board nudge · Unblocked · 2 messages: One, Two"}},
+		{"legend on a steered member", middle, []string{"Board nudge · Unblocked · 2 messages: One, Two", "Board nudge · Unblocked · 2 messages: Three, Four"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			html := presentationHTML(t, tc.ring, PageContent{}, nil)
+			for _, want := range tc.want {
+				if !strings.Contains(html, want) {
+					t.Errorf("missing %q: %s", want, html)
+				}
+			}
+			if strings.Count(html, `data-mail-wake="suppressed"`) != len(tc.want) || strings.Count(html, "data-entry=") != len(tc.ring) {
+				t.Fatalf("unexpected rows: %s", html)
+			}
+			for _, r := range tc.ring {
+				if strings.Count(stdhtml.UnescapeString(html), r.Text) != 1 {
+					t.Fatal("a legend batch lost or duplicated raw mail")
+				}
+			}
+		})
+	}
+}
+
 func TestConversationBoardNudgeBatchPeerFirstKeepsStoredMail(t *testing.T) {
 	const peer = "id:peer"
 	const body = "Retained peer mail"

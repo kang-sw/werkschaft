@@ -185,6 +185,8 @@ type NudgeBody struct {
 // port (loopback, or every interface in LAN mode), and has written its
 // endpoint file.
 type Daemon struct {
+	companionPacks CompanionPackStore
+
 	dir        string
 	lock       *flock.Flock
 	server     *http.Server
@@ -194,6 +196,7 @@ type Daemon struct {
 	index      *Index
 	source     SessionSource
 	config     *ConfigBackend
+	companion  companionState
 	agents     AgentHost
 	leadNudges interface {
 		Start()

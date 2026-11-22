@@ -370,8 +370,8 @@ func (c *conv) mailChanged() {
 	var held []string
 	for _, m := range mail {
 		// Once a steer fails, the rest waits too, so the batch keeps its
-		// order.
-		if len(held) > 0 || !c.steerMail(m.Text) {
+		// order. A held text keeps Drain's text, without a legend.
+		if len(held) > 0 || !c.steerMail(m) {
 			held = append(held, m.Text)
 		}
 	}
@@ -446,11 +446,13 @@ func (c *conv) steersMail() bool {
 
 // steerMail steers one claimed mail into the running turn when the session
 // takes it now (steersMail), and reports whether it did; a failed steer
-// leaves it for the next turn. It runs in the loop.
-func (c *conv) steerMail(text string) bool {
+// leaves it for the next turn. The steer is a submission of its own, so it
+// carries the legend of its own sender (mailLegend). It runs in the loop.
+func (c *conv) steerMail(m ClaimedMail) bool {
 	if !c.steersMail() {
 		return false
 	}
+	text := c.mailLegend([]string{m.Text}, []string{m.Sender})[0]
 	ctl := controlsFor(c.proc)
 	if c.rec.Lead {
 		if err := ctl.steer.Steer(text); err != nil {
@@ -462,9 +464,15 @@ func (c *conv) steerMail(text string) bool {
 	}
 	// Persist before the holder write. The child can accept the steer and
 	// outlive this daemon before its acknowledgement reaches the runner.
+	// Text is the labeled steer the child's taken messages match; Mail
+	// keeps Drain's text for a requeue (steeredReport.requeued).
 	c.steerSeq++
 	seq := c.steerSeq
-	c.steered = append(c.steered, steeredReport{Text: text, Seq: seq})
+	steered := steeredReport{Text: text, Seq: seq}
+	if text != m.Text {
+		steered.Mail = m.Text
+	}
+	c.steered = append(c.steered, steered)
 	c.saveSteered()
 	if err := ctl.reports.Steer(text); err != nil {
 		c.steered = slices.DeleteFunc(c.steered, func(s steeredReport) bool { return s.Seq == seq })
@@ -475,6 +483,21 @@ func (c *conv) steerMail(text string) bool {
 	c.apply(*wakeEvent("mail", "mailbox", "", text).Live)
 	c.changed(false)
 	return true
+}
+
+// mailLegend is texts as one submission of claimed mail carries them, with
+// the sender legend Options.MailLegend places; texts itself without one.
+// senders are Drain's sender reply-ids, nil for a turn's held texts and
+// reports. The result is only submitted (and shown as the submission's
+// wake or user entry), never stored.
+func (c *conv) mailLegend(texts, senders []string) []string {
+	if len(texts) == 0 || c.r.opts.MailLegend == nil {
+		return texts
+	}
+	if out := c.r.opts.MailLegend(c.rec.Root, texts, senders); len(out) == len(texts) {
+		return out
+	}
+	return texts
 }
 
 // inboxChanged takes the inbox's interrupt requests and submits the held
@@ -1287,6 +1310,12 @@ func (c *conv) kickInput() {
 	if cmd != nil {
 		mail, reports = nil, nil
 	}
+	// The held mail goes with its legend, resolved now; the record keeps
+	// the texts without it. A steered mail no run took is among the
+	// reports (requeueSteered), so one legend covers both, and lands on
+	// the first mail text of the turn.
+	legended := c.mailLegend(append(slices.Clone(reports), mail...), nil)
+	sentReports, submitted := legended[:len(reports)], legended[len(reports):]
 	// The turn covers the sends its messages hold: all the drain took
 	// when nothing waits behind it, else only those before the drain that
 	// took the first input left waiting (a leading slash command's turn
@@ -1323,7 +1352,7 @@ func (c *conv) kickInput() {
 	if startErr != nil {
 		err = fmt.Errorf("persist turn start: %w", startErr)
 	} else if cmd == nil {
-		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), reports...), mail...), "\n\n")))
+		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
 	} else if text, ok := c.playbookTurn(*cmd); ok {
 		// The runner expands a playbook command itself: the harness has
 		// no such command, and the turn carries the playbook's body.
@@ -1402,7 +1431,7 @@ func (c *conv) kickInput() {
 	// the dashboard's own text is a user entry; a turn of mail alone is
 	// marked as mail's.
 	origin := wslive.OriginMail
-	text := strings.Join(append(slices.Clone(parts), reports...), "\n\n")
+	text := strings.Join(append(slices.Clone(parts), sentReports...), "\n\n")
 	if cmd != nil {
 		text = cmd.Line()
 	}
@@ -1410,7 +1439,7 @@ func (c *conv) kickInput() {
 		origin = wslive.OriginWhiteboard
 		c.apply(wslive.Event{Kind: wslive.KindUser, Origin: origin, Text: text})
 	}
-	for _, text := range mail {
+	for _, text := range submitted {
 		c.apply(*wakeEvent("mail", "mailbox", "", text).Live)
 	}
 	c.apply(wslive.Event{Kind: wslive.KindTurnStart, Origin: origin})

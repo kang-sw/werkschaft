@@ -123,6 +123,9 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			StartedAt:     time.Now().UTC().Format(time.RFC3339),
 		},
 	}
+	if err := d.refreshCompanion(); err != nil {
+		fmt.Fprintf(logw, "dashboard: load companion settings: %v\n", err)
+	}
 	if d.clipboard == nil {
 		d.clipboard = newNativeClipboardWriter()
 	}

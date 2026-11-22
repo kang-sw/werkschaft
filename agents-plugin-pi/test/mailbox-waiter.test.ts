@@ -20,6 +20,8 @@ import {
   boardSteerDeps,
   boardWakeOutcome,
   buildMailboxPushMessage,
+  buildMailboxPushMessages,
+  mailboxLegend,
   buildMailboxWaitArgv,
   buildWhiteboardHeldMessage,
   createBridgeDrain,
@@ -987,6 +989,25 @@ describe("buildMailboxPushMessage", () => {
     assert.deepEqual(message.details, envelope);
     assert.ok(buildMailboxPushMessage({ ...envelope, from: "peer@repo" }).content.startsWith("mail from peer@repo "));
     assert.ok(buildMailboxPushMessage({ ...envelope, reply_to: "id:abc123" }).content.startsWith("mail from id:abc123 "));
+  });
+  test("the sender legend names each labeled addressed sender once; heads and bodies stay as they are", () => {
+    const a = { reply_to: "id:a", label: "Worker A", content: "one", sent_at: "t1" };
+    const b = { from: "p@machine", label: "Peer", content: "two" };
+    const plain = { from: "q@machine", content: "no label" };
+    const system = { label: "pi:childone", content: "system mail" };
+    assert.equal(mailboxLegend([a, b, { ...a, content: "again" }, plain, system]), "[senders: id:a = Worker A; p@machine = Peer]");
+    assert.equal(mailboxLegend([plain, system]), "");
+    assert.equal(mailboxLegend([]), "");
+    assert.equal(mailboxLegend([{ from: "x@y", label: "a;b]\nc", content: "m" }]), "[senders: x@y = ab c]");
+    assert.equal(mailboxLegend([{ from: "x@y", label: ";]", content: "m" }]), "");
+    assert.equal(mailboxLegend([{ from: "x@y", label: "가".repeat(40), content: "m" }]), `[senders: x@y = ${"가".repeat(32)}]`);
+    assert.equal(mailboxLegend([{ from: "x@y", label: 7 as never, content: "m" }]), "");
+
+    const messages = buildMailboxPushMessages([a, plain]);
+    assert.equal(messages[0]!.content, "[senders: id:a = Worker A]\n\nmail from id:a (t1):\none");
+    assert.equal(messages[1]!.content, buildMailboxPushMessage(plain).content);
+    assert.deepEqual(messages[0]!.details, buildMailboxPushMessage(a).details);
+    assert.deepEqual(buildMailboxPushMessages([]), []);
   });
   test("a shared-layer sender uses its slug handle and carries the full envelope in details", () => {
     const message = buildMailboxPushMessage({ from: "scout@worktree", content: "run the ready ticket", sent_at: "2026-09-15T12:00:00Z" });

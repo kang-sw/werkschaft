@@ -130,22 +130,24 @@ function assertSingleRow(m, label) {
       if (!(await page.locator('#bcol').isVisible())) {
         await page.locator('[data-tab="board"]').first().click();
       }
-      // Allow the exact-width sweep to reach a full 1600px toolbar past the
-      // 1600px docked-rail stage cap (--pbw). Default-layout sweep below keeps
+      // Allow the exact-width sweep to reach full mode past the 1600px
+      // docked-rail stage cap (--pbw); adding the 9th filter button ("Tickets")
+      // pushes English full-mode past 1600px. Default-layout sweep below keeps
       // untouched production CSS.
-      await page.evaluate(() => { document.documentElement.style.setProperty('--pbw', '1700px'); });
+      const wideTarget = lang === 'en' ? 1750 : 1600;
+      await page.evaluate(() => { document.documentElement.style.setProperty('--pbw', '1900px'); });
       await resetScroll(page);
 
-      // Verify wide width (1600): full labelled bar visible on single row.
-      const actualWide = await setExactToolbarWidth(page, 1600);
-      assert(Math.abs(actualWide - 1600) < 1, `${lang} reached 1600px toolbar width (got ${actualWide})`);
+      // Verify wide width: full labelled bar visible on single row.
+      const actualWide = await setExactToolbarWidth(page, wideTarget);
+      assert(Math.abs(actualWide - wideTarget) < 1, `${lang} reached ${wideTarget}px toolbar width (got ${actualWide})`);
       await resetScroll(page);
       const wide = await measureToolbar(page);
-      assertSingleRow(wide, `${lang} w=1600`);
-      assert.equal(wide.mode, 'full', `${lang} 1600 must be in full mode`);
-      assert.equal(wide.actionLabels, 5, `${lang} 1600 must show all 5 action labels`);
-      assert.equal(wide.filterMode, 'inline', `${lang} 1600 must use inline filter`);
-      assert.equal(wide.filterLabelsVisible, 8, `${lang} 1600 must show all 8 non-ask filter labels`);
+      assertSingleRow(wide, `${lang} w=${wideTarget}`);
+      assert.equal(wide.mode, 'full', `${lang} ${wideTarget} must be in full mode`);
+      assert.equal(wide.actionLabels, 5, `${lang} ${wideTarget} must show all 5 action labels`);
+      assert.equal(wide.filterMode, 'inline', `${lang} ${wideTarget} must use inline filter`);
+      assert.equal(wide.filterLabelsVisible, 9, `${lang} ${wideTarget} must show all 9 non-ask filter labels`);
 
       // Capture requested after screenshots in Korean light theme.
       if (captures && lang === 'ko') {
@@ -160,10 +162,10 @@ function assertSingleRow(m, label) {
         }
       }
 
-      // Sweep 1600 down to 360 in 5px steps.
+      // Sweep down to 360 in 5px steps.
       const transitions = [];
       let prevSig = '';
-      for (let w = 1600; w >= 360; w -= 5) {
+      for (let w = wideTarget; w >= 360; w -= 5) {
         await setExactToolbarWidth(page, w);
         const m = await measureToolbar(page);
         assertSingleRow(m, `${lang} w=${w}`);
@@ -177,7 +179,7 @@ function assertSingleRow(m, label) {
       // Sweep +-6px around every transition in 1px steps (and key widths).
       const checked1px = new Set();
       for (const t of transitions) {
-        const hi = Math.min(1600, t.w + 6);
+        const hi = Math.min(wideTarget, t.w + 6);
         const lo = Math.max(360, t.w - 6);
         for (let w = hi; w >= lo; w--) {
           if (checked1px.has(w)) continue;
@@ -198,7 +200,7 @@ function assertSingleRow(m, label) {
       }
 
       // Verify longest filter label selected ("awaiting-confirmation") stays single-row down to 360px.
-      await setExactToolbarWidth(page, 1600);
+      await setExactToolbarWidth(page, wideTarget);
       await resetScroll(page);
       await page.locator('.board-state-radio[data-filter="awaiting-confirmation"]').click();
       await settle(page);

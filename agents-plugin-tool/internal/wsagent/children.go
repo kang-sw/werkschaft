@@ -610,10 +610,25 @@ func (r *Runner) deliverPending() {
 // steeredReport is a report or user message steered into the running turn:
 // seq is its steer command's place among the process's (steerSeq). Mark is
 // the Send coverage of a user message, applied only once Pi takes it.
+// Text is exactly what was steered, which the harness's taken messages
+// match (steerTaken, RecoveredSteers). Mail is a steered mail's text as
+// Drain gave it, set when its steer carried a sender legend: one requeued
+// for a turn goes back without that legend, so its next submission
+// resolves a current one (requeued).
 type steeredReport struct {
 	Text string `json:"text"`
 	Seq  int    `json:"seq"`
+	Mail string `json:"mail,omitempty"`
 	Mark uint64 `json:"-"`
+}
+
+// requeued is the text a steer no run took goes to the next turn as: a
+// steered mail without the legend its steer carried, else Text.
+func (s steeredReport) requeued() string {
+	if s.Mail != "" {
+		return s.Mail
+	}
+	return s.Text
 }
 
 // steerWorker submits a spawned worker's marked inbox messages through the
@@ -698,7 +713,7 @@ func (c *conv) steerAnswered(refusal string) {
 				fmt.Fprintf(c.r.opts.Log, "agent %s: the harness refused a steered report (%s); it goes as a turn\n", c.rec.ReplyID, refusal)
 				c.steered = slices.Delete(c.steered, i, i+1)
 				c.saveSteered()
-				c.update(func(rec *Record) { rec.Reports = append(rec.Reports, s.Text) })
+				c.update(func(rec *Record) { rec.Reports = append(rec.Reports, s.requeued()) })
 				break
 			}
 		}
@@ -755,7 +770,7 @@ func (c *conv) requeueSteered() bool {
 	}
 	texts := make([]string, 0, len(c.steered))
 	for _, s := range c.steered {
-		texts = append(texts, s.Text)
+		texts = append(texts, s.requeued())
 	}
 	c.steered = nil
 	c.saveSteered()

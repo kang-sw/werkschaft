@@ -135,7 +135,12 @@ test('all eleven locales localize popup labels, chart titles, accessible text an
     for (const key of ['observed', 'ideal', 'latest', 'estimated']) assert.ok(help.textContent.includes(t(key)), locale + ': ' + key);
     const cards = nodes(pop.el, '.usage-window-card');
     assert.ok(cards[0].textContent.includes(t('fiveHour')));
-    assert.ok(cards[0].attributes['aria-label'].includes(t('stalePace')));
+    assert.equal(cards[0].querySelector('.usage-number').textContent, '—');
+    assert.equal(cards[0].querySelector('.usage-pace'), null);
+    assert.equal(cards[0].querySelector('.usage-no-report').textContent, t('noRecent5h'));
+    assert.equal(cards[1].querySelector('.usage-no-report').textContent, t('noRecentWeekly'));
+    assert.ok(cards[0].attributes['aria-label'].includes(t('noRecent5h')));
+    assert.ok(cards[0].title.includes('60'));
     assert.ok(cards[0].title.includes(t('historyRecorded')));
     const titles = nodes(cards[0], 'title').map(n => n.textContent);
     for (const key of ['idealTitle', 'nowTitle', 'estimatedTitle']) assert.ok(titles.includes(t(key)), locale + ': ' + key);
@@ -213,21 +218,27 @@ test('clip-path ids remain unique across cards, redraws and repeated mounts', as
   const all = [...first, ...second, ...third]; assert.equal(new Set(all).size, all.length);
 });
 
-test('stale cards neutralize the current run and freeze pace', async () => {
+test('stale cards replace the figure with em-dash, hide pace, date the last reading in tooltip, and neutralize the current run', async () => {
   const { env, pop } = await chartFixture({ stale: true, percents: [10, 20] });
   const card = pop.el.querySelector('.usage-window-card');
   assert.ok(card.className.includes('usage-stale'));
   assert.ok(card.querySelector('.usage-clock'));
-  assert.equal(card.querySelector('.usage-pace').textContent, '(−20%)');
-  assert.match(card.attributes['aria-label'], /stale, pace at last observation/);
+  assert.equal(card.querySelector('.usage-number').textContent, '—');
+  assert.equal(card.querySelector('.usage-pace'), null);
+  assert.equal(card.querySelector('.usage-no-report').textContent, 'No recent 5-hour report');
+  assert.doesNotMatch(card.querySelector('.usage-window').textContent, /20%/);
+  assert.match(card.title, /last 20% at /);
+  assert.match(card.attributes['aria-label'], /No recent 5-hour report/);
+  assert.match(card.attributes['aria-label'], /last 20% at /);
   assert.equal(card.querySelector('.usage-point-current').attributes.fill, 'var(--wb-muted-fg)');
   assert.ok(nodes(card, '.usage-actual').every(line => line.attributes.stroke === 'var(--wb-muted-fg)'));
   env.now(Date.UTC(2026, 10, 15) + 3 * 3600000); env.ticks[0].fn(); await flush();
-  assert.equal(pop.el.querySelector('.usage-pace').textContent, '(−20%)');
+  assert.equal(pop.el.querySelector('.usage-number').textContent, '—');
+  assert.equal(pop.el.querySelector('.usage-pace'), null);
   const css = fs.readFileSync(__dirname + '/assets/usage.css', 'utf8');
   assert.match(css, /\.usage-pop \{[^}]*width: min\(988px, calc\(100vw - 16px\)\)/);
-  assert.match(css, /\.usage-stale \.usage-number \{ text-decoration: underline dotted;/);
   assert.match(css, /\.usage-stale, \.usage-stale \.usage-pace \{ color: var\(--wb-muted-fg\); \}/);
+  assert.match(css, /\.usage-no-report \{[^}]*color: var\(--wb-muted-fg\);/);
 });
 
 test('usage ordering, expired windows, thresholds and ages', () => {
@@ -308,7 +319,8 @@ test('footer matches normal, over-pace and weekly-only reference columns', async
   env.window.WsUsage.mount(env.doc, env.top); await flush();
   const columns = groups(env.button).map(g => g.querySelector('.usage-columns').children);
   assert.deepEqual(columns.map(c => c.length), [2, 1]);
-  assert.deepEqual(columns.flatMap(c => c.map(v => v.querySelector('.usage-key').textContent)), ['5h', '주', '주']);
+  assert.deepEqual(columns.flatMap(c => c.map(v => v.querySelector('.usage-key').textContent)), ['5h', 'wk', 'wk']);
+  assert.deepEqual([env.window.wsT('js.usage.key5h'), env.window.wsT('js.usage.keyweekly')], ['5h', 'wk']); // en locale: English short keys
   assert.deepEqual(columns.flatMap(c => c.map(v => v.querySelector('.usage-number').textContent)), ['20%', '53%', '38%']);
   assert.deepEqual(columns.flatMap(c => c.map(v => v.querySelector('.usage-pace').textContent)), ['−13%', '−13%', '−7%']);
   assert.ok(columns[0][0].querySelector('.under'));
@@ -321,7 +333,7 @@ test('footer matches normal, over-pace and weekly-only reference columns', async
   assert.equal(env.button.querySelector('.hb').attributes['data-h'], 'codex');
 });
 
-test('stale boundary is strictly after 30 minutes, per window, with pace frozen at observation', async () => {
+test('stale boundary is strictly after 30 minutes, per window, switching stale columns to em-dash with dated tooltip', async () => {
   const at = Date.UTC(2026, 10, 15), env = environment(at + 30 * 60000);
   const entry = { harness: 'claude', asOf: at + 30 * 60000, windows: [
     { kind: 'five_hour', percent: 20, asOf: at, resetsAt: at + 5 * 3600000 * 2 / 3 },
@@ -330,23 +342,30 @@ test('stale boundary is strictly after 30 minutes, per window, with pace frozen 
   env.set({ entries: [entry] });
   const mounted = env.window.WsUsage.mount(env.doc, env.top); await flush();
   assert.equal(env.button.querySelector('.usage-stale'), null);
+  assert.equal(env.button.querySelector('.usage-number').textContent, '20%');
   assert.equal(env.button.querySelector('.usage-pace').textContent, '−23%');
   env.now(at + 30 * 60000 + 1); mounted.sync();
-  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-pace').textContent, '−13%');
+  const staleCol = env.button.querySelector('.usage-stale');
+  assert.equal(staleCol.querySelector('.usage-number').textContent, '—');
+  assert.equal(staleCol.querySelector('.usage-pace'), null);
   assert.ok(env.button.querySelector('.usage-clock'));
-  assert.ok(env.button.querySelector('.usage-stale').attributes['aria-label'].includes('stale, pace at last observation'));
+  assert.match(staleCol.attributes['aria-label'], /No recent 5-hour report/);
+  assert.match(staleCol.attributes['aria-label'], /last 20% at /);
   assert.equal(env.button.querySelector('.usage-columns').children[1].className, 'usage-column');
+  assert.equal(env.button.querySelector('.usage-columns').children[1].querySelector('.usage-number').textContent, '53%');
   env.now(at + 42 * 60000); mounted.sync();
-  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-pace').textContent, '−13%');
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '—');
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-pace'), null);
   env.now(at + 55 * 60000); mounted.sync();
-  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-pace').textContent, '−13%');
-  // Stale positive pace must also be neutralized, not just negative pace.
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '—');
+  // Stale positive-pace values also render as em-dash without pace or over tone.
   entry.windows[0].percent = 64; mounted.sync();
-  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-pace').textContent, '+31%');
-  assert.ok(env.button.querySelector('.usage-stale').querySelector('.over'));
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-number').textContent, '—');
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.usage-pace'), null);
+  assert.equal(env.button.querySelector('.usage-stale').querySelector('.over'), null);
+  assert.match(env.button.querySelector('.usage-stale').title, /last 64% at /);
   const css = fs.readFileSync(__dirname + '/assets/usage.css', 'utf8');
   assert.match(css, /\.usage-stale, \.usage-stale \.usage-pace \{ color: var\(--wb-muted-fg\); \}/);
-  assert.match(css, /\.usage-stale \.usage-number \{ text-decoration: underline dotted;/);
 });
 
 test('missing and expired windows never create placeholder columns or fabricated pace', async () => {
@@ -363,10 +382,14 @@ test('missing and expired windows never create placeholder columns or fabricated
   assert.ok(env.button.querySelector('.usage-column').attributes['aria-label'].includes('pace unavailable'));
   entry.windows[1].resetsAt = at + 7 * 86400000;
   delete entry.windows[1].asOf; mounted.sync();
-  assert.equal(env.button.querySelector('.usage-pace').textContent, '—');
+  assert.equal(env.button.querySelector('.usage-number').textContent, '—');
+  assert.equal(env.button.querySelector('.usage-pace'), null);
+  assert.match(env.button.querySelector('.usage-column').attributes['aria-label'], /No recent weekly report/);
   entry.asOf = at; mounted.sync();
+  assert.equal(env.button.querySelector('.usage-number').textContent, '38%');
   assert.equal(env.button.querySelector('.usage-pace').textContent, '+38%');
   entry.windows[1].percent = 0; mounted.sync();
+  assert.equal(env.button.querySelector('.usage-number').textContent, '0%');
   assert.equal(env.button.querySelector('.usage-pace').textContent, '0%');
   assert.equal(env.button.querySelector('.under'), null);
   assert.equal(env.button.querySelector('.over'), null);
@@ -714,4 +737,133 @@ test('popover uses window rows, transposed container rules and a localized missi
   assert.match(css, /@container usage-pop \(max-width: 600px\)/);
   assert.match(css, /@container usage-pop \(max-width: 336px\)/);
   pop.close();
+});
+
+test('stale 5h 0% with fresh weekly shows em-dash/no-report and weekly heading age, then handles reset and fresh 0%', async () => {
+  const t0711 = Date.UTC(2026, 10, 22, 7, 11);
+  const reset5h = Date.UTC(2026, 10, 22, 11, 0);
+  const t1011 = Date.UTC(2026, 10, 22, 10, 11);
+  const reset7d = Date.UTC(2026, 10, 29, 0, 0);
+  const now1 = Date.UTC(2026, 10, 22, 10, 13);
+  const env = environment(now1, 'en');
+  env.set({
+    entries: [{
+      harness: 'claude', plan: 'max', source: 'Claude push', asOf: t1011,
+      windows: [
+        { kind: 'five_hour', percent: 0, asOf: t0711, resetsAt: reset5h },
+        { kind: 'seven_day', percent: 2, asOf: t1011, resetsAt: reset7d }
+      ]
+    }]
+  });
+  const mounted = env.window.WsUsage.mount(env.doc, env.top); await flush();
+  const pop = mounted.makePopover(() => {}, () => {}); pop.open(); await flush();
+
+  // Stage 1: stale 07:11 five_hour 0% + fresh 10:11 seven_day 2%.
+  const cols1 = groups(env.button)[0].querySelector('.usage-columns').children;
+  assert.equal(cols1.length, 2);
+  assert.ok(cols1[0].className.includes('usage-stale'));
+  assert.equal(cols1[0].querySelector('.usage-number').textContent, '—');
+  assert.equal(cols1[0].querySelector('.usage-pace'), null);
+  assert.match(cols1[0].title, /No recent 5-hour report/);
+  assert.match(cols1[0].title, /last 0% at /);
+  assert.ok(!cols1[1].className.includes('usage-stale'));
+  assert.equal(cols1[1].querySelector('.usage-number').textContent, '2%');
+  assert.ok(cols1[1].querySelector('.usage-pace'));
+
+  const cards1 = nodes(pop.el, '.usage-window-card');
+  assert.equal(cards1.length, 2);
+  const c5 = cards1[0], c7 = cards1[1];
+  assert.ok(c5.className.includes('usage-stale'));
+  assert.equal(c5.querySelector('.usage-number').textContent, '—');
+  assert.equal(c5.querySelector('.usage-pace'), null);
+  assert.equal(c5.querySelector('.usage-no-report').textContent, 'No recent 5-hour report');
+  assert.doesNotMatch(c5.querySelector('.usage-window').textContent, /0%/);
+  assert.match(c5.title, /last 0% at /);
+  assert.match(c5.attributes['aria-label'], /No recent 5-hour report/);
+  assert.match(c5.attributes['aria-label'], /last 0% at /);
+  assert.ok(!c7.className.includes('usage-stale'));
+  assert.equal(c7.querySelector('.usage-number').textContent, '2%');
+  assert.ok(c7.querySelector('.usage-pace'));
+  assert.equal(c7.querySelector('.usage-no-report'), null);
+  // Heading age excludes the stale 5h window and uses fresh weekly age (2m ago, not 3h ago).
+  assert.equal(pop.el.querySelector('.usage-vage').textContent, '2m ago');
+  assert.equal(pop.el.querySelector('.usage-vage').title, 'value from 2 min ago');
+
+  // When every window is stale, heading age falls back to the oldest window.
+  env.now(t1011 + 35 * 60000); env.ticks[0].fn(); await flush();
+  assert.equal(pop.el.querySelector('.usage-vage').textContent, '3h ago');
+  assert.equal(nodes(pop.el, '.usage-window-card')[1].querySelector('.usage-number').textContent, '—');
+  assert.equal(nodes(pop.el, '.usage-window-card')[1].querySelector('.usage-no-report').textContent, 'No recent weekly report');
+
+  // Stage 2: advance past five_hour reset with fresh weekly -> absent five_hour handled cleanly.
+  const now2 = reset5h + 60000;
+  env.now(now2);
+  env.set({
+    entries: [{
+      harness: 'claude', plan: 'max', source: 'Claude push', asOf: reset5h,
+      windows: [
+        { kind: 'five_hour', percent: 0, asOf: t0711, resetsAt: reset5h },
+        { kind: 'seven_day', percent: 2, asOf: reset5h, resetsAt: reset7d }
+      ]
+    }]
+  });
+  env.ticks[0].fn(); await flush();
+  const cols2 = groups(env.button)[0].querySelector('.usage-columns').children;
+  assert.equal(cols2.length, 1);
+  assert.equal(cols2[0].querySelector('.usage-key').textContent, 'wk');
+  assert.equal(cols2[0].querySelector('.usage-number').textContent, '2%');
+  assert.equal(env.button.querySelector('.usage-clock'), null);
+  const empty5 = pop.el.querySelector('.usage-window-empty');
+  assert.ok(empty5);
+  assert.equal(empty5.attributes['data-kind'], 'five_hour');
+  assert.equal(empty5.textContent, 'no 5-hour window');
+  assert.equal(nodes(pop.el, '.usage-window-card').length, 1);
+  assert.equal(pop.el.querySelector('.usage-vage').textContent, '1m ago');
+
+  // Stage 3: a fresh observed 0% five_hour report renders numeric 0% with pace (distinct from unknown).
+  const now3 = now2 + 60000;
+  env.now(now3);
+  env.set({
+    entries: [{
+      harness: 'claude', plan: 'max', source: 'Claude push', asOf: now3,
+      windows: [
+        { kind: 'five_hour', percent: 0, asOf: now3, resetsAt: now3 + 5 * 3600000 },
+        { kind: 'seven_day', percent: 2, asOf: now3, resetsAt: reset7d }
+      ]
+    }]
+  });
+  env.ticks[0].fn(); await flush();
+  const cols3 = groups(env.button)[0].querySelector('.usage-columns').children;
+  assert.equal(cols3.length, 2);
+  assert.ok(!cols3[0].className.includes('usage-stale'));
+  assert.equal(cols3[0].querySelector('.usage-number').textContent, '0%');
+  assert.equal(cols3[0].querySelector('.usage-pace').textContent, '0%');
+  const cards3 = nodes(pop.el, '.usage-window-card');
+  assert.equal(cards3.length, 2);
+  assert.ok(!cards3[0].className.includes('usage-stale'));
+  assert.equal(cards3[0].querySelector('.usage-number').textContent, '0%');
+  assert.equal(cards3[0].querySelector('.usage-pace').textContent, '(0%)');
+  assert.equal(cards3[0].querySelector('.usage-no-report'), null);
+  assert.equal(cards3[0].querySelector('.usage-clock'), null);
+  assert.equal(pop.el.querySelector('.usage-vage').textContent, '0m ago');
+  pop.close();
+
+  // Korean locale sanity check for natural label.
+  const koEnv = environment(now1, 'ko');
+  koEnv.set({
+    entries: [{
+      harness: 'claude', plan: 'max', asOf: t1011,
+      windows: [
+        { kind: 'five_hour', percent: 0, asOf: t0711, resetsAt: reset5h },
+        { kind: 'seven_day', percent: 2, asOf: t1011, resetsAt: reset7d }
+      ]
+    }]
+  });
+  const koMounted = koEnv.window.WsUsage.mount(koEnv.doc, koEnv.top); await flush();
+  const koPop = koMounted.makePopover(() => {}, () => {}); koPop.open(); await flush();
+  const koCard5 = nodes(koPop.el, '.usage-window-card')[0];
+  assert.equal(koCard5.querySelector('.usage-number').textContent, '—');
+  assert.equal(koCard5.querySelector('.usage-no-report').textContent, '최근 5시간 보고 없음');
+  assert.match(koCard5.title, /마지막 0% \(/);
+  koPop.close();
 });

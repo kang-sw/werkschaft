@@ -446,8 +446,13 @@
       return draftUnsaved;
     }));
   }
+  async function persistForWindowClose() {
+    await draftReady;
+    return (await saveDraft()) && !draftUnsaved;
+  }
   if (framed) {
     window.wsSaveSessionDraft = saveDraft;
+    window.wsPersistDraftForWindowClose = persistForWindowClose;
     window.wsPrepareSessionLeave = async function () {
       await draftReady;
       await saveDraft();
@@ -481,6 +486,39 @@
   var shFrames = [], shOn = null, shWant = null, shLeaving = null, shHeadHtml = null, shSeq = 0, shTrackerRev = null;
   var shIndex = 0, shRestoring = null, shRestoreNav = null, shRestoreTimer = null;
   var shTop = doc.querySelector(".dwrap > .top"), shBody = doc.querySelector(".dwrap > .dbody");
+  var shCompanion = null, shCompanionFrame = null, shCompanionMuted = false, shCompanionMode = "off";
+  function shCompanionTarget(ent, refreshed) {
+    if (!shCompanion || shCompanionFrame === ent && !refreshed) return;
+    if (shCompanionFrame && shCompanionFrame !== ent) shSend(shCompanionFrame, "companion-gate", { active: false });
+    shCompanionFrame = ent;
+    shCompanion.reset();
+    shCompanion.trackFrame(ent?.el || null);
+    if (ent) shSend(ent, "companion-gate", { active: true });
+  }
+  function shCompanionStop() {
+    if (!shCompanion) return;
+    if (shCompanionFrame) shSend(shCompanionFrame, "companion-gate", { active: false });
+    shCompanionFrame = null;
+    shCompanion.dispose();
+    shCompanion = null;
+  }
+  function shCompanionConfigure(config) {
+    if (!config || !window.WsCompanion) return;
+    if (config.mode !== shCompanionMode) shCompanionMuted = false;
+    shCompanionMode = config.mode;
+    if (shCompanionMuted || config.mode !== "visual" && config.mode !== "full") {
+      shCompanionStop();
+      return;
+    }
+    if (shCompanion) shCompanion.apply(config);
+    else {
+      shCompanion = window.WsCompanion.mount(config, function () {
+        shCompanionMuted = true;
+        shCompanionStop();
+      });
+      if (!shWant && shOn?.loaded) shCompanionTarget(shOn);
+    }
+  }
   function shHistoryIndex() { return history.state && Number.isSafeInteger(history.state.wsShellIndex) ? history.state.wsShellIndex : shIndex; }
   function shPush(f) {
     shIndex = shHistoryIndex() + 1;
@@ -589,7 +627,10 @@
       ent.loaded = true;
       shSettings(ent);
       if (shWant === ent) shShow(ent);
-      else shSend(ent, "shown", { shown: ent === shOn });
+      else {
+        shSend(ent, "shown", { shown: ent === shOn });
+        if (!shWant && ent === shOn) shCompanionTarget(ent, true);
+      }
     });
     shFrames.push(ent);
     return ent;
@@ -670,7 +711,7 @@
     }
     if (!accepted || shHistoryIndex() !== leave.index) { shStay(leave); return; }
     shDrop(ent, true);
-    if (shOn === ent) shOn = null;
+    if (shOn === ent) { shOn = null; shCompanionTarget(null); }
     if (shWant && shWant.f.path !== f.path) shDrop(shWant);
     shStart(f, push);
   }
@@ -686,6 +727,7 @@
       return;
     }
     var el = doc.createElement("iframe");
+    shCompanionTarget(null);
     el.className = shOn ? "sframe" : "sframe on";
     el.title = doc.title;
     if (shWant) shDrop(shWant);
@@ -753,6 +795,7 @@
     }
     shPrune();
     shSend(ent, "shown", { shown: true });
+    shCompanionTarget(ent);
     shRid(ent.f.rid);
     shHead(ent);
     shLayout(ent);
@@ -852,7 +895,15 @@
           if (m.key === "rail") railKey();
           else if (m.key === "esc" && railShown()) railOpen(false);
           break;
-        case "press": if (on) railPopClose(false); break;
+        case "press":
+          if (on) { railPopClose(false); shCompanion?.closeMenu(); }
+          break;
+        case "companion-context":
+          if (on && ent === shCompanionFrame && e.source === shOn.el.contentWindow) {
+            if (m.sessionId !== ent.f.rid || (m.routeKind === "session") !== !!ent.f.rid) break;
+            shCompanion.context(m, shOn.el.getBoundingClientRect());
+          }
+          break;
         case "layout": ent.pincol = m.pincol; ent.dim = m.dim; ent.popover = m.popover === true; if (on) shLayout(ent); break;
         case "scroll": ent.y = m.y; if (on) shScroll(ent); break;
         case "hash": if (on && !shLeaving && shRestoring === null && location.hash !== m.hash) history.replaceState(history.state, "", ent.f.path + m.hash); ent.f.hash = m.hash; break;
@@ -1027,6 +1078,9 @@
         tickTimes();
         if (shTrackerRev !== null) { var rev = shTrackerRev; shTrackerRev = null; trackerNudge(rev); }
         queue();
+      } else if (m.wsShell === "companion-gate") {
+        if (m.active && !companionRelay) companionRelay = startCompanionRelay();
+        else if (!m.active && companionRelay) { companionRelay.dispose(); companionRelay = null; }
       } else if (m.wsShell === "search") {
         // Open, do not toggle a hidden header button via a synthetic click.
         tkSearch();
@@ -1099,10 +1153,28 @@
   restoreSessionView();
   nearTop();
   if (framed) shFrameInit();
-  if (shell && window.WsShell) shShellInit();
+  if (shell && window.WsShell) {
+    shShellInit();
+    doc.addEventListener("ws-companion-config", function (event) { shCompanionConfigure(event.detail); });
+    shCompanionConfigure(window.wsCompanionConfig);
+    window.addEventListener("pagehide", function (event) { if (!event.persisted) shCompanionStop(); });
+  }
+  if (window === window.top) {
+    window.wsNativeCloseReady = async function () {
+      if (!shell) return persistForWindowClose();
+      var frames = shFrames.slice();
+      var results = await Promise.all(frames.map(function (entry) {
+        var page = entry.el.contentWindow;
+        return page && typeof page.wsPersistDraftForWindowClose === "function" &&
+          page.wsPersistDraftForWindowClose();
+      }));
+      return shFrames.length === frames.length && frames.every(function (entry, i) {
+        return entry === shFrames[i] && results[i] === true;
+      });
+    };
+  }
   // --- desktop app update
-  // Only the Werkschaft desktop shell's preload defines werkschaftDesktop;
-  // a browser tab (or an older shell) never shows the row or the toasts.
+  // The desktop shell provides the optional bridge before or after page load.
   // Status: { state, version, message, skipped, phase: { phase, version,
   // skipped } }; state drives the toast, phase (unchecked | none |
   // available | ready) the settings line. downloadPage, when the shell sends
@@ -1111,10 +1183,13 @@
   // through the shell's window-open handler. A current shell adds an
   // optional action (canary | stable-return) to statuses and phases of a
   // manual channel selection, and limited to a canary miss at the page cap.
+  var desktopUpdateMounted = false;
   function desktopUpdate() {
+    if (desktopUpdateMounted || window !== window.top) return;
     var api = window.werkschaftDesktop && window.werkschaftDesktop.update;
     var card = gmenu && gmenu.querySelector(".gmenu");
     if (!api || typeof api.onStatus !== "function" || !card || !window.WsToast) return;
+    desktopUpdateMounted = true;
     var note = card.querySelector(".gn");
     function item(id, mark, label) {
       var b = doc.createElement("button");
@@ -1208,6 +1283,7 @@
     });
   }
   if (!shell) trackerStart();
+  window.addEventListener("werkschaft-update-ready", desktopUpdate);
   desktopUpdate();
   syncSpinnerPhases(doc);
   connect();

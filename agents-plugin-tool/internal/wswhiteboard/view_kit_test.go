@@ -45,6 +45,7 @@ El.prototype.getBoundingClientRect = function () {
   var y = this.top, h = this.clientHeight || this.height;
   if (this.sc) { y = (this.sc === html ? 0 : this.sc.top) + this.y - this.sc.scrollTop; h = this.height;
     for (var p = this; p && p !== this.sc; p = p.parentElement) y += p.ty;
+    if (this.stick !== undefined) y = Math.max(y, (this.sc === html ? 0 : this.sc.top) + this.stick);
   }
   return { top: y, bottom: y + h, height: h, left: 0, right: 500, width: 500 };
 };
@@ -66,7 +67,7 @@ var win = {
   document: document, innerHeight: 800, performance: { now: function () { return now; } },
   IntersectionObserver: IO, ResizeObserver: RO, setTimeout: setTimeout, clearTimeout: clearTimeout,
   requestAnimationFrame: function (fn) { return setTimeout(function () { fn(now); }, 16); }, cancelAnimationFrame: clearTimeout,
-  getComputedStyle: function (el) { return { overflowY: el.oy, scrollPaddingTop: el.padding || '0', position: el.sticky ? 'sticky' : 'static', top: '0', transform: el.ty ? 'matrix(1,0,0,1,0,' + el.ty + ')' : 'none' }; },
+  getComputedStyle: function (el) { return { overflowY: el.oy, scrollPaddingTop: el.padding || '0', position: el.sticky ? 'sticky' : 'static', top: el.stick !== undefined ? el.stick + 'px' : '0', transform: el.ty ? 'matrix(1,0,0,1,0,' + el.ty + ')' : 'none' }; },
   addEventListener: function (t, f) { (winOn[t] = winOn[t] || []).push(f); },
   removeEventListener: function (t, f) { var l = winOn[t] || [], i = l.indexOf(f); if (i >= 0) l.splice(i, 1); }
 };
@@ -230,6 +231,58 @@ var d=topic(plain,'document',html,900),p=topic(bpins,'pin',bpins,700);
 k.jump(d);d.y+=100;advance(16);check('document correction',html.scrollTop,620);winFire('touchstart');
 k.jump(p,{block:'start'});p.y+=80;advance(16);check('pinned correction',bpins.scrollTop,780);bpins.fire('pointerdown');
 check('jumps do not add permanent input hooks',(winOn.keydown||[]).length,nHooks+2);
+`)
+}
+
+// Centered navigation re-measures every frame, so its destination must not
+// depend on where its own scroll leaves a sticky head. A 40px head sticking
+// at 46px sits 105px above a 40px target; landing centered (clearance 124
+// below 50px scroll padding) brings the head to 95px, within the old scan's
+// adoption line (50 + 46 + 1), whose larger top moved the destination back
+// to 399.5, where the head no longer qualified: 405 and 399.5 alternated
+// every frame until the 2 s cap. The top pill hiding at home closed the same
+// loop through the caller's clearance.
+func TestViewKitCenterClearanceUnderNode(t *testing.T) {
+	runViewKit(t, `
+win.matchMedia=function(){return {matches:false};};
+var lands=[];
+El.prototype.scrollTo=function(opt){lands.push(opt.top);this.scrollTop=opt.top;};
+var nav=body.add(new El('nav'));nav.oy='auto';nav.scrollHeight=4000;nav.clientHeight=700;nav.padding='50px';
+var navBoard=nav.add(new El('navBoard'));
+var head=topic(navBoard,'navHead',nav,500);head.candidate=false;head.sticky=true;head.stick=46;
+var target=topic(navBoard,'navTarget',nav,797);
+var k=viewKit(win), ends=[];
+function go(clearance){lands=[];ends=[];k.jump(target,{centerVisible:true,clearance:clearance,onEnd:function(r){ends.push(r);}});advance(2100);}
+go(function(){return 124;});
+check('approaching sticky head does not move the destination',[lands,nav.scrollTop,ends],[[405],405,['settled']]);
+// Rail capsules set the head's sticky top and the pill's top from the topics
+// above, which the jump changes: the caller's clearance is latched when the
+// jump starts and read once more when the landing settles (146 centers at
+// 394, back under 400, where it is not read again).
+var reads=0;
+nav.scrollTop=0;
+go(function(){reads++;return nav.scrollTop>=400?146:124;});
+check('scroll-dependent clearance corrects once',[lands,nav.scrollTop,ends,reads],[[405,394],394,['settled'],2]);
+nav.scrollTop=1500;
+go(function(){return nav.scrollTop>1000?168:124;});
+check('the destination clearance replaces the origin one',[lands,nav.scrollTop,ends],[[383,405],405,['settled']]);
+// Late layout still moves the target and is followed.
+nav.scrollTop=0;setTimeout(function(){target.y+=80;},67);
+go(function(){return 124;});
+check('late layout is followed',[lands,nav.scrollTop,ends],[[405,485],485,['settled']]);
+target.y=797;
+// The top pill (top 56, 28px) hides at the scroller's home with nothing
+// above: clearance 84 clamps a target at 365 to 0, where the pill hides and
+// clearance 0 centers it at 10, where the pill shows again. 0 and 10
+// alternated every frame until the cap. Navigation reserves the pill's slot
+// while hidden (stream-navigation.js), and the kit bounds a clearance that
+// still follows it to one correction.
+head.connected=false;target.y=365;
+function pill(){return nav.scrollTop>4?84:0;}
+nav.scrollTop=600;go(pill);
+check('pill shown at the start: one correction',[lands,nav.scrollTop,ends],[[0,10],10,['settled']]);
+nav.scrollTop=0;go(function(){return 84;});
+check('reserved pill slot: home stays put',[lands,nav.scrollTop,ends],[[0],0,['settled']]);
 `)
 }
 

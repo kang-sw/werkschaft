@@ -84,6 +84,18 @@ func (r *Runner) mailRelation(rec Record, sender string) string {
 	return "peer"
 }
 
+// SpawnLabel is the label its spawner gave the spawned conversation whose
+// reply-id is replyID (Record.Label of a conversation with a Parent), ""
+// for a conversation the runner does not know or one nobody spawned. Mail
+// delivery reads it for the sender legend; it reads memory only.
+func (r *Runner) SpawnLabel(replyID string) string {
+	rec, ok := r.recordOf(replyID)
+	if !ok || rec.Parent == nil {
+		return ""
+	}
+	return rec.Label
+}
+
 // childWaitingExpiry is how long a child may wait before it is deleted:
 // agent.child_waiting_days, read once per runner.
 func (r *Runner) childWaitingExpiry() time.Duration {

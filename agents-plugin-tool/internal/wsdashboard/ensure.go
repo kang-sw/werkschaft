@@ -2,6 +2,8 @@ package wsdashboard
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -58,6 +60,13 @@ type EnsureOptions struct {
 	SpawnBeforeShutdown bool
 	// PreserveRunningLAN uses each fresh healthy observation, not an earlier probe.
 	PreserveRunningLAN bool
+	// DesktopStart limits the starter to one handoff of the shell's observed
+	// daemon. A nil Predecessor authorizes a missing-only start.
+	DesktopStart bool
+	Predecessor  *DaemonIdentity
+	// PrepareSuccessor creates a process gated on the returned admission
+	// callback. It is needed only when a desktop start replaces a daemon.
+	PrepareSuccessor func(args []string) (admit func(bool) error, err error)
 	// Port is the configured dashboard.port, passed to a started daemon as
 	// its --port flag.
 	Port int
@@ -78,6 +87,26 @@ type EnsureOptions struct {
 	PollInterval time.Duration
 	// Log receives diagnostics; nil discards them.
 	Log io.Writer
+}
+
+// DaemonIdentity binds a desktop handoff to a health observation without
+// putting the endpoint bearer into the starter's arguments or input.
+type DaemonIdentity struct {
+	Port      int    `json:"port"`
+	PID       int    `json:"pid"`
+	StartedAt string `json:"started_at"`
+	Version   string `json:"version"`
+	TokenHash string `json:"token_sha256"`
+}
+
+func (id *DaemonIdentity) matches(ep Endpoint, info HealthInfo) bool {
+	if id == nil || ep.Token == "" {
+		return false
+	}
+	sum := sha256.Sum256([]byte(ep.Token))
+	return ep.Port == id.Port && ep.PID == id.PID && info.StartedAt == id.StartedAt &&
+		(info.Port == 0 || info.Port == ep.Port) && info.Version == id.Version &&
+		hex.EncodeToString(sum[:]) == id.TokenHash
 }
 
 // DaemonArgs is the ws-mcp argument list that starts a daemon on port, in
@@ -120,6 +149,11 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 	if client == nil {
 		client = &http.Client{Timeout: DefaultHealthTimeout, Transport: &http.Transport{Proxy: nil}}
 	}
+	if opts.DesktopStart {
+		direct := *client
+		direct.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &direct
+	}
 	logw := opts.Log
 	if logw == nil {
 		logw = io.Discard
@@ -143,6 +177,12 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 		previous, readErr := ReadEndpoint(opts.Dir)
 		if readErr == nil {
 			info, err := Health(ctx, client, previous)
+			if opts.DesktopStart && err == nil && !opts.Predecessor.matches(previous, info) {
+				return OutcomeRunning, nil
+			}
+			if opts.DesktopStart && err != nil && opts.Predecessor != nil {
+				return OutcomeUnavailable, errors.New("dashboard: observed predecessor health became uncertain")
+			}
 			if err == nil && opts.PreserveRunningLAN {
 				opts.LAN = info.LAN
 			}
@@ -156,6 +196,15 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 				}
 				return OutcomeStarted, nil
 			case err == nil:
+				if opts.DesktopStart {
+					if err := replaceFromDesktop(ctx, client, opts, previous); err != nil {
+						return OutcomeUnavailable, err
+					}
+					if !waitForSuccessor(ctx, client, opts, previous.Token, logw) {
+						return OutcomeUnavailable, nil
+					}
+					return OutcomeReplaced, nil
+				}
 				if opts.SpawnBeforeShutdown {
 					// A successful Spawn means OS-accepted independent process creation,
 					// not health readiness; lock wait must cover the drain below.
@@ -177,6 +226,9 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 			default:
 				fmt.Fprintf(logw, "dashboard: recorded daemon unreachable (%v); starting one\n", err)
 			}
+		}
+		if opts.DesktopStart && readErr != nil && opts.Predecessor != nil {
+			return OutcomeUnavailable, errors.New("dashboard: observed predecessor endpoint became unavailable")
 		}
 		if opts.SpawnBeforeShutdown && spawns > 0 {
 			opts.Replace = false // Explicit request is consumed by the first spawn.
@@ -200,7 +252,48 @@ func Ensure(ctx context.Context, opts EnsureOptions) (Outcome, error) {
 		if !waitForSuccessor(ctx, client, opts, previous.Token, logw) {
 			return OutcomeUnavailable, nil
 		}
+		if opts.DesktopStart {
+			return OutcomeStarted, nil
+		}
 	}
+}
+
+func replaceFromDesktop(ctx context.Context, client *http.Client, opts EnsureOptions, previous Endpoint) error {
+	if opts.PrepareSuccessor == nil {
+		return errors.New("dashboard: no desktop successor preflight")
+	}
+	// Retain the dashboard origin and its webview-local drafts.
+	admit, err := opts.PrepareSuccessor(DaemonArgs(previous.Port, opts.LAN, opts.BuildTime))
+	if err != nil {
+		return fmt.Errorf("dashboard: successor preflight: %w", err)
+	}
+	allowed := false
+	defer func() {
+		if !allowed {
+			_ = admit(false)
+		}
+	}()
+	// Process creation can block under antivirus. Recheck the endpoint and
+	// REST identity immediately before draining the predecessor.
+	current, err := ReadEndpoint(opts.Dir)
+	if err != nil {
+		return errors.New("dashboard: predecessor endpoint became unreadable")
+	}
+	health, err := Health(ctx, client, current)
+	if err != nil || !opts.Predecessor.matches(current, health) {
+		return errors.New("dashboard: predecessor changed before drain")
+	}
+	if rechecked, err := ReadEndpoint(opts.Dir); err != nil || rechecked != current {
+		return errors.New("dashboard: predecessor endpoint changed before drain")
+	}
+	if err := RequestShutdown(ctx, client, current); err != nil {
+		return fmt.Errorf("dashboard: authenticated drain uncertain: %w", err)
+	}
+	allowed = true
+	if err := admit(true); err != nil {
+		return fmt.Errorf("dashboard: successor release after drain: %w", err)
+	}
+	return nil
 }
 
 // keepRunning reports whether the healthy daemon info describes may stay:

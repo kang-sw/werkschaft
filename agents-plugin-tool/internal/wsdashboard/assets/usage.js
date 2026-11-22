@@ -42,6 +42,7 @@
   function label(kind) { return kind === "five_hour" ? "5-hour" : "Weekly"; }
   function observation(w, entry) { return w.asOf || entry.asOf; }
   function stale(at, now) { return !!at && now - at > 30 * 60000; }
+  function unreported(at, now) { return !at || stale(at, now); }
   function pace(w, at) {
     var duration = w.kind === "five_hour" ? 5 * 3600000 : 7 * 86400000;
     if (!w.resetsAt || !at) return null;
@@ -131,6 +132,45 @@
       if (node.style && typeof node.style.setProperty === "function") node.style.setProperty(name, String(value));
       else if (node.style) node.style[name] = String(value);
     }
+    var keys = {
+      heading: "js.usage.heading", close: "js.usage.close", legend: "js.usage.legend",
+      fiveHour: "js.usage.fivehour", weekly: "js.usage.weekly", age: "js.usage.age",
+      unavailable: "js.usage.unavailable", signInRequired: "js.usage.signinrequired", disabled: "js.usage.disabled",
+      pending: "js.usage.pending",
+      noFiveHour: "js.usage.no5h", noWeekly: "js.usage.noweekly", modelGroups: "js.usage.modelgroups",
+      chart: "js.usage.chart", baseline: "js.usage.baseline",
+      unknownReset: "js.usage.unknownreset", noRecent5h: "js.usage.norecent5h",
+      noRecentWeekly: "js.usage.norecentweekly", lastReading: "js.usage.lastreading",
+      idealTitle: "js.usage.idealtitle",
+      nowTitle: "js.usage.nowtitle", now: "js.usage.now", estimatedTitle: "js.usage.estimatedtitle",
+      interval: "js.usage.interval", current: "js.usage.current", stale: "js.usage.stale",
+      resets: "js.usage.resets", unknown: "js.usage.unknown", card: "js.usage.card",
+      historyUnavailable: "js.usage.historyunavailable", historyEmpty: "js.usage.historyempty",
+      historyRecorded: "js.usage.historyrecorded", historyEarlier: "js.usage.historyearlier",
+      currentOnly: "js.usage.currentonly", noObservation: "js.usage.noobservation", notLoggedIn: "js.usage.notloggedin",
+      observed: "js.usage.observed", ideal: "js.usage.ideal", latest: "js.usage.latest", estimated: "js.usage.estimated",
+      key5h: "js.usage.key5h", keyWeekly: "js.usage.keyweekly"
+    };
+    function t(key) { return window.wsT.apply(null, [keys[key]].concat(Array.prototype.slice.call(arguments, 1))); }
+    function locale() { return window.wsI18n.lang; }
+    function windowLabel(kind) { return t(kind === "five_hour" ? "fiveHour" : "weekly"); }
+    function noRecentLabel(kind) { return t(kind === "five_hour" ? "noRecent5h" : "noRecentWeekly"); }
+    function observedAge(at, now) { return at ? t("age", Math.max(0, Math.floor((now - at) / 60000))) : t("unavailable"); }
+    function observedTime(at, now) {
+      var d = new Date(at), cur = new Date(now);
+      if (d.getFullYear() === cur.getFullYear() && d.getMonth() === cur.getMonth() && d.getDate() === cur.getDate()) {
+        return d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
+      }
+      return new Intl.DateTimeFormat(locale(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(d);
+    }
+    function lastReading(w, at, now) {
+      return at && Number.isFinite(w.percent) ? t("lastReading", Math.round(w.percent), observedTime(at, now)) : "";
+    }
+    function statusText(status) {
+      if (status === "sign-in required") return t("signInRequired");
+      if (!status || status === "usage unavailable") return t("unavailable");
+      return status;
+    }
     function icon(entry, small) { var n = el("span", small ? "hb sm" : "hb"); n.setAttribute("data-h", String(entry.harness || "")); return n; }
     // mini is the compact trigger the handle steps down to where the header
     // runs short (rail.js topFit): a gauge, the handle's label its tooltip.
@@ -197,18 +237,26 @@
         ["five_hour", "seven_day"].forEach(function (kind) {
           var w = enabled.filter(function (v) { return v.kind === kind; })[0];
           if (!w) return;
-          var at = observation(w, entry), old = stale(at, now);
-          // Once stale, compare at the last observation, never at an advancing
-          // wall clock that would invent headroom from an unchanged value.
-          var delta = at ? pace(w, old ? at : now) : null;
-          var comparison = delta === null ? "—" : (delta > 0 ? "+" : delta < 0 ? "\u2212" : "") + Math.abs(delta) + "%";
-          var column = el("span", "usage-column" + (old ? " usage-stale" : ""));
-          var current = el("span", "usage-current"), number = el("span", "usage-number", Math.round(w.percent));
-          number.appendChild(el("span", "usage-percent", "%"));
-          current.appendChild(el("span", "usage-key", kind === "five_hour" ? "5h" : "주")); current.appendChild(number);
+          var at = observation(w, entry), old = stale(at, now), noRecent = unreported(at, now);
+          var column = el("span", "usage-column" + (noRecent ? " usage-stale" : ""));
+          var current = el("span", "usage-current"), number;
+          if (noRecent) {
+            number = el("span", "usage-number", "—");
+          } else {
+            number = el("span", "usage-number", Math.round(w.percent));
+            number.appendChild(el("span", "usage-percent", "%"));
+          }
+          current.appendChild(el("span", "usage-key", kind === "five_hour" ? t("key5h") : t("keyWeekly"))); current.appendChild(number);
           column.appendChild(current);
-          column.appendChild(el("span", "usage-pace" + (delta > 0 ? " over" : delta < 0 ? " under" : ""), comparison));
-          column.title = name + " " + label(kind) + ": " + Math.round(w.percent) + "%; " + (delta === null ? "pace unavailable" : "pace " + comparison + " (percentage points)") + "; " + age(at, now) + (old ? "; stale, pace at last observation" : "");
+          if (noRecent) {
+            var last = lastReading(w, at, now);
+            column.title = name + " " + windowLabel(kind) + ": " + noRecentLabel(kind) + (last ? "; " + last + "; " + observedAge(at, now) : "; " + t("unavailable"));
+          } else {
+            var delta = pace(w, now);
+            var comparison = delta === null ? "—" : (delta > 0 ? "+" : delta < 0 ? "\u2212" : "") + Math.abs(delta) + "%";
+            column.appendChild(el("span", "usage-pace" + (delta > 0 ? " over" : delta < 0 ? " under" : ""), comparison));
+            column.title = name + " " + label(kind) + ": " + Math.round(w.percent) + "%; " + (delta === null ? "pace unavailable" : "pace " + comparison + " (percentage points)") + "; " + age(at, now);
+          }
           column.setAttribute("aria-label", column.title);
           columns.appendChild(column); hasStale = hasStale || old;
         });
@@ -231,40 +279,22 @@
       if (delta === null || delta === 0) return "var(--wb-muted-fg)";
       return "color-mix(in srgb, var(--wb-muted-fg), var(" + (delta > 0 ? "--wb-fail" : "--wb-ok") + ") " + Math.min(100, Math.abs(delta)) + "%)";
     }
-    var keys = {
-      heading: "js.usage.heading", close: "js.usage.close", legend: "js.usage.legend",
-      fiveHour: "js.usage.fivehour", weekly: "js.usage.weekly", age: "js.usage.age",
-      unavailable: "js.usage.unavailable", signInRequired: "js.usage.signinrequired", disabled: "js.usage.disabled",
-      pending: "js.usage.pending",
-      noFiveHour: "js.usage.no5h", noWeekly: "js.usage.noweekly", modelGroups: "js.usage.modelgroups",
-      chart: "js.usage.chart", baseline: "js.usage.baseline",
-      unknownReset: "js.usage.unknownreset", stalePace: "js.usage.stalepace", idealTitle: "js.usage.idealtitle",
-      nowTitle: "js.usage.nowtitle", now: "js.usage.now", estimatedTitle: "js.usage.estimatedtitle",
-      interval: "js.usage.interval", current: "js.usage.current", stale: "js.usage.stale",
-      resets: "js.usage.resets", unknown: "js.usage.unknown", card: "js.usage.card",
-      historyUnavailable: "js.usage.historyunavailable", historyEmpty: "js.usage.historyempty",
-      historyRecorded: "js.usage.historyrecorded", historyEarlier: "js.usage.historyearlier",
-      currentOnly: "js.usage.currentonly", noObservation: "js.usage.noobservation", notLoggedIn: "js.usage.notloggedin",
-      observed: "js.usage.observed", ideal: "js.usage.ideal", latest: "js.usage.latest", estimated: "js.usage.estimated"
-    };
-    function t(key) { return window.wsT.apply(null, [keys[key]].concat(Array.prototype.slice.call(arguments, 1))); }
-    function locale() { return window.wsI18n.lang; }
-    function windowLabel(kind) { return t(kind === "five_hour" ? "fiveHour" : "weekly"); }
-    function observedAge(at, now) { return at ? t("age", Math.max(0, Math.floor((now - at) / 60000))) : t("unavailable"); }
-    function statusText(status) {
-      if (status === "sign-in required") return t("signInRequired");
-      if (!status || status === "usage unavailable") return t("unavailable");
-      return status;
-    }
     function entryHistory(entry, kind) {
       if (entry.harness === "agy") return data.agyHistory || data.history;
       if (entry.harness === "codex" && kind === "five_hour") return data.codexFiveHourHistory || data.history;
       return data.history;
     }
-    function drawChart(entry, w, old, now) {
+    function drawChart(entry, w, old, noRecent, now) {
       var geometry = trend(entry, w, entryHistory(entry, w.kind)), id = "usage-chart-" + (++chartSerial);
       var chart = svgNode("svg", { "class": "usage-chart", viewBox: "0 0 288 113", role: "img", "aria-label": t("chart", windowLabel(w.kind), t(geometry.knownReset ? "baseline" : "unknownReset")) });
-      chart.appendChild(svgNode("title", {}, windowLabel(w.kind) + ": " + Math.round(w.percent) + "%; " + observedAge(geometry.at, now) + (old ? "; " + t("stalePace") : "")));
+      var chartTitle;
+      if (noRecent) {
+        var last = lastReading(w, geometry.at, now);
+        chartTitle = windowLabel(w.kind) + ": " + noRecentLabel(w.kind) + (last ? "; " + last + "; " + observedAge(geometry.at, now) : "; " + t("unavailable"));
+      } else {
+        chartTitle = windowLabel(w.kind) + ": " + Math.round(w.percent) + "%; " + observedAge(geometry.at, now);
+      }
+      chart.appendChild(svgNode("title", {}, chartTitle));
       var axis = null;
       if (geometry.knownReset && w.kind === "seven_day") {
         var canvas = doc.createElement("canvas"), context = canvas.getContext && canvas.getContext("2d");
@@ -362,14 +392,15 @@
       return slot;
     }
     function windowCard(entry, w, now) {
-      var at = observation(w, entry), old = stale(at, now), isDisabled = !!w.disabled, delta = at ? pace(w, old ? at : now) : null;
+      var at = observation(w, entry), old = stale(at, now), noRecent = unreported(at, now), isDisabled = !!w.disabled;
+      var delta = noRecent ? null : pace(w, now);
       var comparison = delta === null ? "—" : (delta > 0 ? "+" : delta < 0 ? "−" : "") + Math.abs(delta) + "%";
-      var card = el("article", "usage-window-card" + (old ? " usage-stale" : "") + (isDisabled ? " usage-disabled" : ""));
+      var card = el("article", "usage-window-card" + (noRecent ? " usage-stale" : "") + (isDisabled ? " usage-disabled" : ""));
       card.setAttribute("data-kind", w.kind);
       var head = el("div", "usage-window");
       head.appendChild(el("span", "usage-window-name", windowLabel(w.kind)));
-      head.appendChild(el("b", "usage-number", Math.round(w.percent) + "%"));
-      head.appendChild(el("span", "usage-pace" + (delta > 0 ? " over" : delta < 0 ? " under" : ""), "(" + comparison + ")"));
+      head.appendChild(el("b", "usage-number", noRecent ? "—" : Math.round(w.percent) + "%"));
+      if (!noRecent) head.appendChild(el("span", "usage-pace" + (delta > 0 ? " over" : delta < 0 ? " under" : ""), "(" + comparison + ")"));
       if (isDisabled) head.appendChild(el("span", "usage-disabled-tag", t("disabled")));
       if (old) head.appendChild(clock());
       var fullReset = t("resets", w.resetsAt ? new Date(w.resetsAt).toLocaleString(locale()) : t("unknown"));
@@ -377,15 +408,22 @@
       resetEl.title = fullReset;
       head.appendChild(resetEl);
       card.appendChild(head);
-      var chart = drawChart(entry, w, old, now); card.appendChild(chart.el);
-      var observed = observedAge(at, now) + (old ? "; " + t("stalePace") : "");
-      card.setAttribute("aria-label", t("card", windowLabel(w.kind), Math.round(w.percent), comparison, observed) + (isDisabled ? "; " + t("disabled") : ""));
+      var last = noRecent ? lastReading(w, at, now) : "";
+      if (noRecent) card.appendChild(el("div", "usage-no-report", noRecentLabel(w.kind)));
+      var chart = drawChart(entry, w, old, noRecent, now); card.appendChild(chart.el);
+      if (noRecent) {
+        var detail = last ? last + "; " + observedAge(at, now) : t("unavailable");
+        card.setAttribute("aria-label", windowLabel(w.kind) + ": " + noRecentLabel(w.kind) + "; " + detail + (isDisabled ? "; " + t("disabled") : ""));
+      } else {
+        card.setAttribute("aria-label", t("card", windowLabel(w.kind), Math.round(w.percent), comparison, observedAge(at, now)) + (isDisabled ? "; " + t("disabled") : ""));
+      }
       var history = entryHistory(entry, w.kind), note;
       if (!history || history.schema_version !== 1 || history.status === "unavailable") note = t("historyUnavailable");
       else if (history.status === "empty") note = t("historyEmpty");
       else note = t(chart.geometry.points.length > 1 ? "historyRecorded" : "historyEarlier");
       if (chart.geometry.points.length <= 1) note += "; " + t(chart.geometry.points.length ? "currentOnly" : "noObservation");
       if (!chart.geometry.knownReset) note += "; " + t("unknownReset");
+      if (noRecent) note = (last ? last + "; " + observedAge(at, now) : noRecentLabel(w.kind)) + "; " + note;
       card.title = note;
       return card;
     }
@@ -453,7 +491,9 @@
         var windows = active(entry, now);
         var w5 = windows.filter(function (v) { return v.kind === "five_hour"; })[0] || null;
         var w7 = windows.filter(function (v) { return v.kind === "seven_day"; })[0] || null;
-        var groupAt = windows.reduce(function (oldest, w) {
+        var reported = windows.filter(function (w) { return !unreported(observation(w, entry), now); });
+        var ageWindows = reported.length ? reported : windows;
+        var groupAt = ageWindows.reduce(function (oldest, w) {
           var at = observation(w, entry);
           return at && (!oldest || at < oldest) ? at : oldest;
         }, 0);

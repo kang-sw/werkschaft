@@ -36,6 +36,46 @@
       "type": "boolean",
       "default": true,
       "description": "When true, this MCP server lists the pi.* tools, through which a session spawns, steers, and collects Pi subagents: headless Pi coding agents the dashboard daemon runs for it, each reporting a finished turn to the session's mailbox. When false, it does not list them. They are listed only when the server also runs in the dashboard daemon (not a ws-mcp process of its own) and the installed pi reports version 1.0 or later. Read from the project, global, and built-in values when the server starts, so a change applies at the session's next start or reconnect."
+    },
+    {
+      "key": "dashboard.companion_mode",
+      "type": "enum",
+      "enum": [
+        "off",
+        "visual",
+        "full"
+      ],
+      "default": "off",
+      "default_scope": "global",
+      "description": "Controls the companion: off, visual only, or full. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_director",
+      "type": "enum",
+      "enum": [
+        "rules",
+        "sidecar",
+        "lead-tool"
+      ],
+      "default": "rules",
+      "default_scope": "global",
+      "description": "Selects the companion director. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_pack",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "default": "default",
+      "default_scope": "global",
+      "description": "Selects the companion pack: default, auto, or a pack ID. Auto selects a pack for the visible session. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_preset",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "default": "werkschaft-d1",
+      "default_scope": "global",
+      "description": "Selects the companion preset by ID. Only the global value applies."
     }
   ]
 }

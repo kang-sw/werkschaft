@@ -8,10 +8,56 @@ function read(name) {
   return fs.readFileSync(path.join(__dirname, "assets", name), "utf8");
 }
 
+function readLocale(name) {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "wsi18n", "tables", name + ".json"), "utf8"));
+}
+
 const origin = "http://localhost:19544";
 const context = vm.createContext({window: {}, URLSearchParams});
 vm.runInContext(read("shell.js"), context);
 const shell = context.window.WsShell;
+
+test("companion mode labels use key-specific translations and retain translated off", () => {
+  const source = read("dashboard-settings.js");
+  const settingsContext = {document: {querySelector: () => null}};
+  vm.runInNewContext(source, settingsContext);
+  assert.equal(JSON.stringify(settingsContext.wsSettingsChoiceLabels), JSON.stringify({
+    "dashboard.companion_mode": {
+      visual: "js.settings.key.dashboard.companion_mode.visual",
+      full: "js.settings.key.dashboard.companion_mode.full"
+    }
+  }));
+  assert.match(source, /shownValue\(choice, entry\.key\)/);
+  assert.match(source, /value === false \|\| value === "off"\) return tr\("js\.settings\.off"\)/);
+});
+
+test("companion labels are present in every supported locale", () => {
+  const locales = ["en", "ko", "ja", "zh-Hans", "zh-Hant", "de", "es", "fr", "it", "pt-BR", "ru"];
+  const modeKeys = [
+    "js.settings.key.dashboard.companion_mode.visual",
+    "js.settings.key.dashboard.companion_mode.full"
+  ];
+  const stageKeys = [
+    "js.companion.character",
+    "js.companion.return_home",
+    "js.companion.hide",
+    "js.companion.reload",
+    "js.companion.reload_denied",
+    "js.companion.reload_failed",
+    "js.companion.preset",
+    "js.companion.preset_failed",
+    "js.companion.pack_failed"
+  ];
+  for (const locale of locales) {
+    const table = readLocale(locale);
+    for (const key of [...modeKeys, ...stageKeys]) {
+      assert.equal(typeof table[key], "string", `${locale} is missing ${key}`);
+      assert.notEqual(table[key].trim(), "", `${locale} has an empty ${key}`);
+    }
+  }
+  assert.equal(readLocale("ko")[modeKeys[0]], "시각 전용");
+  assert.equal(readLocale("ko")[modeKeys[1]], "전체");
+});
 
 test("settings links and frames keep the exact inspection identifiers", () => {
   const origins = [

@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 75a60323dec32694
 sage-review-completeness-reviewed: 75a60323dec32694
+completed: 2026-11-22
 ---
 
 # Companion T0 Config Keys, Dashboard Settings UI & Live Shell Broadcast
@@ -96,3 +97,11 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
   - `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go -C agents-plugin-tool test ./internal/mcp ./internal/wsi18n ./internal/wspackage -run 'Settings|Manifest|Keys|Companion'`
   - Targeted `wsdashboard` & `mcp` tests verifying `TrustedWrite` enforcement, global-only enforcement (ignoring non-global overrides written by older binaries), separate stdio `ws/config.tune` set and reset daemon handoff, and shell stream connect/reconnect resync after a missed change.
   - `python3 -m unittest discover agents-plugin-wsflow/tests`
+
+### Result (fa2b5d917) - 2026-11-22
+
+- Declared the four global settings and added the Companion section in all 11 dashboard locales. Mirrored the keys to Pi to preserve the existing three-package dashboard manifest contract. Regenerated the daemon package assets and verified their byte parity.
+- The daemon resolves the global scalar overrides against the packaged manifest and keeps the effective `companion` object in memory. Settings mutations and hosted MCP tunes refresh it in process. Standalone stdio tunes send an authenticated loopback invalidation tied to the same global config path. Equal scalar writes leave the persisted config in place, and equal effective values leave the stream snapshot in place.
+- The settings snapshot exposes `companion`. The outer shell bootstraps `window.wsCompanionConfig` and updates it from the rail's `companion` event, exposing changes through the document's `ws-companion-config` event. The rail sends the complete current object on each connect and reconnect. The `auto` pack selector reaches the shell unchanged.
+- Verified the runtime build, package-assets drift check, focused MCP, dashboard, resolver, i18n and embedded-package Go tests, settings JavaScript tests, and wsflow package suite. The isolated loopback test used a separate stdio process to set and reset, confirmed trusted dashboard writes and config-home isolation, and reconnected a tab after a missed update. The focused filters included locale initialization and excluded unrelated Pi spawn tests. The wsflow suite ran 22 tests with 2 skips.
+- Independent lite review of both implementation commits found no actionable issues.

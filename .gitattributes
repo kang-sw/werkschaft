@@ -31,17 +31,25 @@ agents-plugin*/native-pi/first-party-manifest.json linguist-generated=true
 # Third-party minified bundle; not project source (not split, not counted).
 agents-plugin-tool/internal/wswhiteboard/assets/mermaid/mermaid.min.js linguist-vendored
 # Owner (1853)=b 2026-11-20: holder manager tests (1014) and tracker render (1006) passed 1000 lines; raise their own soft limits.
-/agents-plugin-tool/internal/wsholder/manager_test.go ws-size-guard=1300
 /agents-plugin-tool/internal/wsdashboard/assets/tracker-render.js ws-size-guard=1300
 /agents-plugin-tool/internal/wsdashboard/assets/dashboard-ticketmap-graph.js ws-size-guard=1300
 # Owner (2073)=a 2026-11-21: gallery cards script (2376) and agy watchdog tests (1032) passed their limits; raise their own soft limits.
 /agents-plugin-tool/internal/wsdashboard/assets/cards.js ws-size-guard=2900
-/agents-plugin-tool/internal/wsagent/agy_watchdog_test.go ws-size-guard=1300
 # Owner (2101)=b 2026-11-22: tracker picker modal script (1539) and its test (1511) stay whole; raise their own soft limits.
 /agents-plugin-tool/internal/wsdashboard/assets/tracker-picker.js ws-size-guard=1900
-/agents-plugin-tool/internal/wsdashboard/tracker_picker.test.js ws-size-guard=1900
 # Owner (2114)=b, (2115)=b 2026-11-22: lead runner tests (1007) and the settings script (1046) stay whole; the settings v3 mockup is a one-off reference.
-/agents-plugin-tool/internal/wsagent/lead_runner_test.go ws-size-guard=1300
 /agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings.js ws-size-guard=1300
 /ai-docs/assets/mockups/261122/config-settings-ui-v3/mockup.html -ws-size-guard
 /ai-docs/assets/mockups/** -ws-size-guard
+# Owner (2123) 2026-11-22: every test file and test directory gets one 3000-line soft limit
+# (supersedes the earlier per-file test limits). Go tests sit beside their package, so the
+# limit is keyed on test file names and test/testdata directories rather than one folder.
+*_test.go ws-size-guard=3000
+*.test.js ws-size-guard=3000
+*.test.cjs ws-size-guard=3000
+*.test.mjs ws-size-guard=3000
+*.test.ts ws-size-guard=3000
+*.test.tsx ws-size-guard=3000
+**/test/** ws-size-guard=3000
+**/tests/** ws-size-guard=3000
+**/testdata/** ws-size-guard=3000
