@@ -460,6 +460,14 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 		// admission keeps from being sent twice.
 		if c.cutoverRejects(a.Tool) {
 			c.oweCutoverInstruction(a.ID)
+			if c.replaying {
+				// The answer is recorded before it is written, so a crash
+				// between the two leaves the process waiting on it. A second
+				// reject_once is harmless (the process drops an answer to a
+				// request it no longer waits on): the rejoin's end sends it
+				// again (rejectCutoverPending).
+				c.setStatus(func() { c.approvals = append(c.approvals, a) })
+			}
 		}
 		return
 	}
@@ -662,7 +670,11 @@ func (c *conv) answerApproval(id string, allow bool, message string) error {
 // replay skips to (persistSeq, also on shutdown). Otherwise an answer is
 // one write per user decision and is durable at once.
 func (c *conv) sendApproval(answerer approvalAnswerer, req ApprovalRequest, allow bool, message string) error {
-	track := func(rec *Record) { rec.Answered = append(rec.Answered, req.ID) }
+	track := func(rec *Record) {
+		if !slices.Contains(rec.Answered, req.ID) {
+			rec.Answered = append(rec.Answered, req.ID)
+		}
+	}
 	if c.rec.agyBypass() {
 		c.setStatus(func() { track(&c.rec) })
 	} else {

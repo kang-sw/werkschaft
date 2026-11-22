@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 // newAgyCutoverHarness is an agy lead harness whose backend carries the
@@ -346,3 +347,41 @@ func TestAgyCutoverRefusesAReplayedRequestAtRejoin(t *testing.T) {
 
 // idleOrQuiet waits until the loop has settled its current step.
 func (h *leadHarness) idleOrQuiet(id string) { h.quiesce(id) }
+
+// A refusal recorded as answered whose reject_once never reached the
+// process (the daemon went down between the two) is sent at the rejoin:
+// the process does not wait on it forever.
+func TestAgyCutoverResendsARecordedRefusalAtRejoin(t *testing.T) {
+	h, f := newAgyCutoverHarness(t)
+	h.startAt("http://127.0.0.1:1")
+	id := h.lead(BackendAgy, LeadOptions{}).ID
+	f.replyID = id
+	h.send(id, "hello")
+	holder := h.holder(id)
+	eventually(t, "the prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+	h.idleOrQuiet(id)
+	h.runner.Close()
+	h.holders.out(holder, agyRunCommandRequest("6", "r2")...)
+	dir := wsdashboard.SessionDir(h.dir, id)
+	rec, err := readRecord(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The approval's id is the tool call's.
+	rec.Answered = append(rec.Answered, "r2")
+	if err := writeRecord(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the resent refusal", func() bool { return agyAnswered(h, holder, "6", "deny") })
+	if agyAnswered(h, holder, "6", "allow") {
+		t.Fatal("the recorded refusal was allowed")
+	}
+	if got := h.record(id).Answered; len(slices.DeleteFunc(slices.Clone(got), func(a string) bool { return a != "r2" })) > 1 {
+		t.Fatalf("answered ids = %v", got)
+	}
+	if st := h.state(id); len(st.Approvals) != 0 {
+		t.Fatalf("the refusal stays pending: %+v", st.Approvals)
+	}
+}
