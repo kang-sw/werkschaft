@@ -642,6 +642,9 @@
           "branch": "impl/develop/crock-ashes-amigo"
         }
       }
+    },
+    "261122-feat-ws-keep-awake-during-turns": {
+      "registered_at": "2026-11-22T06:13:05Z"
     }
   }
 }
