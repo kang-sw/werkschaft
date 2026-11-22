@@ -93,6 +93,8 @@ Stale since the superseded ticket (codex.large read-only research,
    tracked path as the approved interaction. The owner confirms the realigned
    copy as the visual-reference update. Captures are then compared side by
    side with both: the realigned copy for placement, v2 for the interaction.
+   Confirmed realigned copy (owner (86)=ok, 2026-11-22):
+   `ai-docs/assets/mockups/261122/conversation-audit/conversation-audit-mockup-v3.html`.
 3. **Wide-view darkroom ((550) note).** In the wide view, opening the audit
    window from a click dims everything except the conversation pane and the
    floating window. In the shell, the rail and header dim through the shell's
