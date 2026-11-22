@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -103,7 +104,7 @@ type schedule struct {
 	pending         bool
 	dropped         int
 	closedLogged    bool
-	delivering      bool // a delivery of this schedule is admitted and not yet recorded
+	inflight        int // deliveries of this schedule admitted and not yet recorded
 }
 
 // Scheduler holds the daemon's schedules and one timer armed for the
@@ -139,7 +140,25 @@ type Scheduler struct {
 	writeKick chan struct{}
 	writeDone chan struct{}
 	writeQuit chan struct{}
+
+	// Diagnostics go through logCh to the logger goroutine, so no timer
+	// callback or locked path ever waits on the log file; a full channel
+	// drops the message and counts it.
+	logCh      chan string
+	logQuit    chan struct{}
+	logDone    chan struct{}
+	logDropped atomic.Int64
+
+	// closeDone ends the one Close that ran; every other caller waits on it.
+	closeDone chan struct{}
+	closeErr  error
 }
+
+// logQueue bounds the diagnostics waiting for the logger.
+const logQueue = 64
+
+// logCloseWait bounds how long Close waits for a log write that does not end.
+const logCloseWait = 2 * time.Second
 
 // New builds a scheduler over opts and starts it: it loads every stored
 // schedule once, deletes those whose conversation the runner no longer
@@ -153,6 +172,7 @@ func New(opts Options) (*Scheduler, error) {
 		store: opts.Store, sessions: opts.Sessions, clock: opts.Clock, log: opts.Log,
 		byID: map[string]*schedule{}, byOwner: map[string]map[string]*schedule{}, dirty: map[string]int64{},
 		writeKick: make(chan struct{}, 1), writeDone: make(chan struct{}), writeQuit: make(chan struct{}),
+		logCh: make(chan string, logQueue), logQuit: make(chan struct{}), logDone: make(chan struct{}), closeDone: make(chan struct{}),
 	}
 	s.delivered = sync.NewCond(&s.mu)
 	if s.clock == nil {
@@ -165,6 +185,7 @@ func New(opts Options) (*Scheduler, error) {
 	if err != nil {
 		return nil, err
 	}
+	go s.logger()
 	now := s.clock.Now()
 	var gone []string
 	held := map[string]map[string]bool{}
@@ -180,7 +201,7 @@ func New(opts Options) (*Scheduler, error) {
 		}
 		sch, err := scheduleFromRow(r, now)
 		if err != nil {
-			fmt.Fprintf(s.log, "cron: skip stored schedule %s: %v\n", r.ID, err)
+			s.logf("cron: skip stored schedule %s: %v\n", r.ID, err)
 			continue
 		}
 		if held[r.Owner] == nil {
@@ -196,7 +217,7 @@ func New(opts Options) (*Scheduler, error) {
 	}
 	if len(gone) > 0 {
 		if err := s.store.Delete(gone...); err != nil {
-			fmt.Fprintf(s.log, "cron: reap schedules of ended sessions: %v\n", err)
+			s.logf("cron: reap schedules of ended sessions: %v\n", err)
 		}
 	}
 	s.mu.Lock()
@@ -342,7 +363,7 @@ func (s *Scheduler) fire(gen uint64) {
 			s.mu.Unlock()
 			continue
 		}
-		job.sch.delivering = true
+		job.sch.inflight++
 		s.inflight++
 		s.mu.Unlock()
 
@@ -371,15 +392,15 @@ func (s *Scheduler) fire(gen uint64) {
 			default:
 			}
 		}
-		job.sch.delivering = false
+		job.sch.inflight--
 		s.inflight--
 		s.delivered.Broadcast()
 		s.mu.Unlock()
 		if note != "" {
-			// The diagnostic goes out after the lock: a slow log never holds up
-			// the list and removal callbacks, and it is written once per run of
-			// refusals (closedLogged).
-			io.WriteString(s.log, note)
+			// Queued for the logger after the lock: the timer callback never
+			// writes the file, and the note is made once per run of refusals
+			// (closedLogged).
+			s.logf("%s", note)
 		}
 	}
 }
@@ -408,7 +429,7 @@ func (s *Scheduler) flush() {
 		return
 	}
 	if err := s.store.SetLastFire(batch); err != nil {
-		fmt.Fprintf(s.log, "cron: persist last fires: %v\n", err)
+		s.logf("cron: persist last fires: %v\n", err)
 	}
 }
 
@@ -566,9 +587,11 @@ func (s *Scheduler) Delete(owner, key string) error {
 	s.removeLocked(target)
 	delete(s.dirty, target.id)
 	s.armLocked()
-	// Out of the maps no new delivery is admitted; one already admitted is
-	// waited for, so a prompt is never published after Delete returned.
-	for target.delivering {
+	// Out of the maps no new delivery is admitted; every one already admitted
+	// (overlapping ones included: the next minute can fire while an earlier
+	// hand-off still waits on the runner) is waited for, so a prompt is never
+	// published after Delete returned.
+	for target.inflight > 0 {
 		s.delivered.Wait()
 	}
 	s.mu.Unlock()
@@ -620,7 +643,7 @@ func (s *Scheduler) goneLocked(owner string) {
 		return
 	}
 	if err := s.store.DeleteOwner(owner); err != nil {
-		fmt.Fprintf(s.log, "cron: delete schedules of an ended session: %v\n", err)
+		s.logf("cron: delete schedules of an ended session: %v\n", err)
 	}
 	s.mu.Lock()
 	for _, sch := range s.byOwner[owner] {
@@ -632,16 +655,18 @@ func (s *Scheduler) goneLocked(owner string) {
 }
 
 // Close stops the timer, fences new deliveries, waits for the admitted ones,
-// writes the waiting last-fire deltas and closes the store. It is idempotent
-// and returns only once nothing the scheduler started is still running, so a
-// caller may release daemon ownership after it.
+// writes the waiting last-fire deltas and closes the store. It returns only
+// once nothing the scheduler started is still running, so a caller may release
+// daemon ownership after it; a concurrent caller waits for the same
+// completion and gets the same result.
 func (s *Scheduler) Close() error {
 	s.opMu.Lock()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		s.opMu.Unlock()
-		return nil
+		<-s.closeDone
+		return s.closeErr
 	}
 	s.closed = true
 	if s.timer != nil {
@@ -658,7 +683,54 @@ func (s *Scheduler) Close() error {
 	}
 	close(s.writeQuit)
 	<-s.writeDone
-	return s.store.Close()
+	err := s.store.Close()
+	close(s.logQuit)
+	select {
+	case <-s.logDone:
+	case <-time.After(logCloseWait):
+	}
+	s.closeErr = err
+	close(s.closeDone)
+	return err
+}
+
+// logf queues a diagnostic; it never blocks and never touches the log file.
+func (s *Scheduler) logf(format string, args ...any) {
+	select {
+	case s.logCh <- fmt.Sprintf(format, args...):
+	default:
+		s.logDropped.Add(1)
+	}
+}
+
+// LogDropped is the number of diagnostics dropped because the log was slower
+// than the scheduler produced them.
+func (s *Scheduler) LogDropped() int { return int(s.logDropped.Load()) }
+
+// logger writes the queued diagnostics, and says how many were dropped.
+func (s *Scheduler) logger() {
+	defer close(s.logDone)
+	write := func(msg string) {
+		if n := s.logDropped.Swap(0); n > 0 {
+			fmt.Fprintf(s.log, "cron: %d diagnostics dropped while the log was busy\n", n)
+		}
+		io.WriteString(s.log, msg)
+	}
+	for {
+		select {
+		case msg := <-s.logCh:
+			write(msg)
+		case <-s.logQuit:
+			for {
+				select {
+				case msg := <-s.logCh:
+					write(msg)
+				default:
+					return
+				}
+			}
+		}
+	}
 }
 
 // Reconcile deletes the schedules of every conversation the runner no longer

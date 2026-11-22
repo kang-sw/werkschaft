@@ -223,12 +223,30 @@ func (s *fakeSessions) held(owner string) []wsinbox.Entry {
 	return out
 }
 
+// syncBuf is the log the logger goroutine writes while tests read it.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
 type env struct {
 	t     *testing.T
 	clock *fakeClock
 	sess  *fakeSessions
 	path  string
-	log   *bytes.Buffer
+	log   *syncBuf
 	s     *Scheduler
 }
 
@@ -238,7 +256,7 @@ func newEnv(t *testing.T, start string, owners ...string) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, clock: &fakeClock{now: at}, sess: newSessions(t, owners...), path: filepath.Join(t.TempDir(), StoreName), log: &bytes.Buffer{}}
+	e := &env{t: t, clock: &fakeClock{now: at}, sess: newSessions(t, owners...), path: filepath.Join(t.TempDir(), StoreName), log: &syncBuf{}}
 	e.open()
 	return e
 }
@@ -497,6 +515,7 @@ func TestSuppressedDeliveryIsDroppedAndLoggedOnce(t *testing.T) {
 	if i.Pending || i.Dropped != 3 || i.LastAt != "" {
 		t.Fatalf("info = %+v", i)
 	}
+	eventually(t, func() bool { return strings.Contains(e.log.String(), "not delivered") })
 	if n := strings.Count(e.log.String(), "not delivered"); n != 1 {
 		t.Fatalf("logged %d times, want once: %q", n, e.log.String())
 	}
@@ -793,6 +812,10 @@ func TestFirePathDoesNoStoreWork(t *testing.T) {
 	ops = e.s.store.Ops()
 	io := wsstate.FileIOCounters()
 	e.clock.Advance(30 * time.Second) // one fire
+	// The last-fire delta is written by the coalescing writer after the fire;
+	// sample only once that store operation itself has run.
+	eventually(t, func() bool { return e.s.store.Ops()-ops >= 1 })
+	e.s.Flush()
 	after := wsstate.FileIOCounters()
 	t.Logf("one fire, scheduler side with a fake runner: wsstate-counted file operations total=%d create_temp=%d atomic_replace=%d write=%d read_file=%d read_dir=%d stat=%d",
 		after["file_io_total"]-io["file_io_total"], after["file_io_create_temp"]-io["file_io_create_temp"], after["file_io_atomic_replace"]-io["file_io_atomic_replace"],
@@ -802,18 +825,10 @@ func TestFirePathDoesNoStoreWork(t *testing.T) {
 			t.Errorf("the fire path ran %d %s", got, op)
 		}
 	}
-	// The coalescing writer may commit the delta before or after this
-	// point; either way the fire and its delta cost one commit in all.
-	e.s.Flush()
-	eventually(t, func() bool {
-		e.s.mu.Lock()
-		defer e.s.mu.Unlock()
-		return len(e.s.dirty) == 0
-	})
 	commits := e.s.store.Ops() - ops
 	t.Logf("SQLite commits for that fire and its last-fire delta: %d", commits)
-	if commits > 1 {
-		t.Errorf("fire plus its coalesced write ran %d store operations, want at most 1", commits)
+	if commits != 1 {
+		t.Errorf("fire plus its coalesced write ran %d store operations, want 1", commits)
 	}
 	ops = e.s.store.Ops()
 	if err := e.s.Delete("lead", id); err != nil {
@@ -1069,5 +1084,183 @@ func TestCloseJoinsAnAdmittedDeliveryAndKeepsItsLastFire(t *testing.T) {
 	e.open() // a successor: the persisted last fire survived
 	if i := e.info("lead", "tick"); i.LastAt != "2026-03-10T00:01:00Z" {
 		t.Fatalf("last fire after Close = %q", i.LastAt)
+	}
+}
+
+// gatedDeliveries holds each Deliver at the runner's admission point until
+// its own release; entered[i] closes when the i-th call arrives.
+type gatedDeliveries struct {
+	mu      sync.Mutex
+	entered []chan struct{}
+	release []chan struct{}
+}
+
+func newGated(n int) *gatedDeliveries {
+	g := &gatedDeliveries{}
+	for i := 0; i < n; i++ {
+		g.entered = append(g.entered, make(chan struct{}))
+		g.release = append(g.release, make(chan struct{}))
+	}
+	return g
+}
+
+func (g *gatedDeliveries) gate() func(string) {
+	next := 0
+	return func(string) {
+		g.mu.Lock()
+		i := next
+		next++
+		g.mu.Unlock()
+		close(g.entered[i])
+		<-g.release[i]
+	}
+}
+
+func (e *env) inflight() int {
+	e.s.mu.Lock()
+	defer e.s.mu.Unlock()
+	return e.s.inflight
+}
+
+// Two deliveries of one schedule admitted at once: an inbox removal clears
+// pending after the first prompt was published, the next minute fires and is
+// admitted too. Delete waits until both are done, not just the first.
+func TestDeleteWaitsForEveryOverlappingDelivery(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	id := e.add("lead", "tick", "* * * * *", "")
+	g := newGated(2)
+	e.sess.gate = g.gate()
+	var fires sync.WaitGroup
+	fires.Add(2)
+	go func() { defer fires.Done(); e.clock.Advance(30 * time.Second) }()
+	<-g.entered[0]
+	// The first prompt was published and drained meanwhile, so pending clears
+	// while its hand-off is still unrecorded.
+	e.s.entryLeft(wsinbox.Cron{ID: id})
+	go func() { defer fires.Done(); e.clock.Advance(time.Minute) }()
+	<-g.entered[1]
+	if n := e.inflight(); n != 2 {
+		t.Fatalf("admitted deliveries = %d, want 2", n)
+	}
+	deleted := make(chan error, 1)
+	go func() { deleted <- e.s.Delete("lead", "tick") }()
+	eventually(t, func() bool { return len(e.s.List("lead")) == 0 })
+	close(g.release[0]) // the first completes; the second is still admitted
+	eventually(t, func() bool { return e.inflight() == 1 })
+	select {
+	case err := <-deleted:
+		t.Fatalf("Delete returned (%v) while a second delivery was admitted", err)
+	default:
+	}
+	if n := len(e.sess.held("lead")); n != 1 {
+		t.Fatalf("held = %d before the second delivery published", n)
+	}
+	close(g.release[1])
+	if err := <-deleted; err != nil {
+		t.Fatal(err)
+	}
+	// Delete returned: the second prompt is already in the inbox.
+	if n := len(e.sess.held("lead")); n != 2 {
+		t.Fatalf("held = %d after Delete returned, want both prompts", n)
+	}
+	fires.Wait()
+	e.clock.Advance(5 * time.Minute)
+	if n := len(e.sess.held("lead")); n != 2 {
+		t.Fatalf("a prompt arrived after Delete returned: %d", n)
+	}
+	e.storeRowsAre(0)
+}
+
+// blockedWriter is a log file that stops answering until released.
+type blockedWriter struct {
+	in      chan struct{}
+	release chan struct{}
+	once    sync.Once
+	buf     syncBuf
+}
+
+func (w *blockedWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.in) })
+	<-w.release
+	return w.buf.Write(p)
+}
+
+// The log can stall without holding up a fire: the timer callback queues its
+// diagnostic and goes on, a flood past the bound is dropped and counted, and
+// the count is reported once the log answers.
+func TestStalledLogNeverHoldsUpAFire(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	w := &blockedWriter{in: make(chan struct{}), release: make(chan struct{})}
+	st, err := OpenStore(filepath.Join(t.TempDir(), StoreName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Options{Store: st, Sessions: e.sess, Clock: e.clock, Log: w})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.sess.shut["lead"] = true
+	if _, _, err := s.Add("lead", "tick", "* * * * *", "x", ""); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { e.clock.Advance(30 * time.Second); close(done) }() // a suppressed fire: one diagnostic
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the fire waited on the log")
+	}
+	<-w.in // the logger is stuck inside the file write
+	for i := 0; i < logQueue*3; i++ {
+		s.logf("flood %d\n", i)
+	}
+	if s.LogDropped() == 0 {
+		t.Fatal("a flood into a stalled log was not dropped and counted")
+	}
+	dropped := s.LogDropped()
+	close(w.release)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := w.buf.String()
+	if !strings.Contains(out, "not delivered") || !strings.Contains(out, "diagnostics dropped while the log was busy") {
+		t.Fatalf("log = %q (dropped %d)", out, dropped)
+	}
+}
+
+// Concurrent Close callers all return only after the shutdown finished: the
+// admitted delivery was joined, its last fire persisted and the store closed.
+func TestConcurrentCloseCallersWaitForTheSameShutdown(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	e.add("lead", "tick", "* * * * *", "")
+	_, release, fired := blockedFire(t, e, 30*time.Second)
+	results := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		go func() { results <- e.s.Close() }()
+	}
+	eventually(t, func() bool {
+		e.s.mu.Lock()
+		defer e.s.mu.Unlock()
+		return e.s.closed
+	})
+	select {
+	case err := <-results:
+		t.Fatalf("a Close returned (%v) while a delivery was admitted", err)
+	default:
+	}
+	release()
+	for i := 0; i < 3; i++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+		// Every caller that returned sees the store closed and the delta kept.
+		if _, err := e.s.store.Load(); err == nil {
+			t.Fatal("the store was still open after a Close returned")
+		}
+	}
+	<-fired
+	e.open()
+	if i := e.info("lead", "tick"); i.LastAt != "2026-03-10T00:01:00Z" {
+		t.Fatalf("last fire = %q", i.LastAt)
 	}
 }
