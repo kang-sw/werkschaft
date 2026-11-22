@@ -1264,7 +1264,7 @@ func TestStopOfAnUnknownHolderSaysWhetherTheCensusWasComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Scan()
-	if err := m.Stop("nobody"); errors.Is(err, ErrUnknownHolderIncomplete) {
+	if err := m.Stop("nobody"); !errors.Is(err, ErrUnknownHolder) || errors.Is(err, ErrUnknownHolderIncomplete) {
 		t.Fatalf("a stop after a complete scan = %v", err)
 	}
 }

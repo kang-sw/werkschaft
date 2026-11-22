@@ -1041,17 +1041,25 @@ func TestPruneKeepsAUserStoppedJobThroughItsFirstNoticeAdmission(t *testing.T) {
 	for i := 1; i < HostedMaxJobs; i++ {
 		fx.asyncJob(HostedLaunch{})
 	}
-	inFlight, release := make(chan struct{}), make(chan struct{})
+	inFlight, releaseCh := make(chan struct{}), make(chan struct{})
+	// release opens the held admission once; the cleanup runs it too, so a
+	// failure before the explicit release leaves no parked goroutine.
+	release := sync.OnceFunc(func() { close(releaseCh) })
+	t.Cleanup(release)
 	fx.sessions.mu.Lock()
 	fx.sessions.outcome = NoticeDeferred
 	fx.sessions.beforeNotify = func(string) {
 		close(inFlight)
-		<-release
+		<-releaseCh
 	}
 	fx.sessions.mu.Unlock()
 	stopped := make(chan HostedSummary, 1)
 	go func() { s, _ := fx.h.StopByUser("lead", first.ID); stopped <- s }()
-	<-inFlight // the first admission is in flight: no outcome is recorded yet
+	select { // the first admission is in flight: no outcome is recorded yet
+	case <-inFlight:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first stop notice admission to start")
+	}
 	fx.sessions.mu.Lock()
 	fx.sessions.beforeNotify = nil
 	fx.sessions.mu.Unlock()
@@ -1059,7 +1067,7 @@ func TestPruneKeepsAUserStoppedJobThroughItsFirstNoticeAdmission(t *testing.T) {
 	if _, err := fx.h.Get("lead", first.ID); err != nil {
 		t.Fatalf("the stopped job was pruned while its notice was being admitted: %v", err)
 	}
-	close(release)
+	release()
 	if s := <-stopped; s.StopNotice != StopNoticePending {
 		t.Fatalf("the deferred first outcome = %+v", s)
 	}
