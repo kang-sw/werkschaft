@@ -76,20 +76,31 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		return h.failStart(j, "", lookErr)
 	}
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
+	// Pinned from before the holder launch: a stop that ends the job while
+	// LaunchWith runs leaves a holder this job does not record yet, and the
+	// job must not be pruned (nor its id drawn again) until that holder is
+	// confirmed gone.
+	h.mu.Lock()
+	j.holderPinned = true
+	h.mu.Unlock()
 	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})
 	if err != nil {
+		h.mu.Lock()
+		j.holderPinned = false
+		h.mu.Unlock()
 		return h.failStart(j, "", fmt.Errorf("start the job's holder: %w", err))
 	}
 	h.mu.Lock()
 	if j.row.Terminal() {
 		// Stopped (its owner closing) while the holder launched: the
-		// process never starts, and the job stays until its holder is
-		// gone.
-		j.holderPinned = true
+		// process never starts, and the job stays pinned until its holder
+		// is gone.
 		h.mu.Unlock()
 		go h.retireHolder(j, holder)
 		return h.view(j, OutcomeDone), errClosedBeforeStart
 	}
+	// The job records its holder now: its end and stop handle that holder.
+	j.holderPinned = false
 	j.row.HolderID = holder
 	h.byHolder[holder] = j
 	h.mu.Unlock()

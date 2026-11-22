@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -394,5 +395,57 @@ func TestHostedJobStoppedDuringItsHolderLaunchStaysUntilTheHolderGoes(t *testing
 				t.Fatalf("dropped %v with the holder gone %v", dropped, holderGoes)
 			}
 		})
+	}
+}
+
+// A job stopped while LaunchWith still runs is pinned from the start of
+// that launch: admissions meanwhile neither prune it nor free its id, since
+// the holder being launched will write the exit copy at that id's path.
+func TestHostedJobStoppedInsideItsHolderLaunchIsNotPrunedMeanwhile(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	fx.holders.mu.Lock()
+	fx.holders.beforeLaunch = func() {
+		first := false
+		once.Do(func() { first = true })
+		if first {
+			close(entered)
+			<-release
+		}
+	}
+	fx.holders.mu.Unlock()
+	launched := make(chan HostedView, 1)
+	go func() {
+		v, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+		launched <- v
+	}()
+	<-entered
+	if err := fx.h.StopOwner("lead"); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	fx.h.mu.Lock()
+	for have := range fx.h.jobs {
+		id = have
+	}
+	fx.h.mu.Unlock()
+	for i := 0; i < HostedMaxJobs; i++ {
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fx.h.mu.Lock()
+	_, kept := fx.h.jobs[id]
+	fx.h.mu.Unlock()
+	fx.store.mu.Lock()
+	dropped := slices.Contains(fx.store.deleted, id)
+	fx.store.mu.Unlock()
+	if !kept || dropped {
+		t.Fatalf("job %s stopped inside its holder launch: kept %v, row deleted %v", id, kept, dropped)
+	}
+	close(release)
+	if v := <-launched; v.ID != id {
+		t.Fatalf("the blocked launch answered job %q, want %q", v.ID, id)
 	}
 }

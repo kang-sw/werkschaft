@@ -100,10 +100,12 @@ type hostedJob struct {
 	// stop waits for it, so the process it starts is the one it ends.
 	starting bool
 	spawned  chan struct{}
-	// holderPinned: j ended while a holder launched for it may still run
-	// (a stop during the launch). That holder writes the exit copy at j's
-	// id's path as it goes, so j is not pruned, and its id not reused,
-	// until the holder is confirmed gone (retireHolder). Under h.mu.
+	// holderPinned: a holder launched for j may run without j recording
+	// it: set from before LaunchWith until j records the holder, and kept
+	// when j ended meanwhile (a stop during the launch). That holder writes
+	// the exit copy at j's id's path as it goes, so j is not pruned, and
+	// its id not reused, until the holder is confirmed gone
+	// (retireHolder). Under h.mu.
 	holderPinned bool
 	// rev numbers j's row snapshots for the store (snapLocked, under h.mu);
 	// saveMu orders their writes and saved is the last one written, so a
