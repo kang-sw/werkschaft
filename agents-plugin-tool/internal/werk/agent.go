@@ -454,12 +454,13 @@ func (a *Agent) runTurn(ctx context.Context, text string) {
 	a.out.line(Line{T: LineUser, Turn: turn, Text: text})
 	a.append(userItem(text))
 	reason, errText := a.loop(ctx, turn)
+	// The log is whole before the turn's end is reported, an interrupted turn
+	// included: no unpersisted window extends past what the caller was told.
+	a.log.Flush()
 	a.mu.Lock()
 	a.running, a.lastReason, a.lastError = false, reason, errText
 	a.mu.Unlock()
 	a.out.line(Line{T: LineTurnEnd, Turn: turn, Reason: reason, Error: errText})
-	// The log is whole where a turn ends, an interrupted one included.
-	a.log.Flush()
 }
 
 // loop runs model requests and tool calls until the model asks for no more.

@@ -471,7 +471,8 @@ under `release-compatibility.md`), and is left as it stands.
   known read-only (edit, write, exec launch); read-only calls and model
   requests stay non-blocking. The transcript append and the writer enqueue
   now happen under one lock, so parallel results reach the log in the order
-  memory holds them. Tests: `TestMutatingCallWaitsForDurableCallIntent`,
+  memory holds them. The writer is also flushed before `LineTurnEnd` is
+  published, so no unpersisted window extends past a reported turn end. Tests: `TestMutatingCallWaitsForDurableCallIntent`,
   `TestParallelResultsKeepLogOrder`.
 - **Symlink resolution.** The earlier dangling-link fix cleaned link payloads
   lexically, so a relative link through a directory link followed by `..`

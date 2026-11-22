@@ -774,10 +774,21 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 		mu.Unlock()
 	}})
 	r.user("go")
-	// The writer is held at its first item; the turn runs to its end anyway.
-	end := r.waitTurnEnd(1)
-	if end.Reason != ReasonDone || len(model.requests()) != 2 {
-		t.Fatalf("turn end %+v after %d requests", end, len(model.requests()))
+	// The writer is held at its first item; the loop still makes both model
+	// requests and runs its reads. Only the turn's end waits: it is reported
+	// once the log is whole.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(model.requests()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(model.requests()) != 2 {
+		t.Fatalf("the loop waited for the log: %d requests", len(model.requests()))
+	}
+	time.Sleep(100 * time.Millisecond)
+	for _, l := range r.out.lines() {
+		if l.T == LineTurnEnd {
+			t.Fatal("the turn end was reported before the log was flushed")
+		}
 	}
 	mu.Lock()
 	if len(written) != 0 {
@@ -786,6 +797,9 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 	mu.Unlock()
 
 	close(release)
+	if end := r.waitTurnEnd(1); end.Reason != ReasonDone {
+		t.Fatalf("turn end %+v", end)
+	}
 	r.stop()
 	if err := r.agent.Close(); err != nil {
 		t.Fatal(err)
