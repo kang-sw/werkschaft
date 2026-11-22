@@ -331,6 +331,19 @@ func TestFSScanCapsStopTheWork(t *testing.T) {
 			t.Fatalf("fs.grep bytes read = %q", text)
 		}
 	})
+	t.Run("binary read-ahead", func(t *testing.T) {
+		// A binary file's sniff reads a whole buffer ahead; the budget is
+		// charged what was read, not the sniffed head.
+		for i := range 6 {
+			mustWrite(t, fx.root, fmt.Sprintf("bin/%d.dat", i), "\x00"+strings.Repeat("b", 100<<10))
+		}
+		mustWrite(t, fx.root, "bin/z.txt", "hit\n")
+		setCap(t, &fsGrepScanBytes, 3*(64<<10))
+		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "bin"})
+		if strings.Contains(text, "z.txt:1:hit") || !strings.Contains(text, "stopped after reading") {
+			t.Fatalf("fs.grep over binary files = %q", text)
+		}
+	})
 	t.Run("file size", func(t *testing.T) {
 		setCap(t, &fsGrepFileBytes, 4)
 		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "g"})

@@ -282,21 +282,23 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 		}
 		defer f.Close()
 		files++
-		// The bytes actually read count, not the size stat saw: a file
-		// that grows while it is read stops at what is left.
-		limited := &io.LimitedReader{R: f, N: fsGrepScanBytes - scanned}
+		// The bytes actually read count, not the size stat saw nor what
+		// the search consumed: a file that grows while it is read stops at
+		// what is left, and the reader's read-ahead (a binary file's sniff
+		// reads a whole buffer) is charged as read.
+		budget := fsGrepScanBytes - scanned
+		limited := &io.LimitedReader{R: f, N: budget}
+		defer func() { scanned += budget - limited.N }()
 		reader := bufio.NewReaderSize(limited, 64<<10)
 		head, _ := reader.Peek(fsBinarySniff)
 		if fsIsBinary(head) {
 			skippedBinary++
-			scanned += int64(len(head))
 			return nil
 		}
 		name := fsDisplayPath(root, file)
 		lineNo := 0
 		for {
 			line, err := reader.ReadString('\n')
-			scanned += int64(len(line))
 			if err != nil && limited.N == 0 && fsMoreToRead(f) {
 				// Cut at the scan budget: a partial last line is not
 				// searched.
