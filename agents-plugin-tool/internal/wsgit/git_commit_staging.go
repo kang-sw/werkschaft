@@ -131,12 +131,14 @@ func validateCommitStatus(status StatusResult, paths []string) error {
 
 // expandCommitPathsForTicketMoves adds, for each ticket stem among paths, the
 // other status entries of that stem: naming one side of a ticket move
-// commits the whole move. An untracked (or ignored) entry of a stem that has
-// a staged entry is not added: the staged entries are the move (tickets.move
-// and tickets.close stage it), so an untracked copy beside them is no part of
-// it and is staged only when the caller names it. With nothing of the stem
-// staged, an untracked entry is the destination of an unstaged move (a plain
-// mv) and is added as before.
+// commits the whole move. An untracked (or ignored) entry of a stem whose
+// move destination is staged (an index addition or rename of that stem) is
+// not added: the staged destination is the move (tickets.move and
+// tickets.close stage it), so an untracked copy beside it is no part of it
+// and is staged only when the caller names it. Without a staged destination
+// an untracked entry is the destination of a move not (fully) staged, a
+// plain mv with at most its source's deletion staged, and is added as
+// before: a staged deletion alone is no evidence of where the ticket went.
 func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []string {
 	stems := map[string]bool{}
 	for _, path := range paths {
@@ -147,15 +149,13 @@ func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []stri
 	if len(stems) == 0 {
 		return paths
 	}
-	staged := map[string]bool{}
+	stagedDestination := map[string]bool{}
 	for _, file := range status.ChangedFiles {
-		if file.IndexStatus == "" || file.IndexStatus == "." {
+		if file.IndexStatus != "A" && file.IndexStatus != "R" {
 			continue
 		}
-		for _, path := range []string{file.Path, file.OldPath} {
-			if _, stem, ok := ticketStatusStem(path); path != "" && ok {
-				staged[stem] = true
-			}
+		if _, stem, ok := ticketStatusStem(file.Path); ok {
+			stagedDestination[stem] = true
 		}
 	}
 	expanded := append([]string(nil), paths...)
@@ -170,7 +170,7 @@ func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []stri
 				continue
 			}
 			_, stem, ok := ticketStatusStem(path)
-			if !ok || !stems[stem] || (untracked && staged[stem]) {
+			if !ok || !stems[stem] || (untracked && stagedDestination[stem]) {
 				continue
 			}
 			cleaned := filepath.ToSlash(filepath.Clean(path))

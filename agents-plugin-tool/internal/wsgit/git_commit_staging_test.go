@@ -658,6 +658,60 @@ func TestExpandTicketMoveAddsUntrackedCopiesOnlyWithoutAStagedMove(t *testing.T)
 	if got := expandCommitPathsForTicketMoves(unstaged, []string{idea}); !reflect.DeepEqual(got, []string{idea, todo}) {
 		t.Fatalf("an unstaged move's untracked destination = %q, want it added", got)
 	}
+	// A staged deletion alone is no staged destination: the untracked entry
+	// is still the move's destination.
+	partly := StatusResult{ChangedFiles: []FileStatus{
+		{Path: idea, Status: "D.", IndexStatus: "D", WorktreeStatus: "."},
+		{Path: todo, Status: "?"},
+	}}
+	if got := expandCommitPathsForTicketMoves(partly, []string{idea}); !reflect.DeepEqual(got, []string{idea, todo}) {
+		t.Fatalf("a partly staged move's untracked destination = %q, want it added", got)
+	}
+}
+
+// TestCommitStagesTheDestinationOfAPartlyStagedTicketMove: a plain mv of a
+// committed ticket with only the source's deletion staged (D source, ??
+// destination), committed by its source path, commits the whole move, the
+// destination included.
+func TestCommitStagesTheDestinationOfAPartlyStagedTicketMove(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	const source = "ai-docs/tickets/idea/260810-feat-demo.md"
+	const dest = "ai-docs/tickets/todo/260810-feat-demo.md"
+	root := t.TempDir()
+	sparseTestInitGit(t, root)
+	mustWriteGitTestFixture(t, root, source, "# Demo\n")
+	// A tracked file in the destination's directory makes status list the
+	// untracked destination itself rather than its directory.
+	mustWriteGitTestFixture(t, root, "ai-docs/tickets/todo/.keep", "")
+	sparseTestRunGit(t, root, "add", source, "ai-docs/tickets/todo/.keep")
+	sparseTestRunGit(t, root, "commit", "-m", "seed")
+	if err := os.Rename(filepath.Join(root, source), filepath.Join(root, dest)); err != nil {
+		t.Fatal(err)
+	}
+	sparseTestRunGit(t, root, "rm", "--cached", "--quiet", source)
+	if out := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "status", "--porcelain"))); out != "D  "+source+"\n?? "+dest {
+		t.Fatalf("fixture status = %q, want a staged deletion and an untracked destination", out)
+	}
+
+	branch := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD")))
+	client := Client{Runner: ExecRunner{}, Verifier: func(string, []string) ([]string, error) { return nil, nil }}
+	if _, err := client.Commit(context.Background(), root, CommitOptions{
+		Paths:          []string{source},
+		Title:          "docs(ticket): move demo",
+		AIContext:      []string{"User intent: commit a partly staged ticket move."},
+		ExpectedBranch: branch,
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	committed := strings.Fields(string(sparseTestRunGitOutput(t, root, "show", "--name-only", "--no-renames", "--format=", "HEAD")))
+	if !reflect.DeepEqual(committed, []string{source, dest}) {
+		t.Fatalf("committed = %q, want the source's deletion and the destination", committed)
+	}
+	if out := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "status", "--porcelain"))); out != "" {
+		t.Fatalf("status = %q, want the whole move committed", out)
+	}
 }
 
 // TestCommitLeavesAnUntrackedCopyBesideAStagedTicketMove: a ticket created
