@@ -12,6 +12,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 9c039da2d7b13083
 sage-review-design-reviewed: 9c039da2d7b13083
+completed: 2026-11-23
 ---
 
 # Companion Paper Doll: Head Set, Outfit-Baked Column Schema and Compositor
@@ -613,6 +614,40 @@ Verification:
   - a frame carrying only `fills` validates in an outfit column and is still
     rejected in a legacy `poses.*.layers`.
 
+### Result (a47013cfe) - 2026-11-22
+
+76a6166d9 widens `validateCompanionManifest` to enumerate the rasters in
+outfit columns, attachment layers and columns, eye sets and the layer key
+`fills`, all through the existing filename rule. A `kit` flag lets a layer or
+frame in the new sections stand on `fills` alone, while legacy
+`poses`/`gestures`/`props` keep the v1 raster rule. The returned file list
+keeps its sorted-unique `[]string` shape and only its content widens, so the
+pack-sources install allow-list can follow it unchanged. `lintCompanionKit`
+(`companion_pack_kit.go`) is advisory and parses the raw manifest itself, so
+it can report the projection defect that also fails validation. It reports
+every planned finding, plus attachment slots outside the slot pattern, and
+resolves column anchors with the compositor's key-presence merge.
+
+One narrowing is deliberate (Decision 16), and the lite review noted it as
+the only one. A malformed or unsafe `fills` on a legacy layer, or a top-level
+`outfits`/`attachments`/`eyesets` of the wrong shape, now rejects a manifest
+that used to pass as unknown keys. No shipped pack uses these keys. The
+embedded default pack's file list is pinned to its pre-change value.
+
+a47013cfe rewrites the manual delta to the outfit-baked contract and applies
+it to `companion-pet-rigging.md`:
+- §3a covers the contract and the six-step recipe;
+- the proportion is h28, about 2.92 heads, and the standing master is now
+  the style anchor only;
+- §5 gains the attachment z rows, with the legacy rows kept as v1 usage;
+- the gear-modal bullet gains the five wardrobe keys;
+- Craft Gates 2 and 3 gain the paper-doll checks;
+- the IP line is extended.
+
+No third-party name is introduced. The manual's code facts were checked
+against the branch by symbol: `slotZ`/`bindZ`, `companionSlotID`,
+registration tolerance 4 and the channel pattern.
+
 ### Phase 2: Compositor outfit engine
 
 Goal: the body set renders per Decisions 6, 8-12 and 14. Depends on Phase 1
@@ -650,6 +685,53 @@ Verification:
   passes when the neck tucks under the head with no gap or double edge at the
   head anchor, exposed skin and head-egg skin match in tint, and the seated
   column's head sits lower.
+
+### Result (48ca243f6) - 2026-11-22
+
+9d5189d04 adds the outfit engine to `dashboard-companion-compositor.js`:
+- `column` merges an outfit entry over the same-named top-level entry by key
+  presence. `pose` and `fallback` come only from the top level, `layers` only
+  from the outfit, and a column is bound only when it has layers.
+- `bound` walks the fallback chain, including the implicit `stand` step,
+  inside the active outfit. An unresolved chain draws the legacy projection.
+- Gesture columns replace layers by `id`, or by `slot` in outfit mode only.
+  An unbound gesture in outfit mode keeps its pose and anchors, draws no
+  legacy art, and keeps `replaces` only as a pure removal.
+- `fills` channels follow built-in < pack < outfit < preset < config, and a
+  channel with no color draws untinted.
+- A gesture `headAnchor` applies only in outfit mode.
+
+`dashboard-companion-packs.js` fetches exactly the rasters the server
+enumerates.
+
+Deviation: the same commit also landed the compositor half of Phase 3. That
+covers `makeRig` wardrobe picks, eye sets with a per-selection iris buffer,
+slot-based attachments with the Decision 11 z defaults, and the
+`setWardrobe`/`setPreset` cache clearing. It also exports `wardrobeOptions`,
+`attachmentPairs` and `palettePairs` for the pickers. The engine and the head
+set share `select()` and `view()`, so splitting them would have meant
+throwaway seams.
+
+48ca243f6 closes the lite review's test gaps:
+- pack versus outfit palette order;
+- gesture head anchors in outfit and legacy mode;
+- explicit attachment `z`;
+- fills-only frames.
+
+It also replaces a self-comparing palette assertion. A mutation of the
+compositor confirms that each new assertion fails.
+
+The visual harness rendered an IP-clean procedural 512 × 512 fixture
+through the real compositor in Chromium, in stand, typing and a wave gesture,
+for two outfits and two skin tints. The captures are
+`paper-doll-engine-grid.png` and `paper-doll-neck-zoom.png` under
+`ai-docs/assets/mockups/261122/companion-paper-doll-engine/shots/`. They are
+gitignored like the other mockup shots, and the harness script stayed outside
+the repository. Compared with `companion-mannequin-h28/shots/h28-on.png`,
+they match on all three criteria:
+- the neck tucks under the egg with no gap or double edge;
+- exposed skin is pixel-identical to the head-egg skin at both tints;
+- the seated head sits lower at `headScale` 1.0.
 
 ### Phase 3: Head set, presets and wardrobe selection
 
@@ -697,3 +779,52 @@ Verification:
   - catalog and i18n drift tests pass;
   - the manifest loader compiles the attachments and palette patterns;
   - `LoadCompanion` and the `companion` stream payload carry the five keys.
+
+### Result (b20893e9b) - 2026-11-22
+
+a3b1e528a adds the five global-only keys
+`dashboard.companion_{outfit,hair,eyes,attachments,palette}`:
+- They are identical in the three dashboard manifests. Each pattern wraps
+  its body in an optional group, so the empty default means follow the
+  preset. Attachments and palette take up to 16 space-separated pairs, the
+  bound the rig parses.
+- `manifestGlobalOnlyKeys`, the companion-modal catalog rows with i18n in 11
+  locales, the `CompanionConfig` fields and the `companion` stream payload
+  carry them.
+- The JSON names match the compositor's stage `wardrobeFields`.
+- The manifest key counts pinned in tests move from 11 to 16.
+
+2c136a2ba turns the five modal rows into pickers fed by
+`C.wardrobeOptions` of the active pack:
+- outfit, hair and eyes are selects that open on "Follow preset";
+- attachments get one select per slot, offering follow preset, none or the
+  slot's IDs;
+- palette gets a color input per channel plus a reset.
+
+`composePairs` sorts the keys, lowercases the values, caps at 16 pairs while
+keeping the changed key, and writes `""` when nothing is left. Every pick
+posts `POST /api/config/set {scope:"global"}`. A stage test shows that a live
+`apply` broadcast re-dresses the mounted rig with no pack refetch and
+refreshes an open modal.
+
+b20893e9b re-pins the Chromium settings test (`TestCompanionSettingsBrowser`,
+gated by `WS_PLAYWRIGHT_MODULE`). It had gone stale at four rows. It now
+covers the nine labels and the control types, and checks that a real skin
+color pick writes `skin=#aabbcc` to the global layer. The run passed, and
+the screenshot was checked by eye.
+
+The selection-order, eye-set, attachment and cache-clearing cases are in
+the node suite with the Phase 2 compositor work.
+
+Verification for all three phases, run on the final code head 48ca243f6:
+- full `go test ./internal/mcp -count=1 -timeout 45m`: ok in 853s;
+- full `go test ./internal/wsdashboard/... -count=1`: ok in 542s;
+- `node --test` on `frontend-companion.test.js` and
+  `frontend-settings.test.js`: 50 pass;
+- `generate-package-assets.py --check`: clean;
+- `TestCompanionSettingsBrowser` with Playwright: pass.
+
+An earlier full mcp run on a47013cfe (same Go code) failed once. The failure
+was a TempDir cleanup race in `TestIntakeStopsWithinRecheckOfARemovedKey`, a
+live-session intake test this branch does not touch, and the test passed 5
+of 5 times alone.

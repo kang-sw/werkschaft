@@ -106,6 +106,10 @@ type fakeExecHolders struct {
 	spawnErr error
 	inputErr error
 	replays  []string
+	// incomplete is the listing's Incomplete flag; onScan runs in Scan
+	// (a test completes the census there).
+	incomplete bool
+	onScan     func()
 	// inputClosed is each holder's stdin-closed state, as a holder tracks
 	// it: an eof at spawn or in an input closes it, and a later input is
 	// refused. noInputState lists holders without input_closed, as one
@@ -234,7 +238,14 @@ func (f *fakeExecHolders) Stop(id string) error {
 	return nil
 }
 
-func (f *fakeExecHolders) Scan() {}
+func (f *fakeExecHolders) Scan() {
+	f.mu.Lock()
+	fn := f.onScan
+	f.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
 
 func (f *fakeExecHolders) Replay(id string) error {
 	f.mu.Lock()
@@ -246,7 +257,7 @@ func (f *fakeExecHolders) Replay(id string) error {
 func (f *fakeExecHolders) List() wsholder.Listing {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := wsholder.Listing{}
+	out := wsholder.Listing{Incomplete: f.incomplete}
 	for id, session := range f.live {
 		if f.unattached[id] {
 			out.Holders = append(out.Holders, wsholder.Info{ID: id, Cause: wsholder.CauseNoAnswer, Session: session})
@@ -2206,5 +2217,85 @@ func TestHostedPanicsReleaseTheDeleteClaim(t *testing.T) {
 				t.Fatalf("%d deletes pending after the retry", pending)
 			}
 		})
+	}
+}
+
+// TestHostedIncompleteCensusKeepsLivingJobFenced: a replacement daemon whose
+// startup scan could not read every holder registration does not store a
+// job lost on the listing's word. The job stays running (so the owner's
+// close and the worktree guards still see it) until a complete scan, which
+// then ends it from its exit copy or, with none, as lost; a holder that
+// the later scan lists is replayed and its job lives on.
+func TestHostedIncompleteCensusKeepsLivingJobFenced(t *testing.T) {
+	prevMin, prevMax := retireRetryMin, retireRetryMax
+	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
+	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
+
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	unreadable, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "unreadable"})
+	copied, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "copied"})
+	vanished, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "vanished"})
+	_ = fx.h.Close()
+
+	code := 3
+	raw, _ := json.Marshal(wsholder.Exit{ExitCode: &code, Reason: "child_exited", StoppedAt: time.Now().UTC().Format(time.RFC3339)})
+	if err := os.WriteFile(filepath.Join(fx.exitDir, copied.ID+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The scan cannot read two holders' registrations: both are omitted
+	// from the listing, though the first one's process still runs.
+	fx.holders.mu.Lock()
+	session := fx.holders.live[unreadable.HolderID]
+	delete(fx.holders.live, unreadable.HolderID)
+	delete(fx.holders.live, copied.HolderID)
+	delete(fx.holders.live, vanished.HolderID)
+	fx.holders.incomplete = true
+	fx.holders.mu.Unlock()
+
+	fx.open(10 * time.Millisecond)
+	if a, _ := fx.h.Get("lead", unreadable.ID); a.State != HostedRunning {
+		t.Fatalf("job omitted by an incomplete census = %+v, want running", a)
+	}
+	if a, _ := fx.h.Get("lead", vanished.ID); a.State != HostedRunning {
+		t.Fatalf("job omitted by an incomplete census, no copy = %+v, want running", a)
+	}
+	if a, _ := fx.h.Get("lead", copied.ID); a.State != HostedExited || a.ExitCode == nil || *a.ExitCode != 3 {
+		t.Fatalf("job with an exit copy = %+v, want its status", a)
+	}
+	if n := fx.h.RunningOwners()["lead"]; n != 2 {
+		t.Fatalf("running jobs counted for the owner = %d, want 2 (the close fence)", n)
+	}
+	if n := fx.h.LiveIn(fx.exitDir); n != 2 {
+		t.Fatalf("live jobs in the worktree = %d, want 2 (the worktree fence)", n)
+	}
+	row, _ := fx.store.row(unreadable.ID)
+	if row.Terminal() {
+		t.Fatalf("stored row = %+v, want it left running", row)
+	}
+
+	// A later complete scan lists the first holder again; the second is gone.
+	fx.holders.mu.Lock()
+	fx.holders.onScan = func() {
+		fx.holders.mu.Lock()
+		fx.holders.live[unreadable.HolderID] = session
+		fx.holders.incomplete = false
+		fx.holders.mu.Unlock()
+	}
+	fx.holders.mu.Unlock()
+	eventuallyExec(t, "the unlisted job's reconcile", func() bool {
+		a, _ := fx.h.Get("lead", vanished.ID)
+		return a.State == HostedLost
+	})
+	if a, _ := fx.h.Get("lead", unreadable.ID); a.State != HostedRunning {
+		t.Fatalf("job whose holder the complete scan lists = %+v, want running", a)
+	}
+	fx.holders.mu.Lock()
+	replays := slices.Clone(fx.holders.replays)
+	fx.holders.mu.Unlock()
+	if !slices.Equal(replays, []string{unreadable.HolderID}) {
+		t.Fatalf("replayed holders = %q, want the relisted job's", replays)
+	}
+	if n := fx.h.RunningOwners()["lead"]; n != 1 {
+		t.Fatalf("running jobs after reconcile = %d, want 1", n)
 	}
 }

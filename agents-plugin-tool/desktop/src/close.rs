@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use crate::{
@@ -61,9 +61,9 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
         return;
     }
     thread::spawn(move || {
-        let main = app.get_webview_window(MAIN_WINDOW);
+        let main = crate::chrome::get(&app, MAIN_WINDOW);
         // The exit ends every window, so a secondary's drafts count too.
-        let windows: Vec<_> = app.webview_windows().into_values().collect();
+        let windows: Vec<_> = crate::chrome::all(&app);
         let drafts_ready = every(&windows, |window| drafts_saved(window, &connection));
         let done = match kind {
             Exit::Close => close(&app, main.as_ref(), drafts_ready),
@@ -76,7 +76,7 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
                 release_document(window);
             }
             if let Some(window) = &main {
-                let _ = window.set_title("Werkschaft");
+                crate::chrome::set_title(window, "Werkschaft");
             }
             connection.closing.store(false, Ordering::Release);
         }
@@ -154,7 +154,7 @@ fn full_quit(
         }
     }
     if let Some(window) = main {
-        let _ = window.set_title("Werkschaft — Stopping the background…");
+        crate::chrome::set_title(window, "Werkschaft — Stopping the background…");
     }
     let outcome = daemon.full_stop();
     let stopped = matches!(outcome, Ok(FullStop::Stopped));

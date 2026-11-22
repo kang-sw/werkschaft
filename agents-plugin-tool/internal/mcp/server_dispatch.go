@@ -528,6 +528,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			// scalar resolver-backed knob (subagent / bootstrap_alarm).
 			// Resolver.Set enforces global-only + session-key.
 			value, hasValue := params.Arguments["value"].(string)
+			sentValue := value
 			value, err := normalizeTuneScalar(entry, value, hasValue)
 			if err != nil {
 				return toolTextResponse(req.ID, "", err)
@@ -551,6 +552,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			} else if effective.Scope != resolvedScope || answeredKey != storeKey {
 				text += fmt.Sprintf("shadowed: effective %s: %s [scope:%s]\n", answeredKey, effective.Value, effective.Scope)
 			}
+			text += deprecatedTuneNote(entry.Key, sentValue, value)
 			if entry.Key == wsconfig.ItemWorkflowProfile && value == "orchestrate" {
 				text += orchestrateWhitelistWarning(harness)
 			}

@@ -77,6 +77,18 @@
       "description": "When true, the dashboard shows the companion character beside the conversation. Only the global value applies."
     },
     {
+      "key": "dashboard.companion_mode",
+      "type": "enum",
+      "enum": [
+        "off",
+        "visual",
+        "full"
+      ],
+      "default": "off",
+      "default_scope": "global",
+      "description": "Deprecated alias of dashboard.companion_enabled, kept so 0.51.0 clients and scripts keep working: off hides the companion; visual and full both show it and behave the same. A write to either key updates the other, and a value stored here by an older version decides whether the companion shows. Use dashboard.companion_enabled instead. Only the global value applies."
+    },
+    {
       "key": "dashboard.companion_director",
       "type": "enum",
       "enum": [
@@ -85,7 +97,7 @@
       ],
       "default": "rules",
       "default_scope": "global",
-      "description": "Selects what drives the companion: rules (built-in reactions to session events) or agent (a separate lightweight agent writes the reactions). Only the global value applies."
+      "description": "Selects what drives the companion: rules (built-in reactions to session events) or agent (a separate lightweight agent writes the reactions). The 0.51.0 values sidecar and lead-tool are deprecated; config.tune still accepts them and stores rules. Only the global value applies."
     },
     {
       "key": "dashboard.companion_pack",
@@ -102,6 +114,46 @@
       "default": "werkschaft-d1",
       "default_scope": "global",
       "description": "Selects the companion preset by ID. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_outfit",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_-]{0,63})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Selects the companion outfit set by ID. Empty follows the preset, and an ID the active pack does not define is ignored. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_hair",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_-]{0,63})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Selects the companion hair set by ID. Empty follows the preset, and an ID the active pack does not define is ignored. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_eyes",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_-]{0,63})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Selects the companion eye set by ID. Empty follows the preset, and an ID the active pack does not define is ignored. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_attachments",
+      "type": "string",
+      "pattern": "^([a-z][a-z0-9_-]{0,31}=[a-z0-9][a-z0-9_-]{0,63}( [a-z][a-z0-9_-]{0,31}=[a-z0-9][a-z0-9_-]{0,63}){0,15})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Chooses companion attachments as up to 16 space-separated <slot>=<id> pairs, one attachment per slot; the ID none clears that slot. Empty follows the preset. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_palette",
+      "type": "string",
+      "pattern": "^([a-zA-Z][a-zA-Z0-9_-]{0,31}=#[0-9a-fA-F]{6}( [a-zA-Z][a-zA-Z0-9_-]{0,31}=#[0-9a-fA-F]{6}){0,15})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Overrides companion tint channel colors as up to 16 space-separated <channel>=#rrggbb pairs. Empty follows the preset. Only the global value applies."
     },
     {
       "key": "dashboard.companion_agent_cooldown_seconds",

@@ -213,7 +213,7 @@ func TestExecApprovalFollowsTheLiveMode(t *testing.T) {
 // run at once, an agy lead without a common profile follows its ws bypass,
 // and a Codex lead with no selection counts its reported full-access mode.
 func TestExecImmediatePosture(t *testing.T) {
-	r := NewRunner(Options{Dir: t.TempDir()})
+	r := NewRunner(Options{Dir: t.TempDir(), Backends: BuiltinBackendRegistrations()})
 	for _, tc := range []struct {
 		name    string
 		rec     Record

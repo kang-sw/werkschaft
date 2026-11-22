@@ -289,7 +289,7 @@ func TestAgyCrossHarnessRefusesProfileCreation(t *testing.T) {
 func TestAgyWorkerRecordRefusesMessageContinueAndResume(t *testing.T) {
 	refusals := &wakeRefusals{}
 	h, got := agentHarness(t, func(o *Options) {
-		o.Backends[BackendAgy] = BackendRegistration{Backend: o.Backends[BackendClaude].Backend, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy)}
+		o.Backends[BackendAgy] = BackendRegistration{Backend: o.Backends[BackendClaude].Backend, Permission: builtinPermission(BackendAgy), Lifecycle: builtinLifecycle(BackendAgy), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy)}
 		o.WakeRefused = refusals.add
 	})
 	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.config.Config, "small", "", "gemini-small", BackendAgy, "medium"); err != nil {
@@ -846,7 +846,7 @@ func TestAgyWorkerRecordRefusalIgnoresItsProfile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, map[string]string{"agy-custom": `{"backend":"agy","model":"gemini","instructions":"agent.md"}`})
 			h.runner.Close()
-			h.config.Backends[BackendAgy] = BackendRegistration{Backend: h.backend, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy)}
+			h.config.Backends[BackendAgy] = BackendRegistration{Backend: h.backend, Permission: builtinPermission(BackendAgy), Lifecycle: builtinLifecycle(BackendAgy), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy)}
 			h.start()
 			id := h.create("agy-custom").ID
 			h.runner.Close()

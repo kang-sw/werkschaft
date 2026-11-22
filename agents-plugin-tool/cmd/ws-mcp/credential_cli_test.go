@@ -219,3 +219,30 @@ func TestCredentialCLIInsideTheDaemonWithNoStoreRefuses(t *testing.T) {
 		t.Fatalf("a refused hosted command wrote under the cache: %v", entries)
 	}
 }
+
+// TestCredentialCLIShowMovesTheCandidateFile: `credential show` with no
+// daemon moves a credential file a pre-release build wrote beside the daemon
+// directory into the protected location, and reports its key.
+func TestCredentialCLIShowMovesTheCandidateFile(t *testing.T) {
+	cache := t.TempDir()
+	credPath, _ := wscred.DefaultPath(cache)
+	dir, _ := wsdashboard.Dir(cache)
+	legacy := filepath.Join(filepath.Dir(dir), "auth", wscred.FileName)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"schema_version":1,"providers":{"openrouter":{"kind":"api_key","api_key":"` + credentialCLIFixtureKey + `"}}}`
+	if err := os.WriteFile(legacy, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runCredentialCLI(t, nil, cache, "", "credential", "show")
+	if code != 0 || !strings.Contains(out, "sk-or-...0001") {
+		t.Fatalf("show = %d %q %q", code, out, errOut)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("the legacy file remains: %v", err)
+	}
+	if raw, err := os.ReadFile(credPath); err != nil || string(raw) != body {
+		t.Fatalf("the moved file = %q, %v", raw, err)
+	}
+}

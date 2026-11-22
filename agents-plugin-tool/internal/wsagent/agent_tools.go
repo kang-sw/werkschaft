@@ -307,7 +307,7 @@ func (r *Runner) spawnableHarness(callerBackend, harness string) string {
 	if why := r.registeredWorker(callerBackend, harness); why != "" {
 		return why
 	}
-	if harness == BackendPi && r.opts.ChildCheck != nil {
+	if r.lifecycle(harness).NativeChildren && r.opts.ChildCheck != nil {
 		if err := r.opts.ChildCheck(); err != nil {
 			return err.Error()
 		}
@@ -660,7 +660,7 @@ func (r *Runner) HarnessAvailability(caller, harness string) (why string, known 
 	if why := r.registeredWorker(caller, harness); why != "" {
 		return why, true
 	}
-	if harness != BackendPi || r.opts.ChildCheck == nil {
+	if !r.lifecycle(harness).NativeChildren || r.opts.ChildCheck == nil {
 		return "", true
 	}
 	if r.opts.ChildCheckKnown == nil {

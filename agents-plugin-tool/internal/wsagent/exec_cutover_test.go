@@ -333,11 +333,10 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	if !ok || hello.Conversation != st.ID || hello.ExecCutover != BackendClaude {
 		t.Fatalf("token hello = %+v %v", hello, ok)
 	}
-	// An older daemon on the same port compares the recorded route
-	// literally (474f3a301 runner_process.go:445, worker_rejoin.go:28): the
-	// mark makes it restart this process at its first idle point without
-	// the cutover, instead of serving it without exec tools.
-	if rec.MCPURL != h.runner.mcpURL()+execCutoverRouteMark || rec.MCPURL == h.runner.mcpURL() {
+	// The record keeps the plain route: a v0.51.0 daemon on the same port
+	// compares it literally and reattaches the token only when it matches
+	// (exec_cutover_compat_test.go). The cutover is the record's holder.
+	if rec.MCPURL != h.runner.mcpURL() {
 		t.Fatalf("cutover lead records route %q, daemon route %q", rec.MCPURL, h.runner.mcpURL())
 	}
 
@@ -477,7 +476,7 @@ func TestClaudeExecCutoverIsOptIn(t *testing.T) {
 	if got, _ := flagValue(argv, "--disallowedTools"); !strings.Contains(got, "Bash,PowerShell,Monitor,TaskStop") {
 		t.Fatalf("opted-in lead --disallowedTools = %q", got)
 	}
-	if rec.ExecCutoverHolder == "" || rec.MCPURL != h.runner.mcpURL()+execCutoverRouteMark {
+	if rec.ExecCutoverHolder == "" || rec.MCPURL != h.runner.mcpURL() {
 		t.Fatalf("opted-in lead: cutover holder %q, route %q", rec.ExecCutoverHolder, rec.MCPURL)
 	}
 	if hello, _, ok := h.runner.ResolveMCPToken(rec.MCPToken); !ok || hello.ExecCutover != BackendClaude {

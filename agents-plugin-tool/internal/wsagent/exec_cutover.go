@@ -238,29 +238,35 @@ func (c *conv) rejoinExecCutover(rec Record) bool {
 	return on
 }
 
-// execCutoverRouteMark ends the ws-mcp route a cutover process's record
-// names (Record.MCPURL). The process itself is given the plain route; the
-// mark is a URL fragment, never sent. This daemon reads the marked route as
-// its own (servesMCPURL). An older daemon on the same port compares the
-// route literally, finds it is not its own, and restarts the process at its
-// first idle point without the cutover (its stale-route path): a process
-// whose native tools are removed is never left to a daemon that cannot
-// serve their replacement.
-const execCutoverRouteMark = "#exec-cutover"
+// legacyExecCutoverRouteMark is a fragment unreleased development builds
+// appended to a cutover process's recorded ws-mcp route (Record.MCPURL) so
+// that an older daemon would not recognise the route. It is no longer
+// written: v0.51.0 compares the recorded route literally, and a marked one
+// makes its lead and worker rejoin skip the token's reattachment, so the
+// running process loses every ws tool until an idle restart. The record
+// keeps the plain route a v0.51.0 daemon reattaches; the cutover itself
+// lives in Record.ExecCutoverHolder (exec_cutover_holder_id), a top-level
+// member v0.51.0's record serializer carries across its rewrites unread
+// (wsagent/record.go UnmarshalJSON/MarshalJSON, unknown). A record written
+// with the fragment is still read as this daemon's route.
+const legacyExecCutoverRouteMark = "#exec-cutover"
 
-// recordedMCPURL is the route a start records for its process: url, marked
-// when the process runs under the cutover.
-func recordedMCPURL(url string, cutover bool) string {
-	if cutover && url != "" {
-		return url + execCutoverRouteMark
-	}
-	return url
+// servesMCPURL reports whether a recorded route is this daemon's.
+func (r *Runner) servesMCPURL(recorded string) bool {
+	return strings.TrimSuffix(recorded, legacyExecCutoverRouteMark) == r.mcpURL()
 }
 
-// servesMCPURL reports whether a recorded route is this daemon's, marked
-// or not.
-func (r *Runner) servesMCPURL(recorded string) bool {
-	return strings.TrimSuffix(recorded, execCutoverRouteMark) == r.mcpURL()
+// cutoverStoreGone reports whether c's process runs under the cutover while
+// this daemon's hosted exec jobs are bound without a store (BindExecJobs(nil):
+// the store failed to open). ws-mcp lists the exec tools only over open
+// hosted jobs, so a process rejoined from a predecessor's record has had
+// its native tools removed with nothing to replace them: it restarts at its
+// first idle point, which decides the cutover afresh (execCutoverFor keeps
+// native tools without hosted jobs). Before the daemon binds, nothing is
+// known: BindExecJobs signals every conversation (execReconsider) and this
+// is read then.
+func (c *conv) cutoverStoreGone() bool {
+	return c.execCutover && c.r.exec.bound.Load() && c.r.execJobs() == nil
 }
 
 // cutoverToolsFor returns the tools of want that p's ws tools admit, in

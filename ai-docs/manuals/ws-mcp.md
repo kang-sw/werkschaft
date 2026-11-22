@@ -144,9 +144,13 @@ fresh key is the recovery.
 ### Provider credential store
 
 Provider credentials (an OpenRouter API key today; `internal/wscred`) live
-in one owner-only file, `<cache root>/auth/credentials.json`: POSIX mode
-0600 in a 0700 directory, on Windows a protected DACL granting the current
-user alone; never in a project tree. It is a plain file (storage type 5),
+in one owner-only file, `<cache root>/dashboard/auth/credentials.json`:
+POSIX mode 0600 in a 0700 directory, on Windows a protected DACL granting
+the current user alone; never in a project tree. It sits under the daemon's
+state directory because v0.51.0's file preview already denies that whole
+directory, so a rolled-back daemon cannot show it. A pre-release build kept
+it at `<cache root>/auth/`; the daemon at start, and the offline CLI under
+the daemon lock, move that file once (`Store.MigrateLegacy`). It is a plain file (storage type 5),
 not a SQLite row, so the offline CLI can write it and nothing that copies
 the state databases copies a secret. The daemon reads it once, at the first
 credential use, serves every later read from memory, and rewrites it by

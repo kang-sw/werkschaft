@@ -48,6 +48,42 @@ type credentialStore interface {
 	Close()
 }
 
+// legacyCredentialMigrator is a store that can move a pre-release credential
+// file into its path (*wscred.Store).
+type legacyCredentialMigrator interface{ MigrateLegacy() error }
+
+// migrateCredentials runs the one-time legacy-file move for a store that has
+// one. The caller holds the daemon's lock. A failure is logged and the store
+// still serves the path it has.
+func migrateCredentials(store any, logw io.Writer) {
+	if m, ok := store.(legacyCredentialMigrator); ok {
+		if err := m.MigrateLegacy(); err != nil {
+			fmt.Fprintf(logw, "dashboard: %v\n", err)
+		}
+	}
+}
+
+// MigrateCredentialFile moves a pre-release credential file into credPath
+// for a CLI run outside the daemon that only reads it: when the daemon's lock
+// in dir is free it takes the lock, moves, and releases it; when a daemon
+// holds the lock it has moved the file already, at its start.
+func MigrateCredentialFile(dir, credPath string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	lock := flock.New(filepath.Join(dir, lockFileName))
+	locked, err := lock.TryLock()
+	if err != nil {
+		return fmt.Errorf("dashboard lock: %w", err)
+	}
+	if !locked {
+		_ = lock.Close()
+		return nil
+	}
+	defer func() { _ = lock.Unlock() }()
+	return wscred.NewStore(credPath).MigrateLegacy()
+}
+
 // AgentCredentialHost is an AgentHost whose hosted sessions may ask the
 // token route for provider credentials.
 type AgentCredentialHost interface {
@@ -217,7 +253,11 @@ func applyOfflineCredentialChange(lock *flock.Flock, credPath string, change wsc
 	if beforeOfflineCredentialWrite != nil {
 		beforeOfflineCredentialWrite()
 	}
-	return wscred.NewStore(credPath).Apply(change)
+	store := wscred.NewStore(credPath)
+	if err := store.MigrateLegacy(); err != nil {
+		return wscred.ChangeResult{}, err
+	}
+	return store.Apply(change)
 }
 
 // sendCredentialChange sends change to the daemon ep names. A refusal that

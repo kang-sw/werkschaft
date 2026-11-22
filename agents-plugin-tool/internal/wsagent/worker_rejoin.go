@@ -10,6 +10,10 @@ import (
 
 // Legacy Pi holders retain their descriptor and unfenced record across rejoin.
 // Every newly launched worker includes the backend in the common descriptor.
+//
+// Retained name check: the holder kind "pi-worker" and its absent backend are
+// bytes an older daemon wrote into a still-running holder's descriptor, which
+// no registration data describes. TestWorkerHolderOwnership pins the fixture.
 func workerHolderMatches(rec Record, meta holderSession, child *wsholder.ChildStatus) bool {
 	kind := meta.Kind == holderKindAgentWorker && meta.Backend == rec.Backend ||
 		meta.Kind == holderKindPiWorker && rec.Backend == BackendPi && (meta.Backend == "" || meta.Backend == BackendPi)

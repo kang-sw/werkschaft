@@ -292,15 +292,18 @@ func TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild(t *testing.T) {
 		}
 	}
 	prompt, err := os.ReadFile(promptPath)
-	if err != nil || tier != "playbook-explore:small" {
-		t.Fatalf("playbook.render = %q (prompt %v); want a prompt path and the explore role tier", out, err)
+	// The explore role's default route is the caller's own slot, which a
+	// v0.51.0 spawn also accepts as the bare size, so the render returns
+	// that form (TestRenderedTierSurvivesDaemonRollbackBeforeSpawn).
+	if err != nil || tier != "small" {
+		t.Fatalf("playbook.render = %q (prompt %v); want a prompt path and the bare size the explore role resolves to", out, err)
 	}
 
 	// The role tier's default route: the packaged chain falls through to
 	// the caller's own slot, agy's.
-	route, binding, err := s.routedBinding(tier, wsagent.BackendAgy, cfg)
+	route, binding, err := s.routedBinding("playbook-explore:small", wsagent.BackendAgy, cfg)
 	if err != nil || !route.CallerFallthrough || route.Harness != wsagent.BackendAgy || route.Size != "small" || binding.Model != "agy-small" {
-		t.Fatalf("default route of %s = %+v (%s), binding %+v, %v", tier, route, route.Trace(), binding, err)
+		t.Fatalf("default route of the explore role = %+v (%s), binding %+v, %v", route, route.Trace(), binding, err)
 	}
 
 	// Passed as returned, it starts an agy child: agy admits its own lead.
@@ -321,8 +324,7 @@ func TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild(t *testing.T) {
 
 	// The external fixed tier qualifies the role tier's size: agent.spawn's
 	// dotted tier takes no role-tier node.
-	_, size, _ := strings.Cut(tier, ":")
-	raw = callToolWithKey(t, s, 4, f.hosted, "agent.spawn", map[string]any{"prompt": "Run the playbook at the system prompt path.", "system_prompt_path": promptPath, "tier": "claude." + size, "authority": "read-only", "format": "json"})
+	raw = callToolWithKey(t, s, 4, f.hosted, "agent.spawn", map[string]any{"prompt": "Run the playbook at the system prompt path.", "system_prompt_path": promptPath, "tier": "claude." + tier, "authority": "read-only", "format": "json"})
 	var res wsagent.AgentSpawnResult
 	if err := json.Unmarshal([]byte(raw), &res); err != nil || res.Address == "" {
 		t.Fatalf("agent.spawn = %q (%v)", raw, err)
