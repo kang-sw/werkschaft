@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsconfigservice"
 	"github.com/kang-sw/devenv/internal/wspackage"
@@ -96,8 +97,19 @@ func storedRouting(t *testing.T, f *piRecordFixture) string {
 	return compact.String()
 }
 
+// initializePi completes a Pi client's initialize, so the session's
+// harness (the caller harness traces resolve for) is pi.
+func initializePi(t *testing.T, s *Server) {
+	t.Helper()
+	var out bytes.Buffer
+	if err := s.ServeStdio(context.Background(), strings.NewReader(piInitNative+"\n"), &out); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+}
+
 func TestConfigTuneTierRoutingRoundTripAndGlobalScope(t *testing.T) {
 	f := roleRenderFixture(t)
+	initializePi(t, f.s)
 	value := map[string]any{
 		"bundles": map[string]any{"discussion": map[string]any{"model": " opus ", "harness": "claude", "effort": "high"}},
 		"nodes": map[string]any{
@@ -120,6 +132,22 @@ func TestConfigTuneTierRoutingRoundTripAndGlobalScope(t *testing.T) {
 	}
 	if strings.Contains(text, "collision:") {
 		t.Fatalf("no alias is set, yet the echo reports a collision: %s", text)
+	}
+	// The echo traces the routes the value touches on the caller's harness
+	// (Pi here): written nodes at every size and bundles, but not
+	// untouched routes.
+	for _, want := range []string{
+		"trace: discussion\n",
+		"trace: ticket-worker:medium -> review:medium -> medium -> pi.medium\n",
+		"trace: ticket-worker:large -> claude.xlarge\n",
+		"trace: mine:small -> small -> pi.small\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("echo missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "trace: explore:") || strings.Contains(text, "trace: review:") {
+		t.Errorf("echo traces untouched routes:\n%s", text)
 	}
 
 	// Every other scope is refused, and the stored value stays.
@@ -180,6 +208,9 @@ func TestConfigTuneTierRoutingRefusesInvalidGraphs(t *testing.T) {
 		{"unknown bundle", map[string]any{"nodes": map[string]any{"x": map[string]any{"*": "nosuch"}}}, `unknown bundle "nosuch"`},
 		{"reserved name", map[string]any{"nodes": map[string]any{"opus": map[string]any{}}}, "a tier spelling"},
 		{"nine-hop chain", map[string]any{"nodes": nineHops}, "hops"},
+		{"unknown harness", map[string]any{"nodes": map[string]any{"review": map[string]any{"*": "nosuch.*"}}}, `unknown harness "nosuch"`},
+		{"unlaunchable bundle model", map[string]any{"bundles": map[string]any{"b": map[string]any{"harness": "claude", "model": "two words"}}}, "must match"},
+		{"unlaunchable bundle effort", map[string]any{"bundles": map[string]any{"b": map[string]any{"harness": "claude", "model": "m", "effort": "HIGH"}}}, "lowercase word"},
 	}
 	run := func(id int, label string) {
 		for i, tc := range cases {
@@ -309,6 +340,11 @@ func TestConfigListTierRoutingKnob(t *testing.T) {
 	if worker == nil || worker.Pointers["*"] != "implement:*" {
 		t.Fatalf("packaged role missing from current nodes: %+v", got.Nodes)
 	}
+	// Before the client names its harness, the caller slot is a placeholder.
+	if traces := strings.Join(got.Traces, "\n"); !strings.Contains(traces, "explore:small -> small -> <caller>.small") {
+		t.Fatalf("pre-initialize traces:\n%s", traces)
+	}
+	initializePi(t, f.s)
 
 	if text, isErr := tuneRouting(t, f, 2, map[string]any{"nodes": map[string]any{"ticket-worker": map[string]any{"*": "review:*"}}}, nil); isErr {
 		t.Fatal(text)
@@ -316,6 +352,16 @@ func TestConfigListTierRoutingKnob(t *testing.T) {
 	got = current(list(3))
 	if got.Routing.Nodes["ticket-worker"]["*"] != "review:*" {
 		t.Fatalf("stored routing missing from current: %+v", got)
+	}
+	traces := strings.Join(got.Traces, "\n")
+	for _, want := range []string{
+		"ticket-worker:medium -> review:medium -> medium -> pi.medium",
+		"review:large -> large -> pi.large",
+		"explore:xlarge -> xlarge -> pi.xlarge",
+	} {
+		if !strings.Contains(traces, want) {
+			t.Errorf("current traces missing %q:\n%s", want, traces)
+		}
 	}
 	for _, n := range got.Nodes {
 		if n.Name == "ticket-worker" && n.Pointers["*"] != "review:*" {
@@ -357,12 +403,20 @@ func TestDashboardCatalogTierRoutingMutation(t *testing.T) {
 		"text",
 		map[string]any{"nodes": map[string]any{"a": map[string]any{"*": "b:*"}, "b": map[string]any{"*": "a:*"}}},
 		map[string]any{"nodes": map[string]any{"x": map[string]any{"*": "nosuch:*"}}},
+		map[string]any{"nodes": map[string]any{"review": map[string]any{"*": "nosuch.*"}}},
+		map[string]any{"bundles": map[string]any{"b": map[string]any{"harness": "claude", "model": "m", "effort": "HIGH"}}},
 	} {
 		if _, err := catalog.Validate(wsconfig.ScopeGlobal, op("set", bad)); err == nil {
 			t.Errorf("accepted %v", bad)
 		}
 	}
 
+	// Every built-in harness validates, installed or not.
+	for _, h := range wsagent.BuiltinHarnessNames() {
+		if _, err := catalog.Validate(wsconfig.ScopeGlobal, op("set", map[string]any{"nodes": map[string]any{"mine": map[string]any{"*": h + ".*"}}})); err != nil {
+			t.Errorf("built-in harness %s refused: %v", h, err)
+		}
+	}
 	set, err := catalog.Validate(wsconfig.ScopeGlobal, op("set", map[string]any{"nodes": map[string]any{"mine": map[string]any{"*": "claude.*"}}}))
 	if err != nil {
 		t.Fatal(err)

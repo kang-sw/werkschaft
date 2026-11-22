@@ -201,10 +201,22 @@ func TestTierRoutingHopLimit(t *testing.T) {
 		t.Fatalf("nine-hop Resolve = %v", err)
 	}
 	// An exact alias that would shorten the path does not rescue it: the
-	// graph must stay valid after any alias is reset.
-	g = NewTierGraph(testTierRoles, mustRouting(t, chainRouting(8)), map[string]string{"n2:large": "codex.large"}, testHarnesses)
-	if err := g.Err(); err == nil {
-		t.Fatal("an alias masked a nine-hop path")
+	// graph must stay valid after any alias is reset. Only n1:large is
+	// overlong here (every pointer is a large exception), so an
+	// alias-following validator would accept the graph.
+	var parts []string
+	for i := 1; i < 8; i++ {
+		parts = append(parts, fmt.Sprintf(`"n%d":{"large":"n%d:large"}`, i, i+1))
+	}
+	largeOnly := `{"nodes":{` + strings.Join(parts, ",") + `,"n8":{}}}`
+	for _, aliases := range []map[string]string{nil, {"n2:large": "codex.large"}} {
+		g = NewTierGraph(testTierRoles, mustRouting(t, largeOnly), aliases, testHarnesses)
+		if err := g.Err(); err == nil || !strings.Contains(err.Error(), "more than 8 hops") || !strings.Contains(err.Error(), "n1:large") {
+			t.Fatalf("aliases %v: large-only nine-hop Err = %v", aliases, err)
+		}
+	}
+	if res := mustResolve(t, mustGraph(t, largeOnly[:strings.Index(largeOnly, `"n7"`)]+`"n7":{}}}`, nil), "n1:large", "codex"); len(res.Hops) != TierRoutingMaxHops {
+		t.Fatalf("the large-only chain one node shorter = %d hops (%s)", len(res.Hops), res.Trace())
 	}
 }
 
@@ -277,17 +289,20 @@ func TestTierRoutingExplicitAndBareTokens(t *testing.T) {
 
 func TestTierRoutingValidation(t *testing.T) {
 	parseErrors := map[string]string{
-		`{"nodes":{"Bad":{}}}`:                                             "lowercase slug",
-		`{"nodes":{"a":{"huge":"codex.*"}}}`:                               "selector",
-		`{"nodes":{"a":{"opus":"codex.*"}}}`:                               "selector",
-		`{"nodes":{"a":{"*":"codex.huge"}}}`:                               "<harness>.<size|*>",
-		`{"nodes":{"a":{"*":"review:opus"}}}`:                              "<node>:<size|*>",
-		`{"nodes":{"a":{"*":"Not A Target"}}}`:                             "bundle name",
-		`{"bundles":{"b":{"model":"m"}}}`:                                  "needs a harness",
-		`{"bundles":{"b":{"harness":"agy"}}}`:                              "needs a model",
-		`{"nodes":{"x":{}},"bundles":{"x":{"harness":"agy","model":"m"}}}`: "both a node and a bundle",
-		`{"nodes":{},"extra":1}`:                                           "unknown field",
-		`[]`:                                                               "cannot unmarshal",
+		`{"nodes":{"Bad":{}}}`:                                               "lowercase slug",
+		`{"nodes":{"a":{"huge":"codex.*"}}}`:                                 "selector",
+		`{"nodes":{"a":{"opus":"codex.*"}}}`:                                 "selector",
+		`{"nodes":{"a":{"*":"codex.huge"}}}`:                                 "<harness>.<size|*>",
+		`{"nodes":{"a":{"*":"review:opus"}}}`:                                "<node>:<size|*>",
+		`{"nodes":{"a":{"*":"Not A Target"}}}`:                               "bundle name",
+		`{"bundles":{"b":{"model":"m"}}}`:                                    "needs a harness",
+		`{"bundles":{"b":{"harness":"agy"}}}`:                                "needs a model",
+		`{"nodes":{"x":{}},"bundles":{"x":{"harness":"agy","model":"m"}}}`:   "both a node and a bundle",
+		`{"nodes":{},"extra":1}`:                                             "unknown field",
+		`{"nodes":{"a":null}}`:                                               "must be an object of pointers",
+		`{"bundles":{"b":{"harness":"claude","model":"two words"}}}`:         "must match",
+		`{"bundles":{"b":{"harness":"claude","model":"m","effort":"HIGH"}}}`: "lowercase word",
+		`[]`: "cannot unmarshal",
 	}
 	for raw, want := range parseErrors {
 		if _, err := ParseTierRouting(json.RawMessage(raw)); err == nil || !strings.Contains(err.Error(), want) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
@@ -105,9 +106,102 @@ func (s *Server) tierRoutingFamily() structuredFamily {
 			if reset {
 				return "effective: packaged tier routing defaults apply\n" + s.tierCollisionLines()
 			}
-			return s.tierCollisionLines()
+			return s.tierWriteTraceLines() + s.tierCollisionLines()
 		},
 	}
+}
+
+// tierWriteTraceLines is one "trace: ..." line per route the stored
+// routing touches, resolved for this session's harness as agent.spawn
+// resolves it: each named node at all four sizes, each named bundle, and
+// every listed route whose walk passes one of them. An unreadable graph
+// reports nothing here.
+func (s *Server) tierWriteTraceLines() string {
+	opts := s.configOptions()
+	graph, err := s.tierGraph(opts)
+	if err != nil || graph.Err() != nil {
+		return ""
+	}
+	routing, err := wsconfig.LoadTierRouting(opts)
+	if err != nil {
+		return ""
+	}
+	named := map[string]bool{}
+	var tokens []string
+	for _, name := range sortedKeys(routing.Bundles) {
+		named[name] = true
+		tokens = append(tokens, name)
+	}
+	for _, name := range sortedKeys(routing.Nodes) {
+		named[name] = true
+		for _, size := range wsconfig.TierSizes {
+			tokens = append(tokens, name+":"+size)
+		}
+	}
+	tokens = append(tokens, tierListedTokens(graph)...)
+	touches := func(res wsconfig.TierResolution) bool {
+		if named[tierTokenNode(res.Token)] {
+			return true
+		}
+		for _, hop := range res.Hops {
+			if named[tierTokenNode(hop.To)] {
+				return true
+			}
+		}
+		return false
+	}
+	var b strings.Builder
+	for _, line := range tierRouteTraces(graph, s.playbookHarness(), tokens, touches) {
+		fmt.Fprintf(&b, "trace: %s\n", line)
+	}
+	return b.String()
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// tierTokenNode is the node or bundle name a trace token names.
+func tierTokenNode(token string) string {
+	name, _, _ := strings.Cut(token, ":")
+	return name
+}
+
+// tierListedTokens is every bundle and route token agent.tiers lists.
+func tierListedTokens(graph *wsconfig.TierGraph) []string {
+	return append(sortedKeys(graph.Bundles()), graph.RouteTokens()...)
+}
+
+// tierRouteTraces resolves tokens for harness, once each, keeping those
+// keep accepts (nil keeps all): the trace, or the token and why it does not
+// resolve. A session whose harness is not known yet shows the caller slot
+// as <caller>.<size>.
+func tierRouteTraces(graph *wsconfig.TierGraph, harness string, tokens []string, keep func(wsconfig.TierResolution) bool) []string {
+	if strings.TrimSpace(harness) == "" {
+		harness = "<caller>"
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, token := range tokens {
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		res, err := graph.Resolve(token, harness)
+		if err != nil {
+			out = append(out, token+": "+err.Error())
+			continue
+		}
+		if keep == nil || keep(res) {
+			out = append(out, res.Trace())
+		}
+	}
+	return out
 }
 
 // tierCollisionLines is one "collision: ..." line per place a legacy alias
@@ -128,12 +222,12 @@ func (s *Server) tierCollisionLines() string {
 // tierRoutingTuningKnob is the config.list knob for agent.tier_routing. A
 // stored value that fails to parse or validate surfaces as the knob's error
 // rather than failing the whole listing.
-func tierRoutingTuningKnob(rsrcRoot fs.FS, configOpts wsconfig.Options, registries ...map[string]wsagent.BackendRegistration) (configKeyEntry, tuningKnob) {
+func tierRoutingTuningKnob(rsrcRoot fs.FS, configOpts wsconfig.Options, harness string, registries ...map[string]wsagent.BackendRegistration) (configKeyEntry, tuningKnob) {
 	entry := registryEntryByKey(wsconfig.ItemAgentTierRouting)
 	knob := tuningKnob{
 		ID:          entry.Key,
 		Kind:        "tier_routing",
-		Description: "How a tier name reaches a harness, model, and effort when agent.spawn launches a child. Every tier name is a node with one default pointer and optional per-size exceptions: a playbook role such as ticket-worker:large points to a group (explore, implement, or review), which points to the bare size, which resolves to that slot on the caller's harness. A pointer target is <node>:<size|*>, <harness>.<size|*>, or a bundle name; * carries the requested size through and a size pins it. The value is one object (value_schema): nodes overrides pointers or defines your own nodes, and bundles defines named harness/model/effort terminals. An override replaces only its own selector of the packaged default. A write is refused, and nothing is stored, when a name is reserved, a target is unknown, a node reaches itself at any size, or a path needs more than 8 hops. An agent.tier_aliases entry keeps exact-name precedence; each overlap is listed as a collision after a write. Reset removes the whole value and the packaged defaults apply again. current lists the stored routing and every node's effective pointers. Global-only.",
+		Description: "How a tier name reaches a harness, model, and effort when agent.spawn launches a child. Every tier name is a node with one default pointer and optional per-size exceptions: a playbook role such as ticket-worker:large points to a group (explore, implement, or review), which points to the bare size, which resolves to that slot on the caller's harness. A pointer target is <node>:<size|*>, <harness>.<size|*>, or a bundle name; * carries the requested size through and a size pins it. The value is one object (value_schema): nodes overrides pointers or defines your own nodes, and bundles defines named harness/model/effort terminals. An override replaces only its own selector of the packaged default. A write is refused, and nothing is stored, when a name is reserved, a target is unknown, a node reaches itself at any size, or a path needs more than 8 hops. An agent.tier_aliases entry keeps exact-name precedence; each overlap is listed as a collision after a write. Reset removes the whole value and the packaged defaults apply again. current lists the stored routing, every node's effective pointers, and the resolution trace of every bundle and route on your harness; a write echoes the traces of the routes it touches. Global-only.",
 		Writer:      tuningWriter{Tool: entry.WriterTool, FixedArguments: map[string]string{"key": entry.Key}},
 		Reset: &tuningWriter{
 			Tool:           entry.ResetTool,
@@ -160,9 +254,11 @@ func tierRoutingTuningKnob(rsrcRoot fs.FS, configOpts wsconfig.Options, registri
 			routing = stored
 		}
 	}
-	knob.Current = tierRoutingCurrent{Routing: routing, Nodes: graph.Nodes()}
+	knob.Current = tierRoutingCurrent{Routing: routing, Nodes: graph.Nodes(), Traces: []string{}}
 	if err := graph.Err(); err != nil {
 		knob.Error = err.Error()
+	} else {
+		knob.Current = tierRoutingCurrent{Routing: routing, Nodes: graph.Nodes(), Traces: tierRouteTraces(graph, harness, tierListedTokens(graph), nil)}
 	}
 	return entry, knob
 }
@@ -171,4 +267,7 @@ func tierRoutingTuningKnob(rsrcRoot fs.FS, configOpts wsconfig.Options, registri
 type tierRoutingCurrent struct {
 	Routing wsconfig.TierRouting    `json:"routing"`
 	Nodes   []wsconfig.TierNodeInfo `json:"nodes"`
+	// Traces resolves every bundle and route for the listing session's
+	// harness, as agent.tiers does; empty while the graph is invalid.
+	Traces []string `json:"traces"`
 }

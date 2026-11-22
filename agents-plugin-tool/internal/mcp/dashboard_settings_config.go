@@ -60,9 +60,11 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 		}
 		if entry.Key == wsconfig.ItemAgentTierRouting {
 			// The one exact-key structured setting: no name part, validated as
-			// a whole graph against the package's roles. Backends are not known
-			// to the catalog, so harness names are not limited here; the daemon
-			// tool checks them on its own writes.
+			// a whole graph against the package's roles and the built-in
+			// harnesses, the daemon runner's registered backends
+			// (cmd/ws-mcp newAgentRunner), so a dashboard write cannot store a
+			// graph config.tune and agent.spawn would refuse. A known harness
+			// that is not installed still validates.
 			rule.Type = "object"
 			rule.NormalizeObject = func(value any, scope wsconfig.Scope) (json.RawMessage, error) {
 				if _, ok := value.(map[string]any); !ok || scope != wsconfig.ScopeGlobal {
@@ -80,7 +82,7 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 				if err != nil {
 					return nil, err
 				}
-				if err := wsconfig.NewTierGraph(roles, routing, nil, nil).Err(); err != nil {
+				if err := wsconfig.NewTierGraph(roles, routing, nil, wsagent.TierHarnesses()).Err(); err != nil {
 					return nil, err
 				}
 				return json.Marshal(routing)

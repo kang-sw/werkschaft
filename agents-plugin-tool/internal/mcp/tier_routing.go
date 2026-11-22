@@ -53,28 +53,53 @@ func (s *Server) tierGraph(configOpts wsconfig.Options) (*wsconfig.TierGraph, er
 // renderTierBinding is the binding a playbook.render recommendation carries:
 // the model and effort the recommended tier resolves to for harness. A bare
 // size resolves through the config fallback chain as it always has; a role
-// tier walks the routing graph, and a slot it lands on resolves through the
-// same chain, so the default chain's binding is the bare size's. ok is
-// false when the tier does not resolve.
+// tier walks the routing graph and takes the binding agent.spawn launches
+// (routedBinding), so the default chain's binding is the bare size's
+// wherever the caller harness sets that size. ok is false when the tier
+// does not resolve or the spawn could not launch it.
 func (s *Server) renderTierBinding(harness, tier string, configOpts wsconfig.Options) (model, effort string, ok bool) {
 	tier = strings.TrimSpace(tier)
 	if !wsconfig.IsRoutedTierToken(tier) {
 		_, model, effort, err := wsconfig.ResolveAgentForHarnessConfig(configOpts, tier, "", "", harness)
 		return model, effort, err == nil
 	}
-	graph, err := s.tierGraph(configOpts)
+	_, binding, err := s.routedBinding(tier, harness, configOpts)
 	if err != nil {
 		return "", "", false
+	}
+	return binding.Model, binding.Effort, true
+}
+
+// harnessAvailability is the runner's per-harness spawn check
+// (*wsagent.Runner); a server without a runner of its own (a forwarding
+// spawned agent) skips it, and agent.tiers stays the availability source.
+type harnessAvailability interface {
+	SpawnableHarness(harness string) string
+}
+
+// routedBinding resolves a routed agent.spawn tier the way the spawn does:
+// the graph walk, the terminal harness's own agents.tier slot with no
+// cross-harness fallback (wsagent.RoutedTierBinding), and, where this server
+// hosts the runner, the harness availability check.
+func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options) (wsconfig.TierResolution, wsconfig.AgentTier, error) {
+	graph, err := s.tierGraph(configOpts)
+	if err != nil {
+		return wsconfig.TierResolution{}, wsconfig.AgentTier{}, err
 	}
 	res, err := graph.Resolve(tier, harness)
 	if err != nil {
-		return "", "", false
+		return wsconfig.TierResolution{}, wsconfig.AgentTier{}, err
 	}
-	if res.Bundle != "" {
-		return res.Model, res.Effort, true
+	binding, err := wsagent.RoutedTierBinding(configOpts, res)
+	if err != nil {
+		return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %w", tier, res.Trace(), err)
 	}
-	_, model, effort, err = wsconfig.ResolveAgentForHarnessConfig(configOpts, res.Size, "", "", res.Harness)
-	return model, effort, err == nil
+	if check, ok := s.pi.agents.(harnessAvailability); ok {
+		if why := check.SpawnableHarness(res.Harness); why != "" {
+			return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %s", tier, res.Trace(), why)
+		}
+	}
+	return res, binding, nil
 }
 
 // withRecommendedRenderBindingFor is withRecommendedRenderBinding for a
@@ -101,9 +126,9 @@ func (s *Server) withRecommendedRenderBindingFor(payload, harness, tier string, 
 
 // resolveAgentTier is config.resolve_agent: a bare size resolves through the
 // config fallback chain exactly as before; any other agent.spawn tier (a
-// role tier, alias, explicit <harness>.<size>, or bundle) walks the routing
-// graph first, and the slot it lands on resolves through the same chain.
-// A bundle answers with its own fields and resolved_from "bundle".
+// role tier, alias, explicit <harness>.<size>, or bundle) resolves as
+// agent.spawn resolves it (routedBinding): the terminal harness's own slot,
+// resolved_from that harness, or a bundle's fields, resolved_from "bundle".
 func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult, error) {
 	opts := s.configOptions()
 	if wsconfig.NormalizedTier(tier) != "" {
@@ -114,25 +139,15 @@ func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult,
 		_, _, _, _, err := wsconfig.ResolveAgentTierForHarness(opts, tier, harness)
 		return resolveAgentTierResult{}, err
 	}
-	graph, err := s.tierGraph(opts)
-	if err == nil {
-		var res wsconfig.TierResolution
-		if res, err = graph.Resolve(tier, harness); err == nil {
-			return s.routedAgentTier(opts, res)
-		}
-	}
-	return resolveAgentTierResult{}, fmt.Errorf("tier must be small, medium, large, or xlarge, or a tier agent.spawn accepts: %w", err)
-}
-
-func (s *Server) routedAgentTier(opts wsconfig.Options, res wsconfig.TierResolution) (resolveAgentTierResult, error) {
-	if res.Bundle != "" {
-		return resolveAgentTierResult{Backend: res.Harness, Model: res.Model, Effort: res.Effort, ResolvedFrom: "bundle", Trace: res.Trace()}, nil
-	}
-	backend, model, effort, from, err := wsconfig.ResolveAgentTierForHarness(opts, res.Size, res.Harness)
+	res, binding, err := s.routedBinding(tier, harness, opts)
 	if err != nil {
-		return resolveAgentTierResult{}, err
+		return resolveAgentTierResult{}, fmt.Errorf("tier must be small, medium, large, or xlarge, or a tier agent.spawn accepts: %w", err)
 	}
-	return resolveAgentTierResult{Backend: backend, Model: model, Effort: effort, ResolvedFrom: from, Trace: res.Trace()}, nil
+	from := res.Harness
+	if res.Bundle != "" {
+		from = "bundle"
+	}
+	return resolveAgentTierResult{Backend: res.Harness, Model: binding.Model, Effort: binding.Effort, ResolvedFrom: from, Trace: res.Trace()}, nil
 }
 
 // roleRecommendedTier is the tier a render recommends: <role>:<size> when

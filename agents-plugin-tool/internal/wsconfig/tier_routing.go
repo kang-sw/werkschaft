@@ -42,6 +42,14 @@ var legacyTierSpellings = []string{"small", "light", "haiku", "medium", "core", 
 
 var tierSlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
+// LaunchModelPattern and LaunchEffortPattern are the model and effort
+// shapes a spawn accepts (wsagent Runner.Spawn uses them); a bundle is
+// checked against them before it is stored, so a saved bundle can launch.
+var (
+	LaunchModelPattern  = regexp.MustCompile(`^[A-Za-z0-9._:/\[\]~-]{1,128}$`)
+	LaunchEffortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
+)
+
 // TierBundle is a named terminal: a concrete harness, model, and effort.
 type TierBundle struct {
 	Harness string `json:"harness"`
@@ -84,6 +92,9 @@ func ParseTierRouting(raw json.RawMessage) (TierRouting, error) {
 		if !tierSlugPattern.MatchString(name) {
 			return TierRouting{}, fmt.Errorf("%s: node %q must be a lowercase slug of letters, digits, and hyphens", ItemAgentTierRouting, name)
 		}
+		if pointers == nil {
+			return TierRouting{}, fmt.Errorf("%s: node %q must be an object of pointers ({} for none)", ItemAgentTierRouting, name)
+		}
 		out := map[string]string{}
 		for selector, target := range pointers {
 			if selector != tierSelectorAll && !isTierSize(selector) {
@@ -115,6 +126,12 @@ func ParseTierRouting(raw json.RawMessage) (TierRouting, error) {
 		}
 		if bundle.Model == "" {
 			return TierRouting{}, fmt.Errorf("%s: bundle %q needs a model", ItemAgentTierRouting, name)
+		}
+		if !LaunchModelPattern.MatchString(bundle.Model) {
+			return TierRouting{}, fmt.Errorf("%s: bundle %q model %q must match %s", ItemAgentTierRouting, name, bundle.Model, LaunchModelPattern.String())
+		}
+		if bundle.Effort != "" && !LaunchEffortPattern.MatchString(bundle.Effort) {
+			return TierRouting{}, fmt.Errorf("%s: bundle %q effort %q must be a lowercase word", ItemAgentTierRouting, name, bundle.Effort)
 		}
 		normalized.Bundles[name] = bundle
 	}
@@ -626,6 +643,24 @@ func (g *TierGraph) Bundles() map[string]TierBundle {
 	out := make(map[string]TierBundle, len(g.bundles))
 	for k, v := range g.bundles {
 		out[k] = v
+	}
+	return out
+}
+
+// RouteTokens is the routed tier set the resolution traces list, in
+// Nodes order: each role at the size its playbook declares (all four when
+// it declares none) and each group and user node at all four sizes.
+// Bundles are listed by Bundles.
+func (g *TierGraph) RouteTokens() []string {
+	var out []string
+	for _, node := range g.Nodes() {
+		if node.Kind == TierNodeRole && node.Size != "" {
+			out = append(out, node.Name+":"+node.Size)
+			continue
+		}
+		for _, size := range TierSizes {
+			out = append(out, node.Name+":"+size)
+		}
 	}
 	return out
 }

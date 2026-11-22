@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -419,14 +420,8 @@ func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]w
 	for _, name := range names {
 		out.Bundles = append(out.Bundles, entry(name))
 	}
-	for _, node := range graph.Nodes() {
-		if node.Kind == wsconfig.TierNodeRole && node.Size != "" {
-			out.Routes = append(out.Routes, entry(node.Name+":"+node.Size))
-			continue
-		}
-		for _, size := range wsconfig.TierSizes {
-			out.Routes = append(out.Routes, entry(node.Name+":"+size))
-		}
+	for _, token := range graph.RouteTokens() {
+		out.Routes = append(out.Routes, entry(token))
 	}
 	return out, nil
 }
@@ -493,16 +488,53 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 	if why := r.spawnableHarness(harness); why != "" {
 		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s", tier, why))
 	}
-	tiers, err := wsconfig.HarnessTiers(caller.Config, harness)
-	if err != nil {
-		return "", "", mapping, fmt.Errorf("read agents.tier: %w", err)
+	mapping, err = harnessSlot(caller.Config, harness, bare)
+	var noSlot noTierSlotError
+	if errors.As(err, &noSlot) {
+		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %v", tier, err))
 	}
-	mapping, ok := tiers[bare]
-	if !ok {
-		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s.%s has no model in agents.tier (config.tune key \"agents.tier\" sets one)", tier, harness, bare))
+	if err != nil {
+		return "", "", mapping, err
 	}
 	return harness, bare, mapping, nil
 }
+
+// noTierSlotError is a harness with no agents.tier model at a size.
+type noTierSlotError struct{ harness, size string }
+
+func (e noTierSlotError) Error() string {
+	return fmt.Sprintf("%s.%s has no model in agents.tier (config.tune key \"agents.tier\" sets one)", e.harness, e.size)
+}
+
+// harnessSlot is the agents.tier model agent.spawn launches for harness at
+// bare: the harness's own slot, with no cross-harness fallback.
+func harnessSlot(cfg wsconfig.Options, harness, bare string) (wsconfig.AgentTier, error) {
+	tiers, err := wsconfig.HarnessTiers(cfg, harness)
+	if err != nil {
+		return wsconfig.AgentTier{}, fmt.Errorf("read agents.tier: %w", err)
+	}
+	mapping, ok := tiers[bare]
+	if !ok {
+		return mapping, noTierSlotError{harness, bare}
+	}
+	return mapping, nil
+}
+
+// RoutedTierBinding is the binding agent.spawn launches for a routing-graph
+// resolution, before harness availability: a bundle's own fields, else the
+// resolved harness's agents.tier slot at the resolved size. It never falls
+// back to another harness's slot, so a surface that reports it (render,
+// config.resolve_agent) names what the spawn uses or fails as it does.
+func RoutedTierBinding(cfg wsconfig.Options, res wsconfig.TierResolution) (wsconfig.AgentTier, error) {
+	if res.Bundle != "" {
+		return wsconfig.AgentTier{Backend: res.Harness, Model: res.Model, Effort: res.Effort}, nil
+	}
+	return harnessSlot(cfg, res.Harness, res.Size)
+}
+
+// SpawnableHarness reports why agent.spawn cannot launch harness now ("" when
+// it can): the availability check a routed tier's terminal harness passes.
+func (r *Runner) SpawnableHarness(harness string) string { return r.spawnableHarness(harness) }
 
 // tierRefusal is a 400 naming why and every tier caller may spawn now.
 func (r *Runner) tierRefusal(caller AgentCaller, why string) error {
