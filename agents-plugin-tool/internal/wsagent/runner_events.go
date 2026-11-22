@@ -355,6 +355,14 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed, Text: turnErr})
 		}
 	}
+	if !quiet {
+		// The runner accepted the logical turn's end (a watchdog continue
+		// returned before reaching here), so agy native rows stop being
+		// observed; settling them before the turn end's forced snapshot
+		// puts them on disk in that write. A replayed (quiet) end never
+		// settles them: replayDone does, once.
+		c.settleAgyNative()
+	}
 	if c.wrapHold && !c.rec.Lead && c.rec.Parent != nil && !quiet {
 		// A gap while streaming is reconciled at agent_settled, not left
 		// dependent on acknowledgements that may have left the ring.

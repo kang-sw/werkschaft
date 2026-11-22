@@ -399,7 +399,7 @@ test("superseded companion loads discard decoded bitmaps after leaving a session
 });
 
 function relayFixture() {
-  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [];
+  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [], treeAgents = [];
   const timers = new Map(), listeners = {}, posts = [], held = [];
   const doc = {
     body: {classList: {contains: () => false}},
@@ -415,7 +415,7 @@ function relayFixture() {
     performance: {now: () => now}, Date: class extends Date { static now() { return now; } },
     setTimeout(fn) { timers.set(++timer, fn); return timer; }, clearTimeout(id) { timers.delete(id); },
     rid: "lead", lead: {}, boardLatest: null, TL_ASK: "ask", companionStreamReady: true,
-    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed: 0}),
+    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : selector.startsWith("#r-tree .agent") ? treeAgents : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed: 0}),
     entriesBox: () => ({children: rows}), $: () => null, pageHidden: () => hidden,
     showRegions: () => { while (held.length) held.shift()(); }, shPost: (_, payload) => posts.push(payload),
     innerHeight: 1000, innerWidth: 1000
@@ -425,7 +425,7 @@ function relayFixture() {
   function update() { now += 300; listeners.change.forEach(fn => fn()); flush(); }
   function events() { return posts.splice(0).flatMap(p => p.events); }
   flush(); events();
-  return {set children(value) { children = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
+  return {set children(value) { children = value; }, set treeAgents(value) { treeAgents = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
     update, events, posts, now: () => now,
     input() { listeners.input.forEach(fn => fn({target: {matches: () => true}})); flush(); },
     visibility(value, swap) { hidden = value; if (swap) held.push(swap); listeners.visibilitychange.forEach(fn => fn()); flush(); },
@@ -451,6 +451,31 @@ function relayRow(key, classes, {childId, ms, cause, child, label} = {}) {
       return null;
     }};
 }
+
+// relayAgent is an ended-group row of the expanded tree; unknown marks a
+// native row whose observation ended with the outcome unknown.
+function relayAgent(id, {unknown = false} = {}) {
+  const details = {dataset: {key: "agent-" + id}, querySelector: () => null};
+  return {
+    closest: selector => selector === ".tgroup.ended" ? {} : null,
+    querySelector: selector => selector === ":scope > details[data-key]" ? details : null,
+    classList: {contains: name => name === "done"},
+    matches: () => true,
+    hasAttribute: name => unknown && name === "data-end-unknown"
+  };
+}
+
+test("relay emits no subagent.done for a native row whose observation ended", () => {
+  const f = relayFixture(), done = () => f.events().filter(e => e.kind === "subagent.done");
+  f.children = [{id: "agy-native:call_1", state: "thinking"}]; f.update(); f.events();
+  f.children = []; f.treeAgents = [relayAgent("agy-native:call_1", {unknown: true})]; f.update();
+  assert.equal(done().length, 0);
+  // The same disappearance of a row that did finish is read as done.
+  f.children = [{id: "codex-native:call_2", state: "thinking"}]; f.treeAgents = []; f.update(); f.events();
+  f.children = []; f.treeAgents = [relayAgent("codex-native:call_2")]; f.update();
+  assert.equal(done().length, 1);
+  f.dispose();
+});
 
 test("relay reconciles both report orders, holding, resume, terminal and stale reports", () => {
   const f = relayFixture(), child = state => [{id: "c", state}];

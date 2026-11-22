@@ -61,6 +61,16 @@ func TestRailBusy(t *testing.T) {
 		{"running grandchild of a settled child", row("g", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Agents = []wslive.Agent{{ID: "kid", Status: wslive.StatusDone}, {ID: "grandkid", ParentID: "kid", Status: wslive.StatusRunning}}
 		}), nil), true, true},
+		// A running native subagent counts like any running row; an agy one
+		// ends (outcome unknown) with its parent's turn and stops counting.
+		{"running codex native subagent", row("cn", true, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
+			s.Adapter = "codex"
+			s.Agents = []wslive.Agent{{ID: wslive.NativeCodexPrefix + "call_1", Label: "ok_reply", Status: wslive.StatusRunning, StartedAt: 1}}
+		}), nil), true, true},
+		{"agy native subagent after the parent turn", row("an", true, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
+			s.Adapter = "agy"
+			s.Agents = []wslive.Agent{{ID: wslive.NativeAgyPrefix + "call_2", Label: "research", Status: wslive.StatusDone, StartedAt: 1}}
+		}), nil), false, false},
 		{"background tasks", row("b", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Usage = &wslive.Usage{Background: n(2)}
 		}), nil), true, true},

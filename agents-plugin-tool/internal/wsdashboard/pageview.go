@@ -250,7 +250,10 @@ type AgentNode struct {
 	// its label links to that page.
 	Linked bool
 	// PiDeleted is display-only; the live snapshot keeps its legacy status.
-	PiDeleted  bool
+	PiDeleted bool
+	// Native marks a harness's own subagent (hudNative, markNativeAgents):
+	// the row shows a native badge and its start, end, and state.
+	Native     bool
 	Running    *wslive.RunningView
 	Generating *wslive.GeneratingView
 	// Finished is the agent's finished batches, oldest first; the page shows
@@ -283,6 +286,9 @@ func (a AgentNode) IsRunning() bool { return a.Status == wslive.StatusRunning }
 // running background work shows "background"; Pi children otherwise sleep
 // between turns; native Claude/Codex rows finish done.
 func (a AgentNode) EndedStatus() string {
+	if a.EndUnknown() {
+		return "unknown"
+	}
 	if a.Status == wslive.StatusDone && a.BackgroundTasks > 0 {
 		return "background"
 	}
@@ -297,6 +303,10 @@ func (a AgentNode) EndedStatus() string {
 	}
 	return "done"
 }
+
+// EndUnknown reports a native row whose observation ended without an end
+// time: its outcome is unknown, so the row never shows as completed.
+func (a AgentNode) EndUnknown() bool { return hudEndUnknown(a.Agent, a.Native) }
 
 // ModelText is the agent's model and reasoning effort joined by a space
 // ("<model> <effort>"), either alone when only one is known; empty when

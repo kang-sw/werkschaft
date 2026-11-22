@@ -23,6 +23,7 @@ package wslive
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -108,6 +109,21 @@ const (
 	StatusDone    = "done"
 	StatusFailed  = "failed"
 )
+
+// Native subagent row id prefixes: a harness's own subagent that an adapter
+// maps from its protocol (agy invoke_subagent, Codex subAgentActivity). The
+// prefix keeps the row from colliding with daemon-spawned or other rows, and
+// marks it for the reducer's monotonic rule (State.nativeSettled) and the
+// dashboard's native presentation.
+const (
+	NativeAgyPrefix   = "agy-native:"
+	NativeCodexPrefix = "codex-native:"
+)
+
+// NativeAgentID reports whether id names a prefixed native subagent row.
+func NativeAgentID(id string) bool {
+	return strings.HasPrefix(id, NativeAgyPrefix) || strings.HasPrefix(id, NativeCodexPrefix)
+}
 
 // Origin values: where a user message came from, or what started a turn.
 const (

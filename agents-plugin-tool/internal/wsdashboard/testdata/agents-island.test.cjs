@@ -270,11 +270,46 @@ assert.equal(movedRing.style.animationDelay,
   (-((700 + ctx.animationPhaseOffset('a4', 1150)) % 1150)).toFixed(1) + 'ms');
 assert.equal(oldRing.style.animationDelay, stableDelay, 'unmoved sibling is not restamped');
 
+// Native rows: a dashed native node with its lifecycle in the tooltip; a
+// terminal native row without an end reads observation ended, completion
+// unknown; the observation-ended count shows apart from completed.
+hudPayload = { lead: 'coord', completed: 1, observationEnded: 1, peers: 0, roots: [
+  { id: 'agy-native:call_1', label: 'Kiwi Responder', harness: 'agy', state: 'thinking', native: true, startedAt: 1000 },
+  { id: 'agy-native:call_2', label: 'research', harness: 'agy', state: 'failed', native: true, startedAt: 900 },
+  { id: 'codex-native:call_3', label: 'ok_reply', harness: 'codex', state: 'failed', native: true, startedAt: 800, endedAt: 1800 }
+] };
+ctx.agSwapped();
+const nativeButtons = [];
+(function walk(el) { if (el.classList?.contains('hud-node')) nativeButtons.push(el); (el.children || []).forEach(walk); })(hudRoots);
+assert.equal(nativeButtons[0].getAttribute('data-native'), '1');
+assert.equal(nativeButtons[0].getAttribute('data-linked'), '');
+hudRoots.listeners.mouseover[0]({ target: nativeButtons[0] });
+assert.equal(tooltip.querySelector('.tt-native').textContent, 'js.hud.native');
+assert(tooltip.querySelector('.tt-life'), 'running native tooltip shows its lifecycle');
+assert.equal(tooltip.querySelector('.tt-unknown'), null, 'a running native row is not end-unknown');
+assert.equal(tooltip.querySelector('.tt-hint').textContent, 'js.hud.hint.details', 'a native row never links');
+hudRoots.listeners.mouseover[0]({ target: nativeButtons[1] });
+assert.equal(tooltip.querySelector('.tt-unknown').textContent, 'js.hud.unknownend');
+hudRoots.listeners.mouseover[0]({ target: nativeButtons[2] });
+assert.equal(tooltip.querySelector('.tt-unknown'), null, 'a native row with an end shows it');
+hudRoots.listeners.mouseout[0]({ target: nativeButtons[2], relatedTarget: null });
+hudRoots.listeners.click[0]({ target: nativeButtons[0] });
+assert.deepEqual(navigated, ['/s/r2'], 'a native node click opens details, never a transcript');
+doc.listeners.keydown[0]({ key: 'Escape', defaultPrevented: false });
+assert.equal(hudCanvas.querySelector('.hud-obs').textContent, 'js.hud.obsended:1');
+hudPayload = { lead: 'coord', completed: 4, observationEnded: 2, peers: 2, roots: [] };
+ctx.agSwapped();
+assert.equal(island.attrs['data-mode'], 'idle');
+assert.equal(idle.querySelector('.hud-obs').textContent, 'js.hud.obsended:2');
+assert.equal(idle.children.filter(c => c.className === 'hud-obs').length, 1, 'the count is updated in place');
+assert.equal(hudCanvas.querySelector('.hud-obs').textContent, 'js.hud.obsended:2');
+
 // Empty visible HUD forest falls back to idle pill using HUD.Completed
 hudPayload = { lead: 'coord', completed: 4, peers: 2, roots: [] };
 ctx.agSwapped();
 assert.equal(island.attrs['data-mode'], 'idle');
 assert.equal(idle.querySelector('.agidle-label'), null);
+assert.equal(idle.querySelector('.hud-obs'), null, 'no observation-ended count without such rows');
 
 // Preserve drawerWait and tlPerms exclusions of .ag-source
 const drawerSrc = readAssetSource('wsdashboard', 'dashboard-drawer.js');

@@ -93,6 +93,12 @@ type Event struct {
 	// "pi", "codex", "agy"); absent for native subagents or legacy producers.
 	Harness string `json:"harness,omitempty"`
 	Status  string `json:"status,omitempty"`
+	// EndUnknown, on a subagent's terminal status, ends a running row
+	// without stamping its end time or adding the turn to ActiveMs: the
+	// adapter stopped observing it and does not know when, or whether, it
+	// finished (an agy native subagent at its parent's turn end). It is a
+	// daemon-internal runtime flag, never accepted from or sent on the wire.
+	EndUnknown bool `json:"-"`
 	// ActiveMs is closed-turn work; TurnStartedAt is the current turn's
 	// epoch-millisecond start, or zero when no turn is working. Pi agent
 	// events carry authoritative values, including zero.
@@ -359,7 +365,7 @@ func (st *State) Apply(ev Event, now int64) (Result, error) {
 		st.turnStartedAt, st.turnOrigin = 0, ""
 		res.Changed = true
 	case KindAgent:
-		if st.staleEvent(ev) {
+		if st.staleEvent(ev) || st.nativeSettled(ev) {
 			return res, nil
 		}
 		if err := st.applyAgent(ev, at); err != nil {
@@ -603,6 +609,32 @@ func (st *State) staleEvent(ev Event) bool {
 	return ev.Status != StatusRunning && slices.Contains(st.evicted, ev.AgentID)
 }
 
+// nativeSettled reports whether ev, an agent event, names a prefixed native
+// subagent row (NativeAgentID) that already ended: native transitions are
+// monotonic, so a later running or terminal event for it (a holder replay
+// over a restored row, a duplicate protocol envelope) changes nothing and the
+// row keeps its status, end time (or its absence), and ActiveMs.
+func (st *State) nativeSettled(ev Event) bool {
+	if !NativeAgentID(ev.AgentID) {
+		return false
+	}
+	a, ok := st.agents[ev.AgentID]
+	return ok && a.status != StatusRunning
+}
+
+// RunningAgents lists the running subagents whose id starts with prefix, in
+// id order.
+func (st *State) RunningAgents(prefix string) []string {
+	var out []string
+	for id, a := range st.agents {
+		if a.status == StatusRunning && strings.HasPrefix(id, prefix) {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // activityFor is the lead's activity for an empty id, else the subagent's,
 // created running when new.
 func (st *State) activityFor(id string, at int64) (*activityState, error) {
@@ -670,7 +702,11 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		}
 		a.status, a.endedAt = StatusRunning, 0
 	case StatusDone, StatusFailed:
-		if a.status == StatusRunning {
+		if a.status == StatusRunning && ev.EndUnknown && a.kind != AgentKindPi {
+			// Observation ended, not the subagent: no end time, and the
+			// unobserved span adds no work.
+			a.endedAt, a.turnStartedAt = 0, 0
+		} else if a.status == StatusRunning {
 			a.endedAt = at
 			if a.kind != AgentKindPi {
 				if a.turnStartedAt > 0 && at > a.turnStartedAt {
@@ -1011,8 +1047,8 @@ func (st *State) retain() {
 		return a.id < b.id
 	})
 	drop(finished, FinishedAgentCap, func(a, b *agentState) bool {
-		if a.endedAt != b.endedAt {
-			return a.endedAt > b.endedAt
+		if ea, eb := a.finishedAt(), b.finishedAt(); ea != eb {
+			return ea > eb
 		}
 		return a.id < b.id
 	})
@@ -1027,6 +1063,18 @@ func (st *State) retain() {
 			}
 		}
 	}
+}
+
+// finishedAt ranks a finished subagent for retention: its end time, or, for
+// a row that ended without one (EndUnknown), the start of the idle phase it
+// entered when it settled, which the snapshot persists (PhaseStartedAt), so
+// a just-settled end-unknown row ranks as the newest finished row both at
+// settlement and after a restore.
+func (a *agentState) finishedAt() int64 {
+	if a.endedAt > 0 {
+		return a.endedAt
+	}
+	return a.phaseStartedAt
 }
 
 // SeedFinished takes the finished subagents (done or failed) of prev, a

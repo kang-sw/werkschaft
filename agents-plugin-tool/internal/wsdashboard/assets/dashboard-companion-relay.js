@@ -76,7 +76,10 @@
           event("session.error", "hud:" + rootId + ":" + ++failures);
         }
       }
-      var ended = new Set();
+      // unknown holds the native rows whose observation ended with the
+      // outcome unknown: they leave the HUD without a finish, so no
+      // subagent.done is read from their disappearance.
+      var ended = new Set(), unknown = new Set();
       q("#r-tree .agent:not(.root)", doc).forEach(el => {
         if (el.closest(".ag-source")) return;
         var details = el.querySelector(":scope > details[data-key]"), key = details?.dataset.key;
@@ -84,6 +87,7 @@
         var id = key.replace(/^agent-/, "");
         var reply = details.querySelector(":scope > summary [data-reply-id]")?.dataset.replyId;
         var label = details.querySelector(":scope > summary .aname")?.title;
+        if (el.hasAttribute && el.hasAttribute("data-end-unknown")) unknown.add(reply || id);
         if (!children.has(reply || id) && !children.has(id) && !el.classList.contains("running")) {
           ended.add(reply || id);
           return;
@@ -118,7 +122,8 @@
           }
           if (!info.spawned) { event("subagent.spawn", canonical); info.spawned = true; }
         } else if (wasAlive && !alive) {
-          if ((wasActive && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
+          if (unknown.has(id) || unknown.has(node.id)) info.awaitingReport = false;
+          else if ((wasActive && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
         } else if (wasActive && alive) {
           info.awaitingReport = !info.reportedCurrentTurn;
         }
@@ -126,6 +131,11 @@
       var disappeared = new Set();
       agents.forEach(info => {
         if (present.has(info.canonical) || disappeared.has(info.canonical) || !info.alive) return;
+        if (unknown.has(info.canonical) || unknown.has(info.id)) {
+          info.alive = info.active = info.awaitingReport = false;
+          disappeared.add(info.canonical);
+          return;
+        }
         if (ended.has(info.canonical) || ended.has(info.id) || remaining > 0) {
           if (remaining > 0) remaining--;
           if ((info.active && !info.reportedCurrentTurn) || info.awaitingReport) done(info);

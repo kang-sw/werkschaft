@@ -736,6 +736,11 @@ func (c *conv) replayDone(lost bool) {
 	c.reconcileLeadPermission()
 	c.allowAgyBypassPending()
 	c.checkAction(false)
+	// Observation of agy native subagents is not continuous across a daemon
+	// replacement, and a replayed cancellation cannot be told from a
+	// watchdog continuation awaiting its first output: whatever the turn
+	// state, rows still open now end with their outcome unknown.
+	c.settleAgyNative()
 	c.live.writeSnapshot()
 	c.r.notify(c.rec.ReplyID, c.rec.Root)
 	// A message steered during the rejoin goes to the turn that still runs.

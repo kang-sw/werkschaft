@@ -197,6 +197,8 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 		spec.Holder.ringPulse = agyRingPulse
 	}
 	m := newAgyMapper(spec.SessionID)
+	// Set before startChild: a rejoin's holder replay maps through m too.
+	m.lead = spec.Lead != nil
 	m.recoveredSteers = slices.Clone(spec.RecoveredSteers)
 	m.reattachedPromptAfter = spec.reattachedPromptAfter
 	sp, err := startChild(spec, cmd, m, agyProtocol{})
@@ -669,6 +671,13 @@ type agyMapper struct {
 	approvals  map[string]*agyApproval
 	approvalOf map[string]string
 
+	// lead marks the hosted lead's mapper: only it maps native subagents
+	// (agy's invoke_subagent) to rows; a worker's emits none. nativeLaunch
+	// holds the invoke_subagent calls whose launch has not reported a final
+	// status yet, so a failed launch can end its row.
+	lead         bool
+	nativeLaunch map[string]bool
+
 	// lastContext retains the latest usage_update context so KindStatus rate
 	// events preserve it instead of clearing Usage.Context.
 	lastContext *wslive.UsageContext
@@ -689,6 +698,7 @@ func newAgyMapper(sessionID string) *agyMapper {
 		batches:      newBatchTracker("agy"),
 		approvals:    map[string]*agyApproval{},
 		approvalOf:   map[string]string{},
+		nativeLaunch: map[string]bool{},
 	}
 }
 
@@ -1446,6 +1456,9 @@ func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int6
 		}
 		out = append(out, m.batches.addCall(m.groupID(), u.ToolCallID, name, argsPreview(u.Args), now)...)
 		m.groupCalls = true
+		if name == agyInvokeSubagentTool {
+			out = append(out, m.nativeStart(u, now)...)
+		}
 		return append(out, m.toolStatus(u, replaying, now)...)
 	case "tool_call_update":
 		return m.toolStatus(u, replaying, now)
@@ -1503,6 +1516,15 @@ func (m *agyMapper) toolStatus(u agyUpdate, replaying bool, now int64) []Event {
 	delete(m.openCalls, u.ToolCallID)
 	delete(m.openBg, u.ToolCallID)
 	out := m.batches.endCall(u.ToolCallID, failed, now)
+	if m.nativeLaunch[u.ToolCallID] {
+		// A completed launch only means the child runs asynchronously; its
+		// row stays running until the runner settles it at the parent's
+		// logical turn end. A failed launch ends the row here.
+		delete(m.nativeLaunch, u.ToolCallID)
+		if failed {
+			out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Status: wslive.StatusFailed, At: now}})
+		}
+	}
 	if id, ok := m.approvalOf[u.ToolCallID]; ok {
 		delete(m.approvalOf, u.ToolCallID)
 		delete(m.approvals, id)
@@ -1517,6 +1539,44 @@ func (m *agyMapper) toolStatus(u agyUpdate, replaying bool, now int64) []Event {
 		out = append(out, resultEvents(TrackerWriteTool, "")...)
 	}
 	m.armWakeIfReadyLocked(replaying)
+	return out
+}
+
+// agyInvokeSubagentTool is agy's native subagent launch tool. It stays an
+// adapter-local name: the catalog's native-subagent removal entry is left
+// unset on purpose, since filling it adds a "never use" line to the hosted
+// lead prompt.
+const agyInvokeSubagentTool = "invoke_subagent"
+
+// nativeStart opens a running native subagent row for a hosted lead's
+// invoke_subagent call: id agy-native:<toolCallId>, labelled by Role, else
+// TypeName, else "subagent". The Prompt argument is never read into the row.
+// agy reports no child id, progress, or end, so the row carries no wake,
+// turn, or batch authority and ends only by a failed launch (toolStatus) or
+// the runner's end-unknown settlement.
+func (m *agyMapper) nativeStart(u agyUpdate, now int64) []Event {
+	if !m.lead || u.ToolCallID == "" {
+		return nil
+	}
+	var args struct {
+		Role     string `json:"Role"`
+		TypeName string `json:"TypeName"`
+	}
+	_ = json.Unmarshal(u.Args, &args)
+	label := strings.TrimSpace(args.Role)
+	if label == "" {
+		label = strings.TrimSpace(args.TypeName)
+	}
+	if label == "" {
+		label = "subagent"
+	}
+	if u.Status != "completed" && u.Status != "failed" {
+		m.nativeLaunch[u.ToolCallID] = true
+	}
+	out := []Event{{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Label: label, Status: wslive.StatusRunning, At: now}}}
+	if u.Status == "failed" {
+		out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Status: wslive.StatusFailed, At: now}})
+	}
 	return out
 }
 

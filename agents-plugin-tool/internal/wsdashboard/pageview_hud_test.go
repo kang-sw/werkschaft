@@ -4,6 +4,7 @@ package wsdashboard
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -67,8 +68,9 @@ func TestHUDProjectionStatePrecedenceVisibilityAndHarness(t *testing.T) {
 		// Asleep parent kept visible solely for connectivity to running child.
 		wslive.Agent{ID: "asleep-anc", Status: wslive.StatusDone},
 		wslive.Agent{ID: "grandchild", ParentID: "asleep-anc", Status: wslive.StatusRunning, Activity: wslive.Activity{Phase: wslive.PhaseTool}},
-		// Asleep leaf is folded into Completed.
-		wslive.Agent{ID: "done-leaf", Status: wslive.StatusDone},
+		// Asleep leaf is folded into Completed. In a Claude lead's snapshot
+		// it is a native row, so it carries its end time to read as done.
+		wslive.Agent{ID: "done-leaf", Status: wslive.StatusDone, EndedAt: 1},
 	)
 	v := buildSessionView(pageInputs{Session: leadSess, Snapshot: snap, Now: now, Lookup: lookupOf(nil, nil)})
 	if v.Tree.HUD.Completed != 1 {
@@ -196,5 +198,99 @@ func TestHUDProjectionDepthCapOverflowAndLinkedDedup(t *testing.T) {
 	}
 	if len(decoded.Roots) != 1 || decoded.Completed != 1 {
 		t.Fatalf("decoded HUD = %+v", decoded)
+	}
+}
+
+// TestHUDProjectionNativeRows pins native subagent rows in the HUD and the
+// expanded tree: a running agy row and a completed Codex row carry native,
+// startedAt, and endedAt when known and never link; the completed row folds
+// into the completed count, while an end-unknown agy row is excluded from it
+// and counted as observation ended; the ended group shows lifecycle details;
+// a Claude lead's no-identity row is native; daemon-spawned and Pi extension
+// rows keep their JSON.
+func TestHUDProjectionNativeRows(t *testing.T) {
+	now := testNow
+	ms := now.UnixMilli()
+	agyRun := wslive.Agent{ID: wslive.NativeAgyPrefix + "call_run", Label: "Kiwi Responder", Status: wslive.StatusRunning, StartedAt: ms - 9_000, TurnStartedAt: ms - 9_000, Activity: wslive.Activity{Phase: wslive.PhaseThinking}}
+	agyUnknown := wslive.Agent{ID: wslive.NativeAgyPrefix + "call_old", Label: "research", Status: wslive.StatusDone, StartedAt: ms - 60_000, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: ms - 30_000}}
+	codexDone := wslive.Agent{ID: wslive.NativeCodexPrefix + "call_c", Label: "ok_reply", Status: wslive.StatusDone, StartedAt: ms - 50_000, EndedAt: ms - 40_000, ActiveMs: 10_000}
+	spawned := wslive.Agent{ID: "pi:w1", Label: "worker", Status: wslive.StatusRunning, AgentKind: wslive.AgentKindPi, Harness: "codex", ReplyID: "w1", StartedAt: ms - 5_000}
+	piExt := wslive.Agent{ID: "pi:ext", Label: "pi ext", Status: wslive.StatusRunning, AgentKind: wslive.AgentKindPi, StartedAt: ms - 4_000}
+	lead := liveSession("self", "/p", now)
+	lead.Harness = "agy"
+	v := buildSessionView(pageInputs{Session: lead, Snapshot: liveSnap(now, wslive.Lead{}, agyRun, agyUnknown, codexDone, spawned, piExt), Now: now, Lookup: lookupOf(nil, nil)})
+	hud := v.Tree.HUD
+	if hud.Completed != 1 || hud.ObservationEnded != 1 {
+		t.Fatalf("HUD completed=%d observationEnded=%d, want 1 and 1", hud.Completed, hud.ObservationEnded)
+	}
+	byID := map[string]HUDNode{}
+	for _, n := range hud.Roots {
+		byID[n.ID] = n
+	}
+	run, ok := byID[agyRun.ID]
+	if !ok || !run.Native || run.StartedAt != agyRun.StartedAt || run.EndedAt != 0 || run.Linked || run.Harness != "agy" || run.State != "thinking" {
+		t.Fatalf("running agy node = %+v", run)
+	}
+	for _, id := range []string{agyUnknown.ID, codexDone.ID} {
+		if _, ok := byID[id]; ok {
+			t.Fatalf("finished native row %s stayed in the compact HUD", id)
+		}
+	}
+	// Daemon-spawned and Pi extension rows: no native fields on the wire.
+	for _, id := range []string{spawned.ID, piExt.ID} {
+		raw, _ := json.Marshal(byID[id])
+		if strings.Contains(string(raw), `"native"`) || strings.Contains(string(raw), `"startedAt"`) || strings.Contains(string(raw), `"endedAt"`) {
+			t.Fatalf("%s gained native fields: %s", id, raw)
+		}
+	}
+	raw, _ := json.Marshal(hud)
+	if !strings.Contains(string(raw), `"observationEnded":1`) || !strings.Contains(string(raw), `"native":true`) {
+		t.Fatalf("HUD JSON = %s", raw)
+	}
+	if v.Tree.Finished != 1 || v.Tree.Running != 3 || v.Tree.Failed != 0 {
+		t.Fatalf("tree counts running=%d done=%d failed=%d, want 3, 1 (the codex row only), 0", v.Tree.Running, v.Tree.Finished, v.Tree.Failed)
+	}
+	ended := map[string]AgentNode{}
+	for _, a := range v.Tree.EndedAgents() {
+		ended[a.ID] = a
+	}
+	if u := ended[agyUnknown.ID]; !u.Native || !u.EndUnknown() || u.EndedStatus() != "unknown" {
+		t.Fatalf("end-unknown node = %+v", u)
+	}
+	if c := ended[codexDone.ID]; !c.Native || c.EndUnknown() || c.EndedStatus() != "done" {
+		t.Fatalf("codex node = %+v", c)
+	}
+	html := renderTree(t, v)
+	tree := html[strings.Index(html, `<div class="thead">`):]
+	group := tree[strings.Index(tree, `<div class="tgroup ended">`):]
+	if !strings.Contains(group, `class="agent done native d-unknown" data-end-unknown="1"`) || !strings.Contains(group, "observation ended, completion unknown") {
+		t.Fatalf("ended group lacks the end-unknown row: %s", group)
+	}
+	unknownRow := group[strings.Index(group, `data-end-unknown="1"`):]
+	if unknownRow = unknownRow[:strings.Index(unknownRow, "</summary>")]; !strings.Contains(unknownRow, `<span class="amk">?</span>`) || !strings.Contains(unknownRow, `class="nbadge"`) {
+		t.Fatalf("end-unknown row shows a completion mark: %s", unknownRow)
+	}
+	codexRow := group[strings.Index(group, `data-key="agent-`+codexDone.ID+`"`):]
+	codexRow = codexRow[:strings.Index(codexRow, "</summary>")]
+	for _, want := range []string{`class="nbadge"`, `data-ms="` + strconv.FormatInt(codexDone.StartedAt, 10) + `" data-f="clock"`, `data-ms="` + strconv.FormatInt(codexDone.EndedAt, 10) + `" data-f="clock"`, `<span class="amk">✓</span>`} {
+		if !strings.Contains(codexRow, want) {
+			t.Fatalf("codex ended row lacks %q: %s", want, codexRow)
+		}
+	}
+	if strings.Contains(tree, `href="/s/`) {
+		t.Fatalf("a native row links to a transcript: %s", tree)
+	}
+
+	// A Claude lead's row without daemon identity is native; a Claude lead's
+	// daemon-spawned row is not.
+	claude := liveSession("self", "/p", now)
+	claude.Harness = "claude"
+	cv := buildSessionView(pageInputs{Session: claude, Snapshot: liveSnap(now, wslive.Lead{},
+		wslive.Agent{ID: "task-1", Label: "explore", Status: wslive.StatusRunning, StartedAt: ms - 1_000},
+		spawned), Now: now, Lookup: lookupOf(nil, nil)})
+	for _, n := range cv.Tree.HUD.Roots {
+		if want := n.ID == "task-1"; n.Native != want {
+			t.Fatalf("claude lead node %s native = %v, want %v", n.ID, n.Native, want)
+		}
 	}
 }

@@ -1170,9 +1170,14 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 			}
 		})
 	}
+	// A native subagent row (agy, Codex) publishes RAM-only through the live
+	// slot and never calls the recovery writer itself: it reaches disk with
+	// the next heartbeat or turn-end write, so a chatty child costs no file
+	// touches on the event path.
+	nativeRow := ev.Kind == wslive.KindAgent && wslive.NativeAgentID(ev.AgentID)
 	if quiet {
 		c.live.applyQuiet(ev)
-	} else if coalesceTurnEnd {
+	} else if coalesceTurnEnd || nativeRow {
 		c.live.applyCoalesced(ev)
 	} else {
 		c.live.apply(ev)
@@ -1204,6 +1209,18 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 	}
 	if usageChanged || activityChanged {
 		c.watched()
+	}
+}
+
+// settleAgyNative ends every still-running agy native subagent row of this
+// conversation done with no end time (EndUnknown): agy reports no child end,
+// so observation ends with the parent's accepted logical turn end, or with a
+// rejoin's replay, after which observation is not continuous. The reducer
+// keeps a settled native row from changing again, so a later replayed or live
+// turn end leaves it as it is.
+func (c *conv) settleAgyNative() {
+	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
+		c.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: id, Status: wslive.StatusDone, EndUnknown: true})
 	}
 }
 
