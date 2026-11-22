@@ -572,22 +572,27 @@ func (h *Hosted) forget(dropped []*hostedJob, ids []string, claim uint64) {
 		j.saved = ^uint64(0)
 		j.saveMu.Unlock()
 	}
+	// Fenced: from here a release exposes the ids to a retry. Any exit
+	// short of the tombstones' removal (a failed delete, or a panic the
+	// caller recovers) releases the claim.
+	settled := false
+	defer func() {
+		if settled {
+			return
+		}
+		h.mu.Lock()
+		for _, id := range h.ownedLocked(ids, claim) {
+			h.deleting[id].claim = 0
+		}
+		h.mu.Unlock()
+	}()
 	h.mu.Lock()
 	ids = h.ownedLocked(ids, claim)
 	h.mu.Unlock()
 	if len(ids) == 0 {
 		return
 	}
-	err := h.opts.Store.Delete(ids...)
-	h.mu.Lock()
-	ids = h.ownedLocked(ids, claim)
-	if err != nil {
-		for _, id := range ids {
-			h.deleting[id].claim = 0
-		}
-	}
-	h.mu.Unlock()
-	if err != nil {
+	if err := h.opts.Store.Delete(ids...); err != nil {
 		h.logf("drop finished jobs: %v", err)
 		return
 	}
@@ -600,6 +605,7 @@ func (h *Hosted) forget(dropped []*hostedJob, ids []string, claim uint64) {
 	for _, id := range h.ownedLocked(ids, claim) {
 		delete(h.deleting, id)
 	}
+	settled = true
 	h.mu.Unlock()
 }
 

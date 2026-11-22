@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2069,5 +2070,71 @@ func TestHostedLaunchesDrawingOneIDBothRun(t *testing.T) {
 	listed, _ := fx.h.List("lead")
 	if len(listed) != 2 {
 		t.Fatalf("listed jobs = %d, want 2", len(listed))
+	}
+}
+
+// TestHostedPanicsReleaseTheDeleteClaim: a Store.Delete or OnRunning
+// panic that the caller recovers leaves no tombstone claimed: the dropped
+// jobs were fenced first, and the next launch's retry deletes them.
+func TestHostedPanicsReleaseTheDeleteClaim(t *testing.T) {
+	for _, where := range []string{"delete", "on running"} {
+		t.Run(where, func(t *testing.T) {
+			var once sync.Once
+			boom := func() { once.Do(func() { panic("boom") }) }
+			var armed atomic.Bool
+			var calls atomic.Int64
+			fx := newHostedFixture(t, 5*time.Second)
+			_ = fx.h.Close()
+			fx.onRunning = func() {
+				calls.Add(1)
+				if armed.Load() {
+					boom()
+				}
+			}
+			fx.open(5 * time.Second)
+			fx.quickJobs()
+			for i := 0; i < HostedMaxJobs; i++ {
+				fx.launchFinished()
+			}
+			fx.store.mu.Lock()
+			if where == "delete" {
+				fx.store.duringDelete = func([]string) { boom() }
+			} else {
+				// Only the prune fails its delete, so the claim's release
+				// is what the retry needs.
+				fx.store.failDelete = true
+			}
+			fx.store.mu.Unlock()
+			// Each finished job's admission and end have called OnRunning,
+			// so the armed panic hits this launch's admission only.
+			eventuallyExec(t, "the finished jobs' running updates", func() bool { return calls.Load() == 2*HostedMaxJobs })
+			armed.Store(where == "on running")
+			func() {
+				defer func() { _ = recover() }()
+				_, _ = fx.launch(context.Background(), nil, HostedLaunch{})
+			}()
+			armed.Store(false)
+			fx.h.mu.Lock()
+			claimed := 0
+			for _, tomb := range fx.h.deleting {
+				if tomb.claim != 0 {
+					claimed++
+				}
+			}
+			fx.h.mu.Unlock()
+			if claimed != 0 {
+				t.Fatalf("%d tombstones stay claimed after the recovered panic", claimed)
+			}
+			fx.store.mu.Lock()
+			fx.store.duringDelete, fx.store.failDelete = nil, false
+			fx.store.mu.Unlock()
+			fx.launchFinished()
+			fx.h.mu.Lock()
+			pending := len(fx.h.deleting)
+			fx.h.mu.Unlock()
+			if pending != 0 {
+				t.Fatalf("%d deletes pending after the retry", pending)
+			}
+		})
 	}
 }

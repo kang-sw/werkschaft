@@ -216,10 +216,10 @@ func (h *Hosted) admit(j *hostedJob) error {
 		}
 	}
 	h.mu.Unlock()
+	// Deferred, so a panicking OnRunning still fences the dropped jobs
+	// and settles their claim.
+	defer h.forget(dropped, ids, drop)
 	h.runningChanged()
-	if len(dropped) > 0 {
-		h.forget(dropped, ids, drop)
-	}
 	return nil
 }
 
