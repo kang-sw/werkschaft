@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ type memHostedStore struct {
 	rows    map[string]HostedJobRow
 	puts    int
 	deleted []string
+	// beforePut runs at the start of each Put, before the row is stored.
+	beforePut func(HostedJobRow)
 }
 
 func newMemHostedStore() *memHostedStore { return &memHostedStore{rows: map[string]HostedJobRow{}} }
@@ -37,6 +40,9 @@ func (s *memHostedStore) Load() ([]HostedJobRow, error) {
 }
 
 func (s *memHostedStore) Put(row HostedJobRow) error {
+	if s.beforePut != nil {
+		s.beforePut(row)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rows[row.ID] = row
@@ -378,6 +384,66 @@ func TestHostedSyncEndInsideTheWindow(t *testing.T) {
 	}
 }
 
+// TestHostedLateRunningRowNeverOverwritesTheEnd: a launch's running row
+// that reaches the store after the job's end does not replace the end's
+// row, so a reopen reads the job as exited, not lost.
+func TestHostedLateRunningRowNeverOverwritesTheEnd(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	holders := make(chan string, 1)
+	fx.holders.onSpawn = func(id string) { holders <- id }
+	held, release := make(chan string, 1), make(chan struct{})
+	var once sync.Once
+	fx.store.beforePut = func(row HostedJobRow) {
+		if row.State == HostedRunning && row.PID != 0 {
+			once.Do(func() {
+				held <- row.ID
+				<-release
+			})
+		}
+	}
+	type launched struct {
+		v   HostedView
+		err error
+	}
+	result := make(chan launched, 1)
+	go func() {
+		v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+		result <- launched{v, err}
+	}()
+	id, holder := <-held, <-holders
+	// The job ends while its launch's running row waits to be written.
+	exited := make(chan struct{})
+	go func() {
+		fx.holders.exit(holder, 0)
+		close(exited)
+	}()
+	eventuallyExec(t, "the job's end in memory", func() bool { got, _ := fx.h.Get("lead", id); return got.Terminal() })
+	// Give an end row that does not wait for the running one time to land
+	// first, as it would without the ordering.
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if row, ok := fx.store.row(id); ok && row.Terminal() {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	close(release)
+	r := <-result
+	if r.err != nil || r.v.Outcome != OutcomeDone || r.v.State != HostedExited {
+		t.Fatalf("launch = %+v, %v", r.v, r.err)
+	}
+	<-exited
+	if row, ok := fx.store.row(id); !ok || row.State != HostedExited || row.ExitCode == nil || *row.ExitCode != 0 {
+		t.Fatalf("stored row = %+v, %v; the late running row replaced the end", row, ok)
+	}
+	eventuallyExec(t, "the ended job's holder stop", func() bool { return slices.Contains(fx.holders.stops(), holder) })
+	_ = fx.h.Close()
+	fx.open(5 * time.Second)
+	if got, err := fx.h.Get("lead", id); err != nil || got.State != HostedExited {
+		t.Fatalf("after reopen = %+v, %v", got, err)
+	}
+}
+
 // TestHostedConversionAndOnceOnlyNotice: a job outliving the window is
 // converted in the same call; its end sends one notice under the owner's
 // generation and stable event id, and a replayed exit record or a second
@@ -687,21 +753,31 @@ func TestHostedDeferredAndDroppedNotices(t *testing.T) {
 }
 
 // TestHostedJobCapDropsOldestFinished: past the job cap the oldest finished
-// jobs go, from memory and the store.
+// jobs go, from memory and the store, except one whose notice is still
+// owed.
 func TestHostedJobCapDropsOldestFinished(t *testing.T) {
 	fx := newHostedFixture(t, 10*time.Millisecond)
 	_ = fx.h.Close()
 	zero := 0
 	for i := 0; i < HostedMaxJobs; i++ {
-		id := fmt.Sprintf("exec_old-job-%03d", i)
-		_ = fx.store.Put(HostedJobRow{ID: id, Owner: "lead", State: HostedExited, ExitCode: &zero, StartedAt: int64(i + 1), EndedAt: int64(i + 1)})
+		row := HostedJobRow{ID: fmt.Sprintf("exec_old-job-%03d", i), Owner: "lead", State: HostedExited, ExitCode: &zero, StartedAt: int64(i + 1), EndedAt: int64(i + 1)}
+		if i == 0 {
+			// Its owner took a handoff: the notice waits for a retry.
+			row.Notify, row.Notice = true, NoticePending
+		}
+		_ = fx.store.Put(row)
 	}
+	fx.sessions.outcome = NoticeDeferred
 	fx.open(10 * time.Millisecond)
+	t.Cleanup(func() { _ = fx.h.Close() })
 	if _, err := fx.launch(context.Background(), nil, HostedLaunch{}); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(fx.store.deleted, []string{"exec_old-job-000"}) {
+	if !slices.Equal(fx.store.deleted, []string{"exec_old-job-001"}) {
 		t.Fatalf("dropped = %q", fx.store.deleted)
+	}
+	if row, ok := fx.store.row("exec_old-job-000"); !ok || row.Notice != NoticePending {
+		t.Fatalf("the job owing a notice = %+v, %v", row, ok)
 	}
 	list, more := fx.h.List("lead")
 	if len(list) != HostedListMax || more != HostedMaxJobs-HostedListMax || list[0].State != HostedRunning {
@@ -792,6 +868,53 @@ func TestHostedLegacyReadReportsEvictedOffsets(t *testing.T) {
 	}
 	if r := fx.h.LegacyResponse(v, true); !strings.Contains(r.Error, "left the output ring") {
 		t.Fatalf("inline result hides the evicted prefix: %+v", r)
+	}
+}
+
+// TestHostedApprovalShowsWhatRuns: the approval names the program the job
+// starts, resolved on the job's PATH before the prompt, the call's env
+// overlay, and the head of its stdin cut at a character; a program not on
+// that PATH is refused before any prompt.
+func TestHostedApprovalShowsWhatRuns(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	bin := t.TempDir()
+	file := "tool"
+	if goruntime.GOOS == "windows" {
+		file += ".exe"
+	}
+	prog := filepath.Join(bin, file)
+	if err := os.WriteFile(prog, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdin := strings.Repeat("a", HostedStdinPreviewBytes-1) + "가" + "tail"
+	env := map[string]string{"PATH": bin, "BASH_ENV": "/tmp/x.sh"}
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Argv: []string{"tool", "x"}, Display: "tool x", Environ: []string{"PATH=" + bin}, Env: env, Stdin: []byte(stdin), StdinSet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.sessions.mu.Lock()
+	calls := slices.Clone(fx.sessions.approvals)
+	fx.sessions.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("approvals = %+v", calls)
+	}
+	c := calls[0]
+	wantEnv := []string{"BASH_ENV=/tmp/x.sh", "PATH=" + bin}
+	if !strings.EqualFold(c.Program, prog) || c.Command != "tool x" || !slices.Equal(c.Env, wantEnv) || c.StdinBytes != len(stdin) || c.Stdin != strings.Repeat("a", HostedStdinPreviewBytes-1) {
+		t.Fatalf("approval call = %+v", c)
+	}
+	if s := fx.holders.spawnOf(v.HolderID); len(s.Argv) == 0 || s.Argv[0] != c.Program {
+		t.Fatalf("spawned %q, approved %q", s.Argv, c.Program)
+	}
+
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Argv: []string{"missing-tool"}, Environ: []string{"PATH=" + bin}}); err == nil || !strings.Contains(err.Error(), "not on the job's PATH") {
+		t.Fatalf("a missing program = %v", err)
+	}
+	fx.sessions.mu.Lock()
+	n := len(fx.sessions.approvals)
+	fx.sessions.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("a missing program prompted: %d approvals", n)
 	}
 }
 

@@ -45,11 +45,48 @@ func (r *Runner) ExecOwner(id string) (ExecOwner, error) {
 }
 
 // ExecApproval is one exec call shown for approval: the tool called, the
-// command as the user reads it, and the directory it runs in.
+// command as the user reads it, the directory it runs in, and the rest of
+// what decides what runs: the program that starts (argv[0] resolved on the
+// job's PATH), the call's own environment overlay as NAME=value entries,
+// and the head of the stdin it gives with that stdin's whole length.
 type ExecApproval struct {
-	Tool    string
-	Command string
-	Cwd     string
+	Tool       string
+	Command    string
+	Cwd        string
+	Program    string
+	Env        []string
+	Stdin      string
+	StdinBytes int
+}
+
+// execApprovalInput is call as its prompt's input: what the page shows.
+func execApprovalInput(call ExecApproval) ([]byte, string, error) {
+	in := map[string]any{"command": call.Command, "cwd": call.Cwd}
+	var more []string
+	if call.Program != "" {
+		in["program"] = call.Program
+		more = append(more, "program "+call.Program)
+	}
+	if len(call.Env) > 0 {
+		env := map[string]string{}
+		for _, kv := range call.Env {
+			name, value, _ := strings.Cut(kv, "=")
+			env[name] = value
+		}
+		in["env"] = env
+		more = append(more, "env "+strings.Join(call.Env, " "))
+	}
+	if call.StdinBytes > 0 {
+		in["stdin"] = call.Stdin
+		in["stdin_bytes"] = call.StdinBytes
+		more = append(more, fmt.Sprintf("stdin %d bytes", call.StdinBytes))
+	}
+	desc := "Run this command: " + call.Command
+	if len(more) > 0 {
+		desc += " (" + strings.Join(more, "; ") + ")"
+	}
+	raw, err := json.Marshal(in)
+	return raw, desc, err
 }
 
 // ExecGrant is how an exec call was allowed.
@@ -141,7 +178,7 @@ func (r *Runner) ApproveExec(ctx context.Context, id string, call ExecApproval) 
 	if err != nil {
 		return 0, err
 	}
-	input, err := json.Marshal(map[string]string{"command": call.Command, "cwd": call.Cwd})
+	input, description, err := execApprovalInput(call)
 	if err != nil {
 		return 0, err
 	}
@@ -160,7 +197,7 @@ func (r *Runner) ApproveExec(ctx context.Context, id string, call ExecApproval) 
 			ID:          reqID,
 			Tool:        call.Tool,
 			Input:       input,
-			Description: "Run this command: " + call.Command,
+			Description: description,
 			StartedAt:   r.opts.Now().UnixMilli(),
 		}, answer)
 	}) {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsgit"
 	"github.com/kang-sw/devenv/internal/wsholder"
@@ -71,6 +72,13 @@ type hostedJob struct {
 	// then HostedStopped and sends no notice.
 	stopping   bool
 	delivering bool
+	// rev numbers j's row snapshots for the store (snapLocked, under h.mu);
+	// saveMu orders their writes and saved is the last one written, so a
+	// snapshot taken before the job's end never lands after it. A dropped
+	// job's saved is the maximum: nothing writes its row again.
+	rev    uint64
+	saveMu sync.Mutex
+	saved  uint64
 }
 
 // NewHosted loads the stored jobs: finished ones with their output preview,
@@ -204,9 +212,9 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 		j.row.Error = "exec job worker is no longer active: its holder is gone and left no exit status"
 	}
 	h.endLocked(j)
-	row := h.rowLocked(j)
+	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.put(row)
+	h.save(j, row, rev)
 	_ = os.Remove(path)
 	h.deliver(j)
 }
@@ -251,10 +259,10 @@ func (h *Hosted) endFromExit(j *hostedJob, exit wsholder.Exit) {
 		j.row.State, j.row.Error = HostedLost, "exec job worker is no longer active: its holder ended ("+exit.Reason+") with no exit status"
 	}
 	h.endLocked(j)
-	row := h.rowLocked(j)
+	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.put(row)
-	_ = os.Remove(h.exitCopyPath(j.row.ID))
+	h.save(j, row, rev)
+	_ = os.Remove(h.exitCopyPath(row.ID))
 	h.deliver(j)
 }
 
@@ -297,9 +305,9 @@ func (h *Hosted) HolderEvent(id string, ev wsholder.Event) {
 	}
 	j.row.ExitCode, j.row.Signal = ev.ExitCode, ev.Signal
 	h.endLocked(j)
-	row := h.rowLocked(j)
+	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.put(row)
+	h.save(j, row, rev)
 	h.deliver(j)
 	// The process ended; its holder stays until stopped, and its stop takes
 	// the rest of the job's process group with it.
@@ -341,9 +349,38 @@ func (h *Hosted) rowLocked(j *hostedJob) HostedJobRow {
 	return row
 }
 
-func (h *Hosted) put(row HostedJobRow) {
+// snapLocked is j's row for the store, numbered after every earlier
+// snapshot. h.mu is held.
+func (h *Hosted) snapLocked(j *hostedJob) (HostedJobRow, uint64) {
+	j.rev++
+	return h.rowLocked(j), j.rev
+}
+
+// save stores j's snapshot row numbered rev, unless a later one is stored
+// already: the writes run outside h.mu, so a running row taken before the
+// job's end can reach save after the end's row did.
+func (h *Hosted) save(j *hostedJob, row HostedJobRow, rev uint64) {
+	j.saveMu.Lock()
+	defer j.saveMu.Unlock()
+	if rev <= j.saved {
+		return
+	}
+	j.saved = rev
 	if err := h.opts.Store.Put(row); err != nil {
 		h.logf("store job %s: %v", row.ID, err)
+	}
+}
+
+// forget marks dropped jobs never to be written again, then deletes their
+// rows: a write already under way finishes before the delete.
+func (h *Hosted) forget(dropped []*hostedJob, ids []string) {
+	for _, j := range dropped {
+		j.saveMu.Lock()
+		j.saved = ^uint64(0)
+		j.saveMu.Unlock()
+	}
+	if err := h.opts.Store.Delete(ids...); err != nil {
+		h.logf("drop finished jobs: %v", err)
 	}
 }
 
@@ -364,8 +401,10 @@ type HostedLaunch struct {
 	// Display is the command as the approval and the listing show it;
 	// Command and Shell are a shell launch's line and shell.
 	Display, Command, Shell string
-	// Environ is the job's whole environment.
+	// Environ is the job's whole environment; Env is the call's own overlay
+	// in it, which the approval shows.
 	Environ []string
+	Env     map[string]string
 	// Stdin is written at the start, then stdin closes; StdinSet says it
 	// was given. Without it a legacy launch's stdin closes at once and a
 	// new launch's stays open for Write.
@@ -412,16 +451,18 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if err != nil {
 		return HostedView{}, fmt.Errorf("exec: the owning session cannot take a job: %w", err)
 	}
-	call := HostedCall{Tool: req.Tool, Command: req.Display, Cwd: req.Cwd}
-	explicit, err := h.opts.Sessions.Approve(ctx, owner.ID, call)
+	// The program resolves before the approval, so the prompt names the
+	// binary that starts.
+	argv := append([]string(nil), req.Argv...)
+	bin, err := lookProgram(argv[0], req.Environ)
 	if err != nil {
 		return HostedView{}, err
 	}
-	argv := append([]string(nil), req.Argv...)
-	if bin, lookErr := lookProgram(argv[0], req.Environ); lookErr != nil {
-		return HostedView{}, lookErr
-	} else {
-		argv[0] = bin
+	argv[0] = bin
+	call := approvalCall(req, bin)
+	explicit, err := h.opts.Sessions.Approve(ctx, owner.ID, call)
+	if err != nil {
+		return HostedView{}, err
 	}
 	id, err := h.newID(req.Legacy)
 	if err != nil {
@@ -464,11 +505,12 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	}
 	h.mu.Lock()
 	j.row.PID = st.PID
-	ended := j.row.Terminal()
-	row := h.rowLocked(j)
-	h.mu.Unlock()
-	if !ended {
-		h.put(row)
+	if !j.row.Terminal() {
+		row, rev := h.snapLocked(j)
+		h.mu.Unlock()
+		h.save(j, row, rev)
+	} else {
+		h.mu.Unlock()
 	}
 	if req.Async {
 		return h.view(j, OutcomeAsync), nil
@@ -497,9 +539,9 @@ func (h *Hosted) convert(j *hostedJob) HostedView {
 		return h.view(j, OutcomeDone)
 	}
 	j.row.Notify = true
-	row := h.rowLocked(j)
+	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.put(row)
+	h.save(j, row, rev)
 	return h.view(j, OutcomeConverted)
 }
 
@@ -514,10 +556,13 @@ func (h *Hosted) admit(j *hostedJob) error {
 	running := 0
 	var finished []*hostedJob
 	for _, have := range h.jobs {
-		if have.row.Terminal() {
-			finished = append(finished, have)
-		} else {
+		switch {
+		case !have.row.Terminal():
 			running++
+		case have.row.Notice == NoticePending || have.delivering:
+			// Its notice is still owed; it stays until delivered.
+		default:
+			finished = append(finished, have)
 		}
 	}
 	if running >= HostedMaxJobs {
@@ -525,20 +570,20 @@ func (h *Hosted) admit(j *hostedJob) error {
 		return fmt.Errorf("exec: %d jobs already run; stop one first", running)
 	}
 	h.jobs[j.row.ID] = j
-	var drop []string
+	var dropped []*hostedJob
+	var ids []string
 	if over := len(h.jobs) - HostedMaxJobs; over > 0 {
 		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
 		for _, old := range finished[:min(over, len(finished))] {
 			delete(h.jobs, old.row.ID)
 			h.rings.Release(old.out)
-			drop = append(drop, old.row.ID)
+			dropped = append(dropped, old)
+			ids = append(ids, old.row.ID)
 		}
 	}
 	h.mu.Unlock()
-	if len(drop) > 0 {
-		if err := h.opts.Store.Delete(drop...); err != nil {
-			h.logf("drop finished jobs: %v", err)
-		}
+	if len(dropped) > 0 {
+		h.forget(dropped, ids)
 	}
 	return nil
 }
@@ -558,9 +603,9 @@ func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView
 		j.row.StartedAt = h.opts.Now().UnixMilli()
 	}
 	h.endLocked(j)
-	row := h.rowLocked(j)
+	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.put(row)
+	h.save(j, row, rev)
 	return h.view(j, OutcomeDone), cause
 }
 
@@ -592,9 +637,9 @@ func (h *Hosted) stop(j *hostedJob) {
 	// The holder is gone and its exit record did not arrive first.
 	j.row.State = HostedStopped
 	h.endLocked(j)
-	row := h.rowLocked(j)
+	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.put(row)
+	h.save(j, row, rev)
 }
 
 // Stop stops owner's job id and returns its view after the end.
@@ -766,9 +811,9 @@ func (h *Hosted) deliver(j *hostedJob) {
 	default:
 		j.row.Notice = NoticeDelivered
 	}
-	row = h.rowLocked(j)
+	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.put(row)
+	h.save(j, row, rev)
 }
 
 // deliverPending tries every pending notice.
@@ -897,6 +942,30 @@ func lookProgram(name string, environ []string) (string, error) {
 		return "", fmt.Errorf("exec: %s is not on the job's PATH: %w", name, err)
 	}
 	return bin, nil
+}
+
+// approvalCall is req as its approval shows it, starting program.
+func approvalCall(req HostedLaunch, program string) HostedCall {
+	call := HostedCall{Tool: req.Tool, Command: req.Display, Cwd: req.Cwd, Program: program, StdinBytes: len(req.Stdin)}
+	for name, value := range req.Env {
+		call.Env = append(call.Env, name+"="+value)
+	}
+	sort.Strings(call.Env)
+	head := req.Stdin
+	if len(head) > HostedStdinPreviewBytes {
+		head = head[:HostedStdinPreviewBytes]
+		// Cut at a character's start, not inside one.
+		for i := len(head) - 1; i >= 0 && i >= len(head)-utf8.UTFMax; i-- {
+			if utf8.RuneStart(head[i]) {
+				if !utf8.FullRune(head[i:]) {
+					head = head[:i]
+				}
+				break
+			}
+		}
+	}
+	call.Stdin = strings.ToValidUTF8(string(head), "�")
+	return call
 }
 
 // environMap is environ as the holder's whole child environment; a later

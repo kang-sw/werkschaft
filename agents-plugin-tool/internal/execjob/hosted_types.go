@@ -104,12 +104,23 @@ type HostedOwner struct {
 	Lead bool
 }
 
-// HostedCall is one launch as its approval shows it.
+// HostedCall is one launch as its approval shows it: everything the call
+// gives that decides what runs. Program is argv[0] resolved on the job's
+// PATH, the binary that starts; Env is the call's own environment overlay
+// as sorted NAME=value entries; Stdin is the head of the stdin it gives
+// (HostedStdinPreviewBytes at most) and StdinBytes its whole length.
 type HostedCall struct {
-	Tool    string
-	Command string
-	Cwd     string
+	Tool       string
+	Command    string
+	Cwd        string
+	Program    string
+	Env        []string
+	Stdin      string
+	StdinBytes int
 }
+
+// HostedStdinPreviewBytes bounds the stdin an approval shows.
+const HostedStdinPreviewBytes = 1024
 
 // NoticeOutcome is what the owner side did with a completion notice.
 type NoticeOutcome int

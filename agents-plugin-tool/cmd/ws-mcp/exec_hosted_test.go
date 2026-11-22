@@ -113,8 +113,11 @@ func TestHostedExecOverTheTokenRouteFollowsTheBinding(t *testing.T) {
 }
 
 // TestHostedExecLinkRoutesExecHoldersOnly: before the jobs bind, an exec
-// holder's records are dropped and its exit copy stays; after, they reach
-// the jobs; every other holder kind keeps the lead exit hook.
+// holder's records and exit are dropped without reaching the lead exit
+// hook, and every other holder kind keeps that hook. The bound link's
+// routing to the jobs runs with real holders in
+// TestHostedExecSurvivesAnOldDaemonAndReopens and openHostedExecDaemon's
+// tests.
 func TestHostedExecLinkRoutesExecHoldersOnly(t *testing.T) {
 	link := &hostedExecLink{}
 	var nextCalls []string

@@ -89,7 +89,7 @@ func (s execSessions) Owner(id string) (execjob.HostedOwner, error) {
 }
 
 func (s execSessions) Approve(ctx context.Context, id string, call execjob.HostedCall) (bool, error) {
-	grant, err := s.r.ApproveExec(ctx, id, wsagent.ExecApproval{Tool: call.Tool, Command: call.Command, Cwd: call.Cwd})
+	grant, err := s.r.ApproveExec(ctx, id, wsagent.ExecApproval{Tool: call.Tool, Command: call.Command, Cwd: call.Cwd, Program: call.Program, Env: call.Env, Stdin: call.Stdin, StdinBytes: call.StdinBytes})
 	return grant == wsagent.ExecGrantAnswer, err
 }
 

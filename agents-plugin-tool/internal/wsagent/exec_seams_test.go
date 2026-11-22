@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -103,6 +104,58 @@ func TestExecApprovalPromptsALeadOutsideFullAndBindsTheCall(t *testing.T) {
 	eventually(t, "the withdrawn prompt to go", func() bool { return len(h.state(id).Approvals) == 0 })
 	if _, err := h.runner.AnswerApproval(id, p.ID, true, ""); !isConflict(err) {
 		t.Fatalf("answering a withdrawn prompt = %v, want a conflict", err)
+	}
+}
+
+// TestExecApprovalShowsWhatRunsAndStaysWithItsSession: the prompt carries
+// the program that starts, the call's env overlay and its stdin, and only
+// the owning conversation answers it.
+func TestExecApprovalShowsWhatRunsAndStaysWithItsSession(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id := h.lead(BackendClaude, LeadOptions{PermissionMode: "acceptEdits"}).ID
+	other := h.lead(BackendClaude, LeadOptions{PermissionMode: "acceptEdits"}).ID
+	call := ExecApproval{Tool: "exec.run", Command: "ls", Cwd: h.root, Program: "/opt/evil/ls", Env: []string{"BASH_ENV=/tmp/x.sh", "PATH=/opt/evil"}, Stdin: "echo hi\n", StdinBytes: 8}
+	res := make(chan execApprovalResult, 1)
+	go func() {
+		grant, err := h.runner.ApproveExec(context.Background(), id, call)
+		res <- execApprovalResult{grant, err}
+	}()
+	p := execPrompt(t, h, id)
+	var in struct {
+		Command    string            `json:"command"`
+		Program    string            `json:"program"`
+		Env        map[string]string `json:"env"`
+		Stdin      string            `json:"stdin"`
+		StdinBytes int               `json:"stdin_bytes"`
+	}
+	if err := json.Unmarshal(p.Input, &in); err != nil {
+		t.Fatalf("prompt input %s: %v", p.Input, err)
+	}
+	if in.Command != "ls" || in.Program != "/opt/evil/ls" || in.Env["BASH_ENV"] != "/tmp/x.sh" || in.Env["PATH"] != "/opt/evil" || in.Stdin != "echo hi\n" || in.StdinBytes != 8 {
+		t.Fatalf("prompt input = %s", p.Input)
+	}
+	for _, want := range []string{"Run this command: ls", "program /opt/evil/ls", "env BASH_ENV=/tmp/x.sh PATH=/opt/evil", "stdin 8 bytes"} {
+		if !strings.Contains(p.Description, want) {
+			t.Fatalf("prompt description %q lacks %q", p.Description, want)
+		}
+	}
+
+	if _, err := h.runner.AnswerApproval(other, p.ID, true, ""); err == nil {
+		t.Fatal("another conversation answered the exec prompt")
+	}
+	select {
+	case r := <-res:
+		t.Fatalf("the call settled on another conversation's answer: %+v", r)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if st := h.state(id); len(st.Approvals) != 1 || st.Approvals[0].ID != p.ID {
+		t.Fatalf("the owner's prompt after a foreign answer = %+v", st.Approvals)
+	}
+	if _, err := h.runner.AnswerApproval(id, p.ID, true, ""); err != nil {
+		t.Fatalf("allow: %v", err)
+	}
+	if r := takeExecResult(t, res); r.err != nil || r.grant != ExecGrantAnswer {
+		t.Fatalf("allowed call = %+v", r)
 	}
 }
 

@@ -103,8 +103,9 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 	if err != nil {
 		return toolTextResponse(id, "", err)
 	}
-	environ := execjob.OverlayEnv(s.environ(), stringMapArgument(args["env"]))
-	req := execjob.HostedLaunch{Owner: owner, Tool: name, Root: root, Cwd: cwd, Environ: environ, Async: boolArgument(args["async"])}
+	overlay := stringMapArgument(args["env"])
+	environ := execjob.OverlayEnv(s.environ(), overlay)
+	req := execjob.HostedLaunch{Owner: owner, Tool: name, Root: root, Cwd: cwd, Environ: environ, Env: overlay, Async: boolArgument(args["async"])}
 	if stdin, ok := args["stdin"].(string); ok {
 		req.Stdin, req.StdinSet = []byte(stdin), true
 	}
@@ -243,7 +244,8 @@ func (s *Server) hostedLegacyLaunch(ctx context.Context, id json.RawMessage, nam
 	if err != nil {
 		return execResponse(id, execjob.Response{}, err, true)
 	}
-	req := execjob.HostedLaunch{Owner: s.conversation, Tool: name, Root: root, Cwd: cwd, Environ: execjob.OverlayEnv(s.environ(), stringMapArgument(args["env"])), Legacy: true}
+	overlay := stringMapArgument(args["env"])
+	req := execjob.HostedLaunch{Owner: s.conversation, Tool: name, Root: root, Cwd: cwd, Environ: execjob.OverlayEnv(s.environ(), overlay), Env: overlay, Legacy: true}
 	if stdin, _ := args["stdin"].(string); stdin != "" {
 		req.Stdin, req.StdinSet = []byte(stdin), true
 	}
