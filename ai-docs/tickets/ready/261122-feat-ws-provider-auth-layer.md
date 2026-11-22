@@ -234,6 +234,15 @@ Verification:
   - CLI against a running daemon is served by it and seen by the next token request: `TestCredentialChangeAgainstRunningDaemonIsServedByTheDaemon`, `TestCredentialCLIDirectWithARunningDaemon`.
   - Offline write takes the daemon lock: `TestOfflineCredentialChangeTakesTheDaemonLock`.
 
+#### Edition (513e0dace) - 2026-11-22
+
+- Trust boundary: the token route and ws tool outputs never return the secret; processes running as the same OS user are trusted, since the file's mode or ACL protects against other users only and a same-user process (a hosted exec job) can read the file directly.
+- Follow-up fixes from an independent review (`a1b944bfc..513e0dace`):
+  - The daemon closes its store to changes, after letting the change in flight finish, before it releases its lock.
+  - A directly run binary now reads the key with echo off on a terminal, which supersedes the Result's no-echo note.
+  - An unrecognized argument is never echoed.
+  - The launcher forwards only the first stdin line for `credential set`.
+
 ### Phase 2: OpenAI Sign in with ChatGPT
 
 - SIWC flow per the official docs current at implementation: dynamic client

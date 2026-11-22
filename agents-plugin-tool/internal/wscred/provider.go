@@ -12,8 +12,13 @@
 //     a CLI change reaches it over a daemon channel instead.
 //   - Route. A harness process the daemon started obtains a credential over
 //     the daemon's internal token route (route.go), authenticated by its
-//     per-session bearer; the route is not an MCP tool, and no MCP tool,
-//     config surface, or model-visible text ever carries a credential.
+//     per-session bearer. The route is not an MCP tool; it answers the
+//     secret only to an admitted session, and no ws tool output or config
+//     surface returns it.
+//   - Trust boundary. Processes running as the same OS user are trusted:
+//     the file's owner-only mode (or DACL) keeps other users out, not a
+//     same-user process such as a hosted exec job, which can read the file
+//     directly and which OS permissions cannot stop.
 //   - Redaction. A secret travels as Secret, whose every printed or
 //     marshalled form is redacted; only Reveal returns the value, at the one
 //     place that must send it (an Authorization header, the token route's

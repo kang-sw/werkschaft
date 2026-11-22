@@ -159,20 +159,30 @@ session and exec subprocess.
 `credential set <provider>` (the key on stdin, never in argv),
 `credential show [<provider>]` (masked), and `credential remove <provider>`
 manage it (`--format json` for structured output). The command reads only
-the first stdin line; on a terminal the launcher prompts for it without
-echo. Through the launcher the daemon applies the change itself. A
+the first stdin line, and the launcher forwards only that line; on a
+terminal both the launcher and a directly run binary prompt for it without
+echo. An unrecognized argument is never echoed back, since it may be a
+misplaced key. Through the launcher the daemon applies the change itself. A
 directly run ws binary sends it to the running daemon's
 `POST /auth/provider/change` (authenticated by the endpoint file's token);
 with no daemon running it writes the file while holding the daemon's
-single-instance lock, so no daemon starts mid-write.
+single-instance lock, so no daemon starts mid-write. A stopping daemon
+closes its store to changes, and lets a change already in flight finish,
+before it releases the lock; a change that arrives later is answered as a
+drain, so the sender retries against the successor.
 
 A hosted harness obtains a credential from `POST /auth/provider/token` with
 its per-session bearer (`WS_MCP_SESSION_TOKEN`); the route is not an MCP
 tool. Only a session whose backend registration sets `ProviderCredentials`
 passes, and no current backend does: the external harnesses bring their own
 logins. The dashboard's file browser denies the credential directory. Keys
-and tokens are never logged; the token route's answer to an admitted
-session is the only response that carries one.
+and tokens are never logged.
+
+Trust boundary: the token route's answer to an admitted session is the only
+response that carries a secret; no ws tool output returns one. Processes
+running as the same OS user are trusted. The file's owner-only mode or DACL
+keeps other users out, but not a same-user process such as a hosted exec
+job, which can read the file directly; OS permissions cannot prevent that.
 
 ### Dashboard daemon
 
