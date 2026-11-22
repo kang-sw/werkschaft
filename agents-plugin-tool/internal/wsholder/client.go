@@ -368,22 +368,52 @@ func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 // request line limit once encoded.
 const inputChunk = 256 << 10
 
+// InputError is an Input call that did not complete. The holder queued
+// the first Accepted bytes of its data, in chunks it acknowledged. Refused
+// reports that the holder refused the next chunk (Err is its *OpError), so
+// nothing after Accepted was queued and the eof was not; otherwise that
+// chunk's delivery, and the eof's, is unknown: the call failed after the
+// chunk may have been sent.
+type InputError struct {
+	Accepted int
+	Refused  bool
+	Err      error
+}
+
+func (e *InputError) Error() string {
+	if e.Refused {
+		return fmt.Sprintf("the holder took the first %d bytes and refused the rest: %v", e.Accepted, e.Err)
+	}
+	return fmt.Sprintf("the holder took the first %d bytes; whether the rest arrived is unknown: %v", e.Accepted, e.Err)
+}
+
+func (e *InputError) Unwrap() error { return e.Err }
+
 // Input writes data to the child's standard input or PTY. With eof the
 // child's input closes after it (a pipe child's stdin; an end-of-file key
-// on a PTY).
+// on a PTY). Data longer than one chunk travels in several operations; a
+// failure answers an *InputError that says how much the holder took.
 func (c *Client) Input(data []byte, eof bool) error {
+	accepted := 0
+	fail := func(err error) error {
+		var opErr *OpError
+		return &InputError{Accepted: accepted, Refused: errors.As(err, &opErr), Err: err}
+	}
 	for len(data) > inputChunk {
 		if _, err := c.call("input", map[string]any{"data": data[:inputChunk]}); err != nil {
-			return err
+			return fail(err)
 		}
 		data = data[inputChunk:]
+		accepted += inputChunk
 	}
 	fields := map[string]any{"data": data}
 	if eof {
 		fields["eof"] = true
 	}
-	_, err := c.call("input", fields)
-	return err
+	if _, err := c.call("input", fields); err != nil {
+		return fail(err)
+	}
+	return nil
 }
 
 // Resize sets a PTY child's size.

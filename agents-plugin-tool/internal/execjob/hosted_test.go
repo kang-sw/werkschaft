@@ -819,6 +819,40 @@ func TestHostedStdinSurvivesARestart(t *testing.T) {
 	}
 }
 
+// TestHostedPartialWriteSaysWhatToResend: a multi-chunk write the holder
+// stopped partway answers how many bytes it took and whether the rest was
+// refused or its delivery is unknown, so a retry does not duplicate the
+// accepted prefix; stdin stays open.
+func TestHostedPartialWriteSaysWhatToResend(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 600<<10)
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{&wsholder.InputError{Accepted: 512 << 10, Refused: true, Err: &wsholder.OpError{Code: "input_overflow", Message: "the child is not reading its input"}}, "refused the rest: holder: input_overflow: the child is not reading its input; stdin stays open: resend from byte 524288 of 614400"},
+		{&wsholder.InputError{Accepted: 256 << 10, Err: wsholder.ErrDetached}, "whether the rest arrived is unknown: holder: not attached; check the job before resending from byte 262144 of 614400"},
+	} {
+		fx.holders.mu.Lock()
+		fx.holders.inputErr = tc.err
+		fx.holders.mu.Unlock()
+		_, err := fx.h.Write("lead", v.ID, data, true)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("partial write = %v, want it to say %q", err, tc.want)
+		}
+	}
+	fx.holders.mu.Lock()
+	fx.holders.inputErr = nil
+	fx.holders.mu.Unlock()
+	if _, err := fx.h.Write("lead", v.ID, data[512<<10:], true); err != nil {
+		t.Fatalf("the resend after a partial write = %v", err)
+	}
+}
+
 // TestHostedStdinUnknownAfterRestartStaysClosed: a holder that does not
 // report its stdin state leaves a rejoined job's stdin closed, so a write
 // never claims a success the holder may have dropped.

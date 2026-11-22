@@ -79,7 +79,15 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 			h.mu.Unlock()
 			return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: an earlier eof closed it", id)
 		}
-		// The eof did not reach the child: stdin stays open for a retry.
+		// The eof did not reach the child: stdin stays open. A retry
+		// resends only what the holder did not take.
+		var inErr *wsholder.InputError
+		if errors.As(err, &inErr) {
+			if inErr.Refused {
+				return h.view(j, 0), fmt.Errorf("write to exec job %s: %w; stdin stays open: resend from byte %d of %d", id, err, inErr.Accepted, len(data))
+			}
+			return h.view(j, 0), fmt.Errorf("write to exec job %s: %w; check the job before resending from byte %d of %d", id, err, inErr.Accepted, len(data))
+		}
 		return h.view(j, 0), fmt.Errorf("write to exec job %s: %w", id, err)
 	}
 	if eof {

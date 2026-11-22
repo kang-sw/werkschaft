@@ -144,3 +144,33 @@ func TestSpawnDeliversFiniteInput(t *testing.T) {
 		})
 	}
 }
+
+// TestInputReportsWhatTheHolderTook pins InputError: input to a child that
+// does not read fills the holder's unread-input limit partway through a
+// multi-chunk Input, and the error says how many bytes the holder queued
+// and that it refused the rest, so a retry resends only those.
+func TestInputReportsWhatTheHolderTook(t *testing.T) {
+	dir := testHoldersDir(t)
+	m := testManager(t, dir, newCollector())
+	id, err := m.Launch(json.RawMessage(`{"kind":"test"}`))
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Stop(id) })
+	if _, err := m.Client(id).Spawn(SpawnSpec{Argv: []string{testPython(t), "-c", "import time; time.sleep(60)"}, Mode: "pipe"}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	data := make([]byte, 9<<20)
+	err = m.Client(id).Input(data, true)
+	var inErr *InputError
+	if !errors.As(err, &inErr) {
+		t.Fatalf("Input over the limit = %v, want an *InputError", err)
+	}
+	var opErr *OpError
+	if !inErr.Refused || !errors.As(err, &opErr) || opErr.Code != "input_overflow" {
+		t.Fatalf("Input error = %+v, want a refusal for input_overflow", inErr)
+	}
+	if inErr.Accepted <= 0 || inErr.Accepted >= len(data) || inErr.Accepted%inputChunk != 0 {
+		t.Fatalf("accepted = %d of %d, want whole chunks short of all", inErr.Accepted, len(data))
+	}
+}
