@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -245,6 +246,45 @@ func TestAgyWorkerRejoinEndsTheHolderAndKeepsTheRecord(t *testing.T) {
 	if len(got.list()) != 1 {
 		t.Fatalf("more than one report: %+v", got.list())
 	}
+}
+
+// A refused holder stop keeps the holder in the record, says why, publishes
+// nothing, and starts no process; the next daemon ends it.
+func TestAgyWorkerRejoinFailedStopKeepsTheHolderForTheNextDaemon(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	h.runner.Close()
+	reg := h.opts.Backends[BackendAgy]
+	reg.WorkerCapable, reg.leadOnlyReason = false, agyLeadOnlyReason
+	h.opts.Backends[BackendAgy] = reg
+	h.holders.restart()
+	h.holders.set(func() { h.holders.stopErr = errors.New("holder busy") })
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "holder scan", h.runner.rejoined)
+
+	if h.holders.opCount("stop "+holder) != 1 {
+		t.Fatalf("stops = %v", h.holders.opList())
+	}
+	if rec := h.record(id); rec.HolderID != holder || !rec.TurnOpen {
+		t.Fatalf("a failed stop forgot the holder: %+v", rec)
+	}
+	if st := h.state(id); !strings.HasPrefix(st.Error, agyLeadOnlyReason+"; ") || !strings.HasSuffix(st.Error, "holder busy") {
+		t.Fatalf("state error = %q", st.Error)
+	}
+	if len(got.list()) != 0 || h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("a failed stop published or launched: reports %+v, ops %v", got.list(), h.holders.opList())
+	}
+
+	h.runner.Close()
+	h.holders.set(func() { h.holders.stopErr = nil })
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the next daemon ended the holder", func() bool { return h.holders.opCount("stop "+holder) == 2 })
+	eventually(t, "the failed report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != agyLeadOnlyReason {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen })
 }
 
 // Peer mail still reaches a hosted agy lead under the lead-only posture.
