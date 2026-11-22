@@ -192,7 +192,7 @@ background.
 
 Implement native notifications for user questions and session completion at full idle after all children and background tasks finish. Map native failure to browser fallback without duplicate delivery. Verify questions, child completion while work remains, final idle, a session with an unknown background-task count per (2146), permissions, denied or failed native delivery and fallback.
 
-### Result (db5fbfdcf) - 2026-11-22
+### Result (05c6888ae) - 2026-11-22
 
 The daemon now marks each rail row with `data-busy="1"` while its live
 session is not fully idle (commits 292daa65d, 42fd05cc8). That covers a
@@ -282,7 +282,12 @@ WebView2 secondary window cannot add a browser duplicate.
   regression. Hosted jobs now count per owner and make the owner's row
   active. `HostedOptions.OnRunning` wakes the rail when a job is admitted
   and on every end, outside the lock (ccbec2a96). Rejected: deferring to
-  261117. Launcher jobs keep the worktree-wide path.
+  261117. Launcher jobs keep the worktree-wide path. A scoped re-review of
+  the follow-up found nothing Critical or Important. Two Minors were fixed
+  in 05c6888ae. First, the daemon now wakes the rail once after storing the
+  hosted jobs, because their Start runs before the store; without the wake,
+  a job a predecessor left running stayed unseen until some other wake.
+  Second, the observer is now tested across reopens.
 - The full-quit count includes exec-job holders, so the confirmation now
   says "running sessions and jobs (agent sessions, subagents, terminals,
   and exec jobs)". The incomplete report says "sessions or jobs", and the
@@ -310,6 +315,9 @@ WebView2 secondary window cannot add a browser duplicate.
     the daemon.
   - No route-level test sends concurrent `/shutdown/all` requests;
     `wsholder` covers the race.
+  - The `HostedExecJobs` and `OnRunning` wiring in
+    `cmd/ws-mcp/dashboard.go` has no test of its own; the parts it joins
+    are tested through `Hosted` and the daemon options.
 - Verification: `node testdata/notifications.test.cjs` (Go runner
   `TestNotificationSelectionAndDelivery`) passes. It covers:
   - delivery: native true; native false with permission granted, and with
@@ -341,8 +349,8 @@ WebView2 secondary window cannot add a browser duplicate.
   suites, only the four tests named in Phase 1 fail, and they fail on base
   too.
 
-  After the develop merges and the follow-up (ccbec2a96, db5fbfdcf), these
-  pass:
+  After the develop merges and the follow-up (ccbec2a96, db5fbfdcf,
+  05c6888ae), these pass:
   - `go build ./...`, and `go vet` of `cmd/ws-mcp`, `execjob`, and
     `wsdashboard`;
   - the `execjob` (with the new `TestHostedRunningOwnersFollowEachJob`) and
@@ -357,7 +365,8 @@ WebView2 secondary window cannot add a browser duplicate.
   - `cargo test --locked --features custom-protocol`, which passes 56.
 
   Each of these mutations fails a test: dropping the admit notification,
-  dropping `OwnExecJobs` from Active, or keying jobs by another id. Headless
+  dropping it from `endFromExitCopy` or `endFromExit`, dropping
+  `OwnExecJobs` from Active, or keying jobs by another id. Headless
   Playwright captures of busy, active, and idle rows (EN and KO, light and
   dark) were taken against a scratch daemon, with no GUI. They are stored,
   untracked, under `ai-docs/assets/captures/261122/tray-rail-busy/`. The
