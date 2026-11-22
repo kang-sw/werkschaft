@@ -20,7 +20,7 @@
       // my.* lists exclude hidden items (view.go viewerLists); Show hidden adds their live and pending records to me
       if (showHidden()) VS.itemOrder.forEach(function (id) {
         var it = VS.items[id];
-        if (it && it.hidden) recs = recs.concat(it.assignments.map(A).filter(function (r) { return r.to === v && (r.state === 'live' || r.state === 'pending'); }));
+        if (it && it.hidden) it.assignments.forEach(function (a) { var r = A(a); if (r && r.to === v && (r.state === 'live' || r.state === 'pending')) recs.push(r); });
       });
     }
     else if (key === 'given') recs = [].concat.apply([], VS.my.given.map(function (id) {
@@ -53,7 +53,8 @@
       assignRecs(key, v).forEach(function (r) {
         var col = r.state === 'pending' ? 'pending' : r.status;
         if (!buckets[col]) return;
-        buckets[col].push({ item: r.item, rec: r, drag: r.to === v && r.state === 'live' && !wrapped(r.status) ? r.item : null,
+        // a hidden item has no status actions (canStatus), so its card does not drag
+        buckets[col].push({ item: r.item, rec: r, drag: !VS.items[r.item].hidden && r.to === v && r.state === 'live' && !wrapped(r.status) ? r.item : null,
           who: key !== 'mine' ? r.to : null, sub: (key !== 'mine' ? esc(nm(r.to)) + ' &middot; ' : '') + source(r) });
       });
     }

@@ -358,3 +358,29 @@ test('show hidden routes hidden Related items as the daemon does: involved left 
   assert.ok(!html.includes('Hidden wrapped'), 'a wrapped item is not an open mention');
   assert.ok(c.CLOSED.entries.some(e => e.html.includes('Hidden wrapped')), 'a wrapped item goes to the closed rows');
 });
+
+test('show hidden Mine cards on a hidden item never drag, and a drop on one dispatches nothing', () => {
+  const { c, dispatched } = harness();
+  vm.runInContext(section('  // ------------------------------------------------------------- view modes', '  function whoTag(x)'), c);
+  vm.runInContext(section('  // Kanban drop: only', '  // --------------------------------------------------------------- sync actions'), c);
+  c.lastWrite = () => '';
+  c.VS.items = {
+    i1: makeItem('i1', { title: 'Visible task', assignments: ['a1'] }),
+    i2: makeItem('i2', { title: 'Hidden task', author: 'lena', hidden: true, assignments: ['a2'] })
+  };
+  c.VS.itemOrder = ['i1', 'i2'];
+  c.VS.assignments = {
+    a1: { id: 'a1', item: 'i1', by: 'maya', to: 'maya', state: 'live', status: 'todo' },
+    a2: { id: 'a2', item: 'i2', by: 'lena', to: 'maya', state: 'live', status: 'todo' }
+  };
+  c.VS.my.assignments = ['a1'];
+  c.panelState().showHidden = true;
+  const kanban = c.kanbanBody('mine', 'maya');
+  assert.ok(kanban.includes('Hidden task'), kanban);
+  assert.match(kanban, /draggable="true" data-drag="i1"/, 'a visible own card drags');
+  assert.doesNotMatch(kanban, /data-drag="i2"/, 'the hidden card has no status drag');
+  c.dropOn('i2', 'doing');
+  assert.deepEqual(dispatched, [], 'a drop on a hidden item dispatches nothing');
+  c.dropOn('i1', 'doing');
+  assert.equal(dispatched.length, 1, 'a visible own card still moves');
+});
