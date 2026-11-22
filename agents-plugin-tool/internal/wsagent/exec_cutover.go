@@ -458,7 +458,7 @@ func (c *conv) sendCutoverInstruction() {
 		return
 	}
 	c.cutoverInstructed++
-	rec := c.rec
+	rec := c.record()
 	event := cutoverEventPrefix + rec.HolderID + ":" + trigger
 	c.cutoverInstructing, c.cutoverQueued = true, false
 	c.r.wg.Add(1)

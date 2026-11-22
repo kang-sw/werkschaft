@@ -55,7 +55,7 @@ func (c *conv) handle(ev Event) {
 			// a command the list holds.
 			live := *ev.Live
 			c.commands = slices.Clone(live.Commands)
-			live.Commands = c.r.withPlaybookCommands(c.rec, allowedCommands(live.Commands, c.caps))
+			live.Commands = c.r.withPlaybookCommands(c.record(), allowedCommands(live.Commands, c.caps))
 			ev.Live = &live
 		}
 		if !quiet && ev.Live.Kind == wslive.KindCompact && ev.Live.Phase == wslive.CompactStart {
@@ -476,7 +476,7 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 		// auto-approval: nobody decides it.
 		return
 	}
-	if !quiet && c.rec.agyBypass() && !c.replaying && !c.cutoverRejects(a.Tool) {
+	if !quiet && c.record().agyBypass() && !c.replaying && !c.cutoverRejects(a.Tool) {
 		// Bypass answers before the prompt is published: the page must not
 		// see a modal, a pending row or a wake for a request nobody decides.
 		// Without an answerer, or with no answer the process could build
@@ -675,7 +675,7 @@ func (c *conv) sendApproval(answerer approvalAnswerer, req ApprovalRequest, allo
 			rec.Answered = append(rec.Answered, req.ID)
 		}
 	}
-	if c.rec.agyBypass() {
+	if c.record().agyBypass() {
 		c.setStatus(func() { track(&c.rec) })
 	} else {
 		c.update(track)
@@ -863,7 +863,7 @@ func (c *conv) processEnded() {
 }
 
 func (c *conv) clearAgyInternalPrompt() bool {
-	if !c.rec.agyInternalPrompt() {
+	if !c.record().agyInternalPrompt() {
 		return false
 	}
 	c.update(func(rec *Record) { rec.TurnStartedAt = 0 })
@@ -1223,10 +1223,12 @@ func (c *conv) harnessReported(report HarnessReport, quiet bool) {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: harness version %q (verified %s..%s) runs on %s's capabilities; demoted by its init: %v\n",
 			c.rec.ReplyID, report.Version, caps.Oldest, caps.Newest, caps.ProfileVersion, caps.Demoted)
 	}
-	before := c.r.withPlaybookCommands(c.rec, allowedCommands(c.commands, c.caps))
+	// A whole-record copy takes mu (record): Send stamps rec under it.
+	rec := c.record()
+	before := c.r.withPlaybookCommands(rec, allowedCommands(c.commands, c.caps))
 	c.setStatus(func() { c.caps = &caps })
 	if c.commands != nil {
-		if after := c.r.withPlaybookCommands(c.rec, allowedCommands(c.commands, c.caps)); !slices.Equal(after, before) {
+		if after := c.r.withPlaybookCommands(rec, allowedCommands(c.commands, c.caps)); !slices.Equal(after, before) {
 			c.apply(wslive.Event{Kind: wslive.KindCommands, Commands: after}, quiet)
 		}
 	}
