@@ -768,6 +768,121 @@
 }
 .tier-tbl tbody:last-child tr:last-child td { border-bottom: 0; }
 
+/* Editable combobox (.scb-*) for tier backend, model, and effort inputs */
+.scb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+.scb .scb-inp,
+.tier-tbl .scb .scb-inp {
+  padding-right: 24px;
+}
+.scb-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  bottom: 2px;
+  width: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .1s, color .1s;
+}
+.scb-btn:hover:not(:disabled) {
+  background: var(--wb-wash);
+  color: var(--wb-fg);
+}
+.scb-btn[aria-expanded="true"]:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-primary) 13%, transparent);
+  color: var(--wb-primary);
+}
+.scb-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.scb-chev {
+  font-size: 10px;
+  line-height: 1;
+  transition: transform .1s;
+}
+.scb-btn[aria-expanded="true"] .scb-chev {
+  transform: rotate(180deg);
+}
+.scb-pop {
+  position: fixed;
+  z-index: 4000;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  box-sizing: border-box;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow-hi);
+  font-family: var(--wb-mono);
+  font-size: 12px;
+}
+.scb-pop[hidden] {
+  display: none;
+}
+.scb-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  min-width: 0;
+}
+.scb-opt:hover,
+.scb-opt.is-active {
+  background: var(--wb-muted);
+}
+.scb-opt.is-active {
+  box-shadow: inset 2px 0 0 var(--wb-primary);
+}
+.scb-opt[aria-selected="true"] .scb-opt-id {
+  color: var(--wb-primary);
+  font-weight: 700;
+}
+.scb-opt.is-unavail .scb-opt-id {
+  color: var(--wb-muted-fg);
+}
+.scb-opt-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scb-opt-tag {
+  flex: none;
+  font-family: var(--wb-sans);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-primary) 13%, var(--wb-card));
+  color: var(--wb-primary);
+  white-space: nowrap;
+}
+.scb-opt-tag.muted {
+  background: var(--wb-wash);
+  color: var(--wb-muted-fg);
+}
+
 /* ==========================================================================
    Adapter Sub-Tabs & Compaction Banner
    ========================================================================== */
@@ -810,7 +925,7 @@
   .kprov { flex: 0 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .prec-node, [data-settings-view] .srow, .tg::after, .seg button, .origin-pill, .reset-icon-btn, .lchip { transition: none; }
+  .prec-node, [data-settings-view] .srow, .tg::after, .seg button, .origin-pill, .reset-icon-btn, .lchip, .scb-btn, .scb-chev { transition: none; }
 }
 
 /* ==========================================================================
