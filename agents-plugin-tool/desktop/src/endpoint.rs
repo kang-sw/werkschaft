@@ -307,8 +307,9 @@ impl Daemon {
         Ok(Some(url))
     }
 
-    /// The number of session holders the daemon lists: every agent session,
-    /// subagent, and terminal a full stop would end, whatever its status.
+    /// The number of holders the daemon lists: every agent session,
+    /// subagent, terminal, and hosted exec job a full stop would end,
+    /// whatever its status.
     /// Read from the dashboard's holders route with the browser credential.
     pub fn running_sessions(&self) -> Result<usize> {
         let unavailable = "Could not count the running sessions";

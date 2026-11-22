@@ -173,20 +173,21 @@ const STOPPED_BUT_RUNNING: &str =
     "Every session was stopped, but the background did not exit. Werkschaft stays open.";
 
 // The confirmation a full quit asks, None when nothing would be lost: no
-// running session and every draft saved.
+// running session or exec job (every holder the daemon lists) and every
+// draft saved.
 fn full_quit_question(sessions: Option<usize>, drafts_ready: bool) -> Option<String> {
     let mut lines = Vec::new();
     match sessions {
         Some(0) => (),
         Some(1) => lines.push(
-            "1 running session (an agent session, subagent, or terminal) will be stopped with the background."
+            "1 running session or job (an agent session, subagent, terminal, or exec job) will be stopped with the background."
                 .to_owned(),
         ),
         Some(count) => lines.push(format!(
-            "{count} running sessions (agent sessions, subagents, and terminals) will be stopped with the background."
+            "{count} running sessions and jobs (agent sessions, subagents, terminals, and exec jobs) will be stopped with the background."
         )),
         None => lines.push(
-            "The running sessions could not be counted. Every session still running will be stopped with the background."
+            "The running sessions and jobs could not be counted. Everything still running will be stopped with the background."
                 .to_owned(),
         ),
     }
@@ -239,9 +240,9 @@ fn full_stop_report(outcome: Result<FullStop, &'static str>) -> Report {
         Ok(FullStop::Stopped) => return Report::warning(STOPPED_BUT_RUNNING),
         Ok(FullStop::Incomplete { remaining }) => {
             let sessions = if remaining == 1 {
-                "1 session".to_owned()
+                "1 session or job".to_owned()
             } else {
-                format!("{remaining} sessions")
+                format!("{remaining} sessions or jobs")
             };
             format!("The full quit is incomplete: {sessions} could not be stopped, so the background keeps running. Werkschaft stays open.")
         }
@@ -387,9 +388,15 @@ mod tests {
     fn full_quit_asks_only_when_something_would_be_lost() {
         assert_eq!(full_quit_question(Some(0), true), None);
         let one = full_quit_question(Some(1), true).unwrap();
-        assert!(one.starts_with("1 running session ") && !one.contains("changes"));
+        assert!(
+            one.starts_with("1 running session or job (")
+                && one.contains("exec job")
+                && !one.contains("changes")
+        );
         let many = full_quit_question(Some(3), true).unwrap();
-        assert!(many.starts_with("3 running sessions (agent sessions, subagents, and terminals)"));
+        assert!(many.starts_with(
+            "3 running sessions and jobs (agent sessions, subagents, terminals, and exec jobs)"
+        ));
         // A count that could not be read is never taken as zero.
         let unknown = full_quit_question(None, true).unwrap();
         assert!(unknown.contains("could not be counted"));
@@ -397,7 +404,7 @@ mod tests {
         assert_eq!(drafts, "Some changes may not be saved.");
         let both = full_quit_question(Some(2), false).unwrap();
         assert!(
-            both.starts_with("2 running sessions")
+            both.starts_with("2 running sessions and jobs")
                 && both.ends_with("Some changes may not be saved.")
         );
     }
@@ -407,11 +414,11 @@ mod tests {
         let cases = [
             (
                 Ok(FullStop::Incomplete { remaining: 2 }),
-                "2 sessions could not be stopped",
+                "2 sessions or jobs could not be stopped",
             ),
             (
                 Ok(FullStop::Incomplete { remaining: 1 }),
-                "1 session could not be stopped",
+                "1 session or job could not be stopped",
             ),
             (Ok(FullStop::Unsupported), "older than this app"),
             (Ok(FullStop::Unauthorized), "refused this app's credential"),
