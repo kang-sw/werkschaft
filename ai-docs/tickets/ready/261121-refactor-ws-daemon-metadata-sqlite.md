@@ -1076,6 +1076,76 @@ Verification (macOS arm64):
 - `gofmt`: clean.
 
 
+#### Edition (b018f9ca8) - 2026-11-22
+
+The re-review of 2976c3d53..a16126ad4 found 3 Critical and 3 Important
+issues. All six are fixed, one commit each, none rebutted. Each new test
+failed on the code before its fix, either run directly or with the old
+behavior restored.
+
+Critical fixes:
+
+- **Removal proof ignored the witness identity (C1), fc34f1605:** a
+  removal is now proven only when the witness carries the identity
+  recorded with the intent (`witness_id`). This holds on re-application
+  and in every pass, so a byte-identical copy the owner placed at the
+  witness proves nothing.
+  - An empty recorded identity never proves.
+  - A failed identity lookup is unread, not a mismatch.
+
+  Test: `TestCopiedWitnessNeverProvesARemoval`.
+- **Witness cleanup through a link chain (C2), 4cb24d692:**
+  `routesThrough` now resolves the source one component at a time. It
+  refuses (`ErrWitnessOccupied`) when any step names the witness entry:
+  compared by name without case, in the witness's directory compared by
+  identity. That covers second links and directory aliases.
+  - Hard links still move intact.
+  - A chain of more than 40 links is refused.
+
+  Test: `TestRemovalNeverClearsAWitnessTheSourceResolvesThrough`.
+- **The fallback error after a publication (C3), e834548f0:**
+  `ErrCutoverUnsupported` (keep serving from legacy) is returned only
+  while the journal holds no fence record. Otherwise the refusal is the
+  new `ErrCutoverInterrupted`, across restarts too. The barrier re-check
+  after a rename always reports interrupted. Test:
+  `TestRefusalAfterAFenceIsNeverTheFallback`. Commit's call site landed
+  separately in b018f9ca8: e834548f0 alone does not build.
+
+Important fixes:
+
+- **ReFS (I1), c30356343:** only NTFS is accepted. The barrier's ordering
+  argument does not cover ReFS, and a documented ReFS setting ignores
+  write-through. A cache root on a ReFS Dev Drive stays on the legacy
+  store. Test: `TestUnsupportedFileSystemRefusesTheCutover/refused_on_ReFS`.
+- **NTFS tunneling of the witness token (I2), c1c924803:** on Windows the
+  witness identity is the volume serial plus the file index, without the
+  creation time. Test: `TestWitnessIdentitySurvivesTunneling` (Windows
+  only: compiled, not run).
+- **A denied witness blocked Commit (I3), ffc386452:** over a confirmed
+  denied original, a confirmable denial at the witness is that same state,
+  and the removal is proven by identity. Test:
+  `TestConfirmedDenialMovesWithTheWitness`.
+
+Caller contract for Phase 2:
+
+- `ErrCutoverUnsupported`: stay on the legacy store.
+- `ErrCutoverInterrupted`: do not resume legacy service. Surface the
+  error, because a fence may be live.
+
+API changes: new error `ErrCutoverInterrupted`; the Windows allowlist is
+NTFS only.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (15.5 s).
+- The wsagent and wsdashboard validator tests: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok, and
+  `GOOS=windows go test -c` builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
+
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
 - Depends on Phase 1. Route affected direct Go readers through the daemon
