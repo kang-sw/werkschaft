@@ -100,23 +100,45 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 	}
 	cwdArg, _ := args["cwd"].(string)
 	overlay := stringMapArgument(args["env"])
+	readOnly := s.readOnlyAuthority()
 	var req execjob.HostedLaunch
 	if name == "exec.run" {
 		cwd, err := execjob.ResolveWorkingDir(root, cwdArg)
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
-		req = execjob.HostedLaunch{Owner: owner, Tool: name, Root: root, Cwd: cwd, Environ: execjob.OverlayEnv(s.environ(), overlay), Env: overlay}
 		exe, _ := args["exe"].(string)
 		if strings.TrimSpace(exe) == "" {
 			return toolTextResponse(id, "", errors.New("exec.run: exe is required"))
 		}
-		req.Argv = append([]string{exe}, stringList(args["args"])...)
-		req.Display = displayArgv(req.Argv)
+		argv := append([]string{exe}, stringList(args["args"])...)
+		if readOnly {
+			// A read-only worker's launch is checked and rebuilt, never
+			// passed through (execjob.ReadOnlyArgvLaunch).
+			req, err = execjob.ReadOnlyArgvLaunch(owner, name, root, cwd, argv, s.environ(), overlay)
+			var refusal *execjob.ErrReadOnlyLaunch
+			if errors.As(err, &refusal) {
+				err = fmt.Errorf("%s: %w", name, err)
+			}
+			if err != nil {
+				return toolTextResponse(id, "", err)
+			}
+		} else {
+			req = execjob.HostedLaunch{Owner: owner, Tool: name, Root: root, Cwd: cwd, Environ: execjob.OverlayEnv(s.environ(), overlay), Env: overlay, Argv: argv}
+		}
+		req.Display = displayArgv(argv)
 	} else {
 		// The dashboard composer prepares its launch the same way.
 		line, _ := args["cmd"].(string)
-		req, err = execjob.ShellLaunch(owner, name, root, cwdArg, line, s.environ(), overlay)
+		if readOnly {
+			req, err = execjob.ReadOnlyShellLaunch(owner, name, root, cwdArg, line, s.environ(), overlay)
+			var refusal *execjob.ErrReadOnlyLaunch
+			if errors.As(err, &refusal) {
+				err = fmt.Errorf("%s: %w", name, err)
+			}
+		} else {
+			req, err = execjob.ShellLaunch(owner, name, root, cwdArg, line, s.environ(), overlay)
+		}
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}

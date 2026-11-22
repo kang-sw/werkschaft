@@ -28,7 +28,7 @@ type execTestSessions struct {
 }
 
 func (s *execTestSessions) Owner(id string) (execjob.HostedOwner, error) {
-	return execjob.HostedOwner{ID: id, Gen: 1, Lead: true}, nil
+	return execjob.HostedOwner{ID: id, Gen: 1, Lead: id != "worker"}, nil
 }
 
 func (s *execTestSessions) Approve(context.Context, string, execjob.HostedCall) (bool, error) {
