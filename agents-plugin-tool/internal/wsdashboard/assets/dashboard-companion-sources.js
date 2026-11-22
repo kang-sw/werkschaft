@@ -270,11 +270,18 @@
         if (!res.ok) { fail(failure(res)); return; }
         if (listing) state.panel = { mode: "listing", source: panel.source, listing };
         // HTTP 200 only means the request ran; the pack's own result says whether it was written.
-        const outcome = (listing?.packs || []).find(item => item.id === pack.id);
+        const outcome = outcomeFor(listing?.packs, pack.id);
         if (outcome?.installed === true && !record(outcome.error)) done(t("js.companion.sources.done_install", text(pack.name) || pack.id));
         else fail(packFailure(outcome, res));
         applyCatalog(res.body.catalog);
       });
+    }
+
+    // A marketplace may carry an invalid and a valid row under one ID; the row that was written is the
+    // one the user selected, so prefer it over a duplicate's error.
+    function outcomeFor(packs, id) {
+      const rows = (packs || []).filter(item => record(item) && item.id === id);
+      return rows.find(item => item.installed === true && !record(item.error)) || rows[0];
     }
 
     function uninstall(id, name) {
@@ -332,7 +339,7 @@
         if (listing) state.panel = { mode: "result", source: "", name: panel.name, listing };
         else state.panel = null;
         // Count what was written, not what was asked for; failed packs keep their error on the result cards.
-        const outcomes = (listing?.packs || []).filter(item => ids.includes(item.id));
+        const outcomes = ids.map(id => outcomeFor(listing?.packs, id)).filter(Boolean);
         const written = outcomes.filter(item => item.installed === true && !record(item.error));
         const failed = outcomes.filter(item => !written.includes(item));
         if (!listing) done(t("js.companion.sources.done_import", ids.length));

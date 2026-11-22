@@ -146,7 +146,7 @@ func TestAuditViewBrowser(t *testing.T) {
 				V: 1, ID: "e-res-2", Seq: 5, Session: "livesession", At: t0.Add(90 * time.Millisecond),
 				Harness: "claude", Kind: wsaudit.KindToolResult, Subkind: "Grep", CallID: "c2",
 				ModelSeen: true,
-				Out:       "src/auth.ts:12: const sessionSecret = '***';",
+				Out:       "src/auth.ts:12: const sessionSecret = '***';\n" + strings.Repeat(longLine, 530), // second paged envelope on the same part
 			},
 			{
 				V: 1, ID: "e-call-3", Seq: 6, Session: "livesession", At: t0.Add(500 * time.Millisecond),
