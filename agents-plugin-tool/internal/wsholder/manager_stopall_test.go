@@ -79,6 +79,29 @@ func TestStopAllEndsEveryHolderAndThenRefusesLaunches(t *testing.T) {
 	}
 }
 
+// TestStopAllCountsAHolderWhoseCleanupFailedAsStopped pins the report when
+// a holder's process ended but its stop still failed afterwards (here its
+// exit record cannot be persisted): the holder no longer runs, so it is
+// stopped, not remaining and not missing from both lists.
+func TestStopAllCountsAHolderWhoseCleanupFailedAsStopped(t *testing.T) {
+	dir := testHoldersDir(t)
+	m := testManager(t, dir, nil, func(o *Options) {
+		o.OnExit = func(Descriptor, Exit) error { return errors.New("exit store unavailable") }
+	})
+	id, err := m.Launch(nil)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	pid := holderPIDs(m)[id]
+	res := m.StopAll()
+	if !slices.Equal(res.Stopped, []string{id}) || len(res.Remaining) != 0 {
+		t.Fatalf("StopAll = stopped %v, remaining %+v; want %s stopped and none remaining", res.Stopped, res.Remaining, id)
+	}
+	if processAlive(pid) {
+		t.Errorf("holder %s (pid %d) is alive after the full stop", id, pid)
+	}
+}
+
 // TestStopAllReportsTheHoldersItCouldNotStop pins the partial failure: a
 // holder whose guarded kill is refused (the process under its PID did not
 // start when its descriptor says) keeps running with its child and is

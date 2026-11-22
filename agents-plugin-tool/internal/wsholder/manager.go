@@ -865,8 +865,11 @@ func (m *Manager) StopAll() StopAllResult {
 		left[info.ID] = true
 		result.Remaining = append(result.Remaining, failure)
 	}
-	for id, err := range tried {
-		if err == nil && !left[id] {
+	// A holder whose process is gone is stopped even when its stop reported
+	// an error after the end (its exit record or directory cleanup failed,
+	// logged above): the survivors, not the errors, decide what remains.
+	for id := range tried {
+		if !left[id] {
 			result.Stopped = append(result.Stopped, id)
 		}
 	}
