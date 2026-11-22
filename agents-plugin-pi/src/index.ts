@@ -945,6 +945,7 @@ export default async function wsPiBridgeExtension(pi: ExtensionAPI) {
       ...(sessionRole === undefined ? {
         reasoningSummary: () => sessionSummary?.projection(),
         reasoningSummaryCapable: VERSION === "1.5.2",
+        compactionPreparationCapable: hosted.mode === "hosted",
       } : {}),
     });
     agentDashboardRefreshRef.current = () => {

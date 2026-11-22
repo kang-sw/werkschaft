@@ -387,6 +387,17 @@ func (p *codexProcess) Steer(text string) error {
 	}})
 }
 
+func (p *codexProcess) steerCompaction(text string) (string, error) {
+	session, turn := p.m.active()
+	if turn == "" {
+		return "", ErrUnsupported
+	}
+	id := "wsc/compactSteer/" + p.epoch + "/" + strconv.FormatUint(p.seq.Add(1), 10)
+	return id, p.writeLine(codexProtocol{}.requestLine(id, map[string]any{"method": "turn/steer", "params": map[string]any{
+		"threadId": session, "expectedTurnId": turn, "input": codexInput(text),
+	}}))
+}
+
 // ClearSteered is a no-op for Codex: turn/steer is scoped by the expected
 // active turn id, so an accepted message cannot leak into a later turn.
 func (p *codexProcess) ClearSteered() error { return nil }

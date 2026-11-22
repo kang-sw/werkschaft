@@ -50,11 +50,9 @@ Do these in order, without starting new work in between:
      so list only what that step needs. Take line numbers from your earlier
      reads and put the symbol or heading in `why`. `references` holds files
      a later step may need, opened only then.
-3. **Call `ws-compact`** with every heading filled (empty when there is
-   nothing), then end your turn. The conversation resumes from the summary,
-   and an active goal keeps running. With no goal, a resume message follows
-   when you compacted on your own or at the hard point; after the advisory
-   nudge, a milestone, or a user `/compact`, the next move is the user's. Set
-   `continue_after_compact: true` when you hold known remaining work that does
-   not await the user, so a resume message follows in any case; leave it unset
-   when the next move needs a user answer.
+3. **Call `ws-compact`** with carry-forward prose or an empty value for each
+   heading, then end your turn. An active goal keeps running. Without a goal,
+   autonomous compaction resumes work. After a preparation notice, milestone,
+   or user `/compact`, the next move is the user's. Set
+   `continue_after_compact: true` when you have work that can proceed without
+   user input.

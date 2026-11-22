@@ -267,6 +267,9 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		c.update(func(rec *Record) { rec.Listed = def.ListInIndex })
 		c.writeRegistration()
 	}
+	if rec.SessionID != "" || rec.SessionFile != "" {
+		c.queryRecoveryUsage()
+	}
 	return nil
 }
 
@@ -510,6 +513,9 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		}
 	})
 	c.writeRegistration()
+	if rec.SessionID != "" || rec.SessionFile != "" {
+		c.queryRecoveryUsage()
+	}
 	return nil
 }
 
@@ -662,6 +668,7 @@ func (c *conv) replayDone(lost bool) {
 	lost = lost || c.replayGap
 	boundary := c.replayBoundary
 	c.replaying, c.replayAsked, c.replayGap, c.replayBoundary = false, false, false, false
+	c.queryRecoveryUsage()
 	if !c.rec.Lead && c.rec.Parent != nil {
 		if lost && c.rec.TurnOpen {
 			c.wrapHold = true

@@ -303,9 +303,13 @@ func (m *codexMapper) response(msg codexWire, replies lineReplies, now int64) []
 			if m.worker {
 				out = append(out, Event{SteerAnswer: &SteerAnswer{}})
 			}
+		case "compactSteer":
+			out = append(out, Event{compactSteerReply: &compactSteerReply{id: rawString(msg.ID)}})
 		}
 	} else if kind == "control" && m.worker {
 		out = append(out, Event{SteerAnswer: &SteerAnswer{Refusal: answer.err}})
+	} else if kind == "compactSteer" {
+		out = append(out, Event{compactSteerReply: &compactSteerReply{id: rawString(msg.ID), refusal: answer.err}})
 	}
 	// Notifications, not control acknowledgements, own turn boundaries.
 	// In particular, a late turn/start response cannot reopen an ended turn.

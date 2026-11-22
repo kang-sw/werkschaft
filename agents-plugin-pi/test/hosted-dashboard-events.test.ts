@@ -8,7 +8,7 @@ import { dashboardTaskCounts } from "../src/dashboard-feed.ts";
 import { agentDashboardRefreshRef, markAgentExited, type RpcAgentRegistry } from "../src/spawner.ts";
 import { countBackgroundTasks, killAllBackgroundTasks, startBackgroundTask } from "../src/background-tasks.ts";
 
-function harness(reasoningSummary?: () => ReturnType<ReturnType<typeof createReasoningSummaryObserver>["projection"]>, reasoningSummaryCapable?: boolean) {
+function harness(reasoningSummary?: () => ReturnType<ReturnType<typeof createReasoningSummaryObserver>["projection"]>, reasoningSummaryCapable?: boolean, compactionPreparationCapable?: boolean) {
   let clock = 0;
   let task: (() => void) | undefined;
   let reads = 0;
@@ -18,6 +18,7 @@ function harness(reasoningSummary?: () => ReturnType<ReturnType<typeof createRea
   const channel = createHostedDashboardEvents({
     reasoningSummary,
     reasoningSummaryCapable,
+    compactionPreparationCapable,
     now: () => clock,
     schedule: (fn) => { task = fn; return () => { task = undefined; }; },
     taskCounts: () => { reads++; return counts; },
@@ -197,6 +198,18 @@ test("new bundle advertises optional capability before data and renews it at rea
     assert.deepEqual(h.events().at(-1).capabilities, expected);
     h.channel.stop();
   }
+});
+
+test("hosted compaction preparation capability coexists with summary capability and renews at boundaries", () => {
+  const h = harness(undefined, true, true);
+  h.channel.start(); h.flush();
+  const expected = ["reasoning_summary_v1", "pi_compaction_preparation_v1"];
+  assert.deepEqual(h.events()[0].capabilities, expected);
+  h.channel.leadEvent({ type: "agent_start" }); h.flush();
+  h.channel.leadEvent({ type: "agent_settled" });
+  assert.equal(h.events().length, 3);
+  assert.deepEqual(h.events().at(-1).capabilities, expected);
+  h.channel.stop();
 });
 
 test("a summary callback alone never opts a legacy or unsupported bundle into sending fields", () => {

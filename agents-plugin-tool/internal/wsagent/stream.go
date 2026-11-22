@@ -505,6 +505,7 @@ func (t *batchTracker) endCall(id string, failed bool, now int64) []Event {
 		}
 	}
 	if ev := t.finish(now, false); ev != nil {
+		ev.ToolBoundary = true
 		return []Event{*ev}
 	}
 	return nil

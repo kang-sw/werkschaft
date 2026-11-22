@@ -58,7 +58,9 @@ func (c *conv) handle(ev Event) {
 		if ev.Live.Kind == wslive.KindReply && ev.Live.Final && !(quiet && c.rec.Parent != nil && ev.Seq <= c.rec.TurnStartSeq) {
 			c.reply = ev.Live.Text
 		}
-		if !quiet {
+		if quiet && c.replaying && ev.Live.Kind == wslive.KindCompact {
+			c.replayCompaction(*ev.Live)
+		} else if !quiet {
 			c.compactEvent(*ev.Live)
 		}
 		if ev.LiveCoalescesTurnEnd {
@@ -68,10 +70,16 @@ func (c *conv) handle(ev Event) {
 		}
 		if !quiet && ev.Live.Kind == wslive.KindStatus {
 			c.checkUsageDropCompaction(*ev.Live)
+			if !ev.FinalUsage && !ev.LiveCoalescesTurnEnd {
+				c.steerCompaction(false)
+			}
 			// Pi can report usage after settlement.
 			if c.canKick() && !c.compactIdle() && c.compactionNudgeReady() {
 				c.kickInput()
 			}
+		}
+		if !quiet && ev.ToolBoundary {
+			c.steerCompaction(true)
 		}
 		if !quiet && ev.Live.Kind == wslive.KindCompact && ev.Live.Phase != wslive.CompactStart {
 			if !c.compactCommand {
@@ -189,6 +197,10 @@ func (c *conv) handle(ev Event) {
 		}
 		c.steerAnswered(ev.SteerAnswer.Refusal)
 		c.update(func(rec *Record) { rec.SteerAnswers, rec.SteerAnswerSeq = c.steerAnswers, ev.Seq })
+	case ev.compactSteerReply != nil:
+		if !quiet {
+			c.compactSteerAnswered(*ev.compactSteerReply)
+		}
 	case ev.UserTaken != "":
 		c.steerTaken(ev.UserTaken)
 	case ev.CommandError != "":
@@ -356,6 +368,12 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	}
 	if quiet {
 		return
+	}
+	if ran && !compactCommand && !c.replaying {
+		c.clearCompactionSteerReplies()
+		c.compactContinueAtIdle = turnErr == "" && c.summaryReason != wslive.TurnAborted
+		c.compactIdleInternal = c.compactInternalTurn
+		c.stageHardCompaction(c.compactContinueAtIdle, c.compactIdleInternal)
 	}
 	// Observers must see the terminal diagnostic in the same emission as
 	// the settled lifecycle, including mapped Pi agent_settled failures.
@@ -626,6 +644,7 @@ func (c *conv) processExited() {
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
 	c.compactResumeInternal = false
+	c.compactUsageFresh = false
 	c.stopCompactWatchdog()
 	rejoining, proc := c.replaying, c.proc
 	c.events = nil
@@ -816,6 +835,7 @@ func (c *conv) stopProcess(reason string) {
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
 	c.compactResumeInternal = false
+	c.compactUsageFresh = false
 	c.stopCompactWatchdog()
 	c.stopIdle()
 	if c.proc == nil {
@@ -860,6 +880,7 @@ func (c *conv) stopProcess(reason string) {
 // daemon's rejoin; any other process ends.
 func (c *conv) letGo() {
 	c.quitting = true
+	c.drainCompaction()
 	c.finishLine()
 	c.persistSeq()
 	if hp, ok := c.proc.(holderProcess); ok {

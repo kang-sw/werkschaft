@@ -552,10 +552,10 @@ describe("registerGoalLoop IO glue (fake pi): compaction release (260906 Phase 1
     /** The resume exactly as sent. */
     const sentResume = labeled(resumeText);
 
-    function resumeRun() {
+    function resumeRun(isHosted?: () => boolean) {
       const clock = fakeClock();
       const pi = fakePi();
-      const handle = registerGoalLoop(pi.api, { readConfig: staticConfigReader({ compaction_advisory_percent: 50, compaction_hard_percent: 80 }), ...clock, leadCompactGuidePath: guidePath, sessionKeyRef: { current: "lead-key" } });
+      const handle = registerGoalLoop(pi.api, { isHosted, readConfig: staticConfigReader({ compaction_advisory_percent: 50, compaction_hard_percent: 80 }), ...clock, leadCompactGuidePath: guidePath, sessionKeyRef: { current: "lead-key" } });
       const idle = { current: true };
       const { ctx } = fakeCtx(() => idle.current);
       const usage = { percent: 10 as number | null };
@@ -586,10 +586,10 @@ describe("registerGoalLoop IO glue (fake pi): compaction release (260906 Phase 1
         "Compaction complete. Invoke `lead-revive` (`ws-skill lead-revive`) with session key `lead-key`, then continue the immediate next step; if it awaits the user, end your turn.",
       );
       assert.match(buildCompactionResumeMessage(undefined), /with session key \(recover it first\),/);
-      assert.deepEqual(["hard", "autonomous", "advisory", "milestone", "reroute", undefined].map((route) => resumesAfterCompaction(route as never)), [true, true, false, false, false, false]);
+      assert.deepEqual(["hard", "autonomous", "advisory", "milestone", "reroute", undefined].map((route) => resumesAfterCompaction(route as never)), [false, true, false, false, false, false]);
     });
 
-    test("a lever compaction after a hard preparation sends exactly one resume followUp after release", async () => {
+    test("a lever compaction after hard preparation does not resume without a goal", async () => {
       const { pi, ctx, usage, preparations, resumes, lever, complete, clock } = resumeRun();
       usage.percent = 85;
       pi.handlers.get("turn_end")!({}, ctx);
@@ -597,10 +597,24 @@ describe("registerGoalLoop IO glue (fake pi): compaction release (260906 Phase 1
       await lever();
       assert.equal(resumes().length, 0, "nothing is sent before release");
       await complete();
-      assert.equal(resumes().length, 1);
-      assert.deepEqual(resumes()[0]!.options, { deliverAs: "followUp" });
-      assert.equal(pi.sentUserMessages.length, 1, "the resume is the only user message");
+      assert.equal(resumes().length, 0);
+      assert.equal(pi.sentUserMessages.length, 0);
       assert.equal(clock.pendingCount(), 0, "no goal reminder is scheduled");
+    });
+
+    test("hosted preparation markers suppress implicit resume only in their run", async () => {
+      for (const explicit of [false, true]) {
+        const { pi, ctx, lever, complete, resumes } = resumeRun(() => true);
+        pi.handlers.get("message_start")!({ message: { role: "user", content: "<!-- ws-pi-compaction-preparation --> prepare" } }, ctx);
+        await lever({ continue_after_compact: explicit });
+        await complete();
+        assert.equal(resumes().length, explicit ? 1 : 0);
+      }
+      const ordinary = resumeRun(() => true);
+      ordinary.pi.handlers.get("message_start")!({ message: { role: "user", content: "ordinary work" } }, ordinary.ctx);
+      await ordinary.lever();
+      await ordinary.complete();
+      assert.equal(ordinary.resumes().length, 1);
     });
 
     for (const completion of ["callback", "both"] as const) {
@@ -776,7 +790,7 @@ describe("registerGoalLoop IO glue (fake pi): compaction release (260906 Phase 1
       const { pi } = resumeRun();
       const description = (pi.tools.get("ws-compact") as unknown as { description: string }).description;
       assert.ok(description.endsWith(
-        "After compaction, an active goal keeps running. With no goal, a resume message follows when you called this on your own or after the hard-threshold notice; after the advisory nudge, a milestone, or a user /compact, the next move is the user's unless you set continue_after_compact to true because you hold known remaining work that does not await the user.",
+        "An active goal keeps running. Without a goal, an autonomous compaction resumes work. After a preparation notice, milestone, or user /compact, the next move is the user's. Set continue_after_compact to true when you have work that can proceed without user input.",
       ));
       assert.doesNotMatch(description, /Under an active goal the goal loop continues/);
     });
@@ -832,14 +846,14 @@ describe("registerGoalLoop IO glue (fake pi): compaction release (260906 Phase 1
         });
       }
 
-      test("false does not disable the resume of a hard or autonomous route", async () => {
+      test("false leaves hard preparation idle and preserves autonomous resume", async () => {
         const hard = resumeRun();
         hard.usage.percent = 85;
         hard.pi.handlers.get("turn_end")!({}, hard.ctx);
         assert.equal(hard.preparations().length, 1, "hard steer sent");
         await hard.lever({ continue_after_compact: false });
         await hard.complete();
-        assert.equal(hard.resumes().length, 1);
+        assert.equal(hard.resumes().length, 0);
         const auto = resumeRun();
         await auto.lever({ continue_after_compact: false });
         await auto.complete();
