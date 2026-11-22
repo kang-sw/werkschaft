@@ -53,8 +53,8 @@ const (
 // Fence lifecycle (2125, 2135). A capture row holds one legacy path's
 // original (state, bytes, digest) and at most one fence record: fence_state
 // with fence_kind, fence_digest and fence_mtime. fence_required,
-// fence_witness and the witness ownership (witness_id, witness_content) are
-// sticky: once set, they survive re-staging and restarts.
+// fence_witness and the last witness publication (witness_digest,
+// witness_mtime) are sticky: once set, they survive re-staging and restarts.
 //
 //	none   --apply over the staged original-->  intent  (record durable first)
 //	intent --publication durable----------->    landed
@@ -68,18 +68,20 @@ const (
 //     state only when the live state is not the record's publication, so
 //     bytes the migration wrote are never staged as an original.
 //  2. The record names exactly one publication for the current original. A
-//     replacement is the record's digest under its sentinel mtime. A removal
-//     is the path absent, with its witness (a sibling name, fixed per path)
-//     in the original's state and carrying the identity (witness_id) the
-//     moved file had when the record was written. The record changes only
-//     while the live state is not that publication, so a publication left
-//     by any earlier, interrupted attempt stays provable. No earlier state can prove a new
-//     record: a new sentinel differs from the live mtime, and the witness
-//     path is durably empty before a removal record is written.
-//  3. The migration deletes or overwrites only files it put in place: the
-//     witness path is emptied only of the file the last removal moved there
-//     (witness_id and witness_content), and any other file there refuses the
-//     removal (ErrWitnessOccupied).
+//     replacement is the record's digest under its sentinel mtime at the
+//     path. A removal is the path absent, with its witness (a sibling name,
+//     fixed per path) holding the original's bytes under the record's
+//     sentinel mtime, or absent when the original was. The record changes
+//     only while the live state is not that publication, so a publication
+//     left by any earlier, interrupted attempt stays provable. No earlier
+//     state can prove a new record: a new sentinel differs from the live
+//     mtime of the file it replaces, and the witness path is durably empty
+//     before a removal record is written.
+//  3. The migration overwrites or deletes at the witness path only the
+//     file its last removal published there (witness_digest under
+//     witness_mtime); any other entry there refuses the removal
+//     (ErrWitnessOccupied). The legacy path itself is deleted only once its
+//     bytes are published at the witness.
 //  4. A fence is applied only over the staged original or over its own
 //     proven publication; any other live state is refused (ErrFenceStale).
 //     A legacy write is therefore staged before it is fenced, never lost.
@@ -89,11 +91,9 @@ const (
 //     durable, so it stays pending until the fence is re-applied. Every
 //     rename and deletion the migration makes is itself durable (a
 //     directory sync on POSIX, a write-through rename on Windows). Only a
-//     re-applied removal, whose rename an interrupted attempt made, rests
+//     re-applied removal, whose deletion an interrupted attempt made, rests
 //     on a directory barrier alone (sync_*.go). On Windows that barrier
-//     holds only on NTFS, so the cutover refuses any other file system, and
-//     any volume whose identities carry no incarnation evidence (invariant
-//     2's witness identity, sameIncarnation):
+//     holds only on NTFS, so the cutover refuses any other file system:
 //     ErrCutoverUnsupported while no fence was ever recorded (legacy
 //     service may continue), ErrCutoverInterrupted once one was.
 //  6. Commit proceeds only when every path with fence_required has a landed
@@ -135,7 +135,8 @@ var sessionFiles = []struct{ name, store string }{
 
 // dashboardFiles are the fixed-name bundled files of the dashboard
 // directory. tracker-hooks.json is input configuration: it is captured for
-// its retained bytes and moved by the cutover, not imported into a table.
+// its retained bytes and published at its new input path by the cutover,
+// not imported into a table.
 var dashboardFiles = []struct{ name, store string }{
 	{"support.json", StoreSupport},
 	{"rail-layout.json", StoreRailLayout},
@@ -233,9 +234,8 @@ var (
 	// published on the path (other content, kind or witness).
 	ErrFenceConflict = errors.New("wsmeta: a different fence is already in place")
 	// ErrWitnessOccupied reports a removal fence refused because its witness
-	// path holds a file the migration did not move there, or because the
-	// legacy path resolves to the witness (a link to it, or the same file).
-	// The owner resolves it; the migration never deletes that file.
+	// path holds an entry the migration did not publish there. The owner
+	// resolves it; the migration never replaces or deletes that entry.
 	ErrWitnessOccupied = errors.New("wsmeta: the removal witness path is occupied")
 )
 
@@ -312,19 +312,28 @@ func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error
 }
 
 // ApplyRemovalFence removes the legacy file at rel, a staged capture with a
-// fixed bundled name, by moving it to witness. witness is a file name in
-// rel's directory: the new-daemon-only input path, fixed for rel once
-// chosen. Before the removal's record is written, the witness path is
-// emptied durably, of the file an earlier, invalidated removal moved there
-// and of nothing else (invariant 3). When rel was staged absent, nothing is
-// moved, so an owner's deletion is never resurrected through an old witness.
+// fixed bundled name, after publishing its staged original bytes at
+// witness: a file name in rel's directory, the new-daemon-only input path,
+// fixed for rel once chosen (owner decision, board 2162). The publication is
+// a replacement's (ApplyFence): the record (the original's digest and a
+// sentinel mtime) is durable first, the bytes go to witness under the
+// sentinel, and only then is rel deleted durably. A legacy symbolic link is
+// read through, so the witness becomes a regular copy of its target; the
+// link itself is deleted and its target left alone. Aliases changed during
+// the cutover (hard links, swapped links) are not fenced; the staged
+// original keeps their bytes.
 //
-// A pass proves the removal only while rel is absent and witness is in the
-// staged original's state. So an owner's own deletion of rel is never taken
-// for the fence, and the import never undoes it (2135). A moved symbolic
-// link still resolves the same way, because witness is in the same
-// directory; a link to the witness itself is refused. Re-applying and
-// durability follow ApplyFence.
+// When rel was staged absent, nothing is published: the witness path is
+// emptied, durably, of the migration's own earlier publication, so an
+// owner's deletion is never resurrected through it. An unreadable original
+// has no bytes to publish and refuses the cutover (ErrRemovalUnreadable).
+// The witness path holding anything the migration did not publish refuses
+// the removal (ErrWitnessOccupied).
+//
+// A pass proves the removal only while rel is absent and the witness holds
+// the publication, so an owner's own deletion of rel is never taken for the
+// fence, and the import never undoes it (2135). Re-applying follows
+// ApplyFence.
 func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) error {
 	if err := checkWitnessName(rel, witness); err != nil {
 		return err
@@ -339,29 +348,40 @@ func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) erro
 	witnessRel := path.Join(path.Dir(rel), witness)
 	abs := filepath.Join(s.dir, filepath.FromSlash(rel))
 	wabs := filepath.Join(s.dir, filepath.FromSlash(witnessRel))
-	plan, err := s.planFence(ctx, rel, fenceRemove, absentDigest, witnessRel)
+	plan, err := s.planFence(ctx, rel, fenceRemove, "", witnessRel)
 	if err != nil || plan.landed {
 		return err
 	}
 	if err := s.hit("fence-prepared"); err != nil {
 		return err
 	}
-	if !plan.proven && plan.state != CaptureAbsent {
-		// planFence left the witness path empty.
-		if err := wsstate.AtomicReplaceFile(abs, wabs); err != nil {
-			return err
-		}
-		if err := s.hit("fence-renamed"); err != nil {
+	if plan.state == CapturePresent {
+		// Published again when already proven, as ApplyFence does.
+		if err := s.publishFile(wabs, plan.bytes, time.Unix(plan.mtime, 0)); err != nil {
 			return err
 		}
 	}
-	if err := s.syncDir(filepath.Dir(abs)); err != nil {
+	switch _, err := wsstate.Lstat(abs); {
+	case err == nil:
+		if err := s.removeDurably(abs); err != nil {
+			return err
+		}
+		if err := s.hit("fence-deleted"); err != nil {
+			return err
+		}
+	case errors.Is(err, fs.ErrNotExist):
+		// An interrupted attempt deleted it: the barrier makes that
+		// deletion durable.
+		if err := s.syncDir(filepath.Dir(abs)); err != nil {
+			return err
+		}
+	default:
 		return err
 	}
 	if err := s.hit("fence-replaced"); err != nil {
 		return err
 	}
-	return s.markFenceLanded(ctx, rel, fenceRemove, absentDigest, 0, witnessRel)
+	return s.markFenceLanded(ctx, rel, fenceRemove, plan.digest, plan.mtime, witnessRel)
 }
 
 // checkWitnessName accepts a plain file name, local on every platform. It
@@ -407,7 +427,9 @@ func fixedBundledPath(rel string) bool {
 // fencePlan is what a fence application does after its record is settled.
 type fencePlan struct {
 	state  string // the staged original's state
-	mtime  int64  // the replacement's sentinel
+	digest string // the publication's digest
+	bytes  []byte // a removal's published bytes: the staged original
+	mtime  int64  // the publication's sentinel
 	proven bool   // the publication is already live
 	landed bool   // ...and marked landed: nothing left to do
 }
@@ -434,13 +456,19 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 			return fmt.Errorf("wsmeta: no staged capture %q to fence", rel)
 		}
 		if kind == fenceRemove && m.fenceWitness != "" && m.fenceWitness != witness {
-			return fmt.Errorf("%w: %s moves to %s", ErrFenceConflict, rel, m.fenceWitness)
+			return fmt.Errorf("%w: %s is published at %s", ErrFenceConflict, rel, m.fenceWitness)
 		}
 		abs := filepath.Join(s.dir, filepath.FromSlash(rel))
 		// Before the record: a fence that could not be made durable is never
 		// recorded or published.
-		if reason := cutoverRefusal(filepath.Dir(abs), true); reason != nil {
+		if reason := barrierRefusal(filepath.Dir(abs), true); reason != nil {
 			return s.refuseCutover(ctx, tx, reason)
+		}
+		if kind == fenceRemove {
+			if m.state == CaptureUnreadable {
+				return s.refuseCutover(ctx, tx, fmt.Errorf("%w: %s", ErrRemovalUnreadable, rel))
+			}
+			digest = m.digest
 		}
 		got := readLegacy(abs, s.opts.ReadFile)
 		if got.confirmable && m.state == CaptureUnreadable {
@@ -456,7 +484,12 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 		if unread {
 			return fmt.Errorf("%w: witness of %s", ErrLegacyUnread, rel)
 		}
-		plan = fencePlan{state: m.state, mtime: m.fenceMtime, proven: proven}
+		plan = fencePlan{state: m.state, digest: digest, mtime: m.fenceMtime, proven: proven}
+		if kind == fenceRemove && m.state == CapturePresent {
+			if err := tx.QueryRowContext(ctx, `SELECT bytes FROM legacy_captures WHERE path = ?`, rel).Scan(&plan.bytes); err != nil {
+				return err
+			}
+		}
 		if proven {
 			if m.fenceKind != kind || kind == fenceReplace && m.fenceDigest != digest {
 				return fmt.Errorf("%w: %s", ErrFenceConflict, rel)
@@ -476,178 +509,65 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 				kind, digest, plan.mtime, rel)
 			return err
 		}
-		wid, wcontent, err := s.prepareWitness(m, abs, filepath.Join(s.dir, filepath.FromSlash(witness)), got)
-		if errors.Is(err, errNoIncarnation) {
-			return s.refuseCutover(ctx, tx, err)
-		}
+		// The witness path is durably empty before the record, so the
+		// sticky witness columns always name what the path can hold, and no
+		// earlier publication proves the new record.
+		wabs := filepath.Join(s.dir, filepath.FromSlash(witness))
+		own, err := s.witnessOwned(m, wabs)
 		if err != nil {
 			return err
+		}
+		if own {
+			if err := s.removeDurably(wabs); err != nil {
+				return err
+			}
+		}
+		if m.state == CapturePresent {
+			plan.mtime = fenceSentinel().Unix()
 		}
 		if err := markCutoverStarted(ctx, tx); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'intent', fence_kind = ?, fence_digest = ?, fence_mtime = 0, fence_witness = ?, fence_required = 1, witness_id = ?, witness_content = ? WHERE path = ?`,
-			kind, digest, witness, wid, wcontent, rel)
+		wdigest := ""
+		if m.state == CapturePresent {
+			wdigest = digest
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'intent', fence_kind = ?, fence_digest = ?, fence_mtime = ?, fence_witness = ?, fence_required = 1, witness_digest = ?, witness_mtime = ? WHERE path = ?`,
+			kind, digest, plan.mtime, witness, wdigest, plan.mtime, rel)
 		return err
 	})
 	return plan, err
 }
 
-// prepareWitness empties the witness path wabs before a removal record is
-// written (invariants 2 and 3), and returns the identity and content the
-// move of abs will place there (none when the original is absent). Only the
-// file the last removal moved there is deleted, durably, so no earlier
-// witness can prove the new record; any other file refuses the removal, as
-// does a legacy path that resolves to the witness, which the move would
-// destroy.
-func (s *Store) prepareWitness(m captureMeta, abs, wabs string, got legacyRead) (id, content string, err error) {
-	if got.state != CaptureAbsent {
-		through, err := routesThrough(abs, wabs)
-		if errors.Is(err, errLinkChain) {
-			return "", "", fmt.Errorf("%w: %v", ErrWitnessOccupied, err)
-		}
-		if err != nil {
-			return "", "", fmt.Errorf("%w: %s resolution: %v", ErrLegacyUnread, filepath.Base(abs), err)
-		}
-		if through {
-			return "", "", fmt.Errorf("%w: %s resolves through it", ErrWitnessOccupied, filepath.Base(abs))
-		}
+// witnessOwned reports whether the witness path wabs holds the migration's
+// last removal publication there (invariant 3): a regular file with
+// witness_digest under exactly witness_mtime. An empty path is not owned
+// and free; any other entry refuses the removal.
+func (s *Store) witnessOwned(m captureMeta, wabs string) (bool, error) {
+	info, err := wsstate.Lstat(wabs)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
 	}
-	w := readLegacy(wabs, s.opts.ReadFile)
-	if denied := (legacyRead{state: CaptureUnreadable}); w.confirmable && m.witnessContent == witnessContent(denied) {
-		// The last removal moved a confirmed denial there, and the denial
-		// moved with it (fenceProven): the identity below decides whether
-		// this is still that file (re-review fd1cff5e).
-		w = denied
-	}
-	if w.transient {
-		return "", "", fmt.Errorf("%w: witness %s: %s", ErrLegacyUnread, filepath.Base(wabs), w.err)
-	}
-	if w.state != CaptureAbsent {
-		wid, err := fileIdentity(wabs)
-		if err != nil {
-			return "", "", fmt.Errorf("%w: witness %s: %v", ErrLegacyUnread, filepath.Base(wabs), err)
-		}
-		if !sameIncarnation(wid, m.witnessID) || witnessContent(w) != m.witnessContent {
-			return "", "", fmt.Errorf("%w: %s", ErrWitnessOccupied, filepath.Base(wabs))
-		}
-		if err := s.removeDurably(wabs); err != nil {
-			return "", "", err
-		}
-	}
-	if got.state == CaptureAbsent {
-		return "", "", nil
-	}
-	if id, err = fileIdentity(abs); err != nil {
-		return "", "", fmt.Errorf("%w: %s: %v", ErrLegacyUnread, filepath.Base(abs), err)
-	}
-	if !hasIncarnation(id) {
-		// The witness could never be told from a later file at its inode.
-		return "", "", fmt.Errorf("%w: %s", errNoIncarnation, filepath.Base(abs))
-	}
-	return id, witnessContent(got), nil
-}
-
-// errNoIncarnation reports an entry identity without incarnation evidence
-// (sameIncarnation): a removal from it could never be proven.
-var errNoIncarnation = errors.New("its identity carries no birth time or file index to tell it from a later file at the same inode")
-
-// witnessContent is the comparable content of a read: state and digest.
-func witnessContent(r legacyRead) string { return r.state + " " + r.digest }
-
-// fileIdentity is the identity of the directory entry at p itself (a link is
-// not followed), which a rename within the volume keeps (ident_*.go; a test
-// seam).
-var fileIdentity = entryIdentity
-
-// entryName is the canonical name of the entry name spells in dir: name
-// itself on POSIX, the long name of an NTFS short name on Windows
-// (entryname_*.go; a test seam).
-var entryName = platformEntryName
-
-// routesThrough reports whether resolving abs passes through the directory
-// entry wabs at any depth: abs itself, a link in its chain, or a directory
-// alias on the way. Clearing that entry would change what abs names, and
-// moving abs there would close a cycle. The walk resolves one component at
-// a time, as the kernel does. An entry matches wabs by its canonical name
-// (entryName, so an NTFS short name cannot hide it), compared without case
-// so a case-insensitive volume cannot hide it, in the same directory,
-// compared by identity so an alias of the directory cannot hide it. Other
-// names for the same file, hard links included, do not depend on the entry
-// and move intact. A chain longer than maxLinkHops cannot be
-// excluded and is an error.
-func routesThrough(abs, wabs string) (bool, error) {
-	wdir, err := os.Stat(filepath.Dir(wabs))
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("%w: witness %s: %v", ErrLegacyUnread, filepath.Base(wabs), err)
 	}
-	wname := filepath.Base(wabs)
-	sep := string(filepath.Separator)
-	vol := filepath.VolumeName(abs)
-	cur := vol + sep
-	todo := splitPath(abs[len(vol):])
-	for hops := 0; len(todo) > 0; {
-		part := todo[0]
-		todo = todo[1:]
-		switch part {
-		case ".":
-			continue
-		case "..":
-			cur = filepath.Dir(cur)
-			continue
+	if info.Mode().IsRegular() && m.witnessMtime != 0 {
+		w := readLegacy(wabs, s.opts.ReadFile)
+		if w.transient {
+			return false, fmt.Errorf("%w: witness %s: %s", ErrLegacyUnread, filepath.Base(wabs), w.err)
 		}
-		if d, err := os.Stat(cur); err != nil {
-			return false, err
-		} else if os.SameFile(d, wdir) {
-			name, err := entryName(cur, part)
-			if err != nil {
-				return false, err
-			}
-			if strings.EqualFold(name, wname) {
-				return true, nil
-			}
+		if publishedAs(w, m.witnessDigest, m.witnessMtime) {
+			return true, nil
 		}
-		next := filepath.Join(cur, part)
-		info, err := os.Lstat(next)
-		if errors.Is(err, fs.ErrNotExist) {
-			// Dangling: nothing beyond it is resolved.
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		if info.Mode()&fs.ModeSymlink == 0 {
-			cur = next
-			continue
-		}
-		if hops++; hops > maxLinkHops {
-			return false, fmt.Errorf("%w: %s", errLinkChain, abs)
-		}
-		t, err := os.Readlink(next)
-		if err != nil {
-			return false, err
-		}
-		if v := filepath.VolumeName(t); v != "" || filepath.IsAbs(t) || (t != "" && os.IsPathSeparator(t[0])) {
-			if v == "" {
-				v = filepath.VolumeName(cur)
-			}
-			cur = v + sep
-			t = t[len(filepath.VolumeName(t)):]
-		}
-		todo = append(splitPath(t), todo...)
 	}
-	return false, nil
+	return false, fmt.Errorf("%w: %s", ErrWitnessOccupied, filepath.Base(wabs))
 }
 
-// maxLinkHops bounds a link chain, as the kernel's own limit does.
-const maxLinkHops = 40
-
-// errLinkChain reports a link chain too long (or cyclic) to exclude a
-// dependency on the witness.
-var errLinkChain = fmt.Errorf("more than %d links to resolve", maxLinkHops)
-
-func splitPath(p string) []string {
-	return strings.FieldsFunc(p, func(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) })
+// publishedAs reports whether a read is the migration's publication of
+// digest under the sentinel mtime.
+func publishedAs(r legacyRead, digest string, mtime int64) bool {
+	return r.state == CapturePresent && r.digest == digest &&
+		r.mtime.Unix() == mtime && r.mtime.Nanosecond() == 0
 }
 
 // removeDurably deletes p so that the deletion survives a crash: a rename to
@@ -934,15 +854,15 @@ func contentDigest(data []byte) string {
 type captureMeta struct {
 	state, digest, fenceState, fenceDigest, fenceWitness, fenceKind string
 	fenceRequired                                                   bool
-	fenceMtime                                                      int64
-	witnessID, witnessContent                                       string
+	fenceMtime, witnessMtime                                        int64
+	witnessDigest                                                   string
 }
 
 // loadCaptureMeta reads one capture row's state and fence columns.
 func loadCaptureMeta(ctx context.Context, q querier, rel string) (captureMeta, bool, error) {
 	var m captureMeta
-	err := q.QueryRowContext(ctx, `SELECT state, digest, fence_state, fence_digest, fence_witness, fence_kind, fence_required, fence_mtime, witness_id, witness_content FROM legacy_captures WHERE path = ?`, rel).
-		Scan(&m.state, &m.digest, &m.fenceState, &m.fenceDigest, &m.fenceWitness, &m.fenceKind, &m.fenceRequired, &m.fenceMtime, &m.witnessID, &m.witnessContent)
+	err := q.QueryRowContext(ctx, `SELECT state, digest, fence_state, fence_digest, fence_witness, fence_kind, fence_required, fence_mtime, witness_digest, witness_mtime FROM legacy_captures WHERE path = ?`, rel).
+		Scan(&m.state, &m.digest, &m.fenceState, &m.fenceDigest, &m.fenceWitness, &m.fenceKind, &m.fenceRequired, &m.fenceMtime, &m.witnessDigest, &m.witnessMtime)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, false, nil
 	}
@@ -950,53 +870,29 @@ func loadCaptureMeta(ctx context.Context, q querier, rel string) (captureMeta, b
 }
 
 // fenceProven reports whether the live state is the publication of the
-// row's fence record (invariant 2). For a replacement that is the record's
-// digest under its exact sentinel time. For a removal it is rel absent, with
-// the witness in the staged original's state and, unless the original was
-// absent (nothing moved, the witness path stays empty), carrying the
-// identity recorded with the intent: the file the migration moved, not a
-// copy placed there. unread is set when the witness could not be read, or
-// its identity looked up, for a transient reason.
+// row's fence record (invariant 2): the record's digest under its exact
+// sentinel time, at the path for a replacement, at the witness with the path
+// absent for a removal. A removal of an absent original is proven by both
+// absent. unread is set when the witness could not be read for a transient
+// reason.
 func (s *Store) fenceProven(prev captureMeta, got legacyRead) (proven, unread bool) {
 	if prev.fenceState == FenceNone {
 		return false, false
 	}
-	if prev.fenceKind == fenceRemove {
-		if got.state != CaptureAbsent {
-			return false, false
-		}
-		wabs := filepath.Join(s.dir, filepath.FromSlash(prev.fenceWitness))
-		w := readLegacy(wabs, s.opts.ReadFile)
-		if w.confirmable && prev.state == CaptureUnreadable {
-			// A confirmed denial moves with the file (its ACL travels with
-			// it), so it is the witness's state while it persists; the
-			// identity below tells the moved file from a copy.
-			w = legacyRead{state: CaptureUnreadable, err: w.err}
-		}
-		if w.transient {
-			return false, true
-		}
-		if w.state != prev.state || w.digest != prev.digest {
-			return false, false
-		}
-		if prev.state == CaptureAbsent {
-			return true, false
-		}
-		if prev.witnessID == "" {
-			// No recorded identity: the publication cannot be told from a copy.
-			return false, false
-		}
-		id, err := fileIdentity(wabs)
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, false
-		}
-		if err != nil {
-			return false, true
-		}
-		return sameIncarnation(id, prev.witnessID), false
+	if prev.fenceKind != fenceRemove {
+		return publishedAs(got, prev.fenceDigest, prev.fenceMtime), false
 	}
-	return got.state == CapturePresent && got.digest == prev.fenceDigest &&
-		got.mtime.Unix() == prev.fenceMtime && got.mtime.Nanosecond() == 0, false
+	if got.state != CaptureAbsent {
+		return false, false
+	}
+	w := readLegacy(filepath.Join(s.dir, filepath.FromSlash(prev.fenceWitness)), s.opts.ReadFile)
+	if w.transient {
+		return false, true
+	}
+	if prev.fenceDigest == absentDigest {
+		return w.state == CaptureAbsent, false
+	}
+	return publishedAs(w, prev.fenceDigest, prev.fenceMtime), false
 }
 
 // stagePass captures every bundled file inside tx. It returns the pass
@@ -1005,14 +901,14 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 	res := StageResult{Attempt: attempt}
 	now := s.opts.Now().UTC().Format(time.RFC3339Nano)
 	existing := map[string]captureMeta{}
-	rows, err := tx.QueryContext(ctx, `SELECT path, state, digest, fence_state, fence_digest, fence_witness, fence_kind, fence_required, fence_mtime, witness_id, witness_content FROM legacy_captures`)
+	rows, err := tx.QueryContext(ctx, `SELECT path, state, digest, fence_state, fence_digest, fence_witness, fence_kind, fence_required, fence_mtime, witness_digest, witness_mtime FROM legacy_captures`)
 	if err != nil {
 		return res, err
 	}
 	for rows.Next() {
 		var p string
 		var m captureMeta
-		if err := rows.Scan(&p, &m.state, &m.digest, &m.fenceState, &m.fenceDigest, &m.fenceWitness, &m.fenceKind, &m.fenceRequired, &m.fenceMtime, &m.witnessID, &m.witnessContent); err != nil {
+		if err := rows.Scan(&p, &m.state, &m.digest, &m.fenceState, &m.fenceDigest, &m.fenceWitness, &m.fenceKind, &m.fenceRequired, &m.fenceMtime, &m.witnessDigest, &m.witnessMtime); err != nil {
 			rows.Close()
 			return res, err
 		}

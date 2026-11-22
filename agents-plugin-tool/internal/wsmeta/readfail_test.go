@@ -389,10 +389,10 @@ func TestConfirmedDenialTakesItsFence(t *testing.T) {
 	}
 }
 
-// A confirmed read denial moves with the file: a removal over a confirmed
-// unreadable original is proven by the witness's identity while the same
-// denial persists there, and a copy at the witness proves nothing.
-func TestConfirmedDenialMovesWithTheWitness(t *testing.T) {
+// An unreadable original has no bytes to publish at the new input path, so
+// its removal refuses the cutover: the legacy file is kept, nothing is
+// fenced, and Commit imports nothing (owner decision, board 2162).
+func TestUnreadableOriginalRefusesTheCutover(t *testing.T) {
 	ctx := context.Background()
 	setup := func(t *testing.T) (string, *Store) {
 		dir := legacyFixture(t)
@@ -407,13 +407,11 @@ func TestConfirmedDenialMovesWithTheWitness(t *testing.T) {
 		now := testNow
 		opts := testOpts()
 		opts.Now = func() time.Time { return now }
-		// The ACL travels with the hooks config's bytes, wherever it is.
 		opts.ReadFile = func(p string) ([]byte, error) {
-			raw, err := os.ReadFile(p)
-			if err == nil && string(raw) == hooksBytes {
+			if filepath.Base(p) == fenceHooks {
 				return nil, &fs.PathError{Op: "open", Path: p, Err: errACLDenied}
 			}
-			return raw, err
+			return os.ReadFile(p)
 		}
 		s := openTest(t, dir, opts)
 		for i := 0; i < UnreadConfirmPasses; i++ {
@@ -425,74 +423,35 @@ func TestConfirmedDenialMovesWithTheWitness(t *testing.T) {
 		}
 		return dir, s
 	}
+	refused := func(t *testing.T, err error, want error) {
+		t.Helper()
+		if !errors.Is(err, ErrRemovalUnreadable) || !errors.Is(err, want) {
+			t.Fatalf("err = %v, want %v and ErrRemovalUnreadable", err, want)
+		}
+	}
 
-	t.Run("proven by identity", func(t *testing.T) {
-		_, s := setup(t)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
-			t.Fatal(err)
-		}
-		if res := mustStage(t, s); len(res.Unread) != 0 || len(res.Pending) != 0 || len(res.Unfenced) != 0 {
-			t.Fatalf("stage after the removal = %+v, want it proven", res)
-		}
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
-			t.Fatalf("re-applied removal = %v", err)
-		}
-		if _, err := s.Commit(ctx, testCommit()); err != nil {
-			t.Fatal(err)
-		}
-		if c := captureMap(t, s)[fenceHooks]; c.State != CaptureUnreadable {
-			t.Fatalf("hooks capture = %+v, want the confirmed denial kept", c)
-		}
+	t.Run("before any fence", func(t *testing.T) {
+		dir, s := setup(t)
+		before := treeState(t, dir)
+		refused(t, s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness), ErrCutoverUnsupported)
+		_, err := s.Commit(ctx, testCommit())
+		refused(t, err, ErrCutoverUnsupported)
+		checkRefusedCutover(t, s, dir, before)
 	})
 
-	// The owner writes a new, readable config before the commit: the
-	// re-fence retires the denied witness it moved there, and nothing else.
-	t.Run("a re-fence retires the denied witness", func(t *testing.T) {
+	t.Run("after another fence", func(t *testing.T) {
 		dir, s := setup(t)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
 			t.Fatal(err)
 		}
-		const newHooks = `{"hooks":["new"]}`
-		put(t, dir, fenceHooks, newHooks)
-		mustStage(t, s)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
-			t.Fatalf("re-fence over the denied witness = %v", err)
+		refused(t, s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness), ErrCutoverInterrupted)
+		_, err := s.Commit(ctx, testCommit())
+		refused(t, err, ErrCutoverInterrupted)
+		if got := readRel(t, dir, fenceHooks); got != hooksBytes {
+			t.Fatalf("legacy hooks config = %q, want it kept", got)
 		}
-		if got := readRel(t, dir, hooksWitness); got != newHooks {
-			t.Fatalf("witness = %q, want the new config", got)
-		}
-		if _, err := s.Commit(ctx, testCommit()); err != nil {
-			t.Fatal(err)
-		}
-		if c := captureMap(t, s)[fenceHooks]; c.State != CapturePresent || string(c.Bytes) != newHooks {
-			t.Fatalf("hooks capture = %+v, want the new config", c)
-		}
-	})
-
-	t.Run("a re-fence never retires a denied copy", func(t *testing.T) {
-		dir, s := setup(t)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
-			t.Fatal(err)
-		}
-		replaceWith(t, dir, hooksWitness, hooksBytes)
-		put(t, dir, fenceHooks, `{"hooks":["new"]}`)
-		mustStage(t, s)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrWitnessOccupied) {
-			t.Fatalf("re-fence over a denied copy = %v, want ErrWitnessOccupied", err)
-		}
-		if raw, err := os.ReadFile(filepath.Join(dir, hooksWitness)); err != nil || string(raw) != hooksBytes {
-			t.Fatalf("the owner's copy changed: %q, %v", raw, err)
-		}
-	})
-
-	t.Run("a copy at the witness proves nothing", func(t *testing.T) {
-		dir, s := setup(t)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
-			t.Fatal(err)
-		}
-		replaceWith(t, dir, hooksWitness, hooksBytes)
-		if res := mustStage(t, s); !reflect.DeepEqual(res.Unfenced, []string{fenceHooks}) {
-			t.Fatalf("stage over a copied witness = %+v, want the removal unfenced", res)
+		if done, err := s.ImportComplete(ctx); err != nil || done {
+			t.Fatalf("import complete = %v, %v", done, err)
 		}
 	})
 }

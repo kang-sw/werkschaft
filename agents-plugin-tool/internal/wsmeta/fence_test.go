@@ -199,20 +199,29 @@ func TestInterruptedRetryKeepsTheFirstPublicationProvable(t *testing.T) {
 	}
 }
 
-// A publication renamed into place but interrupted before its directory
-// sync is not trusted by the import: it stays pending until a re-application
-// makes it durable.
+// A publication interrupted before it is marked landed is not trusted by
+// the import: it stays pending until a re-application makes it durable. A
+// replacement is interrupted after its rename, before its directory sync; a
+// removal after the legacy path's deletion.
 func TestUnsyncedPublicationNeedsReapplyBeforeCommit(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
-	armed := false
-	s := openTest(t, dir, crashAt("fence-renamed", &armed))
+	crash := ""
+	opts := testOpts()
+	opts.Fault = func(got string) error {
+		if got == crash {
+			crash = ""
+			return errCrash
+		}
+		return nil
+	}
+	s := openTest(t, dir, opts)
 	mustStage(t, s)
-	armed = true
+	crash = "fence-renamed"
 	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, errCrash) {
 		t.Fatalf("fence = %v", err)
 	}
-	armed = true
+	crash = "fence-deleted"
 	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
 		t.Fatalf("removal fence = %v", err)
 	}
@@ -274,7 +283,9 @@ func TestFencePublicationIsDurableBeforeItLands(t *testing.T) {
 	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"before-commit", "fence-prepared", "fence-renamed", "sync-dir:.", "fence-replaced", "before-commit"}; !reflect.DeepEqual(events, want) {
+	// A removal publishes the original at the witness, then deletes the
+	// legacy path durably (a rename to a dot name, synced, then unlinked).
+	if want := []string{"before-commit", "fence-prepared", "sync-file:dashboard:sentinel=true", "fence-renamed", "sync-dir:.", "sync-dir:.", "fence-deleted", "fence-replaced", "before-commit"}; !reflect.DeepEqual(events, want) {
 		t.Fatalf("removal events = %v, want %v", events, want)
 	}
 }
@@ -445,7 +456,7 @@ func TestForeignWriteOverFenceReturnsToLiveAuthority(t *testing.T) {
 }
 
 // An owner deleting the hooks config while its removal fence is pending
-// (the move never happened) is not undone: the re-applied removal of an
+// (nothing was published) is not undone: the re-applied removal of an
 // absent original leaves no witness either.
 func TestOwnerDeletionDuringPendingRemovalIsNotRestored(t *testing.T) {
 	ctx := context.Background()
@@ -484,8 +495,8 @@ func TestOwnerDeletionDuringPendingRemovalIsNotRestored(t *testing.T) {
 }
 
 // After a removal landed and the old daemon's owner recreated the config,
-// re-fencing moves the new config over the stale witness at the same input
-// path; the witness name is fixed per path.
+// re-fencing publishes the new config over the stale witness at the same
+// input path; the witness name is fixed per path.
 func TestRemovalRefenceReplacesAStaleWitness(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
@@ -520,9 +531,9 @@ func TestRemovalRefenceReplacesAStaleWitness(t *testing.T) {
 	}
 }
 
-// The witness is a plain sibling name on every platform, so the move stays
-// in the path's directory, and a relative link still resolves to the same
-// file there.
+// The witness is a plain sibling name on every platform, so the publication
+// stays in the path's directory. A legacy symbolic link is read through: the
+// witness becomes a regular copy of its target, and the target is kept.
 func TestRemovalWitnessStaysBesideItsPath(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
@@ -554,8 +565,17 @@ func TestRemovalWitnessStaysBesideItsPath(t *testing.T) {
 	if res := mustStage(t, s); len(res.Pending) != 0 || len(res.Unfenced) != 0 {
 		t.Fatalf("moved link not proven: %+v", res)
 	}
+	if info, err := os.Lstat(filepath.Join(dir, hooksWitness)); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("witness = %v, %v; want a regular copy", info, err)
+	}
 	if got := readRel(t, dir, hooksWitness); got != hooksBytes {
-		t.Fatalf("witness resolves to %q", got)
+		t.Fatalf("witness reads %q", got)
+	}
+	if got := readRel(t, dir, "hooks-src/conf.json"); got != hooksBytes {
+		t.Fatalf("link target = %q, want it kept", got)
+	}
+	if _, err := os.Lstat(abs); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy link left in place: %v", err)
 	}
 }
 
@@ -807,11 +827,11 @@ func TestStaleWitnessNeverProvesANewRemoval(t *testing.T) {
 	}
 }
 
-// A removal deletes or overwrites only the file the migration moved to the
-// witness path itself. A file there it did not put there (a sibling, or its
-// own leftover edited since) refuses the removal and is kept; so does a
-// legacy link that resolves to the witness, which the move would destroy.
-// Only fixed bundled paths, which keep their rows while absent, are removed.
+// A removal overwrites or deletes at the witness path only the file the
+// migration published there. A file there it did not publish (a sibling, or
+// its own publication edited since) refuses the removal and is kept. A
+// legacy link to the empty witness dangles and refuses the cutover. Only
+// fixed bundled paths, which keep their rows while absent, are removed.
 func TestRemovalNeverTouchesAFileItDidNotPlace(t *testing.T) {
 	ctx := context.Background()
 	const ownerConfig = `{"hooks":[{"command":["owner"]}]}`
@@ -889,8 +909,9 @@ func TestRemovalNeverTouchesAFileItDidNotPlace(t *testing.T) {
 		}
 		s := openTest(t, dir, testOpts())
 		mustStage(t, s)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrWitnessOccupied) {
-			t.Fatalf("removal of a link to its witness = %v", err)
+		// The link dangles: an unreadable original refuses the cutover.
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrRemovalUnreadable) {
+			t.Fatalf("removal of a link to its witness = %v, want ErrRemovalUnreadable", err)
 		}
 		if target, err := os.Readlink(abs); err != nil || target != hooksWitness {
 			t.Fatalf("link = %q, %v", target, err)
@@ -899,7 +920,7 @@ func TestRemovalNeverTouchesAFileItDidNotPlace(t *testing.T) {
 			t.Fatalf("witness created: %v", err)
 		}
 	})
-	t.Run("hard link to its own leftover moves intact", func(t *testing.T) {
+	t.Run("hard link to its own publication loses nothing", func(t *testing.T) {
 		dir := legacyFixture(t)
 		s := openTest(t, dir, testOpts())
 		mustStage(t, s)
@@ -910,8 +931,8 @@ func TestRemovalNeverTouchesAFileItDidNotPlace(t *testing.T) {
 			t.Fatal(err)
 		}
 		mustStage(t, s)
-		// The leftover entry goes; the move takes the link's own entry, so
-		// the file survives at the witness.
+		// Not fenced as an alias: the staged bytes are published again, so
+		// nothing is lost.
 		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
 			t.Fatal(err)
 		}
@@ -984,10 +1005,9 @@ func replaceWith(t *testing.T, dir, rel, content string) {
 	}
 }
 
-// A removal is proven only by the file the migration moved: the witness
-// must be in the original's state and carry the identity recorded with the
-// intent. A byte-identical copy the owner placed there proves nothing, and
-// an identity that cannot be looked up is unread, not a mismatch.
+// A removal is proven only by the migration's own publication at the
+// witness: the original's bytes under the record's sentinel mtime. A
+// byte-identical copy the owner placed there proves nothing.
 func TestCopiedWitnessNeverProvesARemoval(t *testing.T) {
 	ctx := context.Background()
 
@@ -1033,212 +1053,6 @@ func TestCopiedWitnessNeverProvesARemoval(t *testing.T) {
 			t.Fatalf("commit = %v, want ErrFencePending", err)
 		}
 	})
-
-	t.Run("an identity lookup failure is unread", func(t *testing.T) {
-		dir := legacyFixture(t)
-		s := openTest(t, dir, testOpts())
-		mustStage(t, s)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
-			t.Fatal(err)
-		}
-		prev := fileIdentity
-		t.Cleanup(func() { fileIdentity = prev })
-		fileIdentity = func(p string) (string, error) {
-			if filepath.Base(p) == hooksWitness {
-				return "", errors.New("sharing violation")
-			}
-			return prev(p)
-		}
-		if res := mustStage(t, s); !reflect.DeepEqual(res.Unread, []string{fenceHooks}) || len(res.Unfenced) != 0 {
-			t.Fatalf("stage with an inconclusive witness identity = %+v, want it unread", res)
-		}
-		if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrLegacyUnread) {
-			t.Fatalf("commit = %v, want ErrLegacyUnread", err)
-		}
-		fileIdentity = prev
-		if _, err := s.Commit(ctx, testCommit()); err != nil {
-			t.Fatal(err)
-		}
-		if c := captureMap(t, s)[fenceHooks]; c.State != CapturePresent {
-			t.Fatalf("hooks capture = %+v, want the original kept", c)
-		}
-	})
-}
-
-// withoutBirthTime makes entry identities read as device and inode alone,
-// as on a file system or kernel without birth times: for every entry, or,
-// with filesOnly, for every entry but directories.
-func withoutBirthTime(t *testing.T, filesOnly bool) {
-	t.Helper()
-	prev := fileIdentity
-	t.Cleanup(func() { fileIdentity = prev })
-	fileIdentity = func(p string) (string, error) {
-		id, err := prev(p)
-		if info, serr := os.Lstat(p); filesOnly && serr == nil && info.IsDir() {
-			return id, err
-		}
-		weak, _, _ := strings.Cut(id, btimeTag)
-		return weak, err
-	}
-}
-
-// Device and inode alone never prove a removal: once the moved file is
-// deleted, a new file can take its inode. The cutover is refused where
-// identities carry no incarnation evidence (a birth time, or the Windows
-// file index), and a witness whose identity lost it proves nothing.
-func TestReusableIdentityNeverProvesARemoval(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("refused before staging", func(t *testing.T) {
-		dir := legacyFixture(t)
-		withoutBirthTime(t, false)
-		s := openTest(t, dir, testOpts())
-		before := treeState(t, dir)
-		if _, err := s.Stage(ctx); !errors.Is(err, ErrCutoverUnsupported) {
-			t.Fatalf("Stage = %v, want ErrCutoverUnsupported", err)
-		}
-		checkRefusedCutover(t, s, dir, before)
-	})
-
-	t.Run("refused before the removal's record", func(t *testing.T) {
-		dir := legacyFixture(t)
-		s := openTest(t, dir, testOpts())
-		mustStage(t, s)
-		before := treeState(t, dir)
-		withoutBirthTime(t, true)
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrCutoverUnsupported) {
-			t.Fatalf("ApplyRemovalFence = %v, want ErrCutoverUnsupported", err)
-		}
-		checkRefusedCutover(t, s, dir, before)
-	})
-
-	t.Run("a new file at the reused inode", func(t *testing.T) {
-		dir := legacyFixture(t)
-		armed := false
-		s := openTest(t, dir, crashAt("fence-prepared", &armed))
-		mustStage(t, s)
-		abs := filepath.Join(dir, fenceHooks)
-		moved, err := entryIdentity(abs)
-		if err != nil {
-			t.Fatal(err)
-		}
-		armed = true
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
-			t.Fatalf("interrupted removal = %v", err)
-		}
-		if err := os.Remove(abs); err != nil {
-			t.Fatal(err)
-		}
-		replaceWith(t, dir, hooksWitness, hooksBytes)
-		// The copy took the deleted original's inode; only a birth time
-		// would tell them apart, and this lookup has none.
-		prev := fileIdentity
-		t.Cleanup(func() { fileIdentity = prev })
-		fileIdentity = func(p string) (string, error) {
-			if filepath.Base(p) == hooksWitness {
-				weak, _, _ := strings.Cut(moved, btimeTag)
-				return weak, nil
-			}
-			return prev(p)
-		}
-		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrFenceStale) {
-			t.Fatalf("retry over the new file = %v, want ErrFenceStale", err)
-		}
-		if c := captureMap(t, s)[fenceHooks]; c.FenceState == FenceLanded {
-			t.Fatalf("removal landed on a new file: %+v", c)
-		}
-		if _, err := s.Commit(ctx, testCommit()); err == nil {
-			t.Fatal("commit accepted a removal the migration never published")
-		}
-	})
-}
-
-// A re-fence never clears an owned witness that the new legacy path
-// resolves through, at any depth of its link chain: deleting it would
-// change what the path names, and the move would close a cycle.
-func TestRemovalNeverClearsAWitnessTheSourceResolvesThrough(t *testing.T) {
-	ctx := context.Background()
-	const backing = "hooks-backing.json"
-	for _, tc := range []struct {
-		name  string
-		chain func(t *testing.T, dir string) // links tracker-hooks.json through the witness
-	}{
-		{"through a second link", func(t *testing.T, dir string) {
-			mustSymlink(t, hooksWitness, filepath.Join(dir, "hooks-link2.json"))
-			mustSymlink(t, "hooks-link2.json", filepath.Join(dir, fenceHooks))
-		}},
-		{"through a directory alias", func(t *testing.T, dir string) {
-			mustSymlink(t, ".", filepath.Join(dir, "alias"))
-			mustSymlink(t, filepath.Join("alias", hooksWitness), filepath.Join(dir, fenceHooks))
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := legacyFixture(t)
-			put(t, dir, backing, hooksBytes)
-			abs := filepath.Join(dir, fenceHooks)
-			if err := os.Remove(abs); err != nil {
-				t.Fatal(err)
-			}
-			mustSymlink(t, backing, abs)
-			s := openTest(t, dir, testOpts())
-			mustStage(t, s)
-			// The legacy link moves to the witness, still naming the backing file.
-			if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
-				t.Fatal(err)
-			}
-			tc.chain(t, dir)
-			mustStage(t, s)
-			if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrWitnessOccupied) {
-				t.Fatalf("re-fence through the witness = %v, want ErrWitnessOccupied", err)
-			}
-			if target, err := os.Readlink(filepath.Join(dir, hooksWitness)); err != nil || target != backing {
-				t.Fatalf("witness = %q, %v; want the moved link kept", target, err)
-			}
-			if got := readRel(t, dir, fenceHooks); got != hooksBytes {
-				t.Fatalf("legacy path reads %q", got)
-			}
-		})
-	}
-}
-
-// A name that is another spelling of the witness entry (an NTFS 8.3 short
-// name) depends on it like the long name does, while an independent hard
-// link would not. entryName simulates the alias here; the Windows test of
-// platformEntryName checks a real short name.
-func TestRemovalNeverClearsAWitnessThroughAnAlternateName(t *testing.T) {
-	ctx := context.Background()
-	const alias = "TRACKE~1.JSO"
-	dir := legacyFixture(t)
-	s := openTest(t, dir, testOpts())
-	mustStage(t, s)
-	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
-		t.Fatal(err)
-	}
-	// The alias resolves to the witness entry; a hard link stands in for
-	// it on a file system without short names.
-	if err := os.Link(filepath.Join(dir, hooksWitness), filepath.Join(dir, alias)); err != nil {
-		t.Fatal(err)
-	}
-	prev := entryName
-	t.Cleanup(func() { entryName = prev })
-	entryName = func(d, name string) (string, error) {
-		if name == alias {
-			return hooksWitness, nil
-		}
-		return prev(d, name)
-	}
-	abs := filepath.Join(dir, fenceHooks)
-	mustSymlink(t, alias, abs)
-	mustStage(t, s)
-	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrWitnessOccupied) {
-		t.Fatalf("re-fence through the witness's alternate name = %v, want ErrWitnessOccupied", err)
-	}
-	if got := readRel(t, dir, hooksWitness); got != hooksBytes {
-		t.Fatalf("witness = %q, want the moved config kept", got)
-	}
-	if target, err := os.Readlink(abs); err != nil || target != alias {
-		t.Fatalf("legacy link = %q, %v; want it unmoved", target, err)
-	}
 }
 
 // mustSymlink creates link, skipping the test only where Windows refuses
@@ -1250,5 +1064,36 @@ func mustSymlink(t *testing.T, target, link string) {
 			t.Skipf("symbolic links need Developer Mode or the privilege: %v", err)
 		}
 		t.Fatal(err)
+	}
+}
+
+// A removal interrupted after its publication but before the legacy path's
+// deletion leaves the legacy file authoritative: the pass unfences it, and
+// the re-applied removal recognizes the witness as its own publication,
+// replaces it and completes.
+func TestRemovalInterruptedBeforeItsDeletionIsReapplied(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	armed := false
+	s := openTest(t, dir, crashAt("fence-renamed", &armed))
+	mustStage(t, s)
+	armed = true
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
+		t.Fatalf("interrupted removal = %v", err)
+	}
+	if got := readRel(t, dir, fenceHooks); got != hooksBytes {
+		t.Fatalf("legacy config = %q, want it kept", got)
+	}
+	if res := mustStage(t, s); !reflect.DeepEqual(res.Unfenced, []string{fenceHooks}) || !reflect.DeepEqual(res.Pending, []string{fenceHooks}) {
+		t.Fatalf("stage = %+v, want the removal unfenced and pending", res)
+	}
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatalf("re-applied removal = %v", err)
+	}
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRel(t, dir, hooksWitness); got != hooksBytes {
+		t.Fatalf("witness = %q", got)
 	}
 }

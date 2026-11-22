@@ -107,6 +107,13 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 			// before the legacy path stops being writable authority.
 			return fmt.Errorf("%w: %s", ErrFencePending, strings.Join(res.Stage.Pending, ", "))
 		}
+		if hooks, err := unreadableRemoval(ctx, tx); err != nil {
+			return err
+		} else if hooks != "" {
+			// Its bytes can never be published at the new input path, so
+			// nothing is imported and the legacy file is kept.
+			return s.refuseCutover(ctx, tx, fmt.Errorf("%w: %s", ErrRemovalUnreadable, hooks))
+		}
 		if len(res.Stage.Unread) > 0 {
 			// Importing it as invalid would lose the record or setting for
 			// good once the marker freezes legacy files.
@@ -162,6 +169,19 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 		}
 	}
 	return res, nil
+}
+
+// unreadableRemoval returns the path of an unreadable capture the cutover
+// must remove: the cache-root tracker-hooks.json, whose removal publishes
+// its bytes (ApplyRemovalFence).
+func unreadableRemoval(ctx context.Context, q querier) (string, error) {
+	var p string
+	err := q.QueryRowContext(ctx, `SELECT path FROM legacy_captures WHERE store = ? AND state = ? ORDER BY path LIMIT 1`,
+		StoreTrackerHooksConfig, CaptureUnreadable).Scan(&p)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return p, err
 }
 
 // errFuture marks a document written by a newer schema: it is kept in the

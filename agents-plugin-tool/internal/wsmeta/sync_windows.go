@@ -12,7 +12,7 @@ import (
 // already write-through (wsstate.AtomicReplaceFile), which MoveFileEx
 // documents as on disk when it returns, and a deletion is such a rename. So
 // this barrier is relied on alone only where the change came from an
-// interrupted attempt or another process: a re-applied removal whose rename
+// interrupted attempt or another process: a re-applied removal whose deletion
 // an earlier attempt made, and an original already absent. There it rests
 // on NTFS keeping one ordered metadata log per volume: the write-through
 // rename below returns only after the log is flushed through its own

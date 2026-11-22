@@ -248,9 +248,9 @@ var schema = []string{
 	// read under. fence_* is the migration-owned fence bookkeeping: a fence
 	// records its exact result digest before it replaces the file
 	// ('intent'), so a retry recognises a landed fence even when the crash
-	// came before 'landed'. witness_* names the file a removal fence last
-	// moved to its witness path (identity and content), so the migration
-	// only ever deletes its own leftover there. import_* is set by the
+	// came before 'landed'. witness_* is the publication a removal fence last
+	// made at its witness path (digest and sentinel mtime), so the migration
+	// only ever replaces or deletes its own file there. import_* is set by the
 	// import commit.
 	`CREATE TABLE IF NOT EXISTS legacy_captures (
 		path TEXT PRIMARY KEY,
@@ -269,8 +269,8 @@ var schema = []string{
 		fence_kind TEXT NOT NULL DEFAULT '' CHECK(fence_kind IN ('', 'replace', 'remove')),
 		fence_mtime INTEGER NOT NULL DEFAULT 0,
 		fence_witness TEXT NOT NULL DEFAULT '',
-		witness_id TEXT NOT NULL DEFAULT '',
-		witness_content TEXT NOT NULL DEFAULT '',
+		witness_digest TEXT NOT NULL DEFAULT '',
+		witness_mtime INTEGER NOT NULL DEFAULT 0,
 		import_status TEXT NOT NULL DEFAULT '',
 		import_detail TEXT NOT NULL DEFAULT ''
 	)`,
