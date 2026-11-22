@@ -697,7 +697,17 @@
       }
     },
     "261122-feat-ws-native-subagent-roster": {
-      "registered_at": "2026-11-22T09:16:51Z"
+      "registered_at": "2026-11-22T09:16:51Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T09:33:24Z",
+        "impl": {
+          "branch": "impl/develop/heat-showy-lego"
+        }
+      }
     },
     "261122-feat-ws-provider-auth-layer": {
       "registered_at": "2026-11-22T08:45:21Z",
