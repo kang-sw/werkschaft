@@ -2,6 +2,7 @@
 package wsgit
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -169,37 +170,89 @@ func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []stri
 // such a path would fail with "pathspec did not match any files" and abort the
 // whole commit, although the destination alone is the complete change.
 //
-// A path is dropped only when it is ticket-shaped, absent from status, and a
-// different path of the same stem is present in status. That keeps a mistyped
-// path with no sibling an error, and leaves tracked moves untouched: their old
-// path still carries a deletion or rename entry, so it stays in the grant.
-func dropVanishedTicketMoveSources(status StatusResult, paths []string) []string {
-	inStatus := map[string]bool{}
-	stemPaths := map[string]map[string]bool{}
-	for _, file := range status.ChangedFiles {
-		for _, path := range []string{file.Path, file.OldPath} {
-			if path == "" {
-				continue
-			}
-			cleaned := filepath.ToSlash(filepath.Clean(path))
-			inStatus[cleaned] = true
-			if _, stem, ok := ticketStatusStem(cleaned); ok {
-				if stemPaths[stem] == nil {
-					stemPaths[stem] = map[string]bool{}
-				}
-				stemPaths[stem][cleaned] = true
-			}
+// A path is dropped only when it is ticket-shaped, absent from status and from
+// the index (indexed), and a different path of the same stem is a staged
+// addition (index status A). Absent from status and the index means absent
+// from HEAD too: a HEAD entry missing from the index is a staged deletion in
+// status. That keeps a mistyped path with no sibling an error, leaves tracked
+// moves untouched (their old path still carries a deletion or rename entry),
+// and never lets an untracked or unstaged sibling stand in for the move: such
+// a sibling is staged only when the caller names it.
+func dropVanishedTicketMoveSources(status StatusResult, paths []string, indexed map[string]bool) []string {
+	vanished := map[string]bool{}
+	for _, path := range vanishedTicketMoveSources(status, paths) {
+		if !indexed[path] {
+			vanished[path] = true
 		}
+	}
+	if len(vanished) == 0 {
+		return paths
 	}
 	kept := make([]string, 0, len(paths))
 	for _, path := range paths {
-		cleaned := filepath.ToSlash(filepath.Clean(path))
-		if _, stem, ok := ticketStatusStem(cleaned); ok && !inStatus[cleaned] && len(stemPaths[stem]) > 0 {
+		if vanished[filepath.ToSlash(filepath.Clean(path))] {
 			continue
 		}
 		kept = append(kept, path)
 	}
 	return kept
+}
+
+// vanishedTicketMoveSources lists, cleaned, the ticket-shaped paths among
+// paths that are absent from status while a different path of the same stem
+// is a staged addition: the candidates dropVanishedTicketMoveSources drops
+// once the index confirms they are absent there too.
+func vanishedTicketMoveSources(status StatusResult, paths []string) []string {
+	inStatus := map[string]bool{}
+	stagedAdds := map[string]map[string]bool{}
+	for _, file := range status.ChangedFiles {
+		for _, path := range []string{file.Path, file.OldPath} {
+			if path != "" {
+				inStatus[filepath.ToSlash(filepath.Clean(path))] = true
+			}
+		}
+		if file.IndexStatus != "A" {
+			continue
+		}
+		cleaned := filepath.ToSlash(filepath.Clean(file.Path))
+		if _, stem, ok := ticketStatusStem(cleaned); ok {
+			if stagedAdds[stem] == nil {
+				stagedAdds[stem] = map[string]bool{}
+			}
+			stagedAdds[stem][cleaned] = true
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, path := range paths {
+		cleaned := filepath.ToSlash(filepath.Clean(path))
+		if seen[cleaned] {
+			continue
+		}
+		if _, stem, ok := ticketStatusStem(cleaned); ok && !inStatus[cleaned] && len(stagedAdds[stem]) > 0 {
+			seen[cleaned] = true
+			out = append(out, cleaned)
+		}
+	}
+	return out
+}
+
+// indexedPaths reports which of paths the index holds (git ls-files).
+func indexedPaths(ctx context.Context, runner Runner, root string, paths []string) (map[string]bool, error) {
+	indexed := map[string]bool{}
+	if len(paths) == 0 {
+		return indexed, nil
+	}
+	out, err := runner.RunGit(ctx, root, append([]string{"ls-files", "--cached", "-z", "--"}, paths...)...)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			indexed[filepath.ToSlash(filepath.Clean(path))] = true
+		}
+	}
+	return indexed, nil
 }
 
 // filterIndexDeleteSidePaths drops paths that are the delete side of a staged

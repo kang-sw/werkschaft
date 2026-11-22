@@ -494,17 +494,39 @@ func mustWriteGitTestFixture(t *testing.T, root, relPath, content string) {
 
 func TestDropVanishedTicketMoveSourcesDropsSourceOfFirstCommitMove(t *testing.T) {
 	status := ParseStatus([]byte("1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 bbb ai-docs/tickets/todo/260810-feat-demo.md\n"))
-	got := dropVanishedTicketMoveSources(status, []string{"ai-docs/tickets/idea/260810-feat-demo.md", "ai-docs/tickets/todo/260810-feat-demo.md", "docs/readme.md"})
+	paths := []string{"ai-docs/tickets/idea/260810-feat-demo.md", "ai-docs/tickets/todo/260810-feat-demo.md", "docs/readme.md"}
+	got := dropVanishedTicketMoveSources(status, paths, nil)
 	want := []string{"ai-docs/tickets/todo/260810-feat-demo.md", "docs/readme.md"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("paths = %#v, want %#v", got, want)
+	}
+	// A source the index still holds (tracked and unchanged) is no vanished
+	// source: it stays in the grant.
+	if got := dropVanishedTicketMoveSources(status, paths, map[string]bool{"ai-docs/tickets/idea/260810-feat-demo.md": true}); !reflect.DeepEqual(got, paths) {
+		t.Fatalf("indexed source dropped: %#v", got)
+	}
+}
+
+// TestDropVanishedTicketMoveSourcesNeedsStagedAddition: only a staged
+// addition of the same stem stands for the move. An untracked or a modified
+// sibling keeps the named path, so its pathspec error stands.
+func TestDropVanishedTicketMoveSourcesNeedsStagedAddition(t *testing.T) {
+	paths := []string{"ai-docs/tickets/idea/260810-feat-demo.md"}
+	for name, line := range map[string]string{
+		"untracked": "? ai-docs/tickets/todo/260810-feat-demo.md\n",
+		"modified":  "1 .M N... 100644 100644 100644 aaa aaa ai-docs/tickets/todo/260810-feat-demo.md\n",
+	} {
+		status := ParseStatus([]byte(line))
+		if got := dropVanishedTicketMoveSources(status, paths, nil); !reflect.DeepEqual(got, paths) {
+			t.Fatalf("%s sibling: paths = %#v, want unchanged", name, got)
+		}
 	}
 }
 
 func TestDropVanishedTicketMoveSourcesKeepsTrackedMoveAndMistypedPaths(t *testing.T) {
 	status := ParseStatus([]byte("2 R. N... 100644 100644 100644 aaa bbb R100 ai-docs/tickets/ready/260810-feat-demo.md\tai-docs/tickets/todo/260810-feat-demo.md\n"))
 	paths := []string{"ai-docs/tickets/todo/260810-feat-demo.md", "ai-docs/tickets/ready/260810-feat-demo.md", "ai-docs/tickets/todo/260810-feat-typo.md"}
-	got := dropVanishedTicketMoveSources(status, paths)
+	got := dropVanishedTicketMoveSources(status, paths, nil)
 	if !reflect.DeepEqual(got, paths) {
 		t.Fatalf("paths = %#v, want unchanged %#v (rename old path stays in the grant; a sibling-less path keeps its error)", got, paths)
 	}
@@ -566,5 +588,47 @@ func TestCommitFirstCommitTicketMoveNamesOldOrNewPath(t *testing.T) {
 				t.Fatalf("index still has staged paths after commit: %q", out)
 			}
 		})
+	}
+}
+
+// TestCommitNeverStagesUntrackedTicketSibling: naming a ticket path git never
+// knew, while an untracked file of the same stem sits in another status
+// directory, fails on the named path and leaves the sibling untracked; only a
+// staged addition stands in for a first-commit move.
+func TestCommitNeverStagesUntrackedTicketSibling(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	const named = "ai-docs/tickets/idea/260810-feat-demo.md"
+	const sibling = "ai-docs/tickets/todo/260810-feat-demo.md"
+	root := t.TempDir()
+	sparseTestInitGit(t, root)
+	mustWriteGitTestFixture(t, root, "README.md", "x\n")
+	// A tracked file in the sibling's directory makes status list the
+	// untracked sibling itself rather than its directory.
+	mustWriteGitTestFixture(t, root, "ai-docs/tickets/todo/.keep", "")
+	sparseTestRunGit(t, root, "add", "README.md", "ai-docs/tickets/todo/.keep")
+	sparseTestRunGit(t, root, "commit", "-m", "seed")
+	mustWriteGitTestFixture(t, root, sibling, "# Demo\n")
+
+	branch := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD")))
+	client := Client{Runner: ExecRunner{}, Verifier: func(string, []string) ([]string, error) { return nil, nil }}
+	_, err := client.Commit(context.Background(), root, CommitOptions{
+		Paths:          []string{named},
+		Title:          "docs(ticket): add demo",
+		AIContext:      []string{"User intent: commit a ticket path git never knew."},
+		ExpectedBranch: branch,
+	})
+	if err == nil || !strings.Contains(err.Error(), named) {
+		t.Fatalf("Commit error = %v, want the named path's pathspec failure", err)
+	}
+	if out := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "diff", "--cached", "--name-only"))); out != "" {
+		t.Fatalf("an untracked sibling was staged: %q", out)
+	}
+	if out := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "status", "--porcelain"))); out != "?? "+sibling {
+		t.Fatalf("status = %q, want the sibling still untracked", out)
+	}
+	if n := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "rev-list", "--count", "HEAD"))); n != "1" {
+		t.Fatalf("commits = %s, want only the seed", n)
 	}
 }
