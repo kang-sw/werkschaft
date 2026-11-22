@@ -377,3 +377,30 @@ Verification:
 - `go test ./internal/wsholder -run 'TestSpawnHTTP2Capture|TestCaptureNote|TestLaunchRing|TestAConsumersReplay'` ok; the Python holder suite runs 56 tests ok.
 - `go vet` is clean on the host and with `GOOS=windows`; `generate-package-assets.py --check` ok.
 - Breaking each fix in turn made its test fail.
+
+#### Edition (f2d4940d6) - 2026-11-22
+
+After develop was merged in (8b93a9c00), the delta review left two Critical findings and one Important. All three were fixed in f2d4940d6 and 024c1f7ab. The lead settled each fix direction, and they supersede the matching details of the Result and the 781c88c99 Edition. Each fix prefers unknown, or no cutoff, to a false headerless verdict.
+
+- **Stale cached worker log.** agy can replace its worker under the same front process while the daemon still holds the predecessor's log path.
+  - A tail that would be headerless now gives unknown when its last parsed line (early reading) comes before the boundary minus the skew. A main header in the window still gives header.
+  - No directory is rescanned.
+  - A two-log fixture caches worker A, then lets worker B take a fresh prompt and log its header in its own file; the result is unknown.
+  - agy writes one `Sending user message to conversation` line per prompt (I checked line counts only), so a fresh prompt or automatic continue gives the active log a current line.
+  - The parse fixtures are now in time order and end with the current request's own line.
+- **Tool completions are no longer boundaries.** This replaces the 781c88c99 rule that took the stream reader's receipt time.
+  - Holder records carry no receipt time, so nothing marks an instant at or before the causal completion. The update can wait in the holder's ring or behind stream backpressure while agy logs the next request's header.
+  - The last pending tool call completing now leaves the attempt with no boundary: no silence timer and no cut until the next prompt or automatic continue. Those boundaries are still taken before the send.
+  - `Event.ReceivedAt`, `LeadSpec.Now` and the mapper clock are removed. There is no holder protocol change, so old and new holders behave the same.
+  - A regression test holds the completion back before the mapper until 5 s after the next main header, outside a receipt-time window, and asserts no timer and no cut.
+- **Cutoff marker after the interrupt, off the loop.**
+  - `capture_note` is requested only after the interrupt branch runs. It takes the boundary and cutoff as of the verdict, runs from a goroutine, and only logs a failure.
+  - A test blocks the holder's `capture_note`. It checks that the interrupt was already sent when the call began and that the conversation's loop still answers.
+
+Verification:
+- `go test -timeout 120s ./internal/wsagent` ok in each of five groups: `^TestAgy`, `^TestLead`, `Steer|Holder`, `ModelWait|Wake|Background`, `Cutover|Unrequested|Exec`.
+- The stall, log, frame-trace and output-rate tests pass with `-race -count=3`.
+- `go vet` is clean on the host and with `GOOS=windows`.
+- Mutation checks: removing the stale-tail rule, restoring a receipt-time boundary, or making the marker synchronous each made a test fail.
+  - One mutation is not caught: an asynchronous marker started before the interrupt. Ordering rests on the `defer`, and such a marker cannot delay the cut.
+- holder.py and the shipped manifests are unchanged, so the Python holder suite and the Pi bundles did not need rerunning or regenerating.
