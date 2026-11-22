@@ -361,3 +361,94 @@ func TestHUDProjectionNativeRows(t *testing.T) {
 		}
 	}
 }
+
+// TestHUDNodeContextFigures pins the hover card's context figures: a linked
+// node carries its own session's usage (the band's scale and colour rule), an
+// unlinked node its row's tokens on the scale its runner carried (ws
+// thresholds, else the native window, else none), and an unknown stays absent.
+func TestHUDNodeContextFigures(t *testing.T) {
+	now := testNow
+	tok := func(n int64) *int64 { return &n }
+	run := func(a wslive.Agent, usage *wslive.UsageContext) HUDNode {
+		t.Helper()
+		sessions := map[string]Session{"self": liveSession("self", "/p", now), "r1": liveSession("r1", "/p", now)}
+		linked := liveSnap(now, wslive.Lead{})
+		if usage != nil {
+			linked.Usage = &wslive.Usage{Context: usage}
+		}
+		v := buildSessionView(pageInputs{
+			Session: sessions["self"], Snapshot: liveSnap(now, wslive.Lead{}, a), Now: now,
+			Lookup: lookupOf(sessions, map[string]*wslive.Snapshot{"r1": linked}),
+		})
+		if len(v.Tree.HUD.Roots) != 1 {
+			t.Fatalf("roots = %+v", v.Tree.HUD.Roots)
+		}
+		return v.Tree.HUD.Roots[0]
+	}
+	linked := wslive.Agent{ID: "pi:r1", ReplyID: "r1", AgentKind: wslive.AgentKindPi, Status: wslive.StatusRunning, ContextTokens: 7}
+	plain := wslive.Agent{ID: "n1", Status: wslive.StatusRunning, ContextTokens: 41_000}
+
+	// Normal: the session's own window, no ws thresholds.
+	n := run(linked, &wslive.UsageContext{Tokens: tok(104_000), Window: 272_000})
+	if n.ContextTokens != 104_000 || n.ContextWindow != 272_000 || n.ContextSoft != 0 || n.ContextLevel != "" || n.ContextText != "104k / 272k" {
+		t.Fatalf("linked normal = %+v", n)
+	}
+	// Past the ws soft threshold: the band's warn colour, scaled to the hard point.
+	n = run(linked, &wslive.UsageContext{Tokens: tok(156_000), Window: 1_000_000,
+		Compaction: &wslive.UsageCompaction{Soft: 140_000, Hard: 200_000}})
+	if n.ContextWindow != 200_000 || n.ContextSoft != 140_000 || n.ContextLevel != "warn" || n.ContextText != "156k / 200k" {
+		t.Fatalf("linked past soft = %+v", n)
+	}
+	// Linked with no known tokens: nothing, not the agent's stale figure.
+	n = run(linked, &wslive.UsageContext{Window: 272_000})
+	if n.ContextTokens != 0 || n.ContextText != "" || n.ContextWindow != 0 {
+		t.Fatalf("linked unknown tokens = %+v", n)
+	}
+	// Linked, tokens but no window: the figure alone.
+	n = run(linked, &wslive.UsageContext{Tokens: tok(41_000)})
+	if n.ContextTokens != 41_000 || n.ContextWindow != 0 || n.ContextLevel != "" || n.ContextText != "41.0k" {
+		t.Fatalf("linked no window = %+v", n)
+	}
+	// Linked session without a usage figure at all falls back to the agent's.
+	n = run(linked, nil)
+	if !n.Linked || n.ContextTokens != 7 || n.ContextText != "7" {
+		t.Fatalf("linked no usage = %+v", n)
+	}
+	// Unlinked: the adapter's token count, no window.
+	n = run(plain, nil)
+	if n.ContextTokens != 41_000 || n.ContextWindow != 0 || n.ContextText != "41.0k" {
+		t.Fatalf("unlinked = %+v", n)
+	}
+	// Unlinked with the scale its runner carried on the row: the ws thresholds
+	// scale the bar as the band's do, past soft reads warn.
+	withScale := plain
+	withScale.ContextTokens = 156_000
+	withScale.ContextWindow = 1_000_000
+	withScale.ContextCompaction = &wslive.UsageCompaction{Soft: 140_000, Hard: 200_000}
+	n = run(withScale, nil)
+	if n.ContextWindow != 200_000 || n.ContextSoft != 140_000 || n.ContextLevel != "warn" || n.ContextText != "156k / 200k" {
+		t.Fatalf("unlinked with ws thresholds = %+v", n)
+	}
+	// Thresholds unresolved: the native window scales the bar, no soft tick.
+	withScale.ContextCompaction = nil
+	withScale.ContextTokens = 104_000
+	withScale.ContextWindow = 272_000
+	n = run(withScale, nil)
+	if n.ContextWindow != 272_000 || n.ContextSoft != 0 || n.ContextLevel != "" || n.ContextText != "104k / 272k" {
+		t.Fatalf("unlinked with a native window = %+v", n)
+	}
+	// Thresholds alone (window unknown) still scale it.
+	withScale.ContextWindow = 0
+	withScale.ContextCompaction = &wslive.UsageCompaction{Hard: 200_000}
+	n = run(withScale, nil)
+	if n.ContextWindow != 200_000 || n.ContextText != "104k / 200k" {
+		t.Fatalf("unlinked with a hard point only = %+v", n)
+	}
+	// Unknown stays out of the JSON.
+	plain.ContextTokens = 0
+	n = run(plain, nil)
+	raw, _ := json.Marshal(n)
+	if strings.Contains(string(raw), "context") {
+		t.Fatalf("unknown context leaked into %s", raw)
+	}
+}

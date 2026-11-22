@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -587,4 +589,104 @@ func heldWorkerRejoinFailureClears(t *testing.T, steered bool) {
 		return len(last) >= 2 && last[len(last)-1].Result.Status == TurnDone &&
 			strings.Contains(last[len(last)-1].Result.Message, "after rejoin") && !h.record(id).TurnOpen
 	})
+}
+
+// TestWorkerMCPTokenWaitsForStartupRejoin: a graceful replace serves the MCP
+// route before the first holder scan restored the surviving workers'
+// bearers. A request with a restored worker's token in that window waits for
+// the scan and then resolves, instead of a hard 401 the harness would take
+// for "this server needs auth" and drop for the rest of its process; a token
+// never registered stays refused, at the scan's end.
+func TestWorkerMCPTokenWaitsForStartupRejoin(t *testing.T) {
+	h, _ := workerRecoveryHarness(t, BackendCodex, true)
+	id, _ := spawnHeldRecoveryWorker(t, h, BackendCodex, "workdir-write")
+	token := h.record(id).MCPToken
+	if token == "" {
+		t.Fatal("worker has no persisted MCP token")
+	}
+	h.runner.Close()
+	h.holders.restart()
+	entered, release := h.gateScan()
+	defer release()
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "the startup scan to be held open", entered)
+
+	// The route's decision, as wsdashboard.handleProxyHTTP takes it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		tok := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+		if _, _, ok := h.runner.ResolveMCPToken(tok); !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	post := func(tok string) <-chan int {
+		out := make(chan int, 1)
+		go func() {
+			req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
+			req.Header.Set("Authorization", "Bearer "+tok)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				out <- -1
+				return
+			}
+			resp.Body.Close()
+			out <- resp.StatusCode
+		}()
+		return out
+	}
+	restored, stranger := post(token), post("never-registered-token")
+	select {
+	case code := <-restored:
+		t.Fatalf("a restored worker's request answered %d while the startup scan was open", code)
+	case code := <-stranger:
+		t.Fatalf("an unknown token answered %d while the startup scan was open", code)
+	case <-time.After(300 * time.Millisecond):
+	}
+	release()
+	for name, want := range map[string]struct {
+		ch   <-chan int
+		code int
+	}{"restored": {restored, http.StatusOK}, "never-registered": {stranger, http.StatusUnauthorized}} {
+		select {
+		case code := <-want.ch:
+			if code != want.code {
+				t.Errorf("%s token answered %d, want %d", name, code, want.code)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s token's request never answered after the scan", name)
+		}
+	}
+	wait(t, "rejoin", h.runner.rejoined)
+	// Past the rejoin an unknown token is refused at once.
+	begin := time.Now()
+	if _, _, ok := h.runner.ResolveMCPToken("another-unknown"); ok || time.Since(begin) > time.Second {
+		t.Fatalf("after the rejoin an unknown token resolved (%v) or waited (%v)", ok, time.Since(begin))
+	}
+}
+
+// TestMCPTokenRestoredBetweenLookupAndWait: a token the first lookup misses
+// and the startup rejoin then restores, closing rejoined before the wait
+// begins, resolves; it is not refused for a rejoin that is already done.
+func TestMCPTokenRestoredBetweenLookupAndWait(t *testing.T) {
+	r := NewRunner(Options{Dir: t.TempDir()})
+	r.started.Store(true)
+	r.SetEndpoint("http://127.0.0.1:7")
+	restore := mcpAfterMiss
+	t.Cleanup(func() { mcpAfterMiss = restore })
+	var session *MCPSession
+	mcpAfterMiss = func() {
+		// The rejoin restores the token and finishes in the gap.
+		session = r.attachMCP("c1", "restored-token", map[string]string{"X": "1"}, "/w", 1, BackendCodex)
+		session.Started(nil, 1)
+		r.rejoinOnce.Do(func() { close(r.rejoined) })
+	}
+	begin := time.Now()
+	if _, _, ok := r.ResolveMCPToken("restored-token"); !ok {
+		t.Fatal("a token restored between the lookup and the wait was refused")
+	}
+	if time.Since(begin) > time.Second {
+		t.Fatalf("an already-finished rejoin was waited for: %v", time.Since(begin))
+	}
 }

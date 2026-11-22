@@ -354,6 +354,17 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .tt-pill[data-state="failed"]     { background: color-mix(in srgb, var(--ring-fail) 22%, var(--wb-card)); color: var(--ring-fail); }
 .tt-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
 .tt-meta code { font-size: 10.5px; background: var(--wb-muted); padding: 0 4px; border-radius: 4px; color: var(--wb-fg); }
+.tt-ctx { --c: var(--wb-primary); display: flex; align-items: center; gap: 7px; min-width: 0; font-variant-numeric: tabular-nums; }
+.tt-ctx.warn { --c: var(--wb-warn); }
+.tt-ctx.d-hot { --c: var(--wb-hot); }
+.tt-ctx.crit { --c: var(--wb-fail); }
+.tt-ctx.d-unknown { --c: var(--wb-muted-fg); }
+.tt-ctx .pct { flex: none; min-width: 30px; font: 800 12px/1 system-ui, sans-serif; color: var(--c); }
+.tt-ctx .bar { position: relative; flex: 1 1 auto; min-width: 40px; height: 7px; border-radius: 999px; background: var(--wb-muted); overflow: hidden; }
+.tt-ctx .fill { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 999px; }
+.tt-ctx .m-soft { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--wb-card); box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-fg) 26%, transparent); transform: translateX(-50%); }
+.tt-ctx .tok { flex: none; font: 600 10.5px/1 var(--wb-mono); color: var(--wb-muted-fg); white-space: nowrap; }
+.tt-ctx.d-unknown .tok { font-weight: 500; }
 .tt-chain { font-size: 10.5px; color: var(--wb-muted-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tt-task { font-size: 11px; color: var(--wb-fg); opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tt-hint { font-size: 10.5px; color: var(--wb-primary); font-weight: 700; padding-top: 3px; border-top: 1px solid var(--wb-line); font-family: var(--wb-mono); }

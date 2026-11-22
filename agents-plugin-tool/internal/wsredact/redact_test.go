@@ -1,6 +1,11 @@
 package wsredact
 
-import "testing"
+import (
+	"math/rand"
+	"regexp"
+	"strings"
+	"testing"
+)
 
 // TestURLCredentials pins the URL rule the tracker's remote display shares.
 func TestURLCredentials(t *testing.T) {
@@ -94,6 +99,145 @@ func TestSecretsLeavesOrdinaryTextAlone(t *testing.T) {
 	} {
 		if got := Secrets(in); got != in {
 			t.Errorf("Secrets(%q) = %q, want it unchanged", in, got)
+		}
+	}
+}
+
+// legacySecrets is the pre-Redact implementation of Secrets, kept to pin that
+// the span engine writes byte-identical text.
+func legacySecrets(s string) string {
+	s = URLCredentials(s)
+	for _, ru := range rules {
+		s = legacyMask(ru.re, s)
+	}
+	return s
+}
+
+func legacyMask(re *regexp.Regexp, s string) string {
+	matches := re.FindAllStringSubmatchIndex(s, -1)
+	if matches == nil {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range matches {
+		spans := [][2]int{{m[0], m[1]}}
+		if len(m) > 2 {
+			spans = spans[:0]
+			for g := 2; g < len(m); g += 2 {
+				if m[g] >= 0 && m[g+1] > m[g] {
+					spans = append(spans, [2]int{m[g], m[g+1]})
+				}
+			}
+		}
+		for _, sp := range spans {
+			b.WriteString(s[last:sp[0]])
+			b.WriteString(Mask)
+			last = sp[1]
+		}
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+var redactCorpus = []string{
+	"", "plain", "https://x-access-token:ghp_secret@github.com/o/r.git",
+	"https://@host/x", "https://h/p?a=&b&&c=1#f", "https://h/p?token=ghp_abcdefghijklmnop&x=1",
+	"password=x.ghp_12345678 and more", "PASSWORD=hunter2 ./run GITHUB_TOKEN=abc",
+	`{"api_key": "sk-ant-api03-abcdefghijklmnop", "n": 1}`,
+	"-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY----- tail",
+	"curl -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIi.sig\" https://u:p@h/x?k=v",
+	"mysql --password hunter2 -u root --token=AKIAIOSFODNN7EXAMPLE",
+	"token: https://a:b@h/?x=ghp_abcdefghijk", "secret='p w' auth: x",
+}
+
+// TestRedactTextEqualsLegacySecrets pins byte-identical output over a corpus
+// of overlapping and nested rule matches.
+func TestRedactTextEqualsLegacySecrets(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	inputs := append([]string(nil), redactCorpus...)
+	for i := 0; i < 400; i++ {
+		var b strings.Builder
+		for j := 0; j < 1+rng.Intn(5); j++ {
+			b.WriteString(redactCorpus[rng.Intn(len(redactCorpus))])
+			b.WriteString([]string{" ", "\n", "", "=", "&", "@"}[rng.Intn(6)])
+		}
+		inputs = append(inputs, b.String())
+	}
+	for _, in := range inputs {
+		got, matches := Redact(in)
+		if want := legacySecrets(in); got != want {
+			t.Fatalf("Redact(%q) = %q, want %q", in, got, want)
+		}
+		for i, m := range matches {
+			if got[m.Offset:m.Offset+len(Mask)] != Mask {
+				t.Fatalf("Redact(%q) match %d offset %d is not a mask in %q", in, i, m.Offset, got)
+			}
+			if m.OrigOffset < 0 || m.OrigOffset+m.Length > len(in) || m.Rule == "" {
+				t.Fatalf("Redact(%q) match %d out of range: %+v", in, i, m)
+			}
+			if i > 0 && (m.Offset < matches[i-1].Offset+len(Mask) || m.OrigOffset < matches[i-1].OrigOffset+matches[i-1].Length) {
+				t.Fatalf("Redact(%q) matches overlap or are unordered: %+v", in, matches)
+			}
+		}
+	}
+}
+
+// TestRedactReportsRuleAndOriginalLength pins the match report: the rule
+// name, the original length, and never the original text.
+func TestRedactReportsRuleAndOriginalLength(t *testing.T) {
+	in := "echo ghp_abcdefghijklmnopqrstuvwxyz0123456789 then PASSWORD=hunter2"
+	got, matches := Redact(in)
+	if got != "echo *** then PASSWORD=***" {
+		t.Fatalf("text = %q", got)
+	}
+	want := []Match{
+		{Offset: 5, OrigOffset: 5, Length: 40, Rule: "github_token"},
+		{Offset: 23, OrigOffset: 60, Length: 7, Rule: "secret_assignment"},
+	}
+	if len(matches) != len(want) {
+		t.Fatalf("matches = %+v", matches)
+	}
+	for i := range want {
+		if matches[i] != want[i] {
+			t.Errorf("match %d = %+v, want %+v", i, matches[i], want[i])
+		}
+	}
+}
+
+// TestRedactNestedMatchCoversBoth pins that a later rule swallowing an
+// earlier mask reports one match covering both originals.
+func TestRedactNestedMatchCoversBoth(t *testing.T) {
+	in := "password=x.ghp_12345678 end"
+	got, matches := Redact(in)
+	if got != "password=*** end" || len(matches) != 1 {
+		t.Fatalf("Redact = %q %+v", got, matches)
+	}
+	if m := matches[0]; m.Length != len("x.ghp_12345678") || m.OrigOffset != 9 || m.Rule != "secret_assignment" {
+		t.Fatalf("match = %+v", m)
+	}
+}
+
+// TestRedactEmptyQueryValueReportsZeroLength pins the zero-length mask an
+// empty query value gets.
+func TestRedactEmptyQueryValueReportsZeroLength(t *testing.T) {
+	got, matches := Redact("https://h/p?a=&b=1")
+	if got != "https://h/p?a=***&b=***" || len(matches) != 2 || matches[0].Length != 0 || matches[1].Length != 1 {
+		t.Fatalf("Redact = %q %+v", got, matches)
+	}
+}
+
+// TestMapOffset pins the input-to-output offset map, including an offset
+// inside a masked span, which maps to the mask's end.
+func TestMapOffset(t *testing.T) {
+	in := "ab PASSWORD=hunter2 cd"
+	out, matches := Redact(in)
+	if out != "ab PASSWORD=*** cd" {
+		t.Fatalf("out = %q", out)
+	}
+	for orig, want := range map[int]int{0: 0, 12: 12, 13: 15, 18: 15, 19: 15, 20: 16, len(in): len(out)} {
+		if got := MapOffset(matches, orig); got != want {
+			t.Errorf("MapOffset(%d) = %d, want %d", orig, got, want)
 		}
 	}
 }

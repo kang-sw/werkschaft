@@ -130,7 +130,7 @@ const ctx = vm.createContext({
   q(s, el) {
     if (s === '.tree-node > .node-slot > .hud-node') {
       const found = [];
-      (function walk(n) { if (n.className === 'hud-node') found.push(n); n.children.forEach(walk); })(el);
+      (function walk(n) { if (n.classList.contains('hud-node')) found.push(n); n.children.forEach(walk); })(el);
       return found;
     }
     if (s === 'details[data-key]' && el === tree) return treeDetails;
@@ -160,9 +160,10 @@ hudPayload = {
   lead: 'coord', completed: 5, folded: 3, peers: 5,
   roots: [
     { id: 'a1', label: 'alpha', harness: 'codex', state: 'holding', model: 'gpt-5.4', effort: 'high', elapsedMs: 12000,
+      contextTokens: 104000, contextWindow: 272000, contextText: '104k / 272k',
       children: [{ id: 'a2', label: 'beta', harness: 'claude', state: 'permission', replyId: 'r2', linked: true, task: 'bash ls' }] },
     { id: 'a3', label: 'gamma', harness: 'agy', state: 'idle', overflow: 2 },
-    { id: 'a4', label: 'delta', harness: 'pi', state: 'failed' }
+    { id: 'a4', label: 'delta', harness: 'pi', state: 'failed', contextTokens: 41000, contextText: '41.0k' }
   ]
 };
 const d1 = node('details'); d1.setAttribute('data-key', 'agent-a1');
@@ -215,6 +216,41 @@ hudRoots.listeners.mouseover[0]({ target: buttons[0] });
 assert.equal(tooltip.hidden, false);
 assert.equal(tooltip.querySelector('.tt-task').textContent, 'Read foo.go');
 assert.equal(tooltip.querySelector('.tt-hint').textContent, 'js.hud.hint.details');
+
+// Context row: A normal bar, B past the ws soft threshold, C window unknown, none unknown.
+const ctxRow = () => tooltip.querySelector('.tt-ctx');
+assert.equal(ctxRow().className, 'tt-ctx', 'A: normal level adds no colour class');
+assert.equal(ctxRow().querySelector('.pct').textContent, '38%');
+assert.equal(ctxRow().querySelector('.fill').style.width, '38.2%');
+assert.equal(ctxRow().querySelector('.bar').attrs['aria-valuenow'], '38');
+assert.equal(ctxRow().querySelector('.m-soft'), null, 'A: no soft tick without ws thresholds');
+assert.equal(ctxRow().querySelector('.tok').textContent, '104k / 272k');
+assert.equal(tooltip.children.indexOf(ctxRow()), tooltip.children.indexOf(tooltip.querySelector('.tt-meta')) + 1, 'row sits right under the meta row');
+Object.assign(hudPayload.roots[0], { contextTokens: 156000, contextWindow: 200000, contextSoft: 140000, contextLevel: 'warn', contextText: '156k / 200k' });
+ctx.agSwapped();
+assert.equal(ctxRow().classList.contains('warn'), true, 'B: the hovered card updates in place with the band colour class');
+assert.equal(ctxRow().querySelector('.pct').textContent, '78%');
+assert.equal(ctxRow().querySelector('.m-soft').style.left, '70.0%');
+assert.equal(ctxRow().querySelector('.tok').textContent, '156k / 200k');
+Object.assign(hudPayload.roots[0], { contextTokens: 230000, contextLevel: 'crit', contextText: '230k / 200k' });
+ctx.agSwapped();
+assert.equal(ctxRow().querySelector('.fill').style.width, '100.0%', 'overflow clamps the fill');
+assert.equal(ctxRow().querySelector('.bar').attrs['aria-valuenow'], '100');
+assert.equal(ctxRow().querySelector('.pct').textContent, '115%');
+hudRoots.listeners.mouseout[0]({ target: buttons[0], relatedTarget: null });
+hudRoots.listeners.mouseover[0]({ target: buttons[3] });
+assert.equal(ctxRow().classList.contains('d-unknown'), true, 'C: window unknown');
+assert.equal(ctxRow().querySelector('.bar'), null, 'C: no bar');
+assert.equal(ctxRow().querySelector('.tok').textContent, 'js.hud.context:41.0k');
+hudRoots.listeners.mouseout[0]({ target: buttons[3], relatedTarget: null });
+hudRoots.listeners.mouseover[0]({ target: buttons[2] });
+assert.equal(ctxRow(), null, 'unknown tokens: no row');
+hudRoots.listeners.mouseout[0]({ target: buttons[2], relatedTarget: null });
+delete hudPayload.roots[0].contextTokens; delete hudPayload.roots[0].contextWindow; delete hudPayload.roots[0].contextSoft; delete hudPayload.roots[0].contextLevel; delete hudPayload.roots[0].contextText;
+ctx.agSwapped();
+hudRoots.listeners.mouseover[0]({ target: buttons[0] });
+assert.equal(ctxRow(), null, 'a node that lost its figure drops the row');
+hudRoots.listeners.mouseout[0]({ target: buttons[0], relatedTarget: null });
 
 // .hud-folded hover shows tooltip, updates in place when count changes, and click opens #agpop
 hudRoots.listeners.mouseover[0]({ target: foldedBtn });

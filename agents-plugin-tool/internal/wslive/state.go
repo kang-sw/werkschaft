@@ -153,6 +153,12 @@ type Event struct {
 	Effort        string            `json:"effort,omitempty"`
 	ContextTokens *float64          `json:"contextTokens,omitempty"`
 	OutputTps     *float64          `json:"outputTps,omitempty"`
+	// ContextWindow and ContextCompaction are an agent event's context scale
+	// (Agent.ContextWindow, Agent.ContextCompaction): present values replace
+	// the held ones, as for ContextTokens. A positive window is authoritative
+	// for the pair: a nil compaction beside it clears the held thresholds.
+	ContextWindow     *float64         `json:"contextWindow,omitempty"`
+	ContextCompaction *UsageCompaction `json:"contextCompaction,omitempty"`
 	// Commands is a commands event's list. Command is a command event's
 	// typed line ("/name args"), its output in Text.
 	Commands []SlashCommand `json:"commands,omitempty"`
@@ -207,6 +213,8 @@ type agentState struct {
 	activeMs, turnStartedAt              int64
 	model, effort                        string
 	contextTokens                        int64
+	contextWindow                        int64
+	contextCompaction                    *UsageCompaction
 	outputTps                            float64
 	bgTasks                              int
 	holding, alive                       bool
@@ -800,7 +808,7 @@ func knownAgentKind(kind string) string {
 
 // hasTelemetry reports an event that carries any subagent telemetry field.
 func hasTelemetry(ev Event) bool {
-	return ev.Model != "" || ev.Effort != "" || ev.ContextTokens != nil || ev.OutputTps != nil
+	return ev.Model != "" || ev.Effort != "" || ev.ContextTokens != nil || ev.OutputTps != nil || ev.ContextWindow != nil || ev.ContextCompaction != nil
 }
 
 // setTelemetry takes the event's telemetry fields that are present and
@@ -814,6 +822,17 @@ func (st *State) setTelemetry(a *agentState, ev Event) {
 	}
 	if n := ev.ContextTokens; n != nil && *n >= 0 && *n <= MaxContextTokens {
 		a.contextTokens = int64(math.Round(*n))
+	}
+	windowKnown := false
+	if n := ev.ContextWindow; n != nil && *n >= 0 && *n <= MaxContextTokens {
+		a.contextWindow = int64(math.Round(*n))
+		windowKnown = a.contextWindow > 0
+	}
+	// An event that names the window is the whole scale: the compaction
+	// thresholds are resolved against that window, so a nil value clears
+	// thresholds the new window dropped. Without a window the held scale stays.
+	if windowKnown || ev.ContextCompaction != nil {
+		a.contextCompaction = normalizeCompaction(ev.ContextCompaction)
 	}
 	if r := ev.OutputTps; r != nil && *r >= 0 && *r <= MaxOutputTps {
 		a.outputTps = *r
@@ -1140,7 +1159,9 @@ func (st *State) SeedFinished(prev Snapshot) {
 			model:         cleanLine(st.scrub.scrub(p.Model), ModelRunes),
 			effort:        cleanLine(st.scrub.scrub(p.Effort), EffortRunes),
 			contextTokens: p.ContextTokens,
+			contextWindow: max(p.ContextWindow, 0),
 		}
+		a.contextCompaction = normalizeCompaction(p.ContextCompaction)
 		if p.ParentID != p.ID && agentIDPattern.MatchString(p.ParentID) {
 			a.parentID = p.ParentID
 		}
@@ -1204,14 +1225,16 @@ func (st *State) Snapshot(now int64) Snapshot {
 			AgentKind:     a.kind,
 			Harness:       a.harness,
 
-			Observed:        st.observed[a.id].clone(),
-			Model:           a.model,
-			Effort:          a.effort,
-			ContextTokens:   a.contextTokens,
-			OutputTps:       a.outputTps,
-			BackgroundTasks: a.bgTasks,
-			Holding:         a.holding,
-			Alive:           a.alive,
+			Observed:          st.observed[a.id].clone(),
+			Model:             a.model,
+			Effort:            a.effort,
+			ContextTokens:     a.contextTokens,
+			OutputTps:         a.outputTps,
+			ContextWindow:     a.contextWindow,
+			ContextCompaction: normalizeCompaction(a.contextCompaction),
+			BackgroundTasks:   a.bgTasks,
+			Holding:           a.holding,
+			Alive:             a.alive,
 		})
 	}
 	sort.Slice(snap.Agents, func(i, j int) bool {
@@ -1291,6 +1314,7 @@ type callIn struct {
 	EndedAt     int64  `json:"endedAt"`
 	Failed      bool   `json:"failed"`
 	ArgsPreview string `json:"argsPreview"`
+	ID          string `json:"id"`
 }
 
 var epochPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -1398,13 +1422,25 @@ func (st *State) normalizeCalls(raw []json.RawMessage, callCount int) []BatchCal
 		if json.Unmarshal(item, &in) != nil || strings.TrimSpace(in.Name) == "" {
 			continue
 		}
-		c := BatchCall{Name: cleanToolName(st.scrub.scrub(in.Name)), StartedAt: max(in.StartedAt, 0), Failed: in.Failed, ArgsPreview: st.argsPreview(in.ArgsPreview)}
+		c := BatchCall{Name: cleanToolName(st.scrub.scrub(in.Name)), StartedAt: max(in.StartedAt, 0), Failed: in.Failed, ArgsPreview: st.argsPreview(in.ArgsPreview), ID: callID(in.ID)}
 		if in.EndedAt >= c.StartedAt {
 			c.EndedAt = in.EndedAt
 		}
 		out = append(out, c)
 	}
 	return out
+}
+
+// callID is an adapter's call ID as a batch keeps it: the adapter already
+// normalized it (wsaudit.NormalizeID) and it is kept as sent, never
+// normalized again, so it still matches its audit events' call_id. One
+// that no normalization yields (over CallIDMaxBytes) or that is not text
+// (invalid UTF-8) is dropped.
+func callID(id string) string {
+	if len(id) > CallIDMaxBytes || !utf8.ValidString(id) {
+		return ""
+	}
+	return id
 }
 
 // argsPreviewScanBytes bounds the text argsPreview scans: an adapter may

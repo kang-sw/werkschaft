@@ -213,6 +213,9 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		// The child's authority, which a backend that sandboxes its worker
 		// maps itself (codexWorkerMode).
 		PermissionLevel: level,
+		// A Claude worker reports its session state and background tasks,
+		// so a task it still runs keeps it from idling (idleNow).
+		SessionState: rec.Backend == BackendClaude && isAgentWorkerProfile(rec.Profile),
 		// An agent.spawn child delegates through agent.spawn only.
 		RemoveSubagents: RemovesSubagents(rec),
 	}

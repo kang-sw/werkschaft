@@ -1437,7 +1437,24 @@ from a support conversation:
   thinking, and signature delta lines out of its ring and client stream.
   It skips only whole stdout lines that fit one record and match from the
   line's start; split or unmatched lines stay. Skipped lines consume no
-  sequence number.
+  sequence number. A daemon that sets the holder manager's `AuditChannel`
+  offers the holder audit channel on attach (an optional `audit` field; an
+  older holder ignores it and attaches as before, an older daemon never
+  offers it, and a holder without `--ring-skip` declines it). On a negotiated connection the holder tees each skipped line
+  as an unsequenced `audit` event anchored on the last kept stdout sequence
+  and fences every kept run (`audit_fence`); lines skipped while no daemon
+  is attached, or past the audit queue, are only counted in the fence. The
+  daemon's audit capture (`wsagent/audit_capture.go`) orders tee lines
+  before the kept lines a fence releases and never blocks the holder reader
+  or the stream mapper. Capture runs only when the runner has an
+  `AuditSink`; the shipped daemon sets neither yet (the audit store,
+  ticket `261119-feat-ws-audit-ring-store`, wires both). The Claude adapter
+  writes `meta.request = {id, prev_id, ctx}` on every event from a model
+  request (`wsaudit.RequestChain`): one chain for the lead and one per
+  native subagent (`parent_tool_use_id`), advancing once per assistant
+  message ID, text-only messages included; `ctx` is input + cache read +
+  cache creation tokens and is absent without usage. Codex streams carry
+  usage but no request ID, so their events omit it.
 - **Access.** Spawn, settings, stop, restart, close, and an approval answer take the
   trusted gate (`wsdashboard.TrustedWrite`): 404 to any viewer that is not a
   browser on this machine, 403 without the daemon's own `Origin`. A LAN
@@ -1739,6 +1756,14 @@ parent report. A lead parent instead restores its held turn, adopts the child,
 and receives one late report. An old-pruned child leaves an unowned holder for
 the successor's orphan sweep.
 
+A Claude `agent.spawn` worker is launched with session-state lines on and
+reads its harness's background-task list (`StartSpec.SessionState`), as a lead
+does: a worker whose native background task (for example a Bash
+`run_in_background`) still runs is not idle, so neither the idle timer nor the
+stale-route restart (`restartIfDue`) stops it, and its done turn is held until
+the task ends and any wake-up turn it brings settles. A worker started before
+this change has no such lines and keeps the old behaviour until its next launch.
+
 Interrupt remains turn-scoped. Idle timeout, explicit stop, close, and expiry
 end the holder and revoke its tokens. A legacy direct worker's open turn
 settles `interrupted` once before queued input starts its next held process.
@@ -1746,6 +1771,10 @@ Output lost from the holder's ring uses existing backend recovery. A backend
 that cannot reconcile the lost turn reports failure honestly. Re-arming agy's
 model-wait watchdog across replacement remains outside this contract, matching
 held leads.
+A bearer the successor has not registered yet (its startup holder scan is
+still restoring the surviving workers') waits for that rejoin, up to 8 s
+(`mcpRejoinWait`), then resolves; past the rejoin an unknown bearer is a 401 at
+once, so a hard 401 never reaches a restored worker in that window.
 MCP calls during drain may receive 503. Windows survival requires a
 restart-safe holder; one still inside its starter's job object may end with it.
 

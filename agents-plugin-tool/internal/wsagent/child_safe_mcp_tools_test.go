@@ -23,6 +23,7 @@ var testMutatingAndExcludedWSTools = []string{
 	"agent.interrupt",
 	"agent.list",
 	"agent.tiers",
+	"cron",
 	"whiteboard.update",
 	"config.tune",
 	"wiki.query",

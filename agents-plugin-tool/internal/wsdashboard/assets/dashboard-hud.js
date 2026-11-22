@@ -107,7 +107,9 @@
         elapsedMs: Number(node.elapsedMs) || 0, activeSince: Number(node.activeSince) || 0,
         chain: Array.isArray(node.chain) ? node.chain : [],
         task: node.task || ownTasks[node.id] || "", overflow: Number(node.overflow) || 0,
-        native: !!node.native, startedAt: Number(node.startedAt) || 0, endedAt: Number(node.endedAt) || 0, endUnknown: !!node.endUnknown
+        native: !!node.native, startedAt: Number(node.startedAt) || 0, endedAt: Number(node.endedAt) || 0, endUnknown: !!node.endUnknown,
+        contextTokens: Number(node.contextTokens) || 0, contextWindow: Number(node.contextWindow) || 0,
+        contextSoft: Number(node.contextSoft) || 0, contextLevel: node.contextLevel || "", contextText: node.contextText || ""
     });
     entry.el = btn;
     hudRegistry[node.id] = entry;
@@ -302,6 +304,7 @@
     }
     if (d.overflow > 0) elSpan.appendChild(doc.createTextNode(" \u00b7 " + wsT("js.hud.deeper", d.overflow)));
     meta.appendChild(elSpan); tt.appendChild(meta);
+    var ctx = hudContextRow(d); if (ctx) tt.appendChild(ctx);
     var chain = doc.createElement("div"); chain.className = "tt-chain";
     chain.textContent = [hudLead].concat(d.chain, [d.label]).filter(Boolean).join(" \u203a ");
     tt.appendChild(chain);
@@ -311,6 +314,35 @@
     tt.appendChild(hint);
     tt.hidden = false;
     hudPositionTooltip(tt, entry.el);
+  }
+  // hudContextRow is the card's context occupancy row: percent, bar, ws soft
+  // tick and "used / window" text when the window is known; the bare token
+  // figure when it is not; nothing when the tokens are not known either. The
+  // colour class (contextLevel) is the status band's, computed server-side.
+  function hudContextRow(d) {
+    if (!(d.contextTokens > 0)) return null;
+    var row = doc.createElement("div"); row.className = "tt-ctx";
+    if (!(d.contextWindow > 0)) {
+      row.classList.add("d-unknown");
+      var only = doc.createElement("span"); only.className = "tok"; only.textContent = wsT("js.hud.context", d.contextText);
+      row.appendChild(only);
+      return row;
+    }
+    if (d.contextLevel) row.classList.add(d.contextLevel);
+    var raw = d.contextTokens / d.contextWindow * 100;
+    var pct = doc.createElement("span"); pct.className = "pct"; pct.textContent = Math.round(raw) + "%";
+    var bar = doc.createElement("span"); bar.className = "bar";
+    bar.setAttribute("role", "progressbar"); bar.setAttribute("aria-valuemin", "0"); bar.setAttribute("aria-valuemax", "100");
+    bar.setAttribute("aria-valuenow", String(Math.min(100, Math.max(0, Math.round(raw)))));
+    var fill = doc.createElement("span"); fill.className = "fill"; fill.style.width = Math.min(100, Math.max(0, raw)).toFixed(1) + "%";
+    bar.appendChild(fill);
+    if (d.contextSoft > 0 && d.contextSoft < d.contextWindow) {
+      var soft = doc.createElement("span"); soft.className = "m-soft"; soft.style.left = (d.contextSoft / d.contextWindow * 100).toFixed(1) + "%";
+      bar.appendChild(soft);
+    }
+    var tok = doc.createElement("span"); tok.className = "tok"; tok.textContent = d.contextText;
+    row.appendChild(pct); row.appendChild(bar); row.appendChild(tok);
+    return row;
   }
   // hudLifecycle is a native row's start and end; a row whose observation
   // ended with the outcome unknown (endUnknown) reads as such, never as a

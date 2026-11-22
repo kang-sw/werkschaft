@@ -45,10 +45,15 @@ type conv struct {
 	held          int // inbox messages, maintained at inbox changes/drains under mu
 	hidden        bool
 	contextTokens *float64
-	outputTps     *float64
-	observed      *wslive.ModelObservation
-	observations  []wslive.ModelObservation
-	batches       []wslive.BatchView
+	// contextWindow and contextCompaction are the context scale of the
+	// latest status that knew its window, kept while a later one does not
+	// (State.ContextWindow, State.ContextCompaction).
+	contextWindow     int64
+	contextCompaction *wslive.UsageCompaction
+	outputTps         *float64
+	observed          *wslive.ModelObservation
+	observations      []wslive.ModelObservation
+	batches           []wslive.BatchView
 	// rejoinKeyPending retries a failed attach's key check on State reads
 	// until it succeeds; healthy reads never touch the key store.
 	rejoinKeyPending bool
@@ -979,6 +984,7 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		}
 	}
 	st.ContextTokens = c.contextTokens
+	st.ContextWindow, st.ContextCompaction = c.contextWindow, cloneUsageCompaction(c.contextCompaction)
 	if c.observed != nil {
 		observed := *c.observed
 		st.Observed = &observed
@@ -1319,6 +1325,10 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 				}
 				if tokens >= 0 && tokens <= wslive.MaxContextTokens && (c.contextTokens == nil || *c.contextTokens != tokens) {
 					c.contextTokens, usageChanged = &tokens, true
+				}
+				if ctx.Window > 0 && (c.contextWindow != ctx.Window || !reflect.DeepEqual(c.contextCompaction, ctx.Compaction)) {
+					comp := cloneUsageCompaction(ctx.Compaction)
+					c.contextWindow, c.contextCompaction, usageChanged = ctx.Window, comp, true
 				}
 			}
 			if rate := ev.OutputTps; rate != nil && *rate >= 0 && *rate <= wslive.MaxOutputTps && (c.outputTps == nil || *c.outputTps != *rate) {

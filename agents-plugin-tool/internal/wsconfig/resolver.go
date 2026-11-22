@@ -308,7 +308,7 @@ func deleteOverrideInFile(path, itemKey string) error {
 			return errConfigUnchanged
 		}
 		delete(cfg.Overrides, itemKey)
-		return nil
+		return checkSet(itemKey, cfg.Overrides)
 	})
 	return err
 }
@@ -339,7 +339,7 @@ func setOverrideInFileRMW(path, itemKey string, transform func(current string) s
 			cfg.Overrides = map[string]string{}
 		}
 		cfg.Overrides[itemKey] = value
-		return nil
+		return checkSet(itemKey, cfg.Overrides)
 	})
 	return err
 }

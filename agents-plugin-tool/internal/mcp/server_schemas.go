@@ -943,6 +943,29 @@ func tools() []map[string]any {
 			},
 		},
 		{
+			"name":        "cron",
+			"description": `Schedule prompts for yourself: when a cron expression matches, the daemon sends the prompt to this session as a cron envelope. Hosted lead sessions only. No arguments lists; add {name, expr, prompt, tz?}; delete takes an id or name. Names are unique. expr: 5-field cron (lists, ranges, steps, names, 7 = Sunday; day-of-month and day-of-week OR when both restricted) or @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly; @reboot and never-firing forms are refused. tz: UTC, Z or +HH:MM/-HH:MM (-12:00 to +14:00), default UTC. A fire arrives as your next turn; while one waits, further fires are dropped. Fires missed while down are skipped, not caught up. 32 schedules per session, 16 KiB a prompt; kept across restarts.`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty("Ignored."),
+					"add": map[string]any{
+						"type":        "object",
+						"description": "Register a schedule.",
+						"properties": map[string]any{
+							"name":   stringProperty("Unique in your session, 64 characters at most."),
+							"expr":   stringProperty("5-field cron or a macro."),
+							"prompt": stringProperty("Message delivered at each match."),
+							"tz":     stringProperty("UTC, Z or +HH:MM/-HH:MM. Default UTC."),
+						},
+						"required": []string{"name", "expr", "prompt"},
+					},
+					"delete": stringProperty("Schedule id or name to delete."),
+					"format": stringProperty(formatPropertyDescription),
+				},
+			},
+		},
+		{
 			"name":        dashboardIntakeTool,
 			"description": `Adapter-only: agents must not call. Applies ordered events to the session's dashboard state; each has a kind and optional at (epoch ms). Kinds: reset (clears live state; send at adapter start); turn_start {origin?: terminal|whiteboard|mail}; turn_end {reason?}; agent {agentId?, parentId?, label?, sessionKey?, status?: running|done|failed, caption?, batches?, model?, effort?, contextTokens?, outputTps?} updates the lead or one subagent; permission {agentId?, tool, args} or {agentId?, clear: true}; reply {text, final?} replaces the reply so far, final moves it to the conversation; user {text, origin?}; status {context?, limits?, cost?}; compact {phase: start|end|failed, trigger?}; commands {commands: [{name, description?, source?, layer?}]}; command {command, text?}. Send replies at most 10 times a second. With the dashboard off nothing is recorded. Send status, compact, commands or command only while the latest result's accepts line names it.`,
 			"inputSchema": map[string]any{
@@ -961,7 +984,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        dashboardInboxDrainTool,
-			"description": `Adapter-only: agents must not claim messages. Atomically claim held messages, steering first then oldest; claimed messages cannot be cancelled or steered. Inject each ws:user envelope as a user message. Run command entries (/name args) natively, not as messages; a batch splits at each. steer_only claims steering at a running turn's tool boundary; interrupt_only claims text-free interrupts: stop a turn started before sent_at, discard older interrupts. Full drain drops interrupts. Works with dashboard off. Text by default; format=json for structured messages.`,
+			"description": `Adapter-only: agents must not claim messages. Atomically claim held messages, steering first then oldest; claimed messages cannot be cancelled or steered. Inject each ws:user envelope, and each scheduled-prompt (cron) envelope, as a user message. Run command entries (/name args) natively, not as messages; a batch splits at each. steer_only claims steering at a running turn's tool boundary; interrupt_only claims text-free interrupts: stop a turn started before sent_at, discard older interrupts. Full drain drops interrupts. Works with dashboard off. Text by default; format=json for structured messages.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

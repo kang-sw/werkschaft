@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: b3f3f16065d5b483
 sage-review-completeness-reviewed: b3f3f16065d5b483
+completed: 2026-11-22
 ---
 
 # Audit query and search API
@@ -224,3 +225,56 @@ combined; and more than 500 equal-nanosecond events across pages without
 gaps or duplicates. Confirm requests without UTC bounds keep their contract,
 call lookup stays ID-based, and auth matches `/history`. Verify that capture
 keeps up during a long search.
+
+### Result (12f32abf8) - 2026-11-22
+
+Landed on `impl/develop/envy-salt-drone` (base 0e5199d37) in b829e4956 and
+the review fixes in 12f32abf8.
+
+- `internal/wsdashboard/audit_query.go` (pure query logic) and
+  `audit_routes.go` serve `/s/<reply-id>/audit/events` (summary pages,
+  `call=` lookup), `/audit/event/<id>` (full envelope or `part=` range) and
+  `/audit/search`. They are dispatched from `handleSessionRoutes` behind the
+  same access guard as `/history` (`page_routes.go`; the guarded-route table
+  in `access_test.go` lists the five new paths). All routes are GET/HEAD only.
+- Store read hook: `wsauditstore.Store.View(ctx, session)` returns a
+  capacity-clamped snapshot of the ring's in-memory events plus `Cut`.
+  `ring.cut` is set when `dropOldest` evicts a segment, and on recovery when
+  the oldest segment seq > 1; a whole-ring removal leaves a fresh ring with no
+  cut. Reads never hold the store lock while scanning, so capture is never
+  held up by a search.
+- Decisions:
+  - **Stored truncation:** the store keeps head+tail with no in-band text, so
+    the "marker" is the envelope's `stored_trunc`, returned unchanged.
+  - **attached:** events whose `call_id` or `parent_id` names the call.
+  - **Call lookup answer:** `{call: summary|null, events: [...]}`; `call=`
+    combined with paging, kinds or bounds → 400.
+  - **UTC bounds:** RFC3339Nano with a zero offset.
+  - **Clamping:** `n` and `len` clamp to their maxima, like `/history`.
+  - **Event envelope additions:** `in_bytes`/`out_bytes`/`raw_bytes`,
+    `truncated`, and `range{part:{offset,total}}`.
+  - **Status codes:** event not retained → 404; store unavailable → 503; an
+    unknown before/after ID or search cursor with retained data → 410
+    `stale_cursor`.
+  - **Search scan:** a 64 MiB scan budget per request, so a page may hold
+    fewer than `n` hits and still return a non-null `next`.
+  - **Search excerpts:** at most 1 KiB, with an additive `clipped` flag.
+  - **Search cursor:** carries a query fingerprint; a mismatch → 400.
+  - **Search line numbers:** `line_no` counts stored-body lines. The line
+    holding a `stored_trunc` seam is matched as two pieces, so no match spans
+    the omitted middle.
+  - **End of search:** `next` is null once the oldest hit has been returned
+    (one-hit lookahead).
+- Verification:
+  - `go build ./...`, and `go vet` on wsdashboard and wsauditstore: clean.
+  - `go test ./internal/wsauditstore ./internal/wsaudit -count=1`: ok
+    (39.5s, 0.66s).
+  - `go test ./internal/wsdashboard -count=1 -timeout 60m`: ok (556s on
+    b829e4956; 525s on 12f32abf8).
+  - `go test -race -run 'TestAudit|TestView'`: PASS on both packages; rerun
+    after 12f32abf8 for wsdashboard: PASS (136s).
+  - The tests cover every Verification item above, including the live-store
+    ring cut and stale cursors, a live stored_trunc body, and capture keeping
+    up during a held and concurrent search (`Dropped()==0`).
+- Lite review (0e5199d37..b829e4956): 0 Critical, 2 Important, 3 Minor; all
+  fixed in 12f32abf8.

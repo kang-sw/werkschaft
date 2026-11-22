@@ -1,0 +1,574 @@
+---
+title: "ws/cron: 주기 예약 프롬프트 도구"
+related:
+  261121-refactor-ws-daemon-metadata-sqlite: "daemon metadata SQLite bundle; cron keeps its own small database instead of joining it (Decision 15)"
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: ef56a4a38cfc41b3
+sage-review-completeness-reviewed: ef56a4a38cfc41b3
+completed: 2026-11-22
+---
+
+# ws/cron: scheduled prompt tool
+
+## Background
+
+The owner asked for a `ws/cron` tool: a lead registers a prompt with a Linux
+cron expression, and the dashboard daemon sends that prompt to the lead's own
+session each time the expression matches. Today a lead can only react to input
+that arrives; it cannot ask to be woken at a time. Typical uses are a periodic
+board check, a nightly review sweep, or a reminder to re-run verification.
+
+The daemon already owns everything the feature needs: the authenticated
+binding from a hosted connection to its conversation, a per-conversation
+inbox that a running turn does not interrupt, hosted-session lifecycle, and a
+SQLite store precedent. What is missing is a schedule parser, a daemon-held
+scheduler, and the delivery envelope.
+
+## Decisions
+
+Decisions 1-14 were settled with the owner (schema and timezone rule) and the
+owner's lead (2026-11-22). Decisions 15-21 are technical consequences the
+drafting research forced; each names what it was chosen over.
+
+1. **Tool shape.** One MCP tool `cron`, in both `ws` and `wsflow`, with
+   mutually exclusive arguments:
+   - no arguments: list the caller's schedules, each as
+     `{id, name, expr, tz, next_at, last_at, pending, dropped}`;
+   - `add: {name, expr, prompt, tz?}`: returns `{id, next_at}`;
+   - `delete: "<id or name>"`: returns ok.
+   Both `add` and `delete` is an error. Default output is compact text;
+   `format: "json"` is the opt-in machine form (ws-mcp manual, Tool Output
+   Convention). **Rejected:** separate `cron.add` / `cron.delete` /
+   `cron.list` tools (the owner specified one command); `once`, `max_runs`,
+   `until` and `paused` fields in v1.
+2. **Delete by id or name.** `delete` accepts either the id or the name; names
+   are unique per session, so a name resolves to at most one of the caller's
+   schedules.
+3. **No overwrite.** `add` with a name the caller session already uses is
+   refused. To change a schedule: delete, then add.
+4. **Expression.** Standard 5-field Linux (Vixie) cron: minute, hour,
+   day-of-month, month, day-of-week. Supports lists, ranges, steps, `*`, month
+   and day names such as `MON` / `JAN` (case-insensitive, not as a step value),
+   `0` and `7` both Sunday, and the day-of-month / day-of-week OR rule when both
+   are restricted. A field beginning with `*` (including `*/n`) counts as
+   unrestricted, as in Vixie cron. Macros: `@yearly`, `@annually`,
+   `@monthly`, `@weekly`, `@daily`, `@midnight`, `@hourly`. `@reboot` and a
+   seconds field (6 or 7 fields) are refused. An expression that can never
+   fire (for example Feb 30) is refused at `add`. `go.mod` carries no cron
+   parser (verified against its `require` blocks; the offline module cache
+   holds a third-party cron module that `go.mod` does not require), so the
+   parser is written in the repository with table tests; no new dependency.
+   **Rejected:** a 6-field form with seconds, which is not Linux cron.
+5. **Timezone.** `add` takes an optional `tz` field: `UTC` or `Z`, or a fixed
+   offset `+HH:MM` / `-HH:MM`, the same style as the chat timestamps (the
+   dashboard user-message parser accepts offsets from -12:00 to +14:00,
+   `wsinbox/user_message.go`). The expression's fields are evaluated in that
+   offset. When omitted, `tz` is UTC, so behavior is deterministic and
+   independent of the daemon host's zone. List output, `next_at`, `last_at`
+   and the envelope's `at` are RFC 3339 in the schedule's own offset.
+   **Rejected:** IANA zone names in v1 (no DST handling); an inline zone
+   prefix inside `expr` (`tz` is a separate field only); the daemon's local
+   zone as the default.
+6. **Target.** Always the calling session, identified from the connection's
+   authenticated binding: the per-session token the daemon resolves to
+   `ProxyHello.Conversation`, carried into the server as
+   `ServerOptions.Conversation` (`Server.conversation`). It is never taken
+   from launcher-supplied environment (`WS_HOSTED_SESSION_KEY` and friends)
+   and never from a `session_key` argument, which grants a root and not
+   ownership (the rule the hosted exec tools follow). No other-session
+   targeting. Delivery is a user-turn prompt through the runner's inbox path
+   that dashboard user messages use.
+7. **Availability.** v1 is hosted-lead-only (`Record.Lead`): the daemon must
+   be able to inject a prompt into the caller. Workers (`agent.spawn` children)
+   and any caller the daemon cannot deliver to (an unhosted plain CLI session,
+   a launcher connection) are refused at `add` with a clear error. Children
+   sleep, expire and hand off holders, which adds moving parts; extending to
+   them is future scope. **Rejected:** every daemon-held session in v1.
+8. **Busy and coalescing.** A fire to a mid-turn target queues as the next
+   turn's input; there is no steer into a running turn. At most one pending,
+   undelivered fire exists per schedule. An overlapping fire is dropped and
+   counted; the count is `dropped` in the list. A schedule is pending exactly
+   while its cron entry is held in the target's inbox; every way the entry
+   leaves the inbox (the turn-start drain, a cancel, the drop of held entries
+   for a conversation that takes no more turns) clears it.
+9. **Missed fires.** Fires missed while the daemon was down, replaced, or the
+   machine slept are skipped, not caught up, as in cron. The next fire is
+   computed from now. **Rejected:** anacron-style catch-up.
+10. **Persistence.** Schedules survive daemon restart and replacement. The data
+    is Small mutable state (performance manual, Storage Types type 2), so the
+    store is SQLite. Live schedule state and timers are in memory. The fire path
+    does no file I/O beyond the existing inbox delivery. Persisted: only add,
+    delete and last-fire deltas. File operations per action are counted
+    (Phase 2 verification).
+11. **Lifetime.** A schedule is deleted when its target session ends
+    permanently: the session is deleted or expired. A temporarily disconnected
+    or restarting hosted session keeps its schedules.
+12. **Limits.** 32 schedules per session; prompt at most 16 KiB; name
+    non-empty and unique per session (Decision 3).
+13. **Envelope.** The delivered prompt is wrapped
+    `<ws:cron id="..." name="..." at="...">…</ws:cron>` so the receiver knows
+    it is a scheduled prompt and which one, alongside the existing `<ws:user>`
+    family. `at` is the matched cron minute, RFC 3339 in the schedule's offset.
+14. **Compatibility and scope.** The new MCP tool and the new storage are T0
+    (additive; old binaries lack the tool, never open the file, and the
+    dispatcher refuses an unknown tool without a write). The inbox entry marker
+    Decision 16 needs is T1, the highest tier of the change, which is still
+    patch-allowed; the evidence is in Constraints. It differs from the
+    optional-field T0 of `261115-feat-ws-dashboard-user-message-envelope`
+    because that change kept the drain text shape unchanged, while here an
+    older reader renders the cron entry under a different envelope name. No `/mcp` hello or tracker
+    change. No dashboard UI in v1. Shipped text is tool description only: no
+    playbook or skill text changes; no config key, so no manifest or dashboard
+    settings change.
+15. **Storage file.** A dedicated small SQLite database in the dashboard state
+    directory, opened and held by the daemon beside the hosted exec store
+    (`PRAGMA user_version`, a newer version refused, WAL, one connection), over
+    adding tables to the `wsmeta` daemon metadata store. **Rejected:** `wsmeta`,
+    because it is not opened by any production caller yet (its only importers
+    are tests; `261121-refactor-ws-daemon-metadata-sqlite` Phase 2 owns the
+    cutover), it opens in exclusive locking mode with import fences, and
+    joining it would couple this tool to that cutover. A later child may fold
+    the file into `wsmeta` as a table move.
+16. **Envelope carriage.** The inbox `Entry` gains an optional cron marker
+    (schedule id, name, matched minute with its offset); `Entry.Text()` renders
+    `<ws:cron>` instead of `<ws:user>` for it, escaping the prompt body's
+    closing delimiter as `escapeUserBody` does for `<ws:user>`, and escaping
+    the attribute values. A cron entry is never merged with another and is not
+    steered: the inbox steer admission refuses a cron-marked entry, so a
+    dashboard steer cannot turn it into a mid-turn injection. **Rejected:** wrapping a pre-built `<ws:cron>` string in `Parts`,
+    which would nest it inside a `<ws:user>` envelope.
+17. **Identity declared, not used.** The tool declares an optional
+    `session_key` like the other lead tools, so a caller that passes it per
+    the usual convention is not refused by the argument precheck, but the value
+    never selects the owner. **Rejected:** omitting `session_key` from the
+    schema, which refuses callers who follow the ws-wide convention of passing
+    it.
+18. **Stale timers are missed fires.** A timer that fires more than one cron
+    minute after its scheduled minute (a slept machine, a stalled daemon) is
+    treated as missed under Decision 9: nothing is delivered and the next fire
+    is computed from now. **Rejected:** delivering a late fire, which is
+    catch-up by another name.
+19. **Closed target.** A fire the runner refuses because the target is closed,
+    handed off or no longer known is dropped, counted in `dropped`, and logged once; the
+    schedule stays until Decision 11 deletes it. **Rejected:** deleting on
+    close, which Decision 11 reserves for permanent session end.
+20. **Name and id.** A name is a non-blank string of at most 64 runes with no
+    control characters, because it is an envelope attribute and a list column.
+    Ids have the fixed form `cron-<hex>`, and a name of that form is refused,
+    so Decision 2's id-or-name lookup is never ambiguous. **Rejected:** an
+    unbounded name; resolving an ambiguity by precedence.
+21. **Offset parsing.** `tz` is normalized on add (`Z`, `z` and `utc` become
+    `UTC`; `+00:00` stays an offset) and stored and listed in that normalized
+    form; minutes must be 00-59 and the offset within -12:00 to +14:00.
+    **Rejected:** storing the caller's spelling, which makes equal zones list
+    differently.
+
+## Constraints
+
+Rows from `AGENTS.md` Implementation Conventions that match the paths this
+ticket touches (`agents-plugin-tool/`, `agents-plugin/runtime.json`,
+`agents-plugin-wsflow/runtime.json`):
+
+| manual | applies because |
+|---|---|
+| `ai-docs/manuals/shipped-surface-boundary.md` | The tool description and every string the tool emits (envelope, refusals, list text) ship to downstream projects; they must not name this repository's tickets, commits, paths or tooling. The `agents-plugin/` and `agents-plugin-wsflow/` `runtime.json` edits are under the same row. |
+| `ai-docs/manuals/ws-mcp.md` | New tool in `agents-plugin-tool/internal/mcp/`: compact text by default, `format: "json"` opt-in; `runtime.json` is active compatibility data. |
+| `ai-docs/manuals/release-compatibility.md` | New tool, new database file, new inbox entry field under `agents-plugin-tool/internal/`. Tiers in Decision 14; evidence below. |
+| `ai-docs/manuals/performance.md` | New persisted data (type 2, SQLite), a timer-driven fire path and an interactive-adjacent delivery. Rules 1, 2, 4, 5 and `## Measuring` apply. |
+| `ai-docs/manuals/wsflow-mirroring.md` | The change edits `agents-plugin-wsflow/runtime.json`. The wsflow tool set must match ws; wsflow distributed text stays non-ws-aware (the tool description is shared, so it names no `ws/` form). |
+
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin/, agents-plugin-wsflow/, agents-plugin-tool/)
+- Convention: ai-docs/manuals/wsflow-mirroring.md (declared for agents-plugin-wsflow/)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for agents-plugin-tool/internal/mcp/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
+- Out of scope by decision: dashboard UI, children, catch-up, config keys, IANA
+  zones, any playbook or skill text, `once` / `max_runs` / `until` / `paused`.
+- `config-settings-ui.md` does not apply: no config key, manifest field or
+  dashboard settings asset changes.
+- **Performance contract.** Schedules and the next-fire timer live in memory;
+  one timer is armed for the earliest next fire across all schedules and is
+  re-armed after each fire, add and delete. The fire path reads and writes no
+  file except the inbox entry and the conversation record write the existing
+  delivery path performs for its send counters (as `Runner.AdmitCompletion`
+  does); the scheduler itself touches no file on it. SQLite is
+  touched by `add`, `delete`, a last-fire delta and daemon start (one read of
+  all rows) only. The database is opened once and held (Rule 4).
+- **Compatibility evidence** (Go paths relative to
+  `agents-plugin-tool/internal/`). The store open path to copy is
+  `execjob/hosted_store.go` `OpenHostedStore` and `hostedStoreMigrate`
+  (`PRAGMA user_version`, newer version refused with `ErrHostedStoreNewer`),
+  opened by `cmd/ws-mcp/exec_hosted.go` `openHostedExec` with the file name in
+  `hostedExecStoreName`. A new database file is read by no older binary, so an
+  older daemon cannot misread or overwrite it. The dispatcher refuses an
+  unknown tool at `mcp/server_dispatch.go#L1633` (the default case; the
+  release-compatibility manual's `:1662` citation is stale) and the argument
+  precheck refuses undeclared arguments in `precheckToolArguments`,
+  `mcp/tool_arguments.go#L84-L155` (the manual's `:65-128` is stale), neither
+  writes. The inbox
+  `Entry` is a JSON struct with `SchemaVersion = 1` (`wsinbox/inbox.go`
+  `Entry`); `wsinbox.normalize` rebuilds an `Entry` field by field
+  (`wsinbox/normalize.go:32`), so a field that is not added there is silently
+  dropped on the sender's own path; an old reader drops the unknown field and
+  renders `<ws:user>` (`wsinbox/user_message.go:39`), which is the T1 display
+  degradation.
+- Hosted conversations of every kind, workers included, get a per-session
+  token (`wsagent/mcp_session.go` `attachMCP`), so `Server.conversation` being
+  non-empty does not mean "lead"; the lead check reads the runner's record
+  (`Record.Lead`, `wsagent/record.go:65`), as `Runner.ExecOwner` does.
+- Delivery seam precedent: `Runner.AdmitCompletion` (`wsagent/exec_seams.go`)
+  admits a system notice to one conversation's inbox once, with a closed
+  target suppressed; the cron seam follows its shape but is not steered.
+
+## Prior Art
+
+- `execjob.Hosted` and `cmd/ws-mcp/exec_hosted.go`: a daemon-held component
+  with its own SQLite file, an owner-session seam over the runner
+  (`execSessions`), and a server option read at each call
+  (`ServerOptions.Exec func() *execjob.Hosted`, `Server.execJobs`).
+  `Server.hostedExec` is the "trusted binding present" test and
+  `errNoHostedExec` the refusal wording to imitate.
+- `wsinbox.Entry`, `wsinbox.Send` and `escapeUserBody`: the envelope family
+  and its body escaping.
+- `wsagent.Runner.Send` (`wsagent/runner_operations.go`): an ordinary input
+  is held until the running turn ends for non-Pi backends, which is Decision 8's
+  queue behavior.
+- Hosted lifecycle ends: `Runner.ForgetClosed` (the rail worktree-delete purge;
+  the path a lead's permanent end takes, and it does not notify the daemon),
+  the index's `ForgetSession` forwarding (`wsdashboard/daemon_runtime.go`),
+  `Runner.forget` (reached only from `Runner.expire`, child expiry, which
+  leads never take) and `wsdashboard.PruneRegistrations` (removes an ended
+  session's directory after `RegistryRetention` without telling the runner).
+
+## Prior Decisions
+
+- 0100ef97 (2026-11-22, commit): "Trusted binding (Decision 13): ProxyHello.Conversation is json:\"-\" and only Runner.ResolveMCPToken sets it ... a supplied session_key stays a cwd grant only." — bearing: supports
+- 0100ef97 (2026-11-22, commit): "Completion admission (Decisions 10, 21): AdmitCompletion writes one Steer=true inbox entry carrying EventID under c.wmu+c.mu, checking closed and Record.OpenGen in the same hold" — bearing: supports
+- 261117-feat-ws-exec-tools (2026-11-22, Result): hosted exec jobs landed with their own store, owner-session seams and daemon wiring in cmd/ws-mcp/dashboard.go — bearing: supports
+- 10b1c65f (2026-11-22, commit): "mailbox.recipients joins wsagent.ChildSafeWSTools (so AgentWSTools) and the three runtime.json manifests; the pi copy stays byte-identical to agents-plugin's." — bearing: constrains
+- 1d089568 (2026-11-22, commit): "internal/mcp/process_env.go (ServerOptions): union of the branch's Exec/Conversation fields and develop's MailGroups/MailLabels fields" — bearing: supports
+- 261115-feat-ws-dashboard-user-message-envelope (2026-11-15, Decisions): "Compatibility tier T0 (technical, acked): optional additive request and inbox fields, an unchanged drain text shape, ... Normalize and every inbox rewrite copy the new field" — bearing: contradiction-candidate
+- 697c9508 (2026-11-15, commit): "Build the envelope only in Entry.Text so MCP drains, Pi, Claude and hosted delivery share one serializer without double wrapping" — bearing: constrains
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | new wscron package; wsinbox/inbox.go, wsinbox/normalize.go, wsinbox/user_message.go; wsagent/ runner seam; mcp/server_schemas.go, server_dispatch.go; cmd/ws-mcp/dashboard.go; three runtime.json files |
+| scope.surface | cross-module | tool surface, inbox Entry field, runner seam and daemon wiring span wsinbox, wsagent, mcp, cmd/ws-mcp |
+| scope.new_public_symbol | yes | cron MCP tool, wscron package, wsinbox.Entry cron marker, Runner delivery method |
+| scope.new_type_contract | yes | wsinbox.Entry cron marker field; scheduler-to-runner interface; SQLite schedule schema |
+| scope.test_surface | new-files | no agents-plugin-tool/internal/wscron directory exists; scheduler, store and tool tests are new; existing wsinbox and wsagent tests extend |
+| complexity.reuse_points | confirmed | execjob/hosted_store.go OpenHostedStore, wsagent/exec_seams.go AdmitCompletion and ExecOwner, mcp/server_exec_hosted.go hostedExec read |
+| complexity.side_effect_risk | high | touches the inbox Entry shared by every delivery path, the runner conversation drain, and daemon startup/shutdown |
+| risk.correctness | high | timer-driven fire path, coalescing and pending-clear at drain, cron semantics and offset handling |
+| risk.fit | moderate | follows the hosted exec precedent, but Entry.Text and normalize are shared by all adapters |
+| risk.test | moderate | fake clock and fake runner make most behavior testable; the drain callback and restart paths need integration coverage |
+| risk.security_or_contract | moderate | per-session identity from the trusted binding, envelope escaping against forgery, T1 inbox field compatibility |
+
+## Phases
+
+### Phase 1: Cron expression parser and next-fire computation
+
+Add a small package (suggested name `wscron`) that parses an expression and
+answers "the next matching minute strictly after `t`" for a fixed offset
+(`*time.Location` from `time.FixedZone`), plus a `tz` parser (Decisions 5, 21).
+No runtime wiring.
+
+- Grammar and semantics exactly as Decision 4. Parse errors name the field and
+  the offending token. The macros expand to their 5-field forms (`@weekly` is
+  `0 0 * * 0`, `@monthly` `0 0 1 * *`, `@yearly` and `@annually`
+  `0 0 1 1 *`, `@daily` and `@midnight` `0 0 * * *`, `@hourly` `0 * * * *`).
+  Whitespace between fields is any run of spaces or tabs; the stored `expr`
+  text is the caller's, trimmed.
+- Next-fire search walks days then fields, not minutes, and gives up after a
+  horizon of 10 years: a match-less expression returns "never matches", which
+  `add` refuses. `0 0 29 2 *` must succeed from any date, including just after
+  a century non-leap year.
+- A fixed offset has no DST, so every wall-clock minute of the offset exists
+  exactly once.
+- `tz` parsing: `UTC`, `Z` (case-insensitive) or `±HH:MM` within -12:00 to
+  +14:00; an IANA name, a bare `+9`, a seconds component or an out-of-range
+  value is refused with a message listing the accepted forms.
+- Verification: table tests, pure and clock-free: each Decision 4 feature, the
+  dom/dow OR rule versus AND when one field is `*` or `*/n`, `7` as Sunday
+  including in a range such as `5-7`, names, steps over ranges (`1-10/3`),
+  every macro, each refusal (`@reboot`, 6 fields, empty, out-of-range,
+  `*/0`, reversed range, a name as a step), the never-matching refusal
+  (`0 0 30 2 *`), and next-fire cases across a month end, a year end and a
+  leap day, each in UTC, `+09:00` and `-05:30` so the same instant yields
+  different local matches; `tz` accepted and refused forms. A fuzz or property
+  check that `Next(t)` is strictly after `t` and matches the parsed fields.
+- Deferred: the scheduler, store and any wiring (Phase 2).
+
+### Result (c82d25ce3) - 2026-11-22
+
+- Added the `wscron` package's parser and next-fire search: `Parse` (5-field Vixie grammar, the seven macros, names for month and day-of-week, `7` as Sunday, steps over ranges), `(*Expr).Next(after, loc)` walking days then fields within a 10-year horizon, `Matches`, `ParseTZ` (`UTC`, `Z`, `±HH:MM` from -12:00 to +14:00, `-00:00` normalized to `+00:00`) and `ErrNeverMatches`. A field starting with `*` is unrestricted, so the day-of-month/day-of-week rule is AND then and OR otherwise; a step on a single value and a name as a step are refused, as are `@reboot`, 6- and 7-field forms.
+- Verification: table tests covering each Decision 4 feature, every macro, every refusal and month-end, year-end and leap-day cases in UTC, `+09:00` and `-05:30`; a property test and a fuzz target checking `Next(t)` is strictly after `t` and matches the fields. `go test ./internal/wscron -race` passes (also repeated 20 times) plus a 10 s fuzz run.
+
+#### Edition (7b0f2da20) - 2026-11-22
+
+- Pre-merge review (Critical): a valid step near the machine's integer maximum wrapped the range counter negative and set minute bits outside the requested range (`2-3/9223372036854775807 * * * *` set minute 0, an unscheduled prompt). `Parse` now refuses a step larger than the field's value count (`wscron/expr.go:148`, with the field's value count in the error) and the range loop stops before an increment can pass the range end (`expr.go:182`), so it cannot wrap whatever the step. Steps up to the value count stay valid (`2-3/60` sets only minute 2). Verification: refusal cases for a huge step, `2-3/61`, `*/9` in day-of-week and `5-6/25` in hours; `TestStepStaysInsideItsRange` pins nonzero range starts with the largest accepted step; the parser tests pass with `-race` and a 5 s fuzz run.
+
+### Phase 2: Scheduler, store, delivery and lifecycle
+
+Depends on Phase 1. Add the daemon-held scheduler with an injectable clock
+and timer, its SQLite store (Decision 15), the inbox cron marker and
+envelope (Decision 16), the runner delivery seam, and the lifecycle
+reconciliation. No MCP tool yet; tests drive the scheduler directly.
+
+- **Scheduler.** In-memory schedules keyed by id and grouped by owning
+  conversation id; one timer armed for the earliest next fire, re-armed after
+  each fire, add and delete. The clock and the timer factory are injected so a
+  fake clock drives every test. Add enforces Decisions 3, 12 and 20 (unique
+  name per session, 32 per session, 16 KiB prompt, name rules, never-matching
+  refusal) and returns an opaque id unique across the daemon plus `next_at`.
+  Delete takes an id or a name and refuses one the caller does not own with the
+  same "unknown schedule" answer as a missing one (no existence leak across
+  sessions). List returns the caller's schedules in the Decision 1 shape.
+- **Fire path.** On a timer fire: if the fire is more than one cron minute
+  late, skip it (Decision 18); otherwise, for each schedule matching the
+  minute, drop and count it when a fire is pending (Decision 8), else mark it
+  pending and then hand it to the runner seam, rolling the mark back when the
+  seam reports suppressed or an error. The mark is set before the hand-off,
+  under the lock the pending-clear callback also takes, because an idle
+  lead's loop can drain the entry before the seam returns; a late mark would
+  never clear. Compute the next fire from now. Set
+  last fire in memory and persist only the last-fire delta, off the delivery
+  path (a coalesced write after delivery returns). No file read happens on this
+  path.
+- **Runner seam.** A runner method in the style of `Runner.AdmitCompletion`
+  delivers one cron entry to a conversation's inbox and returns an outcome:
+  accepted, or suppressed because the target is closed, handed off or not
+  known (Decision 19). It writes the inbox entry as a non-steered `Entry` carrying
+  the cron marker, bumps the same send counters `Runner.send` bumps (persisting the record as
+  `AdmitCompletion` does), and wakes
+  the conversation loop the way `Runner.send` does. The scheduler reaches the
+  runner through a small interface, as `execjob.HostedOwner` / `execSessions`
+  do, so tests use a fake.
+- **Pending clears when the entry leaves the inbox.** The pending flag clears
+  on every removal of a held cron entry, reported to the scheduler through a
+  runner callback: the turn-start drain (`kick` in `wsagent/runner_conv.go`),
+  a cancel of the held entry (`wsinbox.Cancel`), and `conv.dropHeld` for a
+  conversation that takes no more turns. The implementer derives the signal
+  from the inbox removal points (or from the entry's presence in the inbox)
+  rather than from the drain alone, so no path leaves a schedule pending
+  forever. After a daemon start, pending is rebuilt once from cron entries
+  still held in the conversation inboxes; it is never persisted by the
+  scheduler. The steer admission (`wsinbox.Steer` / `SteerWithAdmission`)
+  refuses a cron-marked entry (Decision 16).
+- **Envelope.** `<ws:cron id="..." name="..." at="...">` with the prompt body
+  on its own lines inside (Decision 13). Attribute values and the body's
+  `</ws:cron` delimiter are escaped so a prompt or name cannot close or forge
+  the envelope. Update `wsinbox/normalize.go` so the marker survives
+  normalization, and keep `ParseUserMessages` (dashboard transcript parse) from
+  rejecting a turn that contains a cron envelope. Any shipped text that says
+  adapters inject "each `ws:user` envelope" (the dashboard inbox drain tool
+  description in `mcp/server_schemas.go`) is updated to cover the cron
+  envelope.
+- **Store.** One table of schedules (id, owner conversation id, name, expr, tz,
+  prompt, created at, last fire) in the new database (Decision 15). Start loads
+  all rows into memory once; after that only `add` inserts, `delete` removes and
+  a last-fire delta updates. Newer `user_version` refused, matching
+  `OpenHostedStore`; a store that cannot open is logged and leaves the tool
+  refusing with an "unavailable" message, never a crash.
+- **Lifecycle (Decision 11).** A schedule is deleted when its conversation is
+  gone permanently. The hooks are the runner's permanent-removal path for a lead
+  (`Runner.ForgetClosed`, plus `Runner.forget` for completeness) and the
+  index's session-forget path (`ForgetSession`), each delivering a
+  conversation-gone notification to the scheduler. Index removal alone is
+  not permanence (an unmounted project or an identity mismatch also drops a
+  session from the index), so the `ForgetSession` handler deletes only after
+  confirming the runner no longer knows the conversation (neither open nor
+  in its closed set), the same test the startup reconciliation uses. That
+  reconciliation runs at daemon start that deletes rows whose conversation the runner does not know,
+  which covers `PruneRegistrations` removing an ended session's directory
+  behind the runner's back. A fire whose conversation is already unknown is
+  dropped (Decision 19) and does not wait for a restart to be reaped. A
+  disconnect, a daemon replacement or a holder restart deletes nothing.
+- **Verification.**
+  - Fake-clock fire: advance the fake clock to a matching minute and observe
+    one `<ws:cron>` entry in a fake hosted lead's inbox with the right id,
+    name and `at` (in the schedule's offset); no delivery before the minute;
+    the next fire is the next match. A `+09:00` schedule fires at the
+    corresponding UTC instant, not the UTC wall minute.
+  - Busy and coalescing: with the lead mid-turn (entry held undrained), a
+    second matching fire is dropped and `dropped` rises to 1; once the turn
+    drains the entry, `pending` clears and the next fire delivers; two
+    different schedules at the same minute both deliver.
+  - Missed fires: a clock jump past a scheduled minute delivers nothing and
+    computes the next fire from now; a daemon restart across a match minute
+    delivers nothing for it.
+  - Persistence: add two schedules, close the scheduler and store, open a new
+    pair over the same file, and observe the same list with `last_at` and `tz`
+    retained and timers armed; a database stamped with a newer `user_version`
+    is refused unchanged.
+  - Idle lead: with a lead that drains the entry during delivery (before the
+    seam returns), `pending` ends false and the next fire delivers; a
+    suppressed delivery leaves `pending` false.
+  - Pending clearing: a held cron entry that is cancelled, or dropped by the
+    held-entry drop for a conversation taking no more turns, clears `pending`
+    so the next fire delivers; a dashboard steer of a held cron entry is
+    refused and the entry stays non-steered.
+  - Pending rebuild: with a cron entry still held undrained in a conversation
+    inbox, a new scheduler started over the same store lists that schedule as
+    `pending`, and a matching fire is dropped and counted; with no held entry
+    it lists `pending` false.
+  - Deletion on session end: the `ForgetClosed` and `ForgetSession` paths
+    each remove that conversation's schedules and no others; an index drop of
+    a session the runner still knows deletes nothing; a startup reconciliation removes rows of an
+    unknown conversation; a disconnect and a restart keep them.
+  - Limits and refusals: duplicate name, the 33rd schedule, a 16 KiB + 1
+    prompt, a never-matching expression, an id-shaped name, deleting another
+    session's id or name.
+  - Closed target: a suppressed delivery is dropped, counted, and the
+    schedule remains.
+  - Envelope: a prompt containing `</ws:cron>` and a name containing `"`
+    round-trip without forging or closing the envelope; a held cron entry is
+    not merged with a user entry; `normalize` keeps the marker.
+  - Performance: a counting test double or file-activity trace shows the fire
+    path touches no file but the inbox entry write and the record write the send
+    counters cause; record the file-operation count per fire (naming those two
+    writes), add and delete next to the measured action (performance manual,
+    `## Measuring`).
+- Deferred: the MCP tool and daemon wiring (Phase 3); dashboard display of
+  schedules.
+
+#### Edition (77e229cc9) - 2026-11-22
+
+- Round-2 review (Important): the field-width step cap added in 7b0f2da20 narrowed the grammar beyond Decision 4: `2-3/61 * * * *` matched minute 2 before and failed after, and a saved row with such an expression would have been skipped on reload. The cap is removed (`wscron/expr.go`); every positive step parses again, and the loop guard (stop before the increment can pass the range end) alone prevents the wrap. `2-3/61` and `2-3/9223372036854775807` both set only minute 2, `5-59/9223372036854775807` only 5; a step beyond int64 is still refused as not a positive number. This supersedes the cap described in the previous Edition. Verification: `TestStepStaysInsideItsRange` and the refusal table; parser tests and a fuzz run pass.
+
+### Result (ff6449e0b) - 2026-11-22
+
+- Added the scheduler (in-memory schedules, one timer armed for the earliest next fire, injectable clock), its own SQLite store `cron-schedules.db` (`user_version` checked before the WAL pragma so a newer file is refused unchanged; one connection; retry on busy), the `wsinbox.Entry.Cron` marker with the `<ws:cron id name at>` envelope (body `</ws:cron` and attributes escaped; `ParseUserMessages` takes it whole as one plain block), a refusal to steer a held scheduled prompt (`ErrNotSteerable`, and a 409 on the dashboard steer route), a removal observer fired from cancel, interrupt and drain, and the runner seam (`BindCron`, `CronIsLead`, `CronKnown`, `CronHeld`, `DeliverCron`) with `forgetClosed` reporting a permanent end only when the runner no longer knows the conversation.
+- Decisions: pending is marked under the scheduler lock before the hand-off and rolled back when delivery fails or is suppressed; a fire more than one minute late is skipped, never caught up (Decision 18); overlapping fires are dropped and counted; last-fire deltas are written by a coalescing writer after delivery. A global wsinbox observer clears pending because removal points are spread over wsdashboard and wsagent. Lock order: runner `c.mu`, then scheduler `mu`; the scheduler never holds `mu` across a runner call.
+- Review (fix commit de35122d8): the lite review found one Important (the held entries were read before the removal observer was registered, so an entry drained in that gap left a schedule pending until the next restart); the fix registers the observer first and remembers removals while loading, with a regression test, and also re-checks the schedule before a hand-off so a delete or close is honored by a fire already past its lock. Unfixed minors: an `Add` racing `ConversationGone` can insert a schedule for a gone session (reaped on the next restart, each fire a counted drop); the lead gate in Phase 3 reports one refusal for non-lead and closed-lead callers.
+- Performance, measured with a fake runner over a real inbox and the `wsstate` counters: a fire does no store operation and no read_file or read_dir; file operations per fire were 2 (the inbox entry write, one create_temp), and the record write the send counters cause is the runner's and is not counted here; the last-fire delta is one coalesced store commit afterwards. Add and delete are one store commit each.
+- Verification: `go test ./internal/wscron -race` (repeated), `./internal/wsinbox -race`, the wsagent cron, forget and child-safe tests with `-race`, the wsdashboard steer test, `go vet ./...`, and `GOOS=windows go vet` on the touched packages all pass. Not covered: one integrated test of `ForgetClosed` on a real hosted lead removing store rows (the two halves are tested separately).
+
+#### Edition (6b8407a6f) - 2026-11-22
+
+- Pre-merge review (Critical): the T1 marker did not hold on a downgrade. A daemon at the commit before this ticket decodes an entry's JSON through a struct that does not know the `cron` field (`wsinbox/inbox_store.go:169-178` at that commit), renders its part as `<ws:user>` (`wsinbox/user_message.go:39`), and its dashboard steer accepts the held entry and rewrites it as a steered plain one, dropping the field (`inbox_store.go:251-290`); the new daemon then could not tell it was a scheduled prompt and could inject it into a running turn.
+- Fix and tier record, with no T3 boundary: the stored form of a scheduled prompt now carries its whole envelope as the entry's one part beside the `cron` field (`wsinbox/cron.go:77`, applied when an entry is written, `inbox_store.go:56`). Which version writes and reads what: the new daemon writes part = envelope plus the `cron` field; an older daemon reading it ignores the field and shows the part wrapped as a user message (display-degraded, T1); an older daemon's steer rewrite keeps the part (it preserves the parts it decodes) and sets `Steer`; the new daemon reading that entry (`inbox_store.go:178`, `cron.go:118`) recovers the marker from the envelope when the entry is a steered plain single-part entry with no other fields and a strictly valid envelope, clears `Steer`, and holds it for the turn end. A restored cron entry is never steered, whatever `Steer` an older daemon set. A user who types an exact envelope into a steered plain message can have it read as a scheduled prompt; the owner authors both forms, so that is no gain in privilege. Entries stored by this branch's earlier commits (marker with a plain part) still read correctly. Old and new daemons drain the same raw JSON, so there is no T2 recovery needed on the drain path.
+- Verification: `TestOldDaemonSteerRewriteKeepsAScheduledPromptHeld` simulates the older steer rewrite (field dropped, `Steer` true, fresh name), then asserts the new daemon lists it as a held cron entry with the original prompt and name, a steer-only drain takes nothing, a full drain delivers the same text as an unrewritten entry and reports the removal, and that a plain steered message, one quoting an envelope amid other text, and a two-part entry stay plain. The `wsinbox` tests pass with `-race`.
+
+#### Edition (bbe1f60e5) - 2026-11-22
+
+- Pre-merge review (Critical): three lifecycle gaps in the scheduler. (1) `Add` checked its owner before the operation lock, so a purge that ran between found no rows and the add then stored a schedule for a gone session; it now re-checks `Exists` under the lock (`wscron/scheduler.go:505`), and since the runner forgets a conversation before it notifies the scheduler, either the add is refused or the purge waits behind it and removes what it inserted. The same reconciliation covers the daemon's start gap: `Reconcile` (`scheduler.go:668`) reaps owners the runner no longer knows and runs right after `BindCron` (`cmd/ws-mcp/dashboard.go:268`). (2) A fire past the pre-delivery check could still publish after `Delete` returned; a fire is now admitted under the scheduler lock (`scheduler.go:345`, schedule present, scheduler open, counted in flight), and `Delete` removes the schedule from the maps and then waits for its schedule's admitted delivery (`scheduler.go:546`), so no prompt is published after `Delete` returns. (3) `Close` never joined admitted deliveries, so a last-fire delta could land after the final flush and a delivery could outlive the shutdown hook; `Close` now fences new fires, waits for every admitted delivery, then flushes and closes the store (`scheduler.go:638`) before the hook returns and daemon ownership is released.
+- Pre-merge review (Important): the first suppressed delivery wrote its diagnostic to the daemon log while holding the scheduler lock; the line is now built under the lock and written after it is released, once per run of refusals.
+- Verification: deterministic interleaving tests, each forced by channels or a blocking runner seam rather than sleeps: `TestAddRefusedWhenTheOwnerIsForgottenAfterTheLeadCheck`, `TestPurgeWaitsBehindAnAddAndRemovesItsSchedule`, `TestReconcileReapsAnOwnerForgottenBeforeTheCallbackWasBound`, `TestDeleteWaitsForAnAdmittedDelivery` (blocks `Deliver` at the runner admission point, deletes, then releases) and `TestCloseJoinsAnAdmittedDeliveryAndKeepsItsLastFire` (a delivery held across `Close`; the successor store holds the last fire). `go test ./internal/wscron -race` passes, repeated.
+- Performance, corrected (011698395). The first measurement recreated the writer right after closing it, ran only against a fake runner, and counted fixture operations; it is replaced. File operations and SQLite commits are reported apart. Scheduler side, fake runner over the real inbox: one fire is 2 counted file operations (one inbox temp file, one atomic replace), no `read_file`, `read_dir` or `stat`; the fire and its coalesced last-fire delta cost one SQLite commit; add and delete one commit each; a suppressed fire costs no file operation and no commit. Production seam, one accepted `DeliverCron` through the real runner: 4 counted file operations when quiet (the inbox entry write and the record publication, each one temp file plus one atomic replace), 7 in 2 of 4 runs when the runner's own follow-ups (a second record rewrite and a registry read after the wake) landed in the process-wide sample; a suppressed delivery on a closed conversation: 0. SQLite file I/O does not pass through the counters, hence the separate commit count. The performance manual's Windows file-activity and latency baseline was not run here and is pending lead verification.
+- Pre-merge review (Minor): the stress test now checks every operation's result, an empty memory and store at the end, and that every delivery was drained or is still held; the stale cutoff is pinned at exactly one minute, one nanosecond and one second beyond (strictly greater than one minute is stale).
+
+### Phase 3: `cron` MCP tool, daemon wiring and tool-surface parity
+
+Depends on Phase 2. Expose the scheduler as the `cron` tool and wire it into
+the daemon.
+
+- **Tool.** Register `cron` in the tool registry (`mcp/server_schemas.go`
+  `tools()`), dispatch it in `mcp/server_dispatch.go`, and enforce the
+  mutually exclusive-arguments rule. Schema: `add` (object: `name`, `expr`,
+  `prompt` required, `tz` optional), `delete` (string, id or name), optional
+  `session_key` (Decision 17) and `format`. Both `add` and `delete` is an error;
+  neither lists. The description is tool-description text that passes the
+  shipped-surface-boundary test: it states the 5-field syntax and macros, the
+  UTC default and the accepted `tz` forms, the coalescing and no-catch-up
+  rules, the limits, and the lead-only rule, with no repository-specific
+  references and no `ws/` spelling that wsflow would have to rewrite. A refusal
+  of a bad expression or `tz` names the field.
+- **Gate.** The call requires a hosted connection (`Server.conversation`
+  non-empty and a daemon scheduler present) and a runner record with `Lead`
+  set. An unhosted or launcher connection, a worker, and a daemon without a
+  usable store each get a distinct refusal (modeled on `errNoHostedExec`) and
+  write nothing. Mechanism: like the hosted exec tools, `cron` is listed
+  wherever daemon tools are listed and refused at call by the
+  `Server.conversation` plus runner-record check, never by `session_key` role
+  scope (Decision 17). Because `AgentWSTools` is built from
+  `PiMiniLeadWSTools` and is the list every spawned child gets, the
+  implementer either keeps `cron` out of the child list explicitly or relies
+  on the call-time refusal, and the inventory tests state which: a lead's
+  inventory lists `cron`, `ChildSafeWSTools` excludes it, and a worker's call
+  is refused. The agy `DirectTools` list (`wsagent/agy.go`) is part of the
+  checklist: an agy lead either gets `cron` as a direct tool or reaches it
+  through the `call` fallback, and the choice is tested.
+- **Daemon wiring.** Construct the scheduler beside the hosted exec jobs in
+  `cmd/ws-mcp/dashboard.go` (open the database under the daemon lock, close it
+  on shutdown after draining), bind it to the runner, and expose it to the
+  server as a call-time option like `ServerOptions.Exec`. The surfaces that
+  changed in the commit that added `mailbox.recipients` are the checklist:
+  `cmd/ws-mcp/dashboard.go`, `cmd/ws-mcp/hosted_cli.go`, `cmd/ws-mcp/proxy.go`,
+  `mcp/server.go`, `mcp/process_env.go`, `mcp/server_dispatch.go`,
+  `mcp/server_schemas.go`, `wsagent/builtin.go`, `wsagent/agy.go`, and the `tools` map of
+  `agents-plugin/runtime.json`, `agents-plugin-wsflow/runtime.json` and
+  `agents-plugin-pi/runtime.json`. Confirm `ws` and `wsflow` list the same
+  tool set.
+- **Verification.**
+  - Through the MCP tool on a hosted lead connection: `add` returns `{id,
+    next_at}`; list shows it with `tz`, `next_at`, `pending` false and
+    `dropped` 0; `delete` by id and, separately, by name removes it and a
+    second `delete` is refused; a duplicate name is refused; both arguments
+    is an error; the default output is compact text and `format: "json"`
+    returns the structured form; omitted `tz` lists as `UTC`.
+  - Fake-clock fire end to end: add through the tool, advance the clock,
+    observe the `<ws:cron>` entry in the hosted lead's inbox.
+  - Refusals: a worker (spawned child) connection, a launcher / CLI
+    connection with no binding, a connection whose session token resolves to a
+    non-lead record, and a daemon whose store failed to open; each refused
+    with its own message and no row written. A hosted lead passing another
+    session's `session_key` cannot add to that session.
+  - Persistence across a daemon restart through the tool surface: add, restart
+    the daemon harness, list shows the schedule and a fire after the restart
+    delivers.
+  - Deletion on session end through the tool surface: purge the lead's
+    conversation through `ForgetClosed`, observe its schedules gone from the store and the list
+    refused for the dead session.
+  - Parity: the tool-inventory tests include `cron` for a lead and, per the
+    chosen mechanism, omit it for a worker or refuse the worker's call; `ChildSafeWSTools` excludes it (the existing exclusion test
+    lists it); the three `runtime.json` files list it and ws and wsflow list
+    the same tool set; a tool-description check confirms no repository-specific
+    text.
+  - `go build ./...`, `go vet ./...` and the touched packages' tests pass; the
+    wsflow package tests pass.
+- Deferred: dashboard UI for schedules, worker support, catch-up, config keys,
+  IANA zones.
+
+#### Edition (3399005a5) - 2026-11-22
+
+- Round-2 review (Critical, replaces the recovery approach of 6b8407a6f): that recovery could not stop a downgraded daemon's steer from being delivered into a running turn, and it took provenance from text. Both are gone. A scheduled prompt is now stored as `<stamp>-<hex>.cron.json` (`wsinbox/cron.go`, `entryFileName`; the held pattern at `inbox.go:131` accepts the `.cron` form), with the marker in the `cron` field and the prompt as the one part; the body-envelope parse and restore are removed.
+- Source-backed tier, T1 (an old binary ignores new data and changes nothing). The daemon at 7a4f14bbf lists entry files only through `entryNamePattern` (`wsinbox/inbox.go:131`, `^...-[0-9a-f]{8}\.json$`): its `entryNames` (`inbox_list.go:37`, behind `Names`, `Held`, `SteerNames`, `MessageNames`, `readAll`), its drain and interrupt (`inbox_drain.go:27,147`, both via `entryNames`), its `Steer` and `Cancel` (`inbox_store.go:252,297`, `ErrGone` without a claim) and the dashboard steer and cancel routes (`inbox_routes.go:680,698`, through `NameForID`, which appends `.json` to the id and re-checks the pattern) all skip a `.cron.json` name without an error. The runner's held count and its idle delivery read through `Names` (`wsagent/runner_conv.go:826`). The one reader that does not use the pattern, the attachment sweep (`attachments_cleanup.go:60`), only collects image paths and a scheduled prompt has none. So an old daemon never shows, steers or delivers a scheduled prompt, and the new daemon delivers it on reopen: a downgrade delays the prompt and changes no data. The old steer-then-deliver path no longer exists for these entries, so there is no mid-turn injection and no T2 recovery is needed.
+- Provenance is the stored name alone (`isCronFile`, which also accepts the hidden claim form a drain, steer, cancel or interrupt uses). The marker is honored only in a file with that name and dropped from any other file; a cron-named file without a marker does not read. A plain message that contains an exact envelope stays plain, keeps its steer, and its drain or cancel reports no scheduler removal, so it cannot clear a schedule's `pending` or be taken at restart for a held schedule. Restart recovery (`CronHeld`) and the removal observer key off the marker read under that name only.
+- Verification: `TestAScheduledPromptIsInvisibleToThePrecedingDaemon` copies the old pattern literally and checks over a real inbox directory that the old listing sees only the plain message (held and drained), that the old id-to-name mapping does not match, that the file is untouched, and that the current reader lists it, never steer-drains it, drains it in order with the same text and reports the removal. `TestOnlyTheSchedulerWrittenNameMarksAScheduledPrompt` pins that three plain forms carrying an envelope keep `Steer`, steer as plain and fire no removal, that a plain file's `cron` field is dropped, and that a cron-named file without a marker is refused. `go test -race ./internal/wsinbox`, the wsagent cron and forget tests with `-race`, and the wsdashboard steer, cron and inbox tests pass.
+
+#### Edition (2376cc2f2) - 2026-11-22
+
+- Round-2 review (Critical): `Delete` waited on one boolean per schedule, so two admitted deliveries of the same schedule (an inbox removal clears `pending`, the next minute fires while the first hand-off still persists its record) let it return when the first finished. The count is per schedule now (`schedule.inflight`, `wscron/scheduler.go`) and `Delete` waits until it is zero. `TestDeleteWaitsForEveryOverlappingDelivery` holds two deliveries at the runner, deletes, releases the first, shows `Delete` still waiting and no prompt published, releases the second, and checks both prompts are in the inbox before `Delete` returns and none after.
+- Round-2 review (Important): the suppression diagnostic was still written to the log file from the timer callback. It now goes through a bounded queue (64) to a logger goroutine; a full queue drops the message and counts it (`LogDropped`), and the logger reports the count when it next writes; the timer callback does no file I/O. `Close` waits for the logger for at most 2 s so a stalled log cannot hold the shutdown. `TestStalledLogNeverHoldsUpAFire` stalls the log writer, shows the fire returns, floods the queue and sees the drops counted and reported. The last-fire count test now waits for the store operation itself before it samples and expects exactly one commit.
+- Round-2 review (Minor): concurrent `Close` callers waited only for the `closed` flag. All callers now wait on one done channel and return the first caller's result; `TestConcurrentCloseCallersWaitForTheSameShutdown` holds a delivery across three concurrent `Close` calls and checks none returns early, each returns with the store closed, and the successor sees the last fire.
+- Round-2 note: `TestDashboardInboxDrainNudgesOnlyAfterClaiming` (`mcp/dashboard_inbox_test.go:370`), which the reviewer saw time out, passes here when run alone (`-count=10`) and with the cron-filtered `mcp` run; nothing in these changes touches that path.
+- Verification: `go test -race -count=5 ./internal/wscron`, `go vet` and `GOOS=windows go vet` on the touched packages.
+
+#### Edition (e65eef7c2) - 2026-11-22
+
+- Round-3 review (Critical): two overlapping successful deliveries of one schedule finishing in reverse order moved `last_at` backwards, in memory and in the queued delta, and `SetLastFire` replaced the row unconditionally. A fire now records the newer of the current and its own minute, in memory and in the delta (`wscron/scheduler.go`), and the write is monotonic (`last_fire = MAX(last_fire, ?)`, `store.go`). `TestLastFireNeverMovesBackwardsWhenDeliveriesFinishOutOfOrder` publishes two deliveries in order, releases their outcomes in reverse, and checks the newer minute in memory and after a reopen; `TestStoreLastFireOnlyMovesForward` pins the store write alone. Both fail without the fix; `go test -race -count=5 ./internal/wscron` passes.
+
+#### Edition (a96ba604f) - 2026-11-22
+
+- Performance, post-merge figures. On the tree with develop merged, one accepted `DeliverCron` through the real runner counts 7 file operations (create_temp 3, atomic_replace 3, read_file 1); a suppressed delivery counts 0. The earlier "4 when quiet" figure predates develop's change to `wsagent/record.go`, whose record write now makes more temp files; the production-seam test matches the record write by file and kind rather than line for that reason. The lead's Windows host run passed the `wscron` and `wsinbox` suites, including `TestSuppressedFireCostsNoFileOperation`, and measured 1 SQLite commit per fire. The `wsagent` production-seam test cannot run on Windows: the lead fake-holder harness times out there for pre-existing tests as well.
+
+### Result (7b70dec14) - 2026-11-22
+
+- Added the `cron` tool: schema (`add` object, `delete` string, optional `session_key` and `format`) in `server_schemas.go`, dispatch in `server_dispatch.go`, handler in `server_cron.go`. Gate order: hosted binding, then scheduler present, then lead check, each refusal with its own message and nothing written; `session_key` never selects the owner. The description avoids the literal `ws:` spelling because the wsflow namespace rewrite would change it. The dashboard daemon opens the scheduler after the runner is up, binds it to the runner, closes it in the before-unlock hook and at shutdown, and a new `SessionForgotten` daemon hook ends a conversation's schedules.
+- Parity: `ChildSafeWSTools` excludes `cron` (the existing exclusion test lists it); `cron` is listed in the three `runtime.json` files (`>=0.50.8-dev <0.51.0`) and the Pi workflow bundles and native payloads were regenerated; an agy lead reaches it through the `call` fallback; the drain description now names the `ws:cron` envelope and the test pinning it was updated.
+- The first description listed at 2955 B and failed the per-tool schema cap test (1450 B, set by agy's 1500 B limit) on all three surfaces; the follow-up commit e5906a99c trims it to about 1.4 KB. The phase's narrow test filter had missed that test; a Tool-filtered mcp run catches it.
+- Compatibility as implemented: the tool and the new database file are T0; the inbox marker is T1 (an older reader drops the field and shows `<ws:user>`). No T3 and no minor bump.
+- Verification: tool tests (add, list, delete by id and name, refusals, session end, restart persistence and a fire after restart), `cmd/ws-mcp` cron host tests, the runtime capability and wsrsrc mirror/drift tests, `go vet ./...`, `GOOS=windows go vet` on the touched packages; the Tool-filtered mcp tests (including the schema cap); the wsflow Python package tests pass (22 run, 2 skipped).
+- Deferred, as in the ticket: dashboard UI, worker support, catch-up, config keys, IANA zones.
+- Not verified here: the full `cmd/ws-mcp` run fails `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild` because the gitignored embedded workflow package assets are absent in this worktree (`open generated/inventory.json: file does not exist`); the cron tests in that package pass.
+
+#### Edition (59a614e09) - 2026-11-22
+
+- Pre-merge review (Important): the drain description spelled the scheduled-prompt tag `ws:cron`, which the wsflow namespace rewrite turns into `wsflow:cron` while the serializer writes the same `<ws:cron>` tag for both products. The description now says "scheduled-prompt (cron) envelope" (`mcp/server_schemas.go`), and `TestDashboardInboxDrainDescriptionNamesTheCronEnvelopeInBothProducts` renders the advertised description for ws and wsflow and asserts neither spells `ws:cron` or `wsflow:cron`. The older `ws:user envelope` wording in the same description has the same rewrite quirk; it predates this ticket, is pinned by an existing test, and was left alone.
+- Pre-merge review (Minor): the lead gate told a lead whose conversation is closed, handed off or unknown that a worker cannot receive prompts. It now answers with its own message carrying the runner's reason (`mcp/server_cron.go:51`) and keeps the worker wording for a live non-lead; the four refusals stay distinct.
+- Pre-merge review (Important), 284ec7258: `TestForgetClosedRemovesAHostedLeadsStoredSchedules` (wsagent) drives a hosted lead through close and the real `ForgetClosed` with the real scheduler and a real store: a close keeps the rows, the rows are gone the moment `ForgetClosed` returns (no restart reaping involved), and the retained binding is refused afterwards (`IsLead` errors, `Add` returns `ErrNotLead`, no row is written). It lives in wsagent because that package's tests cannot import `mcp` without a cycle; the gate's refusal of an ended lead is covered in `mcp`.
+- Verification: `mcp` runs filtered to `TestCronTool`, `TestDashboardInboxDrain` and `TestListedToolSchemasFitByteCap` pass, as do the wsagent cron, forget and child-safe tests with `-race`, and `GOOS=windows go vet` on wsagent, wscron, wsinbox, mcp and cmd/ws-mcp. `cmd/ws-mcp`'s `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild` still fails only for the missing generated package assets in this worktree.

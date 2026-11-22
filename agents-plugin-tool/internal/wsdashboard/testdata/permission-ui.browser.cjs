@@ -80,7 +80,7 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           S.state = state; S.choices = ch || choices(true); S.posts = [];
           await page.goto(base + '/s/livesession');
           await frame().locator('#grid').waitFor();
-          await page.locator('.dwrap > .top .pmhead').waitFor();
+          await page.locator('.dwrap > .top .tph-hs .host.sse').waitFor();
           await page.waitForTimeout(250);
         }
         async function railOpen() {
@@ -102,7 +102,7 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           return pop;
         }
         async function menu() {
-          await page.locator('.dwrap > .top .pmhead').click();
+          await page.locator('.dwrap > .top .host.hbtn').click();
           const pop = frame().locator('.rpop:not([hidden])').filter({ has: frame().locator('.pmstate') });
           await pop.waitFor();
           await page.waitForTimeout(200);
@@ -187,8 +187,22 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
             tiles.push({ k, png: await pop.locator('.pmstate').screenshot() });
             await closePop();
           }
-          for (const k of ['A', 'B', 'chipFull']) {
+          // The head carries no permission chip, except the icon-only warning
+          // when the harness reports a mode other than the one asked for.
+          for (const k of ['A', 'B', 'chipFull', 'D']) {
             await load(STATES[k]);
+            const n = await page.locator('.dwrap > .top .pmhead').count();
+            assert.equal(n, k === 'D' ? 1 : 0, 'head permission chip for ' + k);
+            if (k === 'D') {
+              const c = page.locator('.dwrap > .top .pmhead');
+              assert.equal(await c.locator('.pmq, .pmtag').count(), 0, 'icon-only');
+              assert.equal((await c.textContent()).trim(), '');
+              assert.ok(await c.getAttribute('title'), 'mismatch title');
+              assert.equal(await c.getAttribute('aria-label'), await c.getAttribute('title'));
+              await c.click();
+              await frame().locator('.rpop:not([hidden])').filter({ has: frame().locator('.pmstate') }).waitFor();
+              await closePop();
+            }
             tiles.push({ k: 'chip-' + k, png: await page.locator('.dwrap > .top .tph-hs').screenshot() });
           }
         });
@@ -257,7 +271,7 @@ function out(name) { return shots ? path.join(shots, name) : undefined; }
           await g.screenshot({ path: out(file), fullPage: true });
           await g.close();
         };
-        const CAP = { A: 'A. Claude, 명시적 읽기 전용', B: 'B. Claude, 선택 없음 (기존 세션)', C: 'C. Pi, 명시적 작업 폴더 쓰기', D: 'D. Claude, 요청과 다른 모드 보고', E: 'E. Claude, 아직 관측 없음', 'chip-A': '헤드 칩: 읽기 전용', 'chip-B': '헤드 칩: 추정', 'chip-chipFull': '헤드 칩: 전체' };
+        const CAP = { A: 'A. Claude, 명시적 읽기 전용', B: 'B. Claude, 선택 없음 (기존 세션)', C: 'C. Pi, 명시적 작업 폴더 쓰기', D: 'D. Claude, 요청과 다른 모드 보고', E: 'E. Claude, 아직 관측 없음', 'chip-A': '헤드: 칩 없음 (읽기 전용)', 'chip-B': '헤드: 칩 없음 (추정)', 'chip-chipFull': '헤드: 칩 없음 (전체)', 'chip-D': '헤드: 불일치 아이콘 칩' };
         await gal(name('state'), '세션 권한 상태: 의도 · 네이티브 모드 · 근거', tiles.map(t => ({ ...t, cap: CAP[t.k] })));
         const UCAP = { A: 'A. 이 데몬이 권한 수준을 알리지 않음', B: 'B. 선택이 거부됨 (404)', B2: 'B2. 다시 확인해도 지원 없음', C: 'C. 세션 메뉴, 지원 없음' };
         await gal(name('unsupported'), '지원 없음 · 거부됨 (기존 경로로 대체하지 않음)', utiles.map(t => ({ ...t, cap: UCAP[t.k] })));

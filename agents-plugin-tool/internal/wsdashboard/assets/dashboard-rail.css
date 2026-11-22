@@ -783,7 +783,7 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 /* what the picked level asks for, then how this harness carries it */
 .rpop .pmwhat { margin: 2px 0 0; font-size: 11.5px; color: var(--wb-fg); }
 .rpop .pmmap { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); }
-.rpop .pmmap code, .pmstate code, .rdeldlg .pmc, .chip.pmhead code { font-family: var(--wb-mono); font-size: 11px; color: var(--wb-fg); background: var(--wb-muted); padding: 0 5px; border-radius: 4px; }
+.rpop .pmmap code, .pmstate code, .rdeldlg .pmc { font-family: var(--wb-mono); font-size: 11px; color: var(--wb-fg); background: var(--wb-muted); padding: 0 5px; border-radius: 4px; }
 .rpop .pmfine { margin: 0; font-size: 11px; color: var(--wb-muted-fg); }
 /* evidence quality pills; there is deliberately no "enforced" style */
 .pmq { display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 700; padding: 0 7px; border-radius: 999px; line-height: 17px; white-space: nowrap; }
@@ -808,10 +808,8 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .rdeldlg .pmack { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 45%, transparent); cursor: pointer; font-weight: 600; }
 .rdeldlg .pmack input { margin: 2px 0 0; accent-color: var(--wb-fail); flex: none; }
 /* the head chip beside the harness chip */
-.chip.pmhead { display: inline-flex; align-items: center; gap: 4px; height: 20px; box-sizing: border-box; margin-left: 6px; padding: 0 7px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-fg); font-size: 11.5px; font-weight: 700; white-space: nowrap; flex: none; }
+.chip.pmhead { display: inline-flex; align-items: center; justify-content: center; height: 20px; width: 20px; box-sizing: border-box; margin-left: 6px; padding: 0; border-radius: 999px; background: var(--wb-muted); color: color-mix(in srgb, var(--wb-warn-ink) 80%, var(--wb-fg)); white-space: nowrap; flex: none; }
 .chip.pmhead .i { width: 11px; height: 11px; }
-.chip.pmhead .pmq { line-height: 15px; padding: 0 5px; margin-right: -4px; }
-.chip.pmhead .pmtag { background: var(--wb-card); }
 .chip.pmhead[role="button"] { cursor: pointer; }
 .chip.pmhead[role="button"]:hover { background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-muted)); }
 .chip.pmhead:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }

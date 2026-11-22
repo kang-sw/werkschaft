@@ -94,7 +94,7 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits
 			// background task's result, a pushed message), and again after
 			// a prompt (requires_action) inside one, which the runner takes
 			// as the turn it already runs; idle ends the turn.
-			if !m.lead() {
+			if !m.sessionState() {
 				return nil
 			}
 			switch l.State {
@@ -129,7 +129,7 @@ func (m *claudeMapper) mapEvents(line []byte, replies lineReplies, observeLimits
 			}
 			return out
 		case "background_tasks_changed":
-			if m.lead() && l.Tasks != nil {
+			if m.sessionState() && l.Tasks != nil {
 				return []Event{m.backgroundCounts(*l.Tasks)}
 			}
 		case "compact_boundary":

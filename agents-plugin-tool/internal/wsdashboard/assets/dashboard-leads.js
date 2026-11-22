@@ -1200,17 +1200,19 @@
       q("svg", chip).forEach(function (s) { s.remove(); });
     }
   }
-  // permChip keeps the head's permission chip beside the harness chip: the
-  // session's level (tagged when derived from older settings) and its
-  // evidence, never the native mode. For a viewer who holds the controls
-  // it opens the session menu, as the harness chip does.
+  // permChip keeps the head quiet about permissions: the level and its
+  // evidence live in the session menu. Only a mismatch (the harness reports
+  // a native mode other than the one asked for) stays as an icon-only chip
+  // beside the harness chip, and for a viewer who holds the controls it
+  // opens the session menu, as the harness chip does.
   function permChip() {
     var h = region("head"), host = h && h.querySelector(".host.sse"), st = lead.st;
     if (!host) return;
-    var chip = h.querySelector(".pmhead"), level = st && !leadGone(st) ? String(st.permission_level || "") : "";
-    if (!level) { if (chip) chip.remove(); return; }
+    var chip = h.querySelector(".pmhead"), asked = st ? String(st.permission_mode || "") : "";
+    var bad = st && !leadGone(st) && st.permission_level && permObserved(st) && asked && String(st.active_mode) !== asked;
+    if (!bad) { if (chip) chip.remove(); return; }
     if (!chip) {
-      chip = mk("span", "chip pmhead");
+      chip = mk("span", "chip pmhead warn");
       chip.addEventListener("click", function () {
         var c = region("head"), hb = c && c.querySelector(".host.hbtn");
         if (hb && leadCan() && (railEl || framed) && WsRail) railPopOpen("sess", hb);
@@ -1220,15 +1222,13 @@
       });
     }
     if (chip.previousSibling !== host) host.parentNode.insertBefore(chip, host.nextSibling);
-    var derived = st.permission_source !== "explicit", q = permEvidence(st), sig = [level, derived, q].join("\n");
+    var text = wsT("js.perm.ev.mismatch", permHarness(String(st.backend || ""))), sig = text;
     if (chip.wsSig !== sig) {
       chip.wsSig = sig;
       chip.textContent = "";
       chip.appendChild(gIcon("lock"));
-      chip.appendChild(mk("span", null, PERM_LABEL[level] ? wsT(PERM_LABEL[level]) : level));
-      if (derived) chip.appendChild(mk("span", "pmtag", wsT("js.perm.tag.derived")));
-      chip.appendChild(permQ(q));
-      chip.title = wsT("js.perm.title");
+      chip.title = text;
+      chip.setAttribute("aria-label", text);
     }
     var can = leadCan();
     if (can) { chip.setAttribute("role", "button"); chip.setAttribute("tabindex", "0"); }

@@ -62,6 +62,7 @@ func Interrupt(dir string, now time.Time) (held []Record, name string, err error
 	for _, c := range claims {
 		_ = remove(c)
 	}
+	notifyCronRemoved(recordEntries(held)...)
 	return queueRecords(held), name, nil
 }
 
@@ -193,6 +194,7 @@ func drain(dir string, steerOnly bool, take func(Entry) bool) ([]Record, error) 
 		out = append(out, Record{Name: name, Entry: entry})
 	}
 	trimDrained(dir)
+	notifyCronRemoved(recordEntries(out)...)
 	return queueRecords(out), firstErr
 }
 
