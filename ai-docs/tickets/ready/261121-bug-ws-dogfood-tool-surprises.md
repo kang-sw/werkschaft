@@ -142,6 +142,19 @@ Commits caeba62f1 (implementation), 64c8c9805 (tests), fb2f39b89 (tool schemas),
 
 Expose the `report` kind consistently in schema and allocator with the same allocation authority as `review`, while preserving the four existing kinds and all write-profile boundaries. Acceptance: `path.generate(kind: "report")` returns a valid artifact path under the report subdirectory; callers with an existing write route can write it, and callers without that authority gain none. Existing `review`, `prompt`, `plan`, and `clone` behavior remains intact; callers discover the enum before sending the new kind to an old server. Cover native and already-authorized `path.write` routes and Pi mini-lead authority.
 
+### Result (88ba82742) - 2026-11-22
+
+`path.generate(kind: "report")` now allocates a reserved `.md` under a new `report-paths` directory beside `review-paths` and `prompt-paths` in the worktree cache (`Layout.ReportDir`, created by `Ensure`; `generatedPathTarget` case). The `kind` enum is `review, report, prompt, plan, clone` and its description tells callers to check the enum first, since an older server refuses the kind. The response shape and the four existing kinds are unchanged.
+
+- Write authority: report paths are `path.write`-eligible like review and prompt, but only for sessions whose profile already carries `path.write`. No profile gained a tool. Pi mini-lead keeps `path.generate` without `path.write` (pinned in `TestBuiltinPiMiniLeadProfileResolves`). The native file-tool route writes the reserved regular file directly (covered at the allocator level).
+- Compatibility: T0, as provisioned. Only an enum value was added, with no store or schema shape change. No shipped playbook or skill text was edited, so none depends on `report`.
+- Tests:
+  - wsstate: report allocation (separate directory, same tree, stable stems, uniqueness, native write, review unchanged, unknown kind refused) and `Ensure` creating `ReportDir`.
+  - mcp: `TestPathGenerateReportKindFollowsPathWriteRoute` (enum order, report path, cross-session refusal, same-session write).
+  - wsagent: mini-lead allocates but cannot write.
+- Verification (`GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`): `go build ./...`; `go vet ./internal/wsstate ./internal/mcp ./internal/wsagent` clean; `go test ./internal/wsstate` (whole package); `./internal/mcp -run 'PathGenerate|PathWrite|GeneratedPath|Schema|ToolsList|ToolList|Description|Advertis'`; `./internal/wsagent -run 'TestBuiltin|ChildSafe'`. Lite review: clean.
+- Not done: the Pi TypeScript bridge tests were not run (nothing there changed).
+
 ### Phase 4: Resolve a fresh implementation branch when the derived one is already merged
 
 Reproduce the reported flow against current source, including resolve followed by pooled acquisition, and locate any remaining stale-checkout gap. Preserve the canonical name and the prior guarded recreation decision: a name-rooted target zero ahead and behind its encoded merge root is recreated under the acquisition lock; equal, ahead, and divergent branches preserve existing behavior. Preserve both resolver-owned `recreate` actions and protect unmerged work. If the current integration fixture already covers the reported flow and passes, record that result without a duplicate fix; otherwise repair the remaining gap and add the missing regression. Re-grade provisional T0 against the implemented read/write paths.
