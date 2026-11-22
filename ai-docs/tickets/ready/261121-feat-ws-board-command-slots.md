@@ -412,6 +412,87 @@ Verification boundary:
 - Performance: the file-operation and latency measurements listed under
   Constraints for the composer paths.
 
+### Result (1321e061b) - 2026-11-22
+
+Landed (develop 02147864c..1321e061b, six commits): 2510c5f03 execjob
+per-launch window, `UserApproved`, `ExpectGen`/`CheckGen`, `OnConvert` and
+`ShellLaunch` (exec.shell now shares it); f9a112a45 runner pending-input
+source consumed at the `turnInput` seam; e0a88cd80 the `composer-exec` route,
+claim map, output file store and the ws-mcp binding; 11caef152 the composer
+UI, card, JS, CSS and eleven i18n tables; 0bf851713 end-to-end binding tests
+over real holders, the latency probe and the `sendMessage` node-fixture stubs;
+1321e061b review follow-up (below).
+
+Verification (each run with a narrow `-run`, `-race` where noted):
+- execjob composer tests, wsagent passive tests (`-race`), wsdashboard
+  composer route/claim/classification/authority/idempotency/async/output-route
+  tests (`-race`), `TestComposerExecBrowser` (Playwright, passes), cmd/ws-mcp
+  composer binding tests: all pass. The node fixtures that run `sendMessage`
+  in isolation (`TestCloseRequestComposerLifecycle`,
+  `TestComposerInlineWireAndHelpers`, capsules and the toast stub) pass with
+  a `cexecSend` stub.
+- `GOOS=windows go vet` on wsagent, wsdashboard, cmd/ws-mcp, execjob: clean.
+  The Windows Git Bash run was not done here; shell selection is
+  `ShellArgv`, identical to exec.shell.
+- Unrelated and environmental: `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`
+  in cmd/ws-mcp fails in a fresh worktree because the embedded workflow
+  packages lack `generated/inventory.json`; every other cmd/ws-mcp test passes.
+
+T0 compatibility evidence:
+- The diff touches no `hosted_store`, proxy/hello, dispatch/tool_arguments,
+  wsinbox, wslive, wsholder or tracker file: no `exec_jobs` schema or
+  `user_version` change, no inbox kind, hello field or holder shape.
+- Composer jobs are ordinary `exec_jobs` rows (tool `exec.shell`), so the
+  existing new -> old -> new test `TestHostedExecSurvivesAnOldDaemonAndReopens`
+  covers them; the output directory is independent of the job store; pending
+  input and receipts are memory only.
+- New client assets against an old daemon fail closed (route 404/405, no
+  `message` POST, draft kept), asserted in the browser test. Old assets keep
+  using `message`, unchanged.
+
+Performance: the route ack, card read and page load touch memory only. The
+oversize result's file operations (MkdirAll, CreateTemp, write, close, chmod,
+rename, ReadDir/Stat/Remove prune sweep) run on the submission goroutine or
+the async finalizer goroutine, never in a request handler and never under the
+claim or submission lock. Short sends add no dashboard file writes beyond the
+job-row WAL commits exec.shell already makes. Latencies were measured on macOS
+only (the probe in `composer_exec_perf_test.go`); a Windows file-touch
+baseline could not be measured here and stays unmeasured.
+
+Decisions:
+- Cards render in a strip above the composer (`.d-cexec` inside `#composer`)
+  rather than in the transcript region: regions are swapped by SSE, so a
+  stable DOM host is needed; the card is still absent from the shared
+  transcript, asserted in the browser test.
+- A LAN viewer typing `!` fails closed: the draft is kept and a hint says to
+  start with a space; the route itself refuses non-`TrustedWrite`.
+- One-use approval is the in-process `UserApproved` launch field; no tool
+  argument can set it and the agent's approval policy is never consulted
+  (tests). `CheckGen` is a separate boolean because generation 0 is real.
+- `OnConvert` runs before `Notify` is set so the exec id is in the lead's
+  pending input before the completion notice can exist; the dashboard's final
+  receipt upserts by exec id, so exactly one outcome reaches the lead (a
+  real-holder test proves the order `hand` then `notice`).
+- Async jobs are finalized lazily when a page polls the card, off the request
+  goroutine (review follow-up); the card reads as running until the file lands.
+
+Review (lite, one pass): the node-fixture finding was already fixed at
+0bf851713; the finalize-in-GET-handler finding is fixed in 1321e061b, along
+with eviction behind an active card, an unreadable retained output (now an
+explicit file error, not an empty file) and `</ws-user-exec>` inside output
+(escaped in the frame). Left open (minor): the input is cleared when a slow
+success response arrives, discarding anything typed meanwhile; async jobs
+that no page polls are never finalized (their completion still reaches the
+lead as the ordinary exec notice); no test of the end-between-OnConvert-and-
+Notify interleaving beyond the unit cases.
+
+Not verified: that a real harness (for example Codex `fs.read`) can read the
+output file, which lives under the daemon state directory.
+
+Left for Phase 2: the slot store, the `session.*_user_command` tools, the
+user-commands SSE event, slot list/Run/remove routes and the revision gate.
+Phase 2 reuses the route, binding, passive hand-off, output file and card.
+
 ### Phase 2: Command slots
 
 Depends on Phase 1 (the route, launch binding, passive hand-off, output file
