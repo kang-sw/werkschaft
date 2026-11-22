@@ -242,7 +242,7 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
 .board-state-filter [data-filter="awaiting-confirmation"] { --state-color: light-dark(#1d7348, #6cc39a); }
 .board-state-filter [data-filter="discussing"] { --state-color: light-dark(#b25000, #e0a36c); }
 .board-state-filter [data-filter="researching"] { --state-color: light-dark(#7544ac, #c6a5f7); }
-.board-state-filter [data-filter="implementing"] { --state-color: light-dark(#2457c5, #7aa2ff); }
+.board-state-filter [data-filter="implementing"], .board-state-filter [data-filter="tickets"] { --state-color: light-dark(#2457c5, #7aa2ff); }
 .board-state-filter [data-filter="waiting"], .board-state-filter [data-filter="closed"] { --state-color: var(--wb-muted-fg); }
 .board-state-inline { display: inline-flex; align-items: center; gap: 2px; height: 30px; padding: 2px; border-radius: 8px; background: var(--wb-muted); }
 .board-state-inline > .li { width: 13px; height: 13px; margin-inline: 5px 3px; color: var(--wb-muted-fg); }

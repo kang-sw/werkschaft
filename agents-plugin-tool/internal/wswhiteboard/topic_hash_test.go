@@ -64,12 +64,17 @@ func TestTopicHashCoversTheRenderedSection(t *testing.T) {
 	}
 	mustApply(t, st, `<wb:topic name="one" tickets="261112-feat-live"/>`)
 	linkedView := BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "r", Tickets: fakeTickets{"261112-feat-live": TicketTodo}})
-	if !linkedView.Topics[0].Live || len(linkedView.Topics[0].Tickets) != 1 {
+	if !linkedView.Topics[0].Live || !linkedView.Topics[0].HasOpenTickets || len(linkedView.Topics[0].Tickets) != 1 {
 		t.Fatal("linked topic lost internal ticket metadata")
 	}
 	linkedHash := hash(newPageData(linkedView, a), linkedView.Topics[0])
 	if linkedHash == base {
 		t.Error("a tickets-only update left the rendered topic hash unchanged")
+	}
+	openOnly := linkedView.Topics[0]
+	openOnly.HasOpenTickets = false
+	if hash(newPageData(linkedView, a), openOnly) == linkedHash {
+		t.Error("HasOpenTickets change left the rendered topic hash unchanged")
 	}
 	doneView := BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "r", Tickets: fakeTickets{"261112-feat-live": TicketDone}})
 	if hash(newPageData(doneView, a), doneView.Topics[0]) == linkedHash {

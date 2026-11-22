@@ -11,12 +11,13 @@ const [file, shots] = process.argv.slice(2);
 const measure = (p) => p.evaluate(() => {
   const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, cy: (r.top + r.bottom) / 2 }; };
   const out = {};
-  for (const name of ['none', 'one', 'three']) {
+  for (const name of ['none', 'one', 'three', 'research', 'finished']) {
     const topic = document.querySelector(`.topic[data-topic="${name}"]`);
     const bar = topic.querySelector(':scope > .tophead > .tbar');
     const lead = bar.querySelector(':scope > .tlead');
     const clock = lead.querySelector(':scope > .dw:not(.wbtk) .dbtn');
     const icon = lead.querySelector(':scope > .dw.wbtk .dbtn');
+    const style = icon ? getComputedStyle(icon) : null;
     out[name] = {
       bar: box(bar), clock: box(clock), icon: box(icon),
       overflow: bar.scrollWidth - bar.clientWidth,
@@ -24,6 +25,10 @@ const measure = (p) => p.evaluate(() => {
       badge: icon && icon.querySelector('.bd') ? icon.querySelector('.bd').textContent : null,
       shadow: getComputedStyle(topic).boxShadow,
       live: topic.classList.contains('live'),
+      openAttr: topic.dataset.openTickets === 'true',
+      openCls: icon ? icon.classList.contains('open') : false,
+      color: style ? style.color : null,
+      opacity: style ? style.opacity : null,
     };
   }
   return out;
@@ -38,8 +43,8 @@ async function run(browser, theme, width) {
     await p.waitForTimeout(300);
     const m = await measure(p);
     const tag = `${theme}@${width}`;
-    if (m.none.icon) fail.push(`${tag}: a topic without tickets shows the icon`);
-    for (const name of ['one', 'three']) {
+    if (m.none.icon || m.none.openAttr) fail.push(`${tag}: a topic without tickets shows the icon or open attr`);
+    for (const name of ['one', 'three', 'research', 'finished']) {
       const t = m[name];
       if (!t.icon) { fail.push(`${tag} ${name}: no ticket icon`); continue; }
       if (t.next !== 'dw') fail.push(`${tag} ${name}: icon follows ${t.next}, not the clock`);
@@ -50,8 +55,19 @@ async function run(browser, theme, width) {
       if (t.overflow > 0) fail.push(`${tag} ${name}: bar overflows by ${t.overflow}px`);
       if (t.live || t.shadow !== m.none.shadow) fail.push(`${tag} ${name}: ticket-derived glow (${t.shadow})`);
     }
+    for (const name of ['one', 'three']) {
+      if (!m[name].openAttr || !m[name].openCls) fail.push(`${tag} ${name}: expected lit open ticket icon and data-open-tickets`);
+      if (m[name].opacity !== '1') fail.push(`${tag} ${name}: expected resting opacity 1, got ${m[name].opacity}`);
+    }
+    for (const name of ['research', 'finished']) {
+      if (m[name].openAttr || m[name].openCls) fail.push(`${tag} ${name}: research/closed-only topic must stay neutral`);
+      if (m[name].color === m.one.color) fail.push(`${tag} ${name}: neutral icon color matches lit open color (${m[name].color})`);
+    }
     if (m.one.badge !== null) fail.push(`${tag}: one ticket shows a count ${m.one.badge}`);
     if (m.three.badge !== '3') fail.push(`${tag}: three tickets show count ${m.three.badge}`);
+    if (m.research.badge !== null) fail.push(`${tag}: one research ticket shows a count ${m.research.badge}`);
+    if (m.finished.badge !== '2') fail.push(`${tag}: finished tickets show count ${m.finished.badge}`);
+    await p.screenshot({ path: path.join(shots, `topic-tickets-rest-${theme}-${width}.png`) });
 
     // A click pins the popover open; read its rows.
     const three = p.locator('.topic[data-topic="three"] .dw.wbtk');
