@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
@@ -204,20 +205,41 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 	if err != nil {
 		return wsdashboard.CompanionConfig{}, err
 	}
-	value := func(key string) string {
-		if raw, ok := overrides[key]; ok {
-			mutation, err := catalog.Validate(wsconfig.ScopeGlobal, wsconfigservice.Operation{Key: key, Action: "set", Value: raw})
-			if err == nil {
-				return mutation.Scalar
-			}
-		}
+	// resolved returns the catalog-validated global override, or the manifest
+	// default when the key is unset or its stored value no longer validates
+	// (as config.get does). The default's dynamic type is the key's type.
+	resolved := func(key string) any {
 		entry := catalog.Entry(key, nil, wsconfig.ScopeGlobal, wsconfigservice.Layers{})
-		fallback, _ := entry.Default.(string)
-		return fallback
+		raw, ok := overrides[key]
+		if !ok {
+			return entry.Default
+		}
+		mutation, err := catalog.Validate(wsconfig.ScopeGlobal, wsconfigservice.Operation{Key: key, Action: "set", Value: raw})
+		if err != nil {
+			return entry.Default
+		}
+		switch entry.Default.(type) {
+		case bool:
+			if parsed, err := strconv.ParseBool(mutation.Scalar); err == nil {
+				return parsed
+			}
+		case int64:
+			if parsed, err := strconv.ParseInt(mutation.Scalar, 10, 64); err == nil {
+				return parsed
+			}
+		default:
+			return mutation.Scalar
+		}
+		return entry.Default
 	}
+	text := func(key string) string { s, _ := resolved(key).(string); return s }
+	flag := func(key string) bool { b, _ := resolved(key).(bool); return b }
+	number := func(key string) int { n, _ := resolved(key).(int64); return int(n) }
 	return wsdashboard.CompanionConfig{
-		Mode: value(wsdashboard.CompanionModeKey), Director: value(wsdashboard.CompanionDirectorKey),
-		Pack: value(wsdashboard.CompanionPackKey), Preset: value(wsdashboard.CompanionPresetKey),
+		Enabled: flag(wsdashboard.CompanionEnabledKey), Director: text(wsdashboard.CompanionDirectorKey),
+		Pack: text(wsdashboard.CompanionPackKey), Preset: text(wsdashboard.CompanionPresetKey),
+		AgentCooldownSeconds: number(wsdashboard.CompanionAgentCooldownKey),
+		AgentHourlyCap:       number(wsdashboard.CompanionAgentHourlyCapKey),
 	}, nil
 }
 
@@ -263,7 +285,7 @@ func dashboardAdapterReadLimits(key string) (noRepo, noSession bool) {
 	case "pi.runaway_threshold", "pi.settle_delay_ms", "pi.compaction_advisory_percent", "pi.compaction_hard_percent",
 		"pi.context_window_override", "pi.compaction_dialog_budget_bytes", "pi.compaction_reread_budget_bytes":
 		return false, false
-	case "agy.model_wait_timeout_seconds", "agy.model_wait_retries":
+	case "agy.model_wait_timeout_seconds", "agy.model_wait_retries", "agy.stall_log_check", "agy.http2_frame_trace":
 		return false, true
 	case DashboardPortKey, "dashboard.pi_spawn_enabled":
 		return true, true

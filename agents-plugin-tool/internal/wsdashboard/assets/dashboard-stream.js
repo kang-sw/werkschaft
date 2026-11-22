@@ -414,13 +414,19 @@
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, companion: onCompanion, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, gone: onGone }
+      events: { assets: onAssets, companion: onCompanion, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, gone: onGone }
     });
     mainStream = st;
     function onCompanion(config) {
       if (!shell || !current() || !config) return;
       window.wsCompanionConfig = config;
       doc.dispatchEvent(new CustomEvent("ws-companion-config", { detail: config }));
+    }
+    // An agent-director command is broadcast to every shell; the companion
+    // keeps only those for the session it shows.
+    function onCompanionCommand(command) {
+      if (!shell || !current() || !command) return;
+      doc.dispatchEvent(new CustomEvent("ws-companion-command", { detail: command }));
     }
     function onRegion(ev) {
       if (!current() || !ev) return;

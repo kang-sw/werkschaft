@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["packs", "compositor", "scenarios", "stage"]) {
+  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -707,6 +707,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     body, hidden: false,
     getElementById: () => null,
     createElement: makeElement,
+    createElementNS: (ns, tag) => makeElement(tag),
     addEventListener() {}
   };
   const win = {
@@ -730,7 +731,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["packs", "compositor", "scenarios", "stage"]) {
+  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -796,5 +797,196 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
   trigger("idle", "session.error");
   assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:?");
 
+  // Directed commands: only the shown session's, quips as text, TTL expiry.
+  step(50);
+  const quipNode = () => root.children.find(child => child.className === "ws-companion-quip");
+  assert.equal(stage.command({ sessionId: "s1", quip: "too early", ttl_ms: 1000 }), false, "no shown session yet");
+  stage.reset("s1");
+  step();
+  assert.equal(stage.command({ sessionId: "other", quip: "not mine", ttl_ms: 1000 }), false);
+  assert.equal(stage.command({ sessionId: "s1", fx: "unknown", quip: "   " }), false, "nothing valid to show");
+  assert.equal(stage.command({ sessionId: "s1", fx: "badge", gesture: "unknown", quip: "<img src=x onerror=alert(1)>", ttl_ms: 1000 }), true);
+  step();
+  assert.equal(root.dataset.scenario, "directed");
+  assert.equal(quipNode().textContent, "<img src=x onerror=alert(1)>", "the quip is set as text");
+  assert.equal(quipNode().innerHTML, undefined, "the quip never goes through innerHTML");
+  assert.equal(quipNode().hidden, false);
+  assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:!");
+  for (let i = 0; i < 22; i++) step(50);
+  assert.equal(quipNode().hidden, true, "the quip dismisses when the TTL ends");
+  assert.equal(root.dataset.scenario, "", "the rules engine resumes");
+
   stage.dispose();
+});
+
+test("companion commands validate IDs against the pack, its fallback chains, shared props and built-in fx", () => {
+  const { directedCommand, scenarioRunner } = companion();
+  const runner = scenarioRunner();
+  const pack = { manifest: {
+    expressions: { happy: { decal: "happy.png" }, grin: { fallback: "happy" }, ghost: { fallback: "missing" } },
+    gestures: { wave: { pose: "stand" } }, props: {}, fx: {}
+  } };
+  const shared = { manifest: { props: { drone: { file: "drone.png" } }, fx: {} } };
+  const long = "<b>hi</b>\nthere " + "x".repeat(200);
+  const full = directedCommand({ sessionId: "s1", scenario: "celebrate_done", expression: "grin", gesture: "nope",
+    prop: "drone", fx: "sparkle", quip: long, ttl_ms: 60000 }, pack, shared, runner);
+  assert.equal(full.id, "celebrate_done");
+  assert.equal(full.ttl, 15000, "TTL clamps to 15 s");
+  assert.equal(full.beats.length, 1);
+  const beat = full.beats[0];
+  assert.equal(beat.expression, "happy", "a fallback chain resolves to its usable entry");
+  assert.equal(beat.gesture, "wave", "an unknown gesture drops; the scenario's own stays");
+  assert.equal(beat.prop, "drone", "props may come from the shared default pack");
+  assert.equal(beat.fx, "sparkle", "built-in fx badges are known");
+  assert.equal(Array.from(beat.quip).length, 140, "quips cut to 140 code points");
+  assert.ok(beat.quip.startsWith("<b>hi</b> there"), "control characters fold to spaces; markup stays literal text");
+
+  const plain = directedCommand({ sessionId: "s1", expression: "ghost", gesture: "wave", ttl_ms: 10 }, pack, shared, runner);
+  assert.equal(plain.id, "directed");
+  assert.equal(plain.ttl, 1000, "TTL clamps to 1 s");
+  assert.deepEqual(JSON.parse(JSON.stringify(plain.beats)),
+    [{ pose: "stand", expression: "idle", gaze: "cursor", ms: 1000, gesture: "wave" }],
+    "a fallback chain ending nowhere drops the field");
+  assert.equal(directedCommand({ sessionId: "s1", scenario: "no_such", expression: "Bad ID!", fx: "nope", quip: " \n " },
+    pack, shared, runner), null, "a command with nothing valid is dropped");
+  assert.equal(directedCommand({ sessionId: "s1", prop: "drone" }, pack, null, runner), null, "no shared pack, no shared props");
+  assert.equal(directedCommand("not a command", pack, shared, runner), null);
+});
+
+test("companion directed beats override the rules engine until the TTL, then the rules resume", () => {
+  const { scenarioRunner } = companion();
+  const runner = scenarioRunner(), guards = { routeKind: "session", pose: "stand", idleMs: 0 };
+  runner.direct([{ pose: "stand", expression: "happy", ms: 400 }, { pose: "stand", expression: "oo", ms: 300 }], 0, 2000);
+  assert.equal(runner.tick(100).entry.id, "directed");
+  runner.fire("user.poke", 150, guards);
+  runner.fire("ask.open", 160, guards);
+  assert.equal(runner.tick(200).beat.expression, "happy", "rules scenarios do not replace a directed beat");
+  assert.equal(runner.tick(500).beat.expression, "oo", "directed steps advance");
+  assert.equal(runner.tick(1900).beat.expression, "oo", "the last step holds until the TTL");
+  runner.endReply();
+  assert.ok(runner.tick(1950), "a reply ending leaves a directed beat alone");
+  assert.equal(runner.tick(2000), null, "the TTL ends the directed beat");
+  runner.fire("user.poke", 2100, guards);
+  assert.equal(runner.tick(2150).entry.id, "startled_poke", "the rules engine resumes");
+
+  runner.direct({ expression: "happy", ms: 5000 }, 3000, 10000);
+  runner.direct({ expression: "cry", ms: 5000 }, 3500, 1000);
+  assert.equal(runner.tick(3600).beat.expression, "cry", "a newer command replaces an older one");
+  assert.equal(runner.tick(4500), null, "with its own TTL");
+  runner.direct({ expression: "happy", ms: 5000 }, 5000, 5000);
+  runner.fire("user.drag", 5100, guards);
+  assert.equal(runner.tick(5200, true).entry.id, "drag_dangle", "dragging still dangles the character");
+  runner.direct({ expression: "happy" }, 6000, Number.NaN);
+  assert.equal(runner.tick(6999).entry.id, "directed");
+  assert.equal(runner.tick(7000), null, "a missing TTL clamps to 1 s");
+});
+
+function modalDom() {
+  const listeners = new Map();
+  const on = (target, type, fn) => { (target.listeners[type] ||= []).push(fn); };
+  const fire = (target, type, event = {}) => { for (const fn of target.listeners[type] || []) fn({ preventDefault() {}, ...event }); };
+  const doc = { listeners: {}, activeElement: null };
+  function element(tag) {
+    const el = {
+      tagName: tag.toUpperCase(), className: "", id: "", title: "", textContent: "", value: "", type: "", disabled: false,
+      children: [], attrs: {}, listeners: {}, style: {}, offsetWidth: 240, offsetHeight: 200, open: false,
+      setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
+      addEventListener(type, fn) { on(this, type, fn); },
+      append(...items) { this.children.push(...items); },
+      replaceChildren(...items) { this.children = [...items]; },
+      focus() { doc.activeElement = this; },
+      all() { return this.children.flatMap(child => [child, ...(child.all ? child.all() : [])]); },
+      contains(other) { return other === this || this.all().includes(other); },
+      querySelector() { return this.all().find(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName) && !c.disabled) || null; },
+      show() { this.open = true; }, close() { this.open = false; }
+    };
+    return el;
+  }
+  class Option { constructor(text, value, _default, selected) { this.tagName = "OPTION"; this.textContent = text; this.value = value; this.selected = selected; } }
+  const sysopen = new Set(["data-sysopen"]);
+  Object.assign(doc, {
+    createElement: element, addEventListener(type, fn) { on(doc, type, fn); },
+    documentElement: { hasAttribute: name => sysopen.has(name) }
+  });
+  return { doc, element, fire, Option, sysopen };
+}
+
+test("companion settings modal opens, writes typed global values, reverts refused input and closes", async () => {
+  const { doc, element, fire, Option, sysopen } = modalDom();
+  const writes = [], notices = [];
+  let fail = false, resets = 0;
+  const fetch = async (url, init) => {
+    if (url === "/api/companion/packs") return { ok: true, json: async () => ({ packs: [{ id: "default" }, { id: "fox" }] }) };
+    writes.push(JSON.parse(init.body));
+    return { ok: !fail };
+  };
+  const C = companion({ document: doc, Option, fetch, wsT: key => key,
+    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const rows = catalog.filter(row => row.surface === "companion-modal");
+  const config = { pack: "default", preset: "werkschaft-d1", agentCooldownSeconds: 30, agentHourlyCap: 20 };
+  const node = element("div"), gear = element("button");
+  const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, {
+    rows: () => rows, config: () => config, persona: () => ({ name: "Fixture Fox", voice: "Short lines." }),
+    presets: () => ({ available: ["werkschaft-d1", "werkschaft-d2"] }),
+    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
+    resetSize: () => { resets++; }, applyPreset() {}, notice: key => notices.push(key)
+  });
+  const dialog = node.children[0];
+  const find = (cls) => dialog.all().filter(c => c.className === cls);
+  const control = key => {
+    const row = dialog.all().filter(c => c.className === "ws-companion-settings-row")[rows.findIndex(r => r.key === key)];
+    return row.all().find(c => c.tagName === "SELECT" || c.tagName === "INPUT");
+  };
+
+  fire(gear, "click");
+  assert.equal(modal.open, true);
+  assert.equal(gear.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(find("ws-companion-settings-label").map(c => c.textContent), rows.map(r => r.label));
+  assert.equal(find("ws-companion-settings-name")[0].textContent, "Fixture Fox");
+  assert.equal(dialog.style.left, "168px", "placed to the right of the character");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(control("dashboard.companion_pack").children.map(o => o.value), ["default", "auto", "fox"]);
+
+  const cooldown = control("dashboard.companion_agent_cooldown_seconds");
+  cooldown.value = "45";
+  fire(cooldown, "change");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(writes.at(-1), { scope: "global", key: "dashboard.companion_agent_cooldown_seconds", value: 45 });
+  cooldown.focus();
+  cooldown.value = "4.5";
+  fire(cooldown, "change");
+  assert.equal(writes.length, 1, "a non-integer is never written");
+  assert.equal(cooldown.value, "30", "and the focused input reverts to the live value");
+
+  // A config push spares the focused select; a failed write reverts and notices.
+  const pack = control("dashboard.companion_pack");
+  pack.focus();
+  const before = pack.children;
+  modal.refresh();
+  assert.equal(pack.children, before, "a focused select is not refilled by a config push");
+  fail = true;
+  pack.value = "fox";
+  fire(pack, "change");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(writes.at(-1), { scope: "global", key: "dashboard.companion_pack", value: "fox" });
+  assert.deepEqual(notices, ["settings_failed"]);
+  assert.notEqual(pack.children, before, "the failed write refills the select from the live config");
+
+  fire(find("ws-companion-settings-action")[0], "click");
+  assert.equal(resets, 1);
+  fire(doc, "keydown", { key: "Escape" });
+  assert.equal(modal.open, false, "Escape closes");
+  assert.equal(doc.activeElement, gear);
+  fire(gear, "click");
+  fire(gear, "click");
+  assert.equal(modal.open, false, "a second gear click closes");
+  fire(gear, "click");
+  fire(find("ws-companion-settings-close")[0], "click");
+  assert.equal(modal.open, false, "the close button closes");
+
+  sysopen.clear();
+  fire(gear, "click");
+  assert.ok(dialog.all().filter(c => c.tagName === "SELECT" || c.tagName === "INPUT").every(c => c.disabled), "read-only pages disable every control");
+  assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
 });

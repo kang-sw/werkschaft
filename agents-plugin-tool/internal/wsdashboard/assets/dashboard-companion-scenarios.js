@@ -65,6 +65,21 @@
     }
   };
 
+  // Built-in effect badges a pack's fx registry may omit.
+  const fxDefaults = {
+    alert: { kind: "badge", text: "!", color: "#e2582c" },
+    ponder: { kind: "float", text: "…", color: "#8fa0b8" },
+    shock: { kind: "badge", text: "!?", color: "#e2582c" },
+    sparkle: { kind: "particles", glyphs: ["✦", "✧", "✦"], color: "#e6aa34" },
+    zzz: { kind: "float", text: "Zzz", color: "#8fa0b8" }
+  };
+
+  // A directed beat outranks every rules scenario except the drag dangle, so
+  // the character still hangs from the pointer while it is dragged.
+  const directedPriority = 99;
+  const directedTTL = { min: 1000, max: 15000 };
+  const quipLimit = 140;
+
   const passive = {
     idle: { pose: "stand", expression: "idle", gaze: "cursor" },
     doze: { pose: "perched", expression: "idle_doze", gaze: "cursor", fx: "zzz" },
@@ -161,6 +176,16 @@
     function tick(now, dragging) {
       while (playing) {
         const { beat, entry, start } = playing;
+        if (playing.until !== undefined) {
+          // A directed beat runs its steps, holds the last one until the TTL
+          // ends, then hands the stage back to the rules engine.
+          if (now >= playing.until) { playing = null; break; }
+          if (beat.stage === "pendulum-drag" && dragging || now - start < beat.ms ||
+              playing.index >= entry.beats.length - 1) return playing;
+          playing.start += beat.ms;
+          playing.beat = entry.beats[++playing.index];
+          continue;
+        }
         if (beat.stage === "pendulum-drag" && dragging || now - start < beat.ms) return playing;
         if (++playing.index >= entry.beats.length) playing = null;
         else {
@@ -171,12 +196,29 @@
       return null;
     }
 
+    // direct plays beat (one beat or a scenario's steps) over the rules
+    // engine until ttlMs (clamped to 1-15 s) ends. A newer call replaces it.
+    function direct(beat, now, ttlMs, id = "directed") {
+      const beats = (Array.isArray(beat) ? beat : [beat]).filter(C.record);
+      if (!beats.length) return;
+      const ttl = C.clamp(Number.isFinite(ttlMs) ? ttlMs : 0, directedTTL.min, directedTTL.max);
+      const entry = { id, priority: directedPriority, cooldown: 0, beats };
+      playing = { entry, index: 0, start: now, beat: beats[0], count: 1, until: now + ttl };
+    }
+
     return {
-      fire, tick,
+      fire, tick, direct,
+      scenario(id) {
+        for (const list of registry.values()) {
+          const entry = list.find(choice => choice.id === id);
+          if (entry) return entry;
+        }
+        return null;
+      },
       preferFrame(signal) {
         if (playing?.signal?.token === signal.token) playing.signal = { ...playing.signal, ...signal };
       },
-      endReply() { if (playing?.entry.id === "working_tatata") playing = null; },
+      endReply() { if (playing?.entry.id === "working_tatata" && playing.until === undefined) playing = null; },
       clear() { playing = null; },
       reset() { playing = null; history.clear(); starts.clear(); }
     };
@@ -256,5 +298,50 @@
     };
   }
 
-  Object.assign(C, { scenarioRunner, timing });
+  // commandId returns id when a registry holds it, applying that registry's
+  // fallback chain, or when it is a built-in; otherwise "" (the field drops).
+  function commandId(id, registries, builtins) {
+    if (!C.timingId(id)) return "";
+    for (const registry of registries) {
+      if (!C.record(registry) || !Object.hasOwn(registry, id)) continue;
+      const found = C.resolveEntry(registry, id, null);
+      if (found) return found.id;
+    }
+    return builtins && Object.hasOwn(builtins, id) ? id : "";
+  }
+
+  function commandQuip(text) {
+    if (typeof text !== "string") return "";
+    return Array.from(text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim()).slice(0, quipLimit).join("").trim();
+  }
+
+  // directedCommand validates a companion-command payload against the active
+  // pack (and the shared default pack for props and fx), the built-in fx
+  // badges, and the runner's scenarios. An unknown ID drops only its field;
+  // a command left with nothing to show is null. The quip is plain text of at
+  // most 140 code points.
+  function directedCommand(command, pack, shared, runner) {
+    if (!C.record(command)) return null;
+    const manifest = pack?.manifest || {}, sharedManifest = shared?.manifest || {};
+    const patch = {};
+    const fields = [
+      ["expression", [manifest.expressions]],
+      ["gesture", [manifest.gestures]],
+      ["prop", [manifest.props, sharedManifest.props]],
+      ["fx", [manifest.fx, sharedManifest.fx], fxDefaults]
+    ];
+    for (const [field, registries, builtins] of fields) {
+      const id = commandId(command[field], registries, builtins);
+      if (id) patch[field] = id;
+    }
+    const quip = commandQuip(command.quip);
+    if (quip) patch.quip = quip;
+    const scenario = C.timingId(command.scenario) ? runner.scenario(command.scenario) : null;
+    if (!scenario && !Object.keys(patch).length) return null;
+    const ttl = C.clamp(Number.isFinite(command.ttl_ms) ? command.ttl_ms : 0, directedTTL.min, directedTTL.max);
+    const steps = scenario ? scenario.beats : [{ ...passive.idle, ms: ttl }];
+    return { id: scenario?.id || "directed", ttl, beats: steps.map(step => ({ ...step, ...patch })) };
+  }
+
+  Object.assign(C, { scenarioRunner, timing, directedCommand, fxDefaults });
 })(window.WsCompanion);

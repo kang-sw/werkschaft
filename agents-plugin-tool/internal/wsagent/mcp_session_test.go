@@ -308,7 +308,7 @@ func TestClaudeWorkerRunsOverHTTP(t *testing.T) {
 	if !ok || hello.Env[EnvAllowedTools] != "tickets.query,compact" || hello.Env[EnvNoDashboard] != "1" || hello.OwnerPID != 777 || !sameDir(hello.Cwd, h.root) {
 		t.Fatalf("the token resolves to the worker's ws-mcp context: %+v %v", hello, ok)
 	}
-	raw, err := os.ReadFile(recordPath(wsdashboard.SessionDir(h.dir, c.ID)))
+	raw, err := readFile(recordPath(wsdashboard.SessionDir(h.dir, c.ID)))
 	if err != nil || strings.Contains(string(raw), s.Token) {
 		t.Fatalf("a worker's token is never persisted: %v", err)
 	}

@@ -63,8 +63,9 @@ const (
 // registered key as ws-mcp's own, so it skips these.
 var manifestGlobalOnlyKeys = map[string]struct{}{
 	DashboardLANKey: {}, DashboardMailboxUndeliveredKey: {},
-	wsdashboard.CompanionModeKey: {}, wsdashboard.CompanionDirectorKey: {},
+	wsdashboard.CompanionEnabledKey: {}, wsdashboard.CompanionDirectorKey: {},
 	wsdashboard.CompanionPackKey: {}, wsdashboard.CompanionPresetKey: {},
+	wsdashboard.CompanionAgentCooldownKey: {}, wsdashboard.CompanionAgentHourlyCapKey: {},
 }
 
 func init() {
