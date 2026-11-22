@@ -53,8 +53,8 @@ Vocabulary used below:
 - **Outfit-baked layer**: body art per column with line, outfit fill channels
   and a pure-white `skinFill` tinted at runtime by the `skin` channel.
 - **Head set**: hair, eye sets, attachments and colors, each chosen on its own.
-- **Scaffold**: the authoring-only white body the art pack dresses by image
-  edit. It never ships and no schema field refers to it (Decision 4).
+- **Scaffold**: the authoring-only body the art pack dresses by image edit.
+  It never ships and no schema field refers to it (Decision 4).
 
 ## Scope
 
@@ -176,10 +176,14 @@ art-pack requirements; no phase here implements them.
 4. **Authoring scaffold and pipeline (125=c).** The art pack authors each
    outfit in six steps; this ticket only records them for the manual recipe
    (Decision 20):
-   1. A starter scaffold: a white body derived from the local reference base
-      under the epic's base-body exception, redrawn upright and front-facing.
-      It carries a generic placeholder bob and face only to balance outfit
-      design.
+   1. A starter scaffold, under the epic's base-body exception: derived from
+      the local reference base, with a generic placeholder bob and face,
+      wearing a plain neutral base layer (simple tee and shorts) that the
+      starter outfit edit replaces; redrawn upright and front-facing;
+      local-only, never shipped. It is not required to be a bare white body,
+      because image generation refuses an upright bare-body scaffold. The bob
+      and face only balance outfit design, and the shipped `skinFill` still
+      comes from the skin split of each dressed asset (step 4).
    2. Dress the starter outfit over the scaffold by image edit.
    3. Make pose and gesture variants by redrawing the dressed asset into each
       pose.
