@@ -58,6 +58,7 @@ struct Data {
     overlay: Cell<HWND>,
     band: Cell<HWND>,
     tracking: Cell<bool>,
+    pressed: Cell<bool>,
     emit: Box<dyn Fn(Event)>,
 }
 
@@ -116,6 +117,7 @@ pub unsafe fn install(
         overlay: Cell::new(HWND::default()),
         band: Cell::new(HWND::default()),
         tracking: Cell::new(false),
+        pressed: Cell::new(false),
         emit: Box::new(emit),
     }));
     let child = |title: PCWSTR| {
@@ -341,16 +343,24 @@ unsafe extern "system" fn overlay_proc(
         }
         WM_NCMOUSELEAVE => {
             state.tracking.set(false);
+            state.pressed.set(false);
             (state.emit)(Event::MaxHover(false));
             (state.emit)(Event::MaxPressed(false));
             LRESULT(0)
         }
         WM_NCLBUTTONDOWN => {
+            state.pressed.set(true);
             (state.emit)(Event::MaxPressed(true));
             LRESULT(0)
         }
         WM_NCLBUTTONUP => {
             (state.emit)(Event::MaxPressed(false));
+            // Only a click that began on the button toggles: an up without its
+            // down (the press started elsewhere, or the pointer left between)
+            // does nothing.
+            if !state.pressed.replace(false) {
+                return LRESULT(0);
+            }
             let command = if IsZoomed(state.top).as_bool() {
                 SC_RESTORE
             } else {
