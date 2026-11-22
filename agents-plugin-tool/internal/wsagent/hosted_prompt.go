@@ -61,19 +61,21 @@ func (r *Runner) subagentSteer(rec Record) string {
 	return fmt.Sprintf("Never use the native `%s` tool. Start a subagent only with the ws `agent.spawn` tool, and continue one with the ws `mailbox.send` tool.", tool)
 }
 
-// nativeFirstSteer is the delegation line of a PreferNativeSubagent lead:
-// its native subagent tool (named only when the catalog names it) explores
-// without ws tools at the harness's default model, and anything that needs
-// ws tools or a specific tier runs on an external harness through
-// agent.spawn, its bare-size recommendations qualified with a harness.
+// nativeFirstSteer is the delegation line of a PreferNativeSubagent lead
+// (agy): its native subagent tool (named only when the catalog names it)
+// explores without ws tools at the harness's default model; anything that
+// needs ws tools runs through agent.spawn with a rendered tier passed as
+// returned, which may end on agy, restrained by the Antigravity terms risk
+// toward an external fixed tier when another harness fits (the same rule as
+// its manual's tier line).
 func nativeFirstSteer(tool string) string {
 	native := "your native subagent tool"
 	if tool != "" {
 		native = "your native `" + tool + "` tool"
 	}
 	return "Use " + native + " for exploration and research that needs no ws tools; it runs at your harness's default model, so when a question needs a specific tier, use a read-only ws `agent.spawn` subagent at an external-harness tier instead. " +
-		"Run rendered ws playbooks and any work that needs ws tools on an external harness: start it with the ws `agent.spawn` tool at a `claude.<size>`, `codex.<size>`, or configured route target, and continue it with the ws `mailbox.send` tool. " +
-		"When a render recommends a bare size or a role tier that resolves to your own harness, put `claude.` or `codex.` before the size instead of passing it as returned. " +
+		"Run rendered ws playbooks and any work that needs ws tools through the ws `agent.spawn` tool, and continue it with the ws `mailbox.send` tool. " +
+		"Pass a rendered tier as returned: a role tier keeps its configured route, model and effort, and may end on agy, which is allowed. An agy route carries the Antigravity terms risk, so when another harness fits the work, choose an external fixed tier such as `claude.small` for `playbook-explore:small` instead; never put a harness prefix before a role tier. " +
 		"A native subagent is one-shot: ask a follow-up of a new one; `mailbox.send` continues only agents started with `agent.spawn`."
 }
 

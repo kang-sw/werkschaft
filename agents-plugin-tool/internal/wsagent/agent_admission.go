@@ -117,6 +117,11 @@ func (r *Runner) childAdmission(rec Record, def Profile) (PermissionLevel, strin
 	if rec.Lead {
 		return "", "", nil
 	}
+	// A cross-harness worker record (admitWorkerRecord) is kept but never
+	// launched or woken again.
+	if err := r.admitWorkerRecord(rec); err != nil {
+		return "", "", err
+	}
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
 	level, source, err := r.workerPermission(rec, def, dir)
 	if err != nil {

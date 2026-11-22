@@ -79,7 +79,7 @@ func TestTierRoutingUIBrowser(t *testing.T) {
 	source := mcp.NewDashboardSessionSource()
 	// agy cannot spawn here, as on a machine without it: the graph's routes
 	// to it say so, as agent.spawn would refuse them.
-	agyMissing := func(harness string) (string, bool) {
+	agyMissing := func(_, harness string) (string, bool) {
 		if harness == "agy" {
 			return `harness "agy" is not installed`, true
 		}

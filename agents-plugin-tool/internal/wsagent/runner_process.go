@@ -71,6 +71,11 @@ func (c *conv) startProcess() error {
 		return conflict("the session is archived; unhide it before starting")
 	}
 	rec := c.record()
+	// Before the profile is read: a removed or edited profile must not mask
+	// a cross-harness refusal (admitWorkerRecord).
+	if err := c.r.admitWorkerRecord(rec); err != nil {
+		return err
+	}
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
 	if err != nil {
 		return err
@@ -94,15 +99,23 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	}
 	defer releaseAdmission()
 	c.mcpStale = false
-	c.loadCompaction()
-	c.loadModelWait()
+	// A cross-harness rejoin attaches only to match ownership and end the
+	// holder: no compaction, agy watchdog, or permission config is read.
+	refused := attach && c.crossHarnessRejoin
+	if !refused {
+		c.loadCompaction()
+		c.loadModelWait()
+	}
 	if rec.Backend == BackendPi && !attach {
 		if err := c.r.checkChildProfile(rec.Parent, rec.Profile, def); err != nil {
 			return err
 		}
 	}
 	level, source := PermissionLevel(""), ""
-	if attach {
+	if refused {
+		// Keeps the level startConv left (none for a refused record).
+		level, source = c.workerPermissionLevel, c.workerPermissionSource
+	} else if attach {
 		var err error
 		level, source, err = c.r.workerPermission(rec, def, c.dir)
 		if err != nil {
@@ -614,14 +627,28 @@ func (c *conv) retireHolder() error {
 // scan.
 func (c *conv) reattach() {
 	rec := c.record()
+	if err := c.r.admitWorkerRecord(rec); err != nil {
+		// Never rejoined. The attach below only lets checkReattach run
+		// the ownership match every held worker passes. Replay, events,
+		// and the MCP bearer stay closed. A matching holder is then
+		// ended (retireCrossHarnessWorker); a mismatched one is never
+		// stopped. The record stays, stopped, either way.
+		c.crossHarnessRejoin = true
+		c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), true })
+		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s refused: %v\n", rec.ReplyID, rec.HolderID, err)
+	}
+	// A cross-harness rejoin never runs, so it reads no profile (startWorker
+	// skips its config reads too).
 	def := Profile{Backend: rec.Backend, Lead: rec.Lead}
-	if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
-		def = *rec.ResolvedDefinition
-	} else if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
-		// Best-effort mapping for a legacy held process is not evidence of
-		// what it launched with. Keep its child ceiling unavailable until
-		// an actual startWorker launch records the checked definition.
-		def = rp.Definition
+	if !c.crossHarnessRejoin {
+		if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
+			def = *rec.ResolvedDefinition
+		} else if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
+			// Best-effort mapping for a legacy held process is not evidence of
+			// what it launched with. Keep its child ceiling unavailable until
+			// an actual startWorker launch records the checked definition.
+			def = rp.Definition
+		}
 	}
 	var err error
 	if rec.Lead {
@@ -678,8 +705,9 @@ func (c *conv) checkReattach() {
 	if !ok {
 		return
 	}
-	if c.workerRetiring {
-		c.retireDowngradedWorker(hp)
+	if c.retiringHolder() {
+		// The ownership match passed before the first, failed stop.
+		c.retryRetirement(hp, true)
 		return
 	}
 	id, _, _ := hp.HolderInfo()
@@ -692,7 +720,10 @@ func (c *conv) checkReattach() {
 			}
 			if !c.rec.Lead {
 				var meta holderSession
-				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.rec, meta, info.Child) {
+				// A cross-harness retirement stops the holder, so a holder already
+				// rejected grants it no stop authority either.
+				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.record(), meta, info.Child) ||
+					c.crossHarnessRejoin && c.r.holders.isRejected(id) {
 					// Never stop a holder that failed the ownership check.
 					c.r.holders.reject(id)
 					hp.Detach()
@@ -705,9 +736,16 @@ func (c *conv) checkReattach() {
 						}
 					})
 					c.recoveryFailed("held process association does not match the worker record")
+					c.crossHarnessRetired()
 					return
 				}
-				if c.retireDowngradedWorker(hp) {
+				if c.retireDowngradedWorker(hp, true) {
+					c.crossHarnessRetired()
+					return
+				}
+				if c.crossHarnessRejoin {
+					// Ownership matched: end the holder instead of rejoining it.
+					c.retireCrossHarnessWorker(hp)
 					return
 				}
 				rec := c.record()
@@ -728,6 +766,7 @@ func (c *conv) checkReattach() {
 	}
 	if !listed {
 		c.processGone()
+		c.crossHarnessRetired()
 		return
 	}
 	if !attached {

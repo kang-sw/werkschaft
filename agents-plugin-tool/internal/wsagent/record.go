@@ -111,6 +111,16 @@ type Record struct {
 	// one-line name its spawner gave it.
 	Parent *ParentRef `json:"parent,omitempty"`
 	Label  string     `json:"label,omitempty"`
+	// SpawnerBackend is the verified backend of the session that spawned
+	// the conversation (AgentCaller.VerifiedBackend), stamped once at
+	// spawn: empty when the spawner had no verified binding, or for a
+	// record made before the stamp, whose startup load derives it from its
+	// parent's record (resolveSpawnerBackends). A backend registered with a
+	// cross-harness refusal admits the record from it (admitWorkerRecord).
+	// It stays out of Parent, whose whole value keys the child index and
+	// parent ownership, and top-level so an older writer keeps it as
+	// unknown data.
+	SpawnerBackend string `json:"spawner_backend,omitempty"`
 	// TurnOpen is set on a conversation with a Parent while one of its
 	// turns runs: a successor rejoins a held process, or reports interruption
 	// when that process is gone.

@@ -2,6 +2,7 @@
 package wsagent
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -369,7 +370,10 @@ func (r *Runner) setPermissionMode(id, mode string, user bool) (State, error) {
 // Pi child can be reopened by Send; other closed conversations refuse it.
 // Its open descendants through conversation parents, and a lead's Pi
 // children (children.go), close first, deepest first. A conversation parent
-// whose done turn waited for this child's report is released.
+// whose done turn waited for this child's report is released. A
+// conversation whose retiring holder could not be ended stays open and
+// fails the close (errHolderNotEnded); a descendant that does stops the
+// cascade before its ancestors close, so closing id again retries it.
 func (r *Runner) CloseConversation(id string) (State, error) {
 	// The jobs a predecessor left are known only once bound: a close
 	// before that would close over jobs it cannot stop. The wait holds no
@@ -402,6 +406,14 @@ func (r *Runner) CloseConversation(id string) (State, error) {
 			break
 		}
 		if _, err := r.closeOne(d); err != nil {
+			// A descendant whose failed retirement stop left its holder
+			// running refuses the close of every conversation above it.
+			if errors.Is(err, errHolderNotEnded) {
+				for _, rest := range order[i:] {
+					r.unfenceExec(rest)
+				}
+				return State{}, err
+			}
 			r.unfenceExec(d)
 		}
 	}
@@ -427,8 +439,7 @@ func (r *Runner) releaseParent(id string) {
 // closeOne closes conversation id alone.
 func (r *Runner) closeOne(id string) (State, error) {
 	st, err := r.act(id, func(c *conv) error {
-		c.close()
-		return nil
+		return c.close()
 	})
 	if err != nil {
 		return st, err

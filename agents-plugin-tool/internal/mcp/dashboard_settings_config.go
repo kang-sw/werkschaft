@@ -159,8 +159,8 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 // DashboardConfigBackend is the daemon's settings backend for packageName.
 // available is agent.spawn's harness availability check without probes
 // (wsagent Runner.HarnessAvailability) the tier routing view reports at each
-// terminal; nil reports none.
-func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func(), available func(harness string) (why string, known bool)) (*wsdashboard.ConfigBackend, error) {
+// terminal, for the view's simulated caller harness; nil reports none.
+func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func(), available func(caller, harness string) (why string, known bool)) (*wsdashboard.ConfigBackend, error) {
 	catalog, err := DashboardConfigCatalog(packageName)
 	if err != nil {
 		return nil, err

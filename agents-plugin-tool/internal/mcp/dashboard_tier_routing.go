@@ -112,11 +112,13 @@ type dashboardTierBundle struct {
 // the built-in harnesses; legacy aliases apply at resolution as they do for
 // agent.spawn. available is the spawn's harness availability check for an
 // interactive view (wsagent Runner.HarnessAvailability: why a harness
-// cannot launch now, "" when it can, known false while that would need a
-// probe); it runs once per harness a route ends on, never for one no route
-// reaches, and marks every route ending on an unavailable harness, as
-// agent.spawn would refuse it. Nil skips it.
-func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(string) (string, bool)) (dashboardTierView, error) {
+// cannot launch now for a caller, "" when it can, known false while that
+// would need a probe); it runs once per harness a route ends on, never for
+// one no route reaches, with the view's caller harness as the caller (a
+// harness that admits only same-harness callers is available in its own
+// preview alone), and marks every route ending on an unavailable harness,
+// as agent.spawn would refuse it. Nil skips it.
+func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(caller, harness string) (string, bool)) (dashboardTierView, error) {
 	roles, err := packagedTierRoles(rsrc)
 	if err != nil {
 		return dashboardTierView{}, err
@@ -142,7 +144,7 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 		a, ok := checked[h]
 		if !ok {
-			a.why, a.known = available(h)
+			a.why, a.known = available(view.Harness, h)
 			checked[h] = a
 			switch {
 			case !a.known:

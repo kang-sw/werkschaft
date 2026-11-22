@@ -514,6 +514,11 @@
     var seg = hsec.appendChild(mk("div", "spseg"));
     seg.setAttribute("role", "radiogroup");
     seg.setAttribute("aria-label", wsT("js.sup.harness"));
+    // agy's terms: a hosted agy lead is still created, with this warning
+    // shown while agy is the picked harness (it never disables Start).
+    var hwarn = hsec.appendChild(mk("p", "spnote spterms", wsT("js.lead.agy.terms")));
+    hwarn.setAttribute("role", "note");
+    hwarn.hidden = true;
     var hbtn = Object.create(null), harnessSig = "";
     // harnessButtons draws the harness segment from the latest list; unless
     // keep, a harness the list no longer offers moves to the first one that
@@ -657,6 +662,7 @@
         hbtn[k].disabled = P.loading || off(k);
         hbtn[k].title = off(k) ? wsT("js.sup.unavail", k, h && h.error || "") : "";
       });
+      hwarn.hidden = P.harness !== "agy";
       Object.keys(ibtn).forEach(function (k) { ibtn[k].setAttribute("aria-checked", String(P.iso === k)); });
       idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint") + (P.harness === "pi" ? " " + wsT("js.lead.iso.pi") : "");
       start.disabled = P.busy || P.loading || off(P.harness);
