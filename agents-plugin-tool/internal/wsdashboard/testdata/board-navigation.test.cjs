@@ -152,6 +152,38 @@ test('a consumed board link is not handled a second time', () => {
   assert.match(dashboard, /if \(e\.defaultPrevented \|\| !a \|\| !inBoard\(a\)/);
 });
 
+for (const pending of [false, true]) test('a host-rendered #p link click reaches boardJump past form.js, pending=' + pending, () => {
+  const { context, nodes, oldNodes, events } = environment(pending);
+  const unfolded = [];
+  context.window.WsCards = { unfoldTopic: n => unfolded.push(n.id) };
+  vm.runInContext(func(dashboard, 'boardLinkClick') + 'window.wbBoardJump = boardJump;', context);
+  // form.js binds the board's in-page links; its listener runs first (on the anchor).
+  const listeners = [];
+  const anchor = { getAttribute: k => (k === 'href' ? '#p33' : null), addEventListener: (t, fn) => listeners.push(fn) };
+  anchor.closest = sel => (sel === 'a[href]' ? anchor : null);
+  const inBoard = context.inBoard;
+  context.inBoard = n => n === anchor || inBoard(n);
+  context.once = () => true;
+  context.q = () => [anchor];
+  vm.runInContext(func(readAssetSource('wswhiteboard', 'form.js'), 'inPageLinks'), context);
+  context.inPageLinks({});
+  context.q = () => [];
+  // The mounted (possibly stale) panel form.js would otherwise navigate to.
+  context.window.wbHistory.resolveTarget = id => (pending ? oldNodes : nodes)[id];
+  context.window.wbHistory.navigate = () => events.push('form-navigate');
+  const e = { target: anchor, button: 0, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  assert.equal(listeners.length, 1);
+  listeners.forEach(fn => fn(e));
+  assert.equal(e.defaultPrevented, false, 'form.js leaves the click to the dashboard');
+  context.boardLinkClick(e);
+  assert.equal(e.defaultPrevented, true);
+  assert.ok(!events.includes('form-navigate'));
+  if (pending) assert.equal(events[0], 'apply');
+  assert.ok(events.includes('scroll:p33'), 'lands on the live node');
+  assert.deepEqual(unfolded, ['p33'], 'the destination topic unfolds');
+  assert.equal(context.window.wbPill.pending, 0);
+});
+
 test('explicit recap resolves its applied topic before materializing the target', () => {
   const { context, nodes, events } = environment(true);
   const old = nodes['topic-aa'];

@@ -319,14 +319,19 @@
     return window.wbHistory ? boardBoxes().reduce(function (all, b) { return all.concat(window.wbHistory.capture(b)); }, []) : null;
   }
   // Native fragments also need to materialize paged panels and open folds.
-  doc.addEventListener("click", function (e) {
+  // The board's own in-page link handler (form.js) defers to this one while
+  // wbBoardJump is set, so a pending update applies and a folded topic
+  // unfolds before the target is measured.
+  function boardLinkClick(e) {
     var a = e.target.closest && e.target.closest("a[href]");
     if (e.defaultPrevented || !a || !inBoard(a) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     var href = a.getAttribute("href") || "";
     if (href.charAt(0) !== "#" || !boardJump(href.slice(1))) return;
     e.preventDefault();
     try { window.history.replaceState(null, "", href); } catch (x) {}
-  });
+  }
+  doc.addEventListener("click", boardLinkClick);
+  window.wbBoardJump = boardJump;
   doc.addEventListener("wbhistoryload", function (e) {
     var el = e.detail && e.detail.root;
     if (!el || !inBoard(el)) return;
