@@ -1256,6 +1256,82 @@ Verification (macOS arm64):
 - `go build ./...`: ok.
 - `gofmt`: clean.
 
+#### Edition (b72e720c4) - 2026-11-22
+
+Decision note. This amends the Phase 1 Result's removal fence. The
+Decision at line 398 is unchanged.
+
+- **Owner decision (board 2162 = a): a removal publishes and never
+  moves.** `ApplyRemovalFence(rel, witness)` does the following:
+  1. Records the original's digest and a sentinel mtime.
+  2. Publishes the staged original bytes at the witness through the
+     replacement path (`publishFile`).
+  3. Deletes `rel` durably.
+
+  Proof is the replacement proof: `rel` absent and the witness holding
+  the digest under the exact sentinel. For an absent original, proof is
+  `rel` and the witness both absent.
+  - The witness path is emptied durably before a new record, but only of
+    the migration's own last publication there. The sticky
+    `witness_digest` and `witness_mtime` columns replace `witness_id` and
+    `witness_content`. Any other entry is `ErrWitnessOccupied`.
+  - A symbolic-link legacy `tracker-hooks.json` becomes a regular copy of
+    its target. The owner accepted this.
+  - Rare aliases are intentionally not fenced: hard links, links swapped
+    mid-cutover, short names and similar. The only guarantee is that no
+    data is lost. The staged original keeps the bytes, a link target is
+    never touched, and the witness only ever loses the migration's own
+    file.
+  - Deleted with their tests: file identity (`ident_*`), short-name
+    resolution (`entryname_*`), `routesThrough`, `sameIncarnation` and the
+    identity preflight, and the denied-witness logic. This was bd08ab4dd.
+    Non-test code went down by 126 lines over the round.
+- **Technical decision (auto-confirmed): an unreadable original refuses
+  the cutover.** `ApplyRemovalFence` and `Commit` return the new
+  `ErrRemovalUnreadable`. It is wrapped in `ErrCutoverUnsupported`, or in
+  `ErrCutoverInterrupted` once a fence exists. The legacy file is kept
+  and nothing is imported. For Phase 2: apply the removal before the
+  replacement fences, so that this refusal can still be the clean legacy
+  fallback.
+- **Moved-aside sessions (b72e720c4):** a vanished session with a fence
+  record is kept as missing, not discarded (`legacy_sessions.missing`,
+  `StageResult.Missing`). Its rows are neither re-read, deleted nor
+  imported.
+  - Restored under the same generation, it is picked up and its fences
+    proven.
+  - Recreated under another generation, it is discarded.
+  - A commit while it is away imports everything else and keeps its rows.
+  - Each session's reads run in a savepoint, so a directory that vanishes
+    mid-read changes nothing.
+
+  Test: `TestMovedAsideSessionKeepsItsJournal`; all three subtests failed
+  on the old logic.
+
+Other test changes:
+
+- New: `TestUnreadableOriginalRefusesTheCutover` and
+  `TestRemovalInterruptedBeforeItsDeletionIsReapplied`.
+- `TestRemovalWitnessStaysBesideItsPath` now asserts the
+  symbolic-link-to-copy behavior.
+- `TestRefusalAfterAFenceIsNeverTheFallback` forces its discard with a
+  recreated session.
+
+API changes:
+
+- `ErrRemovalUnreadable` and `StageResult.Missing` are new.
+- `ErrCutoverUnsupported`'s text no longer names a file system.
+- The new hit point `fence-deleted` follows the legacy deletion.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (15.4 s).
+- `go test -count=1 -v ./internal/wsmeta/`: ok, no failures or skips.
+- `go vet ./internal/wsmeta`, also with `GOOS=windows` and `GOOS=linux`:
+  ok.
+- `GOOS=windows go test -c ./internal/wsmeta`: builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
 
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
