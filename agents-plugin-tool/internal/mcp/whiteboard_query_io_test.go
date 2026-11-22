@@ -26,7 +26,7 @@ func TestWhiteboardQueryHeldStoreUsesNoFolderIO(t *testing.T) {
 		if strings.HasPrefix(site, "file_io_site:wswhiteboard/") && strings.HasSuffix(site, ":stat") {
 			stats += count - before[site]
 		}
-		if strings.HasPrefix(site, "file_io_site:wsstate/replace_file_") && strings.HasSuffix(site, ":read_file") {
+		if strings.HasPrefix(site, "file_io_site:wswhiteboard/") && strings.HasSuffix(site, ":read_file") {
 			boardReads += count - before[site]
 		}
 	}

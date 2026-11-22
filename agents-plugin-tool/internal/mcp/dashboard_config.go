@@ -13,7 +13,9 @@ func (s *Server) notifyScalarTune(key string, opts wsconfig.Options) {
 	if key == wsconfig.ItemWorkflowLang {
 		s.refreshAgentAmbient()
 	}
-	if !wsdashboard.IsCompanionConfigKey(key) {
+	// The daemon holds these global keys in memory; the notification only
+	// invalidates them, and the daemon rereads its own global file.
+	if !wsdashboard.IsDaemonGlobalConfigKey(key) {
 		return
 	}
 	path, err := wsconfig.GlobalPath(opts)

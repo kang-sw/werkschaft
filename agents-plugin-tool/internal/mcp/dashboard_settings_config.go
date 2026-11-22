@@ -285,7 +285,7 @@ func dashboardAdapterReadLimits(key string) (noRepo, noSession bool) {
 	case "pi.runaway_threshold", "pi.settle_delay_ms", "pi.compaction_advisory_percent", "pi.compaction_hard_percent",
 		"pi.context_window_override", "pi.compaction_dialog_budget_bytes", "pi.compaction_reread_budget_bytes":
 		return false, false
-	case "agy.model_wait_timeout_seconds", "agy.model_wait_retries":
+	case "agy.model_wait_timeout_seconds", "agy.model_wait_retries", "agy.stall_log_check", "agy.http2_frame_trace":
 		return false, true
 	case DashboardPortKey, "dashboard.pi_spawn_enabled":
 		return true, true

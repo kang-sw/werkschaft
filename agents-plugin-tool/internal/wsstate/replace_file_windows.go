@@ -36,12 +36,16 @@ func AtomicReplaceFile(tmp, path string) error {
 // ReadFile reads path, retrying the brief holds AtomicReplaceFile retries:
 // an open that meets another process's replace or removal of path in flight
 // fails with ERROR_SHARING_VIOLATION or ERROR_ACCESS_DENIED (a file pending
-// deletion). A missing file is reported at once.
+// deletion). A missing file is reported at once. Every attempt counts at
+// ReadFile's caller, as on POSIX, so the counters name the reading code
+// rather than this wrapper.
 func ReadFile(path string) ([]byte, error) {
+	site := fileIOSite(2, "read_file")
 	var data []byte
 	err := retryTransient(func() error {
+		countFileIOAt(site)
 		var err error
-		data, err = ReadFileOnce(path)
+		data, err = os.ReadFile(path)
 		return err
 	})
 	return data, err

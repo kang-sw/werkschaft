@@ -114,3 +114,60 @@ func TestCompanionModalRowsAndShellStrings(t *testing.T) {
 		t.Fatal("a malformed catalog was accepted")
 	}
 }
+
+// reloadAgents is an agent host that keeps global configuration in memory
+// and counts the daemon's requests to reread it.
+type reloadAgents struct{ reloads int }
+
+func (a *reloadAgents) Handler() http.Handler               { return http.NotFoundHandler() }
+func (a *reloadAgents) Start(func(replyID, project string)) {}
+func (a *reloadAgents) InboxChanged(string)                 {}
+func (a *reloadAgents) Close()                              {}
+func (a *reloadAgents) ReloadGlobalConfig()                 { a.reloads++ }
+
+// TestGlobalConfigNotificationReloadsTheAgentHost: an authenticated
+// invalidation of this daemon's own global file, by the route or in process,
+// rereads the agent host's global settings too; a refused request, another
+// config home, and another daemon's state directory do not.
+func TestGlobalConfigNotificationReloadsTheAgentHost(t *testing.T) {
+	d := authFixture(t)
+	opts := wsconfig.Options{ConfigHome: t.TempDir()}
+	agents := &reloadAgents{}
+	d.agents = agents
+	d.config = &ConfigBackend{Options: opts, LoadCompanion: func() (CompanionConfig, error) { return CompanionConfig{}, nil }}
+	path, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(credential, configID string) int {
+		req := authRequest(http.MethodPost, companionChangedPath, "")
+		req.Header.Set(companionConfigHeader, configID)
+		if credential != "" {
+			req.Header.Set("Authorization", "Bearer "+credential)
+		}
+		return authServe(d, req).Code
+	}
+	if code := send("", companionConfigID(path)); code != http.StatusForbidden || agents.reloads != 0 {
+		t.Fatalf("unauthenticated: status %d, reloads %d", code, agents.reloads)
+	}
+	if code := send(d.endpoint.Token, companionConfigID(filepath.Join(t.TempDir(), "config.json"))); code != http.StatusNoContent || agents.reloads != 0 {
+		t.Fatalf("another config home: status %d, reloads %d", code, agents.reloads)
+	}
+	if code := send(d.endpoint.Token, companionConfigID(path)); code != http.StatusNoContent || agents.reloads != 1 {
+		t.Fatalf("matching: status %d, reloads %d", code, agents.reloads)
+	}
+	if d.NotifyCompanionConfigChange(t.TempDir(), path) || agents.reloads != 1 {
+		t.Fatalf("another state directory reloaded: %d", agents.reloads)
+	}
+	if !d.NotifyCompanionConfigChange(d.dir, path) || agents.reloads != 2 {
+		t.Fatalf("in-process notification: reloads %d", agents.reloads)
+	}
+	for _, key := range []string{CompanionEnabledKey, CompanionDirectorKey, wsconfig.ItemAgentKeepAwakeDuringTurns} {
+		if !IsDaemonGlobalConfigKey(key) {
+			t.Errorf("%s is not a daemon global key", key)
+		}
+	}
+	if IsDaemonGlobalConfigKey(wsconfig.ItemAgentChildWaitingDays) {
+		t.Error("agent.child_waiting_days is read once per start, not invalidated")
+	}
+}
