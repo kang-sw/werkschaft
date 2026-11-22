@@ -3113,5 +3113,8 @@
   "js.tk.pm.chip.asg.org.pend.other": "{1} · 待確認 ({0}人)",
   "js.tk.pm.vac.tip": "無負責人的組織無法選取",
   "js.tk.pm.vac.hint": "需管理員指定負責人後才可選取",
-  "js.tk.pm.stale": "已在別處變更，請重新開啟。"
+  "js.tk.pm.stale": "已在別處變更，請重新開啟。",
+  "js.settings.combo.toggle": "顯示選項",
+  "js.settings.combo.thinking": "推理",
+  "js.settings.combo.unavailable": "無法使用"
 }

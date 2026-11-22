@@ -3113,5 +3113,8 @@
   "js.tk.pm.chip.asg.org.pend.other": "{1} · en attente ({0})",
   "js.tk.pm.vac.tip": "Les organisations sans responsable ne peuvent pas être sélectionnées",
   "js.tk.pm.vac.hint": "Un administrateur doit désigner un responsable pour sélectionner",
-  "js.tk.pm.stale": "Modifié ailleurs. Veuillez rouvrir."
+  "js.tk.pm.stale": "Modifié ailleurs. Veuillez rouvrir.",
+  "js.settings.combo.toggle": "Afficher les options",
+  "js.settings.combo.thinking": "réflexion",
+  "js.settings.combo.unavailable": "indisponible"
 }

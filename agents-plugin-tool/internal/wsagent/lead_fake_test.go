@@ -28,12 +28,15 @@ type fakeStream struct {
 	cond *sync.Cond
 	q    []func()
 	dead bool
+	// done is closed when the stream's goroutine returns.
+	done chan struct{}
 }
 
 func newFakeStream() *fakeStream {
-	s := &fakeStream{}
+	s := &fakeStream{done: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
 	go func() {
+		defer close(s.done)
 		for {
 			s.mu.Lock()
 			for len(s.q) == 0 && !s.dead {
@@ -59,6 +62,20 @@ func (s *fakeStream) push(fn func()) {
 	}
 	s.mu.Unlock()
 	s.cond.Signal()
+}
+
+// drain waits until every record pushed before it has been delivered, or,
+// for a killed stream, until its goroutine has returned, so nothing of a
+// finished test is still running on this stream (and the test's own
+// goroutine is ordered after what it did).
+func (s *fakeStream) drain() {
+	sent := make(chan struct{})
+	s.push(func() { close(sent) })
+	select {
+	case <-sent:
+	case <-s.done:
+	case <-time.After(5 * time.Second):
+	}
 }
 
 func (s *fakeStream) kill() {
@@ -102,6 +119,8 @@ type fakeHolders struct {
 	sinks   []wsholder.Sink
 	holders map[string]*fakeHolder
 	order   []string
+	// streams is every delivery stream made, for drain.
+	streams []*fakeStream
 	// ops lists the launches, spawns, and stops asked for, in order
 	// ("launch h1", "spawn h1", "stop h1").
 	ops  []string
@@ -215,7 +234,7 @@ func (f *fakeHolders) Scan() {
 		if h.attached {
 			continue
 		}
-		h.attached, h.stream = true, newFakeStream()
+		h.attached, h.stream = true, f.newStreamLocked()
 		for _, ev := range h.ring[h.first:] {
 			if ev.Seq >= h.lostFrom && ev.Seq < h.lostTo {
 				if ev.Seq == h.lostFrom {
@@ -262,7 +281,7 @@ func (f *fakeHolders) newLocked(session json.RawMessage, attached bool) *fakeHol
 	f.next++
 	h := &fakeHolder{id: fmt.Sprintf("h%d", f.next), pid: 4000 + f.next, session: session, attached: attached, known: attached}
 	if attached {
-		h.stream = newFakeStream()
+		h.stream = f.newStreamLocked()
 	}
 	f.holders[h.id] = h
 	f.order = append(f.order, h.id)
@@ -546,6 +565,25 @@ func (f *fakeHolders) exit(id string, code int) {
 
 // restart is the daemon's end: every connection closes, and the holders
 // run on for the next daemon to find.
+// newStreamLocked makes a holder's delivery stream and remembers it for
+// drain, killed or not.
+func (f *fakeHolders) newStreamLocked() *fakeStream {
+	s := newFakeStream()
+	f.streams = append(f.streams, s)
+	return s
+}
+
+// drain waits for every stream the holders ever had to deliver what it was
+// given (or, if killed, to stop).
+func (f *fakeHolders) drain() {
+	f.mu.Lock()
+	streams := slices.Clone(f.streams)
+	f.mu.Unlock()
+	for _, s := range streams {
+		s.drain()
+	}
+}
+
 func (f *fakeHolders) restart() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -974,6 +1012,10 @@ func (h *leadHarness) start() *leadHarness {
 		h.runner.BindExecJobs(h.execJobs)
 	}
 	h.t.Cleanup(h.runner.Close)
+	// Runs before Close: the holders' streams deliver on goroutines of their
+	// own, and what they still have to deliver must not outlive the test (it
+	// would race with the package-global changes of the next one).
+	h.t.Cleanup(h.holders.drain)
 	return h
 }
 

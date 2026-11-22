@@ -3113,5 +3113,8 @@
   "js.tk.pm.chip.asg.org.pend.other": "{1} · pendente ({0})",
   "js.tk.pm.vac.tip": "Organizações sem responsável não podem ser selecionadas",
   "js.tk.pm.vac.hint": "Um administrador deve definir um responsável para selecionar",
-  "js.tk.pm.stale": "Alterado em outro lugar. Reabra para tentar novamente."
+  "js.tk.pm.stale": "Alterado em outro lugar. Reabra para tentar novamente.",
+  "js.settings.combo.toggle": "Mostrar opções",
+  "js.settings.combo.thinking": "raciocínio",
+  "js.settings.combo.unavailable": "indisponível"
 }

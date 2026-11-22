@@ -3113,5 +3113,8 @@
   "js.tk.pm.chip.asg.org.pend.other": "{1} · Ausstehend ({0})",
   "js.tk.pm.vac.tip": "Organisationen ohne Leitung können nicht ausgewählt werden",
   "js.tk.pm.vac.hint": "Admin muss eine Leitung zuweisen, um auszuwählen",
-  "js.tk.pm.stale": "Anderswo geändert. Bitte erneut öffnen."
+  "js.tk.pm.stale": "Anderswo geändert. Bitte erneut öffnen.",
+  "js.settings.combo.toggle": "Optionen anzeigen",
+  "js.settings.combo.thinking": "Thinking",
+  "js.settings.combo.unavailable": "nicht verfügbar"
 }
