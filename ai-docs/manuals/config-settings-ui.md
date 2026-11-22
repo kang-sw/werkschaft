@@ -60,7 +60,7 @@ type or selectors:
    ```
    - **`key`**: exact key, or `<prefix>.*` for a wildcard family (for example `preference.*`, `agent.profile.*`).
    - **`section`**: one of `workflow`, `agents`, `compaction`, `prompts`, `profiles`, `claude`, `agy`, `dashboard`, `pi`. Keys starting with `claude.`, `agy.`, `dashboard.`, or `pi.` **must** use that adapter name as `section`.
-   - **`control`**: enforced daemon-type mappings are `boolean` -> `toggle`, `integer` -> `number`, `enum` -> `choice`, `tier` -> `tier`; specialized controls are `text`, `textarea`, `threshold`, `prompt`, and `profile` (for `agent.profile.*` / `worktree.profile.*` under `profiles`). Add `"unit"` when displaying a numeric unit.
+   - **`control`**: enforced daemon-type mappings are `boolean` -> `toggle`, `integer` -> `number`, `enum` -> `choice`, `tier` -> `tier`; specialized controls are `text`, `textarea`, `threshold`, `prompt`, `profile` (for `agent.profile.*` / `worktree.profile.*` under `profiles`), and `tier_routing` (the `agent.tier_routing` graph editor in `dashboard-settings-tiers.js`, which draws and previews the graph through `/api/config/tier-routing` and saves through the ordinary set/reset routes; its catalog rule sets `Editable` so a structured key is not shown read-only). Add `"unit"` when displaying a numeric unit.
    - **`selectors`**: must match the daemon entry's selectors exactly (for example `[]` or `["harness"]`).
    - **`label` / `description`**: distinct i18n IDs starting with `js.settings.key.` (convention: `js.settings.key.<key>.label` and `js.settings.key.<key>.description`).
 

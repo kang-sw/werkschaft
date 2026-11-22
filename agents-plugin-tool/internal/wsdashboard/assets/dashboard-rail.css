@@ -645,6 +645,8 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .rpop .sploc span { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .rpop .sploc code { font-family: var(--wb-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; }
 .rpop .spopts { display: grid; gap: 3px; padding-top: 6px; border-top: 1px solid var(--wb-muted); min-width: 0; }
+.rpop .sptiers { display: grid; gap: 3px; padding: 6px 0; border-top: 1px solid var(--wb-muted); min-width: 0; }
+.rpop .sptiers[hidden] { display: none; }
 .rpop .sprc { display: flex; align-items: center; gap: 8px; min-height: 26px; min-width: 0; }
 .rpop .sprc > label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--wb-muted-fg); white-space: nowrap; }
 .rpop .sprc.off > label { opacity: .55; }

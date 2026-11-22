@@ -66,6 +66,7 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 			// graph config.tune and agent.spawn would refuse. A known harness
 			// that is not installed still validates.
 			rule.Type = "object"
+			rule.Editable = true
 			rule.NormalizeObject = func(value any, scope wsconfig.Scope) (json.RawMessage, error) {
 				if _, ok := value.(map[string]any); !ok || scope != wsconfig.ScopeGlobal {
 					return nil, wsconfigservice.ErrInvalid
@@ -171,13 +172,10 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 	for key, value := range wsagent.BuiltinProfiles() {
 		structured[key] = value
 	}
-	return &wsdashboard.ConfigBackend{
+	backend := &wsdashboard.ConfigBackend{
 		Catalog: catalog, Options: opts, Structured: structured,
 		LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
 			return dashboardCompanionConfig(catalog, opts)
-		},
-		TierRouting: func(draft json.RawMessage, harness string) (any, error) {
-			return dashboardTierRoutingView(rsrc, opts, draft, harness)
 		},
 		Session:            src.settingsSession,
 		IsLead:             src.settingsLead,
@@ -188,7 +186,13 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 				ambient()
 			}
 		},
-	}, nil
+	}
+	// The graph view reads the backend's options at call time, the same
+	// config the snapshot and writes use.
+	backend.TierRouting = func(draft json.RawMessage, harness string) (any, error) {
+		return dashboardTierRoutingView(rsrc, backend.Options, draft, harness)
+	}
+	return backend, nil
 }
 
 func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Options) (wsdashboard.CompanionConfig, error) {

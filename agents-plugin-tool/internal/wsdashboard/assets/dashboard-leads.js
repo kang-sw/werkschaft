@@ -506,6 +506,7 @@
     var el = P.el = rpPop(wsT("js.lead.title"));
     el.appendChild(mk("div", "sphd", wsT("js.lead.title")));
     var loc = el.appendChild(mk("div", "sploc"));
+    var tierPick = leadTierPicker(el.appendChild(mk("div", "sptiers")), tierUsable, applyTier);
     var hsec = el.appendChild(mk("div", "spsec"));
     var seg = hsec.appendChild(mk("div", "spseg"));
     seg.setAttribute("role", "radiogroup");
@@ -563,6 +564,29 @@
     var cancel = row.appendChild(rpBtn("pbtn", wsT("js.rail.cancel")));
     var start = row.appendChild(rpBtn("pbtn go", wsT("js.lead.start")));
     function setErr(text) { err.textContent = text || ""; err.hidden = !text; }
+    // A named tier is usable when its harness can start here and the form
+    // can carry its model and effort (those fields are off on a harness
+    // that lists none).
+    function tierUsable(t) {
+      return !!t.harness && !!hbtn[t.harness] && !off(t.harness) && (!t.model || leadModels(t.harness).length > 0) && (!t.effort || leadEfforts(t.harness).length > 0);
+    }
+    // applyTier fills harness, model, and effort from a picked named tier.
+    // The permission level stays wherever this harness offers it; the
+    // native mode and plugin isolation stay the user's.
+    function applyTier(t) {
+      if (P.busy || P.loading) return;
+      var level = P.level, mode = rows.free();
+      if (t.harness !== P.harness) {
+        picks[P.harness] = currentPick();
+        P.harness = t.harness;
+        P.dropped = "";
+        P.refused = 0;
+        mode = pick(t.harness).mode;
+      }
+      rows.set(P.harness, { model: t.model || "", effort: t.effort || "", mode: mode });
+      P.level = level && (permLevels(P.harness) || []).indexOf(level) >= 0 ? level : "";
+      edited();
+    }
     function off(k) {
       var h = supHarness(k);
       return !hbtn[k] || (!!h && (h.lead === true ? h.available !== true : h.available === false));
@@ -609,9 +633,13 @@
       Object.keys(ibtn).forEach(function (k) { ibtn[k].setAttribute("aria-checked", String(P.iso === k)); });
       idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint") + (P.harness === "pi" ? " " + wsT("js.lead.iso.pi") : "");
       start.disabled = P.busy || P.loading || off(P.harness);
+      tierPick.busy = P.busy || !!P.loading;
+      tierPick.draw();
     }
-    // edited drops an earlier spawn's error once the form changed.
-    function edited() {
+    // edited drops an earlier spawn's error once the form changed; a hand
+    // edit of the model or effort returns the named tier to manual.
+    function edited(sel) {
+      if (sel && (sel === rows.model || sel === rows.effort)) tierPick.manual();
       if (!P.busy) setErr("");
       rows.notes(P.harness);
       permDraw();
@@ -620,6 +648,7 @@
     }
     function setHarness(k) {
       if (P.harness === k) return;
+      tierPick.manual();
       picks[P.harness] = currentPick();
       P.harness = k;
       P.level = P.dropped = "";
@@ -752,6 +781,7 @@
       loc.appendChild(mk("code", null, key)).title = key;
       setErr("");
       status.textContent = "";
+      tierPick.reset();
       harnessButtons();
       rows.set(P.harness, { model: "", effort: "", mode: "" });
       permDraw();
