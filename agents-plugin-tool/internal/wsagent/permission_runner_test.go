@@ -68,7 +68,7 @@ func TestPermissionLaunchMatrix(t *testing.T) {
 					}
 				}
 				rec := h.record(st.ID)
-				raw, err := os.ReadFile(recordPath(wsdashboard.SessionDir(h.dir, st.ID)))
+				raw, err := readFile(recordPath(wsdashboard.SessionDir(h.dir, st.ID)))
 				if err != nil {
 					t.Fatal(err)
 				}

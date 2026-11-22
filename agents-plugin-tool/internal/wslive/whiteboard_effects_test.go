@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -181,6 +182,18 @@ func TestWhiteboardEffectsPinnedOldDiskReader(t *testing.T) {
 		oldSeg, err := oldring.ReadRing(segDir)
 		if err != nil || len(oldSeg) != 0 {
 			t.Fatalf("old reader on segments: %+v %v", oldSeg, err)
+		}
+		// The old writer is a separate clock, strictly increasing only within
+		// itself: an append in the same wall-clock tick as the new writer's
+		// (about 0.5 ms on Windows) gets an equal stamp, which no merge can
+		// order. Append it after the new writer's last stamp, as a later
+		// write in real time would be.
+		pinned, err := wslive.ReadRing(segDir)
+		if err != nil || len(pinned) != 3 {
+			t.Fatalf("new reader on segments: %+v %v", pinned, err)
+		}
+		for !time.Now().After(pinned[len(pinned)-1].At) {
+			time.Sleep(time.Millisecond)
 		}
 		if err := oldring.AppendRing(segDir, []oldring.RingEntry{{Kind: oldring.RingUser, Text: "old-writer"}}); err != nil {
 			t.Fatal(err)
