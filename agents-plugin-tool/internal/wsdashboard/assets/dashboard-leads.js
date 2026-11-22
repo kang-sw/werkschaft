@@ -830,23 +830,27 @@
         sync();
         railPopPlace();
       }, function () {
-        // The newer list arrived over a form the user may have edited: keep
-        // the picks, and show them against the new lists.
-        if (!rpLive(P, gen)) return;
-        picks[P.harness] = currentPick();
-        harnessButtons();
-        showPick(P.harness);
-        reapplyTier();
-        sync();
-        railPopPlace();
+        if (rpLive(P, gen)) choicesArrived();
       });
     };
+    // choicesArrived shows a newer choices list over a form the user may
+    // have edited: it keeps the picks, shows them against the new lists, and
+    // re-applies a picked named tier, so the tier note and the fields agree.
+    function choicesArrived() {
+      picks[P.harness] = currentPick();
+      harnessButtons();
+      showPick(P.harness);
+      reapplyTier();
+      sync();
+      railPopPlace();
+    }
     // permSync redraws the level after the live stream dropped (support is
     // unknown until a new read) and re-reads the choices once it is back.
     P.permSync = function (read) {
-      var gen = P.gen, redraw = function () { if (rpLive(P, gen) && !P.loading) { permDraw(); sync(); railPopPlace(); } };
-      redraw();
-      if (read) leadChoices(redraw, redraw);
+      var gen = P.gen, live = function () { return rpLive(P, gen) && !P.loading; };
+      var arrived = function () { if (live()) choicesArrived(); };
+      if (live()) { permDraw(); sync(); railPopPlace(); }
+      if (read) leadChoices(arrived, arrived);
     };
     P.focus = function () { (hbtn[P.harness].disabled ? cancel : hbtn[P.harness]).focus(); };
     P.close = function () { permFullDrop(); };

@@ -376,3 +376,61 @@ test('the full-permission grant launches the request the warning named, even aft
   assert.equal(body.ack, true);
   assert.equal(effort.value, 'max', 'the form itself still shows the refreshed tier');
 });
+
+test('a choices read after a stream reconnect re-applies the picked tier, so its note and the fields agree', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+  }
+  const pending = [];
+  const hs = [
+    { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto'], permission_levels: ['read-only'] },
+    { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] }
+  ];
+  const before = [{ name: 'deep', trace: 'deep', harness: 'codex', model: 'gpt-5', effort: 'high' }];
+  const after = [{ name: 'deep', trace: 'deep', harness: 'codex', model: 'gpt-5-mini', effort: 'low' }];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost() {}
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const note = () => find(p.el, e => /^js\.lead\.tier\.(picked|hint)/.test(e.text || '')).text;
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers: before });
+  picker.value = 'deep'; picker.events.change();
+  assert.equal(model.value, 'gpt-5');
+
+  // The stream came back; the re-read lists the bundle with new values.
+  p.permSync(true);
+  assert.equal(pending.length, 1, 'the reconnect re-reads the choices');
+  pending.shift()(200, { harnesses: hs, tiers: after });
+  assert.equal(picker.value, 'deep', 'the tier stays picked');
+  assert.match(note(), /gpt-5-mini/, 'the note shows the refreshed bundle');
+  assert.equal(model.value, 'gpt-5-mini', 'the model field follows the note');
+  assert.equal(effort.value, 'low', 'the effort field follows the note');
+
+  // A tier the re-read no longer lists returns the form to manual.
+  p.permSync(true);
+  pending.shift()(200, { harnesses: hs, tiers: [] });
+  assert.equal(picker.value, '');
+  assert.match(note(), /^js\.lead\.tier\.hint/);
+});
