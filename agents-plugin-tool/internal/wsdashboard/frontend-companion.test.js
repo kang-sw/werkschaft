@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["packs", "compositor", "scenarios", "stage"]) {
+  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -661,6 +661,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     body, hidden: false,
     getElementById: () => null,
     createElement: makeElement,
+    createElementNS: (ns, tag) => makeElement(tag),
     addEventListener() {}
   };
   const win = {
@@ -684,7 +685,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["packs", "compositor", "scenarios", "stage"]) {
+  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -750,5 +751,86 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
   trigger("idle", "session.error");
   assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:?");
 
+  // Directed commands: only the shown session's, quips as text, TTL expiry.
+  step(50);
+  const quipNode = () => root.children.find(child => child.className === "ws-companion-quip");
+  assert.equal(stage.command({ sessionId: "s1", quip: "too early", ttl_ms: 1000 }), false, "no shown session yet");
+  stage.reset("s1");
+  step();
+  assert.equal(stage.command({ sessionId: "other", quip: "not mine", ttl_ms: 1000 }), false);
+  assert.equal(stage.command({ sessionId: "s1", fx: "unknown", quip: "   " }), false, "nothing valid to show");
+  assert.equal(stage.command({ sessionId: "s1", fx: "badge", gesture: "unknown", quip: "<img src=x onerror=alert(1)>", ttl_ms: 1000 }), true);
+  step();
+  assert.equal(root.dataset.scenario, "directed");
+  assert.equal(quipNode().textContent, "<img src=x onerror=alert(1)>", "the quip is set as text");
+  assert.equal(quipNode().innerHTML, undefined, "the quip never goes through innerHTML");
+  assert.equal(quipNode().hidden, false);
+  assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:!");
+  for (let i = 0; i < 22; i++) step(50);
+  assert.equal(quipNode().hidden, true, "the quip dismisses when the TTL ends");
+  assert.equal(root.dataset.scenario, "", "the rules engine resumes");
+
   stage.dispose();
+});
+
+test("companion commands validate IDs against the pack, its fallback chains, shared props and built-in fx", () => {
+  const { directedCommand, scenarioRunner } = companion();
+  const runner = scenarioRunner();
+  const pack = { manifest: {
+    expressions: { happy: { decal: "happy.png" }, grin: { fallback: "happy" }, ghost: { fallback: "missing" } },
+    gestures: { wave: { pose: "stand" } }, props: {}, fx: {}
+  } };
+  const shared = { manifest: { props: { drone: { file: "drone.png" } }, fx: {} } };
+  const long = "<b>hi</b>\nthere " + "x".repeat(200);
+  const full = directedCommand({ sessionId: "s1", scenario: "celebrate_done", expression: "grin", gesture: "nope",
+    prop: "drone", fx: "sparkle", quip: long, ttl_ms: 60000 }, pack, shared, runner);
+  assert.equal(full.id, "celebrate_done");
+  assert.equal(full.ttl, 15000, "TTL clamps to 15 s");
+  assert.equal(full.beats.length, 1);
+  const beat = full.beats[0];
+  assert.equal(beat.expression, "happy", "a fallback chain resolves to its usable entry");
+  assert.equal(beat.gesture, "wave", "an unknown gesture drops; the scenario's own stays");
+  assert.equal(beat.prop, "drone", "props may come from the shared default pack");
+  assert.equal(beat.fx, "sparkle", "built-in fx badges are known");
+  assert.equal(Array.from(beat.quip).length, 140, "quips cut to 140 code points");
+  assert.ok(beat.quip.startsWith("<b>hi</b> there"), "control characters fold to spaces; markup stays literal text");
+
+  const plain = directedCommand({ sessionId: "s1", expression: "ghost", gesture: "wave", ttl_ms: 10 }, pack, shared, runner);
+  assert.equal(plain.id, "directed");
+  assert.equal(plain.ttl, 1000, "TTL clamps to 1 s");
+  assert.deepEqual(JSON.parse(JSON.stringify(plain.beats)),
+    [{ pose: "stand", expression: "idle", gaze: "cursor", ms: 1000, gesture: "wave" }],
+    "a fallback chain ending nowhere drops the field");
+  assert.equal(directedCommand({ sessionId: "s1", scenario: "no_such", expression: "Bad ID!", fx: "nope", quip: " \n " },
+    pack, shared, runner), null, "a command with nothing valid is dropped");
+  assert.equal(directedCommand({ sessionId: "s1", prop: "drone" }, pack, null, runner), null, "no shared pack, no shared props");
+  assert.equal(directedCommand("not a command", pack, shared, runner), null);
+});
+
+test("companion directed beats override the rules engine until the TTL, then the rules resume", () => {
+  const { scenarioRunner } = companion();
+  const runner = scenarioRunner(), guards = { routeKind: "session", pose: "stand", idleMs: 0 };
+  runner.direct([{ pose: "stand", expression: "happy", ms: 400 }, { pose: "stand", expression: "oo", ms: 300 }], 0, 2000);
+  assert.equal(runner.tick(100).entry.id, "directed");
+  runner.fire("user.poke", 150, guards);
+  runner.fire("ask.open", 160, guards);
+  assert.equal(runner.tick(200).beat.expression, "happy", "rules scenarios do not replace a directed beat");
+  assert.equal(runner.tick(500).beat.expression, "oo", "directed steps advance");
+  assert.equal(runner.tick(1900).beat.expression, "oo", "the last step holds until the TTL");
+  runner.endReply();
+  assert.ok(runner.tick(1950), "a reply ending leaves a directed beat alone");
+  assert.equal(runner.tick(2000), null, "the TTL ends the directed beat");
+  runner.fire("user.poke", 2100, guards);
+  assert.equal(runner.tick(2150).entry.id, "startled_poke", "the rules engine resumes");
+
+  runner.direct({ expression: "happy", ms: 5000 }, 3000, 10000);
+  runner.direct({ expression: "cry", ms: 5000 }, 3500, 1000);
+  assert.equal(runner.tick(3600).beat.expression, "cry", "a newer command replaces an older one");
+  assert.equal(runner.tick(4500), null, "with its own TTL");
+  runner.direct({ expression: "happy", ms: 5000 }, 5000, 5000);
+  runner.fire("user.drag", 5100, guards);
+  assert.equal(runner.tick(5200, true).entry.id, "drag_dangle", "dragging still dangles the character");
+  runner.direct({ expression: "happy" }, 6000, Number.NaN);
+  assert.equal(runner.tick(6999).entry.id, "directed");
+  assert.equal(runner.tick(7000), null, "a missing TTL clamps to 1 s");
 });

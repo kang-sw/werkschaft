@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -23,7 +24,46 @@ const (
 
 	companionChangedPath  = "/config/companion-changed"
 	companionConfigHeader = "X-WS-Global-Config"
+
+	// companionModalSurface is the settings-catalog surface the companion
+	// modal renders instead of the settings panel.
+	companionModalSurface = "companion-modal"
 )
+
+// shellSettingsStrings are the js.settings.* string prefixes the shell page
+// keeps although it drops the settings page's strings: the companion modal
+// labels its catalog rows with them.
+var shellSettingsStrings = []string{"js.settings.key.dashboard.companion_", "js.settings.unit."}
+
+// companionModalRow is one settings-catalog row the companion modal renders.
+type companionModalRow struct {
+	Key         string `json:"key"`
+	Control     string `json:"control"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Unit        string `json:"unit,omitempty"`
+}
+
+// companionModalRows returns the catalog rows whose surface is the companion
+// modal, in catalog order, as the JSON array the shell page embeds (the
+// shell loads no settings catalog of its own).
+func companionModalRows(catalog []byte) (string, error) {
+	var rows []struct {
+		companionModalRow
+		Surface string `json:"surface"`
+	}
+	if err := json.Unmarshal(catalog, &rows); err != nil {
+		return "", fmt.Errorf("settings catalog: %w", err)
+	}
+	modal := []companionModalRow{}
+	for _, row := range rows {
+		if row.Surface == companionModalSurface {
+			modal = append(modal, row.companionModalRow)
+		}
+	}
+	raw, err := json.Marshal(modal)
+	return string(raw), err
+}
 
 func IsCompanionConfigKey(key string) bool {
 	switch key {

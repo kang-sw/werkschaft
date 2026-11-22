@@ -1413,6 +1413,7 @@
   if (shell && window.WsShell) {
     shShellInit();
     doc.addEventListener("ws-companion-config", function (event) { shCompanionConfigure(event.detail); });
+    doc.addEventListener("ws-companion-command", function (event) { if (shCompanion) shCompanion.command(event.detail); });
     shCompanionConfigure(window.wsCompanionConfig);
     window.addEventListener("pagehide", function (event) { if (!event.persisted) shCompanionStop(); });
   }

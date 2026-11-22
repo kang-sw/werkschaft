@@ -152,11 +152,17 @@ var companionUpdates = [], companion = {enabled: true, director: "rules", pack: 
 doc.addEventListener("ws-companion-config", function (e) { companionUpdates.push(e.detail); });
 sockets[3].msg("companion", companion);
 check("the shell publishes the live companion settings", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
+var companionCommands = [], directed = {sessionId: "rid1", expression: "happy", quip: "hi", ttl_ms: 3000};
+doc.addEventListener("ws-companion-command", function (e) { companionCommands.push(e.detail); });
+sockets[3].msg("companion-command", directed);
+check("the shell hands companion commands to its companion", companionCommands, [directed]);
 shell = false; framed = true; mode = "session";
 connect();
 check("the frame requests tree but not absent rail rows", sockets[4].url, "ws://localhost:1234/s/rid1/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&treerows=1&entryrows=1&panelrows=1&display=1");
 sockets[4].msg("companion", {enabled: false});
 check("a frame leaves the shell companion settings alone", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
+sockets[4].msg("companion-command", {sessionId: "rid1", quip: "frame"});
+check("a frame ignores companion commands", companionCommands, [directed]);
 var companionReads = [];
 // The empty panel region establishes the last keyed baseline on reconnect.
 doc.createElement = function () { return { childNodes: [], children: [], innerHTML: "" }; };

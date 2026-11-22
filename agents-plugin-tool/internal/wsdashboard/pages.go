@@ -74,6 +74,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
+	"dashboard-companion-settings.js",
 	"dashboard-companion-stage.js",
 }
 
@@ -248,6 +249,9 @@ type pageAssetsData struct {
 	ShellScript     template.JS
 	CompanionScript template.JS
 	CompanionCSS    template.CSS
+	// CompanionModalRows is the settings catalog's companion-modal rows as
+	// a JSON array: the shell loads no settings catalog of its own.
+	CompanionModalRows template.JS
 	// CardsScript is the board card framework (cards.js, window.WsCards),
 	// led by its paged docking gallery's pure model (gallery.js,
 	// window.WsGallery),
@@ -392,6 +396,11 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 	if err != nil {
 		return nil, err
 	}
+	modalRows, err := companionModalRows([]byte(a.data.SettingsCatalog))
+	if err != nil {
+		return nil, err
+	}
+	a.data.CompanionModalRows = template.JS(modalRows)
 	icons := map[string]bool{}
 	for _, sprite := range []string{string(a.data.Sprite), string(wb.Sprite)} {
 		for _, m := range symbolPattern.FindAllStringSubmatch(sprite, -1) {

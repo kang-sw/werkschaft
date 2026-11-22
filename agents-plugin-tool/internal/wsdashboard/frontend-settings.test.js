@@ -161,3 +161,13 @@ test("project rail target survives standalone scope traversal without becoming i
   assert.equal(shell.settingsScopeHref("global", unbound, () => "", remembered), "/settings?scope=global#project=project-a");
   assert.equal(shell.settingsScopeHref("project", unbound, () => "", remembered), "/settings?scope=project&target=project-a");
 });
+
+test("the companion modal maps every companion-modal catalog row to a live config field", () => {
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const context = vm.createContext({window: {WsCompanion: {}}});
+  vm.runInContext(read("dashboard-companion-settings.js"), context);
+  const fields = context.window.WsCompanion.companionConfigFields;
+  const modal = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
+  assert.deepEqual(Object.keys(fields).sort(), modal);
+  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "pack", "preset"]);
+});
