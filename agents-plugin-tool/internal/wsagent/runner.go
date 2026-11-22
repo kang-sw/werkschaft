@@ -325,6 +325,11 @@ type Runner struct {
 	// token, and mcpTokenOf by conversation id.
 	mcpTokens  map[string]*mcpToken
 	mcpTokenOf map[string]string
+	// versions are the harness versions processes last reported, by
+	// backend (harness_versions.go).
+	versions *harnessVersions
+	// exec is the hosted exec jobs' view (exec_lifecycle.go).
+	exec execState
 }
 
 // NewRunner returns a runner; Start loads its conversations.

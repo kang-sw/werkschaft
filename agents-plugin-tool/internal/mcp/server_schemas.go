@@ -299,6 +299,21 @@ func tools() []map[string]any {
 			"inputSchema": execWriteSchema(),
 		},
 		{
+			"name":        "fs.read",
+			"description": "Read a text file's lines, numbered from one. offset is how many lines to skip and limit how many to return (default 200, at most 2000). A binary file is refused. The reply holds at most 4 KiB and says where to continue when cut.",
+			"inputSchema": fsReadSchema(),
+		},
+		{
+			"name":        "fs.grep",
+			"description": "Search a file, or every text file under a directory, for lines matching a regular expression (RE2 syntax). Matches come back as path:line:text with one-based line numbers; binary files and .git directories are skipped, and glob filters file names. At most 100 matches and 4 KiB per reply, with the cut said.",
+			"inputSchema": fsGrepSchema(),
+		},
+		{
+			"name":        "fs.list",
+			"description": "List a directory's entries, sorted, with a trailing / on directories; glob filters names. At most 500 entries and 4 KiB per reply, with the cut said.",
+			"inputSchema": fsListSchema(),
+		},
+		{
 			"name":        "exec.status",
 			"description": "Return lifecycle status and stream sizes for a durable exec job.",
 			"inputSchema": execKeySchema(),
@@ -1272,6 +1287,7 @@ func toolSchemaRequiresSessionKey(name string) bool {
 	case "api.list",
 		"exec.spawn", "exec.shell", "exec.status", "exec.result", "exec.abort", "exec.raw.tail", "exec.raw.read", "exec.raw.grep",
 		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write",
+		"fs.read", "fs.grep", "fs.list",
 		"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.merge",
 		"rationale.query", "git.followups",
 		"project_tree",
@@ -1538,4 +1554,32 @@ func objectArrayProperty(description string) map[string]any {
 		"description": description,
 		"items":       map[string]any{"type": "object"},
 	}
+}
+
+// fsPathProperty is the path every fs.* tool reads.
+func fsPathProperty(what string) map[string]string {
+	return stringProperty(what + " A relative path resolves beneath the session's worktree root; an absolute path is read as given.")
+}
+
+func fsReadSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path":   fsPathProperty("The file to read."),
+		"offset": integerProperty("How many lines to skip before the first returned line. Defaults to 0."),
+		"limit":  integerProperty("How many lines to return. Defaults to 200; at most 2000."),
+	}, "required": []string{"path"}}
+}
+
+func fsGrepSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"pattern": stringProperty("The regular expression (RE2 syntax) a line must match."),
+		"path":    fsPathProperty("The file or directory to search."),
+		"glob":    stringProperty("Optional file-name pattern (for example *.go) a searched file's name must match."),
+	}, "required": []string{"pattern", "path"}}
+}
+
+func fsListSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path": fsPathProperty("The directory to list."),
+		"glob": stringProperty("Optional name pattern (for example *.md) an entry's name must match."),
+	}, "required": []string{"path"}}
 }

@@ -277,14 +277,26 @@ func TestAgentMCPHostedWorkerDescriptorThroughProxy(t *testing.T) {
 			listResp := rpcCall("tools/list", map[string]any{})
 			result, _ := listResp["result"].(map[string]any)
 			rawTools, _ := result["tools"].([]any)
-			if len(rawTools) != len(wsagent.AgentWSTools) {
-				t.Fatalf("listed %d tools, want %d", len(rawTools), len(wsagent.AgentWSTools))
+			// The exec and fs.* tools are on the allowlist but listed only on
+			// a trusted binding to a conversation started under the exec
+			// cutover; this launcher connection has none.
+			want := 0
+			for _, name := range wsagent.AgentWSTools {
+				if !strings.HasPrefix(name, "exec.") && !strings.HasPrefix(name, "fs.") {
+					want++
+				}
+			}
+			if len(rawTools) != want {
+				t.Fatalf("listed %d tools, want %d", len(rawTools), want)
 			}
 			byName := make(map[string]map[string]any, len(rawTools))
 			for _, item := range rawTools {
 				tool, _ := item.(map[string]any)
 				name, _ := tool["name"].(string)
 				byName[name] = tool
+				if strings.HasPrefix(name, "exec") || strings.HasPrefix(name, "fs") {
+					t.Fatalf("%s worker without the cutover lists %s", backend, name)
+				}
 			}
 			if _, hasCall := byName["call"]; hasCall {
 				t.Fatalf("%s worker must not list call", backend)
@@ -292,6 +304,9 @@ func TestAgentMCPHostedWorkerDescriptorThroughProxy(t *testing.T) {
 
 			isAgy := backend == wsagent.BackendAgy
 			for _, canonical := range wsagent.AgentWSTools {
+				if strings.HasPrefix(canonical, "exec.") || strings.HasPrefix(canonical, "fs.") {
+					continue
+				}
 				wantName := canonical
 				if isAgy {
 					wantName = strings.ReplaceAll(canonical, ".", "_")
