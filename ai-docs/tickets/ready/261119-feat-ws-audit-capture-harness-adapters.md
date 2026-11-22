@@ -475,6 +475,29 @@ Pre-merge review fixes, one commit each:
   tests now key events the way the store's ingestion does
   (`TestClaudeAuditEnvelopeIDsStayRaw` covers long and digest-shaped IDs).
 
+#### Edition (ba9896127) - 2026-11-22
+
+Second pre-merge review fixes, one commit each, after merging develop
+(8759820cf: `wsholder.Event` keeps both develop's exit byte totals and the
+audit fields):
+
+- 530c46074: when one read holds whole kept lines followed by the head of
+  a cut line (a record limit under the 64 KiB read), the holder fences the
+  whole lines at once. Only the trailing cut run waits for its line's end,
+  so capture no longer times out on those lines
+  (`test_a_read_ending_in_a_cut_line_head_fences_its_whole_lines`).
+- bfec67cbf: control markers never block the holder reader. Past the
+  reserve they coalesce to the newest connection's attach and detach. Capture
+  applies them ahead of the queue as a resync, recorded as one `queue_full`
+  loss, and ignores an attach older than the current connection
+  (`TestAuditControlReserveExhaustionNeverBlocks`).
+- ba9896127: event identities are fixed by role, not position, superseding
+  the positional ordinals of 6d0e667a1. A carried assembly's ordinal is its
+  content block's index (also in the end flush), so a replay that cannot
+  rebuild a tee-only block leaves the others' identities as they were. A
+  line's own events keep their positions, because they are always rebuilt
+  from the line (`TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone`).
+
 ### Phase 2: Codex adapter
 
 Depends on Phase 1. Map the Codex app-server stream onto the envelope,
@@ -536,6 +559,18 @@ Correction to the tool-items bullet above: envelopes carry the raw
 `call_id = item.id` (and the raw parent ID on `subAgentActivity`). The
 audit store normalizes them once, at ingestion (ring-store Decision 3).
 The ring call ID stays `NormalizeID(item.id)`.
+
+#### Edition (ba9896127) - 2026-11-22
+
+A tool call's durable identity is its item: the keyed `SourceID`
+`call.<NormalizeID(item.id)>`, whichever record yields the call. When a
+replay finds that `item/started` has wrapped out of the ring, the completed
+item synthesizes the call. That call finds the live one retained, and the
+result stays the completion's ordinal 0. Before, the result shifted to
+`#1`: a clean replay recorded a false loss, and a failed result was recorded
+as two losses. A live call whose append failed is appended on replay,
+because keyed identities fall outside the boundary rule, as carried
+assemblies do (`TestAuditCodexReplayAfterTheStartedItemWrapped`).
 
 ### Phase 3: agy adapter
 
