@@ -2851,6 +2851,8 @@
   "js.settings.key.agents.tier.description": "Ordnet jeder Stufe pro Harness Backend, Modell und Denkaufwand zu.",
   "js.settings.key.agent.tier_aliases.label": "Eigene Stufen-Aliasse",
   "js.settings.key.agent.tier_aliases.description": "Durch Leerzeichen getrennte name=<harness>.<tier>-Aliasse für Agentenstarts.",
+  "js.settings.key.agent.tier_routing.label": "Tier-Routing",
+  "js.settings.key.agent.tier_routing.description": "Zeigergraph, der Tier-Namen (Playbook-Rollen, Gruppen, eigene Knoten, Bundles) beim Agent-Start auf Harness, Modell und Aufwand abbildet. Hier nur lesbar; Änderungen mit config.tune.",
   "js.settings.key.agent.child_waiting_days.label": "Aufbewahrung wartender Kind-Agenten",
   "js.settings.key.agent.child_waiting_days.description": "Tage bis der Daemon wartende Kind-Agenten und ihre Nachfolger aufräumt.",
   "js.settings.key.agent.git_search_roots.label": "Zusätzliche Git-Suchpfade",

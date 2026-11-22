@@ -2851,6 +2851,8 @@
   "js.settings.key.agents.tier.description": "ハーネスごとに、各ティアのバックエンド、モデル、推論強度を設定します。",
   "js.settings.key.agent.tier_aliases.label": "カスタムティア別名",
   "js.settings.key.agent.tier_aliases.description": "エージェントを起動するための name=<harness>.<tier> の空白区切りリストです。",
+  "js.settings.key.agent.tier_routing.label": "ティアルーティング",
+  "js.settings.key.agent.tier_routing.description": "agent.spawn でティア名（プレイブックのロール、グループ、独自ノード、バンドル）をハーネス・モデル・エフォートへ導くポインタグラフ。ここでは読み取り専用で、config.tune で編集します。",
   "js.settings.key.agent.child_waiting_days.label": "待機中の子の保持期間",
   "js.settings.key.agent.child_waiting_days.description": "待機中の子エージェントとその配下を整理するまでの日数です。",
   "js.settings.key.agent.git_search_roots.label": "Git の追加検索先",

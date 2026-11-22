@@ -117,6 +117,8 @@ func (r Rule) scopeReason(scope wsconfig.Scope) string {
 	switch {
 	case scope == wsconfig.ScopeBuiltin:
 		return "builtin_read_only"
+	case r.Structured && r.GlobalOnly && scope != wsconfig.ScopeGlobal:
+		return "global_only"
 	case r.Structured:
 		return "profile_read_only"
 	case r.ReadOnly:

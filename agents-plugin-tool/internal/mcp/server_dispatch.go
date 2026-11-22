@@ -547,6 +547,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if entry.Key == wsconfig.ItemWorkflowProfile && value == "orchestrate" {
 				text += orchestrateWhitelistWarning(harness)
 			}
+			if entry.Key == wsconfig.ItemAgentTierAliases {
+				// Informational: an alias that overlaps the routing graph keeps
+				// exact-name precedence, so the write stands and says where.
+				text += s.tierCollisionLines()
+			}
 			return toolTextResponse(req.ID, text, nil)
 		}
 

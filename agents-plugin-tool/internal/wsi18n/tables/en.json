@@ -2851,6 +2851,8 @@
   "js.settings.key.agents.tier.description": "Map each capability tier to a backend, model and reasoning effort for the selected harness.",
   "js.settings.key.agent.tier_aliases.label": "Custom tier aliases",
   "js.settings.key.agent.tier_aliases.description": "Space-separated name=<harness>.<tier> aliases for agent spawning.",
+  "js.settings.key.agent.tier_routing.label": "Tier routing",
+  "js.settings.key.agent.tier_routing.description": "Pointer graph that routes tier names (playbook roles, groups, your own nodes, bundles) to a harness, model, and effort for agent spawning. Read-only here; edit it with config.tune.",
   "js.settings.key.agent.child_waiting_days.label": "Waiting child retention",
   "js.settings.key.agent.child_waiting_days.description": "Days before the daemon cleans up waiting child agents and their descendants.",
   "js.settings.key.agent.git_search_roots.label": "Additional Git search roots",

@@ -2851,6 +2851,8 @@
   "js.settings.key.agents.tier.description": "Assegna backend, modello e impegno di ragionamento a ogni livello e ambiente.",
   "js.settings.key.agent.tier_aliases.label": "Alias personalizzati dei livelli",
   "js.settings.key.agent.tier_aliases.description": "Alias name=<harness>.<tier> separati da spazi per avviare gli agenti.",
+  "js.settings.key.agent.tier_routing.label": "Instradamento dei livelli",
+  "js.settings.key.agent.tier_routing.description": "Grafo di puntatori che instrada i nomi dei livelli (ruoli dei playbook, gruppi, nodi propri, bundle) verso harness, modello e impegno all'avvio degli agenti. Sola lettura qui; modificalo con config.tune.",
   "js.settings.key.agent.child_waiting_days.label": "Conservazione degli agenti figli in attesa",
   "js.settings.key.agent.child_waiting_days.description": "Giorni prima di rimuovere gli agenti figli in attesa e i loro discendenti.",
   "js.settings.key.agent.git_search_roots.label": "Percorsi aggiuntivi di ricerca Git",

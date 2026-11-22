@@ -58,7 +58,34 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 		if rule.Compaction {
 			rule.LegacyKey = func(harness string) string { return wsagent.BuiltinCompaction(harness).LegacyKey(entry.Key) }
 		}
-		if entry.Structured {
+		if entry.Key == wsconfig.ItemAgentTierRouting {
+			// The one exact-key structured setting: no name part, validated as
+			// a whole graph against the package's roles. Backends are not known
+			// to the catalog, so harness names are not limited here; the daemon
+			// tool checks them on its own writes.
+			rule.Type = "object"
+			rule.NormalizeObject = func(value any, scope wsconfig.Scope) (json.RawMessage, error) {
+				if _, ok := value.(map[string]any); !ok || scope != wsconfig.ScopeGlobal {
+					return nil, wsconfigservice.ErrInvalid
+				}
+				raw, err := json.Marshal(value)
+				if err != nil {
+					return nil, err
+				}
+				routing, err := wsconfig.ParseTierRouting(raw)
+				if err != nil {
+					return nil, err
+				}
+				roles, err := packagedTierRoles(rsrc)
+				if err != nil {
+					return nil, err
+				}
+				if err := wsconfig.NewTierGraph(roles, routing, nil, nil).Err(); err != nil {
+					return nil, err
+				}
+				return json.Marshal(routing)
+			}
+		} else if entry.Structured {
 			rule.Type = "object"
 			family := worktreeProfileFamily
 			if strings.HasPrefix(entry.Key, wsagent.ProfilePrefix) {

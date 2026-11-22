@@ -2851,6 +2851,8 @@
   "js.settings.key.agents.tier.description": "Связывает каждый уровень с бэкендом, моделью и усилием рассуждения в выбранной среде.",
   "js.settings.key.agent.tier_aliases.label": "Пользовательские псевдонимы уровней",
   "js.settings.key.agent.tier_aliases.description": "Псевдонимы name=<harness>.<tier> для запуска агентов через пробел.",
+  "js.settings.key.agent.tier_routing.label": "Маршрутизация уровней",
+  "js.settings.key.agent.tier_routing.description": "Граф указателей, который направляет имена уровней (роли плейбуков, группы, собственные узлы, наборы) к харнессу, модели и усилию при запуске агентов. Здесь только для чтения; изменяется через config.tune.",
   "js.settings.key.agent.child_waiting_days.label": "Хранение ожидающих дочерних агентов",
   "js.settings.key.agent.child_waiting_days.description": "Число дней до очистки ожидающих дочерних агентов и их потомков.",
   "js.settings.key.agent.git_search_roots.label": "Дополнительные пути поиска Git",

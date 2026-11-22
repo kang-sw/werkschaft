@@ -2851,6 +2851,8 @@
   "js.settings.key.agents.tier.description": "为所选宿主的每个档位指定后端、模型和推理强度。",
   "js.settings.key.agent.tier_aliases.label": "自定义档位别名",
   "js.settings.key.agent.tier_aliases.description": "启动智能体时使用的 name=<harness>.<tier> 别名，以空格分隔。",
+  "js.settings.key.agent.tier_routing.label": "层级路由",
+  "js.settings.key.agent.tier_routing.description": "将层级名称（剧本角色、分组、自定义节点、捆绑包）路由到启动代理所用的 harness、模型和强度的指针图。此处只读，请使用 config.tune 编辑。",
   "js.settings.key.agent.child_waiting_days.label": "等待中的子智能体保留期",
   "js.settings.key.agent.child_waiting_days.description": "守护进程清理等待中的子智能体及其后代前的天数。",
   "js.settings.key.agent.git_search_roots.label": "额外的 Git 搜索目录",

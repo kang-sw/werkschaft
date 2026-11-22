@@ -2851,6 +2851,8 @@
   "js.settings.key.agents.tier.description": "Asigna backend, modelo y esfuerzo de razonamiento a cada nivel y entorno.",
   "js.settings.key.agent.tier_aliases.label": "Alias de nivel personalizados",
   "js.settings.key.agent.tier_aliases.description": "Alias name=<harness>.<tier> separados por espacios para iniciar agentes.",
+  "js.settings.key.agent.tier_routing.label": "Enrutamiento de niveles",
+  "js.settings.key.agent.tier_routing.description": "Grafo de punteros que enruta los nombres de nivel (roles de playbook, grupos, nodos propios, paquetes) a un arnés, modelo y esfuerzo al lanzar agentes. Solo lectura aquí; edítalo con config.tune.",
   "js.settings.key.agent.child_waiting_days.label": "Retención de agentes hijo en espera",
   "js.settings.key.agent.child_waiting_days.description": "Días antes de limpiar los agentes hijo en espera y sus descendientes.",
   "js.settings.key.agent.git_search_roots.label": "Rutas adicionales de búsqueda Git",

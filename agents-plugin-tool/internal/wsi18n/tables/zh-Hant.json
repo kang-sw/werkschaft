@@ -2851,6 +2851,8 @@
   "js.settings.key.agents.tier.description": "為所選主機的每個等級指定後端、模型及推論強度。",
   "js.settings.key.agent.tier_aliases.label": "自訂等級別名",
   "js.settings.key.agent.tier_aliases.description": "啟動代理程式用的 name=<harness>.<tier> 別名，以空格分隔。",
+  "js.settings.key.agent.tier_routing.label": "層級路由",
+  "js.settings.key.agent.tier_routing.description": "將層級名稱（劇本角色、群組、自訂節點、套組）路由到啟動代理所用的 harness、模型與強度的指標圖。此處唯讀，請使用 config.tune 編輯。",
   "js.settings.key.agent.child_waiting_days.label": "等待中的子代理程式保留期",
   "js.settings.key.agent.child_waiting_days.description": "常駐程式清理等待中的子代理程式及其下層前的天數。",
   "js.settings.key.agent.git_search_roots.label": "額外的 Git 搜尋目錄",
