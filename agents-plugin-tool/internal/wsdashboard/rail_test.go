@@ -1580,3 +1580,42 @@ func TestRailMatchesRepositoryWorktreesByFoldedIdentity(t *testing.T) {
 		t.Errorf("feat row = %+v", feat)
 	}
 }
+
+// TestRailFoldedAliasUsesTheListWithTheCustomPool: on Windows the stored
+// spelling of a repository and git's need not agree in case. The list read
+// with the sessions' registrations carries the configured worktree pool;
+// the stored alias's list (read with none) only knows the default pools. The
+// rail picks the former, so an idle tree in the custom pool stays hidden
+// instead of showing as a pending detection.
+func TestRailFoldedAliasUsesTheListWithTheCustomPool(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	now := time.Now()
+	base := t.TempDir()
+	stored := filepath.Join(base, "Work", "Repo")
+	gitRoot := filepath.Join(base, "work", "repo")
+	pool := filepath.Join(base, "pool")
+	pooled := filepath.Join(pool, "idle")
+	entries := []railWorktreeEntry{{Path: gitRoot, Branch: "main"}, {Path: pooled, Branch: "idle"}}
+	repos := map[string]railRepo{
+		gitRoot: {Read: true, Pools: []string{pool}, Entries: entries},
+		stored:  {Read: true, Entries: entries},
+	}
+	view := buildRailView([]railInput{
+		{Session: railSession("s-root", filepath.Join(base, "WORK", "repo"), now, time.Time{}), Repo: gitRoot},
+	}, repos, []storedWorkspace{{Path: stored, Repo: true}}, now)
+	classifyRailAdmissions(&view, &railLayoutDoc{})
+	partitionRailWorkspaces(&view, nil)
+	if len(view.Workspaces) != 1 || len(view.PendingWorkspaces) != 0 {
+		t.Fatalf("Workspaces = %+v, pending %+v", view.Workspaces, view.PendingWorkspaces)
+	}
+	for _, wt := range view.Workspaces[0].Worktrees {
+		if wt.Path == pooled {
+			t.Fatalf("the idle custom-pool tree shows (admission %q): %+v", wt.Admission, view.Workspaces[0].Worktrees)
+		}
+	}
+	if wts := view.Workspaces[0].Worktrees; len(wts) != 1 || !wts[0].Root {
+		t.Fatalf("worktrees = %+v, want the root only", wts)
+	}
+}

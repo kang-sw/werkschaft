@@ -505,6 +505,10 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 	}
 	byWS := map[string][]member{}
 	repoOf := map[string]bool{}
+	// listOf is the repos key a workspace's sessions name (git's spelling of
+	// the root): that list was read with their registrations, so it carries
+	// the configured worktree pool a stored alias's list lacks.
+	listOf := map[string]string{}
 	for _, in := range sessions {
 		reg := in.Session.Registration
 		row := railRow(in, reg.Live(now), now)
@@ -513,6 +517,9 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			own := filepath.Clean(in.Repo)
 			key = canonical(own)
 			repoOf[key] = true
+			if _, ok := repos[own]; ok && listOf[key] == "" {
+				listOf[key] = own
+			}
 			if _, ok := byWS[key]; !ok {
 				byWS[key] = nil
 			}
@@ -595,10 +602,14 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			view.Workspaces = append(view.Workspaces, ws)
 			continue
 		}
-		repo, ok := repos[key]
+		// The list is picked by workspace identity: the one the sessions'
+		// registrations were read with, else the exact spelling, else one
+		// read under a spelling the stored one folds to.
+		repo, ok := repos[listOf[key]]
 		if !ok {
-			// The list is read under git's spelling of the root, which a
-			// stored spelling may fold to.
+			repo, ok = repos[key]
+		}
+		if !ok {
 			for p, r := range repos {
 				if admissionPathKey(p) == admissionPathKey(key) {
 					repo = r
