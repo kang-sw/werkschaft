@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -433,7 +434,7 @@ func TestImplMergeWorktreeReleaseAdvisory(t *testing.T) {
 			}
 			if tc.pooled && tc.leased {
 				d := requireMergeDiagnostic(t, r, "worktree_release", "advisory")
-				if !strings.Contains(d.Reason, branch) || !strings.Contains(d.Reason, worktree) || !strings.Contains(d.Resolution, "worktree.release") || !strings.Contains(d.Resolution, "key bound") {
+				if !strings.Contains(d.Reason, branch) || !strings.Contains(d.Reason, strconv.Quote(worktree)) || !strings.Contains(d.Resolution, "worktree.release") || !strings.Contains(d.Resolution, "key bound") {
 					t.Fatalf("incomplete release guidance: %+v", d)
 				}
 			} else {
