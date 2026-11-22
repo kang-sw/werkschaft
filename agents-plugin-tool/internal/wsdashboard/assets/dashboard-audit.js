@@ -166,8 +166,8 @@
         statEl.textContent = wsT("js.audit.loading");
         statEl.className = "au-wstatus";
         statEl.hidden = false;
-      } else if (win.callSummary || win.activeEnvelope) {
-        var err = win.activeEnvelope && win.activeEnvelope.meta && (win.activeEnvelope.meta.is_error || win.activeEnvelope.meta.error);
+      } else if (win.callSummary || win.activeEnvelope || (!win.inspectEventId && win.resultEnvelope)) {
+        var err = auEnvelopeHasError(win.activeEnvelope) || (!win.inspectEventId && auEnvelopeHasError(win.resultEnvelope));
         statEl.textContent = err ? wsT("js.audit.status.failed") : wsT("js.audit.status.ok");
         statEl.className = "au-wstatus " + (err ? "au-err" : "au-ok");
         statEl.hidden = false;
@@ -210,7 +210,9 @@
     if (!panel) return;
 
     var codeTab = win.tab === "in" || win.tab === "out" || win.tab === "raw";
-    if (tbar) tbar.hidden = !codeTab || !!win.errorState || !!win.emptyState;
+    var outErr = win.tab === "out" && !win.inspectEventId && win.resultError;
+    var outLoading = win.tab === "out" && !win.inspectEventId && win.resultLoading && !win.resultEnvelope;
+    if (tbar) tbar.hidden = !codeTab || !!win.errorState || !!win.emptyState || !!outErr || !!outLoading;
     if (wrapBtn) wrapBtn.setAttribute("aria-pressed", win.wrap ? "true" : "false");
 
     if (win.loading) {
@@ -239,8 +241,18 @@
       win.currentPlain = "";
       return;
     }
+    if (outErr) {
+      panel.innerHTML = auRenderWindowError(win.resultError);
+      win.currentPlain = "";
+      return;
+    }
+    if (outLoading) {
+      panel.innerHTML = '<div class="au-state">' + auEsc(wsT("js.audit.loading")) + "</div>";
+      win.currentPlain = "";
+      return;
+    }
 
-    var ev = win.activeEnvelope;
+    var ev = (win.tab === "out" && !win.inspectEventId && win.resultEnvelope) ? win.resultEnvelope : win.activeEnvelope;
     if (!ev) {
       panel.innerHTML = '<div class="au-state">' + auEsc(wsT("js.audit.part.empty")) + "</div>";
       win.currentPlain = "";
@@ -272,6 +284,11 @@
         try { curHit.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) {}
       }
     }
+  }
+
+  function auIsResultSummary(ev, callId) {
+    if (!ev || ev.call_id !== callId) return false;
+    return ev.kind === "tool_result" || (ev.kind === "subagent" && ev.subkind === "tool_result");
   }
 
   function auFetchEnvelope(win, eventId) {
@@ -310,14 +327,93 @@
     });
   }
 
-  function auLoadCallIntoWindow(win, callId, rowEl, opts) {
-    opts = opts || {};
+  function auFetchResultEnvelope(win, resultId, reqToken) {
+    if (!resultId) {
+      win.resultLoading = false;
+      win.resultError = null;
+      win.resultEnvelope = null;
+      return;
+    }
+    if (win.cache[resultId]) {
+      win.resultLoading = false;
+      win.resultError = null;
+      win.resultEnvelope = win.cache[resultId];
+      return;
+    }
+    win.resultLoading = true;
+    win.resultError = null;
+    win.resultEnvelope = null;
+    var url = "/s/" + encodeURIComponent(auSessionRid()) + "/audit/event/" + encodeURIComponent(resultId);
+    fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      if (!r.ok) return r.text().then(function (msg) { throw { status: r.status, message: msg }; });
+      return r.json();
+    }).then(function (ev) {
+      if (reqToken !== win.reqToken || !win.el.isConnected) return;
+      win.resultLoading = false;
+      win.resultError = null;
+      win.cache[resultId] = ev;
+      win.resultEnvelope = ev;
+      auRenderWindowBody(win);
+    }).catch(function (err) {
+      if (reqToken !== win.reqToken || !win.el.isConnected) return;
+      win.resultLoading = false;
+      win.resultEnvelope = null;
+      win.resultError = { status: err && err.status || 0, message: err && err.message || String(err) };
+      auRenderWindowBody(win);
+    });
+  }
+
+  function auFetchCallEnvelopes(win, primaryId, resultId) {
+    if (!primaryId) {
+      win.loading = false;
+      win.activeEnvelope = null;
+      win.resultLoading = false;
+      win.resultEnvelope = null;
+      win.resultError = null;
+      auRenderWindowBody(win);
+      return;
+    }
+    var reqToken = ++win.reqToken;
+    win.errorState = null;
+    if (win.cache[primaryId]) {
+      win.loading = false;
+      win.activeEnvelope = win.cache[primaryId];
+    } else {
+      win.loading = true;
+      win.activeEnvelope = null;
+      var pUrl = "/s/" + encodeURIComponent(auSessionRid()) + "/audit/event/" + encodeURIComponent(primaryId);
+      fetch(pUrl, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+        if (!r.ok) return r.text().then(function (msg) { throw { status: r.status, message: msg }; });
+        return r.json();
+      }).then(function (ev) {
+        if (reqToken !== win.reqToken || !win.el.isConnected) return;
+        win.loading = false;
+        win.cache[primaryId] = ev;
+        win.activeEnvelope = ev;
+        auRenderWindowBody(win);
+      }).catch(function (err) {
+        if (reqToken !== win.reqToken || !win.el.isConnected) return;
+        win.loading = false;
+        win.errorState = { status: err && err.status || 0, message: err && err.message || String(err) };
+        auRenderWindowBody(win);
+      });
+    }
+    auFetchResultEnvelope(win, resultId, reqToken);
+    auRenderWindowBody(win);
+  }
+
+  function auLoadCallIntoWindow(win, callId, rowEl) {
     var reqToken = ++win.reqToken;
     win.callId = callId;
     win.inspectEventId = null;
     win.activeSummary = null;
     win.callSummary = null;
+    win.primaryEventId = "";
+    win.resultEventId = "";
     win.activeEnvelope = null;
+    win.resultEnvelope = null;
+    win.resultError = null;
+    win.resultLoading = false;
     win.linkedEvents = [];
     win.errorState = null;
     win.emptyState = false;
@@ -327,15 +423,14 @@
     if (rowEl) {
       var tn = rowEl.querySelector(".au-tool");
       var ag = rowEl.querySelector(".au-args");
-      win.toolLabel = (tn ? tn.textContent : callId) + (ag && ag.textContent ? " · " + ag.textContent : "");
+      win.toolLabel = (tn ? tn.textContent : callId) + (ag && ag.textContent ? " \u00b7 " + ag.textContent : "");
     } else if (!win.toolLabel) {
       win.toolLabel = callId;
     }
     auSyncSelectedMarks();
     auRenderWindowBody(win);
 
-    var url = "/s/" + encodeURIComponent(auSessionRid()) + "/audit/events?call=" + encodeURIComponent(callId) +
-      (opts.restart ? "&from=oldest" : "");
+    var url = "/s/" + encodeURIComponent(auSessionRid()) + "/audit/events?call=" + encodeURIComponent(callId);
     fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
       if (!r.ok) return r.text().then(function (msg) { throw { status: r.status, message: msg }; });
       return r.json();
@@ -350,8 +445,12 @@
         auRenderWindowBody(win);
         return;
       }
+      var resEv = win.linkedEvents.find(function (ev) {
+        return ev && ev.id !== targetId && auIsResultSummary(ev, callId);
+      });
       win.primaryEventId = targetId;
-      auFetchEnvelope(win, targetId);
+      win.resultEventId = resEv ? resEv.id : "";
+      auFetchCallEnvelopes(win, win.primaryEventId, win.resultEventId);
     }).catch(function (err) {
       if (reqToken !== win.reqToken || !win.el.isConnected) return;
       win.loading = false;
@@ -361,7 +460,7 @@
   }
 
   function auLoadMorePart(win, part, offset) {
-    var ev = win.activeEnvelope;
+    var ev = (part === "out" && !win.inspectEventId && win.resultEnvelope) ? win.resultEnvelope : win.activeEnvelope;
     if (!ev || !ev.id) return;
     var btn = win.el.querySelector('[data-au-more="' + part + '"]');
     if (btn) btn.disabled = true;
@@ -373,7 +472,8 @@
       if (!r.ok) return r.text().then(function (msg) { throw { status: r.status, message: msg }; });
       return r.json();
     }).then(function (chunk) {
-      if (!win.el.isConnected || win.activeEnvelope !== ev) return;
+      var stillActive = (ev === win.activeEnvelope) || (!win.inspectEventId && ev === win.resultEnvelope);
+      if (!win.el.isConnected || !stillActive) return;
       if (chunk && typeof chunk.data === "string") {
         ev[part] = (ev[part] || "") + chunk.data;
       }
@@ -414,12 +514,17 @@
 
   function auCloseWindow(win) {
     if (!win) return;
+    var active = doc.activeElement;
+    var hadFocus = !!(win.el && active && (active === win.el || (win.el.contains && win.el.contains(active))));
     var idx = auWindows.indexOf(win);
     if (idx >= 0) auWindows.splice(idx, 1);
     if (win.el && win.el.parentNode) win.el.parentNode.removeChild(win.el);
     if (auFocusedWin === win) {
       auFocusedWin = auWindows.length ? auWindows[auWindows.length - 1] : null;
-      if (auFocusedWin) auFocusedWin.el.classList.add("au-focus");
+      if (auFocusedWin) {
+        auFocusedWin.el.classList.add("au-focus");
+        if (hadFocus && typeof auFocusedWin.el.focus === "function") auFocusedWin.el.focus();
+      }
     }
     auSyncSelectedMarks();
     auSyncDarkroom();
@@ -505,9 +610,15 @@
         e.preventDefault();
         auFocusWindow(win);
         var rect = win.el.getBoundingClientRect();
-        var sx = e.clientX, sy = e.clientY, sw = rect.width, sh = rect.height;
+        var sx = e.clientX, sy = e.clientY, sl = rect.left, st = rect.top, sw = rect.width, sh = rect.height;
         var move = function (ev) {
-          var box = auClampPosition(rect.left, rect.top, sw + (ev.clientX - sx), sh + (ev.clientY - sy));
+          var vw = window.innerWidth || 1280;
+          var vh = window.innerHeight || 800;
+          var rawW = Math.min(sw + (ev.clientX - sx), vw - 12 - sl);
+          var rawH = Math.min(sh + (ev.clientY - sy), vh - 12 - st);
+          var box = auClampPosition(sl, st, rawW, rawH);
+          win.el.style.left = box.left + "px";
+          win.el.style.top = box.top + "px";
           win.el.style.width = box.width + "px";
           win.el.style.height = box.height + "px";
         };
@@ -549,7 +660,7 @@
       if (t.closest(".au-crumb-back")) {
         win.inspectEventId = null;
         win.activeSummary = null;
-        auFetchEnvelope(win, win.primaryEventId);
+        auFetchCallEnvelopes(win, win.primaryEventId, win.resultEventId);
         return;
       }
       var tabBtn = t.closest(".au-tab");
@@ -577,12 +688,18 @@
         return;
       }
       if (t.closest("[data-au-restart]")) {
-        auLoadCallIntoWindow(win, win.callId, null, { restart: true });
+        auLoadCallIntoWindow(win, win.callId, null);
         return;
       }
       if (t.closest("[data-au-retry]")) {
-        if (win.inspectEventId) auFetchEnvelope(win, win.inspectEventId);
-        else auLoadCallIntoWindow(win, win.callId, null);
+        if (win.tab === "out" && !win.inspectEventId && win.resultError && win.resultEventId) {
+          auFetchResultEnvelope(win, win.resultEventId, win.reqToken);
+          auRenderWindowBody(win);
+        } else if (win.inspectEventId) {
+          auFetchEnvelope(win, win.inspectEventId);
+        } else {
+          auLoadCallIntoWindow(win, win.callId, null);
+        }
       }
     });
 
@@ -647,6 +764,7 @@
   // --- Lazy post-render hydration for call rows ---
   function auApplyHydration(summaries, markChecked) {
     var byCall = Object.create(null);
+    var errByCall = Object.create(null);
     var seenRequests = Object.create(null);
     // Summaries arrive newest first or oldest first; process oldest first so
     // first call per request_id gets "+delta" and parallel siblings get "·".
@@ -658,9 +776,9 @@
       if (!ev || !ev.call_id) continue;
       if (ev.kind === "tool_call") {
         byCall[ev.call_id] = ev;
-      } else if (ev.kind === "tool_result" && byCall[ev.call_id]) {
+      } else if (ev.kind === "tool_result") {
         if (ev.subkind === "error" || (ev.title && ev.title.indexOf("error") === 0)) {
-          byCall[ev.call_id]._auErr = true;
+          errByCall[ev.call_id] = true;
         }
       }
     }
@@ -672,7 +790,7 @@
       if (s || markChecked) row.setAttribute("data-au-hydrated", "1");
       if (!s) continue;
 
-      if (s._auErr && !row.classList.contains("au-fail")) {
+      if (errByCall[cid] && !row.classList.contains("au-fail")) {
         row.classList.remove("au-done");
         row.classList.add("au-fail");
         var mk = row.querySelector(".au-mk");
@@ -709,37 +827,126 @@
     }
   }
 
+  function auGetHydrationState(sessionId) {
+    var st = auHydratedSessions[sessionId];
+    if (!st) {
+      st = {
+        pending: false,
+        staleRetried: false,
+        initialized: false,
+        before: "",
+        after: "",
+        end: false,
+        events: [],
+        seenIds: Object.create(null)
+      };
+      auHydratedSessions[sessionId] = st;
+    }
+    return st;
+  }
+
+  function auMergeHydrationEvents(st, list) {
+    if (!Array.isArray(list)) return;
+    for (var i = 0; i < list.length; i++) {
+      var ev = list[i];
+      if (!ev || !ev.id || st.seenIds[ev.id]) continue;
+      st.seenIds[ev.id] = true;
+      st.events.push(ev);
+    }
+  }
+
+  function auHasUnhydratedRows() {
+    return q('#convo .au-row[data-call]:not([data-au-hydrated])').length > 0;
+  }
+
+  function auFetchEventsPage(sessionId, params) {
+    var qs = "kinds=tool_call,tool_result&n=500" + (params || "");
+    var url = "/s/" + encodeURIComponent(sessionId) + "/audit/events?" + qs;
+    return fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      if (!r.ok) return r.text().then(function (msg) { throw { status: r.status, message: msg }; });
+      return r.json();
+    });
+  }
+
   function auHydrateCalls() {
     auHydrateTimer = null;
     var sessionId = auSessionRid();
-    if (!sessionId || !window.fetch) return;
-    var unhydrated = q('#convo .au-row[data-call]:not([data-au-hydrated])');
-    if (!unhydrated.length) return;
-    if (auHydratedSessions[sessionId] === "pending") return;
-    auHydratedSessions[sessionId] = "pending";
-    fetch("/s/" + encodeURIComponent(sessionId) + "/audit/events?n=200", { credentials: "same-origin", cache: "no-store" })
-      .then(function (r) {
-        if (!r.ok) return null;
-        return r.json();
-      })
-      .then(function (page) {
+    if (!sessionId || typeof fetch !== "function") return Promise.resolve();
+    if (!auHasUnhydratedRows()) return Promise.resolve();
+    var st = auGetHydrationState(sessionId);
+    if (st.pending) return Promise.resolve();
+    st.pending = true;
+
+    function walkForward() {
+      if (!st.after || !auHasUnhydratedRows()) return Promise.resolve();
+      var prevAfter = st.after;
+      return auFetchEventsPage(sessionId, "&after=" + encodeURIComponent(st.after)).then(function (page) {
         var evs = page && Array.isArray(page.events) ? page.events : [];
-        auHydratedSessions[sessionId] = evs;
-        auApplyHydration(evs, true);
-      })
-      .catch(function () {
-        auHydratedSessions[sessionId] = [];
-        auApplyHydration([], true);
+        auMergeHydrationEvents(st, evs);
+        if (page && page.after) st.after = page.after;
+        auApplyHydration(st.events, st.end);
+        if (evs.length === 500 && page && page.after && page.after !== prevAfter && auHasUnhydratedRows()) {
+          return walkForward();
+        }
       });
+    }
+
+    function walkBackward() {
+      if (st.end || !st.before || !auHasUnhydratedRows()) return Promise.resolve();
+      return auFetchEventsPage(sessionId, "&before=" + encodeURIComponent(st.before)).then(function (page) {
+        var evs = page && Array.isArray(page.events) ? page.events : [];
+        auMergeHydrationEvents(st, evs);
+        st.before = page && page.before ? page.before : "";
+        st.end = !!(page && page.end) || !st.before;
+        auApplyHydration(st.events, st.end);
+        if (!st.end && st.before && auHasUnhydratedRows()) {
+          return walkBackward();
+        }
+      });
+    }
+
+    var startStep;
+    if (!st.initialized) {
+      startStep = auFetchEventsPage(sessionId, "").then(function (page) {
+        var evs = page && Array.isArray(page.events) ? page.events : [];
+        st.initialized = true;
+        st.before = page && page.before ? page.before : "";
+        st.after = page && page.after ? page.after : "";
+        st.end = !!(page && page.end) || !st.before;
+        auMergeHydrationEvents(st, evs);
+        auApplyHydration(st.events, st.end);
+      });
+    } else {
+      startStep = walkForward();
+    }
+
+    return startStep.then(walkBackward).then(function () {
+      st.pending = false;
+      st.staleRetried = false;
+      if (st.end) auApplyHydration(st.events, true);
+    }).catch(function (err) {
+      if (err && err.status === 410 && !st.staleRetried) {
+        st.staleRetried = true;
+        st.initialized = false;
+        st.before = "";
+        st.after = "";
+        st.end = false;
+        st.events = [];
+        st.seenIds = Object.create(null);
+        st.pending = false;
+        return auHydrateCalls();
+      }
+      st.pending = false;
+    });
   }
 
   function auScheduleHydration() {
     var sessionId = auSessionRid();
-    if (Array.isArray(auHydratedSessions[sessionId]) && auHydratedSessions[sessionId].length) {
-      auApplyHydration(auHydratedSessions[sessionId], false);
+    var st = sessionId ? auHydratedSessions[sessionId] : null;
+    if (st && st.events.length) {
+      auApplyHydration(st.events, st.end);
     }
-    var unhydrated = q('#convo .au-row[data-call]:not([data-au-hydrated])');
-    if (!unhydrated.length || auHydrateTimer) return;
+    if (!auHasUnhydratedRows() || auHydrateTimer) return;
     auHydrateTimer = setTimeout(auHydrateCalls, 0);
   }
 
@@ -785,21 +992,21 @@
       return;
     }
 
-    if (e.key === "Escape" && auWindows.length > 0) {
-      e.preventDefault();
-      if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
-      else e.stopPropagation();
-      var targetWin = auFocusedWin && auWindows.indexOf(auFocusedWin) >= 0
-        ? auFocusedWin
-        : auWindows[auWindows.length - 1];
-      auCloseWindow(targetWin);
+    if (e.key === "Escape" && inAuditWin) {
+      var targetWin = auWindows.find(function (w) { return w.el === inAuditWin; });
+      if (targetWin) {
+        e.preventDefault();
+        if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+        else e.stopPropagation();
+        auCloseWindow(targetWin);
+      }
       return;
     }
 
-    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey && !e.metaKey && !e.altKey && auWindows.length > 0) {
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey && !e.metaKey && !e.altKey && inAuditWin) {
       var tag = t && t.tagName ? t.tagName : "";
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
-      var navWin = (inAuditWin && auWindows.find(function (w) { return w.el === inAuditWin; })) || auFocusedWin || auWindows[auWindows.length - 1];
+      var navWin = auWindows.find(function (w) { return w.el === inAuditWin; });
       if (navWin) {
         e.preventDefault();
         auStepCall(navWin, e.key === "ArrowLeft" ? -1 : 1);
@@ -849,6 +1056,7 @@
     tokenGrowth: auTokenGrowthDisplay,
     renderBody: auRenderBodyContent,
     applyHydration: auApplyHydration,
+    hydrate: auHydrateCalls,
     openCall: auOpenCall,
     closeUnpinned: auCloseUnpinned,
     windows: function () { return auWindows.slice(); }

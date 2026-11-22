@@ -5,9 +5,20 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const base = process.env.AUDIT_BASE;
 const shots = process.env.AUDIT_SHOTS;
 
-async function shellDim(page) {
-  return page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sh-dim') || '0') || 0);
+async function pixel(page, x, y) {
+  const buf = await page.screenshot({ clip: { x, y, width: 1, height: 1 } });
+  return page.evaluate(async b64 => {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const c = document.createElement('canvas');
+    c.width = c.height = 1;
+    const g = c.getContext('2d');
+    g.drawImage(bmp, 0, 0);
+    return Array.from(g.getImageData(0, 0, 1, 1).data.slice(0, 3));
+  }, buf.toString('base64'));
 }
+
+const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
 
 (async () => {
   const server = await chromium.launchServer({ headless: true });
@@ -48,7 +59,7 @@ async function shellDim(page) {
       const r3 = document.querySelector('.au-row[data-call="c3"]');
       return r1 && r1.getAttribute('data-au-hydrated') === '1' &&
         r2 && r2.querySelector('.au-tok')?.textContent === '·' &&
-        r3 && r3.classList.contains('au-fail');
+        r3 && r3.getAttribute('data-au-hydrated') === '1';
     });
 
     const tok1 = await frame.locator('.au-row[data-call="c1"] .au-tok').textContent();
@@ -79,6 +90,10 @@ async function shellDim(page) {
     const convoZ = await frame.evaluate(() => getComputedStyle(document.getElementById('convo')).zIndex);
     assert.equal(convoZ, '66', '#convo stays above darkroom scrim');
 
+    // Integrated shell-vanish check: shell sets data-fdim and keeps topbar visible beneath frame scrim at 1440x900
+    await page.waitForFunction(() => document.documentElement.hasAttribute('data-fdim'), null, { timeout: 5000 });
+    assert.equal(await page.locator('.dwrap > .top').isVisible(), true, 'shell topbar remains visible while dimmed');
+
     // Verify redaction chip, stored_trunc divider, and seam seen-cut badge on Input tab
     const winHtml = await win.locator('.au-panel').innerHTML();
     assert.ok(winHtml.includes('api-key'), 'redaction rule chip rendered');
@@ -104,7 +119,23 @@ async function shellDim(page) {
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await frame.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
 
-    // Drag header + resize corner within viewport bounds
+    // At 1920x900 where #rail is pinned open, verify #rail remains visible & distinct under data-fdim
+    await page.setViewportSize({ width: 1920, height: 900 });
+    await page.waitForTimeout(80);
+    assert.equal(await page.locator('#rail').isVisible(), true, 'shell #rail remains visible while dimmed at 1920x900');
+    const railBox = await page.locator('#rail').boundingBox();
+    if (railBox && railBox.x >= 4) {
+      const px = Math.round(railBox.x + railBox.width / 2);
+      const py = Math.round(railBox.y + railBox.height - 40);
+      const gx = Math.max(1, Math.round(railBox.x / 2));
+      const railRGB = await pixel(page, px, py);
+      const gutterRGB = await pixel(page, gx, py);
+      assert.ok(!sameRGB(railRGB, gutterRGB), `shell rail remains distinct from background under audit scrim (${railRGB} vs ${gutterRGB})`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(80);
+
+    // Drag header + resize clamping near bottom-right viewport edge
     const beforeBox = await win.boundingBox();
     const hdBox = await win.locator('.au-whd').boundingBox();
     await page.mouse.move(hdBox.x + 80, hdBox.y + 16);
@@ -114,9 +145,48 @@ async function shellDim(page) {
     const afterDrag = await win.boundingBox();
     assert.ok(Math.abs(afterDrag.x - (beforeBox.x + 40)) < 4, 'window drags horizontally');
 
-    // Output tab + Load more
+    // Push window near bottom-right corner and drag .au-resize outward: must clamp within viewport
+    const edgeHd = await win.locator('.au-whd').boundingBox();
+    await page.mouse.move(edgeHd.x + 40, edgeHd.y + 12);
+    await page.mouse.down();
+    await page.mouse.move(edgeHd.x + 500, edgeHd.y + 420);
+    await page.mouse.up();
+    const nearEdge = await win.boundingBox();
+    await page.mouse.move(nearEdge.x + nearEdge.width - 4, nearEdge.y + nearEdge.height - 4);
+    await page.mouse.down();
+    await page.mouse.move(nearEdge.x + nearEdge.width + 320, nearEdge.y + nearEdge.height + 320);
+    await page.mouse.up();
+    const afterResize = await win.boundingBox();
+    assert.ok(afterResize.x >= 0 && afterResize.y >= 0, 'resized window stays inside top/left viewport bounds');
+    assert.ok(afterResize.x + afterResize.width <= 1440 && afterResize.y + afterResize.height <= 900,
+      `resized window stays within 1440x900 bounds (right=${afterResize.x + afterResize.width}, bottom=${afterResize.y + afterResize.height})`);
+
+    // Decision (605): keyboard outside .au-win must NOT step/close/hijack find on audit window
+    await frame.locator('.au-row[data-call="c1"]').focus();
+    await page.keyboard.press('ArrowRight');
+    assert.ok((await win.locator('.au-wname').textContent()).includes('Read'), 'ArrowRight outside .au-win does not step audit window');
+    await win.locator('.au-pin').click(); // pin -> uncover #convo/#composer so focus can move outside .au-win
+    await frame.evaluate(() => {
+      const target = document.querySelector('#text, textarea, .au-row[data-call="c1"]');
+      if (target && typeof target.focus === 'function') target.focus();
+      if (document.activeElement && document.activeElement.closest && document.activeElement.closest('.au-win')) {
+        document.activeElement.blur();
+      }
+    });
+    assert.equal(await frame.evaluate(() => !!document.activeElement?.closest('.au-win')), false, 'focus moved outside .au-win before outside key test');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('Control+f');
+    await page.keyboard.press('Escape');
+    assert.equal(await frame.locator('.au-win').count(), 1, 'Escape outside .au-win does not close audit window');
+    assert.ok((await win.locator('.au-wname').textContent()).includes('Read'), 'Arrows outside .au-win do not step call');
+    assert.equal(await frame.evaluate(() => !!document.activeElement?.closest('.au-win')), false, 'Ctrl+F outside .au-win does not move focus into .au-sinp');
+    await win.locator('.au-pin').click(); // return to unpinned
+
+    // Output tab reads e-res-1 + Load more works on e-res-1
     console.log('STEP 4: out + loadmore + search + meta + events + errors');
     await win.locator('[data-au-tab="out"]').click();
+    await frame.waitForFunction(() => document.querySelector('.au-win .au-code')?.textContent.includes('ok line needle here in paged output'));
     const loadMoreBtn = win.locator('[data-au-more="out"]');
     await loadMoreBtn.waitFor();
     const beforeLen = await win.locator('.au-line').count();
@@ -135,12 +205,13 @@ async function shellDim(page) {
     assert.equal(await win.locator('.au-code.au-wrap').count(), 1);
     await win.locator('.au-copy-btn').click();
 
-    // Meta tab checks signature_only + request/ctx
+    // Meta tab checks signature_only + request/ctx + non-zero out_bytes from e-res-1
     await win.locator('[data-au-tab="meta"]').click();
     const metaText = await win.locator('.au-meta').textContent();
     assert.ok(metaText.includes('req-1') && metaText.includes('false'), 'Meta shows request_id and signature_only');
+    assert.ok(!/\bout 0\b/.test(metaText), `Meta reflects non-zero e-res-1 out_bytes (${metaText})`);
 
-    // Linked events tab + inspect e-hook-1 + Back breadcrumb
+    // Linked events tab + inspect e-hook-1 + Back breadcrumb (restoring resultEnvelope too)
     await win.locator('[data-au-tab="events"]').click();
     await win.locator('[data-au-ev="e-hook-1"]').click();
     await win.locator('.au-crumb:not([hidden])').waitFor();
@@ -148,12 +219,20 @@ async function shellDim(page) {
     await win.locator('.au-crumb-back').click();
     assert.equal(await win.locator('.au-crumb:not([hidden])').count(), 0);
 
-    // Next call via button + ArrowRight / ArrowLeft, plus kind="other" Raw tab
+    // Next call via button + ArrowRight / ArrowLeft, plus c3 tool_result failed pill & output, plus kind="other" Raw tab
     await win.locator('.au-next').click();
     await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Grep'));
     await win.locator('.au-whd').click();
     await page.keyboard.press('ArrowRight');
-    await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Bash'));
+    await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Bash') && document.querySelector('.au-win .au-wstatus')?.classList.contains('au-err'));
+    assert.ok((await win.locator('.au-wstatus').textContent()).includes('failed'), 'c3 header pill shows failed from e-res-3 meta.is_error');
+    await win.locator('[data-au-tab="out"]').click();
+    await frame.waitForFunction(() => document.querySelector('.au-win .au-code')?.textContent.includes('exit status 1'));
+    const bashOutText = await win.locator('.au-code').textContent();
+    assert.ok(bashOutText.includes('TestSomething') && bashOutText.includes('exit status 1'), 'c3 Output tab shows e-res-3 failure output');
+    await win.locator('[data-au-tab="meta"]').click();
+    assert.ok((await win.locator('.au-meta').textContent()).includes('is_error'), 'c3 Meta tab shows result is_error');
+    await win.locator('.au-whd').click();
     await page.keyboard.press('ArrowRight');
     await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Edit'));
     await win.locator('[data-au-tab="raw"]').click();
@@ -175,11 +254,24 @@ async function shellDim(page) {
     }
     await page.unrouteAll({ behavior: 'ignoreErrors' });
 
-    // Close unpinned via Escape (must stay inside session, not leave shell)
+    // Result event error (404 on e-res-2) on a fresh window keeps Input tab intact and shows error only on Output tab
+    await win.locator('.au-close').click();
+    await frame.waitForFunction(() => document.querySelectorAll('.au-win').length === 0);
+    await page.route('**/s/livesession/audit/event/e-res-2*', route => route.fulfill({ status: 404, body: 'missing' }), { times: 1 });
+    await frame.locator('.au-row[data-call="c2"]').click();
+    await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Grep') && document.querySelector('.au-win .au-code')?.textContent.includes('sessionSecret'));
+    await win.locator('[data-au-tab="out"]').click();
+    await frame.waitForFunction(() => document.querySelector('.au-win .au-state')?.textContent.includes('Event not retained'));
+    await win.locator('[data-au-tab="in"]').click();
+    assert.ok((await win.locator('.au-code').textContent()).includes('sessionSecret'), 'Input tab stays intact when result envelope returns 404');
+
+    // Close unpinned via Escape (must stay inside session, clear shell data-fdim)
     await frame.locator('.au-row[data-call="c1"]').click();
     await win.locator('.au-code').waitFor();
+    await win.focus();
     await page.keyboard.press('Escape');
     assert.equal(await frame.locator('.au-win').count(), 0, 'Escape closes top audit window');
+    await page.waitForFunction(() => !document.documentElement.hasAttribute('data-fdim'), null, { timeout: 5000 });
 
     // Pin cap 4 + 5th pinned window replaces oldest + shows WsToast
     for (let i = 0; i < 5; i++) {

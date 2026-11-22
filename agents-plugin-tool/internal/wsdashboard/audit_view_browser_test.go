@@ -115,7 +115,6 @@ func TestAuditViewBrowser(t *testing.T) {
 				Harness: "claude", Kind: wsaudit.KindToolCall, Subkind: "Read", CallID: "c1",
 				ModelSeen: true,
 				In:        headPart + tailPart,
-				Out:       largeOut,
 				Meta: map[string]any{
 					"request":        map[string]any{"id": "req-1", "ctx": 48000},
 					"signature_only": false,
@@ -132,14 +131,13 @@ func TestAuditViewBrowser(t *testing.T) {
 				V: 1, ID: "e-res-1", Seq: 3, Session: "livesession", At: t0.Add(180 * time.Millisecond),
 				Harness: "claude", Kind: wsaudit.KindToolResult, Subkind: "Read", CallID: "c1",
 				ModelSeen: true,
-				Out:       "read 14KB result",
+				Out:       largeOut,
 			},
 			{
 				V: 1, ID: "e-call-2", Seq: 4, Session: "livesession", At: t0.Add(10 * time.Millisecond),
 				Harness: "claude", Kind: wsaudit.KindToolCall, Subkind: "Grep", CallID: "c2",
 				ModelSeen: true,
 				In:        `{"pattern":"sessionSecret"}`,
-				Out:       "src/auth.ts:12: const sessionSecret = '***';",
 				Meta: map[string]any{
 					"request": map[string]any{"id": "req-1", "ctx": 48000}, // parallel sibling!
 				},
@@ -148,24 +146,25 @@ func TestAuditViewBrowser(t *testing.T) {
 				V: 1, ID: "e-res-2", Seq: 5, Session: "livesession", At: t0.Add(90 * time.Millisecond),
 				Harness: "claude", Kind: wsaudit.KindToolResult, Subkind: "Grep", CallID: "c2",
 				ModelSeen: true,
-				Out:       "1 match",
+				Out:       "src/auth.ts:12: const sessionSecret = '***';",
 			},
 			{
 				V: 1, ID: "e-call-3", Seq: 6, Session: "livesession", At: t0.Add(500 * time.Millisecond),
 				Harness: "claude", Kind: wsaudit.KindToolCall, Subkind: "Bash", CallID: "c3",
 				ModelSeen: true,
 				In:        `{"cmd":"go test ./internal/wsdashboard"}`,
-				Out:       "FAIL\tTestSomething (0.12s)\nexit status 1",
 				Meta: map[string]any{
-					"request":  map[string]any{"id": "req-2", "prev_id": "req-1", "ctx": 50400},
-					"is_error": true,
+					"request": map[string]any{"id": "req-2", "prev_id": "req-1", "ctx": 50400},
 				},
 			},
 			{
 				V: 1, ID: "e-res-3", Seq: 7, Session: "livesession", At: t0.Add(1400 * time.Millisecond),
 				Harness: "claude", Kind: wsaudit.KindToolResult, Subkind: "Bash", CallID: "c3",
 				ModelSeen: true,
-				Out:       "error: test failed",
+				Out:       "FAIL\tTestSomething (0.12s)\nexit status 1",
+				Meta: map[string]any{
+					"is_error": true,
+				},
 			},
 			{
 				V: 1, ID: "e-call-4", Seq: 8, Session: "livesession", At: t0.Add(1600 * time.Millisecond),

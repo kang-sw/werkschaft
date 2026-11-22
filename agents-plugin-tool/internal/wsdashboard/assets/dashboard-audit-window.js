@@ -287,8 +287,13 @@
     return { html: outHtml, matchCount: matchState.total, plainText: body };
   }
 
+  function auEnvelopeHasError(ev) {
+    return !!(ev && ((ev.meta && (ev.meta.is_error || ev.meta.error)) || ev.subkind === "error"));
+  }
+
   function auRenderMetaGrid(win) {
     var ev = win.activeEnvelope;
+    var resEv = !win.inspectEventId ? win.resultEnvelope : null;
     var summary = win.inspectEventId ? win.activeSummary : win.callSummary;
     var rows = [];
     var push = function (k, v) {
@@ -310,18 +315,30 @@
         push(wsT("js.audit.meta.ctx"), (summary.ctx_before != null ? summary.ctx_before : "\u2014") + " \u2192 " + (summary.ctx_after != null ? summary.ctx_after : "\u2014"));
       }
     }
+    var mergedMeta = Object.create(null);
     if (ev && ev.meta) {
-      if (ev.meta.signature_only != null) push(wsT("js.audit.meta.sigonly"), String(ev.meta.signature_only));
-      var keys = Object.keys(ev.meta).sort();
-      for (var i = 0; i < keys.length; i++) {
-        var k = keys[i];
-        if (k === "signature_only") continue;
-        var val = ev.meta[k];
-        push("meta." + k, typeof val === "object" ? JSON.stringify(val) : String(val));
-      }
+      Object.keys(ev.meta).forEach(function (k) { mergedMeta[k] = ev.meta[k]; });
     }
-    if (ev) {
-      push(wsT("js.audit.meta.bytes"), "in " + (ev.in_bytes || 0) + " · out " + (ev.out_bytes || 0) + " · raw " + (ev.raw_bytes || 0));
+    if (resEv && resEv.meta) {
+      Object.keys(resEv.meta).forEach(function (k) {
+        if (!(k in mergedMeta) || ((k === "is_error" || k === "error") && resEv.meta[k])) {
+          mergedMeta[k] = resEv.meta[k];
+        }
+      });
+    }
+    if (mergedMeta.signature_only != null) push(wsT("js.audit.meta.sigonly"), String(mergedMeta.signature_only));
+    var keys = Object.keys(mergedMeta).sort();
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (k === "signature_only") continue;
+      var val = mergedMeta[k];
+      push("meta." + k, typeof val === "object" ? JSON.stringify(val) : String(val));
+    }
+    if (ev || resEv) {
+      var inBytes = ev ? (ev.in_bytes || 0) : 0;
+      var outBytes = resEv ? (resEv.out_bytes || 0) : (ev ? (ev.out_bytes || 0) : 0);
+      var rawBytes = ev ? (ev.raw_bytes || 0) : 0;
+      push(wsT("js.audit.meta.bytes"), "in " + inBytes + " \u00b7 out " + outBytes + " \u00b7 raw " + rawBytes);
     }
     if (!rows.length) return '<div class="au-state">' + auEsc(wsT("js.audit.part.empty")) + "</div>";
     return '<div class="au-meta">' + rows.map(function (r) {
