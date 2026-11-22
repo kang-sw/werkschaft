@@ -30,7 +30,7 @@ const summary = { cursor: 'epoch.1', reset: true, removed: [], feed: [], globals
     assignments: { a0: { id: 'a0', item: 'i0', by: 'me', to: 'me', sender: 'me', state: 'live', status: 'todo', ts: now, lastUpdate: now, completion: 'assignee', chain: [] } },
     requests: {}, rules: {}, notices: [], time: { recentlyClosed: false, recentAssignments: {} } } } } };
 
-async function open(browser, { framed, hash = '', hold = false }) {
+async function open(browser, { framed, hash = '', hold = false, failBody = '' }) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const tab = await context.newPage();
   const errors = [], log = { lists: 0, views: [], terminals: 0, ws: [], checks: 0, seen: [], checkGate: null, viewGates: [] };
@@ -47,6 +47,18 @@ async function open(browser, { framed, hash = '', hold = false }) {
     const Socket = window.WebSocket;
     window.pageSockets = [];
     window.WebSocket = class extends Socket { constructor(...a) { super(...a); window.pageSockets.push(this); } };
+    // A connection that drops after the headers: the first read of this
+    // route answers with a body that fails mid-read.
+    const drop = window.__dropBody = { path: '', done: false };
+    const fetched = window.fetch;
+    window.fetch = function (input, init) {
+      const url = String(input && input.url || input);
+      if (drop.path && !drop.done && url.endsWith(drop.path)) {
+        drop.done = true;
+        return Promise.resolve(new Response(new ReadableStream({ start(c) { c.error(new Error('connection lost')); } }), { status: 200 }));
+      }
+      return fetched.apply(this, arguments);
+    };
     // One restored chat terminal tab, as a returning reader's browser holds.
     try { localStorage.setItem('ws.dashboard.cterm.livesession', JSON.stringify([{ id: 't1', num: 1 }])); } catch (e) { /* a sandboxed body frame has no storage */ }
   });
@@ -71,6 +83,7 @@ async function open(browser, { framed, hash = '', hold = false }) {
     log.terminals++;
     route.fulfill({ json: { terminals: [{ id: 't1', cwd: '/tmp', started_at: Date.now() }], folders: null } });
   });
+  if (failBody) await context.addInitScript(path => { window.__dropBody.path = path; }, failBody);
   await tab.goto(base + '/__host');
   await tab.evaluate(([unframed, hash]) => {
     window.heads = 0;
@@ -161,6 +174,23 @@ async function open(browser, { framed, hash = '', hold = false }) {
       assert.deepEqual(p.errors, []);
       await p.context.close();
       console.log('PASS hidden framed page at #/s1 shown while the entry check is out: views=' + p.log.views.length + ' seen=1');
+    }
+    // A connection lost after the response headers (the daemon restarting
+    // mid-answer) must not strand the held pass: the claim settles as an
+    // unreachable daemon, the reload ends, and a later revision reloads.
+    for (const path of ['/s1/check', '/s1/summary']) {
+      const p = await open(browser, { framed: true, hash: '#/s1', failBody: path });
+      await p.shown(true);
+      await wait(800);
+      const lists = p.log.lists;
+      await p.f.evaluate(() => {
+        const sock = window.pageSockets.filter(s => s.url.includes('/events') && s.readyState === 1).pop();
+        sock.onmessage({ data: JSON.stringify({ event: 'tracker', data: { rev: 2 } }) });
+      });
+      await until(() => p.log.lists > lists, 'a revision nudge reloads after the dropped ' + path);
+      assert.deepEqual(p.errors, []);
+      await p.context.close();
+      console.log('PASS dropped body on ' + path + ' leaves the tracker reloadable');
     }
     // Selecting a restored chat tab on a page still held starts its replay
     // at once, so the pane never shows an empty emulator.

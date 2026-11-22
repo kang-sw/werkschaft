@@ -35,7 +35,7 @@
         var v = null;
         try { v = s ? JSON.parse(s) : null; } catch (e) { v = null; }
         done(r.status, v && typeof v === "object" ? v : {}, r.headers.get("ETag") || "", s);
-      });
+      }, function () { done(0, {}); }); // a connection lost mid-body answers as an unreachable daemon
     }, function () { done(0, {}); });
   }
   function tkErrText(status, v) { return v.error ? String(v.error) : status ? "HTTP " + status : wsT("js.post.unreachable"); }
@@ -472,8 +472,10 @@
       }
       tkFetch(tkUrl(id, "check"), {}, function () {
         tkLoadView(id, function () {
-          tkNotify(); if (done) done();
-          if (claim && --claim.n === 0) claim.waiters.splice(0).forEach(function (fn) { fn(); });
+          // The claim's bookkeeping runs whatever the renderer's callbacks do:
+          // the held reload waits on it.
+          try { tkNotify(); if (done) done(); }
+          finally { if (claim && --claim.n === 0) claim.waiters.splice(0).forEach(function (fn) { fn(); }); }
         });
       });
     },
