@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -229,8 +230,29 @@ func TestTranscriptShutdownFlushesDeferredSendsAndConsumedSnapshot(t *testing.T)
 				h.start()
 				id := h.lead(backend, LeadOptions{}).ID
 				h.send(id, "one")
-				h.quiesce(id)
 				c := h.runner.conv(id)
+				// A Claude lead's launch asks the harness for its commands
+				// (claudeCommandsAsk) from a goroutine of its own, and the fake
+				// holder's answer reaches the loop through the delivery stream.
+				// Applied after the send below, the answer's line writes the
+				// record (persistSeq) and, with it, the held send's coverage.
+				// Wait for the ask, then for every line the holder holds to be
+				// applied and its cursor saved, so the only unwritten change
+				// below is the held send.
+				holder := h.holder(id)
+				if backend == BackendClaude {
+					eventually(t, "the launch's commands ask", func() bool {
+						return slices.ContainsFunc(h.holders.inputs(holder, "control_request"), func(line string) bool {
+							return strings.Contains(line, `"request_id":"`+claudeCommandsAsk+`"`)
+						})
+					})
+				}
+				target := uint64(h.holders.records(holder))
+				eventually(t, "the holder's records to be applied", func() bool {
+					applied := false
+					c.do(func() { applied = c.seq >= target && !c.seqDirty })
+					return applied
+				})
 				diskBefore := h.record(id)
 				if _, err := h.runner.Send(id, "held through shutdown"); err != nil {
 					t.Fatal(err)
