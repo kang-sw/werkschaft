@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -138,9 +140,10 @@ func composerHTTP(d *Daemon, method, path, body, origin, remote string, header m
 	return out
 }
 
+// composerPost is a fresh submission carrying the daemon's current admission
+// token, as a page that just read it would.
 func composerPost(d *Daemon, id, text string) *httptest.ResponseRecorder {
-	body, _ := json.Marshal(map[string]any{"submission_id": id, "text": text})
-	return composerHTTP(d, http.MethodPost, "/s/livesession/composer-exec", string(body), "http://127.0.0.1", "127.0.0.1:1234", nil)
+	return composerPostAs(d, "livesession", id, text, false)
 }
 
 func composerGet(d *Daemon, path string) *httptest.ResponseRecorder {
@@ -215,6 +218,14 @@ func TestComposerRefusesAttachmentsAndBadIDs(t *testing.T) {
 	body = `{"submission_id":"sub-att-0002","text":"!ls","refs":[{"x":1}]}`
 	if res := composerHTTP(f.d, http.MethodPost, "/s/livesession/composer-exec", body, "http://127.0.0.1", "127.0.0.1:1", nil); res.Code != 400 {
 		t.Fatalf("refs: %d %s", res.Code, res.Body)
+	}
+	// Every other field of the regular composer is refused as well, and so is
+	// any field this route does not know, empty or not.
+	for i, field := range []string{`"picks":[{"id":"p"}]`, `"chips":[{"id":"c"}]`, `"notes":["n"]`, `"mentions":[]`, `"images":[]`, `"console":[1]`, `"close_requests":[{}]`, `"surprise":1`} {
+		body = fmt.Sprintf(`{"submission_id":"sub-extra-%03d","text":"!ls",%s,"token":%q}`, i, field, f.d.composer.token())
+		if res := composerHTTP(f.d, http.MethodPost, "/s/livesession/composer-exec", body, "http://127.0.0.1", "127.0.0.1:1", nil); res.Code != 400 || !strings.Contains(res.Body.String(), "no attachments") {
+			t.Fatalf("%s: %d %s", field, res.Code, res.Body)
+		}
 	}
 	for _, id := range []string{"", "short", "has space in it", strings.Repeat("a", 65), "../../etc/passwd"} {
 		if res := composerPost(f.d, id, "!ls"); res.Code != 400 {
@@ -298,7 +309,8 @@ func TestComposerInlineAndFileClassification(t *testing.T) {
 	if got, err := os.ReadFile(file.File); err != nil || len(got) != 4097 {
 		t.Fatalf("file: %d bytes, %v", len(got), err)
 	}
-	if info, err := os.Stat(file.File); err != nil || info.Mode().Perm() != 0o600 {
+	// Windows reports 0666 whatever the file's ACL says; the mode is a Unix fact.
+	if info, err := os.Stat(file.File); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("file mode: %v, %v", info, err)
 	}
 	// Binary/invalid UTF-8: 2000 bytes of 0xff decode to 2000 replacement
@@ -585,7 +597,7 @@ func TestComposerLaunchSurvivesTheClosedTab(t *testing.T) {
 	}
 	f.svc.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
-	body, _ := json.Marshal(map[string]any{"submission_id": "sub-tab-00001", "text": "!sleep 5"})
+	body, _ := json.Marshal(map[string]any{"submission_id": "sub-tab-00001", "text": "!sleep 5", "token": f.d.composer.token()})
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/s/livesession/composer-exec", strings.NewReader(string(body))).WithContext(ctx)
 	req.RemoteAddr = "127.0.0.1:5"
 	req.Header.Set("Origin", "http://127.0.0.1")
@@ -610,9 +622,9 @@ func TestComposerLaunchSurvivesTheClosedTab(t *testing.T) {
 // never dropped, and it does not make the finished ones behind it pile up.
 func TestComposerClaimEvictsFinishedCardsBehindAnActiveOne(t *testing.T) {
 	f := startComposerFixture(t)
-	first, _ := f.d.composerAdmit("livesession", "claim-active-0", "sleep 60", 4, false)
+	first, _ := testAdmit(f.d, "livesession", "claim-active-0", "sleep 60", 4, false, f.d.composer.token())
 	for i := 1; i < composerKeepCards+5; i++ {
-		sub, how := f.d.composerAdmit("livesession", fmt.Sprintf("claim-done-%02d", i), "true", 4, false)
+		sub, how := testAdmit(f.d, "livesession", fmt.Sprintf("claim-done-%02d", i), "true", 4, false, f.d.composer.token())
 		if how != composerFresh {
 			t.Fatalf("admission %d was not fresh", i)
 		}
@@ -633,7 +645,12 @@ func TestComposerClaimEvictsFinishedCardsBehindAnActiveOne(t *testing.T) {
 }
 
 func composerPostAs(d *Daemon, reply, id, text string, retry bool) *httptest.ResponseRecorder {
-	body, _ := json.Marshal(map[string]any{"submission_id": id, "text": text, "retry": retry})
+	return composerPostToken(d, reply, id, text, retry, d.composer.token())
+}
+
+// composerPostToken sends a submission with an explicit admission token.
+func composerPostToken(d *Daemon, reply, id, text string, retry bool, token string) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(map[string]any{"submission_id": id, "text": text, "retry": retry, "token": token})
 	return composerHTTP(d, http.MethodPost, "/s/"+reply+"/composer-exec", string(body), "http://127.0.0.1", "127.0.0.1:1234", nil)
 }
 
@@ -657,6 +674,8 @@ func TestComposerReplayFenceNeverRunsAnIdTwice(t *testing.T) {
 	if n := f.svc.launchCount(); n != 1 {
 		t.Fatalf("launches after resends = %d", n)
 	}
+	// The token the page held when it sent the original request.
+	tokenBefore := f.d.composer.token()
 	// Evict the card: more finished cards than the daemon keeps.
 	for i := 0; i < composerKeepCards+3; i++ {
 		id := fmt.Sprintf("replay-fill-%03d", i)
@@ -679,25 +698,43 @@ func TestComposerReplayFenceNeverRunsAnIdTwice(t *testing.T) {
 	if n := f.svc.launchCount(); n != before {
 		t.Fatalf("an evicted id launched again: %d -> %d", before, n)
 	}
-	// A restart empties the maps: a retry is unknown and runs nothing, a fresh
-	// submission under the same id runs (a deliberate resend).
-	c := &f.d.composer
-	c.mu.Lock()
-	c.subs, c.order, c.fence, c.fenceQ = nil, nil, nil, nil
-	c.mu.Unlock()
-	res := composerPostAs(f.d, "livesession", "replay-0001", "!echo once", true)
-	if card := decodeCard(t, res); res.Code != 200 || !card.Unknown {
-		t.Fatalf("retry after a restart = %d %s", res.Code, res.Body)
+	// The unchanged original request (a fresh one, as the first send was) after
+	// its card went is a delayed copy, not a new submission: the fence holds its
+	// id, and it runs nothing.
+	staleToken := tokenBefore
+	if res := composerPostToken(f.d, "livesession", "replay-0001", "!echo once", false, staleToken); !decodeCard(t, res).Unknown || res.Code != 200 {
+		t.Fatalf("the original request replayed after its card was evicted = %d %s", res.Code, res.Body)
 	}
 	if n := f.svc.launchCount(); n != before {
-		t.Fatalf("a retry after a restart launched: %d -> %d", before, n)
+		t.Fatalf("an unchanged original request launched after eviction: %d -> %d", before, n)
 	}
-	if res := composerPostAs(f.d, "livesession", "replay-0001", "!echo once", false); res.Code != 202 {
-		t.Fatalf("fresh submission after a restart = %d %s", res.Code, res.Body)
+	// A restart empties the maps and issues a new epoch: the unchanged original
+	// request and a retry both run nothing; the refusal carries the new token,
+	// and a deliberate resend with a new id and that token runs.
+	c := &f.d.composer
+	c.mu.Lock()
+	c.subs, c.order, c.fence, c.fenceQ = map[string]*composerSub{}, map[string][]string{}, map[string]struct{}{}, nil
+	c.epoch, c.seq, c.horizon = "newepoch0123", 0, 0
+	c.mu.Unlock()
+	for _, retry := range []bool{true, false} {
+		res := composerPostToken(f.d, "livesession", "replay-0001", "!echo once", retry, staleToken)
+		card := decodeCard(t, res)
+		if res.Code != 200 || !card.Unknown || !strings.HasPrefix(card.Token, "newepoch0123.") {
+			t.Fatalf("original request after a restart (retry=%v) = %d %s", retry, res.Code, res.Body)
+		}
+	}
+	if n := f.svc.launchCount(); n != before {
+		t.Fatalf("a request after a restart launched: %d -> %d", before, n)
+	}
+	if res := composerPostToken(f.d, "livesession", "replay-0002", "!echo once", false, ""); !decodeCard(t, res).Unknown {
+		t.Fatalf("a request with no token was admitted: %d %s", res.Code, res.Body)
+	}
+	if res := composerPostAs(f.d, "livesession", "replay-0002", "!echo once", false); res.Code != 202 {
+		t.Fatalf("deliberate resend after a restart = %d %s", res.Code, res.Body)
 	}
 	waitFor(t, "the deliberate resend to launch", func() bool { return f.svc.launchCount() == before+1 })
 	// The same id for another command is refused, never mapped.
-	if res := composerPostAs(f.d, "livesession", "replay-0001", "!echo other", false); res.Code != 409 {
+	if res := composerPostAs(f.d, "livesession", "replay-0002", "!echo other", false); res.Code != 409 {
 		t.Fatalf("id reused for another command = %d", res.Code)
 	}
 }
@@ -705,8 +742,9 @@ func TestComposerReplayFenceNeverRunsAnIdTwice(t *testing.T) {
 // TestComposerReplayFenceIsBounded: the fence keeps the newest ids only.
 func TestComposerReplayFenceIsBounded(t *testing.T) {
 	f := startComposerFixture(t)
+	firstToken := f.d.composer.token()
 	for i := 0; i < composerFenceMax+10; i++ {
-		sub, how := f.d.composerAdmit("livesession", fmt.Sprintf("bound-%06d", i), "true", 4, false)
+		sub, how := testAdmit(f.d, "livesession", fmt.Sprintf("bound-%06d", i), "true", 4, false, f.d.composer.token())
 		if how != composerFresh {
 			t.Fatalf("admission %d = %v", i, how)
 		}
@@ -716,10 +754,30 @@ func TestComposerReplayFenceIsBounded(t *testing.T) {
 	}
 	c := &f.d.composer
 	c.mu.Lock()
-	n, oldest := len(c.fence), c.fenceQ[0]
+	n, oldest := len(c.fence), c.fenceQ[0].key
 	c.mu.Unlock()
 	if n != composerFenceMax || oldest != "livesession\x00bound-000010" {
 		t.Fatalf("fence holds %d ids from %q", n, oldest)
+	}
+	// An id the fence forgot is not admitted again by the request that first
+	// carried it: its token (taken before the first admission) precedes the
+	// eviction horizon. A page that read the token since is admitted.
+	if _, how := testAdmit(f.d, "livesession", "bound-000000", "true", 4, false, firstToken); how != composerUnknown {
+		t.Fatalf("the original request of an evicted id = %v, want unknown", how)
+	}
+	if _, how := testAdmit(f.d, "livesession", "bound-fresh-1", "true", 4, false, firstToken); how != composerUnknown {
+		t.Fatalf("a new id under a token older than the horizon = %v, want unknown (the page refreshes its token)", how)
+	}
+	if sub, how := testAdmit(f.d, "livesession", "bound-fresh-2", "true", 4, false, f.d.composer.token()); how != composerFresh {
+		t.Fatalf("a current token = %v, want fresh", how)
+	} else {
+		sub.mu.Lock()
+		sub.phase, sub.finalized = "done", true
+		sub.mu.Unlock()
+	}
+	// A token of another daemon instance is never current.
+	if _, how := testAdmit(f.d, "livesession", "bound-fresh-3", "true", 4, false, "other-epoch.99999"); how != composerUnknown {
+		t.Fatalf("a token of another epoch = %v, want unknown", how)
 	}
 }
 
@@ -1094,4 +1152,265 @@ func TestComposerArtifactSurvivesDaemonReplacement(t *testing.T) {
 	if _, err := os.Stat(card.File); !os.IsNotExist(err) {
 		t.Fatalf("the reopened daemon's retention did not expire the old artifact: %v", err)
 	}
+}
+
+// TestComposerAdmittedRequestRacesShutdown: a submission admitted before the
+// daemon stops is waited for, one that arrives after is refused (nothing runs
+// for it), and a burst of submissions racing Close never meets a wait group
+// Add after the Wait (the race detector watches).
+func TestComposerAdmittedRequestRacesShutdown(t *testing.T) {
+	f := startComposerFixture(t)
+	release := make(chan struct{})
+	f.svc.mu.Lock()
+	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
+		<-release
+		zero := 0
+		return ComposerJob{ExecID: "exec_" + req.Line, Gen: 4, State: "exited", ExitCode: &zero, Command: req.Line, Written: 1, Output: []byte("x")}, nil
+	}
+	f.svc.mu.Unlock()
+	if res := composerPost(f.d, "shutdown-0001", "!one"); res.Code != 202 {
+		t.Fatal(res.Body)
+	}
+	closed := make(chan struct{})
+	go func() { f.d.Close(); close(closed) }()
+	waitFor(t, "admission to close", func() bool {
+		f.d.composer.mu.Lock()
+		defer f.d.composer.mu.Unlock()
+		return f.d.composer.closing
+	})
+	// Admission is closed: the request is refused and launches nothing.
+	if res := composerPost(f.d, "shutdown-0002", "!two"); res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a submission after the stop began = %d %s", res.Code, res.Body)
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned while an admitted submission still ran")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return after the admitted submission finished")
+	}
+	if n := f.svc.launchCount(); n != 1 {
+		t.Fatalf("launches = %d, want the one admitted before the stop", n)
+	}
+	if card := decodeCard(t, composerGet(f.d, "/s/livesession/composer-exec/shutdown-0001")); card.Phase != "done" {
+		t.Fatalf("the admitted submission did not finish before Close returned: %+v", card)
+	}
+}
+
+func TestComposerSubmissionsRaceCloseWithoutWaitGroupMisuse(t *testing.T) {
+	for round := 0; round < 5; round++ {
+		f := startComposerFixture(t)
+		var wg sync.WaitGroup
+		var accepted sync.Map
+		for i := 0; i < 16; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				id := fmt.Sprintf("race-%02d-%02d-xx", round, i)
+				if res := composerPost(f.d, id, "!true"); res.Code == http.StatusAccepted {
+					accepted.Store(id, true)
+				}
+			}()
+		}
+		f.d.Close()
+		wg.Wait()
+		// Whatever was admitted ran to its end before Close returned.
+		accepted.Range(func(k, _ any) bool {
+			if card := decodeCard(t, composerGet(f.d, "/s/livesession/composer-exec/"+k.(string))); card.Phase == "running" {
+				t.Errorf("%v still running after Close", k)
+			}
+			return true
+		})
+	}
+}
+
+// TestComposerServiceIsPublishedInitialized: whatever sees the service sees the
+// composer's channels, periods and epoch (the state is built before the
+// service is stored).
+func TestComposerServiceIsPublishedInitialized(t *testing.T) {
+	f := startPageFixture(t)
+	var seen atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for !seen.Load() {
+			if f.d.composer.svc.Load() != nil {
+				c := &f.d.composer
+				c.mu.Lock()
+				ok := c.wake != nil && c.kick != nil && c.epoch != "" && c.settleEvery > 0
+				c.mu.Unlock()
+				if !ok {
+					t.Error("the service was visible before the composer state existed")
+				}
+				seen.Store(true)
+			}
+		}
+	}()
+	f.d.SetComposerExec(&composerFake{jobs: map[string]ComposerJob{}})
+	<-done
+}
+
+// TestComposerSettleTickIsNotPostponedByWakes: a steady stream of conversions
+// (a wake each) never delays a settlement already due, so a finished async card
+// does not stay active while new ones keep coming.
+func TestComposerSettleTickIsNotPostponedByWakes(t *testing.T) {
+	f := startComposerFixture(t)
+	c := &f.d.composer
+	f.svc.mu.Lock()
+	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
+		return ComposerJob{ExecID: "exec_stream", Gen: 4, State: "running", Async: true, Command: req.Line}, nil
+	}
+	f.svc.mu.Unlock()
+	if res := composerPost(f.d, "stream-0001", "!sleep 60"); res.Code != 202 {
+		t.Fatal(res.Body)
+	}
+	waitCard(t, f.d, "stream-0001", "async")
+	zero := 0
+	f.svc.mu.Lock()
+	f.svc.jobs["exec_stream"] = ComposerJob{ExecID: "exec_stream", Gen: 4, State: "exited", ExitCode: &zero, Command: "sleep 60", Written: 2, Output: []byte("ok")}
+	f.svc.mu.Unlock()
+	// Wakes arrive every 5 ms, a quarter of the 20 ms settle period, for as long
+	// as the test lasts.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				select {
+				case c.wake <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+	waitFor(t, "the card to settle under a continuous wake stream", func() bool {
+		return decodeCard(t, composerGet(f.d, "/s/livesession/composer-exec/stream-0001")).Phase == "done"
+	})
+}
+
+// TestComposerSettlementTrimsAnOverLimitBurst: a burst of converted cards that
+// goes idle above the card bound is trimmed by the settlement that finishes
+// them, with no further admission.
+func TestComposerSettlementTrimsAnOverLimitBurst(t *testing.T) {
+	f := startComposerFixture(t)
+	zero := 0
+	n := composerKeepCards + 20
+	f.svc.mu.Lock()
+	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
+		id := "exec_" + strings.TrimSpace(req.Line)
+		return ComposerJob{ExecID: id, Gen: 4, State: "running", Async: true, Command: req.Line}, nil
+	}
+	f.svc.mu.Unlock()
+	for i := 0; i < n; i++ {
+		if res := composerPost(f.d, fmt.Sprintf("burst-%04d-ab", i), fmt.Sprintf("!j%d", i)); res.Code != 202 {
+			t.Fatal(res.Body)
+		}
+	}
+	waitFor(t, "every launch to convert", func() bool { return f.svc.launchCount() == n })
+	waitFor(t, "every card to be async", func() bool {
+		c := &f.d.composer
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, key := range c.order["livesession"] {
+			sub := c.subs[key]
+			sub.mu.Lock()
+			p := sub.phase
+			sub.mu.Unlock()
+			if p == "running" {
+				return false
+			}
+		}
+		return true
+	})
+	// All the jobs end; no new admission follows.
+	f.svc.mu.Lock()
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("exec_j%d", i)
+		f.svc.jobs[id] = ComposerJob{ExecID: id, Gen: 4, State: "exited", ExitCode: &zero, Command: "x", Written: 1, Output: []byte("o")}
+	}
+	f.svc.mu.Unlock()
+	waitFor(t, "the idle burst to be trimmed to the card bound", func() bool {
+		c := &f.d.composer
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.order["livesession"]) <= composerKeepCards && len(c.subs) <= composerKeepCards
+	})
+}
+
+// TestComposerReceiptSaysHowToReadAFile: the receipt of a file result says how
+// to read a large or single-line artifact, by lines with the fs read tool or by
+// byte range through exec.
+func TestComposerReceiptSaysHowToReadAFile(t *testing.T) {
+	f := startComposerFixture(t)
+	zero := 0
+	out := []byte(strings.Repeat("L", 9000)) // one long line
+	f.svc.mu.Lock()
+	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
+		return ComposerJob{ExecID: "exec_long", Gen: 4, State: "exited", ExitCode: &zero, Written: int64(len(out)), Output: out}, nil
+	}
+	f.svc.mu.Unlock()
+	composerPost(f.d, "receipt-0001", "!long")
+	waitCard(t, f.d, "receipt-0001", "done")
+	var text string
+	waitFor(t, "the receipt", func() bool {
+		for _, h := range f.svc.handList() {
+			text = h.text
+		}
+		return text != ""
+	})
+	for _, want := range []string{"fs read tool", "offset and limit count lines", "512 bytes", "tail -c", "head -c"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("the receipt lacks %q: %s", want, text)
+		}
+	}
+}
+
+// TestComposerGoneTreatsAMissingFileAsRemoved: a failed remove whose file is
+// already gone counts as removed (on Windows, a delete-pending name too).
+func TestComposerGoneTreatsAMissingFileAsRemoved(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.out")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if composerGone(path, errors.New("access is denied")) {
+		t.Fatal("a file that is still there counted as gone")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if !composerGone(path, errors.New("access is denied")) || !composerGone(path, os.ErrNotExist) || !composerGone(path, nil) {
+		t.Fatal("a removed file did not count as gone")
+	}
+}
+
+// TestComposerListCarriesTheAdmissionToken: the private list read hands the
+// page the token its fresh submissions carry.
+func TestComposerListCarriesTheAdmissionToken(t *testing.T) {
+	f := startComposerFixture(t)
+	var list struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(composerGet(f.d, "/s/livesession/composer-exec").Body.Bytes(), &list); err != nil || list.Token != f.d.composer.token() || list.Token == "" {
+		t.Fatalf("list token %q vs %q: %v", list.Token, f.d.composer.token(), err)
+	}
+}
+
+// testAdmit is composerAdmit for a test that admits without running the
+// submission: the admission counted a worker, and none will report done.
+func testAdmit(d *Daemon, replyID, id, line string, gen uint64, retry bool, token string) (*composerSub, composerAdmission) {
+	sub, how := d.composerAdmit(replyID, id, line, gen, retry, token)
+	if how == composerFresh {
+		d.composer.wg.Done()
+	}
+	return sub, how
 }

@@ -285,3 +285,28 @@ func TestHostedConvertIsNotNoticeEligibleUntilPublished(t *testing.T) {
 		})
 	}
 }
+
+// TestHostedLaunchStartsNoHolderOnceTheDaemonStops: a launch that meets a
+// closed drain channel (the daemon began stopping) is refused before any
+// holder or process starts, leaving no job running.
+func TestHostedLaunchStartsNoHolderOnceTheDaemonStops(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	drain := make(chan struct{})
+	close(drain)
+	_, err := fx.launch(context.Background(), drain, HostedLaunch{Display: "x"})
+	if err == nil || !strings.Contains(err.Error(), "stopping") {
+		t.Fatalf("launch after the drain began = %v", err)
+	}
+	fx.holders.mu.Lock()
+	spawned := len(fx.holders.spawned)
+	fx.holders.mu.Unlock()
+	if spawned != 0 {
+		t.Fatalf("%d processes started after the drain began", spawned)
+	}
+	rows, _ := fx.store.Load()
+	for _, r := range rows {
+		if r.State == HostedRunning {
+			t.Fatalf("a job still runs: %+v", r)
+		}
+	}
+}

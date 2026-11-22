@@ -116,6 +116,16 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if lookErr != nil {
 		return h.failStart(j, "", lookErr)
 	}
+	// A daemon replacement began: no new holder starts under it (a job already
+	// started converts on the drain and goes on under its holder).
+	select {
+	case <-drain:
+		h.mu.Lock()
+		j.holderPinned = false
+		h.mu.Unlock()
+		return h.failStart(j, "", errors.New("exec: the daemon is stopping"))
+	default:
+	}
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
 	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})
 	if err != nil {
