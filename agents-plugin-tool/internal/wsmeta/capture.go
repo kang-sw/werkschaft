@@ -207,11 +207,11 @@ func (s *Store) Stage(ctx context.Context) (StageResult, error) {
 // content a legacy writer wrote is never taken for the fence (2135). The
 // directory must exist: a fence never recreates a pruned session.
 func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error {
-	sentinel := fenceSentinel()
+	abs := filepath.Join(s.dir, filepath.FromSlash(rel))
+	sentinel := distinctFenceSentinel(abs)
 	if err := s.prepareFence(ctx, rel, contentDigest(fenced), sentinel.Unix(), ""); err != nil {
 		return err
 	}
-	abs := filepath.Join(s.dir, filepath.FromSlash(rel))
 	if err := s.hit("fence-prepared"); err != nil {
 		return err
 	}
@@ -253,8 +253,30 @@ func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) erro
 	return s.markFenceLanded(ctx, rel)
 }
 
-// fenceSentinel picks a random even second in [2000, 2010).
-func fenceSentinel() time.Time {
+// distinctFenceSentinel picks a sentinel whose second differs from the live
+// file's current mtime. Legacy readers cache a file by its stat (mode, size,
+// mtime and identity: wsagent/permission_store.go:85 through
+// wsstate.SameFileMetadata). The replacement changes the inode on POSIX, but
+// the Windows identity is the creation time, which NTFS tunneling can carry
+// over to the replacement. So a fence of the same size must never keep the
+// previous mtime, as a re-fence over an earlier sentinel otherwise could.
+// The mtime only needs to differ; no legacy reader of a fenced path orders
+// mtimes.
+func distinctFenceSentinel(abs string) time.Time {
+	sentinel := fenceSentinel()
+	if info, err := wsstate.Stat(abs); err == nil {
+		for sentinel.Unix() == info.ModTime().Unix() {
+			sentinel = fenceSentinel()
+		}
+	}
+	return sentinel
+}
+
+// fenceSentinel picks a random even second in [2000, 2010). A variable so a
+// test can force a collision.
+var fenceSentinel = randomFenceSentinel
+
+func randomFenceSentinel() time.Time {
 	const lo, span = 946684800, 315532800 // 2000-01-01, ten years
 	var b [8]byte
 	_, _ = rand.Read(b[:])

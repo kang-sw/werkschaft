@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 var errCrash = errors.New("simulated crash")
@@ -117,6 +118,55 @@ func TestByteIdenticalLegacyWriteIsNotTheFence(t *testing.T) {
 	}
 	if c := captureMap(t, s)[fenceHiring]; string(c.Bytes) != disabled {
 		t.Fatalf("capture = %q, want the owner's latest bytes", c.Bytes)
+	}
+}
+
+// A re-fence never keeps the live file's mtime: a stat-keyed legacy cache
+// whose identity survives the replace (NTFS tunneling keeps the creation
+// time) would otherwise serve its stale bytes for a same-size fence.
+func TestRefenceNeverReusesTheLiveMtime(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	s := openTest(t, dir, testOpts())
+	if _, err := s.Stage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	prev := fenceSentinel
+	t.Cleanup(func() { fenceSentinel = prev })
+	first := randomFenceSentinel()
+	draws := 0
+	fenceSentinel = func() time.Time {
+		draws++
+		if draws <= 3 {
+			return first
+		}
+		return first.Add(2 * time.Second)
+	}
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	abs := filepath.Join(dir, filepath.FromSlash(fencePerm))
+	before, err := os.Stat(abs)
+	if err != nil || before.ModTime().Unix() != first.Unix() {
+		t.Fatalf("first fence mtime = %v, %v; want %v", before, err, first)
+	}
+	// The same bytes again, drawing the live sentinel twice first.
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ModTime().Unix() == before.ModTime().Unix() || after.Size() != before.Size() {
+		t.Fatalf("re-fence mtime %v size %d kept the live mtime %v", after.ModTime(), after.Size(), before.ModTime())
+	}
+	res, err := s.Stage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Reused == 0 || len(res.Unfenced) != 0 || len(res.Pending) != 0 {
+		t.Fatalf("re-fence not proven: %+v", res)
 	}
 }
 
