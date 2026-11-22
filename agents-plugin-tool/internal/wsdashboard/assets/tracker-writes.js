@@ -802,7 +802,8 @@
   function dropOn(item, col) {
     var v = memberOf(viewerOf(ui.store)), r = VS.items[item] && VS.items[item].assignments.map(A).filter(function (x) { return x.to === v && x.state === 'live'; })[0];
     if (!r) return toast(wsT("js.tk.toast.notmine"));
-    if (col === r.status || VS.items[item].kind === 'topic') return; // a topic has no status to move
+    // a topic has no status to move; a hidden item offers no status actions (canStatus)
+    if (col === r.status || VS.items[item].kind === 'topic' || VS.items[item].hidden) return;
     var o = ownStatusOpts(r).filter(function (x) { return x.s === col; })[0];
     if (!o) return toast(wsT("js.tk.toast.notstatus", esc(stLabel(col))));
     if (o.dis) return toast(esc(o.why));
