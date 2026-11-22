@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 050af580ba41e793
 sage-review-completeness-reviewed: 050af580ba41e793
+completed: 2026-11-22
 ---
 
 # Werkschaft Companion Engine v2: Full Timing Assetization, Hybrid Global Rail Observation, Articulated Drag & Resize UX
@@ -161,3 +162,41 @@ Owner decisions locked via whiteboard `55=a`, `56=a`, `57` note, timing-assetiza
   - `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion.test.js`
   - Playwright visual suite across Light/Dark KO/EN + lead visual inspection of generated PNGs.
   - `git diff --check`
+
+### Result (abf3c2407) - 2026-11-22
+
+- Shipped pack-defined easings, stage and prop curves, per-beat motion selection,
+  hand anchors, articulated drag, and eye and head prop tracking. The starter
+  catalog includes sustained thinking with coffee and an ellipsis, and the
+  geometric fallback uses a refreshed drone.
+- Reconciled iframe child turns in both update orders and preserved the legacy
+  streaming rising edge. Added canonical mail, board nudge, compaction, and
+  visibility handling. The outer shell observes reconciled rail snapshots,
+  arbitrates urgent cues, deduplicates active-session cues, and emits route
+  switches.
+- Added hover and focus resize with keyboard support, live dock spacing, reset,
+  and labels in all eleven locales. Rail observation uses the existing DOM
+  snapshots and size persists in browser storage, with zero additional daemon
+  file touches.
+- The v1 validator and raw manifest storage preserve T0 compatibility, including
+  colliding opaque keys. Timing diagnostics are advisory and runtime inputs are
+  sanitized. The transient deferred-reload display fallback remains T1 as
+  specified above.
+- Independent lite review led to a regression test and fix for a prior child
+  report arriving during a resumed turn. Background completion follows the
+  rail's own-work latch for each busy span, with regression coverage for
+  exec-only spans.
+
+Verification on `abf3c2407` used offline Go settings.
+
+- Dashboard tests matching `Companion|AssetSource|Page|BoardNudge` passed in
+  43.785 s. Localization tests passed in 3.651 s.
+- The Go build and Windows-targeted vet both exited successfully.
+- The frontend companion suite passed all 21 tests.
+- The browser suite passed all 12 cases across English and Korean in light and
+  dark themes. The technical rig verified hand-aligned launches, articulated
+  dangle, and visible eye and head tracking. The dock measured 116 px at a
+  264 px rail width and 151 px at the 344 px default rail width. Resize,
+  sustained thinking, and rail routing passed with zero unexpected browser
+  errors. All 28 captures stayed outside Git.
+- Working-tree and implementation-range whitespace checks passed.
