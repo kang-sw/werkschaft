@@ -1,0 +1,3072 @@
+<style>
+.rt2-root {
+  --rt2-bg: var(--wb-bg, #f3f3f0);
+  --rt2-fg: var(--wb-fg, #1b1d21);
+  --rt2-card: var(--wb-card, #ffffff);
+  --rt2-muted: var(--wb-muted, #e9e8e3);
+  --rt2-muted-fg: var(--wb-muted-fg, #5f646b);
+  --rt2-primary: var(--wb-primary, #2b62d9);
+  --rt2-primary-fg: var(--wb-primary-fg, #ffffff);
+  --rt2-line: var(--wb-line, color-mix(in srgb, #1b1d21 14%, transparent));
+  --rt2-wash: var(--wb-wash, color-mix(in srgb, #1b1d21 5%, transparent));
+  --rt2-technical: var(--wb-technical, #2457c5);
+  --rt2-on-technical: var(--wb-on-technical, #ffffff);
+  --rt2-ok: var(--wb-ok, #1d7348);
+  --rt2-fail: var(--wb-fail, #a72e36);
+  --rt2-warn: var(--wb-warn, #986300);
+  --rt2-warn-ink: var(--wb-warn-ink, #7a4c00);
+  --rt2-bundle: #6e44c7;
+  --rt2-shadow: var(--wb-shadow, 0 1px 2px rgb(0 0 0 / .10), 0 2px 6px rgb(0 0 0 / .05));
+  --rt2-shadow-hi: var(--wb-shadow-hi, 0 4px 12px rgb(0 0 0 / .16), 0 12px 32px rgb(0 0 0 / .12));
+  --rt2-radius: var(--wb-radius, 12px);
+  --rt2-mono: var(--wb-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  --rt2-sans: var(--wb-sans, system-ui, -apple-system, "Segoe UI", Roboto, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif);
+  font-family: var(--rt2-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--rt2-fg);
+  background: var(--rt2-bg);
+  padding: 8px 10px;
+  border-radius: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+:root[data-theme="dark"] .rt2-root:not([data-rt2-theme="light"]),
+.rt2-root[data-rt2-theme="dark"] {
+  --rt2-bg: #141518;
+  --rt2-fg: #e7e7e4;
+  --rt2-card: #1e2024;
+  --rt2-muted: #2b2d32;
+  --rt2-muted-fg: #a2a6ad;
+  --rt2-primary: #7aa2ff;
+  --rt2-primary-fg: #0c1424;
+  --rt2-line: color-mix(in srgb, #e7e7e4 16%, transparent);
+  --rt2-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --rt2-technical: #26385e;
+  --rt2-on-technical: #d2dcf6;
+  --rt2-ok: #6cc39a;
+  --rt2-fail: #f1888e;
+  --rt2-warn: #e0a741;
+  --rt2-warn-ink: #f6c76b;
+  --rt2-bundle: #b497ff;
+  --rt2-shadow: 0 1px 2px rgb(0 0 0 / .45), 0 2px 8px rgb(0 0 0 / .25);
+  --rt2-shadow-hi: 0 6px 18px rgb(0 0 0 / .55), 0 14px 36px rgb(0 0 0 / .42);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rt2-root:not([data-rt2-theme="light"]) {
+    --rt2-bg: #141518;
+    --rt2-fg: #e7e7e4;
+    --rt2-card: #1e2024;
+    --rt2-muted: #2b2d32;
+    --rt2-muted-fg: #a2a6ad;
+    --rt2-primary: #7aa2ff;
+    --rt2-primary-fg: #0c1424;
+    --rt2-line: color-mix(in srgb, #e7e7e4 16%, transparent);
+    --rt2-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+    --rt2-technical: #26385e;
+    --rt2-on-technical: #d2dcf6;
+    --rt2-ok: #6cc39a;
+    --rt2-fail: #f1888e;
+    --rt2-warn: #e0a741;
+    --rt2-warn-ink: #f6c76b;
+    --rt2-bundle: #b497ff;
+    --rt2-shadow: 0 1px 2px rgb(0 0 0 / .45), 0 2px 8px rgb(0 0 0 / .25);
+    --rt2-shadow-hi: 0 6px 18px rgb(0 0 0 / .55), 0 14px 36px rgb(0 0 0 / .42);
+  }
+}
+.rt2-root[data-rt2-theme="light"] {
+  --rt2-bg: #f3f3f0;
+  --rt2-fg: #1b1d21;
+  --rt2-card: #ffffff;
+  --rt2-muted: #e9e8e3;
+  --rt2-muted-fg: #5f646b;
+  --rt2-primary: #2b62d9;
+  --rt2-primary-fg: #ffffff;
+  --rt2-line: color-mix(in srgb, #1b1d21 14%, transparent);
+  --rt2-wash: color-mix(in srgb, #1b1d21 5%, transparent);
+  --rt2-technical: #2457c5;
+  --rt2-on-technical: #ffffff;
+  --rt2-ok: #1d7348;
+  --rt2-fail: #a72e36;
+  --rt2-warn: #986300;
+  --rt2-warn-ink: #7a4c00;
+  --rt2-bundle: #6e44c7;
+  --rt2-shadow: 0 1px 2px rgb(0 0 0 / .10), 0 2px 6px rgb(0 0 0 / .05);
+  --rt2-shadow-hi: 0 4px 12px rgb(0 0 0 / .16), 0 12px 32px rgb(0 0 0 / .12);
+}
+.rt2-root *, .rt2-root *::before, .rt2-root *::after { box-sizing: border-box; }
+.rt2-root [hidden] { display: none !important; }
+.rt2-root button, .rt2-root input, .rt2-root select { font: inherit; color: inherit; }
+.rt2-root .rt2-i {
+  width: 13px; height: 13px; flex: none; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.85;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.rt2-root button:focus-visible,
+.rt2-root input:focus-visible,
+.rt2-root select:focus-visible { outline: 2px solid var(--rt2-primary); outline-offset: 1px; }
+
+/* Top Switcher Bar */
+.rt2-topbar {
+  display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap;
+  padding: 5px 10px;
+  background: var(--rt2-card);
+  border: 1px solid var(--rt2-line);
+  border-radius: 10px;
+  box-shadow: var(--rt2-shadow);
+}
+.rt2-brand {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 800; white-space: nowrap; word-break: keep-all;
+}
+.rt2-ticket-chip {
+  font-family: var(--rt2-mono); font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 5px;
+  background: var(--rt2-wash); color: var(--rt2-muted-fg);
+}
+.rt2-tabs {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px; border-radius: 8px; background: var(--rt2-muted);
+}
+.rt2-tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 25px; padding: 0 11px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--rt2-muted-fg);
+  font-size: 11.5px; font-weight: 700; cursor: pointer;
+  white-space: nowrap; word-break: keep-all;
+}
+.rt2-tab:hover { color: var(--rt2-fg); }
+.rt2-tab[aria-selected="true"] {
+  background: var(--rt2-card); color: var(--rt2-fg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .14), inset 0 0 0 1px color-mix(in srgb, var(--rt2-line) 70%, transparent);
+}
+.rt2-topbar-right { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.rt2-theme-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 26px; padding: 0 9px; border-radius: 7px;
+  border: 1px solid var(--rt2-line); background: var(--rt2-card);
+  color: var(--rt2-fg); font-size: 11px; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+}
+.rt2-theme-btn:hover { background: var(--rt2-muted); }
+
+/* Stage Frame */
+.rt2-stage {
+  background: var(--rt2-card);
+  border-radius: var(--rt2-radius);
+  box-shadow: var(--rt2-shadow);
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 65%, transparent);
+  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+}
+.rt2-shd { flex: none; background: var(--rt2-card); }
+.rt2-shd-top {
+  min-height: 36px; padding: 4px 12px;
+  display: flex; align-items: center; gap: 7px 9px; flex-wrap: wrap;
+  border-bottom: 1px solid color-mix(in srgb, var(--rt2-muted) 80%, transparent);
+}
+.rt2-shd-title { display: flex; align-items: center; gap: 6px; }
+.rt2-shd-title .rt2-i { width: 14px; height: 14px; color: var(--rt2-primary); }
+.rt2-shd-title h1 {
+  margin: 0; font-size: 13px; font-weight: 800; letter-spacing: -.01em;
+  white-space: nowrap; word-break: keep-all;
+}
+.rt2-route-pill {
+  font-family: var(--rt2-mono); font-size: 10px; font-weight: 700;
+  padding: 2px 7px; border-radius: 999px;
+  background: var(--rt2-wash); color: var(--rt2-muted-fg); white-space: nowrap;
+}
+.rt2-scope-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 20px; padding: 0 8px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700;
+  background: color-mix(in srgb, var(--rt2-primary) 13%, var(--rt2-card));
+  color: var(--rt2-primary); white-space: nowrap;
+}
+.rt2-prec-inline {
+  display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  font-size: 10px; color: var(--rt2-muted-fg);
+  margin-left: 4px;
+}
+.rt2-prec-node {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 6px;
+  border-radius: 999px; font-size: 10px; font-weight: 700;
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 80%, transparent);
+  background: var(--rt2-bg); color: var(--rt2-muted-fg);
+}
+.rt2-prec-node.active {
+  background: var(--rt2-primary); color: var(--rt2-primary-fg);
+  border-color: var(--rt2-primary);
+}
+.rt2-shd-status { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+
+/* Pills & Shared Buttons */
+.rt2-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 19px; padding: 0 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 700;
+  background: var(--rt2-muted); color: var(--rt2-muted-fg);
+  white-space: nowrap; word-break: keep-all;
+}
+.rt2-pill.pri {
+  background: color-mix(in srgb, var(--rt2-primary) 14%, var(--rt2-card));
+  color: var(--rt2-primary);
+  border: 1px solid color-mix(in srgb, var(--rt2-primary) 35%, transparent);
+}
+.rt2-pill.ok {
+  background: color-mix(in srgb, var(--rt2-ok) 14%, var(--rt2-card));
+  color: var(--rt2-ok);
+  border: 1px solid color-mix(in srgb, var(--rt2-ok) 34%, transparent);
+}
+.rt2-pill.warn {
+  background: color-mix(in srgb, var(--rt2-warn) 15%, var(--rt2-card));
+  color: var(--rt2-warn-ink);
+  border: 1px solid color-mix(in srgb, var(--rt2-warn) 42%, transparent);
+}
+.rt2-pill.fail {
+  background: color-mix(in srgb, var(--rt2-fail) 15%, var(--rt2-card));
+  color: var(--rt2-fail);
+  border: 1px solid color-mix(in srgb, var(--rt2-fail) 44%, transparent);
+}
+.rt2-pill.bun {
+  background: color-mix(in srgb, var(--rt2-bundle) 15%, var(--rt2-card));
+  color: var(--rt2-bundle);
+  border: 1px solid color-mix(in srgb, var(--rt2-bundle) 38%, transparent);
+}
+
+.rt2-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  height: 27px; padding: 0 11px; border-radius: 7px;
+  border: 1px solid var(--rt2-line); background: var(--rt2-card);
+  color: var(--rt2-fg); font-size: 11.5px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; word-break: keep-all;
+}
+.rt2-btn:hover:not(:disabled) { background: var(--rt2-muted); }
+.rt2-btn.pri { background: var(--rt2-primary); color: var(--rt2-primary-fg); border-color: var(--rt2-primary); }
+.rt2-btn.pri:hover:not(:disabled) { filter: brightness(1.06); }
+.rt2-btn.danger { color: var(--rt2-fail); border-color: color-mix(in srgb, var(--rt2-fail) 45%, transparent); }
+.rt2-btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--rt2-fail) 12%, var(--rt2-card)); }
+.rt2-btn.sm { height: 23px; padding: 0 8px; font-size: 10.5px; }
+.rt2-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.rt2-seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  width: fit-content; max-width: 100%; height: 26px; padding: 2px;
+  border-radius: 7px; background: var(--rt2-muted);
+}
+.rt2-seg button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  border: 0; background: transparent; border-radius: 5px;
+  height: 22px; padding: 0 8px; font-size: 11px; font-weight: 700;
+  color: var(--rt2-muted-fg); cursor: pointer; white-space: nowrap; word-break: keep-all;
+}
+.rt2-seg button:hover:not(:disabled) { color: var(--rt2-fg); }
+.rt2-seg button[aria-pressed="true"] {
+  background: var(--rt2-card); color: var(--rt2-fg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .12), inset 0 0 0 1px color-mix(in srgb, var(--rt2-line) 70%, transparent);
+}
+.rt2-err-cnt {
+  font-family: var(--rt2-mono); font-size: 9.5px; font-weight: 800;
+  padding: 0 5px; border-radius: 999px;
+  background: color-mix(in srgb, var(--rt2-fail) 18%, transparent);
+  color: var(--rt2-fail);
+}
+
+/* Toolbar */
+.rt2-toolbar {
+  display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--rt2-muted) 22%, var(--rt2-card));
+  border-bottom: 1px solid color-mix(in srgb, var(--rt2-muted) 85%, transparent);
+}
+.rt2-ctrl-grp { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.rt2-ctrl-lbl { font-size: 10.5px; font-weight: 800; color: var(--rt2-muted-fg); white-space: nowrap; }
+.rt2-summary-chips { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+
+/* Skill Tree Canvas */
+.rt2-canvas-wrap {
+  position: relative;
+  padding: 20px 14px 18px;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--rt2-fg) 9%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
+    color-mix(in srgb, var(--rt2-bg) 52%, var(--rt2-card));
+  overflow: hidden;
+}
+.rt2-edges {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+}
+.rt2-edge-path {
+  fill: none;
+  stroke-linecap: round;
+  transition: opacity .15s, stroke-width .15s;
+}
+.rt2-edge-path.trunk {
+  stroke: color-mix(in srgb, var(--rt2-muted-fg) 42%, transparent);
+  stroke-width: 1.8;
+}
+.rt2-edge-path.group-route {
+  stroke: color-mix(in srgb, var(--rt2-primary) 58%, transparent);
+  stroke-width: 2;
+}
+.rt2-edge-path.override {
+  stroke: var(--rt2-primary);
+  stroke-width: 2.25;
+}
+.rt2-edge-path.bundle {
+  stroke: var(--rt2-bundle);
+  stroke-width: 2.25;
+}
+.rt2-edge-path.legacy {
+  stroke: var(--rt2-warn);
+  stroke-width: 2.1;
+  stroke-dasharray: 5 3;
+}
+.rt2-edge-path.err {
+  stroke: var(--rt2-fail);
+  stroke-width: 2.3;
+  stroke-dasharray: 5 3;
+}
+.rt2-edge-path.dim { opacity: .12 !important; }
+.rt2-edge-path.lit { opacity: 1 !important; stroke-width: 3 !important; }
+.rt2-edge-dot { transition: opacity .15s; }
+.rt2-edge-dot.dim { opacity: .12 !important; }
+
+.rt2-columns {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1.62fr) minmax(0, 0.88fr) minmax(0, 0.90fr) minmax(0, 0.82fr);
+  column-gap: clamp(22px, 3.2vw, 48px);
+  align-items: start;
+}
+.rt2-col {
+  display: flex; flex-direction: column; gap: 7px; min-width: 0;
+}
+.rt2-col-hdr {
+  display: flex; align-items: center; justify-content: space-between; gap: 4px;
+  font-size: 10px; font-weight: 800; letter-spacing: .02em;
+  color: var(--rt2-muted-fg);
+  padding: 0 3px 2px;
+  white-space: nowrap;
+}
+.rt2-col-hdr code { font-family: var(--rt2-mono); font-size: 9.5px; }
+
+/* Col 3 offset creates clean top & bottom bypass corridors for Col 2 -> Col 4 edges */
+.rt2-col-bundles { padding-top: 34px; }
+
+/* Cluster Box (Column 1) */
+.rt2-cluster {
+  position: relative;
+  background: var(--rt2-card);
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 85%, transparent);
+  border-radius: 10px;
+  padding: 6px 8px 7px;
+  box-shadow: var(--rt2-shadow);
+  display: flex; flex-direction: column; gap: 5px;
+  transition: opacity .15s, border-color .15s;
+}
+.rt2-cluster-hdr {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.rt2-cluster-title {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--rt2-mono); font-size: 10.5px; font-weight: 800;
+}
+.rt2-cluster-ko { font-family: var(--rt2-sans); font-size: 10.5px; font-weight: 700; color: var(--rt2-muted-fg); }
+.rt2-cluster-port {
+  position: absolute; right: -4px; top: 50%; transform: translateY(-50%);
+  width: 7px; height: 7px; border-radius: 50%;
+  background: color-mix(in srgb, var(--rt2-muted-fg) 65%, var(--rt2-card));
+  border: 1.5px solid var(--rt2-card);
+}
+.rt2-chip-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 6px;
+}
+.rt2-pb-chip {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-between; gap: 4px;
+  min-width: 0; width: 100%; text-align: left;
+  padding: 3.5px 6px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 80%, transparent);
+  background: color-mix(in srgb, var(--rt2-muted) 22%, var(--rt2-card));
+  cursor: pointer;
+  transition: border-color .12s, background .12s, transform .1s, opacity .15s;
+}
+.rt2-pb-chip:hover {
+  border-color: var(--rt2-primary);
+  background: color-mix(in srgb, var(--rt2-primary) 9%, var(--rt2-card));
+}
+.rt2-pb-chip.is-ov {
+  border-color: var(--rt2-primary);
+  background: color-mix(in srgb, var(--rt2-primary) 11%, var(--rt2-card));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rt2-primary) 26%, transparent);
+}
+.rt2-pb-chip.is-bundle {
+  border-color: var(--rt2-bundle);
+  background: color-mix(in srgb, var(--rt2-bundle) 11%, var(--rt2-card));
+}
+.rt2-pb-chip.is-legacy {
+  border-color: var(--rt2-warn);
+  background: color-mix(in srgb, var(--rt2-warn) 12%, var(--rt2-card));
+}
+.rt2-pb-chip.is-err {
+  border-color: var(--rt2-fail);
+  background: color-mix(in srgb, var(--rt2-fail) 12%, var(--rt2-card));
+}
+.rt2-pb-left {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 auto;
+}
+.rt2-status-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: color-mix(in srgb, var(--rt2-muted-fg) 42%, transparent);
+}
+.rt2-pb-chip.is-ov .rt2-status-dot { background: var(--rt2-primary); }
+.rt2-pb-chip.is-bundle .rt2-status-dot { background: var(--rt2-bundle); }
+.rt2-pb-chip.is-legacy .rt2-status-dot { background: var(--rt2-warn); }
+.rt2-pb-chip.is-err .rt2-status-dot { background: var(--rt2-fail); }
+.rt2-pb-name {
+  font-family: var(--rt2-mono); font-size: 10px; font-weight: 700;
+  color: var(--rt2-fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt2-pb-right { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+.rt2-sz {
+  font-family: var(--rt2-mono); font-size: 9px; font-weight: 800;
+  padding: 0 4px; border-radius: 4px; line-height: 15px;
+  background: var(--rt2-wash); color: var(--rt2-muted-fg);
+}
+.rt2-micro-badge {
+  font-size: 8.5px; font-weight: 800; padding: 0 4px; border-radius: 4px; line-height: 14px;
+  white-space: nowrap;
+}
+.rt2-micro-badge.warn {
+  background: color-mix(in srgb, var(--rt2-warn) 22%, var(--rt2-card));
+  color: var(--rt2-warn-ink);
+}
+.rt2-micro-badge.fail {
+  background: color-mix(in srgb, var(--rt2-fail) 20%, var(--rt2-card));
+  color: var(--rt2-fail);
+}
+
+/* Skill Tree Node Cards (Cols 2, 3, 4) */
+.rt2-node {
+  position: relative;
+  display: flex; flex-direction: column; gap: 4px;
+  width: 100%; text-align: left;
+  padding: 7px 10px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 85%, transparent);
+  background: var(--rt2-card);
+  box-shadow: var(--rt2-shadow);
+  cursor: pointer;
+  transition: border-color .12s, box-shadow .12s, opacity .15s;
+}
+.rt2-node:hover {
+  border-color: var(--rt2-primary);
+  box-shadow: var(--rt2-shadow-hi);
+}
+.rt2-node.is-ov {
+  border-color: color-mix(in srgb, var(--rt2-primary) 65%, var(--rt2-line));
+}
+.rt2-node.is-bundle {
+  border-color: color-mix(in srgb, var(--rt2-bundle) 55%, var(--rt2-line));
+}
+.rt2-node.is-legacy {
+  border-color: var(--rt2-warn);
+  background: color-mix(in srgb, var(--rt2-warn) 6%, var(--rt2-card));
+}
+.rt2-node.is-err {
+  border-color: var(--rt2-fail);
+  background: color-mix(in srgb, var(--rt2-fail) 7%, var(--rt2-card));
+}
+.rt2-node.is-ghost {
+  border-style: dashed;
+  border-color: var(--rt2-fail);
+  background: color-mix(in srgb, var(--rt2-fail) 8%, var(--rt2-card));
+}
+.rt2-node.is-add {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--rt2-primary) 55%, var(--rt2-line));
+  background: color-mix(in srgb, var(--rt2-primary) 5%, var(--rt2-card));
+  align-items: center; justify-content: center;
+  padding: 8px 10px; color: var(--rt2-primary);
+  font-size: 11px; font-weight: 800;
+}
+.rt2-node.is-add:hover {
+  background: color-mix(in srgb, var(--rt2-primary) 12%, var(--rt2-card));
+}
+.rt2-node.dim, .rt2-pb-chip.dim, .rt2-cluster.dim { opacity: .28; }
+.rt2-node.lit, .rt2-pb-chip.lit {
+  opacity: 1 !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rt2-primary) 34%, transparent), var(--rt2-shadow-hi);
+}
+.rt2-node.is-err.lit {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rt2-fail) 40%, transparent), var(--rt2-shadow-hi);
+}
+
+.rt2-node-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 5px;
+}
+.rt2-node-title {
+  font-family: var(--rt2-mono); font-size: 11.5px; font-weight: 800; color: var(--rt2-fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt2-node-sub {
+  font-size: 10px; color: var(--rt2-muted-fg);
+  display: flex; align-items: center; justify-content: space-between; gap: 5px; flex-wrap: wrap;
+}
+.rt2-node-mono {
+  font-family: var(--rt2-mono); font-size: 10px; font-weight: 700; color: var(--rt2-fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt2-col-div {
+  display: flex; align-items: center; gap: 6px;
+  margin: 2px 0; font-size: 9.5px; font-weight: 800; color: var(--rt2-muted-fg);
+}
+.rt2-col-div::before, .rt2-col-div::after {
+  content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--rt2-line) 80%, transparent);
+}
+.rt2-slots {
+  display: flex; align-items: center; gap: 3px; flex-wrap: wrap;
+}
+.rt2-slot {
+  font-family: var(--rt2-mono); font-size: 9px; font-weight: 800;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--rt2-wash); color: var(--rt2-muted-fg);
+  border: 1px solid transparent;
+}
+.rt2-slot.active {
+  background: color-mix(in srgb, var(--rt2-primary) 13%, var(--rt2-card));
+  color: var(--rt2-primary);
+  border-color: color-mix(in srgb, var(--rt2-primary) 34%, transparent);
+}
+.rt2-slot.pinned {
+  background: var(--rt2-primary); color: var(--rt2-primary-fg);
+}
+
+/* Diagnostic Overlay Lane inside Canvas (Error/Warning Mode) */
+.rt2-diag-lane {
+  position: relative; z-index: 2;
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px dashed color-mix(in srgb, var(--rt2-fail) 42%, transparent);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
+  gap: 10px;
+}
+.rt2-diag-group {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--rt2-fail) 42%, transparent);
+  background: color-mix(in srgb, var(--rt2-fail) 5%, var(--rt2-card));
+  min-width: 0;
+}
+.rt2-diag-pair {
+  display: inline-flex; align-items: center; gap: 18px; min-width: 0;
+}
+.rt2-mini-node {
+  padding: 4px 8px; border-radius: 7px;
+  border: 1px solid var(--rt2-fail);
+  background: var(--rt2-card);
+  font-family: var(--rt2-mono); font-size: 10.5px; font-weight: 800;
+  color: var(--rt2-fg); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  white-space: nowrap;
+}
+.rt2-mini-node:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--rt2-fail) 26%, transparent); }
+.rt2-mini-node.ok { border-color: var(--rt2-ok); }
+.rt2-diag-caption {
+  font-size: 10px; font-weight: 700; color: var(--rt2-fail);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Bottom Trace HUD Strip */
+.rt2-trace-hud {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  min-height: 34px; padding: 5px 12px;
+  background: color-mix(in srgb, var(--rt2-muted) 26%, var(--rt2-card));
+  border-top: 1px solid color-mix(in srgb, var(--rt2-muted) 90%, transparent);
+  font-size: 11px;
+}
+.rt2-hud-lbl { font-size: 10.5px; font-weight: 800; color: var(--rt2-muted-fg); white-space: nowrap; }
+.rt2-hud-chain {
+  display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  font-family: var(--rt2-mono); font-size: 11px; font-weight: 700;
+}
+.rt2-hud-chip {
+  padding: 1px 6px; border-radius: 5px;
+  background: var(--rt2-card);
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 80%, transparent);
+}
+.rt2-hud-chip.end {
+  background: color-mix(in srgb, var(--rt2-ok) 14%, var(--rt2-card));
+  border-color: color-mix(in srgb, var(--rt2-ok) 36%, transparent);
+  color: var(--rt2-ok);
+}
+.rt2-hud-chip.warn {
+  background: color-mix(in srgb, var(--rt2-warn) 16%, var(--rt2-card));
+  border-color: color-mix(in srgb, var(--rt2-warn) 45%, transparent);
+  color: var(--rt2-warn-ink);
+}
+.rt2-hud-chip.fail {
+  background: color-mix(in srgb, var(--rt2-fail) 15%, var(--rt2-card));
+  border-color: color-mix(in srgb, var(--rt2-fail) 46%, transparent);
+  color: var(--rt2-fail);
+}
+.rt2-hud-right { margin-left: auto; font-size: 10.5px; color: var(--rt2-muted-fg); white-space: nowrap; }
+
+/* Edit / Diagnostic Modal */
+.rt2-modal-backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgb(10 12 16 / .52);
+  backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.rt2-modal {
+  width: min(560px, 100%);
+  max-height: 90vh; overflow-y: auto;
+  background: var(--rt2-card);
+  color: var(--rt2-fg);
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 90%, transparent);
+  box-shadow: var(--rt2-shadow-hi);
+  display: flex; flex-direction: column;
+}
+.rt2-modal-hd {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 11px 15px;
+  border-bottom: 1px solid color-mix(in srgb, var(--rt2-muted) 88%, transparent);
+}
+.rt2-modal-title-wrap { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.rt2-modal-title-wrap h2 {
+  margin: 0; font-size: 13.5px; font-weight: 800; word-break: keep-all;
+}
+.rt2-modal-close {
+  width: 26px; height: 26px; border-radius: 6px; border: 0;
+  background: transparent; color: var(--rt2-muted-fg);
+  cursor: pointer; display: inline-grid; place-items: center;
+}
+.rt2-modal-close:hover { background: var(--rt2-muted); color: var(--rt2-fg); }
+.rt2-modal-body {
+  padding: 13px 15px; display: flex; flex-direction: column; gap: 11px;
+}
+.rt2-modal-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  padding: 10px 15px;
+  border-top: 1px solid color-mix(in srgb, var(--rt2-muted) 88%, transparent);
+  background: color-mix(in srgb, var(--rt2-muted) 18%, var(--rt2-card));
+}
+.rt2-banner {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 11px; border-radius: 8px; font-size: 11.5px; line-height: 1.45;
+  word-break: keep-all;
+}
+.rt2-banner.fail {
+  background: color-mix(in srgb, var(--rt2-fail) 12%, var(--rt2-card));
+  border: 1px solid color-mix(in srgb, var(--rt2-fail) 42%, transparent);
+  color: var(--rt2-fail); font-weight: 700;
+}
+.rt2-banner.warn {
+  background: color-mix(in srgb, var(--rt2-warn) 12%, var(--rt2-card));
+  border: 1px solid color-mix(in srgb, var(--rt2-warn) 42%, transparent);
+  color: var(--rt2-warn-ink); font-weight: 600;
+}
+.rt2-banner.info {
+  background: color-mix(in srgb, var(--rt2-primary) 9%, var(--rt2-card));
+  border: 1px solid color-mix(in srgb, var(--rt2-primary) 32%, transparent);
+  color: var(--rt2-fg);
+}
+.rt2-trace-box {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  padding: 8px 10px; border-radius: 8px;
+  background: var(--rt2-bg); border: 1px solid var(--rt2-line);
+  font-family: var(--rt2-mono); font-size: 11px;
+}
+.rt2-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rt2-field label { font-size: 11px; font-weight: 700; color: var(--rt2-muted-fg); }
+.rt2-inp, .rt2-sel {
+  height: 30px; padding: 0 9px;
+  border: 1px solid var(--rt2-line); border-radius: 7px;
+  background: var(--rt2-bg); color: var(--rt2-fg);
+  font-size: 11.5px; min-width: 0; width: 100%;
+}
+.rt2-inp.mono, .rt2-sel.mono { font-family: var(--rt2-mono); }
+.rt2-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.rt2-suggest-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.rt2-suggest-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 9px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--rt2-primary) 42%, transparent);
+  background: color-mix(in srgb, var(--rt2-primary) 10%, var(--rt2-card));
+  color: var(--rt2-primary); font-family: var(--rt2-mono); font-size: 11px; font-weight: 700;
+  cursor: pointer;
+}
+.rt2-suggest-chip:hover { background: color-mix(in srgb, var(--rt2-primary) 18%, var(--rt2-card)); }
+
+/* Tab 2: New-Session Dialog ((1516)=a) */
+.rt2-ns-body { padding: 14px 16px; }
+.rt2-ns-layout {
+  display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  gap: 14px; align-items: start;
+}
+.rt2-rpop {
+  background: var(--rt2-card); color: var(--rt2-fg);
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 85%, transparent);
+  box-shadow: var(--rt2-shadow-hi);
+  padding: 13px 15px;
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+}
+.rt2-sphd {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 13px; font-weight: 800;
+}
+.rt2-sploc {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: -4px; font-size: 11px; color: var(--rt2-muted-fg);
+  font-family: var(--rt2-mono);
+}
+.rt2-sploc b { color: var(--rt2-fg); }
+.rt2-spsec { display: grid; gap: 5px; min-width: 0; }
+.rt2-splbl {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 11px; font-weight: 700; color: var(--rt2-muted-fg);
+}
+.rt2-spseg {
+  display: flex; flex-wrap: wrap; gap: 2px; width: fit-content; max-width: 100%;
+  background: var(--rt2-muted); border-radius: 999px; padding: 2px;
+}
+.rt2-spseg button {
+  font: inherit; font-size: 11px; font-weight: 600; border: 0;
+  border-radius: 999px; padding: 3px 10px;
+  background: transparent; color: var(--rt2-muted-fg); cursor: pointer;
+}
+.rt2-spseg button[aria-checked="true"] {
+  background: var(--rt2-card); color: var(--rt2-fg);
+  box-shadow: inset 0 0 0 1px var(--rt2-line);
+}
+.rt2-spopts { display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--rt2-muted); }
+.rt2-sprc { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+.rt2-sprc label { font-size: 11px; font-weight: 700; color: var(--rt2-muted-fg); white-space: nowrap; }
+.rt2-spsm {
+  width: 210px; max-width: 65%; height: 28px; padding: 0 7px;
+  border: 0; border-radius: 7px; background: var(--rt2-muted); color: var(--rt2-fg);
+  font-size: 11px; font-family: var(--rt2-mono);
+}
+.rt2-microhint {
+  margin: 0; padding: 5px 8px; border-radius: 7px;
+  font-size: 11px; line-height: 1.4; background: var(--rt2-wash); color: var(--rt2-muted-fg);
+}
+.rt2-microhint.applied {
+  background: color-mix(in srgb, var(--rt2-primary) 11%, var(--rt2-card));
+  color: var(--rt2-primary); font-weight: 600;
+}
+.rt2-microhint.reverted {
+  background: color-mix(in srgb, var(--rt2-warn) 13%, var(--rt2-card));
+  color: var(--rt2-warn-ink); font-weight: 600;
+}
+.rt2-spdiv { border-top: 1px solid var(--rt2-muted); padding-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.rt2-spdesc { margin: 0; font-size: 11px; color: var(--rt2-muted-fg); }
+.rt2-sprow {
+  display: flex; align-items: center; gap: 6px; padding-top: 6px; border-top: 1px solid var(--rt2-muted);
+}
+.rt2-sprow-note {
+  margin-right: auto; font-family: var(--rt2-mono); font-size: 10.5px; color: var(--rt2-muted-fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt2-pbtn {
+  height: 27px; padding: 0 12px; border-radius: 999px; border: 0;
+  font-size: 11px; font-weight: 700; cursor: pointer;
+  background: var(--rt2-muted); color: var(--rt2-muted-fg);
+}
+.rt2-pbtn.go { background: var(--rt2-primary); color: var(--rt2-primary-fg); }
+.rt2-flow-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rt2-step-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.rt2-step-card {
+  display: flex; flex-direction: column; gap: 5px; text-align: left;
+  padding: 9px 10px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 78%, transparent);
+  background: var(--rt2-card); cursor: pointer;
+}
+.rt2-step-card:hover { border-color: var(--rt2-primary); }
+.rt2-step-card.active {
+  border-color: var(--rt2-primary);
+  background: color-mix(in srgb, var(--rt2-primary) 7%, var(--rt2-card));
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--rt2-primary) 35%, transparent);
+}
+.rt2-step-title { font-size: 11.5px; font-weight: 800; }
+.rt2-step-kv {
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--rt2-mono); font-size: 10px; color: var(--rt2-muted-fg);
+}
+.rt2-step-kv span b { color: var(--rt2-fg); }
+.rt2-wire-box {
+  border: 1px solid color-mix(in srgb, var(--rt2-line) 78%, transparent);
+  border-radius: 9px; background: var(--rt2-card);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.rt2-pre {
+  margin: 0; padding: 8px 10px; border-radius: 7px;
+  border: 1px solid var(--rt2-line); background: var(--rt2-bg);
+  font-family: var(--rt2-mono); font-size: 11px; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+/* Responsive 900px */
+@media (max-width: 1080px) {
+  .rt2-columns {
+    grid-template-columns: minmax(0, 1.45fr) minmax(0, 0.9fr) minmax(0, 0.92fr) minmax(0, 0.83fr);
+    column-gap: 20px;
+  }
+  .rt2-canvas-wrap { padding: 18px 9px 16px; }
+  .rt2-pb-chip { padding: 3px 5px; }
+  .rt2-pb-name { font-size: 9.2px; }
+  .rt2-node { padding: 6px 7px; }
+  .rt2-node-title { font-size: 9.8px; }
+  .rt2-node-mono, .rt2-node-sub { font-size: 9.2px; }
+  .rt2-ns-layout { grid-template-columns: minmax(0, 1fr); }
+  .rt2-step-strip { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .rt2-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; }
+  .rt2-col-bundles { padding-top: 0; }
+  .rt2-diag-lane { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+
+<div class="rt2-root" id="rt2-root">
+  <!-- Top Mockup Switcher Bar -->
+  <div class="rt2-topbar">
+    <div class="rt2-brand">
+      <svg class="rt2-i" viewBox="0 0 24 24"><path d="M12 3v4m0 10v4M4.93 4.93l2.83 2.83m8.48 8.48 2.83 2.83M3 12h4m10 0h4M4.93 19.07l2.83-2.83m8.48-8.48 2.83-2.83"/></svg>
+      <span>스킬트리 · 역할 라우팅 v2</span>
+      <span class="rt2-ticket-chip">261119-feat-ws-named-custom-tiers</span>
+    </div>
+    <div class="rt2-tabs" role="tablist" aria-label="목업 화면 전환">
+      <button type="button" class="rt2-tab" role="tab" data-rt2-tab="tree" aria-selected="true">스킬트리 · 라우팅 &amp; 번들</button>
+      <button type="button" class="rt2-tab" role="tab" data-rt2-tab="newsession" aria-selected="false">새 세션 대화상자 ((1516)=a)</button>
+    </div>
+    <div class="rt2-topbar-right">
+      <button type="button" class="rt2-theme-btn" id="rt2-theme-toggle" aria-label="테마 전환">
+        <svg class="rt2-i" id="rt2-theme-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <span id="rt2-theme-label">다크</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- TAB 1: Compact 4-Layer Skill Tree inside /settings > 에이전트 -->
+  <section class="rt2-stage" id="rt2-panel-tree" role="tabpanel">
+    <div class="rt2-shd">
+      <div class="rt2-shd-top">
+        <div class="rt2-shd-title">
+          <svg class="rt2-i" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <h1>설정</h1>
+        </div>
+        <span class="rt2-route-pill">/settings &gt; 에이전트</span>
+        <span class="rt2-scope-pill">프로젝트 · devenv</span>
+        <div class="rt2-prec-inline" aria-label="범위 우선순위">
+          <span>우선순위:</span>
+          <span class="rt2-prec-node">세션</span><span>›</span>
+          <span class="rt2-prec-node active">프로젝트</span><span>›</span>
+          <span class="rt2-prec-node">레포</span><span>›</span>
+          <span class="rt2-prec-node">전역</span><span>›</span>
+          <span class="rt2-prec-node">기본값</span>
+        </div>
+        <div class="rt2-shd-status">
+          <span class="rt2-pill ok" id="rt2-stage-status-pill">포인터 그래프 유효 · 8홉 이내</span>
+        </div>
+      </div>
+
+      <div class="rt2-toolbar">
+        <div class="rt2-ctrl-grp">
+          <div class="rt2-seg" id="rt2-mode-seg" role="group" aria-label="표시 모드">
+            <button type="button" data-mode="tree" aria-pressed="true">라우팅 트리</button>
+            <button type="button" data-mode="errors" aria-pressed="false">오류·경고 진단 <span class="rt2-err-cnt" id="rt2-err-badge-cnt">4</span></button>
+          </div>
+        </div>
+        <div class="rt2-ctrl-grp">
+          <span class="rt2-ctrl-lbl">호출 하네스:</span>
+          <div class="rt2-seg" id="rt2-caller-seg" role="group" aria-label="호출 하네스">
+            <button type="button" data-caller="codex" aria-pressed="false">codex</button>
+            <button type="button" data-caller="claude" aria-pressed="true">claude</button>
+            <button type="button" data-caller="agy" aria-pressed="false">agy</button>
+            <button type="button" data-caller="pi" aria-pressed="false">pi</button>
+          </div>
+        </div>
+        <div class="rt2-ctrl-grp">
+          <span class="rt2-ctrl-lbl">프리셋:</span>
+          <div class="rt2-seg" id="rt2-preset-seg" role="group" aria-label="라우팅 프리셋">
+            <button type="button" data-preset="owner" aria-pressed="true">오너 워크플로 예시</button>
+            <button type="button" data-preset="default" aria-pressed="false">기본값 (설정 없음)</button>
+          </div>
+        </div>
+        <div class="rt2-summary-chips" id="rt2-summary-chips"></div>
+      </div>
+    </div>
+
+    <!-- 4-Column Skill Tree Canvas -->
+    <div class="rt2-canvas-wrap" id="rt2-canvas">
+      <svg class="rt2-edges" id="rt2-edges-svg" aria-hidden="true"></svg>
+      <div class="rt2-columns" id="rt2-columns">
+        <div class="rt2-col" data-col="1" id="rt2-col-1"></div>
+        <div class="rt2-col" data-col="2" id="rt2-col-2"></div>
+        <div class="rt2-col rt2-col-bundles" data-col="3" id="rt2-col-3"></div>
+        <div class="rt2-col" data-col="4" id="rt2-col-4"></div>
+      </div>
+      <div class="rt2-diag-lane" id="rt2-diag-lane" hidden></div>
+    </div>
+
+    <!-- Bottom Trace HUD Strip -->
+    <div class="rt2-trace-hud" id="rt2-trace-hud">
+      <span class="rt2-hud-lbl">추적:</span>
+      <div class="rt2-hud-chain" id="rt2-hud-chain"></div>
+      <span class="rt2-hud-right">노드 호버: 경로 강조 · 클릭: 편집 모달</span>
+    </div>
+  </section>
+
+  <!-- TAB 2: New-Session Dialog ((1516)=a) -->
+  <section class="rt2-stage" id="rt2-panel-newsession" role="tabpanel" hidden>
+    <div class="rt2-shd">
+      <div class="rt2-shd-top">
+        <div class="rt2-shd-title">
+          <svg class="rt2-i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 10h8m-8 4h5"/></svg>
+          <h1>대시보드 · 새 세션 대화상자</h1>
+        </div>
+        <span class="rt2-route-pill">dashboard-leads.js · rpLeadMake</span>
+        <span class="rt2-scope-pill">계약 유지: session.request_hire</span>
+      </div>
+    </div>
+    <div class="rt2-ns-body">
+      <div class="rt2-ns-layout">
+        <div class="rt2-rpop" aria-label="새 리드 세션 대화상자">
+          <div class="rt2-sphd">
+            <span>새 리드 세션</span>
+            <span class="rt2-pill pri" id="rt2-ns-mode-pill">직접 선택</span>
+          </div>
+          <div class="rt2-sploc">
+            <svg class="rt2-i" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <b>devenv</b><span>·</span><span>develop</span>
+          </div>
+          <div class="rt2-spsec">
+            <div class="rt2-splbl">
+              <label for="rt2-ns-bundle">티어 / 번들 프리셋 (선택)</label>
+              <span style="font-weight:500">선택 시 하네스·모델·강도 채움</span>
+            </div>
+            <select class="rt2-sel mono" id="rt2-ns-bundle"></select>
+          </div>
+          <div class="rt2-spsec">
+            <div class="rt2-splbl"><span>하네스</span></div>
+            <div class="rt2-spseg" id="rt2-ns-harness-seg" role="radiogroup" aria-label="하네스">
+              <button type="button" role="radio" data-ns-h="claude" aria-checked="true">Claude</button>
+              <button type="button" role="radio" data-ns-h="codex" aria-checked="false">Codex</button>
+              <button type="button" role="radio" data-ns-h="agy" aria-checked="false">AGY</button>
+              <button type="button" role="radio" data-ns-h="pi" aria-checked="false">Pi</button>
+            </div>
+          </div>
+          <div class="rt2-spopts">
+            <div class="rt2-sprc">
+              <label for="rt2-ns-model">모델</label>
+              <select class="rt2-spsm" id="rt2-ns-model"></select>
+            </div>
+            <div class="rt2-sprc">
+              <label for="rt2-ns-effort">추론 강도</label>
+              <select class="rt2-spsm" id="rt2-ns-effort"></select>
+            </div>
+            <p class="rt2-microhint" id="rt2-ns-hint">번들을 선택하지 않으면 각 필드를 직접 선택합니다.</p>
+          </div>
+          <div class="rt2-spdiv">
+            <div class="rt2-spsec">
+              <div class="rt2-splbl"><span>권한 수준</span><span style="font-weight:500">번들과 독립</span></div>
+              <div class="rt2-spseg" id="rt2-ns-perm-seg" role="radiogroup" aria-label="권한 수준">
+                <button type="button" role="radio" data-ns-perm="default" aria-checked="true">기본</button>
+                <button type="button" role="radio" data-ns-perm="workdir-write" aria-checked="false">작업 디렉터리</button>
+                <button type="button" role="radio" data-ns-perm="full" aria-checked="false">전체 권한</button>
+              </div>
+              <p class="rt2-spdesc" id="rt2-ns-perm-desc">하네스 기본 권한 정책을 따릅니다.</p>
+            </div>
+            <div class="rt2-spsec">
+              <div class="rt2-splbl"><span>플러그인 격리</span><span style="font-weight:500">번들과 독립</span></div>
+              <div class="rt2-spseg" id="rt2-ns-iso-seg" role="radiogroup" aria-label="격리 모드">
+                <button type="button" role="radio" data-ns-iso="default" aria-checked="true">기본</button>
+                <button type="button" role="radio" data-ns-iso="isolated" aria-checked="false">격리</button>
+              </div>
+              <p class="rt2-spdesc">번들 선택은 권한 수준이나 플러그인 격리를 변경하지 않습니다.</p>
+            </div>
+          </div>
+          <div class="rt2-sprow">
+            <span class="rt2-sprow-note" id="rt2-ns-loc">devenv · develop · Claude</span>
+            <button type="button" class="rt2-pbtn" id="rt2-ns-reset">초기화</button>
+            <button type="button" class="rt2-pbtn go" id="rt2-ns-start">세션 시작</button>
+          </div>
+        </div>
+
+        <div class="rt2-flow-panel">
+          <div>
+            <h2 style="margin:0 0 2px;font-size:13px;font-weight:800">(1516)=a 상호작용 흐름 · 클릭하여 단계 시연</h2>
+            <p class="rt2-spdesc">스킬트리에서 추가/편집한 번들이 왼쪽 프리셋 목록에 즉시 반영됩니다. 필드 수정 시 즉시 수동 모드로 복귀합니다.</p>
+          </div>
+          <div class="rt2-step-strip" id="rt2-step-strip">
+            <button type="button" class="rt2-step-card active" data-step="manual">
+              <span class="rt2-pill">① 번들 선택 전</span>
+              <span class="rt2-step-title">직접 선택 (수동)</span>
+              <div class="rt2-step-kv">
+                <span>프리셋: <b>직접 선택 (수동)</b></span>
+                <span>하네스: <b>Claude</b></span>
+                <span>모델/강도: <b>사용자 지정</b></span>
+              </div>
+            </button>
+            <button type="button" class="rt2-step-card" data-step="bundle">
+              <span class="rt2-pill pri">② 번들 선택 시</span>
+              <span class="rt2-step-title">자동 채움 (discussion)</span>
+              <div class="rt2-step-kv">
+                <span>프리셋: <b>discussion</b></span>
+                <span>하네스: <b>AGY</b></span>
+                <span>모델/강도: <b>opus-4-6-thinking · high</b></span>
+              </div>
+            </button>
+            <button type="button" class="rt2-step-card" data-step="reverted">
+              <span class="rt2-pill warn">③ 필드 수동 수정 시</span>
+              <span class="rt2-step-title">즉시 수동 복귀</span>
+              <div class="rt2-step-kv">
+                <span>프리셋: <b>직접 선택 (복귀)</b></span>
+                <span>수정: <b>추론 강도 → medium</b></span>
+                <span>힌트: <b>수동 수정됨 표시</b></span>
+              </div>
+            </button>
+          </div>
+          <div class="rt2-wire-box">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <b style="font-size:12px">전달 페이로드 미리보기 (POST /agents/leads)</b>
+              <span class="rt2-pill ok" id="rt2-ns-submit-badge">실시간 동기화</span>
+            </div>
+            <p class="rt2-spdesc">번들은 UI 입력 보조 전용이며, 실제 요청에는 <code>harness</code>·<code>model</code>·<code>effort</code>와 독립된 <code>permission_level</code>·<code>plugin_isolation</code>만 전달됩니다.</p>
+            <pre class="rt2-pre" id="rt2-ns-payload"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Click-to-Edit / Diagnostic Modal -->
+  <div class="rt2-modal-backdrop" id="rt2-modal-backdrop" hidden>
+    <div class="rt2-modal" id="rt2-modal" role="dialog" aria-modal="true" aria-labelledby="rt2-modal-title">
+      <div class="rt2-modal-hd">
+        <div class="rt2-modal-title-wrap">
+          <h2 id="rt2-modal-title">노드 편집</h2>
+          <span class="rt2-pill" id="rt2-modal-badge"></span>
+        </div>
+        <button type="button" class="rt2-modal-close" id="rt2-modal-x" aria-label="모달 닫기">
+          <svg class="rt2-i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="rt2-modal-body" id="rt2-modal-body"></div>
+      <div class="rt2-modal-foot" id="rt2-modal-foot"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById("rt2-root");
+  if (!root) return;
+
+  var HARNESS_MODELS = {
+    claude: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
+    codex: ["gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"],
+    agy: ["claude-opus-4-6-thinking", "claude-sonnet-4-6", "gemini-3.8-flash-high", "gpt-oss-120b-medium"],
+    pi: ["claude-sonnet-4-6", "claude-opus-4-6", "gpt-5.3-codex-spark"]
+  };
+  var HARNESS_EFFORTS = {
+    claude: ["low", "medium", "high", "max"],
+    codex: ["low", "medium", "high", "xhigh"],
+    agy: ["low", "medium", "high"],
+    pi: ["low", "medium", "high"]
+  };
+  var HARNESS_LABELS = { claude: "Claude", codex: "Codex", agy: "AGY", pi: "Pi" };
+  var HARNESS_ORDER = ["codex", "claude", "agy", "pi"];
+  var HARNESS_TIER_DEFAULTS = {
+    claude: {
+      small: { model: "claude-haiku-4-5", effort: "low" },
+      medium: { model: "claude-sonnet-4-6", effort: "medium" },
+      large: { model: "claude-opus-4-6", effort: "high" },
+      xlarge: { model: "claude-opus-4-6", effort: "max" }
+    },
+    codex: {
+      small: { model: "gpt-5.3-codex-spark", effort: "low" },
+      medium: { model: "gpt-5.3-codex", effort: "medium" },
+      large: { model: "gpt-5.3-codex", effort: "high" },
+      xlarge: { model: "gpt-5.4", effort: "xhigh" }
+    },
+    agy: {
+      small: { model: "gemini-3.8-flash-high", effort: "low" },
+      medium: { model: "claude-sonnet-4-6", effort: "medium" },
+      large: { model: "claude-opus-4-6-thinking", effort: "high" },
+      xlarge: { model: "claude-opus-4-6-thinking", effort: "high" }
+    },
+    pi: {
+      small: { model: "gpt-5.3-codex-spark", effort: "low" },
+      medium: { model: "claude-sonnet-4-6", effort: "medium" },
+      large: { model: "claude-opus-4-6", effort: "high" },
+      xlarge: { model: "claude-opus-4-6", effort: "high" }
+    }
+  };
+  var SIZE_SHORT = { small: "S", medium: "M", large: "L", xlarge: "XL" };
+
+  var ROLES = [
+    {
+      id: "explore", label: "탐색 · 조사",
+      playbooks: [
+        { name: "explore", size: "small", desc: "코드베이스 탐색 및 맥락 수집" },
+        { name: "reference-discovery", size: "small", desc: "관련 문서·심볼·참조 위치 탐색" },
+        { name: "ticket-selector", size: "small", desc: "단일 실행 티어 후보 선별" },
+        { name: "ticket-batch-selector", size: "medium", desc: "다중 티켓 배치 선택 및 우선순위" },
+        { name: "ticket-classifier", size: "medium", desc: "티켓 유형 및 난이도 분류" },
+        { name: "ticket-fact-populator", size: "medium", desc: "구현 제약·매뉴얼 사실 채우기" }
+      ]
+    },
+    {
+      id: "implement", label: "구현 · 실행",
+      playbooks: [
+        { name: "implementer", size: "medium", desc: "위임 작업 구현 워커" },
+        { name: "ticket-worker", size: "medium", desc: "표준 티켓 구현 워커" },
+        { name: "ticket-worker-elevated", size: "large", desc: "고난도·다모듈 티켓 워커" },
+        { name: "ticket-handler", size: "medium", desc: "티켓 작성 및 구조화 핸들러" },
+        { name: "ship-handler", size: "small", desc: "릴리스 게이트·배포 처리" }
+      ]
+    },
+    {
+      id: "review", label: "검토 · 감사",
+      playbooks: [
+        { name: "reviewer", size: "large", desc: "범용 코드·변경 검토자" },
+        { name: "review-handler", size: "medium", desc: "리뷰 라우팅·판정 조율" },
+        { name: "code-review-correctness", size: "large", desc: "정확성·동시성·경계 검토" },
+        { name: "code-review-fit", size: "medium", desc: "아키텍처·패턴 적합성 검토" },
+        { name: "code-review-test", size: "medium", desc: "테스트 커버리지·신뢰성 검토" },
+        { name: "code-review-lite", size: "medium", desc: "경량 빠른 변경 검토" },
+        { name: "ticket-reviewer-design", size: "large", desc: "티켓 설계·아키텍처 심층 검토" },
+        { name: "ticket-reviewer-completeness", size: "medium", desc: "티켓 명세·인수 조건 누락 검토" },
+        { name: "fresh-reader-audit", size: "large", desc: "사전 문맥 없는 신규 독자 감사" },
+        { name: "fresh-read-doc-auditor", size: "large", desc: "문서·스킬 독립 정독 감사" }
+      ]
+    }
+  ];
+
+  var PRESETS = {
+    owner: {
+      groupOverrides: { explore: "codex.*", implement: "claude.*", review: "codex.*" },
+      pbOverrides: {
+        "ticket-worker:medium": "discussion",
+        "ticket-reviewer-design:large": "claude.xlarge"
+      },
+      legacyActive: true
+    },
+    default: {
+      groupOverrides: {},
+      pbOverrides: {},
+      legacyActive: false
+    }
+  };
+
+  var state = {
+    activeTab: "tree",
+    viewMode: "tree", // "tree" | "errors"
+    callerHarness: "claude",
+    groupOverrides: Object.assign({}, PRESETS.owner.groupOverrides),
+    pbOverrides: Object.assign({}, PRESETS.owner.pbOverrides),
+    legacyActive: true,
+    legacyAliases: { "explore:small": "claude.small" },
+    bundles: [
+      { id: "discussion", harness: "agy", model: "claude-opus-4-6-thinking", effort: "high" },
+      { id: "fast-triage", harness: "codex", model: "gpt-5.3-codex-spark", effort: "low" },
+      { id: "deep-design", harness: "claude", model: "claude-opus-4-6", effort: "high" }
+    ],
+    diagFixes: {
+      cycleFixed: false,
+      hopFixed: false,
+      unknownFixTarget: ""
+    },
+    hoverNodeId: null,
+    modal: null,
+    newSession: {
+      bundle: "",
+      harness: "claude",
+      model: "claude-opus-4-6",
+      effort: "high",
+      perm: "default",
+      iso: "default",
+      hintState: "manual"
+    }
+  };
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = text;
+    return n;
+  }
+
+  function findBundle(name) {
+    for (var i = 0; i < state.bundles.length; i++) {
+      if (state.bundles[i].id === name) return state.bundles[i];
+    }
+    return null;
+  }
+
+  function resolveConcrete(target, requestedSize) {
+    var b = findBundle(target);
+    if (b) {
+      return {
+        kind: "bundle",
+        harness: b.harness,
+        slot: b.effort,
+        targetNodeId: "bun:" + b.id,
+        label: b.id,
+        concrete: b.harness + " · " + b.model + " · " + b.effort
+      };
+    }
+    var m = /^(claude|codex|agy|pi)\.(small|medium|large|xlarge|\*)$/.exec(target);
+    if (m) {
+      var h = m[1];
+      var sz = m[2] === "*" ? requestedSize : m[2];
+      var d = HARNESS_TIER_DEFAULTS[h][sz] || HARNESS_TIER_DEFAULTS[h].medium;
+      return {
+        kind: m[2] === "*" ? "harness-wild" : "pinned",
+        harness: h,
+        slot: sz,
+        pinned: m[2] !== "*" && m[2] !== requestedSize,
+        targetNodeId: "tgt:" + h,
+        label: h + "." + sz,
+        concrete: h + " · " + d.model + " · " + d.effort
+      };
+    }
+    return {
+      kind: "unknown",
+      harness: "",
+      slot: "",
+      targetNodeId: "ghost:" + target,
+      label: target,
+      concrete: "미정의 대상"
+    };
+  }
+
+  function resolvePlaybook(roleId, pb) {
+    var fineKey = pb.name + ":" + pb.size;
+    var legacyHit = state.legacyActive && state.legacyAliases[fineKey];
+    var directRule = state.pbOverrides[fineKey];
+    var groupRule = state.groupOverrides[roleId];
+
+    if (legacyHit && !directRule) {
+      var leg = resolveConcrete(legacyHit, pb.size);
+      return {
+        fineKey: fineKey,
+        statusKind: "legacy",
+        overridden: false,
+        legacyCollision: !!groupRule,
+        directRule: "",
+        viaNodeId: "legacy:aliases",
+        targetNodeId: leg.targetNodeId,
+        harness: leg.harness,
+        slot: leg.slot,
+        pinned: false,
+        label: leg.label,
+        concrete: leg.concrete,
+        trace: [
+          { text: fineKey, cls: "" },
+          { text: "agent.tier_aliases", cls: "warn" },
+          { text: leg.concrete, cls: "end" }
+        ]
+      };
+    }
+
+    if (directRule) {
+      var resD = resolveConcrete(directRule, pb.size);
+      var tr = [{ text: fineKey, cls: "" }];
+      if (resD.kind === "bundle") {
+        tr.push({ text: directRule + " (번들)", cls: "" });
+        tr.push({ text: resD.concrete, cls: "end" });
+      } else {
+        tr.push({ text: resD.label + (resD.pinned ? " [고정]" : ""), cls: "" });
+        tr.push({ text: resD.concrete, cls: "end" });
+      }
+      return {
+        fineKey: fineKey,
+        statusKind: "direct",
+        overridden: true,
+        legacyCollision: !!legacyHit,
+        directRule: directRule,
+        viaNodeId: resD.kind === "bundle" ? "bun:" + directRule : null,
+        targetNodeId: resD.targetNodeId,
+        harness: resD.harness,
+        slot: resD.slot,
+        pinned: !!resD.pinned,
+        label: resD.kind === "bundle" ? directRule : resD.label,
+        concrete: resD.concrete,
+        trace: tr
+      };
+    }
+
+    if (groupRule) {
+      var resG = resolveConcrete(groupRule, pb.size);
+      var trG = [
+        { text: fineKey, cls: "" },
+        { text: roleId + ":*", cls: "" }
+      ];
+      if (resG.kind === "bundle") {
+        trG.push({ text: groupRule + " (번들)", cls: "" });
+      }
+      trG.push({ text: resG.concrete, cls: "end" });
+      return {
+        fineKey: fineKey,
+        statusKind: "group",
+        overridden: false,
+        legacyCollision: false,
+        directRule: "",
+        viaNodeId: "hub:" + roleId,
+        midBundleId: resG.kind === "bundle" ? "bun:" + groupRule : null,
+        targetNodeId: resG.targetNodeId,
+        harness: resG.harness,
+        slot: resG.slot,
+        pinned: !!resG.pinned,
+        label: resG.kind === "bundle" ? groupRule : resG.label,
+        concrete: resG.concrete,
+        trace: trG
+      };
+    }
+
+    var bareTarget = state.callerHarness + "." + pb.size;
+    var resB = resolveConcrete(bareTarget, pb.size);
+    return {
+      fineKey: fineKey,
+      statusKind: "builtin",
+      overridden: false,
+      legacyCollision: false,
+      directRule: "",
+      viaNodeId: "hub:" + roleId,
+      targetNodeId: resB.targetNodeId,
+      harness: resB.harness,
+      slot: resB.slot,
+      pinned: false,
+      label: resB.label,
+      concrete: resB.concrete,
+      trace: [
+        { text: fineKey, cls: "" },
+        { text: roleId + ":*", cls: "" },
+        { text: pb.size + " (기본)", cls: "" },
+        { text: resB.concrete, cls: "end" }
+      ]
+    };
+  }
+
+  function countBundleRefs(bundleId) {
+    var refs = [];
+    Object.keys(state.groupOverrides).forEach(function (r) {
+      if (state.groupOverrides[r] === bundleId) refs.push(r + ":*");
+    });
+    Object.keys(state.pbOverrides).forEach(function (k) {
+      if (state.pbOverrides[k] === bundleId) refs.push(k);
+    });
+    return refs;
+  }
+
+  function populateTargetSelect(sel, defaultLabel, includeWildcards, currentVal, size) {
+    sel.textContent = "";
+    var optDef = el("option", "", defaultLabel);
+    optDef.value = "";
+    sel.appendChild(optDef);
+
+    var gWild = el("optgroup");
+    gWild.label = "하네스 그룹 (크기 유지)";
+    HARNESS_ORDER.forEach(function (h) {
+      var o = el("option", "", h + ".*");
+      o.value = h + ".*";
+      gWild.appendChild(o);
+    });
+    sel.appendChild(gWild);
+
+    var gBun = el("optgroup");
+    gBun.label = "이름 붙은 커스텀 번들";
+    state.bundles.forEach(function (b) {
+      var o = el("option", "", b.id + " (" + b.harness + " · " + b.effort + ")");
+      o.value = b.id;
+      gBun.appendChild(o);
+    });
+    sel.appendChild(gBun);
+
+    if (!includeWildcards) {
+      var gPin = el("optgroup");
+      gPin.label = "고정 슬롯 (크기 핀)";
+      HARNESS_ORDER.forEach(function (h) {
+        ["small", "medium", "large", "xlarge"].forEach(function (sz) {
+          var v = h + "." + sz;
+          var o = el("option", "", v + (sz === size ? " (현재 크기)" : ""));
+          o.value = v;
+          gPin.appendChild(o);
+        });
+      });
+      sel.appendChild(gPin);
+    }
+
+    sel.value = currentVal || "";
+    if (currentVal && sel.value !== currentVal) {
+      var fallback = el("option", "", currentVal + " (미정의)");
+      fallback.value = currentVal;
+      sel.appendChild(fallback);
+      sel.value = currentVal;
+    }
+  }
+
+  function syncPresetHighlight() {
+    var btns = document.querySelectorAll("#rt2-preset-seg button");
+    var isOwner = JSON.stringify(state.groupOverrides) === JSON.stringify(PRESETS.owner.groupOverrides) &&
+      JSON.stringify(state.pbOverrides) === JSON.stringify(PRESETS.owner.pbOverrides) && state.legacyActive;
+    var isDef = Object.keys(state.groupOverrides).length === 0 && Object.keys(state.pbOverrides).length === 0 && !state.legacyActive;
+    btns.forEach(function (b) {
+      var p = b.getAttribute("data-preset");
+      b.setAttribute("aria-pressed", String((p === "owner" && isOwner) || (p === "default" && isDef)));
+    });
+  }
+
+  function diagnosticCounts() {
+    var errCount = (state.diagFixes.cycleFixed ? 0 : 1) +
+      (state.diagFixes.hopFixed ? 0 : 1) +
+      (state.diagFixes.unknownFixTarget ? 0 : 1);
+    var warnCount = state.legacyActive ? 1 : 0;
+    return { errors: errCount, warnings: warnCount, total: errCount + warnCount };
+  }
+
+  function getConnectedSet(nodeId) {
+    var set = {};
+    if (!nodeId) return set;
+    set[nodeId] = true;
+
+    if (nodeId.indexOf("pb:") === 0) {
+      var fineKey = nodeId.slice(3);
+      ROLES.forEach(function (role) {
+        role.playbooks.forEach(function (pb) {
+          if (pb.name + ":" + pb.size === fineKey) {
+            var res = resolvePlaybook(role.id, pb);
+            set["clu:" + role.id] = true;
+            if (res.viaNodeId) set[res.viaNodeId] = true;
+            if (res.midBundleId) set[res.midBundleId] = true;
+            if (res.targetNodeId) set[res.targetNodeId] = true;
+          }
+        });
+      });
+      if (state.viewMode === "errors" && fineKey === "implementer:medium") {
+        // no-op
+      }
+      if (state.viewMode === "errors" && fineKey === "ticket-worker-elevated:large" && !state.diagFixes.unknownFixTarget) {
+        set["ghost:fast-model-v9"] = true;
+      }
+    } else if (nodeId.indexOf("hub:") === 0) {
+      var rid = nodeId.slice(4);
+      set["clu:" + rid] = true;
+      var gRule = state.groupOverrides[rid];
+      var t = gRule || (state.callerHarness + ".*");
+      var rg = resolveConcrete(t, "medium");
+      if (rg.kind === "bundle") {
+        set["bun:" + gRule] = true;
+        set["tgt:" + rg.harness] = true;
+      } else if (rg.harness) {
+        set["tgt:" + rg.harness] = true;
+      }
+      ROLES.forEach(function (role) {
+        if (role.id === rid) {
+          role.playbooks.forEach(function (pb) {
+            var res = resolvePlaybook(role.id, pb);
+            if (res.viaNodeId === nodeId) set["pb:" + res.fineKey] = true;
+          });
+        }
+      });
+      if (state.viewMode === "errors" && rid === "implement") {
+        if (!state.diagFixes.unknownFixTarget) set["ghost:fast-model-v9"] = true;
+      }
+    } else if (nodeId === "legacy:aliases") {
+      set["pb:explore:small"] = true;
+      set["clu:explore"] = true;
+      var leg = resolveConcrete(state.legacyAliases["explore:small"], "small");
+      if (leg.targetNodeId) set[leg.targetNodeId] = true;
+    } else if (nodeId.indexOf("bun:") === 0) {
+      var bid = nodeId.slice(4);
+      var b = findBundle(bid);
+      if (b) set["tgt:" + b.harness] = true;
+      ROLES.forEach(function (role) {
+        if (state.groupOverrides[role.id] === bid) {
+          set["hub:" + role.id] = true;
+          set["clu:" + role.id] = true;
+        }
+        role.playbooks.forEach(function (pb) {
+          var res = resolvePlaybook(role.id, pb);
+          if (res.viaNodeId === nodeId || res.midBundleId === nodeId) {
+            set["pb:" + res.fineKey] = true;
+            set["clu:" + role.id] = true;
+          }
+        });
+      });
+    } else if (nodeId.indexOf("tgt:") === 0) {
+      var h = nodeId.slice(4);
+      state.bundles.forEach(function (bn) {
+        if (bn.harness === h) set["bun:" + bn.id] = true;
+      });
+      ROLES.forEach(function (role) {
+        role.playbooks.forEach(function (pb) {
+          var res = resolvePlaybook(role.id, pb);
+          if (res.targetNodeId === nodeId) {
+            set["pb:" + res.fineKey] = true;
+            set["clu:" + role.id] = true;
+            if (res.viaNodeId) set[res.viaNodeId] = true;
+            if (res.midBundleId) set[res.midBundleId] = true;
+          }
+        });
+      });
+    } else if (nodeId === "ghost:fast-model-v9") {
+      set["hub:implement"] = true;
+    } else if (nodeId === "diag:cycle-a" || nodeId === "diag:cycle-b") {
+      set["diag:cycle-a"] = true;
+      set["diag:cycle-b"] = true;
+    } else if (nodeId === "diag:hop-p1" || nodeId === "diag:hop-p9") {
+      set["diag:hop-p1"] = true;
+      set["diag:hop-p9"] = true;
+    }
+    return set;
+  }
+
+  function renderTraceHud(nodeId) {
+    var chain = document.getElementById("rt2-hud-chain");
+    chain.textContent = "";
+    var items = [];
+
+    if (!nodeId) {
+      var defaultPb = ROLES[1].playbooks[1]; // ticket-worker:medium
+      var resDef = resolvePlaybook("implement", defaultPb);
+      items = resDef.trace;
+    } else if (nodeId.indexOf("pb:") === 0) {
+      var fk = nodeId.slice(3);
+      ROLES.forEach(function (r) {
+        r.playbooks.forEach(function (p) {
+          if (p.name + ":" + p.size === fk) {
+            items = resolvePlaybook(r.id, p).trace;
+          }
+        });
+      });
+    } else if (nodeId.indexOf("hub:") === 0) {
+      var rid = nodeId.slice(4);
+      var gRule = state.groupOverrides[rid];
+      var eff = gRule || (state.callerHarness + ".*");
+      var rg = resolveConcrete(eff, "medium");
+      items = [
+        { text: rid + ":*", cls: "" },
+        { text: gRule ? (gRule + (rg.kind === "bundle" ? " (번들)" : "")) : ("기본 상속 (" + state.callerHarness + ".*)"), cls: "" },
+        { text: rg.concrete, cls: "end" }
+      ];
+    } else if (nodeId === "legacy:aliases") {
+      items = [
+        { text: "agent.tier_aliases[explore:small]", cls: "warn" },
+        { text: state.legacyAliases["explore:small"], cls: "" },
+        { text: state.legacyActive ? "정확 매칭 우선 적용" : "비활성", cls: state.legacyActive ? "warn" : "end" }
+      ];
+    } else if (nodeId.indexOf("bun:") === 0) {
+      var bid = nodeId.slice(4);
+      var b = findBundle(bid);
+      if (b) {
+        items = [
+          { text: b.id + " (번들)", cls: "" },
+          { text: b.harness + " · " + b.model + " · " + b.effort, cls: "end" },
+          { text: "권한 미포함", cls: "" }
+        ];
+      }
+    } else if (nodeId.indexOf("tgt:") === 0) {
+      var h = nodeId.slice(4);
+      items = [
+        { text: h + ".*", cls: "" },
+        { text: "small: " + HARNESS_TIER_DEFAULTS[h].small.model + " / xlarge: " + HARNESS_TIER_DEFAULTS[h].xlarge.model, cls: "end" }
+      ];
+    } else if (nodeId === "ghost:fast-model-v9") {
+      items = [
+        { text: "implement:large", cls: "" },
+        { text: "fast-model-v9 (미정의 대상 · UnknownTarget)", cls: "fail" }
+      ];
+    } else if (nodeId === "diag:cycle-a" || nodeId === "diag:cycle-b") {
+      items = state.diagFixes.cycleFixed
+        ? [{ text: "custom-a", cls: "" }, { text: "custom-b", cls: "" }, { text: "claude.large (순환 해소)", cls: "end" }]
+        : [{ text: "custom-a", cls: "" }, { text: "custom-b", cls: "" }, { text: "custom-a (CycleDetected)", cls: "fail" }];
+    } else if (nodeId === "diag:hop-p1" || nodeId === "diag:hop-p9") {
+      items = state.diagFixes.hopFixed
+        ? [{ text: "p1", cls: "" }, { text: "deep-design (1홉 단축)", cls: "end" }]
+        : [{ text: "p1 → p2 → … → p8", cls: "" }, { text: "p9 (9/8 홉 초과 · HopLimitExceeded)", cls: "fail" }];
+    }
+
+    items.forEach(function (it, idx) {
+      if (idx > 0) chain.appendChild(el("span", "", "→"));
+      chain.appendChild(el("span", "rt2-hud-chip " + (it.cls || ""), it.text));
+    });
+  }
+
+  function applyHoverVisuals() {
+    var nid = state.hoverNodeId;
+    var conn = nid ? getConnectedSet(nid) : null;
+    root.querySelectorAll("[data-node-id]").forEach(function (n) {
+      var id = n.getAttribute("data-node-id");
+      if (!conn) {
+        n.classList.remove("dim", "lit");
+      } else if (conn[id]) {
+        n.classList.remove("dim");
+        n.classList.add("lit");
+      } else {
+        n.classList.add("dim");
+        n.classList.remove("lit");
+      }
+    });
+    root.querySelectorAll(".rt2-edge-path").forEach(function (p) {
+      if (!conn) {
+        p.classList.remove("dim", "lit");
+        return;
+      }
+      var from = p.getAttribute("data-from");
+      var to = p.getAttribute("data-to");
+      if (conn[from] && conn[to]) {
+        p.classList.remove("dim");
+        p.classList.add("lit");
+      } else {
+        p.classList.add("dim");
+        p.classList.remove("lit");
+      }
+    });
+    root.querySelectorAll(".rt2-edge-dot").forEach(function (d) {
+      if (!conn) {
+        d.classList.remove("dim");
+        return;
+      }
+      var from = d.getAttribute("data-from");
+      var to = d.getAttribute("data-to");
+      d.classList.toggle("dim", !(conn[from] && conn[to]));
+    });
+    renderTraceHud(nid);
+  }
+
+  function bindInteractiveNode(elm, nodeId, onClick) {
+    elm.setAttribute("data-node-id", nodeId);
+    elm.addEventListener("mouseenter", function () {
+      state.hoverNodeId = nodeId;
+      applyHoverVisuals();
+    });
+    elm.addEventListener("mouseleave", function () {
+      if (state.hoverNodeId === nodeId) {
+        state.hoverNodeId = null;
+        applyHoverVisuals();
+      }
+    });
+    if (onClick) elm.addEventListener("click", onClick);
+  }
+
+  function renderTree() {
+    var isErr = state.viewMode === "errors";
+    var dCounts = diagnosticCounts();
+
+    // Update mode toggle & status pill
+    document.querySelectorAll("#rt2-mode-seg button").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-mode") === state.viewMode));
+    });
+    var errBadge = document.getElementById("rt2-err-badge-cnt");
+    errBadge.textContent = String(dCounts.total);
+
+    var statusPill = document.getElementById("rt2-stage-status-pill");
+    if (isErr && dCounts.errors > 0) {
+      statusPill.className = "rt2-pill fail";
+      statusPill.textContent = "저장 차단 · 오류 " + dCounts.errors + "건 · 경고 " + dCounts.warnings + "건";
+    } else if (isErr && dCounts.warnings > 0) {
+      statusPill.className = "rt2-pill warn";
+      statusPill.textContent = "치명 오류 해소 · 경고 " + dCounts.warnings + "건";
+    } else {
+      statusPill.className = "rt2-pill ok";
+      statusPill.textContent = "포인터 그래프 유효 · 8홉 이내";
+    }
+
+    // Count overrides & target hits
+    var groupCount = Object.keys(state.groupOverrides).length;
+    var pbCount = Object.keys(state.pbOverrides).length;
+    var totalOverrides = groupCount + pbCount;
+    var targetHits = { codex: 0, claude: 0, agy: 0, pi: 0 };
+    var pinnedSlots = { codex: {}, claude: {}, agy: {}, pi: {} };
+    var activeSlots = { codex: {}, claude: {}, agy: {}, pi: {} };
+
+    var pbResMap = {};
+    ROLES.forEach(function (role) {
+      role.playbooks.forEach(function (pb) {
+        var r = resolvePlaybook(role.id, pb);
+        pbResMap[r.fineKey] = r;
+        if (r.harness && targetHits[r.harness] !== undefined) {
+          targetHits[r.harness]++;
+          activeSlots[r.harness][r.slot] = true;
+          if (r.pinned) pinnedSlots[r.harness][r.slot] = true;
+        }
+      });
+    });
+
+    // Summary chips
+    var chips = document.getElementById("rt2-summary-chips");
+    chips.textContent = "";
+    chips.appendChild(el("span", "rt2-pill " + (totalOverrides ? "pri" : ""), "오버라이드 " + totalOverrides + "건"));
+    chips.appendChild(el("span", "rt2-pill bun", "번들 " + state.bundles.length + "개"));
+    if (state.legacyActive) chips.appendChild(el("span", "rt2-pill warn", "레거시 별칭 1건"));
+    chips.appendChild(el("span", "rt2-pill", "클릭하여 편집"));
+
+    // Column 1: 3 Playbook Clusters (21 playbooks)
+    var col1 = document.getElementById("rt2-col-1");
+    col1.textContent = "";
+    var hdr1 = el("div", "rt2-col-hdr");
+    hdr1.appendChild(el("span", "", "1. 플레이북 세부 역할 (21)"));
+    hdr1.appendChild(el("code", "", "개별 오버라이드 우선"));
+    col1.appendChild(hdr1);
+
+    ROLES.forEach(function (role) {
+      var clu = el("div", "rt2-cluster");
+      clu.setAttribute("data-node-id", "clu:" + role.id);
+
+      var chd = el("div", "rt2-cluster-hdr");
+      var left = el("div", "rt2-cluster-title");
+      left.appendChild(el("span", "", role.id));
+      left.appendChild(el("span", "rt2-cluster-ko", "· " + role.label));
+      chd.appendChild(left);
+      chd.appendChild(el("span", "rt2-pill", role.playbooks.length + "개"));
+      clu.appendChild(chd);
+
+      var grid = el("div", "rt2-chip-grid");
+      role.playbooks.forEach(function (pb) {
+        var res = pbResMap[pb.name + ":" + pb.size];
+        var chipCls = "rt2-pb-chip";
+        if (res.statusKind === "direct") {
+          chipCls += res.viaNodeId && res.viaNodeId.indexOf("bun:") === 0 ? " is-bundle" : " is-ov";
+        } else if (res.statusKind === "legacy") {
+          chipCls += " is-legacy";
+        }
+        var btn = el("button", chipCls);
+        btn.type = "button";
+        btn.title = res.fineKey + " → " + res.concrete + " (클릭하여 편집)";
+
+        var l = el("span", "rt2-pb-left");
+        l.appendChild(el("span", "rt2-status-dot"));
+        l.appendChild(el("span", "rt2-pb-name", pb.name));
+        btn.appendChild(l);
+
+        var r = el("span", "rt2-pb-right");
+        if (isErr && res.statusKind === "legacy" && res.legacyCollision) {
+          r.appendChild(el("span", "rt2-micro-badge warn", "충돌"));
+        } else if (res.statusKind === "direct") {
+          r.appendChild(el("span", "rt2-micro-badge " + (res.viaNodeId ? "" : ""), res.viaNodeId ? "번들" : "고정"));
+        }
+        r.appendChild(el("span", "rt2-sz", SIZE_SHORT[pb.size]));
+        btn.appendChild(r);
+
+        bindInteractiveNode(btn, "pb:" + res.fineKey, function () {
+          openPlaybookModal(role.id, pb);
+        });
+        grid.appendChild(btn);
+      });
+      clu.appendChild(grid);
+      var port = el("span", "rt2-cluster-port");
+      port.setAttribute("data-port-cluster", role.id);
+      clu.appendChild(port);
+      col1.appendChild(clu);
+    });
+
+    // Column 2: 3 Middle-Role Hubs + Legacy Alias Node
+    var col2 = document.getElementById("rt2-col-2");
+    col2.textContent = "";
+    var hdr2 = el("div", "rt2-col-hdr");
+    hdr2.appendChild(el("span", "", "2. 중간 고정 역할"));
+    hdr2.appendChild(el("code", "", "<role>:*"));
+    col2.appendChild(hdr2);
+
+    ROLES.forEach(function (role) {
+      var gRule = state.groupOverrides[role.id];
+      var hasUnkErr = isErr && role.id === "implement" && !state.diagFixes.unknownFixTarget;
+      var inhCount = 0;
+      role.playbooks.forEach(function (pb) {
+        var r = pbResMap[pb.name + ":" + pb.size];
+        if (r.viaNodeId === "hub:" + role.id) inhCount++;
+      });
+
+      var hub = el("button", "rt2-node" + (hasUnkErr ? " is-err" : gRule ? " is-ov" : ""));
+      hub.type = "button";
+      var top = el("div", "rt2-node-top");
+      top.appendChild(el("span", "rt2-node-title", role.id + ":*"));
+      if (hasUnkErr) {
+        top.appendChild(el("span", "rt2-pill fail", "대상 오류"));
+      } else {
+        top.appendChild(el("span", "rt2-pill " + (gRule ? "pri" : ""), gRule ? "오버라이드" : "기본 상속"));
+      }
+      hub.appendChild(top);
+
+      var effRule = hasUnkErr ? "fast-model-v9" : (gRule || (state.callerHarness + ".*"));
+      var mid = el("div", "rt2-node-mono", "→ " + effRule);
+      hub.appendChild(mid);
+
+      var sub = el("div", "rt2-node-sub");
+      sub.appendChild(el("span", "", role.label + " · 상속 " + inhCount + "/" + role.playbooks.length));
+      if (hasUnkErr) sub.appendChild(el("span", "rt2-micro-badge fail", "implement:large"));
+      hub.appendChild(sub);
+
+      bindInteractiveNode(hub, "hub:" + role.id, function () {
+        if (hasUnkErr) openDiagnosticModal("unknown");
+        else openHubModal(role);
+      });
+      col2.appendChild(hub);
+    });
+
+    var div2 = el("div", "rt2-col-div", "레거시 별칭");
+    col2.appendChild(div2);
+
+    var hasLegacyOverlap = state.legacyActive && !!state.groupOverrides.explore;
+    var legNode = el("button", "rt2-node" + (state.legacyActive ? " is-legacy" : ""));
+    legNode.type = "button";
+    var legTop = el("div", "rt2-node-top");
+    legTop.appendChild(el("span", "rt2-node-title", "agent.tier_aliases"));
+    if (state.legacyActive) {
+      legTop.appendChild(el("span", "rt2-pill warn", isErr ? "충돌" : (hasLegacyOverlap ? "우선 충돌" : "활성")));
+    } else {
+      legTop.appendChild(el("span", "rt2-pill", "비활성"));
+    }
+    legNode.appendChild(legTop);
+    legNode.appendChild(el("div", "rt2-node-mono", state.legacyActive ? "explore:small → claude.small" : "규칙 비활성 (explore:* 따름)"));
+    var legSub = el("div", "rt2-node-sub");
+    legSub.appendChild(el("span", "", state.legacyActive ? "정확 일치 우선 · 전역 스코프" : "클릭하여 전환"));
+    legNode.appendChild(legSub);
+
+    bindInteractiveNode(legNode, "legacy:aliases", function () {
+      if (isErr && state.legacyActive) openDiagnosticModal("legacy");
+      else openLegacyModal();
+    });
+    col2.appendChild(legNode);
+
+    // Column 3: Named Custom Bundles + Add Bundle
+    var col3 = document.getElementById("rt2-col-3");
+    col3.textContent = "";
+    var hdr3 = el("div", "rt2-col-hdr");
+    hdr3.appendChild(el("span", "", "3. 이름 붙은 번들"));
+    hdr3.appendChild(el("code", "", "권한 미포함"));
+    col3.appendChild(hdr3);
+
+    state.bundles.forEach(function (b) {
+      var refs = countBundleRefs(b.id);
+      var bNode = el("button", "rt2-node is-bundle");
+      bNode.type = "button";
+      var bTop = el("div", "rt2-node-top");
+      bTop.appendChild(el("span", "rt2-node-title", b.id));
+      bTop.appendChild(el("span", "rt2-pill " + (refs.length ? "bun" : ""), refs.length ? ("참조 " + refs.length + "건") : "새 세션용"));
+      bNode.appendChild(bTop);
+
+      bNode.appendChild(el("div", "rt2-node-mono", b.harness + " · " + b.model + " · " + b.effort));
+
+      var bSub = el("div", "rt2-node-sub");
+      bSub.appendChild(el("span", "", refs.length ? refs.join(", ") : "라우팅·새 세션 선택"));
+      bSub.appendChild(el("span", "rt2-pill", "권한 미포함"));
+      bNode.appendChild(bSub);
+
+      bindInteractiveNode(bNode, "bun:" + b.id, function () {
+        openBundleModal("edit", b);
+      });
+      col3.appendChild(bNode);
+    });
+
+    var addBtn = el("button", "rt2-node is-add", "+ 새 번들 추가");
+    addBtn.type = "button";
+    addBtn.id = "rt2-add-bundle-node";
+    addBtn.addEventListener("click", function () {
+      openBundleModal("new", null);
+    });
+    col3.appendChild(addBtn);
+
+    // Column 4: Executable Harness Targets (and Ghost node in Error mode)
+    var col4 = document.getElementById("rt2-col-4");
+    col4.textContent = "";
+    var hdr4 = el("div", "rt2-col-hdr");
+    hdr4.appendChild(el("span", "", "4. 실행 대상"));
+    hdr4.appendChild(el("code", "", "<harness>.*"));
+    col4.appendChild(hdr4);
+
+    HARNESS_ORDER.forEach(function (h) {
+      var cnt = targetHits[h];
+      var tNode = el("button", "rt2-node" + (cnt > 0 ? " is-ov" : ""));
+      tNode.type = "button";
+      var tTop = el("div", "rt2-node-top");
+      tTop.appendChild(el("span", "rt2-node-title", h + ".*" + (h === state.callerHarness ? " (호출)" : "")));
+      tTop.appendChild(el("span", "rt2-pill " + (cnt > 0 ? "ok" : ""), cnt + "건"));
+      tNode.appendChild(tTop);
+
+      var slots = el("div", "rt2-slots");
+      ["small", "medium", "large", "xlarge"].forEach(function (sz) {
+        var sCls = "rt2-slot";
+        if (pinnedSlots[h][sz]) sCls += " pinned";
+        else if (activeSlots[h][sz]) sCls += " active";
+        slots.appendChild(el("span", sCls, SIZE_SHORT[sz] + (pinnedSlots[h][sz] ? " 고정" : "")));
+      });
+      tNode.appendChild(slots);
+
+      var defMed = HARNESS_TIER_DEFAULTS[h].large;
+      tNode.appendChild(el("div", "rt2-node-sub", "L: " + defMed.model + " · " + defMed.effort));
+
+      bindInteractiveNode(tNode, "tgt:" + h, function () {
+        openTargetModal(h);
+      });
+      col4.appendChild(tNode);
+    });
+
+    if (isErr) {
+      var unkResolved = !!state.diagFixes.unknownFixTarget;
+      var ghost = el("button", "rt2-node " + (unkResolved ? "is-ov" : "is-ghost"));
+      ghost.type = "button";
+      var gTop = el("div", "rt2-node-top");
+      gTop.appendChild(el("span", "rt2-node-title", unkResolved ? state.diagFixes.unknownFixTarget : "fast-model-v9 (?)"));
+      gTop.appendChild(el("span", "rt2-pill " + (unkResolved ? "ok" : "fail"), unkResolved ? "수정 미리보기" : "미정의"));
+      ghost.appendChild(gTop);
+      ghost.appendChild(el("div", "rt2-node-sub", unkResolved ? "유효 대상 확인됨 (클릭)" : "UnknownTarget · 클릭하여 수정"));
+      bindInteractiveNode(ghost, "ghost:fast-model-v9", function () {
+        openDiagnosticModal("unknown");
+      });
+      col4.appendChild(ghost);
+    }
+
+    // Diagnostic Overlay Lane inside Canvas (Cycle + 8-Hop)
+    var diagLane = document.getElementById("rt2-diag-lane");
+    diagLane.hidden = !isErr;
+    diagLane.textContent = "";
+    if (isErr) {
+      // 1. Cycle group
+      var cycBox = el("div", "rt2-diag-group");
+      var cycPair = el("div", "rt2-diag-pair");
+      var cA = el("button", "rt2-mini-node" + (state.diagFixes.cycleFixed ? " ok" : ""));
+      cA.type = "button";
+      cA.appendChild(el("span", "", "custom-a"));
+      cA.appendChild(el("span", "rt2-pill " + (state.diagFixes.cycleFixed ? "ok" : "fail"), state.diagFixes.cycleFixed ? "정상" : "순환"));
+      bindInteractiveNode(cA, "diag:cycle-a", function () { openDiagnosticModal("cycle"); });
+
+      var cB = el("button", "rt2-mini-node" + (state.diagFixes.cycleFixed ? " ok" : ""));
+      cB.type = "button";
+      cB.appendChild(el("span", "", state.diagFixes.cycleFixed ? "custom-b → claude.large" : "custom-b"));
+      cB.appendChild(el("span", "rt2-pill " + (state.diagFixes.cycleFixed ? "ok" : "fail"), state.diagFixes.cycleFixed ? "해소됨" : "순환"));
+      bindInteractiveNode(cB, "diag:cycle-b", function () { openDiagnosticModal("cycle"); });
+
+      cycPair.appendChild(cA);
+      cycPair.appendChild(cB);
+      cycBox.appendChild(cycPair);
+      cycBox.appendChild(el("span", "rt2-diag-caption", state.diagFixes.cycleFixed ? "CycleDetected 해소됨" : "CycleDetected · 저장 차단 (클릭)"));
+      diagLane.appendChild(cycBox);
+
+      // 2. 8-hop limit group
+      var hopBox = el("div", "rt2-diag-group");
+      var hopPair = el("div", "rt2-diag-pair");
+      var h1 = el("button", "rt2-mini-node" + (state.diagFixes.hopFixed ? " ok" : ""));
+      h1.type = "button";
+      h1.appendChild(el("span", "", "p1 → p2 → … → p8"));
+      bindInteractiveNode(h1, "diag:hop-p1", function () { openDiagnosticModal("hop"); });
+
+      var h9 = el("button", "rt2-mini-node" + (state.diagFixes.hopFixed ? " ok" : ""));
+      h9.type = "button";
+      h9.appendChild(el("span", "", state.diagFixes.hopFixed ? "deep-design" : "p9"));
+      h9.appendChild(el("span", "rt2-pill " + (state.diagFixes.hopFixed ? "ok" : "fail"), state.diagFixes.hopFixed ? "1/8 홉" : "9/8 홉"));
+      bindInteractiveNode(h9, "diag:hop-p9", function () { openDiagnosticModal("hop"); });
+
+      hopPair.appendChild(h1);
+      hopPair.appendChild(h9);
+      hopBox.appendChild(hopPair);
+      hopBox.appendChild(el("span", "rt2-diag-caption", state.diagFixes.hopFixed ? "HopLimit 해소됨" : "HopLimitExceeded · 최대 8홉 (클릭)"));
+      diagLane.appendChild(hopBox);
+    }
+
+    renderTraceHud(state.hoverNodeId);
+    scheduleDrawEdges();
+  }
+
+  /* Dynamic SVG Edge Measurement & Obstacle-Free Routing */
+  var edgeFrame = 0;
+  function scheduleDrawEdges() {
+    if (edgeFrame) cancelAnimationFrame(edgeFrame);
+    edgeFrame = requestAnimationFrame(drawEdges);
+  }
+
+  function drawEdges() {
+    edgeFrame = 0;
+    if (state.activeTab !== "tree") return;
+    var canvas = document.getElementById("rt2-canvas");
+    var svg = document.getElementById("rt2-edges-svg");
+    if (!canvas || !svg) return;
+    svg.textContent = "";
+
+    var cRect = canvas.getBoundingClientRect();
+    if (cRect.width < 20 || cRect.height < 20) return;
+
+    function findNode(id) {
+      return canvas.querySelector('[data-node-id="' + CSS.escape(id) + '"]');
+    }
+    function boxOf(elNode) {
+      var r = elNode.getBoundingClientRect();
+      return {
+        left: r.left - cRect.left,
+        right: r.right - cRect.left,
+        top: r.top - cRect.top,
+        bottom: r.bottom - cRect.top,
+        cy: (r.top + r.bottom) / 2 - cRect.top
+      };
+    }
+
+    var colEls = [1, 2, 3, 4].map(function (c) { return document.getElementById("rt2-col-" + c); });
+    var colBoxes = colEls.map(function (cEl) { return boxOf(cEl); });
+
+    // Collect intermediate column obstacle boxes for Col 2 and Col 3 (including headers & dividers)
+    var colObstacles = { 2: [], 3: [] };
+    [2, 3].forEach(function (ci) {
+      colEls[ci - 1].querySelectorAll("[data-node-id], .rt2-node, .rt2-col-hdr, .rt2-col-div").forEach(function (n) {
+        colObstacles[ci].push(boxOf(n));
+      });
+    });
+
+    var diagLaneEl = document.getElementById("rt2-diag-lane");
+    var maxCanvasLaneY = (!diagLaneEl.hidden) ? (boxOf(diagLaneEl).top - 6) : (cRect.height - 6);
+
+    // Determine clear horizontal Y-lanes across intermediate columns
+    function findClearLanes(midCols) {
+      var blocked = [];
+      midCols.forEach(function (ci) {
+        colObstacles[ci].forEach(function (b) {
+          blocked.push([b.top - 5, b.bottom + 5]);
+        });
+      });
+      blocked.sort(function (a, b) { return a[0] - b[0]; });
+      var merged = [];
+      blocked.forEach(function (iv) {
+        if (!merged.length || iv[0] > merged[merged.length - 1][1]) {
+          merged.push([iv[0], iv[1]]);
+        } else {
+          merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], iv[1]);
+        }
+      });
+      var lanes = [];
+      var cursor = 6;
+      var maxY = maxCanvasLaneY;
+      merged.forEach(function (b) {
+        if (b[0] - cursor >= 7) lanes.push((cursor + b[0]) / 2);
+        cursor = Math.max(cursor, b[1]);
+      });
+      if (maxY - cursor >= 7) lanes.push((cursor + maxY) / 2);
+      return lanes.length ? lanes : [10, maxY - 4];
+    }
+
+    var skipLaneUsage = {};
+    function pickLane(midCols, idealY) {
+      var lanes = findClearLanes(midCols);
+      var best = lanes[0];
+      var bestDist = Math.abs(best - idealY);
+      lanes.forEach(function (ly) {
+        var d = Math.abs(ly - idealY);
+        if (d < bestDist) { bestDist = d; best = ly; }
+      });
+      var key = Math.round(best);
+      var idx = skipLaneUsage[key] || 0;
+      skipLaneUsage[key] = idx + 1;
+      var offset = idx === 0 ? 0 : (idx % 2 === 1 ? 5 * Math.ceil(idx / 2) : -5 * Math.ceil(idx / 2));
+      return Math.max(5, Math.min(maxCanvasLaneY, best + offset));
+    }
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    function addEdge(fromId, toId, fromCol, toCol, kind, customFromEl, customToEl) {
+      var fEl = customFromEl || findNode(fromId);
+      var tEl = customToEl || findNode(toId);
+      if (!fEl || !tEl) return;
+      var fb = boxOf(fEl);
+      var tb = boxOf(tEl);
+      var x1 = fb.right;
+      var y1 = fb.cy;
+      var x2 = tb.left;
+      var y2 = tb.cy;
+
+      // If source is a left-subcolumn chip inside Col 1, route cleanly out through its 6px inter-row gap
+      // to Col 1's right edge so it never crosses the adjacent right-subcolumn chip.
+      var prefixPath = "";
+      if (fromCol === 1 && !customFromEl && fb.right < colBoxes[0].right - 24) {
+        var exitY = fb.bottom + 3;
+        var exitX = colBoxes[0].right + 4;
+        prefixPath = "M " + (fb.right - 2).toFixed(1) + " " + y1.toFixed(1) +
+                     " Q " + (fb.right + 4).toFixed(1) + " " + exitY.toFixed(1) + ", " +
+                     (fb.right + 8).toFixed(1) + " " + exitY.toFixed(1) +
+                     " L " + exitX.toFixed(1) + " " + exitY.toFixed(1);
+        x1 = exitX;
+        y1 = exitY;
+      }
+
+      var d = "";
+      if (toCol === fromCol + 1 || (fromCol === toCol && Math.abs(x2 - x1) < 80)) {
+        var dx = Math.max(16, Math.abs(x2 - x1) * 0.48);
+        var seg = " C " + (x1 + dx).toFixed(1) + " " + y1.toFixed(1) + ", " +
+                  (x2 - dx).toFixed(1) + " " + y2.toFixed(1) + ", " +
+                  x2.toFixed(1) + " " + y2.toFixed(1);
+        d = prefixPath ? (prefixPath + seg) : ("M " + x1.toFixed(1) + " " + y1.toFixed(1) + seg);
+      } else {
+        var midCols = [];
+        for (var ci = fromCol + 1; ci < toCol; ci++) midCols.push(ci);
+        var laneY = pickLane(midCols, (y1 + y2) / 2);
+        var gx1 = colBoxes[fromCol - 1].right + Math.max(10, (colBoxes[fromCol].left - colBoxes[fromCol - 1].right) * 0.52);
+        var gx2 = colBoxes[toCol - 1].left - Math.max(10, (colBoxes[toCol - 1].left - colBoxes[toCol - 2].right) * 0.52);
+        var bend1 = Math.max(8, (gx1 - x1) * 0.65);
+        var bend2 = Math.max(10, (x2 - gx2) * 0.65);
+        var segS = " C " + (x1 + bend1).toFixed(1) + " " + y1.toFixed(1) + ", " +
+                   (gx1 - bend1 * 0.4).toFixed(1) + " " + laneY.toFixed(1) + ", " +
+                   gx1.toFixed(1) + " " + laneY.toFixed(1) +
+                   " L " + gx2.toFixed(1) + " " + laneY.toFixed(1) +
+                   " C " + (gx2 + bend2 * 0.5).toFixed(1) + " " + laneY.toFixed(1) + ", " +
+                   (x2 - bend2).toFixed(1) + " " + y2.toFixed(1) + ", " +
+                   x2.toFixed(1) + " " + y2.toFixed(1);
+        d = prefixPath ? (prefixPath + segS) : ("M " + x1.toFixed(1) + " " + y1.toFixed(1) + segS);
+      }
+
+      var path = document.createElementNS(svgNS, "path");
+      path.setAttribute("class", "rt2-edge-path " + kind);
+      path.setAttribute("data-from", fromId);
+      path.setAttribute("data-to", toId);
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+
+      if (kind !== "trunk") {
+        var colorMap = {
+          "group-route": "var(--rt2-primary)",
+          "override": "var(--rt2-primary)",
+          "bundle": "var(--rt2-bundle)",
+          "legacy": "var(--rt2-warn)",
+          "err": "var(--rt2-fail)"
+        };
+        var cDot = document.createElementNS(svgNS, "circle");
+        cDot.setAttribute("class", "rt2-edge-dot");
+        cDot.setAttribute("data-from", fromId);
+        cDot.setAttribute("data-to", toId);
+        cDot.setAttribute("cx", x2.toFixed(1));
+        cDot.setAttribute("cy", y2.toFixed(1));
+        cDot.setAttribute("r", "3");
+        cDot.setAttribute("fill", colorMap[kind] || "var(--rt2-primary)");
+        svg.appendChild(cDot);
+      }
+    }
+
+    // 1. Cluster trunk edges (Col 1 -> Col 2 Hub)
+    ROLES.forEach(function (role) {
+      var portEl = canvas.querySelector('[data-port-cluster="' + role.id + '"]');
+      addEdge("clu:" + role.id, "hub:" + role.id, 1, 2, "trunk", portEl, null);
+    });
+
+    // 2. Individual playbook overrides & legacy collision (Col 1 -> Col 2/3/4)
+    ROLES.forEach(function (role) {
+      role.playbooks.forEach(function (pb) {
+        var res = resolvePlaybook(role.id, pb);
+        var pbId = "pb:" + res.fineKey;
+        if (res.statusKind === "legacy") {
+          addEdge(pbId, "legacy:aliases", 1, 2, "legacy");
+        } else if (res.statusKind === "direct") {
+          if (res.viaNodeId && res.viaNodeId.indexOf("bun:") === 0) {
+            addEdge(pbId, res.viaNodeId, 1, 3, "bundle");
+          } else if (res.targetNodeId) {
+            addEdge(pbId, res.targetNodeId, 1, 4, "override");
+          }
+        }
+      });
+    });
+
+    // 3. Middle-role hubs -> Bundle (Col 3) or Harness Target (Col 4)
+    ROLES.forEach(function (role) {
+      var gRule = state.groupOverrides[role.id];
+      var eff = gRule || (state.callerHarness + ".*");
+      var rg = resolveConcrete(eff, "medium");
+      if (rg.kind === "bundle") {
+        addEdge("hub:" + role.id, "bun:" + gRule, 2, 3, "bundle");
+      } else if (rg.targetNodeId) {
+        addEdge("hub:" + role.id, rg.targetNodeId, 2, 4, gRule ? "group-route" : "trunk");
+      }
+    });
+
+    // 4. Legacy alias node -> Harness Target (Col 2 -> Col 4)
+    if (state.legacyActive) {
+      var leg = resolveConcrete(state.legacyAliases["explore:small"], "small");
+      if (leg.targetNodeId) {
+        addEdge("legacy:aliases", leg.targetNodeId, 2, 4, "legacy");
+      }
+    }
+
+    // 5. Named bundles -> Harness Target (Col 3 -> Col 4)
+    state.bundles.forEach(function (b) {
+      addEdge("bun:" + b.id, "tgt:" + b.harness, 3, 4, "bundle");
+    });
+
+    // 6. Diagnostic edges when in Error mode
+    if (state.viewMode === "errors") {
+      if (!state.diagFixes.unknownFixTarget) {
+        addEdge("hub:implement", "ghost:fast-model-v9", 2, 4, "err");
+      } else {
+        addEdge("hub:implement", "ghost:fast-model-v9", 2, 4, "group-route");
+      }
+      // Cycle & hop edges inside diag-lane
+      var cA = findNode("diag:cycle-a");
+      var cB = findNode("diag:cycle-b");
+      if (cA && cB) {
+        var ab = boxOf(cA);
+        var bb = boxOf(cB);
+        var p1 = document.createElementNS(svgNS, "path");
+        p1.setAttribute("class", "rt2-edge-path " + (state.diagFixes.cycleFixed ? "group-route" : "err"));
+        p1.setAttribute("data-from", "diag:cycle-a");
+        p1.setAttribute("data-to", "diag:cycle-b");
+        p1.setAttribute("d", "M " + ab.right.toFixed(1) + " " + (ab.cy - 2).toFixed(1) + " L " + bb.left.toFixed(1) + " " + (bb.cy - 2).toFixed(1));
+        svg.appendChild(p1);
+        if (!state.diagFixes.cycleFixed) {
+          var p2 = document.createElementNS(svgNS, "path");
+          p2.setAttribute("class", "rt2-edge-path err");
+          p2.setAttribute("data-from", "diag:cycle-b");
+          p2.setAttribute("data-to", "diag:cycle-a");
+          p2.setAttribute("d", "M " + bb.left.toFixed(1) + " " + (bb.cy + 3).toFixed(1) + " L " + ab.right.toFixed(1) + " " + (ab.cy + 3).toFixed(1));
+          svg.appendChild(p2);
+        }
+      }
+      var h1 = findNode("diag:hop-p1");
+      var h9 = findNode("diag:hop-p9");
+      if (h1 && h9) {
+        var hb1 = boxOf(h1);
+        var hb9 = boxOf(h9);
+        var hp = document.createElementNS(svgNS, "path");
+        hp.setAttribute("class", "rt2-edge-path " + (state.diagFixes.hopFixed ? "group-route" : "err"));
+        hp.setAttribute("data-from", "diag:hop-p1");
+        hp.setAttribute("data-to", "diag:hop-p9");
+        hp.setAttribute("d", "M " + hb1.right.toFixed(1) + " " + hb1.cy.toFixed(1) + " L " + hb9.left.toFixed(1) + " " + hb9.cy.toFixed(1));
+        svg.appendChild(hp);
+      }
+    }
+
+    if (state.hoverNodeId) applyHoverVisuals();
+  }
+
+  /* Modal System */
+  function openModal(title, badgeText, badgeCls, buildFn) {
+    var backdrop = document.getElementById("rt2-modal-backdrop");
+    document.getElementById("rt2-modal-title").textContent = title;
+    var badge = document.getElementById("rt2-modal-badge");
+    badge.className = "rt2-pill " + (badgeCls || "");
+    badge.textContent = badgeText || "";
+    badge.hidden = !badgeText;
+
+    var body = document.getElementById("rt2-modal-body");
+    var foot = document.getElementById("rt2-modal-foot");
+    body.textContent = "";
+    foot.textContent = "";
+
+    buildFn(body, foot);
+    backdrop.hidden = false;
+    state.modal = true;
+  }
+
+  function closeModal() {
+    document.getElementById("rt2-modal-backdrop").hidden = true;
+    state.modal = null;
+  }
+
+  function openPlaybookModal(roleId, pb) {
+    var fineKey = pb.name + ":" + pb.size;
+    var res = resolvePlaybook(roleId, pb);
+    var curOv = state.pbOverrides[fineKey] || "";
+    var isLegacyHit = state.legacyActive && !!state.legacyAliases[fineKey];
+
+    openModal("세부 역할 편집 · " + fineKey, roleId + " · " + pb.size, "pri", function (body, foot) {
+      body.appendChild(el("p", "rt2-spdesc", pb.desc));
+
+      var trBox = el("div", "rt2-trace-box");
+      res.trace.forEach(function (t, i) {
+        if (i > 0) trBox.appendChild(el("span", "", "→"));
+        trBox.appendChild(el("span", "rt2-hud-chip " + (t.cls || ""), t.text));
+      });
+      body.appendChild(trBox);
+
+      if (isLegacyHit) {
+        var warnB = el("div", "rt2-banner warn");
+        warnB.textContent = "전역 레거시 별칭(agent.tier_aliases['" + fineKey + "'] = '" + state.legacyAliases[fineKey] + "')이 활성 상태입니다. 개별 오버라이드를 지정하면 명시적으로 덮어씁니다.";
+        body.appendChild(warnB);
+      }
+
+      var modeField = el("div", "rt2-field");
+      modeField.appendChild(el("label", "", "해석 방식"));
+      var seg = el("div", "rt2-seg");
+      var bInh = el("button", "", "그룹 상속 (" + roleId + ":*)");
+      bInh.type = "button";
+      var bOv = el("button", "", "개별 오버라이드");
+      bOv.type = "button";
+      var useOv = !!curOv;
+      seg.appendChild(bInh);
+      seg.appendChild(bOv);
+      modeField.appendChild(seg);
+      body.appendChild(modeField);
+
+      var tgtField = el("div", "rt2-field");
+      var lbl = el("label", "", "대상 지정 (하네스 · 번들 · 고정 슬롯)");
+      tgtField.appendChild(lbl);
+      var sel = el("select", "rt2-sel mono");
+      populateTargetSelect(sel, "그룹 상속 (" + roleId + ":*)", false, curOv, pb.size);
+      tgtField.appendChild(sel);
+      body.appendChild(tgtField);
+
+      function syncModeUI() {
+        bInh.setAttribute("aria-pressed", String(!useOv));
+        bOv.setAttribute("aria-pressed", String(useOv));
+        sel.disabled = !useOv;
+      }
+      bInh.addEventListener("click", function () {
+        useOv = false;
+        sel.value = "";
+        syncModeUI();
+      });
+      bOv.addEventListener("click", function () {
+        useOv = true;
+        if (!sel.value) sel.value = state.bundles[0] ? state.bundles[0].id : (state.callerHarness + ".*");
+        syncModeUI();
+      });
+      sel.addEventListener("change", function () {
+        useOv = !!sel.value;
+        syncModeUI();
+      });
+      syncModeUI();
+
+      var resetBtn = el("button", "rt2-btn", "초기화 (상속)");
+      resetBtn.type = "button";
+      resetBtn.disabled = !curOv;
+      resetBtn.addEventListener("click", function () {
+        delete state.pbOverrides[fineKey];
+        syncPresetHighlight();
+        renderTree();
+        closeModal();
+      });
+      foot.appendChild(resetBtn);
+
+      var rightActs = el("div", "");
+      rightActs.style.display = "inline-flex";
+      rightActs.style.gap = "6px";
+      var cancelBtn = el("button", "rt2-btn", "취소");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", closeModal);
+      var saveBtn = el("button", "rt2-btn pri", "저장");
+      saveBtn.type = "button";
+      saveBtn.addEventListener("click", function () {
+        if (useOv && sel.value) state.pbOverrides[fineKey] = sel.value;
+        else delete state.pbOverrides[fineKey];
+        syncPresetHighlight();
+        renderTree();
+        closeModal();
+      });
+      rightActs.appendChild(cancelBtn);
+      rightActs.appendChild(saveBtn);
+      foot.appendChild(rightActs);
+    });
+  }
+
+  function openHubModal(role) {
+    var gRule = state.groupOverrides[role.id] || "";
+    var inh = 0;
+    var ovList = [];
+    role.playbooks.forEach(function (pb) {
+      var fk = pb.name + ":" + pb.size;
+      if (state.pbOverrides[fk]) ovList.push(fk);
+      else inh++;
+    });
+
+    openModal("중간 역할 그룹 편집 · " + role.id + ":*", role.label, "pri", function (body, foot) {
+      var info = el("div", "rt2-banner info");
+      info.textContent = "총 " + role.playbooks.length + "개 플레이북 중 " + inh + "개가 이 그룹 규칙을 상속합니다." +
+        (ovList.length ? (" (개별 오버라이드: " + ovList.join(", ") + ")") : "");
+      body.appendChild(info);
+
+      var f = el("div", "rt2-field");
+      f.appendChild(el("label", "", role.id + ":* 대상 규칙"));
+      var sel = el("select", "rt2-sel mono");
+      populateTargetSelect(sel, "기본 상속 (" + state.callerHarness + ".*)", true, gRule, "medium");
+      f.appendChild(sel);
+      body.appendChild(f);
+
+      var resetBtn = el("button", "rt2-btn", "기본값 초기화");
+      resetBtn.type = "button";
+      resetBtn.disabled = !gRule;
+      resetBtn.addEventListener("click", function () {
+        delete state.groupOverrides[role.id];
+        syncPresetHighlight();
+        renderTree();
+        closeModal();
+      });
+      foot.appendChild(resetBtn);
+
+      var rightActs = el("div", "");
+      rightActs.style.display = "inline-flex";
+      rightActs.style.gap = "6px";
+      var cancelBtn = el("button", "rt2-btn", "취소");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", closeModal);
+      var saveBtn = el("button", "rt2-btn pri", "저장");
+      saveBtn.type = "button";
+      saveBtn.addEventListener("click", function () {
+        if (sel.value) state.groupOverrides[role.id] = sel.value;
+        else delete state.groupOverrides[role.id];
+        syncPresetHighlight();
+        renderTree();
+        closeModal();
+      });
+      rightActs.appendChild(cancelBtn);
+      rightActs.appendChild(saveBtn);
+      foot.appendChild(rightActs);
+    });
+  }
+
+  function openBundleModal(mode, bundle) {
+    var draft = mode === "new"
+      ? { name: "", harness: "codex", model: "gpt-5.4", effort: "high" }
+      : { name: bundle.id, harness: bundle.harness, model: bundle.model, effort: bundle.effort };
+    var title = mode === "new" ? "새 커스텀 번들 만들기" : ("커스텀 번들 편집 · " + bundle.id);
+    var refs = mode === "edit" ? countBundleRefs(bundle.id) : [];
+
+    openModal(title, "권한 미포함", "bun", function (body, foot) {
+      var callout = el("div", "rt2-banner info");
+      callout.textContent = "하네스 · 모델 · 추론 강도만 정의 — 권한(authority) 미포함. 저장 시 라우팅 트리 및 새 세션 대화상자에 즉시 반영됩니다.";
+      body.appendChild(callout);
+
+      var grid = el("div", "rt2-form-grid");
+      var fName = el("div", "rt2-field");
+      fName.appendChild(el("label", "", "번들 이름 (slug)"));
+      var nameInp = el("input", "rt2-inp mono");
+      nameInp.id = "rt2-modal-bun-name";
+      nameInp.placeholder = "예: deep-review";
+      nameInp.value = draft.name;
+      nameInp.addEventListener("input", function (e) { draft.name = e.target.value; });
+      fName.appendChild(nameInp);
+      grid.appendChild(fName);
+
+      var fHar = el("div", "rt2-field");
+      fHar.appendChild(el("label", "", "하네스"));
+      var hSeg = el("div", "rt2-seg");
+      fHar.appendChild(hSeg);
+      grid.appendChild(fHar);
+
+      var fMod = el("div", "rt2-field");
+      fMod.appendChild(el("label", "", "모델"));
+      var mSel = el("select", "rt2-sel mono");
+      mSel.id = "rt2-modal-bun-model";
+      mSel.addEventListener("change", function (e) { draft.model = e.target.value; });
+      fMod.appendChild(mSel);
+      grid.appendChild(fMod);
+
+      var fEff = el("div", "rt2-field");
+      fEff.appendChild(el("label", "", "추론 강도"));
+      var eSeg = el("div", "rt2-seg");
+      fEff.appendChild(eSeg);
+      grid.appendChild(fEff);
+      body.appendChild(grid);
+
+      if (mode === "edit") {
+        var refEl = el("div", "rt2-spdesc");
+        refEl.textContent = refs.length ? ("참조 중인 역할: " + refs.join(", ")) : "참조 중인 역할 없음 (새 세션 대화상자에서 선택 가능)";
+        body.appendChild(refEl);
+      }
+
+      var errBox = el("div", "rt2-banner fail");
+      errBox.hidden = true;
+      body.appendChild(errBox);
+
+      function syncBundleControls() {
+        hSeg.textContent = "";
+        ["claude", "codex", "agy", "pi"].forEach(function (h) {
+          var b = el("button", "", HARNESS_LABELS[h]);
+          b.type = "button";
+          b.setAttribute("aria-pressed", String(draft.harness === h));
+          b.addEventListener("click", function () {
+            draft.harness = h;
+            draft.model = (HARNESS_MODELS[h] || [])[0] || "";
+            draft.effort = (HARNESS_EFFORTS[h] || ["high"])[1] || "high";
+            syncBundleControls();
+          });
+          hSeg.appendChild(b);
+        });
+
+        mSel.textContent = "";
+        var models = HARNESS_MODELS[draft.harness] || [];
+        if (models.indexOf(draft.model) < 0) draft.model = models[0] || "";
+        models.forEach(function (m) {
+          var o = el("option", "", m);
+          o.value = m;
+          mSel.appendChild(o);
+        });
+        mSel.value = draft.model;
+
+        eSeg.textContent = "";
+        var efforts = HARNESS_EFFORTS[draft.harness] || ["low", "medium", "high"];
+        if (efforts.indexOf(draft.effort) < 0) draft.effort = efforts[efforts.length - 1];
+        efforts.forEach(function (ef) {
+          var b = el("button", "", ef);
+          b.type = "button";
+          b.setAttribute("aria-pressed", String(draft.effort === ef));
+          b.addEventListener("click", function () {
+            draft.effort = ef;
+            syncBundleControls();
+          });
+          eSeg.appendChild(b);
+        });
+      }
+      syncBundleControls();
+
+      var leftSlot = el("div", "");
+      if (mode === "edit" && state.bundles.length > 1) {
+        var delBtn = el("button", "rt2-btn danger", "번들 삭제");
+        delBtn.type = "button";
+        delBtn.addEventListener("click", function () {
+          state.bundles = state.bundles.filter(function (x) { return x.id !== bundle.id; });
+          Object.keys(state.groupOverrides).forEach(function (r) { if (state.groupOverrides[r] === bundle.id) delete state.groupOverrides[r]; });
+          Object.keys(state.pbOverrides).forEach(function (k) { if (state.pbOverrides[k] === bundle.id) delete state.pbOverrides[k]; });
+          if (state.newSession.bundle === bundle.id) state.newSession.bundle = "";
+          renderTree();
+          renderNewSession();
+          closeModal();
+        });
+        leftSlot.appendChild(delBtn);
+      }
+      foot.appendChild(leftSlot);
+
+      var rightActs = el("div", "");
+      rightActs.style.display = "inline-flex";
+      rightActs.style.gap = "6px";
+      var cancelBtn = el("button", "rt2-btn", "취소");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", closeModal);
+      var saveBtn = el("button", "rt2-btn pri", "저장");
+      saveBtn.type = "button";
+      saveBtn.id = "rt2-modal-bun-save";
+      saveBtn.addEventListener("click", function () {
+        var clean = String(draft.name || "").trim().toLowerCase();
+        var reserved = ["small", "medium", "large", "xlarge", "explore", "implement", "review", "claude", "codex", "agy", "pi"];
+        if (!/^[a-z][a-z0-9-]{1,30}$/.test(clean)) {
+          errBox.textContent = "번들 이름은 영문 소문자로 시작하는 2~31자 슬러그여야 합니다.";
+          errBox.hidden = false;
+          return;
+        }
+        if (reserved.indexOf(clean) >= 0) {
+          errBox.textContent = "'" + clean + "'은(는) 예약된 역할/크기/하네스 이름입니다.";
+          errBox.hidden = false;
+          return;
+        }
+        var dup = state.bundles.some(function (x) { return x.id === clean && (mode === "new" || x.id !== bundle.id); });
+        if (dup) {
+          errBox.textContent = "동일한 이름의 번들이 이미 존재합니다.";
+          errBox.hidden = false;
+          return;
+        }
+        if (mode === "new") {
+          state.bundles.push({ id: clean, harness: draft.harness, model: draft.model, effort: draft.effort });
+        } else {
+          var oldId = bundle.id;
+          for (var i = 0; i < state.bundles.length; i++) {
+            if (state.bundles[i].id === oldId) {
+              state.bundles[i] = { id: clean, harness: draft.harness, model: draft.model, effort: draft.effort };
+              break;
+            }
+          }
+          if (oldId !== clean) {
+            Object.keys(state.groupOverrides).forEach(function (r) { if (state.groupOverrides[r] === oldId) state.groupOverrides[r] = clean; });
+            Object.keys(state.pbOverrides).forEach(function (k) { if (state.pbOverrides[k] === oldId) state.pbOverrides[k] = clean; });
+            if (state.newSession.bundle === oldId) state.newSession.bundle = clean;
+          }
+        }
+        renderTree();
+        renderNewSession();
+        closeModal();
+      });
+      rightActs.appendChild(cancelBtn);
+      rightActs.appendChild(saveBtn);
+      foot.appendChild(rightActs);
+    });
+  }
+
+  function openLegacyModal() {
+    openModal("레거시 별칭 노드 · agent.tier_aliases", state.legacyActive ? "전역 활성" : "비활성", state.legacyActive ? "warn" : "", function (body, foot) {
+      var banner = el("div", "rt2-banner warn");
+      banner.textContent = "기존 agent.tier_aliases['explore:small'] = 'claude.small' 규칙은 정확 일치 키로 동작하므로 와일드카드(explore:*)보다 런타임 우선순위가 높습니다.";
+      body.appendChild(banner);
+
+      var tr = el("div", "rt2-trace-box");
+      tr.appendChild(el("span", "rt2-hud-chip", "explore:small"));
+      tr.appendChild(el("span", "", "→"));
+      tr.appendChild(el("span", "rt2-hud-chip warn", "claude.small [레거시 우선]"));
+      tr.appendChild(el("span", "", "| 무시됨: explore:*"));
+      body.appendChild(tr);
+
+      var chkLbl = el("label", "");
+      chkLbl.style.display = "inline-flex";
+      chkLbl.style.alignItems = "center";
+      chkLbl.style.gap = "7px";
+      chkLbl.style.fontWeight = "700";
+      chkLbl.style.cursor = "pointer";
+      var chk = el("input");
+      chk.type = "checkbox";
+      chk.checked = state.legacyActive;
+      chkLbl.appendChild(chk);
+      chkLbl.appendChild(el("span", "", "전역 레거시 별칭 활성 (explore:small → claude.small)"));
+      body.appendChild(chkLbl);
+
+      foot.appendChild(el("span", "rt2-spdesc", "해제 시 explore:* 규칙을 따릅니다."));
+      var rightActs = el("div", "");
+      rightActs.style.display = "inline-flex";
+      rightActs.style.gap = "6px";
+      var cancelBtn = el("button", "rt2-btn", "취소");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", closeModal);
+      var saveBtn = el("button", "rt2-btn pri", "적용");
+      saveBtn.type = "button";
+      saveBtn.addEventListener("click", function () {
+        state.legacyActive = !!chk.checked;
+        syncPresetHighlight();
+        renderTree();
+        closeModal();
+      });
+      rightActs.appendChild(cancelBtn);
+      rightActs.appendChild(saveBtn);
+      foot.appendChild(rightActs);
+    });
+  }
+
+  function openTargetModal(h) {
+    openModal("실행 대상 · " + h + ".*", HARNESS_LABELS[h], "ok", function (body, foot) {
+      var list = el("div", "rt2-trace-box");
+      list.style.flexDirection = "column";
+      list.style.alignItems = "stretch";
+      ["small", "medium", "large", "xlarge"].forEach(function (sz) {
+        var row = el("div", "");
+        row.style.display = "flex";
+        row.style.justifyContent = "space-between";
+        row.appendChild(el("span", "", h + "." + sz));
+        row.appendChild(el("span", "rt2-hud-chip end", HARNESS_TIER_DEFAULTS[h][sz].model + " · " + HARNESS_TIER_DEFAULTS[h][sz].effort));
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+
+      var setBtn = el("button", "rt2-btn pri", "호출 하네스 미리보기로 설정");
+      setBtn.type = "button";
+      setBtn.disabled = state.callerHarness === h;
+      setBtn.addEventListener("click", function () {
+        state.callerHarness = h;
+        document.querySelectorAll("#rt2-caller-seg button").forEach(function (x) {
+          x.setAttribute("aria-pressed", String(x.getAttribute("data-caller") === h));
+        });
+        renderTree();
+        closeModal();
+      });
+      foot.appendChild(setBtn);
+      var closeBtn = el("button", "rt2-btn", "닫기");
+      closeBtn.type = "button";
+      closeBtn.addEventListener("click", closeModal);
+      foot.appendChild(closeBtn);
+    });
+  }
+
+  function openDiagnosticModal(kind) {
+    var titles = {
+      cycle: "진단 · 순환 참조 오류",
+      hop: "진단 · 최대 홉 제한 초과",
+      legacy: "진단 · 레거시 별칭 우선순위 충돌",
+      unknown: "진단 · 알 수 없는 대상 오류"
+    };
+    var codes = {
+      cycle: "CycleDetected",
+      hop: "HopLimitExceeded",
+      legacy: "LegacyAliasCollision",
+      unknown: "UnknownTarget"
+    };
+    var isWarn = kind === "legacy";
+
+    openModal(titles[kind], codes[kind], isWarn ? "warn" : "fail", function (body, foot) {
+      var banner = el("div", "rt2-banner " + (isWarn ? "warn" : "fail"));
+      var tr = el("div", "rt2-trace-box");
+
+      if (kind === "cycle") {
+        banner.textContent = state.diagFixes.cycleFixed
+          ? "해결됨: custom-b가 claude.large를 가리켜 순환이 제거되었습니다."
+          : "저장 차단됨 (CycleDetected): 순환 참조가 감지되어 config.tune / lead-tune 저장이 거부되었습니다.";
+        var cNodes = state.diagFixes.cycleFixed ? ["custom-a", "custom-b", "claude.large (해결)"] : ["custom-a", "custom-b", "custom-a (이미 방문)"];
+        cNodes.forEach(function (t, i) {
+          if (i > 0) tr.appendChild(el("span", "", "→"));
+          tr.appendChild(el("span", "rt2-hud-chip " + (i === 2 ? (state.diagFixes.cycleFixed ? "end" : "fail") : ""), t));
+        });
+        body.appendChild(banner);
+        body.appendChild(tr);
+
+        var fixRow = el("div", "rt2-suggest-row");
+        var fixBtn = el("button", "rt2-suggest-chip", state.diagFixes.cycleFixed ? "오류 상태 복원" : "빠른 수정: custom-b → claude.large");
+        fixBtn.type = "button";
+        fixBtn.addEventListener("click", function () {
+          state.diagFixes.cycleFixed = !state.diagFixes.cycleFixed;
+          renderTree();
+          openDiagnosticModal("cycle");
+        });
+        fixRow.appendChild(fixBtn);
+        body.appendChild(fixRow);
+      } else if (kind === "hop") {
+        banner.textContent = state.diagFixes.hopFixed
+          ? "해결됨: p1 → deep-design (1홉)으로 체인이 단축되었습니다."
+          : "저장 차단됨 (HopLimitExceeded): 최대 해석 깊이 8홉을 초과하여 9홉에 도달했습니다.";
+        var hNodes = state.diagFixes.hopFixed ? ["p1", "deep-design (1/8 홉)"] : ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9 (9/8 초과)"];
+        hNodes.forEach(function (t, i) {
+          if (i > 0) tr.appendChild(el("span", "", "→"));
+          tr.appendChild(el("span", "rt2-hud-chip " + (i === hNodes.length - 1 ? (state.diagFixes.hopFixed ? "end" : "fail") : ""), t));
+        });
+        body.appendChild(banner);
+        body.appendChild(tr);
+
+        var hRow = el("div", "rt2-suggest-row");
+        var hBtn = el("button", "rt2-suggest-chip", state.diagFixes.hopFixed ? "오류 상태 복원" : "빠른 수정: p1 → deep-design");
+        hBtn.type = "button";
+        hBtn.addEventListener("click", function () {
+          state.diagFixes.hopFixed = !state.diagFixes.hopFixed;
+          renderTree();
+          openDiagnosticModal("hop");
+        });
+        hRow.appendChild(hBtn);
+        body.appendChild(hRow);
+      } else if (kind === "legacy") {
+        banner.textContent = "우선순위 경고 (LegacyAliasCollision): 전역 agent.tier_aliases['explore:small']='claude.small'이 역할 그룹 규칙 explore:*=" + (state.groupOverrides.explore || "codex.*") + "보다 런타임에 우선 적용됩니다.";
+        tr.appendChild(el("span", "rt2-hud-chip", "explore:small"));
+        tr.appendChild(el("span", "", "→"));
+        tr.appendChild(el("span", "rt2-hud-chip warn", "claude.small [전역 레거시 우선]"));
+        body.appendChild(banner);
+        body.appendChild(tr);
+
+        var lRow = el("div", "rt2-suggest-row");
+        var lBtn = el("button", "rt2-suggest-chip", state.legacyActive ? "빠른 수정: 전역 레거시 별칭 해제" : "레거시 별칭 다시 활성");
+        lBtn.type = "button";
+        lBtn.addEventListener("click", function () {
+          state.legacyActive = !state.legacyActive;
+          renderTree();
+          openDiagnosticModal("legacy");
+        });
+        lRow.appendChild(lBtn);
+        body.appendChild(lRow);
+      } else if (kind === "unknown") {
+        var cur = state.diagFixes.unknownFixTarget;
+        banner.textContent = cur
+          ? ("수정 미리보기 유효: implement:large → " + cur + " 으로 교체 시 정상 해석됩니다.")
+          : "저장 차단됨 (UnknownTarget): 'fast-model-v9'은(는) 등록된 번들, 역할, 또는 <harness>.<tier> 대상이 아닙니다.";
+        tr.appendChild(el("span", "rt2-hud-chip", "implement:large"));
+        tr.appendChild(el("span", "", "→"));
+        tr.appendChild(el("span", "rt2-hud-chip " + (cur ? "end" : "fail"), cur || "fast-model-v9 [미정의 대상]"));
+        body.appendChild(banner);
+        body.appendChild(tr);
+
+        var uLbl = el("div", "rt2-spdesc", "유효한 대상 제안 (클릭하여 미리보기 적용):");
+        body.appendChild(uLbl);
+        var uRow = el("div", "rt2-suggest-row");
+        ["codex.*", "claude.*", "codex.large", "discussion", "deep-design"].forEach(function (pick) {
+          var c = el("button", "rt2-suggest-chip", pick);
+          c.type = "button";
+          c.addEventListener("click", function () {
+            state.diagFixes.unknownFixTarget = pick;
+            renderTree();
+            openDiagnosticModal("unknown");
+          });
+          uRow.appendChild(c);
+        });
+        if (cur) {
+          var rst = el("button", "rt2-btn sm", "오류 상태 복원");
+          rst.type = "button";
+          rst.addEventListener("click", function () {
+            state.diagFixes.unknownFixTarget = "";
+            renderTree();
+            openDiagnosticModal("unknown");
+          });
+          uRow.appendChild(rst);
+        }
+        body.appendChild(uRow);
+      }
+
+      foot.appendChild(el("span", "rt2-pill " + (isWarn ? "warn" : "fail"), isWarn ? "런타임 우선순위 경고" : "오류 해소 전 저장 차단"));
+      var okBtn = el("button", "rt2-btn pri", "닫기");
+      okBtn.type = "button";
+      okBtn.addEventListener("click", closeModal);
+      foot.appendChild(okBtn);
+    });
+  }
+
+  /* Tab 2: New-Session Dialog ((1516)=a) */
+  function renderNewSessionBundleSelect() {
+    var sel = document.getElementById("rt2-ns-bundle");
+    var cur = state.newSession.bundle;
+    sel.textContent = "";
+    var optNone = el("option", "", "직접 선택 (수동)");
+    optNone.value = "";
+    sel.appendChild(optNone);
+    state.bundles.forEach(function (b) {
+      var o = el("option", "", b.id + " (" + b.harness + " · " + b.model + " · " + b.effort + ")");
+      o.value = b.id;
+      sel.appendChild(o);
+    });
+    sel.value = cur && findBundle(cur) ? cur : "";
+  }
+
+  function renderNewSession() {
+    var ns = state.newSession;
+    renderNewSessionBundleSelect();
+
+    document.querySelectorAll("#rt2-ns-harness-seg button").forEach(function (b) {
+      b.setAttribute("aria-checked", String(b.getAttribute("data-ns-h") === ns.harness));
+    });
+
+    var mSel = document.getElementById("rt2-ns-model");
+    mSel.textContent = "";
+    var models = HARNESS_MODELS[ns.harness] || [];
+    if (models.indexOf(ns.model) < 0) ns.model = models[0] || "";
+    models.forEach(function (m) {
+      var o = el("option", "", m);
+      o.value = m;
+      mSel.appendChild(o);
+    });
+    mSel.value = ns.model;
+
+    var eSel = document.getElementById("rt2-ns-effort");
+    eSel.textContent = "";
+    var efforts = HARNESS_EFFORTS[ns.harness] || ["low", "medium", "high"];
+    if (efforts.indexOf(ns.effort) < 0) ns.effort = efforts[efforts.length - 1];
+    efforts.forEach(function (ef) {
+      var o = el("option", "", ef);
+      o.value = ef;
+      eSel.appendChild(o);
+    });
+    eSel.value = ns.effort;
+
+    document.querySelectorAll("#rt2-ns-perm-seg button").forEach(function (b) {
+      b.setAttribute("aria-checked", String(b.getAttribute("data-ns-perm") === ns.perm));
+    });
+    var permDescriptions = {
+      "default": "하네스 기본 권한 정책을 따릅니다.",
+      "workdir-write": "현재 작업 디렉터리 내 편집을 자동 승인합니다.",
+      "full": "확인 프롬프트 없이 모든 도구 실행을 허용합니다."
+    };
+    document.getElementById("rt2-ns-perm-desc").textContent = permDescriptions[ns.perm] || "";
+
+    document.querySelectorAll("#rt2-ns-iso-seg button").forEach(function (b) {
+      b.setAttribute("aria-checked", String(b.getAttribute("data-ns-iso") === ns.iso));
+    });
+
+    var modePill = document.getElementById("rt2-ns-mode-pill");
+    var hintEl = document.getElementById("rt2-ns-hint");
+    if (ns.bundle) {
+      modePill.className = "rt2-pill pri";
+      modePill.textContent = "번들 적용됨: " + ns.bundle;
+      hintEl.className = "rt2-microhint applied";
+      hintEl.textContent = ns.bundle + " 번들에서 하네스·모델·추론 강도가 채워졌습니다. 아무 필드나 수정하면 직접 선택으로 복귀합니다.";
+    } else if (ns.hintState === "reverted") {
+      modePill.className = "rt2-pill warn";
+      modePill.textContent = "직접 선택 (수동 수정됨)";
+      hintEl.className = "rt2-microhint reverted";
+      hintEl.textContent = "수동 수정됨 — 직접 선택 모드로 전환되었습니다. (권한·격리는 변경 없음)";
+    } else {
+      modePill.className = "rt2-pill";
+      modePill.textContent = "직접 선택";
+      hintEl.className = "rt2-microhint";
+      hintEl.textContent = "번들을 선택하지 않으면 각 필드를 직접 선택합니다.";
+    }
+
+    document.getElementById("rt2-ns-loc").textContent = "devenv · develop · " + (HARNESS_LABELS[ns.harness] || ns.harness);
+
+    var activeStep = ns.bundle ? "bundle" : (ns.hintState === "reverted" ? "reverted" : "manual");
+    document.querySelectorAll("#rt2-step-strip .rt2-step-card").forEach(function (c) {
+      c.classList.toggle("active", c.getAttribute("data-step") === activeStep);
+    });
+
+    var payload = {
+      root: "/Users/kang-sw/repos/devenv",
+      harness: ns.harness,
+      model: ns.model,
+      effort: ns.effort,
+      permission_level: ns.perm === "default" ? "" : ns.perm,
+      plugin_isolation: ns.iso
+    };
+    document.getElementById("rt2-ns-payload").textContent = JSON.stringify(payload, null, 2);
+  }
+
+  /* Event Bindings */
+  var tabPanels = {
+    tree: document.getElementById("rt2-panel-tree"),
+    newsession: document.getElementById("rt2-panel-newsession")
+  };
+  document.querySelectorAll(".rt2-tab").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var t = btn.getAttribute("data-rt2-tab");
+      state.activeTab = t;
+      document.querySelectorAll(".rt2-tab").forEach(function (b) {
+        b.setAttribute("aria-selected", String(b === btn));
+      });
+      Object.keys(tabPanels).forEach(function (k) { tabPanels[k].hidden = k !== t; });
+      if (t === "tree") scheduleDrawEdges();
+    });
+  });
+
+  function currentResolvedTheme() {
+    var attr = root.getAttribute("data-rt2-theme");
+    if (attr === "dark" || attr === "light") return attr;
+    var docTheme = document.documentElement.getAttribute("data-theme");
+    if (docTheme === "dark" || docTheme === "light") return docTheme;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function syncThemeButton() {
+    var isDark = currentResolvedTheme() === "dark";
+    document.getElementById("rt2-theme-label").textContent = isDark ? "다크" : "라이트";
+    document.getElementById("rt2-theme-icon").innerHTML = isDark
+      ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
+      : '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>';
+  }
+  document.getElementById("rt2-theme-toggle").addEventListener("click", function () {
+    var next = currentResolvedTheme() === "dark" ? "light" : "dark";
+    root.setAttribute("data-rt2-theme", next);
+    syncThemeButton();
+  });
+
+  document.querySelectorAll("#rt2-mode-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.viewMode = b.getAttribute("data-mode");
+      renderTree();
+    });
+  });
+  document.querySelectorAll("#rt2-caller-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.callerHarness = b.getAttribute("data-caller");
+      document.querySelectorAll("#rt2-caller-seg button").forEach(function (x) {
+        x.setAttribute("aria-pressed", String(x === b));
+      });
+      renderTree();
+    });
+  });
+  document.querySelectorAll("#rt2-preset-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var src = PRESETS[b.getAttribute("data-preset")];
+      state.groupOverrides = Object.assign({}, src.groupOverrides);
+      state.pbOverrides = Object.assign({}, src.pbOverrides);
+      state.legacyActive = src.legacyActive;
+      syncPresetHighlight();
+      renderTree();
+    });
+  });
+
+  /* Modal close handlers */
+  document.getElementById("rt2-modal-x").addEventListener("click", closeModal);
+  document.getElementById("rt2-modal-backdrop").addEventListener("click", function (e) {
+    if (e.target === this) closeModal();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && state.modal) closeModal();
+  });
+
+  /* Tab 2 handlers */
+  document.getElementById("rt2-ns-bundle").addEventListener("change", function (e) {
+    var id = e.target.value;
+    if (!id) {
+      state.newSession.bundle = "";
+      state.newSession.hintState = "manual";
+    } else {
+      var b = findBundle(id);
+      if (b) {
+        state.newSession.bundle = b.id;
+        state.newSession.harness = b.harness;
+        state.newSession.model = b.model;
+        state.newSession.effort = b.effort;
+        state.newSession.hintState = "applied";
+      }
+    }
+    renderNewSession();
+  });
+  function manualFieldEdit() {
+    if (state.newSession.bundle) {
+      state.newSession.bundle = "";
+      state.newSession.hintState = "reverted";
+    } else {
+      state.newSession.hintState = "manual";
+    }
+  }
+  document.querySelectorAll("#rt2-ns-harness-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var h = b.getAttribute("data-ns-h");
+      if (state.newSession.harness === h) return;
+      state.newSession.harness = h;
+      state.newSession.model = (HARNESS_MODELS[h] || [])[0] || "";
+      state.newSession.effort = (HARNESS_EFFORTS[h] || ["high"]).slice(-1)[0];
+      manualFieldEdit();
+      renderNewSession();
+    });
+  });
+  document.getElementById("rt2-ns-model").addEventListener("change", function (e) {
+    state.newSession.model = e.target.value;
+    manualFieldEdit();
+    renderNewSession();
+  });
+  document.getElementById("rt2-ns-effort").addEventListener("change", function (e) {
+    state.newSession.effort = e.target.value;
+    manualFieldEdit();
+    renderNewSession();
+  });
+  document.querySelectorAll("#rt2-ns-perm-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.newSession.perm = b.getAttribute("data-ns-perm");
+      renderNewSession();
+    });
+  });
+  document.querySelectorAll("#rt2-ns-iso-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.newSession.iso = b.getAttribute("data-ns-iso");
+      renderNewSession();
+    });
+  });
+  document.getElementById("rt2-ns-reset").addEventListener("click", function () {
+    state.newSession = { bundle: "", harness: "claude", model: "claude-opus-4-6", effort: "high", perm: "default", iso: "default", hintState: "manual" };
+    document.getElementById("rt2-ns-submit-badge").textContent = "실시간 동기화";
+    renderNewSession();
+  });
+  document.getElementById("rt2-ns-start").addEventListener("click", function () {
+    document.getElementById("rt2-ns-submit-badge").textContent = "session.request_hire 전송됨 (모의)";
+  });
+  document.querySelectorAll("#rt2-step-strip .rt2-step-card").forEach(function (card) {
+    card.addEventListener("click", function () {
+      var step = card.getAttribute("data-step");
+      var disc = findBundle("discussion") || state.bundles[0];
+      if (step === "manual") {
+        state.newSession.bundle = "";
+        state.newSession.harness = "claude";
+        state.newSession.model = "claude-opus-4-6";
+        state.newSession.effort = "high";
+        state.newSession.hintState = "manual";
+      } else if (step === "bundle" && disc) {
+        state.newSession.bundle = disc.id;
+        state.newSession.harness = disc.harness;
+        state.newSession.model = disc.model;
+        state.newSession.effort = disc.effort;
+        state.newSession.hintState = "applied";
+      } else if (step === "reverted" && disc) {
+        state.newSession.bundle = "";
+        state.newSession.harness = disc.harness;
+        state.newSession.model = disc.model;
+        state.newSession.effort = "medium";
+        state.newSession.hintState = "reverted";
+      }
+      renderNewSession();
+    });
+  });
+
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(function () { scheduleDrawEdges(); });
+    ro.observe(document.getElementById("rt2-canvas"));
+  }
+  window.addEventListener("resize", scheduleDrawEdges);
+
+  syncThemeButton();
+  renderTree();
+  renderNewSession();
+})();
+</script>
