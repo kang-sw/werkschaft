@@ -168,7 +168,7 @@ func verifyAdapterEnv(env []string, root string, paths []string) ([]string, erro
 		text := advisory.Text
 		if advisory.Kind == wsdoc.AdvisoryKindFix {
 			// 7-space continuation, matching the FIX:/CHECK: hanging indent.
-			text += "\n       Then git commit --amend --no-edit."
+			text += "\n       Then commit the correction (a follow-up git.commit)."
 		}
 		advisories = append(advisories, text)
 	}

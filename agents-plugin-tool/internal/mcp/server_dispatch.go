@@ -1016,7 +1016,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		commitKey, _ := params.Arguments["session_key"].(string)
 		commitKey = strings.TrimSpace(commitKey)
 		if commitKey != "" {
-			if rec, ok := s.sessions.readState(commitKey, partTodos); ok && len(rec.Todos) > 0 {
+			// An all-done or all-deferred list has nothing to update, and its
+			// summary renders as a bare "..." block, so it adds no reminder.
+			if rec, ok := s.sessions.readState(commitKey, partTodos); ok && hasActiveTodo(rec.Todos) {
 				commitText += fmt.Sprintf("\n## TODO(%s reminder: update this if stale)\n%s\n", s.runtimeNamespace(), renderTodos(rec.Todos, false))
 			}
 		}

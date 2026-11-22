@@ -156,8 +156,10 @@ func TestTicketGraphFlagsUnresolvableRelated(t *testing.T) {
 		"  260726-nope-not-a-thing: why it matters")
 
 	result := f.verify(child)
-	advisory := onlyAdvisory(t, result, AdvisoryKindFix)
-	requireContainsFlat(t, advisory.Text, "related: `260726-nope-not-a-thing` resolves to no ticket stem. Correct or remove the entry.")
+	advisory := onlyAdvisory(t, result, AdvisoryKindCheck)
+	requireContains(t, advisory.Text, "CHECK:")
+	requireContainsFlat(t, advisory.Text, "related: `260726-nope-not-a-thing` is not on this branch; if it lives on an unmerged branch, leave it; otherwise correct or remove the entry.")
+	requireNotContains(t, advisory.Text, "--amend")
 }
 
 func TestTicketGraphParentCycleSuppressesBoard(t *testing.T) {
@@ -294,7 +296,7 @@ func TestTicketGraphBoardAncestorAlreadyClosed(t *testing.T) {
 
 // `related:` and `parent:` both resolve against ticket stems only. The
 // spec-anchor half of `related:` resolution retired with the spec layer, so a
-// non-ticket target is now a FIX from either key — pinned here so a
+// non-ticket target is a CHECK from `related:` and a FIX from `parent:` — pinned here so a
 // reintroduced anchor set fails.
 func TestTicketGraphRelatedAndParentResolveTicketStemsOnly(t *testing.T) {
 	f := newGraphFixture(t)
@@ -302,8 +304,8 @@ func TestTicketGraphRelatedAndParentResolveTicketStemsOnly(t *testing.T) {
 	related := f.ticket("todo", "260726-feat-points-at-nonticket",
 		"related:",
 		"  260513-harness-local-agent-tier-config: former spec reference")
-	advisory := onlyAdvisory(t, f.verify(related), AdvisoryKindFix)
-	requireContainsFlat(t, advisory.Text, "related: `260513-harness-local-agent-tier-config` resolves to no ticket stem.")
+	advisory := onlyAdvisory(t, f.verify(related), AdvisoryKindCheck)
+	requireContainsFlat(t, advisory.Text, "related: `260513-harness-local-agent-tier-config` is not on this branch; if it lives on an unmerged branch, leave it; otherwise correct or remove the entry.")
 
 	parented := f.ticket("todo", "260726-feat-parents-at-nonticket",
 		"parent: 260513-harness-local-agent-tier-config")
@@ -405,8 +407,8 @@ func TestTicketGraphAppliesIntegrityCap(t *testing.T) {
 		t.Fatalf("Advisories = %v, want 5 capped entries plus one overflow line", advisoryKinds(result.Advisories))
 	}
 	for i, advisory := range result.Advisories[:5] {
-		if advisory.Kind != AdvisoryKindFix {
-			t.Fatalf("advisory %d kind = %q, want %q", i, advisory.Kind, AdvisoryKindFix)
+		if advisory.Kind != AdvisoryKindCheck {
+			t.Fatalf("advisory %d kind = %q, want %q", i, advisory.Kind, AdvisoryKindCheck)
 		}
 	}
 	overflow := result.Advisories[5]
@@ -414,7 +416,7 @@ func TestTicketGraphAppliesIntegrityCap(t *testing.T) {
 		t.Fatalf("overflow advisory = %q, want %q", overflow.Text, "... +1 more")
 	}
 	// The overflow marker carries no remedy, so it must never attract the
-	// commit path's amend recipe.
+	// commit path's follow-up recipe.
 	if overflow.Kind == AdvisoryKindFix {
 		t.Fatalf("overflow advisory kind = %q, want a non-fix kind", overflow.Kind)
 	}
@@ -459,8 +461,8 @@ func TestTicketGraphIntegritySubjectIsTheVerifiedFileNotTheStem(t *testing.T) {
 		f.ticket("todo", "260726-feat-two-copies")
 		closed := f.ticket(".done", "260726-feat-two-copies", dangling...)
 
-		advisory := onlyAdvisory(t, f.verify(closed), AdvisoryKindFix)
-		requireContainsFlat(t, advisory.Text, "related: `260726-nope-on-this-copy` resolves to no ticket stem")
+		advisory := onlyAdvisory(t, f.verify(closed), AdvisoryKindCheck)
+		requireContainsFlat(t, advisory.Text, "related: `260726-nope-on-this-copy` is not on this branch")
 	})
 
 	t.Run("dangling on the open copy", func(t *testing.T) {
@@ -468,8 +470,8 @@ func TestTicketGraphIntegritySubjectIsTheVerifiedFileNotTheStem(t *testing.T) {
 		open := f.ticket("todo", "260726-feat-two-copies", dangling...)
 		f.ticket(".done", "260726-feat-two-copies")
 
-		advisory := onlyAdvisory(t, f.verify(open), AdvisoryKindFix)
-		requireContainsFlat(t, advisory.Text, "related: `260726-nope-on-this-copy` resolves to no ticket stem")
+		advisory := onlyAdvisory(t, f.verify(open), AdvisoryKindCheck)
+		requireContainsFlat(t, advisory.Text, "related: `260726-nope-on-this-copy` is not on this branch")
 	})
 }
 
@@ -730,8 +732,8 @@ func TestTicketGraphChecksListFormRelated(t *testing.T) {
 		"  - 260726-nope-list-form  # historical reference")
 
 	result := f.verify(child)
-	advisory := onlyAdvisory(t, result, AdvisoryKindFix)
-	requireContainsFlat(t, advisory.Text, "related: `260726-nope-list-form` resolves to no ticket stem.")
+	advisory := onlyAdvisory(t, result, AdvisoryKindCheck)
+	requireContainsFlat(t, advisory.Text, "related: `260726-nope-list-form` is not on this branch")
 }
 
 // --- Degrade to silence -----------------------------------------------------

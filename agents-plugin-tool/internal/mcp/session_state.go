@@ -88,6 +88,16 @@ func todoActive(status todoStatus) bool {
 	return status == todoPending || status == todoWip
 }
 
+// hasActiveTodo reports whether any item is pending or wip.
+func hasActiveTodo(list []todoItem) bool {
+	for _, item := range list {
+		if todoActive(item.Status) {
+			return true
+		}
+	}
+	return false
+}
+
 // indexOfTodo returns the position of key in list, or -1 when absent.
 func indexOfTodo(list []todoItem, key string) int {
 	key = strings.ToLower(key)

@@ -30,3 +30,8 @@ messages brief; the caller merges back.
 - All output in English regardless of message language.
 - Do not modify files outside the task scope without escalating to the caller.
 - Do not merge sub-branches; the caller reviews and merges after the report.
+  This forbids merging your branch into its parent. When the caller directs you
+  to bring the parent in, start with native git
+  (`git -c merge.directoryRenames=false merge --no-ff --no-commit <source>`),
+  resolve conflicts, then finish with the workflow `git.commit` tool, listing the
+  resolved paths plus any paths its refusal names.

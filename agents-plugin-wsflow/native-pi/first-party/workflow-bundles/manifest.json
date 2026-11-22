@@ -1,6 +1,6 @@
 {
   "ws": {
-    "archive_sha256": "6129b631f43cf3648b8fb80bd764801fe4b0bbed84f19a4af74e6ba28168f5f1",
+    "archive_sha256": "556b30b2b34a6a2ad6105e9421ef59d097e0c7b9a8a13ff568664145ad941d2a",
     "files": {
       ".claude-plugin/plugin.json": "ab391c9b4b8f55831caddc04c3ceef91392b67d684461220238b438ead48bba0",
       ".codex-plugin/hooks.json": "e3f3ea60f82fb0795c63bf54b9208647f39cb3779f050d1c755fabdc8a434490",
@@ -17,7 +17,7 @@
       "claude-agents/effort-medium.md": "f795e9dda59cb032cf1637ffd96d122765fbb221524bb8d9804b3060a944afc2",
       "claude-agents/effort-xhigh.md": "c00ceaba0634c1ccbf3155dc62ea6fe6d821ecf644a1b62eb3a7eec26b8424c4",
       "config-manifest.json": "973e2d264bad322113b13cd64de7c3296c07715de4a1e8625ffea6d2f96099ad",
-      "dashboard-config-manifest.json": "9c10a167cf8dbe853e4262c36b90c43ae653202eaf87ba4184582778759cddea",
+      "dashboard-config-manifest.json": "04996bed4e2def05e98cf3ce9ccbda67b9a6b7a7d62bfc7b7a7bae30e53c45e6",
       "hooks/claude-mod/band.tsx": "73b448da33fac9939e98edd923e57c69b4ebe8f37097202365d5b591bb5e598b",
       "hooks/claude-mod/captions.tsx": "cb9c350bb9e63cf502140dd61633be2df40256db152b467fb667d7f751925feb",
       "hooks/claude-mod/compaction.ts": "e1526f655cede90f4f75b3967562a7dd07566cc9fd56eecc827b7041e360f5b9",
@@ -68,7 +68,7 @@
       "rsrc/lead-workflow-manual/native-spawn-binding.claude.md": "fc7258226abd15ad2baef2ef8a361f6777d8390868a595853f61812def0cf310",
       "rsrc/lead-workflow-manual/native-spawn-binding.codex.md": "ea1977984de016a95df292c3384e93982aa67b12bbd5e8850c7ed792acbdf284",
       "rsrc/lead-workflow-manual/native-spawn-binding.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "rsrc/manifest.json": "d355d35b2094bbfbe1f7f300f5419f415f91cff985574a3e5ee6ac952455a64d",
+      "rsrc/manifest.json": "84515a1955ffdc5531ef90cebc8560d355dc71e4131b1956ff3ba08886b48a34",
       "rsrc/reference-discovery/reference-discovery.md": "1c28d76c2a03efd2889936ee9091715f93b75553d88d9e20b15ee37de8c48b6c",
       "rsrc/review-config/review-config.md": "dfbbf5be52c83cfb4f86edb862f8e7b135afcc7f5efb9433e808d08ac37ff53b",
       "rsrc/review-handler/review-handler.md": "1e98d3efa721e90983925bc320b5fe7e83a9d9fef275d662fe540d02c1859dcc",
@@ -79,7 +79,7 @@
       "rsrc/sample-playbook/sample-playbook.md": "f813e57e9c3af21a911072c992f19afa7e8fd63b085d7527c315665543762673",
       "rsrc/ship-config/ship-config.md": "174f0bb41025ab84bc91e50a72f8d44b7b27f36b14c98dc643738fc5a0004422",
       "rsrc/ship-handler/ship-handler.md": "0ac32bbfd9828bcb612a4a43409ca627615949b82ee69dc7b3732eff0dfa9555",
-      "rsrc/subagent-rules.md": "ef426a9d54e63ac8325c6ab7d3f65b1a57ef0174239df9fcb9c28c081135d2c5",
+      "rsrc/subagent-rules.md": "4e55f61ded71e914b85bc83ff16c9d7644798ff2fa3267f356d804f07d00f4df",
       "rsrc/ticket-batch-selector/ticket-batch-selector.md": "24c7781e6426e42f81f47be62e05c23fe6fd44299c016389a9495e58ab7f29b1",
       "rsrc/ticket-classifier/ticket-classifier.md": "1bbc132d88b7348b2332e3750bd6da406697d90cad9fb9acc5f789a7cdfd23c5",
       "rsrc/ticket-fact-populator/ticket-fact-populator.md": "cf3288402ab6b079bea9e6a7ed1f6820a65cde8df27d82d3a77e22649a013fd6",
@@ -115,7 +115,7 @@
     }
   },
   "wsflow": {
-    "archive_sha256": "4a3640bdf7a770254724ba8be672c880deabd623e865a096236ef9936193128a",
+    "archive_sha256": "1394fadaccdd2b49a2c90f74c763871c3b8899c85aa567ba75e462f7ceef5c29",
     "files": {
       ".claude-plugin/plugin.json": "86ff6069699a7f64dc452778abeb6c5cfb62cebc7d4a2bcc05ad3dbd3f8c3888",
       ".codex-plugin/plugin.json": "f85cb89d304896083240c613f80a9eb2abd63ba8eb6db1796ff503b44abd710f",
@@ -131,7 +131,7 @@
       "claude-agents/effort-medium.md": "f795e9dda59cb032cf1637ffd96d122765fbb221524bb8d9804b3060a944afc2",
       "claude-agents/effort-xhigh.md": "c00ceaba0634c1ccbf3155dc62ea6fe6d821ecf644a1b62eb3a7eec26b8424c4",
       "config-manifest.json": "71471746ed1a455c9126695f3aa2469aadc516050a9a25ae587c08050e0b220a",
-      "dashboard-config-manifest.json": "ea4aae5864015c2f764118f3254b437aa263aaae26b4801d66e137cb07f99f56",
+      "dashboard-config-manifest.json": "74360336a73d248c05df1773248d88f1271bdcc6bf60e32b0f837bbc62081c8b",
       "hooks/claude-mod/band.tsx": "73b448da33fac9939e98edd923e57c69b4ebe8f37097202365d5b591bb5e598b",
       "hooks/claude-mod/captions.tsx": "cb9c350bb9e63cf502140dd61633be2df40256db152b467fb667d7f751925feb",
       "hooks/claude-mod/compaction.ts": "e1526f655cede90f4f75b3967562a7dd07566cc9fd56eecc827b7041e360f5b9",
@@ -182,7 +182,7 @@
       "rsrc/lead-workflow-manual/native-spawn-binding.claude.md": "fc7258226abd15ad2baef2ef8a361f6777d8390868a595853f61812def0cf310",
       "rsrc/lead-workflow-manual/native-spawn-binding.codex.md": "ea1977984de016a95df292c3384e93982aa67b12bbd5e8850c7ed792acbdf284",
       "rsrc/lead-workflow-manual/native-spawn-binding.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "rsrc/manifest.json": "d355d35b2094bbfbe1f7f300f5419f415f91cff985574a3e5ee6ac952455a64d",
+      "rsrc/manifest.json": "84515a1955ffdc5531ef90cebc8560d355dc71e4131b1956ff3ba08886b48a34",
       "rsrc/reference-discovery/reference-discovery.md": "1c28d76c2a03efd2889936ee9091715f93b75553d88d9e20b15ee37de8c48b6c",
       "rsrc/review-config/review-config.md": "dfbbf5be52c83cfb4f86edb862f8e7b135afcc7f5efb9433e808d08ac37ff53b",
       "rsrc/review-handler/review-handler.md": "1e98d3efa721e90983925bc320b5fe7e83a9d9fef275d662fe540d02c1859dcc",
@@ -193,7 +193,7 @@
       "rsrc/sample-playbook/sample-playbook.md": "f813e57e9c3af21a911072c992f19afa7e8fd63b085d7527c315665543762673",
       "rsrc/ship-config/ship-config.md": "174f0bb41025ab84bc91e50a72f8d44b7b27f36b14c98dc643738fc5a0004422",
       "rsrc/ship-handler/ship-handler.md": "0ac32bbfd9828bcb612a4a43409ca627615949b82ee69dc7b3732eff0dfa9555",
-      "rsrc/subagent-rules.md": "ef426a9d54e63ac8325c6ab7d3f65b1a57ef0174239df9fcb9c28c081135d2c5",
+      "rsrc/subagent-rules.md": "4e55f61ded71e914b85bc83ff16c9d7644798ff2fa3267f356d804f07d00f4df",
       "rsrc/ticket-batch-selector/ticket-batch-selector.md": "24c7781e6426e42f81f47be62e05c23fe6fd44299c016389a9495e58ab7f29b1",
       "rsrc/ticket-classifier/ticket-classifier.md": "1bbc132d88b7348b2332e3750bd6da406697d90cad9fb9acc5f789a7cdfd23c5",
       "rsrc/ticket-fact-populator/ticket-fact-populator.md": "cf3288402ab6b079bea9e6a7ed1f6820a65cde8df27d82d3a77e22649a013fd6",

@@ -45,7 +45,7 @@
     "sample-playbook/sample-playbook.md": "f813e57e9c3af21a911072c992f19afa7e8fd63b085d7527c315665543762673",
     "ship-config/ship-config.md": "174f0bb41025ab84bc91e50a72f8d44b7b27f36b14c98dc643738fc5a0004422",
     "ship-handler/ship-handler.md": "0ac32bbfd9828bcb612a4a43409ca627615949b82ee69dc7b3732eff0dfa9555",
-    "subagent-rules.md": "ef426a9d54e63ac8325c6ab7d3f65b1a57ef0174239df9fcb9c28c081135d2c5",
+    "subagent-rules.md": "4e55f61ded71e914b85bc83ff16c9d7644798ff2fa3267f356d804f07d00f4df",
     "ticket-batch-selector/ticket-batch-selector.md": "24c7781e6426e42f81f47be62e05c23fe6fd44299c016389a9495e58ab7f29b1",
     "ticket-classifier/ticket-classifier.md": "1bbc132d88b7348b2332e3750bd6da406697d90cad9fb9acc5f789a7cdfd23c5",
     "ticket-fact-populator/ticket-fact-populator.md": "cf3288402ab6b079bea9e6a7ed1f6820a65cde8df27d82d3a77e22649a013fd6",

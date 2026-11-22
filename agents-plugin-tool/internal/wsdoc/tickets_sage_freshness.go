@@ -76,6 +76,7 @@ func sageReviewFreshnessCheck(env []string, root, ticketRel string, stages []str
 	}
 	currentClean := normalizeTicketForSageFreshness(string(currentRaw))
 	currentDigest := sageReviewBodyDigest(string(currentRaw))
+	currentFullDigest := sageReviewFullBodyDigest(string(currentRaw))
 	currentFM := frontmatterFromText(string(currentRaw))
 	var affected []string
 	var baselines []string
@@ -84,7 +85,7 @@ func sageReviewFreshnessCheck(env []string, root, ticketRel string, stages []str
 		if recorded, ok := currentFM[field+"-reviewed"].(string); ok && strings.TrimSpace(recorded) != "" {
 			// Primary path: compare the recorded digest against the current body
 			// digest directly. No git walk on this path.
-			if strings.TrimSpace(recorded) == currentDigest {
+			if recorded = strings.TrimSpace(recorded); recorded == currentDigest || recorded == currentFullDigest {
 				continue
 			}
 			affected = append(affected, stage)
@@ -241,15 +242,15 @@ func sageReviewCurrentTicketContent(env []string, root, ticketRel string) ([]byt
 	return os.ReadFile(filepath.Join(root, filepath.FromSlash(ticketRel)))
 }
 
-// normalizeTicketForSageFreshness returns the markdown body below the
-// frontmatter fence, trimmed. The whole frontmatter block is excluded (not
-// just sage-review* keys) so any frontmatter-only edit (title, related,
+// ticketBodyBelowFrontmatter returns the markdown body below the frontmatter
+// fence, trimmed. The whole frontmatter block is excluded (not just
+// sage-review* keys) so any frontmatter-only edit (title, related,
 // sage-review* postures/digests, ...) never perturbs the freshness/digest
 // comparison. When the text has no leading `---` fence, or the closing fence
 // is missing, the whole trimmed text is returned instead — a graceful
 // degrade for malformed input rather than collapsing to "" (which would
 // falsely equate all malformed tickets as identical).
-func normalizeTicketForSageFreshness(text string) string {
+func ticketBodyBelowFrontmatter(text string) string {
 	lines := strings.Split(text, "\n")
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
 		return strings.TrimSpace(text)
@@ -262,13 +263,110 @@ func normalizeTicketForSageFreshness(text string) string {
 	return strings.TrimSpace(text)
 }
 
+// normalizeTicketForSageFreshness returns the body below the frontmatter with
+// every `### Result` section and every `#### Edition` block removed, trimmed.
+// A worker appending its Result to a stamped ticket therefore never makes the
+// stamp stale. A Result section runs to the next `### ` or `## ` heading and
+// takes its Edition blocks with it; a stray Edition block runs to the next
+// heading of level 4 or higher. Headings inside fenced code are ignored.
+func normalizeTicketForSageFreshness(text string) string {
+	return stripTicketResultSections(ticketBodyBelowFrontmatter(text))
+}
+
+func stripTicketResultSections(body string) string {
+	lines := strings.Split(body, "\n")
+	kept := make([]string, 0, len(lines))
+	fence := ""
+	// skip is "" when keeping, "result" inside a Result section, "edition"
+	// inside a stray Edition block.
+	skip := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if fence != "" {
+			if strings.HasPrefix(trimmed, fence) {
+				fence = ""
+			}
+			if skip == "" {
+				kept = append(kept, line)
+			}
+			continue
+		}
+		if marker := sageFenceMarker(trimmed); marker != "" {
+			fence = marker
+			if skip == "" {
+				kept = append(kept, line)
+			}
+			continue
+		}
+		if level, title, ok := sageHeading(line); ok {
+			switch {
+			case level <= 3 && skip != "":
+				skip = ""
+			case level == 4 && skip == "edition":
+				skip = ""
+			}
+			if skip == "" {
+				switch {
+				case level == 3 && sageHeadingNamed(title, "Result"):
+					skip = "result"
+				case level == 4 && sageHeadingNamed(title, "Edition"):
+					skip = "edition"
+				}
+			}
+			// A heading of level 4+ never ends a Result section; a level-4
+			// non-Edition heading ends a stray Edition block.
+		}
+		if skip == "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+func sageHeadingNamed(title, name string) bool {
+	return title == name || strings.HasPrefix(title, name+" ")
+}
+
+func sageFenceMarker(trimmed string) string {
+	for _, m := range []string{"```", "~~~"} {
+		if strings.HasPrefix(trimmed, m) {
+			return m
+		}
+	}
+	return ""
+}
+
+// sageHeading parses an ATX heading line of level 1-6 and returns its level
+// and trimmed title.
+func sageHeading(line string) (int, string, bool) {
+	n := 0
+	for n < len(line) && line[n] == '#' {
+		n++
+	}
+	if n == 0 || n > 6 || n >= len(line) || line[n] != ' ' {
+		return 0, "", false
+	}
+	return n, strings.TrimSpace(line[n+1:]), true
+}
+
 // sageReviewBodyDigest computes the sha256 of the body-only normalized text,
 // truncated to a fixed 16-hex-char prefix. Shared by the write path
 // (tickets_sage.go, on every completed stamp) and the freshness read path
 // (sageReviewFreshnessCheck's primary digest comparison) so both agree on
 // what "the digest" means.
 func sageReviewBodyDigest(text string) string {
-	sum := sha256.Sum256([]byte(normalizeTicketForSageFreshness(text)))
+	return sageDigestOf(normalizeTicketForSageFreshness(text))
+}
+
+// sageReviewFullBodyDigest digests the whole body below the frontmatter,
+// Result sections included: the digest older binaries wrote. The read side
+// accepts it next to the stripped digest so existing stamps stay fresh.
+func sageReviewFullBodyDigest(text string) string {
+	return sageDigestOf(ticketBodyBelowFrontmatter(text))
+}
+
+func sageDigestOf(body string) string {
+	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])[:16]
 }
 

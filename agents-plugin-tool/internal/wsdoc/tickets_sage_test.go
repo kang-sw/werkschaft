@@ -1799,3 +1799,91 @@ func assertEpicTodoGateRuns(t *testing.T, root, stem, path string, cfg SageRevie
 		t.Fatalf("gate did not persist the required posture:\n%s", body)
 	}
 }
+
+func TestNormalizeTicketForSageFreshnessStripsResultAndEditionSections(t *testing.T) {
+	head := "---\ntitle: T\n---\n\n# T\n\n## Phases\n\n### Phase 1: One\n\nplan.\n"
+	cases := []struct {
+		name string
+		tail string
+	}{
+		{"result", "\n### Result (abc1234) - 2026-11-22\n\nlanded.\n"},
+		{"result with edition", "\n### Result (abc1234) - 2026-11-22\n\nlanded.\n\n#### Edition (def5678) - 2026-11-23\n\nrevised.\n"},
+		{"stray edition", "\n#### Edition (def5678) - 2026-11-23\n\nrevised.\n"},
+	}
+	want := normalizeTicketForSageFreshness(head)
+	for _, tc := range cases {
+		if got := normalizeTicketForSageFreshness(head + tc.tail); got != want {
+			t.Errorf("%s: normalized body differs:\n%q\nwant\n%q", tc.name, got, want)
+		}
+	}
+
+	// A section after the Result survives; so does a level-4 heading that
+	// closes a stray Edition block.
+	next := head + "\n### Result (abc1234) - 2026-11-22\n\nlanded.\n\n### Phase 2: Two\n\nmore plan.\n"
+	if got := normalizeTicketForSageFreshness(next); !strings.Contains(got, "Phase 2: Two") || strings.Contains(got, "landed.") {
+		t.Errorf("next phase after Result: %q", got)
+	}
+	edition := head + "\n#### Edition (def5678) - 2026-11-23\n\nrevised.\n\n#### Notes\n\nkept.\n"
+	if got := normalizeTicketForSageFreshness(edition); !strings.Contains(got, "kept.") || strings.Contains(got, "revised.") {
+		t.Errorf("heading after stray Edition: %q", got)
+	}
+
+	// Headings inside fenced code are not sections.
+	fenced := head + "\n```md\n### Result (abc1234) - 2026-11-22\n```\n\nafter fence.\n"
+	if got := normalizeTicketForSageFreshness(fenced); !strings.Contains(got, "### Result (abc1234)") || !strings.Contains(got, "after fence.") {
+		t.Errorf("fenced Result heading was stripped: %q", got)
+	}
+
+	// A non-Result heading edit still changes the digest.
+	if sageReviewBodyDigest(head) == sageReviewBodyDigest(strings.Replace(head, "plan.", "other plan.", 1)) {
+		t.Error("a plan edit must change the digest")
+	}
+}
+
+func TestSageGateResultAppendStaysFreshAndLegacyDigestStillReads(t *testing.T) {
+	root := t.TempDir()
+	stem := "260101-epic-resultappend"
+	path := writeSageTicket(t, root, stem, nil)
+	initSageFreshnessRepo(t, root)
+	commitSageFreshnessRepo(t, root, "initial")
+	if _, err := SageRecord(root, SageRecordOptions{
+		TicketStem: stem, Stage: "design", Today: "2026-07-29",
+		Verdicts: []SageVerdict{{Reviewer: "design", Verdict: "pass"}},
+	}); err != nil {
+		t.Fatalf("SageRecord: %v", err)
+	}
+	commitSageFreshnessRepo(t, root, "stamp review")
+
+	stamped := readFileString(t, path)
+	withResult := stamped + "\n### Result (abc1234) - 2026-11-22\n\nlanded.\n"
+	if err := os.WriteFile(path, []byte(withResult), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := sageReviewFreshnessCheck(nil, root, "ai-docs/tickets/todo/"+stem+".md", []string{"design"})
+	if err != nil || len(f.Stages) != 0 {
+		t.Fatalf("Result append: freshness = %+v, err = %v, want fresh", f, err)
+	}
+
+	// A stamp written by an older binary digested the whole body, Result
+	// included; it must keep reading fresh.
+	legacy := strings.Replace(withResult,
+		"sage-review-design-reviewed: "+frontmatterFromText(withResult)["sage-review-design-reviewed"].(string),
+		"sage-review-design-reviewed: "+sageReviewFullBodyDigest(withResult), 1)
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err = sageReviewFreshnessCheck(nil, root, "ai-docs/tickets/todo/"+stem+".md", []string{"design"})
+	if err != nil || len(f.Stages) != 0 {
+		t.Fatalf("legacy full-body digest: freshness = %+v, err = %v, want fresh", f, err)
+	}
+
+	// A plan edit still goes stale.
+	edited := strings.Replace(withResult, "Body text.", "Body text edited.", 1)
+	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err = sageReviewFreshnessCheck(nil, root, "ai-docs/tickets/todo/"+stem+".md", []string{"design"})
+	if err != nil || len(f.Stages) != 1 {
+		t.Fatalf("body edit: freshness = %+v, err = %v, want stale", f, err)
+	}
+}
