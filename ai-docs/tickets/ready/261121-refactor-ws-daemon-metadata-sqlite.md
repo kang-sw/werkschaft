@@ -1145,6 +1145,117 @@ Verification (macOS arm64):
 - `go build ./...`: ok.
 - `gofmt`: clean.
 
+#### Edition (58507fcbf) - 2026-11-22
+
+The re-review of 2976c3d53..68fdc2bd1 confirmed I1 and I2 fixed. It found
+3 Critical, 1 Important and 1 Minor issue. All five are fixed, one commit
+each, none rebutted. Each new test failed on the code before its fix.
+
+Critical fixes:
+
+- **The fallback decision forgot a discarded fence (C3), 45636bf75:**
+  every fence record now sets the meta key `cutover_started` in its own
+  transaction, before its publication, and nothing clears it. Before,
+  the decision read only capture rows, which a pass deletes for a
+  vanished session. Test: `TestRefusalAfterAFenceIsNeverTheFallback/
+  after_a_pass_discarded_the_fenced_rows`.
+- **A reusable POSIX identity proved a removal (C1), a0b075d71:** witness
+  identities are compared with `sameIncarnation`: equal tokens that carry
+  a birth time (POSIX) or the NTFS file index. Device and inode alone
+  never prove a witness.
+  - The cutover is refused, by the same rule as the barrier, on a volume
+    whose directory identity has no such evidence. That is Linux without
+    statx birth times (a seccomp sandbox, older tmpfs) and other Unix
+    systems.
+  - A removal source whose own identity lacks it is refused before its
+    record.
+  - macOS (APFS), ext4/xfs/btrfs and NTFS pass; CI's ubuntu `/tmp` is
+    ext4.
+
+  Test: `TestReusableIdentityNeverProvesARemoval`.
+- **An NTFS short name of the witness (C2), 677dc5def:** each path
+  component in the witness's directory is resolved to its long name
+  (`entryName`, which calls FindFirstFile on Windows) before the
+  comparison. Hard links still move intact.
+  - Seam test: `TestRemovalNeverClearsAWitnessThroughAnAlternateName`.
+  - Real short-name test: `TestShortNameOfTheWitnessIsTheWitness` (Windows
+    only: compiled, not run).
+
+Important fix:
+
+- **A denied witness blocked a re-fence (I3), 4e8324637:** the witness
+  cleanup now reads a confirmable denial as the unreadable state the
+  last removal recorded. The recorded identity then decides, as before.
+  Test: two subtests of `TestConfirmedDenialMovesWithTheWitness`.
+
+Minor fix:
+
+- **Windows symlink privilege (58507fcbf):** `mustSymlink` skips only on
+  `ERROR_PRIVILEGE_NOT_HELD`.
+
+Remaining class of problem: the removal fence moves the owner's
+directory entry and later proves "this witness entry is the file we
+moved". Each round has found another way two names or two files can
+look alike on some platform:
+
+- inode reuse
+- creation-time tunneling
+- case folding
+- link chains
+- directory aliases
+- 8.3 short names
+- an ACL that moves with the file
+
+Cases not yet handled, from the same class:
+
+- APFS normalization-insensitive names: an NFD spelling of the witness
+  passes `EqualFold`.
+- NTFS stream syntax: `name::$DATA` opens the witness itself.
+- overlayfs copy-up: the identity changes without the file changing, so
+  the removal stays pending.
+
+Replacement fences have needed no such fixes since their sentinel proof
+landed.
+
+Simpler alternative (needs a lead decision): publish the removal like a
+replacement and never move the owner's entry.
+
+- Write the staged original's bytes to the witness through `publishFile`
+  under a fresh sentinel mtime, then delete the legacy path durably.
+- Proof is the path absent and the witness matching the original's
+  digest under its exact sentinel. That is the replacement proof.
+- This removes `witness_id`, `sameIncarnation`, `routesThrough`,
+  `entryName` and the denied-witness logic.
+- The witness cleanup check becomes the same sentinel check.
+- The barrier for a re-applied deletion stays.
+
+It fits the Decision at line 398 ("retaining its bytes and making the
+config available through a new-daemon-only input path"). The move is
+only an implementation choice of the C1 Result at line 706. Two
+behaviors differ:
+
+- A legacy `tracker-hooks.json` that is a symbolic link becomes a copy
+  of its target. Later edits to the target no longer reach the new
+  daemon, which touches "owner-controlled reload".
+- An unreadable original has no bytes to publish. It needs its own rule,
+  either a refusal or a plain retire.
+
+New observation, not fixed: a session whose directory is moved aside
+during the cutover loses its journal rows, its staged original included.
+When the directory is restored, its fenced selector is staged as the
+original and imported as invalid. C3 above only keeps the fallback
+decision correct. The original itself is lost to the journal.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (15.7 s).
+- `go test -count=1 ./internal/wsmeta/`: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok, and
+  `GOOS=windows go test -c` builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
 
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
