@@ -121,6 +121,10 @@ type DaemonOptions struct {
 	// single-prompt call (companion_director.go); nil leaves the agent
 	// director inert, and rules mode is unaffected.
 	CompanionOneShot CompanionOneShotFunc
+	// CompanionHasOneShot reports, from memory, whether a harness has a
+	// one-shot mode; a trigger on a harness without one drops before the
+	// limiter charges it. Nil treats every harness as having one.
+	CompanionHasOneShot func(harness string) bool
 	// CardBound reports whether replyID is bound to a subordinate whiteboard
 	// agent card whose Record.Parent stays unset; nil defaults to false.
 	CardBound func(replyID string) bool

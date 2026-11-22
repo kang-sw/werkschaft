@@ -118,6 +118,8 @@ type companionWatch struct {
 
 type companionDirector struct {
 	oneShot CompanionOneShotFunc
+	// hasOneShot reports a harness's one-shot mode; nil is always true.
+	hasOneShot func(harness string) bool
 	// now is a test clock; nil is time.Now.
 	now func() time.Time
 	// idleAfter replaces companionIdleAfter in tests; zero is the default.
@@ -131,7 +133,8 @@ type companionDirector struct {
 	lastCall time.Time
 	running  bool
 	dropped  map[string]int
-	// digests counts built digests, spawns started calls (inertness tests).
+	// digests counts built digests, spawns started calls (inertness and
+	// limiter tests).
 	digests, spawns int
 }
 
@@ -251,8 +254,11 @@ func (d *Daemon) directorObserveSnapshot(replyID string, snap *wslive.Snapshot, 
 	if c.watch.sessionID != replyID {
 		c.resetWatchLocked(replyID)
 	}
+	seeded := c.watch.seeded
 	triggers := c.watch.observe(snap, asks)
-	if changed || len(triggers) > 0 {
+	// Seeding starts the idle stretch too, so a session already quiet when
+	// it gains focus still reaches the long-idle trigger.
+	if changed || len(triggers) > 0 || !seeded {
 		d.directorActivityLocked(now)
 	}
 	c.mu.Unlock()
@@ -329,7 +335,9 @@ func (w *companionWatch) observe(snap *wslive.Snapshot, asks string) []string {
 	if lead.TurnStartedAt != w.turnAt {
 		previous = 0
 	}
-	if seeded && lead.Failed > previous {
+	// A turn-end snapshot keeps the ended turn's count, so only a running
+	// turn can show a new failure.
+	if seeded && lead.TurnStartedAt > 0 && lead.Failed > previous {
 		out = append(out, companionTriggerToolError)
 	}
 	// Commit or merge: once per batch carrying such a call.
@@ -382,6 +390,7 @@ func (w *companionWatch) observe(snap *wslive.Snapshot, asks string) []string {
 // companionCall is one admitted trigger's inputs, copied under the lock.
 type companionCall struct {
 	sessionID, pack, kind string
+	harness               string
 	phase                 string
 	turnActive            bool
 	failed, asks          int
@@ -389,36 +398,51 @@ type companionCall struct {
 
 // directorFire applies the limiter (Decision 2): a trigger inside the
 // cooldown, over the hourly cap, or while a call runs is dropped, not queued.
-// The cap is a rolling window over spawned calls only.
+// A harness without a one-shot mode drops first, from memory. Admission only
+// reserves the running slot; the cooldown and the cap's rolling window are
+// charged when a process is about to spawn (recordLocked), so a trigger that
+// spawns nothing never starves a later call.
 func (d *Daemon) directorFire(sessionID, kind string) {
 	c := &d.director
+	harness := ""
+	if d.index != nil {
+		if s, ok := d.index.Session(sessionID); ok {
+			harness = s.Registration.Harness
+		}
+	}
 	cfg := d.companion.current().config
 	cooldown := time.Duration(min(max(cfg.AgentCooldownSeconds, 10), 3600)) * time.Second
 	limit := min(max(cfg.AgentHourlyCap, 1), 120)
 	c.mu.Lock()
 	focus := c.focusLocked()
-	if focus.sessionID != sessionID {
-		c.dropLocked("unfocused")
-		c.mu.Unlock()
-		return
+	reason := ""
+	switch {
+	case focus.sessionID != sessionID:
+		reason = "unfocused"
+	case harness == "":
+		reason = "no-harness"
+	case c.hasOneShot != nil && !c.hasOneShot(harness):
+		reason = "no-oneshot"
+	default:
+		reason = c.admitLocked(c.clock(), cooldown, limit)
 	}
-	if reason := c.admitLocked(c.clock(), cooldown, limit); reason != "" {
+	if reason != "" {
 		c.dropLocked(reason)
 		c.mu.Unlock()
 		return
 	}
 	call := companionCall{
-		sessionID: sessionID, pack: focus.pack, kind: kind, phase: c.watch.phase,
+		sessionID: sessionID, pack: focus.pack, kind: kind, harness: harness, phase: c.watch.phase,
 		turnActive: c.watch.turnAt > 0, failed: c.watch.failed, asks: len(c.watch.asks),
 	}
 	c.mu.Unlock()
 	go d.directorCall(call)
 }
 
-// admitLocked admits one call at now, recording it, or returns why the
-// trigger drops: busy (a call runs), cooldown (since the last spawned call),
-// or cap (spawned calls in the rolling window ending at now; a call exactly
-// one window old has left it).
+// admitLocked reserves the running slot at now, or returns why the trigger
+// drops: busy (a call runs), cooldown (since the last spawned call), or cap
+// (spawned calls in the rolling window ending at now; a call exactly one
+// window old has left it). It charges nothing; recordLocked does.
 func (c *companionDirector) admitLocked(now time.Time, cooldown time.Duration, limit int) string {
 	switch {
 	case c.running:
@@ -430,10 +454,14 @@ func (c *companionDirector) admitLocked(now time.Time, cooldown time.Duration, l
 	if len(c.calls) >= limit {
 		return "cap"
 	}
-	c.calls = append(c.calls, now)
-	c.lastCall = now
 	c.running = true
 	return ""
+}
+
+// recordLocked charges one spawned call at now to the cooldown and the cap.
+func (c *companionDirector) recordLocked(now time.Time) {
+	c.calls = append(c.calls, now)
+	c.lastCall = now
 }
 
 // directorCall builds the digest and prompt, runs the one-shot call, and
@@ -446,8 +474,15 @@ func (d *Daemon) directorCall(call companionCall) {
 		c.running = false
 		c.mu.Unlock()
 	}()
-	outcome := d.directorRun(call)
+	outcome, spawned := d.directorRun(call)
 	c.mu.Lock()
+	if !spawned {
+		// Nothing ran: count it with the drops (memory only) and log it with
+		// the next spawned call rather than writing a line per trigger.
+		c.dropLocked(outcome)
+		c.mu.Unlock()
+		return
+	}
 	dropped, c.dropped = c.dropped, nil
 	c.mu.Unlock()
 	if d.log != nil {
@@ -471,25 +506,19 @@ func companionDropSummary(dropped map[string]int) string {
 	return strings.Join(parts, " ")
 }
 
-func (d *Daemon) directorRun(call companionCall) string {
+// directorRun reports the call's outcome and whether a process was spawned;
+// an outcome without a spawn is a short drop reason.
+func (d *Daemon) directorRun(call companionCall) (string, bool) {
 	c := &d.director
-	harness := ""
-	if d.index != nil {
-		if s, ok := d.index.Session(call.sessionID); ok {
-			harness = s.Registration.Harness
-		}
-	}
-	if harness == "" {
-		return "no harness"
-	}
+	harness := call.harness
 	opts := d.companionOptions()
 	backend, model, effort, _, err := wsconfig.ResolveAgentTierForHarness(opts, companionDirectorTier, harness)
 	if err != nil {
-		return "tier: " + err.Error()
+		return "tier-error", false
 	}
 	if backend != harness {
 		// No fallback to another harness's account.
-		return "small tier resolves to another harness"
+		return "tier-other-harness", false
 	}
 	pack := d.companionPackFor(call.pack)
 	allowed := companionAllowedIDs(pack)
@@ -504,6 +533,7 @@ func (d *Daemon) directorRun(call companionCall) string {
 	}
 	digest := companionDigest(call, d.companionRing(call.sessionID))
 	c.mu.Lock()
+	c.recordLocked(c.clock())
 	c.digests++
 	c.spawns++
 	c.mu.Unlock()
@@ -519,17 +549,17 @@ func (d *Daemon) directorRun(call companionCall) string {
 	}()
 	reply, err := c.oneShot(ctx, harness, model, effort, prompt)
 	if err != nil {
-		return "call: " + err.Error()
+		return "call: " + err.Error(), true
 	}
 	cmd, ok := parseCompanionReply(reply, allowed)
 	if !ok {
-		return "reply discarded"
+		return "reply discarded", true
 	}
 	cmd.SessionID = call.sessionID
 	if !d.PublishCompanionCommand(cmd) {
-		return "publish refused"
+		return "publish refused", true
 	}
-	return "published"
+	return "published", true
 }
 
 // companionRing returns the focused session's newest ring entries from the
@@ -632,7 +662,10 @@ func companionAllowedIDs(pack companionPackData) map[string][]string {
 		var out []string
 		for _, list := range lists {
 			for _, id := range list {
-				if id == "" || seen[id] || companionUndirected[id] || len(id) > companionCommandIDLimit {
+				// The lists sit in the prompt's instruction part, so a pack key
+				// outside the plain ID charset (spaces, newlines, quoting
+				// marks) is dropped rather than quoted.
+				if seen[id] || companionUndirected[id] || len(id) > companionCommandIDLimit || !companionTimingID.MatchString(id) {
 					continue
 				}
 				seen[id] = true
@@ -818,11 +851,11 @@ func parseCompanionReply(reply string, allowed map[string][]string) (CompanionCo
 	}
 	dec := json.NewDecoder(strings.NewReader(reply))
 	dec.DisallowUnknownFields()
-	if !strings.HasPrefix(reply, "{") || dec.Decode(&in) != nil || dec.More() {
+	if !strings.HasPrefix(reply, "{") || dec.Decode(&in) != nil {
 		return CompanionCommand{}, false
 	}
-	if _, err := dec.Token(); err == nil {
-		return CompanionCommand{}, false // trailing data
+	if strings.TrimSpace(reply[dec.InputOffset():]) != "" {
+		return CompanionCommand{}, false // trailing data, closing delimiters included
 	}
 	pick := func(field, id string) string {
 		if id != "" && slices.Contains(allowed[field], id) {

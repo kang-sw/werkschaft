@@ -45,6 +45,17 @@ const (
 // Windows cmd-shim unwrap).
 type oneShotExecutable interface{ Executable() string }
 
+// HasOneShot reports whether the harness's builtin registration declares an
+// isolated one-shot mode; it reads registrations only, never the CLI.
+func HasOneShot(harness string) bool {
+	reg := builtinRegistration(harness)
+	if reg.OneShot == nil || reg.OneShot.Args == nil {
+		return false
+	}
+	_, ok := reg.Backend.(oneShotExecutable)
+	return ok
+}
+
 // RunOneShot sends prompt to the harness's isolated one-shot mode and returns
 // the trimmed reply. The caller's ctx bounds it; its end kills the process
 // tree. It dispatches only through the builtin registration: a harness with

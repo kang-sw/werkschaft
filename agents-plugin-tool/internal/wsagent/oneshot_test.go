@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -160,16 +161,27 @@ func TestOneShotTimeoutKillsProcessTree(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	t.Setenv("WS_TEST_ONESHOT_PIDFILE", pidFile)
 	reg := fakeOneShot(t, "hang")
-	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	// Cancel once the grandchild has written its pid (bounded), so a loaded
+	// machine's slow start cannot beat the deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	start := time.Now()
+	var cancelledAt atomic.Int64
+	go func() {
+		for start := time.Now(); time.Since(start) < 20*time.Second; time.Sleep(10 * time.Millisecond) {
+			if raw, err := os.ReadFile(pidFile); err == nil && len(strings.TrimSpace(string(raw))) > 0 {
+				break
+			}
+		}
+		cancelledAt.Store(time.Now().UnixNano())
+		cancel()
+	}()
 	_, err := runOneShot(ctx, reg, "fake", "", "", "x")
-	took := time.Since(start)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want deadline exceeded", err)
+	took := time.Since(time.Unix(0, cancelledAt.Load()))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the cancelled context", err)
 	}
 	if took > 5*time.Second {
-		t.Fatalf("returned after %v, want prompt return", took)
+		t.Fatalf("returned %v after the cancel, want prompt return", took)
 	}
 	raw, rerr := os.ReadFile(pidFile)
 	if rerr != nil {
@@ -228,4 +240,12 @@ func TestOneShotHelperProcess(t *testing.T) {
 		time.Sleep(time.Minute)
 	}
 	os.Exit(0)
+}
+
+func TestHasOneShotFollowsRegistrations(t *testing.T) {
+	for harness, want := range map[string]bool{"claude": true, "pi": true, "codex": false, "agy": false, "nope": false} {
+		if got := HasOneShot(harness); got != want {
+			t.Errorf("HasOneShot(%q) = %v, want %v", harness, got, want)
+		}
+	}
 }

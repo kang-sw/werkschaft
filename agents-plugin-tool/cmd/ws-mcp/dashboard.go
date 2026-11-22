@@ -173,7 +173,8 @@ func dashboardCommand(args []string) {
 		HostedExecJobs: func() map[string]int { return host.exec.Load().RunningOwners() },
 		// The companion director's isolated one-shot call, dispatched
 		// through the harness's backend registration.
-		CompanionOneShot: wsagent.RunOneShot,
+		CompanionOneShot:    wsagent.RunOneShot,
+		CompanionHasOneShot: wsagent.HasOneShot,
 		BeforeUnlock: func() {
 			if err := boards.Close(); err != nil {
 				fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)

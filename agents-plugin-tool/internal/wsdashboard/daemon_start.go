@@ -126,6 +126,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		},
 	}
 	d.director.oneShot = opts.CompanionOneShot
+	d.director.hasOneShot = opts.CompanionHasOneShot
 	if err := d.refreshCompanion(); err != nil {
 		fmt.Fprintf(logw, "dashboard: load companion settings: %v\n", err)
 	}
