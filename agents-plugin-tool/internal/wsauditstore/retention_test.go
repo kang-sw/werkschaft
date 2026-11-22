@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1076,5 +1077,63 @@ func TestFailedEvictionSnapshotKeepsQueuedBoundaries(t *testing.T) {
 		if ev.ID == "ev-10" {
 			t.Fatal("source record 10, covered by the queued boundary, was appended late")
 		}
+	}
+}
+
+// TestFailedRingRemovalRelistsOutsideTheStoreLock pins that the relisting a
+// failed whole-ring removal does to account what remains runs without the
+// store-wide lock: every session's Recover takes it, and must not wait on
+// one session's slow or failing disk.
+func TestFailedRingRemovalRelistsOutsideTheStoreLock(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+	s, _ := openTest(t, root, nil)
+	mustAppend(t, s, sourced("gone", 1, wsaudit.KindToolCall))
+	mustAppend(t, s, sourced("other", 1, wsaudit.KindToolCall))
+	if err := s.Finalize(ctx, "other", "holder:1", 1); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	loaded(t, s, "other")
+	origAll, origDir := removeAll, readDir
+	t.Cleanup(func() { removeAll, readDir = origAll, origDir })
+	var failed atomic.Bool
+	entered, release := make(chan struct{}), make(chan struct{})
+	removeAll = func(path string) error {
+		if filepath.Base(path) == "gone" {
+			failed.Store(true)
+			return errors.New("sharing violation")
+		}
+		return origAll(path)
+	}
+	readDir = func(dir string) ([]os.DirEntry, error) {
+		if filepath.Base(dir) == "gone" && failed.CompareAndSwap(true, false) {
+			close(entered)
+			<-release
+		}
+		return origDir(dir)
+	}
+	deleted := make(chan error, 1)
+	go func() { deleted <- s.DeleteSession(ctx, "gone") }()
+	select {
+	case <-entered:
+	case <-time.After(30 * time.Second):
+		close(release)
+		t.Fatal("the failed removal never relisted the ring")
+	}
+	answered := make(chan wsaudit.Recovery, 1)
+	go func() { answered <- s.Recover("other", "holder:1") }()
+	select {
+	case rec := <-answered:
+		close(release)
+		if rec.Boundary != 1 {
+			t.Fatalf("other session's recovery = %+v", rec)
+		}
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("another session's Recover waited on the failed removal's relisting")
+	}
+	if err := <-deleted; err == nil {
+		t.Fatal("failed removal reported success")
 	}
 }

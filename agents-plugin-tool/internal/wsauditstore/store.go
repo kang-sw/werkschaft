@@ -1029,10 +1029,15 @@ func (s *Store) forgetRing(info *sessionInfo) error {
 	info.led.Store(nil)
 	delete(s.dirty, info)
 	info.mu.Unlock()
+	var left int64
+	if err != nil {
+		// Relisted outside s.mu: every session's Recover, Retained and
+		// AppendSourced take it, and must not wait on this disk.
+		left, _ = ringBytes(dir)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
-		left, _ := ringBytes(dir)
 		s.total += left - info.bytes
 		info.bytes = left
 		return fmt.Errorf("remove audit ring of session %s: %w (%d bytes remain)", info.dir, err, left)
