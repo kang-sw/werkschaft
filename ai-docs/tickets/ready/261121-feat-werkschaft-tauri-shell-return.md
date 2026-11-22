@@ -827,3 +827,65 @@ listeners, and scheduled tasks.
 The [macOS owner checklist](../assets/261121-feat-werkschaft-tauri-shell-return/phase-4-macos-owner-checklist.md)
 contains the pending WKWebView viability and paired measurement steps.
 Phase 4 remains open.
+
+#### Windows pass-list rows (b) and (c) rerun - 2026-11-22
+
+**VERIFIED — Scope and build.** The rerun used Windows 11 Pro 25H2
+build 26200.9974 on `DESKTOP-3SUVUA9` and WebView2 Evergreen
+157.0.4341.60. The fixture, profiles, build cache, and evidence lived under
+`C:\Users\ki608\ws-wintest\run-tauri-p4fix-20261122T091503KST`.
+Rust 1.95.0 built the optimized shell with `custom-protocol`. The
+`windows-build-online.log` binary exercised the document guard. The
+`windows-build-diagnostics.log` binary from `f2e2955fe` exercised the same
+native writer with numeric failure diagnostics. Its SHA-256 was
+`354ca5c625684d643fe6fa166fbd12dd3f84149a1b1e45c7628e7878a9534641`.
+Paths below are relative to the run folder's `evidence/` directory.
+
+| Row | Rerun status | Evidence |
+|---|---|---|
+| (b) Drag/drop and clipboard | **PASS for the targeted checks** | `attempt3/probe.log` records a trusted HTML5 drop with one PNG and a rendered image from a synthetic paste. After console unlock, `probe.log` and `rows-b-c.json` record the native menu reporting **Browser login link copied**, four OS clipboard formats, and a separate Win32 test window reading Unicode text owned by the shell's HWND. The URL kept the fixture origin, path, query, and fragment. Its one-time code exchanged with HTTP 200 and replay returned 401. The probe cleared the test content and kept the full link out of the logs. Ordinary physical text copy/paste remains **DEFERRED**. |
+| (c) Local origin, frame and popup guard | **PASS** | `attempt4/probe.log` records the bundled `http://tauri.localhost/index.html` and its stylesheet loading after reload. `attempt3/probe.log` records the pinned dashboard frame loading 50 entries before and after CSP bypass. A blocked popup returned null with the target count at one. With CSP bypassed, the alternate listener returned 200 to the before, renderer fetch, and after controls. It received zero requests for the unapproved iframe. WebView2 recorded a 403 followed by `net::ERR_ABORTED`, with zero alternate frame commits or script executions. |
+
+**VERIFIED — Clipboard path and console state.** The Connection menu minted
+the URL through the daemon and used `arboard` in native Rust. Its Windows
+implementation opened the clipboard with a null window handle. The new
+Windows writer supplies the shell HWND to `OpenClipboard`, empties it,
+and writes Unicode text. In the locked-console attempts, the independent
+Win32 control failed at `OpenClipboard` with error 5 and a test window
+also failed to open the clipboard. `attempt4/probe.log` records
+`WinSta0\Default` and scheduler job UI restrictions of zero. After the
+owner unlocked the console, the same ownerless control opened, emptied,
+and wrote one format. The HWND-bound menu write and independent read
+passed in the same task.
+[Microsoft OpenClipboard](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard)
+
+**INFERRED — Original clipboard failure.** The locked console best
+explains the access denial on this host. The original menu failure
+combined link minting and clipboard errors in one status, and its exact
+Win32 error went unrecorded. The unlocked ownerless control shows that
+this Windows build accepts that write when the clipboard is available.
+
+**VERIFIED — Document request guard.** Windows registers a WebView2
+`WebResourceRequested` filter for document requests originating from
+documents, which covers cross-origin iframes. It supplies a local 403 for
+unapproved destinations before transmission. `FrameNavigationStarting`
+still cancels unapproved frame navigation. The same destination classifier
+admits the two bundled top-level pages and the current dashboard origin.
+[Microsoft WebView2 request filtering](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_22?view=webview2-1.0.2849.39)
+
+**VERIFIED — macOS checks.** `cargo test --locked --features custom-protocol`
+passed 42 tests after loopback socket access was allowed. `cargo clippy
+--locked --features custom-protocol --all-targets` exited 0 with three
+existing warnings in `daemon_package.rs`, `updates.rs`, and `main.rs`.
+The stricter `-D warnings` invocation failed on those warnings. The macOS
+run consisted of crate checks and unit tests.
+
+**VERIFIED — Isolation and cleanup.** `task-audit.txt` records Session 3
+`RunEx` and deletions for seven unique temporary tasks. The final
+clipboard task ended with result 0. The first fixture archive carried
+AppleDouble entries and failed package validation. Repacking the same
+113 daemon files without those entries allowed the fixture to start.
+`Session3.log` and `cleanup-owned-ssh.log` record owned process identities
+and cleanup. The final `cleanup-census.jsonl` entry at 09:40:06 KST
+reports zero run processes, listeners, registered tasks, and running
+tasks.
