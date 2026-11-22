@@ -453,6 +453,98 @@ fn guard_escape(webview: &WKWebView) {
     });
 }
 
+extern "C" {
+    // AppKit; posted with the window as object once it has left full screen.
+    static NSWindowDidExitFullScreenNotification: &'static NSString;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CloseStep {
+    Hide,
+    /// Leave full screen first; hiding a full-screen window leaves its Space
+    /// black instead of returning to the desktop.
+    ExitFullScreen,
+}
+
+/// What hiding to the tray does now. A second close while full screen is
+/// still being left hides at once rather than toggling back into it.
+fn close_step(style_mask: usize, pending: bool) -> CloseStep {
+    if style_mask & STYLE_MASK_FULL_SCREEN != 0 && !pending {
+        CloseStep::ExitFullScreen
+    } else {
+        CloseStep::Hide
+    }
+}
+
+thread_local! {
+    // Observer token of a hide waiting for the window to leave full screen.
+    static PENDING_HIDE: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
+}
+
+fn notification_center() -> Retained<AnyObject> {
+    unsafe { msg_send![class!(NSNotificationCenter), defaultCenter] }
+}
+
+/// Forget a pending hide; true if one was waiting.
+fn cancel_pending_hide() -> bool {
+    let Some(token) = PENDING_HIDE.with(|pending| pending.borrow_mut().take()) else {
+        return false;
+    };
+    let _: () = unsafe { msg_send![&*notification_center(), removeObserver: &*token] };
+    true
+}
+
+/// Take `ns_window` out of native full screen and run `hide` once it is out.
+fn exit_full_screen_then(ns_window: &AnyObject, hide: impl Fn() + 'static) {
+    let block = RcBlock::new(move |_: *mut AnyObject| {
+        if cancel_pending_hide() {
+            hide();
+        }
+    });
+    let token: Option<Retained<AnyObject>> = unsafe {
+        msg_send![
+            &*notification_center(),
+            addObserverForName: NSWindowDidExitFullScreenNotification,
+            object: ns_window,
+            queue: None::<&AnyObject>,
+            usingBlock: &*block
+        ]
+    };
+    PENDING_HIDE.with(|pending| *pending.borrow_mut() = token);
+    let _: () = unsafe { msg_send![ns_window, toggleFullScreen: None::<&AnyObject>] };
+}
+
+/// Hide the main window to the tray, leaving native full screen first so the
+/// user lands on the desktop. Restoring shows the window windowed.
+pub fn hide_to_tray(window: &WebviewWindow) {
+    let pending = cancel_pending_hide();
+    let Ok(raw) = window.ns_window() else {
+        let _ = window.hide();
+        return;
+    };
+    // On the main thread Tauri returns the live NSWindow pointer directly.
+    let ns_window = unsafe { &*raw.cast::<AnyObject>() };
+    let mask: usize = unsafe { msg_send![ns_window, styleMask] };
+    match close_step(mask, pending) {
+        CloseStep::Hide => {
+            let _ = window.hide();
+        }
+        CloseStep::ExitFullScreen => {
+            log("Werkschaft: leaving full screen before hiding to the tray");
+            let target = window.clone();
+            exit_full_screen_then(ns_window, move || {
+                let _ = target.hide();
+            });
+        }
+    }
+}
+
+/// Showing the main window again cancels a hide still waiting on full screen.
+/// Main thread only: the pending hide is main-thread state.
+pub fn keep_shown() {
+    cancel_pending_hide();
+}
+
 pub fn install(
     window: &WebviewWindow,
     connection: Arc<Connection>,
@@ -536,9 +628,13 @@ mod tests {
         sel, ClassType,
     };
 
+    use std::{cell::Cell, rc::Rc};
+
     use super::{
-        add_cancel_guard, drop_key_down, drops_key, swallows_cancel, Guard, Pending, KEY_ESCAPE,
-        PENDING_ESCAPES, STYLE_MASK_FULL_SCREEN,
+        add_cancel_guard, cancel_pending_hide, close_step, drop_key_down, drops_key,
+        exit_full_screen_then, notification_center, swallows_cancel, CloseStep, Guard,
+        NSWindowDidExitFullScreenNotification, Pending, KEY_ESCAPE, PENDING_ESCAPES,
+        STYLE_MASK_FULL_SCREEN,
     };
 
     #[test]
@@ -733,5 +829,48 @@ mod tests {
         let other = new_event();
         assert!(!drop_key_down(&other));
         assert!(!drop_key_down(&other), "other keys pass both times");
+    }
+
+    #[test]
+    fn full_screen_close_exits_first_and_a_second_close_hides() {
+        let windowed = 1 | 2 | 4 | 8;
+        assert_eq!(close_step(windowed, false), CloseStep::Hide);
+        assert_eq!(close_step(FULL, false), CloseStep::ExitFullScreen);
+        assert_eq!(close_step(FULL, true), CloseStep::Hide);
+        assert_eq!(close_step(windowed, true), CloseStep::Hide);
+    }
+
+    define_class!(
+        // Stands in for a full-screen NSWindow: toggling posts the exit.
+        #[unsafe(super(NSObject))]
+        #[name = "WerkschaftTestFullScreenWindow"]
+        struct FullScreenWindow;
+
+        impl FullScreenWindow {
+            #[unsafe(method(toggleFullScreen:))]
+            fn toggle(&self, _: Option<&AnyObject>) {
+                let _: () = unsafe {
+                    msg_send![
+                        &*notification_center(),
+                        postNotificationName: NSWindowDidExitFullScreenNotification,
+                        object: self
+                    ]
+                };
+            }
+        }
+    );
+
+    #[test]
+    fn hide_runs_once_after_leaving_full_screen() {
+        let window: Retained<FullScreenWindow> =
+            unsafe { msg_send![FullScreenWindow::class(), new] };
+        let hides = Rc::new(Cell::new(0));
+        let counter = hides.clone();
+        exit_full_screen_then(&window, move || counter.set(counter.get() + 1));
+        assert_eq!(hides.get(), 1, "hidden once the exit notification arrived");
+        assert!(!cancel_pending_hide(), "the observer removed itself");
+
+        let _: () = unsafe { msg_send![&*window, toggleFullScreen: None::<&AnyObject>] };
+        assert_eq!(hides.get(), 1, "a later exit does not hide again");
     }
 }

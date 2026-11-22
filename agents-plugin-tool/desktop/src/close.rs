@@ -261,6 +261,9 @@ fn full_stop_report(outcome: Result<FullStop, &'static str>) -> Report {
 // A dialog needs a visible parent: the hidden main window is shown first.
 fn show(main: Option<&WebviewWindow>) {
     if let Some(window) = main {
+        // The pending-hide state lives on the main thread; this may not.
+        #[cfg(target_os = "macos")]
+        let _ = window.run_on_main_thread(crate::macos::keep_shown);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
