@@ -94,10 +94,19 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		}
 		defer unlockWorktree()
 		root, cwd = wt, wt
-	} else if cwd == "" {
-		cwd = caller.base()
-	} else if !filepath.IsAbs(cwd) {
-		cwd = filepath.Join(caller.base(), cwd)
+	} else {
+		if cwd == "" {
+			cwd = caller.base()
+		} else if !filepath.IsAbs(cwd) {
+			cwd = filepath.Join(caller.base(), cwd)
+		}
+		// worktree.release counts a child whose cwd lies in the worktree
+		// (ActiveChildrenInWorktree), so a cwd spawn reserves it too.
+		unlockWorktree, err := reserveCwdWorktree(cwd)
+		if err != nil {
+			return AgentSpawnResult{}, conflict("%s: cwd %s is in a worktree that is currently being released; wait for release to finish before spawning there", tool, cwd)
+		}
+		defer unlockWorktree()
 	}
 	label := req.Label
 	if strings.TrimSpace(label) == "" {
@@ -136,6 +145,30 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		}
 	}
 	return AgentSpawnResult{Address: AgentAddress(st.ID), Status: AgentStatus(st)}, nil
+}
+
+// reserveCwdWorktree takes the spawn reservation of the nearest worktree root
+// at or above cwd, as agent.spawn(worktree: ...) does for its root. Only a
+// release in progress refuses: a cwd outside any worktree, or a lock that
+// cannot be taken, leaves the spawn as it was before the reservation.
+func reserveCwdWorktree(cwd string) (func(), error) {
+	for dir := filepath.Clean(cwd); ; {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			unlock, err := wsgit.ReserveWorktreeSpawn(dir)
+			if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+				return nil, err
+			}
+			if err != nil {
+				return func() {}, nil
+			}
+			return unlock, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return func() {}, nil
+		}
+		dir = parent
+	}
 }
 
 func readBounded(path string, limit int64) ([]byte, error) {

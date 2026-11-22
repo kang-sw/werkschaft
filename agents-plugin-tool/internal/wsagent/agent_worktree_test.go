@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -107,6 +108,17 @@ func TestWorktreeActiveChildrenAndSpawnReleaseReservation(t *testing.T) {
 		Prompt: "raced spawn", Tier: "small", Authority: "workdir-write", Worktree: wt,
 	})
 	agentRefused(t, err, http.StatusConflict, "currently being released")
+	// A cwd spawn into the worktree or one of its subdirectories is the same
+	// bound child to worktree.release, so it is refused the same way.
+	if err := os.MkdirAll(filepath.Join(wt, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, cwd := range []string{wt, filepath.Join(wt, "sub")} {
+		_, err = h.runner.AgentSpawn(lead, AgentSpawnRequest{
+			Prompt: "raced cwd spawn", Tier: "small", Authority: "workdir-write", Cwd: cwd,
+		})
+		agentRefused(t, err, http.StatusConflict, "currently being released")
+	}
 	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 0 {
 		t.Fatalf("refused spawn left bound children: %+v", got)
 	}
