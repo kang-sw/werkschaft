@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "지금 감사 저장소를 읽을 수 없습니다.",
   "js.audit.err.retry": "다시 시도",
   "js.audit.err.generic.title": "감사 이벤트를 불러올 수 없음",
-  "js.audit.err.generic.sub": "요청에 실패했습니다."
+  "js.audit.err.generic.sub": "요청에 실패했습니다.",
+  "js.audit.filter.label": "감사 이벤트 필터",
+  "js.audit.kind.thinking": "생각",
+  "js.audit.kind.hook": "훅",
+  "js.audit.kind.reminder": "리마인더",
+  "js.audit.kind.subagent": "서브에이전트",
+  "js.audit.kind.compaction": "압축",
+  "js.audit.kind.system": "시스템",
+  "js.audit.sysrow.start": "세션 시작 · 시스템 프롬프트",
+  "js.audit.kind.unmapped": "기타"
 }

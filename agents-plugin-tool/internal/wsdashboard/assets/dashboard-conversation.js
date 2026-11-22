@@ -13,6 +13,21 @@
     }
     return box.wsKeys;
   }
+  function firstEntryEl(box) {
+    var c = box && box.firstElementChild;
+    while (c && (!c.getAttribute || !c.getAttribute("data-entry"))) c = c.nextSibling;
+    return c || null;
+  }
+  function lastEntryEl(box) {
+    var c = box && box.lastElementChild;
+    while (c && (!c.getAttribute || !c.getAttribute("data-entry"))) c = c.previousElementSibling;
+    return c || null;
+  }
+  function emitAuditEvent(name, detail) {
+    if (typeof CustomEvent === "function" && doc && typeof doc.dispatchEvent === "function") {
+      doc.dispatchEvent(new CustomEvent(name, { detail: detail || {} }));
+    }
+  }
   function resetEntries(box) { box.textContent = ""; box.wsKeys = Object.create(null); }
   // mergeEntries inserts each node of src whose name box lacks at its sorted
   // place and returns inserted/replaced nodes, in order. Existing entries
@@ -29,9 +44,14 @@
         box.replaceChild(n, old);
       } else {
         // New entries are usually the newest (live) or the oldest (history),
-        // so walk back from the end only past entries that sort after k.
+        // so walk back from the end strictly over [data-entry] siblings.
         var c = box.lastElementChild;
-        while (c && (c.getAttribute("data-entry") || "") > k) c = c.previousElementSibling;
+        while (c && (!c.getAttribute || !c.getAttribute("data-entry"))) c = c.previousElementSibling;
+        while (c && c.getAttribute("data-entry") > k) {
+          var prev = c.previousElementSibling;
+          while (prev && (!prev.getAttribute || !prev.getAttribute("data-entry"))) prev = prev.previousElementSibling;
+          c = prev;
+        }
         box.insertBefore(n, c ? c.nextSibling : box.firstChild);
       }
       have[k] = n;
@@ -45,21 +65,32 @@
   // holds: its oldest entry is newer than box's newest, so entries between
   // them, missed while a stream was down, are in neither.
   function gapped(box, nbox) {
-    var last = box.lastElementChild, first = nbox.firstElementChild;
-    return !!(last && first && (first.getAttribute("data-entry") || "") > (last.getAttribute("data-entry") || ""));
+    var last = box && box.lastElementChild;
+    while (last && (!last.getAttribute || !last.getAttribute("data-entry"))) last = last.previousElementSibling;
+    var first = nbox && nbox.firstElementChild;
+    while (first && (!first.getAttribute || !first.getAttribute("data-entry"))) first = first.nextSibling;
+    return !!(last && first && first.getAttribute("data-entry") > last.getAttribute("data-entry"));
   }
   // ENTRY_CAP bounds a conversation box while the user keeps it at the
   // bottom: three of the server's newest windows (its ring size, 50).
   // evictEntries drops the oldest entries past it and reports whether it
-  // dropped any.
+  // dropped any, removing any preceding non-entry nodes before the new oldest entry.
   var ENTRY_CAP = 150;
   function evictEntries(box) {
-    var n = box.children.length - ENTRY_CAP, keys = entryKeys(box);
+    var keys = entryKeys(box), n = Object.keys(keys).length - ENTRY_CAP;
     if (n <= 0) return false;
     for (; n > 0; n--) {
       var c = box.firstElementChild;
+      while (c && (!c.getAttribute || !c.getAttribute("data-entry"))) c = c.nextSibling;
+      if (!c) break;
+      while (c.previousElementSibling) box.removeChild(c.previousElementSibling);
       delete keys[c.getAttribute("data-entry")];
       box.removeChild(c);
+    }
+    var oldest = box.firstElementChild;
+    while (oldest && (!oldest.getAttribute || !oldest.getAttribute("data-entry"))) oldest = oldest.nextSibling;
+    if (oldest) {
+      while (oldest.previousElementSibling) box.removeChild(oldest.previousElementSibling);
     }
     return true;
   }
@@ -112,18 +143,27 @@
       var inserted = mergeEntries(box, incoming, changed);
       inserted.forEach(sweepOutImgs); mermaid(inserted);
       if (pin && evictEntries(box)) histReset();
+      var oldestA = firstEntryEl(box);
+      emitAuditEvent("ws-entries-merged", { oldestAt: oldestA ? (oldestA.getAttribute("data-at") || "") : "", empty: !oldestA });
       return;
     }
     html = next ? entryInputHTML(next) : html;
     var src = frag(html), head = el.querySelector(".thead"), nhead = src.querySelector(".thead");
     var nbox = src.querySelector(".centries");
-    if (!box || !nbox) { el.innerHTML = html; restoreOpen(el); fmtTimes(el); sweepOutImgs(el); mermaid(el); histReset(); return; }
+    if (!box || !nbox) {
+      el.innerHTML = html; restoreOpen(el); fmtTimes(el); sweepOutImgs(el); mermaid(el); histReset();
+      var freshBox = entriesBox(), freshOld = firstEntryEl(freshBox);
+      emitAuditEvent("ws-entries-merged", { oldestAt: freshOld ? (freshOld.getAttribute("data-at") || "") : "", empty: !freshOld });
+      return;
+    }
     if (head && nhead) { head.parentNode.replaceChild(nhead, head); fmtTimes(nhead); }
     if (gapped(box, nbox)) { resetEntries(box); histReset(); }
     var added = mergeEntries(box, nbox, changed);
     added.forEach(sweepOutImgs);
     mermaid(added);
     if (pin && evictEntries(box)) histReset();
+    var oldestB = firstEntryEl(box);
+    emitAuditEvent("ws-entries-merged", { oldestAt: oldestB ? (oldestB.getAttribute("data-at") || "") : "", empty: !oldestB });
   }
 
   // Model history is a click-only popover sourced by the entries title bar.
@@ -405,14 +445,14 @@
   // drops a page still in flight, which would no longer join what the box
   // holds.
   var histBefore = null, histEnd = false, histBusy = false, histEpoch = 0;
-  function histReset() { histBefore = null; histEnd = false; histBusy = false; histEpoch++; }
+  function histReset() { histBefore = null; histEnd = false; histBusy = false; histEpoch++; emitAuditEvent("ws-history-reset", {}); }
   function loadHistory() {
     if (histEnd || histBusy || !window.fetch || !convo || !visible(convo)) return;
     var box = entriesBox();
     if (!box) return;
+    var prevOldest = firstEntryEl(box), prevOldestAt = prevOldest ? prevOldest.getAttribute("data-at") || "" : "";
     if (histBefore === null) {
-      var first = box.firstElementChild;
-      histBefore = first ? first.getAttribute("data-entry") || "" : "";
+      histBefore = prevOldest ? prevOldest.getAttribute("data-entry") || "" : "";
     }
     histBusy = true;
     var epoch = histEpoch;
@@ -435,6 +475,8 @@
       mermaid(added);
       if (res.before) histBefore = res.before;
       if (res.end || !res.before) histEnd = true;
+      var nextOldest = firstEntryEl(box), nextOldestAt = nextOldest ? nextOldest.getAttribute("data-at") || "" : "";
+      emitAuditEvent("ws-history-page", { prevOldestAt: prevOldestAt, oldestAt: nextOldestAt, end: !!histEnd, empty: !nextOldest });
       nearTop();
     }, function () {
       // A failed fetch (daemon replaced, network) is retried on the next

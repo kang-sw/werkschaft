@@ -30,7 +30,21 @@
   function auCallElements() {
     var box = $("convo");
     if (!box) return [];
-    return q(".au-row[data-call]", box);
+    return q(".au-row[data-call], .au-hid[data-event-id], .au-sysrow[data-event-id]", box);
+  }
+
+  function auVisibleAuditRows() {
+    return auCallElements().filter(function (el) {
+      return !el.hidden && !el.closest("[hidden], .au-kind-hidden");
+    });
+  }
+
+  function auRowIndex(win, rows) {
+    for (var i = 0; i < rows.length; i++) {
+      var evId = rows[i].getAttribute("data-event-id");
+      if (win.eventId ? evId === win.eventId : (!evId && rows[i].getAttribute("data-call") === win.callId)) return i;
+    }
+    return -1;
   }
 
   function auRevealCallRow(row) {
@@ -53,14 +67,15 @@
   }
 
   function auSyncSelectedMarks() {
-    var activeCalls = Object.create(null);
+    var activeCalls = Object.create(null), activeEvents = Object.create(null);
     for (var i = 0; i < auWindows.length; i++) {
-      if (auWindows[i].callId) activeCalls[auWindows[i].callId] = true;
+      if (auWindows[i].eventId) activeEvents[auWindows[i].eventId] = true;
+      else if (auWindows[i].callId) activeCalls[auWindows[i].callId] = true;
     }
     var rows = auCallElements();
     for (var j = 0; j < rows.length; j++) {
-      var id = rows[j].getAttribute("data-call");
-      rows[j].classList.toggle("au-sel", !!activeCalls[id]);
+      var evId = rows[j].getAttribute("data-event-id");
+      rows[j].classList.toggle("au-sel", evId ? !!activeEvents[evId] : !!activeCalls[rows[j].getAttribute("data-call")]);
     }
   }
 
@@ -131,11 +146,7 @@
   }
 
   function auUpdateNavButtons(win) {
-    var rows = auCallElements();
-    var idx = -1;
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i].getAttribute("data-call") === win.callId) { idx = i; break; }
-    }
+    var rows = auVisibleAuditRows(), idx = auRowIndex(win, rows);
     var prevBtn = win.el.querySelector(".au-prev");
     var nextBtn = win.el.querySelector(".au-next");
     if (prevBtn) prevBtn.disabled = idx <= 0;
@@ -155,7 +166,7 @@
       badgeSlot.innerHTML = harness ? '<span class="hb sm" data-h="' + auEsc(harness) + '"></span>' : "";
     }
     var title = win.toolLabel || (win.callSummary && win.callSummary.title) || win.callId || wsT("js.audit.window.title");
-    if (win.activeEnvelope && win.inspectEventId) {
+    if (win.activeEnvelope && (win.inspectEventId || win.eventId)) {
       title = (win.activeEnvelope.kind || "") + (win.activeEnvelope.subkind ? ":" + win.activeEnvelope.subkind : "");
     }
     if (nameEl) nameEl.textContent = title;
@@ -291,7 +302,17 @@
     return ev.kind === "tool_result" || (ev.kind === "subagent" && ev.subkind === "tool_result");
   }
 
+  function auAutoEventTab(ev) {
+    if (!ev) return "in";
+    if (ev.kind === "other") return "raw";
+    var hasIn = !!(ev.in || (ev.stored_trunc && ev.stored_trunc.in) || (ev.redacted && ev.redacted.in));
+    var hasOut = !!(ev.out || (ev.stored_trunc && ev.stored_trunc.out) || (ev.redacted && ev.redacted.out));
+    if (ev.kind !== "tool_call" && !hasIn && hasOut) return "out";
+    return "in";
+  }
+
   function auFetchEnvelope(win, eventId) {
+    var reqToken = ++win.reqToken;
     if (!eventId) {
       win.loading = false;
       win.activeEnvelope = null;
@@ -302,10 +323,13 @@
       win.loading = false;
       win.errorState = null;
       win.activeEnvelope = win.cache[eventId];
+      if (win.autoTab) win.tab = auAutoEventTab(win.activeEnvelope);
+      win.autoTab = false;
       auRenderWindowBody(win);
       return;
     }
-    var reqToken = ++win.reqToken;
+    win.activeEnvelope = null;
+    win.resultLoading = false; win.resultEnvelope = null; win.resultError = null;
     win.loading = true;
     win.errorState = null;
     auRenderWindowBody(win);
@@ -318,6 +342,8 @@
       win.loading = false;
       win.cache[eventId] = ev;
       win.activeEnvelope = ev;
+      if (win.autoTab) win.tab = auAutoEventTab(ev);
+      win.autoTab = false;
       auRenderWindowBody(win);
     }).catch(function (err) {
       if (reqToken !== win.reqToken || !win.el.isConnected) return;
@@ -405,7 +431,9 @@
   function auLoadCallIntoWindow(win, callId, rowEl) {
     var reqToken = ++win.reqToken;
     win.callId = callId;
+    win.eventId = "";
     win.inspectEventId = null;
+    win.autoTab = false;
     win.activeSummary = null;
     win.callSummary = null;
     win.primaryEventId = "";
@@ -568,17 +596,15 @@
   }
 
   function auStepCall(win, dir) {
-    var rows = auCallElements();
+    var rows = auVisibleAuditRows();
     if (!rows.length) return;
-    var idx = -1;
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i].getAttribute("data-call") === win.callId) { idx = i; break; }
-    }
-    var nextIdx = idx + dir;
+    var nextIdx = auRowIndex(win, rows) + dir;
     if (nextIdx < 0 || nextIdx >= rows.length) return;
     var nextRow = rows[nextIdx];
     auRevealCallRow(nextRow);
-    auLoadCallIntoWindow(win, nextRow.getAttribute("data-call"), nextRow);
+    var evId = nextRow.getAttribute("data-event-id");
+    if (evId) auLoadEventIntoWindow(win, evId, { rowEl: nextRow });
+    else auLoadCallIntoWindow(win, nextRow.getAttribute("data-call"), nextRow);
   }
 
   function auBindWindowDragResize(win) {
@@ -695,8 +721,8 @@
         if (win.tab === "out" && !win.inspectEventId && win.resultError && win.resultEventId) {
           auFetchResultEnvelope(win, win.resultEventId, win.reqToken);
           auRenderWindowBody(win);
-        } else if (win.inspectEventId) {
-          auFetchEnvelope(win, win.inspectEventId);
+        } else if (win.inspectEventId || win.eventId) {
+          auFetchEnvelope(win, win.inspectEventId || win.eventId);
         } else {
           auLoadCallIntoWindow(win, win.callId, null);
         }
@@ -723,41 +749,53 @@
     auBindWindowDragResize(win);
   }
 
-  function auOpenCall(callId, rowEl) {
-    if (!callId) return;
-    var unpinned = null;
+  function auEnsureWindow(initialTab) {
+    var win = null;
     for (var i = auWindows.length - 1; i >= 0; i--) {
-      if (!auWindows[i].pinned) { unpinned = auWindows[i]; break; }
+      if (!auWindows[i].pinned) { win = auWindows[i]; break; }
     }
-    var win = unpinned;
     if (!win) {
-      win = {
-        id: ++auWinSeq,
-        callId: callId,
-        pinned: false,
-        tab: "in",
-        wrap: false,
-        search: "",
-        activeMatch: 0,
-        matchCount: 0,
-        reqToken: 0,
-        cache: Object.create(null),
-        linkedEvents: []
-      };
+      win = { id: ++auWinSeq, callId: "", eventId: "", pinned: false, tab: initialTab || "in", wrap: false, search: "", activeMatch: 0, matchCount: 0, reqToken: 0, cache: Object.create(null), linkedEvents: [] };
       auBuildWindowDOM(win);
-      var pinnedCount = auWindows.filter(function (w) { return w.pinned; }).length;
-      var box = auComputeWidePlacement(pinnedCount);
-      win.el.style.left = box.left + "px";
-      win.el.style.top = box.top + "px";
-      win.el.style.width = box.width + "px";
-      win.el.style.height = box.height + "px";
+      var box = auComputeWidePlacement(auWindows.filter(function (w) { return w.pinned; }).length);
+      win.el.style.left = box.left + "px"; win.el.style.top = box.top + "px";
+      win.el.style.width = box.width + "px"; win.el.style.height = box.height + "px";
       auAttachWindowEvents(win);
       doc.body.appendChild(win.el);
       auWindows.push(win);
     }
     auFocusWindow(win);
     auSyncDarkroom();
+    return win;
+  }
+
+  function auLoadEventIntoWindow(win, eventId, opts) {
+    ++win.reqToken;
+    opts = opts || {};
+    win.callId = opts.callId || ""; win.eventId = eventId; win.inspectEventId = null;
+    win.activeSummary = opts.summary || null; win.callSummary = null;
+    win.primaryEventId = ""; win.resultEventId = ""; win.resultEnvelope = null; win.resultError = null; win.resultLoading = false; win.linkedEvents = [];
+    win.errorState = null; win.emptyState = false; win.activeMatch = 0;
+    var rowEl = opts.rowEl, kind = opts.kind || (rowEl && rowEl.getAttribute("data-kind")) || (opts.summary && opts.summary.kind) || "";
+    var pv = rowEl && rowEl.querySelector(".au-pv, .au-sysrow-lbl");
+    win.toolLabel = opts.label || (pv && pv.textContent) || eventId;
+    win.autoTab = !opts.tab;
+    win.tab = opts.tab || (kind === "other" ? "raw" : "in");
+    auSyncSelectedMarks();
+    auFetchEnvelope(win, eventId);
+  }
+
+  function auOpenCall(callId, rowEl) {
+    if (!callId) return;
+    var win = auEnsureWindow("in");
     auLoadCallIntoWindow(win, callId, rowEl);
+    win.el.focus();
+  }
+
+  function auOpenEvent(eventId, opts) {
+    if (!eventId) return;
+    var win = auEnsureWindow(opts && opts.tab);
+    auLoadEventIntoWindow(win, eventId, opts);
     win.el.focus();
   }
 
@@ -1059,6 +1097,9 @@
     hydrate: auHydrateCalls,
     scheduleHydration: auScheduleHydration,
     openCall: auOpenCall,
+    openEvent: auOpenEvent,
+    visibleRows: auVisibleAuditRows,
+    syncSelection: auSyncSelectedMarks,
     closeUnpinned: auCloseUnpinned,
     windows: function () { return auWindows.slice(); }
   };

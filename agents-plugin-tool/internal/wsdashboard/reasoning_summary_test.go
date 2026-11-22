@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -132,7 +133,8 @@ func TestReasoningSummaryHistoryImmutableTurnAssociationAndAttempts(t *testing.T
 	ring = append(ring, ringRecord(4, wslive.RingEntry{Kind: wslive.RingTurn, Done: 2, DurationMs: 42000, SummaryHistory: h}))
 	after := renderSummaryRegions(t, nil, ring, cache)
 	html := string(after[regionEntries].HTML)
-	for _, want := range []string{`<div class="turn-with-summary" data-entry="` + ring[3].Name + `"><details class="d-summary saved" data-key="summary-turn-` + ring[3].Name + `">`, "Request 1 · attempt 1", "Request 1 · attempt 2", "Request 2 · attempt 1", "Output 1 · part 2", "Failed · observed prefix", "Aborted · observed prefix", "Locally clipped · retained prefix", "Incomplete · observed prefix", "Streaming · observed prefix", "full text not guaranteed", `</details><div class="turnline">`} {
+	atAttr := ` data-at="` + ring[3].At.UTC().Format(time.RFC3339Nano) + `"`
+	for _, want := range []string{`<div class="turn-with-summary" data-entry="` + ring[3].Name + `"` + atAttr + `><details class="d-summary saved" data-key="summary-turn-` + ring[3].Name + `">`, "Request 1 · attempt 1", "Request 1 · attempt 2", "Request 2 · attempt 1", "Output 1 · part 2", "Failed · observed prefix", "Aborted · observed prefix", "Locally clipped · retained prefix", "Incomplete · observed prefix", "Streaming · observed prefix", "full text not guaranteed", `</details><div class="turnline">`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q: %s", want, html)
 		}

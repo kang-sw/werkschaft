@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "当前无法读取审计存储。",
   "js.audit.err.retry": "重试",
   "js.audit.err.generic.title": "无法加载审计事件",
-  "js.audit.err.generic.sub": "请求失败。"
+  "js.audit.err.generic.sub": "请求失败。",
+  "js.audit.filter.label": "审计事件筛选",
+  "js.audit.kind.thinking": "思考",
+  "js.audit.kind.hook": "钩子",
+  "js.audit.kind.reminder": "提醒",
+  "js.audit.kind.subagent": "子代理",
+  "js.audit.kind.compaction": "压缩",
+  "js.audit.kind.system": "系统",
+  "js.audit.sysrow.start": "会话开始 · 系统提示",
+  "js.audit.kind.unmapped": "其他"
 }

@@ -19,6 +19,8 @@ function mergeEntries(existing, next, changed) {
   return [];
 }
 function mermaid() {} function sweepOutImgs() {}
+function firstEntryEl() { return null; }
+function emitAuditEvent() {}
 `+src+`
 mergeEntriesRegion({querySelector:function() { return null; }},
   {shell:"shell",order:["a","b"],rows:{a:{html:"new A"},b:{html:"new B"}}}, false, null);
