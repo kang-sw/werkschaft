@@ -1,5 +1,7 @@
 ---
 kind: print
+variables:
+  - SpawnIdiom
 ---
 
 # Ticket
@@ -175,9 +177,10 @@ Handler loop:
    stopped worker's worktree and `tier_override` one tier above the worker's
    (xlarge stays xlarge), the tier the handler gives its design reviewer. Pass
    the path on without reading it. Spawn at the tier the render returns
-   (by {{.McpNamespace}}/agent.spawn, with `worktree:` the same path as
-   `root_override`, so the handler's spawn key and its rendered key share one
-   checkout):
+   ({{.SpawnIdiom}}). When the spawn goes through `{{.McpNamespace}}/agent.spawn`
+   and the handler was rendered with `root_override`, pass `worktree:` the same
+   path, so the handler's spawn key and its rendered key share one checkout; a
+   native subagent dispatch keeps the render-root binding alone:
    `Read <rendered-path> as your system prompt.` plus the task block:
    operation (`promote`, `epic-review`, or `revise`), the stems, and the
    branch to commit on (`revise`: the worker's impl branch); `revise` adds the
@@ -224,8 +227,9 @@ Handler loop:
 - Root occupied by a worker (`HEAD` on `impl/*`): no ticket write there.
   Author and commit in the sparse worktree the workflow manual's `### Git`
   describes, and render the handler with `root_override: <worktree>` for that
-  worktree and spawn it with `worktree:` the same path. Exception: `revise` writes the stopped worker's ticket on its impl
-  branch, which the worker resumes from.
+  worktree, and when spawning it through `{{.McpNamespace}}/agent.spawn` pass
+  `worktree:` the same path. Exception: `revise` writes the stopped worker's
+  ticket on its impl branch, which the worker resumes from.
 - Suggest the next action: a child ticket for an epic;
   `{{.SkillNamespace}}:lead-run` for a ticket now in `ready/`.
 - End with `Ticket: ai-docs/tickets/<status>/<stem>.md` per ticket written,

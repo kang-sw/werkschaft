@@ -1,6 +1,6 @@
 {
   "ws": {
-    "archive_sha256": "c48d3664d12ae5de78ee50ade8c319147d2e567f6c10ffd58261cb8c5e429bca",
+    "archive_sha256": "6c5ab9dc6f12e5c7aa664f8d6741cc96944762c2cf1e1e36f2380433f5abf2c8",
     "files": {
       ".claude-plugin/plugin.json": "ab391c9b4b8f55831caddc04c3ceef91392b67d684461220238b438ead48bba0",
       ".codex-plugin/hooks.json": "e3f3ea60f82fb0795c63bf54b9208647f39cb3779f050d1c755fabdc8a434490",
@@ -57,7 +57,7 @@
       "rsrc/lead-review/lead-review.md": "b4283e9bcbb8f6349be5db31db70d0b8d282aa3fead1249c7ac48b38806448b6",
       "rsrc/lead-run/lead-run.md": "a46a4a485e815d757716f369970aa33392902f16ca3314fe72ae25504b5fac09",
       "rsrc/lead-ship/lead-ship.md": "9f35a6dd83ab43837b7812a99b7b2cdc84bf21b15ee6437315b16b8771c54095",
-      "rsrc/lead-ticket/lead-ticket.md": "cef38a8ba7447d0921d75567d022334e10f642d8867c817d4dd063854de5c805",
+      "rsrc/lead-ticket/lead-ticket.md": "5ff9ab4cf7a9d096648c1f796754bd0ee346d9c4c7ce41fee28d626c41a590e9",
       "rsrc/lead-tune/lead-tune.md": "947b10ec5df377e79807206f5fe5e793ab2e9fa01683b0588896f946f5ec617c",
       "rsrc/lead-use-mailbox/arm-the-wait.claude.md": "16670754315019116cc80f47258d2cde957def7fc6b45df74b952f9b79ae7946",
       "rsrc/lead-use-mailbox/arm-the-wait.md": "f47a20a40dc9bc072bac056d843d3deb9e2ee36ccce228e1a9994c1bc4d0a618",
@@ -68,7 +68,7 @@
       "rsrc/lead-workflow-manual/native-spawn-binding.claude.md": "fc7258226abd15ad2baef2ef8a361f6777d8390868a595853f61812def0cf310",
       "rsrc/lead-workflow-manual/native-spawn-binding.codex.md": "ea1977984de016a95df292c3384e93982aa67b12bbd5e8850c7ed792acbdf284",
       "rsrc/lead-workflow-manual/native-spawn-binding.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "rsrc/manifest.json": "da4ea954aad6f565f1998119a0ce75cbe6cda9711a97652078c227a13006cde2",
+      "rsrc/manifest.json": "704e64fa25e8a1192e44ee04c5db678cd1af2694f527b605c66b015aa9091a89",
       "rsrc/reference-discovery/reference-discovery.md": "1c28d76c2a03efd2889936ee9091715f93b75553d88d9e20b15ee37de8c48b6c",
       "rsrc/review-config/review-config.md": "dfbbf5be52c83cfb4f86edb862f8e7b135afcc7f5efb9433e808d08ac37ff53b",
       "rsrc/review-handler/review-handler.md": "0643fdd50d7d6efef57da1cd77970c7189640ea09292c9581534c87af9d38b32",
@@ -115,7 +115,7 @@
     }
   },
   "wsflow": {
-    "archive_sha256": "05713c9bc205a68328cc08f7dc0cfa3c6bc788969032658d76ffc09083acf798",
+    "archive_sha256": "150c3ab623d32bf41aabf45bb946064064b7a20c5e6ea23ae9fe87a32a5e399e",
     "files": {
       ".claude-plugin/plugin.json": "86ff6069699a7f64dc452778abeb6c5cfb62cebc7d4a2bcc05ad3dbd3f8c3888",
       ".codex-plugin/plugin.json": "f85cb89d304896083240c613f80a9eb2abd63ba8eb6db1796ff503b44abd710f",
@@ -171,7 +171,7 @@
       "rsrc/lead-review/lead-review.md": "b4283e9bcbb8f6349be5db31db70d0b8d282aa3fead1249c7ac48b38806448b6",
       "rsrc/lead-run/lead-run.md": "a46a4a485e815d757716f369970aa33392902f16ca3314fe72ae25504b5fac09",
       "rsrc/lead-ship/lead-ship.md": "9f35a6dd83ab43837b7812a99b7b2cdc84bf21b15ee6437315b16b8771c54095",
-      "rsrc/lead-ticket/lead-ticket.md": "cef38a8ba7447d0921d75567d022334e10f642d8867c817d4dd063854de5c805",
+      "rsrc/lead-ticket/lead-ticket.md": "5ff9ab4cf7a9d096648c1f796754bd0ee346d9c4c7ce41fee28d626c41a590e9",
       "rsrc/lead-tune/lead-tune.md": "947b10ec5df377e79807206f5fe5e793ab2e9fa01683b0588896f946f5ec617c",
       "rsrc/lead-use-mailbox/arm-the-wait.claude.md": "16670754315019116cc80f47258d2cde957def7fc6b45df74b952f9b79ae7946",
       "rsrc/lead-use-mailbox/arm-the-wait.md": "f47a20a40dc9bc072bac056d843d3deb9e2ee36ccce228e1a9994c1bc4d0a618",
@@ -182,7 +182,7 @@
       "rsrc/lead-workflow-manual/native-spawn-binding.claude.md": "fc7258226abd15ad2baef2ef8a361f6777d8390868a595853f61812def0cf310",
       "rsrc/lead-workflow-manual/native-spawn-binding.codex.md": "ea1977984de016a95df292c3384e93982aa67b12bbd5e8850c7ed792acbdf284",
       "rsrc/lead-workflow-manual/native-spawn-binding.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "rsrc/manifest.json": "da4ea954aad6f565f1998119a0ce75cbe6cda9711a97652078c227a13006cde2",
+      "rsrc/manifest.json": "704e64fa25e8a1192e44ee04c5db678cd1af2694f527b605c66b015aa9091a89",
       "rsrc/reference-discovery/reference-discovery.md": "1c28d76c2a03efd2889936ee9091715f93b75553d88d9e20b15ee37de8c48b6c",
       "rsrc/review-config/review-config.md": "dfbbf5be52c83cfb4f86edb862f8e7b135afcc7f5efb9433e808d08ac37ff53b",
       "rsrc/review-handler/review-handler.md": "0643fdd50d7d6efef57da1cd77970c7189640ea09292c9581534c87af9d38b32",
