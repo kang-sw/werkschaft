@@ -587,7 +587,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T02:37:32Z"
+        "touched_at": "2026-11-22T02:39:02Z",
+        "impl": {
+          "branch": "impl/develop/wipe-area-props"
+        }
       }
     },
     "261122-feat-ws-mailbox-group-recipients": {
