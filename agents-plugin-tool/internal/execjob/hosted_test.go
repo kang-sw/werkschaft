@@ -89,6 +89,7 @@ type fakeExecHolders struct {
 	exited   map[string]bool
 	seq      map[string]uint64
 	spawnErr error
+	inputErr error
 	replays  []string
 	// onSpawn runs after a spawn, outside the lock (the child's own
 	// behaviour: output, exit).
@@ -127,6 +128,9 @@ func (f *fakeExecHolders) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.Ch
 func (f *fakeExecHolders) Input(id string, data []byte, eof bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inputErr != nil {
+		return f.inputErr
+	}
 	entry := string(data)
 	if eof {
 		entry += "<EOF>"
@@ -703,8 +707,19 @@ func TestHostedStdinAndWrite(t *testing.T) {
 	if _, err := fx.h.Write("lead", v.ID, []byte("line1\n"), false); err != nil {
 		t.Fatal(err)
 	}
+	// An eof the holder refuses (detached, input queue full) leaves stdin
+	// open, so a retry still delivers it.
+	fx.holders.mu.Lock()
+	fx.holders.inputErr = wsholder.ErrDetached
+	fx.holders.mu.Unlock()
+	if _, err := fx.h.Write("lead", v.ID, []byte("line2\n"), true); err == nil {
+		t.Fatal("a refused eof write reported success")
+	}
+	fx.holders.mu.Lock()
+	fx.holders.inputErr = nil
+	fx.holders.mu.Unlock()
 	if _, err := fx.h.Write("lead", v.ID, []byte("line2\n"), true); err != nil {
-		t.Fatal(err)
+		t.Fatalf("the eof retry = %v", err)
 	}
 	if got := fx.holders.inputOf(v.HolderID); !slices.Equal(got, []string{"line1\n", "line2\n<EOF>"}) {
 		t.Fatalf("inputs = %q", got)
@@ -725,6 +740,36 @@ func TestHostedStdinAndWrite(t *testing.T) {
 	}
 	if !keyPattern.MatchString(v.ID) {
 		t.Fatalf("legacy key %q does not match the legacy key form", v.ID)
+	}
+}
+
+// TestHostedStdinSurvivesARestart: a running job launched without stdin
+// takes exec.write and its eof under the next daemon, whose holder still
+// holds the pipe open; a job given stdin at launch, and a legacy launch,
+// stay closed.
+func TestHostedStdinSurvivesARestart(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	open, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	given, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, Stdin: []byte("x"), StdinSet: true})
+	legacy, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, Legacy: true, Tool: "exec.spawn"})
+	_ = fx.h.Close()
+	fx.open(10 * time.Millisecond)
+	if _, err := fx.h.Write("lead", open.ID, []byte("after\n"), false); err != nil {
+		t.Fatalf("write after restart = %v", err)
+	}
+	if _, err := fx.h.Write("lead", open.ID, nil, true); err != nil {
+		t.Fatalf("eof after restart = %v", err)
+	}
+	if got := fx.holders.inputOf(open.HolderID); !slices.Equal(got, []string{"after\n", "<EOF>"}) {
+		t.Fatalf("inputs after restart = %q", got)
+	}
+	for _, v := range []HostedView{given, legacy} {
+		if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil {
+			t.Fatalf("a write to %s's closed stdin was accepted after restart", v.ID)
+		}
 	}
 }
 

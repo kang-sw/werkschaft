@@ -60,8 +60,10 @@ type hostedJob struct {
 	// lastSeq is the last holder record taken: a replay after a daemon
 	// restart starts from the ring's first record again.
 	lastSeq uint64
-	// stdinOpen: the job's stdin takes exec.write.
+	// stdinOpen: the job's stdin takes exec.write. writeMu orders the
+	// writes, so an eof closes it only once its holder took the eof.
 	stdinOpen bool
+	writeMu   sync.Mutex
 	// stopping: exec.stop or an interrupt asked for the end; the end is
 	// then HostedStopped and sends no notice.
 	stopping   bool
@@ -113,6 +115,10 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 			close(j.done)
 		} else if row.HolderID != "" {
 			h.byHolder[row.HolderID] = j
+			// The holder keeps the pipe of a job launched without stdin
+			// open across a daemon replacement. An eof that exec.write sent
+			// before it is not stored; the holder then drops what follows.
+			j.stdinOpen = !row.Legacy && row.StdinBytes == 0
 		}
 		h.jobs[row.ID] = j
 	}

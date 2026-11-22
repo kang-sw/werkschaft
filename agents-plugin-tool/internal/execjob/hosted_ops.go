@@ -60,11 +60,10 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 	if err != nil {
 		return HostedView{}, err
 	}
+	j.writeMu.Lock()
+	defer j.writeMu.Unlock()
 	h.mu.Lock()
 	running, open, holder := !j.row.Terminal(), j.stdinOpen, j.row.HolderID
-	if running && open && eof {
-		j.stdinOpen = false
-	}
 	h.mu.Unlock()
 	switch {
 	case !running:
@@ -73,7 +72,13 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 		return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: it was given at launch, closed by eof, or the job is a legacy launch", id)
 	}
 	if err := h.opts.Holders.Input(holder, data, eof); err != nil {
+		// The eof did not reach the child: stdin stays open for a retry.
 		return h.view(j, 0), fmt.Errorf("write to exec job %s: %w", id, err)
+	}
+	if eof {
+		h.mu.Lock()
+		j.stdinOpen = false
+		h.mu.Unlock()
 	}
 	return h.view(j, 0), nil
 }
