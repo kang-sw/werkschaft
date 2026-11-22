@@ -44,9 +44,11 @@ ID is listed.
   Count a call once through the call envelope. Initialize, schema discovery,
   and dashboard or feed calls do not count. Before returning the tool result,
   re-acquire the slot with at most 20 s of waiting. Return the result when
-  that bound expires even if the cap is exceeded. The Codex default MCP
-  tool timeout is 60 s, and agy ignored an injected `timeoutSeconds` in
-  the probe. Rejected: strict hold until a slot frees, since client timeouts
+  that bound expires even if the cap is exceeded. A hosted lead turn
+  re-acquires by counting without waiting, as in S2. The Codex default MCP
+  tool timeout is 60 s; agy documents a 180 s CLI MCP tool timeout
+  ([Antigravity MCP docs](https://antigravity.google/docs/mcp?tab=cli)) and
+  ignored an injected `timeoutSeconds` in the probe. Rejected: strict hold until a slot frees, since client timeouts
   and autonomous resume make it unenforceable.
 - **S5. Common release signal.** Use S4 for commands once they move to
   ws/exec. An agy-specific signal such as a pending native `run_command`
@@ -121,7 +123,8 @@ Verification:
   completion steer takes no new slot and a completion wake queues.
 - Verify S4 releases and re-acquires around a ws `tools/call`, counts the
   call once through its envelope, excludes nonqualifying requests, and
-  returns the result after a maximum 20 s wait when no slot is available.
+  returns the result after a maximum 20 s wait when no slot is available;
+  a hosted lead turn re-acquires without waiting.
   Cover agy's foreground MCP behavior and the HTTP cancellation path.
 - Verify exactly-once slot release on completion, cancel, panic, EOF, and
   process replacement. Verify a lead waiting for children frees its slot

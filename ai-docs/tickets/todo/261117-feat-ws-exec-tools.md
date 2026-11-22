@@ -102,13 +102,17 @@ The following amendments are owner-confirmed on 2026-11-22.
      shell and monitor tools to `--disallowedTools` through
      `claudeRemovedTools` in `wsagent/claude.go`. Pin the exact tool
      spellings in a hosted init-stream test.
-   - Codex hosted launches set
-     `thread/start.config.features.shell_tool=false`, verified on 0.160.0
+   - Codex hosted launches set `features.shell_tool=false` on both
+     `thread/start` and `thread/resume` (the shared start/resume config
+     builder), verified on 0.160.0
      in `261115-feat-ws-hosted-codex-adapter-contract` (193, 218) and
      `wsagent/codex_fixture_test.go:365-370`.
    - Pi hosted launches omit bash from `--tools`. Worker argument
      construction is in `wsagent/pi_launch.go:62-89`, and hosted leads
-     use the separate `piLeadArgs` path.
+     use the separate `piLeadArgs` path. The lead's MCP-only fallback,
+     taken when the bundled extension is unavailable
+     (`wsagent/pi_lead.go:80-90`), bypasses the extension's tool reshaping,
+     so the removal must hold on that path too.
    - agy uses the daemon rejection in Decision 11.
    - Default the rollout on per harness with a verified mechanism and
      provide a per-harness config key to revert. Exclude the frozen Claude
@@ -143,11 +147,21 @@ The following amendments are owner-confirmed on 2026-11-22.
     existing `Runner.Deliver` path. A notice steers a running turn immediately,
     opens a new turn in an idle session, or enters the next-turn queue
     when the harness lacks steer support. Deliver once, only for async
-    or converted jobs, durably across daemon replacement. Suppress
-    completion after the session closes. Rejected: next-turn-only delivery.
+    or converted jobs, durably across daemon replacement, keyed by a stable
+    per-job completion event ID so replay and restart never deliver a second
+    notice. Suppress completion after the session closes. `Runner.Deliver`
+    currently marks steer only for spawned Pi children
+    (`wsagent/runner_operations.go:118`); Phase 1 extends steer marking to
+    every harness path that supports steering. Rejected: next-turn-only
+    delivery.
 11. **agy command blocking (1503), after the agy 1.5.14 live probe on
     2026-11-22.** The settled launch policy is native `default` mode.
     Native `auto` and `--dangerously-skip-permissions` are never used.
+    For cutover sessions this also overrides a saved lead permission mode
+    that `wsagent/agy.go:380-385` would otherwise reapply on new, resumed,
+    and reattached sessions. The per-harness revert key restores the
+    pre-cutover behavior, including the saved mode; excluded sessions keep
+    their current mode.
     ws bypass and worker auto-approval stay daemon-side
     (`wsagent/agy_bypass.go:15-36`), except that the daemon answers
     `run_command` permission requests with `reject_once`.
@@ -258,7 +272,8 @@ Verification:
 - Exercise sync, async, conversion in the current turn, and pipe stdin via
   `exec.write`. Prove preflight, approval, and slot re-acquisition do not
   consume the 30 s conversion window. Verify running, idle, and next-turn
-  completion delivery, once across daemon replacement, including suppression
+  completion delivery on every steer-capable harness, once across daemon
+  replacement and replay by its stable event ID, including suppression
   after close and absence of notices for synchronous completions.
 - Verify T0 with an old daemon running the new holder, then holder exit, then
   new-daemon reopen and terminal-status retrieval. Share the harness-kill
@@ -296,11 +311,13 @@ suppress post-close completion.
 Verification:
 
 - Verify Claude's hosted init stream and exact removals, the verified Codex
-  config fixture, Pi's lead and worker tool flags, preserved tools, worker allowlist
+  config fixture on both start and resume, Pi's lead and worker tool flags
+  including the lead's MCP-only fallback, preserved tools, worker allowlist
   ordering, default-on behavior, and per-harness revert. Cover the frozen
   Claude CLI tier, missing replacement tools, existing and reattached sessions,
   and unverified versions.
-- Verify agy default launch, the `reject_once` exception under bypass and worker
+- Verify agy default launch on new, resumed, and reattached sessions with
+  a saved non-default mode, the `reject_once` exception under bypass and worker
   auto-approval, command-request detection for foreground and daemon jobs,
   prompt append, new prompt after turn end, and the warning and instruction
   path when a command starts without a request. Cover the advisory-only
