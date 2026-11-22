@@ -165,12 +165,12 @@ function checkStrip(label, g) {
         });
         assert.deepEqual(covered, [true, true], 'dark/1280: the open rail, its scrim and memo pad cover the strip: ' + JSON.stringify(covered));
         await shot(page, 'dark-narrow-open');
-        // The rail footer is Settings and Home alone, and fits at 360px.
+        // The rail footer is Settings, global settings (ed920bb24) and Home, and fits at 360px.
         await page.setViewportSize({ width: 360, height: 760 });
         await page.waitForTimeout(300);
         const foot = await page.evaluate(() => { const f = document.querySelector('#rail .rfoot'); return { fits: f.scrollWidth <= f.clientWidth, kids: [...f.children].map(c => c.className) }; });
         assert.ok(foot.fits, 'footer fits at 360px');
-        assert.deepEqual(foot.kids, ['btn gear settings-toggle', 'btn gear rail-home'], 'footer is Settings then Home');
+        assert.deepEqual(foot.kids, ['btn gear settings-toggle', 'btn gear r-config-global', 'btn gear rail-home'], 'footer is Settings, global settings, then Home');
         await page.keyboard.press('Escape');
         await page.waitForTimeout(300);
 

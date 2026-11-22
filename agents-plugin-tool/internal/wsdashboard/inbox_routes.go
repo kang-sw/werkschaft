@@ -724,6 +724,9 @@ func (d *Daemon) inboxWrite(dir, replyID, route string, raw []byte, now time.Tim
 		if errors.Is(err, wsinbox.ErrGone) {
 			return http.StatusConflict, "the session already received this message"
 		}
+		if errors.Is(err, wsinbox.ErrNotSteerable) {
+			return http.StatusConflict, "a scheduled prompt waits for the turn end and cannot be steered"
+		}
 		if err != nil {
 			fmt.Fprintf(d.log, "dashboard: inbox steer: %v\n", err)
 			return http.StatusInternalServerError, "could not steer the message"

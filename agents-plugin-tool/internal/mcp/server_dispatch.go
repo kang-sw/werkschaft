@@ -1635,6 +1635,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return s.handleMailboxHistory(req.ID, params.Arguments)
 	case "mailbox.recipients":
 		return s.handleMailboxRecipients(req.ID, params.Arguments)
+	case "cron":
+		return s.handleCron(req.ID, params.Arguments)
 	case dashboardIntakeTool:
 		return s.handleDashboardIntake(req.ID, params.Arguments)
 	case dashboardInboxDrainTool:

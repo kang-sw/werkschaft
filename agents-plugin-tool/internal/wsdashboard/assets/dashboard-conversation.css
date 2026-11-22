@@ -112,6 +112,19 @@
 .cmdecho .t { font-size: 11px; font-variant-numeric: tabular-nums; }
 .cmdout { margin: 0; padding: 7px 10px; background: var(--wb-card); border-radius: 8px; box-shadow: var(--wb-shadow); font: 12px/1.45 var(--wb-mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
 .cmdnote { padding-left: 18px; font-size: 11.5px; font-style: italic; color: var(--wb-muted-fg); }
+/* The private result cards of the composer's `!` commands: the command-card
+   treatment above, kept in a strip over the composer, never in the shared
+   transcript. */
+.d-cexec { display: flex; flex-direction: column; gap: 8px; padding: 6px 2px 8px; max-height: 38vh; overflow: auto; }
+.d-cexec[hidden] { display: none; }
+.cexec .cexec-state { margin-left: auto; font-size: 11px; white-space: nowrap; }
+.cexec[data-phase="running"] .cexec-state, .cexec[data-phase="async"] .cexec-state { color: var(--wb-primary); }
+.cexec[data-phase="refused"] .cexec-state, .cexec[data-phase="unknown"] .cexec-state { color: var(--wb-fail); }
+.cexec .cexec-x, .cexec .cexec-copy { cursor: pointer; border: 0; border-radius: 6px; padding: 1px 6px; font: inherit; background: transparent; color: var(--wb-muted-fg); }
+.cexec .cexec-copy { background: var(--wb-card); color: var(--wb-fg); flex: none; white-space: nowrap; }
+.cexec .cexec-x:focus-visible, .cexec .cexec-copy:focus-visible { outline: 2px solid var(--wb-primary); }
+.cexec-file { display: flex; align-items: center; gap: 8px; padding-left: 18px; font-size: 11.5px; min-width: 0; }
+.cexec-file a { overflow-wrap: anywhere; min-width: 0; flex: 1 1 auto; font-family: var(--wb-mono); }
 .caret { display: inline-block; width: 7px; height: 13px; background: currentColor; vertical-align: -2px; margin-left: 2px; animation: dash-blink 1s steps(1) infinite; }
 @keyframes dash-blink { 50% { opacity: 0; } }
 .permwait { display: flex; gap: 8px; align-items: center; background: color-mix(in srgb, var(--wb-ph-perm) 16%, var(--wb-card)); border-radius: 10px; padding: 7px 11px; font-size: 13px; }
@@ -364,6 +377,12 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .tt-ctx .fill { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 999px; }
 .tt-ctx .m-soft { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--wb-card); box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-fg) 26%, transparent); transform: translateX(-50%); }
 .tt-ctx .tok { flex: none; font: 600 10.5px/1 var(--wb-mono); color: var(--wb-muted-fg); white-space: nowrap; }
+.tt-cmp { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 10.5px; color: var(--wb-muted-fg); }
+.tt-cmp .d-now { flex: none; height: 16px; padding: 0 6px; border-radius: 999px; line-height: 16px; font-weight: 800; background: color-mix(in srgb, var(--wb-primary) 18%, transparent); color: var(--wb-primary); }
+.tt-cmp .d-now::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: currentColor; vertical-align: 1px; animation: tt-cmp-pulse 1.2s ease-in-out infinite; }
+@keyframes tt-cmp-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .tt-cmp .d-now::before { animation: none; } }
+.tt-cmp .cnt { font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-ctx.d-unknown .tok { font-weight: 500; }
 .tt-chain { font-size: 10.5px; color: var(--wb-muted-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tt-task { font-size: 11px; color: var(--wb-fg); opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

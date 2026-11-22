@@ -524,6 +524,18 @@ func (j *JobOutput) Read(s Stream, offset, limit int64) Slice {
 	return Slice{Stream: s, Data: j.copyRange(s, start, end), Start: start, End: end, Written: written, Evicted: evicted}
 }
 
+// Retained returns every retained byte of s in one slice: [Evicted, Written).
+// It is bounded by the job's ring (one copy of at most the per-job cap).
+func (j *JobOutput) Retained(s Stream) Slice {
+	if !s.valid() {
+		return Slice{Stream: s}
+	}
+	j.rings.mu.Lock()
+	defer j.rings.mu.Unlock()
+	written, evicted := j.written[s], j.evicted[s]
+	return Slice{Stream: s, Data: j.copyRange(s, evicted, written), Start: evicted, End: written, Written: written, Evicted: evicted}
+}
+
 // copyRange copies the retained bytes of s in [from, to). Caller holds the
 // rings lock and passes a range inside [Evicted, Written].
 func (j *JobOutput) copyRange(s Stream, from, to int64) []byte {

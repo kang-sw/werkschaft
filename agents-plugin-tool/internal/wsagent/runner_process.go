@@ -20,6 +20,9 @@ func (c *conv) runCommand(cmd wsinbox.Command) error {
 	p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 	isCompact := cmd.Name == "compact" && p.DetectsLifecycle()
 	if isCompact && !c.compacting {
+		if c.compactOrigin == "" {
+			c.compactOrigin = wslive.CompactOriginManual
+		}
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 		if p.CommandEndConfirms {
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: wslive.TriggerManual})
@@ -212,6 +215,9 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		// The child's authority, which a backend that sandboxes its worker
 		// maps itself (codexWorkerMode).
 		PermissionLevel: level,
+		// A Claude worker reports its session state and background tasks,
+		// so a task it still runs keeps it from idling (idleNow).
+		SessionState: rec.Backend == BackendClaude && isAgentWorkerProfile(rec.Profile),
 		// An agent.spawn child delegates through agent.spawn only.
 		RemoveSubagents: RemovesSubagents(rec),
 	}

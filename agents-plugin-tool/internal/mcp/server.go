@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kang-sw/devenv/internal/execjob"
+	"github.com/kang-sw/devenv/internal/wscron"
 	"io"
 	"os"
 	"runtime/debug"
@@ -64,6 +65,9 @@ type Server struct {
 	// (server_exec_hosted.go); nil and empty where there is none.
 	exec         func() *execjob.Hosted
 	conversation string
+	// cron returns the daemon's scheduler (ServerOptions.Cron); nil where
+	// there is none.
+	cron func() *wscron.Scheduler
 	// execCutover is the harness of the bound conversation when its
 	// process launched with native shell tools removed (wsagent's exec
 	// cutover): the exec tools are listed, and Codex's fs.* read tools

@@ -46,6 +46,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-composer-pickers.js",
 	"dashboard-composer-selections.js",
 	"dashboard-composer-delivery.js",
+	"dashboard-composer-exec.js",
 	"dashboard-composer-restore.js",
 	"dashboard-composer-status.js",
 	"dashboard-composer-keyboard.js",

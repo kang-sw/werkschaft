@@ -212,8 +212,34 @@ async function checkKeyedRebuild(frame) {
         assert.equal(await row.locator('.tok').textContent(), '156k / 200k');
         assert.equal(await row.locator('.m-soft').count(), 1);
         if (shots) await tip.screenshot({ path: `${shots}/hud-ctx-D-unlinked-${scheme}.png` });
+        // Compaction line: D compacting now (h5, hovered above), the chip then the
+        // count and origin, directly under the context row; the card updates in
+        // place when the compaction ends (count-only, manual); E count only (h2).
+        {
+          const cmp = tip.locator('.tt-cmp');
+          await cmp.waitFor();
+          assert.equal(await cmp.locator('.d-now').textContent(), '압축 중', 'D: compacting chip');
+          assert.equal(await cmp.locator('.cnt').textContent(), '압축 2회 · 마지막 ws 자동', 'D: count and origin');
+          const ctxBox = await row.boundingBox(), cmpBox = await cmp.boundingBox(), tipBox = await tip.boundingBox();
+          assert(cmpBox.y >= ctxBox.y + ctxBox.height - 1 && cmpBox.y < ctxBox.y + ctxBox.height + 14, 'line sits right under the context row');
+          assert(cmpBox.x >= tipBox.x && cmpBox.x + cmpBox.width <= tipBox.x + tipBox.width + 1, 'line stays inside the card');
+          assert.notEqual(await cmp.locator('.d-now').evaluate(el => getComputedStyle(el, '::before').animationName), 'none', 'the dot pulses');
+          if (shots) await tip.screenshot({ path: `${shots}/hud-cmp-D-${scheme}.png` });
+          await fetch(`${switcher}?s=heavy&cmp=done`);
+          await frame.waitForFunction(() => !document.querySelector('#hud-tooltip .tt-cmp .d-now'));
+          assert.equal(await cmp.locator('.cnt').textContent(), '압축 3회 · 마지막 수동', 'the hovered card updates in place');
+          await fetch(`${switcher}?s=heavy`);
+          await frame.waitForFunction(() => document.querySelector('#hud-tooltip .tt-cmp .d-now'));
+          await frame.locator('#agcompact .hud-node[data-id="h2"]').hover();
+          await frame.waitForFunction(() => { const c = document.querySelector('#hud-tooltip .tt-cmp'); return c && !c.querySelector('.d-now'); });
+          assert.equal(await tip.locator('.tt-cmp .cnt').textContent(), '압축 3회 · 마지막 하네스', 'E: count only');
+          assert.equal(await tip.locator('.tt-cmp .d-now').count(), 0);
+          if (shots) await tip.screenshot({ path: `${shots}/hud-cmp-E-${scheme}.png` });
+        }
         await frame.locator('#agcompact .hud-node[data-id="h10"]').hover();
         await frame.waitForFunction(() => document.querySelector('#hud-tooltip .tt-ctx.d-unknown'));
+        assert.equal(await tip.locator('.tt-cmp').count(), 0, 'F: never compacted, no line');
+        if (shots) await tip.screenshot({ path: `${shots}/hud-cmp-F-${scheme}.png` });
         assert.equal(await row.locator('.bar').count(), 0, 'C: no bar');
         assert.equal(await row.locator('.tok').textContent(), '컨텍스트 41.0k');
         if (shots) await tip.screenshot({ path: `${shots}/hud-ctx-C-${scheme}.png` });
