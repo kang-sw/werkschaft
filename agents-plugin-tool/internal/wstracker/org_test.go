@@ -199,6 +199,36 @@ func TestConcurrentOrgListConflictsUseFoldOrder(t *testing.T) {
 	})
 }
 
+// TestOrgCCOnClashedOrgIsDropped CCs an org whose creation loses a
+// concurrent name clash, from the losing clone before it syncs: the final fold
+// keeps no registration for an org it never created.
+func TestOrgCCOnClashedOrgIsDropped(t *testing.T) {
+	tm := newTeam(t)
+	it := tm.do("maya.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Clashed CC"})
+	tm.goOffline("ada.pc")
+	tm.goOffline("bo.pc")
+	tm.do("ada.pc", TypeOrgSet, orgSetPayload("o-a", "Sales", "maya"))
+	lost := tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-b", "Sales", "raj"))
+	cc := tm.do("bo.pc", TypeItemCCOrg, map[string]any{"item": it, "org": "o-b"})
+	tm.comeOnline("ada.pc")
+	tm.comeOnline("bo.pc")
+	for _, who := range []string{"ada.pc", "bo.pc"} {
+		v := tm.view(who)
+		wantEq(t, who+" losing org creation", event(t, v, lost).Status, "flagged")
+		wantEq(t, who+" dependent cc_org passes its causal check", event(t, v, cc).Status, "applied")
+		S := tm.clone(who).r.S
+		if S.orgs["o-b"] != nil {
+			t.Fatalf("%s: clashed org folded", who)
+		}
+		if reg := S.ccOrgs[ccOrgKey(it, "o-b")]; reg != nil {
+			t.Fatalf("%s: orphaned registration %+v on an org the fold never created", who, reg)
+		}
+		if got := v.Items[it].OrgCC; len(got) != 0 {
+			t.Fatalf("%s: item projects org CC %+v", who, got)
+		}
+	}
+}
+
 func TestRemovedChildOrgFallsBackToParent(t *testing.T) {
 	tm := newTeam(t)
 	tm.do("ada.pc", TypeSetLead, map[string]any{"member": "omar", "leads": []string{"lena"}})
