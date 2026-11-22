@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
+  for (const name of ["packs", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -685,7 +685,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
+  for (const name of ["packs", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -877,14 +877,15 @@ test("companion settings modal opens, writes typed global values, reverts refuse
   const C = companion({ document: doc, Option, fetch, wsT: key => key,
     window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
   const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
-  const rows = catalog.filter(row => row.surface === "companion-modal");
+  // The Sources section renders dashboard.companion_sources; the row loop skips it.
+  const rows = catalog.filter(row => row.surface === "companion-modal" && row.key !== "dashboard.companion_sources");
   const config = { pack: "default", preset: "werkschaft-d1", agentCooldownSeconds: 30, agentHourlyCap: 20 };
   const node = element("div"), gear = element("button");
   const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, {
     rows: () => rows, config: () => config, persona: () => ({ name: "Fixture Fox", voice: "Short lines." }),
     presets: () => ({ available: ["werkschaft-d1", "werkschaft-d2"] }),
     anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
-    resetSize: () => { resets++; }, applyPreset() {}, notice: key => notices.push(key)
+    resetSize: () => { resets++; }, applyPreset() {}, notice: key => notices.push(key), packsChanged() {}
   });
   const dialog = node.children[0];
   const find = (cls) => dialog.all().filter(c => c.className === cls);

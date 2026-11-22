@@ -10,6 +10,7 @@
     "dashboard.companion_agent_hourly_cap": "agentHourlyCap",
     "dashboard.companion_sources": "sources"
   };
+  const sourcesKey = "dashboard.companion_sources";
   const voicePreview = 240;
 
   function voiceSummary(voice) {
@@ -34,7 +35,11 @@
     let controls = new Map(), packIds = null, packsRequest = null;
 
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
-    function rows() { return (hooks.rows() || []).filter(row => C.record(row) && Object.hasOwn(configFields, row.key)); }
+    // The Sources section renders dashboard.companion_sources, so it has no row of its own here.
+    function rows() {
+      return (hooks.rows() || []).filter(row => C.record(row) && Object.hasOwn(configFields, row.key) &&
+        row.key !== sourcesKey);
+    }
     function current(key) { return hooks.config()?.[configFields[key]]; }
 
     function el(tag, className, text) {
@@ -109,6 +114,8 @@
         if (row.key === "dashboard.companion_preset") { body.push(personaBlock()); persona = true; }
       }
       if (!persona) body.splice(1, 0, personaBlock());
+      sources.redraw();
+      body.push(sources.node);
       if (!canWrite()) body.push(el("p", "ws-companion-settings-muted", wsT("js.companion.settings_readonly")));
       const reset = el("button", "ws-companion-settings-action", wsT("js.companion.reset_size"));
       reset.type = "button";
@@ -146,6 +153,7 @@
     // a revert after a refused or failed write passes null to reset it too.
     function refresh(spare = doc.activeElement) {
       if (!dialog.open) return;
+      sources.refresh();
       for (const [key, input] of controls) {
         if (input === spare) continue;
         if (input.tagName === "SELECT") fill(input, key);
@@ -153,19 +161,35 @@
       }
     }
 
+    function applyCatalog(catalog) {
+      if (!Array.isArray(catalog?.packs)) return;
+      packIds = catalog.packs.map(pack => pack?.id).filter(C.timingId);
+      const select = controls.get("dashboard.companion_pack");
+      if (select && dialog.open) fill(select, "dashboard.companion_pack");
+      sources.setCatalog(catalog);
+    }
+
     function loadPacks() {
       if (packsRequest) return;
       packsRequest = fetch("/api/companion/packs", { credentials: "same-origin", signal })
         .then(response => response.ok ? response.json() : null)
-        .then(catalog => {
-          if (!Array.isArray(catalog?.packs)) return;
-          packIds = catalog.packs.map(pack => pack?.id).filter(C.timingId);
-          const select = controls.get("dashboard.companion_pack");
-          if (select && dialog.open) fill(select, "dashboard.companion_pack");
-        })
+        .then(applyCatalog)
         .catch(() => {})
         .finally(() => { packsRequest = null; });
     }
+
+    // After an install, update, uninstall or import the modal takes the
+    // returned catalog (or asks for it again) and the stage reloads the active
+    // pack from the changed catalog.
+    const sources = C.sourcesSection({
+      doc, signal, options, canWrite, notice: hooks.notice,
+      raw: () => current(sourcesKey),
+      layout: () => place(),
+      catalogChanged(catalog) {
+        if (catalog) applyCatalog(catalog); else loadPacks();
+        hooks.packsChanged();
+      }
+    });
 
     // place sets the dialog beside the character, clamped to the viewport:
     // to its right when it fits, else to its left.

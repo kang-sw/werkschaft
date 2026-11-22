@@ -363,6 +363,8 @@
       presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
       anchor: () => hit.getBoundingClientRect(),
       resetSize() { sizing.reset(); },
+      // A pack install, update, uninstall or import already reloaded the daemon's store.
+      packsChanged() { requestPack(true); },
       applyPreset, notice
     });
 
