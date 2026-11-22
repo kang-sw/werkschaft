@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: cc5b4b3b24146e2e
 sage-review-completeness-reviewed: cc5b4b3b24146e2e
+completed: 2026-11-22
 ---
 
 # Return the Werkschaft desktop shell to Tauri
@@ -647,6 +648,23 @@ for the owner to decide, without fixed thresholds. Record the evidence and
 the owner’s release decision in the phase Result. After P4 passes, re-home
 the overlapping reliability and Windows delivery work from
 `261115-feat-werkschaft-electron-shell` Phases 2–4 to Tauri.
+
+### Result (1aace4c5e) - 2026-11-22
+
+The owner adopted the Tauri shell ((2140)=b) and closed this phase with
+the unpassed gate rows deferred ((2141)=a). The branch merged into
+`develop` at `1aace4c5e`. The evidence subsections below hold the Windows
+smoke run, the rows (b)/(c) rerun, and the adoption inputs.
+
+- Passed: Windows rows (a), (b) targeted checks, and (c). Paired Windows
+  size, memory, and frame measurements are recorded. macOS crate tests and
+  a 79-minute dogfood run with stable WebContent memory are recorded.
+- Deviation: the gate asked for a pass on every Windows row and for macOS
+  paired measurements. Row (d), row (e), and the macOS Electron pair moved
+  to `261122-chore-werkschaft-tauri-deferred-verification`. The re-home of
+  `261115-feat-werkschaft-electron-shell` Phases 2-4 moved there as well.
+- Forward: the tray, notifications, and full-quit work in
+  `261122-feat-werkschaft-tray-notifications-full-quit` is unblocked.
 
 #### Windows smoke evidence - 2026-11-22
 
