@@ -477,3 +477,20 @@ Key files (from the 2026-11-22 fact-finding; line numbers drift):
   - A trigger on codex or agy sessions always drops until those CLIs gain a
     tool-free one-shot mode.
   - Lite review minors: all addressed in ad8dc9907.
+
+#### Edition (cea9308ab) - 2026-11-22
+
+- At the lead's request, develop eb2e89ee4 (director Phase 1 as landed:
+  b74a115b0 and 255d02b74) was merged into the branch. The merge was clean.
+- Verification on cea9308ab:
+  - `go test ./internal/mcp -count=1 -timeout 45m`, full package: ok
+    (811.3 s).
+  - `go test ./internal/wsdashboard ./internal/wsagent -count=1`, full
+    packages: ok (525.1 s and 158.0 s).
+  - `node --test frontend-companion.test.js frontend-settings.test.js`:
+    39/39.
+  - `node --test *.test.js`: 194/197. The 3 failures are the known
+    pre-existing ones.
+  - `generate-package-assets.py --check`: exit 0.
+  - `go build ./...`: ok. `go vet` on wsdashboard, wsagent, mcp, and
+    cmd/ws-mcp: ok.
