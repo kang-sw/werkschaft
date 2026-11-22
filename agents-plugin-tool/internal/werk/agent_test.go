@@ -281,7 +281,7 @@ func TestLoopRunsToolsAndReplaysReasoningUnchanged(t *testing.T) {
 	}
 
 	got := types(r.out.lines())
-	want := []string{LineInit, LineTurnStart, LineUser, LineReasoning, LineUsage, LineToolStart, LineToolEnd, LineReply, LineUsage, LineTurnEnd}
+	want := []string{LineInit, LineTurnStart, LineUser, LineUsage, LineReasoning, LineToolStart, LineToolEnd, LineUsage, LineReply, LineTurnEnd}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("lines = %v, want %v", got, want)
 	}

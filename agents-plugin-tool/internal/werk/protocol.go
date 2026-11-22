@@ -122,6 +122,10 @@ type Line struct {
 
 	// Turn is the turn counter (1-based) a turn-scoped line belongs to.
 	Turn int `json:"turn,omitempty"`
+	// Response is the provider's id of the model response a usage, reasoning,
+	// reply or tool_start line comes from: the model request of the audit
+	// chain.
+	Response string `json:"response,omitempty"`
 
 	// reply, reasoning, user, user_taken, notice, turn_end
 	Item  string `json:"item,omitempty"`

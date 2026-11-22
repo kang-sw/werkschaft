@@ -455,7 +455,7 @@ func (a *Agent) loop(ctx context.Context, turn int) (reason, errText string) {
 			}
 			return ReasonDone, ""
 		}
-		a.runCalls(ctx, turn, calls)
+		a.runCalls(ctx, turn, resp.ID, calls)
 		if ctx.Err() != nil {
 			return ReasonAborted, ""
 		}
@@ -488,9 +488,16 @@ func functionCalls(items []json.RawMessage) []functionCall {
 	return out
 }
 
-// report emits a completed response's lines: reasoning summaries, the
-// assistant messages, and the usage.
+// report emits a completed response's lines: its usage first (the figures
+// and the response id every later line of the response shares), then its
+// reasoning summaries and assistant messages.
 func (a *Agent) report(turn int, resp *Response) {
+	u := resp.Usage
+	a.out.line(Line{
+		T: LineUsage, Turn: turn, Response: resp.ID,
+		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, ReasoningTokens: u.ReasoningTokens,
+		CostUSD: u.CostUSD, Context: u.InputTokens + u.OutputTokens,
+	})
 	for _, raw := range resp.Output {
 		var it struct {
 			Type    string `json:"type"`
@@ -516,7 +523,7 @@ func (a *Agent) report(turn int, resp *Response) {
 				}
 			}
 			text := strings.Join(parts, "\n")
-			a.out.line(Line{T: LineReasoning, Turn: turn, Item: it.ID, Text: text, Encrypted: text == "" && it.Encrypted != ""})
+			a.out.line(Line{T: LineReasoning, Turn: turn, Response: resp.ID, Item: it.ID, Text: text, Encrypted: text == "" && it.Encrypted != ""})
 		case "message":
 			var parts []string
 			for _, c := range it.Content {
@@ -528,16 +535,10 @@ func (a *Agent) report(turn int, resp *Response) {
 				a.mu.Lock()
 				a.lastReply = text
 				a.mu.Unlock()
-				a.out.line(Line{T: LineReply, Turn: turn, Item: it.ID, Text: text, Final: true})
+				a.out.line(Line{T: LineReply, Turn: turn, Response: resp.ID, Item: it.ID, Text: text, Final: true})
 			}
 		}
 	}
-	u := resp.Usage
-	a.out.line(Line{
-		T: LineUsage, Turn: turn,
-		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, ReasoningTokens: u.ReasoningTokens,
-		CostUSD: u.CostUSD, Context: u.InputTokens + u.OutputTokens,
-	})
 }
 
 // request sends one model request, retrying the failures that are worth it.
@@ -712,7 +713,7 @@ func ModelToolName(wsName string) string {
 // runCalls runs one response's tool calls and appends each result as it
 // finishes. Consecutive read-only calls run together; any other call runs
 // alone. A call the interrupt cut off is answered as interrupted.
-func (a *Agent) runCalls(ctx context.Context, turn int, calls []functionCall) {
+func (a *Agent) runCalls(ctx context.Context, turn int, response string, calls []functionCall) {
 	a.mu.Lock()
 	tools := a.tools
 	a.mu.Unlock()
@@ -732,7 +733,7 @@ func (a *Agent) runCalls(ctx context.Context, turn int, calls []functionCall) {
 			wg.Add(1)
 			go func(c functionCall) {
 				defer wg.Done()
-				a.runCall(ctx, turn, tools, c)
+				a.runCall(ctx, turn, response, tools, c)
 			}(c)
 			answered[c.CallID] = true
 		}
@@ -743,7 +744,7 @@ func (a *Agent) runCalls(ctx context.Context, turn int, calls []functionCall) {
 	// transcript has a result for every call.
 	for _, c := range calls {
 		if !answered[c.CallID] {
-			a.out.line(Line{T: LineToolStart, Turn: turn, Call: c.CallID, Name: c.Name, Args: clip(c.Arguments, ToolArgsLineBytes)})
+			a.out.line(Line{T: LineToolStart, Turn: turn, Response: response, Call: c.CallID, Name: c.Name, Args: clip(c.Arguments, ToolArgsLineBytes)})
 			a.append(functionOutputItem(c.CallID, interruptedOutput))
 			a.out.line(Line{T: LineToolEnd, Turn: turn, Call: c.CallID, Name: c.Name, Output: interruptedOutput, Failed: true})
 		}
@@ -764,8 +765,8 @@ func clip(s string, max int) string {
 
 // runCall runs one call: start line, the tool, the result into the
 // transcript, end line.
-func (a *Agent) runCall(ctx context.Context, turn int, tools map[string]toolEntry, c functionCall) {
-	a.out.line(Line{T: LineToolStart, Turn: turn, Call: c.CallID, Name: c.Name, Args: clip(c.Arguments, ToolArgsLineBytes), Truncated: len(c.Arguments) > ToolArgsLineBytes})
+func (a *Agent) runCall(ctx context.Context, turn int, response string, tools map[string]toolEntry, c functionCall) {
+	a.out.line(Line{T: LineToolStart, Turn: turn, Response: response, Call: c.CallID, Name: c.Name, Args: clip(c.Arguments, ToolArgsLineBytes), Truncated: len(c.Arguments) > ToolArgsLineBytes})
 	output, failed := a.invoke(ctx, tools, c)
 	shown, cut := TruncateOutput(output, ToolOutputBytes)
 	a.append(functionOutputItem(c.CallID, shown))
