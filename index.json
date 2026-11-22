@@ -628,19 +628,6 @@
     "261122-feat-ws-builtin-agent-harness": {
       "registered_at": "2026-11-22T08:45:27Z"
     },
-    "261122-feat-ws-companion-director": {
-      "registered_at": "2026-11-22T00:24:05Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T10:30:46Z",
-        "impl": {
-          "branch": "impl/develop/kept-salon-derby"
-        }
-      }
-    },
     "261122-feat-ws-companion-pack-sources": {
       "registered_at": "2026-11-22T10:27:17Z",
       "lease": {
