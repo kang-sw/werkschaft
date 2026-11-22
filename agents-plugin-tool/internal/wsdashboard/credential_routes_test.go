@@ -397,3 +397,117 @@ func TestCredentialChangeToADaemonWithoutTheRoute(t *testing.T) {
 		t.Fatalf("a draining daemon = %v", err)
 	}
 }
+
+// gatedStore holds its first change at a gate inside the store's critical
+// section, the way a slow write would; its Close waits for that change the
+// way the real store's does (wscred tests the real fence).
+type gatedStore struct {
+	*wscred.Store
+	mu         sync.Mutex
+	held       bool
+	entered    chan struct{}
+	gate       chan struct{}
+	closing    chan struct{}
+	lockHeld   func() bool
+	heldAtLand []bool
+}
+
+func (g *gatedStore) Apply(c wscred.Change) (wscred.ChangeResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.held {
+		g.held = true
+		close(g.entered)
+		<-g.gate
+	}
+	res, err := g.Store.Apply(c)
+	if err == nil && res.Changed {
+		g.heldAtLand = append(g.heldAtLand, g.lockHeld())
+	}
+	return res, err
+}
+
+func (g *gatedStore) Close() {
+	close(g.closing)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.Store.Close()
+}
+
+// TestDaemonShutdownFencesTheCredentialWriter: a change in flight when the
+// daemon stops lands before the daemon releases its lock, and a later one is
+// refused; no daemon write lands after another process may own the file.
+func TestDaemonShutdownFencesTheCredentialWriter(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(t.TempDir(), "auth", wscred.FileName)
+	lockHeld := func() bool {
+		probe := flock.New(filepath.Join(dir, lockFileName))
+		ok, err := probe.TryLock()
+		if ok {
+			_ = probe.Unlock()
+		}
+		return !ok || err != nil
+	}
+	g := &gatedStore{Store: wscred.NewStore(credPath), entered: make(chan struct{}), gate: make(chan struct{}), closing: make(chan struct{}), lockHeld: lockHeld}
+	cd := startCredentialDaemon(t, dir, credPath, g)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sent := make(chan error, 1)
+	go func() {
+		_, _, err := ApplyCredentialChange(ctx, dir, filepath.Join(t.TempDir(), wscred.FileName), wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenRouter, APIKey: wscred.NewSecret(credFixtureKey)})
+		sent <- err
+	}()
+	<-g.entered
+	stopped := make(chan struct{})
+	go func() {
+		cd.d.Close()
+		close(stopped)
+	}()
+	select {
+	case <-g.closing:
+	case <-stopped:
+		t.Fatal("the daemon stopped without closing its credential store")
+	}
+	if !lockHeld() {
+		t.Fatal("the daemon released its lock while a credential change was in flight")
+	}
+	close(g.gate)
+	<-stopped
+	if len(g.heldAtLand) != 1 || !g.heldAtLand[0] {
+		t.Fatalf("the change in flight landed with the lock held = %v", g.heldAtLand)
+	}
+	if lockHeld() {
+		t.Fatal("the stopped daemon still holds its lock")
+	}
+	before, err := os.ReadFile(credPath)
+	if err != nil || !strings.Contains(string(before), credFixtureKey) {
+		t.Fatalf("the change in flight did not land: %v", err)
+	}
+	if _, err := g.Apply(wscred.Change{Op: wscred.OpRemove, Provider: wscred.ProviderOpenRouter}); !errors.Is(err, wscred.ErrStoreClosed) {
+		t.Fatalf("a change after the daemon stopped = %v", err)
+	}
+	if after, _ := os.ReadFile(credPath); string(after) != string(before) {
+		t.Fatal("a refused change rewrote the file after the lock was released")
+	}
+	cancel()
+	<-sent
+}
+
+// TestChangeRouteOnAClosedStoreAsksTheSenderToRetry: a change that reaches
+// a stopping daemon after its store closed is answered as a drain, so the
+// sender retries against the successor instead of failing.
+func TestChangeRouteOnAClosedStoreAsksTheSenderToRetry(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(t.TempDir(), "auth", wscred.FileName)
+	store := &spyStore{Store: wscred.NewStore(credPath)}
+	cd := startCredentialDaemon(t, dir, credPath, store)
+	store.Close()
+	ep, err := ReadEndpoint(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body := postRaw(t, cd.base+credentialChangePath, map[string]string{"Authorization": "Bearer " + ep.Token, "Content-Type": "application/json"}, `{"op":"remove","provider":"openrouter"}`)
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "shutting_down") {
+		t.Fatalf("change on a closed store = %d %s", code, body)
+	}
+}

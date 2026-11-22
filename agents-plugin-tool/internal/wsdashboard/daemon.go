@@ -136,6 +136,8 @@ type DaemonOptions struct {
 	// Credentials is the provider credential store the daemon owns
 	// (credential_routes.go): while the daemon runs it is the credential
 	// file's only writer. Nil serves no credential and takes no change.
+	// Close closes it to changes before it releases the lock, so a store
+	// serves one daemon.
 	Credentials *wscred.Store
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN

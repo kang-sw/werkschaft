@@ -350,3 +350,51 @@ func TestSecretsAreRedactedInEveryPrintedForm(t *testing.T) {
 		t.Fatalf("redacted forms = %q / %q", fmt.Sprint(cred.Secret), fmt.Sprint(Secret{}))
 	}
 }
+
+// TestCloseWaitsForTheChangeInFlightAndRefusesLaterOnes: the daemon closes
+// its store before it releases the lock, so a change in flight lands before
+// Close returns and none lands after.
+func TestCloseWaitsForTheChangeInFlightAndRefusesLaterOnes(t *testing.T) {
+	s := testStore(t)
+	entered, gate := make(chan struct{}), make(chan struct{})
+	beforeCredentialWrite = func() {
+		close(entered)
+		<-gate
+	}
+	t.Cleanup(func() { beforeCredentialWrite = nil })
+	applied := make(chan error, 1)
+	go func() {
+		_, err := s.Apply(Change{Op: OpSet, Provider: ProviderOpenRouter, APIKey: NewSecret(fixtureKey)})
+		applied <- err
+	}()
+	<-entered
+	closed := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a change was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	beforeCredentialWrite = nil
+	close(gate)
+	if err := <-applied; err != nil {
+		t.Fatalf("the change in flight = %v", err)
+	}
+	<-closed
+	raw, err := os.ReadFile(s.Path())
+	if err != nil || !strings.Contains(string(raw), fixtureKey) {
+		t.Fatalf("the change in flight did not land before Close returned: %v", err)
+	}
+	if _, err := s.Apply(Change{Op: OpRemove, Provider: ProviderOpenRouter}); !errors.Is(err, ErrStoreClosed) {
+		t.Fatalf("a change after Close = %v", err)
+	}
+	if raw2, _ := os.ReadFile(s.Path()); string(raw2) != string(raw) {
+		t.Fatal("a refused change rewrote the file")
+	}
+	if cred, err := openrouter(s); err != nil || cred.Secret.Reveal() != fixtureKey {
+		t.Fatalf("a closed store stopped answering reads: %+v, %v", cred, err)
+	}
+}

@@ -66,6 +66,8 @@ type Store struct {
 	mu      sync.Mutex
 	loaded  bool
 	loadErr error
+	// closed refuses every later change (Close).
+	closed bool
 	// failedAt identifies the file a failed load read (see loadLocked).
 	failedAt fileStamp
 	doc      document
@@ -79,6 +81,26 @@ func NewStore(path string) *Store { return &Store{path: path, now: time.Now} }
 
 // Path is the credential file's path.
 func (s *Store) Path() string { return s.path }
+
+// ErrStoreClosed is a change that reached a store its daemon has closed
+// (Close): the daemon is stopping, and its successor, or the offline CLI once
+// none runs, is the file's writer.
+var ErrStoreClosed = errors.New("the credential store is closed to changes: its daemon is stopping; run the command again")
+
+// beforeCredentialWrite, when set by a test, runs inside Apply's critical
+// section just before the file is written.
+var beforeCredentialWrite func()
+
+// Close closes the store to changes and returns once none is in flight: a
+// change that already holds the store finishes first, and every later one
+// fails with ErrStoreClosed. Reads still answer from memory. The daemon calls
+// it before it releases its single-instance lock, so no write of its lands
+// after another process has become the file's writer.
+func (s *Store) Close() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+}
 
 // ChangeOp is a credential change's kind.
 type ChangeOp string
@@ -316,6 +338,9 @@ func (s *Store) Apply(change Change) (ChangeResult, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ChangeResult{}, ErrStoreClosed
+	}
 	if err := s.loadLocked(true); err != nil {
 		return ChangeResult{}, err
 	}
@@ -343,6 +368,9 @@ func (s *Store) Apply(change Change) (ChangeResult, error) {
 	data, err := next.encode()
 	if err != nil {
 		return ChangeResult{}, err
+	}
+	if beforeCredentialWrite != nil {
+		beforeCredentialWrite()
 	}
 	if err := writePrivateFile(s.path, data); err != nil {
 		return ChangeResult{}, fmt.Errorf("write the credential file: %w", err)

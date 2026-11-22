@@ -43,6 +43,9 @@ const credentialChangePath = "/auth/provider/change"
 type credentialStore interface {
 	wscred.Source
 	Apply(wscred.Change) (wscred.ChangeResult, error)
+	// Close refuses later changes and waits for the one in flight; the
+	// daemon calls it before it releases its lock.
+	Close()
 }
 
 // AgentCredentialHost is an AgentHost whose hosted sessions may ask the
@@ -133,6 +136,12 @@ func (d *Daemon) handleProviderChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := d.credentials.Apply(wscred.Change{Op: body.Op, Provider: body.Provider, APIKey: wscred.NewSecret(body.APIKey)})
+	if errors.Is(err, wscred.ErrStoreClosed) {
+		// The daemon is stopping: the sender retries and reaches the
+		// successor, or writes the file itself once the lock is free.
+		writeJSON(w, http.StatusServiceUnavailable, credentialChangeRefusal{Error: "shutting_down"})
+		return
+	}
 	if err != nil {
 		// Apply's errors never quote the key.
 		writeJSON(w, http.StatusUnprocessableEntity, credentialChangeRefusal{Error: err.Error()})
