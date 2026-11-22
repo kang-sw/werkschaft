@@ -59,6 +59,7 @@ func (r *Runner) SetLiveHost(host wsdashboard.LiveHost) { r.opts.LiveHost = host
 // each write to a conversation's stores, so the daemon re-reads it. The
 // daemon calls Start once it holds its lock.
 func (r *Runner) Start(notify func(replyID, project string)) {
+	r.started.Store(true)
 	startupLoaded := make(chan struct{})
 	r.startupMu.Lock()
 	r.startupLoaded = startupLoaded

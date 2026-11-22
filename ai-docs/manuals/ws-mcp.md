@@ -1763,6 +1763,10 @@ Output lost from the holder's ring uses existing backend recovery. A backend
 that cannot reconcile the lost turn reports failure honestly. Re-arming agy's
 model-wait watchdog across replacement remains outside this contract, matching
 held leads.
+A bearer the successor has not registered yet (its startup holder scan is
+still restoring the surviving workers') waits for that rejoin, up to 8 s
+(`mcpRejoinWait`), then resolves; past the rejoin an unknown bearer is a 401 at
+once, so a hard 401 never reaches a restored worker in that window.
 MCP calls during drain may receive 503. Windows survival requires a
 restart-safe holder; one still inside its starter's job object may end with it.
 

@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
@@ -330,6 +331,9 @@ type Runner struct {
 	// rejoined gates nested calls until held-process capabilities are validated.
 	rejoined   chan struct{}
 	rejoinOnce sync.Once
+	// started is set when Start begins: from then until rejoined closes, a
+	// token not yet registered may still be restored by the startup rejoin.
+	started atomic.Bool
 	// startupLoaded closes after Start installed every open record. Restore
 	// markers may be present before then, but compactIdle sends none until the
 	// complete direct-child projection exists.
