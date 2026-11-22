@@ -2,10 +2,8 @@
 package mcp
 
 import (
-	"slices"
 	"strings"
 
-	"github.com/kang-sw/devenv/internal/claudeagents"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -43,15 +41,15 @@ var reservedToolVarNames = func() map[string]bool {
 // variables. A harness without static idioms uses the host-neutral wording.
 func terminologyForHarness(harness, namespace string) map[string]string {
 	terms := wsagent.BuiltinPlaybookTerminology(harness)
-	if terms == (wsagent.PlaybookTerminology{}) {
+	if terms.IsZero() {
 		terms = wsagent.PlaybookTerminology{
 			ExploreAgent:  "an exploration agent",
 			SpawnIdiom:    "spawning a subagent",
 			ContinueIdiom: "resuming the agent using its returned id",
 		}
 	}
-	if harness == wsagent.BackendClaude {
-		terms.SpawnIdiom = claudeSpawnIdiom(namespace)
+	if terms.SpawnIdiomFor != nil {
+		terms.SpawnIdiom = terms.SpawnIdiomFor(namespace)
 	}
 	return map[string]string{
 		"ExploreAgent":  terms.ExploreAgent,
@@ -95,50 +93,26 @@ func (s *Server) callerRecord(key string) (wsagent.Record, bool) {
 }
 
 // callerDaemonAgents reports whether key belongs to a conversation that
-// delegates through the daemon's agent tools, by its callerRecord read
-// once: an MCP-only Pi conversation (piMCPOnlyRecord) or a Claude
-// conversation launched without its native subagent tool
-// (subagentRemovedRecord).
+// delegates through the daemon's agent tools, by its callerRecord read once
+// and the record's own backend declaration
+// (ConnectionPolicy.DelegatesThroughDaemon): an MCP-only Pi conversation, or
+// a Claude conversation launched without its native subagent tool
+// (wsagent.RemovesSubagents). The record's backend decides, which a profile
+// override can make differ from the harness the connection is detected as.
 func (s *Server) callerDaemonAgents(key string) bool {
 	rec, ok := s.callerRecord(key)
-	return ok && (s.piMCPOnlyRecord(rec) || subagentRemovedRecord(rec))
-}
-
-// subagentRemovedRecord reports whether rec is a Claude conversation the
-// daemon launches without the native subagent tool
-// (wsagent.RemovesSubagents: a hosted lead or an agent.spawn child). Its
-// connection is detected as claude, but the claude row's spawn idiom names
-// the tool its launch removed.
-func subagentRemovedRecord(rec wsagent.Record) bool {
-	return rec.Backend == wsagent.BackendClaude && wsagent.RemovesSubagents(rec)
-}
-
-// piMCPOnlyRecord reports whether rec is a Pi conversation the daemon runs
-// without the native ws Pi extension (wsagent.PiMCPOnly). Such a session
-// connects through Pi's builtin MCP client, whose clientInfo is not the
-// extension's "ws-pi-bridge", so harness detection does not see it as pi.
-func (s *Server) piMCPOnlyRecord(rec wsagent.Record) bool {
-	if rec.Backend != wsagent.BackendPi {
+	if !ok {
 		return false
 	}
-	def := rec.ResolvedDefinition
-	if def == nil && !rec.Lead {
+	delegates := s.connectionOf(rec.Backend).DelegatesThroughDaemon
+	return delegates != nil && delegates(rec, func() *wsagent.Profile {
 		// Records written before the launched-profile snapshot fall back to
 		// the profile their name resolves to now.
 		if rp, err := wsagent.ResolveProfile(s.configOptions(), rec.Root, rec.Profile, s.agentBackends()...); err == nil {
-			def = &rp.Definition
+			return &rp.Definition
 		}
-	}
-	if !wsagent.PiMCPOnly(rec, def) {
-		return false
-	}
-	if rec.Lead {
-		return true
-	}
-	if def == nil {
-		return false
-	}
-	return slices.Contains(def.WSTools, "agent.spawn") && slices.Contains(def.WSTools, "mailbox.send")
+		return nil
+	})
 }
 
 // piMCPOnlyTerminology names the daemon's agent tools, which a Pi session
@@ -205,22 +179,4 @@ func nativeFirstManualRewrites(namespace string) []string {
 // other caller.
 func nativeFirstManual(body, namespace string) string {
 	return strings.NewReplacer(nativeFirstManualRewrites(namespace)...).Replace(body)
-}
-
-// claudeSpawnIdiom is the Claude SpawnIdiom value. Claude's Agent tool takes a
-// per-call model but no reasoning-effort parameter; effort comes only from the
-// subagent definition, so the plugin ships one effort-carrier agent per Claude
-// level (<namespace>:effort-<level>). The value carries the whole mapping rule
-// because workers spawn from playbook.render bindings and config.resolve_agent
-// output without ever reading the lead-only native-spawn-binding overlay. It is
-// substituted mid-sentence at every {{.SpawnIdiom}} site, so it stays one
-// clause. The namespace is assembled here rather than written as a
-// {{.SkillNamespace}} literal: substituteVars never re-scans replacement
-// values. The level list is the generator's own, so it names exactly the
-// agents the packages ship.
-func claudeSpawnIdiom(namespace string) string {
-	levels := claudeagents.Levels
-	levelList := strings.Join(levels[:len(levels)-1], ", ") + ", or " + levels[len(levels)-1]
-	return `Agent({subagent_type: "` + namespace + `:effort-<resolved effort>", model: <resolved model>, ...})` +
-		` (subagent_type "general-purpose" when the resolved effort is not exactly ` + levelList + `)`
 }

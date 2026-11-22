@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 // BackendRegistration is the admission descriptor of one registered backend.
@@ -101,12 +103,28 @@ type BackendRegistration struct {
 	// for no special behavior.
 	Permission PermissionPolicy
 	Lifecycle  LifecyclePolicy
+	// Connection is how the backend's client connects and how the daemon's MCP
+	// server treats that connection (backend_policy.go); Dashboard is how the
+	// dashboard's surfaces treat the backend (wsdashboard.HarnessTraits).
+	// Both are runtime-only registration data.
+	Connection ConnectionPolicy
+	Dashboard  wsdashboard.HarnessTraits
 }
 
 // PlaybookTerminology holds static native-tool idioms. Model, effort, and
 // namespace-dependent bindings are resolved when a playbook is rendered.
 type PlaybookTerminology struct {
 	ExploreAgent, SpawnIdiom, ContinueIdiom string
+	// SpawnIdiomFor, when set, spells SpawnIdiom for the runtime namespace of
+	// the rendering server and replaces SpawnIdiom, which a namespaced idiom
+	// cannot state statically.
+	SpawnIdiomFor func(namespace string) string
+}
+
+// IsZero reports whether no wording is declared, so a render uses the
+// host-neutral one.
+func (t PlaybookTerminology) IsZero() bool {
+	return t.ExploreAgent == "" && t.SpawnIdiom == "" && t.ContinueIdiom == "" && t.SpawnIdiomFor == nil
 }
 
 // BuiltinProfileRegistration is one builtin profile owned by a backend's
@@ -159,6 +177,37 @@ func BuiltinHarnessNames() []string {
 // values when the harness uses the host-neutral wording.
 func BuiltinPlaybookTerminology(harness string) PlaybookTerminology {
 	return builtinRegistration(harness).PlaybookTerminology
+}
+
+// BuiltinLifecycle is the built-in backend's lifecycle declaration; the zero
+// value for a name that is not built in. It reads the shared floor.
+func BuiltinLifecycle(name string) LifecyclePolicy {
+	return builtinRegistration(name).Lifecycle
+}
+
+// BuiltinConnection is the built-in backend's connection declaration; the zero
+// value for a name that is not built in. It reads the shared floor, which
+// callers never modify.
+func BuiltinConnection(name string) ConnectionPolicy {
+	return builtinRegistration(name).Connection
+}
+
+// NamedConnection is a backend's name with its connection declaration.
+type NamedConnection struct {
+	Name       string
+	Connection ConnectionPolicy
+}
+
+// BuiltinConnections lists every built-in backend's connection declaration in
+// config listing order, for a connection that has no daemon registry. The
+// policies are shared and read-only.
+func BuiltinConnections() []NamedConnection {
+	values := builtinRegistrations()
+	out := make([]NamedConnection, 0, len(values))
+	for _, value := range values {
+		out = append(out, NamedConnection{Name: value.name, Connection: value.reg.Connection})
+	}
+	return out
 }
 
 // BuiltinBackendRegistrations returns fresh runtime descriptors for every
@@ -250,6 +299,29 @@ func (r *Runner) BackendRegistrations() map[string]BackendRegistration {
 	out := make(map[string]BackendRegistration, len(r.opts.Backends))
 	for name, reg := range r.opts.Backends {
 		out[name] = cloneBackendRegistration(reg)
+	}
+	return out
+}
+
+// BuiltinDashboardHarnesses is the built-in backends' dashboard traits by
+// name, for a daemon embedded without a runner (a fixture) that still shows
+// built-in harnesses.
+func BuiltinDashboardHarnesses() wsdashboard.HarnessTraitSet {
+	values := builtinRegistrations()
+	out := make(wsdashboard.HarnessTraitSet, len(values))
+	for _, value := range values {
+		out[value.name] = value.reg.Dashboard
+	}
+	return out
+}
+
+// DashboardHarnesses is the registered backends' dashboard traits by name,
+// for DaemonOptions.Harnesses. Every registered name is present, a backend
+// with nothing to declare as the zero traits.
+func (r *Runner) DashboardHarnesses() wsdashboard.HarnessTraitSet {
+	out := make(wsdashboard.HarnessTraitSet, len(r.opts.Backends))
+	for name, reg := range r.opts.Backends {
+		out[name] = reg.Dashboard
 	}
 	return out
 }

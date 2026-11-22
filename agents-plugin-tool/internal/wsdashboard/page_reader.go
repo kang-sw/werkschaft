@@ -38,6 +38,8 @@ type pageReader struct {
 	// foreign is the daemon's shared look at the inputs refresh stamps cannot
 	// learn of from a wake (foreign_schedule.go); nil looks every time.
 	foreign *foreignSchedule
+	// harnesses is DaemonOptions.Harnesses.
+	harnesses HarnessTraitSet
 	// layout is the rail's stored nesting, read from memory for a head's
 	// parent jump when the registration names no owner (nil: none).
 	layout *railLayoutStore
@@ -146,6 +148,7 @@ func (r pageReader) lookup() sessionLookup {
 			return snap
 		},
 		piDeleted: func(id string) bool { return piChildDeleted(r.dir, id) },
+		harnesses: r.harnesses,
 		observed: func(id string) *wslive.Snapshot {
 			snap, read := observed[id]
 			if !read {
@@ -307,11 +310,14 @@ func (r pageReader) readSessionWith(replyID string, prev *sessionReads, ringChan
 					return false
 				}
 				// Refresh the owner's row when a closed child loses its
-				// revival file, even without another runner event.
+				// revival file, even without another runner event. The
+				// pi/session.jsonl location is the Pi adapter's persisted
+				// layout (1881 survivor, with piChildDeleted).
 				dir := SessionDir(r.dir, id)
 				inputs.watch = append(inputs.watch, filepath.Join(dir, AgentRecordFileName), filepath.Join(dir, "pi", "session.jsonl"))
 				return lookup.piDeleted(id)
 			},
+			harnesses: r.harnesses,
 		}
 		inputs.watch = append(inputs.watch, in.AttachDir)
 		inputs.contacts = len(page.Contacts) > 0
@@ -468,7 +474,7 @@ func (r pageReader) indexView() IndexView {
 }
 
 func (d *Daemon) pages() pageReader {
-	return pageReader{dir: d.dir, index: d.index, source: d.source, version: d.endpoint.Version, entries: d.entryFiles, snapshots: d.snapshots, foreign: d.foreign, layout: d.layout, agents: d.agents, cardBound: d.cardBound}
+	return pageReader{dir: d.dir, index: d.index, source: d.source, version: d.endpoint.Version, entries: d.entryFiles, snapshots: d.snapshots, foreign: d.foreign, layout: d.layout, agents: d.agents, cardBound: d.cardBound, harnesses: d.harnesses}
 }
 
 // pagesIn is pages reading in the viewer's language.

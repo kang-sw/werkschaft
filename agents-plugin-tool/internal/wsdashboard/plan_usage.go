@@ -61,7 +61,10 @@ type planUsageStore struct {
 	// agy state is kept separate from Claude/Codex so plan-usage.json and
 	// plan-usage-history.json stay byte-identical (T0). All fields below
 	// except resolveAgy, agyDebounce, agyTimeout, agyEnv, and now are guarded by mu.
-	resolveAgy     func() (string, []string, error)
+	resolveAgy func() (string, []string, error)
+	// harnesses declares which harnesses push usage and keep a separate
+	// five-hour history (DaemonOptions.Harnesses); set before use, read-only.
+	harnesses      HarnessTraitSet
 	agyGroups      []planUsageEntry
 	agyLastSaved   []byte
 	agyLastProbe   time.Time
@@ -192,7 +195,10 @@ func validUsage(percent float64) bool {
 }
 
 func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
-	if s == nil || snap == nil || snap.Adapter != "claude" || snap.Usage == nil {
+	// The push is the one pushed-usage provider's persisted shape (the
+	// "claude" cache entry and the "Claude push" history source), kept under
+	// its own name (1881); which snapshots may feed it is the harness's trait.
+	if s == nil || snap == nil || !s.harnesses.pushesUsage(snap.Adapter) || snap.Usage == nil {
 		return
 	}
 	// Legacy snapshots can contain limits without an observation time.
@@ -389,6 +395,12 @@ func currentUsage(e planUsageEntry, now int64) planUsageEntry {
 	}
 	return e
 }
+
+// entries lists the usage providers' current entries. Each provider labels its
+// entry with the persisted "harness" value its cache and history files and the
+// /usage answer have always carried: the Claude push provider "claude" and the
+// ChatGPT-account reader "codex" (agy labels its own in plan_usage_agy.go).
+// These are persisted names, not behavior branches (1881 survivor).
 func (s *planUsageStore) entries() []planUsageEntry {
 	plan, codex, pi := s.detect()
 	s.mu.Lock()
@@ -429,7 +441,7 @@ func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.index != nil {
 		for _, session := range d.index.Sessions() {
-			if session.Harness == "claude" {
+			if d.harnesses.pushesUsage(session.Harness) {
 				d.planUsage.pushClaude(d.snapshots.snapshotWithoutObserved(d.dir, session.ReplyID))
 			}
 		}
@@ -445,11 +457,8 @@ func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
 		if codexHist, ok := d.planUsage.codexFiveHourHistoryView(entries, now); ok {
 			body["codexFiveHourHistory"] = codexHist
 		}
-		for _, e := range entries {
-			if e.Harness == "agy" {
-				body["agyHistory"] = d.planUsage.agyHistoryView(entries, now)
-				break
-			}
+		if agy, ok := d.planUsage.agyHistoryMember(entries, now); ok {
+			body["agyHistory"] = agy
 		}
 	}
 	_ = json.NewEncoder(w).Encode(body)

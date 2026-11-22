@@ -271,6 +271,33 @@ func TestHUDEndUnknownSurvivesAnOlderWriter(t *testing.T) {
 // excluded from both and counted as observation ended; the ended group shows lifecycle details;
 // a Claude lead's no-identity row is native; daemon-spawned and Pi extension
 // rows keep their JSON.
+// TestHUDHarnessLegacyPiAgentKind pins the (1881) survivor: a row written
+// before rows carried a harness name shows as Pi by its agent kind alone, and
+// a row's own registered name or its parent's wins over that marker.
+func TestHUDHarnessLegacyPiAgentKind(t *testing.T) {
+	set := testHarnessTraits()
+	legacy := wslive.Agent{ID: "pi:x", AgentKind: wslive.AgentKindPi}
+	for _, tc := range []struct {
+		name   string
+		set    HarnessTraitSet
+		agent  wslive.Agent
+		parent string
+		want   string
+	}{
+		{"kind alone", set, legacy, "", "pi"},
+		{"kind alone, no registrations", nil, legacy, "", "pi"},
+		{"parent wins", set, legacy, "claude", "claude"},
+		{"own registered name wins", set, wslive.Agent{ID: "a", AgentKind: wslive.AgentKindPi, Harness: " Codex "}, "claude", "codex"},
+		{"unregistered name is not a harness", set, wslive.Agent{ID: "a", Harness: "other"}, "", ""},
+		{"no registrations name no harness", nil, wslive.Agent{ID: "a", Harness: "claude"}, "", ""},
+		{"extension name", HarnessTraitSet{"fixture": {}}, wslive.Agent{ID: "a", Harness: "fixture"}, "", "fixture"},
+	} {
+		if got := resolveHUDHarness(tc.set, tc.agent, tc.parent); got != tc.want {
+			t.Errorf("%s: harness = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestHUDProjectionNativeRows(t *testing.T) {
 	now := testNow
 	ms := now.UnixMilli()

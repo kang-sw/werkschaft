@@ -82,7 +82,8 @@ type LifecyclePolicy struct {
 	// checked against, and spawns through Options.ChildCheck.
 	NativeChildren bool
 	// TerminalSummaries marks a backend whose hosted lead publishes reasoning
-	// summaries from its terminal bridge: the runner starts and projects them.
+	// summaries from its terminal bridge: the runner starts and projects them,
+	// and a terminal session's ws-mcp accepts the summaries its bridge pushes.
 	TerminalSummaries bool
 	// ComposedLeadInstructions marks a backend whose hosted lead receives the
 	// instruction file the daemon composes on every launch (key and workflow
@@ -103,6 +104,33 @@ type LifecyclePolicy struct {
 	// TurnActivity marks a backend whose settled hosted turn signals
 	// Options.AgyActivity (a usage refresh), outside replay and compaction.
 	TurnActivity bool
+}
+
+// ConnectionPolicy is how a backend's client reaches ws-mcp and how the
+// daemon's MCP server and prompt renderer treat that connection where it
+// differs between harnesses. Every field is runtime-only registration data;
+// the zero value asks for none of it.
+type ConnectionPolicy struct {
+	// NamedClient marks a backend whose client announces the backend's own
+	// name as its MCP clientInfo.name, so a connection with no daemon registry
+	// (a terminal harness's stdio server) resolves its harness by that name.
+	// A backend reached only through the daemon is resolved through its
+	// registration instead (ManualHarness).
+	NamedClient bool
+	// BridgeClientName is the exact clientInfo.name of the backend's own
+	// bridge extension, which identifies the backend ahead of any other
+	// detection. Empty: no such bridge.
+	BridgeClientName string
+	// ClientDaemonAgents marks a backend whose client may opt in, by the
+	// initialize experimental capability the bridge sets, to delegating
+	// through the daemon's agent.spawn and mailbox.send.
+	ClientDaemonAgents bool
+	// DelegatesThroughDaemon reports whether rec, a conversation of this
+	// backend the daemon launched, delegates through agent.spawn alone
+	// (playbook terminology). launched resolves the conversation's launched
+	// profile when rec holds no snapshot of it, nil when it cannot. Nil:
+	// the backend's conversations never do.
+	DelegatesThroughDaemon func(rec Record, launched func() *Profile) bool
 }
 
 // Narrow executable differences are optional interfaces on Backend, asserted

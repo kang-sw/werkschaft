@@ -125,7 +125,7 @@ func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, p
 		mark(r, 1)
 	}
 	var fold hudFold
-	out.Roots = projectHUDNodes(roots, 1, normalizeHUDHarness(leadHarness), nil, visible, &fold, now)
+	out.Roots = projectHUDNodes(lookup.harnesses, roots, 1, lookup.harnesses.normalize(leadHarness), nil, visible, &fold, now)
 	out.Completed, out.Folded, out.ObservationEnded = fold.completed, fold.roots, fold.observationEnded
 	return out
 }
@@ -160,7 +160,7 @@ func buildHUDRawForest(agents []wslive.Agent, ownRow bool, ownerHarness string, 
 				continue
 			}
 			seenIDs[a.ID] = true
-			node := &hudRawNode{agent: a, ownRow: ownRow, native: hudNative(a, ownerHarness)}
+			node := &hudRawNode{agent: a, ownRow: ownRow, native: hudNative(a, ownerHarness, lookup.harnesses)}
 			if a.ReplyID != "" && !node.native {
 				if s, ok := lookup.get(a.ReplyID); ok && (s.HasBoard || s.Agent) {
 					node.linked = true
@@ -201,7 +201,7 @@ func hudShouldExpandLinked(a wslive.Agent) bool {
 	return a.Status == wslive.StatusRunning || a.Holding || a.Alive
 }
 
-func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain []string, visible map[*hudRawNode]bool, fold *hudFold, now time.Time) []HUDNode {
+func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parentHarness string, chain []string, visible map[*hudRawNode]bool, fold *hudFold, now time.Time) []HUDNode {
 	out := []HUDNode{}
 	for _, n := range nodes {
 		if !visible[n] {
@@ -214,7 +214,7 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 			continue
 		}
 		a := n.agent
-		harness := resolveHUDHarness(a, parentHarness)
+		harness := resolveHUDHarness(set, a, parentHarness)
 		label := a.Label
 		if label == "" {
 			label = shortID(a.ID)
@@ -247,7 +247,7 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 		}
 		if depth < hudMaxDepth {
 			nextChain := append(slices.Clone(chain), label)
-			kids := projectHUDNodes(n.children, depth+1, harness, nextChain, visible, fold, now)
+			kids := projectHUDNodes(set, n.children, depth+1, harness, nextChain, visible, fold, now)
 			if len(kids) > 0 {
 				node.Children = kids
 			}
@@ -311,15 +311,16 @@ func foldHUDDepthOverflow(nodes []*hudRawNode, visible map[*hudRawNode]bool, fol
 }
 
 // hudNative reports a harness's own subagent: a row whose id carries a
-// native prefix (wslive.NativeAgentID), or a row in a Claude session's
-// snapshot without a daemon identity (daemon-spawned rows always carry a
-// harness, a reply-id, or an agent kind). ownerHarness is the harness of the
+// native prefix (wslive.NativeAgentID), or a row without a daemon identity
+// (daemon-spawned rows always carry a harness, a reply-id, or an agent kind)
+// in the snapshot of a harness that declares those rows native
+// (HarnessTraits.UntaggedRowsNative). ownerHarness is the harness of the
 // session whose snapshot holds the row.
-func hudNative(a wslive.Agent, ownerHarness string) bool {
+func hudNative(a wslive.Agent, ownerHarness string, set HarnessTraitSet) bool {
 	if wslive.NativeAgentID(a.ID) {
 		return true
 	}
-	return normalizeHUDHarness(ownerHarness) == "claude" && a.Harness == "" && a.ReplyID == "" && a.AgentKind == ""
+	return set.untaggedRowsNative(ownerHarness) && a.Harness == "" && a.ReplyID == "" && a.AgentKind == ""
 }
 
 // hudEndUnknown reports a native row whose observation ended with the
@@ -348,22 +349,18 @@ func hudNodeState(a wslive.Agent) string {
 	}
 }
 
-func normalizeHUDHarness(h string) string {
-	switch strings.ToLower(strings.TrimSpace(h)) {
-	case "claude", "codex", "agy", "pi":
-		return strings.ToLower(strings.TrimSpace(h))
-	default:
-		return ""
-	}
-}
-
-func resolveHUDHarness(a wslive.Agent, parentHarness string) string {
-	if h := normalizeHUDHarness(a.Harness); h != "" {
+// resolveHUDHarness is the harness a HUD row shows: its own registered name,
+// else its parent's, else the one its agent kind implies.
+func resolveHUDHarness(set HarnessTraitSet, a wslive.Agent, parentHarness string) string {
+	if h := set.normalize(a.Harness); h != "" {
 		return h
 	}
 	if parentHarness != "" {
 		return parentHarness
 	}
+	// Survivor (1881): rows written before a snapshot row carried a harness
+	// name mark a Pi child only by its agent kind, a persisted marker that
+	// registration data does not describe (TestHUDHarnessLegacyPiAgentKind).
 	if a.AgentKind == wslive.AgentKindPi {
 		return "pi"
 	}

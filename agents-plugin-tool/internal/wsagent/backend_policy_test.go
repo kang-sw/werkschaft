@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 // policyBackend is a backend that declares its differences through the
@@ -254,4 +256,99 @@ func TestTerminalSessionAdoption(t *testing.T) {
 // registers, for fixtures that stand a fake process behind that backend's name.
 func builtinLifecycle(backend string) LifecyclePolicy {
 	return builtinRegistration(backend).Lifecycle
+}
+
+// TestBuiltinDashboardTraits pins every built-in's dashboard declaration with
+// literal expectations; wsdashboard's own fixture (testHarnessTraits) mirrors
+// these because that package cannot import this one.
+func TestBuiltinDashboardTraits(t *testing.T) {
+	want := wsdashboard.HarnessTraitSet{
+		BackendClaude: {PushesUsage: true, UntaggedRowsNative: true, TerminalTakeover: true, ReplayClientName: "claude-code"},
+		BackendCodex:  {SeparateFiveHourHistory: true, ReplayClientName: "codex"},
+		BackendPi:     {TerminalTakeover: true, ReplayClientName: "ws-pi-bridge"},
+		BackendAgy:    {ReplayClientName: "agy"},
+	}
+	runner := policyRunner(BuiltinBackendRegistrations())
+	if got := runner.DashboardHarnesses(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("dashboard traits = %+v, want %+v", got, want)
+	}
+	if got := BuiltinDashboardHarnesses(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("builtin dashboard traits = %+v, want %+v", got, want)
+	}
+	// An extension that declares nothing is registered with zero traits.
+	regs := BuiltinBackendRegistrations()
+	regs["fixture"] = BackendRegistration{Backend: ClaudeBackend{}, LeadProfile: "fixture-lead"}
+	got := policyRunner(regs).DashboardHarnesses()
+	if zero, ok := got["fixture"]; !ok || zero != (wsdashboard.HarnessTraits{}) {
+		t.Fatalf("an undeclared extension = %+v, present %v", zero, ok)
+	}
+}
+
+// TestBuiltinConnectionPolicy pins every built-in's connection declaration.
+func TestBuiltinConnectionPolicy(t *testing.T) {
+	type conn struct {
+		named        bool
+		bridge       string
+		daemonAgents bool
+		delegates    bool
+	}
+	want := map[string]conn{
+		BackendClaude: {named: true, delegates: true},
+		BackendCodex:  {named: true},
+		BackendPi:     {named: true, bridge: "ws-pi-bridge", daemonAgents: true, delegates: true},
+		BackendAgy:    {},
+	}
+	got := map[string]conn{}
+	for _, named := range BuiltinConnections() {
+		c := named.Connection
+		got[named.Name] = conn{c.NamedClient, c.BridgeClientName, c.ClientDaemonAgents, c.DelegatesThroughDaemon != nil}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("connection policy = %+v, want %+v", got, want)
+	}
+	if names := BuiltinHarnessNames(); len(BuiltinConnections()) != len(names) {
+		t.Fatalf("BuiltinConnections lists %d backends, want %d", len(BuiltinConnections()), len(names))
+	}
+	if c := BuiltinConnection("not-built-in"); c.NamedClient || c.DelegatesThroughDaemon != nil {
+		t.Fatalf("an unknown name declares %+v", c)
+	}
+	if l := BuiltinLifecycle(BackendPi); !l.TerminalSummaries || BuiltinLifecycle("not-built-in") != (LifecyclePolicy{}) {
+		t.Fatalf("BuiltinLifecycle = %+v", l)
+	}
+}
+
+// TestDelegatesThroughDaemon: the Claude declaration follows RemovesSubagents
+// and the Pi one follows its launched profile (PiMCPOnly plus the spawn and
+// mailbox tools), reading the snapshot first and the resolver only for a
+// non-lead record that has none.
+func TestDelegatesThroughDaemon(t *testing.T) {
+	claude := BuiltinConnection(BackendClaude).DelegatesThroughDaemon
+	if !claude(Record{Backend: BackendClaude, Lead: true}, nil) || !claude(Record{Backend: BackendClaude, Profile: AgentWorkerProfile(BackendClaude)}, nil) {
+		t.Error("a hosted Claude lead or agent.spawn child keeps no native subagent tool")
+	}
+	if claude(Record{Backend: BackendClaude, Profile: SupportProfileClaude}, nil) {
+		t.Error("the Claude support profile keeps its native subagent tool")
+	}
+	pi := BuiltinConnection(BackendPi).DelegatesThroughDaemon
+	none := func() *Profile { t.Fatal("resolver must not be called"); return nil }
+	if !pi(Record{Backend: BackendPi, Lead: true, PluginWarning: piExtensionFallbackMarker}, none) {
+		t.Error("a Pi lead that fell back to the MCP bridge delegates through the daemon")
+	}
+	if pi(Record{Backend: BackendPi, Lead: true}, none) {
+		t.Error("a Pi lead with the native extension does not")
+	}
+	tools := &Profile{Backend: BackendPi, WSTools: []string{"agent.spawn", "mailbox.send"}}
+	if !pi(Record{Backend: BackendPi, ResolvedDefinition: tools}, none) {
+		t.Error("an MCP-only Pi worker granted both tools delegates through the daemon")
+	}
+	if pi(Record{Backend: BackendPi, ResolvedDefinition: &Profile{Backend: BackendPi, WSTools: []string{"agent.spawn"}}}, none) {
+		t.Error("a Pi worker without mailbox.send does not")
+	}
+	called := false
+	if !pi(Record{Backend: BackendPi}, func() *Profile { called = true; return tools }) || !called {
+		t.Error("a record with no snapshot resolves its launched profile")
+	}
+	if pi(Record{Backend: BackendPi}, func() *Profile { return nil }) {
+		t.Error("an unresolvable launched profile does not delegate")
+	}
 }

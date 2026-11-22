@@ -2,7 +2,16 @@ package wsagent
 
 import (
 	"net/http"
+
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
+
+// agyDashboardTraits: the daemon's replayed initialize presents agy's client
+// name. Agy's client is detected through its registration, not by name alone,
+// and its usage has its own provider (plan_usage_agy.go).
+func agyDashboardTraits() wsdashboard.HarnessTraits {
+	return wsdashboard.HarnessTraits{ReplayClientName: "agy"}
+}
 
 var (
 	_ terminalSession    = AgyBackend{}

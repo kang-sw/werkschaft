@@ -66,6 +66,10 @@ func (e ConvEntry) BoardNudgeSummary() string {
 	return wsi18n.T(e.Lang, "entry.board.nudge", strings.Join(reasons, ", "), preview)
 }
 
+// The note's optional harness label is stored mail text written by earlier
+// versions, which labeled only these three harnesses; the pattern reads those
+// persisted bytes, so it stays a fixed list rather than the registered names
+// (1881 survivor; TestConversationPresentationPeerNoteIsDisplayOnly).
 var peerLeadFirstLine = regexp.MustCompile(`^\[(?:ws|wsflow) note: from a peer lead session \((?:(?:claude|codex|pi), )?not a worker\), with the same authority as yours\]$`)
 
 // A matching stored note earns only a display badge. It is not an identity or

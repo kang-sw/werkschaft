@@ -113,7 +113,7 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	// A hosted lead with no ws skills (playbookCommands) is under the
 	// native-subagent removal policy (wsagent.RemovesSubagents): it
 	// delegates through agent.spawn, where its connection allows it.
-	daemonAgentClient := (harness == "pi" && s.clientPiDaemonAgents()) || descriptor.playbookCommands || s.callerDaemonAgents(callerKey)
+	daemonAgentClient := (s.connectionOf(harness).ClientDaemonAgents && s.clientPiDaemonAgents()) || descriptor.playbookCommands || s.callerDaemonAgents(callerKey)
 	daemonAgents := daemonAgentClient && s.agentListed() && s.toolAllowed("agent.spawn") && s.toolAllowed("mailbox.send")
 	terminology := playbookTerminology(harness, daemonAgents, s.runtimeNamespace())
 	// A PreferNativeSubagent lead explores with its own native subagent and

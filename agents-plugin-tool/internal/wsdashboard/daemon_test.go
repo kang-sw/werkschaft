@@ -24,7 +24,7 @@ func testClient() *http.Client {
 
 func startTestDaemon(t *testing.T, dir, version string) *Daemon {
 	t.Helper()
-	d, err := StartDaemon(DaemonOptions{Dir: dir, Home: t.TempDir(), Port: 0, Version: version, LockWait: 200 * time.Millisecond})
+	d, err := StartDaemon(DaemonOptions{Dir: dir, Home: t.TempDir(), Port: 0, Version: version, LockWait: 200 * time.Millisecond, Harnesses: testHarnessTraits()})
 	if err != nil {
 		t.Fatalf("StartDaemon(%s): %v", version, err)
 	}

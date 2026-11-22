@@ -57,7 +57,7 @@ func TestPlanUsageHistoryPersistedPruningAndIdentity(t *testing.T) {
 	if !foundUnknown {
 		t.Fatal("unknown reset real observation discarded")
 	}
-	restored := newPlanUsageStore(s.dir, s.home, s.getenv)
+	restored := newTestPlanUsageStore(s.dir, s.home, s.getenv)
 	if len(restored.history(now).Samples) != 5002 {
 		t.Fatal("bounded history did not survive restart")
 	}
