@@ -410,3 +410,26 @@ func TestAgyCutoverResendsARecordedRefusalAtRejoin(t *testing.T) {
 		t.Fatalf("the refusal stays pending: %+v", st.Approvals)
 	}
 }
+
+// A denial never picks reject_always: a request that offers no reject_once
+// gets no answer.
+func TestAgyDenialNeverPicksRejectAlways(t *testing.T) {
+	m := newAgyMapper("s")
+	rr := &agyRun{m: m, answers: map[string]controlAnswer{}}
+	line := `{"jsonrpc":"2.0","method":"session/request_permission","params":{"sessionId":"agy-s1","toolCall":{"toolCallId":"k9","name":"run_command","title":"ls","args":{"CommandLine":"ls"}},"options":[{"optionId":"allow","kind":"allow_once"},{"optionId":"never","kind":"reject_always"}]},"id":"9"}`
+	var approval *ApprovalRequest
+	for _, ev := range m.mapLine([]byte(line), rr) {
+		if ev.Approval != nil {
+			approval = ev.Approval
+		}
+	}
+	if approval == nil {
+		t.Fatal("no approval")
+	}
+	if _, option, err := m.answerFor(approval.ID, false); err == nil || option == "never" {
+		t.Fatalf("denial answered with %q (err %v)", option, err)
+	}
+	if _, option, err := m.answerFor(approval.ID, true); err != nil || option != "allow" {
+		t.Fatalf("allow answered with %q (err %v)", option, err)
+	}
+}

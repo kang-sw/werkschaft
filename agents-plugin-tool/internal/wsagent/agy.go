@@ -120,6 +120,12 @@ var (
 // without. wsharnessenv.Drop removes ws's own session identity.
 var agyDropEnv = []string{"CLAUDE", "CODEX_", "PI_", "ORCA_"}
 
+// agyBgShellRule is appended to the system prompt of an agy session
+// outside the exec cutover (lead or worker), overriding Antigravity's
+// reactive-wakeup guidance for background commands: the daemon tracks a
+// running non-daemon run_command and keeps the session awake for it.
+const agyBgShellRule = `Never end your turn while a non-daemon ` + "`run_command`" + ` task you started is still running (ignore this for ` + "`IsDaemon: true`" + ` processes). Override Antigravity's "end the turn and wait" / reactive-wakeup guidance for background commands: stay in the same turn — do other work or check status with ` + "`manage_task`" + ` — until it finishes.`
+
 // agyCutoverMode is the native mode a cutover agy session runs in: the one
 // that asks before each run_command, so the daemon can refuse it.
 const agyCutoverMode = "default"
@@ -350,12 +356,17 @@ func (p *agyProcess) open(spec StartSpec) error {
 		}
 		appendText = string(text)
 	}
+	// A cutover session runs commands through the ws exec tools, whose
+	// completions come as messages; one outside it keeps run_command and
+	// the rule that keeps its turn open while a background one runs.
+	rule := agyBgShellRule
 	if spec.ExecCutover {
-		if trimmed := strings.TrimRight(appendText, "\n"); trimmed != "" {
-			appendText = trimmed + "\n\n" + agyExecCutoverInstruction + "\n"
-		} else {
-			appendText = agyExecCutoverInstruction + "\n"
-		}
+		rule = agyExecCutoverInstruction
+	}
+	if trimmed := strings.TrimRight(appendText, "\n"); trimmed != "" {
+		appendText = trimmed + "\n\n" + rule + "\n"
+	} else {
+		appendText = rule + "\n"
 	}
 	if appendText != "" {
 		params["_meta"] = map[string]any{"antigravity": map[string]any{"systemPrompt": map[string]any{"append": appendText}}}
@@ -911,7 +922,11 @@ func (m *agyMapper) promptDropped(id string) {
 	m.mu.Unlock()
 }
 
-// answerFor is the raw request id and option id that answer approval id.
+// answerFor is the raw request id and option id that answer approval id. A
+// denial is reject_once only: reject_always would make agy refuse that
+// tool for the rest of the session, past the one request denied. A request
+// without reject_once gets no answer (AnswerApproval: errNoApprovalAnswer)
+// and stays for the user.
 func (m *agyMapper) answerFor(id string, allow bool) (json.RawMessage, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -919,7 +934,7 @@ func (m *agyMapper) answerFor(id string, allow bool) (json.RawMessage, string, e
 	if a == nil {
 		return nil, "", fmt.Errorf("agy has no pending permission request %q", id)
 	}
-	kinds := []string{"reject_once", "reject_always"}
+	kinds := []string{"reject_once"}
 	if allow {
 		kinds = []string{"allow_once", "allow_always"}
 	}

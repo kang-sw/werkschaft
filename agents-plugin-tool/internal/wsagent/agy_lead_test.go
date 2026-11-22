@@ -451,8 +451,10 @@ func TestAgyLeadRejoinOfMovedRouteRestartsWithSessionResume(t *testing.T) {
 // request appends its key sentence and the manual the daemon rendered for
 // agy, its directory, and its key to agy's system prompt
 // (_meta.antigravity.systemPrompt.append); with no manual it appends the
-// key sentence and the call to fetch it. The old background-command rule
-// is gone; a lead under the exec cutover appends the exec instruction.
+// key sentence and the call to fetch it. A lead under the exec cutover
+// then appends the exec instruction; one outside it (the rollout switch
+// off, an unverified version) keeps the background-command rule its
+// run_command still needs.
 func TestAgyLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 	for name, tc := range map[string]struct {
 		manual  *leadManualRender
@@ -498,15 +500,15 @@ func TestAgyLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 					t.Fatalf("the manual renders once, for agy, the lead's directory, and its key: %v", calls)
 				}
 			}
-			if strings.Contains(text, "Never end your turn") {
-				t.Fatalf("session/new still carries the background-command rule: %q", text)
+			if tc.cutover == strings.Contains(text, "Never end your turn") {
+				t.Fatalf("cutover %v, background-command rule present %v: %q", tc.cutover, !tc.cutover, text)
 			}
-			got, want := strings.TrimRight(text, "\n"), strings.TrimRight(base, "\n")
+			got, want := strings.TrimRight(text, "\n"), strings.TrimRight(base, "\n")+"\n\n"+agyBgShellRule
 			if tc.cutover {
-				want += "\n\n" + agyExecCutoverInstruction
-				if !strings.HasSuffix(text, "\n") {
-					t.Fatalf("the cutover instruction ends the prompt with a newline: %q", text)
-				}
+				want = strings.TrimRight(base, "\n") + "\n\n" + agyExecCutoverInstruction
+			}
+			if !strings.HasSuffix(text, "\n") {
+				t.Fatalf("the appended rule ends the prompt with a newline: %q", text)
 			}
 			if got != want {
 				t.Fatalf("session/new appends %q, want %q", text, want)
