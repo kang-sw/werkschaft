@@ -106,16 +106,17 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	if err := r.opts.LeadKeys.EnsureLead(ls.Root, ls.Key); err != nil {
-		return State{}, fmt.Errorf("ws session key: %w", err)
-	}
 	// The adopted session binds to its worktree like a created one: hold
-	// the release reservation until it is registered (Runner.create).
+	// the release reservation until it is registered (Runner.create). It is
+	// taken before the first write, the key's, so a refusal writes nothing.
 	unlockBound, err := reserveBoundWorktrees(ls.Root, ls.Cwd)
 	if err != nil {
 		return State{}, boundReservationRefusal(err)
 	}
 	defer unlockBound()
+	if err := r.opts.LeadKeys.EnsureLead(ls.Root, ls.Key); err != nil {
+		return State{}, fmt.Errorf("ws session key: %w", err)
+	}
 
 	// From the check that the terminal harness is gone to the hosted row,
 	// one step: a login that reads the row after it is refused or takes

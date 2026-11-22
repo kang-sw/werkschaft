@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,6 +62,9 @@ func TestReleaseRefusesALeadTakeover(t *testing.T) {
 	}
 	if _, err := os.Stat(recordPath(wsdashboard.SessionDir(h.dir, id))); err == nil {
 		t.Fatal("a refused takeover wrote a record")
+	}
+	if slices.Contains(h.ensured(), "terminal-lead-key") {
+		t.Fatal("a refused takeover wrote the session's key")
 	}
 	if got := h.runner.ActiveChildrenInWorktree(h.root); len(got) != 0 {
 		t.Fatalf("a refused takeover left a bound session: %+v", got)
