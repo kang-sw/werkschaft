@@ -642,7 +642,14 @@
       }
     },
     "261122-feat-ws-companion-pack-sources": {
-      "registered_at": "2026-11-22T10:27:17Z"
+      "registered_at": "2026-11-22T10:27:17Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T11:11:16Z"
+      }
     },
     "261122-feat-ws-companion-paper-doll": {
       "registered_at": "2026-11-22T09:59:01Z",
