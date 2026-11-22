@@ -171,9 +171,10 @@ func TestCodexAuditCompactionBoundaryPerVersion(t *testing.T) {
 	})
 }
 
-// TestCodexRingCallIDMatchesTheAuditCallID pins (601) for Codex: the tools
-// row's calls carry the item ids, normalized once, that the captured
-// tool_call and tool_result events carry, including a long id (digested).
+// TestCodexRingCallIDMatchesTheAuditCallID pins (601) for Codex: the
+// captured tool_call and tool_result events carry the raw item ids, and the
+// tools row's calls carry the display key the store's ingestion makes of
+// them, NormalizeID(raw), including a long id (digested).
 func TestCodexRingCallIDMatchesTheAuditCallID(t *testing.T) {
 	long := "exec-" + strings.Repeat("y", 300)
 	item := func(method, id, status string) string {
@@ -222,10 +223,17 @@ func TestCodexRingCallIDMatchesTheAuditCallID(t *testing.T) {
 		t.Fatalf("ring call ids = %q, want %q", ring, want)
 	}
 	keyed := map[string][]wsaudit.Kind{}
+	var raw []string
 	for _, ev := range sink.events() {
 		if ev.CallID != "" {
-			keyed[ev.CallID] = append(keyed[ev.CallID], ev.Kind)
+			raw = append(raw, ev.CallID)
+			key := wsaudit.NormalizeID(ev.CallID) // the store's ingestion
+			keyed[key] = append(keyed[key], ev.Kind)
 		}
+	}
+	// Envelopes carry the raw item ids; only the store normalizes.
+	if want := []string{long, "exec-short", long, "exec-short"}; !slices.Equal(raw, want) {
+		t.Fatalf("envelope call ids = %q, want the raw item ids %q", raw, want)
 	}
 	for _, id := range ring {
 		if !slices.Equal(keyed[id], []wsaudit.Kind{wsaudit.KindToolCall, wsaudit.KindToolResult}) {

@@ -215,7 +215,7 @@ func (a *claudeAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelop
 			if req.Subtype != "" {
 				ev.Subkind += ":" + req.Subtype
 			}
-			ev.CallID = wsaudit.NormalizeID(req.ToolUseID)
+			ev.CallID = req.ToolUseID
 		}
 		ev.Out = compactJSON(line)
 		return true, []wsaudit.Envelope{ev}
@@ -366,7 +366,7 @@ func (a *claudeAudit) assistant(l claudeAuditLine, at time.Time) []wsaudit.Envel
 			out = append(out, ev)
 		case "tool_use", "server_tool_use", "mcp_tool_use":
 			ev := a.env(wsaudit.KindToolCall, at)
-			ev.Subkind, ev.CallID, ev.In = b.Name, wsaudit.NormalizeID(b.ID), compactJSON(b.Input)
+			ev.Subkind, ev.CallID, ev.In = b.Name, b.ID, compactJSON(b.Input)
 			a.take("tool_use", b.ID)
 			out = append(out, ev)
 		case "text":
@@ -377,7 +377,7 @@ func (a *claudeAudit) assistant(l claudeAuditLine, at time.Time) []wsaudit.Envel
 			if b.ToolUseID != "" {
 				// A server tool's result block (web search, web fetch).
 				ev := a.env(wsaudit.KindToolResult, at)
-				ev.Subkind, ev.CallID, ev.Out = b.Type, wsaudit.NormalizeID(b.ToolUseID), compactJSON(b.Content)
+				ev.Subkind, ev.CallID, ev.Out = b.Type, b.ToolUseID, compactJSON(b.Content)
 				out = append(out, ev)
 				continue
 			}
@@ -394,7 +394,7 @@ func (a *claudeAudit) assistant(l claudeAuditLine, at time.Time) []wsaudit.Envel
 func (a *claudeAudit) subagentBlock(parent string, b claudeAuditBlockIn, raw json.RawMessage, at time.Time) wsaudit.Envelope {
 	ev := a.env(wsaudit.KindSubagent, at)
 	ev.Subkind = b.Type
-	ev.ParentID = wsaudit.NormalizeID(parent)
+	ev.ParentID = parent
 	ev.AgentID = a.tasks[parent]
 	switch b.Type {
 	case "text":
@@ -402,10 +402,10 @@ func (a *claudeAudit) subagentBlock(parent string, b claudeAuditBlockIn, raw jso
 	case "thinking":
 		ev.Out = b.Thinking
 	case "tool_use", "server_tool_use", "mcp_tool_use":
-		ev.CallID, ev.In = wsaudit.NormalizeID(b.ID), compactJSON(b.Input)
+		ev.CallID, ev.In = b.ID, compactJSON(b.Input)
 		setMeta(&ev, "tool", b.Name)
 	case "tool_result":
-		ev.CallID, ev.Out = wsaudit.NormalizeID(b.ToolUseID), claudeResultText(b.Content)
+		ev.CallID, ev.Out = b.ToolUseID, claudeResultText(b.Content)
 		if b.IsError {
 			setMeta(&ev, "is_error", true)
 		}
@@ -467,7 +467,7 @@ func (a *claudeAudit) user(l claudeAuditLine, at time.Time) []wsaudit.Envelope {
 		switch b.Type {
 		case "tool_result":
 			ev := a.env(wsaudit.KindToolResult, at)
-			ev.CallID, ev.Out = wsaudit.NormalizeID(b.ToolUseID), claudeResultText(b.Content)
+			ev.CallID, ev.Out = b.ToolUseID, claudeResultText(b.Content)
 			if b.IsError {
 				setMeta(&ev, "is_error", true)
 			}
@@ -527,7 +527,7 @@ func (a *claudeAudit) system(l claudeAuditLine, line []byte, at time.Time) []wsa
 			a.tasks[l.ToolUseID] = l.TaskID
 		}
 		ev := a.env(wsaudit.KindSubagent, at)
-		ev.Subkind, ev.AgentID, ev.ParentID = l.Subtype, l.TaskID, wsaudit.NormalizeID(l.ToolUseID)
+		ev.Subkind, ev.AgentID, ev.ParentID = l.Subtype, l.TaskID, l.ToolUseID
 		ev.Out = l.Summary
 		if ev.Out == "" {
 			ev.Out = l.Description
@@ -578,13 +578,13 @@ func (a *claudeAudit) flushBlocks(at time.Time, ending bool) []wsaudit.Envelope 
 			}
 		case "tool_use", "server_tool_use", "mcp_tool_use":
 			ev = a.env(wsaudit.KindToolCall, b.at)
-			ev.Subkind, ev.CallID, ev.In = b.name, wsaudit.NormalizeID(b.id), b.body.String()
+			ev.Subkind, ev.CallID, ev.In = b.name, b.id, b.body.String()
 		default:
 			continue
 		}
 		if b.parent != "" {
 			ev.Subkind, ev.Kind = b.typ, wsaudit.KindSubagent
-			ev.ParentID = wsaudit.NormalizeID(b.parent)
+			ev.ParentID = b.parent
 		}
 		setMeta(&ev, wsaudit.MetaAssembled, true)
 		carryLoss(&ev, b)

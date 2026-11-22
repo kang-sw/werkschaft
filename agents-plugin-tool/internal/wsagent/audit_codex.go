@@ -84,7 +84,7 @@ func (a *codexAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelope
 			ItemID string `json:"itemId"`
 		}
 		if json.Unmarshal(msg.Params, &p) == nil {
-			ev.CallID = wsaudit.NormalizeID(p.ItemID)
+			ev.CallID = p.ItemID
 		}
 		ev.Out = compactJSON(line)
 		return true, []wsaudit.Envelope{ev}
@@ -138,13 +138,13 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []wsaudit.
 		if !a.started[it.ID] {
 			a.started[it.ID] = true
 			call := a.env(wsaudit.KindToolCall, at)
-			call.Subkind, call.CallID, call.In = codexToolName(it), wsaudit.NormalizeID(it.ID), codexToolInput(it)
+			call.Subkind, call.CallID, call.In = codexToolName(it), it.ID, codexToolInput(it)
 			out = append(out, call)
 		}
 		if done {
 			delete(a.started, it.ID)
 			res := a.env(wsaudit.KindToolResult, at)
-			res.Subkind, res.CallID, res.Out = codexToolName(it), wsaudit.NormalizeID(it.ID), codexToolOutput(it)
+			res.Subkind, res.CallID, res.Out = codexToolName(it), it.ID, codexToolOutput(it)
 			if it.Status != "" {
 				setMeta(&res, "status", it.Status)
 			}
@@ -175,7 +175,7 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []wsaudit.
 		return []wsaudit.Envelope{a.env(wsaudit.KindCompaction, at)}
 	case it.Type == "subAgentActivity":
 		ev := a.env(wsaudit.KindSubagent, at)
-		ev.Subkind, ev.AgentID, ev.ParentID = it.Kind, it.AgentThreadID, wsaudit.NormalizeID(it.ID)
+		ev.Subkind, ev.AgentID, ev.ParentID = it.Kind, it.AgentThreadID, it.ID
 		ev.Out = it.AgentPath
 		if !done {
 			return nil

@@ -949,10 +949,12 @@ func TestAuditSlowOrFailingSinkNeverDelaysLineDelivery(t *testing.T) {
 	})
 }
 
-// TestClaudeRingCallIDMatchesTheAuditCallID pins (601) for Claude: a tools
-// row's calls carry the same normalized IDs as the captured tool_call and
-// tool_result events, for an ID over 256 encoded bytes (digested) and for a
-// short literal ID spelled as that digest (kept, and a different key).
+// TestClaudeRingCallIDMatchesTheAuditCallID pins (601) for Claude: the
+// captured tool_call and tool_result events carry the raw harness IDs (the
+// store normalizes once, at ingestion), and a tools row's calls carry the
+// display key, NormalizeID(raw), that the store's ingestion gives them. This
+// covers an ID over 256 encoded bytes (digested) and a short literal ID
+// spelled as that digest (kept, and a different key).
 func TestClaudeRingCallIDMatchesTheAuditCallID(t *testing.T) {
 	long := "toolu_" + strings.Repeat("x", 300)
 	digest := wsaudit.NormalizeID(long)
@@ -997,10 +999,16 @@ func TestClaudeRingCallIDMatchesTheAuditCallID(t *testing.T) {
 		}
 	}
 	keyed := map[string][]wsaudit.Kind{}
+	var raw []string
 	for _, ev := range sink.events() {
 		if ev.CallID != "" {
-			keyed[ev.CallID] = append(keyed[ev.CallID], ev.Kind)
+			raw = append(raw, ev.CallID)
+			key := wsaudit.NormalizeID(ev.CallID) // the store's ingestion
+			keyed[key] = append(keyed[key], ev.Kind)
 		}
+	}
+	if want := []string{long, long, literal, literal}; !slices.Equal(raw, want) {
+		t.Fatalf("envelope call ids = %q, want the raw harness ids %q", raw, want)
 	}
 	wantLiteral := wsaudit.NormalizeID(literal)
 	if !slices.Equal(ring, []string{digest, wantLiteral}) || digest == wantLiteral {
@@ -1010,6 +1018,36 @@ func TestClaudeRingCallIDMatchesTheAuditCallID(t *testing.T) {
 		if !slices.Equal(keyed[id], []wsaudit.Kind{wsaudit.KindToolCall, wsaudit.KindToolResult}) {
 			t.Fatalf("history row id %q opens %v, want its call and its result", id, keyed[id])
 		}
+	}
+}
+
+// TestClaudeAuditEnvelopeIDsStayRaw pins the identifier ownership of
+// ring-store Decision 3: the adapter writes the harness's raw IDs into every
+// envelope ID field (call_id, parent ID), for a long ID and for a short
+// literal spelled like a digest; only the store normalizes, once.
+func TestClaudeAuditEnvelopeIDsStayRaw(t *testing.T) {
+	long := "toolu_" + strings.Repeat("p", 300)
+	digestShaped := wsaudit.NormalizeID(long)
+	evs := mapAll(newClaudeAudit("s1"),
+		fmt.Sprintf(`{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":%q}}`, long),
+		fmt.Sprintf(`{"type":"system","subtype":"task_started","task_id":"t1","tool_use_id":%q,"description":"sub"}`, long),
+		fmt.Sprintf(`{"type":"assistant","parent_tool_use_id":%q,"message":{"id":"m1","content":[{"type":"tool_use","id":%q,"name":"Read","input":{}}]}}`, long, digestShaped),
+		fmt.Sprintf(`{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":%q,"name":"Read","input":{}}]}}`, digestShaped),
+	)
+	if len(evs) != 4 {
+		t.Fatalf("events = %+v", evs)
+	}
+	if evs[0].CallID != long {
+		t.Fatalf("control_request call_id = %q, want the raw id", evs[0].CallID)
+	}
+	if evs[1].ParentID != long || evs[1].AgentID != "t1" {
+		t.Fatalf("task_started parent = %q, want the raw id", evs[1].ParentID)
+	}
+	if evs[2].ParentID != long || evs[2].CallID != digestShaped {
+		t.Fatalf("subagent tool_use parent %q call %q, want both raw", evs[2].ParentID, evs[2].CallID)
+	}
+	if evs[3].CallID != digestShaped {
+		t.Fatalf("tool_call call_id = %q, want the digest-shaped literal unchanged", evs[3].CallID)
 	}
 }
 

@@ -606,8 +606,10 @@ type wireCall struct {
 	EndedAt     int64  `json:"endedAt,omitempty"`
 	Failed      bool   `json:"failed,omitempty"`
 	ArgsPreview string `json:"argsPreview,omitempty"`
-	// ID is the call's harness tool-call ID through wsaudit.NormalizeID, the
-	// ring call ID its audit events carry as call_id.
+	// ID is the call's harness tool-call ID through wsaudit.NormalizeID: the
+	// display key a history row carries, which is what the audit store makes
+	// of the raw call_id the call's audit events carry (it normalizes once,
+	// at ingestion).
 	ID string `json:"id,omitempty"`
 }
 
