@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "Impossible de lire le stockage d’audit pour le moment.",
   "js.audit.err.retry": "Réessayer",
   "js.audit.err.generic.title": "Impossible de charger l’événement",
-  "js.audit.err.generic.sub": "La requête a échoué."
+  "js.audit.err.generic.sub": "La requête a échoué.",
+  "js.audit.filter.label": "Filtres d’événements d’audit",
+  "js.audit.kind.thinking": "Réflexion",
+  "js.audit.kind.hook": "Hook",
+  "js.audit.kind.reminder": "Rappel",
+  "js.audit.kind.subagent": "Sous-agent",
+  "js.audit.kind.compaction": "Compaction",
+  "js.audit.kind.system": "Système",
+  "js.audit.sysrow.start": "Début de session · Invite système",
+  "js.audit.kind.unmapped": "Autre"
 }

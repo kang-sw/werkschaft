@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "Could not read the audit store right now.",
   "js.audit.err.retry": "Retry",
   "js.audit.err.generic.title": "Could not load audit event",
-  "js.audit.err.generic.sub": "Request failed."
+  "js.audit.err.generic.sub": "Request failed.",
+  "js.audit.filter.label": "Audit event filters",
+  "js.audit.kind.thinking": "Thinking",
+  "js.audit.kind.hook": "Hook",
+  "js.audit.kind.reminder": "Reminder",
+  "js.audit.kind.subagent": "Subagent",
+  "js.audit.kind.compaction": "Compaction",
+  "js.audit.kind.system": "System",
+  "js.audit.sysrow.start": "Session start · System prompt",
+  "js.audit.kind.unmapped": "Other"
 }

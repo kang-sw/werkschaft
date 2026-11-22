@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "現在監査ストアを読み取れません。",
   "js.audit.err.retry": "再試行",
   "js.audit.err.generic.title": "監査イベントを読み込めません",
-  "js.audit.err.generic.sub": "リクエストに失敗しました。"
+  "js.audit.err.generic.sub": "リクエストに失敗しました。",
+  "js.audit.filter.label": "監査イベントフィルター",
+  "js.audit.kind.thinking": "思考",
+  "js.audit.kind.hook": "フック",
+  "js.audit.kind.reminder": "リマインダー",
+  "js.audit.kind.subagent": "サブエージェント",
+  "js.audit.kind.compaction": "圧縮",
+  "js.audit.kind.system": "システム",
+  "js.audit.sysrow.start": "セッション開始 · システムプロンプト",
+  "js.audit.kind.unmapped": "その他"
 }

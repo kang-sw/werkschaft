@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "No se pudo leer el almacén de auditoría ahora.",
   "js.audit.err.retry": "Reintentar",
   "js.audit.err.generic.title": "No se pudo cargar el evento",
-  "js.audit.err.generic.sub": "Error en la solicitud."
+  "js.audit.err.generic.sub": "Error en la solicitud.",
+  "js.audit.filter.label": "Filtros de eventos de auditoría",
+  "js.audit.kind.thinking": "Pensamiento",
+  "js.audit.kind.hook": "Hook",
+  "js.audit.kind.reminder": "Recordatorio",
+  "js.audit.kind.subagent": "Subagente",
+  "js.audit.kind.compaction": "Compactación",
+  "js.audit.kind.system": "Sistema",
+  "js.audit.sysrow.start": "Inicio de sesión · Prompt del sistema",
+  "js.audit.kind.unmapped": "Otros"
 }

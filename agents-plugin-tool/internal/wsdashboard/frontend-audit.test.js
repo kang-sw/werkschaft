@@ -425,3 +425,43 @@ test('Decision (605): Escape and ArrowLeft/ArrowRight trigger only when focus ta
   assert.equal(stopped, true);
   assert.equal(h.ctx.WsAudit.windows().length, 0, 'Escape inside .au-win closes the audit window');
 });
+
+test('openEvent auto-selects out for non-tool_call out-only envelopes unless opts.tab is set', async () => {
+  const envs = {
+    'ev-rem': { id: 'ev-rem', kind: 'system_reminder', subkind: 'policy', out: 'Check captures.' },
+    'ev-sub': { id: 'ev-sub', kind: 'subagent', subkind: 'spawn', in: '{"role":"verifier"}' },
+    'ev-other': { id: 'ev-other', kind: 'other', subkind: 'custom', raw: '{}' },
+    'ev-call': { id: 'ev-call', kind: 'tool_call', subkind: 'Read', call_id: 'c1', out: 'unused' },
+    'ev-trunc-out': { id: 'ev-trunc-out', kind: 'thinking', stored_trunc: { out: { original_bytes: 20, head_bytes: 10, tail_bytes: 10 } } }
+  };
+  const h = loadAuditControllerHarness(async (url) => {
+    const id = decodeURIComponent(url.split('/').pop());
+    const ev = envs[id];
+    if (!ev) return { ok: false, status: 404, async text() { return 'missing'; } };
+    return { ok: true, status: 200, async json() { return ev; } };
+  });
+
+  h.ctx.WsAudit.openEvent('ev-rem');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'out');
+
+  h.ctx.WsAudit.openEvent('ev-sub');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'in');
+
+  h.ctx.WsAudit.openEvent('ev-other');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'raw');
+
+  h.ctx.WsAudit.openEvent('ev-call');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'in');
+
+  h.ctx.WsAudit.openEvent('ev-trunc-out');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'out');
+
+  h.ctx.WsAudit.openEvent('ev-rem', { tab: 'in' });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'in');
+});

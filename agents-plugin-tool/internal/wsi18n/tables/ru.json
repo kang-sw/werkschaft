@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "Не удалось прочитать хранилище аудита сейчас.",
   "js.audit.err.retry": "Повторить",
   "js.audit.err.generic.title": "Не удалось загрузить событие",
-  "js.audit.err.generic.sub": "Ошибка запроса."
+  "js.audit.err.generic.sub": "Ошибка запроса.",
+  "js.audit.filter.label": "Фильтры событий аудита",
+  "js.audit.kind.thinking": "Размышление",
+  "js.audit.kind.hook": "Хук",
+  "js.audit.kind.reminder": "Напоминание",
+  "js.audit.kind.subagent": "Субагент",
+  "js.audit.kind.compaction": "Сжатие",
+  "js.audit.kind.system": "Система",
+  "js.audit.sysrow.start": "Начало сессии · Системный промпт",
+  "js.audit.kind.unmapped": "Другое"
 }

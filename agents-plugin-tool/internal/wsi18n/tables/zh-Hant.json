@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "目前無法讀取稽核儲存區。",
   "js.audit.err.retry": "重試",
   "js.audit.err.generic.title": "無法載入稽核事件",
-  "js.audit.err.generic.sub": "請求失敗。"
+  "js.audit.err.generic.sub": "請求失敗。",
+  "js.audit.filter.label": "稽核事件篩選",
+  "js.audit.kind.thinking": "思考",
+  "js.audit.kind.hook": "掛鉤",
+  "js.audit.kind.reminder": "提醒",
+  "js.audit.kind.subagent": "子代理",
+  "js.audit.kind.compaction": "壓縮",
+  "js.audit.kind.system": "系統",
+  "js.audit.sysrow.start": "工作階段開始 · 系統提示",
+  "js.audit.kind.unmapped": "其他"
 }

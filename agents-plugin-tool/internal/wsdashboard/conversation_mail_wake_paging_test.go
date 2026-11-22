@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -47,7 +48,7 @@ func TestConversationMailWakePreservesPagingAndTurns(t *testing.T) {
 	if strings.Count(html, summaryKey) != 1 || strings.Index(html, summaryKey) > strings.Index(html, `class="mail-block"`) {
 		t.Fatalf("mail projection moved or duplicated the natural-turn summary: %s", html)
 	}
-	marker := `<span hidden data-entry="` + page.Before + `" data-mail-wake="suppressed"></span>`
+	marker := `<span hidden data-entry="` + page.Before + `" data-mail-wake="suppressed" data-at="` + page.Records[0].At.UTC().Format(time.RFC3339Nano) + `"></span>`
 	if !strings.Contains(html, marker) || strings.Count(html, "data-entry=") != 4 || strings.Count(html, `class="mailline recv"`) != 1 || strings.Count(html, `class="mail-block"`) != 1 {
 		t.Fatalf("suppression lost the oldest paging key or duplicated mail: %s", html)
 	}

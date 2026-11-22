@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "Der Audit-Speicher kann derzeit nicht gelesen werden.",
   "js.audit.err.retry": "Erneut versuchen",
   "js.audit.err.generic.title": "Audit-Ereignis konnte nicht geladen werden",
-  "js.audit.err.generic.sub": "Anfrage fehlgeschlagen."
+  "js.audit.err.generic.sub": "Anfrage fehlgeschlagen.",
+  "js.audit.filter.label": "Audit-Ereignisfilter",
+  "js.audit.kind.thinking": "Denken",
+  "js.audit.kind.hook": "Hook",
+  "js.audit.kind.reminder": "Erinnerung",
+  "js.audit.kind.subagent": "Subagent",
+  "js.audit.kind.compaction": "Kompaktierung",
+  "js.audit.kind.system": "System",
+  "js.audit.sysrow.start": "Sitzungsstart · System-Prompt",
+  "js.audit.kind.unmapped": "Sonstiges"
 }

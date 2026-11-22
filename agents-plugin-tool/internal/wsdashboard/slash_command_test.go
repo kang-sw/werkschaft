@@ -265,7 +265,7 @@ func TestHeldCommandBubbleHasSteer(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("GET /s/livesession = %d", code)
 	}
-	bubble := regexp.MustCompile(`(?s)<div class="msg user held hcmd" data-entry="` + cmd + `">.*?</div></div>`).FindString(page)
+	bubble := regexp.MustCompile(`(?s)<div class="msg user held hcmd" data-entry="` + cmd + `"[^>]*>.*?</div></div>`).FindString(page)
 	if bubble == "" {
 		t.Fatalf("no held command bubble for %s:\n%s", cmd, page)
 	}
@@ -288,10 +288,10 @@ func TestCommandEntryShowsItsOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(set[regionEntries].HTML)
-	out := regexp.MustCompile(`(?s)<div class="cmdrun" data-entry="` + ring[0].Name + `">.*?</pre></div>`).FindString(html)
+	out := regexp.MustCompile(`(?s)<div class="cmdrun" data-entry="` + ring[0].Name + `"[^>]*>.*?</pre></div>`).FindString(html)
 	contains(t, "command with output", out, `<code>/context</code>`, `<pre class="cmdout">  used &lt;40%&gt;`+"\n"+`  free 60%</pre>`)
 	lacks(t, "command with output", out, "cmdnote")
-	none := regexp.MustCompile(`(?s)<div class="cmdrun" data-entry="` + ring[1].Name + `">.*?</div></div>`).FindString(html)
+	none := regexp.MustCompile(`(?s)<div class="cmdrun" data-entry="` + ring[1].Name + `"[^>]*>.*?</div></div>`).FindString(html)
 	contains(t, "command with no output", none, `<code>/config</code>`, `<div class="cmdnote">no text output: it opens in the terminal</div>`)
 	lacks(t, "command with no output", none, "cmdout")
 }

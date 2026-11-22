@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "Não foi possível ler o armazenamento agora.",
   "js.audit.err.retry": "Tentar novamente",
   "js.audit.err.generic.title": "Não foi possível carregar o evento",
-  "js.audit.err.generic.sub": "A requisição falhou."
+  "js.audit.err.generic.sub": "A requisição falhou.",
+  "js.audit.filter.label": "Filtros de eventos de auditoria",
+  "js.audit.kind.thinking": "Pensamento",
+  "js.audit.kind.hook": "Hook",
+  "js.audit.kind.reminder": "Lembrete",
+  "js.audit.kind.subagent": "Subagente",
+  "js.audit.kind.compaction": "Compactação",
+  "js.audit.kind.system": "Sistema",
+  "js.audit.sysrow.start": "Início da sessão · Prompt do sistema",
+  "js.audit.kind.unmapped": "Outro"
 }

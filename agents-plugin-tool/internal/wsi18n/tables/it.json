@@ -3291,5 +3291,14 @@
   "js.audit.err.unavail.sub": "Impossibile leggere l’archivio di audit ora.",
   "js.audit.err.retry": "Riprova",
   "js.audit.err.generic.title": "Impossibile caricare l’evento",
-  "js.audit.err.generic.sub": "Richiesta non riuscita."
+  "js.audit.err.generic.sub": "Richiesta non riuscita.",
+  "js.audit.filter.label": "Filtri eventi di audit",
+  "js.audit.kind.thinking": "Ragionamento",
+  "js.audit.kind.hook": "Hook",
+  "js.audit.kind.reminder": "Promemoria",
+  "js.audit.kind.subagent": "Subagente",
+  "js.audit.kind.compaction": "Compattazione",
+  "js.audit.kind.system": "Sistema",
+  "js.audit.sysrow.start": "Avvio sessione · Prompt di sistema",
+  "js.audit.kind.unmapped": "Altro"
 }
