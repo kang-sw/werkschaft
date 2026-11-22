@@ -139,12 +139,14 @@ func TestComposerExecRunsTheLinesAsTheLeadsOwnExecShell(t *testing.T) {
 	}
 	// A multiline source runs as one script, in the lead's bound worktree,
 	// with stdin at EOF (cat returns), and stderr joins the combined bytes.
+	// stdout and stderr reach the combined stream through separate pipes
+	// (execjob.go), so the lines are asserted without cross-stream order.
 	job, err := run("pwd\necho out\necho err 1>&2\ncat\n", 20*time.Second)
 	if err != nil || !job.Terminal() || job.State != "exited" || job.ExitCode == nil || *job.ExitCode != 0 {
 		t.Fatalf("job = %+v, %v", job, err)
 	}
 	got := string(job.Output)
-	if !strings.HasPrefix(got, root+"\n") || !strings.Contains(got, "out\n") || !strings.Contains(got, "err\n") || job.Written != int64(len(got)) || job.Gen != 1 {
+	if !strings.Contains(got, root+"\n") || !strings.Contains(got, "out\n") || !strings.Contains(got, "err\n") || len(got) != len(root)+1+len("out\n")+len("err\n") || job.Written != int64(len(got)) || job.Gen != 1 {
 		t.Fatalf("output %q written %d gen %d", got, job.Written, job.Gen)
 	}
 	// It is the lead's own exec.shell job: listed under the lead, tool and
