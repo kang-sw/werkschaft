@@ -27,6 +27,21 @@ func TestDraftImageCapMatchesInbox(t *testing.T) {
 	}
 }
 
+// TestDraftRecoveryMerge runs saveDraft's shared-row merge in node VMs:
+// byte identity for ID-less images, no eviction past the image cap, and
+// tombstones applied only once a write commits.
+func TestDraftRecoveryMerge(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	out, err := exec.Command(node, "testdata/draft-merge.test.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("draft merge fixture: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
+
 func TestDashboardDraftRecoveryBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE for Chromium acceptance")

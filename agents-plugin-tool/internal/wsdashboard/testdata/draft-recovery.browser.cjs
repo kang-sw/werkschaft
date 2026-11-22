@@ -372,15 +372,18 @@ async function mergedImageCap(browser) {
   try {
     const pages = [await context.newPage(), await context.newPage()], frames = [];
     for (const page of pages) { await page.goto(base + session); frames.push(await frameFor(page)); }
-    // Each window holds a full message's worth (IMG_MAX = 8) the other never loaded.
+    // Each window holds a full message's worth (IMG_MAX = 8) the other never
+    // loaded. The second save would merge 16: it is refused, nothing saved
+    // is dropped, and that window's draft stays unsaved.
     for (const [w, frame] of frames.entries()) {
       await type(frame, 'Cap draft ' + w);
       for (let i = 0; i < 8; i++) await paste(frame, `w${w}-${i}.png`);
       await frame.locator(`#cimgs img[alt="w${w}-7.png"]`).waitFor();
-      assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+      assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), w === 0);
     }
     const row = await recoveryRow(frames[1]);
-    assert.deepEqual(row.images.map(p => p.name), [0, 1, 2, 3, 4, 5, 6, 7].map(i => `w1-${i}.png`), 'the merge keeps the 8 most recent');
+    assert.deepEqual(row.images.map(p => p.name), [0, 1, 2, 3, 4, 5, 6, 7].map(i => `w0-${i}.png`), 'the over-cap merge keeps the saved images');
+    assert.equal(await pages[1].evaluate(() => window.wsNativeCloseReady()), false, 'the refused window holds native close');
   } finally { await context.close(); }
 }
 

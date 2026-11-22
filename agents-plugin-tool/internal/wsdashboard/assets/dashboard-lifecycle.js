@@ -165,21 +165,40 @@
   var draftDB = null, draftReady = null, draftLoaded = false;
   var draftLegacy = null, draftCommitted = null, draftWrite = null, draftWriteKey = "";
   var draftDeliveryState = new Map(), draftRetained = null, draftRetainedImages = [];
-  // Image IDs and content signatures this renderer has loaded or written.
-  // Another window's newer image in the shared active record is carried
-  // over, never dropped. An older page writes images without an ID (and
-  // strips the IDs it restored), so an ID-less entry is matched by content.
-  var draftKnownImages = new Set();
-  function draftImageSig(p) {
-    return "sig:" + [p.n, p.name, p.blob ? p.blob.size : 0, p.blob ? p.blob.type : ""].join("\u0000");
+  // Image IDs this renderer has loaded or written, each with its content
+  // key ("" until its bytes are read). Another window's image in the shared
+  // active record is carried over, never dropped. An older page writes
+  // images without an ID (and strips the IDs it restored); such an entry is
+  // only ever matched by its bytes (draftContentKey), never by metadata.
+  var draftKnownImages = new Map(), draftDigests = new WeakMap();
+  function draftDigest(blob) {
+    var subtle = window.crypto && window.crypto.subtle;
+    if (!blob || typeof blob.arrayBuffer !== "function" || !subtle) return Promise.resolve("");
+    var known = draftDigests.get(blob);
+    if (known) return known;
+    known = blob.arrayBuffer().then(function (bytes) { return subtle.digest("SHA-256", bytes); }).then(function (hash) {
+      return Array.from(new Uint8Array(hash), function (b) { return (b + 256).toString(16).slice(1); }).join("");
+    }).catch(function () { return ""; });
+    draftDigests.set(blob, known);
+    return known;
   }
-  // A legacy ID-less image gets the same ID in every renderer that restores it.
-  function draftImageID(p) { return p.id || "legacy:" + draftImageSig(p).slice(4); }
-  function draftKnow(p) { draftKnownImages.add(draftImageID(p)); draftKnownImages.add(draftImageSig(p)); }
-  function draftImageKnown(p) { return draftKnownImages.has(p.id || draftImageSig(p)); }
+  // The slot, name, type and SHA-256 of an image's bytes; "" when they cannot
+  // be read. A legacy ID-less image gets "legacy:" + its key as its ID, the
+  // same in every renderer that restores it.
+  function draftContentKey(p) {
+    if (!p || !p.blob) return Promise.resolve("");
+    return draftDigest(p.blob).then(function (digest) {
+      return digest ? "c:" + [p.n, p.name, p.blob.type, p.blob.size, digest].join("\u0000") : "";
+    });
+  }
+  function draftKnow(id, key) {
+    if (id) draftKnownImages.set(id, key || draftKnownImages.get(id) || "");
+  }
   // Removal wins: an image ID this renderer knew and no longer holds goes in
-  // the row's removed set, so a stale window cannot bring it back. Only the
-  // renderer that removed it lifts it again (an undo, a returned send).
+  // the row's removed set (with its content key, which matches the same
+  // bytes written back without an ID), so a stale window cannot bring it
+  // back. Only the renderer that removed it lifts it again (an undo, a
+  // returned send). The set changes only once a write commits.
   var draftTombstoned = new Set(), DRAFT_TOMBSTONES = 64;
 
   function draftDatabase() {
@@ -200,7 +219,10 @@
         result = request.result || null;
         if (!write) return;
         try {
-          result = update(result);
+          // undefined leaves the row as it is.
+          var next = update(result);
+          if (next === undefined) return;
+          result = next;
           if (result) store.put(result, rid);
           else store.delete(rid);
         } catch (e) { tx.abort(); }
@@ -212,13 +234,12 @@
   function draftProjection(d) { return WsRail.emptyDraft(d) ? null : JSON.stringify(d); }
   function savedImage(p) {
     if (!p.id) p.id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
-    if (p.ts == null) p.ts = Date.now();
-    return { id: p.id, ts: p.ts, n: p.n, name: p.name, ref: p.ref, blob: p.blob };
+    return { id: p.id, n: p.n, name: p.name, ref: p.ref, blob: p.blob };
   }
   function loadDraftImage(p) {
-    var id = draftImageID(p), ts = p.ts || 0;
-    return p.ref ? { id: id, ts: ts, n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
-      { id: id, ts: ts, n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
+    var id = p.id || "";
+    return p.ref ? { id: id, n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
+      { id: id, n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
   }
   function imageData(blob) {
     return new Promise(function (resolve, reject) {
@@ -275,7 +296,10 @@
     draftTimer = null;
     var d = readDraft(), projection = draftProjection(d), previous = draftLegacy;
     var images = ctext ? imgs.filter(function (p) { return !p.ref && p.blob; }).map(savedImage) : draftRetainedImages;
-    images.forEach(draftKnow);
+    images.forEach(function (p) {
+      draftKnow(p.id);
+      draftContentKey(p).then(function (key) { draftKnow(p.id, key); });
+    });
     var deliveries = outbox.filter(function (m) { return !m.acked; }).map(function (m) {
       var body = Object.assign({}, m.body);
       delete body.images;
@@ -313,9 +337,64 @@
     }
     draftUnsaved = true;
     if (!draftDB) return Promise.resolve(false);
-    var before = draftDeliveryState, conflicts = [];
+    var before = draftDeliveryState, conflicts = [], pass = null;
+    var stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     draftDeliveryState = states;
-    var write = draftTransaction(true, function (existing) {
+    // mergeImages merges this renderer's images into the row's active
+    // record. Another window may have committed images this one never
+    // loaded: their bytes are kept, and a restore reattaches them as loose
+    // markers. looseKeys are the content keys of the row's ID-less entries in
+    // order, and ownKeys those of images; without them (null) every ID-less
+    // entry is carried over as it is.
+    function mergeImages(existing, looseKeys, ownKeys) {
+      var current = existing && existing.active, active = record;
+      var removed = new Set(existing && Array.isArray(existing.removed) ? existing.removed : []);
+      var own = new Set(), lift = [], bury = [], loose = [], foreign = [], held = new Set(), at = 0;
+      images.forEach(function (p) {
+        own.add(p.id);
+        if (!draftTombstoned.has(p.id)) return;
+        lift.push(p.id);
+        removed.delete(p.id);
+        removed.delete(draftKnownImages.get(p.id));
+      });
+      draftKnownImages.forEach(function (key, id) {
+        if (own.has(id)) return;
+        if (!draftTombstoned.has(id)) { bury.push(id); removed.add(id); }
+        if (key && removed.has(id)) removed.add(key);
+      });
+      var kept = function (p) { return !removed.has(p.id); };
+      images.forEach(function (p, i) { if (ownKeys && ownKeys[i] && kept(p)) held.add(ownKeys[i]); });
+      (current && Array.isArray(current.images) ? current.images : []).forEach(function (p) {
+        if (!p) return;
+        if (p.id) {
+          if (!draftKnownImages.has(p.id) && kept(p)) foreign.push(p);
+          return;
+        }
+        loose.push(p);
+        var key = looseKeys && looseKeys[at++] || "";
+        if (!key) { foreign.push(p); return; }
+        // The same bytes this renderer's record holds, or bytes it removed.
+        if (held.has(key) || removed.has(key)) return;
+        held.add(key);
+        foreign.push(Object.assign({}, p, { id: "legacy:" + key }));
+      });
+      if (foreign.length || record && !record.images.every(kept)) {
+        active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [] });
+        active.images = active.images.filter(kept).concat(foreign);
+      }
+      // Two windows' images may merge past what one message carries
+      // (IMG_MAX, wsinbox.MaxImages). Nothing saved is dropped to fit: the
+      // row keeps its images and this save reports failure, so this window
+      // holds its draft as unsaved until images are removed.
+      var full = !!(foreign.length && active.images.length > IMG_MAX);
+      if (full) active = Object.assign({}, current, { images: current.images.filter(function (p) { return !p || !p.id || kept(p); }) });
+      return { active: active, removed: Array.from(removed).slice(-DRAFT_TOMBSTONES), full: full, lift: lift, bury: bury, loose: loose };
+    }
+    function settleTombstones(merge) {
+      merge.lift.forEach(function (id) { draftTombstoned.delete(id); });
+      merge.bury.forEach(function (id) { draftTombstoned.add(id); });
+    }
+    var first = draftTransaction(true, function (existing) {
       var merged = Object.assign({}, existing && existing.deliveries);
       before.forEach(function (state, id) {
         if (!states.has(id) && merged[id] && merged[id].state === state) delete merged[id];
@@ -332,45 +411,40 @@
         }
         merged[m.id] = m;
       });
-      // Another window may have committed images this one never loaded.
-      // Keep their bytes; a restore reattaches them as loose markers.
-      var current = existing && existing.active, active = record;
-      var removed = new Set(existing && Array.isArray(existing.removed) ? existing.removed : []), own = new Set();
-      images.forEach(function (p) {
-        var id = draftImageID(p);
-        own.add(id);
-        if (draftTombstoned.delete(id)) removed.delete(id);
+      pass = mergeImages(existing, null, null);
+      if (!pass.active && !Object.keys(merged).length && !pass.removed.length) return null;
+      // stamp marks this write: a second pass applies only to the row as
+      // this one left it (an older page's write drops the field).
+      return { active: pass.active, deliveries: merged, removed: pass.removed, stamp: stamp };
+    });
+    // The first write starts at once (it may run on pagehide) and carries
+    // every ID-less entry over. Then their bytes are read and, while no
+    // other write came between, a second pass drops the copies of this
+    // renderer's own or removed bytes and gives the rest their legacy ID.
+    var write = first.then(function () {
+      settleTombstones(pass);
+      if (!pass.loose.length) return pass;
+      return Promise.all([Promise.all(pass.loose.map(draftContentKey)), Promise.all(images.map(draftContentKey))]).then(function (keys) {
+        if (!keys[0].some(Boolean)) return pass;
+        var second = null;
+        return draftTransaction(true, function (existing) {
+          if (!existing || existing.stamp !== stamp) return undefined;
+          second = mergeImages(existing, keys[0], keys[1]);
+          return { active: second.active, deliveries: existing.deliveries, removed: second.removed, stamp: stamp };
+        }).then(function () {
+          if (!second) return pass;
+          settleTombstones(second);
+          return second;
+        }, function () { return pass; });
       });
-      draftKnownImages.forEach(function (id) {
-        if (id.indexOf("sig:") !== 0 && !own.has(id) && !draftTombstoned.has(id)) { draftTombstoned.add(id); removed.add(id); }
-      });
-      var kept = function (p) { return !removed.has(draftImageID(p)); };
-      // An ID-less entry from an older page counts as foreign unless its
-      // content matches an image this renderer loaded or wrote.
-      var foreign = current && Array.isArray(current.images) ? current.images.filter(function (p) {
-        return p && !draftImageKnown(p) && kept(p);
-      }) : [];
-      if (foreign.length || record && !record.images.every(kept)) {
-        active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [] });
-        active.images = active.images.filter(kept).concat(foreign);
-      }
-      // Two windows' images may merge past what one message carries
-      // (IMG_MAX, wsinbox.MaxImages): keep the most recent, in order.
-      if (active && active.images.length > IMG_MAX) {
-        active = Object.assign({}, active, { images: active.images.map(function (p, i) { return { p: p, i: i }; })
-          .sort(function (a, b) { return (b.p.ts || 0) - (a.p.ts || 0) || a.i - b.i; }).slice(0, IMG_MAX)
-          .sort(function (a, b) { return a.i - b.i; }).map(function (x) { return x.p; }) });
-      }
-      var tombstones = Array.from(removed).slice(-DRAFT_TOMBSTONES);
-      if (!active && !Object.keys(merged).length && !tombstones.length) return null;
-      return { active: active, deliveries: merged, removed: tombstones };
-    }).then(function () {
+    }).then(function (merge) {
       if (draftWrite !== write) return true;
       draftWrite = null;
       conflicts.forEach(function (id) {
         var delivery = outbox.find(function (m) { return m.recoveryID === id; });
         if (delivery) delivery.recoveryConflict = true;
       });
+      if (merge.full) { draftUnsaved = true; return false; }
       draftCommitted = draftRecoveryKey(record, states);
       draftUnsaved = missingBlob || !saveLegacyDraft(d, projection) && !rich && hasDraft;
       return !draftUnsaved;
@@ -406,9 +480,25 @@
       draftDB = db;
       return db ? draftTransaction(false).catch(function () { draftDB = null; return null; }) : null;
     }).then(function (record) {
-      var active = record && record.active, removed = new Set(record && Array.isArray(record.removed) ? record.removed : []);
-      if (active && Array.isArray(active.images) && removed.size) {
-        active = Object.assign({}, active, { images: active.images.filter(function (p) { return !removed.has(draftImageID(p)); }) });
+      var stored = record && record.active && Array.isArray(record.active.images) ? record.active.images : [];
+      return Promise.all(stored.map(draftContentKey)).then(function (keys) { return { record: record, keys: keys }; });
+    }).then(function (loaded) {
+      var record = loaded.record, active = record && record.active, removed = new Set(record && Array.isArray(record.removed) ? record.removed : []);
+      if (active && Array.isArray(active.images)) {
+        // An ID-less entry takes its legacy ID from its bytes; one that
+        // repeats a kept image's bytes, or matches removed bytes, is a copy.
+        var seen = new Set(), images = [];
+        active.images.forEach(function (p, i) { if (p && p.id && !removed.has(p.id) && loaded.keys[i]) seen.add(loaded.keys[i]); });
+        active.images.forEach(function (p, i) {
+          var key = loaded.keys[i];
+          if (!p || (p.id ? removed.has(p.id) : key && (removed.has(key) || seen.has(key)))) return;
+          if (!p.id && key) seen.add(key);
+          var image = Object.assign({}, p, { id: p.id || (key ? "legacy:" + key : "") });
+          if (!image.id && !ctext) savedImage(image);
+          draftKnow(image.id, key);
+          images.push(image);
+        });
+        active = Object.assign({}, active, { images: images });
       }
       var useActive = active && (draftLegacy === active.base || draftLegacy === active.projection);
       var prepared = useActive ? active.draft : legacy;
@@ -416,7 +506,6 @@
         draftRetained = prepared && boardDraft(JSON.parse(JSON.stringify(prepared)));
         draftRetainedImages = active ? active.images : [];
       }
-      (active ? active.images : []).forEach(draftKnow);
       restoreDraft(prepared, useActive ? active.images : []);
       if (active && !useActive && ctext) {
         // An older page used the legacy draft in the meantime. Keep its
