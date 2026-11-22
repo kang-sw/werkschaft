@@ -587,6 +587,27 @@
       rows.set(P.harness, { model: t.model || "", effort: t.effort || "", mode: mode });
       edited();
     }
+    // tierAgrees is whether the fields carry the picked named tier (true in
+    // manual selection): its harness, model, and effort as applyTier set
+    // them.
+    function tierAgrees() {
+      var t = tierPick.name && tierPick.current();
+      if (!tierPick.name) return true;
+      return !!t && P.harness === t.harness && rows.model.value === (t.model || "") && rows.effort.value === (t.effort || "");
+    }
+    // reapplyTier puts the still-picked named tier back into the fields
+    // after something redrew them (a refreshed choices list drops a model
+    // or effort its catalog does not list, which applyTier had added). A
+    // tier the refreshed list no longer offers, or that cannot be picked
+    // now, returns the form to manual selection instead. True when the
+    // fields carry the picked tier afterwards.
+    function reapplyTier() {
+      if (!tierPick.name) return false;
+      var t = tierPick.current();
+      if (!t) { tierPick.manual(); return false; }
+      applyTier(t);
+      return tierAgrees();
+    }
     function off(k) {
       var h = supHarness(k);
       return !hbtn[k] || (!!h && (h.lead === true ? h.available !== true : h.available === false));
@@ -662,6 +683,9 @@
     function submit() {
       sync();
       if (start.disabled) return;
+      // Never launch while the picked tier and the fields disagree: put the
+      // tier back, or, when it is gone, send nothing and show manual.
+      if (!tierAgrees() && !reapplyTier()) return;
       if (P.refused) { recheck(); return; }
       var level = dropped() ? "" : P.level;
       if (level === "full") {
@@ -801,6 +825,7 @@
         picks[P.harness] = currentPick();
         harnessButtons();
         showPick(P.harness);
+        reapplyTier();
         sync();
         railPopPlace();
       });

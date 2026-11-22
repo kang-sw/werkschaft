@@ -207,3 +207,92 @@ test('a named tier fills harness, model and effort; a hand edit returns to manua
   assert.equal(body.level, 'read-only');
   assert.equal('tier' in body, false, 'the launch carries no tier name');
 });
+
+test('a picked named tier keeps its off-catalog model and effort across a choices refresh, and goes manual when it vanishes', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+  }
+  const pending = [], posts = [];
+  const hs = [
+    { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto', 'plan'], permission_levels: ['read-only'] },
+    { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] }
+  ];
+  // The bundle's model and effort are not in codex's catalog lists.
+  const offCatalog = { name: 'preview', trace: 'preview', harness: 'codex', model: 'gpt-x-preview', effort: 'xhigh' };
+  const tiers = [offCatalog];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const start = p.el.children.at(-1).children.at(-1);
+  // launch clicks Start; the permission pre-flight re-reads the choices.
+  const launch = () => {
+    start.events.click({ target: start });
+    if (pending.length) pending.shift()(200, { harnesses: hs, tiers });
+    const sent = posts.shift();
+    return sent && sent.body;
+  };
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+
+  // Reopened over a held list: the tier is picked before the fresh list
+  // arrives, whose redraw would drop the off-catalog values.
+  p.open('root', 'name', btn);
+  picker.value = 'preview'; picker.events.change();
+  assert.equal(model.value, 'gpt-x-preview');
+  assert.equal(effort.value, 'xhigh');
+  pending.shift()(200, { harnesses: hs, tiers });
+  assert.equal(picker.value, 'preview', 'the tier stays picked');
+  assert.equal(model.value, 'gpt-x-preview', 'the refresh re-applies the bundle model');
+  assert.equal(effort.value, 'xhigh', 'the refresh re-applies the bundle effort');
+  p.level = 'read-only';
+  let body = launch();
+  assert.equal(body.harness, 'codex');
+  assert.equal(body.model, 'gpt-x-preview', 'the launch carries the bundle model, not a blank');
+  assert.equal(body.effort, 'xhigh');
+
+  // Backstop: fields that disagree with the shown tier are never sent; the
+  // tier is put back first.
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+  picker.value = 'preview'; picker.events.change();
+  model.value = ''; effort.value = '';
+  p.level = 'read-only';
+  body = launch();
+  assert.equal(body.model, 'gpt-x-preview');
+  assert.equal(body.effort, 'xhigh');
+
+  // The bundle vanished from the refreshed list: back to manual, and what
+  // the form shows is what it sends.
+  p.open('root', 'name', btn);
+  picker.value = 'preview'; picker.events.change();
+  pending.shift()(200, { harnesses: hs, tiers: [] });
+  assert.equal(picker.value, '', 'a vanished tier returns the form to manual');
+  assert.equal(model.value, '');
+  assert.equal(effort.value, '');
+  p.level = 'read-only';
+  body = launch();
+  assert.equal(body.model, model.value);
+  assert.equal(body.effort, effort.value);
+});

@@ -6,7 +6,10 @@
   // launch and a hire still send those concrete fields, and the permission
   // level and plugin isolation stay the user's own. manual() returns the row
   // to manual selection: the popover calls it when the user edits any of the
-  // three fields. usable(tier) is the popover's own start check for the
+  // three fields. current() is the picked tier as the latest choices list
+  // it (null when manual or no longer pickable), so the popover can re-apply
+  // it after a refresh redraws the fields. usable(tier) is the popover's
+  // own start check for the
   // tier's harness; a tier it refuses, or one the daemon could not resolve,
   // is listed but cannot be picked. With no bundles configured the row is
   // hidden, so the popover reads as before.
@@ -50,6 +53,13 @@
       T.draw();
     };
     T.reset = function () { T.name = ""; T.draw(); };
+    // current is the picked tier as the latest choices list it, when it can
+    // still be picked; null for manual, or a tier that vanished or turned
+    // unusable in a refreshed list.
+    T.current = function () {
+      var t = T.name && find(T.name);
+      return t && !why(t) ? t : null;
+    };
     sel.addEventListener("change", function () {
       var t = find(sel.value);
       if (!t || why(t)) { T.name = ""; T.draw(); return; }
