@@ -3,6 +3,10 @@ title: "ws/exec 실행 작업 HUD: 채팅창 위 뱃지, 출력 peek, 사용자 
 related:
   261121-feat-ws-board-command-slots: prerequisite (Phase 1) - composer `!` route, submission->job mapping, private command card and pending-input seam this HUD reuses
   261117-feat-ws-exec-tools: landed hosted exec service (Hosted jobs, ring, stop) this HUD reads and controls
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-completeness-reviewed: 97501b82157ebe6c
+sage-review-design-reviewed: 97501b82157ebe6c
 ---
 
 # ws/exec job HUD: composer-gap badges, output peek, user stop
@@ -24,7 +28,7 @@ The visual design was iterated as a text mockup and approved by the owner on
 `ai-docs/assets/mockups/261122/exec-job-hud/`). It is the approved visual
 reference: Phase 2 verification compares Playwright captures against it side
 by side. Where this ticket and the mockup disagree on layout priority, this
-ticket's Decision 1 wins (the mockup let the subagent badge shrink; it must
+ticket's Contract 2 wins (the mockup let the subagent badge shrink; it must
 not).
 
 Source refs below are relative to `agents-plugin-tool/` at develop
@@ -48,7 +52,10 @@ below are the behavior it fixes):
    Interrupt button is always reserved first; exec chips draw only in the
    remaining space and fold to `+N` (with a failure dot if a folded job
    failed), then to one aggregate chip (at 320 px), then hide into the
-   aggregate as space shrinks. The subagent badge and Interrupt never shrink,
+   aggregate as space shrinks. Folding is measurement-driven (a
+   `ResizeObserver` on the leftover width), not fixed breakpoints; the only
+   fixed width is the 320 px aggregate state, and the mockup gallery is the
+   reference for intermediate states. The subagent badge and Interrupt never shrink,
    wrap or ellipsize because of exec chips.
 3. **Pinning.** Failed, lost and just-ended jobs are pinned first for 10 s.
    Ok jobs fade 12 s after ending; failures stay until dismissed; once
@@ -97,9 +104,13 @@ below are the behavior it fixes):
   on, or relaunch, a job the user deliberately ended).
 - **Ended jobs:** ok jobs fade after 12 s; failures stay until dismissed;
   then a quiet "ended N" chip.
+  Timers count from the job's end time: a job that ended before the page
+  loaded is treated as already past its pin and fade windows (ok jobs hidden
+  into the "ended N" chip, failures shown until dismissed); the Phase 2
+  behavior tests cover reload.
 - **Notice language** is the agent session's language.
 - **No force-kill level.** Stop is already SIGKILL of the process group
-  (`Hosted.stop` -> `Holders.Stop`, `internal/execjob/hosted_ops.go:18-62`);
+  (`Hosted.stop` -> `Holders.Stop`, `internal/execjob/hosted_ops.go:18-83`);
   the confirm text says "no cleanup". Rejected: a second "force" tier.
 
 ### Lead technical decisions (auto-confirmed 2026-11-22)
@@ -124,7 +135,7 @@ Each carries its source evidence at develop `daf510d17`.
   seam 261121 adds for its dashboard launch binding and the two should share
   one definition.
 - **Notice delivery.** Source shows a user stop is silent today: a stop sets
-  `j.stopping` (`hosted_ops.go:25`) and `endLocked` owes a notice only when
+  `j.stopping` (`hosted_ops.go:24`) and `endLocked` owes a notice only when
   `!j.stopping` (`hosted.go:570-576`), so the agent never learns of it. The
   existing steer route only promotes a held message (`inbox_routes.go:693`)
   and is the wrong seam. The mailbox steer path already exists on the runner:
@@ -138,13 +149,25 @@ Each carries its source evidence at develop `daf510d17`.
   deduplicated. It is a new notice, not a new injection mechanism. The
   notice's outcome (`NoticeAccepted | Duplicate | Dropped | Deferred`) is
   held in memory next to the stopped marker and maps to the HUD states sent /
-  closed / failed (Retry offered on failed); it is NOT written to the row's
-  persisted `Notice` column. The UI collapses the mockup's "steered" and
+  closed / failed (Retry offered on failed); `Deferred` (held for the next
+  turn) maps to sent, since the agent will receive it. It is NOT written to
+  the row's persisted `Notice` column. Placement: the notice is admitted in
+  the `Hosted` layer once a job ends marked (not in the route handler), through `HostedSessions.Notify`, and only for a job already
+  converted to async (a job still inside its synchronous wait already gets
+  its "stopped" result from the waiting call, so no notice is admitted). The
+  outcome rides the stop (and Retry) response and the revision is bumped once
+  it is recorded, so a second tab or refetch does not see a stale state.
+  Retry: the stop route, on a job that is already ended and marked
+  stopped-by-user whose outcome is not accepted, re-admits the same event ID
+  (so it deduplicates if the first notice did land) and returns the new
+  outcome; an ended job that is not marked remains a pure no-op. The UI collapses the mockup's "steered" and
   "woken" into one "agent notified" outcome (the mockup's tooltip already
   words them alike; the toast follows). Rejected: new `AdmitCompletion` return
   plumbing for a cosmetic distinction. For `!`
   jobs the 261121 pending-input seam carries a "stopped" receipt instead and
-  no notice is admitted (no wake). Rejected: a `wsinbox` kind other than the
+  no notice is admitted (no wake); the receipt is keyed by exec ID so it
+  does not double a stopped result 261121 already carries for a `!` job
+  stopped inside its inline window. Rejected: a `wsinbox` kind other than the
   existing steered entry; reusing the row's `Notice` state machine
   (persisted, tied to the async-completion contract).
 - **Agent notice language.** The conversation's language is `workflow.lang`,
@@ -167,11 +190,27 @@ Each carries its source evidence at develop `daf510d17`.
   above). Rejected: a new `<ws-notice>` envelope (a second machine format for
   the same event family). The mockup's notice sample text is illustrative
   only; the `[ws exec]` format wins over it.
-- **Stopped-by-user marker.** An in-memory field on the hosted job
-  (alongside `stopping`, `hosted_types.go` / `hosted.go:88`), set inside
-  `stop()` under `h.mu` at the point `stopping` is set (`hosted_ops.go:25`),
-  so a job that already ended on its own is never marked. A stop issued by the
-  close cascade (`StopOwner`, `hosted_ops.go:297`) or the agent's own
+- **Stopped-by-user marker.** An in-memory user-stop intent field on the
+  hosted job (alongside `stopping`, `hosted_types.go` / `hosted.go:88`).
+  The user stop passes the intent into `stop()`, which sets it under `h.mu`
+  at the point `stopping` is set (`hosted_ops.go:24`) only when `stopping`
+  was not already true, so when a user stop and an agent `exec.stop` or the
+  close cascade race, the first stop to set `stopping` decides "by you". The
+  intent is cleared where `stopping` is cleared after a failed holder stop
+  (`hosted_ops.go:66-70`). The marker is committed wherever the job actually
+  ends as `HostedStopped` while the intent is set: the two end branches in
+  `stop()` and the holder exit-record paths that end it `HostedStopped` on
+  `exit.Reason == "stop" && j.stopping` (`hosted.go:340,407,469`), which is
+  the normal path of a stopped running job. A job
+  that already ended before the intent was set is never marked, and one
+  whose end lands after `stopping` is set is `stopped` in the source state
+  machine and is marked (no new discrimination is added). A
+  stop that never ends the job (holder stop failed) is never marked, so a
+  later natural exit is not mislabeled. The notice admission (Decisions,
+  "Notice delivery") runs after whichever path commits the marker. The HUD's
+  "Stopped by you" applies only to a marked job, whose row state is
+  `stopped`. A stop issued by the close cascade (`StopOwner`,
+  `hosted_ops.go:297`) or the agent's own
   `exec.stop` is not "by user". Not persisted: lost on daemon restart, which
   is acceptable because the notice was already delivered and the row still
   shows `stopped`. Rejected: a new `exec_jobs` column (a compatibility
@@ -195,13 +234,13 @@ Each carries its source evidence at develop `daf510d17`.
     cwd in front of LAN viewers. The event carries only a revision; the list
     is read from `GET /s/<reply-id>/exec/jobs`, `TrustedWrite`-gated like
     the stop route (a non-local viewer gets 404 and the HUD never mounts).
-  - Client: `events` map in `assets/dashboard-stream.js` (`:417`) gains
+  - Client: `events` map in `internal/wsdashboard/assets/dashboard-stream.js` (`:417`) gains
     `execjobs`; the refetch is coalesced (one in flight, one queued, the
     `tkBusy`/`tkQueued` pattern of `dashboard-tracker.js`). An old page
     ignores an event name it does not list (`dashboard-stream.js:195`).
   - Data: memory-only owner-scoped read. A summary view WITHOUT the
     per-job output tails (`rowLocked` copies a 4 KiB tail per terminal job,
-    `hosted.go:584-593`; 200 jobs per refetch is avoidable), carrying id,
+    `hosted.go:583-594`; 200 jobs per refetch is avoidable), carrying id,
     tool, command, cwd, state, exit code or signal, started/ended, owner kind
     (agent or you), stopped-by-user and notice state, and written bytes.
   - Rejected: a shared region (above); polling (an interval wake for an idle
@@ -290,7 +329,7 @@ Behavioral boundaries:
 - Performance (`ai-docs/manuals/performance.md`): the job list, the stop
   route, the output poll and the SSE revision are memory-only with no file
   I/O on the interactive path; the one durable write a stop causes is the
-  row save `stop()` already performs (`h.save`, `hosted_ops.go:80`). Polling
+  row save `stop()` already performs (`h.save`, `hosted_ops.go:81`). Polling
   runs only while a peek is open; each poll is bounded (16 KiB). Measure
   file operations and latency for: page load with 0 / 1 / 50 / 200 jobs, a
   job start/end burst (SSE wake cost across open streams), an open peek on a
@@ -301,7 +340,7 @@ Behavioral boundaries:
   Command text, cwd and output are rendered escaped (text nodes, never
   markup) in the HUD, and framed as untrusted data in the agent notice.
 - The subagent badge and Interrupt never shrink because of exec chips
-  (Decision 1); this is a verified layout property, not a visual hope.
+  (Contract 2); this is a verified layout property, not a visual hope.
 - Out of scope: stdin control for jobs from the HUD (`exec.write`),
   re-run / restart actions, jobs owned by spawned child conversations (the
   HUD shows the open conversation's own jobs only, the precedent being the
@@ -322,7 +361,7 @@ Behavioral boundaries:
 - The tracker revision event and `signalAll` (`sse.go`, `tracker_helpers.go`):
   the opaque-revision-then-refetch pattern; `dashboard-tracker.js` for the
   coalesced client refetch.
-- The composer gap: `.cbadges` and `.sbwrap` (`assets/dashboard.tmpl:26,279`,
+- The composer gap: `.cbadges` and `.sbwrap` (`internal/wsdashboard/assets/dashboard.tmpl:26,279`,
   `dashboard-conversation.css:237`, `dashboard-rail.css:762`); the
   `ibadge`/`sbadge` fill and hide logic in `dashboard-composer-status.js`.
 - The agents popover HUD (`261120-feat-ws-dashboard-chat-agent-roster-hud`):
@@ -331,6 +370,33 @@ Behavioral boundaries:
   `TrustedWrite`, `/s/<reply-id>/...` shape), the submission->job mapping that
   sets the origin field, the private command card the peek's "Jump to card"
   targets, and the pending-input seam that carries the "stopped" receipt.
+
+## Prior Decisions
+
+- 563302fc (2026-11-22, commit): "Completion (Decisions 10, 21): notice only for async or converted jobs, keyed exec:<id>:exit; Notice state pending->delivered/suppressed persisted with the row; exec.stop/abort/interrupt suppress the notice" — bearing: constrains
+- 0100ef97 (2026-11-22, commit): "Completion admission (Decisions 10, 21): AdmitCompletion writes one Steer=true inbox entry carrying EventID under c.wmu+c.mu, checking closed and Record.OpenGen in the same hold; dedupe set = Record.AcceptedEvents (cap 64" — bearing: supports
+- 0100ef97 (2026-11-22, commit): "agy gate (Decision 22): per-conversation mcpCalls counted by the HTTP token route; while >0, lead steer drains only steer entries wit..." — bearing: constrains
+- a7f5dd26 (2026-11-22, commit): "hostedJob gains starting and spawned. stop() ends a starting job at once (Stopped, holder stopped if any) so Launch never spawns it; Launch checks for that end after LaunchWith" — bearing: constrains
+- 0e35c11a (2026-11-22, commit): "failStart stops the holder synchronously with the job marked stopping and notice off; a stop that fails leaves the job running ... a later stop/StopOwner retries the holder" — bearing: constrains
+- 96316747 (2026-11-22, commit): "a completion notice to a conversation whose running turn takes no steer (no reportSteerer, no lead steer handle) stays held and becomes the next turn (Decision 10 next-turn route)" — bearing: constrains
+- 44f54d18 (2026-11-22, commit): "hosted.go had reached 1010 lines and tripped the repo size guard (limit 1000)... split before Phase 2 of 261117-feat-ws-exec-tools" — bearing: constrains
+- a2140c57 (2026-11-10, commit): "Write errors now end a stream on both framings (SSE ignored them)" — streams are SSE or WebSocket framed; the `execjobs` event rides both via `sink.event` (`sse.go`) — bearing: constrains
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | internal/execjob/hosted*.go, internal/wsagent/exec_seams.go, internal/wsdashboard/{page_routes,sse,daemon,daemon_runtime}.go, cmd/ws-mcp/dashboard.go, internal/wsdashboard/assets/, internal/wsi18n/tables/ |
+| scope.surface | cross-module | execjob, wsagent, wsdashboard, cmd/ws-mcp and dashboard assets change together |
+| scope.new_public_symbol | yes | new Hosted owner-scoped list and offset output read, new DaemonOptions seam, three new routes, execjobs event |
+| scope.new_type_contract | yes | typed dashboard exec seam (list, stop, read output); stream-attributed segment type; in-memory stopped and origin fields |
+| scope.test_surface | new-files | existing internal/execjob/hosted_test.go, internal/wsagent/exec_seams_test.go; new route, SSE and Playwright coverage needed |
+| complexity.reuse_points | confirmed | Hosted.Stop, JobOutput.Read, Runner.AdmitCompletion, tracker revision event and coalesced refetch read in source at develop |
+| complexity.side_effect_risk | high | stop races natural exit and the close cascade, and a new steered notice wakes agents |
+| risk.correctness | high | stopped marker must be set only for a stop that ended the job; exactly-once notice under races (hosted_ops.go:18-83) |
+| risk.fit | moderate | the dashboard has no Hosted access today; a seam shared with pending 261121 must be defined once |
+| risk.test | moderate | race tests, SSE tests and Playwright layout assertions across widths are all new |
+| risk.security_or_contract | high | stop is execution authority; commands, cwd and output must never reach a LAN viewer |
 
 ## Phases
 
@@ -354,8 +420,9 @@ Scope:
   through the 261121 pending-input seam for `!` jobs (no wake).
 - Routes: `GET /s/<reply-id>/exec/jobs`, `GET .../exec/<id>/output`,
   `POST .../exec/<id>/stop` (`TrustedWrite`; open-conversation and owner
-  checks; stop of an already-ended job is an idempotent no-op that sends no
-  notice and marks nothing).
+  checks; stop of an already-ended unmarked job is an idempotent no-op that
+  sends no notice and marks nothing; on a marked job with a non-accepted
+  notice outcome it is the Retry path, see Decisions "Notice delivery").
 - The `execjobs` SSE event (revision, connect-time send, wake from
   `ExecJobsChanged`), the typed dashboard seam bound in `cmd/ws-mcp`.
 
@@ -365,7 +432,10 @@ Verification boundary:
 - Go tests: stop marks only a job this call ended (a job that exited first is
   not marked; close-cascade and agent `exec.stop` do not mark); a user stop
   of an agent job admits exactly one notice (a repeated stop or a Retry is
-  `Duplicate`), wakes an idle conversation and steers a running one, and a
+  `Duplicate`; a Retry after a failed outcome re-admits it; a job still in its
+  sync wait admits none; a job whose holder stop failed, or that had already ended before the stop, is not marked; a stop whose end arrives
+  by the holder exit record IS marked and notified; a user stop racing an
+  agent `exec.stop` is marked only if the user stop set `stopping` first), wakes an idle conversation and steers a running one, and a
   closed or reopened-generation conversation reports closed; a user stop of a
   `!` job admits no notice and adds one receipt to the pending input; the
   owner-scoped list excludes other owners' jobs, includes more than 50, and
@@ -391,7 +461,7 @@ Verification boundary:
 Depends on Phase 1.
 
 Goal: the chip strip, tooltip, peek, stop flow, notice card and toast of the
-approved mockup in the chat page, with the Decision 1 priority layout.
+approved mockup in the chat page, with the Contract 2 priority layout.
 
 Scope: chips and folding (`+N`, failure dot, aggregate at 320 px, hide-to-
 aggregate), pinning and fade timers (10 s / 12 s), dismiss and the "ended N"
@@ -402,7 +472,7 @@ and toast with Retry, toolbar keyboard semantics, `prefers-reduced-motion`,
 the `execjobs` event handler with coalesced refetch and open-peek polling,
 HUD absence on a LAN or old-daemon page, and i18n keys in every shipped table
 (ko and en text final, `js.` prefix for page strings). The mockup's `.cbadges`
-integration follows the layout rule in Decision 1; nothing in
+integration follows the layout rule in Contract 2; nothing in
 `.ibadge`/`.sbadge` styling changes except what keeps them from shrinking.
 
 Deferred: nothing; later features (stdin, re-run) are out of scope.
