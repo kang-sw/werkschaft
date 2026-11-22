@@ -438,7 +438,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-22T13:39:13Z",
         "impl": {
           "branch": "impl/develop/yoga-fever-sip"
@@ -559,19 +559,6 @@
     },
     "261122-feat-ws-builtin-agent-harness": {
       "registered_at": "2026-11-22T08:45:27Z"
-    },
-    "261122-feat-ws-companion-pack-sources": {
-      "registered_at": "2026-11-22T10:27:17Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T11:12:04Z",
-        "impl": {
-          "branch": "impl/develop/jinx-twice-unlit"
-        }
-      }
     },
     "261122-feat-ws-dashboard-session-stats": {
       "registered_at": "2026-11-22T10:16:59Z"
