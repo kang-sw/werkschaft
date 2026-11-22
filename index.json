@@ -616,7 +616,17 @@
       }
     },
     "261122-feat-ws-cron-scheduled-prompts": {
-      "registered_at": "2026-11-22T11:25:33Z"
+      "registered_at": "2026-11-22T11:25:33Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T11:39:24Z",
+        "impl": {
+          "branch": "impl/develop/sugar-veal-reps"
+        }
+      }
     },
     "261122-feat-ws-dashboard-session-stats": {
       "registered_at": "2026-11-22T10:16:59Z"
