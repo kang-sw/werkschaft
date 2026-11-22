@@ -743,11 +743,11 @@
   var shIndex = 0, shRestoring = null, shRestoreNav = null, shRestoreTimer = null;
   var shTop = doc.querySelector(".dwrap > .top"), shBody = doc.querySelector(".dwrap > .dbody");
   var shCompanion = null, shCompanionFrame = null, shCompanionMuted = false, shCompanionMode = "off";
-  function shCompanionTarget(ent, refreshed) {
+  function shCompanionTarget(ent, refreshed, switched) {
     if (!shCompanion || shCompanionFrame === ent && !refreshed) return;
     if (shCompanionFrame && shCompanionFrame !== ent) shSend(shCompanionFrame, "companion-gate", { active: false });
     shCompanionFrame = ent;
-    shCompanion.reset();
+    shCompanion.reset(ent?.f.rid, switched);
     shCompanion.trackFrame(ent?.el || null);
     if (ent) shSend(ent, "companion-gate", { active: true });
   }
@@ -1051,7 +1051,7 @@
     }
     shPrune();
     shSend(ent, "shown", { shown: true });
-    shCompanionTarget(ent);
+    shCompanionTarget(ent, false, !!was && !!ent.f.rid && was.f.rid !== ent.f.rid);
     shRid(ent.f.rid);
     shHead(ent);
     shLayout(ent);

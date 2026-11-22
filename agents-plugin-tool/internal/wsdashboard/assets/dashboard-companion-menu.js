@@ -1,7 +1,7 @@
 (function (C) {
   "use strict";
 
-  function quickMenu(node, hit, menu, options, { returnHome, mute, applyPreset, presets, reloadPack, notice }) {
+  function quickMenu(node, hit, menu, options, { returnHome, resetSize, mute, applyPreset, presets, reloadPack, notice }) {
     const doc = document, signal = options.signal;
     let width = 0, height = 0;
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
@@ -54,13 +54,14 @@
       function action(key, callback) {
         const button = doc.createElement("button");
         button.type = "button";
-        button.textContent = wsT("js.companion." + key);
+        button.textContent = wsT(key);
         button.addEventListener("click", callback);
         menu.append(button);
       }
-      action("return_home", returnHome);
-      action("hide", mute);
-      if (canWrite()) action("reload", reload);
+      action("js.companion.return_home", returnHome);
+      action("js.companion.reset_size", resetSize);
+      action("js.companion.hide", mute);
+      if (canWrite()) action("js.companion.reload", reload);
       const { available, preset } = presets();
       if (available.length > 1) {
         const select = doc.createElement("select"), label = doc.createElement("label");

@@ -27,6 +27,10 @@ type ConfigBackend struct {
 	IsLead             func(Registration) bool
 	Changed            func(string)
 	LoadCompanion      func() (CompanionConfig, error)
+	// TierRouting describes the agent.tier_routing graph for draft (nil: the
+	// stored value) with traces for the caller harness, from the daemon's
+	// own graph and resolver. Nil on a backend without the graph.
+	TierRouting func(draft json.RawMessage, harness string) (any, error)
 }
 
 type configContext struct {
@@ -52,6 +56,10 @@ type configRequest struct {
 	Key       string            `json:"key"`
 	Selectors map[string]string `json:"selectors"`
 	Value     json.RawMessage   `json:"value"`
+	// Revision is the agent.tier_routing revision the edited graph was read
+	// at (the graph view's revision); required for that key, ignored for
+	// every other key.
+	Revision *string `json:"revision,omitempty"`
 }
 
 type configWarning struct {
@@ -78,6 +86,11 @@ var (
 	configForbidden     = configError{403, "forbidden", "Settings require local dashboard access."}
 	configUnsupported   = configError{409, "scope_unsupported", "This setting cannot be changed in the selected scope."}
 	configUnavailable   = configError{500, "config_error", "The configuration could not be loaded or saved."}
+	// The graph editor saves a whole graph built from the copy it loaded;
+	// these refuse a save that does not name that copy's revision or whose
+	// copy is no longer the stored one, so a concurrent edit is never lost.
+	tierRoutingNoRevision = configError{400, "invalid_request", "Saving agent.tier_routing needs the revision of the graph it edits. Reload the graph and apply the edit again."}
+	tierRoutingStale      = configError{409, "stale_revision", "The tier routing graph changed since it was loaded. Nothing was saved; the graph has been reloaded, so apply the edit again."}
 )
 
 func writeConfigError(w http.ResponseWriter, failure configError) {
@@ -383,20 +396,43 @@ func (d *Daemon) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	}
 	mutation, err := d.config.Catalog.Validate(request.Scope, wsconfigservice.Operation{Key: request.Key, Selectors: request.Selectors, Action: action, Value: value})
 	if err != nil {
-		if errors.Is(err, wsconfigservice.ErrScope) {
+		var invalid wsconfigservice.InvalidValue
+		switch {
+		case errors.Is(err, wsconfigservice.ErrScope):
 			writeConfigError(w, configUnsupported)
-		} else {
+		case request.Key == wsconfig.ItemAgentTierRouting && errors.As(err, &invalid):
+			// The graph editor shows why a save was refused (a cycle, the
+			// hop limit, an unknown target) beside the draft.
+			writeConfigError(w, configError{400, "invalid_request", invalid.Reason.Error()})
+		default:
 			writeConfigError(w, badConfigRequest)
 		}
 		return
+	}
+	if mutation.Key == wsconfig.ItemAgentTierRouting {
+		if request.Revision == nil {
+			writeConfigError(w, tierRoutingNoRevision)
+			return
+		}
+		// The shared structured writer compares the revision with the file it
+		// read under the config file lock, so no other writer (another save,
+		// config.tune in any process) can land between compare and write.
+		mutation.Precondition = wsconfig.TierRoutingAt(*request.Revision)
 	}
 	layers, writer, key, failure := d.configLayers(resolved)
 	if failure.status != 0 {
 		writeConfigError(w, failure)
 		return
 	}
+	if d.beforeConfigWrite != nil {
+		d.beforeConfigWrite(mutation.Key)
+	}
 	if err := mutation.Apply(request.Scope, resolved.opts, key, writer); err != nil {
-		writeConfigError(w, configUnavailable)
+		if errors.Is(err, wsconfig.ErrTierRoutingStale) {
+			writeConfigError(w, tierRoutingStale)
+		} else {
+			writeConfigError(w, configUnavailable)
+		}
 		return
 	}
 	if d.config.Changed != nil {
@@ -422,4 +458,57 @@ func (d *Daemon) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	entry := d.config.Catalog.Entry(mutation.Key, mutation.Selectors, request.Scope, layers)
 	affected := d.config.Catalog.AffectedEntries(mutation, request.Scope, layers)
 	writeJSON(w, http.StatusOK, configResult{Entry: entry, Affected: affected, Warnings: warnings})
+}
+
+// tierRoutingRequest is a draft preview: the candidate agent.tier_routing
+// value and the caller harness its traces resolve for.
+type tierRoutingRequest struct {
+	Harness string          `json:"harness"`
+	Value   json.RawMessage `json:"value"`
+}
+
+var configNoTierRouting = configError{404, "upgrade_required", "This daemon has no tier routing graph."}
+
+// handleTierRouting serves the stored agent.tier_routing graph (GET
+// ?harness=) and a draft's preview (POST .../preview), both described by the
+// daemon's validation and resolver, so the editor's layout, inline errors,
+// and traces are what agent.spawn would do. A preview never writes; saving
+// goes through /api/config/set, which validates again.
+func (d *Daemon) handleTierRouting(w http.ResponseWriter, r *http.Request) {
+	preview := strings.HasSuffix(r.URL.Path, "/preview")
+	method := http.MethodGet
+	if preview {
+		method = http.MethodPost
+	}
+	if !configRouteMethod(w, r, method) {
+		return
+	}
+	if preview {
+		if local, own := TrustedWrite(r); !local || !own {
+			writeConfigError(w, configForbidden)
+			return
+		}
+	} else if !localBrowseViewer(r) {
+		writeConfigError(w, configForbidden)
+		return
+	}
+	if d.config == nil || d.config.TierRouting == nil {
+		writeConfigError(w, configNoTierRouting)
+		return
+	}
+	var request tierRoutingRequest
+	if preview {
+		if !decodeConfigRequest(w, r, &request) || len(request.Value) == 0 {
+			writeConfigError(w, badConfigRequest)
+			return
+		}
+	} else {
+		request.Harness = r.URL.Query().Get("harness")
+	}
+	view, err := d.config.TierRouting(request.Value, request.Harness)
+	if err != nil {
+		writeConfigError(w, configUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }

@@ -20,6 +20,7 @@ func builtinConfigDefaults() map[string]string {
 		wsconfig.ItemWorkflowPreferSubagent:    "off",
 		wsconfig.ItemWorkflowWhiteboardEnabled: "off",
 		wsconfig.ItemWorkflowTrackerEnabled:    "off",
+		wsconfig.ItemExecNativeToolRemoval:     "on",
 		wsconfig.ItemWorkflowProfile:           "direct",
 		wsconfig.ItemSageReview:                "auto",
 		wsconfig.ItemSageReviewDesign:          "off",
@@ -159,6 +160,9 @@ type resolveAgentTierResult struct {
 	Model        string `json:"model"`
 	Effort       string `json:"effort"`
 	ResolvedFrom string `json:"resolved_from"`
+	// Trace is the agent.tier_routing path of a role tier, alias, explicit
+	// target, or bundle; empty for a bare size.
+	Trace string `json:"trace,omitempty"`
 }
 
 // promptOverrideValue is one resolved override for a declared point: the harness
@@ -592,6 +596,7 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 	appendKnob(profileEntry, profileKnob)
 
 	appendKnob(agentProfileTuningKnob(resolver, registries...))
+	appendKnob(tierRoutingTuningKnob(rsrcRoot, configOpts, harness, registries...))
 
 	for _, k := range []declaredConfigKey{worktreeNudgeStaleDaysKey, worktreeNudgePreservedGBKey} {
 		entry := k.entry()

@@ -9,18 +9,40 @@
   position: absolute;
   top: 0;
   left: 0;
+  overflow: visible;
+  transform-origin: 50% 80%;
+  pointer-events: auto;
+}
+.ws-companion-character {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   padding: 0;
   border: 0;
   background: none;
   color: inherit;
-  overflow: visible;
-  transform-origin: 50% 80%;
-  pointer-events: auto;
   cursor: grab;
   touch-action: none;
 }
-.ws-companion-hit:active { cursor: grabbing; }
-.ws-companion-hit:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 3px; border-radius: 9px; }
+.ws-companion-character:active { cursor: grabbing; }
+.ws-companion-character:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 3px; border-radius: 9px; }
+.ws-companion-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, transparent 45%, currentColor 46%, currentColor 53%, transparent 54%, transparent 65%, currentColor 66%, currentColor 73%, transparent 74%);
+  color: var(--wb-fg);
+  opacity: 0;
+  cursor: nesw-resize;
+  touch-action: none;
+}
+.ws-companion-hit:is(:hover, :focus-within) .ws-companion-resize { opacity: 0.35; }
+.ws-companion-hit .ws-companion-resize:is(:hover, :active, :focus-visible) { opacity: 0.85; }
+.ws-companion-resize:focus-visible { outline: 2px solid var(--wb-primary); }
 .ws-companion-hit canvas { position: absolute; pointer-events: none; }
 .ws-companion-menu {
   position: absolute;

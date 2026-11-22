@@ -10,6 +10,10 @@ func TestHeldWorkerLaunchFailureHasNoDirectFallback(t *testing.T) {
 	for _, backend := range []string{BackendClaude, BackendCodex, BackendAgy, BackendPi} {
 		t.Run(backend, func(t *testing.T) {
 			h, _ := workerRecoveryHarness(t, backend)
+			// After the startup scan's own kicks (holdersScanned): a start
+			// that fails between markScanned and that kick keeps its prompt
+			// for retry, and the scan's kick launches it once more.
+			wait(t, "initial scan", h.runner.rejoined)
 			h.holders.set(func() { h.holders.spawnErr = errors.New("fixture holder launch refused") })
 			caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
 			child, err := h.runner.AgentSpawn(caller, AgentSpawnRequest{Prompt: "work", Tier: backend + ".small", Authority: "workdir-write"})

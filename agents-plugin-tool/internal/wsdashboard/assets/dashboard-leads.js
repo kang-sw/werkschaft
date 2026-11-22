@@ -382,8 +382,11 @@
   // control right); changed(select) runs on a pick. With adv (the advanced
   // disclosure) inline(false) moves the native mode row there; own(mode,
   // note) shows the mode a permission level decides, the row then fixed,
-  // and free() is the user's own native pick either way.
-  function leadRows(box, changed, adv) {
+  // and free() is the user's own native pick either way. With keep (the
+  // spawn popover) a model or effort the form holds stays a real, enabled
+  // option on an available harness even when the catalog lists none, so
+  // the shown value is the one sent.
+  function leadRows(box, changed, adv, keep) {
     var R = {}, own = "", ownNote = "", free = "", extra = "", inline = true, busyNow = false, cur = { harness: "", active: "", modes: [] };
     function row(label, cls) {
       var r = box.appendChild(mk("div", "sprc")), l = r.appendChild(mk("label", null, label)), s = r.appendChild(mk("select", "spsm" + (cls ? " " + cls : "")));
@@ -447,8 +450,8 @@
       R.disable = function (busy) {
         var unavailable = !!h && (h.lead === true ? h.available !== true : h.available === false);
         busyNow = !!busy;
-        m.sel.disabled = busy || unavailable || !models.length;
-        e.sel.disabled = busy || unavailable || !efforts.length;
+        m.sel.disabled = busy || unavailable || (!models.length && !(keep && v.model));
+        e.sel.disabled = busy || unavailable || (!efforts.length && !(keep && v.effort));
         p.sel.disabled = busy || unavailable || !modes.length || !!own;
       };
       R.disable(false);
@@ -506,12 +509,16 @@
     var el = P.el = rpPop(wsT("js.lead.title"));
     el.appendChild(mk("div", "sphd", wsT("js.lead.title")));
     var loc = el.appendChild(mk("div", "sploc"));
+    var tierPick = leadTierPicker(el.appendChild(mk("div", "sptiers")), tierUsable, applyTier);
     var hsec = el.appendChild(mk("div", "spsec"));
     var seg = hsec.appendChild(mk("div", "spseg"));
     seg.setAttribute("role", "radiogroup");
     seg.setAttribute("aria-label", wsT("js.sup.harness"));
     var hbtn = Object.create(null), harnessSig = "";
-    function harnessButtons() {
+    // harnessButtons draws the harness segment from the latest list; unless
+    // keep, a harness the list no longer offers moves to the first one that
+    // can start (keep leaves it, and Start stays refused).
+    function harnessButtons(keep) {
       var hs = leadHarnesses(), sig = hs.map(function (h) { return h.harness; }).join("\n");
       if (harnessSig !== sig) {
         harnessSig = sig;
@@ -524,7 +531,7 @@
           seg.appendChild(b);
         });
       }
-      if (!hbtn[P.harness] || off(P.harness)) {
+      if (!keep && (!hbtn[P.harness] || off(P.harness))) {
         P.harness = hs.filter(function (h) { return !off(h.harness); }).map(function (h) { return h.harness; })[0] || hs[0].harness;
       }
     }
@@ -542,7 +549,7 @@
     var opts = el.appendChild(mk("div", "spopts"));
     var adv = el.appendChild(mk("details", "pmadv")), advSum = adv.appendChild(mk("summary", null, wsT("js.perm.adv")));
     var advOwn = advSum.appendChild(mk("span", "pmown", wsT("js.perm.adv.owned")));
-    var rows = leadRows(opts, edited, adv);
+    var rows = leadRows(opts, edited, adv, true);
     // Plugin isolation: which plugins the hosted session loads. The pick goes
     // out as plugin_isolation; Pi's standalone binary supports only isolated.
     var isec = el.appendChild(mk("div", "spsec"));
@@ -563,6 +570,50 @@
     var cancel = row.appendChild(rpBtn("pbtn", wsT("js.rail.cancel")));
     var start = row.appendChild(rpBtn("pbtn go", wsT("js.lead.start")));
     function setErr(text) { err.textContent = text || ""; err.hidden = !text; }
+    // A named tier is usable when its harness can start here and the form
+    // can carry its model and effort (those fields are off on a harness
+    // that lists none).
+    function tierUsable(t) {
+      return !!t.harness && !!hbtn[t.harness] && !off(t.harness) && (!t.model || leadModels(t.harness).length > 0) && (!t.effort || leadEfforts(t.harness).length > 0);
+    }
+    // applyTier fills harness, model, and effort from a picked named tier.
+    // The permission level, native mode, and plugin isolation stay the
+    // user's: a level the new harness does not offer shows as dropped (not
+    // sent), and one picked while support is unknown stays visible.
+    function applyTier(t) {
+      if (P.busy || P.loading) return;
+      var mode = rows.free();
+      if (t.harness !== P.harness) {
+        picks[P.harness] = currentPick();
+        P.harness = t.harness;
+        P.dropped = "";
+        P.refused = 0;
+        mode = pick(t.harness).mode;
+      }
+      rows.set(P.harness, { model: t.model || "", effort: t.effort || "", mode: mode });
+      edited();
+    }
+    // tierAgrees is whether the fields carry the picked named tier (true in
+    // manual selection): its harness, model, and effort as applyTier set
+    // them.
+    function tierAgrees() {
+      var t = tierPick.name && tierPick.current();
+      if (!tierPick.name) return true;
+      return !!t && P.harness === t.harness && rows.model.value === (t.model || "") && rows.effort.value === (t.effort || "");
+    }
+    // reapplyTier puts the still-picked named tier back into the fields
+    // after something redrew them (a refreshed choices list drops a model
+    // or effort its catalog does not list, which applyTier had added). A
+    // tier the refreshed list no longer offers, or that cannot be picked
+    // now, returns the form to manual selection instead. True when the
+    // fields carry the picked tier afterwards.
+    function reapplyTier() {
+      if (!tierPick.name) return false;
+      var t = tierPick.current();
+      if (!t) { tierPick.manual(); return false; }
+      applyTier(t);
+      return tierAgrees();
+    }
     function off(k) {
       var h = supHarness(k);
       return !hbtn[k] || (!!h && (h.lead === true ? h.available !== true : h.available === false));
@@ -609,9 +660,13 @@
       Object.keys(ibtn).forEach(function (k) { ibtn[k].setAttribute("aria-checked", String(P.iso === k)); });
       idesc.textContent = wsT(P.iso === "isolated" ? "js.lead.iso.isolated.hint" : "js.lead.iso.default.hint") + (P.harness === "pi" ? " " + wsT("js.lead.iso.pi") : "");
       start.disabled = P.busy || P.loading || off(P.harness);
+      tierPick.busy = P.busy || !!P.loading;
+      tierPick.draw();
     }
-    // edited drops an earlier spawn's error once the form changed.
-    function edited() {
+    // edited drops an earlier spawn's error once the form changed; a hand
+    // edit of the model or effort returns the named tier to manual.
+    function edited(sel) {
+      if (sel && (sel === rows.model || sel === rows.effort)) tierPick.manual();
       if (!P.busy) setErr("");
       rows.notes(P.harness);
       permDraw();
@@ -620,6 +675,7 @@
     }
     function setHarness(k) {
       if (P.harness === k) return;
+      tierPick.manual();
       picks[P.harness] = currentPick();
       P.harness = k;
       P.level = P.dropped = "";
@@ -633,21 +689,35 @@
     function submit() {
       sync();
       if (start.disabled) return;
+      // Never launch while the picked tier and the fields disagree: put the
+      // tier back, or, when it is gone, send nothing and show manual.
+      if (!tierAgrees() && !reapplyTier()) return;
       if (P.refused) { recheck(); return; }
       var level = dropped() ? "" : P.level;
       if (level === "full") {
-        var gen = P.gen;
-        permFullAsk({ harness: P.harness, path: locText() }, function () { if (rpLive(P, gen)) launch("full", true); }, function () {});
+        // The grant launches what the warning named: a refresh that
+        // re-applies the tier while the warning is open (or any other
+        // redraw) cannot change the harness, model, or effort it sends.
+        var gen = P.gen, asked = launchSnap("full", true);
+        permFullAsk({ harness: asked.harness, path: locText() }, function () { if (rpLive(P, gen)) launch(asked); }, function () {});
         return;
       }
-      launch(level, false);
+      launch(launchSnap(level, false));
     }
-    // launch spawns with level (none: the legacy route, as before); ack is
-    // the full warning's grant.
-    function launch(level, ack) {
+    // launchSnap is the spawn request the form shows now: level (none: the
+    // legacy route, as before), ack (the full warning's grant), and the pick
+    // stored for the harness once the spawn succeeds.
+    function launchSnap(level, ack) {
+      return {
+        harness: P.harness,
+        chosen: currentPick(),
+        form: { harness: P.harness, model: rows.model.disabled ? "" : rows.model.value, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack }
+      };
+    }
+    // launch spawns exactly snap's request.
+    function launch(snap) {
       notifAsk();
-      var gen = P.gen, chosenHarness = P.harness, chosen = currentPick();
-      var form = { harness: P.harness, model: rows.model.disabled ? "" : rows.model.value, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack };
+      var gen = P.gen, chosenHarness = snap.harness, chosen = snap.chosen, form = snap.form, level = form.level;
       P.busy = true;
       setErr("");
       status.textContent = wsT(level ? "js.perm.checking" : "js.lead.starting");
@@ -659,7 +729,12 @@
         if (!ok) {
           P.busy = false;
           status.textContent = "";
-          P.dropped = level;
+          // The refusal is about the snapshot: the live form lost the level
+          // only while it still shows the snapshot's harness. A form a
+          // refresh moved elsewhere keeps its own level; the refusal shows
+          // as an error instead.
+          if (P.harness === chosenHarness) P.dropped = level;
+          else setErr(wsT("js.perm.unsent"));
           permDraw();
           sync();
           railPopPlace();
@@ -752,6 +827,7 @@
       loc.appendChild(mk("code", null, key)).title = key;
       setErr("");
       status.textContent = "";
+      tierPick.reset();
       harnessButtons();
       rows.set(P.harness, { model: "", effort: "", mode: "" });
       permDraw();
@@ -765,24 +841,35 @@
         sync();
         railPopPlace();
       }, function () {
-        // The newer list arrived over a form the user may have edited: keep
-        // the picks, and show them against the new lists.
-        if (!rpLive(P, gen)) return;
-        picks[P.harness] = currentPick();
-        harnessButtons();
-        showPick(P.harness);
-        sync();
-        railPopPlace();
+        if (rpLive(P, gen)) choicesArrived();
       });
     };
+    // choicesArrived shows a newer choices list over a form the user may
+    // have edited. A re-read never changes the form on its own: the harness,
+    // model, and effort stay as shown (a value the new list lacks is kept as
+    // an extra option, as applyTier adds one), and a harness no longer
+    // offered stays for Start to refuse. Only a still-picked named tier
+    // re-applies its values (or, gone, returns the form to manual), so the
+    // tier note and the fields agree.
+    function choicesArrived() {
+      var shown = { model: rows.model.value, effort: rows.effort.value, mode: rows.free() };
+      picks[P.harness] = currentPick();
+      harnessButtons(true);
+      rows.set(P.harness, shown);
+      permDraw();
+      reapplyTier();
+      sync();
+      railPopPlace();
+    }
     // permSync redraws the level after the live stream dropped (support is
     // unknown until a new read) and re-reads the choices once it is back.
     P.permSync = function (read) {
-      var gen = P.gen, redraw = function () { if (rpLive(P, gen) && !P.loading) { permDraw(); sync(); railPopPlace(); } };
-      redraw();
-      if (read) leadChoices(redraw, redraw);
+      var gen = P.gen, live = function () { return rpLive(P, gen) && !P.loading; };
+      var arrived = function () { if (live()) choicesArrived(); };
+      if (live()) { permDraw(); sync(); railPopPlace(); }
+      if (read) leadChoices(arrived, arrived);
     };
-    P.focus = function () { (hbtn[P.harness].disabled ? cancel : hbtn[P.harness]).focus(); };
+    P.focus = function () { (hbtn[P.harness] && !hbtn[P.harness].disabled ? hbtn[P.harness] : cancel).focus(); };
     P.close = function () { permFullDrop(); };
     return P;
   }

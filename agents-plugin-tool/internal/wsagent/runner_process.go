@@ -245,6 +245,17 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		// do not register a bearer before checkReattach validates ownership.
 		spec.MCPSession = &MCPSession{Started: func(env []string, _ int) { c.workerMCPEnv = env }}
 	}
+	if attach {
+		// The token is restored after ownership validation
+		// (restoreWorkerMCP), which marks it again.
+		spec.ExecCutover = c.rejoinExecCutover(rec)
+	} else {
+		var mcpEnv map[string]string
+		if spec.WSMCP != nil {
+			mcpEnv = spec.WSMCP.Env
+		}
+		c.decideExecCutover(rec, def, &spec, mcpEnv)
+	}
 	if rec.Backend == BackendPi && !attach {
 		// Persist exactly the definition checked above and passed to Start,
 		// after retiring the previous process. Reattachment keeps this copy.
@@ -274,11 +285,12 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 			c.seq, c.seqDirty, c.live.ringDirty = 0, false, false
 			c.update(func(rec *Record) {
 				rec.HolderID, rec.HostPID, rec.HolderSeq = id, pid, 0
+				rec.ExecCutoverHolder = cutoverHolder(spec.ExecCutover, id)
 				rec.SteerSeq, rec.SteerAnswers, rec.SteerAnswerSeq = 0, 0, 0
 				rec.HandedOffAt = c.r.opts.Now().UTC().Format(time.RFC3339)
 				rec.forgetMCP()
 				if s := spec.MCPSession; s != nil {
-					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, spec.WSMCP.Env, id
+					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, spec.ExecCutover), spec.WSMCP.Env, id
 				}
 			})
 		}
@@ -366,6 +378,8 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	}
 	// spawned: the backend recorded its process before Start returned (LeadSpec.Spawned).
 	var spawned bool
+	// cutover is this start's exec cutover, settled below before the start.
+	var cutover bool
 	spec := StartSpec{
 		Root:         rec.Root,
 		Dir:          c.dir,
@@ -426,7 +440,10 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			Now:        c.r.opts.Now,
 			Spawned: func(holderID string, pid int) {
 				spawned = true
-				c.update(func(rec *Record) { rec.HolderID, rec.HostPID, rec.HolderSeq = holderID, pid, 0 })
+				c.update(func(rec *Record) {
+					rec.HolderID, rec.HostPID, rec.HolderSeq = holderID, pid, 0
+					rec.ExecCutoverHolder = cutoverHolder(cutover, holderID)
+				})
 				c.writeRegistration()
 			},
 		},
@@ -439,7 +456,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		// daemon that keeps the record's members without knowing them: it
 		// loaded the bundle's stdio server, and the token is no one's.
 		c.update(func(rec *Record) { rec.forgetMCP() })
-	case attach && rec.MCPToken != "" && (rec.MCPURL != c.r.mcpURL() || rec.MCPEnv == nil):
+	case attach && rec.MCPToken != "" && (!c.r.servesMCPURL(rec.MCPURL) || rec.MCPEnv == nil):
 		// The process sends its token to a route this daemon does not
 		// serve (it listens on another port), or its hello is unknown:
 		// its ws-mcp is gone until it restarts, at its first idle point
@@ -475,11 +492,22 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			mcpEnv = cmd.Env
 		}
 	}
+	if attach {
+		spec.ExecCutover = c.rejoinExecCutover(rec)
+	} else {
+		c.decideExecCutover(rec, def, &spec, mcpEnv)
+	}
+	cutover = spec.ExecCutover
 	if source == "explicit" {
 		spec.PermissionLevel = level
 		if mode := nativePermissionMode(rec.Backend, level); mode != "" {
 			spec.Lead.PermissionMode = mode
 		}
+	}
+	if mode := c.cutoverLaunchMode(); mode != "" {
+		// The cutover's native mode wins over the saved one, which stays on
+		// record for a start outside the cutover.
+		spec.Lead.PermissionMode = mode
 	}
 	if !attach {
 		c.permissionNudge(level, false, "")
@@ -535,9 +563,10 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	c.seq, c.seqDirty, c.live.ringDirty = 0, false, false
 	c.update(func(rec *Record) {
 		rec.HolderID, rec.HostPID, rec.HolderSeq = id, pid, 0
+		rec.ExecCutoverHolder = cutoverHolder(cutover, id)
 		rec.forgetMCP()
 		if s := spec.MCPSession; s != nil {
-			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, mcpEnv, id
+			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, cutover), mcpEnv, id
 		}
 	})
 	c.writeRegistration()
@@ -741,6 +770,9 @@ func (c *conv) replayDone(lost bool) {
 		c.armModelWait()
 	}
 	c.reconcileLeadPermission()
+	// A rejoined cutover worker's process keeps the mode it ran in.
+	c.holdWorkerCutoverMode(c.activeMode)
+	c.rejectCutoverPending()
 	c.allowAgyBypassPending()
 	c.checkAction(false)
 	c.live.writeSnapshot()

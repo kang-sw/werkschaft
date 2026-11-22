@@ -1111,3 +1111,127 @@ func TestCaptureNoteWritesThroughTheHolderCapture(t *testing.T) {
 		}
 	}
 }
+
+// TestLaunchThatFailsToAttachReturnsTheHolderID: a holder that registered
+// but could not be attached runs on, so LaunchWith's failure names it and
+// the caller can stop it.
+func TestLaunchThatFailsToAttachReturnsTheHolderID(t *testing.T) {
+	python := testPython(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	var started string
+	applies := false
+	m := New(Options{
+		Dir:       testHoldersDir(t),
+		Python:    python,
+		breakaway: &applies,
+		start: func(exe string, args []string, cwd string, breakaway bool) (*exec.Cmd, error) {
+			var dir string
+			for i := 0; i+1 < len(args); i++ {
+				switch args[i] {
+				case "--dir":
+					dir = args[i+1]
+				case "--id":
+					started = args[i+1]
+				}
+			}
+			// A process that registers a port nothing answers on.
+			cmd := exec.Command(python, "-c", "import time; time.sleep(60)")
+			if err := cmd.Start(); err != nil {
+				return nil, err
+			}
+			t.Cleanup(func() { _ = cmd.Process.Kill() })
+			raw, _ := json.Marshal(Descriptor{Schema: 1, ID: started, PID: cmd.Process.Pid, Port: port, Token: "t", Protocol: protocolVersion})
+			if err := os.WriteFile(filepath.Join(dir, descriptorName), raw, 0o600); err != nil {
+				_ = cmd.Process.Kill()
+				return nil, err
+			}
+			return cmd, nil
+		},
+	})
+	t.Cleanup(m.Close)
+	id, err := m.LaunchWith(LaunchSpec{})
+	if err == nil {
+		t.Fatal("LaunchWith with a holder that does not answer succeeded")
+	}
+	if id == "" || id != started {
+		t.Fatalf("LaunchWith's failure named holder %q, want %q (%v)", id, started, err)
+	}
+}
+
+// TestScanReportsADescriptorItCouldNotRead: a holder directory whose
+// descriptor does not read (and is too fresh to clear as an orphan) may
+// hold a running holder, so the listing says it is incomplete until a scan
+// reads every registration again.
+func TestScanReportsADescriptorItCouldNotRead(t *testing.T) {
+	dir := testHoldersDir(t)
+	m := testManager(t, dir, nil)
+	m.Scan()
+	if m.List().Incomplete {
+		t.Fatal("an empty holders directory listed as incomplete")
+	}
+	holderDir := filepath.Join(dir, "unreadable")
+	if err := os.MkdirAll(holderDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(holderDir, descriptorName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if !m.List().Incomplete {
+		t.Fatal("a scan that could not read a holder's descriptor listed as complete")
+	}
+	if err := os.RemoveAll(holderDir); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if m.List().Incomplete {
+		t.Fatal("a scan that read every descriptor still listed as incomplete")
+	}
+}
+
+// TestScanKeepsAnAgedDirectoryWhoseDescriptorDoesNotRead: past the orphan
+// grace, a holder directory with no descriptor is cleared and the listing
+// is complete, but one whose descriptor exists and does not parse may still
+// belong to a live holder: it stays, and the listing stays incomplete.
+func TestScanKeepsAnAgedDirectoryWhoseDescriptorDoesNotRead(t *testing.T) {
+	dir := testHoldersDir(t)
+	long := time.Now().Add(-2 * orphanDirGrace)
+	empty := filepath.Join(dir, "empty")
+	corrupt := filepath.Join(dir, "corrupt")
+	for _, d := range []string{empty, corrupt} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(corrupt, descriptorName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{empty, corrupt} {
+		if err := os.Chtimes(d, long, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := testManager(t, dir, nil)
+	m.Scan()
+	if _, err := os.Stat(empty); !os.IsNotExist(err) {
+		t.Errorf("the aged directory with no descriptor was not cleared: %v", err)
+	}
+	if _, err := os.Stat(corrupt); err != nil {
+		t.Errorf("the aged directory whose descriptor does not read was removed: %v", err)
+	}
+	if !m.List().Incomplete {
+		t.Error("a scan that could not read an existing descriptor listed as complete")
+	}
+	if err := os.RemoveAll(corrupt); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if m.List().Incomplete {
+		t.Error("a scan with only cleared orphans still listed as incomplete")
+	}
+}

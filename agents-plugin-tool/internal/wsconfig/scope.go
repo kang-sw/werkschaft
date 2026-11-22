@@ -211,6 +211,22 @@ const (
 	// filtered capture file. Both are booleans read at process start.
 	ItemAgyStallLogCheck   = "agy.stall_log_check"
 	ItemAgyHTTP2FrameTrace = "agy.http2_frame_trace"
+
+	// ItemExecNativeToolRemoval is the per-harness rollout switch of the
+	// exec cutover: on (the default) launches a dashboard-hosted session
+	// with its native process tools removed in favour of the ws exec tools,
+	// off keeps them. Stored per harness bucket as
+	// ItemExecNativeToolRemoval+"."+<claude|codex|pi|agy|all>; a process
+	// reads it at its start.
+	ItemExecNativeToolRemoval = "exec.native_tool_removal"
+
+	// ItemClaudeExecCutoverEnabled is the Claude opt-in to the exec cutover
+	// (owner tier decision 2161=b): a hosted Claude process starts under the
+	// cutover only when it is true, on top of every other condition. Both
+	// Claude package manifests (ws and wsflow) default it to false, so the
+	// default Claude path never depends on the ws-mcp session route for
+	// commands, which a daemon older than 0.51 refuses.
+	ItemClaudeExecCutoverEnabled = "claude.exec_cutover_enabled"
 )
 
 func init() {
@@ -229,6 +245,12 @@ func init() {
 	RegisterDefaultScope(ItemWorkflowTrackerEnabled, ScopeGlobal)
 	for _, bucket := range []string{"claude", "codex", "pi", "agy", "all"} {
 		RegisterDefaultScope(ItemWorkflowTrackerEnabled+"."+bucket, ScopeGlobal)
+	}
+	// exec.native_tool_removal is a machine-wide rollout switch, global on
+	// the bare key and every bucket key.
+	RegisterDefaultScope(ItemExecNativeToolRemoval, ScopeGlobal)
+	for _, bucket := range []string{"claude", "codex", "pi", "agy", "all"} {
+		RegisterDefaultScope(ItemExecNativeToolRemoval+"."+bucket, ScopeGlobal)
 	}
 	// workflow.profile is the same cross-project habit, so it takes the same
 	// global default on the bare key and every bucket key.

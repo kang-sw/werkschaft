@@ -36,7 +36,7 @@ func TestConversationBoardNudgeWakeRender(t *testing.T) {
 					t.Fatal(err)
 				}
 				html := string(set[regionEntries].HTML)
-				for _, want := range []string{tc.want, `data-entry="` + ring[0].Name + `"`, `class="mail-notification"`, `data-key="wake-` + ring[0].Name + `"`} {
+				for _, want := range []string{tc.want, `data-entry="` + ring[0].Name + `"`, `class="mail-notification"`, `data-board-nudge="1"`, `data-key="wake-` + ring[0].Name + `"`} {
 					if !strings.Contains(stdhtml.UnescapeString(html), want) {
 						t.Errorf("missing %q: %s", want, html)
 					}
@@ -105,7 +105,7 @@ func TestConversationBoardNudgeWakeFallback(t *testing.T) {
 			tc.change(&e)
 			e.Source, e.Caption = "mailbox", strings.ReplaceAll(e.Text, "\n", " ")
 			html := presentationHTML(t, []wslive.RingRecord{ringRecord(1, e)}, PageContent{}, nil)
-			if !strings.Contains(html, "Unmatched") || strings.Contains(html, "Board nudge ·") || strings.Count(html, "[ws mailbox]") != 1 || strings.Count(stdhtml.UnescapeString(html), e.Text) != 1 || strings.Count(html, "<details") != 1 {
+			if !strings.Contains(html, "Unmatched") || strings.Contains(html, `data-board-nudge=`) || strings.Contains(html, "Board nudge ·") || strings.Count(html, "[ws mailbox]") != 1 || strings.Count(stdhtml.UnescapeString(html), e.Text) != 1 || strings.Count(html, "<details") != 1 {
 				t.Fatalf("fallback lost its badge or duplicated raw diagnostics: %s", html)
 			}
 		})
@@ -173,7 +173,7 @@ func TestConversationBoardNudgeTwelveMailBatch(t *testing.T) {
 		if !strings.Contains(plain, "보드 알림 · 차단 해제 12건: Topic <01>, Topic <02> +10") {
 			t.Fatalf("batch summary missing: %s", html)
 		}
-		if strings.Count(html, `class="mail-notification"`) != 1 || strings.Count(html, "<details") != 1 || strings.Count(html, `data-mail-wake="suppressed"`) != 11 || strings.Count(html, "data-entry=") != 12 || strings.Count(html, "[ws mailbox]") != 1 {
+		if strings.Count(html, `class="mail-notification"`) != 1 || strings.Count(html, "<details") != 1 || strings.Count(html, `data-board-nudge="1"`) != 1 || strings.Count(html, `data-mail-wake="suppressed"`) != 11 || strings.Count(html, "data-entry=") != 12 || strings.Count(html, "[ws mailbox]") != 1 {
 			t.Fatalf("batch did not render as one row plus keyed markers: %s", html)
 		}
 		if strings.Contains(html, "연결된 메일 없음") || strings.Contains(html, "메일 알림") || strings.Contains(html, "<01>") {

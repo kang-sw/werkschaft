@@ -96,7 +96,8 @@ IDs, unique within the conversation so the user can cite any item:
 Pass the tier to `{{.McpNamespace}}/config.resolve_agent(tier)` rather than
 naming a model.
 
-- A rendered playbook → the tier its render recommends.
+- A rendered playbook → the tier its render recommends, passed as returned;
+  a role tier such as `ticket-worker:large` is valid there.
 - small: well-specified work with no design calls — mechanical edits,
   running and reading commands, lookups, straightforward investigation.
 - medium: ordinary engineering with a clear target and approach — a scoped

@@ -333,6 +333,9 @@ func (h *leadHarness) startAt(endpoint string) {
 	h.runner = NewRunner(h.opts)
 	h.runner.SetEndpoint(endpoint)
 	h.runner.Start(func(string, string) { h.notes.Add(1) })
+	if h.execJobs != nil {
+		h.runner.BindExecJobs(h.execJobs)
+	}
 	h.t.Cleanup(h.runner.Close)
 }
 

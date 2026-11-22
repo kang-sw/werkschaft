@@ -84,6 +84,10 @@ type StartSpec struct {
 	// conversation delegates through agent.spawn (RemovesSubagents). A
 	// backend whose harness has no such tool ignores it.
 	RemoveSubagents bool
+	// ExecCutover starts the process with its harness's native process tools
+	// (shell, background shell, monitor) removed, the ws exec tools standing
+	// in for them (exec_cutover.go). A backend without such tools ignores it.
+	ExecCutover bool
 	// RecoveredSteers are the unconsumed worker steers persisted before a
 	// holder reattach. A backend may use them to map replayed acknowledgements
 	// back to the runner without persisting backend request ids.
@@ -372,6 +376,9 @@ type Event struct {
 	// tool call returned.
 	Approval     *ApprovalRequest
 	ApprovalDone string
+	// UnrequestedCommand names (by tool call id) a native process tool call
+	// whose execution the stream shows with no permission request for it.
+	UnrequestedCommand string
 	// PermissionMode is the permission mode the harness reports it runs in.
 	PermissionMode string
 	// HarnessState is the state the harness reports it moved to
