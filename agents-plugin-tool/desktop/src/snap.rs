@@ -86,15 +86,6 @@ pub unsafe fn install(
             format!("window thread {owner}, called on {here}"),
         ));
     }
-    let data = Box::into_raw(Box::new(Data {
-        top,
-        dashboard,
-        strip,
-        overlay: HWND::default(),
-        band: HWND::default(),
-        tracking: false,
-        emit: Box::new(emit),
-    }));
     let module = HINSTANCE(
         GetModuleHandleW(PCWSTR::null())
             .map_err(step("GetModuleHandleW"))?
@@ -113,43 +104,52 @@ pub unsafe fn install(
         };
         RegisterClassExW(&class);
     });
-    let overlay = CreateWindowExW(
-        WS_EX_TRANSPARENT,
-        OVERLAY_CLASS,
-        w!("Werkschaft maximize button"),
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0,
-        0,
-        1,
-        1,
-        Some(top),
-        None,
-        Some(module),
-        None,
-    )
-    .map_err(step("CreateWindowExW"))?;
-    let band = CreateWindowExW(
-        WS_EX_TRANSPARENT,
-        OVERLAY_CLASS,
-        w!("Werkschaft resize border"),
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0,
-        0,
-        1,
-        1,
-        Some(top),
-        None,
-        Some(module),
-        None,
-    )
-    .map_err(step("CreateWindowExW"))?;
-    SetWindowLongPtrW(overlay, GWLP_USERDATA, data as isize);
-    SetWindowLongPtrW(band, GWLP_USERDATA, data as isize);
-    (*data).overlay = overlay;
-    (*data).band = band;
+    // From here every failure goes through `discard`, which destroys whatever
+    // child windows exist, clears their user data first and then frees `data`.
+    let data = Box::into_raw(Box::new(Data {
+        top,
+        dashboard,
+        strip,
+        overlay: HWND::default(),
+        band: HWND::default(),
+        tracking: false,
+        emit: Box::new(emit),
+    }));
+    let child = |title: PCWSTR| {
+        CreateWindowExW(
+            WS_EX_TRANSPARENT,
+            OVERLAY_CLASS,
+            title,
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+            0,
+            0,
+            1,
+            1,
+            Some(top),
+            None,
+            Some(module),
+            None,
+        )
+        .map_err(step("CreateWindowExW"))
+    };
+    match child(w!("Werkschaft maximize button")) {
+        Ok(overlay) => (*data).overlay = overlay,
+        Err(error) => {
+            discard(data);
+            return Err(error);
+        }
+    }
+    match child(w!("Werkschaft resize border")) {
+        Ok(band) => (*data).band = band,
+        Err(error) => {
+            discard(data);
+            return Err(error);
+        }
+    }
+    SetWindowLongPtrW((*data).overlay, GWLP_USERDATA, data as isize);
+    SetWindowLongPtrW((*data).band, GWLP_USERDATA, data as isize);
     if !SetWindowSubclass(top, Some(subclass), SUBCLASS_ID, data as usize).as_bool() {
-        let _ = DestroyWindow(overlay);
-        drop(Box::from_raw(data));
+        discard(data);
         return Err(windows::core::Error::new(
             windows::Win32::Foundation::E_FAIL,
             "SetWindowSubclass refused",
@@ -157,6 +157,18 @@ pub unsafe fn install(
     }
     layout(&*data);
     Ok(())
+}
+
+/// Destroys the child windows `data` knows and frees it. Their user data goes
+/// first, so no message can reach a window procedure holding the pointer.
+unsafe fn discard(data: *mut Data) {
+    for child in [(*data).overlay, (*data).band] {
+        if !child.is_invalid() {
+            SetWindowLongPtrW(child, GWLP_USERDATA, 0);
+            let _ = DestroyWindow(child);
+        }
+    }
+    drop(Box::from_raw(data));
 }
 
 const OVERLAY_CLASS: PCWSTR = w!("WERKSCHAFT_MAXIMIZE_BUTTON");
@@ -274,6 +286,13 @@ unsafe extern "system" fn subclass(
         WM_NCDESTROY => {
             let _ = RemoveWindowSubclass(hwnd, Some(subclass), SUBCLASS_ID);
             let result = DefSubclassProc(hwnd, message, wparam, lparam);
+            // The children are normally gone by now; any that is not must not
+            // reach the freed state.
+            for child in [state.overlay, state.band] {
+                if IsWindow(Some(child)).as_bool() {
+                    SetWindowLongPtrW(child, GWLP_USERDATA, 0);
+                }
+            }
             drop(Box::from_raw(data as *mut Data));
             result
         }
