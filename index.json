@@ -542,6 +542,9 @@
     "261121-research-werkschaft-lead-companion-wasu-rig": {
       "registered_at": "2026-11-21T09:52:43Z"
     },
+    "261122-bug-release-0-51-1-compat-blockers": {
+      "registered_at": "2026-11-22T14:55:24Z"
+    },
     "261122-bug-ws-agent-startup-scan-double-start": {
       "registered_at": "2026-11-22T12:55:56Z"
     },
@@ -596,19 +599,6 @@
         "touched_at": "2026-11-22T11:12:02Z",
         "impl": {
           "branch": "impl/develop/grab-stack-jelly"
-        }
-      }
-    },
-    "261122-feat-ws-cron-scheduled-prompts": {
-      "registered_at": "2026-11-22T11:25:33Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T11:39:24Z",
-        "impl": {
-          "branch": "impl/develop/sugar-veal-reps"
         }
       }
     },
