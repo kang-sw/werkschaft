@@ -138,11 +138,15 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 	return AgentSpawnResult{Address: AgentAddress(st.ID), Status: AgentStatus(st)}, nil
 }
 
-// reserveBoundWorktrees takes the spawn reservation of the nearest worktree
-// root at or above each of paths, once per root, until the returned unlock
-// runs. worktree.release counts a conversation as bound when its root equals
-// the worktree or its cwd lies within it (ActiveChildrenInWorktree), so every
-// conversation create reserves both. Only a release in progress refuses
+// reserveBoundWorktrees takes the spawn reservation of every worktree root at
+// or above each of paths, once per root, until the returned unlock runs.
+// worktree.release counts a conversation as bound when its canonical root
+// equals the worktree or its canonical cwd lies anywhere within it
+// (ActiveChildrenInWorktree), so every conversation create reserves each
+// worktree that could count it: the walk starts from the canonical path, so
+// a symlink from outside still reserves the worktree it resolves into, and it
+// does not stop at a nested repo or submodule, whose enclosing worktree counts
+// the conversation too. Only a release in progress refuses
 // (ErrWorktreeReleasing): a path outside any worktree, or a lock that cannot
 // be taken, leaves the create as it was before the reservation.
 func reserveBoundWorktrees(paths ...string) (func(), error) {
@@ -154,37 +158,40 @@ func reserveBoundWorktrees(paths ...string) (func(), error) {
 	}
 	seen := map[string]bool{}
 	for _, path := range paths {
-		dir, ok := enclosingWorktreeRoot(path)
-		if !ok || seen[dir] {
-			continue
-		}
-		seen[dir] = true
-		unlock, err := wsgit.ReserveWorktreeSpawn(dir)
-		if errors.Is(err, wsgit.ErrWorktreeReleasing) {
-			unlockAll()
-			return nil, err
-		}
-		if err == nil {
-			unlocks = append(unlocks, unlock)
+		for _, dir := range enclosingWorktreeRoots(path) {
+			if seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			unlock, err := wsgit.ReserveWorktreeSpawn(dir)
+			if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+				unlockAll()
+				return nil, err
+			}
+			if err == nil {
+				unlocks = append(unlocks, unlock)
+			}
 		}
 	}
 	return unlockAll, nil
 }
 
-// enclosingWorktreeRoot returns the nearest directory at or above path that
-// holds a .git entry. It stops there: a path inside a nested repo or
-// submodule reserves that root, never an unrelated ancestor admin dir.
-func enclosingWorktreeRoot(path string) (string, bool) {
-	if strings.TrimSpace(path) == "" {
-		return "", false
+// enclosingWorktreeRoots returns every directory at or above path's
+// canonical form (canonicalWorktreePath, the form release compares) that
+// holds a .git entry, innermost first.
+func enclosingWorktreeRoots(path string) []string {
+	path = canonicalWorktreePath(path)
+	if path == "" {
+		return nil
 	}
-	for dir := filepath.Clean(path); ; {
+	var roots []string
+	for dir := path; ; {
 		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
-			return dir, true
+			roots = append(roots, dir)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", false
+			return roots
 		}
 		dir = parent
 	}

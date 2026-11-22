@@ -68,6 +68,81 @@ func TestAgentSpawnWidthCapAtomicUnderConcurrentSpawns(t *testing.T) {
 	}
 }
 
+// releaseTestWorktree makes root a Git repository and adds a linked worktree
+// outside it, returning the worktree's path.
+func releaseTestWorktree(t *testing.T, root string) string {
+	t.Helper()
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git(root, "init")
+	git(root, "config", "user.email", "test@example.com")
+	git(root, "config", "user.name", "Test")
+	git(root, "commit", "--allow-empty", "-m", "base")
+	wt := filepath.Join(t.TempDir(), "pooled-wt")
+	git(root, "worktree", "add", "-b", "impl/test/bound", wt, "HEAD")
+	return wt
+}
+
+// TestWorktreeReleaseRefusesSpawnsThatResolveIntoIt verifies that a spawn
+// whose cwd release would count as bound (canonical cwd anywhere within the
+// worktree) is refused while release holds the lock, when the cwd reaches
+// the worktree through a symlink from outside or lies in a nested repo.
+func TestWorktreeReleaseRefusesSpawnsThatResolveIntoIt(t *testing.T) {
+	h, _ := agentHarness(t, nil)
+	wt := releaseTestWorktree(t, h.root)
+	sub := filepath.Join(wt, "sub")
+	nested := filepath.Join(wt, "nested")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(nested, "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "init")
+	cmd.Dir = nested
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init nested: %v\n%s", err, out)
+	}
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(sub, link); err != nil {
+		t.Fatal(err)
+	}
+
+	releaseLock, err := wsgit.WorktreeReleaseLock(context.Background(), wsgit.ExecRunner{}, wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseLock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	lead := h.leadCaller()
+	for _, cwd := range []string{link, nested, filepath.Join(nested, "deep")} {
+		_, err := h.runner.AgentSpawn(lead, AgentSpawnRequest{
+			Prompt: "raced spawn", Tier: "small", Authority: "read-only", Cwd: cwd,
+		})
+		agentRefused(t, err, http.StatusConflict, "currently being released")
+	}
+	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 0 {
+		t.Fatalf("refused spawns left bound children: %+v", got)
+	}
+	if err := releaseLock.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	// Without a release, the same spawns open and count as bound.
+	for _, cwd := range []string{link, nested} {
+		h.agentSpawn(lead, AgentSpawnRequest{Prompt: "bound", Tier: "small", Authority: "read-only", Cwd: cwd})
+	}
+	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 2 {
+		t.Fatalf("bound children = %+v, want 2", got)
+	}
+}
+
 // TestWorktreeActiveChildrenAndSpawnReleaseReservation verifies daemon-wide
 // bound-child discovery (direct, nested grandchild, sleeping/waiting non-closed
 // children, and closed exclusion), the /agents/by-token/worktree.children
