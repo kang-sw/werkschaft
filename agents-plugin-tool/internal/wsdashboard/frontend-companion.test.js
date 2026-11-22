@@ -834,3 +834,113 @@ test("companion directed beats override the rules engine until the TTL, then the
   assert.equal(runner.tick(6999).entry.id, "directed");
   assert.equal(runner.tick(7000), null, "a missing TTL clamps to 1 s");
 });
+
+function modalDom() {
+  const listeners = new Map();
+  const on = (target, type, fn) => { (target.listeners[type] ||= []).push(fn); };
+  const fire = (target, type, event = {}) => { for (const fn of target.listeners[type] || []) fn({ preventDefault() {}, ...event }); };
+  const doc = { listeners: {}, activeElement: null };
+  function element(tag) {
+    const el = {
+      tagName: tag.toUpperCase(), className: "", id: "", title: "", textContent: "", value: "", type: "", disabled: false,
+      children: [], attrs: {}, listeners: {}, style: {}, offsetWidth: 240, offsetHeight: 200, open: false,
+      setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
+      addEventListener(type, fn) { on(this, type, fn); },
+      append(...items) { this.children.push(...items); },
+      replaceChildren(...items) { this.children = [...items]; },
+      focus() { doc.activeElement = this; },
+      all() { return this.children.flatMap(child => [child, ...(child.all ? child.all() : [])]); },
+      contains(other) { return other === this || this.all().includes(other); },
+      querySelector() { return this.all().find(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName) && !c.disabled) || null; },
+      show() { this.open = true; }, close() { this.open = false; }
+    };
+    return el;
+  }
+  class Option { constructor(text, value, _default, selected) { this.tagName = "OPTION"; this.textContent = text; this.value = value; this.selected = selected; } }
+  const sysopen = new Set(["data-sysopen"]);
+  Object.assign(doc, {
+    createElement: element, addEventListener(type, fn) { on(doc, type, fn); },
+    documentElement: { hasAttribute: name => sysopen.has(name) }
+  });
+  return { doc, element, fire, Option, sysopen };
+}
+
+test("companion settings modal opens, writes typed global values, reverts refused input and closes", async () => {
+  const { doc, element, fire, Option, sysopen } = modalDom();
+  const writes = [], notices = [];
+  let fail = false, resets = 0;
+  const fetch = async (url, init) => {
+    if (url === "/api/companion/packs") return { ok: true, json: async () => ({ packs: [{ id: "default" }, { id: "fox" }] }) };
+    writes.push(JSON.parse(init.body));
+    return { ok: !fail };
+  };
+  const C = companion({ document: doc, Option, fetch, wsT: key => key,
+    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const rows = catalog.filter(row => row.surface === "companion-modal");
+  const config = { pack: "default", preset: "werkschaft-d1", agentCooldownSeconds: 30, agentHourlyCap: 20 };
+  const node = element("div"), gear = element("button");
+  const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, {
+    rows: () => rows, config: () => config, persona: () => ({ name: "Fixture Fox", voice: "Short lines." }),
+    presets: () => ({ available: ["werkschaft-d1", "werkschaft-d2"] }),
+    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
+    resetSize: () => { resets++; }, applyPreset() {}, notice: key => notices.push(key)
+  });
+  const dialog = node.children[0];
+  const find = (cls) => dialog.all().filter(c => c.className === cls);
+  const control = key => {
+    const row = dialog.all().filter(c => c.className === "ws-companion-settings-row")[rows.findIndex(r => r.key === key)];
+    return row.all().find(c => c.tagName === "SELECT" || c.tagName === "INPUT");
+  };
+
+  fire(gear, "click");
+  assert.equal(modal.open, true);
+  assert.equal(gear.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(find("ws-companion-settings-label").map(c => c.textContent), rows.map(r => r.label));
+  assert.equal(find("ws-companion-settings-name")[0].textContent, "Fixture Fox");
+  assert.equal(dialog.style.left, "168px", "placed to the right of the character");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(control("dashboard.companion_pack").children.map(o => o.value), ["default", "auto", "fox"]);
+
+  const cooldown = control("dashboard.companion_agent_cooldown_seconds");
+  cooldown.value = "45";
+  fire(cooldown, "change");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(writes.at(-1), { scope: "global", key: "dashboard.companion_agent_cooldown_seconds", value: 45 });
+  cooldown.focus();
+  cooldown.value = "4.5";
+  fire(cooldown, "change");
+  assert.equal(writes.length, 1, "a non-integer is never written");
+  assert.equal(cooldown.value, "30", "and the focused input reverts to the live value");
+
+  // A config push spares the focused select; a failed write reverts and notices.
+  const pack = control("dashboard.companion_pack");
+  pack.focus();
+  const before = pack.children;
+  modal.refresh();
+  assert.equal(pack.children, before, "a focused select is not refilled by a config push");
+  fail = true;
+  pack.value = "fox";
+  fire(pack, "change");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(writes.at(-1), { scope: "global", key: "dashboard.companion_pack", value: "fox" });
+  assert.deepEqual(notices, ["settings_failed"]);
+  assert.notEqual(pack.children, before, "the failed write refills the select from the live config");
+
+  fire(find("ws-companion-settings-action")[0], "click");
+  assert.equal(resets, 1);
+  fire(doc, "keydown", { key: "Escape" });
+  assert.equal(modal.open, false, "Escape closes");
+  assert.equal(doc.activeElement, gear);
+  fire(gear, "click");
+  fire(gear, "click");
+  assert.equal(modal.open, false, "a second gear click closes");
+  fire(gear, "click");
+  fire(find("ws-companion-settings-close")[0], "click");
+  assert.equal(modal.open, false, "the close button closes");
+
+  sysopen.clear();
+  fire(gear, "click");
+  assert.ok(dialog.all().filter(c => c.tagName === "SELECT" || c.tagName === "INPUT").every(c => c.disabled), "read-only pages disable every control");
+  assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
+});

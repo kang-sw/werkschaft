@@ -124,7 +124,7 @@
 
     async function write(row, input) {
       const next = value(row, input);
-      if (next === undefined || !canWrite()) { refresh(); return; }
+      if (next === undefined || !canWrite()) { refresh(null); return; }
       if (row.key === "dashboard.companion_preset") hooks.applyPreset(next);
       try {
         const response = await fetch("/api/config/set", {
@@ -137,15 +137,16 @@
         if (signal.aborted) return;
         hooks.notice("settings_failed");
         if (row.key === "dashboard.companion_preset") hooks.applyPreset(current(row.key));
-        refresh();
+        refresh(null);
       }
     }
 
-    // refresh shows the live config without disturbing the control in use.
-    function refresh() {
+    // refresh shows the live config without disturbing the control in use;
+    // a revert after a refused or failed write passes null to reset it too.
+    function refresh(spare = doc.activeElement) {
       if (!dialog.open) return;
       for (const [key, input] of controls) {
-        if (input === doc.activeElement && input.tagName === "INPUT") continue;
+        if (input === spare) continue;
         if (input.tagName === "SELECT") fill(input, key);
         else input.value = String(current(key) ?? "");
       }
