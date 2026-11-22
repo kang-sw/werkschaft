@@ -5,7 +5,7 @@ blocked-by: 261122-feat-ws-companion-director#phase1
 related:
   261122-feat-ws-companion-engine-v2: compositor, timing grammar and articulated drag this ticket extends
   261122-feat-ws-companion-pack-store: safety-only validator and memory-first asset store this ticket extends
-  261122-chore-ws-companion-official-art-pack: consumer; produces the official outfit-baked columns and head set on this schema, and owns the local-only authoring scaffold
+  261122-chore-ws-companion-official-art-pack: consumer; produces the official outfit-baked columns and head set on this schema, and owns the tracked official authoring scaffold (`ai-docs/assets/companion-pet/scaffold-upright.png`, never shipped; (130))
   261122-feat-ws-companion-director: owns the gear-opened modal and the global-only companion key pattern the wardrobe keys join (Phase 3 hard prerequisite)
   261119-feat-ws-config-git-sync: Appendix A carries SYNC rows for the wardrobe keys added here
 sage-review-design: completed
@@ -77,7 +77,7 @@ Vocabulary used below:
 
 ## Non-Scope
 
-- Official art. Outfit-baked columns, the scaffold and the head set art ship
+- Official art. Outfit-baked columns and the head set art ship
   only through `261122-chore-ws-companion-official-art-pack`. The embedded
   default pack is not changed here (Decision 22).
 - Base-body layering: a base library, per-variant bases, garment split against
@@ -144,7 +144,10 @@ art-pack requirements; no phase here implements them.
       the local reference base, with a generic placeholder bob and face,
       wearing a plain neutral base layer (simple tee and shorts) that the
       starter outfit edit replaces; redrawn upright and front-facing;
-      local-only, never shipped. It is not required to be a bare white body,
+      tracked as the official authoring scaffold at
+      `ai-docs/assets/companion-pet/scaffold-upright.png`, never shipped in any pack; its
+      derivation source and intermediates stay local ((130), owner 2026-11-22
+      20:25; supersedes local-only). It is not required to be a bare white body,
       because image generation refuses an upright bare-body scaffold. The bob
       and face only balance outfit design, and the shipped `skinFill` still
       comes from the skin split of each dressed asset (step 4).
@@ -158,8 +161,11 @@ art-pack requirements; no phase here implements them.
    6. Assemble with the head set and register the column (feet pivot, head
       anchor).
 
-   The scaffold is an authoring scaffold: local-only, never shipped, and no
+   The scaffold is an authoring scaffold: tracked, never shipped, and no
    schema field, test or pack file refers to it.
+   - Rejected: keeping the scaffold local-only ((121)=a, (122)); reversed by
+     (130) after the lead verified it keeps none of the source's identifying
+     features.
    - Rejected: a mannequin pose library with per-pose dressing, because outfit
      details drift between poses. Tests showed a dressed redraw keeps outfit
      details consistent in one attempt.
@@ -168,8 +174,8 @@ art-pack requirements; no phase here implements them.
 5. **IP boundary (75).** Local reproductions of third-party characters stay in
    local-only BYO packs. Shipped art is IP-clean original, except the
    epic's base-body exception (epic Cross-Child Decisions, "Public repository
-   IP boundary"): the scaffold derived from the local reference stays local,
-   and shipped outfit-baked assets may carry body regions that trace back to
+   IP boundary"): the scaffold derived from the local reference is tracked as the
+   official authoring scaffold, never shipped ((130)), and shipped outfit-baked assets may carry body regions that trace back to
    it with every identifying feature removed.
 6. **Columns and implicit kits (76).** Existing pose IDs
    (`stand`/`typing`/`perched`/`dangle`) and gesture IDs are columns. A pack
@@ -534,7 +540,7 @@ line citations in this ticket are evidence only, so re-anchor by symbol
 
 - 261122-epic-werkschaft-lead-companion (2026-11-22, Cross-Child Decisions): "All companion settings are scalar string entries in `wsconfig`'s `overrides` map declared with existing `dashboard-config-manifest.json` fields (`v0.50.8` verified T0)." — bearing: constrains
 - 261122-epic-werkschaft-lead-companion (2026-11-22, Cross-Child Decisions): "Engine children use an IP-clean v3.1 technical fixture so engine verification never blocks on art polish; final shipped art lands exclusively through `261122-chore-ws-companion-official-art-pack`" — bearing: supports
-- 261122-epic-werkschaft-lead-companion (2026-11-22, Cross-Child Decisions): "the scaffold derived from the local reference stays local. Shipped outfit-baked assets may carry body regions (skin, hands, legs) that trace back to it, with every identifying feature removed." — bearing: constrains
+- 261122-epic-werkschaft-lead-companion (2026-11-22, Cross-Child Decisions): "the authoring scaffold derived from the local reference is tracked as the official authoring scaffold at ai-docs/assets/companion-pet/scaffold-upright.png and never shipped ((130)); its derivation source and intermediates stay local. Shipped outfit-baked assets may carry body regions (skin, hands, legs) that trace back to it, with every identifying feature removed." — bearing: constrains
 - 261122-chore-ws-companion-official-art-pack (2026-11-22, Decisions): "v1 wardrobe size (owner 2026-11-22 19:15; paper-doll (98)): one D1 outfit in v1." — bearing: supports
 - 261122-feat-ws-companion-shell-engine (2026-11-22, commit 9865e081): "Keep each manifest and every raster on one immutable revision. Abort superseded generations and release partial decoded assets before retrying the catalog" — bearing: constrains
 - ed832861 (2026-11-07, commit): "RegisterGlobalOnly makes the key a registered wsconfig item, and the manifest namespace check treats a registered key as ws-mcp's own ... exempted from builtinConfigKeySet (manifestGlobalOnlyKeys)" — bearing: constrains
