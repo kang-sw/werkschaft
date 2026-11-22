@@ -137,6 +137,8 @@ type auditRig struct {
 	seq    uint64
 	anchor uint64
 	index  uint64
+	// conn is the holder connection tee and fence events carry.
+	conn uint64
 }
 
 func newAuditRig(t *testing.T, sink wsaudit.Sink, holderID string) *auditRig {
@@ -181,14 +183,14 @@ func (r *auditRig) replayed(seq uint64, line string) {
 // tee delivers a line the holder skipped, anchored on the last kept line.
 func (r *auditRig) tee(line string) {
 	r.index++
-	r.h.event(wsholder.Event{Event: wsholder.EventAudit, Anchor: r.anchor, Index: r.index, At: time.Now().UnixNano(), Data: []byte(line + "\n")})
+	r.h.event(wsholder.Event{Event: wsholder.EventAudit, Conn: r.conn, Anchor: r.anchor, Index: r.index, At: time.Now().UnixNano(), Data: []byte(line + "\n")})
 }
 
 func (r *auditRig) audit(ev wsholder.Event) { r.h.event(ev) }
 
 // fence closes the open interval and releases the kept lines next..through.
 func (r *auditRig) fence(next, through, sent, dropped uint64) {
-	r.h.event(wsholder.Event{Event: wsholder.EventAuditFence, Anchor: r.anchor, Next: next, Through: through, Sent: sent, Dropped: dropped})
+	r.h.event(wsholder.Event{Event: wsholder.EventAuditFence, Conn: r.conn, Anchor: r.anchor, Next: next, Through: through, Sent: sent, Dropped: dropped})
 	r.anchor, r.index = through, 0
 }
 
@@ -796,6 +798,43 @@ func TestAuditReplayOrdinalsIgnoreCarriedAssemblies(t *testing.T) {
 				t.Fatalf("clean replay: %d results, losses %+v, %d events (live %d); want nothing new", len(results), sink.lost, len(evs), len(live))
 			}
 		})
+	}
+}
+
+// TestAuditAttachIsNeverRefusedByAFullQueue pins that the attach marker of
+// a new holder connection survives a full capture queue: the lines and tee
+// lines filling it are refused and recorded as loss, but the attach is
+// queued, so the new connection's tee lines and fences are accepted and its
+// thinking is assembled whole.
+func TestAuditAttachIsNeverRefusedByAFullQueue(t *testing.T) {
+	sink := &memSink{block: make(chan struct{})}
+	r := newAuditRig(t, sink, "h1")
+	r.conn = 1
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: 1, Next: 1})
+	r.keptRun(`{"type":"system","subtype":"status","status":"first"}`, 0, 0)
+	// Capture stalls appending the first event; the queue fills behind it.
+	for i := 0; i < auditQueueItems+100; i++ {
+		r.tee(thinkDelta("lost"))
+	}
+	if r.p.audit.refused.Load() == 0 {
+		t.Fatal("the queue never filled")
+	}
+	r.conn, r.index = 2, 0
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: 2, Next: r.seq + 1})
+	close(sink.block)
+	r.keptRun(thinkStart, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	r.tee(thinkDelta("second "))
+	r.tee(thinkDelta("connection"))
+	r.keptRun(thinkStop, 2, 0)
+	r.keptRun(thinkLine, 0, 0)
+	r.end()
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "second connection" || th[0].Meta[wsaudit.MetaIncomplete] != nil {
+		t.Fatalf("thinking = %+v, want the new connection's deltas assembled whole", th)
+	}
+	if loss := find(sink.events(), func(ev wsaudit.Envelope) bool { return isLoss(ev) && ev.Meta[wsaudit.MetaLossReason] == wsaudit.LossQueueFull }); len(loss) == 0 {
+		t.Fatal("the refused items were not recorded as loss")
 	}
 }
 

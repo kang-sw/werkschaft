@@ -67,6 +67,11 @@ const (
 	// auditQueueItems bounds the lines and holder events waiting for the
 	// capture goroutine; past it they are dropped and recorded as one loss.
 	auditQueueItems = 4096
+	// auditControlItems is queue room only attach and detach markers use:
+	// a lost attach would fail every later tee and fence of its connection
+	// (its Conn would be unknown), so they are never refused for the lines
+	// filling the queue.
+	auditControlItems = 64
 	// auditSinkTimeout bounds one sink call's context; the Sink contract
 	// already requires a prompt return.
 	auditSinkTimeout = time.Second
@@ -176,7 +181,7 @@ func newAuditCapture(tap *auditTap, harness, source string, adapter auditAdapter
 	c := &auditCapture{
 		session: tap.Session, harness: harness, source: source, sink: tap.Sink, adapter: adapter,
 		log: tap.Log, wait: auditFenceWait,
-		in: make(chan auditItem, auditQueueItems), stop: make(chan struct{}), done: make(chan struct{}),
+		in: make(chan auditItem, auditQueueItems+auditControlItems), stop: make(chan struct{}), done: make(chan struct{}),
 		pending: map[uint64][]wsholder.Event{}, nextSeq: 1,
 	}
 	if c.log == nil {
@@ -216,19 +221,41 @@ func (c *auditCapture) holderEvent(ev wsholder.Event) {
 	default:
 		return
 	}
+	if it.kind == auditItemAttached || it.kind == auditItemDetached {
+		c.enqueueControl(it)
+		return
+	}
 	c.enqueue(it)
 }
 
+// enqueue queues a line, tee, or fence, or counts it refused when the queue
+// holds auditQueueItems (the room past it is the control markers'). The
+// length check races only with the process's other producer, so the markers
+// keep nearly all of their room.
 func (c *auditCapture) enqueue(it auditItem) {
 	select {
 	case <-c.stop:
 		return
 	default:
 	}
+	if len(c.in) >= auditQueueItems {
+		c.refused.Add(1)
+		return
+	}
 	select {
 	case c.in <- it:
 	default:
 		c.refused.Add(1)
+	}
+}
+
+// enqueueControl queues an attach or detach marker in order with the items
+// before it; it blocks only when the control room is exhausted too, which
+// takes auditControlItems connections opening while capture is stalled.
+func (c *auditCapture) enqueueControl(it auditItem) {
+	select {
+	case c.in <- it:
+	case <-c.stop:
 	}
 }
 
