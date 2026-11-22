@@ -91,9 +91,21 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 			want: agyStallHeaderless,
 		},
 		{
-			name: "request line inside the skew margin",
-			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogRequest(b.Add(-time.Second), 2, "session/prompt"),
+			name: "request line just after the boundary",
+			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogRequest(b.Add(time.Millisecond), 2, "session/prompt"),
 			want: agyStallHeaderless,
+		},
+		{
+			name:   "request line inside the skew margin, before the boundary",
+			tail:   agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogRequest(b.Add(-time.Second), 2, "session/prompt"),
+			want:   agyStallUnknown,
+			reason: noRequest,
+		},
+		{
+			name:   "request line a microsecond before the boundary",
+			tail:   agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogRequest(b.Add(-time.Microsecond), 2, "session/prompt"),
+			want:   agyStallUnknown,
+			reason: noRequest,
 		},
 		{
 			name: "monitor header whose marker is not in the tail counts as main",
@@ -442,6 +454,15 @@ func TestAgyStallLogVerdictUnknownCases(t *testing.T) {
 		if got, reason := l.verdict("s1", b2); got != agyStallUnknown || !strings.Contains(reason, "no session/prompt request line") {
 			t.Fatalf("predecessor log current to the window = %v (%q), want unknown", got, reason)
 		}
+		// A received an earlier prompt 1s before B's boundary (inside the
+		// skew margin) that ended with no header; B serves the current
+		// prompt in its own file. A's exact request record is not this
+		// request's.
+		aEarlierPrompt := aFirst + agyGlogHeader(b2.Add(-20*time.Second), 3) + agyGlogRequest(b2.Add(-time.Second), 2, "session/prompt")
+		writeAgyLog(t, dir, aName, aEarlierPrompt, time.Now())
+		if got, reason := l.verdict("s1", b2); got != agyStallUnknown || !strings.Contains(reason, "no session/prompt request line") {
+			t.Fatalf("predecessor's earlier prompt inside the skew margin = %v (%q), want unknown", got, reason)
+		}
 		// Had A itself received the prompt, its request line attributes
 		// the tail to the current request: no header since is headerless.
 		writeAgyLog(t, dir, aName, aLater+agyGlogRequest(b2, 2, "session/prompt"), time.Now())
@@ -452,12 +473,15 @@ func TestAgyStallLogVerdictUnknownCases(t *testing.T) {
 	t.Run("locates once", func(t *testing.T) {
 		dir := t.TempDir()
 		l := newAgyStallLog(dir, started)
-		if got, _ := l.verdict("s1", b); got != agyStallUnknown {
+		got, first := l.verdict("s1", b)
+		if got != agyStallUnknown {
 			t.Fatalf("empty dir = %v", got)
 		}
-		writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(-30*time.Second), 3)+agyGlogUserMessage(b, 1, "s1"), time.Now())
-		if got, _ := l.verdict("s1", b); got != agyStallUnknown {
-			t.Fatalf("a second firing scanned again: %v", got)
+		// The new log would read headerless; a second firing keeps the
+		// first locate failure instead of scanning again.
+		writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(-30*time.Second), 3)+agyGlogPrompt(b, 1, "s1"), time.Now())
+		if got, reason := l.verdict("s1", b); got != agyStallUnknown || reason != first {
+			t.Fatalf("a second firing scanned again: %v (%q), want unknown (%q)", got, reason, first)
 		}
 	})
 }

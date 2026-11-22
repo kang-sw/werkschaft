@@ -231,12 +231,15 @@ type agyLogLine struct {
 // boundary's location:
 //   - coverage: the first complete glog line is before boundary-skew;
 //   - attribution (headerless only): agy's per-request line for a
-//     session/prompt is at or after boundary-skew, so this log's worker
-//     received the current request. Without it the tail may be a cached log
-//     whose worker agy replaced under the same front process (the current
-//     request then logs elsewhere, and the old worker may still write
-//     unrelated lines into the window), so it proves nothing about the
-//     current request;
+//     session/prompt is at or after the boundary itself, with no skew, so
+//     this log's worker received the current request. The runner takes the
+//     boundary before the send and agy stamps the receipt on the same host
+//     clock, so the current prompt's line is never before it; a line before
+//     it may be an earlier prompt's, which a cached log whose worker agy
+//     replaced under the same front process can hold (the current request
+//     then logs elsewhere). Without the line the tail proves nothing about
+//     the current request. The skew margin only widens the header lookback,
+//     which suppresses cuts and never enables one;
 //   - format: at least one streamGenerateContent header line (main or
 //     monitor) is in this tail;
 //   - a header line counts as main unless its goroutine logged an
@@ -250,7 +253,7 @@ type agyLogLine struct {
 // An ambiguous local time counts on the side that never cuts: a header in
 // the window under either reading is in the window, the first line covers
 // the boundary only if both readings precede the window, and the request
-// line counts only if both readings are in the window.
+// line counts only if both readings are at or after the boundary.
 func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.Duration) (verdict agyStallVerdict, anyMain bool, reason string) {
 	if boundary.IsZero() {
 		return agyStallUnknown, false, "no request boundary"
@@ -280,7 +283,7 @@ func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.
 	}
 	recognized, main, requested := false, false, false
 	for _, line := range lines {
-		if agyPromptRequestLine(line) && !line.at.Before(window) {
+		if agyPromptRequestLine(line) && !line.at.Before(boundary) {
 			requested = true
 		}
 		if !agyHeaderLine(line) {
