@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -346,5 +347,42 @@ func TestBoardDBUncommittedCreateIsAbsent(t *testing.T) {
 	want := boardDBFixture()
 	if got := openTestBoardDB(t, snapDir, want, BoardDBOptions{}).State(); got == nil || got.Seq != want.Seq || len(got.Topics) != len(want.Topics) {
 		t.Fatalf("snapshot import = %s", folderJSON(got))
+	}
+}
+
+// A worktree root with SQLite URI metacharacters keeps the database inside
+// it across create, close and reopen (the driver splits a plain DSN at '?').
+func TestBoardDBRootWithURIMetacharacters(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("'?' is not a valid Windows file name character")
+	}
+	base := t.TempDir()
+	root := "wt?copy#1 %41"
+	dir := filepath.Join(base, root, "board")
+	b, err := CreateBoardDB(dir, boardDBFixture(), BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Update(func(state *State) error { state.Seq += 10; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := b.State()
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, boardDBName)); err != nil || info.Size() == 0 {
+		t.Fatalf("database in the named root: %v %v", err, info)
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != root {
+			t.Fatalf("stray file %q beside the root", e.Name())
+		}
+	}
+	if got := openTestBoardDB(t, dir, nil, BoardDBOptions{}).State(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reopen\nwant %s\ngot %s", folderJSON(want), folderJSON(got))
 	}
 }
