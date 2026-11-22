@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 9eb223f246eaeec5
 sage-review-completeness-reviewed: 9eb223f246eaeec5
+completed: 2026-11-23
 ---
 
 # exec cutover: enforce worker authority on ws/exec launches
@@ -242,3 +243,45 @@ Implement the read-only allowlist gate from `## Decisions`.
 - The tests are cross-platform (`sh` on POSIX, Git Bash on Windows) and run
   in the Windows CI job.
 - The werk stopgap stays untouched (pending 261122-feat-ws-builtin-agent-harness).
+
+### Result (89b0563ca) - 2026-11-23
+
+Implemented in 9ff3cfbc7, hardened through four code-review rounds and
+Windows CI (43f710ebb, 887f3f98c, 18e7cf753, a6293bf44, 45c99d39d,
+82e64b9d9, 89b0563ca); merged in 1d8fa703a.
+
+- Gate: `permissionRefusal` refuses `exec.spawn` and the legacy
+  `exec.shell` form for read-only workers; `callHostedExec` builds every
+  read-only `exec.run` / new-form `exec.shell` launch through
+  `execjob.ReadOnlyArgvLaunch` / `ReadOnlyShellLaunch`
+  (`internal/execjob/readonly_policy.go`). The level comes from
+  `WS_MCP_PERMISSION_LEVEL` on the hello env.
+- Launch: every program and the shell interpreter resolve to an absolute
+  path (Windows: `.exe`/`.com` only); the environment is rebuilt from the
+  allowlist plus `GIT_OPTIONAL_LOCKS=0`, `GIT_PAGER=cat`, `PAGER=cat`,
+  `GIT_NO_LAZY_FETCH=1`, and `GIT_CONFIG_COUNT=2` pinning
+  `diff.autoRefreshIndex=false` and `log.diffMerges=separate`; on Windows
+  also `MSYS_NO_PATHCONV=1`, `MSYS2_ARG_CONV_EXCL=*`, `MSYS=noglob`,
+  `CYGWIN=noglob`.
+- Deviations, all stricter than the Decisions: Git global options other
+  than `--no-pager`/`--no-optional-locks` refused; `sort -T` refused;
+  unquoted `<`, `{`, `}` refused; long options match by abbreviation;
+  refused short options are refused anywhere in a single-dash cluster;
+  `uniq` takes no operands; `describe --dirty`/`--broken`,
+  `--remerge-diff`, `--diff-merges=remerge|r` and `file -p` refused; on
+  Windows any word containing `"`, `'` or a control character, starting
+  with `@`, or holding whitespace and ending in a backslash is refused
+  (the MSYS runtime re-parses the command line).
+- Tests: `readonly_policy_test.go` (allowlist matrix, re-serialization,
+  launch env, Windows word rule) and `permission_exec_test.go` (worker-bound
+  non-lead server for Codex and Claude: refusals, child argv/env probe,
+  stale-index and merge-diff object-write checks, workdir-write/full/lead
+  unrestricted). Windows CI mcp shards green on 82e64b9d9.
+- Gaps: no real Codex/Claude backend end-to-end; no native-Windows argv
+  probe test (the probe is POSIX; Windows covered by the echo regression
+  and unit rules); Git older than 2.44 ignores `GIT_NO_LAZY_FETCH`.
+
+
+## Resolution (2026-11-23)
+
+Phase 1 merged in 1d8fa703a (read-only allowlist gate for worker exec launches). Out of scope and still open: OS-level confinement, and lifting the werk stopgap (pending 261122-feat-ws-builtin-agent-harness).
