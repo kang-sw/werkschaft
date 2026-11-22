@@ -282,6 +282,87 @@ test('hydration pages backward across before cursors and refreshes forward via a
   assert.equal(r3.getAttribute('data-au-hydrated'), '1');
 });
 
+test('scheduleHydration refreshes live rows when st.end is true and after empty initial session', async () => {
+  // Case 1: initial fetch ends with end:true, then live row c2 arrives via scheduleHydration()
+  const urls1 = [];
+  const h1 = loadAuditControllerHarness(async (url) => {
+    urls1.push(url);
+    const u = new URL('http://localhost' + url);
+    if (u.searchParams.get('after') === 'e1') {
+      return {
+        ok: true, status: 200,
+        async json() {
+          return {
+            events: [{ id: 'e2', seq: 2, kind: 'tool_call', call_id: 'c2', duration_ms: 42 }],
+            before: 'e2', after: 'e2', end: false
+          };
+        }
+      };
+    }
+    return {
+      ok: true, status: 200,
+      async json() {
+        return {
+          events: [{ id: 'e1', seq: 1, kind: 'tool_call', call_id: 'c1', duration_ms: 15 }],
+          before: 'e1', after: 'e1', end: true
+        };
+      }
+    };
+  });
+  const c1 = makeCallRow(h1.makeEl, 'c1');
+  h1.convo.appendChild(c1);
+  h1.ctx.WsAudit.scheduleHydration();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(urls1.length, 1);
+  assert.equal(c1.getAttribute('data-au-hydrated'), '1');
+
+  const c2 = makeCallRow(h1.makeEl, 'c2');
+  h1.convo.appendChild(c2);
+  h1.ctx.WsAudit.scheduleHydration();
+  assert.equal(c2.getAttribute('data-au-hydrated'), null, 'scheduleHydration must not pre-mark unmatched live row before forward walk');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(urls1.length, 2, 'forward after= fetch executes for newly appended live row');
+  assert.ok(urls1[1].includes('&after=e1'), 'forward walk uses after=e1: ' + urls1[1]);
+  assert.equal(c2.getAttribute('data-au-hydrated'), '1');
+  assert.equal(c2.querySelector('.au-dur').textContent, '<0.1s');
+  assert.equal(c2.querySelector('.au-dur').title, '42 ms');
+
+  // Case 2: initial fetch returns events:[], end:true (empty session), then live row c1 arrives
+  const urls2 = [];
+  let callIdx = 0;
+  const h2 = loadAuditControllerHarness(async (url) => {
+    urls2.push(url);
+    callIdx++;
+    if (callIdx === 1) {
+      return { ok: true, status: 200, async json() { return { events: [], before: '', after: '', end: true }; } };
+    }
+    return {
+      ok: true, status: 200,
+      async json() {
+        return {
+          events: [{ id: 'e10', seq: 1, kind: 'tool_call', call_id: 'c1', duration_ms: 88 }],
+          before: 'e10', after: 'e10', end: true
+        };
+      }
+    };
+  });
+  const seed = makeCallRow(h2.makeEl, 'c_seed');
+  h2.convo.appendChild(seed);
+  h2.ctx.WsAudit.scheduleHydration();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(urls2.length, 1);
+  assert.equal(seed.getAttribute('data-au-hydrated'), '1');
+
+  const liveRow = makeCallRow(h2.makeEl, 'c1');
+  h2.convo.appendChild(liveRow);
+  h2.ctx.WsAudit.scheduleHydration();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(urls2.length, 2, 'empty initial session fetches fresh latest page when live row arrives');
+  assert.equal(liveRow.getAttribute('data-au-hydrated'), '1');
+  assert.equal(liveRow.querySelector('.au-dur').textContent, '<0.1s');
+  assert.equal(liveRow.querySelector('.au-dur').title, '88 ms');
+});
+
 test('hydration leaves rows unhydrated on 503 so retry succeeds, and resets once on 410 stale cursor', async () => {
   let attempt = 0;
   const urls = [];

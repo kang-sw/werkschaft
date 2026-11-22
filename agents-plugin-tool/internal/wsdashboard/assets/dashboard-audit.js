@@ -884,7 +884,7 @@
         var evs = page && Array.isArray(page.events) ? page.events : [];
         auMergeHydrationEvents(st, evs);
         if (page && page.after) st.after = page.after;
-        auApplyHydration(st.events, st.end);
+        auApplyHydration(st.events, false);
         if (evs.length === 500 && page && page.after && page.after !== prevAfter && auHasUnhydratedRows()) {
           return walkForward();
         }
@@ -898,7 +898,7 @@
         auMergeHydrationEvents(st, evs);
         st.before = page && page.before ? page.before : "";
         st.end = !!(page && page.end) || !st.before;
-        auApplyHydration(st.events, st.end);
+        auApplyHydration(st.events, false);
         if (!st.end && st.before && auHasUnhydratedRows()) {
           return walkBackward();
         }
@@ -906,7 +906,7 @@
     }
 
     var startStep;
-    if (!st.initialized) {
+    if (!st.initialized || !st.after) {
       startStep = auFetchEventsPage(sessionId, "").then(function (page) {
         var evs = page && Array.isArray(page.events) ? page.events : [];
         st.initialized = true;
@@ -914,7 +914,7 @@
         st.after = page && page.after ? page.after : "";
         st.end = !!(page && page.end) || !st.before;
         auMergeHydrationEvents(st, evs);
-        auApplyHydration(st.events, st.end);
+        auApplyHydration(st.events, false);
       });
     } else {
       startStep = walkForward();
@@ -944,7 +944,7 @@
     var sessionId = auSessionRid();
     var st = sessionId ? auHydratedSessions[sessionId] : null;
     if (st && st.events.length) {
-      auApplyHydration(st.events, st.end);
+      auApplyHydration(st.events, false);
     }
     if (!auHasUnhydratedRows() || auHydrateTimer) return;
     auHydrateTimer = setTimeout(auHydrateCalls, 0);
@@ -1057,6 +1057,7 @@
     renderBody: auRenderBodyContent,
     applyHydration: auApplyHydration,
     hydrate: auHydrateCalls,
+    scheduleHydration: auScheduleHydration,
     openCall: auOpenCall,
     closeUnpinned: auCloseUnpinned,
     windows: function () { return auWindows.slice(); }
