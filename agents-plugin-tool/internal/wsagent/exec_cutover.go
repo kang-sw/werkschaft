@@ -460,7 +460,7 @@ func (c *conv) sendCutoverInstruction() {
 	c.cutoverInstructed++
 	rec := c.rec
 	event := cutoverEventPrefix + rec.HolderID + ":" + trigger
-	c.cutoverInstructing = true
+	c.cutoverInstructing, c.cutoverQueued = true, false
 	c.r.wg.Add(1)
 	go func() {
 		defer c.r.wg.Done()
@@ -469,11 +469,18 @@ func (c *conv) sendCutoverInstruction() {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: exec cutover instruction: %v\n", rec.ReplyID, err)
 		}
 		if err == nil && outcome == CompletionAccepted {
-			// The turn that takes it from the inbox clears the hold.
+			// The turn that takes it from the inbox clears the hold; a
+			// removal outside the runner is noticed once it is queued.
+			c.do(func() {
+				if c.cutoverInstructing {
+					c.cutoverQueued = true
+					c.cutoverInstructionGone()
+				}
+			})
 			return
 		}
 		c.do(func() {
-			c.cutoverInstructing = false
+			c.cutoverInstructing, c.cutoverQueued = false, false
 			c.releaseHeld()
 		})
 	}()
@@ -491,9 +498,31 @@ func (c *conv) cutoverInstructionLeft(recs []wsinbox.Record) {
 	}
 	for _, rec := range recs {
 		if strings.HasPrefix(rec.Entry.EventID, cutoverEventPrefix) {
-			c.cutoverInstructing = false
+			c.cutoverInstructing, c.cutoverQueued = false, false
 			c.r.releaseLater(c.rec.ReplyID)
 			return
 		}
 	}
+}
+
+// cutoverInstructionGone clears the instruction hold once the queued
+// instruction is no longer held in c's inbox although no path of the
+// runner took it: the dashboard's cancel and interrupt routes remove inbox
+// entries themselves and only signal the inbox (Runner.InboxChanged). It
+// reads the inbox only while the hold is on, and runs in the loop.
+func (c *conv) cutoverInstructionGone() {
+	if !c.cutoverInstructing || !c.cutoverQueued {
+		return
+	}
+	held, err := wsinbox.Held(c.inbox)
+	if err != nil {
+		return
+	}
+	for _, rec := range held {
+		if strings.HasPrefix(rec.Entry.EventID, cutoverEventPrefix) {
+			return
+		}
+	}
+	c.cutoverInstructing, c.cutoverQueued = false, false
+	c.r.releaseLater(c.rec.ReplyID)
 }

@@ -82,6 +82,10 @@ type conv struct {
 	// worker's done report waits for the turn it starts (holdsReport);
 	// loop-owned.
 	cutoverInstructing bool
+	// cutoverQueued: the instruction was admitted to the inbox while
+	// cutoverInstructing holds, so its absence from the held entries means
+	// it left (cutoverInstructionGone); loop-owned.
+	cutoverQueued bool
 	// cutoverInstructed counts the instruction prompts the current process
 	// was sent (cutoverInstructionCap); loop-owned, reset at each start
 	// and rejoin.
@@ -525,6 +529,7 @@ func (c *conv) mailLegend(texts, senders []string) []string {
 // messages, starting the process when needed (kick). It runs in the loop.
 func (c *conv) inboxChanged() {
 	c.refreshHeld()
+	c.cutoverInstructionGone()
 	if c.modelWaitBackoffC != nil && c.held > 0 {
 		c.cancelModelWaitBackoff()
 	}

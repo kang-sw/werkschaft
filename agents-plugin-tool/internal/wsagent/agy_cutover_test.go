@@ -6,9 +6,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsinbox"
 )
 
 // newAgyCutoverHarness is an agy lead harness whose backend carries the
@@ -457,4 +459,50 @@ func TestAgyCutoverInstructionHoldEndsWhenItIsTakenBack(t *testing.T) {
 		c.do(func() { instructing = c.cutoverInstructing })
 		return !instructing
 	})
+}
+
+// The dashboard's cancel and interrupt routes remove inbox entries
+// themselves and only signal the inbox: a queued instruction removed that
+// way ends the hold too, while one still held keeps it.
+func TestAgyCutoverInstructionHoldEndsWhenTheDashboardRemovesIt(t *testing.T) {
+	for _, route := range []string{"cancel", "interrupt"} {
+		t.Run(route, func(t *testing.T) {
+			h, _, id, _ := startAgyCutoverWorker(t, nil)
+			c := h.runner.conv(id)
+			var rec Record
+			c.do(func() {
+				c.cutoverInstructing, c.cutoverQueued = true, true
+				// A rejoin's replay: no turn takes the inbox meanwhile, so
+				// the instruction stays held for the dashboard to remove.
+				c.replaying = true
+				rec = c.rec
+			})
+			if _, err := h.runner.AdmitCompletion(id, rec.OpenGen, cutoverEventPrefix+rec.HolderID+":k9", "use exec_shell"); err != nil {
+				t.Fatal(err)
+			}
+			instructing := func() bool {
+				var on bool
+				c.do(func() { on = c.cutoverInstructing })
+				return on
+			}
+			h.runner.InboxChanged(id)
+			if !instructing() {
+				t.Fatal("the hold ended while the instruction is still held")
+			}
+			held, err := wsinbox.Held(c.inbox)
+			if err != nil || len(held) == 0 {
+				t.Fatalf("held = %v, %v", held, err)
+			}
+			if route == "cancel" {
+				_, err = wsinbox.Cancel(c.inbox, held[0].Name)
+			} else {
+				_, _, err = wsinbox.Interrupt(c.inbox, time.Now())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.runner.InboxChanged(id)
+			eventually(t, "the hold to end", func() bool { return !instructing() })
+		})
+	}
 }
