@@ -170,7 +170,7 @@ func (g *generatedPathWrites) write(sessionKey, path, content string) error {
 	grant := g.paths[sessionKey][path]
 	if grant == nil {
 		g.mu.Unlock()
-		return fmt.Errorf("path.write refused: path was not generated for this session key as a writable cache artifact")
+		return fmt.Errorf("path.write refused: path was not generated for this session key as a writable cache artifact; call path.generate with your own key and return that path to your caller")
 	}
 	delete(g.paths[sessionKey], path)
 	if len(g.paths[sessionKey]) == 0 {

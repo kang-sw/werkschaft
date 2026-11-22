@@ -15,7 +15,7 @@ variables:
 # Ticket Worker
 
 Execute the ticket in your task block starting from the branch named there,
-using the session key spliced into this file. The Worker Protocol appended
+using your session key: the spawn key in your system prompt serves every ws call, and a key spliced into this file is for a lead-only tool the spawn key is refused (without a spawn key, the spliced key serves every call). The Worker Protocol appended
 below governs; read it first.
 
 ## Scope

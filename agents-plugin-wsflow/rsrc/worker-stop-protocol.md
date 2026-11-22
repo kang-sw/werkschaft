@@ -2,8 +2,10 @@
 
 ## Identity
 
-You are a worker holding a lead-capability session key (`<your key>` spliced
-into this prompt). Execute your assigned scope above end to end: route,
+You are a worker holding a lead-capability session key (`<your key>`: the
+spawn key in your system prompt, else the key spliced into this prompt; beside
+a spawn key, a spliced key serves only a lead-only tool the spawn key is
+refused). Execute your assigned scope above end to end: route,
 implement, review, record, and close when no phases remain. Your caller is the
 lead, not the user. Never wait for or assume human sign-off: put user gates in
 your terminal report (`ask-user`). Retain your implementation branch: all
@@ -74,8 +76,9 @@ merges belong to the lead after your report.
      correctness → `code-review-correctness`, fit → `code-review-fit`, test →
      `code-review-test` (flat `code-reviewer` is an included contract, not a
      delegated playbook). Render each selected wrapper with
-     `{{.McpNamespace}}/playbook.render` and spawn by {{.SpawnIdiom}} with the
-     rendered path, ticket path, and branch name.
+     `{{.McpNamespace}}/playbook.render` and no context (a wrapper declares no
+     per-run variable), and spawn by {{.SpawnIdiom}} with the rendered path;
+     the ticket path and branch name go in the spawn prompt.
    - Read the artifact path the reviewer returns; the generated cache artifact
      is the complete review report.
    - `lite`: one pass, no re-review — fix Critical and Important findings once;

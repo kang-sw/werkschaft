@@ -464,3 +464,27 @@ func TestServeStdioRejectsPathWriteBeyondRequestLimit(t *testing.T) {
 		t.Fatalf("rejected oversized request changed artifact: bytes=%d err=%v", len(got), readErr)
 	}
 }
+
+// A lead that minted a path for its reviewer departed from the protocol:
+// grants are per minting key, and the refusal says the remedy.
+func TestPathWriteRefusalNamesTheRemedy(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	parent, err := s.sessions.mint(root, roleLead, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := s.sessions.mint(root, roleDelegate, parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := callToolOnce(t, s, 1, "path.generate", map[string]any{"session_key": parent, "kind": "review", "stems": []any{"findings"}})
+	path := strings.TrimSpace(toolText(t, resp))
+	refusal := callToolOnce(t, s, 2, "path.write", map[string]any{"session_key": child, "path": path, "content": "x"})
+	if !toolIsError(t, refusal) || !strings.Contains(refusal, "call path.generate with your own key and return that path to your caller") {
+		t.Fatalf("refusal = %s", refusal)
+	}
+}

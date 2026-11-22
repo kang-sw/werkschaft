@@ -53,13 +53,13 @@
     "ticket-reviewer-completeness/ticket-reviewer-completeness.md": "5b7ec46a882aaa62bcd7f54b6920640e5ad6b4b5639b7c38ef2235e9a66af99a",
     "ticket-reviewer-design/ticket-reviewer-design.md": "1f0bd67988bf76cb4f9c2c6adeac622a30ea3a28fea6a7ba72f1fa07d2554873",
     "ticket-selector/ticket-selector.md": "b0f26d5307ea7b07b0d6b8d3a69050a54e8dbefc64d162edaf64c516f2611730",
-    "ticket-worker-elevated/ticket-worker-elevated.md": "1fc964f3373697c523e575ec36a52eae569b57858dc6e57334196953cd548060",
-    "ticket-worker/ticket-worker.md": "fe17ee279698eddc82ea399e0e870e133514415b5ac040ff7e31d82d69937df1",
+    "ticket-worker-elevated/ticket-worker-elevated.md": "233569ff5fe24117d839daca0a7c9dbf3240fffe0a5e2e936aa2bfb51bd4ef94",
+    "ticket-worker/ticket-worker.md": "fd7d16f4902af28a6b7a2077963651fe500cb26e677cb4ffd5c82d018d613d0d",
     "tracker-admin/tracker-admin.md": "37861d7023be09dbdcc8c65753fcdf4761be48c3f90c2ea3fb71cce0606b9721",
     "tracker-assign/tracker-assign.md": "9f656310f3307bae61fd1a0cbedce9b2260eec23d61c33889e4cd7196788dbb6",
     "tracker-hooks/tracker-hooks.md": "bf4b3fe5eb5c3ab532ba3398af9e181b300ac3ee04130acb6b8ac700f539310f",
     "tracker/tracker.md": "5860dae79f27761fb517b809e646f53262f632055580389ce52cf394f51f5150",
     "whiteboard/whiteboard.md": "379c6ebb0cfdfa24004e0dbf628489d6127f3ec9578e8c7b069c59f0a1e9e1e6",
-    "worker-stop-protocol.md": "28a17e73a4eecb82dd6e791a8036cd33ab2d11d1673ba40a9c1ab5b52abfd57f"
+    "worker-stop-protocol.md": "01ab21c0739eea6a2c2a2749c9f684ccdb9dc511815368510a36b772cba9d8f6"
   }
 }
