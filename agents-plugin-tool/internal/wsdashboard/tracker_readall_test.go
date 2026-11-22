@@ -34,6 +34,8 @@ var pending = {}, log = [], bad = [];
 function wsT(k) { return k; }
 var staged = null;
 function shStage(fn) { if (staged) staged.push(fn); else fn(); }
+function shHolding() { return !!staged; }
+var tkHeld = null;
 function tkUrl(id, op) { return "/tracker/stores/" + id + "/" + op; }
 function tkFetch(path, body, done) {
   if (path === "/tracker/stores") { done(200, { rev: 1, stores: [{ id: "fast" }, { id: "slow" }] }); return; }
@@ -75,6 +77,16 @@ check("released: both views requested", Object.keys(pending).sort(), ["/tracker/
 pending["/tracker/stores/fast/view"](200, { view: { v: "new" } });
 pending["/tracker/stores/slow/view"](200, { view: { v: "new" } });
 check("released: done after both", log[log.length - 1], "done");
+// A store the route entered while the page was held read its own view: the
+// released pass leaves it, and done waits only for the others.
+tkApi = {}; log = []; pending = {}; tkViews = {};
+staged = [];
+tkReadAll(function (status) { log.push("listed:" + status); delete tkHeld.fast; }, function () { log.push("done"); });
+staged.shift()();
+staged = null;
+check("claimed store not re-read", Object.keys(pending), ["/tracker/stores/slow/view"]);
+pending["/tracker/stores/slow/view"](200, { view: { v: "new" } });
+check("done after the unclaimed store", log[log.length - 1], "done");
 process.stdout.write(bad.join("\n"));
 `
 	out, err := nodeScript(node, script).CombinedOutput()

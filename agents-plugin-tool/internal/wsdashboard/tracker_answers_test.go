@@ -146,6 +146,7 @@ var sent = [], answers = {}, notes = 0, bad = [];
 var tkSubs = [function () { notes++; }];
 function wsT(k) { return k; }
 function shStage(fn) { fn(); }
+function shHolding() { return false; }
 function tkMount() {}
 function tkUrl(id, op) { return "/tracker/stores/" + id + "/" + op; }
 // Each path answers answers[path] ([status, body, etag]), or 304 to its etag.

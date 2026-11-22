@@ -68,6 +68,7 @@
   // them at once (shUnstage). What the first show paints stays immediate. A
   // page that is not framed is never staged.
   var shStaged = framed, shStageList = [];
+  function shHolding() { return shStaged; }
   function shStage(fn) { if (shStaged) shStageList.push(fn); else fn(); }
   function shUnstage() {
     if (!shStaged) return;

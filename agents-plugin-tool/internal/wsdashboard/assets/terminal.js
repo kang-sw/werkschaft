@@ -763,6 +763,9 @@
     tabFocusPending = true;
     if (hooks.setCtab) hooks.setCtab("term");
     tabFocusPending = false;
+    // Selecting a tab whose replay a hidden page still holds (hooks.stage)
+    // starts it now, so the pane never shows an empty emulator.
+    activate(target);
     if (target.tabEl.scrollIntoView) target.tabEl.scrollIntoView({ block: "nearest", inline: "nearest" });
     if (!hooks.setCtab && target.t.term && shows(target)) {
       fit(target);

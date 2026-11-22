@@ -55,6 +55,8 @@
   // unchanged store is a 304 with no body. tkDirty records that a reload
   // changed the cache (tkReload tells the renderer only then).
   var tkAnswers = {}, tkList = null, tkDirty = false;
+  // tkHeld: the stores whose views the first show still has to read (shStage).
+  var tkHeld = null;
   // tkLent is another session frame's answer for store id, so a frame the
   // shell just opened revalidates it rather than reading the whole view
   // again; null when there is none (or no shell).
@@ -323,14 +325,21 @@
         tkOrder.forEach(function (id) { keep[id] = true; });
         [tkViews, tkErrs, tkSeen, tkAnswers, tkProjections, tkLegacy, tkReads].forEach(function (m) { Object.keys(m).forEach(function (id) { if (!keep[id]) delete m[id]; }); });
       }
+      // The list is what the header's search button and the drawer's tabs
+      // mount from; the views behind them (the heavy reads) wait for the
+      // page's first show when a hidden frame loaded it (shStage). A store
+      // the page's route enters meanwhile (check) reads its own view; the
+      // held pass leaves it, so one summary is in flight and the entry's
+      // seen-marking lands on the data it asked for.
+      var ids = status === 200 ? tkOrder.slice() : [], left = ids.length, open = {};
+      ids.forEach(function (id) { open[id] = true; });
+      tkHeld = shHolding() ? open : null;
       listed(status);
-      var ids = status === 200 ? tkOrder.slice() : [], left = ids.length;
-      if (!left) { done(); return; }
-      // The list above is what the header's search button and the drawer's
-      // tabs mount from; the views behind them (the heavy reads) wait for the
-      // page's first show when a hidden frame loaded it (shStage).
+      if (!left) { tkHeld = null; done(); return; }
       shStage(function () {
+        tkHeld = null;
         ids.forEach(function (id) {
+          if (!open[id]) { if (--left === 0) done(); return; }
           tkLoadView(id, function (changed) {
             if (changed) tkDirty = true;
             if (--left === 0) done();
@@ -448,6 +457,7 @@
       });
     },
     check: function (id, done) {
+      if (tkHeld) delete tkHeld[id];
       tkFetch(tkUrl(id, "check"), {}, function () {
         tkLoadView(id, function () { tkNotify(); if (done) done(); });
       });

@@ -1381,7 +1381,9 @@
     history.replaceState(Object.assign({}, history.state, { wsShellIndex: shIndex }), "", location.href);
     var ent = shAdd(el, f);
     shOn = ent;
-    if (f.hash) { el.src = window.WsShell.src(f); return; }
+    // A hash lands as a fragment-only src change, which loads nothing again
+    // when the document already finished: the readiness below still stands.
+    if (f.hash) el.src = window.WsShell.src(f);
     try { ent.loaded = el.contentDocument.readyState === "complete"; } catch (x) { /* not yet */ }
     shSend(ent, "sync");
     if (ent.loaded) {
