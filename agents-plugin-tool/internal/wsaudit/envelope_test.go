@@ -3,6 +3,7 @@ package wsaudit
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,9 @@ func TestEnvelopeJSONRoundTrip(t *testing.T) {
 	}
 	if decoded.ModelSeen != orig.ModelSeen || decoded.In != orig.In || decoded.Out != orig.Out {
 		t.Errorf("content mismatch: got model_seen=%v in=%q out=%q", decoded.ModelSeen, decoded.In, decoded.Out)
+	}
+	if len(decoded.Meta) != len(orig.Meta) || decoded.Meta["exit_code"] != float64(0) || decoded.Meta["is_error"] != false {
+		t.Errorf("meta = %#v, want %#v", decoded.Meta, orig.Meta)
 	}
 	if len(decoded.Redactions) != 1 || decoded.Redactions[0] != orig.Redactions[0] {
 		t.Errorf("redactions = %#v, want %#v", decoded.Redactions, orig.Redactions)
@@ -346,6 +350,13 @@ func TestEnvelopeValidationErrors(t *testing.T) {
 			name: "stored_trunc_not_actually_truncated",
 			mutate: func(e *Envelope) {
 				e.StoredTrunc = &StoredTrunc{Out: &BodyTrunc{OriginalBytes: 100, HeadBytes: 50, TailBytes: 50}}
+			},
+			wantErr: ErrInvalidEnvelope,
+		},
+		{
+			name: "stored_trunc_overflow_bounds",
+			mutate: func(e *Envelope) {
+				e.StoredTrunc = &StoredTrunc{Out: &BodyTrunc{OriginalBytes: 100, HeadBytes: math.MaxInt, TailBytes: 1}}
 			},
 			wantErr: ErrInvalidEnvelope,
 		},

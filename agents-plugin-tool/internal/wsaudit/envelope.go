@@ -163,7 +163,8 @@ type BodyTrunc struct {
 
 // Validate checks that b describes a valid head-plus-tail truncation.
 func (b BodyTrunc) Validate() error {
-	if b.OriginalBytes <= 0 || b.HeadBytes < 0 || b.TailBytes < 0 || b.HeadBytes+b.TailBytes >= b.OriginalBytes {
+	if b.OriginalBytes <= 0 || b.HeadBytes < 0 || b.TailBytes < 0 ||
+		b.TailBytes >= b.OriginalBytes || b.HeadBytes >= b.OriginalBytes-b.TailBytes {
 		return fmt.Errorf("%w: invalid stored_trunc bounds (original=%d head=%d tail=%d)",
 			ErrInvalidEnvelope, b.OriginalBytes, b.HeadBytes, b.TailBytes)
 	}
