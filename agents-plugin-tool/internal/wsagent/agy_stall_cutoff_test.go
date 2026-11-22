@@ -38,10 +38,67 @@ func (c *stallClock) advance(d time.Duration) time.Time {
 	return c.now
 }
 
+// stallTimers are fake timers on the stall clock: each has a deadline, a
+// stopped timer never fires, and advance fires every running timer whose
+// deadline it reaches. fire fires one by index regardless (a firing that
+// raced its stop).
+type stallTimers struct {
+	mu        sync.Mutex
+	clock     *stallClock
+	durs      []time.Duration
+	chans     []chan time.Time
+	deadlines []time.Time
+	done      []bool
+}
+
+func (f *stallTimers) start(d time.Duration) (<-chan time.Time, func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := len(f.chans)
+	c := make(chan time.Time, 1)
+	f.durs = append(f.durs, d)
+	f.chans = append(f.chans, c)
+	f.deadlines = append(f.deadlines, f.clock.Now().Add(d))
+	f.done = append(f.done, false)
+	return c, func() {
+		f.mu.Lock()
+		f.done[i] = true
+		f.mu.Unlock()
+	}
+}
+
+func (f *stallTimers) fire(t *testing.T, i int) {
+	t.Helper()
+	f.mu.Lock()
+	c := f.chans[i]
+	f.done[i] = true
+	f.mu.Unlock()
+	c <- time.Now()
+}
+
+// advance moves the clock and fires the running timers it makes due; it
+// returns how many fired.
+func (f *stallTimers) advance(d time.Duration) int {
+	now := f.clock.advance(d)
+	f.mu.Lock()
+	var due []chan time.Time
+	for i, at := range f.deadlines {
+		if !f.done[i] && !at.After(now) {
+			f.done[i] = true
+			due = append(due, f.chans[i])
+		}
+	}
+	f.mu.Unlock()
+	for _, c := range due {
+		c <- now
+	}
+	return len(due)
+}
+
 type stallRig struct {
 	t      *testing.T
 	h      *leadHarness
-	timers *leverTimers
+	timers *stallTimers
 	clock  *stallClock
 	logDir string
 	id     string
@@ -55,8 +112,9 @@ type stallRig struct {
 func newStallRig(t *testing.T, timeout, retries int, settings map[string]string) *stallRig {
 	t.Helper()
 	h, f := newAgyLeadHarness(t)
-	r := &stallRig{t: t, h: h, timers: &leverTimers{}, logDir: t.TempDir()}
+	r := &stallRig{t: t, h: h, logDir: t.TempDir()}
 	r.clock = &stallClock{now: time.Now().Truncate(time.Second)}
+	r.timers = &stallTimers{clock: r.clock}
 	h.opts.Now = r.clock.Now
 	h.opts.Timer = r.timers.start
 	h.opts.AgyModelWaitBackoff = func(int) time.Duration { return 0 }
@@ -93,17 +151,32 @@ func (r *stallRig) writeLog(lines ...string) {
 	}
 }
 
-// baseLog is a verified tail with no main header: covered from a minute
-// before the boundary, naming the session, and holding one monitor header.
+// baseLog is a verified tail with no main header since the boundary:
+// covered from a minute before it, naming the session, holding one monitor
+// header, and one main header of an earlier request of this process (the
+// first-request safeguard is past).
 func (r *stallRig) baseLog(extra ...string) {
 	b := r.boundary
 	lines := []string{
 		agyGlogStart(b.Add(-time.Minute), 1),
+		agyGlogHeader(b.Add(-50*time.Second), 5),
 		agyGlogUserMessage(b, 2, "agy-s1"),
 		agyGlogMonitor(b.Add(time.Second), 7),
 		agyGlogHeader(b.Add(time.Second), 7),
 	}
 	r.writeLog(append(lines, extra...)...)
+}
+
+// monitorOnlyLog is a verified tail whose only headers are a monitor's: the
+// format is recognized, but this process has shown no main header.
+func (r *stallRig) monitorOnlyLog() {
+	b := r.boundary
+	r.writeLog(
+		agyGlogStart(b.Add(-time.Minute), 1),
+		agyGlogUserMessage(b, 2, "agy-s1"),
+		agyGlogMonitor(b.Add(time.Second), 7),
+		agyGlogHeader(b.Add(time.Second), 7),
+	)
 }
 
 // silenceTimers is the number of silence timers started so far.
@@ -252,6 +325,115 @@ func TestAgyStallCutoffAfterToolCompletionWithNoNewHeader(t *testing.T) {
 	}
 }
 
+// The stream reader stamps a tool completion when it receives the line,
+// before the event queue: a loop that handles the completion seconds later
+// still keeps the next request's header, logged in between, in the window.
+func TestAgyStallCutoffToolCompletionBoundaryIsTheReaderTime(t *testing.T) {
+	r := newStallRig(t, 45, 3, nil)
+	r.out(agyToolStartLine)
+	r.until("the pending tool call", func(c *conv) bool { return c.modelWaitPending == 1 })
+	r.baseLog()
+	done := r.clock.advance(100 * time.Second)
+	c := r.conv()
+	c.do(func() {
+		// The loop is busy: the reader takes the completion now, and the
+		// loop handles it only after agy's next request has headers.
+		queued := len(c.events)
+		r.h.holders.out(r.holder, agyToolDoneLine)
+		deadline := time.Now().Add(5 * time.Second)
+		for len(c.events) == queued && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		r.clock.advance(4 * time.Second)
+		r.baseLog(agyGlogHeader(done.Add(time.Second), 9))
+	})
+	r.until("the tool completion", func(c *conv) bool { return c.modelWaitPending == 0 })
+	if b := r.boundaryNow(); !b.Equal(done) {
+		t.Fatalf("boundary = %v, want the reader's receipt %v (loop handled it at %v)", b, done, r.clock.Now())
+	}
+	r.fireSilence(stallTimeout)
+	if got, spent := r.cancels(), r.retries(); got != 0 || spent != 0 {
+		t.Fatalf("a request with headers after a late-handled completion: cancels=%d retries=%d", got, spent)
+	}
+}
+
+// A completion event with no reader time leaves the attempt without a
+// boundary: no silence timer, no cut.
+func TestAgyStallCutoffCompletionWithoutReaderTimeNeverCuts(t *testing.T) {
+	r := newStallRig(t, 45, 3, nil)
+	r.baseLog()
+	c := r.conv()
+	c.do(func() {
+		c.onModelActivity(1, false, time.Time{})
+		c.onModelActivity(0, false, time.Time{})
+	})
+	if b := r.boundaryNow(); !b.IsZero() {
+		t.Fatalf("boundary = %v, want none", b)
+	}
+	if r.armed() {
+		t.Fatal("the silence timer runs with no boundary")
+	}
+	c.do(func() { c.modelWaitTimedOut() })
+	r.sync()
+	if got := r.cancels(); got != 0 {
+		t.Fatalf("cancels = %d with no boundary", got)
+	}
+}
+
+// The first request of a process: a monitor header verifies the format,
+// but until the log shows a main header no firing cuts.
+func TestAgyStallCutoffMonitorHeaderAloneNeverCuts(t *testing.T) {
+	r := newStallRig(t, 45, 3, nil)
+	r.monitorOnlyLog()
+	r.fireSilence(stallTimeout)
+	if got, spent := r.cancels(), r.retries(); got != 0 || spent != 0 {
+		t.Fatalf("first request with only monitor headers: cancels=%d retries=%d", got, spent)
+	}
+	if !strings.Contains(r.h.log.String(), "no main request header yet") {
+		t.Fatalf("no notice:\n%s", r.h.log.String())
+	}
+	// A main header later in this process's log enables the cut.
+	r.baseLog()
+	r.fireSilence(stallTimeout)
+	if got := r.cancels(); got != 1 {
+		t.Fatalf("after a main header: cancels = %d, want 1", got)
+	}
+}
+
+// Hosted agy workers get neither the log-confirmed cutoff nor the frame
+// trace, whatever the settings say.
+func TestAgyStallCutoffWorkerOptsOut(t *testing.T) {
+	setLookPath(t, func(file string) (string, error) { return file, nil })
+	h, timers, _ := agyWatchdogHarnessWithSilence(t, "45", "3", false)
+	resolver := wsconfig.NewResolver(h.config.Config, nil, nil, nil)
+	for _, item := range []string{wsconfig.ItemAgyStallLogCheck, wsconfig.ItemAgyHTTP2FrameTrace} {
+		if err := resolver.Set(item, "true", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, _ := startAgyWatchdogTurn(t, h, false)
+	c := h.runner.conv(id)
+	var lead, armed, logCheck bool
+	var timeout time.Duration
+	var trace string
+	c.do(func() {
+		lead, armed, timeout = c.rec.Lead, c.modelWaitArmed, c.modelWaitTimeout
+		logCheck, trace = c.modelWaitLogCheck, c.agyFrameTrace
+	})
+	if lead {
+		t.Fatal("the watchdog harness conversation is a lead")
+	}
+	if !armed || timeout != stallTimeout {
+		t.Fatalf("worker model wait: armed=%v timeout=%v", armed, timeout)
+	}
+	if logCheck || trace != "" {
+		t.Fatalf("worker got the cutoff (%v) or the trace (%q)", logCheck, trace)
+	}
+	if started, _ := timers.counts(); started != 0 {
+		t.Fatalf("a worker started %d silence timers", started)
+	}
+}
+
 func TestAgyStallCutoffMainHeaderReArmsWithoutRetry(t *testing.T) {
 	r := newStallRig(t, 45, 3, nil)
 	r.baseLog(agyGlogHeader(r.boundary.Add(5*time.Second), 9))
@@ -346,29 +528,62 @@ func TestAgyStallCutoffSteerKeepsTheBoundaryAndItsHeader(t *testing.T) {
 func TestAgyStallCutoffSteerNearTheDeadlineRestartsTheTimer(t *testing.T) {
 	r := newStallRig(t, 45, 3, nil)
 	r.baseLog()
-	r.timers.mu.Lock()
-	original := slices.Index(r.timers.durs, stallTimeout)
-	r.timers.mu.Unlock()
-	r.clock.advance(stallTimeout - time.Second)
+	r.advanceSilence(stallTimeout-time.Second, 0)
 	before := r.silenceTimers()
 	r.h.send(r.id, "steer this")
 	r.h.steerHeld(r.id)
 	r.h.runner.InboxChanged(r.id)
 	eventually(t, "the steer", func() bool { return len(agyPromptIDs(r.h, r.holder)) == 2 })
 	r.sync()
-	if r.silenceTimers() != before+1 {
-		t.Fatalf("a steer started %d silence timers, want one restart", r.silenceTimers()-before)
+	r.expectSteerRestart(before)
+}
+
+// A mail steered into the running turn restarts the timer as an inbox
+// steer does.
+func TestAgyStallCutoffMailSteerRestartsTheTimer(t *testing.T) {
+	r := newStallRig(t, 45, 3, nil)
+	r.baseLog()
+	r.advanceSilence(stallTimeout-time.Second, 0)
+	before := r.silenceTimers()
+	c := r.conv()
+	steered := false
+	c.do(func() { steered = c.steerMail(ClaimedMail{Text: "a mail", Sender: "peer"}) })
+	if !steered {
+		t.Fatal("the mail was not steered")
 	}
-	// The original deadline passes: its timer was replaced.
-	r.clock.advance(time.Second)
-	r.timers.fire(t, original)
 	r.sync()
-	if got := r.cancels(); got != 0 {
-		t.Fatalf("the original deadline cut %d times after the steer", got)
+	if b := r.boundaryNow(); !b.Equal(r.boundary) {
+		t.Fatalf("a mail steer moved the boundary to %v (was %v)", b, r.boundary)
 	}
-	r.fireSilence(stallTimeout - time.Second)
+	r.expectSteerRestart(before)
+}
+
+// advanceSilence moves the clock by d and expects want timers to fire.
+func (r *stallRig) advanceSilence(d time.Duration, want int) {
+	r.t.Helper()
+	r.sync()
+	if got := r.timers.advance(d); got != want {
+		r.t.Fatalf("advancing %v fired %d timers, want %d", d, got, want)
+	}
+	r.sync()
+}
+
+// expectSteerRestart checks a steer one second before the deadline: one
+// full-length timer replaced the running one, the original deadline passes
+// with nothing firing, and the restarted deadline cuts.
+func (r *stallRig) expectSteerRestart(before int) {
+	r.t.Helper()
+	if r.silenceTimers() != before+1 {
+		r.t.Fatalf("a steer started %d silence timers, want one restart", r.silenceTimers()-before)
+	}
+	r.advanceSilence(time.Second, 0)
+	if got := r.cancels(); got != 0 {
+		r.t.Fatalf("the original deadline cut %d times after the steer", got)
+	}
+	r.advanceSilence(stallTimeout-2*time.Second, 0)
+	r.advanceSilence(time.Second, 1)
 	if got := r.cancels(); got != 1 {
-		t.Fatalf("a full timeout after the steer: cancels = %d, want 1", got)
+		r.t.Fatalf("a full timeout after the steer: cancels = %d, want 1", got)
 	}
 }
 
@@ -435,11 +650,12 @@ func TestAgyStallCutoffOffKeepsInBandOnly(t *testing.T) {
 		t.Fatalf("agy.stall_log_check=false started %d silence timers", r.silenceTimers())
 	}
 	c := r.conv()
-	c.do(func() {
-		if !c.modelWaitArmed || c.modelWaitTimeout != stallTimeout {
-			t.Fatalf("in-band recovery must stay armed: armed=%v timeout=%v", c.modelWaitArmed, c.modelWaitTimeout)
-		}
-	})
+	var armed bool
+	var timeout time.Duration
+	c.do(func() { armed, timeout = c.modelWaitArmed, c.modelWaitTimeout })
+	if !armed || timeout != stallTimeout {
+		t.Fatalf("in-band recovery must stay armed: armed=%v timeout=%v", armed, timeout)
+	}
 }
 
 func TestAgyStallCutoffZeroTimeoutNeverArms(t *testing.T) {
@@ -452,11 +668,11 @@ func TestAgyStallCutoffZeroTimeoutNeverArms(t *testing.T) {
 		t.Fatalf("a zero timeout started %d timers", started)
 	}
 	c := r.conv()
-	c.do(func() {
-		if !c.modelWaitLogCheck || c.modelWaitArmed {
-			t.Fatalf("log check %v, armed %v", c.modelWaitLogCheck, c.modelWaitArmed)
-		}
-	})
+	var logCheck, armed bool
+	c.do(func() { logCheck, armed = c.modelWaitLogCheck, c.modelWaitArmed })
+	if !logCheck || armed {
+		t.Fatalf("log check %v, armed %v", logCheck, armed)
+	}
 }
 
 func TestAgyFrameTraceOnAddsGODEBUGCaptureAndCutoffMarker(t *testing.T) {
@@ -476,12 +692,50 @@ func TestAgyFrameTraceOnAddsGODEBUGCaptureAndCutoffMarker(t *testing.T) {
 	if r.cancels() != 1 {
 		t.Fatal("no cutoff")
 	}
-	data, err := os.ReadFile(want)
-	if err != nil {
+	notes := r.h.holders.captureNotes(r.holder)
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "ws: headerless cutoff boundary="+r.boundary.Local().Format(time.RFC3339Nano)+" cutoff=") {
+		t.Fatalf("capture notes = %q", notes)
+	}
+	// The holder owns the file: the daemon never writes it.
+	if _, err := os.Stat(want); !os.IsNotExist(err) {
+		t.Fatalf("the daemon wrote the capture file: %v", err)
+	}
+}
+
+// The marker follows the running holder's spawn option, not the daemon's
+// current setting: a process spawned without a capture gets none after the
+// knob turns on, and one spawned with it keeps it after the knob turns off.
+func TestAgyFrameTraceMarkerFollowsTheRunningHolder(t *testing.T) {
+	r := newStallRig(t, 45, 3, nil)
+	resolver := wsconfig.NewResolver(r.h.opts.Config, nil, nil, nil)
+	if err := resolver.Set(wsconfig.ItemAgyHTTP2FrameTrace, "true", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(string(data), "ws: headerless cutoff boundary="+r.boundary.Local().Format(time.RFC3339Nano)+" cutoff="); n != 1 {
-		t.Fatalf("capture markers = %q", data)
+	c := r.conv()
+	c.do(func() { c.loadModelWait() })
+	r.baseLog()
+	r.fireSilence(stallTimeout)
+	if r.cancels() != 1 {
+		t.Fatal("no cutoff")
+	}
+	if notes := r.h.holders.captureNotes(r.holder); len(notes) != 0 {
+		t.Fatalf("a holder spawned without a capture took notes %q", notes)
+	}
+	if _, err := os.Stat(filepath.Join(wsdashboard.SessionDir(r.h.dir, r.id), AgyFrameLogName)); !os.IsNotExist(err) {
+		t.Fatalf("a capture file appeared: %v", err)
+	}
+
+	on := newStallRig(t, 45, 3, map[string]string{wsconfig.ItemAgyHTTP2FrameTrace: "true"})
+	resolver = wsconfig.NewResolver(on.h.opts.Config, nil, nil, nil)
+	if err := resolver.Set(wsconfig.ItemAgyHTTP2FrameTrace, "false", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
+	oc := on.conv()
+	oc.do(func() { oc.loadModelWait() })
+	on.baseLog()
+	on.fireSilence(stallTimeout)
+	if notes := on.h.holders.captureNotes(on.holder); on.cancels() != 1 || len(notes) != 1 {
+		t.Fatalf("knob turned off on a capturing holder: cancels=%d notes=%q", on.cancels(), notes)
 	}
 }
 

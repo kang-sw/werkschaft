@@ -158,7 +158,7 @@ func (c *conv) handle(ev Event) {
 		c.live.summarySource, c.summaryReason, c.summaryGap = "", "", false
 	case ev.ModelActivity != nil:
 		if !quiet {
-			c.onModelActivity(*ev.ModelActivity, ev.ModelContent)
+			c.onModelActivity(*ev.ModelActivity, ev.ModelContent, ev.ReceivedAt)
 		}
 	case ev.ModelFailureUpdate != nil:
 		if !quiet {

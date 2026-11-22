@@ -423,6 +423,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			},
 			Manual:     func() string { return c.leadManual(rec) },
 			FrameTrace: c.agyFrameTrace,
+			Now:        c.r.opts.Now,
 			Spawned: func(holderID string, pid int) {
 				spawned = true
 				c.update(func(rec *Record) { rec.HolderID, rec.HostPID, rec.HolderSeq = holderID, pid, 0 })

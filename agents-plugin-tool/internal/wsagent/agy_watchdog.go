@@ -3,7 +3,6 @@ package wsagent
 import (
 	"fmt"
 	"math/rand/v2"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -184,12 +183,15 @@ func (c *conv) loadModelWait() {
 	}
 }
 
-// markModelWaitBoundary records that ws just started a fresh model request:
-// a user-turn prompt with no turn running, the watchdog's own automatic
-// continue, or the last pending tool call of the turn reaching a terminal
-// status. A steer and a background tool completion are not boundaries.
-func (c *conv) markModelWaitBoundary() {
-	c.modelWaitBoundary = c.r.opts.Now()
+// markModelWaitBoundary records that a fresh model request started at or
+// after at: a user-turn prompt with no turn running or the watchdog's own
+// automatic continue (at is taken before the send reaches the holder), or
+// the last pending tool call of the turn reaching a terminal status (at is
+// when the stream reader received that update, before the event queue). A
+// steer and a background tool completion are not boundaries. A zero at
+// means no trustworthy time: the attempt has no boundary and never cuts.
+func (c *conv) markModelWaitBoundary(at time.Time) {
+	c.modelWaitBoundary = at
 	c.modelWaitContent = false
 }
 
@@ -234,28 +236,27 @@ func (c *conv) headerlessStall() bool {
 	return false
 }
 
-// noteAgyFrameCutoff appends one marker line to the frame capture file, so
-// the stalled stream can be found by its time.
+// noteAgyFrameCutoff asks the running holder to add one marker line to its
+// frame capture, so the stalled stream can be found by its time. The holder
+// owns the capture file and its cap: it writes the line only when its child
+// was spawned with a capture, whatever the daemon's settings say now, and a
+// holder that predates the operation writes nothing.
 func (c *conv) noteAgyFrameCutoff(cutoff time.Time) {
-	if c.agyFrameTrace == "" {
+	noter, ok := c.proc.(frameCaptureNoter)
+	if !ok {
 		return
 	}
-	f, err := os.OpenFile(c.agyFrameTrace, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		fmt.Fprintf(c.r.opts.Log, "agent %s: agy frame trace marker: %v\n", c.rec.ReplyID, err)
-		return
-	}
-	defer f.Close()
-	line := fmt.Sprintf("%s ws: headerless cutoff boundary=%s cutoff=%s\n", time.Now().Format(time.RFC3339Nano), c.modelWaitBoundary.Local().Format(time.RFC3339Nano), cutoff.Local().Format(time.RFC3339Nano))
-	if _, err := f.WriteString(line); err != nil {
+	text := fmt.Sprintf("ws: headerless cutoff boundary=%s cutoff=%s", c.modelWaitBoundary.Local().Format(time.RFC3339Nano), cutoff.Local().Format(time.RFC3339Nano))
+	if err := noter.NoteFrameCapture(text); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: agy frame trace marker: %v\n", c.rec.ReplyID, err)
 	}
 }
 
-// startModelWait resets per-turn state for a freshly sent ordinary prompt.
-func (c *conv) startModelWait() {
+// startModelWait resets per-turn state for a freshly sent ordinary prompt;
+// sentAt was read before the send.
+func (c *conv) startModelWait(sentAt time.Time) {
 	c.disarmModelWait()
-	c.markModelWaitBoundary()
+	c.markModelWaitBoundary(sentAt)
 	c.armModelWait()
 }
 
@@ -339,9 +340,10 @@ func (c *conv) disarmModelWait() {
 }
 
 // onModelActivity handles a raw ACP session/update activity signal carrying
-// the current count of pending tool calls (including daemon run_command calls)
-// and whether the update carried model content.
-func (c *conv) onModelActivity(pending int, content bool) {
+// the current count of pending tool calls (including daemon run_command
+// calls), whether the update carried model content, and when the stream
+// reader received it (zero when unknown).
+func (c *conv) onModelActivity(pending int, content bool, received time.Time) {
 	if !c.modelWaitArmed {
 		return
 	}
@@ -350,7 +352,7 @@ func (c *conv) onModelActivity(pending int, content bool) {
 	// result. A background command that outlived an earlier turn is not
 	// among the pending calls, so its completion moves nothing.
 	if pending < c.modelWaitPending && pending == 0 {
-		c.markModelWaitBoundary()
+		c.markModelWaitBoundary(received)
 	} else if content {
 		c.modelWaitContent = true
 	}
@@ -585,6 +587,7 @@ func (c *conv) modelWaitBackoffTimedOut() {
 	} else {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: agy reported terminal in-band model failure; sending automatic continue attempt %d/%d (%s)\n", c.rec.ReplyID, c.modelWaitRetries, c.modelWaitMaxRetries, failure)
 	}
+	sentAt := c.r.opts.Now()
 	if err := c.proc.Send("continue"); err != nil {
 		reason := fmt.Sprintf("agy model stream stalled for %s and retry send failed: %v", formatWatchdogDuration(c.modelWaitTimeout), err)
 		if failure != "" {
@@ -593,7 +596,7 @@ func (c *conv) modelWaitBackoffTimedOut() {
 		c.failModelWaitImmediately(reason)
 		return
 	}
-	c.markModelWaitBoundary()
+	c.markModelWaitBoundary(sentAt)
 	c.resetModelWaitTimer()
 }
 

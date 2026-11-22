@@ -1072,3 +1072,42 @@ sys.stderr.flush()
 		t.Fatalf("capture = %q, want %q", data, want)
 	}
 }
+
+// The daemon's cutoff marker goes through the holder's capture, which is
+// the file's only writer; a child spawned without a capture gets none.
+func TestCaptureNoteWritesThroughTheHolderCapture(t *testing.T) {
+	dir := testHoldersDir(t)
+	sink := newCollector()
+	m := testManager(t, dir, sink)
+	child := "import sys\nprint('ready', flush=True)\nsys.stdin.read()\n"
+	for _, withCapture := range []bool{true, false} {
+		id, err := m.Launch(json.RawMessage(`{"kind":"test"}`))
+		if err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		capture := filepath.Join(t.TempDir(), "frames.log")
+		spec := SpawnSpec{Argv: []string{testPython(t), "-c", child}, Mode: "pipe"}
+		if withCapture {
+			spec.HTTP2Capture = &HTTP2Capture{Path: capture, MaxBytes: 1 << 20}
+		}
+		c := m.Client(id)
+		if _, err := c.Spawn(spec); err != nil {
+			t.Fatalf("spawn: %v", err)
+		}
+		waitFor(t, "the child's ready line", func() bool { return strings.Contains(sink.output(id), "ready") })
+		captured, err := c.CaptureNote("ws: headerless cutoff boundary=b cutoff=c")
+		if err != nil || captured != withCapture {
+			t.Fatalf("capture %v: CaptureNote = %v, %v", withCapture, captured, err)
+		}
+		data, err := os.ReadFile(capture)
+		switch {
+		case withCapture && (err != nil || !strings.HasSuffix(string(data), " ws: headerless cutoff boundary=b cutoff=c\n")):
+			t.Fatalf("capture = %q, %v", data, err)
+		case !withCapture && !os.IsNotExist(err):
+			t.Fatalf("a child without a capture got a file: %q, %v", data, err)
+		}
+		if err := c.Input(nil, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

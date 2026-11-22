@@ -227,6 +227,9 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 		}
 	}
 	m := newAgyMapper(spec.SessionID)
+	if spec.Lead != nil {
+		m.clock = spec.Lead.Now
+	}
 	m.recoveredSteers = slices.Clone(spec.RecoveredSteers)
 	m.reattachedPromptAfter = spec.reattachedPromptAfter
 	sp, err := startChild(spec, cmd, m, agyProtocol{})
@@ -289,6 +292,20 @@ func agyIDKind(id string) (string, bool) {
 }
 
 // agyProcess is one `agy acp` process serving one session.
+// frameCaptureNoter is a process whose holder may keep a frame capture.
+type frameCaptureNoter interface {
+	NoteFrameCapture(text string) error
+}
+
+// NoteFrameCapture adds text to the holder's frame capture, when the holder
+// keeps one for this process.
+func (p *agyProcess) NoteFrameCapture(text string) error {
+	if p.holder == nil {
+		return nil
+	}
+	return p.holder.noteCapture(text)
+}
+
 type agyProcess struct {
 	*streamProcess
 	m *agyMapper
@@ -708,6 +725,8 @@ type agyMapper struct {
 	rate        agyOutputRateTracker
 	// now is an optional local clock seam (epoch ms) for deterministic tests.
 	now func() int64
+	// clock stamps Event.ReceivedAt (LeadSpec.Now); nil uses time.Now.
+	clock func() time.Time
 }
 
 func newAgyMapper(sessionID string) *agyMapper {
@@ -939,6 +958,12 @@ func (m *agyMapper) mapAgyLine(line []byte, replies lineReplies, seq uint64) []E
 	if m.now != nil {
 		now = m.now()
 	}
+	// Taken on the reader goroutine, before the event queue: a boundary
+	// from this line is never later than its arrival.
+	received := time.Now()
+	if m.clock != nil {
+		received = m.clock()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	hasID := len(msg.ID) > 0 && string(msg.ID) != "null"
@@ -951,7 +976,7 @@ func (m *agyMapper) mapAgyLine(line []byte, replies lineReplies, seq uint64) []E
 		out := m.update(msg.Params, replies, now)
 		if _, replaying := replies.(silentReplies); !replaying {
 			n := len(m.pendingTools)
-			out = append(out, Event{ModelActivity: &n, ModelContent: m.content})
+			out = append(out, Event{ModelActivity: &n, ModelContent: m.content, ReceivedAt: received})
 			if oldFailure != m.modelFailure {
 				if oldFailure != "" && m.modelFailure == "" {
 					out = append(out, Event{Notice: "agy recovered after in-band model failure: " + oldFailure})

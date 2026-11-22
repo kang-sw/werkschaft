@@ -65,10 +65,12 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
             never to the ring: only framer summary lines ("Framer 0x..:
             wrote|read <TYPE>"), cut after their allowlisted fields
             (stream, len, flags, ErrCode, LastStreamID, incr), are appended
-            to path with the holder's wall-clock time, until the file
-            reaches max_bytes (64 MiB by default) and one marker line ends
-            it. A line cut into several records is classified by its first
-            record. A holder that predates the field ignores it.
+            to path with the holder's wall-clock time. max_bytes (64 MiB by
+            default) bounds the whole file: lines stop where one stop marker
+            line still fits, the marker is written once, and a file found
+            at or over the cap, or already ending in the marker, gets
+            nothing more. A line cut into several records is classified by
+            its first record. A holder that predates the field ignores it.
     input   {"data": "<base64>", "eof": false}   eof closes a pipe child's
             stdin after the data.
     resize  {"rows": n, "cols": n}               PTY children only.
@@ -76,6 +78,13 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
     stop    {}   ends the child (TERM, then KILL after a grace period) and
             exits the holder.
     status  {} -> {"child": <status>, "first_seq": n, "next_seq": n}
+    capture_note {"text": "..."} -> {"captured": bool}
+            Appends one line of text (at most 512 bytes, line ends
+            replaced) to the spawn's http2_capture file, under the same cap
+            and with the holder's wall-clock time; captured is false when
+            the child has no capture or the capture has stopped. The
+            daemon marks a cutoff this way, so the capture file has a
+            single writer. A holder that predates it answers unknown_op.
     replay  {"from": n} -> {"first_seq": n, "next_seq": n}
             Starts the record stream at sequence n; n <= 0 means the whole
             ring. When n has already left the ring the stream begins with
@@ -348,9 +357,16 @@ def http2_frame_summary(line: bytes):
     return b" ".join(kept)
 
 
+HTTP2_CAPTURE_STOP = b"ws holder: frame capture stopped at its byte cap\n"
+HTTP2_NOTE_MAX = 512
+
+
 class Http2Capture:
-    """An append-only frame capture file, opened on its first kept line and
-    held open; it stops at max_bytes with one marker line."""
+    """An append-only frame capture file, opened on its first line and held
+    open. The cap counts every byte, the stop marker's included: lines stop
+    where the marker still fits, the marker (HTTP2_CAPTURE_STOP) is written
+    once, and a file reopened at or over the cap, or already ending in the
+    marker, gets nothing more."""
 
     def __init__(self, path: str, max_bytes: int, log) -> None:
         self.path = path
@@ -361,28 +377,49 @@ class Http2Capture:
         self.done = False
         self.lock = threading.Lock()
 
-    def write(self, kept: bytes) -> None:
+    def write(self, kept: bytes) -> bool:
+        """Appends kept with the wall-clock time; False when it was not
+        written (the capture has stopped)."""
         with self.lock:
             if self.done:
-                return
+                return False
             stamp = datetime.datetime.now().astimezone().isoformat(timespec="microseconds").encode("ascii")
             try:
-                if self.fd is None:
-                    self.fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-                    self.size = os.lseek(self.fd, 0, os.SEEK_END)
-                    if self.size >= self.max_bytes:
-                        self.done = True
-                        return
+                if self.fd is None and not self._open():
+                    return False
                 line = stamp + b" " + kept + b"\n"
-                if self.size + len(line) > self.max_bytes:
-                    os.write(self.fd, stamp + b" ws holder: frame capture stopped at %d bytes\n" % self.max_bytes)
+                if self.size + len(line) + len(HTTP2_CAPTURE_STOP) > self.max_bytes:
+                    if self.size + len(HTTP2_CAPTURE_STOP) <= self.max_bytes:
+                        os.write(self.fd, HTTP2_CAPTURE_STOP)
+                        self.size += len(HTTP2_CAPTURE_STOP)
                     self.done = True
-                    return
+                    return False
                 os.write(self.fd, line)
                 self.size += len(line)
+                return True
             except OSError as exc:
                 self.done = True
                 self.log(f"http2 capture {self.path}: {exc}")
+                return False
+
+    def _open(self) -> bool:
+        # O_BINARY keeps Windows from translating line ends, which would
+        # break the byte count.
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        self.fd = os.open(self.path, flags, 0o600)
+        self.size = os.fstat(self.fd).st_size
+        if self.size >= self.max_bytes:
+            self.done = True
+            return False
+        mark = len(HTTP2_CAPTURE_STOP)
+        if self.size >= mark:
+            # Appends still go to the end; the position only serves this
+            # one read (os.pread is not on Windows).
+            os.lseek(self.fd, self.size - mark, os.SEEK_SET)
+            if os.read(self.fd, mark) == HTTP2_CAPTURE_STOP:
+                self.done = True
+                return False
+        return True
 
     def close(self) -> None:
         with self.lock:
@@ -1426,6 +1463,14 @@ class Holder:
             "next_seq": self.ring.next_seq,
         }
 
+    def _op_capture_note(self, att: Attachment, req: dict) -> dict:
+        text = req.get("text")
+        if not isinstance(text, str) or not text:
+            raise OpError("bad_request", "capture_note needs a text string")
+        data = text.encode("utf-8", "replace").replace(b"\r", b" ").replace(b"\n", b" ")[:HTTP2_NOTE_MAX]
+        capture = self.http2_capture
+        return {"captured": capture is not None and capture.write(data)}
+
     def _op_replay(self, att: Attachment, req: dict) -> dict:
         from_seq = req.get("from", 0)
         if not isinstance(from_seq, int) or isinstance(from_seq, bool):
@@ -1441,6 +1486,7 @@ class Holder:
         "stop": _op_stop,
         "status": _op_status,
         "replay": _op_replay,
+        "capture_note": _op_capture_note,
     }
 
     # -- the child's threads --

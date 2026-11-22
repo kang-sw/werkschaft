@@ -83,6 +83,7 @@ type fakeHolder struct {
 	ringBytes        int
 	ringSkip         string
 	inputs           []string
+	notes            []string
 	attached         bool
 	exited           bool
 	stream           *fakeStream
@@ -395,6 +396,35 @@ func (f *fakeHolders) Input(id string, data []byte, eof bool) error {
 	}
 	f.mu.Unlock()
 	return f.call(id, "input")
+}
+
+// CaptureNote is the holder's capture_note operation: a holder whose child
+// was spawned with a frame capture takes the note, any other answers false.
+func (f *fakeHolders) CaptureNote(id, text string) (bool, error) {
+	if err := f.call(id, "capture_note"); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.holders[id]
+	if h == nil {
+		return false, wsholder.ErrDetached
+	}
+	if h.spec == nil || h.spec.HTTP2Capture == nil {
+		return false, nil
+	}
+	h.notes = append(h.notes, text)
+	return true, nil
+}
+
+// captureNotes are the capture notes holder id took.
+func (f *fakeHolders) captureNotes(id string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h := f.holders[id]; h != nil {
+		return slices.Clone(h.notes)
+	}
+	return nil
 }
 
 func (f *fakeHolders) Status(id string) (wsholder.AttachInfo, error) {

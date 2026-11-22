@@ -1344,7 +1344,10 @@ func (c *conv) kickInput() {
 		mark = rest[0].After
 	}
 	c.stopIdle()
-	startedAt := c.r.opts.Now().UnixMilli()
+	// Read before the send: a request boundary is never later than the
+	// prompt's delivery.
+	sentAt := c.r.opts.Now()
+	startedAt := sentAt.UnixMilli()
 	heldAgy := c.record().heldAgyWorker()
 	if len(recs) > 0 {
 		// Keep drained input recoverable until the send succeeds.
@@ -1434,7 +1437,7 @@ func (c *conv) kickInput() {
 		}
 		c.compactResume = false
 		c.compactResumeInternal = false
-		c.startModelWait()
+		c.startModelWait(sentAt)
 	}
 	c.sendRetried = false
 	c.stopBgGrace()

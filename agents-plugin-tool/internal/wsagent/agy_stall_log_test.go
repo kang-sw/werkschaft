@@ -7,12 +7,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata" // the repeated-hour fixture's zone, on any host
 )
 
 // Synthetic agy worker log lines in agy's glog shape. No real log content.
 
 func agyGlog(at time.Time, goroutine int, file, msg string) string {
-	at = at.Local()
+	return agyGlogWall(at.Local(), goroutine, file, msg)
+}
+
+// agyGlogWall writes at's wall clock in its own location.
+func agyGlogWall(at time.Time, goroutine int, file, msg string) string {
 	return fmt.Sprintf("I%02d%02d %02d:%02d:%02d.%06d %7d %s] %s\n", int(at.Month()), at.Day(), at.Hour(), at.Minute(), at.Second(), at.Nanosecond()/1000, goroutine, file, msg)
 }
 
@@ -109,7 +114,7 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, reason := parseAgyStallTail([]byte(tc.tail), false, b, agyStallSkew)
+			got, _, reason := parseAgyStallTail([]byte(tc.tail), false, b, agyStallSkew)
 			if got != tc.want || !strings.Contains(reason, tc.reason) {
 				t.Fatalf("verdict = %v (%q), want %v (%q)", got, reason, tc.want, tc.reason)
 			}
@@ -123,10 +128,10 @@ func TestParseAgyStallTailClippedFirstLine(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
 	partial := agyGlogHeader(b.Add(time.Second), 9)[5:]
 	tail := partial + agyGlogStart(b.Add(-time.Minute), 1) + agyGlogHeader(b.Add(-30*time.Second), 9)
-	if got, reason := parseAgyStallTail([]byte(tail), true, b, agyStallSkew); got != agyStallHeaderless {
+	if got, _, reason := parseAgyStallTail([]byte(tail), true, b, agyStallSkew); got != agyStallHeaderless {
 		t.Fatalf("clipped tail verdict = %v (%q), want headerless", got, reason)
 	}
-	if got, _ := parseAgyStallTail([]byte("no newline at all"), true, b, agyStallSkew); got != agyStallUnknown {
+	if got, _, _ := parseAgyStallTail([]byte("no newline at all"), true, b, agyStallSkew); got != agyStallUnknown {
 		t.Fatalf("clipped tail with no complete line = %v, want unknown", got)
 	}
 }
@@ -136,13 +141,73 @@ func TestParseAgyStallTailClippedFirstLine(t *testing.T) {
 func TestParseAgyStallTailFormatDriftAfterValidTail(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
 	first := agyGlogStart(b.Add(-time.Minute), 1) + agyGlogMonitor(b.Add(-50*time.Second), 7) + agyGlogHeader(b.Add(-50*time.Second), 7)
-	if got, reason := parseAgyStallTail([]byte(first), false, b, agyStallSkew); got != agyStallHeaderless {
+	if got, _, reason := parseAgyStallTail([]byte(first), false, b, agyStallSkew); got != agyStallHeaderless {
 		t.Fatalf("first tail = %v (%q), want headerless", got, reason)
 	}
 	b2 := b.Add(3 * time.Minute)
 	drifted := agyGlogStart(b2.Add(-time.Minute), 1) + agyGlog(b2.Add(-50*time.Second), 7, "http_helpers.go:760", "Request: https://model.example.invalid/v1internal:streamGenerateContent?alt=sse")
-	if got, reason := parseAgyStallTail([]byte(drifted), false, b2, agyStallSkew); got != agyStallUnknown {
+	if got, _, reason := parseAgyStallTail([]byte(drifted), false, b2, agyStallSkew); got != agyStallUnknown {
 		t.Fatalf("drifted tail = %v (%q), want unknown", got, reason)
+	}
+}
+
+// anyMain reports a main header anywhere in the tail; a monitor header
+// alone verifies the format but is never one.
+func TestParseAgyStallTailReportsAnyMainHeader(t *testing.T) {
+	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
+	before := b.Add(-30 * time.Second)
+	monitorOnly := agyGlogStart(before, 1) + agyGlogMonitor(before, 7) + agyGlogHeader(before, 7)
+	if got, anyMain, _ := parseAgyStallTail([]byte(monitorOnly), false, b, agyStallSkew); got != agyStallHeaderless || anyMain {
+		t.Fatalf("monitor only = %v anyMain=%v, want headerless with no main", got, anyMain)
+	}
+	earlierMain := monitorOnly + agyGlogHeader(b.Add(-10*time.Second), 9)
+	if got, anyMain, _ := parseAgyStallTail([]byte(earlierMain), false, b, agyStallSkew); got != agyStallHeaderless || !anyMain {
+		t.Fatalf("earlier main = %v anyMain=%v, want headerless with a main", got, anyMain)
+	}
+}
+
+// A local time the fall-back hour repeats names two instants; the reading
+// that never cuts wins on both sides of the window.
+func TestParseAgyStallTailRepeatedLocalHour(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wall := func(hour, minute, sec int) time.Time {
+		return time.Date(2026, 11, 1, hour, minute, sec, 0, time.FixedZone("wall", 0))
+	}
+	line := func(hour, minute, sec, goroutine int, file, msg string) string {
+		return agyGlogWall(wall(hour, minute, sec), goroutine, file, msg)
+	}
+	header := func(hour, minute, sec, goroutine int) string {
+		return line(hour, minute, sec, goroutine, "http_helpers.go:760", "URL: https://model.example.invalid/v1internal:streamGenerateContent?alt=sse")
+	}
+	monitor := func(hour, minute, sec, goroutine int) string {
+		return line(hour, minute, sec, goroutine, "llm_monitor.go:706", "LLM Monitor synthetic: Calling LLM")
+	}
+	// 01:10:00 EST, the second 01:10: a header at 01:10:01 is in the window
+	// under its later reading, whichever one time.Date picks.
+	second := time.Date(2026, 11, 1, 6, 10, 0, 0, time.UTC).In(ny)
+	tail := line(0, 50, 0, 1, "server.go:100", "agent ready") + monitor(0, 55, 0, 7) + header(0, 55, 0, 7) + header(1, 10, 1, 9)
+	if got, _, reason := parseAgyStallTail([]byte(tail), false, second, agyStallSkew); got != agyStallHeader {
+		t.Fatalf("repeated-hour header = %v (%q), want header", got, reason)
+	}
+	// 01:10:00 EDT, the first 01:10: a first line at 01:05 could be the
+	// second 01:05, after the boundary, so the tail does not cover it.
+	first := time.Date(2026, 11, 1, 5, 10, 0, 0, time.UTC).In(ny)
+	tail = line(1, 5, 0, 1, "server.go:100", "agent ready") + monitor(1, 5, 1, 7) + header(1, 5, 1, 7) + header(0, 59, 0, 9)
+	if got, _, reason := parseAgyStallTail([]byte(tail), false, first, agyStallSkew); got != agyStallUnknown || !strings.Contains(reason, "starts after") {
+		t.Fatalf("repeated-hour first line = %v (%q), want unknown", got, reason)
+	}
+	early, late := localInstants(2026, time.November, 1, 1, 30, 0, 0, ny)
+	if late.Sub(early) != time.Hour {
+		t.Fatalf("01:30 on the fall-back day = %v and %v, want an hour apart", early, late)
+	}
+	if early, late := localInstants(2026, time.March, 8, 2, 30, 0, 0, ny); !early.Equal(late) {
+		t.Fatalf("a skipped time = %v and %v, want one instant", early, late)
+	}
+	if early, late := localInstants(2026, time.November, 22, 12, 0, 0, 0, ny); !early.Equal(late) {
+		t.Fatalf("an ordinary time = %v and %v, want one instant", early, late)
 	}
 }
 
@@ -191,6 +256,22 @@ func TestLocateAgyWorkerLogBySessionAndAge(t *testing.T) {
 	}
 }
 
+// A predecessor of the same session that stopped just before this process
+// started is never this process's log, even when it is the only match.
+func TestLocateAgyWorkerLogIgnoresAJustStoppedPredecessor(t *testing.T) {
+	dir := t.TempDir()
+	started := time.Now().Add(-time.Minute)
+	b := started.Add(30 * time.Second)
+	writeAgyLog(t, dir, "acp-worker-20261122_115900-21.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogUserMessage(b.Add(-50*time.Second), 1, "s1")+agyGlogMonitor(b.Add(-40*time.Second), 7)+agyGlogHeader(b.Add(-40*time.Second), 9), started.Add(-time.Second))
+	if got, err := locateAgyWorkerLog(dir, "s1", started); err == nil {
+		t.Fatalf("located the predecessor %q", got)
+	}
+	l := newAgyStallLog(dir, started)
+	if got, reason := l.verdict("s1", b); got != agyStallUnknown {
+		t.Fatalf("predecessor only = %v (%q), want unknown", got, reason)
+	}
+}
+
 // The newest matching log wins when two processes of one session both
 // postdate the start.
 func TestLocateAgyWorkerLogPrefersNewest(t *testing.T) {
@@ -234,6 +315,28 @@ func TestAgyStallLogVerdictUnknownCases(t *testing.T) {
 		// Its only glog line is after the boundary minus the margin.
 		if got, _ := l.verdict("s1", b); got != agyStallUnknown {
 			t.Fatalf("garbled log = %v, want unknown", got)
+		}
+	})
+	t.Run("no main header from this process yet", func(t *testing.T) {
+		dir := t.TempDir()
+		l := newAgyStallLog(dir, started)
+		path := writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogUserMessage(b, 1, "s1")+agyGlogMonitor(b.Add(time.Second), 7)+agyGlogHeader(b.Add(time.Second), 7), time.Now())
+		if got, reason := l.verdict("s1", b); got != agyStallUnknown || !strings.Contains(reason, "no main request header") {
+			t.Fatalf("monitor headers only = %v (%q), want unknown", got, reason)
+		}
+		// A main header in a later tail enables cuts from then on, even
+		// once it has scrolled out of the window or the tail.
+		b2 := b.Add(time.Minute)
+		writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(10*time.Second), 9)+agyGlogMonitor(b2.Add(time.Second), 7)+agyGlogHeader(b2.Add(time.Second), 7), time.Now())
+		if got, reason := l.verdict("s1", b2); got != agyStallHeaderless {
+			t.Fatalf("after a main header = %v (%q), want headerless", got, reason)
+		}
+		b3 := b.Add(2 * time.Minute)
+		if err := os.WriteFile(path, []byte(agyGlogStart(b2, 1)+agyGlogMonitor(b3.Add(time.Second), 7)+agyGlogHeader(b3.Add(time.Second), 7)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, reason := l.verdict("s1", b3); got != agyStallHeaderless {
+			t.Fatalf("main header no longer in the tail = %v (%q), want headerless", got, reason)
 		}
 	})
 	t.Run("locates once", func(t *testing.T) {

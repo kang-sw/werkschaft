@@ -220,6 +220,36 @@ func (h *holderChild) name() string { return h.base }
 
 func (h *holderChild) write(line []byte) error { return h.host.Input(h.id, line, false) }
 
+// HolderCaptureNoter is the optional HolderHost operation that adds a line
+// to a holder's frame capture (ManagerHost; wsholder.Client.CaptureNote).
+type HolderCaptureNoter interface {
+	CaptureNote(id, text string) (bool, error)
+}
+
+func (h ManagerHost) CaptureNote(id, text string) (bool, error) {
+	c := h.Client(id)
+	if c == nil {
+		return false, wsholder.ErrDetached
+	}
+	return c.CaptureNote(text)
+}
+
+// noteCapture adds text to the holder's frame capture. The holder writes it
+// only when its child was spawned with a capture; a holder that predates
+// the operation answers unknown_op, which is no error here.
+func (h *holderChild) noteCapture(text string) error {
+	noter, ok := h.host.(HolderCaptureNoter)
+	if !ok {
+		return nil
+	}
+	_, err := noter.CaptureNote(h.id, text)
+	var opErr *wsholder.OpError
+	if errors.As(err, &opErr) && opErr.Code == "unknown_op" {
+		return nil
+	}
+	return err
+}
+
 // kill may run on the holder's reader goroutine, which a stop's answer
 // arrives on, so it does not wait.
 func (h *holderChild) kill() { go func() { _ = h.host.Stop(h.id) }() }

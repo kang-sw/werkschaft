@@ -1625,7 +1625,7 @@ The daemon scans the holders directory at start and every 3 minutes,
 attaches to every holder over loopback TCP with the descriptor's token, and
 replays the holder's sequenced output. A terminal holder keeps a fixed
 4 MiB ring. A newly launched hosted lead or worker holder retains 32 MiB
-and can grow to 1 GiB while output waits to be sent. A spawn may carry `http2_capture`: the holder then routes a pipe child's Go HTTP/2 debug stderr lines to a filter that keeps only framer summaries in a capture file, so the ring and the daemon's stderr tail never hold that trace (the script's docstring has the rules). A successful socket
+and can grow to 1 GiB while output waits to be sent. A spawn may carry `http2_capture`: the holder then routes a pipe child's Go HTTP/2 debug stderr lines to a filter that keeps only framer summaries in a capture file, so the ring and the daemon's stderr tail never hold that trace; the holder is the file's only writer, and a `capture_note` operation adds the daemon's cutoff marker under the same cap (the script's docstring has the rules). A successful socket
 send lets the holder reclaim the sent records above 32 MiB. At the ceiling
 the oldest records are evicted. Running holders keep their launch settings
 across daemon replacement. A reattach within one daemon process

@@ -19,8 +19,8 @@ import (
 // contract, so anything this reader does not recognize yields
 // agyStallUnknown, which never cuts.
 const (
-	// agyStallTailBytes bounds one firing's read: one open, one seek to
-	// the end, and one positioned read.
+	// agyStallTailBytes bounds one firing's read: one open, one stat, at
+	// most one seek, and a bounded read.
 	agyStallTailBytes = 512 << 10
 	// agyStallSkew is the margin between the daemon's clock reading at a
 	// request boundary and agy's own log timestamps.
@@ -28,9 +28,6 @@ const (
 	// agyLocateScanBytes bounds the content scan of one candidate log. A
 	// process serves one session, and its first prompt names it.
 	agyLocateScanBytes = 8 << 20
-	// agyLocateSlack widens "modified since the process started" for file
-	// timestamp granularity.
-	agyLocateSlack = 2 * time.Second
 	// AgyFrameLogName is the frame trace capture file in a session's
 	// directory.
 	AgyFrameLogName = "agy-http2-frames.log"
@@ -48,7 +45,8 @@ const (
 	// the model is generating.
 	agyStallHeader
 	// agyStallHeaderless: a verified tail shows no main-request header at
-	// or after the boundary minus the skew margin.
+	// or after the boundary minus the skew margin, and this process's log
+	// has shown a main-request header before.
 	agyStallHeaderless
 )
 
@@ -68,21 +66,34 @@ func agyDefaultLogDir() string {
 // agyStallLog is one agy process's worker log: located once, on the first
 // silence firing, and cached for the process lifetime.
 type agyStallLog struct {
-	dir   string
+	dir string
+	// since is the process start (or the daemon's rejoin of it): a log
+	// last modified before it belongs to an earlier process.
 	since time.Time
 	// tried is set after the one locator scan; path is its result, err
 	// why it found none.
 	tried bool
 	path  string
 	err   error
+	// sawMain is set once a tail of this process's log has shown a
+	// main-request header. Until then a firing never cuts: a monitor
+	// header verifies the format but proves nothing about main requests.
+	sawMain bool
 }
 
+// newAgyStallLog takes started with no backward slack: a predecessor
+// process of the same session stopped before it, so its log does not
+// qualify, and a coarse file timestamp only makes the log unknown.
+//
+// agy names a worker log after the worker's pid, which the daemon never
+// learns (it starts the front process, which starts the worker), so the
+// locator matches by session and modification time, not by pid.
 func newAgyStallLog(dir string, started time.Time) *agyStallLog {
-	return &agyStallLog{dir: dir, since: started.Add(-agyLocateSlack)}
+	return &agyStallLog{dir: dir, since: started}
 }
 
-// verdict reads the cached log's tail once and judges it against boundary.
-// The locator scan runs at most once per process.
+// verdict reads the cached log's tail once and judges it against boundary
+// in the local zone. The locator scan runs at most once per process.
 func (l *agyStallLog) verdict(sessionID string, boundary time.Time) (agyStallVerdict, string) {
 	if l == nil {
 		return agyStallUnknown, "no agy process log state"
@@ -98,10 +109,16 @@ func (l *agyStallLog) verdict(sessionID string, boundary time.Time) (agyStallVer
 	if err != nil {
 		return agyStallUnknown, err.Error()
 	}
-	return parseAgyStallTail(tail, clipped, boundary, agyStallSkew)
+	verdict, anyMain, reason := parseAgyStallTail(tail, clipped, boundary.Local(), agyStallSkew)
+	l.sawMain = l.sawMain || anyMain
+	if verdict == agyStallHeaderless && !l.sawMain {
+		return agyStallUnknown, "this agy process's log has shown no main request header yet"
+	}
+	return verdict, reason
 }
 
-// locateAgyWorkerLog finds the newest acp-worker-*.log modified since since
+// locateAgyWorkerLog finds the newest acp-worker-*.log modified at or after
+// since
 // whose content names sessionID in agy's "Sending user message to
 // conversation <id>" line.
 func locateAgyWorkerLog(dir, sessionID string, since time.Time) (string, error) {
@@ -164,37 +181,52 @@ func agyLogNames(path string, needle []byte) bool {
 	return false
 }
 
-// readAgyLogTail reads at most limit bytes from the end of path with one
-// open, one seek, and one positioned read. clipped reports that the tail
-// starts inside the file, so its first line may be partial.
+// readAgyLogTail reads at most limit bytes from the end of path: one open,
+// one stat of the open file, one seek when the file is longer than limit,
+// and sequential reads of the remaining bytes (one read in the usual case).
+// ReadAt is avoided: on Windows a positioned read on a blocking handle
+// saves and restores the file pointer with two more seeks. clipped reports
+// that the tail starts inside the file, so its first line may be partial.
 func readAgyLogTail(path string, limit int64) ([]byte, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, false, fmt.Errorf("open agy log: %w", err)
 	}
 	defer f.Close()
-	end, err := f.Seek(0, io.SeekEnd)
+	info, err := f.Stat()
 	if err != nil {
-		return nil, false, fmt.Errorf("seek agy log: %w", err)
+		return nil, false, fmt.Errorf("stat agy log: %w", err)
 	}
-	start := max(0, end-limit)
-	buf := make([]byte, end-start)
-	n, err := f.ReadAt(buf, start)
-	if err != nil && !(errors.Is(err, io.EOF) && n == len(buf)) {
+	size := info.Size()
+	start := max(0, size-limit)
+	if start > 0 {
+		if _, err := f.Seek(start, io.SeekStart); err != nil {
+			return nil, false, fmt.Errorf("seek agy log: %w", err)
+		}
+	}
+	// The file may change after the stat: read what is there, at most the
+	// planned bytes.
+	buf := make([]byte, size-start)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil, false, fmt.Errorf("read agy log: %w", err)
 	}
 	return buf[:n], start > 0, nil
 }
 
-// agyLogLine is one parsed glog line of a tail.
+// agyLogLine is one parsed glog line of a tail. A local time that a clock
+// rollback repeats names two instants: at is the earlier and late the later
+// (equal when the time is unambiguous).
 type agyLogLine struct {
 	at        time.Time
+	late      time.Time
 	goroutine string
 	file      string
 	msg       string
 }
 
-// parseAgyStallTail judges a tail against the request boundary:
+// parseAgyStallTail judges a tail against the request boundary, in the
+// boundary's location:
 //   - coverage: the first complete glog line is before boundary-skew;
 //   - format: at least one streamGenerateContent header line (main or
 //     monitor) is in this tail;
@@ -203,24 +235,28 @@ type agyLogLine struct {
 //
 // A verified tail with a main header at or after boundary-skew is
 // agyStallHeader, one without is agyStallHeaderless; anything else is
-// agyStallUnknown with the reason.
-func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.Duration) (agyStallVerdict, string) {
+// agyStallUnknown with the reason. anyMain reports a main header anywhere
+// in the tail, inside the window or not.
+//
+// An ambiguous local time counts on the side that never cuts: a header in
+// the window under either reading is in the window, and the first line
+// covers the boundary only if both readings precede the window.
+func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.Duration) (verdict agyStallVerdict, anyMain bool, reason string) {
 	if boundary.IsZero() {
-		return agyStallUnknown, "no request boundary"
+		return agyStallUnknown, false, "no request boundary"
 	}
 	if clipped {
 		nl := bytes.IndexByte(tail, '\n')
 		if nl < 0 {
-			return agyStallUnknown, "the agy log tail holds no complete line"
+			return agyStallUnknown, false, "the agy log tail holds no complete line"
 		}
 		tail = tail[nl+1:]
 	}
-	local := boundary.Local()
 	window := boundary.Add(-skew)
 	var lines []agyLogLine
 	monitors := map[string]bool{}
 	for _, raw := range strings.Split(string(tail), "\n") {
-		line, ok := parseAgyGlogLine(strings.TrimSuffix(raw, "\r"), local)
+		line, ok := parseAgyGlogLine(strings.TrimSuffix(raw, "\r"), boundary)
 		if !ok {
 			continue
 		}
@@ -230,10 +266,7 @@ func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.
 		lines = append(lines, line)
 	}
 	if len(lines) == 0 {
-		return agyStallUnknown, "the agy log tail holds no glog line"
-	}
-	if !lines[0].at.Before(window) {
-		return agyStallUnknown, "the agy log tail starts after the request boundary"
+		return agyStallUnknown, false, "the agy log tail holds no glog line"
 	}
 	recognized, main := false, false
 	for _, line := range lines {
@@ -241,17 +274,23 @@ func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.
 			continue
 		}
 		recognized = true
-		if !monitors[line.goroutine] && !line.at.Before(window) {
+		if monitors[line.goroutine] {
+			continue
+		}
+		anyMain = true
+		if !line.late.Before(window) {
 			main = true
 		}
 	}
 	switch {
+	case !lines[0].late.Before(window):
+		return agyStallUnknown, anyMain, "the agy log tail starts after the request boundary"
 	case !recognized:
-		return agyStallUnknown, "the agy log tail holds no recognized streamGenerateContent header line"
+		return agyStallUnknown, anyMain, "the agy log tail holds no recognized streamGenerateContent header line"
 	case main:
-		return agyStallHeader, ""
+		return agyStallHeader, anyMain, ""
 	}
-	return agyStallHeaderless, ""
+	return agyStallHeaderless, anyMain, ""
 }
 
 // agyHeaderLine reports an http_helpers.go line agy logs once a
@@ -264,9 +303,10 @@ func agyHeaderLine(line agyLogLine) bool {
 	return ok && strings.Contains(url, "streamGenerateContent")
 }
 
-// parseAgyGlogLine parses one glog line. glog stamps local month, day, and
-// time without a year: the year is the boundary's, moved by one when that
-// puts the line more than half a year from the boundary (a year wrap).
+// parseAgyGlogLine parses one glog line in the boundary's location. glog
+// stamps local month, day, and time without a year: the year is the
+// boundary's, moved by one when that puts the line more than half a year
+// from the boundary (a year wrap).
 func parseAgyGlogLine(raw string, boundary time.Time) (agyLogLine, bool) {
 	m := agyGlogLine.FindStringSubmatch(raw)
 	if m == nil {
@@ -282,16 +322,52 @@ func parseAgyGlogLine(raw string, boundary time.Time) (agyLogLine, bool) {
 	if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || sec > 60 {
 		return agyLogLine{}, false
 	}
-	at := time.Date(boundary.Year(), time.Month(month), day, hour, minute, sec, micros*1000, boundary.Location())
+	loc := boundary.Location()
+	year := boundary.Year()
+	at := time.Date(year, time.Month(month), day, hour, minute, sec, micros*1000, loc)
 	if at.Month() != time.Month(month) {
 		// Feb 29 in a non-leap boundary year; the log is a year away.
-		at = time.Date(boundary.Year()-1, time.Month(month), day, hour, minute, sec, micros*1000, boundary.Location())
+		year--
+		at = time.Date(year, time.Month(month), day, hour, minute, sec, micros*1000, loc)
 	}
 	switch {
 	case at.After(boundary.AddDate(0, 6, 0)):
-		at = at.AddDate(-1, 0, 0)
+		year--
 	case at.Before(boundary.AddDate(0, -6, 0)):
-		at = at.AddDate(1, 0, 0)
+		year++
 	}
-	return agyLogLine{at: at, goroutine: m[7], file: m[8], msg: m[9]}, true
+	early, late := localInstants(year, time.Month(month), day, hour, minute, sec, micros*1000, loc)
+	return agyLogLine{at: early, late: late, goroutine: m[7], file: m[8], msg: m[9]}, true
+}
+
+// localInstants returns the earliest and latest instants whose wall clock in
+// loc reads the given time. They differ only inside an hour that a clock
+// rollback repeats; a time that a forward jump skips normalizes as
+// time.Date does.
+func localInstants(year int, month time.Month, day, hour, minute, sec, nsec int, loc *time.Location) (time.Time, time.Time) {
+	t := time.Date(year, month, day, hour, minute, sec, nsec, loc)
+	early, late := t, t
+	_, before := t.Add(-24 * time.Hour).Zone()
+	_, after := t.Add(24 * time.Hour).Zone()
+	if before == after {
+		return early, late
+	}
+	shift := time.Duration(before-after) * time.Second
+	if shift < 0 {
+		shift = -shift
+	}
+	for _, alt := range []time.Time{t.Add(-shift), t.Add(shift)} {
+		y, mo, d := alt.Date()
+		h, mi, s := alt.Clock()
+		if y != year || mo != month || d != day || h != hour || mi != minute || s != sec {
+			continue
+		}
+		if alt.Before(early) {
+			early = alt
+		}
+		if alt.After(late) {
+			late = alt
+		}
+	}
+	return early, late
 }

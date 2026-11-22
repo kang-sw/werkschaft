@@ -540,6 +540,11 @@ def stderr_child(data: bytes) -> list:
     return py_child("import sys\nsys.stderr.buffer.write(%r)\nsys.stderr.flush()\nprint('out', flush=True)\n" % data)
 
 
+def read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def capture_lines(path: str) -> list:
     with open(path, "rb") as f:
         lines = f.read().splitlines()
@@ -597,6 +602,17 @@ class Http2CaptureTest(HolderTestCase):
         self.assertEqual(stderr, [b"before\n", b"after\n"])
         self.assertEqual(capture_lines(path), [b"Framer 0xc000abc: read DATA stream=11 len=9000"])
 
+    def test_a_continuation_starting_like_a_trace_line_stays_in_the_ring(self):
+        path = self.capture_path()
+        ordinary = b"x" * 128 + b"http2: Framer 0xc0001: read DATA stream=1 len=1\n"
+        with mock.patch.object(holder_mod, "MAX_RECORD_BYTES", 128):
+            holder = self.start_holder()
+        stderr, _ = self.run_child(holder, ordinary, http2_capture={"path": path})
+        self.assertGreater(len(stderr), 1)
+        self.assertTrue(stderr[1].startswith(b"http2: "))
+        self.assertEqual(b"".join(stderr), ordinary)
+        self.assertFalse(os.path.exists(path))
+
     def test_capture_stops_at_its_cap_with_one_marker(self):
         path = self.capture_path()
         line = b"http2: Framer 0xc0001: read HEADERS flags=END_HEADERS stream=1 len=10\n"
@@ -605,12 +621,77 @@ class Http2CaptureTest(HolderTestCase):
         self.assertEqual(stderr, [])
         with open(path, "rb") as f:
             content = f.read()
-        lines = content.splitlines()
-        markers = [l for l in lines if b"frame capture stopped at 400 bytes" in l]
-        self.assertEqual(len(markers), 1)
-        self.assertIs(lines[-1], markers[0])
-        self.assertTrue(all(b"read HEADERS" in l for l in lines[:-1]))
-        self.assertLessEqual(len(content) - len(markers[0]) - 1, 400)
+        self.assertLessEqual(len(content), 400)
+        self.assertTrue(content.endswith(holder_mod.HTTP2_CAPTURE_STOP))
+        self.assertEqual(content.count(holder_mod.HTTP2_CAPTURE_STOP), 1)
+        kept = content[: -len(holder_mod.HTTP2_CAPTURE_STOP)].splitlines()
+        self.assertTrue(kept)
+        self.assertTrue(all(b"read HEADERS" in l for l in kept))
+
+    def test_capture_cap_counts_the_marker_for_any_line_length(self):
+        path = self.capture_path()
+        mark = len(holder_mod.HTTP2_CAPTURE_STOP)
+        logs = []
+        for cap in (mark - 1, mark, mark + 1, 200, 400):
+            if os.path.exists(path):
+                os.unlink(path)
+            capture = holder_mod.Http2Capture(path, cap, logs.append)
+            for n in (10, 300, 10, 10):
+                capture.write(b"Framer 0xc0: read DATA len=%d " % n + b"y" * n)
+            capture.close()
+            content = read_bytes(path) if os.path.exists(path) else b""
+            self.assertLessEqual(len(content), cap, cap)
+            self.assertLessEqual(content.count(holder_mod.HTTP2_CAPTURE_STOP), 1, cap)
+        self.assertEqual(logs, [])
+
+    def test_capture_reopened_at_its_cap_or_after_its_marker_writes_nothing(self):
+        path = self.capture_path()
+        line = b"http2: Framer 0xc0001: read HEADERS flags=END_HEADERS stream=1 len=10\n"
+        # A file exactly at the cap.
+        with open(path, "wb") as f:
+            f.write(b"z" * 399 + b"\n")
+        holder = self.start_holder()
+        self.run_child(holder, line * 3, http2_capture={"path": path, "max_bytes": 400})
+        self.assertEqual(read_bytes(path), b"z" * 399 + b"\n")
+        # A file a stopped capture ended, well under the cap.
+        stopped = b"earlier line\n" + holder_mod.HTTP2_CAPTURE_STOP
+        with open(path, "wb") as f:
+            f.write(stopped)
+        holder = self.start_holder()
+        self.run_child(holder, line * 3, http2_capture={"path": path, "max_bytes": 4000})
+        self.assertEqual(read_bytes(path), stopped)
+
+    def test_capture_note_goes_through_the_capture_and_its_cap(self):
+        path = self.capture_path()
+        holder = self.start_holder()
+        client = self.attached(holder)
+        self.spawn(client, STDIN_EXIT, mode="pipe", http2_capture={"path": path, "max_bytes": 200})
+        client.events_until(lambda m: is_output(m, b"ready"))
+        reply = client.request("capture_note", {"text": "ws: headerless cutoff\nboundary=1"})
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(reply["captured"])
+        self.assertEqual(capture_lines(path), [b"ws: headerless cutoff boundary=1"])
+        for _ in range(10):
+            reply = client.request("capture_note", {"text": "ws: headerless cutoff " + "n" * 40})
+        self.assertFalse(reply["captured"])
+        self.assertFalse(client.request("capture_note", {"text": ""})["ok"])
+        self.assertTrue(client.request("input", {"data": "", "eof": True})["ok"])
+        self.wait_exit_record(client)
+        content = read_bytes(path)
+        self.assertLessEqual(len(content), 200)
+        self.assertEqual(content.count(holder_mod.HTTP2_CAPTURE_STOP), 1)
+
+    def test_capture_note_without_a_capture_writes_nothing(self):
+        holder = self.start_holder()
+        client = self.attached(holder)
+        self.spawn(client, STDIN_EXIT, mode="pipe")
+        client.events_until(lambda m: is_output(m, b"ready"))
+        reply = client.request("capture_note", {"text": "ws: headerless cutoff"})
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(reply["captured"])
+        self.assertTrue(client.request("input", {"data": "", "eof": True})["ok"])
+        self.wait_exit_record(client)
+        self.assertFalse(os.path.exists(self.capture_path()))
 
     def test_without_capture_stderr_is_unchanged_and_no_file_is_written(self):
         holder = self.start_holder()
