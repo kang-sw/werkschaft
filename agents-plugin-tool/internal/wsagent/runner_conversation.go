@@ -105,7 +105,10 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		settleC:      make(chan struct{}),
 	}
 	c.refreshAmbient()
-	if !rec.Lead {
+	// Derived from the record's immutable backend on every load, with no
+	// stored field, and before any profile or config read.
+	refusal := r.admitWorkerRecord(rec)
+	if !rec.Lead && refusal == nil {
 		if level, source, err := r.currentWorkerPermission(rec); err == nil {
 			c.workerPermissionLevel = level
 			c.workerPermissionSource = source
@@ -186,10 +189,10 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 			c.lastErr = last.Result.Error
 		}
 	}
-	if refusal := r.admitWorkerRecord(rec); refusal != nil {
-		// Derived from the record's immutable backend on every load, with no
-		// stored field: a worker on a lead-only backend shows why it does not
-		// run, whatever its last turn says.
+	if refusal != nil {
+		// A worker on a lead-only backend shows why it does not run,
+		// whatever its last turn says (interrupted settles a turn left
+		// open with this reason too).
 		c.lastErr = refusal.Error()
 	}
 	c.writeRegistration()

@@ -155,11 +155,12 @@ name-free.
   migration-relevant prerequisite, because it adds Codex permission mapping to
   `support.go`/launch sites in this inventory. Keep this ticket in `todo/`
   until that phase has landed on `develop`. Not prerequisites: that ticket's
-  Phase 4 (agy, owner-account gated) and Phase 5, and
-  `261118-feat-ws-agy-tool-names-and-worker-role` Phase 3 (knob-gated probes),
-  because they wait on external gates and would hold this umbrella
-  indefinitely; any site they add must use the (1880) seam, and Phase 4's
-  residual audit catches what they move. `261117-feat-ws-exec-tools` and the
+  Phase 4 (agy, owner-account gated) and Phase 5, because they wait on
+  external gates and would hold this umbrella indefinitely; any site they add
+  must use the (1880) seam, and Phase 4's residual audit catches what they
+  move. `261118-feat-ws-agy-tool-names-and-worker-role` Phase 3 is not a
+  prerequisite either: it was retired by owner decision (1545) and adds no
+  sites. `261117-feat-ws-exec-tools` and the
   child-session tickets add new code under the same seam rule and are not
   prerequisites. Neither are `261114-feat-ws-live-reasoning-summary` and
   `261115-feat-ws-claude-reasoning-summary-producer`, although they touch

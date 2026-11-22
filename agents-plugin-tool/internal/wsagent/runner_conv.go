@@ -236,9 +236,12 @@ type conv struct {
 	// attached for the ownership match only. checkReattach ends a matching
 	// holder (retireLeadOnlyWorker) and never stops a mismatched one.
 	leadOnlyRejoin bool
-	mcpChecking    bool
-	mcpAgain       bool
-	mcpAgainNames  []string
+	// leadOnlyRetiring is a matched lead-only holder whose stop failed; each
+	// heartbeat's checkReattach retries it until it ends.
+	leadOnlyRetiring bool
+	mcpChecking      bool
+	mcpAgain         bool
+	mcpAgainNames    []string
 	// retry is the API request retry under way; alerted that the running
 	// turn brought a typed failure, so its end clears none.
 	retry   *wslive.Retry

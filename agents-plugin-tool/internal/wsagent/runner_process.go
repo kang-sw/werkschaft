@@ -102,15 +102,23 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	}
 	defer releaseAdmission()
 	c.mcpStale = false
-	c.loadCompaction()
-	c.loadModelWait()
+	// A lead-only rejoin attaches only to match ownership and end the
+	// holder: no compaction, agy watchdog, or permission config is read.
+	leadOnly := attach && c.leadOnlyRejoin
+	if !leadOnly {
+		c.loadCompaction()
+		c.loadModelWait()
+	}
 	if rec.Backend == BackendPi && !attach {
 		if err := c.r.checkChildProfile(rec.Parent, rec.Profile, def); err != nil {
 			return err
 		}
 	}
 	level, source := PermissionLevel(""), ""
-	if attach {
+	if leadOnly {
+		// Keeps the level startConv left (none for a refused record).
+		level, source = c.workerPermissionLevel, c.workerPermissionSource
+	} else if attach {
 		var err error
 		level, source, err = c.r.workerPermission(rec, def, c.dir)
 		if err != nil {
@@ -597,14 +605,18 @@ func (c *conv) reattach() {
 		c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), true })
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s refused: %v\n", rec.ReplyID, rec.HolderID, err)
 	}
+	// A lead-only rejoin never runs, so it reads no profile (startWorker
+	// skips its config reads too).
 	def := Profile{Backend: rec.Backend, Lead: rec.Lead}
-	if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
-		def = *rec.ResolvedDefinition
-	} else if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
-		// Best-effort mapping for a legacy held process is not evidence of
-		// what it launched with. Keep its child ceiling unavailable until
-		// an actual startWorker launch records the checked definition.
-		def = rp.Definition
+	if !c.leadOnlyRejoin {
+		if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
+			def = *rec.ResolvedDefinition
+		} else if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
+			// Best-effort mapping for a legacy held process is not evidence of
+			// what it launched with. Keep its child ceiling unavailable until
+			// an actual startWorker launch records the checked definition.
+			def = rp.Definition
+		}
 	}
 	var err error
 	if rec.Lead {
@@ -636,6 +648,11 @@ func (c *conv) checkReattach() {
 	if c.workerRetiring {
 		c.retireDowngradedWorker(hp)
 		c.leadOnlyRetired()
+		return
+	}
+	if c.leadOnlyRetiring {
+		// The ownership match passed before the first, failed stop.
+		c.retireLeadOnlyWorker(hp)
 		return
 	}
 	id, _, _ := hp.HolderInfo()

@@ -44,8 +44,11 @@ func (c *conv) restoreWorkerMCP() {
 //     error.
 //   - An open turn settles failed with that reason, as a process gone at
 //     rejoin does (processGone).
-//   - A failed stop keeps the holder in the record, publishes nothing, and
-//     says so; the next daemon's rejoin tries again.
+//   - A failed stop keeps the holder in the record and the detached
+//     association, publishes nothing, and says so. The conversation stays
+//     replaying (it submits nothing), and each heartbeat's checkReattach
+//     tries the stop again (leadOnlyRetiring), as a downgrade retirement
+//     does.
 func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
 	refusal := c.r.admitWorkerRecord(c.rec)
 	if refusal == nil {
@@ -53,31 +56,40 @@ func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
 	}
 	reason := refusal.Error()
 	id := c.rec.HolderID
-	hp.Detach()
-	c.events = nil
-	c.replaying, c.replayAsked = false, false
+	if !c.leadOnlyRetiring {
+		hp.Detach()
+		c.events = nil
+	}
 	if err := c.r.opts.Holders.Stop(id); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
-		c.setStatus(func() {
-			c.proc = nil
-			c.lastErr = fmt.Sprintf("%s; the session's previous process could not be ended (holder %s): %v", reason, id, err)
-		})
-		fmt.Fprintf(c.r.opts.Log, "agent %s: end lead-only worker holder %s: %v\n", c.rec.ReplyID, id, err)
-		c.writeRegistration()
+		c.leadOnlyRetiring = true
+		// The next beat asks again; replaying keeps checkReattach running.
+		c.replayAsked = false
+		msg := fmt.Sprintf("%s; the session's previous process could not be ended (holder %s): %v", reason, id, err)
+		if msg != c.lastErr {
+			c.setStatus(func() { c.lastErr = msg })
+			fmt.Fprintf(c.r.opts.Log, "agent %s: end lead-only worker holder %s: %v\n", c.rec.ReplyID, id, err)
+			c.writeRegistration()
+		}
 		return
 	}
-	c.setStatus(func() { c.proc = nil })
+	c.leadOnlyRetiring = false
+	c.replaying, c.replayAsked = false, false
+	// A failed attempt's stop error no longer applies.
+	c.setStatus(func() { c.proc, c.lastErr = nil, reason })
 	c.r.revokeToken(c.rec.ReplyID)
-	// The holder and the credentials it carried go in one write.
+	// The holder and the credentials it carried go in one write. A daemon
+	// that dies right after it leaves an open turn the next load settles
+	// with this reason (interrupted).
 	c.update(func(rec *Record) {
 		rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
 		rec.HandedOffAt = ""
 		rec.Capability = ""
 		rec.forgetMCP()
 	})
-	c.leadOnlyRetired()
+	// processEnded settles an open turn failed with the reason the rejoin
+	// set; leadOnlyRetired then writes the one registration.
 	c.processEnded()
-	c.setStatus(func() { c.lastErr = reason })
-	c.writeRegistration()
+	c.leadOnlyRetired()
 }
 
 // leadOnlyRetired closes a lead-only rejoin on whichever path ended it:

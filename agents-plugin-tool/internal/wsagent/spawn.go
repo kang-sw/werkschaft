@@ -386,14 +386,19 @@ func (c *conv) interrupted() {
 	if c.closed || !c.rec.TurnOpen {
 		return
 	}
-	const reason = "the dashboard daemon exited while the turn ran"
+	status, reason := TurnInterrupted, "the dashboard daemon exited while the turn ran"
+	if refusal := c.r.admitWorkerRecord(c.rec); refusal != nil {
+		// A lead-only worker whose holder a daemon ended just before it
+		// died: the turn fails as the retirement would have settled it.
+		status, reason = TurnFailed, refusal.Error()
+	}
 	// Reconcile the lost turn before any queued input can open its successor.
 	// Settlement alone wakes waiters but leaves list/send's running flags stale.
 	c.setStatus(func() { c.turn, c.proc, c.lastErr = false, nil, reason })
 	c.events = nil
 	c.replaying, c.replayAsked, c.replayGap, c.replayBoundary, c.wrapHold = false, false, false, false, false
 	c.apply(wslive.Event{Kind: wslive.KindTurnEnd})
-	c.settleTurn(TurnInterrupted, reason, c.turnMark)
+	c.settleTurn(status, reason, c.turnMark)
 }
 
 // signalSettled wakes every Wait.

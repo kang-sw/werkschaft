@@ -449,6 +449,43 @@ func TestAgyModelWaitWatchdogPublishesExhaustionToHostedLeadConversation(t *test
 	}
 }
 
+// The shipped posture's hosted agy lead (lead-only registration, silence
+// watchdog off) takes an in-band provider failure in its reply stream to the
+// automatic continue: the drain cancels the prompt, and the cancelled
+// prompt's answer sends continue on the same session.
+func TestAgyModelWaitInBandFailureContinuesHostedLeadTurn(t *testing.T) {
+	if agySilenceWatchdogEnabled {
+		t.Fatal("silence watchdog must be off by default")
+	}
+	h, f := newAgyLeadHarness(t)
+	if reg := h.opts.Backends[BackendAgy]; reg.WorkerCapable || reg.leadOnlyReason != agyLeadOnlyReason {
+		t.Fatalf("fixture is not the shipped lead-only posture: %+v", reg)
+	}
+	timers := &leverTimers{}
+	h.opts.Timer = timers.start
+	h.opts.AgyModelWaitBackoff = func(int) time.Duration { return 0 }
+	h.startAt("http://127.0.0.1:1")
+	id := h.lead(BackendAgy, LeadOptions{}).ID
+	f.replyID = id
+	h.send(id, "work")
+	holder := h.holder(id)
+	eventually(t, "hosted lead first prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+
+	h.holders.out(holder, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"\n⚠ API error (attempt 1): stream idle timeout\n"}}}}`)
+	fireWatchdog(t, timers, 0) // the in-band failure drain; no silence timer runs
+	eventually(t, "hosted lead cancel", func() bool { return len(h.holders.acpInputs(holder, "session/cancel")) == 1 })
+	ids := agyPromptIDs(h, holder)
+	h.holders.out(holder, `{"jsonrpc":"2.0","result":{"stopReason":"cancelled"},"id":"`+ids[0]+`"}`)
+	eventually(t, "hosted lead continue prompt", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
+	prompts := h.holders.acpInputs(holder, "session/prompt")
+	if retry := prompts[1]; acpField(t, retry, "sessionId") != "agy-s1" || !strings.Contains(string(retry), `"continue"`) {
+		t.Fatalf("continue prompt = %s", retry)
+	}
+	if st := h.state(id); st.Status != StatusRunning {
+		t.Fatalf("the logical turn ended at the retry: %+v", st)
+	}
+}
+
 func TestAgyModelWaitWatchdogForceStopsWhenInterruptIsIgnored(t *testing.T) {
 	// Exercise the shipped default-three budget: a cancellation that never
 	// lands must still fail on its own grace timer before any retry can start.

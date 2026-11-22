@@ -243,8 +243,10 @@ func TestAgyWorkerRejoinEndsTheHolderAndKeepsTheRecord(t *testing.T) {
 }
 
 // A refused holder stop keeps the holder in the record, says why, publishes
-// nothing, and starts no process; the next daemon ends it.
-func TestAgyWorkerRejoinFailedStopKeepsTheHolderForTheNextDaemon(t *testing.T) {
+// nothing, and starts no process. The same daemon's heartbeat retries the
+// stop until it succeeds; the turn then settles failed with the agy reason,
+// reported once.
+func TestAgyWorkerRejoinRetriesAFailedStopFromTheHeartbeat(t *testing.T) {
 	h, got := workerRecoveryHarness(t, BackendAgy)
 	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
 	leadOnlyAgyNextDaemon(t, h)
@@ -252,29 +254,62 @@ func TestAgyWorkerRejoinFailedStopKeepsTheHolderForTheNextDaemon(t *testing.T) {
 	h.startAt("http://127.0.0.1:1")
 	wait(t, "holder scan", h.runner.rejoined)
 
-	if h.holders.opCount("stop "+holder) != 1 {
-		t.Fatalf("stops = %v", h.holders.opList())
-	}
+	// The heartbeat retries while the stop keeps failing.
+	eventually(t, "a heartbeat retry", func() bool { return h.holders.opCount("stop "+holder) >= 2 })
 	if rec := h.record(id); rec.HolderID != holder || !rec.TurnOpen {
 		t.Fatalf("a failed stop forgot the holder: %+v", rec)
 	}
+	// The process still runs under its holder (Process), detached: nothing
+	// is submitted to it.
 	if st := h.state(id); !strings.HasPrefix(st.Error, agyLeadOnlyReason+"; ") || !strings.HasSuffix(st.Error, "holder busy") {
-		t.Fatalf("state error = %q", st.Error)
+		t.Fatalf("state = %+v", st)
 	}
 	if len(got.list()) != 0 || h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
 		t.Fatalf("a failed stop published or launched: reports %+v, ops %v", got.list(), h.holders.opList())
 	}
 
-	h.runner.Close()
 	h.holders.set(func() { h.holders.stopErr = nil })
-	h.holders.restart()
-	h.startAt("http://127.0.0.1:1")
-	eventually(t, "the next daemon ended the holder", func() bool { return h.holders.opCount("stop "+holder) == 2 })
 	eventually(t, "the failed report", func() bool { return len(got.list()) == 1 })
 	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != agyLeadOnlyReason {
 		t.Fatalf("report = %+v", rep.Result)
 	}
 	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen })
+	stops := h.holders.opCount("stop " + holder)
+	time.Sleep(200 * time.Millisecond) // several heartbeats
+	if st := h.state(id); st.Error != agyLeadOnlyReason || st.Process || st.Status == StatusClosed {
+		t.Fatalf("state = %+v", st)
+	}
+	if h.holders.opCount("stop "+holder) != stops || len(got.list()) != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("retired twice or relaunched: stops %d (was %d), reports %+v, ops %v", h.holders.opCount("stop "+holder), stops, got.list(), h.holders.opList())
+	}
+}
+
+// A daemon that died after the retirement cleared the holder but before the
+// open turn settled leaves an open turn and no holder. The next load settles
+// it failed with the agy reason, not the generic interrupted one.
+func TestAgyWorkerRetirementCrashSettlesWithTheAgyReason(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, _ := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	leadOnlyAgyNextDaemon(t, h)
+	rewriteRecord(t, h, id, func(rec *Record) {
+		rec.HolderID, rec.HostPID, rec.HolderSeq, rec.HandedOffAt = "", 0, 0, ""
+		rec.Capability = ""
+		rec.forgetMCP()
+	})
+	if !h.record(id).TurnOpen {
+		t.Fatal("fixture: the turn is not open")
+	}
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the settled report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != agyLeadOnlyReason {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	if st := h.state(id); st.Error != agyLeadOnlyReason || st.Process || st.Status == StatusClosed {
+		t.Fatalf("state = %+v", st)
+	}
+	if rec := h.record(id); rec.TurnOpen || rec.LastTurn == nil || rec.LastTurn.Result.Status != TurnFailed {
+		t.Fatalf("record = %+v", rec)
+	}
 }
 
 // leadOnlyAgyNextDaemon ends the daemon, its held processes running on, and
@@ -381,10 +416,11 @@ func TestAgyWorkerRetirementRestartsTheExpiryClock(t *testing.T) {
 	h.startAt("http://127.0.0.1:1")
 	eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
 	eventually(t, "the record to forget the holder", func() bool { return h.record(id).HolderID == "" })
+	c := h.runner.conv(id)
+	c.do(func() {}) // the retirement's loop step has finished
 	if at := lastActive(h.record(id)); time.Since(at) > time.Hour {
 		t.Fatalf("last activity %v was not stamped at retirement", at)
 	}
-	c := h.runner.conv(id)
 	expiring := true
 	c.do(func() {
 		c.expireIfDue()
@@ -400,16 +436,26 @@ func TestAgyWorkerRetirementRestartsTheExpiryClock(t *testing.T) {
 
 // The agy reason is derived from the record's backend on every load, with no
 // stored field, so it survives the restart after the retirement. This holds
-// for a parentless worker (no last turn) and an idle parented one (a done
-// last turn).
+// for a parentless worker retired while a user turn runs (a profile-created
+// worker can run one; its record persists the start time but no TurnOpen and
+// no last turn) and for an idle parented one (a done last turn).
 func TestAgyWorkerRefusalReasonSurvivesARestart(t *testing.T) {
 	for _, parentless := range []bool{true, false} {
 		t.Run(fmt.Sprintf("parentless=%v", parentless), func(t *testing.T) {
 			h, _ := workerRecoveryHarness(t, BackendAgy)
-			id, holder := idleHeldAgyWorker(t, h)
+			var id, holder string
+			if parentless {
+				// The holder's process is mid-turn when the daemon exits.
+				id, holder = spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+			} else {
+				id, holder = idleHeldAgyWorker(t, h)
+			}
 			leadOnlyAgyNextDaemon(t, h)
 			if parentless {
-				rewriteRecord(t, h, id, func(rec *Record) { rec.Parent, rec.LastTurn = nil, nil })
+				rewriteRecord(t, h, id, func(rec *Record) { rec.Parent, rec.TurnOpen, rec.LastTurn = nil, false, nil })
+				if h.record(id).TurnStartedAt == 0 {
+					t.Fatal("fixture: no running user turn")
+				}
 			}
 			h.startAt("http://127.0.0.1:1")
 			eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
