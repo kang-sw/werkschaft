@@ -694,7 +694,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T09:22:28Z"
+        "touched_at": "2026-11-22T09:23:03Z",
+        "impl": {
+          "branch": "impl/develop/kept-salon-derby"
+        }
       }
     },
     "261122-feat-ws-harness-native-subagent-preference": {
