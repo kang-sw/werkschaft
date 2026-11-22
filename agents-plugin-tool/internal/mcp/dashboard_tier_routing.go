@@ -31,10 +31,14 @@ type dashboardTierView struct {
 	Revision string `json:"revision,omitempty"`
 	// Error is why the value does not parse or validate; a draft with an
 	// error is refused on save. Empty when the graph is usable.
-	Error      string                `json:"error,omitempty"`
-	Collisions []string              `json:"collisions"`
-	Nodes      []dashboardTierNode   `json:"nodes"`
-	Bundles    []dashboardTierBundle `json:"bundles"`
+	Error string `json:"error,omitempty"`
+	// Unavailable names each harness agent.spawn cannot launch on now, with
+	// why (the runner's availability check); a route ending there carries
+	// the same reason. Empty without a runner to ask.
+	Unavailable map[string]string     `json:"unavailable,omitempty"`
+	Collisions  []string              `json:"collisions"`
+	Nodes       []dashboardTierNode   `json:"nodes"`
+	Bundles     []dashboardTierBundle `json:"bundles"`
 }
 
 // dashboardTierNode is one routing node. Pointers are effective (packaged
@@ -69,7 +73,9 @@ type dashboardTierEdge struct {
 
 // dashboardTierRoute is one resolution: Size is the requested size ("" for
 // a bare bundle name), Resolved the routed size, and Model and Effort the
-// binding agent.spawn launches (BindingError when it has none).
+// binding agent.spawn launches (BindingError when it has none). Unavailable
+// is why agent.spawn cannot launch the terminal harness now; the route then
+// has no binding and BindingError says the same.
 type dashboardTierRoute struct {
 	Token             string             `json:"token"`
 	Size              string             `json:"size,omitempty"`
@@ -82,6 +88,7 @@ type dashboardTierRoute struct {
 	Effort            string             `json:"effort,omitempty"`
 	CallerFallthrough bool               `json:"caller_fallthrough,omitempty"`
 	BindingError      string             `json:"binding_error,omitempty"`
+	Unavailable       string             `json:"unavailable,omitempty"`
 	Error             string             `json:"error,omitempty"`
 }
 
@@ -96,8 +103,11 @@ type dashboardTierBundle struct {
 // with traces for harness (empty or unknown: claude, else the first known
 // harness). Validation matches the dashboard write rule: packaged roles and
 // the built-in harnesses; legacy aliases apply at resolution as they do for
-// agent.spawn.
-func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string) (dashboardTierView, error) {
+// agent.spawn. available is the spawn's harness availability check
+// (wsagent Runner.SpawnableHarness: why a harness cannot launch now, ""
+// when it can); it runs once per harness and marks every route ending on an
+// unavailable harness, as agent.spawn would refuse it. Nil skips it.
+func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(string) string) (dashboardTierView, error) {
 	roles, err := packagedTierRoles(rsrc)
 	if err != nil {
 		return dashboardTierView{}, err
@@ -112,6 +122,26 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 	}
 	view := dashboardTierView{Harness: harness, Harnesses: harnesses, Sizes: wsconfig.TierSizes, MaxHops: wsconfig.TierRoutingMaxHops, Collisions: []string{}, Nodes: []dashboardTierNode{}, Bundles: []dashboardTierBundle{}}
+	checked := map[string]string{}
+	unavailable := func(h string) string {
+		if available == nil || h == "" {
+			return ""
+		}
+		why, ok := checked[h]
+		if !ok {
+			why = available(h)
+			checked[h] = why
+		}
+		return why
+	}
+	for _, h := range harnesses {
+		if why := unavailable(h); why != "" {
+			if view.Unavailable == nil {
+				view.Unavailable = map[string]string{}
+			}
+			view.Unavailable[h] = why
+		}
+	}
 	var routing wsconfig.TierRouting
 	var parseErr error
 	if draft == nil {
@@ -175,11 +205,11 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 		view.Nodes[i].Depth = tierNodeDepth(view.Nodes, index, i, map[int]bool{}, depths)
 		for _, size := range wsconfig.TierSizes {
-			view.Nodes[i].Routes = append(view.Nodes[i].Routes, dashboardTierResolve(graph, opts, view.Nodes[i].Name+":"+size, size, harness))
+			view.Nodes[i].Routes = append(view.Nodes[i].Routes, dashboardTierResolve(graph, opts, view.Nodes[i].Name+":"+size, size, harness, unavailable))
 		}
 	}
 	for _, name := range sortedKeys(bundles) {
-		b := dashboardTierBundle{Name: name, TierBundle: bundles[name], Inbound: []string{}, Route: dashboardTierResolve(graph, opts, name, "", harness)}
+		b := dashboardTierBundle{Name: name, TierBundle: bundles[name], Inbound: []string{}, Route: dashboardTierResolve(graph, opts, name, "", harness, unavailable)}
 		if refs := inbound[name]; refs != nil {
 			b.Inbound = refs
 		}
@@ -236,8 +266,10 @@ func tierNodeDepth(nodes []dashboardTierNode, index map[string]int, i int, seen 
 }
 
 // dashboardTierResolve resolves token as agent.spawn does for a caller on
-// harness, with the binding it would launch.
-func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, token, size, harness string) dashboardTierRoute {
+// harness, with the binding it would launch: none when unavailable reports
+// that the terminal harness cannot launch now, which agent.spawn checks
+// before the harness's tier slot.
+func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, token, size, harness string, unavailable func(string) string) dashboardTierRoute {
 	route := dashboardTierRoute{Token: token, Size: size}
 	res, err := graph.Resolve(token, harness)
 	if err != nil {
@@ -246,6 +278,10 @@ func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, toke
 	}
 	route.Trace, route.Hops, route.Harness, route.Resolved, route.Bundle = res.Trace(), res.Hops, res.Harness, res.Size, res.Bundle
 	route.CallerFallthrough = res.CallerFallthrough
+	if why := unavailable(res.Harness); why != "" {
+		route.Unavailable, route.BindingError = why, why
+		return route
+	}
 	binding, err := wsagent.RoutedTierBinding(opts, res)
 	if err != nil {
 		route.BindingError = err.Error()

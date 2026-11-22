@@ -77,7 +77,15 @@ func TestTierRoutingUIBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := mcp.NewDashboardSessionSource()
-	backend, err := mcp.DashboardConfigBackend("ws", wsconfig.Options{CacheHome: cache, ConfigHome: home}, source, nil)
+	// agy cannot spawn here, as on a machine without it: the graph's routes
+	// to it say so, as agent.spawn would refuse them.
+	agyMissing := func(harness string) string {
+		if harness == "agy" {
+			return `harness "agy" is not installed`
+		}
+		return ""
+	}
+	backend, err := mcp.DashboardConfigBackend("ws", wsconfig.Options{CacheHome: cache, ConfigHome: home}, source, nil, agyMissing)
 	if err != nil {
 		t.Fatal(err)
 	}

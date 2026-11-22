@@ -83,6 +83,17 @@ const shot = name => shots ? path.join(shots, name) : undefined;
     assert.deepEqual(traceChips.map(c => c.split(' · ')[0]), [workerRoute.token, ...workerRoute.hops.map(h => h.to)]);
     assert.match(traceChips.at(-1), /claude\.medium · caller/);
     assert.match(traceChips.at(-2), /medium · bare size/);
+    // agy cannot spawn in this daemon: the bundle routed to it, the node
+    // whose route ends there, and its trace say so, and carry no binding.
+    assert.equal(v.unavailable.agy, 'harness "agy" is not installed');
+    const triage = routeOf(v, 'ticket-selector', 'small');
+    assert.equal(triage.unavailable, v.unavailable.agy);
+    assert.equal(triage.model, undefined);
+    assert.match(await card.locator('[data-id="b:fast-triage"] [data-tier-unavailable=agy]').textContent(), /"agy" is not installed/);
+    assert.equal(await card.locator('[data-tier-node=ticket-selector]').getAttribute('data-tier-unavailable'), 'agy');
+    assert.equal(await card.locator('[data-tier-node=ticket-worker]').getAttribute('data-tier-unavailable'), null);
+    await card.locator('[data-tier-node=ticket-selector]').hover();
+    assert.match(await card.locator('.tr-trace [data-tier-unavailable=agy]').textContent(), /"agy" is not installed/);
     await card.screenshot({ path: shot('graph.png') });
     console.log('graph: daemon nodes and edges drawn; implement falls through to claude.large via the caller');
 

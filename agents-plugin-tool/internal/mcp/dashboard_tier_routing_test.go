@@ -54,7 +54,7 @@ func tierViewRoute(t *testing.T, node dashboardTierNode, size string) dashboardT
 // caller's harness, which the traces name for the requested caller.
 func TestDashboardTierRoutingViewDefaultChainAndCallerFallthrough(t *testing.T) {
 	rsrc, opts := dashboardTierFixture(t)
-	view, err := dashboardTierRoutingView(rsrc, opts, nil, "codex")
+	view, err := dashboardTierRoutingView(rsrc, opts, nil, "codex", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestDashboardTierRoutingViewDefaultChainAndCallerFallthrough(t *testing.T) 
 	}
 
 	// Unknown caller harness: the view picks claude and says so.
-	if view, _ := dashboardTierRoutingView(rsrc, opts, nil, "nosuch"); view.Harness != "claude" {
+	if view, _ := dashboardTierRoutingView(rsrc, opts, nil, "nosuch", nil); view.Harness != "claude" {
 		t.Fatalf("fallback caller = %q", view.Harness)
 	}
 }
@@ -101,7 +101,7 @@ func TestDashboardTierRoutingViewDefaultChainAndCallerFallthrough(t *testing.T) 
 func TestDashboardTierRoutingViewDraftReferencesAndPins(t *testing.T) {
 	rsrc, opts := dashboardTierFixture(t)
 	draft := json.RawMessage(`{"nodes":{"review":{"*":"codex.*","small":"claude.small"},"deep-review":{"*":"deep-design"},"ticket-reviewer-design":{"*":"deep-review:*"},"lead-explore":{}},"bundles":{"deep-design":{"harness":"claude","model":"opus-4-6","effort":"high"}}}`)
-	view, err := dashboardTierRoutingView(rsrc, opts, draft, "claude")
+	view, err := dashboardTierRoutingView(rsrc, opts, draft, "claude", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestDashboardTierRoutingViewDraftReferencesAndPins(t *testing.T) {
 func TestDashboardTierRoutingViewRefusesCyclesAndTheHopLimit(t *testing.T) {
 	rsrc, opts := dashboardTierFixture(t)
 	cycle := json.RawMessage(`{"nodes":{"a":{"*":"b:*"},"b":{"small":"a:large"}}}`)
-	view, err := dashboardTierRoutingView(rsrc, opts, cycle, "claude")
+	view, err := dashboardTierRoutingView(rsrc, opts, cycle, "claude", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestDashboardTierRoutingViewRefusesCyclesAndTheHopLimit(t *testing.T) {
 	}
 	nodes["n9"] = map[string]string{}
 	raw, _ := json.Marshal(map[string]any{"nodes": nodes})
-	view, err = dashboardTierRoutingView(rsrc, opts, raw, "claude")
+	view, err = dashboardTierRoutingView(rsrc, opts, raw, "claude", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestDashboardTierRoutingViewRefusesCyclesAndTheHopLimit(t *testing.T) {
 	}
 	raw, _ = json.Marshal(map[string]any{"nodes": dense})
 	start := time.Now()
-	view, err = dashboardTierRoutingView(rsrc, opts, raw, "claude")
+	view, err = dashboardTierRoutingView(rsrc, opts, raw, "claude", nil)
 	if err != nil || view.Error == "" {
 		t.Fatalf("dense cyclic draft: %v %q", err, view.Error)
 	}
@@ -192,7 +192,7 @@ func TestDashboardTierRoutingViewRefusesCyclesAndTheHopLimit(t *testing.T) {
 			t.Fatalf("depth %d past the cap", node.Depth)
 		}
 	}
-	if view, _ := dashboardTierRoutingView(rsrc, opts, json.RawMessage(`{"nodes":{"Bad Name":{}}}`), "claude"); view.Error == "" {
+	if view, _ := dashboardTierRoutingView(rsrc, opts, json.RawMessage(`{"nodes":{"Bad Name":{}}}`), "claude", nil); view.Error == "" {
 		t.Fatal("unparsable draft accepted")
 	}
 }
@@ -204,7 +204,7 @@ func TestDashboardTierRoutingViewNamesTheStoredRevision(t *testing.T) {
 	rsrc, opts := dashboardTierFixture(t)
 	revision := func() string {
 		t.Helper()
-		view, err := dashboardTierRoutingView(rsrc, opts, nil, "claude")
+		view, err := dashboardTierRoutingView(rsrc, opts, nil, "claude", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -228,5 +228,66 @@ func TestDashboardTierRoutingViewNamesTheStoredRevision(t *testing.T) {
 	}
 	if again := revision(); again != empty {
 		t.Fatalf("revision after removal = %q, want %q", again, empty)
+	}
+}
+
+// The view applies agent.spawn's harness availability check at each
+// terminal: a route ending on a harness the runner cannot launch now (an
+// explicit pointer, a bundle, or the caller fallthrough) has no binding and
+// names why, as the spawn would refuse it, and the view lists the harness.
+func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
+	rsrc, opts := dashboardTierFixture(t)
+	calls := map[string]int{}
+	available := func(harness string) string {
+		calls[harness]++
+		if harness == "codex" || harness == "agy" {
+			return fmt.Sprintf("harness %q is not installed", harness)
+		}
+		return ""
+	}
+	draft := json.RawMessage(`{"nodes":{"review":{"*":"codex.*"},"ticket-selector":{"*":"fast"}},"bundles":{"fast":{"harness":"agy","model":"gemini-flash","effort":"low"}}}`)
+	view, err := dashboardTierRoutingView(rsrc, opts, draft, "claude", available)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Error != "" {
+		t.Fatalf("draft error: %s", view.Error)
+	}
+	if view.Unavailable["codex"] != `harness "codex" is not installed` || view.Unavailable["agy"] == "" || view.Unavailable["claude"] != "" {
+		t.Fatalf("unavailable = %v", view.Unavailable)
+	}
+	for harness, n := range calls {
+		if n != 1 {
+			t.Fatalf("harness %s checked %d times, want once per view", harness, n)
+		}
+	}
+	r := tierViewRoute(t, tierViewNode(t, view, "review"), "large")
+	if r.Trace != "review:large -> codex.large" || r.Unavailable != `harness "codex" is not installed` || r.BindingError != r.Unavailable || r.Model != "" {
+		t.Fatalf("review:large = %+v", r)
+	}
+	if r := tierViewRoute(t, tierViewNode(t, view, "ticket-selector"), "small"); r.Bundle != "fast" || r.Unavailable == "" || r.Model != "" {
+		t.Fatalf("ticket-selector:small = %+v", r)
+	}
+	if b := view.Bundles[0]; b.Name != "fast" || b.Route.Unavailable == "" {
+		t.Fatalf("bundle route = %+v", b.Route)
+	}
+	if r := tierViewRoute(t, tierViewNode(t, view, "implement"), "large"); r.Unavailable != "" || r.BindingError != "" || r.Model == "" {
+		t.Fatalf("implement:large on an available caller = %+v", r)
+	}
+	// The caller fallthrough is checked the same way.
+	view, err = dashboardTierRoutingView(rsrc, opts, nil, "codex", available)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := tierViewRoute(t, tierViewNode(t, view, "implement"), "large"); !r.CallerFallthrough || r.Unavailable != `harness "codex" is not installed` || r.Model != "" {
+		t.Fatalf("implement:large on an unavailable caller = %+v", r)
+	}
+	// Without a check, nothing is marked.
+	view, err = dashboardTierRoutingView(rsrc, opts, draft, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Unavailable != nil || tierViewRoute(t, tierViewNode(t, view, "review"), "large").Unavailable != "" {
+		t.Fatalf("no check marked %v", view.Unavailable)
 	}
 }

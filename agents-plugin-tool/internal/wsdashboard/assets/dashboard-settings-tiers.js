@@ -7,7 +7,10 @@
 // resolution. A node with no "*" pointer has an implicit "caller" edge: its
 // requested size, as the bare size, on the caller's harness. That edge ends
 // at its own terminal, so the fallthrough is visible apart from an explicit
-// pointer to the same harness. An edit becomes a draft the daemon previews
+// pointer to the same harness. A harness agent.spawn cannot launch now (the
+// daemon's availability check) is marked on its terminal, on the nodes whose
+// route ends there, and in their traces, which then carry no binding. An
+// edit becomes a draft the daemon previews
 // (POST .../preview) before it can be saved through /api/config/set, which
 // validates again; cycles and the hop limit show inline and leave the
 // stored graph in force. A save carries the revision of the graph it was
@@ -342,9 +345,23 @@
       view.sizes.forEach(function (size) {
         if (node.pointers[size]) card.append(el("span", "tr-exc", ":" + size + " → " + node.pointers[size]));
       });
+      // The card's own route ends on a harness agent.spawn cannot launch.
+      const own = routeFor(node);
+      if (own && own.unavailable) {
+        card.classList.add("unavail");
+        card.dataset.tierUnavailable = own.harness;
+        top.append(unavailMark(own.unavailable));
+      }
       card.addEventListener("mouseenter", function () { setFocus(node.name); });
       card.addEventListener("focus", function () { setFocus(node.name); });
       return card;
+    }
+
+    function unavailMark(why) {
+      const mark = el("span", "tr-unavail-mark", "!");
+      mark.title = why;
+      mark.setAttribute("aria-label", why);
+      return mark;
     }
 
     function terminalCard(view, term) {
@@ -364,6 +381,15 @@
       }
       top.append(el("span", "tr-count", String(inbound)));
       card.append(top);
+      // The daemon's availability check for the terminal's harness.
+      const harness = term.kind === "bundle" ? term.bundle.harness : term.name;
+      const why = view.unavailable && view.unavailable[harness];
+      if (why) {
+        card.classList.add("unavail");
+        const line = el("span", "tr-ptr tr-unavail", why);
+        line.dataset.tierUnavailable = harness;
+        card.append(line);
+      }
       if (term.kind === "bundle") {
         const b = term.bundle;
         card.append(el("span", "tr-ptr mono", [b.harness, b.model, b.effort].filter(Boolean).join(" | ")));
@@ -467,6 +493,7 @@
       if (route.bundle && !(route.hops || []).length) wrap.lastChild.classList.add("end");
       const binding = route.binding_error ? el("span", "tr-err", route.binding_error) :
         el("span", "tr-binding", [route.harness, route.model, route.effort].filter(Boolean).join(" · "));
+      if (route.unavailable) binding.dataset.tierUnavailable = route.harness;
       wrap.append(binding);
       return wrap;
     }

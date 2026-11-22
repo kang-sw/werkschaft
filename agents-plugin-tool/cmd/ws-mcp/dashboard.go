@@ -131,7 +131,7 @@ func dashboardCommand(args []string) {
 	packageName, _, packageErr := wsagent.ResolveHostedPackage()
 	var settings *wsdashboard.ConfigBackend
 	if packageErr == nil {
-		settings, packageErr = mcp.DashboardConfigBackend(packageName, wsconfig.Options{}, sessions, agents.RefreshAmbient)
+		settings, packageErr = mcp.DashboardConfigBackend(packageName, wsconfig.Options{}, sessions, agents.RefreshAmbient, agents.SpawnableHarness)
 	}
 	if packageErr != nil {
 		fmt.Fprintln(logw, "dashboard: settings catalog unavailable:", packageErr)

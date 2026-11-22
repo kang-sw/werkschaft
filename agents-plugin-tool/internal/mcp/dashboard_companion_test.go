@@ -122,7 +122,7 @@ func TestCompanionStdioHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend, err := DashboardConfigBackend("ws", opts, NewDashboardSessionSource(), nil)
+	backend, err := DashboardConfigBackend("ws", opts, NewDashboardSessionSource(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
