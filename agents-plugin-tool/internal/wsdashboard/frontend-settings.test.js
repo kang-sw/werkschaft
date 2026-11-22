@@ -80,7 +80,9 @@ test("settings panel skips companion-modal rows and keeps enabled and director",
   const hidden = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
   assert.deepEqual(hidden, [
     "dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
-    "dashboard.companion_pack", "dashboard.companion_preset"
+    "dashboard.companion_attachments", "dashboard.companion_eyes", "dashboard.companion_hair",
+    "dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
+    "dashboard.companion_preset"
   ]);
   assert.equal(keys.length, shown.length + hidden.length);
 });
@@ -175,5 +177,5 @@ test("the companion modal maps every companion-modal catalog row to a live confi
   const fields = context.window.WsCompanion.companionConfigFields;
   const modal = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
   assert.deepEqual(Object.keys(fields).sort(), modal);
-  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "pack", "preset"]);
+  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "attachments", "eyes", "hair", "outfit", "pack", "palette", "preset"]);
 });

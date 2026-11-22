@@ -6,6 +6,11 @@
   const configFields = {
     "dashboard.companion_pack": "pack",
     "dashboard.companion_preset": "preset",
+    "dashboard.companion_outfit": "outfit",
+    "dashboard.companion_hair": "hair",
+    "dashboard.companion_eyes": "eyes",
+    "dashboard.companion_attachments": "attachments",
+    "dashboard.companion_palette": "palette",
     "dashboard.companion_agent_cooldown_seconds": "agentCooldownSeconds",
     "dashboard.companion_agent_hourly_cap": "agentHourlyCap"
   };
