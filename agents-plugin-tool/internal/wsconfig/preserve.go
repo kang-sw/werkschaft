@@ -1,6 +1,7 @@
 package wsconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"sort"
 	"unicode"
@@ -112,12 +113,15 @@ func jsonNameIs(key string, names ...string) bool {
 	return false
 }
 
-// foldedMember is what the decoder reads for the field name: every member
-// spelled as name, merged. The decoder fills one field from each spelling
-// in turn, so an older writer that kept a second spelling ("Agents" beside
-// "agents") left unknown members in either; they merge here, nested objects
-// member by member, with the exact spelling applied last so it wins a
-// conflicting leaf.
+// foldedMember merges every member spelled as name. The decoder fills one
+// field from each spelling in turn, without zeroing it first, and a JSON
+// null leaves a struct field as it was. So an older writer that kept a
+// second spelling ("Agents" beside "agents") left members in either, and
+// they merge here, nested objects member by member. The exact spelling is
+// applied last, so it wins a conflicting leaf. A null spelling adds nothing
+// and is skipped. On a conflicting leaf this differs from the decoder,
+// which takes the spelling written last in the document; the known fields
+// come from the decoded Config either way.
 func foldedMember(members map[string]json.RawMessage, name string) json.RawMessage {
 	var keys []string
 	for key := range members {
@@ -131,6 +135,9 @@ func foldedMember(members map[string]json.RawMessage, name string) json.RawMessa
 	}
 	var out json.RawMessage
 	for _, key := range keys {
+		if string(bytes.TrimSpace(members[key])) == "null" {
+			continue
+		}
 		out = mergeJSONMembers(out, members[key])
 	}
 	return out

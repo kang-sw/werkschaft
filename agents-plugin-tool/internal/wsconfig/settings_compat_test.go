@@ -234,3 +234,37 @@ func TestSettingsConfigWriteMergesEveryCasedSpellingOfAMember(t *testing.T) {
 		t.Errorf("merged write read back as %#v", files[ScopeGlobal])
 	}
 }
+
+// TestSettingsConfigWriteIgnoresANullSpelling: the decoder leaves the agents
+// struct as it was for a null "agents", so a null spelling beside "Agents"
+// adds nothing and must not replace the members the other spelling holds.
+func TestSettingsConfigWriteIgnoresANullSpelling(t *testing.T) {
+	opts := Options{ConfigHome: t.TempDir(), CacheHome: t.TempDir()}
+	path, err := GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"schema_version":1,"Agents":{"future_agent":true},"agents":null}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver := NewResolver(opts, nil, nil, nil)
+	if err := resolver.Set("workflow.lang", "Korean", SetOptions{ExplicitScope: ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(out, &members); err != nil {
+		t.Fatal(err)
+	}
+	var agents map[string]json.RawMessage
+	if err := json.Unmarshal(members["agents"], &agents); err != nil || string(agents["future_agent"]) != "true" {
+		t.Errorf("unrelated write dropped the cased spelling's member beside a null one: %s", out)
+	}
+	if _, ok := members["Agents"]; ok {
+		t.Errorf("write kept the cased spelling: %s", out)
+	}
+}
