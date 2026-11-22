@@ -448,7 +448,9 @@ differ. Base behavior chose the permission clear and the `SessionFile` versus
 adoption, which clears the native mode and sets the session id, as before.
 `TestTakeoverAdoptsUnderTheResolvedTargetBackend` pins the record shape for a
 Pi terminal under a Claude profile and a Claude terminal under a Pi profile,
-and fails against the source-keyed adoption. `go test ./internal/wsagent`,
+and fails against the source-keyed adoption. It also checks the first
+launch's resume flag and permission mode and, for the Claude target, the
+hand-off resume command end to end. `go test ./internal/wsagent`,
 `go vet` on darwin and `GOOS=windows` pass.
 
 ### Phase 3: Migrate MCP detection, prompt terminology, and dashboard consumers

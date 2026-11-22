@@ -253,11 +253,15 @@ func TestTakeoverAdoptsUnderTheResolvedTargetBackend(t *testing.T) {
 	for _, tc := range []struct {
 		name, source, profile, override string
 		want                            Record
+		// launch is the flag the first start resumes the session with, and
+		// mode the permission mode it runs under ("" for none).
+		launch, mode string
+		handOff      bool
 	}{
 		{"pi terminal under a claude profile", BackendPi, LeadProfilePi, `{"backend":"claude","lead":true,"permission_mode":"acceptEdits"}`,
-			Record{Backend: BackendClaude, PermissionMode: "acceptEdits", SessionID: "SESSION"}},
+			Record{Backend: BackendClaude, PermissionMode: "acceptEdits", SessionID: "SESSION"}, "--resume", "acceptEdits", true},
 		{"claude terminal under a pi profile", BackendClaude, LeadProfileClaude, `{"backend":"pi","lead":true}`,
-			Record{Backend: BackendPi, SessionFile: "SESSION"}},
+			Record{Backend: BackendPi, SessionFile: "SESSION"}, "--session", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newLeadHarness(t).start()
@@ -288,6 +292,29 @@ func TestTakeoverAdoptsUnderTheResolvedTargetBackend(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("record = %+v, want %+v", got, want)
+			}
+			// End to end: the launch reads the adopted record, and a hand-off
+			// resumes it under the target backend's terminal command.
+			h.send(id, "hello")
+			holder := h.holder(id)
+			spec := h.holders.spawned(holder)
+			if resumed, _ := flagValue(spec.Argv, tc.launch); resumed != session {
+				t.Fatalf("spawn %v: %s = %q, want %q", spec.Argv, tc.launch, resumed, session)
+			}
+			if mode, _ := flagValue(spec.Argv, "--permission-mode"); mode != tc.mode {
+				t.Fatalf("spawn %v: permission mode %q, want %q", spec.Argv, mode, tc.mode)
+			}
+			if !tc.handOff {
+				return
+			}
+			h.holders.out(holder, turnLines(session, "u1", "done")...)
+			h.idle(id)
+			st, err := h.runner.HandOff(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := resumeLine(h.root, "claude", "--resume", session); st.ResumeCommand != want {
+				t.Fatalf("hand-off resume command %q, want %q", st.ResumeCommand, want)
 			}
 		})
 	}
