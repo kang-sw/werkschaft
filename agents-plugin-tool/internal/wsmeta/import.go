@@ -92,7 +92,7 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 			res.AlreadyComplete = true
 			return nil
 		}
-		if err := s.checkCutoverDirs(); err != nil {
+		if err := s.checkCutoverDirs(ctx, tx); err != nil {
 			return err
 		}
 		attempt++
