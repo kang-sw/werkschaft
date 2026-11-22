@@ -3,6 +3,7 @@ package wsagent
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -199,6 +200,8 @@ func (a *claudeAudit) streamEvent(l claudeAuditLine, at time.Time) []wsaudit.Env
 	case "content_block_start":
 		b := &claudeAuditBlock{index: e.Index, typ: e.ContentBlock.Type, id: e.ContentBlock.ID, name: e.ContentBlock.Name, parent: l.ParentToolUseID, at: at}
 		b.body.WriteString(e.ContentBlock.Thinking)
+		// A block start opens its index afresh.
+		a.blocks = slices.DeleteFunc(a.blocks, func(o *claudeAuditBlock) bool { return o.index == e.Index && !o.used })
 		a.blocks = append(a.blocks, b)
 	case "content_block_delta":
 		b := a.block(e.Index)

@@ -395,6 +395,60 @@ func TestAuditTeeArrivingAfterTheNextKeptLineKeepsSourceOrder(t *testing.T) {
 	}
 }
 
+// TestAuditFenceAheadOfItsAnchorLineWaitsForIt pins the other wire order:
+// the holder sends audit messages ahead of ring records, so an interval's
+// tee lines and fence can arrive before the kept line they follow. They
+// are mapped only after it.
+func TestAuditFenceAheadOfItsAnchorLineWaitsForIt(t *testing.T) {
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.keptRun(thinkStart, 0, 0)
+	// The fence releasing the block start (seq 2) is sent, then the tee
+	// lines anchored on it and their fence, all before record 2 itself.
+	r.fence(2, 2, 0, 0)
+	r.tee(thinkDelta("after start"))
+	r.fence(3, 3, 1, 0)
+	r.kept(thinkBlock) // seq 2
+	r.kept(thinkStop)  // seq 3
+	r.keptRun(thinkLine, 0, 0)
+	r.keptRun(auditResultLine, 0, 0)
+	r.end()
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "after start" || th[0].Meta[wsaudit.MetaIncomplete] != nil {
+		t.Fatalf("thinking = %+v, want the delta assembled into the block it follows", th)
+	}
+}
+
+// TestAuditBacklogReplayInterleavesTheOpenInterval pins attach to a holder
+// with a backlog: the records before the attach replay without fences, the
+// open interval's live tee lines (anchored on a backlog record) wait for
+// that record, and live kept lines wait for their fence.
+func TestAuditBacklogReplayInterleavesTheOpenInterval(t *testing.T) {
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	// Records 1-2 were kept while no daemon was attached; the holder's
+	// next sequence is 3 and its open interval is anchored on 2.
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 3})
+	r.anchor = 2
+	r.tee(thinkDelta("live "))
+	r.tee(thinkDelta("thought"))
+	r.fence(3, 3, 2, 0)
+	r.kept(thinkStart) // backlog 1
+	r.kept(thinkBlock) // backlog 2
+	r.kept(thinkStop)  // live 3
+	r.keptRun(thinkLine, 0, 0)
+	r.keptRun(auditResultLine, 0, 0)
+	r.end()
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "live thought" {
+		t.Fatalf("thinking = %+v, want the live deltas after their backlog block start", th)
+	}
+	if n := find(sink.events(), isLoss); len(n) != 0 {
+		t.Fatalf("loss recorded: %+v", n)
+	}
+}
+
 // TestAuditFenceAccounting pins the fence cases: a zero-skip interval closes
 // at once; a tee the holder dropped is recorded on the open assembled event
 // as incomplete, or as a standalone loss marker when none spans it; the
