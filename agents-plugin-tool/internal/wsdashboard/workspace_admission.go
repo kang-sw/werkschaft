@@ -103,9 +103,15 @@ func (r workspaceAdmissionRecord) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
+// foldWorkspacePaths makes workspace identity case-insensitive, as Windows
+// paths are; a variable so tests on other systems can exercise it.
+var foldWorkspacePaths = runtime.GOOS == "windows"
+
+// admissionPathKey is a workspace path's identity: rail grouping, the
+// admission display and the admission route all compare by it.
 func admissionPathKey(p string) string {
 	p = filepath.Clean(p)
-	if runtime.GOOS == "windows" {
+	if foldWorkspacePaths {
 		return strings.ToLower(p)
 	}
 	return p

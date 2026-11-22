@@ -1512,3 +1512,32 @@ func TestRailUnregisteredWorkspaceSessionsKeepNotificationRows(t *testing.T) {
 		}
 	}
 }
+
+// TestRailGroupsWorkspacesByFoldedIdentity: where workspace identity folds
+// case (Windows), a session spelled differently from a stored workspace
+// joins it, and two spellings of one unstored root make one pending
+// workspace, matching the keys the admission route validates by.
+func TestRailGroupsWorkspacesByFoldedIdentity(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	now := time.Now()
+	base := t.TempDir()
+	stored := filepath.Join(base, "Work", "Repo")
+	view := buildRailView([]railInput{
+		{Session: railSession("s-same", filepath.Join(base, "work", "repo"), now.Add(-3*time.Minute), time.Time{})},
+		{Session: railSession("s-sub", filepath.Join(base, "WORK", "repo", "sub"), now.Add(-2*time.Minute), time.Time{})},
+		{Session: railSession("s-pend-a", filepath.Join(base, "Pend"), now.Add(-time.Minute), time.Time{})},
+		{Session: railSession("s-pend-b", filepath.Join(base, "pend"), now, time.Time{})},
+	}, nil, []storedWorkspace{{Path: stored}}, now)
+	partitionRailWorkspaces(&view, nil)
+	if len(view.Workspaces) != 1 || view.Workspaces[0].Path != stored || !view.Workspaces[0].Stored {
+		t.Fatalf("Workspaces = %+v, want the stored %s only", view.Workspaces, stored)
+	}
+	if got := railIDs(view.Workspaces[0].Sessions); strings.Join(got, ",") != "s-same,s-sub" {
+		t.Fatalf("stored workspace sessions = %v, want s-same,s-sub", got)
+	}
+	if len(view.PendingWorkspaces) != 1 || view.PendingWorkspaces[0].SessionCount() != 2 {
+		t.Fatalf("PendingWorkspaces = %+v, want one workspace holding both spellings", view.PendingWorkspaces)
+	}
+}

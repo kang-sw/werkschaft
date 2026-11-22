@@ -478,8 +478,22 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 	var view RailView
 	storedAt := map[string]bool{}
 	var folders []string
+	// One workspace per identity (admissionPathKey, case-folded on Windows),
+	// which the admission display and route also use: a stored spelling
+	// wins, else the first one seen, so C:\Work\Repo stored and a session
+	// at C:\work\repo make one workspace, not an empty stored one and a
+	// pending twin the route refuses as stale.
+	canon := map[string]string{}
+	canonical := func(p string) string {
+		k := admissionPathKey(p)
+		if c, ok := canon[k]; ok {
+			return c
+		}
+		canon[k] = p
+		return p
+	}
 	for _, w := range stored {
-		p := filepath.Clean(w.Path)
+		p := canonical(filepath.Clean(w.Path))
 		storedAt[p] = true
 		if !w.Repo {
 			folders = append(folders, p)
@@ -496,12 +510,13 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		row := railRow(in, reg.Live(now), now)
 		key := filepath.Clean(reg.Project)
 		if in.Repo != "" {
-			key = filepath.Clean(in.Repo)
+			own := filepath.Clean(in.Repo)
+			key = canonical(own)
 			repoOf[key] = true
 			if _, ok := byWS[key]; !ok {
 				byWS[key] = nil
 			}
-			if railPooled(repos[key], key, in.Session.Project) {
+			if railPooled(repos[own], own, in.Session.Project) {
 				// Hidden, live or ended, and left out of every count; its
 				// repository still shows as it would without it.
 				continue
@@ -509,12 +524,14 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		} else {
 			best := ""
 			for _, f := range folders {
-				if railPathUnder(f, key) && len(f) > len(best) {
+				if railPathUnder(admissionPathKey(f), admissionPathKey(key)) && len(f) > len(best) {
 					best = f
 				}
 			}
 			if best != "" {
 				key = best
+			} else {
+				key = canonical(key)
 			}
 		}
 		byWS[key] = append(byWS[key], member{in: in, row: row})
@@ -530,7 +547,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		}
 	}
 	for _, w := range stored {
-		p := filepath.Clean(w.Path)
+		p := canonical(filepath.Clean(w.Path))
 		if _, ok := byWS[p]; !ok {
 			byWS[p] = nil
 			if w.Repo {
@@ -621,7 +638,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 						break
 					}
 				}
-			} else if railPathUnder(key, project) && !m.in.Linked {
+			} else if railPathUnder(admissionPathKey(key), admissionPathKey(project)) && !m.in.Linked {
 				a = addWT(railWorktreeEntry{Path: key})
 			} else {
 				a = addWT(railWorktreeEntry{Path: project})
