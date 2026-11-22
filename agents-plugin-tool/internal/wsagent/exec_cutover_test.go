@@ -3,10 +3,13 @@ package wsagent
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
@@ -254,7 +257,7 @@ func cutoverHarness(t *testing.T) *leadHarness {
 	codex := h.opts.Backends[BackendCodex]
 	codex.ExecCutover = &ExecCutoverSupport{Since: "0.160.0"}
 	h.opts.Backends[BackendCodex] = codex
-	seedHarnessVersions(t, h.dir, map[string]string{BackendClaude: "2.1.330", BackendCodex: "0.160.0"})
+	seedHarnessVersions(t, h, map[string]string{BackendClaude: "2.1.330", BackendCodex: "0.160.0"})
 	h.execJobs = newFakeExecJobs()
 	h.start()
 	h.runner.SetEndpoint("http://127.0.0.1:1")
@@ -262,17 +265,23 @@ func cutoverHarness(t *testing.T) *leadHarness {
 }
 
 // seedHarnessVersions saves the harness versions a predecessor daemon's
-// processes reported, as a runner over dir reads them.
-func seedHarnessVersions(t *testing.T, dir string, versions map[string]string) {
+// processes reported, each from the binary h's backend launches, as a
+// runner over h.dir reads them.
+func seedHarnessVersions(t *testing.T, h *leadHarness, versions map[string]string) {
 	t.Helper()
-	raw, err := json.Marshal(versions)
-	if err != nil {
+	var b strings.Builder
+	for backend, version := range versions {
+		raw, err := json.Marshal(harnessSeen{Backend: backend, Version: version, Binary: harnessBinaryOf(h.opts.Backends[backend])})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Write(raw)
+		b.WriteByte('\n')
+	}
+	if err := os.MkdirAll(h.dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, harnessVersionsFile), raw, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(h.dir, harnessVersionsFile), []byte(b.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -353,19 +362,20 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	writeOverrides(t, filepath.Join(h.opts.Config.ConfigHome, "config.json"), map[string]string{})
 
 	// A harness version older than the verified one keeps native tools.
-	h.runner.noteHarnessVersion(BackendClaude, "2.1.326")
+	claudeBinary := harnessBinaryOf(h.opts.Backends[BackendClaude])
+	h.runner.noteHarnessVersion(BackendClaude, "2.1.326", claudeBinary)
 	old := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
 	if _, rec = leadLaunch(t, h, old.ID); rec.ExecCutoverHolder != "" {
 		t.Fatal("a lead on an unverified older harness started under the cutover")
 	}
-	h.runner.noteHarnessVersion(BackendClaude, "2.1.331")
+	h.runner.noteHarnessVersion(BackendClaude, "2.1.331", claudeBinary)
 	newer := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
 	if _, rec = leadLaunch(t, h, newer.ID); rec.ExecCutoverHolder == "" {
 		t.Fatal("a lead on a newer harness kept its native tools")
 	}
 	// The version a process reported outlives the daemon.
-	if got := NewRunner(h.opts).harnessVersion(BackendClaude); got != "2.1.331" {
-		t.Fatalf("a later daemon reads harness version %q", got)
+	if got := NewRunner(h.opts).harnessVersion(BackendClaude); got.Version != "2.1.331" || got.Binary != claudeBinary {
+		t.Fatalf("a later daemon reads harness version %+v", got)
 	}
 
 	// Hosted exec jobs that failed to open leave nothing to replace the
@@ -419,7 +429,8 @@ func TestExecCutoverExclusions(t *testing.T) {
 	leadLaunch(t, h, st.ID)
 	c := h.runner.conv(st.ID)
 	rec := c.record()
-	bound := execCutoverInputs{binding: true}
+	binary := harnessBinaryOf(h.opts.Backends[BackendClaude])
+	bound := execCutoverInputs{binding: true, binary: binary}
 	if on, why := c.execCutoverFor(rec, Profile{}, bound); !on {
 		t.Fatalf("lead with binding: %s", why)
 	}
@@ -432,19 +443,20 @@ func TestExecCutoverExclusions(t *testing.T) {
 	// leaves it nothing to read with.
 	codexWorker := worker
 	codexWorker.Backend = BackendCodex
-	if on, why := c.execCutoverFor(codexWorker, Profile{WSTools: append([]string{"exec.shell"}, CodexReadWSTools[:2]...)}, bound); on || !strings.Contains(why, "no fs.list") {
+	codexBound := execCutoverInputs{binding: true, binary: harnessBinaryOf(h.opts.Backends[BackendCodex])}
+	if on, why := c.execCutoverFor(codexWorker, Profile{WSTools: append([]string{"exec.shell"}, CodexReadWSTools[:2]...)}, codexBound); on || !strings.Contains(why, "no fs.list") {
 		t.Fatalf("codex worker without fs.list: %v %s", on, why)
 	}
-	if on, why := c.execCutoverFor(codexWorker, builtinProfile(t, AgentWorkerProfile(BackendCodex)), bound); !on {
+	if on, why := c.execCutoverFor(codexWorker, builtinProfile(t, AgentWorkerProfile(BackendCodex)), codexBound); !on {
 		t.Fatalf("codex agent worker profile refused: %s", why)
 	}
 	if on, _ := c.execCutoverFor(worker, builtinProfile(t, AgentWorkerProfile(BackendClaude)), bound); !on {
 		t.Fatal("agent worker profile refused")
 	}
-	if on, why := c.execCutoverFor(rec, Profile{}, execCutoverInputs{binding: true, mcpEnv: map[string]string{envNoAgent: "1"}}); on || !strings.Contains(why, "agentless") {
+	if on, why := c.execCutoverFor(rec, Profile{}, execCutoverInputs{binding: true, binary: binary, mcpEnv: map[string]string{envNoAgent: "1"}}); on || !strings.Contains(why, "agentless") {
 		t.Fatalf("agentless: %v %s", on, why)
 	}
-	if on, why := c.execCutoverFor(rec, Profile{}, execCutoverInputs{}); on || !strings.Contains(why, "trusted ws-mcp binding") {
+	if on, why := c.execCutoverFor(rec, Profile{}, execCutoverInputs{binary: binary}); on || !strings.Contains(why, "trusted ws-mcp binding") {
 		t.Fatalf("no binding: %v %s", on, why)
 	}
 	pi := rec
@@ -471,6 +483,69 @@ func TestExecCutoverUnknownHarnessVersionKeepsNativeTools(t *testing.T) {
 	}
 	if !strings.Contains(h.log.String(), "keeps its native process tools: no process of the harness has reported its version yet") {
 		t.Fatalf("log: %s", h.log.String())
+	}
+}
+
+// A version stands for the binary its process ran from: a downgrade (any
+// change of the binary) since the report leaves the version unverified,
+// and the next start keeps its native tools.
+func TestExecCutoverBinaryChangeUnverifiesTheVersion(t *testing.T) {
+	h := newLeadHarness(t)
+	bin := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n# 2.1.331\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claude := h.opts.Backends[BackendClaude]
+	claude.Backend = ClaudeBackend{Command: bin}
+	claude.ExecCutover = &ExecCutoverSupport{Since: "2.1.330"}
+	h.opts.Backends[BackendClaude] = claude
+	seedHarnessVersions(t, h, map[string]string{BackendClaude: "2.1.331"})
+	h.execJobs = newFakeExecJobs()
+	h.start()
+	h.runner.SetEndpoint("http://127.0.0.1:1")
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	if _, rec := leadLaunch(t, h, st.ID); rec.ExecCutoverHolder == "" {
+		t.Fatalf("the reported binary's lead kept its native tools; log: %s", h.log.String())
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n# 2.1.300, a downgrade\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	down := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	argv, rec := leadLaunch(t, h, down.ID)
+	if got, _ := flagValue(argv, "--disallowedTools"); strings.Contains(got, "Bash") || rec.ExecCutoverHolder != "" {
+		t.Fatalf("a lead on a changed binary: removes %q, cutover holder %q", got, rec.ExecCutoverHolder)
+	}
+	if !strings.Contains(h.log.String(), "keeps its native process tools: the harness binary changed since a process of it reported version 2.1.331") {
+		t.Fatalf("log: %s", h.log.String())
+	}
+}
+
+// Reports noted concurrently land in the log in the order the store
+// took them: a later daemon reads what this one holds.
+func TestHarnessVersionsLogOrderMatchesMemory(t *testing.T) {
+	dir := t.TempDir()
+	s := loadHarnessVersions(dir, io.Discard)
+	var wg sync.WaitGroup
+	for i := range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.note(BackendCodex, fmt.Sprintf("0.%d.0", 160+i), "bin")
+		}()
+	}
+	wg.Wait()
+	if got, want := loadHarnessVersions(dir, io.Discard).get(BackendCodex), s.get(BackendCodex); got != want {
+		t.Fatalf("reloaded %+v, memory %+v", got, want)
+	}
+	// An unchanged report writes nothing.
+	before, _ := os.ReadFile(filepath.Join(dir, harnessVersionsFile))
+	v := s.get(BackendCodex)
+	s.note(BackendCodex, v.Version, v.Binary)
+	if after, _ := os.ReadFile(filepath.Join(dir, harnessVersionsFile)); len(after) != len(before) {
+		t.Fatal("an unchanged report appended a line")
+	}
+	if strings.Count(string(before), "\n") != 64 {
+		t.Fatalf("log lines = %d", strings.Count(string(before), "\n"))
 	}
 }
 

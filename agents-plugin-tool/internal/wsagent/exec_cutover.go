@@ -8,11 +8,7 @@
 package wsagent
 
 import (
-	"encoding/json"
 	"fmt"
-	"maps"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -59,14 +55,17 @@ type ExecCutoverSupport struct {
 type execCutoverInputs struct {
 	binding bool
 	mcpEnv  map[string]string
+	// binary fingerprints the binary the start launches (harnessBinaryOf).
+	binary string
 }
 
 // execCutoverFor decides whether rec's next process starts under the exec
 // cutover, and when not, why. Every condition must hold:
 //   - the backend has a verified removal mechanism (registration metadata);
 //   - a harness version a process last reported (to this daemon or a
-//     predecessor) is known and not older than the one that mechanism was
-//     verified on; an unknown version keeps native tools;
+//     predecessor) is known, was reported by a process of the binary this
+//     start launches (harness_versions.go), and is not older than the one
+//     that mechanism was verified on; anything else keeps native tools;
 //   - the process gets the trusted binding that hosted exec jobs require
 //     (a Pi bridge or Claude stdio fallback has none), and the daemon's
 //     hosted exec jobs are open and bound (BindExecJobs);
@@ -81,10 +80,12 @@ func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bo
 	}
 	if since := reg.ExecCutover.Since; since != "" {
 		switch seen := c.r.harnessVersion(rec.Backend); {
-		case seen == "":
+		case seen.Version == "":
 			return false, "no process of the harness has reported its version yet, so the removal is unverified for it"
-		case !versionInRange(seen, since, ""):
-			return false, fmt.Sprintf("harness version %s is older than %s, where the removal was verified", seen, since)
+		case seen.Binary != in.binary:
+			return false, fmt.Sprintf("the harness binary changed since a process of it reported version %s, so the removal is unverified for it", seen.Version)
+		case !versionInRange(seen.Version, since, ""):
+			return false, fmt.Sprintf("harness version %s is older than %s, where the removal was verified", seen.Version, since)
 		}
 	}
 	if !in.binding {
@@ -160,9 +161,12 @@ func (c *conv) execRolloutOn(rec Record) bool {
 // (and Codex's read tools) from its first request.
 func (c *conv) decideExecCutover(rec Record, def Profile, spec *StartSpec, mcpEnv map[string]string) {
 	in := execCutoverInputs{binding: spec.MCPSession != nil && spec.MCPSession.Token != "", mcpEnv: mcpEnv}
+	if reg := c.r.opts.Backends[rec.Backend]; reg.ExecCutover != nil {
+		in.binary = harnessBinaryOf(reg)
+	}
 	on, why := c.execCutoverFor(rec, def, in)
 	spec.ExecCutover = on
-	c.setStatus(func() { c.execCutover = on })
+	c.setStatus(func() { c.execCutover, c.launchBinary = on, in.binary })
 	if on {
 		c.r.markMCPCutover(rec.ReplyID, rec.Backend)
 	} else if c.r.opts.Backends[rec.Backend].ExecCutover != nil {
@@ -174,7 +178,9 @@ func (c *conv) decideExecCutover(rec Record, def Profile, spec *StartSpec, mcpEn
 // on only when the holder it runs under is the one started under it.
 func (c *conv) rejoinExecCutover(rec Record) bool {
 	on := rec.ExecCutoverHolder != "" && rec.ExecCutoverHolder == rec.HolderID
-	c.setStatus(func() { c.execCutover = on })
+	// The binary a process this daemon did not launch ran from is unknown:
+	// its version report is not kept.
+	c.setStatus(func() { c.execCutover, c.launchBinary = on, "" })
 	if on {
 		c.r.markMCPCutover(rec.ReplyID, rec.Backend)
 	}
@@ -214,73 +220,15 @@ func (r *Runner) markMCPCutover(id, backend string) {
 	}
 }
 
-// harnessVersionsFile, under the runner's directory, keeps the harness
-// versions processes last reported, so a start after a daemon restart
-// decides on them before its own process reports.
-const harnessVersionsFile = "harness-versions.json"
-
-// loadHarnessVersionsLocked reads harnessVersionsFile once; r.mu is held.
-func (r *Runner) loadHarnessVersionsLocked() {
-	if r.harnessVersionsLoaded {
-		return
-	}
-	r.harnessVersionsLoaded = true
-	if r.harnessVersions == nil {
-		r.harnessVersions = map[string]string{}
-	}
-	if r.opts.Dir == "" {
-		return
-	}
-	raw, err := os.ReadFile(filepath.Join(r.opts.Dir, harnessVersionsFile))
-	if err != nil {
-		return
-	}
-	var saved map[string]string
-	if json.Unmarshal(raw, &saved) != nil {
-		return
-	}
-	for backend, version := range saved {
-		if _, ok := r.harnessVersions[backend]; !ok && version != "" {
-			r.harnessVersions[backend] = version
-		}
-	}
+// noteHarnessVersion keeps a process's report of backend's version,
+// launched from binary (harnessVersions.note).
+func (r *Runner) noteHarnessVersion(backend, version, binary string) {
+	r.versions.note(backend, version, binary)
 }
 
-// noteHarnessVersion keeps the harness version a process of backend
-// reported last (a downgrade replaces a newer one), for the next start's
-// cutover decision, and saves it under the runner's directory.
-func (r *Runner) noteHarnessVersion(backend, version string) {
-	if version == "" {
-		return
-	}
-	r.mu.Lock()
-	r.loadHarnessVersionsLocked()
-	if r.harnessVersions[backend] == version {
-		r.mu.Unlock()
-		return
-	}
-	r.harnessVersions[backend] = version
-	saved := maps.Clone(r.harnessVersions)
-	r.mu.Unlock()
-	if r.opts.Dir == "" {
-		return
-	}
-	raw, err := json.Marshal(saved)
-	if err == nil {
-		err = writeFileAtomic(filepath.Join(r.opts.Dir, harnessVersionsFile), append(raw, '\n'), 0o600)
-	}
-	if err != nil {
-		fmt.Fprintf(r.opts.Log, "agent runner: save harness versions: %v\n", err)
-	}
-}
-
-// harnessVersion is the harness version a process of backend last
-// reported to this daemon or a predecessor, "" when none has.
-func (r *Runner) harnessVersion(backend string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.loadHarnessVersionsLocked()
-	return r.harnessVersions[backend]
+// harnessVersion is backend's last reported version and binary.
+func (r *Runner) harnessVersion(backend string) harnessSeen {
+	return r.versions.get(backend)
 }
 
 // envValue is name's value in env, "" when absent.

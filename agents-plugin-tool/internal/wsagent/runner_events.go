@@ -1187,7 +1187,7 @@ func (c *conv) finishClose() {
 // and offers the command list again under the result. A backend with no
 // profile stays handle-only: no grades, no demotion, no warning.
 func (c *conv) harnessReported(report HarnessReport, quiet bool) {
-	c.r.noteHarnessVersion(c.rec.Backend, report.Version)
+	c.r.noteHarnessVersion(c.rec.Backend, report.Version, c.launchBinary)
 	profile := c.r.opts.Backends[c.rec.Backend].Catalog
 	if profile == nil {
 		return

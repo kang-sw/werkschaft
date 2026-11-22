@@ -19,7 +19,7 @@ func newAgyCutoverHarness(t *testing.T) (*leadHarness, *agyFake) {
 	agy.ExecCutover = real.ExecCutover
 	agy.WorkerAutoApprove = true
 	h.opts.Backends[BackendAgy] = agy
-	seedHarnessVersions(t, h.dir, map[string]string{BackendAgy: real.ExecCutover.Since})
+	seedHarnessVersions(t, h, map[string]string{BackendAgy: real.ExecCutover.Since})
 	h.execJobs = newFakeExecJobs()
 	return h, f
 }
