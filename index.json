@@ -243,19 +243,6 @@
     "261114-feat-ws-live-reasoning-summary": {
       "registered_at": "2026-11-14T11:47:01Z"
     },
-    "261114-feat-ws-mailbox-multi-recipient": {
-      "registered_at": "2026-11-14T14:30:48Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T01:47:08Z",
-        "impl": {
-          "branch": "impl/develop/cod-zap-gains"
-        }
-      }
-    },
     "261114-feat-ws-prompt-refusal-conversation-notice": {
       "registered_at": "2026-11-14T12:34:19Z"
     },
@@ -595,6 +582,9 @@
     },
     "261122-feat-ws-companion-shell-engine": {
       "registered_at": "2026-11-22T00:23:58Z"
+    },
+    "261122-feat-ws-mailbox-group-recipients": {
+      "registered_at": "2026-11-22T02:05:13Z"
     }
   }
 }
