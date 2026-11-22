@@ -225,8 +225,8 @@
     }
 
     function rasterList(layer, sharedAsset) {
-      if (typeof layer === "string") return [texture(layer, null, sharedAsset)];
-      if (layer.mode === "static") return [texture(layer.file, null, sharedAsset)];
+      if (typeof layer === "string") return [texture(layer, null, sharedAsset)].filter(Boolean);
+      if (layer.mode === "static") return [texture(layer.file, null, sharedAsset)].filter(Boolean);
       return [
         texture(layer.file, null, sharedAsset), texture(layer.detail, null, sharedAsset),
         ...fills.map(([field, color]) => texture(layer[field], palette[color], sharedAsset)),
@@ -246,6 +246,7 @@
       const rasters = frames ? null : rasterList(layer, sharedAsset);
       return {
         z: finite(layer.z, z),
+        drawable: frames ? frames.some(list => list.length > 0) : rasters.length > 0,
         paint(ctx, t, gaze, physics) {
           const list = frames ? frames[Math.floor(t * layer.fps) % frames.length] : rasters;
           ctx.save();
@@ -448,6 +449,7 @@
       const layers = propLayers(id, registry);
       return {
         data,
+        drawable: layers.some(layer => layer.drawable),
         draw(ctx, t) { for (const layer of layers) layer.paint(ctx, t); }
       };
     }

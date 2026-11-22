@@ -599,3 +599,156 @@ test("companion resize persists completed pointer and keyboard actions, clamps a
   assert.equal(size, 116);
   assert.ok(changes >= 4);
 });
+
+test("companion stage creates an FX canvas for semantic-split FX and falls back to spans for non-drawable FX", async () => {
+  let raf = null, rafId = 0, now = 0;
+  function makeElement(tag) {
+    const el = {
+      tagName: tag.toUpperCase(), className: "", children: [], childNodes: [], dataset: {},
+      style: { setProperty() {}, removeProperty() {} }, hidden: false, textContent: "",
+      setAttribute() {}, removeAttribute() {}, addEventListener() {}, setPointerCapture() {}, remove() {},
+      append(...items) {
+        for (const item of items) {
+          this.childNodes.push(item);
+          if (item && typeof item === "object") this.children.push(item);
+        }
+      },
+      insertBefore(item) { this.append(item); },
+      replaceChildren(...items) { this.children.length = 0; this.childNodes.length = 0; this.append(...items); }
+    };
+    if (tag === "canvas") {
+      el.width = 0;
+      el.height = 0;
+      el.drawn = [];
+      const ctx = {
+        canvas: el, save() {}, restore() {}, clearRect() {}, setTransform() {}, translate() {}, rotate() {}, scale() {},
+        fillRect() {}, getImageData: () => ({ data: [] }),
+        drawImage(image) { el.drawn.push(image); }
+      };
+      el.getContext = () => ctx;
+    }
+    return el;
+  }
+  class Canvas {
+    constructor(width, height) { this.width = width; this.height = height; this.drawn = []; }
+    getContext() {
+      return {
+        canvas: this, save() {}, restore() {}, clearRect() {}, setTransform() {}, translate() {}, rotate() {}, scale() {},
+        fillRect() {}, getImageData: () => ({ data: [] }),
+        drawImage: image => { this.drawn.push(image); }
+      };
+    }
+  }
+  const body = makeElement("body");
+  const manifestData = {
+    id: "default", schema: "ws-companion/v1", canvas: [128, 128],
+    poses: { stand: { layers: [{ file: "body.png" }] } },
+    fx: {
+      semantic: { kind: "float", line: "fx-line.png", accentFill: "fx-fill.png" },
+      badge: { kind: "badge", text: "!", color: "#e2582c" },
+      sparkles: { kind: "particles", glyphs: ["✦", "✧"] },
+      empty_layers: { kind: "badge", text: "?", layers: [] }
+    },
+    scenarios: {
+      semantic_fx: { on: "mail.recv", priority: 95, steps: [{ ms: 40, fx: "semantic" }] },
+      badge_fx: { on: "mail.send", priority: 95, steps: [{ ms: 40, fx: "badge" }] },
+      particles_fx: { on: "session.compacted", priority: 95, steps: [{ ms: 40, fx: "sparkles" }] },
+      empty_fx: { on: "session.error", priority: 95, steps: [{ ms: 40, fx: "empty_layers" }] }
+    }
+  };
+  const doc = {
+    documentElement: { dataset: { rid: "" }, classList: { contains: () => false } },
+    body, hidden: false,
+    getElementById: () => null,
+    createElement: makeElement,
+    addEventListener() {}
+  };
+  const win = {
+    WsCompanion: {},
+    WsShell: { companionContext: routeKind => ({ routeKind: routeKind || "session", activity: "idle", landmarks: {}, events: [] }) },
+    addEventListener() {}, innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1
+  };
+  const context = vm.createContext({
+    window: win, document: doc, URLSearchParams, AbortController, OffscreenCanvas: Canvas,
+    ResizeObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    performance: { now: () => now },
+    wsT: key => key,
+    requestAnimationFrame: fn => { raf = fn; return ++rafId; },
+    cancelAnimationFrame: () => { raf = null; },
+    fetch: async url => {
+      if (url.startsWith("/api/companion/packs?")) return { ok: true, json: async () => ({ resolvedAuto: { packId: "default" }, packs: [{ id: "default", rev: "r1" }] }) };
+      if (url === "/api/companion/packs") return { ok: true, json: async () => ({ resolvedAuto: { packId: "default" }, packs: [{ id: "default", rev: "r1" }] }) };
+      if (url.includes("/pack.json?")) return { ok: true, json: async () => manifestData };
+      return { ok: true, blob: async () => url };
+    },
+    createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
+  });
+  for (const name of ["packs", "compositor", "scenarios", "stage"]) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
+  }
+  const C = context.window.WsCompanion;
+  C.quickMenu = () => ({ rebuild() {}, measure() {}, place() {}, close() {} });
+
+  // Compositor unit checks: resolved semantic layers are drawable; missing bitmaps are not.
+  const rig = C.makeRig({
+    manifest: {
+      canvas: [128, 128],
+      fx: {
+        semantic: { line: "fx-line.png", accentFill: "fx-fill.png" },
+        missingFile: { file: "missing.png" },
+        missingFrame: { frames: ["missing.png"] },
+        textOnly: { kind: "badge", text: "!" }
+      }
+    },
+    bitmaps: new Map([["fx-line.png", { id: "fx-line.png" }], ["fx-fill.png", { id: "fx-fill.png" }]])
+  }, null, "");
+  assert.equal(rig.prop("semantic", "fx").drawable, true);
+  assert.equal(rig.prop("missingFile", "fx").drawable, false);
+  assert.equal(rig.prop("missingFrame", "fx").drawable, false);
+  assert.equal(rig.prop("textOnly", "fx").drawable, false);
+
+  const stage = C.mount({ pack: "default", preset: "" }, () => {});
+  await new Promise(resolve => setImmediate(resolve));
+  const root = body.children[0];
+  const step = (dt = 16) => {
+    const fn = raf;
+    raf = null;
+    assert.ok(fn, "expected scheduled animation frame");
+    now += dt;
+    fn(now);
+  };
+  const fxNode = () => root.children.find(child => child.className === "ws-companion-fx");
+  const trigger = (activity, eventKind) => {
+    stage.context({
+      routeKind: "session", activity, landmarks: {}, sessionId: "s1",
+      events: eventKind ? [{ kind: eventKind, token: eventKind + ":" + now }] : []
+    }, { left: 0, top: 0, width: 800, height: 600 });
+    step();
+  };
+
+  trigger("idle", "mail.recv");
+  const semanticFx = fxNode();
+  assert.ok(semanticFx && !semanticFx.hidden);
+  assert.equal(semanticFx.children.length, 1);
+  assert.equal(semanticFx.children[0].tagName, "CANVAS");
+  assert.equal(semanticFx.children[0].drawn.length, 2);
+  assert.equal(semanticFx.children[0].drawn[1].id, "fx-line.png");
+
+  step(50);
+  trigger("thinking", null);
+  assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:…");
+
+  trigger("idle", "mail.send");
+  assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:!");
+
+  step(50);
+  trigger("idle", "session.compacted");
+  assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:✦,SPAN:✧");
+
+  step(50);
+  trigger("idle", "session.error");
+  assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:?");
+
+  stage.dispose();
+});

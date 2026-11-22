@@ -562,7 +562,7 @@
         if (lastCount !== count) {
           lastCount = count;
           decoration.replaceChildren();
-          if (def?.file || def?.layers?.length || def?.frames) {
+          if (fx.drawable) {
             const image = doc.createElement("canvas");
             image.width = image.height = 96;
             decoration.append(image);
