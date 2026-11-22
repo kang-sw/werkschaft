@@ -88,6 +88,13 @@ func sageReviewFreshnessCheck(env []string, root, ticketRel string, stages []str
 			if recorded = strings.TrimSpace(recorded); recorded == currentDigest || recorded == currentFullDigest {
 				continue
 			}
+			// Mismatch only: a stamp written by an older daemon digests the
+			// whole body, Results included, so a later Result append matches
+			// neither current digest. The git cost is paid here and nowhere
+			// on the match path above.
+			if sageLegacyStampOnlyGainedResults(env, root, ticketRel, recorded, currentClean) {
+				continue
+			}
 			affected = append(affected, stage)
 			baselines = append(baselines, "the last recorded digest")
 			continue
@@ -116,6 +123,28 @@ func sageReviewFreshnessCheck(env []string, root, ticketRel string, stages []str
 		Baseline:    baseline,
 		Instruction: fmt.Sprintf("Inspect the ticket diff against %s and decide whether to rerun sage %s review.", baseline, strings.Join(affected, " and ")),
 	}, nil
+}
+
+// sageLegacyStampOnlyGainedResults reports whether recorded is the full-body
+// digest of a committed revision of the ticket whose Result-stripped body
+// equals currentClean: the only edits since the stamp are Results and
+// Editions. A stamp matching no committed revision, or one whose reviewed
+// content changed, reports false and keeps the stale advisory.
+func sageLegacyStampOnlyGainedResults(env []string, root, ticketRel, recorded, currentClean string) bool {
+	history, err := sageReviewTicketHistory(env, root, ticketRel)
+	if err != nil {
+		return false
+	}
+	for _, entry := range history {
+		raw, err := sageGitOutput(env, root, "show", entry.Commit+":"+entry.Path)
+		if err != nil || sageReviewFullBodyDigest(string(raw)) != recorded {
+			continue
+		}
+		if normalizeTicketForSageFreshness(string(raw)) == currentClean {
+			return true
+		}
+	}
+	return false
 }
 
 func sageReviewStageBaseline(env []string, root, ticketRel, stage string) (commit, text string, ok bool, err error) {
@@ -276,23 +305,27 @@ func normalizeTicketForSageFreshness(text string) string {
 func stripTicketResultSections(body string) string {
 	lines := strings.Split(body, "\n")
 	kept := make([]string, 0, len(lines))
-	fence := ""
+	var fenceChar byte
+	fenceLen := 0
 	// skip is "" when keeping, "result" inside a Result section, "edition"
 	// inside a stray Edition block.
 	skip := ""
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if fence != "" {
-			if strings.HasPrefix(trimmed, fence) {
-				fence = ""
+		// Fences follow CommonMark, as ticketPhaseHeadingProblems does: the
+		// opener's length and character bind its closer, and a line with an
+		// info string never closes.
+		if char, n, info := markdownFence(line); n > 0 {
+			if fenceLen == 0 {
+				fenceChar, fenceLen = char, n
+			} else if char == fenceChar && n >= fenceLen && info == "" {
+				fenceLen = 0
 			}
 			if skip == "" {
 				kept = append(kept, line)
 			}
 			continue
 		}
-		if marker := sageFenceMarker(trimmed); marker != "" {
-			fence = marker
+		if fenceLen > 0 {
 			if skip == "" {
 				kept = append(kept, line)
 			}
@@ -325,15 +358,6 @@ func stripTicketResultSections(body string) string {
 
 func sageHeadingNamed(title, name string) bool {
 	return title == name || strings.HasPrefix(title, name+" ")
-}
-
-func sageFenceMarker(trimmed string) string {
-	for _, m := range []string{"```", "~~~"} {
-		if strings.HasPrefix(trimmed, m) {
-			return m
-		}
-	}
-	return ""
 }
 
 // sageHeading parses an ATX heading line of level 1-6 and returns its level

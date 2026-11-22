@@ -1887,3 +1887,74 @@ func TestSageGateResultAppendStaysFreshAndLegacyDigestStillReads(t *testing.T) {
 		t.Fatalf("body edit: freshness = %+v, err = %v, want stale", f, err)
 	}
 }
+
+// A four-marker fence may contain a three-marker line: the inner line neither
+// closes the outer fence nor makes a sample Result heading a real section.
+func TestNormalizeTicketForSageFreshnessHonorsNestedFenceLengths(t *testing.T) {
+	head := "---\ntitle: T\n---\n\n# T\n\n## Phases\n\n### Phase 1: One\n\nplan.\n"
+	doc := func(sample string) string {
+		return head + "\n````md\n```\n### Result (abc1234) - 2026-11-22\n" + sample + "\n```\n````\n\nafter.\n"
+	}
+	got := normalizeTicketForSageFreshness(doc("sample text"))
+	if !strings.Contains(got, "### Result (abc1234)") || !strings.Contains(got, "sample text") || !strings.Contains(got, "after.") {
+		t.Fatalf("nested fence content was stripped: %q", got)
+	}
+	if sageReviewBodyDigest(doc("sample text")) == sageReviewBodyDigest(doc("edited sample")) {
+		t.Fatal("editing text under a sample Result heading inside a nested fence must change the digest")
+	}
+	// An info string never closes a fence.
+	infoed := head + "\n```md\n```go\n### Result (abc1234) - 2026-11-22\nkept\n```\n"
+	if got := normalizeTicketForSageFreshness(infoed); !strings.Contains(got, "kept") {
+		t.Fatalf("a line with an info string closed the fence: %q", got)
+	}
+}
+
+// A legacy stamp digested the whole body. When the stamped body already held
+// a phase Result, appending the next phase's Result matches neither current
+// digest, so the check consults history: the stamp must equal a committed
+// revision's full-body digest whose stripped body equals the current one.
+func TestSageFreshnessLegacyStampSurvivesLaterResultAppend(t *testing.T) {
+	root := t.TempDir()
+	stem := "260101-epic-legacyappend"
+	rel := "ai-docs/tickets/todo/" + stem + ".md"
+	path := writeSageTicket(t, root, stem, nil)
+	initSageFreshnessRepo(t, root)
+	phase1 := readFileString(t, path) + "\n### Result (abc1234) - 2026-11-22\n\nphase one landed.\n"
+	if err := os.WriteFile(path, []byte(phase1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.Replace(phase1, "\n---\n", "\nsage-review-design: completed\nsage-review-design-reviewed: "+sageReviewFullBodyDigest(phase1)+"\n---\n", 1)
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commitSageFreshnessRepo(t, root, "legacy stamp with a phase 1 result")
+
+	check := func(want int, what string) {
+		t.Helper()
+		f, err := sageReviewFreshnessCheck(nil, root, rel, []string{"design"})
+		if err != nil || len(f.Stages) != want {
+			t.Fatalf("%s: freshness = %+v, err = %v, want %d stale stage(s)", what, f, err, want)
+		}
+	}
+	check(0, "unchanged legacy stamp")
+
+	withPhase2 := legacy + "\n### Result (def5678) - 2026-11-23\n\nphase two landed.\n"
+	if err := os.WriteFile(path, []byte(withPhase2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check(0, "next phase Result appended")
+
+	// Reviewed content changed: the history match no longer helps.
+	edited := strings.Replace(withPhase2, "Body text.", "Body text edited.", 1)
+	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check(1, "plan edited after the stamp")
+
+	// A stamp matching no committed revision keeps the advisory.
+	orphan := strings.Replace(withPhase2, sageReviewFullBodyDigest(phase1), "0123456789abcdef", 1)
+	if err := os.WriteFile(path, []byte(orphan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check(1, "stamp matching no committed body")
+}
