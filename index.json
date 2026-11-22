@@ -527,7 +527,17 @@
       "registered_at": "2026-11-21T12:39:33Z"
     },
     "261121-feat-ws-board-command-slots": {
-      "registered_at": "2026-11-21T09:21:23Z"
+      "registered_at": "2026-11-21T09:21:23Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T12:41:55Z",
+        "impl": {
+          "branch": "impl/develop/aptly-ended-charm"
+        }
+      }
     },
     "261121-feat-ws-board-search-ranking": {
       "registered_at": "2026-11-21T09:35:55Z"
