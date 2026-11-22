@@ -1129,3 +1129,13 @@ byte-identical) and seeing its test fail.
 - Fixture: every hold's wait (list, stop, stop-block, output hang) also selects
   on a `quit` channel closed in `t.Cleanup`, so a failed run releases all held
   handlers at once.
+
+#### Edition (bae0d3325) - 2026-11-23
+
+Review round 6 (test-only; no product change). The ordering tests proved when the daemon snapshotted a list, but `xhStale` compares the browser's own issue order, and a timed-out GET can be replaced by a fresh one carrying the same marker. They now use browser-side evidence (Playwright `request` / `requestfinished` / `requestfailed`, recorded in issue order with method, URL, status and body):
+
+- STOP-TERMINAL: no list read is in flight when the stop is issued; the test asserts that every read that carried the running list the page consumed (exec_s3 present, exec_s1 running) was issued after the stop POST and finished with 200. Scratch revert of the running→ended exception in `xhStale` still fails it (waiting for the stopped chip).
+- ORDER-LATE-LIST: exec_o9 leaves the live fixture right after the held snapshot is taken, so only that captured response carries it; the test asserts exactly one read carried it, it finished with 200 (not failed), and it was issued before the retry POST. Scratch revert of the issue-number check (`return false`) still fails it (history `sending, closed, failed, closed`). Scratch probe for the closed gap: `XH_REQ_MS=300` with the release delayed 700 ms (the held GET times out and a fresh GET replaces it) now fails (`exec_o9` never appears); before the fixture change it could pass.
+- LIST-RETRY (minor): failures are armed only after the empty setup revision's own read finished and no list read is in flight or issued for 500 ms. The guard is a setup change; not separately scratch-reverted (the retry removal proof from round 3 is unchanged).
+
+Verification: `go test -race -count=1 -run 'TestExecHUDReviewBrowser$|TestExecHUDBrowser$' ./internal/wsdashboard` ok (386.7 s); `GOOS=windows go vet ./internal/wsdashboard` clean; `git diff --check` clean.
