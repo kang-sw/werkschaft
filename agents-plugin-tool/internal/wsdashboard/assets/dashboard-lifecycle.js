@@ -882,6 +882,10 @@
     el.addEventListener("load", function () {
       if (shFrames.indexOf(ent) < 0) return;
       ent.loaded = true;
+      if (ent.lateHash !== undefined) {
+        try { ent.el.contentWindow.location.hash = ent.lateHash; } catch (x) { /* unloading */ }
+        delete ent.lateHash;
+      }
       shSettings(ent);
       if (shWant === ent) shShow(ent);
       else {
@@ -910,16 +914,25 @@
     }
     // A destination that never became visible owns no reader edits. A rapid
     // pick supersedes it without parking an extra loading document.
-    if (window.WsShell.cacheLimit && shOn && shWant && shWant !== shOn) shDrop(shWant);
-    var ent = shOn || shWant;
+    // A repick of that same pending destination keeps its loading document.
+    var pend = shOn && shWant && shWant !== shOn && shWant.f.path === f.path && f.path !== shOn.f.path ? shWant : null;
+    if (window.WsShell.cacheLimit && shOn && shWant && shWant !== shOn && !pend) shDrop(shWant);
+    var ent = pend || shOn || shWant;
     if (ent && ent.f.path === f.path) {
       ent.el.inert = false;
       if (push && window.WsShell.pagePath(location) + location.hash !== f.path + f.hash) shPush(f);
       if (!push) shIndex = shHistoryIndex();
       if (f.hash !== ent.f.hash) {
-        try { ent.el.contentWindow.location.hash = f.hash; } catch (x) { /* unloading */ }
+        // A document still loading may drop a hash assignment; the load
+        // handler applies it once the page is there.
+        if (ent.loaded) {
+          try { ent.el.contentWindow.location.hash = f.hash; } catch (x) { /* unloading */ }
+        } else ent.lateHash = f.hash;
       }
       ent.f = f;
+      // A pending destination whose load already fired never gets another
+      // load event to show it; go through the normal show path now.
+      if (ent === shWant && ent !== shOn && ent.loaded) shShow(ent);
       return;
     }
     if (!ent) { shStart(f, push); return; }
