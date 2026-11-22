@@ -330,3 +330,85 @@ Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
 - One run of the earlier, narrower filter timed out once in
   `TestAgyModelWaitWatchdogPublishesExhaustionToHostedLeadConversation`. It
   passed three times in isolation and in the broad run above.
+
+#### Edition (8363a4f3c) - 2026-11-22
+
+The same reviewer's addendum (items 7-11) and the lead's parentless note.
+The lead settled each one; `8363a4f3c` fixes them.
+
+7. **Failed stop retry (important).** Before, a failed `Holders.Stop` during
+   a lead-only retirement only set an error, and nothing retried it until
+   the next daemon start. Now `retireLeadOnlyWorker` keeps the detached
+   association and `replaying` on failure and sets `leadOnlyRetiring`.
+   `checkReattach` runs on every heartbeat while `replaying`, and it retries
+   the stop first, as a downgrade retirement (`workerRetiring`) does. While
+   it retries, the record keeps the holder and nothing is submitted.
+   `State.Process` stays true because the process does still run. The
+   error names the failed stop. On success the error goes back to the bare
+   agy reason before the turn settles.
+8. **Crash before settlement (minor).** A daemon can die after the holder
+   clear is persisted but before `processEnded` settles the turn. The next
+   load's `interrupted()` now settles that open turn `TurnFailed` with the
+   agy reason, not the generic `TurnInterrupted`.
+9. **Hosted lead in-band retry (minor).** Added
+   `TestAgyModelWaitInBandFailureContinuesHostedLeadTurn`. It runs a hosted
+   agy lead under the shipped lead-only registration with the silence
+   watchdog off. An in-band `API error` chunk arms the drain, the prompt is
+   cancelled, and `continue` goes out on the same session while the turn
+   stays running.
+10. **One write, no config before refusal (minor).** Retirement now runs:
+    clear the holder, then `processEnded`, then `leadOnlyRetired`.
+    `leadOnlyRetired` makes the only registration write; `publish` and
+    `processEnded` write none. A lead-only rejoin reads no profile
+    (`reattach`). `startWorker` skips `loadCompaction`, `loadModelWait`, and
+    `workerPermission` for that attach. On load, `startConvWith` admits
+    before `currentWorkerPermission` reads any profile. `startProcess` and
+    `Deliver` already admitted first (item 3).
+11. **Stale cross-reference (minor).**
+    `261118-refactor-ws-harness-name-branches` Constraints now say
+    `261118-feat-ws-agy-tool-names-and-worker-role` Phase 3 was retired by
+    owner decision (1545) and adds no sites.
+
+**Correction to the Result.** "Such a record opens no turn" is wrong. A
+profile-created parentless worker can run a user turn. Its record keeps
+`TurnStartedAt` but never `TurnOpen`, which is persisted only for a parented
+record, so startup does not rebuild the turn. The parentless case of
+`TestAgyWorkerRefusalReasonSurvivesARestart` now retires the holder while
+such a user turn runs.
+
+Tests in `agy_lead_only_test.go`:
+- `TestAgyWorkerRejoinRetriesAFailedStopFromTheHeartbeat` replaces
+  `TestAgyWorkerRejoinFailedStopKeepsTheHolderForTheNextDaemon`. The first
+  stop fails and heartbeats keep retrying, with no report or launch. Once
+  the stop succeeds the turn reports failed exactly once with the agy
+  reason, and nothing more happens on later heartbeats.
+- `TestAgyWorkerRetirementCrashSettlesWithTheAgyReason`: a record with an
+  open turn and no holder settles `TurnFailed` with the agy reason.
+- `TestAgyWorkerRetirementRestartsTheExpiryClock` now waits for the
+  retirement's loop step before reading the stamp. Because the stamp now
+  follows `processEnded`, reading it right after the holder clear raced.
+
+`ai-docs/manuals/ws-mcp.md` now covers the heartbeat retry, the crash
+settlement, and the absence of config reads before refusal.
+
+Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+- `go test ./internal/wsagent -count=3 -run 'TestAgyModelWaitInBandFailureContinuesHostedLeadTurn|TestAgyWorker|TestAgyLeadOnly'`:
+  ok.
+- `go test ./internal/wsagent -count=2 -run 'TestAgyWorker|TestAgyLeadOnly|TestAgyModelWaitInBandFailureContinuesHostedLeadTurn|Downgrade|Rejoin|Interrupted'`:
+  ok.
+- `go test ./internal/wsagent -run 'Agy|Agent|Worker|Held|Tier|Lead|Spawn|Child|REST|Registration|Wake|Deliver|Rejoin|Codex|Expir|Ownership|Downgrade|Reattach|Recovery|Interrupt|Watchdog|ModelWait'`:
+  the only failure was `TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop`
+  ("got no loop"). It is flaky without this change: 4 or 5 of 10 runs fail
+  at both `2bafac925` (the ticket base) and `68616bdb9`.
+- `go test ./internal/mcp -run 'TestHostedAgy|DashboardTierRouting|AgentTiers|TestAgentLead|TestAgyWorkerConnection'`:
+  ok.
+- `go vet ./internal/wsagent ./internal/mcp`: clean. gofmt is clean on the
+  touched files.
+- Mutation checks:
+  - Restoring the one-shot behavior (clearing `replaying` on a failed stop)
+    fails the heartbeat test.
+  - Removing the admission in `interrupted()` fails the crash test.
+  - Removing only the explicit `leadOnlyRetiring` branch in `checkReattach`
+    is not caught. The fake holder stays `Attached` after `Detach`, so the
+    normal ownership path retries too. The branch stays so that a holder
+    reporting itself detached is still retried.
