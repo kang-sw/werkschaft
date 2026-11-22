@@ -17,6 +17,8 @@ import (
 
 const (
 	planUsageHistoryCache      = "plan-usage-history.json"
+	// Retained name check: the persisted five-hour history file name
+	// (TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile).
 	planUsageCodexHistoryCache = "plan-usage-codex-history.json"
 	planUsageHistoryAge        = 14 * 24 * time.Hour
 	planUsageHistoryCap        = 5000

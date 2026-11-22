@@ -197,6 +197,8 @@ func (s *planUsageStore) queryCodex(ctx context.Context) (planUsageEntry, error)
 		req.Header.Set("ChatGPT-Account-Id", auth.Tokens.Account)
 	}
 	req.Header.Set("User-Agent", "ws-dashboard")
+	// Retained name check: the provider's usage endpoint headers
+	// (TestPlanUsageCodexRESTWindows).
 	req.Header.Set("originator", "codex_cli_rs")
 	body, err := s.readUsageResponse(req)
 	if err != nil {

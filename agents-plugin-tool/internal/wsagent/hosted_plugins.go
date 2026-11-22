@@ -38,6 +38,8 @@ func HostedPluginEnvironment(name, root string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Retained name check: the shipped package manifest's build-owned path
+	// (TestHostedPluginEnvironmentUsesNativeTemplatePaths).
 	raw, err := fs.ReadFile(source, ".claude-plugin/plugin.json")
 	if err != nil {
 		return nil, err
@@ -61,6 +63,8 @@ func HostedPluginEnvironment(name, root string) (map[string]string, error) {
 		"WS_MCP_CLI_NAME": "", "WS_MCP_CONFIG_MANIFESTS": "",
 	}
 	for key, value := range manifest.Servers[name].Env {
+		// Retained name check: the root placeholder the shipped manifests carry
+		// (TestHostedPluginEnvironmentUsesNativeTemplatePaths).
 		if strings.Contains(value, "${CLAUDE_PLUGIN_ROOT}") {
 			value = strings.ReplaceAll(filepath.FromSlash(value), "${CLAUDE_PLUGIN_ROOT}", root)
 		}

@@ -24,7 +24,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	c.loadModelWait()
 	// Each agy process writes its own worker log: locate it afresh.
 	c.agyLog = nil
-	if rec.Backend == BackendAgy {
+	if life.WorkerLog {
 		c.agyLog = c.newAgyLog()
 	}
 	level, source, err := c.r.leadPermission(rec, c.dir)

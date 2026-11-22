@@ -91,8 +91,10 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		Lifecycle: LifecyclePolicy{
 			ComposedLeadInstructions: true,
 			// No stdio fallback: an agy lead has no ws-mcp without the route.
-			LeadHTTPMCP:  true,
-			TurnActivity: true,
+			LeadHTTPMCP:   true,
+			TurnActivity:  true,
+			InternalTurns: true,
+			WorkerLog:     true,
 		},
 		// Native default mode asks before each run_command, and the daemon
 		// refuses it (agy 1.5.14 live probe: native auto and

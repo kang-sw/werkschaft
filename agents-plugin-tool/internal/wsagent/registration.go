@@ -356,6 +356,8 @@ func profileBackends(registries []map[string]BackendRegistration) []string {
 
 // permissionModes preserves legacy Pi values accepted on reads and ignored at
 // launch. Registered extensions use their own modes, not the Pi fallback.
+// Retained name check: legacy Pi permission values are persisted bytes read
+// back by name (TestPermissionModesLegacyFallback).
 func permissionModes(backend string, registries []map[string]BackendRegistration) []string {
 	if backend == BackendPi {
 		return LeadPermissionModes

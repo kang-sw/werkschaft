@@ -16,6 +16,9 @@ func isCompactionTuneKey(key string) bool {
 		return true
 	}
 	switch key {
+	// Retained name check: these are the harness-bucketed compaction config keys a
+	// user's config may hold; registration data does not rename a stored key
+	// (TestCompactionConfigGetTuneAndLegacy).
 	case "claude.compaction_advisory_enabled",
 		"claude.compaction_advisory_percent",
 		"pi.compaction_advisory_percent",

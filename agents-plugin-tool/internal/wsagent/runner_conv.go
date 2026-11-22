@@ -1820,7 +1820,7 @@ func (c *conv) kickInput() {
 	// prompt's delivery.
 	sentAt := c.r.opts.Now()
 	startedAt := sentAt.UnixMilli()
-	heldAgy := c.record().heldAgyWorker()
+	heldAgy := c.r.heldInternalWorker(c.record())
 	if len(recs) > 0 {
 		// Keep drained input recoverable until the send succeeds.
 		c.update(func(rec *Record) { rec.Queued = queue })

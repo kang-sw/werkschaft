@@ -72,6 +72,8 @@ type Record struct {
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// AgyBypass is ws-side approval intent; PermissionMode stays native.
 	// Keep it top-level so older Record writers retain it as unknown data.
+	// Retained name check: the persisted Record member older daemons wrote
+	// (TestAgyBypassScopeAndLegacyRecordRewrite).
 	AgyBypass bool `json:"agy_bypass,omitempty"`
 	// PluginIsolation selects the lead's plugin loadout across restarts.
 	PluginIsolation string `json:"plugin_isolation,omitempty"`
@@ -1021,14 +1023,6 @@ func registration(rec Record, now time.Time) wsdashboard.Registration {
 
 func (rec Record) heldWorker() bool {
 	return wsdashboard.HeldAgentWorker(rec.Lead, rec.HolderID, rec.HandedOffAt)
-}
-
-func (rec Record) heldAgyWorker() bool {
-	return rec.Backend == BackendAgy && rec.Parent != nil && rec.heldWorker()
-}
-
-func (rec Record) agyInternalPrompt() bool {
-	return rec.Backend == BackendAgy && rec.Parent != nil && !rec.TurnOpen && rec.TurnStartedAt != 0
 }
 
 func (rec Record) handedOff() bool {

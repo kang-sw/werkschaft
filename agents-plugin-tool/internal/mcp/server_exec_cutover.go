@@ -5,7 +5,6 @@ import (
 	"slices"
 
 	"github.com/kang-sw/devenv/internal/execjob"
-	"github.com/kang-sw/devenv/internal/wsagent"
 )
 
 // server_exec_cutover.go decides what a connection whose bound conversation
@@ -34,11 +33,12 @@ func (s *Server) execToolsListed() bool {
 }
 
 // codexReadTools reports whether this connection lists and admits the
-// fs.* read tools: a trusted binding to a Codex conversation that launched
-// under the cutover. A supplied session_key or hello field never stands in
+// fs.* read tools: a trusted binding to a conversation of a backend that declares
+// them (LifecyclePolicy.ExecReadTools, Codex) that
+// launched under the cutover. A supplied session_key or hello field never stands in
 // for that binding.
 func (s *Server) codexReadTools() bool {
-	return s.conversation != "" && s.execCutover == wsagent.BackendCodex
+	return s.conversation != "" && s.execCutover != "" && s.lifecycleOf(s.execCutover).ExecReadTools
 }
 
 // cutoverListed reports whether a tool permanentlyHiddenTool hides is

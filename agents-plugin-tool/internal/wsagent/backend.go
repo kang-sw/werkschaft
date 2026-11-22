@@ -606,6 +606,8 @@ func harnessCommand(command, name string) (string, []string, error) {
 // shimRemedy tells the user how to get a refused shim out of the way of
 // harness name.
 func shimRemedy(shim, name string) string {
+	// Retained name check: the remedy keys on the program the shim wraps
+	// (claude.exe), an executable name, not a backend (TestHarnessCommandRefusalNamesARemedy).
 	if name == "claude" {
 		return fmt.Sprintf(`install Claude Code's native build, or put the directory holding the native claude.exe (for example %%USERPROFILE%%\.local\bin) ahead of %s on PATH`, filepath.Dir(shim))
 	}

@@ -27,6 +27,8 @@ func SpawnAgentEvent(st State, key string) wslive.Event {
 	if label == "" {
 		label = "subagent " + st.ID
 	}
+	// Retained name check: the live agent id prefix of a Pi child row is persisted in
+	// snapshots written by older daemons (TestAgentSpawnHostedWorkerRows).
 	ev := wslive.Event{Kind: wslive.KindAgent, AgentID: "pi:" + st.ID,
 		AgentKind: wslive.AgentKindPi, Harness: st.Backend, Label: label, Status: status,
 		Model: st.Model, Effort: st.Effort, Observed: st.Observed, SessionKey: key,
