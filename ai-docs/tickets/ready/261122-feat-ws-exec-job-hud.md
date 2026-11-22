@@ -668,6 +668,65 @@ and `retireRetryMax` and an earlier test's retire goroutine reading them, and
 `TestHostedJobStoppedDuringItsHolderLaunchStaysUntilTheHolderGoes` depending
 on millisecond ordering of `EndedAt` when pruning.
 
+#### Edition (899877ad6) - 2026-11-23
+
+Round 3 of the pre-merge review (FIX-FIRST) on 1204ac3cc. The fix is 899877ad6;
+the test-hygiene commit 83343849d (below) sits between. The notice-exposure
+Critical stays closed by lead decision (round 1).
+
+- **Important 1, absence decided by a separate `List`: fixed.**
+  `Manager.Stop` now answers `wsholder.ErrUnknownHolderIncomplete` (wrapping
+  `ErrUnknownHolder`, so every `errors.Is` consumer is unchanged) when the id
+  is not indexed and the last scan was incomplete, both read under the one lock
+  of the lookup. `Hosted.stopHolderOf` acts only on that answer and calls no
+  `List`, so a scan that indexes the holder and completes the census after the
+  lookup cannot turn it into a success. Tests: the manager's three answers
+  (complete, incomplete, complete again); a fake whose scan indexes the holder
+  and completes the census right after the answer (the stop still fails, the
+  job stays running and unmarked, and the next stop ends it). Trade-off,
+  accepted: under a persistently incomplete census an absent target cannot be
+  stopped; the stop keeps failing until the target is indexed or a scan
+  completes the census (the job stays visible and fenced meanwhile, which is
+  what reconciliation needs).
+- **Important 2, pending stop rows past the cap: accepted, no code.** A
+  pending stop row follows the existing completion-notice exemption
+  (`row.Notice`), which has the same unbounded-under-permanent-deferral
+  property; growth needs more than 200 user-stopped jobs whose owner sessions
+  stay handed off. Bounding both notice kinds is a follow-up candidate.
+- **Important 3, a gap before the first outcome: fixed.** `stopNoticeOwedLocked`
+  keeps a user-stopped row from pruning from `endLocked` through the first
+  recorded outcome (none) as well as while pending. Test: 200 running jobs, one
+  stopped with its first admission held in flight, a 201st admitted (pruning
+  runs); the stopped row is kept, its deferred outcome is pending, and the
+  timer's retry finds it. It fails when the keep is reduced to pending.
+- **Important 4, the start failure's end rewrite: fixed.** `failStart`'s
+  `wasEnded` branch moves the revision when it changes what a list shows
+  (stopped or exited, possibly marked stopped-by-user, to failed). Test with a
+  fake whose `Stop` sends the exit record of a never-started job, as a real
+  holder's does: the last revision sees `failed` and the job ends unmarked. It
+  fails without the change. Accepted: when the cleanup's own holder stop
+  fails, the waiting stop owner asks the holder again after the hand-over
+  opens; two sequential stops, not concurrent ones.
+- **Minor, release arming:** the hand-over release is armed before `Spawn`, so
+  a recovered panic there cannot strand a waiting stop.
+- **Minor, tests:** the 100 ms hand-over window is replaced by a wait for the
+  stop to own its attempt (it can then only be waiting for the hand-over); the
+  prune tests use a frozen clock so only `endSeq` ranks jobs.
+
+Test-hygiene commit 83343849d (separate): the retire retry bounds are per-Hosted
+options (`HostedOptions.RetireRetryMin/Max`) instead of package variables a test
+rewrote, and pruning breaks equal-millisecond `EndedAt` ties by the order the
+jobs ended in (`endSeq`; production order changes only among equal `EndedAt`).
+Ten concurrent runs of the race-built execjob test binary: 4 of 10 failed
+before (3 data races, 1 prune test); 0 of 30 after that commit and 0 of 30
+again after 899877ad6.
+
+Verification: `go test -race -count=1 ./internal/execjob` (full) ok;
+`./internal/wsholder -run 'Stop|Scan|Unknown'`, `./internal/wsagent -run
+'StopNote|UserStop|TestExecHUDStopAndReads'` and `./cmd/ws-mcp -run
+TestComposer` ok; `GOOS=windows go vet` clean on execjob, wsholder, wsagent,
+wsdashboard, cmd/ws-mcp and internal/mcp.
+
 ### Phase 2: HUD UI
 
 Depends on Phase 1.
