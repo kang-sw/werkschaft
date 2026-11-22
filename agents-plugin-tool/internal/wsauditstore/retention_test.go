@@ -1024,3 +1024,57 @@ func TestControlOnlyRingsAreEvictableAndTombstonesGoLast(t *testing.T) {
 		t.Fatalf("tombstone removal not logged: %s", log.String())
 	}
 }
+
+// TestFailedEvictionSnapshotKeepsQueuedBoundaries pins the order inside a
+// keep-state eviction: a queued finalize waits in the ring's pending lines
+// until the writer idles; when the eviction's replacement header then fails
+// to write, nothing is deleted and that pending boundary must survive for the
+// idle flush or Close to persist. Dropped with the failed snapshot, the
+// restarted store would admit a covered record late.
+func TestFailedEvictionSnapshotKeepsQueuedBoundaries(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+	s, _ := openTest(t, root, nil)
+	for seq := uint64(1); seq <= 9; seq++ {
+		mustAppend(t, s, sourced("a", seq, wsaudit.KindToolCall))
+	}
+	flush(t, s)
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	var evictErr error
+	if _, err := s.call(ctx, job{kind: jobBarrier, fn: func() {
+		s.finalize("a", "holder:1", 11) // queued, not yet written
+		s.mu.Lock()
+		info := s.sessions["a"]
+		s.mu.Unlock()
+		writeFile = func(f *os.File, b []byte) (int, error) {
+			if filepath.Base(filepath.Dir(f.Name())) == "a" {
+				return 0, errors.New("disk full")
+			}
+			return orig(f, b)
+		}
+		evictErr = s.removeRing(info, false)
+		writeFile = orig
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if evictErr == nil {
+		t.Fatal("eviction with a failing snapshot reported success")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, _ := openTest(t, root, nil)
+	loaded(t, s2, "a")
+	if rec := s2.Recover("a", "holder:1"); rec.Boundary != 11 {
+		t.Fatalf("recovered boundary = %d, want the queued 11", rec.Boundary)
+	}
+	mustAppend(t, s2, sourced("a", 10, wsaudit.KindToolCall))
+	flush(t, s2)
+	for _, ev := range events(t, s2, "a") {
+		if ev.ID == "ev-10" {
+			t.Fatal("source record 10, covered by the queued boundary, was appended late")
+		}
+	}
+}

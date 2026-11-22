@@ -948,8 +948,9 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 		}
 	}
 	if r.hasState() {
-		r.clearPending() // the header below carries their state
-		delete(s.dirty, info)
+		// The header below carries the queued loss and boundary lines' state;
+		// they are dropped only once it is written, so a failed snapshot
+		// leaves them for the idle flush or Close to persist.
 		r.forceRotate = true
 		if _, err := r.write(nil, s.limits.SegmentBytes(), math.MaxInt64, nil); err != nil {
 			if cold {
@@ -965,6 +966,8 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 			info.mu.Unlock()
 			return fmt.Errorf("evict audit ring of session %s: persist its recovery state first: %w; nothing deleted", info.dir, err)
 		}
+		r.clearPending()
+		delete(s.dirty, info)
 	}
 	var err error
 	if r.hasState() {
