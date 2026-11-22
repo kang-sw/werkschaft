@@ -219,6 +219,42 @@ func TestCheckoutReleaseEndsEarlierBindings(t *testing.T) {
 	freshProc.nextSent(t)
 }
 
+// TestCheckoutReleaseBackgroundWorkKeepsBindingLive: a child bound before a
+// release whose turn ended with background work still running keeps a live
+// binding (the checkout stays out of reuse); once that work ends and its
+// process sleeps, the binding is no longer live.
+func TestCheckoutReleaseBackgroundWorkKeepsBindingLive(t *testing.T) {
+	restoreGrace := bgResumeGrace
+	bgResumeGrace = 60 * time.Millisecond
+	t.Cleanup(func() { bgResumeGrace = restoreGrace })
+
+	h, clk, wt, _ := releaseHarness(t)
+	lead := h.leadCaller()
+	child, proc := h.agentRunning(lead, AgentSpawnRequest{Prompt: "run build", Tier: "small", Authority: "workdir-write", Worktree: wt})
+	one, zero := 1, 0
+	proc.events <- Event{BackgroundTasks: &one}
+	proc.reply("started background build")
+	eventually(t, "background state", func() bool {
+		return findAgent(t, h.runner.AgentList(lead), child).State == AgentBackground
+	})
+
+	releaseAfterBindings(t, clk, wt)
+	h.runner.CheckoutReleased(wt, false)
+	if c := boundByAddress(h.runner.ActiveChildrenInWorktree(wt))[AgentAddress(child)]; !c.BoundBeforeRelease || !c.Live {
+		t.Fatalf("background work after the turn keeps a pre-release binding live: %+v", c)
+	}
+	if proc.isClosed() {
+		t.Fatal("a release must never stop a process")
+	}
+
+	proc.events <- Event{BackgroundTasks: &zero}
+	eventually(t, "background work ended", func() bool { return h.state(child).BackgroundTasks == 0 })
+	h.asleep(child)
+	if c := boundByAddress(h.runner.ActiveChildrenInWorktree(wt))[AgentAddress(child)]; !c.BoundBeforeRelease || c.Live {
+		t.Fatalf("an asleep pre-release binding is not live: %+v", c)
+	}
+}
+
 // TestCheckoutReleaseRefusesWakeByRootOrCwdAfterRestart: a daemon that
 // starts after the release has no in-memory notice; the wake of a child
 // bound by root (agent.spawn worktree) or by working directory (cwd inside
