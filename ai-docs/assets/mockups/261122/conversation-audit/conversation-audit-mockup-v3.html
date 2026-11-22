@@ -1,0 +1,1763 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conversation Audit View Mockup (v3 — Realigned Shell)</title>
+<style>
+:root,
+html[data-theme="dark"] {
+  --wb-bg: #141518;
+  --wb-shell: #101113;
+  --wb-fg: #e7e7e4;
+  --wb-card: #1e2024;
+  --wb-muted: #2b2d32;
+  --wb-muted-fg: #a2a6ad;
+  --wb-primary: #7aa2ff;
+  --wb-line: color-mix(in srgb, #e7e7e4 16%, transparent);
+  --wb-soft: color-mix(in srgb, #e7e7e4 7%, transparent);
+  --wb-ok: #6cc39a;
+  --wb-fail: #f0797e;
+  --wb-warn: #e0a36c;
+  --wb-hook: #b9a6f5;
+  --wb-rem: #6fcdd4;
+  --wb-think: #a2a6ad;
+  --wb-other: #8e95a3;
+  --wb-user-bg: #243457;
+  --wb-user-fg: #d3defb;
+  --wb-red-bg1: #3a2a2c;
+  --wb-red-bg2: #33252a;
+  --wb-red-fg: #f0b3b6;
+  --wb-red-bd: #6b3a3e;
+  --wb-c1-bg: #2a2d33; --wb-c1-fg: #e4e5e8;
+  --wb-c2-bg: #4d331b; --wb-c2-fg: #f6d9bd;
+  --wb-c3-bg: #243457; --wb-c3-fg: #d2dcf6;
+  --wb-c4-bg: #1d3e2f; --wb-c4-fg: #c6ead6;
+  --wb-scrim: rgb(8 9 12 / .64);
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 10px 28px rgb(0 0 0 / .45);
+  --wb-win-shadow: 0 4px 12px rgb(0 0 0 / .55), 0 20px 48px rgb(0 0 0 / .65);
+  --wb-sans: system-ui, -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+  --wb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html[data-theme="light"] {
+  --wb-bg: #f3f4f7;
+  --wb-shell: #e9ecf1;
+  --wb-fg: #1b1d22;
+  --wb-card: #ffffff;
+  --wb-muted: #eaedf2;
+  --wb-muted-fg: #5c626e;
+  --wb-primary: #2f66e8;
+  --wb-line: color-mix(in srgb, #1b1d22 14%, transparent);
+  --wb-soft: color-mix(in srgb, #1b1d22 5%, transparent);
+  --wb-ok: #1b8a5a;
+  --wb-fail: #cc3a44;
+  --wb-warn: #b86214;
+  --wb-hook: #6e52c9;
+  --wb-rem: #15848d;
+  --wb-think: #69707d;
+  --wb-other: #687082;
+  --wb-user-bg: #dce7ff;
+  --wb-user-fg: #14264d;
+  --wb-red-bg1: #fbecee;
+  --wb-red-bg2: #f5dde1;
+  --wb-red-fg: #8f2530;
+  --wb-red-bd: #dfa5ac;
+  --wb-c1-bg: #eef0f4; --wb-c1-fg: #1b1d22;
+  --wb-c2-bg: #fdf0e3; --wb-c2-fg: #6b3b0f;
+  --wb-c3-bg: #e6eeff; --wb-c3-fg: #1a3775;
+  --wb-c4-bg: #e3f5ec; --wb-c4-fg: #145338;
+  --wb-scrim: rgb(16 20 28 / .40);
+  --wb-shadow: 0 1px 2px rgb(15 20 30 / .07), 0 2px 8px rgb(15 20 30 / .05);
+  --wb-shadow-hi: 0 2px 6px rgb(15 20 30 / .10), 0 12px 28px rgb(15 20 30 / .14);
+  --wb-win-shadow: 0 6px 16px rgb(15 20 30 / .14), 0 22px 48px rgb(15 20 30 / .18);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+html, body { height: 100%; overflow: hidden; background: var(--wb-bg); color: var(--wb-fg); font: 12.5px/1.45 var(--wb-sans); }
+button, input { font: inherit; color: inherit; }
+
+/* ---- Docked mockup control bar (separate from real shell topbar) ---- */
+.mock-bar {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--wb-shell);
+  border-bottom: 1px solid var(--wb-line);
+  font-size: 11.5px;
+  overflow-x: auto;
+  white-space: nowrap;
+  position: relative;
+  z-index: 80;
+}
+.mock-bar .mlbl { font-weight: 800; color: var(--wb-muted-fg); letter-spacing: .02em; }
+.mock-bar .msep { width: 1px; height: 16px; background: var(--wb-line); flex: none; }
+.mock-btn {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-card);
+  color: var(--wb-muted-fg);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: none;
+}
+.mock-btn:hover { color: var(--wb-fg); background: var(--wb-muted); }
+.mock-btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--wb-primary) 18%, var(--wb-card));
+  border-color: color-mix(in srgb, var(--wb-primary) 55%, transparent);
+  color: var(--wb-primary);
+  font-weight: 700;
+}
+.mock-hint { margin-left: auto; font-size: 11px; color: var(--wb-muted-fg); }
+
+/* ---- App shell matching shell-redesign-v4 ---- */
+.app-shell {
+  position: relative;
+  display: flex;
+  height: calc(100vh - 34px);
+  width: 100%;
+  background: var(--wb-bg);
+  overflow: hidden;
+}
+
+/* Icons */
+.i { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.i17 { width: 17px; height: 17px; }
+
+/* .hb harness badges (exact dashboard.css / shell-redesign-v4 styles) */
+.hb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 15px;
+  border-radius: 4.5px;
+  font: 800 10px/1 ui-rounded, "Arial Rounded MT Bold", system-ui, sans-serif;
+  background: #3a3b3f;
+  color: #9a9a9a;
+}
+.hb.sm { width: 19px; height: 12px; border-radius: 3.5px; font-size: 8px; }
+.hb::before { content: "??"; }
+.hb[data-h="claude"] { background: #d97757; color: #fff; }
+.hb[data-h="claude"]::before { content: "Cl"; }
+.hb[data-h="codex"] { background: #f2f2f2; color: #1e1f22; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12); }
+.hb[data-h="codex"]::before { content: "Co"; }
+.hb[data-h="agy"] { background: #3b7be8; color: #fff; }
+.hb[data-h="agy"]::before { content: "Ag"; }
+.hb[data-h="pi"] { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
+.hb[data-h="pi"]::before { content: "Pi"; }
+
+/* Left rail (docked full height on wide; overlay drawer on narrow) */
+.rail {
+  width: 268px;
+  flex: none;
+  margin: 10px 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--wb-card);
+  box-shadow: var(--wb-shadow);
+  border: 1px solid var(--wb-line);
+  overflow: hidden;
+  position: relative;
+  z-index: 10;
+}
+.rail-hd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 8px 0 12px;
+  flex: none;
+  border-bottom: 1px solid var(--wb-line);
+}
+.rail-title { font-weight: 800; font-size: 13px; margin-right: 2px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 99px;
+  background: var(--wb-muted);
+  color: var(--wb-muted-fg);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--wb-ok); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--wb-ok) 25%, transparent); flex: none; }
+.qmark { color: var(--wb-warn); font-weight: 800; }
+.sp { flex: 1; }
+.icon-btn {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--wb-muted); color: var(--wb-fg); }
+.rail-gl { font: 10.5px var(--wb-mono); color: var(--wb-muted-fg); padding: 8px 14px 5px; }
+.rail-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+.rail-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  padding: 0 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.rail-row:hover { background: var(--wb-soft); }
+.rail-row.act { background: var(--wb-muted); }
+.rail-rn { font-weight: 700; font-size: 12px; line-height: 1.25; }
+.rail-rsub { font-size: 10.5px; color: var(--wb-muted-fg); line-height: 1.2; }
+.rail-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--wb-line);
+  flex: none;
+}
+.rfb {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.rfb:hover { background: var(--wb-muted); color: var(--wb-fg); }
+
+.rail-scrim { display: none; }
+
+/* Stage + floating topbar handles */
+.stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 12px;
+  padding: 46px 14px 14px;
+}
+.topbar {
+  position: absolute;
+  z-index: 15;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: none;
+}
+.tb-lc, .tb-rc { display: flex; align-items: flex-start; gap: 6px; flex: none; }
+.tb-cc { flex: 1; min-width: 0; display: flex; justify-content: center; align-items: flex-start; gap: 6px; }
+.topbar .hd-h { pointer-events: auto; }
+.hd-h {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 2px 10px 0;
+  border: 0;
+  border-radius: 0 0 8px 8px;
+  background: var(--wb-card);
+  color: var(--wb-muted-fg);
+  box-shadow: var(--wb-shadow-hi);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.hd-h:hover { color: var(--wb-fg); }
+.hd-h.sq { width: 34px; padding: 2px 0 0; justify-content: center; }
+.hd-h.dr::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 0 0 0 8px;
+  background: linear-gradient(45deg, var(--wb-bg) 50%, var(--wb-muted) 50%);
+}
+.hd-h.dr { padding: 2px 9px 0 11px; }
+.hd-col { display: flex; flex-direction: column; justify-content: center; text-align: left; }
+.hd-r1 { display: flex; align-items: center; gap: 4px; font-size: 9.5px; line-height: 1.1; font-weight: 500; color: var(--wb-muted-fg); }
+.hd-r2 { display: flex; align-items: center; font-size: 12px; line-height: 1.15; font-weight: 800; color: var(--wb-fg); }
+.hd-host {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--wb-muted);
+  color: var(--wb-muted-fg);
+}
+.hd-host::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--wb-ok); }
+.hd-tg { display: none; }
+.uc { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; font-family: var(--wb-mono); }
+.uc-cur { display: flex; align-items: baseline; gap: 2px; }
+.uc-k { color: var(--wb-muted-fg); font: 500 9px/1 var(--wb-sans); }
+.uc-n { color: var(--wb-fg); font: 700 10.5px/1 var(--wb-mono); }
+.uc-p { font-size: 8.5px; color: var(--wb-fg); }
+.uc-pace { font: 600 9px/1 var(--wb-mono); }
+.uc-pace.under { color: var(--wb-ok); }
+.uc-pace.over { color: var(--wb-fail); }
+.tb-vr { width: 1px; height: 18px; background: var(--wb-line); margin: 0 2px; }
+
+/* ---- Darkroom backdrop (wide view only, unpinned audit window open) ---- */
+.darkroom-scrim {
+  position: fixed;
+  inset: 34px 0 0 0;
+  z-index: 30;
+  background: var(--wb-scrim);
+  backdrop-filter: blur(1px);
+  cursor: pointer;
+}
+
+/* ---- Conversation pane ---- */
+.conv-pane {
+  position: relative;
+  z-index: 10;
+  width: 560px;
+  max-width: 100%;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--wb-card);
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  box-shadow: var(--wb-shadow);
+  overflow: hidden;
+}
+.app-shell.darkroom .conv-pane {
+  z-index: 35;
+  box-shadow: var(--wb-win-shadow);
+  border-color: color-mix(in srgb, var(--wb-primary) 35%, var(--wb-line));
+}
+
+.pane-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  height: 38px;
+  border-bottom: 1px solid var(--wb-line);
+  flex: none;
+}
+.ptab {
+  height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ptab.on { color: var(--wb-fg); border-bottom-color: var(--wb-primary); }
+.ptab .cnt { font-size: 10.5px; padding: 0 5px; border-radius: 99px; background: var(--wb-muted); color: var(--wb-muted-fg); }
+.pane-counters {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 10.5px/1 var(--wb-mono);
+}
+.ctr-pill {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--wb-muted);
+  color: var(--wb-muted-fg);
+}
+.ctr-pill b { color: var(--wb-fg); }
+
+/* Search & kind filter chips bar */
+.phead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--wb-line);
+  background: color-mix(in srgb, var(--wb-bg) 35%, var(--wb-card));
+  flex: none;
+}
+.sch-wrap {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px;
+  border-radius: 7px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-bg);
+}
+.sch-wrap:focus-within { outline: 2px solid var(--wb-primary); outline-offset: -1px; }
+.sch-wrap input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.sopt {
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--wb-muted-fg);
+  font: 700 10.5px/1 var(--wb-mono);
+  cursor: pointer;
+}
+.sopt:hover { background: var(--wb-muted); color: var(--wb-fg); }
+.sopt[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--wb-primary) 18%, var(--wb-card));
+  border-color: color-mix(in srgb, var(--wb-primary) 50%, transparent);
+  color: var(--wb-primary);
+}
+.fchips { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+.fchip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--wb-line);
+  cursor: pointer;
+  user-select: none;
+  color: var(--wb-muted-fg);
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  background: transparent;
+}
+.fchip.on { color: var(--wb-fg); background: var(--wb-soft); border-color: color-mix(in srgb, var(--wb-fg) 22%, transparent); }
+.fchip i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+/* Feed */
+.feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.msg { display: flex; flex-direction: column; gap: 3px; }
+.msg.user { align-items: flex-end; }
+.msg.user .bub {
+  max-width: 88%;
+  background: var(--wb-user-bg);
+  color: var(--wb-user-fg);
+  border-radius: 13px;
+  padding: 7px 11px;
+  line-height: 1.5;
+}
+.mh { font-size: 11px; color: var(--wb-muted-fg); display: flex; gap: 6px; align-items: baseline; }
+.mh b { color: var(--wb-fg); }
+.msg.lead .bub {
+  background: var(--wb-muted);
+  border-radius: 12px;
+  padding: 8px 11px;
+  line-height: 1.5;
+}
+
+/* Inline hydrated capsules (.icapsule from dashboard-conversation.css) */
+.icapsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  max-width: min(34ch, 100%);
+  height: 20px;
+  padding: 0 7px;
+  margin: 0 1px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: baseline;
+  white-space: nowrap;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 38%, transparent);
+  color: var(--wb-fg);
+  cursor: pointer;
+}
+.icapsule-head { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.icapsule-val { flex: none; white-space: nowrap; }
+.icapsule-sub { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wb-muted-fg); font-style: italic; }
+.icapsule-answer .icapsule-sub { font-style: normal; }
+.icapsule-answer .icapsule-sub::before { content: "· "; }
+.icapsule-topic { background: var(--wb-muted); box-shadow: inset 0 0 0 1px var(--wb-line); }
+.icapsule-topic .icapsule-sub { font-style: normal; }
+.icapsule-selection, .icapsule-pick {
+  background: var(--wb-muted);
+  box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 0 0 1px var(--wb-line);
+}
+.icapsule-count {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--wb-primary) 18%, var(--wb-card));
+  color: var(--wb-fg);
+}
+.icapsule:hover { background: color-mix(in srgb, var(--wb-primary) 24%, var(--wb-card)); box-shadow: inset 0 0 0 1px var(--wb-primary); }
+.hchips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; }
+
+.icapsule-pop {
+  position: fixed;
+  z-index: 70;
+  min-width: 220px;
+  max-width: min(380px, calc(100vw - 16px));
+  padding: 9px 11px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow-hi);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.icapsule-pop-hd { font-weight: 700; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+.icapsule-pop-quote { padding: 5px 8px; border-left: 3px solid var(--wb-primary); border-radius: 5px; background: var(--wb-muted); font: 11.5px/1.4 var(--wb-mono); }
+
+/* Approved v2 call list & hidden event rows */
+.strip {
+  border-left: 2px solid var(--wb-line);
+  margin-left: 5px;
+  padding-left: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.shead {
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+  padding: 1px 0;
+}
+.shead:hover { color: var(--wb-fg); }
+.call, .hid {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2.5px 7px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+.call:hover, .hid:hover { background: var(--wb-soft); }
+.call.sel, .hid.sel, .sysrow.sel {
+  background: color-mix(in srgb, var(--wb-primary) 18%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--wb-primary) 55%, transparent);
+}
+.call .mk { width: 12px; flex: none; text-align: center; font-weight: 700; }
+.call .tn {
+  font: 600 11.5px var(--wb-mono);
+  background: var(--wb-soft);
+  padding: 0 6px;
+  border-radius: 5px;
+  flex: none;
+}
+.call .ar {
+  font: 11.5px var(--wb-mono);
+  color: var(--wb-muted-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+.call .nm {
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+.call .hit, .hid .hit {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-warn) 26%, transparent);
+  color: var(--wb-warn);
+  flex: none;
+}
+.call .att { font-size: 10px; color: var(--wb-hook); flex: none; }
+.call.muted-empty { opacity: .7; }
+.more { font-size: 11px; color: var(--wb-muted-fg); padding: 1px 7px; cursor: pointer; }
+.more:hover { color: var(--wb-primary); }
+
+.hid {
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  border: 1px dashed var(--wb-line);
+  padding: 1.5px 8px;
+  align-self: flex-start;
+  max-width: 100%;
+}
+.hid .dot-ev { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.hid > span:not(.pv) { white-space: nowrap; flex: none; }
+.hid .pv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-style: italic; }
+.hid.inner { margin-left: 18px; border: 0; padding: 0.5px 7px; }
+.sysrow {
+  align-self: stretch;
+  text-align: center;
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  border-top: 1px solid var(--wb-line);
+  border-bottom: 1px solid var(--wb-line);
+  padding: 3px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.sysrow:hover { color: var(--wb-fg); background: var(--wb-soft); }
+
+mark { background: color-mix(in srgb, var(--wb-warn) 38%, transparent); color: inherit; border-radius: 2px; }
+mark.cur { background: var(--wb-warn); color: #141518; }
+
+/* Composer at bottom of conversation pane */
+.composer {
+  flex: none;
+  margin: 0 10px 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-bg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.composer input { flex: 1; border: 0; background: transparent; outline: none; font-size: 12.5px; color: var(--wb-fg); }
+.composer .send-btn {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 0;
+  background: var(--wb-primary);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ---- Whiteboard right pane ---- */
+.wbp {
+  position: relative;
+  z-index: 10;
+  flex: 1;
+  min-width: 0;
+  background: var(--wb-card);
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  box-shadow: var(--wb-shadow);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+.wbp-hd { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--wb-line); padding-bottom: 8px; }
+.wbp-title { font-weight: 800; font-size: 13px; }
+.wbp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 1; min-height: 0; }
+.wbp-col { background: var(--wb-bg); border: 1px solid var(--wb-line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.wbp-ct { font-size: 11px; font-weight: 800; color: var(--wb-muted-fg); text-transform: uppercase; letter-spacing: .04em; }
+.wcard { border-radius: 9px; padding: 9px 11px; line-height: 1.45; font-size: 12px; }
+.wcard.c1 { background: var(--wb-c1-bg); color: var(--wb-c1-fg); font-weight: 700; }
+.wcard.c2 { background: var(--wb-c2-bg); color: var(--wb-c2-fg); }
+.wcard.c3 { background: var(--wb-c3-bg); color: var(--wb-c3-fg); }
+.wcard.c4 { background: var(--wb-c4-bg); color: var(--wb-c4-fg); }
+
+/* ---- Floating audit window (wide) & 72% bottom sheet (narrow) ---- */
+.audit-wins { position: fixed; inset: 34px 0 0 0; pointer-events: none; z-index: 40; }
+.win {
+  pointer-events: auto;
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--wb-card);
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  box-shadow: var(--wb-win-shadow);
+  overflow: hidden;
+  resize: both;
+  min-width: 340px;
+  min-height: 260px;
+}
+.grab { display: none; width: 40px; height: 4px; border-radius: 2px; background: var(--wb-line); margin: 7px auto 2px; flex: none; }
+.wh {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--wb-line);
+  cursor: move;
+  user-select: none;
+  background: color-mix(in srgb, var(--wb-bg) 35%, var(--wb-card));
+  flex: none;
+}
+.wh .tn { font: 700 12px var(--wb-mono); }
+.wh .st { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; flex: none; font-weight: 700; }
+.wh .st.ok { background: color-mix(in srgb, var(--wb-ok) 20%, transparent); color: var(--wb-ok); }
+.wh .st.fail { background: color-mix(in srgb, var(--wb-fail) 20%, transparent); color: var(--wb-fail); }
+.wh .st.muted { background: var(--wb-muted); color: var(--wb-muted-fg); }
+.wh .m { font-size: 11px; color: var(--wb-muted-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.wh .grow { flex: 1; }
+.ib {
+  font: inherit;
+  font-size: 12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--wb-muted-fg);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.ib:hover { background: var(--wb-soft); color: var(--wb-fg); border-color: var(--wb-line); }
+.ib.pinned { color: var(--wb-primary); background: color-mix(in srgb, var(--wb-primary) 16%, transparent); border-color: color-mix(in srgb, var(--wb-primary) 40%, transparent); }
+
+.wtabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--wb-line);
+  flex: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.wtabs::-webkit-scrollbar { display: none; }
+.wtab {
+  font-size: 12px;
+  padding: 7px 10px;
+  color: var(--wb-muted-fg);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  flex: none;
+}
+.wtab.on { color: var(--wb-fg); border-bottom-color: var(--wb-primary); font-weight: 700; }
+.wtab .c { font-size: 10px; padding: 0 5px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-muted-fg); }
+
+.wtool {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--wb-line);
+  font-size: 11px;
+  color: var(--wb-muted-fg);
+  flex: none;
+}
+.wtool input[data-wq] {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-bg);
+  color: var(--wb-fg);
+  width: 170px;
+}
+.wtool input[data-wq]:focus { outline: 2px solid var(--wb-primary); outline-offset: -1px; }
+
+.banner {
+  margin: 8px 10px 0;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  background: color-mix(in srgb, var(--wb-warn) 14%, transparent);
+  color: var(--wb-warn);
+  border: 1px solid color-mix(in srgb, var(--wb-warn) 35%, transparent);
+  flex: none;
+}
+.banner.info { background: var(--wb-soft); color: var(--wb-muted-fg); border-color: var(--wb-line); }
+
+.wb { flex: 1; overflow: auto; min-height: 0; }
+.code { font: 12px/1.55 var(--wb-mono); padding: 6px 0; }
+.code .l { display: flex; padding-right: 12px; }
+.code .l:hover { background: var(--wb-soft); }
+.code .n { width: 44px; flex: none; text-align: right; padding-right: 10px; color: color-mix(in srgb, var(--wb-muted-fg) 75%, transparent); user-select: none; }
+.code .t { white-space: pre; min-width: 0; }
+.code.wrap .t { white-space: pre-wrap; word-break: break-all; }
+.code .l.err .t { color: var(--wb-fail); }
+
+/* Seen-cut boundary line */
+.code .l.cut {
+  background: color-mix(in srgb, var(--wb-warn) 12%, transparent);
+  border-top: 1px dashed color-mix(in srgb, var(--wb-warn) 55%, transparent);
+  border-bottom: 1px dashed color-mix(in srgb, var(--wb-warn) 55%, transparent);
+}
+.code .l.cut .n, .code .l.cut .t { color: var(--wb-warn); font-weight: 700; white-space: pre-wrap; }
+
+/* Decision 7: Stored truncation row (stored_trunc) */
+.stored-trunc {
+  margin: 4px 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--wb-primary) 50%, transparent);
+  background: color-mix(in srgb, var(--wb-primary) 9%, var(--wb-bg));
+  color: var(--wb-fg);
+  font: 11.5px/1.45 var(--wb-sans);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stored-trunc .st-hd { display: flex; align-items: center; gap: 6px; font-weight: 700; }
+.stored-trunc .st-badge {
+  font: 700 10px/1 var(--wb-mono);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--wb-primary) 20%, var(--wb-card));
+  color: var(--wb-primary);
+}
+.stored-trunc .st-cut {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed color-mix(in srgb, var(--wb-warn) 45%, transparent);
+  color: var(--wb-warn);
+  font-weight: 700;
+}
+
+/* Response-level load more row (truncated: true) */
+.load-more-row {
+  margin: 6px 10px 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-muted);
+  color: var(--wb-fg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+}
+.load-more-btn {
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--wb-primary) 55%, transparent);
+  background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card));
+  color: var(--wb-primary);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Hatched redaction chip */
+.red {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font: 600 11px/1.2 var(--wb-sans);
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: repeating-linear-gradient(135deg, var(--wb-red-bg1) 0 6px, var(--wb-red-bg2) 6px 12px);
+  color: var(--wb-red-fg);
+  border: 1px solid var(--wb-red-bd);
+  vertical-align: 1px;
+  cursor: help;
+}
+
+.kv { display: grid; grid-template-columns: 150px 1fr; gap: 5px 12px; padding: 10px 12px; font-size: 12px; }
+.kv dt { color: var(--wb-muted-fg); }
+.kv dd { margin: 0; font-family: var(--wb-mono); font-size: 11.5px; word-break: break-all; }
+.kv h5 { grid-column: 1 / -1; margin: 8px 0 0; font-size: 11px; color: var(--wb-muted-fg); letter-spacing: .04em; text-transform: uppercase; }
+
+.evl { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.ev { border: 1px solid var(--wb-line); border-radius: 8px; overflow: hidden; }
+.ev .eh { display: flex; gap: 6px; align-items: center; padding: 4px 8px; font-size: 11px; background: var(--wb-soft); }
+.ev pre { margin: 0; padding: 6px 9px; font: 11.5px/1.45 var(--wb-mono); white-space: pre-wrap; }
+
+.wf { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 6px 10px; border-top: 1px solid var(--wb-line); font-size: 11px; color: var(--wb-muted-fg); flex: none; }
+kbd { font: 10px var(--wb-mono); padding: 0 4px; border: 1px solid var(--wb-line); border-radius: 4px; color: var(--wb-fg); }
+
+/* Decision 7: Calm non-error No-Audit-Data empty state (ZERO purge/delete controls) */
+.empty-audit {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 28px 24px;
+  gap: 10px;
+}
+.empty-ico {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--wb-muted);
+  border: 1px solid var(--wb-line);
+  display: grid;
+  place-items: center;
+  color: var(--wb-muted-fg);
+}
+.empty-title { font-size: 14px; font-weight: 800; color: var(--wb-fg); }
+.empty-desc { max-width: 340px; font-size: 12px; color: var(--wb-muted-fg); line-height: 1.55; }
+.empty-meta {
+  margin-top: 4px;
+  padding: 6px 11px;
+  border-radius: 8px;
+  background: var(--wb-bg);
+  border: 1px solid var(--wb-line);
+  font: 11px/1.4 var(--wb-mono);
+  color: var(--wb-muted-fg);
+}
+
+/* ---- Narrow responsive layout (<= 900px) ---- */
+@media (max-width: 900px) {
+  .rail { display: none; }
+  .rail.open {
+    display: flex;
+    position: fixed;
+    left: 10px;
+    top: 44px;
+    bottom: 10px;
+    margin: 0;
+    z-index: 60;
+    box-shadow: var(--wb-win-shadow);
+  }
+  .rail-scrim.open {
+    display: block;
+    position: fixed;
+    inset: 34px 0 0 0;
+    z-index: 55;
+    background: var(--wb-scrim);
+  }
+  .hd-tg { display: flex; }
+  .tb-cc { display: none; }
+  .tb-rc .hd-lbl-btn { display: none; }
+  .topbar { gap: 6px; left: 8px; right: 8px; }
+  .tb-lc, .tb-rc { gap: 4px; }
+  .hd-h { padding: 2px 7px 0; gap: 5px; }
+  .hd-host { display: none; }
+  .stage { padding: 44px 8px 8px; }
+  .conv-pane { width: 100%; border-radius: 10px; }
+  .wbp { display: none; }
+  /* No darkroom on narrow view */
+  .darkroom-scrim { display: none !important; }
+  .app-shell.darkroom .conv-pane { z-index: 10; box-shadow: var(--wb-shadow); border-color: var(--wb-line); }
+  /* 72% bottom sheet */
+  .win {
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 72% !important;
+    min-width: 0;
+    border-radius: 14px 14px 0 0;
+    resize: none;
+  }
+  .grab { display: block; }
+  .wh { cursor: default; }
+  .kv { grid-template-columns: 1fr; gap: 2px; }
+  .kv dt { margin-top: 6px; font-weight: 700; }
+  .mock-hint { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="mock-bar" role="region" aria-label="Mockup controls">
+  <span class="mlbl">MOCKUP</span>
+  <button class="mock-btn" data-theme-set="dark" aria-pressed="true">Dark</button>
+  <button class="mock-btn" data-theme-set="light" aria-pressed="false">Light</button>
+  <span class="msep"></span>
+  <span class="mlbl">STATE</span>
+  <button class="mock-btn" data-preset="default" aria-pressed="true">Default Audit + Darkroom</button>
+  <button class="mock-btn" data-preset="stored_trunc" aria-pressed="false">Stored Truncation (stored_trunc)</button>
+  <button class="mock-btn" data-preset="empty" aria-pressed="false">No Audit Data (Empty)</button>
+  <button class="mock-btn" data-preset="search" aria-pressed="false">Search Match (출력 3)</button>
+  <span class="mock-hint">J/K row · Enter open · ←/→ nav · Esc close · Shift+click / 📌 pin (up to 4)</span>
+</div>
+
+<div class="app-shell" id="appShell">
+  <aside class="rail" id="rail" aria-label="Sessions">
+    <div class="rail-hd">
+      <span class="rail-title">세션</span>
+      <span class="chip"><span class="dot"></span>실시간 14</span>
+      <span class="chip"><span class="qmark">?</span> 43</span>
+      <span class="sp"></span>
+      <button class="icon-btn" title="Sleep"><svg class="i" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+      <button class="icon-btn" title="Refresh"><svg class="i" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.5-4M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.5 4M20 20v-4h-4"/></svg></button>
+    </div>
+    <div class="rail-gl">develop · audit-view</div>
+    <div class="rail-list" id="railList"></div>
+    <div class="rail-foot">
+      <button class="rfb"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg>설정</button>
+      <button class="rfb"><svg class="i" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7"/><path d="M6 10v9h12v-9"/></svg>홈</button>
+    </div>
+  </aside>
+  <div class="rail-scrim" id="railScrim"></div>
+
+  <div class="stage" id="stage">
+    <header class="topbar">
+      <div class="tb-lc">
+        <button class="hd-h sq hd-tg" id="railToggle" title="Sessions"><svg class="i i17" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+        <div class="hd-h" title="Session identity">
+          <div class="hd-col">
+            <span class="hd-r1"><span>devenv</span><span>·</span><span>11/22 09:31</span></span>
+            <span class="hd-r2">Audit View</span>
+          </div>
+          <svg class="i" viewBox="0 0 24 24" style="color:var(--wb-muted-fg)"><path d="M14.5 5.5l4 4L8 20H4v-4z"/></svg>
+        </div>
+        <div class="hd-h">
+          <span class="hb" data-h="claude"></span>
+          <span style="color:var(--wb-fg)">opus-5</span>
+          <svg class="i" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6"/></svg>
+          <span class="hd-host">hosted</span>
+        </div>
+      </div>
+
+      <div class="tb-cc">
+        <div class="hd-h" title="Plan usage">
+          <span class="hb sm" data-h="claude"></span>
+          <span class="uc"><span class="uc-cur"><span class="uc-k">5h</span><span class="uc-n">26</span><span class="uc-p">%</span></span><span class="uc-pace under">-11%</span></span>
+          <span class="uc"><span class="uc-cur"><span class="uc-k">주</span><span class="uc-n">53</span><span class="uc-p">%</span></span><span class="uc-pace over">+18%</span></span>
+          <span class="tb-vr"></span>
+          <span class="hb sm" data-h="codex"></span>
+          <span class="uc"><span class="uc-cur"><span class="uc-k">주</span><span class="uc-n">79</span><span class="uc-p">%</span></span><span class="uc-pace over">+22%</span></span>
+        </div>
+      </div>
+
+      <div class="tb-rc">
+        <button class="hd-h sq" title="New session"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button class="hd-h hd-lbl-btn" title="Tracker"><svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M9 8v8M15 8v5"/></svg><span>SW개발실</span></button>
+        <button class="hd-h hd-lbl-btn" title="Branch"><svg class="i" viewBox="0 0 24 24"><circle cx="6" cy="5.5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="8.5" r="2"/><path d="M6 7.5v9M18 10.5c0 3.5-5 4.5-10.5 6.5"/></svg><span>develop</span></button>
+        <button class="hd-h sq dr" id="topSearchBtn" title="Search conversation"><svg class="i i17" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
+        <button class="hd-h sq dr" title="Settings &amp; panels"><svg class="i i17" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      </div>
+    </header>
+
+    <section class="conv-pane" id="convPane" aria-label="Conversation">
+      <div class="pane-tabs">
+        <button class="ptab on">Conversation</button>
+        <button class="ptab">Files <span class="cnt">12</span></button>
+        <div class="pane-counters">
+          <span class="ctr-pill">USER <b>3</b></span>
+          <span class="ctr-pill">MAIL <b>1</b></span>
+        </div>
+      </div>
+
+      <div class="phead" id="phead">
+        <div class="sch-wrap">
+          <svg class="i" viewBox="0 0 24 24" style="color:var(--wb-muted-fg)"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+          <input id="caQ" placeholder="Search conversation — inputs, outputs, hidden events" autocomplete="off">
+          <button class="sopt" id="optCase" aria-pressed="false" title="Case sensitive">Aa</button>
+          <button class="sopt" id="optRegex" aria-pressed="false" title="Regular expression">.*</button>
+        </div>
+        <div class="fchips">
+          <button class="fchip on" data-f="reminder"><i style="background:var(--wb-rem)"></i>Reminder</button>
+          <button class="fchip on" data-f="hook"><i style="background:var(--wb-hook)"></i>Hook</button>
+          <button class="fchip on" data-f="thinking"><i style="background:var(--wb-think)"></i>Thinking</button>
+          <button class="fchip on" data-f="system"><i style="background:var(--wb-warn)"></i>System</button>
+          <button class="fchip on" data-f="other"><i style="background:var(--wb-other)"></i>Other</button>
+        </div>
+      </div>
+
+      <div class="feed" id="caFeed"></div>
+
+      <div class="composer">
+        <input placeholder="Message session… (use /plan, @topic, or #selection)" aria-label="Message input">
+        <button class="send-btn">Send</button>
+      </div>
+    </section>
+
+    <aside class="wbp" aria-label="Whiteboard">
+      <div class="wbp-hd">
+        <span class="wbp-title">Whiteboard · Conversation Audit View</span>
+        <span class="chip">develop @ 192f8b2bf</span>
+      </div>
+      <div class="wbp-cols">
+        <div class="wbp-col">
+          <div class="wbp-ct">Decisions</div>
+          <div class="wcard c1">D1 · Realign v3 surrounds to landed shell + develop@192f8b2bf</div>
+          <div class="wcard c3">D3 · Wide darkroom dims rail, topbar &amp; whiteboard; keeps conv + unpinned audit lit</div>
+          <div class="wcard c4">D7 · Distinct stored_trunc boundary + calm empty state (no purge UI)</div>
+        </div>
+        <div class="wbp-col">
+          <div class="wbp-ct">Contracts (602–610)</div>
+          <div class="wcard c2">602 · Inline .icapsule pills deduplicated from .hchips</div>
+          <div class="wcard c1">606 · Pinned windows (up to 4, 24px step) stay lit without darkroom</div>
+          <div class="wcard c3">609 · Narrow ≤900px: 72% bottom sheet, 1-col Meta, zero darkroom</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="darkroom-scrim" id="darkroomScrim" hidden title="Click dimmed area to close unpinned audit window"></div>
+  <div class="audit-wins" id="caWins"></div>
+</div>
+
+<div class="icapsule-pop" id="icapsulePop" hidden></div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  var RED = /⟦REDACTED:([a-z_]+):(\d+)⟧/g;
+  function redact(h) {
+    return h.replace(/⟦REDACTED:([a-z_]+):(\d+)⟧/g, function (_, k, n) {
+      return '<span class="red" title="wsredact rule: ' + k + ' · ' + n + ' chars, not stored">🔒 ' + k + ' · ' + n + 'ch</span>';
+    });
+  }
+
+  /* ---- Rail sessions ---- */
+  var SESSIONS = [
+    { h: 'claude', name: 'Audit View', sub: 'Just now · running', act: 1 },
+    { h: 'codex', name: 'CO-3', sub: '4m ago · idle' },
+    { h: 'agy', name: 'AGY-5', sub: '14m ago · idle' },
+    { h: 'pi', name: 'PI-1', sub: '1h ago · stopped' },
+    { h: 'claude', name: 'CL-9', sub: 'Yesterday' },
+    { h: 'codex', name: 'CO-2', sub: 'Yesterday' }
+  ];
+  $('railList').innerHTML = SESSIONS.map(function (r) {
+    return '<div class="rail-row' + (r.act ? ' act' : '') + '"><span class="hb" data-h="' + r.h + '"></span><div><div class="rail-rn">' + esc(r.name) + '</div><div class="rail-rsub">' + esc(r.sub) + '</div></div></div>';
+  }).join('');
+
+  /* ---- Mockup audit data ---- */
+  function makeBashOut() {
+    var o = ['$ go test ./internal/wsdashboard/... -run "Palette|Board|Pins" -count=1'];
+    var pk = ['palette', 'board_motion', 'pins_column', 'tophead_sticky', 'note_images'];
+    for (var i = 0; i < 18; i++) {
+      var p = pk[i % pk.length];
+      if (i === 3) o.push('    env: WS_TRACKER_TOKEN=⟦REDACTED:api_token:40⟧ GIT_ASKPASS=/usr/local/bin/ws-askpass');
+      else if (i === 4) o.push('    pins_column_test.go:88: empty board: got height 58px, want full (r-board > .empty:only-child)');
+      else if (i === 5) o.push('--- FAIL: TestPinsEmptyFullHeight (0.41s)');
+      else o.push('=== RUN   Test' + p.replace(/(^|_)(\w)/g, function (_, a, b) { return b.toUpperCase(); }) + '/case_' + (i % 19) + ' — PASS (0.0' + (i % 9) + 's)');
+    }
+    o.push('FAIL\tagents-plugin-tool/internal/wsdashboard\t7.412s');
+    return o;
+  }
+  var BASH_OUT = makeBashOut();
+
+  var CALLS = {
+    'c-read': {
+      tool: 'Read', st: 'ok', args: 'assets/cards.js · 840–870', dur: '0.1s', tok: '+1.2k',
+      input: { file_path: 'agents-plugin-tool/internal/wsdashboard/assets/cards.js', offset: 840, limit: 30 },
+      out: ['    mount: function (el, o) {', '      board = el;', '      opt = o;', '      col = o.column || null;', '      pins = mk("div", "bpins");', '      board.insertBefore(pins, board.firstChild);', '    }'],
+      respTrunc: '2.4 MB response truncated by RPC · 280 lines remaining',
+      att: []
+    },
+    'c-grep': {
+      tool: 'Grep', st: 'ok', args: '"nimgs|empty:only-child" dashboard.css', dur: '0.2s', tok: '·',
+      input: { pattern: 'nimgs|empty:only-child', path: 'assets/dashboard.css', '-n': true },
+      out: ['504:.nimgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }', '508:.topic > .nimgs { margin: 0 10px 6px; }', '1488:.r-board:has(> .empty:only-child) { height: 100%; }'],
+      att: []
+    },
+    'c-bash': {
+      tool: 'Bash', st: 'fail', args: 'go test ./internal/wsdashboard/... -run "Palette|Board|Pins"', dur: '7.6s', tok: '+9.8k', exit: 1,
+      input: { command: 'cd agents-plugin-tool && go test ./internal/wsdashboard/... -run "Palette|Board|Pins" -count=1', description: 'Run dashboard palette/board/pins tests', timeout: 600000 },
+      out: BASH_OUT,
+      cutAt: 10,
+      storedTrunc: {
+        headLines: 7,
+        tailLines: 3,
+        omittedBytes: '184,320',
+        cutInOmittedMiddle: true
+      },
+      respTrunc: 'Response page 1 of 3 · 412 additional lines available',
+      att: [
+        { k: 'hook', name: 'PostToolUse', src: 'ws plugin', text: '(응답 언어: 한국어)' },
+        { k: 'reminder', name: 'system-reminder', src: 'harness', text: 'File cards.js was referenced. Verify before editing.' }
+      ]
+    },
+    'c-edit': {
+      tool: 'Edit', st: 'ok', args: 'assets/dashboard.css: .topic > .nimgs → .tophead > .nimgs', dur: '0.1s', tok: '+210',
+      input: { file_path: 'assets/dashboard.css', old_string: '.topic > .nimgs { margin: 0 10px 6px; }', new_string: '.tophead > .nimgs { margin: 0 10px 6px; }' },
+      out: ['The file assets/dashboard.css has been updated successfully.'],
+      att: []
+    },
+    'c-mail': {
+      tool: 'mailbox_send', st: 'ok', args: 'to: id:regroup… · "UX -> EXEC: post-swap QA…"', dur: '0.3s', tok: '+1.1k',
+      input: { session_key: 'erratic-hardly-tremor', to: 'id:regrouppunctuateconstantcanyon', content: 'UX -> EXEC: post-swap QA.\nAuth token: Bearer ⟦REDACTED:bearer_token:64⟧' },
+      out: ['sent to id:regrouppunctuateconstantcanyon', 'reply_to: id:ibuprofenpetitewhimsicaloak'],
+      att: [{ k: 'hook', name: 'PostToolUse', src: 'ws plugin', text: '(응답 언어: 한국어)' }]
+    }
+  };
+
+  var HID = {
+    'h-session': {
+      k: 'system', title: 'Session start context', pv: 'AGENTS.md · skills (31) · SessionStart hook · system prompt absent',
+      sections: [
+        ['System prompt', 'Not carried in this harness stream (claude · stream-json). Streams that carry system prompts display them here verbatim.'],
+        ['AGENTS.md', '# AGENTS.md - devenv\n## Current Authority\n`AGENTS.md` is the canonical root workflow context…']
+      ]
+    },
+    'h-hook1': { k: 'hook', title: 'UserPromptSubmit', pv: '(응답 언어: 한국어)', sections: [['ws plugin · UserPromptSubmit', '(응답 언어: 한국어)']] },
+    'h-think': { k: 'thinking', title: 'Thinking block', pv: '1.3k tokens · signature only stored', sections: [['Thinking', 'Only cryptographic signature is emitted in stream-json; token count: 1,312.']] },
+    'h-rem1': { k: 'reminder', title: 'system-reminder', pv: 'Keep verification concise and cite exact TestPinsEmptyFullHeight output…', sections: [['system-reminder', 'Keep verification concise and cite exact TestPinsEmptyFullHeight output.']] },
+    'h-other': { k: 'other', title: 'custom_telemetry', pv: 'Unknown stream event kind · click to inspect Raw envelope', sections: [['Raw event', 'Normalized as "other" and opened directly on the Raw tab.']], openRaw: true }
+  };
+
+  var FEED = [
+    { t: 'sys', id: 'h-session', label: 'Session start · context 3 items · system prompt not in stream' },
+    {
+      t: 'user', at: '09:31',
+      html: 'Check <span class="icapsule icapsule-topic" data-icapsule="topic"><span class="icapsule-head">[ship-gate]</span></span> answer <span class="icapsule icapsule-answer" data-icapsule="ans"><span class="icapsule-head">(81)</span><span class="icapsule-val">a</span><span class="icapsule-sub">darkroom</span></span> and review <span class="icapsule icapsule-pick" data-icapsule="pick"><span class="icapsule-head">p3</span><span class="icapsule-sub">stored_trunc</span></span> for <span class="icapsule icapsule-selection" data-icapsule="sel"><span class="icapsule-head">[ship-gate] (81)</span><span class="icapsule-count">+1</span></span> before running the TestPins suite.'
+    },
+    { t: 'hid', id: 'h-hook1' },
+    { t: 'hid', id: 'h-think' },
+    { t: 'tools', dur: '8.1s', calls: ['c-read', 'c-grep', 'c-bash', 'c-edit'] },
+    { t: 'hid', id: 'h-rem1' },
+    { t: 'hid', id: 'h-other' },
+    {
+      t: 'lead', at: '09:33',
+      chips: ['(82) b · pinned stays lit'],
+      text: 'Confirmed TestPinsEmptyFullHeight failure in pins_column_test.go:88 and captured redacted env output. Inspect any call row or hidden event to open the audit window.'
+    },
+    { t: 'tools', dur: '0.3s', calls: ['c-mail'] }
+  ];
+
+  var COLOR = { reminder: 'var(--wb-rem)', hook: 'var(--wb-hook)', thinking: 'var(--wb-think)', system: 'var(--wb-warn)', other: 'var(--wb-other)' };
+  var KIND = { reminder: 'Reminder', hook: 'Hook', thinking: 'Thinking', system: 'System', other: 'Other' };
+
+  /* ---- State ---- */
+  var S = {
+    theme: 'dark',
+    preset: 'default',
+    q: '',
+    caseSens: false,
+    regex: false,
+    filters: { reminder: 1, hook: 1, thinking: 1, system: 1, other: 1 },
+    sel: null,
+    wins: [],
+    expand: {},
+    emptyAudit: false,
+    storedTruncMode: false
+  };
+  var Z = 10;
+
+  function makeMatcher(q) {
+    if (!q) return null;
+    try {
+      var pat = S.regex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp('(' + pat + ')', S.caseSens ? 'g' : 'ig');
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function textOf(id) {
+    if (S.emptyAudit) return '';
+    var c = CALLS[id];
+    if (c) return JSON.stringify(c.input) + '\n' + c.out.join('\n') + '\n' + c.att.map(function (a) { return a.text; }).join('\n');
+    var h = HID[id];
+    return h ? (h.pv + '\n' + h.sections.map(function (s) { return s[1]; }).join('\n')) : '';
+  }
+
+  function hits(id) {
+    var re = makeMatcher(S.q);
+    if (!re) return 0;
+    var m = textOf(id).match(re);
+    return m ? m.length : 0;
+  }
+
+  function hl(s) {
+    var safe = esc(s);
+    var re = makeMatcher(S.q);
+    if (!re) return safe;
+    return safe.replace(re, '<mark>$1</mark>');
+  }
+
+  function rows() {
+    var o = [];
+    FEED.forEach(function (e) {
+      if (e.t === 'tools') {
+        e.calls.forEach(function (c) {
+          o.push(c);
+          CALLS[c].att.forEach(function (a, i) { if (S.filters[a.k]) o.push(c + '#' + i); });
+        });
+      } else if (e.t === 'hid' || e.t === 'sys') {
+        if (S.filters[HID[e.id].k]) o.push(e.id);
+      }
+    });
+    return o;
+  }
+
+  function callRow(id) {
+    var c = CALLS[id];
+    var h = hits(id);
+    var fail = c.st === 'fail';
+    var mk = S.emptyAudit ? '<span class="mk" style="color:var(--wb-muted-fg)">○</span>'
+      : '<span class="mk" style="color:' + (fail ? 'var(--wb-fail)' : 'var(--wb-ok)') + '">' + (fail ? '✗' : '✓') + '</span>';
+    return '<div class="call' + (S.sel === id ? ' sel' : '') + (S.emptyAudit ? ' muted-empty' : '') + '" data-id="' + id + '">' +
+      mk +
+      '<span class="tn">' + c.tool + '</span>' +
+      '<span class="ar">' + hl(c.args) + '</span>' +
+      (h ? '<span class="hit">출력 ' + h + '</span>' : '') +
+      (c.att.length && !S.emptyAudit ? '<span class="att" title="Linked events">◆' + c.att.length + '</span>' : '') +
+      (S.emptyAudit ? '' : '<span class="nm">' + c.dur + ' · ' + c.tok + '</span>') + '</div>' +
+      (S.emptyAudit ? '' : c.att.map(function (a, i) {
+        if (!S.filters[a.k]) return '';
+        var rid = id + '#' + i;
+        return '<div class="hid inner' + (S.sel === rid ? ' sel' : '') + '" data-id="' + rid + '"><span class="dot-ev" style="background:' + COLOR[a.k] + '"></span><span>' + esc(a.name) + '</span><span class="pv">' + hl(a.text) + '</span></div>';
+      }).join(''));
+  }
+
+  function hidRow(id) {
+    var h = HID[id];
+    var n = hits(id);
+    return '<div class="hid' + (S.sel === id ? ' sel' : '') + '" data-id="' + id + '"><span class="dot-ev" style="background:' + COLOR[h.k] + '"></span><span>' + KIND[h.k] + ' · ' + esc(h.title) + '</span><span class="pv">' + hl(h.pv) + '</span>' + (n ? '<span class="hit">출력 ' + n + '</span>' : '') + '</div>';
+  }
+
+  function renderFeed() {
+    var h = '';
+    FEED.forEach(function (e, ei) {
+      if (e.t === 'user') {
+        h += '<div class="msg user"><div class="mh"><b>You</b><span>' + e.at + '</span></div><div class="bub">' + e.html + '</div></div>';
+      } else if (e.t === 'lead') {
+        var ch = e.chips ? '<div class="hchips">' + e.chips.map(function (c) { return '<span class="icapsule"><span class="icapsule-head">' + esc(c) + '</span></span>'; }).join('') + '</div>' : '';
+        h += '<div class="msg lead"><div class="mh"><b>Claude</b><span>' + e.at + '</span></div><div class="bub">' + ch + hl(e.text) + '</div></div>';
+      } else if (e.t === 'hid') {
+        if (!S.emptyAudit && S.filters[HID[e.id].k]) h += hidRow(e.id);
+      } else if (e.t === 'sys') {
+        if (S.emptyAudit) {
+          h += '<div class="sysrow' + (S.sel === e.id ? ' sel' : '') + '" data-id="' + e.id + '">No audit data for this session · retention expired or capture off — click to inspect</div>';
+        } else if (S.filters.system) {
+          var n = hits(e.id);
+          h += '<div class="sysrow' + (S.sel === e.id ? ' sel' : '') + '" data-id="' + e.id + '">⚙ ' + esc(e.label) + (n ? ' <span class="hit">출력 ' + n + '</span>' : '') + ' — click to audit</div>';
+        }
+      } else if (e.t === 'tools') {
+        var ex = S.expand[ei] || S.q;
+        var show = ex ? e.calls : e.calls.slice(0, 3);
+        var fail = e.calls.filter(function (c) { return CALLS[c].st === 'fail'; }).length;
+        var shead = S.emptyAudit
+          ? 'Calls ' + e.calls.length + ' · no stored audit payload'
+          : 'Calls ' + e.calls.length + (fail ? ' · <b style="color:var(--wb-fail)">' + fail + ' failed</b>' : '') + ' · ' + e.dur;
+        h += '<div class="strip"><div class="shead" data-x="' + ei + '">' + shead + '</div>' +
+          show.map(callRow).join('') +
+          (e.calls.length > show.length ? '<div class="more" data-x="' + ei + '">+ ' + (e.calls.length - show.length) + ' more</div>' : '') +
+          '</div>';
+      }
+    });
+    $('caFeed').innerHTML = h;
+  }
+
+  function updateDarkroom() {
+    var hasUnpinned = S.wins.some(function (w) { return !w.pinned; });
+    var isWide = window.innerWidth > 900;
+    var active = hasUnpinned && isWide;
+    $('appShell').classList.toggle('darkroom', active);
+    $('darkroomScrim').hidden = !active;
+  }
+
+  function winFor(id) {
+    var parts = id.split('#');
+    var base = parts[0];
+    var ai = parts.length > 1 ? +parts[1] : -1;
+    if (CALLS[base] && ai >= 0) {
+      var a = CALLS[base].att[ai];
+      return { kind: 'event', title: a.name, sub: KIND[a.k] + ' · ' + a.src + ' · linked to ' + CALLS[base].tool, sections: [[a.name, a.text]], raw: { type: 'attachment', parentToolUseId: 'toolu_01' + base.slice(2), hookEvent: a.name, content: a.text } };
+    }
+    if (CALLS[base]) return { kind: 'call', c: CALLS[base] };
+    var h = HID[base];
+    return { kind: 'event', title: h.title, sub: KIND[h.k], openRaw: !!h.openRaw, sections: h.sections, raw: { harness: 'claude', stream: 'stream-json', kind: h.k, native: { type: h.k, subtype: h.title } } };
+  }
+
+  function openWin(id, pinNew) {
+    S.sel = id;
+    renderFeed();
+    var w = S.wins.filter(function (x) { return !x.pinned; })[0];
+    if (!w || pinNew) {
+      if (S.wins.filter(function (x) { return x.pinned; }).length >= 4 && pinNew) return;
+      w = { id: id, tab: 'out', q: '', cur: 0, wrap: false, pinned: !!pinNew, el: document.createElement('div'), x: 0, y: 0 };
+      S.wins.push(w);
+      $('caWins').appendChild(w.el);
+      var idx = S.wins.length - 1;
+      var convRect = $('convPane').getBoundingClientRect();
+      var baseLeft = Math.max(24, Math.round(convRect.right + 14));
+      var maxLeft = Math.max(24, window.innerWidth - 570);
+      w.x = Math.min(maxLeft, baseLeft) + idx * 24;
+      w.y = 48 + idx * 24;
+      w.w = Math.min(580, Math.max(420, window.innerWidth - w.x - 16));
+    }
+    w.id = id;
+    var d = winFor(id);
+    w.tab = d.kind === 'call' ? (S.q ? 'out' : (w.tab || 'out')) : (d.openRaw ? 'raw' : 'body');
+    if (d.kind === 'call' && ['in', 'out', 'meta', 'raw', 'att'].indexOf(w.tab) < 0) w.tab = 'out';
+    w.q = S.q || '';
+    w.cur = 0;
+    drawWin(w);
+    updateDarkroom();
+  }
+
+  function codeLines(lines, w, cutAt, storedTrunc) {
+    var re = makeMatcher(w.q), k = 0, h = '';
+    function renderLine(l, num) {
+      var t = esc(l), cls = 'l';
+      if (/FAIL/.test(l) || /: got /.test(l)) cls += ' err';
+      if (re) t = t.replace(re, function (m) { return '<mark data-m="' + (k++) + '">' + m + '</mark>'; });
+      return '<div class="' + cls + '"><span class="n">' + num + '</span><span class="t">' + redact(t) + '</span></div>';
+    }
+    if (storedTrunc) {
+      var head = lines.slice(0, storedTrunc.headLines);
+      var tail = lines.slice(-storedTrunc.tailLines);
+      head.forEach(function (l, i) { h += renderLine(l, i + 1); });
+      h += '<div class="stored-trunc">' +
+        '<div class="st-hd"><span class="st-badge">stored_trunc</span><span>' + storedTrunc.omittedBytes + ' bytes omitted in storage (head + tail retained)</span></div>' +
+        (storedTrunc.cutInOmittedMiddle ? '<div class="st-cut"><span>✂</span><span>Model saw up to 30,000 chars — seen cut lands inside the omitted middle; tail below was unseen by model</span></div>' : '') +
+        '</div>';
+      var startNum = lines.length - tail.length + 1;
+      tail.forEach(function (l, i) { h += renderLine(l, startNum + i); });
+    } else {
+      lines.forEach(function (l, i) {
+        h += renderLine(l, i + 1);
+        if (cutAt && i === cutAt - 1) {
+          h += '<div class="l cut"><span class="n">✂</span><span class="t">── Model saw up to here (30,000 chars). ' + (lines.length - cutAt) + ' stored lines below were unseen by model ──</span></div>';
+        }
+      });
+    }
+    w.total = k;
+    return '<div class="code' + (w.wrap ? ' wrap' : '') + '">' + h + '</div>';
+  }
+
+  function drawWin(w) {
+    var el = w.el;
+    el.className = 'win';
+    el.style.left = Math.max(12, w.x) + 'px';
+    el.style.top = Math.max(8, w.y) + 'px';
+    if (!el.style.width) { el.style.width = (w.w || 560) + 'px'; el.style.height = '650px'; }
+    el.style.zIndex = ++Z;
+
+    if (S.emptyAudit) {
+      el.innerHTML =
+        '<div class="grab"></div>' +
+        '<div class="wh" data-drag><span class="hb" data-h="claude"></span><span class="tn">Session Audit</span><span class="st muted">No data</span><span class="grow"></span><button class="ib" data-a="close" title="Close (Esc)">✕</button></div>' +
+        '<div class="wb"><div class="empty-audit">' +
+        '<div class="empty-ico"><svg class="i" viewBox="0 0 24 24" style="width:20px;height:20px"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 10h8M8 14h5"/></svg></div>' +
+        '<div class="empty-title">No audit data recorded for this session</div>' +
+        '<div class="empty-desc">Detailed tool payloads and hidden stream events are absent because retention expired under the workspace GC policy or stream audit capture was disabled for this session.</div>' +
+        '<div class="empty-meta">session: 261118-0937 · retention: 14d · status: absent</div>' +
+        '</div></div>' +
+        '<div class="wf"><span><kbd>Esc</kbd> Close</span><span>Read-only audit archive</span></div>';
+      el.dataset.wid = S.wins.indexOf(w);
+      return;
+    }
+
+    var d = winFor(w.id), h = '';
+    var nav = '<button class="ib" data-a="prev" title="Previous (←)">‹</button><button class="ib" data-a="next" title="Next (→)">›</button>';
+    if (d.kind === 'call') {
+      var c = d.c;
+      var red = (JSON.stringify(c.input) + c.out.join('')).match(RED);
+      red = red ? red.length : 0;
+      h += '<div class="grab"></div><div class="wh" data-drag>' +
+        '<span class="hb" data-h="claude"></span>' +
+        '<span class="tn">' + c.tool + '</span>' +
+        '<span class="st ' + (c.st === 'fail' ? 'fail' : 'ok') + '">' + (c.st === 'fail' ? 'fail' + (c.exit != null ? ' · exit ' + c.exit : '') : 'ok') + '</span>' +
+        '<span class="m">' + esc(c.args) + '</span><span class="grow"></span>' +
+        nav +
+        '<button class="ib" data-a="copy" title="Copy current tab">⧉</button>' +
+        '<button class="ib' + (w.pinned ? ' pinned' : '') + '" data-a="pin" title="Pin window (stays lit, up to 4)">📌</button>' +
+        '<button class="ib" data-a="close" title="Close (Esc)">✕</button></div>';
+      var tabs = [['in', 'Input'], ['out', 'Output', c.out.length + 'L'], ['meta', 'Meta'], ['raw', 'Raw'], ['att', 'Linked', c.att.length]];
+      h += '<div class="wtabs">' + tabs.map(function (t) {
+        return '<div class="wtab' + (w.tab === t[0] ? ' on' : '') + '" data-tab="' + t[0] + '">' + t[1] + (t[2] !== undefined ? '<span class="c">' + t[2] + '</span>' : '') + '</div>';
+      }).join('') + '</div>';
+
+      if (w.tab === 'out' || w.tab === 'in') {
+        h += '<div class="wtool"><input data-wq placeholder="Find in window (Ctrl+F)" value="' + esc(w.q) + '"><span data-cnt></span><button class="ib" data-a="mprev">↑</button><button class="ib" data-a="mnext">↓</button><span style="flex:1"></span><label style="display:flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" data-wrap' + (w.wrap ? ' checked' : '') + '>Wrap</label></div>';
+        if (w.tab === 'out' && S.storedTruncMode && c.storedTrunc) {
+          h += '<div class="banner">Storage retained head + tail (184,320 bytes omitted). Seen-cut boundary falls inside the omitted middle.</div>';
+        } else if (w.tab === 'out' && c.cutAt) {
+          h += '<div class="banner">Model saw first ' + c.cutAt + ' lines (30,000 chars) — stored view shows all ' + c.out.length + ' lines.</div>';
+        }
+        if (red) h += '<div class="banner info">Redacted ' + red + ' secret(s): rule name and length preserved; raw secret never stored.</div>';
+        var lines = w.tab === 'out' ? c.out : JSON.stringify(c.input, null, 2).split('\n');
+        var useStored = (w.tab === 'out' && S.storedTruncMode) ? c.storedTrunc : null;
+        h += '<div class="wb">' + codeLines(lines, w, w.tab === 'out' ? c.cutAt : 0, useStored) +
+          (w.tab === 'out' && c.respTrunc ? '<div class="load-more-row"><span>truncated: true · ' + esc(c.respTrunc) + '</span><button class="load-more-btn" data-a="loadmore">Load more</button></div>' : '') +
+          '</div>';
+      } else if (w.tab === 'meta') {
+        h += '<div class="wb"><dl class="kv"><h5>Invocation</h5><dt>tool_use_id</dt><dd>toolu_01' + w.id.slice(2) + 'Xq9</dd><dt>Duration</dt><dd>' + c.dur + '</dd>' + (c.exit != null ? '<dt>Exit code</dt><dd>' + c.exit + '</dd>' : '') + '<dt>cwd</dt><dd>/Users/kang-sw/devenv</dd><h5>Tokens</h5><dt>Input · Cache</dt><dd>176k · 174k cache read</dd><dt>Delta</dt><dd>' + c.tok + '</dd><dt>Model</dt><dd>claude-opus-5 · effort high</dd><h5>Storage</h5><dt>Redactions</dt><dd>' + red + ' (wsredact)</dd><dt>Source</dt><dd>claude · stream-json · seq #412–413</dd></dl></div>';
+      } else if (w.tab === 'raw') {
+        var env = { harness: 'claude', stream: 'stream-json', kind: 'tool_call', id: 'toolu_01' + w.id.slice(2), tool: c.tool, input: c.input };
+        h += '<div class="banner info">Normalized envelope + verbatim harness stream event.</div><div class="wb">' + codeLines(JSON.stringify(env, null, 2).split('\n'), w, 0, null) + '</div>';
+      } else {
+        h += '<div class="wb"><div class="evl">' + (c.att.length ? c.att.map(function (a, i) {
+          return '<div class="ev"><div class="eh"><span class="dot-ev" style="width:7px;height:7px;border-radius:50%;background:' + COLOR[a.k] + '"></span><b>' + esc(a.name) + '</b><span style="color:var(--wb-muted-fg)">' + KIND[a.k] + ' · ' + esc(a.src) + '</span><span style="flex:1"></span><button class="ib" data-a="ev" data-ev="' + w.id + '#' + i + '" title="Open in pinned window">↗</button></div><pre>' + redact(esc(a.text)) + '</pre></div>';
+        }).join('') : '<div style="color:var(--wb-muted-fg);font-size:12px">No linked hooks or reminders.</div>') + '</div></div>';
+      }
+    } else {
+      h += '<div class="grab"></div><div class="wh" data-drag><span class="hb" data-h="claude"></span><span class="tn">' + esc(d.title) + '</span><span class="m">' + esc(d.sub) + '</span><span class="grow"></span>' + nav + '<button class="ib" data-a="copy">⧉</button><button class="ib' + (w.pinned ? ' pinned' : '') + '" data-a="pin">📌</button><button class="ib" data-a="close" title="Close (Esc)">✕</button></div>';
+      h += '<div class="wtabs"><div class="wtab' + (w.tab === 'body' ? ' on' : '') + '" data-tab="body">Content</div><div class="wtab' + (w.tab === 'raw' ? ' on' : '') + '" data-tab="raw">Raw</div></div>';
+      if (w.tab === 'raw') h += '<div class="wb">' + codeLines(JSON.stringify(d.raw, null, 2).split('\n'), w, 0, null) + '</div>';
+      else h += '<div class="wb"><div class="evl">' + d.sections.map(function (s) { return '<div class="ev"><div class="eh"><b>' + esc(s[0]) + '</b></div><pre>' + redact(hl(s[1])) + '</pre></div>'; }).join('') + '</div></div>';
+    }
+    h += '<div class="wf"><span><kbd>←</kbd><kbd>→</kbd> Prev/Next</span><span><kbd>Ctrl+F</kbd> Find</span><span><kbd>Esc</kbd> Close</span>' + (window.innerWidth > 900 ? '<span>Drag header · Resize corner</span>' : '') + '</div>';
+    el.innerHTML = h;
+    el.dataset.wid = S.wins.indexOf(w);
+    markCur(w);
+  }
+
+  function markCur(w) {
+    var ms = w.el.querySelectorAll('mark[data-m]'), c = w.el.querySelector('[data-cnt]');
+    if (c) c.textContent = w.q ? (ms.length ? (w.cur + 1) + ' / ' + ms.length : '0 hits') : '';
+    ms.forEach(function (m, i) { m.classList.toggle('cur', i === w.cur); });
+  }
+
+  function step(w, dir) {
+    var all = rows(), i = all.indexOf(w.id);
+    if (i < 0) i = 0;
+    var n = all[(i + dir + all.length) % all.length];
+    w.id = n;
+    S.sel = n;
+    renderFeed();
+    var d = winFor(n);
+    w.tab = d.kind === 'call' ? (['in', 'out', 'meta', 'raw', 'att'].indexOf(w.tab) >= 0 ? w.tab : 'out') : (d.openRaw ? 'raw' : 'body');
+    w.cur = 0;
+    drawWin(w);
+  }
+
+  function closeWin(w) {
+    w.el.remove();
+    S.wins.splice(S.wins.indexOf(w), 1);
+    if (!S.wins.length) { S.sel = null; renderFeed(); }
+    updateDarkroom();
+  }
+
+  function closeAllWins() {
+    S.wins.slice().forEach(closeWin);
+  }
+
+  /* ---- Events ---- */
+  $('caFeed').addEventListener('click', function (e) {
+    var cap = e.target.closest('[data-icapsule]');
+    if (cap) {
+      var pop = $('icapsulePop');
+      var r = cap.getBoundingClientRect();
+      pop.innerHTML = '<div class="icapsule-pop-hd"><span>' + esc(cap.textContent) + '</span><span style="color:var(--wb-muted-fg);font-size:11px">Inline capsule</span></div><div class="icapsule-pop-quote">Deduplicated from .hchips — rendered inline at baseline height inside user prose.</div>';
+      pop.style.left = Math.min(window.innerWidth - 260, r.left) + 'px';
+      pop.style.top = (r.bottom + 6) + 'px';
+      pop.hidden = false;
+      return;
+    }
+    var x = e.target.closest('[data-x]');
+    if (x) { S.expand[x.dataset.x] = !S.expand[x.dataset.x]; renderFeed(); return; }
+    var rEl = e.target.closest('[data-id]');
+    if (rEl) openWin(rEl.dataset.id, e.shiftKey);
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('[data-icapsule]') && !e.target.closest('#icapsulePop')) $('icapsulePop').hidden = true;
+  });
+
+  $('phead').addEventListener('click', function (e) {
+    var f = e.target.closest('[data-f]');
+    if (!f) return;
+    S.filters[f.dataset.f] = S.filters[f.dataset.f] ? 0 : 1;
+    f.classList.toggle('on', !!S.filters[f.dataset.f]);
+    renderFeed();
+  });
+
+  $('caQ').addEventListener('input', function () { S.q = this.value.trim(); renderFeed(); });
+  $('optCase').addEventListener('click', function () { S.caseSens = !S.caseSens; this.setAttribute('aria-pressed', String(S.caseSens)); renderFeed(); });
+  $('optRegex').addEventListener('click', function () { S.regex = !S.regex; this.setAttribute('aria-pressed', String(S.regex)); renderFeed(); });
+
+  $('darkroomScrim').addEventListener('click', function () {
+    S.wins.filter(function (w) { return !w.pinned; }).forEach(closeWin);
+  });
+
+  $('railToggle').addEventListener('click', function () {
+    $('rail').classList.toggle('open');
+    $('railScrim').classList.toggle('open');
+  });
+  $('railScrim').addEventListener('click', function () {
+    $('rail').classList.remove('open');
+    $('railScrim').classList.remove('open');
+  });
+  $('topSearchBtn').addEventListener('click', function () { $('caQ').focus(); });
+
+  $('caWins').addEventListener('click', function (e) {
+    var el = e.target.closest('.win');
+    if (!el) return;
+    var w = S.wins[+el.dataset.wid];
+    el.style.zIndex = ++Z;
+    var t = e.target.closest('[data-tab]');
+    if (t) { w.tab = t.dataset.tab; w.cur = 0; drawWin(w); return; }
+    var a = e.target.closest('[data-a]');
+    if (!a) return;
+    var k = a.dataset.a;
+    if (k === 'close') closeWin(w);
+    else if (k === 'prev') step(w, -1);
+    else if (k === 'next') step(w, 1);
+    else if (k === 'pin') { w.pinned = !w.pinned; drawWin(w); updateDarkroom(); }
+    else if (k === 'mnext' || k === 'mprev') {
+      var n = w.el.querySelectorAll('mark[data-m]').length;
+      if (n) { w.cur = (w.cur + (k === 'mnext' ? 1 : -1) + n) % n; markCur(w); }
+    }
+    else if (k === 'ev') openWin(a.dataset.ev, true);
+    else if (k === 'loadmore') { a.textContent = 'Loaded +120 lines'; a.disabled = true; }
+    else if (k === 'copy') { a.textContent = '✓'; setTimeout(function () { a.textContent = '⧉'; }, 900); }
+  });
+
+  $('caWins').addEventListener('input', function (e) {
+    var el = e.target.closest('.win'), w = S.wins[+el.dataset.wid];
+    if (e.target.matches('[data-wq]')) {
+      w.q = e.target.value; w.cur = 0;
+      var pos = e.target.selectionStart;
+      drawWin(w);
+      var i = w.el.querySelector('[data-wq]');
+      i.focus(); i.setSelectionRange(pos, pos);
+    } else if (e.target.matches('[data-wrap]')) {
+      w.wrap = e.target.checked; drawWin(w);
+    }
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var top = S.wins[S.wins.length - 1];
+    if (e.target.matches('input') && e.key !== 'Escape') return;
+    if (top && e.key === 'Escape') { closeWin(top); return; }
+    if (top && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); step(top, e.key === 'ArrowRight' ? 1 : -1); return; }
+    if (top && (e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); var i = top.el.querySelector('[data-wq]'); if (i) i.focus(); return; }
+    if (e.key === 'j' || e.key === 'k') {
+      var all = rows(), idx = all.indexOf(S.sel);
+      S.sel = all[Math.max(0, Math.min(all.length - 1, idx + (e.key === 'j' ? 1 : -1)))];
+      renderFeed();
+    }
+    if (e.key === 'Enter' && S.sel) openWin(S.sel);
+  });
+
+  /* Drag by header */
+  var drag = null;
+  $('caWins').addEventListener('pointerdown', function (e) {
+    if (window.innerWidth <= 900) return;
+    var hd = e.target.closest('[data-drag]');
+    if (!hd || e.target.closest('button')) return;
+    var el = hd.closest('.win'), w = S.wins[+el.dataset.wid];
+    drag = { w: w, x: e.clientX, y: e.clientY, ox: w.x, oy: w.y };
+    hd.setPointerCapture(e.pointerId);
+  });
+  $('caWins').addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    drag.w.x = Math.max(12, drag.ox + (e.clientX - drag.x));
+    drag.w.y = Math.max(8, drag.oy + (e.clientY - drag.y));
+    drag.w.el.style.left = drag.w.x + 'px';
+    drag.w.el.style.top = drag.w.y + 'px';
+  });
+  $('caWins').addEventListener('pointerup', function () { drag = null; });
+
+  window.addEventListener('resize', function () {
+    updateDarkroom();
+    var convRect = $('convPane').getBoundingClientRect();
+    S.wins.forEach(function (w, idx) {
+      if (window.innerWidth > 900) {
+        var baseLeft = Math.max(24, Math.round(convRect.right + 14));
+        var maxLeft = Math.max(24, window.innerWidth - 570);
+        w.x = Math.min(maxLeft, baseLeft) + idx * 24;
+        w.el.style.width = Math.min(580, Math.max(420, window.innerWidth - w.x - 16)) + 'px';
+        drawWin(w);
+      }
+    });
+  });
+
+  /* ---- Mockup controls (Theme + Presets) ---- */
+  function setTheme(t) {
+    S.theme = t;
+    document.documentElement.setAttribute('data-theme', t);
+    [].forEach.call(document.querySelectorAll('[data-theme-set]'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === t));
+    });
+  }
+
+  function applyPreset(p) {
+    S.preset = p;
+    [].forEach.call(document.querySelectorAll('[data-preset]'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.preset === p));
+    });
+    closeAllWins();
+    S.emptyAudit = false;
+    S.storedTruncMode = false;
+    S.q = '';
+    $('caQ').value = '';
+
+    if (p === 'default') {
+      renderFeed();
+      openWin('c-bash');
+    } else if (p === 'stored_trunc') {
+      S.storedTruncMode = true;
+      renderFeed();
+      openWin('c-bash');
+    } else if (p === 'empty') {
+      S.emptyAudit = true;
+      renderFeed();
+      openWin('c-bash');
+    } else if (p === 'search') {
+      S.q = 'TestPins';
+      $('caQ').value = 'TestPins';
+      renderFeed();
+      openWin('c-bash');
+    }
+  }
+
+  [].forEach.call(document.querySelectorAll('[data-theme-set]'), function (b) {
+    b.addEventListener('click', function () { setTheme(b.dataset.themeSet); });
+  });
+  [].forEach.call(document.querySelectorAll('[data-preset]'), function (b) {
+    b.addEventListener('click', function () { applyPreset(b.dataset.preset); });
+  });
+
+  /* Expose hook for automated visual capture verification */
+  window.__auditMock = { setTheme: setTheme, applyPreset: applyPreset, openWin: openWin };
+
+  applyPreset('default');
+})();
+</script>
+</body>
+</html>
