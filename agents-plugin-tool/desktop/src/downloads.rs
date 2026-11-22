@@ -22,13 +22,12 @@ use crate::{
 const FALLBACK_NAME: &str = "download";
 /// The longest file name kept, in bytes; filesystems allow 255.
 const NAME_MAX: usize = 200;
-/// The most " (n)" suffixes tried before the download is refused.
-const SUFFIX_MAX: u32 = 9999;
+/// The most " (n)" suffixes tried before the download is refused; each try
+/// is a file probe under the ledger lock.
+const SUFFIX_MAX: u32 = 100;
 
-/// Downloads accepted and not yet finished: URL and chosen path. Shared by
-/// every window so two downloads never pick one name, and read at the end
-/// because WKWebView reports no path then.
-static ACTIVE: Mutex<Vec<(Url, PathBuf)>> = Mutex::new(Vec::new());
+/// Every window shares one ledger, so two downloads never pick one name.
+static ACTIVE: Mutex<Active> = Mutex::new(Active::new());
 
 /// The handler for `WebviewWindowBuilder::on_download`.
 pub fn handler<R: Runtime>(
@@ -44,33 +43,101 @@ pub fn handler<R: Runtime>(
                 return false;
             };
             let name = pick_name(destination.file_name().and_then(|name| name.to_str()), &url);
-            let mut active = ACTIVE.lock().unwrap();
-            let Some(path) = unique_path(&folder, &name, |candidate| {
-                candidate.exists() || active.iter().any(|(_, taken)| taken == candidate)
-            }) else {
-                drop(active);
-                announce(&webview, false, &name);
-                return false;
-            };
-            active.push((url, path.clone()));
-            *destination = path;
-            true
+            let begun = ACTIVE
+                .lock()
+                .unwrap()
+                .begin(url, &folder, &name, |path| path.exists());
+            match begun {
+                Begin::Reserved(path) => {
+                    *destination = path;
+                    true
+                }
+                Begin::Duplicate => false,
+                Begin::NoName => {
+                    announce(&webview, false, &name);
+                    false
+                }
+            }
         }
         DownloadEvent::Finished { url, success, .. } => {
-            let mut active = ACTIVE.lock().unwrap();
-            // A download this handler refused or never saw also ends here.
-            let Some(at) = active.iter().position(|(started, _)| *started == url) else {
-                return true;
-            };
-            let (_, path) = active.remove(at);
-            drop(active);
-            let name = path
-                .file_name()
-                .map_or_else(|| FALLBACK_NAME.into(), |name| name.to_string_lossy());
-            announce(&webview, success, &name);
+            let ended = ACTIVE.lock().unwrap().finish(&url, success);
+            if let Some(path) = ended {
+                let name = path
+                    .file_name()
+                    .map_or_else(|| FALLBACK_NAME.into(), |name| name.to_string_lossy());
+                announce(&webview, success, &name);
+            }
             true
         }
         _ => true,
+    }
+}
+
+/// What a download request gets.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Begin {
+    Reserved(PathBuf),
+    /// The same URL is already downloading.
+    Duplicate,
+    /// Every candidate name is taken.
+    NoName,
+}
+
+/// Downloads accepted and not yet finished, at most one per URL: a completion
+/// names only its URL (WKWebView gives no path), so a second download of one
+/// URL could not be told apart from the first.
+pub struct Active {
+    reserved: Vec<(Url, PathBuf)>,
+    /// Same-URL requests refused while one was reserved. WebView2 may still
+    /// report each as an interrupted completion; that must release nothing.
+    refused: Vec<Url>,
+}
+
+impl Active {
+    pub const fn new() -> Self {
+        Self {
+            reserved: Vec::new(),
+            refused: Vec::new(),
+        }
+    }
+
+    /// Reserves a path for `url`; `exists` tells whether a file is there.
+    pub fn begin(
+        &mut self,
+        url: Url,
+        folder: &Path,
+        name: &str,
+        exists: impl Fn(&Path) -> bool,
+    ) -> Begin {
+        if self.reserved.iter().any(|(held, _)| *held == url) {
+            self.refused.push(url);
+            return Begin::Duplicate;
+        }
+        // A refusal's completion that never came must not outlive its URL.
+        self.refused.retain(|refused| *refused != url);
+        let reserved = &self.reserved;
+        let Some(path) = unique_path(folder, name, |candidate| {
+            exists(candidate) || reserved.iter().any(|(_, taken)| taken == candidate)
+        }) else {
+            return Begin::NoName;
+        };
+        self.reserved.push((url, path.clone()));
+        Begin::Reserved(path)
+    }
+
+    /// Ends the download of `url`, returning its reserved path. None for a
+    /// URL never reserved, and for the interrupted completion of a refused
+    /// duplicate, which release nothing.
+    pub fn finish(&mut self, url: &Url, success: bool) -> Option<PathBuf> {
+        if !success {
+            if let Some(at) = self.refused.iter().position(|refused| refused == url) {
+                self.refused.remove(at);
+                return None;
+            }
+        }
+        let at = self.reserved.iter().position(|(held, _)| held == url)?;
+        self.refused.retain(|refused| refused != url);
+        Some(self.reserved.remove(at).1)
     }
 }
 
@@ -160,14 +227,14 @@ fn split_extension(name: &str) -> (&str, &str) {
     }
 }
 
-/// `stem` + `ext` within `limit` bytes, cutting the stem on a char boundary.
-fn clip(stem: &str, ext: &str, limit: usize) -> String {
-    let room = limit.saturating_sub(ext.len());
+/// `stem` + `tail` within `limit` bytes, cutting the stem on a char boundary.
+fn clip(stem: &str, tail: &str, limit: usize) -> String {
+    let room = limit.saturating_sub(tail.len());
     let mut end = stem.len().min(room);
     while !stem.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}{ext}", &stem[..end])
+    format!("{}{tail}", &stem[..end])
 }
 
 fn percent_decode(segment: &str) -> String {
@@ -204,7 +271,8 @@ pub fn unique_path(folder: &Path, name: &str, taken: impl Fn(&Path) -> bool) -> 
     }
     let (stem, ext) = split_extension(name);
     (1..=SUFFIX_MAX)
-        .map(|n| folder.join(clip(&format!("{stem} ({n})"), ext, NAME_MAX)))
+        // Cut the stem, not the tail, so the number and extension survive.
+        .map(|n| folder.join(clip(stem, &format!(" ({n}){ext}"), NAME_MAX)))
         .find(|candidate| !taken(candidate))
 }
 
@@ -338,5 +406,96 @@ mod tests {
             std::fs::read_to_string(dir.path().join("board.zip")).unwrap(),
             "mine"
         );
+    }
+
+    #[test]
+    fn a_long_taken_name_still_gets_its_number_and_extension() {
+        let folder = Path::new("/dl");
+        let long = sanitize(&format!("{}.zip", "a".repeat(400))).unwrap();
+        assert_eq!(long.len(), NAME_MAX);
+        let numbered = unique_path(folder, &long, |path| path == folder.join(&long)).unwrap();
+        let name = numbered.file_name().unwrap().to_str().unwrap();
+        assert_ne!(name, long);
+        assert!(name.ends_with(" (1).zip"), "{name}");
+        assert!(name.len() <= NAME_MAX);
+        let wide = sanitize(&format!("{}.tar.gz", "名".repeat(100))).unwrap();
+        let numbered = unique_path(folder, &wide, |path| path == folder.join(&wide)).unwrap();
+        let name = numbered.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.ends_with(" (1).tar.gz") && name.len() <= NAME_MAX,
+            "{name}"
+        );
+    }
+
+    #[test]
+    fn the_number_search_is_short() {
+        let probes = std::cell::Cell::new(0);
+        let taken = |_: &Path| {
+            probes.set(probes.get() + 1);
+            true
+        };
+        assert_eq!(unique_path(Path::new("/dl"), "a.zip", taken), None);
+        assert!(probes.get() <= 101, "{}", probes.get());
+    }
+
+    #[test]
+    fn one_url_downloads_once_and_a_refused_copys_end_releases_nothing() {
+        let folder = Path::new("/dl");
+        let board = url("http://127.0.0.1:1/s/a/board.zip");
+        let other = url("http://127.0.0.1:1/s/b/board.zip");
+        let mut active = Active::new();
+        let first = active.begin(board.clone(), folder, "board.zip", |_| false);
+        assert_eq!(first, Begin::Reserved(folder.join("board.zip")));
+        // The same URL again while in flight is refused.
+        assert_eq!(
+            active.begin(board.clone(), folder, "board.zip", |_| false),
+            Begin::Duplicate
+        );
+        // Its interrupted completion releases nothing and announces nothing.
+        assert_eq!(active.finish(&board, false), None);
+        // The first download still owns its name: another URL numbers past it.
+        assert_eq!(
+            active.begin(other.clone(), folder, "board.zip", |_| false),
+            Begin::Reserved(folder.join("board (1).zip"))
+        );
+        // The real end names the first download's file.
+        assert_eq!(active.finish(&board, true), Some(folder.join("board.zip")));
+        assert_eq!(
+            active.finish(&other, false),
+            Some(folder.join("board (1).zip"))
+        );
+        // Never reserved, or already ended: nothing.
+        assert_eq!(active.finish(&board, true), None);
+        assert_eq!(active.finish(&url("https://x.test/z"), false), None);
+        // The URL may download again once ended.
+        assert_eq!(
+            active.begin(board, folder, "board.zip", |_| false),
+            Begin::Reserved(folder.join("board.zip"))
+        );
+    }
+
+    #[test]
+    fn a_stale_refusal_does_not_swallow_a_later_real_failure() {
+        let folder = Path::new("/dl");
+        let board = url("http://127.0.0.1:1/board.zip");
+        let mut active = Active::new();
+        active.begin(board.clone(), folder, "board.zip", |_| false);
+        active.begin(board.clone(), folder, "board.zip", |_| false);
+        // The refused copy never reported; the first succeeds and ends.
+        assert!(active.finish(&board, true).is_some());
+        // A later download of the URL that fails is reported.
+        active.begin(board.clone(), folder, "board.zip", |_| false);
+        assert!(active.finish(&board, false).is_some());
+    }
+
+    #[test]
+    fn a_full_name_space_refuses_without_reserving() {
+        let mut active = Active::new();
+        let board = url("http://127.0.0.1:1/board.zip");
+        assert_eq!(
+            active.begin(board.clone(), Path::new("/dl"), "a.zip", |_| true),
+            Begin::NoName
+        );
+        assert_eq!(active.finish(&board, false), None);
     }
 }
