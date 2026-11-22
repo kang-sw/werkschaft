@@ -10,7 +10,7 @@ related:
   261114-feat-ws-hosted-antigravity-acp-adapter: "deferred adapter; no Antigravity implementation or runtime claim here"
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-design-reviewed: 6936cf7330d939f6
+sage-review-design-reviewed: 226cfeee40d3983c
 sage-review-completeness-reviewed: 6936cf7330d939f6
 ---
 
@@ -355,6 +355,14 @@ parent admission on every launch. Repeated approval/recovery must not reapply
 a higher old selection over a later authorized lowering. Compare changed
 hire controls against that ticket's tracked modal baseline; no separate
 worker visual reference is approved.
+
+**Permission storage handoff (2026-11-22).** From Phase 2 of
+`261121-refactor-ws-daemon-metadata-sqlite`, the permission service persists
+and recovers the approved selection through the daemon's SQLite-backed store.
+Run the same restart, actual current-parent admission and replay checks through
+that service. Import `permission.json` once and retain the fenced legacy snapshot
+under (2125). The old launch path refuses a present invalid selector
+(`internal/wsagent/permission.go:146-161`, `internal/wsagent/permission_store.go:119-140`).
 
 Forward to common-session-interface Phase 2: absorb these bounded controls
 into the shared session boundary with behavior/state parity, retaining their

@@ -6,6 +6,10 @@ related:
   261118-feat-ws-display-transcript-memory-first: "Phase 3 record delta work transferred by (1326)"
   261120-refactor-ws-agent-workers-under-holders: "temporary applied-sequence write exception (1862)"
   261117-research-ws-daemon-file-touch-map: "historical file-touch and crash-recovery evidence"
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 7d176a5cf8df70fa
+sage-review-completeness-reviewed: 7d176a5cf8df70fa
 ---
 
 # Move daemon metadata stores to SQLite
@@ -22,7 +26,8 @@ cutover requirements are settled below.
 
 Source citations are pinned to `e29019758`. Go paths are relative to
 `agents-plugin-tool/internal/` unless they start with `cmd/`, which is relative
-to `agents-plugin-tool/`. `<dash>` is `<cache>/dashboard`
+to `agents-plugin-tool/`, or `scripts/`, which is relative to the repository root
+(`scripts/rail-headless.mjs`). `<dash>` is `<cache>/dashboard`
 (`wsdashboard/endpoint.go:37,61-70`, `wsstate/paths.go:91-103`). `<session>` is
 `<dash>/sessions/<reply-id>` (`wsdashboard/registry.go:30-46,257-261`).
 `<config>` is the directory of global `config.json`, by default `~/.ws` and
@@ -39,7 +44,7 @@ The paths and cadence below are **VERIFIED** from their read and write sites.
 | `<dash>/support.json` | `NewSupport` loads last selection and store-to-conversation mappings during daemon construction. Choices and current support-session lookups use memory. `cmd/ws-mcp/dashboard.go:112-119`, `wsagent/support.go:82-91,157-182,350-384,450-486`. | Opening support writes the mapping. Restart can delete and then add a mapping in two writes. Store unregister removes its mapping. Selection writes the last choice, with an extra mapping write on a harness replacement. `wsagent/support.go:197-212,387-414,489-528,560-581,634-657`. |
 | `<dash>/pi-probes-v1/<fingerprint>-{models,version}.json` | Go computes the fingerprint from the Pi executable/package identity and, for models, the agent directory and credential/config stamps. Cache reads occur on the version probe and after Support's model memory-cache miss. Models retain the original observation with a five-minute TTL. The MCP version probe is once per process, and the direct server refuses this Pi route before probing when it has no runner. `wsagent/pi_probe_cache.go:101-139,157-232`, `wsagent/pi.go:94-116,280-300`, `wsagent/support.go:40-41,282-332`, `mcp/pi_tools.go:77-98,129-143,521-532`. | Success after a cache miss or staleness only. An unrecognized future schema is protected during publication. The Pi subprocess returns listing/version output. Go reads and writes the recovery cache. `wsagent/pi.go:94-116,280-300`, `wsagent/pi_probe_cache.go:235-261`, `cmd/ws-mcp/dashboard.go:354`. |
 | `<dash>/rail-layout.json` | Startup reads the document. The rail reads it when the file stamp changes, and the stream stamp revalidates at the foreign-files boundary. `wsdashboard/rail_layout.go:285-320,344-394,419-431`, `wsdashboard/rail.go:37-50,235-248`, `wsdashboard/foreign_schedule.go:23-26,81-93`. | A changed `POST /rail/layout` operation (move, attach, star, import, etc.) or a worktree removal that changes saved order. A mutation reads the current file first. `wsdashboard/rail_layout_route.go:18-42,104-111`, `wsdashboard/rail_layout.go:442-484`, `wsdashboard/rail_layout_worktrees.go:65-115`. |
-| `<dash>/plan-usage.json` and `plan-usage-agy.json` | Startup loads each latest projection. `GET /rail/usage` reads their in-memory entries, can ingest Claude observations, and can ask for a refresh. `wsdashboard/daemon_start.go:135`, `wsdashboard/daemon_http.go:65-66`, `wsdashboard/plan_usage.go:20,114-133,397-460`, `wsdashboard/plan_usage_agy.go:22-23,85-144`. | Changed Claude observations and Codex/Pi usage query results update the first file. Codex/Pi queries are gated at five minutes ordinarily and five seconds on forced refresh. Successful agy results update the second file when its encoding changes. Activity or forced refresh can schedule a probe, with a default ten-minute debounce. `wsdashboard/plan_usage.go:179-188,266-281`, `wsdashboard/plan_usage_probe.go:23-55,71-125`, `wsdashboard/plan_usage_agy.go:22-28,138-144,189-209,241-263`, `wsdashboard/daemon_runtime.go:16-22,57-69`. |
+| `<dash>/plan-usage.json` and `plan-usage-agy.json` | Startup loads each latest projection. `GET /rail/usage` reads their in-memory entries, can ingest Claude observations, and can ask for a refresh. `wsdashboard/daemon_start.go:135`, `wsdashboard/daemon_http.go:65-66`, `wsdashboard/plan_usage.go:20,114-133,397-460`, `wsdashboard/plan_usage_agy.go:22-23,85-144`. | Changed accepted Claude observations and Codex/Pi usage query results update the first file; stale observations and expired reported Claude windows are ignored (agents-plugin-tool/internal/wsdashboard/plan_usage.go#L210-L240). Codex/Pi queries are gated at five minutes ordinarily and five seconds on forced refresh. Successful agy results update the second file when its encoding changes. Activity or forced refresh can schedule a probe, with a default ten-minute debounce. `wsdashboard/plan_usage.go:179-188,266-281`, `wsdashboard/plan_usage_probe.go:23-55,71-125`, `wsdashboard/plan_usage_agy.go:22-28,138-144,189-209,241-263`, `wsdashboard/daemon_runtime.go:16-22,57-69`. |
 | `<dash>/plan-usage-history.json`, `plan-usage-codex-history.json` and `plan-usage-agy-history.json` | The history response and nonempty append batches stat the file and reread on a stamp miss. Codex checks for retained five-hour samples before reading its projected history. `wsdashboard/plan_usage_history.go:17-20,119-164,265-272,408-460`, `wsdashboard/plan_usage_agy.go:22-23,553-564`, `wsdashboard/plan_usage.go:447-457`. | A changed retained sample batch rewrites the relevant history file. Shared history receives Claude and eligible Codex/Pi samples. Codex five-hour and agy histories have separate files. Identical or immediately pruned samples cause no write. `wsdashboard/plan_usage.go:273-281`, `wsdashboard/plan_usage_probe.go:109-123`, `wsdashboard/plan_usage_agy.go:254-263`, `wsdashboard/plan_usage_history.go:265-332`. |
 | `<dash>/memos/<sha256-of-workspace>.json` | GET and POST `/rail/memos` and one read per displayed workspace per rail render. The file key is the hash of the workspace string. `wsdashboard/daemon_http.go:65`, `wsdashboard/memos.go:23-51,118-151`, `wsdashboard/rail.go:37-51,214-225`. | Each successful add, edit or delete replaces that workspace's memo document. The writer retains unknown document/item members and rejects a future schema. `wsdashboard/memos.go:67-84,153-197`. |
 | `<session>/label.json` | Dashboard index reads the label after a successful lane read. `wsdashboard/index.go:574-596`, `wsdashboard/label_route.go:73-89`. | Each accepted session-label POST replaces the label or removes the file when cleared. Hiring can also write the label before publishing a hired lead. `wsdashboard/label_route.go:91-105,131-152`, `wsdashboard/session_hiring.go:42-49`, `wsagent/runner_create.go:243-249`. |
@@ -62,7 +67,9 @@ The paths and cadence below are **VERIFIED** from their read and write sites.
   `mcp/server_dispatch.go:145-154`, `mcp/server_inventory.go:140-165`,
   `mcp/tracker_support.go:49-64`, `mcp/playbook_render.go:107-115`,
   `mcp/tool_aliases.go:102-114`, `mcp/dashboard_sessions.go:370-409,460-472`,
-  `wsdashboard/registry.go:386-425,448-498`.
+  `wsdashboard/registry.go:386-425,448-498`. Current sites include
+  agents-plugin-tool/internal/mcp/dashboard_sessions.go#L468-L468 and
+  agents-plugin-tool/internal/wsdashboard/registry.go#L490-L496.
 - **VERIFIED: an external non-Go fixture uses two file formats.**
   `scripts/rail-headless.mjs:135-149,167-180,232-243,579-582,979-982`
   seeds `label.json` in its scratch registry and removes/reads the scratch
@@ -118,7 +125,7 @@ with measured syscall counts and latency still due.
 
 | Action and conditions | Metadata calls | Source |
 |---|---:|---|
-| Held lead or worker finishes a line that advances the sequence and touched the final ring | 5 for the whole record per line. Clean heartbeat 0. Dirty heartbeat 5 for the whole record, on the default 30 s runner tick. | `wsagent/record.go:525-543`, `wsagent/runner_events.go:17-29`, `wsagent/runner_process.go:797-816`, `wsagent/runner_conv.go:536,653-659,812-829`, `wsagent/runner_startup.go:35-37`, `wslive/snapshot.go:85-89` |
+| Held lead or worker finishes a line that advances the sequence and touched the final ring | 5 for the whole record per line. Clean heartbeat 0. Dirty heartbeat 5 for the whole record, on the default 30 s runner tick. | agents-plugin-tool/internal/wsagent/runner_process.go#L811-L830, agents-plugin-tool/internal/wsagent/runner_conv.go#L672-L678, agents-plugin-tool/internal/wsagent/runner_conv.go#L831-L846, agents-plugin-tool/internal/wsagent/record.go#L324-L365, `wsagent/runner_startup.go:35-37`, `wslive/snapshot.go:85-89` |
 | Direct support admission with a matching candidate key | 1 whole-record read per admission invocation | `mcp/tracker_support.go:49-64,86-97`, `wsagent/record.go:294-321` |
 | Hosted lead state poll or explicit common-permission change to an existing lead selection | 1 stat for a warm stable poll, 3 calls when a loaded existing file revalidates and rereads. Stable absent poll 2 (stat + lstat). The change uses 8 on the selection file (authorization stat + read, writer read + 5), plus any record update or later launch checks. A worker's parent authorization reads are additional. | `wsagent/runner_operations.go:23-29`, `wsagent/permission_store.go:76-125,201-238`, `wsagent/permission.go:128-130,294-350`, `wsagent/record.go:335-365` |
 | Support store read, opening send, or New replacing an existing conversation | 0 in `support.json` for read or send to an existing conversation, 5 to set a mapping, 10 to delete and replace a mapping | `wsagent/support.go:197-212,411-414,474-528` |
@@ -168,9 +175,11 @@ that snapshot of the code and machine.
   subject to measurement.
 
 - **(1980) Agent records:** Move `agent.json` authority into SQLite in this
-  bundle. First route direct Go record readers, including tracker auth,
-  session unregister and registration pruning, through the daemon. Retain
-  only legacy file behavior required by the selected compatibility tier.
+  bundle. First route direct Go record readers through the daemon, including
+  tracker admission, aliases, hosted lineage, unregister and registration
+  pruning (`mcp/tracker_support.go:49-64`, `mcp/tool_aliases.go:97-132`,
+  `mcp/hosted_key.go:74-95`, `mcp/dashboard_sessions.go:405-408,467-472`).
+  Legacy records become the cutover snapshot under (2125).
   Rejected: leave the shared file authoritative and only remove holder
   whole-file rewrites.
 - **(1981) Workspaces:** Leave `workspaces.json` outside the bundle: its
@@ -180,8 +189,8 @@ that snapshot of the code and machine.
   config root can be shared across daemons. Rejected: include seen marks and
   add a shared-ownership contract.
 - **(1983) Permission selection:** Edits go only through the daemon's
-  authorized entry point; read the old file only for compatibility and
-  import. Preserve fail-closed behavior and origin validation. Rejected:
+  authorized entry point. Capture the old file for one-time import before the
+  (2125) fence. Preserve fail-closed behavior and origin validation. Rejected:
   continue accepting direct live file edits.
 - **(1984) Rail layout:** Dashboard actions are the only live write path;
   update fixtures to test dashboard actions and legacy import separately.
@@ -196,17 +205,23 @@ that snapshot of the code and machine.
   the daemon handles the work. Prove predecessor drain, writer shutdown and
   successor startup during replacement. Rejected: multi-process SQLite WAL
   access; refuse direct calls as a T3 boundary.
-- **(1987) Compatibility:** Target T0–T2 per store and return any T3 boundary
-  to the owner as a new decision. Rejected: settling T3 without owner approval.
+- **(1987) Compatibility:** Apply the directional criteria in
+  `ai-docs/manuals/release-compatibility.md:54-71,127-145`. The bundled stores'
+  same-root downgrade follows the dated (2125) owner exception. Any T3
+  boundary requires a new owner decision.
 - **(1988) Topology:** Use one shared daemon state DB for cache-rooted stores;
   revisit only if measurements show contention. Rejected: per-store DBs with
   multiplied handles and checkpoints.
-- **(1989) Import:** Use transactional, repeatable legacy import. Choose the
-  discovery point, completion marker and authority handoff; keep invalid or
-  future data and unknown fields available for recovery. Rejected: request-path
-  fallback and continuous dual writes.
-- **(1990) Legacy files:** Keep legacy files through this child, following the
-  whiteboard rollback precedent (1816)=a. Rejected: remove them in this child.
+- **(1989) Import:** Use transactional, repeatable legacy import with the
+  (2125) completion marker and authority handoff. Keep original import bytes,
+  unknown fields and invalid or future inputs for recovery. Discover bundled
+  data in hosted and CLI-only session directories, including labels and hiring
+  flags alongside registration rows (`wsdashboard/label_route.go:73-105,108-125`,
+  `wsdashboard/session_hire_routes.go:148-175`). Protect adjacent files during
+  discovery and import. Rejected: request-path fallback and continuous dual
+  writes.
+- **(1990) Legacy files:** Retain the fenced cutover snapshot under (2125).
+  Keep original import bytes with recovery data.
 - **(1991) Conversation state:** Use reply-ID keyed state and bounded recovery
   deltas; decide snapshot/compaction and legacy unknown-field representation.
   Rejected: rewrite the whole record on every mutation.
@@ -242,8 +257,10 @@ that snapshot of the code and machine.
 - **(2001) Answer checks:** Use a guarded reply-ID keyed marker; preserve the
   interrupt/check race and trace marker update before inbox nudge. Rejected:
   an unguarded batched cursor advance.
-- **(2002) Hiring:** Key metadata by reply ID with request identity available
-  to retry; decide recovery after partial label, hiring and record publication.
+- **(2002) Hiring:** Key metadata by reply ID. Preserve request identity and
+  retry after interrupted creation, coordinating label, hiring and record
+  changes through the daemon store. The approval journal stays in its separate
+  file (`wsagent/hire.go:59-86`, `wsdashboard/session_hire.go:78-105,418-452`).
   Rejected: embed hiring flags in registration.
 - **(2004) Tracker hooks:** Scope cursors by registration nonce and use keyed
   processed/due updates; preserve queue/receipt order and catch-up policy.
@@ -263,21 +280,198 @@ that snapshot of the code and machine.
   compare on the target Windows AhnLab V3 machine before release. Rejected:
   gate the switch on a WAL prototype; the wired comparison supplies the needed
   evidence for the chosen topology.
+- **(2121) No daemon running:** An affected raw `ws-mcp call` attaches to a
+  healthy daemon and otherwise fails at once with an error naming
+  `ws-mcp daemon-start` for the same cache/config root. An affected
+  `serve --stdio` session ensures the daemon once under the existing
+  dashboard policy, then attaches; when disabled or unavailable it returns a
+  recoverable unavailable error. Authority checks route together with their
+  operation; a connection failure after a mutation is sent keeps the
+  existing unknown-outcome behavior. This matches the launcher's CLI/MCP
+  split (`agents-plugin/bin/ws-mcp-launcher.py:1612-1641,1821-1877`).
+  Rejected: auto-start for one-shot `call` (detached startup and AV latency
+  on a one-shot call); an in-process read-only SQLite fallback (conflicts
+  with (1986)).
+- **(2122) Replacement writer barrier:** Stop metadata admission and drain
+  routed calls and background users, including tracker hooks, poll and watch.
+  Close SQLite before releasing `dashboard.lock`. The successor takes that
+  lock before metadata open, import and restore, including Support
+  initialization, and validates before serving. This also applies to a prestarted
+  successor under `261115-feat-werkschaft-electron-daemon-override` Phase 3.
+  The current constructor reads Support before the lock and the current shutdown
+  can leave hosted calls and tracker work running after unlock
+  (`cmd/ws-mcp/dashboard.go:112-120,186-224`, `wsagent/support.go:157-179`,
+  `wsdashboard/daemon_start.go:24-45`, `wsdashboard/daemon_runtime.go:118-169`,
+  `wsdashboard/ensure.go:158-167`).
+- **(2125)=a. Freeze bundled legacy metadata at cutover (owner, 2026-11-22).**
+  Under `dashboard.lock`, wait for the legacy metadata writers to exit before
+  discovering inputs. The existing daemon can release the lock while old calls
+  or hooks are still running (`cmd/ws-mcp/dashboard.go:196-224`,
+  `mcp/dashboard_sessions.go:405-423`). Durably stage the original bytes and
+  import states before applying the one-time fences. Interrupted cutover
+  ((2135), owner 2026-11-22): while a cutover is pending, unfenced legacy
+  files stay the live authority. Keep a durable capture journal per file and
+  per session generation outside session directories. A retry drains legacy
+  writers again, re-stages the current bytes of every unfenced file
+  (permission selector together with its record), and reuses a staged
+  original only where the migration-owned fence demonstrably landed on that
+  exact file. Handle a crash after a replacement but before its journal
+  mark, and discard journal state for a session deleted or recreated since;
+  never recreate a pruned directory on retry (the current writer calls
+  `MkdirAll`). The final import re-reads unfenced files and re-enumerates
+  sessions inside the commit boundary and imports no session that has
+  vanished. A raw old registration prune racing that boundary joins the
+  post-cutover prune residual below (`wsdashboard/daemon_start.go:24-45`,
+  `wsagent/permission.go:294-349`, `mcp/dashboard_sessions.go:405-423`,
+  `wsdashboard/registry.go:386-425`, `wsagent/record.go:335-365`).
+  Rejected: retrying blindly from staged originals, which loses a permission
+  lowering the old daemon accepted in between and reincarnates a pruned
+  session; an enforced exclusive maintenance window, which costs downtime
+  and cannot be enforced for downstream installs. Once the fences are durable,
+  commit the imported state and completion marker in the same SQLite transaction.
+  SQLite owns the bundled stores after that commit. Subsequent opens restore
+  from SQLite and ignore legacy edits, additions and deletions. The surviving
+  files are the fenced cutover snapshot. The new daemon makes zero later
+  bundled-store publications to legacy paths. New raw calls route under
+  (1986) and (2121). Shared registration, holder, ring, inbox and adjacent
+  file contracts continue through their existing owners
+  (`wsdashboard/registry.go:257-285,333-367`, `wsdashboard/daemon_runtime.go:154-162`,
+  `wsagent/runner_process.go:208-220,237-245`, `wslive/snapshot.go:125-128`,
+  `wsinbox/inbox_store.go:203-221`).
+
+  Apply the four one-time fences from the staged originals.
+  - Give every imported session a present, invalid `permission.json` selector,
+    including sessions whose old file was absent. The old reader distinguishes
+    an invalid selector from omission and refuses fresh lead and worker
+    admission. Already-held processes can rejoin without applying the
+    selection (`wsagent/permission_store.go:60-67,119-140`,
+    `wsagent/permission.go:128-161`, `wsagent/runner_process.go:69-91,274-285`).
+  - Clear legacy hiring `Enabled` and retain `Hired` and `RequestID`. The old
+    eligibility check refuses hiring with this flag cleared. The new daemon
+    uses the imported original flag and request identity
+    (`wsdashboard/session_hiring.go:10-31`, `wsdashboard/session_hire.go:110-133`,
+    `wsagent/hire.go:59-86`).
+  - Support tracker authority ((2136)=a, owner 2026-11-22): set a nonempty
+    `closed_at` on every eligible legacy support record (parentless,
+    non-lead), preserving its key, root and unknown fields; SQLite keeps the
+    imported original open state. The pinned raw binary (`ws-mcp call` or
+    `serve --stdio`) admits tracker support writes from a retained key by
+    re-reading `ClosedAt`, regardless of the daemon lock, so without this
+    fence a conversation SQLite has closed stays writable through it while
+    the new daemon runs (`cmd/ws-mcp/main.go:19-74`,
+    `mcp/tracker_support.go:49-80`, `mcp/tracker_update.go:17-21,49-73`,
+    `wsagent/runner_events.go:1033-1056`). The old binary then shows those
+    support conversations as closed; the old prune predicate requires a lead
+    or parent, so the mark does not make them prune-eligible
+    (`wsagent/support.go:370-392`, `wsdashboard/registry.go:463-467`). Leads
+    and children get no synthetic `closed_at`. Rejected: a documented
+    residual only, which leaves every existing support key writable; a
+    close-only mirror, which is write-through under (2125); an old-side
+    access boundary, which is T3.
+  - Child tracker authority (same fence, reviewer findings auto-confirmed
+    2026-11-22). The pinned gate tests the session key's parent and never
+    reads `Record.Parent`, spawned children carry parentless delegate keys,
+    and it resolves the profile and the registered stores on every call,
+    so any open non-lead child can become admissible after cutover through
+    a profile or store change (`mcp/tracker_tools.go:52-67`,
+    `mcp/tracker_support.go:49-80`, `mcp/agent_keys.go:40-43`,
+    `wsagent/runner_create.go:172-212`, `wsagent/spawn.go:125-127`). The
+    fence therefore covers every non-lead record with a parent that is
+    open at cutover, whatever its current profile or root. Such a record
+    keeps an empty `closed_at`; its `profile` is set to the sentinel
+    `!cutover-fenced`, which fails the profile-name grammar that
+    `ResolveProfile` checks before reading any configuration, so no
+    configured definition can resolve it (`wsagent/profile.go:57,361,398-401`,
+    `mcp/tracker_support.go:61-64`). The original profile is kept in
+    SQLite and in the record's unknown field `cutover_profile`. The old
+    prune predicate retires a child only on `closed_at` or a stale
+    hand-off, so the directory is kept
+    (`wsdashboard/registry.go:386-425,463-467`). Parentless non-lead records
+    take the `closed_at` fence above. Rejected: `closed_at` on children,
+    which lets an old daemon after a downgrade delete the child's directory
+    once retention passes, unrecoverable on re-upgrade; a grammar-valid
+    sentinel such as `ws-cutover-fenced`, which a configured profile can
+    define; fencing only children eligible at cutover, which a later
+    profile or store change makes admissible; rewriting `WSKey`, which old
+    restore, key setup and mailbox drain depend on (`wsagent/record.go:320`,
+    `wsagent/runner_process.go:147-153`, `wsagent/runner_conv.go:351-355`).
+  - Remove the cache-root dashboard's legacy `tracker-hooks.json` after retaining
+    its bytes and making the config available through a new-daemon-only input
+    path. Preserve owner-controlled reload and
+    nonce-scoped progress in the new daemon. The old runner goes idle when
+    the file is absent (`wstrackerhook/config.go:13-16,31-45`,
+    `wstrackerhook/runner.go:204-247,280-299`, `wstrackerhook/state.go:25-34,52-60`).
+    Update both shipped hook instructions,
+    `agents-plugin/rsrc/tracker-hooks/tracker-hooks.md` and
+    `agents-plugin-wsflow/rsrc/tracker-hooks/tracker-hooks.md`, to name the
+    new input path in the same change, and verify that an edit made as they
+    document reloads in the new daemon. Left unchanged, they direct edits to
+    the retired file, so new hooks stay idle and the file the old runner
+    watches reappears (`wstrackerhook/runner.go:210-245`).
+
+  **Owner compatibility exception, 2026-11-22.** A same-root downgrade after
+  cutover is accepted in a patch as a ticket-specific exception, recorded on
+  the precedent of (1855) in `ai-docs/manuals/release-compatibility.md:129-140`.
+  Re-upgrade discards old edits to bundled stores.
+  Disclose that the old binary can prune a shared session directory revived
+  after cutover based on stale `agent.json`, can replay or orphan a holder from
+  stale identity or sequence, and can replay pending entries from the separate
+  hiring approval journal. It can also accept stale authenticated tracker
+  writes from a support record an old binary created after a later same-root
+  downgrade, which stays open on re-upgrade because the support fence ran
+  once ((2136); `wsagent/support.go:387-414`, `wsagent/runner_create.go:248-249`).
+  An older daemon after a downgrade cannot launch a fresh process for a
+  child that was open at cutover, because the fence renamed its profile to
+  `!cutover-fenced`; it can still reattach a surviving holder, and a held Pi
+  worker keeps its stored resolved definition, but tracker writes stay
+  refused because the gate resolves the record's profile on every call
+  (`wsagent/runner_process.go:38-59,528-549`,
+  `wsagent/runner_conversation.go:209-217`). The old daemon still starts and
+  serves other sessions, and re-upgrade restores the child's original
+  profile and open state from SQLite.
+  An older daemon serving the same root after a downgrade can also accept
+  the owner's trusted toggle to re-enable hiring for a CLI lead nested after
+  cutover, because the frozen layout still shows it as a root, and approval
+  then checks that stale hierarchy; both need deliberate owner action, and
+  the new daemon keeps refusing per (955) ((2137)=b, owner 2026-11-22;
+  `wsdashboard/session_hire_routes.go:148-197`,
+  `wsdashboard/session_hire.go:110-151,418-437`). Rejected: a one-time
+  per-row `Enabled=false, Hired=true` sentinel, which misreports every
+  ordinary lead in the old dashboard and leaves later CLI rows uncovered;
+  an old-root boundary, which is T3.
+  The hiring gate still applies on a replay attempt
+  (`mcp/dashboard_sessions.go:405-408`, `wsdashboard/registry.go:386-425,456-468`,
+  `wsagent/runner_startup.go:68-123`, `wsagent/record.go:84-92`,
+  `wsagent/runner_process.go:237-245,482-487`,
+  `wsdashboard/session_hire.go:78-105,314-348,418-427`).
+  The owner rejected (b) freeze with a T3 boundary requiring a minor bump and
+  (c) continued write-through.
+- **Permission and hiring consumers:** At Phase 2 cutover,
+  `261115-feat-ws-permission-profile` Decision 8,
+  `261115-feat-ws-worker-profile-session-spawn` Phase 2, and
+  `261115-feat-ws-session-hire-approval` Decision (957) use the daemon's
+  SQLite-backed store service for their live reads, writes and recovery.
+  The legacy `permission.json` and `hiring.json` are one-time import inputs
+  and stay as the fenced snapshot under (2125).
 
 ## Constraints
 
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for `agents-plugin/`, `agents-plugin-wsflow/`, `agents-plugin-tool/`)
+- Convention: ai-docs/manuals/wsflow-mirroring.md (declared for `agents-plugin/rsrc/`, `agents-plugin/skills/`, `agents-plugin/hooks/`, `agents-plugin-wsflow/`)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for `agents-plugin-tool/internal/mcp/`)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for `agents-plugin-tool/internal/`)
+- Convention: ai-docs/manuals/performance.md (declared for `agents-plugin-tool/`)
 - Follow `ai-docs/manuals/performance.md:12-40,63-73` for memory-first reads,
   deltas, file/handle lifetime, interactive I/O and Windows before/after
   measurement. Rule 8 governs any proposed exception. Count the store reads
   and writes as well as SQLite open, WAL/SHM, locks, sync and checkpoint work.
-- **Compatibility tier unresolved.** Grade each affected store and direct
-  call under `ai-docs/manuals/release-compatibility.md` before `ready`. Trace
-  new open of old files, the old binary's actual read/write or refusal after
-  cutover, and re-upgrade reconstruction. A T2 claim needs surviving data
-  and a deterministic new-reader recovery trace. T3 requires a minor release,
-  explicit owner approval and an effective old-side fence before damaging
-  writes. T4 cannot ship. Retaining files as a rollback snapshot alone gives
-  no T2 recovery of the updates after import.
+- **Owner compatibility exception, 2026-11-22, (2125)=a.** The patch accepts
+  loss of old bundled-store changes on re-upgrade and the same-root stale
+  prune, holder and pending-hire replay risks recorded in Decisions. Keep
+  this exception scoped to this cutover. Record directional evidence under
+  `ai-docs/manuals/release-compatibility.md:54-71,127-145` for old import,
+  old-binary fences and re-upgrade. The frozen snapshot and discarded old
+  edits carry no T2 recovery promise. Document the residuals for users.
 - **VERIFIED existing contracts:** the holder reattaches using `HolderSeq`
   together with holder identity, for leads and workers. Ring apply precedes
   line completion, and graceful detach finishes an in-flight line. Preserve
@@ -291,9 +485,9 @@ that snapshot of the code and machine.
   `wsagent/runner_conv.go:318-365,1209-1230,1284-1313`,
   `wsagent/children.go:654-679,744-775`, `wsdashboard/registry.go:448-467`.
 - Route permission edits through the authorized daemon entry point and rail
-  layout writes through dashboard actions. Their legacy files are compatibility
-  and import inputs, not live edit paths. Preserve usage history import
-  schema/error protection and document offline SQLite recovery.
+  layout writes through dashboard actions. Use their legacy files for the
+  initial import under (2125). Preserve usage history import schema/error
+  protection and document offline SQLite recovery.
 - Preserve the current permission error/omission distinction, unknown fields,
   and presence-sensitive delegation provenance. Preserve hook catch-up, due
   and retry semantics, and seen-mark identity across unregister/re-register.
@@ -313,55 +507,91 @@ that snapshot of the code and machine.
   Follow `ai-docs/manuals/shipped-surface-boundary.md` for any new diagnostics
   or other shipped text.
 
+## Prior Decisions
+
+- 261118-feat-ws-display-transcript-memory-first (2026-11-19, commit): "Keep both kick writes and every consumed-input/replay-sensitive record mutation immediate: Mail, Reports, Steered/SteerSeq/TurnMark, PendingReports, and ring-tied HolderSeq." — bearing: constrains
+- 261120-refactor-ws-agent-workers-under-holders (2026-11-20, commit): "Owner1862=a accepts inherited cursor writes for this merge and directs their removal to the SQLite daemon-metadata bundle." — bearing: supports
+- 261113-feat-ws-dashboard-session-rail-tree (2026-11-14, commit): "Store follows workspaceStore: a mutex, a re-read of the file before every op, and writePrivateFile." — bearing: constrains
+- 1680ca3a8 (2026-11-22, commit): "Reattached agy workers kept a daemon-sent prompt's turn open only by the in-memory outstanding map, which a replacement daemon lacks" — bearing: constrains
+
 ## Route Facts
 
-These are draft facts to refresh at promotion. **VERIFIED** denotes a current
-code route. **INFERRED** denotes implementation or verification scope.
-
-| Fact | Value | Evidence |
+| fact | value | evidence |
 |---|---|---|
-| scope.span | multi-file | VERIFIED. Inventory spans `wsagent`, `wsdashboard`, `wstrackerhook`, `wstrackerhost`, `mcp` and `cmd/ws-mcp`. |
-| scope.surface | cross-module | VERIFIED. Record read paths extend to direct MCP, dashboard ownership and registration pruning. See process and ownership boundaries. |
-| scope.new_public_symbol | open | INFERRED. The store API and authenticated daemon routing require implementation design under (1980), (1986) and (1988). |
-| scope.new_type_contract | yes | INFERRED. SQLite recovery shapes and downgrade behavior require implementation design under the settled decisions. |
-| scope.test_surface | multi-package | INFERRED. Startup and mixed-version recovery, raw CLI, holder replay, route behavior and the rail scratch fixture cross package boundaries. |
-| complexity.reuse_points | confirmed | VERIFIED. `wsstore/store.go:145-162,209-230` and `wsstore/retry.go:22-48` provide SQLite setup, and legacy readers are listed above. |
-| complexity.side_effect_risk / risk.correctness | high | INFERRED. A stale authority read can alter admission or prune a live directory. Cursor/recovery ordering can drop or replay held output. |
-| risk.fit / risk.test | high | INFERRED. Shared roots and direct callers constrain cutover. Performance needs comparable Windows AV traces. |
-| risk.security_or_contract | high | INFERRED. Record-based tracker admission, permission provenance, and stored MCP token/holder data require explicit preservation. `mcp/tracker_support.go:41-64`, `wsagent/permission_store.go:148-161,217-237`, `wsagent/runner_process.go:247-255,489-496`. |
+| scope.span | multi-file | agents-plugin-tool/internal/wsagent/record.go, agents-plugin-tool/internal/wsdashboard/rail_layout.go, agents-plugin-tool/internal/wstrackerhook/state.go and direct MCP callers |
+| scope.surface | cross-module | Record authority crosses wsagent, wsdashboard and MCP; agents-plugin-tool/internal/wsagent/record.go#L290-L298 |
+| scope.new_public_symbol | unknown | The daemon routing and store API are not specified |
+| scope.new_type_contract | yes | SQLite recovery records and authenticated daemon request contract are required by Decisions (1986), (1991) and (1992) |
+| scope.test_surface | existing | agents-plugin-tool/internal/wsagent/transcript_hot_path_test.go covers record replacements; Phase 1 also requires old-format import and restart tests |
+| complexity.reuse_points | confirmed | agents-plugin-tool/internal/wsstore/store.go#L145-L162 and agents-plugin-tool/internal/wsstore/retry.go#L22-L48 provide SQLite setup and retry |
+| complexity.side_effect_risk | high | Authority cutover changes persistence and daemon replacement across multiple stores |
+| risk.correctness | high | Holder replay, consumed input and cursor ordering must survive crashes |
+| risk.fit | high | Direct callers, shared config roots and existing dashboard integration constrain the cutover |
+| risk.test | high | Mixed-version recovery, daemon replacement and Windows AV performance require broad verification |
+| risk.security_or_contract | high | Tracker admission and permission provenance depend on protected records and authenticated routing |
 
 ## Phases
 
-Sequence under (2008). Resolve the remaining implementation details and grade
-compatibility under (1987) before the ready plan.
+Sequence under (2008).
 
 ### Phase 1: Build the store and legacy import without wiring callers
 
-- Implement the shared store and repeatable import for eligible metadata. Use
-  fixtures from the listed old formats and keep active callers on their
-  existing paths during this phase.
-- Verify old-data import, restart and retry after interruption, unknown
-  fields and invalid/future inputs, and registration or holder ID isolation.
-  Capture a comparable legacy baseline and record the directional
-  compatibility evidence for the authority switch.
+- Implement the shared store, repeatable import and transactional completion
+  marker for eligible metadata. Keep active callers on their existing paths.
+- Verify old-data import including CLI-only labels/hiring, original byte
+  retention, absent/invalid/future inputs, unknown fields, and registration or
+  holder identity isolation. Verify a staged import can retry after
+  interruption. Capture a comparable legacy baseline and record the
+  directional compatibility evidence for cutover.
 
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
-- Depends on Phase 1. Wire the agreed reader, writer and daemon lifecycle
-  paths. Route direct Go readers through the daemon before agent record cutover,
-  including tracker auth, session unregister and registration pruning. The
-  holder's sequence-only writes for a final ring line and a dirty heartbeat
-  cease replacing the whole record.
+- Depends on Phase 1. Route affected direct Go readers through the daemon
+  before agent record cutover under (1980), (1986) and (2121). The holder's
+  sequence-only writes for a final ring line and a dirty heartbeat cease
+  replacing the whole record.
+- Apply (2125) under the (2122) lock and drain boundary. Interrupt before a
+  fence, after a partial fence, and on both sides of the import commit. Verify retry
+  after the legacy writers exit, recovery of the original staged bytes,
+  import and marker visibility together, and protected adjacent files.
+  With the pinned old daemon as an actual intervening writer after an
+  interruption before fencing (2135), lower a permission and verify the
+  retry imports the lowered selection; kill after a fence replacement but
+  before its journal mark and verify recovery; prune a session between
+  interruption and retry and verify it is neither imported nor recreated.
+- Use the pinned old binary to verify fresh lead and worker launch refusal
+  from the invalid permission file, including the case where it was absent at
+  import. Verify the existing held-process rejoin behavior, hiring disabled
+  with the hired identity preserved, tracker support writes refused through
+  `ws-mcp call` with a retained support key whose record was open at
+  cutover (2136), with the key of a child open at cutover at a store root
+  whose profile grants the tracker tool, and with the key of a child that
+  qualifies only after cutover through a profile override or a new store
+  registration, even with a configured profile named like the sentinel;
+  verify the old daemon starts with fenced children present, tracker
+  writes still fail after a fenced child's holder rejoins, the old prune
+  keeps their directories after retention, and re-upgrade restores their
+  original profile and open state; and
+  hooks disabled while the legacy
+  config path is absent. Confirm the new daemon sees the imported values and
+  preserves hook reload and progress on its new input path.
+- After cutover, exercise new writes and shutdown with zero legacy
+  publications. Edit and delete existing bundled files and add a new bundled
+  legacy file with the old binary. Verify re-upgrade restores from SQLite
+  alone and preserves the shared contracts.
 - Verify hard-kill/rejoin and graceful replacement for held leads and
   workers, including interrupted ring append and pending consumed input.
-  Exercise tracker authorization, terminal ownership/pruning, permission
-  provenance, dashboard refresh/notifications and the hook registration
-  boundaries. Exercise authenticated direct calls and stdio with the daemon
-  available and unavailable, and replacement drain. Test authorized permission
-  edits, fail-closed origin validation, dashboard-only layout actions, and
-  legacy imports separately. Verify schema/error protection and the documented
-  offline SQLite recovery path. Verify the old/new cutover contract on the old
-  binary as well as the new one.
+  Verify a prestarted successor, including Support, reads metadata only after
+  acquiring the lock, and the predecessor drains SQLite users and closes its
+  handle before unlock. Exercise authenticated direct calls and stdio with the
+  daemon available and unavailable, tracker admission, permission provenance
+  and fail-closed origin validation, terminal ownership/pruning, dashboard-only
+  layout actions, and dashboard refresh/notifications. Verify schema/error
+  protection and the documented offline SQLite recovery path.
+- Reproduce an old registry prune of an expired on-disk record after the
+  corresponding session was revived in SQLite. Document the mixed-version
+  prune residual and the other same-root downgrade residuals in user-facing
+  upgrade guidance under (2125).
 
 ### Phase 3: Record the measured result
 
@@ -373,5 +603,5 @@ compatibility under (1987) before the ready plan.
 - Record syscall counts and action-to-visible-effect latency, including WAL,
   SHM, sync, checkpoint, replacement and shutdown bursts, against the prior
   paths. Verify the two cursor-driven whole-file writes are absent in the
-  traced cases. Record any requested performance exception and its measured
-  cost for the owner.
+  traced cases. Record requested exceptions and their measured costs for the
+  owner.

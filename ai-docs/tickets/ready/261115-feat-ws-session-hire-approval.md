@@ -6,7 +6,7 @@ related:
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: ec7138fd30ded2a9
-sage-review-design-reviewed: ec7138fd30ded2a9
+sage-review-design-reviewed: c62feac214d063fb
 ---
 
 # Owner-approved nonblocking hosted-session hiring
@@ -264,7 +264,12 @@ raised:
   session: the layout route refuses with a new reason code (T0 additive). The
   flag cannot be turned on for a session nested under another. Because the
   hierarchy is one level deep, a nested session never has children of its
-  own.
+  own. Exception outside this ticket's binary: after the metadata SQLite
+  cutover, an older daemon serving the same root after a downgrade reads the
+  frozen layout and can re-enable hiring for a lead nested after cutover;
+  that case is a documented residual of the dated owner exception in
+  `261121-refactor-ws-daemon-metadata-sqlite` ((2137)=b), not a gap in this
+  rule.
 - **(957) technical, auto-confirmed from fact population - flag storage.**
   The hiring flag, for hosted and CLI sessions alike, lives in a
   dashboard-owned sidecar beside `label.json` in
@@ -273,6 +278,14 @@ raised:
   in `registration.json`, which the MCP process rewrites without preserving
   unknown fields, so older or stale writers would drop it; the hosted
   `agent.json` alone, which would give CLI leads (769=a) a second store.
+
+  **Storage handoff (2026-11-22).** From Phase 2 of
+  `261121-refactor-ws-daemon-metadata-sqlite`, the daemon's SQLite-backed store
+  service owns hiring metadata for hosted and CLI sessions. Trusted writes and
+  eligibility checks use that service. Import `hiring.json` once and retain the
+  fenced legacy snapshot under (2125). Clearing its `Enabled` flag disables old
+  hiring eligibility while preserving `Hired` and `RequestID`
+  (`wsdashboard/session_hire.go:110-133`, `wsdashboard/session_hiring.go:10-31`).
 - **(958) technical, auto-confirmed from fact population - roster telemetry.**
   Roster rows reuse the rail row's projection, because the roster's scope is
   the rail tree:

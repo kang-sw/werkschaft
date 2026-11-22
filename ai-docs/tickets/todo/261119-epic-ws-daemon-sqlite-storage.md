@@ -43,8 +43,14 @@ file-touch and complexity gains:
    remain files if `file://` links remain; retiring the separate per-update
    embed HTML snapshot `ai-docs/whiteboards/<id>-<hash>.html` is also in scope
    as its own child.)
-4. **Daemon-only metadata bundle:** Strictly daemon-internal JSON snapshots
-   with zero external readers even outside the launcher:
+4. **Daemon-owned metadata bundle:** SQLite becomes the daemon's authority.
+   Existing raw Go MCP processes read `agent.json` for admission, aliases and
+   registration retention. Route affected calls from new binaries through the
+   daemon. Retain the legacy cutover snapshot with one-time permission, hiring
+   and hook fences under child decision (2125). Current raw readers are in
+   `agents-plugin-tool/internal/mcp/tracker_support.go:49-64`,
+   `agents-plugin-tool/internal/mcp/tool_aliases.go:97-132`, and
+   `agents-plugin-tool/internal/mcp/dashboard_sessions.go:405-408,467-472`.
    - `wsagent`: `agent.json` (also known as `record.json`; absorbs Phase 3
      `record.json` delta-append-log work moved from
      `261118-feat-ws-display-transcript-memory-first` by owner decision
@@ -53,13 +59,11 @@ file-touch and complexity gains:
      commits, e.g. `c47ac38d6`, `539c6c778`, `6979a79e6`, `253ea7b41`; child
      inputs `pi/session.jsonl` and `system_prompt.md` stay files).
    - `wsdashboard`: `rail-layout.json`, `plan-usage*.json`, `memos/`,
-     `label.json`, `ack-check.json`, `hiring.json`, `workspaces.json` (4–5
+     `label.json`, `ack-check.json`, `hiring.json` (4–5
      ops/update; 11/25 storage fix/perf commits, e.g. `da771b684`, `95aa846d1`,
      `b9c3611a3`).
    - `wstrackerhook`: `<store-id>.json` cursor/processed/due state (4–5
      ops/batch; 2/4 storage commits, `edf30f571`, `3a04d584d`).
-   - `wstrackerhost`: `ui-seen.json` (4–5 ops on `MarkSeen`; strictly
-     daemon-only).
 5. **MCP session key store (`mcp/session_layout.go`, `sessions/<key>/`):**
    `<cache>/sessions/<key>/{key,agenda,todos,whiteboard}.json` + `.lock` and
    legacy `keys/`. Daemon-only writer in 0.50+; currently ~7–9 ops per
@@ -81,6 +85,14 @@ file-touch and complexity gains:
   - **Git-transport / remote-synced stores:** `wsledger`
     (`~/.ws/tracker/<id>/repo.git` signed refs/commits), `wsindex`
     (`refs/ws/tickets-index`, `refs/ws/tickets-pending`).
+  - **Config-rooted shared stores:** `workspaces.json` and `ui-seen.json`
+    stay files under child decisions (1981) and (1982). The workspace writer
+    reloads changes from other processes, and tracker seen state is rooted at
+    the registered store directory. Daemons with separate cache roots can share
+    the same config root. `agents-plugin-tool/internal/wsdashboard/workspaces.go:23-30,50-52`,
+    `agents-plugin-tool/internal/wstrackerhost/registry.go:32-40,43-64`,
+    `agents-plugin-tool/internal/wstrackerhost/seen.go:113-128`,
+    `agents-plugin-tool/internal/wsstate/paths.go:91-103`.
   - **Files read or written by non-Go processes:**
     - `dashboard/{endpoint.json, dashboard.lock, launcher-start.lock, last-port, last-running-executable.json, localhost-secret, lan-token}`
       (read by `ws-mcp-launcher.py` and `desktop-electron`).
@@ -109,7 +121,10 @@ Child execution order is **not yet decided** (see `## Open questions`):
 - Planned: `wsinbox` (`inbox/`, `drained/`, `answer-pending/`; `attachments/` kept as blob files) -> SQLite
 - Planned: `wswhiteboard` (2PC WAL folder -> one SQLite DB per board/session, lazily opened and idle-closed)
 - Planned: `wswhiteboard` embed HTML snapshot retirement (stop rendering `ai-docs/whiteboards/<id>-<hash>.html` per update; updates shipped whiteboard playbook embed rule and `whiteboard.update` `embed:` result field; mechanism open)
-- Planned: Daemon-only metadata bundle (`wsagent`, including absorbed `record.json` delta log from `261118-feat-ws-display-transcript-memory-first` Phase 3 per `(1326)=a`, `wsdashboard` misc UI state, `wstrackerhook` state, `wstrackerhost` `ui-seen.json`) -> SQLite
+- Planned: `261121-refactor-ws-daemon-metadata-sqlite` moves the `wsagent`,
+  `wsdashboard` and `wstrackerhook` metadata listed in Scope item 4 to SQLite,
+  including the absorbed `record.json` delta work from
+  `261118-feat-ws-display-transcript-memory-first` Phase 3 per (1326)=a.
   - Must also remove the held-conversation applied-sequence rewrite: today each final ring line and each dirty heartbeat replaces the whole `agent.json` for held leads and, since `261120-refactor-ws-agent-workers-under-holders`, held workers (owner-approved performance exception `(1862)=a`, 2026-11-20).
 - Planned: MCP session key store (`sessions/<key>/` + legacy `keys/` migration) -> SQLite
 - Planned: Numbers screen (`261120-feat-ws-dashboard-numbers-screen`), with ~30-day harness/model statistics after the SQLite board store lands on `develop`
@@ -118,10 +133,14 @@ Child execution order is **not yet decided** (see `## Open questions`):
 
 Confirmed by the owner on 2026-11-19 (21:52 and 21:56, board `(1325)=a`):
 
-- **Five-store scope and exclusions:** Target all five candidate stores listed
+- **Five-group scope and exclusions:** Target all five candidate store groups listed
   in `## Scope` for expected dramatic file-touch and complexity reductions;
   exclude `wsmailbox` (already memory-first JSONL ring, `e973b72b4`) and keep
-  all git-tracked, git-transport, non-Go-accessed, and raw-blob files as files.
+  the files listed under `## Non-Scope`. Scope item 4 reflects the metadata
+  child's shared-store exclusions (1981) and (1982). Its dated (2125) owner
+  exception accepts a same-root patch downgrade to the fenced cutover snapshot
+  and discards subsequent edits to bundled legacy files on re-upgrade. See
+  `261121-refactor-ws-daemon-metadata-sqlite` for the accepted residuals.
 - **Whiteboard storage shape (`(1325)=a`, 2026-11-19 21:56):** One SQLite file
   per board (per session), opened lazily and closed when idle, with a small
   `cache_size`.
@@ -153,7 +172,7 @@ Confirmed by the owner on 2026-11-19 (21:52 and 21:56, board `(1325)=a`):
 - **Cross-cutting manual obligations:** Each child ticket must comply with
   `ai-docs/manuals/performance.md` (memory-first interactive paths, measured
   before/after file ops), `ai-docs/manuals/release-compatibility.md` (source-backed
-  compatibility tier settled before ready), and
+  compatibility settled before ready), and
   `ai-docs/manuals/shipped-surface-boundary.md`.
 
 ## Open questions
@@ -163,15 +182,15 @@ must not be assumed by child tickets without owner confirmation:
 
 - **Child ordering:** Which candidate store runs first as the pilot and the
   sequence across the children.
-- **Per-store compatibility tier:** For each candidate store (and the embed
-  snapshot retirement child), whether downgrade compatibility stays `<= T2` (via
-  startup import + shutdown/dual-write export to legacy files) or accepts a
-  `T3` minor boundary.
+- **Per-store compatibility:** For stores with unsettled decisions and the
+  embed snapshot retirement child, settle whether downgrade is compatible at
+  T0–T2 or needs a T3 minor boundary. The metadata bundle follows its dated
+  (2125) exception.
 - **Windows AV benchmark (AhnLab V3) gate:** Using a corporate Windows PC
   running AhnLab V3 as the first gate to compare SQLite WAL (`-wal`/`-shm`,
   checkpoint `fsync`, `PRAGMA synchronous`) syscall counts and latency against
   current file stores / memory-first JSONL (`ai-docs/manuals/performance.md:65-73`).
-- **Direct-binary CLI access policy:** How direct `ws-mcp` CLI/serve
+- **Direct-binary CLI access policy for unsettled stores:** How direct `ws-mcp` CLI/serve
   invocations bypassing `ws-mcp-launcher.py` (`cmd/ws-mcp/main.go`) are handled
   when the daemon holds a SQLite store (concurrent WAL access vs. explicit
   refusal, plus `daemon-start --replace` handoff behavior on Windows).
@@ -180,7 +199,7 @@ must not be assumed by child tickets without owner confirmation:
 
 - Done: All five candidate-store child tickets and the in-scope embed-snapshot
   retirement child are in `.done/` (or explicitly deferred/dropped by the
-  owner), compatibility tiers and Windows AV measurements are verified per
+  owner), compatibility decisions and Windows AV measurements are verified per
   child, and the owner closes this epic.
 - Dropped: The owner drops the SQLite migration direction.
 - Deferred: Stores outside the five confirmed candidates (`wsnote` non-repo

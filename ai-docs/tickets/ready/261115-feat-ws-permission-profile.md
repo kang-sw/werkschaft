@@ -10,7 +10,7 @@ related:
   261117-feat-ws-agent-tools-mailbox-routing: "its Decision 13 is the source of Decision 3's ws/agent.spawn exception; it adds the create-time admission and worker-side explicit-level persistence for agent.spawn children"
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-design-reviewed: c34a82c839d45331
+sage-review-design-reviewed: bb757b64dffa20c1
 sage-review-completeness-reviewed: c34a82c839d45331
 ---
 
@@ -126,6 +126,15 @@ verification scope.
    key records. Prefer this sidecar
    over a tolerant Record member because CLI and hosted sessions share the
    session-directory home, whereas a CLI session need not have an agent Record.
+
+   **Storage handoff (2026-11-22).** From Phase 2 of
+   `261121-refactor-ws-daemon-metadata-sqlite`, persist through the daemon's
+   SQLite-backed store service and resolve the current selection through it on
+   every reopen and actual launch. Import `permission.json` once and retain
+   the fenced legacy snapshot under (2125). The cutover's invalid selector
+   blocks fresh admission by the old reader (`internal/wsagent/permission_store.go:119-140`,
+   `internal/wsagent/permission.go:128-161`). Decision 8's authorization,
+   provenance and fail-closed behavior apply to the live selection.
 9. **Technical API choice.** Use the existing Runner launch/control seams
    (`LeadOptions`, `SpawnSpec`, `StartSpec`, settings handling), with transient
    `permission_level`; accepted explicit selections update the sidecar under
