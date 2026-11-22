@@ -530,6 +530,11 @@ class AuditChannelTest(HolderTestCase):
         )
         order = [m for m in events if m.get("event") in ("audit", "audit_fence") or m.get("stream") == "stdout"]
         pos = {id(m): i for i, m in enumerate(order)}
+        # Audit messages go ahead of ring records: in one chunk, a tee line
+        # reaches the client before the kept line it is anchored on. The
+        # daemon's capture orders them by anchor, not by arrival.
+        k1_msg = next(m for m in order if m.get("seq") == k1)
+        self.assertLess(pos[id(tees[0])], pos[id(k1_msg)])
         # Each interval's tee lines precede its fence, and a fence precedes
         # the kept lines it releases.
         self.assertLess(pos[id(tees[1])], pos[id(fences[1])])
@@ -565,6 +570,42 @@ class AuditChannelTest(HolderTestCase):
         self.assertFalse([m for m in events if m.get("event") == "audit"])
         fences = [m for m in events if m.get("event") == "audit_fence" and not m.get("final")]
         self.assertEqual([(f["tee_count_sent"], f["dropped_count"]) for f in fences], [(0, 2)])
+
+    def test_a_holder_without_a_skip_pattern_does_not_take_the_channel(self):
+        holder = self.start_holder()
+        client, reply = self.attach_audit(holder)
+        self.assertNotIn("audit", reply)
+        self.spawn(client, py_child("print('one')\nprint('two')\n"), mode="pipe")
+        events = client.events_until(lambda m: m.get("event") == "exit")
+        self.assertFalse([m for m in events if str(m.get("event", "")).startswith("audit")])
+
+    def test_drops_of_intervals_fenced_while_detached_reach_the_next_fence(self):
+        holder = self.start_holder(ring_skip="^drop")
+        client = self.attached(holder)
+        code = (
+            "import sys\n"
+            "print('keep 1', flush=True)\n"
+            "sys.stdin.readline()\n"
+            "print('drop x', flush=True)\n"
+            "print('keep 2', flush=True)\n"
+            "print('drop y', flush=True)\n"
+            "print('drop z', flush=True)\n"
+            "print('keep 3', flush=True)\n"
+            "sys.stdin.readline()\n"
+            "print('keep 4', flush=True)\n"
+        )
+        self.spawn(client, py_child(code), mode="pipe")
+        client.events_until(lambda m: is_output(m, b"keep 1"))
+        client.close()
+        self.assertTrue(wait_until(lambda: holder.attachment is None))
+        with holder.cond:
+            holder._queue_input(b"go\n", False)
+        self.assertTrue(wait_until(lambda: holder.tee_carry == 3))
+        client2, _ = self.attach_audit(holder)
+        self.assertTrue(client2.request("input", {"data": base64.b64encode(b"go\n").decode()})["ok"])
+        events = client2.events_until(lambda m: m.get("event") == "exit")
+        fences = [m for m in events if m.get("event") == "audit_fence" and not m.get("final")]
+        self.assertEqual([(f["tee_count_sent"], f["dropped_count"], f.get("lost_before", 0)) for f in fences], [(0, 0, 3)])
 
     def test_a_full_audit_queue_drops_tee_lines_and_counts_them(self):
         holder = self.start_holder(ring_skip="^drop")

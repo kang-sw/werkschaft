@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -94,13 +95,22 @@ type Event struct {
 	Sent    uint64 `json:"tee_count_sent,omitempty"`
 	Dropped uint64 `json:"dropped_count,omitempty"`
 	Final   bool   `json:"final,omitempty"`
+	// LostBefore is a fence's count of lines dropped in earlier intervals
+	// whose fence reached no daemon.
+	LostBefore uint64 `json:"lost_before,omitempty"`
+
+	// Conn names the attach connection that delivered the event (never on
+	// the wire): events of a connection that has ended, still in flight
+	// after its successor's, can be told apart.
+	Conn uint64 `json:"-"`
 }
 
 // Audit channel events. EventAudit and EventAuditFence come from the
 // holder; the client itself delivers EventAuditAttached (Next is the
 // holder's next record sequence at attach) before any event of a connection
 // that negotiated the channel, and EventAuditDetached once that connection
-// has ended.
+// has ended. A sink that registers for a holder after its attach reads the
+// attach from Manager.AuditAttach instead.
 const (
 	EventAudit         = "audit"
 	EventAuditFence    = "audit_fence"
@@ -141,8 +151,11 @@ type AttachInfo struct {
 	FirstSeq uint64      `json:"first_seq"`
 	NextSeq  uint64      `json:"next_seq"`
 	// Audit is the audit channel version negotiated on this connection; 0
-	// for none (not offered, or a holder that predates the channel).
+	// for none (not offered, a holder that predates the channel, or one
+	// that skips no lines).
 	Audit int `json:"audit,omitempty"`
+	// Conn is the connection's Event.Conn.
+	Conn uint64 `json:"-"`
 }
 
 // AttachOptions are what an attach offers beyond the protocol.
@@ -175,9 +188,14 @@ type Client struct {
 	nextID  int64
 	waiters map[int64]chan reply
 	done    chan struct{}
-	// audit is the negotiated audit channel version.
+	// audit is the negotiated audit channel version; id this connection's
+	// Event.Conn.
 	audit int
+	id    uint64
 }
+
+// connIDs numbers attach connections for Event.Conn.
+var connIDs atomic.Uint64
 
 // Attach connects to the holder desc names, authenticates, and takes over
 // its attach slot. onEvent receives every event on the connection's reader
@@ -253,9 +271,9 @@ func AttachWith(ctx context.Context, desc Descriptor, opts AttachOptions, onEven
 	if opts.Audit > 0 && answer.Audit > 0 && answer.Audit <= opts.Audit {
 		audit = answer.Audit
 	}
-	c := &Client{conn: conn, onEvent: onEvent, waiters: map[int64]chan reply{}, done: make(chan struct{}), audit: audit}
+	c := &Client{conn: conn, onEvent: onEvent, waiters: map[int64]chan reply{}, done: make(chan struct{}), audit: audit, id: connIDs.Add(1)}
 	go c.read(reader, answer.NextSeq)
-	return c, AttachInfo{Protocol: answer.Protocol, Child: answer.Child, FirstSeq: answer.FirstSeq, NextSeq: answer.NextSeq, Audit: audit}, nil
+	return c, AttachInfo{Protocol: answer.Protocol, Child: answer.Child, FirstSeq: answer.FirstSeq, NextSeq: answer.NextSeq, Audit: audit, Conn: c.id}, nil
 }
 
 // read delivers replies to their callers and events to onEvent until the
@@ -264,14 +282,14 @@ func (c *Client) read(reader *bufio.Reader, next uint64) {
 	defer func() {
 		_ = c.conn.Close()
 		if c.audit > 0 && c.onEvent != nil {
-			c.onEvent(Event{Event: EventAuditDetached})
+			c.onEvent(Event{Event: EventAuditDetached, Conn: c.id})
 		}
 		c.mu.Lock()
 		close(c.done)
 		c.mu.Unlock()
 	}()
 	if c.audit > 0 && c.onEvent != nil {
-		c.onEvent(Event{Event: EventAuditAttached, Next: next})
+		c.onEvent(Event{Event: EventAuditAttached, Next: next, Conn: c.id})
 	}
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -288,6 +306,7 @@ func (c *Client) read(reader *bufio.Reader, next uint64) {
 		if probe.Event != "" {
 			var ev Event
 			if json.Unmarshal(line, &ev) == nil && c.onEvent != nil {
+				ev.Conn = c.id
 				c.onEvent(ev)
 			}
 			continue

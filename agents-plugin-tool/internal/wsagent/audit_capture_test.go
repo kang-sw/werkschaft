@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -369,29 +371,143 @@ func thinkDelta(text string) string {
 }
 
 // TestAuditTeeArrivingAfterTheNextKeptLineKeepsSourceOrder pins Decision
-// 5's ordering: a tee line delivered after the kept line that follows it is
-// still assembled before that line, because the kept line waits for the
-// fence that releases it; the display stream never waits.
+// 5's ordering: a tee line delivered after the kept lines that follow it is
+// still assembled before them, because they wait for the fence that
+// releases them; the display stream never waits. The held lines include
+// the result, which ends the block: mapped early, it would flush the block
+// before the deltas arrived.
 func TestAuditTeeArrivingAfterTheNextKeptLineKeepsSourceOrder(t *testing.T) {
 	sink := &memSink{}
 	r := newAuditRig(t, sink, "h1")
 	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
 	r.keptRun(thinkStart, 0, 0)
 	r.keptRun(thinkBlock, 0, 0)
-	// The kept stop line arrives before the interval's tee lines and fence.
+	// The stop and the result arrive before the interval's tee lines and
+	// fence.
 	r.kept(thinkStop)
+	r.kept(auditResultLine)
 	r.tee(thinkDelta("plan "))
 	r.tee(thinkDelta("carefully"))
-	r.fence(r.seq, r.seq, 2, 0)
-	r.keptRun(thinkLine, 0, 0)
-	r.keptRun(auditResultLine, 0, 0)
+	r.fence(r.seq-1, r.seq, 2, 0)
 	r.end()
 	th := find(sink.events(), ofKind(wsaudit.KindThinking))
 	if len(th) != 1 || th[0].Out != "plan carefully" || th[0].Meta[wsaudit.MetaAssembled] != true || th[0].Meta[wsaudit.MetaIncomplete] != nil {
 		t.Fatalf("thinking = %+v, want the teed deltas assembled whole", th)
 	}
-	if got := r.displayLines(); got != 5 {
-		t.Fatalf("display delivered %d lines, want 5", got)
+	if got := r.displayLines(); got != 4 {
+		t.Fatalf("display delivered %d lines, want 4", got)
+	}
+}
+
+// TestAuditLostFenceClosesItsIntervalBeforeTheNext pins a fence lost to
+// overload: the next fence closes the stranded interval first, unfenced and
+// marked incomplete, so its tee lines never map after later lines.
+func TestAuditLostFenceClosesItsIntervalBeforeTheNext(t *testing.T) {
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.keptRun(thinkStart, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	r.tee(thinkDelta("first half"))
+	// The fence closing that interval is lost; the next run's comes.
+	r.anchor, r.index = r.seq+1, 0
+	r.kept(`{"type":"system","subtype":"status","status":"between"}`)
+	r.fence(r.seq+1, r.seq+1, 0, 0)
+	r.kept(auditResultLine)
+	r.end()
+	evs := sink.events()
+	th := find(evs, ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "first half" || th[0].Meta[wsaudit.MetaIncomplete] != true {
+		t.Fatalf("thinking = %+v, want the stranded delta assembled and marked incomplete", th)
+	}
+	var order []string
+	for _, ev := range evs {
+		order = append(order, string(ev.Kind)+"/"+ev.Subkind)
+	}
+	if want := []string{"system/status", "thinking/", "system/result:success"}; !slices.Equal(order, want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+}
+
+// TestAuditLateTeesCoalesceAndAFenceReopensTheStream pins overload after a
+// timeout: the tee lines that keep coming are one loss, not one per line,
+// and the next fence on the same connection opens the tee stream again.
+func TestAuditLateTeesCoalesceAndAFenceReopensTheStream(t *testing.T) {
+	old := auditFenceWait
+	auditFenceWait = 30 * time.Millisecond
+	t.Cleanup(func() { auditFenceWait = old })
+	sink := &memSink{}
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.kept(thinkStart) // its fence never comes
+	waitUntil(t, "the timeout", func() bool { return len(find(sink.events(), isLoss)) == 1 })
+	for i := 0; i < 50; i++ {
+		r.tee(thinkDelta("x"))
+	}
+	r.fence(r.seq+1, r.seq+1, 50, 0) // reopens from the next interval
+	r.kept(thinkBlock)
+	r.tee(thinkDelta("back"))
+	r.fence(r.seq+1, r.seq+1, 1, 0)
+	r.kept(thinkStop)
+	r.keptRun(thinkLine, 0, 0)
+	r.end()
+	evs := sink.events()
+	loss := find(evs, isLoss)
+	if len(loss) != 2 || loss[1].Meta[wsaudit.MetaLossReason] != wsaudit.LossLate || loss[1].Meta[wsaudit.MetaLost] != uint64(50) {
+		t.Fatalf("loss = %+v, want the timeout and one late loss of 50", loss)
+	}
+	if th := find(evs, ofKind(wsaudit.KindThinking)); len(th) != 1 || th[0].Out != "back" {
+		t.Fatalf("thinking = %+v, want the reopened stream's delta", th)
+	}
+}
+
+// TestAuditRealHolderAttachReachesCapture pins the manager-to-process path:
+// a real holder launched under a manager that offers the audit channel
+// attaches before the process is listed, and capture still learns of the
+// attach (Manager.AuditAttach), so the ring-skipped deltas are assembled.
+func TestAuditRealHolderAttachReachesCapture(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("no python3")
+	}
+	if out, err := exec.Command(python, "-c", "import sys; print(sys.version_info >= (3, 10))").Output(); err != nil || strings.TrimSpace(string(out)) != "True" {
+		t.Skip("python3 older than 3.10")
+	}
+	var table holderTable
+	m := wsholder.New(wsholder.Options{Dir: filepath.Join(t.TempDir(), wsholder.DirName), Python: python, AuditChannel: true})
+	m.AddSink(&table)
+	t.Cleanup(m.Close)
+	sink := &memSink{}
+	mapper := newClaudeMapper(leadSpec())
+	p := newStreamProcess(mapper, claudeProtocol{})
+	p.prepareAudit(StartSpec{audit: &auditTap{Session: wsaudit.Session{ID: "s1", Class: wsaudit.SessionHostedLead}, Sink: sink}}, mapper)
+	h := &holderChild{host: ManagerHost{m}, table: &table, session: holderSession{Kind: holderKindLead, ReplyID: "s1"}, ringSkip: claudeRingSkip}
+	lines := []string{thinkStart, thinkBlock, thinkDelta("real "), thinkDelta("holder"), thinkStop, thinkLine, auditResultLine}
+	script := "import sys\nfor l in sys.argv[1:]:\n    sys.stdout.write(l + '\\n')\n    sys.stdout.flush()\nsys.stdin.read()\n"
+	cmd := exec.Command(python, append([]string{"-c", script}, lines...)...)
+	if err := h.start(p, cmd); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Stop(h.id) })
+	var mu sync.Mutex
+	ended := 0
+	go func() {
+		for ev := range p.events {
+			if ev.LineEnd {
+				mu.Lock()
+				ended++
+				mu.Unlock()
+			}
+		}
+	}()
+	waitUntil(t, "the kept lines", func() bool { mu.Lock(); defer mu.Unlock(); return ended == 5 })
+	waitUntil(t, "the assembled thinking", func() bool { return len(find(sink.events(), ofKind(wsaudit.KindThinking))) == 1 })
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if th[0].Out != "real holder" || th[0].Meta[wsaudit.MetaIncomplete] != nil {
+		t.Fatalf("thinking = %+v, want the teed deltas from the real holder", th[0])
+	}
+	if loss := find(sink.events(), isLoss); len(loss) != 0 {
+		t.Fatalf("loss = %+v", loss)
 	}
 }
 

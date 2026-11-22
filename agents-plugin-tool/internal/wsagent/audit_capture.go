@@ -99,7 +99,9 @@ type auditInterval struct {
 	anchor        uint64
 	tees          []wsholder.Event
 	sent, dropped uint64
-	unfenced      bool
+	// unfenced intervals closed without their fence; reason says why.
+	unfenced bool
+	reason   string
 }
 
 type auditCapture struct {
@@ -128,6 +130,19 @@ type auditCapture struct {
 	// is the first record sequence that connection delivered live.
 	teeOn    bool
 	waitFrom uint64
+	// conn is the attached connection (wsholder.Event.Conn) and live
+	// whether it still is: a fence on a live connection whose tee stream a
+	// timeout closed opens it again.
+	conn uint64
+	live bool
+	// late counts tee lines lost for arriving after their interval closed,
+	// recorded as one loss before the next other item (noteLate).
+	late uint64
+	// partialAnchor and partialIndex are the interval a closed tee stream
+	// left open and the last index it mapped, so the interval continuing on
+	// the next connection maps only the rest.
+	partialAnchor uint64
+	partialIndex  uint64
 	// through is the last kept sequence a fence released; fenced the anchor
 	// of the last interval a fence closed (valid with anyFence).
 	through  uint64
@@ -244,6 +259,7 @@ func (c *auditCapture) run() {
 				}
 			}
 			c.noteRefused()
+			c.noteLate()
 			c.closeTee(wsaudit.LossStreamEnd)
 			at := time.Now()
 			c.emit(c.adapter.flush(at), true, nil, at, wsaudit.SourceID{Source: c.source, Key: "end." + strconv.FormatUint(c.boundary, 10)})
@@ -268,6 +284,15 @@ func (c *auditCapture) noteRefused() {
 	}
 }
 
+// noteLate records the tee lines counted late since the last item as one
+// loss, before the next item maps.
+func (c *auditCapture) noteLate() {
+	if c.late > 0 {
+		c.loss(c.late, wsaudit.LossLate, c.boundary)
+		c.late = 0
+	}
+}
+
 func (c *auditCapture) finalize() {
 	if c.sourced == nil || c.boundary <= c.finalized {
 		return
@@ -282,6 +307,9 @@ func (c *auditCapture) finalize() {
 }
 
 func (c *auditCapture) handle(it auditItem) {
+	if it.kind != auditItemTee {
+		c.noteLate()
+	}
 	switch it.kind {
 	case auditItemLine:
 		if it.seq == 0 {
@@ -298,10 +326,10 @@ func (c *auditCapture) handle(it auditItem) {
 		c.pump()
 	case auditItemTee:
 		a := it.ev.Anchor
-		if !c.teeOn || c.anyFence && a <= c.fenced {
+		if !c.teeOn || it.ev.Conn != c.conn || c.anyFence && a <= c.fenced {
 			// Its interval is finalized (or no tee stream is open): mapping
 			// it now would reorder, so it is lost.
-			c.loss(1, wsaudit.LossLate, a)
+			c.late++
 			return
 		}
 		ev := it.ev
@@ -311,10 +339,40 @@ func (c *auditCapture) handle(it auditItem) {
 		c.pending[a] = append(c.pending[a], ev)
 		c.pump()
 	case auditItemFence:
-		if !c.teeOn {
+		f := it.ev
+		if !c.live || f.Conn != c.conn {
 			return
 		}
-		f := it.ev
+		if f.LostBefore > 0 {
+			c.loss(f.LostBefore, wsaudit.LossDropped, f.Anchor)
+		}
+		if !c.teeOn {
+			// A timeout closed the tee stream; this fence opens it again
+			// from the interval after it. Its own lines were counted late.
+			c.teeOn = true
+			c.fenced, c.anyFence = f.Anchor, true
+			if !f.Final && f.Through > c.through {
+				c.through = f.Through
+			}
+			if f.Dropped > 0 {
+				c.loss(f.Dropped, wsaudit.LossDropped, f.Anchor)
+			}
+			c.pump()
+			return
+		}
+		// An earlier interval whose fence was lost (a full queue on either
+		// side) closes unfenced before this one, never after it.
+		var lost []uint64
+		for a := range c.pending {
+			if a < f.Anchor {
+				lost = append(lost, a)
+			}
+		}
+		sort.Slice(lost, func(i, j int) bool { return lost[i] < lost[j] })
+		for _, a := range lost {
+			c.ready = append(c.ready, auditInterval{anchor: a, tees: c.pending[a], unfenced: true, reason: wsaudit.LossDropped})
+			delete(c.pending, a)
+		}
 		c.ready = append(c.ready, auditInterval{anchor: f.Anchor, tees: c.pending[f.Anchor], sent: f.Sent, dropped: f.Dropped})
 		delete(c.pending, f.Anchor)
 		c.fenced, c.anyFence = f.Anchor, true
@@ -323,16 +381,23 @@ func (c *auditCapture) handle(it auditItem) {
 		}
 		c.pump()
 	case auditItemAttached:
+		if c.live && it.ev.Conn == c.conn {
+			return // the same attach, read from the manager and delivered too
+		}
 		if c.teeOn {
 			c.closeTee(wsaudit.LossDisconnect)
 		}
-		c.teeOn, c.waitFrom = true, it.ev.Next
+		c.teeOn, c.live, c.conn, c.waitFrom = true, true, it.ev.Conn, it.ev.Next
 		c.through = 0
 		if it.ev.Next > 0 {
 			c.through = it.ev.Next - 1
 		}
 		c.anyFence = false
 	case auditItemDetached:
+		if !c.live || it.ev.Conn != c.conn {
+			return // an earlier connection's, delivered after its successor's
+		}
+		c.live = false
 		c.closeTee(wsaudit.LossDisconnect)
 	}
 }
@@ -346,7 +411,7 @@ func (c *auditCapture) pump() {
 	progressed := false
 	for {
 		if len(c.ready) > 0 && (c.ready[0].anchor == 0 || c.ready[0].anchor <= c.boundary) {
-			c.mapInterval(c.ready[0], "")
+			c.mapInterval(c.ready[0])
 			c.ready = c.ready[1:]
 			progressed = true
 			continue
@@ -377,10 +442,15 @@ func (c *auditCapture) pump() {
 // indices that never arrived (dropped by the holder, or by this queue) as
 // loss where they fell; an unfenced interval is marked incomplete for
 // reason after its lines.
-func (c *auditCapture) mapInterval(iv auditInterval, reason string) {
+func (c *auditCapture) mapInterval(iv auditInterval) {
 	tees := iv.tees
 	sort.SliceStable(tees, func(i, j int) bool { return tees[i].Index < tees[j].Index })
 	next := uint64(1)
+	if iv.anchor == c.partialAnchor && c.partialIndex > 0 {
+		// The interval continues one a closed tee stream mapped in part.
+		next = c.partialIndex + 1
+	}
+	c.partialAnchor, c.partialIndex = 0, 0
 	for _, t := range tees {
 		if t.Index < next {
 			continue // a duplicate index
@@ -392,7 +462,10 @@ func (c *auditCapture) mapInterval(iv auditInterval, reason string) {
 		next = t.Index + 1
 	}
 	if iv.unfenced {
-		c.loss(0, reason, iv.anchor)
+		if next > 1 {
+			c.partialAnchor, c.partialIndex = iv.anchor, next-1
+		}
+		c.loss(0, iv.reason, iv.anchor)
 		return
 	}
 	if total := iv.sent + iv.dropped; total >= next {
@@ -409,7 +482,7 @@ func (c *auditCapture) closeTee(reason string) {
 	stuck := len(c.held) > 0 || len(c.ready) > 0
 	unfenced := len(c.pending) > 0
 	for a, tees := range c.pending {
-		c.ready = append(c.ready, auditInterval{anchor: a, tees: tees, unfenced: true})
+		c.ready = append(c.ready, auditInterval{anchor: a, tees: tees, unfenced: true, reason: reason})
 	}
 	clear(c.pending)
 	sort.SliceStable(c.ready, func(i, j int) bool { return c.ready[i].anchor < c.ready[j].anchor })
@@ -417,7 +490,7 @@ func (c *auditCapture) closeTee(reason string) {
 	// A tee line sits after the kept line it is anchored on.
 	for len(c.held) > 0 || len(c.ready) > 0 {
 		if len(c.ready) > 0 && (len(c.held) == 0 || c.ready[0].anchor < c.held[0].seq) {
-			c.mapInterval(c.ready[0], reason)
+			c.mapInterval(c.ready[0])
 			c.ready = c.ready[1:]
 			continue
 		}

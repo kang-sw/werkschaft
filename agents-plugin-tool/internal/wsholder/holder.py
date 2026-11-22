@@ -64,7 +64,12 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
         closed, the kept lines next..through follow it with nothing skipped
         between them, and of the interval's lines s were sent and d dropped
         (no audit connection, or a full audit queue). A final fence has no
-        next and closes the last interval.
+        next and closes the last interval. "lost_before": n, when present,
+        counts lines dropped in earlier intervals whose fence reached no
+        daemon. A holder without --ring-skip has nothing to tee and does not
+        take the channel. Audit messages are written ahead of the ring's
+        records, so a tee line and its fence may arrive before the kept line
+        they follow.
   The newest authenticated attach takes over: the previous connection gets
   {"event": "detached", "reason": "replaced"} and is closed, and only the
   new one may send operations.
@@ -965,6 +970,9 @@ class Holder:
         self.tee_index = 0
         self.tee_sent = 0
         self.tee_dropped = 0
+        # Lines dropped in intervals whose fence reached no daemon; the next
+        # delivered fence reports them as lost_before.
+        self.tee_carry = 0
         self.cond = threading.Condition()
         self.attachment: Attachment | None = None
         self.child = None
@@ -1186,7 +1194,10 @@ class Holder:
             return None
         att = Attachment(self, sock)
         offered = req.get("audit")
-        if isinstance(offered, int) and not isinstance(offered, bool) and offered >= AUDIT_VERSION:
+        # Only a holder that skips lines has anything to tee: one without a
+        # skip pattern does not take the channel, so the daemon never waits
+        # for fences it will not send.
+        if self.ring_skip is not None and isinstance(offered, int) and not isinstance(offered, bool) and offered >= AUDIT_VERSION:
             att.audit = AUDIT_VERSION
         with self.cond:
             if self.exit_event.is_set():
@@ -1429,6 +1440,7 @@ class Holder:
         """Close the open audit interval (called with cond held): the kept
         lines next_seq..through follow it; a final fence closes the last."""
         att = self.attachment
+        delivered = False
         if att is not None and att.audit:
             message = {
                 "event": "audit_fence",
@@ -1436,12 +1448,18 @@ class Holder:
                 "tee_count_sent": self.tee_sent,
                 "dropped_count": self.tee_dropped,
             }
+            if self.tee_carry:
+                message["lost_before"] = self.tee_carry
             if final:
                 message["final"] = True
             else:
                 message["next"] = next_seq
                 message["through"] = through
-            att.push_audit(message, tee=False)
+            delivered = att.push_audit(message, tee=False)
+        if delivered:
+            self.tee_carry = 0
+        else:
+            self.tee_carry += self.tee_dropped
         if not final:
             self.tee_anchor = through
         self.tee_index = self.tee_sent = self.tee_dropped = 0
