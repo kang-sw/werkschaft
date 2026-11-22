@@ -348,6 +348,25 @@ func ScriptExcept(lang string, prefixes ...string) template.JS {
 	})
 }
 
+// ScriptExceptKeeping is ScriptExcept over the except prefixes, but keeps a
+// key starting with any keep prefix: a page that drops a script's strings
+// yet shows a few of them itself.
+func ScriptExceptKeeping(lang string, except, keep []string) template.JS {
+	return filteredScript(lang, func(k string) bool {
+		for _, prefix := range keep {
+			if strings.HasPrefix(k, prefix) {
+				return true
+			}
+		}
+		for _, prefix := range except {
+			if strings.HasPrefix(k, prefix) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 // filteredScript is Script over the client keys keep accepts.
 func filteredScript(lang string, keep func(key string) bool) template.JS {
 	if !Supported(lang) {

@@ -47,6 +47,13 @@ func (c *conv) setPromptBoundary(rec *Record, startedAt int64, reportable bool) 
 // recorded before it would leave a successor waiting for a response to a
 // prompt that never reached the harness.
 func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
+	// The prompt is a keep-awake member while its send is in flight. A
+	// successful send's caller opens the turn (beginTurn, or compactCommand
+	// for a native compaction) before the loop step ends, so membership
+	// carries over; a failed one is dropped by that step's sync.
+	c.awakeSending = true
+	c.syncAwake()
+	defer func() { c.awakeSending = false }()
 	heldAgy := c.record().heldAgyWorker()
 	startedAt := c.r.opts.Now().UnixMilli()
 	if err := send(); err != nil || !heldAgy {
@@ -329,6 +336,11 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	c.loadCompaction()
 	c.loadModelWait()
+	// Each agy process writes its own worker log: locate it afresh.
+	c.agyLog = nil
+	if rec.Backend == BackendAgy {
+		c.agyLog = c.newAgyLog()
+	}
 	level, source, err := c.r.leadPermission(rec, c.dir)
 	if err != nil {
 		if !attach {
@@ -443,7 +455,8 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 				EnvHostedSessionKey: rec.WSKey,
 				EnvHostedSessionRow: wsdashboard.RegistrationPath(c.r.opts.Dir, rec.ReplyID),
 			},
-			Manual: func() string { return c.leadManual(rec) },
+			Manual:     func() string { return c.leadManual(rec) },
+			FrameTrace: c.agyFrameTrace,
 			Spawned: func(holderID string, pid int) {
 				spawned = true
 				c.update(func(rec *Record) {
@@ -648,7 +661,23 @@ func (c *conv) reattach() {
 		// The holder stays in the record: the next start ends it first.
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
 		if !rec.Lead {
+			// A worker keeps replaying until checkReattach reads this after
+			// the holder scan and ends the recovery (recoveryFailed drops
+			// the open turn). The scan can take long, so the failure leaves
+			// keep-awake membership now (wantAwake) instead of waiting for it.
 			c.rejoinErr = err.Error()
+			c.publishAwake(c.wantAwake())
+		} else {
+			// No process came back, so no replay will ever settle the turn
+			// the record showed open: end the replay and drop that turn, or
+			// the keep-awake membership it froze would hold the assertion
+			// for good.
+			c.replaying = false
+			if c.turn {
+				c.setStatus(func() { c.turn = false })
+				c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnEnd})
+			}
+			c.publishAwake(c.wantAwake())
 		}
 	}
 }

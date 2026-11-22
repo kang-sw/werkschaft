@@ -475,7 +475,7 @@ func (c *conv) compactionStateInstruction() string {
 }
 
 func (c *conv) piLeadCompaction() bool {
-	return c.rec.Lead && c.rec.Backend == BackendPi && !PiMCPOnly(c.rec, nil)
+	return c.rec.Lead && c.rec.Backend == BackendPi && !PiMCPOnly(c.record(), nil)
 }
 
 func (c *conv) canSteerCompaction() bool {

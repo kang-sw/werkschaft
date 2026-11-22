@@ -42,6 +42,7 @@ func NewRunner(opts Options) *Runner {
 		opts.Alive = wsstate.ProcessAlive
 	}
 	r := &Runner{opts: opts, versions: loadHarnessVersions(opts.Dir, opts.Log), convs: map[string]*conv{}, closed: map[string]Record{}, quit: make(chan struct{}), scanned: make(chan struct{}), rejoined: make(chan struct{}), startupLoaded: make(chan struct{}), notify: func(string, string) {}}
+	r.awake = newKeepAwake(opts)
 	if opts.Holders != nil {
 		// Before the manager's first scan, so a predecessor's holders are
 		// seen attaching.

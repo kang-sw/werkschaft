@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -432,11 +433,16 @@ func TestAgyModelWaitWatchdogPublishesExhaustionToHostedLeadConversation(t *test
 	holder := h.holder(id)
 	eventually(t, "hosted lead first prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
 
+	// The fired tick reaches the loop asynchronously; answer cancelled only
+	// once the watchdog's session/cancel shows it took the tick, or the
+	// answer lands as a plain aborted turn with no retry to make.
 	fireWatchdog(t, timers, 0)
+	eventually(t, "hosted lead first cancel", func() bool { return agyCancels(h, holder) == 1 })
 	ids := agyPromptIDs(h, holder)
 	h.holders.out(holder, `{"jsonrpc":"2.0","result":{"stopReason":"cancelled"},"id":"`+ids[0]+`"}`)
 	eventually(t, "hosted lead continue prompt", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
 	fireWatchdog(t, timers, 2)
+	eventually(t, "hosted lead second cancel", func() bool { return agyCancels(h, holder) == 2 })
 	ids = agyPromptIDs(h, holder)
 	h.holders.out(holder, `{"jsonrpc":"2.0","result":{"stopReason":"cancelled"},"id":"`+ids[1]+`"}`)
 	h.idle(id)
@@ -1154,4 +1160,18 @@ func TestAgyModelWaitWatchdogTimeoutZeroDisables(t *testing.T) {
 			t.Fatalf("disabled watchdog state: timeout=%v armed=%v", c.modelWaitTimeout, c.modelWaitArmed)
 		}
 	})
+}
+
+// agyCancels counts the session/cancel notifications sent to holder.
+func agyCancels(h *leadHarness, holder string) int {
+	n := 0
+	for _, line := range h.holders.inputs(holder, "") {
+		var d struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal([]byte(line), &d) == nil && d.Method == "session/cancel" {
+			n++
+		}
+	}
+	return n
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsawake"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -126,6 +127,10 @@ type Options struct {
 	// AgyModelWaitBackoff returns the delay before automatic continue attempt
 	// n (one-based). Nil uses bounded exponential jitter.
 	AgyModelWaitBackoff func(attempt int) time.Duration
+	// AgyLogDir is where agy writes its acp-worker-*.log files, which a
+	// hosted agy lead's stall cutoff reads. Empty uses agy's own directory
+	// under the user's home.
+	AgyLogDir string
 	// WSMCP is the stdio ws-mcp command serving root, without the runner's
 	// environment; nil refuses profiles that allow ws tools.
 	WSMCP func(root string) (MCPCommand, error)
@@ -233,6 +238,8 @@ type Options struct {
 	WakeRefused func(from, id, reason string)
 	// ChildWaitingDays overrides agent.child_waiting_days; 0 reads it.
 	ChildWaitingDays int
+	// keepAwake replaces the platform's idle-sleep backend in tests.
+	keepAwake wsawake.Backend
 	// spawnListed observes global spawn-projection listings in tests.
 	spawnListed func(string)
 	// stateInboxRead observes state-held inbox scans in tests.
@@ -260,9 +267,14 @@ type Runner struct {
 	// expiry is childWaitingExpiry's value, read once (expiryOnce).
 	expiryOnce sync.Once
 	expiry     time.Duration
-	quit       chan struct{}
-	wg         sync.WaitGroup
-	once       sync.Once
+	// awake holds the idle-sleep assertion while live turns run and
+	// agent.keep_awake_during_turns is on (keep_awake.go); awakeReloadMu
+	// serializes the setting's read with its publish.
+	awake         *wsawake.Core
+	awakeReloadMu sync.Mutex
+	quit          chan struct{}
+	wg            sync.WaitGroup
+	once          sync.Once
 	// summaryMu only guards the two maps below, briefly; it is never held
 	// across another lock or I/O (summaryLock, setSummaryOwner,
 	// summaryOwner). summaryLocks holds one mutex per reply-id, created

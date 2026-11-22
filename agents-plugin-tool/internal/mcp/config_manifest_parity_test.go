@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -175,6 +176,47 @@ func TestShippedClaudeWatchdogInterval(t *testing.T) {
 			}
 			if resp := keyedCall(t, server, 932002, sessionKey, "config.tune", map[string]any{"key": key, "value": "1"}); toolIsError(t, resp) {
 				t.Fatalf("config.tune(%s=1) = %s", key, resp)
+			}
+		})
+	}
+}
+
+// TestShippedAgyStallCutoffConfig pins the two agy stall knobs: both
+// packages default the log-confirmed cutoff on and the HTTP/2 frame trace
+// off, both are booleans, and a non-boolean tune is refused.
+func TestShippedAgyStallCutoffConfig(t *testing.T) {
+	defaults := map[string]bool{"agy.stall_log_check": true, "agy.http2_frame_trace": false}
+	for _, pkg := range []struct {
+		name string
+		path string
+	}{{"ws", agyManifestPath}, {"wsflow", wsflowAgyManifestPath}} {
+		t.Run(pkg.name, func(t *testing.T) {
+			declared := loadDeclaredConfig(pkg.path)
+			if len(declared.rejected) != 0 {
+				t.Fatalf("%s rejected %v", pkg.path, declared.rejected)
+			}
+			server, _, sessionKey := manifestServer(t, pkg.path)
+			callID := 934000
+			for key, want := range defaults {
+				k, ok := declared.lookup(key)
+				if !ok {
+					t.Fatalf("%s does not declare %s", pkg.path, key)
+				}
+				if k.Type != declaredTypeBoolean || k.DefaultValue != want {
+					t.Fatalf("%s contract = %+v, want boolean with default %v", key, k, want)
+				}
+				if got := configGetJSON(t, server, callID, map[string]any{"key": key}); got.Value != want || got.Scope != "builtin" {
+					t.Fatalf("config.get(%s) = %+v", key, got)
+				}
+				callID++
+				if resp := keyedCall(t, server, callID, sessionKey, "config.tune", map[string]any{"key": key, "value": "maybe"}); !toolIsError(t, resp) {
+					t.Fatalf("config.tune(%s=maybe) = %s, want a rejection", key, resp)
+				}
+				callID++
+				if resp := keyedCall(t, server, callID, sessionKey, "config.tune", map[string]any{"key": key, "value": strconv.FormatBool(!want)}); toolIsError(t, resp) {
+					t.Fatalf("config.tune(%s=%v) = %s", key, !want, resp)
+				}
+				callID++
 			}
 		})
 	}

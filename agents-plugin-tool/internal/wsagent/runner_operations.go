@@ -121,7 +121,9 @@ func (r *Runner) send(id, text string) (State, error) {
 	_, _, err = wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Steer: steer}, r.opts.Now())
 	if err == nil {
 		// After the write, under the lock kick drains with: a turn whose
-		// drain counted this send holds its message (Wait).
+		// drain counted this send holds its message (Wait). These rec
+		// stamps come from outside the loop, so the loop copies the whole
+		// record under mu (conv.record), never as a bare c.rec value.
 		c.sends++
 		c.held++
 		c.rec.Sends = c.sends

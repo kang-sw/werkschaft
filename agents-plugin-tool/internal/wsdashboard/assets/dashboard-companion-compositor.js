@@ -457,5 +457,5 @@
     return { view, prop, setPreset, width, height };
   }
 
-  Object.assign(C, { makeRig, motion, finite, clamp, mix, inRange, bounded, record, timingId, solveBezier, compileCurves, RAD });
+  Object.assign(C, { makeRig, motion, finite, clamp, mix, inRange, bounded, record, timingId, solveBezier, compileCurves, RAD, resolveEntry: resolve });
 })(window.WsCompanion);

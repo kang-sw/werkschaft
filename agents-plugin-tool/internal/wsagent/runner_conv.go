@@ -158,6 +158,19 @@ type conv struct {
 	modelWaitBackoffC           <-chan time.Time
 	modelWaitBackoffStop        func()
 	modelWaitBackoffFailure     string
+	// A hosted agy lead's log-confirmed stall cutoff (agy_watchdog.go):
+	// modelWaitLogCheck is agy.stall_log_check, modelWaitBoundary the wall
+	// time ws last started a fresh model request, modelWaitContent whether
+	// model content arrived since, agyLog the process's worker log, and
+	// agyLogNoted whether this session logged its one unknown-log notice.
+	// agyFrameTrace is the frame capture file when agy.http2_frame_trace
+	// is on.
+	modelWaitLogCheck bool
+	modelWaitBoundary time.Time
+	modelWaitContent  bool
+	agyLog            *agyStallLog
+	agyLogNoted       bool
+	agyFrameTrace     string
 	// modelWaitBackoffFence is the only model-wait field shared with Send:
 	// pending -> cancelled lets a successful inbox write win before it
 	// returns; pending -> firing commits the automatic continue instead.
@@ -296,6 +309,11 @@ type conv struct {
 	// first Send (or close), so awakeLocked counts a newly registered spawn
 	// with no gap after pendingSpawns handoff. Under mu.
 	spawnPending bool
+	// Keep-awake membership (keep_awake.go), loop-owned: awakeMember is what
+	// this instance last published, awakeSending is set while a standalone
+	// prompt's send is in flight.
+	awakeMember  bool
+	awakeSending bool
 
 	// Turn settles (spawn.go). sends counts Runner.Send's messages and
 	// settled is the last settled turn, settleC closed and replaced at each
@@ -494,6 +512,7 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: steer a mail: %v\n", c.rec.ReplyID, err)
 			return false
 		}
+		c.modelWaitSteered()
 		c.apply(*wakeEvent("mail", "mailbox", "", text).Live)
 		return true
 	}
@@ -606,13 +625,18 @@ func (c *conv) steer() {
 	if err := st.Steer(text); err != nil {
 		c.setStatus(func() { c.lastErr = "send the steered message: " + err.Error() })
 		c.stopProcess("")
+		return
 	}
+	c.modelWaitSteered()
 }
 
 func (c *conv) loop() {
 	defer c.r.wg.Done()
 	defer close(c.done)
 	defer c.live.closeSlot()
+	// Whatever way the loop ends (close, hand-off, shutdown), this
+	// instance's membership goes with it.
+	defer c.publishAwake(false)
 	defer func() {
 		c.stopCompactWatchdog()
 		c.stopModelWaitTimer()
@@ -646,6 +670,9 @@ func (c *conv) loop() {
 	if c.settle() {
 		return
 	}
+	// A rejoined child whose record shows its turn open runs it under a
+	// trusted holder: publish that before the replay settles it.
+	c.publishAwake(c.wantAwake())
 	for {
 		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, spawnC, bgGraceC <-chan time.Time
 		leverC = c.leverC
@@ -744,6 +771,7 @@ func (c *conv) loop() {
 			}
 			return
 		}
+		c.syncAwake()
 		if c.settle() {
 			return
 		}
@@ -1366,13 +1394,19 @@ func (c *conv) kickInput() {
 		mark = rest[0].After
 	}
 	c.stopIdle()
-	startedAt := c.r.opts.Now().UnixMilli()
+	// Read before the send: a request boundary is never later than the
+	// prompt's delivery.
+	sentAt := c.r.opts.Now()
+	startedAt := sentAt.UnixMilli()
 	heldAgy := c.record().heldAgyWorker()
 	if len(recs) > 0 {
 		// Keep drained input recoverable until the send succeeds.
 		c.update(func(rec *Record) { rec.Queued = queue })
 	}
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
+	// The admitted turn is a keep-awake member before its send is tried; a
+	// failed send clears turn below, and the loop step's sync drops it.
+	c.syncAwake()
 	// The turn reaches the page only once its send went through: a failed
 	// send leaves no user entry or turn line of its own (its error shows),
 	// so its retry shows the message once. The process's events for the
@@ -1456,7 +1490,7 @@ func (c *conv) kickInput() {
 		}
 		c.compactResume = false
 		c.compactResumeInternal = false
-		c.startModelWait()
+		c.startModelWait(sentAt)
 	}
 	c.sendRetried = false
 	c.stopBgGrace()

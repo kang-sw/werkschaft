@@ -139,7 +139,8 @@ func agyDownstreamEvents(events []Event) []Event {
 	var visible []Event
 	for _, event := range events {
 		activity := event.ModelActivity
-		event.ModelActivity = nil
+		// The activity signal's own fields.
+		event.ModelActivity, event.ModelContent = nil, false
 		if activity != nil && reflect.DeepEqual(event, Event{}) {
 			continue
 		}

@@ -3,11 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -374,6 +376,16 @@ func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 	}
 	text, _ := fx.call("exec.shell", posixShell(map[string]any{"command": "printf 'l1\\nl2\\n'; printf 'e1\\n' >&2", "working_dir": "sub"}))
 	key := lineValue(t, execKeyLine, text)
+	// The combined stream is arrival order across two pipes, so stderr's e1
+	// may land before, between, or after stdout's lines (on Windows each
+	// printf'd line can arrive as its own write). Grep must number e1 by
+	// where it actually landed in the combined text.
+	combined, _ := fx.call("exec.raw.read", map[string]any{"exec_key": key, "stream": "combined", "offset": 0, "limit": 100})
+	_, combinedText, _ := strings.Cut(combined, "========== text ==========\n")
+	e1Line := slices.Index(strings.Split(combinedText, "\n"), "e1") + 1
+	if e1Line == 0 || strings.Count(combinedText, "\n") != 3 {
+		t.Fatalf("combined = %s", combined)
+	}
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -383,7 +395,7 @@ func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 		{"exec.result", map[string]any{"exec_key": key}, []string{"l1\nl2\n", "e1\n"}},
 		{"exec.raw.tail", map[string]any{"exec_key": key, "lines": 1}, []string{"stream: stdout", "l2"}},
 		{"exec.raw.read", map[string]any{"exec_key": key, "stream": "stdout", "offset": 3, "limit": 3}, []string{"offset: 3", "next_offset: 6", "size: 6", "l2"}},
-		{"exec.raw.grep", map[string]any{"exec_key": key, "stream": "combined", "pattern": "e1"}, []string{"matches: 1", "3: e1"}},
+		{"exec.raw.grep", map[string]any{"exec_key": key, "stream": "combined", "pattern": "e1"}, []string{"matches: 1", fmt.Sprintf("%d: e1", e1Line)}},
 	} {
 		got, isErr := fx.call(tc.name, tc.args)
 		for _, want := range tc.want {
