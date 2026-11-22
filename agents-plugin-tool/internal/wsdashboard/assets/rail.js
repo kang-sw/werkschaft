@@ -516,15 +516,19 @@
     });
   }
 
+  // rowAsks is a row's open board question IDs (data-asks), or null from an
+  // older server that does not render the attribute.
+  function rowAsks(row) {
+    var raw = row.getAttribute("data-asks");
+    return raw === null ? null : new Set(raw.trim().split(/\s+/).filter(Boolean));
+  }
+
   // attention is tab-memory only, independent of the persistent question
   // dot. First observations (including a reconnect's full rail) baseline
   // silently. Replaced rows retain the flag but never replay its flash.
   function attention() {
     var seen = Object.create(null);
-    function asks(row) {
-      var raw = row.getAttribute("data-asks");
-      return raw === null ? null : new Set(raw.trim().split(/\s+/).filter(Boolean));
-    }
+    var asks = rowAsks;
     function observe(rows, rid, baseline) {
       var kept = Object.create(null);
       rows.forEach(function (row) {
@@ -555,6 +559,49 @@
       mark: mark,
       sync: function (rows, rid, hint) { observe(rows, rid); mark(rows, rid, hint); }
     };
+  }
+
+  // notices picks, from each full read of the rail's rows, what the page
+  // that owns the rail notifies of; tab memory only, one pass per read.
+  // "idle": a top-level live row (no data-g, neither ended nor stopped)
+  // whose data-busy went away, which the server keeps while the session,
+  // any child row under it, or any background work it knows of still
+  // runs, so a child finishing under a busy parent is no notice and the
+  // parent's own finish is one. Its tag holds the row's last-tool time,
+  // with a count added when a finish repeats that time (a turn without a
+  // tool), so each finish has its own. "ask": a row of any depth whose
+  // data-asks gained IDs the read before did not have, as attention reads
+  // them: a closed ID that reopens is new; ids are those IDs, sorted. A
+  // row's first read, and every row of a read passed baseline (a
+  // reconnect's first full rail), only records; a row gone or ended is
+  // forgotten or recorded idle without a notice.
+  function notices() {
+    var seen = Object.create(null);
+    function read(rows, baseline) {
+      var kept = Object.create(null), out = [];
+      rows.forEach(function (row) {
+        var id = row.getAttribute("data-rid");
+        if (!id || kept[id]) return;
+        var prev = seen[id], ids = rowAsks(row), top = row.getAttribute("data-g") === null;
+        var live = !row.classList.contains("ended") && !row.classList.contains("stopped");
+        var busy = live && row.getAttribute("data-busy") === "1";
+        var when = row.querySelector("time.when.t"), ms = (when && when.getAttribute("data-ms")) || "0";
+        var cur = kept[id] = { busy: busy, top: top, asks: ids, ms: prev ? prev.ms : "", n: prev ? prev.n : 0 };
+        if (!prev || baseline) return;
+        if (top && prev.top && live && prev.busy && !busy) {
+          cur.n = cur.ms === ms ? cur.n + 1 : 0;
+          cur.ms = ms;
+          out.push({ kind: "idle", rid: id, row: row, tag: "ws-idle:" + id + ":" + ms + (cur.n ? "." + cur.n : "") });
+        }
+        if (ids && prev.asks) {
+          var fresh = Array.from(ids).filter(function (n) { return !prev.asks.has(n); }).sort();
+          if (fresh.length) out.push({ kind: "ask", rid: id, row: row, ids: fresh, tag: "ws-ask:" + id + ":" + fresh.join(",") });
+        }
+      });
+      seen = kept;
+      return out;
+    }
+    return { read: read };
   }
 
   // state is the rail's stored sets over store, as marks reads them: the
@@ -1037,6 +1084,8 @@
     swapGate: swapGate,
     markCurrent: markCurrent,
     attention: attention,
+    notices: notices,
+    rowAsks: rowAsks,
     reviveRoute: reviveRoute,
     markRevive: markRevive,
     handedNotice: handedNotice,

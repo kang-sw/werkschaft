@@ -1,18 +1,66 @@
-  // --- awaiting-approval notifications -----------------------------------------
-  // A row of the rail (the index's list on /) carries data-ap while its
-  // hosted session waits on a tool approval. Each read of those rows, from
-  // the live region or a hidden tab's held update, notifies of a wait the
-  // read before did not have; the first read only sets the baseline. The
-  // notification is the browser's when the user granted it (asked on a
-  // click that starts a session, answers an approval, or sends a message
-  // on a hosted page, never on load), else a toast once the tab shows. One
-  // tag per wait keeps several open tabs to one notification. A page not
-  // on the daemon's machine cannot answer, and its notification says so.
-  var apSeen = null, apHeld = [];
+  // --- notifications -------------------------------------------------------------
+  // Only the page that owns the rail notifies (a framed page's shell does),
+  // from each read of the rail's rows (the live region, or a hidden tab's
+  // held update); a row's first read only sets its baseline. It notifies
+  // of three things. A row carries data-ap while its hosted session waits
+  // on a tool approval: a wait the read before did not have is one. A
+  // top-level session that finished, once nothing of it runs any more (no
+  // child, background task, or exec job; the server's data-busy), is one,
+  // and a child finishing under a busy parent is none. A board question a
+  // row's data-asks opened since the read before is one. The viewed
+  // session's own, in a tab the user is looking at, is in front of them
+  // and is none. One tag per event keeps several open tabs, and the
+  // Werkschaft shell, to one notification. A page not on the daemon's
+  // machine cannot answer a wait, and its notification says so.
+  var apSeen = null, apHeld = [], railNotices = WsRail ? WsRail.notices() : null;
   function notifAsk() {
     try {
       if (window.Notification && window.Notification.permission === "default") window.Notification.requestPermission();
     } catch (e) { /* no notifications in this browser */ }
+  }
+  // notifDeliver shows the notification n (title, lines, tag, go: what a
+  // click opens, keep: whether a held one still applies at a later read)
+  // once, never twice. A secondary Werkschaft window shows none, as its
+  // main window does. The main window's shell shows it natively
+  // (werkschaftNotify, injected after load, so read here); only when that
+  // is missing, refused, or fails does the browser's show it, when the
+  // user granted it (asked on a click that starts a session, answers an
+  // approval, or sends a message on a hosted page, never on load), else a
+  // toast, once the tab shows.
+  function notifDeliver(n) {
+    if (window.werkschaftSecondary === true) return;
+    var shell = window.werkschaftNotify, shown;
+    if (!shell || typeof shell.notify !== "function") { notifFallback(n); return; }
+    try { shown = shell.notify(n.title, n.lines.join("\n"), n.tag); }
+    catch (e) { notifFallback(n); return; }
+    Promise.resolve(shown).then(function (ok) { if (ok !== true) notifFallback(n); }, function () { notifFallback(n); });
+  }
+  function notifFallback(n) {
+    try {
+      if (window.Notification && window.Notification.permission === "granted") {
+        var b = new window.Notification(n.title, { body: n.lines.join("\n"), tag: n.tag });
+        b.onclick = function () { window.focus(); b.close(); n.go(); };
+        return;
+      }
+    } catch (e) { /* a browser that notifies only through a service worker */ }
+    if (doc.hidden) apHeld.push(n);
+    else notifToast(n);
+  }
+  function notifToast(n) {
+    if (!window.WsToast) return;
+    window.WsToast.show([n.title].concat(n.lines).join(" · "), { kind: "notice", onClick: n.go });
+  }
+  function notifViewed(id) { return id === rid && !doc.hidden && (!doc.hasFocus || doc.hasFocus()); }
+  function notifGo(id) {
+    if (id === rid) return;
+    saveDraft();
+    go("/s/" + encodeURIComponent(id));
+  }
+  // notifWho is the session as a notification's title names it: its
+  // workspace or project, then its reply ID.
+  function notifWho(row) {
+    var g = row.closest(".rws, .project"), nm = g && g.querySelector(".nm, .pname");
+    return (nm ? nm.textContent + "/" : "") + (row.getAttribute("data-rid") || "");
   }
   function apKey(r) { return r.rid + "\n" + r.tool + "\n" + r.args; }
   function apRows(el) {
@@ -21,18 +69,31 @@
       return { rid: row.getAttribute("data-rid") || "", tool: row.getAttribute("data-ap-tool") || "", args: row.getAttribute("data-ap-args") || "", project: nm ? nm.textContent : "" };
     });
   }
-  function apScan(el) {
+  // apScan reads the rows of el, the region name ("rail", or the index's
+  // "sessions", whose rows carry approvals only). baseline (a reconnect's
+  // first full rail) records the rail's finishes and questions without
+  // notifying, as attention does: a restarted daemon re-derives every
+  // row's state, and what happened while the stream was down is not news.
+  // Waits keep their baseline across reconnects.
+  function apScan(el, name, baseline) {
     // A framed page's shell notifies, from its rail.
     if (!el || framed) return;
-    var now = {}, fresh = [];
+    var now = {}, fresh = [], rows = null, events = [];
     apRows(el).forEach(function (r) {
       var k = apKey(r);
       if (apSeen && !apSeen[k] && !now[k]) fresh.push(r);
       now[k] = true;
     });
     apSeen = now;
-    apHeld = apHeld.filter(function (r) { return now[apKey(r)]; });
+    if (name === "rail" && railNotices) {
+      var list = q(".rs[data-rid]", el);
+      rows = {};
+      list.forEach(function (row) { rows[row.getAttribute("data-rid")] = row; });
+      events = railNotices.read(list, !!baseline);
+    }
+    apHeld = apHeld.filter(function (n) { return n.keep(now, rows); });
     fresh.forEach(apNotify);
+    events.forEach(railNotify);
   }
   // apText is a wait's notification: the session in the title; the tool,
   // its arguments, and (away from the daemon's machine) where to answer in
@@ -42,36 +103,43 @@
     if (!root.hasAttribute("data-sysopen")) lines.push(wsT("js.notif.lan"));
     return { title: wsT("js.notif.title", (r.project ? r.project + "/" : "") + r.rid), lines: lines.filter(Boolean) };
   }
-  function apGo(r) {
-    if (r.rid === rid) return;
-    saveDraft();
-    go("/s/" + encodeURIComponent(r.rid));
-  }
   function apNotify(r) {
-    // the viewed session's own wait, in a tab the user is looking at, is
-    // the card in front of them
-    if (r.rid === rid && !doc.hidden && (!doc.hasFocus || doc.hasFocus())) return;
-    var t = apText(r);
-    try {
-      if (window.Notification && window.Notification.permission === "granted") {
-        var n = new window.Notification(t.title, { body: t.lines.join("\n"), tag: "ws-approval:" + apKey(r) });
-        n.onclick = function () { window.focus(); n.close(); apGo(r); };
-        return;
-      }
-    } catch (e) { /* a browser that notifies only through a service worker */ }
-    if (doc.hidden) apHeld.push(r);
-    else apToast(r);
+    if (notifViewed(r.rid)) return;
+    var t = apText(r), k = apKey(r);
+    notifDeliver({ title: t.title, lines: t.lines, tag: "ws-approval:" + k, go: function () { notifGo(r.rid); }, keep: function (now) { return !!now[k]; } });
   }
-  function apToast(r) {
-    if (!window.WsToast) return;
-    var t = apText(r);
-    window.WsToast.show([t.title].concat(t.lines).join(" · "), { kind: "notice", onClick: function () { apGo(r); } });
+  // railNotify is a rail event's notification (WsRail.notices): a finish
+  // names the row's last message, a question how many opened. A held one
+  // is dropped once its row is gone, a finished session works again, or
+  // every question it names has closed.
+  function railNotify(e) {
+    if (notifViewed(e.rid)) return;
+    var who = notifWho(e.row), title, lines = [], keep;
+    if (e.kind === "idle") {
+      var msg = e.row.querySelector(".drmsg .s2"), text = msg ? msg.textContent : "", by = msg && msg.querySelector(".who");
+      if (by && text.indexOf(by.textContent) === 0) text = by.textContent + " · " + text.slice(by.textContent.length);
+      text = text.replace(/\s+/g, " ").trim();
+      if (text) lines.push(text.length > 200 ? text.slice(0, 199) + "…" : text);
+      title = wsT("js.notif.idle.title", who);
+      keep = function (now, rows) {
+        var r = rows ? rows[e.rid] : e.row;
+        return !!r && r.getAttribute("data-busy") !== "1" && !r.classList.contains("ended");
+      };
+    } else {
+      lines.push(wsTn("js.notif.ask.body", e.ids.length));
+      title = wsT("js.notif.ask.title", who);
+      keep = function (now, rows) {
+        var r = rows ? rows[e.rid] : e.row, open = r && WsRail.rowAsks(r);
+        return !!open && e.ids.some(function (id) { return open.has(id); });
+      };
+    }
+    notifDeliver({ title: title, lines: lines, tag: e.tag, go: function () { notifGo(e.rid); }, keep: keep });
   }
   doc.addEventListener("visibilitychange", function () {
     if (doc.hidden) return;
     var held = apHeld;
     apHeld = [];
-    held.forEach(apToast);
+    held.forEach(notifToast);
   });
   if (hostedPage) {
     doc.addEventListener("click", function (e) {
@@ -1143,7 +1211,7 @@
   applySent();
   startDraftRecovery();
   tlCount();
-  apScan(region(mode === "index" ? "sessions" : "rail"));
+  apScan(region(mode === "index" ? "sessions" : "rail"), mode === "index" ? "sessions" : "rail");
   if (hostedPage) { lead.key = leadKey(); leadFetch(); }
   else if (handedPage) leadFetch();
   syncBadge();

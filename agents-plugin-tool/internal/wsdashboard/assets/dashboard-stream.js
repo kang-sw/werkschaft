@@ -512,7 +512,9 @@
       if (ev.name === "board" && companionRelay) companionRelay.board(ev.html);
       // Observe even held updates: an ask may open and close while hidden
       // or during a drag. Reconnect's first full rail silently baselines.
-      if (ev.name === "rail" && railAttention) railAttention.observe(q(".rs", frag(WsRail.rowInputHTML(ev.html))), rid, railBaseline);
+      var railFrag = ev.name === "rail" && railAttention ? frag(WsRail.rowInputHTML(ev.html)) : null;
+      if (railFrag) railAttention.observe(q(".rs", railFrag), rid, railBaseline);
+      if (railFrag && railBaseline) apScan(railFrag, "rail", true);
       if (ev.name === "rail") railBaseline = false;
       // A hidden tab keeps only each region's newest update and applies none;
       // showing the tab applies them (showRegions). The stream stays open, so
@@ -521,7 +523,7 @@
         delete hiddenRegions[ev.name];
         hiddenRegions[ev.name] = { hash: ev.hash, html: ev.html };
         tlHold(ev.name, ev.hash, ev.html);
-        if (ev.name === "rail" || ev.name === "sessions") apScan(frag(ev.name === "rail" && WsRail ? WsRail.rowInputHTML(ev.html) : ev.html));
+        if (ev.name === "rail" || ev.name === "sessions") apScan(railFrag || frag(ev.html), ev.name);
         companionSettled(ev);
         return;
       }
