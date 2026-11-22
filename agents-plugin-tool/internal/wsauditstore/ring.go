@@ -265,62 +265,120 @@ func newRing(session, dir string) *ring {
 	return &ring{session: session, dir: dir, led: newLedger(), pendingFin: map[string]uint64{}}
 }
 
-// headReadBytes bounds how much of a segment newerRingOnDisk reads; the
-// version is the header's second key.
-const headReadBytes = 4 << 10
-
 // newerRingOnDisk reports whether any segment of the ring at dir opens with a
-// header of a newer format, reading only each segment's head. Age-out and
-// capacity eviction never delete such a ring (Decision 4, forward safety).
-func newerRingOnDisk(dir string) bool {
+// header of a newer format, reading only each segment's first line (at most
+// HeaderBound bytes). Age-out and capacity eviction never delete such a ring
+// (Decision 4, forward safety). A listing or read that fails is returned as
+// an error: the caller keeps the ring rather than guess (fail closed).
+func newerRingOnDisk(dir string) (bool, error) {
 	segs, _, err := listSegments(dir)
-	if err != nil {
-		return false
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
 	}
+	if err != nil {
+		return false, err
+	}
+	var firstErr error
 	for _, seg := range segs {
-		head, err := readHead(filepath.Join(dir, segmentName(seg.seq)), headReadBytes)
-		if err == nil && headerVersion(head) > RingSchemaVersion {
-			return true
+		head, err := readHead(filepath.Join(dir, segmentName(seg.seq)), int(HeaderBound))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if headNewer(head) {
+			return true, nil
 		}
 	}
-	return false
+	return false, firstErr
 }
 
-// headerVersion is the "v" of a header line at the start of head, read token
-// by token so a torn or long line still yields it; 0 when head does not open
-// with a header object carrying one.
-func headerVersion(head []byte) int {
+// headNewer reports whether a segment's head (its first HeaderBound bytes)
+// opens with a header this binary must not delete or write: one naming a
+// newer format, or a header whose version cannot be read. A complete first
+// line is parsed whole; a torn one is scanned key by key, in any key order.
+func headNewer(head []byte) bool {
+	if nl := bytes.IndexByte(head, '\n'); nl >= 0 {
+		_, newer := headerNewer(head[:nl])
+		return newer
+	}
+	t, v, vKnown := scanHeaderKeys(head)
+	switch {
+	case t != "" && t != lineHeader:
+		return false
+	case vKnown:
+		return v > RingSchemaVersion
+	default:
+		return t == lineHeader // a header whose version is unreadable
+	}
+}
+
+// headerNewer classifies one complete first line, in any key order: whether
+// it is a header, and whether that header names a newer format or a version
+// this binary cannot read (both are never ours to write or delete). A line
+// that is not a JSON object is no header.
+func headerNewer(text []byte) (header, newer bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(text, &fields) != nil {
+		return false, false
+	}
+	var t string
+	if json.Unmarshal(fields["t"], &t) != nil || t != lineHeader {
+		return false, false
+	}
+	var v int
+	if raw, ok := fields["v"]; !ok || json.Unmarshal(raw, &v) != nil {
+		return true, true
+	}
+	return true, v > RingSchemaVersion
+}
+
+// scanHeaderKeys reads the top-level "t" and "v" of a possibly torn JSON
+// object token by token, in any key order, stopping once both are known or
+// the input ends.
+func scanHeaderKeys(head []byte) (t string, v int, vKnown bool) {
 	dec := json.NewDecoder(bytes.NewReader(head))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-		return 0
+		return "", 0, false
 	}
-	header := false
-	for dec.More() {
+	for dec.More() && (t == "" || !vKnown) {
 		key, err := dec.Token()
 		if err != nil {
-			return 0
+			return t, v, vKnown
 		}
 		switch key {
 		case "t":
-			var t string
 			if dec.Decode(&t) != nil {
-				return 0
+				return "", v, vKnown
 			}
-			header = t == lineHeader
 		case "v":
-			var v int
-			if dec.Decode(&v) != nil || !header {
-				return 0
+			if dec.Decode(&v) != nil {
+				return t, 0, false
 			}
-			return v
+			vKnown = true
 		default:
 			var skip json.RawMessage
 			if dec.Decode(&skip) != nil {
-				return 0
+				return t, v, vKnown
 			}
 		}
 	}
-	return 0
+	return t, v, vKnown
+}
+
+// headerVersion is the "v" of a header line at the start of head, in any key
+// order and even when the line is torn; 0 when head does not open with a
+// header object carrying one.
+func headerVersion(head []byte) int {
+	t, v, vKnown := scanHeaderKeys(head)
+	if t != lineHeader || !vKnown {
+		return 0
+	}
+	return v
 }
 
 // listSegments returns the ring's segment sequence numbers and sizes in
@@ -468,6 +526,13 @@ func (r *ring) replaySegment(seg *segment, raw []byte) (good int, newer, header 
 		}
 		text := raw[pos : pos+nl]
 		next := pos + nl + 1
+		if first {
+			// The version is read on its own first, so a newer header whose
+			// shape this binary cannot decode still refuses writes.
+			if h, newer := headerNewer(text); h && newer {
+				return pos, true, true
+			}
+		}
 		var ln line
 		if err := json.Unmarshal(text, &ln); err != nil {
 			if next == len(raw) {
@@ -483,9 +548,6 @@ func (r *ring) replaySegment(seg *segment, raw []byte) (good int, newer, header 
 				header = true
 				if r.session == "" {
 					r.session = ln.Session
-				}
-				if ln.V > RingSchemaVersion {
-					return pos, true, header
 				}
 				// Every header seeds: each is a snapshot of the state so far,
 				// and seeding takes maxima and unions, so a header whose

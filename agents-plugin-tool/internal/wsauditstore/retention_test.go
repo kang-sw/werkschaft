@@ -427,8 +427,13 @@ func TestNewerFormatRingIsNeverAgedOutOrEvicted(t *testing.T) {
 	root := t.TempDir()
 	clock := &fakeClock{now: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)}
 	seg := writeNewerRing(t, root, "future", 3*int(mib), clock.now.Add(-30*24*time.Hour))
-	if headerVersion([]byte(`{"t":"h","v":2,"sess`)) != 2 || headerVersion([]byte(`{"t":"e","e":{"v":9}}`)) != 0 {
+	if headerVersion([]byte(`{"t":"h","v":2,"sess`)) != 2 || headerVersion([]byte(`{"v":2,"t":"h","sess`)) != 2 ||
+		headerVersion([]byte(`{"t":"e","e":{"v":9}}`)) != 0 {
 		t.Fatal("headerVersion misreads a torn header or an event line")
+	}
+	if !headNewer([]byte(`{"v":3,"t":"h"}`+"\n")) || !headNewer([]byte(`{"t":"h","v":"two"}`+"\n")) ||
+		headNewer([]byte(`{"t":"h","v":1}`+"\n")) || headNewer([]byte(`{"t":"e","v":9}`+"\n")) || headNewer([]byte(`{"t":"e","v`)) {
+		t.Fatal("headNewer misclassifies a first line")
 	}
 	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 6 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
 	s, log := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
@@ -696,4 +701,75 @@ func TestPeriodicSweepRunsUnderASteadyStreamOfAppends(t *testing.T) {
 	}
 	close(stop)
 	<-producing
+}
+
+// writeRingWithHeader writes an unopened one-segment ring whose first line is
+// header, followed by one padding line.
+func writeRingWithHeader(t *testing.T, root, session, header string, mtime time.Time) string {
+	t.Helper()
+	dir := filepath.Join(root, session)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seg := filepath.Join(dir, segmentName(1))
+	content := header + "\n" + `{"t":"future","pad":"zz"}` + "\n"
+	if err := os.WriteFile(seg, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(seg, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	return seg
+}
+
+// TestColdNewerFormatGuardFailsClosed pins the cold forward-safety guard: a
+// newer header is recognized in any key order and whatever shape its other
+// fields take, a ring whose headers cannot be read is not removed by an
+// automatic sweep, and a newer header this binary cannot decode still makes
+// a loaded ring refuse writes.
+func TestColdNewerFormatGuardFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	clock := &fakeClock{now: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)}
+	expired := clock.now.Add(-30 * 24 * time.Hour)
+	reordered := writeRingWithHeader(t, root, "reordered", `{"v":2,"t":"h","session":"reordered"}`, expired)
+	reshaped := writeRingWithHeader(t, root, "reshaped", `{"t":"h","v":2,"state":"a newer shape"}`, expired)
+	unreadable := writeRingWithHeader(t, root, "unreadable", `{"t":"h","v":1,"session":"unreadable"}`, expired)
+	orig := readHead
+	t.Cleanup(func() { readHead = orig })
+	readHead = func(path string, n int) ([]byte, error) {
+		if strings.Contains(path, "unreadable") {
+			return nil, errors.New("i/o error")
+		}
+		return orig(path, n)
+	}
+	s, log := openTest(t, root, func(o *Options) { o.Now = clock.Now; o.DeferFirstSweep = true })
+	if err := s.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, seg := range []string{reordered, reshaped, unreadable} {
+		if _, err := os.Stat(seg); err != nil {
+			t.Fatalf("%s was aged out: %v\n%s", seg, err, log.String())
+		}
+	}
+	if !strings.Contains(log.String(), "cannot read its segment headers") {
+		t.Fatalf("unreadable headers not logged: %s", log.String())
+	}
+	// Loaded, the undecodable newer header still refuses writes.
+	mustAppend(t, s, sourced("reshaped", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	raw, err := os.ReadFile(reshaped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"t":"e"`) {
+		t.Fatalf("a record was written into a newer-format ring:\n%s", raw)
+	}
+	// Once the headers read, the ring ages out as usual.
+	readHead = orig
+	if err := s.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(unreadable); !os.IsNotExist(err) {
+		t.Fatalf("readable expired ring kept: %v", err)
+	}
 }

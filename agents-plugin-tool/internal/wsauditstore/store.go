@@ -1038,8 +1038,9 @@ func (s *Store) refreshLastSeen() {
 }
 
 // foreign reports whether info's ring holds a newer format: a loaded ring
-// refusing writes, or an unloaded one whose segment headers say so. The
-// answer is remembered. Writer goroutine only.
+// refusing writes, or an unloaded one whose segment headers say so — or whose
+// headers cannot be read, so automatic retention fails closed. A newer format
+// is remembered; a read failure is asked again. Writer goroutine only.
 func (s *Store) foreign(info *sessionInfo) bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
@@ -1053,10 +1054,16 @@ func (s *Store) foreignLocked(info *sessionInfo) bool {
 	}
 	if r := info.ring; r != nil {
 		info.newer = errors.Is(r.readOnly, ErrNewerFormat)
-	} else {
-		info.newer = newerRingOnDisk(filepath.Join(s.opts.Root, info.dir))
+		return info.newer
 	}
-	return info.newer
+	newer, err := newerRingOnDisk(filepath.Join(s.opts.Root, info.dir))
+	if err != nil {
+		// Fail closed, and ask again next time.
+		s.logf("session %s: cannot read its segment headers: %v; it is not removed automatically", info.dir, err)
+		return true
+	}
+	info.newer = newer
+	return newer
 }
 
 func maxTime(a, b time.Time) time.Time {
