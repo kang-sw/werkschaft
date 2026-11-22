@@ -10,7 +10,7 @@
   }
 
   var scopes = ["builtin", "synced", "global", "repo", "project", "session"];
-  var sections = ["workflow", "agents", "compaction", "adapters", "profiles", "prompts"];
+  var sections = ["workflow", "agents", "compaction", "adapters", "companion", "profiles", "prompts"];
   var adapters = ["claude", "pi", "agy", "dashboard"];
   var filterLabels = {
     all: "js.settings.filter.all",
@@ -31,6 +31,7 @@
     agents: "js.settings.section.agents",
     compaction: "js.settings.section.compaction",
     adapters: "js.settings.section.adapters",
+    companion: "js.settings.section.companion",
     profiles: "js.settings.section.profiles",
     prompts: "js.settings.section.prompts",
     claude: "js.settings.section.claude",
@@ -43,6 +44,7 @@
     agents: "js.settings.section_note.agents",
     compaction: "js.settings.section_note.compaction",
     adapters: "js.settings.section_note.adapters",
+    companion: "js.settings.section_note.companion",
     profiles: "js.settings.section_note.profiles",
     prompts: "js.settings.section_note.prompts"
   };
