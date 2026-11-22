@@ -430,8 +430,14 @@ class RingStreamTest(unittest.TestCase):
             self.assertEqual(holder.ring.next_seq, count + 1)
             self.assertGreater(holder.ring.size, base)
             self.assertLessEqual(holder.ring.size, ceiling)
-            # The newest window of rows is kept, whatever the relay has sent.
-            self.assertLessEqual(holder.ring.first_seq(), count + 1 - window)
+            # Nothing undelivered is evicted: below the ceiling the ring drops
+            # only records the relay has sent (seq < delivered_before), however
+            # many that is (a socket takes more before it blocks on some
+            # platforms). The reads below prove every row arrived.
+            self.assertLessEqual(
+                holder.ring.first_seq(),
+                max(holder.ring.delivered_before, count + 1 - window),
+            )
 
         with reader.makefile("rb") as stream:
             for seq in range(1, count + 1):
