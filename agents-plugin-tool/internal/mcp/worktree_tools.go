@@ -383,7 +383,7 @@ func lockWorktreePool(ctx context.Context, runner wsgit.Runner, root, tool strin
 // mint binds a worker key to the canonical worktree root; injecting it keeps the
 // Git lifecycle independent of Server and makes failed-mint cleanup testable.
 func acquireWorktree(waitCtx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue, parentKey string, mint func(string) (string, error)) (worktreeAcquireResult, error) {
-	return acquireWorktreeWith(waitCtx, runner, env, root, base, targetBranch, profile, poolConfigValue, parentKey, mint, nil)
+	return acquireWorktreeWith(waitCtx, runner, env, root, base, targetBranch, profile, poolConfigValue, parentKey, mint, nil, nil)
 }
 
 // worktreeBusyFunc reports whether a reuse candidate is still occupied by
@@ -392,9 +392,22 @@ func acquireWorktree(waitCtx context.Context, runner wsgit.Runner, env []string,
 // release lock.
 type worktreeBusyFunc func(ctx context.Context, target string) bool
 
+// worktreeExecFenceFunc reserves a worktree against exec jobs
+// (Server.worktreeExecFence): it refuses while a job runs, or is being
+// launched, with its root or working directory in target, and otherwise
+// refuses new launches there until the returned unfence runs. nil fences
+// nothing.
+type worktreeExecFenceFunc func(target string) (func(), error)
+
+// afterWorktreeClaim, when set (tests only), runs once a reuse candidate is
+// claimed: its release lock and exec fence are held, and its checkout has
+// not started.
+var afterWorktreeClaim func(path string)
+
 // acquireWorktreeWith is acquireWorktree with a daemon-side occupancy check
-// applied to every reuse candidate.
-func acquireWorktreeWith(waitCtx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue, parentKey string, mint func(string) (string, error), busy worktreeBusyFunc) (worktreeAcquireResult, error) {
+// applied to every reuse candidate, and an exec fence taken on the claimed
+// one and held until its lease is published (or the acquire rolled back).
+func acquireWorktreeWith(waitCtx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue, parentKey string, mint func(string) (string, error), busy worktreeBusyFunc, fenceExec worktreeExecFenceFunc) (worktreeAcquireResult, error) {
 	unlock, err := lockWorktreeAcquire(waitCtx, runner, root)
 	if err != nil {
 		return worktreeAcquireResult{}, err
@@ -405,9 +418,9 @@ func acquireWorktreeWith(waitCtx context.Context, runner wsgit.Runner, env []str
 	// matching the handler's existing behavior. A waiter's deadline never
 	// cancels the holder's hooks or releases its protection early.
 	ctx := context.Background()
-	result, unclaim, err := provisionWorktreeClaim(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, busy)
-	// The reused checkout stays reserved against spawns and releases until
-	// its new lease is published (or the acquire rolled back).
+	result, unclaim, err := provisionWorktreeClaim(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, busy, fenceExec)
+	// The reused checkout stays reserved against spawns, releases and exec
+	// launches until its new lease is published (or the acquire rolled back).
 	defer unclaim()
 	if err != nil {
 		return result, err
@@ -449,7 +462,7 @@ func acquireWorktreeWith(waitCtx context.Context, runner wsgit.Runner, env []str
 // linked worktree. The pool always resolves against the primary root, so a call
 // from a linked worktree never nests a per-worktree pool.
 func provisionWorktree(ctx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue string) (worktreeAcquireResult, error) {
-	res, unclaim, err := provisionWorktreeClaim(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, nil)
+	res, unclaim, err := provisionWorktreeClaim(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, nil, nil)
 	unclaim()
 	return res, err
 }
@@ -458,14 +471,16 @@ func provisionWorktree(ctx context.Context, runner wsgit.Runner, env []string, r
 // of its claim on a reused checkout: the checkout's per-worktree release lock,
 // held exclusively from the eligibility check on, so no spawn binds a child
 // and no release starts between that check and the caller's lease
-// publication. The release func is never nil.
-func provisionWorktreeClaim(ctx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue string, busy worktreeBusyFunc) (worktreeAcquireResult, func(), error) {
+// publication, and its exec fence (fenceExec), taken after the other checks
+// pass, so no exec job launches into it in that span either. The release
+// func is never nil.
+func provisionWorktreeClaim(ctx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue string, busy worktreeBusyFunc, fenceExec worktreeExecFenceFunc) (worktreeAcquireResult, func(), error) {
 	unclaim := func() {}
-	res, err := provisionWorktreeLocked(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, busy, &unclaim)
+	res, err := provisionWorktreeLocked(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, busy, fenceExec, &unclaim)
 	return res, unclaim, err
 }
 
-func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue string, busy worktreeBusyFunc, unclaim *func()) (worktreeAcquireResult, error) {
+func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue string, busy worktreeBusyFunc, fenceExec worktreeExecFenceFunc, unclaim *func()) (worktreeAcquireResult, error) {
 	var res worktreeAcquireResult
 	base = strings.TrimSpace(base)
 	targetBranch = strings.TrimSpace(targetBranch)
@@ -535,7 +550,9 @@ func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []str
 	// held, whoever holds it; only a release (or the user) clears a lease. The
 	// daemon-side check (busy) then skips a worktree still bound to a child
 	// since its last completed release, or bound before it with a live
-	// process, or with a running exec job whose cwd is in it.
+	// process. Last, the exec fence skips one where an exec job runs or is
+	// being launched (its root or working directory in it); once taken, the
+	// fence refuses launches there until the lease is published.
 	var claim string
 	var claimMarker *worktreeMarker
 	for _, e := range entries {
@@ -555,8 +572,26 @@ func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []str
 			_ = lock.Unlock()
 			continue
 		}
+		// Lock order matches release: the candidate's flock, then the exec
+		// admission locks inside the fence (exec admission never takes the
+		// flock). A refusal means a job occupies the candidate: skip it.
+		unfence := func() {}
+		if fenceExec != nil {
+			u, err := fenceExec(e.Path)
+			if err != nil {
+				_ = lock.Unlock()
+				continue
+			}
+			unfence = u
+		}
 		claim = e.Path
-		*unclaim = func() { _ = lock.Unlock() }
+		*unclaim = func() {
+			unfence()
+			_ = lock.Unlock()
+		}
+		if afterWorktreeClaim != nil {
+			afterWorktreeClaim(claim)
+		}
 		break
 	}
 
@@ -1115,13 +1150,9 @@ func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) 
 // while a conversation bound since its last completed release (or, with none
 // recorded, any bound conversation) is listed (open, or closed with its
 // process still held), or while a conversation bound before that release
-// still has a live process, or while a running hosted exec job has its cwd in
-// it (the release guard's predicate, checkWorktreeLiveExecJobs). A daemon
-// that cannot answer makes it busy.
+// still has a live process. A daemon that cannot answer makes it busy.
+// Exec jobs are acquisition's exec fence's concern, not this check's.
 func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
-	if s.checkWorktreeLiveExecJobs(target) != nil {
-		return true
-	}
 	occ, err := s.worktreeOccupancy(ctx, target)
 	if err != nil {
 		return true

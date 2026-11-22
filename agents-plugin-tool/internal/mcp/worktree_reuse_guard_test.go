@@ -144,7 +144,7 @@ func TestWorktreeAcquireSkipsOccupiedCheckouts(t *testing.T) {
 		defer worker.Close()
 		next, err := acquireWorktreeWith(context.Background(), worker.gitRunner(), worker.environ(), root, base, "impl/test/next", builtinProfile(t, worktreeProfileFull), "", lead, func(path string) (string, error) {
 			return sLead.sessions.mint(path, roleLead, lead)
-		}, worker.worktreeBusy)
+		}, worker.worktreeBusy, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

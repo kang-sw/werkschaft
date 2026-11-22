@@ -794,7 +794,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		result, err := acquireWorktreeWith(ctx, s.gitRunner(), s.environ(), entry.root, base, targetBranch, profile, poolRV.Value, key, func(mintPath string) (string, error) {
 			resolved, err := s.resolveSession(sessionAccess{mode: sessionAccessMintIdentity, root: mintPath, scope: roleLead, parent: key})
 			return resolved.key, err
-		}, s.worktreeBusy)
+		}, s.worktreeBusy, s.worktreeExecFence)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}
