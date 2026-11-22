@@ -13,7 +13,7 @@ import (
 
 func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 	registrations := BuiltinBackendRegistrations()
-	if len(registrations) != 4 {
+	if len(registrations) != 5 {
 		t.Fatalf("builtin registrations = %v", registrations)
 	}
 	wants := []struct {
@@ -26,6 +26,7 @@ func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 		{BackendPi, LeadProfilePi, []string{SupportProfilePi, PiWorkerProfile, PiMiniLeadProfile, AgentWorkerProfile(BackendPi), ExploreProfile, SearchAnswerProfilePi, LeadProfilePi}, false, *PiCompaction()},
 		{BackendCodex, LeadProfileCodex, []string{AgentWorkerProfile(BackendCodex), LeadProfileCodex}, true, CodexCatalog().Compaction},
 		{BackendAgy, LeadProfileAgy, []string{AgentWorkerProfile(BackendAgy), LeadProfileAgy}, true, AgyCatalog().Compaction},
+		{BackendWerk, "", []string{AgentWorkerProfile(BackendWerk)}, true, WerkCatalog().Compaction},
 	}
 	for _, want := range wants {
 		t.Run(want.backend, func(t *testing.T) {
@@ -51,7 +52,7 @@ func TestBuiltinBackendRegistrationDefaults(t *testing.T) {
 	if got := BuiltinCompaction("unknown"); got != (CompactionProtocol{}) {
 		t.Errorf("unknown harness compaction = %+v", got)
 	}
-	if names := BuiltinHarnessNames(); !slices.Equal(names, []string{BackendClaude, BackendCodex, BackendPi, BackendAgy}) {
+	if names := BuiltinHarnessNames(); !slices.Equal(names, []string{BackendClaude, BackendCodex, BackendPi, BackendAgy, BackendWerk}) {
 		t.Errorf("builtin harness order = %v", names)
 	}
 }
@@ -137,6 +138,7 @@ func TestRegisteredBackendAdmission(t *testing.T) {
 		BackendPi:     {LeadProfile: LeadProfilePi},
 		BackendAgy:    {LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes},
 		BackendCodex:  {LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes},
+		BackendWerk:   {},
 	}
 	if !reflect.DeepEqual(ProfileValueSchema(), ProfileValueSchema(production)) {
 		t.Fatal("production profile schema changed from the builtin-only contract")

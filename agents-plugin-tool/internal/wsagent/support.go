@@ -271,6 +271,11 @@ func supportBackendAvailability(name string, backend Backend) (bool, string) {
 			return false, fmt.Sprintf("%s is not installed: %v", cl.Executable(), err)
 		}
 	}
+	if setup, ok := backend.(workerSetup); ok {
+		if why := setup.workerCredentialGap(); why != "" {
+			return false, why
+		}
+	}
 	return true, ""
 }
 

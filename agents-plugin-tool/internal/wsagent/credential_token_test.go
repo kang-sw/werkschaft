@@ -8,24 +8,26 @@ import (
 // provider credentials, as the builtin harness's will.
 const testProviderHarness = "test-provider-harness"
 
-// TestNoCurrentBackendAdmitsProviderCredentials: none of the harnesses ws
-// hosts today may obtain provider credentials; each brings its own login.
-func TestNoCurrentBackendAdmitsProviderCredentials(t *testing.T) {
+// TestOnlyTheBuiltinHarnessAdmitsProviderCredentials: of the harnesses ws
+// hosts, only the one that makes model requests itself (the builtin Go
+// harness) may obtain provider credentials; each of the others brings its own
+// login.
+func TestOnlyTheBuiltinHarnessAdmitsProviderCredentials(t *testing.T) {
 	regs := BuiltinBackendRegistrations()
 	if len(regs) == 0 {
 		t.Fatal("no builtin registrations")
 	}
 	for name, reg := range regs {
-		if reg.ProviderCredentials {
-			t.Errorf("backend %s admits provider credentials", name)
+		if want := name == BackendWerk; reg.ProviderCredentials != want {
+			t.Errorf("backend %s: ProviderCredentials = %v, want %v", name, reg.ProviderCredentials, want)
 		}
 	}
 }
 
 // TestCredentialTokenFollowsTheRegistrationCapability: the token route
 // admits a session only when its backend registration sets
-// ProviderCredentials: every current backend is refused, a test-only
-// registration that sets it is admitted, and an unknown or voided token
+// ProviderCredentials: every backend that brings its own login is refused,
+// the builtin harness and a test-only registration that set it are admitted, and an unknown or voided token
 // resolves to nothing. Resolving for credentials is not the harness
 // reaching ws-mcp.
 func TestCredentialTokenFollowsTheRegistrationCapability(t *testing.T) {
@@ -49,7 +51,7 @@ func TestCredentialTokenFollowsTheRegistrationCapability(t *testing.T) {
 		if !ok || session.Harness != name || session.Conversation != "c-"+name || session.Lead {
 			t.Fatalf("%s: session = %+v, %v", name, session, ok)
 		}
-		if want := name == testProviderHarness; session.Permitted != want {
+		if want := name == testProviderHarness || name == BackendWerk; session.Permitted != want {
 			t.Errorf("%s: permitted = %v, want %v", name, session.Permitted, want)
 		}
 		select {

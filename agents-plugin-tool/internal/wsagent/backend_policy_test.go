@@ -269,6 +269,7 @@ func TestBuiltinDashboardTraits(t *testing.T) {
 		BackendCodex:  {SeparateFiveHourHistory: true, ReplayClientName: "codex"},
 		BackendPi:     {TerminalTakeover: true, ReplayClientName: "ws-pi-bridge"},
 		BackendAgy:    {ReplayClientName: "agy"},
+		BackendWerk:   {ReplayClientName: "ws-werk"},
 	}
 	runner := policyRunner(BuiltinBackendRegistrations())
 	if got := runner.DashboardHarnesses(); !reflect.DeepEqual(got, want) {
@@ -299,6 +300,7 @@ func TestBuiltinConnectionPolicy(t *testing.T) {
 		BackendCodex:  {named: true},
 		BackendPi:     {named: true, bridge: "ws-pi-bridge", daemonAgents: true, delegates: true},
 		BackendAgy:    {},
+		BackendWerk:   {},
 	}
 	got := map[string]conn{}
 	for _, named := range BuiltinConnections() {

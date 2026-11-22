@@ -160,6 +160,12 @@ type fakeHolders struct {
 	// errMsg an error answer; ok false leaves it unanswered. It runs
 	// without the lock held, so it may call into the runner.
 	acp func(id, method string, params json.RawMessage) (result, errMsg string, ok bool)
+	// onSpawn runs after a child spawned and onInput after an input was
+	// written to a child (the input is also recorded as usual), both without
+	// the lock held: a test that runs a child in-process (the werk loop)
+	// starts it from the first and feeds it from the second.
+	onSpawn func(id string, spec wsholder.SpawnSpec)
+	onInput func(id string, data []byte, eof bool)
 }
 
 func newFakeHolders() *fakeHolders {
@@ -337,9 +343,13 @@ func (f *fakeHolders) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.ChildS
 	}
 	h.spec = &spec
 	pid := h.pid
+	onSpawn := f.onSpawn
 	f.mu.Unlock()
 	if err := f.call(id, "spawn"); err != nil {
 		return wsholder.ChildStatus{}, err
+	}
+	if onSpawn != nil {
+		onSpawn(id, spec)
 	}
 	return wsholder.ChildStatus{State: "running", PID: pid, Mode: spec.Mode}, nil
 }
@@ -422,7 +432,11 @@ func (f *fakeHolders) Input(id string, data []byte, eof bool) error {
 		code := 0
 		f.appendLocked(h, wsholder.Event{Event: "exit", ExitCode: &code})
 	}
+	onInput := f.onInput
 	f.mu.Unlock()
+	if onInput != nil {
+		onInput(id, data, eof)
+	}
 	return f.call(id, "input")
 }
 

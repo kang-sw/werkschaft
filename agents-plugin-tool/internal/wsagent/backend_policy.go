@@ -1,6 +1,10 @@
 package wsagent
 
-import "maps"
+import (
+	"maps"
+
+	"github.com/kang-sw/devenv/internal/wsconfig"
+)
 
 // The runner never branches on a harness name. What differs between harnesses
 // is declared here: data on the backend's BackendRegistration (PermissionPolicy,
@@ -192,6 +196,20 @@ type leadCompactionBridge interface {
 // permission mode to the user (admitNativeMode); an error refuses the request.
 type nativeModeAdmitter interface {
 	admitNativeMode(rec Record, mode string, user bool) error
+}
+
+// workerSetup is implemented by a backend whose workers need setup beyond an
+// installed executable: the daemon reports each gap as the harness's
+// unavailability, with the reason, in agent.tiers and the dashboard. Neither
+// method runs a process or reads a credential's value.
+type workerSetup interface {
+	// workerCredentialGap is why no worker can start for lack of a provider
+	// credential; "" when one is configured, or none is needed.
+	workerCredentialGap() string
+	// workerTierGap is why no tier of the harness is usable given the tier
+	// models the user configured (none: a harness that ships no default
+	// model); "" when it is.
+	workerTierGap(tiers map[string]wsconfig.AgentTier) string
 }
 
 func (r *Runner) permissionPolicy(backend string) PermissionPolicy {

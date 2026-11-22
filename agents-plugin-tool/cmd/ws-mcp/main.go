@@ -13,6 +13,12 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
+// hiddenCommands are the subcommands of this binary that only the daemon
+// starts (a session holder keeps their process), registered by the file that
+// owns each; they are not part of the product's command surface. A command
+// returns the process exit code.
+var hiddenCommands = map[string]func(args []string) int{}
+
 var version = "0.51.0-dev"
 var sourceCommit = "dev"
 
@@ -20,6 +26,9 @@ func main() {
 	// Only process entry points own lifecycle, signals and process exit. All
 	// one-shot product commands share the same core as daemon-hosted CLI.
 	if len(os.Args) > 1 {
+		if run, ok := hiddenCommands[os.Args[1]]; ok {
+			os.Exit(run(os.Args[2:]))
+		}
 		switch os.Args[1] {
 		case "serve":
 			serve(os.Args[2:])

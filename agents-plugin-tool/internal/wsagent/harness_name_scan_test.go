@@ -25,11 +25,11 @@ import (
 // parses each file and fails on
 //
 //   - any use of a constant whose value is a harness name: BackendClaude,
-//     BackendCodex, BackendAgy, BackendPi, PiTierHarness, wslive.AgentKindPi,
+//     BackendCodex, BackendAgy, BackendPi, BackendWerk, PiTierHarness, wslive.AgentKindPi,
 //     and any constant declared that way later (harnessAliases finds them from
 //     their declarations);
 //   - any short string literal (no whitespace, or at most
-//     shortNameLiteral bytes) that names a harness (claude, codex, agy, pi,
+//     shortNameLiteral bytes) that names a harness (claude, codex, agy, pi, werk,
 //     antigravity) as a word or inside a token such as a config key, tool
 //     name, environment variable, path, or provider label;
 //   - any alternation of harness names inside a literal (a pattern); and
@@ -261,17 +261,19 @@ var aliasRoots = []string{"..", "../../cmd"}
 var (
 	adapterOwned = []*regexp.Regexp{
 		// Backend implementation files own genuine harness behavior.
-		regexp.MustCompile(`^internal/wsagent/(claude|codex|agy|pi)[a-z0-9_]*\.go$`),
-		regexp.MustCompile(`^internal/wsagent/audit_(claude|codex)\.go$`),
+		regexp.MustCompile(`^internal/wsagent/(claude|codex|agy|pi|werk)[a-z0-9_]*\.go$`),
+		regexp.MustCompile(`^internal/wsagent/audit_(claude|codex|werk)\.go$`),
+		// The builtin harness's hidden subcommand, which the daemon starts.
+		regexp.MustCompile(`^cmd/ws-mcp/werk[a-z0-9_]*\.go$`),
 		// The Pi extension's MCP tool surface and forwarder.
 		regexp.MustCompile(`^internal/mcp/pi_[a-z0-9_]*\.go$`),
 		// The Agy usage provider.
 		regexp.MustCompile(`^internal/wsdashboard/plan_usage_agy\.go$`),
 	}
-	harnessWord  = regexp.MustCompile(`(?i)claude|codex|agy|antigravity|(^|[^a-z0-9])pi([^a-z0-9]|$)`)
-	harnessExact = regexp.MustCompile(`(?i)^(claude|codex|agy|antigravity|pi)$`)
-	harnessAlt   = regexp.MustCompile(`(?i)\|(claude|codex|agy|pi)\b|\b(claude|codex|agy|pi)\|`)
-	backendIdent = regexp.MustCompile(`^Backend(Claude|Codex|Agy|Pi)$`)
+	harnessWord  = regexp.MustCompile(`(?i)claude|codex|agy|antigravity|(^|[^a-z0-9])(pi|werk)([^a-z0-9]|$)`)
+	harnessExact = regexp.MustCompile(`(?i)^(claude|codex|agy|antigravity|pi|werk)$`)
+	harnessAlt   = regexp.MustCompile(`(?i)\|(claude|codex|agy|pi|werk)\b|\b(claude|codex|agy|pi|werk)\|`)
+	backendIdent = regexp.MustCompile(`^Backend(Claude|Codex|Agy|Pi|Werk)$`)
 
 	// decisionCalls are the strings functions whose literal argument is a
 	// comparison operand: a long product name there is a branch, not prose.

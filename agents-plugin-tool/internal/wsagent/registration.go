@@ -144,7 +144,7 @@ type namedBackendRegistration struct {
 // builtinRegistrations is the immutable descriptor floor. Its order preserves
 // the advertised config selectors and tracker-support preference.
 var builtinRegistrations = sync.OnceValue(func() []namedBackendRegistration {
-	backends := []registrationBackend{ClaudeBackend{}, CodexBackend{}, PiBackend{}, AgyBackend{}}
+	backends := []registrationBackend{ClaudeBackend{}, CodexBackend{}, PiBackend{}, AgyBackend{}, WerkBackend{}}
 	out := make([]namedBackendRegistration, 0, len(backends))
 	for _, backend := range backends {
 		name, reg := backend.registration()

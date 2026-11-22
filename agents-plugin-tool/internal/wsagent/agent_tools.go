@@ -413,6 +413,11 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 			return AgentTiers{}, fmt.Errorf("read agents.tier: %w", err)
 		}
 		usable[h] = tiers
+		if setup, ok := r.opts.Backends[h].Backend.(workerSetup); ok {
+			if why := setup.workerTierGap(tiers); why != "" {
+				out.Unavailable = append(out.Unavailable, h+": "+why)
+			}
+		}
 		if h == caller.Harness {
 			out.Native = tierEntries("", tiers)
 		}
