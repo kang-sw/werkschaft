@@ -379,6 +379,85 @@ run needs, once, from a lead session on this branch's build:
 display, SIWC, Pi retirement and the `pi.*` redirect (Phase 3), the live OpenRouter
 run (above), and model context-window lookup.
 
+#### Edition (a0b7dc391) - 2026-11-23
+
+Review fixes to Phase 1 (an independent review of `545b0d5ed..cfcfb94f1`
+returned fix-first), as eight commits on the same branch. The Result above is
+unchanged.
+
+**T0 restated: T1 for one path, T0 for everything else.** The Result's
+whole-sweep T0 was too broad. A configured-werk **downgrade** is T1: after a
+user has put a `werk` target into the global `agent.tier_routing` graph, or
+saved a custom profile that names the `werk` backend, an older binary refuses
+the whole value, not just the werk part. In the old code `NewTierGraph` validates
+with the old build's harness list, so a bundle with harness `werk`
+(`wsconfig/tier_routing.go:338`) or a node pointer to `werk.*` (`:356`) fails
+validation, and `Resolve` then returns the graph's error for every tier name
+(`:524`); `mcp/config_tier_routing.go:96` (`graph.Err()`) refuses the write the
+same way. `wsagent/profile.go:376-387` (`ResolveProfiles`) fails the entire
+family on any invalid entry, so a profile whose backend the old registry lacks
+fails the list. No stored data changes and nothing is migrated: reopening with a
+build that has `werk` recovers it, and an install that never configures werk
+(no werk bucket, no werk target, no werk profile) is unaffected. Every other
+Phase 1 surface stays T0 as the Result says (the additive registration, config
+buckets, catalog, `pickers`, and the hidden subcommand).
+
+**Fixes**
+- *Shell authority.* The daemon's hosted exec auto-approves every worker, so a
+  read-only werk worker could write through the shell; Codex read-only workers
+  share that gap on develop, and the generic fix (the shared approval and
+  permission gate) is left to a separate exec-tools ticket and not touched
+  here. For werk only, a read-only worker is not offered `exec_shell`,
+  `exec_run`, `exec_spawn` or `exec_write` and a forced call is refused before
+  it reaches the daemon; its file read tools and the read-only ws tools stay
+  (`werk/agent.go`). **workdir-write and full keep the shell, and the
+  workdir-write shell is confined only by its start directory, the same as the
+  Codex cutover, pending the exec-tools ticket.**
+- *Dangling symlink.* The workdir-write boundary now follows a link whose target
+  does not exist to where a write would create it (relative links and chains
+  included; a loop errors), so a link out of the tree is refused whether its
+  target exists or not (`werk/filetools.go`).
+- *Credentials.* The child's environment drops every `OPENROUTER_` variable and
+  the names the auth layer lists for the provider (`wscred.Provider.EnvKeys`),
+  case-insensitively. Provider error text (HTTP bodies, `response.failed`,
+  `error` events, transport errors) and the free text of system lines in the
+  audit record are masked (`wsredact.Secrets` plus a bearer rule and the
+  request's own token), before the 300-character cut.
+- *Header stall.* A first-byte watchdog (`HeaderTimeout`, default 2 minutes)
+  cuts a request whose response headers never arrive; it is an `ErrStreamCut`,
+  so the loop's retry policy applies.
+- *Transcript writes.* Items go to one ordered background writer; the
+  in-memory transcript still feeds the next request. The writer is flushed at
+  every turn end (an interrupt included), when `Serve` returns, and on `Close`.
+  A crash loses a tail, never the middle, and a call without a persisted result
+  is answered as interrupted by resume and never re-run.
+- *Model list.* The picker's OpenRouter list is fetched in the background under
+  its own lock, never inside a choices request: a cached list answers at once,
+  a harness not yet listed is left out and `pickers_pending` is set (an additive
+  key), and the settings combobox then asks again after 1.5 seconds. A Claude or
+  Codex choices request no longer waits on OpenRouter.
+- *Retry-After.* A wait above the five-minute cap ends the turn with an error that
+  names the provider's wait and does not retry early; a wait at the cap is honored.
+- *Label.* The harness bucket tab reads "Werk" (`js.settings.section.werk`, all
+  eleven tables).
+
+**Verification.** `go build` and `go vet` are clean on darwin and
+`GOOS=windows`. `./internal/werk` passes with `-race`; `./internal/wsagent`
+passes (`TestSlowModelListDoesNotHoldChoices` was racy once and is fixed and
+repeated twenty times under `-race`); `./internal/wslive`, `wsi18n`,
+`wsconfig`, `wscred` and `wsredact` pass. `go test ./cmd/ws-mcp`: only the known
+`TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild` fails.
+`go test ./internal/mcp`: only the nine tests that need the missing generated
+inventory fail. Node `frontend-settings` passes 14 of 14. The settings browser
+tests that clear `WS_RSRC_DEV_CHECKOUT` fail here for the same missing-inventory
+reason they did before (`TestSettingsComboboxBrowser`, `TestTierRoutingUIBrowser`,
+`TestSettingsInteractionBrowser`, `TestSettingsProductionBrowser`,
+`TestSettingsAndEmptyRootBrowser`); with that variable pointed at this
+checkout temporarily, `TestSettingsComboboxBrowser` and `TestTierRoutingUIBrowser`
+pass against the changed assets. The full `./internal/wsdashboard` browser suite
+was run once and timed out at its ten-minute limit with many other browser
+tests failing at their start; it was not used as evidence.
+
 ### Phase 2: Lead role and OpenAI SIWC
 
 - Hosted lead registration: lead profile, permission levels, dashboard steer
