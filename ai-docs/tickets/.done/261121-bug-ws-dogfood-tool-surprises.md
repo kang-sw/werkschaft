@@ -178,6 +178,10 @@ This pass hardens the exec-job follow-up after review of 1793cab62.
   - `TestResolvePathTakesAPathLongerThanMaxPath` checks that a path longer than MAX_PATH resolves and that admission accepts it.
   - `TestResolvePathFollowsAShortJunctionToALongTarget` builds a junction with `FSCTL_SET_REPARSE_POINT`, since `mklink` may not take a target that long. It checks that the junction resolves to the stripped long target and that `rootForms` agrees.
 
+#### Edition (f8f829930) - 2026-11-22
+
+- `win32Path` now matches `internal/mcp`'s `extendedLengthPath`. In f8f829930 it prefixed every path after `filepath.Abs` and `Clean`, which skipped Win32 name normalization: `checkout.` opened the literal dotted name, while process creation opened `checkout`. Now a path already in extended or device form (either separator) passes through. Any other path is normalized with the native `GetFullPathName` and gets `\\?\` or `\\?\UNC\` only when the normalized form is 248 characters or longer. A shorter path is opened exactly as given, so the common case resolves as it did before f8f829930. New Windows-only tests `TestResolvePathOfATrailingDotNamesTheUndottedDirectory` (short, coexisting dotted and undotted names, and long) and `TestWin32PathPrefixesOnlyLongPaths` were compiled with vet only.
+
 ### Phase 3: Allocate reports through an explicit path kind
 
 Expose the `report` kind consistently in schema and allocator with the same allocation authority as `review`, while preserving the four existing kinds and all write-profile boundaries. Acceptance: `path.generate(kind: "report")` returns a valid artifact path under the report subdirectory; callers with an existing write route can write it, and callers without that authority gain none. Existing `review`, `prompt`, `plan`, and `clone` behavior remains intact; callers discover the enum before sending the new kind to an old server. Cover native and already-authorized `path.write` routes and Pi mini-lead authority.

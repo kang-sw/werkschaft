@@ -150,3 +150,74 @@ func TestResolvePathFollowsAShortJunctionToALongTarget(t *testing.T) {
 		t.Fatalf("the junction's resolution %q is outside the target's forms %q", got, rootForms(target))
 	}
 }
+
+// A path ending in a period names the undotted directory, as an ordinary
+// Win32 open and CreateProcess see it, short or past MAX_PATH; where both
+// names exist (made through the extended-length form), the resolver still
+// answers what the unprefixed open sees, so admission and the process
+// agree on the directory.
+func TestResolvePathOfATrailingDotNamesTheUndottedDirectory(t *testing.T) {
+	base, err := resolvePath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkout := filepath.Join(base, "checkout")
+	if err := os.Mkdir(checkout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dotted := checkout + "."
+	if got, err := resolvePath(dotted); err != nil || got != checkout {
+		t.Fatalf("resolvePath(%q) = %q, %v, want %q", dotted, got, err, checkout)
+	}
+	if _, realCwd, err := admittedPlaces(base, dotted); err != nil || realCwd != checkout {
+		t.Fatalf("admittedPlaces(dotted cwd) = %q, %v, want %q", realCwd, err, checkout)
+	}
+
+	deep := longDir(t, base)
+	if got, err := resolvePath(deep + "."); err != nil || got != deep {
+		t.Fatalf("resolvePath(long path + \".\") = %q, %v, want %q", got, err, deep)
+	}
+
+	dual := filepath.Join(base, "dual")
+	for _, d := range []string{dual, dual + "."} {
+		if err := os.Mkdir(`\\?\`+d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = os.Remove(`\\?\` + dual + ".") })
+	// What an unprefixed open of the dotted name reaches.
+	seen, err := os.Stat(dual + ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolvePath(dual + ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The resolution, opened literally.
+	resolved, err := os.Stat(`\\?\` + got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(seen, resolved) || got != dual {
+		t.Fatalf("resolvePath(%q) with both names present = %q, want %q, the directory the unprefixed open sees", dual+".", got, dual)
+	}
+}
+
+// win32Path leaves a short path and every extended or device path, in
+// either separator, as given, and lengthens only a long one.
+func TestWin32PathPrefixesOnlyLongPaths(t *testing.T) {
+	for _, p := range []string{`C:\short\path`, `\\?\C:\x`, `//?/C:/x`, `\??\C:\x`, `\\.\pipe\x`, `//./pipe/x`} {
+		if got := win32Path(p); got != p {
+			t.Errorf("win32Path(%q) = %q, want it unchanged", p, got)
+		}
+	}
+	long := `C:\` + strings.Repeat(`d\`, 150) + "end"
+	if got, want := win32Path(long), `\\?\`+long; got != want {
+		t.Errorf("win32Path(long) = %q, want %q", got, want)
+	}
+	unc := `\\host\share\` + strings.Repeat(`d\`, 150) + "end"
+	if got, want := win32Path(unc), `\\?\UNC\host\share\`+strings.Repeat(`d\`, 150)+"end"; got != want {
+		t.Errorf("win32Path(long UNC) = %q, want %q", got, want)
+	}
+}

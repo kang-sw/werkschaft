@@ -15,9 +15,10 @@ import (
 // 1.23 filepath.EvalSymlinks keeps a junction as spelled, or fails below
 // one, so a job could enter a worktree through a junction while every
 // path it records lies outside. One open and close; p must exist. The
-// open takes p in the extended-length form (win32Path), so a deep
-// worktree or working directory resolves on a host whose Win32 calls stay
-// MAX_PATH-limited; the result comes back in the ordinary spelling.
+// open takes p as win32Path gives it: a deep worktree or working directory
+// in the extended-length form, so it resolves on a host whose Win32 calls
+// stay MAX_PATH-limited, and any other as given. The result comes back in
+// the ordinary spelling.
 func resolvePath(p string) (string, error) {
 	name, err := windows.UTF16PtrFromString(win32Path(p))
 	if err != nil {
@@ -36,31 +37,64 @@ func resolvePath(p string) (string, error) {
 	return filepath.Clean(stripExtendedPrefix(final)), nil
 }
 
-// win32Path is p in the extended-length form a raw CreateFile needs to
-// pass MAX_PATH: \\?\ before an absolute drive path, \\?\UNC\ in place of
-// a UNC path's leading \\. Go's os package applies this itself
-// (fixLongPath); a raw call does not. p is made absolute and cleaned
-// first, since the prefixed form resolves neither . nor .. nor forward
-// slashes. A path already in the extended (\\?\, \??\) or device (\\.\)
-// form comes back unchanged. internal/mcp's extendedLengthPath does the
-// same for its raw CreateFile; execjob cannot import it (mcp imports
-// execjob).
+// win32Path is p as a raw CreateFile must take it to open what an
+// ordinary Win32 open of p opens. Go's os package lengthens a long path
+// itself (fixLongPath); a raw call does not. internal/mcp's
+// extendedLengthPath does the same for its raw CreateFile, and this
+// mirrors it (execjob cannot import mcp, which imports execjob):
+//   - an extended (\\?\, \??\) or device (\\.\) path, in either separator,
+//     comes back unchanged;
+//   - otherwise p is normalized by the native GetFullPathName, which
+//     applies the Win32 rules the prefixed form skips (a trailing dot or
+//     space dropped, separators and . / .. resolved), so `checkout.` names
+//     `checkout` as an unprefixed open and CreateProcess would;
+//   - only a normalized path of 248 characters or more (MAX_PATH less room
+//     for an 8.3 name, os's bound) gains \\?\ or \\?\UNC\; a shorter p comes
+//     back as given, opened exactly as an ordinary call opens it.
 func win32Path(p string) string {
-	if strings.HasPrefix(p, `\\?\`) || strings.HasPrefix(p, `\??\`) || strings.HasPrefix(p, `\\.\`) {
+	if extendedOrDevicePath(p) {
 		return p
 	}
-	if !filepath.IsAbs(p) {
-		abs, err := filepath.Abs(p)
+	full, err := fullPathName(p)
+	if err != nil || len(full) < 248 || extendedOrDevicePath(full) {
+		return p
+	}
+	if len(full) >= 2 && full[0] == '\\' && full[1] == '\\' {
+		return `\\?\UNC\` + full[2:]
+	}
+	return `\\?\` + full
+}
+
+// extendedOrDevicePath reports whether p starts with \\?\, \\.\ (either
+// separator in each place) or \??\.
+func extendedOrDevicePath(p string) bool {
+	if len(p) < 4 {
+		return false
+	}
+	if p[:4] == `\??\` {
+		return true
+	}
+	sep := func(c byte) bool { return c == '\\' || c == '/' }
+	return sep(p[0]) && sep(p[1]) && (p[2] == '?' || p[2] == '.') && sep(p[3])
+}
+
+// fullPathName is windows.GetFullPathName of p.
+func fullPathName(p string) (string, error) {
+	name, err := windows.UTF16FromString(p)
+	if err != nil {
+		return "", err
+	}
+	buf := make([]uint16, windows.MAX_PATH)
+	for {
+		n, err := windows.GetFullPathName(&name[0], uint32(len(buf)), &buf[0], nil)
 		if err != nil {
-			return p
+			return "", err
 		}
-		p = abs
+		if int(n) < len(buf) {
+			return windows.UTF16ToString(buf[:n]), nil
+		}
+		buf = make([]uint16, n)
 	}
-	p = filepath.Clean(p)
-	if rest, ok := strings.CutPrefix(p, `\\`); ok {
-		return `\\?\UNC\` + rest
-	}
-	return `\\?\` + p
 }
 
 // finalPathByHandle is h's normalized DOS-volume path, which carries the
