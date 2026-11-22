@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -230,13 +231,19 @@ func TestPathGenerateGrantAllowsReplaceSaveAndRefusesReplacedTarget(t *testing.T
 		return strings.TrimSpace(toolText(t, resp))
 	}
 
+	// Windows refuses a rename-replace over a file that any handle has open
+	// (ERROR_ACCESS_DENIED), FILE_SHARE_DELETE or not, so the grant's held
+	// handle cannot allow it there; the delete-and-recreate save below covers
+	// the replaced-target refusal on Windows.
 	renamed := generate(1, "rename-save")
-	sibling := renamed + ".tmp"
-	if err := os.WriteFile(sibling, []byte("editor save"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(sibling, renamed); err != nil {
-		t.Fatalf("rename-replace over a granted artifact: %v", err)
+	if runtime.GOOS != "windows" {
+		sibling := renamed + ".tmp"
+		if err := os.WriteFile(sibling, []byte("editor save"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(sibling, renamed); err != nil {
+			t.Fatalf("rename-replace over a granted artifact: %v", err)
+		}
 	}
 	removed := generate(2, "delete-save")
 	if err := os.Remove(removed); err != nil {
@@ -257,6 +264,9 @@ func TestPathGenerateGrantAllowsReplaceSaveAndRefusesReplacedTarget(t *testing.T
 		t.Fatalf("recreated artifact = %q, %v", got, err)
 	}
 
+	if runtime.GOOS == "windows" {
+		return
+	}
 	resp := callToolOnce(t, s, 3, "path.write", map[string]any{
 		"session_key": key, "path": renamed, "content": "must not land",
 	})
@@ -389,6 +399,11 @@ func TestPathWriteRefusesSymlinkReplacementAndAcceptsOversizedContent(t *testing
 		t.Fatalf("symlink victim = %q, %v", got, err)
 	}
 
+	// Windows refuses to rename a directory with open handles beneath it
+	// (the held grants), so the parent-swap attack cannot be staged there.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	parentSwapPath := generate(5)
 	originalParent := filepath.Dir(parentSwapPath)
 	movedParent := originalParent + "-moved"
