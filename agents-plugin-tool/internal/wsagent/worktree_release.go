@@ -86,83 +86,83 @@ func releaseKey(checkout string) string {
 	return checkout
 }
 
-// primeCheckoutReleases reads, once per checkout per daemon, the release
-// marker of each checkout the runner has not seen yet, so the interactive
-// paths (Deliver, mail claims, process start, occupancy) answer from memory.
-// A release this daemon hears of later replaces the entry (CheckoutReleased).
-// An unreadable or malformed marker reads as no recorded release, as before:
-// every binding then counts.
-func (r *Runner) primeCheckoutReleases(checkouts []string) {
-	for _, checkout := range checkouts {
-		key := releaseKey(checkout)
-		r.relMu.Lock()
-		_, known := r.releases[key]
-		r.relMu.Unlock()
-		if known {
-			continue
-		}
-		at, ok, err := wsgit.WorktreeReleasedAt(checkout)
-		rel := checkoutRelease{at: at, ok: ok && err == nil}
-		r.relMu.Lock()
-		if _, known := r.releases[key]; !known {
-			if r.releases == nil {
-				r.releases = map[string]checkoutRelease{}
-			}
-			r.releases[key] = rel
-		}
-		r.relMu.Unlock()
-	}
-}
+// Runner.releases holds only completed releases, never "not released": a
+// release this daemon did not hear of (a notice that was lost, or a release
+// by another process) must still reach the next cold check, which reads the
+// marker (readCheckoutRelease). It is monotonic: an entry only moves to a
+// later instant, so a stale or reordered notice never moves it back.
 
-// knownCheckoutRelease is checkout's release from memory alone; a checkout
-// never primed reads as unreleased.
+// knownCheckoutRelease is checkout's release from memory alone: the latest
+// release this daemon heard of or read. A checkout with none reads as
+// unreleased. The interactive paths (Deliver to a running process, mail
+// claims, the occupancy scan's per-conversation check) use it.
 func (r *Runner) knownCheckoutRelease(checkout string) checkoutRelease {
 	r.relMu.Lock()
 	defer r.relMu.Unlock()
-	return r.releases[releaseKey(checkout)]
+	at, ok := r.releases[releaseKey(checkout)]
+	return checkoutRelease{at: at, ok: ok}
 }
 
-// checkoutReleaseOf is checkout's release, priming it from its marker at its
-// first use in this daemon.
-func (r *Runner) checkoutReleaseOf(checkout string) checkoutRelease {
-	r.primeCheckoutReleases([]string{checkout})
+// readCheckoutRelease is checkout's release as its durable marker records it,
+// or as memory knows it when that is later: the cold paths' check (a process
+// start, a load, a Pi revival, the occupancy scan's target). A marker found
+// is remembered; its absence never is. An unreadable or malformed marker
+// reads as no recorded release, as before: every binding then counts. It
+// costs the marker lookup: a stat of .git, a read of a gitfile, and a read of
+// the marker.
+func (r *Runner) readCheckoutRelease(checkout string) checkoutRelease {
+	if at, ok, err := wsgit.WorktreeReleasedAt(checkout); err == nil && ok {
+		r.noteCheckoutRelease(checkout, at)
+	}
 	return r.knownCheckoutRelease(checkout)
 }
 
 // noteCheckoutRelease records, in memory, that checkout's release completed
-// at at.
+// at at, unless memory already knows a later one.
 func (r *Runner) noteCheckoutRelease(checkout string, at time.Time) {
 	r.relMu.Lock()
 	defer r.relMu.Unlock()
 	if r.releases == nil {
-		r.releases = map[string]checkoutRelease{}
+		r.releases = map[string]time.Time{}
 	}
-	r.releases[releaseKey(checkout)] = checkoutRelease{at: at, ok: true}
+	key := releaseKey(checkout)
+	if have, ok := r.releases[key]; !ok || at.After(have) {
+		r.releases[key] = at
+	}
 }
 
 // releasedFrom is the first of checkouts whose known release came after rec
 // was bound; "" when there is none or rec is not release-bound. It reads
 // memory only.
 func (r *Runner) releasedFrom(rec Record, checkouts []string) string {
+	return r.releasedBy(rec, checkouts, r.knownCheckoutRelease)
+}
+
+// releasedOnDisk is releasedFrom with each checkout's marker read
+// (readCheckoutRelease): the cold paths' check, which a lost notice cannot
+// mislead.
+func (r *Runner) releasedOnDisk(rec Record, checkouts []string) string {
+	return r.releasedBy(rec, checkouts, r.readCheckoutRelease)
+}
+
+func (r *Runner) releasedBy(rec Record, checkouts []string, of func(string) checkoutRelease) string {
 	if !releaseBound(rec) {
 		return ""
 	}
 	for _, checkout := range checkouts {
-		if rel := r.knownCheckoutRelease(checkout); rel.ok && wsgit.BoundBeforeRelease(rec.CreatedAt, rec.CreatedUnixNano, rel.at) {
+		if rel := of(checkout); rel.ok && wsgit.BoundBeforeRelease(rec.CreatedAt, rec.CreatedUnixNano, rel.at) {
 			return checkout
 		}
 	}
 	return ""
 }
 
-// loadReleasedCheckout resolves rec's checkouts, primes their releases, and
-// reports the one whose release ended its binding: the load-time check of a
+// loadReleasedCheckout resolves rec's checkouts and reports, from their
+// markers, the one whose release ended its binding: the load-time check of a
 // record with no conversation yet (a Pi child's resume).
 func (r *Runner) loadReleasedCheckout(rec Record) string {
 	root, cwd := canonicalBinding(rec)
-	checkouts := resolveCheckouts(rec, root, cwd)
-	r.primeCheckoutReleases(checkouts)
-	return r.releasedFrom(rec, checkouts)
+	return r.releasedOnDisk(rec, resolveCheckouts(rec, root, cwd))
 }
 
 // checkoutReleasedRefusal is the start refusal of a conversation whose
@@ -192,13 +192,45 @@ func (c *conv) releasedLocked() string {
 	return c.releasedCheckout
 }
 
+// releasedOnDiskLocked is releasedLocked for a cold path (a process start):
+// it reads the checkouts' markers rather than trusting memory alone, so a
+// release whose notice never reached this daemon still refuses the start.
+// Only a release found is kept. c.mu is held.
+func (c *conv) releasedOnDiskLocked() string {
+	if c.releasedCheckout == "" {
+		c.releasedCheckout = c.r.releasedOnDisk(c.rec, c.checkouts)
+	}
+	return c.releasedCheckout
+}
+
 // noteReleased records, in memory, that checkout's release ended this
-// conversation's binding.
+// conversation's binding. It waits for an input the loop admitted before it
+// to reach the backend (admitInput), so once it returns no input admitted
+// before the release is still on its way.
 func (c *conv) noteReleased(checkout string) {
 	if checkout == "" {
 		return
 	}
+	c.inputMu.Lock()
+	defer c.inputMu.Unlock()
 	c.setStatus(func() { c.releasedCheckout = checkout })
+}
+
+// admitInput runs write, the step that hands a turn or a steer to the
+// backend, unless a release ended this conversation's binding; it then
+// returns that checkout and write does not run. The check is the last one
+// before the backend sees the input, and it and write share inputMu with
+// noteReleased: a release notice either marks the conversation first, and
+// the input is refused, or waits until write returned. Every earlier check
+// is only a snapshot. It runs in the loop.
+func (c *conv) admitInput(write func()) (refusedBy string) {
+	c.inputMu.Lock()
+	defer c.inputMu.Unlock()
+	if checkout := c.released(); checkout != "" {
+		return checkout
+	}
+	write()
+	return ""
 }
 
 // ReleasedConversation is one spawned conversation whose binding a release

@@ -66,11 +66,13 @@ func (c *conv) startProcess() error {
 	rec := c.record()
 	// A launch, wake or resume of a spawned conversation in a checkout
 	// released after it was bound is refused: the release ended that binding.
-	// The check reads memory only, and it and the starting mark share one mu
-	// hold with the release notice and the occupancy read: a notice either
-	// lands first (this start is refused) or finds the start live.
+	// A start is a cold path, so the check reads the checkouts' markers, not
+	// memory alone: a release whose notice never reached this daemon still
+	// refuses it. The check and the starting mark share one mu hold with the
+	// release notice and the occupancy read: a notice either lands first
+	// (this start is refused) or finds the start live.
 	c.mu.Lock()
-	checkout := c.releasedLocked()
+	checkout := c.releasedOnDiskLocked()
 	if checkout == "" {
 		c.starting = true
 	}

@@ -266,6 +266,12 @@ type conv struct {
 	// it then takes no input there, even while its process lives. It is
 	// never cleared. Under mu.
 	releasedCheckout string
+	// inputMu fences input against a release notice: the loop holds it
+	// from its last release check until a turn or steer has been handed to
+	// the backend (admitInput), and the notice holds it while it marks the
+	// conversation released (noteReleased). The conversation's own lock;
+	// only c.mu is ever taken under it.
+	inputMu sync.Mutex
 	// canonRoot and canonCwd are the record's Root and effective working
 	// directory (Record.workDir) with symlinks resolved
 	// (canonicalWorktreePath), once, in startConv; both are fixed for a
@@ -431,6 +437,11 @@ func (c *conv) mailChanged() {
 	if len(c.rec.Mail) > 0 {
 		c.kick()
 	}
+	if released == "" {
+		// A release that landed after the snapshot refused a steer above
+		// (admitInput); its senders are told too.
+		released = c.released()
+	}
 	if released != "" {
 		// Told whether or not the kick reached a start: a running turn, or
 		// a start deferred past the first holder scan, defers the kick, and
@@ -527,7 +538,13 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 	}
 	c.steered = append(c.steered, steered)
 	c.saveSteered()
-	if err := ctl.reports.Steer(text); err != nil {
+	var err error
+	if refusedBy := c.admitInput(func() { err = ctl.reports.Steer(text) }); refusedBy != "" {
+		// A release landed after mailChanged's snapshot: the mail is held
+		// and its sender told (mailChanged).
+		err = checkoutReleasedRefusal(refusedBy)
+	}
+	if err != nil {
 		c.steered = slices.DeleteFunc(c.steered, func(s steeredReport) bool { return s.Seq == seq })
 		c.saveSteered()
 		fmt.Fprintf(c.r.opts.Log, "agent %s: steer a mail: %v\n", c.rec.ReplyID, err)
@@ -1419,22 +1436,35 @@ func (c *conv) kickInput() {
 		// Keep drained input recoverable until the send succeeds.
 		c.update(func(rec *Record) { rec.Queued = queue })
 	}
-	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	// The turn reaches the page only once its send went through: a failed
 	// send leaves no user entry or turn line of its own (its error shows),
 	// so its retry shows the message once. The process's events for the
 	// turn are handled by this loop after kick returns, so they still
 	// follow the turn's start.
 	ordinary := cmd == nil
-	if cmd == nil {
-		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
-	} else if text, ok := c.playbookTurn(*cmd); ok {
-		// The runner expands a playbook command itself: the harness has
-		// no such command, and the turn carries the playbook's body.
-		ordinary = true
-		err = c.proc.Send(c.turnInput(text))
-	} else {
-		err = c.runCommand(*cmd)
+	// The release check above is a snapshot: a release notice can land
+	// between it and the send, so the send is admitted against it once more
+	// (admitInput).
+	refusedBy := c.admitInput(func() {
+		c.setStatus(func() { c.turn, c.lastErr = true, "" })
+		if cmd == nil {
+			err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
+		} else if text, ok := c.playbookTurn(*cmd); ok {
+			// The runner expands a playbook command itself: the harness
+			// has no such command, and the turn carries the playbook's
+			// body.
+			ordinary = true
+			err = c.proc.Send(c.turnInput(text))
+		} else {
+			err = c.runCommand(*cmd)
+		}
+	})
+	if refusedBy != "" {
+		// Nothing was sent: the input stays queued (persisted above), as a
+		// refused start keeps it, and the idle process may sleep again.
+		c.refuseStart(checkoutReleasedRefusal(refusedBy))
+		c.armIdle()
+		return
 	}
 	if err == nil && heldAgy {
 		// The holder accepted the prompt and outlives the daemon from here.

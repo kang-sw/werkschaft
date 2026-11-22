@@ -48,9 +48,16 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 		c.mu.Lock()
 		asleep := c.proc == nil && !c.turn
 		rec := c.rec
-		// From memory: the checkouts and their releases were settled when
-		// the conversation was loaded, and a release's notice updates them.
-		checkout = c.releasedLocked()
+		// A running process is checked from memory: its checkouts were
+		// settled when it was loaded, and a release's notice updates them.
+		// A sleeping one is about to start, a cold path, so its markers are
+		// read: a release whose notice never reached this daemon still
+		// refuses the wake and tells the sender.
+		if asleep {
+			checkout = c.releasedOnDiskLocked()
+		} else {
+			checkout = c.releasedLocked()
+		}
 		c.mu.Unlock()
 		switch {
 		case checkout != "":

@@ -110,12 +110,12 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	// memory.
 	c.canonRoot, c.canonCwd = canonicalBinding(rec)
 	if releaseBound(rec) {
-		// The checkouts it is bound to, and whether a release already ended
-		// that binding, are settled here, once, before any mail claim, rejoin
-		// or start can ask: those then read memory only.
+		// The checkouts it is bound to are settled here, once, and whether
+		// a release already ended that binding is read from their markers
+		// before any mail claim or rejoin can ask, so those can answer from
+		// memory; a process start reads the markers again.
 		c.checkouts = resolveCheckouts(rec, c.canonRoot, c.canonCwd)
-		r.primeCheckoutReleases(c.checkouts)
-		c.releasedCheckout = r.releasedFrom(rec, c.checkouts)
+		c.releasedCheckout = r.releasedOnDisk(rec, c.checkouts)
 	}
 	if !rec.Lead {
 		if level, source, err := r.currentWorkerPermission(rec); err == nil {

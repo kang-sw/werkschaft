@@ -311,13 +311,13 @@ type BoundWorktreeChild struct {
 // worktree or within it, oldest first then by address: each non-closed one,
 // and a closed one whose process the runner still holds (a close marks the
 // conversation closed before it stops the process). It reads memory only,
-// apart from worktree's release marker at its first use in this daemon.
+// apart from worktree's release marker.
 func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild {
 	target := canonicalWorktreePath(worktree)
 	if target == "" {
 		return nil
 	}
-	release := r.checkoutReleaseOf(target)
+	release := r.readCheckoutRelease(target)
 	type match struct {
 		createdAt string
 		child     BoundWorktreeChild

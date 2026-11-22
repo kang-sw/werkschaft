@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsgit"
 )
 
@@ -768,5 +769,250 @@ func TestCheckoutReleaseTellsSendersOfMailHeldBeforeTheRelease(t *testing.T) {
 	}
 	if n := h.backend.startCount(); n != starts {
 		t.Fatalf("mail to a released child started %d processes", n-starts)
+	}
+}
+
+// TestCheckoutReleaseTokenRouteRefusesForgedNotice: a worker token's release
+// notice acts only as far as the durable marker bears it out. With no marker
+// (a checkout never released) the notice is refused, with or without an
+// instant, and every binding stays current; one naming an instant other than
+// the marker's is refused too. The true notice then ends the binding.
+func TestCheckoutReleaseTokenRouteRefusesForgedNotice(t *testing.T) {
+	h, clk, wt, _ := releaseHarness(t)
+	lead := h.leadCaller()
+	victim, victimProc := h.agentRunning(lead, AgentSpawnRequest{Prompt: "running", Tier: "medium", Authority: "workdir-write", Worktree: wt})
+	_, workerProc := h.agentRunning(lead, AgentSpawnRequest{Prompt: "worker", Tier: "medium", Authority: "workdir-write"})
+	token := h.backend.start(h.backend.startCount() - 1).WSMCP.Env[EnvPiToken]
+	if token == "" {
+		t.Fatal("the worker has no capability token")
+	}
+	forged := clk.Now().Add(time.Hour).Format(time.RFC3339Nano)
+	for _, body := range []map[string]any{
+		{"worktree": wt, "released_at": forged, "cancel_turns": true},
+		{"worktree": wt},
+	} {
+		code, out := h.tokenCall(token, "worktree.released", body)
+		if code != http.StatusConflict || !strings.Contains(out, "no release marker") {
+			t.Fatalf("a notice for a never-released checkout must be refused: %d %s", code, out)
+		}
+	}
+	if c := h.runner.conv(victim); c.released() != "" {
+		t.Fatal("a forged notice must not end a binding")
+	}
+	if rel := h.runner.knownCheckoutRelease(canonicalWorktreePath(wt)); rel.ok {
+		t.Fatalf("a forged notice must not enter the release memory: %+v", rel)
+	}
+	if c := boundByAddress(h.runner.ActiveChildrenInWorktree(wt))[AgentAddress(victim)]; c.BoundBeforeRelease {
+		t.Fatalf("a forged notice must leave the binding current: %+v", c)
+	}
+	if n := procInterrupts(victimProc); n != 0 {
+		t.Fatalf("a forged notice interrupted %d turns", n)
+	}
+
+	at := releaseAfterBindings(t, clk, wt)
+	code, out := h.tokenCall(token, "worktree.released", map[string]any{"worktree": wt, "released_at": at.Add(time.Second).Format(time.RFC3339Nano)})
+	if code != http.StatusConflict || !strings.Contains(out, "does not match the release marker") {
+		t.Fatalf("a notice naming another instant must be refused: %d %s", code, out)
+	}
+	if c := h.runner.conv(victim); c.released() != "" {
+		t.Fatal("a mismatched notice must not end a binding")
+	}
+	code, out = h.tokenCall(token, "worktree.released", map[string]any{"worktree": wt, "released_at": at.Format(time.RFC3339Nano)})
+	if code != http.StatusOK {
+		t.Fatalf("the true notice = %d %s", code, out)
+	}
+	if c := h.runner.conv(victim); c.released() == "" {
+		t.Fatal("the true notice ends the earlier binding")
+	}
+	victimProc.reply("done")
+	workerProc.reply("done")
+}
+
+// TestCheckoutReleaseMemoryOnlyMovesLater: the runner's release memory holds
+// the latest release it knows of; an older notice or an older marker read
+// never moves it back.
+func TestCheckoutReleaseMemoryOnlyMovesLater(t *testing.T) {
+	h, clk, wt, _ := releaseHarness(t)
+	target := canonicalWorktreePath(wt)
+	earlier := clk.Now()
+	later := earlier.Add(time.Hour)
+	h.runner.noteCheckoutRelease(target, later)
+	h.runner.CheckoutReleased(wt, earlier, false)
+	if got := h.runner.knownCheckoutRelease(target); !got.ok || !got.at.Equal(later) {
+		t.Fatalf("an older notice moved the release back: %+v", got)
+	}
+	if err := wsgit.RecordWorktreeRelease(wt, earlier); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.runner.readCheckoutRelease(target); !got.ok || !got.at.Equal(later) {
+		t.Fatalf("an older marker moved the release back: %+v", got)
+	}
+}
+
+// TestCheckoutReleaseLostNoticeStillRefusesTheWake: a child's spawn found no
+// release marker, and its checkout's release notice never reached the
+// daemon. Its wake still reads the marker and is refused, telling the sender,
+// with no process started: the spawn's "not released" was never remembered.
+// That holds for a wake by Deliver, which reads the marker for a sleeping
+// child, and for one by mailbox mail, which reaches the process start with no
+// earlier check but memory: the start reads the marker itself. Each runs on
+// its own runner, since any marker read puts the release in that runner's
+// memory for every later check.
+func TestCheckoutReleaseLostNoticeStillRefusesTheWake(t *testing.T) {
+	for _, by := range []string{"deliver", "mail"} {
+		t.Run(by, func(t *testing.T) {
+			h, clk, wt, tells := releaseHarness(t)
+			mail := newFakeMail()
+			h.config.Mail = mail
+			h.runner.Close()
+			h.start()
+			child, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "workdir-write", Worktree: wt})
+			proc.reply("done")
+			eventually(t, "settled", func() bool { return h.state(child).Status == StatusIdle })
+			h.asleep(child)
+			key := h.keyOf(child)
+			eventually(t, "mailbox watched", func() bool { return mail.watched(key) })
+			releaseAfterBindings(t, clk, wt) // no notice reaches the runner
+			starts := h.backend.startCount()
+			if by == "deliver" {
+				if _, err := h.runner.Deliver(child, Delivery{From: "sender", Text: "wake"}); err != nil {
+					t.Fatal(err)
+				}
+				if got := tells.snapshot(); len(got) != 1 {
+					t.Fatalf("Deliver must tell its sender at once: %+v", got)
+				}
+			} else {
+				mail.deliverFrom(key, "sender", "wake up")
+				eventually(t, "sender told", func() bool { return len(tells.snapshot()) == 1 })
+			}
+			if got := tells.snapshot()[0]; !got.released || got.from != "sender" || canonicalWorktreePath(got.checkout) != canonicalWorktreePath(wt) {
+				t.Fatalf("the wake must be refused to its sender naming the worktree: %+v", got)
+			}
+			eventually(t, "wake refused", func() bool { return strings.Contains(h.state(child).Error, "released") })
+			if n := h.backend.startCount(); n != starts {
+				t.Fatalf("a wake after a lost notice started %d processes", n-starts)
+			}
+		})
+	}
+}
+
+// TestCheckoutReleaseNoticeDuringAStartRefusesItsTurn: a wake passed every
+// release check and its backend is starting when the release notice lands.
+// The turn is never sent: the last check, right before the send, sees the
+// release. The input stays queued and the refusal shows.
+func TestCheckoutReleaseNoticeDuringAStartRefusesItsTurn(t *testing.T) {
+	h, clk, wt, _ := releaseHarness(t)
+	child, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "workdir-write", Worktree: wt})
+	proc.reply("done")
+	eventually(t, "settled", func() bool { return h.state(child).Status == StatusIdle })
+	h.asleep(child)
+	starts := h.backend.startCount()
+	g := h.backend.gateStarts(t)
+	defer g.release()
+	if _, err := h.runner.Deliver(child, Delivery{From: "sender", Text: "wake"}); err != nil {
+		t.Fatal(err)
+	}
+	g.awaitEntered(t)
+	h.runner.CheckoutReleased(wt, releaseAfterBindings(t, clk, wt), false)
+	g.release()
+	next := h.backend.waitProc(t, starts)
+	noTurnSent(t, next, "a turn whose release landed during its start")
+	eventually(t, "refusal recorded", func() bool { return strings.Contains(h.state(child).Error, "released") })
+	if rec := h.record(child); len(rec.Queued) == 0 {
+		t.Fatalf("the refused turn's input must stay queued: %+v", rec.Queued)
+	}
+	if next.isClosed() {
+		t.Fatal("a release never stops a process")
+	}
+}
+
+// TestWorktreeReleaseRefusesPiSpawnsIntoIt: both Pi spawn paths, a worker's
+// nested pi.spawn through the token route and a lead's root Pi spawn, take
+// the worktree's release reservation like agent.spawn, so a release holding
+// it refuses them and no child binds; once it is free they bind.
+func TestWorktreeReleaseRefusesPiSpawnsIntoIt(t *testing.T) {
+	h, _ := childHarness(t)
+	wt := releaseTestWorktree(t, h.root)
+	sub := filepath.Join(wt, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	starts := h.backend.startCount()
+	h.spawnWorker("large")
+	token := h.token(starts)
+	if token == "" {
+		t.Fatal("the worker has no capability token")
+	}
+	lock, err := wsgit.WorktreeReleaseLock(context.Background(), wsgit.ExecRunner{}, wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	code, out := h.tokenCall(token, "spawn", map[string]any{"prompt": "nested", "tier": "small", "cwd": sub})
+	if code != http.StatusConflict || !strings.Contains(out, "currently being released") {
+		t.Fatalf("a nested pi.spawn into a worktree being released must be refused: %d %s", code, out)
+	}
+	for _, spec := range []SpawnSpec{
+		{Profile: PiWorkerProfile, Root: h.root, Cwd: sub, Prompt: "root by cwd", Tier: "small", Parent: &leadParent},
+		{Profile: PiWorkerProfile, Root: wt, Prompt: "root by root", Tier: "small", Parent: &leadParent},
+	} {
+		_, err := h.runner.Spawn(spec)
+		agentRefused(t, err, http.StatusConflict, "currently being released")
+	}
+	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 0 {
+		t.Fatalf("refused Pi spawns left bound children: %+v", got)
+	}
+	if err := lock.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := h.tokenCall(token, "spawn", map[string]any{"prompt": "nested", "tier": "small", "cwd": sub}); code != http.StatusCreated {
+		t.Fatalf("a nested pi.spawn with the reservation free = %d %s", code, out)
+	}
+	if _, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Cwd: sub, Prompt: "root by cwd", Tier: "small", Parent: &leadParent}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 2 {
+		t.Fatalf("bound Pi children = %+v, want 2", got)
+	}
+}
+
+// TestCheckoutReleaseReachesALegacyRecordWithoutCwd: a record written before
+// it carried a cwd runs in its root (Record.workDir). Rooted in a nested repo
+// of a released worktree, such a child is bound to that worktree by the rule
+// occupancy uses, so its wake after a restart is refused naming it.
+func TestCheckoutReleaseReachesALegacyRecordWithoutCwd(t *testing.T) {
+	h, clk, wt, tells := releaseHarness(t)
+	nested := filepath.Join(wt, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "init")
+	cmd.Dir = nested
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init nested: %v\n%s", err, out)
+	}
+	child, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "nested", Tier: "medium", Authority: "workdir-write", Worktree: nested})
+	proc.reply("done")
+	eventually(t, "settled", func() bool { return h.state(child).Status == StatusIdle })
+	h.asleep(child)
+	h.runner.Close()
+	rec := h.record(child)
+	rec.Cwd, rec.CreatedUnixNano = "", 0
+	if err := writeRecord(wsdashboard.SessionDir(h.dir, child), rec); err != nil {
+		t.Fatal(err)
+	}
+	releaseAfterBindings(t, clk, wt)
+	h.start()
+	starts := h.backend.startCount()
+	if _, err := h.runner.Deliver(child, Delivery{From: "sender", Text: "wake"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tells.snapshot(); len(got) != 1 || !got[0].released || canonicalWorktreePath(got[0].checkout) != canonicalWorktreePath(wt) {
+		t.Fatalf("the legacy child's wake must be refused naming the worktree: %+v", got)
+	}
+	if n := h.backend.startCount(); n != starts {
+		t.Fatalf("a refused wake started %d processes", n-starts)
 	}
 }
