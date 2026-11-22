@@ -15,8 +15,3 @@ func dirGeneration(info os.FileInfo) string {
 	}
 	return "mtime:" + info.ModTime().UTC().Format("20060102T150405.000000000")
 }
-
-// stableReadError reports a read error a retry will not clear. On Windows an
-// access-denied error is also what a pending delete or a scanner's exclusive
-// open returns, so no read error is treated as stable.
-func stableReadError(error) bool { return false }

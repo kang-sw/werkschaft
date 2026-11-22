@@ -259,6 +259,14 @@ var schema = []string{
 		import_detail TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE INDEX IF NOT EXISTS legacy_captures_session ON legacy_captures(reply_id)`,
+	// Consecutive staging passes on which a bundled path failed with a
+	// confirmable read error (capture.go confirmUnread).
+	`CREATE TABLE IF NOT EXISTS legacy_unread (
+		path TEXT PRIMARY KEY,
+		first_at TEXT NOT NULL,
+		passes INTEGER NOT NULL,
+		error TEXT NOT NULL DEFAULT ''
+	)`,
 	// One row per discovered session directory and the generation it was
 	// captured under; a deleted or recreated directory drops its captures.
 	`CREATE TABLE IF NOT EXISTS legacy_sessions (

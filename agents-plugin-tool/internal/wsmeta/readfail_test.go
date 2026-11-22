@@ -173,3 +173,114 @@ func TestLinkToFIFOIsUnreadableAndNeverBlocks(t *testing.T) {
 		t.Fatalf("permission = %+v, want fail-closed", p)
 	}
 }
+
+var errACLDenied = errors.New("access denied (test)")
+
+// A selector its ACL denies for good fails closed for its own session once
+// the denial persisted across passes; it no longer blocks every session's
+// import. A sharing violation never confirms.
+func TestPersistentAccessDenialBecomesAnInvalidSelection(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	prev := classifyReadError
+	classifyReadError = func(err error) readClass {
+		if errors.Is(err, errACLDenied) {
+			return classConfirmable
+		}
+		return classTransient
+	}
+	t.Cleanup(func() { classifyReadError = prev })
+	const shared = "sessions/worker/agent.json"
+	now := testNow
+	sharing := true
+	opts := testOpts()
+	opts.Now = func() time.Time { return now }
+	opts.ReadFile = func(p string) ([]byte, error) {
+		switch {
+		case p == filepath.Join(dir, filepath.FromSlash(fencePerm)):
+			return nil, &fs.PathError{Op: "open", Path: p, Err: errACLDenied}
+		case sharing && p == filepath.Join(dir, filepath.FromSlash(shared)):
+			return nil, &fs.PathError{Op: "open", Path: p, Err: errors.New("sharing violation")}
+		}
+		return os.ReadFile(p)
+	}
+	s := openTest(t, dir, opts)
+	// Passes in quick succession do not confirm, however many there are.
+	for i := 0; i < UnreadConfirmPasses+2; i++ {
+		res, err := s.Stage(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{fencePerm, shared}; !reflect.DeepEqual(res.Unread, want) {
+			t.Fatalf("pass %d unread = %v, want %v", i, res.Unread, want)
+		}
+	}
+	now = now.Add(UnreadConfirmAfter)
+	res, err := s.Stage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{shared}; !reflect.DeepEqual(res.Unread, want) {
+		t.Fatalf("unread after the denial persisted = %v, want only the sharing violation", res.Unread)
+	}
+	if c := captureMap(t, s)[fencePerm]; c.State != CaptureUnreadable {
+		t.Fatalf("denied selector = %+v", c)
+	}
+	// The sharing violation clears; the import proceeds with the denied
+	// selector as a fail-closed invalid row for that session alone.
+	sharing = false
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := snap.Permissions["hostedlead"]; p.State != "invalid" {
+		t.Fatalf("denied selector imported as %+v, want invalid", p)
+	}
+	if _, ok := snap.Records["worker"]; !ok {
+		t.Fatal("the other session's record was not imported")
+	}
+}
+
+// A denial that clears before it is confirmed starts its count over.
+func TestClearedDenialResetsItsCount(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	prev := classifyReadError
+	classifyReadError = func(error) readClass { return classConfirmable }
+	t.Cleanup(func() { classifyReadError = prev })
+	now := testNow
+	failing := true
+	opts := testOpts()
+	opts.Now = func() time.Time { return now }
+	opts.ReadFile = func(p string) ([]byte, error) {
+		if failing && p == filepath.Join(dir, filepath.FromSlash(fencePerm)) {
+			return nil, &fs.PathError{Op: "open", Path: p, Err: errACLDenied}
+		}
+		return os.ReadFile(p)
+	}
+	s := openTest(t, dir, opts)
+	for i := 0; i < UnreadConfirmPasses; i++ {
+		if _, err := s.Stage(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failing = false
+	if _, err := s.Stage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	failing = true
+	now = now.Add(UnreadConfirmAfter)
+	res, err := s.Stage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(res.Unread, []string{fencePerm}) {
+		t.Fatalf("unread = %v: a cleared denial was confirmed", res.Unread)
+	}
+	if c := captureMap(t, s)[fencePerm]; c.State != CapturePresent {
+		t.Fatalf("selector = %+v, want the earlier readable capture", c)
+	}
+}

@@ -372,6 +372,9 @@ type legacyRead struct {
 	// transient marks a read that failed for a reason a retry may clear;
 	// state is then unset and the previous capture row, if any, stands.
 	transient bool
+	// confirmable marks a transient failure that reads as permanent once it
+	// persists (readClass).
+	confirmable bool
 }
 
 // readLegacy reads one bundled file. A dangling symbolic link, a directory
@@ -385,10 +388,7 @@ func readLegacy(abs string, readFile func(string) ([]byte, error)) legacyRead {
 		return legacyRead{state: CaptureAbsent, digest: absentDigest}
 	}
 	if err != nil {
-		if stableReadError(err) {
-			return legacyRead{state: CaptureUnreadable, err: err.Error()}
-		}
-		return legacyRead{transient: true, err: err.Error()}
+		return readFailure(err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
 		// A link counts by its target: dangling is an existing, unreadable
@@ -397,10 +397,8 @@ func readLegacy(abs string, readFile func(string) ([]byte, error)) legacyRead {
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			return legacyRead{state: CaptureUnreadable, err: "dangling symbolic link"}
-		case err != nil && stableReadError(err):
-			return legacyRead{state: CaptureUnreadable, err: err.Error()}
 		case err != nil:
-			return legacyRead{transient: true, err: err.Error()}
+			return readFailure(err)
 		}
 		info = target
 	}
@@ -416,15 +414,48 @@ func readLegacy(abs string, readFile func(string) ([]byte, error)) legacyRead {
 			// Removed (or its link target removed) after the stat: read as
 			// changed, and re-read by the next pass.
 			return legacyRead{transient: true, err: err.Error()}
-		case stableReadError(err):
-			return legacyRead{state: CaptureUnreadable, err: err.Error()}
 		}
-		return legacyRead{transient: true, err: err.Error()}
+		return readFailure(err)
 	}
 	if data == nil {
 		data = []byte{}
 	}
 	return legacyRead{state: CapturePresent, bytes: data, digest: contentDigest(data), mtime: info.ModTime()}
+}
+
+// readClass sorts a read error: transient errors may clear on a later pass;
+// a stable one is the file's state; a confirmable one is transient until it
+// persists across UnreadConfirmPasses passes spanning UnreadConfirmAfter,
+// then reads as stable.
+type readClass int
+
+const (
+	classTransient readClass = iota
+	classStable
+	classConfirmable
+)
+
+// classifyReadError is the platform's read error classification (a test
+// seam).
+var classifyReadError = platformReadErrorClass
+
+// A confirmable read failure (Windows access denied: an ACL, or a pending
+// delete) becomes a permanent, unreadable input once it persisted across this
+// many staging passes and this long, so a selector its ACL denies fails
+// closed for its own session instead of blocking every session's import.
+const (
+	UnreadConfirmPasses = 3
+	UnreadConfirmAfter  = 5 * time.Second
+)
+
+func readFailure(err error) legacyRead {
+	switch classifyReadError(err) {
+	case classStable:
+		return legacyRead{state: CaptureUnreadable, err: err.Error()}
+	case classConfirmable:
+		return legacyRead{transient: true, confirmable: true, err: err.Error()}
+	}
+	return legacyRead{transient: true, err: err.Error()}
 }
 
 // errNotRegular reports a bundled path that opened as something other than a
@@ -438,8 +469,8 @@ func contentDigest(data []byte) string {
 
 type captureMeta struct {
 	state, digest, fenceState, fenceDigest, fenceWitness, fenceKind string
-	fenceRequired                                                 bool
-	fenceMtime                                         int64
+	fenceRequired                                                   bool
+	fenceMtime                                                      int64
 }
 
 // fenceProven reports whether the migration's own fence on a capture is the
@@ -503,12 +534,55 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		return res, err
 	}
 
+	unread := map[string]bool{}
+	rows, err = tx.QueryContext(ctx, `SELECT path FROM legacy_unread`)
+	if err != nil {
+		return res, err
+	}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return res, err
+		}
+		unread[p] = true
+	}
+	if err := rows.Close(); err != nil {
+		return res, err
+	}
+
 	seen := map[string]bool{}
 	capture := func(rel, store, replyID, gen string) error {
 		seen[rel] = true
 		res.Files++
 		got := readLegacy(filepath.Join(s.dir, filepath.FromSlash(rel)), s.opts.ReadFile)
 		prev, had := existing[rel]
+		// A fenced original is never given up to a confirmed failure: the
+		// live file is the fence's result.
+		if got.confirmable && !(had && prev.fenceState != FenceNone) {
+			// Once confirmed, the capture stays unreadable while the same
+			// denial persists; only a successful read changes it.
+			confirmed := had && prev.state == CaptureUnreadable
+			if !confirmed {
+				var err error
+				if confirmed, err = s.confirmUnread(ctx, tx, rel, got.err); err != nil {
+					return err
+				}
+			}
+			if confirmed {
+				got = legacyRead{state: CaptureUnreadable, err: got.err}
+			}
+		}
+		if !got.confirmable || !got.transient {
+			if unread[rel] {
+				delete(unread, rel)
+				if _, err := tx.ExecContext(ctx, `DELETE FROM legacy_unread WHERE path = ?`, rel); err != nil {
+					return err
+				}
+			}
+		} else {
+			delete(unread, rel)
+		}
 		if got.transient {
 			// Keep the row as staged: a fenced original in particular must
 			// survive, since its live file is the fence's result. Commit
@@ -647,6 +721,12 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		return res, err
 	}
 
+	// Failure counts of paths no longer discovered are dropped.
+	for p := range unread {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM legacy_unread WHERE path = ?`, p); err != nil {
+			return res, err
+		}
+	}
 	// Files gone since an earlier pass are no longer inputs.
 	for p := range existing {
 		if !seen[p] {
@@ -659,6 +739,31 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 	sort.Strings(res.Unread)
 	sort.Strings(res.Pending)
 	return res, nil
+}
+
+// confirmUnread counts one more pass on which rel failed with a confirmable
+// error and reports whether the failure is now confirmed permanent. A
+// committed Stage keeps the count; a refused Commit rolls its pass back.
+func (s *Store) confirmUnread(ctx context.Context, tx *sql.Tx, rel, readErr string) (bool, error) {
+	now := s.opts.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO legacy_unread(path, first_at, passes, error) VALUES(?, ?, 1, ?)
+		ON CONFLICT(path) DO UPDATE SET passes = passes + 1, error = excluded.error`, rel, now.Format(time.RFC3339Nano), readErr); err != nil {
+		return false, err
+	}
+	var firstAt string
+	var passes int
+	if err := tx.QueryRowContext(ctx, `SELECT first_at, passes FROM legacy_unread WHERE path = ?`, rel).Scan(&firstAt, &passes); err != nil {
+		return false, err
+	}
+	first, err := time.Parse(time.RFC3339Nano, firstAt)
+	if err != nil {
+		return false, err
+	}
+	if passes < UnreadConfirmPasses || now.Sub(first) < UnreadConfirmAfter {
+		return false, nil
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM legacy_unread WHERE path = ?`, rel)
+	return err == nil, err
 }
 
 // sessionGenerations lists the session directories and their generations.

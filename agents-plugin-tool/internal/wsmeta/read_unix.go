@@ -3,7 +3,9 @@
 package wsmeta
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"syscall"
 
@@ -27,4 +29,13 @@ func readRegularFile(path string) ([]byte, error) {
 		return nil, errNotRegular
 	}
 	return io.ReadAll(f)
+}
+
+// platformReadErrorClass: POSIX opens meet no sharing violations, so a
+// permission error is the file's state; anything else may clear.
+func platformReadErrorClass(err error) readClass {
+	if errors.Is(err, fs.ErrPermission) {
+		return classStable
+	}
+	return classTransient
 }

@@ -3,9 +3,7 @@
 package wsmeta
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"syscall"
 )
@@ -18,10 +16,4 @@ func dirGeneration(info os.FileInfo) string {
 		return fmt.Sprintf("ino:%d:%d", uint64(st.Dev), uint64(st.Ino))
 	}
 	return "mtime:" + info.ModTime().UTC().Format("20060102T150405.000000000")
-}
-
-// stableReadError reports a read error a retry will not clear. POSIX opens
-// meet no sharing violations, so a permission error is the file's state.
-func stableReadError(err error) bool {
-	return errors.Is(err, fs.ErrPermission)
 }
