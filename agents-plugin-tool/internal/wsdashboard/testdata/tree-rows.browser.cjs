@@ -160,8 +160,15 @@ const base = process.env.TREE_ROWS_BASE;
     await shown(false);
     await frame.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)));
     const oldHash = await frame.locator('#r-tree').getAttribute('data-h');
-    assert.deepEqual(deltaKeys(await update('parent', 'hidden-parent')), ['agent-parent']);
-    assert.deepEqual(deltaKeys(await update('child', 'hidden-child')), ['agent-child']);
+    // cd1c99614: a cached (hidden) frame stops its main stream, so no event
+    // arrives while hidden; the daemon state still accumulates and the frame
+    // resyncs from the full snapshot when it is shown again.
+    const quiet = async (op, text) => assert.equal((await fetch(process.env.TREE_ROWS_UPDATES + '?' + new URLSearchParams({ op, text }))).status, 204);
+    const hiddenStart = events.length;
+    await quiet('parent', 'hidden-parent');
+    await quiet('child', 'hidden-child');
+    await frame.evaluate(() => new Promise(resolve => setTimeout(resolve, 300)));
+    assert.equal(events.length, hiddenStart, 'a hidden cached frame receives no stream events');
     assert.equal(await frame.locator('#r-tree').getAttribute('data-h'), oldHash, 'hidden frame did not swap');
     assert(!(await frame.locator('#r-tree').textContent()).includes('hidden-parent'));
     await shown(true);

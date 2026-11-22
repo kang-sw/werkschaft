@@ -86,6 +86,8 @@ const report = {cases: [], screenshots: [], errors: []};
         const full = path.join(output, `impl-${id}-${state}.png`);
         await page.screenshot({path: full});
         const box = await pill.boundingBox();
+        // cbf0bf9e1: the capsule is hidden at idle top, so there is nothing to compare.
+        if (counts.upd === 0 && await page.evaluate(() => window.__holdScroller().scrollTop <= 4)) { assert.equal(box, null, `${id} ${state}: capsule hidden at the top with no pending update`); return; }
         assert(box, `${id} ${state}: home capsule is always visible outside overview`);
         assert.equal(box.height, 28, `${id} ${state}: capsule retains accepted 28px height`);
         const anchor = box;
@@ -120,7 +122,8 @@ const report = {cases: [], screenshots: [], errors: []};
       }
       await page.evaluate(() => {window.__holdScroller().scrollTop = 0; window.wbPill.update();});
       await frames(14);
-      assert.equal(await pill.locator('.oq-arr').isVisible(), true, 'home arrow is present at idle top');
+      // cbf0bf9e1: the top capsule hides at the very top with no pending update and nothing above.
+      assert.equal(await pill.locator('.oq-arr').isVisible(), false, 'home arrow is hidden at idle top');
       assert.equal(await label.isVisible(), false);
       await capture('idle-top', {upd: 0, open: 0, ans: 0});
       await scrollToTopic('T04');

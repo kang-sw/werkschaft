@@ -41,6 +41,7 @@ const [base, emptyBase] = process.argv.slice(2);
       await dialog.waitFor({ state: 'visible' });
     }
     async function rootIsEmpty() {
+      await page.waitForFunction(() => document.documentElement.getAttribute('data-rid') === '', null, {timeout: 5000}).catch(() => {});
       await current().locator('#grid').waitFor();
       assert.equal(await page.locator('html').getAttribute('data-rid'), '');
       assert.equal(await page.locator('.rs.cur').count(), 0);

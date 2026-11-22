@@ -64,12 +64,14 @@ async function openRail(page) {
         await home.waitFor({ state: 'visible' });
         assert.equal(await home.count(), 1);
         assert.equal(await home.getAttribute('title'), label);
-        assert.equal(await home.evaluate(el => el.previousElementSibling.id), 'gear');
+        assert.equal(await home.evaluate(el => el.previousElementSibling.className), 'btn gear r-config-global'); // ed920bb24: the global-settings gear sits between Settings and Home
+        assert.equal(await home.evaluate(el => el.previousElementSibling.previousElementSibling.id), 'gear');
         assert.equal(await home.locator('use').getAttribute('href'), '#l-house');
         const gearBox = await page.locator('#gear').boundingBox(), homeBox = await home.boundingBox();
-        assert.equal(homeBox.width, gearBox.width, 'Home has Settings width');
         assert.equal(homeBox.height, gearBox.height, 'Home has Settings height');
-        assert.ok(homeBox.x >= gearBox.x + gearBox.width, 'Home is immediately right of Settings');
+        assert.ok(homeBox.x >= gearBox.x + gearBox.width, 'Home is right of Settings');
+        const globalBox = await page.locator('.rfoot > .r-config-global').boundingBox();
+        assert.ok(homeBox.x >= globalBox.x + globalBox.width, 'Home is immediately right of the global settings gear');
         assert.equal(await page.locator('.rfoot').evaluate(el => el.scrollWidth <= el.clientWidth), true);
         if (shots && !desktop) {
           fs.mkdirSync(shots, { recursive: true });
