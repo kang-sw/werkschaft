@@ -436,3 +436,21 @@ Verification:
 - The stall, log, locator, tail-read and frame-trace tests pass with `-race -count=3`.
 - `go vet ./internal/wsagent` is clean on the host and with `GOOS=windows`. `git diff --check` is clean.
 - Mutation checks, each made a test fail: dropping the gate, using the later reading, accepting any `server.go:` tag, substring token matching, and restoring the last-line guard instead (fails the near-rollover subtest). Removing the continue's request line from the rig fails the continue test.
+
+#### Edition (6549873da) - 2026-11-22
+
+The codex delta review of 58fa56d2e..96ba5618f found that the 7b58889ad gate still let an earlier prompt stand in for the current one. The lead settled the fix, which supersedes the window comparison in the 7b58889ad Edition.
+
+- **No-skew attribution rule.** The `session/prompt` request line that enables a headerless verdict must be at or after the boundary itself, with no skew. In a repeated fall-back hour, its earlier reading must be at or after the boundary.
+  - The skew margin stays only in the header lookback (the main-header case), which suppresses cuts and never enables one.
+  - Why: the runner reads the boundary before the send, and agy stamps the receipt on the same host clock, so the current prompt's line is never before the boundary. A request line before it may belong to an earlier prompt: a cached predecessor worker can receive a prompt 1 s before the boundary that ends without headers, while its replacement serves the current prompt in its own file. A missed line only gives unknown, which never cuts.
+- **Fixtures.**
+  - The former positive skew case (request line at b-1s) now gives unknown, and so does a variant at b-1µs. A request line at b+1ms gives headerless.
+  - The two-worker subtest adds the reviewer's variant. Worker A has a main header at b-20s and its own exact request line for an earlier prompt at b-1s, with no header after it. B logs its header in its own file. The result is unknown. The positive case with A's request line at b gives headerless.
+  - Minor: the locate-once fixture now adds a log that would read headerless, and checks that the second firing returns the first locate failure's reason.
+
+Verification:
+- The stall, log, locator, tail-read and frame-trace tests pass with `-race -count=3`.
+- `go test ./internal/wsagent -run Agy -timeout 300s` passes.
+- `go vet ./internal/wsagent` is clean on the host and with `GOOS=windows`. `git diff --check` is clean.
+- Mutation checks, each made a test fail: comparing the request line against boundary-skew (fails the b-1s, b-1µs and two-worker cases), using its later reading (fails the repeated-hour case), and rescanning after a locate failure (fails locate-once).
