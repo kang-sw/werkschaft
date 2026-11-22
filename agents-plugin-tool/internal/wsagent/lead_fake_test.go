@@ -963,10 +963,6 @@ func newLeadHarness(t *testing.T) *leadHarness {
 	return h
 }
 
-// hostedLeadLauncher stands in for the daemon's ws-mcp command
-// (agentMCPCommand in cmd/ws-mcp): the selected package staged from build inputs
-// at each process start, its launcher and its selection warning.
-// The command names no real file; the holders are fakes.
 // fakeHarness is the command the lead harnesses register for harness name:
 // a path no file answers to, because the fake holder never runs it. The
 // path must be absolute on the host: harnessBinaryOf fingerprints a program
@@ -980,6 +976,10 @@ func fakeHarness(name string) string {
 	return "/opt/harness/" + name
 }
 
+// hostedLeadLauncher stands in for the daemon's ws-mcp command
+// (agentMCPCommand in cmd/ws-mcp): the selected package staged from build inputs
+// at each process start, its launcher and its selection warning.
+// The command names no real file; the holders are fakes.
 func hostedLeadLauncher(version string) func(string) (MCPCommand, error) {
 	return func(root string) (MCPCommand, error) {
 		name, warning, err := ResolveHostedPackage()

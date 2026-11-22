@@ -247,6 +247,27 @@ test("the head anchor is displaced by the deform field at the column's head anch
   headTranslate({ grid: [2, 2], bones: { hand: { pivot: [8, 8], region: [[0, 10], [16, 10], [16, 16], [0, 16]], feather: 0, motion: lift } } }, 4);
 });
 
+test("a gesture that supplies its own head anchor rides its own deform, never the pose column's", () => {
+  const lift = { oscillate: { ty: [-4, -4], hz: 1 } };
+  const breath = { grid: [2, 2], bones: { breath: { pivot: [8, 8], region: everything, motion: lift } } };
+  const headY = gestureDeform => {
+    const rec = recorder();
+    const pack = deformPack(breath);
+    pack.manifest.gestures.wave = {};
+    pack.manifest.outfits.street.gestures = { wave: { headAnchor: [8, 10], ...(gestureDeform ? { deform: gestureDeform } : {}), layers: [{ file: "hand.png" }] } };
+    const view = rig(pack, rec).view("stand", "wave", "idle", []);
+    rec.rig = view;
+    rec.clear();
+    view.render(0, gaze);
+    return rec.composite().filter(entry => entry.op === "translate").map(entry => entry.args);
+  };
+  const plain = headY(null);
+  assert.ok(plain.some(([x, y]) => x === 8 && y === 10), `no gesture deform leaves the gesture head anchor still: ${JSON.stringify(plain)}`);
+  assert.ok(!plain.some(([, y]) => Math.abs(y - 6) < 1e-9), "the pose deform does not move the gesture head");
+  const own = headY(breath);
+  assert.ok(own.some(([x, y]) => x === 8 && Math.abs(y - 6) < 1e-9), `the gesture's own deform moves the head: ${JSON.stringify(own)}`);
+});
+
 test("deform.roll rotates the composed stack about the head anchor by rotDeg only", () => {
   const roll = { motion: { oscillate: { rotDeg: [2, 2], tx: [5, 5], hz: 1 } } };
   const rec = recorder();

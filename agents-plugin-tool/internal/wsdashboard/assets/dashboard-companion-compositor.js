@@ -572,7 +572,7 @@
       const gestureAnchor = point(outfit ? act?.headAnchor : null, null);
       const anchor = gestureAnchor || point(body.headAnchor, pivot);
       // The head rides the deform of the column that supplied its anchor.
-      const anchorDeform = gestureAnchor && gestureDeform ? gestureDeform : poseDeform;
+      const anchorDeform = gestureAnchor ? gestureDeform : poseDeform;
       const noShift = { x: 0, y: 0 };
       let headShift = noShift;
       const scale = clamp(finite(body.headScale, 1), 0.1, 4);

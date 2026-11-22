@@ -414,7 +414,7 @@ func agentToolDefinitions() []map[string]any {
 					"system_prompt_path": stringProperty("File to append; absolute or relative to session root. Excludes system_prompt."),
 					"authority":          stringProperty("read-only, workdir-write or full; capped at your own level."),
 					"cwd":                stringProperty("Absolute, or relative to the session's root. Default: the session's root. Excludes worktree."),
-					"worktree":           stringProperty("Acquired worktree as cwd and project root; absolute or relative to session root. Excludes cwd."),
+					"worktree":           stringProperty("Acquired worktree as cwd+root; child gets its own key. Absolute or root-relative. Excludes cwd."),
 					"label":              stringProperty("Defaults to prompt's first line."),
 					"format":             format,
 				},

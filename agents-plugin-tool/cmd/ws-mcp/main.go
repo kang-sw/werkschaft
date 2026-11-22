@@ -19,7 +19,7 @@ import (
 // returns the process exit code.
 var hiddenCommands = map[string]func(args []string) int{}
 
-var version = "0.51.0-dev"
+var version = "0.51.1-dev"
 var sourceCommit = "dev"
 
 func main() {
