@@ -688,7 +688,14 @@
       "registered_at": "2026-11-22T08:45:27Z"
     },
     "261122-feat-ws-companion-director": {
-      "registered_at": "2026-11-22T00:24:05Z"
+      "registered_at": "2026-11-22T00:24:05Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T09:22:28Z"
+      }
     },
     "261122-feat-ws-harness-native-subagent-preference": {
       "registered_at": "2026-11-22T08:46:10Z",
