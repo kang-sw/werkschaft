@@ -1,14 +1,15 @@
 use std::{
-    ffi::CStr,
+    cell::RefCell,
+    ffi::{c_char, c_int, CStr, CString},
     sync::{Arc, OnceLock},
 };
 
-use block2::Block;
+use block2::{Block, RcBlock};
 use objc2::{
-    define_class, ffi, msg_send,
+    class, define_class, ffi, msg_send,
     rc::{Retained, Weak},
     runtime::{AnyClass, AnyObject, NSObject, ProtocolObject, Sel},
-    sel, DefinedClass, MainThreadOnly,
+    sel, DefinedClass, MainThreadOnly, Message,
 };
 use objc2_foundation::{ns_string, MainThreadMarker, NSError, NSObjectProtocol, NSString};
 use objc2_web_kit::{
@@ -248,14 +249,21 @@ fn swallows_cancel(style_mask: usize) -> bool {
 }
 
 extern "C" {
-    // Foundation; variadic, so objc2-foundation does not bind it.
-    fn NSLog(format: &NSString, ...);
+    // libc; variadic.
+    fn syslog(priority: c_int, format: *const c_char, ...);
 }
 
+// LOG_NOTICE in <syslog.h>.
+const LOG_NOTICE: c_int = 5;
+
 /// One line in the unified log; stderr is lost for a Finder-launched app.
+/// syslog's `%s` argument is logged in the clear, where NSLog's arguments
+/// (and objc2's static NSStrings) show as `<private>`.
 fn log(message: &str) {
-    let message = NSString::from_str(message);
-    unsafe { NSLog(ns_string!("%@"), &*message) };
+    let Ok(message) = CString::new(message) else {
+        return;
+    };
+    unsafe { syslog(LOG_NOTICE, c"%s".as_ptr(), message.as_ptr()) };
 }
 
 // Superclass of the guarded window class, where an allowed cancel continues.
@@ -324,28 +332,124 @@ fn add_cancel_guard(object: &AnyObject, name: &CStr) -> Guard {
     Guard::NotFound
 }
 
+// kVK_Escape in Carbon's HIToolbox/Events.h.
+const KEY_ESCAPE: u16 = 53;
+// NSEventMaskKeyDown: 1 << NSEventTypeKeyDown (10).
+const EVENT_MASK_KEY_DOWN: u64 = 1 << 10;
+// Esc keyDowns remembered while WebKit decides whether the page handled them.
+const PENDING_ESCAPES: usize = 8;
+
+/// Whether the key monitor drops a keyDown: only WebKit's re-send of an Esc
+/// the page left unhandled, and only in native full screen.
+fn drops_key(key_code: u16, resent: bool, style_mask: usize) -> bool {
+    key_code == KEY_ESCAPE && resent && style_mask & STYLE_MASK_FULL_SCREEN != 0
+}
+
+/// Esc keyDowns seen once. A second sighting of the same event is WebKit's
+/// re-send; it is forgotten then. The oldest entry goes once full, since the
+/// page handled it and WebKit never re-sent it.
+struct Pending<T>(Vec<T>);
+
+impl<T: PartialEq> Pending<T> {
+    const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn resent(&mut self, event: T) -> bool {
+        if let Some(index) = self.0.iter().position(|seen| *seen == event) {
+            self.0.remove(index);
+            return true;
+        }
+        if self.0.len() == PENDING_ESCAPES {
+            self.0.remove(0);
+        }
+        self.0.push(event);
+        false
+    }
+}
+
+/// An NSEvent compared by identity: WebKit re-sends the very object.
+struct EventRef(Retained<AnyObject>);
+
+impl PartialEq for EventRef {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(&*self.0, &*other.0)
+    }
+}
+
+thread_local! {
+    static ESCAPES: RefCell<Pending<EventRef>> = const { RefCell::new(Pending::new()) };
+}
+
+/// Local monitor body; true drops the event before AppKit dispatches it.
+fn drop_key_down(event: &AnyObject) -> bool {
+    let key_code: u16 = unsafe { msg_send![event, keyCode] };
+    if key_code != KEY_ESCAPE {
+        return false;
+    }
+    let resent = ESCAPES.with(|escapes| escapes.borrow_mut().resent(EventRef(event.retain())));
+    let window: Option<Retained<AnyObject>> = unsafe { msg_send![event, window] };
+    let mask: usize = window.map_or(0, |window| unsafe { msg_send![&*window, styleMask] });
+    let drops = drops_key(key_code, resent, mask);
+    if drops {
+        log("Werkschaft: Esc re-send dropped to keep full screen (page saw the key)");
+    }
+    drops
+}
+
+/// Drop an unhandled Esc before AppKit can act on it in full screen.
+///
+/// WKWebView passes every key to the page first. When the page leaves it
+/// unhandled, WebKit hands the same NSEvent back to `-[NSApplication
+/// sendEvent:]`, and whichever AppKit path then acts on Esc (key equivalent,
+/// `keyDown:`, `cancelOperation:`) can leave full screen. A local monitor runs
+/// at the top of `sendEvent:` for both passes; it lets the first through and
+/// drops only the re-send while in full screen, so page Esc handlers still run.
+fn monitor_escape() -> bool {
+    let block = RcBlock::new(|event: *mut AnyObject| -> *mut AnyObject {
+        match unsafe { event.as_ref() } {
+            Some(key) if drop_key_down(key) => std::ptr::null_mut(),
+            _ => event,
+        }
+    });
+    let monitor: Option<Retained<AnyObject>> = unsafe {
+        msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: EVENT_MASK_KEY_DOWN,
+            handler: &*block
+        ]
+    };
+    // AppKit keeps the monitor; it stays for the life of the app.
+    monitor.map(std::mem::forget).is_some()
+}
+
 /// Keep Esc from leaving native full screen.
 ///
-/// NSWindow implements `cancelOperation:` and leaves full screen with it.
-/// WKWebView hands an Esc the page leaves unhandled back to AppKit, and the
-/// resulting `cancelOperation:` reaches the window: nothing between the web
-/// view and the window (Wry's views, NSView, NSResponder) implements it.
-/// Guarding the window class catches the command however it arrives, whether
-/// walked up the responder chain or sent to the window directly. The page has
-/// already seen the key by then; only the leftover command is dropped.
+/// The key monitor drops WebKit's re-send of an unhandled Esc. The window
+/// guard also drops any `cancelOperation:` that still reaches the window in
+/// full screen: NSWindow implements it, and nothing between the web view and
+/// the window (Wry's views, NSView, NSResponder) does.
 fn guard_escape(webview: &WKWebView) {
     ESCAPE_GUARD.get_or_init(|| {
-        let window: Option<Retained<AnyObject>> = unsafe { msg_send![webview, window] };
-        let Some(window) = window else {
-            log("Werkschaft: Esc full-screen guard not installed: web view has no window");
-            return;
-        };
-        match add_cancel_guard(&window, WINDOW_CLASS) {
-            Guard::Installed => log("Werkschaft: Esc full-screen guard installed on TaoWindow"),
-            outcome => log(&format!(
-                "Werkschaft: Esc full-screen guard not installed ({outcome:?}); Esc may leave full screen"
-            )),
+        if monitor_escape() {
+            log("Werkschaft: Esc full-screen key monitor installed");
+        } else {
+            log("Werkschaft: Esc full-screen key monitor not installed");
         }
+        let window: Option<Retained<AnyObject>> = unsafe { msg_send![webview, window] };
+        let outcome = window.map_or(Guard::NotFound, |window| {
+            add_cancel_guard(&window, WINDOW_CLASS)
+        });
+        log(match outcome {
+            Guard::Installed => "Werkschaft: Esc full-screen window guard installed on TaoWindow",
+            Guard::AlreadyDefined => {
+                "Werkschaft: Esc window guard not installed: TaoWindow defines cancelOperation:"
+            }
+            Guard::AlreadyInstalled => {
+                "Werkschaft: Esc window guard not installed: already installed"
+            }
+            Guard::NotFound => "Werkschaft: Esc window guard not installed: no TaoWindow",
+        });
     });
 }
 
@@ -432,7 +536,10 @@ mod tests {
         sel, ClassType,
     };
 
-    use super::{add_cancel_guard, swallows_cancel, Guard, STYLE_MASK_FULL_SCREEN};
+    use super::{
+        add_cancel_guard, drop_key_down, drops_key, swallows_cancel, Guard, Pending, KEY_ESCAPE,
+        PENDING_ESCAPES, STYLE_MASK_FULL_SCREEN,
+    };
 
     #[test]
     fn escape_is_swallowed_only_in_native_full_screen() {
@@ -529,5 +636,102 @@ mod tests {
             add_cancel_guard(object, c"WerkschaftTestWindow"),
             Guard::AlreadyInstalled
         );
+    }
+
+    const FULL: usize = 1 | 2 | 4 | 8 | STYLE_MASK_FULL_SCREEN;
+
+    #[test]
+    fn only_a_resent_escape_in_full_screen_is_dropped() {
+        assert!(drops_key(KEY_ESCAPE, true, FULL));
+        assert!(
+            !drops_key(KEY_ESCAPE, false, FULL),
+            "first pass reaches the page"
+        );
+        assert!(!drops_key(KEY_ESCAPE, true, FULL & !STYLE_MASK_FULL_SCREEN));
+        assert!(!drops_key(36, true, FULL), "Return is never touched");
+    }
+
+    #[test]
+    fn pending_escapes_recognize_resends_in_any_order() {
+        let mut pending = Pending::new();
+        assert!(!pending.resent(1));
+        assert!(!pending.resent(2), "a second Esc before WebKit answers");
+        assert!(pending.resent(1), "re-send of the first");
+        assert!(pending.resent(2), "re-send of the second");
+        assert!(!pending.resent(1), "forgotten once re-sent");
+    }
+
+    #[test]
+    fn pending_escapes_are_bounded() {
+        let mut pending = Pending::new();
+        for event in 0..=PENDING_ESCAPES {
+            assert!(!pending.resent(event));
+        }
+        assert!(!pending.resent(0), "the oldest was evicted");
+        assert!(pending.resent(PENDING_ESCAPES));
+    }
+
+    static KEY_CODE: AtomicUsize = AtomicUsize::new(0);
+    static KEY_WINDOW_MASK: AtomicUsize = AtomicUsize::new(0);
+
+    define_class!(
+        // Stands in for the key window: reports its style mask.
+        #[unsafe(super(NSObject))]
+        #[name = "WerkschaftTestKeyWindow"]
+        struct KeyWindow;
+
+        impl KeyWindow {
+            #[unsafe(method(styleMask))]
+            fn style_mask(&self) -> usize {
+                KEY_WINDOW_MASK.load(Ordering::SeqCst)
+            }
+        }
+    );
+
+    define_class!(
+        // Stands in for an NSEvent: a key code and a window.
+        #[unsafe(super(NSObject))]
+        #[name = "WerkschaftTestKeyEvent"]
+        struct KeyEvent;
+
+        impl KeyEvent {
+            #[unsafe(method(keyCode))]
+            fn key_code(&self) -> u16 {
+                KEY_CODE.load(Ordering::SeqCst) as u16
+            }
+
+            #[unsafe(method_id(window))]
+            fn window(&self) -> Option<Retained<KeyWindow>> {
+                Some(unsafe { msg_send![KeyWindow::class(), new] })
+            }
+        }
+    );
+
+    #[test]
+    fn monitor_drops_only_the_resend_of_an_escape() {
+        let new_event = || -> Retained<KeyEvent> { unsafe { msg_send![KeyEvent::class(), new] } };
+        KEY_WINDOW_MASK.store(FULL, Ordering::SeqCst);
+        KEY_CODE.store(KEY_ESCAPE.into(), Ordering::SeqCst);
+
+        let first = new_event();
+        let second = new_event();
+        assert!(!drop_key_down(&first), "the page gets the Esc");
+        assert!(!drop_key_down(&second));
+        assert!(drop_key_down(&first), "unhandled re-send is dropped");
+        assert!(drop_key_down(&second));
+
+        KEY_WINDOW_MASK.store(FULL & !STYLE_MASK_FULL_SCREEN, Ordering::SeqCst);
+        let windowed = new_event();
+        assert!(!drop_key_down(&windowed));
+        assert!(
+            !drop_key_down(&windowed),
+            "outside full screen AppKit keeps it"
+        );
+
+        KEY_WINDOW_MASK.store(FULL, Ordering::SeqCst);
+        KEY_CODE.store(36, Ordering::SeqCst);
+        let other = new_event();
+        assert!(!drop_key_down(&other));
+        assert!(!drop_key_down(&other), "other keys pass both times");
     }
 }
