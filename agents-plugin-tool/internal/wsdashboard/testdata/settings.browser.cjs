@@ -226,6 +226,7 @@ const snapshot = '/api/config/snapshot';
     await show('global');
     assert.match(await scopeButton('session').textContent(), /미평가/);
     assert(await scopeButton('synced').isDisabled());
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'clean Settings frame is ready for native close');
 
     const auth = await page.request.post(base + '/api/config/set', { headers: { Origin: 'http://elsewhere.test' },
       data: { scope:'global', key:'workflow.lang', value:'blocked' } });
@@ -312,6 +313,7 @@ const snapshot = '/api/config/snapshot';
     await pickSection('workflow');
     await setLanguage('First draft', null, false);
     await setLanguage('Second draft', null, false);
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), false, 'pending repo proposal holds native close');
     await proposal('toggle').click();
     assert.match(await frame().locator('.proposal-patch').textContent(), /Second draft/);
     assert.doesNotMatch(await frame().locator('.proposal-patch').textContent(), /First draft/);
@@ -343,6 +345,7 @@ const snapshot = '/api/config/snapshot';
     assert.doesNotMatch(await manual.inputValue(), secrets);
     await proposal('clear').click();
     await proposal('copy').waitFor({ state:'hidden' });
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'cleared repo proposal releases native close');
 
     assert.deepEqual(errors, []);
     console.log('Verified settings scopes, navigation, authorization, mutations, profiles, prompt diff, proposals and 8 visual captures.');
