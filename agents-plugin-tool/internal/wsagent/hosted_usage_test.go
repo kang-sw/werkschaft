@@ -131,8 +131,9 @@ func TestHostedPiRowShowsRunningTool(t *testing.T) {
 	}
 	waitRunning(true)
 	// An activity-only native alias must not mask the child's batches.
+	nativeKey := h.record(child.ID).WSKey // read on the test goroutine: h.record can t.Fatal
 	h.runner.conv(lead.ID).do(func() {
-		h.runner.conv(lead.ID).apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native-worker", SessionKey: h.record(child.ID).WSKey, Caption: strPtr("working")})
+		h.runner.conv(lead.ID).apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native-worker", SessionKey: nativeKey, Caption: strPtr("working")})
 	})
 	waitRunning(true)
 	h.holders.out(holder, `{"type":"tool_execution_end","toolCallId":"c1","isError":false}`)
@@ -161,8 +162,9 @@ func TestHostedPiRowUsesOwnUsageWhileRunningAndAfterRecovery(t *testing.T) {
 	}
 	waitTokens(wslive.StatusRunning)
 	// A native activity-only alias must not erase the daemon's own usage.
+	nativeKey := h.record(child.ID).WSKey // read on the test goroutine: h.record can t.Fatal
 	h.runner.conv(lead.ID).do(func() {
-		h.runner.conv(lead.ID).apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native-worker", SessionKey: h.record(child.ID).WSKey, Caption: strPtr("working")})
+		h.runner.conv(lead.ID).apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native-worker", SessionKey: nativeKey, Caption: strPtr("working")})
 	})
 	waitTokens(wslive.StatusRunning)
 	// The row's rate source is also the child, never the lead's context.

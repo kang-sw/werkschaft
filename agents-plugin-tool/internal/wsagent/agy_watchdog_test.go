@@ -331,9 +331,10 @@ func TestAgyModelWaitWatchdogSilenceOffKeepsInBandRetry(t *testing.T) {
 	h, timers, _ := agyWatchdogHarnessWithSilence(t, "1", "1", false)
 	id, p := startAgyWatchdogTurn(t, h, false)
 	c := h.runner.conv(id)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if !c.modelWaitArmed || c.modelWaitTimeout != time.Second {
-			t.Fatalf("in-band retry must stay armed: armed=%v timeout=%v", c.modelWaitArmed, c.modelWaitTimeout)
+			failf("in-band retry must stay armed: armed=%v timeout=%v", c.modelWaitArmed, c.modelWaitTimeout)
+			return
 		}
 	})
 	time.Sleep(1100 * time.Millisecond)
@@ -1094,9 +1095,10 @@ func TestAgyModelWaitWatchdogDoesNotArmForCompact(t *testing.T) {
 		t.Fatalf("compact command = %q, want /compact", sent)
 	}
 	c := h.runner.conv(id)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if c.modelWaitArmed || c.modelWaitC != nil {
-			t.Fatalf("real compact command armed model waiting")
+			failf("real compact command armed model waiting")
+			return
 		}
 	})
 	if started, _ := timers.counts(); started != 2 {
@@ -1118,9 +1120,10 @@ func TestAgyModelWaitWatchdogTimeoutZeroDisables(t *testing.T) {
 		t.Fatalf("disabled watchdog started %d timers", started)
 	}
 	c := h.runner.conv(id)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if c.modelWaitTimeout != 0 || c.modelWaitArmed {
-			t.Fatalf("disabled watchdog state: timeout=%v armed=%v", c.modelWaitTimeout, c.modelWaitArmed)
+			failf("disabled watchdog state: timeout=%v armed=%v", c.modelWaitTimeout, c.modelWaitArmed)
+			return
 		}
 	})
 }
