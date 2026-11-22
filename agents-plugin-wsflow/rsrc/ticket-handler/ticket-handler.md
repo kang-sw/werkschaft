@@ -121,6 +121,11 @@ named below. Independent spawns may run in parallel.
      unimplemented phase, or as an appended Edition when the phase has a
      `### Result`. A choice in it that the ticket's
      decisions do not settle → the queue.
+   - `revise` whose `proposed_resolution:` asks for the fact populator (the
+     ticket has no Route Facts, and the gates stop on it): run this step's
+     populator on the ticket as it stands in your worktree and review its
+     edit as above, before applying any other part of the resolution; steps
+     2-4 then run on the populated ticket.
 2. Settle: open items → report `decisions`; apply each digest; repeat to the
    settle point. Then step 3 (`promote`) or step 4, with a delta review of
    anything changed since the last review.

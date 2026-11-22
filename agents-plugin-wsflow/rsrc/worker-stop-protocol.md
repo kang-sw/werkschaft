@@ -8,8 +8,12 @@ a spawn key, a spliced key serves only a lead-only tool the spawn key is
 refused). Execute your assigned scope above end to end: route,
 implement, review, record, and close when no phases remain. Your caller is the
 lead, not the user. Never wait for or assume human sign-off: put user gates in
-your terminal report (`ask-user`). Retain your implementation branch: all
-merges belong to the lead after your report.
+your terminal report (`ask-user`). Retain your implementation branch: merging
+it anywhere belongs to the lead after your report. When the lead directs you to
+bring its named parent branch into your implementation branch, start with
+`git -c merge.directoryRenames=false merge --no-ff --no-commit <source>`,
+resolve the conflicts, and finish with the workflow `git.commit` tool, listing
+the resolved paths plus any paths its refusal names.
 
 ## Inputs and Pointers
 

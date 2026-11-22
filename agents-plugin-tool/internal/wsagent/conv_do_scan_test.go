@@ -143,12 +143,16 @@ func TestDoCallbacksNeverExitTheLoopGoroutine(t *testing.T) {
 	}
 }
 
-// The loop-side counterpart: a whole-record copy inside a do callback goes
-// through c.record() (mu), as 340acfb0a settled; single-field reads of
-// loop-written fields stay unlocked.
-func TestDoCallbacksCopyTheRecordUnderMu(t *testing.T) {
+// The loop-side counterpart, narrower than a locking proof: a call inside a
+// do callback must not take the conversation's record field (x.rec) as a
+// direct argument, because that copies the whole record without mu while Send
+// updates Sends and LastActiveAt under mu; the copy goes through c.record()
+// instead, as 340acfb0a settled. It does not see an alias (`r := c.rec; f(r)`)
+// or a copy in a loop handler not reached through do, and single-field reads
+// of loop-written fields stay unlocked by design.
+func TestDoCallbacksPassNoRecordFieldAsCallArgument(t *testing.T) {
 	if found := scanPackage(t, false, doCallbackRecordCopies); len(found) > 0 {
-		t.Fatalf("conv.do callbacks pass the conversation's record by value without mu (use c.record()):\n%s", strings.Join(found, "\n"))
+		t.Fatalf("conv.do callbacks pass the conversation's record field as a call argument, copying it without mu (use c.record()):\n%s", strings.Join(found, "\n"))
 	}
 	fset, file := parseGoSource(t, "planted.go", "package p\nfunc f() { c.do(func() { err = endedError(c.rec) }) }\n")
 	if got := doCallbackRecordCopies(fset, file); len(got) != 1 {
