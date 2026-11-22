@@ -15,11 +15,12 @@ import (
 
 // readOnlyRefusedTool reports a ws tool call of the agent loadout that
 // changes the work directory, review ledger, or ticket board, which a
-// read-only agent may not call. mailbox.send and non-bootstrap review.marker
+// read-only agent may not call. The sage gate and stamp write sage-review
+// posture into a ticket, and reviewers must never write it. mailbox.send and non-bootstrap review.marker
 // reads stay allowed.
 func readOnlyRefusedTool(name string, args map[string]any) bool {
 	switch name {
-	case "git.commit", "tickets.create_empty", "tickets.acquire", "tickets.release", "tickets.close", "tickets.move", "review.stamp":
+	case "git.commit", "tickets.create_empty", "tickets.acquire", "tickets.release", "tickets.close", "tickets.move", "review.stamp", "tickets.sage_gate", "tickets.sage_stamp":
 		return true
 	case "review.marker":
 		return boolArgument(args["bootstrap"])
