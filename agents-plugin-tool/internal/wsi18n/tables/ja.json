@@ -28,6 +28,8 @@
   "js.usage.legend": "使用量グラフの凡例",
   "js.usage.fivehour": "5時間",
   "js.usage.weekly": "週間",
+  "js.usage.key5h": "5h",
+  "js.usage.keyweekly": "週",
   "js.usage.age": "{0}分前の値",
   "js.usage.unavailable": "使用量を取得できません",
   "js.usage.signinrequired": "サインインが必要",

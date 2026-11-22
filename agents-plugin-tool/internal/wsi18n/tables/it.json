@@ -28,6 +28,8 @@
   "js.usage.legend": "Legenda del grafico di utilizzo",
   "js.usage.fivehour": "5 ore",
   "js.usage.weekly": "Settimanale",
+  "js.usage.key5h": "5h",
+  "js.usage.keyweekly": "Set",
   "js.usage.age": "valore di {0} min fa",
   "js.usage.unavailable": "utilizzo non disponibile",
   "js.usage.signinrequired": "accesso richiesto",
