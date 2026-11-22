@@ -865,3 +865,59 @@ always sends it); every local stream gets a `usercmd` event on connect;
 
 Not tested here: LAN stream gating of the event beyond the unit gate, a run
 against a real older binary, the Windows host and Git Bash.
+
+#### Edition (33319f024) - 2026-11-23
+
+Round 1 of the pre-merge review (five Important, four Minor), fixed in one
+commit on top of bc6fa0448.
+
+- Revision reuse after a restart: `user-commands.db` now keeps the highest
+  revision ever issued (a `meta` row, schema version 2), raised in the same
+  transaction as every set and every removal and never lowered; the counter
+  seeds from that high-water, the surviving rows and the clock, so a clock set
+  back or frozen cannot reissue one. The test injects the clock (same instant,
+  set back, forward) instead of relying on millisecond resolution.
+- Stale list: `Registry.Snapshot` returns the commands and the stream revision
+  from one read under one lock; a test interleaves writes with snapshots and
+  asserts one revision never carries two lists.
+- Browser removal: the route refuses a missing, zero or negative revision
+  (400), and `RemoveIf` compares the revision under the registry writer lock in
+  the same step as the removal (`stale` or `withdrawn` answers carry the fresh
+  list). The agent's unregister tool keeps its by-id removal.
+- Production file I/O: `ComposerRoot` and `ComposerTarget` take the lead's
+  worktree from the runner record in memory and no longer ask the key store,
+  so Run, a cold list and every refetch touch no key record; the 10 s root
+  cache is gone. A test over the real runner and the production key store
+  deletes the lead's key record from disk and shows list, revision, lookup and
+  conditional removal still answer; a wsagent test counts zero key-store calls.
+- One ordering point: a click's known-card, fence and token answers, its
+  revision check (`resolve`) and its claim run under the composer's admission
+  lock, so a withdrawal is either before the claim (refused, nothing claimed)
+  or after it (the claim stands) and a second request with the same submission
+  id gets the first one's card. A test races five concurrent requests with one
+  submission id against a withdrawal for 40 rounds and asserts a single outcome.
+- Minor: the worktree a line was read for travels with the admission to the
+  launch, which refuses another (tested at the launch binding), and the stream
+  revision carries the worktree so the strip refetches when it changes; the
+  busy table is a null-prototype object (a command named `constructor` is
+  runnable; browser test); a double click is one run (clicks after the first of
+  a count are ignored, and the slot stays guarded for 600 ms after its answer;
+  browser tests with a real `dblclick` and with two scripted rapid clicks, the
+  latter verified to fail without the guard); a hosted lead that connects while
+  the daemon is starting waits (bounded, 5 s) for its user commands to settle,
+  chosen over a tool-list refresh because no list-changed notification exists.
+
+File operations per interactive path (store operations, composer file
+operations, key-record reads), measured by the tests above: list, page load,
+stream connect, click acknowledgement and a short click's whole run make 0, 0,
+0. A registration, a replacement and a removal make one store commit each, an
+unchanged registration none. The localhost guard's cookie revalidation (one
+stat of the secret file per localhost request) is the pre-existing baseline and
+is not counted against this feature.
+
+Verification: `wsusercmd` and the `wsdashboard` filter
+`TestComposer|UserCommand|Usercmd|TestI18N|TestAssetSource|TestCloseRequestComposerLifecycle|Steer|Inbox`
+with `-race` (Playwright included), `mcp` `UserCommand|Inventory|Shipped|Schema`,
+`cmd/ws-mcp` `UserCommand|Usercmd|Composer|Exec|Dashboard`, `wsagent`
+`ComposerRoot|Exec|Passive`: pass; `GOOS=windows go vet` on the five touched
+packages: clean. The Windows host run is the lead's.
