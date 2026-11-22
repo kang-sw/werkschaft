@@ -9,7 +9,9 @@
 // envelopes over without waiting on disk, and a full queue or a failed write
 // drops the event with a log line rather than stalling capture. Reads are
 // served from the in-memory index, which is recovered from a ring's
-// segments once, on its first use. Capture's recovery questions
+// segments once, on its first use; the query API's View of an unloaded ring
+// reads its segments on the caller's goroutine instead, so a query never
+// occupies the writer. Capture's recovery questions
 // (wsaudit.SourcedSink Recover and Retained) are answered from a per-ring
 // identity ledger under its own lock, never behind a disk write.
 package wsauditstore
@@ -23,6 +25,7 @@ import (
 	"math"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -164,7 +167,22 @@ type Store struct {
 
 	dropped    atomic.Uint64
 	queueDrops atomic.Uint64 // queue-full drops not yet logged
+
+	// cold caches the views View read from unloaded rings, by ring directory
+	// name, each keyed by the segment listing it was read from.
+	coldMu sync.Mutex
+	cold   map[string]coldView
 }
+
+// coldView is a cached View of an unloaded ring and the segment listing
+// (sequence numbers and sizes) it was read from.
+type coldView struct {
+	listing string
+	view    View
+}
+
+// coldViews bounds the cached cold views.
+const coldViews = 4
 
 var _ wsaudit.SourcedSink = (*Store)(nil)
 
@@ -1281,22 +1299,83 @@ type View struct {
 }
 
 // View returns a snapshot of the session's retained events and eviction
-// state, from memory. The read lock is held only to copy the slice header:
-// a caller scanning the snapshot for as long as it likes never holds up the
-// writer, which only appends past the snapshot's length or replaces the
-// slice. An unknown session yields an empty View.
+// state. A loaded ring answers from memory, and the read lock is held only to
+// copy the slice header: a caller scanning the snapshot for as long as it
+// likes never holds up the writer, which only appends past the snapshot's
+// length or replaces the slice. An unloaded ring is read from disk on the
+// caller's goroutine (coldRead), never through the writer, so a query never
+// delays capture. An unknown session yields an empty View.
 func (s *Store) View(ctx context.Context, session string) (View, error) {
-	info, err := s.loaded(ctx, session)
-	if err != nil || info == nil {
-		return View{}, err
-	}
-	r := info.view.Load()
-	if r == nil {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	s.mu.Lock()
+	info := s.sessions[dir]
+	s.mu.Unlock()
+	if info == nil {
 		return View{}, nil
 	}
-	r.view.RLock()
-	v := View{Events: r.events[:len(r.events):len(r.events)], Cut: r.cut}
-	r.view.RUnlock()
+	if r := info.view.Load(); r != nil {
+		r.view.RLock()
+		v := View{Events: r.events[:len(r.events):len(r.events)], Cut: r.cut}
+		r.view.RUnlock()
+		return v, nil
+	}
+	return s.coldRead(ctx, dir, session)
+}
+
+// coldRead reads an unloaded ring's segments into a View without loading
+// the ring: nothing is truncated, opened for writing, or published, and a
+// torn last line is left out as recovery would. The writer may evict or
+// load the ring meanwhile; a segment deleted since the listing is skipped.
+// The view is cached by the listing it was read from, so paging through a
+// cold session reads its segments once.
+func (s *Store) coldRead(ctx context.Context, dirName, session string) (View, error) {
+	dir := filepath.Join(s.opts.Root, dirName)
+	segs, _, err := listSegments(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return View{}, nil
+	}
+	if err != nil {
+		return View{}, err
+	}
+	var key strings.Builder
+	for _, seg := range segs {
+		fmt.Fprintf(&key, "%d:%d,", seg.seq, seg.size)
+	}
+	s.coldMu.Lock()
+	c, ok := s.cold[dirName]
+	s.coldMu.Unlock()
+	if ok && c.listing == key.String() {
+		return c.view, nil
+	}
+	r := newRing(session, dir)
+	for i := range segs {
+		if err := ctx.Err(); err != nil {
+			return View{}, err
+		}
+		raw, err := readFile(filepath.Join(dir, segmentName(segs[i].seq)))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return View{}, err
+		}
+		if _, newer, _ := r.replaySegment(&segs[i], raw); newer {
+			break // later segments of a newer ring are not ours to parse
+		}
+	}
+	v := View{Events: r.events[:len(r.events):len(r.events)], Cut: len(segs) > 0 && segs[0].seq > 1}
+	s.coldMu.Lock()
+	if s.cold == nil {
+		s.cold = map[string]coldView{}
+	}
+	if _, ok := s.cold[dirName]; !ok && len(s.cold) >= coldViews {
+		for k := range s.cold {
+			delete(s.cold, k) // any one: a miss only costs a reread
+			break
+		}
+	}
+	s.cold[dirName] = coldView{listing: key.String(), view: v}
+	s.coldMu.Unlock()
 	return v, nil
 }
 

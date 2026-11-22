@@ -2,6 +2,10 @@ package wsauditstore
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,4 +93,90 @@ func TestViewSnapshotNeverHoldsUpTheWriter(t *testing.T) {
 	if v := view(t, s, "sess"); !v.Cut || v.Events[len(v.Events)-1].Seq != 140 {
 		t.Fatalf("fresh view after the writes: cut %v, last seq %d", v.Cut, v.Events[len(v.Events)-1].Seq)
 	}
+}
+
+// TestColdViewNeverOccupiesTheWriter pins that the query API's first read
+// of an unloaded ring is served off the capture writer: with that read held
+// inside a segment read, appends to another session are accepted past the
+// queue depth, persisted and readable, and nothing is dropped. Released, the
+// cold read answers what the loaded ring holds, and a repeat answers from
+// its cache without rereading the segments.
+func TestColdViewNeverOccupiesTheWriter(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	for seq := uint64(1); seq <= 5; seq++ {
+		mustAppend(t, s, sourced("cold", seq, wsaudit.KindToolCall))
+	}
+	flush(t, s)
+	_ = s.Close()
+
+	s2, _ := openTest(t, root, func(o *Options) { o.QueueDepth = 4 })
+	dir := filepath.Join(root, sessionDirName("cold")) + string(filepath.Separator)
+	orig := readFile
+	t.Cleanup(func() { readFile = orig })
+	entered, release := make(chan struct{}), make(chan struct{})
+	var hold, freed sync.Once
+	t.Cleanup(func() { freed.Do(func() { close(release) }) }) // before s2 closes
+	var reads sync.Map
+	readFile = func(path string) ([]byte, error) {
+		if strings.HasPrefix(path, dir) {
+			n, _ := reads.LoadOrStore(path, new(int))
+			*n.(*int)++
+			hold.Do(func() { close(entered); <-release })
+		}
+		return orig(path)
+	}
+	type answer struct {
+		v   View
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		v, err := s2.View(context.Background(), "cold")
+		got <- answer{v, err}
+	}()
+	<-entered // the cold read is inside its segment read
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	for seq := uint64(1); seq <= 32; seq++ {
+		it := sourced("live", seq, wsaudit.KindToolCall)
+		if err := s2.AppendSourced(ctx, it.id, it.rec(), it.Envelope); err != nil {
+			t.Fatalf("append %d while a cold read is held: %v", seq, err)
+		}
+		if seq%4 == 0 {
+			if err := s2.Flush(ctx); err != nil {
+				t.Fatalf("flush while a cold read is held: %v", err)
+			}
+		}
+	}
+	if n := len(events(t, s2, "live")); n != 32 || s2.Dropped() != 0 {
+		t.Fatalf("while a cold read is held: %d live events, %d dropped", n, s2.Dropped())
+	}
+
+	freed.Do(func() { close(release) })
+	a := <-got
+	if a.err != nil || len(a.v.Events) != 5 || a.v.Cut {
+		t.Fatalf("cold view = %d events, cut %v, err %v", len(a.v.Events), a.v.Cut, a.err)
+	}
+	again := view(t, s2, "cold")
+	reads.Range(func(path, n any) bool {
+		if *n.(*int) != 1 {
+			t.Errorf("%s read %d times by two cold views", path, *n.(*int))
+		}
+		return true
+	})
+	loaded(t, s2, "cold")
+	warm := view(t, s2, "cold")
+	if fmt.Sprint(ids(again.Events)) != fmt.Sprint(ids(warm.Events)) || again.Cut != warm.Cut {
+		t.Fatalf("cold view %v (cut %v) differs from the loaded ring's %v (cut %v)", ids(again.Events), again.Cut, ids(warm.Events), warm.Cut)
+	}
+}
+
+func ids(evs []wsaudit.Envelope) []string {
+	out := make([]string, len(evs))
+	for i, ev := range evs {
+		out[i] = ev.ID
+	}
+	return out
 }
