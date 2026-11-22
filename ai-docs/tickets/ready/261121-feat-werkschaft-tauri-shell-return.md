@@ -889,3 +889,23 @@ AppleDouble entries and failed package validation. Repacking the same
 and cleanup. The final `cleanup-census.jsonl` entry at 09:40:06 KST
 reports zero run processes, listeners, registered tasks, and running
 tasks.
+
+#### Owner adoption decision - 2026-11-22
+
+**VERIFIED — Decision.** The owner adopted the Tauri shell (whiteboard
+(2140)=b: adopt once rows (b) and (c) re-verify on Windows). The rerun above
+records both as PASS, so `impl/develop/basin-spray-cider` merged into
+`develop` at `1aace4c5e`. Inputs the owner weighed: Windows installed payload
+67,232,265 vs 424,880,653 bytes and NSIS download 24,523,509 vs 173,635,745
+bytes (daemon included), shell/webview memory −62 MiB idle and −85 MiB active,
+equal frame p95, and a macOS dogfood run with stable WebContent memory over
+79 minutes. An ad-hoc macOS zip of the installed app was 29,346,982 bytes
+against the shipped `Werkschaft-darwin-arm64.zip` of 142,176,148 bytes. That
+pair was not measured under this phase's paired-measurement rules.
+
+**Open — Gate rows not yet passed.** Row (d) needs physical shortcuts and
+ordinary copy/paste on a staffed Windows console. Row (e) needs a signed
+install, update, failed-update recovery, and antivirus lock check on a
+throwaway account or VM. The macOS paired Electron measurement stays
+unmeasured because this host does not launch Electron. Electron retirement
+and OS signing/notarization remain separate decisions.
