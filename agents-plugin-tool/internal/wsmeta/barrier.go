@@ -21,13 +21,15 @@ var ErrCutoverUnsupported = errors.New("wsmeta: the legacy cutover is not suppor
 
 // barrierFileSystem names the file system holding dir, or "" where the
 // platform's barrier needs none: a directory fsync on POSIX. On Windows the
-// barrier rests on NTFS's ordered metadata log, so only NTFS and ReFS
-// volumes are accepted (fs_*.go; a test seam).
+// barrier rests on NTFS's ordered metadata log, so only NTFS volumes are
+// accepted (fs_*.go; a test seam). ReFS is refused: the ordering argument
+// does not cover it, and a documented ReFS setting ignores write-through
+// requests altogether (re-review 80ffd114).
 var barrierFileSystem = platformFileSystem
 
 // barrierFileSystems are the Windows file systems whose metadata ordering
 // the barrier relies on.
-var barrierFileSystems = []string{"NTFS", "ReFS"}
+var barrierFileSystems = []string{"NTFS"}
 
 // checkBarrierDir refuses dir unless its file system supports the barrier.
 // The refusal is logged with its reason. A missing dir passes when

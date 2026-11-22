@@ -90,7 +90,7 @@ const (
 //     directory sync on POSIX, a write-through rename on Windows). Only a
 //     re-applied removal, whose rename an interrupted attempt made, rests
 //     on a directory barrier alone (sync_*.go). On Windows that barrier
-//     holds only on NTFS and ReFS, so the cutover refuses any other file
+//     holds only on NTFS, so the cutover refuses any other file
 //     system before it changes anything (ErrCutoverUnsupported).
 //  6. Commit proceeds only when every path with fence_required has a landed
 //     record that the commit's own pass proves. When proof fails, the outcome

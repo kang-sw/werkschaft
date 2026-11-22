@@ -103,6 +103,19 @@ func TestUnsupportedFileSystemRefusesTheCutover(t *testing.T) {
 		}
 	})
 
+	for _, name := range []string{"ReFS", "FAT32", "exFAT"} {
+		t.Run("refused on "+name, func(t *testing.T) {
+			dir := legacyFixture(t)
+			fileSystems(t, dir, name, nil)
+			s := openTest(t, dir, testOpts())
+			before := treeState(t, dir)
+			if _, err := s.Stage(ctx); !errors.Is(err, ErrCutoverUnsupported) {
+				t.Fatalf("Stage on %s = %v, want ErrCutoverUnsupported", name, err)
+			}
+			checkRefusedCutover(t, s, dir, before)
+		})
+	}
+
 	t.Run("a session directory on another volume", func(t *testing.T) {
 		dir := legacyFixture(t)
 		fileSystems(t, dir, "NTFS", map[string]string{"sessions/hostedlead": "exFAT"})
@@ -173,7 +186,7 @@ func TestUnsupportedFileSystemRefusesTheCutover(t *testing.T) {
 
 func TestSupportedFileSystemsCompleteTheCutover(t *testing.T) {
 	ctx := context.Background()
-	for _, name := range []string{"", "NTFS", "ntfs", "ReFS"} {
+	for _, name := range []string{"", "NTFS", "ntfs"} {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
 			dir := legacyFixture(t)
 			fileSystems(t, dir, name, nil)

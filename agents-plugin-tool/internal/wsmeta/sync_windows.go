@@ -18,7 +18,7 @@ import (
 // rename below returns only after the log is flushed through its own
 // record, which covers every earlier change in the directory. That ordering
 // is file-system behavior, not the MoveFileEx contract, so every cutover
-// call first checks that the directories it changes are on NTFS or ReFS and
+// call first checks that the directories it changes are on NTFS and
 // otherwise refuses with ErrCutoverUnsupported (barrier.go; lead decision on
 // re-review e33c561c). A crash can leave a dot-named barrier file behind,
 // which no bundled-file discovery reads.
