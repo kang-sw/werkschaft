@@ -24,6 +24,7 @@ func (d *Daemon) registerCompanionInstallRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(companionPacksRoute+"/validate", d.handleCompanionValidate)
 	mux.HandleFunc(companionPacksRoute+"/import", d.handleCompanionImport)
 	mux.HandleFunc(companionPacksRoute+"/{id}/uninstall", d.handleCompanionUninstall)
+	d.registerCompanionSourceRoutes(mux)
 }
 
 // companionTrustedPost gates an install-family route: POST only, a local
@@ -174,6 +175,14 @@ func (d *Daemon) handleCompanionImport(w http.ResponseWriter, r *http.Request) {
 	plan, ok := companionUploadPlan(w, r, data)
 	if !ok {
 		return
+	}
+	// An import click may download the external packs its marketplace lists,
+	// but nothing is fetched while the companion is off.
+	plan.external = func(entry companionMarketplaceEntry, inflate *companionInflate) (*companionArchive, error) {
+		if !d.companion.current().config.Enabled {
+			return nil, errors.New("turn the companion on to download external packs")
+		}
+		return d.companionFetch.fetchPack(r.Context(), entry, inflate)
 	}
 	result, err := d.companionPacks.install(d.companionOptions(), plan, ids, false)
 	if err != nil {

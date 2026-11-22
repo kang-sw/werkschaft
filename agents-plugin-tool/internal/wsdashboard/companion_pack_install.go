@@ -113,6 +113,7 @@ const (
 	companionStatusUpdate    = "update"    // installed from this source, content changed
 	companionStatusOther     = "other"     // installed from another source; an install replaces it
 	companionStatusManual    = "manual"    // a hand-made directory holds the ID; install refused
+	companionStatusBuiltin   = "builtin"   // the embedded default pack in the official listing
 )
 
 type companionListing struct {

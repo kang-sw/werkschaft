@@ -16,8 +16,8 @@ type companionSourceEntry struct {
 }
 
 // parseCompanionSources splits the whitespace-separated source list. Each
-// entry is judged alone: https only, at most companionURLMax characters,
-// listed once, and at most companionSourcesMax entries in total.
+// entry is judged alone by the fetcher's source rules (parseCompanionSource),
+// listed once, and at most companionSourcesMax valid entries in total.
 func parseCompanionSources(raw string) []companionSourceEntry {
 	entries := []companionSourceEntry{}
 	seen := map[string]bool{}
@@ -30,7 +30,7 @@ func parseCompanionSources(raw string) []companionSourceEntry {
 		case valid >= companionSourcesMax:
 			entry.Error = fmt.Sprintf("at most %d sources are used", companionSourcesMax)
 		default:
-			if err := companionHTTPSURL(url); err != nil {
+			if _, err := parseCompanionSource(url); err != nil {
 				entry.Error = err.Error()
 			}
 		}

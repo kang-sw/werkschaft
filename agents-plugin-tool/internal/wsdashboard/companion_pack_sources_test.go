@@ -18,7 +18,7 @@ func TestCompanionPackSourcesParse(t *testing.T) {
 		{"https://user:pw@example.invalid/c.git", "credentials"},
 		{long, "exceeds"},
 		{"official", "absolute https URL"},
-		{"https://example.invalid/d.zip#x", ""}, // the fetcher judges the fragment
+		{"https://example.invalid/d.zip#x", "fragment"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("parsed %d entries, want %d: %+v", len(got), len(want), got)
