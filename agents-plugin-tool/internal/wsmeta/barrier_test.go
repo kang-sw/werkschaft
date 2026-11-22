@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -234,6 +235,31 @@ func TestRefusalAfterAFenceIsNeverTheFallback(t *testing.T) {
 		wantInterrupted(t, "Commit", err)
 		wantInterrupted(t, "ApplyFence", s.ApplyFence(ctx, fencePerm, fencedSelector))
 		wantInterrupted(t, "ApplyRemovalFence", s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness))
+	})
+
+	t.Run("after a pass discarded the fenced rows", func(t *testing.T) {
+		dir := legacyFixture(t)
+		fileSystems(t, dir, "NTFS", nil)
+		s := openTest(t, dir, testOpts())
+		mustStage(t, s)
+		if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+			t.Fatal(err)
+		}
+		// The fenced session leaves, a pass drops its rows, and it returns.
+		session := filepath.Join(dir, "sessions", "hostedlead")
+		aside := filepath.Join(dir, "hostedlead-aside")
+		if err := os.Rename(session, aside); err != nil {
+			t.Fatal(err)
+		}
+		if res := mustStage(t, s); res.Discarded != 1 {
+			t.Fatalf("stage = %+v, want the session discarded", res)
+		}
+		if err := os.Rename(aside, session); err != nil {
+			t.Fatal(err)
+		}
+		barrierFileSystem = fat
+		_, err := s.Stage(ctx)
+		wantInterrupted(t, "Stage", err)
 	})
 
 	t.Run("a record without its publication", func(t *testing.T) {

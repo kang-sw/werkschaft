@@ -2,6 +2,7 @@ package wsmeta
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -80,14 +81,26 @@ func (s *Store) interrupted(reason error) error {
 	return err
 }
 
-// cutoverStarted reports whether any fence was ever recorded. A record is
-// written before its publication and fence_required is sticky, so a
-// cutover that may have changed a legacy file always reports started.
+// cutoverStarted reports whether any fence was ever recorded. Every fence
+// record sets the meta key cutoverStartedKey in its own transaction, before
+// its publication, and nothing clears it: a pass that discards capture rows
+// (a vanished session, a key no longer enumerated) cannot erase it
+// (re-review fd1cff5e). The capture columns are checked as well.
 func cutoverStarted(ctx context.Context, q querier) (bool, error) {
 	var started bool
-	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM legacy_captures
-		WHERE fence_required = 1 OR fence_state != 'none' OR fence_witness != '' OR witness_id != '')`).Scan(&started)
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM meta WHERE key = '`+cutoverStartedKey+`')
+		OR EXISTS(SELECT 1 FROM legacy_captures
+			WHERE fence_required = 1 OR fence_state != 'none' OR fence_witness != '' OR witness_id != '')`).Scan(&started)
 	return started, err
+}
+
+// cutoverStartedKey is the meta key a fence record sets for good.
+const cutoverStartedKey = "cutover_started"
+
+// markCutoverStarted records, inside tx, that a fence record exists.
+func markCutoverStarted(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO meta(key, value) VALUES(?, '1') ON CONFLICT(key) DO NOTHING`, cutoverStartedKey)
+	return err
 }
 
 func supportedFileSystem(name string) bool {

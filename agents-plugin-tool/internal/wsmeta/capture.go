@@ -465,6 +465,9 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 		if got.state != m.state || got.digest != m.digest {
 			return fmt.Errorf("%w: %s", ErrFenceStale, rel)
 		}
+		if err := markCutoverStarted(ctx, tx); err != nil {
+			return err
+		}
 		if kind == fenceReplace {
 			plan.mtime = distinctFenceSentinel(abs).Unix()
 			_, err = tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'intent', fence_kind = ?, fence_digest = ?, fence_mtime = ?, fence_witness = '', fence_required = 1 WHERE path = ?`,
