@@ -2600,6 +2600,7 @@
   "js.ws.admission.toast.undone": "工作區已返回待處理",
   "js.ws.admission.toast.partial": "已套用{0}；{1}遭拒。選擇已保留。",
   "js.ws.admission.failed": "無法套用工作區選擇。選擇已保留。",
+  "js.ws.admission.uncertain": "工作區選擇僅部分儲存。側欄顯示已儲存的狀態；重試前請檢查。",
   "js.ws.admission.toast.both": "已套用{0}和{1}",
   "js.ws.admission.group.workspaces": "工作區",
   "js.ws.admission.group.worktrees": "工作樹",

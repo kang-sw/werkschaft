@@ -271,10 +271,13 @@ type workspaceAdmissionRequest struct {
 }
 
 type workspaceAdmissionReply struct {
-	Applied bool   `json:"applied"`
-	Gen     uint64 `json:"gen,omitempty"`
-	Message string `json:"message,omitempty"`
-	HTML    string `json:"html,omitempty"`
+	Applied bool `json:"applied"`
+	// Uncertain marks a refused batch whose undo could not be written: its
+	// approvals stayed stored, and HTML shows the rail as it now is.
+	Uncertain bool   `json:"uncertain,omitempty"`
+	Gen       uint64 `json:"gen,omitempty"`
+	Message   string `json:"message,omitempty"`
+	HTML      string `json:"html,omitempty"`
 }
 
 // handleWorkspaceAdmission serves POST /rail/workspaces/admission. It validates
@@ -397,7 +400,7 @@ func (d *Daemon) handleWorkspaceAdmission(w http.ResponseWriter, r *http.Request
 			// rather than the draft it refused.
 			d.broker.wake(railListRepoKey)
 			nextView := d.railView(d.pagesIn(lang))
-			reply.Gen = nextView.LayoutGen
+			reply.Uncertain, reply.Gen = true, nextView.LayoutGen
 			if region, rerr := renderRailRegion(nextView, lang); rerr == nil {
 				reply.HTML = string(region.HTML)
 			}

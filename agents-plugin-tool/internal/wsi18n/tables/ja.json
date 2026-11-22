@@ -2600,6 +2600,7 @@
   "js.ws.admission.toast.undone": "ワークスペースを保留中に戻しました",
   "js.ws.admission.toast.partial": "{0} を適用、{1} は拒否されました。選択は保持されます。",
   "js.ws.admission.failed": "適用できませんでした。選択は保持されます。",
+  "js.ws.admission.uncertain": "一部のみ保存されました。保存された状態をレールに表示しています。再試行する前に確認してください。",
   "js.ws.admission.toast.both": "{0} と {1} を適用しました",
   "js.ws.admission.group.workspaces": "ワークスペース",
   "js.ws.admission.group.worktrees": "ワークツリー",

@@ -2600,6 +2600,7 @@
   "js.ws.admission.toast.undone": "Spazio riportato in attesa",
   "js.ws.admission.toast.partial": "{0} applicato; {1} rifiutato. La selezione rimane.",
   "js.ws.admission.failed": "Impossibile applicare la selezione. Rimane salvata.",
+  "js.ws.admission.uncertain": "La selezione è stata salvata solo in parte. La barra mostra ciò che è stato salvato; controlla prima di riprovare.",
   "js.ws.admission.toast.both": "{0} e {1} applicati",
   "js.ws.admission.group.workspaces": "spazi di lavoro",
   "js.ws.admission.group.worktrees": "worktree",

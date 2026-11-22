@@ -2600,6 +2600,7 @@
   "js.ws.admission.toast.undone": "Espacio devuelto a pendientes",
   "js.ws.admission.toast.partial": "Se aplicó {0}; se rechazó {1}. Se conserva la selección.",
   "js.ws.admission.failed": "No se pudo aplicar la selección. Se conserva.",
+  "js.ws.admission.uncertain": "La selección solo se guardó en parte. La barra muestra lo guardado; revísalo antes de reintentar.",
   "js.ws.admission.toast.both": "Se aplicaron {0} y {1}",
   "js.ws.admission.group.workspaces": "espacios de trabajo",
   "js.ws.admission.group.worktrees": "árboles de trabajo",
