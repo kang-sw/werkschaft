@@ -28,12 +28,13 @@ const agyAPIErrorPrefix = "⚠ API error"
 const agyStreamInterrupted = "⚠ The stream was interrupted. Please continue the task you were working on."
 
 const (
-	// agy's native retry starts about 4s after an attempt-1 idle timeout.
-	// Allow up to 15s for its output before interrupting the open prompt.
-	modelFailureDrain    = 15 * time.Second
-	modelWaitCancelGrace = 5 * time.Second
-	modelWaitBackoffBase = time.Second
-	modelWaitBackoffCap  = 30 * time.Second
+	// Give agy's native retry its full 10-minute SSE idle window plus a
+	// margin. Raw ACP activity renews this interval while the failure is pending.
+	modelNativeIdleRetryFallback = 11 * time.Minute
+	modelFailureDrain            = 15 * time.Second
+	modelWaitCancelGrace         = 5 * time.Second
+	modelWaitBackoffBase         = time.Second
+	modelWaitBackoffCap          = 30 * time.Second
 )
 
 const (
@@ -134,11 +135,16 @@ func (c *conv) loadModelWait() {
 	c.modelWaitMaxRetries = retries
 }
 
-// startModelWait arms the model-wait watchdog for a freshly sent ordinary agy
-// prompt turn. Compaction, replayed, and unsolicited turns do not call this.
+// startModelWait resets per-turn state for a freshly sent ordinary prompt.
 func (c *conv) startModelWait() {
 	c.disarmModelWait()
-	if c.rec.Backend != BackendAgy || c.modelWaitTimeout <= 0 || c.replaying || c.compacting || c.compactCommand {
+	c.armModelWait()
+}
+
+// armModelWait also accepts a turn recovered from holder replay, with its
+// pending tool count already restored.
+func (c *conv) armModelWait() {
+	if c.rec.Backend != BackendAgy || c.modelWaitTimeout <= 0 || !c.turn || c.replaying || c.wrapHold || c.compacting || c.compactCommand || c.compactInternalTurn || c.interruptAsked {
 		return
 	}
 	c.modelWaitArmed = true
@@ -232,14 +238,17 @@ func (c *conv) onModelActivity(pending int) {
 		return
 	}
 	if c.modelWaitFailure != "" {
+		if modelFailureDrainDuration(c.modelWaitFailure) == modelNativeIdleRetryFallback {
+			c.resetModelFailureDrain(modelNativeIdleRetryFallback)
+		}
 		return
 	}
 	c.resetModelWaitTimer()
 }
 
 // onModelFailure starts a recovery wait when an anchored failure line becomes
-// the accumulated reply tail. Later model output clears it and restores the
-// ordinary silence timer; only a still-terminal failure is cancelled.
+// the accumulated reply tail. Later model output clears the failure; a
+// prompt response goes through the existing settlement and retry path.
 func (c *conv) onModelFailure(failure string) {
 	if !c.modelWaitArmed || c.modelWaitCancelling || c.modelWaitFailErr != "" {
 		return
@@ -261,9 +270,20 @@ func (c *conv) onModelFailure(failure string) {
 	c.modelWaitFailureExcluded = false
 	c.modelWaitFailure = failure
 	c.stopModelWaitTimer()
+	c.resetModelFailureDrain(modelFailureDrainDuration(failure))
+}
+
+func modelFailureDrainDuration(failure string) time.Duration {
+	if agyModelFailureClass(failure) == "stream idle timeout" {
+		return modelNativeIdleRetryFallback
+	}
+	return modelFailureDrain
+}
+
+func (c *conv) resetModelFailureDrain(d time.Duration) {
 	c.stopModelFailureDrain()
 	if c.r != nil && c.r.opts.Timer != nil {
-		c.modelWaitDrainC, c.modelWaitDrainStop = c.r.opts.Timer(modelFailureDrain)
+		c.modelWaitDrainC, c.modelWaitDrainStop = c.r.opts.Timer(d)
 	}
 }
 
@@ -277,7 +297,7 @@ func (c *conv) modelFailureDrainTimedOut() {
 	}
 	if c.modelWaitRetries < c.modelWaitMaxRetries {
 		c.modelWaitCancelling = true
-		fmt.Fprintf(c.r.opts.Log, "agent %s: agy model failure remained terminal for %s; interrupting before automatic continue attempt %d/%d (%s)\n", c.rec.ReplyID, modelFailureDrain, c.modelWaitRetries+1, c.modelWaitMaxRetries, c.modelWaitFailure)
+		fmt.Fprintf(c.r.opts.Log, "agent %s: agy model failure remained unresolved for %s; interrupting before automatic continue attempt %d/%d (%s)\n", c.rec.ReplyID, modelFailureDrainDuration(c.modelWaitFailure), c.modelWaitRetries+1, c.modelWaitMaxRetries, c.modelWaitFailure)
 		if err := c.proc.Interrupt(); err != nil {
 			c.failModelWaitImmediately(fmt.Sprintf("agy model failure interrupt failed: %v (%s)", err, c.modelWaitFailure))
 		} else {

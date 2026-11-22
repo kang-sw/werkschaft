@@ -881,3 +881,128 @@ func TestAgyWorkerReattachWaitsForPromptResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestAgyWorkerReattachInterceptsNativeFailureOnce(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	// Replace before the open prompt produces any content.
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	first := agyPromptIDs(h, holder)[0]
+	h.runner.Close()
+	h.holders.restart()
+	timers := &leverTimers{}
+	h.opts.Timer = timers.start
+	h.opts.AgyModelWaitBackoff = func(int) time.Duration { return 0 }
+	h.startAt("http://127.0.0.1:1")
+	c := h.runner.conv(id)
+	eventually(t, "open worker turn rearmed after replay", func() bool {
+		var armed bool
+		c.do(func() { armed = !c.replaying && c.turn && c.rec.TurnOpen && c.modelWaitArmed })
+		return armed
+	})
+	if started, _ := timers.counts(); started != 0 || len(got.list()) != 0 {
+		t.Fatalf("rejoin started %d timers and reported %d results", started, len(got.list()))
+	}
+	end := `{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"` + first + `"}`
+	h.holders.out(holder, agyIdleTimeoutChunk, end)
+	eventually(t, "one automatic continue", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
+	prompts := h.holders.acpInputs(holder, "session/prompt")
+	var params struct{ Prompt []struct{ Text string } }
+	if err := json.Unmarshal(prompts[1], &params); err != nil || len(params.Prompt) != 1 || params.Prompt[0].Text != "continue" {
+		t.Fatalf("retry prompt params = %s", prompts[1])
+	}
+	if started, stopped := timers.counts(); started != 1 || stopped != 1 {
+		t.Fatalf("fallback timers started = %d, stopped = %d, want one stopped timer", started, stopped)
+	}
+	timers.fire(t, 0)
+	retry := agyPromptIDs(h, holder)[1]
+	h.holders.out(holder, end, // Duplicate response to the predecessor prompt.
+		`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"retried result"}}}}`,
+		`{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"`+retry+`"}`)
+	eventually(t, "one worker result", func() bool { return len(got.list()) == 1 })
+	if result := got.list()[0].Result; result.Status != TurnDone || result.Message != "retried result" {
+		t.Fatalf("retried result = %+v", result)
+	}
+	if count := len(agyPromptIDs(h, holder)); count != 2 || len(h.holders.acpInputs(holder, "session/cancel")) != 0 {
+		t.Fatalf("reattach sent %d prompts and %d cancels", count, len(h.holders.acpInputs(holder, "session/cancel")))
+	}
+}
+
+func TestAgyWorkerReattachDoesNotArmCompletedTurn(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	completeRecoveryWorker(t, h, BackendAgy, holder)
+	eventually(t, "completed worker result", func() bool { return len(got.list()) == 1 && !h.record(id).TurnOpen })
+	h.runner.Close()
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	c := h.runner.conv(id)
+	var armed, active bool
+	eventually(t, "completed worker rejoined", func() bool {
+		var ready bool
+		c.do(func() { ready, armed, active = c.proc != nil && !c.replaying, c.modelWaitArmed, c.turn })
+		return ready
+	})
+	if armed || active || len(got.list()) != 1 || len(agyPromptIDs(h, holder)) != 1 {
+		t.Fatalf("completed worker rejoined with active=%v, armed=%v, reports=%d, prompts=%d", active, armed, len(got.list()), len(agyPromptIDs(h, holder)))
+	}
+}
+
+func TestAgyWorkerReattachSuspendsNativeFailureForPendingToolOrApproval(t *testing.T) {
+	for _, tc := range []struct {
+		name, line string
+		tools      int
+		approvals  int
+	}{
+		{"tool", `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","name":"run_command","status":"in_progress","args":{"IsDaemon":true}}}}`, 1, 0},
+		{"approval", `{"jsonrpc":"2.0","id":"approval-1","method":"session/request_permission","params":{"toolCall":{"toolCallId":"t1","name":"run_command"},"options":[{"optionId":"yes","kind":"allow_once"}]}}`, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, got := workerRecoveryHarness(t, BackendAgy, false)
+			id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+			h.holders.out(holder, tc.line)
+			c := h.runner.conv(id)
+			eventually(t, "pending work before rejoin", func() bool {
+				var ready bool
+				c.do(func() { ready = c.modelWaitPending == tc.tools && len(c.approvals) == tc.approvals })
+				return ready
+			})
+			h.runner.Close()
+			h.holders.restart()
+			timers := &leverTimers{}
+			h.opts.Timer = timers.start
+			h.startAt("http://127.0.0.1:1")
+			c = h.runner.conv(id)
+			var armed bool
+			var tools, approvals int
+			eventually(t, "worker rejoined with pending work", func() bool {
+				var ready bool
+				c.do(func() {
+					ready = c.proc != nil && !c.replaying
+					armed, tools, approvals = c.modelWaitArmed, c.modelWaitPending, len(c.approvals)
+				})
+				return ready
+			})
+			if !armed || tools != tc.tools || approvals != tc.approvals {
+				t.Fatalf("reattach watchdog: armed=%v, tools=%d, approvals=%d", armed, tools, approvals)
+			}
+			h.holders.out(holder, agyIdleTimeoutChunk)
+			eventually(t, "native failure excluded while work is pending", func() bool {
+				var excluded bool
+				c.do(func() { excluded = c.modelWaitFailureExcluded })
+				return excluded
+			})
+			if started, _ := timers.counts(); started != 0 {
+				t.Fatalf("failure during pending %s started %d timers", tc.name, started)
+			}
+			first := agyPromptIDs(h, holder)[0]
+			h.holders.out(holder, `{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"`+first+`"}`)
+			eventually(t, "worker failure settled", func() bool { return len(got.list()) == 1 })
+			if result := got.list()[0].Result; result.Status != TurnFailed || !strings.HasPrefix(result.Error, "[stream idle timeout]") {
+				t.Fatalf("excluded failure result = %+v", result)
+			}
+			if len(agyPromptIDs(h, holder)) != 1 || len(h.holders.acpInputs(holder, "session/cancel")) != 0 {
+				t.Fatal("failure during pending work sent a cancel or prompt")
+			}
+		})
+	}
+}

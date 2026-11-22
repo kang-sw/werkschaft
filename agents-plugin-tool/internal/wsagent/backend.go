@@ -428,6 +428,8 @@ type Event struct {
 	// during a turn, carrying the count of currently pending tool calls
 	// (including daemon commands) so the model-wait watchdog can reset or pause.
 	ModelActivity *int
+	// agyReplay carries the mapper's in-memory observation at ReplayDone.
+	agyReplay *agyReplayObservation
 	// CompactRequested (with TurnEnd): the ending turn carried a successful
 	// compaction lever call (a *__request_compaction tool call whose result
 	// is not an error) and was not interrupted. The runner holds queued
