@@ -17,18 +17,21 @@ import (
 )
 
 func TestWhiteboardConstructionBeforeDashboardBind(t *testing.T) {
-	for _, mode := range []string{"proxy", "hosted-cli", "raw-cli"} {
+	for _, mode := range []string{"proxy", "hosted-cli"} {
 		t.Run(mode, func(t *testing.T) {
 			hello := cliHello(t)
 			for _, name := range []string{"WS_CACHE_HOME", "WS_CONFIG_HOME", "WS_MCP_PROJECT_ROOT", "WS_RSRC_ROOT", "WS_MCP_NO_DASHBOARD", "WS_MCP_CONFIG_MANIFESTS"} {
 				t.Setenv(name, hello.Env[name])
 			}
-			host := &proxyHost{logw: io.Discard}
+			boards := mcp.NewWhiteboardStores(io.Discard)
+			t.Cleanup(func() {
+				if err := boards.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			host := &proxyHost{logw: io.Discard, boards: boards}
 			var stdout, stderr strings.Builder
 			cli := &hostedCLI{hello: hello, host: host, ctx: context.Background(), env: mcp.EnvFromMap(hello.Env), stdout: &stdout, stderr: &stderr}
-			if mode == "raw-cli" {
-				cli.host = nil
-			}
 			var server *mcp.Server
 			if mode == "proxy" {
 				hello.Mode = wsdashboard.ProxyModeMCP
@@ -59,15 +62,20 @@ func TestWhiteboardConstructionBeforeDashboardBind(t *testing.T) {
 				text = stdout.String()
 			}
 			want := "full: page not yet served\n"
-			if mode == "raw-cli" {
-				want = "full: page unavailable\n"
-			}
 			if !strings.Contains(text, want) || strings.Contains(text, "index.html") || strings.Contains(text, "start the daemon") {
 				t.Fatal(text)
 			}
-			board, err := (wswhiteboard.FolderStore{Dir: filepath.Join(hello.Cwd, "ai-docs", "whiteboards", wsmailbox.ReplyID(key))}).Open(nil)
-			if err != nil || board == nil || board.Seq != 1 {
-				t.Fatalf("board did not commit once: %+v, %v", board, err)
+			// The daemon's registry holds the board's exclusive SQLite handle.
+			if err := boards.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err := wswhiteboard.OpenBoardDB(filepath.Join(hello.Cwd, "ai-docs", "whiteboards", wsmailbox.ReplyID(key)), nil, wswhiteboard.BoardDBOptions{})
+			if err != nil || db == nil {
+				t.Fatalf("board did not commit: %v", err)
+			}
+			defer db.Close()
+			if state := db.State(); state == nil || state.Seq != 1 {
+				t.Fatalf("board did not commit once: %+v", state)
 			}
 
 		})

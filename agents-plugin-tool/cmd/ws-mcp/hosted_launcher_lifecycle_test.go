@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,7 +77,14 @@ func TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild(t *testing.T)
 			}
 			assertRead(version)
 
-			const successorVersion = "0.50.99-dev"
+			// Newer than this build in patch only: a release bump moves the
+			// build's minor, and a fixed literal then lands older or in another
+			// minor than the launcher accepts.
+			var major, minor int
+			if _, err := fmt.Sscanf(version, "%d.%d.", &major, &minor); err != nil {
+				t.Fatalf("build version %q: %v", version, err)
+			}
+			successorVersion := fmt.Sprintf("%d.%d.99-dev", major, minor)
 			successor := buildDashboardTestBin(t, successorVersion)
 			start(successor) // Ordinary newer-core replacement, no --replace.
 			replaced := waitForEndpoint(t, dir, successorVersion, 15*time.Second)
