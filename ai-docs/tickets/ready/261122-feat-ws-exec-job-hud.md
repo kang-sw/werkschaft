@@ -1139,3 +1139,16 @@ Review round 6 (test-only; no product change). The ordering tests proved when th
 - LIST-RETRY (minor): failures are armed only after the empty setup revision's own read finished and no list read is in flight or issued for 500 ms. The guard is a setup change; not separately scratch-reverted (the retry removal proof from round 3 is unchanged).
 
 Verification: `go test -race -count=1 -run 'TestExecHUDReviewBrowser$|TestExecHUDBrowser$' ./internal/wsdashboard` ok (386.7 s); `GOOS=windows go vet ./internal/wsdashboard` clean; `git diff --check` clean.
+
+#### Edition (430899a32) - 2026-11-23
+
+Review round 7 (test/fixture only; no production asset or non-test Go change). The round-6 evidence closed the false passes but left healthy-run flake windows, all from uncontrolled revision wakes racing the scenarios. Fixed once, structurally:
+
+- Fixture: a controlled-wake mode (`/manual`). While on, a stop's end and `/patch` publish no revision; `/bump` answers with the revision it made. The daemon reads the revision before the list, so a finished list read whose `rev` is at least that value was taken after the wake. A `wake(net, jobs)` helper publishes one revision and waits for such a read (then a short quiet window only to see a dirty refetch). Scenarios that do not enable the mode keep today's behavior.
+- STOP-TERMINAL: setup drains through controlled wakes; after the stop POST (held at the daemon) one wake carrying a marker job (exec_s3) is published, and the test asserts from the request log that its read is the only list read issued after the stop POST, that it carries the marker with the job still running, and that the marker chip is applied, before the lists are held and the stop is let through. The `every`-over-all-reads check is gone. A wake while a held read is in flight only marks the page dirty (the refetch follows the release), so the later "sent" step publishes a wake and waits for the toast instead of a second held list.
+- ORDER-LATE-LIST: setup through a controlled wake; the exec_o9 chip insertion is latched by a MutationObserver installed before the release (like the notice-state history), replacing the polled selector.
+- LIST-RETRY: the simulated failures are armed only after two controlled setup wakes (seed, then empty) were read to the end; the scenario's own wake is the only source after that.
+
+Scratch reverts (edit, run, restore, `cmp` identical; nothing committed): removing the running→ended exception in `xhStale` fails STOP-TERMINAL (waiting for the stopped chip); replacing the issue-number check with `return false` fails ORDER-LATE-LIST (history `sending, closed, failed, closed`); removing the list retry (`else xhRetryLater()` → `else {}`) fails LIST-RETRY (the late chip never appears). No-flake check: the three scenarios on en-light 5 times each (a script looped `WS_EXEC_HUD_SECTS=<name> WS_EXEC_HUD_COMBOS=en-light go test -run TestExecHUDReviewBrowser`), 15/15 passes (a narrowed run exits 3 by design).
+
+Verification: `go test -race -count=1 -run 'TestExecHUDReviewBrowser$|TestExecHUDBrowser$' ./internal/wsdashboard` ok (386.1 s); `GOOS=windows go vet ./internal/wsdashboard` clean; `git diff --check` clean.
