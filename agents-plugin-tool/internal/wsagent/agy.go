@@ -79,7 +79,7 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		// refuses it (agy 1.5.14 live probe: native auto and
 		// --dangerously-skip-permissions run commands without asking, and
 		// top-level --settings rules do not reach ACP sessions).
-		ExecCutover: &ExecCutoverSupport{Since: "1.5.14", LaunchMode: "default", RejectTools: []string{agyCommandTool}, Instruction: agyExecCutoverInstruction},
+		ExecCutover: &ExecCutoverSupport{Since: "1.5.14", LaunchMode: agyCutoverMode, RejectTools: []string{agyCommandTool}, Instruction: agyExecCutoverInstruction},
 		Profiles: []BuiltinProfileRegistration{
 			agentWorkerBuiltinProfile(BackendAgy, nil),
 			leadBuiltinProfile(LeadProfileAgy, BackendAgy, ""),
@@ -119,6 +119,10 @@ var (
 // agyDropEnv are the parent harness variable prefixes an agy session starts
 // without. wsharnessenv.Drop removes ws's own session identity.
 var agyDropEnv = []string{"CLAUDE", "CODEX_", "PI_", "ORCA_"}
+
+// agyCutoverMode is the native mode a cutover agy session runs in: the one
+// that asks before each run_command, so the daemon can refuse it.
+const agyCutoverMode = "default"
 
 // agyExecCutoverInstruction is appended to a cutover agy session's system
 // prompt at session creation, and sent once as a prompt at the end of a
@@ -386,11 +390,18 @@ func (p *agyProcess) open(spec StartSpec) error {
 			return fmt.Errorf("effort: %w", err)
 		}
 	}
+	mode := ""
 	if spec.Lead != nil {
-		if mode := spec.Lead.PermissionMode; mode != "" && mode != p.m.mode() {
-			if err := p.SetPermissionMode(mode); err != nil {
-				return fmt.Errorf("permission mode: %w", err)
-			}
+		mode = spec.Lead.PermissionMode
+	}
+	if spec.ExecCutover {
+		// A cutover worker too: a resumed session reopens in whatever
+		// mode it last ran in, and native auto runs commands unasked.
+		mode = agyCutoverMode
+	}
+	if mode != "" && mode != p.m.mode() {
+		if err := p.SetPermissionMode(mode); err != nil {
+			return fmt.Errorf("permission mode: %w", err)
 		}
 	}
 	return nil

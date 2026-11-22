@@ -192,6 +192,12 @@ func (c *conv) handle(ev Event) {
 		// permission choice. Keep that report in activeMode for projection, but
 		// do not turn an observation into a persisted next-launch override.
 		legacyCodexOmission := rec.Backend == BackendCodex && rec.PermissionMode == ""
+		if !rec.Lead && c.cutoverSupport() != nil {
+			if !quiet && !c.replaying {
+				c.holdWorkerCutoverMode(ev.PermissionMode)
+			}
+			break
+		}
 		if mode := c.cutoverLaunchMode(); mode != "" {
 			// Under the cutover the process runs in its launch mode only:
 			// a reported move is undone, and the saved preference stays.

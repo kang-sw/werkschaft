@@ -269,6 +269,21 @@ func (c *conv) cutoverLaunchMode() string {
 	return ""
 }
 
+// holdWorkerCutoverMode returns a cutover worker's process to its launch
+// mode when it runs in another (reported is the mode it reports). A
+// lead's mode goes through its settings reconciliation instead.
+func (c *conv) holdWorkerCutoverMode(reported string) {
+	s := c.cutoverSupport()
+	if s == nil || s.LaunchMode == "" || c.rec.Lead || reported == "" || reported == s.LaunchMode || c.proc == nil {
+		return
+	}
+	if err := controlsFor(c.proc).setPermissionMode(s.LaunchMode); err != nil {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: return to native %s under the exec cutover: %v\n", c.rec.ReplyID, s.LaunchMode, err)
+		return
+	}
+	fmt.Fprintf(c.r.opts.Log, "agent %s: returned from native %s to %s under the exec cutover\n", c.rec.ReplyID, reported, s.LaunchMode)
+}
+
 // cutoverRejects reports whether the daemon refuses a permission request
 // for tool in c's current process.
 func (c *conv) cutoverRejects(tool string) bool {

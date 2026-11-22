@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -30,6 +31,9 @@ type agyFake struct {
 	// model is the session's model: a Claude model offers no thought
 	// level, as in agy.
 	model string
+	// openMode, when set, is the mode a session opens in (a resumed
+	// session's last one); native default otherwise.
+	openMode string
 }
 
 func newAgyLeadHarness(t *testing.T) (*leadHarness, *agyFake) {
@@ -115,7 +119,10 @@ func (f *agyFake) answer(_, method string, params json.RawMessage) (string, stri
 		if sid == "" {
 			sid = "agy-s1"
 		}
-		return `{"sessionId":"` + sid + `","modes":{"currentModeId":"default","availableModes":[{"id":"default"},{"id":"accept-edits"},{"id":"auto"},{"id":"plan"}]},"configOptions":` + f.config("", "") + `}`, "", true
+		f.mu.Lock()
+		openMode := cmp.Or(f.openMode, "default")
+		f.mu.Unlock()
+		return `{"sessionId":"` + sid + `","modes":{"currentModeId":"` + openMode + `","availableModes":[{"id":"default"},{"id":"accept-edits"},{"id":"auto"},{"id":"plan"}]},"configOptions":` + f.config("", "") + `}`, "", true
 	case "session/set_config_option":
 		var p struct {
 			ConfigID string `json:"configId"`

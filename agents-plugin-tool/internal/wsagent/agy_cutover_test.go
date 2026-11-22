@@ -278,6 +278,38 @@ func TestAgyCutoverWorkerRefusesRunCommandAndHoldsItsReport(t *testing.T) {
 	}
 }
 
+// A cutover agy worker runs in native default as a lead does: a session
+// that opens in another mode (a resumed one's last) is returned to it at
+// launch, and an in-stream move away from it is undone.
+func TestAgyCutoverWorkerRunsInNativeDefault(t *testing.T) {
+	h, f := newAgyCutoverHarness(t)
+	f.openMode = "auto"
+	reg := h.opts.Backends[BackendAgy]
+	reg.WorkerCapable, reg.WorkerProfile, reg.WorkerHTTPMCP, reg.WorkerAutoApprove = true, AgentWorkerProfile(BackendAgy), true, true
+	h.opts.Backends[BackendAgy] = reg
+	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
+	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "gemini-3.8-flash", BackendAgy, "medium"); err != nil {
+		t.Fatal(err)
+	}
+	h.startAt("http://127.0.0.1:1")
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	if rec := h.record(id); rec.ExecCutoverHolder == "" {
+		t.Fatal("the agy worker did not start under the cutover")
+	}
+	// The launch sets default; the session's own open report of auto may
+	// set it once more.
+	eventually(t, "the launch's set_mode", func() bool { return len(agyModes(t, h, holder)) > 0 })
+	launch := agyModes(t, h, holder)
+	if slices.ContainsFunc(launch, func(m string) bool { return m != "default" }) {
+		t.Fatalf("launch set_mode calls = %v", launch)
+	}
+	h.holders.out(holder, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"current_mode_update","currentModeId":"auto"}}}`)
+	eventually(t, "the worker returned to default", func() bool {
+		modes := agyModes(t, h, holder)
+		return len(modes) > len(launch) && modes[len(modes)-1] == "default"
+	})
+}
+
 // A run_command request the process made while no daemon ran is replayed
 // to the next one, which refuses it at the rejoin's end, keeps the
 // rejoined process in native default whatever mode was saved, and sends

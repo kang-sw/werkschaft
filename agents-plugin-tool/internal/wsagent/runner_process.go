@@ -761,6 +761,8 @@ func (c *conv) replayDone(lost bool) {
 		c.armModelWait()
 	}
 	c.reconcileLeadPermission()
+	// A rejoined cutover worker's process keeps the mode it ran in.
+	c.holdWorkerCutoverMode(c.activeMode)
 	c.rejectCutoverPending()
 	c.allowAgyBypassPending()
 	c.checkAction(false)
