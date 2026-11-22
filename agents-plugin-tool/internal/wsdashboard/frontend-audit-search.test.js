@@ -433,3 +433,30 @@ test("reused window starts hit B immediately and stale hit A cannot clear its ow
   assert.equal(win.resultEnvelope.out, "B\nsecond\nhit\n");
   assert.equal(win._auPagingOwner, null);
 });
+
+test("same cached envelope supersedes an aborted paging lock without losing the new lock", async () => {
+  const env = makeMockFetchEnv({fetch:async()=>response()});
+  const win = pageWin(), ev = win.resultEnvelope, requests = [];
+  const paging = installPaging(env, [win], (url, opts) => new Promise(resolve => requests.push({url, signal:opts.signal, resolve})));
+  env.api.handleWindowRender(win);
+  win.reqToken++;
+  win.targetLine = 4;
+  env.api.handleWindowRender(win);
+  const ownerB = win._auPagingOwner, lockB = win._morePending.get(ev).out;
+  assert.equal(requests.length, 2, "same-envelope B fetch starts immediately");
+  assert.equal(requests[0].signal.aborted, true);
+  assert.equal(requests[1].signal.aborted, false);
+  requests[0].resolve({ok:true,json:async()=>({data:"stale\n",end:true})});
+  await flush();
+  assert.equal(ev.out, "a\n");
+  assert.equal(win._auPagingOwner, ownerB);
+  assert.equal(win._morePending.get(ev).out, lockB, "late A finally preserves B lock");
+  const manual = paging.loadMorePart(win, "out", 2);
+  assert.equal(requests.length, 2, "live manual and automatic work still share");
+  requests[1].resolve({ok:true,json:async()=>({data:"second\nthird\nhit\n",end:true})});
+  assert.equal(await manual, true);
+  await flush();
+  assert.equal(ev.out, "a\nsecond\nthird\nhit\n");
+  assert.equal(win._auPagingOwner, null);
+  assert.equal(win._morePending.get(ev).out, undefined);
+});

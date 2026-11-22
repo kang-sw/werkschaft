@@ -499,13 +499,20 @@
     win._morePending = win._morePending || new WeakMap();
     if (!win._morePending.has(ev)) win._morePending.set(ev, {});
     var paging = win._morePending.get(ev);
-    if (paging[part]) {
-      if (!owner) paging[part].manual = true;
-      return paging[part];
+    var existing = paging[part];
+    if (existing && !existing.aborted && !existing.controller.signal.aborted && existing.reqToken === win.reqToken) {
+      if (!owner) existing.manual = true;
+      return existing.promise;
+    }
+    if (existing) {
+      existing.aborted = true;
+      if (paging[part] === existing) delete paging[part];
+      existing.controller.abort();
     }
     if (!ev.range || !ev.range[part] || ev.range[part].offset !== offset) return Promise.resolve(false);
     var token = win.reqToken;
     var controller = new AbortController();
+    var entry = { reqToken: token, controller: controller, aborted: false, manual: !owner };
     var btn = win.el.querySelector('[data-au-more="' + part + '"]');
     if (btn) btn.disabled = true;
     var panel = win.el.querySelector(".au-panel");
@@ -517,7 +524,7 @@
       return r.json();
     }).then(function (chunk) {
       var stillActive = (ev === win.activeEnvelope) || (!win.inspectEventId && ev === win.resultEnvelope);
-      if (win.reqToken !== token || (owner && (owner.cancelled || auDisplayedEnvelope(win) !== ev) && !pending.manual) || !win.el.isConnected || !stillActive || !ev.range || !ev.range[part] || ev.range[part].offset !== offset) return false;
+      if (entry.aborted || win.reqToken !== token || (owner && (owner.cancelled || auDisplayedEnvelope(win) !== ev) && !entry.manual) || !win.el.isConnected || !stillActive || !ev.range || !ev.range[part] || ev.range[part].offset !== offset) return false;
       if (!chunk || typeof chunk.data !== "string") return false;
       ev[part] = (ev[part] || "") + chunk.data;
       if (chunk && chunk.end && ev.range) {
@@ -532,12 +539,18 @@
       return true;
     }).catch(function () {
       if (btn) btn.disabled = false;
-      if (!(owner && owner.cancelled)) toast(wsT("js.audit.loadmore.failed"));
+      if (!entry.aborted && !(owner && owner.cancelled)) toast(wsT("js.audit.loadmore.failed"));
       return false;
-    }).finally(function () { delete paging[part]; });
-    pending.manual = !owner;
-    if (owner) owner.cancel = function () { owner.cancelled = true; if (!pending.manual) controller.abort(); };
-    paging[part] = pending;
+    }).finally(function () { if (paging[part] === entry) delete paging[part]; });
+    entry.promise = pending;
+    if (owner) owner.cancel = function () {
+      owner.cancelled = true;
+      if (entry.manual) return;
+      entry.aborted = true;
+      if (paging[part] === entry) delete paging[part];
+      controller.abort();
+    };
+    paging[part] = entry;
     return pending;
   }
 
