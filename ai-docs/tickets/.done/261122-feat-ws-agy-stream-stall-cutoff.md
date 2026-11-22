@@ -344,3 +344,36 @@ Decisions:
   - The steer-deadline test's stale-channel assertion: its real evidence is the timer count plus the later cut.
   - Untested: the worker conv exclusion and `steerMail` restarting the timer.
   - holder.py depends on Go's standard `log` prefix before `http2: `.
+
+#### Edition (781c88c99) - 2026-11-22
+
+Pre-merge review (fix-needed) addressed in 781c88c99. The lead settled these decisions, and they supersede the matching Phase 1 Result details:
+
+- **Request boundary at or before its cause.**
+  - Prompt and automatic-continue boundaries are read before the send reaches the holder.
+  - A tool completion's boundary is the time the stream reader received the line, stamped before the event queue.
+  - With no reader time, the attempt has no boundary and never cuts.
+  - A regression test covers a header logged between the real completion and the loop handling it: the header stays in the window.
+- **Locator: no backward slack.** Only logs modified at or after the process start qualify.
+  - PID matching does not apply. The daemon knows only agy's front-process PID, and worker log names carry the worker's PID.
+  - A fixture where a just-stopped same-session predecessor is the only matching log returns unknown.
+- **Repeated local hour.**
+  - A header counts in the window if either reading of its local time falls in it.
+  - The first line covers the boundary only if both readings precede the window.
+  - Covered by a repeated-hour fixture.
+- **Holder owns the capture file.**
+  - The daemon's cutoff marker goes through a new additive holder operation, `capture_note`, under the capture's cap. It follows the original spawn option across a daemon reattach, and an older holder simply gets no marker. The daemon never writes the file.
+  - The cap includes the stop marker: its bytes are reserved and it is written once. A file reopened at or over the cap, or already ending in the marker, gets nothing more.
+  - The tests assert total size within the cap, a single marker, and the reopen behavior.
+- **Tail read.** One stat, at most one seek, then a bounded sequential read. There is no positioned read, so Windows also does a single native seek. The commit records the Windows and Unix operation counts.
+- **First-request safeguard.** It holds until this process's log has shown at least one main header. A monitor header alone verifies the format but never enables a cut.
+- **Minor test fixes.**
+  - A deadline-driven fake timer for the steer restart.
+  - Direct tests for the mail-steer restart and the worker opt-out.
+  - A holder fixture where a non-trace line's continuation begins with `http2: ` and stays in the ring.
+
+Verification:
+- `go test ./internal/wsagent -run 'Agy|Lead|Steer|Holder|ModelWait|Wake|Background'` ok; the new tests pass with `-race -count=3`.
+- `go test ./internal/wsholder -run 'TestSpawnHTTP2Capture|TestCaptureNote|TestLaunchRing|TestAConsumersReplay'` ok; the Python holder suite runs 56 tests ok.
+- `go vet` is clean on the host and with `GOOS=windows`; `generate-package-assets.py --check` ok.
+- Breaking each fix in turn made its test fail.
