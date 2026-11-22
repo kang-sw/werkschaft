@@ -281,6 +281,45 @@ func TestAgyTerminalFailureSurvivesCancelledRetryBackoff(t *testing.T) {
 	}
 }
 
+// TestAgyContinueCrossingAReleaseIsNoAttempt: an agy turn's model stream
+// stalled and its automatic continue waits out its backoff when a release
+// notice ends the conversation's binding. The continue's last check, which
+// shares the notice's fence (admitInput), refuses it: nothing is sent, the
+// attempt is not counted, the turn does not fail and the process keeps
+// running.
+func TestAgyContinueCrossingAReleaseIsNoAttempt(t *testing.T) {
+	h, timers, got := agyWatchdogHarnessWithSilence(t, "45", "3", false)
+	h.runner.Close()
+	h.config.AgyModelWaitBackoff = func(int) time.Duration { return time.Second }
+	h.start()
+	id, p := startAgyWatchdogTurn(t, h, true)
+	m := newAgyMapper("s")
+	m.promptSent("ws-p-watchdog-1")
+	feedAgyWatchdogLines(m, p, agyIdleTimeoutChunk, `{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"ws-p-watchdog-1"}`)
+	eventually(t, "retry backoff timer", func() bool {
+		started, _ := timers.counts()
+		return started == 2
+	})
+	c := h.runner.conv(id)
+	c.noteReleased(h.root)
+	var retries int
+	var failErr string
+	c.do(func() {
+		c.modelWaitBackoffTimedOut()
+		retries, failErr = c.modelWaitRetries, c.modelWaitFailErr
+	})
+	noTurnSent(t, p, "an automatic continue crossing a release")
+	if retries != 0 || failErr != "" {
+		t.Fatalf("a refused continue counted as an attempt: retries=%d failure=%q", retries, failErr)
+	}
+	if reports := got.lead(); len(reports) != 0 {
+		t.Fatalf("a refused continue failed the turn: %+v", reports)
+	}
+	if p.isClosed() {
+		t.Fatal("a release never stops a process")
+	}
+}
+
 func TestAgyTerminalFailureSurvivesInterruptTimeout(t *testing.T) {
 	h, timers, got := agyWatchdogHarnessWithSilence(t, "45", "3", false)
 	_, p := startAgyWatchdogTurn(t, h, true)

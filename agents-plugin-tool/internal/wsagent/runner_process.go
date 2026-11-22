@@ -45,11 +45,17 @@ func (c *conv) setPromptBoundary(rec *Record, startedAt int64, reportable bool) 
 // inbox drain. Internal prompts wait for ACP without opening a parent result.
 // The boundary is recorded only once the holder accepted the prompt: one
 // recorded before it would leave a successor waiting for a response to a
-// prompt that never reached the harness.
+// prompt that never reached the harness. send runs only when the binding
+// survives the last release check (admitInput); otherwise nothing runs and
+// the error is an inputReleasedError, which is no send failure.
 func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
 	heldAgy := c.record().heldAgyWorker()
 	startedAt := c.r.opts.Now().UnixMilli()
-	if err := send(); err != nil || !heldAgy {
+	var err error
+	if checkout := c.admitInput(func() { err = send() }); checkout != "" {
+		return &inputReleasedError{checkout: checkout}
+	}
+	if err != nil || !heldAgy {
 		return err
 	}
 	c.update(func(rec *Record) { c.setPromptBoundary(rec, startedAt, reportable) })

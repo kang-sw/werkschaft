@@ -926,6 +926,69 @@ func TestCheckoutReleaseNoticeDuringAStartRefusesItsTurn(t *testing.T) {
 	}
 }
 
+// TestCheckoutReleaseCrossingAutomaticCompactionInput: a release notice lands
+// after the loop's release snapshot (kick, kickInput) and before an
+// automatic compaction input reaches the backend. The input's last check,
+// which shares the notice's fence (admitInput), drops it quietly: nothing is
+// sent, no compaction starts, the nudge is not counted as issued, no error
+// is recorded and the process keeps running.
+func TestCheckoutReleaseCrossingAutomaticCompactionInput(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stage func(c *conv) *compactRequest
+		send  func(c *conv) bool
+	}{
+		{"nudge", func(c *conv) *compactRequest {
+			c.compactNudge = compactionNudge{text: "compaction advisory", level: 1, standalone: true}
+			c.compactUsageFresh = true
+			return nil
+		}, (*conv).sendCompactionNudge},
+		{"command", func(c *conv) *compactRequest {
+			c.compactPending = &compactRequest{resume: true, auto: true}
+			return c.compactPending
+		}, (*conv).compactIdle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, clk, wt, _ := releaseHarness(t)
+			child, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "workdir-write", Worktree: wt})
+			proc.reply("done")
+			eventually(t, "settled", func() bool { return h.state(child).Status == StatusIdle })
+			at := releaseAfterBindings(t, clk, wt)
+			c := h.runner.conv(child)
+			var sent bool
+			var req *compactRequest
+			c.do(func() {
+				req = tc.stage(c)
+				if c.released() != "" {
+					t.Error("the snapshot must pass: the release has not landed yet")
+					return
+				}
+				h.runner.CheckoutReleased(wt, at, false)
+				sent = tc.send(c)
+				if c.compacting || c.compactCommand {
+					t.Errorf("a refused compaction input started a compaction: compacting=%v command=%v", c.compacting, c.compactCommand)
+				}
+				if c.compactAdvised || tc.name == "nudge" && c.compactNudge.level != 1 {
+					t.Errorf("a refused nudge counts as issued: advised=%v nudge=%+v", c.compactAdvised, c.compactNudge)
+				}
+			})
+			if sent {
+				t.Fatal("a compaction input crossing a release reports it was sent")
+			}
+			noTurnSent(t, proc, "a compaction input crossing a release")
+			if req != nil && (req.err == nil || !strings.Contains(req.err.Error(), "released")) {
+				t.Fatalf("the refused compaction request must say the release refused it: %v", req.err)
+			}
+			if st := h.state(child); st.Error != "" {
+				t.Fatalf("a refused compaction input is no failure, yet it recorded %q", st.Error)
+			}
+			if proc.isClosed() {
+				t.Fatal("a release never stops a process")
+			}
+		})
+	}
+}
+
 // TestWorktreeReleaseRefusesPiSpawnsIntoIt: both Pi spawn paths, a worker's
 // nested pi.spawn through the token route and a lead's root Pi spawn, take
 // the worktree's release reservation like agent.spawn, so a release holding

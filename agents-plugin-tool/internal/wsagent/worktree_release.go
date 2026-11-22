@@ -4,6 +4,7 @@
 package wsagent
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"slices"
@@ -231,6 +232,33 @@ func (c *conv) admitInput(write func()) (refusedBy string) {
 	}
 	write()
 	return ""
+}
+
+// inputReleasedError is the refusal of an automatic input (a compaction
+// command, nudge, continuation or restore turn) whose last release check
+// (admitInput) found the binding ended: nothing reached the backend. It is
+// no send failure, so its callers drop the input quietly (dropReleasedInput)
+// rather than record an error or stop the process.
+type inputReleasedError struct{ checkout string }
+
+func (e *inputReleasedError) Error() string {
+	return fmt.Sprintf("its worktree %s was released after it was bound there", e.checkout)
+}
+
+// releasedInput reports the checkout of err's release refusal, when err is
+// one (inputReleasedError).
+func releasedInput(err error) (string, bool) {
+	var refused *inputReleasedError
+	if errors.As(err, &refused) {
+		return refused.checkout, true
+	}
+	return "", false
+}
+
+// dropReleasedInput logs an automatic input a release refused; the process
+// is left running, as a release never stops it.
+func (c *conv) dropReleasedInput(what, checkout string) {
+	fmt.Fprintf(c.r.opts.Log, "agent %s: no %s: its worktree %s was released\n", c.rec.ReplyID, what, checkout)
 }
 
 // ReleasedConversation is one spawned conversation whose binding a release
