@@ -33,7 +33,9 @@ func (l *companionKitLint) issue(path, message string) {
 //   - an outfit column with no top-level poses/gestures entry;
 //   - column headAnchor/feetPivot drift from the pack registration;
 //   - outfit, hair, eye-set and attachment IDs (and attachment slots) the
-//     wardrobe config keys cannot select, and the reserved attachment ID none.
+//     wardrobe config keys cannot select, and the reserved attachment ID none;
+//   - an outfit column's mesh `deform` field (see lintDeform) and a deform
+//     on a registry column, where the engine ignores it.
 func lintCompanionKit(raw []byte) []string {
 	var root map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -48,6 +50,9 @@ func lintCompanionKit(raw []byte) []string {
 		top[section] = groups
 		for _, id := range sortedCompanionKeys(groups) {
 			group, _ := groups[id].(map[string]any)
+			if group["deform"] != nil {
+				l.issue(fmt.Sprintf("%s.%s.deform", section, id), "is ignored on a registry column; declare it on the outfit column")
+			}
 			layers, _ := group["layers"].([]any)
 			for i, v := range layers {
 				layer, _ := v.(map[string]any)
@@ -92,6 +97,8 @@ func lintCompanionKit(raw []byte) []string {
 					// columns anchor lower or hang by design.
 					l.drift(columnPath, entry, inherited, registration, section == "poses" && column == "stand")
 				}
+				entry, _ := columns[column].(map[string]any)
+				l.deform(columnPath, entry, root)
 			}
 		}
 	}

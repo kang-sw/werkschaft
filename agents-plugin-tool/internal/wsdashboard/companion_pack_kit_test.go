@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -274,4 +275,109 @@ func TestCompanionKitLint(t *testing.T) {
 func companionValidation(raw string) ([]string, error) {
 	_, files, err := validateCompanionManifest([]byte(raw), "kit")
 	return files, err
+}
+
+// TestCompanionKitDeformLint covers the advisory mesh-deform findings: a clean
+// column reports nothing, a defective one reports every rule by path, and the
+// validator still accepts the manifest (deform is T0).
+func TestCompanionKitDeformLint(t *testing.T) {
+	const clean = `{
+		"schema":"ws-companion/v1","id":"mesh","name":"Mesh","canvas":[512,512],
+		"motions":{"hip-l":{"oscillate":{"rotDeg":[-6,6],"hz":0.8}}},
+		"poses":{"stand":{"layers":[{"file":"s.png"}]},"dangle":{"fallback":"stand"}},
+		"outfits":{"street":{"poses":{
+			"stand":{"layers":[{"file":"a.png"}]},
+			"dangle":{"layers":[{"id":"body","file":"b.png"},{"id":"tail","file":"t.png","z":25,"motion":"breathe"}],"deform":{
+				"grid":[12,16],
+				"bones":{
+					"hipL":{"pivot":[235,330],"region":[[200,300],[260,300],[260,420],[200,420]],"feather":24,"motion":"hip-l"},
+					"kneeL":{"pivot":[238,410],"parent":"hipL","region":[[200,400],[260,400],[260,500],[200,500]],"motion":{"oscillate":{"rotDeg":[-6,6],"hz":0.8,"phase":0.17}}}
+				},
+				"roll":{"pivot":[256,184],"motion":{"use":"sway-pivot"}}}}
+		}}}
+	}`
+	if _, _, err := validateCompanionManifest([]byte(clean), "mesh"); err != nil {
+		t.Fatalf("deform manifest rejected: %v", err)
+	}
+	if issues := lintCompanionKit([]byte(clean)); len(issues) != 0 {
+		t.Fatalf("clean deform reported: %q", issues)
+	}
+
+	defective := `{
+		"schema":"ws-companion/v1","id":"mesh","name":"Mesh","canvas":[512,512],
+		"poses":{"stand":{"layers":[{"file":"s.png"}],"deform":{"bones":{}}}},
+		"outfits":{"street":{"poses":{"stand":{"layers":[
+			{"id":"low","file":"a.png","z":10},
+			{"id":"mid","file":"m.png","z":15,"fps":2,"frames":[{"file":"m1.png"},{"file":"m2.png"}]},
+			{"id":"swing","file":"w.png","z":16,"swingWeight":0.5},
+			{"id":"top","file":"b.png","z":20},
+			{"id":"above","file":"c.png","z":30,"motion":"breathe"}
+		],"deform":{
+			"grid":[1,40],
+			"bones":{
+				"Bad Id":{"pivot":[10,10],"region":[[0,0],[9,0],[9,9]]},
+				"outside":{"pivot":[900,10],"region":[[0,0],[9,0],[9,9]]},
+				"thin":{"pivot":[10,10],"region":[[0,0],[9,0]]},
+				"orphan":{"pivot":[10,10],"parent":"ghost","region":[[0,0],[9,0],[9,9]]},
+				"loopA":{"pivot":[10,10],"parent":"loopB","region":[[0,0],[9,0],[9,9]]},
+				"loopB":{"pivot":[10,10],"parent":"loopA","region":[[0,0],[9,0],[9,9]]},
+				"lost":{"pivot":[10,10],"region":[[0,0],[9,0],[9,9]],"motion":"nowhere"}
+			},
+			"roll":{"pivot":[-5,10],"motion":{"use":"nowhere"}}}}}}}
+	}`
+	got := strings.Join(lintCompanionKit([]byte(defective)), "\n")
+	for _, want := range []string{
+		"poses.stand.deform: is ignored on a registry column",
+		"outfits.street.poses.stand.deform.grid[0]: must be an integer within 2..32",
+		"outfits.street.poses.stand.deform.grid[1]: must be an integer within 2..32",
+		`outfits.street.poses.stand.deform.bones.Bad Id: ID must match`,
+		"outfits.street.poses.stand.deform.bones.outside.pivot:",
+		"outfits.street.poses.stand.deform.bones.thin.region: needs at least 3 points",
+		`outfits.street.poses.stand.deform.bones.orphan.parent: refers to undefined bone "ghost"`,
+		"outfits.street.poses.stand.deform.bones.loopA.parent: parent chain loops",
+		"outfits.street.poses.stand.deform.bones.loopB.parent: parent chain loops",
+		"outfits.street.poses.stand.deform.bones.lost.motion: refers to an undefined motion",
+		"outfits.street.poses.stand.deform.roll.pivot:",
+		"outfits.street.poses.stand.deform.roll.motion: refers to an undefined motion",
+		"outfits.street.poses.stand.layers[1]: moves between the static layers",
+		"outfits.street.poses.stand.layers[2]: moves between the static layers",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"layers[4]", "layers[0]", "layers[3]", "bones.orphan.pivot", "bones.Bad Id.pivot"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("unexpected %q in:\n%s", unwanted, got)
+		}
+	}
+	if _, _, err := validateCompanionManifest([]byte(strings.Replace(clean, `"grid":[12,16]`, `"grid":[1,40]`, 1)), "mesh"); err != nil {
+		t.Fatalf("a bad grid must lint, never block a load: %v", err)
+	}
+}
+
+// TestCompanionDeformFixtureIsValidAndLintClean builds the shared synthetic
+// deform fixture (the one the node tests and the Chromium captures render) and
+// checks that the daemon validator accepts it and the kit lint reports nothing.
+func TestCompanionDeformFixtureIsValidAndLintClean(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	script := `const { deformFixture } = require("./testdata/companion-deform-fixture.cjs");
+const canvas = () => ({ getContext: () => new Proxy({}, { get: () => () => {}, set: () => true }) });
+process.stdout.write(JSON.stringify(deformFixture(canvas).manifest));`
+	raw, err := exec.Command(node, "-e", script).Output()
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if _, _, err := validateCompanionManifest(raw, "deform-fixture"); err != nil {
+		t.Fatalf("deform fixture rejected: %v", err)
+	}
+	if issues := lintCompanionKit(raw); len(issues) != 0 {
+		t.Fatalf("deform fixture lint: %q", issues)
+	}
+	if !strings.Contains(string(raw), `"kneeL"`) || !strings.Contains(string(raw), `"roll"`) {
+		t.Fatalf("fixture lost its leg chain or roll: %s", raw)
+	}
 }

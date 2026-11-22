@@ -272,6 +272,10 @@
     const composite = buffer(width, height);
     const boundsBuffer = buffer(128, 128, { willReadFrequently: true });
     const decals = new Map();
+    // Composed deform columns (canvas, compiled mesh), keyed by outfit, column
+    // and replaced layers; select() clears them with the tinted cache, so a
+    // tint or outfit change recomposes.
+    const meshCores = new Map();
     const outfits = record(manifest.outfits) ? manifest.outfits : null;
     let palette, hair, eyes, iris = null, outfit = null, outfitId = null, attachments = [], picks = {};
     let presetKey = presetId, config = record(wardrobe) ? wardrobe : {};
@@ -311,6 +315,7 @@
       tinted.clear();
       rigViews.clear();
       decals.clear();
+      meshCores.clear();
     }
 
     function setPreset(id) {
@@ -372,6 +377,10 @@
       const rasters = frames ? null : rasterList(layer, sharedAsset);
       return {
         z: finite(layer.z, z),
+        // A layer with frames, a motion track or drag inertia moves on its
+        // own; only a static one can join a deform column's composed canvas.
+        dynamic: !!(frames || transform || weight !== null),
+        rasters,
         drawable: frames ? frames.some(list => list.length > 0) : rasters.length > 0,
         paint(ctx, t, gaze, physics) {
           const list = frames ? frames[Math.floor(t * layer.fps) % frames.length] : rasters;
@@ -483,7 +492,10 @@
       if (!record(entry) || !Array.isArray(entry.layers) || !entry.layers.length) return null;
       const base = own(manifest[section], id);
       const registry = record(base) ? base : {};
-      return { ...registry, ...entry, pose: registry.pose, fallback: registry.fallback, layers: entry.layers };
+      // deform is never inherited from the registry entry: each outfit or
+      // gesture column declares its own.
+      return { ...registry, ...entry, pose: registry.pose, fallback: registry.fallback, layers: entry.layers,
+        deform: Object.hasOwn(entry, "deform") ? entry.deform : undefined };
     }
 
     // bound walks a column's fallback chain (with the resolver's implicit
@@ -500,6 +512,30 @@
       return item ? { id: implicit, item } : null;
     }
 
+    // deformCore composes a column's static layers into one canvas (cached
+    // per outfit, column and replaced layers) and compiles its mesh; null
+    // leaves every layer rigid (no static layer, or no usable bone).
+    function deformCore(deform, parts, keyParts) {
+      const fixed = parts.filter(part => !part.dynamic);
+      if (!fixed.length) return null;
+      const key = JSON.stringify([outfitId, ...keyParts]);
+      let core = meshCores.get(key);
+      if (!core) {
+        const ctx = buffer(width, height);
+        for (const part of [...fixed].sort((a, b) => a.z - b.z)) for (const image of part.rasters) draw(ctx, image);
+        let pixels = null;
+        try {
+          const probe = buffer(width, height, { willReadFrequently: true });
+          probe.drawImage(ctx.canvas, 0, 0);
+          pixels = probe.getImageData(0, 0, width, height).data;
+        } catch (_) { /* an unreadable canvas meshes over its full bounds */ }
+        core = { canvas: ctx.canvas, mesh: C.deform.compile(deform, width, height, pixels) };
+        if (meshCores.size >= 24) meshCores.clear();
+        meshCores.set(key, core);
+      }
+      return core.mesh ? { core, z: Math.min(...fixed.map(part => part.z)) } : null;
+    }
+
     function view(pose, gesture, expression, props) {
       const key = JSON.stringify([pose, gesture, expression, props]);
       if (rigViews.has(key)) return rigViews.get(key);
@@ -508,6 +544,7 @@
       }
       const usableGesture = item => !!(item?.pose || item?.replaces?.length || item?.layers?.length || hand(item?.handAnchor));
       let gestureHit = outfit ? bound("gestures", gesture, null) : null;
+      const gestureBound = !!gestureHit;
       if (!gestureHit) {
         gestureHit = resolve(manifest.gestures, gesture, null, usableGesture);
         // Inside an outfit, an unbound gesture keeps its pose and anchors but
@@ -522,14 +559,22 @@
       const requested = act?.pose || pose;
       // A column the outfit cannot resolve draws the legacy projection stack,
       // so the body is never empty.
-      const resolved = (outfit && bound("poses", requested, "stand")) ||
-        resolve(manifest.poses, requested, "stand", x => !!x?.layers?.length);
+      const boundPose = outfit ? bound("poses", requested, "stand") : null;
+      const resolved = boundPose || resolve(manifest.poses, requested, "stand", x => !!x?.layers?.length);
       const body = resolved.item;
+      // deform belongs to outfit columns only: a legacy stack never meshes.
+      const poseDeform = boundPose && record(body.deform) ? body.deform : null;
+      const gestureDeform = gestureBound && record(act.deform) ? act.deform : null;
       const layers = [];
       const head = manifest.head;
       const pivot = point(head?.pivot, [width / 2, height * 0.28]);
       // A gesture column may carry its own head anchor inside an outfit.
-      const anchor = point(outfit ? act?.headAnchor : null, null) || point(body.headAnchor, pivot);
+      const gestureAnchor = point(outfit ? act?.headAnchor : null, null);
+      const anchor = gestureAnchor || point(body.headAnchor, pivot);
+      // The head rides the deform of the column that supplied its anchor.
+      const anchorDeform = gestureAnchor && gestureDeform ? gestureDeform : poseDeform;
+      const noShift = { x: 0, y: 0 };
+      let headShift = noShift;
       const scale = clamp(finite(body.headScale, 1), 0.1, 4);
       const headLayer = body.layers.find(layer => layer.mode === "head-egg");
       const egg = head ? rasterList(head.egg || headLayer || {}) : [];
@@ -544,7 +589,7 @@
         return { z, paint(ctx, t, gaze, physics) {
           const movement = headMotion?.(t);
           ctx.save();
-          ctx.translate(anchor[0] + (movement?.tx || 0), anchor[1] + (movement?.ty || 0));
+          ctx.translate(anchor[0] + headShift.x + (movement?.tx || 0), anchor[1] + headShift.y + (movement?.ty || 0));
           ctx.rotate((movement?.rotDeg || 0) * RAD + gaze.x * (gaze.prop ? propTilt : gazeTilt) + swingAngle(headWeight, headLag, physics));
           ctx.scale(scale * (movement?.sx ?? 1), scale * (movement?.sy ?? 1));
           ctx.translate(-pivot[0], -pivot[1]);
@@ -562,10 +607,32 @@
       // An outfit gesture also replaces by slot; legacy packs keep id-only
       // matching so their stacks stay identical.
       const replaced = layer => replacements.has(layer.id) || !!outfit && layer.slot !== undefined && replacements.has(layer.slot);
-      const bodyLayers = [...body.layers.filter(layer => !replaced(layer)), ...(act?.layers || [])];
-      for (const layer of bodyLayers) {
-        if (layer.mode !== "head-egg") layers.push(layerPaint(layer, 20));
+      const poseLayers = body.layers.filter(layer => !replaced(layer)), gestureLayers = act?.layers || [];
+      const bodyLayers = [...poseLayers, ...gestureLayers];
+      // A column with a deform meshes its static layers as one composed
+      // canvas drawn at the lowest of their z; layers with frames, motion
+      // tracks or drag inertia stay rigid at their own z.
+      const meshes = [];
+      const groups = [
+        { layers: poseLayers, deform: poseDeform, key: ["pose", resolved.id, [...replacements].sort().join(",")] },
+        { layers: gestureLayers, deform: gestureDeform, key: ["gesture", gestureHit?.id] }
+      ];
+      for (const group of groups) {
+        const parts = group.layers.filter(layer => layer.mode !== "head-egg").map(layer => layerPaint(layer, 20));
+        const hit = group.deform ? deformCore(group.deform, parts, group.key) : null;
+        if (!hit) { layers.push(...parts); continue; }
+        const mesh = C.deform.instance(hit.core.mesh, hit.core.canvas, anchor,
+          bone => motion(bone.motion, manifest.motions, declared), (bone, physics) => swingAngle(bone.weight, bone.lag, physics));
+        meshes.push({ deform: group.deform, mesh });
+        layers.push({ z: hit.z, paint: ctx => mesh.draw(ctx) }, ...parts.filter(part => part.dynamic));
       }
+      headShift = meshes.find(item => item.deform === anchorDeform)?.mesh.shift || noShift;
+      // roll rotates the whole composed stack about the neck (or its own
+      // pivot); it comes from the gesture column's deform when that column
+      // declares one, else the pose column's.
+      const rollSpec = (gestureDeform || poseDeform)?.roll;
+      const rollMotion = record(rollSpec) ? motion(rollSpec.motion, manifest.motions, declared) : null;
+      const rollPivot = point(rollSpec?.pivot, anchor);
       if (resolved.id === "typing" && !body.layers.some(layer =>
         layer.id === "prop-typing-desk" || layer.file?.startsWith("prop-typing-desk"))) {
         layers.push(...propLayers("prop-typing-desk"));
@@ -601,11 +668,21 @@
       const result = {
         pose: resolved.id,
         handAnchor: hand(act?.handAnchor) || hand(body.handAnchor) || [width * 0.5, height * 0.48],
-        articulatedDrag: bodyLayers.some(layer => swingWeight(layer) !== null) || headWeight !== null || swingWeight(hair?.back) !== null,
+        articulatedDrag: bodyLayers.some(layer => swingWeight(layer) !== null) || headWeight !== null || swingWeight(hair?.back) !== null ||
+          meshes.some(item => item.mesh.articulated),
         seat: body.seatY === undefined ? null : clamp(finite(body.seatY) / height, 0, 1),
         render(t, gaze, physics) {
           composite.clearRect(0, 0, width, height);
+          for (let i = 0; i < meshes.length; i++) meshes[i].mesh.update(t, physics);
+          const roll = rollMotion ? finite(rollMotion(t)?.rotDeg) * RAD : 0;
+          if (roll) {
+            composite.save();
+            composite.translate(rollPivot[0], rollPivot[1]);
+            composite.rotate(roll);
+            composite.translate(-rollPivot[0], -rollPivot[1]);
+          }
           for (const layer of layers) layer.paint(composite, t, gaze, physics);
+          if (roll) composite.restore();
           return composite.canvas;
         }
       };
