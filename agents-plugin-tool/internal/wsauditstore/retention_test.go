@@ -960,3 +960,67 @@ func TestColdEvictionPersistsStateBeforeDeleting(t *testing.T) {
 	removeFile, removeAll = origFile, origAll
 	assertOldBoundaryHolds(t, root, lim, clock)
 }
+
+// TestControlOnlyRingsAreEvictableAndTombstonesGoLast pins store-wide
+// eviction of a loaded ring that holds only control lines (losses,
+// boundaries) and no events: it is evicted like any other ring, leaving a
+// bounded tombstone that is not evicted again, and a tombstone itself goes —
+// recovery state and all — once trimming the active ring cannot make room.
+func TestControlOnlyRingsAreEvictableAndTombstonesGoLast(t *testing.T) {
+	root := t.TempDir()
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 4 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	s, log := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	ctx := context.Background()
+	reason := strings.Repeat("q", 250)
+	for seq := uint64(1); seq <= 5000; seq++ {
+		if err := s.RecordLoss(ctx, "ctl", wsaudit.SourceID{Source: "holder:1", Seq: seq}, reason); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Finalize(ctx, "ctl", "holder:1", 5000); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	ctl := filepath.Join(root, "ctl")
+	// Control lines land when the writer idles.
+	for deadline := time.Now().Add(10 * time.Second); diskBytes(t, ctl) < mib; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("setup: control-only ring holds only %d bytes", diskBytes(t, ctl))
+		}
+	}
+	clock.Advance(time.Hour)
+	for seq := uint64(1); seq <= 16; seq++ {
+		mustAppend(t, s, bigRecord("busy", seq, lim))
+	}
+	flush(t, s)
+	if got := diskBytes(t, ctl); got > HeaderBound {
+		t.Fatalf("control-only ring was never evicted: %d bytes\n%s", got, log.String())
+	}
+	if n := strings.Count(log.String(), "evict audit ring of session ctl"); n != 1 {
+		t.Fatalf("ctl evicted %d times\n%s", n, log.String())
+	}
+	if got := diskBytes(t, root); got > lim.TotalBytes {
+		t.Fatalf("store holds %d bytes, cap %d", got, lim.TotalBytes)
+	}
+	if rec := s.Recover("ctl", "holder:1"); rec.Boundary != 5000 {
+		t.Fatalf("the tombstone lost its boundary: %+v", rec)
+	}
+	// Room no trim of the active ring can make takes the tombstone.
+	if _, err := s.call(ctx, job{kind: jobBarrier, fn: func() {
+		s.mu.Lock()
+		busy := s.sessions["busy"]
+		s.mu.Unlock()
+		busy.mu.Lock()
+		s.makeRoom(busy, lim.TotalBytes)
+		busy.mu.Unlock()
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ctl); !os.IsNotExist(err) {
+		t.Fatalf("the tombstone survived the last resort: %v\n%s", err, log.String())
+	}
+	if !strings.Contains(log.String(), "forget the recovery state of session ctl") {
+		t.Fatalf("tombstone removal not logged: %s", log.String())
+	}
+}

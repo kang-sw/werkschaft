@@ -92,6 +92,9 @@ type job struct {
 	seq     uint64
 	at      time.Time
 	reply   chan jobResult
+	// fn, on a barrier, runs on the writer goroutine (tests reach writer
+	// state through it).
+	fn func()
 }
 
 type jobResult struct {
@@ -120,6 +123,11 @@ type sessionInfo struct {
 	// newer is set once the ring is known to hold a newer format; age-out and
 	// capacity eviction leave it alone.
 	newer bool
+	// tombstone is set (under Store.mu) while the ring holds only the
+	// recovery state store-wide eviction left of it, and cleared by its next
+	// write: makeRoom never evicts it into another tombstone and removes it
+	// only as the last resort.
+	tombstone bool
 }
 
 // Store is the audit segment ring store. It implements wsaudit.SourcedSink.
@@ -543,6 +551,9 @@ func (s *Store) handle(j job) {
 	case jobSweep:
 		s.sweep()
 	case jobBarrier:
+		if j.fn != nil {
+			j.fn()
+		}
 	}
 	if j.reply != nil {
 		j.reply <- res
@@ -675,6 +686,7 @@ func (s *Store) writeLocked(info *sessionInfo, payload []byte) error {
 	s.mu.Lock()
 	s.total += r.bytes - info.bytes
 	info.bytes = r.bytes
+	info.tombstone = false
 	s.mu.Unlock()
 	return err
 }
@@ -770,46 +782,65 @@ func (s *Store) finalize(session, source string, boundary uint64) {
 	info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
 }
 
-// makeRoom evicts whole least-recently-used rings other than the active one
-// until need more bytes fit the store total; past every other ring, the
-// active ring drops its own oldest segments, keeping its newest. A ring
-// whose data was already evicted (loaded, no events) is not a victim again.
-// active.mu is held.
+// makeRoom makes need more bytes fit the store total, in this order: whole
+// least-recently-used rings other than the active one lose their data
+// (keeping their recovery state as a tombstone); then the active ring drops
+// its own oldest segments, keeping its newest; only then do tombstones go,
+// least recently used first, recovery state and all. A tombstone is never
+// evicted into another tombstone. active.mu is held.
 func (s *Store) makeRoom(active *sessionInfo, need int64) {
 	failed := map[*sessionInfo]bool{}
+	trimmed := false
 	for {
 		s.mu.Lock()
 		if s.total+need <= s.limits.TotalBytes {
 			s.mu.Unlock()
 			return
 		}
-		var victim *sessionInfo
-		for _, info := range s.sessions {
-			if info == active || info.bytes == 0 || failed[info] || info.newer ||
-				(info.ring != nil && len(info.ring.events) == 0) {
-				continue
+		pick := func(tombstones bool) *sessionInfo {
+			var victim *sessionInfo
+			for _, info := range s.sessions {
+				if info == active || info.bytes == 0 || failed[info] || info.newer || info.tombstone != tombstones {
+					continue
+				}
+				if victim == nil || info.lastSeen.Before(victim.lastSeen) ||
+					(info.lastSeen.Equal(victim.lastSeen) && info.dir < victim.dir) {
+					victim = info
+				}
 			}
-			if victim == nil || info.lastSeen.Before(victim.lastSeen) ||
-				(info.lastSeen.Equal(victim.lastSeen) && info.dir < victim.dir) {
-				victim = info
-			}
+			return victim
 		}
+		victim := pick(false)
+		forget := false
+		if victim == nil && trimmed {
+			victim, forget = pick(true), true
+		}
+		room := s.limits.TotalBytes - (s.total - active.bytes) - need
 		s.mu.Unlock()
 		if victim == nil {
-			s.mu.Lock()
-			room := s.limits.TotalBytes - (s.total - active.bytes) - need
-			s.mu.Unlock()
+			if trimmed {
+				return
+			}
+			trimmed = true
 			if !s.foreignLocked(active) {
 				s.trimRingLocked(active, max(room, 0))
 			}
-			return
+			continue
 		}
 		if s.foreign(victim) {
 			s.logf("store total cap: keep audit ring of session %s: it holds a newer format", victim.dir)
+			failed[victim] = true
 			continue
 		}
-		s.logf("store total cap: evict audit ring of session %s (%d bytes, last seen %s)", victim.dir, victim.bytes, formatTime(victim.lastSeen))
-		if err := s.removeRing(victim, false); err != nil {
+		var err error
+		if forget {
+			s.logf("store total cap: forget the recovery state of session %s (%d bytes, last seen %s)", victim.dir, victim.bytes, formatTime(victim.lastSeen))
+			err = s.removeRing(victim, true)
+		} else {
+			s.logf("store total cap: evict audit ring of session %s (%d bytes, last seen %s)", victim.dir, victim.bytes, formatTime(victim.lastSeen))
+			err = s.removeRing(victim, false)
+		}
+		if err != nil {
 			s.logf("store total cap: %v", err)
 			failed[victim] = true
 		}
@@ -963,6 +994,9 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 			info.session = r.session
 		}
 		s.account(info)
+		s.mu.Lock()
+		info.tombstone = err == nil && r.hasState()
+		s.mu.Unlock()
 	} else {
 		info.ring = nil
 		info.view.Store(nil)
