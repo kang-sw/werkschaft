@@ -689,18 +689,29 @@
       if (P.refused) { recheck(); return; }
       var level = dropped() ? "" : P.level;
       if (level === "full") {
-        var gen = P.gen;
-        permFullAsk({ harness: P.harness, path: locText() }, function () { if (rpLive(P, gen)) launch("full", true); }, function () {});
+        // The grant launches what the warning named: a refresh that
+        // re-applies the tier while the warning is open (or any other
+        // redraw) cannot change the harness, model, or effort it sends.
+        var gen = P.gen, asked = launchSnap("full", true);
+        permFullAsk({ harness: asked.harness, path: locText() }, function () { if (rpLive(P, gen)) launch(asked); }, function () {});
         return;
       }
-      launch(level, false);
+      launch(launchSnap(level, false));
     }
-    // launch spawns with level (none: the legacy route, as before); ack is
-    // the full warning's grant.
-    function launch(level, ack) {
+    // launchSnap is the spawn request the form shows now: level (none: the
+    // legacy route, as before), ack (the full warning's grant), and the pick
+    // stored for the harness once the spawn succeeds.
+    function launchSnap(level, ack) {
+      return {
+        harness: P.harness,
+        chosen: currentPick(),
+        form: { harness: P.harness, model: rows.model.disabled ? "" : rows.model.value, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack }
+      };
+    }
+    // launch spawns exactly snap's request.
+    function launch(snap) {
       notifAsk();
-      var gen = P.gen, chosenHarness = P.harness, chosen = currentPick();
-      var form = { harness: P.harness, model: rows.model.disabled ? "" : rows.model.value, effort: rows.effort.disabled ? "" : rows.effort.value, mode: level ? "" : rows.mode.disabled ? "" : rows.mode.value, isolation: P.iso, level: level, ack: ack };
+      var gen = P.gen, chosenHarness = snap.harness, chosen = snap.chosen, form = snap.form, level = form.level;
       P.busy = true;
       setErr("");
       status.textContent = wsT(level ? "js.perm.checking" : "js.lead.starting");

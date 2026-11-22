@@ -296,3 +296,83 @@ test('a picked named tier keeps its off-catalog model and effort across a choice
   assert.equal(body.model, model.value);
   assert.equal(body.effort, effort.value);
 });
+
+test('the full-permission grant launches the request the warning named, even after a refresh re-applies the tier elsewhere', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+    showModal() { this.open = true; }
+    close() { this.open = false; }
+  }
+  const pending = [], posts = [], dialogs = [];
+  const levels = ['read-only', 'workdir-write', 'full'];
+  const hs = [
+    { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }, { id: 'sonnet' }], efforts: ['high', 'max'], permission_modes: ['auto', 'plan'], permission_levels: levels },
+    { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: levels }
+  ];
+  const onCodex = [{ name: 'name', trace: 'name', harness: 'codex', model: 'gpt-5', effort: 'low' }];
+  const onClaude = [{ name: 'name', trace: 'name', harness: 'claude', model: 'sonnet', effort: 'max' }];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    doc: { body: { appendChild(e) { e.parentNode = this; dialogs.push(e); return e; } } },
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const texts = (el) => [el.text || '', ...el.children.flatMap(texts)].join(' ');
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const start = p.el.children.at(-1).children.at(-1);
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers: onCodex });
+
+  // Reopened over the held list: /support/choices is still out while the
+  // tier is picked on codex and Start opens the full warning.
+  p.open('root', 'name', btn);
+  picker.value = 'name'; picker.events.change();
+  assert.equal(p.harness, 'codex');
+  p.level = 'full';
+  start.events.click({ target: start });
+  const dlg = dialogs[0];
+  assert.ok(dlg && dlg.open, 'the full warning is open');
+  assert.match(texts(dlg), /name · codex/, 'the warning names codex');
+  assert.equal(posts.length, 0);
+
+  // The held read lands: the same bundle now maps to claude, and the
+  // refresh re-applies it while the warning stays open.
+  pending.shift()(200, { harnesses: hs, tiers: onClaude });
+  assert.equal(p.harness, 'claude', 'the refresh re-applied the tier on claude');
+  assert.equal(model.value, 'sonnet');
+
+  // Tick and grant: the launch is the one the warning named.
+  const box = dlg.children[3].children[0], grant = dlg.children[4].children[1];
+  box.checked = true; box.events.change();
+  grant.events.click();
+  assert.equal(pending.length, 1, 'the grant runs the permission pre-flight');
+  pending.shift()(200, { harnesses: hs, tiers: onClaude });
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].path, '/agents/leads/permission');
+  const body = posts[0].body;
+  assert.equal(body.harness, 'codex', 'the grant launches the harness the warning named');
+  assert.equal(body.model, 'gpt-5');
+  assert.equal(body.effort, 'low');
+  assert.equal(body.level, 'full');
+  assert.equal(body.ack, true);
+  assert.equal(effort.value, 'max', 'the form itself still shows the refreshed tier');
+});
