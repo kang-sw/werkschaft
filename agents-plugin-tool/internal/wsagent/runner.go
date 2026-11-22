@@ -311,6 +311,8 @@ type Runner struct {
 	// harnessVersions are the newest harness versions processes reported,
 	// by backend (noteHarnessVersion), under mu; memory only.
 	harnessVersions map[string]string
+	// exec is the hosted exec jobs' view (exec_lifecycle.go).
+	exec execState
 }
 
 // NewRunner returns a runner; Start loads its conversations.

@@ -73,6 +73,18 @@ func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool
 	if err == nil && caller != nil && !caller.Force && caller.CheckChildren != nil {
 		err = caller.CheckChildren(ctx, target)
 	}
+	if err == nil && caller != nil && caller.FenceExec != nil {
+		var unfence func()
+		if unfence, err = caller.FenceExec(target); err == nil {
+			lockOnly := unlock
+			unlock = func() {
+				unfence()
+				lockOnly()
+			}
+		} else {
+			err = fmt.Errorf("worktree.release refuses %s: %w. Nothing was changed", target, err)
+		}
+	}
 	if err != nil {
 		unlock()
 		return "", worktreeEntry{}, nil, err

@@ -372,9 +372,16 @@ func (r *Runner) CloseConversation(id string) (State, error) {
 	if _, err := r.open(id); err != nil {
 		return State{}, err
 	}
-	for _, d := range r.descendants(id) {
+	descendants := r.descendants(id)
+	// New exec jobs are refused before anything closes; each conversation's
+	// jobs end (whole process groups, no notice) before it closes, deepest
+	// first.
+	r.fenceExec(append(slices.Clone(descendants), id))
+	for _, d := range descendants {
+		r.stopExec([]string{d})
 		_, _ = r.closeOne(d)
 	}
+	r.stopExec([]string{id})
 	st, err := r.closeOne(id)
 	if err != nil {
 		return st, err

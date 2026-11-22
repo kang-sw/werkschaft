@@ -29,6 +29,11 @@ type Hosted struct {
 	started  bool
 	closed   bool
 	retry    *time.Timer
+	// ownerFences are the conversations whose new jobs are refused (a close
+	// in progress); rootFences the worktrees being released or removed, each
+	// with its holder count. Both under mu.
+	ownerFences map[string]bool
+	rootFences  map[string]*rootFence
 }
 
 // HostedOptions configures Hosted. Holders, Store and Sessions are

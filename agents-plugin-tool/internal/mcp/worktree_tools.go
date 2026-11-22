@@ -859,6 +859,11 @@ type worktreeReleaseCaller struct {
 	WorkerKey     string
 	Force         bool
 	CheckChildren func(ctx context.Context, target string) error
+	// FenceExec, when set, refuses the release while an exec job runs in
+	// the target and otherwise holds new jobs there off until the returned
+	// unfence (worktreeExecFence); run under the per-worktree lock, force or
+	// not.
+	FenceExec func(target string) (func(), error)
 }
 
 // checkWorktreeBoundChildren refuses a non-forced worktree.release while any

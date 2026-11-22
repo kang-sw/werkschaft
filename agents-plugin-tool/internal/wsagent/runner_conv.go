@@ -1413,7 +1413,9 @@ func (c *conv) kickInput() {
 	// that waited for it. Publish that turn before opening the report's
 	// successor. Legacy pi-worker turns, and report-free successors such as
 	// background follow-ups, retain their interim-supersession behavior.
-	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 {
+	// A worker that still owns a live exec job keeps holding: its report
+	// waits for the job, and this successor's own turn reports later.
+	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 && !c.ownsLiveExec() {
 		res := *c.heldRes
 		c.hold(nil)
 		c.publish(res, heldAgy)

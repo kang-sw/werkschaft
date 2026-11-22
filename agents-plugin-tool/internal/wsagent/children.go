@@ -386,6 +386,7 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	if err := writeRecord(dir, rec); err != nil {
 		return nil, err
 	}
+	r.unfenceExec(id)
 	c = r.startConv(rec, nil)
 	c.watched()
 	return c, nil
@@ -799,11 +800,11 @@ func (c *conv) saveSteered() {
 
 // holdsReport reports whether a done turn of the conversation waits for
 // running background tasks or its children: background work still running on
-// a worker, a child's report it holds and no turn took yet (steered and not
+// a worker (a harness background task, or a hosted exec job it owns), a child's report it holds and no turn took yet (steered and not
 // taken, or kept for the next turn), or a child of its own that is open
 // (openChildOf). It runs in the loop.
 func (c *conv) holdsReport() bool {
-	if (!c.rec.Lead && (c.bgTasks > 0 || c.bgGraceTimer != nil)) || len(c.steered) > 0 || len(c.rec.Reports) > 0 || c.compactHoldsReport() {
+	if (!c.rec.Lead && (c.bgTasks > 0 || c.bgGraceTimer != nil || c.ownsLiveExec())) || len(c.steered) > 0 || len(c.rec.Reports) > 0 || c.compactHoldsReport() {
 		return true
 	}
 	ref := ParentRef{Kind: ParentConversation, ReplyID: c.rec.ReplyID}

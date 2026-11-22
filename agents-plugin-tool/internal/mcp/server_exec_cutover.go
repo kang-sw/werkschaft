@@ -2,8 +2,11 @@ package mcp
 
 import (
 	"errors"
+	"fmt"
+	"path/filepath"
 	"slices"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 )
 
@@ -50,4 +53,20 @@ func (s *Server) cutoverListed(name string) bool {
 		return s.execToolsListed()
 	}
 	return false
+}
+
+// worktreeExecFence reserves worktree target for a release or removal
+// against exec jobs: the daemon's hosted jobs under one lock with their
+// admission (execjob.Hosted.FenceRoot), and this process's file-backed
+// legacy jobs by count.
+func (s *Server) worktreeExecFence(target string) (func(), error) {
+	legacy := execjob.ActiveRoots()
+	n := legacy[filepath.Clean(target)]
+	if real, err := filepath.EvalSymlinks(target); err == nil && filepath.Clean(real) != filepath.Clean(target) {
+		n += legacy[filepath.Clean(real)]
+	}
+	if n > 0 {
+		return nil, fmt.Errorf("%d exec job(s) still run in it; abort them with exec.abort, or let them finish, first", n)
+	}
+	return s.execJobs().FenceRoot(target)
 }

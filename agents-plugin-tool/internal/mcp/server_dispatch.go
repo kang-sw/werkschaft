@@ -829,7 +829,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		force, _ := params.Arguments["force"].(bool)
-		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren}
+		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, FenceExec: s.worktreeExecFence}
 		result, err := releaseWorktreeAs(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, lookup, caller)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
@@ -867,7 +867,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		staleAfter, _ := worktreeNudgeThresholds(&resolver, key)
-		result, err := removeWorktree(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup)
+		result, err := removeWorktreeFenced(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup, s.worktreeExecFence)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}

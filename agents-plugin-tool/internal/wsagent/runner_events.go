@@ -973,7 +973,7 @@ func (c *conv) finishLine() {
 // idleNow reports whether the idle timer may stop the process. Read child
 // state here too: a spawn notification may still be queued when the timer fires.
 func (c *conv) idleNow() bool {
-	if c.turn || c.replaying || c.bgTasks > 0 || c.bgGraceTimer != nil || c.compacting || c.compactCommand {
+	if c.turn || c.replaying || c.bgTasks > 0 || c.bgGraceTimer != nil || c.compacting || c.compactCommand || c.ownsLiveExec() {
 		return false
 	}
 	kind := ParentConversation
@@ -994,9 +994,9 @@ func (c *conv) idleNow() bool {
 		// Send coverage protects initial queuing, but not input retained
 		// for retry after a settled launch failure. A held result still
 		// waits for the child's own descendants.
-		// A child whose start admission refused sleeps (wakeRefused).
-		active := child.rec.Parent != nil && *child.rec.Parent == parent && !child.closed &&
-			(child.turn || child.bgTasks != 0 || child.holding || !child.wakeRefused && child.sends > max(child.settled.mark, child.voided))
+		// The one sleep predicate (keepsAwakeLocked): an awake child keeps
+		// its parent awake, a sleeping one (a refused wake included) does not.
+		active := child.rec.Parent != nil && *child.rec.Parent == parent && child.keepsAwakeLocked()
 		child.mu.Unlock()
 		if active {
 			return false

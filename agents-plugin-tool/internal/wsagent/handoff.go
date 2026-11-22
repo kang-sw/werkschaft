@@ -282,6 +282,9 @@ func (r *Runner) Reopen(id string) (State, error) {
 	rec.ClosedAt = ""
 	err = writeRecord(wsdashboard.SessionDir(r.opts.Dir, id), rec)
 	unlock()
+	if err == nil {
+		r.unfenceExec(id)
+	}
 	if err != nil {
 		r.mu.Lock()
 		rec.ClosedAt = r.opts.Now().UTC().Format(time.RFC3339)

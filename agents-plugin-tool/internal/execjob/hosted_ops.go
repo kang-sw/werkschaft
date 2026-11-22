@@ -3,8 +3,10 @@ package execjob
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
@@ -19,6 +21,11 @@ func (h *Hosted) stop(j *hostedJob) {
 	j.stopping = true
 	holder := j.row.HolderID
 	h.mu.Unlock()
+	if holder == "" {
+		// Its holder is not started yet: Launch sees stopping and fails
+		// the start.
+		return
+	}
 	err := h.opts.Holders.Stop(holder)
 	if err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
 		h.logf("stop job %s: %v", j.row.ID, err)
@@ -171,4 +178,154 @@ func (h *Hosted) view(j *hostedJob, outcome HostedOutcome) HostedView {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return HostedView{HostedJobRow: h.rowLocked(j), Outcome: outcome}
+}
+
+// StopOwner stops every running job of owner, each with its whole process
+// group, and returns once they ended. A stop sends no completion notice.
+func (h *Hosted) StopOwner(owner string) {
+	if h == nil || owner == "" {
+		return
+	}
+	h.mu.Lock()
+	var jobs []*hostedJob
+	for _, j := range h.jobs {
+		if j.row.Owner == owner && !j.row.Terminal() {
+			jobs = append(jobs, j)
+		}
+	}
+	h.mu.Unlock()
+	for _, j := range jobs {
+		h.stop(j)
+	}
+}
+
+// FenceOwner refuses owner's new jobs until UnfenceOwner; a job already
+// past admission but not started fails its start.
+func (h *Hosted) FenceOwner(owner string) {
+	if h == nil || owner == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ownerFences == nil {
+		h.ownerFences = map[string]bool{}
+	}
+	h.ownerFences[owner] = true
+}
+
+// UnfenceOwner lets owner own new jobs again.
+func (h *Hosted) UnfenceOwner(owner string) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.ownerFences, owner)
+}
+
+// within reports whether path is root or lies beneath it.
+func within(root, path string) bool {
+	if path == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// rootForms are root's spellings a job row may carry: as given and with
+// its symlinks resolved (a temp directory under /var is /private/var on
+// macOS). A file lookup, on the release path only.
+func rootForms(root string) []string {
+	root = filepath.Clean(root)
+	forms := []string{root}
+	if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
+		forms = append(forms, real)
+	}
+	return forms
+}
+
+// inRoot reports whether row's job runs in one of a worktree's forms.
+func inRoot(forms []string, row HostedJobRow) bool {
+	for _, root := range forms {
+		if within(root, row.Root) || within(root, row.Cwd) {
+			return true
+		}
+	}
+	return false
+}
+
+// fencedRootLocked is the fenced worktree row's job would run in, "" when
+// none. Under mu.
+func (h *Hosted) fencedRootLocked(row HostedJobRow) string {
+	for root, fence := range h.rootFences {
+		if inRoot(fence.forms, row) {
+			return root
+		}
+	}
+	return ""
+}
+
+// LiveIn counts the running jobs whose root or working directory lies in
+// worktree root.
+func (h *Hosted) LiveIn(root string) int {
+	if h == nil {
+		return 0
+	}
+	forms := rootForms(root)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.liveInLocked(forms)
+}
+
+func (h *Hosted) liveInLocked(forms []string) int {
+	n := 0
+	for _, j := range h.jobs {
+		if !j.row.Terminal() && inRoot(forms, j.row) {
+			n++
+		}
+	}
+	return n
+}
+
+// FenceRoot reserves worktree root for a release or removal: it refuses
+// while a job runs there, and otherwise refuses new jobs there until the
+// returned unfence runs. One lock orders it with job admission, so no job
+// slips in between the check and the release.
+func (h *Hosted) FenceRoot(root string) (unfence func(), err error) {
+	if h == nil {
+		return func() {}, nil
+	}
+	forms := rootForms(root)
+	root = forms[0]
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if n := h.liveInLocked(forms); n > 0 {
+		return nil, fmt.Errorf("%d exec job(s) still run in it; stop them with exec.stop (exec.list shows them), or let them finish, first", n)
+	}
+	if h.rootFences == nil {
+		h.rootFences = map[string]*rootFence{}
+	}
+	if h.rootFences[root] == nil {
+		h.rootFences[root] = &rootFence{forms: forms}
+	}
+	h.rootFences[root].holders++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if f := h.rootFences[root]; f != nil {
+				if f.holders--; f.holders <= 0 {
+					delete(h.rootFences, root)
+				}
+			}
+		})
+	}, nil
+}
+
+// rootFence is one reserved worktree: its spellings and how many
+// reservations hold it.
+type rootFence struct {
+	forms   []string
+	holders int
 }

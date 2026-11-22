@@ -81,6 +81,19 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		}
 	}
 	h.mu.Lock()
+	if j.stopping || h.ownerFences[owner.ID] {
+		// Its owner closed (or the job was stopped) while it waited for
+		// approval: the process never starts. A stop that already ended the
+		// job keeps its stopped end.
+		cause := errors.New("exec: the owning session closed before the job started")
+		if j.row.Terminal() {
+			delete(h.byHolder, holder)
+			h.mu.Unlock()
+			return h.view(j, OutcomeDone), cause
+		}
+		h.mu.Unlock()
+		return h.failStart(j, holder, cause)
+	}
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
 	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: req.Cwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
@@ -136,6 +149,14 @@ func (h *Hosted) admit(j *hostedJob) error {
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("exec: the daemon is shutting down")
+	}
+	if h.ownerFences[j.row.Owner] {
+		h.mu.Unlock()
+		return errors.New("exec: the owning session is closing")
+	}
+	if root := h.fencedRootLocked(j.row); root != "" {
+		h.mu.Unlock()
+		return fmt.Errorf("exec: the worktree %s is being released or removed", root)
 	}
 	running := 0
 	var finished []*hostedJob
