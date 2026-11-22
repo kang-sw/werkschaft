@@ -51,6 +51,11 @@ impl Connection {
         self.daemon.lock().unwrap().clone()
     }
 
+    /// The daemon the dashboard is pinned to, for the full quit.
+    pub fn pinned_daemon(&self) -> Option<Daemon> {
+        self.daemon()
+    }
+
     pub fn pinned_url(&self) -> Option<Url> {
         self.daemon.lock().unwrap().as_ref().map(|d| d.url.clone())
     }

@@ -10,9 +10,20 @@ Update and restart plugins on the previous minor after a cross-minor swap.
 
 macOS requires Python 3 for daemon start and replacement. Windows prefers an
 independent daemon process and retries inside the containing Windows job if
-the OS reports access denied for breakaway. Closing the shell leaves the
-daemon running. A job-lifetime daemon ends when its containing job is torn
-down.
+the OS reports access denied for breakaway. A job-lifetime daemon ends when
+its containing job is torn down.
+
+Werkschaft has two lifetimes: the app, and the background (the daemon and
+every session it runs). The window's close button hides the app to the tray
+without asking about drafts. In the tray menu, **Close Werkschaft** (also the
+app menu's or the system's quit) exits the app and keeps the background
+running. **Quit Werkschaft and Stop the Background…** stops every session and
+then the daemon. It asks first when sessions are running, with their count.
+Both exits ask first when a draft may not be saved. A full quit that cannot
+stop everything says what remains and keeps the app open. So does one against
+an older daemon without the full stop, which stops nothing. When another
+client starts a new background right after, the app reports it. Left-clicking
+the tray icon shows the window on Windows and opens the menu on macOS.
 
 For development, set `WERKSCHAFT_DAEMON_ROOT` to an absolute path to a prepared
 candidate directory before launching Tauri. It has the same layout as the

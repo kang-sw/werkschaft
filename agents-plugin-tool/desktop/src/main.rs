@@ -9,11 +9,14 @@ mod close;
 mod daemon;
 mod daemon_package;
 mod endpoint;
+#[cfg(test)]
+mod full_stop_e2e;
 #[cfg(target_os = "macos")]
 mod macos;
 mod navigation;
 mod python;
 mod shell;
+mod tray;
 mod updates;
 #[cfg(windows)]
 mod windows;
@@ -298,14 +301,23 @@ fn main() {
     let setup_state = state.clone();
     let instance_state = state.clone();
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(move |app, _args, _cwd| {
-            let target = app.clone();
-            let state = instance_state.clone();
-            let _ = app.run_on_main_thread(move || restore_main(&target, &state));
-        }))
+        .plugin(tauri_plugin_single_instance::init(
+            move |app, _args, _cwd| {
+                let target = app.clone();
+                let state = instance_state.clone();
+                let _ = app.run_on_main_thread(move || restore_main(&target, &state));
+            },
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_menu_event(move |app, event| {
+            match tray::action(event.id().as_ref()) {
+                Some(tray::Action::Show) => return restore_main(app, &menu_state),
+                Some(tray::Action::Exit(kind)) => {
+                    return close::exit(app.clone(), menu_state.clone(), kind)
+                }
+                None => (),
+            }
             let window = app
                 .webview_windows()
                 .into_values()
@@ -327,6 +339,8 @@ fn main() {
                 });
             app.manage(zoom);
             install_menu(app.handle())?;
+            let tray_state = setup_state.clone();
+            tray::install(app.handle(), move |app| restore_main(app, &tray_state))?;
             updates::Controller::start(app.handle(), setup_state.clone());
             build_window(app.handle(), setup_state.clone())?;
             setup_state.watch(app.handle().clone());
@@ -335,6 +349,8 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Unable to initialize Werkschaft")
         .run(move |app, event| match event {
+            // The main window's close button hides it to the tray: no draft
+            // check, since the page keeps running.
             RunEvent::WindowEvent {
                 label,
                 event: WindowEvent::CloseRequested { api, .. },
@@ -342,17 +358,25 @@ fn main() {
             } if close::checks_draft(&label) => {
                 if let Some(window) = app.get_webview_window(&label) {
                     api.prevent_close();
-                    close::request(window, state.clone());
+                    let _ = window.hide();
                 }
             }
-            RunEvent::ExitRequested { api, .. } if state.rebuilding.load(Ordering::Acquire) => {
-                api.prevent_exit();
+            RunEvent::ExitRequested { code, api, .. } => {
+                match close::exit_request(code, state.rebuilding.load(Ordering::Acquire)) {
+                    close::ExitRequest::Proceed => (),
+                    close::ExitRequest::Prevent => api.prevent_exit(),
+                    close::ExitRequest::Close => {
+                        api.prevent_exit();
+                        close::exit(app.clone(), state.clone(), close::Exit::Close);
+                    }
+                }
             }
             RunEvent::Exit => app.state::<Zoom>().finish(),
             #[cfg(target_os = "macos")]
-            RunEvent::Reopen { has_visible_windows, .. }
-                if !has_visible_windows || app.get_webview_window(close::MAIN_WINDOW).is_none() =>
-            {
+            RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } if !has_visible_windows || app.get_webview_window(close::MAIN_WINDOW).is_none() => {
                 restore_main(app, &state);
             }
             #[cfg(windows)]
