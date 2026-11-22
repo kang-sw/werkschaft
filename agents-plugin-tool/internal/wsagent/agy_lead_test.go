@@ -465,6 +465,7 @@ func TestAgyLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 				agy.ExecCutover = real.ExecCutover
 				h.opts.Backends[BackendAgy] = agy
 				seedHarnessVersions(t, h.dir, map[string]string{BackendAgy: real.ExecCutover.Since})
+				h.execJobs = newFakeExecJobs()
 			}
 			if manual != nil {
 				h.opts.LeadManual = manual.render

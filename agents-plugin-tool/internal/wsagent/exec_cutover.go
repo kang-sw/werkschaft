@@ -68,7 +68,8 @@ type execCutoverInputs struct {
 //     predecessor) is known and not older than the one that mechanism was
 //     verified on; an unknown version keeps native tools;
 //   - the process gets the trusted binding that hosted exec jobs require
-//     (a Pi bridge or Claude stdio fallback has none);
+//     (a Pi bridge or Claude stdio fallback has none), and the daemon's
+//     hosted exec jobs are open and bound (BindExecJobs);
 //   - its ws tools include the replacement (cutoverReplacement): a lead
 //     lists every ws tool, a worker only its profile's allowlist, and
 //     agentless ws-mcp lists no exec tool;
@@ -88,6 +89,12 @@ func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bo
 	}
 	if !in.binding {
 		return false, "the process has no trusted ws-mcp binding (stdio or bridge fallback)"
+	}
+	if c.r.execJobs() == nil {
+		// ws-mcp lists the exec tools only over open hosted jobs: a store
+		// that failed to open, or one the daemon has not bound yet, would
+		// leave the process with neither its shell nor exec.shell.
+		return false, "the daemon's hosted exec jobs are not open"
 	}
 	if !rec.Lead {
 		for _, name := range cutoverReplacement(rec.Backend) {

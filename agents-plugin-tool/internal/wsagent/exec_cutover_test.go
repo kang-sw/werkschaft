@@ -255,6 +255,7 @@ func cutoverHarness(t *testing.T) *leadHarness {
 	codex.ExecCutover = &ExecCutoverSupport{Since: "0.160.0"}
 	h.opts.Backends[BackendCodex] = codex
 	seedHarnessVersions(t, h.dir, map[string]string{BackendClaude: "2.1.330", BackendCodex: "0.160.0"})
+	h.execJobs = newFakeExecJobs()
 	h.start()
 	h.runner.SetEndpoint("http://127.0.0.1:1")
 	return h
@@ -316,6 +317,7 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	h.runner = NewRunner(h.opts)
 	h.runner.SetEndpoint("http://127.0.0.1:1")
 	h.runner.Start(func(string, string) {})
+	h.runner.BindExecJobs(h.execJobs)
 	t.Cleanup(h.runner.Close)
 	h.quiesce(st.ID)
 	if hello, _, ok := h.runner.ResolveMCPToken(rec.MCPToken); !ok || hello.ExecCutover != BackendClaude {
@@ -365,6 +367,19 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	if got := NewRunner(h.opts).harnessVersion(BackendClaude); got != "2.1.331" {
 		t.Fatalf("a later daemon reads harness version %q", got)
 	}
+
+	// Hosted exec jobs that failed to open leave nothing to replace the
+	// native tools with.
+	h.runner.exec.src.Store(nil)
+	noJobs := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	argv, rec = leadLaunch(t, h, noJobs.ID)
+	if got, _ := flagValue(argv, "--disallowedTools"); strings.Contains(got, "Bash") || rec.ExecCutoverHolder != "" {
+		t.Fatalf("lead without hosted exec jobs: removes %q, cutover holder %q", got, rec.ExecCutoverHolder)
+	}
+	if !strings.Contains(h.log.String(), "keeps its native process tools: the daemon's hosted exec jobs are not open") {
+		t.Fatalf("log: %s", h.log.String())
+	}
+	h.runner.BindExecJobs(h.execJobs)
 
 	// Without the HTTP route the lead runs ws-mcp over stdio: no binding.
 	h.runner.SetEndpoint("")
@@ -446,6 +461,7 @@ func TestExecCutoverUnknownHarnessVersionKeepsNativeTools(t *testing.T) {
 	claude := h.opts.Backends[BackendClaude]
 	claude.ExecCutover = &ExecCutoverSupport{Since: "2.1.330"}
 	h.opts.Backends[BackendClaude] = claude
+	h.execJobs = newFakeExecJobs()
 	h.start()
 	h.runner.SetEndpoint("http://127.0.0.1:1")
 	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
