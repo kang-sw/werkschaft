@@ -148,6 +148,9 @@ func TestEnterImplementMissingRouteFactsIsNamedNotDefaulted(t *testing.T) {
 			if !strings.HasPrefix(result.NextInstruction, "Stop and report missing route facts:") {
 				t.Fatalf("next instruction did not lead with the missing-facts stop: %q", result.NextInstruction)
 			}
+			if !strings.Contains(result.NextInstruction, "proposed_resolution: run ticket-fact-populator on ai-docs/tickets/ready/260627-feat-enter-implement-deterministic-verdict-engine.md") {
+				t.Fatalf("missing-facts stop does not name its remedy: %q", result.NextInstruction)
+			}
 			if !containsString(result.Conditions, "route-facts="+tc.wantStatus) {
 				t.Fatalf("conditions missing the named outcome: %v", result.Conditions)
 			}
@@ -366,5 +369,52 @@ func TestEnterImplementReviewPhaseResolvesThroughParentSession(t *testing.T) {
 		if got := containsString(keysOf(record.Todos), "review"); got != wantNeed {
 			t.Fatalf("%s: installed review todo = %v, want %v: %v", tc.name, got, wantNeed, keysOf(record.Todos))
 		}
+	}
+}
+
+// TestTicketsQueryTextFlagsReadyTicketWithoutRouteFacts pins the listing
+// signal: a ready implementation ticket with no ## Route Facts section carries
+// `route_facts: missing`, while one with the section, a non-ready ticket and a
+// board-artifact category carry none.
+func TestTicketsQueryTextFlagsReadyTicketWithoutRouteFacts(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	mustWrite(t, root, "ai-docs/_index.md", "# Index\n")
+	const facts = "## Route Facts\n\n| fact | value |\n|---|---|\n| scope.span | single-file |\n\n"
+	mustWrite(t, root, "ai-docs/tickets/ready/260201-feat-nofacts.md",
+		"---\ntitle: Gadget without facts\n---\n# Gadget\n\n## Phases\n\n### Phase 1: X\n")
+	mustWrite(t, root, "ai-docs/tickets/ready/260202-feat-withfacts.md",
+		"---\ntitle: Gadget with facts\n---\n# Gadget\n\n"+facts+"## Phases\n\n### Phase 1: Y\n")
+	mustWrite(t, root, "ai-docs/tickets/todo/260203-feat-todo.md",
+		"---\ntitle: Gadget todo\n---\n# Gadget\n\n## Phases\n\n### Phase 1: Z\n")
+	mustWrite(t, root, "ai-docs/tickets/ready/260204-research-board.md",
+		"---\ntitle: Gadget research\n---\n# Gadget\n")
+	initGit(t, root)
+
+	out := callScopedTool(t, root, 1, "tickets.query", map[string]any{"query": "gadget"})
+	entries := map[string]string{}
+	var current string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "[") {
+			current = line
+			entries[current] = ""
+			continue
+		}
+		if current != "" {
+			entries[current] += line + "\n"
+		}
+	}
+	missing := 0
+	for header, body := range entries {
+		flagged := strings.Contains(body, "route_facts: missing")
+		if flagged {
+			missing++
+		}
+		if flagged != strings.Contains(header, "260201-feat-nofacts") {
+			t.Fatalf("route_facts flag on %q = %v:\n%s", header, flagged, out)
+		}
+	}
+	if missing != 1 || len(entries) != 4 {
+		t.Fatalf("want 4 listed tickets with exactly one route_facts: missing, got %d/%d:\n%s", missing, len(entries), out)
 	}
 }

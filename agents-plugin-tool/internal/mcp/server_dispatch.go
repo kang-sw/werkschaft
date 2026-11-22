@@ -1254,8 +1254,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if nudge := implementCloseMergeReviewNudge(s.gitClient(), root); nudge != "" {
 			text += "next_instruction: " + nudge + "\n"
 		}
-		if reviewNudge := wsreview.CheckpointNudgeWith(context.Background(), s.gitRunner(), root); reviewNudge != "" {
-			text += "review-watermark: " + reviewNudge + "\n"
+		if s.reviewNudgeWanted(callerKey) {
+			if reviewNudge := wsreview.CheckpointNudgeWith(context.Background(), s.gitRunner(), root); reviewNudge != "" {
+				text += "review-watermark: " + reviewNudge + "\n"
+			}
 		}
 		return toolTextResponse(req.ID, text, nil)
 	case "review.marker":

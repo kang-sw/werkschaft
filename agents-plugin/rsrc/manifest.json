@@ -22,9 +22,9 @@
     "lead-delegate/lead-delegate.md": "087e8fc203bf71dae516591127afaac1fcfa977bbea3f3ba678bc5eae7a4ce74",
     "lead-discuss/lead-discuss.md": "3cf8920dd6cfa765e67ad7be9fbfc7f51cd75c7efa880874028d9556df696f8e",
     "lead-review/lead-review.md": "b4283e9bcbb8f6349be5db31db70d0b8d282aa3fead1249c7ac48b38806448b6",
-    "lead-run/lead-run.md": "8a6c10ac084a7540818f998f8e37b63ed070a1f3256db563a286d280165ebb6c",
+    "lead-run/lead-run.md": "a46a4a485e815d757716f369970aa33392902f16ca3314fe72ae25504b5fac09",
     "lead-ship/lead-ship.md": "9f35a6dd83ab43837b7812a99b7b2cdc84bf21b15ee6437315b16b8771c54095",
-    "lead-ticket/lead-ticket.md": "0aafc4e2d6d0ec7ff3e1b0df4e736e4349e362910ce505ac8798b2627d3d2083",
+    "lead-ticket/lead-ticket.md": "952a581d5c32de51cfe9fa6ddd54305ff5a06c0c2b674b082be4cecc49038916",
     "lead-tune/lead-tune.md": "947b10ec5df377e79807206f5fe5e793ab2e9fa01683b0588896f946f5ec617c",
     "lead-use-mailbox/arm-the-wait.claude.md": "16670754315019116cc80f47258d2cde957def7fc6b45df74b952f9b79ae7946",
     "lead-use-mailbox/arm-the-wait.md": "f47a20a40dc9bc072bac056d843d3deb9e2ee36ccce228e1a9994c1bc4d0a618",
@@ -37,7 +37,7 @@
     "lead-workflow-manual/native-spawn-binding.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "reference-discovery/reference-discovery.md": "1c28d76c2a03efd2889936ee9091715f93b75553d88d9e20b15ee37de8c48b6c",
     "review-config/review-config.md": "dfbbf5be52c83cfb4f86edb862f8e7b135afcc7f5efb9433e808d08ac37ff53b",
-    "review-handler/review-handler.md": "1e98d3efa721e90983925bc320b5fe7e83a9d9fef275d662fe540d02c1859dcc",
+    "review-handler/review-handler.md": "0643fdd50d7d6efef57da1cd77970c7189640ea09292c9581534c87af9d38b32",
     "reviewer/reviewer.md": "e54a825ecee2b1bd70f5ff43e6a6bc0b4594d4ab2a98c0062faa383097df5309",
     "risk-rubric.md": "ee683558afb588ca14b63654c0bf1d815d8971df90f5014b92118c8cc01982b7",
     "sample-conventions.md": "fd90dadec24fbd89a8489172239a7abe97d450ec16526b54818c9c7634aaeb91",
@@ -49,7 +49,7 @@
     "ticket-batch-selector/ticket-batch-selector.md": "24c7781e6426e42f81f47be62e05c23fe6fd44299c016389a9495e58ab7f29b1",
     "ticket-classifier/ticket-classifier.md": "1bbc132d88b7348b2332e3750bd6da406697d90cad9fb9acc5f789a7cdfd23c5",
     "ticket-fact-populator/ticket-fact-populator.md": "cf3288402ab6b079bea9e6a7ed1f6820a65cde8df27d82d3a77e22649a013fd6",
-    "ticket-handler/ticket-handler.md": "f017df20b573ba6c612ffec8a5085a7773f23327c3ab2ad2db5ba4bead46352d",
+    "ticket-handler/ticket-handler.md": "9e197073584a2039034b4c6e67e7899b5652a77cc4bffe5b44cf618521bd0f63",
     "ticket-reviewer-completeness/ticket-reviewer-completeness.md": "5b7ec46a882aaa62bcd7f54b6920640e5ad6b4b5639b7c38ef2235e9a66af99a",
     "ticket-reviewer-design/ticket-reviewer-design.md": "1f0bd67988bf76cb4f9c2c6adeac622a30ea3a28fea6a7ba72f1fa07d2554873",
     "ticket-selector/ticket-selector.md": "b0f26d5307ea7b07b0d6b8d3a69050a54e8dbefc64d162edaf64c516f2611730",
@@ -60,6 +60,6 @@
     "tracker-hooks/tracker-hooks.md": "bf4b3fe5eb5c3ab532ba3398af9e181b300ac3ee04130acb6b8ac700f539310f",
     "tracker/tracker.md": "5860dae79f27761fb517b809e646f53262f632055580389ce52cf394f51f5150",
     "whiteboard/whiteboard.md": "379c6ebb0cfdfa24004e0dbf628489d6127f3ec9578e8c7b069c59f0a1e9e1e6",
-    "worker-stop-protocol.md": "51c585191207e7c71943bceaaa7dd6db364b22810a27a9b59425873562c8270b"
+    "worker-stop-protocol.md": "28a17e73a4eecb82dd6e791a8036cd33ab2d11d1673ba40a9c1ab5b52abfd57f"
   }
 }

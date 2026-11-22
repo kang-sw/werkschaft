@@ -59,8 +59,10 @@ merges belong to the lead after your report.
 1. **Route:** `{{.McpNamespace}}/route.resolve_implement(session_key:
    <your key>, target: {kind: "ticket", ticket_path: <path>, ticket_stem:
    <stem>})`. Its todo list is your skeleton; its branch action creates or
-   reuses your impl branch from the branch in your task block. Missing route
-   facts → `blocked` (`next: revise`). Once on your impl branch, record it
+   reuses your impl branch from the branch in your task block. On a lead
+   vouch, re-route with `policy: {branch: {identity_vouch: {branch,
+   ticket_stem}}}` exactly as the lead gave it; never build one yourself.
+   Missing route facts → `blocked` (`next: revise`). Once on your impl branch, record it
    with `{{.McpNamespace}}/tickets.acquire(ticket_stem: <stem>)`
    (informational only: a refusal or error goes under `unresolved:` and never
    stops the run; never set its override flag).

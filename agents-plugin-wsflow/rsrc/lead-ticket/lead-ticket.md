@@ -171,8 +171,10 @@ Handler loop:
    `## Open Decision Queue` section.
 2. `{{.McpNamespace}}/playbook.render(name: "ticket-handler", session_key:
    <your key>)`; for `revise`, pass `root_override: <worktree>` for the
-   stopped worker's worktree. Pass the path on without reading it. Spawn at
-   the tier the render returns: `Read <rendered-path> as your system prompt.` plus the task block:
+   stopped worker's worktree and `tier_override` one tier above the worker's
+   (xlarge stays xlarge), the tier the handler gives its design reviewer. Pass
+   the path on without reading it. Spawn at the tier the render returns:
+   `Read <rendered-path> as your system prompt.` plus the task block:
    operation (`promote`, `epic-review`, or `revise`), the stems, and the
    branch to commit on (`revise`: the worker's impl branch); `revise` adds the
    worker's `proposed_resolution:` verbatim and the worker's tier.

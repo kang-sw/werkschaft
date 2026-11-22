@@ -14,6 +14,7 @@ const validReadyTicketBody = "---\n" +
 	"sage-review-completeness: completed\n" +
 	"---\n\n" +
 	"# Valid ready ticket\n\n" +
+	sageRouteFactsSection +
 	"## Phases\n\n" +
 	"### Phase 1: First\n\n" +
 	"### Result (abc123) - 2026-07-23\n\n" +
@@ -381,6 +382,45 @@ func TestTicketVerifyReadySageGateStillRefusesUnstampedTicket(t *testing.T) {
 	}
 	if guardrails := findingGuardrails(t, result.Findings); !containsGuardrail(guardrails, "ready-sage-posture") {
 		t.Fatalf("findings = %#v, want the ready-sage-posture guardrail", result.Findings)
+	}
+}
+
+// A ready/ implementation ticket with no ## Route Facts section reaches a
+// worker that can only stop; git mv and direct creation bypass tickets.move's
+// tip, so verify warns. The warning is soft and skips non-implementation
+// categories.
+func TestTicketVerifyWarnsForReadyTicketWithoutRouteFacts(t *testing.T) {
+	root := t.TempDir()
+	path := "ai-docs/tickets/ready/260723-feat-nofacts.md"
+	body := "---\ntitle: No facts\nsage-review-design: completed\nsage-review-completeness: completed\n---\n\nBody.\n"
+	mustWrite(t, root, path, body)
+
+	result, err := TicketVerify(root, []string{path})
+	if err != nil {
+		t.Fatalf("TicketVerify returned error: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("result = %#v, the route-facts warning must not block", result)
+	}
+	var found bool
+	for _, w := range result.Warnings {
+		if w.Guardrail == "route-facts" && strings.Contains(w.Message, "ticket-fact-populator") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %#v, want a route-facts warning naming ticket-fact-populator", result.Warnings)
+	}
+
+	mustWrite(t, root, path, strings.Replace(body, "Body.", sageRouteFactsSection+"Body.", 1))
+	result, err = TicketVerify(root, []string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range result.Warnings {
+		if w.Guardrail == "route-facts" {
+			t.Fatalf("warnings = %#v, a ticket with the section must not warn", result.Warnings)
+		}
 	}
 }
 

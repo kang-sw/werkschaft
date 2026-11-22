@@ -2,7 +2,7 @@
 kind: render
 delegates: true
 role: worker
-tier: medium
+tier: large
 tier-role: ticket-handler
 tier-parent: implement:*
 variables:
@@ -22,9 +22,21 @@ to it as a report, and you resume on its reply.
 - Task block: the operation, the member stems (`epic-review`: one epic;
   `revise`: one `ready/` ticket), and the branch to commit on. `revise` adds
   the worker's `proposed_resolution:` and tier.
-- Your session key is spliced into this prompt; use it as `<your key>`.
-- `{{.McpNamespace}}/workflow_manual(session_key: <your key>)`: its
-  `### Asking the user` defines the item classes.
+- Keys: the spawn key in your system prompt is `<your key>` and the session
+  key of every call; only `{{.McpNamespace}}/tickets.sage_stamp` (and any
+  other lead-only tool) takes the lead-scoped key spliced into this prompt,
+  because the spawn key is refused there. Without a spawn key, the spliced key
+  serves every call.
+- Item classes (each queue item has one): `announced`: one answer, and you
+  can cite why the alternatives lose (a language or platform constraint, a
+  prior commit or ticket decision, a project convention, or a consequence of
+  a confirmed decision). `technical`: no such citation, and the answer does
+  not hinge on the user's preferences; pick it on technical grounds and state
+  the reasoning, stating any uncertainty. `policy`: the answer depends on the
+  user's preferences, priorities, or product direction (audience or scale,
+  scope in or out, cost or risk tolerance, a downstream-visible trade-off).
+  A bare "should we do X?" or "which one?", and anything that reverses a prior
+  decision, is `policy`.
 - `{{.McpNamespace}}/convention.read(name: "ticket-conventions")`:
   actionable and non-actionable tickets, the `### Result` freeze, and the
   title language.
@@ -67,7 +79,7 @@ Trace every change (a lead reply, a reviewer fix, a populator correction, a
 
 ## Open Decision Queue
 
-- Classes: the manual's `### Asking the user`. A documentation-placement
+- Classes: the item classes in Inputs. A documentation-placement
   choice is announced when a linked ticket or a convention prescribes it
   (cite it), otherwise technical.
 - Section `## Open Decision Queue` in each affected member; the line under
@@ -182,7 +194,9 @@ Report and wait for the lead's reply:
 - `awaiting-confirmation`: reviews passed, stamps current.
 - `blocked`: dependency closure failed; a block verdict needs a decision no
   queue item can carry; a move failed; the same step failed twice for the
-  same cause; an unrecognized lead reply.
+  same cause; an unrecognized lead reply; a reviewer spawn refused as above
+  your tier, naming the tier needed. Never downgrade the reviewer: that also
+  covers a tier routing that maps a reviewer role above you.
 
 ## Report
 

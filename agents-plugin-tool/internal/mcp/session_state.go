@@ -88,6 +88,18 @@ func todoActive(status todoStatus) bool {
 	return status == todoPending || status == todoWip
 }
 
+// reviewNudgeWanted reports whether the review-watermark nudge belongs to this
+// caller. The sweep it recommends is a top-level lead's call, so a worker key
+// (lead-scoped but with a parent) never sees it; a keyless or unknown caller
+// keeps it, as before.
+func (s *Server) reviewNudgeWanted(key string) bool {
+	if strings.TrimSpace(key) == "" {
+		return true
+	}
+	entry, found := s.lookupSession(key)
+	return !found || entry.isTopLevelLead()
+}
+
 // hasActiveTodo reports whether any item is pending or wip.
 func hasActiveTodo(list []todoItem) bool {
 	for _, item := range list {
@@ -1146,8 +1158,10 @@ func (s *Server) handleEnterImplement(id json.RawMessage, args map[string]any) r
 		return toolTextResponse(id, text, err)
 	}
 	raw := result.Raw
-	if reviewNudge := wsreview.CheckpointNudgeWith(context.Background(), s.gitRunner(), record.Root); reviewNudge != "" {
-		raw += "review-watermark: " + reviewNudge + "\n"
+	if s.reviewNudgeWanted(sessionKey) {
+		if reviewNudge := wsreview.CheckpointNudgeWith(context.Background(), s.gitRunner(), record.Root); reviewNudge != "" {
+			raw += "review-watermark: " + reviewNudge + "\n"
+		}
 	}
 	return toolTextResponse(id, raw, nil)
 }
