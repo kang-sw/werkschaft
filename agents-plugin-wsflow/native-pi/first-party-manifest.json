@@ -1,13 +1,13 @@
 {
-  "bundle_input_hash": "38d4fdd1e5cae89230cc8eb2a306dad7efb379c2ff1d56cac7aa2bebaf7bb574",
+  "bundle_input_hash": "c6a48936f49e1c6f35a45eb10f58fd55c732316bb64c5ab562efb0d979aeab6c",
   "closure_key": "0abbaf013d0dd47ae1fa8b0946e1b69f003e2e69cfbe34c55887dd65f48e5183",
   "files": {
     "bin/ws-pi-forward.mjs": "6101d609e6b7bf4bd683a368c700029640d1a8a03e67a0ef087061f6328a26a1",
-    "bundle-inputs.json": "bc3340dd3d6fc53b1ac02de0f9d888c78202f44d7c2f3f6ad760a6ca75e6a580",
+    "bundle-inputs.json": "69a8426b9735ea19990f382a13c82a4ebc6e8180dc02af99f556d5f19a5475d7",
     "config-manifest.json": "e2806616ab165234285749ecb62e90f3b4748f6e64a39e476ad2f093b082cd45",
     "dist/THIRD_PARTY_NOTICES": "efcf20f46412a1c4f28bb0a7889783e3f179fdbf8483cd9850a2008478538884",
     "dist/eff_large_wordlist.txt": "18586c092f641ecd1a471dd6ab35618ab69f0aa7483486424f7caf0996d06259",
-    "dist/index.js": "3fa33c5c086240e4fb0df06ae44a524e9545ea822b15cd59130d542ca4da5064",
+    "dist/index.js": "77a1ad8d91d515fc5db12937318b3d3d218d22d9f6f6a1f415432985648fcc50",
     "execute-worker-guide.md": "8bbb4a1e3cb4a47e869168251da64322b452389220d2f147bed3b0eae048f44c",
     "explore-guide.md": "51a53b386cca4c8418dcbd81137b6329c0c5791520883b07eeee6ea8bbc8931a",
     "lead-compact-guide.md": "73f7bab876025bf67567cbe3330e869753aae4a6267394c7c983254ec8842ada",
@@ -15,9 +15,9 @@
     "pi-lead-guide.md": "30c01cf9e6462000f5aede52850f6945038ef3f7e88097820390ea08693bf29c",
     "src/helper-host.mjs": "b9be5babbf7e6d81dcd8397e6014625125528333ca47fc5e231a0ad1e1dd9f88",
     "src/web-search-helper.mjs": "9ad060b6e12a22622d0657bf94fee2e2f5493eff1d9af1724da0db42c2693792",
-    "workflow-bundles/manifest.json": "8358c8a0d93834a1d4de97349239d0c30031ee3378bac672d68256239549b84c",
-    "workflow-bundles/ws.zip": "de931cb48938e733163ffba8e5c0385a74a327b8162b3167acd30a44627dc7b8",
-    "workflow-bundles/wsflow.zip": "9ba886ce3dd688e473d8c151746593becbd2c74423a6fcdc199be5988a2f8a87"
+    "workflow-bundles/manifest.json": "5e59bb3bce7e7b0846c9a9b34ceead7c31cb3891f0b4517e663a5868dd368e8f",
+    "workflow-bundles/ws.zip": "149ee926742bd30809180cc0b2d1e0cf100672c6c7373b72edcb514ee62f5a93",
+    "workflow-bundles/wsflow.zip": "a827edb0baa8e2b9aeebfc8b73d25db56b3d65a094de1aacac4963ac6457fdbc"
   },
   "inputs": {
     "agents-plugin-pi/bin/ws-pi-forward.mjs": "6101d609e6b7bf4bd683a368c700029640d1a8a03e67a0ef087061f6328a26a1",
@@ -25,7 +25,7 @@
     "agents-plugin-pi/config-manifest.json": "e2806616ab165234285749ecb62e90f3b4748f6e64a39e476ad2f093b082cd45",
     "agents-plugin-pi/dist/THIRD_PARTY_NOTICES": "efcf20f46412a1c4f28bb0a7889783e3f179fdbf8483cd9850a2008478538884",
     "agents-plugin-pi/dist/eff_large_wordlist.txt": "18586c092f641ecd1a471dd6ab35618ab69f0aa7483486424f7caf0996d06259",
-    "agents-plugin-pi/dist/index.js": "3fa33c5c086240e4fb0df06ae44a524e9545ea822b15cd59130d542ca4da5064",
+    "agents-plugin-pi/dist/index.js": "77a1ad8d91d515fc5db12937318b3d3d218d22d9f6f6a1f415432985648fcc50",
     "agents-plugin-pi/execute-worker-guide.md": "8bbb4a1e3cb4a47e869168251da64322b452389220d2f147bed3b0eae048f44c",
     "agents-plugin-pi/explore-guide.md": "51a53b386cca4c8418dcbd81137b6329c0c5791520883b07eeee6ea8bbc8931a",
     "agents-plugin-pi/lead-compact-guide.md": "73f7bab876025bf67567cbe3330e869753aae4a6267394c7c983254ec8842ada",
@@ -65,7 +65,7 @@
     "agents-plugin-pi/src/daemon-agent-compat.ts": "462d72cff06b474e61cf203d624f1336edd63102e5690ee233c5729d0c421763",
     "agents-plugin-pi/src/dashboard-feed.ts": "3e9c2d1268be1468208c9f1723e607d538a4e95445f069fec89a2a95f02b079c",
     "agents-plugin-pi/src/dashboard-wake.ts": "e8fb345629f865de8a69024d25e8fc06a8b2ed4564ebc19e6e04ab819e8bcdca",
-    "agents-plugin-pi/src/delegation-policy.ts": "380115544acc025994afff7ed1913129cf5a94872950fb3aaf64071a5109f8c3",
+    "agents-plugin-pi/src/delegation-policy.ts": "4bfa089e20cb6cd4660255cb561460147d5da1e782e2bb8eaa562dfdf443c1c5",
     "agents-plugin-pi/src/display-summary-render.ts": "ad966380c094fa7e73cbb687050b4b4184008c84a4798584dec0f357cf8dd2b3",
     "agents-plugin-pi/src/display-summary-session.ts": "675c3b9fa8e7c929dc7302a218336984587da1ab808db954bb4d3d54303f42ce",
     "agents-plugin-pi/src/display-summary-sidecar.ts": "670fe16ecb93a25bc5beb0bbc907f3273e1da8cf5509d933633bcc15a4aeb591",
@@ -129,9 +129,9 @@
     "agents-plugin-pi/src/word-chain-id.ts": "92c05a1662b4b33898588b57ea5caefc35ee1435912cf8e5b27dfe8dba788194",
     "agents-plugin-pi/src/workflow-owner.ts": "82254d29833dcbe688071bc89e94d6d9dc1bd51217e8f71d8e498ca5e023ca21",
     "agents-plugin-pi/src/write-scopes.ts": "74156ad253e5d16e0ac653737eb7017b49d8e7b9a205aa4e745b74239775dbdc",
-    "agents-plugin-pi/workflow-bundles/manifest.json": "8358c8a0d93834a1d4de97349239d0c30031ee3378bac672d68256239549b84c",
-    "agents-plugin-pi/workflow-bundles/ws.zip": "de931cb48938e733163ffba8e5c0385a74a327b8162b3167acd30a44627dc7b8",
-    "agents-plugin-pi/workflow-bundles/wsflow.zip": "9ba886ce3dd688e473d8c151746593becbd2c74423a6fcdc199be5988a2f8a87"
+    "agents-plugin-pi/workflow-bundles/manifest.json": "5e59bb3bce7e7b0846c9a9b34ceead7c31cb3891f0b4517e663a5868dd368e8f",
+    "agents-plugin-pi/workflow-bundles/ws.zip": "149ee926742bd30809180cc0b2d1e0cf100672c6c7373b72edcb514ee62f5a93",
+    "agents-plugin-pi/workflow-bundles/wsflow.zip": "a827edb0baa8e2b9aeebfc8b73d25db56b3d65a094de1aacac4963ac6457fdbc"
   },
   "schema_version": 1
 }

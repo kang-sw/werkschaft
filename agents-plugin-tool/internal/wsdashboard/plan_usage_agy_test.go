@@ -136,8 +136,10 @@ func TestPlanUsageAgyActivityDoesNotWaitForStoreLock(t *testing.T) {
 	d := &Daemon{planUsage: s}
 	s.mu.Lock()
 	returned := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
-		d.AgyActivity()
+		// Same call AgyActivity makes, with its refresh goroutine's completion exposed.
+		d.agyActivity(done)
 		close(returned)
 	}()
 	select {
@@ -153,6 +155,13 @@ func TestPlanUsageAgyActivityDoesNotWaitForStoreLock(t *testing.T) {
 	}
 	if got := fakeAgyCallCount(countFile); got != 1 {
 		t.Fatalf("activity probe count = %d, want 1", got)
+	}
+	// Wait for the refresh goroutine itself: probes.Wait alone has no
+	// happens-before edge to its read of d.planUsage.
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("agy activity refresh did not finish")
 	}
 	s.probes.Wait()
 }
