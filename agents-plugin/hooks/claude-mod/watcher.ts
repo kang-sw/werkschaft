@@ -431,12 +431,46 @@ export function formatEnvelope(m: DrainedMail): string {
   return `${stamp ? `mail from ${handle} (${stamp})` : `mail from ${handle}`}:\n${m.content}`
 }
 
-/** One prompt for the whole drained batch, never one per envelope. */
+/** The longest label the legend shows, in code points (the daemon's own cut). */
+const LEGEND_LABEL_MAX = 32
+
+/** A label as the legend line carries it: one line, no `;` or `]`, at most LEGEND_LABEL_MAX code points. */
+function legendLabel(label: string): string {
+  const clean = label.replace(/[;\]]/g, '').replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim()
+  return [...clean].slice(0, LEGEND_LABEL_MAX).join('').trim()
+}
+
+/**
+ * The batch's sender legend, `[senders: <handle> = <label>; ...]`: one entry
+ * per distinct addressed sender (`from` or `reply_to`) that carries a `label`,
+ * in first-appearance order, under the handle `formatEnvelope` heads its
+ * message with. A senderless envelope's `label` is its handle, not a legend
+ * entry. Empty when no sender has a label.
+ */
+export function mailLegend(mail: readonly DrainedMail[]): string {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const m of mail) {
+    if (!('content' in m)) continue
+    const handle = field(m.from) || field(m.reply_to)
+    if (!handle || seen.has(handle)) continue
+    seen.add(handle)
+    const label = legendLabel(field(m.label))
+    if (label) parts.push(`${handle.replace(/[\s\u0000-\u001f\u007f]+/g, ' ')} = ${label}`)
+  }
+  return parts.length > 0 ? `[senders: ${parts.join('; ')}]` : ''
+}
+
+/**
+ * One prompt for the whole drained batch, never one per envelope. A sender
+ * legend, when any sender has a label, is the batch head's second line.
+ */
 export function formatBatch(label: string, recvTool: string, key: string, mail: readonly DrainedMail[]): string {
   const head =
     `[${label}] ${mail.length} message(s) arrived for session_key ${key}. ` +
     `They were already received through ${recvTool}; do not call it again for these.`
-  return [head, ...mail.map(formatEnvelope)].join('\n\n')
+  const legend = mailLegend(mail)
+  return [legend ? `${head}\n${legend}` : head, ...mail.map(formatEnvelope)].join('\n\n')
 }
 
 /** The notice-path prompt: the model drains through its own permission flow. */
