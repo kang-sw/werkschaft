@@ -821,6 +821,110 @@ were checked; the fenced paths are `agent.json`, `permission.json`,
 Verification: `go test -race -count=1 ./internal/wsmeta/` ok;
 `go vet` (darwin, `GOOS=windows`, `GOOS=linux`) ok; `gofmt` clean.
 
+#### Edition (ef0259ce7) - 2026-11-22
+
+The second re-review of 3df153f83^..e93782cd3 found 4 Critical and 6
+Important issues. All are fixed in ef0259ce7 and none is rebutted. Each
+fix's test was run with the fix reverted and failed.
+
+The fences now follow one lifecycle, stated with its invariants at the
+fence constants in `capture.go`:
+
+```text
+none -> intent -> landed
+any state -> none, when a pass cannot prove the publication
+```
+
+Its rules:
+
+- A fence record changes only while its publication is not live.
+- A fence applies only over the staged original, or over its own proven
+  publication. Anything else returns `ErrFenceStale`.
+- A publication is made durable before it is marked landed.
+- `Commit` needs every required fence to be both landed and proven by its
+  own pass.
+- When proof fails, the live state is re-staged and the fence must be
+  applied again. The original is never written back.
+
+The earlier rule that a removal is satisfied when the path was staged
+absent is gone; a required removal is re-applied like any other fence.
+
+Critical fixes:
+
+- **Retry overwrote the proof of a landed fence (C1):** a retry interrupted
+  before it publishes now keeps the record of a publication already in
+  place, so the migration's bytes are never staged as the original. Test:
+  `TestInterruptedRetryKeepsTheFirstPublicationProvable`.
+- **Stale witness blocked a re-fence (C2):** the witness is now fixed for
+  each path and replaced on re-fence. Removing a path whose original was
+  absent also removes any stale witness. Tests:
+  `TestRemovalRefenceReplacesAStaleWitness` and
+  `TestOwnerDeletionDuringPendingRemovalIsNotRestored`.
+- **No durability barrier before the marker (C3):** a replacement now
+  syncs its temporary file after setting the sentinel time, renames it,
+  then syncs the directory. A removal renames, then syncs the directory.
+  - On POSIX the directory sync is an fsync.
+  - On Windows it is a write-through rename of a scratch file, which
+    relies on NTFS's ordered metadata log.
+
+  A publication that a pass finds live but not marked landed stays pending
+  until the fence is re-applied. Re-applying only syncs the directory.
+  Tests: `TestFencePublicationIsDurableBeforeItLands` and
+  `TestUnsyncedPublicationNeedsReapplyBeforeCommit`.
+- **Failed identity lookup discarded a session (C4):** a lookup that fails
+  now fails the pass and changes nothing, instead of returning a weaker
+  token. On Linux, a missing statx (`ENOSYS`, or `EPERM` from seccomp) uses
+  the device and inode token consistently. Test:
+  `TestInconclusiveSessionIdentityKeepsItsJournal`.
+
+Important fixes:
+
+- **I1, Windows journal ACL:** every open creates the `-journal` with the
+  owner-only ACL if it is missing, and propagates errors other than
+  absence. SQLite removes that empty journal only on an empty database, and
+  its own journal then holds no page images. Runtime check: the Windows
+  test now covers the journal (left to the lead).
+- **I2, validator identity:** the validator signature is
+  `LegacyValidator(rel, replyID, raw)`. `wsagent.ValidateLegacyRecord` and
+  `wsdashboard.ValidateLegacyUsageHistory` now have this signature, so they
+  wire in without adapters. Test: `TestOwnersValidatorsWireIntoCommit`.
+- **I3, pending deletes:** a confirmable denial is confirmed only for an
+  input that was never readable. A file read earlier keeps its staged
+  original and blocks the commit. Test:
+  `TestDenialAfterAReadablePassKeepsTheOriginal`.
+- **I4, relative root:** `Open` resolves the root to an absolute path once.
+  Test: `TestOpenResolvesARelativeRoot`.
+- **I5 and I6, witness path and moved links:** the witness must be a plain
+  file name in the path's own directory. It rejects separators, `:`,
+  dot names and bundled names. Because the witness is a sibling, a moved
+  relative link still resolves to the same file. Test:
+  `TestRemovalWitnessStaysBesideItsPath`.
+
+API changes:
+
+- `ApplyRemovalFence(rel, witness)` now takes a file name, not a
+  dashboard-relative path.
+- New errors: `ErrFenceStale` and `ErrFenceConflict`.
+- `CommitOptions.Validate` holds `LegacyValidator` values.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (12.3 s).
+- `go test -count=1 ./internal/wsagent/`: ok (147.5 s). Two earlier runs
+  were disturbed by sibling test runs loading the machine.
+  - The first hit the default 10-minute timeout.
+  - The second failed two timing tests:
+    `TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop` and
+    `TestAdmitCompletionWaitsForTheNextTurnWithoutASteer`.
+
+  Both tests pass 5 out of 5 runs in isolation (`-count=5`), and neither
+  touches code this branch changes.
+- The wsdashboard validator tests: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
 - Depends on Phase 1. Route affected direct Go readers through the daemon
