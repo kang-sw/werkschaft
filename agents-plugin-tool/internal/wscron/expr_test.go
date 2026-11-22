@@ -1,6 +1,7 @@
 package wscron
 
 import (
+	"fmt"
 	"math/rand"
 	"strings"
 	"testing"
@@ -46,6 +47,10 @@ func TestParseRefusals(t *testing.T) {
 		{"* * * * 8", "day-of-week field: 8"},
 		{"*/0 * * * *", "minute field: step"},
 		{"5-1 * * * *", "reversed"},
+		{"2-3/9223372036854775807 * * * *", "larger than the field"},
+		{"2-3/61 * * * *", "larger than the field's 60 values"},
+		{"* * * * */9", "larger than the field's 8 values"},
+		{"* 5-6/25 * * *", "larger than the field's 24 values"},
 		{"1,,2 * * * *", "empty list item"},
 		{"* * * * MON/2", "step"},
 		{"* * * * 1-5/MON", "step"},
@@ -63,6 +68,34 @@ func TestParseRefusals(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), c.want) {
 			t.Errorf("Parse(%q) = %q, want it to contain %q", c.expr, err, c.want)
+		}
+	}
+}
+
+// A step at most the field's value count never moves a bit outside the range,
+// whatever the range's start: 2-3/60 sets only 2, and 58-59/60 only 58.
+func TestStepStaysInsideItsRange(t *testing.T) {
+	for _, c := range []struct {
+		expr string
+		min  []int
+	}{
+		{"2-3/60 * * * *", []int{2}},
+		{"58-59/60 * * * *", []int{58}},
+		{"10-20/7 * * * *", []int{10, 17}},
+		{"59-59/1 * * * *", []int{59}},
+	} {
+		e, err := Parse(c.expr)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.expr, err)
+		}
+		var got []int
+		for m := 0; m < 64; m++ {
+			if e.minute&(1<<uint(m)) != 0 {
+				got = append(got, m)
+			}
+		}
+		if fmt.Sprint(got) != fmt.Sprint(c.min) {
+			t.Errorf("Parse(%q) minutes = %v, want %v", c.expr, got, c.min)
 		}
 	}
 }

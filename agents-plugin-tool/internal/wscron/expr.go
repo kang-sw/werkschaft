@@ -144,6 +144,9 @@ func parseItem(item string, spec fieldSpec) (uint64, error) {
 		if err != nil || stepPart == "" || stepPart[0] == '+' || stepPart[0] == '-' || n < 1 {
 			return 0, fmt.Errorf("%s field: step %q in %q must be a positive number", spec.name, stepPart, item)
 		}
+		if n > spec.max-spec.min+1 {
+			return 0, fmt.Errorf("%s field: step %d in %q is larger than the field's %d values", spec.name, n, item, spec.max-spec.min+1)
+		}
 		step = n
 	}
 	var lo, hi int
@@ -173,8 +176,12 @@ func parseItem(item string, spec fieldSpec) (uint64, error) {
 		lo, hi = v, v
 	}
 	var bits uint64
-	for v := lo; v <= hi; v += step {
+	for v := lo; ; v += step {
 		bits |= 1 << uint(v)
+		// Stop before the increment can pass hi, so no step wraps the counter.
+		if step > hi-v {
+			break
+		}
 	}
 	return bits, nil
 }
