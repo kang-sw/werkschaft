@@ -92,7 +92,9 @@ func (s *Server) resolveRsrcRoot(rsrcRootOverride string) (fs.FS, error) {
 //
 // Returns (body, recommendedTier, error): recommendedTier is the first-class tier
 // declared in the playbook frontmatter, or tierOverride when supplied, surfaced
-// so the caller can pick the delegate's model from one render call.
+// so the caller can pick the delegate's model from one render call. For a
+// caller that delegates through daemon-owned agent.spawn, a playbook that
+// declares tier-role recommends <role>:<that tier> instead.
 func renderPlaybookBody(s *Server, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, mintRoot string, parentKey string, workflowLang string, overrideLookup overrideLookupFn, tierOverride string) (string, string, error) {
 	return renderPlaybookBodyForCaller(s, "", "", rsrcRoot, name, callerContext, configOpts, mintRoot, parentKey, workflowLang, overrideLookup, tierOverride)
 }
@@ -188,7 +190,10 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 		return "", "", err
 	}
 
-	return renderProductModePlaybookBody(body, s.noAgentMode()), recommendedTier, nil
+	// A daemon-agent caller is recommended the playbook's role tier, which
+	// agent.spawn routes through agent.tier_routing; the body above used
+	// the bare size either way.
+	return renderProductModePlaybookBody(body, s.noAgentMode()), roleRecommendedTier(daemonAgents, pb.Meta.TierRole, recommendedTier), nil
 }
 
 func substitutePlaybookVars(body string, declared []string, vars map[string]string) (string, error) {

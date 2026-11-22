@@ -410,6 +410,9 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// A Pi subagent's own pi.* calls (the token route) need a usable
 		// Pi, as a lead's do.
 		ChildCheck: mcp.PiReady,
+		// agent.spawn routes role tiers through the packaged playbook
+		// roles' agent.tier_routing graph.
+		TierRoles: mcp.PackagedTierRoles,
 		// A message that cannot wake its sleeping agent stays queued; its
 		// sender hears why once.
 		WakeRefused: mcp.AgentWakeRefused(logw),

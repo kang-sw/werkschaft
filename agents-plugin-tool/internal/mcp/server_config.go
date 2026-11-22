@@ -159,6 +159,9 @@ type resolveAgentTierResult struct {
 	Model        string `json:"model"`
 	Effort       string `json:"effort"`
 	ResolvedFrom string `json:"resolved_from"`
+	// Trace is the agent.tier_routing path of a role tier, alias, explicit
+	// target, or bundle; empty for a bare size.
+	Trace string `json:"trace,omitempty"`
 }
 
 // promptOverrideValue is one resolved override for a declared point: the harness
