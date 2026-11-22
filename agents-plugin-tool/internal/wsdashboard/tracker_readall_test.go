@@ -32,6 +32,8 @@ func TestTrackerTkReadAllRendersEachStoreAsItArrives(t *testing.T) {
 var tkApi = {}, tkOrder = [], tkViews = {}, tkErrs = {}, tkSeen = {}, tkHostErr = null, tkSupport = false, tkLastRev = null;
 var pending = {}, log = [], bad = [];
 function wsT(k) { return k; }
+var staged = null;
+function shStage(fn) { if (staged) staged.push(fn); else fn(); }
 function tkUrl(id, op) { return "/tracker/stores/" + id + "/" + op; }
 function tkFetch(path, body, done) {
   if (path === "/tracker/stores") { done(200, { rev: 1, stores: [{ id: "fast" }, { id: "slow" }] }); return; }
@@ -59,6 +61,20 @@ pending["/tracker/stores/slow/view"](500, {});
 check("unmounted, first view landed", log, ["listed:200"]);
 pending["/tracker/stores/fast/view"](200, { view: { v: "new" } });
 check("unmounted, both landed", log, ["listed:200", "done"]);
+
+// A page staged for its first show lists the stores at once but reads no
+// view until the show releases the held reads.
+tkApi = {}; log = []; pending = {}; tkViews = {};
+staged = [];
+tkReadAll(function (status) { log.push("listed:" + status); }, function () { log.push("done"); });
+check("staged: listed, no view requested", [log, Object.keys(pending)], [["listed:200"], []]);
+check("staged: one held read", staged.length, 1);
+staged.shift()();
+staged = null;
+check("released: both views requested", Object.keys(pending).sort(), ["/tracker/stores/fast/view", "/tracker/stores/slow/view"]);
+pending["/tracker/stores/fast/view"](200, { view: { v: "new" } });
+pending["/tracker/stores/slow/view"](200, { view: { v: "new" } });
+check("released: done after both", log[log.length - 1], "done");
 process.stdout.write(bad.join("\n"));
 `
 	out, err := nodeScript(node, script).CombinedOutput()

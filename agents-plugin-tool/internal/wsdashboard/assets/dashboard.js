@@ -61,6 +61,21 @@
   // its region updates and skips the clock until it shows.
   var shell = root.hasAttribute("data-shell"), framed = root.hasAttribute("data-frame") && !!window.WsShell, shHidden = false;
   if (framed && window.parent === window) { location.replace(location.pathname + location.hash); return; }
+  // A framed page is loaded by the shell before it is shown (a cold switch
+  // loads it hidden, a preload stays hidden), so it is staged until its first
+  // show: shStage holds the loads nobody sees before then (the tracker's
+  // per-store views, the chat tabs' terminal replay) and the first show runs
+  // them at once (shUnstage). What the first show paints stays immediate. A
+  // page that is not framed is never staged.
+  var shStaged = framed, shStageList = [];
+  function shStage(fn) { if (shStaged) shStageList.push(fn); else fn(); }
+  function shUnstage() {
+    if (!shStaged) return;
+    shStaged = false;
+    var held = shStageList;
+    shStageList = [];
+    held.forEach(function (fn) { try { fn(); } catch (e) { /* one deferred load never blocks the rest */ } });
+  }
   function syncPageVisibility() {
     var paused = doc.hidden || shHidden;
     if (root.hasAttribute("data-animation-paused") !== paused) root.toggleAttribute("data-animation-paused", paused);

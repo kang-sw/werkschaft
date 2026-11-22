@@ -102,7 +102,9 @@ async function runBase() {
   vm.runInContext(pure, c);
   assert.deepEqual(plain(c.bad), []);
   assert.equal(s.current(), first);
-  assert.deepEqual(plain(first.got), ['sync', 'settings']);
+  // The frame the shell page loaded with already finished loading, so no load
+  // event will tell it that it is the shown one: the shell does.
+  assert.deepEqual(plain(first.got), ['sync', 'settings', 'shown:true']);
   const beforeHead = c.renameChecks;
   c.from(first.contentWindow, { wsShell: 'head', html: '<b>a</b>', qs: '', pad: 0, top: 40 });
   assert.deepEqual(plain(c.log), ['swap:head:<b>a</b>']);

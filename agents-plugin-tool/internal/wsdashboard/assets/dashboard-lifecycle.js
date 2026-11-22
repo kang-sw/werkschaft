@@ -1337,6 +1337,7 @@
         shHidden = !m.shown;
         if (shHidden && queued) { cancelAnimationFrame(queued); queued = null; }
         syncPageVisibility();
+        if (m.shown) shUnstage();
         if (shHidden) {
           // Opaque author scripts have no safe general pause API. Retain
           // their placeholder heights, not their running child documents.
@@ -1383,7 +1384,11 @@
     if (f.hash) { el.src = window.WsShell.src(f); return; }
     try { ent.loaded = el.contentDocument.readyState === "complete"; } catch (x) { /* not yet */ }
     shSend(ent, "sync");
-    if (ent.loaded) shSettings(ent);
+    if (ent.loaded) {
+      shSettings(ent);
+      // No load event will tell this frame it is the shown one.
+      shSend(ent, "shown", { shown: true });
+    }
   }
 
   if (live || gmenu) {

@@ -324,13 +324,18 @@
         [tkViews, tkErrs, tkSeen, tkAnswers, tkProjections, tkLegacy, tkReads].forEach(function (m) { Object.keys(m).forEach(function (id) { if (!keep[id]) delete m[id]; }); });
       }
       listed(status);
-      var left = status === 200 ? tkOrder.length : 0;
+      var ids = status === 200 ? tkOrder.slice() : [], left = ids.length;
       if (!left) { done(); return; }
-      tkOrder.forEach(function (id) {
-        tkLoadView(id, function (changed) {
-          if (changed) tkDirty = true;
-          if (--left === 0) done();
-          else if (tkApi && changed) tkNotify(true);
+      // The list above is what the header's search button and the drawer's
+      // tabs mount from; the views behind them (the heavy reads) wait for the
+      // page's first show when a hidden frame loaded it (shStage).
+      shStage(function () {
+        ids.forEach(function (id) {
+          tkLoadView(id, function (changed) {
+            if (changed) tkDirty = true;
+            if (--left === 0) done();
+            else if (tkApi && changed) tkNotify(true);
+          });
         });
       });
     }, false, null, held ? held.tag : "");

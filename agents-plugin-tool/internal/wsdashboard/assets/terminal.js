@@ -881,7 +881,11 @@
     tabList.push(tab);
     saveTabStore();
     if (shouldActivate) activateTab(t.id);
-    activate(tab);
+    // A chat tab's replay (the whole ring from offset 0) is work nobody sees
+    // until its pane shows: a page the shell loaded hidden holds it for its
+    // first show (hooks.stage), while a pane showing now starts at once.
+    if (hooks.stage && !shows(tab)) hooks.stage(function () { activate(tab); });
+    else activate(tab);
     return tab;
   }
   function reconcileTabs(known, terminals, asked) {
