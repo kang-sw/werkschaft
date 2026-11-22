@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: b71e948adb14f634
 sage-review-completeness-reviewed: b71e948adb14f634
+completed: 2026-11-23
 ---
 
 # Chat composer `!` commands and command slots
@@ -798,3 +799,69 @@ Verification boundary:
   and `en`.
 - Performance: slot registration and list/page-load file-operation counts
   against the Windows baseline.
+
+### Result (bc6fa0448) - 2026-11-23
+
+Landed (develop 1679c7691..bc6fa0448, one commit): the `wsusercmd` registry
+and its own `user-commands.db` (held connection, WAL, one commit per changed
+row, none for an unchanged definition, memory read model; scope is the lead's
+reply ID plus its bound worktree; 32 per scope, label 64, description 256,
+line 4 KiB; revisions clock-seeded and never reused across withdrawal and
+restart; startup reconcile drops forgotten conversations); the dashboard
+routes behind `composerGate` (`GET /s/<id>/user-commands`, `POST .../<slot>/run`
+and `.../remove`, strict bodies that never carry command text); the run path
+through the Phase 1 composer admission (`composerAdmitSlot`, known-card and
+retry answers first, 409 `stale`/`withdrawn` with the fresh list, a card that
+shows the slot label); the opaque `usercmd` stream event (local viewers with
+a reply ID, on connect and on change); the `session.register_user_command`
+and `session.unregister_user_command` tools (trusted binding owner only,
+listed only to an open hosted lead, lead-only for keys, in `LeadToolNames`,
+the three `runtime.json` files and the Pi owner-lead set); the slot strip UI
+and eleven i18n tables; the `ws-mcp.md` store bullet.
+
+Verification (narrow `-run`, no whole-package runs of `internal/mcp` or
+`wsdashboard` as a filter-less sweep):
+- `wsusercmd` (all, including concurrency and a newer-schema refusal),
+  `wsdashboard` user-command route/authority/stale/withdrawn/idempotency/
+  stream tests, `mcp` user-command tool tests (listing, lead-only,
+  forged owner argument, limits, shipped-text), `cmd/ws-mcp` binding tests
+  (scope, 10 s root cache, restart and older-daemon reload), `wsagent`
+  `ComposerRoot`: pass. The wsdashboard package also passed in full once.
+- `TestUserCommandBrowser` (Playwright; captures left untracked) passes in
+  `ko` and `en`. i18n key tests and the asset-source list test pass.
+- Pi: bridge and child-tool-inheritance tests pass; two other Pi tests fail
+  identically on the base commit (pre-existing).
+- `GOOS=windows go vet` on wsusercmd, wsdashboard, wsagent, mcp, cmd/ws-mcp:
+  clean. The Windows host run and the Git Bash run are not done here.
+- T0 evidence: no change under `internal/execjob`; `exec_jobs` and its
+  `user_version` are untouched; `TestUserCommandsReloadAfterARestartAndAnOldDaemon`
+  opens the older daemon's stores in the same directory, leaves the slot
+  database byte-identical, and a reopen restores every command; an older
+  daemon refuses the unknown tool name.
+- File operations (`TestUserCommandInteractivePathsTouchNoStore`): list,
+  page load, stream connect and click acknowledgement touch the store zero
+  times; an unchanged registration commits nothing; a registration, a
+  replacement and a removal each make one commit. macOS probe
+  (`WS_COMPOSER_PERF=1`): register p50 28 µs, unchanged 0.5 µs, replace 21 µs,
+  remove 69 µs, list read 96 µs, session page with and without the binding
+  3.2 ms / 3.0 ms, click acknowledgement 94 µs. The worktree root is read from
+  the key record, so page reads reuse it for 10 s per open generation; a click,
+  a removal and the tools read it fresh. The Windows baseline comparison is
+  left to the lead.
+
+Decisions: the browser sends the slot ID and displayed revision, never text,
+and the daemon runs the stored line only while its revision matches; the
+owner is the trusted conversation binding, never a key or an argument; the
+stream event is opaque and the page refetches (no polling); a slot click
+reuses the Phase 1 submission, token and card machinery rather than a second
+exec path.
+
+Review (lite, one pass): no Critical or Important. Four Minor left unfixed:
+the list can show the previous worktree's commands for up to 10 s after a
+rebind (a click re-reads fresh, so nothing wrong can run); removal is
+check-then-act and skips the revision check when none is sent (the page
+always sends it); every local stream gets a `usercmd` event on connect;
+`Reconcile` does not notify (it only runs at startup).
+
+Not tested here: LAN stream gating of the event beyond the unit gate, a run
+against a real older binary, the Windows host and Git Bash.
