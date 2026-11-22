@@ -248,7 +248,8 @@
     function view(pose, gesture, expression, props) {
       const key = JSON.stringify([pose, gesture, expression, props]);
       if (rigViews.has(key)) return rigViews.get(key);
-      const act = resolve(manifest.gestures, gesture, null, x => !!x?.layers?.length)?.item;
+      const act = resolve(manifest.gestures, gesture, null, item =>
+        !!(item?.pose || item?.replaces?.length || item?.layers?.length))?.item;
       const resolved = resolve(manifest.poses, act?.pose || pose, "stand", x => !!x?.layers?.length);
       const body = resolved.item;
       const layers = [];

@@ -40,6 +40,52 @@ test("companion knee tracks rotate continuously with independently phased pivots
   assert.equal(motion("wave-pivot")(0).rotDeg, -22);
 });
 
+test("companion gestures can select a pose or remove slots without adding layers", () => {
+  class Canvas {
+    constructor(width, height) {
+      this.width = width;
+      this.height = height;
+      this.drawn = [];
+    }
+    getContext() {
+      return {
+        canvas: this,
+        save() {},
+        restore() {},
+        clearRect: () => { this.drawn.length = 0; },
+        drawImage: image => { this.drawn.push(image); },
+        getImageData: () => ({data: []})
+      };
+    }
+  }
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const pack = {
+    manifest: {
+      canvas: [512, 512],
+      poses: {
+        stand: {layers: [{id: "body", file: "body.png"}, {id: "arm", file: "arm.png"}]},
+        perched: {layers: [{file: "perched.png"}]}
+      },
+      gestures: {
+        perch: {pose: "perched"},
+        tuck: {replaces: ["arm"]},
+        hide: {fallback: "tuck"}
+      }
+    },
+    bitmaps: new Map(["body.png", "arm.png", "perched.png"].map(file => [file, {file}]))
+  };
+  const rig = makeRig(pack, null, "");
+  const gaze = {x: 0, y: 0};
+  const draw = gesture => {
+    const view = rig.view("stand", gesture, "idle", []);
+    return [view.pose, Array.from(view.render(0, gaze).drawn, image => image.file)];
+  };
+  assert.deepEqual(draw(null), ["stand", ["body.png", "arm.png"]]);
+  assert.deepEqual(draw("perch"), ["perched", ["perched.png"]]);
+  assert.deepEqual(draw("tuck"), ["stand", ["body.png"]]);
+  assert.deepEqual(draw("hide"), ["stand", ["body.png"]]);
+});
+
 test("companion scenarios evaluate guarded pack overrides and advance multi-beat steps", () => {
   const { scenarioRunner } = companion();
   const runner = scenarioRunner({

@@ -96,7 +96,6 @@ function fetch() { return Promise.resolve({ status: 404 }); }
 var mode = "session", rid = "rid1", worktree = "", heldNow = "board.1,head.2", hiddenRegions = {}, modeHash = "", liveMode = false;
 function held() { return heldNow; }
 function boardInputFull() { return null; }
-function panelInputFull() { return null; }
 function trackerLost() { log.push("lost"); }
 function trackerNudge(rev) { log.push("nudge:" + rev); }
 function swap(name, hash, html) { log.push("swap:" + name + "." + hash); }
@@ -159,6 +158,8 @@ check("the frame requests tree but not absent rail rows", sockets[4].url, "ws://
 sockets[4].msg("companion", {mode: "off"});
 check("a frame leaves the shell companion settings alone", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
 var companionReads = [];
+// The empty panel region establishes the last keyed baseline on reconnect.
+doc.createElement = function () { return { childNodes: [], children: [], innerHTML: "" }; };
 companionRelay = { board: function (html) { companionReads.push(html); }, reconcile: function (ready) { companionReads.push(ready); } };
 sockets[4].msg("region", {name: "board", hash: "catch-up", html: "<p>reconciled board</p>"});
 sockets[4].msg("region", {name: "panels", hash: "held", html: ""});
