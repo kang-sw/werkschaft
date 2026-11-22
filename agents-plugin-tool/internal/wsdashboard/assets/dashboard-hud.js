@@ -109,7 +109,8 @@
         task: node.task || ownTasks[node.id] || "", overflow: Number(node.overflow) || 0,
         native: !!node.native, startedAt: Number(node.startedAt) || 0, endedAt: Number(node.endedAt) || 0, endUnknown: !!node.endUnknown,
         contextTokens: Number(node.contextTokens) || 0, contextWindow: Number(node.contextWindow) || 0,
-        contextSoft: Number(node.contextSoft) || 0, contextLevel: node.contextLevel || "", contextText: node.contextText || ""
+        contextSoft: Number(node.contextSoft) || 0, contextLevel: node.contextLevel || "", contextText: node.contextText || "",
+        compacting: !!node.compacting, compactions: Number(node.compactions) || 0, compactOrigin: node.compactOrigin || ""
     });
     entry.el = btn;
     hudRegistry[node.id] = entry;
@@ -305,6 +306,7 @@
     if (d.overflow > 0) elSpan.appendChild(doc.createTextNode(" \u00b7 " + wsT("js.hud.deeper", d.overflow)));
     meta.appendChild(elSpan); tt.appendChild(meta);
     var ctx = hudContextRow(d); if (ctx) tt.appendChild(ctx);
+    var cmp = hudCompactionRow(d); if (cmp) tt.appendChild(cmp);
     var chain = doc.createElement("div"); chain.className = "tt-chain";
     chain.textContent = [hudLead].concat(d.chain, [d.label]).filter(Boolean).join(" \u203a ");
     tt.appendChild(chain);
@@ -342,6 +344,26 @@
     }
     var tok = doc.createElement("span"); tok.className = "tok"; tok.textContent = d.contextText;
     row.appendChild(pct); row.appendChild(bar); row.appendChild(tok);
+    return row;
+  }
+  // hudCompactionRow is the card's compaction line under the context row: an
+  // accent chip while a compaction is queued or running, then the count and the
+  // latest compaction's origin when known. No line without either.
+  function hudCompactionRow(d) {
+    if (!d.compacting && !(d.compactions > 0)) return null;
+    var row = doc.createElement("div"); row.className = "tt-cmp";
+    if (d.compacting) {
+      var now = doc.createElement("span"); now.className = "d-now"; now.textContent = wsT("js.hud.compacting");
+      row.appendChild(now);
+    }
+    if (d.compactions > 0) {
+      var cnt = doc.createElement("span"); cnt.className = "cnt";
+      var text = wsT("js.hud.compactions", d.compactions);
+      var origin = d.compactOrigin === "auto" ? wsT("js.hud.compactorigin.auto") : d.compactOrigin === "manual" ? wsT("js.hud.compactorigin.manual") : d.compactOrigin === "native" ? wsT("js.hud.compactorigin.native") : "";
+      if (origin) text += " \u00b7 " + origin;
+      cnt.textContent = text;
+      row.appendChild(cnt);
+    }
     return row;
   }
   // hudLifecycle is a native row's start and end; a row whose observation

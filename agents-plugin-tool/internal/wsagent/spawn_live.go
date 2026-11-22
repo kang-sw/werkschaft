@@ -34,7 +34,9 @@ func SpawnAgentEvent(st State, key string) wslive.Event {
 		ContextCompaction: cloneUsageCompaction(st.ContextCompaction),
 		ActiveMs:          st.ActiveMs,
 		Holding:           st.Status != StatusClosed && st.Holding,
-		Alive:             st.Status != StatusClosed && st.Process}
+		Alive:             st.Status != StatusClosed && st.Process,
+		Compacting:        st.Status != StatusClosed && st.Compacting,
+		Compactions:       st.Compactions, CompactOrigin: st.CompactOrigin}
 	if st.Status == StatusRunning {
 		ev.TurnStartedAt = st.TurnStartedAt
 	}

@@ -126,6 +126,18 @@ type conv struct {
 	compactStop                               func()
 	compactNote                               string
 
+	// compactOrigin is the origin (wslive.CompactOriginAuto or Manual) of the
+	// compaction ws itself requested, from its dispatch until its end or
+	// failure; empty while none runs or the harness compacts on its own. It is
+	// loop-owned.
+	compactOrigin string
+	// cmpActive, cmpCount and cmpLast mirror the compaction state State shows
+	// (Compacting, Compactions, CompactOrigin) under mu, as the loop-owned
+	// fields above are not readable there.
+	cmpActive bool
+	cmpCount  int
+	cmpLast   string
+
 	// A nudge and any requested post-compaction continuation have no parent result.
 	compactNudge                               compactionNudge
 	compactInternalTurn, compactResumeInternal bool
@@ -985,6 +997,7 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 	}
 	st.ContextTokens = c.contextTokens
 	st.ContextWindow, st.ContextCompaction = c.contextWindow, cloneUsageCompaction(c.contextCompaction)
+	st.Compacting, st.Compactions, st.CompactOrigin = c.cmpActive && !c.closed, c.cmpCount, c.cmpLast
 	if c.observed != nil {
 		observed := *c.observed
 		st.Observed = &observed
@@ -1296,6 +1309,15 @@ func (c *conv) applyCoalesced(ev wslive.Event, quiet bool) {
 func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 	if c.stageAgyNativeReplay(ev, quiet) {
 		return
+	}
+	if ev.Kind == wslive.KindCompact && !quiet && c.compactOrigin != "" {
+		// A compaction ws requested is recorded as that request's origin, not
+		// the harness's own trigger: a harness reports the command that ran
+		// it ("manual") whoever sent it.
+		ev.Trigger = c.compactOrigin
+		if ev.Phase == wslive.CompactEnd || ev.Phase == wslive.CompactFailed {
+			defer func() { c.compactOrigin = "" }()
+		}
 	}
 	if !quiet {
 		c.observeCompaction(ev)

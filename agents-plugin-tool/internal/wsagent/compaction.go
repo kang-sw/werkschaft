@@ -112,6 +112,7 @@ func (r *Runner) Compact(callerKey, target string, resume *bool) CompactResult {
 		}
 		req := &compactRequest{resume: again, internal: dest.compactInternalTurn, crossing: dest.aboveCompactHard()}
 		dest.compactPending = req
+		dest.publishCompaction(false)
 		out = CompactResult{"queued", "native compaction waits for the idle boundary"}
 		dest.kick()
 		if req.err != nil {
@@ -171,6 +172,7 @@ func (c *conv) loadCompaction() {
 	c.compactHardSteerID = ""
 	c.compactAdvised, c.compactM1Issued, c.compactM2Issued = false, false, false
 	c.compactNudge = compactionNudge{}
+	c.compactOrigin = ""
 }
 
 func (c *conv) loadCompactionThresholds() {
@@ -361,6 +363,7 @@ func (c *conv) checkUsageDropCompaction(ev wslive.Event) {
 
 // compactIdle precedes inbox reads. All crossing/lifecycle state is in memory.
 func (c *conv) compactIdle() bool {
+	defer c.publishCompaction(false)
 	if c.compacting || c.compactCommand {
 		return true
 	}
@@ -389,6 +392,7 @@ func (c *conv) compactIdle() bool {
 		if req.auto {
 			trigger = wslive.TriggerAuto
 		}
+		c.compactOrigin = trigger
 		cmd := wsinbox.Command{Name: "compact"}
 		if p, ok := c.proc.(*piProcess); req.auto && ok && p.mapper.compactPreparation.Load() {
 			cmd.Args = "<!-- ws-pi-daemon-auto-compact -->"
@@ -402,6 +406,7 @@ func (c *conv) compactIdle() bool {
 		})
 		if checkout, ok := releasedInput(err); ok {
 			req.err = err
+			c.compactOrigin = ""
 			c.compactCommand, c.compactResume, c.compactResumeInternal = false, false, false
 			c.dropReleasedInput("compaction", checkout)
 			c.releaseHeld()
@@ -487,6 +492,7 @@ func (c *conv) stageHardCompaction(resume, internal bool) {
 		return
 	}
 	c.compactPending = &compactRequest{resume: resume, internal: internal, auto: true, crossing: true}
+	c.publishCompaction(false)
 }
 
 func (c *conv) compactionStateInstruction() string {
@@ -735,6 +741,8 @@ func (c *conv) compactEvent(ev wslive.Event) {
 	if ev.Kind != wslive.KindCompact {
 		return
 	}
+	completed := false
+	defer func() { c.publishCompaction(completed) }()
 	switch ev.Phase {
 	case wslive.CompactStart:
 		c.stopIdle()
@@ -756,6 +764,12 @@ func (c *conv) compactEvent(ev wslive.Event) {
 			return
 		}
 		c.compacting = false
+		completed = true
+		origin := c.compactOrigin
+		if origin == "" {
+			origin = wslive.CompactOriginNative
+		}
+		c.setStatus(func() { c.cmpCount++; c.cmpLast = origin })
 		if c.compactPending != nil && c.compactPending.crossing {
 			// Native compaction already handled the queued request's crossing.
 			c.compactPending = nil
@@ -782,6 +796,22 @@ func (c *conv) compactEvent(ev wslive.Event) {
 				}
 			}
 		}
+	}
+}
+
+// publishCompaction mirrors the compaction state State shows and tells the
+// watchers when it changed: a compaction queued, running or ended (active), or
+// one completed (completed).
+func (c *conv) publishCompaction(completed bool) {
+	active := c.compactPending != nil || c.compacting || c.compactCommand
+	changed := completed
+	c.setStatus(func() {
+		if c.cmpActive != active {
+			c.cmpActive, changed = active, true
+		}
+	})
+	if changed {
+		c.watched()
 	}
 }
 

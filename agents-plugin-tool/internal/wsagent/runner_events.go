@@ -364,6 +364,7 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	// The cutover's instruction goes once the turn is over: a steer into the
 	// running turn would replace it.
 	defer c.sendCutoverInstruction()
+	defer c.publishCompaction(false)
 	compactCommand, wasCompacting := c.compactCommand, c.compacting
 	if !quiet {
 		c.compactCommand = false
