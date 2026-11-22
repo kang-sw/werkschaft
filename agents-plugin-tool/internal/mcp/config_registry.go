@@ -421,6 +421,29 @@ var configRegistry = []configKeyEntry{
 		},
 	},
 	{
+		// One structured (JSON object) value in the global file's
+		// structured_overrides member, written through config.tune's
+		// structured path. Global-only: one graph keeps validation and reset
+		// atomic across every worktree that references a node.
+		Key:        wsconfig.ItemAgentTierRouting,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{{
+			Name:        "scope",
+			Description: "Storage scope. Only global; omit it.",
+			Enum:        []string{string(wsconfig.ScopeGlobal)},
+		}},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "The whole routing object (see value_schema): {\"nodes\": {<node>: {\"*\" or small|medium|large|xlarge: <target>}}, \"bundles\": {<name>: {harness, model, effort}}}. A target is <node>:<size|*>, <harness>.<size|*>, or a bundle name. It replaces the stored routing as a whole; omit when reset is true.",
+			Required:    true,
+		}},
+		NoAgentVisible:        true,
+		RequiresLeadAuthority: wsconfig.GlobalOnly(wsconfig.ItemAgentTierRouting),
+		ResolverBacked:        true,
+		Structured:            true,
+	},
+	{
 		Key:        wsconfig.ItemAgentChildWaitingDays,
 		WriterTool: "config.tune",
 		ResetTool:  "config.tune",

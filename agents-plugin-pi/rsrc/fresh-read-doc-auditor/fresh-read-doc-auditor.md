@@ -2,6 +2,8 @@
 kind: render
 role: auditor
 tier: large
+tier-role: fresh-read-doc-auditor
+tier-parent: review:*
 variables:
   - TargetFiles
 ---

@@ -295,3 +295,92 @@ test('describe formats item.unhide and comment.unhide events', () => {
   assert.equal(c.sysKindKey('comment.unhide'), 'js.tk.tr.k.comment');
   assert.equal(c.sysKindKey('item.unhide'), 'js.tk.tr.k.hide');
 });
+
+test('show hidden puts my hidden assignments in the Mine layouts and hidden comment mentions in Related', () => {
+  const { c } = harness();
+  vm.runInContext(section('  // ------------------------------------------------------------- view modes', '  function whoTag(x)'), c);
+  c.lastWrite = () => '';
+  const vis = makeItem('i1', { title: 'Visible task', due: '2026-11-25', assignments: ['a1'] });
+  const hid = makeItem('i2', { title: 'Hidden task', author: 'lena', due: '2026-11-26', hidden: true, assignments: ['a2', 'a3'] });
+  const mentioned = makeItem('i3', { title: 'Hidden mention', author: 'lena', hidden: true });
+  const ownComment = makeItem('i4', { title: 'Hidden own comment', author: 'lena', hidden: true });
+  c.VS.items = { i1: vis, i2: hid, i3: mentioned, i4: ownComment };
+  c.VS.itemOrder = ['i1', 'i2', 'i3', 'i4'];
+  c.VS.assignments = {
+    a1: { id: 'a1', item: 'i1', by: 'maya', to: 'maya', state: 'live', status: 'todo', fallback: true },
+    a2: { id: 'a2', item: 'i2', by: 'lena', to: 'maya', state: 'live', status: 'doing' },
+    a3: { id: 'a3', item: 'i2', by: 'lena', to: 'lena', state: 'live', status: 'doing' }
+  };
+  c.VS.comments = {
+    k1: { id: 'k1', item: 'i3', author: 'lena', body: '@maya look', hidden: null, mentions: ['maya'] },
+    k2: { id: 'k2', item: 'i4', author: 'maya', body: '@maya note', hidden: null, mentions: ['maya'] }
+  };
+  c.VS.my.assignments = ['a1'];
+
+  const recs = () => c.assignRecs('mine', 'maya').map(r => r.id).sort();
+  assert.deepEqual(recs(), ['a1']);
+  assert.deepEqual(c.dueRows('mine', 'maya').map(x => x.item), ['i1']);
+  assert.ok(!c.listRelated().includes('Hidden mention'));
+
+  c.panelState().showHidden = true;
+  assert.deepEqual(recs(), ['a1', 'a2'], 'only my record on the hidden item');
+  assert.deepEqual(c.dueRows('mine', 'maya').map(x => x.item).sort(), ['i1', 'i2']);
+  const kanban = c.kanbanBody('mine', 'maya');
+  assert.ok(kanban.includes('Hidden task') && kanban.includes('tk-hidden'), kanban);
+  const related = c.listRelated();
+  assert.ok(related.includes('Hidden mention'), related);
+  assert.ok(!related.includes('Hidden own comment'), 'my own comment mention is not a mention source');
+});
+
+test('show hidden routes hidden Related items as the daemon does: involved left out, CC first, wrapped closed', () => {
+  const { c } = harness();
+  vm.runInContext(section('  // ------------------------------------------------------------- view modes', '  function whoTag(x)'), c);
+  c.lastWrite = () => '';
+  const hidden = (id, title, extra) => makeItem(id, { title, author: 'lena', hidden: true, ...extra });
+  c.VS.items = {
+    h1: hidden('h1', 'Hidden CC and comment', { cc: ['maya'] }),
+    h2: hidden('h2', 'Hidden mine', { author: 'maya' }),
+    h3: hidden('h3', 'Hidden assigned', { assignments: ['a3'] }),
+    h4: hidden('h4', 'Hidden wrapped', { status: 'done' }),
+    h5: hidden('h5', 'Hidden open mention')
+  };
+  c.VS.itemOrder = ['h1', 'h2', 'h3', 'h4', 'h5'];
+  c.VS.assignments = { a3: { id: 'a3', item: 'h3', by: 'lena', to: 'maya', state: 'pending', status: 'todo' } };
+  c.VS.comments = Object.fromEntries(c.VS.itemOrder.map((item, i) => ['k' + i, { id: 'k' + i, item, author: 'lena', body: '@maya', hidden: null, mentions: ['maya'] }]));
+  c.panelState().showHidden = true;
+  c.CLOSED = { entries: [], older: 0 };
+  const html = c.listRelated();
+  const sectionOf = key => html.slice(html.indexOf(`data-rsec="${key}"`), key === 'cc' ? html.indexOf('data-rsec="mentioned"') : undefined);
+  assert.ok(sectionOf('cc').includes('Hidden CC and comment'), 'a hidden CC item is a CC row');
+  assert.ok(!sectionOf('mentioned').includes('Hidden CC and comment'), 'and never repeats under Mentioned');
+  assert.ok(sectionOf('mentioned').includes('Hidden open mention'));
+  assert.ok(!html.includes('Hidden mine') && !html.includes('Hidden assigned'), 'my own and assigned items stay in my own scopes');
+  assert.ok(!html.includes('Hidden wrapped'), 'a wrapped item is not an open mention');
+  assert.ok(c.CLOSED.entries.some(e => e.html.includes('Hidden wrapped')), 'a wrapped item goes to the closed rows');
+});
+
+test('show hidden Mine cards on a hidden item never drag, and a drop on one dispatches nothing', () => {
+  const { c, dispatched } = harness();
+  vm.runInContext(section('  // ------------------------------------------------------------- view modes', '  function whoTag(x)'), c);
+  vm.runInContext(section('  // Kanban drop: only', '  // --------------------------------------------------------------- sync actions'), c);
+  c.lastWrite = () => '';
+  c.VS.items = {
+    i1: makeItem('i1', { title: 'Visible task', assignments: ['a1'] }),
+    i2: makeItem('i2', { title: 'Hidden task', author: 'lena', hidden: true, assignments: ['a2'] })
+  };
+  c.VS.itemOrder = ['i1', 'i2'];
+  c.VS.assignments = {
+    a1: { id: 'a1', item: 'i1', by: 'maya', to: 'maya', state: 'live', status: 'todo' },
+    a2: { id: 'a2', item: 'i2', by: 'lena', to: 'maya', state: 'live', status: 'todo' }
+  };
+  c.VS.my.assignments = ['a1'];
+  c.panelState().showHidden = true;
+  const kanban = c.kanbanBody('mine', 'maya');
+  assert.ok(kanban.includes('Hidden task'), kanban);
+  assert.match(kanban, /draggable="true" data-drag="i1"/, 'a visible own card drags');
+  assert.doesNotMatch(kanban, /data-drag="i2"/, 'the hidden card has no status drag');
+  c.dropOn('i2', 'doing');
+  assert.deepEqual(dispatched, [], 'a drop on a hidden item dispatches nothing');
+  c.dropOn('i1', 'doing');
+  assert.equal(dispatched.length, 1, 'a visible own card still moves');
+});

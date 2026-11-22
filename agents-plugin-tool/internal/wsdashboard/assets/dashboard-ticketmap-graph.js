@@ -980,6 +980,11 @@
     // B (or the search) is centered at k >= .95 with its label framed.
     function show() {
       if (!ready) return;
+      // A selection changed in View B moves a retained ring to it, or
+      // leaves the ring when the selection is gone.
+      if (E && S.sel !== E.i) {
+        if (S.sel !== null && G.nodes[S.sel]) egoOn(S.sel); else egoOff(true);
+      }
       if (S.sel !== null && G.nodes[S.sel]) inspector(S.sel); else { tm.inspShow(false); resize(); }
       keepCam = false;
       edgeSync();

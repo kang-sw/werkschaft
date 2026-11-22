@@ -544,6 +544,839 @@ Sequence under (2008).
   interruption. Capture a comparable legacy baseline and record the
   directional compatibility evidence for cutover.
 
+### Result (09cf15e92) - 2026-11-22
+
+Landed in 73434818e (store and import) and 09cf15e92 (lite review fixes).
+The new package `agents-plugin-tool/internal/wsmeta` has no callers yet:
+every live store still uses its legacy file.
+
+- **Store** (`store.go`): one `<dash>/metadata.sqlite` per dashboard directory
+  (1988). It runs WAL with `locking_mode=EXCLUSIVE`, so there is no `-shm` and
+  a second daemon cannot open the database while the first holds it (bounded
+  2 s open retry). Other settings: `busy_timeout=100` with a bounded busy
+  retry, one connection, foreign keys on. The database and its WAL are
+  pre-created owner-only (0600). Schema version 1; a newer schema is refused
+  (`ErrNewerSchema`). Live record and cursor writes commit at
+  `synchronous=NORMAL`; stage, fence and import commits run at `FULL` (2006).
+  Auto-checkpoint is off, a 30 s idle `TRUNCATE` checkpoint runs, and `Close`
+  checkpoints too.
+- **Capture journal** (`capture.go`, 2125/2135):
+  - `Stage` discovers every bundled file, CLI-only session directories
+    included. Session files: `agent.json`, `permission.json`, `label.json`,
+    `ack-check.json`, `hiring.json`. Dashboard files: `support.json`,
+    `rail-layout.json`, `plan-usage*.json` and its histories,
+    `tracker-hooks.json`. Directories: `pi-probes-v1/`, `memos/`,
+    `tracker-hooks/`.
+  - Each file's original bytes and digest are stored per path with the
+    session generation (unix `dev:ino`, Windows creation time).
+  - `PrepareFence` durably records the fenced result's digest (`absent` for a
+    removal) before the replacement, and `MarkFenceLanded` marks it in place.
+    A retry reuses a staged original only when the live digest equals the
+    fence digest. Otherwise it re-stages the live bytes and reports the path
+    in `Unfenced`.
+  - A vanished or recreated session directory loses its journal rows and is
+    never recreated.
+  - A transient read failure (a sharing violation that outlives
+    `wsstate.ReadFile`'s retry) keeps the earlier row unchanged and reports
+    the path in `Unread`.
+- **Import commit** (`import.go`):
+  - `Commit` runs in one `FULL` transaction: it re-runs the stage pass,
+    refuses on any `Unfenced` (`ErrFenceInvalidated`) or `Unread`
+    (`ErrLegacyUnread`) path, replaces the keyed tables, decodes each capture
+    under a savepoint, runs `BeforeMarker`, and writes
+    `import_state=complete`.
+  - Each capture's status is recorded in the journal: imported, absent,
+    invalid, future, ignored or retained. An invalid or unreadable
+    (including dangling-link) permission selection becomes a fail-closed
+    `invalid` row (1993).
+  - After the marker, `Stage` and the fence calls return `ErrImportComplete`
+    and `Commit` returns `AlreadyComplete`. Before it, live writes and `Load`
+    return `ErrNotImported`.
+- **Records and cursors** (`records.go`, `snapshot.go`):
+  - `PatchRecord` appends top-level member deltas (null removes a member) and
+    folds them into the snapshot after `RecordDeltaBound`=32 (1991).
+  - `SetHolderCursor` is keyed by (reply_id, holder_id) and only advances. It
+    accepts writes from the record's current holder only (`ErrStaleHolder`
+    otherwise) and drops earlier holders' cursors (1992).
+  - `Load` returns the whole startup snapshot. Unknown members stay as raw
+    JSON.
+
+Verification (macOS arm64):
+
+- `go test ./internal/wsmeta/`: ok.
+- `go test -race -count=3 ./internal/wsmeta/`: ok (11.9 s).
+- `go build ./...`: ok.
+- `go vet ./internal/wsmeta ./internal/wsagent`: ok.
+- `GOOS=windows go vet ./internal/wsmeta`: ok.
+- `gofmt -l`: clean.
+- Tests cover:
+  - Old-data import: CLI-only label and hiring, original bytes, absent,
+    invalid and future inputs, unknown members, registration and holder files
+    left untouched, and a tree-state check showing the import writes no
+    legacy file.
+  - Interrupted stage, and an interrupted commit retried from live unfenced
+    files (a pruned session is not imported or recreated; a latecomer is
+    imported).
+  - A recreated session directory losing its journal rows.
+  - A fence landed before its journal mark, and a foreign write over a fence.
+  - A transient read leaving a fenced original intact and blocking `Commit`;
+    a stable read error failing closed.
+  - `BeforeMarker` rollback, and a restart that ignores legacy edits.
+  - Exclusive, `-shm`-free, owner-only files, and newer-schema refusal.
+  - Holder cursor keying, including a late write from the old holder, and
+    bounded deltas surviving a restart.
+
+Baseline, macOS M3, no antivirus, `-benchtime 2000x` (supporting evidence
+only; the Windows measurement is Phase 3):
+
+| Write | Legacy path | wsmeta |
+|---|---|---|
+| Holder cursor (one holder_seq update) | ~190 µs (whole-record rewrite, 2 counted file ops, 5 by source count) | `BenchmarkHolderCursor` ~41 µs |
+| Record member patch | ~190 µs (whole-record rewrite) | `BenchmarkRecordPatch` ~41–65 µs |
+| Permission change | `BenchmarkMetadataBaselinePermissionChange` ~200 µs (3 counted file ops) | n/a |
+
+The legacy benchmarks are in
+`wsagent/metadata_baseline_bench_test.go`
+(`BenchmarkMetadataBaselineHolderSeqRecordRewrite`,
+`BenchmarkMetadataBaselinePermissionChange`). Syscall counts were not captured
+because macOS tracing needs root.
+
+Compatibility evidence:
+
+- Phase 1 is T0. The only new files are `<dash>/metadata.sqlite` and its
+  `-wal`. No old code enumerates the `<dash>` root: wsdashboard's `ReadDir`
+  calls cover session subdirectories and fs routes only, and `registry.go:297`
+  reads `<dash>/sessions`.
+- Cutover fences, read from current source as a proxy for the pinned old
+  binary:
+  - An invalid permission file fails closed:
+    `wsagent/permission_store.go:120-138`, dangling link at `:124`.
+  - Hiring is refused when `Enabled` is false:
+    `wsdashboard/session_hire.go:131`.
+  - Tracker support refuses a set `ClosedAt` (`mcp/tracker_support.go:58`)
+    and resolves the profile at `:61`.
+  - The profile grammar is `^[a-z][a-z0-9-]*$`
+    (`wsagent/profile.go:57,361`), and `ResolveProfile` validates it first
+    (`:398-400`).
+  - Hooks go idle when `tracker-hooks.json` is absent:
+    `wstrackerhook/runner.go:226-229`.
+- Tests that run the old binary belong to Phase 2.
+
+Decisions:
+
+- Pi probe results are imported, not re-probed.
+- Memo documents keep their sha256 key.
+- `tracker-hooks.json` is captured for its retained bytes only and is not
+  decoded into a table.
+- Histories keep the all-or-nothing `schema_version=1` rule.
+- Read errors: dangling links, non-regular files and POSIX permission errors
+  are stable `unreadable` inputs. On Windows every other read error is
+  transient, because `ACCESS_DENIED` also comes from pending deletes and
+  scanner opens.
+
+Deferred to Phase 2/3:
+
+- Applying the fences and old-binary execution tests (Phase 2).
+- Confirming the idle-checkpoint interval and the NORMAL/FULL split with the
+  Windows measurement (Phase 3).
+- Per-harness history validity predicates beyond the schema rule (left to
+  the history owners when they switch).
+- Lite review Minor items, not fixed:
+  - `delegated_authority: null` is imported as invalid, while the old reader
+    accepts it (fails closed).
+  - Labels are imported without the old `cleanLabel` validation; the Phase 2
+    owner must re-validate on load.
+  - Inode reuse can hide a recreated session directory on ext4/tmpfs, and NTFS
+    tunneling can hide one on Windows.
+  - Untested fence branches: an intent whose replacement never landed, fence
+    calls on an unknown path, and pairing a lowered permission selector with
+    its record (2135).
+
+#### Edition (a6157bdfe) - 2026-11-22
+
+Pre-merge review of 2976c3d53..de6bee0d8 (3 Critical, 9 Important, 3
+Minor) is fixed in 3df153f83..a6157bdfe. Every finding is fixed and none is
+rebutted. Each fix has a test that fails without it.
+
+- **C1, fence proof** (ba9261aba): the store now applies the fences itself.
+  `ApplyFence(rel, bytes)` records the fenced digest and a random past
+  even-second sentinel mtime durably, writes a temp file with that mtime and
+  atomically replaces the path. A landed replacement is proven by digest and
+  exact sentinel mtime, so a byte-identical legacy write is not the fence.
+  `ApplyRemovalFence(rel, witness)` moves the file to a fresh witness path
+  that only the new daemon reads. Proof is `rel` absent and the witness
+  digest equal to the staged original, so an owner's own deletion is not
+  taken for the fence and its original is not restored. Tests are in
+  `fence_test.go`.
+- **C2, durable fence obligation** (ba9261aba): `fence_required` and
+  `fence_kind` survive a re-stage. `StageResult.Pending` lists required
+  fences not proven in the pass, and `Commit` returns `ErrFencePending`
+  until they are proven, including after a restart.
+- **C3, owner-only files** (81a62ad33): every `Open` narrows the database,
+  `-wal` and `-journal` to owner-only. On POSIX this is 0600, tested by
+  `TestReopenNarrowsWidenedFiles`. On Windows it is a protected DACL with one
+  full-access ACE for the token user, set with `SetNamedSecurityInfo`, and
+  the `-wal` is pre-created. `GOOS=windows go vet` passes.
+  `TestDatabaseFilesHaveOwnerOnlyACL` is still unrun; it is left to the lead
+  on a Windows host.
+- **I1, DSN** (81a62ad33): the driver gets an escaped `file:` URI.
+  `TestOpenUnderRootWithURIMetacharacters` uses a root containing `?#%`.
+- **I2, holder change** (3df153f83): a `holder_id` change without
+  `holder_seq` now adds `holder_seq: null` and drops the reply's cursors. This
+  matches legacy `runner_process.go:283`, which resets `HolderSeq` to 0.
+- **I3/I4, record and history validity** (3df153f83): `CommitOptions.Validate`
+  injects the legacy owners' validators, and `RequiredValidators` lists
+  `agent_record` and the three usage histories. A missing one returns
+  `ErrValidatorMissing`. Each validator runs after wsmeta's own decode, inside
+  the capture's savepoint. The new exports `wsagent.ValidateLegacyRecord` and
+  `wsdashboard.ValidateLegacyUsageHistory` share the legacy readers' decode,
+  and tests pin each one against its reader.
+- **I5, null delegation** (3df153f83): `delegated_authority: null` imports as
+  set and false, as in `wsagent/permission_store.go:148-153`.
+- **I6, persistent Windows denial** (b68961a96): read errors fall into three
+  classes.
+  - Windows sharing and lock violations stay transient.
+  - Windows `ACCESS_DENIED` is confirmable. It becomes `unreadable`, a
+    fail-closed selection for its own session, after
+    `UnreadConfirmPasses`=3 passes and `UnreadConfirmAfter`=5 s, counted in
+    `legacy_unread`.
+  - On POSIX, `ErrPermission` remains stable.
+
+  A denial that clears resets its count. Fenced rows never confirm.
+- **I7, FIFO through a link** (81a62ad33): a symlink is judged by its target.
+  POSIX reads open with `O_NONBLOCK` and require a regular file by `fstat`.
+  `TestLinkToFIFOIsUnreadableAndNeverBlocks` covers this.
+- **I8, benchmark fairness** (a6157bdfe): both sides now advance the sequence
+  on the same prebuilt record (`wsmeta/testdata/baseline-record.json`), and
+  only the advance is timed.
+- **I9, session generation** (51822bc25): the generation is now:
+  - darwin: `dev:ino` plus birthtime;
+  - linux: `dev:ino` plus statx btime;
+  - Windows: volume serial, file index and creation time;
+  - other unix: `dev:ino`.
+
+  A recreation still missed (for example a filesystem without birth time)
+  cannot reuse the deleted session's original, because the C1 proof needs
+  the store's own sentinel or witness.
+  `TestMissedRecreationNeverReusesTheDeletedSessionsOriginal` covers this.
+- **m1, labels** (3df153f83): labels follow legacy `cleanLabel`: trimmed, no
+  control characters or U+2028/2029, at most 64 runes. A blank label is no
+  label; anything else is invalid.
+- **m2, memo nulls** (3df153f83): a null memo item is kept, as in legacy
+  `memos.go:48-66`.
+- **m3, cursor range** (3df153f83): `SetHolderCursor` rejects a sequence
+  above `MaxInt64`, and an imported one gets no cursor.
+
+API changes against the Result above:
+
+- `ApplyFence` and `ApplyRemovalFence` replace `PrepareFence` and
+  `MarkFenceLanded`.
+- `Commit` needs `CommitOptions.Validate`.
+- `StageResult` gains `Pending`.
+- The read-error decision in the Result is refined by I6: `ACCESS_DENIED` is
+  no longer transient forever.
+
+Of the deferred items above, these are now resolved:
+
+- The history validity predicates (I4).
+- All four lite-review Minor items: null delegation, `cleanLabel`, inode
+  reuse and fence branch coverage.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok.
+- `go test -count=1 ./internal/wsagent/`: ok.
+- The wsdashboard validator tests: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok.
+- `go build ./...`: ok.
+- `gofmt -l internal/wsmeta`: clean.
+
+#### Edition (ddc951bfa) - 2026-11-22
+
+Follow-up to C1, at the lead's request: does a backdated sentinel mislead
+any reader that caches a fenced file by mtime? All non-test mtime readers
+were checked; the fenced paths are `agent.json`, `permission.json`,
+`hiring.json` and the removed `tracker-hooks.json`.
+
+- No legacy reader of a fenced path orders mtimes; the caches compare for
+  equality only.
+  - `wsagent/permission_store.go:85` (the hosted page's revalidation)
+    compares mode, size, mtime and identity through
+    `wsstate.SameFileMetadata`. Launch admission re-reads unconditionally
+    (`:62-68`).
+  - `wstrackerhook/runner.go:215` stamps `tracker-hooks.json` by size and
+    mtime. The removal fence makes the file absent, which changes the stamp.
+  - `wsdashboard/registry.go:417` ages a session by its directory mtime,
+    which the fence's rename advances.
+- The equality hazard: on Windows the identity is the creation time, which
+  NTFS tunneling can carry across the replace. A same-size re-fence over an
+  earlier sentinel could then look unchanged. `ApplyFence` now draws its
+  sentinel until its second differs from the live file's mtime.
+  `TestRefenceNeverReusesTheLiveMtime` fails without this change.
+- When a proof fails, the live bytes are re-staged and `Commit` refuses
+  (`ErrFenceInvalidated`, then `ErrFencePending`) until the path is fenced
+  again. The original is never written back.
+
+Verification: `go test -race -count=1 ./internal/wsmeta/` ok;
+`go vet` (darwin, `GOOS=windows`, `GOOS=linux`) ok; `gofmt` clean.
+
+#### Edition (ef0259ce7) - 2026-11-22
+
+The second re-review of 3df153f83^..e93782cd3 found 4 Critical and 6
+Important issues. All are fixed in ef0259ce7 and none is rebutted. Each
+fix's test was run with the fix reverted and failed.
+
+The fences now follow one lifecycle, stated with its invariants at the
+fence constants in `capture.go`:
+
+```text
+none -> intent -> landed
+any state -> none, when a pass cannot prove the publication
+```
+
+Its rules:
+
+- A fence record changes only while its publication is not live.
+- A fence applies only over the staged original, or over its own proven
+  publication. Anything else returns `ErrFenceStale`.
+- A publication is made durable before it is marked landed.
+- `Commit` needs every required fence to be both landed and proven by its
+  own pass.
+- When proof fails, the live state is re-staged and the fence must be
+  applied again. The original is never written back.
+
+The earlier rule that a removal is satisfied when the path was staged
+absent is gone; a required removal is re-applied like any other fence.
+
+Critical fixes:
+
+- **Retry overwrote the proof of a landed fence (C1):** a retry interrupted
+  before it publishes now keeps the record of a publication already in
+  place, so the migration's bytes are never staged as the original. Test:
+  `TestInterruptedRetryKeepsTheFirstPublicationProvable`.
+- **Stale witness blocked a re-fence (C2):** the witness is now fixed for
+  each path and replaced on re-fence. Removing a path whose original was
+  absent also removes any stale witness. Tests:
+  `TestRemovalRefenceReplacesAStaleWitness` and
+  `TestOwnerDeletionDuringPendingRemovalIsNotRestored`.
+- **No durability barrier before the marker (C3):** a replacement now
+  syncs its temporary file after setting the sentinel time, renames it,
+  then syncs the directory. A removal renames, then syncs the directory.
+  - On POSIX the directory sync is an fsync.
+  - On Windows it is a write-through rename of a scratch file, which
+    relies on NTFS's ordered metadata log.
+
+  A publication that a pass finds live but not marked landed stays pending
+  until the fence is re-applied. Re-applying only syncs the directory.
+  Tests: `TestFencePublicationIsDurableBeforeItLands` and
+  `TestUnsyncedPublicationNeedsReapplyBeforeCommit`.
+- **Failed identity lookup discarded a session (C4):** a lookup that fails
+  now fails the pass and changes nothing, instead of returning a weaker
+  token. On Linux, a missing statx (`ENOSYS`, or `EPERM` from seccomp) uses
+  the device and inode token consistently. Test:
+  `TestInconclusiveSessionIdentityKeepsItsJournal`.
+
+Important fixes:
+
+- **I1, Windows journal ACL:** every open creates the `-journal` with the
+  owner-only ACL if it is missing, and propagates errors other than
+  absence. SQLite removes that empty journal only on an empty database, and
+  its own journal then holds no page images. Runtime check: the Windows
+  test now covers the journal (left to the lead).
+- **I2, validator identity:** the validator signature is
+  `LegacyValidator(rel, replyID, raw)`. `wsagent.ValidateLegacyRecord` and
+  `wsdashboard.ValidateLegacyUsageHistory` now have this signature, so they
+  wire in without adapters. Test: `TestOwnersValidatorsWireIntoCommit`.
+- **I3, pending deletes:** a confirmable denial is confirmed only for an
+  input that was never readable. A file read earlier keeps its staged
+  original and blocks the commit. Test:
+  `TestDenialAfterAReadablePassKeepsTheOriginal`.
+- **I4, relative root:** `Open` resolves the root to an absolute path once.
+  Test: `TestOpenResolvesARelativeRoot`.
+- **I5 and I6, witness path and moved links:** the witness must be a plain
+  file name in the path's own directory. It rejects separators, `:`,
+  dot names and bundled names. Because the witness is a sibling, a moved
+  relative link still resolves to the same file. Test:
+  `TestRemovalWitnessStaysBesideItsPath`.
+
+API changes:
+
+- `ApplyRemovalFence(rel, witness)` now takes a file name, not a
+  dashboard-relative path.
+- New errors: `ErrFenceStale` and `ErrFenceConflict`.
+- `CommitOptions.Validate` holds `LegacyValidator` values.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (12.3 s).
+- `go test -count=1 ./internal/wsagent/`: ok (147.5 s). Two earlier runs
+  were disturbed by sibling test runs loading the machine.
+  - The first hit the default 10-minute timeout.
+  - The second failed two timing tests:
+    `TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop` and
+    `TestAdmitCompletionWaitsForTheNextTurnWithoutASteer`.
+
+  Both tests pass 5 out of 5 runs in isolation (`-count=5`), and neither
+  touches code this branch changes.
+- The wsdashboard validator tests: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
+#### Edition (a87930b1a) - 2026-11-22
+
+The third re-review of 2976c3d53..8f6f007e8 found 4 Critical and 3
+Important issues. Five are fixed. One is partly fixed and its remainder
+waits on a product decision (NEEDS-DECISION). None is rebutted. Each
+fix's test was run against the code before the fix and failed.
+
+Lifecycle changes (`capture.go`, at the fence constants):
+
+- The cutover calls (`Stage`, `ApplyFence`, `ApplyRemovalFence`,
+  `Commit`) hold one cutover lock end to end. A fence's journal record
+  and its file-system change therefore form one transition.
+- A new invariant: the migration deletes or overwrites only files it put
+  in place itself.
+- No earlier state can prove a new record. A new sentinel differs from
+  the live mtime, and the witness path is durably empty before a removal
+  record is written.
+- A re-applied replacement is published again with the same bytes and
+  sentinel.
+
+Critical fixes:
+
+- **Concurrent fences (`capture.go:260`), 33495fc96:** two fence calls
+  could plan over the same original and publish in reverse order, or a
+  publication could follow `Commit`. The cutover lock serializes them,
+  and the landed mark updates only the exact record it published
+  (`ErrFenceConflict` otherwise). Test:
+  `TestConcurrentCutoverCallsWaitForAPublication`.
+- **Stale witness proving a new removal (`capture.go:683`),
+  6cb11f6cd:** before a removal record is written, the witness path is
+  now durably emptied: a rename to a dot name, a directory sync, then
+  the unlink. Test: `TestStaleWitnessNeverProvesANewRemoval`.
+- **Witness name overwrote or deleted other files (`capture.go:315`),
+  6cb11f6cd:**
+  - Each removal record stores the identity (a token that survives a
+    rename) and the content of the file it moves (`witness_id`,
+    `witness_content`).
+  - Only a file matching both is cleared. Any other file there refuses
+    the removal with `ErrWitnessOccupied`, and so does a legacy symbolic
+    link that resolves to the witness.
+  - A hard link moves intact.
+  - Removal fences are limited to fixed bundled paths, whose rows survive
+    absence.
+
+  Test: `TestRemovalNeverTouchesAFileItDidNotPlace`.
+- **Windows file creation (`private_windows.go:35`), a87930b1a:** a
+  missing database, WAL or journal file is created with `CreateFile`
+  (`CREATE_NEW`, no sharing), using the owner-only security descriptor as
+  its security attributes. No other principal can open it at any point.
+  Test: `TestDatabaseFilesAreOwnerOnlyFromCreation` (Windows only;
+  compiled and vetted, not run).
+
+Important fixes:
+
+- **Confirmed denial blocked its fence (`capture.go:388`), ca51e2576:**
+  `planFence` now plans over a denial a pass confirmed. A shared rule
+  (`denialConfirmable`) keeps an unreadable original confirmed under a
+  fence record. Test: `TestConfirmedDenialTakesItsFence`.
+- **Linux identity without statx (`gen_linux.go:36`), 5b0955758:** the
+  fallback emits the same device (major:minor) and inode components.
+  `sameGeneration` compares birth times only when both tokens carry one.
+  Test: `TestIdentityWithoutBirthTimeIsTheSameSession`.
+- **Windows durability barrier (`sync_windows.go:29`), partly fixed in
+  3667ab036:**
+  - Every rename and deletion the migration makes is now itself
+    write-through on Windows, including a re-applied replacement, which
+    is published again. Test: `TestReappliedReplacementIsPublishedAgain`.
+  - Still on the barrier alone: a re-applied removal whose rename an
+    interrupted attempt made, and an original that was already absent.
+    Redoing that removal would mean moving the original back, which the
+    lifecycle forbids.
+  - NEEDS-DECISION: verify that the volume is NTFS or ReFS and refuse
+    the barrier elsewhere, or accept the NTFS ordering assumption as
+    documented.
+
+API changes:
+
+- New error: `ErrWitnessOccupied`.
+- `ApplyRemovalFence` refuses paths without a fixed bundled name.
+- New schema columns: `legacy_captures.witness_id` and
+  `legacy_captures.witness_content`.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (11.6 s).
+- `go test -count=1 -timeout 25m ./internal/wsagent/`: ok (149.8 s).
+- The wsdashboard validator tests and the wsagent record validator
+  tests: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok, and the
+  Windows test binary compiles.
+- `go build ./...`: ok.
+- `gofmt`: clean on this round's files. `plan_usage_history.go:278` was
+  already unformatted on 2976c3d53.
+
+
+#### Edition (d5ccd98db) - 2026-11-22
+
+This resolves the NEEDS-DECISION left on the Windows barrier in Edition
+(a87930b1a). The lead chose option (a): verify the file system and refuse
+the cutover on any other.
+
+- **What changed:** every cutover call checks the file system of each
+  directory it can change. On Windows only NTFS and ReFS are accepted.
+  - On any other file system, or one that cannot be determined, the call
+    refuses with `ErrCutoverUnsupported` before it changes anything.
+  - On POSIX the barrier is a directory fsync and needs no check.
+  - The Windows query is `GetVolumeInformationByHandle` on the directory
+    itself, so a mounted folder reports the volume it mounts.
+- **Where it is checked:**
+  - `Stage` and `Commit`: the dashboard directory, every session directory
+    and every keyed-file directory.
+  - `planFence`: the fence's own directory, before its record is written.
+  - `syncDir`: so `landed` never rests on an unverified barrier.
+
+  Each check runs after the import-state check, so a completed import
+  still answers `AlreadyComplete` or `ErrImportComplete`.
+- **What a refusal leaves:** no capture or fence record in the journal, the
+  legacy tree unchanged and the import incomplete. The legacy files stay
+  the authority. Each refusal is logged through `Options.Logf` with its
+  reason (the directory and its file system).
+- **Startup is not blocked:** `Open` and pre-import reads never run the
+  check, and wsmeta is still unwired in Phase 1. Phase 2's caller must
+  treat `errors.Is(err, ErrCutoverUnsupported)` as staying on the legacy
+  store.
+- **Tests:**
+  - `TestUnsupportedFileSystemRefusesTheCutover` covers:
+    - a refusal before staging (the store still opens, the reason is
+      logged)
+    - a single session directory on another volume
+    - an unknown file system
+    - fences refused before their record
+    - landed never set on a refused barrier
+  - `TestSupportedFileSystemsCompleteTheCutover` runs the cutover through
+    for POSIX, `NTFS`, `ntfs` and `ReFS`.
+  - Removing any one of the four checks (Stage, planFence, Commit,
+    syncDir) fails a subtest.
+  - `TestPlatformFileSystemNamesTheVolume` is Windows only: compiled, not
+    run.
+- **API change:** new error `ErrCutoverUnsupported`.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (13.4 s).
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok, and
+  `GOOS=windows go test -c` builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
+
+#### Edition (b018f9ca8) - 2026-11-22
+
+The re-review of 2976c3d53..a16126ad4 found 3 Critical and 3 Important
+issues. All six are fixed, one commit each, none rebutted. Each new test
+failed on the code before its fix, either run directly or with the old
+behavior restored.
+
+Critical fixes:
+
+- **Removal proof ignored the witness identity (C1), fc34f1605:** a
+  removal is now proven only when the witness carries the identity
+  recorded with the intent (`witness_id`). This holds on re-application
+  and in every pass, so a byte-identical copy the owner placed at the
+  witness proves nothing.
+  - An empty recorded identity never proves.
+  - A failed identity lookup is unread, not a mismatch.
+
+  Test: `TestCopiedWitnessNeverProvesARemoval`.
+- **Witness cleanup through a link chain (C2), 4cb24d692:**
+  `routesThrough` now resolves the source one component at a time. It
+  refuses (`ErrWitnessOccupied`) when any step names the witness entry:
+  compared by name without case, in the witness's directory compared by
+  identity. That covers second links and directory aliases.
+  - Hard links still move intact.
+  - A chain of more than 40 links is refused.
+
+  Test: `TestRemovalNeverClearsAWitnessTheSourceResolvesThrough`.
+- **The fallback error after a publication (C3), e834548f0:**
+  `ErrCutoverUnsupported` (keep serving from legacy) is returned only
+  while the journal holds no fence record. Otherwise the refusal is the
+  new `ErrCutoverInterrupted`, across restarts too. The barrier re-check
+  after a rename always reports interrupted. Test:
+  `TestRefusalAfterAFenceIsNeverTheFallback`. Commit's call site landed
+  separately in b018f9ca8: e834548f0 alone does not build.
+
+Important fixes:
+
+- **ReFS (I1), c30356343:** only NTFS is accepted. The barrier's ordering
+  argument does not cover ReFS, and a documented ReFS setting ignores
+  write-through. A cache root on a ReFS Dev Drive stays on the legacy
+  store. Test: `TestUnsupportedFileSystemRefusesTheCutover/refused_on_ReFS`.
+- **NTFS tunneling of the witness token (I2), c1c924803:** on Windows the
+  witness identity is the volume serial plus the file index, without the
+  creation time. Test: `TestWitnessIdentitySurvivesTunneling` (Windows
+  only: compiled, not run).
+- **A denied witness blocked Commit (I3), ffc386452:** over a confirmed
+  denied original, a confirmable denial at the witness is that same state,
+  and the removal is proven by identity. Test:
+  `TestConfirmedDenialMovesWithTheWitness`.
+
+Caller contract for Phase 2:
+
+- `ErrCutoverUnsupported`: stay on the legacy store.
+- `ErrCutoverInterrupted`: do not resume legacy service. Surface the
+  error, because a fence may be live.
+
+API changes: new error `ErrCutoverInterrupted`; the Windows allowlist is
+NTFS only.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (15.5 s).
+- The wsagent and wsdashboard validator tests: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok, and
+  `GOOS=windows go test -c` builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
+#### Edition (58507fcbf) - 2026-11-22
+
+The re-review of 2976c3d53..68fdc2bd1 confirmed I1 and I2 fixed. It found
+3 Critical, 1 Important and 1 Minor issue. All five are fixed, one commit
+each, none rebutted. Each new test failed on the code before its fix.
+
+Critical fixes:
+
+- **The fallback decision forgot a discarded fence (C3), 45636bf75:**
+  every fence record now sets the meta key `cutover_started` in its own
+  transaction, before its publication, and nothing clears it. Before,
+  the decision read only capture rows, which a pass deletes for a
+  vanished session. Test: `TestRefusalAfterAFenceIsNeverTheFallback/
+  after_a_pass_discarded_the_fenced_rows`.
+- **A reusable POSIX identity proved a removal (C1), a0b075d71:** witness
+  identities are compared with `sameIncarnation`: equal tokens that carry
+  a birth time (POSIX) or the NTFS file index. Device and inode alone
+  never prove a witness.
+  - The cutover is refused, by the same rule as the barrier, on a volume
+    whose directory identity has no such evidence. That is Linux without
+    statx birth times (a seccomp sandbox, older tmpfs) and other Unix
+    systems.
+  - A removal source whose own identity lacks it is refused before its
+    record.
+  - macOS (APFS), ext4/xfs/btrfs and NTFS pass; CI's ubuntu `/tmp` is
+    ext4.
+
+  Test: `TestReusableIdentityNeverProvesARemoval`.
+- **An NTFS short name of the witness (C2), 677dc5def:** each path
+  component in the witness's directory is resolved to its long name
+  (`entryName`, which calls FindFirstFile on Windows) before the
+  comparison. Hard links still move intact.
+  - Seam test: `TestRemovalNeverClearsAWitnessThroughAnAlternateName`.
+  - Real short-name test: `TestShortNameOfTheWitnessIsTheWitness` (Windows
+    only: compiled, not run).
+
+Important fix:
+
+- **A denied witness blocked a re-fence (I3), 4e8324637:** the witness
+  cleanup now reads a confirmable denial as the unreadable state the
+  last removal recorded. The recorded identity then decides, as before.
+  Test: two subtests of `TestConfirmedDenialMovesWithTheWitness`.
+
+Minor fix:
+
+- **Windows symlink privilege (58507fcbf):** `mustSymlink` skips only on
+  `ERROR_PRIVILEGE_NOT_HELD`.
+
+Remaining class of problem: the removal fence moves the owner's
+directory entry and later proves "this witness entry is the file we
+moved". Each round has found another way two names or two files can
+look alike on some platform:
+
+- inode reuse
+- creation-time tunneling
+- case folding
+- link chains
+- directory aliases
+- 8.3 short names
+- an ACL that moves with the file
+
+Cases not yet handled, from the same class:
+
+- APFS normalization-insensitive names: an NFD spelling of the witness
+  passes `EqualFold`.
+- NTFS stream syntax: `name::$DATA` opens the witness itself.
+- overlayfs copy-up: the identity changes without the file changing, so
+  the removal stays pending.
+
+Replacement fences have needed no such fixes since their sentinel proof
+landed.
+
+Simpler alternative (needs a lead decision): publish the removal like a
+replacement and never move the owner's entry.
+
+- Write the staged original's bytes to the witness through `publishFile`
+  under a fresh sentinel mtime, then delete the legacy path durably.
+- Proof is the path absent and the witness matching the original's
+  digest under its exact sentinel. That is the replacement proof.
+- This removes `witness_id`, `sameIncarnation`, `routesThrough`,
+  `entryName` and the denied-witness logic.
+- The witness cleanup check becomes the same sentinel check.
+- The barrier for a re-applied deletion stays.
+
+It fits the Decision at line 398 ("retaining its bytes and making the
+config available through a new-daemon-only input path"). The move is
+only an implementation choice of the C1 Result at line 706. Two
+behaviors differ:
+
+- A legacy `tracker-hooks.json` that is a symbolic link becomes a copy
+  of its target. Later edits to the target no longer reach the new
+  daemon, which touches "owner-controlled reload".
+- An unreadable original has no bytes to publish. It needs its own rule,
+  either a refusal or a plain retire.
+
+New observation, not fixed: a session whose directory is moved aside
+during the cutover loses its journal rows, its staged original included.
+When the directory is restored, its fenced selector is staged as the
+original and imported as invalid. C3 above only keeps the fallback
+decision correct. The original itself is lost to the journal.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (15.7 s).
+- `go test -count=1 ./internal/wsmeta/`: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok, and
+  `GOOS=windows go test -c` builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
+#### Edition (b72e720c4) - 2026-11-22
+
+Decision note. This amends the Phase 1 Result's removal fence. The
+Decision at line 398 is unchanged.
+
+- **Owner decision (board 2162 = a): a removal publishes and never
+  moves.** `ApplyRemovalFence(rel, witness)` does the following:
+  1. Records the original's digest and a sentinel mtime.
+  2. Publishes the staged original bytes at the witness through the
+     replacement path (`publishFile`).
+  3. Deletes `rel` durably.
+
+  Proof is the replacement proof: `rel` absent and the witness holding
+  the digest under the exact sentinel. For an absent original, proof is
+  `rel` and the witness both absent.
+  - The witness path is emptied durably before a new record, but only of
+    the migration's own last publication there. The sticky
+    `witness_digest` and `witness_mtime` columns replace `witness_id` and
+    `witness_content`. Any other entry is `ErrWitnessOccupied`.
+  - A symbolic-link legacy `tracker-hooks.json` becomes a regular copy of
+    its target. The owner accepted this.
+  - Rare aliases are intentionally not fenced: hard links, links swapped
+    mid-cutover, short names and similar. The only guarantee is that no
+    data is lost. The staged original keeps the bytes, a link target is
+    never touched, and the witness only ever loses the migration's own
+    file.
+  - Deleted with their tests: file identity (`ident_*`), short-name
+    resolution (`entryname_*`), `routesThrough`, `sameIncarnation` and the
+    identity preflight, and the denied-witness logic. This was bd08ab4dd.
+    Non-test code went down by 126 lines over the round.
+- **Technical decision (auto-confirmed): an unreadable original refuses
+  the cutover.** `ApplyRemovalFence` and `Commit` return the new
+  `ErrRemovalUnreadable`. It is wrapped in `ErrCutoverUnsupported`, or in
+  `ErrCutoverInterrupted` once a fence exists. The legacy file is kept
+  and nothing is imported. For Phase 2: apply the removal before the
+  replacement fences, so that this refusal can still be the clean legacy
+  fallback.
+- **Moved-aside sessions (b72e720c4):** a vanished session with a fence
+  record is kept as missing, not discarded (`legacy_sessions.missing`,
+  `StageResult.Missing`). Its rows are neither re-read, deleted nor
+  imported.
+  - Restored under the same generation, it is picked up and its fences
+    proven.
+  - Recreated under another generation, it is discarded.
+  - A commit while it is away imports everything else and keeps its rows.
+  - Each session's reads run in a savepoint, so a directory that vanishes
+    mid-read changes nothing.
+
+  Test: `TestMovedAsideSessionKeepsItsJournal`; all three subtests failed
+  on the old logic.
+
+Other test changes:
+
+- New: `TestUnreadableOriginalRefusesTheCutover` and
+  `TestRemovalInterruptedBeforeItsDeletionIsReapplied`.
+- `TestRemovalWitnessStaysBesideItsPath` now asserts the
+  symbolic-link-to-copy behavior.
+- `TestRefusalAfterAFenceIsNeverTheFallback` forces its discard with a
+  recreated session.
+
+API changes:
+
+- `ErrRemovalUnreadable` and `StageResult.Missing` are new.
+- `ErrCutoverUnsupported`'s text no longer names a file system.
+- The new hit point `fence-deleted` follows the legacy deletion.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (15.4 s).
+- `go test -count=1 -v ./internal/wsmeta/`: ok, no failures or skips.
+- `go vet ./internal/wsmeta`, also with `GOOS=windows` and `GOOS=linux`:
+  ok.
+- `GOOS=windows go test -c ./internal/wsmeta`: builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
+#### Edition (19e629158) - 2026-11-22
+
+Round 8: fixes from the codex re-review of d89e955ee, as graded by the
+lead. This is post-cut work, not in 0.51.0. Each fix has a test that
+failed before it.
+
+- **Compare before delete (018ba7047).** `ApplyRemovalFence` reads `rel`
+  again right before deleting it. Only the planned version, which is the
+  one published at the witness, is retired. An owner save made in between
+  is kept, and the call returns `ErrFenceStale`; the caller stages and
+  applies again. An original staged absent and created in the window is
+  handled the same way.
+  - The gap between that read and the deletion is not fenced. The lead
+    accepted narrowing it to a check right before the delete.
+  - Test: `TestRemovalKeepsAnOwnerSaveMadeDuringIt`.
+- **An unreadable removal outranks fence errors at commit (2907271ae).**
+  `Commit` checks for an unreadable hooks config before it checks for
+  invalidated or pending fences. The caller gets `ErrRemovalUnreadable`
+  with its classification instead of a fence retry that cannot succeed.
+  - Test: `TestUnreadableRemovalOutranksAPendingFence`.
+- **A fence waits for its session (19e629158).** `planFence` refuses a
+  session row with `ErrFenceStale` and writes nothing while either holds:
+  - the session is marked missing (or has no `legacy_sessions` row);
+  - its live directory is absent or of another generation than the row.
+
+  A pass that confirms the directory lifts the refusal.
+  - Test: `TestFenceWaitsForAPassToConfirmTheSession`.
+- **Accepted without a fix (minor follow-up):** suppose the process
+  crashes after the witness publish and before the legacy deletion. If the
+  owner deletes the legacy file before the retry, the retry commits the
+  staged bytes. This needs a crash in that window plus a manual deletion
+  before restart, and the owner can delete the config again.
+
+Verification (macOS arm64):
+
+- `go test -count=1 -v ./internal/wsmeta`: ok, 90 PASS lines, no failures
+  or skips.
+- `go test -race -count=1 ./internal/wsmeta`: ok (16.5 s).
+- `go vet ./internal/wsmeta`, also with `GOOS=windows` and `GOOS=linux`:
+  ok.
+- `GOOS=windows go test -c ./internal/wsmeta`: builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
+
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
 - Depends on Phase 1. Route affected direct Go readers through the daemon

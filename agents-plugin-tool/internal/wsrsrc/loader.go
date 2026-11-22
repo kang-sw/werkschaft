@@ -328,6 +328,14 @@ func metaFromFrontmatter(fm map[string]any) PlaybookMeta {
 			if s, ok := v.(string); ok {
 				meta.Tier = s
 			}
+		case "tier-role":
+			if s, ok := v.(string); ok {
+				meta.TierRole = s
+			}
+		case "tier-parent":
+			if s, ok := v.(string); ok {
+				meta.TierParent = s
+			}
 		case "includes":
 			if list, ok := v.([]string); ok {
 				meta.Includes = list

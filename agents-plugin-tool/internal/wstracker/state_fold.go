@@ -389,7 +389,7 @@ func (s *state) apply(n *node) {
 		id := p.str("org")
 		o := s.orgs[id]
 		if o == nil {
-			o = &org{id: id}
+			o = &org{id: id, created: n}
 			s.orgs[id] = o
 			s.oorder = append(s.oorder, id)
 		}

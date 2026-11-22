@@ -269,7 +269,7 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 .handed .hdtext { font-weight: 600; }
 .handed .hdlbl { color: var(--wb-muted-fg); }
 .handed .hdcmd { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
-.handed code { font-family: var(--wb-mono); font-size: 12px; padding: 2px 6px; border-radius: 5px; background: var(--wb-muted); overflow-wrap: anywhere; min-width: 0; }
+.handed code { font-family: var(--wb-mono); font-size: 12px; padding: 2px 6px; border-radius: 5px; background: var(--wb-muted); overflow-wrap: anywhere; white-space: pre-wrap; min-width: 0; }
 .handed .hdcopy { width: 24px; height: 24px; flex: none; display: inline-grid; place-items: center; border: 0; padding: 0; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
 .handed .hdcopy:hover { background: var(--wb-muted); }
 .handed .hdcopy:focus-visible { outline: 1.5px solid var(--wb-primary); }

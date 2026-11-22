@@ -55,6 +55,16 @@ func ReadPanelSource(root, path string) (string, error) {
 	if linfo.Size() > MaxPanelBytes {
 		return "", errors.New(sourceTooLarge)
 	}
+	// On Windows an Lstat result carries no file identity until the first
+	// SameFile call resolves it, by reopening the path. Resolve it now, so the
+	// identity is the one just checked and a file swapped in before the open
+	// below cannot lend its own to the comparison. A failed resolve leaves
+	// the identity unresolved (a later SameFile would reopen the path, then
+	// possibly a swapped-in file) and makes this self-comparison false, so it
+	// is refused like any other change; elsewhere it is always true.
+	if !os.SameFile(linfo, linfo) {
+		return "", fmt.Errorf("the file changed while opening; keep the file inside the session root %s without symlinks or junctions", root)
+	}
 	if panelSrcBeforeOpen != nil {
 		panelSrcBeforeOpen()
 	}

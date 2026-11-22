@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/mcpframe"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 func TestPathWriteRequiresSameSessionGeneratedCachePath(t *testing.T) {
@@ -150,6 +151,194 @@ func TestPathWriteGrantsAreBoundedAndConsumed(t *testing.T) {
 		"session_key": key, "path": last, "content": "second",
 	}); !toolIsError(t, resp) {
 		t.Fatalf("completed grant was not consumed: %s", resp)
+	}
+}
+
+// A legacy path.generate batch larger than the grant budget must still
+// return every path (v0.50.8 behavior); the budget bounds only which of them
+// path.write accepts.
+func TestPathGenerateOversizedBatchReturnsAllPathsAndBoundsGrants(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	key, err := s.sessions.mint(root, roleDelegate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stems := make([]any, 0, maxGeneratedPathGrants+1)
+	for i := 0; i <= maxGeneratedPathGrants; i++ {
+		stems = append(stems, fmt.Sprintf("batch-%02d", i))
+	}
+	resp := callToolOnce(t, s, 1, "path.generate", map[string]any{
+		"session_key": key, "kind": "prompt", "stems": stems,
+	})
+	if toolIsError(t, resp) {
+		t.Fatalf("oversized legacy path.generate batch refused: %s", resp)
+	}
+	paths := strings.Split(strings.TrimRight(toolText(t, resp), "\n"), "\n")
+	if len(paths) != len(stems) {
+		t.Fatalf("path.generate returned %d paths, want %d", len(paths), len(stems))
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("generated path %q not allocated: %v", path, err)
+		}
+	}
+	processGeneratedWrites.mu.RLock()
+	count := processGeneratedWrites.grantCountLocked()
+	processGeneratedWrites.mu.RUnlock()
+	if count > maxGeneratedPathGrants {
+		t.Fatalf("open generated-path grants = %d, want <= %d", count, maxGeneratedPathGrants)
+	}
+	if resp := callToolOnce(t, s, 2, "path.write", map[string]any{
+		"session_key": key, "path": paths[0], "content": "over budget",
+	}); !toolIsError(t, resp) {
+		t.Fatalf("batch entry beyond the grant budget was writable: %s", resp)
+	}
+	if resp := callToolOnce(t, s, 3, "path.write", map[string]any{
+		"session_key": key, "path": paths[len(paths)-1], "content": "within budget",
+	}); toolIsError(t, resp) {
+		t.Fatalf("newest batch entry write: %s", resp)
+	}
+}
+
+// A legacy caller may save a generated artifact by replace (write a sibling,
+// rename over the path, or delete and recreate) while the daemon holds the
+// path.write grant. On Windows this requires that no handle stays open between
+// path.generate and path.write; the replaced file must then fail path.write's
+// identity check.
+func TestPathGenerateGrantAllowsReplaceSaveAndRefusesReplacedTarget(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	key, err := s.sessions.mint(root, roleDelegate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generate := func(id int, stem string) string {
+		t.Helper()
+		resp := callToolOnce(t, s, id, "path.generate", map[string]any{
+			"session_key": key, "kind": "review", "stems": []any{stem},
+		})
+		if toolIsError(t, resp) {
+			t.Fatalf("path.generate: %s", resp)
+		}
+		return strings.TrimSpace(toolText(t, resp))
+	}
+
+	renamed := generate(1, "rename-save")
+	sibling := renamed + ".tmp"
+	if err := os.WriteFile(sibling, []byte("editor save"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(sibling, renamed); err != nil {
+		t.Fatalf("rename-replace over a granted artifact: %v", err)
+	}
+	removed := generate(2, "delete-save")
+	if err := os.Remove(removed); err != nil {
+		t.Fatalf("delete of a granted artifact: %v", err)
+	}
+	// On Windows a delete under a held FILE_SHARE_DELETE handle can leave
+	// the name delete-pending; a save that recreates the same name must
+	// still succeed.
+	if err := os.WriteFile(removed, []byte("recreated"), 0o644); err != nil {
+		t.Fatalf("recreate after deleting a granted artifact: %v", err)
+	}
+	if resp := callToolOnce(t, s, 4, "path.write", map[string]any{
+		"session_key": key, "path": removed, "content": "must not land",
+	}); !toolIsError(t, resp) {
+		t.Fatalf("path.write wrote a recreated artifact: %s", resp)
+	}
+	if got, err := os.ReadFile(removed); err != nil || string(got) != "recreated" {
+		t.Fatalf("recreated artifact = %q, %v", got, err)
+	}
+
+	resp := callToolOnce(t, s, 3, "path.write", map[string]any{
+		"session_key": key, "path": renamed, "content": "must not land",
+	})
+	if !toolIsError(t, resp) {
+		t.Fatalf("path.write wrote a replaced artifact: %s", resp)
+	}
+	if got, err := os.ReadFile(renamed); err != nil || string(got) != "editor save" {
+		t.Fatalf("replaced artifact = %q, %v", got, err)
+	}
+}
+
+// A grant needs the reservation's creation identity: a GeneratedPath with
+// none is refused (fail closed), and the refusal deletes nothing.
+func TestPathGenerateGrantRefusesUnknownIdentityAndKeepsFiles(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	generated, err := wsstate.NewManager(wsstate.Options{}).GeneratePaths(root, "review", []string{"known", "unknown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated[0].Created == nil || generated[1].Created == nil {
+		t.Fatal("GeneratePaths did not record creation identities")
+	}
+	if err := os.WriteFile(generated[0].Path, []byte("saved by another process"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generated[1].Created = nil
+	if err := processGeneratedWrites.grant("unknown-identity-key", generated); err == nil || !strings.Contains(err.Error(), "no creation identity") {
+		t.Fatalf("grant with an unknown creation identity = %v", err)
+	}
+	if got, err := os.ReadFile(generated[0].Path); err != nil || string(got) != "saved by another process" {
+		t.Fatalf("saved reservation after refusal = %q, %v", got, err)
+	}
+	if _, err := os.Lstat(generated[1].Path); err != nil {
+		t.Fatalf("refused reservation was deleted: %v", err)
+	}
+}
+
+// At capacity, a refused new grant must not evict the existing grants: the
+// new grants are validated before any eviction.
+func TestPathGenerateRefusedGrantDoesNotEvictExistingGrants(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	key, err := s.sessions.mint(root, roleDelegate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stems := make([]any, 0, maxGeneratedPathGrants)
+	for i := 0; i < maxGeneratedPathGrants; i++ {
+		stems = append(stems, fmt.Sprintf("full-%02d", i))
+	}
+	resp := callToolOnce(t, s, 1, "path.generate", map[string]any{
+		"session_key": key, "kind": "review", "stems": stems,
+	})
+	if toolIsError(t, resp) {
+		t.Fatalf("path.generate: %s", resp)
+	}
+	paths := strings.Split(strings.TrimRight(toolText(t, resp), "\n"), "\n")
+
+	notRegular := filepath.Join(t.TempDir(), "dir-artifact")
+	if err := os.Mkdir(notRegular, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := processGeneratedWrites.grant(key, []wsstate.GeneratedPath{{Kind: "review", Path: notRegular}}); err == nil {
+		t.Fatal("grant of a non-regular artifact was accepted")
+	}
+	processGeneratedWrites.mu.RLock()
+	count := processGeneratedWrites.grantCountLocked()
+	processGeneratedWrites.mu.RUnlock()
+	if count != maxGeneratedPathGrants {
+		t.Fatalf("grants after a refused grant = %d, want %d (none evicted)", count, maxGeneratedPathGrants)
+	}
+	if resp := callToolOnce(t, s, 2, "path.write", map[string]any{
+		"session_key": key, "path": paths[0], "content": "still granted",
+	}); toolIsError(t, resp) {
+		t.Fatalf("a refused grant evicted the oldest existing grant: %s", resp)
 	}
 }
 

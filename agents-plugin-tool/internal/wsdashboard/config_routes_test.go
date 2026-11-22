@@ -254,3 +254,49 @@ func TestSettingsMutationRefreshesCommonAndSpecificBucketSiblings(t *testing.T) 
 		}
 	}
 }
+
+// TestSettingsSessionGearBindsContainingFolder: a live session started in a
+// subdirectory of a stored plain-folder workspace sits under that folder in
+// the rail; its gear's bound worktree ID is the folder's, and the snapshot
+// route accepts it as the session's context.
+func TestSettingsSessionGearBindsContainingFolder(t *testing.T) {
+	backend := settingsTestBackend(t)
+	backend.Session = func(reg Registration) (wsconfigservice.SessionLayer, wsconfig.SessionWriter, string, bool) {
+		return wsconfigservice.SessionLayer{}, nil, "", true
+	}
+	f := startPageFixture(t, withWorkspaces(t), func(o *DaemonOptions) { o.Config = backend })
+	stored := t.TempDir()
+	sub := mkDir(t, filepath.Join(stored, "nested", "dir"))
+	if _, err := f.d.workspaces.add(stored, false); err != nil {
+		t.Fatal(err)
+	}
+	f.addSession(t, "subsession", sub, "sub")
+	waitFor(t, "subdirectory session indexed", func() bool { _, ok := f.d.Index().Session("subsession"); return ok })
+
+	want := settingsID("worktree", stored)
+	var got string
+	found := false
+	for _, ws := range f.d.railView(f.d.pages()).Workspaces {
+		for _, r := range ws.AllSessions() {
+			if r.ReplyID == "subsession" {
+				got, found = r.SettingsWorktree(), true
+				if ws.Path != stored {
+					t.Fatalf("session grouped under %s, want stored folder %s", ws.Path, stored)
+				}
+			}
+		}
+	}
+	if !found || got != want {
+		t.Fatalf("session gear worktree = %q (found %v), want the stored folder's %q", got, found, want)
+	}
+	if result := settingsRequest(t, f.d, http.MethodGet, "/api/config/snapshot?scope=builtin&worktree="+want+"&session=subsession", "", ""); result.Code != 200 {
+		t.Fatalf("gear context = %d %s, want 200", result.Code, result.Body)
+	}
+	if result := settingsRequest(t, f.d, http.MethodGet, "/api/config/snapshot?scope=session&target=subsession&worktree="+want+"&session=subsession", "", ""); result.Code != 200 {
+		t.Fatalf("session scope via gear = %d %s, want 200", result.Code, result.Body)
+	}
+	stale := settingsID("worktree", sub)
+	if result := settingsRequest(t, f.d, http.MethodGet, "/api/config/snapshot?scope=builtin&worktree="+stale+"&session=subsession", "", ""); result.Code != 400 || !strings.Contains(result.Body.String(), "invalid_context") {
+		t.Fatalf("unindexed project worktree = %d %s, want 400 invalid_context", result.Code, result.Body)
+	}
+}

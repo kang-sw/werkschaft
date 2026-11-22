@@ -344,3 +344,28 @@ test('in-card find resolves cards only when focus or pointer is inside a non-ter
   assert.equal(api.stepIndex(0, 3, -1), 2);
   assert.equal(api.stepIndex(0, 0, 1), -1);
 });
+
+test('in-card find keeps a frame as one capped index segment whatever count it reports', () => {
+  const doc = { body: {}, querySelectorAll: () => [], addEventListener: () => {} };
+  const win = { addEventListener: () => {}, getComputedStyle: () => ({ visibility: 'visible' }) };
+  const ctx = vm.createContext({ document: doc, window: win, getComputedStyle: win.getComputedStyle, Set, Array });
+  vm.runInContext(cardFindSource, ctx);
+  const api = win.wbCardFind;
+  const frame = { isConnected: true };
+  api.state.card = { isConnected: true };
+  api.state.query = 'x';
+  api.state.seq = 7;
+  api.state.frames = [{ el: frame, count: 0 }];
+  const started = Date.now();
+  api.onFrameResult(frame, 7, 2147483647);
+  assert.ok(Date.now() - started < 1000, 'a huge reported count does no per-match host work');
+  assert.equal(api.state.items.length, 1);
+  assert.equal(api.state.total, 100000);
+  assert.equal(api.state.index, 0);
+  assert.deepEqual({ ...api.itemAt(99999) }, { kind: 'frame', frame, local: 99999 });
+  assert.equal(api.itemAt(100000), null);
+  api.step(-1);
+  assert.equal(api.state.index, 99999);
+  api.onFrameResult(frame, 6, 5); // stale search
+  assert.equal(api.state.total, 100000);
+});

@@ -483,6 +483,78 @@ async function checkKeyedRebuild(frame) {
       await ctx.close();
     }
 
+    // 5b. Folded alive-idle direct children: active nodes + single +8 badge, hover tooltip, click -> #agpop
+    const foldShots = process.env.WS_HUD_FOLD_SHOTS;
+    if (foldShots) require('node:fs').mkdirSync(foldShots, { recursive: true });
+    for (const scheme of ['dark', 'light']) {
+      const { ctx, tab, frame, errors } = await openSession(b, 'folded', { width: 1280, scheme: scheme === 'dark' ? 'light' : 'dark' });
+      await chooseTheme(tab, frame, scheme);
+      await tab.mouse.move(1, 1);
+      await frame.waitForTimeout(250);
+      const foldState = await frame.evaluate(() => {
+        const nodes = [...document.querySelectorAll('#agcompact .hud-node')];
+        const idleDirect = nodes.filter(n => n.getAttribute('data-state') === 'idle');
+        const folded = document.querySelectorAll('#agcompact .hud-folded');
+        const btn = folded[0];
+        const nr = nodes[0].getBoundingClientRect();
+        const fr = btn.getBoundingClientRect();
+        return {
+          mode: document.getElementById('agisland').getAttribute('data-mode'),
+          nodeCount: nodes.length,
+          idleDirectCount: idleDirect.length,
+          foldedCount: folded.length,
+          foldedText: btn.textContent,
+          foldedHasNodeClass: btn.classList.contains('hud-node'),
+          foldedH: Math.round(fr.height),
+          topDelta: Math.abs(fr.top - nr.top),
+          popAgents: document.querySelectorAll('#agpop .agent:not(.root)').length
+        };
+      });
+      assert.equal(foldState.mode, 'compact');
+      assert.equal(foldState.nodeCount, 2, 'only 2 active direct .hud-node elements');
+      assert.equal(foldState.idleDirectCount, 0, '0 stray idle direct .hud-node elements');
+      assert.equal(foldState.foldedCount, 1, 'single .hud-folded badge');
+      assert.equal(foldState.foldedText, '+8');
+      assert.equal(foldState.foldedHasNodeClass, false);
+      assert.equal(foldState.foldedH, 24);
+      assert(foldState.topDelta <= 1, `folded badge aligned with 24px nodes (topDelta=${foldState.topDelta})`);
+      assert.equal(foldState.popAgents, 10, '#agpop still lists all 10 agents');
+
+      const convoBox = await frame.locator('#convo').boundingBox();
+      const foldClip = {
+        x: Math.max(0, Math.round(convoBox.x + convoBox.width - 360)),
+        y: Math.max(0, Math.round(convoBox.y)),
+        width: 360,
+        height: 200
+      };
+      if (foldShots) await tab.screenshot({ path: `${foldShots}/hud-folded-${scheme}.png`, clip: foldClip });
+
+      await frame.locator('#agcompact .hud-folded').hover();
+      await frame.locator('#hud-tooltip:not([hidden])').waitFor();
+      await frame.waitForTimeout(200);
+      const foldTip = await frame.evaluate(() => {
+        const tip = document.getElementById('hud-tooltip').getBoundingClientRect();
+        const convo = document.getElementById('convo').getBoundingClientRect();
+        return {
+          pill: document.querySelector('#hud-tooltip .tt-pill')?.textContent || '',
+          title: document.querySelector('#hud-tooltip .tt-title')?.textContent || '',
+          hint: document.querySelector('#hud-tooltip .tt-hint')?.textContent || '',
+          insideConvo: tip.left >= convo.left - 1 && tip.right <= convo.right + 1 && tip.top >= convo.top - 1 && tip.bottom <= convo.bottom + 1
+        };
+      });
+      assert.equal(foldTip.pill, '+8');
+      assert(foldTip.title.includes('8'), `tooltip title includes count: ${foldTip.title}`);
+      assert.match(foldTip.hint, /트리 상세 열기/);
+      assert.equal(foldTip.insideConvo, true, 'folded tooltip clamped inside #convo');
+      if (foldShots) await tab.screenshot({ path: `${foldShots}/hud-folded-hover-${scheme}.png`, clip: foldClip });
+
+      await frame.click('#agcompact .hud-folded');
+      await frame.locator('#agisland[data-mode="full"]').waitFor();
+      assert.equal(await frame.locator('#hud-tooltip').isHidden(), true, 'clicking .hud-folded hides tooltip');
+      assert.deepEqual(errors, [], `no pageerrors in folded ${scheme}`);
+      await ctx.close();
+    }
+
     // 6. Optional side-by-side mockup capture
     if (shots && mockup) {
       const ctx = await b.newContext({ viewport: { width: 1280, height: 840 }, colorScheme: 'dark' });

@@ -125,6 +125,47 @@ func wtRun(ctx context.Context, runner wsgit.Runner, root string, args ...string
 	return strings.TrimSpace(string(out)), err
 }
 
+// deleteStaleTargetBranch deletes a stale canonical target without force,
+// from wtPath already detached at the target's encoded merge root.
+// `git branch -d` checks a configured upstream instead of HEAD, so a target
+// whose upstream is behind its tip is refused even when the merge root holds
+// every target commit. Only in that case, after re-verifying that the target
+// is an ancestor of the detached merge root, the stale upstream setting is
+// dropped and the same non-force delete retried against HEAD; a failed
+// retry restores the upstream setting.
+func deleteStaleTargetBranch(ctx context.Context, runner wsgit.Runner, wtPath, targetBranch string) error {
+	_, err := wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch)
+	if err == nil {
+		return nil
+	}
+	ref := "refs/heads/" + targetBranch
+	upstream, upErr := wtRun(ctx, runner, wtPath, "for-each-ref", "--format=%(upstream)", ref)
+	if upErr != nil || upstream == "" {
+		return err
+	}
+	if _, ancErr := wtRun(ctx, runner, wtPath, "merge-base", "--is-ancestor", ref, "HEAD"); ancErr != nil {
+		return err
+	}
+	// --unset-upstream drops branch.<name>.remote and branch.<name>.merge;
+	// keep them so a failed retry can put the upstream back.
+	remoteKey, mergeKey := "branch."+targetBranch+".remote", "branch."+targetBranch+".merge"
+	remote, remoteErr := wtRun(ctx, runner, wtPath, "config", "--get", remoteKey)
+	merge, mergeErr := wtRun(ctx, runner, wtPath, "config", "--get", mergeKey)
+	if _, unsetErr := wtRun(ctx, runner, wtPath, "branch", "--unset-upstream", targetBranch); unsetErr != nil {
+		return err
+	}
+	if _, err = wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch); err != nil {
+		if remoteErr == nil && remote != "" {
+			_, _ = wtRun(ctx, runner, wtPath, "config", remoteKey, remote)
+		}
+		if mergeErr == nil && merge != "" {
+			_, _ = wtRun(ctx, runner, wtPath, "config", mergeKey, merge)
+		}
+		return err
+	}
+	return nil
+}
+
 // worktreeEntry is one parsed record from `git worktree list --porcelain`.
 type worktreeEntry struct {
 	Path     string
@@ -565,7 +606,7 @@ func provisionWorktree(ctx context.Context, runner wsgit.Runner, env []string, r
 						if _, err := wtRun(ctx, runner, wtPath, noSubmoduleRecurse("switch", "--detach", mergeRootRef)...); err != nil {
 							return res, fmt.Errorf("worktree.acquire: detach stale target %q at encoded merge root %q: %w", targetBranch, mergeRoot, err)
 						}
-						if _, err := wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch); err != nil {
+						if err := deleteStaleTargetBranch(ctx, runner, wtPath, targetBranch); err != nil {
 							return res, fmt.Errorf("worktree.acquire: delete stale target branch %q without force: %v; release any checkout holding it and re-acquire", targetBranch, err)
 						}
 						if _, err := wtRun(ctx, runner, wtPath, noSubmoduleRecurse("switch", "-c", targetBranch, mergeRootRef)...); err != nil {
@@ -859,6 +900,9 @@ type worktreeReleaseCaller struct {
 	WorkerKey     string
 	Force         bool
 	CheckChildren func(ctx context.Context, target string) error
+	// CheckExecJobs is the running-hosted-exec-job check, run next to
+	// CheckChildren under the same lock.
+	CheckExecJobs func(target string) error
 }
 
 // checkWorktreeBoundChildren refuses a non-forced worktree.release while any
@@ -894,6 +938,35 @@ func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) 
 		}
 	}
 	return fmt.Errorf("worktree.release refuses %s: non-closed child agent(s) are still bound to this worktree (%s). Nothing was changed. Wait for them to finish or close them before releasing; pass force: true only if you intend to clean the worktree while they remain open", target, strings.Join(parts, ", "))
+}
+
+// checkWorktreeLiveExecJobs refuses a non-forced worktree.release while any
+// running hosted exec job's recorded cwd is target or lies under it, naming
+// each job. Hygiene would otherwise reset and clean the tree under a running
+// process and the next acquire would reuse it. Paths compare the way
+// ActiveChildrenInWorktree compares a conversation's. It reads the daemon's
+// in-memory jobs, so a connection without hosted exec (none of its jobs can
+// live here) passes. It is not an admission fence: a job launched after this
+// check, before hygiene ends, is not seen.
+func (s *Server) checkWorktreeLiveExecJobs(target string) error {
+	jobs := s.execJobs()
+	if jobs == nil {
+		return nil
+	}
+	want := wsagent.CanonicalWorktreePath(target)
+	if want == "" {
+		return nil
+	}
+	var parts []string
+	for _, row := range jobs.RunningRows() {
+		if wsagent.WorktreePathContains(want, wsagent.CanonicalWorktreePath(row.Cwd)) {
+			parts = append(parts, fmt.Sprintf("%s (%s, cwd %s)", row.ID, row.Tool, row.Cwd))
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return fmt.Errorf("worktree.release refuses %s: running exec job(s) have their cwd in this worktree (%s). Nothing was changed. Wait for them to end or stop them with exec.stop, then release again; pass force: true only if you intend to clean the worktree under them", target, strings.Join(parts, ", "))
 }
 
 // releaseWorktreeAs is releaseWorktree on behalf of caller (nil: no lease

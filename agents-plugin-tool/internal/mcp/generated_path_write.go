@@ -20,9 +20,22 @@ type generatedPathWrites struct {
 }
 
 type generatedPathGrant struct {
-	mu      sync.Mutex
-	file    *os.File
-	created time.Time
+	mu sync.Mutex
+	// file is the held path.write descriptor where holdGeneratedPathGrant is
+	// set; nil on Windows, where path.write reopens the path instead.
+	file *os.File
+	// identity is the granted file as opened at grant time; path.write
+	// refuses any file that is not this one.
+	identity os.FileInfo
+	created  time.Time
+}
+
+// close releases the held descriptor, if any. The caller holds g.mu or owns
+// the grant exclusively.
+func (g *generatedPathGrant) close() {
+	if g.file != nil {
+		_ = g.file.Close()
+	}
 }
 
 const maxGeneratedPathGrants = 64
@@ -46,8 +59,12 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 		}
 		eligible = append(eligible, item)
 	}
+	// The descriptor budget bounds path.write capabilities, not path.generate:
+	// a legacy batch larger than the budget still returns every path, and only
+	// its newest maxGeneratedPathGrants entries become writable, matching the
+	// oldest-first eviction a sequence of smaller batches would produce.
 	if len(eligible) > maxGeneratedPathGrants {
-		return fmt.Errorf("path.generate: requested %d writable cache artifacts; maximum is %d", len(eligible), maxGeneratedPathGrants)
+		eligible = eligible[len(eligible)-maxGeneratedPathGrants:]
 	}
 
 	g.mu.Lock()
@@ -55,13 +72,18 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 	if g.paths == nil {
 		g.paths = make(map[string]map[string]*generatedPathGrant)
 	}
-	for g.grantCountLocked()+len(eligible) > maxGeneratedPathGrants {
-		g.evictOldestLocked()
-	}
 
+	// Every new grant is validated and opened before any earlier grant is
+	// evicted, so a refused call leaves the existing grants intact.
 	opened := make(map[string]*generatedPathGrant, len(eligible))
 	for _, item := range eligible {
-		before, err := os.Lstat(item.Path)
+		// A reservation whose creation identity is unknown cannot be told
+		// from an entry another process put there: refuse, fail closed.
+		if item.Created == nil {
+			closeGeneratedPathGrants(opened)
+			return fmt.Errorf("path.generate: writable cache artifact %q has no creation identity", item.Path)
+		}
+		before, err := lstatGeneratedPath(item.Path)
 		if err != nil {
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: inspect writable cache artifact %q: %w", item.Path, err)
@@ -70,18 +92,27 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: writable cache artifact %q is not a regular file", item.Path)
 		}
-		file, err := os.OpenFile(item.Path, os.O_RDWR, 0)
+		file, err := openGeneratedPathGrant(item.Path)
 		if err != nil {
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: open writable cache artifact %q: %w", item.Path, err)
 		}
 		after, err := file.Stat()
-		if err != nil || !os.SameFile(before, after) {
+		if err != nil || !os.SameFile(before, after) || !os.SameFile(item.Created, after) {
 			_ = file.Close()
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: writable cache artifact %q changed while it was granted", item.Path)
 		}
-		opened[item.Path] = &generatedPathGrant{file: file, created: time.Now()}
+		grant := &generatedPathGrant{identity: after, created: time.Now()}
+		if holdGeneratedPathGrant {
+			grant.file = file
+		} else {
+			_ = file.Close()
+		}
+		opened[item.Path] = grant
+	}
+	for g.grantCountLocked()+len(opened) > maxGeneratedPathGrants {
+		g.evictOldestLocked()
 	}
 	for path, grant := range opened {
 		if g.paths[sessionKey] == nil {
@@ -89,7 +120,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 		}
 		if prior := g.paths[sessionKey][path]; prior != nil {
 			prior.mu.Lock()
-			_ = prior.file.Close()
+			prior.close()
 			prior.mu.Unlock()
 		}
 		g.paths[sessionKey][path] = grant
@@ -99,7 +130,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 
 func closeGeneratedPathGrants(grants map[string]*generatedPathGrant) {
 	for _, grant := range grants {
-		_ = grant.file.Close()
+		grant.close()
 	}
 }
 
@@ -129,7 +160,7 @@ func (g *generatedPathWrites) evictOldestLocked() {
 		delete(g.paths, oldestKey)
 	}
 	oldest.mu.Lock()
-	_ = oldest.file.Close()
+	oldest.close()
 	oldest.mu.Unlock()
 }
 
@@ -148,28 +179,38 @@ func (g *generatedPathWrites) write(sessionKey, path, content string) error {
 	g.mu.Unlock()
 	grant.mu.Lock()
 	defer func() {
-		_ = grant.file.Close()
+		grant.close()
 		grant.mu.Unlock()
 	}()
 
-	pathInfo, err := os.Lstat(path)
+	pathInfo, err := lstatGeneratedPath(path)
 	if err != nil {
 		return fmt.Errorf("path.write inspect target: %w", err)
 	}
-	fileInfo, err := grant.file.Stat()
+	file := grant.file
+	if file == nil {
+		// Windows: no descriptor was held, so a replace-save stays possible;
+		// reopen and let the identity check below refuse a replaced file.
+		file, err = openGeneratedPathGrant(path)
+		if err != nil {
+			return fmt.Errorf("path.write open artifact: %w", err)
+		}
+		defer file.Close()
+	}
+	fileInfo, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("path.write inspect granted artifact: %w", err)
 	}
-	if !pathInfo.Mode().IsRegular() || !fileInfo.Mode().IsRegular() || !os.SameFile(pathInfo, fileInfo) {
+	if !pathInfo.Mode().IsRegular() || !fileInfo.Mode().IsRegular() || !os.SameFile(grant.identity, fileInfo) || !os.SameFile(pathInfo, fileInfo) {
 		return fmt.Errorf("path.write refused: generated target is not a regular file")
 	}
-	if err := grant.file.Truncate(0); err != nil {
+	if err := file.Truncate(0); err != nil {
 		return fmt.Errorf("path.write truncate artifact: %w", err)
 	}
-	if _, err := grant.file.Seek(0, 0); err != nil {
+	if _, err := file.Seek(0, 0); err != nil {
 		return fmt.Errorf("path.write seek artifact: %w", err)
 	}
-	if _, err := grant.file.WriteString(content); err != nil {
+	if _, err := file.WriteString(content); err != nil {
 		return fmt.Errorf("path.write content: %w", err)
 	}
 	return nil

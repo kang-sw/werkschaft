@@ -166,7 +166,7 @@ func TestKeepAwakeConfigNotifiesTheDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	agents = &keepAwakeAgents{opts: opts, dir: dir}
-	backend, err := DashboardConfigBackend("ws", opts, NewDashboardSessionSource(), nil)
+	backend, err := DashboardConfigBackend("ws", opts, NewDashboardSessionSource(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

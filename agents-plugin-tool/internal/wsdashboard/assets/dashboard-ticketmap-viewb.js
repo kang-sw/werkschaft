@@ -912,9 +912,10 @@
       body.appendChild(full);
     }
 
-    // show follows the shared selection (it may have changed in View C):
-    // focus it, or leave the focus mode when it is gone.
+    // show follows the shared filters and selection (either may have
+    // changed in View C): focus it, or leave the focus mode when it is gone.
     function show() {
+      filter();
       var sel = tm.S.sel;
       if (sel !== null && (!isFocus() || cur !== sel)) { focus(sel); return; }
       if (sel === null && isFocus()) { unfocus(); return; }

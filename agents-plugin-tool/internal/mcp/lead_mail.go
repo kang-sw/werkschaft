@@ -213,8 +213,19 @@ func (m *LeadMailbox) Drain(root, key string, relation func(sender string) strin
 
 // mailSenderReplyID is the reply-id of env's sender, "" for none: its
 // reply handle, or the reply-id of the session that owns its named
-// address now. It reads the store's memory only.
+// address now (addressReplyID, resolved fresh: the relation and the wake
+// decisions read it).
 func (s *Server) mailSenderReplyID(env wsmailbox.Envelope, root string) string {
+	return s.envelopeSenderReplyID(env, root, s.addressReplyID)
+}
+
+// labelSenderReplyID is mailSenderReplyID for a display label only: a named
+// sender resolves through the display memo (labelAddressReplyID).
+func (s *Server) labelSenderReplyID(env wsmailbox.Envelope, root string) string {
+	return s.envelopeSenderReplyID(env, root, s.labelAddressReplyID)
+}
+
+func (s *Server) envelopeSenderReplyID(env wsmailbox.Envelope, root string, named func(wsmailbox.Address, string) string) string {
 	for _, handle := range []string{env.ReplyTo, env.From} {
 		if id, ok := strings.CutPrefix(handle, wsmailbox.ReplyIDPrefix); ok {
 			return id
@@ -224,7 +235,7 @@ func (s *Server) mailSenderReplyID(env wsmailbox.Envelope, root string) string {
 	if env.From == "" || err != nil || addr.Kind != wsmailbox.AddressSlug {
 		return ""
 	}
-	return s.addressReplyID(addr, root)
+	return named(addr, root)
 }
 
 // Return puts mail a Drain claimed for key, and the session never read,

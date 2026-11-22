@@ -36,27 +36,12 @@ func (b *BoardDB) ExportArchive() ([]byte, error) {
 // BackupLegacy writes the current board as a legacy-layout folder at dir.
 // It is the Phase-1 building block used by whiteboard.load before replacement.
 func (b *BoardDB) BackupLegacy(dir string) error {
-	data, err := b.ExportArchive()
-	if err != nil {
-		return err
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return fmt.Errorf("whiteboard board DB is closed")
 	}
-	tmp, err := os.CreateTemp("", "ws-whiteboard-db-backup-*.zip")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		return err
-	}
-	return extractArchive(name, dir)
+	return b.backupLegacyLocked(dir)
 }
 
 // LoadArchive replaces the in-memory/DB board from a legacy-layout zip. The
@@ -203,41 +188,67 @@ func LoadNewBoardDB(dir, zipPath string, opts BoardDBOptions) (*BoardDB, int, er
 	return b, len(next.Topics), nil
 }
 
-func (b *BoardDB) backupLegacyLocked(dir string) error {
+// backupLegacyLocked writes the board's own legacy files straight into a new
+// folder at dir. They are trusted, so the incoming-archive extraction caps do
+// not apply; a failed backup removes the folder it created.
+func (b *BoardDB) backupLegacyLocked(dir string) (err error) {
 	tmp, err := os.MkdirTemp("", "ws-whiteboard-db-backup-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	f := FolderStore{Dir: tmp}
-	intent, err := b.legacyIntentLocked(f)
+	intent, err := b.legacyIntentLocked(FolderStore{Dir: tmp})
 	if err != nil {
 		return err
 	}
-	archive, err := boardLegacyArchive(intent)
+	files, err := boardLegacyFiles(intent)
 	if err != nil {
-		return err
-	}
-	zipFile, err := os.CreateTemp("", "ws-whiteboard-db-backup-*.zip")
-	if err != nil {
-		return err
-	}
-	name := zipFile.Name()
-	defer os.Remove(name)
-	if _, err := zipFile.Write(archive); err != nil {
-		zipFile.Close()
-		return err
-	}
-	if err := zipFile.Close(); err != nil {
 		return err
 	}
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return err
 	}
-	return extractArchive(name, dir)
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+	for _, name := range boardLegacyNames(files) {
+		target := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("back up the board: %w", err)
+		}
+		if err := os.WriteFile(target, files[name], 0o644); err != nil {
+			return fmt.Errorf("back up the board: %w", err)
+		}
+	}
+	return nil
 }
 
 func boardLegacyArchive(intent *folderIntent) ([]byte, error) {
+	files, err := boardLegacyFiles(intent)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	for _, name := range boardLegacyNames(files) {
+		writer, err := zw.Create(name)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := writer.Write(files[name]); err != nil {
+			return nil, err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// boardLegacyFiles is the legacy folder layout of intent, by slash path.
+func boardLegacyFiles(intent *folderIntent) (map[string][]byte, error) {
 	files := map[string][]byte{
 		"meta.json":      folderJSON(intent.Session),
 		"committed.json": folderJSON(folderReceipt{SchemaVersion: FolderSchemaVersion, Generation: intent.Session.Generation}),
@@ -251,26 +262,16 @@ func boardLegacyArchive(intent *folderIntent) ([]byte, error) {
 		}
 		files[log.Path] = append(files[log.Path], log.Data...)
 	}
+	return files, nil
+}
+
+func boardLegacyNames(files map[string][]byte) []string {
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var out bytes.Buffer
-	zw := zip.NewWriter(&out)
-	for _, name := range names {
-		writer, err := zw.Create(name)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := writer.Write(files[name]); err != nil {
-			return nil, err
-		}
-	}
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return names
 }
 
 // legacyIntentLocked maps the current State to a fresh legacy layout. Load

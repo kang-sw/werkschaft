@@ -4,11 +4,43 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
+
+// The draft recovery merge clamps to the composer's IMG_MAX, which must be
+// the inbox's per-message cap (inbox_routes.go refuses more).
+func TestDraftImageCapMatchesInbox(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("assets", "dashboard-composer-images.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`var IMG_MAX = (\d+)`).FindSubmatch(src)
+	if m == nil || string(m[1]) != strconv.Itoa(wsinbox.MaxImages) {
+		t.Fatalf("IMG_MAX = %q, want wsinbox.MaxImages = %d", m, wsinbox.MaxImages)
+	}
+}
+
+// TestDraftRecoveryMerge runs saveDraft's shared-row merge in node VMs:
+// byte identity for ID-less images, no eviction past the image cap, and
+// tombstones applied only once a write commits.
+func TestDraftRecoveryMerge(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	out, err := exec.Command(node, "testdata/draft-merge.test.cjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("draft merge fixture: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
 
 func TestDashboardDraftRecoveryBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {

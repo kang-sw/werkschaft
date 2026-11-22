@@ -3,6 +3,8 @@ kind: render
 delegates: true
 role: reviewer
 tier: large
+tier-role: code-review-correctness
+tier-parent: review:*
 includes:
   - code-reviewer
 variables:

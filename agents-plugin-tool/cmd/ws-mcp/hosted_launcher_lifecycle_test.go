@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -76,7 +78,14 @@ func TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild(t *testing.T)
 			}
 			assertRead(version)
 
-			const successorVersion = "0.50.99-dev"
+			// Newer than this build in patch only: a release bump moves the
+			// build's minor, and a fixed literal then lands older or in another
+			// minor than the launcher accepts.
+			var major, minor int
+			if _, err := fmt.Sscanf(version, "%d.%d.", &major, &minor); err != nil {
+				t.Fatalf("build version %q: %v", version, err)
+			}
+			successorVersion := fmt.Sprintf("%d.%d.99-dev", major, minor)
 			successor := buildDashboardTestBin(t, successorVersion)
 			start(successor) // Ordinary newer-core replacement, no --replace.
 			replaced := waitForEndpoint(t, dir, successorVersion, 15*time.Second)
@@ -84,7 +93,18 @@ func TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild(t *testing.T)
 				t.Fatal("successor did not replace the original daemon")
 			}
 			assertRead(successorVersion)
+			// A direct daemon-start spawns the daemon from its own path (the
+			// hosted launcher stages a copy before it calls daemon-start), so
+			// the successor daemon still runs from successor here. Windows
+			// refuses to delete a running image but permits renaming it,
+			// which equally takes the original path away.
 			for _, original := range []string{bin, successor} {
+				if runtime.GOOS == "windows" {
+					if err := os.Rename(original, filepath.Join(t.TempDir(), "moved.exe")); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
 				if err := os.Remove(original); err != nil {
 					t.Fatal(err)
 				}

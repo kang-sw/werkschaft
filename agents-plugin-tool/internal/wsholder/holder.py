@@ -72,14 +72,30 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
             {"event": "gap", "from": n, "to": <first held sequence>}.
 
   Child status: {"state": "none"} | {"state": "running", "pid", "mode"} |
-  {"state": "exited", "pid", "mode", "exit_code", "signal"}.
+  {"state": "exited", "pid", "mode", "exit_code", "signal"}. A running pipe
+  child's status also carries "input_closed": whether an eof (spawn's
+  input_eof or an input operation's) closed its stdin; an input operation
+  after that is refused with "input_closed". A holder that predates the
+  field sends none.
 
   Records (sequenced from 1, streamed after replay):
 
     {"event": "output", "seq": n, "stream": "stdout" | "stderr" | "pty",
-     "data": "<base64>"}   plus "partial": true when a pipe line was cut at
+     "data": "<base64>", "offset": n, "combined_offset": n}
+                           plus "partial": true when a pipe line was cut at
                            the record limit and continues in the next record.
-    {"event": "exit", "seq": n, "exit_code": <int|null>, "signal": <int|null>}
+                           offset is the absolute byte offset of data in its
+                           stream and combined_offset in all output, in
+                           arrival order, so a replay that starts after
+                           evicted records still places its bytes. A holder
+                           that predates them sends neither.
+    {"event": "exit", "seq": n, "exit_code": <int|null>, "signal": <int|null>,
+     "stream_bytes": {"<stream>": n, ...}, "output_bytes": n}
+                           stream_bytes and output_bytes are the output
+                           totals before the exit, per stream and in all,
+                           so a replay that holds no output record still
+                           knows them. A holder that predates them sends
+                           neither.
 
   The output ring retains 4 MiB by default. A holder started with
   --ring-ceiling-bytes can keep a backlog above --ring-bytes until it sends
@@ -175,7 +191,7 @@ class OpError(Exception):
 
 
 class Record:
-    __slots__ = ("seq", "kind", "stream", "data", "partial", "fields")
+    __slots__ = ("seq", "kind", "stream", "data", "partial", "fields", "offset", "combined_offset")
 
     def __init__(self, seq, kind, stream=None, data=b"", partial=False, fields=None):
         self.seq = seq
@@ -184,6 +200,8 @@ class Record:
         self.data = data
         self.partial = partial
         self.fields = fields
+        self.offset = None
+        self.combined_offset = None
 
     def cost(self) -> int:
         return len(self.data) + 64
@@ -201,6 +219,9 @@ class Record:
         }
         if self.partial:
             msg["partial"] = True
+        if self.offset is not None:
+            msg["offset"] = self.offset
+            msg["combined_offset"] = self.combined_offset
         return msg
 
 
@@ -215,6 +236,10 @@ class Ring:
         self.head = 0
         self.size = 0
         self.next_seq = 1
+        # Output bytes appended so far, per stream and in all: an output
+        # record's offsets, which eviction never renumbers.
+        self.stream_bytes: dict = {}
+        self.output_bytes = 0
 
     def first_seq(self) -> int:
         if self.head < len(self.items):
@@ -223,6 +248,11 @@ class Ring:
 
     def append(self, kind, stream=None, data=b"", partial=False, fields=None) -> Record:
         rec = Record(self.next_seq, kind, stream, data, partial, fields)
+        if kind == "output":
+            rec.offset = self.stream_bytes.get(stream, 0)
+            rec.combined_offset = self.output_bytes
+            self.stream_bytes[stream] = rec.offset + len(data)
+            self.output_bytes += len(data)
         self.next_seq += 1
         self.items.append(rec)
         self.size += rec.cost()
@@ -1193,6 +1223,8 @@ class Holder:
             raise OpError("spawn_failed", f"{type(exc).__name__}: {exc}") from None
         self.child = child
         self.child_status = {"state": "running", "pid": child.pid, "mode": child.mode}
+        if child.mode == "pipe":
+            self.child_status["input_closed"] = False
         # Queued under the lock before the writer starts: the data and EOF
         # reach the child in order even when it exits at once.
         self._queue_input(spec["input"], spec["input_eof"])
@@ -1214,6 +1246,8 @@ class Holder:
     def _op_input(self, att: Attachment, req: dict) -> None:
         self._running_child()
         data = parse_input_data(req.get("data"))
+        if self.child_status.get("input_closed"):
+            raise OpError("input_closed", "the child's stdin was closed by an earlier eof")
         if self.input_pending + len(data) > MAX_PENDING_INPUT:
             raise OpError("input_overflow", "the child is not reading its input")
         self._queue_input(data, req.get("eof") is True)
@@ -1224,6 +1258,8 @@ class Holder:
             self.input_pending += len(data)
         if eof:
             self.input_queue.append(None)
+            if "input_closed" in self.child_status:
+                self.child_status["input_closed"] = True
         self.cond.notify_all()
 
     def _op_resize(self, att: Attachment, req: dict) -> None:
@@ -1341,7 +1377,10 @@ class Holder:
             t.join(timeout=max(0.0, deadline - time.monotonic()))
         with self.cond:
             self.child_status = {"state": "exited", "pid": child.pid, "mode": child.mode, **fields}
-            self.ring.append("exit", fields=fields)
+            # The totals let a replay whose output records all left the
+            # ring still place the job's byte counts.
+            totals = {"stream_bytes": dict(self.ring.stream_bytes), "output_bytes": self.ring.output_bytes}
+            self.ring.append("exit", fields={**fields, **totals})
             self.idle_since = time.monotonic()
             self.input_queue.clear()
             self.input_pending = 0

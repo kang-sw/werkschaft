@@ -94,10 +94,10 @@ func (s *workspaceStore) reload() error {
 			continue
 		}
 		p := filepath.Clean(rec.Path)
-		if seen[p] {
+		if seen[admissionPathKey(p)] {
 			continue
 		}
-		seen[p] = true
+		seen[admissionPathKey(p)] = true
 		list = append(list, storedWorkspace{Path: p, Repo: holdsGitDir(p)})
 	}
 	s.list = list
@@ -139,9 +139,12 @@ func (s *workspaceStore) preflight() error {
 	return s.reload()
 }
 
+// index finds path by workspace identity (admissionPathKey): on Windows a
+// differently cased spelling is the same entry.
 func (s *workspaceStore) index(path string) int {
+	k := admissionPathKey(path)
 	for i, w := range s.list {
-		if w.Path == path {
+		if admissionPathKey(w.Path) == k {
 			return i
 		}
 	}
@@ -184,19 +187,7 @@ func (s *workspaceStore) add(dir string, dry bool) (workspaceAdd, error) {
 	if err := s.reload(); err != nil {
 		return out, err
 	}
-	changed := s.mergeLinkedLocked(loc.Worktree)
-	switch {
-	case loc.Worktree != "" && s.index(loc.Worktree) >= 0:
-		out.Result = workspaceMerged
-		s.rewriteLocked(loc.Worktree, loc.Root)
-		changed = true
-	case s.index(loc.Root) >= 0:
-		out.Result = workspaceKnown
-	default:
-		out.Result = workspaceAdded
-		s.list = append(s.list, storedWorkspace{Path: loc.Root, Repo: loc.Repo})
-		changed = true
-	}
+	changed := s.addLocked(loc, &out)
 	if dry {
 		// The list in memory took the changes; read the file's back.
 		return out, s.reload()
@@ -211,6 +202,76 @@ func (s *workspaceStore) add(dir string, dry bool) (workspaceAdd, error) {
 	return out, nil
 }
 
+// addLocked applies one add of loc to the list in memory, recording its
+// result in out; mu is held. It reports whether the list changed.
+func (s *workspaceStore) addLocked(loc workspaceLocation, out *workspaceAdd) bool {
+	changed := s.mergeLinkedLocked(loc.Worktree)
+	switch {
+	case loc.Worktree != "" && s.index(loc.Worktree) >= 0:
+		out.Result = workspaceMerged
+		s.rewriteLocked(loc.Worktree, loc.Root)
+		changed = true
+	case s.index(loc.Root) >= 0:
+		out.Result = workspaceKnown
+	default:
+		out.Result = workspaceAdded
+		s.list = append(s.list, storedWorkspace{Path: loc.Root, Repo: loc.Repo})
+		changed = true
+	}
+	return changed
+}
+
+// errWorkspaceRestore marks an addBatch whose commit failed and whose
+// undo could not be written either: the batch's adds stay stored.
+var errWorkspaceRestore = errors.New("workspace list restore failed")
+
+// addBatch adds every dir with one write, then runs commit (the batch's
+// later write) with mu still held, so no add or forget lands between the
+// two. When commit fails it writes the list from before the batch back,
+// and the commit's error is returned; when that undo fails too, the error
+// also wraps errWorkspaceRestore. A failed write leaves the file as it was.
+func (s *workspaceStore) addBatch(dirs []string, commit func([]workspaceAdd) error) ([]workspaceAdd, error) {
+	locs := make([]workspaceLocation, len(dirs))
+	for i, dir := range dirs {
+		locs[i] = locateWorkspace(dir)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.reload(); err != nil {
+		return nil, err
+	}
+	before := append([]storedWorkspace(nil), s.list...)
+	outs := make([]workspaceAdd, len(dirs))
+	changed := false
+	for i, loc := range locs {
+		outs[i] = workspaceAdd{Path: filepath.Clean(dirs[i]), Root: loc.Root, Repo: loc.Repo, Worktree: loc.Worktree}
+		if s.addLocked(loc, &outs[i]) {
+			changed = true
+		}
+	}
+	if changed {
+		if err := s.save(); err != nil {
+			_ = s.reload()
+			return nil, err
+		}
+	}
+	if commit == nil {
+		return outs, nil
+	}
+	if err := commit(outs); err != nil {
+		if !changed {
+			return nil, err
+		}
+		s.list = before
+		if rerr := s.save(); rerr != nil {
+			_ = s.reload()
+			return nil, errors.Join(err, errWorkspaceRestore, rerr)
+		}
+		return nil, err
+	}
+	return outs, nil
+}
+
 // forget removes path from the list; false when it is not in it.
 func (s *workspaceStore) forget(path string) (bool, error) {
 	path = filepath.Clean(path)
@@ -219,11 +280,13 @@ func (s *workspaceStore) forget(path string) (bool, error) {
 	if err := s.reload(); err != nil {
 		return false, err
 	}
-	i := s.index(path)
-	if i < 0 {
+	if s.index(path) < 0 {
 		return false, nil
 	}
-	s.list = append(s.list[:i], s.list[i+1:]...)
+	// Every spelling of the path goes, so none shows again after it.
+	for i := s.index(path); i >= 0; i = s.index(path) {
+		s.list = append(s.list[:i], s.list[i+1:]...)
+	}
 	if err := s.save(); err != nil {
 		_ = s.reload()
 		return false, err

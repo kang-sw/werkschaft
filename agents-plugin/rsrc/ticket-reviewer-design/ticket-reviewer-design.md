@@ -3,6 +3,8 @@ kind: render
 delegates: true
 role: reviewer
 tier: large
+tier-role: ticket-reviewer-design
+tier-parent: review:*
 variables:
   - RoleModel
   - ExploreAgent

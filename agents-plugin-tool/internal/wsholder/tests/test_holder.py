@@ -333,6 +333,17 @@ class RingTest(unittest.TestCase):
         self.assertEqual(ring.first_seq(), 1)
         self.assertEqual(ring.size, 2 * cost)
 
+    def test_output_offsets_count_each_stream_and_all_output(self):
+        ring = holder_mod.Ring(1 << 20)
+        a = ring.append("output", "stdout", b"abc")
+        b = ring.append("output", "stderr", b"de")
+        c = ring.append("output", "stdout", b"f")
+        exit_rec = ring.append("exit", fields={"exit_code": 0, "signal": None})
+        self.assertEqual([(r.offset, r.combined_offset) for r in (a, b, c)], [(0, 0), (0, 3), (3, 5)])
+        self.assertEqual(c.message()["offset"], 3)
+        self.assertEqual(c.message()["combined_offset"], 5)
+        self.assertNotIn("offset", exit_rec.message())
+
     def test_newest_stays_even_when_it_exceeds_the_budget(self):
         ring = holder_mod.Ring(64, 128)
         ring.append("output", "stdout", b"x")
@@ -427,6 +438,24 @@ class RingReplayTest(HolderTestCase):
         for from_seq in (0, -5):
             _, events = self._replay(holder, from_seq)
             self.assertEqual([m["seq"] for m in events], list(range(first, 202)))
+
+    def test_replayed_records_carry_their_absolute_byte_offsets(self):
+        holder, first = self._filled_holder()
+        _, events = self._replay(holder, 0)
+        # Each line is 10 bytes on stdout, the only stream.
+        for msg in events[:-1]:
+            self.assertEqual(msg["offset"], (msg["seq"] - 1) * 10)
+            self.assertEqual(msg["combined_offset"], msg["offset"])
+        self.assertGreater(events[0]["offset"], 0)
+        self.assertNotIn("offset", events[-1])
+
+    def test_exit_record_carries_the_output_totals(self):
+        holder, first = self._filled_holder()
+        # Only the exit record is replayed: its totals still give the counts.
+        _, events = self._replay(holder, 201)
+        self.assertEqual([m["event"] for m in events], ["exit"])
+        self.assertEqual(events[0]["stream_bytes"], {"stdout": 2000})
+        self.assertEqual(events[0]["output_bytes"], 2000)
 
     def test_replay_from_a_held_sequence_starts_there(self):
         holder, first = self._filled_holder()
@@ -691,6 +720,28 @@ class SpawnInputTest(HolderTestCase):
         events = client.events_until(lambda m: m.get("event") == "exit")
         self.assertEqual(self.stdout_of(events), b"got:|eof\n")
         self.assertEqual(events[-1]["exit_code"], 0)
+
+    def test_status_reports_stdin_closed_and_input_after_eof_is_refused(self):
+        sleeper = py_child("import time; time.sleep(30)")
+        holder = self.start_holder()
+        client = self.attached(holder, stream=False)
+        reply = self.spawn(client, sleeper)
+        self.assertIs(reply["child"]["input_closed"], False)
+        data = base64.b64encode(b"x").decode("ascii")
+        self.assertTrue(client.request("input", {"data": data, "eof": True})["ok"])
+        client.close()
+        # A rejoining client reads the closed stdin from the attach reply.
+        again = self.connect(holder)
+        attach = again.attach(holder.token)
+        self.assertIs(attach["child"]["input_closed"], True)
+        refused = again.request("input", {"data": data})
+        self.assertEqual((refused["ok"], refused.get("error")), (False, "input_closed"))
+
+    def test_spawn_with_input_eof_reports_stdin_closed(self):
+        holder = self.start_holder()
+        client = self.attached(holder, stream=False)
+        reply = self.spawn(client, py_child("import time; time.sleep(30)"), input_eof=True)
+        self.assertIs(reply["child"]["input_closed"], True)
 
     def test_input_without_eof_leaves_stdin_open_for_input_operations(self):
         holder = self.start_holder()

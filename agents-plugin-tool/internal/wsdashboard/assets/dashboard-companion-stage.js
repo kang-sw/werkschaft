@@ -9,44 +9,194 @@
     sparkle: { kind: "particles", glyphs: ["✦", "✧", "✦"], color: "#e6aa34" },
     zzz: { kind: "float", text: "Zzz", color: "#8fa0b8" }
   };
+  const railRowSelector = ".rs[data-rid]";
+  let mountedRailObserver;
+
+  function railSignals() {
+    let rows = new Map();
+
+    function read(fragment, activeRid, baseline) {
+      const nodes = fragment.querySelectorAll(railRowSelector), next = new Map();
+      const childApprovals = new Set();
+      for (const row of nodes) {
+        if (!row.matches(".ended, .stopped") && row.hasAttribute("data-ap")) {
+          const parent = row.closest(".rkids")?.dataset.parent;
+          if (parent) childApprovals.add(parent);
+        }
+      }
+      let winner = null;
+      function offer(id, kind, priority, order, token) {
+        const active = id === activeRid;
+        const rank = priority * 4 + (active ? 2 : 0) + order;
+        if (!winner || rank > winner.rank) winner = { rid: id, kind, token, rank, source: "rail" };
+      }
+      for (const row of nodes) {
+        const id = row.dataset.rid;
+        if (!id || next.has(id) || row.matches(".ended, .stopped")) continue;
+        const previous = rows.get(id), busy = row.dataset.busy === "1", top = !row.hasAttribute("data-g");
+        const working = row.dataset.active === "1";
+        // Match rail notices: keep the session's own work marked until its busy span ends.
+        const active = busy && (working || !!(previous?.busy && previous.active));
+        const approval = row.hasAttribute("data-ap") || top && !childApprovals.has(id) && !!row.querySelector(".kap");
+        const failure = !!row.querySelector(".hb.err");
+        const asks = row.dataset.asks === undefined ? null : new Set(row.dataset.asks.trim().split(/\s+/).filter(Boolean));
+        next.set(id, { busy, active, working, top, approval, failure, asks });
+        if (baseline) continue;
+        if (failure && !previous?.failure) offer(id, "session.error", 70, 0);
+        if (approval && !previous?.approval) offer(id, "ask.open", 65, 1, "perm:" + id);
+        if (asks && previous?.asks) {
+          for (const ask of asks) {
+            if (!previous.asks.has(ask)) offer(id, "ask.open", 65, 0, "ask:" + id + ":" + ask);
+          }
+        }
+        if (id !== activeRid && top && previous?.top && previous.busy && previous.active && !busy && !approval && !failure) {
+          offer(id, "global.session_done", 52, 0);
+        }
+      }
+      rows = next;
+      return winner;
+    }
+
+    function posture(activeRid, activity) {
+      let permission = "", failure = "", working = 0;
+      for (const [id, row] of rows) {
+        if (row.approval && (!permission || id === activeRid)) permission = id;
+        if (row.failure && (!failure || id === activeRid)) failure = id;
+        if (id !== activeRid && row.working && !row.approval && !row.failure) working++;
+      }
+      if (activity === "permission") return { activity, rid: activeRid };
+      if (permission) return { activity: "permission", rid: permission };
+      if (activity === "error") return { activity, rid: activeRid };
+      if (failure) return { activity: "error", rid: failure };
+      if (activity === "idle" && working) return { activity: "tool", rid: "" };
+      return { activity, rid: "" };
+    }
+    return { read, posture };
+  }
+
+  function signalPairs() {
+    const pending = new Map();
+    return {
+      observe(signal, stamp) {
+        if (!/^(?:ask|perm):/.test(signal.token || "")) return false;
+        for (const [key, prior] of pending) if (stamp - prior.stamp > 1250) pending.delete(key);
+        const prior = pending.get(signal.token);
+        if (prior && prior.source !== signal.source) {
+          pending.delete(signal.token);
+          return true;
+        }
+        pending.set(signal.token, { source: signal.source, stamp });
+        return false;
+      },
+      clear() { pending.clear(); }
+    };
+  }
+
+  function resizeControl(grip, options, currentSize, changed) {
+    const key = "ws.companion.size";
+    let preferred = null, active = null, cap = 240;
+    try {
+      const saved = window.localStorage.getItem(key);
+      const value = Number(saved);
+      if (saved !== null && Number.isFinite(value) && value >= 64 && value <= 240) preferred = value;
+    } catch (_) { /* Storage may be unavailable. */ }
+    function persist() {
+      try { window.localStorage.setItem(key, String(preferred)); } catch (_) { /* Storage may be unavailable. */ }
+    }
+    function update(value) {
+      preferred = Math.round(clamp(value, Math.min(64, cap), cap));
+      changed();
+    }
+    grip.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || active) return;
+      event.preventDefault();
+      active = { id: event.pointerId, x: event.clientX, y: event.clientY, size: currentSize() };
+      grip.setPointerCapture(event.pointerId);
+    }, options);
+    grip.addEventListener("pointermove", event => {
+      if (active?.id !== event.pointerId) return;
+      const dx = event.clientX - active.x, dy = active.y - event.clientY;
+      update(active.size + (Math.abs(dx) >= Math.abs(dy) ? dx : dy));
+    }, options);
+    function finish(event) {
+      if (active?.id !== event.pointerId) return;
+      active = null;
+      if (preferred !== null) persist();
+    }
+    for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) grip.addEventListener(name, finish, options);
+    grip.addEventListener("keydown", event => {
+      const direction = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[event.key];
+      if (!direction) return;
+      event.preventDefault();
+      update(currentSize() + direction * 4);
+      persist();
+    }, options);
+    return {
+      value(fallback, width, height) {
+        cap = Math.max(1, Math.min(240, width - 24, height - 24));
+        const value = Math.min(preferred ?? fallback, cap);
+        grip.setAttribute("aria-valuemin", String(Math.min(64, cap)));
+        grip.setAttribute("aria-valuemax", String(cap));
+        grip.setAttribute("aria-valuenow", String(Math.round(value)));
+        return value;
+      },
+      reset() {
+        preferred = null;
+        try { window.localStorage.removeItem(key); } catch (_) { /* Storage may be unavailable. */ }
+        changed();
+      }
+    };
+  }
 
   function mount(config, mute) {
     const doc = document, root = doc.documentElement, rail = doc.getElementById("rail");
     const cancel = new AbortController(), options = { signal: cancel.signal };
     const node = doc.createElement("div");
     node.className = "ws-companion";
-    const hit = doc.createElement("button");
-    hit.type = "button";
+    const hit = doc.createElement("div");
     hit.className = "ws-companion-hit";
-    hit.title = wsT("js.companion.character");
-    hit.setAttribute("aria-label", hit.title);
-    hit.setAttribute("aria-haspopup", "true");
-    hit.setAttribute("aria-expanded", "false");
+    const character = doc.createElement("button");
+    character.type = "button";
+    character.className = "ws-companion-character";
+    character.title = wsT("js.companion.character");
+    character.setAttribute("aria-label", character.title);
+    character.setAttribute("aria-haspopup", "true");
+    character.setAttribute("aria-expanded", "false");
     const canvas = doc.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
-    hit.append(canvas);
+    character.append(canvas);
+    const grip = doc.createElement("div");
+    grip.className = "ws-companion-resize";
+    grip.tabIndex = 0;
+    grip.setAttribute("role", "slider");
+    grip.setAttribute("aria-label", wsT("js.companion.resize"));
+    grip.setAttribute("aria-valuemin", "64");
+    hit.append(character, grip);
     hit.hidden = true;
     const ctx = canvas.getContext("2d");
     const menu = doc.createElement("div");
     menu.className = "ws-companion-menu";
-    menu.setAttribute("aria-label", hit.title);
+    menu.setAttribute("aria-label", character.title);
     menu.hidden = true;
     node.append(hit, menu);
     doc.body.append(node);
 
-    let model, rig, view, runner = C.scenarioRunner(), fxContext = null;
+    let model, rig, view, runner = C.scenarioRunner(), timing = C.timing(), fxContext = null;
     let state = window.WsShell.companionContext();
+    let activeRid = root.dataset.rid || "", posture = { activity: "idle", rid: "" }, switchedAt = -Infinity;
+    let markedRid, railMark;
+    const railEvents = railSignals(), pairs = signalPairs();
     let currentConfig = config, preset = config.preset;
     let frame = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
     let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, lastCount;
     let size = 96, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
-    let swing = 0, swingSpeed = 0;
+    const physics = { swing: 0, swingVel: 0 };
     const beatOrigin = { x: 0, y: 0 };
-    const position = { x: 0, y: 0 }, cursor = { x: 0, y: 0 }, gaze = { x: 0, y: 0 };
+    const position = { x: 0, y: 0 }, cursor = { x: 0, y: 0 }, gaze = { x: 0, y: 0, prop: false };
     const propPosition = { x: 0, y: 0 }, propStart = { x: 0, y: 0 }, propEnd = { x: 0, y: 0 };
-    const physical = { sx: 1, sy: 1, angle: 0, lift: 0 };
+    const physical = {}, propFrame = {}, bodyBox = {};
     const guards = { routeKind: "home", pose: "stand", idleMs: 0 };
     let marks = Object.create(null);
 
@@ -58,6 +208,8 @@
       model = pack;
       rig = next;
       runner = C.scenarioRunner(pack.manifest.scenarios);
+      timing = C.timing(pack.manifest);
+      if (now - switchedAt < 900) runner.fire("route.switch", switchedAt, guards);
       viewBeat = null;
       dirty = true;
       node.dataset.pack = pack.id;
@@ -67,8 +219,8 @@
       schedule();
     }, () => notice("pack_failed"));
 
-    const controls = C.quickMenu(node, hit, menu, options, {
-      returnHome, mute, applyPreset, notice,
+    const controls = C.quickMenu(node, character, menu, options, {
+      returnHome, resetSize, mute, applyPreset, notice,
       presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
       async reloadPack() {
         await loader.reload(cancel.signal);
@@ -96,14 +248,19 @@
       loader.load(currentConfig.pack || "default", state, force);
     }
 
-    function reset() {
+    function reset(id, switched) {
       if (custom?.mark) custom = { x: position.x, y: position.y };
-      state = window.WsShell.companionContext();
+      activeRid = id || "";
+      state = window.WsShell.companionContext(activeRid ? "session" : "home");
       marks = Object.create(null);
       runner.reset();
+      pairs.clear();
       viewBeat = null;
       nextIdle = now + 45000;
       lastBusy = now;
+      switchedAt = switched ? now : -Infinity;
+      if (switched) fire("route.switch");
+      updatePosture();
       requestPack();
       invalidated();
     }
@@ -111,7 +268,7 @@
     function context(payload, frameRect) {
       const previous = state.activity;
       const previousComposer = marks["composer-top"];
-      state = payload;
+      state = payload.activity === "streaming" ? { ...payload, activity: "replying" } : payload;
       frameBox = frameRect;
       marks = Object.create(null);
       for (const id of landmarks) {
@@ -123,24 +280,55 @@
       const composer = marks["composer-top"];
       if (composer?.left !== previousComposer?.left || composer?.y !== previousComposer?.y) dirty = true;
       requestPack();
-      if (previous !== state.activity) { lastBusy = now; nextIdle = now + 45000; }
-      for (const event of payload.events) if (event && typeof event.kind === "string") fire(event.kind);
+      if (previous === "replying" && state.activity !== "replying") runner.endReply();
+      updatePosture();
+      for (const event of payload.events) {
+        if (!event || typeof event.kind !== "string") continue;
+        const token = typeof event.token === "string" ? event.token : "";
+        const rid = token.startsWith("perm:") ? token.slice(5) : payload.sessionId;
+        receiveSignal({ kind: event.kind, token, rid, source: "frame" });
+      }
       schedule();
     }
 
-    function fire(kind) {
+    function updatePosture() {
+      const next = railEvents.posture(activeRid, state.activity);
+      if (next.activity !== posture.activity) { lastBusy = now; nextIdle = now + 45000; }
+      posture = next;
+    }
+
+    function receiveSignal(signal) {
+      if (pairs.observe(signal, performance.now())) {
+        if (signal.source === "frame") runner.preferFrame(signal);
+      } else fire(signal.kind, signal);
+    }
+
+    function observeRail(fragment, id, baseline) {
+      activeRid = id || "";
+      const signal = railEvents.read(fragment, activeRid, baseline);
+      updatePosture();
+      if (signal) receiveSignal(signal);
+      schedule();
+    }
+
+    function fire(kind, signal) {
       guards.routeKind = state.routeKind;
       guards.pose = view?.pose || "stand";
-      guards.idleMs = state.activity === "idle" ? now - lastBusy : 0;
-      runner.fire(kind, now, guards);
+      guards.idleMs = posture.activity === "idle" ? now - lastBusy : 0;
+      runner.fire(kind, now, guards, signal);
       if (kind.startsWith("user.")) {
         lastBusy = now;
         nextIdle = now + 45000;
       }
     }
 
+    const sizing = resizeControl(grip, options, () => size, invalidated);
+
+    function resetSize() { sizing.reset(); controls.close(); }
+
     function layout() {
       dirty = false;
+      markedRid = undefined;
       vw = window.innerWidth;
       vh = window.innerHeight;
       dpr = window.devicePixelRatio || 1;
@@ -151,7 +339,7 @@
       const docked = rect && open && rect.right > 0 && getComputedStyle(rail).visibility !== "hidden";
       if (!docked) {
         rail?.removeAttribute("data-companion-dock");
-        size = clamp(Math.min(vw - 24, vh - 24), 48, 96);
+        size = sizing.value(clamp(Math.min(vw - 24, vh - 24), 48, 104), vw, vh);
         const composer = marks["composer-top"];
         home = composer ? {
           x: clamp(composer.left + size / 2, 12 + size / 2, vw - size / 2),
@@ -160,7 +348,7 @@
         return;
       }
 
-      size = clamp(Math.min(rect.width * 0.36, rect.height * 0.36), 72, 136);
+      size = sizing.value(clamp(Math.min(rect.width * 0.44, rect.height * 0.36), 88, 152), vw, vh);
       const list = rail.querySelector(".rlist");
       const unreg = list?.querySelector(":scope > .rws-unreg");
       const footer = rail.querySelector(".rfoot, .r-config-global");
@@ -184,19 +372,19 @@
     function invalidated() { dirty = true; schedule(); }
     const railResize = new ResizeObserver(invalidated);
     let observed = [];
-    function observeRail() {
+    function observeRailLayout() {
       const nodes = rail ? [rail, ...rail.querySelectorAll(".rlist, .rfoot, .rws-unreg")] : [];
       if (nodes.length === observed.length && nodes.every((item, i) => item === observed[i])) return;
       railResize.disconnect();
       nodes.forEach(el => railResize.observe(el));
       observed = nodes;
     }
-    const railChanges = new MutationObserver(() => { observeRail(); invalidated(); });
+    const railChanges = new MutationObserver(() => { observeRailLayout(); invalidated(); });
     if (rail) {
-      railChanges.observe(rail, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] });
+      railChanges.observe(rail, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "class"] });
       rail.addEventListener("scroll", invalidated, { ...options, capture: true });
       rail.addEventListener("transitionend", invalidated, options);
-      observeRail();
+      observeRailLayout();
     }
     railChanges.observe(root, { attributes: true, attributeFilter: ["class"] });
     window.addEventListener("resize", invalidated, options);
@@ -205,16 +393,47 @@
       return custom?.mark ? marks[custom.mark] || custom : custom || home;
     }
 
-    function placeCharacter(seconds) {
+    function railLandmark(id) {
+      if (markedRid === id) return railMark;
+      markedRid = id;
+      railMark = null;
+      if (!id || !rail) return railMark;
+      const row = rail.querySelector('.rs[data-rid="' + CSS.escape(id) + '"]');
+      let rect = row?.getBoundingClientRect();
+      const parent = row?.closest(".rkids")?.previousElementSibling;
+      if ((!rect?.width || !rect.height) && parent?.matches(railRowSelector)) rect = parent.getBoundingClientRect();
+      if (rect?.width && rect.height && rect.right > 0 && rect.bottom > 0 && rect.left < vw && rect.top < vh) {
+        railMark = { x: rect.left + rect.width / 2, y: rect.top };
+      }
+      return railMark;
+    }
+
+    function gazeMark(key, playing) {
+      const signal = playing?.signal;
+      const rid = signal?.rid || (!playing ? posture.rid : "");
+      if (key === "rail-alert") return railLandmark(rid);
+      if (key === "whiteboard-ask" && rid) {
+        return (signal?.source === "frame" || rid === activeRid ? marks[key] : null) || railLandmark(rid);
+      }
+      return C.own(marks, key === "caret" ? "composer-top" : key);
+    }
+
+    function measureCharacter() {
       const v = view, b = v.bounds;
       const width = (b[2] - b[0]) * size, height = (b[3] - b[1]) * size;
       const perching = v.pose === "perched" && (home.rail || custom?.mark);
       const bottom = perching ? v.seat ?? b[3] : b[3];
-      const x = position.x - width / 2;
-      const y = position.y + physical.lift + (b[1] - bottom) * size;
+      bodyBox.width = width;
+      bodyBox.height = height;
+      bodyBox.x = position.x + physical.tx * size - width / 2;
+      bodyBox.y = position.y + (physical.lift + b[1] - bottom) * size;
+    }
+
+    function placeCharacter(seconds) {
+      const { x, y, width, height } = bodyBox, b = view.bounds;
       const widthPixels = Math.ceil(size * dpr);
       if (canvas.width !== widthPixels || canvas.height !== widthPixels) canvas.width = canvas.height = widthPixels;
-      const art = v.render(seconds, gaze);
+      const art = view.render(seconds, gaze, beat.stage === "pendulum-drag" && view.articulatedDrag ? physics : null);
       ctx.clearRect(0, 0, widthPixels, widthPixels);
       ctx.drawImage(art, 0, 0, widthPixels, widthPixels);
       hit.style.width = width + "px";
@@ -228,6 +447,11 @@
 
     function propAction(item) { return typeof item === "string" ? item : item?.id; }
 
+    function propBehavior(selector, data) {
+      const motion = selector?.motion || data.behavior || "attach";
+      return C.own(timing.prop, motion) ? motion : C.own(timing.prop, data.behavior) ? data.behavior : "attach";
+    }
+
     function setBeat(next, playing) {
       viewBeat = next;
       viewPlaying = playing;
@@ -237,7 +461,7 @@
       viewStart = now;
       const propId = propAction(next.prop);
       const attach = rig.prop(propId);
-      const attached = attach.data && (attach.data.behavior || "attach") === "attach" &&
+      const attached = attach.data && propBehavior(next.prop, attach.data) === "attach" &&
         (!attach.data.anchor || attach.data.anchor === "behind-head" || attach.data.anchor === "body");
       const renderPose = next.pose || "stand";
       view = rig.view(renderPose, next.gesture, next.expression || "idle", attached ? [propId] : []);
@@ -258,7 +482,33 @@
       }
     }
 
-    function positionProp(playing, progress, age) {
+    function handPosition(out) {
+      const ox = bodyBox.width * 0.5, oy = bodyBox.height * 0.8;
+      const x = (size * (view.handAnchor[0] / rig.width - view.bounds[0]) - ox) * physical.sx;
+      const y = (size * (view.handAnchor[1] / rig.height - view.bounds[1]) - oy) * physical.sy;
+      const cos = Math.cos(physical.angle), sin = Math.sin(physical.angle);
+      out.x = bodyBox.x + ox + x * cos - y * sin;
+      out.y = bodyBox.y + oy + x * sin + y * cos;
+    }
+
+    function propPoint(out, id, homeSide) {
+      if (id === "hand") { handPosition(out); return; }
+      const mark = C.own(marks, id), rest = target();
+      out.x = mark?.x ?? (homeSide ? position.x : rest.x + size * 1.25);
+      out.y = mark?.y ?? (homeSide ? position.y - size * 0.52 : rest.y - size * 0.8);
+    }
+
+    function propRecoil(progress) {
+      if (!prop) return;
+      const recoil = timing.prop[propBehavior(beat.prop, prop.data)].recoil;
+      if (!recoil || progress <= recoil.start || progress >= recoil.end) return;
+      const envelope = progress <= recoil.peak ? (progress - recoil.start) / (recoil.peak - recoil.start) :
+        (recoil.end - progress) / (recoil.end - recoil.peak);
+      physical.lift += envelope * (recoil.lift || 0);
+      physical.angle += envelope * (recoil.angle || 0) * (position.x < vw / 2 ? 1 : -1);
+    }
+
+    function positionProp(progress, age) {
       if (!prop) {
         if (propCanvas) propCanvas.hidden = true;
         return;
@@ -270,40 +520,36 @@
         node.insertBefore(propCanvas, menu);
         propCtx = propCanvas.getContext("2d");
       }
-      const rest = target();
-      const id = beat.prop?.to || beat.prop?.from || prop.data.anchor;
-      const mark = C.own(marks, id);
-      const sx = position.x, sy = position.y - 0.52 * size;
-      propStart.x = sx; propStart.y = sy;
-      propEnd.x = mark?.x ?? rest.x + size * 1.25;
-      propEnd.y = mark?.y ?? rest.y - size * 0.8;
-      const behavior = prop.data.behavior || "attach";
-      if (behavior === "bonk-from-edge") {
-        propStart.x = sx < vw / 2 ? vw + size / 2 : -size / 2;
-        propStart.y = clamp(sy - size * 1.1, 12, vh - 12);
-        propEnd.x = sx; propEnd.y = sy;
-        if (progress >= 0.27 && progress < 0.30) physical.lift = Math.min(physical.lift, -size * 0.04);
-        else if (progress >= 0.30 && progress < 0.58) physical.angle += 0.24 * Math.sin((progress - 0.3) * Math.PI / 0.28);
-      } else if (behavior === "burst") {
-        propEnd.x = sx; propEnd.y = sy;
+      const behavior = propBehavior(beat.prop, prop.data), curve = timing.prop[behavior];
+      const hand = behavior === "hand-liftoff" ? "hand" : undefined;
+      const returning = beat.prop?.action === "return";
+      const destination = beat.prop?.to || prop.data.anchor;
+      propPoint(propStart, beat.prop?.from || (returning ? destination : hand), !returning);
+      propPoint(propEnd, beat.prop?.to || (returning ? hand : destination), returning ||
+        behavior === "burst" || !!curve.edge);
+      if (curve.edge) {
+        const right = curve.edge === "right" || curve.edge === "away" && position.x < vw / 2;
+        propStart.x = right ? vw + size / 2 : -size / 2;
+        propStart.y = clamp(propEnd.y - size * 1.1, 12, vh - 12);
       }
-      if (beat.prop?.action === "return") {
-        C.own(C.propMotion, behavior)?.(progress, age, propEnd, propStart, size, propPosition);
-      } else {
-        (C.own(C.propMotion, behavior) || C.propMotion.attach)(progress, age, propStart, propEnd, size, propPosition);
-      }
+      curve.sample(progress, propFrame);
+      propPosition.x = mix(propStart.x, propEnd.x, propFrame.along) + size * propFrame.offsetX;
+      propPosition.y = mix(propStart.y, propEnd.y, propFrame.along) + size * (propFrame.arcY + propFrame.offsetY);
       const pixels = Math.ceil(dpr * size);
       if (propCanvas.width !== pixels || propCanvas.height !== pixels) propCanvas.width = propCanvas.height = pixels;
       propCtx.setTransform(pixels / rig.width, 0, 0, pixels / rig.height, 0, 0);
       propCtx.clearRect(0, 0, rig.width, rig.height);
       prop.draw(propCtx, age);
       propCanvas.hidden = false;
+      propCanvas.style.opacity = String(propFrame.alpha);
       propCanvas.style.width = propCanvas.style.height = size + "px";
-      propCanvas.style.transform = "translate3d(" + (propPosition.x - size / 2) + "px," + (propPosition.y - size / 2) + "px,0)";
+      propCanvas.style.transform = "translate3d(" + (propPosition.x - size / 2) + "px," + (propPosition.y - size / 2) +
+        "px,0) rotate(" + propFrame.rotDeg + "deg) scale(" + propFrame.scale + ")";
     }
 
     function effects(playing, progress, age) {
       const def = fx.data, count = playing?.count || 1;
+      if (!playing) progress = def?.kind === "float" ? age % 2.3 / 2.3 : 0;
       if (!def && count < 2) {
         if (decoration) decoration.hidden = true;
       } else {
@@ -316,7 +562,7 @@
         if (lastCount !== count) {
           lastCount = count;
           decoration.replaceChildren();
-          if (def?.file || def?.layers?.length || def?.frames) {
+          if (fx.drawable) {
             const image = doc.createElement("canvas");
             image.width = image.height = 96;
             decoration.append(image);
@@ -342,7 +588,7 @@
         decoration.hidden = false;
         decoration.style.transform = "translate3d(" + (position.x + size * 0.26) + "px," +
           (position.y - size * (0.77 + progress * 0.36)) + "px,0)";
-        decoration.style.opacity = String(Math.min(1, (1 - progress) * 4));
+        decoration.style.opacity = String(Math.min(1, (1 - progress) * 4, !playing && progress ? progress * 12 : 1));
         if (def?.kind === "particles") {
           const nodes = decoration.children;
           for (let i = 0; i < nodes.length; i++) {
@@ -354,11 +600,12 @@
       if (quip && !quip.hidden) quip.style.transform = "translate3d(" + position.x + "px," + (position.y - size * 0.95) + "px,0)";
     }
 
-    function look(age, dt) {
+    function look(age, dt, playing) {
       const key = beat.gaze;
       let x = (cursor.x - position.x) / 150, y = (cursor.y - position.y + size * 0.6) / 120;
-      const mark = C.own(marks, key === "caret" ? "composer-top" : key);
-      if (prop && key?.startsWith("prop:")) {
+      const mark = gazeMark(key, playing);
+      gaze.prop = !!prop && key === "prop:" + propAction(beat.prop);
+      if (gaze.prop) {
         x = (propPosition.x - position.x) / size;
         y = (propPosition.y - position.y + size * 0.61) / size;
       } else if (mark) {
@@ -366,7 +613,7 @@
         y = (mark.y - position.y + size * 0.61) / 160;
       } else if (key === "scan") { x = Math.sin(age * 3); y = 0.2; }
       else if (key === "up" || key === "down") { x = 0; y = key === "up" ? -1 : 1; }
-      const easing = 1 - Math.exp(-dt / 75);
+      const easing = 1 - Math.exp(-dt / (gaze.prop ? 36 : 75));
       gaze.x = mix(gaze.x, clamp(x, -1, 1), easing);
       gaze.y = mix(gaze.y, clamp(y, -1, 1), easing);
     }
@@ -379,10 +626,13 @@
       last = stamp;
       if (!rig) return;
       if (dirty) layout();
-      if (state.activity !== "idle" || drag) nextIdle = now + 45000;
+      if (posture.activity !== "idle" || drag) nextIdle = now + 45000;
       else if (now >= nextIdle) { fire("idle.long"); nextIdle = now + 45000; }
       const playing = runner.tick(now, !!drag?.moving);
-      const passive = state.activity === "idle" && now - lastBusy > 45000 ? C.passive.doze : C.own(C.passive, state.activity) || C.passive.idle;
+      const beats = timing.passive;
+      const idleMs = now - lastBusy;
+      const dozing = posture.activity === "idle" && idleMs > 45000 && (idleMs - 45000) % 45000 < 32000;
+      const passive = dozing ? beats.doze : C.own(beats, posture.activity) || beats.idle;
       const next = playing?.beat || passive;
       if (viewBeat !== next || viewPlaying !== playing) setBeat(next, playing);
       const rest = target();
@@ -390,8 +640,8 @@
       if (rest.corner) x = 12 + ((view.bounds[2] - view.bounds[0]) * size) / 2;
       if (drag?.moving) { x = drag.x; y = drag.y; }
       const age = (now - viewStart) / 1000;
-      const progress = playing?.beat.ms ? clamp((now - playing.start) / playing.beat.ms, 0, 1) : 0;
-      const mark = next.stage === "hop-bounce" && C.own(marks, next.gaze);
+      const progress = playing?.beat.ms ? clamp((now - playing.start) / playing.beat.ms, 0, 1) : playing ? 0 : age % 2.3 / 2.3;
+      const mark = playing && next.stage === "hop-bounce" && gazeMark(next.gaze, playing);
       if (mark && !drag?.moving) {
         const toward = progress * progress * (3 - 2 * progress);
         x = mix(beatOrigin.x, clamp(mark.x, size / 2, vw - size / 2), toward);
@@ -401,12 +651,21 @@
       position.x = mix(position.x, x, amount);
       position.y = mix(position.y, y, amount);
       arrived = true;
-      swingSpeed += (-swing * 45 - swingSpeed * 8) * dt / 1000;
-      swing = clamp(swing + swingSpeed * dt / 1000, -0.5, 0.5);
-      C.stageEffects.stay(progress, age, size, physical);
-      (C.own(C.stageEffects, next.stage) || C.stageEffects.stay)(progress, age, size, physical, swing);
-      positionProp(playing, progress, age);
-      look(age, dt);
+      const { stiffness, damping, maxSwing, bodyFallbackScale } = timing.drag;
+      // Substep the spring so the upper pack damping bound stays stable at
+      // the largest frame interval we accept after a stall.
+      const steps = Math.ceil(dt / 16) || 1, step = dt / (1000 * steps);
+      for (let i = 0; i < steps; i++) {
+        physics.swingVel += (-physics.swing * stiffness - physics.swingVel * damping) * step;
+        physics.swing = clamp(physics.swing + physics.swingVel * step, -maxSwing, maxSwing);
+      }
+      const pendulum = next.stage === "pendulum-drag";
+      (C.own(timing.stage, next.stage) || timing.stage.stay).sample(progress, physical);
+      physical.angle = physical.rotDeg * C.RAD + (pendulum && !view.articulatedDrag ? physics.swing * bodyFallbackScale : 0);
+      propRecoil(progress);
+      measureCharacter();
+      positionProp(progress, age);
+      look(age, dt, playing);
       placeCharacter(age);
       effects(playing, progress, age);
       schedule();
@@ -448,14 +707,14 @@
       controls.close();
       invalidated();
     }
-    hit.addEventListener("pointerdown", event => {
+    character.addEventListener("pointerdown", event => {
       if (event.button !== 0) return;
       controls.close();
       suppressClick = false;
       drag = { id: event.pointerId, startX: event.clientX, startY: event.clientY, x: position.x, y: position.y, lastX: event.clientX };
-      hit.setPointerCapture(event.pointerId);
+      character.setPointerCapture(event.pointerId);
     }, options);
-    hit.addEventListener("pointermove", event => {
+    character.addEventListener("pointermove", event => {
       if (drag?.id !== event.pointerId) return;
       const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
       if (!drag.moving) {
@@ -468,7 +727,9 @@
       }
       drag.x = clamp(drag.originX + dx, size / 3, vw - size / 3);
       drag.y = clamp(drag.originY + dy, size / 2, vh - 8);
-      swingSpeed = clamp(swingSpeed - (event.clientX - drag.lastX) * 0.085, -5, 5);
+      if (timing.drag.maxSwing) {
+        physics.swingVel = clamp(physics.swingVel - (event.clientX - drag.lastX) * timing.drag.impulse, -5, 5);
+      }
       drag.lastX = event.clientX;
     }, options);
     function drop(event) {
@@ -489,14 +750,17 @@
       drag = null;
       invalidated();
     }
-    for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) hit.addEventListener(name, drop, options);
-    hit.addEventListener("click", () => { if (!suppressClick) fire("user.poke"); suppressClick = false; }, options);
-    hit.addEventListener("dblclick", returnHome, options);
+    for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) character.addEventListener(name, drop, options);
+    character.addEventListener("click", () => { if (!suppressClick) fire("user.poke"); suppressClick = false; }, options);
+    character.addEventListener("dblclick", returnHome, options);
 
+    mountedRailObserver = observeRail;
+    if (rail) observeRail(rail, activeRid, true);
     requestPack();
     return {
       apply, reset, context, trackFrame, closeMenu: controls.close,
       dispose() {
+        if (mountedRailObserver === observeRail) mountedRailObserver = null;
         cancel.abort();
         frameInput?.abort();
         cancelAnimationFrame(frame);
@@ -510,5 +774,6 @@
     };
   }
 
-  C.mount = mount;
+  Object.assign(C, { mount, railSignals, signalPairs, resizeControl,
+    observeRail(fragment, activeRid, baseline) { mountedRailObserver?.(fragment, activeRid, baseline); } });
 })(window.WsCompanion);

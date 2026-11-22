@@ -41,14 +41,11 @@ func (c *conv) setPromptBoundary(rec *Record, startedAt int64, reportable bool) 
 	rec.TurnStartSeq = max(c.seq, c.lineOpen)
 }
 
-func (c *conv) restorePromptBoundary(before Record) {
-	c.update(func(rec *Record) {
-		rec.TurnOpen, rec.TurnStartedAt, rec.TurnStartSeq = before.TurnOpen, before.TurnStartedAt, before.TurnStartSeq
-	})
-}
-
 // sendStandalonePrompt persists the boundary for prompts sent outside the
 // inbox drain. Internal prompts wait for ACP without opening a parent result.
+// The boundary is recorded only once the holder accepted the prompt: one
+// recorded before it would leave a successor waiting for a response to a
+// prompt that never reached the harness.
 func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
 	// The prompt is a keep-awake member while its send is in flight. A
 	// successful send's caller opens the turn (beginTurn, or compactCommand
@@ -57,20 +54,13 @@ func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
 	c.awakeSending = true
 	c.syncAwake()
 	defer func() { c.awakeSending = false }()
-	before := c.record()
-	if !before.heldAgyWorker() {
-		return send()
+	heldAgy := c.record().heldAgyWorker()
+	startedAt := c.r.opts.Now().UnixMilli()
+	if err := send(); err != nil || !heldAgy {
+		return err
 	}
-	err := c.update(func(rec *Record) { c.setPromptBoundary(rec, c.r.opts.Now().UnixMilli(), reportable) })
-	if err != nil {
-		err = fmt.Errorf("persist turn start: %w", err)
-	} else {
-		err = send()
-	}
-	if err != nil {
-		c.restorePromptBoundary(before)
-	}
-	return err
+	c.update(func(rec *Record) { c.setPromptBoundary(rec, startedAt, reportable) })
+	return nil
 }
 
 // startProcess resolves the profile again (it may have changed since the
@@ -608,15 +598,24 @@ func (c *conv) reattach() {
 	if err != nil {
 		// The holder stays in the record: the next start ends it first.
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
-		// No process came back, so no replay will ever settle the turn the
-		// record showed open: end the replay and drop that turn, or the
-		// keep-awake membership it froze would hold the assertion for good.
-		c.replaying = false
-		if c.turn {
-			c.setStatus(func() { c.turn = false })
-			c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnEnd})
+		if !rec.Lead {
+			// A worker keeps replaying until checkReattach reads this after
+			// the holder scan and ends the recovery (recoveryFailed drops
+			// the open turn); the next loop step's sync then releases the
+			// keep-awake membership.
+			c.rejoinErr = err.Error()
+		} else {
+			// No process came back, so no replay will ever settle the turn
+			// the record showed open: end the replay and drop that turn, or
+			// the keep-awake membership it froze would hold the assertion
+			// for good.
+			c.replaying = false
+			if c.turn {
+				c.setStatus(func() { c.turn = false })
+				c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnEnd})
+			}
+			c.publishAwake(c.wantAwake())
 		}
-		c.publishAwake(c.wantAwake())
 	}
 }
 
@@ -627,6 +626,15 @@ func (c *conv) reattach() {
 func (c *conv) checkReattach() {
 	// Before the first scan an unlisted holder may be one not attached yet;
 	// holdersScanned asks again after it.
+	if c.replaying && c.proc == nil && c.rejoinErr != "" && c.r.scanDone() {
+		// A worker rejoin that failed (reattach) has no process to replay
+		// into. End the recovery so the start put off until the scan runs;
+		// it ends the held process first (retireHolder).
+		reason := "rejoin: " + c.rejoinErr
+		c.rejoinErr = ""
+		c.recoveryFailed(reason)
+		return
+	}
 	if !c.replaying || c.replayAsked || c.proc == nil || !c.r.scanDone() {
 		return
 	}
@@ -778,7 +786,15 @@ func (c *conv) recoveryFailed(reason string) {
 	if c.rec.TurnOpen {
 		c.settleTurn(TurnFailed, text, c.turnMark)
 	}
+	hadProc := c.proc != nil
 	c.stopProcess("")
+	if !hadProc {
+		// A failed rejoin has no process, so stopProcess returned before
+		// processEnded; the state restored for the held process (an
+		// internal compaction turn, steered reports) still needs that
+		// end-of-process cleanup, or it discards or blocks the next turn.
+		c.processEnded()
+	}
 	c.r.revokeToken(c.rec.ReplyID)
 	if c.rec.Capability != "" || c.rec.MCPToken != "" {
 		c.update(func(rec *Record) { rec.Capability = ""; rec.forgetMCP() })

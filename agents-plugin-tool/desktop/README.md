@@ -121,6 +121,12 @@ python3 -m unittest discover -s scripts -p test_build_slot.py -v
   documents. External HTTP(S) links open in the system browser from top-level
   links and popups. Other schemes are blocked. Popup requests never create a
   second webview.
+- Downloads are accepted only from the pinned dashboard origin and saved to the
+  user's Downloads folder under the server's file name, cleaned to one path
+  component and numbered `name (1).ext` rather than overwriting; a native
+  notification reports the end. macOS needs the navigation delegate to hand
+  WebKit's download to Wry; on Windows the same handler replaces WebView2's
+  default download UI (Wry already suppresses it).
 - The renderer uses the dashboard's existing draft storage. The native close
   asks the pinned top-level renderer whether it recovered the draft and shows
   the native **Stay / Close** prompt if recovery fails or the renderer is too

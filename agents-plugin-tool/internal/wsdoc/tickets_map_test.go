@@ -685,3 +685,164 @@ func TestTicketMapSourcesNameNoRepositoryTickets(t *testing.T) {
 		}
 	}
 }
+
+// TestTicketMapRacyBuildKeepsPublishedEntry pins that a racy (unmemoized)
+// build replaces the root's memo entry instead of clearing the one an earlier
+// caller already holds and reads after the lock is released.
+func TestTicketMapRacyBuildKeepsPublishedEntry(t *testing.T) {
+	resetTicketMapState(t)
+	root := t.TempDir()
+	writeMapBoard(t, root, map[string]string{"todo/260101-feat-stable": mapTicket("Stable")})
+	held, err := ticketMapFor(root)
+	if err != nil || held.result == nil || len(held.json) == 0 {
+		t.Fatalf("stable build: entry %+v err %v", held, err)
+	}
+	mustWrite(t, root, TicketsDir+"/todo/260102-feat-fresh.md", mapTicket("Fresh"))
+	buildTicketMap(t, root)
+	if held.result == nil || len(held.json) == 0 {
+		t.Fatal("a racy build cleared an entry already returned to a caller")
+	}
+}
+
+// TestTicketMapConcurrentRacyRebuilds runs readers against builds that
+// alternate between memoized and racy boards; under -race it pins that no
+// caller reads an entry another build writes.
+func TestTicketMapConcurrentRacyRebuilds(t *testing.T) {
+	resetTicketMapState(t)
+	root := t.TempDir()
+	writeMapBoard(t, root, map[string]string{
+		"todo/260101-feat-stable": mapTicket("Stable"),
+		"todo/260102-feat-fresh":  mapTicket("Fresh"),
+	})
+	fresh := filepath.Join(root, TicketsDir, "todo", "260102-feat-fresh.md")
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	failures := make(chan string, 8)
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if g%2 == 0 {
+					raw, err := TicketMapJSON(root)
+					if err != nil || len(raw) == 0 {
+						failures <- "TicketMapJSON returned empty bytes or " + errString(err)
+						return
+					}
+					continue
+				}
+				r, err := TicketMap(root)
+				if err != nil || r == nil {
+					failures <- "TicketMap returned nil or " + errString(err)
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < 40; i++ {
+		when := time.Now()
+		if i%2 == 0 {
+			when = when.Add(-time.Hour)
+		}
+		if err := os.Chtimes(fresh, when, when); err != nil {
+			t.Fatal(err)
+		}
+		buildTicketMap(t, root)
+	}
+	close(stop)
+	wg.Wait()
+	close(failures)
+	for msg := range failures {
+		t.Fatal(msg)
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return "no error"
+	}
+	return err.Error()
+}
+
+// TestTicketMapVanishedTicketIsSkipped moves one open ticket and one closed
+// ref away between listing (or lstat) and read: the build keeps every other
+// ticket, treats the vanished ref as dangling, and is not memoized.
+func TestTicketMapVanishedTicketIsSkipped(t *testing.T) {
+	resetTicketMapState(t)
+	root := t.TempDir()
+	writeMapBoard(t, root, map[string]string{
+		"ready/260101-feat-ready-sample": mapTicket("Ready sample"),
+		"todo/260102-feat-gone-sample":   mapTicket("Gone sample"),
+		"todo/260103-feat-kept-sample":   mapTicket("Kept sample", "related:", "  260100-feat-closed-sample: note"),
+	})
+	writeOldTicket(t, root, TicketsDir+"/.done/260100-feat-closed-sample.md", mapTicket("Closed sample"), time.Hour)
+	orig := readTicketFile
+	readTicketFile = func(path string) ([]byte, error) {
+		base := filepath.Base(path)
+		if base == "260102-feat-gone-sample.md" || base == "260100-feat-closed-sample.md" {
+			return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
+		}
+		return orig(path)
+	}
+	t.Cleanup(func() { readTicketFile = orig })
+
+	r := buildTicketMap(t, root)
+	if got, want := mapStems(r), []string{"260101-feat-ready-sample", "260103-feat-kept-sample"}; !slices.Equal(got, want) {
+		t.Fatalf("stems = %v, want %v", got, want)
+	}
+	if r.Meta.Dangling != 1 {
+		t.Fatalf("dangling = %d, want the vanished ref", r.Meta.Dangling)
+	}
+	ticketMapState.mu.Lock()
+	state := ticketMapState.roots[root]
+	ticketMapState.mu.Unlock()
+	if state == nil || state.result != nil {
+		t.Fatalf("vanished-file build memo = %+v, want tracked and unmemoized", state)
+	}
+}
+
+// TestTicketMapFailedBuildStaysUnderRootCap fails a build after it cached the
+// ready column's documents: the root is tracked, so eviction releases them.
+func TestTicketMapFailedBuildStaysUnderRootCap(t *testing.T) {
+	resetTicketMapState(t)
+	t.Cleanup(func() { resetTicketMapState(t) })
+	failing := t.TempDir()
+	writeMapBoard(t, failing, map[string]string{
+		"ready/260101-feat-ready-sample": mapTicket("Ready sample"),
+		"todo/260102-feat-locked-sample": mapTicket("Locked sample"),
+	})
+	boom := errors.New("access denied")
+	orig := readTicketFile
+	readTicketFile = func(path string) ([]byte, error) {
+		if filepath.Base(path) == "260102-feat-locked-sample.md" {
+			return nil, boom
+		}
+		return orig(path)
+	}
+	t.Cleanup(func() { readTicketFile = orig })
+	if _, err := TicketMap(failing); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the read error", err)
+	}
+	if docs, _ := rootDocsCached(failing); docs != 1 {
+		t.Fatalf("failed build cached %d docs, want the ready one", docs)
+	}
+	ticketMapState.mu.Lock()
+	_, tracked := ticketMapState.roots[failing]
+	ticketMapState.mu.Unlock()
+	if !tracked {
+		t.Fatal("failed build root is not tracked under the root cap")
+	}
+	for i := 0; i < ticketMapRootCap; i++ {
+		other := t.TempDir()
+		writeEvictBoard(t, other)
+		buildTicketMap(t, other)
+	}
+	if docs, _ := rootDocsCached(failing); docs != 0 {
+		t.Fatalf("evicted failed root still holds %d docs", docs)
+	}
+}

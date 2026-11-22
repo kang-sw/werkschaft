@@ -1169,7 +1169,8 @@ func (s layoutScope) orderTree(groups []railGroupRows) {
 
 // railSetBusy sets r.Active and r.Busy (RailRow), each of its children's
 // first, and reports Busy. Only a live row is either; an active or busy
-// live child keeps its parent so at any depth. Exec jobs known only by
+// live child keeps its parent so at any depth, as does a running agent at
+// any depth of the row's own snapshot (runningAgents). Exec jobs known only by
 // worktree make a row busy, never active; its own hosted jobs make it active.
 func railSetBusy(r *RailRow) bool {
 	kidBusy, kidActive := false, false
@@ -1182,7 +1183,7 @@ func railSetBusy(r *RailRow) bool {
 		}
 	}
 	r.Active = r.Live && (kidActive || r.Working || r.permission || r.Approval != nil ||
-		r.Subagents > 0 || r.BackgroundTasks > 0 || r.OwnExecJobs > 0)
+		r.Subagents > 0 || r.runningAgents > 0 || r.BackgroundTasks > 0 || r.OwnExecJobs > 0)
 	r.Busy = r.Active || (r.Live && (kidBusy || r.ExecJobs > 0))
 	return r.Busy
 }

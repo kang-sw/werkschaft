@@ -169,6 +169,48 @@ func setPiVersion(t *testing.T, version string, err error) {
 	t.Cleanup(func() { piProbe, piVersion = previousProbe, previousCache })
 }
 
+// PiReadyKnown answers without running pi: from a fresh on-disk record
+// (read once per process) until the process probed, then from the probe;
+// unknown when neither exists.
+func TestPiReadyKnownNeverRunsThePiProbe(t *testing.T) {
+	probes, reads := 0, 0
+	previousProbe, previousRecord, previousCache := piProbe, piProbeRecord, piVersion
+	t.Cleanup(func() { piProbe, piProbeRecord, piVersion = previousProbe, previousRecord, previousCache })
+	piProbe = func(context.Context) (string, error) { probes++; return "1.0.0", nil }
+	record, recorded := "", false
+	piProbeRecord = func() (string, bool) { reads++; return record, recorded }
+
+	piVersion = new(piVersionCache)
+	for range 2 {
+		if known, err := PiReadyKnown(); known || err != nil {
+			t.Fatalf("no record, no probe = %v, %v; want unknown", known, err)
+		}
+	}
+	record, recorded = "0.1.0", true
+	piVersion = new(piVersionCache)
+	if known, err := PiReadyKnown(); !known || err == nil || !strings.Contains(err.Error(), "pi 0.1.0 is installed") {
+		t.Fatalf("an old on-disk record = %v, %v", known, err)
+	}
+	record = "9.0.0"
+	piVersion = new(piVersionCache)
+	for range 2 {
+		if known, err := PiReadyKnown(); !known || err != nil {
+			t.Fatalf("a usable on-disk record = %v, %v", known, err)
+		}
+	}
+	if probes != 0 || reads != 3 {
+		t.Fatalf("PiReadyKnown ran the probe %d times and read the record %d times; want 0 and once per process (3)", probes, reads)
+	}
+	// Once the process probed, its answer wins over the record.
+	piProbe = func(context.Context) (string, error) { probes++; return "", errors.New("pi: not found") }
+	if err := PiReady(); err == nil || probes != 1 {
+		t.Fatalf("PiReady = %v after %d probes", err, probes)
+	}
+	if known, err := PiReadyKnown(); !known || err == nil || !strings.Contains(err.Error(), "no usable pi") || probes != 1 {
+		t.Fatalf("after the probe = %v, %v (%d probes)", known, err, probes)
+	}
+}
+
 // piFixture is a lead session on a root whose launcher loaded manifests,
 // with a server built over agents (nil: the direct path).
 type piFixture struct {

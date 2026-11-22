@@ -3,6 +3,8 @@ kind: render
 delegates: false
 role: delegate
 tier: medium
+tier-role: ticket-fact-populator
+tier-parent: review:*
 variables:
   - RoleModel
 ---
