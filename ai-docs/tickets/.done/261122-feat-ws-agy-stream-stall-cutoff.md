@@ -404,3 +404,12 @@ Verification:
 - Mutation checks: removing the stale-tail rule, restoring a receipt-time boundary, or making the marker synchronous each made a test fail.
   - One mutation is not caught: an asynchronous marker started before the interrupt. Ordering rests on the `defer`, and such a marker cannot delay the cut.
 - holder.py and the shipped manifests are unchanged, so the Python holder suite and the Pi bundles did not need rerunning or regenerating.
+
+#### Edition (782dff1aa) - 2026-11-22
+
+- **Correction to the f2d4940d6 Edition.** agy does not write a `Sending user message to conversation` line for every prompt. Counting line tags across the local worker logs (no content copied):
+  - `server.go:1883` follows 418 of 2152 `session/prompt` requests, and only 9 of the 246 prompts sent right after a `session/cancel`, which is how an automatic continue arrives.
+  - Lines that do follow every prompt: agy's generic request line (`server.go:213`, `ACP Request received: session/prompt`, one per request by definition) and `latency_breakdown.go:168`, within 2 s of all 2152 prompts and all 246 after a cancel.
+  - The last-line guard does not depend on the user-message line: any glog line of the active worker in the window satisfies it.
+- **Minor (782dff1aa).** The stall test rig orders fixture lines by their parsed instants, not by yearless text.
+- **Open.** The round 4 Critical is still open: worker A's last line falls inside the skew window while worker B logs the live header in its own file. Its settled fix needs per-prompt evidence and named the user-message line, which these counts rule out; the lead decides how to revise it.
