@@ -158,7 +158,11 @@ func TestSlowModelListDoesNotHoldChoices(t *testing.T) {
 		t.Error("the other harnesses were not listed")
 	}
 	// A second request while the listing runs starts no second fetch.
+	for deadline := time.Now().Add(5 * time.Second); hits.Load() == 0 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
 	sh.support.Choices(context.Background())
+	time.Sleep(50 * time.Millisecond)
 	if n := hits.Load(); n != 1 {
 		t.Errorf("model list requests = %d, want 1", n)
 	}
