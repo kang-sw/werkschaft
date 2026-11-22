@@ -347,7 +347,14 @@
       if (!paneFrame) paneFrame = requestAnimationFrame(notePanes);
     }, { passive: true });
   });
+  // Region messages that arrive in one frame (a warm switch's reconnect sends
+  // every region that changed meanwhile) share the first one's snapshot: the
+  // offsets read again after a swap's writes would force a layout per message
+  // and restoreScroll keeps only the first offset of each scroller anyway.
+  // The frame, or the owner's own input, ends the share.
+  var scrollSnap = null;
   function scrollState() {
+    if (scrollSnap) return scrollSnap;
     // The observer owns visibility. Snapshot offsets before swap writes,
     // without getClientRects/style probes or any reads of owned scrollers.
     var s = [];
@@ -356,6 +363,8 @@
       if (el && !el.wbScrollOwner && (paneObserver ? paneVisible[id] : visible(el))) s.push([el, el.scrollTop]);
     });
     if (doc.scrollingElement && !doc.scrollingElement.wbScrollOwner) s.push([doc.scrollingElement, doc.scrollingElement.scrollTop]);
+    scrollSnap = s;
+    requestAnimationFrame(function () { scrollSnap = null; });
     return s;
   }
   // Restore after the swap's writes; collect all current offsets before any
@@ -375,7 +384,7 @@
     });
   }
   ["wheel", "touchstart", "pointerdown", "keydown"].forEach(function (type) {
-    window.addEventListener(type, function () { scrollRestore.clear(); }, { capture: true, passive: true });
+    window.addEventListener(type, function () { scrollRestore.clear(); scrollSnap = null; }, { capture: true, passive: true });
   });
 
   // The conversation stays at the bottom while the user has it there. Its
