@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exec-job HUD — mockup (chat strip badges, peek, stop)</title>
+  <link rel="stylesheet" href="exec-hud.css">
+</head>
+<body style="margin:0">
+<div class="xh page" id="root" data-theme="dark">
+  <header class="ctl" aria-label="Mockup controls">
+    <div class="brand"><span class="tagc">EXEC HUD</span><strong id="ttl">Hosted exec jobs in the chat strip</strong></div>
+    <span class="lbl" data-i="ctl.view">View</span>
+    <div class="seg" id="seg-view" role="group"><button data-v="live" aria-pressed="true">Live</button><button data-v="gallery" aria-pressed="false">All states</button></div>
+    <span class="lbl" data-i="ctl.theme">Theme</span>
+    <div class="seg" id="seg-theme" role="group"><button data-v="dark" aria-pressed="true">Dark</button><button data-v="light" aria-pressed="false">Light</button></div>
+    <span class="lbl" data-i="ctl.lang">Language</span>
+    <div class="seg" id="seg-lang" role="group"><button data-v="en" aria-pressed="true">EN</button><button data-v="ko" aria-pressed="false">KO</button></div>
+  </header>
+
+  <section id="live" class="stagewrap">
+    <div class="ctl" aria-label="Live scenario controls">
+      <span class="lbl" data-i="ctl.scn">Scenario</span>
+      <div class="seg" id="seg-scn" role="group">
+        <button data-v="idle" data-i="scn.idle">Idle</button><button data-v="one" data-i="scn.one">1 job</button>
+        <button data-v="many" data-i="scn.many" aria-pressed="true">Many (7)</button><button data-v="states" data-i="scn.states">Ended states</button>
+      </div>
+      <span class="lbl" data-i="ctl.w">Width</span>
+      <div class="seg" id="seg-w" role="group"><button data-v="desk" data-i="w.desk" aria-pressed="true">Desktop</button><button data-v="narrow" data-i="w.narrow">Narrow</button></div>
+      <span class="lbl" data-i="ctl.agent">Agent is</span>
+      <div class="seg" id="seg-agent" role="group">
+        <button data-v="working" data-i="ag.working" aria-pressed="true">Working</button><button data-v="idle" data-i="ag.idle">Idle</button>
+        <button data-v="closed" data-i="ag.closed">Closed</button><button data-v="down" data-i="ag.down">Unreachable</button>
+      </div>
+      <div class="seg"><button id="add-agent" data-i="ctl.add.agent">+ agent job</button><button id="add-user" data-i="ctl.add.user">+ ! job</button></div>
+    </div>
+    <div id="stage"></div>
+    <p class="legend" id="legend"></p>
+  </section>
+
+  <section id="gallery" class="gallery" hidden></section>
+</div>
+
+<script src="exec-hud.js"></script>
+<script src="exec-hud-gallery.js"></script>
+<script>
+(function () {
+  "use strict";
+  var root = document.getElementById("root"), stage = document.getElementById("stage"), gal = document.getElementById("gallery");
+  var lang = "en", live = null, scn = "many", narrow = false, agent = "working";
+  var LEG = {
+    en: 'Hover a chip: command · cwd · elapsed · owner. Click (or <kbd>Enter</kbd>): live output peek. Hover a chip corner ■ (or open the peek and press <b>Stop</b>): confirm, then the owning agent is told. <kbd>←</kbd><kbd>→</kbd> move across chips and tabs, <kbd>Esc</kbd> cancels the confirm, then closes the panel. Chips on a finished job show its outcome and a × dismiss. Agent state above decides how the notice lands.',
+    ko: '칩에 호버: 명령 · cwd · 경과 · 실행 주체. 클릭(<kbd>Enter</kbd>): 실시간 출력 peek. 칩 모서리 ■ 호버(또는 peek의 <b>중지</b>): 확인 후 소유 에이전트에게 알림. <kbd>←</kbd><kbd>→</kbd> 칩·탭 이동, <kbd>Esc</kbd>는 확인 취소 → 패널 닫기. 끝난 작업 칩은 결과와 × 닫기를 보여줍니다. 위의 ‘에이전트 상태’가 알림이 도달하는 방식을 결정합니다.'
+  };
+  function T(k) { return (ExecHud.I18N[lang][k]) || ExecHud.I18N.en[k] || k; }
+  function labels() {
+    Array.prototype.forEach.call(document.querySelectorAll("[data-i]"), function (n) { n.textContent = T(n.getAttribute("data-i")); });
+    document.getElementById("legend").innerHTML = LEG[lang];
+    document.getElementById("ttl").textContent = lang === "ko" ? "채팅 strip의 hosted exec 작업" : "Hosted exec jobs in the chat strip";
+    document.documentElement.lang = lang;
+  }
+  function mountLive() {
+    if (live) live.destroy();
+    live = ExecHud.create(stage, { lang: lang, narrow: narrow, agent: agent, scenario: scn, paneW: 780, resizable: true, subagents: 3, bg: 2 });
+    live.onAgentChange = function (a) { agent = a; seg("seg-agent", a); };
+  }
+  function mountGallery() { ExecHudGallery.build(gal, lang); }
+  function seg(id, v) { Array.prototype.forEach.call(document.getElementById(id).children, function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-v") === v ? "true" : "false"); }); }
+  function bind(id, fn) { document.getElementById(id).addEventListener("click", function (e) { var b = e.target.closest("button"); if (!b) return; var v = b.getAttribute("data-v"); seg(id, v); fn(v); }); }
+  bind("seg-view", function (v) { document.getElementById("live").hidden = v !== "live"; gal.hidden = v !== "gallery"; if (v === "gallery") mountGallery(); });
+  bind("seg-theme", function (v) { root.setAttribute("data-theme", v); });
+  bind("seg-lang", function (v) { lang = v; labels(); mountLive(); if (!gal.hidden) mountGallery(); });
+  bind("seg-scn", function (v) { scn = v; live.seed(v); live.cfg({ agent: agent }); });
+  bind("seg-w", function (v) { narrow = v === "narrow"; live.cfg({ narrow: narrow }); live.relayout(); });
+  bind("seg-agent", function (v) { agent = v; live.cfg({ agent: v }); });
+  var finiteTests = [{ kind: "test", finishAfter: 26, finishExit: 0 }, { kind: "make", finishAfter: 22, finishExit: 2 }];
+  var fi = 0;
+  document.getElementById("add-agent").addEventListener("click", function () { var s = finiteTests[fi++ % 2]; live.addJob({ kind: s.kind, finishAfter: s.finishAfter, finishExit: s.finishExit, preLines: 2 }); });
+  document.getElementById("add-user").addEventListener("click", function () { live.addJob({ kind: "dev", owner: "user", preLines: 2 }); });
+  document.fonts && document.fonts.ready.then(function () { if (live) live.relayout(); });
+  labels(); mountLive();
+  var q = location.search; if (q.indexOf("gallery") >= 0) { document.querySelector('#seg-view [data-v="gallery"]').click(); }
+  window.__hud = function () { return live; };
+})();
+</script>
+</body>
+</html>
