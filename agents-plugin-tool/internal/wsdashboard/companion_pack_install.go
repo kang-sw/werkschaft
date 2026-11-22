@@ -206,6 +206,14 @@ func (s *CompanionPackStore) renameFile(oldPath, newPath string) error {
 	return os.Rename(oldPath, newPath)
 }
 
+func (s *CompanionPackStore) removeTree(path string) error {
+	s.fsop("remove")
+	if s.removeAll != nil {
+		return s.removeAll(path)
+	}
+	return os.RemoveAll(path)
+}
+
 // checkPacksRoot refuses a pack root that is a link, as the scan does: an
 // install or uninstall through it would act outside the config home.
 func (s *CompanionPackStore) checkPacksRoot(paths companionInstallPaths) error {
@@ -231,13 +239,19 @@ const (
 	companionUninstallAside = "~"
 )
 
-// recoverStaging puts back a previous pack that a crash or a failed rollback
-// left in a staging run (swapIn moves it to <run>/.<id>; an uninstall's
-// <run>/~<id> is never restored). A moved-aside copy is
-// deleted only after its target is confirmed in place, which prepareStaging's
-// removal of the run then does. Callers hold installMu and run it before
-// prepareStaging.
-func (s *CompanionPackStore) recoverStaging(opts wsconfig.Options, paths companionInstallPaths) error {
+// recoverStaging keeps one invariant: a "."-named backup is recoverable only
+// while its target is absent, and none survives an operation. A backup whose
+// target exists is the leftover of a successful update (its deferred run
+// removal failed) and is removed here; if that removal fails the operation is
+// refused, because a later uninstall of the target would otherwise make the
+// stale backup look like a pack to restore. With the invariant, at most one
+// backup per ID has a missing target (the swap that failed its rollback); more
+// than one is refused rather than guessed between. A restored backup is
+// deleted only by prepareStaging's removal of the run, after its target is
+// confirmed in place. An uninstall's "~" copy is never touched. Callers hold
+// installMu and run it before prepareStaging. Any restore that succeeded is
+// published before returning, even when a later one fails.
+func (s *CompanionPackStore) recoverStaging(opts wsconfig.Options, paths companionInstallPaths) (err error) {
 	s.fsop("lstat")
 	if info, err := os.Lstat(paths.staging); err != nil || info.Mode().Type() != fs.ModeDir {
 		return nil // absent, or refused later by prepareStaging
@@ -250,7 +264,8 @@ func (s *CompanionPackStore) recoverStaging(opts wsconfig.Options, paths compani
 	if err != nil {
 		return fail()
 	}
-	restored := false
+	type backup struct{ id, path string }
+	var missing []backup
 	for _, run := range runs {
 		if !run.IsDir() {
 			continue
@@ -266,22 +281,38 @@ func (s *CompanionPackStore) recoverStaging(opts wsconfig.Options, paths compani
 			if !dotted || !child.IsDir() || !companionPackID.MatchString(id) {
 				continue
 			}
-			target := filepath.Join(paths.packs, id)
+			path := filepath.Join(runDir, child.Name())
 			s.fsop("lstat")
-			if _, err := os.Lstat(target); err == nil {
-				continue // in place: the copy is stale
+			if _, err := os.Lstat(filepath.Join(paths.packs, id)); err == nil {
+				if s.removeTree(path) != nil {
+					return companionRefuse(http.StatusInternalServerError, "cannot remove a stale companion pack backup left in staging")
+				}
+				continue
 			} else if !errors.Is(err, fs.ErrNotExist) {
 				return fail()
 			}
-			s.fsop("mkdir")
-			if os.MkdirAll(paths.packs, 0o755) != nil || s.renameFile(filepath.Join(runDir, child.Name()), target) != nil {
-				return fail()
-			}
-			restored = true
+			missing = append(missing, backup{id, path})
 		}
 	}
-	if restored {
-		s.reload(opts)
+	seen := map[string]bool{}
+	for _, b := range missing {
+		if seen[b.id] {
+			return companionRefuse(http.StatusInternalServerError, "several previous copies of a companion pack are left in staging; remove the staging directory yourself after choosing one")
+		}
+		seen[b.id] = true
+	}
+	restored := false
+	defer func() {
+		if restored {
+			s.reload(opts)
+		}
+	}()
+	for _, b := range missing {
+		s.fsop("mkdir")
+		if os.MkdirAll(paths.packs, 0o755) != nil || s.renameFile(b.path, filepath.Join(paths.packs, b.id)) != nil {
+			return fail()
+		}
+		restored = true
 	}
 	return nil
 }
@@ -307,8 +338,7 @@ func (s *CompanionPackStore) prepareStaging(paths companionInstallPaths) (string
 			return "", companionRefuse(http.StatusInternalServerError, "cannot list the companion staging directory")
 		}
 		for _, entry := range entries {
-			s.fsop("remove")
-			_ = os.RemoveAll(filepath.Join(paths.staging, entry.Name()))
+			_ = s.removeTree(filepath.Join(paths.staging, entry.Name()))
 		}
 	}
 	s.fsop("mkdir")
@@ -490,8 +520,7 @@ func (s *CompanionPackStore) install(opts wsconfig.Options, plan companionInstal
 		if stranded {
 			return // the run holds the only copy of a previous pack
 		}
-		s.fsop("remove")
-		_ = os.RemoveAll(run)
+		_ = s.removeTree(run)
 	}()
 	now := time.Now().UTC().Format(time.RFC3339)
 	var written []staged
@@ -725,8 +754,7 @@ func (s *CompanionPackStore) uninstall(opts wsconfig.Options, id string) (*compa
 		return nil, err
 	}
 	defer func() {
-		s.fsop("remove")
-		_ = os.RemoveAll(run)
+		_ = s.removeTree(run)
 	}()
 	var moved error
 	snapshot := s.swapAndLoad(opts, func() {

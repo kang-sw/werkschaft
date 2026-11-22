@@ -43,6 +43,7 @@ type CompanionPackStore struct {
 	installMu sync.Mutex
 	trace     func(op string)                     // counts installer file operations in tests
 	rename    func(oldPath, newPath string) error // injects rename failures in tests; nil selects os.Rename
+	removeAll func(path string) error             // injects removal failures in tests; nil selects os.RemoveAll
 }
 
 type companionPackOpen func(parent companionPackFile, name string, directory bool) (companionPackFile, error)
