@@ -504,3 +504,74 @@ Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
 - `go test ./internal/wsagent -run 'Agy|Agent|Worker|Held|Tier|Lead|Spawn|Child|REST|Registration|Wake|Deliver|Rejoin|Codex|Expir|Ownership|Downgrade|Reattach|Recovery|Interrupt|Watchdog|ModelWait|Stop|Archive|Hidden|Idle|Pi'`:
   ok (125.8s).
 - `go vet ./internal/wsagent`: clean. gofmt is clean on the touched files.
+
+#### Edition (4d16df74f) - 2026-11-22
+
+Round 6 of the codex review. The delta confirmed the manual Stop fix for both
+retirement kinds, and confirmed idle, archive, and daemon shutdown are fine.
+It raised two more items; `4d16df74f` fixes both.
+
+**N. A close during a failed retirement stop.** `CloseConversation`, directly
+or through a parent's cascade, is another `stopProcess` caller. Before the fix:
+- `closeIf` marked the conversation closed before `finishClose` retried the
+  holder stop;
+- when that stop failed, `closeOne` still dropped the conversation from
+  `r.convs`;
+- so a live holder was left with no heartbeat retry and no usable Stop.
+
+Now `close()` first calls `closeRetired()`. While `retiringHolder()` holds, it
+retries the holder's own stop through `retryRetirement`, before anything is
+marked closed. If that stop fails again:
+- the close returns `errHolderNotEnded`, a 409 that carries the stop error;
+- nothing is marked closed, and the conversation stays in `r.convs` with its
+  `HolderID`, its retirement flag, `replaying`, and the heartbeat retry;
+- in a cascade, `CloseConversation` stops at that descendant before closing
+  any ancestor. Descendants are visited deepest first, so the parent stays
+  open and closing it again retries the whole cascade.
+
+Other close errors in a cascade (already closed, unknown) are still ignored, as
+before. Existing callers already handle a close error; the expiry path logs it
+and retries on a later heartbeat without forgetting the session.
+
+**O. A deliberate Stop no longer wakes held input.** When a downgrade
+retirement's stop succeeded, it always signalled the inbox. So input queued
+during a failing retry relaunched the worker at once, even when a user's Stop
+or a close drove that success. `Runner.Stop` promises held input waits for
+the next send. `retryRetirement` and `retireDowngradedWorker` now take a
+`wake` flag. Only the heartbeat path (`checkReattach`) sets it; `stopProcess`
+and `closeRetired` pass false.
+
+Tests:
+- `TestDowngradeRetirementRetriesStop` gains three outcomes:
+  - `queued then user stop`: input is queued during the failing retry, then a
+    user Stop succeeds. No relaunch follows for 300 ms (no launch, no holder,
+    no open turn). The next send then wakes the worker.
+  - `close` and `parent close`: the retirement stop is failing when the close
+    runs. The close is refused with `errHolderNotEnded` after a holder stop
+    attempt. Both conversations stay in the runner, the parent is not closed,
+    the child keeps its holder and open turn, and the retry stays armed (a
+    manual heartbeat retries). Once the stop succeeds, the next close retires
+    and closes the child (and the parent in the cascade) after four holder
+    stops in all. A further close is refused as closed and stops nothing.
+- New `TestAgyWorkerCloseDuringAFailedRetirementKeepsTheConversation` runs the
+  same close flow for the lead-only retirement. It also checks that the turn
+  is reported once, failed with the agy reason.
+
+Mutation checks (each reverted afterwards):
+- always signalling the inbox fails `queued then user stop`: the worker
+  relaunched as h2;
+- removing the close guard fails `close`, `parent close`, and the agy close
+  test;
+- ignoring the cascade error fails `parent close` (`close error = <nil>`).
+
+The agy paragraph of `ai-docs/manuals/ws-mcp.md` now describes the refused
+close and the Stop that does not wake held input.
+
+Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+- `go test ./internal/wsagent -count=1 -run 'TestDowngradeRetirement|TestAgyWorker'`:
+  ok.
+- `go test ./internal/wsagent -count=1 -run 'Agy|Rejoin|Downgrade|Retire|Recovery|Holder|Worker|Stop|Close|Archive|Hidden|Idle|Pi|Expire|Cascade|Descend|Children|Spawn'`:
+  ok (351.5s).
+- `go test ./internal/mcp -count=1 -run 'Close|PiTool'`: ok.
+- `go vet ./internal/wsagent ./internal/mcp`: clean. gofmt is clean on the
+  touched files.
