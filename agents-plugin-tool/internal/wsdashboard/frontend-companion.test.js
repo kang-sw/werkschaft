@@ -334,3 +334,146 @@ test("superseded companion loads discard decoded bitmaps after leaving a session
   assert.equal(closed.filter(url => url.includes("/old/")).length, 2);
   loader.dispose();
 });
+
+function relayFixture() {
+  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [];
+  const timers = new Map(), listeners = {}, posts = [], held = [];
+  const doc = {
+    body: {classList: {contains: () => false}},
+    querySelector(selector) {
+      if (selector.includes(".clive")) return {dataset: {phase, subdeep}};
+      return null;
+    },
+    addEventListener(name, fn) { (listeners[name] ||= []).push(fn); }
+  };
+  const context = vm.createContext({
+    doc, window: {WsShell: {companionContext: () => ({landmarks: {}})}, addEventListener() {}},
+    AbortController, MutationObserver: class { observe() {} disconnect() {} }, ResizeObserver: class { observe() {} disconnect() {} },
+    performance: {now: () => now}, Date: class extends Date { static now() { return now; } },
+    setTimeout(fn) { timers.set(++timer, fn); return timer; }, clearTimeout(id) { timers.delete(id); },
+    rid: "lead", lead: {}, boardLatest: null, TL_ASK: "ask", companionStreamReady: true,
+    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed: 0}),
+    entriesBox: () => ({children: rows}), $: () => null, pageHidden: () => hidden,
+    showRegions: () => { while (held.length) held.shift()(); }, shPost: (_, payload) => posts.push(payload),
+    innerHeight: 1000, innerWidth: 1000
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", "dashboard-companion-relay.js"), "utf8") + "\nthis.relay = startCompanionRelay();", context);
+  function flush() { const work = [...timers.values()]; timers.clear(); work.forEach(fn => fn()); }
+  function update() { now += 300; listeners.change.forEach(fn => fn()); flush(); }
+  function events() { return posts.splice(0).flatMap(p => p.events); }
+  flush(); events();
+  return {set children(value) { children = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
+    update, events, posts, now: () => now,
+    input() { listeners.input.forEach(fn => fn({target: {matches: () => true}})); flush(); },
+    visibility(value, swap) { hidden = value; if (swap) held.push(swap); listeners.visibilitychange.forEach(fn => fn()); flush(); },
+    dispose: () => context.relay.dispose()};
+}
+
+function relayRow(key, classes, {childId, ms, cause, child, label} = {}) {
+  const names = new Set(classes.split(" "));
+  return {dataset: {entry: key, childId, wakeCause: cause},
+    matches(selector) {
+      return selector.split(", ").some(part => {
+        const negative = [...part.matchAll(/:not\(([^)]+)\)/g)].map(x => x[1]);
+        part = part.replace(/:not\([^)]+\)/g, "");
+        const matches = s => [...s.matchAll(/\.([\w-]+)/g)].every(x => names.has(x[1])) &&
+          (!s.startsWith("article") || names.has("article")) && (!s.includes("[data-board-nudge]") || names.has("board-nudge")) && (!s.includes("[data-mail-wake]") || names.has("mail-wake"));
+        return matches(part) && !negative.some(matches);
+      });
+    },
+    querySelector(selector) {
+      if (selector === "time[data-ms]") return ms ? {dataset: {ms}} : null;
+      if (selector === ".mpeer") return label ? {textContent: label} : null;
+      if (selector.startsWith(":scope > details.mailline.")) return child === selector.split(".").pop() ? {} : null;
+      return null;
+    }};
+}
+
+test("relay reconciles both report orders, holding, resume, terminal and stale reports", () => {
+  const f = relayFixture(), child = state => [{id: "c", state}];
+  f.children = child("holding"); f.update(); assert.equal(f.events().filter(e => e.kind === "subagent.spawn").length, 0);
+  f.children = child("thinking"); f.update(); assert.equal(f.events().filter(e => e.kind === "subagent.spawn").length, 1);
+  const first = f.now();
+  f.rows = [relayRow("01", "mailline recv child-report", {childId: "c", ms: first})]; f.update();
+  assert.equal(f.events().filter(e => e.kind === "subagent.done").length, 1);
+  f.children = child("holding"); f.update(); assert.equal(f.events().filter(e => e.kind === "subagent.done").length, 0);
+  f.children = child("thinking"); f.update(); f.events();
+  f.rows = [...f.rows, relayRow("02", "mailline recv child-report", {childId: "c", ms: first})]; f.update();
+  assert.equal(f.events().filter(e => e.kind === "subagent.done").length, 0);
+  f.children = child("holding"); f.update(); f.events();
+  f.rows = [...f.rows, relayRow("03", "mailline recv child-report", {childId: "c", ms: f.now()})]; f.update();
+  assert.equal(f.events().filter(e => e.kind === "subagent.done").length, 1);
+  f.children = child("closed"); f.update(); assert.equal(f.events().filter(e => e.kind === "subagent.done").length, 0);
+  f.children = child("thinking"); f.update(); f.events(); f.children = child("closed"); f.update();
+  assert.equal(f.events().filter(e => e.kind === "subagent.done").length, 1);
+  f.dispose();
+});
+
+test("relay preserves legacy streaming edges, phase permission and typing during thinking", () => {
+  const f = relayFixture();
+  f.phase = "tool"; f.update(); let events = f.events();
+  assert.equal(events.filter(e => e.kind === "session.streaming").length, 1);
+  assert.equal(events.filter(e => e.kind === "session.tool").length, 1);
+  f.phase = "replying"; f.update(); events = f.events();
+  assert.equal(events.filter(e => e.kind === "session.streaming").length, 0);
+  assert.equal(events.filter(e => e.kind === "session.replying").length, 1);
+  f.phase = "permission"; f.update(); events = f.events();
+  assert.equal(events.find(e => e.kind === "ask.open").token, "perm:lead");
+  f.phase = "thinking"; f.update(); f.events(); f.input();
+  assert.equal(f.posts.at(-1).activity, "typing_user");
+  f.dispose();
+});
+
+test("relay classifies peer mail and compaction without nudge or background-exit ghosts", () => {
+  const f = relayFixture();
+  f.rows = [relayRow("01", "mail-notification board-nudge"), relayRow("02", "mail-notification mail-wake"),
+    relayRow("03", "mail-notification"), relayRow("04", "article mail-block", {child: "recv"}),
+    relayRow("05", "article mail-block", {child: "sent"}), relayRow("06", "mailline recv agent-card"),
+    relayRow("07", "mailline recv agent-note", {childId: "x", cause: "background_exit"}),
+    relayRow("08", "sysline compaction"), relayRow("09", "sysline compaction fail")];
+  f.update(); const kinds = f.events().map(e => e.kind);
+  assert.equal(kinds.filter(k => k === "mail.recv").length, 2);
+  assert.equal(kinds.filter(k => k === "mail.send").length, 1);
+  assert.equal(kinds.filter(k => k === "session.compacted").length, 1);
+  assert.equal(kinds.filter(k => k === "subagent.done").length, 0);
+  f.dispose();
+});
+
+test("relay applies held regions before visibility baseline", () => {
+  const f = relayFixture(); f.visibility(true);
+  f.visibility(false, () => { f.rows = [relayRow("01", "mailline recv")]; });
+  assert.equal(f.events().filter(e => e.kind === "mail.recv").length, 0);
+  f.rows = [relayRow("01", "mailline recv"), relayRow("02", "mailline recv")]; f.update();
+  assert.equal(f.events().filter(e => e.kind === "mail.recv").length, 1);
+  f.dispose();
+});
+
+
+test("relay suppresses ambiguous reports and tombstones a short-lived child", () => {
+  const f = relayFixture();
+  f.children = [{id: "a", label: "shared", state: "holding"}, {id: "b", label: "shared", state: "holding"}];
+  f.update(); f.events();
+  f.rows = [relayRow("01", "mailline recv child-report", {label: "shared"}),
+    relayRow("02", "mailline recv child-report", {childId: "short"}),
+    relayRow("03", "mailline recv child-report", {childId: "short"})];
+  f.update();
+  const done = f.events().filter(e => e.kind === "subagent.done");
+  assert.equal(done.length, 1);
+  assert.ok(done[0].token.endsWith("short:1"));
+  f.dispose();
+});
+
+
+test("relay emits canonical whiteboard and child approval tokens", () => {
+  const f = relayFixture();
+  f.asks = [{id: "item-42", getAttribute: () => "42", getBoundingClientRect: () => ({width: 0})}];
+  f.permissions = [{closest(selector) {
+    if (selector === ".ag-source") return null;
+    return {querySelector: () => ({dataset: {replyId: "child"}})};
+  }, querySelector: () => null}];
+  f.update();
+  const asks = f.events().filter(e => e.kind === "ask.open");
+  assert.deepEqual(asks.map(e => e.token).sort(), ["ask:lead:42", "perm:child"]);
+  assert.equal(asks.find(e => e.token === "perm:child").rid, "child");
+  f.dispose();
+});
