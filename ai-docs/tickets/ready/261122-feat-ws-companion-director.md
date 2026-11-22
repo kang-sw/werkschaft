@@ -244,6 +244,77 @@ Key files (from the 2026-11-22 fact-finding; line numbers drift):
   open/close/write, ID validation with fallback, TTL expiry, and quip
   `textContent` rendering; a headless Chromium capture of the gear and modal.
 
+### Result (588dfc45f) - 2026-11-22
+
+- **Landed** (6683c2568, 8c87e23da, 114721b43, b0a104fda, 1a6c3cfeb,
+  588dfc45f; develop merged in at 8999d97e6 on the lead's instruction):
+  - Six global-only keys per Decision 3 (`companion_enabled` bool,
+    `companion_director` rules|agent, pack, preset,
+    `agent_cooldown_seconds` 10–3600/30, `agent_hourly_cap` 1–120/20). They
+    are typed bool/int with a per-key fallback to the default; project, repo,
+    and session layers never apply. Covered across manifests, `CompanionConfig`,
+    the stream payload, catalog, and i18n.
+  - Catalog `surface: "companion-modal"`; the panel's `sectionEntries` skips
+    those rows. The shell embeds them as `window.wsCompanionModalRows`
+    (`companionModalRows`) and keeps their strings through
+    `wsi18n.ScriptExceptKeeping` + `shellSettingsStrings`. Documented in
+    `config-settings-ui.md`.
+  - Gear (`.ws-companion-gear`, directly under the resize grip, hover/focus
+    reveal) opens a non-modal `<dialog>` (`dashboard-companion-settings.js`)
+    beside the character, clamped to the viewport. Pack, preset, cooldown,
+    and cap write to `POST /api/config/set` at the global scope (integers as
+    JSON numbers), only on `data-sysopen` pages. It closes on Escape, a second
+    gear click, or the close button.
+  - `companion-command` rail event (newest-only hub, `sessionId`): the shell
+    stream dispatches `ws-companion-command`, and the stage acts only for the
+    shown session. `directedCommand` validates scenario, expression, gesture,
+    prop, and fx IDs through the compositor's fallback chains (props and fx
+    also from the shared pack, fx also from the built-in `fxDefaults`) and
+    drops only an unknown field. `runner.direct` plays at priority 99 with
+    the TTL clamped to 1–15 s and the last step held. Drag still wins, and a
+    newer command replaces an older one. The quip is folded to at most 140
+    code points and rendered with `textContent` in a `pointer-events: none`
+    bubble.
+  - Optional pack `persona` (validated server-side; `personaOf` normalizes
+    it client-side), shown in the modal after the preset row.
+  - `companion-pet-rigging.md` re-checked: its config and director lines
+    match; added a line on directed commands.
+- **Verification** (on the merged tree, head 588dfc45f):
+  - `node --test frontend-companion.test.js frontend-settings.test.js`:
+    34/34 pass. Covers the panel filter, the modal's open/close/write,
+    read-only, and refused input, ID validation with fallback, TTL expiry,
+    and the quip `textContent`.
+  - `node --test *.test.js`: 189/192. The 3 failures ("closed opener
+    clicks…", "lifecycle post coalesces…", "idle CSS bounds…") also fail
+    without this ticket's changes (verified at 6683c2568).
+  - `go test ./internal/wsi18n ./internal/wsconfig ./internal/wspackage`: ok.
+  - `go test ./internal/mcp -timeout 45m -run
+    'Companion|DashboardSettingsUI|ShippedDashboardManifests|DashboardConfig|DashboardCompanion|TierRouting'`:
+    ok.
+  - `go test ./internal/wsdashboard -timeout 30m`: the only failure was the
+    stale assembly expectation, fixed in 588dfc45f. The rerun of the asset,
+    companion, stream, and page tests is ok.
+  - `TestCompanionSettingsBrowser` (headless Chromium, with
+    `WS_PLAYWRIGHT_MODULE` set): PASS. Captures are in
+    `/tmp/ws-companion-shots-kitty/`: `companion-gear-hover.png`,
+    `companion-settings-modal.png`, `companion-directed-quip.png`.
+  - `generate-package-assets.py --check`: ok. `go build ./...` and `go vet`
+    on mcp, wsdashboard, wsi18n, and wsconfig: ok.
+- **Decisions:**
+  - The shell page embeds the modal rows instead of loading the settings
+    catalog, because it loads no catalog and drops `js.settings.*`.
+  - Directed beats sit at priority 99, so drag_dangle (100) still wins and
+    rules scenarios cannot replace them.
+  - The modal's refresh spares whichever control has focus. A refused or
+    failed write reverts every control.
+- **Open (lite review, minor):**
+  - The newest-only hub coalesces across sessions (benign under Phase 2's
+    single focus).
+  - `scenario` combined with field overrides patches every step of a
+    multi-step scenario.
+  - Directed `drag_dangle` and reply-bound scenario IDs are accepted without
+    drag or reply state.
+
 ### Phase 2: Agent sidecar director
 
 - **Goals:**
