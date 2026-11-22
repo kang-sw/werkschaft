@@ -551,6 +551,42 @@ section.selection-bundle > .thumbs { margin: 0; padding: 0 10px 8px; }
 .thumbs .ipath { font-size: 12px; color: var(--wb-muted-fg); word-break: break-all; }
 /* an "[Image #N]" marker in a message's text */
 .imgtag { display: inline-block; font-size: 11px; font-weight: 800; line-height: 1.3; padding: 0 5px; border-radius: 4px; font-variant-numeric: tabular-nums; vertical-align: 1px; background: color-mix(in srgb, var(--wb-primary) 22%, var(--wb-card)); color: var(--wb-fg); }
+/* inline hydrated capsules inside chat prose: compact single-line pills that
+   match prose line height without inflating vertical rhythm; rich multi-line
+   details live in the viewport-clamped .icapsule-pop popover. */
+.icapsule { display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; max-width: min(34ch, 100%); height: 20px; padding: 0 7px; margin: 0 1px; border-radius: 999px; font-size: 12px; line-height: 1; vertical-align: baseline; white-space: nowrap; overflow: hidden; background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-primary) 35%, transparent); color: var(--wb-fg); cursor: default; }
+.icapsule-head { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.icapsule-mono { font-family: var(--wb-mono); font-weight: 600; }
+.icapsule-val { flex: none; white-space: nowrap; }
+.icapsule-sub { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wb-muted-fg); font-style: italic; }
+.icapsule-answer .icapsule-sub { font-style: normal; }
+.icapsule-answer .icapsule-sub::before { content: "· "; }
+.icapsule-topic { background: var(--wb-muted); box-shadow: inset 0 0 0 1px var(--wb-line); }
+.icapsule-topic .icapsule-sub { font-style: normal; }
+.icapsule-mention, .icapsule-selection, .icapsule-pick { background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-primary), inset 0 0 0 1px var(--wb-line); }
+.icapsule-console { background: var(--wb-muted); box-shadow: inset 3px 0 0 var(--wb-warn), inset 0 0 0 1px var(--wb-line); }
+.icapsule-count, .icapsule-note-mk, .icapsule-img-mk { flex: none; font-size: 10.5px; font-weight: 700; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; }
+.icapsule-count, .icapsule-img-mk { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-card)); color: var(--wb-fg); }
+.icapsule[data-icapsule], .icapsule[data-wb-nav] { cursor: pointer; }
+.icapsule[data-icapsule]:hover, .icapsule[data-icapsule]:focus-visible, .icapsule[data-icapsule][aria-expanded="true"],
+.icapsule[data-wb-nav]:hover, .icapsule[data-wb-nav]:focus-visible { background: color-mix(in srgb, var(--wb-primary) 22%, var(--wb-card)); box-shadow: inset 0 0 0 1px var(--wb-primary); }
+.icapsule[data-icapsule]:focus-visible, .icapsule[data-wb-nav]:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 1px; }
+/* floating detail popover for multi-line mentions, selections, notes, picks, and consoles */
+.icapsule-pop { position: fixed; z-index: calc(var(--z-popovers, 60) + 5); box-sizing: border-box; min-width: 220px; max-width: min(440px, calc(100vw - 16px)); max-height: min(340px, calc(100vh - 16px)); overflow: auto; padding: 9px 11px; border: 1px solid var(--wb-line); border-radius: 10px; background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow-hi); font-size: 12.5px; line-height: 1.45; }
+.icapsule-pop[hidden] { display: none; }
+.icapsule-pop-hd { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.icapsule-pop-title { flex: 1 1 auto; min-width: 0; font-weight: 700; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.icapsule-jump { flex: none; display: inline-flex; align-items: center; justify-content: center; height: 20px; min-width: 22px; padding: 0 6px; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--wb-primary) 14%, var(--wb-card)); color: var(--wb-primary); font: 700 11px/1 var(--wb-sans); cursor: pointer; }
+.icapsule-jump:hover, .icapsule-jump:focus-visible { background: color-mix(in srgb, var(--wb-primary) 24%, var(--wb-card)); outline: 1.5px solid var(--wb-primary); }
+.icapsule-pop-url { margin-bottom: 6px; font-family: var(--wb-mono); font-size: 11px; color: var(--wb-muted-fg); overflow-wrap: anywhere; }
+.icapsule-pop-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-fg); }
+.icapsule-pop-quotes { display: flex; flex-direction: column; gap: 8px; }
+.icapsule-pop-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 11.5px; color: var(--wb-fg); font-variant-numeric: tabular-nums; }
+.icapsule-pop-meta b { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.icapsule-pop-quote, .icapsule-pop-lines { margin: 0; padding: 6px 8px; border-left: 3px solid var(--wb-primary); border-radius: 6px; background: var(--wb-muted); color: var(--wb-fg); font-family: var(--wb-mono); font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
+.icapsule-pop-lines { border-left-color: var(--wb-warn); }
+.icapsule-pop-comment { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--wb-line); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-fg); }
+.icapsule-pop-imgs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 /* held: sent from the page, not yet received by the session */
 .msg.held .bub { background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--wb-primary) 45%, transparent); }
 .heldtag { font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 0 6px; border-radius: 4px; background: var(--wb-ph-perm); color: var(--wb-on-ph-perm); }

@@ -164,10 +164,316 @@
     if (cancel) mh.appendChild(cancel);
     el.appendChild(mh);
     bub.className = "bub";
-    // Match the server's achips presentation using only escaped DOM text.
-    // Structured-only sends have no free-text paragraph to confirm receipt.
+    // Match the server's inline capsule hydration & achips deduplication using only escaped DOM text.
     var chips = doc.createElement("div"), back = m.back;
     chips.className = "hchips";
+    function singleLine(s) { return String(s || "").replace(/\s+/g, " ").trim(); }
+    function attachSource(cap, build) {
+      var tpl = doc.createElement("template");
+      tpl.className = "icapsule-source";
+      var root = tpl.content || tpl;
+      build(root);
+      cap.appendChild(tpl);
+    }
+    function appendDetailHeader(root, title, mono) {
+      var hd = doc.createElement("div"), b = doc.createElement("b");
+      hd.className = "icapsule-pop-hd";
+      b.className = "icapsule-pop-title" + (mono ? " icapsule-mono" : "");
+      b.textContent = title;
+      hd.appendChild(b);
+      root.appendChild(hd);
+    }
+    function makePill(kind, headText, valText, subText, titleText, monoHead) {
+      var cap = doc.createElement("span"), hd = doc.createElement("b");
+      cap.className = "icapsule icapsule-" + kind;
+      hd.className = "icapsule-head" + (monoHead ? " icapsule-mono" : "");
+      hd.textContent = headText;
+      cap.appendChild(hd);
+      if (valText) {
+        appendText(cap, " ");
+        var val = doc.createElement("span");
+        val.className = "icapsule-val";
+        val.textContent = valText;
+        cap.appendChild(val);
+      }
+      if (subText) {
+        var sub = doc.createElement("span");
+        sub.className = "icapsule-sub";
+        sub.textContent = subText;
+        cap.appendChild(sub);
+      }
+      if (titleText) cap.setAttribute("title", titleText);
+      return cap;
+    }
+    function makeInteractive(cap) {
+      cap.setAttribute("data-icapsule", "1");
+      cap.setAttribute("role", "button");
+      cap.setAttribute("tabindex", "0");
+      cap.setAttribute("aria-haspopup", "dialog");
+      cap.setAttribute("aria-expanded", "false");
+    }
+    function appendText(parent, str) {
+      if (!str) return;
+      if (typeof doc.createTextNode === "function") { parent.appendChild(doc.createTextNode(str)); return; }
+      var span = doc.createElement("span");
+      span.textContent = str;
+      parent.appendChild(span);
+    }
+    function appendImageTags(parent, text) {
+      var re = /\[Image #([1-9][0-9]{0,5})\]/g, last = 0, match;
+      while ((match = re.exec(text))) {
+        if (match.index > last) appendText(parent, text.slice(last, match.index));
+        var tagEl = doc.createElement("span");
+        tagEl.className = "imgtag";
+        tagEl.setAttribute("title", wsT("imgtag.title", match[1]));
+        tagEl.textContent = "#" + match[1];
+        parent.appendChild(tagEl);
+        last = match.index + match[0].length;
+      }
+      if (last < text.length) appendText(parent, text.slice(last));
+    }
+    var backChips = (back.chips || []).slice(), usedChip = [];
+    var backTopics = (back.topics || []).slice(), usedTopic = [];
+    var backMentions = (back.mentions || []).slice(), usedMention = [];
+    var backPicks = (back.picks || []).slice(), usedPick = [];
+    var backConsoles = (back.consoles || []).slice(), usedConsole = [];
+    function hydrateProseInto(parent, prose) {
+      if (!prose) return;
+      if (!backChips.length && !backTopics.length && !backMentions.length && !backPicks.length && !backConsoles.length) {
+        appendImageTags(parent, prose);
+        return;
+      }
+      var last = 0, i = 0;
+      function isWord(ch) { return /[A-Za-z0-9_]/.test(ch); }
+      while (i < prose.length) {
+        var ch = prose.charAt(i);
+        if (ch === "(" && (i === 0 || !isWord(prose.charAt(i - 1)))) {
+          var am = /^\(([0-9]{1,6})\)=([A-Za-z0-9]{1,16})/.exec(prose.slice(i));
+          if (am) {
+            var ci = -1;
+            for (var k = 0; k < backChips.length; k++) {
+              if (usedChip[k]) continue;
+              var c = backChips[k], want = c.answer || "note";
+              if (String(c.id) === am[1] && want === am[2]) { ci = k; break; }
+            }
+            if (ci >= 0) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              var ac = backChips[ci], aval = ac.answer || "note", anote = String(ac.note || "");
+              var apill = makePill("answer", "(" + ac.id + ")", aval, anote.trim() ? singleLine(anote) : "", anote);
+              if (anote.trim()) {
+                makeInteractive(apill);
+                attachSource(apill, function (root) {
+                  appendDetailHeader(root, "(" + ac.id + ") " + aval);
+                  var body = doc.createElement("div"); body.className = "icapsule-pop-text"; body.textContent = anote;
+                  root.appendChild(body);
+                });
+              }
+              parent.appendChild(apill);
+              usedChip[ci] = true;
+              i += am[0].length; last = i; continue;
+            }
+          }
+        } else if (ch === "{" && prose.slice(i, i + 2) === "{{") {
+          var pm = /^\{\{(p[1-9][0-9]*)\}\}/.exec(prose.slice(i));
+          if (pm) {
+            var pid = pm[1], mi = -1;
+            for (var mk = 0; mk < backMentions.length; mk++) {
+              if (usedMention[mk]) continue;
+              var mt = backMentions[mk].text || "";
+              if (mt === pid || mt.indexOf(pid + " · ") === 0) { mi = mk; break; }
+            }
+            if (mi >= 0) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              var mn = backMentions[mi], sub = (mn.text || "").indexOf(pid + " · ") === 0 ? mn.text.slice(pid.length + 3) : mn.text;
+              var mpill = makePill("mention", pid, "", singleLine(sub), mn.text);
+              makeInteractive(mpill);
+              attachSource(mpill, function (root) {
+                appendDetailHeader(root, "[" + mn.topic + "] " + pid);
+                var qEl = doc.createElement("pre"); qEl.className = "icapsule-pop-quote"; qEl.textContent = mn.text || "";
+                root.appendChild(qEl);
+              });
+              parent.appendChild(mpill);
+              usedMention[mi] = true;
+              i += pm[0].length; last = i; continue;
+            }
+          }
+        } else if (ch === "[") {
+          if (prose.slice(i, i + 6) === "[note:") {
+            var ti = -1, tlen = -1;
+            for (var tk = 0; tk < backTopics.length; tk++) {
+              if (usedTopic[tk]) continue;
+              var tn = backTopics[tk].topic || "";
+              if (tn.length > tlen && prose.slice(i, i + 7 + tn.length) === "[note:" + tn + "]") { ti = tk; tlen = tn.length; }
+            }
+            if (ti >= 0) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              var tc = backTopics[ti];
+              var tpill = makePill("topic", "[" + tc.topic + "]", "", singleLine(tc.note), tc.note);
+              makeInteractive(tpill);
+              attachSource(tpill, function (root) {
+                appendDetailHeader(root, "[" + tc.topic + "]");
+                var body = doc.createElement("div"); body.className = "icapsule-pop-text"; body.textContent = tc.note || "";
+                root.appendChild(body);
+              });
+              parent.appendChild(tpill);
+              usedTopic[ti] = true;
+              i += 7 + tlen; last = i; continue;
+            }
+          } else if (prose.slice(i, i + 9) === "[mention:") {
+            var mni = -1, mnlen = -1;
+            for (var mnk = 0; mnk < backMentions.length; mnk++) {
+              if (usedMention[mnk]) continue;
+              var mtop = backMentions[mnk].topic || "";
+              if (mtop.length > mnlen && prose.slice(i, i + 10 + mtop.length) === "[mention:" + mtop + "]") { mni = mnk; mnlen = mtop.length; }
+            }
+            if (mni >= 0) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              var mm = backMentions[mni], mhead = "[" + mm.topic + "]" + (mm.id ? " (" + mm.id + ")" : "");
+              var mnpill = makePill("mention", mhead, "", singleLine(mm.text), mm.text);
+              makeInteractive(mnpill);
+              attachSource(mnpill, function (root) {
+                appendDetailHeader(root, mhead);
+                var qEl = doc.createElement("pre"); qEl.className = "icapsule-pop-quote"; qEl.textContent = mm.text || "";
+                root.appendChild(qEl);
+              });
+              parent.appendChild(mnpill);
+              usedMention[mni] = true;
+              i += 10 + mnlen; last = i; continue;
+            }
+          } else if (prose.slice(i, i + 6) === "[pick:") {
+            var pki = -1, pklen = -1;
+            for (var pk = 0; pk < backPicks.length; pk++) {
+              if (usedPick[pk]) continue;
+              var psel = backPicks[pk].selector || "";
+              if (psel.length > pklen && prose.slice(i, i + 7 + psel.length) === "[pick:" + psel + "]") { pki = pk; pklen = psel.length; }
+            }
+            if (pki >= 0) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              var pp = backPicks[pki], ptitle = pp.url + "\n" + pp.selector + (pp.text ? "\n" + pp.text : "");
+              var ppill = makePill("pick", pp.selector, "", singleLine(pp.text), ptitle, true);
+              makeInteractive(ppill);
+              attachSource(ppill, function (root) {
+                appendDetailHeader(root, pp.selector, true);
+                var urlEl = doc.createElement("div"); urlEl.className = "icapsule-pop-url"; urlEl.textContent = pp.url || "";
+                root.appendChild(urlEl);
+                if (pp.text) { var tx = doc.createElement("div"); tx.className = "icapsule-pop-text"; tx.textContent = pp.text; root.appendChild(tx); }
+              });
+              parent.appendChild(ppill);
+              usedPick[pki] = true;
+              i += 7 + pklen; last = i; continue;
+            }
+          } else if (prose.slice(i, i + 9) === "[console:") {
+            var cni = -1, cnlen = -1;
+            for (var ck = 0; ck < backConsoles.length; ck++) {
+              if (usedConsole[ck]) continue;
+              var curl = backConsoles[ck].url || "";
+              if (curl.length > cnlen && prose.slice(i, i + 10 + curl.length) === "[console:" + curl + "]") { cni = ck; cnlen = curl.length; }
+            }
+            if (cni >= 0) {
+              if (i > last) appendImageTags(parent, prose.slice(last, i));
+              var cc = backConsoles[cni], chead = "console ×" + (cc.lines || []).length;
+              var ctitle = cc.url + "\n" + (cc.lines || []).join("\n");
+              var cpill = makePill("console", chead, "", cc.url, ctitle);
+              makeInteractive(cpill);
+              attachSource(cpill, function (root) {
+                appendDetailHeader(root, chead);
+                var urlEl = doc.createElement("div"); urlEl.className = "icapsule-pop-url"; urlEl.textContent = cc.url || "";
+                var linesEl = doc.createElement("pre"); linesEl.className = "icapsule-pop-lines"; linesEl.textContent = (cc.lines || []).join("\n");
+                root.appendChild(urlEl); root.appendChild(linesEl);
+              });
+              parent.appendChild(cpill);
+              usedConsole[cni] = true;
+              i += 10 + cnlen; last = i; continue;
+            }
+          }
+        }
+        i++;
+      }
+      if (last < prose.length) appendImageTags(parent, prose.slice(last));
+    }
+    function buildSelectionPill(s) {
+      var first = s.mentions[0], head = "[" + first.topic + "]" + (first.id ? " (" + first.id + ")" : first.entry ? " " + first.entry : "");
+      var titles = s.mentions.map(function (x) { return x.text; });
+      if (s.comment && s.comment.trim()) titles.push(s.comment);
+      var pill = makePill("selection", head, "", singleLine(first.text), titles.join("\n"));
+      if (s.mentions.length > 1) {
+        var cnt = doc.createElement("span"); cnt.className = "icapsule-count"; cnt.textContent = "+" + (s.mentions.length - 1);
+        pill.insertBefore(cnt, pill.querySelector ? pill.querySelector(".icapsule-sub") : null);
+      }
+      if (s.comment && s.comment.trim()) {
+        var mk = doc.createElement("span"); mk.className = "icapsule-note-mk"; mk.setAttribute("aria-hidden", "true"); mk.textContent = "\u270e";
+        pill.appendChild(mk);
+      }
+      (s.images || []).forEach(function (n) {
+        var imk = doc.createElement("span"); imk.className = "icapsule-img-mk"; imk.textContent = "#" + n;
+        pill.appendChild(imk);
+      });
+      makeInteractive(pill);
+      attachSource(pill, function (root) {
+        var quotes = doc.createElement("div"); quotes.className = "icapsule-pop-quotes";
+        s.mentions.forEach(function (sm) {
+          var item = doc.createElement("div"), meta = doc.createElement("div"), b = doc.createElement("b"), qEl = doc.createElement("pre");
+          item.className = "icapsule-pop-item"; meta.className = "icapsule-pop-meta";
+          b.textContent = "[" + sm.topic + "]" + (sm.id ? " (" + sm.id + ")" : "") + (sm.entry ? " " + sm.entry : "");
+          qEl.className = "icapsule-pop-quote"; qEl.textContent = sm.text;
+          meta.appendChild(b); item.appendChild(meta); item.appendChild(qEl); quotes.appendChild(item);
+        });
+        root.appendChild(quotes);
+        if (s.comment) {
+          var com = doc.createElement("div"); com.className = "icapsule-pop-comment"; com.textContent = s.comment;
+          root.appendChild(com);
+        }
+        if (s.images && s.images.length) {
+          var imgsEl = doc.createElement("div"); imgsEl.className = "icapsule-pop-imgs";
+          s.images.forEach(function (n) {
+            var it = doc.createElement("span"); it.className = "imgtag"; it.textContent = "#" + n;
+            imgsEl.appendChild(it);
+          });
+          root.appendChild(imgsEl);
+        }
+      });
+      return pill;
+    }
+    var part = null;
+    if (m.back.text) {
+      part = doc.createElement("div");
+      part.className = "hpart";
+      var raw = m.back.text;
+      if (raw.indexOf("<wb:selection") >= 0 && typeof selectionTags === "function" && typeof readSelectionBlock === "function") {
+        var tags = selectionTags(raw), segs = [], pos = 0;
+        for (var ti = 0; ti < tags.length; ti++) {
+          var start = tags[ti][0];
+          if (raw.charAt(start + 1) === "/") continue;
+          if (start > pos) segs.push({ text: raw.slice(pos, start) });
+          var depth = 1, end = raw.length;
+          for (ti++; ti < tags.length; ti++) {
+            depth += raw.charAt(tags[ti][0] + 1) === "/" ? -1 : 1;
+            if (!depth) { end = tags[ti][1]; break; }
+          }
+          var block = raw.slice(start, end);
+          var sel = (start === 0 || raw.charAt(start - 1) === "\n") && (end === raw.length || /^\r?\n/.test(raw.slice(end))) ? readSelectionBlock(block) : null;
+          if (sel) segs.push({ selection: sel });
+          else segs.push({ text: block, plain: true });
+          pos = end;
+        }
+        if (pos < raw.length) segs.push({ text: raw.slice(pos) });
+        segs.forEach(function (sg, idx) {
+          if (sg.selection) { part.appendChild(buildSelectionPill(sg.selection)); return; }
+          if (sg.plain) { appendText(part, sg.text); return; }
+          var prevS = idx > 0 && !!segs[idx - 1].selection, nextS = idx + 1 < segs.length && !!segs[idx + 1].selection;
+          var t = sg.text;
+          var hp = false, hn = false;
+          if (prevS) { var t1 = t.replace(/^(?:\r?\n){1,2}/, ""); hp = t1 !== t; t = t1; }
+          if (nextS) { var t2 = t.replace(/(?:\r?\n){1,2}$/, ""); hn = t2 !== t; t = t2; }
+          if (!t) { if (prevS && nextS) appendText(part, " "); return; }
+          if (hp && !/^\s/.test(t)) t = " " + t;
+          if (hn && !/\s$/.test(t)) t = t + " ";
+          hydrateProseInto(part, t);
+        });
+      } else {
+        hydrateProseInto(part, raw);
+      }
+    }
     function chip(cls, label, value, note, title) {
       var el = doc.createElement("span"), head = doc.createElement("b");
       el.className = "achip" + (cls ? " " + cls : "");
@@ -187,22 +493,14 @@
       if (title || note) el.setAttribute("title", title || note);
       chips.appendChild(el);
     }
-    (back.chips || []).forEach(function (c) { chip("", "(" + c.id + ")", c.answer || "note", c.note); });
-    (back.topics || []).forEach(function (n) { chip("tchip", "[" + n.topic + "]", "", n.note); });
-    (back.mentions || []).forEach(function (n) { chip("mchip", "[" + n.topic + "]" + (n.id ? " (" + n.id + ")" : ""), "", n.text); });
+    backChips.forEach(function (c, i) { if (!usedChip[i]) chip("", "(" + c.id + ")", c.answer || "note", c.note); });
+    backTopics.forEach(function (n, i) { if (!usedTopic[i]) chip("tchip", "[" + n.topic + "]", "", n.note); });
+    backMentions.forEach(function (n, i) { if (!usedMention[i]) chip("mchip", "[" + n.topic + "]" + (n.id ? " (" + n.id + ")" : ""), "", n.text); });
     (back.closeRequests || []).forEach(function (r) { chip("close-request-chip", wsT("js.closerequest.label", r.topic), "", r.reason); });
-    (back.picks || []).forEach(function (p) { chip("mchip pchip", p.selector, "", p.text, p.url + "\n" + p.selector + (p.text ? "\n" + p.text : "")); });
-    (back.consoles || []).forEach(function (c) { chip("mchip cchip", "console ×" + c.lines.length, "", c.url, c.url + "\n" + c.lines.join("\n")); });
+    backPicks.forEach(function (p, i) { if (!usedPick[i]) chip("mchip pchip", p.selector, "", p.text, p.url + "\n" + p.selector + (p.text ? "\n" + p.text : "")); });
+    backConsoles.forEach(function (c, i) { if (!usedConsole[i]) chip("mchip cchip", "console ×" + c.lines.length, "", c.url, c.url + "\n" + c.lines.join("\n")); });
     if (chips.firstChild) bub.appendChild(chips);
-    if (m.back.text) {
-      // The server renders the text as markdown: a paragraph is the
-      // nearest plain-text shape.
-      var part = doc.createElement("div"), para = doc.createElement("p");
-      part.className = "hpart";
-      para.textContent = m.back.text;
-      part.appendChild(para);
-      bub.appendChild(part);
-    }
+    if (part && part.firstChild) bub.appendChild(part);
     if (m.pics.length) {
       var th = doc.createElement("div");
       th.className = "thumbs";

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"html/template"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,6 +49,529 @@ type HeldView struct {
 	// typed line. Its steer control sends the line as steered text the agent
 	// acts on itself (wsinbox.Steer).
 	Command *wsinbox.Command
+	Lang    string
+}
+
+// AllImages returns every attached image for the held message, combining
+// selection-owned images and loose images without duplicates.
+func (h HeldView) AllImages() []AttachmentView {
+	return collectBubbleImages(h.Content, h.Images)
+}
+
+// Hydrated projects inline anchor-matched capsules inside Parts/Content and
+// deduplicates matched items from the header chip strip.
+func (h HeldView) Hydrated() hydratedUserMessage {
+	return hydrateUserMessage(h.Lang, h.Answers(), h.Mentions, h.CloseRequests, h.Picks, h.Consoles, h.BoardTargets, "", h.Parts, h.Content)
+}
+
+// AllImages returns every attached image for the entry, combining
+// selection-owned images and loose images without duplicates.
+func (e ConvEntry) AllImages() []AttachmentView {
+	return collectBubbleImages(e.Content, e.Images)
+}
+
+// Hydrated projects inline anchor-matched capsules inside Text/Content and
+// deduplicates matched items from the header chip strip.
+func (e ConvEntry) Hydrated() hydratedUserMessage {
+	return hydrateUserMessage(e.Lang, e.Answers, e.Mentions, e.CloseRequests, e.Picks, e.Consoles, e.BoardTargets, e.Text, nil, e.Content)
+}
+
+func collectBubbleImages(content []SelectionContentPart, loose []AttachmentView) []AttachmentView {
+	if len(content) == 0 {
+		return loose
+	}
+	var out []AttachmentView
+	seen := map[int]bool{}
+	add := func(img AttachmentView) {
+		if img.Num > 0 {
+			if seen[img.Num] {
+				return
+			}
+			seen[img.Num] = true
+		}
+		out = append(out, img)
+	}
+	for _, p := range content {
+		if p.Selection != nil {
+			for _, img := range p.Selection.Images {
+				add(img)
+			}
+		}
+	}
+	for _, img := range loose {
+		add(img)
+	}
+	return out
+}
+
+type hydratedUserMessage struct {
+	AnswerChips   []conversationChip
+	MentionChips  []conversationChip
+	CloseRequests []wsinbox.CloseRequest
+	Picks         []wsinbox.Pick
+	Consoles      []wsinbox.Console
+	Grouped       bool
+	Body          template.HTML
+	Parts         []template.HTML
+}
+
+var (
+	inlineAnswerAnchorRe    = regexp.MustCompile(`^\(([0-9]{1,6})\)=([A-Za-z0-9]{1,16})`)
+	inlinePanelAnchorRe     = regexp.MustCompile(`^\{\{(p[1-9][0-9]*)\}\}`)
+	inlineLeadingNewlineRe  = regexp.MustCompile(`^(?:\r?\n){1,2}`)
+	inlineTrailingNewlineRe = regexp.MustCompile(`(?:\r?\n){1,2}$`)
+)
+
+func isAnchorWordByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+func singleLinePreview(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+type inlineHydrator struct {
+	lang     string
+	targets  map[string]string
+	answers  []conversationChip
+	mentions []conversationChip
+	picks    []wsinbox.Pick
+	consoles []wsinbox.Console
+	usedAns  []bool
+	usedMen  []bool
+	usedPick []bool
+	usedCon  []bool
+}
+
+func newInlineHydrator(lang string, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, picks []wsinbox.Pick, consoles []wsinbox.Console, targets map[string]string) *inlineHydrator {
+	ac := answerChips(answers, targets)
+	mc := mentionChips(mentions, targets)
+	return &inlineHydrator{
+		lang:     lang,
+		targets:  targets,
+		answers:  ac,
+		mentions: mc,
+		picks:    picks,
+		consoles: consoles,
+		usedAns:  make([]bool, len(ac)),
+		usedMen:  make([]bool, len(mc)),
+		usedPick: make([]bool, len(picks)),
+		usedCon:  make([]bool, len(consoles)),
+	}
+}
+
+func (h *inlineHydrator) hasCandidates() bool {
+	return len(h.answers) > 0 || len(h.mentions) > 0 || len(h.picks) > 0 || len(h.consoles) > 0
+}
+
+func (h *inlineHydrator) jumpButton(target, topicTarget string) string {
+	if target == "" {
+		return ""
+	}
+	label := wsi18n.T(h.lang, "entry.whiteboard.topic")
+	return `<button type="button" class="icapsule-jump" data-wb-nav="` + template.HTMLEscapeString(target) + `" data-wb-topic="` + template.HTMLEscapeString(topicTarget) + `" title="` + template.HTMLEscapeString(label) + `" aria-label="` + template.HTMLEscapeString(label) + `">&#8599;</button>`
+}
+
+func (h *inlineHydrator) renderAnswer(c conversationChip) string {
+	val := c.Value
+	if val == "" {
+		val = "note"
+	}
+	esc := template.HTMLEscapeString
+	if strings.TrimSpace(c.Note) == "" {
+		nav := ""
+		if c.Target != "" {
+			nav = ` role="link" tabindex="0" data-wb-nav="` + esc(c.Target) + `" data-wb-topic="` + esc(c.TopicTarget) + `"`
+		}
+		return `<span class="icapsule icapsule-answer"` + nav + `><b class="icapsule-head">(` + esc(c.IDs) + `)</b> <span class="icapsule-val">` + esc(val) + `</span></span>`
+	}
+	sub := singleLinePreview(c.Note)
+	var b strings.Builder
+	b.WriteString(`<span class="icapsule icapsule-answer" data-icapsule="1" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" title="` + esc(c.Note) + `">`)
+	b.WriteString(`<b class="icapsule-head">(` + esc(c.IDs) + `)</b> <span class="icapsule-val">` + esc(val) + `</span>`)
+	if sub != "" {
+		b.WriteString(`<span class="icapsule-sub">` + esc(sub) + `</span>`)
+	}
+	b.WriteString(`<template class="icapsule-source"><div class="icapsule-pop-hd"><b class="icapsule-pop-title">(` + esc(c.IDs) + `) ` + esc(val) + `</b>` + h.jumpButton(c.Target, c.TopicTarget) + `</div><div class="icapsule-pop-text">` + esc(c.Note) + `</div></template></span>`)
+	return b.String()
+}
+
+func (h *inlineHydrator) renderTopic(c conversationChip) string {
+	esc := template.HTMLEscapeString
+	sub := singleLinePreview(c.Note)
+	var b strings.Builder
+	b.WriteString(`<span class="icapsule icapsule-topic" data-icapsule="1" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" title="` + esc(c.Note) + `">`)
+	b.WriteString(`<b class="icapsule-head">[` + esc(c.Topic) + `]</b>`)
+	if sub != "" {
+		b.WriteString(`<span class="icapsule-sub">` + esc(sub) + `</span>`)
+	}
+	b.WriteString(`<template class="icapsule-source"><div class="icapsule-pop-hd"><b class="icapsule-pop-title">[` + esc(c.Topic) + `]</b>` + h.jumpButton(c.Target, c.TopicTarget) + `</div><div class="icapsule-pop-text">` + esc(c.Note) + `</div></template></span>`)
+	return b.String()
+}
+
+func (h *inlineHydrator) renderMention(c conversationChip, panelID string) string {
+	esc := template.HTMLEscapeString
+	head := "[" + c.Topic + "]"
+	if c.IDs != "" {
+		head += " (" + c.IDs + ")"
+	}
+	popTitle := head
+	subSrc := c.Text
+	if panelID != "" {
+		head = panelID
+		popTitle = "[" + c.Topic + "] " + panelID
+		if rest, ok := strings.CutPrefix(c.Text, panelID+" · "); ok {
+			subSrc = rest
+		}
+	}
+	sub := singleLinePreview(subSrc)
+	var b strings.Builder
+	b.WriteString(`<span class="icapsule icapsule-mention" data-icapsule="1" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" title="` + esc(c.Text) + `">`)
+	b.WriteString(`<b class="icapsule-head">` + esc(head) + `</b>`)
+	if sub != "" {
+		b.WriteString(`<span class="icapsule-sub">` + esc(sub) + `</span>`)
+	}
+	b.WriteString(`<template class="icapsule-source"><div class="icapsule-pop-hd"><b class="icapsule-pop-title">` + esc(popTitle) + `</b>` + h.jumpButton(c.Target, c.TopicTarget) + `</div><pre class="icapsule-pop-quote">` + esc(c.Text) + `</pre></template></span>`)
+	return b.String()
+}
+
+func (h *inlineHydrator) renderPick(p wsinbox.Pick) string {
+	esc := template.HTMLEscapeString
+	title := p.URL + "\n" + p.Selector
+	if p.Text != "" {
+		title += "\n" + p.Text
+	}
+	sub := singleLinePreview(p.Text)
+	var b strings.Builder
+	b.WriteString(`<span class="icapsule icapsule-pick" data-icapsule="1" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" title="` + esc(title) + `">`)
+	b.WriteString(`<b class="icapsule-head icapsule-mono">` + esc(p.Selector) + `</b>`)
+	if sub != "" {
+		b.WriteString(`<span class="icapsule-sub">` + esc(sub) + `</span>`)
+	}
+	b.WriteString(`<template class="icapsule-source"><div class="icapsule-pop-hd"><b class="icapsule-pop-title icapsule-mono">` + esc(p.Selector) + `</b></div><div class="icapsule-pop-url">` + esc(p.URL) + `</div>`)
+	if p.Text != "" {
+		b.WriteString(`<div class="icapsule-pop-text">` + esc(p.Text) + `</div>`)
+	}
+	b.WriteString(`</template></span>`)
+	return b.String()
+}
+
+func (h *inlineHydrator) renderConsole(c wsinbox.Console) string {
+	esc := template.HTMLEscapeString
+	head := "console ×" + strconv.Itoa(len(c.Lines))
+	joined := strings.Join(c.Lines, "\n")
+	title := c.URL
+	if joined != "" {
+		title += "\n" + joined
+	}
+	var b strings.Builder
+	b.WriteString(`<span class="icapsule icapsule-console" data-icapsule="1" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" title="` + esc(title) + `">`)
+	b.WriteString(`<b class="icapsule-head">` + esc(head) + `</b><span class="icapsule-sub">` + esc(c.URL) + `</span>`)
+	b.WriteString(`<template class="icapsule-source"><div class="icapsule-pop-hd"><b class="icapsule-pop-title">` + esc(head) + `</b></div><div class="icapsule-pop-url">` + esc(c.URL) + `</div><pre class="icapsule-pop-lines">` + esc(joined) + `</pre></template></span>`)
+	return b.String()
+}
+
+func (h *inlineHydrator) hydrateProse(prose string) template.HTML {
+	if prose == "" || !h.hasCandidates() {
+		return markedText(h.lang, prose)
+	}
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(prose); {
+		switch prose[i] {
+		case '(':
+			if i == 0 || !isAnchorWordByte(prose[i-1]) {
+				if m := inlineAnswerAnchorRe.FindStringSubmatchIndex(prose[i:]); m != nil {
+					id, val := prose[i+m[2]:i+m[3]], prose[i+m[4]:i+m[5]]
+					matched := -1
+					for k, c := range h.answers {
+						if h.usedAns[k] || c.Topic != "" {
+							continue
+						}
+						wantVal := c.Value
+						if wantVal == "" {
+							wantVal = "note"
+						}
+						if c.IDs == id && wantVal == val {
+							matched = k
+							break
+						}
+					}
+					if matched >= 0 {
+						b.WriteString(string(markedText(h.lang, prose[last:i])))
+						b.WriteString(h.renderAnswer(h.answers[matched]))
+						h.usedAns[matched] = true
+						i += m[1]
+						last = i
+						continue
+					}
+				}
+			}
+		case '{':
+			if strings.HasPrefix(prose[i:], "{{") {
+				if m := inlinePanelAnchorRe.FindStringSubmatchIndex(prose[i:]); m != nil {
+					panelID := prose[i+m[2] : i+m[3]]
+					matched := -1
+					for k, c := range h.mentions {
+						if h.usedMen[k] {
+							continue
+						}
+						if c.Text == panelID || strings.HasPrefix(c.Text, panelID+" · ") {
+							matched = k
+							break
+						}
+					}
+					if matched >= 0 {
+						b.WriteString(string(markedText(h.lang, prose[last:i])))
+						b.WriteString(h.renderMention(h.mentions[matched], panelID))
+						h.usedMen[matched] = true
+						i += m[1]
+						last = i
+						continue
+					}
+				}
+			}
+		case '[':
+			switch {
+			case strings.HasPrefix(prose[i:], "[note:"):
+				bestIdx, bestLen := -1, -1
+				for k, c := range h.answers {
+					if h.usedAns[k] || c.Topic == "" {
+						continue
+					}
+					if len(c.Topic) > bestLen && strings.HasPrefix(prose[i:], "[note:"+c.Topic+"]") {
+						bestIdx, bestLen = k, len(c.Topic)
+					}
+				}
+				if bestIdx >= 0 {
+					b.WriteString(string(markedText(h.lang, prose[last:i])))
+					b.WriteString(h.renderTopic(h.answers[bestIdx]))
+					h.usedAns[bestIdx] = true
+					i += len("[note:") + bestLen + 1
+					last = i
+					continue
+				}
+			case strings.HasPrefix(prose[i:], "[mention:"):
+				bestIdx, bestLen := -1, -1
+				for k, c := range h.mentions {
+					if h.usedMen[k] {
+						continue
+					}
+					if len(c.Topic) > bestLen && strings.HasPrefix(prose[i:], "[mention:"+c.Topic+"]") {
+						bestIdx, bestLen = k, len(c.Topic)
+					}
+				}
+				if bestIdx >= 0 {
+					b.WriteString(string(markedText(h.lang, prose[last:i])))
+					b.WriteString(h.renderMention(h.mentions[bestIdx], ""))
+					h.usedMen[bestIdx] = true
+					i += len("[mention:") + bestLen + 1
+					last = i
+					continue
+				}
+			case strings.HasPrefix(prose[i:], "[pick:"):
+				bestIdx, bestLen := -1, -1
+				for k, p := range h.picks {
+					if h.usedPick[k] {
+						continue
+					}
+					if len(p.Selector) > bestLen && strings.HasPrefix(prose[i:], "[pick:"+p.Selector+"]") {
+						bestIdx, bestLen = k, len(p.Selector)
+					}
+				}
+				if bestIdx >= 0 {
+					b.WriteString(string(markedText(h.lang, prose[last:i])))
+					b.WriteString(h.renderPick(h.picks[bestIdx]))
+					h.usedPick[bestIdx] = true
+					i += len("[pick:") + bestLen + 1
+					last = i
+					continue
+				}
+			case strings.HasPrefix(prose[i:], "[console:"):
+				bestIdx, bestLen := -1, -1
+				for k, c := range h.consoles {
+					if h.usedCon[k] {
+						continue
+					}
+					if len(c.URL) > bestLen && strings.HasPrefix(prose[i:], "[console:"+c.URL+"]") {
+						bestIdx, bestLen = k, len(c.URL)
+					}
+				}
+				if bestIdx >= 0 {
+					b.WriteString(string(markedText(h.lang, prose[last:i])))
+					b.WriteString(h.renderConsole(h.consoles[bestIdx]))
+					h.usedCon[bestIdx] = true
+					i += len("[console:") + bestLen + 1
+					last = i
+					continue
+				}
+			}
+		}
+		i++
+	}
+	b.WriteString(string(markedText(h.lang, prose[last:])))
+	return template.HTML(b.String())
+}
+
+func trimSelectionSeparator(s string, prevSel, nextSel bool) string {
+	if s == "" {
+		return ""
+	}
+	hadPrevNL := false
+	if prevSel {
+		trimmed := inlineLeadingNewlineRe.ReplaceAllString(s, "")
+		if len(trimmed) != len(s) {
+			hadPrevNL = true
+			s = trimmed
+		}
+	}
+	hadNextNL := false
+	if nextSel {
+		trimmed := inlineTrailingNewlineRe.ReplaceAllString(s, "")
+		if len(trimmed) != len(s) {
+			hadNextNL = true
+			s = trimmed
+		}
+	}
+	if s == "" {
+		if prevSel && nextSel {
+			return " "
+		}
+		return ""
+	}
+	if hadPrevNL && s[0] != ' ' && s[0] != '\t' && s[0] != '\n' && s[0] != '\r' {
+		s = " " + s
+	}
+	if hadNextNL && s[len(s)-1] != ' ' && s[len(s)-1] != '\t' && s[len(s)-1] != '\n' && s[len(s)-1] != '\r' {
+		s += " "
+	}
+	return s
+}
+
+func renderSelectionInlineHTML(lang string, s *SelectionView, targets map[string]string) template.HTML {
+	if s == nil || len(s.Mentions) == 0 {
+		return ""
+	}
+	esc := template.HTMLEscapeString
+	first := s.Mentions[0]
+	head := "[" + first.Topic + "]"
+	if first.ID != "" {
+		head += " (" + first.ID + ")"
+	} else if first.Entry != "" {
+		head += " " + first.Entry
+	}
+	sub := singleLinePreview(first.Text)
+	hasNote := strings.TrimSpace(s.Comment) != ""
+	var titleParts []string
+	for _, m := range s.Mentions {
+		titleParts = append(titleParts, m.Text)
+	}
+	if hasNote {
+		titleParts = append(titleParts, s.Comment)
+	}
+	var b strings.Builder
+	b.WriteString(`<span class="icapsule icapsule-selection" data-icapsule="1" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" title="` + esc(strings.Join(titleParts, "\n")) + `">`)
+	b.WriteString(`<b class="icapsule-head">` + esc(head) + `</b>`)
+	if len(s.Mentions) > 1 {
+		b.WriteString(`<span class="icapsule-count">+` + strconv.Itoa(len(s.Mentions)-1) + `</span>`)
+	}
+	if sub != "" {
+		b.WriteString(`<span class="icapsule-sub">` + esc(sub) + `</span>`)
+	}
+	if hasNote {
+		b.WriteString(`<span class="icapsule-note-mk" aria-hidden="true">&#9998;</span>`)
+	}
+	for _, img := range s.Images {
+		if img.Num > 0 {
+			b.WriteString(`<span class="icapsule-img-mk">#` + strconv.Itoa(img.Num) + `</span>`)
+		}
+	}
+	b.WriteString(`<template class="icapsule-source"><div class="icapsule-pop-quotes">`)
+	jumpLabel := wsi18n.T(lang, "entry.whiteboard.topic")
+	chips := mentionChips(s.Mentions, targets)
+	for i, m := range s.Mentions {
+		label := "[" + m.Topic + "]"
+		if m.ID != "" {
+			label += " (" + m.ID + ")"
+		}
+		if m.Entry != "" {
+			label += " " + m.Entry
+		}
+		b.WriteString(`<div class="icapsule-pop-item"><div class="icapsule-pop-meta"><b>` + esc(label) + `</b>`)
+		if i < len(chips) && chips[i].Target != "" {
+			b.WriteString(`<button type="button" class="icapsule-jump" data-wb-nav="` + esc(chips[i].Target) + `" data-wb-topic="` + esc(chips[i].TopicTarget) + `" title="` + esc(jumpLabel) + `" aria-label="` + esc(jumpLabel) + `">&#8599;</button>`)
+		}
+		b.WriteString(`</div><pre class="icapsule-pop-quote">` + esc(m.Text) + `</pre></div>`)
+	}
+	b.WriteString(`</div>`)
+	if s.Comment != "" {
+		b.WriteString(`<div class="icapsule-pop-comment">` + esc(s.Comment) + `</div>`)
+	}
+	if len(s.Images) > 0 {
+		b.WriteString(`<div class="icapsule-pop-imgs">`)
+		for _, img := range s.Images {
+			if img.Num > 0 {
+				b.WriteString(`<span class="imgtag" title="` + esc(wsi18n.T(lang, "imgtag.title", img.Num)) + `">#` + strconv.Itoa(img.Num) + `</span>`)
+			} else if img.Path != "" {
+				b.WriteString(`<span class="ipath">` + esc(img.Path) + `</span>`)
+			}
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</template></span>`)
+	return template.HTML(b.String())
+}
+
+func hydrateUserMessage(lang string, answers []wsinbox.AnswerLine, mentions []wsinbox.Mention, closeReqs []wsinbox.CloseRequest, picks []wsinbox.Pick, consoles []wsinbox.Console, targets map[string]string, text string, parts []string, content []SelectionContentPart) hydratedUserMessage {
+	h := newInlineHydrator(lang, answers, mentions, picks, consoles, targets)
+	out := hydratedUserMessage{CloseRequests: closeReqs}
+	if len(content) > 0 {
+		out.Grouped = true
+		var b strings.Builder
+		for i, part := range content {
+			if part.Selection != nil {
+				b.WriteString(string(renderSelectionInlineHTML(lang, part.Selection, targets)))
+				continue
+			}
+			if part.Plain {
+				b.WriteString(template.HTMLEscapeString(part.Text))
+				continue
+			}
+			prevSel := i > 0 && content[i-1].Selection != nil
+			nextSel := i+1 < len(content) && content[i+1].Selection != nil
+			t := trimSelectionSeparator(part.Text, prevSel, nextSel)
+			b.WriteString(string(h.hydrateProse(t)))
+		}
+		out.Body = template.HTML(b.String())
+	} else if len(parts) > 0 {
+		out.Parts = make([]template.HTML, len(parts))
+		for i, p := range parts {
+			out.Parts[i] = h.hydrateProse(p)
+		}
+	} else {
+		out.Body = h.hydrateProse(text)
+	}
+	for i, c := range h.answers {
+		if !h.usedAns[i] {
+			out.AnswerChips = append(out.AnswerChips, c)
+		}
+	}
+	for i, c := range h.mentions {
+		if !h.usedMen[i] {
+			out.MentionChips = append(out.MentionChips, c)
+		}
+	}
+	for i, p := range h.picks {
+		if !h.usedPick[i] {
+			out.Picks = append(out.Picks, p)
+		}
+	}
+	for i, c := range h.consoles {
+		if !h.usedCon[i] {
+			out.Consoles = append(out.Consoles, c)
+		}
+	}
+	return out
 }
 
 // Answers are the held message's chips and topic notes as the capsules a

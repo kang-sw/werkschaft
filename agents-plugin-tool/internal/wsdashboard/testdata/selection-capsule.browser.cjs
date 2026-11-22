@@ -1,6 +1,7 @@
 // Run by TestSelectionCapsuleBrowser against a static render of four
 // whiteboard selections: mention+comment, mention only, two mentions+comment,
-// and a long topic with a long quote.
+// and a long topic with a long quote. Verifies compact single-line inline
+// pills (.icapsule-selection) and inert escaped popover templates.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -22,60 +23,37 @@ const [file, shots] = process.argv.slice(2);
           await page.screenshot({ path: path.join(shots, `${theme}-${width}.png`), fullPage: true });
         }
         const m = await page.evaluate(() => {
-          const bordered = (el) => {
-            const cs = getComputedStyle(el);
-            return parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderLeftWidth) > 0 || /inset/.test(cs.boxShadow);
-          };
           return [...document.querySelectorAll('.msg.user .bub')].map((bub) => {
-            const capsules = bub.querySelectorAll('.selection-bundle');
+            const capsules = bub.querySelectorAll('.icapsule.icapsule-selection');
             const cap = capsules[0];
-            const inner = cap ? [...cap.querySelectorAll('*')].filter(bordered).filter((el) => !el.matches('.selection-comment')).length : -1;
-            const quotes = cap ? [...cap.querySelectorAll('.selection-quote')].map((q) => {
-              const tag = q.querySelector('.selection-topic'), text = q.querySelector('.anote');
-              if (!tag || !text) return null;
-              const tagRects = tag.getClientRects(), textRects = text.getClientRects();
-              const tr = tagRects[tagRects.length - 1], xr = textRects[0];
-              return {
-                tagInline: getComputedStyle(tag).display === 'inline' && getComputedStyle(text).display === 'inline',
-                // the quote's first line box starts on the tag's last line
-                sameLine: Math.abs(tr.top - xr.top) < 2 && xr.left >= tr.right - 1,
-                tagWrapsAsText: getComputedStyle(tag).whiteSpace !== 'nowrap',
-              };
-            }) : [];
-            const comment = cap && cap.querySelector('.selection-comment');
-            const shown = comment && getComputedStyle(comment).display !== 'none' && comment.textContent !== '';
-            let divider = null;
-            const lastQuote = cap && [...cap.querySelectorAll('.selection-quote')].pop();
-            if (shown && lastQuote) {
-              const cs = getComputedStyle(comment), cr = comment.getBoundingClientRect(), capR = cap.getBoundingClientRect();
-              const last = lastQuote.getBoundingClientRect();
-              divider = {
-                line: parseFloat(cs.borderTopWidth) >= 1 && cs.borderTopStyle !== 'none',
-                below: cr.top >= last.bottom - 1,
-                inside: cr.bottom <= capR.bottom + 0.5 && cr.left >= capR.left - 0.5 && cr.right <= capR.right + 0.5,
-                spans: Math.abs(cr.left - capR.left) <= 4 && Math.abs(cr.right - capR.right) <= 1.5,
-              };
-            }
-            return { capsules: capsules.length, inner, quotes, shown: !!shown, hasComment: !!(comment && comment.textContent), divider, overflow: bub.scrollWidth > bub.clientWidth + 1 };
+            const cs = cap ? getComputedStyle(cap) : null;
+            const rect = cap ? cap.getBoundingClientRect() : null;
+            const tpl = cap ? cap.querySelector('template.icapsule-source') : null;
+            const quotes = tpl ? [...tpl.content.querySelectorAll('.icapsule-pop-item')] : [];
+            const comment = tpl && tpl.content.querySelector('.icapsule-pop-comment');
+            return {
+              capsules: capsules.length,
+              inlineFlex: cs && cs.display === 'inline-flex' && cs.alignItems === 'center',
+              singleLine: rect && rect.height <= 24,
+              hasSource: !!tpl,
+              quotes: quotes.length,
+              hasComment: !!(comment && comment.textContent),
+              overflow: bub.scrollWidth > bub.clientWidth + 1,
+            };
           });
         });
         const where = `${theme}@${width}`;
         try {
           assert.deepEqual(errors, [], where + ': no page errors');
           assert.equal(m.length, 4, where + ': four selection messages');
-          assert.deepEqual(m.map((x) => x.quotes.length), [1, 1, 2, 1], where + ': one quote paragraph per mention');
+          assert.deepEqual(m.map((x) => x.quotes), [1, 1, 2, 1], where + ': one quote item per mention');
+          assert.deepEqual(m.map((x) => x.hasComment), [true, false, true, true], where + ': comment presence matches fixture');
           m.forEach((x, i) => {
-            assert.equal(x.capsules, 1, `${where} #${i}: exactly one capsule`);
-            assert.equal(x.inner, 0, `${where} #${i}: no nested bordered capsule`);
+            assert.equal(x.capsules, 1, `${where} #${i}: exactly one inline selection capsule`);
+            assert.ok(x.inlineFlex, `${where} #${i}: compact inline-flex pill`);
+            assert.ok(x.singleLine, `${where} #${i}: fits on a single line`);
+            assert.ok(x.hasSource, `${where} #${i}: carries inert icapsule-source template`);
             assert.equal(x.overflow, false, `${where} #${i}: nothing overflows the bubble`);
-            x.quotes.forEach((q) => {
-              assert.ok(q, `${where} #${i}: tag and quote present`);
-              assert.ok(q.tagInline, `${where} #${i}: tag is inline text`);
-              assert.ok(q.sameLine, `${where} #${i}: quote starts on the tag's line box`);
-              assert.ok(q.tagWrapsAsText, `${where} #${i}: tag wraps like text`);
-            });
-            assert.equal(x.shown, x.hasComment, `${where} #${i}: comment section shows exactly when there is a comment`);
-            if (x.hasComment) assert.deepEqual(x.divider, { line: true, below: true, inside: true, spans: true }, `${where} #${i}: comment below a divider inside the capsule`);
           });
         } catch (e) {
           failures.push(e.message);

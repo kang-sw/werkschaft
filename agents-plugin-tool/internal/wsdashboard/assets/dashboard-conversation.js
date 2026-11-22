@@ -314,13 +314,14 @@
   function conversationBoardActivate(e) {
     if (e.type === "keydown" ? e.key !== "Enter" : e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     var link = e.target && e.target.closest && e.target.closest("[data-wb-nav]");
-    var box = entriesBox(), held = region("convlive");
-    if (!link || !((box && box.contains(link)) || (held && held.contains(link)))) return;
+    var box = entriesBox(), held = region("convlive"), pop = typeof icapsulePop !== "undefined" ? icapsulePop : null;
+    if (!link || !((box && box.contains(link)) || (held && held.contains(link)) || (pop && pop.contains(link)))) return;
     var selection = window.getSelection && window.getSelection();
     if (e.type !== "keydown" && selection && !selection.isCollapsed) return;
     e.preventDefault();
     var topic = link.getAttribute("data-wb-topic"), target = link.getAttribute("data-wb-nav");
     if (!topic) { toast(wsT("js.whiteboard.jump.itemmissing")); return; }
+    if (typeof icapsuleClose === "function" && pop && pop.contains(link)) icapsuleClose(false);
     effectJump(topic, target, function (found, exact) {
       if (!found || !exact) toast(wsT("js.whiteboard.jump.itemmissing"));
     });
@@ -595,4 +596,140 @@
       return true;
     }, function () { btn.disabled = false; return false; });
   }
+
+  // --- inline capsule detail popover (.icapsule-pop) ------------------------
+  // Keeps rich multi-line mentions, selections, notes, picks, and consoles in
+  // a viewport-clamped floating popover outside SSE-swapped regions.
+  var icapsulePop = null, icapsuleActive = null, icapsulePinned = false, icapsuleLeaveTimer = 0;
+  function icapsuleSource(el) {
+    if (!el) return null;
+    for (var i = 0; i < el.children.length; i++) {
+      var c = el.children[i];
+      if (c.tagName === "TEMPLATE" && c.classList.contains("icapsule-source")) return c;
+    }
+    return null;
+  }
+  function icapsuleTrigger(n) {
+    var cap = n && n.closest ? n.closest(".icapsule[data-icapsule]") : null;
+    if (!cap) return null;
+    var box = entriesBox(), held = region("convlive");
+    return (box && box.contains(cap)) || (held && held.contains(cap)) ? cap : null;
+  }
+  function icapsulePlace() {
+    if (!icapsulePop || icapsulePop.hidden || !icapsuleActive) return;
+    if (!icapsuleActive.isConnected || !icapsuleActive.getClientRects().length) { icapsuleClose(false); return; }
+    var a = icapsuleActive.getBoundingClientRect();
+    if (convo) {
+      var cr = convo.getBoundingClientRect();
+      if (a.bottom < cr.top || a.top > cr.bottom) { icapsuleClose(false); return; }
+    }
+    var vw = root.clientWidth || window.innerWidth, vh = root.clientHeight || window.innerHeight;
+    var m = 8, gap = 6, w = icapsulePop.offsetWidth, h = icapsulePop.offsetHeight;
+    var left = Math.max(m, Math.min(a.left, vw - w - m));
+    var top = a.bottom + gap;
+    if (top + h > vh - m) top = a.top - gap - h >= m ? a.top - gap - h : Math.max(m, vh - h - m);
+    icapsulePop.style.left = Math.round(left) + "px";
+    icapsulePop.style.top = Math.round(top) + "px";
+  }
+  function icapsuleOpen(el, pin) {
+    var src = icapsuleSource(el);
+    if (!src) return;
+    clearTimeout(icapsuleLeaveTimer);
+    if (!icapsulePop) {
+      icapsulePop = doc.createElement("div");
+      icapsulePop.id = "icapsule-pop";
+      icapsulePop.className = "icapsule-pop";
+      icapsulePop.setAttribute("role", "dialog");
+      icapsulePop.hidden = true;
+      icapsulePop.addEventListener("mouseenter", function () { clearTimeout(icapsuleLeaveTimer); });
+      icapsulePop.addEventListener("mouseleave", function () {
+        if (!icapsulePinned) icapsuleScheduleClose();
+      });
+      doc.body.appendChild(icapsulePop);
+    }
+    if (icapsuleActive && icapsuleActive !== el) icapsuleActive.setAttribute("aria-expanded", "false");
+    icapsuleActive = el;
+    icapsulePinned = !!pin;
+    el.setAttribute("aria-expanded", "true");
+    // Clone inert <template> nodes directly so untrusted content never passes through innerHTML.
+    if (src.content) icapsulePop.replaceChildren(src.content.cloneNode(true));
+    else {
+      icapsulePop.textContent = "";
+      Array.prototype.forEach.call(src.children, function (c) { icapsulePop.appendChild(c.cloneNode(true)); });
+    }
+    icapsulePop.hidden = false;
+    icapsulePlace();
+  }
+  function icapsuleClose(refocus) {
+    clearTimeout(icapsuleLeaveTimer);
+    var prev = icapsuleActive;
+    icapsuleActive = null;
+    icapsulePinned = false;
+    if (prev) prev.setAttribute("aria-expanded", "false");
+    if (icapsulePop) icapsulePop.hidden = true;
+    if (refocus && prev && prev.isConnected) prev.focus();
+  }
+  function icapsuleScheduleClose() {
+    clearTimeout(icapsuleLeaveTimer);
+    icapsuleLeaveTimer = setTimeout(function () {
+      if (!icapsulePinned) icapsuleClose(false);
+    }, 120);
+  }
+  doc.addEventListener("mouseover", function (e) {
+    if (icapsulePinned) return;
+    var cap = icapsuleTrigger(e.target);
+    if (cap) icapsuleOpen(cap, false);
+    else if (icapsulePop && icapsulePop.contains(e.target)) clearTimeout(icapsuleLeaveTimer);
+  });
+  doc.addEventListener("mouseout", function (e) {
+    if (icapsulePinned || !icapsuleActive) return;
+    var to = e.relatedTarget;
+    if (to && (icapsuleActive.contains(to) || (icapsulePop && icapsulePop.contains(to)))) return;
+    if (icapsuleTrigger(e.target) === icapsuleActive) icapsuleScheduleClose();
+  });
+  doc.addEventListener("focusin", function (e) {
+    if (icapsulePinned) return;
+    var cap = icapsuleTrigger(e.target);
+    if (cap) icapsuleOpen(cap, false);
+    else if (icapsulePop && !icapsulePop.contains(e.target) && icapsuleActive) icapsuleClose(false);
+  });
+  doc.addEventListener("focusout", function (e) {
+    if (icapsulePinned || !icapsuleActive) return;
+    var to = e.relatedTarget;
+    if (to && (icapsuleActive.contains(to) || (icapsulePop && icapsulePop.contains(to)))) return;
+    icapsuleScheduleClose();
+  });
+  doc.addEventListener("click", function (e) {
+    var cap = icapsuleTrigger(e.target);
+    if (cap) {
+      var selection = window.getSelection && window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      e.preventDefault();
+      if (icapsuleActive === cap && icapsulePinned && icapsulePop && !icapsulePop.hidden) icapsuleClose(false);
+      else icapsuleOpen(cap, true);
+      return;
+    }
+    if (icapsulePop && !icapsulePop.hidden && !icapsulePop.contains(e.target)) icapsuleClose(false);
+  });
+  doc.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && icapsulePop && !icapsulePop.hidden) {
+      e.preventDefault();
+      e.stopPropagation();
+      icapsuleClose(true);
+      return;
+    }
+    if ((e.key === "Enter" || e.key === " ") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      var cap = icapsuleTrigger(e.target);
+      if (cap) {
+        e.preventDefault();
+        if (icapsuleActive === cap && icapsulePinned && icapsulePop && !icapsulePop.hidden) icapsuleClose(false);
+        else icapsuleOpen(cap, true);
+      }
+    }
+  });
+  window.addEventListener("resize", icapsulePlace);
+  doc.addEventListener("scroll", function (e) {
+    if (icapsulePop && !icapsulePop.hidden && e.target && icapsulePop.contains(e.target)) return;
+    icapsulePlace();
+  }, true);
 
