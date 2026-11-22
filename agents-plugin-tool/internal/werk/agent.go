@@ -69,6 +69,10 @@ type Config struct {
 	Sleep      func(ctx context.Context, d time.Duration) error
 	Backoff    func(attempt int) time.Duration
 	MaxRetries int
+
+	// BeforeAppend, when set, runs in the background writer ahead of each log
+	// append (a seam for tests that delay the write).
+	BeforeAppend func(json.RawMessage)
 }
 
 // Limits of the loop.
@@ -128,6 +132,7 @@ type Agent struct {
 	cfg   Config
 	files *Files
 	store *Store
+	log   *writer
 	out   *emitter
 	now   func() time.Time
 
@@ -202,6 +207,9 @@ func New(cfg Config) (*Agent, error) {
 		model: cfg.Model, effort: cfg.Effort, session: session,
 		transcript: items, resumed: len(items),
 	}
+	a.log = newWriter(store, cfg.BeforeAppend, func(err error) {
+		a.out.line(Line{T: LineNotice, Text: "the conversation could not be saved: " + err.Error()})
+	})
 	a.repaired = a.repairPending()
 	return a, nil
 }
@@ -227,7 +235,7 @@ func (a *Agent) repairPending() int {
 	for _, id := range pending {
 		item := functionOutputItem(id, interruptedOutput)
 		a.transcript = append(a.transcript, item)
-		_ = a.store.Append(item)
+		a.log.Add(item)
 	}
 	return len(pending)
 }
@@ -275,23 +283,25 @@ func userItem(text string) json.RawMessage {
 	return raw
 }
 
-// append adds an item to the transcript and the store: memory first, then one
-// appended line.
+// append adds an item to the transcript and queues it for the log: memory
+// first, the disk behind it in the same order (writer.go).
 func (a *Agent) append(item json.RawMessage) {
 	a.mu.Lock()
 	a.transcript = append(a.transcript, item)
 	a.mu.Unlock()
-	if err := a.store.Append(item); err != nil {
-		a.out.line(Line{T: LineNotice, Text: "the conversation could not be saved: " + err.Error()})
-	}
+	a.log.Add(item)
 }
 
-// Close releases the conversation file.
-func (a *Agent) Close() error { return a.store.Close() }
+// Close writes what is queued and releases the conversation file.
+func (a *Agent) Close() error {
+	a.log.Close()
+	return a.store.Close()
+}
 
 // Serve runs the session: it reads commands from in until it ends, and
 // returns after the running turn has ended.
 func (a *Agent) Serve(ctx context.Context, in io.Reader) error {
+	defer a.log.Flush()
 	a.mu.Lock()
 	a.out.line(Line{T: LineInit, Session: a.session, Version: ProtocolVersion, Model: a.model, Effort: a.effort, Resumed: a.resumed})
 	a.mu.Unlock()
@@ -445,6 +455,8 @@ func (a *Agent) runTurn(ctx context.Context, text string) {
 	a.running, a.lastReason, a.lastError = false, reason, errText
 	a.mu.Unlock()
 	a.out.line(Line{T: LineTurnEnd, Turn: turn, Reason: reason, Error: errText})
+	// The log is whole where a turn ends, an interrupted one included.
+	a.log.Flush()
 }
 
 // loop runs model requests and tool calls until the model asks for no more.

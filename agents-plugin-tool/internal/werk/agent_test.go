@@ -751,3 +751,91 @@ func TestReadOnlyWorkerHasNoExecLaunchTools(t *testing.T) {
 		}
 	}
 }
+
+// A delayed log write does not hold the loop: the model's next request and
+// the turn's end do not wait for the disk, and once the writer catches up the
+// log holds every item in the order of the transcript.
+func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var written []string
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(callOf("c1", "read", `{"path":"a.txt"}`), callOf("c2", "read", `{"path":"a.txt"}`)),
+		reply(msgItem("done")),
+	}}
+	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(item json.RawMessage) {
+		<-release
+		mu.Lock()
+		written = append(written, string(item))
+		mu.Unlock()
+	}})
+	r.user("go")
+	// The writer is held at its first item; the turn runs to its end anyway.
+	end := r.waitTurnEnd(1)
+	if end.Reason != ReasonDone || len(model.requests()) != 2 {
+		t.Fatalf("turn end %+v after %d requests", end, len(model.requests()))
+	}
+	mu.Lock()
+	if len(written) != 0 {
+		t.Errorf("%d items were written while the writer was held", len(written))
+	}
+	mu.Unlock()
+
+	close(release)
+	r.stop()
+	if err := r.agent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	transcript := r.agent.Transcript()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(written) != len(transcript) || len(transcript) != 6 {
+		t.Fatalf("written %d items, transcript %d (want 6: user, 2 calls, 2 results, reply)", len(written), len(transcript))
+	}
+	for i := range transcript {
+		if written[i] != string(transcript[i]) {
+			t.Errorf("item %d out of order or changed:\n written %s\n memory  %s", i, written[i], transcript[i])
+		}
+	}
+	_, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != len(transcript) {
+		t.Errorf("recovered %d items, want %d", len(recovered), len(transcript))
+	}
+}
+
+// An interrupt flushes: the log is whole once the turn has ended.
+func TestInterruptedTurnFlushesTheLog(t *testing.T) {
+	started := make(chan struct{})
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		func(ctx context.Context, _ Request, _ StreamHandler) (*Response, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}}
+	r := newRig(t, Config{Endpoint: model})
+	r.user("go")
+	<-started
+	r.send(Command{Type: CmdInterrupt})
+	r.waitTurnEnd(1)
+	// The turn's end is reported before the flush; wait for the log to be
+	// whole through the agent, as shutdown does.
+	r.stop()
+	if err := r.agent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, recovered, err := OpenStore(r.agent.cfg.Dir, r.agent.Session(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 {
+		t.Errorf("recovered %d items, want the user message", len(recovered))
+	}
+}
