@@ -324,3 +324,46 @@ func TestExecCloseKeepsTheTreeOpenWhenAJobDoesNotStop(t *testing.T) {
 		t.Fatalf("still fenced: %v", fenced)
 	}
 }
+
+// An explicit close that arrives before the daemon bound the exec jobs a
+// predecessor left waits for the binding, then stops the jobs it learned
+// of; one that sees no binding in time is refused and closes nothing.
+func TestExecCloseWaitsForTheJobsToBind(t *testing.T) {
+	h, _ := newFakePiRecoveryHarness(t)
+	h.runner.ExpectExecJobs()
+	worker, _ := spawnRecoveryWorker(t, h)
+	old := execBindWait
+	execBindWait = 50 * time.Millisecond
+	t.Cleanup(func() { execBindWait = old })
+	if _, err := h.runner.CloseConversation(worker.ID); err == nil || !strings.Contains(err.Error(), "has not restored its exec jobs") {
+		t.Fatalf("a close before the jobs bound: %v", err)
+	}
+	if h.state(worker.ID).Status == StatusClosed {
+		t.Fatal("closed over jobs the daemon did not know yet")
+	}
+	execBindWait = 5 * time.Second
+	closed := make(chan error, 1)
+	go func() {
+		_, err := h.runner.CloseConversation(worker.ID)
+		closed <- err
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("the close went ahead before the jobs bound: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	jobs := newFakeExecJobs()
+	jobs.set(worker.ID, 1)
+	h.runner.BindExecJobs(jobs)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the close did not go ahead once the jobs bound")
+	}
+	if got := jobs.log(); !slices.Contains(got, "stop "+worker.ID) {
+		t.Fatalf("the restored job was not stopped: %v", got)
+	}
+}

@@ -5,9 +5,11 @@
 package wsagent
 
 import (
+	"errors"
 	"maps"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ExecJobs is the hosted exec jobs as the runner reads them.
@@ -41,6 +43,45 @@ type execState struct {
 	live     atomic.Pointer[map[string]int]
 	bound    atomic.Bool
 	deferred atomic.Bool
+	// boundC, under boundMu, is closed when the jobs bind: an explicit
+	// close that arrives before waits on it (awaitExecBound).
+	boundMu sync.Mutex
+	boundC  chan struct{}
+}
+
+// execBindWait bounds how long an explicit close waits for the hosted exec
+// jobs to bind (a test seam).
+var execBindWait = 30 * time.Second
+
+// errExecUnbound refuses an explicit close that arrived before the daemon
+// bound the exec jobs a predecessor left and did not see them bind in
+// time: it cannot stop jobs it does not know yet.
+var errExecUnbound = errors.New("the daemon has not restored its exec jobs yet, so the session's jobs cannot be stopped; retry the close shortly")
+
+// awaitExecBound returns once the hosted exec jobs are bound, or when the
+// runner expects none; errExecUnbound after execBindWait.
+func (r *Runner) awaitExecBound() error {
+	if !r.exec.deferred.Load() || r.exec.bound.Load() {
+		return nil
+	}
+	r.exec.boundMu.Lock()
+	if r.exec.bound.Load() {
+		r.exec.boundMu.Unlock()
+		return nil
+	}
+	if r.exec.boundC == nil {
+		r.exec.boundC = make(chan struct{})
+	}
+	wait := r.exec.boundC
+	r.exec.boundMu.Unlock()
+	timer := time.NewTimer(execBindWait)
+	defer timer.Stop()
+	select {
+	case <-wait:
+		return nil
+	case <-timer.C:
+		return errExecUnbound
+	}
 }
 
 // ExpectExecJobs marks a runner whose hosted exec jobs the daemon binds
@@ -63,6 +104,12 @@ func (r *Runner) BindExecJobs(src ExecJobs) {
 	r.exec.live.Store(&next)
 	r.exec.bound.Store(true)
 	r.exec.mu.Unlock()
+	r.exec.boundMu.Lock()
+	if r.exec.boundC != nil {
+		close(r.exec.boundC)
+		r.exec.boundC = nil
+	}
+	r.exec.boundMu.Unlock()
 	r.mu.Lock()
 	all := make(map[string]bool, len(r.convs))
 	for id := range r.convs {

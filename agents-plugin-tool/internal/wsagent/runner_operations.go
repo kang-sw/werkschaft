@@ -368,6 +368,12 @@ func (r *Runner) setPermissionMode(id, mode string, user bool) (State, error) {
 // children (children.go), close first, deepest first. A conversation parent
 // whose done turn waited for this child's report is released.
 func (r *Runner) CloseConversation(id string) (State, error) {
+	// The jobs a predecessor left are known only once bound: a close
+	// before that would close over jobs it cannot stop. The wait holds no
+	// lock.
+	if err := r.awaitExecBound(); err != nil {
+		return State{}, fmt.Errorf("close %s: %w", id, err)
+	}
 	r.resumeMu.Lock()
 	defer r.resumeMu.Unlock()
 	if _, err := r.open(id); err != nil {
