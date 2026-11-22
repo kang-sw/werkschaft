@@ -325,7 +325,10 @@ func (s *CompanionPackStore) install(opts wsconfig.Options, plan companionInstal
 				item.Status = companionStatusOther
 			}
 		}
-		if wanted != nil && !wanted[entry.ID] {
+		// An unselected entry is listed only. A dry run lists a url entry
+		// without downloading it: its status follows the entry's sha256, and
+		// the pack zip is fetched and checked only by an install click.
+		if (wanted != nil && !wanted[entry.ID]) || (dryRun && entry.URL != "") {
 			if entry.URL != "" && item.Status == companionStatusInstalled && entry.SHA256 != installedPack.info.Origin.ArchiveSHA256 {
 				item.Status = companionStatusUpdate
 			}

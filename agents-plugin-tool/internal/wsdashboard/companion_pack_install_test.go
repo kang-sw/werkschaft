@@ -681,3 +681,83 @@ func TestCompanionPackInstallFileOperations(t *testing.T) {
 		t.Fatalf("uninstall ops: %v", removal)
 	}
 }
+
+// TestCompanionPackInstallExternalEntry covers a url entry through the
+// plan's external hook: a dry run lists it without a download, an install
+// fetches and checks it, and the listing status follows the entry's sha256.
+func TestCompanionPackInstallExternalEntry(t *testing.T) {
+	home := t.TempDir()
+	store := &CompanionPackStore{}
+	opts := wsconfig.Options{ConfigHome: home}
+	packZip := companionTestZip(t,
+		companionZipEntry{name: "far-0123/"},
+		companionZipEntry{name: "far-0123/pack.json", data: companionTestManifest("far", "stand.png", "")},
+		companionZipEntry{name: "far-0123/stand.png", data: companionTestPNG(t, 8, 8)})
+	sum := strings.Repeat("c1", 32)
+	market := func(sha string) []byte {
+		return companionTestZip(t,
+			companionZipEntry{name: "marketplace.json", data: companionTestMarket(
+				companionTestEntry("near", "packs/near"),
+				fmt.Sprintf(`{"id":"far","name":"Far","version":"2.0.0","url":"https://example.invalid/far.zip","sha256":%q}`, sha))},
+			companionZipEntry{name: "packs/near/pack.json", data: companionTestManifest("near", "stand.png", "")},
+			companionZipEntry{name: "packs/near/stand.png", data: companionTestPNG(t, 8, 8)})
+	}
+	var fetched []string
+	run := func(data []byte, ids []string, dryRun bool, external func(companionMarketplaceEntry, *companionInflate) (*companionArchive, error)) companionInstallResult {
+		t.Helper()
+		inflate := newCompanionInflate()
+		archive, err := openCompanionArchive(data, inflate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := archive.marketplace()
+		if err != nil {
+			t.Fatal(err)
+		}
+		origin := companionInstallOrigin{Source: "https://example.invalid/packs.zip", Kind: "zip", ArchiveSHA256: strings.Repeat("ab", 32)}
+		result, err := store.install(opts, companionInstallPlan{archive: archive, market: m, origin: origin, external: external}, ids, dryRun)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	refuse := func(entry companionMarketplaceEntry, _ *companionInflate) (*companionArchive, error) {
+		t.Fatalf("dry run downloaded %s", entry.URL)
+		return nil, nil
+	}
+	serve := func(entry companionMarketplaceEntry, inflate *companionInflate) (*companionArchive, error) {
+		fetched = append(fetched, entry.URL)
+		return openCompanionArchive(packZip, inflate)
+	}
+
+	listing := run(market(sum), nil, true, refuse)
+	if far := companionListed(listing, "far"); far == nil || far.Status != companionStatusAvailable || far.Error != nil || far.Rev != "" {
+		t.Fatalf("dry-run url entry = %+v, want available with no download", far)
+	}
+	if near := companionListed(listing, "near"); near == nil || near.Error != nil || near.Rev == "" {
+		t.Fatalf("dry-run path entry = %+v, want validated", near)
+	}
+
+	installed := run(market(sum), []string{"far"}, false, serve)
+	if far := companionListed(installed, "far"); far == nil || !far.Installed || far.Error != nil {
+		t.Fatalf("install url entry = %+v", far)
+	}
+	if len(fetched) != 1 || fetched[0] != "https://example.invalid/far.zip" {
+		t.Fatalf("fetched = %v, want one download of the entry URL", fetched)
+	}
+	origin := store.snapshot(opts).byID["far"].info.Origin
+	if origin == nil || origin.ArchiveSHA256 != sum || origin.Kind != "zip" || origin.Version != "2.0.0" {
+		t.Fatalf("far sidecar = %+v, want the entry sha256 as archiveSha256", origin)
+	}
+
+	if far := companionListed(run(market(sum), nil, true, refuse), "far"); far.Status != companionStatusInstalled {
+		t.Fatalf("unchanged url entry status = %q, want installed", far.Status)
+	}
+	if far := companionListed(run(market(strings.Repeat("d2", 32)), nil, true, refuse), "far"); far.Status != companionStatusUpdate {
+		t.Fatalf("changed url entry status = %q, want update", far.Status)
+	}
+	if far := companionListed(run(market(sum), []string{"far"}, false, nil), "far"); far.Error == nil ||
+		!strings.Contains(far.Error.Message, "network source") {
+		t.Fatalf("url entry without a fetcher = %+v, want a refusal", far)
+	}
+}
