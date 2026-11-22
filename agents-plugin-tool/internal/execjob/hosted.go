@@ -80,8 +80,10 @@ type HostedOptions struct {
 	// JobBytes and TotalBytes replace the ring bounds (a test seam).
 	JobBytes, TotalBytes int64
 	// OnRunning is called, with no lock held, after a job enters or leaves
-	// the running set RunningOwners counts, and after a user stop's notice
-	// outcome is recorded (what the job list shows); nil observes nothing.
+	// the running set RunningOwners counts, after a job is spawned and
+	// saved (its start time and process are set), and after a user stop's
+	// notice outcome is recorded (what the job list shows); nil observes
+	// nothing.
 	// It runs on the launching or ending goroutine, so it must return
 	// promptly.
 	OnRunning func()

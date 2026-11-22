@@ -803,3 +803,31 @@ func TestRevisionMovesOnceTheStartTimeIsSet(t *testing.T) {
 		t.Fatalf("the start times each revision saw = %v: the last must carry one", starts)
 	}
 }
+
+// TestStopNoticeCarriesNoMoreOutputThanTheCompletionNotice: the notice goes to
+// the shared conversation like the completion notice does, so it holds the
+// same output tail and no more.
+func TestStopNoticeCarriesNoMoreOutputThanTheCompletionNotice(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	v := fx.asyncJob(HostedLaunch{})
+	fx.holders.out(v.HolderID, "stdout", strings.Repeat("x", 3*HostedPreviewBytes)+"\n")
+	if _, err := fx.h.StopByUser("lead", v.ID); err != nil {
+		t.Fatal(err)
+	}
+	n := stopNotices(fx)
+	if len(n) != 1 {
+		t.Fatalf("notices = %+v", fx.sessions.noticeList())
+	}
+	// The tail is the last HostedPreviewBytes bytes: that many minus the
+	// final newline of x's.
+	run := strings.Repeat("x", HostedPreviewBytes-1)
+	if !strings.Contains(n[0].text, run+"\n") || strings.Contains(n[0].text, "x"+run) {
+		t.Fatalf("the notice does not hold exactly the last %d output bytes", HostedPreviewBytes)
+	}
+	if got := len(n[0].text); got > HostedPreviewBytes+1024 {
+		t.Fatalf("the notice is %d bytes long, more than the tail %d and its fixed text", got, HostedPreviewBytes)
+	}
+	if !strings.Contains(n[0].text, fmt.Sprintf("output (last %d of %d bytes)", HostedPreviewBytes, 3*HostedPreviewBytes+1)) {
+		t.Fatalf("notice lacks the tail header:\n%.300s", n[0].text)
+	}
+}

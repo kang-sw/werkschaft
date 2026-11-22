@@ -641,8 +641,8 @@ func TestHostedAsyncAnswersAtOnce(t *testing.T) {
 
 // TestHostedRunningOwnersFollowEachJob: RunningOwners counts the running
 // jobs by owning conversation; OnRunning runs, with no lock held, once a
-// job is admitted and once it ends, whether it exits, is stopped, or never
-// starts; a reopened Hosted counts a running job its predecessor left.
+// job is admitted, once it is spawned and saved (its start time is set), and
+// once it ends, whether it exits, is stopped, or never starts; a reopened Hosted counts a running job its predecessor left.
 func TestHostedRunningOwnersFollowEachJob(t *testing.T) {
 	fx := newHostedFixture(t, time.Hour)
 	var mu sync.Mutex
@@ -682,7 +682,9 @@ func TestHostedRunningOwnersFollowEachJob(t *testing.T) {
 	mu.Unlock()
 	want := []map[string]int{
 		{"lead": 1},             // lead admitted
+		{"lead": 1},             // lead spawned (its start time is set)
 		{"lead": 1, "other": 1}, // other admitted
+		{"lead": 1, "other": 1}, // other spawned
 		{"other": 1},            // lead exited
 		{},                      // other stopped
 		{"lead": 1},             // the failing launch admitted
@@ -735,6 +737,7 @@ func TestHostedRunningOwnersFollowEachJob(t *testing.T) {
 	mu.Unlock()
 	want = []map[string]int{
 		{"lead": 1, "other": 1}, // other admitted beside the kept job
+		{"lead": 1, "other": 1}, // other spawned
 		{"other": 1},            // the kept job's holder left (HolderGone)
 		{},                      // the next start found other's holder gone
 	}
@@ -2220,9 +2223,9 @@ func TestHostedPanicsReleaseTheDeleteClaim(t *testing.T) {
 				fx.store.failDelete = true
 			}
 			fx.store.mu.Unlock()
-			// Each finished job's admission and end have called OnRunning,
-			// so the armed panic hits this launch's admission only.
-			eventuallyExec(t, "the finished jobs' running updates", func() bool { return calls.Load() == 2*HostedMaxJobs })
+			// Each finished job's admission, spawn and end have called
+			// OnRunning, so the armed panic hits this launch's admission only.
+			eventuallyExec(t, "the finished jobs' running updates", func() bool { return calls.Load() == 3*HostedMaxJobs })
 			armed.Store(where == "on running")
 			func() {
 				defer func() { _ = recover() }()
