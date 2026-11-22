@@ -113,6 +113,9 @@ func dashboardCommand(args []string) {
 	// Mail sender labels read the runner and the daemon once each exists.
 	labels := &mailLabels{}
 	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label)
+	// The hosted exec jobs bind after the runner starts (openHostedExec):
+	// until then no held report is released and no session sleeps.
+	agents.ExpectExecJobs()
 	labels.agents.Store(agents)
 	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
 	// The one provider credential store: the daemon's token route and its
@@ -141,7 +144,7 @@ func dashboardCommand(args []string) {
 	packageName, _, packageErr := wsagent.ResolveHostedPackage()
 	var settings *wsdashboard.ConfigBackend
 	if packageErr == nil {
-		settings, packageErr = mcp.DashboardConfigBackend(packageName, wsconfig.Options{}, sessions, agents.RefreshAmbient)
+		settings, packageErr = mcp.DashboardConfigBackend(packageName, wsconfig.Options{}, sessions, agents.RefreshAmbient, agents.HarnessAvailability)
 	}
 	if packageErr != nil {
 		fmt.Fprintln(logw, "dashboard: settings catalog unavailable:", packageErr)
@@ -224,12 +227,21 @@ func dashboardCommand(args []string) {
 		if d := host.live.Load(); d != nil {
 			d.ExecJobsChanged()
 		}
+		agents.ExecJobsChanged()
 	}
 	execjob.SetActiveObserver(execJobsChanged)
 	defer execjob.SetActiveObserver(nil)
 	// Under the lock and with the runner started: a completion notice for
 	// a conversation the runner does not know yet would be dropped.
-	host.exec.Store(openHostedExec(dir, holders, agents, execLink, logw, execJobsChanged))
+	hostedExec := openHostedExec(dir, holders, agents, execLink, logw, execJobsChanged)
+	host.exec.Store(hostedExec)
+	// The jobs a predecessor left are settled: the runner's report holds,
+	// sleep and close cascade read them from now on.
+	if hostedExec != nil {
+		agents.BindExecJobs(hostedExec)
+	} else {
+		agents.BindExecJobs(nil)
+	}
 	// Start ran before this Store, so its wakes read no jobs: a job a
 	// predecessor left running reaches the rail with this one.
 	execJobsChanged()
@@ -437,6 +449,12 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// A Pi subagent's own pi.* calls (the token route) need a usable
 		// Pi, as a lead's do.
 		ChildCheck: mcp.PiReady,
+		// The dashboard's tier routing view asks availability without
+		// running pi --version (Runner.HarnessAvailability).
+		ChildCheckKnown: mcp.PiReadyKnown,
+		// agent.spawn routes role tiers through the packaged playbook
+		// roles' agent.tier_routing graph.
+		TierRoles: mcp.PackagedTierRoles,
 		// A message that cannot wake its sleeping agent stays queued; its
 		// sender hears why once.
 		WakeRefused: mcp.AgentWakeRefused(logw),
@@ -547,5 +565,5 @@ func serveDashboard(server *mcp.Server) {
 // hostedRender is what reg says about text the daemon renders for its
 // hosted lead.
 func hostedRender(reg wsagent.BackendRegistration, boards *mcp.WhiteboardStores) mcp.HostedRender {
-	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
+	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, PreferNativeSubagent: reg.PreferNativeSubagent, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
 }

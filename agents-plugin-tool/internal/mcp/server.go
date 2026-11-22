@@ -64,6 +64,11 @@ type Server struct {
 	// (server_exec_hosted.go); nil and empty where there is none.
 	exec         func() *execjob.Hosted
 	conversation string
+	// execCutover is the harness of the bound conversation when its
+	// process launched with native shell tools removed (wsagent's exec
+	// cutover): the exec tools are listed, and Codex's fs.* read tools
+	// exist, only then. Empty elsewhere.
+	execCutover string
 	// agentBackendSource exposes the daemon's registered backend descriptors
 	// independently of pi.agents, so token-forwarding workers resolve their
 	// harness descriptor without receiving a lead runner handle.

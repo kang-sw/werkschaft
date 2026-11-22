@@ -21,6 +21,8 @@ func TestSettingsProposalDeliversOnceToAnActiveLeadWithoutWritingRepo(t *testing
 	target := settingsID("worktree", f.project)
 	body := `{"target":"` + target + `","operations":[{"action":"set","key":"workflow.profile","selectors":{"harness":"codex"},"value":"orchestrate"},{"action":"reset","key":"workflow.profile","selectors":{"harness":"*"}}]}`
 	own := "http://127.0.0.1:43210"
+	// A Windows project path holds backslashes, which JSON must escape.
+	projectJSON, _ := json.Marshal(f.project)
 	try := func(body, origin string) *httptest.ResponseRecorder {
 		return settingsRequest(t, f.d, http.MethodPost, "/api/config/proposal", body, origin)
 	}
@@ -30,7 +32,7 @@ func TestSettingsProposalDeliversOnceToAnActiveLeadWithoutWritingRepo(t *testing
 	}{
 		{body, "http://evil.example", "forbidden", 403},
 		{`{"target":"` + target + `","operations":[]}`, own, "invalid_request", 400},
-		{strings.Replace(body, target, f.project, 1), own, "target_not_found", 404},
+		{strings.Replace(body, target, strings.Trim(string(projectJSON), `"`), 1), own, "target_not_found", 404},
 		{strings.Replace(body, `"harness":"*"`, `"harness":"codex"`, 1), own, "invalid_request", 400},
 		{strings.Replace(body, "workflow.profile", "agent.profile.test", 1), own, "invalid_request", 400},
 	} {

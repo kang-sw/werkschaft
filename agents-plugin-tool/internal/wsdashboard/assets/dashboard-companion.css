@@ -9,18 +9,121 @@
   position: absolute;
   top: 0;
   left: 0;
+  overflow: visible;
+  transform-origin: 50% 80%;
+  pointer-events: auto;
+}
+.ws-companion-character {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   padding: 0;
   border: 0;
   background: none;
   color: inherit;
-  overflow: visible;
-  transform-origin: 50% 80%;
-  pointer-events: auto;
   cursor: grab;
   touch-action: none;
 }
-.ws-companion-hit:active { cursor: grabbing; }
-.ws-companion-hit:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 3px; border-radius: 9px; }
+.ws-companion-character:active { cursor: grabbing; }
+.ws-companion-character:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 3px; border-radius: 9px; }
+.ws-companion-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, transparent 45%, currentColor 46%, currentColor 53%, transparent 54%, transparent 65%, currentColor 66%, currentColor 73%, transparent 74%);
+  color: var(--wb-fg);
+  opacity: 0;
+  cursor: nesw-resize;
+  touch-action: none;
+}
+.ws-companion-hit:is(:hover, :focus-within) .ws-companion-resize { opacity: 0.35; }
+.ws-companion-hit .ws-companion-resize:is(:hover, :active, :focus-visible) { opacity: 0.85; }
+.ws-companion-resize:focus-visible { outline: 2px solid var(--wb-primary); }
+.ws-companion-gear {
+  position: absolute;
+  top: 22px;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--wb-fg);
+  opacity: 0;
+  cursor: pointer;
+}
+.ws-companion-gear svg { width: 14px; height: 14px; pointer-events: none; }
+.ws-companion-hit:is(:hover, :focus-within) .ws-companion-gear { opacity: 0.35; }
+.ws-companion-hit .ws-companion-gear:is(:hover, :active, :focus-visible), .ws-companion-gear[aria-expanded="true"] { opacity: 0.85; }
+.ws-companion-gear:focus-visible { outline: 2px solid var(--wb-primary); }
+.ws-companion-settings {
+  position: absolute;
+  inset: auto;
+  top: 0;
+  left: 0;
+  margin: 0;
+  width: min(272px, calc(100vw - 12px));
+  max-height: calc(100vh - 12px);
+  overflow: auto;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--wb-line);
+  border-radius: 12px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow-hi);
+  font: 12px/1.4 var(--wb-sans, system-ui, sans-serif);
+  pointer-events: auto;
+}
+.ws-companion-settings[open] { display: grid; gap: 8px; }
+.ws-companion-settings-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ws-companion-settings h2 { margin: 0; font-size: 13px; font-weight: 650; }
+.ws-companion-settings h3 { margin: 0 0 2px; font-size: 11px; font-weight: 600; color: var(--wb-muted-fg); text-transform: uppercase; letter-spacing: 0.04em; }
+.ws-companion-settings p { margin: 0; }
+.ws-companion-settings-close {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: 16px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+.ws-companion-settings-close:is(:hover, :focus-visible), .ws-companion-settings-action:is(:hover, :focus-visible) { background: var(--wb-wash); }
+.ws-companion-settings-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.ws-companion-settings-control { display: inline-flex; align-items: center; gap: 4px; }
+.ws-companion-settings select, .ws-companion-settings input {
+  max-width: 132px;
+  padding: 3px 6px;
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  background: var(--wb-bg);
+  color: inherit;
+  font: inherit;
+}
+.ws-companion-settings input[type="number"] { width: 72px; }
+.ws-companion-settings-unit, .ws-companion-settings-muted { color: var(--wb-muted-fg); }
+.ws-companion-settings-persona { padding: 6px 8px; border-radius: 8px; background: var(--wb-wash); overflow-wrap: anywhere; }
+.ws-companion-settings-name { font-weight: 600; }
+.ws-companion-settings-voice { white-space: pre-line; max-height: 7.2em; overflow: auto; }
+.ws-companion-settings-action {
+  justify-self: start;
+  padding: 4px 8px;
+  border: 1px solid var(--wb-line);
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
 .ws-companion-hit canvas { position: absolute; pointer-events: none; }
 .ws-companion-menu {
   position: absolute;
@@ -58,6 +161,8 @@
 .ws-companion-fx[data-kind="particles"] > span:not(:first-child) { position: absolute; left: 0; }
 .ws-companion-quip {
   max-width: 170px;
+  pointer-events: none;
+  user-select: none;
   padding: 4px 7px;
   border-radius: 7px;
   background: var(--wb-card);

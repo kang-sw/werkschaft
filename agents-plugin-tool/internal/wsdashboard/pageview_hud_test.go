@@ -62,17 +62,27 @@ func TestHUDProjectionStatePrecedenceVisibilityAndHarness(t *testing.T) {
 		wslive.Agent{ID: "think", Status: wslive.StatusRunning, Activity: wslive.Activity{Phase: wslive.PhaseThinking}},
 		// Holding inherits parent harness from "fail" ("codex") instead of lead.
 		wslive.Agent{ID: "hold", ParentID: "fail", Status: wslive.StatusDone, Holding: true, Alive: true},
-		// Alive-idle stays visible as idle.
+		// Direct alive-idle leaf folds into Folded & Completed.
 		wslive.Agent{ID: "alive", Status: wslive.StatusDone, Alive: true, AgentKind: wslive.AgentKindPi},
+		// Deeper (depth >= 2) alive-idle leaf stays visible.
+		wslive.Agent{ID: "alive-deep", ParentID: "hold", Status: wslive.StatusDone, Alive: true},
+		// Deeper (depth >= 2) dead-done leaf folds into Completed only, not Folded.
+		wslive.Agent{ID: "done-deep", ParentID: "hold", Status: wslive.StatusDone},
 		// Asleep parent kept visible solely for connectivity to running child.
 		wslive.Agent{ID: "asleep-anc", Status: wslive.StatusDone},
 		wslive.Agent{ID: "grandchild", ParentID: "asleep-anc", Status: wslive.StatusRunning, Activity: wslive.Activity{Phase: wslive.PhaseTool}},
-		// Asleep leaf is folded into Completed.
+		// Direct alive-idle parent with only dead-done child folds whole subtree into Completed (2) and increments Folded once (1).
+		wslive.Agent{ID: "alive-folded-parent", Status: wslive.StatusDone, Alive: true},
+		wslive.Agent{ID: "alive-folded-child", ParentID: "alive-folded-parent", Status: wslive.StatusDone},
+		// Asleep leaf is folded into Completed and Folded.
 		wslive.Agent{ID: "done-leaf", Status: wslive.StatusDone},
 	)
 	v := buildSessionView(pageInputs{Session: leadSess, Snapshot: snap, Now: now, Lookup: lookupOf(nil, nil)})
-	if v.Tree.HUD.Completed != 1 {
-		t.Fatalf("HUD.Completed = %d, want 1", v.Tree.HUD.Completed)
+	if v.Tree.HUD.Completed != 5 {
+		t.Fatalf("HUD.Completed = %d, want 5", v.Tree.HUD.Completed)
+	}
+	if v.Tree.HUD.Folded != 3 {
+		t.Fatalf("HUD.Folded = %d, want 3", v.Tree.HUD.Folded)
 	}
 	byID := map[string]HUDNode{}
 	var collect func([]HUDNode)
@@ -83,8 +93,10 @@ func TestHUDProjectionStatePrecedenceVisibilityAndHarness(t *testing.T) {
 		}
 	}
 	collect(v.Tree.HUD.Roots)
-	if _, ok := byID["done-leaf"]; ok {
-		t.Fatal("asleep leaf should be excluded from visible HUD roots")
+	for _, hiddenID := range []string{"alive", "done-leaf", "done-deep", "alive-folded-parent", "alive-folded-child"} {
+		if _, ok := byID[hiddenID]; ok {
+			t.Fatalf("node %q should be excluded from visible HUD roots", hiddenID)
+		}
 	}
 	want := map[string][2]string{
 		"perm":       {"permission", "agy"},
@@ -92,7 +104,7 @@ func TestHUDProjectionStatePrecedenceVisibilityAndHarness(t *testing.T) {
 		"reply":      {"tool", "claude"},
 		"think":      {"thinking", "claude"},
 		"hold":       {"holding", "codex"},
-		"alive":      {"idle", "claude"},
+		"alive-deep": {"idle", "codex"},
 		"asleep-anc": {"idle", "claude"},
 		"grandchild": {"tool", "claude"},
 	}
@@ -110,7 +122,7 @@ func TestHUDProjectionStatePrecedenceVisibilityAndHarness(t *testing.T) {
 			t.Errorf("node %q should require confirmation", id)
 		}
 	}
-	for _, id := range []string{"alive", "asleep-anc"} {
+	for _, id := range []string{"alive-deep", "asleep-anc"} {
 		if byID[id].CloseActive {
 			t.Errorf("node %q should close immediately", id)
 		}
@@ -172,8 +184,8 @@ func TestHUDProjectionDepthCapOverflowAndLinkedDedup(t *testing.T) {
 	if n5.ID != "n5-vis" || n5.Overflow != 1 || len(n5.Children) != 0 {
 		t.Fatalf("depth-4 node n5-vis = %+v, want Overflow=1 and no Children", n5)
 	}
-	if v.Tree.HUD.Completed != 1 {
-		t.Fatalf("HUD.Completed = %d, want 1 (n5-done only, no double count of pi:n2)", v.Tree.HUD.Completed)
+	if v.Tree.HUD.Completed != 1 || v.Tree.HUD.Folded != 0 {
+		t.Fatalf("HUD = (Completed=%d, Folded=%d), want (1, 0) (n5-done only, no double count of pi:n2)", v.Tree.HUD.Completed, v.Tree.HUD.Folded)
 	}
 	// Verify SubagentCount and CompactAgents stay untouched by HUD holding/alive rules.
 	if v.Tree.Subagents != (SubagentCount{}) || len(v.Tree.CompactAgents) != 0 {

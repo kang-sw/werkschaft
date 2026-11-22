@@ -25,6 +25,13 @@ type PlaybookMeta struct {
 	// Recognized here (parse-only) and surfaced as playbook.render's
 	// recommended tier. Empty when absent from frontmatter.
 	Tier string
+	// TierRole is the playbook's own tier-routing role node (frontmatter
+	// tier-role), so a daemon-agent render recommends <TierRole>:<Tier>.
+	// Empty when absent: the render recommends the bare Tier.
+	TierRole string
+	// TierParent is the role node's packaged default pointer (frontmatter
+	// tier-parent), such as implement:*. Meaningful only with TierRole.
+	TierParent string
 	// Includes is the ordered list of bare text-dep names to auto-include.
 	Includes []string
 	// Variables is the ordered list of declared substitution variable names.

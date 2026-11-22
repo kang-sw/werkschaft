@@ -44,10 +44,24 @@ func (r worktreeRemoveResult) text() string {
 // staleAfter (a live worker's tree). It also refuses what release refuses: the
 // primary worktree and any path outside the owned pool.
 func removeWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, staleAfter time.Duration, now time.Time, lookup worktreeProfileLookup) (worktreeRemoveResult, error) {
+	return removeWorktreeFenced(ctx, runner, env, wtPath, poolConfigValue, staleAfter, now, lookup, nil)
+}
+
+// removeWorktreeFenced is removeWorktree that first reserves the target
+// against exec jobs (worktreeExecFence): a live job refuses the removal,
+// and none starts there until it is done.
+func removeWorktreeFenced(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, staleAfter time.Duration, now time.Time, lookup worktreeProfileLookup, fenceExec func(string) (func(), error)) (worktreeRemoveResult, error) {
 	var res worktreeRemoveResult
 	target, entry, mainRoot, err := ownedPoolWorktree(ctx, runner, wtPath, poolConfigValue, "worktree.remove")
 	if err != nil {
 		return res, err
+	}
+	if fenceExec != nil {
+		unfence, err := fenceExec(target)
+		if err != nil {
+			return res, fmt.Errorf("worktree.remove refuses %s: %w", target, err)
+		}
+		defer unfence()
 	}
 	res.Path = target
 	if !entry.Detached {

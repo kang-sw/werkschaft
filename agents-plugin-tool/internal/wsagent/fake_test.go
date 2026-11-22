@@ -33,6 +33,21 @@ type fakeBackend struct {
 	// steers makes its processes take a child's report mid-turn
 	// (reportSteerer).
 	steers bool
+	// sendGate, when set, holds every Send until released (gateSends).
+	sendGate *gate
+}
+
+// gateSends holds every Send until the gate is released.
+func (b *fakeBackend) gateSends(t *testing.T) *gate {
+	g := newGate(t, func() {
+		b.mu.Lock()
+		b.sendGate = nil
+		b.mu.Unlock()
+	})
+	b.mu.Lock()
+	b.sendGate = g
+	b.mu.Unlock()
+	return g
 }
 
 // takeSendFailure reports whether the next send fails (failSends).
@@ -234,6 +249,14 @@ func (p *fakeProc) gateClose(t *testing.T) *gate {
 func (p *fakeProc) Events() <-chan Event { return p.events }
 
 func (p *fakeProc) Send(text string) error {
+	if p.backend != nil {
+		p.backend.mu.Lock()
+		g := p.backend.sendGate
+		p.backend.mu.Unlock()
+		if g != nil {
+			g.wait()
+		}
+	}
 	if p.backend != nil && p.backend.takeSendFailure() {
 		return errors.New("write |1: broken pipe")
 	}

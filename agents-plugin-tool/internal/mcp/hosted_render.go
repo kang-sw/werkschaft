@@ -16,13 +16,16 @@ import (
 // PlaybookCommands, whether its sessions run without ws's plugin skills and
 // reach ws only as the daemon's own server. ToolNameScheme and CallFallback
 // keep its generated tool index identical to the connection's discovery.
+// PreferNativeSubagent selects the native-first wording of the text the lead
+// executes itself (nativeFirstTerminology).
 type HostedRender struct {
-	Harness          string
-	PlaybookCommands bool
-	ToolNameScheme   string
-	CallFallback     bool
-	DirectTools      []string
-	Boards           *WhiteboardStores
+	Harness              string
+	PlaybookCommands     bool
+	PreferNativeSubagent bool
+	ToolNameScheme       string
+	CallFallback         bool
+	DirectTools          []string
+	Boards               *WhiteboardStores
 }
 
 // hostedRenderServer is a throwaway server that renders for the hosted lead
@@ -53,7 +56,7 @@ func hostedRenderServer(env []string, root string, render HostedRender, key stri
 		s.Close()
 		return nil, nil, err
 	}
-	s.descriptor = connectionDescriptor{manualHarness: render.Harness, playbookCommands: render.PlaybookCommands, aliases: aliases, callFallback: render.CallFallback, directTools: render.DirectTools, leadRender: true}
+	s.descriptor = connectionDescriptor{manualHarness: render.Harness, playbookCommands: render.PlaybookCommands, preferNativeSubagent: render.PreferNativeSubagent, aliases: aliases, callFallback: render.CallFallback, directTools: render.DirectTools, leadRender: true}
 	s.descriptorResolved = true
 	// A render may start the session-start tracker check (a background
 	// fetch); the server is released once that settles, without holding up

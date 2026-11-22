@@ -80,14 +80,15 @@ const ExploreProfile = "explore"
 // allows.
 var PiWorkerTools = []string{"read", "bash", "edit", "write", "grep", "find", "ls"}
 
-// PiWorkerWSTools are the ws tools the pi-worker profile allows: the commit
-// an implementation prompt ends with, the git reads a commit and a diff
+// PiWorkerWSTools are the ws tools the pi-worker profile allows: the exec
+// tools that replace a cutover session's shell, the commit an
+// implementation prompt ends with, the git reads a commit and a diff
 // review need, implementation-branch resolution, ticket creation and preflight
 // verification, and the pi.* tools a spawning playbook needs. A worker's
 // pi.* calls go to the daemon on its capability token (children.go), which
 // caps the spawn tree's depth and tier. Ticket lifecycle operations remain
 // on pi-mini-lead; worktree leasing has its own authorization boundary.
-var PiWorkerWSTools = []string{"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.resolve_impl_branch", "tickets.create_empty", "tickets.verify", "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait", "compact", "agenda.set"}
+var PiWorkerWSTools = append([]string{"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.resolve_impl_branch", "tickets.create_empty", "tickets.verify", "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait", "compact", "agenda.set"}, ExecWSTools...)
 
 // PiMiniLeadWSTools adds ticket workflow reads and lifecycle operations, but
 // no lead-only tools or note, whiteboard, or tracker writes.
@@ -171,7 +172,11 @@ func agentWSTools() []string {
 			out = append(out, name)
 		}
 	}
-	for _, name := range append([]string{"agent.spawn", "agent.interrupt", "agent.list", "agent.tiers", "review.stamp", "tickets.sage_gate", "tickets.sage_stamp"}, ChildSafeWSTools...) {
+	// The exec tools came in with PiMiniLeadWSTools; Codex's fs.* read
+	// tools join them here (ws-mcp admits those for a cutover Codex child
+	// only), before any harness's native process tools are removed.
+	extra := append([]string{"agent.spawn", "agent.interrupt", "agent.list", "agent.tiers", "review.stamp", "tickets.sage_gate", "tickets.sage_stamp"}, CodexReadWSTools...)
+	for _, name := range append(extra, ChildSafeWSTools...) {
 		if !slices.Contains(out, name) {
 			out = append(out, name)
 		}

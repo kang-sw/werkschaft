@@ -3,6 +3,8 @@ kind: render
 delegates: false
 role: implementer
 tier: medium
+tier-role: implementer
+tier-parent: implement:*
 variables:
   - RoleModel
   - PlanPath

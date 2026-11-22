@@ -406,6 +406,7 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 		if !c.turn {
 			c.applySettings()
 		}
+		c.rejectCutoverPending()
 		c.allowAgyBypassPending()
 		c.recheckExecApprovals()
 	}
@@ -419,6 +420,14 @@ func (c *conv) reconcileLeadPermission() {
 	// The loop owns permission state, but Send updates the shared record
 	// concurrently. Copy it under mu before passing it by value.
 	rec := c.record()
+	if mode := c.cutoverLaunchMode(); mode != "" {
+		// The cutover's mode, never the saved one, is what the process must
+		// run in; the record keeps the saved preference.
+		if !c.dirtyMode && c.activeMode != "" && c.activeMode != mode {
+			c.dirtyMode, c.reconcileMode = true, true
+		}
+		return
+	}
 	if !rec.Lead || nativePermissionMode(rec.Backend, PermissionReadOnly) == "" || c.dirtyMode {
 		return
 	}

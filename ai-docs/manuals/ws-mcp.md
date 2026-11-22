@@ -1013,6 +1013,21 @@ Pi calls share this route; the Pi-specific legacy behavior follows:
   themselves. A process stop (the stop route, an idle stop, a settings change)
   does not cascade, and a child's report resumes the stopped parent. A report
   to a closed parent stays in the child's record.
+- **Keep-awake.** With the global-only `agent.keep_awake_during_turns` on
+  (default false), the runner holds one idle-system-sleep assertion while any
+  conversation instance has a live turn (`wsagent/keep_awake.go`,
+  `internal/wsawake`). A turn counts from admission, before its send, through
+  tool calls, approvals and retries, to its end, transport loss, close,
+  hand-off or shutdown; a standalone prompt counts during its send and a
+  native `/compact` until its command settles. A rejoin keeps the membership
+  it had while replaying and then publishes what the replay rebuilt. Queued
+  input, idle processes, terminal sessions and exec jobs never count. The
+  daemon reads the value after publishing its endpoint and rereads it on the
+  companion-changed invalidation (`config.tune` set or reset) and on a
+  settings write. One worker goroutine makes every OS call: `caffeinate -i -w
+  <daemon pid>` on macOS, `SetThreadExecutionState` on one locked thread on
+  Windows, nothing elsewhere. A failed assertion is logged once and retried
+  only at the next activation.
 
 The runner also hosts lead sessions: a headless Claude Code, Pi, agy, or Codex
 process that loads the user's own harness setup (no profile allowlist or
@@ -1060,7 +1075,14 @@ from a support conversation:
   policy (a lead or an `agent.spawn` worker) whose backend catalog names a
   native subagent tool for its role also gets a line never to use that
   tool and to delegate through `agent.spawn`/`mailbox.send`
-  (`Runner.subagentSteer`); a worker gets it after its key sentence.
+  (`Runner.subagentSteer`); a worker gets it after its key sentence. A lead
+  of a backend with `PreferNativeSubagent` (agy) gets a native-first line
+  instead, whether or not its catalog names the tool: its native subagent
+  explores without ws tools at the harness's default model, while rendered
+  playbooks, ws-tool work, and tier-specific questions go to `agent.spawn`
+  at a `claude.<size>`, `codex.<size>`, or configured route target (a bare
+  size or own-harness role tier a render recommends gets `claude.` or
+  `codex.` first), and a native subagent is one-shot.
 - **Playbook commands.** A backend with `PlaybookCommands` (Claude, agy)
   hosts leads with no ws skills: the lead's connection (not a worker's)
   renders under the `ws` server's names whatever package the daemon
@@ -1082,7 +1104,21 @@ from a support conversation:
   backend's `BackendRegistration`, read through the conversation record's
   `Backend`; common code names no backend. `ManualHarness` is the harness the
   lead's manual renders under (claude, agy, codex; Pi declares none);
-  `PlaybookCommands` is described above.
+  `PlaybookCommands` is described above. `PreferNativeSubagent` (agy only)
+  selects the native-first prompt line above and, for text the hosted lead
+  executes itself (`workflow_manual`, `playbook.read`, the playbook-command
+  render), native-first terminology: `ExploreAgent` names its native
+  subagent, `SpawnIdiom` names `agent.spawn` on an external harness with the
+  size-prefix rule, and the continuity tip names `agent.spawn`'s subagents.
+  For that lead's workflow manual, the renderer also rewrites three rendered
+  sentences (`nativeFirstManual`; plain text, not declared variables, so the
+  resource and caller-context validation are unchanged). The exploration
+  bullet loses the "tier the question needs" suffix. A rendered delegate is
+  spawned through `agent.spawn` on an external harness with the returned path
+  and the rendered tier qualified with a harness prefix (no model/effort
+  bindings, which `agent.spawn` does not take).
+  `playbook.render` output is unchanged for every caller: a rendered
+  delegate runs on another process.
   `CallFallback` opts hosted lead connections into the compact `call` tool
   and a generated callable-tool index appended to their workflow manual.
   Only agy sets it today; ordinary plugin/stdio connections, other hosted
@@ -1668,7 +1704,7 @@ The daemon scans the holders directory at start and every 3 minutes,
 attaches to every holder over loopback TCP with the descriptor's token, and
 replays the holder's sequenced output. A terminal holder keeps a fixed
 4 MiB ring. A newly launched hosted lead or worker holder retains 32 MiB
-and can grow to 1 GiB while output waits to be sent. A successful socket
+and can grow to 1 GiB while output waits to be sent. A spawn may carry `http2_capture`: the holder then routes a pipe child's Go HTTP/2 debug stderr lines to a filter that keeps only framer summaries in a capture file, so the ring and the daemon's stderr tail never hold that trace; the holder is the file's only writer, and a `capture_note` operation adds the daemon's cutoff marker under the same cap (the script's docstring has the rules). A successful socket
 send lets the holder reclaim the sent records above 32 MiB. At the ceiling
 the oldest records are evicted. Running holders keep their launch settings
 across daemon replacement. A reattach within one daemon process
@@ -2041,7 +2077,7 @@ Current launcher inputs:
 | `WS_MCP_PI_ENDPOINT` | Set beside `WS_MCP_PI_TOKEN`: the dashboard daemon's loopback base URL, for example `http://127.0.0.1:29417`. |
 | `WS_MCP_NAMESPACE` | MCP namespace and embedded package identity: `wsflow` selects wsflow assets; empty/unset or a custom display namespace selects ws. |
 | `WS_MCP_SETUP_TOOL` | Advertised setup tool name override; empty or unset defaults to `ws.setup`. |
-| `WS_MCP_CONFIG_MANIFESTS` | Adapter config key manifests, separated by the platform path-list separator (`:` POSIX, `;` Windows); `;` is accepted on every platform, which the static launcher configs use. Declared keys become `config.tune`-writable, cataloged by `config.list`, and typed in `config.get`; a rejected manifest is logged to stderr and listed by `config.list`. The ws and wsflow packages each list three package-local manifests in both launch configs: `config-manifest.json` (namespace `claude.`; the same keys, differing only in `default`, pinned by `TestShippedClaudeManifestsDifferOnlyInDefaults`), `agy-config-manifest.json` (namespace `agy.`; `agy.model_wait_timeout_seconds`, default 120 in ws and 0 in wsflow, plus `agy.model_wait_retries`, default 3 in both), and `dashboard-config-manifest.json` (namespace `dashboard.`: `dashboard.enabled`, default on in every package; `dashboard.port`, default 29417; `dashboard.lan_enabled`, global-only and default off in every package; `dashboard.pi_spawn_enabled`, which gates legacy `pi.*` calls, default on in ws and off in wsflow and Pi). Codex paths are relative to `cwd: "."` (the plugin root); Claude paths use `${CLAUDE_PLUGIN_ROOT}`. Pi lists its own config and dashboard manifests, joined with the platform separator. A path that does not resolve fails nothing: the keys stay undeclared, so check `config.list` after changing the list. |
+| `WS_MCP_CONFIG_MANIFESTS` | Adapter config key manifests, separated by the platform path-list separator (`:` POSIX, `;` Windows); `;` is accepted on every platform, which the static launcher configs use. Declared keys become `config.tune`-writable, cataloged by `config.list`, and typed in `config.get`; a rejected manifest is logged to stderr and listed by `config.list`. The ws and wsflow packages each list three package-local manifests in both launch configs: `config-manifest.json` (namespace `claude.`; the same keys, differing only in `default`, pinned by `TestShippedClaudeManifestsDifferOnlyInDefaults`), `agy-config-manifest.json` (namespace `agy.`; `agy.model_wait_timeout_seconds`, default 120 in ws and 0 in wsflow, `agy.model_wait_retries`, default 3 in both, `agy.stall_log_check`, default on in both, which lets a hosted agy lead's silence timer cut a model request only when agy's own worker log shows it has no response headers, and `agy.http2_frame_trace`, default off in both, which starts agy with `GODEBUG=http2debug=2` and has its holder keep filtered frame summaries in the session's `agy-http2-frames.log`), and `dashboard-config-manifest.json` (namespace `dashboard.`: `dashboard.enabled`, default on in every package; `dashboard.port`, default 29417; `dashboard.lan_enabled`, global-only and default off in every package; `dashboard.pi_spawn_enabled`, which gates legacy `pi.*` calls, default on in ws and off in wsflow and Pi). Codex paths are relative to `cwd: "."` (the plugin root); Claude paths use `${CLAUDE_PLUGIN_ROOT}`. Pi lists its own config and dashboard manifests, joined with the platform separator. A path that does not resolve fails nothing: the keys stay undeclared, so check `config.list` after changing the list. |
 | `WS_MCP_CLI_NAME` | Declared `ws-cli` / `wsflow-cli` shim or Python launcher command used in printed mailbox wait and re-arm guidance when it matches the supported safe form. The launcher sets it unless already set; an absent or unrecognized value uses an illustrative Python launcher path, never the runtime binary. |
 
 Launcher diagnostics must go to stderr. Stdout belongs to the MCP JSON-RPC

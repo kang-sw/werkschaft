@@ -64,6 +64,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-workspace-admission.js",
 	"dashboard-rail-popovers.js",
 	"dashboard-leads.js",
+	"dashboard-tier-picker.js",
 	"dashboard-session-view.js",
 	"dashboard-companion-relay.js",
 	"dashboard-lifecycle.js",
@@ -74,6 +75,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
+	"dashboard-companion-settings.js",
 	"dashboard-companion-stage.js",
 }
 
@@ -248,6 +250,9 @@ type pageAssetsData struct {
 	ShellScript     template.JS
 	CompanionScript template.JS
 	CompanionCSS    template.CSS
+	// CompanionModalRows is the settings catalog's companion-modal rows as
+	// a JSON array: the shell loads no settings catalog of its own.
+	CompanionModalRows template.JS
 	// CardsScript is the board card framework (cards.js, window.WsCards),
 	// led by its paged docking gallery's pure model (gallery.js,
 	// window.WsGallery),
@@ -367,8 +372,8 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		ShellScript:      template.JS(get("shell.js")),
 		CompanionScript:  template.JS(get("dashboard-companion.js")),
 		CompanionCSS:     template.CSS(get("dashboard-companion.css")),
-		SettingsCSS:      template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css")),
-		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings.js")),
+		SettingsCSS:      template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css")),
+		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings.js")),
 		SettingsCatalog:  template.JS(get("dashboard-settings-catalog.json")),
 		OverviewScript:   template.JS(get("overview.js")),
 		CardsScript:      template.JS(get("gallery.js") + "\n;\n" + get("cards.js")),
@@ -392,6 +397,11 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 	if err != nil {
 		return nil, err
 	}
+	modalRows, err := companionModalRows([]byte(a.data.SettingsCatalog))
+	if err != nil {
+		return nil, err
+	}
+	a.data.CompanionModalRows = template.JS(modalRows)
 	icons := map[string]bool{}
 	for _, sprite := range []string{string(a.data.Sprite), string(wb.Sprite)} {
 		for _, m := range symbolPattern.FindAllStringSubmatch(sprite, -1) {

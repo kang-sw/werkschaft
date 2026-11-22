@@ -1,6 +1,8 @@
 ---
 kind: render
 tier: small
+tier-role: playbook-explore
+tier-parent: explore:*
 variables:
   - ExploreAgent
   - SpawnIdiom

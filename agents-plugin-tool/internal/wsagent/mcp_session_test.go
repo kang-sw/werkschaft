@@ -311,7 +311,7 @@ func TestClaudeWorkerRunsOverHTTP(t *testing.T) {
 	if cs, ok := h.runner.ResolveCredentialToken(s.Token); !ok || cs.Lead || cs.Permitted || cs.Conversation != c.ID {
 		t.Fatalf("a worker is background use, and its harness gets no provider credential: %+v %v", cs, ok)
 	}
-	raw, err := os.ReadFile(recordPath(wsdashboard.SessionDir(h.dir, c.ID)))
+	raw, err := readFile(recordPath(wsdashboard.SessionDir(h.dir, c.ID)))
 	if err != nil || strings.Contains(string(raw), s.Token) {
 		t.Fatalf("a worker's token is never persisted: %v", err)
 	}
@@ -336,6 +336,9 @@ func (h *leadHarness) startAt(endpoint string) {
 	h.runner = NewRunner(h.opts)
 	h.runner.SetEndpoint(endpoint)
 	h.runner.Start(func(string, string) { h.notes.Add(1) })
+	if h.execJobs != nil {
+		h.runner.BindExecJobs(h.execJobs)
+	}
 	h.t.Cleanup(h.runner.Close)
 }
 

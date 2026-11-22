@@ -21,6 +21,14 @@ type Mutation struct {
 	StoredKey  string
 	Scalar     string
 	Structured json.RawMessage
+	// IsStructured marks a write to a structured (JSON object) key, a
+	// profile family member or an exact key such as agent.tier_routing, so
+	// Apply and AfterWrite address structured_overrides for a reset too.
+	IsStructured bool
+	// Precondition (nil: none) runs on the stored file inside a structured
+	// write's locked read-modify-write; its error refuses the write and is
+	// returned by Apply unchanged.
+	Precondition wsconfig.StructuredPrecondition
 }
 
 func (c *Catalog) Validate(scope wsconfig.Scope, op Operation) (Mutation, error) {
@@ -45,13 +53,15 @@ func (c *Catalog) Validate(scope wsconfig.Scope, op Operation) (Mutation, error)
 	}
 	m := Mutation{Operation: op, StoredKey: rule.StoreKey(harness)}
 	if rule.Structured {
-		if rule.ValidateName(strings.TrimPrefix(op.Key, strings.TrimSuffix(FamilyKey(op.Key), "*"))) != nil {
+		m.IsStructured = true
+		// An exact structured key has no name part to validate.
+		if rule.ValidateName != nil && rule.ValidateName(strings.TrimPrefix(op.Key, strings.TrimSuffix(FamilyKey(op.Key), "*"))) != nil {
 			return Mutation{}, ErrInvalid
 		}
 		if op.Action == "set" {
 			value, err := rule.NormalizeObject(op.Value, scope)
 			if err != nil {
-				return Mutation{}, ErrInvalid
+				return Mutation{}, InvalidValue{Reason: err}
 			}
 			m.Structured = value
 		}
@@ -132,11 +142,11 @@ func (m Mutation) Apply(scope wsconfig.Scope, opts wsconfig.Options, sessionKey 
 		return m.writeTier(scope, opts)
 	}
 	r := wsconfig.NewResolver(opts, nil, nil, writer)
-	if m.Action == "reset" && strings.HasSuffix(FamilyKey(m.Key), ".profile.*") {
-		return r.UnsetStructured(m.StoredKey, scope)
+	if m.Action == "reset" && m.IsStructured {
+		return r.UnsetStructuredIf(m.StoredKey, scope, m.Precondition)
 	}
 	if m.Structured != nil {
-		return r.SetStructured(m.StoredKey, m.Structured, scope)
+		return r.SetStructuredIf(m.StoredKey, m.Structured, scope, m.Precondition)
 	}
 	target := wsconfig.SetOptions{ExplicitScope: scope, SessionKey: sessionKey}
 	if m.Action == "reset" {
@@ -166,7 +176,7 @@ func (m Mutation) AfterWrite(scope wsconfig.Scope, layers Layers) Layers {
 	if scope == wsconfig.ScopeSession {
 		values = layers.Session.Own
 	}
-	if m.Structured != nil || strings.HasSuffix(FamilyKey(m.Key), ".profile.*") {
+	if m.Structured != nil || m.IsStructured {
 		if file.StructuredOverrides == nil {
 			file.StructuredOverrides = make(map[string]json.RawMessage)
 		}

@@ -2,6 +2,7 @@
   "use strict";
   const { own } = C;
   const TAU = 2 * Math.PI;
+  const RAD = Math.PI / 180;
   const channels = { rotDeg: 0, tx: 0, ty: 0, sx: 1, sy: 1 };
   const channelNames = Object.keys(channels);
   const aliases = {
@@ -15,10 +16,52 @@
     ["skinFill", "skin"], ["hairFill", "hair"]
   ];
   const colors = { hair: "#ec8468", eye: "#dfa040", skin: "#f4cdb4", outfitPrimary: "#f2e5d4", outfitAccent: "#e6aa34" };
+  const easings = {
+    linear: [0, 0, 1, 1], easeIn: [0.42, 0, 1, 1], easeOut: [0, 0, 0.58, 1],
+    easeInOut: [0.42, 0, 0.58, 1], anticipate: [0.36, -0.45, 0.65, 1],
+    overshoot: [0.34, 1.45, 0.64, 1], snapBounce: [0.32, -0.35, 0.22, 1.32]
+  };
+  const stageChannels = { lift: [-2, 2, 0], tx: [-2, 2, 0], sx: [0.1, 3, 1], sy: [0.1, 3, 1], rotDeg: [-180, 180, 0] };
+  const propChannels = {
+    along: [-2, 3, 1], arcY: [-3, 3, 0], offsetX: [-3, 3, 0], offsetY: [-3, 3, 0],
+    scale: [0, 4, 1], rotDeg: [-720, 720, 0], alpha: [0, 1, 1]
+  };
 
   function finite(x, fallback = 0) { return Number.isFinite(x) ? x : fallback; }
   function clamp(x, low, high) { return Math.min(high, Math.max(low, x)); }
   function mix(a, b, t) { return a + (b - a) * t; }
+  function inRange(x, low, high) { return Number.isFinite(x) && x >= low && x <= high; }
+  function bounded(x, low, high, fallback = 0) { return inRange(x, low, high) ? x : fallback; }
+  function record(value) { return value && typeof value === "object" && !Array.isArray(value); }
+  function timingId(value) { return typeof value === "string" && /^[a-z\d_-]{1,64}$/i.test(value); }
+  function bezierTuple(value) {
+    return Array.isArray(value) && value.length === 4 && inRange(value[0], 0, 1) && inRange(value[1], -4, 4) &&
+      inRange(value[2], 0, 1) && inRange(value[3], -4, 4);
+  }
+  function cubic(t, a, b) {
+    const u = 1 - t;
+    return 3 * u * u * t * a + 3 * u * t * t * b + t * t * t;
+  }
+  function solveBezier(p, curve) {
+    if (!curve || p <= 0 || p >= 1) return clamp(p, 0, 1);
+    const x1 = curve[0], y1 = curve[1], x2 = curve[2], y2 = curve[3];
+    if (x1 === y1 && x2 === y2) return p;
+    // X is monotonic, including curves with a horizontal tangent. Bisection
+    // keeps the interpolation deterministic at those tangents as well.
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      if (cubic(mid, x1, x2) < p) lo = mid;
+      else hi = mid;
+    }
+    return cubic((lo + hi) / 2, y1, y2);
+  }
+  function easing(value, declared) {
+    if (bezierTuple(value)) return value;
+    if (!timingId(value)) return null;
+    const custom = own(declared, value);
+    return bezierTuple(custom) ? custom : own(easings, value);
+  }
   function buffer(width, height, options) {
     const canvas = new OffscreenCanvas(width, height);
     return canvas.getContext("2d", options);
@@ -42,18 +85,23 @@
 
   // The upper bound is the first key strictly after time. At a duplicated
   // time the last equal key wins, while the approach ends at the first one.
-  function keyframes(keys, loop, time, out) {
-    const duration = keys.at(-1).t;
-    const t = duration > 0 && loop !== false ? time % duration : time;
+  function upperBound(keys, field, value) {
     let lo = 0, hi = keys.length;
     while (lo < hi) {
       const i = (lo + hi) >>> 1;
-      if (keys[i].t <= t) lo = i + 1;
+      if (keys[i][field] <= value) lo = i + 1;
       else hi = i;
     }
+    return lo;
+  }
+
+  function keyframes(keys, curves, loop, time, out) {
+    const duration = keys.at(-1).t;
+    const t = duration > 0 && loop !== false ? time % duration : time;
+    const lo = upperBound(keys, "t", t);
     const before = keys[Math.max(0, lo - 1)];
     const after = keys[lo];
-    const amount = lo > 0 && after ? (t - before.t) / (after.t - before.t) : 0;
+    const amount = lo > 0 && after ? solveBezier((t - before.t) / (after.t - before.t), curves[lo - 1]) : 0;
     for (const name of channelNames) {
       const from = before[name] ?? channels[name];
       out[name] = amount ? mix(from, after[name] ?? channels[name], amount) : from;
@@ -61,12 +109,13 @@
     return out;
   }
 
-  function motion(spec, motions) {
+  function motion(spec, motions, declared) {
     const name = typeof spec === "string" ? spec : spec?.use;
     const track = name ? own(motions, name) || { oscillate: own(aliases, name) } : spec;
     const output = { ...channels };
     if (track?.keyframes?.length) {
-      return time => keyframes(track.keyframes, track.loop, time, output);
+      const curves = track.keyframes.map(key => easing(key.ease, declared));
+      return time => keyframes(track.keyframes, curves, track.loop, time, output);
     }
     if (!track?.oscillate) return null;
     const osc = track.oscillate;
@@ -84,9 +133,60 @@
     };
   }
 
+  function compileCurve(def, bounds, declared, isProp) {
+    if (!record(def) || !Array.isArray(def.keyframes) || def.keyframes.length < 1 || def.keyframes.length > 64) return null;
+    const names = Object.keys(bounds);
+    const keys = [], curves = [];
+    let previous = 0;
+    for (const frame of def.keyframes) {
+      if (!record(frame) || !inRange(frame.p, previous, 1)) return null;
+      for (const key of names) {
+        const [low, high] = bounds[key];
+        if (Object.hasOwn(frame, key) && !inRange(frame[key], low, high)) return null;
+      }
+      previous = frame.p;
+      keys.push(frame);
+      curves.push(easing(frame.ease, declared));
+    }
+    const { edge, recoil } = def;
+    if (isProp && Object.hasOwn(def, "edge") && !["away", "left", "right"].includes(edge)) return null;
+    if (isProp && Object.hasOwn(def, "recoil") && (!record(recoil) || !inRange(recoil.start, 0, 1) ||
+        !inRange(recoil.peak, 0, 1) || !inRange(recoil.end, 0, 1) || !(recoil.start < recoil.peak && recoil.peak < recoil.end) ||
+        Object.hasOwn(recoil, "lift") && !inRange(recoil.lift, -1, 1) ||
+        Object.hasOwn(recoil, "angle") && !inRange(recoil.angle, -1.5, 1.5))) return null;
+    return { edge: isProp && edge, recoil: isProp && recoil, sample(p, out) {
+      const i = upperBound(keys, "p", p);
+      const before = keys[Math.max(0, i - 1)], after = keys[i];
+      const amount = i && after ? solveBezier((p - before.p) / (after.p - before.p), curves[i - 1]) : 0;
+      for (const key of names) {
+        const range = bounds[key], from = before[key] ?? range[2];
+        out[key] = amount ? clamp(mix(from, after[key] ?? range[2], amount), range[0], range[1]) : from;
+      }
+      return out;
+    } };
+  }
+
+  function compileCurves(starters, custom, declared, isProp = false) {
+    const table = Object.create(null);
+    const channels = isProp ? propChannels : stageChannels;
+    for (const [id, definition] of Object.entries(starters)) table[id] = compileCurve(definition, channels, declared, isProp);
+    for (const [id, definition] of Object.entries(record(custom) ? custom : {})) {
+      if (!timingId(id)) continue;
+      const curve = compileCurve(definition, channels, declared, isProp);
+      if (curve) table[id] = curve;
+    }
+    return table;
+  }
+
+  function swingWeight(layer) { return bounded(layer?.swingWeight, -2, 2, null); }
+  function swingAngle(weight, lag, physics) {
+    return physics ? weight * physics.swing - lag * physics.swingVel : 0;
+  }
+
   function makeRig(pack, shared, presetId) {
     const { manifest, bitmaps } = pack;
     const [width, height] = manifest.canvas;
+    const declared = record(manifest.easings) ? manifest.easings : null;
     const [sharedWidth, sharedHeight] = shared?.manifest.canvas || manifest.canvas;
     const tinted = new Map();
     const rigViews = new Map();
@@ -125,8 +225,8 @@
     }
 
     function rasterList(layer, sharedAsset) {
-      if (typeof layer === "string") return [texture(layer, null, sharedAsset)];
-      if (layer.mode === "static") return [texture(layer.file, null, sharedAsset)];
+      if (typeof layer === "string") return [texture(layer, null, sharedAsset)].filter(Boolean);
+      if (layer.mode === "static") return [texture(layer.file, null, sharedAsset)].filter(Boolean);
       return [
         texture(layer.file, null, sharedAsset), texture(layer.detail, null, sharedAsset),
         ...fills.map(([field, color]) => texture(layer[field], palette[color], sharedAsset)),
@@ -140,19 +240,22 @@
 
     function layerPaint(layer, z, sharedAsset = false) {
       const pivot = point(layer.pivot, [width / 2, height / 2]);
-      const transform = motion(layer.motion, manifest.motions);
+      const transform = motion(layer.motion, manifest.motions, declared);
+      const weight = swingWeight(layer), lag = bounded(layer.swingLag, -0.5, 0.5);
       const frames = layer.frames?.length ? layer.frames.map(frame => rasterList(frame, sharedAsset)) : null;
       const rasters = frames ? null : rasterList(layer, sharedAsset);
       return {
         z: finite(layer.z, z),
-        paint(ctx, t) {
+        drawable: frames ? frames.some(list => list.length > 0) : rasters.length > 0,
+        paint(ctx, t, gaze, physics) {
           const list = frames ? frames[Math.floor(t * layer.fps) % frames.length] : rasters;
           ctx.save();
-          if (transform) {
-            const { rotDeg, tx, ty, sx, sy } = transform(t);
-            ctx.translate(pivot[0] + tx, pivot[1] + ty);
-            ctx.rotate(rotDeg * Math.PI / 180);
-            ctx.scale(sx, sy);
+          const angle = swingAngle(weight, lag, physics);
+          if (transform || angle) {
+            const movement = transform?.(t) || channels;
+            ctx.translate(pivot[0] + movement.tx, pivot[1] + movement.ty);
+            ctx.rotate(movement.rotDeg * RAD + angle);
+            ctx.scale(movement.sx, movement.sy);
             ctx.translate(-pivot[0], -pivot[1]);
           }
           for (const image of list) draw(ctx, image);
@@ -248,8 +351,11 @@
     function view(pose, gesture, expression, props) {
       const key = JSON.stringify([pose, gesture, expression, props]);
       if (rigViews.has(key)) return rigViews.get(key);
+      function hand(value) {
+        return Array.isArray(value) && value.length === 2 && inRange(value[0], 0, width) && inRange(value[1], 0, height) ? value : null;
+      }
       const act = resolve(manifest.gestures, gesture, null, item =>
-        !!(item?.pose || item?.replaces?.length || item?.layers?.length))?.item;
+        !!(item?.pose || item?.replaces?.length || item?.layers?.length || hand(item?.handAnchor)))?.item;
       const resolved = resolve(manifest.poses, act?.pose || pose, "stand", x => !!x?.layers?.length);
       const body = resolved.item;
       const layers = [];
@@ -260,17 +366,21 @@
       const headLayer = body.layers.find(layer => layer.mode === "head-egg");
       const egg = head ? rasterList(head.egg || headLayer || {}) : [];
       const face = expressionPaint(resolve(manifest.expressions, expression, "idle")?.item, egg);
-      const headMotion = motion(headLayer?.motion, manifest.motions);
+      const headMotion = motion(headLayer?.motion, manifest.motions, declared);
+      const headWeight = swingWeight(head) ?? swingWeight(headLayer);
+      const headLag = bounded(head?.swingLag, -0.5, 0.5, bounded(headLayer?.swingLag, -0.5, 0.5));
+      const gazeTilt = bounded(head?.gazeTiltDeg, 0, 30, 1.5) * RAD;
+      const propTilt = bounded(head?.propGazeTiltDeg, 0, 30, 6) * RAD;
 
       function onHead(z, paint) {
-        return { z, paint(ctx, t, gaze) {
+        return { z, paint(ctx, t, gaze, physics) {
           const movement = headMotion?.(t);
           ctx.save();
           ctx.translate(anchor[0] + (movement?.tx || 0), anchor[1] + (movement?.ty || 0));
-          ctx.rotate((movement?.rotDeg || 0) * Math.PI / 180 + gaze.x * 0.018);
+          ctx.rotate((movement?.rotDeg || 0) * RAD + gaze.x * (gaze.prop ? propTilt : gazeTilt) + swingAngle(headWeight, headLag, physics));
           ctx.scale(scale * (movement?.sx ?? 1), scale * (movement?.sy ?? 1));
           ctx.translate(-pivot[0], -pivot[1]);
-          paint(ctx, t, gaze);
+          paint(ctx, t, gaze, physics);
           ctx.restore();
         } };
       }
@@ -281,7 +391,8 @@
       }
 
       const replacements = new Set(act?.replaces || []);
-      for (const layer of [...body.layers.filter(layer => !replacements.has(layer.id)), ...(act?.layers || [])]) {
+      const bodyLayers = [...body.layers.filter(layer => !replacements.has(layer.id)), ...(act?.layers || [])];
+      for (const layer of bodyLayers) {
         if (layer.mode !== "head-egg") layers.push(layerPaint(layer, 20));
       }
       if (resolved.id === "typing" && !body.layers.some(layer =>
@@ -289,7 +400,7 @@
         layers.push(...propLayers("prop-typing-desk"));
       }
       if (head) {
-        layers.push(onHead(finite(headLayer?.z, 30), ctx => egg.forEach(image => draw(ctx, image))));
+        layers.push(onHead(finite(headLayer?.z, 30), ctx => { for (const image of egg) draw(ctx, image); }));
         layers.push(onHead(40, face));
         addHead(hair?.back, 10);
         addHead(hair?.front, 50);
@@ -304,10 +415,12 @@
       layers.sort((a, b) => a.z - b.z);
       const result = {
         pose: resolved.id,
+        handAnchor: hand(act?.handAnchor) || hand(body.handAnchor) || [width * 0.5, height * 0.48],
+        articulatedDrag: bodyLayers.some(layer => swingWeight(layer) !== null) || headWeight !== null || swingWeight(hair?.back) !== null,
         seat: body.seatY === undefined ? null : clamp(finite(body.seatY) / height, 0, 1),
-        render(t, gaze) {
+        render(t, gaze, physics) {
           composite.clearRect(0, 0, width, height);
-          for (const layer of layers) layer.paint(composite, t, gaze);
+          for (const layer of layers) layer.paint(composite, t, gaze, physics);
           return composite.canvas;
         }
       };
@@ -336,6 +449,7 @@
       const layers = propLayers(id, registry);
       return {
         data,
+        drawable: layers.some(layer => layer.drawable),
         draw(ctx, t) { for (const layer of layers) layer.paint(ctx, t); }
       };
     }
@@ -343,5 +457,5 @@
     return { view, prop, setPreset, width, height };
   }
 
-  Object.assign(C, { makeRig, motion, finite, clamp, mix });
+  Object.assign(C, { makeRig, motion, finite, clamp, mix, inRange, bounded, record, timingId, solveBezier, compileCurves, RAD, resolveEntry: resolve });
 })(window.WsCompanion);

@@ -29,7 +29,7 @@ func printPlaybook(s *Server, rsrcRoot fs.FS, name string, callerContext map[str
 // and selecting profile (see renderPlaybookBodyForCaller).
 func printPlaybookForCaller(s *Server, callerKey, profile string, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, workflowLang string, overrideLookup overrideLookupFn) (string, string, error) {
 	// playbook.read exposes no tier_override arg — always "" (frontmatter tier).
-	body, recommendedTier, err := renderPlaybookBodyForCaller(s, callerKey, profile, rsrcRoot, name, callerContext, configOpts, "", "", workflowLang, overrideLookup, "")
+	body, recommendedTier, err := renderPlaybookBodyForCaller(s, callerKey, profile, rsrcRoot, name, callerContext, configOpts, "", "", workflowLang, overrideLookup, "", true)
 	if err != nil {
 		return "", "", err
 	}
@@ -84,7 +84,7 @@ func renderPlaybookWithPlan(s *Server, callerKey, profile string, rsrcRoot fs.FS
 		}
 		templateContext, renderContext = splitDeclaredRenderContext(callerContext, declared)
 	}
-	body, recommendedTier, err := renderPlaybookBodyForCaller(s, callerKey, profile, rsrcRoot, name, templateContext, configOpts, mintRoot, parentKey, workflowLang, overrideLookup, tierOverride)
+	body, recommendedTier, err := renderPlaybookBodyForCaller(s, callerKey, profile, rsrcRoot, name, templateContext, configOpts, mintRoot, parentKey, workflowLang, overrideLookup, tierOverride, false)
 	if err != nil {
 		return "", "", "", err
 	}

@@ -19,6 +19,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 338f16892c5ddf00
 sage-review-completeness-reviewed: 338f16892c5ddf00
+completed: 2026-11-22
 ---
 
 # ws/exec tools
@@ -331,6 +332,12 @@ Decisions 19–22 record technical settlements.
     `#L406-L415`). If the turn has ended, queue the completion for ordinary
     next-turn delivery. See S7 and S14 in
     `261122-feat-ws-agent-turn-semaphore`.
+23. Downgrade boundary (owner (2165)=a, 2026-11-22): legacy-shaped hosted
+    `exec.spawn`/`exec.shell` jobs launched by a 0.51 daemon live only in
+    `exec-jobs.db`. A v0.50.8 daemon cannot read, return results for, or abort
+    their `exec_key` ("not found"). Re-upgrading recovers status from the
+    retained row and exit copy. Accepted as T3 within the 0.51 minor boundary.
+    Rejected: mirroring legacy launches to the file store.
 
 ## Constraints
 
@@ -638,6 +645,28 @@ Verification:
     token route carries it to the jobs. No single test runs both halves end
     to end.
 
+#### Edition (f70eacba7) - 2026-11-22
+
+Corrects the two post-restart items under Known limits above, checked
+against the source at this edition:
+
+- The running-job item no longer holds. Holder output events carry absolute
+  offsets (`wsholder/client.go`, `Offset` and `CombinedOffset`). A rejoin
+  replays them through `OutputRings.AppendAt` (`execjob/hosted.go:401-413`,
+  `execjob/hosted_ring.go:162-188`), which counts the bytes the holder no
+  longer has as written and evicted. Offsets stay absolute, and a read below
+  them reports the gap instead of resuming at the oldest ring record.
+- The finished-job item keeps its preview-only limit: a finished job keeps
+  only its 4 KiB previews.
+- New remaining limit: absolute totals are lost when the job and its holder
+  both finish while the daemon is absent. The holder's exit totals
+  (`stream_bytes`, `output_bytes`, added in `73859f4ed`) travel only on the
+  live exit event. The exit copy and `exit.json` still store status alone
+  (`wsholder/holder.py:1003-1024`, `write_exit_record`; `wsholder.Exit` in
+  `wsholder/manager.go`). `endFromExitCopy` (`execjob/hosted.go:284`) and
+  `endFromExit` (`execjob/hosted.go:358`) end such a job from status alone,
+  so its byte counters are not advanced.
+
 ### Phase 2: Harness cutover, report hold, and session and worktree lifecycle
 
 After Phase 1, add the exec tools to worker allowlists and then enable verified
@@ -709,3 +738,132 @@ Verification:
 - Race job admission with worktree release, and verify release and removal
   refusal while a job is live. Verify close fences new admissions, cascades
   deepest-first, kills whole job groups, and suppresses post-close notices.
+
+### Result (6813a00b8) - 2026-11-22
+
+- **Landed** (`474f3a301..6813a00b8`):
+  - **Cutover decision** (`wsagent/exec_cutover.go`). It is made at each
+    new process start and kept by a rejoin only when the attached holder is
+    the one recorded in `Record.ExecCutoverHolder`. Every condition must
+    hold:
+    - the backend registers a verified removal (`ExecCutoverSupport`);
+    - the harness version a process last reported is known and not older
+      than the verified one (Claude 2.1.330, Codex 0.160.0, agy 1.5.14).
+      Reported versions persist in `harness-versions.json` under the
+      runner directory, so a restarted daemon decides on them. A harness
+      no process has reported yet keeps its native tools;
+    - the process gets the trusted HTTP ws-mcp binding;
+    - its ws tools include the replacement: a lead lists every tool; a
+      worker allowlist must name `exec.shell`, and for Codex also
+      `fs.read`, `fs.grep` and `fs.list` (agentless ws-mcp has none);
+    - the per-harness switch `exec.native_tool_removal.<harness>` (bucket,
+      then `all`, then bare; default on) is not off.
+    The token carries the flag to ws-mcp (`ProxyHello.ExecCutover`, never
+    decoded from a hello).
+  - **Listing and admission** (`mcp/server_exec_cutover.go`). A cutover
+    connection lists `exec.run`, `exec.shell`, `exec.stop`, `exec.tail`,
+    `exec.list` and `exec.write`; legacy names stay callable and unlisted.
+    `fs.read`, `fs.grep` and `fs.list` are listed and admitted only for a
+    cutover Codex conversation; elsewhere a direct call is refused.
+  - **fs.* caps** (`mcp/server_fs.go`; each exercised by a test): 4 KiB
+    per reply with the cut stated; `fs.read` 200 default / 2000 max lines,
+    64 MiB read, 512-byte line cut; `fs.grep` 100 matches, 100,000
+    directory entries visited, 10,000 files, 64 MiB read, files over 8 MiB
+    skipped; `fs.list` 500 entries returned, 10,000 read. Binary means a NUL in the first 8 KiB (`fs.read` refuses,
+    `fs.grep` skips and counts). Reach: relative paths under the session
+    root, absolute paths as given (Codex read-only reads everywhere).
+  - **Claude**: `--disallowedTools` adds `Bash,PowerShell,Monitor,TaskStop,BashOutput,KillShell`.
+    A read-only worker's dontAsk rules gain the exec tools.
+  - **Codex**: `features.shell_tool=false` in the one start/resume config
+    builder, and `approval_mode: approve` for the exec and fs.* tools for
+    leads and every worker role (read-only `never` included).
+  - **Pi**: a worker drops `bash` from `--tools`. Pi has no registered
+    removal: neither its lead (extension or bridge) nor its worker (stdio
+    launcher) has a trusted binding, and a lead `--tools` would also filter
+    the extension's tools.
+  - **agy**: native default at launch, on live settings changes, on
+    in-stream reports and on reconciliation; the saved mode stays on record.
+    The daemon answers `run_command` requests `reject_once` (live, replayed
+    at a rejoin's end, or waiting at a mode change) ahead of ws bypass and
+    worker auto-approval, which still answer other requests. The exec
+    instruction is appended at session creation and sent once at the end of
+    a turn with a refused request or an unrequested run (execution evidence:
+    `rawOutput.exit_code` or non-empty output, correlated by toolCallId).
+    A worker's report of the refused turn waits for the turn the
+    instruction starts, so the parent never receives the empty reply.
+    `agyLeadBgShellRule` and the worker-instruction line are gone; the
+    mapper tracks no background commands under the cutover.
+  - **Lifecycle** (`wsagent/exec_lifecycle.go`, `execjob/hosted_ops.go`):
+    - Report hold: `holdsReport` counts an owned live job, and the
+      child-report successor does not publish while one runs.
+    - One sleep predicate `keepsAwakeLocked` (turn, background task or
+      monitor, owned live exec job, held turn, initial spawn, untaken
+      input): `idleNow` reads it for children; `awakeLocked` adds the
+      process for the width cap.
+    - The daemon calls `ExpectExecJobs` before the runner starts and
+      `BindExecJobs` after the jobs a predecessor left are settled; until
+      then every conversation counts a live job. Binding wakes every
+      conversation, and count reads are serialized so a stale snapshot
+      never lands last.
+    - Close: fence the tree's new jobs, then per conversation deepest
+      first stop its jobs (process groups, no notice) and close it; a
+      revival unfences.
+    - Worktrees: `worktree.release` (force included) and `worktree.remove`
+      reserve the target under the admission lock; a live job refuses them.
+- **Verification** (Go, `GOPROXY=off GOTOOLCHAIN=local`):
+  - `go test ./internal/wsagent/ ./internal/execjob/ ./internal/wsconfig/ -count=1`: all ok (wsagent 320.6s).
+    `TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop` failed once under
+    an earlier full-suite load; it passed 10/10 in isolation on this branch
+    and on base.
+  - `go test ./internal/mcp/ -count=1`: the six failures are all failures
+    of the same suite on develop `474f3a301` too
+    (`TestPlaybookPrintGoldenExplore*` x4,
+    `TestWaitingOnNudgeProductionTicketTreeRestartAndReblock`,
+    `TestWhiteboardCommandAcceptanceFirstTextRetryAndSequence`). The review
+    fixes were re-run with `-run 'FS|Exec|Worktree|Inventory|Schema'`: ok.
+  - `go test ./cmd/ws-mcp/`: only the pre-existing reds
+    `TestProxyWhiteboardLinkHasNoLoginCode` and
+    `TestWhiteboardConstructionBeforeDashboardBind`.
+  - wsdashboard proxy and settings tests, wsi18n, wsinbox, wspackage: ok.
+    `generate-package-assets.py --check`: ok. `go vet` on the touched
+    packages: ok.
+  - The Claude removal names come from a live `claude` 2.1.330 init probe
+    (`wsagent/testdata/claude-2.1.330-native-process-tools.jsonl`).
+- **Decisions:**
+  - Pi registers no removal: it has no trusted binding. The worker's
+    `bash` drop is wired but dormant.
+  - Under the agy cutover, saved `auto` and `accept-edits` modes run in
+    native default (Decision 11). Their non-command requests now prompt,
+    or are auto-answered under ws bypass or worker auto-approval.
+  - An unknown harness version is unverified: the first start of a
+    harness this daemon (or a predecessor) never heard from keeps its
+    native tools.
+- **Review** (lite, 7 Important, 0 Critical): every Important finding is fixed in
+  `6813a00b8`:
+  - version gate on an unknown version;
+  - Codex worker without `fs.*`;
+  - missed wake at bind;
+  - racing count snapshots;
+  - premature agy worker report;
+  - the worker test did not drive `addApproval`;
+  - `fs.grep` walk unbounded, and caps only pinned.
+
+  Minor findings left open:
+  - a close whose `closeOne` fails leaves the conversation fenced;
+  - a failed holder stop is only logged;
+  - the fence check and `Holders.Spawn` are separated by an unlocked gap;
+  - admission-against-release is tested sequentially only;
+  - the instruction resend per refused turn is uncapped;
+  - non-cutover agy sessions lose the background-shell prompt rule;
+  - no runtime Codex refusal detection.
+- **Known limits:**
+  - no live Codex or agy probe of the removal;
+  - no runtime detection of a Codex version that refuses preapproved
+    replacement calls (only the static `Since` gate);
+  - no Windows checks and no syscall measurement;
+  - interrupt and survival behavior rests on the Phase 1 tests.
+- **Dogfood:**
+  - the ws MCP server rejected auth mid-run and recovered later; plain git
+    commits bridged it;
+  - a fresh worktree lacks generated package assets until
+    `generate-package-assets.py` runs, which reds mcp settings tests.

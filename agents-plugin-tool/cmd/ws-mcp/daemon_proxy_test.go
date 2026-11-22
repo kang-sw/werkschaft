@@ -417,6 +417,11 @@ func TestHostedConnectionSeeingALANChangeReplacesTheDaemon(t *testing.T) {
 	}
 
 	config := `{"schema_version": 1, "overrides": {"dashboard.lan_enabled": "true"}}`
+	// The daemon creates the config directory lazily, and not before this
+	// point on every platform.
+	if err := os.MkdirAll(h.configHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(h.configHome, "config.json"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}

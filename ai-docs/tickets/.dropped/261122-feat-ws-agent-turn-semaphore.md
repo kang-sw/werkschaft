@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: a6b1ef3c13a78477
 sage-review-completeness-reviewed: a6b1ef3c13a78477
+dropped: 2026-11-22
 ---
 
 # Agent turn semaphore
@@ -249,3 +250,8 @@ Verification:
   tail's cap permits admission. After admitting the head, check the next
   worker against its own cap using the updated shared count. Verify a
   cap-`0` request can enter while a finite-cap worker waits.
+
+
+## Resolution (2026-11-22)
+
+Dropped by the owner (whiteboard (2171)=a, 2026-11-22). The agy stalls were judged not to be a concurrency problem, so the cap would ship at 0 (unlimited) and carry about 4k lines of unused rejoin/holder accounting complexity, while each review round found new defects in those paths. The implementation branch impl/develop/ditch-taunt-cut was never merged. Two develop fixes found during its reviews were salvaged separately: the held-agy early report now waits for a live exec job, and the conv loop copies the record under mu in workerHolderMatches.

@@ -17,14 +17,14 @@ const context = vm.createContext({window: {}, URLSearchParams});
 vm.runInContext(read("shell.js"), context);
 const shell = context.window.WsShell;
 
-test("companion mode labels use key-specific translations and retain translated off", () => {
+test("companion director labels use key-specific translations and retain translated off", () => {
   const source = read("dashboard-settings.js");
   const settingsContext = {document: {querySelector: () => null}};
   vm.runInNewContext(source, settingsContext);
   assert.equal(JSON.stringify(settingsContext.wsSettingsChoiceLabels), JSON.stringify({
-    "dashboard.companion_mode": {
-      visual: "js.settings.key.dashboard.companion_mode.visual",
-      full: "js.settings.key.dashboard.companion_mode.full"
+    "dashboard.companion_director": {
+      rules: "js.settings.key.dashboard.companion_director.rules",
+      agent: "js.settings.key.dashboard.companion_director.agent"
     }
   }));
   assert.match(source, /shownValue\(choice, entry\.key\)/);
@@ -34,8 +34,8 @@ test("companion mode labels use key-specific translations and retain translated 
 test("companion labels are present in every supported locale", () => {
   const locales = ["en", "ko", "ja", "zh-Hans", "zh-Hant", "de", "es", "fr", "it", "pt-BR", "ru"];
   const modeKeys = [
-    "js.settings.key.dashboard.companion_mode.visual",
-    "js.settings.key.dashboard.companion_mode.full"
+    "js.settings.key.dashboard.companion_director.rules",
+    "js.settings.key.dashboard.companion_director.agent"
   ];
   const stageKeys = [
     "js.companion.character",
@@ -46,7 +46,13 @@ test("companion labels are present in every supported locale", () => {
     "js.companion.reload_failed",
     "js.companion.preset",
     "js.companion.preset_failed",
-    "js.companion.pack_failed"
+    "js.companion.pack_failed",
+    "js.companion.settings",
+    "js.companion.close",
+    "js.companion.persona",
+    "js.companion.persona_none",
+    "js.companion.settings_failed",
+    "js.companion.settings_readonly"
   ];
   for (const locale of locales) {
     const table = readLocale(locale);
@@ -55,8 +61,28 @@ test("companion labels are present in every supported locale", () => {
       assert.notEqual(table[key].trim(), "", `${locale} has an empty ${key}`);
     }
   }
-  assert.equal(readLocale("ko")[modeKeys[0]], "시각 전용");
-  assert.equal(readLocale("ko")[modeKeys[1]], "전체");
+  assert.equal(readLocale("ko")[modeKeys[0]], "규칙");
+  assert.equal(readLocale("ko")[modeKeys[1]], "에이전트");
+});
+
+test("settings panel skips companion-modal rows and keeps enabled and director", () => {
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const specs = new Map(catalog.map(spec => [spec.key, spec]));
+  const method = read("dashboard-settings.js").match(/\n  function sectionEntries\(name\) \{[\s\S]*?\n  \}/)[0];
+  const keys = catalog.filter(spec => spec.key.startsWith("dashboard.companion_")).map(spec => spec.key);
+  const sectionEntries = vm.runInNewContext(method + "\nsectionEntries", {
+    snapshot: {entries: keys.map(key => ({key}))},
+    specFor: key => specs.get(key),
+    adapters: ["claude", "pi", "agy", "dashboard"]
+  });
+  const shown = sectionEntries("companion").map(entry => entry.key).sort();
+  assert.deepEqual(shown, ["dashboard.companion_director", "dashboard.companion_enabled"]);
+  const hidden = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
+  assert.deepEqual(hidden, [
+    "dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
+    "dashboard.companion_pack", "dashboard.companion_preset"
+  ]);
+  assert.equal(keys.length, shown.length + hidden.length);
 });
 
 test("settings links and frames keep the exact inspection identifiers", () => {
@@ -140,4 +166,14 @@ test("project rail target survives standalone scope traversal without becoming i
   const remembered = new URLSearchParams(new URL(builtin, origin).hash.slice(1)).get("project");
   assert.equal(shell.settingsScopeHref("global", unbound, () => "", remembered), "/settings?scope=global#project=project-a");
   assert.equal(shell.settingsScopeHref("project", unbound, () => "", remembered), "/settings?scope=project&target=project-a");
+});
+
+test("the companion modal maps every companion-modal catalog row to a live config field", () => {
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const context = vm.createContext({window: {WsCompanion: {}}});
+  vm.runInContext(read("dashboard-companion-settings.js"), context);
+  const fields = context.window.WsCompanion.companionConfigFields;
+  const modal = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
+  assert.deepEqual(Object.keys(fields).sort(), modal);
+  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "pack", "preset"]);
 });

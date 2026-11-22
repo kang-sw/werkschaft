@@ -132,6 +132,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		// that owns hosted exec jobs.
 		opts.Exec = h.exec.Load
 		opts.Conversation = hello.Conversation
+		opts.ExecCutover = hello.ExecCutover
 		server := mcp.NewServerWithOptions(opts)
 		h.applyLANChange(server)
 		return &proxyMCPSession{server: server}, nil

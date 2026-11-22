@@ -83,6 +83,7 @@ type fakeHolder struct {
 	ringBytes        int
 	ringSkip         string
 	inputs           []string
+	notes            []string
 	attached         bool
 	exited           bool
 	stream           *fakeStream
@@ -111,6 +112,10 @@ type fakeHolders struct {
 	timeouts    int
 	// spawnErr fails Spawn and stopErr Stop (the holder stays).
 	spawnErr, stopErr error
+	// captureHook, when set, runs as each CaptureNote begins (and may
+	// block it); captureCalls counts the CaptureNote calls begun.
+	captureHook  func()
+	captureCalls int
 	// refuse answers a control request of a subtype with an error; any
 	// other control request written to a child is answered with success,
 	// as a harness answers it.
@@ -122,6 +127,9 @@ type fakeHolders struct {
 	// scanHook, when set, runs at the start of each Scan, before it takes
 	// the lock (gateScan).
 	scanHook func()
+	// incomplete is the listing's Incomplete: the last scan could not read
+	// every holder's registration.
+	incomplete bool
 	// failInput fails the next n inputs whose first line has a type (a
 	// negative n fails every one), as a write to a gone child does; the
 	// failed input reaches no child.
@@ -223,7 +231,7 @@ func (f *fakeHolders) Scan() {
 func (f *fakeHolders) List() wsholder.Listing {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out wsholder.Listing
+	out := wsholder.Listing{Incomplete: f.incomplete}
 	for _, id := range f.order {
 		h := f.holders[id]
 		if h == nil || !h.known {
@@ -395,6 +403,49 @@ func (f *fakeHolders) Input(id string, data []byte, eof bool) error {
 	}
 	f.mu.Unlock()
 	return f.call(id, "input")
+}
+
+// CaptureNote is the holder's capture_note operation: a holder whose child
+// was spawned with a frame capture takes the note, any other answers false.
+func (f *fakeHolders) CaptureNote(id, text string) (bool, error) {
+	f.mu.Lock()
+	f.captureCalls++
+	hook := f.captureHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err := f.call(id, "capture_note"); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.holders[id]
+	if h == nil {
+		return false, wsholder.ErrDetached
+	}
+	if h.spec == nil || h.spec.HTTP2Capture == nil {
+		return false, nil
+	}
+	h.notes = append(h.notes, text)
+	return true, nil
+}
+
+// captureCallCount is the number of CaptureNote calls begun.
+func (f *fakeHolders) captureCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.captureCalls
+}
+
+// captureNotes are the capture notes holder id took.
+func (f *fakeHolders) captureNotes(id string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h := f.holders[id]; h != nil {
+		return slices.Clone(h.notes)
+	}
+	return nil
 }
 
 func (f *fakeHolders) Status(id string) (wsholder.AttachInfo, error) {
@@ -785,16 +836,19 @@ func (b *logBuffer) String() string {
 // fake holder host: nothing is executed, and the test writes the harness's
 // output lines itself.
 type leadHarness struct {
-	t       *testing.T
-	dir     string
-	root    string
-	opts    Options
-	holders *fakeHolders
-	keys    *fakeLeadKeys
-	mail    *fakeMail
-	log     *logBuffer
-	runner  *Runner
-	syncs   int
+	// execJobs, when set, is bound as the hosted exec jobs of every runner
+	// the harness starts.
+	execJobs ExecJobs
+	t        *testing.T
+	dir      string
+	root     string
+	opts     Options
+	holders  *fakeHolders
+	keys     *fakeLeadKeys
+	mail     *fakeMail
+	log      *logBuffer
+	runner   *Runner
+	syncs    int
 	// notes counts the runner's page notifications.
 	notes atomic.Int64
 }
@@ -912,6 +966,9 @@ func leadLauncherPlugin(t *testing.T, argv []string) string {
 func (h *leadHarness) start() *leadHarness {
 	h.runner = NewRunner(h.opts)
 	h.runner.Start(func(string, string) { h.notes.Add(1) })
+	if h.execJobs != nil {
+		h.runner.BindExecJobs(h.execJobs)
+	}
 	h.t.Cleanup(h.runner.Close)
 	return h
 }

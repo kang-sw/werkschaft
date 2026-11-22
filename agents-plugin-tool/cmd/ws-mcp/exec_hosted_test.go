@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -147,6 +148,7 @@ func TestHostedExecLinkRoutesExecHoldersOnly(t *testing.T) {
 // nothing; the new daemon then reopens and reads the job's terminal status
 // from the exit copy.
 func TestHostedExecSurvivesAnOldDaemonAndReopens(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatalf("python3: %v", err)
@@ -301,6 +303,7 @@ func waitNotice(t *testing.T, d *hostedExecDaemon, what string) string {
 // before its jobs bind, replays its ring, and ends the job with the exit
 // record, one notice, and the holder's stop.
 func TestHostedExecChildEndsUnderAnOldDaemon(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	state := t.TempDir()
 	first := openHostedExecDaemon(t, state, 100*time.Millisecond)
 	root := t.TempDir()
@@ -353,6 +356,7 @@ func TestHostedExecChildEndsUnderAnOldDaemon(t *testing.T) {
 // job's end still produces its owner's completion notice for the next
 // harness process to take.
 func TestHarnessKillSurvivalFixture(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	state := t.TempDir()
 	d := openHostedExecDaemon(t, state, 100*time.Millisecond)
 	t.Cleanup(func() {
@@ -390,5 +394,14 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// skipWithoutPOSIXShell skips a fixture whose job is a /bin/sh script: the
+// holder spawns argv directly, and a Windows runner has no /bin/sh.
+func skipWithoutPOSIXShell(t *testing.T) {
+	t.Helper()
+	if goruntime.GOOS == "windows" {
+		t.Skip("fixture runs a /bin/sh job; Windows has no /bin/sh")
 	}
 }

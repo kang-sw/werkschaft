@@ -3,10 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -346,6 +349,14 @@ func TestHostedExecConversionInTheSameTurn(t *testing.T) {
 func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 	fx := newHostedExecFixture(t, 10*time.Second)
 	legacyKey := regexp.MustCompile(`(?m)^exec_key: exec-[0-9]+-[0-9a-f]{16}$`)
+	// The legacy exec.shell runs cmd.exe on Windows unless a shell is named,
+	// so these POSIX lines name Bash there.
+	posixShell := func(args map[string]any) map[string]any {
+		if runtime.GOOS == "windows" {
+			args["shell"] = "bash"
+		}
+		return args
+	}
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -353,8 +364,8 @@ func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 	}{
 		{"exec.spawn", map[string]any{"cmd": "cat", "stdin": "spawn-in\n"}, "spawn-in"},
 		{"exec.spawn", map[string]any{"cmd": "cat"}, ""},
-		{"exec.shell", map[string]any{"command": "cat; echo shell-done", "stdin": "shell-in\n"}, "shell-in"},
-		{"exec.shell", map[string]any{"command": "cat; echo shell-done"}, "shell-done"},
+		{"exec.shell", posixShell(map[string]any{"command": "cat; echo shell-done", "stdin": "shell-in\n"}), "shell-in"},
+		{"exec.shell", posixShell(map[string]any{"command": "cat; echo shell-done"}), "shell-done"},
 	} {
 		text, isErr := fx.call(tc.name, tc.args)
 		// Empty output has no stream sections, as on the file-backed path.
@@ -363,8 +374,18 @@ func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 			t.Fatalf("%s %v = %v %s", tc.name, tc.args, isErr, text)
 		}
 	}
-	text, _ := fx.call("exec.shell", map[string]any{"command": "printf 'l1\\nl2\\n'; printf 'e1\\n' >&2", "working_dir": "sub"})
+	text, _ := fx.call("exec.shell", posixShell(map[string]any{"command": "printf 'l1\\nl2\\n'; printf 'e1\\n' >&2", "working_dir": "sub"}))
 	key := lineValue(t, execKeyLine, text)
+	// The combined stream is arrival order across two pipes, so stderr's e1
+	// may land before, between, or after stdout's lines (on Windows each
+	// printf'd line can arrive as its own write). Grep must number e1 by
+	// where it actually landed in the combined text.
+	combined, _ := fx.call("exec.raw.read", map[string]any{"exec_key": key, "stream": "combined", "offset": 0, "limit": 100})
+	_, combinedText, _ := strings.Cut(combined, "========== text ==========\n")
+	e1Line := slices.Index(strings.Split(combinedText, "\n"), "e1") + 1
+	if e1Line == 0 || strings.Count(combinedText, "\n") != 3 {
+		t.Fatalf("combined = %s", combined)
+	}
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -374,7 +395,7 @@ func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 		{"exec.result", map[string]any{"exec_key": key}, []string{"l1\nl2\n", "e1\n"}},
 		{"exec.raw.tail", map[string]any{"exec_key": key, "lines": 1}, []string{"stream: stdout", "l2"}},
 		{"exec.raw.read", map[string]any{"exec_key": key, "stream": "stdout", "offset": 3, "limit": 3}, []string{"offset: 3", "next_offset: 6", "size: 6", "l2"}},
-		{"exec.raw.grep", map[string]any{"exec_key": key, "stream": "combined", "pattern": "e1"}, []string{"matches: 1", "3: e1"}},
+		{"exec.raw.grep", map[string]any{"exec_key": key, "stream": "combined", "pattern": "e1"}, []string{"matches: 1", fmt.Sprintf("%d: e1", e1Line)}},
 	} {
 		got, isErr := fx.call(tc.name, tc.args)
 		for _, want := range tc.want {

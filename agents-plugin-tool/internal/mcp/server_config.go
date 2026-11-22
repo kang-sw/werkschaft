@@ -20,6 +20,7 @@ func builtinConfigDefaults() map[string]string {
 		wsconfig.ItemWorkflowPreferSubagent:    "off",
 		wsconfig.ItemWorkflowWhiteboardEnabled: "off",
 		wsconfig.ItemWorkflowTrackerEnabled:    "off",
+		wsconfig.ItemExecNativeToolRemoval:     "on",
 		wsconfig.ItemWorkflowProfile:           "direct",
 		wsconfig.ItemSageReview:                "auto",
 		wsconfig.ItemSageReviewDesign:          "off",
@@ -34,6 +35,7 @@ func builtinConfigDefaults() map[string]string {
 		wsconfig.ItemGitMergeSizeHardLines:     gitMergeSizeHardLinesKey.Default,
 		wsconfig.ItemGitMergeSizeExtensions:    gitMergeSizeExtensionsKey.Default,
 		wsconfig.ItemAgentChildWaitingDays:     strconv.Itoa(wsagent.DefaultChildWaitingDays),
+		wsconfig.ItemAgentKeepAwakeDuringTurns: keepAwakeDuringTurnsKey.Default,
 	}
 	for key, value := range wsconfig.CompactionDefaults {
 		defaults[key] = value
@@ -159,6 +161,9 @@ type resolveAgentTierResult struct {
 	Model        string `json:"model"`
 	Effort       string `json:"effort"`
 	ResolvedFrom string `json:"resolved_from"`
+	// Trace is the agent.tier_routing path of a role tier, alias, explicit
+	// target, or bundle; empty for a bare size.
+	Trace string `json:"trace,omitempty"`
 }
 
 // promptOverrideValue is one resolved override for a declared point: the harness
@@ -462,6 +467,20 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 		Current:     currentWorkflowPreference(resolver, sessionKey, childWaitingEntry.Key),
 	})
 
+	keepAwakeEntry := registryEntryByKey(wsconfig.ItemAgentKeepAwakeDuringTurns)
+	appendKnob(keepAwakeEntry, tuningKnob{
+		ID:          keepAwakeEntry.Key,
+		Kind:        "workflow_preference",
+		Description: keepAwakeDuringTurnsHelp,
+		Writer:      tuningWriter{Tool: keepAwakeEntry.WriterTool, FixedArguments: map[string]string{"key": keepAwakeEntry.Key}},
+		Reset: &tuningWriter{
+			Tool:           keepAwakeEntry.ResetTool,
+			FixedArguments: map[string]string{"key": keepAwakeEntry.Key, "reset": "true"},
+		},
+		ValueFields: keepAwakeEntry.ValueFields,
+		Current:     currentWorkflowPreference(resolver, sessionKey, keepAwakeEntry.Key),
+	})
+
 	sageReviewEntry := registryEntryByKey(wsconfig.ItemSageReview)
 	appendKnob(sageReviewEntry, tuningKnob{
 		ID:          sageReviewEntry.Key,
@@ -592,6 +611,7 @@ func buildTuningCatalog(rsrcRoot fs.FS, resolver *wsconfig.Resolver, sessionKey,
 	appendKnob(profileEntry, profileKnob)
 
 	appendKnob(agentProfileTuningKnob(resolver, registries...))
+	appendKnob(tierRoutingTuningKnob(rsrcRoot, configOpts, harness, registries...))
 
 	for _, k := range []declaredConfigKey{worktreeNudgeStaleDaysKey, worktreeNudgePreservedGBKey} {
 		entry := k.entry()
