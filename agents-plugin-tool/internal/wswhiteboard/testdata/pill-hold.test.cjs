@@ -101,6 +101,16 @@ function makePillHarness(itemSpecs, opts = {}) {
       ctx.textContent = spec.ctx;
       el.appendChild(ctx);
     }
+    if (spec.why) {
+      const why = new El('span');
+      why.className = 'why';
+      why.textContent = spec.why.text;
+      const a = new El('a');
+      a.attrs.href = spec.why.href;
+      a.textContent = spec.why.label;
+      why.q['a[href]'] = [a];
+      el.appendChild(why);
+    }
     if (spec.options) {
       spec.options.forEach((opt, i) => {
         const o = new El('button');
@@ -272,6 +282,28 @@ test('hold auto-clears when item content or re-ask marker changes (fingerprint c
   assert.equal(h3.items[1].classList.contains('wb-held'), false, 're-asked item hold auto-cleared');
   assert.equal(h3.titleCounts.at(-1), 2);
   assert.deepEqual(storage.dump(), {}, 'cleared holds remove empty localStorage entry');
+});
+
+test('a rationale link target change clears the hold; a pre-upgrade hold migrates instead of clearing', () => {
+  const ask = href => [{ id: 30, top: -200, title: 'Pick a cache', why: { text: 'See the design notes', label: 'design notes', href } }];
+  const storage = makeStorage();
+  const h1 = makePillHarness(ask('docs/a.md'), { storage, rid: 'board-l' });
+  h1.clickHold(h1.items[0]);
+  assert.equal(h1.items[0].classList.contains('wb-held'), true);
+  const h2 = makePillHarness(ask('docs/b.md'), { storage, rid: 'board-l' });
+  assert.equal(h2.items[0].classList.contains('wb-held'), false, 'retargeted link clears the hold');
+  assert.equal(h2.titleCounts.at(-1), 1);
+
+  // A hold stored with the text-only fingerprint (before link targets were
+  // included) is kept and rewritten in the current form.
+  const legacy = h2.win.wbPill.fingerprint(h2.items[0], true);
+  assert.notEqual(legacy, h2.win.wbPill.fingerprint(h2.items[0]));
+  const seeded = makeStorage({ 'ws.wb.holds.board-l': JSON.stringify({ 30: legacy }) });
+  const h3 = makePillHarness(ask('docs/b.md'), { storage: seeded, rid: 'board-l' });
+  assert.equal(h3.items[0].classList.contains('wb-held'), true, 'upgrade keeps an existing hold');
+  assert.deepEqual(JSON.parse(seeded.dump()['ws.wb.holds.board-l']), { 30: h3.win.wbPill.fingerprint(h3.items[0]) });
+  const h4 = makePillHarness(ask('docs/c.md'), { storage: seeded, rid: 'board-l' });
+  assert.equal(h4.items[0].classList.contains('wb-held'), false, 'a later retarget still clears it');
 });
 
 test('hold is dropped when item is answered (drafted or sent) or withdrawn from open asks', () => {

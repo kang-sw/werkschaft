@@ -39,7 +39,20 @@
     return el.getAttribute("data-id") || el.getAttribute("id") || "";
   }
   function normText(s) { return String(s || "").replace(/\s+/g, " ").trim(); }
-  function itemFingerprint(el) {
+  // Authored link destinations in a rationale: a patch may change only a
+  // link's target and keep its label. Script-built controls are skipped.
+  function linkTargets(el) {
+    var out = [];
+    Array.prototype.forEach.call((el.querySelectorAll && el.querySelectorAll("a[href]")) || [], function (a) {
+      if (a.closest && a.closest("button")) return;
+      out.push(a.getAttribute("href") || "");
+    });
+    return out.length ? "\nh:" + out.join("\n") : "";
+  }
+  // legacy omits link targets: the fingerprint holds stored before targets
+  // were included, which reconcileHolds migrates instead of clearing. With
+  // no rationale links both forms are equal.
+  function itemFingerprint(el, legacy) {
     if (!el) return "";
     var parts = [];
     var title = el.querySelector && el.querySelector(".title");
@@ -48,7 +61,7 @@
     if (ctx) parts.push("c:" + normText(ctx.textContent));
     if (el.querySelectorAll) {
       Array.prototype.forEach.call(el.querySelectorAll(".why") || [], function (w) {
-        parts.push("w:" + normText(w.textContent));
+        parts.push("w:" + normText(w.textContent) + (legacy ? "" : linkTargets(w)));
       });
       Array.prototype.forEach.call(el.querySelectorAll(".opt") || [], function (o) {
         if (!o || !o.hasAttribute || !o.hasAttribute("data-opt")) return;
@@ -150,7 +163,12 @@
       if (!k) return;
       openIds[k] = true;
       if (!(k in holds)) return;
-      if (answered(el) || holds[k] !== itemFingerprint(el)) {
+      var fp = itemFingerprint(el);
+      if (holds[k] !== fp && holds[k] === itemFingerprint(el, true)) {
+        holds[k] = fp; // held before link targets counted; keep the hold
+        changed = true;
+      }
+      if (answered(el) || holds[k] !== fp) {
         delete holds[k];
         changed = true;
       }
@@ -178,7 +196,7 @@
   function isHeldExternal(el) {
     var k = itemKey(el);
     if (!k || !(k in holds)) return false;
-    return holds[k] === itemFingerprint(el);
+    return holds[k] === itemFingerprint(el) || holds[k] === itemFingerprint(el, true);
   }
   function toggleHold(el) {
     var k = itemKey(el);
