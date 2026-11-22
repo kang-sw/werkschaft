@@ -615,3 +615,47 @@ func TestStoreSiblingsOfOneSourceRecordAreAllRetained(t *testing.T) {
 		t.Fatalf("after finalize: retained %s, loss %d", got, lossCount(t, s, "sess"))
 	}
 }
+
+// TestStoreDisplayKeyLookupNormalizesRawIDsExactlyOnce pins Decision 3's
+// ownership split: capture hands the store raw IDs, the store normalizes each
+// exactly once at ingestion, and a lookup by the display key
+// (wsaudit.NormalizeID of the raw ID) finds the record before and after a
+// restart; a key normalized twice does not, and a short literal ID still
+// resolves to itself.
+func TestStoreDisplayKeyLookupNormalizesRawIDsExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	session := strings.Repeat("s", 300) // a raw session ID past the identifier bound
+	rawID, rawCall, rawParent := strings.Repeat("i", 300), strings.Repeat("c", 300), strings.Repeat("p", 300)
+	long := sourced(session, 1, wsaudit.KindToolCall)
+	long.ID, long.CallID, long.ParentID = rawID, rawCall, rawParent
+	short := sourced(session, 2, wsaudit.KindToolResult)
+	short.ID, short.CallID = "short-id", "call-1"
+	mustAppend(t, s, long)
+	mustAppend(t, s, short)
+	flush(t, s)
+	check := func(s *Store) {
+		t.Helper()
+		ctx := context.Background()
+		ev, ok, err := s.Event(ctx, session, wsaudit.NormalizeID(rawID))
+		if err != nil || !ok || ev.CallID != wsaudit.NormalizeID(rawCall) || ev.ParentID != wsaudit.NormalizeID(rawParent) {
+			t.Fatalf("display-key lookup = %+v %v %v", ev, ok, err)
+		}
+		if _, ok, _ := s.Event(ctx, session, wsaudit.NormalizeID(wsaudit.NormalizeID(rawID))); ok {
+			t.Fatal("a twice-normalized key found the record")
+		}
+		if evs, _ := s.EventsByCallID(ctx, session, wsaudit.NormalizeID(rawCall)); len(evs) != 1 || evs[0].ID != wsaudit.NormalizeID(rawID) {
+			t.Fatalf("call-key lookup = %+v", evs)
+		}
+		if _, ok, _ := s.Event(ctx, session, "short-id"); !ok {
+			t.Fatal("a short literal ID did not resolve to itself")
+		}
+		if evs, _ := s.EventsByCallID(ctx, session, "call-1"); len(evs) != 1 {
+			t.Fatalf("short call key = %+v", evs)
+		}
+	}
+	check(s)
+	_ = s.Close()
+	s2, _ := openTest(t, root, nil)
+	check(s2)
+}

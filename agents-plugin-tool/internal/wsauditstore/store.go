@@ -899,25 +899,31 @@ func (s *Store) Events(ctx context.Context, session string) ([]wsaudit.Envelope,
 	return append([]wsaudit.Envelope(nil), info.ring.events...), nil
 }
 
-// Event returns the retained event with the normalized ID id.
-func (s *Store) Event(ctx context.Context, session, id string) (wsaudit.Envelope, bool, error) {
+// Event returns the retained event whose ID key is key. The store owns
+// identifier normalization (Decision 3): producers hand it raw IDs and it
+// normalizes each exactly once at ingestion, so a record's key is
+// wsaudit.NormalizeID(raw ID) — the display key a history row carries. key is
+// compared verbatim, never normalized again (a digest key normalized twice
+// would name a different record). session is the raw session ID, like every
+// other session argument.
+func (s *Store) Event(ctx context.Context, session, key string) (wsaudit.Envelope, bool, error) {
 	evs, err := s.Events(ctx, session)
 	for i := len(evs) - 1; i >= 0; i-- {
-		if evs[i].ID == id {
+		if evs[i].ID == key {
 			return evs[i], true, err
 		}
 	}
 	return wsaudit.Envelope{}, false, err
 }
 
-// EventsByCallID returns the retained events carrying the normalized call
-// key callID (as a history row carries it), oldest first. The key is never
-// re-normalized.
-func (s *Store) EventsByCallID(ctx context.Context, session, callID string) ([]wsaudit.Envelope, error) {
+// EventsByCallID returns the retained events whose call key is key, oldest
+// first. As for Event, key is wsaudit.NormalizeID(raw call ID) — the display
+// key — and is compared verbatim.
+func (s *Store) EventsByCallID(ctx context.Context, session, key string) ([]wsaudit.Envelope, error) {
 	evs, err := s.Events(ctx, session)
 	var out []wsaudit.Envelope
 	for _, ev := range evs {
-		if ev.CallID == callID {
+		if ev.CallID == key {
 			out = append(out, ev)
 		}
 	}
