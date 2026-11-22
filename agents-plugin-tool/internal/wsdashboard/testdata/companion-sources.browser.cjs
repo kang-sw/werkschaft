@@ -148,6 +148,23 @@ async function shotDialog(page, name) {
     assert.equal(importCalls.at(-1).path, '/api/companion/packs/alpha/uninstall');
     assert.deepEqual(await page.evaluate(() => fetch('/api/companion/packs').then(r => r.json()).then(c => c.packs.map(p => p.id).sort())), ['default']);
 
+    // A 200 import whose pack carries its own error is a failure, and the count is what was written.
+    await page.route('**/api/companion/packs/import*', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      listing: { source: 'fan-pack.zip', kind: 'local', official: false, name: 'Fan', packs: [
+        { id: 'alpha', name: 'Pack alpha', version: '1.0.0', status: 'available', installed: true },
+        { id: 'beta', name: 'Pack beta', version: '1.0.0', status: 'available', error: { id: 'beta', path: '', message: 'cannot move the staged pack into place' } }], errors: [] } }) }));
+    await section.locator('input[type="file"]').setInputFiles({ name: 'fan-pack.zip', mimeType: 'application/zip', buffer: zipBytes });
+    await panel.locator('input[type="checkbox"]').first().waitFor();
+    await panel.getByRole('button', { name: /^import/i }).click();
+    const alert = section.locator('.ws-companion-sources-error[role="alert"]');
+    await alert.waitFor();
+    assert.equal(await section.locator('.ws-companion-sources-ok').count(), 0, 'a partial result is not announced as success');
+    assert.match(await alert.textContent(), /beta: cannot move the staged pack into place/);
+    assert.match(await alert.textContent(), /1/, 'one of the two requested packs was written');
+    await dialog.evaluate(d => d.querySelector('.ws-companion-sources-panel').scrollIntoView({ block: 'start' }));
+    await shotDialog(page, 'companion-sources-import-partial');
+    await page.unroute('**/api/companion/packs/import*');
+
     // The authoring links point at exactly the daemon's three guide routes, and each one serves.
     const links = await section.locator('.ws-companion-sources-links a').evaluateAll(list => list.map(a => ({ href: a.getAttribute('href'), rel: a.rel, target: a.target })));
     assert.deepEqual(links.map(l => l.href), ['/api/companion/authoring/guide.md', '/api/companion/authoring/pack.schema.json', '/api/companion/authoring/marketplace.schema.json']);

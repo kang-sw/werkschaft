@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -190,8 +191,104 @@ func (s *CompanionPackStore) swapAndLoad(opts wsconfig.Options, swap func()) *co
 	return s.load(opts)
 }
 
+// companionStrandedError reports that a previous pack could not be moved back
+// after a failed swap. Its copy stays in the staging run, which the caller
+// must keep so recoverStaging can restore it.
+type companionStrandedError struct{ message string }
+
+func (e *companionStrandedError) Error() string { return e.message }
+
+func (s *CompanionPackStore) renameFile(oldPath, newPath string) error {
+	s.fsop("rename")
+	if s.rename != nil {
+		return s.rename(oldPath, newPath)
+	}
+	return os.Rename(oldPath, newPath)
+}
+
+// checkPacksRoot refuses a pack root that is a link, as the scan does: an
+// install or uninstall through it would act outside the config home.
+func (s *CompanionPackStore) checkPacksRoot(paths companionInstallPaths) error {
+	s.fsop("lstat")
+	info, err := os.Lstat(paths.packs)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return companionRefuse(http.StatusInternalServerError, "cannot inspect the companion pack directory")
+	case info.Mode().Type() != fs.ModeDir:
+		return companionRefuse(http.StatusConflict, "the companion pack directory must be a plain directory")
+	}
+	return nil
+}
+
+// Moved-aside names in a staging run: "." + id is a previous pack displaced by
+// an install swap, and recoverStaging may put it back; "~" + id is a pack an
+// uninstall removed, which must stay removed, so recoverStaging never touches
+// it. Neither prefix can start a pack ID.
+const (
+	companionSwapAside      = "."
+	companionUninstallAside = "~"
+)
+
+// recoverStaging puts back a previous pack that a crash or a failed rollback
+// left in a staging run (swapIn moves it to <run>/.<id>; an uninstall's
+// <run>/~<id> is never restored). A moved-aside copy is
+// deleted only after its target is confirmed in place, which prepareStaging's
+// removal of the run then does. Callers hold installMu and run it before
+// prepareStaging.
+func (s *CompanionPackStore) recoverStaging(opts wsconfig.Options, paths companionInstallPaths) error {
+	s.fsop("lstat")
+	if info, err := os.Lstat(paths.staging); err != nil || info.Mode().Type() != fs.ModeDir {
+		return nil // absent, or refused later by prepareStaging
+	}
+	fail := func() error {
+		return companionRefuse(http.StatusInternalServerError, "cannot restore a previous companion pack left in staging")
+	}
+	s.fsop("readdir")
+	runs, err := os.ReadDir(paths.staging)
+	if err != nil {
+		return fail()
+	}
+	restored := false
+	for _, run := range runs {
+		if !run.IsDir() {
+			continue
+		}
+		runDir := filepath.Join(paths.staging, run.Name())
+		s.fsop("readdir")
+		children, err := os.ReadDir(runDir)
+		if err != nil {
+			return fail()
+		}
+		for _, child := range children {
+			id, dotted := strings.CutPrefix(child.Name(), companionSwapAside)
+			if !dotted || !child.IsDir() || !companionPackID.MatchString(id) {
+				continue
+			}
+			target := filepath.Join(paths.packs, id)
+			s.fsop("lstat")
+			if _, err := os.Lstat(target); err == nil {
+				continue // in place: the copy is stale
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return fail()
+			}
+			s.fsop("mkdir")
+			if os.MkdirAll(paths.packs, 0o755) != nil || s.renameFile(filepath.Join(runDir, child.Name()), target) != nil {
+				return fail()
+			}
+			restored = true
+		}
+	}
+	if restored {
+		s.reload(opts)
+	}
+	return nil
+}
+
 // prepareStaging removes staging runs a crash or a failed removal left
-// behind, then creates a fresh run directory. Callers hold installMu.
+// behind, then creates a fresh run directory. Callers hold installMu and have
+// run recoverStaging.
 func (s *CompanionPackStore) prepareStaging(paths companionInstallPaths) (string, error) {
 	s.fsop("lstat")
 	info, err := os.Lstat(paths.staging)
@@ -228,10 +325,13 @@ func (s *CompanionPackStore) prepareStaging(paths companionInstallPaths) (string
 type companionLocalDirs struct {
 	visited int
 	plain   map[string]bool
+	// folded maps a lower-cased entry name to its on-disk spelling, for a
+	// case-insensitive volume where "Foo" and "foo" are one directory.
+	folded map[string]string
 }
 
 func (s *CompanionPackStore) localDirs(paths companionInstallPaths) (companionLocalDirs, error) {
-	dirs := companionLocalDirs{plain: map[string]bool{}}
+	dirs := companionLocalDirs{plain: map[string]bool{}, folded: map[string]string{}}
 	s.fsop("readdir")
 	entries, err := os.ReadDir(paths.packs)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -244,6 +344,7 @@ func (s *CompanionPackStore) localDirs(paths companionInstallPaths) (companionLo
 		id := entry.Name()
 		plain := entry.Type()&(fs.ModeSymlink|fs.ModeIrregular) == 0 && entry.IsDir()
 		dirs.plain[id] = plain
+		dirs.folded[strings.ToLower(id)] = id
 		if plain && id != companionDefaultID && id != "auto" && companionPackID.MatchString(id) {
 			dirs.visited++
 		}
@@ -280,6 +381,14 @@ func (s *CompanionPackStore) install(opts wsconfig.Options, plan companionInstal
 		wanted = make(map[string]bool, len(ids))
 		for _, id := range ids {
 			wanted[id] = true
+		}
+	}
+	if err := s.checkPacksRoot(paths); err != nil {
+		return result, err
+	}
+	if !dryRun {
+		if err := s.recoverStaging(opts, paths); err != nil {
+			return result, err
 		}
 	}
 	snapshot := s.snapshot(opts)
@@ -376,7 +485,11 @@ func (s *CompanionPackStore) install(opts wsconfig.Options, plan companionInstal
 	if err != nil {
 		return result, err
 	}
+	stranded := false
 	defer func() {
+		if stranded {
+			return // the run holds the only copy of a previous pack
+		}
 		s.fsop("remove")
 		_ = os.RemoveAll(run)
 	}()
@@ -403,6 +516,8 @@ func (s *CompanionPackStore) install(opts wsconfig.Options, plan companionInstal
 		for _, item := range written {
 			if err := s.swapIn(paths, run, item.id); err != nil {
 				failed[item.id] = err.Error()
+				var lost *companionStrandedError
+				stranded = stranded || errors.As(err, &lost)
 			}
 		}
 	})
@@ -433,6 +548,9 @@ func (s *CompanionPackStore) preparePlanEntry(plan companionInstallPlan, entry c
 	fail := func(err error) (*companionPack, *companionPackError) {
 		e := companionAsPackError(err, entry.ID)
 		return nil, &e
+	}
+	if spelled, clash := dirs.folded[strings.ToLower(entry.ID)]; clash && spelled != entry.ID {
+		return fail(errors.New("a pack directory whose name differs only by case already uses this pack ID; remove it yourself to install this one"))
 	}
 	if plain, exists := dirs.plain[entry.ID]; exists {
 		if !plain {
@@ -546,27 +664,26 @@ func (s *CompanionPackStore) writeNew(name string, data []byte) error {
 }
 
 // swapIn moves a staged pack into place. An existing directory is first
-// renamed into the staging run, and restored when the second rename fails.
-// The caller holds scanMu through swapAndLoad.
+// renamed into the staging run, and restored when the second rename fails; if
+// that restore fails too, the copy stays in the run and a
+// companionStrandedError tells the caller not to delete the run. The caller
+// holds scanMu through swapAndLoad.
 func (s *CompanionPackStore) swapIn(paths companionInstallPaths, run, id string) error {
 	// A pack ID never starts with a dot, so the moved-aside name cannot meet
-	// another staged pack.
+	// another staged pack. recoverStaging restores only this "." name.
 	target := filepath.Join(paths.packs, id)
-	old := filepath.Join(run, "."+id)
+	old := filepath.Join(run, companionSwapAside+id)
 	s.fsop("lstat")
 	_, err := os.Lstat(target)
 	replacing := err == nil
 	if replacing {
-		s.fsop("rename")
-		if err := os.Rename(target, old); err != nil {
+		if err := s.renameFile(target, old); err != nil {
 			return errors.New("cannot move the installed pack aside")
 		}
 	}
-	s.fsop("rename")
-	if err := os.Rename(filepath.Join(run, id), target); err != nil {
-		if replacing {
-			s.fsop("rename")
-			_ = os.Rename(old, target)
+	if err := s.renameFile(filepath.Join(run, id), target); err != nil {
+		if replacing && s.renameFile(old, target) != nil {
+			return &companionStrandedError{"cannot move the staged pack into place, and the previous pack could not be restored; it is kept aside and the next install or uninstall restores it"}
 		}
 		return errors.New("cannot move the staged pack into place")
 	}
@@ -588,6 +705,12 @@ func (s *CompanionPackStore) uninstall(opts wsconfig.Options, id string) (*compa
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkPacksRoot(paths); err != nil {
+		return nil, err
+	}
+	if err := s.recoverStaging(opts, paths); err != nil {
+		return nil, err
+	}
 	target := filepath.Join(paths.packs, id)
 	s.fsop("lstat")
 	info, err := os.Lstat(target)
@@ -607,8 +730,7 @@ func (s *CompanionPackStore) uninstall(opts wsconfig.Options, id string) (*compa
 	}()
 	var moved error
 	snapshot := s.swapAndLoad(opts, func() {
-		s.fsop("rename")
-		moved = os.Rename(target, filepath.Join(run, "."+id))
+		moved = s.renameFile(target, filepath.Join(run, companionUninstallAside+id))
 	})
 	if moved != nil {
 		return snapshot, companionRefuse(http.StatusInternalServerError, "cannot remove the pack directory")

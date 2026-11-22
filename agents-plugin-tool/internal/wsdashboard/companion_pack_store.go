@@ -41,7 +41,8 @@ type CompanionPackStore struct {
 	// installMu serializes install, update, uninstall, and dry runs. It is
 	// always taken before scanMu, never while holding it.
 	installMu sync.Mutex
-	trace     func(op string) // counts installer file operations in tests
+	trace     func(op string)                     // counts installer file operations in tests
+	rename    func(oldPath, newPath string) error // injects rename failures in tests; nil selects os.Rename
 }
 
 type companionPackOpen func(parent companionPackFile, name string, directory bool) (companionPackFile, error)
