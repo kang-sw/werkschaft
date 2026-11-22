@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 3302b5eedd080007
 sage-review-completeness-reviewed: 3302b5eedd080007
+completed: 2026-11-23
 ---
 
 # Move harness-name branches out of the common layer into per-harness registration data
@@ -808,3 +809,8 @@ Conversation`) pass; full `wsagent` fails only the three pre-existing Pi bundle
 tests; targeted `internal/mcp` fails only the known inventory-environment test.
 The T0 verdict above is unchanged: the runtime-only accessors add no persisted
 shape.
+
+
+## Resolution (2026-11-23)
+
+All four phases merged into develop: Phase 1, Phase 2 (3a1f316aa), Phase 3 (0e6693a21) and Phase 4 (eb048c776). Common code reads harness policy through the registration seam. The durable scan test (harness_name_scan_test.go) gates new name branches against an exact allowlist. The compatibility tier is T0 across all phases.
