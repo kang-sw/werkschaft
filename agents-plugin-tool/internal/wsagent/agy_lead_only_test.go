@@ -355,6 +355,74 @@ func TestAgyWorkerUserStopDuringAFailedRetirementStopsTheHolder(t *testing.T) {
 	}
 }
 
+// A close while a failed retirement retries stops the holder first. A failed
+// stop refuses the close: the conversation stays open in the runner with its
+// holder and the heartbeat retry, so the live holder keeps both. A later
+// close that ends the holder closes the conversation once.
+func TestAgyWorkerCloseDuringAFailedRetirementKeepsTheConversation(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	leadOnlyAgyNextDaemon(t, h)
+	h.opts.heartbeat = time.Hour // the test drives each retry
+	h.holders.set(func() { h.holders.stopErr = errors.New("holder busy") })
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "holder scan", h.runner.rejoined)
+	eventually(t, "the failed retirement stop", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+	c := h.runner.conv(id)
+	armed := func() bool {
+		ok := false
+		c.do(func() { ok = c.leadOnlyRetiring && c.replaying && c.proc != nil && !c.closed })
+		return ok
+	}
+	stops := func() int { return h.holders.opCount("stop " + holder) }
+
+	_, err := h.runner.CloseConversation(id)
+	if !errors.Is(err, errHolderNotEnded) || !strings.HasSuffix(err.Error(), "close it again to retry") || !strings.Contains(err.Error(), "holder busy") {
+		t.Fatalf("close error = %v", err)
+	}
+	if stops() != 2 {
+		t.Fatalf("the close did not stop the holder: %v", h.holders.opList())
+	}
+	if h.runner.conv(id) == nil {
+		t.Fatal("a refused close dropped the conversation from the runner")
+	}
+	if rec := h.record(id); rec.HolderID != holder || !rec.TurnOpen || rec.ClosedAt != "" {
+		t.Fatalf("a refused close forgot the holder or closed: %+v", rec)
+	}
+	if !armed() || len(got.list()) != 0 {
+		t.Fatalf("a refused close disarmed the retry or published: armed %v, reports %+v", armed(), got.list())
+	}
+	if st := h.state(id); st.Status == StatusClosed || !strings.HasSuffix(st.Error, "holder busy") {
+		t.Fatalf("state = %+v", st)
+	}
+	c.do(c.heartbeat)
+	if stops() != 3 {
+		t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+	}
+
+	h.holders.set(func() { h.holders.stopErr = nil })
+	st, err := h.runner.CloseConversation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stops() != 4 || st.Status != StatusClosed || h.runner.conv(id) != nil {
+		t.Fatalf("the close did not end the holder and close: stops %v, state %+v", h.holders.opList(), st)
+	}
+	if rec := h.record(id); rec.HolderID != "" || rec.TurnOpen || rec.ClosedAt == "" || rec.MCPToken != "" || rec.Capability != "" {
+		t.Fatalf("the closed worker kept its holder or turn: %+v", rec)
+	}
+	eventually(t, "the failed report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != agyLeadOnlyReason {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	if _, err := h.runner.CloseConversation(id); err == nil {
+		t.Fatal("a closed conversation closed again")
+	}
+	if stops() != 4 || len(got.list()) != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("closed twice or relaunched: stops %d, reports %+v, ops %v", stops(), got.list(), h.holders.opList())
+	}
+}
+
 // A daemon that died after the retirement cleared the holder but before the
 // open turn settled leaves an open turn and no holder. The next load settles
 // it failed with the agy reason, not the generic interrupted one.

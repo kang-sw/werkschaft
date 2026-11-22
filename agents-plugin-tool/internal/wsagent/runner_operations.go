@@ -2,6 +2,7 @@
 package wsagent
 
 import (
+	"errors"
 	"slices"
 	"sort"
 	"strings"
@@ -365,7 +366,10 @@ func (r *Runner) setPermissionMode(id, mode string, user bool) (State, error) {
 // Pi child can be reopened by Send; other closed conversations refuse it.
 // Its open descendants through conversation parents, and a lead's Pi
 // children (children.go), close first, deepest first. A conversation parent
-// whose done turn waited for this child's report is released.
+// whose done turn waited for this child's report is released. A
+// conversation whose retiring holder could not be ended stays open and
+// fails the close (errHolderNotEnded); a descendant that does stops the
+// cascade before its ancestors close, so closing id again retries it.
 func (r *Runner) CloseConversation(id string) (State, error) {
 	r.resumeMu.Lock()
 	defer r.resumeMu.Unlock()
@@ -373,7 +377,9 @@ func (r *Runner) CloseConversation(id string) (State, error) {
 		return State{}, err
 	}
 	for _, d := range r.descendants(id) {
-		_, _ = r.closeOne(d)
+		if _, err := r.closeOne(d); errors.Is(err, errHolderNotEnded) {
+			return State{}, err
+		}
 	}
 	st, err := r.closeOne(id)
 	if err != nil {
@@ -396,8 +402,7 @@ func (r *Runner) releaseParent(id string) {
 // closeOne closes conversation id alone.
 func (r *Runner) closeOne(id string) (State, error) {
 	st, err := r.act(id, func(c *conv) error {
-		c.close()
-		return nil
+		return c.close()
 	})
 	if err != nil {
 		return st, err

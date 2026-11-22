@@ -49,7 +49,8 @@ func (c *conv) restoreWorkerMCP() {
 //     replaying (it submits nothing), and each heartbeat's checkReattach
 //     tries the stop again (leadOnlyRetiring), as a downgrade retirement
 //     does. Any stopProcess (a user's Stop) retries it too (retryRetirement),
-//     never through the detached stream's Close.
+//     never through the detached stream's Close, and a close is refused
+//     while it fails (errHolderNotEnded).
 func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
 	refusal := c.r.admitWorkerRecord(c.rec)
 	if refusal == nil {
@@ -102,11 +103,13 @@ func (c *conv) retiringHolder() bool {
 }
 
 // retryRetirement tries a retiringHolder's holder stop again, from the
-// heartbeat (checkReattach) or from any stopProcess. A failure keeps the
-// holder in the record and the retry armed.
-func (c *conv) retryRetirement(hp holderProcess) {
+// heartbeat (checkReattach, wake) or from any stopProcess or close. A
+// failure keeps the holder in the record and the retry armed. Only the
+// heartbeat's success wakes retained input: a deliberate Stop leaves it held
+// for the next send (Runner.Stop), and a close drops it.
+func (c *conv) retryRetirement(hp holderProcess, wake bool) {
 	if c.workerRetiring {
-		c.retireDowngradedWorker(hp)
+		c.retireDowngradedWorker(hp, wake)
 		c.leadOnlyRetired()
 		return
 	}
@@ -155,9 +158,30 @@ func downgradeSettledChild(child, parent Record) bool {
 	return err == nil && time.UnixMilli(child.TurnStartedAt).Before(settled)
 }
 
+// errHolderNotEnded marks a close refused because a retiringHolder's holder
+// stop failed again: the conversation stays open, with its heartbeat retry,
+// so the live holder is never left without one; a later close retries.
+var errHolderNotEnded = errors.New("retiring holder not ended")
+
+// closeRetired retries a retiringHolder's stop before a close marks the
+// conversation closed, and refuses the close while it still fails.
+func (c *conv) closeRetired() error {
+	if !c.retiringHolder() {
+		return nil
+	}
+	if hp, ok := c.proc.(holderProcess); ok {
+		c.retryRetirement(hp, false)
+	}
+	if !c.retiringHolder() {
+		return nil
+	}
+	return categorized(errHolderNotEnded, conflict("the conversation stays open: its retiring process could not be ended (%s); close it again to retry", c.lastErr))
+}
+
 // This runs after ownership validation and before requesting replay. Retiring
 // the downgrade-fenced turn must not publish a second report to its parent.
-func (c *conv) retireDowngradedWorker(hp holderProcess) bool {
+// wake (the heartbeat's attempts) signals the inbox once it succeeds.
+func (c *conv) retireDowngradedWorker(hp holderProcess, wake bool) bool {
 	rec := c.record()
 	if !c.workerRetiring {
 		if rec.Parent == nil || rec.Parent.Kind != ParentConversation {
@@ -194,7 +218,10 @@ func (c *conv) retireDowngradedWorker(hp holderProcess) bool {
 	c.seqDirty, c.live.ringDirty = false, false
 	c.writeRegistration()
 	// Inbox signals consumed while retirement was retrying could not kick.
-	// Recheck the retained input now that this child may launch a new turn.
-	c.signalInbox()
+	// Recheck the retained input now that this child may launch a new turn,
+	// unless a deliberate Stop or close ended it.
+	if wake {
+		c.signalInbox()
+	}
 	return true
 }

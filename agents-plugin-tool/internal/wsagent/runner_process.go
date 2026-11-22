@@ -647,7 +647,7 @@ func (c *conv) checkReattach() {
 	}
 	if c.retiringHolder() {
 		// The ownership match passed before the first, failed stop.
-		c.retryRetirement(hp)
+		c.retryRetirement(hp, true)
 		return
 	}
 	id, _, _ := hp.HolderInfo()
@@ -679,7 +679,7 @@ func (c *conv) checkReattach() {
 					c.leadOnlyRetired()
 					return
 				}
-				if c.retireDowngradedWorker(hp) {
+				if c.retireDowngradedWorker(hp, true) {
 					c.leadOnlyRetired()
 					return
 				}

@@ -1085,7 +1085,14 @@ from a support conversation:
   then stopped (`retireLeadOnlyWorker`): an open turn settles failed with
   the reason. A failed stop keeps the holder in the record and is retried
   on every heartbeat until it succeeds; a user's Stop meanwhile retries the
-  holder's own stop and keeps the holder if that fails too. A daemon that dies between clearing
+  holder's own stop and keeps the holder if that fails too. A close
+  (directly or through a parent's cascade) also retries that stop first and,
+  if it fails, is refused (`errHolderNotEnded`, HTTP 409). The conversation
+  stays open with its holder and heartbeat retry, the cascade closes no
+  ancestor, and closing again retries. A downgrade retirement whose stop
+  failed behaves the same way. Only the heartbeat's successful retry wakes
+  input queued meanwhile: after a deliberate Stop it waits for the next
+  send. A daemon that dies between clearing
   the holder and settling the turn leaves the next load to settle it failed
   with the same reason, not as interrupted. A mismatched or already
   rejected holder is never stopped; the record only drops the association.

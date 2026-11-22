@@ -870,8 +870,9 @@ func (c *conv) stopProcess(reason string) {
 		// closing it would end nothing, and releaseHolder would then forget
 		// a holder that still runs. Only the holder's own stop ends it; a
 		// failure keeps the holder, the error, and the heartbeat retry.
+		// Retained input stays held for the next send.
 		if hp, ok := c.proc.(holderProcess); ok {
-			c.retryRetirement(hp)
+			c.retryRetirement(hp, false)
 		}
 		return
 	}
@@ -1105,8 +1106,16 @@ func (c *conv) stopIdle() {
 
 // close ends the conversation's current lifetime. It marks it closed
 // first, under mu, so a Send either wrote before (and its message is
-// dropped below with the other held ones) or is refused.
-func (c *conv) close() { c.closeIf(nil) }
+// dropped below with the other held ones) or is refused. A retiring holder
+// whose stop fails again refuses it first (closeRetired): nothing is marked
+// closed, and the conversation keeps its heartbeat retry.
+func (c *conv) close() error {
+	if err := c.closeRetired(); err != nil {
+		return err
+	}
+	c.closeIf(nil)
+	return nil
+}
 
 // closeIf is close when done (nil for always) holds in the same mu hold
 // that marks the conversation closed, and reports whether it closed. It
