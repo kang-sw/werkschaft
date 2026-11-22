@@ -342,6 +342,11 @@ func (h *Hosted) HolderEvent(id string, ev wsholder.Event) {
 		h.mu.Unlock()
 		return
 	}
+	if ev.OutputBytes != nil {
+		// A replay whose output records all left the holder's ring still
+		// ends with the job's totals.
+		h.rings.AdvanceTo(j.out, ev.StreamBytes["stdout"], ev.StreamBytes["stderr"], *ev.OutputBytes)
+	}
 	j.row.State = HostedExited
 	if j.stopping {
 		j.row.State = HostedStopped

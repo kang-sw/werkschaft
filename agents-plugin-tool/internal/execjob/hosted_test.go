@@ -799,6 +799,33 @@ func TestHostedRejoinKeepsAbsoluteOffsets(t *testing.T) {
 	}
 }
 
+// TestHostedExitOnlyReplayKeepsTheTotals: a rejoin whose replay holds only
+// the exit record still ends the job with its output totals, so a saved
+// cursor reports the gap instead of clamping to 0.
+func TestHostedExitOnlyReplayKeepsTheTotals(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Legacy: true, Tool: "exec.spawn", Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.open(10 * time.Millisecond)
+	code, total := 0, int64(3<<20)
+	fx.holders.emit(v.HolderID, wsholder.Event{Event: "exit", ExitCode: &code, StreamBytes: map[string]int64{"stdout": total - 40, "stderr": 40}, OutputBytes: &total})
+	eventuallyExec(t, "the job's end", func() bool { got, _ := fx.h.Get("lead", v.ID); return got.Terminal() })
+	read, ok, err := fx.h.LegacyRead(fx.exitDir, v.ID, "stderr", 10, 100)
+	if !ok || err != nil || read.Size != 40 || read.EvictedBefore != 40 || read.Offset != 40 {
+		t.Fatalf("stderr from a saved cursor = %+v %v %v", read, ok, err)
+	}
+	got, _ := fx.h.Get("lead", v.ID)
+	if got.Written[StreamStdout] != total-40 || got.Written[StreamCombined] != total {
+		t.Fatalf("totals after an exit-only replay = %v", got.Written)
+	}
+	if row, _ := fx.store.row(v.ID); row.Written[StreamCombined] != total {
+		t.Fatalf("stored totals = %v", row.Written)
+	}
+}
+
 // TestHostedOwnershipAndListing: only the owner sees, stops or tails a
 // job, and a listing shows running jobs first.
 func TestHostedOwnershipAndListing(t *testing.T) {

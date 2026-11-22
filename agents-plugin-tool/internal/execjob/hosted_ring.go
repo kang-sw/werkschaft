@@ -188,6 +188,21 @@ func (r *OutputRings) AppendAt(j *JobOutput, s Stream, data []byte, own, combine
 	r.appendLocked(j, s, data)
 }
 
+// AdvanceTo moves stdout, stderr and combined up to the totals a holder
+// reported, as AppendAt does for the bytes before a record: what never
+// arrived counts as written and evicted. Totals at or below what was
+// written change nothing.
+func (r *OutputRings) AdvanceTo(j *JobOutput, stdout, stderr, combined int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if j.released {
+		return
+	}
+	r.skipTo(j, StreamStdout, stdout)
+	r.skipTo(j, StreamStderr, stderr)
+	r.skipTo(j, StreamCombined, combined)
+}
+
 // skipTo moves s's written and evicted marks up to at when bytes before it
 // never arrived, first dropping the oldest records through the last one
 // holding s's bytes. The gap's newlines are unknown, so absolute grep line

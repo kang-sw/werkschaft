@@ -449,6 +449,14 @@ class RingReplayTest(HolderTestCase):
         self.assertGreater(events[0]["offset"], 0)
         self.assertNotIn("offset", events[-1])
 
+    def test_exit_record_carries_the_output_totals(self):
+        holder, first = self._filled_holder()
+        # Only the exit record is replayed: its totals still give the counts.
+        _, events = self._replay(holder, 201)
+        self.assertEqual([m["event"] for m in events], ["exit"])
+        self.assertEqual(events[0]["stream_bytes"], {"stdout": 2000})
+        self.assertEqual(events[0]["output_bytes"], 2000)
+
     def test_replay_from_a_held_sequence_starts_there(self):
         holder, first = self._filled_holder()
         _, events = self._replay(holder, first + 5)

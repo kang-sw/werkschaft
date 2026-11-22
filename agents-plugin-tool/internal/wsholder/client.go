@@ -81,11 +81,16 @@ type Event struct {
 	Offset         *int64 `json:"offset,omitempty"`
 	CombinedOffset *int64 `json:"combined_offset,omitempty"`
 	// ExitCode and Signal are an exit record's status.
-	ExitCode *int   `json:"exit_code,omitempty"`
-	Signal   *int   `json:"signal,omitempty"`
-	From     uint64 `json:"from,omitempty"`
-	To       uint64 `json:"to,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	ExitCode *int `json:"exit_code,omitempty"`
+	Signal   *int `json:"signal,omitempty"`
+	// StreamBytes and OutputBytes are an exit record's output totals, by
+	// stream name and in all, so a replay with no output record left still
+	// knows them. A holder that predates them sends neither.
+	StreamBytes map[string]int64 `json:"stream_bytes,omitempty"`
+	OutputBytes *int64           `json:"output_bytes,omitempty"`
+	From        uint64           `json:"from,omitempty"`
+	To          uint64           `json:"to,omitempty"`
+	Reason      string           `json:"reason,omitempty"`
 }
 
 // SpawnSpec is the child a holder starts. Env, when not nil, is the child's

@@ -85,7 +85,13 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
                            arrival order, so a replay that starts after
                            evicted records still places its bytes. A holder
                            that predates them sends neither.
-    {"event": "exit", "seq": n, "exit_code": <int|null>, "signal": <int|null>}
+    {"event": "exit", "seq": n, "exit_code": <int|null>, "signal": <int|null>,
+     "stream_bytes": {"<stream>": n, ...}, "output_bytes": n}
+                           stream_bytes and output_bytes are the output
+                           totals before the exit, per stream and in all,
+                           so a replay that holds no output record still
+                           knows them. A holder that predates them sends
+                           neither.
 
   The output ring retains 4 MiB by default. A holder started with
   --ring-ceiling-bytes can keep a backlog above --ring-bytes until it sends
@@ -1361,7 +1367,10 @@ class Holder:
             t.join(timeout=max(0.0, deadline - time.monotonic()))
         with self.cond:
             self.child_status = {"state": "exited", "pid": child.pid, "mode": child.mode, **fields}
-            self.ring.append("exit", fields=fields)
+            # The totals let a replay whose output records all left the
+            # ring still place the job's byte counts.
+            totals = {"stream_bytes": dict(self.ring.stream_bytes), "output_bytes": self.ring.output_bytes}
+            self.ring.append("exit", fields={**fields, **totals})
             self.idle_since = time.monotonic()
             self.input_queue.clear()
             self.input_pending = 0
