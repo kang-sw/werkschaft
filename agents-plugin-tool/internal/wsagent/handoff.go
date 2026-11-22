@@ -302,18 +302,17 @@ func resumeCommand(rec Record, sessionDir string) string {
 	if !rec.Lead {
 		return ""
 	}
-	cd := "cd " + shellQuote(rec.workDir()) + " && "
 	switch rec.Backend {
 	case BackendClaude:
 		if rec.SessionID == "" {
 			return ""
 		}
-		return cd + "claude --resume " + shellQuote(rec.SessionID)
+		return resumeLine(rec.workDir(), "claude --resume", rec.SessionID)
 	case BackendAgy:
 		if rec.SessionID == "" {
 			return ""
 		}
-		return cd + "agy --conversation " + shellQuote(rec.SessionID)
+		return resumeLine(rec.workDir(), "agy --conversation", rec.SessionID)
 	case BackendPi:
 		file := rec.SessionFile
 		if file == "" {
@@ -322,9 +321,38 @@ func resumeCommand(rec Record, sessionDir string) string {
 				return ""
 			}
 		}
-		return cd + "pi --session " + shellQuote(file)
+		return resumeLine(rec.workDir(), "pi --session", file)
 	}
 	return ""
+}
+
+// resumeLine renders "change to dir, then run command with arg" for the
+// host's terminal shell. On Windows that is PowerShell, which the daemon's
+// own pickShell prefers and Windows Terminal opens by default; Windows
+// PowerShell 5.1 rejects "&&", so the line uses Set-Location and ";" and
+// a failed Set-Location stops it. cmd.exe cannot run this line.
+func resumeLine(dir, command, arg string) string {
+	if hostWindows {
+		return "Set-Location -LiteralPath " + psQuote(dir) + " -ErrorAction Stop; " + command + " " + psQuote(arg)
+	}
+	return "cd " + shellQuote(dir) + " && " + command + " " + shellQuote(arg)
+}
+
+// psQuote single-quotes s as a PowerShell verbatim string, where only a
+// single quote needs escaping, by doubling it. PowerShell also reads the
+// typographic single quotes U+2018-U+201B as quote marks, so those double
+// too.
+func psQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range s {
+		b.WriteRune(r)
+		if r == '\'' || r >= '\u2018' && r <= '\u201b' {
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
 
 // shellQuote quotes s for a POSIX shell when it holds anything but plain

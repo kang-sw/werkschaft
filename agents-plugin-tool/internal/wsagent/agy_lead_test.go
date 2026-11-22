@@ -308,7 +308,7 @@ func TestAgyLeadOverACP(t *testing.T) {
 	h.holders.out(holder, `{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"`+ids[1]+`"}`)
 	h.idle(id)
 	st, err := h.runner.HandOff(id)
-	if err != nil || st.Status != StatusHandedOff || st.ResumeCommand != "cd "+shellQuote(h.root)+" && agy --conversation agy-s1" {
+	if err != nil || st.Status != StatusHandedOff || st.ResumeCommand != resumeLine(h.root, "agy --conversation", "agy-s1") {
 		t.Fatalf("agy handoff = %+v, %v", st, err)
 	}
 }
