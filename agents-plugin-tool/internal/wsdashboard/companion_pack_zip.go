@@ -249,6 +249,9 @@ func (a *companionArchive) read(f *zip.File, limit int) ([]byte, error) {
 	}
 	defer rc.Close()
 	data, err := io.ReadAll(io.LimitReader(rc, int64(allowed)+1))
+	// Charge what was produced even when the entry then fails, so a run of
+	// corrupt or capped entries cannot exceed the operation total.
+	a.inflate.left -= min(len(data), a.inflate.left)
 	if uint64(len(data)) > allowed {
 		switch {
 		case allowed == uint64(limit):
@@ -262,7 +265,6 @@ func (a *companionArchive) read(f *zip.File, limit int) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("corrupt archive entry")
 	}
-	a.inflate.left -= len(data)
 	return data, nil
 }
 

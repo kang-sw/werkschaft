@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"image"
@@ -809,5 +810,155 @@ func TestCompanionPackInstallPaperDollFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(other, "companions", "kit")); !os.IsNotExist(err) {
 		t.Fatal("a refused pack left a directory")
+	}
+}
+
+func TestCompanionPackInstallHandMadeNameCaseFold(t *testing.T) {
+	home := t.TempDir()
+	// A hand-made "Foo" is invalid to the scan (IDs are lower case) but on a
+	// case-insensitive volume it is the directory "foo" names.
+	dir := filepath.Join(home, "companions", "Foo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mine.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := new(CompanionPackStore)
+	result, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "foo")...), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := companionListed(result, "foo"); p.Error == nil || p.Installed {
+		t.Fatalf("case-variant hand-made directory not refused: %+v", p)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "mine.txt")); err != nil || string(got) != "keep" {
+		t.Fatalf("hand-made pack changed: %q %v", got, err)
+	}
+	if got := companionDirFiles(t, filepath.Join(home, "companions")); strings.Join(got, ",") != "Foo" {
+		t.Fatalf("pack root: %v", got)
+	}
+}
+
+func TestCompanionPackInstallStrandedPreviousPack(t *testing.T) {
+	home := t.TempDir()
+	opts := wsconfig.Options{ConfigHome: home}
+	store := new(CompanionPackStore)
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	before := store.snapshot(opts).byID["alpha"].info.Rev
+	entries := companionTestBundle(t, "", "alpha")
+	entries[2].data = companionTestPNG(t, 9, 9)
+	changed := companionTestZip(t, entries...)
+
+	// The staged pack cannot move in and the previous pack cannot move back.
+	target := filepath.Join(home, "companions", "alpha")
+	store.rename = func(oldPath, newPath string) error {
+		if newPath == target {
+			return errors.New("injected rename failure")
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	result, err := companionTestRun(store, home, changed, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := companionListed(result, "alpha")
+	if p.Installed || p.Error == nil || !strings.Contains(p.Error.Message, "could not be restored") {
+		t.Fatalf("stranded rollback not surfaced: %+v", p)
+	}
+	stranded, _ := filepath.Glob(filepath.Join(home, companionStagingName, "run-*", ".alpha", companionManifestName))
+	if len(stranded) != 1 {
+		t.Fatalf("previous pack deleted with the run: %v", stranded)
+	}
+
+	// The next operation restores it instead of deleting it.
+	store.rename = nil
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "beta")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	s := store.snapshot(opts)
+	if s.byID["alpha"] == nil || s.byID["alpha"].info.Rev != before || s.byID["beta"] == nil {
+		t.Fatalf("previous pack not restored: %+v", s.packs)
+	}
+	if got := companionDirFiles(t, filepath.Join(home, companionStagingName)); len(got) != 0 {
+		t.Fatalf("staging left behind: %v", got)
+	}
+}
+
+func TestCompanionPackInstallRecoversCrashBetweenRenames(t *testing.T) {
+	for _, op := range []string{"install", "uninstall"} {
+		t.Run(op, func(t *testing.T) {
+			home := t.TempDir()
+			opts := wsconfig.Options{ConfigHome: home}
+			store := new(CompanionPackStore)
+			if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha")...), nil, false); err != nil {
+				t.Fatal(err)
+			}
+			// A crash after the moved-aside rename leaves the only copy in staging.
+			run := filepath.Join(home, companionStagingName, "run-crashed")
+			if err := os.MkdirAll(run, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(filepath.Join(home, "companions", "alpha"), filepath.Join(run, ".alpha")); err != nil {
+				t.Fatal(err)
+			}
+			store = new(CompanionPackStore)
+			switch op {
+			case "install":
+				if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "beta")...), nil, false); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if _, err := store.uninstall(opts, "alpha"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := store.snapshot(opts)
+			if (op == "install") != (s.byID["alpha"] != nil) {
+				t.Fatalf("%s: alpha presence wrong: %+v", op, s.packs)
+			}
+			if got := companionDirFiles(t, filepath.Join(home, companionStagingName)); len(got) != 0 {
+				t.Fatalf("staging left behind: %v", got)
+			}
+		})
+	}
+}
+
+func TestCompanionPackInstallRefusesLinkedPackRoot(t *testing.T) {
+	home := t.TempDir()
+	opts := wsconfig.Options{ConfigHome: home}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(home, "companions")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	store := new(CompanionPackStore)
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha")...), nil, false); err == nil {
+		t.Fatal("install through a linked pack root accepted")
+	}
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha")...), nil, true); err == nil {
+		t.Fatal("dry run through a linked pack root accepted")
+	}
+	if _, err := store.uninstall(opts, "alpha"); err == nil {
+		t.Fatal("uninstall through a linked pack root accepted")
+	}
+	if got := companionDirFiles(t, outside); len(got) != 0 {
+		t.Fatalf("wrote through the link: %v", got)
+	}
+}
+
+func TestCompanionArchiveChargesBytesOfFailedRead(t *testing.T) {
+	data := companionTestZip(t, companionZipEntry{name: "big.bin", data: bytes.Repeat([]byte{7}, 100<<10), store: true})
+	inflate := &companionInflate{left: 1 << 20}
+	archive, err := openCompanionArchive(data, inflate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archive.read(archive.files["big.bin"], 10<<10); err == nil {
+		t.Fatal("over-limit entry accepted")
+	}
+	if used := (1 << 20) - inflate.left; used < 10<<10 {
+		t.Fatalf("failed read charged %d bytes, want at least the %d it produced", used, 10<<10)
 	}
 }

@@ -275,7 +275,7 @@ test("install, update and uninstall call the daemon, take the returned catalog a
     raw: "https://example.invalid/packs.git",
     handler: (url, init, body) => {
       if (url.endsWith("/sources/fetch")) return { status: 200, body: { listing: listing({ packs: [pack("a", "available")] }) } };
-      if (url.endsWith("/sources/install")) return { status: 200, body: { listing: listing({ packs: [pack("a", "installed")] }), catalog: fresh } };
+      if (url.endsWith("/sources/install")) return { status: 200, body: { listing: listing({ packs: [pack("a", "installed", { installed: true })] }), catalog: fresh } };
       if (url.endsWith("/uninstall")) return { status: 200, body: { packs: [{ id: "default" }] } };
       return { status: 500, body: {} };
     }
@@ -328,7 +328,7 @@ test("the import preview validates the file, lists passed packs as checkboxes, a
         return { status: 200, body: { listing: listing({ source: "Fan Pack.zip", kind: "local", name: "Fan", packs: [
           pack("a", "available"), pack("b", "available"), pack("c", "installed"), pack("bad", "available", { error: { id: "bad", path: "pack.json", message: "no poses.stand" } }), pack("hand", "manual")] }) } };
       }
-      return { status: 200, body: { listing: listing({ kind: "local", name: "Fan", packs: [pack("a", "installed"), pack("b", "installed")] }), catalog: { packs: [{ id: "default" }, { id: "a" }, { id: "b" }] } } };
+      return { status: 200, body: { listing: listing({ kind: "local", name: "Fan", packs: [pack("a", "installed", { installed: true }), pack("b", "installed", { installed: true }), pack("c", "installed", { installed: true })] }), catalog: { packs: [{ id: "default" }, { id: "a" }, { id: "b" }] } } };
     }
   });
   const input = tagged(t.root, "INPUT").find(c => c.type === "file");
@@ -361,6 +361,44 @@ test("the import preview validates the file, lists passed packs as checkboxes, a
   assert.deepEqual(t.changed[0], { packs: [{ id: "default" }, { id: "a" }, { id: "b" }] });
   assert.match(t.root.text(), /done_import:2/);
   assert.deepEqual(tagged(cls(t.root, "ws-companion-sources-panel")[0], "BUTTON").map(b => b.textContent), ["js.companion.sources.close_listing"], "the result has no install buttons for a local file");
+});
+
+test("a 200 install or import reports each pack's own result, not the request's", async () => {
+  const bad = { error: { id: "a", path: "pack.json", message: "cannot move the staged pack into place" } };
+  let installBody;
+  const t = setup({
+    raw: "https://example.invalid/packs.git",
+    handler: (url) => {
+      if (url.endsWith("/sources/fetch")) return { status: 200, body: { listing: listing({ packs: [pack("a", "available")] }) } };
+      if (url.endsWith("/sources/install")) return { status: 200, body: installBody };
+      if (url.startsWith("/api/companion/packs/validate")) return { status: 200, body: { listing: listing({ kind: "local", packs: [pack("a", "available"), pack("b", "available")] }) } };
+      return { status: 200, body: { listing: listing({ kind: "local", packs: [pack("a", "available", { ...bad }), pack("b", "installed", { installed: true })] }) } };
+    }
+  });
+  fire(buttonOf(cls(t.root, "ws-companion-sources-source")[1], "js.companion.sources.show"), "click");
+  await tick(); await tick();
+
+  installBody = { listing: listing({ packs: [pack("a", "available", { installed: false })] }) };
+  fire(buttonOf(t.root, "js.companion.sources.install"), "click");
+  await tick(); await tick();
+  assert.ok(!t.root.text().includes("done_install"), "installed:false is not announced as success");
+
+  installBody = { listing: listing({ packs: [pack("a", "available", { ...bad })] }) };
+  fire(buttonOf(t.root, "js.companion.sources.install"), "click");
+  await tick(); await tick();
+  assert.ok(!t.root.text().includes("done_install"), "a per-pack error is not announced as success");
+  assert.match(t.root.text(), /cannot move the staged pack into place/);
+
+  const input = tagged(t.root, "INPUT").find(c => c.type === "file");
+  input.files = [{ name: "Fan.zip", size: 3 }];
+  fire(input, "change");
+  await tick(); await tick();
+  fire(buttonOf(t.root, "js.companion.sources.import"), "click");
+  await tick(); await tick();
+  const text = t.root.text();
+  assert.match(text, /done_import:1/, "one of the two requested packs was written");
+  assert.ok(!/done_import:2/.test(text), "the requested count is not reported");
+  assert.match(text, /a: cannot move the staged pack into place/);
 });
 
 test("a rejected import file shows the daemon's reason and offers no import", async () => {
