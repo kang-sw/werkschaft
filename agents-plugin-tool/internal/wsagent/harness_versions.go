@@ -101,10 +101,10 @@ func (s *harnessVersions) get(backend string) harnessSeen {
 
 // note keeps a process's report of backend's version, launched from
 // binary, and appends it to the log when it changed anything. A report
-// with no version or no known binary (a rejoined process this daemon did
-// not launch) is not kept.
+// with no version, no known binary (a rejoined process this daemon did not
+// launch) or an unresolved one is not kept.
 func (s *harnessVersions) note(backend, version, binary string) {
-	if s == nil || version == "" || binary == "" {
+	if s == nil || version == "" || binary == "" || strings.HasPrefix(binary, harnessUnresolved) {
 		return
 	}
 	v := harnessSeen{Backend: backend, Version: version, Binary: binary}
@@ -139,12 +139,16 @@ func appendLine(path string, line []byte) error {
 	return werr
 }
 
+// harnessUnresolved prefixes the fingerprint of a command that does not
+// resolve to a file: such a fingerprint never verifies a version.
+const harnessUnresolved = "unresolved:"
+
 // harnessBinaryOf fingerprints the binary reg's backend launches: each
 // file of its resolved command (the program, and on Windows the script a
 // cmd shim runs) by real path, size and modification time. A backend that
 // names no executable has the empty fingerprint's stand-in "-"; a command
-// that does not resolve fingerprints as unresolved, which never matches a
-// launched one.
+// that does not resolve fingerprints as unresolved (harnessUnresolved),
+// which the store never keeps and the cutover gate never accepts.
 func harnessBinaryOf(reg BackendRegistration) string {
 	lister, ok := reg.Backend.(ChoiceLister)
 	if !ok {
@@ -153,7 +157,14 @@ func harnessBinaryOf(reg BackendRegistration) string {
 	exe := lister.Executable()
 	prog, pre, err := harnessCommand(exe, exe)
 	if err != nil {
-		return "unresolved:" + exe
+		return harnessUnresolved + exe
+	}
+	// A bare name passes through harnessCommand off Windows; the launch's
+	// exec.Command then finds it on PATH, and so does this.
+	if !filepath.IsAbs(prog) && !strings.ContainsRune(prog, filepath.Separator) && !strings.ContainsRune(prog, '/') {
+		if prog, err = lookPath(prog); err != nil {
+			return harnessUnresolved + exe
+		}
 	}
 	parts := make([]string, 0, 1+len(pre))
 	for _, p := range append([]string{prog}, pre...) {
@@ -173,7 +184,7 @@ func harnessBinaryOf(reg BackendRegistration) string {
 		parts = append(parts, fmt.Sprintf("%s|%d|%d", real, info.Size(), info.ModTime().UnixNano()))
 	}
 	if len(parts) == 0 {
-		return "unresolved:" + exe
+		return harnessUnresolved + exe
 	}
 	return strings.Join(parts, ";")
 }

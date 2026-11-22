@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -615,5 +616,52 @@ func writeOverrides(t *testing.T, path string, values map[string]string) {
 	}
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A default (bare) harness command fingerprints the file the launch finds
+// on PATH; one that resolves nowhere is never kept by the store nor
+// accepted by the gate, even when a stored report carries the same
+// unresolved fingerprint.
+func TestHarnessBinaryResolvesABareCommandOnPath(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "codex")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	real, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := harnessBinaryOf(BackendRegistration{Backend: CodexBackend{}})
+	if !strings.HasPrefix(got, real+"|") {
+		t.Fatalf("default codex fingerprints as %q, want the PATH file %s", got, real)
+	}
+	t.Setenv("PATH", t.TempDir())
+	missing := harnessBinaryOf(BackendRegistration{Backend: CodexBackend{}})
+	if !strings.HasPrefix(missing, harnessUnresolved) {
+		t.Fatalf("a missing codex fingerprints as %q", missing)
+	}
+	s := loadHarnessVersions(t.TempDir(), io.Discard)
+	s.note(BackendCodex, "0.170.0", missing)
+	if v := s.get(BackendCodex); v.Version != "" {
+		t.Fatalf("the store kept an unresolved binary's report: %+v", v)
+	}
+
+	h := cutoverHarness(t)
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	leadLaunch(t, h, st.ID)
+	c := h.runner.conv(st.ID)
+	rec := c.record()
+	unresolved := harnessUnresolved + "claude"
+	h.runner.versions.mu.Lock()
+	h.runner.versions.seen[BackendClaude] = harnessSeen{Backend: BackendClaude, Version: "9.9.9", Binary: unresolved}
+	h.runner.versions.mu.Unlock()
+	if on, why := c.execCutoverFor(rec, Profile{}, execCutoverInputs{binding: true, binary: unresolved}); on || !strings.Contains(why, "does not resolve") {
+		t.Fatalf("an unresolved harness command: %v %s", on, why)
 	}
 }

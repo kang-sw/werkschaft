@@ -80,6 +80,8 @@ func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bo
 	}
 	if since := reg.ExecCutover.Since; since != "" {
 		switch seen := c.r.harnessVersion(rec.Backend); {
+		case strings.HasPrefix(in.binary, harnessUnresolved):
+			return false, "the harness command does not resolve to a file (" + strings.TrimPrefix(in.binary, harnessUnresolved) + "), so no reported version can verify the removal for it"
 		case seen.Version == "":
 			return false, "no process of the harness has reported its version yet, so the removal is unverified for it"
 		case seen.Binary != in.binary:
