@@ -13,6 +13,7 @@ import (
 	"errors"
 	"math"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strings"
 	"time"
@@ -34,9 +35,6 @@ const (
 	// auditSearchDefault and auditSearchMax bound a search page's n.
 	auditSearchDefault = 100
 	auditSearchMax     = 500
-	// auditSearchBudget bounds the body bytes one search request scans; a
-	// page that reaches it returns the hits so far with a next cursor.
-	auditSearchBudget = 64 << 20
 	// auditLineMax bounds a search hit's line; a longer line is returned as
 	// an excerpt around its first match, marked clipped.
 	auditLineMax = 1024
@@ -47,6 +45,11 @@ const (
 	// a digest.
 	auditIDMax = 4 * wsaudit.IdentifierMaxBytes
 )
+
+// auditSearchBudget bounds the body bytes one search request scans; a page
+// that reaches it returns the hits so far with a next cursor (a variable so
+// tests can reach it with small bodies).
+var auditSearchBudget = 64 << 20
 
 // errStaleCursor answers an event or search cursor whose event is no longer
 // retained while the session still has audit data.
@@ -508,9 +511,14 @@ type auditSearchAnswer struct {
 // it was issued for.
 type auditSearch struct {
 	match func(line string) (start, end int, ok bool)
-	kinds map[wsaudit.Kind]bool
-	n     int
-	query string
+	// re is the compiled pattern (nil for a case-sensitive literal);
+	// asserts is set when it holds a zero-width assertion (^ $ \A \z \b
+	// \B), whose answer depends on the text around a position.
+	re      *regexp.Regexp
+	asserts bool
+	kinds   map[wsaudit.Kind]bool
+	n       int
+	query   string
 }
 
 // newAuditSearch compiles q: a regular expression (RE2, linear time) when
@@ -537,6 +545,10 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 	if err != nil {
 		return s, err
 	}
+	s.re = re
+	if tree, err := syntax.Parse(pattern, syntax.Perl); err == nil {
+		s.asserts = hasAssertion(tree)
+	}
 	s.match = func(line string) (int, int, bool) {
 		loc := re.FindStringIndex(line)
 		if loc == nil {
@@ -545,6 +557,22 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 		return loc[0], loc[1], true
 	}
 	return s, nil
+}
+
+// hasAssertion reports whether a parsed pattern holds a zero-width
+// assertion.
+func hasAssertion(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText,
+		syntax.OpWordBoundary, syntax.OpNoWordBoundary:
+		return true
+	}
+	for _, sub := range re.Sub {
+		if hasAssertion(sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func boolDigit(b bool) string {
@@ -604,14 +632,14 @@ func (s auditSearch) run(evs []wsaudit.Envelope, cursor *searchPos, done func() 
 		i, field, fromLine = k, cursor.Field, cursor.Line
 	}
 	// pending is the cursor after the n-th hit, issued once the lookahead
-	// finds another hit or the scan stops early.
+	// finds another hit.
 	var pending *string
+	// stopAt ends the scan early (budget, cancellation) at the first
+	// unexamined position: the lookahead found no hit between the n-th hit
+	// and here, so resuming here repeats no work.
 	stopAt := func(ev *wsaudit.Envelope, field, line int) (auditSearchAnswer, error) {
-		if pending == nil {
-			next := encodeSearchCursor(searchPos{Seq: ev.Seq, ID: ev.ID, Field: field, Line: line, Query: s.query})
-			pending = &next
-		}
-		ans.Next = pending
+		next := encodeSearchCursor(searchPos{Seq: ev.Seq, ID: ev.ID, Field: field, Line: line, Query: s.query})
+		ans.Next = &next
 		return ans, nil
 	}
 	scanned := 0
@@ -627,12 +655,15 @@ func (s auditSearch) run(evs []wsaudit.Envelope, cursor *searchPos, done func() 
 			continue
 		}
 		for ; field <= 1; field, fromLine = field+1, 1 {
-			if scanned >= auditSearchBudget {
-				return stopAt(ev, field, fromLine)
-			}
 			name, body, trunc := wsaudit.FieldIn, ev.In, storedTrunc(ev, wsaudit.FieldIn)
 			if field == 1 {
 				name, body, trunc = wsaudit.FieldOut, ev.Out, storedTrunc(ev, wsaudit.FieldOut)
+			}
+			if body == "" {
+				continue // nothing left to search here, whatever the budget
+			}
+			if scanned >= auditSearchBudget {
+				return stopAt(ev, field, fromLine)
 			}
 			scanned += len(body)
 			stop := false
@@ -667,13 +698,32 @@ func (s auditSearch) run(evs []wsaudit.Envelope, cursor *searchPos, done func() 
 	return ans, nil
 }
 
-// matchLine matches one stored line. A line holding a stored_trunc seam
-// (seam >= 0) is matched as its head piece, then its tail piece, so a match
-// never joins text from both sides of the omitted middle; offsets are in the
-// whole line.
+// matchLine matches one stored line. In a line holding a stored_trunc seam
+// (seam >= 0) no match consumes text from both sides of the omitted middle.
+// A pattern without zero-width assertions is matched against the head piece,
+// then the tail piece. One with assertions is matched against the whole
+// line, so ^ $ \b see the line's real boundaries and neighbours, not the
+// pieces' ends, and a match crossing the seam is passed over; a match hidden
+// inside a crossing one is still found in a piece when it does not touch the
+// seam (where the piece's end would answer the assertion). Offsets are in
+// the whole line.
 func (s auditSearch) matchLine(line string, seam int) (int, int, bool) {
 	if seam < 0 {
 		return s.match(line)
+	}
+	if s.asserts {
+		for _, loc := range s.re.FindAllStringIndex(line, -1) {
+			if loc[1] <= seam || loc[0] >= seam {
+				return loc[0], loc[1], true
+			}
+		}
+		if start, end, ok := s.match(line[:seam]); ok && end < seam {
+			return start, end, true
+		}
+		if start, end, ok := s.match(line[seam:]); ok && start > 0 {
+			return start + seam, end + seam, true
+		}
+		return 0, 0, false
 	}
 	if start, end, ok := s.match(line[:seam]); ok {
 		return start, end, true

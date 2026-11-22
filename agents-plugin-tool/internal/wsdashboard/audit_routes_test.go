@@ -159,9 +159,11 @@ func TestAuditEventsPagesLikeHistory(t *testing.T) {
 	if p := auditJSON[pageOut](t, d, "/s/big/audit/events?before=e2", 200); !p.End || p.Cut {
 		t.Fatalf("an uncut ring's end: end %v cut %v", p.End, p.Cut)
 	}
-	for _, q := range []string{"n=0", "n=-1", "n=x", "before=e5&after=e9", "kinds=tool_call,nope", "n=1&n=2", "before=a%00b"} {
+	for _, q := range []string{"n=0", "n=-1", "n=x", "before=e5&after=e9", "kinds=tool_call,nope", "n=1&n=2", "before=" + strings.Repeat("x", auditIDMax+1)} {
 		auditJSON[map[string]string](t, d, base+"?"+q, 400)
 	}
+	// IDs are opaque: a control character is no reason to refuse one.
+	auditJSON[map[string]string](t, d, base+"?before=a%00b", 410)
 	// The page summaries carry the contract's fields.
 	p = auditJSON[pageOut](t, d, base+"?n=1", 200)
 	for _, key := range []string{"id", "seq", "at", "kind", "subkind", "call_id", "parent_id", "agent_id", "model_seen", "title", "in_bytes", "out_bytes", "attached"} {
@@ -565,9 +567,19 @@ func TestAuditStoredTruncBodyKeepsItsMarkerAndMiddleOut(t *testing.T) {
 		Hits []map[string]any `json:"hits"`
 		Next *string          `json:"next"`
 	}
-	for _, q := range []string{"MIDDLE", "alphabeta", "alpha.*beta"} {
+	// Nor do zero-width assertions answer at the seam as if it were a line
+	// end or a word boundary: "alphabeta" is one word of one stored line.
+	for _, q := range []string{"MIDDLE", "alphabeta", "alpha.*beta", `alpha$`, `^beta`, `\bbeta`, `alpha\b`, `alpha\z`, `\Abeta`} {
 		if s := auditJSON[searchOut](t, d, "/s/sess/audit/search?regex=1&q="+url.QueryEscape(q), 200); len(s.Hits) != 0 {
 			t.Errorf("search %q found %v", q, s.Hits)
+		}
+	}
+	// They still answer at the stored line's real boundaries, on both sides
+	// of the seam, and a match hidden inside a crossing one is found.
+	for _, q := range []string{`^head ends`, `starts$`, `\bends alpha`, `\bbeta\B|\btail\b`, `head|alpha.*tail`} {
+		s := auditJSON[searchOut](t, d, "/s/sess/audit/search?regex=1&q="+url.QueryEscape(q), 200)
+		if len(s.Hits) != 1 || fmt.Sprint(s.Hits[0]["line_no"]) != "2" {
+			t.Errorf("search %q = %v, want one hit on line 2", q, s.Hits)
 		}
 	}
 	// The stored body's lines are "line one", "head ends alphabeta tail
@@ -742,5 +754,91 @@ func TestAuditRoutesAreReadOnly(t *testing.T) {
 	}
 	if rec := auditGet(t, &Daemon{log: io.Discard}, http.MethodGet, "/s/sess/audit/events"); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("no store: %d", rec.Code)
+	}
+}
+
+// TestAuditSearchBudgetStopsAtTheFirstUnexaminedPosition pins the scan
+// budget's continuation: an empty remaining field is not a reason to stop, so
+// a page ending on the oldest hit has a null next even at the budget, and a
+// budget stop after the n-th hit resumes where the lookahead stopped, not
+// after the n-th hit.
+func TestAuditSearchBudgetStopsAtTheFirstUnexaminedPosition(t *testing.T) {
+	orig := auditSearchBudget
+	t.Cleanup(func() { auditSearchBudget = orig })
+	auditSearchBudget = 1
+	s, err := newAuditSearch("needle", false, false, nil, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := func() bool { return false }
+	ev := func(seq int, in string) wsaudit.Envelope {
+		e := auditEv(seq, wsaudit.KindToolCall, auditBase)
+		e.In, e.Out = in, ""
+		return e
+	}
+	// The oldest event's input holds the n-th hit; its output is empty.
+	ans, err := s.run([]wsaudit.Envelope{ev(1, "needle one")}, nil, none)
+	if err != nil || len(ans.Hits) != 1 || ans.Next != nil {
+		t.Fatalf("page ending on the oldest hit at the budget: %d hits, next %v, err %v", len(ans.Hits), ans.Next, err)
+	}
+	// e3 holds the n-th hit; the lookahead reaches the budget before e2.
+	evs := []wsaudit.Envelope{ev(1, "needle three"), ev(2, "no hit here"), ev(3, "needle one")}
+	ans, err = s.run(evs, nil, none)
+	if err != nil || len(ans.Hits) != 1 || ans.Next == nil {
+		t.Fatalf("first page: %d hits, next %v, err %v", len(ans.Hits), ans.Next, err)
+	}
+	p, err := decodeSearchCursor(*ans.Next, s.query)
+	if err != nil || p.Seq != 2 || p.Field != 0 || p.Line != 1 {
+		t.Fatalf("budget cursor = %+v (%v), want the start of e2", p, err)
+	}
+	var got []string
+	for ans.Next != nil {
+		p, _ := decodeSearchCursor(*ans.Next, s.query)
+		if ans, err = s.run(evs, &p, none); err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range ans.Hits {
+			got = append(got, h.EventID)
+		}
+	}
+	if fmt.Sprint(got) != "[e1]" {
+		t.Fatalf("following the budget cursors found %v, want [e1]", got)
+	}
+}
+
+// TestAuditIDsRoundTripVerbatim pins that IDs are opaque: an event and call
+// ID the store kept verbatim with a control character (wsaudit.NormalizeID
+// keeps short values as given) is accepted back as an event path, a cursor
+// and a call key.
+func TestAuditIDsRoundTripVerbatim(t *testing.T) {
+	call := auditEv(1, wsaudit.KindToolCall, auditBase)
+	call.ID, call.CallID = "ev\x01one", "call\x02one"
+	result := auditEv(2, wsaudit.KindToolResult, auditBase.Add(time.Second))
+	result.CallID = call.CallID
+	if wsaudit.NormalizeID(call.ID) != call.ID || wsaudit.NormalizeID(call.CallID) != call.CallID {
+		t.Fatal("fixture: the IDs are not kept verbatim")
+	}
+	fx := &fixtureAudit{}
+	fx.set("sess", wsauditstore.View{Events: []wsaudit.Envelope{call, result}})
+	d := auditDaemon(fx)
+	p := auditJSON[pageOut](t, d, "/s/sess/audit/events", 200)
+	if p.Before != call.ID || p.Events[0]["call_id"] != call.CallID {
+		t.Fatalf("page = %+v", p)
+	}
+	type envOut struct {
+		ID string `json:"id"`
+	}
+	if e := auditJSON[envOut](t, d, "/s/sess/audit/event/"+url.PathEscape(p.Before), 200); e.ID != call.ID {
+		t.Fatalf("event = %q", e.ID)
+	}
+	if n := auditJSON[pageOut](t, d, "/s/sess/audit/events?after="+url.QueryEscape(p.Before), 200); len(n.Events) != 1 || n.Events[0]["id"] != "e2" {
+		t.Fatalf("after the ID: %+v", n)
+	}
+	type callOut struct {
+		Call   map[string]any   `json:"call"`
+		Events []map[string]any `json:"events"`
+	}
+	if c := auditJSON[callOut](t, d, "/s/sess/audit/events?call="+url.QueryEscape(call.CallID), 200); c.Call["id"] != call.ID || len(c.Events) != 1 {
+		t.Fatalf("call lookup = %+v", c)
 	}
 }

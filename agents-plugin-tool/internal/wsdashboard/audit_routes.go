@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsauditstore"
@@ -159,15 +158,13 @@ func auditKinds(q url.Values) (map[wsaudit.Kind]bool, string, error) {
 	return kinds, raw, nil
 }
 
-// auditID validates an event or call ID taken from a request.
+// auditID bounds an event or call ID taken from a request. IDs are opaque
+// and compared verbatim: the store keeps a short identifier as given
+// (wsaudit.NormalizeID), control characters included, so any ID an answer
+// carries must be accepted back.
 func auditID(key, id string) error {
 	if len(id) > auditIDMax {
 		return auditBadRequest(key + " is too long")
-	}
-	for _, c := range id {
-		if unicode.IsControl(c) {
-			return auditBadRequest(key + " carries a control character")
-		}
 	}
 	return nil
 }
