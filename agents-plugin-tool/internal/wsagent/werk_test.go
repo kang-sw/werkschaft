@@ -706,3 +706,47 @@ func holderOutputs(f *fakeHolders, id string) []string {
 	}
 	return out
 }
+
+// A process started for a conversation that has a backend session resumes it:
+// the recorded session id and the composed instruction file go on the command
+// line, and the effort only when there is one.
+func TestWerkArgsResumeTheRecordedSession(t *testing.T) {
+	spec := StartSpec{
+		Root: "/work/tree", Dir: "/sessions/s1", Cwd: "/work/tree/sub", Model: "vendor/m", PermissionLevel: PermissionWorkdirWrite,
+		SessionID: "0123456789abcdef0123", Instructions: "/sessions/s1/instructions.md",
+	}
+	args, err := werkArgs(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for flag, want := range map[string]string{
+		"--session": "0123456789abcdef0123", "--instructions": "/sessions/s1/instructions.md", "--dir": "/sessions/s1",
+		"--root": "/work/tree", "--cwd": "/work/tree/sub", "--authority": "workdir-write", "--model": "vendor/m",
+	} {
+		if got := argValue(args, flag); got != want {
+			t.Errorf("%s = %q, want %q", flag, got, want)
+		}
+	}
+	if slices.Contains(args, "--effort") {
+		t.Errorf("an empty effort was passed: %v", args)
+	}
+	spec.SessionID, spec.Instructions, spec.Effort = "", "", "high"
+	args, _ = werkArgs(spec)
+	if slices.Contains(args, "--session") || slices.Contains(args, "--instructions") || argValue(args, "--effort") != "high" {
+		t.Errorf("a new session's args = %v", args)
+	}
+	// A profile's own Tools allowlist narrows the file tools.
+	spec.Profile.Tools = []string{"Read", "grep"}
+	if got := argValue(mustArgs(t, spec), "--tools"); got != "read,grep" {
+		t.Errorf("tools = %q", got)
+	}
+}
+
+func mustArgs(t *testing.T, spec StartSpec) []string {
+	t.Helper()
+	args, err := werkArgs(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return args
+}
