@@ -574,7 +574,7 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T06:21:42Z",
+        "touched_at": "2026-11-22T07:09:48Z",
         "impl": {
           "branch": "impl/develop/briar-blurb-prune"
         }
