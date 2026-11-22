@@ -461,3 +461,46 @@ Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
 - `go vet ./internal/wsagent`: clean. gofmt is clean on the touched files.
 - Mutation check: disabling the `stopProcess` guard fails the new test,
   because the user's Stop makes no holder stop.
+
+#### Edition (c188560f6) - 2026-11-22
+
+Two follow-ups to the third Edition, both settled by the lead. `c188560f6`
+makes the code change.
+
+**Scope of item 10's claim (doc only).** The second Edition says item 10
+leaves one registration write. That holds only on the normal path, where the
+holder passes the ownership match and is stopped (`retireLeadOnlyWorker`).
+The mismatch and gone paths keep their existing writes. The code comment in
+`retireLeadOnlyWorker` now says the same. Behavior is unchanged.
+
+**Stop during a failed downgrade retirement (adjacent fix).** The downgrade
+retirement (`workerRetiring`) had the same gap as the lead-only one in the
+third Edition. After a failed holder stop it keeps `c.proc` pointing at a
+stream it has already detached. A user's Stop then ran the stream's no-op
+`Close`, and `releaseHolder` cleared a `HolderID` whose holder still ran.
+
+Both retirements now share one predicate, `retiringHolder()`
+(`workerRetiring || leadOnlyRetiring`), and one retry,
+`retryRetirement(hp)`. `stopProcess` and `checkReattach` both use them, in
+place of the separate branches. So any stop during either retirement goes
+through the holder's own stop. `HolderID` is cleared only when that stop
+succeeds. A failure keeps `HolderID`, the retirement flag, and `replaying`,
+so the heartbeat retry stays armed.
+
+Mirror test: a `user stop` case in `TestDowngradeRetirementRetriesStop`. It
+failed before the fix (the user's Stop made no holder stop: `[launch h1
+spawn h1 stop h1]`) and passes after:
+- the first user Stop fails: the holder and the open turn are kept, the
+  error shows, nothing is published, and the retry stays armed;
+- a manual heartbeat still retries;
+- the next user Stop succeeds and retires the child once, four holder stops
+  in all;
+- a later Stop and heartbeat stop nothing more, and the record keeps its
+  sleeping shape across a restart.
+
+Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+- `go test ./internal/wsagent -count=3 -run 'TestDowngradeRetirement|TestAgyWorker|TestAgyLeadOnly'`:
+  ok.
+- `go test ./internal/wsagent -run 'Agy|Agent|Worker|Held|Tier|Lead|Spawn|Child|REST|Registration|Wake|Deliver|Rejoin|Codex|Expir|Ownership|Downgrade|Reattach|Recovery|Interrupt|Watchdog|ModelWait|Stop|Archive|Hidden|Idle|Pi'`:
+  ok (125.8s).
+- `go vet ./internal/wsagent`: clean. gofmt is clean on the touched files.
