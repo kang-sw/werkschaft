@@ -1454,20 +1454,24 @@ class Holder:
 
     def _append_run(self, stream: str, run) -> None:
         """Append consecutive kept pieces and fence the interval before them
-        (called with cond held). A run ending in a cut line's head waits for
-        the line's end: no line ends inside it, so no skipped line can follow
-        it before the line's rest, and the fence names whole lines only."""
+        (called with cond held). The whole lines are fenced at once; a
+        trailing cut line's head waits for the line's end: no line ends
+        inside it, so no skipped line can follow it before the line's rest,
+        and the fence names whole lines only."""
         first = self.tee_run_first
-        last = 0
-        partial = False
+        through = 0
+        tail = 0
         for data, partial in run:
-            last = self.ring.append("output", stream, data, partial).seq
-            first = first or last
-        if partial:
-            self.tee_run_first = first
-            return
-        self.tee_run_first = 0
-        self._audit_fence(first, last)
+            seq = self.ring.append("output", stream, data, partial).seq
+            first = first or seq
+            if partial:
+                tail = tail or seq
+            else:
+                through, tail = seq, 0
+        if through:
+            self._audit_fence(first, through)
+            first = tail
+        self.tee_run_first = first
 
     def _audit_tee(self, data: bytes, at: int) -> None:
         """Send one skipped line on the audit channel, or count it dropped

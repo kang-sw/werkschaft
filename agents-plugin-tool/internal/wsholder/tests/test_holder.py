@@ -636,6 +636,43 @@ class AuditChannelTest(HolderTestCase):
         fences = [m for m in events if m.get("event") == "audit_fence" and not m.get("final")]
         self.assertEqual([(f["tee_count_sent"], f["dropped_count"], f.get("lost_before", 0)) for f in fences], [(0, 0, 3)])
 
+    def test_a_read_ending_in_a_cut_line_head_fences_its_whole_lines(self):
+        # One read holds a whole kept line and the head of a line longer
+        # than one record (a 4 KiB ring cuts at 4 KiB, under the 64 KiB
+        # read). The whole line's fence goes out at once; only the cut
+        # line's run waits for the line's end, which the child holds back
+        # until its input arrives.
+        holder = self.start_holder(ring_skip="^drop", ring_bytes=4096, ring_ceiling_bytes=1 << 20)
+        client, _ = self.attach_audit(holder)
+        code = (
+            "import sys\n"
+            "sys.stdout.buffer.write(b'keep 1\\n' + b'x' * 10000)\n"
+            "sys.stdout.flush()\n"
+            "sys.stdin.readline()\n"
+            "sys.stdout.buffer.write(b'y' * 100 + b'\\ndrop a\\nkeep 2\\n')\n"
+            "sys.stdout.flush()\n"
+        )
+        self.spawn(client, py_child(code), mode="pipe")
+        early = client.events_until(lambda m: m.get("event") == "audit_fence" and m.get("through"))
+        seq_of = {decode(m): m["seq"] for m in early if m.get("stream") == "stdout"}
+        fence = early[-1]
+        k1 = fence["through"]
+        self.assertEqual((fence["anchor"], fence["next"], fence["tee_count_sent"]), (0, k1, 0))
+        self.assertTrue(client.request("input", {"data": base64.b64encode(b"go\n").decode()})["ok"])
+        events = early + client.events_until(lambda m: m.get("event") == "exit")
+        records = [m for m in events if m.get("stream") == "stdout"]
+        seq_of = {decode(m): m["seq"] for m in records}
+        self.assertEqual(seq_of[b"keep 1\n"], k1)
+        cut = [m["seq"] for m in records if m.get("partial") or decode(m).startswith(b"x") or decode(m).startswith(b"y")]
+        k2 = seq_of[b"keep 2\n"]
+        fences = [m for m in events if m.get("event") == "audit_fence"]
+        # keep 1 alone, then the cut line (its head is no line's anchor),
+        # then keep 2 after the teed drop, then the final interval.
+        self.assertEqual(
+            [(f["anchor"], f.get("next"), f.get("through"), f["tee_count_sent"], f.get("final", False)) for f in fences],
+            [(0, k1, k1, 0, False), (k1, cut[0], cut[-1], 0, False), (cut[-1], k2, k2, 1, False), (k2, None, None, 0, True)],
+        )
+
     def test_a_full_audit_queue_drops_tee_lines_and_counts_them(self):
         holder = self.start_holder(ring_skip="^drop")
         client, _ = self.attach_audit(holder)
