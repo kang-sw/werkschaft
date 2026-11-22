@@ -83,6 +83,11 @@ type Store struct {
 	db   *sql.DB
 	opts Options
 
+	// cutover serializes the legacy cutover calls (Stage, ApplyFence,
+	// ApplyRemovalFence, Commit) end to end. A fence's journal record and its
+	// file-system publication are one transition, so no other call may plan,
+	// stage or commit between them. Taken before mu.
+	cutover sync.Mutex
 	// mu serializes every write transaction and the synchronous level the
 	// single connection runs it at.
 	mu              sync.Mutex

@@ -221,6 +221,8 @@ var (
 // replaces or removes one. The caller holds dashboard.lock and has drained
 // the legacy writers (2125, 2135).
 func (s *Store) Stage(ctx context.Context) (StageResult, error) {
+	s.cutover.Lock()
+	defer s.cutover.Unlock()
 	var res StageResult
 	err := s.write(ctx, durable, func(tx *sql.Tx) error {
 		state, attempt, err := importState(ctx, tx)
@@ -256,6 +258,8 @@ func (s *Store) Stage(ctx context.Context) (StageResult, error) {
 // returns ErrFenceStale. The directory must exist: a fence never recreates a
 // pruned session.
 func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error {
+	s.cutover.Lock()
+	defer s.cutover.Unlock()
 	abs := filepath.Join(s.dir, filepath.FromSlash(rel))
 	plan, err := s.planFence(ctx, rel, fenceReplace, contentDigest(fenced), "")
 	if err != nil || plan.landed {
@@ -275,7 +279,7 @@ func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error
 	if err := s.hit("fence-replaced"); err != nil {
 		return err
 	}
-	return s.markFenceLanded(ctx, rel)
+	return s.markFenceLanded(ctx, rel, fenceReplace, contentDigest(fenced), plan.mtime, "")
 }
 
 // ApplyRemovalFence removes the legacy file at rel, a staged capture, by
@@ -295,6 +299,8 @@ func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) erro
 	if err := checkWitnessName(rel, witness); err != nil {
 		return err
 	}
+	s.cutover.Lock()
+	defer s.cutover.Unlock()
 	witnessRel := path.Join(path.Dir(rel), witness)
 	abs := filepath.Join(s.dir, filepath.FromSlash(rel))
 	wabs := filepath.Join(s.dir, filepath.FromSlash(witnessRel))
@@ -327,7 +333,7 @@ func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) erro
 	if err := s.hit("fence-replaced"); err != nil {
 		return err
 	}
-	return s.markFenceLanded(ctx, rel)
+	return s.markFenceLanded(ctx, rel, fenceRemove, absentDigest, 0, witnessRel)
 }
 
 // checkWitnessName accepts a plain file name, local on every platform. It
@@ -510,10 +516,20 @@ func syncFileData(p string) error {
 
 func (s *Store) syncDir(dir string) error { return syncDirectory(dir) }
 
-func (s *Store) markFenceLanded(ctx context.Context, rel string) error {
+// markFenceLanded marks the exact record this application published (the
+// cutover lock keeps it current); any other record is a conflict.
+func (s *Store) markFenceLanded(ctx context.Context, rel, kind, digest string, mtime int64, witness string) error {
 	return s.write(ctx, durable, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'landed' WHERE path = ? AND fence_state = 'intent'`, rel)
-		return err
+		r, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'landed'
+			WHERE path = ? AND fence_state = 'intent' AND fence_kind = ? AND fence_digest = ? AND fence_mtime = ? AND fence_witness = ?`,
+			rel, kind, digest, mtime, witness)
+		if err != nil {
+			return err
+		}
+		if n, err := r.RowsAffected(); err != nil || n != 1 {
+			return fmt.Errorf("%w: %s: its record changed during the publication", ErrFenceConflict, rel)
+		}
+		return nil
 	})
 }
 

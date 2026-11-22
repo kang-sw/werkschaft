@@ -79,6 +79,8 @@ type ImportResult struct {
 // bundled file for a transient reason fails with ErrLegacyUnread and changes
 // nothing; the caller retries.
 func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, error) {
+	s.cutover.Lock()
+	defer s.cutover.Unlock()
 	res := ImportResult{Status: map[string]int{}}
 	err := s.write(ctx, durable, func(tx *sql.Tx) error {
 		res = ImportResult{Status: map[string]int{}}

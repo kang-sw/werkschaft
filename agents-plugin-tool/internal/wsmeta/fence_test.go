@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -697,5 +698,70 @@ func TestIdentityWithoutBirthTimeIsTheSameSession(t *testing.T) {
 		if got := sameGeneration(c.a, c.b); got != c.same {
 			t.Errorf("sameGeneration(%q, %q) = %v", c.a, c.b, got)
 		}
+	}
+}
+
+// Fence calls, staging and the import commit are serialized end to end: a
+// second fence or a commit cannot run between a fence's record and its
+// publication, so the live publication is always the journal's record and a
+// migration-written file is never staged as an original.
+func TestConcurrentCutoverCallsWaitForAPublication(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	reached, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	opts := testOpts()
+	opts.Fault = func(stage string) error {
+		if stage == "fence-prepared" {
+			first := false
+			once.Do(func() { first = true })
+			if first {
+				close(reached)
+				<-release
+			}
+		}
+		return nil
+	}
+	s := openTest(t, dir, opts)
+	mustStage(t, s)
+	errA, errB := make(chan error, 1), make(chan error, 1)
+	commit := make(chan error, 1)
+	go func() { errA <- s.ApplyFence(ctx, fencePerm, fencedSelector) }()
+	<-reached
+	go func() { errB <- s.ApplyFence(ctx, fencePerm, []byte(`{"permission_level":"!other-fence"}`)) }()
+	go func() {
+		_, err := s.Commit(ctx, testCommit())
+		commit <- err
+	}()
+	select {
+	case err := <-errB:
+		close(release)
+		<-errA
+		t.Fatalf("a second fence ran during the first's publication: %v", err)
+	case err := <-commit:
+		close(release)
+		<-errA
+		t.Fatalf("a commit ran during a fence's publication: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	if err := <-errA; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errB; !errors.Is(err, ErrFenceConflict) && !errors.Is(err, ErrImportComplete) {
+		t.Fatalf("second fence = %v, want a conflict or the completed import", err)
+	}
+	if err := <-commit; err != nil {
+		t.Fatal(err)
+	}
+	if got := readRel(t, dir, fencePerm); got != string(fencedSelector) {
+		t.Fatalf("live selector = %q", got)
+	}
+	snap, err := s.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := snap.Permissions["hostedlead"]; p.Level != "workdir-write" {
+		t.Fatalf("permission = %+v, want the staged original", p)
 	}
 }
