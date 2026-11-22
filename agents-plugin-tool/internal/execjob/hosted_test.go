@@ -1616,6 +1616,74 @@ func TestHostedFailingDeletesStayBounded(t *testing.T) {
 	}
 }
 
+// TestHostedIDOfAPendingDeleteIsNotReused: the id draw skips the id of a
+// dropped job whose row delete has not succeeded, so a new job cannot
+// overwrite that row or its exit copy.
+func TestHostedIDOfAPendingDeleteIsNotReused(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.store.mu.Lock()
+	fx.store.failDelete = true
+	fx.store.mu.Unlock()
+	fx.launchFinished() // drops the oldest job; its delete fails
+	var first HostedJobRow
+	fx.h.mu.Lock()
+	for id := range fx.h.deleting {
+		first, _ = fx.store.row(id)
+	}
+	fx.h.mu.Unlock()
+	if first.ID == "" {
+		t.Fatalf("no job is pending delete")
+	}
+	keys := []string{strings.TrimPrefix(first.ID, "exec_"), "fresh-new-key"}
+	defer func(old func() (string, error)) { newExecKey = old }(newExecKey)
+	newExecKey = func() (string, error) {
+		k := keys[0]
+		if len(keys) > 1 {
+			keys = keys[1:]
+		}
+		return k, nil
+	}
+	v := fx.launchFinished()
+	if v.ID == first.ID {
+		t.Fatalf("the new job reused %s, whose delete is pending", first.ID)
+	}
+	if row, _ := fx.store.row(first.ID); row.ID != first.ID || row.HolderID != first.HolderID {
+		t.Fatalf("the pending row = %+v, want job %s's own", row, first.ID)
+	}
+}
+
+// TestHostedStaleHolderEndLeavesTheJob: a holder's end that names a job's
+// id under another holder (an earlier job's holder under a reused id)
+// neither ends the job nor removes the exit copy at its id's path.
+func TestHostedStaleHolderEndLeavesTheJob(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(fx.exitDir, v.ID+".json")
+	if err := os.WriteFile(copyPath, []byte(`{"reason":"child_exited"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
+	code := 9
+	fx.h.HolderGone(wsholder.Descriptor{ID: "stale-holder", Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
+	if got, _ := fx.h.Get("lead", v.ID); got.State != HostedRunning {
+		t.Fatalf("job after a stale holder's end = %+v, want running", got)
+	}
+	if _, err := os.Stat(copyPath); err != nil {
+		t.Fatalf("a stale holder's end removed the live job's exit copy: %v", err)
+	}
+	fx.holders.out(v.HolderID, "stdout", "still here\n")
+	if _, got, _ := fx.h.Tail("lead", v.ID, 1<<10); !strings.Contains(string(got.Data), "still here") {
+		t.Fatalf("output after a stale holder's end = %q", got.Data)
+	}
+}
+
 // TestHostedRepeatedHolderEndsKeepTheCopyUntilADeleteSucceeds: the
 // manager calls a holder's end again when its directory removal failed,
 // and the callbacks race the job cap's delete. Whatever their order, the

@@ -224,6 +224,9 @@ func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView
 	return h.view(j, OutcomeDone), cause
 }
 
+// newExecKey draws a three-word exec key (a test seam).
+var newExecKey = wskey.Generate
+
 // newID draws an unused exec id: three words for the new tools; for a
 // legacy launch the long legacy key form, whose 64 random bits keep it
 // apart from the file-backed jobs' keys without opening their store.
@@ -237,15 +240,19 @@ func (h *Hosted) newID(legacy bool) (string, error) {
 			}
 			id = "exec-" + strconv.FormatInt(h.opts.Now().UnixMilli(), 10) + "-" + hex.EncodeToString(b[:])
 		} else {
-			key, err := wskey.Generate()
+			key, err := newExecKey()
 			if err != nil {
 				return "", err
 			}
 			id = "exec_" + key
 		}
+		// An id whose dropped row is still being deleted stays reserved:
+		// reusing it would overwrite that row and its exit copy.
 		h.mu.Lock()
 		_, taken := h.jobs[id]
+		_, pending := h.deleting[id]
 		h.mu.Unlock()
+		taken = taken || pending
 		if !taken {
 			return id, nil
 		}
