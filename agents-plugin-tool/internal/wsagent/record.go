@@ -444,6 +444,46 @@ type liveWriter struct {
 	// observedSeeded reports that st seeded from the whole evidence
 	// directory (wsdashboard.ObservedFoldSlot).
 	observedSeeded bool
+	// restored is what the snapshot an earlier daemon left says of agy
+	// native rows, for the first replay to end (takeRestored).
+	restored restoredAgyNative
+}
+
+// restoredAgyNative is what a restored snapshot says of agy native rows: the
+// rows it lists (any status), those it lists running, and its write time.
+// readable is false when no snapshot of this session could be read.
+type restoredAgyNative struct {
+	readable  bool
+	updatedAt int64
+	listed    map[string]bool
+	running   map[string]bool
+}
+
+// restoredAgyNativeOf reads prev, a snapshot of session replyID.
+func restoredAgyNativeOf(prev wslive.Snapshot, replyID string) restoredAgyNative {
+	if prev.ReplyID != replyID {
+		return restoredAgyNative{}
+	}
+	r := restoredAgyNative{readable: true, updatedAt: prev.UpdatedAt, listed: map[string]bool{}, running: map[string]bool{}}
+	for _, a := range prev.Agents {
+		if !strings.HasPrefix(a.ID, wslive.NativeAgyPrefix) {
+			continue
+		}
+		r.listed[a.ID] = true
+		if a.Status == wslive.StatusRunning {
+			r.running[a.ID] = true
+		}
+	}
+	return r
+}
+
+// takeRestored returns what the restored snapshot said, once: after the
+// first replay ended, the writer's own state is the record a later one
+// would rebuild against, readable and with nothing restored running.
+func (w *liveWriter) takeRestored() restoredAgyNative {
+	r := w.restored
+	w.restored = restoredAgyNative{readable: true}
+	return r
 }
 
 // newLiveWriter starts from the finished subagents of the snapshot an
@@ -461,7 +501,9 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 	} else if err != nil {
 		folded = false
 	}
+	var restored restoredAgyNative
 	if prev, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir)); err == nil {
+		restored = restoredAgyNativeOf(prev, st.ReplyID())
 		st.SeedFinished(prev)
 		st.SeedLastTurn(prev)
 		if prev.Lead.OutputRate != nil {
@@ -483,6 +525,7 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 		appendRing:        wslive.AppendRing,
 		observedSeeded:    folded,
 		outputRates:       wslive.NewOutputRateLog(dir),
+		restored:          restored,
 	}
 }
 

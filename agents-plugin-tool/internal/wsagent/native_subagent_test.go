@@ -14,6 +14,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
 const (
@@ -598,9 +599,9 @@ func TestAgyNativeLaunchCorrelationEndsWithTheRow(t *testing.T) {
 // TestAgyNativeReplayKeepsHistoricalRetention: six agy launches in separate
 // completed turns leave the newest five rows in the recovery cache. A rejoin
 // whose holder ring still holds all six starts replays the oldest one, whose
-// settlement left no record. That row closes end-unknown at the replay's end
-// without displacing the five newer restored rows, which keep their stored
-// values.
+// settlement left no record. Retention already evicted that row, so the
+// replay does not resurrect it, even when a buffered live turn end saw it
+// running; the five newer restored rows keep their stored values.
 func TestAgyNativeReplayKeepsHistoricalRetention(t *testing.T) {
 	previous := suiteBackend
 	suiteBackend = BackendAgy
@@ -618,12 +619,14 @@ func TestAgyNativeReplayKeepsHistoricalRetention(t *testing.T) {
 		var restored wslive.Snapshot
 		restored.ReplyID = c.live.st.ReplyID()
 		base := time.Now().Add(-time.Hour).UnixMilli()
+		restored.UpdatedAt = base + 7*60_000
 		for i := 2; i <= 6; i++ {
 			at := base + int64(i)*60_000
 			restored.Agents = append(restored.Agents, wslive.Agent{ID: launch(i), Label: "research", Status: wslive.StatusDone,
 				StartedAt: at - 30_000, EndedAt: at, EndUnknown: true, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: at}})
 		}
 		c.live.st.SeedFinished(restored)
+		c.live.restored = restoredAgyNativeOf(restored, restored.ReplyID)
 		c.replaying = true
 		quiet := func(ev Event) { ev.Replay = true; c.handle(ev) }
 		for i := 1; i <= 6; i++ {
@@ -631,6 +634,8 @@ func TestAgyNativeReplayKeepsHistoricalRetention(t *testing.T) {
 			quiet(nativeRowEvent(launch(i), "research", wslive.StatusRunning))
 			quiet(Event{TurnEnd: true})
 		}
+		// A buffered prompt response past the sequence mark.
+		c.handle(Event{TurnEnd: true})
 		c.handle(Event{ReplayDone: true})
 		snap := c.live.st.Snapshot(time.Now().UnixMilli())
 		for _, want := range restored.Agents {
@@ -644,7 +649,136 @@ func TestAgyNativeReplayKeepsHistoricalRetention(t *testing.T) {
 			}
 		}
 		if a, ok := snapAgent(snap, launch(1)); ok {
-			t.Errorf("the oldest launch displaced a newer restored row: %+v", a)
+			t.Errorf("the replay resurrected the evicted oldest launch: %+v", a)
+		}
+		if c.live.st.HasAgent(launch(1)) {
+			t.Error("the evicted oldest launch is still in the state")
 		}
 	})
+}
+
+// TestAgyNativeReplayClosesRebuiltRowsWithoutSnapshot: with no readable
+// restored snapshot there is no restored row to displace, so the rows a
+// replay rebuilt from quiet records close end-unknown at the replay's end.
+func TestAgyNativeReplayClosesRebuiltRowsWithoutSnapshot(t *testing.T) {
+	previous := suiteBackend
+	suiteBackend = BackendAgy
+	t.Cleanup(func() { suiteBackend = previous })
+	h := newHarness(t, map[string]string{"chat": chatProfile})
+	id := h.create("chat").ID
+	if _, err := h.runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	p := h.backend.waitProc(t, 0)
+	p.nextSent(t)
+	c := h.runner.conv(id)
+	rows := []string{wslive.NativeAgyPrefix + "first", wslive.NativeAgyPrefix + "second"}
+	c.do(func() {
+		c.live.restored = restoredAgyNative{}
+		c.replaying = true
+		quiet := func(ev Event) { ev.Replay = true; c.handle(ev) }
+		for _, row := range rows {
+			quiet(Event{TurnStart: true})
+			quiet(nativeRowEvent(row, "research", wslive.StatusRunning))
+			quiet(Event{TurnEnd: true})
+		}
+		before := c.r.opts.Now().UnixMilli()
+		c.handle(Event{ReplayDone: true})
+		after := c.r.opts.Now().UnixMilli()
+		snap := c.live.st.Snapshot(after)
+		for _, row := range rows {
+			a, ok := snapAgent(snap, row)
+			if !ok || a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt < before || a.EndedAt > after {
+				t.Errorf("row %s = %+v (present %v), want end-unknown at the replay end (%d..%d)", row, a, ok, before, after)
+			}
+		}
+	})
+}
+
+// TestAgyNativeReplayClosesRebuiltRowsByEvidence: against a readable restored
+// snapshot, a rebuilt row the snapshot listed running closes end-unknown at
+// the snapshot's write time (its start moved back to it), a row a record past
+// the holder's sequence mark touched closes at that record's time, and a
+// quiet-only row the snapshot does not list is dropped.
+func TestAgyNativeReplayClosesRebuiltRowsByEvidence(t *testing.T) {
+	previous := suiteBackend
+	suiteBackend = BackendAgy
+	t.Cleanup(func() { suiteBackend = previous })
+	h := newHarness(t, map[string]string{"chat": chatProfile})
+	id := h.create("chat").ID
+	if _, err := h.runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	p := h.backend.waitProc(t, 0)
+	p.nextSent(t)
+	c := h.runner.conv(id)
+	wasRunning, live, evicted := wslive.NativeAgyPrefix+"was-running", wslive.NativeAgyPrefix+"live", wslive.NativeAgyPrefix+"evicted"
+	c.do(func() {
+		updatedAt := time.Now().Add(-time.Minute).UnixMilli()
+		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: updatedAt, Agents: []wslive.Agent{
+			{ID: wasRunning, Label: "research", Status: wslive.StatusRunning, StartedAt: updatedAt - 10_000},
+		}}
+		c.live.st.SeedFinished(restored)
+		c.live.restored = restoredAgyNativeOf(restored, restored.ReplyID)
+		c.replaying = true
+		quiet := func(ev Event) { ev.Replay = true; c.handle(ev) }
+		quiet(Event{TurnStart: true})
+		quiet(nativeRowEvent(evicted, "old", wslive.StatusRunning))
+		quiet(nativeRowEvent(wasRunning, "research", wslive.StatusRunning))
+		quiet(nativeRowEvent(live, "probe", wslive.StatusRunning))
+		liveAt := c.r.opts.Now().UnixMilli() - 5
+		c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: live, Label: "probe", Status: wslive.StatusRunning, At: liveAt}})
+		c.handle(Event{ReplayDone: true})
+		snap := c.live.st.Snapshot(c.r.opts.Now().UnixMilli())
+		if a, ok := snapAgent(snap, wasRunning); !ok || a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt != updatedAt || a.StartedAt > updatedAt {
+			t.Errorf("row the snapshot listed running = %+v (present %v), want end-unknown at %d", a, ok, updatedAt)
+		}
+		if a, ok := snapAgent(snap, live); !ok || a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt != liveAt {
+			t.Errorf("row a live record touched = %+v (present %v), want end-unknown at %d", a, ok, liveAt)
+		}
+		if a, ok := snapAgent(snap, evicted); ok {
+			t.Errorf("quiet-only row absent from the snapshot was resurrected: %+v", a)
+		}
+	})
+}
+
+// TestLiveWriterRestoresAgyNativeRows: the live writer keeps what the
+// snapshot an earlier daemon left says of agy native rows, once; a missing
+// snapshot or one of another session is not readable.
+func TestLiveWriterRestoresAgyNativeRows(t *testing.T) {
+	now := func() time.Time { return time.Unix(1000, 0) }
+	missing := newLiveWriter(t.TempDir(), "key", "agy", now, io.Discard)
+	if missing.takeRestored().readable {
+		t.Fatal("a missing snapshot reads as readable")
+	}
+	write := func(snap wslive.Snapshot) string {
+		dir := t.TempDir()
+		raw, err := json.Marshal(snap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(wslive.SnapshotPath(dir), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	running, done := wslive.NativeAgyPrefix+"running", wslive.NativeAgyPrefix+"done"
+	snap := wslive.Snapshot{ReplyID: wsmailbox.ReplyID("key"), UpdatedAt: 42_000, Agents: []wslive.Agent{
+		{ID: running, Status: wslive.StatusRunning, StartedAt: 1},
+		{ID: done, Status: wslive.StatusDone, StartedAt: 1, EndedAt: 2},
+		{ID: wslive.NativeCodexPrefix + "other", Status: wslive.StatusRunning, StartedAt: 1},
+	}}
+	w := newLiveWriter(write(snap), "key", "agy", now, io.Discard)
+	got := w.takeRestored()
+	want := restoredAgyNative{readable: true, updatedAt: 42_000, listed: map[string]bool{running: true, done: true}, running: map[string]bool{running: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("restored = %+v, want %+v", got, want)
+	}
+	if again := w.takeRestored(); !again.readable || len(again.listed) != 0 || len(again.running) != 0 {
+		t.Fatalf("second take = %+v, want readable with nothing restored", again)
+	}
+	snap.ReplyID = "another"
+	if newLiveWriter(write(snap), "key", "agy", now, io.Discard).takeRestored().readable {
+		t.Fatal("another session's snapshot reads as readable")
+	}
 }

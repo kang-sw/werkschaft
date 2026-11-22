@@ -218,9 +218,9 @@ type conv struct {
 	// in this order, so a launch failure buffered later in the same replay
 	// still ends its row failed.
 	agyNativeDeferred []agyNativeSettle
-	// agyNativeReplay places the agy native rows a replay rebuilds in the
-	// history the restored recovery cache holds (agyNativeReplayEnd).
-	agyNativeReplay agyNativeReplayOrder
+	// agyNativeReplay is what the running replay showed of agy native rows
+	// (finishAgyNativeReplay).
+	agyNativeReplay agyNativeReplayRows
 	// rejoinErr is a worker rejoin's start failure: checkReattach ends that
 	// recovery after the scan instead of waiting on a replay with no process.
 	rejoinErr       string
@@ -1298,90 +1298,101 @@ func (c *conv) endAgyNativeObservation(at int64) {
 	}
 }
 
-// finishAgyNativeReplay ends a rejoin's observation of agy native rows:
-// first the rows a live turn end accepted during the replay, at that end's
-// time and in order, unless a later record of the replay ended them; then,
-// since observation is not continuous across a daemon replacement and a
-// replayed cancellation cannot be told from a watchdog continuation awaiting
-// its first output, every row still running, at the time agyNativeReplayEnd
-// gives it.
+// finishAgyNativeReplay ends a rejoin's observation of agy native rows.
+// Retention already decided which finished rows the restored snapshot kept,
+// so the rows the replay rebuilt only from records the previous daemon had
+// applied, and which a readable restored snapshot does not list, are dropped
+// (dropAgyNativeRebuilt), not resurrected. Then come the rows a live turn end
+// accepted during the replay, at that end's time and in order, unless a later
+// record of the replay ended them. Last, since observation is not continuous
+// across a daemon replacement and a replayed cancellation cannot be told from
+// a watchdog continuation awaiting its first output, every row still running
+// closes end-unknown at the time agyNativeReplayEnd gives it.
 func (c *conv) finishAgyNativeReplay() {
+	restored := c.live.takeRestored()
+	rows := c.agyNativeReplay
 	deferred := c.agyNativeDeferred
-	c.agyNativeDeferred = nil
+	c.agyNativeReplay, c.agyNativeDeferred = agyNativeReplayRows{}, nil
+	// A dropped row is gone from the state, so its deferred end is skipped.
+	c.dropAgyNativeRebuilt(rows, restored)
 	c.settleAgyNative(deferred)
 	var rest []agyNativeSettle
 	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
-		rest = append(rest, agyNativeSettle{id, c.agyNativeReplayEnd(id)})
+		rest = append(rest, agyNativeSettle{id, c.agyNativeReplayEnd(id, rows, restored)})
 	}
-	c.agyNativeReplay = agyNativeReplayOrder{}
 	c.settleAgyNative(rest)
 }
 
-// agyNativeReplayOrder places the agy native rows a replay rebuilds. Holder
-// records carry no time, so a replayed record maps at the replay's clock;
-// the restored rows the replay passes (rows the recovery cache kept, which
-// the reducer leaves as they are) give the history its order instead.
-type agyNativeReplayOrder struct {
-	// anchor is the latest end of a restored row the replay passed so far,
-	// floor the earliest one.
-	anchor, floor int64
-	// quiet maps a row the replay rebuilt from records the previous daemon
-	// applied to the anchor at its last record; live holds a row a record
-	// past the holder's sequence mark touched.
-	quiet map[string]int64
-	live  map[string]bool
+// agyNativeReplayRows is what a replay showed of agy native rows: the rows it
+// created (the state held none when their first record arrived) and, for each
+// row a record past the holder's sequence mark touched, that record's time.
+type agyNativeReplayRows struct {
+	created map[string]bool
+	live    map[string]int64
 }
 
-// noteAgyNativeReplay records where an agy native row event of a replay
-// falls in the restored history, before it is applied.
+// noteAgyNativeReplay records an agy native row event of a replay, before it
+// is applied.
 func (c *conv) noteAgyNativeReplay(ev wslive.Event, quiet bool) {
 	if !c.replaying || ev.Kind != wslive.KindAgent || !strings.HasPrefix(ev.AgentID, wslive.NativeAgyPrefix) {
 		return
 	}
 	o := &c.agyNativeReplay
-	_, rebuilt := o.quiet[ev.AgentID]
-	if endedAt, ended, ok := c.live.st.AgentEnd(ev.AgentID); ok && ended && !rebuilt && !o.live[ev.AgentID] {
-		if endedAt > 0 {
-			o.anchor = max(o.anchor, endedAt)
-			if o.floor == 0 || endedAt < o.floor {
-				o.floor = endedAt
-			}
-		}
-		return
-	}
 	if !quiet {
-		if o.live == nil {
-			o.live = map[string]bool{}
+		at := ev.At
+		if at <= 0 {
+			at = c.r.opts.Now().UnixMilli()
 		}
-		o.live[ev.AgentID] = true
+		if o.live == nil {
+			o.live = map[string]int64{}
+		}
+		o.live[ev.AgentID] = at
 		return
 	}
-	if o.quiet == nil {
-		o.quiet = map[string]int64{}
+	if c.live.st.HasAgent(ev.AgentID) {
+		return
 	}
-	o.quiet[ev.AgentID] = o.anchor
+	if o.created == nil {
+		o.created = map[string]bool{}
+	}
+	o.created[ev.AgentID] = true
 }
 
-// agyNativeReplayEnd is when a rejoin's observation of the agy native row id
-// ended, for its retention rank. A row records past the holder's sequence
-// mark touched was observed until now. A row rebuilt only from records the
-// previous daemon applied keeps its historical place: the end of the latest
-// restored row the replay passed before its last record, or, before every
-// one, just under the earliest such end. Without restored rows in the
-// replay, now.
-func (c *conv) agyNativeReplayEnd(id string) int64 {
-	o := c.agyNativeReplay
-	now := c.r.opts.Now().UnixMilli()
-	anchor, rebuilt := o.quiet[id]
-	switch {
-	case o.live[id] || !rebuilt:
-		return now
-	case anchor > 0:
-		return anchor
-	case o.floor > 1:
-		return o.floor - 1
+// dropAgyNativeRebuilt removes the agy native rows the replay created from
+// records the previous daemon had applied alone, which a readable restored
+// snapshot does not list: retention evicted them. Without a readable
+// snapshot nothing is dropped (no restored row is there to displace). The
+// process forgets the dropped rows' launch correlations.
+func (c *conv) dropAgyNativeRebuilt(rows agyNativeReplayRows, restored restoredAgyNative) {
+	if !restored.readable {
+		return
 	}
-	return now
+	var ids []string
+	for id := range rows.created {
+		if _, live := rows.live[id]; !live && !restored.listed[id] {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	dropped := c.live.st.DropNativeAgents(ids)
+	if f, ok := c.proc.(nativeLaunchForgetter); ok && len(dropped) > 0 {
+		f.forgetNativeLaunches(dropped)
+	}
+}
+
+// agyNativeReplayEnd is when a rejoin's observation of the agy native row id,
+// still running at the replay's end, ended: the time of the last record past
+// the holder's sequence mark that touched it; else, for a row the restored
+// snapshot listed running, that snapshot's write time; else (no readable
+// snapshot, or a row older than the restored state) the replay's end.
+func (c *conv) agyNativeReplayEnd(id string, rows agyNativeReplayRows, restored restoredAgyNative) int64 {
+	if at, ok := rows.live[id]; ok {
+		return at
+	}
+	if restored.running[id] && restored.updatedAt > 0 {
+		return restored.updatedAt
+	}
+	return c.r.opts.Now().UnixMilli()
 }
 
 // settleAgyNative ends each of rows that still runs done as observation
