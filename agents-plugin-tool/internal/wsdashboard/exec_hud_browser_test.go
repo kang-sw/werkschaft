@@ -57,6 +57,14 @@ type hudBrowserSvc struct {
 	outDelayMs  int
 	inflight    map[string]int
 	maxInflight map[string]int
+	// stopAfterMs holds a stop's answer back after its snapshot is taken, and
+	// listDelayMs does the same for the job list (answers that arrive late, after
+	// newer ones); outGone makes an output read answer 404 for the listed jobs, and
+	// outHang makes it never answer (until released or 25 s).
+	stopAfterMs int
+	listDelayMs int
+	outGone     map[string]bool
+	outHang     chan struct{}
 }
 
 func (s *hudBrowserSvc) Open(string) (uint64, error) { return 4, nil }
@@ -68,11 +76,16 @@ func (s *hudBrowserSvc) summary(j *hudBrowserJob) execjob.HostedSummary {
 
 func (s *hudBrowserSvc) Jobs(owner string) []execjob.HostedSummary {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.counts["list"]++
 	var out []execjob.HostedSummary
 	for _, j := range s.jobs {
 		out = append(out, s.summary(j))
+	}
+	delay := s.listDelayMs
+	s.mu.Unlock()
+	// The snapshot is taken: a slow answer reaches the page after the job moved on.
+	if delay > 0 {
+		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 	return out
 }
@@ -93,8 +106,17 @@ func (s *hudBrowserSvc) ReadOutput(owner, id string, from int64, limit int) (exe
 		s.maxInflight[id] = s.inflight[id]
 	}
 	out, err := s.readLocked(id, from, limit)
-	delay := s.outDelayMs
+	if s.outGone[id] {
+		out, err = execjob.HostedOutput{}, execjob.ErrExecNotFound
+	}
+	delay, hang := s.outDelayMs, s.outHang
 	s.mu.Unlock()
+	if hang != nil {
+		select {
+		case <-hang:
+		case <-time.After(25 * time.Second):
+		}
+	}
 	// The snapshot is taken: a slow answer reaches the page after the job moved on.
 	if delay > 0 {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
@@ -183,7 +205,12 @@ func (s *hudBrowserSvc) StopByUser(owner, id string) (execjob.HostedSummary, err
 		}
 	}
 	sum := s.summary(j)
-	d := s.d
+	d, after := s.d, s.stopAfterMs
+	if after > 0 {
+		s.mu.Unlock()
+		time.Sleep(time.Duration(after) * time.Millisecond)
+		s.mu.Lock()
+	}
 	go d.ExecJobsChanged()
 	return sum, nil
 }
@@ -231,7 +258,7 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 		return ComposerJob{ExecID: "exec_hi", Gen: 4, State: "exited", ExitCode: &zero, Command: req.Line, Written: 3, Output: []byte("hi\n")}, nil
 	}
 	f.svc.mu.Unlock()
-	svc := &hudBrowserSvc{counts: map[string]int{}, failedOne: map[string]bool{}, notice: "sent", d: f.d, fromLog: map[string][]int64{}, inflight: map[string]int{}, maxInflight: map[string]int{}}
+	svc := &hudBrowserSvc{counts: map[string]int{}, failedOne: map[string]bool{}, notice: "sent", d: f.d, fromLog: map[string][]int64{}, inflight: map[string]int{}, maxInflight: map[string]int{}, outGone: map[string]bool{}}
 	f.d.SetExecJobs(svc)
 	ctl := http.NewServeMux()
 	reply := func(w http.ResponseWriter, v any) {
@@ -271,11 +298,15 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 	})
 	ctl.HandleFunc("/set", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Notice     string `json:"notice"`
-			StopMs     int    `json:"stopMs"`
-			OutDelayMs int    `json:"outDelayMs"`
-			Unbind     bool   `json:"unbind"`
-			Bind       bool   `json:"bind"`
+			Notice     string   `json:"notice"`
+			StopMs     int      `json:"stopMs"`
+			OutDelayMs int      `json:"outDelayMs"`
+			StopAfter  int      `json:"stopAfterMs"`
+			ListDelay  int      `json:"listDelayMs"`
+			Gone       []string `json:"outGone"`
+			Hang       bool     `json:"outHang"`
+			Unbind     bool     `json:"unbind"`
+			Bind       bool     `json:"bind"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		svc.mu.Lock()
@@ -284,6 +315,18 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 		}
 		svc.stopMs = in.StopMs
 		svc.outDelayMs = in.OutDelayMs
+		svc.stopAfterMs = in.StopAfter
+		svc.listDelayMs = in.ListDelay
+		svc.outGone = map[string]bool{}
+		for _, id := range in.Gone {
+			svc.outGone[id] = true
+		}
+		if in.Hang && svc.outHang == nil {
+			svc.outHang = make(chan struct{})
+		} else if !in.Hang && svc.outHang != nil {
+			close(svc.outHang)
+			svc.outHang = nil
+		}
 		svc.mu.Unlock()
 		if in.Unbind {
 			f.d.SetExecJobs(nil)
@@ -331,7 +374,7 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 	ctl.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()
-		reply(w, map[string]any{"counts": svc.counts, "from": svc.lastFrom, "fromLog": svc.fromLog, "maxInflight": svc.maxInflight})
+		reply(w, map[string]any{"counts": svc.counts, "from": svc.lastFrom, "fromLog": svc.fromLog, "maxInflight": svc.maxInflight, "inflight": svc.inflight})
 	})
 	ctl.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
 		svc.mu.Lock()

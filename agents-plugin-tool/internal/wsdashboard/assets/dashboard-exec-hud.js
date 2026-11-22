@@ -8,7 +8,7 @@
 // flow and the toast are dashboard-exec-hud-peek.js. Contract 2: the exec chips
 // are the lowest-priority element of the strip; the interrupt and subagent
 // badges keep their width and the group below takes only what is left.
-  var xhEnabled = cexecEnabled, xhJobs = [], xhById = Object.create(null), xhAbsent = false, xhFetching = false, xhDirty = false, xhRev = -1;
+  var xhEnabled = cexecEnabled, xhJobs = [], xhById = Object.create(null), xhAbsent = false, xhFetching = false, xhDirty = false, xhRev = -1, xhSeq = 0;
   var xhStopping = Object.create(null), xhGroup = null, xhMore = null, xhAgg = null, xhSlots = [], xhShown = [], xhFolded = [], xhSig = "", xhTick = 0, xhFadeTimer = 0;
   var xhTip = null, xhTipFor = "", xhRo = null, xhDismissed = Object.create(null), xhDismissKey = "ws.xhud.dismissed." + rid, xhHidden = 0, xhActive = "";
   var XH_PIN_MS = 10000, XH_FADE_MS = 12000, XH_NARROW_PX = 320, XH_GAP = 6, XH_MAX_CHIPS = 12;
@@ -476,13 +476,21 @@
     if (focusNext) { var b = xhButtons()[0]; if (b) b.focus(); }
   }
   // --- the list ----------------------------------------------------------------
-  function xhApplyJobs(jobs) {
+  // Every read and every stop answer is a snapshot taken between its request and
+  // its response, and answers arrive in any order. Each request takes the next
+  // number when it is issued; a job record carries the number of the request that
+  // produced it, and an answer only replaces a record that is not newer. After a
+  // stop or a retry settles, the list is read again, and that newest list wins.
+  // An ended job never runs again whatever the numbers say.
+  function xhStale(old, job, q) {
+    return (old._q || 0) > q || (old.state !== "running" && job.state === "running");
+  }
+  function xhApplyJobs(jobs, q) {
     var now = Date.now(), seen = Object.create(null);
     jobs.forEach(function (j, i) {
       seen[j.id] = true;
       var old = xhById[j.id];
-      // A list answered after a newer stop answer does not take it back.
-      if (old && xhStale(old, j)) { j = jobs[i] = old; }
+      if (old && xhStale(old, j, q)) { j = jobs[i] = old; } else j._q = q;
       j.seenEnded = old && old.seenEnded ? old.seenEnded : (j.state !== "running" && !j.ended_at ? now : 0);
       if (j.state !== "running") delete xhStopping[j.id];
     });
@@ -491,22 +499,35 @@
     xhById = Object.create(null);
     jobs.forEach(function (j) { xhById[j.id] = j; });
   }
+  // xhGet is a bounded GET: a request that never answers is aborted, so the
+  // in-flight flag of its caller is released.
+  var XH_REQ_MS = 10000;
+  function xhGet(url) {
+    var ac = window.AbortController ? new AbortController() : null, t = setTimeout(function () { if (ac) ac.abort(); }, XH_REQ_MS);
+    var opts = { credentials: "same-origin", cache: "no-store" };
+    if (ac) opts.signal = ac.signal;
+    return fetch(url, opts).then(function (r) {
+      if (r.status === 404 || r.status === 403) return { status: r.status, body: null };
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json().then(function (b) { return { status: r.status, body: b }; });
+    }).then(function (v) { clearTimeout(t); return v; }, function (e) { clearTimeout(t); throw e; });
+  }
   function xhFetch() {
     if (!xhEnabled || xhAbsent) return;
     if (xhFetching) { xhDirty = true; return; }
     xhFetching = true;
     xhDirty = false;
-    fetch("/s/" + rid + "/exec/jobs", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+    var q = ++xhSeq;
+    xhGet("/s/" + rid + "/exec/jobs").then(function (x) {
       // A daemon without the route, a LAN viewer and a closed lead all answer
       // 404: no HUD, and no further reads this page load.
-      if (r.status === 404 || r.status === 403) { xhAbsent = true; return null; }
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
+      if (x.status === 404 || x.status === 403) { xhAbsent = true; return null; }
+      return x.body;
     }).then(function (res) {
       xhFetching = false;
       if (res && Array.isArray(res.jobs)) {
         xhRev = typeof res.rev === "number" ? res.rev : xhRev;
-        xhApplyJobs(res.jobs);
+        xhApplyJobs(res.jobs, q);
         xhRender(false);
         xhPeekJobsChanged();
       } else if (xhAbsent) xhUnmount();

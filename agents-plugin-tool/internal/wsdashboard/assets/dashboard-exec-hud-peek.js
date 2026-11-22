@@ -7,7 +7,7 @@
 // never markup. Strip and list: dashboard-exec-hud.js.
   var xhPk = { open: false, id: "", origin: "", confirm: "", pinned: false, follow: true, pending: 0, wrap: true, cmdOpen: false, sig: "" };
   var xhPeekEl = null, xhToastEl = null, xhOutEl = null, xhNewBtn = null, xhFoot = null, xhOut = null, xhPollT = 0, xhPollGen = 0, xhConfT = 0, xhConfLeft = 0, xhToastT = 0, xhNoticeBusy = Object.create(null), xhCopiedT = 0;
-  var XH_TAIL_BYTES = 16384, XH_MAX_LINES = 1500, XH_MAX_BYTES = 196608, XH_CONFIRM_S = 8, XH_POLL_MIN = 350, XH_POLL_MAX = 3000;
+  var XH_TAIL_BYTES = 16384, XH_MAX_LINES = 1500, XH_MAX_UNITS = 196608, XH_CONFIRM_S = 8, XH_POLL_MIN = 350, XH_POLL_MAX = 3000;
   function xhPeekOpen() { return xhPk.open; }
   function xhPeekId() { return xhPk.id; }
   function xhFmtBytes(n) { return n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " KiB"; }
@@ -287,7 +287,7 @@
       ow.appendChild(xhNewBtn);
       xhPeekEl.appendChild(ow);
       xhOutEl.addEventListener("scroll", xhOnScroll);
-      xhOut = { id: j.id, next: -1, start: 0, delay: XH_POLL_MIN, skip: false, drained: false, open: false, openEl: null, openStream: "", gen: 0, written: j.written || 0, ended: false, empty: true, busy: false, again: false, bytes: 0, first: true };
+      xhOut = { id: j.id, next: -1, start: 0, delay: XH_POLL_MIN, skip: false, drained: false, open: false, openEl: null, openStream: "", gen: 0, written: j.written || 0, ended: false, empty: true, busy: false, again: false, units: 0, first: true, gap: false };
       xhOutEl.appendChild(xhEl("span", "xempty", wsT("js.xhud.out.empty")));
       out = ow;
     } else {
@@ -356,7 +356,7 @@
       if (cut && first) part = part.replace(/^\uFFFD{1,3}/, "");
       if (part !== "" || (!last && !ln)) {
         if (!ln) { ln = xhLineEl(stream); if (cut && first) ln.className += " cut"; frag.appendChild(ln); made++; }
-        if (part !== "") { ln.appendChild(doc.createTextNode(part)); ln._n = (ln._n || 0) + part.length; o.bytes += part.length; }
+        if (part !== "") { ln.appendChild(doc.createTextNode(part)); ln._n = (ln._n || 0) + part.length; o.units += part.length; }
       }
       first = false;
       if (!last) o.open = false;
@@ -364,22 +364,23 @@
     }
     return made;
   }
-  // trim keeps what the panel retains bounded by bytes as well as lines: old
-  // lines go first, and a single endless line loses its oldest text.
+  // trim keeps what the panel retains bounded by size as well as by lines. The
+  // size is counted in UTF-16 code units (string length), not bytes: 196608 of
+  // them. Old lines go first, and a single endless line loses its oldest text.
   function xhTrim() {
     var o = xhOut, el = xhOutEl;
-    while (el.childNodes.length > XH_MAX_LINES || o.bytes > XH_MAX_BYTES) {
+    while (el.childNodes.length > XH_MAX_LINES || o.units > XH_MAX_UNITS) {
       var f = el.firstChild;
       if (!f) break;
       if (el.childNodes.length === 1) {
         if (f.childNodes.length < 2) break;
-        o.bytes -= f.firstChild.data.length;
+        o.units -= f.firstChild.data.length;
         f._n = Math.max(0, (f._n || 0) - f.firstChild.data.length);
         f.removeChild(f.firstChild);
         f.classList.add("cut");
         continue;
       }
-      o.bytes -= f._n || 0;
+      o.units -= f._n || 0;
       if (f === o.openEl) { o.open = false; o.openEl = null; }
       el.removeChild(f);
     }
@@ -398,7 +399,7 @@
       if (k >= 0) { segs = segs.slice(k); segs[0] = { stream: segs[0].stream, text: segs[0].text.slice(segs[0].text.indexOf("\n") + 1) }; }
       else cut = true;
     }
-    if (res.gap) { frag.appendChild(xhEl("span", "l sys", wsT("js.xhud.out.gap"))); o.open = false; made++; }
+    if (res.gap || o.gap) { o.gap = false; frag.appendChild(xhEl("span", "l sys", wsT("js.xhud.out.gap"))); o.open = false; made++; }
     segs.forEach(function (s) { made += xhAppendText(s.stream, s.text, frag, cut); cut = false; });
     if (frag.childNodes.length || made) {
       var emp = xhOutEl.querySelector(".xempty");
@@ -438,6 +439,7 @@
     xhOut.skip = xhOut.start > 0;
     xhOut.gen = xhPollGen;
     xhOut.first = true;
+    xhOut.gap = false;
     xhPollSchedule(0);
   }
   function xhPollNow() {
@@ -463,16 +465,22 @@
     if (o.busy) { o.again = true; return; }
     o.busy = true;
     o.again = false;
-    fetch("/s/" + rid + "/exec/" + encodeURIComponent(id) + "/output?from=" + o.next, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-      if (r.status === 404) return { gone: true };
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
+    var q = ++xhSeq;
+    xhGet("/s/" + rid + "/exec/" + encodeURIComponent(id) + "/output?from=" + o.next).then(function (x) {
+      if (x.status === 404) return { gone: true };
+      if (x.status !== 200) throw new Error("HTTP " + x.status);
+      return x.body;
     }).then(function (res) {
       o.busy = false;
       if (gen !== xhPollGen || !xhPk.open || xhOut !== o) return;
-      if (res.gone) { xhFetch(); return; }
+      if (res.gone) {
+        xhFetch();
+        // A wake-up that came while this read was out is not lost with its 404.
+        if (o.again) xhPollSchedule(0);
+        return;
+      }
       var t0 = window.performance && performance.now ? performance.now() : 0;
-      xhPollApply(res, o, id);
+      xhPollApply(res, o, id, q);
       if (t0 && performance.measure) { try { performance.measure("ws.xhud.poll", { start: t0, end: performance.now(), detail: { bytes: res.next - res.from } }); } catch (e) {} }
     }, function () {
       o.busy = false;
@@ -484,9 +492,9 @@
   // pollApply takes one read: the job's fresher record, the new runs, the next
   // offset, and the delay to the following read (short while more is waiting,
   // growing while idle, none once an ended job is drained).
-  function xhPollApply(res, o, id) {
+  function xhPollApply(res, o, id, q) {
     var before = o.next;
-    xhMergeJob(res.job);
+    xhMergeJob(res.job, q);
     o.written = res.written;
     // The list's size is as old as its last event (output does not raise one):
     // when the first read finds far more waiting than the tail window, it is
@@ -494,6 +502,10 @@
     if (o.first) {
       o.first = false;
       if (res.written - res.from > XH_TAIL_BYTES + 1) {
+        // The first request may have asked below what the ring still holds (the list's
+        // size was stale): the daemon clamped it and said so. That eviction is real
+        // although this answer is dropped: the notice is shown with the tail.
+        if (res.gap) o.gap = true;
         o.start = Math.max(0, res.written - XH_TAIL_BYTES);
         o.next = o.start;
         o.skip = o.start > 0;
@@ -513,21 +525,15 @@
     if (j) xhFootText(j);
     xhPollSchedule(o.again ? 0 : o.delay);
   }
-  // mergeJob takes a fresher job record (an output read or a stop answer) into
-  // the list and redraws when its state moved.
-  var XH_NOTICE_RANK = { "": 0, pending: 1, failed: 2, sent: 3, closed: 3 };
-  // stale: a record older than the one held. An ended job never runs again, and a
-  // stop's notice only moves forward (none, pending, failed, sent or closed); a
-  // read or list answered after a newer answer must not take either back.
-  function xhStale(old, job) {
-    if (old.state !== "running" && job.state === "running") return true;
-    return old.state === job.state && (XH_NOTICE_RANK[job.stop_notice || ""] || 0) < (XH_NOTICE_RANK[old.stop_notice || ""] || 0);
-  }
-  function xhMergeJob(job) {
+  // mergeJob takes a job record answered to request q (an output read or a stop
+  // answer) into the list, unless the record held is newer, and redraws when its
+  // state moved. (xhStale: dashboard-exec-hud.js.)
+  function xhMergeJob(job, q) {
     if (!job || !job.id) return;
     var old = xhById[job.id];
-    if (!old || xhStale(old, job)) return;
+    if (!old || xhStale(old, job, q)) return;
     var prev = xhSt(old) + "|" + (old.stop_notice || "") + "|" + old.written;
+    job._q = q;
     job.seenEnded = old.seenEnded || (job.state !== "running" && !job.ended_at ? Date.now() : 0);
     if (job.state !== "running") delete xhStopping[job.id];
     xhJobs[xhJobs.indexOf(old)] = job;
@@ -570,13 +576,14 @@
     if (focusBack) { var b = xhPeekEl.querySelector('[data-xact="stop"]'); if (b) b.focus(); }
   }
   function xhStopRequest(id, done) {
+    var q = ++xhSeq;
     fetch("/s/" + rid + "/exec/" + encodeURIComponent(id) + "/stop", { method: "POST", credentials: "same-origin", cache: "no-store" }).then(function (r) {
       return r.text().then(function (s) { return { r: r, s: s }; }, function () { return { r: r, s: "" }; });
     }).then(function (x) {
       var body = null;
       try { body = JSON.parse(x.s); } catch (e) { body = null; }
-      done(x.r, body, x.s);
-    }, function () { done(null, null, wsT("js.post.unreachable")); });
+      done(x.r, body, x.s, q);
+    }, function () { done(null, null, wsT("js.post.unreachable"), q); });
   }
   function xhDoStop(id) {
     clearInterval(xhConfT);
@@ -589,30 +596,29 @@
     xhRender(true);
     var sel = xhPeekEl && xhPeekEl.querySelector('[aria-selected="true"]');
     if (sel) sel.focus();
-    xhStopRequest(id, function (r, body, text) {
+    xhStopRequest(id, function (r, body, text, q) {
       delete xhStopping[id];
-      if (body && body.job) xhMergeJobForce(body.job);
-      if (r && r.ok && body && body.job) { xhAfterStop(body.job); return; }
+      if (body && body.job) xhMergeJob(body.job, q);
+      // The answer is one snapshot among others and may be older than a list that
+      // already arrived: the list is read again now, and the newest one wins.
+      xhFetch();
+      if (r && r.ok && body && body.job) { xhAfterStop(id); return; }
       // The job may still run (its holder did not go), or is not found.
-      if (r && r.status === 404) xhFetch();
       xhRender(true);
       xhPeekRender(false);
       var head = xhCmdHead(j.command), why = body && body.error ? body.error : (text || "HTTP " + (r ? r.status : 0));
       if (window.WsToast) window.WsToast.show(wsT("js.xhud.toast.stop.fail", head, why), { kind: "warn" });
     });
   }
-  function xhMergeJobForce(job) {
-    var old = xhById[job.id];
-    if (!old) return;
-    job.seenEnded = old.seenEnded || (job.state !== "running" && !job.ended_at ? Date.now() : 0);
-    xhJobs[xhJobs.indexOf(old)] = job;
-    xhById[job.id] = job;
-  }
-  function xhAfterStop(job) {
+  // afterStop shows the job as it stands now (not as the answer said, which a
+  // newer list may have overtaken).
+  function xhAfterStop(id) {
+    var job = xhById[id];
     xhRender(true);
     xhPeekRender(false);
-    if (xhOut && xhOut.id === job.id) xhPollNow();
-    if (job.state !== "running" && !(xhPk.open && xhPk.id === job.id)) xhToast(job);
+    if (!job) return;
+    if (xhOut && xhOut.id === id) xhPollNow();
+    if (job.state !== "running" && !(xhPk.open && xhPk.id === id)) xhToast(job);
   }
   function xhRetryNotice(id) {
     var j = xhById[id];
@@ -620,9 +626,10 @@
     xhNoticeBusy[id] = true;
     xhPk.sig = "";
     xhPeekRender(false);
-    xhStopRequest(id, function (r, body) {
+    xhStopRequest(id, function (r, body, text, q) {
       delete xhNoticeBusy[id];
-      if (body && body.job) xhMergeJobForce(body.job);
+      if (body && body.job) xhMergeJob(body.job, q);
+      xhFetch();
       xhRender(true);
       xhPk.sig = "";
       xhPeekRender(false);
@@ -725,10 +732,18 @@
       // The label follows the outcome: copyText resolves to whether it copied.
       var old = a.getAttribute("data-xlabel") || a.textContent;
       a.setAttribute("data-xlabel", old);
+      // Where the keyboard stays while the copy runs. The fallback borrows focus for
+      // a scratch field and drops it; the button gets the keyboard back only when
+      // the user's last focus was the button or the panel, not the composer they
+      // moved to while a slow clipboard answered.
+      var last = doc.activeElement;
+      var track = function (ev) { var t = ev.target; if (t && !(t.tagName === "TEXTAREA" && t.readOnly)) last = t; };
+      doc.addEventListener("focusin", track, true);
       Promise.resolve(copyText(j.command, true)).then(function (ok) { return ok === true; }, function () { return false; }).then(function (ok) {
+        doc.removeEventListener("focusin", track, true);
         if (!a.isConnected) return;
-        // The copy fallback selects a scratch field and drops it: the keyboard returns to the button.
-        if (!doc.activeElement || doc.activeElement === doc.body) a.focus();
+        var own = !!last && (last === a || (xhPeekEl && xhPeekEl.contains(last)));
+        if (own && (!doc.activeElement || doc.activeElement === doc.body)) a.focus();
         a.textContent = ok ? "✓ " + wsT("js.xhud.pk.copied") : "⚠ " + wsT("js.xhud.pk.copyfail");
         clearTimeout(xhCopiedT);
         xhCopiedT = setTimeout(function () { a.textContent = old; }, 1400);
