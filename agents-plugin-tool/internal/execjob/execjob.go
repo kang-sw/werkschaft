@@ -95,6 +95,10 @@ type RawReadResponse struct {
 	ExecKey string `json:"exec_key"`
 	Stream  string `json:"stream"`
 	textreader.ReadResult
+	// EvictedBefore is set for a hosted job read below its output ring's
+	// retained window: the bytes before this offset are gone, and the read
+	// began at it.
+	EvictedBefore int64 `json:"evicted_before,omitempty"`
 }
 type RawTailResponse struct {
 	ExecKey string `json:"exec_key"`
