@@ -224,6 +224,28 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       view = await sessionFrame(page);
       await view.waitForSelector('.d-cexec .cexec');
 
+      // the first private list read answers with good headers but a body that is
+      // cut short: the send that needed its token ends (busy clears, the draft is
+      // kept, nothing runs), and sending again once the read works runs it once
+      await page.route('**/composer-exec', route => route.request().method() === 'GET' ? route.fulfill({ status: 200, contentType: 'application/json', body: '{"cards":[' }) : route.continue());
+      await page.reload();
+      view = await sessionFrame(page);
+      await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
+      await page.waitForTimeout(500);
+      const beforeBroken = posts.length;
+      await send(view, '!echo nojson');
+      await page.waitForTimeout(600);
+      assert.equal(await draft(view), '!echo nojson', 'the draft is kept when the token read fails after good headers');
+      assert.equal(posts.length, beforeBroken, 'nothing was posted without a token');
+      await view.click('#csend');
+      await page.waitForTimeout(400);
+      assert.equal(posts.length, beforeBroken, 'a second click reads again and is not stuck busy');
+      await page.unroute('**/composer-exec');
+      await view.click('#csend');
+      await view.waitForSelector('.cexec code:text-is("echo nojson")');
+      assert.equal(await draft(view), '', 'the send that follows a working read runs and settles the draft');
+      assert.equal(await view.locator('.cexec code:text-is("echo nojson")').count(), 1, 'the command ran once');
+
       // an old daemon: the route is unknown. It fails closed: nothing sent
       // as a prompt, the draft stays.
       await page.reload();

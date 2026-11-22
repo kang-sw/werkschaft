@@ -197,9 +197,12 @@
   // cexecList reads the daemon's private card list once and keeps its admission
   // token; done gets the list, or null when the read was denied or failed.
   function cexecList(done) {
+    // A transport failure, and a body that fails to read or parse after good
+    // headers, both end as null: done always runs, so a caller that waits on it
+    // (a send needing the token) clears its busy state and keeps the draft.
     fetch("/s/" + rid + "/composer-exec", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
       return r.ok ? r.json() : null;
-    }, function () { return null; }).then(function (list) {
+    }).catch(function () { return null; }).then(function (list) {
       if (!list || !Array.isArray(list.cards)) { done(null); return; }
       if (typeof list.token === "string" && list.token) cexecToken = list.token;
       done(list);
