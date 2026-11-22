@@ -128,7 +128,7 @@ var (
 	// answer; its wrapped text says which.
 	ErrInvalid = errors.New("invalid message")
 
-	entryNamePattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-f]{8}\.json$`)
+	entryNamePattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-f]{8}(?:\.cron)?\.json$`)
 	chipIDPattern    = regexp.MustCompile(`^[0-9]{1,6}$`)
 	// imageMarkerPattern is an ImageMarker in a send's text.
 	imageMarkerPattern = regexp.MustCompile(`\[Image #([1-9][0-9]{0,5})\]`)
@@ -210,8 +210,9 @@ type Entry struct {
 	Command *Command `json:"command,omitempty"`
 	// Cron marks a scheduled prompt a daemon-held schedule sent (cron.go).
 	// Its one part is the prompt; Text wraps it as <ws:cron> instead of
-	// <ws:user>. It is never steered and never merged. A reader that does
-	// not know the field shows the prompt under the <ws:user> envelope.
+	// <ws:user>. It is never steered and never merged. The marker counts only
+	// in a file stored under a scheduled prompt's own name, which an earlier
+	// reader never lists.
 	Cron *Cron `json:"cron,omitempty"`
 }
 

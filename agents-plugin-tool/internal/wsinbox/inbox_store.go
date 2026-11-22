@@ -53,7 +53,7 @@ func writeEntry(dir string, entry Entry) (string, error) {
 
 func writeEntryJournaled(dir string, entry Entry, journal bool) (string, error) {
 	stamp := nextStamp().Format(stampLayout)
-	raw, err := json.Marshal(wireCron(entry))
+	raw, err := json.Marshal(entry)
 	if err != nil {
 		return "", err
 	}
@@ -61,7 +61,7 @@ func writeEntryJournaled(dir string, entry Entry, journal bool) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	name := stamp + "-" + suffix + ".json"
+	name := entryFileName(stamp, suffix, entry)
 	tmp, err := wsstate.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return "", fmt.Errorf("create inbox temp file: %w", err)
@@ -175,7 +175,7 @@ func readEntry(path string) (Entry, error) {
 	if err := json.Unmarshal(raw, &e); err != nil {
 		return Entry{}, fmt.Errorf("parse inbox entry: %w", err)
 	}
-	return restoreCron(e), nil
+	return provenCron(path, e)
 }
 
 // claim atomically takes the entry name in dir away from the inbox by

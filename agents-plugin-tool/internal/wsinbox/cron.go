@@ -1,10 +1,12 @@
 // The scheduled-prompt envelope: an inbox entry a daemon-held schedule sent,
-// marked by Entry.Cron, rendered as <ws:cron> beside the <ws:user> family.
+// marked by Entry.Cron and stored under its own file name, rendered as
+// <ws:cron> beside the <ws:user> family.
 package wsinbox
 
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -40,18 +42,6 @@ func escapeCronBody(text string) string {
 	})
 }
 
-func unescapeCronBody(text string) string {
-	return cronBodyDelimiter.ReplaceAllStringFunc(text, func(s string) string {
-		if strings.HasPrefix(s, "&lt;") {
-			return "</ws:cron"
-		}
-		if strings.HasPrefix(s, "&amp;") {
-			return "&" + s[len("&amp;"):]
-		}
-		return s
-	})
-}
-
 var cronAttrEscaper = strings.NewReplacer("&", "&amp;", `"`, "&quot;", "<", "&lt;", ">", "&gt;")
 
 // cronText is the entry's <ws:cron> envelope; the body is the entry's text.
@@ -65,77 +55,48 @@ func (e Entry) cronText() string {
 		`" at="` + cronAttrEscaper.Replace(c.At) + `">` + "\n" + escapeCronBody(body) + "\n</ws:cron>"
 }
 
-// A held scheduled prompt is stored with its whole envelope as its one part,
-// beside the Cron field. A daemon built before the marker ignores the field,
-// shows the part as a user message, and its dashboard steer rewrites the entry
-// as a steered plain one: the envelope in the part survives that rewrite, so
-// restoreCron can recover the marker from it. In memory the entry is always
-// (Cron, the prompt as its part); only the stored form carries the envelope.
+// A scheduled prompt is stored under a name an earlier daemon's inbox reader
+// never lists: its stamp and hex, then ".cron.json" in place of ".json". That
+// reader (and its drain, cancel and dashboard steer, all of which go through
+// the same name pattern) skips the file without an error, so a downgraded
+// daemon neither shows nor delivers a scheduled prompt; the current daemon
+// reads it again once it reopens the inbox. The name is the only provenance:
+// the Cron field is honored in a file with that name and dropped from any
+// other, so no message text and no JSON a plain send wrote can pass for a
+// scheduler's prompt.
 
-// wireCron returns the stored form of a scheduled prompt; any other entry is
-// returned as it is.
-func wireCron(e Entry) Entry {
-	if e.Cron == nil {
-		return e
-	}
-	text := e.cronText()
-	if text == "" {
-		return e
-	}
-	e.Parts = []string{text}
-	return e
-}
+// cronNameSuffix replaces ".json" in a scheduled prompt's entry name.
+const cronNameSuffix = ".cron.json"
 
-var cronAttrUnescaper = strings.NewReplacer("&quot;", `"`, "&lt;", "<", "&gt;", ">", "&amp;", "&")
+// cronStored matches the base name of a scheduled prompt's entry file: held,
+// drained, or claimed by a drain, steer, cancel or interrupt (a hidden file
+// that keeps the name and appends the operation).
+var cronStored = regexp.MustCompile(`^\.?[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-f]{8}\.cron\.json(?:\.[a-z]+-[0-9a-f]+)?$`)
 
-var cronAttrs = regexp.MustCompile(`^<ws:cron id="([^"\n]*)" name="([^"\n]*)" at="([^"\n]*)">\n`)
+// isCronFile reports whether path names a scheduler-written entry file.
+func isCronFile(path string) bool { return cronStored.MatchString(filepath.Base(path)) }
 
-// parseCronEnvelope decodes a whole <ws:cron> envelope text (cronText's
-// output); ok is false for anything else, including trailing text.
-func parseCronEnvelope(text string) (mark Cron, body string, ok bool) {
-	m := cronAttrs.FindStringSubmatch(text)
-	if m == nil || !strings.HasSuffix(text, "\n</ws:cron>") || len(text) < len(m[0])+len("\n</ws:cron>") {
-		return Cron{}, "", false
-	}
-	inner := text[len(m[0]) : len(text)-len("\n</ws:cron>")]
-	if strings.Contains(inner, "</ws:cron") {
-		return Cron{}, "", false // cronText escapes the body, so a raw delimiter is not ours
-	}
-	mark = Cron{ID: cronAttrUnescaper.Replace(m[1]), Name: cronAttrUnescaper.Replace(m[2]), At: cronAttrUnescaper.Replace(m[3])}
-	mark, err := cleanCronMark(mark)
-	if err != nil {
-		return Cron{}, "", false
-	}
-	return mark, unescapeCronBody(inner), true
-}
-
-// restoreCron turns a stored entry back into its in-memory form: the Cron
-// field's entry drops the envelope around its part, and a steered plain entry
-// whose one part is a scheduled prompt's envelope (an older daemon dropped
-// the field when it steered the held entry) gets its marker back. A restored
-// entry is never steered: it waits for the turn end like any scheduled
-// prompt, whatever Steer an older daemon set.
-func restoreCron(e Entry) Entry {
-	if len(e.Parts) != 1 {
-		return e
-	}
+// entryFileName is the name a new entry gets under stamp and suffix.
+func entryFileName(stamp, suffix string, e Entry) string {
 	if e.Cron != nil {
-		if mark, body, ok := parseCronEnvelope(e.Parts[0]); ok && mark == *e.Cron {
-			e.Parts = []string{body}
-		}
-		e.Steer = false
-		return e
+		return stamp + "-" + suffix + cronNameSuffix
 	}
-	if !e.Steer || e.Command != nil || e.Interrupt || len(e.Chips) > 0 || len(e.Topics) > 0 || len(e.Mentions) > 0 ||
-		len(e.CloseRequests) > 0 || len(e.Picks) > 0 || len(e.Consoles) > 0 || len(e.Images) > 0 {
-		return e
+	return stamp + "-" + suffix + ".json"
+}
+
+// provenCron settles an entry read from path: only a scheduler-named file
+// keeps its marker (and is never steered); a cron-named file without one does
+// not read; any other file loses a marker it carries.
+func provenCron(path string, e Entry) (Entry, error) {
+	if !isCronFile(path) {
+		e.Cron = nil
+		return e, nil
 	}
-	if mark, body, ok := parseCronEnvelope(e.Parts[0]); ok {
-		e.Cron = &mark
-		e.Parts = []string{body}
-		e.Steer = false
+	if e.Cron == nil {
+		return Entry{}, fmt.Errorf("parse inbox entry: %s carries no schedule marker", filepath.Base(path))
 	}
-	return e
+	e.Steer = false
+	return e, nil
 }
 
 func cleanCronMark(c Cron) (Cron, error) {
