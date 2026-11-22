@@ -531,6 +531,28 @@ func TestDiffFenceLineKinds(t *testing.T) {
 		}
 		wantNone(t, out, "<script>")
 	}
+	// "++"/"--" source lines inside a hunk are additions/removals; headers
+	// are recognised by position (counted hunk end, or a pair before "@@").
+	for _, tc := range []struct{ lines, kinds []string }{
+		{
+			[]string{"--- a/a.c", "+++ b/a.c", "@@ -1,2 +1,2 @@", "---i;", "+++i;", " x", "--- a/b.c", "+++ b/b.c", "@@ -1 +1 @@", "-a", "+b"},
+			[]string{"file", "file", "hunk", "remove", "add", "context", "file", "file", "hunk", "remove", "add"},
+		},
+		{
+			[]string{"@@", "--- old", "+++ new", "@@", "++i;", "-- note"},
+			[]string{"hunk", "file", "file", "hunk", "add", "remove"},
+		},
+	} {
+		got := diffLineKinds(func() (out [][]byte) {
+			for _, l := range tc.lines {
+				out = append(out, []byte(l+"\n"))
+			}
+			return
+		}())
+		if strings.Join(got, ",") != strings.Join(tc.kinds, ",") {
+			t.Errorf("kinds for %q = %v, want %v", tc.lines, got, tc.kinds)
+		}
+	}
 	plain := string(RenderText("```go\n+new\n-old\n```", TextTargets{}))
 	if plain != "<pre><code class=\"language-go\">+new\n-old\n</code></pre>" {
 		t.Errorf("non-diff fence changed: %s", plain)

@@ -993,11 +993,20 @@ func (r *mdRenderer) fencedCode(w util.BufWriter, source []byte, node ast.Node, 
 		}
 		_ = w.WriteByte('>')
 	}
+	var kinds []string
+	if diff {
+		lines := make([][]byte, n.Lines().Len())
+		for i := range lines {
+			segment := n.Lines().At(i)
+			lines[i] = segment.Value(source)
+		}
+		kinds = diffLineKinds(lines)
+	}
 	for i := 0; i < n.Lines().Len(); i++ {
 		segment := n.Lines().At(i)
 		line := segment.Value(source)
 		if diff {
-			_, _ = w.WriteString(`<span class="wb-diff-` + diffLineKind(line) + `">`)
+			_, _ = w.WriteString(`<span class="wb-diff-` + kinds[i] + `">`)
 		}
 		_, _ = w.Write(util.EscapeHTML(line))
 		if diff {
@@ -1012,20 +1021,76 @@ func (r *mdRenderer) fencedCode(w util.BufWriter, source []byte, node ast.Node, 
 	return ast.WalkSkipChildren, nil
 }
 
-func diffLineKind(line []byte) string {
-	s := string(line)
-	switch {
-	case strings.HasPrefix(s, "+++"), strings.HasPrefix(s, "---"), strings.HasPrefix(s, "diff "), strings.HasPrefix(s, "index "):
-		return "file"
-	case strings.HasPrefix(s, "@@"):
-		return "hunk"
-	case strings.HasPrefix(s, "+"):
-		return "add"
-	case strings.HasPrefix(s, "-"):
-		return "remove"
-	default:
-		return "context"
+var diffHunkHeader = regexp.MustCompile(`^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@`)
+
+// diffLineKinds classifies a diff/patch fence's lines. "---" and "+++" are
+// file headers only by position: before the first hunk, once a hunk's line
+// counts are used up, or as a "--- "/"+++ " pair leading straight into the
+// next "@@". Elsewhere in a hunk they are a removed "--..." or added "++..."
+// source line. "diff " and "index " can never be hunk lines.
+func diffLineKinds(lines [][]byte) []string {
+	kinds := make([]string, len(lines))
+	has := func(i int, prefix string) bool {
+		return i >= 0 && i < len(lines) && strings.HasPrefix(string(lines[i]), prefix)
 	}
+	inHunk := false
+	oldLeft, newLeft := -1, -1 // -1: the hunk header gave no counts
+	for i := 0; i < len(lines); i++ {
+		s := string(lines[i])
+		switch {
+		case strings.HasPrefix(s, "@@"):
+			kinds[i], inHunk = "hunk", true
+			oldLeft, newLeft = -1, -1
+			if m := diffHunkHeader.FindStringSubmatch(s); m != nil {
+				oldLeft, newLeft = diffHunkCount(m[1]), diffHunkCount(m[2])
+			}
+			continue
+		case strings.HasPrefix(s, "diff "), strings.HasPrefix(s, "index "):
+			kinds[i], inHunk = "file", false
+			continue
+		}
+		if inHunk && oldLeft == 0 && newLeft == 0 {
+			inHunk = false
+		}
+		if strings.HasPrefix(s, "---") || strings.HasPrefix(s, "+++") {
+			if !inHunk {
+				kinds[i] = "file"
+				continue
+			}
+			if has(i, "--- ") && has(i+1, "+++ ") && has(i+2, "@@") {
+				kinds[i], kinds[i+1], inHunk = "file", "file", false
+				i++
+				continue
+			}
+		}
+		switch {
+		case strings.HasPrefix(s, "+"):
+			kinds[i] = "add"
+			newLeft--
+		case strings.HasPrefix(s, "-"):
+			kinds[i] = "remove"
+			oldLeft--
+		case strings.HasPrefix(s, "\\"):
+			kinds[i] = "context" // "\ No newline at end of file"
+		default:
+			kinds[i] = "context"
+			oldLeft--
+			newLeft--
+		}
+		oldLeft, newLeft = max(oldLeft, -1), max(newLeft, -1)
+	}
+	return kinds
+}
+
+func diffHunkCount(s string) int {
+	if s == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // itemRef renders a reference to an item on the page as an in-page anchor
