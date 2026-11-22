@@ -308,9 +308,11 @@ type Runner struct {
 	// token, and mcpTokenOf by conversation id.
 	mcpTokens  map[string]*mcpToken
 	mcpTokenOf map[string]string
-	// harnessVersions are the newest harness versions processes reported,
-	// by backend (noteHarnessVersion), under mu; memory only.
-	harnessVersions map[string]string
+	// harnessVersions are the harness versions processes last reported, by
+	// backend (noteHarnessVersion), under mu; loaded from and kept in
+	// harnessVersionsFile once harnessVersionsLoaded.
+	harnessVersions       map[string]string
+	harnessVersionsLoaded bool
 	// exec is the hosted exec jobs' view (exec_lifecycle.go).
 	exec execState
 }

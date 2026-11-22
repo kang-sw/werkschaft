@@ -8,7 +8,11 @@
 package wsagent
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -60,26 +64,37 @@ type execCutoverInputs struct {
 // execCutoverFor decides whether rec's next process starts under the exec
 // cutover, and when not, why. Every condition must hold:
 //   - the backend has a verified removal mechanism (registration metadata);
-//   - the harness version this daemon last saw is not older than the one
-//     that mechanism was verified on;
+//   - a harness version a process last reported (to this daemon or a
+//     predecessor) is known and not older than the one that mechanism was
+//     verified on; an unknown version keeps native tools;
 //   - the process gets the trusted binding that hosted exec jobs require
 //     (a Pi bridge or Claude stdio fallback has none);
-//   - its ws tools include the exec replacement (a profile allowlist
-//     without exec.shell, or agentless ws-mcp, has none);
+//   - its ws tools include the replacement (cutoverReplacement): a lead
+//     lists every ws tool, a worker only its profile's allowlist, and
+//     agentless ws-mcp lists no exec tool;
 //   - the harness's rollout switch is on.
 func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bool, string) {
 	reg := c.r.opts.Backends[rec.Backend]
 	if reg.ExecCutover == nil {
 		return false, "the harness has no verified native tool removal"
 	}
-	if seen := c.r.harnessVersion(rec.Backend); seen != "" && !versionInRange(seen, reg.ExecCutover.Since, "") {
-		return false, fmt.Sprintf("harness version %s is older than %s, where the removal was verified", seen, reg.ExecCutover.Since)
+	if since := reg.ExecCutover.Since; since != "" {
+		switch seen := c.r.harnessVersion(rec.Backend); {
+		case seen == "":
+			return false, "no process of the harness has reported its version yet, so the removal is unverified for it"
+		case !versionInRange(seen, since, ""):
+			return false, fmt.Sprintf("harness version %s is older than %s, where the removal was verified", seen, since)
+		}
 	}
 	if !in.binding {
 		return false, "the process has no trusted ws-mcp binding (stdio or bridge fallback)"
 	}
-	if !rec.Lead && !slices.Contains(def.WSTools, "exec.shell") {
-		return false, "the profile's ws tools have no exec replacement"
+	if !rec.Lead {
+		for _, name := range cutoverReplacement(rec.Backend) {
+			if !slices.Contains(def.WSTools, name) {
+				return false, "the profile's ws tools have no " + name + " to replace the native tools with"
+			}
+		}
 	}
 	if envFlagOn(in.mcpEnv[envNoAgent]) || (in.mcpEnv[envNoAgent] == "" && envFlagOn(envValue(environ(), envNoAgent))) {
 		return false, "agentless ws-mcp has no exec tools"
@@ -88,6 +103,16 @@ func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bo
 		return false, wsconfig.ItemExecNativeToolRemoval + " is off for " + rec.Backend
 	}
 	return true, ""
+}
+
+// cutoverReplacement are the ws tools a worker profile's allowlist must
+// name for its native tools to be removed: exec.shell, and for Codex,
+// whose shell is also its read surface, the fs.* read tools.
+func cutoverReplacement(backend string) []string {
+	if backend == BackendCodex {
+		return append([]string{"exec.shell"}, CodexReadWSTools...)
+	}
+	return []string{"exec.shell"}
 }
 
 // execRolloutOn reads the harness's rollout switch: its bucket, then all,
@@ -150,7 +175,9 @@ func (c *conv) rejoinExecCutover(rec Record) bool {
 }
 
 // cutoverToolsFor returns the tools of want that p's ws tools admit, in
-// want's order: all of them when p names no ws tools.
+// want's order: all of them when p names no ws tools (a lead, whose ws-mcp
+// lists every tool; a worker without an allowlist has no ws-mcp and never
+// starts under the cutover).
 func cutoverToolsFor(p Profile, want []string) []string {
 	out := make([]string, 0, len(want))
 	for _, name := range want {
@@ -180,25 +207,72 @@ func (r *Runner) markMCPCutover(id, backend string) {
 	}
 }
 
-// noteHarnessVersion keeps the newest harness version a process of backend
-// reported, for the next start's cutover decision. Memory only.
+// harnessVersionsFile, under the runner's directory, keeps the harness
+// versions processes last reported, so a start after a daemon restart
+// decides on them before its own process reports.
+const harnessVersionsFile = "harness-versions.json"
+
+// loadHarnessVersionsLocked reads harnessVersionsFile once; r.mu is held.
+func (r *Runner) loadHarnessVersionsLocked() {
+	if r.harnessVersionsLoaded {
+		return
+	}
+	r.harnessVersionsLoaded = true
+	if r.harnessVersions == nil {
+		r.harnessVersions = map[string]string{}
+	}
+	if r.opts.Dir == "" {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(r.opts.Dir, harnessVersionsFile))
+	if err != nil {
+		return
+	}
+	var saved map[string]string
+	if json.Unmarshal(raw, &saved) != nil {
+		return
+	}
+	for backend, version := range saved {
+		if _, ok := r.harnessVersions[backend]; !ok && version != "" {
+			r.harnessVersions[backend] = version
+		}
+	}
+}
+
+// noteHarnessVersion keeps the harness version a process of backend
+// reported last (a downgrade replaces a newer one), for the next start's
+// cutover decision, and saves it under the runner's directory.
 func (r *Runner) noteHarnessVersion(backend, version string) {
 	if version == "" {
 		return
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.harnessVersions == nil {
-		r.harnessVersions = map[string]string{}
+	r.loadHarnessVersionsLocked()
+	if r.harnessVersions[backend] == version {
+		r.mu.Unlock()
+		return
 	}
 	r.harnessVersions[backend] = version
+	saved := maps.Clone(r.harnessVersions)
+	r.mu.Unlock()
+	if r.opts.Dir == "" {
+		return
+	}
+	raw, err := json.Marshal(saved)
+	if err == nil {
+		err = writeFileAtomic(filepath.Join(r.opts.Dir, harnessVersionsFile), append(raw, '\n'), 0o600)
+	}
+	if err != nil {
+		fmt.Fprintf(r.opts.Log, "agent runner: save harness versions: %v\n", err)
+	}
 }
 
 // harnessVersion is the harness version a process of backend last
-// reported to this daemon, "" when none has.
+// reported to this daemon or a predecessor, "" when none has.
 func (r *Runner) harnessVersion(backend string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.loadHarnessVersionsLocked()
 	return r.harnessVersions[backend]
 }
 
@@ -307,22 +381,44 @@ func (c *conv) unrequestedCommand(toolCallID string, quiet bool) {
 	c.oweCutoverInstruction(toolCallID)
 }
 
+// cutoverEventPrefix starts the completion event id of a cutover
+// instruction prompt.
+const cutoverEventPrefix = "exec-cutover:"
+
 // sendCutoverInstruction delivers the turn's owed instruction once it has
 // ended, through once-only completion admission: its event id names the
 // process holder and the trigger, so a replay of the turn, or a daemon
-// restart in between, finds it admitted.
+// restart in between, finds it admitted. A worker's done report of the
+// turn is held until the turn the instruction starts (cutoverInstructing),
+// so its parent never reads the refused turn's empty reply as its report;
+// an instruction not admitted releases it.
 func (c *conv) sendCutoverInstruction() {
 	trigger := c.cutoverNudge
 	c.cutoverNudge = ""
 	s := c.cutoverSupport()
 	if trigger == "" || s == nil || s.Instruction == "" {
+		if trigger != "" {
+			c.r.releaseLater(c.rec.ReplyID)
+		}
 		return
 	}
 	rec := c.rec
-	event := "exec-cutover:" + rec.HolderID + ":" + trigger
+	event := cutoverEventPrefix + rec.HolderID + ":" + trigger
+	c.cutoverInstructing = true
+	c.r.wg.Add(1)
 	go func() {
-		if _, err := c.r.AdmitCompletion(rec.ReplyID, rec.OpenGen, event, s.Instruction); err != nil {
+		defer c.r.wg.Done()
+		outcome, err := c.r.AdmitCompletion(rec.ReplyID, rec.OpenGen, event, s.Instruction)
+		if err != nil {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: exec cutover instruction: %v\n", rec.ReplyID, err)
 		}
+		if err == nil && outcome == CompletionAccepted {
+			// The turn that takes it from the inbox clears the hold.
+			return
+		}
+		c.do(func() {
+			c.cutoverInstructing = false
+			c.releaseHeld()
+		})
 	}()
 }

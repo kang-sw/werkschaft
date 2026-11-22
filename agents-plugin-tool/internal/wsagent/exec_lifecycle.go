@@ -6,6 +6,7 @@ package wsagent
 
 import (
 	"maps"
+	"sync"
 	"sync/atomic"
 )
 
@@ -32,6 +33,10 @@ type ExecJobs interface {
 // report is not released, and no session sleeps, before the jobs a
 // predecessor left are known.
 type execState struct {
+	// mu orders each read of the counts with its store, so a slower
+	// reader never stores an older snapshot over a newer one; the source's
+	// own lock is taken under it, never the other way round.
+	mu       sync.Mutex
 	src      atomic.Pointer[ExecJobs]
 	live     atomic.Pointer[map[string]int]
 	bound    atomic.Bool
@@ -45,11 +50,18 @@ func (r *Runner) ExpectExecJobs() { r.exec.deferred.Store(true) }
 // BindExecJobs binds the daemon's hosted exec jobs (nil when it has none)
 // and reads their counts. Run it once the jobs settled what a predecessor
 // left (execjob.Hosted.Start).
+//
+// Change signals the source raised while it settled (before binding) do not
+// count: binding drops the counts they read, so the read here is the first
+// one and has every conversation reconsider what the unbound hold kept.
 func (r *Runner) BindExecJobs(src ExecJobs) {
+	r.exec.mu.Lock()
 	if src != nil {
 		r.exec.src.Store(&src)
 	}
+	r.exec.live.Store(nil)
 	r.exec.bound.Store(true)
+	r.exec.mu.Unlock()
 	r.ExecJobsChanged()
 }
 
@@ -64,6 +76,7 @@ func (r *Runner) execJobs() ExecJobs {
 // ended, and has every conversation whose count changed reconsider its
 // held report and its sleep. It never waits on a conversation's loop.
 func (r *Runner) ExecJobsChanged() {
+	r.exec.mu.Lock()
 	next := map[string]int{}
 	if src := r.execJobs(); src != nil {
 		next = src.RunningOwners()
@@ -72,6 +85,7 @@ func (r *Runner) ExecJobsChanged() {
 	if p := r.exec.live.Swap(&next); p != nil {
 		prev = *p
 	}
+	r.exec.mu.Unlock()
 	changed := map[string]bool{}
 	for id, n := range next {
 		if prev[id] != n {
@@ -84,8 +98,8 @@ func (r *Runner) ExecJobsChanged() {
 		}
 	}
 	if prev == nil {
-		// The first read after binding: every held report and idle timer
-		// waited on it.
+		// The first read after binding (or ever): every held report and
+		// idle timer waited on it.
 		r.mu.Lock()
 		for id := range r.convs {
 			changed[id] = true

@@ -251,9 +251,29 @@ func cutoverHarness(t *testing.T) *leadHarness {
 	claude := h.opts.Backends[BackendClaude]
 	claude.ExecCutover = &ExecCutoverSupport{Since: "2.1.330"}
 	h.opts.Backends[BackendClaude] = claude
+	codex := h.opts.Backends[BackendCodex]
+	codex.ExecCutover = &ExecCutoverSupport{Since: "0.160.0"}
+	h.opts.Backends[BackendCodex] = codex
+	seedHarnessVersions(t, h.dir, map[string]string{BackendClaude: "2.1.330", BackendCodex: "0.160.0"})
 	h.start()
 	h.runner.SetEndpoint("http://127.0.0.1:1")
 	return h
+}
+
+// seedHarnessVersions saves the harness versions a predecessor daemon's
+// processes reported, as a runner over dir reads them.
+func seedHarnessVersions(t *testing.T, dir string, versions map[string]string) {
+	t.Helper()
+	raw, err := json.Marshal(versions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, harnessVersionsFile), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func leadLaunch(t *testing.T, h *leadHarness, id string) ([]string, Record) {
@@ -341,6 +361,10 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	if _, rec = leadLaunch(t, h, newer.ID); rec.ExecCutoverHolder == "" {
 		t.Fatal("a lead on a newer harness kept its native tools")
 	}
+	// The version a process reported outlives the daemon.
+	if got := NewRunner(h.opts).harnessVersion(BackendClaude); got != "2.1.331" {
+		t.Fatalf("a later daemon reads harness version %q", got)
+	}
 
 	// Without the HTTP route the lead runs ws-mcp over stdio: no binding.
 	h.runner.SetEndpoint("")
@@ -386,8 +410,18 @@ func TestExecCutoverExclusions(t *testing.T) {
 	}
 	worker := rec
 	worker.Lead = false
-	if on, why := c.execCutoverFor(worker, Profile{WSTools: []string{"git.status"}}, bound); on || !strings.Contains(why, "no exec replacement") {
+	if on, why := c.execCutoverFor(worker, Profile{WSTools: []string{"git.status"}}, bound); on || !strings.Contains(why, "no exec.shell") {
 		t.Fatalf("worker without exec tools: %v %s", on, why)
+	}
+	// A Codex worker's shell is also its read surface: exec.shell alone
+	// leaves it nothing to read with.
+	codexWorker := worker
+	codexWorker.Backend = BackendCodex
+	if on, why := c.execCutoverFor(codexWorker, Profile{WSTools: append([]string{"exec.shell"}, CodexReadWSTools[:2]...)}, bound); on || !strings.Contains(why, "no fs.list") {
+		t.Fatalf("codex worker without fs.list: %v %s", on, why)
+	}
+	if on, why := c.execCutoverFor(codexWorker, builtinProfile(t, AgentWorkerProfile(BackendCodex)), bound); !on {
+		t.Fatalf("codex agent worker profile refused: %s", why)
 	}
 	if on, _ := c.execCutoverFor(worker, builtinProfile(t, AgentWorkerProfile(BackendClaude)), bound); !on {
 		t.Fatal("agent worker profile refused")
@@ -402,6 +436,25 @@ func TestExecCutoverExclusions(t *testing.T) {
 	pi.Backend = BackendPi
 	if on, why := c.execCutoverFor(pi, Profile{}, bound); on || !strings.Contains(why, "no verified native tool removal") {
 		t.Fatalf("pi: %v %s", on, why)
+	}
+}
+
+// A harness whose version no process has reported, to this daemon or a
+// predecessor, keeps its native tools until one does.
+func TestExecCutoverUnknownHarnessVersionKeepsNativeTools(t *testing.T) {
+	h := newLeadHarness(t)
+	claude := h.opts.Backends[BackendClaude]
+	claude.ExecCutover = &ExecCutoverSupport{Since: "2.1.330"}
+	h.opts.Backends[BackendClaude] = claude
+	h.start()
+	h.runner.SetEndpoint("http://127.0.0.1:1")
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	argv, rec := leadLaunch(t, h, st.ID)
+	if got, _ := flagValue(argv, "--disallowedTools"); strings.Contains(got, "Bash") || rec.ExecCutoverHolder != "" {
+		t.Fatalf("unknown-version lead: removes %q, cutover holder %q", got, rec.ExecCutoverHolder)
+	}
+	if !strings.Contains(h.log.String(), "keeps its native process tools: no process of the harness has reported its version yet") {
+		t.Fatalf("log: %s", h.log.String())
 	}
 }
 

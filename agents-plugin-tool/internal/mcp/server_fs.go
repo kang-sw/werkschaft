@@ -30,26 +30,42 @@ const (
 	// fsReadDefaultLines and fsReadMaxLines bound fs.read's returned lines.
 	fsReadDefaultLines = 200
 	fsReadMaxLines     = 2000
-	// fsReadScanBytes bounds the bytes fs.read reads to reach and return
-	// its lines.
-	fsReadScanBytes = 64 << 20
 	// fsLineBytes bounds one returned line; a longer one is cut.
 	fsLineBytes = 512
 	// fsGrepMaxMatches bounds fs.grep's returned matches.
 	fsGrepMaxMatches = 100
-	// fsGrepMaxFiles and fsGrepScanBytes bound fs.grep's scan: files
-	// opened and bytes read across them.
-	fsGrepMaxFiles  = 10000
-	fsGrepScanBytes = 64 << 20
-	// fsGrepFileBytes skips a file larger than this.
-	fsGrepFileBytes = 8 << 20
-	// fsListMaxEntries bounds fs.list's returned entries; fsListScanEntries
-	// the directory entries it reads.
-	fsListMaxEntries  = 500
-	fsListScanEntries = 10000
+	// fsListMaxEntries bounds fs.list's returned entries.
+	fsListMaxEntries = 500
 	// fsBinarySniff is the head a NUL byte in marks a binary file.
 	fsBinarySniff = 8192
 )
+
+// The scan caps bound the work behind a reply. Variables only so tests can
+// exercise them at small sizes; nothing else changes them.
+var (
+	// fsReadScanBytes bounds the bytes fs.read reads to reach and return
+	// its lines.
+	fsReadScanBytes int64 = 64 << 20
+	// fsGrepMaxFiles and fsGrepScanBytes bound fs.grep's scan: files
+	// opened and bytes read across them.
+	fsGrepMaxFiles        = 10000
+	fsGrepScanBytes int64 = 64 << 20
+	// fsGrepScanEntries bounds the directory entries fs.grep's walk visits,
+	// whatever its glob or the files' sizes let through.
+	fsGrepScanEntries = 100000
+	// fsGrepFileBytes skips a file larger than this.
+	fsGrepFileBytes int64 = 8 << 20
+	// fsListScanEntries bounds the directory entries fs.list reads.
+	fsListScanEntries = 10000
+)
+
+// fsSize names a byte count for a reply.
+func fsSize(n int64) string {
+	if n >= 1<<20 && n%(1<<20) == 0 {
+		return fmt.Sprintf("%d MiB", n>>20)
+	}
+	return fmt.Sprintf("%d bytes", n)
+}
 
 // errFSBinary is fs.read's refusal of a binary file.
 var errFSBinary = errors.New("binary file (a NUL byte in its first 8 KiB); fs.read reads text files only")
@@ -203,7 +219,7 @@ func fsRead(path string, offset, limit int) (string, error) {
 	case more:
 		fmt.Fprintf(&out.b, "[more lines follow line %d; continue with offset=%d]\n", offset+shown, offset+shown)
 	case scanCapped:
-		fmt.Fprintf(&out.b, "[stopped after reading %d MiB of the file; lines beyond it are not reachable with fs.read]\n", fsReadScanBytes>>20)
+		fmt.Fprintf(&out.b, "[stopped after reading %s of the file; lines beyond it are not reachable with fs.read]\n", fsSize(fsReadScanBytes))
 	}
 	return out.b.String(), nil
 }
@@ -229,7 +245,8 @@ func fsDisplayPath(root, path string) string {
 // fsGrep searches file or directory path for lines matching the regular
 // expression pattern, in files whose name passes glob, and returns them as
 // path:line:text with one-based line numbers. A directory walk skips .git
-// directories, symlinked directories and binary files.
+// directories, symlinked directories and binary files, and stops at the
+// scan caps: entries visited, files opened, bytes read.
 func fsGrep(root, path, pattern, glob string) (string, error) {
 	if pattern == "" {
 		return "", errors.New("pattern is required")
@@ -256,7 +273,7 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 			return fs.SkipAll
 		}
 		if scanned+size > fsGrepScanBytes {
-			stop = fmt.Sprintf("stopped after reading %d MiB", fsGrepScanBytes>>20)
+			stop = fmt.Sprintf("stopped after reading %s", fsSize(fsGrepScanBytes))
 			return fs.SkipAll
 		}
 		f, err := os.Open(file)
@@ -308,7 +325,12 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 			return "", fmt.Errorf("%s is a binary file; fs.grep searches text files only", path)
 		}
 	} else {
+		visited := 0
 		walkErr := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+			if visited++; visited > fsGrepScanEntries {
+				stop = fmt.Sprintf("stopped after visiting %d directory entries; narrow the path or glob", fsGrepScanEntries)
+				return fs.SkipAll
+			}
 			if err != nil {
 				if p == path {
 					return err
@@ -345,7 +367,7 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 		notes = append(notes, fmt.Sprintf("%d binary files skipped", skippedBinary))
 	}
 	if skippedLarge > 0 {
-		notes = append(notes, fmt.Sprintf("%d files over %d MiB skipped", skippedLarge, fsGrepFileBytes>>20))
+		notes = append(notes, fmt.Sprintf("%d files over %s skipped", skippedLarge, fsSize(fsGrepFileBytes)))
 	}
 	if len(notes) > 0 {
 		fmt.Fprintf(&out.b, "[%s]\n", strings.Join(notes, "; "))

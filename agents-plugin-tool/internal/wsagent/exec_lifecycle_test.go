@@ -185,6 +185,44 @@ func TestExecWorkerReportHeldWhileItsJobRuns(t *testing.T) {
 	}
 }
 
+// A daemon that settles a predecessor's jobs raises change signals before
+// it binds them; binding still has every conversation the unbound hold kept
+// reconsider it, so a held report with no live job goes out.
+func TestExecBindReleasesReportsHeldBeforeBinding(t *testing.T) {
+	h, _ := newFakePiRecoveryHarness(t)
+	h.runner.ExpectExecJobs()
+	worker, holder := spawnRecoveryWorker(t, h)
+	waited := make(chan TurnResult, 1)
+	go func() {
+		res, _ := h.runner.wait(context.Background(), worker.ID, 10*time.Second, true)
+		waited <- res
+	}()
+	eventually(t, "the parent's wait", func() bool {
+		c := h.runner.conv(worker.ID)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.parentWaits) > 0
+	})
+	h.holders.out(holder, recoveryPiReply("done")...)
+	h.idle(worker.ID)
+	// A change signal while the jobs settle, before binding.
+	h.runner.ExecJobsChanged()
+	select {
+	case res := <-waited:
+		t.Fatalf("the report went out before the jobs were bound: %+v", res)
+	case <-time.After(300 * time.Millisecond):
+	}
+	h.runner.BindExecJobs(newFakeExecJobs())
+	select {
+	case res := <-waited:
+		if res.Status != TurnDone {
+			t.Fatalf("released report: %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("binding did not release the held report")
+	}
+}
+
 // An explicit close refuses new exec jobs of the whole tree first, then
 // ends each conversation's jobs before it closes, deepest first.
 func TestExecCloseFencesThenStopsDeepestFirst(t *testing.T) {

@@ -73,10 +73,15 @@ type conv struct {
 	// native command under the cutover, whose instruction prompt the
 	// turn's end sends (sendCutoverInstruction); loop-owned.
 	cutoverNudge string
-	activeMode   string
-	bgTasks     int
-	background  *int
-	monitors    *int
+	// cutoverInstructing reports that a turn's instruction prompt is on
+	// its way to the inbox, or in it and not yet taken by a turn: a
+	// worker's done report waits for the turn it starts (holdsReport);
+	// loop-owned.
+	cutoverInstructing bool
+	activeMode         string
+	bgTasks            int
+	background         *int
+	monitors           *int
 	// actionNeeded is State.ActionNeeded.
 	actionNeeded string
 	// Worker permission projection is transient. Explicit selection lives in
@@ -1298,6 +1303,9 @@ func (c *conv) kickInput() {
 	c.drained = covered
 	queue := slices.Clone(c.rec.Queued)
 	for _, rec := range recs {
+		if strings.HasPrefix(rec.Entry.EventID, cutoverEventPrefix) {
+			c.cutoverInstructing = false
+		}
 		if cmd := rec.Entry.Command; cmd != nil {
 			cmd := *cmd
 			queue = append(queue, QueuedInput{Command: &cmd, After: from})

@@ -279,3 +279,71 @@ func TestFSListGlobDirsAndEntryCap(t *testing.T) {
 		t.Fatalf("fs.list scan cap changed")
 	}
 }
+
+// setCap lowers a scan cap for one test.
+func setCap[T int | int64](t *testing.T, cap *T, v T) {
+	t.Helper()
+	old := *cap
+	*cap = v
+	t.Cleanup(func() { *cap = old })
+}
+
+// Every scan cap stops the work behind a reply and says so: fs.read's
+// bytes read, fs.grep's entries visited, files opened, bytes read and
+// largest file searched, and fs.list's entries read.
+func TestFSScanCapsStopTheWork(t *testing.T) {
+	fx := newFSFixture(t, "codex")
+	var b strings.Builder
+	for i := 1; i <= 50; i++ {
+		fmt.Fprintf(&b, "line %d\n", i)
+	}
+	mustWrite(t, fx.root, "many.txt", b.String())
+	setCap(t, &fsReadScanBytes, 64)
+	text, _ := fx.call("fs.read", map[string]any{"path": "many.txt", "offset": 40})
+	if text != "[stopped after reading 64 bytes of the file; lines beyond it are not reachable with fs.read]\n" {
+		t.Fatalf("fs.read scan cap = %q", text)
+	}
+
+	mustWrite(t, fx.root, "g/a.txt", "hit a\n")
+	mustWrite(t, fx.root, "g/b.txt", "hit b\n")
+	mustWrite(t, fx.root, "g/c.txt", "hit c\n")
+	t.Run("files", func(t *testing.T) {
+		setCap(t, &fsGrepMaxFiles, 2)
+		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "g"})
+		if text != "g/a.txt:1:hit a\ng/b.txt:1:hit b\n[truncated: stopped after 2 files]\n" {
+			t.Fatalf("fs.grep file cap = %q", text)
+		}
+	})
+	t.Run("bytes", func(t *testing.T) {
+		setCap(t, &fsGrepScanBytes, 10)
+		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "g"})
+		if text != "g/a.txt:1:hit a\n[truncated: stopped after reading 10 bytes]\n" {
+			t.Fatalf("fs.grep byte cap = %q", text)
+		}
+	})
+	t.Run("file size", func(t *testing.T) {
+		setCap(t, &fsGrepFileBytes, 4)
+		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "g"})
+		if text != "no matches.\n[3 files over 4 bytes skipped]\n" {
+			t.Fatalf("fs.grep file size cap = %q", text)
+		}
+	})
+	t.Run("entries", func(t *testing.T) {
+		// A glob nothing passes still spends a visit on every entry.
+		setCap(t, &fsGrepScanEntries, 3)
+		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "g", "glob": "*.none"})
+		if text != "[truncated: stopped after visiting 3 directory entries; narrow the path or glob]\n" {
+			t.Fatalf("fs.grep entry cap = %q", text)
+		}
+	})
+	t.Run("list entries", func(t *testing.T) {
+		setCap(t, &fsListScanEntries, 2)
+		text, _ := fx.call("fs.list", map[string]any{"path": "g"})
+		if strings.Count(text, ".txt\n") != 2 || !strings.HasSuffix(text, "[read only the first 2 directory entries]\n") {
+			t.Fatalf("fs.list scan cap = %q", text)
+		}
+	})
+	if fsGrepScanEntries != 100000 {
+		t.Fatal("fs.grep entry cap changed")
+	}
+}

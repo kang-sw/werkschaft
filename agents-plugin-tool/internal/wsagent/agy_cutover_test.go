@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
 // newAgyCutoverHarness is an agy lead harness whose backend carries the
@@ -17,6 +19,7 @@ func newAgyCutoverHarness(t *testing.T) (*leadHarness, *agyFake) {
 	agy.ExecCutover = real.ExecCutover
 	agy.WorkerAutoApprove = true
 	h.opts.Backends[BackendAgy] = agy
+	seedHarnessVersions(t, h.dir, map[string]string{BackendAgy: real.ExecCutover.Since})
 	return h, f
 }
 
@@ -208,9 +211,8 @@ func TestAgyCutoverUnrequestedCommandWarnsAndInstructsOnce(t *testing.T) {
 	}
 }
 
-// A cutover agy worker's run_command is refused ahead of worker
-// auto-approval, which still answers its other requests.
-func TestAgyCutoverWorkerRefusesRunCommandBeforeAutoApproval(t *testing.T) {
+// A cutover agy mapper does not track run_command as a background shell.
+func TestAgyCutoverMapperSkipsBackgroundTracking(t *testing.T) {
 	m := newAgyMapper("s")
 	m.cutover = true
 	rr := &agyRun{m: m, answers: map[string]controlAnswer{}}
@@ -228,14 +230,50 @@ func TestAgyCutoverWorkerRefusesRunCommandBeforeAutoApproval(t *testing.T) {
 	if len(m.openBg) != 0 {
 		t.Fatalf("a cutover mapper tracks run_command as background: %v", m.openBg)
 	}
-	c := &conv{rec: Record{Backend: BackendAgy}, execCutover: true}
-	c.r = &Runner{opts: Options{Backends: map[string]BackendRegistration{BackendAgy: {ExecCutover: &ExecCutoverSupport{RejectTools: []string{agyCommandTool}}, WorkerAutoApprove: true}}}}
-	if !c.cutoverRejects(approval.Tool) || c.cutoverRejects("write_to_file") {
-		t.Fatal("cutoverRejects")
+}
+
+// A cutover agy worker's run_command is refused ahead of worker
+// auto-approval, which still answers its other requests. The refused
+// turn's empty reply is not its report: the parent hears from the worker
+// once the turn the instruction starts ends.
+func TestAgyCutoverWorkerRefusesRunCommandAndHoldsItsReport(t *testing.T) {
+	h, _ := newAgyCutoverHarness(t)
+	got := &reports{}
+	h.opts.Report = got.add
+	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
+	reg := h.opts.Backends[BackendAgy]
+	reg.WorkerCapable, reg.WorkerProfile, reg.WorkerHTTPMCP, reg.WorkerAutoApprove = true, AgentWorkerProfile(BackendAgy), true, true
+	h.opts.Backends[BackendAgy] = reg
+	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "gemini-3.8-flash", BackendAgy, "medium"); err != nil {
+		t.Fatal(err)
 	}
-	c.execCutover = false
-	if c.cutoverRejects(approval.Tool) {
-		t.Fatal("a process outside the cutover refuses run_command")
+	h.startAt("http://127.0.0.1:1")
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	if rec := h.record(id); rec.ExecCutoverHolder == "" {
+		t.Fatalf("the agy worker did not start under the cutover: %+v", rec)
+	}
+
+	// Worker auto-approval answers an ordinary request...
+	h.holders.out(holder, `{"jsonrpc":"2.0","method":"session/request_permission","params":{"sessionId":"agy-s1","toolCall":{"toolCallId":"w1","name":"write_to_file","title":"write"},"options":[{"optionId":"allow","kind":"allow_once"},{"optionId":"deny","kind":"reject_once"}]},"id":"8"}`)
+	eventually(t, "the auto-approved write", func() bool { return agyAnswered(h, holder, "8", "allow") })
+	// ...but never run_command: the daemon refuses it first.
+	h.holders.out(holder, agyRunCommandRequest("9", "k1")...)
+	eventually(t, "the refused run_command", func() bool { return agyAnswered(h, holder, "9", "deny") })
+	if agyAnswered(h, holder, "9", "allow") {
+		t.Fatal("worker auto-approval allowed run_command")
+	}
+	h.holders.out(holder, agyRefusedUpdate("k1"), agyEndTurn(h, holder, 0))
+
+	eventually(t, "the instruction prompt", func() bool { return countInstruction(agyCutoverPrompts(t, h, holder)) == 1 })
+	if n := len(got.list()); n != 0 {
+		t.Fatalf("the refused turn reported to the parent: %+v", got.list())
+	}
+	h.holders.out(holder,
+		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ran it with exec_shell"}}}}`,
+		agyEndTurn(h, holder, 1))
+	eventually(t, "the worker's report", func() bool { return len(got.list()) == 1 })
+	if r := got.list()[0]; r.Result.Status != TurnDone || r.Result.Message != "ran it with exec_shell" {
+		t.Fatalf("report: %+v", r)
 	}
 }
 
