@@ -772,3 +772,39 @@ and reach no `Profile`, `Record`, holder, config, history file, or MCP schema.
 - Newly found T1+ behavior: none.
 
 All four phases are complete on `impl/develop/harness-name-branches-p4`.
+
+**Edition (Phase 4, guard review fixes, ab504d202).** A codex review of
+`0e6693a21..d0aef569f` saw no built-in runtime regression and asked for five
+fixes to the guard and one hot path, none changing built-in behavior.
+(1) The scan caught only the four `Backend*` identifiers, so
+`case wsagent.PiTierHarness:` or a use of `wslive.AgentKindPi` passed. It now
+discovers every constant whose value is a harness name from the constants' own
+declarations (and constants declared as one of those) and gates each use; six
+existing uses surfaced and are persisted-marker survivors with a fixture each
+(`PiTierHarness` in `children.go`, `AgentKindPi` in `record.go`,
+`spawn_live.go`, `pageview.go`, `pageview_session.go`, `pageview_hud.go`), with
+the new `TestLiveWriterEndAgentsLeavesPiChildRows`. Negative test:
+`TestHarnessNameScanFindsConstantAliases`. (2) A harness-naming literal is
+gated however long when it is a decision operand (switch case, `==`/`!=`, a
+`strings` comparison argument, a map key or index); no existing site was one.
+Negative test: `TestHarnessNameScanGatesLongProductNameOperands`. (3) The site
+comment is now required on the top-level declaration holding each persisted or
+external occurrence, not on the file
+(`TestHarnessNameScanMarksSitesIndividually`); comments were added where a
+declaration lacked one. The fifteen dashboard read-limit entries now cite the new
+`TestDashboardAdapterReadLimitsKeepHarnessKeyScopes`, which exercises
+`dashboardAdapterReadLimits`. The allowlist is now 120 entries (20 declarative,
+53 persisted, 47 external). (4) Test files are indexed once instead of re-read per
+entry. (5) `server_exec_cutover.go:41` and the connection/lifecycle reads cloned
+the whole registry per call (and three times per `tools/list`); the runner now
+answers `BackendLifecycle`/`BackendConnection` by name, the server reads them
+through an optional interface (full-copy fallback and source precedence
+unchanged), and `TestPolicyReadsDoNotCloneTheRegistry` asserts zero copies.
+Resolving once at connection build was rejected because the registry can gain a
+registration after a connection exists. From `agents-plugin-tool/`: `go build
+./...` and `go vet` (darwin, `GOOS=windows`) pass; the scan tests, `wslive`, and
+targeted `wsdashboard` (`PlanUsage|Trait|Usage|HUD|PiSpawn|AgentRow|Prune|
+Conversation`) pass; full `wsagent` fails only the three pre-existing Pi bundle
+tests; targeted `internal/mcp` fails only the known inventory-environment test.
+The T0 verdict above is unchanged: the runtime-only accessors add no persisted
+shape.
