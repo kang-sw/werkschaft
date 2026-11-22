@@ -399,6 +399,50 @@ class RingStreamTest(unittest.TestCase):
             self.assertEqual(holder.ring.head, 0)
             self.assertEqual(len(holder.ring.items), holder.ring.next_seq - holder.ring.first_seq())
 
+    def test_one_byte_rows_reach_a_slow_attachment_without_gaps(self):
+        # The hosted exec holder's ring: 1 MiB of base, and the ceiling the Go
+        # side gives it (hostedHolderRingCeiling). A row of one byte costs 65,
+        # so the last 1 MiB of raw output is 65 MiB of records; they must all
+        # reach an attachment that is slow, with none evicted undelivered.
+        window = 1 << 20
+        base = 1 << 20
+        ceiling = (66 << 20) + 64
+        count = window + 1000
+        holder = holder_mod.Holder(".", ring_bytes=base, ring_ceiling_bytes=ceiling)
+        writer, reader = socket.socketpair()
+        self.addCleanup(reader.close)
+        self.addCleanup(writer.close)
+        writer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32 << 10)
+        reader.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32 << 10)
+        reader.settimeout(TIMEOUT)
+        att = holder_mod.Attachment(holder, writer)
+        with holder.cond:
+            holder.attachment = att
+            att.start_stream(1)
+        att.thread.start()
+        self.addCleanup(att.thread.join, TIMEOUT)
+        self.addCleanup(att.kill)
+
+        # The reader holds off until the child has written every row.
+        for _ in range(count):
+            holder._append_output("stdout", [(b"\n", False)])
+        with holder.cond:
+            self.assertEqual(holder.ring.next_seq, count + 1)
+            self.assertGreater(holder.ring.size, base)
+            self.assertLessEqual(holder.ring.size, ceiling)
+            # The newest window of rows is kept, whatever the relay has sent.
+            self.assertLessEqual(holder.ring.first_seq(), count + 1 - window)
+
+        with reader.makefile("rb") as stream:
+            for seq in range(1, count + 1):
+                msg = json.loads(stream.readline())
+                self.assertEqual((msg["event"], msg["seq"]), ("output", seq))
+                self.assertEqual(decode(msg), b"\n")
+
+        self.assertTrue(wait_until(lambda: holder.ring.delivered_before == count + 1))
+        with holder.cond:
+            self.assertLessEqual(holder.ring.size, base)
+
 
 class RingReplayTest(HolderTestCase):
     def _filled_holder(self):
