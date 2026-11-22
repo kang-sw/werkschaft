@@ -232,6 +232,153 @@ Verified evidence (read-only audits on develop `b2e3b900e`, 2026-11-22):
   survival across a daemon replace, and one live OpenRouter worker run
   through `agent.spawn` recorded in the Result.
 
+### Result (804b4ec18) - 2026-11-23
+
+Phase 1 landed on `impl/develop/werk-harness-p1` in nine commits, lowest
+layer first (the registration needs the mapper and the loop, so it comes after
+them): Responses client and line protocol (`64c5b6a67`), JSONL conversation log
+(`ff74a748b`), loop, file tools, ws tool client and holder-run entry
+(`4f6a9327d`), registration, catalog, tier config and mapper (`e56aef79f`),
+audit adapter (`420ab6141`), OpenRouter model list and picker wiring
+(`804b4ec18`), then tests: resume arguments (`27b01bbf1`), the mcp enumerations
+that now list werk (`b8dca616b`) and a wake that resumes from the log
+(`6aa5cf657`). The new runtime is
+`agents-plugin-tool/internal/werk`; the daemon side is `internal/wsagent/werk*.go`
+and `audit_werk.go`; the hidden subcommand is `cmd/ws-mcp/werk_run.go`.
+
+**T0 verdict (Decision 10): holds.** Everything is an addition; no persisted
+shape, MCP tool, argument or default and no existing backend's behavior changed.
+- New backend: `registration.go` `builtinRegistrations` (the `WerkBackend{}` entry
+  after `AgyBackend{}`); its profile row `agent-worker-werk` is a new builtin
+  profile, and `werk` joins the `agent.profile` backend enum, the `agents.tier`
+  harness enum and the per-harness config buckets, all derived from
+  `BuiltinHarnessNames()`.
+- Config keys: `wsconfig/config.go` `normalizedHarness` gains `case "werk"` (so
+  `HarnessTiers` and `agents.tier` resolve `werk.<tier>`), `wsconfig/scope.go`
+  adds the `werk` bucket to the four bucket families. No default tier model is
+  added (`applyDefaultTiers` and `defaultModelAliases` are untouched).
+- Catalog: `werk_catalog.go` `WerkCatalog`; `HarnessReport` needs nothing.
+- Records and holders: the worker holder uses the existing `holderKindAgentWorker`
+  with `Backend: werk` (`workerHolderMatches` is backend-generic); `Record` and
+  the holder descriptor are unchanged.
+- Common seams, additive only: `backend_policy.go` `workerSetup` (an optional
+  Backend interface; only werk implements it) read at `support.go`
+  `supportBackendAvailability` and `agent_tools.go` `AgentTiers`; `support.go`
+  `ChoicesAnswer.Pickers` (an additive key of `GET /support/choices`);
+  `cmd/ws-mcp/main.go` `hiddenCommands` (an empty table every other command
+  ignores).
+- The `agent.tiers` output gains an `unavailable harnesses:` line for werk only.
+
+**Deviations and judgment calls.**
+- Compaction is graded `unsupported` for the worker role and
+  `NoWorkerCompactionSteer` is set. Decision 6's `ws/compact` lifecycle is the
+  lead role's (Phase 2); the Phase 1 bullet list has no compaction line. The
+  store has a tested `Rotate` (snapshot segment, old segment deleted whole) for
+  that work to start from; nothing uses it.
+- Provider reasoning summaries are replayed and captured for audit but not shown
+  (catalog `reasoning_stream` unsupported for the worker); the live summary is
+  Phase 2's lead surface.
+- A resumed conversation answers a tool call that has no result as interrupted
+  and does not run it again. A mutating call cut by a restart may have half run,
+  so re-running it was the worse default; the model is told to check the state.
+- A completed ws call whose connection dropped after the request was written is
+  not retried (the result says it may or may not have taken effect); only a
+  failure before any byte was written waits for the daemon and retries.
+- Parallel read-only ws calls are a static set (`parallelMCP` in
+  `internal/werk/agent.go`) because ws-mcp lists no read-only annotation; every
+  other ws tool runs serially.
+- The picker reads a new `pickers` list instead of extending `harnesses` of
+  `/support/choices`: that list is what the support and lead dialogs offer as
+  radio choices, and werk can open neither. The settings combobox merges both.
+- `include: ["reasoning.encrypted_content"]` is sent with a reasoning effort (the
+  OpenAI stateless-replay field). OpenRouter's acceptance of it is **unverified**
+  offline; the live run must confirm it (a 400 would name it).
+- The model's usage `context window` is not known (the loop does not fetch
+  `context_length`), so the context percent is absent until Phase 2 adds it.
+- `config.tune`'s `harness` argument description still lists "claude, codex, pi,
+  agy, or *": an MCP tool description is out of Phase 1's boundary, and the value
+  `werk` is accepted (enum derived from `BuiltinHarnessNames`).
+- The cost the dashboard shows is summed in the mapper from the provider's
+  per-response figure over the replayed ring, so a ring that wrapped under a long
+  session undercounts it.
+- Test hooks added to existing test code: `fakeHolders.onSpawn/onInput` (run the
+  real loop in-process behind a fake holder); `newAgentRunner` takes a credential
+  status function (six test call sites pass `nil`); two tests that pinned "no
+  backend admits provider credentials" now say only werk does.
+
+**Verification** (from `agents-plugin-tool/`, on the final tree):
+- `go build ./...`; `go vet ./...`; `GOOS=windows go vet ./internal/... ./cmd/...`: clean.
+- `go test ./internal/wsagent ./internal/wslive ./internal/wsi18n ./internal/wsconfig ./internal/werk -count=1`: all ok.
+  `-race` over the werk and `TestWerk*` tests found and fixed one real race (a
+  usage pointer into mapper state).
+- Fixtures against a fake Responses server (`internal/werk/responses_test.go`):
+  streamed tool call with argument deltas, reasoning replay unchanged and in order,
+  `response.failed`, 429 with `Retry-After`, 401 (no token in the error), cut stream,
+  stalled stream, no credential. Loop tests (`agent_test.go`): retries never rerun a
+  completed call, a cut before completion runs nothing, retry bounds and backoff,
+  interrupt, steer, resume, parallel versus serial calls, output truncation.
+- Authority per tool and level (`filetools_test.go` `TestAuthorityPerTool`): read,
+  grep, glob open everywhere; edit and write refused read-only, confined for
+  workdir-write (absolute path, `..`, and a symbolic link that leaves the tree),
+  open for full, refused with no authority.
+- Audit per kind (`audit_werk_test.go`): every line type through the adapter, and
+  a recorded session from the real loop through the capture tap.
+- Holder survival across a daemon replace (`TestWerkHolderSurvivesADaemonReplaceMidTurn`,
+  existing runner-replacement pattern): same holder, PID and MCP tuple, one
+  launch/spawn, no stop, one report, successor drives the same child. A ring-gap
+  variant settles the turn from the process's status answer.
+- `go test ./cmd/ws-mcp -count=1`: only the known
+  `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild` fails.
+- `node --test internal/wsdashboard/frontend-settings.test.js`: 13 of 13. The whole
+  frontend suite has four failures in `frontend-scroll`/`frontend-idle`; the idle one
+  asserts a CSS string that is absent at the base commit `545b0d5ed`.
+- `go test ./internal/mcp -count=1`: the nine known inventory tests fail
+  (`embedded workflow packages missing`) plus two load-sensitive ones that pass
+  alone (`TestHostedLiveBusyTurnFlushesEachHeartbeat`,
+  `TestHostedLiveUnservedDirStaysDirect`). The first run also failed twelve tests
+  that pinned the four-harness lists (`agent.profile` backend enum, `agents.tier`
+  and per-key harness enums, repo-key bucket spellings, builtin profile list, the
+  orchestrate-whitelist warning); they were stale, not the code, and are updated
+  (`b8dca616b`). The orchestrate warning now names werk as unverified: a decision
+  for the owner (whitelist it or not), not a spelling.
+- `go test ./internal/wsdashboard` with the cached Playwright: the four known
+  browser tests fail, plus `TestEntryRowsBrowser` (`firstEntryEl is not defined`,
+  the same error the Node `frontend-scroll` test hits), `TestBoardChatSmallUXBrowser`
+  (jump-arrow geometry) and `TestSettingsAndEmptyRootBrowser` (a settings frame
+  that never shows its grid, the page the known settings browser tests also fail
+  on). All three fail identically with this branch's dashboard asset changes
+  reverted; develop itself was not run, since no scratch checkout is allowed.
+- Not run here, and not inspected for harness lists beyond reading their sources:
+  the nine env-blocked mcp tests, `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`.
+  `internal/wsawake` `TestCaffeinateStartsAndReapsOneHelper` flaked under load and
+  passes alone.
+
+**Live run (the lead's step; nothing here called a real provider).** The live
+run needs, once, from a lead session on this branch's build:
+1. A provider key: `ws-mcp credential set openrouter` (the hosted CLI command
+   `credential set openrouter`; `credential show` lists it masked). The daemon
+   only reads the configured flag; the key reaches the worker per request through
+   the provider token route.
+2. A tier model, from the dashboard model picker or by hand:
+   `config.tune` key `agents.tier`, harness `werk`, scope global, value
+   `{tier:"small", model:"<an OpenRouter model ID that lists tools>", effort:"<optional>"}`.
+3. `agent.tiers` shows, in order of what is missing:
+   - no key: `unavailable harnesses:` then `werk: no OpenRouter API key is configured; set one with the CLI command "credential set openrouter" (or in the dashboard settings)`;
+   - key but no tier model: `werk: no tier model is configured for werk; set one with config.tune key "agents.tier" (harness "werk", tier small, medium, large or xlarge, and an OpenRouter model ID from the dashboard model picker); no default model is shipped`;
+   - ready: `werk.small: <model>/<effort|->` under `ext`, and no werk line under unavailable.
+4. `agent.spawn` with `tier: "werk.small"` and `authority: "workdir-write"` on a
+   throwaway worktree, a prompt that makes it read a file, run `exec_shell` and edit a
+   file. Watch for: the first request's status (a 400 naming `include` is the
+   unverified assumption above), a model that does not support tools, the child's
+   reply as its report, cost and context in its row, `exec_shell` available (the
+   daemon log says `keeps its native process tools: ...` when the exec cutover is
+   refused, which leaves the worker with no shell), and a daemon replace while it
+   works (the holder keeps the process).
+
+**Deferred / not done.** Compaction and the lead role (Phase 2), reasoning-summary
+display, SIWC, Pi retirement and the `pi.*` redirect (Phase 3), the live OpenRouter
+run (above), and model context-window lookup.
+
 ### Phase 2: Lead role and OpenAI SIWC
 
 - Hosted lead registration: lead profile, permission levels, dashboard steer
