@@ -1,6 +1,6 @@
 {{define "session"}}<!DOCTYPE html>
 <html data-mode="{{.Mode}}" data-rid="{{.ReplyID}}"{{if .HasBoard}} data-board-incarnation="{{.BoardIncarnation}}"{{end}}{{with .Worktree}} data-worktree="{{.}}"{{end}} data-assets="{{.Assets.ID}}" data-wb-titlehost data-lang="{{lang}}" data-langpref="{{.LangPref}}"{{with .Theme}} data-theme="{{.}}"{{end}}{{if .SysOpen}} data-sysopen="1" data-can-control="1"{{end}}{{if .Hosted}} data-hosted="1"{{end}}{{if .IsChild}} data-child="1"{{end}}{{if .CanEditSettings}} data-can-edit-settings="1"{{end}}{{if .HandedOff}} data-handed="1"{{end}}{{with .Terminal}} data-term="{{.}}"{{end}}{{if .Frame}} data-frame="1"{{end}}>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{pwa .Theme}}
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}{{pwa .Theme}}
 <title>{{if .Worktree}}{{.Workspace}} · {{.WorktreeBranch}} - Werkschaft (alpha){{else}}{{template "stitle" .}}{{end}}</title>
 {{if .Frame}}<link rel="stylesheet" href="/s/{{.Assets.FrameWhiteboardFile}}">{{if .Terminal}}
 <link rel="stylesheet" href="/s/{{.Assets.FrameXtermFile}}">{{end}}
@@ -72,7 +72,7 @@ in the head, and the inline script right after the rail applies the marks
 until then. */}}
 {{define "shell"}}<!DOCTYPE html>
 <html data-mode="shell" data-shell="1"{{if .Settings}} data-settings-shell{{end}} data-rid="{{.RID}}" data-assets="{{.Assets.ID}}" data-lang="{{lang}}" data-langpref="{{.LangPref}}"{{with .Theme}} data-theme="{{.}}"{{end}}{{if .SysOpen}} data-sysopen="1" data-can-control="1"{{end}}>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{pwa .Theme}}
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}{{pwa .Theme}}
 <title>{{.Title}}</title>
 <style>{{.Assets.WhiteboardCSS}}</style>
 <style>{{.Assets.CSS}}</style>
@@ -389,7 +389,7 @@ line, the head's failure chip, and a rail row's error ring title. */}}
 
 {{define "index"}}<!DOCTYPE html>
 <html data-mode="index" data-rid="" data-assets="{{.Assets.ID}}" data-wb-titlehost data-lang="{{lang}}" data-langpref="{{.LangPref}}"{{with .Theme}} data-theme="{{.}}"{{end}}{{if .Local}} data-sysopen="1" data-can-control="1"{{end}}{{if .Frame}} data-frame="1"{{end}}>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{pwa .Theme}}
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}{{pwa .Theme}}
 <title>Werkschaft (alpha)</title>
 <style>{{.Assets.WhiteboardCSS}}</style>
 <style>{{.Assets.CSS}}</style>
@@ -515,7 +515,7 @@ both inline the board's stylesheet for its colours and markdown rules. */}}
 .fileview .fnote { font-size: 12.5px; color: var(--wb-muted-fg); }{{end}}
 
 {{define "file-md"}}<!DOCTYPE html>
-<html{{with .Theme}} data-theme="{{.}}"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html{{with .Theme}} data-theme="{{.}}"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}
 <title>{{.Rel}}</title>
 <style>{{.WhiteboardCSS}}</style>
 <style>{{template "filecss"}}</style></head>
@@ -523,7 +523,7 @@ both inline the board's stylesheet for its colours and markdown rules. */}}
 {{end}}
 
 {{define "file-none"}}<!DOCTYPE html>
-<html{{with .Theme}} data-theme="{{.}}"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html{{with .Theme}} data-theme="{{.}}"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}
 <title>{{.Rel}}</title>
 <style>{{.WhiteboardCSS}}</style>
 <style>{{template "filecss"}}</style></head>
@@ -563,7 +563,7 @@ shows when its capability no longer verifies. Its script posts the mint for
 the path the URL named and replaces the page with the fresh URL, at most
 once in a few seconds per tab; a refused mint shows the note. */}}
 {{define "file-remint"}}<!DOCTYPE html>
-<html{{with .Theme}} data-theme="{{.}}"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html{{with .Theme}} data-theme="{{.}}"{{end}}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}
 <title>{{.Abs}}</title>
 <style>{{.WhiteboardCSS}}</style>
 <style>{{template "filecss"}}</style></head>
@@ -595,7 +595,7 @@ once in a few seconds per tab; a refused mint shows the note. */}}
 
 {{define "config-settings"}}<!DOCTYPE html>
 <html data-mode="settings" data-frame="1" data-lang="{{lang}}"{{with .Theme}} data-theme="{{.}}"{{end}}>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">{{firstPaint}}
 <title>{{t "js.settings.title"}} · Werkschaft</title>
 <link rel="stylesheet" href="/s/{{.Assets.FrameWhiteboardFile}}">
 <link rel="stylesheet" href="/s/{{.Assets.FrameCSSFile}}">

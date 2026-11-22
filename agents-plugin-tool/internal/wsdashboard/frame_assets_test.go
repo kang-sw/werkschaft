@@ -58,7 +58,11 @@ func TestFramedSessionAssets(t *testing.T) {
 				t.Fatal(err)
 			}
 			page := readBody(t, res)
-			if strings.Contains(page, "<script>") || strings.Contains(page, "<style>") {
+			if !strings.Contains(page, string(firstPaintStyle())) {
+				t.Fatal("framed document lacks the inline first-paint style")
+			}
+			stripped := strings.ReplaceAll(page, string(firstPaintStyle()), "")
+			if strings.Contains(page, "<script>") || strings.Contains(stripped, "<style>") {
 				t.Fatal("framed document still contains inline executable/style assets")
 			}
 			// Topic srcdocs use fixed public assets because their opaque

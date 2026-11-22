@@ -187,3 +187,63 @@ func TestEveryTableTranslatesTheThemeKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestFirstPaintStyleInServedPageHeads verifies that every shell and framed
+// page includes the inline first-paint style in <head> before external
+// stylesheets load, for dark, light, and auto themes, and that its colours
+// match the theme tokens.
+func TestFirstPaintStyleInServedPageHeads(t *testing.T) {
+	f := startPageFixture(t, func(o *DaemonOptions) { o.Config = settingsTestBackend(t) })
+	writeFile(t, f.project+"/note.md", "# hello\n")
+	wantInline := string(firstPaintStyle())
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"root shell", "/"},
+		{"session shell", "/s/livesession"},
+		{"settings shell", "/settings?scope=global"},
+		{"framed index", "/?frame=1"},
+		{"framed live session", "/s/livesession?frame=1"},
+		{"framed board session", "/s/boardsession?frame=1"},
+		{"framed settings", "/settings?scope=global&frame=1"},
+		{"framed file view", "/s/livesession/file?path=note.md&frame=1"},
+		{"framed finding page", "/s/notyetthere?frame=1"},
+	} {
+		for _, cookie := range []string{"dark", "light", ""} {
+			code, body := getTheme(t, f.base+tc.path, cookie)
+			wantCode := http.StatusOK
+			if tc.path == "/s/notyetthere?frame=1" {
+				wantCode = http.StatusNotFound
+			}
+			if code != wantCode {
+				t.Fatalf("%s (theme %q): GET = %d, want %d", tc.name, cookie, code, wantCode)
+			}
+			head, _, hasHead := strings.Cut(body, "</head>")
+			if !hasHead {
+				t.Fatalf("%s (theme %q): missing </head>", tc.name, cookie)
+			}
+			if tc.path == "/s/notyetthere?frame=1" {
+				for _, want := range []string{themeColorLight, themeColorDark, "color-scheme:dark", "color-scheme:light", "html,body{height:100%;margin:0;background:var(--bg)}"} {
+					if !strings.Contains(head, want) {
+						t.Errorf("%s (theme %q): head lacks %q", tc.name, cookie, want)
+					}
+				}
+				continue
+			}
+			idx := strings.Index(head, wantInline)
+			if idx < 0 {
+				t.Errorf("%s (theme %q): head lacks inline first-paint style", tc.name, cookie)
+				continue
+			}
+			if linkAt := strings.Index(head, `<link rel="stylesheet"`); linkAt >= 0 && idx > linkAt {
+				t.Errorf("%s (theme %q): inline first-paint style (%d) appears after external stylesheet (%d)", tc.name, cookie, idx, linkAt)
+			}
+		}
+	}
+	for _, want := range []string{themeColorLight, themeColorDark, "color-scheme:light dark", "color-scheme:dark", "color-scheme:light"} {
+		if !strings.Contains(wantInline, want) {
+			t.Errorf("firstPaintStyle() lacks %q", want)
+		}
+	}
+}
