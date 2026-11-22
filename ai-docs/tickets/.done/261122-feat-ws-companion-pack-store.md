@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 986c9295fe7d1f82
 sage-review-completeness-reviewed: 986c9295fe7d1f82
+completed: 2026-11-22
 ---
 
 # Companion Embedded Default Pack & Local BYO Pack Store (Memory-First HTTP Serving)
@@ -116,3 +117,11 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
 - **Verification boundary:**
   - `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go -C agents-plugin-tool test ./internal/wsdashboard -run 'CompanionPack'`
   - Confirm `GOOS=windows go -C agents-plugin-tool vet ./internal/wsdashboard` passes with no platform-specific path bugs.
+
+### Result (2ce97830f) - 2026-11-22
+
+- Added the embedded technical fixture and shared props, the local pack catalog, and authenticated catalog, manifest, asset, and reload routes. The store picks the pack root using `wsconfig.GlobalPath`, reads local files through pinned directory handles, and first scans on a companion pack request. A reload swaps one immutable snapshot. Stale revision requests receive the current revision with a conflict response.
+- Kept valid extension fields in the served manifest bytes. This is T0: `daemon_http.go` adds routes behind the existing access guard, `companion_pack_store.go` reads pack files without rewriting them, and `companion_pack_routes.go` serves the cached bytes. Earlier binaries keep their existing routes and leave these files available for the new binary to read.
+- The focused `CompanionPack` tests passed with and without `-race`. The dashboard package built successfully, and `GOOS=windows go -C agents-plugin-tool vet ./internal/wsdashboard` passed. Verification used the offline Go environment.
+- With one local pack and one raster, the first authenticated catalog request recorded four pack-store opens, four stats, and one directory read. Warm catalog, manifest, and asset requests each recorded zero pack-store operations. The existing authentication middleware recorded one credential stat and one file read on the cold request, then one stat and zero file reads per warm request.
+- The lite review found a gap in testing directory replacement after an open. Commit `9adcd05e9` added deterministic tests for replacement before opening the pack directory, manifest, or asset. Those cases ran on macOS and are included in the existing Windows CI suite. Native Windows execution was unavailable during this run.

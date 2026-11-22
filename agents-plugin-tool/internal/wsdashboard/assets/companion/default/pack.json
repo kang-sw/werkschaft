@@ -1,0 +1,49 @@
+{
+  "schema": "ws-companion/v1",
+  "id": "default",
+  "name": "Default technical fixture",
+  "canvas": [
+    512,
+    512
+  ],
+  "poses": {
+    "stand": {
+      "layers": [
+        {
+          "file": "stand.png",
+          "mode": "static",
+          "z": 20
+        }
+      ]
+    }
+  },
+  "props": {
+    "drone": {
+      "file": "drone.png",
+      "z": 60,
+      "behavior": "arc-to-landmark",
+      "anchor": "hud-roster"
+    },
+    "mail": {
+      "file": "mail.png",
+      "z": 60,
+      "behavior": "bonk-from-edge",
+      "coalesceMs": 1000
+    },
+    "grab": {
+      "file": "grab.png",
+      "z": 25,
+      "behavior": "attach",
+      "anchor": "behind-head"
+    },
+    "prop-typing-desk": {
+      "file": "typing-desk.png",
+      "mode": "static",
+      "z": 22,
+      "behavior": "attach"
+    }
+  },
+  "presets": {
+    "werkschaft-d1": {}
+  }
+}
