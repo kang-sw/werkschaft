@@ -5,7 +5,7 @@
 // assembly. Nothing here falls back to sending the text as a prompt: a daemon
 // that does not know the route refuses, and the draft stays.
   var cexecEnabled = !!(composer && composer.getAttribute("data-cexec") === "1" && rid && window.fetch);
-  var cexecCards = [], cexecById = {}, cexecBox = null, cexecPending = null, cexecBusy = false, cexecStoreKey = "ws.cexec." + rid, cexecAttemptKey = "ws.cexec.attempt." + rid;
+  var cexecCards = [], cexecById = {}, cexecBox = null, cexecPending = null, cexecBusy = false, cexecToken = "", cexecTrack = null, cexecStoreKey = "ws.cexec." + rid, cexecAttemptKey = "ws.cexec.attempt." + rid;
   function cexecNewID() {
     var bytes = new Uint8Array(12);
     if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
@@ -180,20 +180,29 @@
   function cexecRestore() {
     if (!cexecEnabled) return;
     var remembered = cexecLoad();
-    if (!remembered.length) return;
     // Remembered commands are shown only once the daemon's private list read
     // succeeded: a denied or failed read (a LAN page, a closed lead, an old
-    // daemon) renders nothing of them.
-    fetch("/s/" + rid + "/composer-exec", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-      return r.ok ? r.json() : null;
-    }, function () { return null; }).then(function (list) {
-      if (!list || !Array.isArray(list.cards)) return;
+    // daemon) renders nothing of them. The same read hands the page the
+    // admission token its fresh submissions carry.
+    cexecList(function (list) {
+      if (!list) return;
       var known = {};
       (list.cards || []).forEach(function (card) { known[card.id] = card; });
       remembered.forEach(function (m) {
         if (cexecById[m.id]) return;
         cexecAdd(m.id, m.command, known[m.id] || { id: m.id, command: m.command, phase: "done", unknown: true });
       });
+    });
+  }
+  // cexecList reads the daemon's private card list once and keeps its admission
+  // token; done gets the list, or null when the read was denied or failed.
+  function cexecList(done) {
+    fetch("/s/" + rid + "/composer-exec", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }, function () { return null; }).then(function (list) {
+      if (!list || !Array.isArray(list.cards)) { done(null); return; }
+      if (typeof list.token === "string" && list.token) cexecToken = list.token;
+      done(list);
     });
   }
   // cexecAttached reports whether the draft carries any composer state beyond
@@ -218,17 +227,42 @@
     } catch (e) { return true; }
     return false;
   }
+  // The draft's edits while a command is pending are tracked, so an
+  // acknowledgement can tell the draft it acknowledged from a newer one. Only
+  // plain appends at the very end keep it "intact"; any other edit (a
+  // replacement, a deletion, an insertion inside, whatever the text ends up as,
+  // even the same text typed again) makes the draft a different revision.
+  if (cexecEnabled && ctext) {
+    var cexecSel = null;
+    // The edit happens in the composer's editor (or the plain textarea); the
+    // caret is read from the field before the browser applies it.
+    doc.addEventListener("beforeinput", function (e) {
+      var editor = ctext.wsc && ctext.wsc.editor;
+      if (e.target !== ctext && (!editor || e.target !== editor)) return;
+      cexecSel = cexecTrack ? [ctext.selectionStart, ctext.selectionEnd, ctext.value.length] : null;
+    }, true);
+    ctext.addEventListener("input", function () {
+      var t = cexecTrack;
+      if (!t || !t.intact) return;
+      var sel = cexecSel;
+      cexecSel = null;
+      var append = sel && sel[0] === sel[1] && sel[0] === sel[2] && sel[2] === t.cur.length && ctext.value.length >= t.cur.length && ctext.value.indexOf(t.cur) === 0;
+      if (append) t.cur = ctext.value; else t.intact = false;
+    });
+  }
   // cexecAcknowledged clears the draft the daemon acknowledged and nothing
-  // typed since: the same text clears it with its mentions; text appended
-  // meanwhile stays, and a draft edited or begun anew meanwhile (with whatever
-  // it gathered) is left untouched.
-  function cexecAcknowledged(text) {
+  // more: while the draft is still that revision (only appended to since) the
+  // acknowledged text goes, with its mentions when nothing was appended and
+  // what was appended stays; a draft replaced, edited elsewhere, or begun anew
+  // meanwhile, whatever its text, is left whole.
+  function cexecAcknowledged(text, track) {
     var now = ctext.value;
+    if (!track || !track.intact || now.indexOf(text) !== 0) return;
     if (now === text) {
       ctext.value = ""; grow(); clearMentions();
-    } else if (now.length > text.length && now.indexOf(text) === 0) {
+    } else {
       ctext.value = now.slice(text.length); grow();
-    } else return;
+    }
     saveDraft();
   }
   // cexecSend takes the composer's raw text when its very first character is
@@ -247,44 +281,62 @@
     var attempt = cexecPending;
     cexecSaveAttempt(attempt);
     cexecBusy = true;
-    function settled() { cexecPending = null; cexecSaveAttempt(null); }
-    fetch("/s/" + rid + "/composer-exec", {
-      method: "POST", credentials: "same-origin", cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ submission_id: attempt.id, text: text, retry: retry })
-    }).then(function (r) {
-      // A body that cannot be read leaves the status as the answer.
-      return r.text().then(function (s) { return { r: r, s: s }; }, function () { return { r: r, s: "" }; });
-    }).then(function (x) {
-      var r = x.r, s = x.s;
-      cexecBusy = false;
-      if (r.ok) {
-        var card = {};
-        try { card = JSON.parse(s); } catch (e) { card = {}; }
-        settled();
-        if (card && card.unknown) {
-          // The daemon cannot say what became of an earlier attempt and ran
-          // nothing: the draft stays, and sending again is a deliberate new run.
-          cexecAdd(attempt.id, text.slice(1), { id: attempt.id, command: text.slice(1), phase: "done", unknown: true });
+    // The draft revision this send acknowledges, tracked from here on.
+    var track = cexecTrack = { text: text, cur: text, intact: true };
+    function settled() { cexecPending = null; cexecSaveAttempt(null); if (cexecTrack === track) cexecTrack = null; }
+    function post() {
+      fetch("/s/" + rid + "/composer-exec", {
+        method: "POST", credentials: "same-origin", cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ submission_id: attempt.id, text: text, retry: retry, token: cexecToken })
+      }).then(function (r) {
+        // A body that cannot be read leaves the status as the answer.
+        return r.text().then(function (s) { return { r: r, s: s }; }, function () { return { r: r, s: "" }; });
+      }).then(function (x) {
+        var r = x.r, s = x.s;
+        cexecBusy = false;
+        if (r.ok) {
+          var card = {};
+          try { card = JSON.parse(s); } catch (e) { card = {}; }
+          if (card && typeof card.token === "string" && card.token) cexecToken = card.token;
+          settled();
+          if (card && card.unknown) {
+            // The daemon cannot say what became of an earlier attempt, or cannot
+            // tell this request from a delayed copy of one it forgot, and ran
+            // nothing: the draft stays, and sending again is a deliberate new run.
+            cexecAdd(attempt.id, text.slice(1), { id: attempt.id, command: text.slice(1), phase: "done", unknown: true });
+            return;
+          }
+          // The draft goes only now that the daemon holds the submission, and
+          // only the acknowledged revision of it.
+          cexecAcknowledged(text, track);
+          cexecAdd(attempt.id, text.slice(1), card && card.id === attempt.id ? card : null);
           return;
         }
-        // The draft goes only now that the daemon holds the submission, and
-        // only the acknowledged revision of it.
-        cexecAcknowledged(text);
-        cexecAdd(attempt.id, text.slice(1), card && card.id === attempt.id ? card : null);
+        // An old daemon (route unknown) or any definite refusal: nothing was
+        // sent, as a prompt or otherwise, and the draft stays. A server error
+        // leaves the attempt unresolved (its retry asks, never runs).
+        if (r.status === 404 || r.status === 405) noteWarn(wsT("js.cexec.unsupported"));
+        else noteWarn(wsT("js.send.fail", s.trim() || "HTTP " + r.status));
+        if (r.status < 500) settled();
+      }, function () {
+        cexecBusy = false;
+        // Outcome unknown: the draft and the recorded attempt stay, so sending
+        // the same text again is a retry of the same submission.
+        noteWarn(wsT("js.post.unreachable"));
+      });
+    }
+    if (cexecToken || retry) post();
+    else cexecList(function (list) {
+      // No admission token yet (the page's first list read has not landed, or
+      // was denied): a fresh submission needs one, so read it first.
+      if (!list) {
+        cexecBusy = false;
+        settled();
+        noteWarn(wsT("js.post.unreachable"));
         return;
       }
-      // An old daemon (route unknown) or any definite refusal: nothing was
-      // sent, as a prompt or otherwise, and the draft stays. A server error
-      // leaves the attempt unresolved (its retry asks, never runs).
-      if (r.status === 404 || r.status === 405) noteWarn(wsT("js.cexec.unsupported"));
-      else noteWarn(wsT("js.send.fail", s.trim() || "HTTP " + r.status));
-      if (r.status < 500) settled();
-    }, function () {
-      cexecBusy = false;
-      // Outcome unknown: the draft and the recorded attempt stay, so sending
-      // the same text again is a retry of the same submission.
-      noteWarn(wsT("js.post.unreachable"));
+      post();
     });
     return true;
   }

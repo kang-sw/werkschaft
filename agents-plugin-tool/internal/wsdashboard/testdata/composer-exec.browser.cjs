@@ -47,7 +47,8 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       const page = await ctx.newPage();
       page.on('pageerror', e => { errors.push(lang + ': ' + e.message); console.error('PAGE ERROR:', e.message); });
       const posts = [];
-      page.on('request', r => { if (r.method() === 'POST') posts.push(new URL(r.url()).pathname); });
+      const messages = [];
+      page.on('request', r => { if (r.method() === 'POST') { posts.push(new URL(r.url()).pathname); if (new URL(r.url()).pathname.endsWith('/message')) messages.push(JSON.parse(r.postData() || '{}')); } });
       const shot = async name => { if (shots) await view.locator('#composer').screenshot({ path: path.join(shots, lang + '-' + name + '.png') }); };
       await page.goto(base + '/s/livesession');
       let view = await sessionFrame(page);
@@ -137,7 +138,7 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       // any attached composer state refuses the command, whatever its kind:
       // an inline pick capsule after the bang keeps the first byte intact
       await type(view, '!echo ');
-      await view.evaluate(() => document.querySelector('#ctext').wsc.insertCapsule('pick', { label: 'div.x', anchor: '[pick:div.x]', plain: 'div.x', pick: { selector: 'div.x', text: '' } }));
+      await view.evaluate(() => document.querySelector('#ctext').wsc.insertCapsule('pick', { label: 'div.x', anchor: '[pick:div.x]', plain: 'div.x', pick: { url: 'http://localhost/page', selector: 'div.x', text: 'x' } }));
       const beforePick = posts.length, cardsPick = await view.locator('.d-cexec .cexec').count();
       await view.click('#csend');
       await page.waitForTimeout(500);
@@ -145,7 +146,22 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       assert.ok((await draft(view)).includes('[pick:div.x]'), 'the pick capsule stays in the draft');
       assert.equal(await view.locator('.d-cexec .cexec').count(), cardsPick, 'no card for a refused submission');
       assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.attachments), () => false), 'the refusal is shown');
-      await view.evaluate(() => { const e = document.querySelector('#ctext').wsc; e.ordered().slice().forEach(r => e.remove(r.kind, r.key)); });
+      // The refusal keeps the attachment for a regular send: made an ordinary
+      // message (a leading space), the same draft goes once, with its pick, and
+      // a second click finds nothing left to send.
+      const msgBefore = messages.length;
+      await editor(view).click();
+      await view.page().keyboard.press('Home');
+      await view.page().keyboard.insertText(' ');
+      await view.click('#csend');
+      for (let i = 0; i < 50 && messages.length === msgBefore; i++) await page.waitForTimeout(100);
+      assert.equal(messages.length, msgBefore + 1, 'the regular send went out once');
+      assert.ok(JSON.stringify(messages[msgBefore].picks || []).includes('div.x'), 'the pick was carried by the regular send: ' + JSON.stringify(messages[msgBefore]));
+      assert.equal(await view.evaluate(() => document.querySelector('#ctext').wsc.ordered().length), 0, 'the pick capsule was consumed');
+      assert.equal(await draft(view), '', 'the draft was consumed');
+      await view.click('#csend');
+      await page.waitForTimeout(400);
+      assert.equal(messages.length, msgBefore + 1, 'the consumed attachments are not sent twice');
 
       // a slow acknowledgement clears only the acknowledged draft: what was
       // typed while the request was pending stays
@@ -159,6 +175,21 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       await view.page().keyboard.insertText(' typed meanwhile');
       await view.waitForSelector('.cexec code:text-is("echo slowack")');
       assert.equal(await draft(view), ' typed meanwhile', 'text typed while the request was pending is kept');
+      // a replacement draft that begins with the submitted text, and the same
+      // text typed again, are new drafts: the acknowledgement leaves both whole
+      await send(view, '!echo one');
+      await editor(view).click();
+      await view.page().keyboard.press('ControlOrMeta+A');
+      await view.page().keyboard.insertText('!echo one more');
+      await view.waitForSelector('.cexec code:text-is("echo one")');
+      assert.equal(await draft(view), '!echo one more', 'a replacement that begins with the submitted text stays whole');
+      await send(view, '!echo two');
+      await editor(view).click();
+      await view.page().keyboard.press('ControlOrMeta+A');
+      await view.page().keyboard.press('Delete');
+      await view.page().keyboard.insertText('!echo two');
+      await view.waitForSelector('.cexec code:text-is("echo two")');
+      assert.equal(await draft(view), '!echo two', 'the same text typed again as a new draft stays');
       await page.unroute('**/composer-exec');
 
       // a lost response: the first request ran on the daemon but its answer

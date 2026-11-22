@@ -3134,7 +3134,7 @@
   "js.cexec.file": "出力ファイル",
   "js.cexec.copypath": "パスをコピー",
   "js.cexec.truncated": "先頭 {0} バイトは保持されていません。",
-  "js.cexec.replaced": "無効な UTF-8 バイトは U+FFFD として表示されます。",
+  "js.cexec.replaced": "無効な UTF-8 バイトは U+FFFD として、NUL バイトは U+2400 として表示されます。",
   "js.cexec.dismiss": "閉じる",
   "js.cexec.attachments": "コマンドには添付を含められません: 添付を外すか、先頭に空白を付けてメッセージとして送信してください。",
   "js.cexec.unsupported": "このデーモンではここで ! コマンドを実行できません(ws を更新するか、このマシンでダッシュボードを開いてください)。何も送信されていません。先頭に空白を付けるとメッセージとして送れます。"

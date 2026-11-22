@@ -3134,7 +3134,7 @@
   "js.cexec.file": "输出文件",
   "js.cexec.copypath": "复制路径",
   "js.cexec.truncated": "前 {0} 字节未保留。",
-  "js.cexec.replaced": "无效的 UTF-8 字节显示为 U+FFFD。",
+  "js.cexec.replaced": "无效的 UTF-8 字节显示为 U+FFFD，NUL 字节显示为 U+2400。",
   "js.cexec.dismiss": "关闭",
   "js.cexec.attachments": "命令不能附带附件：请移除附件，或在开头加空格后作为消息发送。",
   "js.cexec.unsupported": "此守护进程无法在此运行 ! 命令（请更新 ws，或在本机打开仪表板）。未发送任何内容；以空格开头即可作为消息发送。"

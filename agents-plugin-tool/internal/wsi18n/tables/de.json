@@ -3134,7 +3134,7 @@
   "js.cexec.file": "Ausgabedatei",
   "js.cexec.copypath": "Pfad kopieren",
   "js.cexec.truncated": "Die ersten {0} Bytes wurden nicht behalten.",
-  "js.cexec.replaced": "Ungültige UTF-8-Bytes werden als U+FFFD angezeigt.",
+  "js.cexec.replaced": "Ungültige UTF-8-Bytes werden als U+FFFD und NUL-Bytes als U+2400 angezeigt.",
   "js.cexec.dismiss": "Schließen",
   "js.cexec.attachments": "Ein Befehl trägt keine Anhänge: Entferne sie oder sende den Text mit einem führenden Leerzeichen als Nachricht.",
   "js.cexec.unsupported": "Dieser Daemon kann hier keine !-Befehle ausführen (ws aktualisieren oder das Dashboard auf diesem Rechner öffnen). Nichts wurde gesendet; mit einem Leerzeichen beginnen, um den Text als Nachricht zu senden."

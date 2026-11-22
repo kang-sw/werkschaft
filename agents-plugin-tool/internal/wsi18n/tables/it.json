@@ -3134,7 +3134,7 @@
   "js.cexec.file": "File di output",
   "js.cexec.copypath": "Copia percorso",
   "js.cexec.truncated": "I primi {0} byte non sono stati conservati.",
-  "js.cexec.replaced": "I byte UTF-8 non validi sono mostrati come U+FFFD.",
+  "js.cexec.replaced": "I byte UTF-8 non validi sono mostrati come U+FFFD e i byte NUL come U+2400.",
   "js.cexec.dismiss": "Chiudi",
   "js.cexec.attachments": "Un comando non porta allegati: rimuovili, oppure invia il testo come messaggio con uno spazio iniziale.",
   "js.cexec.unsupported": "Questo daemon non può eseguire comandi ! qui (aggiorna ws, o apri la dashboard su questa macchina). Non è stato inviato nulla; inizia con uno spazio per inviare il testo come messaggio."

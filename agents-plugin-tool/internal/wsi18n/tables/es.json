@@ -3134,7 +3134,7 @@
   "js.cexec.file": "Archivo de salida",
   "js.cexec.copypath": "Copiar ruta",
   "js.cexec.truncated": "Los primeros {0} bytes no se conservaron.",
-  "js.cexec.replaced": "Los bytes UTF-8 no válidos se muestran como U+FFFD.",
+  "js.cexec.replaced": "Los bytes UTF-8 no válidos se muestran como U+FFFD y los bytes NUL como U+2400.",
   "js.cexec.dismiss": "Cerrar",
   "js.cexec.attachments": "Un comando no lleva adjuntos: quítalos, o envía el texto como mensaje con un espacio al inicio.",
   "js.cexec.unsupported": "Este daemon no puede ejecutar comandos ! aquí (actualiza ws, o abre el panel en esta máquina). No se envió nada; empieza con un espacio para enviar el texto como mensaje."
