@@ -690,19 +690,6 @@
     "261122-feat-ws-companion-director": {
       "registered_at": "2026-11-22T00:24:05Z"
     },
-    "261122-feat-ws-companion-engine-v2": {
-      "registered_at": "2026-11-22T04:40:58Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T05:08:26Z",
-        "impl": {
-          "branch": "impl/develop/crock-ashes-amigo"
-        }
-      }
-    },
     "261122-feat-ws-harness-native-subagent-preference": {
       "registered_at": "2026-11-22T08:46:10Z",
       "lease": {
