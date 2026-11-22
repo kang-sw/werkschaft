@@ -17,11 +17,13 @@ Existing routing, ordinary envelope queues and per-session history remain the su
 - **Public context in content:** the server prepends a generated public To/CC header to the content body. All copies carry public To/CC context; BCC is never shown in that public header or disclosed to co-recipients. Preserve the supplied message body after the generated context. Do not depend on a new structured envelope/header field to make the audience visible.
 - **Compatibility: T0, additive arguments only.** Retain the current mailbox store and envelope shapes, including ordinary history records. No new store fields, shared-message object, schema-version change, protocol change or grouped-history replacement belongs to this feature.
 - **Owner correction: no schema-check or old-daemon guidance.** The daemon serves the tool list; a session that sees `cc` already sees the new daemon's tool surface. Reject the source report's proposed capability-probing instruction, old-daemon argument fallback and additional schema-discovery gate.
+- **Header placement after the peer-lead note (lead, 2026-11-22).** A top-level lead's send stamps a peer-lead note as the body's first line (`internal/mcp/mailbox_tools.go#L91-L93`), and the dashboard recognizes that note only on the first line (`internal/wsdashboard/conversation_presentation.go#L69`). Insert the generated public To/CC header after that note line and before the supplied body, so the note stays first. A send without the note puts the header first. Copies of a scalar-`to` send with no CC or BCC carry no header, so existing single-recipient bodies stay byte-identical.
+- **Rollback sentence location (lead, 2026-11-22).** `ai-docs/manuals/ws-mcp.md` has no separate rollback runbook. Put the settled sentence in its `### Daemon replacement and process ownership` section, the section that governs daemon swaps. Do not create a rollback procedure; `261115-feat-ws-dev-daemon-accepted-build-recovery` owns that.
 - **Only residual rollback instruction:** add one line to the rollback runbook: "After rolling back the daemon, terminal sessions refresh their tool list." This is not a new feature-negotiation procedure or a release-time approval gate.
 
 ## Constraints
 
-- This is accepted `todo/` backlog, not ready promotion or implementation authority. No mail is sent and no live daemon is changed while authoring this ticket.
+- Owner instruction (2026-11-22) promotes this ticket to ready and authorizes Phase 1 implementation; the original 2026-11-14 capture carried no implementation authority. Live peer mail and daemon replacement still need their own authorization.
 - Read `ai-docs/manuals/shipped-surface-boundary.md` and `ai-docs/manuals/release-compatibility.md` before changing the tooling; read `ai-docs/manuals/ws-mcp.md` for changes under `agents-plugin-tool/internal/mcp/` and the rollback instruction. If shipped workflow guidance changes, also read `ai-docs/manuals/skill-authoring.md` and the matching `ai-docs/manuals/wsflow-mirroring.md` obligations.
 - Preserve the existing named-address and reply-ID routing, sender/reply identity, queue ownership, receive/drain behavior, history access and normal reply-to-sender semantics. A public audience is display context, not authority over other sessions or a task-claiming mechanism.
 - BCC means hidden from other mail recipients, not secrecy from the sender, local operator or ordinary tool-argument audit. Do not expose the BCC list in delivered body content, recipient history or public dashboard expansion. Do not claim BCC prevents a recipient from revealing their own presence by replying.
@@ -51,14 +53,15 @@ Existing routing, ordinary envelope queues and per-session history remain the su
 
 Implement the settled argument shape and server-generated public audience context on the existing send path. Deliver separate ordinary envelopes to the explicit To/CC/BCC recipients, preserving route-appropriate sender/reply identity and current receive/history semantics. Update the advertised tool arguments and relevant send documentation/tests, without adding the rejected schema-check or old-daemon guidance.
 
-Add only the settled terminal-tool-list refresh sentence to the daemon rollback runbook. Do not expand this into broadcast, group membership, a store migration, reply-all, a new dashboard grouping feature or a new harness protocol.
+Add only the settled terminal-tool-list refresh sentence to the `### Daemon replacement and process ownership` section of `ai-docs/manuals/ws-mcp.md`. Do not expand this into broadcast, group membership, a store migration, reply-all, a new dashboard grouping feature or a new harness protocol.
 
 Verification:
 
 - Existing scalar To addressing still routes correctly. Array To, CC and BCC reach their explicit destinations through independent ordinary copies, including supported named-address/reply-ID routes.
+- A top-level lead's multi-recipient send keeps the peer-lead note on the first line, followed by the public To/CC header and then the body, and the dashboard still recognizes the note. A scalar send with no CC or BCC produces the same body as before.
 - Every delivered copy shows the generated public To/CC header and original message body, while no co-recipient can recover the BCC list from its received envelope/body/history or dashboard rendering.
 - Receiving one copy leaves other recipients' copies intact. Existing sender/reply identity, queue/drain and per-session history behavior remain functional.
 - Store/envelope serialization remains unchanged and no schema-version bump is introduced. Existing body-based host delivery renders the public audience without a new adapter metadata contract.
 - The advertised arguments match `to: string | string[]`, optional `cc: string[]`, optional `bcc: string[]`; no all-peers selector is added.
-- The rollback runbook contains the one settled refresh sentence and no new schema-check/old-daemon guidance is introduced.
+- The `ws-mcp.md` daemon replacement section contains the one settled refresh sentence and no new schema-check/old-daemon guidance is introduced.
 - Record exact focused test commands and results during implementation. Live peer mail, daemon replacement and cross-session smoke require their own authorization; this docs capture performs none.
