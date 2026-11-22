@@ -120,7 +120,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	}
 	unlockBound, err := reserveBoundWorktrees(root, boundCwd)
 	if err != nil {
-		return State{}, conflict("%v; wait for the release to finish before opening a conversation there", err)
+		return State{}, boundReservationRefusal(err)
 	}
 	defer unlockBound()
 	rp, err := r.resolve(profile, root)

@@ -143,6 +143,30 @@ func TestWorktreeReleaseRefusesSpawnsThatResolveIntoIt(t *testing.T) {
 	}
 }
 
+// TestWorktreeReservationFailureRefusesTheCreate verifies that a create whose
+// release reservation cannot be taken is refused rather than admitted
+// unreserved, since a release may already hold the lock it failed to reach.
+func TestWorktreeReservationFailureRefusesTheCreate(t *testing.T) {
+	h, _ := agentHarness(t, nil)
+	broken := filepath.Join(t.TempDir(), "broken-wt")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A gitfile whose admin dir cannot be resolved stands in for any lock
+	// resolution, open, or acquire error.
+	missing := filepath.Join(t.TempDir(), "gone", "worktrees", "broken-wt")
+	if err := os.WriteFile(filepath.Join(broken, ".git"), []byte("gitdir: "+missing+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := h.runner.AgentSpawn(h.leadCaller(), AgentSpawnRequest{
+		Prompt: "unreservable spawn", Tier: "small", Authority: "read-only", Cwd: broken,
+	})
+	agentRefused(t, err, http.StatusConflict, "could not take the release reservation", "broken-wt", "try again")
+	if got := h.runner.ActiveChildrenInWorktree(broken); len(got) != 0 {
+		t.Fatalf("refused create left bound children: %+v", got)
+	}
+}
+
 // TestWorktreeActiveChildrenAndSpawnReleaseReservation verifies daemon-wide
 // bound-child discovery (direct, nested grandchild, sleeping/waiting non-closed
 // children, and closed exclusion), the /agents/by-token/worktree.children

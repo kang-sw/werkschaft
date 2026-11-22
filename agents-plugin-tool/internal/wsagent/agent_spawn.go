@@ -146,9 +146,10 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 // worktree that could count it: the walk starts from the canonical path, so
 // a symlink from outside still reserves the worktree it resolves into, and it
 // does not stop at a nested repo or submodule, whose enclosing worktree counts
-// the conversation too. Only a release in progress refuses
-// (ErrWorktreeReleasing): a path outside any worktree, or a lock that cannot
-// be taken, leaves the create as it was before the reservation.
+// the conversation too. A path outside any worktree reserves nothing. A
+// reservation that cannot be taken refuses like a release in progress
+// (ErrWorktreeReleasing) does: an unreserved create could slip in beside a
+// release that already holds the lock (boundReservationRefusal).
 func reserveBoundWorktrees(paths ...string) (func(), error) {
 	var unlocks []func()
 	unlockAll := func() {
@@ -164,16 +165,26 @@ func reserveBoundWorktrees(paths ...string) (func(), error) {
 			}
 			seen[dir] = true
 			unlock, err := wsgit.ReserveWorktreeSpawn(dir)
-			if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+			if err != nil {
 				unlockAll()
-				return nil, err
+				if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+					return nil, err
+				}
+				return nil, fmt.Errorf("could not take the release reservation of worktree %s: %w", dir, err)
 			}
-			if err == nil {
-				unlocks = append(unlocks, unlock)
-			}
+			unlocks = append(unlocks, unlock)
 		}
 	}
 	return unlockAll, nil
+}
+
+// boundReservationRefusal is the conflict a create answers when
+// reserveBoundWorktrees refuses it.
+func boundReservationRefusal(err error) error {
+	if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+		return conflict("%v; wait for the release to finish before opening a conversation there", err)
+	}
+	return conflict("%v; no conversation opens there unreserved, since a concurrent worktree.release could miss it; try again", err)
 }
 
 // enclosingWorktreeRoots returns every directory at or above path's
