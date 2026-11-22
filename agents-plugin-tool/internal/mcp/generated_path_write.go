@@ -46,8 +46,12 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 		}
 		eligible = append(eligible, item)
 	}
+	// The descriptor budget bounds path.write capabilities, not path.generate:
+	// a legacy batch larger than the budget still returns every path, and only
+	// its newest maxGeneratedPathGrants entries become writable, matching the
+	// oldest-first eviction a sequence of smaller batches would produce.
 	if len(eligible) > maxGeneratedPathGrants {
-		return fmt.Errorf("path.generate: requested %d writable cache artifacts; maximum is %d", len(eligible), maxGeneratedPathGrants)
+		eligible = eligible[len(eligible)-maxGeneratedPathGrants:]
 	}
 
 	g.mu.Lock()
@@ -95,6 +99,19 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 		g.paths[sessionKey][path] = grant
 	}
 	return nil
+}
+
+// discardGeneratedCacheArtifacts removes the review/prompt reservations a
+// refused path.generate call allocated, so a refusal withholds its paths
+// without leaving their empty files behind. os.Remove unlinks a swapped-in
+// symlink itself, never its target.
+func discardGeneratedCacheArtifacts(generated []wsstate.GeneratedPath) {
+	for _, item := range generated {
+		if item.Kind != "review" && item.Kind != "prompt" {
+			continue
+		}
+		_ = os.Remove(item.Path)
+	}
 }
 
 func closeGeneratedPathGrants(grants map[string]*generatedPathGrant) {

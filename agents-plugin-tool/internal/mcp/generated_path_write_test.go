@@ -153,6 +153,57 @@ func TestPathWriteGrantsAreBoundedAndConsumed(t *testing.T) {
 	}
 }
 
+// A legacy path.generate batch larger than the grant budget must still
+// return every path (v0.50.8 behavior); the budget bounds only which of them
+// path.write accepts.
+func TestPathGenerateOversizedBatchReturnsAllPathsAndBoundsGrants(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	key, err := s.sessions.mint(root, roleDelegate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stems := make([]any, 0, maxGeneratedPathGrants+1)
+	for i := 0; i <= maxGeneratedPathGrants; i++ {
+		stems = append(stems, fmt.Sprintf("batch-%02d", i))
+	}
+	resp := callToolOnce(t, s, 1, "path.generate", map[string]any{
+		"session_key": key, "kind": "prompt", "stems": stems,
+	})
+	if toolIsError(t, resp) {
+		t.Fatalf("oversized legacy path.generate batch refused: %s", resp)
+	}
+	paths := strings.Fields(toolText(t, resp))
+	if len(paths) != len(stems) {
+		t.Fatalf("path.generate returned %d paths, want %d", len(paths), len(stems))
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("generated path %q not allocated: %v", path, err)
+		}
+	}
+	processGeneratedWrites.mu.RLock()
+	count := processGeneratedWrites.grantCountLocked()
+	processGeneratedWrites.mu.RUnlock()
+	if count > maxGeneratedPathGrants {
+		t.Fatalf("open generated-path grants = %d, want <= %d", count, maxGeneratedPathGrants)
+	}
+	if resp := callToolOnce(t, s, 2, "path.write", map[string]any{
+		"session_key": key, "path": paths[0], "content": "over budget",
+	}); !toolIsError(t, resp) {
+		t.Fatalf("batch entry beyond the grant budget was writable: %s", resp)
+	}
+	if resp := callToolOnce(t, s, 3, "path.write", map[string]any{
+		"session_key": key, "path": paths[len(paths)-1], "content": "within budget",
+	}); toolIsError(t, resp) {
+		t.Fatalf("newest batch entry write: %s", resp)
+	}
+}
+
 func TestPathWriteRefusesSymlinkReplacementAndAcceptsOversizedContent(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
 	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))

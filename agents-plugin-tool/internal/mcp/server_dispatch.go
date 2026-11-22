@@ -1479,6 +1479,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		}
 		key, _ := params.Arguments["session_key"].(string)
 		if err := processGeneratedWrites.grant(key, generated); err != nil {
+			discardGeneratedCacheArtifacts(generated)
 			return toolTextResponse(req.ID, "", err)
 		}
 		text := ""
