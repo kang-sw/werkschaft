@@ -668,13 +668,13 @@ type agyMapper struct {
 	cutover        bool
 	requested      map[string]bool
 	ranUnrequested map[string]bool
-	modelFailure    string
-	turnSeq         int
-	group           int
-	groupCalls      bool
-	reply           strings.Builder
-	replyAt         int64
-	batches         batchTracker
+	modelFailure   string
+	turnSeq        int
+	group          int
+	groupCalls     bool
+	reply          strings.Builder
+	replyAt        int64
+	batches        batchTracker
 
 	wakeTimer      *time.Timer
 	wakeGeneration uint64
@@ -695,17 +695,17 @@ type agyMapper struct {
 
 func newAgyMapper(sessionID string) *agyMapper {
 	return &agyMapper{
-		sessionID:    sessionID,
-		outstanding:  map[string]bool{},
-		steerText:    map[string]string{},
-		openCalls:    map[string]bool{},
-		pendingTools: map[string]bool{},
-		openBg:       map[string]bool{},
-		bgCalls:      map[string]bool{},
-		batches:      newBatchTracker("agy"),
-		approvals:    map[string]*agyApproval{},
-		approvalOf:   map[string]string{},
-		requested:    map[string]bool{},
+		sessionID:      sessionID,
+		outstanding:    map[string]bool{},
+		steerText:      map[string]string{},
+		openCalls:      map[string]bool{},
+		pendingTools:   map[string]bool{},
+		openBg:         map[string]bool{},
+		bgCalls:        map[string]bool{},
+		batches:        newBatchTracker("agy"),
+		approvals:      map[string]*agyApproval{},
+		approvalOf:     map[string]string{},
+		requested:      map[string]bool{},
 		ranUnrequested: map[string]bool{},
 	}
 }
