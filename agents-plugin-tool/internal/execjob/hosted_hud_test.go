@@ -171,6 +171,98 @@ func TestUserStopLosingTheRaceToAnAgentStopIsNotMarked(t *testing.T) {
 	}
 }
 
+// TestUserStopRacingNaturalExitEndsOnceAndMarksConsistently: the user's stop
+// and the child's own exit land together, over many jobs. Each ends in
+// exactly one terminal state; stopped-by-user holds exactly when that state
+// is stopped, and a marked job has one notice, an exited one none.
+func TestUserStopRacingNaturalExitEndsOnceAndMarksConsistently(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	const rounds = 60
+	stopped, exited := 0, 0
+	for i := 0; i < rounds; i++ {
+		v := fx.asyncJob(HostedLaunch{})
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = fx.h.StopByUser("lead", v.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			fx.holders.exit(v.HolderID, 3)
+		}()
+		close(start)
+		wg.Wait()
+		eventuallyExec(t, "the end", func() bool { g, _ := fx.h.Get("lead", v.ID); return g.Terminal() })
+		sum, err := fx.h.StopByUser("lead", v.ID) // reads the settled state; a no-op
+		if err != nil {
+			t.Fatalf("round %d: %v", i, err)
+		}
+		if sum.StoppedByUser != (sum.State == HostedStopped) {
+			t.Fatalf("round %d: marked %v with state %s", i, sum.StoppedByUser, sum.State)
+		}
+		var n int
+		for _, e := range stopNotices(fx) {
+			if strings.Contains(e.event, v.ID) {
+				n++
+			}
+		}
+		switch sum.State {
+		case HostedStopped:
+			stopped++
+			if n != 1 || sum.StopNotice != StopNoticeSent {
+				t.Fatalf("round %d: stopped job has %d notices, outcome %q", i, n, sum.StopNotice)
+			}
+		case HostedExited:
+			exited++
+			if n != 0 {
+				t.Fatalf("round %d: an exited job has %d stop notices", i, n)
+			}
+		default:
+			t.Fatalf("round %d: state %s", i, sum.State)
+		}
+	}
+	t.Logf("stopped %d, exited %d of %d", stopped, exited, rounds)
+}
+
+// TestUserStopSettingStoppingFirstMarksTheJobAnAgentStopJoins: the user's stop
+// sets stopping and is still in the holder; the agent's own stop joins and is
+// the one that ends the job. The user's stop decided it: marked, one notice.
+func TestUserStopSettingStoppingFirstMarksTheJobAnAgentStopJoins(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	v := fx.asyncJob(HostedLaunch{})
+	inUser := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	fx.holders.mu.Lock()
+	fx.holders.beforeStop = func(string) {
+		if calls.Add(1) == 1 { // the user's stop, in flight
+			close(inUser)
+			<-release
+		}
+	}
+	fx.holders.mu.Unlock()
+	userDone := make(chan error, 1)
+	go func() { _, err := fx.h.StopByUser("lead", v.ID); userDone <- err }()
+	<-inUser
+	agentDone := make(chan error, 1)
+	go func() { _, err := fx.h.Stop("lead", v.ID); agentDone <- err }()
+	if err := <-agentDone; err != nil { // the agent's stop ends the job while the user's is held
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-userDone; err != nil {
+		t.Fatal(err)
+	}
+	sum := fx.h.Jobs("lead")[0]
+	if sum.State != HostedStopped || !sum.StoppedByUser || sum.StopNotice != StopNoticeSent || len(stopNotices(fx)) != 1 {
+		t.Fatalf("job = %+v, notices %+v", sum, fx.sessions.noticeList())
+	}
+}
+
 // TestUserStopWhoseHolderDidNotGoMarksNothing: a failed holder stop leaves
 // the job running and unmarked, so a later natural exit is not mislabeled.
 func TestUserStopWhoseHolderDidNotGoMarksNothing(t *testing.T) {

@@ -183,8 +183,8 @@ func (h *Hosted) StopByUser(owner, id string) (HostedSummary, error) {
 // noticeStopped admits the notice a marked stop owes its owner, once: the
 // first call after the marked end admits and records the outcome, every
 // later one (the ending goroutine and the stopping caller both call it) finds
-// it recorded. It waits for a converted job's id to be published first
-// (convert calls it again after).
+// it recorded. A converted job whose id is not published yet is skipped
+// here; convert calls it again once it is.
 func (h *Hosted) noticeStopped(j *hostedJob) {
 	j.noticeMu.Lock()
 	defer j.noticeMu.Unlock()
