@@ -792,6 +792,35 @@ Verification (macOS arm64):
 - `go build ./...`: ok.
 - `gofmt -l internal/wsmeta`: clean.
 
+#### Edition (ddc951bfa) - 2026-11-22
+
+Follow-up to C1, at the lead's request: does a backdated sentinel mislead
+any reader that caches a fenced file by mtime? All non-test mtime readers
+were checked; the fenced paths are `agent.json`, `permission.json`,
+`hiring.json` and the removed `tracker-hooks.json`.
+
+- No legacy reader of a fenced path orders mtimes; the caches compare for
+  equality only.
+  - `wsagent/permission_store.go:85` (the hosted page's revalidation)
+    compares mode, size, mtime and identity through
+    `wsstate.SameFileMetadata`. Launch admission re-reads unconditionally
+    (`:62-68`).
+  - `wstrackerhook/runner.go:215` stamps `tracker-hooks.json` by size and
+    mtime. The removal fence makes the file absent, which changes the stamp.
+  - `wsdashboard/registry.go:417` ages a session by its directory mtime,
+    which the fence's rename advances.
+- The equality hazard: on Windows the identity is the creation time, which
+  NTFS tunneling can carry across the replace. A same-size re-fence over an
+  earlier sentinel could then look unchanged. `ApplyFence` now draws its
+  sentinel until its second differs from the live file's mtime.
+  `TestRefenceNeverReusesTheLiveMtime` fails without this change.
+- When a proof fails, the live bytes are re-staged and `Commit` refuses
+  (`ErrFenceInvalidated`, then `ErrFencePending`) until the path is fenced
+  again. The original is never written back.
+
+Verification: `go test -race -count=1 ./internal/wsmeta/` ok;
+`go vet` (darwin, `GOOS=windows`, `GOOS=linux`) ok; `gofmt` clean.
+
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
 - Depends on Phase 1. Route affected direct Go readers through the daemon
