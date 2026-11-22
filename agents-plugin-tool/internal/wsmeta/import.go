@@ -90,6 +90,11 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 		if len(res.Stage.Unfenced) > 0 {
 			return fmt.Errorf("%w: %s", ErrFenceInvalidated, strings.Join(res.Stage.Unfenced, ", "))
 		}
+		if len(res.Stage.Pending) > 0 {
+			// A fence invalidated and re-staged earlier still has to land
+			// before the legacy path stops being writable authority.
+			return fmt.Errorf("%w: %s", ErrFencePending, strings.Join(res.Stage.Pending, ", "))
+		}
 		if len(res.Stage.Unread) > 0 {
 			// Importing it as invalid would lose the record or setting for
 			// good once the marker freezes legacy files.

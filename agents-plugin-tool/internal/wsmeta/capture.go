@@ -2,12 +2,15 @@ package wsmeta
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -111,6 +114,15 @@ type Capture struct {
 	CapturedAt  string
 	FenceState  string
 	FenceDigest string
+	// FenceRequired is set once a fence was applied to this path and stays
+	// set across re-staging: the import commits only after a fence on this
+	// path is proven in place again.
+	FenceRequired bool
+	// FenceModTime is the sentinel modification time (Unix seconds) a
+	// replacement fence carries; FenceWitness is where a removal fence moved
+	// the file.
+	FenceModTime int64
+	FenceWitness string
 	// ImportStatus is set by the import commit: imported, absent, invalid,
 	// future, ignored or retained.
 	ImportStatus string
@@ -133,6 +145,10 @@ type StageResult struct {
 	// transient reason. Their earlier row, if any, is kept unchanged; a
 	// commit refuses with ErrLegacyUnread until a pass reads them.
 	Unread []string
+	// Pending lists capture paths with a required fence that is not proven
+	// in place in this pass (Unfenced paths included). Commit refuses with
+	// ErrFencePending while any remain; apply the fence again.
+	Pending []string
 }
 
 var (
@@ -147,6 +163,9 @@ var (
 	// ErrLegacyUnread reports a commit attempted while a bundled legacy file
 	// could not be read for a transient reason; retry the commit.
 	ErrLegacyUnread = errors.New("wsmeta: a legacy file could not be read")
+	// ErrFencePending reports a commit attempted while a path that needs a
+	// fence has none proven in place; apply the fence again.
+	ErrFencePending = errors.New("wsmeta: a required fence is not in place")
 )
 
 // Stage runs one durable capture pass: it discovers every bundled legacy
@@ -176,25 +195,109 @@ func (s *Store) Stage(ctx context.Context) (StageResult, error) {
 	return res, err
 }
 
-// PrepareFence durably records, before the caller replaces (or, with
-// remove, deletes) the legacy file at rel, the exact result the replacement
-// leaves. A retry then keeps the staged original whenever the live file is
-// that result, even if the process died before MarkFenceLanded.
-func (s *Store) PrepareFence(ctx context.Context, rel string, fenced []byte, remove bool) error {
-	digest := absentDigest
-	if !remove {
-		digest = contentDigest(fenced)
+// ApplyFence replaces the legacy file at rel, a staged capture, with fenced:
+// one of the cutover's one-time fences (2125). It durably records the intent
+// first, with the fenced digest and a sentinel modification time, then
+// writes fenced to a temporary file in the same directory stamped with that
+// time, atomically replaces rel with it and marks the fence landed. The
+// sentinel is a random even second in 2000-2009, which survives coarse
+// file-system timestamps and which no legacy writer produces (each writes a
+// current time). A later pass keeps the staged original only while the live
+// file has both the fenced digest and the sentinel time, so byte-identical
+// content a legacy writer wrote is never taken for the fence (2135). The
+// directory must exist: a fence never recreates a pruned session.
+func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error {
+	sentinel := fenceSentinel()
+	if err := s.prepareFence(ctx, rel, contentDigest(fenced), sentinel.Unix(), ""); err != nil {
+		return err
 	}
-	return s.setFence(ctx, rel, FenceIntent, digest)
+	abs := filepath.Join(s.dir, filepath.FromSlash(rel))
+	if err := s.hit("fence-prepared"); err != nil {
+		return err
+	}
+	if err := writeFenceFile(abs, fenced, sentinel); err != nil {
+		return err
+	}
+	if err := s.hit("fence-replaced"); err != nil {
+		return err
+	}
+	return s.markFenceLanded(ctx, rel)
 }
 
-// MarkFenceLanded records that the replacement PrepareFence announced is in
-// place.
-func (s *Store) MarkFenceLanded(ctx context.Context, rel string) error {
-	return s.setFence(ctx, rel, FenceLanded, "")
+// ApplyRemovalFence removes the legacy file at rel, a staged present
+// capture, by moving it to witness (a slash path relative to the dashboard
+// directory that must not exist yet: the new-daemon-only input path). A
+// later pass keeps the staged original only while rel is absent and witness
+// holds the original's bytes, so an owner's deletion of rel is never taken
+// for the fence and never undone by the import (2135).
+func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) error {
+	if witness == "" || path.IsAbs(witness) || path.Clean(witness) != witness || strings.HasPrefix(witness, "../") || witness == ".." || witness == rel {
+		return fmt.Errorf("wsmeta: invalid removal witness %q", witness)
+	}
+	wabs := filepath.Join(s.dir, filepath.FromSlash(witness))
+	if _, err := wsstate.Lstat(wabs); !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("wsmeta: removal witness %q already exists", witness)
+	}
+	if err := s.prepareFence(ctx, rel, absentDigest, 0, witness); err != nil {
+		return err
+	}
+	if err := s.hit("fence-prepared"); err != nil {
+		return err
+	}
+	if err := os.Rename(filepath.Join(s.dir, filepath.FromSlash(rel)), wabs); err != nil {
+		return err
+	}
+	if err := s.hit("fence-replaced"); err != nil {
+		return err
+	}
+	return s.markFenceLanded(ctx, rel)
 }
 
-func (s *Store) setFence(ctx context.Context, rel, fenceState, digest string) error {
+// fenceSentinel picks a random even second in [2000, 2010).
+func fenceSentinel() time.Time {
+	const lo, span = 946684800, 315532800 // 2000-01-01, ten years
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	n := int64(binary.LittleEndian.Uint64(b[:])>>1) % (span / 2)
+	return time.Unix(lo+2*n, 0)
+}
+
+// writeFenceFile writes data beside abs, stamps it with mtime and atomically
+// replaces abs with it.
+func writeFenceFile(abs string, data []byte, mtime time.Time) error {
+	f, err := wsstate.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".cutover-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chtimes(tmp, mtime, mtime); err != nil {
+		return err
+	}
+	if err := wsstate.AtomicReplaceFile(tmp, abs); err != nil {
+		return err
+	}
+	ok = true
+	return nil
+}
+
+func (s *Store) prepareFence(ctx context.Context, rel, digest string, mtime int64, witness string) error {
 	return s.write(ctx, durable, func(tx *sql.Tx) error {
 		state, _, err := importState(ctx, tx)
 		if err != nil {
@@ -203,12 +306,15 @@ func (s *Store) setFence(ctx context.Context, rel, fenceState, digest string) er
 		if state == importComplete {
 			return ErrImportComplete
 		}
-		var res sql.Result
-		if fenceState == FenceIntent {
-			res, err = tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = ?, fence_digest = ? WHERE path = ?`, fenceState, digest, rel)
-		} else {
-			res, err = tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = ? WHERE path = ? AND fence_state != 'none'`, fenceState, rel)
+		cond := ``
+		if witness != "" {
+			cond = ` AND state = 'present'`
 		}
+		kind := "replace"
+		if witness != "" {
+			kind = "remove"
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'intent', fence_digest = ?, fence_mtime = ?, fence_witness = ?, fence_required = 1, fence_kind = ? WHERE path = ?`+cond, digest, mtime, witness, kind, rel)
 		if err != nil {
 			return err
 		}
@@ -216,6 +322,13 @@ func (s *Store) setFence(ctx context.Context, rel, fenceState, digest string) er
 			return fmt.Errorf("wsmeta: no staged capture %q to fence", rel)
 		}
 		return nil
+	})
+}
+
+func (s *Store) markFenceLanded(ctx context.Context, rel string) error {
+	return s.write(ctx, durable, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'landed' WHERE path = ? AND fence_state = 'intent'`, rel)
+		return err
 	})
 }
 
@@ -230,7 +343,7 @@ func (s *Store) Captures(ctx context.Context) ([]Capture, error) {
 	return out, err
 }
 
-const captureColumns = `path, store, reply_id, session_gen, state, bytes, digest, read_error, attempt, captured_at, fence_state, fence_digest, import_status, import_detail`
+const captureColumns = `path, store, reply_id, session_gen, state, bytes, digest, read_error, attempt, captured_at, fence_state, fence_digest, fence_required, fence_mtime, fence_witness, import_status, import_detail`
 
 func loadCaptures(ctx context.Context, q querier) ([]Capture, error) {
 	rows, err := q.QueryContext(ctx, `SELECT `+captureColumns+` FROM legacy_captures ORDER BY path`)
@@ -241,7 +354,7 @@ func loadCaptures(ctx context.Context, q querier) ([]Capture, error) {
 	var out []Capture
 	for rows.Next() {
 		var c Capture
-		if err := rows.Scan(&c.Path, &c.Store, &c.ReplyID, &c.SessionGen, &c.State, &c.Bytes, &c.Digest, &c.ReadError, &c.Attempt, &c.CapturedAt, &c.FenceState, &c.FenceDigest, &c.ImportStatus, &c.ImportDetail); err != nil {
+		if err := rows.Scan(&c.Path, &c.Store, &c.ReplyID, &c.SessionGen, &c.State, &c.Bytes, &c.Digest, &c.ReadError, &c.Attempt, &c.CapturedAt, &c.FenceState, &c.FenceDigest, &c.FenceRequired, &c.FenceModTime, &c.FenceWitness, &c.ImportStatus, &c.ImportDetail); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -255,6 +368,7 @@ type legacyRead struct {
 	bytes  []byte
 	digest string
 	err    string
+	mtime  time.Time // of the file (or link target) discovery stat'ed
 	// transient marks a read that failed for a reason a retry may clear;
 	// state is then unset and the previous capture row, if any, stands.
 	transient bool
@@ -310,7 +424,7 @@ func readLegacy(abs string, readFile func(string) ([]byte, error)) legacyRead {
 	if data == nil {
 		data = []byte{}
 	}
-	return legacyRead{state: CapturePresent, bytes: data, digest: contentDigest(data)}
+	return legacyRead{state: CapturePresent, bytes: data, digest: contentDigest(data), mtime: info.ModTime()}
 }
 
 // errNotRegular reports a bundled path that opened as something other than a
@@ -323,7 +437,31 @@ func contentDigest(data []byte) string {
 }
 
 type captureMeta struct {
-	state, digest, fenceState, fenceDigest string
+	state, digest, fenceState, fenceDigest, fenceWitness, fenceKind string
+	fenceRequired                                                 bool
+	fenceMtime                                         int64
+}
+
+// fenceProven reports whether the migration's own fence on a capture is the
+// live file: a replacement fence's digest and sentinel time, or a removal
+// fence's absent path with the original bytes at its witness. unread is set
+// when the witness could not be read for a transient reason.
+func (s *Store) fenceProven(prev captureMeta, got legacyRead) (proven, unread bool) {
+	if prev.fenceState == FenceNone {
+		return false, false
+	}
+	if prev.fenceWitness != "" {
+		if got.state != CaptureAbsent {
+			return false, false
+		}
+		w := readLegacy(filepath.Join(s.dir, filepath.FromSlash(prev.fenceWitness)), s.opts.ReadFile)
+		if w.transient {
+			return false, true
+		}
+		return w.state == CapturePresent && w.digest == prev.digest, false
+	}
+	return got.state == CapturePresent && got.digest == prev.fenceDigest &&
+		got.mtime.Unix() == prev.fenceMtime && got.mtime.Nanosecond() == 0, false
 }
 
 // stagePass captures every bundled file inside tx. It returns the pass
@@ -332,14 +470,14 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 	res := StageResult{Attempt: attempt}
 	now := s.opts.Now().UTC().Format(time.RFC3339Nano)
 	existing := map[string]captureMeta{}
-	rows, err := tx.QueryContext(ctx, `SELECT path, state, digest, fence_state, fence_digest FROM legacy_captures`)
+	rows, err := tx.QueryContext(ctx, `SELECT path, state, digest, fence_state, fence_digest, fence_witness, fence_kind, fence_required, fence_mtime FROM legacy_captures`)
 	if err != nil {
 		return res, err
 	}
 	for rows.Next() {
 		var p string
 		var m captureMeta
-		if err := rows.Scan(&p, &m.state, &m.digest, &m.fenceState, &m.fenceDigest); err != nil {
+		if err := rows.Scan(&p, &m.state, &m.digest, &m.fenceState, &m.fenceDigest, &m.fenceWitness, &m.fenceKind, &m.fenceRequired, &m.fenceMtime); err != nil {
 			rows.Close()
 			return res, err
 		}
@@ -382,19 +520,33 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 			}
 			return nil
 		}
-		fenced := had && prev.fenceState != FenceNone
-		if fenced && got.state != CaptureUnreadable && got.digest == prev.fenceDigest {
-			// The migration's own fence is the live file: keep the original.
-			res.Reused++
-			_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ? WHERE path = ?`, attempt, gen, rel)
-			return err
-		}
-		if fenced {
-			res.Unfenced = append(res.Unfenced, rel)
+		if had {
+			proven, unread := s.fenceProven(prev, got)
+			if unread {
+				res.Unread = append(res.Unread, rel)
+				_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ? WHERE path = ?`, attempt, gen, rel)
+				return err
+			}
+			if proven {
+				// The migration's own fence is the live file: keep the original.
+				res.Reused++
+				_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ? WHERE path = ?`, attempt, gen, rel)
+				return err
+			}
+			if prev.fenceState != FenceNone {
+				res.Unfenced = append(res.Unfenced, rel)
+			}
+			// The obligation outlives the re-stage below and a restart. A
+			// removal is satisfied by a path that is absent and was staged
+			// absent: nothing is left to retain or fence.
+			removed := prev.fenceKind == "remove" && prev.fenceState == FenceNone && prev.state == CaptureAbsent && got.state == CaptureAbsent
+			if prev.fenceRequired && !removed {
+				res.Pending = append(res.Pending, rel)
+			}
 		}
 		if had && got.state != CaptureUnreadable && prev.state == got.state && prev.digest == got.digest {
 			// Unchanged original (its fence, if any, never landed).
-			_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ?, fence_state = 'none', fence_digest = '' WHERE path = ?`, attempt, gen, rel)
+			_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ?, fence_state = 'none', fence_digest = '', fence_mtime = 0, fence_witness = '' WHERE path = ?`, attempt, gen, rel)
 			return err
 		}
 		res.Restaged++
@@ -403,7 +555,7 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 			ON CONFLICT(path) DO UPDATE SET store = excluded.store, reply_id = excluded.reply_id, session_gen = excluded.session_gen,
 				state = excluded.state, bytes = excluded.bytes, digest = excluded.digest, read_error = excluded.read_error,
 				attempt = excluded.attempt, captured_at = excluded.captured_at, fence_state = 'none', fence_digest = '',
-				import_status = '', import_detail = ''`,
+				fence_mtime = 0, fence_witness = '', import_status = '', import_detail = ''`,
 			rel, store, replyID, gen, got.state, got.bytes, got.digest, got.err, attempt, now)
 		return err
 	}
@@ -505,6 +657,7 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 	}
 	sort.Strings(res.Unfenced)
 	sort.Strings(res.Unread)
+	sort.Strings(res.Pending)
 	return res, nil
 }
 

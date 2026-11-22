@@ -46,11 +46,7 @@ func TestTransientReadKeepsFencedOriginalAndBlocksCommit(t *testing.T) {
 	}
 	staged := captureMap(t, s)
 	fenced := []byte(`{"permission_level":"!cutover-fenced"}`)
-	if err := s.PrepareFence(ctx, perm, fenced, false); err != nil {
-		t.Fatal(err)
-	}
-	put(t, dir, perm, string(fenced))
-	if err := s.MarkFenceLanded(ctx, perm); err != nil {
+	if err := s.ApplyFence(ctx, perm, fenced); err != nil {
 		t.Fatal(err)
 	}
 	put(t, dir, late, `{"through":3}`)

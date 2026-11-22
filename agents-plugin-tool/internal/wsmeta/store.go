@@ -251,6 +251,10 @@ var schema = []string{
 		captured_at TEXT NOT NULL,
 		fence_state TEXT NOT NULL DEFAULT 'none' CHECK(fence_state IN ('none', 'intent', 'landed')),
 		fence_digest TEXT NOT NULL DEFAULT '',
+		fence_required INTEGER NOT NULL DEFAULT 0,
+		fence_kind TEXT NOT NULL DEFAULT '' CHECK(fence_kind IN ('', 'replace', 'remove')),
+		fence_mtime INTEGER NOT NULL DEFAULT 0,
+		fence_witness TEXT NOT NULL DEFAULT '',
 		import_status TEXT NOT NULL DEFAULT '',
 		import_detail TEXT NOT NULL DEFAULT ''
 	)`,
