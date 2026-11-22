@@ -353,6 +353,55 @@ test('a storage event from another tab never writes back a prune from this tab\'
   assert.equal(lagging.items[0].classList.contains('wb-held'), true, 'adopted hold is shown');
 });
 
+test('a rerun before the pending signal keeps holds another tab made on a newer board', () => {
+  const storage = makeStorage();
+  const key = 'ws.wb.holds.board-r';
+  const b = makePillHarness([{ id: 50, top: -200, title: 'Old wording' }], { storage, rid: 'board-r' });
+  const a = makePillHarness([{ id: 50, top: -200, title: 'New wording' }, { id: 51, top: -100 }], { storage, rid: 'board-r' });
+  a.clickHold(a.items[0]);
+  a.clickHold(a.items[1]);
+  const held = storage.dump();
+  assert.deepEqual(Object.keys(JSON.parse(held[key])).sort(), ['50', '51']);
+  // B's partial swap renders the old topic and reruns pill.js before the
+  // dashboard's badge marks the update pending (st.pending is still 0).
+  b.run();
+  assert.deepEqual(storage.dump(), held, 'the old snapshot proves neither hold stale');
+});
+
+test('a storage redraw on a lagging board keeps a newer hold on an item it shows with older content', () => {
+  const storage = makeStorage();
+  const key = 'ws.wb.holds.board-g';
+  const b = makePillHarness([{ id: 60, top: -200, title: 'Old wording' }], { storage, rid: 'board-g' });
+  const a = makePillHarness([{ id: 60, top: -200, title: 'New wording' }], { storage, rid: 'board-g' });
+  a.clickHold(a.items[0]);
+  const held = storage.dump();
+  b.fireStorage(key);
+  b.win.wbPill.update();
+  b.flush();
+  assert.deepEqual(storage.dump(), held, 'B has not rendered the held content, so it cannot judge it');
+  assert.equal(b.items[0].classList.contains('wb-held'), false, 'shown as held only on the content it was made on');
+  // A rendered the held content; when its own board then changes that item,
+  // the hold is provably stale and goes.
+  a.items[0].children[0].textContent = 'Newest wording';
+  a.win.wbPill.update();
+  a.flush();
+  assert.deepEqual(storage.dump(), {}, 'the tab that saw the held content change drops it');
+});
+
+test('holds set in two tabs before either sees the other\'s storage event are both kept', () => {
+  const storage = makeStorage();
+  const key = 'ws.wb.holds.board-k';
+  const specs = [{ id: 70, top: -200 }, { id: 71, top: -100 }, { id: 72, top: -50 }];
+  const a = makePillHarness(specs, { storage, rid: 'board-k' });
+  const b = makePillHarness(specs, { storage, rid: 'board-k' });
+  a.clickHold(a.items[0]);
+  b.clickHold(b.items[1]);
+  assert.deepEqual(Object.keys(JSON.parse(storage.dump()[key])).sort(), ['70', '71']);
+  a.clickHold(a.items[2]);
+  b.clickHold(b.items[1]); // unhold touches only its own key
+  assert.deepEqual(Object.keys(JSON.parse(storage.dump()[key])).sort(), ['70', '72']);
+});
+
 test('hold is dropped when item is answered (drafted or sent) or withdrawn from open asks', () => {
   const storage = makeStorage();
   const h1 = makePillHarness([

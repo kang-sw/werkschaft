@@ -167,15 +167,34 @@
     if (b.title !== tip) b.title = tip;
     if (b.getAttribute("aria-label") !== tip) b.setAttribute("aria-label", tip);
   }
+  // Writes are per key: re-read both maps, change only the given IDs, and
+  // write them back, so a hold another tab set since this tab last loaded
+  // them is never overwritten by this tab's copy.
+  function writeHolds(mutate) {
+    var h = loadHolds(), l = loadHolds(linksStorageKey());
+    mutate(h, l);
+    holds = h;
+    links = l;
+    saveHolds(holds);
+  }
+  function holdId(k, h, l) { return k + "\n" + h[k] + "\n" + (k in l ? l[k] : ""); }
+  // What this tab has rendered, kept across the dashboard's reruns of this
+  // script: each hold it showed on its own content, each open item ID, and
+  // whether it has judged a board yet. A tab's board only moves forward.
+  var board = boardKey(), mem = st.holdMem && st.holdMem.board === board ? st.holdMem
+    : (st.holdMem = { board: board, seen: {}, rendered: {}, trusted: false });
   // Reconcile stored holds against current items:
   // - drop any hold whose item is now answered
   // - clear any hold whose content fingerprint changed (patched or re-asked)
   // - when pruneAbsent is true, drop any stored ID no longer among open items
   //   (answered on server or withdrawn)
-  // Every drop is written to the localStorage all tabs share, so it runs only
-  // against a current board: while the dashboard buffers a board update this
-  // DOM is an old snapshot that may lack (or show older content for) an item
-  // another tab just held. The prune then waits for the update.
+  // A drop is written to the localStorage all tabs share, and this DOM may be
+  // an old snapshot (a buffered update, or a stream behind another tab's), so
+  // a changed or absent item proves a hold stale only against content this
+  // tab rendered itself: it showed the hold on matching content, or showed
+  // the item, before. The first board a tab judges was fetched whole and
+  // counts as current. While the dashboard buffers an update nothing is
+  // judged; the prune waits for it.
   var pruneDue = false;
   function reconcileHolds(pruneAbsent) {
     if (st.pending > 0) {
@@ -184,36 +203,42 @@
     }
     pruneAbsent = pruneAbsent || pruneDue;
     pruneDue = false;
-    var openIds = {}, changed = false;
+    var shown = items.length > 0 || d.querySelector(".topic") || d.querySelector(".reply");
+    var trusted = shown && !mem.trusted;
+    if (shown) mem.trusted = true;
+    var openIds = {}, drop = {};
     items.forEach(function (el) {
       var k = itemKey(el);
       if (!k) return;
       openIds[k] = true;
       if (!(k in holds)) return;
-      if (answered(el) || !matches(el, k)) {
-        delete holds[k];
-        changed = true;
-      }
+      var id = holdId(k, holds, links);
+      if (answered(el)) drop[k] = id;
+      else if (matches(el, k)) mem.seen[id] = true;
+      else if (trusted || mem.seen[id]) drop[k] = id;
     });
-    if (pruneAbsent && (items.length > 0 || d.querySelector(".topic") || d.querySelector(".reply"))) {
+    if (pruneAbsent && shown) {
       Object.keys(holds).forEach(function (k) {
-        if (!openIds[k]) {
-          delete holds[k];
-          changed = true;
-        }
+        if (!openIds[k] && (trusted || mem.rendered[k])) drop[k] = holdId(k, holds, links);
       });
     }
-    if (changed) saveHolds(holds);
-  }
-  function applyHoldDOM() {
-    items.forEach(function (el) {
-      var k = itemKey(el);
-      syncHoldDOM(el, !!(k && (k in holds) && !answered(el)));
+    Object.keys(openIds).forEach(function (k) { mem.rendered[k] = true; });
+    if (!Object.keys(drop).length) return;
+    // Only the hold that was judged goes: another tab may have replaced it.
+    writeHolds(function (h, l) {
+      Object.keys(drop).forEach(function (k) {
+        if (k in h && holdId(k, h, l) === drop[k]) { delete h[k]; delete l[k]; }
+      });
     });
   }
+  function applyHoldDOM() {
+    items.forEach(function (el) { syncHoldDOM(el, held(el)); });
+  }
+  // A hold shows only on the content it was made on; one kept for content
+  // this tab has not rendered yet waits for it.
   function held(el) {
     var k = itemKey(el);
-    return !!(k && (k in holds) && !answered(el));
+    return !!(k && (k in holds) && !answered(el) && matches(el, k));
   }
   function isHeldExternal(el) {
     var k = itemKey(el);
@@ -222,18 +247,17 @@
   function toggleHold(el) {
     var k = itemKey(el);
     if (!k) return false;
-    if (k in holds) {
-      delete holds[k];
-      saveHolds(holds);
+    if (k in holds && matches(el, k)) {
+      writeHolds(function (h, l) { delete h[k]; delete l[k]; });
       syncHoldDOM(el, false);
       retitle();
       redrawSoon();
       return false;
     }
     if (answered(el)) return false;
-    holds[k] = itemFingerprint(el, true);
-    links[k] = itemFingerprint(el);
-    saveHolds(holds);
+    var legacy = itemFingerprint(el, true), full = itemFingerprint(el);
+    writeHolds(function (h, l) { h[k] = legacy; l[k] = full; });
+    mem.seen[holdId(k, holds, links)] = true;
     syncHoldDOM(el, true);
     retitle();
     redrawSoon();
