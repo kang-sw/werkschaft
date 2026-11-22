@@ -83,6 +83,24 @@ function netLog(page, pattern) {
 }
 const jobsOf = b => (b && Array.isArray(b.jobs)) ? b.jobs : [];
 
+const revOf = e => { try { return JSON.parse(e.body).rev; } catch (x) { return -1; } };
+// wake publishes one revision (after setting the jobs, when given) in controlled-wake mode and waits for the
+// positive browser-side evidence that its read happened: a list read finished whose revision is the one just made
+// (the daemon reads the revision before the list, so that read was taken after the wake), then no list read in
+// flight or new for a while. It returns that read's entry. The caller checks what the UI shows for it.
+async function wake(net, jobs) {
+  if (jobs) await post('/jobs', jobs);
+  const R = await post('/bump');
+  const gets = () => net.log.filter(e => e.method === 'GET');
+  let hit = null;
+  for (let t = 0; t < 6000 && !hit; t += 25) { hit = gets().find(e => e.done && !e.failed && e.status === 200 && revOf(e) >= R) || null; if (!hit) await sleep(25); }
+  assert.ok(hit, 'the wake (revision ' + R + ') was read: ' + JSON.stringify(gets().map(e => [e.i, e.done, e.failed, e.status, revOf(e)])));
+  for (let calm = 0, t = 0; calm < 200 && t < 6000; t += 25) { const n = net.log.length; await sleep(25); calm = (net.log.length === n && gets().every(e => e.done)) ? calm + 25 : 0; }
+  assert.ok(gets().every(e => e.done), 'no list read is left in flight after the wake');
+  await Promise.all(gets().map(e => e.fin));
+  return hit;
+}
+
 async function run(browser, { lang, scheme }) {
   const T = TEXT[lang], tag = lang + '-' + scheme;
   let st, fi;
@@ -529,31 +547,36 @@ async function run(browser, { lang, scheme }) {
   });
 
   await sect('ORDER-LATE-LIST', async () => {
-    // a list answered late, taken before the retry, does not take it back in the initiating tab
+    // a list answered late, taken before the retry, does not take it back in the initiating tab. Wakes are controlled:
+    // no revision is published but the ones this scenario publishes.
     await post('/set', { notice: 'sent' });
-    await setJobs([stopped('exec_o1', 'deploy --prod', 'failed')]);
+    await post('/manual', { on: true });
+    const net = netLog(page, /\/exec\/(jobs$|exec_o1\/stop)/);
+    await wake(net, [stopped('exec_o1', 'deploy --prod', 'failed')]);
     await view.waitForSelector('.xchip[data-xid="exec_o1"]');
     await openChip(view, 'exec_o1');
     await view.waitForSelector('.xnotice[data-ns="failed"]');
+    // both are latched in the page before anything is released: the notice's states, and the sibling's chip appearing
     await view.evaluate(() => {
       window.__ns = [];
+      window.__o9 = false;
       new MutationObserver(() => { const c = document.querySelector('.xpeek .xnotice'), v = c ? c.getAttribute('data-ns') : '-'; if (window.__ns[window.__ns.length - 1] !== v) window.__ns.push(v); }).observe(document.querySelector('.xpeek'), { subtree: true, childList: true, attributes: true });
+      new MutationObserver(() => { if (document.querySelector('.xchip[data-xid="exec_o9"]')) window.__o9 = true; }).observe(document.documentElement, { subtree: true, childList: true, attributes: true });
     });
     // the list taken before the retry (failed) is held at the daemon, with a sibling job only that list carries
     // (the sibling leaves the live fixture as soon as that list's snapshot is taken, so no later read can show it);
     // the retry's own answer (closed: the agent's session is gone, not an optimistic state) is shown; then the old
-    // list is released, and the sibling's chip appearing is the barrier that the old answer has been taken
-    const net = netLog(page, /\/exec\/(jobs$|exec_o1\/stop)/);
+    // list is released, and the latched chip is the barrier that the old answer has been taken
     await post('/set', { notice: 'closed', listHold: true });
     await post('/jobs', [stopped('exec_o1', 'deploy --prod', 'failed'), J('exec_o9', 'late sibling', { started_at: Date.now() - 9000 })]);
     await post('/bump');
     await waitStat(s => (s.held.list || 0) >= 1, 3000, 'the list taken before the retry, held');
     await post('/jobs', [stopped('exec_o1', 'deploy --prod', 'failed')]);
-    assert.equal(await view.locator('.xchip[data-xid="exec_o9"]').count(), 0, 'ORDER: the held list is not on the page yet');
+    assert.equal(await view.evaluate(() => window.__o9), false, 'ORDER: the held list is not on the page yet');
     await view.click('.xnotice [data-xact="retry"]');
     await view.waitForSelector('.xpeek .xnotice[data-ns="closed"]', { timeout: 4000 });
     await post('/set', { notice: 'closed' });
-    await view.waitForSelector('.xchip[data-xid="exec_o9"]', { state: 'attached', timeout: 6000 });
+    await view.waitForFunction(() => window.__o9 === true, null, { timeout: 6000 });
     await net.settled(4000);
     net.stop();
     // browser-side evidence: the sibling came from one read, the one issued before the retry's request, and that
@@ -568,6 +591,7 @@ async function run(browser, { lang, scheme }) {
     const firstClosed = ns.indexOf('closed');
     assert.ok(firstClosed >= 0, 'ORDER: the retry shows its answer: ' + JSON.stringify(ns));
     assert.ok(!ns.slice(firstClosed).includes('failed'), 'ORDER: an older list answered late does not bring the failed notice back: ' + JSON.stringify(ns));
+    await post('/manual', { on: false });
     await post('/set', { notice: 'sent' });
     await closeAny();
   });
@@ -606,20 +630,18 @@ async function run(browser, { lang, scheme }) {
   // stop's request still said "running" (the daemon took that list's snapshot before the stop landed); the
   // panel is on another job by then, and the outcome toast appears once.
   await sect('STOP-TERMINAL', async () => {
+    // wakes are controlled: the only revisions are the ones published here
     await post('/set', { notice: 'pending' });
+    await post('/manual', { on: true });
+    const net = netLog(page, /\/exec\/(jobs$|exec_s1\/stop)/);
     const run3 = [J('exec_s1', 'worker one', { started_at: Date.now() - 60000 }), J('exec_s2', 'worker two', { started_at: Date.now() - 50000 })];
-    await setJobs(run3);
+    await wake(net, run3);
     await view.waitForSelector('.xchip[data-xid="exec_s2"]', { state: 'attached' });
     await openChip(view, 'exec_s1');
     await view.evaluate(() => {
       window.__tn = 0;
       new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.classList && n.classList.contains('xtt-text')) window.__tn++; }))).observe(document.querySelector('.xtoast'), { childList: true });
     });
-    // no list read is in flight when the stop is issued, so every read after it is issued after the stop request
-    const net = netLog(page, /\/exec\/(jobs$|exec_s1\/stop)/);
-    await sleep(400);
-    await net.settled(4000);
-    const before = net.log.length;
     // the stop waits at the daemon, before it takes effect, until the lists are held
     await post('/set', { notice: 'pending', stopBlock: true });
     await view.click('.xpeek [data-xact="stop"]');
@@ -627,18 +649,18 @@ async function run(browser, { lang, scheme }) {
     await view.click('.xconf [data-xact="confirm"]');
     await view.click('.xp-tab[data-xtab="exec_s2"]');
     await waitStat(s => (s.held.stopblock || 0) >= 1, 3000, 'the stop request waiting at the daemon');
-    // a list taken after the stop request, while the job still runs; a third job appearing shows the page took it
-    await setJobs(run3.concat([J('exec_s3', 'worker three', { started_at: Date.now() - 40000 })]));
+    let stopReq = null;
+    for (let t = 0; t < 3000 && !stopReq; t += 25) { stopReq = net.log.find(e => e.method === 'POST'); if (!stopReq) await sleep(25); }
+    assert.ok(stopReq, 'STOP-TERMINAL: the stop request was observed');
+    // one wake after the stop request, carrying the third job as its marker, while the job still runs: its read is the
+    // only list read issued after the stop request
+    const hit = await wake(net, run3.concat([J('exec_s3', 'worker three', { started_at: Date.now() - 40000 })]));
+    const after = net.log.filter(e => e.method === 'GET' && e.i > stopReq.i);
+    assert.deepEqual(after.map(e => e.i), [hit.i], 'STOP-TERMINAL: the wake\'s read is the only one issued after the stop request: ' + JSON.stringify(net.log.map(e => [e.i, e.method, e.status])));
+    assert.ok(net.bodyHas(hit, b => jobsOf(b).some(j => j.id === 'exec_s3') && jobsOf(b).some(j => j.id === 'exec_s1' && j.state === 'running')), 'STOP-TERMINAL: that read carries the marker and the running job');
+    // applied: its marker (the third job's chip) is on the page, and the job still shows running
     await view.waitForSelector('.xchip[data-xid="exec_s3"]', { state: 'attached', timeout: 3000 });
     assert.equal(await view.locator('.xchip[data-xid="exec_s1"] .xnode[data-st="running"], .xchip[data-xid="exec_s1"] .xnode[data-st="stopping"]').count(), 1, 'STOP-TERMINAL: the page holds the running list');
-    // browser-side evidence: that running list (the one carrying s3, s1 still running) was read by a GET issued after
-    // the stop request, and it finished
-    await net.settled(4000);
-    const stopReq = net.log.find(e => e.method === 'POST');
-    assert.ok(stopReq && stopReq.i >= before, 'STOP-TERMINAL: the stop request was observed after the setup reads: ' + JSON.stringify(net.log.map(e => [e.i, e.method])));
-    const runList = net.log.filter(e => e.method === 'GET' && net.bodyHas(e, b => jobsOf(b).some(j => j.id === 'exec_s3') && jobsOf(b).some(j => j.id === 'exec_s1' && j.state === 'running')));
-    assert.ok(runList.length >= 1, 'STOP-TERMINAL: a finished read carried the running list: ' + JSON.stringify(net.log.map(e => [e.i, e.method, e.failed, e.status])));
-    assert.ok(runList.every(e => !e.failed && e.status === 200 && e.i > stopReq.i), 'STOP-TERMINAL: the running list was read after the stop request was issued: ' + JSON.stringify([stopReq.i, runList.map(e => e.i)]));
     // every list is held at the daemon (its snapshot taken, its answer not sent) before the stop is let through
     await post('/set', { notice: 'pending', stopBlock: true, listHold: true });
     await post('/set', { notice: 'pending', listHold: true });
@@ -646,14 +668,17 @@ async function run(browser, { lang, scheme }) {
     await view.waitForSelector('.xchip[data-xid="exec_s1"] .xnode[data-st="stopped"]', { state: 'attached', timeout: 8000 });
     await view.waitForSelector('.xtoast:not([hidden])', { timeout: 3000 });
     assert.match(await view.locator('.xtoast').textContent(), T.notifying, 'STOP-TERMINAL: the toast comes from the stop answer');
-    await waitStat(s => (s.held.list || 0) >= 1, 5000, 'a list held at the daemon');
-    // the job moves on to sent and its list is held too; then the held lists are released
+    await waitStat(s => (s.held.list || 0) >= 1, 5000, 'a list held at the daemon (the one after the stop)');
+    // the job moves on to sent and a wake announces it (the page, its read held, reads once more after it); then the
+    // held list is released
     await post('/patch', { id: 'exec_s1', state: 'stopped', stopped_by_user: true, stop_notice: 'sent' });
+    await post('/bump');
     assert.equal(await view.evaluate(() => window.__tn), 1, 'STOP-TERMINAL: one toast so far');
     await post('/set', { notice: 'sent' });
     await view.waitForFunction(re => new RegExp(re).test(document.querySelector('.xtoast .xtt-text').textContent), T.notified.source, { timeout: 6000 });
     assert.equal(await view.evaluate(() => window.__tn), 1, 'STOP-TERMINAL: the toast appears exactly once');
     net.stop();
+    await post('/manual', { on: false });
     await closeAny();
   });
 
@@ -675,17 +700,14 @@ async function run(browser, { lang, scheme }) {
       await route.fulfill({ response: r });
       completed++;
     });
+    // wakes are controlled: the setup's are published and read to the end first; then the scenario's own wake is
+    // the only source of reads
+    await post('/manual', { on: true });
     const net = netLog(page, /\/exec\/jobs$/);
-    await setJobs([J('exec_seed', 'seed job')]);
+    await wake(net, [J('exec_seed', 'seed job')]);
     await view.waitForSelector('.xchip[data-xid="exec_seed"]', { state: 'attached', timeout: 4000 });
-    await setJobs([]);
+    await wake(net, []);
     await view.waitForSelector('.xchip[data-xid="exec_seed"]', { state: 'detached', timeout: 4000 });
-    // the setup revision's own read (the one that emptied the strip) finished; then no read is pending and none
-    // is issued for a while, so no wake of the setup is left to use up a simulated failure
-    let calm = 0;
-    for (let t = 0; t < 6000 && calm < 500; t += 50) { const n = net.log.length; await sleep(50); calm = (net.log.length === n && net.log.every(e => e.done)) ? calm + 50 : 0; }
-    assert.ok(calm >= 500, 'LIST-RETRY: the setup reads are drained: ' + JSON.stringify(net.log.map(e => [e.i, e.done])));
-    assert.ok(net.log.some(e => !e.failed && net.bodyHas(e, b => jobsOf(b).length === 0)), 'LIST-RETRY: the setup revision\'s own read (empty list) finished');
     assert.equal(completed, requested, 'LIST-RETRY: every setup read completed');
     net.stop();
     armed = true;
@@ -698,6 +720,7 @@ async function run(browser, { lang, scheme }) {
     await sleep(2500);
     assert.equal(times.length, n, 'LIST-RETRY: no more reads once it answered (no event came)');
     await ctx.unroute('**/exec/jobs');
+    await post('/manual', { on: false });
     await setJobs([]);
   });
 

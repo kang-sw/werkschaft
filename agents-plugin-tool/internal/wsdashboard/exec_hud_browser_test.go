@@ -65,6 +65,9 @@ type hudBrowserSvc struct {
 	// (until released or 25 s).
 	// stopBlock holds a stop before it takes effect (the job is still running while
 	// it waits). quit is closed when the test ends, and releases every wait at once.
+	// manual: no automatic revision is published (a stop's end, /patch); the script
+	// publishes each one with /bump, which answers with the revision it made.
+	manual    bool
 	stopGate  chan struct{}
 	stopBlock chan struct{}
 	listGate  chan struct{}
@@ -195,7 +198,7 @@ func (s *hudBrowserSvc) StopByUser(owner, id string) (execjob.HostedSummary, err
 	s.mu.Lock()
 	s.counts["stop"]++
 	s.counts["stop:"+id]++
-	ms, block := s.stopMs, s.stopBlock
+	ms, block, manual := s.stopMs, s.stopBlock, s.manual
 	s.mu.Unlock()
 	if block != nil {
 		s.waitGate("stopblock", block)
@@ -237,7 +240,9 @@ func (s *hudBrowserSvc) StopByUser(owner, id string) (execjob.HostedSummary, err
 		s.waitGate("stop", gate)
 		s.mu.Lock()
 	}
-	go d.ExecJobsChanged()
+	if !manual {
+		go d.ExecJobsChanged()
+	}
 	return sum, nil
 }
 
@@ -411,11 +416,31 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 			j.ExitCode = in.ExitCode
 			j.StoppedByUser = in.Stopped
 		}
+		manual := svc.manual
 		svc.mu.Unlock()
-		f.d.ExecJobsChanged()
+		if !manual {
+			f.d.ExecJobsChanged()
+		}
 		reply(w, "ok")
 	})
-	ctl.HandleFunc("/bump", func(w http.ResponseWriter, r *http.Request) { f.d.ExecJobsChanged(); reply(w, "ok") })
+	ctl.HandleFunc("/bump", func(w http.ResponseWriter, r *http.Request) {
+		f.d.ExecJobsChanged()
+		reply(w, f.d.execRev.Load())
+	})
+	// /manual switches the controlled-wake mode on or off (see manual).
+	ctl.HandleFunc("/manual", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			On bool `json:"on"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		svc.mu.Lock()
+		svc.manual = in.On
+		svc.mu.Unlock()
+		reply(w, "ok")
+	})
 	ctl.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()
