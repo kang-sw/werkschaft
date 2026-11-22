@@ -418,3 +418,72 @@ restored, the oldest not resurrected even after a buffered live turn end),
 `TestAgyNativeReplayClosesRebuiltRowsWithoutSnapshot`,
 `TestAgyNativeReplayClosesRebuiltRowsByEvidence`,
 `TestLiveWriterRestoresAgyNativeRows`.
+
+#### Edition (9b86bc211) - 2026-11-22
+
+Delta review fixes (e23dd9a6f, 4967c21ea, 9b86bc211). These supersede the
+"older writer drops it" and option B clauses above where they differ.
+
+- End-unknown classification follows from the invariant, not the flag
+  alone. Agy reports no child completion, so a done `agy-native:` row
+  always ended with its observation; observed launch failures are failed
+  (`wslive.AgyObservationEnded`). Seeding (`SeedFinished`),
+  `wslive.ReadSnapshot` and the dashboard's snapshot parse set `EndUnknown`
+  from it. Writers keep writing the flag. A snapshot an older writer
+  rewrote without the flag still leaves the row out of the HUD completion
+  count (`TestHUDEndUnknownSurvivesAnOlderWriter`,
+  `TestEndUnknownRowSurvivesAnOlderWriter`).
+- Replay staging. While a replay runs, agy native row events stay outside
+  the state and retention. They are kept in order, with the live turn ends
+  between them and each event's arrival time. At ReplayDone (or a process
+  end during the replay), the steps run in this order:
+  1. Rows the snapshot shows evicted are dropped, and their events never
+     apply.
+  2. The surviving events apply in order.
+  3. The rows each staged live turn end found running settle at that end's
+     time, after every event. A later buffered launch failure still wins.
+
+  Each apply runs retention, but because the evicted rows are already gone
+  and settled native rows never change, the result equals one retention
+  over the final set. Five saved rows survive a replayed quiet start plus
+  launch failure of an older evicted row
+  (`TestAgyNativeReplayStagesRebuiltFailureOutsideRetention`). A catch-up
+  failure of a snapshot-running row still applies
+  (`TestAgyNativeReplayKeepsCatchUpFailureOfRunningRow`).
+- Snapshot coverage. The recovery file gains additive
+  `holderId`/`holderSeq` (`wslive.Snapshot.HolderID`, `HolderSeq`): the
+  holder records the state applied, which is the conversation's applied
+  `HolderSeq` when written. During a replay, the file keeps the coverage
+  of the snapshot the state was restored from.
+  - A rebuilt row the snapshot lacks is dropped only when its first record
+    is at or below the covered seq of the same holder.
+  - A row started after that seq is kept. A terminal record that follows
+    closes it; otherwise it closes end-unknown at the replay boundary.
+  - A row the snapshot lists running whose start left the ring is seeded
+    from its stored label, parent and start, and closes end-unknown at the
+    snapshot's `UpdatedAt`.
+  - Without the members, the option B rule applies.
+
+  Evidence: `TestAgyNativeReplayHonorsSnapshotCoverage` and
+  `TestSnapshotRecordsHolderCoverage`.
+- RAM publish authority ends with the proved process. A terminal login
+  takes a hosted row only once its process is gone
+  (`Registration.HostMayRun`). `lockSummaryWriterRAM` probes the proved
+  host PID through `Options.Alive`, a signal probe with no file I/O. When
+  the process is gone, it drops the proof and publishes nothing
+  (`TestNativeRowRAMProofEndsWithItsProcess`).
+
+Compatibility tier T1 (release-compatibility), for the new members:
+- Old reader: 7482aa91e `wslive/snapshot.go:451-460` decodes with plain
+  `json.Unmarshal` into a `Snapshot` (`:130-160`) that has no
+  `holderId`/`holderSeq` or `endUnknown` members, so it ignores them.
+- Old writer: 7482aa91e `wsagent/record.go:646-685` re-marshals that struct
+  and replaces the file, which drops the members.
+- New reader after a downgrade and re-upgrade:
+  - `restoredAgyNativeOf` (`wsagent/record.go:486`) reads no coverage, and
+    `restoredAgyNative.evicted` (`:475-484`) falls back to option B (`:479`).
+  - The dropped `endUnknown` is recovered by `AgyObservationEnded`
+    (`wslive/snapshot.go:128`, `wslive/state.go:1109`).
+
+No state is lost beyond option B's behaviour, which this ticket already
+accepted.
