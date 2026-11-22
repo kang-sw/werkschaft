@@ -768,3 +768,387 @@ Verification boundary:
   console error.
 - Performance: an open peek polls only while open; measure per-poll cost and
   chip render cost with 200 jobs (Constraints).
+
+### Result (1e43393cc) - 2026-11-23
+
+Landed in 444c57b29 (the HUD) and 1e43393cc (the lite review's fixes). UI only;
+no backend change was needed.
+
+- Files: `dashboard-exec-hud.js` (list, strip, folding, tooltip),
+  `dashboard-exec-hud-peek.js` (peek, output polling, stop flow, notice card,
+  toast), `dashboard-exec-hud.css`, the `execjobs` handler in
+  `dashboard-stream.js`, the assembly lists in `pages.go` and
+  `asset_source_test.go`, 86 `js.xhud.*` keys in all 11 tables.
+- Feed: event-driven only. The page makes no initial read; the `execjobs` event
+  (sent once on connect) triggers a coalesced list read (one in flight, one
+  queued). A daemon without the HUD never sends it, so an old daemon is asked
+  for nothing and logs nothing; a 404/403 on the list (LAN viewer, closed lead)
+  marks the page absent for that load. Ticking and fade timers run only while a
+  chip needs them.
+- Contract 2: `.sbwrap > .sbadge` is `flex: none; max-width: none`, the other
+  badges were already `flex: none`, and the interrupt slot is reserved even
+  while hidden. The group takes the measured remainder (a `ResizeObserver` on
+  the strip and the badges): all chips, chips and `+N` (failure dot on the fold),
+  one aggregate chip, its node alone, nothing. The only fixed width is the
+  aggregate at a composer of 320 px or less.
+- Decisions: stopped jobs fade after 12 s like ok jobs unless their stop notice
+  failed or closed (then they stay, with Retry); dismissals live in
+  sessionStorage per conversation and survive a reload; the quiet "ended N"
+  chip counts faded, not dismissed, jobs; only 12 chips are ever built (the
+  rest fold by count); the peek starts at the last 16 KiB of the output and
+  drops a leading partial line; the peek shows stopped state as "Stopped" (the
+  daemon cannot tell an agent stop from the close cascade); the mockup's
+  "sample notice text" disclosure is not drawn (the text is server-side and the
+  ticket calls the mockup's sample illustrative).
+- Deviations from the mockup: the confirm reads "Stop this job?" and names TERM
+  then KILL after a grace period (Windows: tree kill), per the ticket, not
+  "Force-stop … SIGKILL, no cleanup"; the toast over an open panel sits above
+  the panel (the mockup's offset overlapped the tab row); chips rise only when
+  new (the mockup replayed it on every rebuild); `.xpeek` max-height follows
+  the viewport instead of the mockup pane; no HUD-specific wide/narrow pane
+  classes (a narrow composer is measured).
+- Collisions found and avoided: the product's global copy handler
+  (`data-act="copy"`) and a `data-tab` ancestor swallowed the mockup's
+  attribute names; the HUD uses `data-x*` and `x*`/`xp-*` classes. `.sbadge` in
+  the tracker's support chat gets the same no-shrink rule.
+- Verification (macOS, `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+  `TestExecHUDBrowser` (Chromium, real page, routes and stream event; ko/en x
+  light/dark; 56 captures) ok; `TestComposerExecBrowser`,
+  `TestComposerControlsAndMeterBrowser`, `TestAgentBadgePopoverBrowser`,
+  `TestAgentsIslandBehavior`, `TestTreeRowsBrowser`, the support-chat badge
+  tests and the stream/SSE/WS filter ok; `./internal/wsi18n` ok;
+  `GOOS=windows go vet` and `go vet` clean on wsdashboard and wsi18n. No other
+  package was run. The browser test asserts: badge widths, heights, positions,
+  no clip and no ellipsis with and without jobs at 8 widths and two badge sets
+  (including a `12(+34)` label and a background badge); chips never grow as the
+  strip narrows; aggregate at 320; pin order, 12 s fade, reload past the
+  windows, dismiss across a reload, "ended N"; tooltip 7-line clamp; escaping
+  of command, cwd and output; stderr tint; polling only while open and from the
+  last offset; "N new" without a jump; copy; confirm focus, Esc, 8 s revert,
+  TERM/KILL wording; stop of agent and `!` jobs (notice shown vs "no agent
+  notice"), Retry; toast; toolbar keyboard (one tab stop, arrows, Home/End,
+  Enter, Esc consumed, focus returns); jump to card; reduced motion; no HUD and
+  no request without the event (old daemon) or on a 404.
+- Performance, 200 jobs (macOS, Chromium headless): chip render p50 1.6-3.6 ms,
+  max 4-6 ms with 12 chips and 117 nodes in the strip (23 ms p50, 185 chips
+  before the 12-chip cap); list read 0.8 ms p50, 1.7 ms max (about 40 KB); a
+  peek on a 1 MiB job reads the last 16 KiB first (body 16.7 KB with JSON),
+  apply 2.4 ms, fetch 1-10 ms, 4 polls in 2.5 s while idle (backoff 350 ms to
+  3 s), none after close; opening a peek with 200 tabs renders in 12 ms. No file
+  operation is made by any of it (fetches to memory-only routes). The Windows
+  and antivirus budget is unverified.
+- Review (lite, one pass): no Critical. Three Important, fixed in 1e43393cc:
+  keyboard open lost focus on the chip rebuild; Esc reached the rail, drawer
+  and shell as well; reopening the open job duplicated its output.
+- Not fixed, minor: the confirm's interval runs to 0 if the job ends under it;
+  the group can overlay the subagent badge for one frame before the observer
+  folds it; reopening the same job through `+N` has no browser test; the LAN
+  view's one logged 404 on the list read (by design).
+- Captures (untracked, not committed):
+  `ai-docs/assets/captures/261123/exec-job-hud-ui/`, `<lang>-<light|dark>-NN-*`
+  for idle, running, many (`+N`), aggregate at 320, ended states, quiet
+  "ended", tooltip, peek, peek with "N new", confirm, notice card, toast and a
+  failed notice with Retry, plus `mockup-gallery-*` renders of the approved
+  mockup for the same languages and themes.
+
+#### Edition (26847931e) - 2026-11-23
+
+The pre-merge review of 4535c801e..e1fedaf24 (codex, round 1: fix first) was
+fixed in 26847931e. The Phase 2 Result above stays as written; this Edition
+supersedes it where they differ.
+
+- Toast scope, settled by the lead: the toast stays View-only, matching the
+  approved mockup (its toast carries only View). The Phase 2 Scope's "toast
+  with Retry" wording is superseded: Retry lives on the notice card in the
+  peek, where a failed notice is visible and where the stop is. What the toast
+  must tell the truth about is fixed: a job that exited before the stop was
+  accepted reads "had already ended" (the daemon marks only a job a stop ended,
+  so the UI no longer calls a natural exit "Stopped"), and a toast still up
+  follows the job's notice (notifying, then sent or failed).
+- Performance claim corrected: the Result's "No file operation is made by any of
+  it" holds for the HUD's own paths only (list, output read and stop answer from
+  memory). Every authenticated GET and POST pays the shared localhost guard's
+  revalidation of the secret file: 4 counted file operations per request (all
+  in the guard; an equally authenticated 404 makes the same 4), identical
+  for the list with 0, 1, 50 and 200 jobs, the output read, the stop route and
+  an equally authenticated 404 (`TestExecHUDRoutesTouchNoFilesBeyondTheRequestGuard`,
+  p50 about 90 µs per request in the fake-service fixture). The guard is
+  unchanged on purpose: its per-request revalidation is the deliberate design
+  shared by every authenticated dashboard route (deleting the secret rotates
+  the cookie at once). Cost of an open peek, from the poll schedule (350 ms
+  first delay, x1.5 while idle, 3 s ceiling; 20 ms between reads while more
+  output waits): measured 4 polls in the first 2.5 s of an idle peek, then one
+  read per 3 s (about 1.3 file ops/s); a peek that follows a steady stream reads
+  about every 350 ms (about 3 requests/s, 11 file ops/s); a backlog is caught up
+  at up to 50 reads/s (200 file ops/s) only while bytes wait, 16 KiB per read. A
+  closed peek makes none. Whether to cut the guard's per-request stat for these
+  routes is a follow-up decision, not part of this phase.
+- Review findings fixed (each has a browser assertion in
+  `TestExecHUDReviewBrowser` that failed before the fix):
+  - I1: selecting the open tab again is a no-op (no rewind, no repeated output).
+  - I2: one output read in flight per tab, wake-ups coalesced into one more read;
+    a record older than the one held (a running snapshot answered after the end,
+    an earlier notice state) is never merged back, in reads and in list
+    refreshes; a tab drains only on a terminal record.
+  - I3: a >16 KiB single-line tail shows a bounded suffix marked cut; retained
+    text is capped at 192 KiB as well as 1500 lines (1.1 MB of output keeps about
+    196 K characters in 987 lines).
+  - I4: the HUD's Escape handler sits on the window in the capture phase from
+    load, so it runs before the drawer's own capture handler and consumes the
+    key; the real drawer stays open on it and still closes on its own Escape.
+  - I5: keyboard focus survives a confirmation timeout and an end under the
+    confirmation (Stop, else the selected tab), a fold on resize (the +N or
+    aggregate stands in), and closing a peek whose chip folded. Found on the way:
+    +N and the aggregate were hidden and shown again inside every layout pass,
+    which dropped focus from them on each one-second tick; they are set once.
+  - I6: an ended job has a Dismiss button in the peek, so a failure that only
+    the aggregate shows (320 px) is cleared by keyboard; the panel moves to the
+    next job or closes.
+  - I7: the aggregate's last step has a rule (`.compact` shows its node only);
+    +N is measured at its widest count; the test asserts every drawn chip,
+    +N and aggregate inside the protected gap at 69 widths x 4 badge sets with a
+    120-job crowd (three-digit counts) and while the badges change width.
+  - I8: toast truth as above.
+  - Also: a first read that finds more than the tail window waiting (the list's
+    size is only as new as its last event) re-reads the real tail instead of
+    paging through the log from a stale offset.
+- Minors fixed: the footer's stream label is inside the localized template in
+  all 11 tables (`js.xhud.out.tail`); a failed copy shows a failure label
+  (`js.xhud.pk.copyfail`) and keeps the keyboard on the button; the +N reopen of
+  the open job and the 10 s unpin boundary have assertions; the two 404 cases
+  are named for what they test: a routed 404 on the list (what a LAN viewer
+  gets from the localhost-only route; asked exactly once, never again) and an
+  unbound service (the daemon still announces its revision, the route answers
+  404, asked exactly once). A browser test over a real LAN address was not
+  added: the fixture serves loopback only, and the daemon-side LAN refusal is
+  pinned by `TestExecHUDRoutesAreLocalhostOnlyAndOwnerScoped`.
+- New keys: `js.xhud.toast.ended`, `js.xhud.pk.copyfail` (88 `js.xhud.*` keys per
+  table). The nine non-ko/en translations of these two keys and of the changed
+  footer were written by the worker and are unreviewed by a human.
+- Not fixed, minor: the group can still overlay the subagent badge for one
+  frame before the observer folds it; `xhSaveDismissed` caps by insertion order
+  (job ids are `exec_...`, so no effect).
+- Captures refreshed (untracked): all `<lang>-<light|dark>-01..13-*` and
+  `mockup-gallery-*`, plus new `en-light` and `ko-dark` `14-peek-ended-dismiss`,
+  `15-compact-aggregate`, `16-long-line`, `17-toast-ended`.
+
+#### Edition (9de84a7a3) - 2026-11-23
+
+Pre-merge review round 2 (codex, fresh reviewer, 73de8c9e9: fix first, no
+Critical) was fixed in 9de84a7a3. The Phase 2 Result and the Edition above stay
+as written; this Edition supersedes them where they differ.
+
+- Snapshot ordering (Important 1), replacing the rank-only notice guard. The job
+  summary carries no per-job version and none was added (a backend field is a
+  cross-version surface). Ordering is client-side: every list read, output read
+  and stop or retry request takes the next number when it is issued, a job
+  record carries the number of the request that produced it, and an answer
+  replaces a record only when it is not newer (`xhStale`, with the rule that an
+  ended job never runs again kept as well). After a stop or a retry settles the
+  list is read again, so the newest list wins; the stop toast is built from the
+  job as it stands then, not from the answer. This allows a real
+  failed -> pending retry (the second tab now takes it) and stops an older
+  list or stop answer arriving late from taking a newer state back. A snapshot
+  dropped as older is corrected by that refresh, which is why the refresh is
+  issued unconditionally.
+- Eviction notice (Important 2): when the first read is re-seated at the tail
+  (the list's size was stale), the daemon's `gap` flag of the dropped answer is
+  carried to the tail read, so a real eviction shows its notice (from 0, evicted
+  256 KiB, written 512 KiB).
+- Polling: a wake-up that arrives while a read is out and gets a 404 leads to
+  one more read; list and output GETs abort after 10 s (`AbortController`) so a
+  fetch that never answers releases the tab's in-flight flag and reading
+  resumes with backoff. Stop and retry POSTs are not time-bounded.
+- Clipboard: Copy takes the keyboard back after its fallback only when the
+  user's last focus was Copy or the panel (a focus moved to the composer while
+  a slow clipboard answered stays there).
+- Retention units, corrects the earlier Edition's "192 KiB": the cap is
+  `XH_MAX_UNITS = 196608` UTF-16 code units (string length), not bytes; system
+  markers are outside the count and a terminal marker may stand as the 1501st
+  line (pre-existing, accepted). A trim with mixed stdout/stderr keeps the
+  stderr tint on the surviving span, and the cut line's ellipsis is asserted
+  through the computed `::before`.
+- LAN evidence, corrects the earlier Edition: what the daemon test
+  (`TestExecHUDRoutesAreLocalhostOnlyAndOwnerScoped`) proves is a 401 for an
+  unauthenticated non-loopback request; that the route itself refuses LAN
+  before any service lookup is the route source (`exec_hud.go`), read, not
+  exercised by an authenticated LAN request. The browser cases named "404" are
+  routed-404 and unbound-service cases. No LAN route test was added (settled).
+- Tests (`TestExecHUDReviewBrowser`; the ones marked * failed against the
+  73de8c9e9 assets in a probe run): `ORDER-RETRY`* (failed -> pending -> sent
+  visible in a second page), `ORDER-LATE-LIST`* (a list taken before the retry
+  and answered after it does not bring `failed` back), `ORDER-STOP`* (a stop
+  answer held back past a newer list carrying `sent` shows no `notifying`
+  toast), `GAP`*, `POLL-404`*, `POLL-HANG`* (aborts at 10 s and reads
+  resume), `COPY`* (focus ownership in a delayed rejection), `I3b` (mixed trim),
+  `I8` (a toast opened on notifying turns to the failure text; View only). Test
+  hygiene: D1 now confirms only while a read is in flight, D2 requires the final
+  output and the terminal marker, `REOPEN` seeds its own jobs and requires a
+  read, the focus-logging listeners, the unused regex and array and the probe
+  mode are gone, a development run narrowed by `WS_EXEC_HUD_SECTS` or
+  `WS_EXEC_HUD_COMBOS` exits non-zero so it cannot pass as a verification, and
+  the I6 check no longer reads `sessionStorage`.
+- Accepted residuals (settled, not fixed): the fold decision measures at the
+  total count and so folds early near digit boundaries (9/10, 99/100);
+  the group may overlay a badge for one frame before the observer folds it; the
+  layout cost is not measured; the aggregate's reopen is worded as the
+  aggregate's, not +N's.
+- Captures: no pixel of the UI changed this round; the untracked captures under
+  `ai-docs/assets/captures/261123/exec-job-hud-ui/` were regenerated by the
+  final run.
+
+#### Edition (9995bdfec) - 2026-11-23
+
+Pre-merge review round 3 (fresh codex reviewer, no Critical, two Important),
+fixed on top of the develop merge (0b3e22541). Refines the issue-order rule of
+the previous Edition; the rest of that Edition stands.
+
+- Ordering, refined: request issue order is not the order in which the daemon
+  took its snapshots, so one move does not wait for the numbers. An answer that
+  says a job ended replaces a record that still says running whatever its
+  request number (running -> ended is one-way), and an ended job is never shown
+  running again. The number check stays for running vs running and for two
+  ended snapshots competing (e.g. the notice states). (`xhStale`.)
+- Stop feedback: when the daemon accepts a stop (2xx with the job), the page
+  remembers it per job id (`xhStopWait`, 30 s, dropped with a job that leaves
+  the list). The outcome toast is created once, by the first of the stop answer,
+  a list or an output read that shows the job ended, unless the panel already
+  shows that job (it has the notice card). Covers a panel closed or switched
+  before the answer, and an answer that arrives behind a later list that still
+  said running. A POST that failed or was refused remembers nothing and keeps
+  the "stop failed" toast.
+- Refresh retry: a list read that fails (network error, abort at the 10 s
+  bound, non-2xx other than 403/404) keeps the refresh owed and is read again
+  after 1 s, doubling to 15 s, one read in flight; any new event reads at once;
+  a success resets the pause; 403/404 stay terminal (no HUD, no more reads) as
+  before.
+- Copy: after the fallback's scratch field leaves the keyboard on the page, it
+  goes back to the element the user last had if it is still connected: Copy
+  when that was Copy or the panel, the composer editor when the user moved
+  there during a slow clipboard answer.
+- Tests (`TestExecHUDReviewBrowser`; marked * failed against the 0b3e22541
+  assets in a probe run): `STOP-TERMINAL`* (the stop takes effect after a list
+  that said running, the panel is on another job, the answer arrives: one
+  toast, counted by added toast nodes), `LIST-RETRY`* (the sole event, then a
+  503, an aborted list and a quiet successful retry; the pauses grow), `COPY`*
+  now asserts the composer editor is focused, `POLL-404` asserts exactly two
+  reads and quiescence, also after the job leaves, `I3b` waits for the first
+  read before appending the mixed chunks. `ORDER-LATE-LIST` and `ORDER-STOP`
+  wait on fixture counters (`stop:<id>`, `list`, `listDone`) and two animation
+  frames instead of fixed sleeps; a development run narrowed by
+  `WS_EXEC_HUD_SECTS` or `WS_EXEC_HUD_COMBOS` sets `process.exitCode = 3` so
+  the browser is closed.
+- Develop merge: 0b3e22541 (develop 121864eb8). Conflicts: `pages.go` (style
+  list: develop's audit-rows file then the HUD's), `asset_source_test.go`
+  (dashboard.js and dashboard.css assembly lists carry both sides) and the 11
+  `wsi18n/tables/*.json` (develop's `js.audit.*` keys followed by the HUD's
+  `js.xhud.*`; 3390 keys per table, identical across locales).
+- Captures: no pixel of the UI changed; the untracked captures were regenerated
+  by the final run.
+
+#### Edition (84480446f) - 2026-11-23
+
+Pre-merge review round 4 (fresh codex reviewer, no Critical, three Important;
+the develop merge resolutions were verified correct). Fixed on top of 1b89ec00b.
+
+- Copy focus (product): the continuation restores the keyboard whenever the
+  fallback's scratch field leaves it on the page, independent of the original
+  button's lifetime: to the element the user last had if it is still connected,
+  or to the panel's current Copy button when they were on the replaced one. Only
+  the label update stays tied to the original button.
+- Fixture: answers can be held and released on purpose. `/set` with `stopHold`
+  or `listHold` takes the snapshot and holds the answer until a `/set` without
+  it releases everything held; `held` in `/stats` counts answers waiting (taken
+  snapshot, answer not sent). `stopAfterMs`, `listDelayMs` and the `listDone`
+  counter (incremented before the body was written) are gone.
+- Tests (`TestExecHUDReviewBrowser`), each proven by reverting the rule it
+  guards in a scratch copy of the asset (not committed; assets restored
+  byte-identical) and seeing the test fail:
+  - `COPY`: the clipboard rejection is held until the composer editor has focus
+    and a real HUD update (the job ends) has replaced the button; then the
+    editor must hold the keyboard. Fails when restoration depends on the
+    button being connected.
+  - `STOP-TERMINAL`: a running list is taken by the page (a third job appears),
+    then every list is held at the daemon; the stopped chip and the toast must
+    come from the stop answer alone; the lists are released after a notice
+    change and the toast is counted once. Fails (waiting for the stopped chip)
+    when the running -> ended exception in `xhStale` is reverted.
+  - `I3b`: a short marker is shown first, then 220 KB of mixed output crosses
+    the 196,608-unit cap; the marker and the oldest stdout span must be evicted
+    and the surviving stderr span keep its tint. Fails with the cap raised
+    (retained 220,016). The trim drops whole spans in a mixed stream, so the
+    retained length is not asserted to sit near the cap.
+  - `ORDER-LATE-LIST` and `ORDER-STOP`: an older list / an older stop answer is
+    held, a newer snapshot is shown (UI barrier: `sending`, a stopped chip),
+    then the old answer is released. Both fail when the issue-number check of
+    `xhStale` is reverted (`failed` comes back; a stale "notifying" toast).
+  - `POLL-404`: the first read is held at the daemon, the wake is dispatched
+    synchronously while it is in flight, then released: exactly two reads and
+    quiescence, also after the job leaves the list. Fails when the coalesced
+    wake is dropped.
+  - `LIST-RETRY`: seeds a job and then empties the list (UI barrier: the chip
+    is gone) before arming the failure route, so no earlier revision can use a
+    simulated failure. Fails without the retry.
+- Captures: no pixel changed; the untracked captures were regenerated by the
+  final run.
+
+#### Edition (9b79133b5) - 2026-11-23
+
+Pre-merge review round 5 (narrow, over the round-4 fixes; four Important, two
+Minor, no Critical). Minimal changes on top of ab596f498; the develop merge is
+not repeated. Each of 1-4 was checked by reverting the guarded behavior in a
+scratch copy (not committed; the files were restored and compared
+byte-identical) and seeing its test fail.
+
+- Copy focus (product): after a delayed rejection the keyboard goes back to the
+  tracked last element when it is connected and visible; the panel's current Copy
+  button substitutes only when that last element is the replaced original Copy.
+  A control of another job (its Wrap) keeps the keyboard. New `COPY-WRAP`: a
+  delayed Copy on job A, the panel switched to B (A's button is replaced), B's
+  Wrap focused, the rejection released: Wrap keeps the keyboard. Reverting to the
+  round-4 rule (any panel control -> Copy) fails it ("keyboard on Copy").
+- `STOP-TERMINAL`: the fixture now holds a stop before it takes effect
+  (`stopBlock`). The running list is taken by the page (a third job appears),
+  the list hold is armed, and only then is the stop let through, so no timer can
+  put a terminal list ahead of the hold. Reverting the running -> ended exception
+  of `xhStale` fails it (the stopped chip never appears from the stop answer).
+- `ORDER-LATE-LIST`: the barrier is the retry's non-optimistic answer (the card
+  turns `closed`, not the optimistic `sending`). The held list carries a sibling
+  job only it has; the sibling's chip appearing is the observable consumption of
+  the old list before `failed` is checked to have stayed out. Reverting the
+  issue-number check fails it (history `sending, closed, failed, closed`).
+- `POLL-404`: the browser's own `response` and `requestfailed` events are
+  recorded; the two reads must both be answered 404 and none may fail, so a
+  transport-timeout retry cannot stand in for the 404 retry. Dropping the
+  coalesced wake fails it (`[404]`); a scratch run with the request bound at
+  300 ms and the release delayed past it fails it as well (two `ERR_ABORTED`,
+  one 404).
+- `LIST-RETRY`: the route passes lists through and counts the completed ones
+  until it is armed; the setup revision's own list is waited for (and no list
+  outstanding) before the failures are armed.
+- Fixture: every hold's wait (list, stop, stop-block, output hang) also selects
+  on a `quit` channel closed in `t.Cleanup`, so a failed run releases all held
+  handlers at once.
+
+#### Edition (bae0d3325) - 2026-11-23
+
+Review round 6 (test-only; no product change). The ordering tests proved when the daemon snapshotted a list, but `xhStale` compares the browser's own issue order, and a timed-out GET can be replaced by a fresh one carrying the same marker. They now use browser-side evidence (Playwright `request` / `requestfinished` / `requestfailed`, recorded in issue order with method, URL, status and body):
+
+- STOP-TERMINAL: no list read is in flight when the stop is issued; the test asserts that every read that carried the running list the page consumed (exec_s3 present, exec_s1 running) was issued after the stop POST and finished with 200. Scratch revert of the running→ended exception in `xhStale` still fails it (waiting for the stopped chip).
+- ORDER-LATE-LIST: exec_o9 leaves the live fixture right after the held snapshot is taken, so only that captured response carries it; the test asserts exactly one read carried it, it finished with 200 (not failed), and it was issued before the retry POST. Scratch revert of the issue-number check (`return false`) still fails it (history `sending, closed, failed, closed`). Scratch probe for the closed gap: `XH_REQ_MS=300` with the release delayed 700 ms (the held GET times out and a fresh GET replaces it) now fails (`exec_o9` never appears); before the fixture change it could pass.
+- LIST-RETRY (minor): failures are armed only after the empty setup revision's own read finished and no list read is in flight or issued for 500 ms. The guard is a setup change; not separately scratch-reverted (the retry removal proof from round 3 is unchanged).
+
+Verification: `go test -race -count=1 -run 'TestExecHUDReviewBrowser$|TestExecHUDBrowser$' ./internal/wsdashboard` ok (386.7 s); `GOOS=windows go vet ./internal/wsdashboard` clean; `git diff --check` clean.
+
+#### Edition (430899a32) - 2026-11-23
+
+Review round 7 (test/fixture only; no production asset or non-test Go change). The round-6 evidence closed the false passes but left healthy-run flake windows, all from uncontrolled revision wakes racing the scenarios. Fixed once, structurally:
+
+- Fixture: a controlled-wake mode (`/manual`). While on, a stop's end and `/patch` publish no revision; `/bump` answers with the revision it made. The daemon reads the revision before the list, so a finished list read whose `rev` is at least that value is a post-increment snapshot: it was taken after the wake. (It is evidence of the snapshot, not that the page consumed the stream event; the page's application of the read is checked separately by the scenario's own UI marker.) A `wake(net, jobs)` helper publishes one revision and waits for such a read (then a short quiet window only to see a dirty refetch). Scenarios that do not enable the mode keep today's behavior.
+- STOP-TERMINAL: setup drains through controlled wakes; after the stop POST (held at the daemon) one wake carrying a marker job (exec_s3) is published, and the test asserts from the request log that its read is the only list read issued after the stop POST, that it carries the marker with the job still running, and that the marker chip is applied, before the lists are held and the stop is let through. The `every`-over-all-reads check is gone. A wake while a held read is in flight only marks the page dirty (the refetch follows the release), so the later "sent" step publishes a wake and waits for the toast instead of a second held list.
+- ORDER-LATE-LIST: setup through a controlled wake; the exec_o9 chip insertion is latched by a MutationObserver installed before the release (like the notice-state history), replacing the polled selector.
+- LIST-RETRY: the simulated failures are armed only after two controlled setup wakes (seed, then empty) were read to the end; the scenario's own wake is the only source after that.
+
+Scratch reverts (edit, run, restore, `cmp` identical; nothing committed): removing the running→ended exception in `xhStale` fails STOP-TERMINAL (waiting for the stopped chip); replacing the issue-number check with `return false` fails ORDER-LATE-LIST (history `sending, closed, failed, closed`); removing the list retry (`else xhRetryLater()` → `else {}`) fails LIST-RETRY (the late chip never appears). No-flake check: the three scenarios on en-light 5 times each (a script looped `WS_EXEC_HUD_SECTS=<name> WS_EXEC_HUD_COMBOS=en-light go test -run TestExecHUDReviewBrowser`), 15/15 passes (a narrowed run exits 3 by design).
+
+Verification: `go test -race -count=1 -run 'TestExecHUDReviewBrowser$|TestExecHUDBrowser$' ./internal/wsdashboard` ok (386.1 s); `GOOS=windows go vet ./internal/wsdashboard` clean; `git diff --check` clean.

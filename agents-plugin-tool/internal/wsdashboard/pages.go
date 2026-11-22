@@ -50,6 +50,8 @@ var dashboardScriptFiles = []string{
 	"dashboard-composer-ucmd.js",
 	"dashboard-composer-restore.js",
 	"dashboard-composer-status.js",
+	"dashboard-exec-hud.js",
+	"dashboard-exec-hud-peek.js",
 	"dashboard-composer-keyboard.js",
 	"dashboard-actions.js",
 	"dashboard-drawer.js",
@@ -102,6 +104,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-audit.css",
 	"dashboard-audit-rows.css",
 	"dashboard-audit-search.css",
+	"dashboard-exec-hud.css",
 }
 
 var trackerScriptFiles = []string{
