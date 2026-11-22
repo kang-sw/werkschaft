@@ -831,3 +831,153 @@ func TestStopNoticeCarriesNoMoreOutputThanTheCompletionNotice(t *testing.T) {
 		t.Fatalf("notice lacks the tail header:\n%.300s", n[0].text)
 	}
 }
+
+// TestUserStopOfAnUnknownHolderUnderAnIncompleteCensusStaysRunning: the
+// manager not knowing a holder proves it gone only when its census read every
+// holder. Under an incomplete one the stop is an error, the job stays running
+// and unmarked with no notice, and the stop works once the census is complete.
+// The agent's own stop (exec.stop) shares the path.
+func TestUserStopOfAnUnknownHolderUnderAnIncompleteCensusStaysRunning(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	v := fx.asyncJob(HostedLaunch{})
+	fx.holders.mu.Lock()
+	delete(fx.holders.live, v.HolderID) // the manager does not know it
+	fx.holders.incomplete = true
+	fx.holders.mu.Unlock()
+	if _, err := fx.h.StopByUser("lead", v.ID); err == nil || !strings.Contains(err.Error(), "census is incomplete") {
+		t.Fatalf("a user stop under an incomplete census = %v", err)
+	}
+	if _, err := fx.h.Stop("lead", v.ID); err == nil {
+		t.Fatal("exec.stop under an incomplete census must be an error too")
+	}
+	fx.h.mu.Lock()
+	j := fx.h.jobs[v.ID]
+	state, intent, stopping := j.row.State, j.stopIntent, j.stopping
+	fx.h.mu.Unlock()
+	if state != HostedRunning || intent || stopping {
+		t.Fatalf("state %s intent %v stopping %v after the refused stop", state, intent, stopping)
+	}
+	if n := fx.sessions.noticeList(); len(n) != 0 {
+		t.Fatalf("notices after a refused stop: %+v", n)
+	}
+	fx.holders.mu.Lock()
+	fx.holders.incomplete = false
+	fx.holders.mu.Unlock()
+	sum, err := fx.h.StopByUser("lead", v.ID)
+	if err != nil || sum.State != HostedStopped || !sum.StoppedByUser || len(stopNotices(fx)) != 1 {
+		t.Fatalf("the stop under a complete census = %+v, %v, notices %+v", sum, err, fx.sessions.noticeList())
+	}
+}
+
+// TestSpawnFailureSettlesBeforeAWaitingUserStopReturns: the hand-over fails
+// while a user stop waits for it. The stop does not ask the holder a second
+// time or end the job itself: the start's own cleanup settles the row once
+// (failed, not a user's stop, no notice), and the stop then returns.
+func TestSpawnFailureSettlesBeforeAWaitingUserStopReturns(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	entered, release := make(chan string, 1), make(chan struct{})
+	fx.holders.mu.Lock()
+	fx.holders.beforeSpawn = func(id string) {
+		entered <- id
+		<-release
+	}
+	fx.holders.spawnErr = errors.New("spawn refused")
+	fx.holders.mu.Unlock()
+	launched := make(chan error, 1)
+	go func() {
+		_, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true, Display: "x", Command: "x"})
+		launched <- err
+	}()
+	<-entered
+	var id string
+	for _, s := range fx.h.Jobs("lead") {
+		id = s.ID
+	}
+	stopped := make(chan error, 1)
+	go func() { _, err := fx.h.StopByUser("lead", id); stopped <- err }()
+	select {
+	case err := <-stopped:
+		t.Fatalf("the stop returned before the hand-over settled: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-launched; err == nil {
+		t.Fatal("the launch must fail")
+	}
+	if err := <-stopped; err != nil {
+		t.Fatalf("the waiting stop = %v", err)
+	}
+	fx.holders.mu.Lock()
+	calls := fx.holders.stopCalls
+	fx.holders.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("the holder was stopped %d times, want 1 (the cleanup's)", calls)
+	}
+	sum := fx.h.Jobs("lead")[0]
+	if sum.State != HostedFailed || sum.StoppedByUser || len(fx.sessions.noticeList()) != 0 {
+		t.Fatalf("job = %+v, notices %+v", sum, fx.sessions.noticeList())
+	}
+}
+
+// TestDeferredStopNoticeRetriesWithoutMovingTheRevision: a deferred notice
+// tried again and deferred again changes nothing the list shows, so the
+// revision stays; the retry that lands moves it.
+func TestDeferredStopNoticeRetriesWithoutMovingTheRevision(t *testing.T) {
+	var revs atomic.Int32
+	fx := &hostedFixture{t: t, holders: newFakeExecHolders(), sessions: newFakeExecSessions(), store: newMemHostedStore(), exitDir: t.TempDir()}
+	fx.onRunning = func() { revs.Add(1) }
+	fx.open(time.Second)
+	fx.sessions.mu.Lock()
+	fx.sessions.outcome = NoticeDeferred
+	fx.sessions.mu.Unlock()
+	v := fx.asyncJob(HostedLaunch{})
+	if s, _ := fx.h.StopByUser("lead", v.ID); s.StopNotice != StopNoticePending {
+		t.Fatalf("stop = %+v", s)
+	}
+	before := revs.Load()
+	fx.h.deliverPending()
+	fx.h.deliverPending()
+	if s, _ := fx.h.StopByUser("lead", v.ID); s.StopNotice != StopNoticePending {
+		t.Fatalf("still handed off: %+v", s)
+	}
+	if got := revs.Load(); got != before {
+		t.Fatalf("revision moved %d times across deferred retries", got-before)
+	}
+	fx.sessions.mu.Lock()
+	fx.sessions.outcome = 0
+	fx.sessions.mu.Unlock()
+	fx.h.deliverPending()
+	if got := fx.h.Jobs("lead")[0]; got.StopNotice != StopNoticeSent || revs.Load() == before {
+		t.Fatalf("the landed retry: %+v, revisions %d -> %d", got, before, revs.Load())
+	}
+}
+
+// TestPruneKeepsAJobWhoseStopNoticeIsStillPending: terminal-row pruning keeps
+// a user-stopped job whose notice a handed-off session deferred, as it keeps a
+// row with a pending completion notice, so the retry on takeover still finds it.
+func TestPruneKeepsAJobWhoseStopNoticeIsStillPending(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	fx.sessions.mu.Lock()
+	fx.sessions.outcome = NoticeDeferred
+	fx.sessions.mu.Unlock()
+	first := fx.asyncJob(HostedLaunch{})
+	if s, _ := fx.h.StopByUser("lead", first.ID); s.StopNotice != StopNoticePending {
+		t.Fatalf("stop = %+v", s)
+	}
+	time.Sleep(5 * time.Millisecond) // the first job ended strictly before every other
+	// The session takes the other jobs' completion notices, so only the
+	// first job's stop notice stays owed.
+	fx.sessions.mu.Lock()
+	fx.sessions.outcome = 0
+	fx.sessions.mu.Unlock()
+	for i := 0; i < HostedMaxJobs+5; i++ {
+		v := fx.asyncJob(HostedLaunch{})
+		fx.holders.exit(v.HolderID, 0)
+	}
+	if _, err := fx.h.Get("lead", first.ID); err != nil {
+		t.Fatalf("the job with a pending stop notice was pruned: %v", err)
+	}
+	if n := len(fx.h.Jobs("lead")); n > HostedMaxJobs+1 {
+		t.Fatalf("jobs = %d: nothing else was pruned either", n)
+	}
+}

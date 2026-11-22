@@ -193,7 +193,7 @@ func (h *Hosted) StopByUser(owner, id string) (HostedSummary, error) {
 func (h *Hosted) noticeStopped(j *hostedJob) {
 	j.noticeMu.Lock()
 	defer j.noticeMu.Unlock()
-	h.admitStopNoticeLocked(j)
+	h.admitStopNoticeLocked(j, StopNoticeNone)
 }
 
 // retryStopNotice admits a failed or deferred user-stop notice again.
@@ -201,19 +201,23 @@ func (h *Hosted) retryStopNotice(j *hostedJob) {
 	j.noticeMu.Lock()
 	defer j.noticeMu.Unlock()
 	h.mu.Lock()
-	if j.stopNotice != StopNoticeFailed && j.stopNotice != StopNoticePending {
-		h.mu.Unlock()
+	from := j.stopNotice
+	h.mu.Unlock()
+	if from != StopNoticeFailed && from != StopNoticePending {
 		return
 	}
-	j.stopNotice = StopNoticeNone
-	h.mu.Unlock()
-	h.admitStopNoticeLocked(j)
+	h.admitStopNoticeLocked(j, from)
 }
 
-// admitStopNoticeLocked is noticeStopped with j.noticeMu held.
-func (h *Hosted) admitStopNoticeLocked(j *hostedJob) {
+// admitStopNoticeLocked is noticeStopped with j.noticeMu held: it admits the
+// notice while j's outcome is still from (none for the first admission, the
+// failed or pending outcome for a retry), so an admission that does not run
+// leaves the outcome, and its retry, as it was. The revision moves only when
+// the recorded outcome differs from from: a deferred notice tried again and
+// deferred again changes nothing the list shows.
+func (h *Hosted) admitStopNoticeLocked(j *hostedJob, from string) {
 	h.mu.Lock()
-	if !j.userStopped || !j.stopOwed || j.stopNotice != StopNoticeNone || !h.started || h.closed || j.publishing {
+	if !j.userStopped || !j.stopOwed || j.stopNotice != from || !h.started || h.closed || j.publishing {
 		h.mu.Unlock()
 		return
 	}
@@ -254,7 +258,9 @@ func (h *Hosted) admitStopNoticeLocked(j *hostedJob) {
 	}
 	h.mu.Unlock()
 	// What the list shows changed; the revision moves once it is recorded.
-	h.runningChanged()
+	if outcome != from {
+		h.runningChanged()
+	}
 }
 
 // stopNoticeText is the notice of a job the user stopped: the completion

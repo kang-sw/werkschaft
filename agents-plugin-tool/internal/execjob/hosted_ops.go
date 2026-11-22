@@ -82,7 +82,9 @@ func (h *Hosted) stop(j *hostedJob, byUser bool) error {
 
 // stopHolderOf is the owning stop's holder stop and end: it waits for a
 // hand-over in progress, stops j's holder, and ends the job itself when the
-// holder went without its exit record. An error means the holder did not go.
+// holder went without its exit record. An error means the holder did not go
+// (or, for a holder the manager does not know, that an incomplete census
+// leaves it unproven that it is gone).
 func (h *Hosted) stopHolderOf(j *hostedJob) error {
 	h.mu.Lock()
 	if wait := j.spawned; wait != nil {
@@ -109,6 +111,15 @@ func (h *Hosted) stopHolderOf(j *hostedJob) error {
 		// The holder did not go: the job may still run.
 		h.mu.Unlock()
 		return fmt.Errorf("stop exec job %s: %w", j.row.ID, err)
+	}
+	if err != nil && h.opts.Holders.List().Incomplete {
+		// Unknown to the manager is proof of absence only from a census that
+		// read every holder: an incomplete one may omit a live holder (an
+		// unreadable descriptor), and ending the job here would hide it from
+		// the reconciliation that settles it once a scan reads them all. The
+		// job stays running and the stop can be retried.
+		h.mu.Unlock()
+		return fmt.Errorf("stop exec job %s: its holder is not known and the holder census is incomplete, so it may still run; retry once a scan reads every holder", j.row.ID)
 	}
 	// The holder is gone and its exit record did not arrive first.
 	j.row.State = HostedStopped

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -193,7 +194,10 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	// MAX_PATH fails at process start, as it did before admission resolved
 	// it (the path reached the same CreateProcess).
 	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: realCwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
-	close(spawned)
+	// release opens the hand-over wait once, on every path out (a panic in
+	// the start's cleanup included).
+	release := sync.OnceFunc(func() { close(spawned) })
+	defer release()
 	if err != nil {
 		if st.PID != 0 {
 			// The child started and only its remaining input failed.
@@ -201,8 +205,13 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 			j.row.PID = st.PID
 			h.mu.Unlock()
 		}
+		// A stop waiting for the hand-over stays waiting until failStart has
+		// settled the row (and its holder): it then finds the job ended and
+		// returns, so one outcome stands instead of a second holder stop and
+		// a second end racing the cleanup.
 		return h.failStart(j, holder, fmt.Errorf("start %s: %w", argv[0], err))
 	}
+	release()
 	h.mu.Lock()
 	j.row.PID = st.PID
 	if !j.row.Terminal() {
@@ -324,8 +333,10 @@ func (h *Hosted) admit(j *hostedJob) error {
 			// A holder of it may still write its exit copy: it stays, and
 			// counts toward the cap, until that holder is gone.
 			held++
-		case have.row.Notice == NoticePending || have.delivering:
-			// Its notice is still owed; it stays until delivered.
+		case have.row.Notice == NoticePending || have.delivering || (have.userStopped && have.stopNotice == StopNoticePending):
+			// Its notice (the completion notice, or a user-stop notice a
+			// handed-off session deferred) is still owed; it stays until
+			// delivered.
 		default:
 			finished = append(finished, have)
 		}
