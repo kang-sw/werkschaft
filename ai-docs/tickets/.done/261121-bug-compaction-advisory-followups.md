@@ -1,5 +1,6 @@
 ---
 title: "컴팩션 권고 전달의 잔여 문제 해결"
+completed: 2026-11-22
 ---
 
 # Compaction advisory delivery follow-ups
