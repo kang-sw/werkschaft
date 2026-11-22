@@ -120,6 +120,18 @@ type DaemonOptions struct {
 	// CardBound reports whether replyID is bound to a subordinate whiteboard
 	// agent card whose Record.Parent stays unset; nil defaults to false.
 	CardBound func(replyID string) bool
+	// ExecJobs counts the live exec jobs this process runs, by their
+	// worktree root; the rail counts them on the rows they sit under
+	// (RailRow.ExecJobs). It must read memory only: the rail calls it once
+	// per render. Nil counts none. ExecJobsChanged re-renders the rail
+	// after the counts change.
+	ExecJobs func() map[string]int
+	// HostedExecJobs counts the hosted exec jobs still running by their
+	// owning conversation (reply id); the rail counts them on that
+	// session's row only (RailRow.OwnExecJobs). Same contract as ExecJobs:
+	// memory only, once per render, nil counts none, and ExecJobsChanged
+	// re-renders the rail after the counts change.
+	HostedExecJobs func() map[string]int
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN
 	// mode on loopback; empty derives it from LAN.
@@ -338,6 +350,10 @@ type Daemon struct {
 	// (webcard_proxy.go).
 	web       *webRegistry
 	cardBound func(replyID string) bool
+	// execJobs is DaemonOptions.ExecJobs; hostedExecJobs is
+	// DaemonOptions.HostedExecJobs.
+	execJobs       func() map[string]int
+	hostedExecJobs func() map[string]int
 
 	closeOnce sync.Once
 	stop      chan struct{}

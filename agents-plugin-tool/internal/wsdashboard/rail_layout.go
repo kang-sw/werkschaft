@@ -1162,8 +1162,29 @@ func (s layoutScope) orderTree(groups []railGroupRows) {
 				p.Children = append(p.Children, k)
 			}
 			p.KidBusy = railKidBusy(p.Children)
+			railSetBusy(p)
 		}
 	}
+}
+
+// railSetBusy sets r.Active and r.Busy (RailRow), each of its children's
+// first, and reports Busy. Only a live row is either; an active or busy
+// live child keeps its parent so at any depth. Exec jobs known only by
+// worktree make a row busy, never active; its own hosted jobs make it active.
+func railSetBusy(r *RailRow) bool {
+	kidBusy, kidActive := false, false
+	for i := range r.Children {
+		if railSetBusy(&r.Children[i]) {
+			kidBusy = true
+		}
+		if r.Children[i].Active {
+			kidActive = true
+		}
+	}
+	r.Active = r.Live && (kidActive || r.Working || r.permission || r.Approval != nil ||
+		r.Subagents > 0 || r.BackgroundTasks > 0 || r.OwnExecJobs > 0)
+	r.Busy = r.Active || (r.Live && (kidBusy || r.ExecJobs > 0))
+	return r.Busy
 }
 
 // railKidBusy counts the rows under a parent, at any depth, that are at

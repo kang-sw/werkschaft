@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -537,5 +538,55 @@ func TestResultWithContextEndsAWaitWhenTheContextEnds(t *testing.T) {
 			t.Fatalf("wait returned %v after cancellation (budget %v, nonblocking baseline %v) on retry", elapsed, budget, baselineElapsed)
 		}
 		t.Logf("wait returned %v after cancellation (budget %v, nonblocking baseline %v); retrying once for runner contention", elapsed, budget, baselineElapsed)
+	}
+}
+
+func TestActiveRootsAndObserverFollowAJobsLifetime(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	root := gitRoot(t)
+	var mu sync.Mutex
+	var seen []map[string]int
+	SetActiveObserver(func() {
+		// Called with no execjob lock held: ActiveRoots (and a Load) must
+		// not deadlock from inside it.
+		roots := ActiveRoots()
+		mu.Lock()
+		seen = append(seen, roots)
+		mu.Unlock()
+	})
+	t.Cleanup(func() { SetActiveObserver(nil) })
+	if got := ActiveRoots()[filepath.Clean(root)]; got != 0 {
+		t.Fatalf("before launch: ActiveRoots()[root] = %d, want 0", got)
+	}
+	res, err := Launch(LaunchOptions{Root: root, Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}})
+	if err != nil || res.Status != stateSucceeded {
+		t.Fatalf("launch: %+v %v", res, err)
+	}
+	// A job finished within the foreground window returns after its worker
+	// left the active set and the observer ran.
+	mu.Lock()
+	got := append([]map[string]int(nil), seen...)
+	mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("observer calls = %d (%v), want 2 (enter, leave)", len(got), got)
+	}
+	if got[0][filepath.Clean(root)] != 1 {
+		t.Fatalf("on enter: ActiveRoots = %v, want %s:1", got[0], root)
+	}
+	if got[1][filepath.Clean(root)] != 0 {
+		t.Fatalf("on leave: ActiveRoots = %v, want no %s", got[1], root)
+	}
+	if n := ActiveRoots()[filepath.Clean(root)]; n != 0 {
+		t.Fatalf("after: ActiveRoots()[root] = %d, want 0", n)
+	}
+	// A cleared observer is not called.
+	SetActiveObserver(nil)
+	if _, err := Launch(LaunchOptions{Root: root, Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("cleared observer was called: %d calls", len(seen))
 	}
 }

@@ -159,9 +159,9 @@ func TestNonLoopbackHostIsRefused(t *testing.T) {
 		"localhost.evil.example": http.StatusForbidden,
 		"":                       http.StatusForbidden,
 	} {
-		for _, path := range []string{"/health", "/shutdown"} {
+		for _, path := range []string{"/health", "/shutdown", FullStopPath} {
 			method := http.MethodGet
-			if path == "/shutdown" {
+			if path != "/health" {
 				method = http.MethodPost
 			}
 			req := httptest.NewRequest(method, path, nil)
@@ -170,7 +170,7 @@ func TestNonLoopbackHostIsRefused(t *testing.T) {
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			wantPath := want
-			if path == "/shutdown" && want == http.StatusOK {
+			if path != "/health" && want == http.StatusOK {
 				wantPath = http.StatusUnauthorized // passed the guard, no token
 			}
 			if rec.Code != wantPath {

@@ -28,12 +28,15 @@ import (
 
 // HolderHost is the session holder manager the daemon runs
 // (*wsholder.Manager). Run scans at once and rescans until Close; Close
-// detaches from every holder and ends none.
+// detaches from every holder and ends none. StopAll ends every holder for
+// the full stop route (handleShutdownAll), refusing launches meanwhile, and
+// reports the ones whose process still runs.
 type HolderHost interface {
 	Run()
 	Close()
 	List() wsholder.Listing
 	Stop(id string) error
+	StopAll() wsholder.StopAllResult
 }
 
 // holderList is the holders route's answer.

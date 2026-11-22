@@ -51,21 +51,23 @@ func (l *hostedExecLink) onExit(next func(wsholder.Descriptor, wsholder.Exit) er
 }
 
 // openHostedExec opens the hosted exec jobs over holders for runner's
-// conversations and binds them to link. Run it under the daemon's lock,
-// once the runner has started. A failure is logged and leaves the daemon on
-// the legacy exec path, where the hosted exec tools refuse.
-func openHostedExec(dir string, holders *wsholder.Manager, runner *wsagent.Runner, link *hostedExecLink, logw io.Writer) *execjob.Hosted {
+// conversations and binds them to link; onRunning hears each job start and
+// end (HostedOptions.OnRunning). Run it under the daemon's lock, once the
+// runner has started. A failure is logged and leaves the daemon on the
+// legacy exec path, where the hosted exec tools refuse.
+func openHostedExec(dir string, holders *wsholder.Manager, runner *wsagent.Runner, link *hostedExecLink, logw io.Writer, onRunning func()) *execjob.Hosted {
 	store, err := execjob.OpenHostedStore(filepath.Join(dir, hostedExecStoreName))
 	if err != nil {
 		fmt.Fprintf(logw, "dashboard: hosted exec unavailable: %v\n", err)
 		return nil
 	}
 	hosted, err := execjob.NewHosted(execjob.HostedOptions{
-		Holders:  execjob.HolderManager{Manager: holders},
-		Store:    store,
-		Sessions: execSessions{r: runner},
-		ExitDir:  filepath.Join(dir, hostedExecExitsName),
-		Log:      logw,
+		Holders:   execjob.HolderManager{Manager: holders},
+		Store:     store,
+		Sessions:  execSessions{r: runner},
+		ExitDir:   filepath.Join(dir, hostedExecExitsName),
+		Log:       logw,
+		OnRunning: onRunning,
 	})
 	if err != nil {
 		_ = store.Close()

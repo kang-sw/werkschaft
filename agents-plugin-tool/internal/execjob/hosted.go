@@ -47,6 +47,10 @@ type HostedOptions struct {
 	Now    func() time.Time
 	// JobBytes and TotalBytes replace the ring bounds (a test seam).
 	JobBytes, TotalBytes int64
+	// OnRunning is called, with no lock held, after a job enters or leaves
+	// the running set RunningOwners counts; nil observes nothing. It runs
+	// on the launching or ending goroutine, so it must return promptly.
+	OnRunning func()
 }
 
 type hostedJob struct {
@@ -108,6 +112,31 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 		h.jobs[row.ID] = j
 	}
 	return h, nil
+}
+
+// RunningOwners counts the jobs still running by their owning conversation
+// (HostedJobRow.Owner), including the running jobs a predecessor left that
+// Start has not settled yet. It reads memory only; a nil h counts none.
+func (h *Hosted) RunningOwners() map[string]int {
+	out := map[string]int{}
+	if h == nil {
+		return out
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, j := range h.jobs {
+		if !j.row.Terminal() && j.row.Owner != "" {
+			out[j.row.Owner]++
+		}
+	}
+	return out
+}
+
+// runningChanged calls OnRunning; h.mu must not be held.
+func (h *Hosted) runningChanged() {
+	if h.opts.OnRunning != nil {
+		h.opts.OnRunning()
+	}
 }
 
 func (h *Hosted) logf(format string, args ...any) {
@@ -204,6 +233,7 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 	h.endLocked(j)
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
+	h.runningChanged()
 	h.save(j, row, rev)
 	_ = os.Remove(path)
 	h.deliver(j)
@@ -251,6 +281,7 @@ func (h *Hosted) endFromExit(j *hostedJob, exit wsholder.Exit) {
 	h.endLocked(j)
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
+	h.runningChanged()
 	h.save(j, row, rev)
 	_ = os.Remove(h.exitCopyPath(row.ID))
 	h.deliver(j)
@@ -297,6 +328,7 @@ func (h *Hosted) HolderEvent(id string, ev wsholder.Event) {
 	h.endLocked(j)
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
+	h.runningChanged()
 	h.save(j, row, rev)
 	h.deliver(j)
 	// The process ended; its holder stays until stopped, and its stop takes

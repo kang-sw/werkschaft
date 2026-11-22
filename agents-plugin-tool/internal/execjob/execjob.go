@@ -15,6 +15,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/textreader"
@@ -114,6 +115,38 @@ type RawGrepResponse struct {
 type activeJob struct {
 	root, key string
 	cmd       *exec.Cmd
+}
+
+// activeObserver is SetActiveObserver's function; nil observes nothing.
+var activeObserver atomic.Pointer[func()]
+
+// ActiveRoots counts the live jobs this process launched and still runs
+// (its worker has not finished), by their cleaned Root. A job another
+// process launched, or one this process lost on restart, is not counted.
+func ActiveRoots() map[string]int {
+	out := map[string]int{}
+	active.Range(func(_, v any) bool {
+		out[filepath.Clean(v.(*activeJob).root)]++
+		return true
+	})
+	return out
+}
+
+// SetActiveObserver sets f to be called, with no lock held, after a job
+// enters or leaves the set ActiveRoots counts; nil clears it. f runs on
+// the launching or finishing goroutine, so it must return promptly.
+func SetActiveObserver(f func()) {
+	if f == nil {
+		activeObserver.Store(nil)
+		return
+	}
+	activeObserver.Store(&f)
+}
+
+func notifyActive() {
+	if f := activeObserver.Load(); f != nil {
+		(*f)()
+	}
 }
 
 // Store is the exec-job store under one cache home and environment: job
@@ -260,8 +293,13 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	rec.UpdatedAt = ts()
 	_ = st.writeRecord(opts.Root, rec)
 	active.Store(activeKey(opts.Root, key), &activeJob{root: opts.Root, key: key, cmd: cmd})
+	notifyActive()
 	done := make(chan struct{})
-	go func() { st.finalize(opts.Root, key, cmd, stdout, stderr, combined); close(done) }()
+	go func() {
+		st.finalize(opts.Root, key, cmd, stdout, stderr, combined)
+		notifyActive() // finalize has left active and released mu
+		close(done)
+	}()
 	select {
 	case <-done:
 		rec, _ = st.Load(opts.Root, key)

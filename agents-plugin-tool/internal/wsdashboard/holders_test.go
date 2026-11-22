@@ -21,6 +21,8 @@ type fakeHolders struct {
 	runs    int
 	closes  int
 	running chan struct{}
+	// calls is the order of StopAll and Close calls.
+	calls []string
 }
 
 func newFakeHolders() *fakeHolders {
@@ -40,7 +42,35 @@ func (f *fakeHolders) Run() {
 func (f *fakeHolders) Close() {
 	f.mu.Lock()
 	f.closes++
+	f.calls = append(f.calls, "close")
 	f.mu.Unlock()
+}
+
+// StopAll ends every listed holder whose stop the test did not fail; those
+// it did stay listed and are answered as remaining with their error.
+func (f *fakeHolders) StopAll() wsholder.StopAllResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "stopall")
+	out := wsholder.StopAllResult{Stopped: []string{}, Remaining: []wsholder.StopFailure{}}
+	var kept []wsholder.Info
+	for _, h := range f.listing.Holders {
+		if err := f.stopErr[h.ID]; err != nil {
+			kept = append(kept, h)
+			out.Remaining = append(out.Remaining, wsholder.StopFailure{Info: h, Error: err.Error()})
+			continue
+		}
+		f.stopped = append(f.stopped, h.ID)
+		out.Stopped = append(out.Stopped, h.ID)
+	}
+	f.listing.Holders = kept
+	return out
+}
+
+func (f *fakeHolders) callOrder() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
 }
 
 func (f *fakeHolders) List() wsholder.Listing {

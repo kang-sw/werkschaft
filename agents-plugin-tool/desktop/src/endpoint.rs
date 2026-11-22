@@ -6,7 +6,8 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 use url::Url;
 
@@ -207,7 +208,8 @@ impl Daemon {
         }))
     }
 
-    fn auth_json(&self, route: &str, body: Value) -> Result<Option<Value>> {
+    // The bearer, once the recorded and answering daemon are still this one.
+    fn verified_token(&self) -> Result<&str> {
         let initial = read_endpoint(&self.root)?;
         let token = self.token()?;
         if initial != self.endpoint {
@@ -217,6 +219,11 @@ impl Daemon {
         if current != *self || read_endpoint(&self.root)? != initial {
             return Err("Dashboard changed before authenticated request; retry");
         }
+        Ok(token)
+    }
+
+    fn auth_json(&self, route: &str, body: Value) -> Result<Option<Value>> {
+        let token = self.verified_token()?;
         let mut response = agent(3)
             .post(self.url.join(route).unwrap().as_str())
             .header("Authorization", &format!("Bearer {token}"))
@@ -298,6 +305,137 @@ impl Daemon {
             return Err(invalid);
         }
         Ok(Some(url))
+    }
+
+    /// The number of holders the daemon lists: every agent session,
+    /// subagent, terminal, and hosted exec job a full stop would end,
+    /// whatever its status.
+    /// Read from the dashboard's holders route with the browser credential.
+    pub fn running_sessions(&self) -> Result<usize> {
+        let unavailable = "Could not count the running sessions";
+        let cookie = self.browser_cookie()?.ok_or(unavailable)?;
+        let mut response = agent(3)
+            .get(self.url.join("/holders").unwrap().as_str())
+            .header("Cookie", &format!("{}={}", cookie.name, cookie.value))
+            .call()
+            .map_err(|_| unavailable)?;
+        if response.status() != 200 {
+            return Err(unavailable);
+        }
+        #[derive(Deserialize)]
+        struct Listing {
+            holders: Vec<serde::de::IgnoredAny>,
+        }
+        let listing: Listing = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_JSON * 16)
+            .read_json()
+            .map_err(|_| unavailable)?;
+        Ok(listing.holders.len())
+    }
+
+    /// Asks the daemon to stop every session holder and then itself
+    /// (`POST /shutdown/all`, with the endpoint bearer). An error means the
+    /// request was not sent, so nothing was stopped.
+    pub fn full_stop(&self) -> Result<FullStop> {
+        let token = self.verified_token()?;
+        let response = agent(FULL_STOP_TIMEOUT_SECS)
+            .post(self.url.join(FULL_STOP_ROUTE).unwrap().as_str())
+            .header("Authorization", &format!("Bearer {token}"))
+            .send_empty();
+        let Ok(mut response) = response else {
+            return Ok(FullStop::Unknown);
+        };
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_JSON * 16)
+            .read_to_vec()
+            .unwrap_or_default();
+        Ok(classify_full_stop(status, &body))
+    }
+
+    /// Waits until this daemon no longer answers and its endpoint record is
+    /// gone or replaced, which it removes last before releasing its lock.
+    pub fn wait_stopped(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if !self.is_healthy()
+                && read_endpoint(&self.root).map_or(true, |endpoint| endpoint != self.endpoint)
+            {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// Another daemon now recorded and answering under this one's cache root.
+    pub fn successor(&self) -> Option<Daemon> {
+        discover_at(&self.root).ok().filter(|daemon| daemon != self)
+    }
+}
+
+const FULL_STOP_ROUTE: &str = "/shutdown/all";
+// The daemon stops every holder before it answers: each gets a graceful
+// stop and then a guarded kill, bounded by the daemon, in parallel.
+const FULL_STOP_TIMEOUT_SECS: u64 = 150;
+
+/// The daemon's answer to a full stop.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FullStop {
+    /// Every holder ended and the daemon is stopping.
+    Stopped,
+    /// Some holders could not be stopped; the daemon keeps running.
+    Incomplete { remaining: usize },
+    /// The daemon has no full stop: a 404, or the `401 login_required` an
+    /// older daemon's access guard gives a route outside its exemption.
+    /// Nothing was stopped.
+    Unsupported,
+    /// The route refused the bearer (`401 unauthorized`). Nothing was stopped.
+    Unauthorized,
+    /// The daemon was already stopping and left its holders as they are.
+    AlreadyStopping,
+    /// No answer, or one this app cannot read: the outcome is unknown.
+    Unknown,
+}
+
+pub fn classify_full_stop(status: u16, body: &[u8]) -> FullStop {
+    #[derive(Deserialize)]
+    struct Answer {
+        #[serde(default)]
+        shutting_down: bool,
+        #[serde(default)]
+        remaining: Option<Vec<serde::de::IgnoredAny>>,
+        #[serde(default)]
+        error: Option<String>,
+    }
+    let answer = serde_json::from_slice::<Answer>(body).ok();
+    let error = answer.as_ref().and_then(|a| a.error.as_deref());
+    match status {
+        202 => match answer {
+            Some(Answer {
+                shutting_down: true,
+                remaining: Some(remaining),
+                ..
+            }) if remaining.is_empty() => FullStop::Stopped,
+            _ => FullStop::Unknown,
+        },
+        409 => match answer.and_then(|a| a.remaining) {
+            Some(remaining) if !remaining.is_empty() => FullStop::Incomplete {
+                remaining: remaining.len(),
+            },
+            _ => FullStop::Unknown,
+        },
+        404 => FullStop::Unsupported,
+        401 if error == Some("login_required") => FullStop::Unsupported,
+        401 => FullStop::Unauthorized,
+        503 if error == Some("shutting_down") => FullStop::AlreadyStopping,
+        _ => FullStop::Unknown,
     }
 }
 
@@ -569,6 +707,151 @@ mod tests {
             format!(r#"{{"port":{port},"pid":12,"token":"{}"}}"#, "b".repeat(64)).as_bytes(),
         );
         assert!(daemon.browser_cookie().is_err());
+    }
+
+    #[test]
+    fn full_stop_answers_are_classified_conservatively() {
+        let stopped = br#"{"shutting_down":true,"stopped":["h1","h2"],"remaining":[]}"#;
+        assert_eq!(classify_full_stop(202, stopped), FullStop::Stopped);
+        // A 202 that is not a complete stop is never taken as one.
+        for body in [
+            &br#"{"shutting_down":false,"stopped":[],"remaining":[]}"#[..],
+            br#"{"shutting_down":true,"stopped":[],"remaining":[{"id":"h1"}]}"#,
+            br#"{"shutting_down":true}"#,
+            br#"{"shutting_down":true}garbage"#,
+            b"",
+        ] {
+            assert_eq!(classify_full_stop(202, body), FullStop::Unknown);
+        }
+        let incomplete = br#"{"shutting_down":false,"stopped":["h1"],"remaining":[{"id":"h2","pid":4,"error":"not killed"},{"id":"h3","pid":5,"error":"x"}]}"#;
+        assert_eq!(
+            classify_full_stop(409, incomplete),
+            FullStop::Incomplete { remaining: 2 }
+        );
+        assert_eq!(
+            classify_full_stop(409, br#"{"remaining":[]}"#),
+            FullStop::Unknown
+        );
+        // An older daemon: no route (404), or its localhost guard's refusal
+        // of a route outside its exemption.
+        assert_eq!(
+            classify_full_stop(404, b"404 page not found\n"),
+            FullStop::Unsupported
+        );
+        assert_eq!(
+            classify_full_stop(401, b"{\"error\":\"login_required\"}\n"),
+            FullStop::Unsupported
+        );
+        // The route's own refusal of the bearer is an authentication error.
+        assert_eq!(
+            classify_full_stop(401, b"unauthorized\n"),
+            FullStop::Unauthorized
+        );
+        assert_eq!(
+            classify_full_stop(401, br#"{"error":"something else"}"#),
+            FullStop::Unauthorized
+        );
+        assert_eq!(
+            classify_full_stop(503, b"{\"error\":\"shutting_down\"}\n"),
+            FullStop::AlreadyStopping
+        );
+        for status in [200, 204, 403, 500, 503] {
+            assert_eq!(classify_full_stop(status, b"{}"), FullStop::Unknown);
+        }
+    }
+
+    // A one-connection-per-request server answering each request in order:
+    // (expected request line prefix, status line, body).
+    fn scripted(
+        answers: Vec<(&'static str, &'static str, String)>,
+    ) -> (u16, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (expected, status, body) in answers {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    request.push_str(&line);
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                }
+                assert!(request.starts_with(expected), "{request}");
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                requests.push(request.to_lowercase());
+            }
+            requests
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn full_stop_sends_only_the_bearer_after_rechecking_identity() {
+        let cache = Cache::new();
+        let token = "c".repeat(64);
+        let health = r#"{"service":"ws-dashboard","pid":12,"started_at":"start"}"#.to_string();
+        let (port, server) = scripted(vec![
+            ("GET /health ", "200 OK", health.clone()),
+            ("GET /health ", "200 OK", health.clone()),
+            (
+                "POST /shutdown/all ",
+                "409 Conflict",
+                r#"{"shutting_down":false,"stopped":[],"remaining":[{"id":"h1","pid":7,"error":"not killed"}]}"#.to_string(),
+            ),
+        ]);
+        cache.write(format!(r#"{{"port":{port},"pid":12,"token":"{token}"}}"#).as_bytes());
+        let daemon = discover_at(&cache.0).unwrap();
+        assert_eq!(
+            daemon.full_stop().unwrap(),
+            FullStop::Incomplete { remaining: 1 }
+        );
+        let requests = server.join().unwrap();
+        let stop = &requests[2];
+        assert!(stop.contains(&format!("authorization: bearer {token}")));
+        assert!(!stop.contains("cookie:") && !stop.contains("origin:"));
+
+        // A changed endpoint record stops the request before it is sent.
+        cache.write(
+            format!(r#"{{"port":{port},"pid":12,"token":"{}"}}"#, "d".repeat(64)).as_bytes(),
+        );
+        assert!(daemon.full_stop().is_err());
+    }
+
+    #[test]
+    fn running_sessions_counts_every_listed_holder_with_the_browser_credential() {
+        let cache = Cache::new();
+        let token = "e".repeat(64);
+        let health = r#"{"service":"ws-dashboard","pid":12,"started_at":"start"}"#.to_string();
+        let listing = r#"{"holders":[{"id":"h1","attached":true},{"id":"h2","attached":false,"cause":"no_answer"},{"id":"h3"}],"failures":[],"can_stop":true}"#;
+        let (port, server) = scripted(vec![
+            ("GET /health ", "200 OK", health.clone()),
+            ("GET /health ", "200 OK", health.clone()),
+            (
+                "POST /auth/cookie ",
+                "200 OK",
+                r#"{"name":"ws_local","value":"cookie-value","maxAge":60}"#.to_string(),
+            ),
+            ("GET /holders ", "200 OK", listing.to_string()),
+        ]);
+        cache.write(format!(r#"{{"port":{port},"pid":12,"token":"{token}"}}"#).as_bytes());
+        let daemon = discover_at(&cache.0).unwrap();
+        assert_eq!(daemon.running_sessions().unwrap(), 3);
+        let requests = server.join().unwrap();
+        let holders = &requests[3];
+        assert!(holders.contains("cookie: ws_local=cookie-value"));
+        assert!(!holders.contains("authorization:"));
     }
 
     #[test]

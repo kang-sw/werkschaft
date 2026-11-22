@@ -199,6 +199,36 @@ type RailRow struct {
 	// Subagents counts the running agents the lead itself spawned (level 1),
 	// zero without a live adapter.
 	Subagents int
+	// ExecJobs counts the live exec jobs this daemon runs whose worktree
+	// root is the row's Project or holds it (railExecJobs). A job counts on
+	// every row of its worktree, not only the session that launched it.
+	ExecJobs int
+	// OwnExecJobs counts the hosted exec jobs this session owns that still
+	// run. Unlike ExecJobs they are known by their owning conversation, so
+	// they count on this row alone.
+	OwnExecJobs int
+	// Busy reports a live session not yet fully idle, rendered as
+	// data-busy="1": the lead works or waits on a permission (an approval
+	// or a terminal's prompt), or a ws-known activity remains: a running
+	// subagent, a background task, an exec job (ExecJobs, OwnExecJobs), or
+	// a busy live child row at any depth. The rail layout sets it once the
+	// children are nested (orderTree, railSetBusy). A harness that reports
+	// no background task count (taskBadgeCounts clamps its unknown count to
+	// zero) is fully idle once its turn ended and none of the rest remains,
+	// so such a session may read idle while unseen background work still
+	// runs.
+	Busy bool
+	// Active is Busy by the session's own activity, rendered as
+	// data-active="1": everything Busy counts except ExecJobs, which are
+	// known only by worktree and so also keep other sessions there busy;
+	// the session's own hosted jobs (OwnExecJobs) count. A page notifies a
+	// finish only for a busy span that was active at some point, so a
+	// session busy only through another one's job never reads as finished.
+	Active bool
+	// permission is the lead's permission wait, from a present adapter,
+	// for any session: a hosted one also has Approval, a terminal one waits
+	// on its own prompt. Busy reads it.
+	permission bool
 	// CountPolicy is the board's open policy and check items.
 	CountPolicy int
 	// OpenAskIDs is the index's already-read set, exposed as data-asks.
@@ -354,6 +384,28 @@ type railInput struct {
 	// CanRevive reports a daemon that hosts lead sessions: an ended row
 	// then carries how it comes back (railRevive).
 	CanRevive bool
+	// ExecJobs is the live exec job count under the session's project
+	// (railExecJobs), as RailRow.ExecJobs; OwnExecJobs is the session's own
+	// running hosted exec jobs (DaemonOptions.HostedExecJobs), as
+	// RailRow.OwnExecJobs.
+	ExecJobs    int
+	OwnExecJobs int
+}
+
+// railExecJobs sums the live exec jobs (DaemonOptions.ExecJobs, by root)
+// whose root is project or holds it.
+func railExecJobs(jobs map[string]int, project string) int {
+	if len(jobs) == 0 || project == "" {
+		return 0
+	}
+	project = filepath.Clean(project)
+	n := 0
+	for root, c := range jobs {
+		if railPathUnder(filepath.Clean(root), project) {
+			n += c
+		}
+	}
+	return n
 }
 
 // railMessage is a session's last conversation message as the rail shows it.
@@ -721,6 +773,8 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 		Hosted:      reg.Hosted,
 		Exit:        hostExit(reg),
 		Hover:       sessionHover(reg, in.Snapshot, live, now),
+		ExecJobs:    in.ExecJobs,
+		OwnExecJobs: in.OwnExecJobs,
 	}
 	if !live {
 		row.Revive, row.ReviveBlocked = railRevive(in)
@@ -737,6 +791,7 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 	row.LastTool = lastToolAt(snap.Lead)
 	if row.Exit == nil && lifecycle != SessionStopped && adapterPresent(snap, now) {
 		row.Working = leadWorking(snap.Lead.Phase)
+		row.permission = snap.Lead.Phase == wslive.PhasePermission
 		row.Subagents = levelOneRunning(snap.Agents)
 		bg, mon := taskBadgeCounts(snap)
 		row.BackgroundTasks = bg + mon

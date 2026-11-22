@@ -54,6 +54,18 @@ func (d *Daemon) agentChanged(replyID, _ string) {
 	d.acks.poke(replyID)
 }
 
+// ExecJobsChanged re-renders the rail once after the live exec job counts
+// (DaemonOptions.ExecJobs) changed. It reads no file: it wakes the rail
+// streams as a layout change does, and their render reuses its cached
+// inputs, asking ExecJobs again. Wakes coalesce in the broker's window and
+// the rail's minimum interval, so a burst of jobs renders once.
+func (d *Daemon) ExecJobsChanged() {
+	if d.broker == nil {
+		return
+	}
+	d.broker.wake(railListRepoKey)
+}
+
 // AgyActivity schedules a usage refresh after a hosted agy turn settles.
 // The handoff must not wait for the plan-usage store's lock.
 func (d *Daemon) AgyActivity() {

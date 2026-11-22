@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	goruntime "runtime"
 	"slices"
 	"strings"
@@ -288,6 +289,8 @@ type hostedFixture struct {
 	sessions *fakeExecSessions
 	store    *memHostedStore
 	exitDir  string
+	// onRunning is the next open's HostedOptions.OnRunning.
+	onRunning func()
 }
 
 func newHostedFixture(t *testing.T, window time.Duration) *hostedFixture {
@@ -300,7 +303,7 @@ func newHostedFixture(t *testing.T, window time.Duration) *hostedFixture {
 // open builds a Hosted over the fixture's store, as a daemon start does.
 func (fx *hostedFixture) open(window time.Duration) {
 	fx.t.Helper()
-	h, err := NewHosted(HostedOptions{Holders: fx.holders, Store: fx.store, Sessions: fx.sessions, ExitDir: fx.exitDir, Window: window})
+	h, err := NewHosted(HostedOptions{Holders: fx.holders, Store: fx.store, Sessions: fx.sessions, ExitDir: fx.exitDir, Window: window, OnRunning: fx.onRunning})
 	if err != nil {
 		fx.t.Fatal(err)
 	}
@@ -484,6 +487,113 @@ func TestHostedAsyncAnswersAtOnce(t *testing.T) {
 	}
 	fx.holders.exit(v.HolderID, 0)
 	eventuallyExec(t, "the async notice", func() bool { return len(fx.sessions.noticeList()) == 1 })
+}
+
+// TestHostedRunningOwnersFollowEachJob: RunningOwners counts the running
+// jobs by owning conversation; OnRunning runs, with no lock held, once a
+// job is admitted and once it ends, whether it exits, is stopped, or never
+// starts; a reopened Hosted counts a running job its predecessor left.
+func TestHostedRunningOwnersFollowEachJob(t *testing.T) {
+	fx := newHostedFixture(t, time.Hour)
+	var mu sync.Mutex
+	var seen []map[string]int
+	fx.onRunning = func() {
+		// No Hosted lock is held: RunningOwners must not deadlock here.
+		owners := fx.h.RunningOwners()
+		mu.Lock()
+		seen = append(seen, owners)
+		mu.Unlock()
+	}
+	fx.open(time.Hour)
+	if got := fx.h.RunningOwners(); len(got) != 0 {
+		t.Fatalf("before any launch: RunningOwners = %v", got)
+	}
+	lead, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil || lead.State != HostedRunning {
+		t.Fatalf("lead launch = %+v, %v", lead, err)
+	}
+	other, err := fx.launch(context.Background(), nil, HostedLaunch{Owner: "other", Async: true})
+	if err != nil || other.State != HostedRunning {
+		t.Fatalf("other launch = %+v, %v", other, err)
+	}
+	if got := fx.h.RunningOwners(); got["lead"] != 1 || got["other"] != 1 || len(got) != 2 {
+		t.Fatalf("two running jobs: RunningOwners = %v", got)
+	}
+	fx.holders.exit(lead.HolderID, 0)
+	if _, err := fx.h.Stop("other", other.ID); err != nil {
+		t.Fatal(err)
+	}
+	fx.holders.spawnErr = errors.New("no such program")
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err == nil {
+		t.Fatal("a launch whose spawn fails succeeded")
+	}
+	mu.Lock()
+	got := slices.Clone(seen)
+	mu.Unlock()
+	want := []map[string]int{
+		{"lead": 1},             // lead admitted
+		{"lead": 1, "other": 1}, // other admitted
+		{"other": 1},            // lead exited
+		{},                      // other stopped
+		{"lead": 1},             // the failing launch admitted
+		{},                      // and ended before it started
+	}
+	if len(got) != len(want) {
+		t.Fatalf("OnRunning calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if len(got[i]) != len(want[i]) {
+			t.Fatalf("OnRunning call %d saw %v, want %v (all: %v)", i, got[i], want[i], got)
+		}
+		for k, n := range want[i] {
+			if got[i][k] != n {
+				t.Fatalf("OnRunning call %d saw %v, want %v (all: %v)", i, got[i], want[i], got)
+			}
+		}
+	}
+	// A job still running when the daemon restarts counts at once. Its end
+	// is observed when its holder leaves before the exit record arrives,
+	// and when the next start finds a running job's holder gone.
+	fx.holders.spawnErr = nil
+	kept, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	seen = nil
+	mu.Unlock()
+	fx.open(time.Hour)
+	if got := fx.h.RunningOwners(); got["lead"] != 1 || len(got) != 1 {
+		t.Fatalf("after a reopen with %s running: RunningOwners = %v", kept.ID, got)
+	}
+	left, err := fx.launch(context.Background(), nil, HostedLaunch{Owner: "other", Async: true})
+	if err != nil || left.State != HostedRunning {
+		t.Fatalf("other launch after the reopen = %+v, %v", left, err)
+	}
+	fx.holders.mu.Lock()
+	session := fx.holders.live[kept.HolderID]
+	delete(fx.holders.live, left.HolderID)
+	fx.holders.mu.Unlock()
+	code := 0
+	fx.h.HolderGone(wsholder.Descriptor{ID: kept.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "exit"})
+	fx.open(time.Hour)
+	if got := fx.h.RunningOwners(); len(got) != 0 {
+		t.Fatalf("after a reopen with %s's holder gone: RunningOwners = %v", left.ID, got)
+	}
+	mu.Lock()
+	got = slices.Clone(seen)
+	mu.Unlock()
+	want = []map[string]int{
+		{"lead": 1, "other": 1}, // other admitted beside the kept job
+		{"other": 1},            // the kept job's holder left (HolderGone)
+		{},                      // the next start found other's holder gone
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("OnRunning calls across reopens = %v, want %v", got, want)
+	}
+	if got := (*Hosted)(nil).RunningOwners(); len(got) != 0 {
+		t.Fatalf("a nil Hosted counts %v", got)
+	}
 }
 
 // TestHostedWindowExcludesApprovalAndRechecksTheLiveMode: the window starts

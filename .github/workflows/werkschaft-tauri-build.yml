@@ -73,7 +73,7 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Test packaging and release contracts
-        run: node --test scripts/test-package.cjs scripts/test-release.cjs
+        run: node --test scripts/test-package.cjs scripts/test-release.cjs scripts/test-notify-bridge.cjs
 
       - name: Assemble and validate the wsflow daemon input without executing it
         run: >-
