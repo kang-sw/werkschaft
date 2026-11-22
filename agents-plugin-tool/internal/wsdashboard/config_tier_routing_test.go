@@ -154,3 +154,58 @@ func TestSettingsTierRoutingSaveRefusesAStaleRevision(t *testing.T) {
 		t.Fatalf("reset revision = %s, want the empty store's %s", revision, opened)
 	}
 }
+
+// A config.tune-style write through the shared structured writer that lands
+// after the dashboard save read the layers and before it writes still
+// refuses the stale save: the revision is compared under the config file
+// lock, against the file read there.
+func TestSettingsTierRoutingSaveRefusesAWriteThatLandsMidSave(t *testing.T) {
+	catalog, err := wsconfigservice.NewCatalog([]wsconfigservice.Rule{
+		{Key: wsconfig.ItemAgentTierRouting, Type: "object", Structured: true, GlobalOnly: true, Editable: true,
+			NormalizeObject: func(value any, _ wsconfig.Scope) (json.RawMessage, error) { return json.Marshal(value) }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := wsconfig.Options{CacheHome: filepath.Join(t.TempDir(), "cache"), ConfigHome: filepath.Join(t.TempDir(), "global")}
+	d := authFixture(t)
+	d.config = &ConfigBackend{Catalog: catalog, Options: opts}
+	own := "http://127.0.0.1:43210"
+	tuned := json.RawMessage(`{"bundles":{"tuned":{"harness":"claude","model":"m-t"}}}`)
+	for _, tc := range []struct{ action, value string }{
+		{"set", `,"value":{"bundles":{"mine":{"harness":"codex","model":"m-a"}}}`},
+		{"reset", ""},
+	} {
+		resolver := wsconfig.NewResolver(opts, nil, nil, nil)
+		if err := resolver.UnsetStructured(wsconfig.ItemAgentTierRouting, wsconfig.ScopeGlobal); err != nil {
+			t.Fatal(err)
+		}
+		_, opened, err := wsconfig.LoadTierRoutingRevision(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writes := 0
+		d.beforeConfigWrite = func(key string) {
+			if key != wsconfig.ItemAgentTierRouting {
+				t.Errorf("hook for %s", key)
+			}
+			writes++
+			// The same writer config.tune uses (mcp/config_structured.go).
+			if err := resolver.SetStructured(wsconfig.ItemAgentTierRouting, tuned, wsconfig.ScopeGlobal); err != nil {
+				t.Fatal(err)
+			}
+		}
+		body := `{"scope":"global","key":"agent.tier_routing"` + tc.value + `,"revision":"` + opened + `"}`
+		got := settingsRequest(t, d, http.MethodPost, "/api/config/"+tc.action, body, own)
+		if writes != 1 || got.Code != 409 || !strings.Contains(got.Body.String(), "stale_revision") {
+			t.Fatalf("%s overtaken mid-save = %d %s (hook ran %d times)", tc.action, got.Code, got.Body, writes)
+		}
+		routing, _, err := wsconfig.LoadTierRoutingRevision(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(routing.Bundles) != 1 || routing.Bundles["tuned"].Model != "m-t" {
+			t.Fatalf("%s: the stale save replaced the tuned graph: %+v", tc.action, routing)
+		}
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -737,6 +738,23 @@ func TierRoutingRevision(cfg Config) string {
 	}
 	sum := sha256.Sum256(compacted.Bytes())
 	return hex.EncodeToString(sum[:16])
+}
+
+// ErrTierRoutingStale refuses a whole-graph write whose base revision no
+// longer names the stored agent.tier_routing value.
+var ErrTierRoutingStale = errors.New("agent.tier_routing changed since the edited copy was read")
+
+// TierRoutingAt is the precondition a whole-graph writer passes to
+// SetStructuredIf / UnsetStructuredIf: the global file, read under its lock,
+// must still hold the value at revision, or the write is refused with
+// ErrTierRoutingStale.
+func TierRoutingAt(revision string) StructuredPrecondition {
+	return func(current Config) error {
+		if TierRoutingRevision(current) != revision {
+			return ErrTierRoutingStale
+		}
+		return nil
+	}
 }
 
 // LoadTierAliases reads agent.tier_aliases (global-only) for opts.

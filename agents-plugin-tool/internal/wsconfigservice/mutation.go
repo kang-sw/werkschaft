@@ -25,6 +25,10 @@ type Mutation struct {
 	// profile family member or an exact key such as agent.tier_routing, so
 	// Apply and AfterWrite address structured_overrides for a reset too.
 	IsStructured bool
+	// Precondition (nil: none) runs on the stored file inside a structured
+	// write's locked read-modify-write; its error refuses the write and is
+	// returned by Apply unchanged.
+	Precondition wsconfig.StructuredPrecondition
 }
 
 func (c *Catalog) Validate(scope wsconfig.Scope, op Operation) (Mutation, error) {
@@ -139,10 +143,10 @@ func (m Mutation) Apply(scope wsconfig.Scope, opts wsconfig.Options, sessionKey 
 	}
 	r := wsconfig.NewResolver(opts, nil, nil, writer)
 	if m.Action == "reset" && m.IsStructured {
-		return r.UnsetStructured(m.StoredKey, scope)
+		return r.UnsetStructuredIf(m.StoredKey, scope, m.Precondition)
 	}
 	if m.Structured != nil {
-		return r.SetStructured(m.StoredKey, m.Structured, scope)
+		return r.SetStructuredIf(m.StoredKey, m.Structured, scope, m.Precondition)
 	}
 	target := wsconfig.SetOptions{ExplicitScope: scope, SessionKey: sessionKey}
 	if m.Action == "reset" {

@@ -251,10 +251,10 @@ type Daemon struct {
 	auth      localhostAuth
 	clipboard clipboardWriter
 	memoMu    sync.Mutex // serializes daemon-local memo read/modify/write
-	// tierRoutingMu serializes agent.tier_routing saves from revision check
-	// to write (handleConfigMutation).
-	tierRoutingMu sync.Mutex
-	planUsage     *planUsageStore // daemon-private account usage, never credentials
+	// beforeConfigWrite runs between a config save's layer read and its
+	// write (a test seam; nil in production).
+	beforeConfigWrite func(key string)
+	planUsage         *planUsageStore // daemon-private account usage, never credentials
 	// pprof serves the pprof routes (pprofHandler).
 	pprof bool
 	// buildTime is the build time /health reports; zero is unknown.

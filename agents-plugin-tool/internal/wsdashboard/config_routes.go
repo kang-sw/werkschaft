@@ -393,30 +393,30 @@ func (d *Daemon) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	graph := mutation.Key == wsconfig.ItemAgentTierRouting
-	if graph {
-		// Hold the revision check through the write, so two saves from the
-		// same revision cannot both pass it.
-		d.tierRoutingMu.Lock()
-		defer d.tierRoutingMu.Unlock()
+	if mutation.Key == wsconfig.ItemAgentTierRouting {
+		if request.Revision == nil {
+			writeConfigError(w, tierRoutingNoRevision)
+			return
+		}
+		// The shared structured writer compares the revision with the file it
+		// read under the config file lock, so no other writer (another save,
+		// config.tune in any process) can land between compare and write.
+		mutation.Precondition = wsconfig.TierRoutingAt(*request.Revision)
 	}
 	layers, writer, key, failure := d.configLayers(resolved)
 	if failure.status != 0 {
 		writeConfigError(w, failure)
 		return
 	}
-	if graph {
-		if request.Revision == nil {
-			writeConfigError(w, tierRoutingNoRevision)
-			return
-		}
-		if *request.Revision != wsconfig.TierRoutingRevision(layers.Files[wsconfig.ScopeGlobal]) {
-			writeConfigError(w, tierRoutingStale)
-			return
-		}
+	if d.beforeConfigWrite != nil {
+		d.beforeConfigWrite(mutation.Key)
 	}
 	if err := mutation.Apply(request.Scope, resolved.opts, key, writer); err != nil {
-		writeConfigError(w, configUnavailable)
+		if errors.Is(err, wsconfig.ErrTierRoutingStale) {
+			writeConfigError(w, tierRoutingStale)
+		} else {
+			writeConfigError(w, configUnavailable)
+		}
 		return
 	}
 	if d.config.Changed != nil {
