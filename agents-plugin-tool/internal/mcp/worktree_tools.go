@@ -1018,7 +1018,7 @@ type worktreeReleaseCaller struct {
 	// unfence (worktreeExecFence); run under the per-worktree lock, force or
 	// not.
 	FenceExec   func(target string) (func(), error)
-	CheckNotice func(ctx context.Context, target string) (releaseBindings, error)
+	CheckNotice func(ctx context.Context, target string) releaseBindings
 	Released    func(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool, bindings releaseBindings) worktreeReleaseNotice
 	// bindings is CheckNotice's finding, kept for Released.
 	bindings releaseBindings
@@ -1027,10 +1027,17 @@ type worktreeReleaseCaller struct {
 // releaseBindings is what the notice check learned about the agents bound to
 // a release's target: unknown when it did not look or its occupancy read
 // failed, so no warning may claim either way.
-type releaseBindings int
+type releaseBindings struct {
+	kind releaseBindingsKind
+	// live names the live bound agents (address and state) of a
+	// releaseBindingsLive finding, for a warning to name.
+	live []string
+}
+
+type releaseBindingsKind int
 
 const (
-	releaseBindingsUnknown releaseBindings = iota
+	releaseBindingsUnknown releaseBindingsKind = iota
 	releaseBindingsNoneLive
 	releaseBindingsLive
 )
@@ -1170,37 +1177,39 @@ func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
 	return false
 }
 
-// checkWorktreeReleaseNotice refuses a release, before it changes anything,
-// when the daemon this server forwards to predates release notices (it
-// answers a probe notice with its unknown-route refusal) while live agents
-// are bound to target: such a daemon would keep running bindings the release
-// ends, which the release-compatibility contract does not allow. With no
-// live bound agent there is nothing it could keep running, and the release
-// proceeds (its notice then fails with a warning). A daemon-hosted server
-// answers in memory and always takes the notice; any other occupancy or probe
-// failure is left to the bound-child check and the notice's own warning. It
+// checkWorktreeReleaseNotice reports, before a release changes anything, what
+// is known of the agents bound to target, for the warning of a notice that
+// cannot be delivered. A daemon that predates release notices (it answers a
+// probe notice with its unknown-route refusal) keeps running the bindings the
+// release ends; the release still proceeds, as v0.51.0's own forced release
+// did, and its warning names the live agents it leaves running (owner
+// Decision (2182)=a, a scoped reversal of the refusal for old daemons only).
+// A daemon-hosted server answers in memory and always takes the notice. It
 // returns what it learned of the bound agents: none live only when the
 // occupancy read succeeded and listed none, unknown when it did not look or
 // that read failed.
-func (s *Server) checkWorktreeReleaseNotice(ctx context.Context, target string) (releaseBindings, error) {
+func (s *Server) checkWorktreeReleaseNotice(ctx context.Context, target string) releaseBindings {
 	if s.pi.worktreeChildren != nil || !s.piForwards() {
-		return releaseBindingsUnknown, nil
+		return releaseBindings{}
 	}
 	occ, err := s.worktreeOccupancy(ctx, target)
 	if err != nil {
-		return releaseBindingsUnknown, nil
+		return releaseBindings{}
 	}
 	if !liveBoundChildren(occ.Children) {
-		return releaseBindingsNoneLive, nil
+		return releaseBindings{kind: releaseBindingsNoneLive}
 	}
-	var answer struct {
-		Probe bool `json:"probe"`
+	var live []string
+	for _, child := range occ.Children {
+		if (!child.BoundBeforeRelease && child.State != wsagent.AgentClosed) || child.Live {
+			if child.State != "" {
+				live = append(live, fmt.Sprintf("%s (%s)", child.Address, child.State))
+			} else {
+				live = append(live, child.Address)
+			}
+		}
 	}
-	err = s.piCall(ctx, "worktree.released", map[string]any{"worktree": target, "probe": true}, piForwardTimeout, &answer)
-	if err != nil && unknownAgentRoute(err) {
-		return releaseBindingsLive, fmt.Errorf("worktree.release refuses %s: the running ws daemon predates release notices, so it would keep the child agents bound here running in this worktree after the release. Nothing was changed. %s, then release again", target, worktreeReleaseDaemonSwap)
-	}
-	return releaseBindingsLive, nil
+	return releaseBindings{kind: releaseBindingsLive, live: live}
 }
 
 // worktreeReleaseDaemonSwap is the recovery an older daemon needs: only a
@@ -1278,10 +1287,10 @@ const worktreeReleaseNoNotice = "no ws daemon was told about this release (this 
 
 // worktreeReleaseNoticeFailure is the outcome of a completed release whose
 // notice failed, with its warning. An older daemon has no worktree.released
-// route and answers its unknown-route refusal; the release reaches here when
-// the notice check proved no live agent bound, or could not tell
-// (checkWorktreeReleaseNotice), and the warning claims only what that check
-// proved. Any other written refusal is a daemon that did not apply the
+// route and answers its unknown-route refusal; the release proceeds, as
+// v0.51.0's own did, and the warning claims only what the pre-release check
+// (checkWorktreeReleaseNotice) learned of the bound agents, naming any live
+// one it leaves running. Any other written refusal is a daemon that did not apply the
 // notice. Every other error (no answer, a timeout, a lost connection, an
 // unreadable answer) leaves it unconfirmed: the daemon applies a notice
 // before it answers, so the answer may be lost after it applied it. Either
@@ -1300,11 +1309,11 @@ func worktreeReleaseNoticeFailure(err error, cancelTurns bool, bindings releaseB
 		return worktreeReleaseNotice{Outcome: outcome, Lines: []string{line}}
 	case unknownAgentRoute(err):
 		outcome = releaseNoticeOldDaemon
-		switch bindings {
+		switch bindings.kind {
 		case releaseBindingsNoneLive:
-			line = "the running ws daemon predates release notices; no live agent was bound here, so none keeps running in this worktree. " + worktreeReleaseDaemonSwap + " before releasing a worktree with live agents (such a release is refused)"
+			line = "the running ws daemon predates release notices; no live agent was bound here, so none keeps running in this worktree. " + worktreeReleaseDaemonSwap + " so a forced release can end the bindings of live agents"
 		case releaseBindingsLive:
-			line = "the running ws daemon predates release notices, so it did not end the bindings of the live agents bound here before this release: they can still take input in this worktree until their processes end. " + worktreeReleaseDaemonSwap
+			line = fmt.Sprintf("the running ws daemon predates release notices, so it did not end the bindings of the live agents bound here before this release (%s): they keep running and can still take input in this worktree until their processes end. %s", strings.Join(bindings.live, ", "), worktreeReleaseDaemonSwap)
 		default:
 			line = "the running ws daemon predates release notices, and whether a live agent is bound here is unknown (the binding check could not read the daemon's occupancy): such an agent can still take input in this worktree until its process ends. " + worktreeReleaseDaemonSwap
 		}
