@@ -459,6 +459,13 @@ func (s *Store) run() {
 			for _, j := range batch {
 				s.handle(j)
 			}
+			// A steady stream of work must not starve retention: a sweep
+			// that came due runs between batches.
+			select {
+			case <-tick:
+				s.sweep()
+			default:
+			}
 		}
 		if n := s.queueDrops.Swap(0); n > 0 {
 			s.logf("dropped %d audit events: write queue full", n)

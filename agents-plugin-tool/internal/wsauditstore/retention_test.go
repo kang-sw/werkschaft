@@ -640,3 +640,60 @@ func TestIndexRecoveryKeepsOlderFilesUntilASnapshotLands(t *testing.T) {
 		t.Fatalf("a failed snapshot left %v", names)
 	}
 }
+
+// TestPeriodicSweepRunsUnderASteadyStreamOfAppends pins that retention is not
+// starved by work: while a producer keeps the write queue from ever running
+// dry, a sweep that comes due still runs between batches and ages out an
+// expired ring.
+func TestPeriodicSweepRunsUnderASteadyStreamOfAppends(t *testing.T) {
+	root := t.TempDir()
+	old := filepath.Join(root, "expired")
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seg := filepath.Join(old, segmentName(1))
+	if err := os.WriteFile(seg, []byte(`{"t":"h","v":1,"session":"expired"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ageRing(t, old, time.Now().Add(-30*24*time.Hour))
+	// Slow writes keep the producer ahead of the writer.
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		time.Sleep(time.Millisecond)
+		return orig(f, b)
+	}
+	s, log := openTest(t, root, func(o *Options) {
+		o.DeferFirstSweep = true
+		o.SweepInterval = 20 * time.Millisecond
+		o.QueueDepth = 64
+	})
+	stop := make(chan struct{})
+	producing := make(chan struct{})
+	go func() {
+		defer close(producing)
+		for seq := uint64(1); ; seq++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			it := sourced("busy", seq, wsaudit.KindToolCall)
+			_ = s.AppendSourced(context.Background(), it.id, it.Envelope)
+		}
+	}()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if _, err := os.Stat(old); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(stop)
+			<-producing
+			t.Fatalf("no sweep ran while appends kept coming\n%s", log.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(stop)
+	<-producing
+}
