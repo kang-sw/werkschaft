@@ -4,6 +4,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: e879ecc845e23815
 sage-review-design-reviewed: e879ecc845e23815
+completed: 2026-11-22
 ---
 
 # Explicit mailbox multi-recipient sends with public To/CC and hidden BCC
@@ -75,3 +76,24 @@ Verification:
 - The advertised arguments match `to: string | string[]`, optional `cc: string[]`, optional `bcc: string[]`; no all-peers selector is added.
 - The `ws-mcp.md` daemon replacement section contains the one settled refresh sentence and no new schema-check/old-daemon guidance is introduced.
 - Record exact focused test commands and results during implementation. Live peer mail, daemon replacement and cross-session smoke require their own authorization; this docs capture performs none.
+
+### Result (778c74173) - 2026-11-22
+
+Landed in 9bd91e982 (implementation) and 778c74173 (format isolation and review minors), base fccdd9dab.
+
+- `mailbox.send` takes `to: string | string[]`, `cc: string[]` and `bcc: string[]` (`to` is an `anyOf` string or string array; required arguments are unchanged). A scalar `to` with no or empty cc/bcc keeps the legacy path byte for byte: trimmed body, no header, same receipt.
+- Fan-out (`internal/mcp/mailbox_fanout.go`) validates every address before sending anything, so a malformed address refuses the whole call and never reaches the header. A repeated address is collapsed to one copy under its most public role. Content must be non-blank; the supplied bytes are delivered untrimmed.
+- Each recipient gets one ordinary envelope through the shared `deliverMailboxCopy` (factored out of the scalar path), in its own store transaction with route-appropriate stamps (`from` or `reply_to`). A failed copy neither rolls back nor stops the others. One wake and one nudge cover the delivered copies. The receipt lists delivered (with stamp) and failed (with error) recipients; when nothing was delivered, the call is a text tool error with the same list, including under `format: json`.
+- Every copy opens with the generated public line `[ws mail to: a, b; cc: c]`; BCC is never named. A peer-lead note, whether stamped for a top-level lead or forwarded from either product, stays on the first line, above the header. Envelope and store shape are unchanged (T0).
+- The `mailbox.send` description was rewritten to fit the 1450 B per-tool cap (1383 B). `ai-docs/manuals/ws-mcp.md` gained the one settled refresh sentence under `### Daemon replacement and process ownership`. No rsrc or playbook text changed.
+- Fan-out mail shows the header line as its history title and dashboard preview; no title-skip was added.
+- Forward: the recipient line format is isolated in `mailboxAudienceHeader` and pinned only by `TestMailboxAudienceHeader`. Routing tests build their expected bodies through it, and `TestComposeMailboxFanOutBody` pins placement with an opaque header. A pending owner decision (collapsed marker plus an expand tool) may replace the format; that would be a separate follow-up run by the lead.
+- Routing: the route verdict was "stop" (no branch commits, 7 behind develop). Work proceeded on the branch as cut, per the lead's instruction not to rebase.
+- Lite review (fccdd9dab..9bd91e982): no Critical or Important findings. Both minors (partial JSON receipt with a failed entry; all-failed under `format: json`) were covered in 778c74173.
+
+Verification (run from `agents-plugin-tool/`):
+
+- At 778c74173: `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test ./internal/mcp/ -run 'TestMailboxFanOut|TestMailboxScalarSendUnchangedByFanOut|TestMailboxSendAdvertisesFanOutArguments|TestMailboxAudienceHeader|TestComposeMailboxFanOutBody' -count=1 -v`: 11/11 PASS.
+- At 778c74173: `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test ./internal/mcp/ -run 'TestMailbox|TestComposeMailboxFanOutBody|TestStampPeerLeadNote|TestLeadUseMailbox|TestDirectMailbox|TestHostedMailbox|TestAgentMail|TestListedToolSchemas|TestAgentToolSize|TestPrecheck|TestSchemaClosedRule|TestHandlerOwnedArguments|TestServeStdioToolsListAndCall|TestCallListSchemaAndDispatch|TestToolAlias|TestHarvest|TestConfigTuneValueSchema' -count=1`: ok. `go vet ./internal/mcp/`: clean.
+- At 9bd91e982: `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test ./internal/wsdashboard/ -run 'TestConversationPresentation' -count=1`: ok. `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test ./internal/wsmailbox/ -count=1`: ok. `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build ./...`: clean.
+- Not run: cmd/ws-mcp daemon proxy tests (they need a daemon). No live mail, daemon replacement or cross-session smoke, as the ticket requires.
