@@ -401,6 +401,35 @@ test("a 200 install or import reports each pack's own result, not the request's"
   assert.match(text, /a: cannot move the staged pack into place/);
 });
 
+test("a duplicate-ID invalid row does not mask the pack that installed", async () => {
+  const bad = { error: { id: "a", path: "pack.json", message: "duplicate row is invalid" } };
+  const both = () => listing({ packs: [pack("a", "available", { ...bad }), pack("a", "installed", { installed: true })] });
+  const t = setup({
+    raw: "https://example.invalid/packs.git",
+    handler: (url) => {
+      if (url.endsWith("/sources/fetch")) return { status: 200, body: { listing: listing({ packs: [pack("a", "available")] }) } };
+      if (url.endsWith("/sources/install")) return { status: 200, body: { listing: both() } };
+      if (url.startsWith("/api/companion/packs/validate")) return { status: 200, body: { listing: listing({ kind: "local", packs: [pack("a", "available")] }) } };
+      return { status: 200, body: { listing: listing({ kind: "local", packs: [pack("a", "available", { ...bad }), pack("a", "installed", { installed: true })] }) } };
+    }
+  });
+  fire(buttonOf(cls(t.root, "ws-companion-sources-source")[1], "js.companion.sources.show"), "click");
+  await tick(); await tick();
+  fire(buttonOf(t.root, "js.companion.sources.install"), "click");
+  await tick(); await tick();
+  assert.match(t.root.text(), /done_install/, "the valid duplicate's install is announced");
+  assert.ok(!t.root.text().includes("duplicate row is invalid") || !/js\.companion\.sources\.install_failed/.test(t.root.text()), "no failure notice for the invalid duplicate");
+
+  const input = tagged(t.root, "INPUT").find(c => c.type === "file");
+  input.files = [{ name: "Fan.zip", size: 3 }];
+  fire(input, "change");
+  await tick(); await tick();
+  fire(buttonOf(t.root, "js.companion.sources.import"), "click");
+  await tick(); await tick();
+  assert.match(t.root.text(), /done_import:1/);
+  assert.ok(!/a: duplicate row is invalid/.test(t.root.text()), "the import summary counts no false failure");
+});
+
 test("a rejected import file shows the daemon's reason and offers no import", async () => {
   const file = { name: "big.zip" };
   const t = setup({ handler: () => ({ status: 413, body: { error: "file is over 64 MiB" } }) });

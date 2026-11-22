@@ -189,6 +189,46 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     await frame.waitForFunction(() => document.querySelector('.au-win .au-code')?.textContent.includes('ok line needle here in paged output'));
     const loadMoreBtn = win.locator('[data-au-more="out"]');
     await loadMoreBtn.waitFor();
+    // Load more is guarded per envelope+part: event A's pending request must not block event B's
+    // same-part request after the window steps to the next call, and B still sends only one.
+    {
+      const hits = { 'e-res-1': 0, 'e-res-2': 0 };
+      let release;
+      const gate = new Promise(r => { release = r; });
+      const hold = async route => {
+        const m = /event\/(e-res-\d)\?/.exec(route.request().url());
+        if (m) hits[m[1]]++;
+        await gate;
+        await route.continue();
+      };
+      await context.route(/part=out&offset=/, hold);
+      await loadMoreBtn.click();
+      await page.waitForTimeout(100);
+      assert.equal(hits['e-res-1'], 1, 'event A requested its range');
+      await win.locator('.au-next').click();
+      await win.locator('.au-next').click();
+      await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Grep'));
+      await win.locator('[data-au-tab="out"]').click();
+      await win.locator('[data-au-more="out"]').waitFor();
+      await win.locator('[data-au-more="out"]').click();
+      await page.waitForTimeout(200);
+      assert.equal(hits['e-res-2'], 1, 'event B loads more while A is pending');
+      await win.locator('.au-wrap-btn').click();
+      await win.locator('[data-au-more="out"]').click();
+      await win.locator('.au-wrap-btn').click();
+      await page.waitForTimeout(200);
+      assert.equal(hits['e-res-2'], 1, 'still one request per envelope+part');
+      const bBefore = await win.locator('.au-line').count();
+      release();
+      await frame.waitForFunction((prev) => document.querySelectorAll('.au-win .au-line').length > prev, bBefore);
+      await page.waitForTimeout(300);
+      await context.unroute(/part=out&offset=/, hold);
+      await win.locator('.au-prev').click();
+      await win.locator('.au-prev').click();
+      await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Read'));
+      await win.locator('[data-au-tab="out"]').click();
+      await win.locator('[data-au-more="out"]').waitFor();
+    }
     const beforeLen = await win.locator('.au-line').count();
     // A re-render (Wrap) while a range request is pending replaces the button;
     // a second Load more must not fetch and append the same chunk again.
