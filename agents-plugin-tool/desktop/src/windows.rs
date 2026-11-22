@@ -71,7 +71,7 @@ pub fn install(
 
 const E_NOINTERFACE: HRESULT = HRESULT(0x8000_4002_u32 as i32);
 
-const RUNTIME_OUTDATED: &str = "The Microsoft Edge WebView2 Runtime on this computer is too old for Werkschaft's page protection, so the dashboard cannot open. Update the WebView2 Runtime to version 128 or later (or ask your administrator to), then restart Werkschaft.";
+const RUNTIME_OUTDATED: &str = "The Microsoft Edge WebView2 Runtime on this computer is too old for Werkschaft's page protection, so the dashboard cannot open. Update the WebView2 Runtime to version 122 or later (or ask your administrator to), then restart Werkschaft.";
 
 // Every interface the hooks need comes from the installed runtime: a missing
 // one means an older runtime, and Retry would fail the same way. The page
