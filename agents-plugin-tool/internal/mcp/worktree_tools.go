@@ -900,6 +900,10 @@ type worktreeReleaseCaller struct {
 	WorkerKey     string
 	Force         bool
 	CheckChildren func(ctx context.Context, target string) error
+	// CheckExecJobs is the running-hosted-exec-job check, run next to
+	// CheckChildren under the same lock; it names the jobs to a non-forced
+	// release.
+	CheckExecJobs func(target string) error
 	// FenceExec, when set, refuses the release while an exec job runs in
 	// the target and otherwise holds new jobs there off until the returned
 	// unfence (worktreeExecFence); run under the per-worktree lock, force or
@@ -940,6 +944,35 @@ func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) 
 		}
 	}
 	return fmt.Errorf("worktree.release refuses %s: non-closed child agent(s) are still bound to this worktree (%s). Nothing was changed. Wait for them to finish or close them before releasing; pass force: true only if you intend to clean the worktree while they remain open", target, strings.Join(parts, ", "))
+}
+
+// checkWorktreeLiveExecJobs refuses a non-forced worktree.release while any
+// running hosted exec job's recorded cwd is target or lies under it, naming
+// each job. Hygiene would otherwise reset and clean the tree under a running
+// process and the next acquire would reuse it. Paths compare the way
+// ActiveChildrenInWorktree compares a conversation's. It reads the daemon's
+// in-memory jobs, so a connection without hosted exec (none of its jobs can
+// live here) passes. It is not an admission fence: a job launched after this
+// check, before hygiene ends, is not seen.
+func (s *Server) checkWorktreeLiveExecJobs(target string) error {
+	jobs := s.execJobs()
+	if jobs == nil {
+		return nil
+	}
+	want := wsagent.CanonicalWorktreePath(target)
+	if want == "" {
+		return nil
+	}
+	var parts []string
+	for _, row := range jobs.RunningRows() {
+		if wsagent.WorktreePathContains(want, wsagent.CanonicalWorktreePath(row.Cwd)) {
+			parts = append(parts, fmt.Sprintf("%s (%s, cwd %s)", row.ID, row.Tool, row.Cwd))
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return fmt.Errorf("worktree.release refuses %s: running exec job(s) have their cwd in this worktree (%s). Nothing was changed. Wait for them to end or stop them with exec.stop, then release again; force: true does not override a running exec job", target, strings.Join(parts, ", "))
 }
 
 // releaseWorktreeAs is releaseWorktree on behalf of caller (nil: no lease

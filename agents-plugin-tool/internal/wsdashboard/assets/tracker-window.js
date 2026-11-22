@@ -15,7 +15,14 @@
   // A Today filter keeps only its records. A topic record (its holder) has no status, so no scope shows it here.
   function assignRecs(key, v) {
     var recs;
-    if (key === 'mine') recs = VS.my.assignments.concat(VS.my.received.pending).map(A);
+    if (key === 'mine') {
+      recs = VS.my.assignments.concat(VS.my.received.pending).map(A);
+      // my.* lists exclude hidden items (view.go viewerLists); Show hidden adds their live and pending records to me
+      if (showHidden()) VS.itemOrder.forEach(function (id) {
+        var it = VS.items[id];
+        if (it && it.hidden) it.assignments.forEach(function (a) { var r = A(a); if (r && r.to === v && (r.state === 'live' || r.state === 'pending')) recs.push(r); });
+      });
+    }
     else if (key === 'given') recs = [].concat.apply([], VS.my.given.map(function (id) {
       return VS.items[id].assignments.map(A).filter(function (r) { return (r.by === v || r.sender === v) && r.to !== v && (r.state === 'live' || r.state === 'pending'); });
     }));
@@ -46,7 +53,8 @@
       assignRecs(key, v).forEach(function (r) {
         var col = r.state === 'pending' ? 'pending' : r.status;
         if (!buckets[col]) return;
-        buckets[col].push({ item: r.item, rec: r, drag: r.to === v && r.state === 'live' && !wrapped(r.status) ? r.item : null,
+        // a hidden item has no status actions (canStatus), so its card does not drag
+        buckets[col].push({ item: r.item, rec: r, drag: !VS.items[r.item].hidden && r.to === v && r.state === 'live' && !wrapped(r.status) ? r.item : null,
           who: key !== 'mine' ? r.to : null, sub: (key !== 'mine' ? esc(nm(r.to)) + ' &middot; ' : '') + source(r) });
       });
     }

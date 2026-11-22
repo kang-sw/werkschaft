@@ -68,13 +68,16 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 			"worktree.acquire", "worktree.release", "note.query", "note.write",
 			"config.resolve_agent", "todo.list", "todo.check",
 		},
-		ToolsAlwaysLoad:   true,
-		ManualHarness:     BackendAgy,
-		PlaybookCommands:  true,
-		WorkerCapable:     true,
-		WorkerProfile:     AgentWorkerProfile(BackendAgy),
-		WorkerHTTPMCP:     true,
-		WorkerAutoApprove: true,
+		ToolsAlwaysLoad:  true,
+		ManualHarness:    BackendAgy,
+		PlaybookCommands: true,
+		// An agy lead explores with its own subagents and reaches the other
+		// harnesses through agent.spawn.
+		PreferNativeSubagent: true,
+		WorkerCapable:        true,
+		WorkerProfile:        AgentWorkerProfile(BackendAgy),
+		WorkerHTTPMCP:        true,
+		WorkerAutoApprove:    true,
 		// Native default mode asks before each run_command, and the daemon
 		// refuses it (agy 1.5.14 live probe: native auto and
 		// --dangerously-skip-permissions run commands without asking, and

@@ -83,7 +83,11 @@ func TestWaitingOnNudgeProductionTicketTreeRestartAndReblock(t *testing.T) {
 	if len(f.queue(t)) != 1 {
 		t.Fatal("local done not observed")
 	}
+	// A restarted daemon replaces the old one; the board DB is exclusively
+	// owned, so the old owner must release it first.
+	f.n.Close()
 	f.n = NewWhiteboardNudges(f.n.dir, nil, io.Discard)
+	t.Cleanup(f.n.Close)
 	f.n.process(f.target, nudgeNow)
 	if len(f.queue(t)) != 1 {
 		t.Fatal("restart lost receipt")

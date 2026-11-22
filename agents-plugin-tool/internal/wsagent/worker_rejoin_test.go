@@ -1,10 +1,13 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -333,4 +336,127 @@ func TestWorkerAttachRegistersNoMCPBeforeOwnership(t *testing.T) {
 			}
 		})
 	}
+}
+
+// startFailBackend fails Start while fail is set, as a harness whose command
+// lookup fails for a moment (a Windows npm shim replaced during an update).
+type startFailBackend struct {
+	Backend
+	fail *atomic.Bool
+}
+
+func (b startFailBackend) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	if b.fail.Load() {
+		return nil, errors.New("agy backend: exec: \"agy\": executable file not found in %PATH%")
+	}
+	return b.Backend.Start(ctx, spec)
+}
+
+// A held worker whose rejoin cannot start its backend does not stay in replay
+// with no process: its open turn fails once the scan completes, and later
+// input restarts the worker after the harness has returned.
+func TestHeldWorkerRejoinStartFailureAllowsRestart(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	fail := &atomic.Bool{}
+	reg := h.opts.Backends[BackendAgy]
+	reg.Backend = startFailBackend{Backend: reg.Backend, fail: fail}
+	h.opts.Backends[BackendAgy] = reg
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+
+	fail.Store(true)
+	h.runner.Close()
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the failed rejoin settled the open turn", func() bool { return len(got.list()) == 1 })
+	if result := got.list()[0].Result; result.Status != TurnFailed || !strings.Contains(result.Error+result.Message, "executable file not found") {
+		t.Fatalf("failed rejoin result: %+v", result)
+	}
+	c := h.runner.conv(id)
+	var replaying, turn bool
+	c.do(func() { replaying, turn = c.replaying, c.turn })
+	if replaying || turn {
+		t.Fatalf("after a failed rejoin: replaying=%v turn=%v", replaying, turn)
+	}
+
+	fail.Store(false)
+	h.send(id, "again")
+	eventually(t, "a new holder for the restarted worker", func() bool {
+		rec := h.record(id)
+		return rec.HolderID != "" && rec.HolderID != holder
+	})
+	next := h.holder(id)
+	eventually(t, "the restarted worker's prompt", func() bool { return len(agyPromptIDs(h, next)) == 1 })
+}
+
+// A held agy worker restored mid internal compaction prompt with a steered
+// report not yet taken, whose rejoin cannot start its backend, still gets the
+// end-of-process cleanup: the steered report goes to the next turn and that
+// turn's result settles instead of being discarded as internal.
+func TestHeldWorkerRejoinFailureClearsRestoredTurnState(t *testing.T) {
+	for _, steered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("steered=%v", steered), func(t *testing.T) { heldWorkerRejoinFailureClears(t, steered) })
+	}
+}
+
+func heldWorkerRejoinFailureClears(t *testing.T, steered bool) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	fail := &atomic.Bool{}
+	reg := h.opts.Backends[BackendAgy]
+	reg.Backend = startFailBackend{Backend: reg.Backend, fail: fail}
+	h.opts.Backends[BackendAgy] = reg
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	completeRecoveryWorker(t, h, BackendAgy, holder)
+	eventually(t, "the first turn settled", func() bool { return len(got.list()) == 1 && !h.record(id).TurnOpen })
+
+	fail.Store(true)
+	h.runner.Close()
+	rec := h.record(id)
+	if rec.HolderID == "" {
+		t.Fatal("the idle held worker kept no holder")
+	}
+	rec.TurnStartedAt = time.Now().UnixMilli() // an internal compaction prompt in flight
+	if steered {
+		rec.Steered = []steeredReport{{Text: "steered report", Seq: 1}}
+		rec.SteerSeq = 1
+	}
+	if !rec.agyInternalPrompt() {
+		t.Fatal("the edited record is not an internal agy prompt")
+	}
+	if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+		t.Fatal(err)
+	}
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	c := h.runner.conv(id)
+	eventually(t, "the failed rejoin ended the recovery", func() bool {
+		var failed bool
+		// The requeued steered report may already have tried a start that
+		// failed the same way, so lastErr is either failure.
+		c.do(func() { failed = !c.replaying && !c.turn && c.proc == nil && c.lastErr != "" && len(c.steered) == 0 })
+		return failed
+	})
+
+	fail.Store(false)
+	h.send(id, "again")
+	eventually(t, "a new holder for the restarted worker", func() bool {
+		r := h.record(id)
+		return r.HolderID != "" && r.HolderID != holder
+	})
+	next := h.holder(id)
+	completed := 0
+	eventually(t, "the steered report and the new message settled", func() bool {
+		prompts := agyPromptIDs(h, next)
+		for ; completed < len(prompts); completed++ {
+			h.holders.out(next,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"after rejoin"}}}}`,
+				jsonLine(map[string]any{"jsonrpc": "2.0", "id": prompts[completed], "result": map[string]any{"stopReason": "end_turn"}}))
+		}
+		inputs := strings.Join(h.holders.inputs(next, ""), "\n")
+		if steered && !strings.Contains(inputs, "steered report") || !strings.Contains(inputs, "again") {
+			return false
+		}
+		last := got.list()
+		return len(last) >= 2 && last[len(last)-1].Result.Status == TurnDone &&
+			strings.Contains(last[len(last)-1].Result.Message, "after rejoin") && !h.record(id).TurnOpen
+	})
 }

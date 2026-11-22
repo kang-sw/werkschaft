@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -346,6 +347,14 @@ func TestHostedExecConversionInTheSameTurn(t *testing.T) {
 func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 	fx := newHostedExecFixture(t, 10*time.Second)
 	legacyKey := regexp.MustCompile(`(?m)^exec_key: exec-[0-9]+-[0-9a-f]{16}$`)
+	// The legacy exec.shell runs cmd.exe on Windows unless a shell is named,
+	// so these POSIX lines name Bash there.
+	posixShell := func(args map[string]any) map[string]any {
+		if runtime.GOOS == "windows" {
+			args["shell"] = "bash"
+		}
+		return args
+	}
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -353,8 +362,8 @@ func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 	}{
 		{"exec.spawn", map[string]any{"cmd": "cat", "stdin": "spawn-in\n"}, "spawn-in"},
 		{"exec.spawn", map[string]any{"cmd": "cat"}, ""},
-		{"exec.shell", map[string]any{"command": "cat; echo shell-done", "stdin": "shell-in\n"}, "shell-in"},
-		{"exec.shell", map[string]any{"command": "cat; echo shell-done"}, "shell-done"},
+		{"exec.shell", posixShell(map[string]any{"command": "cat; echo shell-done", "stdin": "shell-in\n"}), "shell-in"},
+		{"exec.shell", posixShell(map[string]any{"command": "cat; echo shell-done"}), "shell-done"},
 	} {
 		text, isErr := fx.call(tc.name, tc.args)
 		// Empty output has no stream sections, as on the file-backed path.
@@ -363,7 +372,7 @@ func TestHostedExecLegacyLaunchesReadToEOF(t *testing.T) {
 			t.Fatalf("%s %v = %v %s", tc.name, tc.args, isErr, text)
 		}
 	}
-	text, _ := fx.call("exec.shell", map[string]any{"command": "printf 'l1\\nl2\\n'; printf 'e1\\n' >&2", "working_dir": "sub"})
+	text, _ := fx.call("exec.shell", posixShell(map[string]any{"command": "printf 'l1\\nl2\\n'; printf 'e1\\n' >&2", "working_dir": "sub"}))
 	key := lineValue(t, execKeyLine, text)
 	for _, tc := range []struct {
 		name string

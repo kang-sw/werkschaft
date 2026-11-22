@@ -73,10 +73,20 @@
     }
     return null;
   }
-  // Unicode case-folding key for org-name uniqueness, at least as strict as Go's strings.EqualFold
-  // (collapses e.g. Greek σ/ς/Σ and German ß/ẞ into a single fold key).
+  // Org-name uniqueness key matching Go's strings.EqualFold: per-code-point simple folding
+  // (σ/ς/Σ, ß/ẞ, ſ/s, K/k collapse), never full mappings that change length (ß ≠ ss).
+  // Dotted/dotless I have no simple fold to i/I.
+  function orgNameFoldOne(c) {
+    if (c === 'ı' || c === 'İ') return c;
+    var k = c;
+    [true, false, true, false].forEach(function (up) {
+      var next = up ? k.toUpperCase() : k.toLowerCase();
+      if (Array.from(next).length === 1) k = next;
+    });
+    return k;
+  }
   function orgNameFoldKey(s) {
-    return String(s || '').trim().toUpperCase().toLowerCase().toUpperCase().toLowerCase();
+    return Array.from(String(s || '').trim(), orgNameFoldOne).join('');
   }
   function orgEdNameClash(ed, name, excludeId) {
     var low = orgNameFoldKey(name);

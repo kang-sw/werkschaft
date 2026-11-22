@@ -4,10 +4,10 @@
     var active = false, baseline = true, listened = new AbortController();
     var tokens = new Set(), pending = [], agents = new Map(), completed = 0, newest = "";
     var boardInput = boardLatest?.html, parsedBoard, canonicalAsks = null;
-    var lastActivity = "", lastRoot = "", failures = 0;
+    var lastActivity = "", lastRoot = "", lastStreaming = false, failures = 0, previousPermissions = new Set();
     var observer = new MutationObserver(queue);
     var resize = new ResizeObserver(queue);
-    var activityEvents = { idle: "session.idle", thinking: "session.thinking", streaming: "session.streaming", typing_user: "user.typing" };
+    var activityEvents = { idle: "session.idle", thinking: "session.thinking", tool: "session.tool", replying: "session.replying", typing_user: "user.typing" };
     var terminal = new Set(["idle", "ended", "closed", "done", "failed"]);
     var watched = ["r-board", "bgal", "r-panels", "r-entries", "r-convlive", "r-tree", "r-head", "composer", "agisland"];
     var directCommit = /^(?:mcp__[^\s]+__)?(?:git_commit|git_merge|(?:ws\/)?git\.(?:commit|merge))$/i;
@@ -47,13 +47,14 @@
       q("#r-convlive .permwait, #r-tree .phase.permission, #r-tree .brow.perm").forEach(el => {
         if (el.closest(".ag-source")) return;
         var agent = el.closest(".agent:not(.root), .peer");
-        var id = agent?.querySelector(":scope > details[data-key]")?.dataset.key || agent?.dataset.peer || "lead";
+        var id = agent?.querySelector(":scope > details > summary [data-reply-id]")?.dataset.replyId || agent?.dataset.peer || rid;
         var time = el.querySelector("time[data-ms]")?.dataset.ms;
         var tool = el.querySelector("code[title], .tool[title]")?.title;
         var args = el.querySelector(".args")?.textContent.trim();
         var detail = time || [tool, args].filter(Boolean).join(":");
         if (!keys.has(id) || (detail && keys.get(id) === id)) keys.set(id, detail ? id + ":" + detail : id);
       });
+      if (doc.querySelector("#r-convlive .clive[data-phase]")?.dataset.phase === "permission" && !keys.has(rid)) keys.set(rid, rid);
       return keys;
     }
 
@@ -92,33 +93,66 @@
           children.set(reply || id, { id, replyId: reply, label, state: "thinking" });
         }
       });
-      var remaining = Math.max(0, hud.completed - completed), running = 0;
+      var remaining = Math.max(0, hud.completed - completed), running = 0, legacyCount = 0;
       completed = hud.completed;
       var present = new Set();
       children.forEach((node, id) => {
         var previous = agents.get(id) || agents.get(node.id);
-        var live = !terminal.has(node.state) && !ended.has(id);
+        var alive = !terminal.has(node.state) && !ended.has(id);
+        var childActive = alive && node.state !== "holding";
         var canonical = previous?.canonical || id;
-        var info = { ...node, live, canonical };
+        var info = previous || { canonical, spawned: baseline, reportedCurrentTurn: false, awaitingReport: false, lastDoneMs: 0, turnStartedMs: 0, doneSeq: 0 };
+        var wasActive = info.active, wasAlive = info.alive;
+        Object.assign(info, node, { alive, active: childActive, canonical });
         agents.set(id, info);
         if (node.id && id !== node.id) agents.set(node.id, info);
         present.add(canonical);
-        if (live) {
+        if (!terminal.has(node.state)) legacyCount++;
+        if (childActive) {
           running++;
-          if (!previous) event("subagent.spawn", canonical);
-        } else if (previous?.live) event("subagent.done", canonical);
+          if (!wasActive && !baseline) {
+            info.reportedCurrentTurn = false;
+            info.awaitingPriorTurn = info.awaitingReport;
+            // HUD time is shifted by accumulated work for the displayed timer.
+            info.turnStartedMs = node.activeSince > 0 ? node.activeSince + (node.elapsedMs || 0) : Date.now();
+          }
+          if (!info.spawned) { event("subagent.spawn", canonical); info.spawned = true; }
+        } else if (wasAlive && !alive) {
+          if ((wasActive && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
+        } else if (wasActive && alive) {
+          info.awaitingReport = !info.reportedCurrentTurn;
+        }
       });
       var disappeared = new Set();
       agents.forEach(info => {
-        if (present.has(info.canonical) || disappeared.has(info.canonical) || !info.live) return;
+        if (present.has(info.canonical) || disappeared.has(info.canonical) || !info.alive) return;
         if (ended.has(info.canonical) || ended.has(info.id) || remaining > 0) {
           if (remaining > 0) remaining--;
-          info.live = false;
+          if ((info.active && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
+          info.alive = info.active = false;
           disappeared.add(info.canonical);
-          event("subagent.done", info.canonical);
         }
       });
-      return running;
+      return { running, legacyCount };
+    }
+
+    function done(info, rowMs, priorTurn) {
+      event("subagent.done", info.canonical + ":" + ++info.doneSeq);
+      info.lastDoneMs = rowMs || Date.now();
+      info.awaitingPriorTurn = false;
+      if (!priorTurn) info.reportedCurrentTurn = true;
+      if (!priorTurn || info.active || info.reportedCurrentTurn) info.awaitingReport = false;
+    }
+
+    function reportDone(info, rowMs) {
+      if (rowMs && rowMs < info.lastDoneMs) return;
+      if (rowMs && rowMs < info.turnStartedMs) {
+        if (info.awaitingPriorTurn && rowMs > info.lastDoneMs) done(info, rowMs, true);
+        return;
+      }
+      // Without a time, a report during a resumed turn could belong to either turn.
+      if (!rowMs && info.awaitingPriorTurn) return;
+      if (info.active ? !info.reportedCurrentTurn : info.awaitingReport) done(info, rowMs);
     }
 
     function reportIdentity(row) {
@@ -160,10 +194,20 @@
         if (!key || key <= newest) continue;
         if (key > top) top = key;
         if (row.matches(".mailline.recv.agent-note:not(.fail), .mailline.recv.child-report:not(.fail)")) {
-          if (row.dataset.wakeCause !== "background_exit") event("subagent.done", reportIdentity(row));
-        } else if (row.matches(".mailline.recv, .mail-notification") || row.matches(".mail-block") && row.querySelector(".mailline.recv")) {
-          if (!row.matches(".agent-note, .child-report")) event("mail.recv", key);
+          if (!baseline && row.dataset.wakeCause !== "background_exit") {
+            var id = reportIdentity(row), rowMs = Number(row.querySelector("time[data-ms]")?.dataset.ms) || 0;
+            var info = agents.get(id);
+            if (id && !info) {
+              info = { canonical: id, alive: false, active: false, spawned: true, reportedCurrentTurn: false, awaitingReport: false, lastDoneMs: 0, turnStartedMs: 0, doneSeq: 0 };
+              agents.set(id, info);
+              done(info, rowMs);
+            } else if (info) reportDone(info, rowMs);
+          }
+        } else if (row.matches(".mailline.recv:not(.agent-note):not(.child-report):not(.agent-card), .mail-notification:not([data-board-nudge]):not([data-mail-wake])") || row.matches("article.mail-block") && row.querySelector(":scope > details.mailline.recv")) {
+          event("mail.recv", key);
         }
+        if (row.matches(".mailline.sent") || row.matches("article.mail-block") && row.querySelector(":scope > details.mailline.sent")) event("mail.send", key);
+        if (row.matches(".sysline.compaction:not(.fail)")) event("session.compacted", key);
         if (row.matches(".sysline.notice.fail, .sysline.compaction.fail, .mailline.recv.agent-note.fail") ||
             row.matches(".toolsline") && row.querySelector(".brow.fail")) event("session.error", key);
         if (row.matches(".toolsline:not(.live)") && celebrate(row)) event("session.celebrate", key);
@@ -171,17 +215,21 @@
       newest = top;
     }
 
-    function activity(wait, running) {
+    function activity(wait, legacyRunning) {
       var phase = doc.querySelector("#r-convlive .clive[data-phase]")?.dataset.phase;
       var failed = doc.querySelector("#r-head .tph-chips .chip.fail, #r-tree .agent.root.failed") ||
         phase === "failed" || phase === "error";
       if (failed && !lastRoot) event("session.error", "lead:" + ++failures);
       lastRoot = failed ? "failed" : "";
+      var streamingNow = !wait && phase !== "permission" && !failed && (phase === "replying" || phase === "tool" || legacyRunning > 0);
+      if (!baseline && !lastStreaming && streamingNow) pending.push({ kind: "session.streaming", token: "session.streaming:" + rid + ":" + Math.round(performance.now()) });
+      lastStreaming = streamingNow;
       if (wait || phase === "permission") return "permission";
       if (failed) return "error";
-      if (phase === "replying" || phase === "tool" || running > 0) return "streaming";
+      if ((!phase || phase === "idle" || phase === "thinking") && performance.now() < typedUntil) return "typing_user";
       if (phase === "thinking") return "thinking";
-      if (performance.now() < typedUntil) return "typing_user";
+      if (phase === "tool") return "tool";
+      if (phase === "replying") return "replying";
       return "idle";
     }
 
@@ -198,12 +246,18 @@
       if (rid) {
         // Cached and reconnecting pages can still have pending region swaps.
         // Read their current context silently until the first render is applied.
-        var open = asks(), permissions = permissionKeys(), running = agentNodes();
-        open.ids.forEach(id => event("ask.open", id));
-        permissions.forEach(key => event("ask.open", "permission:" + key));
+        var open = asks(), permissions = permissionKeys(), children = agentNodes();
+        open.ids.forEach(id => {
+          var token = "ask:" + rid + ":" + id;
+          if (!tokens.has(token)) { tokens.add(token); if (!baseline) pending.push({ kind: "ask.open", token, rid }); }
+        });
+        permissions.forEach((key, owner) => {
+          if (!baseline && !previousPermissions.has(owner)) pending.push({ kind: "ask.open", token: "perm:" + owner, rid: owner });
+        });
+        previousPermissions = new Set(permissions.keys());
         archived();
         var count = Number(doc.querySelector("#r-convlive .clive")?.dataset.subdeep) || 0;
-        var act = activity(permissions.size > 0, Math.max(running, count));
+        var act = activity(permissions.size > 0, Math.max(children.legacyCount, count));
         var kind = activityEvents[act];
         if (!baseline && kind && act !== lastActivity) pending.push({ kind, token: kind + ":" + rid + ":" + Math.round(performance.now()) });
         lastActivity = act;
@@ -212,7 +266,7 @@
         payload.model = lead.st?.model || doc.querySelector("#r-head [data-companion-model]")?.dataset.companionModel || "";
         payload.activity = act;
         payload.openAskCount = open.ids.size + permissions.size;
-        payload.runningSubagents = Math.max(running, count);
+        payload.runningSubagents = children.running;
         var composer = rect($("composer"));
         var ask = open.mounted.map(rect).find(Boolean);
         var hud = rect($("agisland"));
@@ -260,6 +314,8 @@
       completed = 0;
       newest = "";
       lastRoot = lastActivity = "";
+      lastStreaming = false;
+      previousPermissions.clear();
       collect();
       baseline = false;
       queue();
@@ -278,6 +334,7 @@
       if (active) return;
       active = true;
       baseline = true;
+      showRegions();
       observer.observe(doc.body, { attributes: true, attributeFilter: ["class"] });
       for (var id of watched) {
         var el = $(id);

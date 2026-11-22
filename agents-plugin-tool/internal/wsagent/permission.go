@@ -247,7 +247,9 @@ func legacyWorkerPermission(def Profile) PermissionLevel {
 	}
 	for _, tool := range def.WSTools {
 		switch tool {
-		case "git.status", "git.diff", "git.log", "git.merge_base":
+		// The runner adds compact to every hosted worker at launch (resolve),
+		// and it runs at read-only authority: it cannot raise the level.
+		case "git.status", "git.diff", "git.log", "git.merge_base", "compact":
 		default:
 			if slices.Contains(PiWorkerWSTools, tool) || slices.Contains(PiMiniLeadWSTools, tool) {
 				mutable = true

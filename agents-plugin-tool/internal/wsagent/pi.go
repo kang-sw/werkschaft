@@ -304,6 +304,21 @@ func PiVersion(ctx context.Context) (string, error) {
 	return version, err
 }
 
+// PiVersionCached is PiVersion's answer from its on-disk probe record alone:
+// it looks pi up on PATH and stats and reads files, but never runs pi. ok is
+// false when no fresh record matches the installed pi.
+func PiVersionCached() (version string, ok bool) {
+	command, pre, err := harnessCommand("", "pi")
+	if err != nil {
+		return "", false
+	}
+	record, ok := newPiProbeCache("version", command, pre, piEnv(environ())).load(piProbeNow())
+	if !ok {
+		return "", false
+	}
+	return record.version()
+}
+
 func parsePiVersion(out []byte) (string, error) {
 	version := piVersionPattern.FindString(string(out))
 	if version == "" {

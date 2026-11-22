@@ -73,6 +73,14 @@ func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool
 	if err == nil && caller != nil && !caller.Force && caller.CheckChildren != nil {
 		err = caller.CheckChildren(ctx, target)
 	}
+	// Running hosted exec jobs live outside the conversations CheckChildren
+	// sees; one whose cwd is in the tree is wiped by hygiene just the same.
+	// A non-forced release names them here.
+	if err == nil && caller != nil && !caller.Force && caller.CheckExecJobs != nil {
+		err = caller.CheckExecJobs(target)
+	}
+	// The fence refuses any release (force included) while a job runs in
+	// the tree, and holds new launches off until the release is over.
 	if err == nil && caller != nil && caller.FenceExec != nil {
 		var unfence func()
 		if unfence, err = caller.FenceExec(target); err == nil {

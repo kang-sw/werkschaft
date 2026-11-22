@@ -242,6 +242,11 @@
     q('a[href^="#item-"], a[href^="#check-"], a[href^="#p"]', root).forEach(function (a) {
       if (once(a)) a.addEventListener("click", function (e) {
         if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        // In the dashboard its document-level link handler (boardJump) owns
+        // the click: it applies a buffered board update and unfolds the
+        // destination topic before measuring. Consuming it here would land
+        // on stale content or measure a folded panel.
+        if (window.wbBoardJump) return;
         var id = a.getAttribute("href").slice(1);
         if (!/^(?:item-|check-|p)[1-9][0-9]*$/.test(id)) return;
         var history = window.wbHistory;

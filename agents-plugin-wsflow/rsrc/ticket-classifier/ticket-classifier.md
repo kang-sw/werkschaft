@@ -3,6 +3,8 @@ kind: render
 delegates: false
 role: delegate
 tier: medium
+tier-role: ticket-classifier
+tier-parent: explore:*
 includes:
   - risk-rubric
 ---

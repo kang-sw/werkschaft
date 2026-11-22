@@ -22,7 +22,14 @@ live by the daemon.
 - Every ask goes on the board as an item.
 - One open ask per topic (a check counts); patch or re-ask it as the work
   moves.
-- Work finished and no open ask → close the topic. A report that asks
+- A discussion reached a conclusion (decisions settled, a diagnosis finished,
+  a ticket written or promoted) → before the topic closes or goes idle, post
+  an item proposing the follow-up: what runs next (implementation, a ticket
+  promotion, the next phase) and who runs it; or a `wb:log` line reporting
+  that the follow-up already started. A conclusion with no next step leaves
+  settled work to rot.
+- Work finished, its follow-up started or handed off, and no open ask → close
+  the topic; a decision alone is not finished work. A report that asks
   nothing → create and close it in the same update.
 - The user approved a deliverable → build it without re-asking.
 - Text mockups (HTML/SVG) → save under

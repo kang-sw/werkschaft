@@ -116,17 +116,39 @@ func (r *Resolver) StructuredScopePath(scope Scope) (string, error) {
 // SetStructured writes value (already validated by the caller) as the whole
 // structured value of itemKey in scope.
 func (r *Resolver) SetStructured(itemKey string, value json.RawMessage, scope Scope) error {
+	return r.SetStructuredIf(itemKey, value, scope, nil)
+}
+
+// StructuredPrecondition checks the scope's file as read under its config
+// file lock, before a structured write changes it; an error refuses the
+// write, writes nothing, and is returned unchanged. A missing file reads as
+// Config{}.
+type StructuredPrecondition func(current Config) error
+
+// SetStructuredIf is SetStructured that first runs check (nil: none) inside
+// the writer's locked read-modify-write, so a compare against the stored
+// value cannot be overtaken by another writer of the same file between the
+// compare and the write. The repo scope takes no check.
+func (r *Resolver) SetStructuredIf(itemKey string, value json.RawMessage, scope Scope, check StructuredPrecondition) error {
 	path, err := r.StructuredScopePath(scope)
 	if err != nil {
 		return err
 	}
 	if scope == ScopeRepo {
+		if check != nil {
+			return errRepoPrecondition
+		}
 		return updateRepoConfigFile(path, func(_ map[string]string, structured map[string]json.RawMessage) error {
 			structured[itemKey] = value
 			return nil
 		})
 	}
 	_, err = updateConfigFile(path, func(cfg *Config) error {
+		if check != nil {
+			if err := check(*cfg); err != nil {
+				return err
+			}
+		}
 		if cfg.StructuredOverrides == nil {
 			cfg.StructuredOverrides = map[string]json.RawMessage{}
 		}
@@ -136,15 +158,31 @@ func (r *Resolver) SetStructured(itemKey string, value json.RawMessage, scope Sc
 	return err
 }
 
+var errRepoPrecondition = errors.New("resolver: a checked structured write has no repo scope")
+
 // UnsetStructured removes itemKey's structured value from scope, so the key
 // resolves from the next broader scope again. Removing an absent key, or from
 // an absent file, is a no-op that writes nothing.
 func (r *Resolver) UnsetStructured(itemKey string, scope Scope) error {
+	return r.UnsetStructuredIf(itemKey, scope, nil)
+}
+
+// UnsetStructuredIf is UnsetStructured that first runs check (nil: none)
+// inside the writer's locked read-modify-write, as SetStructuredIf does. The
+// check runs even when there is nothing to remove, so a refused reset is
+// reported the same way whatever is stored.
+func (r *Resolver) UnsetStructuredIf(itemKey string, scope Scope, check StructuredPrecondition) error {
 	path, err := r.StructuredScopePath(scope)
 	if err != nil {
 		return err
 	}
+	if scope == ScopeRepo && check != nil {
+		return errRepoPrecondition
+	}
 	if !configFileExists(path) {
+		if check != nil {
+			return check(Config{})
+		}
 		return nil
 	}
 	if scope == ScopeRepo {
@@ -157,6 +195,11 @@ func (r *Resolver) UnsetStructured(itemKey string, scope Scope) error {
 		})
 	} else {
 		_, err = updateConfigFile(path, func(cfg *Config) error {
+			if check != nil {
+				if err := check(*cfg); err != nil {
+					return err
+				}
+			}
 			if _, exists := cfg.StructuredOverrides[itemKey]; !exists {
 				return errConfigUnchanged
 			}

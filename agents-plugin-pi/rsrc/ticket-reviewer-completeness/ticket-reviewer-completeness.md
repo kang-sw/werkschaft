@@ -3,6 +3,8 @@ kind: render
 delegates: true
 role: reviewer
 tier: medium
+tier-role: ticket-reviewer-completeness
+tier-parent: review:*
 variables:
   - RoleModel
 ---

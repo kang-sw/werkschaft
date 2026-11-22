@@ -14,7 +14,7 @@ use objc2::{
 };
 use objc2_foundation::{ns_string, MainThreadMarker, NSError, NSObjectProtocol, NSString};
 use objc2_web_kit::{
-    WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
+    WKDownload, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
     WKNavigationResponse, WKNavigationResponsePolicy, WKScriptMessage, WKScriptMessageHandler,
     WKUserContentController, WKWebView,
 };
@@ -144,6 +144,38 @@ define_class!(
                 }
             }
             reply.call((WKNavigationResponsePolicy::Cancel,));
+        }
+
+        // Wry's delegate attaches its download delegate here. Without these
+        // forwards WebKit starts the download with no delegate and drops it.
+        // Only navigations `action`/`response` allowed can reach a download.
+        #[unsafe(method(webView:navigationAction:didBecomeDownload:))]
+        fn action_download(
+            &self,
+            webview: &WKWebView,
+            action: &WKNavigationAction,
+            download: &WKDownload,
+        ) {
+            if let Some(original) = self.ivars().original.load() {
+                unsafe {
+                    original.webView_navigationAction_didBecomeDownload(webview, action, download);
+                }
+            }
+        }
+
+        #[unsafe(method(webView:navigationResponse:didBecomeDownload:))]
+        fn response_download(
+            &self,
+            webview: &WKWebView,
+            response: &WKNavigationResponse,
+            download: &WKDownload,
+        ) {
+            if let Some(original) = self.ivars().original.load() {
+                unsafe {
+                    original
+                        .webView_navigationResponse_didBecomeDownload(webview, response, download);
+                }
+            }
         }
 
         #[unsafe(method(webView:didCommitNavigation:))]
@@ -648,7 +680,65 @@ fn guard_escape(webview: &WKWebView) {
                 "Werkschaft: Esc window guard {label} on TaoWindow: {outcome:?}"
             ));
         }
+        let outcome = guard_exit_failure(&window);
+        log(&format!(
+            "Werkschaft: full-screen exit failure hook windowDidFailToExitFullScreen: on TaoWindowDelegate: {outcome:?}"
+        ));
     });
+}
+
+/// AppKit reports a refused or failed programmatic full-screen exit only to
+/// the window delegate (`windowDidFailToExitFullScreen:`), with no
+/// notification, and no did-exit follows. Drop the pending hide and the Esc
+/// bypass so a later close starts the exit again.
+unsafe extern "C-unwind" fn window_did_fail_to_exit_full_screen(
+    _: &AnyObject,
+    _: Sel,
+    _: Option<&AnyObject>,
+) {
+    log("Werkschaft: full-screen exit failed; the pending close-to-tray hide is dropped");
+    cancel_pending_hide();
+}
+
+// Runtime name of tao's window delegate (`#[name = "TaoWindowDelegate"]` in
+// tao's macOS window_delegate.rs); it does not implement the failure method.
+const DELEGATE_CLASS: &CStr = c"TaoWindowDelegate";
+
+/// Add `windowDidFailToExitFullScreen:` to the delegate's class. Nothing is
+/// forwarded: the delegate class does not define the method.
+fn guard_exit_failure(window: &AnyObject) -> Guard {
+    let delegate: Option<Retained<AnyObject>> = unsafe { msg_send![window, delegate] };
+    match delegate {
+        Some(delegate) => add_exit_failure_method(&delegate, DELEGATE_CLASS),
+        None => Guard::NotFound,
+    }
+}
+
+/// The class named `name` in `delegate`'s hierarchy gets the failure method.
+fn add_exit_failure_method(delegate: &AnyObject, name: &CStr) -> Guard {
+    let mut class = Some(delegate.class());
+    while let Some(current) = class {
+        if current.name() == name {
+            // NO, adding nothing, if the class already defines the method.
+            let added = unsafe {
+                ffi::class_addMethod(
+                    (current as *const AnyClass).cast_mut(),
+                    sel!(windowDidFailToExitFullScreen:),
+                    std::mem::transmute::<WindowMethod, objc2::runtime::Imp>(
+                        window_did_fail_to_exit_full_screen as WindowMethod,
+                    ),
+                    c"v@:@".as_ptr(),
+                )
+            };
+            return if added.as_bool() {
+                Guard::Installed
+            } else {
+                Guard::AlreadyDefined
+            };
+        }
+        class = current.superclass();
+    }
+    Guard::NotFound
 }
 
 extern "C" {
@@ -663,12 +753,18 @@ enum CloseStep {
     /// Leave full screen first; hiding a full-screen window leaves its Space
     /// black instead of returning to the desktop.
     ExitFullScreen,
+    /// A hide already waits on the exit; hiding now, mid-transition, leaves
+    /// the Space black, and toggling again would re-enter full screen.
+    Wait,
 }
 
-/// What hiding to the tray does now. A second close while full screen is
-/// still being left hides at once rather than toggling back into it.
+/// What hiding to the tray does now. A repeated close while full screen is
+/// still being left changes nothing: the pending hide runs once the exit
+/// ends.
 fn close_step(style_mask: usize, pending: bool) -> CloseStep {
-    if style_mask & STYLE_MASK_FULL_SCREEN != 0 && !pending {
+    if pending {
+        CloseStep::Wait
+    } else if style_mask & STYLE_MASK_FULL_SCREEN != 0 {
         CloseStep::ExitFullScreen
     } else {
         CloseStep::Hide
@@ -719,8 +815,9 @@ fn exit_full_screen_then(ns_window: &AnyObject, hide: impl Fn() + 'static) {
 /// Hide the main window to the tray, leaving native full screen first so the
 /// user lands on the desktop. Restoring shows the window windowed.
 pub fn hide_to_tray(window: &WebviewWindow) {
-    let pending = cancel_pending_hide();
+    let pending = PENDING_HIDE.with(|pending| pending.borrow().is_some());
     let Ok(raw) = window.ns_window() else {
+        cancel_pending_hide();
         let _ = window.hide();
         return;
     };
@@ -730,6 +827,9 @@ pub fn hide_to_tray(window: &WebviewWindow) {
     match close_step(mask, pending) {
         CloseStep::Hide => {
             let _ = window.hide();
+        }
+        CloseStep::Wait => {
+            log("Werkschaft: close while leaving full screen; the pending hide stays");
         }
         CloseStep::ExitFullScreen => {
             log("Werkschaft: leaving full screen before hiding to the tray");
@@ -835,11 +935,12 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        add_window_method, cancel_operation, cancel_pending_hide, close_step, drop_key_down,
-        drops_key, escape_triggered, exit_full_screen_mode, exit_full_screen_then,
-        notification_center, refuses_exit, swallows_cancel, CloseStep, Guard,
+        add_exit_failure_method, add_window_method, cancel_operation, cancel_pending_hide,
+        close_step, drop_key_down, drops_key, escape_triggered, exit_full_screen_mode,
+        exit_full_screen_then, notification_center, refuses_exit, swallows_cancel,
+        window_did_fail_to_exit_full_screen, CloseStep, Guard,
         NSWindowDidExitFullScreenNotification, Pending, WindowMethod, ALLOW_EXIT, ESCAPE_RECENT,
-        KEY_ESCAPE, LAST_ESCAPE, PENDING_ESCAPES, STYLE_MASK_FULL_SCREEN,
+        KEY_ESCAPE, LAST_ESCAPE, PENDING_ESCAPES, PENDING_HIDE, STYLE_MASK_FULL_SCREEN,
     };
 
     #[test]
@@ -1114,12 +1215,12 @@ mod tests {
     }
 
     #[test]
-    fn full_screen_close_exits_first_and_a_second_close_hides() {
+    fn full_screen_close_exits_first_and_a_repeated_close_waits() {
         let windowed = 1 | 2 | 4 | 8;
         assert_eq!(close_step(windowed, false), CloseStep::Hide);
         assert_eq!(close_step(FULL, false), CloseStep::ExitFullScreen);
-        assert_eq!(close_step(FULL, true), CloseStep::Hide);
-        assert_eq!(close_step(windowed, true), CloseStep::Hide);
+        assert_eq!(close_step(FULL, true), CloseStep::Wait);
+        assert_eq!(close_step(windowed, true), CloseStep::Wait);
     }
 
     define_class!(
@@ -1154,5 +1255,80 @@ mod tests {
 
         let _: () = unsafe { msg_send![&*window, toggleFullScreen: None::<&AnyObject>] };
         assert_eq!(hides.get(), 1, "a later exit does not hide again");
+    }
+
+    define_class!(
+        // Stands in for a full-screen NSWindow whose exit never finishes.
+        #[unsafe(super(NSObject))]
+        #[name = "WerkschaftTestStuckWindow"]
+        struct StuckWindow;
+
+        impl StuckWindow {
+            #[unsafe(method(toggleFullScreen:))]
+            fn toggle(&self, _: Option<&AnyObject>) {}
+        }
+    );
+
+    #[test]
+    fn a_failed_exit_drops_the_pending_hide_and_a_later_close_retries() {
+        let window: Retained<StuckWindow> = unsafe { msg_send![StuckWindow::class(), new] };
+        let hides = Rc::new(Cell::new(0));
+        let counter = hides.clone();
+        exit_full_screen_then(&window, move || counter.set(counter.get() + 1));
+        assert!(ALLOW_EXIT.with(Cell::get), "the Esc bypass is armed");
+        assert!(PENDING_HIDE.with(|pending| pending.borrow().is_some()));
+
+        // AppKit's delegate call; no did-exit follows.
+        unsafe { window_did_fail_to_exit_full_screen(&window, sel!(new), None) };
+        assert!(!ALLOW_EXIT.with(Cell::get), "the Esc bypass is disarmed");
+        assert!(PENDING_HIDE.with(|pending| pending.borrow().is_none()));
+        assert_eq!(hides.get(), 0, "nothing was hidden");
+
+        // A later close is not Wait again.
+        assert_eq!(close_step(FULL, false), CloseStep::ExitFullScreen);
+        let counter = hides.clone();
+        let retry: Retained<FullScreenWindow> =
+            unsafe { msg_send![FullScreenWindow::class(), new] };
+        exit_full_screen_then(&retry, move || counter.set(counter.get() + 1));
+        assert_eq!(hides.get(), 1, "the retried exit hides once it ends");
+    }
+
+    static FAILURES: AtomicUsize = AtomicUsize::new(0);
+
+    define_class!(
+        // Stands in for a window with a delegate: reports a stand-in delegate.
+        #[unsafe(super(NSObject))]
+        #[name = "WerkschaftTestDelegate"]
+        struct Delegate;
+    );
+
+    #[test]
+    fn the_failure_hook_is_added_to_the_delegate_class_once() {
+        let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::class(), new] };
+        let failed = || {
+            let _: () = unsafe {
+                msg_send![&*delegate, windowDidFailToExitFullScreen: None::<&AnyObject>]
+            };
+        };
+        assert_eq!(
+            add_exit_failure_method(&delegate, c"NoSuchDelegate"),
+            Guard::NotFound
+        );
+        assert_eq!(
+            add_exit_failure_method(&delegate, c"WerkschaftTestDelegate"),
+            Guard::Installed
+        );
+        // The installed method is the real one: it drops a pending hide.
+        let window: Retained<StuckWindow> = unsafe { msg_send![StuckWindow::class(), new] };
+        exit_full_screen_then(&window, || {
+            FAILURES.fetch_add(1, Ordering::SeqCst);
+        });
+        failed();
+        assert!(!cancel_pending_hide(), "the failure call dropped it");
+        assert_eq!(FAILURES.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            add_exit_failure_method(&delegate, c"WerkschaftTestDelegate"),
+            Guard::AlreadyDefined
+        );
     }
 }

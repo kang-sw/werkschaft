@@ -320,3 +320,36 @@ func TestBoardDBLoadBlocksStaleAdmission(t *testing.T) {
 		unlock()
 	}
 }
+
+// The backup writes the board's own files directly: an existing board past the
+// incoming-archive caps still accepts a small valid archive.
+func TestBoardDBLoadArchiveBackupIgnoresIncomingCaps(t *testing.T) {
+	loadDir := t.TempDir()
+	makeLegacyBoard(t, loadDir, boardDBFixture())
+	loadZip, err := (FolderStore{Dir: loadDir}).ExportArchive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	zipPath := filepath.Join(t.TempDir(), "board.zip")
+	if err := os.WriteFile(zipPath, loadZip, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := t.TempDir()
+	big := boardDBFixture()
+	big.Topics[0].Entries[0].Text = strings.Repeat("x", 256<<10)
+	makeLegacyBoard(t, sourceDir, big)
+	board := openTestBoardDB(t, sourceDir, nil, BoardDBOptions{})
+	want := board.State()
+	size := archiveMaxBytes
+	archiveMaxBytes = 64 << 10 // above the incoming archive, below the board
+	t.Cleanup(func() { archiveMaxBytes = size })
+	backup, _, err := board.LoadArchive(zipPath, time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveMaxBytes = size
+	got, err := (FolderStore{Dir: backup}).Open(nil)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("backup: %v\nwant %s\ngot %s", err, folderJSON(want), folderJSON(got))
+	}
+}

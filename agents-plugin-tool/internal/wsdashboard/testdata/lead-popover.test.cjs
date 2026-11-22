@@ -52,7 +52,7 @@ function fixture(harness, choices = legacy, delayed = false) {
   });
   vm.runInContext(rail, ctx);
   ctx.WsRail = ctx.window.WsRail;
-  vm.runInContext(source.match(/\n  function supHarness\(name\) \{[\s\S]*?\n  \}\n/)[0] + maker[0], ctx);
+  vm.runInContext(source.match(/\n  function supHarness\(name\) \{[\s\S]*?\n  \}\n/)[0] + source.match(/\n  function leadTierPicker\([\s\S]*?\n  \}\n/)[0] + maker[0], ctx);
   const p = active = ctx.rpLeadMake();
   p.open('/repo', 'repo', mk('button'));
   p.el.hidden = false;
@@ -63,7 +63,7 @@ function fixture(harness, choices = legacy, delayed = false) {
     harnessGroup.listeners.click({ target: { closest: () => button } });
   }
   if (harness) pick(harness);
-  const selects = nodes.filter(n => n.tag === 'select');
+  const selects = nodes.filter(n => n.tag === 'select' && !n.attrs['data-tier-picker']);
   return { p, nodes, events, requests, storage, pick, harnessGroup,
     choicesReady() { answerChoices(); },
     model: selects[0], mode: selects[1], effort: selects[2],

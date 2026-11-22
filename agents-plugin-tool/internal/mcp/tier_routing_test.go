@@ -1,0 +1,349 @@
+package mcp
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsconfig"
+)
+
+const rolePlaybookContent = `---
+kind: render
+role: worker
+tier: medium
+tier-role: ticket-worker
+tier-parent: implement:*
+---
+# Role Playbook
+
+Do the work.
+`
+
+const (
+	piInitNative = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ws-pi-bridge"}}}`
+	piInitDaemon = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ws-pi-bridge"},"capabilities":{"experimental":{"wsPiDaemonAgents":true}}}}`
+)
+
+// roleRenderFixture is a Pi lead whose package holds one role playbook.
+func roleRenderFixture(t *testing.T) *piRecordFixture {
+	t.Helper()
+	useResourceFixture(t, buildTestRsrcTree(t, map[string]string{
+		"role-pb/role-pb.md": rolePlaybookContent,
+	}))
+	return newPiRecordFixture(t)
+}
+
+// renderResponse completes the initialize request, renders name through
+// playbook.render, and returns the response lines (path first).
+func renderResponse(t *testing.T, s *Server, key, name, initialize string, extra map[string]any) []string {
+	t.Helper()
+	var out bytes.Buffer
+	if err := s.ServeStdio(context.Background(), strings.NewReader(initialize+"\n"), &out); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	args := map[string]any{"name": name, "session_key": key}
+	for k, v := range extra {
+		args[k] = v
+	}
+	return renderLines(t, callToolOnce(t, s, 2, "playbook.render", args))
+}
+
+func setRouting(t *testing.T, s *Server, raw string) {
+	t.Helper()
+	resolver := wsconfig.NewResolver(s.configOptions(), nil, nil, nil)
+	if err := resolver.SetStructured(wsconfig.ItemAgentTierRouting, json.RawMessage(raw), wsconfig.ScopeGlobal); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func metadata(lines []string) string { return strings.Join(lines[1:], "\n") }
+
+// A daemon-agent caller is recommended the role tier and the binding the
+// graph resolves; a native caller keeps the bare size and its own
+// harness's binding, mapping or not.
+func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
+	f := roleRenderFixture(t)
+	nativeFallback := metadata(strings.Split(withRecommendedRenderBinding("path", wsagent.BackendPi, "medium", f.s.configOptions()), "\n"))
+
+	// Pi sets no medium slot: the bare size takes the config fallback
+	// chain's binding, and the unmapped role tier, which falls through to
+	// that bare size, carries the same binding byte for byte (agent.spawn
+	// refuses both forms alike: TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers).
+	if daemon, want := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)), strings.Replace(nativeFallback, "recommended-tier: medium", "recommended-tier: ticket-worker:medium", 1); daemon != want || !strings.Contains(want, "recommended-model: ") {
+		t.Fatalf("slotless daemon metadata = %q, want the bare fallback %q", daemon, want)
+	}
+	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeFallback {
+		t.Fatalf("slotless native metadata = %q, want %q", native, nativeFallback)
+	}
+
+	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
+		"value": map[string]any{"tier": "medium", "model": "pi-mid", "effort": "high"}})
+	if toolIsError(t, resp) {
+		t.Fatalf("set pi.medium: %s", resp)
+	}
+	nativeBaseline := metadata(strings.Split(withRecommendedRenderBinding("path", wsagent.BackendPi, "medium", f.s.configOptions()), "\n"))
+	if nativeBaseline != "recommended-tier: medium\nrecommended-model: pi-mid\nrecommended-reasoning-effort: high" {
+		t.Fatalf("baseline = %q", nativeBaseline)
+	}
+
+	// Default chain: the daemon caller's binding is the bare size's.
+	daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil))
+	if want := strings.Replace(nativeBaseline, "recommended-tier: medium", "recommended-tier: ticket-worker:medium", 1); daemon != want {
+		t.Fatalf("default-chain daemon metadata = %q, want %q", daemon, want)
+	}
+	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeBaseline {
+		t.Fatalf("default-chain native metadata = %q, want %q", native, nativeBaseline)
+	}
+
+	// A cross-harness mapping moves only the daemon caller's binding.
+	setRouting(t, f.s, `{"nodes":{"implement":{"*":"claude.*"}}}`)
+	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil))
+	if want := "recommended-tier: ticket-worker:medium\nrecommended-model: sonnet\nrecommended-reasoning-effort: high"; daemon != want {
+		t.Fatalf("mapped daemon metadata = %q, want %q", daemon, want)
+	}
+	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeBaseline {
+		t.Fatalf("mapped native metadata = %q, want %q", native, nativeBaseline)
+	}
+
+	// tier_override keeps its bare validation and replaces the role's size.
+	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, map[string]any{"tier_override": "opus"}))
+	if want := "recommended-tier: ticket-worker:large\nrecommended-model: opus\nrecommended-reasoning-effort: high"; daemon != want {
+		t.Fatalf("override daemon metadata = %q, want %q", daemon, want)
+	}
+	resp = callToolOnce(t, f.s, 3, "playbook.render", map[string]any{"name": "role-pb", "session_key": f.leadKey, "tier_override": "ticket-worker:large"})
+	if !toolIsError(t, resp) || !strings.Contains(toolText(t, resp), "tier_override") {
+		t.Fatalf("a role-shaped tier_override must stay rejected: %s", resp)
+	}
+
+	// An invalid graph keeps the role recommendation without a binding.
+	setRouting(t, f.s, `{"nodes":{"implement":{"*":"nosuch:*"}}}`)
+	if daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)); daemon != "recommended-tier: ticket-worker:medium" {
+		t.Fatalf("invalid-graph daemon metadata = %q", daemon)
+	}
+}
+
+// With no user config an unmapped role tier, whose chain ends at the bare
+// size on the caller's harness, resolves exactly as that bare size does on
+// every surface that reports a binding: config.resolve_agent for Pi (no
+// medium slot: the legacy fallback chain), an omitted harness on a session
+// with no detected harness (the default bucket), Codex, and Claude, and the
+// render binding for the same harnesses.
+func TestUnmappedRoleTierResolvesAsTheBareSize(t *testing.T) {
+	f := roleRenderFixture(t)
+	resolve := func(tier, harness string) (resolveAgentTierResult, string) {
+		t.Helper()
+		args := map[string]any{"tier": tier, "format": "json"}
+		if harness != "" {
+			args["harness"] = harness
+		}
+		resp := callToolOnce(t, f.s, 4, "config.resolve_agent", args)
+		if toolIsError(t, resp) {
+			return resolveAgentTierResult{}, toolText(t, resp)
+		}
+		var got resolveAgentTierResult
+		if err := json.Unmarshal([]byte(toolText(t, resp)), &got); err != nil {
+			t.Fatalf("decode %s: %v", resp, err)
+		}
+		return got, ""
+	}
+	if h := f.s.currentHarness(); h != "" {
+		t.Fatalf("fixture session harness = %q, want none detected", h)
+	}
+	opts := f.s.configOptions()
+	for _, harness := range []string{wsagent.BackendPi, "", "codex", wsagent.BackendClaude} {
+		bare, bareErr := resolve("medium", harness)
+		role, roleErr := resolve("ticket-worker:medium", harness)
+		if bareErr != "" || roleErr != "" {
+			t.Fatalf("harness %q: bare error %q, role error %q", harness, bareErr, roleErr)
+		}
+		caller := harness
+		if caller == "" {
+			caller = "<caller>"
+		}
+		if want := "ticket-worker:medium -> implement:medium -> medium -> " + caller + ".medium"; role.Trace != want {
+			t.Fatalf("harness %q: role trace = %q, want %q", harness, role.Trace, want)
+		}
+		role.Trace = ""
+		if role != bare {
+			t.Fatalf("harness %q: role = %+v, bare = %+v", harness, role, bare)
+		}
+		switch harness {
+		case wsagent.BackendPi, "":
+			if bare.ResolvedFrom != "default" {
+				t.Fatalf("harness %q: bare resolved_from = %q, want the default bucket fallback", harness, bare.ResolvedFrom)
+			}
+		default:
+			if bare.ResolvedFrom != harness {
+				t.Fatalf("harness %q: bare resolved_from = %q", harness, bare.ResolvedFrom)
+			}
+		}
+
+		// Render: the role recommendation carries the bare recommendation's
+		// binding for the same harness, whichever harness the walk uses.
+		f.s.rootMu.Lock()
+		f.s.sessionHarness = harness
+		f.s.rootMu.Unlock()
+		wantRender := strings.Replace(withRecommendedRenderBinding("path", harness, "medium", opts), "recommended-tier: medium", "recommended-tier: ticket-worker:medium", 1)
+		got := f.s.withRecommendedRenderBindingFor("path", harness, "ticket-worker:medium", opts)
+		f.s.rootMu.Lock()
+		f.s.sessionHarness = ""
+		f.s.rootMu.Unlock()
+		if got != wantRender || !strings.Contains(got, "recommended-model: ") {
+			t.Fatalf("harness %q: role render = %q, want %q", harness, got, wantRender)
+		}
+	}
+}
+
+func TestConfigResolveAgentRoutesSpawnTiers(t *testing.T) {
+	f := roleRenderFixture(t)
+	setRouting(t, f.s, `{
+		"nodes":{"implement":{"*":"claude.*"},"review":{"xlarge":"pi.*"}},
+		"bundles":{"discussion":{"harness":"agy","model":"claude-opus-4-6-thinking","effort":"high"}}
+	}`)
+	resolve := func(tier string) (resolveAgentTierResult, string) {
+		t.Helper()
+		resp := callToolOnce(t, f.s, 4, "config.resolve_agent", map[string]any{"tier": tier, "harness": "pi", "format": "json"})
+		if toolIsError(t, resp) {
+			return resolveAgentTierResult{}, toolText(t, resp)
+		}
+		var got resolveAgentTierResult
+		if err := json.Unmarshal([]byte(toolText(t, resp)), &got); err != nil {
+			t.Fatalf("decode %s: %v", resp, err)
+		}
+		return got, ""
+	}
+	want, err := func() (resolveAgentTierResult, error) {
+		backend, model, effort, from, err := wsconfig.ResolveAgentTierForHarness(f.s.configOptions(), "medium", "pi")
+		return resolveAgentTierResult{Backend: backend, Model: model, Effort: effort, ResolvedFrom: from}, err
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare, errText := resolve("medium"); errText != "" || bare != want {
+		t.Fatalf("bare size = %+v %s, want the pre-change resolution %+v", bare, errText, want)
+	}
+	if got, errText := resolve("ticket-worker:medium"); errText != "" || got.Backend != "claude" || got.Model != "sonnet" || got.ResolvedFrom != "claude" ||
+		got.Trace != "ticket-worker:medium -> implement:medium -> claude.medium" {
+		t.Fatalf("role tier = %+v %s", got, errText)
+	}
+	if got, errText := resolve("discussion"); errText != "" || got.Backend != "agy" || got.Model != "claude-opus-4-6-thinking" || got.ResolvedFrom != "bundle" {
+		t.Fatalf("bundle = %+v %s", got, errText)
+	}
+	if got, errText := resolve("claude.large"); errText != "" || got.Model != "opus" || got.Trace != "claude.large" {
+		t.Fatalf("explicit target = %+v %s", got, errText)
+	}
+	// review:xlarge lands on pi.xlarge, which Pi does not set: agent.spawn
+	// refuses it, so config.resolve_agent does too rather than answering
+	// with another harness's slot.
+	if got, errText := resolve("review:xlarge"); !strings.Contains(errText, "pi.xlarge has no model in agents.tier") {
+		t.Fatalf("slotless routed tier = %+v %q", got, errText)
+	}
+	// With a runner of its own, the server applies the spawn's harness
+	// availability check: no harness is registered here.
+	f.s.pi.agents = wsagent.NewRunner(wsagent.Options{})
+	if got, errText := resolve("ticket-worker:medium"); !strings.Contains(errText, `harness "claude" is not registered in this daemon`) {
+		t.Fatalf("unavailable harness = %+v %q", got, errText)
+	}
+	if got, errText := resolve("discussion"); !strings.Contains(errText, `harness "agy" is not registered`) {
+		t.Fatalf("unavailable bundle harness = %+v %q", got, errText)
+	}
+	f.s.pi.agents = nil
+	if _, errText := resolve("nosuch:large"); !strings.Contains(errText, "tier must be small, medium, large, or xlarge") || !strings.Contains(errText, "not a tier node") {
+		t.Fatalf("unknown role error = %q", errText)
+	}
+}
+
+func TestPackagedTierRolesFromAResourceTree(t *testing.T) {
+	root := buildTestRsrcTree(t, map[string]string{
+		"role-pb/role-pb.md":   rolePlaybookContent,
+		"plain-pb/plain-pb.md": "---\nkind: render\ntier: small\n---\nbody\n",
+	})
+	roles, err := packagedTierRoles(os.DirFS(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roles) != 1 || roles[0] != (wsconfig.TierRole{Name: "ticket-worker", Parent: "implement:*", Size: "medium"}) {
+		t.Fatalf("roles = %+v", roles)
+	}
+}
+
+func TestFormatAgentTiersRoutingSection(t *testing.T) {
+	base := wsagent.AgentTiers{Harness: "claude"}
+	if strings.Contains(formatAgentTiers(base), "routing") {
+		t.Fatal("a listing without a graph printed a routing section")
+	}
+	base.Routing = &wsagent.AgentRouting{
+		Supported: true,
+		Bundles:   []wsagent.AgentRouteEntry{{Tier: "discussion", Trace: "discussion", Harness: "agy", Error: `harness "agy" has no spawnable tier now`}},
+		Routes: []wsagent.AgentRouteEntry{
+			{Tier: "ticket-worker:medium", Trace: "ticket-worker:medium -> implement:medium -> medium -> claude.medium", Model: "sonnet", Effort: "high"},
+			{Tier: "x:small", Error: "boom"},
+		},
+		Collisions: []string{"alias a -> b shadows bundle a"},
+	}
+	text := formatAgentTiers(base)
+	for _, want := range []string{
+		"routing (agent.tier_routing;",
+		"  discussion: not spawnable now: harness \"agy\" has no spawnable tier now\n",
+		"  ticket-worker:medium -> implement:medium -> medium -> claude.medium: sonnet/high\n",
+		"  x:small: not spawnable now: boom\n",
+		"  collision: alias a -> b shadows bundle a\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("agent.tiers text missing %q:\n%s", want, text)
+		}
+	}
+	base.Routing = &wsagent.AgentRouting{Supported: true, Error: "agent.tier_routing: pointer cycle a -> b -> a"}
+	if text := formatAgentTiers(base); !strings.Contains(text, "  unavailable: agent.tier_routing: pointer cycle a -> b -> a\n") {
+		t.Fatalf("invalid graph text:\n%s", text)
+	}
+}
+
+// The shipped playbooks' own frontmatter drives the recommendation: a
+// daemon-agent caller is told <role>:<size> (the explore playbook's role is
+// playbook-explore), the binding follows the group mapping, and a native
+// caller keeps the bare size and caller-harness binding with or without it.
+func TestShippedPlaybookFrontmatterRecommendations(t *testing.T) {
+	useResourceFixture(t, "../../../agents-plugin/rsrc")
+	f := newPiRecordFixture(t)
+	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
+		"value": map[string]any{"tier": "large", "model": "pi-large", "effort": "high"}})
+	if toolIsError(t, resp) {
+		t.Fatalf("set pi.large: %s", resp)
+	}
+	tier := func(initialize, name string) string {
+		first, _, _ := strings.Cut(metadata(renderResponse(t, f.s, f.leadKey, name, initialize, nil)), "\n")
+		return first
+	}
+	for name, want := range map[string]string{
+		"ticket-reviewer-design": "ticket-reviewer-design:large",
+		"ticket-worker-elevated": "ticket-worker-elevated:large",
+		"explore":                "playbook-explore:small",
+	} {
+		if got := tier(piInitDaemon, name); got != "recommended-tier: "+want {
+			t.Fatalf("daemon %s = %q, want %q", name, got, want)
+		}
+		bare := want[strings.LastIndex(want, ":")+1:]
+		if got := tier(piInitNative, name); got != "recommended-tier: "+bare {
+			t.Fatalf("native %s = %q, want bare %q", name, got, bare)
+		}
+	}
+
+	nativeBefore := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitNative, nil))
+	daemon := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil))
+	if want := "recommended-tier: ticket-reviewer-design:large\nrecommended-model: pi-large\nrecommended-reasoning-effort: high"; daemon != want {
+		t.Fatalf("default-chain daemon metadata = %q, want %q", daemon, want)
+	}
+	setRouting(t, f.s, `{"nodes":{"review":{"*":"claude.*"}}}`)
+	if daemon = metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil)); !strings.HasPrefix(daemon, "recommended-tier: ticket-reviewer-design:large\nrecommended-model: opus") {
+		t.Fatalf("mapped daemon metadata = %q", daemon)
+	}
+	if native := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitNative, nil)); native != nativeBefore {
+		t.Fatalf("mapped native metadata = %q, want %q", native, nativeBefore)
+	}
+}

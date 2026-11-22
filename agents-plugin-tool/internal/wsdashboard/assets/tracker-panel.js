@@ -441,19 +441,29 @@
   // section, each in the view's order and foldable (relSecHtml); the done items either section
   // would hold (related.closed) go to the recently-closed section like any scope's closed rows.
   function listRelated() {
-    var R = VS.my.related || {}, cc = listOf(R.cc).filter(keepItem), mn = listOf(R.mentioned).filter(keepItem);
+    var R = VS.my.related || {}, cc = listOf(R.cc).filter(keepItem), mn = listOf(R.mentioned).filter(keepItem), closed = listOf(R.closed).filter(keepItem);
     if (showHidden()) {
-      var v = VS.viewer.member, seenCC = {}, seenMn = {};
-      cc.forEach(function (id) { seenCC[id] = true; });
-      mn.forEach(function (id) { seenMn[id] = true; });
+      var v = VS.viewer.member, seen = {}, inComment = {};
+      cc.concat(mn, closed).forEach(function (id) { seen[id] = true; });
+      // the daemon's mention sources (view.go related): the item body and shown comments by others
+      vals(VS.comments || {}).forEach(function (c) {
+        if (c && !c.hidden && c.author !== v && listOf(c.mentions).indexOf(v) >= 0) inComment[c.item] = true;
+      });
+      // as view.go related: an item I created or hold a live or pending record on shows in my own
+      // scopes, a CC outranks a mention, and a wrapped item goes to the closed rows
+      var involved = function (it) {
+        return it.author === v || listOf(it.assignments).some(function (a) { var r = A(a); return r && r.to === v && (r.state === 'live' || r.state === 'pending'); });
+      };
       VS.itemOrder.forEach(function (id) {
         var it = VS.items[id];
-        if (!it || !it.hidden || !keepItem(id)) return;
-        if (!seenCC[id] && listOf(it.cc).indexOf(v) >= 0) { seenCC[id] = true; cc.push(id); }
-        if (!seenMn[id] && listOf(it.mentions).indexOf(v) >= 0) { seenMn[id] = true; mn.push(id); }
+        if (!it || !it.hidden || seen[id] || !keepItem(id) || involved(it)) return;
+        var isCC = listOf(it.cc).indexOf(v) >= 0;
+        if (!isCC && listOf(it.mentions).indexOf(v) < 0 && !inComment[id]) return;
+        seen[id] = true;
+        (wrapped(it.status) ? closed : isCC ? cc : mn).push(id);
       });
     }
-    listOf(R.closed).filter(keepItem).forEach(function (id) { addClosed(closeTs(VS.items[id]), 1, irow({ rk: 'rel:x:' + id, item: id, closed: true }), recentlyClosed(id)); });
+    closed.forEach(function (id) { addClosed(closeTs(VS.items[id]), 1, irow({ rk: 'rel:x:' + id, item: id, closed: true }), recentlyClosed(id)); });
     if (FILT && !cc.length && !mn.length) return filterEmpty();
     return relSecHtml('cc', wsT("js.tk.list.rel.cc"), cc, wsT("js.tk.list.rel.cc.none")) + relSecHtml('mentioned', wsT("js.tk.list.rel.mentioned"), mn, wsT("js.tk.list.rel.mentioned.none"));
   }

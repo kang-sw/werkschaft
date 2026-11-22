@@ -308,7 +308,7 @@ func TestHandOffGivesTheSessionToTheTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "cd " + shellQuote(h.root) + " && claude --resume sess-1"
+	want := resumeLine(h.root, "claude", "--resume", "sess-1")
 	if st.Status != StatusHandedOff || st.Lifecycle != wsdashboard.SessionStopped || st.Process || st.ResumeCommand != want {
 		t.Fatalf("handed-off state = %+v, want the resume command %q", st, want)
 	}
@@ -387,7 +387,7 @@ func TestHandOffThroughTheRoute(t *testing.T) {
 	h.holders.out(holder, turnLines("sess 1", "u1", "done")...)
 	h.idle(id)
 	r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/handoff", nil)
-	if st := decodeState(t, r); r.status != http.StatusOK || st.Status != StatusHandedOff || st.ResumeCommand != "cd "+shellQuote(h.root)+" && claude --resume 'sess 1'" {
+	if st := decodeState(t, r); r.status != http.StatusOK || st.Status != StatusHandedOff || st.ResumeCommand != resumeLine(h.root, "claude", "--resume", "sess 1") {
 		t.Fatalf("handoff = %d %s", r.status, r.body)
 	}
 	if r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/handoff", nil); r.status != http.StatusConflict {
@@ -457,27 +457,49 @@ func TestReopenOpensAClosedHostedSession(t *testing.T) {
 	}
 }
 
-// TestResumeCommand pins the command a handed-off session shows.
+// TestResumeCommand pins the command a handed-off session shows: POSIX
+// on a non-Windows host, PowerShell on a Windows one.
 func TestResumeCommand(t *testing.T) {
 	dir := t.TempDir()
 	own := piSessionFile(dir)
 	cases := []struct {
-		rec  Record
-		want string
+		rec           Record
+		posix, window string
 	}{
-		{Record{Lead: true, Backend: BackendClaude, Root: "/w/repo", SessionID: "abc-1"}, "cd /w/repo && claude --resume abc-1"},
-		{Record{Lead: true, Backend: BackendClaude, Root: "/w/repo", Cwd: "/w/my repo/it's", SessionID: "abc-1"}, `cd '/w/my repo/it'\''s' && claude --resume abc-1`},
-		{Record{Lead: true, Backend: BackendClaude, Root: "/w/repo"}, ""},
-		{Record{Lead: true, Backend: BackendAgy, Root: "/w/repo", SessionID: "agy 1"}, "cd /w/repo && agy --conversation 'agy 1'"},
-		{Record{Lead: true, Backend: BackendAgy, Root: "/w/repo"}, ""},
-		{Record{Lead: true, Backend: BackendPi, Root: "/w/repo", SessionFile: "/h/.pi/s 1.jsonl"}, "cd /w/repo && pi --session '/h/.pi/s 1.jsonl'"},
+		{Record{Lead: true, Backend: BackendClaude, Root: "/w/repo", SessionID: "abc-1"},
+			"cd /w/repo && claude --resume abc-1",
+			"Set-Location -LiteralPath '/w/repo' -ErrorAction Stop; claude --resume 'abc-1'"},
+		{Record{Lead: true, Backend: BackendClaude, Root: "/w/repo", Cwd: "/w/my repo/it's", SessionID: "abc-1"},
+			`cd '/w/my repo/it'\''s' && claude --resume abc-1`,
+			"Set-Location -LiteralPath '/w/my repo/it''s' -ErrorAction Stop; claude --resume 'abc-1'"},
+		{Record{Lead: true, Backend: BackendClaude, Root: "/w/repo"}, "", ""},
+		{Record{Lead: true, Backend: BackendAgy, Root: `C:\w\repo`, SessionID: "agy 1"},
+			`cd 'C:\w\repo' && agy --conversation 'agy 1'`,
+			`Set-Location -LiteralPath 'C:\w\repo' -ErrorAction Stop; agy --conversation 'agy 1'`},
+		{Record{Lead: true, Backend: BackendAgy, Root: "/w/repo"}, "", ""},
+		// A value PowerShell would hand the harness mangled gets steps.
+		{Record{Lead: true, Backend: BackendAgy, Root: `C:\w`, SessionID: `x"y`},
+			`cd 'C:\w' && agy --conversation 'x"y'`,
+			"# PowerShell cannot pass this session's --conversation value to agy intact; resume it by hand:\n" +
+				"# 1. Change to the directory: C:\\w\n" +
+				"# 2. Run agy --conversation with exactly this value: x\"y"},
+		{Record{Lead: true, Backend: BackendPi, Root: `C:\Users\O'Neil\repo`, SessionFile: "C:\\h\\.pi\\s \u2019$x.jsonl"},
+			"cd 'C:\\Users\\O'\\''Neil\\repo' && pi --session 'C:\\h\\.pi\\s \u2019$x.jsonl'",
+			"Set-Location -LiteralPath 'C:\\Users\\O''Neil\\repo' -ErrorAction Stop; pi --session 'C:\\h\\.pi\\s \u2019\u2019$x.jsonl'"},
 		// A pi session the daemon started has no file until its first run.
-		{Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, ""},
-		{Record{Backend: BackendClaude, Root: "/w/repo", SessionID: "abc-1"}, ""},
+		{Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, "", ""},
+		{Record{Backend: BackendClaude, Root: "/w/repo", SessionID: "abc-1"}, "", ""},
 	}
-	for _, c := range cases {
-		if got := resumeCommand(c.rec, dir); got != c.want {
-			t.Errorf("resumeCommand(%+v) = %q, want %q", c.rec, got, c.want)
+	for _, windows := range []bool{false, true} {
+		setHostWindows(t, windows)
+		for _, c := range cases {
+			want := c.posix
+			if windows {
+				want = c.window
+			}
+			if got := resumeCommand(c.rec, dir); got != want {
+				t.Errorf("windows=%v resumeCommand(%+v) = %q, want %q", windows, c.rec, got, want)
+			}
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(own), 0o755); err != nil {
@@ -488,8 +510,13 @@ func TestResumeCommand(t *testing.T) {
 	}
 	// The temp directory is plain on Linux but holds backslashes (and an
 	// 8.3 "~") on Windows, which a POSIX shell must see quoted.
+	setHostWindows(t, false)
 	if got, want := resumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "cd /w/repo && pi --session "+shellQuote(own); got != want {
 		t.Errorf("a daemon-started pi session = %q, want %q", got, want)
+	}
+	setHostWindows(t, true)
+	if got, want := resumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "Set-Location -LiteralPath '/w/repo' -ErrorAction Stop; pi --session "+psQuote(own); got != want {
+		t.Errorf("a daemon-started pi session on Windows = %q, want %q", got, want)
 	}
 }
 
