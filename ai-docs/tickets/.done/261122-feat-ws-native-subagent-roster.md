@@ -366,3 +366,27 @@ Decisions:
 - The observation-ended count renders in both the compact and idle HUD.
 - The `done-leaf` HUD test fixture gained `EndedAt: 1` so it stays a
   completed row rather than end-unknown.
+
+#### Edition (770d3bace) - 2026-11-22
+
+End-unknown rows no longer encode their state as a zero `EndedAt`; this
+changes Decision 4's representation only. A row whose observation ended
+with the outcome unknown now carries a real `EndedAt` (when observation
+ended: the accepted turn end, or a rejoin's replay end placed by the
+restored history, 0232210cb) plus an additive `endUnknown` snapshot flag
+(`wslive.Agent.EndUnknown`, `json:"endUnknown,omitempty"`). The HUD, tree
+and companion relay key on the flag, never on `EndedAt == 0`. Retention
+ranks finished rows by `EndedAt` alone again.
+
+Compatibility evidence (T1, release-compatibility):
+- Old reader: 7482aa91e `wslive/snapshot.go:451-460` decodes with plain
+  `json.Unmarshal`, with no `DisallowUnknownFields` in wslive or
+  wsdashboard, into an `Agent` without the member (`snapshot.go:341`
+  declares only `endedAt`). The flag is ignored and the row shows done with
+  its end time. This is the display degradation T1 already accepts.
+- Old writer: 7482aa91e `wslive/state.go:1013-1015` ranks finished rows by
+  `endedAt` alone at the cap, then `wsagent/record.go:685` replaces the
+  recovery cache. An end-unknown row ranks by its real observation end, so
+  it outlives older completions. The old writer drops the flag on rewrite;
+  after re-upgrade the row is retained and shows done (display-only).
+  `TestEndUnknownRowSurvivesAnOlderWriter` pins this path.
