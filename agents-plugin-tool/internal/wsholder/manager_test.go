@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1018,5 +1019,56 @@ for line in sys.stdin:
 	})
 	if n := lost(); n != 0 {
 		t.Errorf("after a consumer's replay the holder has lost %d records, want none: the manager received them all", n)
+	}
+}
+
+// TestSpawnHTTP2CaptureFiltersStderr: a spawn's HTTP2Capture reaches a real
+// holder, which keeps framer summaries in the capture file and every Go
+// HTTP/2 debug line out of the records the daemon receives; ordinary stderr
+// still arrives. The trace text is synthetic.
+func TestSpawnHTTP2CaptureFiltersStderr(t *testing.T) {
+	dir := testHoldersDir(t)
+	sink := newCollector()
+	m := testManager(t, dir, sink)
+	id, err := m.Launch(json.RawMessage(`{"kind":"test"}`))
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	capture := filepath.Join(t.TempDir(), "frames.log")
+	child := `
+import sys
+sys.stderr.write("plain before\n")
+sys.stderr.write("2026/11/22 12:00:00 http2: Transport encoding header \"authorization\" = \"Bearer SECRET\"\n")
+sys.stderr.write("2026/11/22 12:00:00 http2: Framer 0xc0001: wrote HEADERS flags=END_HEADERS stream=1 len=300\n")
+sys.stderr.write("http2: Framer 0xc0001: read DATA stream=1 len=20 data=\"SECRET reply\"\n")
+sys.stderr.write("plain after\n")
+sys.stderr.flush()
+`
+	if _, err := m.Client(id).Spawn(SpawnSpec{Argv: []string{testPython(t), "-c", child}, Mode: "pipe", HTTP2Capture: &HTTP2Capture{Path: capture, MaxBytes: 1 << 20}}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	waitFor(t, "the child's exit record", func() bool {
+		for _, ev := range sink.snapshot(id) {
+			if ev.Event == "exit" {
+				return true
+			}
+		}
+		return false
+	})
+	if got := sink.output(id); got != "plain before\nplain after\n" {
+		t.Fatalf("records = %q, want only the plain stderr lines", got)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		_, rest, _ := strings.Cut(line, " ")
+		kept = append(kept, rest)
+	}
+	want := []string{"Framer 0xc0001: wrote HEADERS flags=END_HEADERS stream=1 len=300", "Framer 0xc0001: read DATA stream=1 len=20"}
+	if !slices.Equal(kept, want) || strings.Contains(string(data), "SECRET") {
+		t.Fatalf("capture = %q, want %q", data, want)
 	}
 }

@@ -117,6 +117,18 @@ type SpawnSpec struct {
 	// finishes without a later Input call. With no Input it is an
 	// immediate EOF.
 	InputEOF bool `json:"input_eof,omitempty"`
+	// HTTP2Capture, when set, routes every stderr line of a pipe child
+	// that is a Go HTTP/2 debug log line (GODEBUG=http2debug) to a filter
+	// instead of the ring: only framer summary lines, cut after their
+	// allowlisted fields, are appended to Path, up to MaxBytes. A holder
+	// that predates the field ignores it.
+	HTTP2Capture *HTTP2Capture `json:"http2_capture,omitempty"`
+}
+
+// HTTP2Capture is SpawnSpec.HTTP2Capture.
+type HTTP2Capture struct {
+	Path     string `json:"path"`
+	MaxBytes int64  `json:"max_bytes,omitempty"`
 }
 
 // AttachInfo is what a holder reports when an attach succeeds.
@@ -350,6 +362,9 @@ func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 	}
 	if spec.InputEOF && len(rest) == 0 {
 		fields["input_eof"] = true
+	}
+	if spec.HTTP2Capture != nil {
+		fields["http2_capture"] = spec.HTTP2Capture
 	}
 	answer, err := c.call("spawn", fields)
 	if err != nil || len(rest) == 0 {

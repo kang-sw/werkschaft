@@ -145,6 +145,8 @@ type holderChild struct {
 	// ringPulse is the launch's wsholder.LaunchSpec.RingPulse: a content-free
 	// replacement emitted at a bounded rate for skipped output.
 	ringPulse string
+	// http2Capture is the spawn's wsholder.SpawnSpec.HTTP2Capture.
+	http2Capture *wsholder.HTTP2Capture
 
 	// Worker replay waits for record/descriptor ownership validation. The
 	// holder's replay reply precedes its events, so Scan can finish while
@@ -204,7 +206,7 @@ func (h *holderChild) start(p *streamProcess, cmd *exec.Cmd) error {
 			env[name] = value
 		}
 	}
-	st, err := h.host.Spawn(id, wsholder.SpawnSpec{Argv: append([]string{cmd.Path}, cmd.Args[1:]...), Cwd: cmd.Dir, Env: env, Mode: "pipe"})
+	st, err := h.host.Spawn(id, wsholder.SpawnSpec{Argv: append([]string{cmd.Path}, cmd.Args[1:]...), Cwd: cmd.Dir, Env: env, Mode: "pipe", HTTP2Capture: h.http2Capture})
 	if err != nil {
 		h.table.remove(id, h)
 		_ = h.host.Stop(id)

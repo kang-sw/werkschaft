@@ -304,6 +304,11 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	c.loadCompaction()
 	c.loadModelWait()
+	// Each agy process writes its own worker log: locate it afresh.
+	c.agyLog = nil
+	if rec.Backend == BackendAgy {
+		c.agyLog = c.newAgyLog()
+	}
 	level, source, err := c.r.leadPermission(rec, c.dir)
 	if err != nil {
 		if !attach {
@@ -416,7 +421,8 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 				EnvHostedSessionKey: rec.WSKey,
 				EnvHostedSessionRow: wsdashboard.RegistrationPath(c.r.opts.Dir, rec.ReplyID),
 			},
-			Manual: func() string { return c.leadManual(rec) },
+			Manual:     func() string { return c.leadManual(rec) },
+			FrameTrace: c.agyFrameTrace,
 			Spawned: func(holderID string, pid int) {
 				spawned = true
 				c.update(func(rec *Record) { rec.HolderID, rec.HostPID, rec.HolderSeq = holderID, pid, 0 })

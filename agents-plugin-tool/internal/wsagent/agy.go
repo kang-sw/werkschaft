@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsharnessenv"
+	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -168,7 +169,32 @@ func agyEnv(spec StartSpec) []string {
 			set[name] = value
 		}
 	}
-	return harnessEnv(wsharnessenv.Drop(spec.Env), agyDropEnv, nil, set)
+	env := harnessEnv(wsharnessenv.Drop(spec.Env), agyDropEnv, nil, set)
+	if spec.Lead != nil && spec.Lead.FrameTrace != "" {
+		env = withGODEBUG(env, agyFrameTraceGODEBUG)
+	}
+	return env
+}
+
+// agyFrameTraceGODEBUG turns on Go's verbose HTTP/2 frame logging: level 2
+// adds the framer read and write lines, whose framer pointer tells
+// connections apart and whose stream id tells requests apart.
+const agyFrameTraceGODEBUG = "http2debug=2"
+
+// withGODEBUG adds setting to env's GODEBUG, after any settings already
+// there (a later setting of the same name wins).
+func withGODEBUG(env []string, setting string) []string {
+	for i, kv := range env {
+		if value, ok := strings.CutPrefix(kv, "GODEBUG="); ok {
+			if value != "" {
+				setting = value + "," + setting
+			}
+			out := slices.Clone(env)
+			out[i] = "GODEBUG=" + setting
+			return out
+		}
+	}
+	return append(slices.Clone(env), "GODEBUG="+setting)
 }
 
 // Start launches `agy acp` for spec and, unless it rejoins a held process,
@@ -195,6 +221,10 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 	if spec.Holder != nil {
 		spec.Holder.ringSkip = agyRingSkip
 		spec.Holder.ringPulse = agyRingPulse
+		if spec.Lead != nil && spec.Lead.FrameTrace != "" {
+			// The holder filters the trace out of stderr before its ring.
+			spec.Holder.http2Capture = &wsholder.HTTP2Capture{Path: spec.Lead.FrameTrace, MaxBytes: agyFrameCaptureMaxBytes}
+		}
 	}
 	m := newAgyMapper(spec.SessionID)
 	m.recoveredSteers = slices.Clone(spec.RecoveredSteers)
@@ -653,12 +683,15 @@ type agyMapper struct {
 	openBg          map[string]bool
 	bgCalls         map[string]bool
 	modelFailure    string
-	turnSeq         int
-	group           int
-	groupCalls      bool
-	reply           strings.Builder
-	replyAt         int64
-	batches         batchTracker
+	// content is set while mapping one session/update that carried model
+	// content (text, thought, its holder pulse, or a plan).
+	content    bool
+	turnSeq    int
+	group      int
+	groupCalls bool
+	reply      strings.Builder
+	replyAt    int64
+	batches    batchTracker
 
 	wakeTimer      *time.Timer
 	wakeGeneration uint64
@@ -914,10 +947,11 @@ func (m *agyMapper) mapAgyLine(line []byte, replies lineReplies, seq uint64) []E
 		return m.request(msg, replies, now)
 	case msg.Method == "session/update":
 		oldFailure := m.modelFailure
+		m.content = false
 		out := m.update(msg.Params, replies, now)
 		if _, replaying := replies.(silentReplies); !replaying {
 			n := len(m.pendingTools)
-			out = append(out, Event{ModelActivity: &n})
+			out = append(out, Event{ModelActivity: &n, ModelContent: m.content})
 			if oldFailure != m.modelFailure {
 				if oldFailure != "" && m.modelFailure == "" {
 					out = append(out, Event{Notice: "agy recovered after in-band model failure: " + oldFailure})
@@ -1362,6 +1396,11 @@ func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int6
 	_, replaying := replies.(silentReplies)
 	if u.SessionUpdate != "agent_message_chunk" {
 		m.rate.breakRun(replaying)
+	}
+	switch u.SessionUpdate {
+	case "agent_message_chunk", "agent_thought_chunk", "ws_activity", "plan":
+		// A holder pulse stands in for dropped thought lines.
+		m.content = true
 	}
 	switch u.SessionUpdate {
 	case "agent_message_chunk":

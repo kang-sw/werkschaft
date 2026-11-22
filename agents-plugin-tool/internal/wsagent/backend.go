@@ -125,6 +125,10 @@ type LeadSpec struct {
 	// request): ws-mcp confirms a hosted session by the registration's
 	// host_pid, so the row must name the process first.
 	Spawned func(holderID string, pid int)
+	// FrameTrace, when not empty, is the capture file of an opt-in HTTP/2
+	// frame trace: agy starts with GODEBUG=http2debug=2 and its holder
+	// keeps only filtered frame summaries of that stderr output there.
+	FrameTrace string
 }
 
 // MCPCommand is a stdio MCP server's launch command.
@@ -446,6 +450,10 @@ type Event struct {
 	// during a turn, carrying the count of currently pending tool calls
 	// (including daemon commands) so the model-wait watchdog can reset or pause.
 	ModelActivity *int
+	// ModelContent marks a ModelActivity update that carried model content
+	// (agent text, thought, or plan): the current model request has a
+	// response, so it is not a headerless stall.
+	ModelContent bool
 	// agyReplay carries the mapper's in-memory observation at ReplayDone.
 	agyReplay *agyReplayObservation
 	// CompactRequested (with TurnEnd): the ending turn carried a successful

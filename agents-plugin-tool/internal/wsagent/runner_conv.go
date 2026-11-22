@@ -133,6 +133,19 @@ type conv struct {
 	modelWaitBackoffC           <-chan time.Time
 	modelWaitBackoffStop        func()
 	modelWaitBackoffFailure     string
+	// A hosted agy lead's log-confirmed stall cutoff (agy_watchdog.go):
+	// modelWaitLogCheck is agy.stall_log_check, modelWaitBoundary the wall
+	// time ws last started a fresh model request, modelWaitContent whether
+	// model content arrived since, agyLog the process's worker log, and
+	// agyLogNoted whether this session logged its one unknown-log notice.
+	// agyFrameTrace is the frame capture file when agy.http2_frame_trace
+	// is on.
+	modelWaitLogCheck bool
+	modelWaitBoundary time.Time
+	modelWaitContent  bool
+	agyLog            *agyStallLog
+	agyLogNoted       bool
+	agyFrameTrace     string
 	// modelWaitBackoffFence is the only model-wait field shared with Send:
 	// pending -> cancelled lets a successful inbox write win before it
 	// returns; pending -> firing commits the automatic continue instead.
@@ -462,6 +475,7 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: steer a mail: %v\n", c.rec.ReplyID, err)
 			return false
 		}
+		c.modelWaitSteered()
 		c.apply(*wakeEvent("mail", "mailbox", "", text).Live)
 		return true
 	}
@@ -572,7 +586,9 @@ func (c *conv) steer() {
 	if err := st.Steer(text); err != nil {
 		c.setStatus(func() { c.lastErr = "send the steered message: " + err.Error() })
 		c.stopProcess("")
+		return
 	}
+	c.modelWaitSteered()
 }
 
 func (c *conv) loop() {
