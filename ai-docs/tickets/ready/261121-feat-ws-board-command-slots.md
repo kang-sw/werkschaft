@@ -690,6 +690,59 @@ on Windows) and skips only where exec.shell has no shell. Its Windows run is
 lead-owned and pending; here it ran against bash and `GOOS=windows go vet` of
 the touched packages is clean.
 
+#### Edition (b6537dfcc) - 2026-11-22
+
+Round-3 review of the round-2 fixes (FIX-FIRST: 3 Critical, 4 Important),
+commits 986c24dc3, eff415549, b6537dfcc. The
+frozen text and the Editions above are not edited; where they differ from what
+follows, this Edition governs.
+
+Replay token (C1, refines the replay bullet of the Edition above): a token is
+current only for a count the daemon has issued, from the eviction horizon
+through its current sequence, inclusive. A future count is refused as "outcome
+unknown" like a stale one, so it can neither admit a request nor stay
+admissible after the fence evicts that request's id.
+
+Publication (C2, a lead exception next to decision 2):
+notice eligibility stays off during publication; a refused publication falls
+back to the ordinary notice as the single delivery. This is a lead exception to
+the rule that a notice follows only a successful publication, and the pin is
+`TestComposerExecRefusedHandOffLeavesTheOrdinaryNotice`. It holds only because
+publication is all-or-nothing: `OnConvert` returns an error only when nothing
+reached the owner or the client, and `PassiveHand` checks the generation and
+stores the receipt under one hold, so a refusal never leaves both the receipt
+and the notice. The contract is stated on `HostedLaunch.OnConvert`.
+
+Shutdown (C3): the background loop is registered under the same mutex as
+admission and `composerWait`, and the service is published only while
+admission is open, so a Close racing the binding neither waits past the loop's
+registration nor lets a closed daemon publish a service. Tested with a Close
+before the binding and a Close racing it under the race detector.
+
+Body (I1): after the one JSON object a second decode must return end of input;
+a stray delimiter, a second value or garbage is malformed and launches nothing
+(`Decoder.More` is a container check and passed them).
+
+Trimming (I2): the card bound is also applied when a submission's own goroutine
+finishes its run, so a burst whose every job ends inside its window (no
+conversion, no settle tick) trims without another request. Tested with a burst
+held unfinished until all of it is admitted.
+
+Client (I3): the first private list read routes a body that fails to read or
+parse after good headers into the same completion callback as a transport
+failure, so the send clears its busy state and keeps the draft. Covered in the
+browser test (a cut-short list body, then a working read).
+
+Windows retention (I4): a removal counts as done only on success, an absent
+file, or Windows errno 303 (ERROR_DELETE_PENDING). Access denied (5) and a
+sharing violation (32), the answers for a file another handle holds without
+share-delete, leave the file present: its size stays counted, its card keeps
+its link, and the failure is logged by the sweep. The errno check is a small
+per-OS helper (`composer_remove_windows.go` and a stub); the classifier is
+unit-tested with synthetic errors in the portable suite, and the 303 case in a
+Windows-only test the lead runs on the host. The earlier Lstat-based
+`composerGone` and its mapping of permission errors to removed are gone.
+
 ### Phase 2: Command slots
 
 Depends on Phase 1 (the route, launch binding, passive hand-off, output file
