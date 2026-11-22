@@ -230,3 +230,38 @@ func TestRecordDeltasStayBoundedAndSurviveRestart(t *testing.T) {
 		t.Fatalf("fresh holder_seq = %v", m["holder_seq"])
 	}
 }
+
+// A cache root with URI metacharacters opens the database inside it, not a
+// truncated path (the driver splits a plain DSN at '?').
+func TestOpenUnderRootWithURIMetacharacters(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("'?' is not a valid Windows file name character")
+	}
+	ctx := context.Background()
+	base := t.TempDir()
+	dir := filepath.Join(base, "cache?copy#1 %41", "dashboard")
+	s := openTest(t, dir, testOpts())
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, DBName))
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("database in the named root: %v size %v", err, info)
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "cache?copy#1 %41" {
+			t.Fatalf("stray file %q beside the root", e.Name())
+		}
+	}
+	s2 := openTest(t, dir, testOpts())
+	if done, err := s2.ImportComplete(ctx); err != nil || !done {
+		t.Fatalf("reopen sees complete=%v err=%v", done, err)
+	}
+}

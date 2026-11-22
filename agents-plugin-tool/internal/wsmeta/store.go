@@ -26,13 +26,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
-
-	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 const (
@@ -103,9 +102,9 @@ func Open(dir string, opts Options) (*Store, error) {
 		opts.Now = time.Now
 	}
 	if opts.ReadFile == nil {
-		// Retries a Windows sharing violation (antivirus, indexer) before
-		// failing; POSIX reads once.
-		opts.ReadFile = wsstate.ReadFile
+		// Regular files only; retries a Windows sharing violation
+		// (antivirus, indexer) before failing.
+		opts.ReadFile = readRegularFile
 	}
 	if opts.CheckpointIdle == 0 {
 		opts.CheckpointIdle = CheckpointIdle
@@ -114,17 +113,11 @@ func Open(dir string, opts Options) (*Store, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, DBName)
-	// Create the file owner-only before SQLite opens it: the unix VFS gives
-	// the WAL (and any journal) the main file's mode, so the side files stay
-	// private too. Agent records hold session keys and capability secrets.
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
+	// Owner-only before SQLite opens it, on every open (private_*.go).
+	if err := makePrivate(path); err != nil {
 		return nil, err
 	}
-	if err := f.Close(); err != nil {
-		return nil, err
-	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqliteURI(path))
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +149,30 @@ func Open(dir string, opts Options) (*Store, error) {
 		return nil, s.openError("migrate", err)
 	}
 	return s, nil
+}
+
+// sqliteURI is path as an SQLite file: URI. The driver splits a plain DSN at
+// its first '?', so a cache root containing one would open another file;
+// percent-encoding every byte outside the unreserved set keeps '?', '#' and
+// '%' literal.
+func sqliteURI(path string) string {
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // C:/x becomes /C:/x, which SQLite's Windows VFS accepts
+	} else if strings.HasPrefix(p, "//") {
+		p = "//" + p // a UNC path keeps an empty URI authority
+	}
+	var b strings.Builder
+	b.WriteString("file:")
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("-._~/:", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
 }
 
 func (s *Store) openError(stage string, err error) error {

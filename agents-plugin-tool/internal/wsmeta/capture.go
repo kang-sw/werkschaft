@@ -276,17 +276,32 @@ func readLegacy(abs string, readFile func(string) ([]byte, error)) legacyRead {
 		}
 		return legacyRead{transient: true, err: err.Error()}
 	}
-	if info.Mode()&fs.ModeSymlink == 0 && !info.Mode().IsRegular() {
+	if info.Mode()&fs.ModeSymlink != 0 {
+		// A link counts by its target: dangling is an existing, unreadable
+		// selection; anything but a regular file is never opened.
+		target, err := wsstate.Stat(abs)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return legacyRead{state: CaptureUnreadable, err: "dangling symbolic link"}
+		case err != nil && stableReadError(err):
+			return legacyRead{state: CaptureUnreadable, err: err.Error()}
+		case err != nil:
+			return legacyRead{transient: true, err: err.Error()}
+		}
+		info = target
+	}
+	if !info.Mode().IsRegular() {
 		return legacyRead{state: CaptureUnreadable, err: "not a regular file"}
 	}
 	data, err := readFile(abs)
 	if err != nil {
 		switch {
-		case errors.Is(err, fs.ErrNotExist) && info.Mode()&fs.ModeSymlink != 0:
-			return legacyRead{state: CaptureUnreadable, err: "dangling symbolic link"}
+		case errors.Is(err, errNotRegular):
+			return legacyRead{state: CaptureUnreadable, err: "not a regular file"}
 		case errors.Is(err, fs.ErrNotExist):
-			// Removed between the Lstat and the read.
-			return legacyRead{state: CaptureAbsent, digest: absentDigest}
+			// Removed (or its link target removed) after the stat: read as
+			// changed, and re-read by the next pass.
+			return legacyRead{transient: true, err: err.Error()}
 		case stableReadError(err):
 			return legacyRead{state: CaptureUnreadable, err: err.Error()}
 		}
@@ -297,6 +312,10 @@ func readLegacy(abs string, readFile func(string) ([]byte, error)) legacyRead {
 	}
 	return legacyRead{state: CapturePresent, bytes: data, digest: contentDigest(data)}
 }
+
+// errNotRegular reports a bundled path that opened as something other than a
+// regular file.
+var errNotRegular = errors.New("not a regular file")
 
 func contentDigest(data []byte) string {
 	sum := sha256.Sum256(data)

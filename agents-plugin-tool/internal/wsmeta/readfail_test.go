@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // failingReads returns Options whose legacy reads of the named slash paths
@@ -129,5 +130,50 @@ func TestStableReadErrorIsUnreadableAndFailsClosed(t *testing.T) {
 	}
 	if p := snap.Permissions["hostedlead"]; p.State != "invalid" {
 		t.Fatalf("permission = %+v, want a fail-closed invalid row", p)
+	}
+}
+
+// A bundled path linking to a FIFO is an unreadable input; the pass never
+// blocks opening it.
+func TestLinkToFIFOIsUnreadableAndNeverBlocks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no FIFOs in the Windows file namespace")
+	}
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "dashboard")
+	put(t, dir, "sessions/a/label.json", `{"label":"A"}`)
+	fifo := filepath.Join(t.TempDir(), "fifo")
+	if err := mkfifo(fifo); err != nil {
+		t.Skip(err)
+	}
+	if err := os.Symlink(fifo, filepath.Join(dir, "sessions", "a", "permission.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := mkfifo(filepath.Join(dir, "support.json")); err != nil {
+		t.Fatal(err)
+	}
+	s := openTest(t, dir, Options{Now: testOpts().Now, CheckpointIdle: -1})
+	done := make(chan error, 1)
+	go func() { _, err := s.Commit(ctx, testCommit()); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the import blocked on a FIFO")
+	}
+	caps := captureMap(t, s)
+	for _, p := range []string{"sessions/a/permission.json", "support.json"} {
+		if c := caps[p]; c.State != CaptureUnreadable {
+			t.Fatalf("%s: %+v", p, c)
+		}
+	}
+	snap, err := s.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := snap.Permissions["a"]; p.State != "invalid" {
+		t.Fatalf("permission = %+v, want fail-closed", p)
 	}
 }
