@@ -4,6 +4,7 @@ related:
   261003-feat-pi-execute-worker-git-read-tools: prerequisite; structural removal of git inspection approvals lands first, and this ticket's value is measured on the residual
   261003-research-typed-decision-model-new-domains: origin; decision-model survey and the discussion that narrowed this to read-only
   260904-feat-ws-pi-execute-approval-gateway: origin constraints; §2 per-mutation gate invariant kept, §5 no-string-classification partially reversed
+dropped: 2026-11-22
 ---
 
 # Auto-approve read-only ws-execute commands with a typed decision model; mutations still go to the lead
@@ -102,3 +103,8 @@ That is up to ~70 of 327, about 20%.
   - With the backend unavailable, every request reaches the lead exactly as today.
   - In `shadow` mode no request is auto-approved.
   - In `on` mode a vetoed or below-threshold command reaches the lead, and an auto-approved command produces a display row and a log entry but no lead turn.
+
+
+## Resolution (2026-11-22)
+
+Dropped by owner (5002)=a (2026-11-22): the Pi extension is frozen (no new work) and retires behind `261122-feat-ws-builtin-agent-harness` Phase 3; this ticket's execute gateway lives entirely inside that extension. Hosted sessions use the common dashboard approval path.
