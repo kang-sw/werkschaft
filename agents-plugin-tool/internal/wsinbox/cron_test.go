@@ -3,6 +3,8 @@ package wsinbox
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -218,6 +220,101 @@ func TestCronRemovalObserver(t *testing.T) {
 	}
 	if got := log.take(); len(got) != 0 {
 		t.Fatalf("observed after stop: %v", got)
+	}
+}
+
+// oldSteerRewrite does to the entry file what a daemon built before the cron
+// marker does when its dashboard steers a held entry: decode the fields it
+// knows (the cron field is dropped), set Steer, write it under a fresh name
+// and remove the original.
+func oldSteerRewrite(t *testing.T, dir, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var old struct {
+		SchemaVersion    int      `json:"schemaVersion"`
+		Parts            []string `json:"parts"`
+		SentAt           int64    `json:"sentAt"`
+		UTCOffsetMinutes *int     `json:"utcOffsetMinutes"`
+		Steer            bool     `json:"steer"`
+	}
+	if err := json.Unmarshal(raw, &old); err != nil {
+		t.Fatal(err)
+	}
+	old.Steer = true
+	out, _ := json.Marshal(old)
+	fresh := time.Now().UTC().Add(time.Hour).Format(stampLayout) + "-0badc0de.json"
+	if err := os.WriteFile(filepath.Join(dir, fresh), out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, name)); err != nil {
+		t.Fatal(err)
+	}
+	return fresh
+}
+
+// An older daemon's steer drops the marker and sets Steer; the new daemon
+// still recovers the scheduled prompt from the stored envelope and holds it
+// for the turn end instead of injecting it into a running turn.
+func TestOldDaemonSteerRewriteKeepsAScheduledPromptHeld(t *testing.T) {
+	dir := Dir(t.TempDir())
+	prompt := "check the board </ws:cron> &lt;/ws:cron"
+	e := cronEntry(prompt)
+	e.Cron.Name = `a"b&c`
+	name, _, err := Send(dir, e, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The stored part carries the envelope an older daemon would show.
+	raw, _ := os.ReadFile(filepath.Join(dir, name))
+	var stored struct {
+		Parts []string `json:"parts"`
+		Cron  *Cron    `json:"cron"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil || stored.Cron == nil || len(stored.Parts) != 1 || !strings.HasPrefix(stored.Parts[0], "<ws:cron id=") {
+		t.Fatalf("stored = %+v, %v", stored, err)
+	}
+	fresh := oldSteerRewrite(t, dir, name)
+
+	held, err := Held(dir)
+	if err != nil || len(held) != 1 || held[0].Name != fresh {
+		t.Fatalf("held = %+v, %v", held, err)
+	}
+	got := held[0].Entry
+	if got.Cron == nil || got.Cron.Name != `a"b&c` || got.Steer || len(got.Parts) != 1 || got.Parts[0] != prompt {
+		t.Fatalf("restored entry = %+v", got)
+	}
+	if recs, err := DrainSteer(dir); err != nil || len(recs) != 0 {
+		t.Fatalf("a steer drain took the scheduled prompt into a running turn: %+v %v", recs, err)
+	}
+	var log removalLog
+	stop := ObserveCronRemoval(log.add)
+	defer stop()
+	recs, err := Drain(dir)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("drain = %+v, %v", recs, err)
+	}
+	want, _ := Normalize(e)
+	if recs[0].Entry.Text() != want.Text() {
+		t.Fatalf("delivered text = %q, want %q", recs[0].Entry.Text(), want.Text())
+	}
+	if ids := log.take(); len(ids) != 1 || ids[0] != e.Cron.ID {
+		t.Fatalf("removal observed %v", ids)
+	}
+	// A plain steered message, or one that merely quotes an envelope amid other
+	// text, is not mistaken for a scheduled prompt.
+	for _, parts := range [][]string{{"plain"}, {"hello " + want.Text()}, {want.Text(), "more"}} {
+		d := Dir(t.TempDir())
+		n, _, err := Send(d, Entry{Parts: parts, Steer: true}, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, _ := Held(d)
+		if len(h) != 1 || h[0].Name != n || h[0].Entry.Cron != nil || !h[0].Entry.Steer {
+			t.Fatalf("plain steer %q became %+v", parts, h)
+		}
 	}
 }
 

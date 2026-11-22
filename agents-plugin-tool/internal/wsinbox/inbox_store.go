@@ -53,7 +53,7 @@ func writeEntry(dir string, entry Entry) (string, error) {
 
 func writeEntryJournaled(dir string, entry Entry, journal bool) (string, error) {
 	stamp := nextStamp().Format(stampLayout)
-	raw, err := json.Marshal(entry)
+	raw, err := json.Marshal(wireCron(entry))
 	if err != nil {
 		return "", err
 	}
@@ -175,7 +175,7 @@ func readEntry(path string) (Entry, error) {
 	if err := json.Unmarshal(raw, &e); err != nil {
 		return Entry{}, fmt.Errorf("parse inbox entry: %w", err)
 	}
-	return e, nil
+	return restoreCron(e), nil
 }
 
 // claim atomically takes the entry name in dir away from the inbox by

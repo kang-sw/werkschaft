@@ -65,6 +65,79 @@ func (e Entry) cronText() string {
 		`" at="` + cronAttrEscaper.Replace(c.At) + `">` + "\n" + escapeCronBody(body) + "\n</ws:cron>"
 }
 
+// A held scheduled prompt is stored with its whole envelope as its one part,
+// beside the Cron field. A daemon built before the marker ignores the field,
+// shows the part as a user message, and its dashboard steer rewrites the entry
+// as a steered plain one: the envelope in the part survives that rewrite, so
+// restoreCron can recover the marker from it. In memory the entry is always
+// (Cron, the prompt as its part); only the stored form carries the envelope.
+
+// wireCron returns the stored form of a scheduled prompt; any other entry is
+// returned as it is.
+func wireCron(e Entry) Entry {
+	if e.Cron == nil {
+		return e
+	}
+	text := e.cronText()
+	if text == "" {
+		return e
+	}
+	e.Parts = []string{text}
+	return e
+}
+
+var cronAttrUnescaper = strings.NewReplacer("&quot;", `"`, "&lt;", "<", "&gt;", ">", "&amp;", "&")
+
+var cronAttrs = regexp.MustCompile(`^<ws:cron id="([^"\n]*)" name="([^"\n]*)" at="([^"\n]*)">\n`)
+
+// parseCronEnvelope decodes a whole <ws:cron> envelope text (cronText's
+// output); ok is false for anything else, including trailing text.
+func parseCronEnvelope(text string) (mark Cron, body string, ok bool) {
+	m := cronAttrs.FindStringSubmatch(text)
+	if m == nil || !strings.HasSuffix(text, "\n</ws:cron>") || len(text) < len(m[0])+len("\n</ws:cron>") {
+		return Cron{}, "", false
+	}
+	inner := text[len(m[0]) : len(text)-len("\n</ws:cron>")]
+	if strings.Contains(inner, "</ws:cron") {
+		return Cron{}, "", false // cronText escapes the body, so a raw delimiter is not ours
+	}
+	mark = Cron{ID: cronAttrUnescaper.Replace(m[1]), Name: cronAttrUnescaper.Replace(m[2]), At: cronAttrUnescaper.Replace(m[3])}
+	mark, err := cleanCronMark(mark)
+	if err != nil {
+		return Cron{}, "", false
+	}
+	return mark, unescapeCronBody(inner), true
+}
+
+// restoreCron turns a stored entry back into its in-memory form: the Cron
+// field's entry drops the envelope around its part, and a steered plain entry
+// whose one part is a scheduled prompt's envelope (an older daemon dropped
+// the field when it steered the held entry) gets its marker back. A restored
+// entry is never steered: it waits for the turn end like any scheduled
+// prompt, whatever Steer an older daemon set.
+func restoreCron(e Entry) Entry {
+	if len(e.Parts) != 1 {
+		return e
+	}
+	if e.Cron != nil {
+		if mark, body, ok := parseCronEnvelope(e.Parts[0]); ok && mark == *e.Cron {
+			e.Parts = []string{body}
+		}
+		e.Steer = false
+		return e
+	}
+	if !e.Steer || e.Command != nil || e.Interrupt || len(e.Chips) > 0 || len(e.Topics) > 0 || len(e.Mentions) > 0 ||
+		len(e.CloseRequests) > 0 || len(e.Picks) > 0 || len(e.Consoles) > 0 || len(e.Images) > 0 {
+		return e
+	}
+	if mark, body, ok := parseCronEnvelope(e.Parts[0]); ok {
+		e.Cron = &mark
+		e.Parts = []string{body}
+		e.Steer = false
+	}
+	return e
+}
+
 func cleanCronMark(c Cron) (Cron, error) {
 	c.ID, c.Name, c.At = strings.TrimSpace(c.ID), strings.TrimSpace(c.Name), strings.TrimSpace(c.At)
 	for label, v := range map[string]string{"id": c.ID, "name": c.Name, "at": c.At} {
