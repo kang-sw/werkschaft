@@ -122,6 +122,9 @@ type fakeHolders struct {
 	// scanHook, when set, runs at the start of each Scan, before it takes
 	// the lock (gateScan).
 	scanHook func()
+	// incomplete is the listing's Incomplete: the last scan could not read
+	// every holder's registration.
+	incomplete bool
 	// failInput fails the next n inputs whose first line has a type (a
 	// negative n fails every one), as a write to a gone child does; the
 	// failed input reaches no child.
@@ -223,7 +226,7 @@ func (f *fakeHolders) Scan() {
 func (f *fakeHolders) List() wsholder.Listing {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out wsholder.Listing
+	out := wsholder.Listing{Incomplete: f.incomplete}
 	for _, id := range f.order {
 		h := f.holders[id]
 		if h == nil || !h.known {

@@ -130,6 +130,10 @@ type StartFailure struct {
 type Listing struct {
 	Holders  []Info         `json:"holders"`
 	Failures []StartFailure `json:"failures"`
+	// Incomplete: the last scan could not read the whole holders directory
+	// (the directory itself, or a holder's descriptor), so a running holder
+	// may be missing from Holders.
+	Incomplete bool `json:"incomplete,omitempty"`
 }
 
 type entry struct {
@@ -157,7 +161,10 @@ type Manager struct {
 	// sinks receive the attached holders' events (Options.Sink, AddSink).
 	sinks    []Sink
 	failures []StartFailure
-	closed   bool
+	// incomplete: the last scan could not read every holder's registration
+	// (Listing.Incomplete).
+	incomplete bool
+	closed     bool
 	// stopping refuses launches from the start of a StopAll; it stays set
 	// after a complete one, whose caller closes the manager.
 	stopping bool
@@ -270,10 +277,12 @@ func (m *Manager) scan() {
 	if m.isClosed() {
 		return
 	}
+	incomplete := false
 	dirs, err := os.ReadDir(m.opts.Dir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			m.logf("scan: %v", err)
+			incomplete = true
 		}
 		dirs = nil
 	}
@@ -286,8 +295,15 @@ func (m *Manager) scan() {
 		dir := filepath.Join(m.opts.Dir, id)
 		desc, err := ReadDescriptor(dir)
 		if err != nil {
-			if info, statErr := os.Stat(dir); statErr == nil && time.Since(info.ModTime()) > orphanDirGrace {
-				_ = os.RemoveAll(dir)
+			info, statErr := os.Stat(dir)
+			// A directory gone meanwhile is a holder that exited.
+			removed := errors.Is(statErr, os.ErrNotExist)
+			if statErr == nil && time.Since(info.ModTime()) > orphanDirGrace {
+				removed = os.RemoveAll(dir) == nil
+			}
+			if !removed {
+				// A holder may run here whose registration did not read.
+				incomplete = true
 			}
 			continue
 		}
@@ -328,6 +344,7 @@ func (m *Manager) scan() {
 			delete(m.entries, id)
 		}
 	}
+	m.incomplete = incomplete
 	m.mu.Unlock()
 }
 
@@ -518,7 +535,7 @@ func (m *Manager) Client(id string) *Client {
 func (m *Manager) List() Listing {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := Listing{Holders: []Info{}, Failures: []StartFailure{}}
+	out := Listing{Holders: []Info{}, Failures: []StartFailure{}, Incomplete: m.incomplete}
 	for _, e := range m.entries {
 		out.Holders = append(out.Holders, e.info())
 	}

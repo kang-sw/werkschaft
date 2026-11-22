@@ -1071,3 +1071,34 @@ func TestLaunchThatFailsToAttachReturnsTheHolderID(t *testing.T) {
 		t.Fatalf("LaunchWith's failure named holder %q, want %q (%v)", id, started, err)
 	}
 }
+
+// TestScanReportsADescriptorItCouldNotRead: a holder directory whose
+// descriptor does not read (and is too fresh to clear as an orphan) may
+// hold a running holder, so the listing says it is incomplete until a scan
+// reads every registration again.
+func TestScanReportsADescriptorItCouldNotRead(t *testing.T) {
+	dir := testHoldersDir(t)
+	m := testManager(t, dir, nil)
+	m.Scan()
+	if m.List().Incomplete {
+		t.Fatal("an empty holders directory listed as incomplete")
+	}
+	holderDir := filepath.Join(dir, "unreadable")
+	if err := os.MkdirAll(holderDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(holderDir, descriptorName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if !m.List().Incomplete {
+		t.Fatal("a scan that could not read a holder's descriptor listed as complete")
+	}
+	if err := os.RemoveAll(holderDir); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if m.List().Incomplete {
+		t.Fatal("a scan that read every descriptor still listed as incomplete")
+	}
+}

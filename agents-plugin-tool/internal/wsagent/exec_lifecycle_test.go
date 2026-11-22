@@ -448,3 +448,31 @@ func TestExecCloseWithoutOpenJobsWaitsForTheFirstHolderScan(t *testing.T) {
 		t.Fatalf("holder ops = %q: want %s stopped", ops, mine)
 	}
 }
+
+// A daemon whose hosted exec jobs did not open refuses a close, retryably,
+// while its last holder scan could not read every holder's registration: a
+// holder of the closing conversation may run unlisted, so a listing with no
+// match does not prove its jobs ended.
+func TestExecCloseWithoutOpenJobsRefusesOverAnIncompleteHolderScan(t *testing.T) {
+	h := newLeadHarness(t)
+	h.start()
+	h.runner.ExpectExecJobs()
+	h.runner.BindExecJobs(nil)
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	wait(t, "the first holder scan", h.runner.rejoined)
+	h.holders.mu.Lock()
+	h.holders.incomplete = true
+	h.holders.mu.Unlock()
+	if _, err := h.runner.CloseConversation(st.ID); err == nil || !strings.Contains(err.Error(), "has not found the exec job holders") {
+		t.Fatalf("a close over an incomplete holder scan: %v", err)
+	}
+	if h.state(st.ID).Status == StatusClosed {
+		t.Fatal("closed over a holder scan that may have missed its exec holder")
+	}
+	h.holders.mu.Lock()
+	h.holders.incomplete = false
+	h.holders.mu.Unlock()
+	if _, err := h.runner.CloseConversation(st.ID); err != nil {
+		t.Fatal(err)
+	}
+}

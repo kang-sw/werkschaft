@@ -63,8 +63,9 @@ var execBindWait = 30 * time.Second
 var errExecUnbound = errors.New("the daemon has not restored its exec jobs yet, so the session's jobs cannot be stopped; retry the close shortly")
 
 // errExecUnscanned refuses an explicit close on a daemon whose hosted exec
-// jobs did not open, before its first holder scan: the exec holders a
-// predecessor left are not listed yet, so the close could not stop them.
+// jobs did not open, before its first holder scan or while its last scan
+// was incomplete (wsholder.Listing.Incomplete): the exec holders a
+// predecessor left may not be listed, so the close could not stop them.
 var errExecUnscanned = errors.New("the daemon has not found the exec job holders it was left yet, so the session's jobs cannot be stopped; retry the close shortly")
 
 // awaitExecBound returns once the hosted exec jobs are bound, or when the
@@ -275,8 +276,14 @@ func (r *Runner) stopExecHolders(id string) error {
 		// The listing does not name a predecessor's holders yet.
 		return errExecUnscanned
 	}
+	listing := r.opts.Holders.List()
+	if listing.Incomplete {
+		// The last scan could not read every holder's registration: one
+		// of this conversation's may run unlisted.
+		return errExecUnscanned
+	}
 	var errs []error
-	for _, info := range r.opts.Holders.List().Holders {
+	for _, info := range listing.Holders {
 		var s execHolderSession
 		if json.Unmarshal(info.Session, &s) != nil || s.Kind != "exec" || s.Owner != id {
 			continue
