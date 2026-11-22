@@ -76,11 +76,16 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 		}
 	}
 	h.mu.Lock()
-	running, open, unknown := !j.row.Terminal(), j.stdinOpen, j.stdinUnknown
+	running, open, unknown, spawned := !j.row.Terminal(), j.stdinOpen, j.stdinUnknown, j.row.PID != 0
 	h.mu.Unlock()
 	switch {
 	case !running:
 		return h.view(j, 0), fmt.Errorf("exec job %s is not running (%s)", id, j.row.State)
+	case !spawned:
+		// Its holder runs but the process has not started (an approval
+		// may still be pending): the holder's no_child would read as an
+		// ended process, so the write waits for the spawn.
+		return h.view(j, 0), fmt.Errorf("exec job %s has not started its process yet; retry once it has", id)
 	case unknown:
 		return h.view(j, 0), fmt.Errorf("exec job %s's stdin state is not known yet: its holder is not attached; retry once it is", id)
 	case !open:

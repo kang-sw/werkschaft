@@ -158,6 +158,9 @@ func (f *fakeExecHolders) Input(id string, data []byte, eof bool) error {
 	if f.inputErr != nil {
 		return f.inputErr
 	}
+	if _, ok := f.spawned[id]; !ok {
+		return &wsholder.InputError{Refused: true, Err: &wsholder.OpError{Code: "no_child", Message: "no child is running"}}
+	}
 	if f.inputClosed[id] && !f.noInputState {
 		return &wsholder.OpError{Code: "input_closed", Message: "the child's stdin was closed by an earlier eof"}
 	}
@@ -1898,5 +1901,56 @@ func TestHostedCompetingRetriesNeverDeleteAReusedID(t *testing.T) {
 	}
 	if _, err := os.Stat(copyPath); err != nil {
 		t.Fatalf("the new job's exit copy went: %v", err)
+	}
+}
+
+// TestHostedWriteBeforeTheSpawnKeepsStdin: between the holder's launch and
+// the process's spawn (here, a reapproval) the job is listed as running;
+// a write then is refused without reaching the holder, whose no_child
+// would read as an ended process, and stdin stays open for the process.
+func TestHostedWriteBeforeTheSpawnKeepsStdin(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	waiting, release := make(chan struct{}), make(chan struct{})
+	fx.sessions.mu.Lock()
+	fx.sessions.immediate = func(string) (bool, error) {
+		close(waiting)
+		<-release
+		return true, nil
+	}
+	fx.sessions.mu.Unlock()
+	type result struct {
+		v   HostedView
+		err error
+	}
+	launched := make(chan result, 1)
+	go func() {
+		v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+		launched <- result{v, err}
+	}()
+	<-waiting
+	views, _ := fx.h.List("lead")
+	if len(views) != 1 || views[0].State != HostedRunning {
+		t.Fatalf("jobs before the spawn = %+v", views)
+	}
+	id := views[0].ID
+	if _, err := fx.h.Write("lead", id, []byte("early\n"), false); err == nil || !strings.Contains(err.Error(), "not started its process yet") {
+		t.Fatalf("a write before the spawn = %v", err)
+	}
+	fx.holders.mu.Lock()
+	calls := fx.holders.inputCalls
+	fx.holders.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("a write before the spawn reached the holder %d times", calls)
+	}
+	close(release)
+	r := <-launched
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if _, err := fx.h.Write("lead", id, []byte("later\n"), true); err != nil {
+		t.Fatalf("a write after the spawn = %v", err)
+	}
+	if got := fx.holders.inputOf(r.v.HolderID); !slices.Equal(got, []string{"later\n<EOF>"}) {
+		t.Fatalf("inputs = %q", got)
 	}
 }
