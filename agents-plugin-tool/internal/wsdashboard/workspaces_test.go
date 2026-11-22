@@ -2,10 +2,13 @@ package wsdashboard
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
+	"time"
 )
 
 // mkRepoRoot makes dir a repository's root worktree as the daemon detects
@@ -251,5 +254,68 @@ func TestWorkspaceStoreSweep(t *testing.T) {
 	var none *workspaceStore
 	if none.sweep() || none.workspaces() != nil {
 		t.Error("a nil store swept or listed something")
+	}
+}
+
+// TestWorkspaceStoreAddBatchUndoKeepsConcurrentChanges: an add or forget
+// that arrives while a batch's later write runs waits for the batch, so the
+// batch's undo cannot write over it; an undo that cannot be written is
+// reported, not dropped.
+func TestWorkspaceStoreAddBatchUndoKeepsConcurrentChanges(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "config", "dashboard")
+	file := filepath.Join(dir, "workspaces.json")
+	kept := mkDir(t, filepath.Join(base, "kept"))
+	gone := mkDir(t, filepath.Join(base, "gone"))
+	approved := mkDir(t, filepath.Join(base, "approved"))
+	added := mkDir(t, filepath.Join(base, "added"))
+	s := openWorkspaceStore(file)
+	for _, d := range []string{kept, gone} {
+		if _, err := s.add(d, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitErr := errors.New("admission write failed")
+	done := make(chan error, 1)
+	_, err := s.addBatch([]string{approved}, func([]workspaceAdd) error {
+		go func() {
+			if _, err := s.forget(gone); err != nil {
+				done <- err
+				return
+			}
+			_, err := s.add(added, false)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			done <- err
+			t.Error("an add and forget landed while the batch's write ran")
+		case <-time.After(200 * time.Millisecond):
+		}
+		return commitErr
+	})
+	if !errors.Is(err, commitErr) || errors.Is(err, errWorkspaceRestore) {
+		t.Fatalf("addBatch = %v, want the commit's error alone", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	want := []storedWorkspace{{Path: kept}, {Path: added}}
+	if got := openWorkspaceStore(file).workspaces(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the undo = %+v, want %+v", got, want)
+	}
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+	_, err = s.addBatch([]string{approved}, func([]workspaceAdd) error {
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		return commitErr
+	})
+	_ = os.Chmod(dir, 0o700)
+	if !errors.Is(err, commitErr) || !errors.Is(err, errWorkspaceRestore) {
+		t.Fatalf("addBatch with an unwritable undo = %v, want the restore failure reported", err)
 	}
 }

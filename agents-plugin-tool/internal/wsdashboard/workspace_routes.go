@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -364,36 +365,45 @@ func (d *Daemon) handleWorkspaceAdmission(w http.ResponseWriter, r *http.Request
 
 	// The approvals land in workspaces.json with one write, and are written
 	// back out when the admission write fails, so a refused batch leaves both
-	// stores as they were.
+	// stores as they were. The workspace store stays locked from the first
+	// write to the undo, so the undo never drops a concurrent add or forget.
 	removePaths := append([]string(nil), undoPaths...)
-	var restoreList []storedWorkspace
-	restoreWorkspaces := false
-	if len(approvePaths) > 0 {
-		adds, before, err := d.workspaces.addBatch(approvePaths)
-		if err != nil {
-			fmt.Fprintf(d.log, "dashboard: approve workspace: %v\n", err)
-			writeJSON(w, http.StatusInternalServerError, workspaceAdmissionReply{Message: wsi18n.T(lang, "rail.ws.storefailed")})
-			return
+	applyAdmission := func() error {
+		if len(rejectPaths) == 0 && len(removePaths) == 0 {
+			return nil
 		}
-		restoreList, restoreWorkspaces = before, true
-		for i, p := range approvePaths {
-			removePaths = append(removePaths, p)
-			if a := adds[i]; a.Root != "" && a.Root != p {
-				removePaths = append(removePaths, a.Root)
-			}
-		}
+		_, err := d.wsAdmission.apply(rejectPaths, removePaths)
+		return err
 	}
-	if len(rejectPaths) > 0 || len(removePaths) > 0 {
-		if _, err := d.wsAdmission.apply(rejectPaths, removePaths); err != nil {
-			fmt.Fprintf(d.log, "dashboard: apply workspace admission: %v\n", err)
-			if restoreWorkspaces {
-				if rerr := d.workspaces.restore(restoreList); rerr != nil {
-					fmt.Fprintf(d.log, "dashboard: restore workspaces after admission failure: %v\n", rerr)
+	var err error
+	if len(approvePaths) > 0 {
+		_, err = d.workspaces.addBatch(approvePaths, func(adds []workspaceAdd) error {
+			for i, p := range approvePaths {
+				removePaths = append(removePaths, p)
+				if a := adds[i]; a.Root != "" && a.Root != p {
+					removePaths = append(removePaths, a.Root)
 				}
 			}
-			writeJSON(w, http.StatusInternalServerError, workspaceAdmissionReply{Message: wsi18n.T(lang, "rail.ws.storefailed")})
-			return
+			return applyAdmission()
+		})
+	} else {
+		err = applyAdmission()
+	}
+	if err != nil {
+		fmt.Fprintf(d.log, "dashboard: apply workspace admission: %v\n", err)
+		reply := workspaceAdmissionReply{Message: wsi18n.T(lang, "rail.ws.storefailed")}
+		if errors.Is(err, errWorkspaceRestore) {
+			// The approvals stayed stored: show the rail as it now is
+			// rather than the draft it refused.
+			d.broker.wake(railListRepoKey)
+			nextView := d.railView(d.pagesIn(lang))
+			reply.Gen = nextView.LayoutGen
+			if region, rerr := renderRailRegion(nextView, lang); rerr == nil {
+				reply.HTML = string(region.HTML)
+			}
 		}
+		writeJSON(w, http.StatusInternalServerError, reply)
+		return
 	}
 
 	d.broker.wake(railListRepoKey)

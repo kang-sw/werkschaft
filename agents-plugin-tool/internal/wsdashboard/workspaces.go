@@ -218,10 +218,16 @@ func (s *workspaceStore) addLocked(loc workspaceLocation, out *workspaceAdd) boo
 	return changed
 }
 
-// addBatch adds every dir with one write, so a failed write leaves the file
-// as it was. It returns each add's outcome and the list before the batch,
-// which restore puts back when a later write of the same batch fails.
-func (s *workspaceStore) addBatch(dirs []string) ([]workspaceAdd, []storedWorkspace, error) {
+// errWorkspaceRestore marks an addBatch whose commit failed and whose
+// undo could not be written either: the batch's adds stay stored.
+var errWorkspaceRestore = errors.New("workspace list restore failed")
+
+// addBatch adds every dir with one write, then runs commit (the batch's
+// later write) with mu still held, so no add or forget lands between the
+// two. When commit fails it writes the list from before the batch back,
+// and the commit's error is returned; when that undo fails too, the error
+// also wraps errWorkspaceRestore. A failed write leaves the file as it was.
+func (s *workspaceStore) addBatch(dirs []string, commit func([]workspaceAdd) error) ([]workspaceAdd, error) {
 	locs := make([]workspaceLocation, len(dirs))
 	for i, dir := range dirs {
 		locs[i] = locateWorkspace(dir)
@@ -229,7 +235,7 @@ func (s *workspaceStore) addBatch(dirs []string) ([]workspaceAdd, []storedWorksp
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.reload(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	before := append([]storedWorkspace(nil), s.list...)
 	outs := make([]workspaceAdd, len(dirs))
@@ -240,27 +246,27 @@ func (s *workspaceStore) addBatch(dirs []string) ([]workspaceAdd, []storedWorksp
 			changed = true
 		}
 	}
-	if !changed {
-		return outs, before, nil
+	if changed {
+		if err := s.save(); err != nil {
+			_ = s.reload()
+			return nil, err
+		}
 	}
-	if err := s.save(); err != nil {
-		_ = s.reload()
-		return nil, nil, err
+	if commit == nil {
+		return outs, nil
 	}
-	return outs, before, nil
-}
-
-// restore writes list back as the stored list: the undo of an addBatch whose
-// batch failed at a later write.
-func (s *workspaceStore) restore(list []storedWorkspace) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.list = append([]storedWorkspace(nil), list...)
-	if err := s.save(); err != nil {
-		_ = s.reload()
-		return err
+	if err := commit(outs); err != nil {
+		if !changed {
+			return nil, err
+		}
+		s.list = before
+		if rerr := s.save(); rerr != nil {
+			_ = s.reload()
+			return nil, errors.Join(err, errWorkspaceRestore, rerr)
+		}
+		return nil, err
 	}
-	return nil
+	return outs, nil
 }
 
 // forget removes path from the list; false when it is not in it.
