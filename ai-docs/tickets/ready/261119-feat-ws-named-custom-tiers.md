@@ -324,6 +324,65 @@ pre-feature resolver at `b1d236bc2`. With no alias, verify refusal before
 creation and the unsupported-routing response. With an exact alias,
 verify the same concrete binding on both versions.
 
+### Result (613e2b78b) - 2026-11-22
+
+Landed in commits 7b4b81018, bfe1d80f1, 177788ec0, 9706f702b, d6deee1ed and 613e2b78b.
+
+- **Config and resolver.** `wsconfig/tier_routing.go` adds the global-only structured key `agent.tier_routing` (`{nodes, bundles}`), described in (1526). It has a strict parser. Bundle model and effort must match the patterns `Runner.Spawn` enforces, and null nodes are rejected.
+  - `TierGraph` overlays user pointers per selector onto the packaged group and role nodes.
+  - Validation ignores aliases, as (1532) requires. It covers reserved names, unknown targets and harnesses, cycles over all edges at any size, and the 8-hop limit at all four sizes from every node.
+  - `Resolve` follows the token order: explicit `<harness>.<size>`, bare size, exact legacy alias, then the `<node>:<size>` walk or bundle. At each node it tries the alias, the exact pointer, `*`, fallthrough, then the caller slot. It returns a trace such as `ticket-worker:large -> implement:large -> large -> codex.large`.
+  - Rank follows (1528): the routed size, or xlarge for a bare bundle name.
+- **Spawn.** `wsagent.resolveTier` routes tokens that no legacy path matches through the graph. Child tier ceilings use the rank. `agent.tiers` gains an additive `routing` section (`supported`, `error`, `bundles`, `routes` with traces, `collisions`). An invalid graph refuses role tiers, and legacy tokens keep working.
+- **Render and resolve_agent.** Shared resolution follows (1531):
+  - A daemon-agent caller rendering a playbook with `tier-role` gets `recommended-tier: <role>:<size>`. Its binding is what agent.spawn launches (`wsagent.RoutedTierBinding` plus the runner's harness availability). A terminal the spawn would refuse carries no binding.
+  - Native callers and bare sizes are byte-identical to before.
+  - `config.resolve_agent` accepts every agent.spawn tier and adds `trace`. Bare sizes resolve exactly as before.
+- **Lead tune.**
+  - config.tune `agent.tier_routing`: global by default, other scopes refused. It validates the candidate graph before any write and stores the canonical value. The echo includes `trace:` lines for the routes the write touches and `collision:` lines.
+  - Writes to `agent.tier_aliases` echo collisions.
+  - config.list has a `tier_routing` knob with the stored routing, effective pointers, and every route trace.
+  - The dashboard catalog row is read-only until Phase 2; its write validation uses the daemon's harnesses. All 11 locale tables are updated.
+  - wsconfigservice now handles a name-less structured key. Previously a dashboard set would hit a nil `ValidateName`, and a reset would unset a scalar override instead of the key.
+
+Decisions taken in this phase:
+- Frontmatter keeps `tier: <size>` and adds `tier-role:` and `tier-parent:`. Phase 3 populates them. `wsrsrc.TierRoles` scans `<name>/<name>.md` playbooks.
+- `tier_override` keeps its bare validation and replaces the role's size: an override of `opus` gives `ticket-worker:large`. A role-shaped override stays rejected.
+- The agent.spawn `tier` description is unchanged. That tool definition sits 3 bytes under its 1450-byte cap, so the vocabulary lives in `agent.tiers` and `config.resolve_agent`.
+- A bundle shadowed by an exact alias lists the alias route.
+- For a session whose harness is not yet known, traces show the caller slot as `<caller>.<size>`.
+
+Verification, all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`:
+- Full-package runs pass for `wsconfig`, `wsagent`, `wsrsrc`, `wsi18n` and `wspackage`.
+- `mcp` passes with `-run 'TierRouting|ConfigTune|ConfigList|Catalog|Settings|AgentTier|AgentTool|AgentSpawn|PlaybookRender|ResolveAgent|RoleRecommendation|FormatAgentTiers|PackagedTierRoles|AgentsTier|AgentBackend'`, and `wsdashboard` with `-run TestSettings`.
+- `go build ./...`, `go vet` on the touched packages, and `generate-package-assets.py --check` are clean.
+- Tests cover: the default chain against the bare size; both override levels; wildcard propagation and pinning; a node cycle whose edges pin different sizes, repeated with an exact alias masking one edge; the hop limit, including an alias that would shorten the only overlong walk; alias collisions; explicit targets; ceilings for routed and direct bundles; the daemon caller getting the mapped binding while a native caller keeps its harness binding; and the absence of a cross-harness fallback.
+- Cross-version exercises ran against exported trees of the real old revisions, outside the repository, and were not committed:
+  - The v0.50.8 shared writer (`SetGlobalAgentsTierForHarness`, `UnsetGlobalAgentsTierForHarness`) rewrote a config holding a saved graph. The new daemon reopened it and recovered both the graph and the old writer's binding: `ticket-worker:large -> implement:large -> claude.large => old-writer-opus/high`.
+  - `ticket-worker:large`, captured from a real new-daemon render, was sent to the `b1d236bc2` `Runner.AgentSpawn`. With no alias it was refused with 400 `tier "ticket-worker:large" is neither a tier, <harness>.<tier>, nor an alias in agent.tier_aliases`, with no child and no process started. The old `agent.tiers` JSON has no `routing` member.
+  - With the exact alias `ticket-worker:large=pi.large`, both versions spawned `pi`/`prov/large-model`/`low`.
+  - The committed regression proxies are `TestTierRoutingSurvivesAnOlderWriterAndReopens` and `TestRoleTierAgainstThePreFeatureResolver`.
+- Pre-existing failures, not exercised here:
+  - `TestPlaybookPrintGoldenExplore*`: `explore.md` dropped `delegates` in 6ceff7e97.
+  - `TestDashboardSettingsUICatalog`: needs the gitignored generated package assets in a fresh worktree.
+
+Review (lite, one pass) found 1 Critical, 5 Important and 2 Minor; all are resolved in 613e2b78b or by the exercises above.
+- Critical: render and resolve_agent bindings diverged from spawn, which has no cross-harness fallback and checks availability.
+- Important:
+  - Bundles with model or effort values the spawn cannot launch.
+  - The dashboard write skipped harness validation.
+  - No trace on the lead-tune surface.
+  - The hop test passed even if validation followed aliases.
+  - The cross-version tests were simulated.
+- Minor: null nodes; a bare-size assertion that swallowed its error.
+
+Compatibility: **T0** for same-minor callers and existing calls. Downgrade is **T1**, per (1533).
+- `wsagent.AgentTiers` gains only the `routing,omitempty` field (`wsagent/agent_tools.go`, AgentTiers and AgentRouting).
+- Legacy tokens (bare, dotted, exact alias) take their pre-change path in `resolveTier`, and the graph is consulted only after an alias miss (`wsagent/agent_tools.go`, resolveTier). Refusal text is unchanged.
+- Native renders and bare sizes are unchanged (`mcp/playbook_render.go`, roleRecommendedTier gated on daemonAgents; `mcp/tier_routing.go`, resolveAgentTier bare branch).
+- Storage is `structured_overrides`, which the v0.50.8 writer decodes and re-encodes whole (`v0.50.8:agents-plugin-tool/internal/wsconfig/config.go:34-53,750-767`), as the exercise above confirmed.
+- After a downgrade, a role recommendation issued before it is refused before creation by the pre-feature resolver's alias-then-refuse path (`b1d236bc2:agents-plugin-tool/internal/wsagent/agent_tools.go:315-351`, `b1d236bc2:agents-plugin-tool/internal/wsagent/agent_spawn.go:45-50`). An exact alias keeps the same binding, and the missing `routing` section tells callers routing is unsupported.
+
 ### Phase 2: Dashboard named-tier picker and pointer editor
 
 After Phase 1, use its tier config and resolver in both dashboard entry
