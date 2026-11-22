@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -887,81 +888,129 @@ func (s *Store) enforceCaps() {
 	}
 }
 
-// removeRing deletes a ring's directory. A ring that lost only its data to
+// removeRing deletes a ring's data. A ring that loses its data to
 // store-wide eviction keeps its recovery state — read from its newest
 // segments first when it was not loaded — and persists it as a header-only
-// segment, so a later record cannot replay what was already finalized, even
-// across a restart; forget drops the entry whole. A deletion that fails is
-// reported and leaves what remains on disk accounted; the ring is then
-// reloaded from it on next use.
+// segment written after every existing one BEFORE any of them is deleted, so
+// a crash at any point leaves the boundary on disk and a later record cannot
+// replay what was already finalized. forget (retention, explicit deletion)
+// drops the whole directory and the entry. A deletion that fails is reported
+// and leaves what remains on disk accounted.
 func (s *Store) removeRing(info *sessionInfo, forget bool) error {
+	if forget {
+		return s.forgetRing(info)
+	}
 	info.mu.Lock()
 	r := info.ring
+	cold := r == nil
 	dir := filepath.Join(s.opts.Root, info.dir)
-	if r != nil {
-		r.close()
-	} else if !forget {
+	if cold {
 		r = recoverTail(info.session, dir)
+		if r == nil {
+			info.mu.Unlock()
+			return fmt.Errorf("evict audit ring of session %s: its segments cannot be listed", info.dir)
+		}
 	}
-	if err := removeAll(dir); err != nil {
-		var left int64
-		if segs, _, lerr := listSegments(dir); lerr == nil {
-			for _, seg := range segs {
-				left += seg.size
+	if r.hasState() {
+		r.clearPending() // the header below carries their state
+		delete(s.dirty, info)
+		r.forceRotate = true
+		if _, err := r.write(nil, s.limits.SegmentBytes(), math.MaxInt64, nil); err != nil {
+			if cold {
+				r.close()
+				left, _ := ringBytes(dir) // a torn header segment may have landed
+				s.mu.Lock()
+				s.total += left - info.bytes
+				info.bytes = left
+				s.mu.Unlock()
+			} else {
+				s.account(info)
+			}
+			info.mu.Unlock()
+			return fmt.Errorf("evict audit ring of session %s: persist its recovery state first: %w; nothing deleted", info.dir, err)
+		}
+	}
+	var err error
+	if r.hasState() {
+		for len(r.segs) > 1 {
+			if _, derr := r.dropOldest(); derr != nil {
+				err = fmt.Errorf("evict audit ring of session %s: %w (%d bytes remain)", info.dir, r.evictErr, r.bytes)
+				r.evictErr = nil
+				break
 			}
 		}
-		info.ring = nil
-		info.view.Store(nil)
-		info.led.Store(nil)
-		delete(s.dirty, info)
-		info.mu.Unlock()
+	} else {
+		// No state worth keeping: the data goes whole.
+		r.close()
+		if rerr := removeAll(dir); rerr != nil {
+			err = fmt.Errorf("evict audit ring of session %s: %w", info.dir, rerr)
+		}
+		left, _ := ringBytes(dir)
+		r = newRing(r.session, dir)
+		if left > 0 {
+			r = nil // reloaded from what remains on next use
+		}
 		s.mu.Lock()
 		s.total += left - info.bytes
 		info.bytes = left
 		s.mu.Unlock()
-		return fmt.Errorf("remove audit ring of session %s: %w (%d bytes remain)", info.dir, err, left)
 	}
-	keep := r != nil && !forget
-	if keep {
-		r.view.Lock()
-		r.events, r.ids = nil, nil
-		r.view.Unlock()
-		r.segs, r.bytes = nil, 0
-		r.led.mu.Lock()
-		clear(r.led.retained)
-		r.led.mu.Unlock()
-		r.file, r.forceRotate, r.evictErr = nil, false, nil
-		r.clearPending() // the header below carries their state
-		delete(s.dirty, info)
-		if r.hasState() {
-			if _, err := r.write(nil, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes(), nil); err != nil {
-				s.logf("session %s: persist recovery state after eviction: %v", info.dir, err)
-			}
-		}
+	if r != nil {
 		info.ring = r
 		info.view.Store(r)
 		info.led.Store(r.led)
 		if info.session == "" {
 			info.session = r.session
 		}
+		s.account(info)
 	} else {
 		info.ring = nil
 		info.view.Store(nil)
 		info.led.Store(nil)
-		delete(s.dirty, info)
 	}
 	info.mu.Unlock()
+	return err
+}
+
+// forgetRing deletes a ring's whole directory and, once it is gone, the
+// entry. A failed deletion leaves what remains accounted, to be reloaded
+// from on next use.
+func (s *Store) forgetRing(info *sessionInfo) error {
+	info.mu.Lock()
+	if r := info.ring; r != nil {
+		r.close()
+	}
+	dir := filepath.Join(s.opts.Root, info.dir)
+	err := removeAll(dir)
+	info.ring = nil
+	info.view.Store(nil)
+	info.led.Store(nil)
+	delete(s.dirty, info)
+	info.mu.Unlock()
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		left, _ := ringBytes(dir)
+		s.total += left - info.bytes
+		info.bytes = left
+		return fmt.Errorf("remove audit ring of session %s: %w (%d bytes remain)", info.dir, err, left)
+	}
 	s.total -= info.bytes
 	info.bytes = 0
-	if keep {
-		s.total += r.bytes
-		info.bytes = r.bytes
-	} else if s.sessions[info.dir] == info {
+	if s.sessions[info.dir] == info {
 		delete(s.sessions, info.dir)
 	}
-	s.mu.Unlock()
 	return nil
+}
+
+// ringBytes is the bytes of the ring's segments left on disk.
+func ringBytes(dir string) (int64, error) {
+	segs, _, err := listSegments(dir)
+	var n int64
+	for _, seg := range segs {
+		n += seg.size
+	}
+	return n, err
 }
 
 func (s *Store) deleteSession(session string) error {

@@ -579,9 +579,11 @@ func (r *ring) recover() error {
 }
 
 // recoverTail recovers a ring's identity state from its newest segments
-// alone — back to the newest one opening with a header, whose snapshot holds
-// everything before it — for an unloaded ring about to be evicted. It
-// returns nil when nothing is readable.
+// alone — back to the newest one opening with a complete, well-formed header,
+// whose snapshot holds everything before it (a torn header from a crash
+// right after rotation does not count) — for an unloaded ring about to be
+// evicted. Every listed segment is accounted in segs and bytes. It returns
+// nil when the ring cannot be listed or has no segment.
 func recoverTail(session, dir string) *ring {
 	segs, _, err := listSegments(dir)
 	if err != nil || len(segs) == 0 {
@@ -595,18 +597,31 @@ func recoverTail(session, dir string) *ring {
 			continue
 		}
 		raws[start] = raw
-		if headerVersion(raw) > 0 {
+		if completeHeader(raw) {
 			break
 		}
 	}
 	start = max(start, 0)
 	r := newRing(session, dir)
-	for i := start; i < len(segs); i++ {
-		if raws[i] != nil {
+	for i := range segs {
+		if i >= start && raws[i] != nil {
 			r.replaySegment(&segs[i], raws[i])
 		}
+		r.bytes += segs[i].size
 	}
+	r.segs = segs
 	return r
+}
+
+// completeHeader reports whether raw opens with a newline-terminated line
+// that decodes whole as a header.
+func completeHeader(raw []byte) bool {
+	nl := bytes.IndexByte(raw, '\n')
+	if nl < 0 {
+		return false
+	}
+	var ln line
+	return json.Unmarshal(raw[:nl], &ln) == nil && ln.T == lineHeader && ln.State != nil
 }
 
 // hasState reports whether the ring's ledger holds recovery state worth

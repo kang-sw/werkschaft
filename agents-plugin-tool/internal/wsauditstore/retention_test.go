@@ -374,12 +374,6 @@ func TestFailedEvictionsReportAndKeepTheirAccounting(t *testing.T) {
 	_ = s.Close()
 
 	removeFile = origFile
-	removeAll = func(path string) error {
-		if filepath.Base(path) == "old" {
-			return refuse
-		}
-		return origAll(path)
-	}
 	root2 := t.TempDir()
 	lim2 := Limits{SessionBytes: 4 * mib, TotalBytes: 6 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
 	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
@@ -388,13 +382,20 @@ func TestFailedEvictionsReportAndKeepTheirAccounting(t *testing.T) {
 		mustAppend(t, s2, bigRecord("old", seq, lim2))
 	}
 	flush(t, s2)
+	// The whole ring's data refuses deletion.
+	removeFile = func(path string) error {
+		if filepath.Base(filepath.Dir(path)) == "old" {
+			return refuse
+		}
+		return origFile(path)
+	}
 	clock.Advance(time.Hour)
 	for seq := uint64(1); seq <= 6; seq++ {
 		mustAppend(t, s2, bigRecord("new", seq, lim2))
 	}
 	flush(t, s2)
-	if !strings.Contains(log2.String(), "remove audit ring of session old") {
-		t.Fatalf("failed ring removal not logged: %s", log2.String())
+	if !strings.Contains(log2.String(), "evict audit ring of session old: delete segment 1") {
+		t.Fatalf("failed ring eviction not logged: %s", log2.String())
 	}
 	if disk, total := diskBytes(t, root2), storeTotal(s2); disk != total {
 		t.Fatalf("store total %d, disk %d", total, disk)
@@ -857,4 +858,105 @@ func TestHeaderAndControlLinesStayWithinTheirBounds(t *testing.T) {
 			t.Fatalf("log lacks %q: %s", want, log.String())
 		}
 	}
+}
+
+// finalizedOldRing writes ring "old" with records 1 and 4 of holder:1
+// finalized through 4, and returns its directory.
+func finalizedOldRing(t *testing.T, root string, lim Limits, clock *fakeClock) string {
+	t.Helper()
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	mustAppend(t, s, bigRecord("old", 1, lim))
+	mustAppend(t, s, bigRecord("old", 4, lim))
+	if err := s.Finalize(context.Background(), "old", "holder:1", 4); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	_ = s.Close()
+	return filepath.Join(root, "old")
+}
+
+// evictOld fills ring "new" in a fresh store until "old" (never loaded) is
+// evicted for the store total.
+func evictOld(t *testing.T, root string, lim Limits, clock *fakeClock) {
+	t.Helper()
+	clock.Advance(time.Hour)
+	s, log := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 8; seq++ {
+		mustAppend(t, s, bigRecord("new", seq, lim))
+	}
+	flush(t, s)
+	if !strings.Contains(log.String(), "evict audit ring of session old") {
+		t.Fatalf("old ring not evicted: %s", log.String())
+	}
+	_ = s.Close()
+}
+
+// assertOldBoundaryHolds reopens the store and checks ring "old" still
+// refuses a late replay of holder:1.
+func assertOldBoundaryHolds(t *testing.T, root string, lim Limits, clock *fakeClock) {
+	t.Helper()
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	loaded(t, s, "old")
+	if rec := s.Recover("old", "holder:1"); rec.Boundary != 4 || rec.MaxSeq != 4 {
+		t.Fatalf("recovery after eviction and restart = %+v", rec)
+	}
+	mustAppend(t, s, sourced("old", 2, wsaudit.KindToolCall)) // late replay
+	flush(t, s)
+	for _, seq := range sourceSeqs(t, s, "old") {
+		if seq == 2 {
+			t.Fatal("a late replay after eviction was appended")
+		}
+	}
+}
+
+// TestColdEvictionSkipsATornNewestHeader pins cold eviction of a ring whose
+// newest segment holds only a torn header (a crash right after rotation): its
+// state is recovered from the newest complete header and segments after it,
+// not from the torn one, and persisted before the old segments go.
+func TestColdEvictionSkipsATornNewestHeader(t *testing.T) {
+	root := t.TempDir()
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 4 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	dir := finalizedOldRing(t, root, lim, clock)
+	segs, _, err := listSegments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	torn := `{"t":"h","v":1,"session":"old","state":{"max_seq":4,"boundar`
+	if err := os.WriteFile(filepath.Join(dir, segmentName(segs[len(segs)-1].seq+1)), []byte(torn), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evictOld(t, root, lim, clock)
+	assertOldBoundaryHolds(t, root, lim, clock)
+}
+
+// TestColdEvictionPersistsStateBeforeDeleting pins the eviction order: the
+// replacement header lands before any segment is deleted, so a crash right
+// after the first deletion (simulated: it deletes, then the run stops) still
+// leaves the boundary on disk.
+func TestColdEvictionPersistsStateBeforeDeleting(t *testing.T) {
+	root := t.TempDir()
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 4 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	finalizedOldRing(t, root, lim, clock)
+	origFile, origAll := removeFile, removeAll
+	t.Cleanup(func() { removeFile, removeAll = origFile, origAll })
+	crashed := errors.New("crashed")
+	removeFile = func(path string) error {
+		if filepath.Base(filepath.Dir(path)) == "old" {
+			_ = origFile(path)
+			return crashed
+		}
+		return origFile(path)
+	}
+	removeAll = func(path string) error {
+		if filepath.Base(path) == "old" {
+			_ = origAll(path)
+			return crashed
+		}
+		return origAll(path)
+	}
+	evictOld(t, root, lim, clock)
+	removeFile, removeAll = origFile, origAll
+	assertOldBoundaryHolds(t, root, lim, clock)
 }
