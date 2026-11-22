@@ -40,21 +40,21 @@ type CompanionConfig struct {
 	Preset   string `json:"preset"`
 }
 
-type companionSnapshot struct {
+type companionConfigSnapshot struct {
 	config CompanionConfig
 	wake   chan struct{}
 }
 
 type companionState struct {
 	reloadMu sync.Mutex
-	snapshot atomic.Pointer[companionSnapshot]
+	snapshot atomic.Pointer[companionConfigSnapshot]
 }
 
-func (s *companionState) current() companionSnapshot {
+func (s *companionState) current() companionConfigSnapshot {
 	if snapshot := s.snapshot.Load(); snapshot != nil {
 		return *snapshot
 	}
-	return companionSnapshot{config: CompanionConfig{Mode: "off", Director: "rules", Pack: "default", Preset: "werkschaft-d1"}}
+	return companionConfigSnapshot{config: CompanionConfig{Mode: "off", Director: "rules", Pack: "default", Preset: "werkschaft-d1"}}
 }
 
 // refreshCompanion reads the persisted global layer after a write or at daemon
@@ -77,7 +77,7 @@ func (d *Daemon) refreshCompanion() error {
 		return err
 	}
 	if config != previous.config {
-		s.snapshot.Store(&companionSnapshot{config: config, wake: make(chan struct{})})
+		s.snapshot.Store(&companionConfigSnapshot{config: config, wake: make(chan struct{})})
 		close(previous.wake)
 	}
 	return nil
