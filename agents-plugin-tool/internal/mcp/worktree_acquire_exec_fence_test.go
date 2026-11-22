@@ -138,7 +138,7 @@ func TestWorktreeAcquireFencesExecLaunchesUntilLeasePublished(t *testing.T) {
 		t.Helper()
 		hostedErr, legacyErr := tryLaunches(when, path)
 		for name, err := range map[string]error{"hosted": hostedErr, "legacy": legacyErr} {
-			if err == nil || !strings.Contains(err.Error(), "being released or removed") {
+			if err == nil || !strings.Contains(err.Error(), "being acquired") {
 				t.Errorf("%s: a %s launch into the claimed candidate = %v, want the fence's refusal", when, name, err)
 			}
 		}
@@ -153,7 +153,7 @@ func TestWorktreeAcquireFencesExecLaunchesUntilLeasePublished(t *testing.T) {
 	res, err := acquireWorktreeWith(context.Background(), s.gitRunner(), s.environ(), root, base, "impl/test/race-b", builtinProfile(t, worktreeProfileFull), "", leadA, func(path string) (string, error) {
 		assertRefused("at the mint", candidate)
 		return s.sessions.mint(path, roleLead, leadA)
-	}, s.worktreeBusy, s.worktreeExecFence)
+	}, s.worktreeBusy, s.worktreeAcquireExecFence)
 	afterWorktreeClaim = nil
 	if err != nil {
 		t.Fatal(err)

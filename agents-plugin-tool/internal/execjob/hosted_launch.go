@@ -215,9 +215,9 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return errors.New("exec: the owning session is closing")
 	}
-	if root := h.fencedRootLocked(j.row); root != "" {
+	if root, reason := h.fencedRootLocked(j.row); root != "" {
 		h.mu.Unlock()
-		return fmt.Errorf("exec: the worktree %s is being released or removed", root)
+		return fmt.Errorf("exec: the worktree %s is %s", root, reason)
 	}
 	// newID checked the id without holding h.mu through here: a launch
 	// that drew the same id may have been admitted since.

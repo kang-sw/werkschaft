@@ -19,9 +19,17 @@ var legacyAdmission struct {
 	// reserved holds the launches past admission and not yet active, each
 	// as its cleaned root and working directory.
 	reserved map[*legacyLaunch]struct{}
-	// fences counts the fences on each form of a fenced target.
-	fences map[string]int
+	// fences counts the fences on each form of a fenced target; reasons
+	// holds the first live fence's reason for each form.
+	fences  map[string]int
+	reasons map[string]string
 }
+
+// The reasons a worktree fence gives when it refuses a new job.
+const (
+	FenceReleasing = "being released or removed"
+	FenceAcquiring = "being acquired (checked out for a new holder)"
+)
 
 // legacyLaunch is a reserved launch's places: its root and working
 // directory.
@@ -40,7 +48,7 @@ func reserveLegacy(root, wd string) (func(), error) {
 	defer legacyAdmission.mu.Unlock()
 	for fenced := range legacyAdmission.fences {
 		if within(fenced, root) || within(fenced, wd) {
-			return nil, fmt.Errorf("exec: %s is being released or removed; launch elsewhere", fenced)
+			return nil, fmt.Errorf("exec: %s is %s; launch elsewhere", fenced, legacyAdmission.reasons[fenced])
 		}
 	}
 	if legacyAdmission.reserved == nil {
@@ -65,6 +73,13 @@ func reserveLegacy(root, wd string) (func(), error) {
 // otherwise new legacy launches there are refused until the returned
 // unfence (idempotent) runs.
 func FenceLegacyRoot(target string) (func(), error) {
+	return FenceLegacyRootAs(target, FenceReleasing)
+}
+
+// FenceLegacyRootAs is FenceLegacyRoot whose refusal of a new launch names
+// reason; while fences with different reasons overlap, the first one's
+// reason stands.
+func FenceLegacyRootAs(target, reason string) (func(), error) {
 	forms := rootForms(target)
 	legacyAdmission.mu.Lock()
 	defer legacyAdmission.mu.Unlock()
@@ -93,9 +108,12 @@ func FenceLegacyRoot(target string) (func(), error) {
 	}
 	if legacyAdmission.fences == nil {
 		legacyAdmission.fences = map[string]int{}
+		legacyAdmission.reasons = map[string]string{}
 	}
 	for _, f := range forms {
-		legacyAdmission.fences[f]++
+		if legacyAdmission.fences[f]++; legacyAdmission.fences[f] == 1 {
+			legacyAdmission.reasons[f] = reason
+		}
 	}
 	var once sync.Once
 	return func() {
@@ -105,6 +123,7 @@ func FenceLegacyRoot(target string) (func(), error) {
 			for _, f := range forms {
 				if legacyAdmission.fences[f]--; legacyAdmission.fences[f] <= 0 {
 					delete(legacyAdmission.fences, f)
+					delete(legacyAdmission.reasons, f)
 				}
 			}
 		})

@@ -371,14 +371,14 @@ func inRoot(forms []string, row HostedJobRow) bool {
 }
 
 // fencedRootLocked is the fenced worktree row's job would run in, "" when
-// none. Under mu.
-func (h *Hosted) fencedRootLocked(row HostedJobRow) string {
+// none, and the reason its fence gives. Under mu.
+func (h *Hosted) fencedRootLocked(row HostedJobRow) (root, reason string) {
 	for root, fence := range h.rootFences {
 		if inRoot(fence.forms, row) {
-			return root
+			return root, fence.reason
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // LiveIn counts the running jobs whose root or working directory lies in
@@ -408,6 +408,13 @@ func (h *Hosted) liveInLocked(forms []string) int {
 // returned unfence runs. One lock orders it with job admission, so no job
 // slips in between the check and the release.
 func (h *Hosted) FenceRoot(root string) (unfence func(), err error) {
+	return h.FenceRootAs(root, FenceReleasing)
+}
+
+// FenceRootAs is FenceRoot whose refusal of a new job names reason
+// (FenceReleasing, FenceAcquiring); while fences with different reasons
+// overlap, the first one's reason stands.
+func (h *Hosted) FenceRootAs(root, reason string) (unfence func(), err error) {
 	if h == nil {
 		return func() {}, nil
 	}
@@ -422,7 +429,7 @@ func (h *Hosted) FenceRoot(root string) (unfence func(), err error) {
 		h.rootFences = map[string]*rootFence{}
 	}
 	if h.rootFences[root] == nil {
-		h.rootFences[root] = &rootFence{forms: forms}
+		h.rootFences[root] = &rootFence{forms: forms, reason: reason}
 	}
 	h.rootFences[root].holders++
 	var once sync.Once
@@ -439,9 +446,10 @@ func (h *Hosted) FenceRoot(root string) (unfence func(), err error) {
 	}, nil
 }
 
-// rootFence is one reserved worktree: its spellings and how many
-// reservations hold it.
+// rootFence is one reserved worktree: its spellings, how many
+// reservations hold it, and why (the refusal's wording).
 type rootFence struct {
 	forms   []string
 	holders int
+	reason  string
 }

@@ -55,6 +55,68 @@ func TestHostedFenceRootRefusesLiveJobsAndNewOnes(t *testing.T) {
 	}
 }
 
+// A fence names its holder's reason in the refusal of a new hosted or
+// legacy job: an acquisition's fence says the worktree is being acquired,
+// a release's keeps its wording, and the first live fence's reason stands
+// while another overlaps it.
+func TestFenceRefusalNamesItsReason(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	wt := gitRoot(t)
+	legacy := func() error {
+		_, err := Launch(LaunchOptions{Root: wt, Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}})
+		return err
+	}
+	assertReason := func(when, want string) {
+		t.Helper()
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: wt, Async: true}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: hosted refusal = %v, want %q", when, err, want)
+		}
+		if err := legacy(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: legacy refusal = %v, want %q", when, err, want)
+		}
+	}
+
+	unHosted, err := fx.h.FenceRootAs(wt, FenceAcquiring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unLegacy, err := FenceLegacyRootAs(wt, FenceAcquiring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReason("acquisition fence", "being acquired")
+	// An overlapping release fence does not change the standing reason.
+	relHosted, err := fx.h.FenceRoot(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relLegacy, err := FenceLegacyRoot(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReason("acquisition fence with a release fence over it", "being acquired")
+	unHosted()
+	unLegacy()
+	relHosted()
+	relLegacy()
+
+	unHosted, err = fx.h.FenceRoot(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unLegacy, err = FenceLegacyRoot(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReason("release fence", "being released or removed")
+	unHosted()
+	unLegacy()
+	if err := legacy(); err != nil {
+		t.Fatalf("a legacy launch after the fences lifted: %v", err)
+	}
+}
+
 // A closing owner's jobs end through StopOwner (no notice), its new jobs
 // are refused while fenced, and one that passed admission while waiting
 // for approval never starts its process.
