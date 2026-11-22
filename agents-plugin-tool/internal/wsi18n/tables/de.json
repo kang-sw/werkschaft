@@ -2739,6 +2739,8 @@
   "js.settings.key.dashboard.companion_preset.description": "Eine Begleiter-Voreinstellungs-ID eingeben.",
   "js.companion.character": "Begleiter",
   "js.companion.return_home": "Zur Startposition",
+  "js.companion.reset_size": "Größe zurücksetzen",
+  "js.companion.resize": "Begleitergröße ändern",
   "js.companion.hide": "Ausblenden",
   "js.companion.reload": "Pakete neu laden",
   "js.companion.reload_denied": "Pakete können hier nicht neu geladen werden.",

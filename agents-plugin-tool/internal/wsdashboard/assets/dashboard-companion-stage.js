@@ -91,26 +91,91 @@
     };
   }
 
+  function resizeControl(grip, options, currentSize, changed) {
+    const key = "ws.companion.size";
+    let preferred = null, active = null, cap = 240;
+    try {
+      const saved = window.localStorage.getItem(key);
+      const value = Number(saved);
+      if (saved !== null && Number.isFinite(value) && value >= 64 && value <= 240) preferred = value;
+    } catch (_) { /* Storage may be unavailable. */ }
+    function persist() {
+      try { window.localStorage.setItem(key, String(preferred)); } catch (_) { /* Storage may be unavailable. */ }
+    }
+    function update(value) {
+      preferred = Math.round(clamp(value, Math.min(64, cap), cap));
+      changed();
+    }
+    grip.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || active) return;
+      event.preventDefault();
+      active = { id: event.pointerId, x: event.clientX, y: event.clientY, size: currentSize() };
+      grip.setPointerCapture(event.pointerId);
+    }, options);
+    grip.addEventListener("pointermove", event => {
+      if (active?.id !== event.pointerId) return;
+      const dx = event.clientX - active.x, dy = active.y - event.clientY;
+      update(active.size + (Math.abs(dx) >= Math.abs(dy) ? dx : dy));
+    }, options);
+    function finish(event) {
+      if (active?.id !== event.pointerId) return;
+      active = null;
+      if (preferred !== null) persist();
+    }
+    for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) grip.addEventListener(name, finish, options);
+    grip.addEventListener("keydown", event => {
+      const direction = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[event.key];
+      if (!direction) return;
+      event.preventDefault();
+      update(currentSize() + direction * 4);
+      persist();
+    }, options);
+    return {
+      value(fallback, width, height) {
+        cap = Math.max(1, Math.min(240, width - 24, height - 24));
+        const value = Math.min(preferred ?? fallback, cap);
+        grip.setAttribute("aria-valuemin", String(Math.min(64, cap)));
+        grip.setAttribute("aria-valuemax", String(cap));
+        grip.setAttribute("aria-valuenow", String(Math.round(value)));
+        return value;
+      },
+      reset() {
+        preferred = null;
+        try { window.localStorage.removeItem(key); } catch (_) { /* Storage may be unavailable. */ }
+        changed();
+      }
+    };
+  }
+
   function mount(config, mute) {
     const doc = document, root = doc.documentElement, rail = doc.getElementById("rail");
     const cancel = new AbortController(), options = { signal: cancel.signal };
     const node = doc.createElement("div");
     node.className = "ws-companion";
-    const hit = doc.createElement("button");
-    hit.type = "button";
+    const hit = doc.createElement("div");
     hit.className = "ws-companion-hit";
-    hit.title = wsT("js.companion.character");
-    hit.setAttribute("aria-label", hit.title);
-    hit.setAttribute("aria-haspopup", "true");
-    hit.setAttribute("aria-expanded", "false");
+    const character = doc.createElement("button");
+    character.type = "button";
+    character.className = "ws-companion-character";
+    character.title = wsT("js.companion.character");
+    character.setAttribute("aria-label", character.title);
+    character.setAttribute("aria-haspopup", "true");
+    character.setAttribute("aria-expanded", "false");
     const canvas = doc.createElement("canvas");
     canvas.setAttribute("aria-hidden", "true");
-    hit.append(canvas);
+    character.append(canvas);
+    const grip = doc.createElement("div");
+    grip.className = "ws-companion-resize";
+    grip.tabIndex = 0;
+    grip.setAttribute("role", "slider");
+    grip.setAttribute("aria-label", wsT("js.companion.resize"));
+    grip.setAttribute("aria-valuemin", "64");
+    hit.append(character, grip);
     hit.hidden = true;
     const ctx = canvas.getContext("2d");
     const menu = doc.createElement("div");
     menu.className = "ws-companion-menu";
-    menu.setAttribute("aria-label", hit.title);
+    menu.setAttribute("aria-label", character.title);
     menu.hidden = true;
     node.append(hit, menu);
     doc.body.append(node);
@@ -153,8 +218,8 @@
       schedule();
     }, () => notice("pack_failed"));
 
-    const controls = C.quickMenu(node, hit, menu, options, {
-      returnHome, mute, applyPreset, notice,
+    const controls = C.quickMenu(node, character, menu, options, {
+      returnHome, resetSize, mute, applyPreset, notice,
       presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
       async reloadPack() {
         await loader.reload(cancel.signal);
@@ -256,6 +321,10 @@
       }
     }
 
+    const sizing = resizeControl(grip, options, () => size, invalidated);
+
+    function resetSize() { sizing.reset(); controls.close(); }
+
     function layout() {
       dirty = false;
       markedRid = undefined;
@@ -269,7 +338,7 @@
       const docked = rect && open && rect.right > 0 && getComputedStyle(rail).visibility !== "hidden";
       if (!docked) {
         rail?.removeAttribute("data-companion-dock");
-        size = clamp(Math.min(vw - 24, vh - 24), 48, 96);
+        size = sizing.value(clamp(Math.min(vw - 24, vh - 24), 48, 104), vw, vh);
         const composer = marks["composer-top"];
         home = composer ? {
           x: clamp(composer.left + size / 2, 12 + size / 2, vw - size / 2),
@@ -278,7 +347,7 @@
         return;
       }
 
-      size = clamp(Math.min(rect.width * 0.36, rect.height * 0.36), 72, 136);
+      size = sizing.value(clamp(Math.min(rect.width * 0.44, rect.height * 0.36), 88, 152), vw, vh);
       const list = rail.querySelector(".rlist");
       const unreg = list?.querySelector(":scope > .rws-unreg");
       const footer = rail.querySelector(".rfoot, .r-config-global");
@@ -637,14 +706,14 @@
       controls.close();
       invalidated();
     }
-    hit.addEventListener("pointerdown", event => {
+    character.addEventListener("pointerdown", event => {
       if (event.button !== 0) return;
       controls.close();
       suppressClick = false;
       drag = { id: event.pointerId, startX: event.clientX, startY: event.clientY, x: position.x, y: position.y, lastX: event.clientX };
-      hit.setPointerCapture(event.pointerId);
+      character.setPointerCapture(event.pointerId);
     }, options);
-    hit.addEventListener("pointermove", event => {
+    character.addEventListener("pointermove", event => {
       if (drag?.id !== event.pointerId) return;
       const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
       if (!drag.moving) {
@@ -678,9 +747,9 @@
       drag = null;
       invalidated();
     }
-    for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) hit.addEventListener(name, drop, options);
-    hit.addEventListener("click", () => { if (!suppressClick) fire("user.poke"); suppressClick = false; }, options);
-    hit.addEventListener("dblclick", returnHome, options);
+    for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) character.addEventListener(name, drop, options);
+    character.addEventListener("click", () => { if (!suppressClick) fire("user.poke"); suppressClick = false; }, options);
+    character.addEventListener("dblclick", returnHome, options);
 
     mountedRailObserver = observeRail;
     if (rail) observeRail(rail, activeRid, true);
@@ -702,6 +771,6 @@
     };
   }
 
-  Object.assign(C, { mount, railSignals, signalPairs,
+  Object.assign(C, { mount, railSignals, signalPairs, resizeControl,
     observeRail(fragment, activeRid, baseline) { mountedRailObserver?.(fragment, activeRid, baseline); } });
 })(window.WsCompanion);

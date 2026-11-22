@@ -538,3 +538,40 @@ test("relay emits canonical whiteboard and child approval tokens", () => {
   assert.equal(asks.find(e => e.token === "perm:child").rid, "child");
   f.dispose();
 });
+
+test("companion resize persists completed pointer and keyboard actions, clamps and resets", () => {
+  const data = new Map(), listeners = {}, attrs = {}, captures = [];
+  const storage = { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) };
+  const C = companion();
+  // The helper closes over its own window, so load it with a storage-backed window.
+  const context = vm.createContext({window: {WsCompanion: C, localStorage: storage}});
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "assets/dashboard-companion-stage.js"), "utf8"), context);
+  const grip = {addEventListener: (name, fn) => { listeners[name] = fn; }, setAttribute: (name, value) => { attrs[name] = value; }, setPointerCapture: id => captures.push(id)};
+  let size = 116, changes = 0;
+  const control = C.resizeControl(grip, {}, () => size, () => { changes++; size = control.value(116, 1600, 900); });
+  assert.equal(control.value(116, 1600, 900), 116);
+  const event = (id, x, y) => ({pointerId: id, clientX: x, clientY: y, button: 0, preventDefault() {}});
+  listeners.pointerdown(event(7, 100, 100));
+  listeners.pointermove(event(7, 300, 100));
+  assert.equal(size, 240);
+  assert.equal(data.size, 0);
+  assert.deepEqual(captures, [7]);
+  listeners.pointerup(event(7, 300, 100));
+  assert.equal(data.get("ws.companion.size"), "240");
+  listeners.keydown({key: "ArrowDown", preventDefault() {}});
+  assert.equal(data.get("ws.companion.size"), "236");
+  const restoredGrip = {addEventListener() {}, setAttribute() {}};
+  const restored = C.resizeControl(restoredGrip, {}, () => size, () => {});
+  assert.equal(restored.value(116, 1600, 900), 236);
+  assert.equal(control.value(116, 150, 800), 126);
+  assert.equal(attrs["aria-valuemax"], "126");
+  assert.equal(control.value(116, 1600, 900), 236);
+  listeners.pointerdown(event(8, 100, 100));
+  listeners.pointermove(event(8, -1000, 100));
+  listeners.pointerup(event(8, -1000, 100));
+  assert.equal(data.get("ws.companion.size"), "64");
+  control.reset();
+  assert.equal(data.size, 0);
+  assert.equal(size, 116);
+  assert.ok(changes >= 4);
+});

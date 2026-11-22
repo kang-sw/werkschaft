@@ -2739,6 +2739,8 @@
   "js.settings.key.dashboard.companion_preset.description": "Saisissez un ID de préréglage du compagnon.",
   "js.companion.character": "Compagnon",
   "js.companion.return_home": "Retour à l’accueil",
+  "js.companion.reset_size": "Réinitialiser la taille",
+  "js.companion.resize": "Redimensionner le compagnon",
   "js.companion.hide": "Masquer",
   "js.companion.reload": "Recharger les packs",
   "js.companion.reload_denied": "Les packs ne peuvent pas être rechargés ici.",
