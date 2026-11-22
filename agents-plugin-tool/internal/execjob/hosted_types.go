@@ -240,6 +240,23 @@ const (
 	// hostedHolderRing is each job holder's own ring: what a restarted
 	// daemon replays from a running job.
 	hostedHolderRing = 1 << 20
+	// hostedHolderRingCeiling lets that ring grow, only while the holder's
+	// relay has not sent the records yet, so the last hostedJobBytes of raw
+	// output always reach the daemon on a healthy attach. The ring charges a
+	// record its data plus 64 bytes (holder.py Record.cost) and trims whole
+	// records, so the base ring alone keeps 1 MiB / 71 = 14768 rows of 7 bytes,
+	// not 1 MiB. The ceiling keeps the newest records whose cost fits it, so
+	// it must hold what the newest hostedJobBytes of output can cost:
+	//   - every record holds at least one byte of it, so the window spans at
+	//     most 2^20 records, 64 bytes each: 64 MiB;
+	//   - their data is the window's 2^20 bytes, plus up to 2^20-1 more in
+	//     the one record straddling the window's start (a record is at most
+	//     MAX_RECORD_BYTES = 1 MiB): 2 MiB - 1;
+	//   - the exit record, 64 bytes, is the newest.
+	// That sums to 66 MiB - 1 + 64, under 66 MiB + 64. Sent records are
+	// reclaimed to the base ring at once, so the memory is transient: held
+	// only while the relay lags, and by accounting at most this many bytes.
+	hostedHolderRingCeiling = 66<<20 + 64
 	// HostedMaxJobs bounds the jobs kept (running ones always stay; the
 	// oldest finished ones go first) and HostedListMax one listing.
 	HostedMaxJobs = 200
