@@ -1326,21 +1326,10 @@ func (c *conv) kickInput() {
 	}
 	c.stopIdle()
 	startedAt := c.r.opts.Now().UnixMilli()
-	before := c.record()
-	heldAgy := before.heldAgyWorker()
-	var startErr error
-	if len(recs) > 0 || heldAgy {
-		// Keep drained input recoverable until the send succeeds. An agy
-		// holder can outlive the daemon as soon as it accepts the prompt.
-		err := c.update(func(rec *Record) {
-			rec.Queued = queue
-			if heldAgy {
-				c.setPromptBoundary(rec, startedAt, true)
-			}
-		})
-		if heldAgy {
-			startErr = err
-		}
+	heldAgy := c.record().heldAgyWorker()
+	if len(recs) > 0 {
+		// Keep drained input recoverable until the send succeeds.
+		c.update(func(rec *Record) { rec.Queued = queue })
 	}
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	// The turn reaches the page only once its send went through: a failed
@@ -1349,9 +1338,7 @@ func (c *conv) kickInput() {
 	// turn are handled by this loop after kick returns, so they still
 	// follow the turn's start.
 	ordinary := cmd == nil
-	if startErr != nil {
-		err = fmt.Errorf("persist turn start: %w", startErr)
-	} else if cmd == nil {
+	if cmd == nil {
 		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
 	} else if text, ok := c.playbookTurn(*cmd); ok {
 		// The runner expands a playbook command itself: the harness has
@@ -1361,10 +1348,26 @@ func (c *conv) kickInput() {
 	} else {
 		err = c.runCommand(*cmd)
 	}
-	if err != nil && heldAgy {
-		c.restorePromptBoundary(before)
+	if err == nil && heldAgy {
+		// The holder accepted the prompt and outlives the daemon from here.
+		// Record the prompt's boundary and take its input off the queue in
+		// one write at once: a successor then waits for this prompt's
+		// response and never submits its input again. Nothing is recorded
+		// before the holder accepts, so a send the holder never took leaves
+		// the input queued and no prompt for a successor to wait on.
+		c.update(func(rec *Record) {
+			rec.Queued = rest
+			rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
+			if len(mail) > 0 {
+				rec.Mail = nil
+			}
+			if len(reports) > 0 {
+				rec.Reports = nil
+			}
+			c.setPromptBoundary(rec, startedAt, true)
+		})
 	}
-	if err != nil && startErr == nil && cmd != nil && cmd.Name == "compact" {
+	if err != nil && cmd != nil && cmd.Name == "compact" {
 		c.setStatus(func() { c.turn, c.lastErr = false, "compaction: "+err.Error() })
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})

@@ -832,14 +832,20 @@ func TestAgyWorkerReattachWaitsForPromptResponse(t *testing.T) {
 			atSend := observeAgyWorkerPromptStarts(h)
 			id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
 			before := h.record(id)
+			if atWrite := <-atSend; atWrite.TurnOpen || atWrite.TurnStartedAt != 0 {
+				t.Fatalf("first prompt boundary recorded before the holder accepted it: open=%v time=%d", atWrite.TurnOpen, atWrite.TurnStartedAt)
+			}
+			if !before.TurnOpen || before.TurnStartedAt == 0 || len(before.Queued) != 0 {
+				t.Fatalf("first prompt after acceptance: open=%v time=%d queued=%+v", before.TurnOpen, before.TurnStartedAt, before.Queued)
+			}
 			h.holders.out(holder,
 				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","name":"read_file","status":"in_progress"}}}`,
 				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}}`,
 			)
 			eventually(t, "the first tool call completed", func() bool { return h.record(id).HolderSeq >= before.HolderSeq+2 })
 			rejoinAgyWorker(t, h, id)
-			if start := <-atSend; !start.TurnOpen || start.TurnStartedAt == 0 || start.TurnStartedAt != h.record(id).TurnStartedAt || start.TurnStartSeq != h.record(id).TurnStartSeq {
-				t.Fatalf("first prompt boundary at send: open=%v time=%d seq=%d", start.TurnOpen, start.TurnStartedAt, start.TurnStartSeq)
+			if rec := h.record(id); !rec.TurnOpen || rec.TurnStartedAt != before.TurnStartedAt || rec.TurnStartSeq != before.TurnStartSeq {
+				t.Fatalf("first prompt boundary after rejoin: open=%v time=%d seq=%d", rec.TurnOpen, rec.TurnStartedAt, rec.TurnStartSeq)
 			}
 
 			if tc.usage {
@@ -911,6 +917,66 @@ func rejoinAgyWorker(t *testing.T, h *leadHarness, id string) {
 	})
 }
 
+// The record names an agy worker's prompt only once the holder took it. A
+// daemon that dies at the holder write leaves the input queued and no prompt
+// open: its successor submits the input once and does not wait for a response
+// to a prompt that never reached the harness. A daemon that dies right after
+// the holder took it leaves no input to submit again.
+func TestAgyWorkerPromptRecordedOnlyOnceAccepted(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	atSend := observeAgyWorkerPromptStarts(h)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	atWrite := <-atSend
+	if atWrite.TurnOpen || atWrite.TurnStartedAt != 0 || len(atWrite.Queued) != 1 || atWrite.Queued[0].Text == "" {
+		t.Fatalf("record at the holder write: open=%v time=%d queued=%+v", atWrite.TurnOpen, atWrite.TurnStartedAt, atWrite.Queued)
+	}
+	accepted := h.record(id)
+	if !accepted.TurnOpen || accepted.TurnStartedAt == 0 || len(accepted.Queued) != 0 {
+		t.Fatalf("record after acceptance: open=%v time=%d queued=%+v", accepted.TurnOpen, accepted.TurnStartedAt, accepted.Queued)
+	}
+	replace := func(rec Record) {
+		t.Helper()
+		h.runner.Close()
+		if err := WriteRecordForTest(h.dir, rec); err != nil {
+			t.Fatal(err)
+		}
+		h.holders.restart()
+		h.startAt("http://127.0.0.1:1")
+		eventually(t, "the worker rejoined its holder", func() bool {
+			c := h.runner.conv(id)
+			if c == nil {
+				return false
+			}
+			ready := false
+			c.do(func() { ready = c.proc != nil && !c.replaying })
+			return ready
+		})
+		h.quiesce(id)
+	}
+
+	// The daemon died right after the holder took the prompt.
+	replace(accepted)
+	if n, rec := len(agyPromptIDs(h, holder)), h.record(id); n != 1 || !rec.TurnOpen || len(rec.Queued) != 0 {
+		t.Fatalf("after a replacement past acceptance: prompts=%d open=%v queued=%+v", n, rec.TurnOpen, rec.Queued)
+	}
+
+	// The daemon died before the holder took the prompt.
+	replace(atWrite)
+	eventually(t, "the queued input submitted once more", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
+	eventually(t, "the resubmitted prompt's record", func() bool {
+		rec := h.record(id)
+		return rec.TurnOpen && rec.TurnStartedAt != 0 && len(rec.Queued) == 0
+	})
+	prompt := agyPromptIDs(h, holder)[1]
+	h.holders.out(holder,
+		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"resubmitted result"}}}}`,
+		jsonLine(map[string]any{"jsonrpc": "2.0", "id": prompt, "result": map[string]any{"stopReason": "end_turn"}}))
+	eventually(t, "one worker result", func() bool { return len(got.list()) == 1 })
+	if result := got.list()[0].Result; result.Status != TurnDone || result.Message != "resubmitted result" {
+		t.Fatalf("resubmitted result: %+v", result)
+	}
+}
+
 func TestAgyWorkerCompactionPromptSurvivesReattach(t *testing.T) {
 	const quiet = 40 * time.Millisecond
 	restoreUsage := agyWakeUsageQuiet
@@ -946,12 +1012,15 @@ func TestAgyWorkerCompactionPromptSurvivesReattach(t *testing.T) {
 			eventually(t, "the original result", func() bool { return len(got.list()) == 1 })
 			c := h.runner.conv(id)
 			c.do(func() { tc.prepare(c) })
-			var start Record
 			select {
-			case start = <-atSend:
+			case atWrite := <-atSend:
+				if atWrite.TurnStartedAt != 0 {
+					t.Fatalf("compaction boundary recorded before the holder accepted it: open=%v time=%d", atWrite.TurnOpen, atWrite.TurnStartedAt)
+				}
 			default:
 				t.Fatal("the standalone compaction prompt did not reach the holder")
 			}
+			start := h.record(id)
 
 			rejoinAgyWorker(t, h, id)
 			h.holders.out(holder,
@@ -967,7 +1036,7 @@ func TestAgyWorkerCompactionPromptSurvivesReattach(t *testing.T) {
 				t.Fatalf("compaction prompt settled during quiet: reports=%d status=%s", count, status)
 			}
 			if rec := h.record(id); start.TurnOpen != tc.reportable || start.TurnStartedAt == 0 || rec.TurnStartedAt != start.TurnStartedAt || rec.TurnStartSeq != start.TurnStartSeq {
-				t.Fatalf("compaction boundary at send: open=%v time=%d seq=%d", start.TurnOpen, start.TurnStartedAt, start.TurnStartSeq)
+				t.Fatalf("compaction boundary after acceptance: open=%v time=%d seq=%d", start.TurnOpen, start.TurnStartedAt, start.TurnStartSeq)
 			}
 			prompt := agyPromptIDs(h, holder)[1]
 			h.holders.out(holder,

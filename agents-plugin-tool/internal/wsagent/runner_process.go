@@ -41,29 +41,19 @@ func (c *conv) setPromptBoundary(rec *Record, startedAt int64, reportable bool) 
 	rec.TurnStartSeq = max(c.seq, c.lineOpen)
 }
 
-func (c *conv) restorePromptBoundary(before Record) {
-	c.update(func(rec *Record) {
-		rec.TurnOpen, rec.TurnStartedAt, rec.TurnStartSeq = before.TurnOpen, before.TurnStartedAt, before.TurnStartSeq
-	})
-}
-
 // sendStandalonePrompt persists the boundary for prompts sent outside the
 // inbox drain. Internal prompts wait for ACP without opening a parent result.
+// The boundary is recorded only once the holder accepted the prompt: one
+// recorded before it would leave a successor waiting for a response to a
+// prompt that never reached the harness.
 func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
-	before := c.record()
-	if !before.heldAgyWorker() {
-		return send()
+	heldAgy := c.record().heldAgyWorker()
+	startedAt := c.r.opts.Now().UnixMilli()
+	if err := send(); err != nil || !heldAgy {
+		return err
 	}
-	err := c.update(func(rec *Record) { c.setPromptBoundary(rec, c.r.opts.Now().UnixMilli(), reportable) })
-	if err != nil {
-		err = fmt.Errorf("persist turn start: %w", err)
-	} else {
-		err = send()
-	}
-	if err != nil {
-		c.restorePromptBoundary(before)
-	}
-	return err
+	c.update(func(rec *Record) { c.setPromptBoundary(rec, startedAt, reportable) })
+	return nil
 }
 
 // startProcess resolves the profile again (it may have changed since the
