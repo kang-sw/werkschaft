@@ -131,7 +131,8 @@ func wtRun(ctx context.Context, runner wsgit.Runner, root string, args ...string
 // whose upstream is behind its tip is refused even when the merge root holds
 // every target commit. Only in that case, after re-verifying that the target
 // is an ancestor of the detached merge root, the stale upstream setting is
-// dropped and the same non-force delete retried against HEAD.
+// dropped and the same non-force delete retried against HEAD; a failed
+// retry restores the upstream setting.
 func deleteStaleTargetBranch(ctx context.Context, runner wsgit.Runner, wtPath, targetBranch string) error {
 	_, err := wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch)
 	if err == nil {
@@ -145,11 +146,24 @@ func deleteStaleTargetBranch(ctx context.Context, runner wsgit.Runner, wtPath, t
 	if _, ancErr := wtRun(ctx, runner, wtPath, "merge-base", "--is-ancestor", ref, "HEAD"); ancErr != nil {
 		return err
 	}
+	// --unset-upstream drops branch.<name>.remote and branch.<name>.merge;
+	// keep them so a failed retry can put the upstream back.
+	remoteKey, mergeKey := "branch."+targetBranch+".remote", "branch."+targetBranch+".merge"
+	remote, remoteErr := wtRun(ctx, runner, wtPath, "config", "--get", remoteKey)
+	merge, mergeErr := wtRun(ctx, runner, wtPath, "config", "--get", mergeKey)
 	if _, unsetErr := wtRun(ctx, runner, wtPath, "branch", "--unset-upstream", targetBranch); unsetErr != nil {
 		return err
 	}
-	_, err = wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch)
-	return err
+	if _, err = wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch); err != nil {
+		if remoteErr == nil && remote != "" {
+			_, _ = wtRun(ctx, runner, wtPath, "config", remoteKey, remote)
+		}
+		if mergeErr == nil && merge != "" {
+			_, _ = wtRun(ctx, runner, wtPath, "config", mergeKey, merge)
+		}
+		return err
+	}
+	return nil
 }
 
 // worktreeEntry is one parsed record from `git worktree list --porcelain`.

@@ -489,6 +489,42 @@ func TestProvisionWorktreeRecreatesStaleTargetWithUpstreamBehindTip(t *testing.T
 	}
 }
 
+// failBranchDeleteRunner runs git normally but fails every `branch -d`,
+// simulating a retried non-force delete that still refuses.
+type failBranchDeleteRunner struct{ wsgit.ExecRunner }
+
+func (r failBranchDeleteRunner) RunGit(ctx context.Context, root string, args ...string) ([]byte, error) {
+	if len(args) >= 2 && args[0] == "branch" && args[1] == "-d" {
+		return []byte("error: simulated refusal"), fmt.Errorf("simulated branch -d refusal")
+	}
+	return r.ExecRunner.RunGit(ctx, root, args...)
+}
+
+// When the retried delete still fails after the stale upstream was unset,
+// the upstream configuration is restored.
+func TestDeleteStaleTargetBranchRestoresUpstreamWhenRetryFails(t *testing.T) {
+	root, base := worktreeFixture(t)
+	target := "impl/main/restore-upstream"
+	runGit(t, root, "branch", target, base)
+	unrelated := strings.TrimSpace(string(runGitOutput(t, root, "commit-tree", base+"^{tree}", "-m", "unrelated upstream")))
+	runGit(t, root, "branch", "stale-upstream", unrelated)
+	runGit(t, root, "branch", "--set-upstream-to=stale-upstream", target)
+	runGit(t, root, "switch", "--detach", base)
+	wantRemote := strings.TrimSpace(string(runGitOutput(t, root, "config", "--get", "branch."+target+".remote")))
+	wantMerge := strings.TrimSpace(string(runGitOutput(t, root, "config", "--get", "branch."+target+".merge")))
+
+	if err := deleteStaleTargetBranch(context.Background(), failBranchDeleteRunner{}, root, target); err == nil {
+		t.Fatal("delete succeeded although every branch -d was refused")
+	}
+	if got := strings.TrimSpace(string(runGitOutput(t, root, "config", "--get", "branch."+target+".remote"))); got != wantRemote {
+		t.Fatalf("branch remote after failed retry = %q, want %q", got, wantRemote)
+	}
+	if got := strings.TrimSpace(string(runGitOutput(t, root, "config", "--get", "branch."+target+".merge"))); got != wantMerge {
+		t.Fatalf("branch merge after failed retry = %q, want %q", got, wantMerge)
+	}
+	runGit(t, root, "show-ref", "--verify", "refs/heads/"+target)
+}
+
 func TestProvisionWorktreeStaleTargetHeldElsewhereFailsWithoutMutation(t *testing.T) {
 	root, base := worktreeFixture(t)
 	mergeRoot := strings.TrimSpace(string(runGitOutput(t, root, "branch", "--show-current")))
