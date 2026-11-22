@@ -167,13 +167,29 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "$feed" --repo "$GITHUB_REPOSITORY" --clobber
           else
             files=( "$RUNNER_TEMP/ws-mcp-assets/"* "${desktop[@]}" "$feed" )
-            if published=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'); then
-              for file in "${files[@]}"; do
-                if ! grep -Fxq -- "${file##*/}" <<< "$published"; then
-                  gh release upload "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-                  break
+            if release=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets,isDraft); then
+              # Only a finished upload counts; an interrupted one stays as a non-uploaded
+              # asset of the same name, which upload --clobber deletes and replaces.
+              uploaded='.assets[] | select(.state == "uploaded") | .name'
+              published=$(jq -r "$uploaded" <<< "$release")
+              missing() {
+                for file in "${files[@]}"; do
+                  grep -Fxq -- "${file##*/}" <<< "$published" || return 0
+                done
+                return 1
+              }
+              if missing; then
+                gh release upload "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+                published=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq "$uploaded")
+                if missing; then
+                  echo "::error::Release $GITHUB_REF_NAME is still missing assets after the upload."
+                  exit 1
                 fi
-              done
+              fi
+              # An interrupted create leaves a draft; publish it once every asset is there.
+              if [[ "$(jq -r '.isDraft' <<< "$release")" == true ]]; then
+                gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+              fi
             else
               # With attachments gh creates a draft and publishes it only after every upload succeeds.
               gh release create "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag \

@@ -49,7 +49,9 @@ to the Tauri launch environment.
 ## Build and run
 
 Use Rust 1.95 and the native toolchain (Xcode Command Line Tools on macOS,
-MSVC on Windows). Windows runs on Microsoft Edge WebView2 Evergreen.
+MSVC on Windows). Windows runs on Microsoft Edge WebView2 Evergreen, version
+122 or later (`ICoreWebView2_22`, which the page boundary requires); with an
+older runtime the app says to update it and does not open the dashboard.
 
 ```sh
 cargo test --locked --features custom-protocol
