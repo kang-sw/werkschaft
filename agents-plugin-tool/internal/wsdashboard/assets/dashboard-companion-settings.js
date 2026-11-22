@@ -301,7 +301,6 @@
       doc, signal, options, canWrite, notice: hooks.notice,
       raw: () => current(sourcesKey),
       verdicts: () => hooks.config()?.sourceEntries,
-      layout: () => place(),
       catalogChanged(catalog) {
         if (catalog) applyCatalog(catalog); else loadPacks();
         hooks.packsChanged();
@@ -322,11 +321,26 @@
       dialog.style.top = Math.round(top) + "px";
     }
 
+    // Whatever resizes the open dialog (the Sources section opening, a listing
+    // or import preview, a wardrobe row gaining inputs) re-places it, at most
+    // once per frame. place() only moves the dialog, so it never feeds back.
+    let placeFrame = 0;
+    const resized = new ResizeObserver(() => {
+      if (!placeFrame) placeFrame = requestAnimationFrame(() => { placeFrame = 0; place(); });
+    });
+    function unobserve() {
+      resized.disconnect();
+      cancelAnimationFrame(placeFrame);
+      placeFrame = 0;
+    }
+    signal.addEventListener("abort", unobserve, { once: true });
+
     function show() {
       build();
       dialog.show();
       gear.setAttribute("aria-expanded", "true");
       place();
+      resized.observe(dialog);
       loadPacks();
       dialog.querySelector("select:not(:disabled), input:not(:disabled), button")?.focus({ preventScroll: true });
     }
@@ -334,6 +348,7 @@
     function hide(focusGear) {
       if (!dialog.open) return;
       const inside = dialog.contains(doc.activeElement);
+      unobserve();
       dialog.close();
       gear.setAttribute("aria-expanded", "false");
       if (focusGear || inside) gear.focus({ preventScroll: true });

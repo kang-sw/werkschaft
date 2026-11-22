@@ -110,7 +110,6 @@
     const summary = doc.createElement("summary");
     summary.textContent = t("js.companion.sources.title");
     details.append(summary);
-    details.addEventListener("toggle", () => deps.layout(), options);
 
     let keyed = new Map();
 

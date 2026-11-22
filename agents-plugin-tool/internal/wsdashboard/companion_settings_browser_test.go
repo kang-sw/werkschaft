@@ -22,6 +22,13 @@ func TestCompanionSourcesBrowser(t *testing.T) {
 	runCompanionBrowser(t, "testdata/companion-sources.browser.cjs", companionBrowserSource)
 }
 
+// On a viewport taller than the dialog with Sources open, a zip import
+// preview and its result grow the dialog; it re-places inside the viewport,
+// a bounded number of times, and the ZIP import control stays reachable.
+func TestCompanionSourcesPlacementBrowser(t *testing.T) {
+	runCompanionBrowser(t, "testdata/companion-sources-placement.browser.cjs", "")
+}
+
 const companionBrowserSource = "https://example.invalid/packs.git"
 
 func runCompanionBrowser(t *testing.T, script, sources string) {

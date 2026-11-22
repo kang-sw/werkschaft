@@ -35,7 +35,7 @@ const buttonOf = (root, label) => root.all().find(c => c.tagName === "BUTTON" &&
 function setup({ raw = "", write = true, handler, catalog, verdicts } = {}) {
   const doc = dom();
   const calls = [], changed = [], notices = [];
-  const state = { raw, write, layouts: 0, verdicts };
+  const state = { raw, write, verdicts };
   const fetch = async (url, init = {}) => {
     calls.push({ url, init, body: typeof init.body === "string" ? JSON.parse(init.body) : init.body });
     const out = await (handler?.(url, init, calls.at(-1).body) ?? { status: 200, body: {} });
@@ -50,7 +50,7 @@ function setup({ raw = "", write = true, handler, catalog, verdicts } = {}) {
   const section = C.sourcesSection({
     doc, signal, options: { signal }, canWrite: () => state.write, raw: () => state.raw,
     verdicts: () => state.verdicts,
-    notice: key => notices.push(key), layout: () => { state.layouts++; },
+    notice: key => notices.push(key),
     catalogChanged: next => changed.push(next)
   });
   if (catalog) section.setCatalog(catalog);
