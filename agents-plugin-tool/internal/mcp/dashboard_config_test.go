@@ -78,8 +78,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				t.Fatalf("rejected: %v", declared.rejected)
 			}
 			own := loadDeclaredConfig(pkg.own)
-			if len(declared.keys) != len(own.keys)+9 {
-				t.Fatalf("%d keys loaded, want the package's %d plus 9 dashboard keys", len(declared.keys), len(own.keys))
+			if len(declared.keys) != len(own.keys)+13 {
+				t.Fatalf("%d keys loaded, want the package's %d plus 13 dashboard keys", len(declared.keys), len(own.keys))
 			}
 			for _, tc := range []struct {
 				key, kind, def, pattern string

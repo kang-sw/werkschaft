@@ -215,8 +215,9 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			delay = ackCheckDelay
 		}
 		d.acks = &ackChecker{delay: delay, run: d.checkAnswers}
-		d.index = NewIndex(IndexOptions{Dir: opts.Dir, Source: d.source, Log: logw, OnChange: d.sessionChanged})
+		d.index = NewIndex(IndexOptions{Dir: opts.Dir, Source: d.source, Log: logw, OnChange: d.sessionChanged, OnRemove: d.auditSessionRemoved})
 	}
+	d.openAudit(logw)
 	d.server = &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	// The runner takes its change hook before the first request can reach
 	// it.
@@ -238,6 +239,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		if d.agents != nil {
 			d.agents.Close()
 		}
+		d.closeAudit()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
 		_ = listener.Close()
 		_ = lock.Unlock()

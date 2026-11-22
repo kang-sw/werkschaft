@@ -208,6 +208,7 @@ type Daemon struct {
 	index      *Index
 	source     SessionSource
 	config     *ConfigBackend
+	audit      *auditState
 	companion  companionState
 	agents     AgentHost
 	leadNudges interface {

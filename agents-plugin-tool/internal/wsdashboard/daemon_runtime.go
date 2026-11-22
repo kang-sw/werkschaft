@@ -16,6 +16,7 @@ import (
 func (d *Daemon) sessionChanged(replyID string) {
 	if d.index != nil {
 		if session, ok := d.index.Session(replyID); ok {
+			d.auditSessionSeen(session.Registration)
 			d.scheduleAnswerReplay(session.Registration)
 			if d.planUsage != nil && session.Harness == "claude" {
 				d.planUsage.pushClaude(d.snapshots.snapshotWithoutObserved(d.dir, replyID))
@@ -171,6 +172,9 @@ func (d *Daemon) Close() {
 			d.holders.Close()
 		}
 		d.foreign.close()
+		// After the runner and holders let go, so no capture appends race
+		// the final flush.
+		d.closeAudit()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
 		if d.beforeUnlock != nil {
 			d.beforeUnlock()

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wsauditstore"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsconfigservice"
 )
@@ -27,6 +28,9 @@ type ConfigBackend struct {
 	IsLead             func(Registration) bool
 	Changed            func(string)
 	LoadCompanion      func() (CompanionConfig, error)
+	// LoadAuditLimits reads the audit store knobs once at daemon start,
+	// clamped to a valid set with one warning per change.
+	LoadAuditLimits func() (wsauditstore.Limits, []string, error)
 }
 
 type configContext struct {
