@@ -23,6 +23,7 @@ package wslive
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -109,6 +110,41 @@ const (
 	StatusFailed  = "failed"
 )
 
+// Native subagent row id prefixes: a harness's own subagent that an adapter
+// maps from its protocol (agy invoke_subagent, Codex subAgentActivity). The
+// prefix keeps the row from colliding with daemon-spawned or other rows, and
+// marks it for the reducer's monotonic rule (State.nativeSettled) and the
+// dashboard's native presentation.
+const (
+	NativeAgyPrefix   = "agy-native:"
+	NativeCodexPrefix = "codex-native:"
+)
+
+// AgyObservationEnded reports the invariant behind an agy native row's
+// end: agy reports no child completion, so a done agy native row always
+// ended with its observation, the outcome unknown (an observed launch failure
+// is failed). It recovers Agent.EndUnknown where a writer that knew no flag
+// dropped it.
+func AgyObservationEnded(id, status string) bool {
+	return strings.HasPrefix(id, NativeAgyPrefix) && status == StatusDone
+}
+
+// RecoverEndUnknown sets EndUnknown on every row of s whose end the
+// invariant shows unknown (AgyObservationEnded). Snapshot file readers call
+// it after decoding.
+func (s *Snapshot) RecoverEndUnknown() {
+	for i := range s.Agents {
+		if AgyObservationEnded(s.Agents[i].ID, s.Agents[i].Status) {
+			s.Agents[i].EndUnknown = true
+		}
+	}
+}
+
+// NativeAgentID reports whether id names a prefixed native subagent row.
+func NativeAgentID(id string) bool {
+	return strings.HasPrefix(id, NativeAgyPrefix) || strings.HasPrefix(id, NativeCodexPrefix)
+}
+
 // Origin values: where a user message came from, or what started a turn.
 const (
 	OriginTerminal   = "terminal"
@@ -157,6 +193,16 @@ type Snapshot struct {
 	// command entry, in the host's own order (a commands event); absent
 	// when the adapter reports none, and then the page sends it no command.
 	Commands []SlashCommand `json:"commands,omitempty"`
+	// HolderID and HolderSeq are what a daemon's recovery file covers: the
+	// state it shows applied every record of holder HolderID through
+	// HolderSeq. A rejoin's replay tells by them whether a row the file
+	// lacks was evicted (its start covered) or started after the write.
+	// A current writer always writes HolderSeq: with a holder, 0 when no
+	// record of it was applied yet; without one, 0 with HolderID absent
+	// (no record of any holder covered). Only a writer that predates them
+	// leaves both absent. Readers that know no such member ignore them.
+	HolderID  string  `json:"holderId,omitempty"`
+	HolderSeq *uint64 `json:"holderSeq,omitempty"`
 }
 
 // Command list caps.
@@ -339,6 +385,13 @@ type Agent struct {
 	Status    string `json:"status"`
 	StartedAt int64  `json:"startedAt,omitempty"`
 	EndedAt   int64  `json:"endedAt,omitempty"`
+	// EndUnknown marks a finished row whose observation ended with the
+	// outcome unknown: EndedAt is when observation ended, not a known
+	// completion. An older reader ignores it and shows the row done; an
+	// older writer drops it and keeps the row's EndedAt rank. Readers then
+	// recover it from the invariant (AgyObservationEnded), so writers keep
+	// writing it but no reader depends on it alone.
+	EndUnknown bool `json:"endUnknown,omitempty"`
 	// ActiveMs is accumulated closed-turn work; TurnStartedAt is the
 	// current working turn's start, absent between turns.
 	ActiveMs      int64 `json:"activeMs,omitempty"`
@@ -447,7 +500,8 @@ type GeneratingView struct {
 }
 
 // ReadSnapshot reads a snapshot file. Unknown fields are ignored and absent
-// ones read as empty.
+// ones read as empty; an end-unknown classification an older writer dropped
+// is recovered (RecoverEndUnknown).
 func ReadSnapshot(path string) (Snapshot, error) {
 	var snap Snapshot
 	// Writers replace snapshot.json atomically (wsagent writeFileAtomic,
@@ -457,6 +511,7 @@ func ReadSnapshot(path string) (Snapshot, error) {
 		return snap, err
 	}
 	err = json.Unmarshal(raw, &snap)
+	snap.RecoverEndUnknown()
 	return snap, err
 }
 

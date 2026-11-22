@@ -28,6 +28,7 @@
       lead: typeof raw.lead === "string" ? raw.lead : "",
       completed: Number(raw.completed) || 0,
       folded: Number(raw.folded) || 0,
+      observationEnded: Number(raw.observationEnded) || 0,
       peers: Number(raw.peers) || 0,
       roots: Array.isArray(raw.roots) ? raw.roots : []
     };
@@ -71,6 +72,7 @@
     if (oldState !== state) btn.setAttribute("data-state", state);
     if (node.replyId) btn.setAttribute("data-reply-id", node.replyId); else btn.removeAttribute("data-reply-id");
     if (node.linked) btn.setAttribute("data-linked", "1"); else btn.removeAttribute("data-linked");
+    if (node.native) btn.setAttribute("data-native", "1"); else btn.removeAttribute("data-native");
     btn.setAttribute("aria-label", label + " (" + (HUD_HARNESS_NAME[harness] || harness || "?") + ", " + hudStateText(state) + ")");
     if (harness) emb.setAttribute("data-h", harness); else emb.removeAttribute("data-h");
     emb.textContent = HUD_HARNESS_LABEL[harness] || "??";
@@ -104,7 +106,8 @@
         closeActive: !!node.closeActive,
         elapsedMs: Number(node.elapsedMs) || 0, activeSince: Number(node.activeSince) || 0,
         chain: Array.isArray(node.chain) ? node.chain : [],
-        task: node.task || ownTasks[node.id] || "", overflow: Number(node.overflow) || 0
+        task: node.task || ownTasks[node.id] || "", overflow: Number(node.overflow) || 0,
+        native: !!node.native, startedAt: Number(node.startedAt) || 0, endedAt: Number(node.endedAt) || 0, endUnknown: !!node.endUnknown
     });
     entry.el = btn;
     hudRegistry[node.id] = entry;
@@ -280,8 +283,11 @@
     if (d.harness) hb.setAttribute("data-h", d.harness);
     var title = doc.createElement("span"); title.className = "tt-title"; title.textContent = d.label;
     var pill = doc.createElement("span"); pill.className = "tt-pill"; pill.setAttribute("data-state", d.state); pill.textContent = hudStateText(d.state);
-    head.appendChild(hb); head.appendChild(title); head.appendChild(pill);
+    head.appendChild(hb); head.appendChild(title);
+    if (d.native) { var nb = doc.createElement("span"); nb.className = "tt-native"; nb.textContent = wsT("js.hud.native"); head.appendChild(nb); }
+    head.appendChild(pill);
     tt.appendChild(head);
+    if (d.native) tt.appendChild(hudLifecycle(d));
     var meta = doc.createElement("div"); meta.className = "tt-meta";
     if (d.model) { var mc = doc.createElement("code"); mc.textContent = d.model; meta.appendChild(mc); }
     if (d.effort) { var ef = doc.createElement("span"); ef.textContent = d.effort; meta.appendChild(ef); }
@@ -305,6 +311,46 @@
     tt.appendChild(hint);
     tt.hidden = false;
     hudPositionTooltip(tt, entry.el);
+  }
+  // hudLifecycle is a native row's start and end; a row whose observation
+  // ended with the outcome unknown (endUnknown) reads as such, never as a
+  // completion.
+  function hudLifecycle(d) {
+    var life = doc.createElement("div"); life.className = "tt-life";
+    function stamp(key, ms) {
+      var span = doc.createElement("span");
+      span.appendChild(doc.createTextNode(wsT(key) + " "));
+      var tm = doc.createElement("time"); tm.setAttribute("data-ms", String(ms)); tm.setAttribute("data-f", "clock");
+      if (typeof fmtTime === "function") fmtTime(tm, Date.now()); else tm.textContent = new Date(ms).toLocaleTimeString();
+      span.appendChild(tm);
+      return span;
+    }
+    if (d.startedAt > 0) life.appendChild(stamp("js.hud.started", d.startedAt));
+    var terminal = d.state === "idle" || d.state === "failed";
+    if (terminal && !d.endUnknown && d.endedAt > 0) {
+      if (life.childNodes.length) life.appendChild(doc.createTextNode(" \u00b7 "));
+      life.appendChild(stamp("js.hud.ended", d.endedAt));
+    } else if (terminal && d.endUnknown) {
+      var unk = doc.createElement("span"); unk.className = "tt-unknown"; unk.textContent = wsT("js.hud.unknownend");
+      if (life.childNodes.length) life.appendChild(doc.createTextNode(" \u00b7 "));
+      life.appendChild(unk);
+    }
+    return life;
+  }
+  // hudObservationEnded shows, in a view (the compact HUD or the idle
+  // island), how many native rows ended with their outcome unknown; they are
+  // not in the completed count.
+  function hudObservationEnded(view, holder, n) {
+    if (!view) return;
+    var host = holder || view, chip = null;
+    for (var i = 0; i < host.children.length; i++) {
+      if (host.children[i].classList && host.children[i].classList.contains("hud-obs")) chip = host.children[i];
+    }
+    if (n > 0) {
+      if (!chip) { chip = doc.createElement("span"); chip.className = "hud-obs"; host.appendChild(chip); }
+      chip.textContent = wsT("js.hud.obsended", n);
+      chip.setAttribute("title", wsT("js.hud.obsended.title"));
+    } else if (chip) chip.remove();
   }
   function hudFocusNode(id, agpop, agOpenFn) {
     var target = null;
@@ -431,6 +477,8 @@
       Object.keys(hudRegistry).forEach(function (id) { if (!seen[id]) delete hudRegistry[id]; });
       hudUpdateFolded(rootsEl, hud.roots.length > 0 ? hud.folded : 0);
     }
+    hudObservationEnded(agcompact, agcompact.querySelector(".hud-canvas"), hud.observationEnded);
+    hudObservationEnded(agidle, null, hud.observationEnded);
     hudBindEvents(agcompact, agpop, agOpenFn);
     if (hudHoveredId) {
       if (hudRegistry[hudHoveredId] && agpop && agpop.hidden) hudShowTooltip(hudHoveredId);
@@ -440,6 +488,6 @@
       else hudHideTooltip();
     }
     hudScheduleConnectors();
-    return { visibleCount: hud.roots.length, folded: hud.folded, completed: hud.completed, peers: hud.peers };
+    return { visibleCount: hud.roots.length, folded: hud.folded, completed: hud.completed, observationEnded: hud.observationEnded, peers: hud.peers };
   }
   window.wsHud = { project: hudProject, drawConnectors: hudScheduleConnectors, hideTooltip: hudHideTooltip };

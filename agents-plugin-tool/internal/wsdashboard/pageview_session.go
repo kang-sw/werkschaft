@@ -307,11 +307,14 @@ func buildSessionView(in pageInputs) SessionView {
 	v.Host = in.Snapshot.Host
 	v.Background, v.Monitors = taskBadgeCounts(in.Snapshot)
 	v.Tree.Agents = agentTree(in.Snapshot.Agents, lookup)
+	markNativeAgents(v.Tree.Agents, v.Harness)
 	for _, a := range in.Snapshot.Agents {
-		switch a.Status {
-		case wslive.StatusRunning:
+		switch {
+		case a.Status == wslive.StatusRunning:
 			v.Tree.Running++
-		case wslive.StatusFailed:
+		case hudEndUnknown(a, hudNative(a, v.Harness)):
+			// Observation ended, outcome unknown: neither done nor failed.
+		case a.Status == wslive.StatusFailed:
 			v.Tree.Failed++
 		default:
 			v.Tree.Finished++
@@ -433,6 +436,18 @@ func agentTree(agents []wslive.Agent, lookup sessionLookup) []AgentNode {
 		return out
 	}
 	return build(roots)
+}
+
+// markNativeAgents marks the harness's own subagents of a session whose
+// harness is ownerHarness (hudNative), at every depth.
+func markNativeAgents(nodes []AgentNode, ownerHarness string) {
+	for i := range nodes {
+		nodes[i].Native = hudNative(nodes[i].Agent, ownerHarness)
+		if nodes[i].Native {
+			nodes[i].Linked = false
+		}
+		markNativeAgents(nodes[i].Children, ownerHarness)
+	}
 }
 
 // resolvedContacts drops the session's own address and orders the rest by
