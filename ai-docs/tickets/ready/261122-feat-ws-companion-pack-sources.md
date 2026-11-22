@@ -7,6 +7,10 @@ related:
   261122-feat-ws-companion-paper-doll: may grow the pack schema; the install allow-list follows the validator's file list (sibling branch)
   261122-feat-ws-companion-director: Phase 2 UI lives in its gear modal and uses its catalog surface field; persona stays untrusted data per its Decision 7
   261122-chore-ws-companion-official-art-pack: the official source lists only IP-clean packs such as this one
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 125b2a064343bd72
+sage-review-completeness-reviewed: 125b2a064343bd72
 ---
 
 # Companion Pack User Sources (Marketplace Install): Git/Zip Sources, Safe Extraction, Authoring Guide
@@ -52,7 +56,10 @@ were auto-confirmed under the owner's standing directive.
      ref is `HEAD`). The daemon resolves the ref to a commit SHA through
      the smart-HTTP ref advertisement
      (`GET <repo>/info/refs?service=git-upload-pack`, a pkt-line parse).
-     This works on any host and needs no host API. It then downloads a zip
+     A non-`HEAD` ref matches `refs/heads/<ref>` first, then
+     `refs/tags/<ref>` (the peeled `^{}` commit for an annotated tag); a
+     full 40-hex SHA is used as given. This works on any host and needs
+     no host API. It then downloads a zip
      archive pinned to that commit. It tries a fixed, ordered list of two
      common archive URL patterns (`<repo>/archive/<sha>.zip` and
      `<repo>/-/archive/<sha>/<name>-<sha>.zip`), and the first response
@@ -124,12 +131,24 @@ were auto-confirmed under the owner's standing directive.
      rejected; names are normalized with `path.Clean` and the cleaned
      name must equal the stored name; duplicate names are rejected. The
      central directory may hold at most 4,096 entries.
+   - **Directory entries:** a name ending in `/` is a directory entry, as
+     host archives list them (`repo-<sha>/`, `repo-<sha>/packs/`). It is
+     tolerated and skipped: the name-safety checks run on the name with the
+     trailing slash stripped, and it never triggers the nested-subdirectory
+     or non-regular-entry rejections. Only a regular file entry under a
+     subdirectory of a pack directory is a nested-subdirectory rejection.
+     Directory entries count toward the 4,096 entry cap.
    - **Pack-level entry rules:** a pack directory holds at most 256 entries.
      Symlinks (Unix mode bits in the external attributes) and other
      non-regular entries are rejected, as are entries in nested
      subdirectories. Names that differ only by case are rejected, because
      macOS and Windows file systems ignore case. Every file name must be
      `pack.json` or pass `validCompanionRaster` (`companion_pack_schema.go:21`).
+     Windows reserved device names (`con`, `prn`, `aux`, `nul`,
+     `com1`-`com9`, `lpt1`-`lpt9`, case-insensitive, with or without an
+     extension) are rejected for both a pack `id` and a file name, because
+     the validators accept them but the write step would fail or hit a
+     device on Windows, and the pack would never load.
    - **Caps:** the store's own caps apply: `pack.json` 512 KiB, asset 2 MiB,
      pack 16 MiB, total 64 MiB (`companion_pack_store.go:26-29`). They
      count the bytes actually decompressed (through a `LimitReader`), not
@@ -164,13 +183,33 @@ were auto-confirmed under the owner's standing directive.
      into staging first and deletes it after the swap. Staging
      directories left over from an earlier run are removed at the next
      install.
-   - **Reload:** the pipeline calls the store's existing `reload`
+   - **Serialization:** one install mutex serializes install, update, and
+     uninstall, so two operations on one ID cannot race. The rename swap and
+     the following load also run under one acquisition of the store's
+     private scan lock (a store-side method that swaps and loads, built on
+     a locked variant of `reload`; the existing `reload` takes that lock
+     itself and Go mutexes are not reentrant), so a lazy first scan or a user reload
+     never sees the pack missing during the swap, and on Windows never
+     collides with the scan's pinned handles.
+   - **Reload:** the pipeline reloads through the store's `reload`
      (`companion_pack_store.go:105-109`) and returns the new catalog.
    - **Guards:** an install refuses an `id` whose directory exists without
      an install sidecar, because that is a hand-made pack that only the
      user may replace. It also refuses an install that would push local
-     packs past `companionMaxPacks`. Uninstall deletes only directories
+     packs past `companionMaxPacks` (the count includes error directories,
+     as the scan's `visited` does). Uninstall deletes only directories
      that carry a sidecar.
+   - **Total cache budget:** the scan gives each pack the remaining part
+     of the 64 MiB local cache (`companion_pack_store.go:25-29`) and
+     drops a pack that exceeds it, in ascending ID order. So the
+     install-time `loadCompanionPack` call gets the cache cap minus the
+     bytes of the other installed local packs, read inside the serialized
+     section from the store's current snapshot (an update excludes the
+     replaced pack's own old bytes), and an install that would exceed it is refused
+     with a structured error. The refusal also covers a new pack whose ID
+     sorts earlier and would push an installed later pack out of the
+     catalog. This keeps "a pack that installs is a pack that loads"
+     true across the whole directory.
 
 5. **Integrity and updates only on explicit action.**
    - An external pack `url` requires `sha256`. The hash is checked on the
@@ -182,12 +221,23 @@ were auto-confirmed under the owner's standing directive.
      archive's sha256 for display and change detection.
    - Fetch, install, check for updates, and update each run only when the
      user clicks. There is no background polling, timer, or startup fetch
-     (`performance.md` Rules 1 and 6; the Windows AV file-touch cost).
-   - An update is offered when the source's resolved commit, archive
-     sha256, or pack `sha256` differs from the sidecar. The `version`
-     string is display-only. Rejected alternative: semver comparison. It
-     trusts an author-controlled string and misses re-uploads that keep
-     the same version.
+     (`performance.md` Rule 5, page load completes from memory, and its Windows AV file-touch cost).
+   - The sidecar records `packSha256` for every installed pack: the
+     store's content hash of the installed pack (`info.Rev` from
+     `loadCompanionPack`). For an external `url` pack it also records the
+     entry's `sha256` as `archiveSha256`.
+   - Checking for updates re-fetches the source on the user's click. A
+     changed resolved commit or archive sha256 only means the pack must be
+     re-read. A pack shows "update available" only when its re-read content
+     hash differs from the sidecar's `packSha256` (an external `url` pack:
+     when the entry's `sha256` differs from the recorded `archiveSha256`).
+     So an unrelated commit in a multi-pack repository raises no badge.
+     The `version` string is display-only. Rejected alternative: semver
+     comparison. It trusts an author-controlled string and misses
+     re-uploads that keep the same version.
+   - A `kind: local` install has no source to re-fetch: check and update
+     are not offered for it. Importing a newer zip replaces it through the
+     same install path.
 
 6. **Pack text is untrusted.**
    - Marketplace strings, pack strings, and persona are untrusted data.
@@ -242,7 +292,10 @@ were auto-confirmed under the owner's standing directive.
    - Direct connections refuse loopback, link-local, unspecified, and
      multicast addresses. The check runs at dial time in the dialer's
      `Control` hook, so DNS rebinding cannot get around it. Private
-     ranges stay allowed for home NAS hosting.
+     ranges stay allowed for home NAS hosting. The dial-time address
+     guard is a helper whose refused-range policy is a parameter, so a
+     stricter caller (the planned web-tools fetch, which also refuses
+     private ranges) can reuse it without a second copy.
    - When an environment proxy is set (`http.ProxyFromEnvironment`; this
      matters on corporate PCs), the proxy makes the connection and the
      address check does not apply.
@@ -255,8 +308,9 @@ were auto-confirmed under the owner's standing directive.
      Schemas (`ws-companion/v1` `pack.json`, `ws-companion-marketplace/v1`),
      served at new read routes on the companion route family. The modal
      links them.
-   - A validate endpoint (`POST /api/companion/packs/validate`, the same
-     pipeline with no write) returns per-pack errors. The modal's import
+   - The validate endpoint (`POST /api/companion/packs/validate`, the same
+     pipeline with no write) returns per-pack errors. It is built in
+     Phase 1; Phase 3 documents it in the guide. The modal's import
      preview is its UI.
    - Under `shipped-surface-boundary.md`, the guide is shipped text and
      must stand alone. It names no ticket stem, repository path, commit
@@ -276,7 +330,8 @@ were auto-confirmed under the owner's standing directive.
       it updates with the binary. It lists only Werkschaft's own IP-clean
       packs.
     - At first it lists only the embedded `default` pack, shown as
-      built-in and installed. Later official packs are added to it by a
+      built-in and installed. It has no sidecar, so uninstall is not
+      offered for it. Later official packs are added to it by a
       release, with `url` + `sha256`.
     - Only this embedded source carries `official: true`. A user source
       can never claim the flag, whatever its manifest name.
@@ -325,6 +380,11 @@ were auto-confirmed under the owner's standing directive.
 
 ## Constraints
 
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for agents-plugin-tool/internal/mcp/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
+
 Required manuals (per `AGENTS.md` `### Implementation Conventions`):
 - `ai-docs/manuals/performance.md`:
   - Fetching or installing anything only on explicit action.
@@ -362,6 +422,33 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
 - Embedded asset serving pattern: `landing_guide.go` (`go:embed` plus
   hashed names).
 
+## Prior Decisions
+
+- a3b05466 (2026-11-22, commit): "Pin the local pack root and its child directories during the scan so renames or symlinks cannot redirect downloads across pack boundaries." — bearing: constrains
+- 1afde23b (2026-11-22, commit): "companionExtendedPath mirrors os.addExtendedPrefix's rules (248 threshold ...); the Windows file applies it only to the root, after filepath.Abs" — bearing: constrains
+- 261122-feat-ws-companion-pack-store (2026-11-22, commit b59f0c51): "Single self-contained pack.json per pack retained in v1 ... to minimize Windows AV file touches per performance.md." — bearing: constrains
+- 2ce97830 (2026-11-22, commit): "Pack-store I/O: one local pack and raster requires 4 opens, 4 stats, and 1 ReadDir cold, zero warm" — bearing: constrains
+- 261122-feat-ws-companion-director (2026-11-22, Decisions): "A settings-catalog row may carry "surface": "companion-modal"" — bearing: supports
+- fa2b5d91 (2026-11-22, commit): "Use the packaged manifest rules and the global scalar overrides to keep scope and validation aligned with config.tune." — bearing: supports
+- 261106-feat-ws-dashboard-browser-interaction (2026-11-07, commit ed832861): "Global-only through wsconfig.RegisterGlobalOnly ... exempted from builtinConfigKeySet (manifestGlobalOnlyKeys)" — bearing: supports
+- 261112-feat-ws-mailbox-undelivered-notice (2026-11-13, commit 95f33550): "Keep ws, wsflow, and Pi manifest parity and resource mirrors" — bearing: supports
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | agents-plugin-tool/internal/wsdashboard/ (new zip pipeline, fetcher, routes, sidecar, embedded guide and schemas), internal/mcp/dashboard_config.go, config manifests, locale tables, frontend modal |
+| scope.surface | cross-module | new HTTP routes, the dashboard.companion_sources key, the catalog origin member and the ws-companion-marketplace/v1 contract cross wsdashboard, mcp, wsconfig and the frontend |
+| scope.new_public_symbol | yes | dashboard.companion_sources key and its constant, new TrustedWrite routes on /api/companion/packs |
+| scope.new_type_contract | yes | ws-companion-marketplace/v1 manifest, .ws-install.json sidecar, catalog origin object |
+| scope.test_surface | new-files | new hostile-zip, fetcher and guide drift tests; existing companion_pack_store_test.go, companion_pack_routes_test.go and companion_pack_schema_test.go are extended |
+| complexity.reuse_points | confirmed | loadCompanionPack, validateCompanionManifest, validCompanionRaster, reload and TrustedWrite read at companion_pack_store.go#L257-L306, companion_pack_schema.go#L21-L23, companion_pack_routes.go#L140-L148 |
+| complexity.side_effect_risk | high | writes, renames and deletes pack directories under the user config home, and makes outbound network fetches |
+| risk.correctness | high | zip safety, atomic swap, staging cleanup and update detection each have hostile or crash cases |
+| risk.fit | moderate | Phase 2 needs the director gear modal and the catalog surface field (pending 261122-feat-ws-companion-director) |
+| risk.test | high | many hostile-archive cases, TLS fetcher cases, and file-operation measurements on Windows-sensitive paths |
+| risk.security_or_contract | high | untrusted archives and URLs, SSRF dial guard, and a new external marketplace schema contract |
+
 ## Phases
 
 ### Phase 1: Zip pipeline, installer, local import and validate endpoints
@@ -386,12 +473,14 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
     directory, an unknown file, an unreferenced raster, SVG, an
     extension/format mismatch, oversized dimensions, entry-count and
     per-file, per-pack, and total caps, the ratio bomb, an encrypted
-    entry, a bad marketplace schema, an ID mismatch, a reserved ID, and
-    a duplicate ID.
+    entry, a bad marketplace schema, an ID mismatch, a reserved ID, a
+    duplicate ID, a Windows reserved device name as an ID or file
+    name, and a pack over the remaining total cache budget.
   - Acceptance cases: a self-contained bundle, a single top-level
-    directory archive, ignored extra repository files, update over a
-    sidecar directory, refusal over a hand-made directory, and the
-    local-pack cap.
+    directory archive with directory entries (as a host archive lists
+    them), ignored extra repository files, update over a sidecar
+    directory, refusal over a hand-made directory, the local-pack cap,
+    and concurrent installs of one ID serialized.
   - Crash safety: a leftover staging directory produces no catalog error
     and is cleaned up at the next install.
   - The `CompanionPack` suite passes with `-race`, and
@@ -414,8 +503,10 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
   3. The embedded official source of Decision 10.
   4. Source fetch (returns the listing and keeps the downloaded zip in a
      one-entry in-memory cache, at most 64 MiB, expiring after 10 min, so
-     an install needs no second download), install, check for updates,
-     and update routes.
+     an install needs no second download; on a cache miss, expired or
+     replaced by another source's fetch, the install click downloads
+     again, which is still explicit user action), install, check for
+     updates, and update routes.
   5. A modal Sources section:
      - the official source and user sources, with add and remove;
      - pack cards showing name, author, license, version, origin, and an
