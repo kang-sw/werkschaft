@@ -1358,7 +1358,7 @@ func (c *conv) kickInput() {
 		// response and never submits its input again. Nothing is recorded
 		// before the holder accepts, so a send the holder never took leaves
 		// the input queued and no prompt for a successor to wait on.
-		c.update(func(rec *Record) {
+		accepted := func(rec *Record) {
 			rec.Queued = rest
 			rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
 			if len(mail) > 0 {
@@ -1368,7 +1368,23 @@ func (c *conv) kickInput() {
 				rec.Reports = nil
 			}
 			c.setPromptBoundary(rec, startedAt, true)
-		})
+			// The open successor supersedes or publishes (below) a held
+			// turn; the record never keeps both.
+			rec.HeldTurn = nil
+		}
+		if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 {
+			// The reports open the held turn's successor, so the held turn
+			// is published in that same write (as below for other workers):
+			// a restart between two writes would restore the predecessor's
+			// HeldTurn beside the successor's open turn, mark and consumed
+			// reports.
+			res := *c.heldRes
+			c.turnMark, c.reply = mark, ""
+			c.hold(nil)
+			c.publishWith(res, true, accepted)
+		} else {
+			c.update(accepted)
+		}
 	}
 	if err != nil && cmd != nil && cmd.Name == "compact" {
 		c.setStatus(func() { c.turn, c.lastErr = false, "compaction: "+err.Error() })

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -339,8 +340,18 @@ func writeRecord(sessionDir string, rec Record) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(recordPath(sessionDir), append(raw, '\n'), 0o600)
+	if err := writeFileAtomic(recordPath(sessionDir), append(raw, '\n'), 0o600); err != nil {
+		return err
+	}
+	if observe := recordWritten.Load(); observe != nil {
+		(*observe)(sessionDir, rec)
+	}
+	return nil
 }
+
+// recordWritten, when set by a test, observes every record written, so a
+// test can restart from the record as it stood after any one write.
+var recordWritten atomic.Pointer[func(sessionDir string, rec Record)]
 
 // writeFileAtomic replaces path with data through a temporary file in the
 // same directory.
