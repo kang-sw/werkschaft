@@ -720,7 +720,17 @@
       "registered_at": "2026-11-22T09:16:51Z"
     },
     "261122-feat-ws-provider-auth-layer": {
-      "registered_at": "2026-11-22T08:45:21Z"
+      "registered_at": "2026-11-22T08:45:21Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T09:20:16Z",
+        "impl": {
+          "branch": "impl/develop/shack-coma-jimmy"
+        }
+      }
     },
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
