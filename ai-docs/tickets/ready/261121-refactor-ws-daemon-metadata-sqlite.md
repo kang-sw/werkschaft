@@ -692,6 +692,106 @@ Deferred to Phase 2/3:
     calls on an unknown path, and pairing a lowered permission selector with
     its record (2135).
 
+#### Edition (a6157bdfe) - 2026-11-22
+
+Pre-merge review of 2976c3d53..de6bee0d8 (3 Critical, 9 Important, 3
+Minor) is fixed in 3df153f83..a6157bdfe. Every finding is fixed and none is
+rebutted. Each fix has a test that fails without it.
+
+- **C1, fence proof** (ba9261aba): the store now applies the fences itself.
+  `ApplyFence(rel, bytes)` records the fenced digest and a random past
+  even-second sentinel mtime durably, writes a temp file with that mtime and
+  atomically replaces the path. A landed replacement is proven by digest and
+  exact sentinel mtime, so a byte-identical legacy write is not the fence.
+  `ApplyRemovalFence(rel, witness)` moves the file to a fresh witness path
+  that only the new daemon reads. Proof is `rel` absent and the witness
+  digest equal to the staged original, so an owner's own deletion is not
+  taken for the fence and its original is not restored. Tests are in
+  `fence_test.go`.
+- **C2, durable fence obligation** (ba9261aba): `fence_required` and
+  `fence_kind` survive a re-stage. `StageResult.Pending` lists required
+  fences not proven in the pass, and `Commit` returns `ErrFencePending`
+  until they are proven, including after a restart.
+- **C3, owner-only files** (81a62ad33): every `Open` narrows the database,
+  `-wal` and `-journal` to owner-only. On POSIX this is 0600, tested by
+  `TestReopenNarrowsWidenedFiles`. On Windows it is a protected DACL with one
+  full-access ACE for the token user, set with `SetNamedSecurityInfo`, and
+  the `-wal` is pre-created. `GOOS=windows go vet` passes.
+  `TestDatabaseFilesHaveOwnerOnlyACL` is still unrun; it is left to the lead
+  on a Windows host.
+- **I1, DSN** (81a62ad33): the driver gets an escaped `file:` URI.
+  `TestOpenUnderRootWithURIMetacharacters` uses a root containing `?#%`.
+- **I2, holder change** (3df153f83): a `holder_id` change without
+  `holder_seq` now adds `holder_seq: null` and drops the reply's cursors. This
+  matches legacy `runner_process.go:283`, which resets `HolderSeq` to 0.
+- **I3/I4, record and history validity** (3df153f83): `CommitOptions.Validate`
+  injects the legacy owners' validators, and `RequiredValidators` lists
+  `agent_record` and the three usage histories. A missing one returns
+  `ErrValidatorMissing`. Each validator runs after wsmeta's own decode, inside
+  the capture's savepoint. The new exports `wsagent.ValidateLegacyRecord` and
+  `wsdashboard.ValidateLegacyUsageHistory` share the legacy readers' decode,
+  and tests pin each one against its reader.
+- **I5, null delegation** (3df153f83): `delegated_authority: null` imports as
+  set and false, as in `wsagent/permission_store.go:148-153`.
+- **I6, persistent Windows denial** (b68961a96): read errors fall into three
+  classes.
+  - Windows sharing and lock violations stay transient.
+  - Windows `ACCESS_DENIED` is confirmable. It becomes `unreadable`, a
+    fail-closed selection for its own session, after
+    `UnreadConfirmPasses`=3 passes and `UnreadConfirmAfter`=5 s, counted in
+    `legacy_unread`.
+  - On POSIX, `ErrPermission` remains stable.
+
+  A denial that clears resets its count. Fenced rows never confirm.
+- **I7, FIFO through a link** (81a62ad33): a symlink is judged by its target.
+  POSIX reads open with `O_NONBLOCK` and require a regular file by `fstat`.
+  `TestLinkToFIFOIsUnreadableAndNeverBlocks` covers this.
+- **I8, benchmark fairness** (a6157bdfe): both sides now advance the sequence
+  on the same prebuilt record (`wsmeta/testdata/baseline-record.json`), and
+  only the advance is timed.
+- **I9, session generation** (51822bc25): the generation is now:
+  - darwin: `dev:ino` plus birthtime;
+  - linux: `dev:ino` plus statx btime;
+  - Windows: volume serial, file index and creation time;
+  - other unix: `dev:ino`.
+
+  A recreation still missed (for example a filesystem without birth time)
+  cannot reuse the deleted session's original, because the C1 proof needs
+  the store's own sentinel or witness.
+  `TestMissedRecreationNeverReusesTheDeletedSessionsOriginal` covers this.
+- **m1, labels** (3df153f83): labels follow legacy `cleanLabel`: trimmed, no
+  control characters or U+2028/2029, at most 64 runes. A blank label is no
+  label; anything else is invalid.
+- **m2, memo nulls** (3df153f83): a null memo item is kept, as in legacy
+  `memos.go:48-66`.
+- **m3, cursor range** (3df153f83): `SetHolderCursor` rejects a sequence
+  above `MaxInt64`, and an imported one gets no cursor.
+
+API changes against the Result above:
+
+- `ApplyFence` and `ApplyRemovalFence` replace `PrepareFence` and
+  `MarkFenceLanded`.
+- `Commit` needs `CommitOptions.Validate`.
+- `StageResult` gains `Pending`.
+- The read-error decision in the Result is refined by I6: `ACCESS_DENIED` is
+  no longer transient forever.
+
+Of the deferred items above, these are now resolved:
+
+- The history validity predicates (I4).
+- All four lite-review Minor items: null delegation, `cleanLabel`, inode
+  reuse and fence branch coverage.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok.
+- `go test -count=1 ./internal/wsagent/`: ok.
+- The wsdashboard validator tests: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok.
+- `go build ./...`: ok.
+- `gofmt -l internal/wsmeta`: clean.
+
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
 - Depends on Phase 1. Route affected direct Go readers through the daemon
