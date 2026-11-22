@@ -237,6 +237,9 @@ func (c *conv) handle(ev Event) {
 			c.stopCompactWatchdog()
 			settledCompact = true
 		}
+		if settledCompact {
+			c.publishCompaction(false)
+		}
 		if !quiet && c.compacting {
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed, Text: ev.CommandError})
@@ -722,6 +725,8 @@ func (c *conv) processExited() {
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
+	c.compactOrigin = ""
+	c.publishCompaction(false)
 	c.compactResumeInternal = false
 	c.compactUsageFresh = false
 	c.stopCompactWatchdog()
@@ -934,6 +939,8 @@ func (c *conv) stopProcess(reason string) {
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
+	c.compactOrigin = ""
+	c.publishCompaction(false)
 	c.compactResumeInternal = false
 	c.compactUsageFresh = false
 	c.stopCompactWatchdog()

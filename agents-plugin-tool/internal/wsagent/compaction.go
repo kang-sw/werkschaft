@@ -815,6 +815,26 @@ func (c *conv) publishCompaction(completed bool) {
 	}
 }
 
+// seedCompactions raises the count a restarted runner begins from zero at to
+// the one an earlier run's row still holds (a lower one is stale), taking the
+// row's latest origin only while this run has completed none itself.
+func (c *conv) seedCompactions(n int, origin string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n > c.cmpCount {
+		c.cmpCount = n
+		if c.cmpLast == "" {
+			c.cmpLast = origin
+		}
+	}
+}
+
+func (c *conv) compactionCount() (int, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cmpCount, c.cmpLast
+}
+
 func (c *conv) compactInput(text string) string {
 	if !c.compactNudge.standalone && c.compactNudge.text != "" {
 		text = c.compactNudge.text + "\n\n" + text
