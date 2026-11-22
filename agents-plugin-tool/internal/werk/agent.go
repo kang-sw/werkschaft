@@ -84,7 +84,8 @@ const (
 	ToolArgsLineBytes = 256 << 10
 	// DefaultMaxRetries is how many times a failed request is sent again.
 	DefaultMaxRetries = 5
-	// MaxRetryAfter caps a server-requested wait.
+	// MaxRetryAfter caps a server-requested wait: a longer one ends the turn
+	// with an error that names it.
 	MaxRetryAfter = 5 * time.Minute
 	// replyThrottle spaces the streamed reply lines of one message.
 	replyThrottle = 300 * time.Millisecond
@@ -597,10 +598,16 @@ func (a *Agent) request(ctx context.Context, turn int) (*Response, error) {
 		if !ok || attempt >= limit {
 			return nil, err
 		}
+		if delay > MaxRetryAfter {
+			// The provider asked for a longer wait than a session holds a turn
+			// open for. Retrying early would only be refused again, so the turn
+			// ends and says how long to wait.
+			return nil, fmt.Errorf("the model endpoint asked to wait %s before the next request, longer than the %s this session waits; send the message again after that wait (%v)",
+				delay.Round(time.Second), MaxRetryAfter, err)
+		}
 		if delay <= 0 {
 			delay = a.backoff(attempt + 1)
 		}
-		delay = min(delay, MaxRetryAfter)
 		line := Line{T: LineRetry, Turn: turn, Attempt: attempt + 1, MaxRetries: limit, DelayMS: delay.Milliseconds(), Error: err.Error()}
 		var h *HTTPError
 		if errors.As(err, &h) {

@@ -839,3 +839,33 @@ func TestInterruptedTurnFlushesTheLog(t *testing.T) {
 		t.Errorf("recovered %d items, want the user message", len(recovered))
 	}
 }
+
+// A Retry-After above the cap is not retried early: the turn ends with an
+// error that names the provider's wait, and no request is sent again.
+func TestRetryAfterAboveTheCapEndsTheTurn(t *testing.T) {
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		failWith(&HTTPError{Status: 429, Message: "daily quota", RetryAfter: 2 * time.Hour}),
+		reply(msgItem("must not be asked")),
+	}}
+	var slept []time.Duration
+	r := newRig(t, Config{Endpoint: model, Sleep: func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil }})
+	r.user("hi")
+	end := r.waitTurnEnd(1)
+	if end.Reason != ReasonError || !strings.Contains(end.Error, "2h0m0s") || !strings.Contains(end.Error, "daily quota") || !strings.Contains(end.Error, "again after") {
+		t.Fatalf("end = %+v", end)
+	}
+	if len(slept) != 0 || len(model.requests()) != 1 {
+		t.Errorf("slept %v, requests %d: nothing may be retried early", slept, len(model.requests()))
+	}
+	// At the cap itself the wait is honored.
+	model = &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		failWith(&HTTPError{Status: 429, Message: "slow", RetryAfter: MaxRetryAfter}),
+		reply(msgItem("ok")),
+	}}
+	slept = nil
+	r2 := newRig(t, Config{Endpoint: model, Sleep: func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil }})
+	r2.user("hi")
+	if end := r2.waitTurnEnd(1); end.Reason != ReasonDone || len(slept) != 1 || slept[0] != MaxRetryAfter {
+		t.Fatalf("at the cap: end %+v slept %v", end, slept)
+	}
+}
