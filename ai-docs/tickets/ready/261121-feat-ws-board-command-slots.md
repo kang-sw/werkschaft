@@ -4,6 +4,10 @@ related:
   261117-feat-ws-exec-tools: prerequisite, landed (daemon-owned hosted exec service this reuses)
   261117-feat-ws-exec-mux-terminal: neighbouring exec surface (terminal sessions); independent
   261118-feat-ws-exec-intent-filter: neighbouring exec safety layer
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: b71e948adb14f634
+sage-review-completeness-reviewed: b71e948adb14f634
 ---
 
 # Chat composer `!` commands and command slots
@@ -65,7 +69,10 @@ Technical decisions below were settled by the lead and auto-confirmed on
   so both frontends share `OverlayEnv`, `ResolveWorkingDir`, `ShellArgv` and
   `execjob.Hosted.Launch`. `cmd/ws-mcp` binds a narrow typed dashboard
   dependency to the same service `openHostedExec` builds. The wait policy is
-  per launch: 10 s for composer launches; the MCP default stays 30 s. The
+  per launch: 10 s for composer launches; the MCP default stays 30 s. Today
+  the window is a `Hosted`-wide option (`h.opts.Window` in
+  `internal/execjob/hosted_launch.go`), so the launch request gains a window
+  override. The
   request carries the expected open generation so admission can refuse a stale
   one, and the owner, generation and bound worktree come from server-side
   runner state, never from the browser. Rejected: a synthetic MCP call or fake
@@ -95,7 +102,7 @@ Technical decisions below were settled by the lead and auto-confirmed on
   overflow the oldest receipts collapse to `job <id>: see exec.list`. There
   is no persistence: after a daemon restart the lead can still query the job
   through `exec.list` / tail, and the card shows the job state. `turnInput`
-  (`internal/wsagent/runner_conv.go`) consumes it on the next eligible send,
+  (`internal/wsagent/ambient.go#L67`, called from `runner_conv.go#L1807,L1813`) consumes it on the next eligible send,
   the same seam as `<ws-ambient>`; it is acknowledged only on an accepted send,
   so a failed send leaves it pending and a new arrival is never lost. It never
   touches `wsinbox`, `canKick`, steering or the send/held counters. Output is
@@ -232,7 +239,7 @@ Technical decisions below were settled by the lead and auto-confirmed on
     binary to read or overwrite: T0 trivially
     (`internal/wsagent/exec_seams.go:370–413`,
     `internal/wsagent/runner_conv.go:1730–1748`,
-    `internal/wslive/state.go:71–74,474–488`).
+    `internal/wslive/state.go:71–74,514`).
 
 ## Constraints
 
@@ -245,6 +252,10 @@ Conventions`); read each before editing a covered file:
   (T0 target above; run its scenario sheet for the new → old → new cycle).
 - `agents-plugin-tool/internal/mcp/` → `ai-docs/manuals/ws-mcp.md` (the new
   `session.register_user_command` / `session.unregister_user_command` tools).
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for agents-plugin-tool/internal/mcp/)
 - `ai-docs/manuals/config-settings-ui.md` does not apply: retention limits are
   fixed constants in this ticket, not settings. It applies only if a later
   change exposes them as settings.
@@ -297,6 +308,32 @@ Behavioral boundaries:
 - The dashboard outbox draft/unknown-result behavior in
   `dashboard-composer-delivery.js`: adapt the acknowledgement to the
   submission receipt; do not insert a held inbox bubble.
+
+## Prior Decisions
+
+- 0100ef97 (2026-11-22, commit): "AdmitCompletion writes one Steer=true inbox entry carrying EventID ... Record.AcceptedEvents (cap 64) dedupe" — bearing: constrains
+- 0100ef97 (2026-11-22, commit): "Trusted binding (Decision 13): ProxyHello.Conversation is json:\"-\" and only Runner.ResolveMCPToken sets it; a supplied session_key stays a cwd grant only" — bearing: constrains
+- 0100ef97 (2026-11-22, commit): "Daemon-owned approval (Decision 4): ApproveExec re-reads the live posture from memory; Non-leads run at once" — bearing: constrains
+- 1793cab6 (2026-11-22, commit): "Compatibility verdict, T0 ... An older daemon names only its own columns: its SELECT, INSERT and ON CONFLICT DO UPDATE" — bearing: supports
+- 261117-feat-ws-exec-tools (2026-11-21, commit d4becf20): "Owner sees its permission model as close to exposing ws/exec, so it stays idea until after 261117-feat-ws-exec-tools." — bearing: supports
+- 0e35c11a (2026-11-22, commit): "failStart stops the holder synchronously with the job marked stopping and notice off" — bearing: constrains
+- 261112-feat-ws-dashboard-slash-commands (2026-11-12, Result 49e0da567): "Only lead sessions report a command list." — bearing: supports
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | internal/mcp/server_exec_hosted.go, internal/mcp/session_hire.go, internal/wsdashboard/page_routes.go, internal/wsagent/ambient.go, internal/wsagent/runner_conv.go, internal/execjob, cmd/ws-mcp/exec_hosted.go, dashboard assets, internal/wsi18n/tables/ |
+| scope.surface | cross-module | new HTTP routes, MCP session tools, runner pending input, execjob launch binding, dashboard assets |
+| scope.new_public_symbol | yes | session.register_user_command, session.unregister_user_command, composer-exec routes, typed dashboard launch dependency |
+| scope.new_type_contract | yes | typed dashboard launch binding, pending-input source, slot store row and submission claim map |
+| scope.test_surface | new-files | existing tests in internal/execjob/hosted_test.go, cmd/ws-mcp/exec_hosted_test.go; new route, store, pending-input and Playwright coverage needed |
+| complexity.reuse_points | confirmed | execjob.Hosted.Launch, ShellArgv, OverlayEnv, ResolveWorkingDir (execjob/hosted_launch.go#L478, execjob.go#L647-L651), turnInput seam (wsagent/ambient.go#L67), Hosted.Get/Tail (hosted_ops.go#L178-L187), TrustedWrite (wsdashboard/access.go#L211) |
+| complexity.side_effect_risk | high | touches launch fence, completion notice ordering, turn input seam and a new on-disk store without starting or steering turns |
+| risk.correctness | high | exit-versus-conversion race, ID visibility before first admission, idempotency claim map and generation staleness |
+| risk.fit | moderate | extracts shared prep from callHostedExec and adds a dashboard binding in cmd/ws-mcp; the HostedSessions adapter fits but is not a drop-in |
+| risk.test | high | needs Playwright ko/en captures, Windows Git Bash and four harness prompt shapes; Windows tests run only on the remote host |
+| risk.security_or_contract | high | browser-triggered command execution behind TrustedWrite, one-use approval, a localhost-only output route, and T0 compatibility to preserve |
 
 ## Phases
 
