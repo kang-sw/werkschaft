@@ -758,6 +758,24 @@ type HostedLaunch struct {
 	Async    bool
 	// Legacy launches keep the legacy key and reply shape.
 	Legacy bool
+	// Window overrides the execution window of this launch (zero keeps the
+	// daemon's).
+	Window time.Duration
+	// CheckGen makes ExpectGen binding (zero is a real generation): a
+	// conversation that has reopened since the caller decided refuses the
+	// launch.
+	ExpectGen uint64
+	CheckGen  bool
+	// UserApproved marks a launch the user explicitly asked for through a
+	// trusted dashboard route (the composer's `!`): it is its own one-use
+	// approval, and the agent's approval policy is neither asked nor changed.
+	// Only in-process callers set it; no tool argument reaches it.
+	UserApproved bool
+	// OnConvert runs once when a still-running job converts to async, before
+	// the job owes its completion notice, so a caller can make the exec id
+	// visible ahead of the first notice admission. A job that ends first
+	// converts nothing and never calls it.
+	OnConvert func(HostedView)
 }
 
 // HostedOutcome is how a launch call ended.

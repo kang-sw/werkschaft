@@ -35,6 +35,9 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if err != nil {
 		return HostedView{}, fmt.Errorf("exec: the owning session cannot take a job: %w", err)
 	}
+	if req.CheckGen && owner.Gen != req.ExpectGen {
+		return HostedView{}, errors.New("exec: the owning session reopened since this request was made")
+	}
 	// The job's resolved places, so a worktree fence matches it however
 	// its working directory was spelled and the process starts where
 	// admission checked; once per launch, stored with the row. A place that
@@ -59,7 +62,10 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if lookErr == nil {
 		argv[0] = bin
 		call = approvalCall(req, bin)
-		if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
+		if req.UserApproved {
+			// The user's own request is this invocation's approval.
+			explicit = true
+		} else if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
 			return HostedView{}, err
 		}
 	}
@@ -177,15 +183,19 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if req.Async {
 		return h.view(j, OutcomeAsync), nil
 	}
-	window := time.NewTimer(h.opts.Window)
+	wait := h.opts.Window
+	if req.Window > 0 {
+		wait = req.Window
+	}
+	window := time.NewTimer(wait)
 	defer window.Stop()
 	select {
 	case <-j.done:
 		return h.view(j, OutcomeDone), nil
 	case <-window.C:
-		return h.convert(j), nil
+		return h.convert(j, req.OnConvert), nil
 	case <-drain:
-		return h.convert(j), nil
+		return h.convert(j, req.OnConvert), nil
 	case <-ctx.Done():
 		h.stop(j)
 		return h.view(j, OutcomeDone), ctx.Err()
@@ -194,7 +204,20 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 
 // convert makes j async when it still runs; an end that won the race is an
 // OutcomeDone.
-func (h *Hosted) convert(j *hostedJob) HostedView {
+func (h *Hosted) convert(j *hostedJob, onConvert func(HostedView)) HostedView {
+	h.mu.Lock()
+	if j.row.Terminal() {
+		h.mu.Unlock()
+		return h.view(j, OutcomeDone)
+	}
+	h.mu.Unlock()
+	if onConvert != nil {
+		// Before the job owes a notice: an end that follows can only order
+		// its notice after this call, so the id is visible first. An end
+		// that wins the race below leaves the id's early mention to the
+		// caller's final answer, which supersedes it.
+		onConvert(h.view(j, OutcomeConverted))
+	}
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
@@ -471,6 +494,28 @@ func environMap(environ []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// ShellLaunch prepares the hosted launch of one bash line: cwd resolved
+// inside root (cwdArg empty is root itself), environ overlaid with overlay,
+// and the shell chosen by ShellArgv. exec.shell and the dashboard composer
+// both build their launch here, so the shell, the working directory and the
+// environment are one decision. The caller sets what is its own (Async,
+// Stdin, Window, approval).
+func ShellLaunch(owner, tool, root, cwdArg, line string, environ []string, overlay map[string]string) (HostedLaunch, error) {
+	cwd, err := ResolveWorkingDir(root, cwdArg)
+	if err != nil {
+		return HostedLaunch{}, err
+	}
+	if strings.TrimSpace(line) == "" {
+		return HostedLaunch{}, errors.New(tool + ": cmd is required")
+	}
+	environ = OverlayEnv(environ, overlay)
+	argv, err := ShellArgv(line, environ)
+	if err != nil {
+		return HostedLaunch{}, err
+	}
+	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, Environ: environ, Env: overlay, Argv: argv, Display: line, Command: line, Shell: argv[0]}, nil
 }
 
 // ShellArgv is the new exec.shell form's argv for line: Bash on the job's
