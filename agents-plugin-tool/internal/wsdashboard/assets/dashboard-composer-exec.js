@@ -105,7 +105,15 @@
     close.title = wsT("js.cexec.dismiss");
     close.setAttribute("aria-label", wsT("js.cexec.dismiss"));
     close.addEventListener("click", function () { cexecDismiss(c); });
-    echo.appendChild(mk); echo.appendChild(code); echo.appendChild(state); echo.appendChild(close);
+    echo.appendChild(mk);
+    if (card.label) {
+      // A user command's click: its label leads the exact command it ran.
+      var lbl = doc.createElement("span");
+      lbl.className = "cexec-label";
+      lbl.textContent = card.label;
+      echo.appendChild(lbl);
+    }
+    echo.appendChild(code); echo.appendChild(state); echo.appendChild(close);
     el.appendChild(echo);
     function note(text) {
       var n = doc.createElement("div");

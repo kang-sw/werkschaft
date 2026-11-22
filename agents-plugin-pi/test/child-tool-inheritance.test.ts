@@ -10,7 +10,7 @@ import { childPolicy, DELEGATION_ENV, type DelegationPolicy } from "../src/deleg
 import { resolveTools, spawnAdmission } from "../src/spawner.ts";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const ownerTools = ["ws__session_request_hire", "ws__session_roster"];
+const ownerTools = ["ws__session_request_hire", "ws__session_roster", "ws__session_register_user_command", "ws__session_unregister_user_command"];
 const rawWorkerTools = ["ferrule", "playbook.read", "playbook.render", "git.status", "session.children"];
 const wsTools = [...rawWorkerTools.map(sanitizeToolName), ...ownerTools];
 const root: DelegationPolicy = { version: 1, depth: 0, maxDepth: 2, authority: "lead", tools: wsTools };
@@ -58,7 +58,7 @@ test("nested delegate-implementer render admits a child without inheriting hire 
   const callsPath = join(directory, "calls.jsonl");
   const launcherPath = join(directory, "launcher.py");
   writeFileSync(launcherPath, `import json,sys
-names=${JSON.stringify([...rawWorkerTools, "session.request_hire", "session.roster"])}
+names=${JSON.stringify([...rawWorkerTools, "session.request_hire", "session.roster", "session.register_user_command", "session.unregister_user_command"])}
 for line in sys.stdin:
  q=json.loads(line); m=q['method']
  if m=='initialize': r={'serverInfo':{'version':${JSON.stringify(version)}},'capabilities':{}}

@@ -98,6 +98,17 @@ type ServerOptions struct {
 	// (or a nil result) on the direct path and on a daemon whose schedule
 	// store could not open, where the cron tool refuses.
 	Cron func() *wscron.Scheduler
+	// UserCommands returns the daemon's user commands, read at each call like
+	// Exec; nil (or a nil result) on the direct path and on a daemon whose
+	// store could not open, where the user command tools are neither listed
+	// nor served.
+	UserCommands func() UserCommandHost
+	// UserCommandsDiscovery is UserCommands for the tool list and the schema and
+	// manual discovery only: it may wait (bounded) for a daemon that is still
+	// starting to settle its user commands, which a registration or withdrawal
+	// never does (those read UserCommands and refuse while it is nil). nil uses
+	// UserCommands.
+	UserCommandsDiscovery func() UserCommandHost
 	// Conversation is the hosted conversation a per-session token bound
 	// this connection to (wsdashboard.ProxyHello.Conversation); empty for a
 	// launcher connection. Only it attributes hosted exec jobs: a supplied
@@ -209,6 +220,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	s.pi.agents = opts.Agents
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
+	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
 	}
