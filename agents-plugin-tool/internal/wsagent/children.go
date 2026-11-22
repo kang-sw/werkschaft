@@ -249,6 +249,8 @@ func tierRank(tier string) int {
 // PiTierRefusal names the config.tune key a spawn's unset tier needs and
 // the tiers that are set.
 func PiTierRefusal(tool, tier string, tiers map[string]wsconfig.AgentTier) error {
+	// Retained name check: PiTierHarness is the stored agents.tier bucket the
+	// refusal tells the user to tune (TestPiSpawnResolvesThePiTierAndCwd).
 	set := make([]string, 0, len(tiers))
 	for _, t := range []string{"small", "medium", "large", "xlarge"} {
 		if _, ok := tiers[t]; ok {
@@ -308,6 +310,8 @@ func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
 	}
 	cfg := r.opts.Config
 	cfg.RepoRoot = rec.Root
+	// Retained name check: the Pi tier mapping lives in the stored PiTierHarness
+	// bucket (TestPiSpawnResolvesThePiTierAndCwd).
 	tiers, err := wsconfig.HarnessTiers(cfg, PiTierHarness)
 	if err != nil {
 		return State{}, fmt.Errorf("%s: read agents.tier: %w", tool, err)

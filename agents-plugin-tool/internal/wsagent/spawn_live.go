@@ -176,6 +176,8 @@ func (c *conv) seedSpawnRows() {
 	if c.r.opts.spawnListed != nil {
 		c.r.opts.spawnListed(c.rec.ReplyID)
 	}
+	// Retained name check: a Pi child row's live agent id carries the pi: prefix in
+	// snapshots older daemons wrote (TestAgentSpawnHostedWorkerRows).
 	for _, st := range SpawnTree(ParentRef{Kind: kind, ReplyID: c.rec.ReplyID}, c.r.Children) {
 		if st.Status == StatusClosed && !known["pi:"+st.ID] {
 			continue

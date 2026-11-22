@@ -803,6 +803,10 @@ func (w *liveWriter) write(res wslive.Result, err error, kind string, coalesceTu
 
 // endAgents marks every running subagent failed: the process that ran them
 // is gone, so no end will come for them.
+//
+// Retained name check: a row of agent kind pi belongs to the daemon's agent
+// runner, which outlives the process and ends it itself; the kind is the
+// persisted marker of that row in the snapshot (TestLiveWriterEndAgentsLeavesPiChildRows).
 func (w *liveWriter) endAgents() {
 	for _, a := range w.st.Snapshot(w.now().UnixMilli()).Agents {
 		if a.Status == wslive.StatusRunning && a.AgentKind != wslive.AgentKindPi {

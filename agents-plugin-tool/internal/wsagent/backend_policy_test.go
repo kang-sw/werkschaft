@@ -433,3 +433,25 @@ func TestTierHarnessesLeadWithClaude(t *testing.T) {
 		t.Fatalf("an extension registration displaced the default: %v", got)
 	}
 }
+
+// TestRunnerPolicyAccessorsMatchTheRegistryCopy pins the per-name accessors to
+// the full registry copy they stand in for on hot paths.
+func TestRunnerPolicyAccessorsMatchTheRegistryCopy(t *testing.T) {
+	r := &Runner{opts: Options{Backends: BuiltinBackendRegistrations()}}
+	for name, reg := range r.BackendRegistrations() {
+		life, ok := r.BackendLifecycle(name)
+		if !ok || life != reg.Lifecycle {
+			t.Errorf("%s: BackendLifecycle = %+v, %v; want %+v", name, life, ok, reg.Lifecycle)
+		}
+		conn, ok := r.BackendConnection(name)
+		if !ok || conn.BridgeClientName != reg.Connection.BridgeClientName || conn.NamedClient != reg.Connection.NamedClient {
+			t.Errorf("%s: BackendConnection = %+v, %v; want %+v", name, conn, ok, reg.Connection)
+		}
+	}
+	if _, ok := r.BackendLifecycle("unregistered"); ok {
+		t.Error("an unregistered name reported a lifecycle")
+	}
+	if _, ok := r.BackendConnection("unregistered"); ok {
+		t.Error("an unregistered name reported a connection")
+	}
+}

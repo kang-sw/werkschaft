@@ -182,6 +182,8 @@ func (s *planUsageStore) nowTime() time.Time {
 	return time.Now()
 }
 func (s *planUsageStore) saveLocked() {
+	// Retained name check: the plan-usage file's claude member is persisted bytes
+	// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 	raw, err := json.Marshal(struct {
 		Claude planUsageEntry `json:"claude"`
 		GPT    planUsageEntry `json:"gpt"`

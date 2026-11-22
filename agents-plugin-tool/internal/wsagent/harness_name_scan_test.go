@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -23,12 +24,17 @@ import (
 // internal/wsagent, internal/mcp, internal/wsdashboard, and cmd/ws-mcp. It
 // parses each file and fails on
 //
-//   - any BackendClaude, BackendCodex, BackendAgy, or BackendPi identifier;
+//   - any use of a constant whose value is a harness name: BackendClaude,
+//     BackendCodex, BackendAgy, BackendPi, PiTierHarness, wslive.AgentKindPi,
+//     and any constant declared that way later (harnessAliases finds them from
+//     their declarations);
 //   - any short string literal (no whitespace, or at most
 //     shortNameLiteral bytes) that names a harness (claude, codex, agy, pi,
 //     antigravity) as a word or inside a token such as a config key, tool
-//     name, environment variable, path, or provider label; and
-//   - any alternation of harness names inside a literal (a pattern).
+//     name, environment variable, path, or provider label;
+//   - any alternation of harness names inside a literal (a pattern); and
+//   - any literal naming a harness, however long, that is a decision operand: a
+//     switch case, an ==/!= operand, a strings comparison argument, or a map key.
 //
 // outside the adapter-owned files and outside harnessNameAllowlist, which this
 // test carries. Long prose (descriptions, diagnostics, error text) is not a
@@ -36,7 +42,8 @@ import (
 // file, the literal or identifier, how many times it occurs, its class, the
 // persisted or external boundary that registration data cannot interpret, and
 // the fixture that pins it. A new site, a changed count, a stale entry, a
-// missing fixture, or a missing site comment fails the test. Work that adds a
+// missing fixture, or a persisted or external site whose own top-level
+// declaration carries no site comment fails the test. Work that adds a
 // harness difference must route it through the registration seam
 // (backend_policy.go) or extend the allowlist in its own diff under the
 // (1881) rule: only old persisted bytes or external identifiers qualify.
@@ -59,8 +66,8 @@ const (
 	classExternal = "external"
 )
 
-// siteComment is the marker every file holding a persisted or external
-// allowlist entry carries in a comment at its sites.
+// siteComment is the marker the top-level declaration of every persisted or
+// external allowlist site carries in a comment (its doc comment or one inside).
 const siteComment = "Retained name check"
 
 // siteCommentRe also accepts the older wording of the marker (Phases 2-3),
@@ -134,7 +141,10 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsagent/catalog.go", "pi.compaction_hard_percent", 1, classPersisted, "legacy config key a user's config may still hold", compactKeys),
 		site("internal/wsagent/children.go", "WS_MCP_PI_TOKEN", 1, classExternal, "environment variable the bundled Pi extension reads", piChild),
 		site("internal/wsagent/children.go", "WS_MCP_PI_ENDPOINT", 1, classExternal, "environment variable the bundled Pi extension reads", piChild),
-		site("internal/wsagent/children.go", "pi", 1, classPersisted, "PiTierHarness: the harness bucket stored in tier routing and the legacy pi.spawn tier rule", piChild),
+		site("internal/wsagent/children.go", "pi", 1, classPersisted, "PiTierHarness: the harness bucket stored in tier routing and the legacy pi.spawn tier rule", "TestPiSpawnResolvesThePiTierAndCwd"),
+		site("internal/wsagent/children.go", "PiTierHarness", 3, classPersisted, "the constant's declaration and its two reads: the stored agents.tier bucket of a Pi spawn", "TestPiSpawnResolvesThePiTierAndCwd"),
+		site("internal/wsagent/record.go", "AgentKindPi", 1, classPersisted, "a Pi child row's agent kind, the persisted marker of a row the daemon's runner owns", "TestLiveWriterEndAgentsLeavesPiChildRows"),
+		site("internal/wsagent/spawn_live.go", "AgentKindPi", 1, classPersisted, "the agent kind stamped on a Pi child row in snapshots", "TestAgentSpawnHostedWorkerRows"),
 		site("internal/wsagent/children.go", "pi.", 3, classExternal, "the pi.* tool-name prefix of the Pi extension's calls", piChild),
 		site("internal/wsagent/children.go", "pi.spawn", 1, classExternal, "the Pi extension's spawn tool name", piChild),
 		site("internal/wsagent/holder.go", "pi-worker", 1, classPersisted, "holder kind an older daemon wrote into a still-running holder's descriptor", "TestWorkerHolderOwnership"),
@@ -152,21 +162,21 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/mcp/compaction.go", "claude.compaction_advisory_percent", 1, classPersisted, "config keys a user's config may hold", compactKeys),
 		site("internal/mcp/compaction.go", "pi.compaction_advisory_percent", 1, classPersisted, "config keys a user's config may hold", compactKeys),
 		site("internal/mcp/compaction.go", "pi.compaction_hard_percent", 1, classPersisted, "config keys a user's config may hold", compactKeys),
-		site("internal/mcp/dashboard_settings_config.go", "claude.status_band_enabled", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.runaway_threshold", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.settle_delay_ms", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_advisory_percent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_hard_percent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.context_window_override", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_dialog_budget_bytes", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_reread_budget_bytes", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "agy.model_wait_timeout_seconds", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "agy.model_wait_retries", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "agy.stall_log_check", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "agy.http2_frame_trace", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "dashboard.pi_spawn_enabled", 1, classPersisted, "persisted config key the settings page routes by group", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "claude.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardSettingsReadTunedValues"),
-		site("internal/mcp/dashboard_settings_config.go", "pi.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardSettingsReadTunedValues"),
+		site("internal/mcp/dashboard_settings_config.go", "claude.status_band_enabled", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "pi.runaway_threshold", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "pi.settle_delay_ms", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_advisory_percent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_hard_percent", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "pi.context_window_override", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_dialog_budget_bytes", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "pi.compaction_reread_budget_bytes", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "agy.model_wait_timeout_seconds", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "agy.model_wait_retries", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "agy.stall_log_check", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "agy.http2_frame_trace", 1, classPersisted, "persisted config keys the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "dashboard.pi_spawn_enabled", 1, classPersisted, "persisted config key the settings page routes by group", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "claude.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
+		site("internal/mcp/dashboard_settings_config.go", "pi.", 1, classPersisted, "the harness-bucketed config key prefix the settings page groups by", "TestDashboardAdapterReadLimitsKeepHarnessKeyScopes"),
 		site("internal/mcp/server_dispatch.go", "pi.spawn", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
 		site("internal/mcp/server_dispatch.go", "pi.send", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
 		site("internal/mcp/server_dispatch.go", "pi.list", 1, classExternal, "the Pi extension's MCP tool names, forwarded to the daemon", "TestPiForwardShowsSleepAndDeleted"),
@@ -188,6 +198,9 @@ var harnessNameAllowlist = func() []nameSite {
 		site("internal/wsdashboard/conversation_presentation.go", `^\[(?:ws|wsflow) note: from a peer lead session \((?:(?:claude|codex|pi), )?not a worker\), with the same authority as yours\]$`, 1, classPersisted,
 			"stored peer-lead mail text written by earlier versions, which labeled only claude, codex, and pi", "TestConversationPresentationPeerNoteIsDisplayOnly"),
 		site("internal/wsdashboard/page_reader.go", "pi", 1, classPersisted, "the Pi session file location inside a session directory, watched for child revival", "TestPruneRegistrationsAgesRetiredLeadsByTheirRow"),
+		site("internal/wsdashboard/pageview.go", "AgentKindPi", 1, classPersisted, "a finished Pi child row is told apart by its persisted agent kind", "TestPiSpawnDisplayStatus"),
+		site("internal/wsdashboard/pageview_session.go", "AgentKindPi", 1, classPersisted, "a finished Pi child row is told apart by its persisted agent kind", "TestPiSpawnDisplayRefreshesAfterSessionRemoval"),
+		site("internal/wsdashboard/pageview_hud.go", "AgentKindPi", 1, classPersisted, "the historical Pi agent-kind marker of a live agent with no harness name", "TestHUDHarnessLegacyPiAgentKind"),
 		site("internal/wsdashboard/pageview_hud.go", "pi", 1, classPersisted, "the historical Pi agent-kind marker of a live agent with no harness name", "TestHUDHarnessLegacyPiAgentKind"),
 		site("internal/wsdashboard/registry.go", "pi", 2, classPersisted, "the Pi record backend and session file location protected from retirement deletion", "TestPruneRegistrationsAgesRetiredLeadsByTheirRow"),
 		site("internal/wsdashboard/plan_usage.go", `json:"claude"`, 2, classPersisted, "the plan-usage file's claude member", history),
@@ -240,6 +253,11 @@ var scanRoots = []struct{ dir, rel string }{
 	{"../../cmd/ws-mcp", "cmd/ws-mcp"},
 }
 
+// aliasRoots are the directories searched for named string constants whose value
+// is a harness name (wslive.AgentKindPi, PiTierHarness): a constant is the same
+// name branch as the literal it holds, so a use of one is gated like the literal.
+var aliasRoots = []string{"..", "../../cmd"}
+
 var (
 	adapterOwned = []*regexp.Regexp{
 		// Backend implementation files own genuine harness behavior.
@@ -251,10 +269,20 @@ var (
 		regexp.MustCompile(`^internal/wsdashboard/plan_usage_agy\.go$`),
 	}
 	harnessWord  = regexp.MustCompile(`(?i)claude|codex|agy|antigravity|(^|[^a-z0-9])pi([^a-z0-9]|$)`)
+	harnessExact = regexp.MustCompile(`(?i)^(claude|codex|agy|antigravity|pi)$`)
 	harnessAlt   = regexp.MustCompile(`(?i)\|(claude|codex|agy|pi)\b|\b(claude|codex|agy|pi)\|`)
 	backendIdent = regexp.MustCompile(`^Backend(Claude|Codex|Agy|Pi)$`)
+
+	// decisionCalls are the strings functions whose literal argument is a
+	// comparison operand: a long product name there is a branch, not prose.
+	decisionCalls = map[string]bool{
+		"EqualFold": true, "Contains": true, "HasPrefix": true, "HasSuffix": true,
+		"Index": true, "Cut": true, "TrimPrefix": true, "TrimSuffix": true,
+	}
 )
 
+// gatedLiteral reports whether a string literal names a harness as a name: a
+// short or token-shaped literal, or an alternation of names.
 func gatedLiteral(v string) bool {
 	if harnessAlt.MatchString(v) {
 		return true
@@ -265,14 +293,235 @@ func gatedLiteral(v string) bool {
 	return !strings.ContainsAny(v, " \t\n") || len(v) <= shortNameLiteral
 }
 
+// gatedOperand is gatedLiteral for a literal that is a decision operand (a
+// switch case, an ==/!= operand, a strings comparison argument, or a map key):
+// any literal naming a harness there is gated, however long, because a product
+// name compared against a client string is a name branch. Diagnostic and format
+// strings are not operands and stay allowed.
+func gatedOperand(v string, operand bool) bool {
+	return gatedLiteral(v) || (operand && harnessWord.MatchString(v))
+}
+
+// harnessAliases is the set of constant names whose value is a harness name,
+// discovered once across the repository's non-test Go code: every constant
+// declared as a harness name literal, and every constant declared as one of
+// those. Backend{Claude,Codex,Agy,Pi}, PiTierHarness, and wslive.AgentKindPi
+// are found this way, as is any constant added later.
+var (
+	aliasOnce  sync.Once
+	aliasNames map[string]bool
+)
+
+func harnessAliases(t testing.TB) map[string]bool {
+	t.Helper()
+	aliasOnce.Do(func() {
+		aliasNames = map[string]bool{}
+		type pending struct {
+			name, from string
+		}
+		var chained []pending
+		fset := token.NewFileSet()
+		for _, root := range aliasRoots {
+			err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if d.IsDir() {
+					switch d.Name() {
+					case "node_modules", "testdata", ".git", "vendor":
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+				f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+				if err != nil {
+					return err
+				}
+				for _, decl := range f.Decls {
+					gen, ok := decl.(*ast.GenDecl)
+					if !ok || gen.Tok != token.CONST {
+						continue
+					}
+					for _, spec := range gen.Specs {
+						vs := spec.(*ast.ValueSpec)
+						for i, name := range vs.Names {
+							if i >= len(vs.Values) {
+								break
+							}
+							switch v := vs.Values[i].(type) {
+							case *ast.BasicLit:
+								if val, err := strconv.Unquote(v.Value); err == nil && v.Kind == token.STRING && harnessExact.MatchString(val) {
+									aliasNames[name.Name] = true
+								}
+							case *ast.Ident:
+								chained = append(chained, pending{name.Name, v.Name})
+							case *ast.SelectorExpr:
+								chained = append(chained, pending{name.Name, v.Sel.Name})
+							}
+						}
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		for changed := true; changed; {
+			changed = false
+			for _, c := range chained {
+				if aliasNames[c.from] && !aliasNames[c.name] {
+					aliasNames[c.name] = true
+					changed = true
+				}
+			}
+		}
+	})
+	return aliasNames
+}
+
 type foundSite struct{ file, token string }
 
-// scanHarnessNames returns the count of every gated name occurrence by file
-// and token, and the source of each scanned file.
-func scanHarnessNames(t *testing.T) (map[foundSite]int, map[string]string) {
+// scanResult is what one source file holds: each gated name occurrence by token,
+// and how many of them sit in a top-level declaration that carries no site
+// comment.
+type scanResult struct {
+	found    map[foundSite]int
+	unmarked map[foundSite]int
+}
+
+// scanSource parses one file and returns its gated name occurrences. An
+// occurrence is marked when the top-level declaration holding it (its doc
+// comment included) carries a site comment, so a marker names the concrete site
+// it justifies rather than the file.
+func scanSource(rel string, src []byte, aliases map[string]bool) (scanResult, error) {
+	res := scanResult{found: map[foundSite]int{}, unmarked: map[foundSite]int{}}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, rel, src, parser.ParseComments)
+	if err != nil {
+		return res, err
+	}
+
+	// Decision operands.
+	operand := map[*ast.BasicLit]bool{}
+	mark := func(e ast.Expr) {
+		if lit, ok := e.(*ast.BasicLit); ok {
+			operand[lit] = true
+		}
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			if x.Op == token.EQL || x.Op == token.NEQ {
+				mark(x.X)
+				mark(x.Y)
+			}
+		case *ast.CaseClause:
+			for _, e := range x.List {
+				mark(e)
+			}
+		case *ast.KeyValueExpr:
+			mark(x.Key)
+		case *ast.IndexExpr:
+			mark(x.Index)
+		case *ast.CallExpr:
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok && decisionCalls[sel.Sel.Name] {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "strings" {
+					for _, a := range x.Args {
+						mark(a)
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	var markers []*ast.CommentGroup
+	for _, g := range f.Comments {
+		var raw strings.Builder
+		for _, c := range g.List {
+			raw.WriteString(c.Text)
+			raw.WriteByte('\n')
+		}
+		if siteCommentRe.MatchString(raw.String()) {
+			markers = append(markers, g)
+		}
+	}
+	marked := func(pos token.Pos) bool {
+		for _, d := range f.Decls {
+			start, end := d.Pos(), d.End()
+			switch x := d.(type) {
+			case *ast.FuncDecl:
+				if x.Doc != nil {
+					start = x.Doc.Pos()
+				}
+			case *ast.GenDecl:
+				if x.Doc != nil {
+					start = x.Doc.Pos()
+				}
+			}
+			if pos < start || pos >= end {
+				continue
+			}
+			for _, g := range markers {
+				if g.Pos() >= start && g.End() <= end {
+					return true
+				}
+			}
+			return false
+		}
+		return false
+	}
+
+	record := func(tok string, pos token.Pos) {
+		key := foundSite{rel, tok}
+		res.found[key]++
+		if !marked(pos) {
+			res.unmarked[key]++
+		}
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Ident:
+			if backendIdent.MatchString(x.Name) || aliases[x.Name] {
+				record(x.Name, x.Pos())
+			}
+		case *ast.BasicLit:
+			if x.Kind != token.STRING {
+				break
+			}
+			v, err := strconv.Unquote(x.Value)
+			if err != nil {
+				break
+			}
+			if gatedOperand(v, operand[x]) {
+				record(v, x.Pos())
+			}
+		}
+		return true
+	})
+	return res, nil
+}
+
+func isAdapterOwned(rel string) bool {
+	for _, re := range adapterOwned {
+		if re.MatchString(rel) {
+			return true
+		}
+	}
+	return false
+}
+
+// scanHarnessNames returns every gated name occurrence of the scanned packages
+// by file and token, with the count of those outside a site-commented
+// declaration.
+func scanHarnessNames(t *testing.T) scanResult {
 	t.Helper()
-	found := map[foundSite]int{}
-	sources := map[string]string{}
+	aliases := harnessAliases(t)
+	total := scanResult{found: map[foundSite]int{}, unmarked: map[foundSite]int{}}
 	for _, root := range scanRoots {
 		entries, err := os.ReadDir(root.dir)
 		if err != nil {
@@ -284,49 +533,32 @@ func scanHarnessNames(t *testing.T) (map[foundSite]int, map[string]string) {
 				continue
 			}
 			rel := root.rel + "/" + name
+			if isAdapterOwned(rel) {
+				continue
+			}
 			raw, err := os.ReadFile(filepath.Join(root.dir, name))
 			if err != nil {
 				t.Fatal(err)
 			}
-			sources[rel] = string(raw)
-			skip := false
-			for _, re := range adapterOwned {
-				skip = skip || re.MatchString(rel)
-			}
-			if skip {
-				continue
-			}
-			f, err := parser.ParseFile(token.NewFileSet(), rel, raw, 0)
+			res, err := scanSource(rel, raw, aliases)
 			if err != nil {
 				t.Fatalf("%s: %v", rel, err)
 			}
-			ast.Inspect(f, func(n ast.Node) bool {
-				switch x := n.(type) {
-				case *ast.Ident:
-					if backendIdent.MatchString(x.Name) {
-						found[foundSite{rel, x.Name}]++
-					}
-				case *ast.BasicLit:
-					if x.Kind != token.STRING {
-						break
-					}
-					v, err := strconv.Unquote(x.Value)
-					if err != nil {
-						t.Fatalf("%s: %v", rel, err)
-					}
-					if gatedLiteral(v) {
-						found[foundSite{rel, v}]++
-					}
-				}
-				return true
-			})
+			for k, n := range res.found {
+				total.found[k] += n
+			}
+			for k, n := range res.unmarked {
+				total.unmarked[k] += n
+			}
 		}
 	}
-	return found, sources
+	return total
 }
 
 func TestCommonCodeHasNoHarnessNameBranch(t *testing.T) {
-	found, sources := scanHarnessNames(t)
+	res := scanHarnessNames(t)
+	found := res.found
+	fixtures := testFunctionIndex(t)
 
 	allowed := map[foundSite]nameSite{}
 	for _, s := range harnessNameAllowlist {
@@ -357,11 +589,11 @@ func TestCommonCodeHasNoHarnessNameBranch(t *testing.T) {
 		if s.boundary == "" || len(s.fixtures) == 0 {
 			problems = append(problems, fmt.Sprintf("%s %q: an entry needs its boundary and a fixture", key.file, key.token))
 		}
-		if s.class != classDeclarative && !siteCommentRe.MatchString(sources[key.file]) {
-			problems = append(problems, fmt.Sprintf("%s %q: the file carries no %q site comment", key.file, key.token, siteComment))
+		if n := res.unmarked[key]; s.class != classDeclarative && n > 0 {
+			problems = append(problems, fmt.Sprintf("%s %q: %d site(s) sit in a declaration with no %q comment naming the boundary", key.file, key.token, n, siteComment))
 		}
 		for _, fixture := range s.fixtures {
-			if !fixtureExists(t, fixture) {
+			if !fixtures[fixture] {
 				problems = append(problems, fmt.Sprintf("%s %q: fixture %s does not exist", key.file, key.token, fixture))
 			}
 		}
@@ -372,11 +604,13 @@ func TestCommonCodeHasNoHarnessNameBranch(t *testing.T) {
 	}
 }
 
-// fixtureExists reports whether a test function of that name is declared in a
-// scanned package's test files.
-func fixtureExists(t *testing.T, name string) bool {
+var testFuncRe = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
+
+// testFunctionIndex is the set of test functions declared in the scanned
+// packages' test files, built from one read of each file.
+func testFunctionIndex(t *testing.T) map[string]bool {
 	t.Helper()
-	needle := "func " + name + "("
+	out := map[string]bool{}
 	for _, root := range scanRoots {
 		entries, err := os.ReadDir(root.dir)
 		if err != nil {
@@ -390,17 +624,18 @@ func fixtureExists(t *testing.T, name string) bool {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(string(raw), needle) {
-				return true
+			for _, m := range testFuncRe.FindAllSubmatch(raw, -1) {
+				out[string(m[1])] = true
 			}
 		}
 	}
-	return false
+	return out
 }
 
 // TestHarnessNameScanDetectsAnOffender proves the gate trips: a branch on a
-// backend constant, a name literal, or a key prefix is gated, and prose and
-// unrelated words are not.
+// backend constant or on an alias of one, a name literal, a key prefix, or a
+// long product name in a comparison is gated, and prose and unrelated words are
+// not.
 func TestHarnessNameScanDetectsAnOffender(t *testing.T) {
 	for _, v := range []string{"claude", "Pi", "agy", "codex", "pi.", "lead-pi", "via Codex CLI", "claude.exec_cutover_enabled", "CODEX_HOME", "(?:claude|codex|pi)", "<wait|codex-stop-hook>"} {
 		if !gatedLiteral(v) {
@@ -414,5 +649,96 @@ func TestHarnessNameScanDetectsAnOffender(t *testing.T) {
 	}
 	if !backendIdent.MatchString("BackendPi") || backendIdent.MatchString("BackendPiExtra") || backendIdent.MatchString("Backends") {
 		t.Error("the Backend identifier pattern is wrong")
+	}
+}
+
+// scanOffender scans a synthetic common-code file.
+func scanOffender(t *testing.T, src string) scanResult {
+	t.Helper()
+	res, err := scanSource("internal/mcp/offender.go", []byte(src), harnessAliases(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// TestHarnessNameScanFindsConstantAliases: a constant whose value is a harness
+// name is the same branch as the literal, so a use of it is gated. The aliases
+// come from the constants' own declarations, not from a list kept here.
+func TestHarnessNameScanFindsConstantAliases(t *testing.T) {
+	aliases := harnessAliases(t)
+	for _, name := range []string{"BackendClaude", "BackendCodex", "BackendAgy", "BackendPi", "PiTierHarness", "AgentKindPi", "piHarness"} {
+		if !aliases[name] {
+			t.Errorf("%s is not discovered as a harness-name constant", name)
+		}
+	}
+	res := scanOffender(t, `package mcp
+
+func branch(h string) bool {
+	switch h {
+	case wsagent.PiTierHarness:
+		return true
+	}
+	return h == wslive.AgentKindPi
+}
+`)
+	for _, name := range []string{"PiTierHarness", "AgentKindPi"} {
+		if res.found[foundSite{"internal/mcp/offender.go", name}] != 1 {
+			t.Errorf("a use of %s was not gated: %v", name, res.found)
+		}
+	}
+}
+
+// TestHarnessNameScanGatesLongProductNameOperands: a long product name compared
+// against a client string is a branch, while the same words in a diagnostic are
+// prose.
+func TestHarnessNameScanGatesLongProductNameOperands(t *testing.T) {
+	res := scanOffender(t, `package mcp
+
+import "strings"
+
+func branch(clientName string, m map[string]int) bool {
+	if strings.EqualFold(clientName, "Claude Code Enterprise CLI") {
+		return true
+	}
+	if clientName == "Codex Desktop Enterprise Edition build" {
+		return true
+	}
+	_ = m["Antigravity Workspace Client build"]
+	switch clientName {
+	case "Pi Coding Agent Extension Bridge":
+	}
+	return false
+}
+
+func message() string {
+	return "this read tool runs only in a Claude Code session whose shell tool is replaced"
+}
+`)
+	for _, tok := range []string{"Claude Code Enterprise CLI", "Codex Desktop Enterprise Edition build", "Antigravity Workspace Client build", "Pi Coding Agent Extension Bridge"} {
+		if res.found[foundSite{"internal/mcp/offender.go", tok}] != 1 {
+			t.Errorf("the operand %q was not gated: %v", tok, res.found)
+		}
+	}
+	if len(res.found) != 4 {
+		t.Errorf("prose was gated: %v", res.found)
+	}
+}
+
+// TestHarnessNameScanMarksSitesIndividually: a site comment justifies the
+// declaration it sits in, not the file.
+func TestHarnessNameScanMarksSitesIndividually(t *testing.T) {
+	res := scanOffender(t, `package mcp
+
+// Retained name check: the stored key.
+func marked() string { return "claude.key" }
+
+func unmarked() string { return "pi.key" }
+`)
+	if res.unmarked[foundSite{"internal/mcp/offender.go", "claude.key"}] != 0 {
+		t.Error("a commented declaration was reported unmarked")
+	}
+	if res.unmarked[foundSite{"internal/mcp/offender.go", "pi.key"}] != 1 {
+		t.Error("an uncommented declaration was reported marked")
 	}
 }

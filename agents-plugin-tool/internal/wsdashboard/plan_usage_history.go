@@ -80,6 +80,8 @@ func validCodexFiveHourSample(v planUsageSample) bool {
 }
 
 func validPlanUsageSample(v planUsageSample) bool {
+	// Retained name check: the harness and source labels of the legacy history file
+	// are persisted bytes earlier writers wrote (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 	if v.Group != "" {
 		return false
 	}
