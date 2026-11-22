@@ -581,7 +581,14 @@
       "registered_at": "2026-11-22T00:24:05Z"
     },
     "261122-feat-ws-companion-shell-engine": {
-      "registered_at": "2026-11-22T00:23:58Z"
+      "registered_at": "2026-11-22T00:23:58Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T02:37:32Z"
+      }
     },
     "261122-feat-ws-mailbox-group-recipients": {
       "registered_at": "2026-11-22T02:05:13Z",
