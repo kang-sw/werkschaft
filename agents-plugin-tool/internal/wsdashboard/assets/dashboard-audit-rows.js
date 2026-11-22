@@ -159,7 +159,9 @@
   // Controller active only in a session dashboard with #convo and WsAudit.
   if (typeof doc !== "undefined" && typeof window !== "undefined" && $("convo") && window.WsAudit) {
     var auRowsRid = root.getAttribute("data-rid") || (typeof rid !== "undefined" ? rid : "") || "";
-    var auKindsPref = auReadKindsPref(window.localStorage, AU_KIND_STORAGE);
+    // Reading window.localStorage itself throws when storage is denied.
+    function auStore() { try { return window.localStorage; } catch (e) { return null; } }
+    var auKindsPref = auReadKindsPref(auStore(), AU_KIND_STORAGE);
     var auEventsById = Object.create(null);
     var auBarEl = null;
     var auCoveredSince = "";
@@ -256,7 +258,7 @@
         auKindsPref[kind] = nextOn;
         chip.classList.toggle("au-on", nextOn);
         chip.setAttribute("aria-pressed", nextOn ? "true" : "false");
-        auWriteKindsPref(window.localStorage, AU_KIND_STORAGE, auKindsPref);
+        auWriteKindsPref(auStore(), AU_KIND_STORAGE, auKindsPref);
         auSyncKindVisibility();
         if (auFocusedAuditEl && auFocusedAuditEl.classList.contains("au-kind-hidden")) {
           auFocusedAuditEl.classList.remove("au-cur");
@@ -265,6 +267,11 @@
       });
       convoEl.insertBefore(bar, convoEl.firstChild);
       auBarEl = bar;
+      // The chip bar wraps on narrow panes; the chat jump arrow (sticky, see
+      // .d-jump-wrap) must sit below the bar's real height, not a fixed one.
+      var syncBarH = function () { convoEl.style.setProperty("--au-bar-h", bar.offsetHeight + "px"); };
+      syncBarH();
+      if (window.ResizeObserver) new window.ResizeObserver(syncBarH).observe(bar);
       return bar;
     }
 

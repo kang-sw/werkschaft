@@ -53,11 +53,13 @@ async function runTheme(browser, theme) {
     const cr = c.getBoundingClientRect();
     const btn = c.querySelector('.d-jump-btn');
     const br = btn.getBoundingClientRect();
+    // The audit filter bar (.au-bar) is pinned above the arrow, so the arrow sits just below its real height.
+    const bar = c.querySelector(':scope > .au-bar'), barH = bar ? bar.getBoundingClientRect().height : 0;
     return {
       hidden: btn.hidden,
       dir: btn.getAttribute('data-dir'),
       leftOffset: br.left - cr.left,
-      topOffset: br.top - cr.top,
+      topOffset: br.top - cr.top - barH,
       scrollTop: c.scrollTop
     };
   });
