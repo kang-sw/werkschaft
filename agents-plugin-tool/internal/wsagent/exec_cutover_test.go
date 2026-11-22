@@ -568,12 +568,33 @@ func TestExecRolloutReadsTheConfigOnce(t *testing.T) {
 	c := h.runner.conv(st.ID)
 	rec := c.record()
 	resolver := c.rolloutResolver(rec)
+	// The counters are process-wide: only the cached-read site config
+	// loading goes through counts, and the least of a few runs stands, so
+	// another goroutine's reads do not.
+	configOps := func() int64 {
+		var n int64
+		for site, v := range wsstate.FileIOCounters() {
+			if strings.HasPrefix(site, "file_io_site:wsstate/read_cache.go:") {
+				n += v
+			}
+		}
+		return n
+	}
 	ops := func(f func()) int64 {
-		before := wsstate.FileIOCounters()["file_io_total"]
-		f()
-		return wsstate.FileIOCounters()["file_io_total"] - before
+		least := int64(-1)
+		for range 5 {
+			before := configOps()
+			f()
+			if d := configOps() - before; least < 0 || d < least {
+				least = d
+			}
+		}
+		return least
 	}
 	one := ops(func() { _, _ = resolver.ListScalars(rec.WSKey, wsconfig.ItemExecNativeToolRemoval) })
+	if one == 0 {
+		t.Fatal("no config file operation counted for one resolution")
+	}
 	if got := ops(func() { c.execRolloutOn(rec) }); got > one {
 		t.Fatalf("the rollout check took %d file operations; one resolution takes %d", got, one)
 	}
