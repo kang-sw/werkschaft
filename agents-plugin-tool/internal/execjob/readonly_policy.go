@@ -81,17 +81,13 @@ func checkReadOnlyArgv(argv []string) error {
 			}
 		}
 	case "uniq":
-		operands := 0
-		dashdash := false
+		// Stdin only: a platform's uniq opens its second operand for
+		// writing, and parses options differently around the first operand,
+		// so no operand (a bare - or --, which open one) is admitted.
 		for _, a := range args {
-			if !dashdash && a == "--" {
-				dashdash = true
-			} else if dashdash || a == "-" || !strings.HasPrefix(a, "-") {
-				operands++
+			if a == "-" || a == "--" || !strings.HasPrefix(a, "-") {
+				return refuse("uniq reads stdin only here: %q is an operand (the second operand names an output file)", a)
 			}
-		}
-		if operands > 1 {
-			return refuse("uniq takes at most one operand (the second names an output file)")
 		}
 	case "sed":
 		if len(args) < 2 || args[0] != "-n" || !readOnlySedScript.MatchString(args[1]) {
@@ -110,8 +106,8 @@ func checkReadOnlyArgv(argv []string) error {
 		}
 	case "file":
 		for _, a := range args {
-			if shortHas(a, "C") || longMatches(a, "compile") {
-				return refuse("file %s writes a file", a)
+			if shortHas(a, "Cp") || longMatches(a, "compile", "preserve-date") {
+				return refuse("file %s writes a file or file metadata", a)
 			}
 		}
 	case "rg":
@@ -178,9 +174,26 @@ func checkGit(args []string) error {
 	if !readOnlyGitSubcommands[sub] {
 		return refuse("git %q is not an allowed read subcommand (global options such as -c are refused)", sub)
 	}
-	for _, a := range args[i+1:] {
-		if strings.HasPrefix(a, "-O") || longMatches(a, gitRefusedOptions...) {
+	rest := args[i+1:]
+	for j, a := range rest {
+		// O (git grep's pager, git diff's order file) anywhere in a short
+		// cluster is refused: a cluster's later letters may be its value.
+		if shortHas(a, "O") || longMatches(a, gitRefusedOptions...) || longMatches(a, "remerge-diff") {
 			return refuse("git %s %s writes a file or runs a program", sub, a)
+		}
+		if sub == "describe" && longMatches(a, "dirty", "broken") {
+			return refuse("git describe %s refreshes the index", a)
+		}
+		if n := longName(a); n != "" && strings.HasPrefix("diff-merges", n) {
+			value, hasValue := "", strings.Contains(a, "=")
+			if hasValue {
+				_, value, _ = strings.Cut(a, "=")
+			} else if j+1 < len(rest) {
+				value = rest[j+1]
+			}
+			if value == "r" || (value != "" && strings.HasPrefix("remerge", value)) {
+				return refuse("git %s %s writes objects into the repository", sub, a)
+			}
 		}
 	}
 	return nil
@@ -381,15 +394,40 @@ func readOnlyEnvironment(environ []string) []string {
 			out = append(out, kv)
 		}
 	}
-	return append(out, "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "PAGER=cat")
+	out = append(out,
+		"GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "PAGER=cat",
+		// No lazy fetch of a partial clone's missing objects (Git 2.44 and
+		// later; older Git ignores it), which would write a packfile.
+		"GIT_NO_LAZY_FETCH=1",
+		// git diff refreshes a stale index by default, which rewrites it.
+		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=diff.autoRefreshIndex", "GIT_CONFIG_VALUE_0=false")
+	if win {
+		// Git Bash must pass the checked words to a native process as they are.
+		out = append(out, "MSYS_NO_PATHCONV=1", "MSYS2_ARG_CONV_EXCL=*")
+	}
+	return out
 }
 
 // resolveReadOnly resolves bare name on environ's PATH to the absolute path
-// the launch runs.
+// the launch runs. A relative result would resolve against the job's cwd,
+// and on Windows only native executables start without a system shell
+// parsing the arguments.
 func resolveReadOnly(name string, environ []string) (string, error) {
 	bin, err := wsgit.LookPathEnv(name, environ)
 	if err != nil {
 		return "", refuse("%s is not on the job's PATH", name)
+	}
+	return checkReadOnlyExecutable(name, bin)
+}
+
+func checkReadOnlyExecutable(name, bin string) (string, error) {
+	if !filepath.IsAbs(bin) {
+		return "", refuse("%s resolves to %q, which is not an absolute path", name, bin)
+	}
+	if goruntime.GOOS == "windows" {
+		if ext := strings.ToLower(filepath.Ext(bin)); ext != ".exe" && ext != ".com" {
+			return "", refuse("%s resolves to %q, which is not a native executable (.exe or .com)", name, bin)
+		}
 	}
 	return bin, nil
 }
@@ -443,6 +481,9 @@ func ReadOnlyShellLaunch(owner, tool, root, cwdArg, line string, environ []strin
 	}
 	shellArgv, err := ShellArgv(strings.Join(parts, " | "), env)
 	if err != nil {
+		return HostedLaunch{}, err
+	}
+	if _, err := checkReadOnlyExecutable("the shell", shellArgv[0]); err != nil {
 		return HostedLaunch{}, err
 	}
 	if base := strings.ToLower(filepath.Base(shellArgv[0])); strings.HasPrefix(base, "bash") {

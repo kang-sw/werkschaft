@@ -1,145 +1,241 @@
 package mcp
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 )
 
-// A worker's hosted session (a Codex, Claude opt-in or agy cutover worker
-// all attach the same way) carries its authority in the connection's
-// environment (wsagent.EnvPermissionLevel), which the exec gate reads.
+// A hosted worker's connection (a Codex or Claude cutover worker attaches
+// the same way) is bound to a non-lead conversation, and its authority is
+// the hello env's wsagent.EnvPermissionLevel. These tests build that
+// binding: a ServerOptions with the worker's own Env, Conversation and
+// ExecCutover, over the real-holder fixture.
 
-func TestReadOnlyWorkerExecAllowlist(t *testing.T) {
+type workerFixture struct {
+	*hostedExecFixture
+	worker *Server
+	key    string
+}
+
+func (w *workerFixture) call(name string, args map[string]any) (string, bool) {
+	w.t.Helper()
+	return callExecTool(w.t, w.worker, w.key, name, args)
+}
+
+// newWorkerFixture binds a worker server of harness at level. extraEnv is the
+// worker harness's own environment on top of the test process's.
+func newWorkerFixture(t *testing.T, harness string, level wsagent.PermissionLevel, extraEnv ...string) *workerFixture {
+	t.Helper()
 	fx := newHostedExecFixture(t, 10*time.Second)
-	t.Setenv(wsagent.EnvPermissionLevel, string(wsagent.PermissionReadOnly))
-	pwned := filepath.Join(fx.root, "pwned")
+	env := append(os.Environ(), extraEnv...)
+	if level != "" {
+		env = append(env, wsagent.EnvPermissionLevel+"="+string(level))
+	}
+	worker := NewServerWithOptions(ServerOptions{Root: fx.root, Version: "test", Env: env, Harness: harness, Conversation: "worker", ExecCutover: harness, Exec: func() *execjob.Hosted { return fx.hosted }})
+	key, _ := parseLoginResponse(t, callLogin(t, worker, 900002, fx.root, nil))
+	return &workerFixture{hostedExecFixture: fx, worker: worker, key: key}
+}
 
-	refused := []struct {
-		tool string
-		args map[string]any
-		want string
-	}{
-		{"exec.run", map[string]any{"exe": "touch", "args": []string{"pwned"}}, "not an allowed read command"},
-		{"exec.run", map[string]any{"exe": "git", "args": []string{"commit", "-m", "x"}}, "not an allowed read subcommand"},
-		{"exec.run", map[string]any{"exe": "git", "args": []string{"status"}, "env": map[string]any{"GIT_PAGER": "touch pwned"}}, "environment override"},
-		{"exec.shell", map[string]any{"cmd": "echo x > pwned"}, "only 2>&1"},
-		{"exec.shell", map[string]any{"cmd": "git status; touch pwned"}, "command list"},
-		{"exec.shell", map[string]any{"cmd": "echo $(touch pwned)"}, "unquoted $"},
-		{"exec.shell", map[string]any{"cmd": "ls *"}, "unquoted glob"},
-		{"exec.shell", map[string]any{"cmd": "sed -i s/x/y/ README.md"}, "sed"},
-		{"exec.shell", map[string]any{"command": "touch pwned"}, "not checked"},
-		{"exec.shell", map[string]any{"command": "touch pwned", "shell": "sh"}, "not checked"},
-		{"exec.spawn", map[string]any{"cmd": "touch", "args": []string{"pwned"}}, "not checked"},
-	}
-	for _, c := range refused {
-		text, isErr := fx.call(c.tool, c.args)
-		if !isErr || !strings.Contains(text, c.want) || !strings.Contains(text, "permission denied") {
-			t.Errorf("%s %v = %v %q, want a permission refusal naming %q", c.tool, c.args, isErr, text, c.want)
-		}
-	}
-	if _, err := os.Stat(pwned); err == nil {
-		t.Fatal("a refused launch wrote a file")
-	}
-
-	// Read-shaped launches pass through the hosted admission and run.
-	text, isErr := fx.call("exec.run", map[string]any{"exe": "git", "args": []string{"status", "--short"}})
-	if isErr || !strings.Contains(text, "status: exited 0") || !strings.Contains(text, "README.md") {
-		t.Fatalf("read-only exec.run git status = %v %s", isErr, text)
-	}
-	text, isErr = fx.call("exec.shell", map[string]any{"cmd": "git ls-files -o '*.md' 2>&1 | head -n 5"})
-	if isErr || !strings.Contains(text, "status: exited 0") || !strings.Contains(text, "README.md") {
-		t.Fatalf("read-only exec.shell pipeline = %v %s", isErr, text)
-	}
-	// The process receives exactly the checked vector: no glob, variable
-	// or word-splitting expansion happens.
-	text, isErr = fx.call("exec.run", map[string]any{"exe": "echo", "args": []string{"*.md", "$HOME", "a  b"}})
-	if isErr || !strings.Contains(text, "*.md $HOME a  b\n") {
-		t.Fatalf("exec.run echo = %v %s", isErr, text)
-	}
-	text, isErr = fx.call("exec.shell", map[string]any{"cmd": `echo '*.md' "$x" ` + "'a  b'"})
-	if !isErr {
-		t.Fatalf("a $ inside double quotes passed: %s", text)
-	}
-	text, isErr = fx.call("exec.shell", map[string]any{"cmd": `echo '*.md' '$HOME' "a  b"`})
-	if isErr || !strings.Contains(text, "*.md $HOME a  b\n") {
-		t.Fatalf("exec.shell echo = %v %s", isErr, text)
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
 
-// An inherited BASH_ENV, ENV, GIT_EXTERNAL_DIFF, GIT_PAGER or PAGER does not
-// reach a read-only launch or run startup code.
-func TestReadOnlyWorkerExecEnvironmentIsNotInherited(t *testing.T) {
-	fx := newHostedExecFixture(t, 10*time.Second)
+func TestReadOnlyWorkerExecAllowlist(t *testing.T) {
+	for _, harness := range []string{"codex", "claude"} {
+		t.Run(harness, func(t *testing.T) {
+			w := newWorkerFixture(t, harness, wsagent.PermissionReadOnly)
+			gitIn(t, w.root, "checkout", "-q", "-b", "topic")
+			gitIn(t, w.root, "add", ".")
+			gitIn(t, w.root, "commit", "-q", "-m", "first commit on topic")
+			pwned := filepath.Join(w.root, "pwned")
+
+			refused := []struct {
+				tool string
+				args map[string]any
+				want string
+			}{
+				{"exec.run", map[string]any{"exe": "touch", "args": []string{"pwned"}}, "not an allowed read command"},
+				{"exec.run", map[string]any{"exe": "git", "args": []string{"commit", "-m", "x"}}, "not an allowed read subcommand"},
+				{"exec.run", map[string]any{"exe": "git", "args": []string{"grep", "-nO", "touch pwned", "README"}}, "writes a file or runs a program"},
+				{"exec.run", map[string]any{"exe": "git", "args": []string{"status"}, "env": map[string]any{"GIT_PAGER": "touch pwned"}}, "environment override"},
+				{"exec.shell", map[string]any{"cmd": "echo x > pwned"}, "only 2>&1"},
+				{"exec.shell", map[string]any{"cmd": "git status; touch pwned"}, "command list"},
+				{"exec.shell", map[string]any{"cmd": "echo $(touch pwned)"}, "unquoted $"},
+				{"exec.shell", map[string]any{"cmd": "ls *"}, "unquoted glob"},
+				{"exec.shell", map[string]any{"cmd": "sed -i s/x/y/ README.md"}, "sed"},
+				{"exec.shell", map[string]any{"command": "touch pwned"}, "not checked"},
+				{"exec.shell", map[string]any{"command": "touch pwned", "shell": "sh"}, "not checked"},
+				{"exec.spawn", map[string]any{"cmd": "touch", "args": []string{"pwned"}}, "not checked"},
+			}
+			for _, c := range refused {
+				text, isErr := w.call(c.tool, c.args)
+				if !isErr || !strings.Contains(text, c.want) || !strings.Contains(text, "permission denied") {
+					t.Errorf("%s %v = %v %q, want a permission refusal naming %q", c.tool, c.args, isErr, text, c.want)
+				}
+			}
+			if _, err := os.Stat(pwned); err == nil {
+				t.Fatal("a refused launch wrote a file")
+			}
+
+			// Read-shaped launches pass through the hosted admission and run.
+			text, isErr := w.call("exec.run", map[string]any{"exe": "git", "args": []string{"log", "--oneline", "-n", "1"}})
+			if isErr || !strings.Contains(text, "status: exited 0") || !strings.Contains(text, "first commit on topic") {
+				t.Fatalf("read-only exec.run git log = %v %s", isErr, text)
+			}
+			text, isErr = w.call("exec.shell", map[string]any{"cmd": "git ls-files '*.md' 2>&1 | head -n 5"})
+			if isErr || !strings.Contains(text, "status: exited 0") || !strings.Contains(text, "README.md") {
+				t.Fatalf("read-only exec.shell pipeline = %v %s", isErr, text)
+			}
+			// The process receives exactly the checked vector: no glob,
+			// variable or word-splitting expansion happens.
+			text, isErr = w.call("exec.run", map[string]any{"exe": "echo", "args": []string{"*.md", "$HOME", "a  b"}})
+			if isErr || !strings.Contains(text, "*.md $HOME a  b\n") {
+				t.Fatalf("exec.run echo = %v %s", isErr, text)
+			}
+			text, isErr = w.call("exec.shell", map[string]any{"cmd": `echo '*.md' '$HOME' "a  b"`})
+			if isErr || !strings.Contains(text, "*.md $HOME a  b\n") {
+				t.Fatalf("exec.shell echo = %v %s", isErr, text)
+			}
+			if text, isErr = w.call("exec.shell", map[string]any{"cmd": `echo "$x"`}); !isErr {
+				t.Fatalf("a $ inside double quotes passed: %s", text)
+			}
+		})
+	}
+}
+
+// probeScript prints its argv one per line, then its environment, so a test
+// reads what the child actually received. It stands in for an allowed
+// program (nl) first on the PATH.
+const probeScript = "#!/bin/sh\nprintf 'ARG:%s\\n' \"$@\"\n/usr/bin/env | sed 's/^/ENV:/'\n"
+
+// The child's actual argv and environment: the allowlisted environment with
+// the read-only settings, none of the worker harness's startup or helper
+// variables, for both launch forms.
+func TestReadOnlyWorkerChildArgvAndEnvironment(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("the probe is a POSIX script; the Windows argv assertion is not covered here")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "nl"), []byte(probeScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	startup := filepath.Join(t.TempDir(), "startup.sh")
-	marker := filepath.Join(fx.root, "startup-ran")
+	marker := filepath.Join(t.TempDir(), "startup-ran")
 	if err := os.WriteFile(startup, []byte("touch '"+marker+"'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"BASH_ENV", "ENV"} {
-		t.Setenv(name, startup)
-	}
-	t.Setenv("GIT_EXTERNAL_DIFF", startup)
-	t.Setenv("GIT_PAGER", "touch "+marker)
-	t.Setenv("PAGER", "touch "+marker)
-	t.Setenv(wsagent.EnvPermissionLevel, string(wsagent.PermissionReadOnly))
-
-	for _, c := range []struct {
-		tool string
-		args map[string]any
-	}{
-		{"exec.shell", map[string]any{"cmd": "echo hi"}},
-		{"exec.shell", map[string]any{"cmd": "git status | cat"}},
-		{"exec.run", map[string]any{"exe": "git", "args": []string{"log", "-n", "1"}}},
+	path := bin + string(os.PathListSeparator) + os.Getenv("PATH")
+	w := newWorkerFixture(t, "codex", wsagent.PermissionReadOnly,
+		"PATH="+path, "BASH_ENV="+startup, "ENV="+startup, "GIT_EXTERNAL_DIFF="+startup, "GIT_PAGER=touch "+marker, "PAGER=touch "+marker,
+		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.pager", "GIT_CONFIG_VALUE_0=touch "+marker, "LD_PRELOAD=/nonexistent", "WS_SECRET=secret")
+	for name, call := range map[string]func() (string, bool){
+		"run": func() (string, bool) {
+			return w.call("exec.run", map[string]any{"exe": "nl", "args": []string{"*.md", "$HOME", "a  b", "it's"}})
+		},
+		"shell": func() (string, bool) {
+			return w.call("exec.shell", map[string]any{"cmd": `nl '*.md' '$HOME' "a  b" "it's"`})
+		},
 	} {
-		if text, isErr := fx.call(c.tool, c.args); isErr && !strings.Contains(text, "does not have any commits") {
-			t.Fatalf("%s %v = %s", c.tool, c.args, text)
+		text, isErr := call()
+		if isErr || !strings.Contains(text, "status: exited 0") {
+			t.Fatalf("%s: %v %s", name, isErr, text)
+		}
+		for _, want := range []string{"ARG:*.md\n", "ARG:$HOME\n", "ARG:a  b\n", "ARG:it's\n", "ENV:GIT_PAGER=cat\n", "ENV:PAGER=cat\n", "ENV:GIT_OPTIONAL_LOCKS=0\n", "ENV:GIT_NO_LAZY_FETCH=1\n",
+			"ENV:GIT_CONFIG_COUNT=1\n", "ENV:GIT_CONFIG_KEY_0=diff.autoRefreshIndex\n", "ENV:GIT_CONFIG_VALUE_0=false\n", "ENV:PATH="} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: child output lacks %q:\n%s", name, want, text)
+			}
+		}
+		for _, bad := range []string{"ENV:BASH_ENV", "ENV:ENV=", "ENV:GIT_EXTERNAL_DIFF", "touch", "ENV:LD_PRELOAD", "ENV:WS_SECRET", "core.pager", "ENV:WS_MCP"} {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s: the child received %q:\n%s", name, bad, text)
+			}
 		}
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("an inherited startup variable ran code in a read-only launch")
 	}
+}
 
-	// The same inherited environment does run in an unrestricted launch
-	// (when the shell is bash), which proves the check above can fail.
-	t.Setenv(wsagent.EnvPermissionLevel, string(wsagent.PermissionWorkdirWrite))
-	if text, isErr := fx.call("exec.shell", map[string]any{"cmd": "echo hi"}); isErr || !strings.Contains(text, "hi") {
-		t.Fatalf("workdir-write shell = %v %s", isErr, text)
+// A read-only git diff and git status leave a stat-stale index byte for
+// byte as it was (diff refreshes it by default).
+func TestReadOnlyWorkerGitReadsDoNotRewriteTheIndex(t *testing.T) {
+	w := newWorkerFixture(t, "claude", wsagent.PermissionReadOnly)
+	gitIn(t, w.root, "add", ".")
+	gitIn(t, w.root, "commit", "-q", "-m", "c")
+	// Same content, new mtime: the cached stat data is stale.
+	later := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(w.root, "README.md"), later, later); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(marker); err != nil {
-		if _, bashErr := os.Stat("/bin/bash"); bashErr == nil {
-			t.Logf("control launch did not run BASH_ENV: %v", err)
+	index := filepath.Join(w.root, ".git", "index")
+	before, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"diff"}, {"status", "--short"}, {"diff", "--stat", "HEAD"}} {
+		if text, isErr := w.call("exec.run", map[string]any{"exe": "git", "args": args}); isErr || !strings.Contains(text, "status: exited 0") {
+			t.Fatalf("git %v = %v %s", args, isErr, text)
 		}
+	}
+	for _, args := range [][]string{{"describe", "--dirty"}, {"describe", "--broken"}} {
+		if text, isErr := w.call("exec.run", map[string]any{"exe": "git", "args": args}); !isErr || !strings.Contains(text, "refreshes the index") {
+			t.Fatalf("git %v = %v %s", args, isErr, text)
+		}
+	}
+	after, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("a read-only git read rewrote the index")
 	}
 }
 
 // workdir-write and full workers, and a lead, keep unrestricted launches.
 func TestNonReadOnlyExecLaunchesAreUnrestricted(t *testing.T) {
-	for _, level := range []string{string(wsagent.PermissionWorkdirWrite), string(wsagent.PermissionFull), ""} {
-		t.Run("level="+level, func(t *testing.T) {
-			fx := newHostedExecFixture(t, 10*time.Second)
-			t.Setenv(wsagent.EnvPermissionLevel, level)
-			text, isErr := fx.call("exec.shell", map[string]any{"cmd": "echo one > one.txt; touch two.txt"})
-			if isErr || !strings.Contains(text, "status: exited 0") {
-				t.Fatalf("exec.shell write = %v %s", isErr, text)
-			}
-			text, isErr = fx.call("exec.run", map[string]any{"exe": "touch", "args": []string{"three.txt"}})
-			if isErr || !strings.Contains(text, "status: exited 0") {
-				t.Fatalf("exec.run write = %v %s", isErr, text)
-			}
-			for _, name := range []string{"one.txt", "two.txt", "three.txt"} {
-				if _, err := os.Stat(filepath.Join(fx.root, name)); err != nil {
-					t.Errorf("%s not written: %v", name, err)
-				}
-			}
-			text, isErr = fx.call("exec.spawn", map[string]any{"cmd": "touch", "args": []string{"four.txt"}})
-			if isErr {
-				t.Fatalf("exec.spawn = %s", text)
-			}
+	for _, level := range []wsagent.PermissionLevel{wsagent.PermissionWorkdirWrite, wsagent.PermissionFull} {
+		t.Run("worker/"+string(level), func(t *testing.T) {
+			w := newWorkerFixture(t, "codex", level)
+			assertUnrestricted(t, w.root, w.call)
 		})
+	}
+	t.Run("lead", func(t *testing.T) {
+		fx := newHostedExecFixture(t, 10*time.Second)
+		assertUnrestricted(t, fx.root, fx.call)
+	})
+}
+
+func assertUnrestricted(t *testing.T, root string, call func(string, map[string]any) (string, bool)) {
+	t.Helper()
+	text, isErr := call("exec.shell", map[string]any{"cmd": "echo one > one.txt; touch two.txt"})
+	if isErr || !strings.Contains(text, "status: exited 0") {
+		t.Fatalf("exec.shell write = %v %s", isErr, text)
+	}
+	text, isErr = call("exec.run", map[string]any{"exe": "touch", "args": []string{"three.txt"}})
+	if isErr || !strings.Contains(text, "status: exited 0") {
+		t.Fatalf("exec.run write = %v %s", isErr, text)
+	}
+	for _, name := range []string{"one.txt", "two.txt", "three.txt"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
+			t.Errorf("%s not written: %v", name, err)
+		}
+	}
+	if text, isErr = call("exec.spawn", map[string]any{"cmd": "touch", "args": []string{"four.txt"}}); isErr {
+		t.Fatalf("exec.spawn = %s", text)
 	}
 }

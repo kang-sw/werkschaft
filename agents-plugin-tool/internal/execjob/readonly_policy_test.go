@@ -2,6 +2,8 @@ package execjob
 
 import (
 	"os"
+	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -25,7 +27,11 @@ func TestReadOnlyShellLineAllowed(t *testing.T) {
 		"sed -n '10,40p' README.md",
 		"sed -n '$p' README.md",
 		"sort -r names.txt",
-		"uniq names.txt",
+		"sort names.txt | uniq -c",
+		"git log --diff-merges=first-parent -1",
+		"git describe --tags --always",
+		"git grep -n -e x",
+		"file -b README.md",
 		"ls -la >/dev/null",
 		`echo "a b" 'c;d' e\;f`,
 		"cat README.md | grep -n x | cut -d: -f1",
@@ -53,6 +59,11 @@ func TestReadOnlyShellLineRefused(t *testing.T) {
 		"sort -o x y", "sort --output=x", "sort -ro x", "sort --compress-program=sh", "sort --compress=sh", "uniq a b", "uniq -c a b", "sed -i s/a/b/ f", "sed -n -i p f",
 		"sed s/a/b/ f", "sed -n 's/a/b/p' f", "sed -n '1w x' f", "sed -n '1p;2p' f", "sed -n 1p f -i", "tree -o x", "tree -ao x", "file -C", "file --compile",
 		"rg --pre sh x", "rg --pre-glob '*' x", "rg -z x", "rg --search-zip x", "rg -nz x",
+		"git grep -nO less x", "git grep -inOless x", "git grep -nO", "git diff -nO x", "git log -mO", "file -p x", "file -bp x", "file --preserve-date x", "file --pres x",
+		"uniq names.txt", "uniq -c names.txt", "uniq - out", "uniq -- a", "uniq -c -- a b", "uniq a -b",
+		"git describe --dirty", "git describe --broken", "git describe --dir", "git describe --brok", "git describe --dirty=-x",
+		"git log --remerge-diff", "git show --remerge-d", "git log --diff-merges=remerge", "git log --diff-merges=r", "git log --diff-merges remerge", "git log --diff-merges r", "git log --diff-m=remerge", "git log --diff-merges=rem",
+		"sort -T /tmp x", "sort -rT/tmp x",
 		"/bin/ls", "./ls", "../x/git status", "ls *", "ls ?", "ls [a]", "cat ~/x", "cat ~", "echo {a,b}", "echo a # b", "echo 'unterminated", `echo "unterminated`, `echo \`,
 	} {
 		if _, err := readOnlyLine(t, line); err == nil {
@@ -104,14 +115,14 @@ func TestReadOnlyShellReserialization(t *testing.T) {
 }
 
 func TestReadOnlyEnvironmentIsAllowlisted(t *testing.T) {
-	in := []string{"PATH=/bin", "HOME=/h", "LC_ALL=C", "LANG=C", "BASH_ENV=/x", "ENV=/x", "GIT_EXTERNAL_DIFF=x", "GIT_PAGER=less", "PAGER=less", "LD_PRELOAD=x", "DYLD_INSERT_LIBRARIES=x", "WS_MCP_SESSION_TOKEN=t", "FOO=1"}
+	in := []string{"PATH=/bin", "HOME=/h", "LC_ALL=C", "LANG=C", "BASH_ENV=/x", "ENV=/x", "GIT_EXTERNAL_DIFF=x", "GIT_PAGER=less", "PAGER=less", "LD_PRELOAD=x", "DYLD_INSERT_LIBRARIES=x", "WS_MCP_SESSION_TOKEN=t", "FOO=1", "GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=core.pager", "GIT_CONFIG_VALUE_0=sh", "GIT_CONFIG_GLOBAL=/x"}
 	got := strings.Join(readOnlyEnvironment(in), "\n")
-	for _, bad := range []string{"BASH_ENV", "ENV=", "GIT_EXTERNAL_DIFF", "less", "LD_PRELOAD", "DYLD_", "WS_MCP", "FOO"} {
+	for _, bad := range []string{"BASH_ENV", "ENV=", "GIT_EXTERNAL_DIFF", "less", "LD_PRELOAD", "DYLD_", "WS_MCP", "FOO", "core.pager", "GIT_CONFIG_COUNT=3", "GIT_CONFIG_GLOBAL"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("environment keeps %s:\n%s", bad, got)
 		}
 	}
-	for _, want := range []string{"PATH=/bin", "HOME=/h", "LC_ALL=C", "LANG=C", "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "PAGER=cat"} {
+	for _, want := range []string{"GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=diff.autoRefreshIndex", "GIT_CONFIG_VALUE_0=false", "PATH=/bin", "HOME=/h", "LC_ALL=C", "LANG=C", "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "PAGER=cat"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("environment lacks %s:\n%s", want, got)
 		}
@@ -137,5 +148,51 @@ func TestReadOnlyArgvLaunch(t *testing.T) {
 	}
 	if _, err := ReadOnlyArgvLaunch("w", "exec.run", root, root, []string{"ls"}, os.Environ(), map[string]string{"PATH": "/tmp"}); err == nil {
 		t.Fatal("env override passed")
+	}
+}
+
+func TestReadOnlyExecutableMustBeAbsoluteNative(t *testing.T) {
+	if _, err := checkReadOnlyExecutable("git", "bin/git"); err == nil {
+		t.Error("a relative executable passed")
+	}
+	if _, err := checkReadOnlyExecutable("git", "git"); err == nil {
+		t.Error("a bare executable passed")
+	}
+	abs, _ := filepath.Abs("git")
+	if goruntime.GOOS == "windows" {
+		for _, name := range []string{`C:\x\git.bat`, `C:\x\git.cmd`, `C:\x\git`, `C:\x\git.ps1`} {
+			if _, err := checkReadOnlyExecutable("git", name); err == nil {
+				t.Errorf("%s passed", name)
+			}
+		}
+		if _, err := checkReadOnlyExecutable("git", `C:\x\GIT.EXE`); err != nil {
+			t.Error(err)
+		}
+		got := strings.Join(readOnlyEnvironment(os.Environ()), "\n")
+		if !strings.Contains(got, "MSYS_NO_PATHCONV=1") || !strings.Contains(got, "MSYS2_ARG_CONV_EXCL=*") {
+			t.Errorf("Windows environment lacks the MSYS conversion exclusions:\n%s", got)
+		}
+	} else if _, err := checkReadOnlyExecutable("git", abs); err != nil {
+		t.Error(err)
+	}
+	// A relative PATH entry resolves to a relative program: refused.
+	dir := t.TempDir()
+	name := "relprog"
+	if goruntime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o755); err != nil {
+		t.Skip(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if _, err := ReadOnlyArgvLaunch("w", "exec.run", dir, dir, []string{"relprog"}, []string{"PATH=."}, nil); err == nil {
+		t.Error("a program found through a relative PATH entry passed")
 	}
 }
