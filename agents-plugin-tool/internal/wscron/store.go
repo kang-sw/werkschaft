@@ -191,11 +191,12 @@ func (s *Store) DeleteOwner(owner string) error {
 }
 
 // SetLastFire records the last fire of each id (Unix seconds) in one
-// transaction; an id with no row is a no-op.
+// transaction; an id with no row is a no-op. It only moves a last fire
+// forward, so a late write of an older minute never undoes a newer one.
 func (s *Store) SetLastFire(last map[string]int64) error {
 	return s.write("update cron last fires", func(ctx context.Context, tx *sql.Tx) error {
 		for id, at := range last {
-			if _, err := tx.ExecContext(ctx, `UPDATE schedules SET last_fire = ? WHERE id = ?`, at, id); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE schedules SET last_fire = MAX(COALESCE(last_fire, 0), ?) WHERE id = ?`, at, id); err != nil {
 				return err
 			}
 		}

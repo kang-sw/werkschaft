@@ -1264,3 +1264,60 @@ func TestConcurrentCloseCallersWaitForTheSameShutdown(t *testing.T) {
 		t.Fatalf("last fire = %q", i.LastAt)
 	}
 }
+
+// Two deliveries of one schedule published in order whose outcomes are
+// handled in reverse: the last fire stays the newer minute, in memory and
+// after a reopen, and an older delta written late never moves the row back.
+func TestLastFireNeverMovesBackwardsWhenDeliveriesFinishOutOfOrder(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	id := e.add("lead", "tick", "* * * * *", "")
+	g := newGated(2)
+	e.sess.gate = g.gate()
+	var fires sync.WaitGroup
+	fires.Add(2)
+	go func() { defer fires.Done(); e.clock.Advance(30 * time.Second) }() // minute 00:01
+	<-g.entered[0]
+	e.s.entryLeft(wsinbox.Cron{ID: id})                              // pending clears; the next minute can fire
+	go func() { defer fires.Done(); e.clock.Advance(time.Minute) }() // minute 00:02
+	<-g.entered[1]
+	close(g.release[1]) // the newer minute's outcome is recorded first
+	eventually(t, func() bool { return e.inflight() == 1 })
+	close(g.release[0]) // then the older one
+	fires.Wait()
+	if i := e.info("lead", "tick"); i.LastAt != "2026-03-10T00:02:00Z" {
+		t.Fatalf("last fire in memory = %q, want the newer minute", i.LastAt)
+	}
+	e.s.Flush()
+	e.restart()
+	if i := e.info("lead", "tick"); i.LastAt != "2026-03-10T00:02:00Z" {
+		t.Fatalf("last fire after reopen = %q, want the newer minute", i.LastAt)
+	}
+}
+
+// The store write is monotonic on its own: a delta that reaches it late with
+// an older minute leaves the newer one.
+func TestStoreLastFireOnlyMovesForward(t *testing.T) {
+	st, err := OpenStore(filepath.Join(t.TempDir(), StoreName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Put(Row{ID: "a", Owner: "o", Name: "n", Expr: "* * * * *", TZ: "UTC", Prompt: "p", CreatedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []int64{200, 100, 200, 300} {
+		if err := st.SetLastFire(map[string]int64{"a": at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := st.Load()
+	if err != nil || len(rows) != 1 || rows[0].LastFire != 300 {
+		t.Fatalf("rows = %+v, %v", rows, err)
+	}
+	if err := st.SetLastFire(map[string]int64{"a": 250}); err != nil {
+		t.Fatal(err)
+	}
+	if rows, _ := st.Load(); rows[0].LastFire != 300 {
+		t.Fatalf("an older delta moved last fire back: %d", rows[0].LastFire)
+	}
+}

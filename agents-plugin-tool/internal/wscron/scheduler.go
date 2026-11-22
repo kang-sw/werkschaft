@@ -385,8 +385,12 @@ func (s *Scheduler) fire(gen uint64) {
 			}
 		default:
 			job.sch.closedLogged = false
-			job.sch.last = job.at
-			s.dirty[job.id] = job.at.Unix()
+			// Overlapping deliveries can finish in either order: the last
+			// fire only moves forward, in memory and in the queued delta.
+			if job.sch.last.IsZero() || job.at.After(job.sch.last) {
+				job.sch.last = job.at
+				s.dirty[job.id] = job.at.Unix()
+			}
 			select {
 			case s.writeKick <- struct{}{}:
 			default:
