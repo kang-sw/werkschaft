@@ -1,3 +1,10 @@
+var wsSettingsChoiceLabels = {
+  "dashboard.companion_mode": {
+    visual: "js.settings.key.dashboard.companion_mode.visual",
+    full: "js.settings.key.dashboard.companion_mode.full"
+  }
+};
+
 (function () {
   "use strict";
   var view = document.querySelector("[data-settings-view]");
@@ -119,12 +126,17 @@
     send("title", {title: document.title});
   }
 
+  function publishCompanionContext() {
+    send("companion-context", window.WsShell.companionContext("settings"));
+  }
+
   window.addEventListener("message", function (event) {
     if (event.source !== window.parent || event.origin !== location.origin) return;
     var message = window.WsShell.message(event.data);
     if (!message) return;
     switch (message.wsShell) {
       case "sync": syncShell(); break;
+      case "companion-gate": if (message.active) publishCompanionContext(); break;
       case "theme":
         if (message.theme) document.documentElement.dataset.theme = message.theme;
         else delete document.documentElement.dataset.theme;
@@ -277,7 +289,9 @@
 
   function sectionName(name) { return tr(sectionLabels[name]); }
 
-  function shownValue(value) {
+  function shownValue(value, key) {
+    var choiceKey = key && typeof value === "string" && wsSettingsChoiceLabels[key] && wsSettingsChoiceLabels[key][value];
+    if (choiceKey) return tr(choiceKey);
     if (value === null || value === undefined || value === "") return tr("js.settings.empty_value");
     if (typeof value === "object") {
       if ("backend" in value || "model" in value || "effort" in value) {
@@ -333,7 +347,7 @@
       var isDraftLayer = draft && layer.scope === "repo";
       var valText, isEmpty = false;
       if (isDraftLayer) {
-        valText = draft.action === "reset" ? tr("js.settings.proposal.reset") : shownValue(draft.value);
+        valText = draft.action === "reset" ? tr("js.settings.proposal.reset") : shownValue(draft.value, entry.key);
       } else if (layer.status === "context_missing") {
         valText = tr("js.settings.context_missing_short");
         isEmpty = true;
@@ -341,7 +355,7 @@
         valText = tr("js.settings.not_applicable");
         isEmpty = true;
       } else if (layer.present) {
-        valText = shownValue(layer.value);
+        valText = shownValue(layer.value, entry.key);
       } else {
         valText = "—";
         isEmpty = true;
@@ -373,9 +387,9 @@
     drawer.append(chain);
     var noteText = draft ? tr("js.settings.proposal.queued") :
       shadowed(entry) ? tr(entry.conditional ? "js.settings.shadow_conditional" : "js.settings.shadow", source(entry)) :
-      scope === "builtin" ? tr("js.settings.builtin_value", shownValue(entry.default)) :
-      selected(entry) !== undefined ? tr("js.settings.override", shownValue(selected(entry))) :
-      tr(entry.conditional ? "js.settings.value_conditional" : "js.settings.value_effective", shownValue(entry.value));
+      scope === "builtin" ? tr("js.settings.builtin_value", shownValue(entry.default, entry.key)) :
+      selected(entry) !== undefined ? tr("js.settings.override", shownValue(selected(entry), entry.key)) :
+      tr(entry.conditional ? "js.settings.value_conditional" : "js.settings.value_effective", shownValue(entry.value, entry.key));
     if (entry.layers.some(function (l) { return l.legacy && l.scope === scope; })) {
       noteText = tr("js.settings.legacy_tier");
     }
@@ -403,7 +417,7 @@
       return {
         text: scopeName("builtin"),
         style: "lock",
-        title: tr("js.settings.layers") + " · " + tr("js.settings.builtin_value", shownValue(entry.default)),
+        title: tr("js.settings.layers") + " · " + tr("js.settings.builtin_value", shownValue(entry.default, entry.key)),
         lock: true
       };
     }
@@ -548,7 +562,7 @@
       segment.setAttribute("role", "group");
       segment.setAttribute("aria-label", label);
       for (const choice of choices) {
-        const option = button("", shownValue(choice), function () {
+        const option = button("", shownValue(choice, entry.key), function () {
           current = choice;
           for (const other of segment.children) other.setAttribute("aria-pressed", String(other === option));
           segment.dispatchEvent(new Event("input", {bubbles: true}));
@@ -565,13 +579,13 @@
       select.setAttribute("aria-label", label);
       select.disabled = disabled;
       if (!choices.includes(value)) {
-        var unknown = el("option", "", shownValue(value));
+        var unknown = el("option", "", shownValue(value, entry.key));
         unknown.selected = true;
         unknown.disabled = true;
         select.append(unknown);
       }
       for (var option of choices) {
-        var choice = el("option", "", shownValue(option));
+        var choice = el("option", "", shownValue(option, entry.key));
         choice.value = String(option);
         choice.selected = option === value;
         select.append(choice);

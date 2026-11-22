@@ -45,6 +45,7 @@
   //     hash    {hash}                the frame's hash route changed: the
   //                                   address bar takes it
   //     theme   {theme}               the frame's theme was picked
+  //     companion-context              the active frame's companion observations
   //   shell to frame
   //     shown   {shown}               the frame was shown or hidden: a
   //                                   hidden one holds its region updates,
@@ -58,6 +59,7 @@
   //     theme   {theme}               another page picked the theme
   //     settings {layout, input}      shell's current choices, independent
   //                                   of whether browser persistence works
+  //     companion-gate {active}       enable or release companion observations
   // Frontend-only bound, not a persisted setting or manifest key. Zero keeps
   // the fresh-load path for diagnostics; one destination may be loading.
   var CACHE_LIMIT = 5;
@@ -72,6 +74,12 @@
     hash: { hash: "string" },
     theme: { theme: "string" },
     settings: { layout: "string", input: "string" },
+    "companion-gate": { active: "boolean" },
+    "companion-context": {
+      sessionId: "string", routeKind: "string", harness: "string", model: "string",
+      activity: "string", openAskCount: "number", runningSubagents: "number",
+      events: "array", landmarks: "record"
+    },
     shown: { shown: "boolean" },
     search: {},
     overview: {},
@@ -87,9 +95,18 @@
     for (var k in want) {
       var t = want[k], v = m[k];
       if (t.charAt(0) === "?") { if (v === null) continue; t = t.slice(1); }
-      if (typeof v !== t) return null;
+      if (t === "array") { if (!Array.isArray(v)) return null; }
+      else if (t === "record") { if (!v || typeof v !== "object" || Array.isArray(v)) return null; }
+      else if (typeof v !== t) return null;
     }
     return m;
+  }
+
+  function companionContext(routeKind) {
+    return {
+      sessionId: "", routeKind: routeKind || "home", harness: "", model: "",
+      activity: "idle", openAskCount: 0, runningSubagents: 0, events: [], landmarks: {}
+    };
   }
 
   // SESSION is a session page's path; its reply-id is the daemon's
@@ -162,5 +179,5 @@
     return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
   }
 
-  window.WsShell = { message: message, framed: framed, src: src, pagePath: pagePath, settingsHref: settingsHref, settingsScopeHref: settingsScopeHref, alpha: alpha, cacheLimit: CACHE_LIMIT };
+  window.WsShell = { message: message, companionContext: companionContext, framed: framed, src: src, pagePath: pagePath, settingsHref: settingsHref, settingsScopeHref: settingsScopeHref, alpha: alpha, cacheLimit: CACHE_LIMIT };
 })();

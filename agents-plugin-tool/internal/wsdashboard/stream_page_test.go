@@ -157,6 +157,15 @@ connect();
 check("the frame requests tree but not absent rail rows", sockets[4].url, "ws://localhost:1234/s/rid1/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&treerows=1&entryrows=1&panelrows=1&display=1");
 sockets[4].msg("companion", {mode: "off"});
 check("a frame leaves the shell companion settings alone", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
+var companionReads = [];
+// The empty panel region establishes the last keyed baseline on reconnect.
+doc.createElement = function () { return { childNodes: [], children: [], innerHTML: "" }; };
+companionRelay = { board: function (html) { companionReads.push(html); }, reconcile: function (ready) { companionReads.push(ready); } };
+sockets[4].msg("region", {name: "board", hash: "catch-up", html: "<p>reconciled board</p>"});
+sockets[4].msg("region", {name: "panels", hash: "held", html: ""});
+sockets[4].msg("region", {name: "panels", hash: "live", html: ""});
+check("companion baselines the canonical board at the first panel render", companionReads, ["<p>reconciled board</p>", true]);
+companionRelay = null;
 worktree = "/fixture";
 connect();
 check("worktree excludes tree rows", sockets[5].url, "ws://localhost:1234/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&display=1");

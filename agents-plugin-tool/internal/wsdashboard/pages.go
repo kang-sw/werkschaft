@@ -65,7 +65,16 @@ var dashboardScriptFiles = []string{
 	"dashboard-rail-popovers.js",
 	"dashboard-leads.js",
 	"dashboard-session-view.js",
+	"dashboard-companion-relay.js",
 	"dashboard-lifecycle.js",
+}
+
+var companionScriptFiles = []string{
+	"dashboard-companion-packs.js",
+	"dashboard-companion-compositor.js",
+	"dashboard-companion-scenarios.js",
+	"dashboard-companion-menu.js",
+	"dashboard-companion-stage.js",
 }
 
 var dashboardStyleFiles = []string{
@@ -106,6 +115,8 @@ func readDashboardSource(read func(string) ([]byte, error), name string) ([]byte
 		files = dashboardStyleFiles
 	case "tracker.js":
 		files = trackerScriptFiles
+	case "dashboard-companion.js":
+		files = companionScriptFiles
 	default:
 		return read(name)
 	}
@@ -234,7 +245,9 @@ type pageAssetsData struct {
 	// ShellScript is the iframe shell's pure helpers (shell.js,
 	// window.WsShell): the frame LRU, the paths a shell frames, and the
 	// shell-frame message shapes, which the shell and its frames both load.
-	ShellScript template.JS
+	ShellScript     template.JS
+	CompanionScript template.JS
+	CompanionCSS    template.CSS
 	// CardsScript is the board card framework (cards.js, window.WsCards),
 	// led by its paged docking gallery's pure model (gallery.js,
 	// window.WsGallery),
@@ -352,6 +365,8 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		MemoScript:       template.JS(get("memo.js")),
 		UsageScript:      template.JS(get("usage.js")),
 		ShellScript:      template.JS(get("shell.js")),
+		CompanionScript:  template.JS(get("dashboard-companion.js")),
+		CompanionCSS:     template.CSS(get("dashboard-companion.css")),
 		SettingsCSS:      template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css")),
 		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings.js")),
 		SettingsCatalog:  template.JS(get("dashboard-settings-catalog.json")),
