@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Companion marketplace manifest (ws-companion-marketplace/v1)",
+  "description": "The marketplace.json at the root of a pack source. Readers ignore fields they do not know, so every object here stays open. One bad entry does not hide the other entries of the list; the dashboard reports it beside that entry.",
+  "type": "object",
+  "required": ["schema", "name", "packs"],
+  "properties": {
+    "schema": {
+      "const": "ws-companion-marketplace/v1",
+      "description": "The format marker. Any other value is refused."
+    },
+    "name": {
+      "allOf": [{ "$ref": "#/$defs/text" }, { "pattern": "\\S", "maxLength": 64 }],
+      "description": "The marketplace display name."
+    },
+    "owner": {
+      "type": "object",
+      "description": "Optional author of the marketplace.",
+      "properties": {
+        "name": { "allOf": [{ "$ref": "#/$defs/text" }, { "maxLength": 64 }] },
+        "url": { "$ref": "#/$defs/httpsUrl" }
+      }
+    },
+    "packs": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/entry" },
+      "description": "The listed packs. An id may be listed only once."
+    }
+  },
+  "$defs": {
+    "text": {
+      "type": "string",
+      "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$",
+      "description": "Plain text without control characters."
+    },
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^https://[^\\s\\x00-\\x1f\\x7f-\\x9f/?#@]+([/?#]\\S*)?$",
+      "description": "An absolute https URL without credentials, spaces or control characters."
+    },
+    "entry": {
+      "type": "object",
+      "required": ["id", "name", "version"],
+      "description": "One listed pack. It is self-contained (path names a directory inside the same archive) or external (url and sha256 name a separate pack zip).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "not": {
+            "anyOf": [
+              { "enum": ["default", "auto"] },
+              { "pattern": "^(con|prn|aux|nul|com[1-9]|lpt[1-9])$" }
+            ]
+          },
+          "description": "The pack ID. It must equal the id in the pack's own pack.json."
+        },
+        "name": { "allOf": [{ "$ref": "#/$defs/text" }, { "pattern": "\\S", "maxLength": 64 }] },
+        "version": {
+          "allOf": [{ "$ref": "#/$defs/text" }, { "pattern": "\\S", "maxLength": 32 }],
+          "description": "Shown to the user only. Updates are detected from the pack content, never from this string."
+        },
+        "author": { "allOf": [{ "$ref": "#/$defs/text" }, { "maxLength": 64 }] },
+        "license": { "allOf": [{ "$ref": "#/$defs/text" }, { "maxLength": 64 }] },
+        "description": { "allOf": [{ "$ref": "#/$defs/text" }, { "maxLength": 280 }] },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?:[^./\\\\\\x00][^/\\\\\\x00]*|\\.[^./\\\\\\x00][^/\\\\\\x00]*|\\.\\.[^/\\\\\\x00]+)(?:/(?:[^./\\\\\\x00][^/\\\\\\x00]*|\\.[^./\\\\\\x00][^/\\\\\\x00]*|\\.\\.[^/\\\\\\x00]+))*$",
+          "not": { "pattern": "^[A-Za-z]:" },
+          "description": "A clean relative directory inside the archive that holds pack.json, such as packs/sample-a. No leading slash, drive letter, backslash, or .. segment."
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl",
+          "description": "An https URL of a zip that holds one pack, with pack.json at its root or in its single top-level folder."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The SHA-256 of the pack zip, as 64 lowercase hex characters. It is checked before the zip is opened."
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["path"],
+          "not": { "anyOf": [{ "required": ["url"] }, { "required": ["sha256"] }] }
+        },
+        {
+          "required": ["url", "sha256"],
+          "not": { "required": ["path"] }
+        }
+      ]
+    }
+  }
+}

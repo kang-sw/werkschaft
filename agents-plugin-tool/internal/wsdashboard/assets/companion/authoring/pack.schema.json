@@ -1,0 +1,334 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Companion pack manifest (ws-companion/v1)",
+  "description": "The pack.json of one companion pack. Readers ignore fields they do not know, so this schema leaves every object open except where the format itself is closed. A pack that passes this schema can still fail the dashboard's checks (file presence, sizes, image headers); use the import preview for the full check.",
+  "type": "object",
+  "required": ["schema", "id", "name", "canvas", "poses"],
+  "properties": {
+    "schema": {
+      "const": "ws-companion/v1",
+      "description": "The format marker. Any other value is refused."
+    },
+    "id": {
+      "$ref": "#/$defs/packId",
+      "description": "The pack ID. It must equal the pack directory name and the marketplace entry id."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "The display name. It must not be blank."
+    },
+    "canvas": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 64, "maximum": 2048 },
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "The logical canvas [width, height] in pixels."
+    },
+    "autoMatch": {
+      "type": "object",
+      "description": "Optional hints for the automatic pack choice: the pack scores higher when the running harness or model matches a tag.",
+      "properties": {
+        "harnesses": { "$ref": "#/$defs/matchTags" },
+        "models": { "$ref": "#/$defs/matchTags" }
+      }
+    },
+    "persona": {
+      "type": "object",
+      "description": "Optional character voice, read as untrusted quoted text. A persona that is malformed or too long is dropped without failing the pack.",
+      "properties": {
+        "name": { "type": "string", "maxLength": 40 },
+        "voice": { "type": "string", "maxLength": 800 },
+        "quipLanguage": {
+          "type": "string",
+          "pattern": "^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,4}$",
+          "description": "A language tag such as en or pt-BR."
+        }
+      }
+    },
+    "head": {
+      "type": "object",
+      "description": "The shared head: the egg-shaped head layers, the live eye layers, and the mouth rasters.",
+      "properties": {
+        "egg": { "$ref": "#/$defs/channels" },
+        "eyes": {
+          "type": "object",
+          "properties": {
+            "sclera": { "$ref": "#/$defs/raster" },
+            "irisFill": { "$ref": "#/$defs/raster" },
+            "irisLine": { "$ref": "#/$defs/raster" },
+            "frameLower": { "$ref": "#/$defs/raster" },
+            "lidCoverL": { "$ref": "#/$defs/raster" },
+            "lidCoverR": { "$ref": "#/$defs/raster" },
+            "lidLashL": { "$ref": "#/$defs/raster" },
+            "lidLashR": { "$ref": "#/$defs/raster" },
+            "browL": { "$ref": "#/$defs/raster" },
+            "browR": { "$ref": "#/$defs/raster" }
+          }
+        },
+        "mouths": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/raster" },
+          "description": "Mouth shapes by name; every value is a raster file name."
+        }
+      }
+    },
+    "hairs": {
+      "type": "object",
+      "description": "Hair styles by ID. Each style holds back, front and acc layers.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "back": { "$ref": "#/$defs/channels" },
+          "front": { "$ref": "#/$defs/channels" },
+          "acc": { "$ref": "#/$defs/channels" }
+        }
+      }
+    },
+    "poses": {
+      "type": "object",
+      "required": ["stand"],
+      "description": "Poses by ID. stand is required; any other ID is optional and may name a fallback pose.",
+      "properties": {
+        "stand": {
+          "allOf": [
+            { "$ref": "#/$defs/group" },
+            { "required": ["layers"], "properties": { "layers": { "minItems": 1 } } }
+          ]
+        }
+      },
+      "additionalProperties": { "$ref": "#/$defs/group" }
+    },
+    "gestures": {
+      "type": "object",
+      "description": "Gestures by ID. A gesture adds layers over a pose or replaces some of its layers.",
+      "additionalProperties": { "$ref": "#/$defs/group" }
+    },
+    "expressions": {
+      "type": "object",
+      "description": "Expressions by ID. An entry with a decal swaps the whole face for that raster.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": { "decal": { "$ref": "#/$defs/raster" } }
+      }
+    },
+    "props": {
+      "type": "object",
+      "description": "Props by ID: floating items such as a drone or a letter.",
+      "additionalProperties": { "$ref": "#/$defs/effect" }
+    },
+    "fx": {
+      "type": "object",
+      "description": "Effects by ID, drawn like props.",
+      "additionalProperties": { "$ref": "#/$defs/effect" }
+    },
+    "motions": {
+      "type": "object",
+      "description": "Reusable named motion tracks.",
+      "additionalProperties": { "type": "object" }
+    },
+    "presets": {
+      "type": "object",
+      "description": "Palette presets by ID.",
+      "additionalProperties": { "type": "object" }
+    },
+    "scenarios": {
+      "type": "object",
+      "description": "Scenario overrides and additions by ID.",
+      "additionalProperties": { "$ref": "#/$defs/scenario" }
+    },
+    "easings": { "type": "object", "description": "Named cubic-bezier easing curves." },
+    "stageEffects": { "type": "object", "description": "Whole-body choreography curves." },
+    "propMotions": { "type": "object", "description": "Prop trajectory curves." },
+    "physics": { "type": "object", "description": "Drag-inertia tuning." },
+    "passive": { "type": "object", "description": "Resting beats by state." }
+  },
+  "$defs": {
+    "packId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "not": {
+        "anyOf": [
+          { "enum": ["default", "auto"] },
+          { "pattern": "^(con|prn|aux|nul|com[1-9]|lpt[1-9])$" }
+        ]
+      }
+    },
+    "raster": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\\.(webp|png)$",
+      "not": { "pattern": "\\.\\." },
+      "description": "A plain file name of a .png or .webp file in the pack directory: at most 128 characters before the extension, no folders."
+    },
+    "matchTags": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "allOf": [
+          { "pattern": "^[\\x20-\\x7e]{1,128}$" },
+          { "pattern": "\\S" }
+        ]
+      }
+    },
+    "channels": {
+      "type": "object",
+      "description": "Raster channels of one drawn part. line is a fixed ink layer; the *Fill channels are neutral masks the runtime tints; detail is untinted.",
+      "properties": {
+        "file": { "$ref": "#/$defs/raster" },
+        "line": { "$ref": "#/$defs/raster" },
+        "jacketFill": { "$ref": "#/$defs/raster" },
+        "accentFill": { "$ref": "#/$defs/raster" },
+        "skinFill": { "$ref": "#/$defs/raster" },
+        "detail": { "$ref": "#/$defs/raster" },
+        "hairFill": { "$ref": "#/$defs/raster" }
+      }
+    },
+    "layer": {
+      "allOf": [
+        { "$ref": "#/$defs/channels" },
+        {
+          "anyOf": [
+            { "not": { "required": ["frames"] } },
+            { "required": ["fps"] }
+          ],
+          "properties": {
+            "mode": {
+              "enum": ["static", "semantic-split", "semantic-split-frames", "static-frames", "head-egg"],
+              "description": "Optional. It is inferred from the other keys: frames gives a frame loop, tinted channels give semantic-split, file alone gives static."
+            },
+            "z": { "type": "number", "description": "Stacking order; the default is 20." },
+            "pivot": {
+              "type": "array",
+              "items": { "type": "number" },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "The joint [x, y] a motion rotates around."
+            },
+            "motion": {
+              "description": "A named motion, or an inline track with oscillate or keyframes.",
+              "type": ["string", "object"]
+            },
+            "fps": { "type": "number", "minimum": 0.1, "maximum": 30, "description": "Frames per second of a frame loop. A layer with frames needs it." },
+            "frames": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "oneOf": [
+                  { "$ref": "#/$defs/raster" },
+                  {
+                    "$ref": "#/$defs/channels",
+                    "anyOf": [
+                      { "required": ["file"] },
+                      { "required": ["line"] },
+                      { "required": ["jacketFill"] },
+                      { "required": ["accentFill"] },
+                      { "required": ["skinFill"] },
+                      { "required": ["detail"] },
+                      { "required": ["hairFill"] }
+                    ]
+                  }
+                ]
+              },
+              "description": "Frames of a loop: raster file names, or objects of channels."
+            }
+          }
+        }
+      ]
+    },
+    "drawable": {
+      "allOf": [
+        { "$ref": "#/$defs/layer" },
+        {
+          "anyOf": [
+            { "required": ["file"] },
+            { "required": ["line"] },
+            { "required": ["jacketFill"] },
+            { "required": ["accentFill"] },
+            { "required": ["skinFill"] },
+            { "required": ["detail"] },
+            { "required": ["hairFill"] },
+            { "required": ["frames"] },
+            { "required": ["mode"], "properties": { "mode": { "const": "head-egg" } } }
+          ]
+        }
+      ],
+      "description": "A layer that draws something: a raster, tinted channels, a frame loop, or the shared head."
+    },
+    "group": {
+      "type": "object",
+      "properties": {
+        "pose": { "type": "string", "description": "For a gesture: the pose it plays over." },
+        "fallback": { "type": "string", "description": "The pose used when this one is missing a part; the default is stand." },
+        "replaces": { "type": "array", "items": { "type": "string" }, "description": "For a gesture: the layers of the pose it swaps out." },
+        "layers": { "type": "array", "items": { "$ref": "#/$defs/drawable" } },
+        "headAnchor": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        "headScale": { "type": "number" },
+        "handAnchor": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+      }
+    },
+    "effect": {
+      "allOf": [
+        { "$ref": "#/$defs/layer" },
+        {
+          "properties": {
+            "layers": { "type": "array", "items": { "$ref": "#/$defs/drawable" } }
+          }
+        }
+      ],
+      "description": "A prop or effect: a layer of its own, a list of layers, or both."
+    },
+    "scenario": {
+      "type": "object",
+      "description": "A scenario beat. It reacts to the events named by on, with optional guards and timed steps.",
+      "properties": {
+        "disabled": { "type": "boolean", "description": "true mutes a built-in scenario of the same ID." },
+        "on": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+          ]
+        },
+        "when": {
+          "type": "object",
+          "description": "Guards. Only the keys below are accepted; an unknown guard fails the pack.",
+          "properties": {
+            "streak": { "type": "integer", "minimum": 0 },
+            "windowMs": { "type": "integer", "minimum": 0 },
+            "idleMs": { "type": "integer", "minimum": 0 },
+            "hourRange": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "prefixItems": [
+                { "type": "integer", "minimum": 0, "maximum": 23 },
+                { "type": "integer", "minimum": 0, "maximum": 24 }
+              ]
+            },
+            "routeKind": { "type": "string", "minLength": 1 },
+            "pose": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "priority": { "type": "number" },
+        "cooldownMs": { "type": "number", "minimum": 0 },
+        "durationMs": { "type": "number", "minimum": 0 },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["ms"],
+            "properties": { "ms": { "type": "number", "minimum": 0 } }
+          }
+        },
+        "pose": { "type": "string" },
+        "gesture": { "type": "string" },
+        "expression": { "type": "string" },
+        "gaze": { "type": "string" },
+        "stage": { "type": "string" },
+        "quip": { "type": "string" }
+      }
+    }
+  }
+}
