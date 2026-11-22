@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -636,6 +637,13 @@ func TestMarkdownBareURLs(t *testing.T) {
 // code block, a home path, and a path with any other colon stay text; a code
 // span that is one whole path links (TestMarkdownCodeSpanPaths).
 func TestMarkdownBarePaths(t *testing.T) {
+	// The href is the path in slash form with an "./" anchor against a scheme
+	// reading: fileHref applies filepath.ToSlash, which turns a drive path's
+	// backslashes into slashes on Windows and leaves them as "%5C" elsewhere.
+	driveHref := "./C:%5CUsers%5Ca.txt"
+	if runtime.GOOS == "windows" {
+		driveHref = "./C:/Users/a.txt"
+	}
 	for name, layout := range layouts() {
 		t.Run(name, func(t *testing.T) {
 			out := mdBoard(t, layout,
@@ -648,7 +656,7 @@ func TestMarkdownBarePaths(t *testing.T) {
 				`and/or a/b x1.5/2.5`, `~/home/a.md`,
 				`<a href="ai-docs/c.md"><code>ai-docs/c.md</code></a>`, `a/b.go:note`,
 				`(<a href="ai-docs/x.md">ai-docs/x.md</a>)`, `<a href="docs/q.md">docs/q.md:3:4</a>:`,
-				`<a href="./C:%5CUsers%5Ca.txt">C:\Users\a.txt</a>`,
+				`<a href="`+driveHref+`">C:\Users\a.txt</a>`,
 			)
 		})
 	}
