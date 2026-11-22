@@ -82,9 +82,107 @@ The prerequisite is satisfied: its Phase 4 Result (closed in 9c5a761a8) records 
 
 Implement the authenticated full-stop route: discover and stop all holders before stopping the daemon, and report remaining holders on partial failure. Design for concurrent starts and stop races. Test authorization and origin boundaries, discovery, termination, daemon shutdown, running sessions, races, partial failures and the evidenced directional compatibility tier. Preserve ordinary `/shutdown`, daemon replacement and surviving holders.
 
+### Result (e9d961574) - 2026-11-22
+
+`POST /shutdown/all` takes `/shutdown`'s endpoint bearer and joins its
+loopback-only cookie exemption
+(`agents-plugin-tool/internal/wsdashboard/daemon_http.go:45,205-238`,
+`localhost_auth.go:104`). It calls `wsholder.Manager.StopAll`
+(`agents-plugin-tool/internal/wsholder/manager.go:818-918`). StopAll refuses
+launches with `ErrStopping` from its call, including a launch queued behind a
+running one. A launch already running finishes and its holder is stopped.
+Each round rescans the holders directory and stops every holder not yet
+tried in parallel, using the protocol stop or the start-time-guarded kill.
+The survivors are then read from the directory and the process table, not
+from manager memory. The route closes the daemon only when no holder process
+remains. That success answers `202 {"shutting_down": true, "stopped": [...],
+"remaining": []}`. Otherwise it answers `409` with each remaining holder and
+the reason, lifts the launch refusal, and keeps serving. A daemon that is
+already stopping answers `503 {"error": "shutting_down"}` and stops nothing.
+Plain `/shutdown`, daemon replacement, and holders that outlive an ordinary
+stop are unchanged.
+
+- Compatibility T0, by direction. An old caller (the old shell, Electron, an
+  `Ensure` drain) still sends only `/shutdown`, which keeps its behavior
+  (`daemon_http.go:162-174`, `TestOrdinaryShutdownLeavesTheHolders`). A new
+  caller reaching an older daemon is gated: that daemon's exemption names
+  only `/shutdown` (`dd73e50ec:agents-plugin-tool/internal/wsdashboard/localhost_auth.go:104`),
+  so the guard answers a bearer-only `POST /shutdown/all` with
+  `401 {"error":"login_required"}` before routing (`access.go:124-139`,
+  `localhost_auth.go:136-148`). Nothing is stopped or written. The new shell
+  reports that as unsupported, distinct from the route's own
+  `401 unauthorized`. No store or holder protocol changes. Holder exits are
+  persisted through the existing `OnExit` path of the individual stop.
+- Partial-stop and race semantics: an incomplete stop never closes the
+  daemon. A `Close` that begins during StopAll can end the process before it
+  answers, so callers treat a lost answer as an incomplete stop.
+- Verification: `go test ./internal/wsholder -run StopAll` passes against
+  real isolated holders. It covers every holder ended with its running child,
+  including unscanned, unattachable, and predecessor holders; a refused
+  guarded kill reported remaining; and a running launch stopped while a
+  queued one is refused. `go test ./internal/wsdashboard -run
+  'FullStop|OrdinaryShutdown|UnexemptMachinePost|Shutdown|NonLoopbackHost|LocalhostAuthExemptions|Holder|LANMode|Guard'`
+  passes for bearer, LAN token, non-loopback Host, ordering, 409, 503,
+  no-holder-host, and older-daemon response shape cases. The full
+  `wsholder` and `wsagent` suites pass. `TestWideExplorerRouting`,
+  `TestShellStreamsTheRailAndItsFramesTheirRegions`,
+  `TestProxyWhiteboardLinkHasNoLoginCode`, and
+  `TestWhiteboardConstructionBeforeDashboardBind` fail identically on base
+  `dd73e50ec` in this environment. `ai-docs/manuals/ws-mcp.md` documents the
+  route.
+- Performance: the full stop reads the holders directory and descriptors
+  once per round (at most three) plus once for survivors. It runs only for
+  this destructive request, never on an interactive path, and adds no
+  persisted data.
+
 ### Phase 2: Tray and desktop lifecycle
 
 Build on Phase 1 for Tauri: X hides to tray without a draft prompt; "닫기" exits only the app; "완전 종료" stops holders and daemon. Check unsent drafts on real exit, and confirm full quit only for running sessions, showing their count. Left-click restores and focuses except on macOS, where it opens the menu. Verify hide and restore, both exit actions, draft recovery and check failures, zero and nonzero session counts (agent sessions, children and terminals per (2144)), cancellation, incomplete-stop reporting, the unsupported response of an older daemon per (2142), and the reported successor daemon per (2145) against an isolated daemon; expose only the agreed two user-facing tiers.
+
+### Result (279dd4d4f) - 2026-11-22
+
+The main window's close button hides it to the tray with no draft check.
+The tray menu has Show Werkschaft, Close Werkschaft, and Quit Werkschaft and
+Stop the Background (`agents-plugin-tool/desktop/src/tray.rs`). Close exits
+only the app and is also what the app menu's, Dock's, or system's quit does.
+`ExitRequested` with no code is prevented and routed to Close. The app's own
+exits, the updater restart, and the Windows rebuild proceed as before
+(`close.rs`, `exit_request`). Both exits run the existing draft-readiness
+check and confirm when it fails. A full quit counts every holder
+`GET /holders` lists, read with the existing browser credential: agent
+sessions, subagent workers, and terminals per (2144). An unreadable count is
+never taken as zero. It confirms once, combining count and draft lines, only
+when something would be lost. It then posts the full stop, waits for the
+daemon to exit, and reports an observed successor daemon before exiting
+(2145). Incomplete (409), unsupported (404 or `401 login_required`),
+unauthorized, already stopping, and unknown outcomes show what happened and
+keep the app open. They release the document and clear the exit flag.
+`Connection.closing` stays set throughout, so the shell never restarts the
+daemon it is stopping. A left click restores and focuses the window on
+Windows and opens the menu on macOS (2092). Labels name only the app and the
+background.
+
+- Decisions: the labels are English like the rest of the native shell, which
+  has no i18n. macOS keeps its Dock icon while hidden, and Reopen restores
+  the window. The tray needs only Tauri's `tray-icon` feature, whose crate
+  was already locked.
+- Verification: `cargo test --locked --features custom-protocol` passes
+  (54 at `5e8fb3b6f`). Its tests cover response classification, bearer-only
+  requests after the identity recheck, holder counting, confirmation and
+  report wording, exit routing, and tray click mapping. The isolated
+  end-to-end run used
+  `WERKSCHAFT_E2E_WS_MCP=/tmp/ws-mcp-e2e-new WERKSCHAFT_E2E_OLD_WS_MCP=/tmp/ws-mcp-e2e-old cargo test --locked --features custom-protocol full_stop_e2e -- --ignored --test-threads=1`
+  and passed both tests. Each test starts real daemons in a scratch HOME,
+  `WS_CACHE_HOME`, `WS_CONFIG_HOME`, and port 0. The new daemon stopped two
+  terminal holders and itself, then a successor daemon was observed. A
+  daemon built from `dd73e50ec` answered unsupported, and its holder and the
+  daemon stayed alive. No test process outlived the run. Clippy reports only
+  warnings in untouched code. No GUI was launched; Phase 4 runs the
+  packaged app.
+- Performance: an exit's identity rechecks read the endpoint file a bounded
+  number of times. After the full stop, the endpoint is polled every 200 ms
+  only while the daemon no longer answers health, for at most 20 s. Nothing
+  is persisted.
 
 ### Phase 3: Native notifications
 
