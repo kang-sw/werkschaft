@@ -436,3 +436,27 @@ Coordinate variants, mirrors, and spawn-site wording with
 section. Verify that a daemon caller can pass a returned recommendation
 directly to spawn and gets the expected binding with and without a
 mapping. Verify the unchanged native output from the same frontmatter.
+
+### Result (5016be289) - 2026-11-22
+
+Landed in 5016be289. All 21 playbooks that declare `tier:` now carry `tier-role` (their stem; the explore playbook is `playbook-explore`, per (1534)) and `tier-parent: <group>:*`. Each keeps its size, so native renders and bare `tier_override` are unchanged.
+
+- **Assignment by primary work** (1515), with the ambiguous calls listed:
+  - `explore`: `playbook-explore` (small), `reference-discovery` (small), `ticket-selector` (small), `ticket-batch-selector` (medium), `ticket-classifier` (medium). The classifier only reads and briefs the lead, so it is exploration.
+  - `implement`: `implementer` (medium), `ticket-worker` (medium), `ticket-worker-elevated` (large), `ticket-handler` (medium), `ship-handler` (small).
+  - `review`: `reviewer` (large), `code-review-correctness` (large), `code-review-fit` (medium), `code-review-lite` (medium), `code-review-test` (medium), `ticket-reviewer-completeness` (medium), `ticket-reviewer-design` (large), `review-handler` (medium), `fresh-read-doc-auditor` (large), `fresh-reader-audit` (large), `ticket-fact-populator` (medium). The fact populator checks ticket claims against the tree before correcting the ticket, so it is verification. The two fresh-reader auditors are document reviewers.
+  - `delegate-implementer` declares no `tier:`. A role needs a size and the phase keeps every size, so it gets no role. Giving it `implement` means choosing a size, which is an owner call.
+- **Mirrors.** Regenerated in the 261117 Session Procedure order: manifest, wsflow rsrc mirror, composed skills, wsflow skills, skills manifest. The Pi rsrc was hand-synced including `manifest.json`, then `prepare-workflow-bundles.py` and `prepare-native-payload.py --first-party-only` ran.
+- **Workflow manual.** The single "Choosing a tier" line now reads "the tier its render recommends, passed as returned; a role tier such as `ticket-worker:large` is valid there".
+
+Verification, with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`:
+- New tests: `TestShippedPlaybooksDeclareTierRoles` (`wsrsrc`), `TestShippedPlaybookRecommendationsSpawnWithAndWithoutAMapping` (`wsagent`) and `TestShippedPlaybookFrontmatterRecommendations` (`mcp`).
+  - The `wsrsrc` test pins the role, parent and size inventory for both shipped trees, and rejects a `tier:` without a role.
+  - The `wsagent` test spawns every shipped `<role>:<size>` as the render returns it. Unmapped, it equals the bare size. Under `review:*=pi.*`, `explore:*=claude.*` and a role pin, only the mapped group or role moves, and `playbook-explore` follows the `explore` group.
+  - The `mcp` test renders shipped playbooks for daemon and native callers: daemon `<role>:<size>` with the default-chain and mapped bindings, native bare and byte-identical before and after the mapping.
+- Full `go test` passes for `wsrsrc`, `wsagent`, `wsconfig` and `wspackage`. `go build ./...` and `go vet` on the touched packages are clean.
+- `mcp` narrow run: only the four known `TestPlaybookPrintGoldenExplore*` failures (unrelated; the frontmatter addition does not touch the golden bodies).
+- wsflow Python unittests: 22 pass, 2 skipped.
+- `agents-plugin-pi` `npm test`: 27 failures, the identical set by name before and after the change (stash baseline at the Phase 1 head).
+
+Review (lite, one pass): clean, no findings.
