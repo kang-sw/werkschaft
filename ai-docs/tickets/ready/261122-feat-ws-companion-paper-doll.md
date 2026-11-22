@@ -10,8 +10,8 @@ related:
   261119-feat-ws-config-git-sync: Appendix A carries SYNC rows for the wardrobe keys added here
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-completeness-reviewed: 95f7e12d31a3e8a6
-sage-review-design-reviewed: 95f7e12d31a3e8a6
+sage-review-completeness-reviewed: 9c039da2d7b13083
+sage-review-design-reviewed: 9c039da2d7b13083
 ---
 
 # Companion Paper Doll: Head Set, Outfit-Baked Column Schema and Compositor
