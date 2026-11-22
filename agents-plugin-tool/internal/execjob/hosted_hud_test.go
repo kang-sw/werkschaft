@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -533,3 +535,75 @@ func TestUserStopAddsNoDurableState(t *testing.T) {
 }
 
 func reflectEqualRows(a, b HostedJobRow) bool { return reflect.DeepEqual(a, b) }
+
+// TestHUDDaemonPathsAreMemoryOnly measures the HUD's paths on the real
+// Hosted (the ticket's performance measurement; ai-docs/manuals/performance.md
+// Rules 1 and 5): the summary list at 0/1/50/200 jobs, a poll of an open
+// peek over a 1 MiB output, and a stop touch the job store and the exit
+// directory not at all, except the one row save a stop already costs. The
+// latencies it logs are the daemon-side cost; the dashboard's route and
+// stream numbers are in wsdashboard's exec_hud_perf_test.go.
+func TestHUDDaemonPathsAreMemoryOnly(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	storeOps := func() (puts int) { fx.store.mu.Lock(); defer fx.store.mu.Unlock(); return fx.store.puts }
+	exitEntries := func() int { e, _ := os.ReadDir(fx.exitDir); return len(e) }
+	median := func(do func()) time.Duration {
+		var ds []time.Duration
+		for i := 0; i < 15; i++ {
+			start := time.Now()
+			do()
+			ds = append(ds, time.Since(start))
+		}
+		sort.Slice(ds, func(a, b int) bool { return ds[a] < ds[b] })
+		return ds[len(ds)/2]
+	}
+	var first HostedView
+	for i, want := range []int{1, 50, 200} {
+		for len(fx.h.Jobs("lead")) < want {
+			v := fx.asyncJob(HostedLaunch{})
+			if i == 0 && first.ID == "" {
+				first = v
+			}
+		}
+		puts, entries := storeOps(), exitEntries()
+		lat := median(func() { fx.h.Jobs("lead") })
+		if storeOps() != puts || exitEntries() != entries {
+			t.Fatalf("the list with %d jobs touched the store or the exit directory", want)
+		}
+		t.Logf("Jobs() with %3d jobs: p50 %v, store rows written 0, exit-dir entries unchanged (%d)", want, lat, entries)
+	}
+	if got := fx.h.Jobs("nobody"); len(got) != 0 {
+		t.Fatal(got)
+	}
+	// A 1 MiB-output job: poll the whole ring in 16 KiB reads, as an open peek
+	// does while it follows the tail.
+	fx.holders.out(first.HolderID, "stdout", strings.Repeat("0123456789abcdef", (1<<20)/16))
+	puts, entries := storeOps(), exitEntries()
+	var polls int
+	drain := func() {
+		polls = 0
+		for off := int64(0); ; polls++ {
+			got, err := fx.h.ReadOutput("lead", first.ID, off, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Next == off {
+				return
+			}
+			off = got.Next
+		}
+	}
+	whole := median(drain)
+	one := median(func() { _, _ = fx.h.ReadOutput("lead", first.ID, 1<<19, 0) })
+	if storeOps() != puts || exitEntries() != entries {
+		t.Fatal("reading output touched the store or the exit directory")
+	}
+	t.Logf("peek over 1 MiB: one 16 KiB poll p50 %v; the whole ring in %d polls p50 %v; store and exit directory untouched", one, polls, whole)
+	// A stop: the row save the stop already makes, and nothing for the HUD.
+	puts = storeOps()
+	start := time.Now()
+	if _, err := fx.h.StopByUser("lead", first.ID); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("StopByUser: %v, store rows written %d (an agent's stop writes the same)", time.Since(start), storeOps()-puts)
+}

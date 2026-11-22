@@ -113,6 +113,10 @@ check("open lights the indicator", indicator.off, false);
 s.msg("region", { name: "board", hash: "3", html: "<p>b</p>" });
 s.msg("tracker", { rev: 0 });
 check("region and tracker act", log, ["swap:board.3", "nudge:0"]);
+// The exec job revision event of a newer daemon (execjobs): a page that does
+// not list the name ignores it, and the frames after it still act.
+s.msg("execjobs", { rev: 5 });
+check("an event name the page does not list is ignored", log, ["swap:board.3", "nudge:0"]);
 s.msg("ping");
 check("open reports visibility and ping is answered", s.sent, ['{"event":"visibility","visible":true}', '{"event":"pong"}']);
 log = [];
