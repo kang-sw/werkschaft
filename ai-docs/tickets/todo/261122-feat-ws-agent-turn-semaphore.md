@@ -66,9 +66,10 @@ individual decision ID is listed. S12–S16 record technical settlements.
 - **S7. Exec completion.** A notice steered into a running turn takes no
   new slot. A completion notice that opens a worker turn queues like
   other worker turns. Agy steer replaces the running ACP prompt. If the
-  turn has yielded its slot, wait for the MCP response and slot
-  reacquisition before steering, or queue for the next turn if that
-  turn ended. Hosted leads count immediately. See exec Decision 22.
+  turn has yielded its slot, steer once the originating MCP call has
+  replied or been cancelled and the same turn generation is counted.
+  Queue for the next turn if that turn ended. Hosted leads count
+  immediately. See Decision 22 in `261117-feat-ws-exec-tools`.
 - **S8. Config (1500)=a.** Provide a nonnegative per-harness
   `max_concurrent_turns` setting through `lead-tune`, starting with
   `agy.max_concurrent_turns` in
@@ -111,9 +112,11 @@ individual decision ID is listed. S12–S16 record technical settlements.
   Keep counting the turn until that group drains because the first response
   can resume model work. HTTP cancellation stops waiting immediately and
   counts a still-live originating turn without waiting, since the client may
-  resume on its local timeout. Ignore late accounting callbacks after that
-  turn ends or its process is replaced. This prevents duplicate releases
-  and gives reply and cancellation races one owner.
+  resume on its local timeout. Cancellation finalizes the originating call
+  for S7, and a later grant or result for that call cannot trigger a second
+  steer or slot count. Ignore late accounting callbacks after the turn ends
+  or its process is replaced. This gives reply and cancellation races one
+  owner.
 - **S15. Restore active counts.** After daemon replacement, rebuild each
   harness's active count from trusted holder replay before admitting new
   finite-cap worker turns. Follow the Runner's conservative recovery
@@ -214,9 +217,11 @@ Verification:
 - Exercise slot reuse on retries, ws continue, watchdog continue, compaction,
   and standalone prompts, including standalone send rollback. Verify a
   completion steer takes no new slot and a completion wake queues. For
-  agy, verify a completion waits for the tool reply and slot reacquisition,
-  including immediate reacquisition for leads, and queues to the next
-  turn if the original turn ends first.
+  agy, verify completion waits until the tool has replied or been cancelled
+  and the same turn generation is counted. Check immediate reacquisition
+  for leads and next-turn delivery if the original turn ends first. Cancel
+  before the pending slot grant, then deliver a late result and verify one
+  steer and one slot count.
 - Verify S4 releases and re-acquires around a ws `tools/call`, counts the
   call once through its envelope, excludes nonqualifying requests, and
   returns the result after a maximum 20 s wait when no slot is available;

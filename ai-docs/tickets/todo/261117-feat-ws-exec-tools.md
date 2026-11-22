@@ -101,6 +101,10 @@ Decisions 19–22 record technical settlements.
    (1512)=c would add a configuration list and command matching. This
    decision supersedes (1511) and the approval mechanism in (18).
    Command-content judgment stays in `261118-feat-ws-exec-intent-filter`.
+   Codex currently preapproves only `ChildSafeWSTools` and uses approval
+   policy `never` for read-only workers (`wsagent/codex.go#L256-L289`,
+   `#L307-L325`). For cutover, preapprove the exec tools each Codex worker
+   role is permitted to call and all three `fs.*` tools from Decision 6.
 5. **Claude permission pipeline.** Allowlist `ws/exec.*` to avoid a second
    prompt. Verify in Phase 1 whether Claude raises `can_use_tool` for MCP
    tools.
@@ -118,6 +122,10 @@ Decisions 19–22 record technical settlements.
      builder), verified on 0.160.0
      in `261115-feat-ws-hosted-codex-adapter-contract` (193, 218) and
      `wsagent/codex_fixture_test.go:365-370`.
+     Selection for cutover, the trusted binding and the rollout switch
+     determine shell removal. A live permission-mode change leaves shell
+     eligibility intact and needs no thread reopen
+     (`wsagent/codex.go#L205-L245`, `#L430-L441`).
    - **Codex read tools (owner, 2026-11-22 10:35 KST).** Before removing
      shell, expose three additive T0 MCP tools to hosted Codex leads
      and workers selected for cutover:
@@ -313,10 +321,14 @@ Decisions 19–22 record technical settlements.
 22. **agy completion while the slot is yielded.** agy steer sends a
     replacement ACP prompt (`wsagent/agy.go#L401-L426`). When the current
     turn has yielded its semaphore slot for an MCP call, hold the completion
-    steer until the response is returned and that turn has re-acquired its
-    slot. A lead counts immediately on reacquisition. If the turn has ended,
-    queue the completion for ordinary next-turn delivery. This prevents the
-    steer from replacing the prompt while it is still waiting on the tool.
+    steer until the originating MCP call has replied or been cancelled and
+    the same turn generation is counted. A lead counts immediately on
+    reacquisition. Cancellation drops the pending HTTP reply and restores
+    accounting under S14. Release the steer once even if a late result
+    follows cancellation (`wsdashboard/proxy_http.go#L200-L206`,
+    `#L406-L415`). If the turn has ended, queue the completion for ordinary
+    next-turn delivery. See S7 and S14 in
+    `261122-feat-ws-agent-turn-semaphore`.
 
 ## Constraints
 
@@ -415,6 +427,10 @@ Verification:
   with close and manual revival of a Pi child. Verify no automatic revival,
   no stale notice after manual revival and no notices for synchronous
   completions. Exercise ordinary Runner admission without a semaphore.
+- In the agy completion-gate fixture, cancel the originating MCP call
+  before its pending slot grant, then deliver a late MCP result. Verify
+  one steer after the same turn generation is counted, with no second
+  steer or slot count from the late result.
 - Verify T0 with an old daemon running the new holder, then holder exit, then
   new-daemon reopen and terminal-status retrieval. Share the harness-kill
   survival case with `261120-feat-ws-agy-timeout-process-respawn`.
@@ -443,6 +459,10 @@ After Phase 1, add the exec tools to worker allowlists and then enable verified
 per-harness native process tool removal with its rollout switch and exclusions.
 For Codex, implement and advertise the three read tools from Decision 6 and
 allowlist them for workers before disabling shell on start or resume.
+Preapprove each worker role's permitted exec tools and the three read tools
+in Codex's own MCP approval config before disabling shell for that profile.
+Apply the (1506) replacement exclusion when a version refuses these calls
+for the profile, so the profile keeps native shell.
 Use the existing config registry and settings catalog for the rollout switch.
 On agy, enforce native default mode at startup, during live settings changes,
 and on reconciliation. Apply daemon `reject_once` to live and replayed
@@ -476,6 +496,14 @@ Verification:
   grep line numbers, matching readable-path reach, binary read refusal
   and binary grep skipping. Check the 4 KiB result budget, truncation
   signals and the chosen line, match, entry and scan caps.
+- Switch a running hosted Codex lead from `full` to a prompt-required
+  mode and back. Verify shell stays off and each `fs.*` call stays
+  callable without a prompt, with no thread reopen.
+- For a hosted Codex worker, verify a role-permitted exec call and each
+  `fs.*` call reach ws without a Codex-side prompt or refusal. Cover
+  read-only workers with approval policy `never` and verify that a
+  version refusing a replacement call leaves shell available for that
+  profile.
 - Verify agy default launch on new, resumed, and reattached sessions with
   a saved non-default mode, the `reject_once` exception under bypass and worker
   auto-approval, and mode changes and reconciliation during the process
