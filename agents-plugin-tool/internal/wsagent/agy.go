@@ -53,6 +53,10 @@ type AgyBackend struct {
 }
 
 func (b AgyBackend) registration() (string, BackendRegistration) {
+	// No OneShot, probed 2026-11-22 with agy 1.5.14: `agy -p` (stdin or
+	// argument, --output-format text, --disable-slash-commands) has no flag
+	// that removes its tools or MCP servers; --mode and --sandbox restrict or
+	// gate them without disabling them, so no one-shot mode is verifiable.
 	return BackendAgy, BackendRegistration{
 		Backend:         b,
 		LeadProfile:     LeadProfileAgy,
