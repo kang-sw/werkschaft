@@ -530,7 +530,13 @@ call compatible.
 
 **VERIFIED - T0, directional.** The new types have no JSON tags and reach no
 `Profile`, `Record`, holder file, config, history file, or MCP schema, so the
-bytes both versions write and read are unchanged. Old client against new
+schema is unchanged and the values written for the built-in harnesses are
+unchanged. For an extension harness the values can differ: a newly detected
+extension name can now be written into the existing `Registration.Harness`
+string (`mcp/dashboard_sessions.go:415-423`, `wsdashboard/registry.go:84,266`).
+An old reader decodes it, and the base HUD hides unknown harnesses
+(`pageview_hud.go:351-357` at base), so this stays T0 with a T1 display effect
+for extensions only. Old client against new
 server: the same initialize table (four harnesses, padded and wrong-case
 bridge names, raw markers, unknown clients, with and without a daemon registry)
 passes against the base sources through a Go overlay and against the new
@@ -591,7 +597,8 @@ account slot, so a second provider needs its own accumulation. No new provider
 plumbing. Targeted `internal/mcp` (`Harness|Initialize|Detect|Connection`) fails
 only the known inventory-environment tests; `internal/wsdashboard`
 (`Trait|PlanUsage|Usage`) and `internal/wsagent` pass; build and vet pass on
-darwin and windows.
+darwin and windows. The T0 claim above is therefore "schema unchanged and
+built-in values unchanged", not universally byte-identical.
 
 ### Phase 4: Residual audit and parity, compatibility, and performance gate
 
