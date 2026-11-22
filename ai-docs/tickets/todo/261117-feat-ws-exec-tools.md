@@ -118,12 +118,31 @@ Decisions 19–22 record technical settlements.
      builder), verified on 0.160.0
      in `261115-feat-ws-hosted-codex-adapter-contract` (193, 218) and
      `wsagent/codex_fixture_test.go:365-370`.
-     Check whether each supported version has a native read/search tool
-     independent of its shell. If none is available, apply the replacement
-     exclusion in (1506) to preserve native shell for hosted leads outside
-     bypass or `full`. Otherwise these leads would have to approve each
-     file read under Decision 4. Codex workers remain eligible because their
-     exec calls run without a prompt.
+   - **Codex read tools (owner, 2026-11-22 10:35 KST).** Before removing
+     shell, expose three additive T0 MCP tools to hosted Codex leads
+     and workers selected for cutover:
+     - `fs.read(path, offset?, limit?)` reads text lines. The offset is
+       the number of lines to skip, and limit is the number to return.
+     - `fs.grep(pattern, path, glob?)` searches a file or directory and
+       returns ripgrep-style matches with paths and one-based line numbers.
+       The optional glob filters filenames.
+     - `fs.list(path, glob?)` lists directory entries with an optional
+       glob filter.
+     The tools are read-only and run without approval in every session
+     mode. Match the readable paths of Codex's native read-only mode with
+     advisory checks and no OS confinement. Return a clear binary-file
+     error from `fs.read` and skip binary files in `fs.grep`. Bound each
+     inline result to 4 KiB and report truncation. The Phase 2 implementer
+     chooses finite limits for returned lines, matches and directory
+     entries, as well as the work spent scanning. Record the values in
+     the Phase 2 Result and cover them in tests.
+     Add all three to the Codex worker allowlist before disabling shell.
+     Advertise and admit them only for hosted Codex sessions in cutover
+     using the trusted binding in Decision 13. Other harnesses retain
+     native Read/Grep/Glob. The owner chose a uniform ws read surface
+     to avoid per-read approval prompts. Rejected alternatives were
+     retaining shell for Codex leads outside bypass/full and relying on
+     per-version experimental `read_file`, `list_dir` or `grep_files`.
    - Pi hosted launches omit bash from `--tools`. Worker argument
      construction is in `wsagent/pi_launch.go:62-89`, and hosted leads
      use the separate `piLeadArgs` path. The lead's MCP-only fallback,
@@ -334,6 +353,9 @@ legacy caller's timeout and result handling. Retain holder exit status through
 a downgrade and reopen. Grade the holder protocol and restore data separately
 and record the directional verdicts in Phase 1's Result, with source lines
 showing which version writes and reads each surface and what survives reopening.
+The Codex-only `fs.*` tools are additive T0. In Phase 2, verify that the
+new inventory and allowlist keep legacy calls and other harness tool
+inventories compatible. Check discovery before removing native shell.
 
 ## Prior Decisions
 
@@ -347,9 +369,9 @@ showing which version writes and reads each surface and what survives reopening.
 | fact | value | evidence |
 |---|---|---|
 | scope.span | multi-file | agents-plugin-tool/internal/execjob/, internal/mcp/, internal/wsagent/, internal/wsholder/; harness integration and config registry |
-| scope.surface | public-interface | exec.run, exec.shell, exec.stop, exec.tail, exec.list, exec.write and legacy MCP contracts |
-| scope.new_public_symbol | yes | exec.run, exec.stop, exec.tail, exec.list, exec.write |
-| scope.new_type_contract | yes | new MCP tool argument and response contracts; exec.shell argument families |
+| scope.surface | public-interface | exec MCP calls and legacy contracts plus hosted Codex fs.read, fs.grep and fs.list |
+| scope.new_public_symbol | yes | exec.run, exec.stop, exec.tail, exec.list, exec.write, fs.read, fs.grep, fs.list |
+| scope.new_type_contract | yes | exec and fs MCP argument and response contracts, including exec.shell argument families |
 | scope.test_surface | existing | agents-plugin-tool/internal/mcp/server_stdio_exec_test.go; wsagent/agy_lead_test.go |
 | complexity.reuse_points | confirmed | internal/execjob/execjob.go, wsagent/agent_delivery.go, wsholder/manager.go |
 | complexity.side_effect_risk | high | process execution, approval, lifecycle, and native tool cutover |
@@ -419,6 +441,8 @@ Verification:
 
 After Phase 1, add the exec tools to worker allowlists and then enable verified
 per-harness native process tool removal with its rollout switch and exclusions.
+For Codex, implement and advertise the three read tools from Decision 6 and
+allowlist them for workers before disabling shell on start or resume.
 Use the existing config registry and settings catalog for the rollout switch.
 On agy, enforce native default mode at startup, during live settings changes,
 and on reconciliation. Apply daemon `reject_once` to live and replayed
@@ -444,11 +468,14 @@ Verification:
   Claude CLI tier, missing replacement tools, existing and reattached sessions,
   and unverified versions. Verify that the Pi bridge and Claude stdio fallback
   retain native tools when the trusted binding is absent.
-- Check supported Codex versions for an available native read/search path
-  outside shell, including experimental `read_file`, `list_dir` and
-  `grep_files`. Where none is available, verify on start and resume that
-  hosted leads outside bypass or `full` retain native shell. Verify shell
-  removal for otherwise eligible bypass/full leads and Codex workers.
+- Verify a hosted Codex lead outside bypass/full can read, search and list
+  without an approval prompt after shell is disabled. Exercise worker
+  allowlist ordering and confirm the tools are absent from non-Codex
+  inventories and Codex sessions outside cutover. Verify direct calls
+  from those sessions are refused. Cover line offsets, glob filters,
+  grep line numbers, matching readable-path reach, binary read refusal
+  and binary grep skipping. Check the 4 KiB result budget, truncation
+  signals and the chosen line, match, entry and scan caps.
 - Verify agy default launch on new, resumed, and reattached sessions with
   a saved non-default mode, the `reject_once` exception under bypass and worker
   auto-approval, and mode changes and reconciliation during the process
