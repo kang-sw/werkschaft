@@ -164,7 +164,7 @@ func piMCPOnlyTerminology(namespace string) map[string]string {
 func nativeFirstTerminology(namespace string) map[string]string {
 	terms := piMCPOnlyTerminology(namespace)
 	terms["ExploreAgent"] = "your native subagent (no ws tools, your harness's default model; when the question needs a specific tier, a read-only `" + namespace + "/agent.spawn` subagent at an external-harness tier)"
-	terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness; authority: at most your own)"
+	terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness; authority: at most your own)"
 	return terms
 }
 
@@ -185,8 +185,8 @@ func nativeFirstManualRewrites(namespace string) []string {
 		explore + "; pick that tier by `### Choosing a tier`.",
 		"give the subagent the returned path and spawn it with the\n  tier and bindings the render returns.",
 		"spawn the subagent through\n  " + spawn + " on an external harness with the returned path and the render's tier, qualified as `### Choosing a tier` states.",
-		"- A rendered playbook → the tier its render recommends.\n",
-		"- A rendered playbook → the tier its render recommends; as a " + spawn + " target, put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness.\n",
+		"- A rendered playbook → the tier its render recommends, passed as returned;\n  a role tier such as `ticket-worker:large` is valid there.\n",
+		"- A rendered playbook → the tier its render recommends; as a " + spawn + " target, put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness.\n",
 	}
 }
 
