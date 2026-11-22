@@ -514,7 +514,17 @@
       "registered_at": "2026-11-19T14:04:50Z"
     },
     "261119-feat-ws-named-custom-tiers": {
-      "registered_at": "2026-11-19T08:32:19Z"
+      "registered_at": "2026-11-19T08:32:19Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T04:37:12Z",
+        "impl": {
+          "branch": "impl/develop/video-tidal-march"
+        }
+      }
     },
     "261119-feat-ws-whiteboard-frame-css-isolation": {
       "registered_at": "2026-11-19T06:59:13Z"
