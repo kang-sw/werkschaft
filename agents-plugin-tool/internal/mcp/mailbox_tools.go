@@ -139,6 +139,18 @@ func mailboxAddressString(addr wsmailbox.Address) string {
 // is one store transaction, so a failed copy changes nothing and a fan-out's
 // other copies are unaffected by it.
 func (s *Server) deliverMailboxCopy(sessionKey string, entry sessionEntry, sender mailboxSendIdentity, addr wsmailbox.Address, content, now string) (mailboxDelivery, error) {
+	var targetPath string
+	var targetErr error
+	if addr.Kind == wsmailbox.AddressSlug {
+		targetPath, targetErr = s.mailboxPaths().ForScope(addr.Scope, entry.root)
+	}
+	return s.deliverMailboxCopyAt(sessionKey, entry, sender, addr, targetPath, targetErr, content, now)
+}
+
+// deliverMailboxCopyAt is deliverMailboxCopy with a named address's store
+// path already resolved (targetPath, or its resolution error targetErr), so
+// a fan-out enqueues each copy at the path its group route records.
+func (s *Server) deliverMailboxCopyAt(sessionKey string, entry sessionEntry, sender mailboxSendIdentity, addr wsmailbox.Address, targetPath string, targetErr error, content, now string) (mailboxDelivery, error) {
 	var from string
 	if sender.isOwner {
 		switch addr.Kind {
@@ -155,13 +167,8 @@ func (s *Server) deliverMailboxCopy(sessionKey string, entry sessionEntry, sende
 	// caller's correspondents. That, the enqueue, and the sender's history
 	// entry are one store transaction: one ring record.
 	counterparty := mailboxAddressString(addr)
-	var targetPath string
-	if addr.Kind == wsmailbox.AddressSlug {
-		path, perr := s.mailboxPaths().ForScope(addr.Scope, entry.root)
-		if perr != nil {
-			return mailboxDelivery{}, perr
-		}
-		targetPath = path
+	if addr.Kind == wsmailbox.AddressSlug && targetErr != nil {
+		return mailboxDelivery{}, targetErr
 	}
 	contact := mailboxContactFor(s.mailboxPaths(), counterparty, entry.root)
 

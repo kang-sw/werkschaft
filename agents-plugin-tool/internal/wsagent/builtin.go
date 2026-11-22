@@ -157,9 +157,12 @@ func childSafeWSToolsFor(p Profile) []string {
 
 // AgentWSTools are the common ws tools every agent.spawn child gets, on
 // every harness: PiMiniLeadWSTools with agent.* in place of pi.*, the review
-// ledger tools, plus ChildSafeWSTools. The child's authority does not select
-// among them; a read-only child's ws-mcp refuses the mutating ones
-// (EnvPermissionLevel).
+// ledger tools, the sage gate and stamp (a spawned ticket-handler runs them),
+// plus ChildSafeWSTools. The child's authority does not select among them; a
+// read-only child's ws-mcp refuses the mutating ones (EnvPermissionLevel).
+// Listing is not authority: tickets.sage_stamp is also lead-only to a key, so a
+// child reaches it only with a lead-scoped key (a worker-role playbook.render
+// key), never its delegate-scoped agent key.
 var AgentWSTools = agentWSTools()
 
 func agentWSTools() []string {
@@ -172,7 +175,7 @@ func agentWSTools() []string {
 	// The exec tools came in with PiMiniLeadWSTools; Codex's fs.* read
 	// tools join them here (ws-mcp admits those for a cutover Codex child
 	// only), before any harness's native process tools are removed.
-	extra := append([]string{"agent.spawn", "agent.interrupt", "agent.list", "agent.tiers", "review.stamp"}, CodexReadWSTools...)
+	extra := append([]string{"agent.spawn", "agent.interrupt", "agent.list", "agent.tiers", "review.stamp", "tickets.sage_gate", "tickets.sage_stamp"}, CodexReadWSTools...)
 	for _, name := range append(extra, ChildSafeWSTools...) {
 		if !slices.Contains(out, name) {
 			out = append(out, name)

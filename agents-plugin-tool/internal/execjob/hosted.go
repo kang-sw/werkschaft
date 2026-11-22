@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,14 +27,31 @@ type Hosted struct {
 	mu       sync.Mutex
 	jobs     map[string]*hostedJob
 	byHolder map[string]*hostedJob
-	started  bool
-	closed   bool
-	retry    *time.Timer
+	// deleting holds the ids of the jobs the job cap dropped whose row
+	// delete has not succeeded (still under way, or failed): a holder's end
+	// for one of them leaves the exit copy to the delete, the id draw skips
+	// them, and admit retries their delete and counts them toward the job
+	// cap, so a failing store bounds them. deleteGen numbers the claims.
+	deleting  map[string]*tombstone
+	deleteGen uint64
+	started   bool
+	closed    bool
+	retry     *time.Timer
 	// ownerFences are the conversations whose new jobs are refused (a close
 	// in progress); rootFences the worktrees being released or removed, each
 	// with its holder count. Both under mu.
 	ownerFences map[string]bool
 	rootFences  map[string]*rootFence
+}
+
+// tombstone is a dropped job whose row delete has not succeeded.
+type tombstone struct {
+	holder string
+	// claim is the delete under way for the id (its claim number), 0 when
+	// none: one delete at a time owns a tombstone, from fencing its job's
+	// row writes through the copy's removal or the claim's release, so a
+	// retry never deletes the row of a later job under the same id.
+	claim uint64
 }
 
 // HostedOptions configures Hosted. Holders, Store and Sessions are
@@ -65,8 +83,13 @@ type hostedJob struct {
 	// lastSeq is the last holder record taken: a replay after a daemon
 	// restart starts from the ring's first record again.
 	lastSeq uint64
-	// stdinOpen: the job's stdin takes exec.write.
+	// stdinOpen: the job's stdin takes exec.write. writeMu orders the
+	// writes, so an eof closes it only once its holder took the eof.
 	stdinOpen bool
+	// stdinUnknown: a rejoined job whose holder has not reported its
+	// stdin yet (not attached); a write asks the listing again first.
+	stdinUnknown bool
+	writeMu      sync.Mutex
 	// stopping: exec.stop or an interrupt asked for the end; the end is
 	// then HostedStopped and sends no notice.
 	stopping   bool
@@ -84,6 +107,11 @@ type hostedJob struct {
 	rev    uint64
 	saveMu sync.Mutex
 	saved  uint64
+	// endStored: a terminal row of j is in the store (under saveMu). Until
+	// then j's exit copy stays, and exitCopyOwed records that its removal
+	// waits for that store write (or the row's delete, which removes it).
+	endStored    bool
+	exitCopyOwed bool
 }
 
 // NewHosted loads the stored jobs: finished ones with their output preview,
@@ -107,22 +135,40 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 	if opts.TotalBytes <= 0 {
 		opts.TotalBytes = hostedTotalBytes
 	}
-	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}}
+	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*tombstone{}}
 	rows, err := opts.Store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load hosted exec jobs: %w", err)
 	}
 	for _, row := range rows {
-		j := &hostedJob{row: row, out: h.rings.NewJob(), done: make(chan struct{})}
+		j := &hostedJob{row: row, out: h.rings.NewJob(), done: make(chan struct{}), endStored: row.Terminal()}
 		if row.Terminal() {
 			h.rings.Restore(j.out, row.Written, row.Tails[StreamStdout], row.Tails[StreamStderr], row.Tails[StreamCombined])
 			close(j.done)
 		} else if row.HolderID != "" {
+			// stdin waits for the live holder's report (Start, or a later
+			// write): the row does not record an eof exec.write sent.
 			h.byHolder[row.HolderID] = j
+			j.stdinUnknown = !row.Legacy
 		}
 		h.jobs[row.ID] = j
 	}
 	return h, nil
+}
+
+// stdinFromHolderLocked settles a rejoined job's unknown stdin from its
+// holder's listing. The holder keeps a pipe child's stdin across a daemon
+// replacement and says whether an eof closed it; an attached holder that
+// does not say (one that predates the field) leaves it closed, so no write
+// claims success. An unattached holder (no child status) leaves it
+// unknown for a later look. h.mu is held.
+func stdinFromHolderLocked(j *hostedJob, info wsholder.Info) {
+	if !j.stdinUnknown || info.Child == nil {
+		return
+	}
+	j.stdinUnknown = false
+	c := info.Child
+	j.stdinOpen = c.State == "running" && c.InputClosed != nil && !*c.InputClosed
 }
 
 // RunningOwners counts the jobs still running by their owning conversation
@@ -174,6 +220,9 @@ func (h *Hosted) Start() {
 		j := h.jobs[execID]
 		owned := j != nil && j.row.HolderID == info.ID
 		ended := owned && j.row.Terminal()
+		if owned && !ended {
+			stdinFromHolderLocked(j, info)
+		}
 		h.mu.Unlock()
 		switch {
 		case !owned:
@@ -211,7 +260,34 @@ func (h *Hosted) Start() {
 	for _, j := range gone {
 		h.endFromExitCopy(j)
 	}
+	h.sweepExitCopies()
 	h.deliverPending()
+}
+
+// sweepExitCopies removes the exit copies no job row needs: a removal that
+// failed, or one a predecessor never reached. A copy whose job still has a
+// row, or whose row delete has not succeeded, stays.
+func (h *Hosted) sweepExitCopies() {
+	entries, err := os.ReadDir(h.opts.ExitDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			h.logf("sweep exit copies: %v", err)
+		}
+		return
+	}
+	for _, e := range entries {
+		id, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || e.IsDir() {
+			continue
+		}
+		h.mu.Lock()
+		_, live := h.jobs[id]
+		_, pending := h.deleting[id]
+		h.mu.Unlock()
+		if !live && !pending {
+			h.removeExitCopy(id)
+		}
+	}
 }
 
 // endFromExitCopy ends job j, whose holder is gone, with the status its
@@ -246,7 +322,7 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 	h.mu.Unlock()
 	h.runningChanged()
 	h.save(j, row, rev)
-	_ = os.Remove(path)
+	h.dropExitCopy(j)
 	h.deliver(j)
 }
 
@@ -260,17 +336,32 @@ func (h *Hosted) HolderGone(desc wsholder.Descriptor, exit wsholder.Exit) {
 	}
 	h.mu.Lock()
 	j := h.jobs[execID]
-	if j != nil && j.row.HolderID == desc.ID {
-		delete(h.byHolder, desc.ID)
-	}
-	ended := j == nil || j.row.Terminal()
-	h.mu.Unlock()
-	if !ended {
-		// The holder went before its exit record reached this daemon.
-		h.endFromExit(j, exit)
+	if j != nil && j.row.HolderID != desc.ID {
+		// A holder of an earlier job under a reused id: the live job, and
+		// the exit copy at its id's path, are not this holder's.
+		current := j.row.HolderID
+		h.mu.Unlock()
+		h.logf("holder %s ended: job %s runs under holder %q, so it stays", desc.ID, execID, current)
 		return
 	}
-	_ = os.Remove(h.exitCopyPath(execID))
+	if b := h.byHolder[desc.ID]; b != nil && b.row.ID == execID {
+		delete(h.byHolder, desc.ID)
+	}
+	_, pending := h.deleting[execID]
+	ended := j == nil || j.row.Terminal()
+	h.mu.Unlock()
+	switch {
+	case !ended:
+		// The holder went before its exit record reached this daemon.
+		h.endFromExit(j, exit)
+	case j != nil:
+		h.dropExitCopy(j)
+	case !pending:
+		// The job's row delete succeeded (or no job row ever named it).
+		h.removeExitCopy(execID)
+	}
+	// A dropped job whose row delete has not succeeded keeps its copy:
+	// the delete removes it once it succeeds (forget).
 }
 
 // endFromExit ends running job j with the status its holder's exit.json
@@ -294,7 +385,7 @@ func (h *Hosted) endFromExit(j *hostedJob, exit wsholder.Exit) {
 	h.mu.Unlock()
 	h.runningChanged()
 	h.save(j, row, rev)
-	_ = os.Remove(h.exitCopyPath(row.ID))
+	h.dropExitCopy(j)
 	h.deliver(j)
 }
 
@@ -324,12 +415,24 @@ func (h *Hosted) HolderEvent(id string, ev wsholder.Event) {
 		if ev.Stream == "stderr" {
 			stream = StreamStderr
 		}
-		h.rings.Append(j.out, stream, ev.Data)
+		if ev.Offset != nil && ev.CombinedOffset != nil {
+			// A rejoin replays the holder's ring from its oldest record:
+			// its offsets keep a reader's saved byte cursor on the same
+			// bytes and mark the prefix the holder no longer has.
+			h.rings.AppendAt(j.out, stream, ev.Data, *ev.Offset, *ev.CombinedOffset)
+		} else {
+			h.rings.Append(j.out, stream, ev.Data)
+		}
 		return
 	}
 	if j.row.Terminal() {
 		h.mu.Unlock()
 		return
+	}
+	if ev.OutputBytes != nil {
+		// A replay whose output records all left the holder's ring still
+		// ends with the job's totals.
+		h.rings.AdvanceTo(j.out, ev.StreamBytes["stdout"], ev.StreamBytes["stderr"], *ev.OutputBytes)
 	}
 	j.row.State = HostedExited
 	if j.stopping {
@@ -401,20 +504,120 @@ func (h *Hosted) save(j *hostedJob, row HostedJobRow, rev uint64) {
 	j.saved = rev
 	if err := h.opts.Store.Put(row); err != nil {
 		h.logf("store job %s: %v", row.ID, err)
+		return
+	}
+	if row.Terminal() && !j.endStored {
+		j.endStored = true
+		if j.exitCopyOwed {
+			j.exitCopyOwed = false
+			h.removeExitCopy(row.ID)
+		}
 	}
 }
 
-// forget marks dropped jobs never to be written again, then deletes their
-// rows: a write already under way finishes before the delete.
-func (h *Hosted) forget(dropped []*hostedJob, ids []string) {
+// dropExitCopy removes j's exit copy once a terminal row of j is stored.
+// Until then the copy stays: a successor daemon that still reads the
+// running row ends the job from the copy's status instead of as lost, and
+// the next stored terminal row (save) or the row's delete (forget) removes
+// it.
+func (h *Hosted) dropExitCopy(j *hostedJob) {
+	j.saveMu.Lock()
+	defer j.saveMu.Unlock()
+	if j.endStored {
+		h.removeExitCopy(j.row.ID)
+		return
+	}
+	j.exitCopyOwed = true
+}
+
+// removeExitCopy removes job id's exit copy; a failure stays for the next
+// start's sweep (sweepExitCopies).
+func (h *Hosted) removeExitCopy(id string) {
+	if err := os.Remove(h.exitCopyPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		h.logf("remove job %s's exit copy: %v", id, err)
+	}
+}
+
+// claimLocked starts a delete claim: the caller owns the tombstones it
+// marks with the returned number. h.mu is held.
+func (h *Hosted) claimLocked() uint64 {
+	h.deleteGen++
+	return h.deleteGen
+}
+
+// claimRetriesLocked claims every tombstone no delete owns, for a retry.
+// h.mu is held.
+func (h *Hosted) claimRetriesLocked() ([]string, uint64) {
+	var ids []string
+	claim := h.claimLocked()
+	for id, t := range h.deleting {
+		if t.claim == 0 {
+			t.claim = claim
+			ids = append(ids, id)
+		}
+	}
+	return ids, claim
+}
+
+// ownedLocked keeps the ids whose tombstone claim still holds. h.mu is
+// held.
+func (h *Hosted) ownedLocked(ids []string, claim uint64) []string {
+	var out []string
+	for _, id := range ids {
+		if t := h.deleting[id]; t != nil && t.claim == claim {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// forget marks dropped jobs never to be written again, then deletes the
+// rows of ids, whose tombstones claim owns: a write already under way
+// finishes before the delete. Only a delete that succeeded removes their
+// exit copies and their tombstones; after a failure the rows and copies
+// stay together for a successor, and the claim is released for the next
+// admit's retry.
+func (h *Hosted) forget(dropped []*hostedJob, ids []string, claim uint64) {
 	for _, j := range dropped {
 		j.saveMu.Lock()
 		j.saved = ^uint64(0)
 		j.saveMu.Unlock()
 	}
+	// Fenced: from here a release exposes the ids to a retry. Any exit
+	// short of the tombstones' removal (a failed delete, or a panic the
+	// caller recovers) releases the claim.
+	settled := false
+	defer func() {
+		if settled {
+			return
+		}
+		h.mu.Lock()
+		for _, id := range h.ownedLocked(ids, claim) {
+			h.deleting[id].claim = 0
+		}
+		h.mu.Unlock()
+	}()
+	h.mu.Lock()
+	ids = h.ownedLocked(ids, claim)
+	h.mu.Unlock()
+	if len(ids) == 0 {
+		return
+	}
 	if err := h.opts.Store.Delete(ids...); err != nil {
 		h.logf("drop finished jobs: %v", err)
+		return
 	}
+	// Still claimed, so still reserved: no job under these ids can own
+	// the copies yet.
+	for _, id := range ids {
+		h.removeExitCopy(id)
+	}
+	h.mu.Lock()
+	for _, id := range h.ownedLocked(ids, claim) {
+		delete(h.deleting, id)
+	}
+	settled = true
+	h.mu.Unlock()
 }
 
 func (h *Hosted) exitCopyPath(id string) string {

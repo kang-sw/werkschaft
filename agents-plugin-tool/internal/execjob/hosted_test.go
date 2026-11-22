@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,13 @@ type memHostedStore struct {
 	deleted []string
 	// beforePut runs at the start of each Put, before the row is stored.
 	beforePut func(HostedJobRow)
+	// failPut refuses the rows it matches, as a busy database does.
+	failPut func(HostedJobRow) bool
+	// failDelete refuses every Delete.
+	failDelete bool
+	// duringDelete runs inside Delete, before it answers: what another
+	// goroutine does while the delete is under way.
+	duringDelete func(ids []string)
 }
 
 func newMemHostedStore() *memHostedStore { return &memHostedStore{rows: map[string]HostedJobRow{}} }
@@ -46,6 +54,9 @@ func (s *memHostedStore) Put(row HostedJobRow) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failPut != nil && s.failPut(row) {
+		return errors.New("database is locked")
+	}
 	s.rows[row.ID] = row
 	s.puts++
 	return nil
@@ -53,7 +64,16 @@ func (s *memHostedStore) Put(row HostedJobRow) error {
 
 func (s *memHostedStore) Delete(ids ...string) error {
 	s.mu.Lock()
+	during := s.duringDelete
+	s.mu.Unlock()
+	if during != nil {
+		during(ids)
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failDelete {
+		return errors.New("database is locked")
+	}
 	for _, id := range ids {
 		delete(s.rows, id)
 	}
@@ -84,7 +104,18 @@ type fakeExecHolders struct {
 	exited   map[string]bool
 	seq      map[string]uint64
 	spawnErr error
+	inputErr error
 	replays  []string
+	// inputClosed is each holder's stdin-closed state, as a holder tracks
+	// it: an eof at spawn or in an input closes it, and a later input is
+	// refused. noInputState lists holders without input_closed, as one
+	// that predates the field does. inputCalls counts Input calls.
+	inputClosed  map[string]bool
+	noInputState bool
+	inputCalls   int
+	// unattached lists holders the manager has not attached (yet): the
+	// listing gives them no child status.
+	unattached map[string]bool
 	// onSpawn runs after a spawn, outside the lock (the child's own
 	// behaviour: output, exit).
 	onSpawn func(id string)
@@ -94,10 +125,13 @@ type fakeExecHolders struct {
 	beforeLaunch func()
 	// stopErr fails Stop: the holder stays, its child runs on.
 	stopErr error
+	// onLaunch runs inside LaunchWith, outside the lock, before the new
+	// holder's id reaches the job.
+	onLaunch func(id string)
 }
 
 func newFakeExecHolders() *fakeExecHolders {
-	return &fakeExecHolders{launched: map[string]wsholder.LaunchSpec{}, spawned: map[string]wsholder.SpawnSpec{}, inputs: map[string][]string{}, live: map[string]json.RawMessage{}, exited: map[string]bool{}, seq: map[string]uint64{}}
+	return &fakeExecHolders{launched: map[string]wsholder.LaunchSpec{}, spawned: map[string]wsholder.SpawnSpec{}, inputs: map[string][]string{}, live: map[string]json.RawMessage{}, exited: map[string]bool{}, seq: map[string]uint64{}, inputClosed: map[string]bool{}, unattached: map[string]bool{}}
 }
 
 func (f *fakeExecHolders) LaunchWith(spec wsholder.LaunchSpec) (string, error) {
@@ -113,6 +147,12 @@ func (f *fakeExecHolders) LaunchWith(spec wsholder.LaunchSpec) (string, error) {
 	id := fmt.Sprintf("h%012d", f.n)
 	f.launched[id] = spec
 	f.live[id] = spec.Session
+	if f.onLaunch != nil {
+		hook := f.onLaunch
+		f.mu.Unlock()
+		hook(id)
+		f.mu.Lock()
+	}
 	return id, nil
 }
 
@@ -129,6 +169,7 @@ func (f *fakeExecHolders) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.Ch
 		return wsholder.ChildStatus{}, f.spawnErr
 	}
 	f.spawned[id] = spec
+	f.inputClosed[id] = spec.InputEOF
 	hook := f.onSpawn
 	f.mu.Unlock()
 	if hook != nil {
@@ -140,9 +181,20 @@ func (f *fakeExecHolders) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.Ch
 func (f *fakeExecHolders) Input(id string, data []byte, eof bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.inputCalls++
+	if f.inputErr != nil {
+		return f.inputErr
+	}
+	if _, ok := f.spawned[id]; !ok {
+		return &wsholder.InputError{Refused: true, Err: &wsholder.OpError{Code: "no_child", Message: "no child is running"}}
+	}
+	if f.inputClosed[id] && !f.noInputState {
+		return &wsholder.OpError{Code: "input_closed", Message: "the child's stdin was closed by an earlier eof"}
+	}
 	entry := string(data)
 	if eof {
 		entry += "<EOF>"
+		f.inputClosed[id] = true
 	}
 	f.inputs[id] = append(f.inputs[id], entry)
 	return nil
@@ -187,7 +239,18 @@ func (f *fakeExecHolders) List() wsholder.Listing {
 	defer f.mu.Unlock()
 	out := wsholder.Listing{}
 	for id, session := range f.live {
-		out.Holders = append(out.Holders, wsholder.Info{ID: id, Attached: true, Session: session})
+		if f.unattached[id] {
+			out.Holders = append(out.Holders, wsholder.Info{ID: id, Cause: wsholder.CauseNoAnswer, Session: session})
+			continue
+		}
+		child := &wsholder.ChildStatus{State: "running"}
+		if f.exited[id] {
+			child.State = "exited"
+		} else if !f.noInputState {
+			closed := f.inputClosed[id]
+			child.InputClosed = &closed
+		}
+		out.Holders = append(out.Holders, wsholder.Info{ID: id, Attached: true, Session: session, Child: child})
 	}
 	return out
 }
@@ -720,8 +783,19 @@ func TestHostedStdinAndWrite(t *testing.T) {
 	if _, err := fx.h.Write("lead", v.ID, []byte("line1\n"), false); err != nil {
 		t.Fatal(err)
 	}
+	// An eof the holder refuses (detached, input queue full) leaves stdin
+	// open, so a retry still delivers it.
+	fx.holders.mu.Lock()
+	fx.holders.inputErr = wsholder.ErrDetached
+	fx.holders.mu.Unlock()
+	if _, err := fx.h.Write("lead", v.ID, []byte("line2\n"), true); err == nil {
+		t.Fatal("a refused eof write reported success")
+	}
+	fx.holders.mu.Lock()
+	fx.holders.inputErr = nil
+	fx.holders.mu.Unlock()
 	if _, err := fx.h.Write("lead", v.ID, []byte("line2\n"), true); err != nil {
-		t.Fatal(err)
+		t.Fatalf("the eof retry = %v", err)
 	}
 	if got := fx.holders.inputOf(v.HolderID); !slices.Equal(got, []string{"line1\n", "line2\n<EOF>"}) {
 		t.Fatalf("inputs = %q", got)
@@ -742,6 +816,238 @@ func TestHostedStdinAndWrite(t *testing.T) {
 	}
 	if !keyPattern.MatchString(v.ID) {
 		t.Fatalf("legacy key %q does not match the legacy key form", v.ID)
+	}
+}
+
+// TestHostedStdinSurvivesARestart: a running job launched without stdin
+// takes exec.write and its eof under the next daemon, whose holder still
+// holds the pipe open; a job given stdin at launch, and a legacy launch,
+// stay closed.
+func TestHostedStdinSurvivesARestart(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	open, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	given, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, Stdin: []byte("x"), StdinSet: true})
+	legacy, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, Legacy: true, Tool: "exec.spawn"})
+	// Launched with explicit empty stdin, and closed by an acked eof before
+	// the replacement: the row cannot tell either from an open stdin.
+	empty, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, StdinSet: true})
+	acked, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if _, err := fx.h.Write("lead", acked.ID, []byte("last\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.open(10 * time.Millisecond)
+	for _, v := range []HostedView{empty, acked} {
+		fx.holders.mu.Lock()
+		before := fx.holders.inputCalls
+		fx.holders.mu.Unlock()
+		if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil || !strings.Contains(err.Error(), "no open stdin") {
+			t.Fatalf("a write to %s's closed stdin after restart = %v", v.ID, err)
+		}
+		fx.holders.mu.Lock()
+		after := fx.holders.inputCalls
+		fx.holders.mu.Unlock()
+		if after != before {
+			t.Fatalf("a write to %s's closed stdin reached the holder after restart", v.ID)
+		}
+	}
+	if _, err := fx.h.Write("lead", open.ID, []byte("after\n"), false); err != nil {
+		t.Fatalf("write after restart = %v", err)
+	}
+	if _, err := fx.h.Write("lead", open.ID, nil, true); err != nil {
+		t.Fatalf("eof after restart = %v", err)
+	}
+	if got := fx.holders.inputOf(open.HolderID); !slices.Equal(got, []string{"after\n", "<EOF>"}) {
+		t.Fatalf("inputs after restart = %q", got)
+	}
+	for _, v := range []HostedView{given, legacy} {
+		if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil {
+			t.Fatalf("a write to %s's closed stdin was accepted after restart", v.ID)
+		}
+	}
+}
+
+// TestHostedPartialWriteSaysWhatToResend: a multi-chunk write the holder
+// stopped partway answers how many bytes it took and whether the rest was
+// refused or its delivery is unknown, so a retry does not duplicate the
+// accepted prefix; stdin stays open.
+func TestHostedPartialWriteSaysWhatToResend(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 600<<10)
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{&wsholder.InputError{Accepted: 512 << 10, Refused: true, Err: &wsholder.OpError{Code: "input_overflow", Message: "the child is not reading its input"}}, "refused the rest: holder: input_overflow: the child is not reading its input; stdin stays open: resend from byte 524288 of 614400"},
+		{&wsholder.InputError{Accepted: 256 << 10, Err: wsholder.ErrDetached}, "whether the rest arrived is unknown: holder: not attached; check the job before resending from byte 262144 of 614400"},
+	} {
+		fx.holders.mu.Lock()
+		fx.holders.inputErr = tc.err
+		fx.holders.mu.Unlock()
+		_, err := fx.h.Write("lead", v.ID, data, true)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("partial write = %v, want it to say %q", err, tc.want)
+		}
+	}
+	fx.holders.mu.Lock()
+	fx.holders.inputErr = nil
+	fx.holders.mu.Unlock()
+	if _, err := fx.h.Write("lead", v.ID, data[512<<10:], true); err != nil {
+		t.Fatalf("the resend after a partial write = %v", err)
+	}
+}
+
+// TestHostedWriteToAGoneStdinGivesNoResendAdvice: a refusal that no
+// resend can cure (the child already ended, its stdin closed, or a bad
+// request) says so instead of "stdin stays open: resend"; a gone stdin
+// refuses the next write without reaching the holder.
+func TestHostedWriteToAGoneStdinGivesNoResendAdvice(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+		gone bool
+	}{
+		{"no_child first chunk", &wsholder.InputError{Refused: true, Err: &wsholder.OpError{Code: "no_child", Message: "no child is running"}}, "no open stdin: the job's process has ended (the holder took 0 of 614400 bytes)", true},
+		{"no_child later chunk", &wsholder.InputError{Accepted: 256 << 10, Refused: true, Err: &wsholder.OpError{Code: "no_child", Message: "no child is running"}}, "no open stdin: the job's process has ended (the holder took 262144 of 614400 bytes)", true},
+		{"input_closed later chunk", &wsholder.InputError{Accepted: 256 << 10, Refused: true, Err: &wsholder.OpError{Code: "input_closed", Message: "closed"}}, "no open stdin: an earlier eof closed it (the holder took 262144 of 614400 bytes)", true},
+		{"bad_request", &wsholder.InputError{Refused: true, Err: &wsholder.OpError{Code: "bad_request", Message: "input data must be base64"}}, "holder: bad_request: input data must be base64", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHostedFixture(t, 10*time.Millisecond)
+			v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fx.holders.mu.Lock()
+			fx.holders.inputErr = tc.err
+			fx.holders.mu.Unlock()
+			_, err = fx.h.Write("lead", v.ID, make([]byte, 600<<10), true)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "resend") {
+				t.Fatalf("write = %v, want it to say %q and give no resend advice", err, tc.want)
+			}
+			fx.holders.mu.Lock()
+			fx.holders.inputErr = nil
+			fx.holders.mu.Unlock()
+			_, err = fx.h.Write("lead", v.ID, []byte("x"), false)
+			if gone := err != nil && strings.Contains(err.Error(), "no open stdin"); gone != tc.gone {
+				t.Fatalf("the next write = %v, want stdin gone %v", err, tc.gone)
+			}
+		})
+	}
+}
+
+// TestHostedStdinSettlesOnALaterAttach: a rejoined job whose holder did
+// not attach by Start has an unknown stdin; a write refuses without
+// reaching the holder until the holder attaches, then delivers.
+func TestHostedStdinSettlesOnALaterAttach(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.holders.mu.Lock()
+	fx.holders.unattached[v.HolderID] = true
+	fx.holders.mu.Unlock()
+	fx.open(10 * time.Millisecond)
+	if _, err := fx.h.Write("lead", v.ID, []byte("early\n"), false); err == nil || !strings.Contains(err.Error(), "not known yet") {
+		t.Fatalf("a write before the holder attached = %v", err)
+	}
+	// The manager's rescan attaches the holder.
+	fx.holders.mu.Lock()
+	delete(fx.holders.unattached, v.HolderID)
+	fx.holders.mu.Unlock()
+	if _, err := fx.h.Write("lead", v.ID, []byte("later\n"), true); err != nil {
+		t.Fatalf("a write after the holder attached = %v", err)
+	}
+	if got := fx.holders.inputOf(v.HolderID); !slices.Equal(got, []string{"later\n<EOF>"}) {
+		t.Fatalf("inputs = %q", got)
+	}
+	if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil || !strings.Contains(err.Error(), "no open stdin") {
+		t.Fatalf("a write after the eof = %v", err)
+	}
+}
+
+// TestHostedStdinUnknownAfterRestartStaysClosed: a holder that does not
+// report its stdin state leaves a rejoined job's stdin closed, so a write
+// never claims a success the holder may have dropped.
+func TestHostedStdinUnknownAfterRestartStaysClosed(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.holders.mu.Lock()
+	fx.holders.noInputState = true
+	fx.holders.mu.Unlock()
+	fx.open(10 * time.Millisecond)
+	if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil {
+		t.Fatalf("a write to a stdin of unknown state was accepted")
+	}
+	if got := fx.holders.inputOf(v.HolderID); len(got) != 0 {
+		t.Fatalf("inputs = %q", got)
+	}
+}
+
+// TestHostedRejoinKeepsAbsoluteOffsets: a running job rejoined after a
+// daemon replacement places the holder's replayed records at their
+// absolute offsets, so a saved exec.raw.read cursor reads the same bytes
+// and a read below the replay reports the prefix the holder evicted.
+func TestHostedRejoinKeepsAbsoluteOffsets(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Legacy: true, Tool: "exec.spawn", Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.open(10 * time.Millisecond)
+	// The holder's ring kept only the output from byte 4096 on.
+	at := func(off int64) *int64 { return &off }
+	fx.holders.emit(v.HolderID, wsholder.Event{Event: "output", Stream: "stdout", Data: []byte("kept-1\n"), Offset: at(4096), CombinedOffset: at(4096)})
+	fx.holders.emit(v.HolderID, wsholder.Event{Event: "output", Stream: "stdout", Data: []byte("kept-2\n"), Offset: at(4103), CombinedOffset: at(4103)})
+	read, ok, err := fx.h.LegacyRead(fx.exitDir, v.ID, "stdout", 4103, 100)
+	if !ok || err != nil || read.Offset != 4103 || read.Text != "kept-2\n" || read.Size != 4110 || read.EvictedBefore != 0 {
+		t.Fatalf("read from a saved cursor = %+v %v %v", read, ok, err)
+	}
+	read, ok, err = fx.h.LegacyRead(fx.exitDir, v.ID, "stdout", 0, 100)
+	if !ok || err != nil || read.EvictedBefore != 4096 || read.Offset != 4096 || read.Text != "kept-1\nkept-2\n" {
+		t.Fatalf("read below the replay = %+v %v %v", read, ok, err)
+	}
+}
+
+// TestHostedExitOnlyReplayKeepsTheTotals: a rejoin whose replay holds only
+// the exit record still ends the job with its output totals, so a saved
+// cursor reports the gap instead of clamping to 0.
+func TestHostedExitOnlyReplayKeepsTheTotals(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Legacy: true, Tool: "exec.spawn", Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.open(10 * time.Millisecond)
+	code, total := 0, int64(3<<20)
+	fx.holders.emit(v.HolderID, wsholder.Event{Event: "exit", ExitCode: &code, StreamBytes: map[string]int64{"stdout": total - 40, "stderr": 40}, OutputBytes: &total})
+	eventuallyExec(t, "the job's end", func() bool { got, _ := fx.h.Get("lead", v.ID); return got.Terminal() })
+	read, ok, err := fx.h.LegacyRead(fx.exitDir, v.ID, "stderr", 10, 100)
+	if !ok || err != nil || read.Size != 40 || read.EvictedBefore != 40 || read.Offset != 40 {
+		t.Fatalf("stderr from a saved cursor = %+v %v %v", read, ok, err)
+	}
+	got, _ := fx.h.Get("lead", v.ID)
+	if got.Written[StreamStdout] != total-40 || got.Written[StreamCombined] != total {
+		t.Fatalf("totals after an exit-only replay = %v", got.Written)
+	}
+	if row, _ := fx.store.row(v.ID); row.Written[StreamCombined] != total {
+		t.Fatalf("stored totals = %v", row.Written)
 	}
 }
 
@@ -857,6 +1163,162 @@ func TestHostedRestartSettlesGoneHolders(t *testing.T) {
 	eventuallyExec(t, "the live job's notice", func() bool { return len(fx.sessions.noticeList()) == 4 })
 }
 
+// TestHostedExitCopyStaysUntilTheEndIsStored: when the store refuses the
+// job's terminal row, the holder's cleanup keeps the exit copy, so the next
+// daemon, still reading the running row, ends the job with its real status
+// and owed notice instead of as lost; it removes the copy once the end is
+// stored.
+func TestHostedExitCopyStaysUntilTheEndIsStored(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(fx.exitDir, v.ID+".json")
+	code := 3
+	raw, _ := json.Marshal(wsholder.Exit{ExitCode: &code, Reason: "child_exited"})
+	if err := os.WriteFile(copyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.store.mu.Lock()
+	fx.store.failPut = func(r HostedJobRow) bool { return r.Terminal() }
+	fx.store.mu.Unlock()
+	fx.holders.exit(v.HolderID, code)
+	eventuallyExec(t, "the ended job's holder stop", func() bool { return slices.Contains(fx.holders.stops(), v.HolderID) })
+	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
+	fx.h.HolderGone(wsholder.Descriptor{ID: v.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
+	if _, err := os.Stat(copyPath); err != nil {
+		t.Fatalf("the exit copy went before the end was stored: %v", err)
+	}
+	if row, _ := fx.store.row(v.ID); row.Terminal() {
+		t.Fatalf("stored row = %+v, want the running row the refused end left", row)
+	}
+	_ = fx.h.Close()
+
+	fx.store.mu.Lock()
+	fx.store.failPut = nil
+	fx.store.mu.Unlock()
+	fx.sessions.mu.Lock()
+	fx.sessions.seen = map[string]bool{}
+	fx.sessions.notices = nil
+	fx.sessions.mu.Unlock()
+	fx.open(10 * time.Millisecond)
+	got, _ := fx.h.Get("lead", v.ID)
+	if got.State != HostedExited || got.ExitCode == nil || *got.ExitCode != code {
+		t.Fatalf("job after restart = %+v, want exited %d", got, code)
+	}
+	if row, _ := fx.store.row(v.ID); !row.Terminal() {
+		t.Fatalf("stored row after restart = %+v", row)
+	}
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("the exit copy stays after the end was stored: %v", err)
+	}
+	eventuallyExec(t, "the owed notice", func() bool { return len(fx.sessions.noticeList()) == 1 })
+}
+
+// TestHostedDroppedJobTakesItsOwedExitCopy: a finished job whose terminal
+// row was never stored keeps its exit copy until the job cap drops it;
+// dropping the job deletes its row and removes the copy with it. A failed
+// delete keeps both, so a successor still ends the job from the copy. The
+// holder's end may come before the prune, or while the delete is under
+// way: through HolderGone (the job already left h.jobs) or through a
+// callback that captured the job before the prune; the copy goes only
+// after the delete succeeded either way.
+func TestHostedDroppedJobTakesItsOwedExitCopy(t *testing.T) {
+	for _, during := range []string{"", "holder gone", "captured job"} {
+		for _, fails := range []bool{false, true} {
+			name := during
+			if name == "" {
+				name = "before the prune"
+			}
+			if fails {
+				name += ", delete fails"
+			}
+			t.Run(name, func(t *testing.T) { testDroppedJobExitCopy(t, fails, during) })
+		}
+	}
+}
+
+func testDroppedJobExitCopy(t *testing.T, deleteFails bool, during string) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(fx.exitDir, v.ID+".json")
+	code := 0
+	raw, _ := json.Marshal(wsholder.Exit{ExitCode: &code, Reason: "child_exited"})
+	if err := os.WriteFile(copyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.store.mu.Lock()
+	fx.store.failPut = func(r HostedJobRow) bool { return r.Terminal() }
+	fx.store.mu.Unlock()
+	fx.holders.exit(v.HolderID, code)
+	eventuallyExec(t, "the delivered notice", func() bool {
+		got, _ := fx.h.Get("lead", v.ID)
+		return got.Notice == NoticeDelivered
+	})
+	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
+	gone := func() {
+		fx.h.HolderGone(wsholder.Descriptor{ID: v.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
+	}
+	fx.h.mu.Lock()
+	captured := fx.h.jobs[v.ID]
+	fx.h.mu.Unlock()
+	var copyDuring error = errors.New("the delete never ran")
+	fx.store.mu.Lock()
+	fx.store.failPut = nil
+	fx.store.failDelete = deleteFails
+	fx.store.duringDelete = func(ids []string) {
+		if !slices.Contains(ids, v.ID) {
+			return
+		}
+		switch during {
+		case "holder gone":
+			gone()
+		case "captured job":
+			fx.h.dropExitCopy(captured)
+		}
+		_, copyDuring = os.Stat(copyPath)
+	}
+	fx.store.mu.Unlock()
+	if during == "" {
+		gone()
+		if _, err := os.Stat(copyPath); err != nil {
+			t.Fatalf("the exit copy went before the end was stored: %v", err)
+		}
+	}
+	for i := 0; i < HostedMaxJobs; i++ {
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if copyDuring != nil {
+		t.Fatalf("the exit copy went before the delete answered: %v", copyDuring)
+	}
+	if deleteFails {
+		// A holder end after the failed delete still keeps the copy.
+		gone()
+		if _, ok := fx.store.row(v.ID); !ok {
+			t.Fatalf("the row went though its delete failed")
+		}
+		if _, err := os.Stat(copyPath); err != nil {
+			t.Fatalf("the exit copy went though the row stays: %v", err)
+		}
+		return
+	}
+	fx.store.mu.Lock()
+	dropped := slices.Contains(fx.store.deleted, v.ID)
+	fx.store.mu.Unlock()
+	if !dropped {
+		t.Fatalf("the finished job %s was not dropped", v.ID)
+	}
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("the dropped job's exit copy stays: %v", err)
+	}
+}
+
 // TestHostedDeferredAndDroppedNotices: a deferred notice stays pending for
 // a later pass; a dropped one is never retried.
 func TestHostedDeferredAndDroppedNotices(t *testing.T) {
@@ -917,6 +1379,31 @@ func TestHostedJobCapDropsOldestFinished(t *testing.T) {
 	}
 }
 
+// TestHostedRefusedLaunchKeepsNoRing: a launch the running-job cap
+// refuses leaves no output ring behind.
+func TestHostedRefusedLaunchKeepsNoRing(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	for i := 0; i < HostedMaxJobs; i++ {
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rings := func() int {
+		fx.h.rings.mu.Lock()
+		defer fx.h.rings.mu.Unlock()
+		return len(fx.h.rings.jobs)
+	}
+	before := rings()
+	for i := 0; i < 3; i++ {
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err == nil || !strings.Contains(err.Error(), "already run") {
+			t.Fatalf("launch over the cap = %v", err)
+		}
+	}
+	if after := rings(); after != before {
+		t.Fatalf("refused launches left rings: %d before, %d after", before, after)
+	}
+}
+
 // TestHostedLegacyShapeAndReaders: a hosted legacy launch answers the
 // legacy Response, and the legacy readers find it by root.
 func TestHostedLegacyShapeAndReaders(t *testing.T) {
@@ -960,6 +1447,25 @@ func TestHostedLegacyShapeAndReaders(t *testing.T) {
 	}
 	if _, ok, _ := fx.h.LegacyRead(root, "exec-00000000", "stdout", 0, 10); ok {
 		t.Fatal("an unknown key is hosted")
+	}
+	// A new-tool job of the same root is its owner's alone: no legacy reader
+	// or abort finds it by root.
+	fx.holders.onSpawn = nil
+	nv, err := fx.launch(context.Background(), nil, HostedLaunch{Root: root, Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fx.h.LegacyStatus(root, nv.ID); ok {
+		t.Fatal("legacy status finds a new-tool job by root")
+	}
+	if _, ok, _ := fx.h.LegacyRead(root, nv.ID, "stdout", 0, 10); ok {
+		t.Fatal("legacy read finds a new-tool job by root")
+	}
+	if _, ok := fx.h.LegacyAbort(root, nv.ID); ok {
+		t.Fatal("legacy abort finds a new-tool job by root")
+	}
+	if got, _ := fx.h.Get("lead", nv.ID); got.State != HostedRunning {
+		t.Fatalf("the new-tool job after a refused legacy abort = %+v", got)
 	}
 
 	// A running legacy job: the timed reply carries the guidance, and abort
@@ -1048,6 +1554,25 @@ func TestHostedApprovalShowsWhatRuns(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("a missing program prompted: %d approvals", n)
 	}
+
+	// A legacy launch of a missing program keeps the file-backed answer: a
+	// failed record under a legacy key the legacy readers find, unprompted.
+	lv, err := fx.launch(context.Background(), nil, HostedLaunch{Legacy: true, Tool: "exec.spawn", Argv: []string{"missing-tool"}, Environ: []string{"PATH=" + bin}})
+	if err == nil || lv.State != HostedFailed || !keyPattern.MatchString(lv.ID) || !strings.Contains(lv.Error, "not on the job's PATH") {
+		t.Fatalf("a legacy missing program = %+v, %v", lv, err)
+	}
+	if st, ok := fx.h.LegacyStatus(fx.exitDir, lv.ID); !ok || st.Status != stateFailed || !st.ResultReady || st.ExecKey != lv.ID {
+		t.Fatalf("legacy status of the failed start = %+v, %v", st, ok)
+	}
+	if row, ok := fx.store.row(lv.ID); !ok || row.State != HostedFailed {
+		t.Fatalf("stored failed start = %+v, %v", row, ok)
+	}
+	fx.sessions.mu.Lock()
+	n = len(fx.sessions.approvals)
+	fx.sessions.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("a legacy missing program prompted: %d approvals", n)
+	}
 }
 
 // TestHostedLaunchRefusals: no argv, an unknown owner, and a spawn failure.
@@ -1065,4 +1590,601 @@ func TestHostedLaunchRefusals(t *testing.T) {
 		t.Fatalf("spawn failure = %+v, %v", v, err)
 	}
 	eventuallyExec(t, "the failed job's holder stop", func() bool { return slices.Contains(fx.holders.stops(), v.HolderID) })
+}
+
+// quickJobs makes every later launch's process exit at once, so a
+// synchronous launch comes back finished with no notice owed.
+func (fx *hostedFixture) quickJobs() {
+	fx.holders.mu.Lock()
+	fx.holders.onSpawn = func(id string) { go fx.holders.exit(id, 0) }
+	fx.holders.mu.Unlock()
+}
+
+func (fx *hostedFixture) launchFinished() HostedView {
+	fx.t.Helper()
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+	if err != nil || v.Outcome != OutcomeDone {
+		fx.t.Fatalf("a quick job = %+v, %v", v, err)
+	}
+	return v
+}
+
+// TestHostedFailingDeletesStayBounded: while the store refuses every
+// delete, the job cap's dropped jobs pile up only to the cap: launches are
+// refused once they and the running jobs fill it, and a dropped job keeps
+// no holder entry. Once the store recovers, the next launch retries the
+// failed deletes and clears them.
+func TestHostedFailingDeletesStayBounded(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.store.mu.Lock()
+	fx.store.failDelete = true
+	fx.store.mu.Unlock()
+	var refusal error
+	for i := 0; i < 3*HostedMaxJobs && refusal == nil; i++ {
+		_, refusal = fx.launch(context.Background(), nil, HostedLaunch{})
+	}
+	fx.h.mu.Lock()
+	pending, holders := len(fx.h.deleting), len(fx.h.byHolder)
+	fx.h.mu.Unlock()
+	if refusal == nil || !strings.Contains(refusal.Error(), "could not be deleted") {
+		t.Fatalf("launch while deletes fail = %v, want a refusal once the cap fills", refusal)
+	}
+	if pending > HostedMaxJobs || holders > HostedMaxJobs {
+		t.Fatalf("%d dropped jobs pending, %d holder entries; want at most %d each", pending, holders, HostedMaxJobs)
+	}
+	fx.store.mu.Lock()
+	fx.store.failDelete = false
+	fx.store.mu.Unlock()
+	fx.launchFinished()
+	fx.h.mu.Lock()
+	pending = len(fx.h.deleting)
+	fx.h.mu.Unlock()
+	fx.store.mu.Lock()
+	rows := len(fx.store.rows)
+	fx.store.mu.Unlock()
+	if pending != 0 || rows > HostedMaxJobs {
+		t.Fatalf("after the store recovered: %d pending, %d rows", pending, rows)
+	}
+}
+
+// TestHostedIDOfAPendingDeleteIsNotReused: the id draw skips the id of a
+// dropped job whose row delete has not succeeded, so a new job cannot
+// overwrite that row or its exit copy.
+func TestHostedIDOfAPendingDeleteIsNotReused(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.store.mu.Lock()
+	fx.store.failDelete = true
+	fx.store.mu.Unlock()
+	fx.launchFinished() // drops the oldest job; its delete fails
+	var first HostedJobRow
+	fx.h.mu.Lock()
+	for id := range fx.h.deleting {
+		first, _ = fx.store.row(id)
+	}
+	fx.h.mu.Unlock()
+	if first.ID == "" {
+		t.Fatalf("no job is pending delete")
+	}
+	keys := []string{strings.TrimPrefix(first.ID, "exec_"), "fresh-new-key"}
+	defer func(old func() (string, error)) { newExecKey = old }(newExecKey)
+	newExecKey = func() (string, error) {
+		k := keys[0]
+		if len(keys) > 1 {
+			keys = keys[1:]
+		}
+		return k, nil
+	}
+	v := fx.launchFinished()
+	if v.ID == first.ID {
+		t.Fatalf("the new job reused %s, whose delete is pending", first.ID)
+	}
+	if row, _ := fx.store.row(first.ID); row.ID != first.ID || row.HolderID != first.HolderID {
+		t.Fatalf("the pending row = %+v, want job %s's own", row, first.ID)
+	}
+}
+
+// TestHostedStaleHolderEndLeavesTheJob: a holder's end that names a job's
+// id under another holder (an earlier job's holder under a reused id)
+// neither ends the job nor removes the exit copy at its id's path.
+func TestHostedStaleHolderEndLeavesTheJob(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(fx.exitDir, v.ID+".json")
+	if err := os.WriteFile(copyPath, []byte(`{"reason":"child_exited"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
+	code := 9
+	fx.h.HolderGone(wsholder.Descriptor{ID: "stale-holder", Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
+	if got, _ := fx.h.Get("lead", v.ID); got.State != HostedRunning {
+		t.Fatalf("job after a stale holder's end = %+v, want running", got)
+	}
+	if _, err := os.Stat(copyPath); err != nil {
+		t.Fatalf("a stale holder's end removed the live job's exit copy: %v", err)
+	}
+	fx.holders.out(v.HolderID, "stdout", "still here\n")
+	if _, got, _ := fx.h.Tail("lead", v.ID, 1<<10); !strings.Contains(string(got.Data), "still here") {
+		t.Fatalf("output after a stale holder's end = %q", got.Data)
+	}
+}
+
+// TestHostedRepeatedHolderEndsKeepTheCopyUntilADeleteSucceeds: the
+// manager calls a holder's end again when its directory removal failed,
+// and the callbacks race the job cap's delete. Whatever their order, the
+// exit copy of a job whose running row is still stored stays, and only a
+// delete that succeeded removes it.
+func TestHostedRepeatedHolderEndsKeepTheCopyUntilADeleteSucceeds(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(fx.exitDir, v.ID+".json")
+	code := 0
+	raw, _ := json.Marshal(wsholder.Exit{ExitCode: &code, Reason: "child_exited"})
+	if err := os.WriteFile(copyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.store.mu.Lock()
+	fx.store.failPut = func(r HostedJobRow) bool { return r.Terminal() }
+	fx.store.mu.Unlock()
+	fx.holders.exit(v.HolderID, code)
+	eventuallyExec(t, "the delivered notice", func() bool {
+		got, _ := fx.h.Get("lead", v.ID)
+		return got.Notice == NoticeDelivered
+	})
+	time.Sleep(3 * time.Millisecond) // the oldest end: the cap drops it first
+	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
+	gone := func() {
+		fx.h.HolderGone(wsholder.Descriptor{ID: v.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
+	}
+	goneRacing := func(n int) {
+		var wg sync.WaitGroup
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func() { defer wg.Done(); gone() }()
+		}
+		wg.Wait()
+	}
+	rowKeepsCopy := func(when string) {
+		t.Helper()
+		if _, ok := fx.store.row(v.ID); !ok {
+			return
+		}
+		if _, err := os.Stat(copyPath); err != nil {
+			t.Fatalf("%s: the exit copy went while the running row stays: %v", when, err)
+		}
+	}
+	goneRacing(4)
+	rowKeepsCopy("repeated ends before the prune")
+
+	fx.store.mu.Lock()
+	fx.store.failPut = nil
+	fx.store.failDelete = true
+	fx.store.duringDelete = func(ids []string) {
+		if slices.Contains(ids, v.ID) {
+			goneRacing(4)
+			rowKeepsCopy("ends racing the failing delete")
+		}
+	}
+	fx.store.mu.Unlock()
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.h.mu.Lock()
+	_, pending := fx.h.deleting[v.ID]
+	fx.h.mu.Unlock()
+	if !pending {
+		t.Fatalf("job %s is not pending delete", v.ID)
+	}
+	goneRacing(4)
+	rowKeepsCopy("repeated ends after the failed delete")
+
+	var during error = errors.New("the retry never ran")
+	fx.store.mu.Lock()
+	fx.store.failDelete = false
+	fx.store.duringDelete = func(ids []string) {
+		if slices.Contains(ids, v.ID) {
+			goneRacing(4)
+			_, during = os.Stat(copyPath)
+		}
+	}
+	fx.store.mu.Unlock()
+	fx.launchFinished()
+	if during != nil {
+		t.Fatalf("the exit copy went before the retried delete answered: %v", during)
+	}
+	if _, ok := fx.store.row(v.ID); ok {
+		t.Fatalf("the row stays after the retried delete")
+	}
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("the exit copy stays after its row's delete: %v", err)
+	}
+	goneRacing(4)
+}
+
+// TestHostedStartSweepsExitCopiesWithoutARow: an exit copy whose job has
+// no row (its removal failed, or a predecessor never reached it) goes at
+// the next start; a copy whose job still has a row, and anything that is
+// not an exit copy, stays.
+func TestHostedStartSweepsExitCopiesWithoutARow(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	kept := fx.launchFinished()
+	write := func(name string) string {
+		p := filepath.Join(fx.exitDir, name)
+		if err := os.WriteFile(p, []byte(`{"reason":"child_exited"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	keptCopy, orphan, other := write(kept.ID+".json"), write("exec_gone-job-copy.json"), write("notes.txt")
+	_ = fx.h.Close()
+	fx.open(5 * time.Second)
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("the exit copy with no row stays after a start: %v", err)
+	}
+	for _, p := range []string{keptCopy, other} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s went at the start: %v", filepath.Base(p), err)
+		}
+	}
+}
+
+// TestHostedCompetingRetriesNeverDeleteAReusedID: two launches retry the
+// failed deletes at once. The first's retry clears an id and a new job
+// takes that id; the second launch, which came in while the first's
+// delete was under way, must not delete the new job's row or exit copy.
+func TestHostedCompetingRetriesNeverDeleteAReusedID(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.store.mu.Lock()
+	fx.store.failDelete = true
+	fx.store.mu.Unlock()
+	fx.launchFinished() // drops one job; its delete fails
+	var reused string
+	fx.h.mu.Lock()
+	for id := range fx.h.deleting {
+		reused = id
+	}
+	fx.h.mu.Unlock()
+	if reused == "" {
+		t.Fatal("no job is pending delete")
+	}
+
+	// The first retry's delete waits inside the store until the second
+	// launch either reached the store for the same id (a retry of an id
+	// another delete owns) or finished without doing so; the second
+	// retry's delete then waits until the id has been reused.
+	secondIn, reusedNow, competed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var calls int
+	var callsMu sync.Mutex
+	// The key seam is set once, before the competing launch starts, and
+	// restored only after it finished: the draws read reuseKey under its
+	// lock instead.
+	var keyMu sync.Mutex
+	var reuseKey string
+	var competing atomic.Bool
+	old := newExecKey
+	newExecKey = func() (string, error) {
+		keyMu.Lock()
+		k := reuseKey
+		keyMu.Unlock()
+		if k != "" {
+			return k, nil
+		}
+		return old()
+	}
+	t.Cleanup(func() {
+		if competing.Load() {
+			select {
+			case <-competed:
+			case <-time.After(5 * time.Second):
+			}
+		}
+		newExecKey = old
+	})
+	fx.store.mu.Lock()
+	fx.store.failDelete = false
+	fx.store.duringDelete = func(ids []string) {
+		if !slices.Contains(ids, reused) {
+			return
+		}
+		callsMu.Lock()
+		calls++
+		n := calls
+		callsMu.Unlock()
+		switch n {
+		case 1:
+			competing.Store(true)
+			go func() {
+				defer close(competed)
+				v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+				if err != nil || v.Outcome != OutcomeDone {
+					t.Errorf("the competing launch = %+v, %v", v, err)
+				}
+			}()
+			select {
+			case <-secondIn:
+			case <-competed:
+			}
+		case 2:
+			close(secondIn)
+			<-reusedNow
+		}
+	}
+	fx.store.mu.Unlock()
+	fx.launchFinished() // the first retry clears reused
+
+	keyMu.Lock()
+	reuseKey = strings.TrimPrefix(reused, "exec_")
+	keyMu.Unlock()
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	keyMu.Lock()
+	reuseKey = ""
+	keyMu.Unlock()
+	if err != nil || v.ID != reused {
+		t.Fatalf("the reusing launch = %+v, %v; want id %s", v, err, reused)
+	}
+	copyPath := filepath.Join(fx.exitDir, reused+".json")
+	if err := os.WriteFile(copyPath, []byte(`{"reason":"child_exited"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	callsMu.Lock()
+	second := calls >= 2
+	callsMu.Unlock()
+	if second {
+		close(reusedNow)
+	}
+	select {
+	case <-competed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the competing launch never finished")
+	}
+	if row, ok := fx.store.row(reused); !ok || row.HolderID != v.HolderID {
+		t.Fatalf("the new job's row under the reused id = %+v, %v", row, ok)
+	}
+	if _, err := os.Stat(copyPath); err != nil {
+		t.Fatalf("the new job's exit copy went: %v", err)
+	}
+}
+
+// TestHostedWriteBeforeTheSpawnKeepsStdin: between the holder's launch and
+// the process's spawn (here, a reapproval) the job is listed as running;
+// a write then is refused without reaching the holder, whose no_child
+// would read as an ended process, and stdin stays open for the process.
+func TestHostedWriteBeforeTheSpawnKeepsStdin(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	waiting, release := make(chan struct{}), make(chan struct{})
+	fx.sessions.mu.Lock()
+	fx.sessions.immediate = func(string) (bool, error) {
+		close(waiting)
+		<-release
+		return true, nil
+	}
+	fx.sessions.mu.Unlock()
+	type result struct {
+		v   HostedView
+		err error
+	}
+	launched := make(chan result, 1)
+	go func() {
+		v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+		launched <- result{v, err}
+	}()
+	<-waiting
+	views, _ := fx.h.List("lead")
+	if len(views) != 1 || views[0].State != HostedRunning {
+		t.Fatalf("jobs before the spawn = %+v", views)
+	}
+	id := views[0].ID
+	if _, err := fx.h.Write("lead", id, []byte("early\n"), false); err == nil || !strings.Contains(err.Error(), "not started its process yet") {
+		t.Fatalf("a write before the spawn = %v", err)
+	}
+	fx.holders.mu.Lock()
+	calls := fx.holders.inputCalls
+	fx.holders.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("a write before the spawn reached the holder %d times", calls)
+	}
+	close(release)
+	r := <-launched
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if _, err := fx.h.Write("lead", id, []byte("later\n"), true); err != nil {
+		t.Fatalf("a write after the spawn = %v", err)
+	}
+	if got := fx.holders.inputOf(r.v.HolderID); !slices.Equal(got, []string{"later\n<EOF>"}) {
+		t.Fatalf("inputs = %q", got)
+	}
+}
+
+// TestHostedEarlyHolderEndReadsTheJobUnderTheLock: a holder that ends
+// before the launch has recorded it on its job takes HolderGone's mismatch
+// path while the launch records the holder; the log reads the job's
+// holder under h.mu (run with -race: the read raced the launch's write).
+func TestHostedEarlyHolderEndReadsTheJobUnderTheLock(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	done := make(chan struct{})
+	fx.holders.mu.Lock()
+	fx.holders.onLaunch = func(holder string) {
+		fx.holders.mu.Lock()
+		session := fx.holders.launched[holder].Session
+		fx.holders.mu.Unlock()
+		go func() {
+			defer close(done)
+			fx.h.HolderGone(wsholder.Descriptor{ID: holder, Session: session}, wsholder.Exit{Reason: "killed"})
+		}()
+		time.Sleep(50 * time.Millisecond)
+	}
+	fx.holders.mu.Unlock()
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+}
+
+// TestHostedBulkPruneFitsTheTombstoneRoom: a prune that drops many jobs at
+// once (their notices were owed until now) drops no more than the room the
+// pending deletes leave under the job cap, so a failed bulk delete parks at
+// most the cap.
+func TestHostedBulkPruneFitsTheTombstoneRoom(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	fx.store.mu.Lock()
+	fx.store.failDelete = true
+	fx.store.mu.Unlock()
+	fx.h.mu.Lock()
+	for i := 0; i < HostedMaxJobs*3/4; i++ {
+		fx.h.deleting[fmt.Sprintf("exec_parked-%d", i)] = &tombstone{holder: "gone"}
+	}
+	for i := 0; i < HostedMaxJobs*3/2; i++ {
+		id := fmt.Sprintf("exec_finished-%d", i)
+		j := &hostedJob{out: fx.h.rings.NewJob(), done: make(chan struct{})}
+		j.row = HostedJobRow{ID: id, Owner: "lead", State: HostedExited, EndedAt: int64(i + 1)}
+		close(j.done)
+		fx.h.jobs[id] = j
+	}
+	fx.h.mu.Unlock()
+	fx.launchFinished()
+	fx.h.mu.Lock()
+	pending := len(fx.h.deleting)
+	fx.h.mu.Unlock()
+	if pending > HostedMaxJobs {
+		t.Fatalf("%d deletes pending after a failed bulk prune, want at most %d", pending, HostedMaxJobs)
+	}
+}
+
+// TestHostedLaunchesDrawingOneIDBothRun: two launches that draw the same
+// id before either is admitted do not share it: the second admission
+// finds it taken and draws again.
+func TestHostedLaunchesDrawingOneIDBothRun(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	var mu sync.Mutex
+	draws := 0
+	both := make(chan struct{})
+	defer func(old func() (string, error)) { newExecKey = old }(newExecKey)
+	newExecKey = func() (string, error) {
+		mu.Lock()
+		draws++
+		n := draws
+		mu.Unlock()
+		switch n {
+		case 1:
+			<-both
+			return "same-drawn-key", nil
+		case 2:
+			close(both)
+			return "same-drawn-key", nil
+		}
+		return fmt.Sprintf("fresh-drawn-key%d", n), nil
+	}
+	views := make(chan HostedView, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+			if err != nil {
+				t.Errorf("launch = %v", err)
+			}
+			views <- v
+		}()
+	}
+	wg.Wait()
+	close(views)
+	var ids []string
+	for v := range views {
+		ids = append(ids, v.ID)
+	}
+	if len(ids) != 2 || ids[0] == ids[1] {
+		t.Fatalf("the two launches got ids %q, want two different ones", ids)
+	}
+	listed, _ := fx.h.List("lead")
+	if len(listed) != 2 {
+		t.Fatalf("listed jobs = %d, want 2", len(listed))
+	}
+}
+
+// TestHostedPanicsReleaseTheDeleteClaim: a Store.Delete or OnRunning
+// panic that the caller recovers leaves no tombstone claimed: the dropped
+// jobs were fenced first, and the next launch's retry deletes them.
+func TestHostedPanicsReleaseTheDeleteClaim(t *testing.T) {
+	for _, where := range []string{"delete", "on running"} {
+		t.Run(where, func(t *testing.T) {
+			var once sync.Once
+			boom := func() { once.Do(func() { panic("boom") }) }
+			var armed atomic.Bool
+			var calls atomic.Int64
+			fx := newHostedFixture(t, 5*time.Second)
+			_ = fx.h.Close()
+			fx.onRunning = func() {
+				calls.Add(1)
+				if armed.Load() {
+					boom()
+				}
+			}
+			fx.open(5 * time.Second)
+			fx.quickJobs()
+			for i := 0; i < HostedMaxJobs; i++ {
+				fx.launchFinished()
+			}
+			fx.store.mu.Lock()
+			if where == "delete" {
+				fx.store.duringDelete = func([]string) { boom() }
+			} else {
+				// Only the prune fails its delete, so the claim's release
+				// is what the retry needs.
+				fx.store.failDelete = true
+			}
+			fx.store.mu.Unlock()
+			// Each finished job's admission and end have called OnRunning,
+			// so the armed panic hits this launch's admission only.
+			eventuallyExec(t, "the finished jobs' running updates", func() bool { return calls.Load() == 2*HostedMaxJobs })
+			armed.Store(where == "on running")
+			func() {
+				defer func() { _ = recover() }()
+				_, _ = fx.launch(context.Background(), nil, HostedLaunch{})
+			}()
+			armed.Store(false)
+			fx.h.mu.Lock()
+			claimed := 0
+			for _, tomb := range fx.h.deleting {
+				if tomb.claim != 0 {
+					claimed++
+				}
+			}
+			fx.h.mu.Unlock()
+			if claimed != 0 {
+				t.Fatalf("%d tombstones stay claimed after the recovered panic", claimed)
+			}
+			fx.store.mu.Lock()
+			fx.store.duringDelete, fx.store.failDelete = nil, false
+			fx.store.mu.Unlock()
+			fx.launchFinished()
+			fx.h.mu.Lock()
+			pending := len(fx.h.deleting)
+			fx.h.mu.Unlock()
+			if pending != 0 {
+				t.Fatalf("%d deletes pending after the retry", pending)
+			}
+		})
+	}
 }

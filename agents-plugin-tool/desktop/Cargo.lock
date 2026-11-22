@@ -5016,6 +5016,7 @@ dependencies = [
  "objc2-web-kit",
  "open",
  "reqwest",
+ "rfd",
  "rusqlite",
  "semver",
  "serde",

@@ -268,6 +268,9 @@ function mountSheetFramework(c) {
     ibtn(cls) { const n = c.doc.createElement('button'); n.className = cls; return n; }
   });
   c.doc.getElementById = id => c.$(id);
+  // cards.js keeps the toolbar fit state at module scope (87b093a0f); the
+  // extracted functions below read it from the context.
+  vm.runInContext('var toolbarFit = { width: 0, probing: false, modes: ["", "compact-filter", "compact-actions", "dropdown", "tight"] };', c);
   for (const name of ['buildToolbar', 'filesColumn', 'sheetWidth', 'clearSheetWidth', 'sizeSheet', 'maximize']) {
     const match = cardsSource.match(new RegExp('\\n  function ' + name + '\\([\\s\\S]*?\\n  \\}\\n'));
     assert.ok(match, name); vm.runInContext(match[0], c);

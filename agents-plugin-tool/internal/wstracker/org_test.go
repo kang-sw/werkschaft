@@ -140,6 +140,24 @@ func TestConcurrentOrgListConflictsUseFoldOrder(t *testing.T) {
 		wantEq(t, "fold-order winner", tm.clone("ada.pc").r.S.orgs["o-a"].name, "Second")
 	})
 
+	t.Run("same id concurrent creates", func(t *testing.T) {
+		tm := newTeam(t)
+		tm.goOffline("ada.pc")
+		tm.goOffline("bo.pc")
+		a := tm.do("ada.pc", TypeOrgSet, orgSetPayload("o-a", "Alpha", "maya"))
+		b := tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-a", "Beta", "raj"))
+		tm.comeOnline("ada.pc")
+		tm.comeOnline("bo.pc")
+		for _, who := range []string{"ada.pc", "bo.pc"} {
+			v := tm.view(who)
+			wantEq(t, who+" first create", event(t, v, a).Status, "applied")
+			wantEq(t, who+" later create of the same id", event(t, v, b).Status, "flagged")
+			o := tm.clone(who).r.S.orgs["o-a"]
+			wantEq(t, who+" first creator keeps name", o.name, "Alpha")
+			wantEq(t, who+" first creator keeps head", o.head, "maya")
+		}
+	})
+
 	t.Run("duplicate live names", func(t *testing.T) {
 		tm := newTeam(t)
 		tm.goOffline("ada.pc")
@@ -179,6 +197,110 @@ func TestConcurrentOrgListConflictsUseFoldOrder(t *testing.T) {
 		wantEq(t, "later member removal", event(t, v, rm).Status, "applied")
 		wantEq(t, "removal vacates concurrent head", tm.clone("ada.pc").r.S.orgs["o-leaf"].head, "")
 	})
+}
+
+// TestOrgCCOnClashedOrgIsDropped CCs an org whose creation loses a
+// concurrent name clash, from the losing clone before it syncs: the CC is
+// flagged (its writer acted on an org the fold never created), and the final
+// fold keeps no registration for it.
+func TestOrgCCOnClashedOrgIsDropped(t *testing.T) {
+	tm := newTeam(t)
+	it := tm.do("maya.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Clashed CC"})
+	tm.goOffline("ada.pc")
+	tm.goOffline("bo.pc")
+	tm.do("ada.pc", TypeOrgSet, orgSetPayload("o-a", "Sales", "maya"))
+	lost := tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-b", "Sales", "raj"))
+	cc := tm.do("bo.pc", TypeItemCCOrg, map[string]any{"item": it, "org": "o-b"})
+	tm.comeOnline("ada.pc")
+	tm.comeOnline("bo.pc")
+	for _, who := range []string{"ada.pc", "bo.pc"} {
+		v := tm.view(who)
+		wantEq(t, who+" losing org creation", event(t, v, lost).Status, "flagged")
+		wantEq(t, who+" dependent cc_org on the lost org", event(t, v, cc).Status, "flagged")
+		S := tm.clone(who).r.S
+		if S.orgs["o-b"] != nil {
+			t.Fatalf("%s: clashed org folded", who)
+		}
+		if reg := S.ccOrgs[ccOrgKey(it, "o-b")]; reg != nil {
+			t.Fatalf("%s: orphaned registration %+v on an org the fold never created", who, reg)
+		}
+		if got := v.Items[it].OrgCC; len(got) != 0 {
+			t.Fatalf("%s: item projects org CC %+v", who, got)
+		}
+	}
+}
+
+// TestSameIDOrgCollisionKeepsWinnerOrg covers two admins minting one org id
+// offline: views that saw both creates see the winner's org, and events whose
+// writer saw only the losing create never land on the winner's org.
+func TestSameIDOrgCollisionKeepsWinnerOrg(t *testing.T) {
+	t.Run("later writer sees the winner", func(t *testing.T) {
+		tm := newTeam(t)
+		it := tm.do("maya.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Winner CC"})
+		tm.goOffline("ada.pc")
+		tm.goOffline("bo.pc")
+		tm.do("ada.pc", TypeOrgSet, orgSetPayload("o-x", "Active", "maya"))
+		lost := tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-x", "Vacant", ""))
+		tm.comeOnline("ada.pc")
+		tm.comeOnline("bo.pc")
+		cc := tm.do("raj.pc", TypeItemCCOrg, map[string]any{"item": it, "org": "o-x"})
+		for _, who := range []string{"ada.pc", "bo.pc", "raj.pc"} {
+			v := tm.view(who)
+			wantEq(t, who+" losing create", event(t, v, lost).Status, "flagged")
+			wantEq(t, who+" CC against the winner's active org", event(t, v, cc).Status, "applied")
+			o := tm.clone(who).r.S.orgs["o-x"]
+			wantEq(t, who+" winner name", o.name, "Active")
+			wantEq(t, who+" winner head", o.head, "maya")
+			wantIn(t, who+" CC reaches the winner's head", ccMembers(tm.clone(who).r.S.items[it]), "maya")
+		}
+	})
+
+	t.Run("losing writer's own events stay off the winner", func(t *testing.T) {
+		tm := newTeam(t)
+		it := tm.do("maya.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Loser CC"})
+		own := tm.do("bo.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Loser assign"})
+		tm.goOffline("ada.pc")
+		tm.goOffline("bo.pc")
+		tm.do("ada.pc", TypeOrgSet, orgSetPayload("o-x", "Alpha", "maya"))
+		tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-x", "Beta", "raj"))
+		edit := tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-x", "Beta Renamed", "raj"))
+		cc := tm.do("bo.pc", TypeItemCCOrg, map[string]any{"item": it, "org": "o-x"})
+		assign := tm.do("bo.pc", TypeItemAssign, map[string]any{"item": own, "targets": []any{map[string]any{"root": "raj", "org": "o-x", "include_root": true}}})
+		rm := tm.do("bo.pc", TypeOrgRemove, map[string]any{"org": "o-x"})
+		tm.comeOnline("ada.pc")
+		tm.comeOnline("bo.pc")
+		for _, who := range []string{"ada.pc", "bo.pc"} {
+			v := tm.view(who)
+			for name, id := range map[string]string{"edit": edit, "cc": cc, "remove": rm} {
+				wantEq(t, who+" losing writer's "+name, event(t, v, id).Status, "flagged")
+			}
+			// An assign drops only its lost org target and stays applied.
+			ae := event(t, v, assign)
+			wantEq(t, who+" losing writer's assign", ae.Status, "applied")
+			if ae.Reason == nil || !strings.Contains(*ae.Reason, "org target dropped") {
+				t.Fatalf("%s: assign reason %v does not note the dropped target", who, ae.Reason)
+			}
+			S := tm.clone(who).r.S
+			o := S.orgs["o-x"]
+			wantEq(t, who+" winner keeps name", o.name, "Alpha")
+			wantEq(t, who+" winner keeps head", o.head, "maya")
+			wantEq(t, who+" winner not removed", o.removed == nil, true)
+			if reg := S.ccOrgs[ccOrgKey(it, "o-x")]; reg != nil {
+				t.Fatalf("%s: losing CC registered on the winner's org: %+v", who, reg)
+			}
+			if len(S.liveRules(own)) != 0 || len(S.openRules(own)) != 0 {
+				t.Fatalf("%s: losing assign made a rule", who)
+			}
+		}
+	})
+}
+
+func ccMembers(it *item) []string {
+	var out []string
+	for _, e := range it.cc {
+		out = append(out, e.member)
+	}
+	return out
 }
 
 func TestRemovedChildOrgFallsBackToParent(t *testing.T) {

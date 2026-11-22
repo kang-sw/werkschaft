@@ -28,8 +28,18 @@ const agyAPIErrorPrefix = "⚠ API error"
 const agyStreamInterrupted = "⚠ The stream was interrupted. Please continue the task you were working on."
 
 const (
-	// Give agy's native retry its full 10-minute SSE idle window plus a
-	// margin. Raw ACP activity renews this interval while the failure is pending.
+	// agy logs an in-band failure line and then retries natively. The retry
+	// can hold response headers within seconds yet emit no ACP session/update
+	// until model output starts, so a short drain cancels a retry that is
+	// already succeeding. Failures agy is known to retry natively (stream idle
+	// timeout, unexpected EOF, stream interrupted) get the long window: agy's
+	// full 10-minute SSE idle window plus a margin. Raw ACP activity renews it
+	// while the failure is pending; a turn end still takes the retry path.
+	//
+	// Every other class keeps the 15s drain. The "(attempt N)" line is the
+	// same for a retried and a final failure, so the class list is the only
+	// signal; making all classes long would leave a terminal failure hanging
+	// for 11 minutes before ws continues it.
 	modelNativeIdleRetryFallback = 11 * time.Minute
 	modelFailureDrain            = 15 * time.Second
 	modelWaitCancelGrace         = 5 * time.Second
@@ -238,8 +248,8 @@ func (c *conv) onModelActivity(pending int) {
 		return
 	}
 	if c.modelWaitFailure != "" {
-		if modelFailureDrainDuration(c.modelWaitFailure) == modelNativeIdleRetryFallback {
-			c.resetModelFailureDrain(modelNativeIdleRetryFallback)
+		if d := modelFailureDrainDuration(c.modelWaitFailure); d == modelNativeIdleRetryFallback {
+			c.resetModelFailureDrain(d)
 		}
 		return
 	}
@@ -274,7 +284,8 @@ func (c *conv) onModelFailure(failure string) {
 }
 
 func modelFailureDrainDuration(failure string) time.Duration {
-	if agyModelFailureClass(failure) == "stream idle timeout" {
+	switch agyModelFailureClass(failure) {
+	case "stream idle timeout", "unexpected EOF", "stream interrupted":
 		return modelNativeIdleRetryFallback
 	}
 	return modelFailureDrain

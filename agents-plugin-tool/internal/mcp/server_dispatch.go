@@ -1483,6 +1483,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return toolTextResponse(req.ID, "", err)
 		}
 		key, _ := params.Arguments["session_key"].(string)
+		// A refused grant leaves the reserved files in place: an orphan empty
+		// file is harmless, deleting content another process saved is not.
 		if err := processGeneratedWrites.grant(key, generated); err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}

@@ -460,6 +460,71 @@ func TestProvisionWorktreeClassifiesNameRootedCanonicalTarget(t *testing.T) {
 	}
 }
 
+// `git branch -d` checks a configured upstream instead of HEAD. A stale
+// canonical target whose upstream lacks its tip must still be recreated when
+// the encoded merge root holds every target commit.
+func TestProvisionWorktreeRecreatesStaleTargetWithUpstreamBehindTip(t *testing.T) {
+	root, base := worktreeFixture(t)
+	mergeRoot := strings.TrimSpace(string(runGitOutput(t, root, "branch", "--show-current")))
+	target := "impl/" + mergeRoot + "/upstream-behind"
+	runGit(t, root, "branch", target, base)
+	unrelated := strings.TrimSpace(string(runGitOutput(t, root, "commit-tree", base+"^{tree}", "-m", "unrelated upstream")))
+	runGit(t, root, "branch", "stale-upstream", unrelated)
+	runGit(t, root, "branch", "--set-upstream-to=stale-upstream", target)
+	runGit(t, root, "commit", "--allow-empty", "-m", "merge root advanced")
+	rootHead := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", "HEAD")))
+
+	res, err := provisionWorktree(context.Background(), wsgit.ExecRunner{}, nil, root, mergeRoot, target, builtinProfile(t, worktreeProfileFull), acquireTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wtBranch(t, res.Path); got != target {
+		t.Fatalf("checked out branch = %q, want %q", got, target)
+	}
+	if got := strings.TrimSpace(string(runGitOutput(t, res.Path, "rev-parse", "HEAD"))); got != rootHead {
+		t.Fatalf("target head = %s, want recreated at merge root %s", got, rootHead)
+	}
+	if got := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", "stale-upstream"))); got != unrelated {
+		t.Fatalf("stale upstream branch moved to %s", got)
+	}
+}
+
+// failBranchDeleteRunner runs git normally but fails every `branch -d`,
+// simulating a retried non-force delete that still refuses.
+type failBranchDeleteRunner struct{ wsgit.ExecRunner }
+
+func (r failBranchDeleteRunner) RunGit(ctx context.Context, root string, args ...string) ([]byte, error) {
+	if len(args) >= 2 && args[0] == "branch" && args[1] == "-d" {
+		return []byte("error: simulated refusal"), fmt.Errorf("simulated branch -d refusal")
+	}
+	return r.ExecRunner.RunGit(ctx, root, args...)
+}
+
+// When the retried delete still fails after the stale upstream was unset,
+// the upstream configuration is restored.
+func TestDeleteStaleTargetBranchRestoresUpstreamWhenRetryFails(t *testing.T) {
+	root, base := worktreeFixture(t)
+	target := "impl/main/restore-upstream"
+	runGit(t, root, "branch", target, base)
+	unrelated := strings.TrimSpace(string(runGitOutput(t, root, "commit-tree", base+"^{tree}", "-m", "unrelated upstream")))
+	runGit(t, root, "branch", "stale-upstream", unrelated)
+	runGit(t, root, "branch", "--set-upstream-to=stale-upstream", target)
+	runGit(t, root, "switch", "--detach", base)
+	wantRemote := strings.TrimSpace(string(runGitOutput(t, root, "config", "--get", "branch."+target+".remote")))
+	wantMerge := strings.TrimSpace(string(runGitOutput(t, root, "config", "--get", "branch."+target+".merge")))
+
+	if err := deleteStaleTargetBranch(context.Background(), failBranchDeleteRunner{}, root, target); err == nil {
+		t.Fatal("delete succeeded although every branch -d was refused")
+	}
+	if got := strings.TrimSpace(string(runGitOutput(t, root, "config", "--get", "branch."+target+".remote"))); got != wantRemote {
+		t.Fatalf("branch remote after failed retry = %q, want %q", got, wantRemote)
+	}
+	if got := strings.TrimSpace(string(runGitOutput(t, root, "config", "--get", "branch."+target+".merge"))); got != wantMerge {
+		t.Fatalf("branch merge after failed retry = %q, want %q", got, wantMerge)
+	}
+	runGit(t, root, "show-ref", "--verify", "refs/heads/"+target)
+}
+
 func TestProvisionWorktreeStaleTargetHeldElsewhereFailsWithoutMutation(t *testing.T) {
 	root, base := worktreeFixture(t)
 	mergeRoot := strings.TrimSpace(string(runGitOutput(t, root, "branch", "--show-current")))
