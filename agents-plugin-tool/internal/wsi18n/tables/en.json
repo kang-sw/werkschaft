@@ -2577,6 +2577,8 @@
   "js.hud.hint.link": "Click: open /s/{0}",
   "js.hud.hint.details": "Click: open tree details",
   "js.hud.lead": "lead",
+  "js.hud.folded.title": "{0} finished direct agents",
+  "js.hud.folded.aria": "{0} finished direct agents — open agent list",
   "rail.ws.admission.invalid": "Invalid workspace admission selection.",
   "rail.ws.admission.stale": "Workspace list changed. Refresh and select again.",
   "rail.ws.empty.title": "No workspaces added",

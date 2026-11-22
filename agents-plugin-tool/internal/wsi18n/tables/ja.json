@@ -2577,6 +2577,8 @@
   "js.hud.hint.link": "クリック: セッションを開く /s/{0}",
   "js.hud.hint.details": "クリック: ツリー詳細を開く",
   "js.hud.lead": "リード",
+  "js.hud.folded.title": "完了した直属エージェント {0}件",
+  "js.hud.folded.aria": "完了した直属エージェント {0}件 — エージェント一覧を開く",
   "rail.ws.admission.invalid": "無効なワークスペース承認の選択です。",
   "rail.ws.admission.stale": "ワークスペース一覧が変更されました。更新してから選び直してください。",
   "rail.ws.empty.title": "ワークスペースはありません",

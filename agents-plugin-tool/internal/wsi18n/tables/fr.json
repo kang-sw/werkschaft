@@ -2577,6 +2577,8 @@
   "js.hud.hint.link": "Clic : ouvrir /s/{0}",
   "js.hud.hint.details": "Clic : ouvrir les détails",
   "js.hud.lead": "lead",
+  "js.hud.folded.title": "{0} agents directs terminés",
+  "js.hud.folded.aria": "{0} agents directs terminés — ouvrir la liste des agents",
   "rail.ws.admission.invalid": "Sélection d’admission d’espace de travail non valide.",
   "rail.ws.admission.stale": "La liste des espaces de travail a changé. Actualisez et sélectionnez à nouveau.",
   "rail.ws.empty.title": "Aucun espace de travail ajouté",

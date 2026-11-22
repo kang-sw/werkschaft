@@ -2577,6 +2577,8 @@
   "js.hud.hint.link": "點擊：開啟 /s/{0}",
   "js.hud.hint.details": "點擊：開啟樹狀詳情",
   "js.hud.lead": "主導",
+  "js.hud.folded.title": "{0} 個已完成回合的直屬代理",
+  "js.hud.folded.aria": "{0} 個已完成回合的直屬代理 — 開啟代理清單",
   "rail.ws.admission.invalid": "無效的工作區准入選擇。",
   "rail.ws.admission.stale": "工作區清單已變更。請重新整理後再選擇。",
   "rail.ws.empty.title": "尚未新增工作區",

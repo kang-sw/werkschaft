@@ -2577,6 +2577,8 @@
   "js.hud.hint.link": "点击：打开 /s/{0}",
   "js.hud.hint.details": "点击：打开树详情",
   "js.hud.lead": "主导",
+  "js.hud.folded.title": "{0} 个已完成回合的直属智能体",
+  "js.hud.folded.aria": "{0} 个已完成回合的直属智能体 — 打开智能体列表",
   "rail.ws.admission.invalid": "无效的工作区准入选择。",
   "rail.ws.admission.stale": "工作区列表已变更。请刷新后重新选择。",
   "rail.ws.empty.title": "尚未添加工作区",
