@@ -1,5 +1,5 @@
 ---
-summary: Living production spec for the Werkschaft lead companion (desktop pet) — v3.1+ data-driven doll-maker schema, full timing/easing/stage/prop-motion assetization, articulated drag inertia, hybrid global #rail + active-session relay, hover resize UX, and 1-by-1 art craft gates
+summary: Living production spec for the Werkschaft lead companion (desktop pet) — v3.1+ data-driven doll-maker schema, full timing/easing/stage/prop-motion assetization, articulated drag inertia, mesh-deform leg and breath articulation, hybrid global #rail + active-session relay, hover resize UX, and 1-by-1 art craft gates
 ---
 
 # Werkschaft Lead Companion: v3.1+ Doll-Maker Rigging & Architecture Manual
@@ -60,6 +60,8 @@ Side-view walking (`W. Side-Walk`) is retired from v1/v3.1. Locomotion between l
 | **`dangle`** (Family D) | Pointer drag-and-drop pick-up (`drag_dangle`) — **no `prop-grab`** | **Articulated hanging body**: separated torso, left/right arms, and left/right legs with shoulder/hip `pivot`s and subtle differential `swingWeight` / `swingLag` inertia driven by drag spring physics (not rigid slab rotation) | **Optional** (falls back to `stand` + gentle whole-body `pendulum-drag`) |
 | **`cup_hands`** (Gesture) | Launching/receiving `prop-drone` (`subagent.spawn`/`done`) and `prop-mail` (`mail.send`) | Cupped-hands + lifted-shoulders arm layers with **"끙---차!" (anticipation dip → crisp upward lift → settle)** keyframe motion and explicit `handAnchor: [x, y]` so props visibly lift off from the character's palms | **Recommended** (falls back to `stand` + pose/default `handAnchor`) |
 
+The layer compositions above describe the legacy stack. An outfit-baked column is one layer stack that articulates by mesh deform (§3b); it is not cut into separate limb layers.
+
 ### 2. Canonical Egg-Head, Open `expressions` Dictionary & Visible Prop Gaze (`0.0px` Silhouette Shift)
 
 All poses share one standardized **canonical egg-head** (`head-egg-fill` + `head-egg-line`) positioned by each pose's `headAnchor: [x, y]` and `headScale` (see Uniform Head Scale Gate below). `expressions` is an open map unifying both expression tracks:
@@ -96,7 +98,7 @@ All keys below are optional sections under `ws-companion/v1`; a pack without `ou
 - **Eye sets:** `eyesets.<id>` takes the same keys as `head.eyes`, which stays the implicit default. The iris buffer follows the selected eye block.
 - **Presets & selection:** presets gain `outfit`, `eyes` (IDs), `attachments` (`{ "<slot>": "<id>" | "none" }`) and `palette` (`{ "<channel>": "#rrggbb" }`). Selection order is config key > preset > pack default (outfit: `defaultOutfit`, then the first sorted key; hair: the existing default-hair behavior; eyes: `head.eyes`; attachments: none; palette: pack `palette`). Attachments merge per slot and palette per channel across the sources, and `none` clears a slot. An ID the active pack lacks falls back to the preset. Outfit, hair, eye-set and attachment IDs match `^[a-z0-9][a-z0-9_-]{0,63}$`, and `none` is reserved. A wardrobe change clears the view, tinted and decal caches, and a live config broadcast re-dresses without a reload.
 - **Old-daemon projection (T0):** every outfit pack keeps `poses.stand.layers` flattened from the default outfit, using only v1 raster keys (`line`, `jacketFill`, `accentFill`, `skinFill`, `detail`, `file`). An older daemon ignores the new sections, serves only the files it enumerates, and renders that projection.
-- **Kit lint:** non-rejecting `lintCompanionKit` (never changes validation) reports a legacy-projection layer or frame whose only rasters are `fills`; an outfit that binds no `stand` column; an outfit column with no top-level `poses`/`gestures` entry; registration drift; outfit, hair, eye-set and attachment IDs the config patterns cannot select; an attachment slot that does not match the slot pattern; and a pack defining the reserved attachment ID `none`.
+- **Kit lint:** non-rejecting `lintCompanionKit` (never changes validation) reports a legacy-projection layer or frame whose only rasters are `fills`; an outfit that binds no `stand` column; an outfit column with no top-level `poses`/`gestures` entry; registration drift; mesh-deform findings (§3b); outfit, hair, eye-set and attachment IDs the config patterns cannot select; an attachment slot that does not match the slot pattern; and a pack defining the reserved attachment ID `none`.
 
 #### Authoring recipe (per outfit)
 
@@ -104,10 +106,62 @@ All keys below are optional sections under `ws-companion/v1`; a pack without `ou
 2. **Dress** the starter outfit over the scaffold by image edit, keeping exposed skin a flat tint distinct from every outfit fill so light outfit parts stay separable.
 3. **Redraw** the dressed asset into each pose and gesture; a dressed redraw keeps outfit details consistent where per-pose dressing drifts.
 4. **Split skin:** flat skin color to a pure-white `skinFill` mask.
-5. **Cut the head** off at the neck, under the head anchor.
-6. **Assemble** with the head set and register the column (feet pivot, head anchor).
+5. **Remove the head** by image edit into a headless column master: erase the head and hair and infill the collar, shoulder or hand they hid, so the neck tucks under the head anchor (the [Generative Edit Toolkit](#generative-edit-toolkit-erase-and-infill) head-removal card). Nothing is cut apart.
+6. **Assemble** with the head set and register the column (feet pivot, head anchor). Each articulated column then declares its mesh-deform regions on that headless master (§3b).
 
-Articulated columns (`perched` knee-pivot lower legs, `dangle` torso/arms/legs, the 2-frame `typing` hands) get their segments by cutting the whole dressed redraw at assembly; hidden overlap regions are repaired by image edit, with per-column owner sign-off. An outfit column accepts any number of layers, so the schema is unaffected. No split/assemble tool is committed: the pipeline is image-edit driven, and `lintCompanionKit` checks the assembled pack.
+Articulated columns (`perched` knees, `dangle` hips and knees, the shoulder breath, the `typing` hand tap) keep the whole dressed redraw as one outfit-baked layer stack and move by **mesh deform** declared on the column (§3b); the redraw is never cut apart, so no wedge or hole opens at a joint and no overlap region needs repair. A pose or motion past the deform's safe range is an erase-and-infill edit of the column master shipped as an extra column or `frames` entry (see the [Generative Edit Toolkit](#generative-edit-toolkit-erase-and-infill)). No split/assemble tool is committed: the pipeline is image-edit driven, and `lintCompanionKit` checks the assembled pack.
+
+### 3b. Mesh Deform: Leg and Breath Articulation on Outfit Columns
+
+An outfit column may declare an optional `deform`. The compositor deforms the column's composed body layers (line, outfit fills, tinted `skinFill`) together through a grid mesh (linear blend skinning), so `perched` knees, `dangle` hips and knees, a shoulder breath and the `typing` hand tap move without cutting the art apart. It is an additive pack field (T0): the Go validator ignores it and serves the bytes unchanged, an older engine renders the rigid column, and `lintCompanionKit` only warns.
+
+```json
+"deform": {
+  "grid": [12, 16],
+  "bones": {
+    "hipL":  { "pivot": [235, 330], "region": [[200, 300], [260, 300], [260, 420], [200, 420]], "feather": 24, "motion": "dangle-hip-l" },
+    "kneeL": { "pivot": [238, 410], "parent": "hipL", "region": [[200, 400], [260, 400], [260, 500], [200, 500]],
+               "motion": { "oscillate": { "rotDeg": [-6, 6], "hz": 0.8, "phase": 0.17 } } }
+  },
+  "roll": { "pivot": [256, 184], "motion": { "oscillate": { "rotDeg": [-2, 2], "hz": 0.5 } } }
+}
+```
+
+- **`grid`:** mesh columns and rows over the composed column's opaque bounds; default `[12, 16]`, each value clamped to `2..32`. Fully transparent cells draw nothing.
+- **Bones:** at most 16 per column, ID `^[a-z][a-zA-Z0-9_-]{0,31}$`. `pivot` is in canvas pixels. `parent` is optional; a child's transform composes after its parent's, so a knee rotates after its hip. `region` is a polygon of at least 3 canvas-pixel points (at most 64 are read).
+- **Weights:** a vertex has weight 1 inside the region and falls to 0 over `feather` px outside it (default 24, clamped `0..256`) on a smoothstep. Weights are normalized per sibling set (bones sharing a parent), and weight left over among top-level bones stays on the rest pose. A child blends its parent's chain transform `(1 - w)` against its own `(w)`, so a shin vertex inside both the `hipL` and `kneeL` regions takes the full knee chain, not a hip/knee average. Vertex weights are sampled on the grid and interpolated across each triangle, so keep a feather no tighter than about one grid cell.
+- **Bone `motion`:** a named entry of `motions` (or a built-in alias) or an inline motion, evaluated like a layer motion. Only `tx`, `ty` and `rotDeg` apply (canvas pixels and degrees); scale channels are ignored. `swingWeight` / `swingLag` on a bone add drag inertia the same way a layer's do.
+- **`roll`:** a rigid rotation of the whole composed stack (body, head, attachments and held props) about `pivot` (default the column's `headAnchor`, the neck point). Only `rotDeg` applies. It runs once, so it softens lines less than a mesh pass. The `stage` `physics.drag` pendulum is cursor-driven and cannot set an autonomous per-column amplitude and rate from `pack.json`, which is why the column declares `roll`.
+- **Head:** the head set is not meshed; its anchor is displaced by the deform field at the column's `headAnchor`, so the head rises with the breath and stays seated on the neck.
+- **Static vs. rigid layers:** the composed canvas holds the column's static layers only. Layers with `frames`, a motion track (`oscillate` / `keyframes`) or `swingWeight`, body attachments (such as `tail`) and gesture `replaces` removals are drawn rigidly at their own z and are never meshed. The meshed canvas draws at the **lowest z of its static layers**; a rigid layer whose z lies between static layers is unsupported and lint warns on it.
+- **Per column, no inheritance:** each outfit pose or gesture column declares its own `deform` (a `deform` on a top-level registry column is ignored, and lint says so). A gesture column's own static layers mesh under its own `deform`; only the layers it `replaces` on the pose column are removed. `roll` comes from the gesture column's `deform` when that column declares one, else from the pose column's; the head displacement follows the `deform` of the column that supplies the head anchor.
+- **Cost:** a column with no `deform`, or whose bones are all at rest, draws as a single rigid `drawImage`. A deformed frame costs one clipped, 0.5 px-expanded affine `drawImage` per moving triangle, plus one clip for the still cells.
+
+#### Safe amplitudes (probe-measured)
+
+Measured on the D1 outfit sheet with linear blend skinning on a grid mesh: folds 0 and no alpha holes inside these ranges. Only the rows marked *engine-verified* were re-checked by the engine's own captures (the synthetic fixture); the rest are labelled **probe-measured, not engine-verified**.
+
+| Motion | Safe range | Status |
+|---|---|---|
+| `perched` / `dangle` knee | ±10° | probe-measured, not engine-verified |
+| hip | ±8° and ±15° | probe-measured, not engine-verified |
+| `dangle` legs with whole-body roll | ±6° legs, ±2° roll | engine-verified (±10° / ±4° is borderline: the line thins to 0.59×) |
+| shoulder breath on `stand`, `typing` (hands pinned) | up to +4 px (512-canvas units) | engine-verified |
+| shoulder breath on `coffee` (hands pinned) | up to +2 px | probe-measured, not engine-verified |
+| shoulder breath on other columns | +2 px | probe-measured, not engine-verified |
+| `typing` hand tap | 1 px alternating, one bone per hand, opposite phases | probe-measured, not engine-verified |
+| shoulder rotation (±25°) | **unsupported**: no torso is drawn behind the sleeve | use an erase-and-infill edit |
+
+"Pinned" means the hand regions carry no breath motion: each hand is its own bone, or lies outside every breath region. The official pack's starting values (`dangle` legs ±6° with roll ±2°, breath +4 px on `stand` and `typing`, +2 px on `coffee` and the other columns) are `pack.json` values, never hardcoded in the engine.
+
+#### Region authoring
+
+1. **Author on the headless column master**, not on the dressed head: remove the head by image edit first (§3a recipe step 5), then draw each region on that master.
+2. Keep the shorts hem anchored: the hip region ends above the hem and the hem sits in no leg region's falloff.
+3. Keep the shin region's notch above the shoe collar so the sock and shoe do not shear.
+4. Feather the knee and hip regions into each other so the child's weight reaches 1 inside the shin.
+5. **Preview** at the manual's preview sizes (at least 160 px and 240 px) at rest and at the extreme of each motion, looking for seam hairlines, tears and thin lines.
+6. A pose or motion past the safe range, or a seam the deform leaves, is **not** fixed by adding bones or cutting segments: use the [Generative Edit Toolkit (Erase-and-Infill)](#generative-edit-toolkit-erase-and-infill) on the column master and ship the result as an extra column or a `frames` entry.
 
 ### 4. Canonical `ws-companion/v1` `pack.json` Schema & Assetized Timing Grammar
 
@@ -153,7 +207,7 @@ A pack is a single self-contained `pack.json` plus relative WebP/PNG raster asse
 z10  Hair Back         (hair-*-back-fill/line — drapes behind body, optional subtle swingWeight)
 z11  Tail Attachment   (body-bound slot `tail`, behind the body)
 z19  Behind-Body Limbs (legacy-pack v1 usage: perched knee-sway legs, articulated dangle legs/arms behind torso)
-z20  Body              (default for body layers: outfit-baked column layers, or the legacy pose torso / seated body / dangle torso)
+z20  Body              (default for body layers: outfit-baked column layers, or the legacy pose torso / seated body / dangle torso; a deform column draws its meshed canvas here, at the lowest z of its static layers, §3b)
 z21  Gesture Arm       (legacy-pack v1 usage: optional gesture arm such as cup_hands / wave / coffee with lineless shoulder cap + pivot track) · default of a body-bound custom attachment slot
 z22  Static Prop       (legacy-pack v1 usage: e.g., prop-typing-desk — mode: static, untinted, stationary)
 z24  Foreground Hands  (legacy-pack v1 usage: e.g., typing-hands 2-frame loop above desk, or foreground cup_hands palms)
@@ -176,10 +230,10 @@ Every official shipped pack must satisfy all six gates before replacing dev fixt
 1. **One-by-One Asset Crafting Cadence (Mandatory Workflow):** Never batch-generate and dump all poses/gestures/props at once. Author and present **one asset unit at a time** (1. `stand` + canonical head/eyes -> 2. `perched` -> 3. `typing` -> 4. articulated `dangle` -> 5. `cup_hands` launch gesture -> 6. remaining gestures one by one -> 7. `prop-drone` & `prop-mail` one by one -> 8. expressions/hair/presets), receiving live preview feedback and explicit owner sign-off on each asset before starting the next.
 2. **Human Visual Sign-Off Required for Shipped Art:** Automated pixel/bbox/seam metrics verify technical invariants (`0.0px` head pop, transparent corners, tint isolation) but cannot catch anatomical awkwardness, elbow pinches, leftover hood fragments, or awkward grips. Every shipped official art pose, gesture, and prop requires explicit owner visual approval. Paper-doll checks: exposed skin matches the head-egg skin at four skin tints, with no outfit paint on `skinFill`; the neck tucks under the head with no gap or double edge at the head anchor; and `lintCompanionKit` reports clean.
 3. **Uniform Canonical Head Pixel Scale Across All Poses (`headScale === 1.0`):** Every pose (`stand`, `typing`, `perched`, `dangle`, and any custom pose) must keep the exact same physical `head-egg` pixel diameter as `stand`; the canonical head diameter is the h28 head. Seated poses anchor naturally lower (`headAnchor.y`) rather than scaling up to fill `512 px`.
-4. **Continuous Knee-Pivot Sway & Restrained Articulated Drag Inertia:** Avoid 2-frame binary swaps for relaxed idle limb motion (`perched` legs use continuous out-of-phase knee `oscillate`). For `dangle`, separate torso, left/right arms, and left/right legs with shoulder/hip pivots and subtle differential `swingWeight` / `swingLag` ("과하지 않게") and **no `prop-grab` overlay**.
+4. **Continuous Knee-Pivot Sway & Restrained Articulated Drag Inertia:** Avoid 2-frame binary swaps for relaxed idle limb motion (`perched` legs use continuous out-of-phase knee `oscillate`). For an outfit-baked `dangle`, deform the legs (hips and knees, ±6° safe) and add a whole-body roll (±2°) that hides the motionless arms: arms have **no joints** (§3b). A legacy `dangle` stack may keep separate layers with differential `swingWeight` / `swingLag` ("과하지 않게"). **No `prop-grab` overlay** either way.
 5. **"끙---차!" Cutout Paper-Doll Timing Philosophy (Anticipation → Snap → Overshoot → Settle):** Author joint `keyframes`, `stageEffects`, and `propMotions` with snappy cutout rhythm — a deliberate coiled anticipation dip (e.g., crouching before a hop, lowering shoulders+palms before lifting off a drone/letter), a crisp release snap, slight overshoot, and clean settle — rather than uniform linear or flat sinusoidal motion.
 6. **Lineless Joint Cap & Post-Composite Silhouette Outline (R&D Track):**
-   - *Active in v3.1+:* Author pivoting garment limbs with a **lineless rounded shoulder/hip cap** that overlaps the torso so no black cut line appears across rotation.
+   - *Active in v3.1+:* A legacy stack that pivots separate garment layers authors a **lineless rounded shoulder/hip cap** that overlaps the torso so no black cut line appears across rotation. An outfit-baked deform column has no cut segments and needs no cap: instead keep the shorts hem anchored and the shin region's notch above the shoe collar so the line never thins across a joint (§3b).
    - *Future R&D Track:* Single-pass uniform `#1e2433` union-alpha silhouette outline shader over a lineless `bodyBuf`.
 
 ## Hybrid Cross-Session Observation & Starter Scenario Catalog (P1–P6, S1–S11)

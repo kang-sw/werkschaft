@@ -77,6 +77,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-builtins.js",
 	"dashboard-companion-packs.js",
 	"dashboard-companion-focus.js",
+	"dashboard-companion-deform.js",
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
