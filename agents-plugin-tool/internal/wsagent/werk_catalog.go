@@ -54,7 +54,7 @@ func WerkCatalog() *HarnessProfile {
 		entry.Role = RoleLead
 		entry.Grade = GradeUnsupported
 		entry.Values = nil
-		entry.Source = "no werk lead is registered: the lead role is Phase 2 of 261122-feat-ws-builtin-agent-harness"
+		entry.Source = "no werk lead is registered: the harness ships the worker role first and the lead role later"
 		p.Entries = append(p.Entries, entry)
 	}
 	return p
