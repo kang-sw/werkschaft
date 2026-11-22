@@ -518,6 +518,37 @@ Third pre-merge review fixes, one commit each:
   before that attach, so the ended connection is not left live
   (`TestAuditOverflowedDetachFollowsItsQueuedAttach`).
 
+#### Edition (5b2f6fb8d) - 2026-11-22
+
+Fourth pre-merge review fix (Decision 5, cold recovery).
+
+**Problem.** Capture judged the recovery rule only against its `Recover`
+snapshot, then handed the sink the bare identity. A keyed identity carries
+no position. A store still loading the session answers `Recover` with zero.
+On such a cold replay, a call whose append had failed could get a fresh seq
+after its result and the cut.
+
+**Interface change.** `SourcedSink.AppendSourced(ctx, id, rec, ev)` now also
+takes `rec`, the source record that yielded the event.
+
+**Contract.** The sink applies the rule to `rec` against its own ledger.
+`SourceID.Covered` is the shared definition of the rule.
+
+**End flush.** It is now positioned after the last kept line, not at it,
+like a tee line anchored on that line. That line is usually finalized
+already, and the sink judges against its live boundary.
+
+**Tests.** The `boundarySink` fake admits as the store does, and its `cold`
+flag makes `Recover` answer zero. Tests:
+
+- the cold subtests of `TestAuditCodexFailedCallIsNeverAppendedAfterTheCut`
+  and `TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone`;
+- `TestAuditStreamEndFlushIsNotCoveredByItsOwnBoundary`;
+- `TestSourceIDCovered`.
+
+The store in `261119-feat-ws-audit-ring-store` must take `rec` (see the
+Phase 5 constraint).
+
 ### Phase 2: Codex adapter
 
 Depends on Phase 1. Map the Codex app-server stream onto the envelope,
@@ -634,3 +665,25 @@ daemon, replay the holder, and append again: retained source identities are
 not duplicated and envelope sequences resume above the recovered maximum.
 Fail append of source sequence 10, append 11, restart and replay: 10 is
 recorded as loss and is not appended after 11.
+
+Constraints:
+
+- **Writer admission uses the source record position.** The store's writer
+  admits each `AppendSourced` (Decision 5) by the source record position
+  `rec` it is handed, not by the identity `id`. It checks
+  `rec.Covered(boundary)` against the recovered ledger, including
+  boundaries finalized since.
+- **Reason.** A keyed identity (a Codex call `call.<id>`, a carried
+  assembly `asm.*`) has no position. Capture's own check uses its `Recover`
+  snapshot, which is zero for a ring still loading. Trusting that snapshot
+  lets a failed call get a fresh seq after its result and cut, marked
+  model-seen.
+- **Wiring.** Wiring the adapter to the store means `Store.AppendSourced`
+  takes `rec` (5b2f6fb8d changed the interface).
+
+Additional verification: a cold-replay test. A call whose append failed, its
+retained result, and a compaction cut are replayed while `Recover` still
+answers zero: against the real store with the session ring not yet loaded,
+or with an equivalent delayed load. The call is recorded as loss and never
+appended after the result and the cut. Run it for a keyed Codex call and a
+keyed Claude carried assembly.
