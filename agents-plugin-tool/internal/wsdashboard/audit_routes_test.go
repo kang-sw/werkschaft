@@ -585,6 +585,14 @@ func TestAuditStoredTruncBodyKeepsItsMarkerAndMiddleOut(t *testing.T) {
 			t.Errorf("search %q = %v, want one hit on line 2", q, s.Hits)
 		}
 	}
+	// A quote running to the end of the pattern (\Q with no \E) is a valid
+	// pattern, anchored or not, on a line with a seam or without one.
+	for q, want := range map[string]string{`^\Qhead ends al`: "2", `^\Qline one`: "1", `\b\Qtail starts`: "2", `^\Qlast line`: "3"} {
+		s := auditJSON[searchOut](t, d, "/s/sess/audit/search?regex=1&q="+url.QueryEscape(q), 200)
+		if len(s.Hits) != 1 || fmt.Sprint(s.Hits[0]["line_no"]) != want {
+			t.Errorf("search %q = %v, want one hit on line %s", q, s.Hits, want)
+		}
+	}
 	// The stored body's lines are "line one", "head ends alphabeta tail
 	// starts" (the seam inside it), "last line": a hit on either side of the
 	// seam is line 2, shown as the stored line, and the line after it is 3.

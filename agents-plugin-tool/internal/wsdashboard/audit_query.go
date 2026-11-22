@@ -545,7 +545,10 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 		return s, err
 	}
 	if tree, err := syntax.Parse(pattern, syntax.Perl); err == nil && hasAssertion(tree) {
-		if s.seamed, err = newSeamMatcher(pattern); err != nil {
+		// The parsed expression's own spelling, not the source: a source can
+		// end inside a construct that runs to the end of the pattern (\Q
+		// with no \E), which would swallow the wrapping.
+		if s.seamed, err = newSeamMatcher(tree.String()); err != nil {
 			return s, err
 		}
 	}
@@ -726,7 +729,8 @@ func (s auditSearch) matchLine(line string, seam int) (int, int, bool) {
 // breaks): the head as head+sentinel, keeping the pattern's match ending at
 // or before the seam; the tail as sentinel+tail, keeping its match starting
 // at or after it. Matching allocates the two side copies and the submatch
-// indexes, however many matches the line holds.
+// indexes, however many matches the line holds. Its pattern is a parsed
+// expression's String(), which closes every construct it opens.
 type seamMatcher struct {
 	// head[w] and tail[w] use a word (w=1) or non-word (w=0) sentinel.
 	head, tail [2]*regexp.Regexp
