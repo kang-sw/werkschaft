@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
@@ -42,6 +43,13 @@ func deniedBasePaths(homes []string) []string {
 			add(filepath.Join(dir, name))
 		}
 	}
+	// The provider credential file, and its directory.
+	addCredentials := func(cacheHome string) {
+		if path, err := wscred.DefaultPath(cacheHome); err == nil {
+			add(filepath.Dir(path))
+			add(path)
+		}
+	}
 	for _, home := range homes {
 		for _, name := range outsideDenied {
 			add(filepath.Join(home, filepath.FromSlash(name)))
@@ -49,11 +57,13 @@ func deniedBasePaths(homes []string) []string {
 		if dir, err := Dir(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName)); err == nil {
 			addDaemonDir(dir)
 		}
+		addCredentials(filepath.Join(home, ".cache", wsstate.DefaultCacheDirName))
 	}
 	// Use the daemon's own resolver, including WS_CACHE_HOME relocation.
 	if dir, err := Dir(""); err == nil {
 		addDaemonDir(dir)
 	}
+	addCredentials("")
 	for _, key := range []string{"GH_CONFIG_DIR", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE"} {
 		add(os.Getenv(key))
 	}

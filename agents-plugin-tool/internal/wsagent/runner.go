@@ -236,6 +236,12 @@ type Options struct {
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
 	WakeRefused func(from, id, reason string)
+	// CheckoutReleased, when not nil, tells the sender of a message for a
+	// spawned conversation whose checkout was released after it was bound
+	// (from: the sender's reply-id, id: the conversation, checkout: the
+	// released checkout, reason). Such a conversation never launches, wakes
+	// or resumes there again. Nil falls back to WakeRefused.
+	CheckoutReleased func(from, id, checkout, reason string)
 	// ChildWaitingDays overrides agent.child_waiting_days; 0 reads it.
 	ChildWaitingDays int
 	// keepAwake replaces the platform's idle-sleep backend in tests.
@@ -264,6 +270,13 @@ type Runner struct {
 	closed        map[string]Record
 	childrenIndex map[ParentRef]map[string]bool // mu; parent identity is immutable
 	pendingSpawns map[ParentRef]int             // mu; in-flight width-checked spawns until registered
+	// releases is each checkout's latest completed release this daemon
+	// knows of, keyed by releaseKey: fed by worktree.release's notice and by
+	// every marker a cold check reads. It holds only releases found, never
+	// their absence, and only ever moves later (worktree_release.go). Under
+	// relMu, never held with mu.
+	relMu    sync.Mutex
+	releases map[string]time.Time
 	// expiry is childWaitingExpiry's value, read once (expiryOnce).
 	expiryOnce sync.Once
 	expiry     time.Duration

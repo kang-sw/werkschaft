@@ -182,6 +182,67 @@ Verified external facts (read-only research, 2026-11-22, official sources):
   daemon and visible to the next token request; a test that the offline CLI
   write takes the daemon lock.
 
+### Result (430ecfc61) - 2026-11-22
+
+Landed on `impl/develop/shack-coma-jimmy` (`b5d2538ac..430ecfc61`):
+
+- `internal/wscred`:
+  - Provider registry (`openrouter`, kind `api_key`) and `Mask`.
+  - `Secret`, which redacts every fmt verb and JSON/Text form.
+  - `Source` with typed `ErrNotConfigured` / `ErrConsentRequired` / `ErrUnknownProvider` errors.
+  - `Store` for `<cache root>/auth/credentials.json`:
+    - Reads the file lazily once and serves later reads from memory.
+    - Writes by atomic replace: file first, then memory.
+    - Keeps members it does not know, and never rewrites a newer `schema_version`.
+    - Owner-only: 0600 in a 0700 directory, or a protected owner-only DACL on Windows.
+    - A failed load is kept until the file changes.
+  - `ServeToken`, plus the harness-side `RouteClient`. The client keeps the last credential through a drain, an unreachable daemon, or a successor's 401, and forgets it on a refusal about the credential itself.
+- `internal/wsdashboard`:
+  - `POST /auth/provider/token`, admitted by the per-session bearer, loopback only, no Origin.
+  - `POST /auth/provider/change`, admitted by the endpoint bearer.
+  - `ApplyCredentialChange` (Decision 7) takes the daemon lock with `TryLock` and writes the file offline while holding it. Otherwise it checks the recorded daemon's identity (`Health`) and sends the change to that daemon. An older daemon is named, not waited out.
+  - The file browser's deny set covers the credential directory and file.
+- `internal/wsagent`:
+  - `BackendRegistration.ProviderCredentials`.
+  - `Runner.ResolveCredentialToken`, which does not mark the MCP session connected.
+- `cmd/ws-mcp`:
+  - `credential set|show|remove [--format json]`. The key comes only from the first stdin line, never argv.
+  - Inside the daemon the command applies to the daemon's one store.
+  - The launchers forward stdin for `credential set` and prompt with `getpass` on a terminal. All three launcher copies are kept identical.
+  - Manual: a "Provider credential store" section in `ai-docs/manuals/ws-mcp.md`.
+
+Decisions made here:
+
+- The token route is gated on a registration capability flag (`ProviderCredentials`) that no current backend sets. It is not a harness-name branch, because no builtin-harness session kind exists yet. Tests refuse every current backend and admit a test-only registration.
+- The route derives `Request` from the runner's own record of the session, never from the caller. `AgentSession` is always true, and `Background = !Lead`; a missing record counts as background.
+- A 401 keeps the kept credential, as Decision 6 asks for a swap: a successor answers 401 before it restores the session's bearer.
+- The key reaches the CLI only through stdin. A directly run binary reads it without echo suppression; through the launcher, `getpass` gives a no-echo prompt.
+- Compatibility T0: an older daemon answers the change route with `login_required`, which is reported as "does not take credential changes".
+
+Verification:
+
+- Full suites of `internal/wscred`, `internal/wsagent` and `internal/wsdashboard` pass.
+- `cmd/ws-mcp` credential tests pass. The package's three other failures (`TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`, `TestProxyWhiteboardLinkHasNoLoginCode`, `TestWhiteboardConstructionBeforeDashboardBind`) fail identically at `b5d2538ac`.
+- `go build ./...`, and `go vet` with and without `GOOS=windows`, are clean.
+- The launcher unittest passes (64 tests).
+- The Windows DACL test (`private_file_windows_test.go`) is compile-checked only; it runs on a Windows host.
+- One lite review pass: no Critical or Important findings. Its Minor findings were fixed in `430ecfc61`, except the no-echo prompt for a directly run binary.
+- Coverage of the phase's verification list:
+  - Registry, file mode, atomic write and redaction: `store_test.go`, `private_file_unix_test.go`.
+  - Route refusal of non-admitted bearers: `TestProviderTokenRouteAdmitsOnlyPermittedSessions`, `TestCredentialTokenFollowsTheRegistrationCapability`.
+  - Harness client obtains the key through the route: `TestHarnessClientObtainsTheKeyThroughTheRoute`.
+  - CLI against a running daemon is served by it and seen by the next token request: `TestCredentialChangeAgainstRunningDaemonIsServedByTheDaemon`, `TestCredentialCLIDirectWithARunningDaemon`.
+  - Offline write takes the daemon lock: `TestOfflineCredentialChangeTakesTheDaemonLock`.
+
+#### Edition (513e0dace) - 2026-11-22
+
+- Trust boundary: the token route and ws tool outputs never return the secret; processes running as the same OS user are trusted, since the file's mode or ACL protects against other users only and a same-user process (a hosted exec job) can read the file directly.
+- Follow-up fixes from an independent review (`a1b944bfc..513e0dace`):
+  - The daemon closes its store to changes, after letting the change in flight finish, before it releases its lock.
+  - A directly run binary now reads the key with echo off on a terminal, which supersedes the Result's no-echo note.
+  - An unrecognized argument is never echoed.
+  - The launcher forwards only the first stdin line for `credential set`.
+
 ### Phase 2: OpenAI Sign in with ChatGPT
 
 - SIWC flow per the official docs current at implementation: dynamic client

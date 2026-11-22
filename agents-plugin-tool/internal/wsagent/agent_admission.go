@@ -8,7 +8,13 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
-type admissionRefusal struct{ reason string }
+// admissionRefusal refuses a process start while keeping its input. checkout
+// is set when the refusal is a release of the conversation's checkout
+// (checkoutReleasedRefusal), which no later admission lifts.
+type admissionRefusal struct {
+	reason   string
+	checkout string
+}
 
 func (e *admissionRefusal) Error() string { return e.reason }
 
@@ -116,6 +122,11 @@ func detachedWorkerFallback(dir, source string) bool {
 func (r *Runner) childAdmission(rec Record, def Profile) (PermissionLevel, string, error) {
 	if rec.Lead {
 		return "", "", nil
+	}
+	// A cross-harness worker record (admitWorkerRecord) is kept but never
+	// launched or woken again.
+	if err := r.admitWorkerRecord(rec); err != nil {
+		return "", "", err
 	}
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
 	level, source, err := r.workerPermission(rec, def, dir)

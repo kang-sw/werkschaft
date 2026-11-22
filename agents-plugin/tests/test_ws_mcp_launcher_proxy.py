@@ -996,13 +996,19 @@ class LauncherProxyTest(unittest.TestCase):
         self.assertFalse(hasattr(self.launcher, "ProcessStream"))
         self.assertFalse(hasattr(self.launcher, "proxy_disabled"))
 
-    def run_main(self, argv, *, input_text="", input_encoding="utf-8", forbid_install=False, allow_build=False, local_devenv=False, allow_lifecycle=False, lifecycle_code=0):
+    def run_main(self, argv, *, input_text="", input_encoding="utf-8", stdin_tty=False, stdin_buffer=None, forbid_install=False, allow_build=False, local_devenv=False, allow_lifecycle=False, lifecycle_code=0):
         stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
         stderr = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
         env = dict(self.env, WS_MCP_RUNTIME_DIR=str(self.root), WS_MCP_LAUNCHER_DIRECT="1")
+
+        class TtyStdin(io.TextIOWrapper):
+            def isatty(self):
+                return True
+
+        stdin_class = TtyStdin if stdin_tty else io.TextIOWrapper
         with mock.patch.dict(os.environ, env, clear=True), \
              mock.patch.object(sys, "argv", [str(LAUNCHER_PATH), *argv]), \
-             mock.patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(input_text.encode("utf-8")), encoding=input_encoding)), \
+             mock.patch.object(sys, "stdin", stdin_class(stdin_buffer if stdin_buffer is not None else io.BytesIO(input_text.encode("utf-8")), encoding=input_encoding)), \
              mock.patch.object(sys, "stdout", stdout), mock.patch.object(sys, "stderr", stderr), \
              mock.patch.object(self.launcher, "detect_project_root"), \
              mock.patch.object(self.launcher, "local_devenv_runtime_enabled", return_value=local_devenv), \
@@ -1254,6 +1260,65 @@ class LauncherProxyTest(unittest.TestCase):
                 code, _, _ = self.run_main(argv, input_text=payload, input_encoding="cp1252", forbid_install=True)
                 self.assertEqual(code, 0)
                 self.assertEqual(daemon.hellos[-1]["stdin"], payload)
+
+    def test_credential_set_forwards_its_stdin_but_other_credential_commands_do_not(self):
+        daemon = self.daemon(cli_exit_code=0)
+        daemon.write_endpoint(self.daemon_dir)
+        key = "fixture-key-0001 \n"
+        code, _, _ = self.run_main(["credential", "set", "openrouter"], input_text=key, input_encoding="cp1252", forbid_install=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(daemon.hellos[-1]["argv"], ["credential", "set", "openrouter"])
+        self.assertEqual(daemon.hellos[-1]["stdin"], key)
+        for argv in (["credential", "show"], ["credential", "remove", "openrouter"]):
+            with self.subTest(argv=argv):
+                code, _, _ = self.run_main(argv, input_text=key, forbid_install=True)
+                self.assertEqual(code, 0)
+                self.assertNotIn("stdin", daemon.hellos[-1])
+
+    def test_credential_set_forwards_only_the_first_line_of_a_held_open_pipe(self):
+        daemon = self.daemon(cli_exit_code=0)
+        daemon.write_endpoint(self.daemon_dir)
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, b"fixture-key-0003\nsecond line that stays behind\n")
+        result = {}
+
+        class PipeReader(io.RawIOBase):
+            # Reads the pipe without owning it, so the stdin wrapper run_main
+            # builds closes nothing and leaves no unclosed-file warning.
+            def readable(self):
+                return True
+
+            def readinto(self, buffer):
+                data = os.read(read_fd, len(buffer))
+                buffer[:len(data)] = data
+                return len(data)
+
+        def run():
+            result["code"] = self.run_main(["credential", "set", "openrouter"], stdin_buffer=io.BufferedReader(PipeReader()), forbid_install=True)[0]
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(10)
+        hung = worker.is_alive()
+        os.close(write_fd)  # Unblocks a read to EOF, so a failure does not hang.
+        worker.join(10)
+        os.close(read_fd)
+        self.assertFalse(hung, "the launcher read a held-open pipe to EOF")
+        self.assertEqual(result.get("code"), 0)
+        self.assertEqual(daemon.hellos[-1]["stdin"], "fixture-key-0003\n")
+
+    def test_credential_set_reads_a_terminal_without_echo(self):
+        daemon = self.daemon(cli_exit_code=0)
+        daemon.write_endpoint(self.daemon_dir)
+        with mock.patch.object(self.launcher.getpass, "getpass", return_value="fixture-key-0002") as prompt:
+            code, _, _ = self.run_main(["credential", "set", "openrouter"], input_text="ignored", stdin_tty=True, forbid_install=True)
+        self.assertEqual(code, 0)
+        prompt.assert_called_once()
+        self.assertEqual(daemon.hellos[-1]["stdin"], "fixture-key-0002")
+        with mock.patch.object(self.launcher.getpass, "getpass") as prompt:
+            code, _, _ = self.run_main(["mailbox", "codex-stop-hook"], input_text="{}", stdin_tty=True, forbid_install=True)
+        prompt.assert_not_called()
+        self.assertEqual(daemon.hellos[-1]["stdin"], "{}")
 
     def test_cold_stalled_download_reaches_framed_mcp_errors(self):
         silent = socket.socket()

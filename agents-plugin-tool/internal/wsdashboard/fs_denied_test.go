@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kang-sw/devenv/internal/wscred"
 )
 
 func assertSensitiveReadsRefused(t *testing.T, o *outsideFixture, path string) {
@@ -81,6 +83,34 @@ func TestFSLocalDeniedIdentitiesFollowReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSensitiveReadsRefused(t, o, alias)
+}
+
+// TestFSLocalDeniedProviderCredentials: the file browser never reads the
+// provider credential file, its directory, or a hardlink to it, at the
+// default cache root or a relocated one.
+func TestFSLocalDeniedProviderCredentials(t *testing.T) {
+	for _, relocated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "relocated"}[relocated], func(t *testing.T) {
+			o := startOutsideFixture(t)
+			t.Setenv("WS_CACHE_HOME", "")
+			if relocated {
+				t.Setenv("WS_CACHE_HOME", filepath.Join(o.away, "cache"))
+			}
+			path, err := wscred.DefaultPath("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret := o.write(t, filepath.Dir(path), filepath.Base(path), "DENIED-PROVIDER-CREDENTIAL")
+			assertSensitiveReadsRefused(t, o, secret)
+			assertSensitiveDirRefused(t, o, filepath.Dir(path))
+			alias := filepath.Join(o.away, "provider.png")
+			if err := os.Link(secret, alias); err != nil {
+				t.Skipf("hardlinks unavailable: %v", err)
+			}
+			assertSensitiveReadsRefused(t, o, alias)
+			assertOrdinaryLocalReads(t, o, o.write(t, o.away, "ordinary.txt", "ORDINARY"))
+		})
+	}
 }
 
 func TestFSLocalDeniedDaemonState(t *testing.T) {

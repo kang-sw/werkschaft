@@ -1,6 +1,6 @@
 {
   "ws": {
-    "archive_sha256": "6129b631f43cf3648b8fb80bd764801fe4b0bbed84f19a4af74e6ba28168f5f1",
+    "archive_sha256": "8477f0fe4a1f82d7b3077986dea73f4fc906111ff5b06fc56a169e85ae89f29c",
     "files": {
       ".claude-plugin/plugin.json": "ab391c9b4b8f55831caddc04c3ceef91392b67d684461220238b438ead48bba0",
       ".codex-plugin/hooks.json": "e3f3ea60f82fb0795c63bf54b9208647f39cb3779f050d1c755fabdc8a434490",
@@ -9,7 +9,7 @@
       "agy-config-manifest.json": "8f89b83830ca0c9e88096f205ecc7cb8bc6081fe87d5d4eb7f621a6660e48bb9",
       "bin/ws-cli": "64969b4f3f810a6628e43876c0ee67856c9e0abf9bb19d7dd31540c156dd7fcc",
       "bin/ws-cli.cmd": "747815bea96b806398e052dfb790318cb4f370d59f6ac3519a417ae56bf38917",
-      "bin/ws-mcp-launcher.py": "60e4352ef1effcd01b90454e0a5ebf2d57397310e93569904e0bdc0cd3bdc8c4",
+      "bin/ws-mcp-launcher.py": "7d7a3c96f5ee93b959e36aeb3be374d975b67b14b90b2229129a8fe6f36ad9ea",
       "bin/ws-pi-payload.py": "b92624cbdc40b83aa4b5d5333cff5c36754023fbf1b21c1deb9bf8f26c292d05",
       "claude-agents/effort-high.md": "b7e9af1395b845dc064ea1d756ff97ad265c554de5340f831f911ac12848131a",
       "claude-agents/effort-low.md": "1d9a75d393e24f1f08024f5ecbc39dbafc957ccd056b84f7b00b35a1c70f8539",
@@ -17,7 +17,7 @@
       "claude-agents/effort-medium.md": "f795e9dda59cb032cf1637ffd96d122765fbb221524bb8d9804b3060a944afc2",
       "claude-agents/effort-xhigh.md": "c00ceaba0634c1ccbf3155dc62ea6fe6d821ecf644a1b62eb3a7eec26b8424c4",
       "config-manifest.json": "973e2d264bad322113b13cd64de7c3296c07715de4a1e8625ffea6d2f96099ad",
-      "dashboard-config-manifest.json": "9c10a167cf8dbe853e4262c36b90c43ae653202eaf87ba4184582778759cddea",
+      "dashboard-config-manifest.json": "04996bed4e2def05e98cf3ce9ccbda67b9a6b7a7d62bfc7b7a7bae30e53c45e6",
       "hooks/claude-mod/band.tsx": "73b448da33fac9939e98edd923e57c69b4ebe8f37097202365d5b591bb5e598b",
       "hooks/claude-mod/captions.tsx": "cb9c350bb9e63cf502140dd61633be2df40256db152b467fb667d7f751925feb",
       "hooks/claude-mod/compaction.ts": "e1526f655cede90f4f75b3967562a7dd07566cc9fd56eecc827b7041e360f5b9",
@@ -115,13 +115,13 @@
     }
   },
   "wsflow": {
-    "archive_sha256": "4a3640bdf7a770254724ba8be672c880deabd623e865a096236ef9936193128a",
+    "archive_sha256": "0b5652e3fb48d515a6c0dc7e6b442c7f4b827cb18485e2b324c64f5ec06c5369",
     "files": {
       ".claude-plugin/plugin.json": "86ff6069699a7f64dc452778abeb6c5cfb62cebc7d4a2bcc05ad3dbd3f8c3888",
       ".codex-plugin/plugin.json": "f85cb89d304896083240c613f80a9eb2abd63ba8eb6db1796ff503b44abd710f",
       ".mcp.json": "ac9063b97c538e4bf6253a560bb6760a8196c4874b6c19b038344cdb9930f685",
       "agy-config-manifest.json": "cf1f2a3710370a76e67f73837d2b2a496c0589988943aaa72ef65b83a3e3d9fa",
-      "bin/ws-mcp-launcher.py": "60e4352ef1effcd01b90454e0a5ebf2d57397310e93569904e0bdc0cd3bdc8c4",
+      "bin/ws-mcp-launcher.py": "7d7a3c96f5ee93b959e36aeb3be374d975b67b14b90b2229129a8fe6f36ad9ea",
       "bin/ws-pi-payload.py": "b92624cbdc40b83aa4b5d5333cff5c36754023fbf1b21c1deb9bf8f26c292d05",
       "bin/wsflow-cli": "d7a402167e761e6a34da62cef67d5d184b763e127b30fffcd53efd060f8a6957",
       "bin/wsflow-cli.cmd": "f249ab84c899265b5f914a5bfa80e785b6ffd30b46ff14e4ffaa03ad15cc453f",
@@ -131,7 +131,7 @@
       "claude-agents/effort-medium.md": "f795e9dda59cb032cf1637ffd96d122765fbb221524bb8d9804b3060a944afc2",
       "claude-agents/effort-xhigh.md": "c00ceaba0634c1ccbf3155dc62ea6fe6d821ecf644a1b62eb3a7eec26b8424c4",
       "config-manifest.json": "71471746ed1a455c9126695f3aa2469aadc516050a9a25ae587c08050e0b220a",
-      "dashboard-config-manifest.json": "ea4aae5864015c2f764118f3254b437aa263aaae26b4801d66e137cb07f99f56",
+      "dashboard-config-manifest.json": "74360336a73d248c05df1773248d88f1271bdcc6bf60e32b0f837bbc62081c8b",
       "hooks/claude-mod/band.tsx": "73b448da33fac9939e98edd923e57c69b4ebe8f37097202365d5b591bb5e598b",
       "hooks/claude-mod/captions.tsx": "cb9c350bb9e63cf502140dd61633be2df40256db152b467fb667d7f751925feb",
       "hooks/claude-mod/compaction.ts": "e1526f655cede90f4f75b3967562a7dd07566cc9fd56eecc827b7041e360f5b9",

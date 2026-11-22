@@ -308,6 +308,9 @@ func TestClaudeWorkerRunsOverHTTP(t *testing.T) {
 	if !ok || hello.Env[EnvAllowedTools] != "tickets.query,compact" || hello.Env[EnvNoDashboard] != "1" || hello.OwnerPID != 777 || !sameDir(hello.Cwd, h.root) {
 		t.Fatalf("the token resolves to the worker's ws-mcp context: %+v %v", hello, ok)
 	}
+	if cs, ok := h.runner.ResolveCredentialToken(s.Token); !ok || cs.Lead || cs.Permitted || cs.Conversation != c.ID {
+		t.Fatalf("a worker is background use, and its harness gets no provider credential: %+v %v", cs, ok)
+	}
 	raw, err := readFile(recordPath(wsdashboard.SessionDir(h.dir, c.ID)))
 	if err != nil || strings.Contains(string(raw), s.Token) {
 		t.Fatalf("a worker's token is never persisted: %v", err)
@@ -374,6 +377,9 @@ func TestClaudeLeadMCPOverHTTP(t *testing.T) {
 		hello.Env[EnvHostedSession] != "1" || hello.Env[EnvHostedSessionKey] != rec.WSKey || hello.Env[EnvAllowedTools] != "" ||
 		hello.Env["WS_RSRC_ROOT"] != filepath.Join(bundle, "rsrc") || !sameDir(hello.ProjectRoot, h.root) {
 		t.Fatalf("the token resolves to the hosted lead's ws-mcp context: %+v %v", hello, ok)
+	}
+	if cs, ok := h.runner.ResolveCredentialToken(token); !ok || !cs.Lead || cs.Permitted {
+		t.Fatalf("a hosted lead is no background use, and its harness gets no provider credential: %+v %v", cs, ok)
 	}
 
 	// The next daemon rejoins the process and restores its token.

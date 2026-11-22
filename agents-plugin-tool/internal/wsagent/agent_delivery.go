@@ -43,17 +43,35 @@ type Delivery struct {
 // sender gets one notice (Options.WakeRefused).
 func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 	var refusal error
+	checkout := ""
 	if c := r.conv(id); c != nil {
 		c.mu.Lock()
 		asleep := c.proc == nil && !c.turn
 		rec := c.rec
-		c.mu.Unlock()
+		// A running process is checked from memory: its checkouts were
+		// settled when it was loaded, and a release's notice updates them.
+		// A sleeping one is about to start, a cold path, so its markers are
+		// read: a release whose notice never reached this daemon still
+		// refuses the wake and tells the sender.
 		if asleep {
-			rp, resolveErr := r.resolve(rec.Profile, rec.Root)
-			if resolveErr != nil {
-				refusal = resolveErr
-			} else {
-				_, _, refusal = r.childAdmission(rec, rp.Definition)
+			checkout = c.releasedOnDiskLocked()
+		} else {
+			checkout = c.releasedLocked()
+		}
+		c.mu.Unlock()
+		switch {
+		case checkout != "":
+			// Its checkout was released after it was bound: no launch, wake
+			// or resume there, live process or not.
+			refusal = checkoutReleasedRefusal(checkout)
+		case asleep:
+			// Ahead of the profile: its edits never mask a cross-harness refusal.
+			if refusal = r.admitWorkerRecord(rec); refusal == nil {
+				if rp, resolveErr := r.resolve(rec.Profile, rec.Root); resolveErr != nil {
+					refusal = resolveErr
+				} else {
+					_, _, refusal = r.childAdmission(rec, rp.Definition)
+				}
 			}
 		}
 	}
@@ -61,8 +79,8 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 	if err != nil {
 		return st, err
 	}
-	if refusal != nil && d.From != "" && r.opts.WakeRefused != nil {
-		r.opts.WakeRefused(d.From, id, refusal.Error())
+	if refusal != nil {
+		r.tellRefused(d.From, id, checkout, refusal.Error())
 	}
 	return st, nil
 }

@@ -106,8 +106,30 @@ func hostedBackendConnection(t *testing.T, backend string, regs map[string]wsage
 		t.Fatal(err)
 	}
 	s := f.connect(t)
-	s.pi.agents = wsagent.NewRunner(wsagent.Options{Backends: regs})
+	runner := wsagent.NewRunner(wsagent.Options{Backends: regs})
+	s.pi.agents = runner
+	// The daemon's token binding names the lead's conversation, which its
+	// runner holds open on that backend.
+	s.conversation = rec.ReplyID
+	s.callerBinding = boundCallers{Runner: runner, backends: map[string]string{rec.ReplyID: backend}}
 	return s, f
+}
+
+// boundCallers is a daemon runner's memory-only caller check with the open
+// conversations fixed: conversation (or "token:"+capability) to backend.
+type boundCallers struct {
+	*wsagent.Runner
+	backends map[string]string
+}
+
+func (b boundCallers) CallerBackend(conversation, capability string) string {
+	if conversation != "" {
+		return b.backends[conversation]
+	}
+	if capability == "" {
+		return ""
+	}
+	return b.backends["token:"+capability]
 }
 
 func descriptorRegistrations() map[string]wsagent.BackendRegistration {

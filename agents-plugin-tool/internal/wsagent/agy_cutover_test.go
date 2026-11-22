@@ -278,6 +278,8 @@ func startAgyCutoverWorker(t *testing.T, setup func(*leadHarness, *agyFake)) (*l
 	h.opts.Report = got.add
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	reg := h.opts.Backends[BackendAgy]
+	// The shipped cross-harness refusal stays: the worker is spawned by a
+	// verified agy lead (spawnHeldRecoveryWorker), the real admission.
 	reg.WorkerCapable, reg.WorkerProfile, reg.WorkerHTTPMCP, reg.WorkerAutoApprove = true, AgentWorkerProfile(BackendAgy), true, true
 	h.opts.Backends[BackendAgy] = reg
 	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "gemini-3.8-flash", BackendAgy, "medium"); err != nil {
