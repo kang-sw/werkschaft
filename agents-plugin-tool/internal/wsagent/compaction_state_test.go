@@ -359,3 +359,69 @@ func TestCompactionStateCountSurvivesARunnerRestart(t *testing.T) {
 		t.Fatalf("after the next compaction: %+v", st)
 	}
 }
+
+// A child closed before a daemon restart has no conversation in the next run;
+// its closed row must republish the count the restored snapshot kept, not a
+// zero that would wipe it.
+func TestCompactionStateClosedChildKeepsItsCountAcrossARestart(t *testing.T) {
+	h, _ := newFakePiRecoveryHarness(t)
+	reg := h.runner.opts.Backends[BackendPi]
+	reg.NativeCompaction = PiCompaction()
+	h.runner.opts.Backends[BackendPi] = reg
+	lead := h.lead(BackendClaude, LeadOptions{})
+	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "work", Parent: &ParentRef{Kind: ParentLead, ReplyID: lead.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := h.holder(child.ID)
+	h.holders.out(holder, `{"type":"agent_start"}`, `{"type":"agent_settled"}`)
+	h.idle(child.ID)
+	h.runner.conv(child.ID).do(func() {
+		c := h.runner.conv(child.ID)
+		c.compactPending = &compactRequest{auto: true}
+		c.publishCompaction(false)
+		c.kick()
+	})
+	eventually(t, "worker RPC compact", func() bool { return len(h.holders.inputs(holder, "compact")) == 1 })
+	h.holders.out(holder, `{"type":"compaction_start","reason":"manual"}`, `{"type":"compaction_end","reason":"manual"}`, `{"type":"response","command":"compact","success":true}`)
+	eventually(t, "the completed compaction", func() bool { return h.state(child.ID).Compactions == 1 })
+	eventually(t, "the row shows the count", func() bool {
+		for _, a := range h.snapshot(lead.ID).Agents {
+			if a.ID == "pi:"+child.ID && a.Compactions == 1 {
+				return true
+			}
+		}
+		return false
+	})
+	if _, err := h.runner.CloseConversation(child.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.runner.conv(lead.ID).do(func() {
+		c := h.runner.conv(lead.ID)
+		c.spawnDirty, c.spawnNext = true, time.Time{}
+		c.seedSpawnRows()
+		c.live.forceSnapshot()
+	})
+
+	h.restart()
+	if c := h.runner.conv(child.ID); c != nil {
+		t.Fatal("the closed child has a conversation in the next run")
+	}
+	parent := h.runner.conv(lead.ID)
+	if parent == nil {
+		t.Fatal("the lead has no conversation in the next run")
+	}
+	var row wslive.Agent
+	parent.do(func() {
+		parent.spawnDirty, parent.spawnNext = true, time.Time{}
+		parent.seedSpawnRows()
+		for _, a := range parent.live.st.Snapshot(h.runner.opts.Now().UnixMilli()).Agents {
+			if a.ID == "pi:"+child.ID {
+				row = a
+			}
+		}
+	})
+	if row.ID == "" || row.Compactions != 1 || row.CompactOrigin != wslive.CompactOriginAuto {
+		t.Fatalf("the closed child's row after the restart: %+v", row)
+	}
+}

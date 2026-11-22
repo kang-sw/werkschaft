@@ -181,11 +181,16 @@ func (c *conv) seedSpawnRows() {
 		rec, ok := c.r.recordOf(st.ID)
 		if ok {
 			// A restarted runner counts compactions from zero: the row this
-			// snapshot restored still holds the count, so take it back.
+			// snapshot restored still holds the count, so take it back. A
+			// child with no conversation in this run (closed before the
+			// restart) has no count of its own to publish, and the zero would
+			// overwrite the row's: it republishes the row's.
 			if row, held := rows["pi:"+st.ID]; held && row.Compactions > st.Compactions {
 				if child := c.r.conv(st.ID); child != nil {
 					child.seedCompactions(row.Compactions, row.CompactOrigin)
 					st.Compactions, st.CompactOrigin = child.compactionCount()
+				} else {
+					st.Compactions, st.CompactOrigin = row.Compactions, row.CompactOrigin
 				}
 			}
 			for _, ev := range SpawnAgentEvents(st, rec.WSKey) {
