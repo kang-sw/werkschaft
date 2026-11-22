@@ -162,6 +162,46 @@ func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []stri
 	return expanded
 }
 
+// dropVanishedTicketMoveSources removes a ticket path the caller named that
+// git knows nothing about because the ticket was created and moved before its
+// first commit: tickets.move staged the file straight to its destination, so
+// the source status directory has no index, HEAD or status entry left. Staging
+// such a path would fail with "pathspec did not match any files" and abort the
+// whole commit, although the destination alone is the complete change.
+//
+// A path is dropped only when it is ticket-shaped, absent from status, and a
+// different path of the same stem is present in status. That keeps a mistyped
+// path with no sibling an error, and leaves tracked moves untouched: their old
+// path still carries a deletion or rename entry, so it stays in the grant.
+func dropVanishedTicketMoveSources(status StatusResult, paths []string) []string {
+	inStatus := map[string]bool{}
+	stemPaths := map[string]map[string]bool{}
+	for _, file := range status.ChangedFiles {
+		for _, path := range []string{file.Path, file.OldPath} {
+			if path == "" {
+				continue
+			}
+			cleaned := filepath.ToSlash(filepath.Clean(path))
+			inStatus[cleaned] = true
+			if _, stem, ok := ticketStatusStem(cleaned); ok {
+				if stemPaths[stem] == nil {
+					stemPaths[stem] = map[string]bool{}
+				}
+				stemPaths[stem][cleaned] = true
+			}
+		}
+	}
+	kept := make([]string, 0, len(paths))
+	for _, path := range paths {
+		cleaned := filepath.ToSlash(filepath.Clean(path))
+		if _, stem, ok := ticketStatusStem(cleaned); ok && !inStatus[cleaned] && len(stemPaths[stem]) > 0 {
+			continue
+		}
+		kept = append(kept, path)
+	}
+	return kept
+}
+
 // filterIndexDeleteSidePaths drops paths that are the delete side of a staged
 // rename (IndexStatus "R", via OldPath) or an outright staged deletion
 // (IndexStatus "D") from the given expanded path list. It exists so Commit

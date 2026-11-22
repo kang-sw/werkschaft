@@ -99,7 +99,7 @@ func (c Client) Commit(ctx context.Context, root string, opts CommitOptions) (Co
 		return CommitResult{}, err
 	}
 	preStatus := ParseStatus(preStatusOut)
-	opts.Paths = expandCommitPathsForTicketMoves(preStatus, opts.Paths)
+	opts.Paths = dropVanishedTicketMoveSources(preStatus, expandCommitPathsForTicketMoves(preStatus, opts.Paths))
 	for _, args := range stagingCommandsForCommit(opts.Paths, preStatus, opts.SparseScopeActive) {
 		if _, err := runner.RunGit(ctx, root, args...); err != nil {
 			return CommitResult{}, err

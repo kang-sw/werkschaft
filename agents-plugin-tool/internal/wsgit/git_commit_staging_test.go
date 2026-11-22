@@ -491,3 +491,80 @@ func mustWriteGitTestFixture(t *testing.T, root, relPath, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestDropVanishedTicketMoveSourcesDropsSourceOfFirstCommitMove(t *testing.T) {
+	status := ParseStatus([]byte("1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 bbb ai-docs/tickets/todo/260810-feat-demo.md\n"))
+	got := dropVanishedTicketMoveSources(status, []string{"ai-docs/tickets/idea/260810-feat-demo.md", "ai-docs/tickets/todo/260810-feat-demo.md", "docs/readme.md"})
+	want := []string{"ai-docs/tickets/todo/260810-feat-demo.md", "docs/readme.md"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestDropVanishedTicketMoveSourcesKeepsTrackedMoveAndMistypedPaths(t *testing.T) {
+	status := ParseStatus([]byte("2 R. N... 100644 100644 100644 aaa bbb R100 ai-docs/tickets/ready/260810-feat-demo.md\tai-docs/tickets/todo/260810-feat-demo.md\n"))
+	paths := []string{"ai-docs/tickets/todo/260810-feat-demo.md", "ai-docs/tickets/ready/260810-feat-demo.md", "ai-docs/tickets/todo/260810-feat-typo.md"}
+	got := dropVanishedTicketMoveSources(status, paths)
+	if !reflect.DeepEqual(got, paths) {
+		t.Fatalf("paths = %#v, want unchanged %#v (rename old path stays in the grant; a sibling-less path keeps its error)", got, paths)
+	}
+}
+
+// TestCommitFirstCommitTicketMoveNamesOldOrNewPath replays what
+// tickets.create_empty followed by tickets.move leaves in a fresh repository:
+// the ticket was never committed, so the index holds only the destination.
+// Naming the vanished source used to abort the commit with "pathspec did not
+// match any files".
+func TestCommitFirstCommitTicketMoveNamesOldOrNewPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	const oldPath = "ai-docs/tickets/idea/260810-feat-demo.md"
+	const newPath = "ai-docs/tickets/todo/260810-feat-demo.md"
+	for name, paths := range map[string][]string{
+		"old":  {oldPath},
+		"new":  {newPath},
+		"both": {oldPath, newPath},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			sparseTestInitGit(t, root)
+			mustWriteGitTestFixture(t, root, "README.md", "x\n")
+			sparseTestRunGit(t, root, "add", "README.md")
+			sparseTestRunGit(t, root, "commit", "-m", "seed")
+			mustWriteGitTestFixture(t, root, oldPath, "# Demo\n")
+			mustWriteGitTestFixture(t, root, "ai-docs/tickets/todo/.keep", "")
+			sparseTestRunGit(t, root, "add", oldPath)
+			sparseTestRunGit(t, root, "mv", "--force", oldPath, newPath)
+
+			branch := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD")))
+			var verified []string
+			client := Client{Runner: ExecRunner{}, Verifier: func(_ string, paths []string) ([]string, error) {
+				verified = paths
+				return nil, nil
+			}}
+			result, err := client.Commit(context.Background(), root, CommitOptions{
+				Paths:          paths,
+				Title:          "docs(ticket): add demo",
+				AIContext:      []string{"User intent: commit a ticket moved before its first commit."},
+				ExpectedBranch: branch,
+			})
+			if err != nil {
+				t.Fatalf("Commit returned error: %v", err)
+			}
+			if !reflect.DeepEqual(result.Paths, []string{newPath}) {
+				t.Fatalf("result.Paths = %#v, want only %q", result.Paths, newPath)
+			}
+			if !reflect.DeepEqual(verified, []string{newPath}) {
+				t.Fatalf("verifier paths = %#v, want only %q", verified, newPath)
+			}
+			committed := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "show", "--name-only", "--format=", "HEAD")))
+			if committed != newPath {
+				t.Fatalf("commit contains %q, want only %q", committed, newPath)
+			}
+			if out := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "diff", "--cached", "--name-only"))); out != "" {
+				t.Fatalf("index still has staged paths after commit: %q", out)
+			}
+		})
+	}
+}
