@@ -87,11 +87,35 @@ func TestDashboardInboxDrainDescriptionIsAdapterOnly(t *testing.T) {
 	if !strings.HasPrefix(desc, "Adapter-only:") {
 		t.Fatalf("description = %q", desc)
 	}
-	for _, want := range []string{"agents must not claim", "Atomically claim", "steering first then oldest", "cannot be cancelled or steered", "ws:user envelope"} {
+	for _, want := range []string{"agents must not claim", "Atomically claim", "steering first then oldest", "cannot be cancelled or steered", "ws:user envelope", "scheduled-prompt (cron) envelope"} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("description lacks %q: %s", want, desc)
 		}
 	}
+}
+
+// The scheduled-prompt envelope is named in terms both products can show: the
+// wsflow rendering rewrites "ws:" to "wsflow:", but the serializer writes the
+// same <ws:cron> tag for both, so the description must not spell the tag.
+func TestDashboardInboxDrainDescriptionNamesTheCronEnvelopeInBothProducts(t *testing.T) {
+	for _, tool := range tools() {
+		if tool["name"] != dashboardInboxDrainTool {
+			continue
+		}
+		for _, namespace := range []string{"ws", "wsflow"} {
+			desc, _ := publicToolDefinition(tool, "", namespace)["description"].(string)
+			if !strings.Contains(desc, "scheduled-prompt (cron) envelope") {
+				t.Errorf("%s description lacks the scheduled-prompt envelope: %s", namespace, desc)
+			}
+			for _, wrong := range []string{"wsflow:cron", "ws:cron"} {
+				if strings.Contains(desc, wrong) {
+					t.Errorf("%s description spells %q, which is not the tag the serializer writes for both products: %s", namespace, wrong, desc)
+				}
+			}
+		}
+		return
+	}
+	t.Fatal("no drain tool")
 }
 
 func TestDashboardInboxDrainTextAndJSONOutput(t *testing.T) {

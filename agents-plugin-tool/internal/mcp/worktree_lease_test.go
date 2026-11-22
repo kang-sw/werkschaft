@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,27 +82,34 @@ func TestReleaseWorktreeToleratesMissingLease(t *testing.T) {
 }
 
 func TestWorktreeAcquireFailedLeaseWriteDetaches(t *testing.T) {
-	s, _, base, leadKey := worktreeListServer(t)
+	s, root, base, leadKey := worktreeListServer(t)
 	acq := acquireForTest(t, s, 1, leadKey, base, "impl/test/alpha")
 	if rel := callToolOnce(t, s, 2, "worktree.release", map[string]any{"session_key": leadKey, "path": acq.Path}); toolIsError(t, rel) {
 		t.Fatalf("release failed: %s", rel)
 	}
 	// Occupy the lease path with a non-empty directory so the atomic rename
 	// onto it fails on the next acquire, which reuses this released worktree.
+	// The blocker appears once the worktree is claimed (its hygiene runs): a
+	// candidate whose lease is unreadable is never claimed.
 	adminDir := strings.TrimSpace(string(runGitOutput(t, acq.Path, "rev-parse", "--absolute-git-dir")))
 	blocker := filepath.Join(adminDir, worktreeLeaseFileName)
-	if err := os.MkdirAll(filepath.Join(blocker, "x"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	resp := callToolOnce(t, s, 3, "worktree.acquire", map[string]any{
-		"session_key": leadKey, "base": base, "profile": "full", "target_branch": "impl/test/beta",
+	var once sync.Once
+	runner := acquireRunnerFunc(func(ctx context.Context, path string, args ...string) ([]byte, error) {
+		if slices.Contains(args, "reset") && filepath.Clean(path) == filepath.Clean(acq.Path) {
+			once.Do(func() {
+				if err := os.MkdirAll(filepath.Join(blocker, "x"), 0o755); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		return s.gitRunner().RunGit(ctx, path, args...)
 	})
-	if !toolIsError(t, resp) {
-		t.Fatalf("acquire must fail when the worktree lease cannot be written: %s", resp)
+	_, err := acquireWithServer(context.Background(), s, runner, root, base, "impl/test/beta", builtinProfile(t, worktreeProfileFull), "", leadKey)
+	if err == nil {
+		t.Fatal("acquire must fail when the worktree lease cannot be written")
 	}
-	if !strings.Contains(toolText(t, resp), "worktree lease") {
-		t.Fatalf("failure must name the worktree lease: %s", resp)
+	if !strings.Contains(err.Error(), "worktree lease") {
+		t.Fatalf("failure must name the worktree lease: %v", err)
 	}
 	if b := wtBranch(t, acq.Path); b != "HEAD" {
 		t.Fatalf("failed lease write must leave the worktree detached, branch = %q", b)

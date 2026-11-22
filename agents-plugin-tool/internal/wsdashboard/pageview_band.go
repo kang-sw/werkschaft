@@ -52,6 +52,9 @@ type ContextBar struct {
 	FillWidth     string
 	// Level is "", "warn", "d-hot", "crit", or "d-unknown".
 	Level string
+	// Denom is the bar's scale in tokens (the ws hard point when resolved, else
+	// the native window); 0 when unknown.
+	Denom int64
 	// Tokens is "<current> / <target>" (e.g. "51,293 / 180K" or "? / 180K").
 	Tokens string
 	// Native is the optional native window parenthetical (e.g. "1.0M"), omitted
@@ -160,6 +163,7 @@ func contextBar(c wslive.UsageContext) *ContextBar {
 	if hard > 0 {
 		denom = hard
 	}
+	bar.Denom = max(denom, 0)
 	if denom > 0 {
 		if soft > 0 && soft < denom {
 			bar.SoftPct = fmtPct(soft, denom)

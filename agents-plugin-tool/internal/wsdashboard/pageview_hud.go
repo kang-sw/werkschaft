@@ -13,11 +13,16 @@ const hudMaxDepth = 4
 // HUDView is the serialized hierarchical org-chart projection embedded in
 // #r-tree .ag-source for the floating compact HUD.
 type HUDView struct {
-	Lead      string    `json:"lead,omitempty"`
-	Completed int       `json:"completed"`
-	Folded    int       `json:"folded,omitempty"`
-	Peers     int       `json:"peers"`
-	Roots     []HUDNode `json:"roots"`
+	Lead      string `json:"lead,omitempty"`
+	Completed int    `json:"completed"`
+	Folded    int    `json:"folded,omitempty"`
+	// ObservationEnded counts the folded native rows whose observation ended
+	// with their outcome unknown (hudEndUnknown): they are never counted as
+	// completed, so the page and the companion relay never read them as a
+	// finish.
+	ObservationEnded int       `json:"observationEnded,omitempty"`
+	Peers            int       `json:"peers"`
+	Roots            []HUDNode `json:"roots"`
 }
 
 // HUDNode is one node in the compact horizontal org-chart HUD.
@@ -37,16 +42,56 @@ type HUDNode struct {
 	Task        string    `json:"task,omitempty"`
 	Overflow    int       `json:"overflow,omitempty"`
 	Children    []HUDNode `json:"children,omitempty"`
+	// Native marks a harness's own subagent (hudNative): it shows a native
+	// badge and its lifecycle, and never links to a transcript. StartedAt,
+	// EndedAt (epoch ms), and EndUnknown are a native row's alone, so every
+	// other row's JSON stays as before. EndUnknown marks a row whose
+	// observation ended with the outcome unknown (hudEndUnknown): it reads as
+	// such, never as a completion, and carries no EndedAt, since its end is
+	// not a known one.
+	Native     bool  `json:"native,omitempty"`
+	StartedAt  int64 `json:"startedAt,omitempty"`
+	EndedAt    int64 `json:"endedAt,omitempty"`
+	EndUnknown bool  `json:"endUnknown,omitempty"`
+	// Context* is the agent's context occupancy for the hover card's bar.
+	// ContextTokens is the current size and ContextWindow the bar's scale (the
+	// ws hard point when resolved, else the native window), absent while
+	// unknown: a node with tokens but no window shows the figure without a
+	// bar. ContextSoft is the ws soft threshold, ContextLevel the status
+	// band's colour class, ContextText the compact "used / window" text.
+	ContextTokens int64  `json:"contextTokens,omitempty"`
+	ContextWindow int64  `json:"contextWindow,omitempty"`
+	ContextSoft   int64  `json:"contextSoft,omitempty"`
+	ContextLevel  string `json:"contextLevel,omitempty"`
+	ContextText   string `json:"contextText,omitempty"`
 	// OwnRow marks nodes rendered in #r-tree's .agent list so hudJSON can omit
 	// their Task from .ag-source (keeping tree-rows shell invariant on caption edits).
 	OwnRow bool `json:"-"`
 }
 
 type hudRawNode struct {
-	agent    wslive.Agent
-	linked   bool
-	ownRow   bool
+	agent  wslive.Agent
+	linked bool
+	ownRow bool
+	native bool
+	// usage is the linked session's own context figure (its status band's).
+	// It comes only from the snapshot expandHUDLinked already read, never a
+	// read of its own: a linked row that is not expanded, or whose snapshot
+	// carries none, leaves it nil.
+	usage    *wslive.UsageContext
 	children []*hudRawNode
+}
+
+// hudFold is the tally of folded rows: completed ones, native rows whose
+// observation ended with the outcome unknown, and the folded top-level rows.
+type hudFold struct{ completed, observationEnded, roots int }
+
+func (f *hudFold) add(n *hudRawNode) {
+	if hudEndUnknown(n.agent, n.native) {
+		f.observationEnded++
+	} else {
+		f.completed++
+	}
 }
 
 // hudProjection builds the compact HUD forest from the session's own agents and
@@ -59,7 +104,7 @@ func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, p
 		Roots: []HUDNode{},
 	}
 	seenIDs := map[string]bool{}
-	roots := buildHUDRawForest(agents, true, seenIDs, lookup)
+	roots := buildHUDRawForest(agents, true, leadHarness, seenIDs, lookup)
 	visitedSessions := map[string]bool{self: true}
 	expandHUDLinked(roots, seenIDs, visitedSessions, lookup, now)
 
@@ -79,11 +124,16 @@ func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, p
 	for _, r := range roots {
 		mark(r, 1)
 	}
-	out.Roots = projectHUDNodes(roots, 1, normalizeHUDHarness(leadHarness), nil, visible, &out.Completed, &out.Folded, now)
+	var fold hudFold
+	out.Roots = projectHUDNodes(roots, 1, normalizeHUDHarness(leadHarness), nil, visible, &fold, now)
+	out.Completed, out.Folded, out.ObservationEnded = fold.completed, fold.roots, fold.observationEnded
 	return out
 }
 
-func buildHUDRawForest(agents []wslive.Agent, ownRow bool, seenIDs map[string]bool, lookup sessionLookup) []*hudRawNode {
+// buildHUDRawForest builds the raw forest of one snapshot's agents;
+// ownerHarness is the harness of the session whose snapshot it is, which
+// decides a Claude lead's native rows (hudNative).
+func buildHUDRawForest(agents []wslive.Agent, ownRow bool, ownerHarness string, seenIDs map[string]bool, lookup sessionLookup) []*hudRawNode {
 	present := map[string]bool{}
 	for _, a := range agents {
 		if !seenIDs[a.ID] {
@@ -110,8 +160,8 @@ func buildHUDRawForest(agents []wslive.Agent, ownRow bool, seenIDs map[string]bo
 				continue
 			}
 			seenIDs[a.ID] = true
-			node := &hudRawNode{agent: a, ownRow: ownRow}
-			if a.ReplyID != "" {
+			node := &hudRawNode{agent: a, ownRow: ownRow, native: hudNative(a, ownerHarness)}
+			if a.ReplyID != "" && !node.native {
 				if s, ok := lookup.get(a.ReplyID); ok && (s.HasBoard || s.Agent) {
 					node.linked = true
 				}
@@ -135,8 +185,12 @@ func expandHUDLinked(nodes []*hudRawNode, seenIDs, visited map[string]bool, look
 		if _, ok := lookup.get(rid); !ok {
 			continue
 		}
-		if snap := lookup.snap(rid); adapterPresent(snap, now) {
-			attached := buildHUDRawForest(snap.Agents, false, seenIDs, lookup)
+		snap := lookup.snap(rid)
+		if snap != nil && snap.Usage != nil {
+			n.usage = snap.Usage.Context
+		}
+		if adapterPresent(snap, now) {
+			attached := buildHUDRawForest(snap.Agents, false, n.agent.Harness, seenIDs, lookup)
 			expandHUDLinked(attached, seenIDs, visited, lookup, now)
 			n.children = append(n.children, attached...)
 		}
@@ -147,13 +201,15 @@ func hudShouldExpandLinked(a wslive.Agent) bool {
 	return a.Status == wslive.StatusRunning || a.Holding || a.Alive
 }
 
-func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain []string, visible map[*hudRawNode]bool, completed, folded *int, now time.Time) []HUDNode {
+func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain []string, visible map[*hudRawNode]bool, fold *hudFold, now time.Time) []HUDNode {
 	out := []HUDNode{}
 	for _, n := range nodes {
 		if !visible[n] {
-			*completed += countHUDRawSubtree(n)
-			if depth == 1 {
-				*folded++
+			foldHUDRawSubtree(n, fold)
+			// The folded chip reads as finished agents: an end-unknown
+			// native row is never one.
+			if depth == 1 && !hudEndUnknown(n.agent, n.native) {
+				fold.roots++
 			}
 			continue
 		}
@@ -180,39 +236,98 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 			Task:        hudNodeTask(a),
 			OwnRow:      n.ownRow,
 		}
+		node.setContext(a, n.usage)
+		if n.native {
+			node.Native, node.StartedAt = true, max(a.StartedAt, 0)
+			if hudEndUnknown(a, true) {
+				node.EndUnknown = true
+			} else {
+				node.EndedAt = max(a.EndedAt, 0)
+			}
+		}
 		if depth < hudMaxDepth {
 			nextChain := append(slices.Clone(chain), label)
-			kids := projectHUDNodes(n.children, depth+1, harness, nextChain, visible, completed, folded, now)
+			kids := projectHUDNodes(n.children, depth+1, harness, nextChain, visible, fold, now)
 			if len(kids) > 0 {
 				node.Children = kids
 			}
 		} else {
-			node.Overflow = foldHUDDepthOverflow(n.children, visible, completed)
+			node.Overflow = foldHUDDepthOverflow(n.children, visible, fold)
 		}
 		out = append(out, node)
 	}
 	return out
 }
 
-func countHUDRawSubtree(n *hudRawNode) int {
-	total := 1
-	for _, c := range n.children {
-		total += countHUDRawSubtree(c)
+// setContext fills the Context* fields through the status band's own rule
+// (contextBar), so the card and the band of the same session agree. A linked
+// row whose session's usage was read takes that figure. Any other row builds
+// it from its own row: the tokens, and the scale its runner carried onto the
+// row (Agent.ContextWindow, Agent.ContextCompaction: the ws compaction
+// thresholds, else the native window). A row with tokens and no scale, such as
+// a harness's own native subagent, carries the tokens alone.
+func (n *HUDNode) setContext(a wslive.Agent, usage *wslive.UsageContext) {
+	if usage == nil {
+		if a.ContextTokens <= 0 {
+			return
+		}
+		tokens := a.ContextTokens
+		usage = &wslive.UsageContext{Tokens: &tokens, Window: a.ContextWindow, Compaction: a.ContextCompaction}
 	}
-	return total
+	if usage.Tokens == nil || *usage.Tokens <= 0 {
+		return
+	}
+	n.ContextTokens = *usage.Tokens
+	n.ContextText = compactTokens(n.ContextTokens)
+	bar := contextBar(*usage)
+	if !bar.Known || bar.Denom <= 0 {
+		return
+	}
+	n.ContextWindow, n.ContextLevel = bar.Denom, bar.Level
+	if bar.SoftPct != "" {
+		n.ContextSoft = usage.Compaction.Soft
+	}
+	n.ContextText += " / " + compactTokens(bar.Denom)
 }
 
-func foldHUDDepthOverflow(nodes []*hudRawNode, visible map[*hudRawNode]bool, completed *int) int {
+func foldHUDRawSubtree(n *hudRawNode, fold *hudFold) {
+	fold.add(n)
+	for _, c := range n.children {
+		foldHUDRawSubtree(c, fold)
+	}
+}
+
+func foldHUDDepthOverflow(nodes []*hudRawNode, visible map[*hudRawNode]bool, fold *hudFold) int {
 	overflow := 0
 	for _, n := range nodes {
 		if visible[n] {
 			overflow++
 		} else {
-			*completed++
+			fold.add(n)
 		}
-		overflow += foldHUDDepthOverflow(n.children, visible, completed)
+		overflow += foldHUDDepthOverflow(n.children, visible, fold)
 	}
 	return overflow
+}
+
+// hudNative reports a harness's own subagent: a row whose id carries a
+// native prefix (wslive.NativeAgentID), or a row in a Claude session's
+// snapshot without a daemon identity (daemon-spawned rows always carry a
+// harness, a reply-id, or an agent kind). ownerHarness is the harness of the
+// session whose snapshot holds the row.
+func hudNative(a wslive.Agent, ownerHarness string) bool {
+	if wslive.NativeAgentID(a.ID) {
+		return true
+	}
+	return normalizeHUDHarness(ownerHarness) == "claude" && a.Harness == "" && a.ReplyID == "" && a.AgentKind == ""
+}
+
+// hudEndUnknown reports a native row whose observation ended with the
+// outcome unknown (wslive.Agent.EndUnknown; an agy native subagent at its
+// parent's turn end): it never reads as a completion. Its EndedAt is when
+// observation ended, which only ranks it for retention.
+func hudEndUnknown(a wslive.Agent, native bool) bool {
+	return native && a.EndUnknown && (a.Status == wslive.StatusDone || a.Status == wslive.StatusFailed)
 }
 
 func hudNodeState(a wslive.Agent) string {

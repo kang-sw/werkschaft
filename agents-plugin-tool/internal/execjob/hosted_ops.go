@@ -348,37 +348,101 @@ func within(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-// rootForms are root's spellings a job row may carry: as given and with
-// its symlinks resolved (a temp directory under /var is /private/var on
-// macOS). A file lookup, on the release path only.
+// rootForms are root's spellings a job row may carry: as given and as
+// resolvePath sees it (a temp directory under /var is /private/var on
+// macOS; a junction is its target on Windows). The candidate side of every
+// fence and live-job count, resolved by the same resolver as the job side
+// (admittedPlaces) so both compare in one form. A file lookup, on the
+// release and acquire paths only.
 func rootForms(root string) []string {
 	root = filepath.Clean(root)
 	forms := []string{root}
-	if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
+	if real, err := resolvePath(root); err == nil && real != root {
 		forms = append(forms, real)
 	}
 	return forms
 }
 
-// inRoot reports whether row's job runs in one of a worktree's forms.
-func inRoot(forms []string, row HostedJobRow) bool {
-	for _, root := range forms {
-		if within(root, row.Root) || within(root, row.Cwd) {
-			return true
+// admittedPlaces are a job's root and working directory as resolvePath
+// sees them, always filled when err is nil (equal to the recorded spelling
+// where no link intervenes); realCwd is "" only for an empty cwd. A working
+// directory reached through a link passed only a lexical containment check,
+// so the process may run inside another worktree than either recorded path
+// names. Taken once per job, at admission: a fence matches the job in
+// either spelling with no file lookup of its own, and the process starts
+// in the place admission checked. A path that cannot be resolved is an
+// error, and the launch is refused: its spelling is unchecked, and could
+// appear as a link into a worktree fenced before the process starts. So is
+// a working directory whose resolved place has no ordinary spelling to
+// start the process in (checkOrdinarySpelling); the root, never spawned
+// in, needs none. One lookup when the two are the same path, two
+// otherwise.
+func admittedPlaces(root, cwd string) (realRoot, realCwd string, err error) {
+	root = filepath.Clean(root)
+	if realRoot, err = resolvePath(root); err != nil {
+		return "", "", fmt.Errorf("exec: the worktree root %q cannot be resolved, so the launch is refused: %w", root, err)
+	}
+	switch {
+	case cwd == "":
+		return realRoot, "", nil
+	case filepath.Clean(cwd) == root:
+		realCwd = realRoot
+	default:
+		if realCwd, err = resolvePath(filepath.Clean(cwd)); err != nil {
+			return "", "", fmt.Errorf("exec: the working directory %q cannot be resolved, so the launch is refused: %w", cwd, err)
+		}
+	}
+	if err = checkOrdinarySpelling(realCwd); err != nil {
+		return "", "", fmt.Errorf("exec: the working directory %q cannot be resolved, so the launch is refused: %w", cwd, err)
+	}
+	return realRoot, realCwd, nil
+}
+
+// restoredPlaces are admittedPlaces for a running row an older daemon
+// stored without them: its process already runs, so a path that no longer
+// resolves keeps only its recorded spelling ("" here).
+func restoredPlaces(root, cwd string) []string {
+	var places []string
+	if real, err := resolvePath(filepath.Clean(root)); err == nil {
+		places = append(places, real)
+	}
+	if cwd != "" {
+		if real, err := resolvePath(filepath.Clean(cwd)); err == nil {
+			places = append(places, real)
+		}
+	}
+	return places
+}
+
+// placesIn reports whether one of a job's places lies in one of a
+// worktree's forms.
+func placesIn(forms, places []string) bool {
+	for _, form := range forms {
+		for _, p := range places {
+			if within(form, p) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// fencedRootLocked is the fenced worktree row's job would run in, "" when
-// none. Under mu.
-func (h *Hosted) fencedRootLocked(row HostedJobRow) string {
+// jobIn reports whether j runs in one of a worktree's forms, by its
+// recorded root and working directory or their resolved spellings (from
+// admission, or from restore for a row an older daemon wrote).
+func jobIn(forms []string, j *hostedJob) bool {
+	return placesIn(forms, []string{j.row.Root, j.row.Cwd, j.row.RealRoot, j.row.RealCwd}) || placesIn(forms, j.real)
+}
+
+// fencedRootLocked is the fenced worktree j would run in, "" when none,
+// and the reason its fence gives. Under mu.
+func (h *Hosted) fencedRootLocked(j *hostedJob) (root, reason string) {
 	for root, fence := range h.rootFences {
-		if inRoot(fence.forms, row) {
-			return root
+		if jobIn(fence.forms, j) {
+			return root, fence.holds.reason()
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // LiveIn counts the running jobs whose root or working directory lies in
@@ -396,7 +460,7 @@ func (h *Hosted) LiveIn(root string) int {
 func (h *Hosted) liveInLocked(forms []string) int {
 	n := 0
 	for _, j := range h.jobs {
-		if !j.row.Terminal() && inRoot(forms, j.row) {
+		if !j.row.Terminal() && jobIn(forms, j) {
 			n++
 		}
 	}
@@ -408,6 +472,13 @@ func (h *Hosted) liveInLocked(forms []string) int {
 // returned unfence runs. One lock orders it with job admission, so no job
 // slips in between the check and the release.
 func (h *Hosted) FenceRoot(root string) (unfence func(), err error) {
+	return h.FenceRootAs(root, FenceReleasing)
+}
+
+// FenceRootAs is FenceRoot whose refusal of a new job names reason
+// (FenceReleasing, FenceAcquiring); while fences with different reasons
+// overlap, the refusal names the latest one still held.
+func (h *Hosted) FenceRootAs(root, reason string) (unfence func(), err error) {
 	if h == nil {
 		return func() {}, nil
 	}
@@ -424,14 +495,15 @@ func (h *Hosted) FenceRoot(root string) (unfence func(), err error) {
 	if h.rootFences[root] == nil {
 		h.rootFences[root] = &rootFence{forms: forms}
 	}
-	h.rootFences[root].holders++
+	hold := &fenceHold{reason: reason}
+	h.rootFences[root].holds = append(h.rootFences[root].holds, hold)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			if f := h.rootFences[root]; f != nil {
-				if f.holders--; f.holders <= 0 {
+				if f.holds = f.holds.drop(hold); len(f.holds) == 0 {
 					delete(h.rootFences, root)
 				}
 			}
@@ -439,9 +511,35 @@ func (h *Hosted) FenceRoot(root string) (unfence func(), err error) {
 	}, nil
 }
 
-// rootFence is one reserved worktree: its spellings and how many
-// reservations hold it.
+// rootFence is one reserved worktree: its spellings and the reservations
+// holding it, oldest first.
 type rootFence struct {
-	forms   []string
-	holders int
+	forms []string
+	holds fenceHolds
+}
+
+// fenceHold is one fence on a worktree and why it was taken (the wording
+// of the refusal it causes).
+type fenceHold struct{ reason string }
+
+// fenceHolds are the fences live on one worktree, oldest first.
+type fenceHolds []*fenceHold
+
+// reason is the latest live fence's reason, so a refusal never names a
+// fence already lifted.
+func (hs fenceHolds) reason() string {
+	if len(hs) == 0 {
+		return ""
+	}
+	return hs[len(hs)-1].reason
+}
+
+// drop removes hold, keeping the others in order.
+func (hs fenceHolds) drop(hold *fenceHold) fenceHolds {
+	for i, have := range hs {
+		if have == hold {
+			return append(hs[:i:i], hs[i+1:]...)
+		}
+	}
+	return hs
 }

@@ -245,6 +245,31 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 		Agents: foldedAgents,
 	}
 
+	// Context figures for the hover card: h5 is an unlinked hosted agent with
+	// ws thresholds on its row (a bar), h10 an unlinked agent with tokens and
+	// no scale (variant C); the linked rows take boardsession's own usage,
+	// normal (variant A) by default and past its ws soft threshold (variant B)
+	// when a scenario asks for usage=soft.
+	for i := range heavy.Agents {
+		switch heavy.Agents[i].ID {
+		case "h5":
+			// Unlinked hosted child: its runner carried the ws thresholds on the row.
+			heavy.Agents[i].ContextTokens = 156_000
+			heavy.Agents[i].ContextWindow = 1_000_000
+			heavy.Agents[i].ContextCompaction = &wslive.UsageCompaction{Soft: 140_000, Hard: 200_000}
+		case "h10":
+			heavy.Agents[i].ContextTokens = 41_000
+		}
+	}
+	boardUsage := func(tokens int64, soft bool) *wslive.Snapshot {
+		ctx := &wslive.UsageContext{Tokens: &tokens, Window: 272_000}
+		if soft {
+			ctx.Window = 1_000_000
+			ctx.Compaction = &wslive.UsageCompaction{Soft: 140_000, Hard: 200_000}
+		}
+		return &wslive.Snapshot{SchemaVersion: 1, Adapter: "claude", UpdatedAt: time.Now().UnixMilli(), HeartbeatMs: 30000, Usage: &wslive.Usage{Context: ctx}}
+	}
+	f.d.snapshots.SetLive(f.dir, "boardsession", *boardUsage(104_000, false))
 	f.d.snapshots.SetLive(f.dir, "livesession", heavy)
 	f.d.broker.wake(liveDep("livesession"))
 	switcher := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -269,6 +294,11 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 			next = heavy
 		}
 		next.UpdatedAt = time.Now().UnixMilli()
+		if r.URL.Query().Get("usage") == "soft" {
+			f.d.snapshots.SetLive(f.dir, "boardsession", *boardUsage(156_000, true))
+		} else {
+			f.d.snapshots.SetLive(f.dir, "boardsession", *boardUsage(104_000, false))
+		}
 		f.d.snapshots.SetLive(f.dir, "livesession", next)
 		f.d.broker.wake(liveDep("livesession"))
 		w.WriteHeader(http.StatusNoContent)

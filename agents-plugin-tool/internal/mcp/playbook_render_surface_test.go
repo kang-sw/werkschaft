@@ -858,3 +858,43 @@ func TestRenderPlaybookBodyTierOverride(t *testing.T) {
 		}
 	})
 }
+
+// TestRenderKeyBlockWordingFollowsCallerAndRole pins the credential block's
+// wording. A worker-role child of a daemon agent.spawn caller holds the spawn
+// key its system prompt names as well as the spliced lead-scoped key, so the
+// block says which key serves which calls. A native-subagent caller's spliced
+// key is its only key, a sublead must use its minted key for every call (the
+// whiteboard status path admits only the marker-carrying key), and a
+// delegate-scoped role has no lead-only tool to reach: all three keep the
+// single-key wording.
+func TestRenderKeyBlockWordingFollowsCallerAndRole(t *testing.T) {
+	useResourceFixture(t, buildTestRsrcTree(t, map[string]string{
+		"role-pb/role-pb.md": rolePlaybookContent,
+		"sub-pb/sub-pb.md":   subleadPlaybookContent,
+		"impl-pb/impl-pb.md": implementerPlaybookContent,
+	}))
+	f := newPiRecordFixture(t)
+
+	const single = "Use this key in all ws tool calls."
+	const split = "Your system prompt's spawn key is your session key for every ws call; use this lead-scoped key only for a lead-only tool the spawn key is refused (for example `tickets.sage_stamp`)."
+	for _, tc := range []struct {
+		name, playbook, initialize, want, notWant string
+		scope                                     toolRole
+	}{
+		{"daemon worker", "role-pb", piInitDaemon, split, single, roleLead},
+		{"native worker", "role-pb", piInitNative, single, "spawn key", roleLead},
+		{"daemon sublead", "sub-pb", piInitDaemon, single, "spawn key", roleLead},
+		{"daemon implementer", "impl-pb", piInitDaemon, single, "spawn key", roleDelegate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := renderedBody(t, f.s, f.leadKey, tc.playbook, tc.initialize)
+			if !strings.Contains(body, tc.want) || strings.Contains(body, tc.notWant) {
+				t.Fatalf("key block wording wrong (want %q, not %q):\n%s", tc.want, tc.notWant, body)
+			}
+			entry, ok := f.s.sessions.lookup(extractSplicedKey(t, body))
+			if !ok || entry.scope != tc.scope {
+				t.Fatalf("spliced key scope = %q (found %v), want %q", entry.scope, ok, tc.scope)
+			}
+		})
+	}
+}

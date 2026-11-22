@@ -216,6 +216,9 @@
     const guards = { routeKind: "home", pose: "stand", idleMs: 0 };
     let marks = Object.create(null);
 
+    // The focus report carries the session this stage shows and the pack it
+    // renders; before the first pack is drawn nothing is reported.
+    function reportFocus() { C.focus?.show(activeRid, model?.id || ""); }
     function notice(key) { window.WsToast?.show(wsT("js.companion." + key), { kind: "notice" }); }
     const loader = C.packLoader((pack, shared) => {
       const next = C.makeRig(pack, shared, preset, currentConfig);
@@ -232,6 +235,7 @@
       node.dataset.pack = pack.id;
       node.dataset.rev = pack.rev;
       hit.hidden = false;
+      reportFocus();
       if (!menu.hidden) controls.rebuild();
       settings?.rebuild();
       schedule();
@@ -303,6 +307,7 @@
       updatePosture();
       requestPack();
       invalidated();
+      reportFocus();
     }
 
     function context(payload, frameRect) {
@@ -346,6 +351,7 @@
     function observeRail(fragment, id, baseline) {
       activeRid = id || "";
       const signal = railEvents.read(fragment, activeRid, baseline);
+      reportFocus();
       updatePosture();
       if (signal) receiveSignal(signal);
       schedule();
@@ -827,6 +833,7 @@
         rail?.style.removeProperty("--companion-slot");
         loader.dispose();
         node.remove();
+        C.focus?.show("", "");
       }
     };
   }

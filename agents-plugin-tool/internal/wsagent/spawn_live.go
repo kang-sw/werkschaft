@@ -31,11 +31,16 @@ func SpawnAgentEvent(st State, key string) wslive.Event {
 		AgentKind: wslive.AgentKindPi, Harness: st.Backend, Label: label, Status: status,
 		Model: st.Model, Effort: st.Effort, Observed: st.Observed, SessionKey: key,
 		ContextTokens: st.ContextTokens, OutputTps: st.OutputTps,
-		ActiveMs: st.ActiveMs,
-		Holding:  st.Status != StatusClosed && st.Holding,
-		Alive:    st.Status != StatusClosed && st.Process}
+		ContextCompaction: cloneUsageCompaction(st.ContextCompaction),
+		ActiveMs:          st.ActiveMs,
+		Holding:           st.Status != StatusClosed && st.Holding,
+		Alive:             st.Status != StatusClosed && st.Process}
 	if st.Status == StatusRunning {
 		ev.TurnStartedAt = st.TurnStartedAt
+	}
+	if st.ContextWindow > 0 {
+		window := float64(st.ContextWindow)
+		ev.ContextWindow = &window
 	}
 	if st.Status != StatusClosed && st.BackgroundTasks > 0 {
 		ev.BackgroundTasks = st.BackgroundTasks
@@ -64,6 +69,7 @@ func SpawnAgentEvents(st State, key string) []wslive.Event {
 	for _, o := range st.Observations {
 		ev := row
 		ev.Batches, ev.Model, ev.Effort, ev.ContextTokens, ev.OutputTps = nil, "", "", nil, nil
+		ev.ContextWindow, ev.ContextCompaction = nil, nil
 		observed := o
 		ev.Observed = &observed
 		out = append(out, ev)

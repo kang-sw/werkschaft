@@ -115,6 +115,12 @@ func guardedRoutes() []struct{ method, path, body string } {
 		{http.MethodGet, "/s/livesession/image?path=shot.png", ""},
 		{http.MethodGet, "/s/livesession/file?path=shot.png", ""},
 		{http.MethodGet, "/s/livesession/history", ""},
+		// The audit query routes take /history's guard (and no other).
+		{http.MethodGet, "/s/livesession/audit/events", ""},
+		{http.MethodGet, "/s/livesession/audit/events?call=c1", ""},
+		{http.MethodGet, "/s/livesession/audit/event/e1", ""},
+		{http.MethodGet, "/s/livesession/audit/event/e1?part=out", ""},
+		{http.MethodGet, "/s/livesession/audit/search?q=x", ""},
 		{http.MethodGet, "/s/livesession/entry?key=20261107T090000.000000000Z-ab.json", ""},
 		{http.MethodGet, "/s/livesession/tickets/idea", ""},
 		{http.MethodGet, "/s/livesession/tickets/graph", ""},

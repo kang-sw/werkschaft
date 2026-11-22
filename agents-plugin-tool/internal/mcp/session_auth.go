@@ -201,6 +201,9 @@ type sessionStore struct {
 	// sublead memoizes each key's sub-lead marker read (key ->
 	// subleadCacheEntry); see subleadPlaybook.
 	sublead sync.Map
+	// policyParent memoizes each key's policy-parent marker read (key ->
+	// policyParentEntry); see policyParentOf.
+	policyParent sync.Map
 }
 
 func newSessionStore() *sessionStore {
@@ -215,6 +218,12 @@ func newSessionStore() *sessionStore {
 // candidate a legacy record file already holds is taken too. Only the split
 // layout is ever minted into.
 func (s *sessionStore) mint(root string, scope toolRole, parent string) (string, error) {
+	return s.mintWithPolicyParent(root, scope, parent, "")
+}
+
+// mintWithPolicyParent is mint for a key that also inherits session-scope
+// overrides from policyParent (session_policy_parent.go).
+func (s *sessionStore) mintWithPolicyParent(root string, scope toolRole, parent, policyParent string) (string, error) {
 	d, err := s.dirs()
 	if err != nil {
 		return "", err
@@ -246,6 +255,15 @@ func (s *sessionStore) mint(root string, scope toolRole, parent string) (string,
 			return "", err
 		}
 		if claimed {
+			if policyParent != "" {
+				// Right after the claim, before the key is handed out. A
+				// failed write must not leave a key that silently resolves
+				// the lead's policy as the builtin.
+				if err := s.writePolicyParent(d, candidate, policyParent); err != nil {
+					_ = os.RemoveAll(d.keyDir(candidate))
+					return "", err
+				}
+			}
 			return candidate, nil
 		}
 		// rare collision; generate a fresh candidate and retry
@@ -581,6 +599,9 @@ func (s *sessionStore) walkLineage(d sessionDirs, key string, record sessionReco
 		}
 		parent := record.Parent
 		if parent == "" {
+			parent, _ = s.policyParentOf(d, key)
+		}
+		if parent == "" {
 			return
 		}
 		if _, dup := seen[parent]; dup {
@@ -591,7 +612,7 @@ func (s *sessionStore) walkLineage(d sessionDirs, key string, record sessionReco
 		if !ok {
 			return
 		}
-		record = next
+		key, record = parent, next
 	}
 }
 

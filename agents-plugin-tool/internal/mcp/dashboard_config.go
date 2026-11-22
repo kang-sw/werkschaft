@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/kang-sw/devenv/internal/wsauditstore"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
@@ -67,6 +68,8 @@ var manifestGlobalOnlyKeys = map[string]struct{}{
 	wsdashboard.CompanionPackKey: {}, wsdashboard.CompanionPresetKey: {},
 	wsdashboard.CompanionOutfitKey: {}, wsdashboard.CompanionHairKey: {}, wsdashboard.CompanionEyesKey: {},
 	wsdashboard.CompanionAttachmentsKey: {}, wsdashboard.CompanionPaletteKey: {},
+	wsauditstore.KeySessionCapMiB: {}, wsauditstore.KeyTotalCapMiB: {},
+	wsauditstore.KeyBodyCapKiB: {}, wsauditstore.KeyRetentionDays: {},
 	wsdashboard.CompanionAgentCooldownKey: {}, wsdashboard.CompanionAgentHourlyCapKey: {},
 }
 
@@ -74,6 +77,11 @@ func init() {
 	for key := range manifestGlobalOnlyKeys {
 		wsconfig.RegisterGlobalOnly(key)
 	}
+	// The audit byte knobs hold only as a set ((2129)=a): a global write or
+	// reset that would break it is refused before it commits.
+	wsconfig.RegisterSetCheck(wsauditstore.Keys(), func(overrides map[string]string) error {
+		return wsauditstore.ValidateValues(overrides)
+	})
 }
 
 // DashboardSettings is the dashboard configuration a stdio server reads once

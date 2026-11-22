@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -137,6 +138,19 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		}
 		return State{}, badRequest("agent profile %q is not a lead profile (lead: true)", rp.Name)
 	}
+	spawnerBackend := ""
+	if spawn != nil {
+		spawnerBackend = spawn.spawnerBackend
+	}
+	if lead == nil {
+		// Every worker creation, profile-based or spawned, passes the
+		// cross-harness check before anything is minted or written: a
+		// spawn for its caller's verified backend, a dashboard or REST
+		// creation for none.
+		if err := r.admitWorker(rp.Definition.Backend, spawnerBackend); err != nil {
+			return State{}, &requestError{status: http.StatusForbidden, msg: err.Error()}
+		}
+	}
 	if spawn != nil {
 		releaseAdmission := r.holdParentAdmission(spawn.Parent)
 		defer releaseAdmission()
@@ -191,7 +205,12 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		if spawn != nil && rp.Definition.Backend == BackendPi && spawn.Cwd != "" {
 			keyRoot = spawn.Cwd
 		}
-		if key, err = r.opts.Keys.Mint(keyRoot); err != nil {
+		if child, ok := r.opts.Keys.(ChildKeyStore); ok && spawn != nil && spawn.policyKey != "" {
+			key, err = child.MintChild(keyRoot, spawn.policyKey)
+		} else {
+			key, err = r.opts.Keys.Mint(keyRoot)
+		}
+		if err != nil {
 			return State{}, fmt.Errorf("mint ws session key: %w", err)
 		}
 	}
@@ -206,6 +225,12 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		WSKey:     key,
 		Listed:    rp.Definition.ListInIndex,
 		CreatedAt: now.UTC().Format(time.RFC3339),
+		// The same instant at nanosecond precision, for the release
+		// boundary.
+		CreatedUnixNano: now.UnixNano(),
+	}
+	if lead == nil {
+		rec.SpawnerBackend = spawnerBackend
 	}
 	if lead != nil {
 		rec.Lead = true
@@ -375,6 +400,13 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 	}
 	if c.rec.Backend == BackendClaude && spec.Holder != nil && spec.Holder.id != "" {
 		spec.restoredClaudeUsage = c.live.st.Snapshot(c.live.now().UnixMilli()).Usage
+	}
+	if sink := c.r.opts.AuditSink; sink != nil {
+		class := wsaudit.SessionHostedChild
+		if spec.Lead != nil {
+			class = wsaudit.SessionHostedLead
+		}
+		spec.audit = &auditTap{Session: wsaudit.Session{ID: c.rec.ReplyID, Class: class}, Sink: sink, Log: c.r.opts.Log}
 	}
 	proc, err := backend.Start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)

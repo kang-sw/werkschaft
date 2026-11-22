@@ -235,6 +235,11 @@ func (d *Daemon) sessionRoster(replyID string) ([]SessionRosterRow, error) {
 			if !scope.child(row.ReplyID) || scope.parent(row.ReplyID) != replyID {
 				continue
 			}
+			// Only the rail's active session list (live or asleep): deleted
+			// and archived rows sit in its folds, never in the roster.
+			if !row.InSessionList() {
+				continue
+			}
 			item := SessionRosterRow{Mailbox: "id:" + row.ReplyID, Harness: row.Harness, Label: row.Label, State: "idle"}
 			if row.Live && row.Exit == nil && !row.Hover.Stale {
 				if row.Working {

@@ -406,3 +406,83 @@ func TestGeneratePathsPlanSanitizesStemAndAvoidsCollisions(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratePathsAllocatesReportPathsInOwnDirectory(t *testing.T) {
+	repo := initRepo(t)
+	manager := NewManager(Options{
+		CacheHome: filepath.Join(t.TempDir(), "cache"),
+		Now:       func() time.Time { return fixedNow },
+	})
+
+	paths, err := manager.GeneratePaths(repo, "report", []string{"survey", "../bad stem"})
+	if err != nil {
+		t.Fatalf("GeneratePaths(report) returned error: %v", err)
+	}
+	layout, _, _, err := manager.Ensure(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.ReportDir == layout.ReviewDir || layout.ReportDir == layout.PromptDir {
+		t.Fatalf("report dir %q must be separate from review %q and prompt %q", layout.ReportDir, layout.ReviewDir, layout.PromptDir)
+	}
+	if filepath.Dir(layout.ReportDir) != filepath.Dir(layout.ReviewDir) {
+		t.Fatalf("report dir %q is not in the same generated-paths tree as %q", layout.ReportDir, layout.ReviewDir)
+	}
+	if len(paths) != 2 || paths[0].Stem != "survey" || paths[1].Stem != "bad-stem" {
+		t.Fatalf("stems not preserved in stable order: %+v", paths)
+	}
+	for _, generated := range paths {
+		if generated.Kind != "report" {
+			t.Fatalf("kind = %q, want report", generated.Kind)
+		}
+		if got := canonicalForTest(t, filepath.Dir(generated.Path)); got != layout.ReportDir {
+			t.Fatalf("path dir = %q, want %q", got, layout.ReportDir)
+		}
+		if !strings.HasSuffix(generated.Path, "-"+generated.Stem+".md") {
+			t.Fatalf("path %q does not end with sanitized stem %q", generated.Path, generated.Stem)
+		}
+		if info, err := os.Stat(generated.Path); err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("reserved path %q stat=%v err=%v", generated.Path, info, err)
+		}
+		// Native file tools write the reserved path directly.
+		if err := os.WriteFile(generated.Path, []byte("report\n"), 0o644); err != nil {
+			t.Fatalf("native write to %q: %v", generated.Path, err)
+		}
+	}
+	again, err := manager.GeneratePaths(repo, "report", []string{"survey"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again[0].Path == paths[0].Path {
+		t.Fatalf("second allocation reused %q", again[0].Path)
+	}
+	// The four existing kinds keep their directories.
+	if rev, err := manager.GeneratePaths(repo, "review", []string{"x"}); err != nil || canonicalForTest(t, filepath.Dir(rev[0].Path)) != layout.ReviewDir {
+		t.Fatalf("review allocation changed: %+v %v", rev, err)
+	}
+	if _, err := manager.GeneratePaths(repo, "reports", []string{"x"}); err == nil {
+		t.Fatal("unknown kind reports must stay refused")
+	}
+}
+
+// TestGeneratePathsRefusesUnknownKindBeforeLayout: an unknown kind touches no
+// cache directory, and a review allocation does not create report-paths.
+func TestGeneratePathsRefusesUnknownKindBeforeLayout(t *testing.T) {
+	repo := initRepo(t)
+	cache := filepath.Join(t.TempDir(), "cache")
+	manager := NewManager(Options{CacheHome: cache, Now: func() time.Time { return fixedNow }})
+	if _, err := manager.GeneratePaths(repo, "reports", []string{"x"}); err == nil || !strings.Contains(err.Error(), "unsupported path kind") {
+		t.Fatalf("unknown kind error = %v", err)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("an unknown kind prepared the cache layout at %s (err=%v)", cache, err)
+	}
+	review, err := manager.GeneratePaths(repo, "review", []string{"x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportDir := filepath.Join(filepath.Dir(filepath.Dir(review[0].Path)), "report-paths")
+	if _, err := os.Stat(reportDir); !os.IsNotExist(err) {
+		t.Fatalf("a review allocation created %s (err=%v)", reportDir, err)
+	}
+}

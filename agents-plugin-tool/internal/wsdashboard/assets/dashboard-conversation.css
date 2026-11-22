@@ -354,9 +354,32 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .tt-pill[data-state="failed"]     { background: color-mix(in srgb, var(--ring-fail) 22%, var(--wb-card)); color: var(--ring-fail); }
 .tt-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
 .tt-meta code { font-size: 10.5px; background: var(--wb-muted); padding: 0 4px; border-radius: 4px; color: var(--wb-fg); }
+.tt-ctx { --c: var(--wb-primary); display: flex; align-items: center; gap: 7px; min-width: 0; font-variant-numeric: tabular-nums; }
+.tt-ctx.warn { --c: var(--wb-warn); }
+.tt-ctx.d-hot { --c: var(--wb-hot); }
+.tt-ctx.crit { --c: var(--wb-fail); }
+.tt-ctx.d-unknown { --c: var(--wb-muted-fg); }
+.tt-ctx .pct { flex: none; min-width: 30px; font: 800 12px/1 system-ui, sans-serif; color: var(--c); }
+.tt-ctx .bar { position: relative; flex: 1 1 auto; min-width: 40px; height: 7px; border-radius: 999px; background: var(--wb-muted); overflow: hidden; }
+.tt-ctx .fill { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 999px; }
+.tt-ctx .m-soft { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--wb-card); box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-fg) 26%, transparent); transform: translateX(-50%); }
+.tt-ctx .tok { flex: none; font: 600 10.5px/1 var(--wb-mono); color: var(--wb-muted-fg); white-space: nowrap; }
+.tt-ctx.d-unknown .tok { font-weight: 500; }
 .tt-chain { font-size: 10.5px; color: var(--wb-muted-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tt-task { font-size: 11px; color: var(--wb-fg); opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tt-hint { font-size: 10.5px; color: var(--wb-primary); font-weight: 700; padding-top: 3px; border-top: 1px solid var(--wb-line); font-family: var(--wb-mono); }
+/* Native subagents (the harness's own): a dashed ring and badge, their
+   lifecycle line, and the count of rows whose observation ended with the
+   outcome unknown, which never joins the completed count. */
+.hud-node[data-native] .hud-ring { border-style: dashed; }
+.tt-native { flex: none; height: 16px; padding: 0 5px; border: 1px dashed currentColor; border-radius: 4px; font: 800 9px/14px var(--wb-mono); color: var(--wb-muted-fg); text-transform: uppercase; }
+.tt-life { font-size: 10.5px; color: var(--wb-muted-fg); font-variant-numeric: tabular-nums; }
+.tt-unknown { color: var(--ring-hold); font-weight: 700; }
+.hud-obs { display: block; margin-top: 6px; font: 700 10px/1.2 var(--wb-sans); color: var(--wb-muted-fg); white-space: nowrap; text-align: center; }
+.agidle:has(> .hud-obs) { width: auto; padding: 0 9px; }
+.agidle .hud-obs { display: inline; margin: 0 0 0 5px; }
+/* The label sits in the island, so chat text behind the translucent glass must not read through it. */
+.dgrid.live > .agisland:is([data-mode="compact"], [data-mode="idle"]):has(.hud-obs) { background: var(--wb-card); backdrop-filter: none; -webkit-backdrop-filter: none; }
 @media (prefers-reduced-motion: reduce) { .agisland, .agview, .agpop, .agcompact::before, .hud-node, .hud-folded, .hud-close, .aclose { transition: none !important; } .hud-node[data-state] .hud-ring { animation: none; } }
 /* Keep the hidden full view measurable for the island's size transition;
    data-mode controls its visibility and the hidden attribute remains JS state. */

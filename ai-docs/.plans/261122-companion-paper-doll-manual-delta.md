@@ -49,7 +49,7 @@ All keys below are optional sections under `ws-companion/v1`; a pack without `ou
 
 #### Authoring recipe (per outfit)
 
-1. **Starter scaffold:** a local-only authoring body, never shipped and referenced by no schema field, test or pack file: a neutral tee and shorts with a generic placeholder bob and face, redrawn upright and front-facing. The bob and face only balance outfit design.
+1. **Starter scaffold:** the tracked official authoring scaffold (`ai-docs/assets/companion-pet/scaffold-upright.png`; its derivation source stays local), never shipped in any pack and referenced by no schema field, test or pack file: a neutral tee and shorts with a generic placeholder bob and face, redrawn upright and front-facing. The bob and face only balance outfit design.
 2. **Dress** the starter outfit over the scaffold by image edit, keeping exposed skin a flat tint distinct from every outfit fill so light outfit parts stay separable.
 3. **Redraw** the dressed asset into each pose and gesture; a dressed redraw keeps outfit details consistent where per-pose dressing drifts.
 4. **Split skin:** flat skin color to a pure-white `skinFill` mask.
@@ -105,6 +105,9 @@ Outfit-baked body layers default to `z20`, below the fixed head band, and any la
 ## 6. Repository hygiene line (Public Repository IP Boundary)
 
 Decision 5. Appended: local reproductions of third-party characters stay in
-local-only BYO packs, and the authoring scaffold derived from the local
-reference stays local; shipped outfit-baked assets may carry body regions that
-trace back to it only with every identifying feature removed.
+local-only BYO packs. The authoring scaffold derived from the local reference
+is tracked as the official authoring scaffold
+(`ai-docs/assets/companion-pet/scaffold-upright.png`, owner (130)) and never
+ships in any pack; its derivation source and intermediates stay local. Shipped
+outfit-baked assets may carry body regions that trace back to it only with
+every identifying feature removed.

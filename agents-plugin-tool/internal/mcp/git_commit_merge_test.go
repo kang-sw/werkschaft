@@ -187,6 +187,10 @@ func TestGitCommitMergeRefusalPreservesContent(t *testing.T) {
 			f := newMCPCommitMergeFixture(t, nil, nil, nil)
 			paths, branch, want := []string{"conflict.txt"}, "ours", "unrelated staged path"
 			switch kind {
+			case "unrelated addition", "unrelated edit", "incoming bytes", "incoming mode":
+				want = "staged paths that need an explicit grant"
+			}
+			switch kind {
 			case "unrelated addition":
 				mustWrite(t, f.root, "unrelated-added.txt", "unapproved\n")
 				runGit(t, f.root, "add", "unrelated-added.txt")
@@ -221,7 +225,7 @@ func TestGitCommitMergeRefusalPreservesContent(t *testing.T) {
 			if !failed || !strings.Contains(text, want) {
 				t.Fatalf("want %s refusal, got %s", want, text)
 			}
-			if kind != "unresolved" && kind != "branch mismatch" && !strings.Contains(text, "existing paths grant") {
+			if kind != "unresolved" && kind != "branch mismatch" && !strings.Contains(text, "existing paths grant") && !strings.Contains(text, "adding them to paths") {
 				t.Fatalf("missing explicit-grant recovery: %s", text)
 			}
 			if kind == "missing merge state" {
@@ -252,7 +256,7 @@ func TestGitCommitMergeCompositeContentRequiresExplicitGrant(t *testing.T) {
 		t.Fatalf("fixture is not composite: %q", got)
 	}
 	text, failed := f.call(t, []string{"conflict.txt"}, "ours", "text")
-	if !failed || !strings.Contains(text, "composite.txt") || !strings.Contains(text, "existing paths grant") {
+	if !failed || !strings.Contains(text, "composite.txt") || !strings.Contains(text, "adding them to paths") {
 		t.Fatalf("composite content admitted: %s", text)
 	}
 	f.assertUncommitted(t)

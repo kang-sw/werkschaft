@@ -681,6 +681,30 @@ func TestInterruptEntryIsRefusedByCancelAndSteerAndNeedsAnAdapter(t *testing.T) 
 	}
 }
 
+func TestSteerRouteRefusesAHeldScheduledPrompt(t *testing.T) {
+	f := startPageFixture(t)
+	name, _, err := wsinbox.Send(f.inbox("livesession"), wsinbox.Entry{
+		Parts: []string{"nightly sweep"},
+		Cron:  &wsinbox.Cron{ID: "cron-0a1b2c", Name: "nightly", At: "2026-03-10T09:00:00Z"},
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := wsinbox.Record{Name: name}.ID()
+	code, _, raw := postJSON(t, f.base+"/s/livesession/steer", f.base, `{"id":"`+id+`"}`)
+	if code != http.StatusConflict || !strings.Contains(raw, "scheduled prompt") {
+		t.Fatalf("steer of a scheduled prompt = %d (%s), want 409 naming it", code, raw)
+	}
+	held, err := wsinbox.Held(f.inbox("livesession"))
+	if err != nil || len(held) != 1 || held[0].Name != name || held[0].Entry.Steer || held[0].Entry.Cron == nil {
+		t.Fatalf("held after the refused steer = %+v, %v", held, err)
+	}
+	// Cancel is still allowed: the user may withdraw a held scheduled prompt.
+	if code, _, raw := postJSON(t, f.base+"/s/livesession/cancel", f.base, `{"id":"`+id+`"}`); code != http.StatusOK {
+		t.Fatalf("cancel = %d: %s", code, raw)
+	}
+}
+
 func TestWriteRoutesRequireTheDaemonsOwnOrigin(t *testing.T) {
 	f := startPageFixture(t)
 	for _, route := range []string{"message", "cancel", "steer", "interrupt"} {

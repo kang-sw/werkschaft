@@ -39,6 +39,15 @@ func (b ClaudeBackend) registration() (string, BackendRegistration) {
 		// --disallowedTools claudeNativeProcessTools, verified on 2.1.330
 		// (testdata/claude-2.1.330-native-process-tools.jsonl).
 		ExecCutover: &ExecCutoverSupport{Since: "2.1.330"},
+		// One-shot probe, 2026-11-22, claude 2.1.330: `claude -p
+		// --output-format text --setting-sources "" --strict-mcp-config
+		// --tools "" --permission-mode dontAsk --no-session-persistence
+		// --disable-slash-commands --model haiku --effort low`, prompt on
+		// stdin, answered on stdout (exit 0). --no-session-persistence
+		// writes no transcript under ~/.claude/projects (the same call
+		// without it writes one); it still creates an empty auto-memory
+		// directory there. Every flag is listed by `claude --help`.
+		OneShot: &OneShotSupport{Args: claudeOneShotArgs, Env: claudeEnv},
 		PlaybookTerminology: PlaybookTerminology{
 			ExploreAgent:  "the Explore agent",
 			ContinueIdiom: "SendMessage(to: <agentId>)",
@@ -107,6 +116,13 @@ func claudeLeadEnv(spec StartSpec) []string {
 		set[name] = value
 	}
 	return harnessEnv(wsharnessenv.Drop(spec.Env), []string{"CLAUDE"}, claudeKeptEnv, set)
+}
+
+// claudeWorkerEnv is an agent.spawn worker's environment: claudeEnv plus the
+// session-state lines, which tell a turn the harness began on its own (a
+// finished background task's wake-up) from an idle harness.
+func claudeWorkerEnv(env []string) []string {
+	return harnessEnv(wsharnessenv.Drop(env), []string{"CLAUDE"}, claudeKeptEnv, map[string]string{"CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"})
 }
 
 // claudeLeadArgs is the command line of a lead conversation: print mode
@@ -188,6 +204,29 @@ func claudeRemovedTools(spec StartSpec) []string {
 		removed = append(removed, "Skill")
 	}
 	return removed
+}
+
+// claudeOneShotArgs is the isolated one-shot command line: the worker launch
+// pattern (claudeArgs) without MCP servers, plugins, or tools, plus no
+// session file and no skills or slash commands.
+func claudeOneShotArgs(model, effort string) []string {
+	args := []string{
+		"-p",
+		"--output-format", "text",
+		"--setting-sources", "",
+		"--strict-mcp-config",
+		"--tools", "",
+		"--permission-mode", "dontAsk",
+		"--no-session-persistence",
+		"--disable-slash-commands",
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--effort", effort)
+	}
+	return args
 }
 
 // claudeArgs is the claude command line for spec, without the executable.
@@ -491,6 +530,9 @@ func (b ClaudeBackend) Start(ctx context.Context, spec StartSpec) (Process, erro
 	cmd := exec.Command(command, append(pre, args...)...)
 	cmd.Dir = spec.workDir()
 	cmd.Env = claudeEnv(spec.Env)
+	if spec.SessionState && spec.Lead == nil {
+		cmd.Env = claudeWorkerEnv(spec.Env)
+	}
 	if spec.Lead != nil {
 		cmd.Env = claudeLeadEnv(spec)
 		if spec.Holder != nil {

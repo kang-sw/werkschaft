@@ -112,6 +112,10 @@ type IndexOptions struct {
 	// re-read's goroutine under that session's lane, so calls for different
 	// sessions may run concurrently, and calls for one session never do.
 	OnChange func(replyID string)
+	// OnRemove is called, under the index lock, with the last registration
+	// of each session a re-read or purge removes from the index. It must not
+	// block or call back into the index.
+	OnRemove func(replyID string, last Registration)
 	// Log receives one line per session added to or removed from the index;
 	// nil discards them.
 	Log io.Writer
@@ -611,6 +615,9 @@ func (x *Index) applyRead(replyID string, reg *Registration, full bool, stores L
 		}
 		delete(x.sessions, replyID)
 		fmt.Fprintf(x.opts.Log, "dashboard: session %s removed (project %s)\n", replyID, entry.session.Project)
+		if x.opts.OnRemove != nil {
+			x.opts.OnRemove(replyID, entry.session.Registration)
+		}
 		return true
 	}
 	if clock := x.liveClocks[replyID]; clock.generation != 0 && clock.generation != liveGeneration {

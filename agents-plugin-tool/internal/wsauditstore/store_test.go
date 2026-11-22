@@ -1,0 +1,1171 @@
+package wsauditstore
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/kang-sw/devenv/internal/wsaudit"
+	"github.com/kang-sw/devenv/internal/wsstate"
+)
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+func openTest(t *testing.T, root string, mutate func(*Options)) (*Store, *syncBuffer) {
+	t.Helper()
+	log := &syncBuffer{}
+	opts := Options{Root: root, Log: log, SweepInterval: -1}
+	if mutate != nil {
+		mutate(&opts)
+	}
+	s, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, log
+}
+
+func flush(t *testing.T, s *Store) {
+	t.Helper()
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// item is an envelope and the source identity capture appends it under.
+type item struct {
+	id wsaudit.SourceID
+	// from is the yielding source record of a keyed item; zero means the
+	// item is keyed by its own record (id).
+	from wsaudit.SourceID
+	wsaudit.Envelope
+}
+
+// rec is the source record position AppendSourced judges coverage by.
+func (it item) rec() wsaudit.SourceID {
+	if it.from == (wsaudit.SourceID{}) {
+		return it.id
+	}
+	return it.from
+}
+
+func sourced(session string, seq uint64, kind wsaudit.Kind) item {
+	ev, _ := wsaudit.NewEnvelope(session, "claude", time.Now(), kind)
+	ev.ID = fmt.Sprintf("ev-%d", seq)
+	ev.Seq = seq
+	ev.Out = fmt.Sprintf("output %d", seq)
+	return item{id: wsaudit.SourceID{Source: "holder:1", Seq: seq}, Envelope: ev}
+}
+
+func tee(session string, anchor, index uint64) item {
+	ev, _ := wsaudit.NewEnvelope(session, "claude", time.Now(), wsaudit.KindAssistantText)
+	ev.ID = fmt.Sprintf("tee-%d.%d", anchor, index)
+	ev.Out = ev.ID
+	return item{id: wsaudit.SourceID{Source: "holder:1", Tee: true, Anchor: anchor, Index: index}, Envelope: ev}
+}
+
+func mustAppend(t *testing.T, s *Store, it item) {
+	t.Helper()
+	// Capture treats a known duplicate as success.
+	if err := s.AppendSourced(context.Background(), it.id, it.rec(), it.Envelope); err != nil && !errors.Is(err, wsaudit.ErrDuplicateSource) {
+		t.Fatal(err)
+	}
+}
+
+// loaded recovers a session's ring after a restart, so the in-memory
+// recovery answers are complete.
+func loaded(t *testing.T, s *Store, session string) {
+	t.Helper()
+	s.Preload(session)
+	flush(t, s)
+}
+
+// retainedIDs lists the source identities of a session's retained events in
+// order, in SourceID.String form.
+func retainedIDs(t *testing.T, s *Store, session string) []string {
+	t.Helper()
+	info, err := s.loaded(context.Background(), session)
+	if err != nil || info == nil {
+		t.Fatalf("session %s not loaded: %v", session, err)
+	}
+	r := info.view.Load()
+	r.view.RLock()
+	defer r.view.RUnlock()
+	var out []string
+	for _, id := range r.ids {
+		if id != nil {
+			out = append(out, id.String())
+		}
+	}
+	return out
+}
+
+func lossCount(t *testing.T, s *Store, session string) uint64 {
+	t.Helper()
+	l := s.ledgerOf(session)
+	if l == nil {
+		t.Fatalf("session %s not loaded", session)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loss
+}
+
+func events(t *testing.T, s *Store, session string) []wsaudit.Envelope {
+	t.Helper()
+	evs, err := s.Events(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evs
+}
+
+func sourceSeqs(t *testing.T, s *Store, session string) []uint64 {
+	t.Helper()
+	var out []uint64
+	for _, id := range retainedIDs(t, s, session) {
+		var seq uint64
+		if _, err := fmt.Sscanf(id, "holder:1/s%d#0", &seq); err == nil {
+			out = append(out, seq)
+		}
+	}
+	return out
+}
+
+// TestStoreAdmitsKeyedEventsByTheirSourceRecord pins the writer's admission
+// of a keyed identity (a Codex call, a carried assembly), which carries no
+// position of its own: on a restarted store whose ring is not loaded (Recover
+// answers zero, so capture cannot judge), the writer judges the source record
+// it is handed against the recovered boundary. Covered, the event is lost,
+// never appended late; past the boundary, or anchored on it, it is appended.
+func TestStoreAdmitsKeyedEventsByTheirSourceRecord(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	for seq := uint64(1); seq <= 4; seq++ {
+		mustAppend(t, s, sourced("sess", seq, wsaudit.KindToolCall))
+	}
+	if err := s.Finalize(context.Background(), "sess", "holder:1", 4); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	_ = s.Close()
+
+	s2, _ := openTest(t, root, nil)
+	if rec := s2.Recover("sess", "holder:1"); rec != (wsaudit.Recovery{}) {
+		t.Fatalf("recovery of an unloaded ring = %+v, want zero", rec)
+	}
+	keyed := func(key string, from wsaudit.SourceID) item {
+		it := sourced("sess", 0, wsaudit.KindToolCall)
+		it.ID = key
+		it.id = wsaudit.SourceID{Source: "holder:1", Key: key}
+		it.from = from
+		return it
+	}
+	mustAppend(t, s2, keyed("call.late", wsaudit.SourceID{Source: "holder:1", Seq: 2}))
+	mustAppend(t, s2, keyed("asm.t3.1", wsaudit.SourceID{Source: "holder:1", Tee: true, Anchor: 3, Index: 1}))
+	mustAppend(t, s2, keyed("asm.t4.1", wsaudit.SourceID{Source: "holder:1", Tee: true, Anchor: 4, Index: 1}))
+	mustAppend(t, s2, keyed("call.new", wsaudit.SourceID{Source: "holder:1", Seq: 5}))
+	flush(t, s2)
+	var got []string
+	for _, ev := range events(t, s2, "sess")[4:] {
+		got = append(got, ev.ID)
+	}
+	if want := []string{"asm.t4.1", "call.new"}; !slices.Equal(got, want) {
+		t.Fatalf("appended after restart = %v, want %v", got, want)
+	}
+	if n := lossCount(t, s2, "sess"); n != 2 {
+		t.Fatalf("loss = %d, want the two covered keyed events", n)
+	}
+}
+
+// TestStoreRestartReplayDedupsAndContinuesSequence pins Decision 5: append,
+// restart, replay the holder's records, and append again — sequences stay
+// continuous and no retained source identity repeats.
+func TestStoreRestartReplayDedupsAndContinuesSequence(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	for seq := uint64(1); seq <= 5; seq++ {
+		mustAppend(t, s, sourced("sess", seq, wsaudit.KindToolCall))
+	}
+	flush(t, s)
+	_ = s.Close()
+
+	s2, _ := openTest(t, root, nil)
+	if rec := s2.Recover("sess", "holder:1"); rec != (wsaudit.Recovery{}) {
+		t.Fatalf("recovery of an unloaded ring = %+v, want zero", rec)
+	}
+	flush(t, s2) // the first question queued the load
+	// Appends alone never finalize: capture reports the boundary.
+	rec := s2.Recover("sess", "holder:1")
+	if rec != (wsaudit.Recovery{MaxSeq: 5}) || !s2.Retained("sess", wsaudit.SourceID{Source: "holder:1", Seq: 5}) {
+		t.Fatalf("recovery = %+v", rec)
+	}
+	if err := s2.AppendSourced(context.Background(), wsaudit.SourceID{Source: "holder:1", Seq: 3}, wsaudit.SourceID{Source: "holder:1", Seq: 3}, sourced("sess", 3, wsaudit.KindToolCall).Envelope); !errors.Is(err, wsaudit.ErrDuplicateSource) {
+		t.Fatalf("append of a retained identity = %v", err)
+	}
+	for seq := uint64(1); seq <= 5; seq++ { // holder reattachment replays
+		mustAppend(t, s2, sourced("sess", seq, wsaudit.KindToolCall))
+	}
+	for seq := uint64(6); seq <= 7; seq++ {
+		mustAppend(t, s2, sourced("sess", rec.MaxSeq+seq-5, wsaudit.KindToolCall))
+	}
+	flush(t, s2)
+	evs := events(t, s2, "sess")
+	if got := fmt.Sprint(sourceSeqs(t, s2, "sess")); got != "[1 2 3 4 5 6 7]" {
+		t.Fatalf("source identities = %s", got)
+	}
+	for i, ev := range evs {
+		if ev.Seq != uint64(i+1) {
+			t.Fatalf("event %d has seq %d", i, ev.Seq)
+		}
+	}
+}
+
+// TestStoreFailedWriteIsLossNeverLateAppend pins Decision 5: fail the append
+// of source 10, append 11, restart and replay — 10 is not appended after 11,
+// the loss count is 1, and the compaction cut is unchanged.
+func TestStoreFailedWriteIsLossNeverLateAppend(t *testing.T) {
+	root := t.TempDir()
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		if bytes.Contains(b, []byte(`"id":"ev-10"`)) {
+			return 0, errors.New("injected write failure")
+		}
+		return orig(f, b)
+	}
+	s, log := openTest(t, root, nil)
+	compaction := sourced("sess", 9, wsaudit.KindCompaction)
+	compaction.Meta = map[string]any{wsaudit.MetaEstimated: true}
+	mustAppend(t, s, compaction)
+	mustAppend(t, s, sourced("sess", 10, wsaudit.KindToolCall))
+	mustAppend(t, s, sourced("sess", 11, wsaudit.KindToolResult))
+	flush(t, s)
+	if !strings.Contains(log.String(), "injected write failure") {
+		t.Fatalf("write failure not logged: %s", log.String())
+	}
+	before := wsaudit.FindModelSeenCut(events(t, s, "sess"))
+	_ = s.Close()
+	writeFile = orig
+
+	s2, _ := openTest(t, root, nil)
+	for seq := uint64(9); seq <= 11; seq++ {
+		mustAppend(t, s2, sourced("sess", seq, wsaudit.KindToolCall))
+	}
+	flush(t, s2)
+	evs := events(t, s2, "sess")
+	if got := fmt.Sprint(sourceSeqs(t, s2, "sess")); got != "[9 11]" {
+		t.Fatalf("source identities = %s", got)
+	}
+	if n := lossCount(t, s2, "sess"); n != 1 {
+		t.Fatalf("loss = %d", n)
+	}
+	if after := wsaudit.FindModelSeenCut(evs); after != before || !after.Estimated {
+		t.Fatalf("cut moved: %+v -> %+v", before, after)
+	}
+	_ = s2.Close()
+	s3, _ := openTest(t, root, nil)
+	mustAppend(t, s3, sourced("sess", 10, wsaudit.KindToolCall))
+	flush(t, s3)
+	if n := lossCount(t, s3, "sess"); n != 1 {
+		t.Fatalf("a second replay counted the loss again: %d", n)
+	}
+}
+
+// TestStoreFinalizedBoundaryRefusesLateRecords pins the per-source
+// finalized boundary: a record at or below it without a retained identity
+// is loss, even across a restart.
+func TestStoreFinalizedBoundaryRefusesLateRecords(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	if err := s.Finalize(ctx, "sess", "holder:1", 3); err != nil { // 2 and 3 dropped upstream
+		t.Fatal(err)
+	}
+	mustAppend(t, s, sourced("sess", 2, wsaudit.KindToolCall))
+	mustAppend(t, s, sourced("sess", 4, wsaudit.KindToolCall))
+	flush(t, s)
+	_ = s.Close()
+	s2, _ := openTest(t, root, nil)
+	mustAppend(t, s2, sourced("sess", 3, wsaudit.KindToolCall))
+	flush(t, s2)
+	if got := fmt.Sprint(sourceSeqs(t, s2, "sess")); got != "[1 4]" {
+		t.Fatalf("source identities = %s", got)
+	}
+	if rec, n := s2.Recover("sess", "holder:1"), lossCount(t, s2, "sess"); n != 2 || rec.Boundary != 3 || rec.MaxSeq != 4 {
+		t.Fatalf("recovery = %+v, loss %d", rec, n)
+	}
+}
+
+// TestStoreTeeAfterItsAnchorIsAdmitted pins the tee rule of the finalized
+// boundary: retaining or losing a record never moves the boundary, so a tee
+// record anchored on the last kept line is appended; once capture finalizes
+// past an anchor, a tee anchored below the boundary is loss, and one anchored
+// on it is still admitted.
+func TestStoreTeeAfterItsAnchorIsAdmitted(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	mustAppend(t, s, sourced("sess", 2, wsaudit.KindToolCall))
+	mustAppend(t, s, tee("sess", 2, 1)) // after kept line 2, before any finalize
+	flush(t, s)
+	if err := s.Finalize(ctx, "sess", "holder:1", 2); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s, tee("sess", 2, 2)) // anchored on the boundary: admitted
+	mustAppend(t, s, tee("sess", 1, 1)) // anchored below it: loss
+	mustAppend(t, s, sourced("sess", 3, wsaudit.KindToolCall))
+	key := sourced("sess", 0, wsaudit.KindSystem)
+	key.id = wsaudit.SourceID{Source: "holder:1", Key: "end.3"}
+	mustAppend(t, s, key) // a synthesized record is never covered
+	flush(t, s)
+	want := "[holder:1/s1#0 holder:1/s2#0 holder:1/t2.1#0 holder:1/t2.2#0 holder:1/s3#0 holder:1/kend.3#0]"
+	if got := fmt.Sprint(retainedIDs(t, s, "sess")); got != want {
+		t.Fatalf("retained = %s", got)
+	}
+	if n := lossCount(t, s, "sess"); n != 1 {
+		t.Fatalf("loss = %d", n)
+	}
+	_ = s.Close()
+	s2, _ := openTest(t, root, nil)
+	loaded(t, s2, "sess")
+	if rec := s2.Recover("sess", "holder:1"); rec != (wsaudit.Recovery{MaxSeq: 6, Boundary: 2}) {
+		t.Fatalf("recovered %+v", rec)
+	}
+	if got := fmt.Sprint(retainedIDs(t, s2, "sess")); got != want || lossCount(t, s2, "sess") != 1 {
+		t.Fatalf("recovered retained = %s", got)
+	}
+}
+
+// TestStoreRecordLossAndBoundaryPersistWithoutALaterRecord pins that capture's
+// RecordLoss and Finalize reach disk once the writer idles, with no further
+// record to carry them, and survive a restart.
+func TestStoreRecordLossAndBoundaryPersistWithoutALaterRecord(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	lost := wsaudit.SourceID{Source: "holder:1", Seq: 2}
+	if err := s.RecordLoss(ctx, "sess", lost, wsaudit.LossDropped); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finalize(ctx, "sess", "holder:1", 2); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	flush(t, s) // the writer idled in between
+	raw, err := os.ReadFile(filepath.Join(root, "sess", segmentName(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"t":"loss"`)) || !bytes.Contains(raw, []byte(`"reason":"dropped"`)) || !bytes.Contains(raw, []byte(`"t":"fin"`)) {
+		t.Fatalf("control lines not on disk:\n%s", raw)
+	}
+	_ = s.Close()
+	s3, _ := openTest(t, root, nil)
+	loaded(t, s3, "sess")
+	if rec := s3.Recover("sess", "holder:1"); rec.Boundary != 2 || lossCount(t, s3, "sess") != 1 {
+		t.Fatalf("recovered %+v", rec)
+	}
+	mustAppend(t, s3, sourced("sess", 2, wsaudit.KindToolCall)) // replayed: already lost
+	flush(t, s3)
+	if got := fmt.Sprint(sourceSeqs(t, s3, "sess")); got != "[1]" {
+		t.Fatalf("source identities = %s", got)
+	}
+}
+
+// TestStoreRecoveryAnswersNeverWaitOnAWrite pins the SourcedSink contract:
+// Recover, Retained and AppendSourced return while the writer is stuck in a
+// disk write of the same ring.
+func TestStoreRecoveryAnswersNeverWaitOnAWrite(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	s, _ := openTest(t, t.TempDir(), nil)
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	s.Close()
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return orig(f, b)
+	}
+	root := s.opts.Root
+	s2, _ := openTest(t, root, nil)
+	defer close(release)
+	loaded(t, s2, "sess")
+	mustAppend(t, s2, sourced("sess", 2, wsaudit.KindToolCall))
+	<-entered
+	done := make(chan wsaudit.Recovery, 1)
+	go func() {
+		_ = s2.AppendSourced(context.Background(), wsaudit.SourceID{Source: "holder:1", Seq: 3}, wsaudit.SourceID{Source: "holder:1", Seq: 3}, sourced("sess", 3, wsaudit.KindToolCall).Envelope)
+		if !s2.Retained("sess", wsaudit.SourceID{Source: "holder:1", Seq: 1}) {
+			t.Error("retained identity not reported")
+		}
+		done <- s2.Recover("sess", "holder:1")
+	}()
+	select {
+	case rec := <-done:
+		if rec.MaxSeq != 1 {
+			t.Fatalf("recovery during a write = %+v", rec)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery questions waited on the writer's disk write")
+	}
+}
+
+// TestStoreRefusesNewerRingFormat pins Decision 4: a ring holding a newer
+// schema version is not written.
+func TestStoreRefusesNewerRingFormat(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "sess")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seg := filepath.Join(dir, segmentName(1))
+	content := []byte(`{"t":"h","v":2,"session":"sess"}` + "\n" + `{"t":"future"}` + "\n")
+	if err := os.WriteFile(seg, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, log := openTest(t, root, nil)
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	raw, _ := os.ReadFile(seg)
+	if !bytes.Equal(raw, content) {
+		t.Fatal("the newer ring was written")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("a new segment was added: %d files", len(entries))
+	}
+	if !strings.Contains(log.String(), "newer format") {
+		t.Fatalf("refusal not logged: %s", log.String())
+	}
+}
+
+// TestStoreRecoversIndependentRingsModesAndHeldHandle pins recovery into the
+// in-memory index, one ring per session, 0600/0700 modes, and one held
+// handle: steady appends open nothing and write once each.
+func TestStoreRecoversIndependentRingsModesAndHeldHandle(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "audit")
+	s, _ := openTest(t, root, nil)
+	mustAppend(t, s, sourced("alpha", 1, wsaudit.KindToolCall))
+	mustAppend(t, s, sourced("beta", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	before := wsstate.FileIOCounters()
+	const n = 50
+	for seq := uint64(2); seq < 2+n; seq++ {
+		mustAppend(t, s, sourced("alpha", seq, wsaudit.KindToolCall))
+	}
+	flush(t, s)
+	after := wsstate.FileIOCounters()
+	if opens := after["file_io_open_file"] - before["file_io_open_file"]; opens != 0 {
+		t.Fatalf("steady appends opened %d files", opens)
+	}
+	if writes := after["file_io_write"] - before["file_io_write"]; writes != n {
+		t.Fatalf("%d appends made %d writes", n, writes)
+	}
+	t.Logf("file ops for %d steady appends: total %d (writes %d)", n, after["file_io_total"]-before["file_io_total"], after["file_io_write"]-before["file_io_write"])
+	_ = s.Close()
+
+	s2, _ := openTest(t, root, nil)
+	if got := len(events(t, s2, "alpha")); got != 1+n {
+		t.Fatalf("alpha recovered %d events", got)
+	}
+	if got := fmt.Sprint(sourceSeqs(t, s2, "beta")); got != "[1]" {
+		t.Fatalf("beta = %s", got)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	for _, path := range []string{filepath.Join(root, "alpha"), filepath.Join(root, "beta"), root} {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s mode %v %v", path, info.Mode().Perm(), err)
+		}
+	}
+	info, err := os.Stat(filepath.Join(root, "alpha", segmentName(1)))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("segment mode %v %v", info.Mode().Perm(), err)
+	}
+}
+
+// TestStoreTornTailIsTrimmed pins recovery from a torn last line.
+func TestStoreTornTailIsTrimmed(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	_ = s.Close()
+	seg := filepath.Join(root, "sess", segmentName(1))
+	f, _ := os.OpenFile(seg, os.O_WRONLY|os.O_APPEND, 0o600)
+	_, _ = f.WriteString(`{"t":"e","e":{"v":1,"id":"torn`)
+	_ = f.Close()
+	s2, _ := openTest(t, root, nil)
+	mustAppend(t, s2, sourced("sess", 2, wsaudit.KindToolCall))
+	flush(t, s2)
+	_ = s2.Close()
+	s3, _ := openTest(t, root, nil)
+	if got := fmt.Sprint(sourceSeqs(t, s3, "sess")); got != "[1 2]" {
+		t.Fatalf("recovered %s", got)
+	}
+}
+
+// TestStoreSlowOrFailingWriterNeverDelaysProducer pins the non-blocking
+// writer: a slow disk fills the queue and drops with a log line, and a
+// failing disk drops with a log line, while Append returns at once.
+func TestStoreSlowOrFailingWriterNeverDelaysProducer(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	release := make(chan struct{})
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		<-release
+		return orig(f, b)
+	}
+	s, log := openTest(t, t.TempDir(), func(o *Options) { o.QueueDepth = 4 })
+	start := time.Now()
+	var full int
+	for seq := uint64(1); seq <= 200; seq++ {
+		if err := s.Append(context.Background(), sourced("sess", seq, wsaudit.KindToolCall).Envelope); errors.Is(err, ErrQueueFull) {
+			full++
+		}
+	}
+	elapsed := time.Since(start)
+	close(release)
+	_ = s.Close()
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("200 appends against a stalled disk took %s", elapsed)
+	}
+	if full == 0 || s.Dropped() < uint64(full) || !strings.Contains(log.String(), "write queue full") {
+		t.Fatalf("full=%d dropped=%d log=%q", full, s.Dropped(), log.String())
+	}
+
+	writeFile = func(*os.File, []byte) (int, error) { return 0, errors.New("disk gone") }
+	s2, log2 := openTest(t, t.TempDir(), nil)
+	start = time.Now()
+	for seq := uint64(1); seq <= 20; seq++ {
+		if err := s2.Append(context.Background(), sourced("sess", seq, wsaudit.KindToolCall).Envelope); err != nil {
+			t.Fatalf("append returned %v", err)
+		}
+	}
+	if time.Since(start) > 200*time.Millisecond {
+		t.Fatal("appends waited on a failing disk")
+	}
+	flush(t, s2)
+	if s2.Dropped() != 20 || !strings.Contains(log2.String(), "disk gone") {
+		t.Fatalf("dropped=%d log=%q", s2.Dropped(), log2.String())
+	}
+}
+
+// TestStoreFileOpsPerAppendedEvent measures file operations per appended
+// event (performance.md, Measuring): one write in steady state, and a
+// bounded handful at rotation and eviction.
+func TestStoreFileOpsPerAppendedEvent(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 64 * kib, Retention: MinRetention}
+	s, _ := openTest(t, t.TempDir(), func(o *Options) { o.Limits = lim })
+	body := strings.Repeat("x", 60*1024)
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	before := wsstate.FileIOCounters()
+	const n = 200 // ~12 MiB through a 4 MiB ring of 1 MiB segments
+	finals := int64(0)
+	for seq := uint64(2); seq < 2+n; seq++ {
+		ev := sourced("sess", seq, wsaudit.KindToolResult)
+		ev.Out = body
+		mustAppend(t, s, ev)
+		if seq%16 == 0 {
+			// Capture finalizes when idle; the fin line rides the next record
+			// or one idle write, never more.
+			if err := s.Finalize(context.Background(), "sess", "holder:1", seq); err != nil {
+				t.Fatal(err)
+			}
+			finals++
+			flush(t, s)
+		}
+	}
+	flush(t, s)
+	flush(t, s)
+	after := wsstate.FileIOCounters()
+	delta := func(k string) int64 { return after[k] - before[k] }
+	rotations := delta("file_io_open_file")
+	t.Logf("%d appends, %d finalizes: total %d file ops (write %d, open %d, close %d, remove %d) = %.2f per event; %d rotations",
+		n, finals, delta("file_io_total"), delta("file_io_write"), rotations, delta("file_io_close"), delta("file_io_remove"),
+		float64(delta("file_io_total"))/n, rotations)
+	// A rotation writes its header on its own, before the ring trims, so
+	// the old segments stay the recovery point until it lands.
+	if w := delta("file_io_write"); w < n || w > n+finals+rotations || delta("file_io_total") > n+finals+4*rotations {
+		t.Fatalf("file ops exceed one write per event and per finalize plus rotation: writes %d, total %d", w, delta("file_io_total"))
+	}
+	if rec := s.Recover("sess", "holder:1"); rec.Boundary != 2+n-1-(2+n-1)%16 {
+		t.Fatalf("boundary %d", rec.Boundary)
+	}
+	if delta("file_io_read_file") != 0 || delta("file_io_read_dir") != 0 {
+		t.Fatal("appends reread files")
+	}
+}
+
+// TestStoreSiblingsOfOneSourceRecordAreAllRetained pins the review's
+// regression: the envelopes one source record yields (Ordinal) and the tee
+// lines of one interval (Index) share a source position, and every one is
+// retained on a clean run; once capture finalizes past that position, a
+// replayed sibling is a duplicate and one never appended is loss.
+func TestStoreSiblingsOfOneSourceRecordAreAllRetained(t *testing.T) {
+	s, _ := openTest(t, t.TempDir(), nil)
+	ctx := context.Background()
+	for ord := 0; ord < 3; ord++ {
+		it := sourced("sess", 5, wsaudit.KindToolCall)
+		it.id.Ordinal = ord
+		it.ID = fmt.Sprintf("ev-5-%d", ord)
+		mustAppend(t, s, it)
+	}
+	for idx := uint64(1); idx <= 2; idx++ {
+		mustAppend(t, s, tee("sess", 7, idx))
+	}
+	flush(t, s)
+	want := "[holder:1/s5#0 holder:1/s5#1 holder:1/s5#2 holder:1/t7.1#0 holder:1/t7.2#0]"
+	if got := fmt.Sprint(retainedIDs(t, s, "sess")); got != want || lossCount(t, s, "sess") != 0 {
+		t.Fatalf("retained %s, loss %d", got, lossCount(t, s, "sess"))
+	}
+	if err := s.Finalize(ctx, "sess", "holder:1", 8); err != nil {
+		t.Fatal(err)
+	}
+	replay := sourced("sess", 5, wsaudit.KindToolCall)
+	replay.id.Ordinal = 1
+	mustAppend(t, s, replay)
+	missing := sourced("sess", 5, wsaudit.KindToolCall)
+	missing.id.Ordinal = 3
+	mustAppend(t, s, missing)
+	flush(t, s)
+	if got := fmt.Sprint(retainedIDs(t, s, "sess")); got != want || lossCount(t, s, "sess") != 1 {
+		t.Fatalf("after finalize: retained %s, loss %d", got, lossCount(t, s, "sess"))
+	}
+}
+
+// TestStoreDisplayKeyLookupNormalizesRawIDsExactlyOnce pins Decision 3's
+// ownership split: capture hands the store raw IDs, the store normalizes each
+// exactly once at ingestion, and a lookup by the display key
+// (wsaudit.NormalizeID of the raw ID) finds the record before and after a
+// restart; a key normalized twice does not, and a short literal ID still
+// resolves to itself.
+func TestStoreDisplayKeyLookupNormalizesRawIDsExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	session := strings.Repeat("s", 300) // a raw session ID past the identifier bound
+	rawID, rawCall, rawParent := strings.Repeat("i", 300), strings.Repeat("c", 300), strings.Repeat("p", 300)
+	long := sourced(session, 1, wsaudit.KindToolCall)
+	long.ID, long.CallID, long.ParentID = rawID, rawCall, rawParent
+	short := sourced(session, 2, wsaudit.KindToolResult)
+	short.ID, short.CallID = "short-id", "call-1"
+	mustAppend(t, s, long)
+	mustAppend(t, s, short)
+	flush(t, s)
+	check := func(s *Store) {
+		t.Helper()
+		ctx := context.Background()
+		ev, ok, err := s.Event(ctx, session, wsaudit.NormalizeID(rawID))
+		if err != nil || !ok || ev.CallID != wsaudit.NormalizeID(rawCall) || ev.ParentID != wsaudit.NormalizeID(rawParent) {
+			t.Fatalf("display-key lookup = %+v %v %v", ev, ok, err)
+		}
+		if _, ok, _ := s.Event(ctx, session, wsaudit.NormalizeID(wsaudit.NormalizeID(rawID))); ok {
+			t.Fatal("a twice-normalized key found the record")
+		}
+		if evs, _ := s.EventsByCallID(ctx, session, wsaudit.NormalizeID(rawCall)); len(evs) != 1 || evs[0].ID != wsaudit.NormalizeID(rawID) {
+			t.Fatalf("call-key lookup = %+v", evs)
+		}
+		if _, ok, _ := s.Event(ctx, session, "short-id"); !ok {
+			t.Fatal("a short literal ID did not resolve to itself")
+		}
+		if evs, _ := s.EventsByCallID(ctx, session, "call-1"); len(evs) != 1 {
+			t.Fatalf("short call key = %+v", evs)
+		}
+	}
+	check(s)
+	_ = s.Close()
+	s2, _ := openTest(t, root, nil)
+	check(s2)
+}
+
+// TestStoreJobsRunInCallOrder pins one ordered writer queue: with the queue
+// full, a RecordLoss and a Finalize are not overtaken by an append that finds
+// a freed slot after them, and a Flush returns only after both ran.
+func TestStoreJobsRunInCallOrder(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	tokens := make(chan struct{})
+	entered := make(chan struct{}, 64)
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		if bytes.HasPrefix(b, []byte(`{"t":"h"`)) {
+			return orig(f, b) // a rotation's own header write
+		}
+		entered <- struct{}{}
+		<-tokens
+		return orig(f, b)
+	}
+	s, _ := openTest(t, t.TempDir(), func(o *Options) { o.QueueDepth = 2 })
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	<-entered // the writer is inside the write of 1
+	mustAppend(t, s, sourced("sess", 2, wsaudit.KindToolCall))
+	mustAppend(t, s, sourced("sess", 3, wsaudit.KindToolCall))
+	four := sourced("sess", 4, wsaudit.KindToolCall)
+	if err := s.AppendSourced(ctx, four.id, four.rec(), four.Envelope); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("append past the queue depth = %v", err)
+	}
+	if err := s.RecordLoss(ctx, "sess", four.id, wsaudit.LossQueueFull); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finalize(ctx, "sess", "holder:1", 4); err != nil {
+		t.Fatal(err)
+	}
+	tokens <- struct{}{} // finish 1; the writer moves on to 2 and frees a slot
+	<-entered
+	late := tee("sess", 3, 1) // anchored below the boundary finalized before it
+	if err := s.AppendSourced(ctx, late.id, late.rec(), late.Envelope); err != nil {
+		t.Fatalf("append into a freed slot = %v", err)
+	}
+	close(tokens)
+	flush(t, s)
+	if rec := s.Recover("sess", "holder:1"); rec.Boundary != 4 {
+		t.Fatalf("flush returned before the queued Finalize ran: %+v", rec)
+	}
+	want := "[holder:1/s1#0 holder:1/s2#0 holder:1/s3#0]"
+	if got := fmt.Sprint(retainedIDs(t, s, "sess")); got != want || lossCount(t, s, "sess") != 2 {
+		t.Fatalf("retained %s, loss %d", got, lossCount(t, s, "sess"))
+	}
+}
+
+// TestStoreCloseDrainsEveryAcceptedJob pins Close against concurrent
+// producers: every control job accepted before Close reaches disk.
+func TestStoreCloseDrainsEveryAcceptedJob(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		root := t.TempDir()
+		s, _ := openTest(t, root, nil)
+		mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+		flush(t, s)
+		var mu sync.Mutex
+		var accepted uint64
+		var wg sync.WaitGroup
+		for g := 0; g < 4; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				for b := uint64(g + 2); ; b += 4 {
+					if s.Finalize(context.Background(), "sess", "holder:1", b) != nil {
+						return
+					}
+					mu.Lock()
+					accepted = max(accepted, b)
+					mu.Unlock()
+				}
+			}(g)
+		}
+		time.Sleep(time.Millisecond)
+		_ = s.Close()
+		wg.Wait()
+		s2, _ := openTest(t, root, nil)
+		loaded(t, s2, "sess")
+		if rec := s2.Recover("sess", "holder:1"); rec.Boundary != accepted {
+			t.Fatalf("round %d: recovered boundary %d, accepted up to %d", round, rec.Boundary, accepted)
+		}
+		_ = s2.Close()
+	}
+}
+
+// bigRecord is a sourced record with two bodies at the per-body cap, so each
+// fills most of a segment at the smallest limits.
+func bigRecord(session string, seq uint64, lim Limits) item {
+	it := sourced(session, seq, wsaudit.KindToolResult)
+	body := strings.Repeat("y", int(lim.BodyBytes)-64)
+	it.In, it.Out = body, body
+	return it
+}
+
+// TestStoreLossCountSurvivesWrapAndRestart pins durable loss accounting: a
+// covered loss whose line lands after a rotation's header is counted once
+// after the segment before it wraps away and the store restarts, and a
+// replayed RecordLoss of that identity is not counted again.
+func TestStoreLossCountSurvivesWrapAndRestart(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	root := t.TempDir()
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	var once sync.Once
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		once.Do(func() { entered <- struct{}{}; <-hold })
+		return orig(f, b)
+	}
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	mustAppend(t, s, bigRecord("sess", 1, lim))
+	<-entered // queue the rest behind the first write, so no idle flush splits them
+	if err := s.Finalize(ctx, "sess", "holder:1", 5); err != nil {
+		t.Fatal(err)
+	}
+	lost := wsaudit.SourceID{Source: "holder:1", Seq: 3} // covered by the boundary
+	if err := s.RecordLoss(ctx, "sess", lost, wsaudit.LossDropped); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s, bigRecord("sess", 6, lim)) // rotates: header, then the loss line
+	close(hold)
+	for seq := uint64(7); seq <= 16; seq++ { // wrap the first segments away
+		mustAppend(t, s, bigRecord("sess", seq, lim))
+	}
+	flush(t, s)
+	if _, err := os.Stat(filepath.Join(root, "sess", segmentName(1))); !os.IsNotExist(err) {
+		t.Fatalf("the first segment did not wrap: %v", err)
+	}
+	if n := lossCount(t, s, "sess"); n != 1 {
+		t.Fatalf("loss before restart = %d", n)
+	}
+	_ = s.Close()
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	loaded(t, s2, "sess")
+	if n := lossCount(t, s2, "sess"); n != 1 {
+		t.Fatalf("loss after wrap and restart = %d", n)
+	}
+	if err := s2.RecordLoss(ctx, "sess", lost, wsaudit.LossDropped); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s2, sourced("sess", 3, wsaudit.KindToolCall))
+	flush(t, s2)
+	if n := lossCount(t, s2, "sess"); n != 1 {
+		t.Fatalf("a replayed loss of a counted identity counted again: %d", n)
+	}
+}
+
+// TestStoreLostSetFoldsIntoABoundedHeader pins the header bound of the lost
+// set: thousands of covered losses fold into the lost floor, the rotation
+// header stays within the budget, and replays of folded identities are not
+// counted again across a restart.
+func TestStoreLostSetFoldsIntoABoundedHeader(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	root := t.TempDir()
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	const n = 3000
+	if err := s.Finalize(ctx, "sess", "holder:1", n+1); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(2); seq < n+2; seq++ {
+		if err := s.RecordLoss(ctx, "sess", wsaudit.SourceID{Source: "holder:1", Seq: seq}, wsaudit.LossDropped); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for seq := uint64(n + 2); seq < n+14; seq++ {
+		mustAppend(t, s, bigRecord("sess", seq, lim))
+	}
+	flush(t, s)
+	segs, _, err := listSegments(filepath.Join(root, "sess"))
+	if err != nil || len(segs) < 2 || segs[0].seq == 1 {
+		t.Fatalf("segments %+v %v: want the first wrapped away", segs, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "sess", segmentName(segs[0].seq)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := raw[:bytes.IndexByte(raw, '\n')]
+	if len(header) > lostBudget+4096 {
+		t.Fatalf("rotation header is %d bytes", len(header))
+	}
+	_ = s.Close()
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	loaded(t, s2, "sess")
+	if got := lossCount(t, s2, "sess"); got != n {
+		t.Fatalf("loss after restart = %d, want %d", got, n)
+	}
+	for seq := uint64(2); seq < n+2; seq++ {
+		_ = s2.RecordLoss(ctx, "sess", wsaudit.SourceID{Source: "holder:1", Seq: seq}, wsaudit.LossDropped)
+	}
+	flush(t, s2)
+	if got := lossCount(t, s2, "sess"); got != n {
+		t.Fatalf("replayed losses counted again: %d", got)
+	}
+}
+
+// TestStoreSparseLossesNeverSettleUnseenIdentities pins that bounding the
+// lost set never settles an identity it has not seen: with thousands of
+// sparse losses (every even sequence) over the budget, a never-seen odd
+// record below them is still counted as a loss when covered by the boundary,
+// and still appended when not — before and after a restart.
+func TestStoreSparseLossesNeverSettleUnseenIdentities(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	root := t.TempDir()
+	s, log := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	const top = 3000
+	if err := s.Finalize(ctx, "covered", "holder:1", top+1); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []string{"covered", "open"} {
+		for seq := uint64(2); seq <= top; seq += 2 {
+			if err := s.RecordLoss(ctx, session, wsaudit.SourceID{Source: "holder:1", Seq: seq}, wsaudit.LossDropped); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	flush(t, s)
+	if !strings.Contains(log.String(), "lost identities forgotten") {
+		t.Fatalf("setup: the lost set never ran over its budget: %s", log.String())
+	}
+	const losses = top / 2
+	check := func(s *Store, odd uint64, wantLoss uint64) {
+		t.Helper()
+		mustAppend(t, s, sourced("covered", odd, wsaudit.KindToolCall))
+		mustAppend(t, s, sourced("open", odd, wsaudit.KindToolCall))
+		flush(t, s)
+		if got := lossCount(t, s, "covered"); got != wantLoss {
+			t.Fatalf("covered never-seen record %d: loss %d, want %d", odd, got, wantLoss)
+		}
+		if seqs := sourceSeqs(t, s, "open"); len(seqs) == 0 || seqs[len(seqs)-1] != odd {
+			t.Fatalf("uncovered never-seen record %d was not appended: %v", odd, seqs)
+		}
+	}
+	check(s, 3, losses+1)
+	_ = s.Close()
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	loaded(t, s2, "covered")
+	loaded(t, s2, "open")
+	check(s2, 5, losses+2)
+}
+
+// TestStoreTornHeaderNeverLeavesAHeaderlessLiveSegment pins recovery from a
+// segment whose header line is torn (a crash right after rotation): the
+// next write opens a new segment with a valid header instead of appending
+// headerless lines, and every event survives another restart.
+func TestStoreTornHeaderNeverLeavesAHeaderlessLiveSegment(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	_ = s.Close()
+	for i, torn := range []string{`{"t":"h","v":1,"sess`, `{"t":"h","v":1,garbage}` + "\n"} {
+		segs, _, _ := listSegments(filepath.Join(root, "sess"))
+		next := segs[len(segs)-1].seq + 1
+		if err := os.WriteFile(filepath.Join(root, "sess", segmentName(next)), []byte(torn), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s2, _ := openTest(t, root, nil)
+		mustAppend(t, s2, sourced("sess", uint64(i+2), wsaudit.KindToolCall))
+		flush(t, s2)
+		_ = s2.Close()
+	}
+	segs, _, _ := listSegments(filepath.Join(root, "sess"))
+	for _, seg := range segs {
+		raw, err := os.ReadFile(filepath.Join(root, "sess", segmentName(seg.seq)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(raw, []byte(`"t":"e"`)) {
+			continue
+		}
+		var ln line
+		if nl := bytes.IndexByte(raw, '\n'); nl < 0 || json.Unmarshal(raw[:nl], &ln) != nil || ln.T != lineHeader {
+			t.Fatalf("segment %d holds events without a valid header:\n%s", seg.seq, raw)
+		}
+	}
+	s3, _ := openTest(t, root, nil)
+	if got := fmt.Sprint(sourceSeqs(t, s3, "sess")); got != "[1 2 3]" {
+		t.Fatalf("recovered %s", got)
+	}
+}
+
+// TestStoreBurstOfControlLinesNeverOverflowsASegment pins the write bound:
+// thousands of queued loss lines plus a rotation header are written in
+// chunks, so no write and no segment exceeds the segment size.
+func TestStoreBurstOfControlLinesNeverOverflowsASegment(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	var mu sync.Mutex
+	var largest int
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	var once sync.Once
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		once.Do(func() { entered <- struct{}{}; <-hold })
+		mu.Lock()
+		largest = max(largest, len(b))
+		mu.Unlock()
+		return orig(f, b)
+	}
+	root := t.TempDir()
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	mustAppend(t, s, bigRecord("sess", 1, lim))
+	<-entered // everything below queues behind the first write
+	const n = 20000
+	if err := s.Finalize(ctx, "sess", "holder:1", n+2); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(2); seq < n+2; seq++ {
+		_ = s.RecordLoss(ctx, "sess", wsaudit.SourceID{Source: "holder:1", Seq: seq, Ordinal: 7}, wsaudit.LossDropped)
+	}
+	mustAppend(t, s, bigRecord("sess", n+3, lim))
+	close(hold)
+	flush(t, s)
+	if int64(largest) > lim.SegmentBytes() {
+		t.Fatalf("a single write of %d bytes exceeds the %d-byte segment", largest, lim.SegmentBytes())
+	}
+	segs, _, _ := listSegments(filepath.Join(root, "sess"))
+	var total int64
+	for _, seg := range segs {
+		total += seg.size
+		if seg.size > lim.SegmentBytes() {
+			t.Fatalf("segment %d holds %d bytes", seg.seq, seg.size)
+		}
+	}
+	if total > lim.EffectiveSessionBytes() {
+		t.Fatalf("ring holds %d bytes", total)
+	}
+	if got := lossCount(t, s, "sess"); got != n {
+		t.Fatalf("loss = %d", got)
+	}
+}
+
+// blockingLog is a log writer stuck until released, like a log file on a
+// stalled disk.
+type blockingLog struct{ release chan struct{} }
+
+func (b *blockingLog) Write(p []byte) (int, error) {
+	<-b.release
+	return len(p), nil
+}
+
+// TestStoreQueueFullNeverWaitsOnTheLog pins the interactive path: a producer
+// that finds the queue full returns at once even when the log writer is
+// stuck; the writer reports the drops once it catches up.
+func TestStoreQueueFullNeverWaitsOnTheLog(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	stall := make(chan struct{})
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		<-stall
+		return orig(f, b)
+	}
+	logw := &blockingLog{release: make(chan struct{})}
+	s, err := Open(Options{Root: t.TempDir(), Log: logw, SweepInterval: -1, QueueDepth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() {
+		full := 0
+		for seq := uint64(1); seq <= 50; seq++ {
+			if errors.Is(s.Append(context.Background(), sourced("sess", seq, wsaudit.KindToolCall).Envelope), ErrQueueFull) {
+				full++
+			}
+		}
+		done <- full
+	}()
+	select {
+	case full := <-done:
+		if full == 0 {
+			t.Fatal("the queue never filled")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a full queue made the producer wait on the log writer")
+	}
+	close(stall)
+	close(logw.release)
+	_ = s.Close()
+}
+
+// TestStoreReadsNeverWaitOnAWrite pins reads against a stalled disk: Events,
+// Event and EventsByCallID answer from memory while the writer is stuck in a
+// write of the same ring.
+func TestStoreReadsNeverWaitOnAWrite(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	s, _ := openTest(t, t.TempDir(), nil)
+	first := sourced("sess", 1, wsaudit.KindToolCall)
+	first.CallID = "call-1"
+	mustAppend(t, s, first)
+	flush(t, s)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return orig(f, b)
+	}
+	defer close(release)
+	mustAppend(t, s, sourced("sess", 2, wsaudit.KindToolCall))
+	<-entered
+	done := make(chan error, 1)
+	go func() {
+		ctx := context.Background()
+		evs, err := s.Events(ctx, "sess")
+		if err == nil && len(evs) != 1 {
+			err = fmt.Errorf("events = %d", len(evs))
+		}
+		if _, ok, _ := s.Event(ctx, "sess", "ev-1"); !ok && err == nil {
+			err = errors.New("event not found")
+		}
+		if got, _ := s.EventsByCallID(ctx, "sess", "call-1"); len(got) != 1 && err == nil {
+			err = errors.New("call lookup failed")
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reads waited on the writer's disk write")
+	}
+}

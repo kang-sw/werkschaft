@@ -284,6 +284,16 @@ func TestFormatSageRecordAutonomousOrdersRestamp(t *testing.T) {
 		if restampIdx == -1 {
 			t.Fatalf("%s routing must order a re-stamp so the digest covers the fixed body:\n%s", name, out)
 		}
+		// The re-stamp is conditional on the fixes not being in the ticket yet:
+		// a stamp taken after the fixes already covers them.
+		for _, want := range []string{"If any of those", "autonomous issue(s) are not yet in the ticket", "no re-stamp is needed"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("%s routing missing the conditional clause %q:\n%s", name, want, out)
+			}
+		}
+		if strings.Contains(out, "Commit after that second stamp") {
+			t.Fatalf("%s routing still orders an unconditional re-stamp:\n%s", name, out)
+		}
 	}
 
 	clean := formatSageRecord(wsdoc.SageRecordResult{
@@ -583,6 +593,9 @@ func TestServeStdioSageStampDelegateKeyBlocked(t *testing.T) {
 	}
 	if !strings.Contains(rawResp, "-32601") {
 		t.Errorf("delegate key: expected JSON-RPC error code -32601, got:\n%s", rawResp)
+	}
+	if !strings.Contains(rawResp, "this key is delegate-scoped") || !strings.Contains(rawResp, "lead-scoped key a worker-role playbook.render spliced into your prompt") {
+		t.Errorf("delegate key: refusal must say a lead-only tool needs the spliced lead-scoped key, got:\n%s", rawResp)
 	}
 	// The rejection must be a pure gate error, not a partial write.
 	body, readErr := os.ReadFile(filepath.Join(root, "ai-docs", "tickets", "todo", "260101-feat-blocked.md"))

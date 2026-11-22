@@ -35,6 +35,15 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if err != nil {
 		return HostedView{}, fmt.Errorf("exec: the owning session cannot take a job: %w", err)
 	}
+	// The job's resolved places, so a worktree fence matches it however
+	// its working directory was spelled and the process starts where
+	// admission checked; once per launch, stored with the row. A place that
+	// cannot be resolved refuses the launch (admittedPlaces), before
+	// anything asks for approval.
+	realRoot, realCwd, err := admittedPlaces(req.Root, req.Cwd)
+	if err != nil {
+		return HostedView{}, err
+	}
 	// The program resolves before the approval, so the prompt names the
 	// binary that starts.
 	argv := append([]string(nil), req.Argv...)
@@ -65,7 +74,7 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		// this job does not record yet, and the job must not be pruned (nor
 		// its id drawn again) until that holder is confirmed gone.
 		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet, starting: true, holderPinned: lookErr == nil}
-		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
+		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, RealRoot: realRoot, RealCwd: realCwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
 		err = h.admit(j)
 		if err == nil {
 			break
@@ -141,7 +150,11 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
-	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: req.Cwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
+	// realCwd is in the ordinary spelling, never the extended-length form:
+	// CreateProcess refuses \\?\ as a current directory. A Windows cwd past
+	// MAX_PATH fails at process start, as it did before admission resolved
+	// it (the path reached the same CreateProcess).
+	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: realCwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
 	close(spawned)
 	if err != nil {
 		if st.PID != 0 {
@@ -215,9 +228,9 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return errors.New("exec: the owning session is closing")
 	}
-	if root := h.fencedRootLocked(j.row); root != "" {
+	if root, reason := h.fencedRootLocked(j); root != "" {
 		h.mu.Unlock()
-		return fmt.Errorf("exec: the worktree %s is being released or removed", root)
+		return fmt.Errorf("exec: the worktree %s is %s", root, reason)
 	}
 	// newID checked the id without holding h.mu through here: a launch
 	// that drew the same id may have been admitted since.

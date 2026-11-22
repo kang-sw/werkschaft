@@ -444,3 +444,31 @@ func TestRefusedWakeKeepsTheMailAndTellsTheSenderOnce(t *testing.T) {
 		t.Fatalf("an admitted wake told the sender: %v", got)
 	}
 }
+
+// A spawned worker's key inherits its spawner's session-scope config: a lead
+// caller names its own ws key (PolicyKey), a token holder's nested spawn names
+// the holder's, and a caller without one mints an independent key.
+func TestAgentSpawnMintsTheChildKeyUnderItsSpawnersPolicyKey(t *testing.T) {
+	h, _ := agentHarness(t, nil)
+	lead := h.leadCaller()
+	lead.PolicyKey = "lead-ws-key"
+	id, _ := h.agentRunning(lead, AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "workdir-write"})
+	key := h.record(id).WSKey
+	if got := h.keys.policyParents[key]; got != "lead-ws-key" {
+		t.Fatalf("worker key policy parent = %q, want the lead's key", got)
+	}
+
+	holder := h.holderOf(id)
+	if holder.PolicyKey != key {
+		t.Fatalf("holder caller policy key = %q, want the worker's own key %q", holder.PolicyKey, key)
+	}
+	nested, _ := h.agentRunning(holder, AgentSpawnRequest{Prompt: "nested", Tier: "small", Authority: "workdir-write"})
+	if got := h.keys.policyParents[h.record(nested).WSKey]; got != key {
+		t.Fatalf("nested worker key policy parent = %q, want %q", got, key)
+	}
+
+	plain, _ := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "plain", Tier: "medium", Authority: "workdir-write"})
+	if got, ok := h.keys.policyParents[h.record(plain).WSKey]; ok {
+		t.Fatalf("a caller without a policy key minted a child key under %q", got)
+	}
+}

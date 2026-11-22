@@ -71,7 +71,9 @@ var dashboardScriptFiles = []string{
 }
 
 var companionScriptFiles = []string{
+	"dashboard-companion-builtins.js",
 	"dashboard-companion-packs.js",
+	"dashboard-companion-focus.js",
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
@@ -373,7 +375,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		CompanionScript:  template.JS(get("dashboard-companion.js")),
 		CompanionCSS:     template.CSS(get("dashboard-companion.css")),
 		SettingsCSS:      template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css")),
-		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings.js")),
+		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings.js")),
 		SettingsCatalog:  template.JS(get("dashboard-settings-catalog.json")),
 		OverviewScript:   template.JS(get("overview.js")),
 		CardsScript:      template.JS(get("gallery.js") + "\n;\n" + get("cards.js")),

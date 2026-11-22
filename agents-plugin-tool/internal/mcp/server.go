@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kang-sw/devenv/internal/execjob"
+	"github.com/kang-sw/devenv/internal/wscron"
 	"io"
 	"os"
 	"runtime/debug"
@@ -64,6 +65,9 @@ type Server struct {
 	// (server_exec_hosted.go); nil and empty where there is none.
 	exec         func() *execjob.Hosted
 	conversation string
+	// cron returns the daemon's scheduler (ServerOptions.Cron); nil where
+	// there is none.
+	cron func() *wscron.Scheduler
 	// execCutover is the harness of the bound conversation when its
 	// process launched with native shell tools removed (wsagent's exec
 	// cutover): the exec tools are listed, and Codex's fs.* read tools
@@ -73,6 +77,9 @@ type Server struct {
 	// independently of pi.agents, so token-forwarding workers resolve their
 	// harness descriptor without receiving a lead runner handle.
 	agentBackendSource AgentBackendRegistry
+	// callerBinding is the daemon runner's memory-only caller check
+	// (ServerOptions.CallerBinding); nil where no daemon hosts this server.
+	callerBinding CallerBindingReader
 	// env is the caller process's environment; nil reads this process's
 	// live (process_env.go). ownerPID is the caller's PID; zero means this
 	// process. debug is the caller's debug ring.

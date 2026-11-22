@@ -21,6 +21,8 @@ import (
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wscron"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsnote"
 )
@@ -69,7 +71,10 @@ type proxyHost struct {
 	agents mcp.PiAgents
 	// exec is the daemon's hosted exec jobs, bound after StartDaemon; nil
 	// keeps every connection on the legacy exec path.
-	exec   atomic.Pointer[execjob.Hosted]
+	exec atomic.Pointer[execjob.Hosted]
+	// cron is the daemon's scheduler, bound after StartDaemon; nil leaves
+	// the cron tool refusing as unavailable.
+	cron   atomic.Pointer[wscron.Scheduler]
 	boards *mcp.WhiteboardStores
 	notes  *wsnote.Cache
 	// mailLabels resolves mail sender labels for every hosted server
@@ -77,6 +82,9 @@ type proxyHost struct {
 	// store, so a recipient on one connection expands a group mail another
 	// connection sent.
 	mailLabels mcp.MailLabelFunc
+	// credentials is the daemon's provider credential store, which a hosted
+	// `credential` command applies through; nil refuses the command.
+	credentials *wscred.Store
 }
 
 // wait blocks until the replacement goroutine, if any, has ended.
@@ -118,6 +126,11 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 			if reader, ok := h.agents.(mcp.WorktreeChildrenReader); ok {
 				opts.WorktreeChildren = reader
 			}
+			// Every connection, a forwarding worker's too, checks its
+			// authenticated caller against the runner's memory.
+			if binding, ok := h.agents.(mcp.CallerBindingReader); ok {
+				opts.CallerBinding = binding
+			}
 			// A worker now connects through the launcher too. Its capability
 			// token, not a lead runner handle, scopes its nested pi.* calls.
 			if strings.TrimSpace(hello.Env[wsagent.EnvPiToken]) == "" {
@@ -127,6 +140,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		// Only a token-resolved hello names its conversation: the binding
 		// that owns hosted exec jobs.
 		opts.Exec = h.exec.Load
+		opts.Cron = h.cron.Load
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
 		server := mcp.NewServerWithOptions(opts)

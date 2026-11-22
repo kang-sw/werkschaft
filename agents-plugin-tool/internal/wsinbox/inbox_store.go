@@ -61,7 +61,7 @@ func writeEntryJournaled(dir string, entry Entry, journal bool) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	name := stamp + "-" + suffix + ".json"
+	name := entryFileName(stamp, suffix, entry)
 	tmp, err := wsstate.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return "", fmt.Errorf("create inbox temp file: %w", err)
@@ -175,7 +175,7 @@ func readEntry(path string) (Entry, error) {
 	if err := json.Unmarshal(raw, &e); err != nil {
 		return Entry{}, fmt.Errorf("parse inbox entry: %w", err)
 	}
-	return e, nil
+	return provenCron(path, e)
 }
 
 // claim atomically takes the entry name in dir away from the inbox by
@@ -261,6 +261,11 @@ func SteerWithAdmission(dir, name string, admit func(Entry) error) (string, erro
 		_ = rename(claimed, filepath.Join(dir, name))
 		return "", ErrGone
 	}
+	if err == nil && entry.Cron != nil {
+		// A scheduled prompt waits for the turn end; it never steers.
+		_ = rename(claimed, filepath.Join(dir, name))
+		return "", ErrNotSteerable
+	}
 	if err == nil && admit != nil {
 		if err := admit(entry); err != nil {
 			_ = rename(claimed, filepath.Join(dir, name))
@@ -312,5 +317,6 @@ func Cancel(dir, name string) (Entry, error) {
 		return Entry{}, ErrGone
 	}
 	_ = remove(claimed)
+	notifyCronRemoved(entry)
 	return entry, nil
 }

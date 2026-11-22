@@ -76,7 +76,13 @@
           event("session.error", "hud:" + rootId + ":" + ++failures);
         }
       }
-      var ended = new Set();
+      // A native row (the harness's own subagent) is done only on its own
+      // evidence: its tree row shows it ended with a known end (knownEnd). A
+      // row whose observation ended with the outcome unknown, a row that
+      // left the tree (the finished-row cap evicts it), and a transition the
+      // DOM skipped are never read as a finish, and never spend the
+      // completed count's rise.
+      var ended = new Set(), unknown = new Set(), native = new Set(), knownEnd = new Set();
       q("#r-tree .agent:not(.root)", doc).forEach(el => {
         if (el.closest(".ag-source")) return;
         var details = el.querySelector(":scope > details[data-key]"), key = details?.dataset.key;
@@ -84,6 +90,12 @@
         var id = key.replace(/^agent-/, "");
         var reply = details.querySelector(":scope > summary [data-reply-id]")?.dataset.replyId;
         var label = details.querySelector(":scope > summary .aname")?.title;
+        var endUnknown = !!(el.hasAttribute && el.hasAttribute("data-end-unknown"));
+        if (endUnknown) unknown.add(reply || id);
+        if (el.classList.contains("native")) {
+          native.add(reply || id);
+          if (!endUnknown && !el.classList.contains("running") && (el.closest(".tgroup.ended") || el.matches(".done, .failed"))) knownEnd.add(reply || id);
+        }
         if (!children.has(reply || id) && !children.has(id) && !el.classList.contains("running")) {
           ended.add(reply || id);
           return;
@@ -103,7 +115,7 @@
         var canonical = previous?.canonical || id;
         var info = previous || { canonical, spawned: baseline, reportedCurrentTurn: false, awaitingReport: false, lastDoneMs: 0, turnStartedMs: 0, doneSeq: 0 };
         var wasActive = info.active, wasAlive = info.alive;
-        Object.assign(info, node, { alive, active: childActive, canonical });
+        Object.assign(info, node, { alive, active: childActive, canonical, native: !!(info.native || node.native || native.has(id) || native.has(node.id)) });
         agents.set(id, info);
         if (node.id && id !== node.id) agents.set(node.id, info);
         present.add(canonical);
@@ -118,7 +130,14 @@
           }
           if (!info.spawned) { event("subagent.spawn", canonical); info.spawned = true; }
         } else if (wasAlive && !alive) {
-          if ((wasActive && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
+          if (info.native && !knownEnd.has(id) && !knownEnd.has(node.id)) info.awaitingReport = false;
+          else if (unknown.has(id) || unknown.has(node.id)) info.awaitingReport = false;
+          else {
+            // A native finish is in hud.completed too: it is not left over
+            // for another row's disappearance.
+            if (info.native && remaining > 0) remaining--;
+            if ((wasActive && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
+          }
         } else if (wasActive && alive) {
           info.awaitingReport = !info.reportedCurrentTurn;
         }
@@ -126,6 +145,18 @@
       var disappeared = new Set();
       agents.forEach(info => {
         if (present.has(info.canonical) || disappeared.has(info.canonical) || !info.alive) return;
+        if (info.native && (knownEnd.has(info.canonical) || knownEnd.has(info.id))) {
+          if (remaining > 0) remaining--;
+          if ((info.active && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
+          info.alive = info.active = false;
+          disappeared.add(info.canonical);
+          return;
+        }
+        if (info.native || unknown.has(info.canonical) || unknown.has(info.id)) {
+          info.alive = info.active = info.awaitingReport = false;
+          disappeared.add(info.canonical);
+          return;
+        }
         if (ended.has(info.canonical) || ended.has(info.id) || remaining > 0) {
           if (remaining > 0) remaining--;
           if ((info.active && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
