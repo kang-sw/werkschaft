@@ -362,22 +362,35 @@ func (d *Daemon) handleWorkspaceAdmission(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// The approvals land in workspaces.json with one write, and are written
+	// back out when the admission write fails, so a refused batch leaves both
+	// stores as they were.
 	removePaths := append([]string(nil), undoPaths...)
-	for _, p := range approvePaths {
-		a, err := d.workspaces.add(p, false)
+	var restoreList []storedWorkspace
+	restoreWorkspaces := false
+	if len(approvePaths) > 0 {
+		adds, before, err := d.workspaces.addBatch(approvePaths)
 		if err != nil {
 			fmt.Fprintf(d.log, "dashboard: approve workspace: %v\n", err)
 			writeJSON(w, http.StatusInternalServerError, workspaceAdmissionReply{Message: wsi18n.T(lang, "rail.ws.storefailed")})
 			return
 		}
-		removePaths = append(removePaths, p)
-		if a.Root != "" && a.Root != p {
-			removePaths = append(removePaths, a.Root)
+		restoreList, restoreWorkspaces = before, true
+		for i, p := range approvePaths {
+			removePaths = append(removePaths, p)
+			if a := adds[i]; a.Root != "" && a.Root != p {
+				removePaths = append(removePaths, a.Root)
+			}
 		}
 	}
 	if len(rejectPaths) > 0 || len(removePaths) > 0 {
 		if _, err := d.wsAdmission.apply(rejectPaths, removePaths); err != nil {
 			fmt.Fprintf(d.log, "dashboard: apply workspace admission: %v\n", err)
+			if restoreWorkspaces {
+				if rerr := d.workspaces.restore(restoreList); rerr != nil {
+					fmt.Fprintf(d.log, "dashboard: restore workspaces after admission failure: %v\n", rerr)
+				}
+			}
 			writeJSON(w, http.StatusInternalServerError, workspaceAdmissionReply{Message: wsi18n.T(lang, "rail.ws.storefailed")})
 			return
 		}

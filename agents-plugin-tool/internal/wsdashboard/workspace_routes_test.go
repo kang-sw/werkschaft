@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -682,5 +683,82 @@ func TestWorkspaceAdmissionRoute(t *testing.T) {
 	code, rep = postAdm("en", workspaceAdmissionRequest{Selections: []workspaceAdmissionSelection{{Path: pendB, Action: "approve"}}})
 	if code != http.StatusOK || !rep.Applied || !strings.Contains(rep.HTML, `data-ws="`+pendB+`"`) || f.d.wsAdmission.isRejected(pendB) {
 		t.Fatalf("approve rejected root = (%d, %+v), isRejected=%v", code, rep, f.d.wsAdmission.isRejected(pendB))
+	}
+}
+
+// TestWorkspaceAdmissionRouteRestoresApprovalsOnAdmissionWriteFailure: an
+// admission write that fails after the approvals were stored puts
+// workspaces.json back, so the refused batch leaves both stores unchanged and
+// its retained draft is not stale on retry.
+func TestWorkspaceAdmissionRouteRestoresApprovalsOnAdmissionWriteFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory write permission is not enforced by mode bits on Windows")
+	}
+	f := startPageFixture(t, withWorkspaces(t))
+	pendA := t.TempDir()
+	pendB := t.TempDir()
+	pendC := t.TempDir()
+	f.addSession(t, "sa", pendA, "A")
+	f.addSession(t, "sb", pendB, "B")
+	f.addSession(t, "sc", pendC, "C")
+	waitFor(t, "pending sessions indexed", func() bool {
+		_, a := f.d.Index().Session("sa")
+		_, b := f.d.Index().Session("sb")
+		_, c := f.d.Index().Session("sc")
+		return a && b && c
+	})
+	wsFile := filepath.Join(filepath.Dir(f.d.wsAdmission.file), "workspaces.json")
+	wsBefore, _ := os.ReadFile(wsFile)
+
+	// Move the admission file into a readable but unwritable directory:
+	// preflight reads it, the batch's write is refused.
+	lockedDir := t.TempDir()
+	admFile := filepath.Join(lockedDir, "workspace-admission.json")
+	admBefore := []byte(`{"rejected":[],"version":1}` + "\n")
+	if err := os.WriteFile(admFile, admBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockedDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o700) })
+	f.d.wsAdmission.mu.Lock()
+	f.d.wsAdmission.file = admFile
+	f.d.wsAdmission.seen = railFileStamp{}
+	f.d.wsAdmission.mu.Unlock()
+
+	rawBody, err := json.Marshal(workspaceAdmissionRequest{Selections: []workspaceAdmissionSelection{
+		{Path: pendA, Action: "approve"}, {Path: pendB, Action: "approve"}, {Path: pendC, Action: "reject"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(rawBody)
+	code, _, raw := postJSON(t, f.base+workspaceAdmissionRoute, f.base, body)
+	if code != http.StatusInternalServerError || strings.Contains(raw, `"applied":true`) {
+		t.Fatalf("batch with failing admission write = (%d, %s), want unapplied 500", code, raw)
+	}
+	got, _ := os.ReadFile(wsFile)
+	gotDoc, beforeDoc := workspacesDoc{}, workspacesDoc{}
+	_ = json.Unmarshal(got, &gotDoc)
+	_ = json.Unmarshal(wsBefore, &beforeDoc)
+	if len(gotDoc.Workspaces) != len(beforeDoc.Workspaces) {
+		t.Fatalf("refused batch left approvals in workspaces.json: %s (before %s)", got, wsBefore)
+	}
+	for _, ws := range f.d.workspaces.workspaces() {
+		if ws.Path == pendA || ws.Path == pendB {
+			t.Fatalf("refused batch left %s stored", ws.Path)
+		}
+	}
+	if got, _ := os.ReadFile(admFile); string(got) != string(admBefore) {
+		t.Fatalf("refused batch changed the admission file: %s", got)
+	}
+
+	// The retained draft applies on retry once the store is writable.
+	if err := os.Chmod(lockedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, raw := postJSON(t, f.base+workspaceAdmissionRoute, f.base, body); code != http.StatusOK || !strings.Contains(raw, `"applied":true`) {
+		t.Fatalf("retry = (%d, %s), want 200 applied", code, raw)
 	}
 }

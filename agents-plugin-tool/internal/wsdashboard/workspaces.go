@@ -184,6 +184,24 @@ func (s *workspaceStore) add(dir string, dry bool) (workspaceAdd, error) {
 	if err := s.reload(); err != nil {
 		return out, err
 	}
+	changed := s.addLocked(loc, &out)
+	if dry {
+		// The list in memory took the changes; read the file's back.
+		return out, s.reload()
+	}
+	if !changed {
+		return out, nil
+	}
+	if err := s.save(); err != nil {
+		_ = s.reload()
+		return out, err
+	}
+	return out, nil
+}
+
+// addLocked applies one add of loc to the list in memory, recording its
+// result in out; mu is held. It reports whether the list changed.
+func (s *workspaceStore) addLocked(loc workspaceLocation, out *workspaceAdd) bool {
 	changed := s.mergeLinkedLocked(loc.Worktree)
 	switch {
 	case loc.Worktree != "" && s.index(loc.Worktree) >= 0:
@@ -197,18 +215,52 @@ func (s *workspaceStore) add(dir string, dry bool) (workspaceAdd, error) {
 		s.list = append(s.list, storedWorkspace{Path: loc.Root, Repo: loc.Repo})
 		changed = true
 	}
-	if dry {
-		// The list in memory took the changes; read the file's back.
-		return out, s.reload()
+	return changed
+}
+
+// addBatch adds every dir with one write, so a failed write leaves the file
+// as it was. It returns each add's outcome and the list before the batch,
+// which restore puts back when a later write of the same batch fails.
+func (s *workspaceStore) addBatch(dirs []string) ([]workspaceAdd, []storedWorkspace, error) {
+	locs := make([]workspaceLocation, len(dirs))
+	for i, dir := range dirs {
+		locs[i] = locateWorkspace(dir)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.reload(); err != nil {
+		return nil, nil, err
+	}
+	before := append([]storedWorkspace(nil), s.list...)
+	outs := make([]workspaceAdd, len(dirs))
+	changed := false
+	for i, loc := range locs {
+		outs[i] = workspaceAdd{Path: filepath.Clean(dirs[i]), Root: loc.Root, Repo: loc.Repo, Worktree: loc.Worktree}
+		if s.addLocked(loc, &outs[i]) {
+			changed = true
+		}
 	}
 	if !changed {
-		return out, nil
+		return outs, before, nil
 	}
 	if err := s.save(); err != nil {
 		_ = s.reload()
-		return out, err
+		return nil, nil, err
 	}
-	return out, nil
+	return outs, before, nil
+}
+
+// restore writes list back as the stored list: the undo of an addBatch whose
+// batch failed at a later write.
+func (s *workspaceStore) restore(list []storedWorkspace) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.list = append([]storedWorkspace(nil), list...)
+	if err := s.save(); err != nil {
+		_ = s.reload()
+		return err
+	}
+	return nil
 }
 
 // forget removes path from the list; false when it is not in it.
