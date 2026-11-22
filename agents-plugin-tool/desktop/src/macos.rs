@@ -1,7 +1,8 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     ffi::{c_char, c_int, CStr, CString},
     sync::{Arc, OnceLock},
+    time::{Duration, Instant},
 };
 
 use block2::{Block, RcBlock};
@@ -266,9 +267,84 @@ fn log(message: &str) {
     unsafe { syslog(LOG_NOTICE, c"%s".as_ptr(), message.as_ptr()) };
 }
 
-// Superclass of the guarded window class, where an allowed cancel continues.
+// Superclass of the guarded window class, where an allowed call continues.
 static WINDOW_SUPER: OnceLock<&'static AnyClass> = OnceLock::new();
 static ESCAPE_GUARD: OnceLock<()> = OnceLock::new();
+
+extern "C" {
+    // AppKit's NSApp: nil until NSApplication exists (always, in the app).
+    static NSApp: *mut AnyObject;
+}
+
+// NSEventTypeKeyDown / NSEventTypeKeyUp.
+const EVENT_KEY_DOWN: usize = 10;
+const EVENT_KEY_UP: usize = 11;
+// Stack frames logged per full-screen exit attempt.
+const STACK_FRAMES: usize = 40;
+// How long after an Esc keyDown a full-screen exit counts as caused by it.
+const ESCAPE_RECENT: Duration = Duration::from_millis(500);
+
+thread_local! {
+    // When the key monitor last saw an Esc keyDown.
+    static LAST_ESCAPE: Cell<Option<Instant>> = const { Cell::new(None) };
+    // Set while close-to-tray takes the window out of full screen.
+    static ALLOW_EXIT: Cell<bool> = const { Cell::new(false) };
+    // Windows that left full screen on Esc without passing the method guard.
+    static REENTER: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Whether a full-screen exit counts as caused by Esc: the event being
+/// handled is an Esc key, or an Esc keyDown was seen just before.
+fn escape_triggered(current_key: Option<u16>, since_escape: Option<Duration>) -> bool {
+    current_key == Some(KEY_ESCAPE) || since_escape.is_some_and(|elapsed| elapsed < ESCAPE_RECENT)
+}
+
+/// Whether a full-screen exit is refused: Esc caused it and close-to-tray
+/// did not ask for it.
+fn refuses_exit(escape: bool, allowed: bool) -> bool {
+    escape && !allowed
+}
+
+/// `[NSApp currentEvent]` as its type and, for key events, its key code.
+fn current_event() -> Option<(usize, Option<u16>)> {
+    let app = unsafe { NSApp.as_ref() }?;
+    let event: Option<Retained<AnyObject>> = unsafe { msg_send![app, currentEvent] };
+    let event = event?;
+    let kind: usize = unsafe { msg_send![&*event, type] };
+    let key = matches!(kind, EVENT_KEY_DOWN | EVENT_KEY_UP)
+        .then(|| -> u16 { unsafe { msg_send![&*event, keyCode] } });
+    Some((kind, key))
+}
+
+/// Whether the full-screen exit under way counts as caused by Esc, and a
+/// description of why for the log.
+fn exit_trigger() -> (bool, String) {
+    let current = current_event();
+    let since = LAST_ESCAPE.with(Cell::get).map(|at| at.elapsed());
+    let escape = escape_triggered(current.and_then(|(_, key)| key), since);
+    let event = match current {
+        Some((kind, Some(key))) => format!("type {kind} keyCode {key}"),
+        Some((kind, None)) => format!("type {kind}"),
+        None => "none".to_owned(),
+    };
+    let since = since.map_or("never".to_owned(), |elapsed| {
+        format!("{} ms ago", elapsed.as_millis())
+    });
+    let bypass = ALLOW_EXIT.with(Cell::get);
+    let description =
+        format!("current event {event}; last Esc keyDown {since}; close-to-tray {bypass}; Esc-caused {escape}");
+    (escape, description)
+}
+
+/// The current call stack, one log line per frame.
+fn log_stack(context: &str) {
+    let symbols: Retained<AnyObject> = unsafe { msg_send![class!(NSThread), callStackSymbols] };
+    let count: usize = unsafe { msg_send![&*symbols, count] };
+    for index in 0..count.min(STACK_FRAMES) {
+        let frame: Retained<NSString> = unsafe { msg_send![&*symbols, objectAtIndex: index] };
+        log(&format!("Werkschaft: {context} stack {frame}"));
+    }
+}
 
 unsafe extern "C-unwind" fn cancel_operation(this: &AnyObject, _: Sel, sender: Option<&AnyObject>) {
     let mask: usize = unsafe { msg_send![this, styleMask] };
@@ -281,49 +357,82 @@ unsafe extern "C-unwind" fn cancel_operation(this: &AnyObject, _: Sel, sender: O
     }
 }
 
+/// `-[NSWindow toggleFullScreen:]` leaves full screen by sending
+/// `exitFullScreenMode:`, which starts the exit transition; guarding it here
+/// refuses an Esc-caused exit from either entry.
+unsafe extern "C-unwind" fn exit_full_screen_mode(
+    this: &AnyObject,
+    _: Sel,
+    sender: Option<&AnyObject>,
+) {
+    let (escape, description) = exit_trigger();
+    if refuses_exit(escape, ALLOW_EXIT.with(Cell::get)) {
+        log(&format!(
+            "Werkschaft: Esc full-screen exit refused at exitFullScreenMode: ({description})"
+        ));
+        log_stack("refused exit");
+        return;
+    }
+    log(&format!(
+        "Werkschaft: full-screen exit allowed at exitFullScreenMode: ({description})"
+    ));
+    log_stack("allowed exit");
+    if let Some(superclass) = WINDOW_SUPER.get() {
+        let _: () = unsafe { msg_send![super(this, *superclass), exitFullScreenMode: sender] };
+    }
+}
+
+type WindowMethod = unsafe extern "C-unwind" fn(&AnyObject, Sel, Option<&AnyObject>);
+
 #[derive(Debug, PartialEq, Eq)]
 enum Guard {
     Installed,
-    /// The matched class defines `cancelOperation:` itself.
+    /// The matched class defines the method itself.
     AlreadyDefined,
-    /// A guard is already installed on some class.
+    /// Guards already live on a class with another superclass.
     AlreadyInstalled,
     /// No class in the object's hierarchy has the expected name.
     NotFound,
 }
 
-/// Add the full-screen `cancelOperation:` guard to the class named `name` in
-/// `object`'s hierarchy. The method is added to the class once, never by
-/// swapping an object's isa: an observed object (KVO) has a runtime subclass
-/// as its real isa, and replacing that isa drops the observation. Walking up
-/// from the real isa finds the named class beneath any such subclass.
-fn add_cancel_guard(object: &AnyObject, name: &CStr) -> Guard {
-    if WINDOW_SUPER.get().is_some() {
-        return Guard::AlreadyInstalled;
-    }
+/// Add a `void (id sender)` window method to the class named `name` in
+/// `object`'s hierarchy, forwarding to that class's superclass. The method
+/// is added to the class, never by swapping an object's isa: an observed
+/// object (KVO) has a runtime subclass as its real isa, and replacing that
+/// isa drops the observation. Walking up from the real isa finds the named
+/// class beneath any such subclass.
+fn add_window_method(
+    object: &AnyObject,
+    name: &CStr,
+    selector: Sel,
+    method: WindowMethod,
+) -> Guard {
     let mut class = Some(object.class());
     while let Some(current) = class {
         if current.name() == name {
             let Some(superclass) = current.superclass() else {
                 return Guard::NotFound;
             };
-            // Returns NO, adding nothing, if the class already defines
-            // cancelOperation: itself; inherited definitions are overridden.
+            if WINDOW_SUPER
+                .get()
+                .is_some_and(|guarded| !std::ptr::eq(*guarded, superclass))
+            {
+                return Guard::AlreadyInstalled;
+            }
+            // Returns NO, adding nothing, if the class already defines the
+            // method itself; inherited definitions are overridden.
             let added = unsafe {
                 ffi::class_addMethod(
                     (current as *const AnyClass).cast_mut(),
-                    sel!(cancelOperation:),
-                    std::mem::transmute::<
-                        unsafe extern "C-unwind" fn(&AnyObject, Sel, Option<&AnyObject>),
-                        objc2::runtime::Imp,
-                    >(cancel_operation),
+                    selector,
+                    std::mem::transmute::<WindowMethod, objc2::runtime::Imp>(method),
                     c"v@:@".as_ptr(),
                 )
             };
             if !added.as_bool() {
                 return Guard::AlreadyDefined;
             }
-            // Main thread only, so nothing calls the guard before this is set.
+            // Main thread only, so nothing calls the method before this is set.
             let _ = WINDOW_SUPER.set(superclass);
             return Guard::Installed;
         }
@@ -334,8 +443,8 @@ fn add_cancel_guard(object: &AnyObject, name: &CStr) -> Guard {
 
 // kVK_Escape in Carbon's HIToolbox/Events.h.
 const KEY_ESCAPE: u16 = 53;
-// NSEventMaskKeyDown: 1 << NSEventTypeKeyDown (10).
-const EVENT_MASK_KEY_DOWN: u64 = 1 << 10;
+// NSEventMaskKeyDown | NSEventMaskKeyUp: 1 << type.
+const EVENT_MASK_KEYS: u64 = (1 << EVENT_KEY_DOWN) | (1 << EVENT_KEY_UP);
 // Esc keyDowns remembered while WebKit decides whether the page handled them.
 const PENDING_ESCAPES: usize = 8;
 
@@ -382,18 +491,31 @@ thread_local! {
 }
 
 /// Local monitor body; true drops the event before AppKit dispatches it.
+/// Only Esc is looked at, and only Esc is logged: other key codes stay out
+/// of the system log.
 fn drop_key_down(event: &AnyObject) -> bool {
     let key_code: u16 = unsafe { msg_send![event, keyCode] };
     if key_code != KEY_ESCAPE {
         return false;
     }
-    let resent = ESCAPES.with(|escapes| escapes.borrow_mut().resent(EventRef(event.retain())));
+    let kind: usize = unsafe { msg_send![event, type] };
     let window: Option<Retained<AnyObject>> = unsafe { msg_send![event, window] };
     let mask: usize = window.map_or(0, |window| unsafe { msg_send![&*window, styleMask] });
-    let drops = drops_key(key_code, resent, mask);
-    if drops {
-        log("Werkschaft: Esc re-send dropped to keep full screen (page saw the key)");
+    let full_screen = mask & STYLE_MASK_FULL_SCREEN != 0;
+    if kind != EVENT_KEY_DOWN {
+        log(&format!(
+            "Werkschaft: Esc keyUp seen by the key monitor (full screen {full_screen})"
+        ));
+        return false;
     }
+    LAST_ESCAPE.with(|last| last.set(Some(Instant::now())));
+    let resent = ESCAPES.with(|escapes| escapes.borrow_mut().resent(EventRef(event.retain())));
+    let drops = drops_key(key_code, resent, mask);
+    let pass = if resent { "re-send" } else { "first pass" };
+    let action = if drops { "dropped" } else { "passed" };
+    log(&format!(
+        "Werkschaft: Esc keyDown {pass} {action} by the key monitor (full screen {full_screen})"
+    ));
     drops
 }
 
@@ -401,10 +523,9 @@ fn drop_key_down(event: &AnyObject) -> bool {
 ///
 /// WKWebView passes every key to the page first. When the page leaves it
 /// unhandled, WebKit hands the same NSEvent back to `-[NSApplication
-/// sendEvent:]`, and whichever AppKit path then acts on Esc (key equivalent,
-/// `keyDown:`, `cancelOperation:`) can leave full screen. A local monitor runs
-/// at the top of `sendEvent:` for both passes; it lets the first through and
-/// drops only the re-send while in full screen, so page Esc handlers still run.
+/// sendEvent:]`. A local monitor runs at the top of `sendEvent:` for both
+/// passes; it lets the first through and drops only the re-send while in
+/// full screen, so page Esc handlers still run.
 fn monitor_escape() -> bool {
     let block = RcBlock::new(|event: *mut AnyObject| -> *mut AnyObject {
         match unsafe { event.as_ref() } {
@@ -415,7 +536,7 @@ fn monitor_escape() -> bool {
     let monitor: Option<Retained<AnyObject>> = unsafe {
         msg_send![
             class!(NSEvent),
-            addLocalMonitorForEventsMatchingMask: EVENT_MASK_KEY_DOWN,
+            addLocalMonitorForEventsMatchingMask: EVENT_MASK_KEYS,
             handler: &*block
         ]
     };
@@ -423,12 +544,79 @@ fn monitor_escape() -> bool {
     monitor.map(std::mem::forget).is_some()
 }
 
+fn notification_window(notification: *mut AnyObject) -> Option<Retained<AnyObject>> {
+    let notification = unsafe { notification.as_ref() }?;
+    unsafe { msg_send![notification, object] }
+}
+
+fn observe(name: &NSString, block: &Block<dyn Fn(*mut AnyObject)>) {
+    let token: Option<Retained<AnyObject>> = unsafe {
+        msg_send![
+            &*notification_center(),
+            addObserverForName: name,
+            object: None::<&AnyObject>,
+            queue: None::<&AnyObject>,
+            usingBlock: block
+        ]
+    };
+    // Observers stay for the life of the app.
+    if let Some(token) = token {
+        std::mem::forget(token);
+    }
+}
+
+/// Log every full-screen exit with its cause and stack. An Esc-caused exit
+/// that got past the method guard is undone by re-entering full screen once
+/// it ends: a visible flicker, the last resort if some path skips
+/// `exitFullScreenMode:`.
+fn observe_exits() {
+    let will = RcBlock::new(|notification: *mut AnyObject| {
+        let (escape, description) = exit_trigger();
+        log(&format!(
+            "Werkschaft: window will exit full screen ({description})"
+        ));
+        log_stack("will exit");
+        if refuses_exit(escape, ALLOW_EXIT.with(Cell::get)) {
+            if let Some(window) = notification_window(notification) {
+                let address = Retained::as_ptr(&window) as usize;
+                REENTER.with(|reenter| reenter.borrow_mut().push(address));
+                log("Werkschaft: Esc exit got past exitFullScreenMode:; full screen is re-entered once it ends");
+            }
+        }
+    });
+    let finished = |outcome: &'static str| {
+        RcBlock::new(move |notification: *mut AnyObject| {
+            // Close-to-tray's exit is over.
+            ALLOW_EXIT.with(|allow| allow.set(false));
+            let Some(window) = notification_window(notification) else {
+                return;
+            };
+            let address = Retained::as_ptr(&window) as usize;
+            let reenter = REENTER.with(|reenter| {
+                let mut reenter = reenter.borrow_mut();
+                let found = reenter.iter().position(|seen| *seen == address);
+                found.map(|index| reenter.remove(index)).is_some()
+            });
+            log(&format!(
+                "Werkschaft: window {outcome} full screen (re-enter {reenter})"
+            ));
+            if reenter && outcome == "did exit" {
+                let _: () = unsafe { msg_send![&*window, toggleFullScreen: None::<&AnyObject>] };
+            }
+        })
+    };
+    unsafe {
+        observe(NSWindowWillExitFullScreenNotification, &will);
+        observe(NSWindowDidExitFullScreenNotification, &finished("did exit"));
+    }
+}
+
 /// Keep Esc from leaving native full screen.
 ///
-/// The key monitor drops WebKit's re-send of an unhandled Esc. The window
-/// guard also drops any `cancelOperation:` that still reaches the window in
-/// full screen: NSWindow implements it, and nothing between the web view and
-/// the window (Wry's views, NSView, NSResponder) does.
+/// The method guard on `exitFullScreenMode:` refuses an Esc-caused exit.
+/// The key monitor drops WebKit's re-send of an unhandled Esc, the
+/// `cancelOperation:` guard drops that command in full screen, and the exit
+/// observers log every exit and undo one that got past the guard.
 fn guard_escape(webview: &WKWebView) {
     ESCAPE_GUARD.get_or_init(|| {
         if monitor_escape() {
@@ -436,25 +624,36 @@ fn guard_escape(webview: &WKWebView) {
         } else {
             log("Werkschaft: Esc full-screen key monitor not installed");
         }
+        observe_exits();
+        log("Werkschaft: full-screen exit observers installed");
         let window: Option<Retained<AnyObject>> = unsafe { msg_send![webview, window] };
-        let outcome = window.map_or(Guard::NotFound, |window| {
-            add_cancel_guard(&window, WINDOW_CLASS)
-        });
-        log(match outcome {
-            Guard::Installed => "Werkschaft: Esc full-screen window guard installed on TaoWindow",
-            Guard::AlreadyDefined => {
-                "Werkschaft: Esc window guard not installed: TaoWindow defines cancelOperation:"
-            }
-            Guard::AlreadyInstalled => {
-                "Werkschaft: Esc window guard not installed: already installed"
-            }
-            Guard::NotFound => "Werkschaft: Esc window guard not installed: no TaoWindow",
-        });
+        let Some(window) = window else {
+            log("Werkschaft: Esc window guards not installed: web view has no window");
+            return;
+        };
+        for (selector, method, label) in [
+            (
+                sel!(exitFullScreenMode:),
+                exit_full_screen_mode as WindowMethod,
+                "exitFullScreenMode:",
+            ),
+            (
+                sel!(cancelOperation:),
+                cancel_operation as WindowMethod,
+                "cancelOperation:",
+            ),
+        ] {
+            let outcome = add_window_method(&window, WINDOW_CLASS, selector, method);
+            log(&format!(
+                "Werkschaft: Esc window guard {label} on TaoWindow: {outcome:?}"
+            ));
+        }
     });
 }
 
 extern "C" {
-    // AppKit; posted with the window as object once it has left full screen.
+    // AppKit; posted with the window as object around a full-screen exit.
+    static NSWindowWillExitFullScreenNotification: &'static NSString;
     static NSWindowDidExitFullScreenNotification: &'static NSString;
 }
 
@@ -487,6 +686,7 @@ fn notification_center() -> Retained<AnyObject> {
 
 /// Forget a pending hide; true if one was waiting.
 fn cancel_pending_hide() -> bool {
+    ALLOW_EXIT.with(|allow| allow.set(false));
     let Some(token) = PENDING_HIDE.with(|pending| pending.borrow_mut().take()) else {
         return false;
     };
@@ -511,6 +711,8 @@ fn exit_full_screen_then(ns_window: &AnyObject, hide: impl Fn() + 'static) {
         ]
     };
     PENDING_HIDE.with(|pending| *pending.borrow_mut() = token);
+    // The Esc exit guard lets this exit through; cleared when it ends.
+    ALLOW_EXIT.with(|allow| allow.set(true));
     let _: () = unsafe { msg_send![ns_window, toggleFullScreen: None::<&AnyObject>] };
 }
 
@@ -630,11 +832,14 @@ mod tests {
 
     use std::{cell::Cell, rc::Rc};
 
+    use std::time::{Duration, Instant};
+
     use super::{
-        add_cancel_guard, cancel_pending_hide, close_step, drop_key_down, drops_key,
-        exit_full_screen_then, notification_center, swallows_cancel, CloseStep, Guard,
-        NSWindowDidExitFullScreenNotification, Pending, KEY_ESCAPE, PENDING_ESCAPES,
-        STYLE_MASK_FULL_SCREEN,
+        add_window_method, cancel_operation, cancel_pending_hide, close_step, drop_key_down,
+        drops_key, escape_triggered, exit_full_screen_mode, exit_full_screen_then,
+        notification_center, refuses_exit, swallows_cancel, CloseStep, Guard,
+        NSWindowDidExitFullScreenNotification, Pending, WindowMethod, ALLOW_EXIT, ESCAPE_RECENT,
+        KEY_ESCAPE, LAST_ESCAPE, PENDING_ESCAPES, STYLE_MASK_FULL_SCREEN,
     };
 
     #[test]
@@ -665,6 +870,10 @@ mod tests {
         // view class between the web view and the window responds to it.
         let window = AnyClass::get(c"NSWindow").expect("AppKit is linked");
         assert!(defines(window, "cancelOperation:"));
+        // toggleFullScreen: leaves full screen through exitFullScreenMode:,
+        // which the exit guard overrides; both are NSWindow's own.
+        assert!(defines(window, "exitFullScreenMode:"));
+        assert!(defines(window, "toggleFullScreen:"));
         for name in [c"NSView", c"NSResponder", c"WKWebView"] {
             let class = AnyClass::get(name).expect("framework is linked");
             assert!(class.instance_method(sel!(cancelOperation:)).is_none());
@@ -673,6 +882,7 @@ mod tests {
 
     static MASK: AtomicUsize = AtomicUsize::new(0);
     static CANCELS: AtomicUsize = AtomicUsize::new(0);
+    static EXITS: AtomicUsize = AtomicUsize::new(0);
 
     define_class!(
         // Stands in for NSWindow: owns cancelOperation: and reports a mask.
@@ -690,48 +900,115 @@ mod tests {
             fn cancel(&self, _: Option<&AnyObject>) {
                 CANCELS.fetch_add(1, Ordering::SeqCst);
             }
+
+            #[unsafe(method(exitFullScreenMode:))]
+            fn exit(&self, _: Option<&AnyObject>) {
+                EXITS.fetch_add(1, Ordering::SeqCst);
+            }
         }
     );
 
     define_class!(
-        // Stands in for TaoWindow: inherits cancelOperation:.
+        // Stands in for TaoWindow: inherits both methods.
         #[unsafe(super(WindowBase, NSObject))]
         #[name = "WerkschaftTestWindow"]
         struct Window;
     );
 
     #[test]
-    fn guard_drops_cancel_only_in_full_screen() {
-        // Runs as one test: the guard's superclass is process-wide.
+    fn exit_is_refused_only_when_esc_caused_it() {
+        let soon = Some(Duration::from_millis(10));
+        let late = Some(ESCAPE_RECENT + Duration::from_millis(1));
+        assert!(
+            escape_triggered(Some(KEY_ESCAPE), None),
+            "Esc is the current event"
+        );
+        assert!(escape_triggered(None, soon), "an Esc keyDown just before");
+        assert!(
+            escape_triggered(Some(3), soon),
+            "Ctrl+Cmd+F right after an Esc"
+        );
+        assert!(!escape_triggered(Some(3), late), "Ctrl+Cmd+F");
+        assert!(!escape_triggered(None, None), "green button or menu click");
+        assert!(refuses_exit(true, false));
+        assert!(!refuses_exit(true, true), "close-to-tray asked for it");
+        assert!(!refuses_exit(false, false));
+    }
+
+    #[test]
+    fn window_guards_refuse_only_what_they_should() {
+        // Runs as one test: the guards' superclass is process-wide.
         let window: Retained<Window> = unsafe { msg_send![Window::class(), new] };
         let object: &AnyObject = &window;
         let cancel = || {
             let _: () = unsafe { msg_send![object, cancelOperation: None::<&AnyObject>] };
             CANCELS.load(Ordering::SeqCst)
         };
+        let exit = || {
+            let _: () = unsafe { msg_send![object, exitFullScreenMode: None::<&AnyObject>] };
+            EXITS.load(Ordering::SeqCst)
+        };
+        let add = |name, selector, method: WindowMethod| {
+            add_window_method(object, name, selector, method)
+        };
+        let cancel_guard = cancel_operation as WindowMethod;
+        let exit_guard = exit_full_screen_mode as WindowMethod;
 
-        assert_eq!(add_cancel_guard(object, c"NoSuchWindow"), Guard::NotFound);
         assert_eq!(
-            add_cancel_guard(object, c"WerkschaftTestWindowBase"),
+            add(c"NoSuchWindow", sel!(cancelOperation:), cancel_guard),
+            Guard::NotFound
+        );
+        assert_eq!(
+            add(
+                c"WerkschaftTestWindowBase",
+                sel!(cancelOperation:),
+                cancel_guard
+            ),
             Guard::AlreadyDefined
         );
         assert_eq!(cancel(), 1, "nothing installed yet");
 
         assert_eq!(
-            add_cancel_guard(object, c"WerkschaftTestWindow"),
+            add(
+                c"WerkschaftTestWindow",
+                sel!(cancelOperation:),
+                cancel_guard
+            ),
             Guard::Installed
         );
         MASK.store(1 | 2 | 4 | 8, Ordering::SeqCst);
         assert_eq!(cancel(), 2, "windowed: the cancel reaches the superclass");
-        MASK.store(1 | 2 | 4 | 8 | STYLE_MASK_FULL_SCREEN, Ordering::SeqCst);
+        MASK.store(FULL, Ordering::SeqCst);
         assert_eq!(cancel(), 2, "full screen: the cancel is dropped");
         MASK.store(1, Ordering::SeqCst);
         assert_eq!(cancel(), 3, "back to windowed");
-
         assert_eq!(
-            add_cancel_guard(object, c"WerkschaftTestWindow"),
-            Guard::AlreadyInstalled
+            add(
+                c"WerkschaftTestWindow",
+                sel!(cancelOperation:),
+                cancel_guard
+            ),
+            Guard::AlreadyDefined
         );
+
+        // The same class takes the exit guard; no NSApp exists in tests, so
+        // only the recent-Esc record marks an exit as Esc-caused.
+        assert_eq!(
+            add(
+                c"WerkschaftTestWindow",
+                sel!(exitFullScreenMode:),
+                exit_guard
+            ),
+            Guard::Installed
+        );
+        LAST_ESCAPE.with(|last| last.set(None));
+        assert_eq!(exit(), 1, "no Esc: the exit goes through");
+        LAST_ESCAPE.with(|last| last.set(Some(Instant::now())));
+        assert_eq!(exit(), 1, "right after Esc: refused");
+        ALLOW_EXIT.with(|allow| allow.set(true));
+        assert_eq!(exit(), 2, "close-to-tray: goes through");
+        ALLOW_EXIT.with(|allow| allow.set(false));
+        LAST_ESCAPE.with(|last| last.set(None));
     }
 
     const FULL: usize = 1 | 2 | 4 | 8 | STYLE_MASK_FULL_SCREEN;
@@ -791,6 +1068,11 @@ mod tests {
         struct KeyEvent;
 
         impl KeyEvent {
+            #[unsafe(method(type))]
+            fn kind(&self) -> usize {
+                10
+            }
+
             #[unsafe(method(keyCode))]
             fn key_code(&self) -> u16 {
                 KEY_CODE.load(Ordering::SeqCst) as u16
