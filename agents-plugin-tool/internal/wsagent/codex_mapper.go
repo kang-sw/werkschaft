@@ -109,6 +109,12 @@ type codexMapper struct {
 	nativeSeen  map[string]bool
 	nativeOrder []string
 	nativeOpen  map[string]string
+	// context and limits are the latest figures of each half of the
+	// session's usage. A status event replaces the snapshot's whole usage,
+	// and Codex pushes the halves as separate notifications, so every status
+	// event carries both.
+	context *wslive.UsageContext
+	limits  []wslive.UsageLimit
 }
 
 // codexNativeSeenCap bounds the remembered subAgentActivity ids; an id
@@ -169,7 +175,7 @@ func (m *codexMapper) mapLine(line []byte, replies lineReplies) []Event {
 	case msg.Method == "" && hasID:
 		return m.response(msg, replies, now)
 	case msg.Method == "account/rateLimits/updated":
-		return codexLimits(msg.Params)
+		return m.limitsStatus(codexLimits(msg.Params))
 	}
 
 	var p struct {
@@ -266,7 +272,7 @@ func (m *codexMapper) mapLine(line []byte, replies lineReplies) []Event {
 	case "item/completed":
 		return m.item(p.TurnID, p.Item, true, now)
 	case "thread/tokenUsage/updated":
-		return codexUsage(msg.Params)
+		return m.contextStatus(codexUsage(msg.Params))
 	}
 	return nil
 }
@@ -719,7 +725,7 @@ func codexModels(raw json.RawMessage) {
 	codexChoices.models, codexChoices.efforts, codexChoices.at = models, efforts, time.Now()
 }
 
-func codexUsage(raw json.RawMessage) []Event {
+func codexUsage(raw json.RawMessage) *wslive.UsageContext {
 	var p struct {
 		TokenUsage struct {
 			Last *struct {
@@ -743,7 +749,7 @@ func codexUsage(raw json.RawMessage) []Event {
 		hit := float64(last.Cached) * 100 / float64(last.Input)
 		context.CacheHit = &hit
 	}
-	return []Event{{Live: &wslive.Event{Kind: wslive.KindStatus, Context: context}}}
+	return context
 }
 
 type codexLimit struct {
@@ -752,7 +758,7 @@ type codexLimit struct {
 	Reset   int64   `json:"resetsAt"`
 }
 
-func codexLimits(raw json.RawMessage) []Event {
+func codexLimits(raw json.RawMessage) []wslive.UsageLimit {
 	var p struct {
 		RateLimits struct {
 			Primary   *codexLimit `json:"primary"`
@@ -778,8 +784,30 @@ func codexLimits(raw json.RawMessage) []Event {
 			limits = append(limits, wslive.UsageLimit{Kind: kind, Percent: limit.Percent, ResetsAt: limit.Reset * 1000})
 		}
 	}
+	return limits
+}
+
+// contextStatus remembers a context figure and publishes it with the
+// retained limits; nil when the notification carried no figure.
+func (m *codexMapper) contextStatus(context *wslive.UsageContext) []Event {
+	if context == nil {
+		return nil
+	}
+	m.context = context
+	return m.status()
+}
+
+// limitsStatus remembers the limits of a rate-limit notification and
+// publishes them with the retained context; nil when it named no known limit.
+func (m *codexMapper) limitsStatus(limits []wslive.UsageLimit) []Event {
 	if len(limits) == 0 {
 		return nil
 	}
-	return []Event{{Live: &wslive.Event{Kind: wslive.KindStatus, Limits: limits}}}
+	m.limits = limits
+	return m.status()
+}
+
+func (m *codexMapper) status() []Event {
+	ev := wslive.Event{Kind: wslive.KindStatus, Limits: slices.Clone(m.limits), Context: cloneUsageContext(m.context)}
+	return []Event{{Live: &ev}}
 }
