@@ -481,6 +481,9 @@
     "261119-feat-ws-audit-query-api": {
       "registered_at": "2026-11-19T14:04:43Z"
     },
+    "261119-feat-ws-audit-ring-store": {
+      "registered_at": "2026-11-22T01:18:35Z"
+    },
     "261119-feat-ws-audit-sqlite-store": {
       "registered_at": "2026-11-19T14:04:38Z"
     },
