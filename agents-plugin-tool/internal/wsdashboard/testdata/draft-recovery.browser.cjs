@@ -279,6 +279,7 @@ async function recoveryRow(frame, edit) {
 // An older page restores without IDs and appends its own ID-less paste.
 const olderPageWrite = `row.active.images = row.active.images.map(({ id, ...p }) => p)
   .concat([{ n: 9, name: 'older.png', ref: '', blob: blob('older') }]);
+delete row.active.mine;
 return row;`;
 
 async function rollingUpgradeImages(browser) {
@@ -314,7 +315,7 @@ async function legacyImageAcrossWindows(browser) {
     await paste(s, 'legacy.png');
     await s.locator('#cimgs img[alt="legacy.png"]').waitFor();
     assert.equal(await s.evaluate(() => window.wsSaveSessionDraft()), true);
-    await recoveryRow(s, 'row.active.images = row.active.images.map(({ id, ...p }) => p); return row;');
+    await recoveryRow(s, 'row.active.images = row.active.images.map(({ id, ...p }) => p); delete row.active.mine; return row;');
     await seed.close();
     // Two newer windows restore the same ID-less image and both edit.
     const pages = [await context.newPage(), await context.newPage()], frames = [];

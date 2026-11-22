@@ -310,7 +310,9 @@
     // A POST starts only after this transaction (including its mirror).
     // A completed send may be the last IndexedDB record for this session.
     // Confirm the new legacy projection before dropping that recovery copy.
-    var mirrorNow = !deliveries.length;
+    // A draft with images mirrors only once its record is accepted: a
+    // refused merge must leave the committed record's projection in place.
+    var mirrorNow = !deliveries.length && !images.length;
     var textSaved = mirrorNow && saveLegacyDraft(d, projection);
     var missingBlob = (d.lost || []).some(function (number) {
       return !images.some(function (image) { return image.n === number; });
@@ -339,7 +341,11 @@
       return Promise.resolve(!draftUnsaved);
     }
     draftUnsaved = true;
-    if (!draftDB) return Promise.resolve(false);
+    if (!draftDB) {
+      // No recovery record can hold the images: keep the text at least.
+      if (!deliveries.length) saveLegacyDraft(d, projection);
+      return Promise.resolve(false);
+    }
     var before = draftDeliveryState, conflicts = [], pass = null;
     var stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     draftDeliveryState = states;
@@ -376,8 +382,9 @@
         loose.push(p);
         var key = looseKeys && looseKeys[at++] || "";
         if (!key) { foreign.push(p); return; }
-        // The same bytes this renderer's record holds, or bytes it removed.
-        if (held.has(key) || removed.has(key)) return;
+        // The same bytes this renderer's record holds (a restored copy keeps
+        // the legacy ID of its first slot after a renumber), or removed bytes.
+        if (held.has(key) || own.has("legacy:" + key) || removed.has(key)) return;
         held.add(key);
         foreign.push(Object.assign({}, p, { id: "legacy:" + key }));
       });
@@ -491,10 +498,12 @@
         // An ID-less entry takes its legacy ID from its bytes; one that
         // repeats a kept image's bytes, or matches removed bytes, is a copy.
         var seen = new Set(), images = [];
-        active.images.forEach(function (p, i) { if (p && p.id && !removed.has(p.id) && loaded.keys[i]) seen.add(loaded.keys[i]); });
+        active.images.forEach(function (p, i) {
+          if (p && p.id && !removed.has(p.id)) { seen.add(p.id); if (loaded.keys[i]) seen.add(loaded.keys[i]); }
+        });
         active.images.forEach(function (p, i) {
           var key = loaded.keys[i];
-          if (!p || (p.id ? removed.has(p.id) : key && (removed.has(key) || seen.has(key)))) return;
+          if (!p || (p.id ? removed.has(p.id) : key && (removed.has(key) || seen.has(key) || seen.has("legacy:" + key)))) return;
           if (!p.id && key) seen.add(key);
           var image = Object.assign({}, p, { id: p.id || (key ? "legacy:" + key : "") });
           if (!image.id && !ctext) savedImage(image);
@@ -553,6 +562,7 @@
     var d = boardDraft(saved);
     recoveredImages = recoveredImages || [];
     if (!d) return;
+    var savedText = typeof d.text === "string" ? d.text : "";
     restoring = true;
     var bound = function (p) { return !mine || mine.has(p.id); };
     try {
@@ -641,6 +651,9 @@
           imgSeq = Math.max(imgSeq, p.n);
         });
         var loose = [];
+        // Another window's image never takes a number the draft names, even
+        // one whose own image is gone: it comes back past all of them.
+        if (mine) Object.keys(markerNums(savedText + named)).concat(Array.isArray(d.lost) ? d.lost : []).forEach(function (n) { imgSeq = Math.max(imgSeq, +n || 0); });
         recoveredImages.filter(bound).concat(recoveredImages.filter(function (p) { return !bound(p); })).forEach(function (p) {
           var image = loadDraftImage(p), occupied = !bound(p) || imgs.some(function (other) { return other.n === p.n; });
           if (occupied) image.n = nextNum();
