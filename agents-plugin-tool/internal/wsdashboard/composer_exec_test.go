@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -1374,22 +1375,52 @@ func TestComposerReceiptSaysHowToReadAFile(t *testing.T) {
 	}
 }
 
-// TestComposerGoneTreatsAMissingFileAsRemoved: a failed remove whose file is
-// already gone counts as removed (on Windows, a delete-pending name too).
-func TestComposerGoneTreatsAMissingFileAsRemoved(t *testing.T) {
+// TestComposerRemovedClassifiesRemovalErrors: a removal counts as done only on
+// success or an absent file (or Windows' delete-pending); access denied, a
+// sharing violation and every other error leave the file counted.
+func TestComposerRemovedClassifiesRemovalErrors(t *testing.T) {
+	pathErr := func(err error) error { return &os.PathError{Op: "remove", Path: "x.out", Err: err} }
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"success", nil, true},
+		{"not exist", os.ErrNotExist, true},
+		{"wrapped not exist", pathErr(os.ErrNotExist), true},
+		{"permission", pathErr(os.ErrPermission), false},
+		{"access denied", pathErr(syscall.Errno(5)), false},
+		{"sharing violation", pathErr(syscall.Errno(32)), false},
+		{"other", errors.New("disk on fire"), false},
+	} {
+		if got := composerRemoved(c.err); got != c.want {
+			t.Errorf("%s: composerRemoved = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestComposerPruneKeepsAFileItCannotRemove: a failing removal leaves the file
+// counted and reports the error; the next file is still tried against the cap.
+func TestComposerPruneKeepsAFileItCannotRemove(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "x.out")
-	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
+	now := time.Now()
+	for i, name := range []string{"a.out", "b.out"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := now.Add(-composerFileAge - time.Hour - time.Duration(i)*time.Minute)
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if composerGone(path, errors.New("access is denied")) {
-		t.Fatal("a file that is still there counted as gone")
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if !composerGone(path, errors.New("access is denied")) || !composerGone(path, os.ErrNotExist) || !composerGone(path, nil) {
-		t.Fatal("a removed file did not count as gone")
+	var failed []string
+	// Every removal fails as access denied: both expired files stay present.
+	present, ok := composerPruneWith(dir, now, func(string) error { return &os.PathError{Op: "remove", Err: syscall.Errno(5)} }, func(path string, err error) {
+		failed = append(failed, filepath.Base(path))
+	})
+	if !ok || len(present) != 2 || len(failed) != 2 {
+		t.Fatalf("present %v failed %v: files that could not be removed must stay counted", present, failed)
 	}
 }
 
@@ -1403,6 +1434,124 @@ func TestComposerListCarriesTheAdmissionToken(t *testing.T) {
 	if err := json.Unmarshal(composerGet(f.d, "/s/livesession/composer-exec").Body.Bytes(), &list); err != nil || list.Token != f.d.composer.token() || list.Token == "" {
 		t.Fatalf("list token %q vs %q: %v", list.Token, f.d.composer.token(), err)
 	}
+}
+
+// TestComposerRefusesAFutureAdmissionSequence: a token whose count the daemon
+// has not issued proves nothing; it cannot admit a request, so it cannot outlive
+// the fence entry of its own admission.
+func TestComposerRefusesAFutureAdmissionSequence(t *testing.T) {
+	f := startComposerFixture(t)
+	c := &f.d.composer
+	c.mu.Lock()
+	epoch, seq := c.epoch, c.seq
+	c.mu.Unlock()
+	before := f.svc.launchCount()
+	for _, n := range []uint64{seq + 1, seq + 1000, ^uint64(0)} {
+		token := fmt.Sprintf("%s.%d", epoch, n)
+		res := composerPostToken(f.d, "livesession", fmt.Sprintf("future-%d-xx", n%1000), "!echo x", false, token)
+		if res.Code != 200 || !decodeCard(t, res).Unknown {
+			t.Fatalf("future sequence %d = %d %s", n, res.Code, res.Body)
+		}
+	}
+	if n := f.svc.launchCount(); n != before {
+		t.Fatalf("a future sequence launched: %d -> %d", before, n)
+	}
+	// The counts from the horizon through the current one are all accepted.
+	for _, n := range []uint64{seq, 0} {
+		if c.mu.Lock(); !c.currentLocked(fmt.Sprintf("%s.%d", epoch, n)) {
+			c.mu.Unlock()
+			t.Fatalf("an issued sequence %d was refused", n)
+		}
+		c.mu.Unlock()
+	}
+}
+
+// TestComposerRefusesTrailingInput: after the one JSON object the input must
+// end; anything else (a stray delimiter, a second value, garbage) is malformed
+// and launches nothing.
+func TestComposerRefusesTrailingInput(t *testing.T) {
+	f := startComposerFixture(t)
+	good := fmt.Sprintf(`{"submission_id":"trail-0001-x","text":"!echo x","token":%q}`, f.d.composer.token())
+	for _, tail := range []string{`}`, `]`, ` {}`, ` x`, `,`, ` 1`} {
+		res := composerHTTP(f.d, http.MethodPost, "/s/livesession/composer-exec", good+tail, "http://127.0.0.1", "127.0.0.1:1234", nil)
+		if res.Code != http.StatusBadRequest {
+			t.Errorf("trailing %q = %d %s, want 400", tail, res.Code, res.Body)
+		}
+	}
+	if n := f.svc.launchCount(); n != 0 {
+		t.Fatalf("a malformed request launched %d jobs", n)
+	}
+	// Trailing whitespace is not input.
+	res := composerHTTP(f.d, http.MethodPost, "/s/livesession/composer-exec", good+" \n", "http://127.0.0.1", "127.0.0.1:1234", nil)
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("the object followed by whitespace = %d %s", res.Code, res.Body)
+	}
+}
+
+// TestComposerCloseRacesBinding: a Close that races SetComposerExec never leaves
+// the loop registered past the wait, and a daemon that has closed publishes no
+// service.
+func TestComposerCloseRacesBinding(t *testing.T) {
+	// Closed first: nothing is published and no loop starts.
+	f := startPageFixture(t)
+	f.d.Close()
+	f.d.SetComposerExec(&composerFake{jobs: map[string]ComposerJob{}})
+	if f.d.composer.svc.Load() != nil {
+		t.Fatal("a closed daemon published the composer service")
+	}
+	// Racing: whichever wins, no goroutine outlives Close's wait.
+	for round := 0; round < 20; round++ {
+		f := startPageFixture(t)
+		bound := make(chan struct{})
+		go func() {
+			f.d.SetComposerExec(&composerFake{jobs: map[string]ComposerJob{}})
+			close(bound)
+		}()
+		f.d.Close()
+		<-bound
+		done := make(chan struct{})
+		go func() { f.d.composer.wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the composer loop outlived Close")
+		}
+	}
+}
+
+// TestComposerAllFastBurstTrims: a burst whose every job ends inside its own
+// submission goroutine (none converts, so no settle tick ever follows) is
+// trimmed to the card bound without another request.
+func TestComposerAllFastBurstTrims(t *testing.T) {
+	f := startComposerFixture(t)
+	zero := 0
+	n := composerKeepCards + 20
+	release := make(chan struct{})
+	f.svc.mu.Lock()
+	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
+		<-release
+		return ComposerJob{ExecID: "exec_" + strings.TrimSpace(req.Line), Gen: 4, State: "exited", ExitCode: &zero, Command: req.Line, Written: 1, Output: []byte("o")}, nil
+	}
+	f.svc.mu.Unlock()
+	for i := 0; i < n; i++ {
+		if res := composerPost(f.d, fmt.Sprintf("fast-%04d-abc", i), fmt.Sprintf("!j%d", i)); res.Code != 202 {
+			t.Fatal(res.Body)
+		}
+	}
+	// Every card is unfinished at admission, so no admission could trim.
+	c := &f.d.composer
+	c.mu.Lock()
+	if got := len(c.order["livesession"]); got != n {
+		c.mu.Unlock()
+		t.Fatalf("cards held while running = %d, want %d", got, n)
+	}
+	c.mu.Unlock()
+	close(release)
+	waitFor(t, "the all-fast burst to be trimmed to the card bound", func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.order["livesession"]) <= composerKeepCards && len(c.subs) <= composerKeepCards
+	})
 }
 
 // testAdmit is composerAdmit for a test that admits without running the

@@ -21,7 +21,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -219,14 +218,18 @@ func (c *composerExec) token() string {
 }
 
 // currentLocked reports whether token still proves a fresh submission was made
-// after the fence's horizon, by this daemon's own epoch. mu is held.
+// after the fence's horizon, by this daemon's own epoch, from a count it issued.
+// mu is held.
 func (c *composerExec) currentLocked(token string) bool {
 	epoch, seq, ok := strings.Cut(token, ".")
 	if !ok || epoch != c.epoch {
 		return false
 	}
 	n, err := strconv.ParseUint(seq, 10, 64)
-	return err == nil && n >= c.horizon
+	// Only a count this daemon has issued: from the eviction horizon through the
+	// current sequence. A future count was never handed out, so it proves nothing
+	// and could outlive the fence entry of its own admission.
+	return err == nil && n >= c.horizon && n <= c.seq
 }
 
 // SetComposerExec binds the service the composer route runs on; before it
@@ -238,8 +241,16 @@ func (d *Daemon) SetComposerExec(svc ComposerExecService) {
 	}
 	c := &d.composer
 	// State first, then the service: whatever sees the service sees the
-	// initialized composer.
+	// initialized composer. The loop is registered, and the service published,
+	// under the lock that closes admission (composerWait), so a Close that has
+	// begun waiting never races the loop's registration and a closed daemon
+	// publishes nothing.
 	c.ensure()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing {
+		return
+	}
 	c.loopOnce.Do(func() {
 		c.wg.Add(1)
 		go d.composerLoop()
@@ -458,7 +469,9 @@ func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc Comp
 		http.Error(w, "malformed request", http.StatusBadRequest)
 		return
 	}
-	if dec.More() {
+	// One object and nothing after it: a second decode must meet the end of the
+	// input (More only checks a container, so it passes trailing garbage).
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		http.Error(w, "malformed request", http.StatusBadRequest)
 		return
 	}
@@ -483,6 +496,10 @@ func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc Comp
 		go func() {
 			defer d.composer.wg.Done()
 			d.composerRun(svc, sub)
+			// A run that ended in its own goroutine never reaches the settle
+			// tick; the card bound is applied as it ends, so an all-fast burst
+			// trims without another request.
+			d.composerTrimReply(sub.reply)
 		}()
 		sub.mu.Lock()
 		card := sub.cardLocked()
@@ -593,6 +610,14 @@ func (c *composerExec) trimLocked(replyID string) {
 		delete(c.subs, c.order[replyID][drop])
 		c.order[replyID] = append(c.order[replyID][:drop:drop], c.order[replyID][drop+1:]...)
 	}
+}
+
+// composerTrimReply applies the card bound to one session.
+func (d *Daemon) composerTrimReply(replyID string) {
+	c := &d.composer
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trimLocked(replyID)
 }
 
 // composerTrim applies the card bound to every session: what a burst of
@@ -1097,7 +1122,9 @@ func (d *Daemon) composerLoop() {
 func (d *Daemon) composerSweep() {
 	dir := filepath.Join(d.dir, composerOutputDir)
 	scanned := time.Now()
-	present, ok := composerPrune(dir, scanned)
+	present, ok := composerPruneWith(dir, scanned, os.Remove, func(path string, err error) {
+		fmt.Fprintf(d.log, "dashboard: composer output %s not removed: %v\n", filepath.Base(path), err)
+	})
 	if !ok {
 		return
 	}
@@ -1124,19 +1151,14 @@ func (d *Daemon) composerSweep() {
 // remove the same files.
 var composerPruneMu sync.Mutex
 
-// composerGone reports whether removing path, which returned err, left the
-// file gone: it went (a lost race with another remover), or on Windows it is
-// delete-pending (the removal won, an open handle keeps the name until it
-// closes, and the name then answers access denied instead of not-exist).
-func composerGone(path string, err error) bool {
-	if err == nil || errors.Is(err, os.ErrNotExist) {
-		return true
-	}
-	_, serr := os.Lstat(path)
-	if errors.Is(serr, os.ErrNotExist) {
-		return true
-	}
-	return runtime.GOOS == "windows" && errors.Is(serr, os.ErrPermission)
+// composerRemoved reports whether a removal that returned err left the file
+// gone: it succeeded, the file was already absent (a lost race with another
+// remover), or on Windows it is delete-pending (the name goes when an open
+// handle closes). Every other error, access denied and a sharing violation
+// included, means the file is still there: its size stays counted and its card
+// keeps its link.
+func composerRemoved(err error) bool {
+	return err == nil || errors.Is(err, os.ErrNotExist) || composerDeletePending(err)
 }
 
 // composerPrune deletes whole output files: those older than the age bound,
@@ -1144,6 +1166,12 @@ func composerGone(path string, err error) bool {
 // file that is already gone, or delete-pending, counts as removed, never as
 // still taking room; sweeps run one at a time.
 func composerPrune(dir string, now time.Time) (map[string]struct{}, bool) {
+	return composerPruneWith(dir, now, os.Remove, nil)
+}
+
+// composerPruneWith is composerPrune with the removal (a test seam) and a
+// report of each removal failure, a file that stays, to fail.
+func composerPruneWith(dir string, now time.Time, remove func(string) error, fail func(path string, err error)) (map[string]struct{}, bool) {
 	composerPruneMu.Lock()
 	defer composerPruneMu.Unlock()
 	present := map[string]struct{}{}
@@ -1172,8 +1200,12 @@ func composerPrune(dir string, now time.Time) (map[string]struct{}, bool) {
 		if now.Sub(info.ModTime()) > composerFileAge {
 			composerFileOp("remove")
 			path := filepath.Join(dir, e.Name())
-			if composerGone(path, os.Remove(path)) {
+			rerr := remove(path)
+			if composerRemoved(rerr) {
 				continue
+			}
+			if fail != nil {
+				fail(path, rerr)
 			}
 		}
 		files = append(files, file{e.Name(), info.ModTime(), info.Size()})
@@ -1186,9 +1218,12 @@ func composerPrune(dir string, now time.Time) (map[string]struct{}, bool) {
 		}
 		composerFileOp("remove")
 		path := filepath.Join(dir, files[i].name)
-		if composerGone(path, os.Remove(path)) {
+		rerr := remove(path)
+		if composerRemoved(rerr) {
 			total -= files[i].size
 			files[i].size = -1
+		} else if fail != nil {
+			fail(path, rerr)
 		}
 	}
 	for _, f := range files {
