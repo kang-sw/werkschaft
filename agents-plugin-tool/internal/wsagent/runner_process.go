@@ -692,7 +692,7 @@ func (c *conv) checkReattach() {
 			}
 			if !c.rec.Lead {
 				var meta holderSession
-				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.rec, meta, info.Child) {
+				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.record(), meta, info.Child) {
 					// Never stop a holder that failed the ownership check.
 					c.r.holders.reject(id)
 					hp.Detach()

@@ -1437,7 +1437,8 @@ func (c *conv) kickInput() {
 			// turn; the record never keeps both.
 			rec.HeldTurn = nil
 		}
-		if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 {
+		if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 && !c.ownsLiveExec() {
+			// A worker that still owns a live exec job keeps holding (below).
 			// The reports open the held turn's successor, so the held turn
 			// is published in that same write (as below for other workers):
 			// a restart between two writes would restore the predecessor's

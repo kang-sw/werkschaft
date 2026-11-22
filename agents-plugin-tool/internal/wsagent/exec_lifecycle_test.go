@@ -476,3 +476,32 @@ func TestExecCloseWithoutOpenJobsRefusesOverAnIncompleteHolderScan(t *testing.T)
 		t.Fatal(err)
 	}
 }
+
+// A held agy worker that owns a live exec job keeps holding its done report
+// when a child's report opens its successor turn: the held turn is superseded
+// by the successor, which reports later, not published at the successor's
+// send.
+func TestAgyHeldWorkerKeepsItsReportForALiveExecJobAtAChildReport(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	jobs := newFakeExecJobs()
+	h.runner.BindExecJobs(jobs)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	jobs.set(id, 1)
+	h.runner.ExecJobsChanged()
+	completeRecoveryWorker(t, h, BackendAgy, holder)
+	c := h.runner.conv(id)
+	eventually(t, "the done turn held for the live job", func() bool {
+		var held bool
+		c.do(func() { held = c.heldRes != nil })
+		return held
+	})
+	c.do(func() {
+		c.update(func(rec *Record) { rec.Reports = append(rec.Reports, "child result") })
+		c.signalInbox()
+	})
+	eventually(t, "the child report's successor turn", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
+	c.do(func() {})
+	if reps := got.list(); len(reps) != 0 {
+		t.Fatalf("the held report was published at the successor's send while its exec job runs: %+v", reps)
+	}
+}
