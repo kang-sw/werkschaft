@@ -345,3 +345,135 @@ Key files (from the 2026-11-22 fact-finding; line numbers drift):
   proving rules mode and disabled mode build no digest and spawn nothing;
   per-trigger file-operation and spawn counts reported per `performance.md`;
   one live run on the dashboard with a captured quip.
+
+### Result (db6fc7a3b) - 2026-11-22
+
+- **Landed** (06cbdf5a1, 8cd6f4a5d, 697b84908, ad8dc9907, db6fc7a3b):
+  - One-shot runner: `wsagent.RunOneShot` / `HasOneShot` with
+    `BackendRegistration.OneShot {Args, Env}`. It runs in `os.TempDir()` in
+    its own process group, sends the prompt on stdin, caps stdout and stderr
+    at 64 KiB each, and on ctx end calls `execjob.KillTree` (WaitDelay 2 s).
+    The env is scrubbed: `wsharnessenv.Drop` plus the harness's own session
+    variables. Probe notes sit at each registration (2026-11-22):
+    - claude 2.1.330 registered: `-p --output-format text --setting-sources ""
+      --strict-mcp-config --tools "" --permission-mode dontAsk
+      --no-session-persistence --disable-slash-commands`, plus `--model` and
+      `--effort`.
+    - pi 1.5.2 registered: `-p --no-session --no-tools --no-extensions
+      --no-mcp …`.
+    - codex 0.170.0 and agy 1.5.14 left without OneShot: no flag removes
+      every tool.
+  - Injection: wsdashboard cannot import wsagent, so the daemon takes
+    `DaemonOptions.CompanionOneShot` and `CompanionHasOneShot`; `cmd/ws-mcp`
+    wires both.
+  - Focus report (Decision 8):
+    - Each shell rail stream gets a `companion-focus` token event.
+    - `POST /api/companion/focus` is gated by `TrustedWrite`: 404 when not
+      local, 403 cross-origin, 401 unauthenticated, 405 for a non-POST
+      method, 400 for a bad or oversized request, 410 for a gone stream.
+    - The daemon keeps one report per live stream, dropped with the stream,
+      and directs the newest non-empty one.
+    - Shell reporter `dashboard-companion-focus.js`: agent mode only, while
+      the page is visible, with the shown session and the rendered
+      (auto-resolved) pack. It clears when hidden, deduplicates repeats, and
+      ignores every failure, including an older daemon's 404.
+  - Triggers (Decision 2, (66)=c), observed in `daemonLiveSlot.Publish` and
+    `RingAppended`:
+    - turn end
+    - a failure rising inside a running turn
+    - commit or merge: a Go port of the `directCommit` / `shellTool` /
+      `concreteCommand` patterns, fired once per batch `epoch:seq`
+    - a new `OpenAskIDs` entry
+    - 10 minutes of no activity, once per stretch (armed at seeding)
+    The first observation only seeds.
+  - Limiter: drop, never queue, with reasons busy, cooldown or cap.
+    - Cooldown (10–3600 s) and cap (1–120 per rolling hour) are read live
+      from config.
+    - Both are charged only when a process spawns.
+    - A harness without one-shot drops from memory before the limiter. A
+      `small` tier resolving to another harness drops uncharged.
+    - Drops are counted in memory and summarized on the next call's log
+      line.
+  - Digest and prompt:
+    - Digest: memory-only, from the pinned RAM ring; 20 entries, 200 runes
+      each, 4000 total, newest kept; head line with turn, phase, failed
+      calls and open questions.
+    - Prompt: persona and digest quoted as `<<<PERSONA`/`<<<SESSION` data
+      blocks (delimiters neutralized inside the data). Quip language is the
+      persona's `quipLanguage`, else `workflow.lang`, else English.
+    - Allowed IDs: the pack dictionaries plus the built-in scenarios and fx
+      from the new `dashboard-companion-builtins.js`. That one file is run by
+      the shell bundle and parsed by the daemon. Only `[A-Za-z0-9_-]{1,64}`
+      keys pass; `drag_dangle` is not directable.
+  - Reply: one ` ```json ` fence is tolerated; unknown fields or trailing
+    data discard the reply; an unknown ID drops only its field; the model
+    cannot choose the session; TTL defaults to 6000 ms. A valid reply is
+    published as `companion-command`. The lead session gets no tool or
+    prompt text.
+  - `companion-pet-rigging.md`: Two-Speed AI sub-bullets on focus, the
+    builtins source, and the zero-cost and charging rules.
+- **Verification:**
+  - `go test ./internal/wsdashboard -race -run 'Companion|AssetSource|StreamPage|Bundle|Pages'`:
+    ok, except `TestDevAssetsOffServesTheEmbeddedPages`. That test also
+    fails under `-race` at base da3c4531f (its 500 ms client times out while
+    dev assets rebuild); without `-race` it passes.
+  - `go test ./internal/wsdashboard -race -run Companion` after the review
+    fixes: ok.
+  - `go test ./internal/wsagent -run 'OneShot|Registration' -count=3`: ok.
+  - `go test ./internal/mcp -timeout 45m -run 'Companion|DashboardSettingsUI|ShippedDashboardManifests|DashboardConfig|DashboardCompanion|TierRouting'`:
+    ok.
+  - `node --test frontend-companion.test.js frontend-settings.test.js`:
+    39/39.
+  - `node --test *.test.js`: 194/197. The 3 failures are the known
+    pre-existing ones (Phase 1 Result).
+  - `go build ./...`: ok. `go vet` wsagent, wsdashboard, cmd/ws-mcp: ok.
+  - Live run on an isolated daemon (real shell assets, real
+    `wsagent.RunOneShot` against claude, synthetic hosted session, headless
+    Chromium):
+    - focus POST answered 204
+    - daemon log: `companion director: turn_end: published`
+    - rendered quip: "Parser fix is in, but the last git commit reported an
+      error. Worth checking it went through!"
+    - captures: `/tmp/ws-live-companion/shots/companion-live-quip.png` and
+      `companion-live-quip-full.png`
+  - Full packages on ad8dc9907:
+    - `go test ./internal/wsagent`: ok (139.9 s).
+    - `generate-package-assets.py --check`: exit 0.
+    - `go test ./internal/wsdashboard`: one failure,
+      `TestShellStreamsTheRailAndItsFramesTheirRegions`, which treated the
+      new `companion-focus` rail event as a leak. Fixed in db6fc7a3b, which
+      allows exactly one token per stream; the full rerun ran after the develop
+      merge (below).
+- **Per-trigger cost (`performance.md`):** counted by reading the code; no
+  root tracer is available (dtruss and fs_usage need sudo).
+  - Off and `rules` modes: 0 file operations, 0 spawns. Every hook
+    returns after one in-memory config read; covered by
+    `TestCompanionDirectorInertOutsideAgentMode`. A shell stream's only
+    extra cost is one random token and one SSE event.
+  - Dropped trigger (busy, cooldown, cap, unfocused, no-harness,
+    no-oneshot): 0 file operations, 0 spawns, memory counters only.
+  - Spawned call:
+    - global and project tier config through `wsstate.ReadFileCached`: one
+      stat each, a read only when changed
+    - +1 global stat for `workflow.lang`, only when the persona has no
+      `quipLanguage`
+    - ring, pack and builtins read from memory
+    - 1 log line, 1 process spawn
+    - claude itself creates an empty auto-memory directory
+  - Focus POST: memory-only, sent only in agent mode on a change.
+- **Decisions:**
+  - The runner is injected through `DaemonOptions` to break the import
+    cycle.
+  - The built-in IDs live in a JSON-bodied JS asset, the single source for
+    both sides.
+  - Focus reports are tied to a stream token and die with the stream; a
+    report on a gone stream answers 410.
+  - The limiter charges at spawn, not at admission (review finding).
+  - Commit detection fires once per batch.
+- **Open:**
+  - The turn-semaphore slot drop waits on
+    `261122-feat-ws-agent-turn-semaphore` (still in ready, not
+    implemented).
+  - A trigger on codex or agy sessions always drops until those CLIs gain a
+    tool-free one-shot mode.
+  - Lite review minors: all addressed in ad8dc9907.
