@@ -733,25 +733,46 @@ func TestAgyFrameTraceMarkerFollowsTheRunningHolder(t *testing.T) {
 	}
 }
 
-// The marker is a diagnostic: the interrupt goes out while the holder's
-// capture_note is still blocked, and the note lands once the holder
-// answers.
+// The marker is a diagnostic: capture_note begins only after the interrupt
+// went out, and while the holder holds it the conversation's loop still
+// answers; the note lands once the holder answers.
 func TestAgyFrameTraceMarkerNeverDelaysTheInterrupt(t *testing.T) {
 	r := newStallRig(t, 45, 3, map[string]string{wsconfig.ItemAgyHTTP2FrameTrace: "true"})
 	release := make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	t.Cleanup(unblock)
+	cancelsAtNote := make(chan int, 1)
 	r.h.holders.mu.Lock()
-	r.h.holders.captureBlock = release
+	r.h.holders.captureHook = func() {
+		cancelsAtNote <- r.cancels()
+		<-release
+	}
 	r.h.holders.mu.Unlock()
 	r.baseLog()
 	r.sync()
 	r.clock.advance(stallTimeout)
 	r.timers.fire(t, r.newestSilenceTimer())
 	// No quiesce: a loop held by the marker would never answer one.
-	eventually(t, "the interrupt", func() bool { return r.cancels() == 1 })
-	eventually(t, "the blocked marker request", func() bool { return r.h.holders.captureCallCount() == 1 })
+	select {
+	case n := <-cancelsAtNote:
+		if n != 1 {
+			t.Fatalf("capture_note began with %d interrupts sent, want it after the interrupt", n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no capture_note")
+	}
+	answered := make(chan struct{})
+	go func() {
+		c := r.conv()
+		c.do(func() {})
+		close(answered)
+	}()
+	select {
+	case <-answered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the conversation's loop waits on the blocked capture_note")
+	}
 	if notes := r.h.holders.captureNotes(r.holder); len(notes) != 0 {
 		t.Fatalf("notes %q landed while the holder was blocked", notes)
 	}

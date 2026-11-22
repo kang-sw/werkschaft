@@ -112,9 +112,9 @@ type fakeHolders struct {
 	timeouts    int
 	// spawnErr fails Spawn and stopErr Stop (the holder stays).
 	spawnErr, stopErr error
-	// captureBlock, when set, holds every CaptureNote until it closes;
-	// captureCalls counts the CaptureNote calls begun.
-	captureBlock chan struct{}
+	// captureHook, when set, runs as each CaptureNote begins (and may
+	// block it); captureCalls counts the CaptureNote calls begun.
+	captureHook  func()
 	captureCalls int
 	// refuse answers a control request of a subtype with an error; any
 	// other control request written to a child is answered with success,
@@ -410,10 +410,10 @@ func (f *fakeHolders) Input(id string, data []byte, eof bool) error {
 func (f *fakeHolders) CaptureNote(id, text string) (bool, error) {
 	f.mu.Lock()
 	f.captureCalls++
-	block := f.captureBlock
+	hook := f.captureHook
 	f.mu.Unlock()
-	if block != nil {
-		<-block
+	if hook != nil {
+		hook()
 	}
 	if err := f.call(id, "capture_note"); err != nil {
 		return false, err
