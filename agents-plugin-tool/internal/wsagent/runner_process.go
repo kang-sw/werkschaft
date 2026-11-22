@@ -608,6 +608,15 @@ func (c *conv) reattach() {
 	if err != nil {
 		// The holder stays in the record: the next start ends it first.
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
+		// No process came back, so no replay will ever settle the turn the
+		// record showed open: end the replay and drop that turn, or the
+		// keep-awake membership it froze would hold the assertion for good.
+		c.replaying = false
+		if c.turn {
+			c.setStatus(func() { c.turn = false })
+			c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnEnd})
+		}
+		c.publishAwake(c.wantAwake())
 	}
 }
 

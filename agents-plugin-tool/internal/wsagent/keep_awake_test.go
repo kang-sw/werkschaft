@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -612,5 +613,39 @@ func TestKeepAwakeWorkerHolderRejoin(t *testing.T) {
 			eventually(t, "the worker turn to end", func() bool { return !h.record(worker.ID).TurnOpen && h.state(worker.ID).Status != StatusRunning })
 			awaitAwake(t, h.runner, fake, 0, false)
 		})
+	}
+}
+
+// attachFails is a backend whose attach to a held process fails, as a Codex
+// ring that cannot be read or a harness gone from this daemon does; a fresh
+// start still works.
+type attachFails struct{ Backend }
+
+func (b attachFails) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	if spec.Holder != nil && spec.Holder.id != "" {
+		return nil, errors.New("attach refused")
+	}
+	return b.Backend.Start(ctx, spec)
+}
+
+// TestKeepAwakeFailedWorkerRejoin: a worker whose record shows its turn open
+// under a holder the next daemon cannot attach to leaves no process whose
+// replay could settle that turn, so it drops out of the keep-awake count
+// instead of holding the assertion for good.
+func TestKeepAwakeFailedWorkerRejoin(t *testing.T) {
+	h, fake, start := awakePiHarness(t)
+	worker, _ := spawnRecoveryWorker(t, h)
+	awaitAwake(t, h.runner, fake, 1, true)
+	h.runner.Close()
+	h.holders.restart()
+	reg := h.opts.Backends[BackendPi]
+	reg.Backend = attachFails{reg.Backend}
+	h.opts.Backends[BackendPi] = reg
+	start()
+	wait(t, "the holder scan", h.runner.rejoined)
+	h.quiesce(worker.ID)
+	awaitAwake(t, h.runner, fake, 0, false)
+	if h.state(worker.ID).Status == StatusRunning {
+		t.Fatalf("the unattached worker still shows a running turn: %+v", h.state(worker.ID))
 	}
 }
