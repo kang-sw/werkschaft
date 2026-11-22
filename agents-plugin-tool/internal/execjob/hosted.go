@@ -40,9 +40,9 @@ type Hosted struct {
 	// path, so the id is not drawn, its ended job not pruned, and both count
 	// toward the job cap until the stop is confirmed (retireOld).
 	retiring map[string]int
-	started   bool
-	closed    bool
-	retry     *time.Timer
+	started  bool
+	closed   bool
+	retry    *time.Timer
 	// quit closes with Close: it ends the retried holder stops
 	// (retryRetire).
 	quit chan struct{}
