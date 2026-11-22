@@ -2751,6 +2751,8 @@
   "js.settings.section_note.companion": "夥伴外觀和行為",
   "js.settings.key.dashboard.companion_enabled.label": "夥伴",
   "js.settings.key.dashboard.companion_enabled.description": "在儀表板中顯示夥伴角色。僅全域值生效。",
+  "js.settings.key.dashboard.companion_mode.label": "模式（已棄用）",
+  "js.settings.key.dashboard.companion_mode.description": "為舊版用戶端保留的夥伴開關已棄用別名：off 隱藏，visual 與 full 顯示。僅全域值生效。",
   "js.settings.key.dashboard.companion_director.label": "控制器",
   "js.settings.key.dashboard.companion_director.description": "選擇夥伴的驅動方式:內建規則,或獨立的輕量代理。僅全域值生效。",
   "js.settings.key.dashboard.companion_director.rules": "規則",

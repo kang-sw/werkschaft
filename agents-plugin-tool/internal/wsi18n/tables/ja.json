@@ -2751,6 +2751,8 @@
   "js.settings.section_note.companion": "コンパニオンの外観と動作",
   "js.settings.key.dashboard.companion_enabled.label": "コンパニオン",
   "js.settings.key.dashboard.companion_enabled.description": "ダッシュボードにコンパニオンのキャラクターを表示します。グローバル値のみが適用されます。",
+  "js.settings.key.dashboard.companion_mode.label": "モード（非推奨）",
+  "js.settings.key.dashboard.companion_mode.description": "古いクライアント向けに残されたコンパニオン有効設定の非推奨エイリアスです。off で非表示、visual と full で表示します。グローバル値のみ適用されます。",
   "js.settings.key.dashboard.companion_director.label": "ディレクター",
   "js.settings.key.dashboard.companion_director.description": "コンパニオンを動かす方式を選びます。組み込みルール、または別の軽量エージェントです。グローバル値のみが適用されます。",
   "js.settings.key.dashboard.companion_director.rules": "ルール",

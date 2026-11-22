@@ -2751,6 +2751,8 @@
   "js.settings.section_note.companion": "Внешний вид и поведение компаньона",
   "js.settings.key.dashboard.companion_enabled.label": "Компаньон",
   "js.settings.key.dashboard.companion_enabled.description": "Показывает персонажа-компаньона на панели. Применяется только глобальное значение.",
+  "js.settings.key.dashboard.companion_mode.label": "Режим (устарел)",
+  "js.settings.key.dashboard.companion_mode.description": "Устаревший псевдоним параметра включения компаньона для старых клиентов: off скрывает его, visual и full показывают. Действует только глобальное значение.",
   "js.settings.key.dashboard.companion_director.label": "Управление",
   "js.settings.key.dashboard.companion_director.description": "Выбирает, что управляет компаньоном: встроенные правила или отдельный лёгкий агент. Применяется только глобальное значение.",
   "js.settings.key.dashboard.companion_director.rules": "Правила",

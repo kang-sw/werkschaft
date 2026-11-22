@@ -926,12 +926,13 @@ var wsSettingsChoiceLabels = {
     return true;
   }
 
-  // Rows with a surface other than the panel (the companion modal) stay in the
-  // catalog for inspection but are not rendered here.
+  // Rows with a surface other than the panel (the companion modal, or the
+  // deprecated aliases no UI renders) stay in the catalog for inspection but
+  // are not rendered here.
   function sectionEntries(name) {
     return snapshot ? snapshot.entries.filter(function (entry) {
       var spec = specFor(entry.key);
-      return spec && spec.surface !== "companion-modal" && (name === "adapters" ? adapters.includes(spec.section) : spec.section === name);
+      return spec && !spec.surface && (name === "adapters" ? adapters.includes(spec.section) : spec.section === name);
     }) : [];
   }
 

@@ -2751,6 +2751,8 @@
   "js.settings.section_note.companion": "Aspetto e comportamento del compagno",
   "js.settings.key.dashboard.companion_enabled.label": "Compagno",
   "js.settings.key.dashboard.companion_enabled.description": "Mostra il personaggio compagno nella dashboard. Si applica solo il valore globale.",
+  "js.settings.key.dashboard.companion_mode.label": "Modalità (obsoleta)",
+  "js.settings.key.dashboard.companion_mode.description": "Alias obsoleto dell'impostazione di attivazione del compagno, mantenuto per i client meno recenti: off lo nasconde; visual e full lo mostrano. Si applica solo il valore globale.",
   "js.settings.key.dashboard.companion_director.label": "Direttore",
   "js.settings.key.dashboard.companion_director.description": "Sceglie cosa guida il compagno: regole integrate o un agente leggero separato. Si applica solo il valore globale.",
   "js.settings.key.dashboard.companion_director.rules": "Regole",

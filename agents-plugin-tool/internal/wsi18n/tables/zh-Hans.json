@@ -2751,6 +2751,8 @@
   "js.settings.section_note.companion": "伙伴外观和行为",
   "js.settings.key.dashboard.companion_enabled.label": "伙伴",
   "js.settings.key.dashboard.companion_enabled.description": "在仪表板中显示伙伴角色。仅全局值生效。",
+  "js.settings.key.dashboard.companion_mode.label": "模式（已弃用）",
+  "js.settings.key.dashboard.companion_mode.description": "为旧客户端保留的伙伴开关已弃用别名：off 隐藏，visual 和 full 显示。仅全局值生效。",
   "js.settings.key.dashboard.companion_director.label": "控制器",
   "js.settings.key.dashboard.companion_director.description": "选择伙伴的驱动方式:内置规则,或独立的轻量代理。仅全局值生效。",
   "js.settings.key.dashboard.companion_director.rules": "规则",
