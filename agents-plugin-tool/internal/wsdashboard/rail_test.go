@@ -825,6 +825,47 @@ func TestRailListerSweepsOnFullReadsAndRereadsOneRepository(t *testing.T) {
 	none.reread("/a")
 }
 
+// TestRailListerRereadAndDropReachAFoldedAlias pins the invalidation of a
+// stored repository the rail lists under a session's case-folded spelling
+// (Windows): a rail add or delete names the stored spelling, and its reread
+// and dropped row must reach the list the rail renders, with no interval.
+func TestRailListerRereadAndDropReachAFoldedAlias(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	fake := &railFakeRead{reads: map[string]int{}}
+	stop := make(chan struct{})
+	defer close(stop)
+	l := newRailLister(fake.read, nil, stop)
+	l.after = func(time.Duration) <-chan time.Time { return make(chan time.Time) }
+	listed := filepath.FromSlash("/base/work/repo")
+	stored := filepath.FromSlash("/base/Work/Repo")
+	// rail.go lists the stored alias under the session's spelling only.
+	wanted := map[string][]Registration{listed: {{ReplyID: "s"}}}
+
+	l.lists(wanted)
+	release := l.watch()
+	waitFor(t, "the first read", func() bool { return len(l.lists(wanted)[listed].Entries) == 2 })
+
+	l.dropWorktree(stored, listed+"-wt", "")
+	if got := l.lists(wanted)[listed].Entries; len(got) != 1 || got[0].Path != listed {
+		t.Fatalf("entries after a delete through the stored spelling = %+v, want the root only", got)
+	}
+	l.reread(stored)
+	waitFor(t, "the reread through the stored spelling", func() bool { return fake.count(listed) == 2 })
+	waitFor(t, "the added worktree to show", func() bool { return len(l.lists(wanted)[listed].Entries) == 2 })
+
+	release()
+	waitFor(t, "the goroutine to end", func() bool { l.mu.Lock(); defer l.mu.Unlock(); return !l.running })
+	l.reread(stored)
+	l.mu.Lock()
+	_, kept := l.repos[listed]
+	l.mu.Unlock()
+	if kept {
+		t.Errorf("a reread through the stored spelling with no viewer kept the list")
+	}
+}
+
 // railFakeSource is a WorktreeSource that also lists repositories.
 type railFakeSource struct {
 	railFakeRead
