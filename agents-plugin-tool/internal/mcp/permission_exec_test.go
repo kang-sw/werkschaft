@@ -154,7 +154,7 @@ func TestReadOnlyWorkerChildArgvAndEnvironment(t *testing.T) {
 	path := bin + string(os.PathListSeparator) + os.Getenv("PATH")
 	w := newWorkerFixture(t, "codex", wsagent.PermissionReadOnly,
 		"PATH="+path, "BASH_ENV="+startup, "ENV="+startup, "GIT_EXTERNAL_DIFF="+startup, "GIT_PAGER=touch "+marker, "PAGER=touch "+marker,
-		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.pager", "GIT_CONFIG_VALUE_0=touch "+marker, "LD_PRELOAD=/nonexistent", "WS_SECRET=secret")
+		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.pager", "GIT_CONFIG_VALUE_0=touch "+marker, "WS_TEST_LEAK_SENTINEL=secret")
 	for name, call := range map[string]func() (string, bool){
 		"run": func() (string, bool) {
 			return w.call("exec.run", map[string]any{"exe": "nl", "args": []string{"*.md", "$HOME", "a  b", "it's"}})
@@ -173,7 +173,7 @@ func TestReadOnlyWorkerChildArgvAndEnvironment(t *testing.T) {
 				t.Errorf("%s: child output lacks %q:\n%s", name, want, text)
 			}
 		}
-		for _, bad := range []string{"ENV:BASH_ENV", "ENV:ENV=", "ENV:GIT_EXTERNAL_DIFF", "touch", "ENV:LD_PRELOAD", "ENV:WS_SECRET", "core.pager", "ENV:WS_MCP"} {
+		for _, bad := range []string{"ENV:BASH_ENV", "ENV:ENV=", "ENV:GIT_EXTERNAL_DIFF", "touch", "ENV:LD_PRELOAD", "ENV:WS_TEST_LEAK_SENTINEL", "core.pager", "ENV:WS_MCP"} {
 			if strings.Contains(text, bad) {
 				t.Errorf("%s: the child received %q:\n%s", name, bad, text)
 			}

@@ -39,6 +39,20 @@ func TestReadOnlyShellLineAllowed(t *testing.T) {
 		"git log --no-ext-diff -1",
 		"jq . file.json",
 	} {
+		// The matrix does not depend on installed tools: a line whose
+		// program is absent from this host's PATH is skipped.
+		if segs, err := parseReadOnlyLine(line); err == nil {
+			absent := ""
+			for _, seg := range segs {
+				if _, lookErr := wsgit.LookPathEnv(seg.words[0].text, os.Environ()); lookErr != nil {
+					absent = seg.words[0].text
+				}
+			}
+			if absent != "" {
+				t.Logf("skipped %q: %s is not on PATH", line, absent)
+				continue
+			}
+		}
 		if _, err := readOnlyLine(t, line); err != nil {
 			t.Errorf("%q refused: %v", line, err)
 		}
