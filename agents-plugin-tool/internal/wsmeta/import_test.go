@@ -40,7 +40,7 @@ func TestImportOldDataKeepsOriginalsAndUnknownMembers(t *testing.T) {
 	if stage.Sessions != wantSessions || stage.Restaged == 0 || stage.Reused != 0 || len(stage.Unfenced) != 0 {
 		t.Fatalf("stage = %+v", stage)
 	}
-	res, err := s.Commit(ctx, CommitOptions{})
+	res, err := s.Commit(ctx, testCommit())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestStageInterruptedMidPassLeavesNothingAndRetries(t *testing.T) {
 	if _, err := s.Stage(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Commit(ctx, CommitOptions{}); err != nil {
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -243,7 +243,7 @@ func TestCommitInterruptedRetriesFromLiveUnfencedFiles(t *testing.T) {
 
 	for _, stage := range []string{"commit-staged", "commit-imported", "before-commit"} {
 		failAt = stage
-		if _, err := s.Commit(ctx, CommitOptions{}); err == nil {
+		if _, err := s.Commit(ctx, testCommit()); err == nil {
 			t.Fatalf("commit interrupted at %s succeeded", stage)
 		}
 		if done, err := s.ImportComplete(ctx); err != nil || done {
@@ -260,7 +260,7 @@ func TestCommitInterruptedRetriesFromLiveUnfencedFiles(t *testing.T) {
 	}
 
 	failAt = "commit-done" // after the commit point: the import stands
-	if _, err := s.Commit(ctx, CommitOptions{}); err == nil {
+	if _, err := s.Commit(ctx, testCommit()); err == nil {
 		t.Fatal("fault after commit was not reported")
 	}
 	done, err := s.ImportComplete(ctx)
@@ -282,7 +282,7 @@ func TestCommitInterruptedRetriesFromLiveUnfencedFiles(t *testing.T) {
 		t.Fatalf("pruned session directory was recreated: %v", err)
 	}
 	failAt = ""
-	res, err := s.Commit(ctx, CommitOptions{})
+	res, err := s.Commit(ctx, testCommit())
 	if err != nil || !res.AlreadyComplete {
 		t.Fatalf("repeat commit = %+v, %v", res, err)
 	}
@@ -359,7 +359,7 @@ func TestFenceLandedBeforeJournalMarkKeepsOriginal(t *testing.T) {
 	if c := caps[absentPerm]; c.State != CaptureAbsent {
 		t.Fatalf("absent-before-fence capture = %+v", c)
 	}
-	if _, err := s.Commit(ctx, CommitOptions{}); err != nil {
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := s.Load(ctx)
@@ -401,7 +401,7 @@ func TestForeignWriteOverFenceReturnsToLiveAuthority(t *testing.T) {
 	put(t, dir, perm, lowered)
 
 	// A commit refuses while a fenced file is unfenced, and changes nothing.
-	if _, err := s.Commit(ctx, CommitOptions{}); !errors.Is(err, ErrFenceInvalidated) {
+	if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrFenceInvalidated) {
 		t.Fatalf("commit over an invalidated fence = %v", err)
 	}
 	if c := captureMap(t, s)[perm]; c.FenceState != FenceLanded {
@@ -419,7 +419,7 @@ func TestForeignWriteOverFenceReturnsToLiveAuthority(t *testing.T) {
 		t.Fatalf("re-staged capture = %+v", c)
 	}
 	var seen []Capture
-	if _, err := s.Commit(ctx, CommitOptions{BeforeMarker: func(c []Capture) error { seen = c; return nil }}); err != nil {
+	if _, err := s.Commit(ctx, withMarker(func(c []Capture) error { seen = c; return nil })); err != nil {
 		t.Fatal(err)
 	}
 	if len(seen) == 0 {
@@ -438,7 +438,7 @@ func TestBeforeMarkerErrorRollsBack(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t, legacyFixture(t), testOpts())
 	boom := errors.New("fence check failed")
-	if _, err := s.Commit(ctx, CommitOptions{BeforeMarker: func([]Capture) error { return boom }}); !errors.Is(err, boom) {
+	if _, err := s.Commit(ctx, withMarker(func([]Capture) error { return boom })); !errors.Is(err, boom) {
 		t.Fatalf("commit = %v", err)
 	}
 	if done, _ := s.ImportComplete(ctx); done {
@@ -456,7 +456,7 @@ func TestRestartRestoresFromSQLiteAndIgnoresLegacyEdits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Commit(ctx, CommitOptions{}); err != nil {
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
 		t.Fatal(err)
 	}
 	first, err := s.Load(ctx)
@@ -485,7 +485,7 @@ func TestRestartRestoresFromSQLiteAndIgnoresLegacyEdits(t *testing.T) {
 	if _, err := s2.Stage(ctx); !errors.Is(err, ErrImportComplete) {
 		t.Fatalf("stage after import = %v", err)
 	}
-	if res, err := s2.Commit(ctx, CommitOptions{}); err != nil || !res.AlreadyComplete {
+	if res, err := s2.Commit(ctx, testCommit()); err != nil || !res.AlreadyComplete {
 		t.Fatalf("commit after import = %+v, %v", res, err)
 	}
 	if !reflect.DeepEqual(journal, captureMap(t, s2)) {
@@ -496,7 +496,7 @@ func TestRestartRestoresFromSQLiteAndIgnoresLegacyEdits(t *testing.T) {
 func TestEmptyDashboardImportsNothing(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t, filepath.Join(t.TempDir(), "dashboard"), testOpts())
-	res, err := s.Commit(ctx, CommitOptions{})
+	res, err := s.Commit(ctx, testCommit())
 	if err != nil {
 		t.Fatal(err)
 	}

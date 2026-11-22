@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,6 +19,59 @@ var testNow = time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 
 func testOpts() Options {
 	return Options{Now: func() time.Time { return testNow }, CheckpointIdle: -1}
+}
+
+// testValidate stands in for the owners' legacy decoders that Phase 2 binds
+// (wsagent.ValidateLegacyRecord, wsdashboard.ValidateLegacyUsageHistory):
+// known record members keep their types, and every history sample needs a
+// positive asOf.
+func testValidate() map[string]func(string, []byte) error {
+	record := func(replyID string, raw []byte) error {
+		var r struct {
+			ReplyID   string `json:"reply_id"`
+			WSKey     string `json:"ws_session_key"`
+			Root      string `json:"root"`
+			ClosedAt  string `json:"closed_at"`
+			HolderSeq uint64 `json:"holder_seq"`
+		}
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return err
+		}
+		if r.ReplyID != replyID || r.WSKey == "" || r.Root == "" {
+			return errors.New("not a complete agent record")
+		}
+		return nil
+	}
+	history := func(_ string, raw []byte) error {
+		var h struct {
+			Samples []struct {
+				AsOf int64 `json:"asOf"`
+			} `json:"samples"`
+		}
+		if err := json.Unmarshal(raw, &h); err != nil {
+			return err
+		}
+		for _, v := range h.Samples {
+			if v.AsOf <= 0 {
+				return errors.New("invalid usage history sample")
+			}
+		}
+		return nil
+	}
+	return map[string]func(string, []byte) error{
+		StoreAgentRecord:       record,
+		StoreUsageHistory:      history,
+		StoreUsageHistoryCodex: history,
+		StoreUsageHistoryAgy:   history,
+	}
+}
+
+func testCommit() CommitOptions { return CommitOptions{Validate: testValidate()} }
+
+func withMarker(f func([]Capture) error) CommitOptions {
+	o := testCommit()
+	o.BeforeMarker = f
+	return o
 }
 
 func openTest(t *testing.T, dir string, opts Options) *Store {

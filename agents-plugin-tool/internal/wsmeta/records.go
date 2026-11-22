@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 )
 
 // RecordDeltaBound is how many member deltas a conversation record keeps
@@ -95,6 +96,39 @@ func (s *Store) PatchRecord(ctx context.Context, replyID string, patch map[strin
 		} else if err != nil {
 			return err
 		}
+		if newHolder, ok := patch["holder_id"]; ok {
+			// A holder change starts the new holder's ring at zero, as the
+			// runner's attach does (runner_process.go: HolderID, HolderSeq =
+			// id, 0): the old holder's sequence never becomes the new
+			// holder's replay position, and no earlier cursor overlays it.
+			snapshot, deltas, err := loadRecordParts(ctx, tx, replyID)
+			if err != nil {
+				return err
+			}
+			current, err := recordHolder(snapshot, deltas)
+			if err != nil {
+				return err
+			}
+			var nextHolder string
+			if !isNull(newHolder) {
+				_ = json.Unmarshal(newHolder, &nextHolder)
+			}
+			if nextHolder != current {
+				if _, ok := patch["holder_seq"]; !ok {
+					reset := make(map[string]json.RawMessage, len(patch)+1)
+					for k, v := range patch {
+						reset[k] = v
+					}
+					reset["holder_seq"] = json.RawMessage(`null`)
+					if raw, err = json.Marshal(reset); err != nil {
+						return err
+					}
+				}
+				if _, err := tx.ExecContext(ctx, `DELETE FROM agent_holder_cursors WHERE reply_id = ?`, replyID); err != nil {
+					return err
+				}
+			}
+		}
 		if next > RecordDeltaBound {
 			return s.compactRecord(ctx, tx, replyID, raw)
 		}
@@ -137,6 +171,11 @@ func (s *Store) SetHolderCursor(ctx context.Context, replyID, holderID string, s
 	}
 	if holderID == "" {
 		return fmt.Errorf("wsmeta: empty holder id")
+	}
+	if seq > math.MaxInt64 {
+		// SQLite integers are signed 64-bit; a larger value would compare
+		// out of order.
+		return fmt.Errorf("wsmeta: holder sequence %d exceeds %d", seq, int64(math.MaxInt64))
 	}
 	return s.write(ctx, relaxed, func(tx *sql.Tx) error {
 		if err := s.requireImported(ctx, tx); err != nil {

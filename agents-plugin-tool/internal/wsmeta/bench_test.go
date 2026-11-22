@@ -26,7 +26,7 @@ func benchStore(b *testing.B) *Store {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = s.Close() })
-	if _, err := s.Commit(context.Background(), CommitOptions{}); err != nil {
+	if _, err := s.Commit(context.Background(), testCommit()); err != nil {
 		b.Fatal(err)
 	}
 	return s

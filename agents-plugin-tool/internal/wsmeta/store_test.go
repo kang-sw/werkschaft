@@ -19,7 +19,7 @@ func TestOpenIsOwnerOnlyExclusiveAndShmFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Commit(ctx, CommitOptions{}); err != nil {
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
 		t.Fatal(err)
 	}
 	var mode, locking string
@@ -92,7 +92,7 @@ func importedStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	dir := legacyFixture(t)
 	s := openTest(t, dir, testOpts())
-	if _, err := s.Commit(context.Background(), CommitOptions{}); err != nil {
+	if _, err := s.Commit(context.Background(), testCommit()); err != nil {
 		t.Fatal(err)
 	}
 	return s, dir

@@ -74,7 +74,7 @@ func TestTransientReadKeepsFencedOriginalAndBlocksCommit(t *testing.T) {
 		t.Fatalf("an unread new file was captured: %+v", c)
 	}
 	// A commit refuses and changes nothing while any input is unread.
-	if _, err := s.Commit(ctx, CommitOptions{}); !errors.Is(err, ErrLegacyUnread) || !strings.Contains(err.Error(), record) {
+	if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrLegacyUnread) || !strings.Contains(err.Error(), record) {
 		t.Fatalf("commit with unread inputs = %v", err)
 	}
 	if done, err := s.ImportComplete(ctx); err != nil || done {
@@ -86,7 +86,7 @@ func TestTransientReadKeepsFencedOriginalAndBlocksCommit(t *testing.T) {
 
 	// Once the reads succeed the retry imports the original selection.
 	failing = false
-	if _, err := s.Commit(ctx, CommitOptions{}); err != nil {
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := s.Load(ctx)
@@ -113,7 +113,7 @@ func TestStableReadErrorIsUnreadableAndFailsClosed(t *testing.T) {
 	const perm = "sessions/hostedlead/permission.json"
 	failing := true
 	s := openTest(t, dir, failingReads(dir, &failing, fs.ErrPermission, perm))
-	res, err := s.Commit(ctx, CommitOptions{})
+	res, err := s.Commit(ctx, testCommit())
 	if err != nil {
 		t.Fatal(err)
 	}

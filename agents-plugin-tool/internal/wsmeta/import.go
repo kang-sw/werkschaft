@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Import statuses of a capture row.
@@ -32,7 +35,23 @@ type CommitOptions struct {
 	// capture pass and the keyed import, before the completion marker. A
 	// non-nil error rolls everything back (the cutover's fence check).
 	BeforeMarker func(captures []Capture) error
+	// Validate holds the legacy owners' own decoders, keyed by capture
+	// store. A present document this package decoded is imported only when
+	// its validator accepts it; a refusal imports it as invalid, keeping
+	// its bytes in the journal. This package cannot import the owners, so
+	// Commit refuses with ErrValidatorMissing while a present capture of a
+	// store in RequiredValidators has none: agent records (wsagent's
+	// readRecord decode, every known member typed) and the usage histories
+	// (wsdashboard's per-harness sample validity).
+	Validate map[string]func(replyID string, raw []byte) error
 }
+
+// RequiredValidators are the stores whose legacy reader rejects documents
+// this package's member-level decode would accept.
+var RequiredValidators = []string{StoreAgentRecord, StoreUsageHistory, StoreUsageHistoryCodex, StoreUsageHistoryAgy}
+
+// ErrValidatorMissing reports a commit without a required legacy validator.
+var ErrValidatorMissing = errors.New("wsmeta: a required legacy validator is missing")
 
 // ImportResult describes a committed (or already committed) import.
 type ImportResult struct {
@@ -88,9 +107,12 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 		if err != nil {
 			return err
 		}
+		if err := checkValidators(captures, opts.Validate); err != nil {
+			return err
+		}
 		for i := range captures {
 			c := &captures[i]
-			status, detail, err := importCapture(ctx, tx, *c)
+			status, detail, err := importCapture(ctx, tx, *c, opts.Validate[c.Store])
 			if err != nil {
 				return fmt.Errorf("import %s: %w", c.Path, err)
 			}
@@ -139,7 +161,20 @@ type errIgnored struct{ detail string }
 
 func (e errIgnored) Error() string { return e.detail }
 
-func importCapture(ctx context.Context, tx *sql.Tx, c Capture) (status, detail string, err error) {
+func checkValidators(captures []Capture, validate map[string]func(string, []byte) error) error {
+	required := map[string]bool{}
+	for _, store := range RequiredValidators {
+		required[store] = true
+	}
+	for _, c := range captures {
+		if c.State == CapturePresent && required[c.Store] && validate[c.Store] == nil {
+			return fmt.Errorf("%w: %s (%s)", ErrValidatorMissing, c.Store, c.Path)
+		}
+	}
+	return nil
+}
+
+func importCapture(ctx context.Context, tx *sql.Tx, c Capture, validate func(string, []byte) error) (status, detail string, err error) {
 	switch c.State {
 	case CaptureAbsent:
 		return ImportAbsent, "", nil
@@ -161,6 +196,12 @@ func importCapture(ctx context.Context, tx *sql.Tx, c Capture) (status, detail s
 		return "", "", err
 	}
 	decodeErr := decodeCapture(ctx, tx, c)
+	if decodeErr == nil && validate != nil {
+		// After the decode, so a newer document still reads as future.
+		if err := validate(c.ReplyID, c.Bytes); err != nil {
+			decodeErr = invalidf("%v", err)
+		}
+	}
 	if decodeErr != nil {
 		if _, err := tx.ExecContext(ctx, `ROLLBACK TO capture`); err != nil {
 			return "", "", err
@@ -318,7 +359,7 @@ func importAgentRecord(ctx context.Context, tx *sql.Tx, c Capture) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_records(reply_id, session_gen, snapshot_json) VALUES(?, ?, ?)`, c.ReplyID, c.SessionGen, c.Bytes); err != nil {
 		return err
 	}
-	if holderID != "" && holderSeq > 0 {
+	if holderID != "" && holderSeq > 0 && holderSeq <= math.MaxInt64 {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_holder_cursors(reply_id, holder_id, holder_seq) VALUES(?, ?, ?)`, c.ReplyID, holderID, int64(holderSeq)); err != nil {
 			return err
 		}
@@ -342,10 +383,12 @@ func importPermission(ctx context.Context, tx *sql.Tx, c Capture) error {
 	if ok, err := member(m, "permission_level", &level); err != nil || !ok || !permissionLevels[level] {
 		return invalidf("invalid permission_level")
 	}
+	// Presence alone sets provenance; JSON null decodes as false there
+	// (permission_store.go readPermissionSelectionState).
 	delegatedSet, delegated := false, false
 	if raw, ok := m["delegated_authority"]; ok {
 		delegatedSet = true
-		if err := json.Unmarshal(raw, &delegated); err != nil || isNull(raw) {
+		if err := json.Unmarshal(raw, &delegated); err != nil {
 			return invalidf("invalid delegated_authority")
 		}
 	}
@@ -359,15 +402,37 @@ func importLabel(ctx context.Context, tx *sql.Tx, c Capture) error {
 	if err != nil {
 		return err
 	}
-	var label string
-	if _, err := member(m, "label", &label); err != nil {
+	var raw string
+	if _, err := member(m, "label", &raw); err != nil {
 		return err
+	}
+	label, ok := cleanLabel(raw)
+	if !ok {
+		return invalidf("not a label: one line of at most %d characters", maxLabelRunes)
 	}
 	if label == "" {
 		return errIgnored{"empty label"}
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO labels(reply_id, label, body_json) VALUES(?, ?, ?)`, c.ReplyID, label, c.Bytes)
 	return err
+}
+
+// maxLabelRunes and cleanLabel mirror wsdashboard's label rules
+// (label_route.go cleanLabel): readSessionLabel trims the value and reads an
+// invalid one as no label, so only a clean label gets a live row.
+const maxLabelRunes = 64
+
+func cleanLabel(raw string) (string, bool) {
+	label := strings.TrimSpace(raw)
+	if !utf8.ValidString(label) {
+		return "", false
+	}
+	for _, r := range label {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return "", false
+		}
+	}
+	return label, utf8.RuneCountInString(label) <= maxLabelRunes
 }
 
 func importAckCheck(ctx context.Context, tx *sql.Tx, c Capture) error {
@@ -700,6 +765,13 @@ func importMemo(ctx context.Context, tx *sql.Tx, c Capture) error {
 		return err
 	}
 	for i, raw := range items {
+		if isNull(raw) {
+			// readMemoDoc keeps a null item and memos() skips it.
+			if _, err := tx.ExecContext(ctx, `INSERT INTO memos(workspace_hash, position, memo_id, body_json) VALUES(?, ?, '', ?)`, hash, i, []byte("null")); err != nil {
+				return err
+			}
+			continue
+		}
 		item, err := object(raw)
 		if err != nil {
 			return invalidf("memos[%d]: not an object", i)
