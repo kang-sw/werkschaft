@@ -372,6 +372,47 @@ history rendering, the open-below oldest interval once history ends
 history. Cover chip persistence, paging both ways, J/K skipping
 hidden kinds, and LOOK side by side with both mockups.
 
+### Result (0dc7dfdc) - 2026-11-23
+
+- Added hidden-event rows in `dashboard-audit-rows.js` (699 lines) and
+  `dashboard-audit-rows.css` (201 lines), `data-at` on every `ConvEntry`
+  wrapper, the `.hb` conversation header badge, a centered `.au-sysrow`
+  session-start system prompt banner, and `.au-inner` call-attached rows
+  with chronological orphan fallback.
+- Implemented (607)/(681) half-open UTC `[since, until)` paging, open-below
+  fetching on `end: true`, empty-history fallback, multi-page live `after=`
+  refresh drain, `503`/network retries without poisoning coverage, a single
+  `410` reset, and epoch guards on `ws-history-reset` fetches and
+  `ws-history-page` continuations.
+- Added `dashboard-conversation.js` `[data-entry]` child guards in
+  `firstEntryEl`, `lastEntryEl`, `mergeEntries`, `gapped`, `evictEntries`,
+  and `loadHistory`, plus `ws-history-page`, `ws-entries-merged`, and
+  `ws-history-reset` CustomEvents.
+- Added `WsAudit.openEvent` with `reqToken` invalidation on cached and
+  uncached switches. Default tabs select Raw for `other`, Output for
+  out-only non-call events, and Input when input is present; ←/→ step
+  across visible audit rows.
+- Added seven-kind filter chips persisted under `ws.dashboard.auditkinds`,
+  conversation-scoped J/K/Enter navigation skipping hidden kinds, and
+  11-locale i18n parity (+9 keys, 3,231 total).
+
+Verification:
+- Node audit suites: 22/22 PASS, including reset/continuation races,
+  failed second-page retry, multi-page live refresh, and cached-event switches.
+- Full non-browser Go suites (`wsdashboard` and `wsi18n`): PASS before
+  review fixes; targeted dashboard Go tests and i18n suite: PASS after rebase.
+- Final isolated Chromium `TestAuditViewBrowser` and
+  `TestAuditViewPhase2Browser`: PASS (6.412s).
+- Four LOOK captures visually inspected by lead:
+  `/tmp/audit-view-phase2-captures/audit-p2-{wide,narrow}-{dark,light}.png`
+  (untracked).
+- Read-only `codex.medium` review: **PASS** at `0dc7dfdc`.
+- `git diff --check`: PASS; merge-tree against `develop@42969d3e3`:
+  zero conflicts.
+
+Phase 3 remains: conversation-wide search, field-count badges, and paged
+hit-list navigation. The ticket stays in `ready/`.
+
 ### Phase 3: Conversation-wide search
 
 Depends on this ticket's Phase 2.
