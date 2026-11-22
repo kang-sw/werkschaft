@@ -806,8 +806,9 @@ func TestAuditReplayOrdinalsIgnoreCarriedAssemblies(t *testing.T) {
 // line ends a thinking block whose body was all tee'd and a tool block, and
 // carries [thinking, tool_call]; the tool_call's append fails. Replayed, the
 // thinking body is gone (no event) and only the tool_call is rebuilt. It
-// keeps its block's slot, so it is appended once rather than mistaken for
-// the retained thinking, and nothing is duplicated.
+// keeps its block's slot, so it is not mistaken for the retained thinking;
+// and its record is at the finalized boundary, so it is recorded as loss,
+// never appended late (Decision 5). Nothing is duplicated.
 func TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone(t *testing.T) {
 	const (
 		toolStart = `{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}}}`
@@ -826,7 +827,7 @@ func TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone(t *testing.T) {
 	r.keptRun(toolStop, 1, 0)
 	isCall := func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindToolCall }
 	sink.failEnv = isCall
-	r.keptRun(auditResultLine, 0, 0)
+	resultSeq := r.keptRun(auditResultLine, 0, 0)
 	kept := []string{thinkStart, thinkBlock, thinkStop, toolStart, toolStop, auditResultLine}
 	r.end()
 	if th := find(sink.events(), ofKind(wsaudit.KindThinking)); len(th) != 1 || th[0].Out != "tee only" {
@@ -846,8 +847,14 @@ func TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone(t *testing.T) {
 	if n := len(find(evs, ofKind(wsaudit.KindThinking))); n != 1 {
 		t.Fatalf("thinking events after replay = %d, want 1", n)
 	}
-	if calls := find(evs, isCall); len(calls) != 1 || calls[0].CallID != "toolu_1" {
-		t.Fatalf("tool calls after replay = %+v, want the failed one appended once", calls)
+	if calls := find(evs, isCall); len(calls) != 0 {
+		t.Fatalf("tool calls after replay = %+v, want the failed one never appended late", calls)
+	}
+	// The tool block's slot is its index, 1: positionally it would be #0,
+	// the retained thinking's identity, and vanish without a loss.
+	want := wsaudit.SourceID{Source: "h1", Key: fmt.Sprintf("asm.%d", resultSeq), Ordinal: 1}
+	if !slices.Equal(sink.lost, []wsaudit.SourceID{want}) {
+		t.Fatalf("losses = %+v, want only the tool call %+v", sink.lost, want)
 	}
 	if n := len(find(evs, func(ev wsaudit.Envelope) bool { return ev.Subkind == "result:success" })); n != 1 {
 		t.Fatalf("results after replay = %d, want 1", n)
@@ -902,6 +909,59 @@ func TestAuditCodexReplayAfterTheStartedItemWrapped(t *testing.T) {
 			}
 			if len(sink.lost) != 0 || len(evs) != len(live) {
 				t.Fatalf("clean replay: losses %+v, %d events (live %d); want nothing new", sink.lost, len(evs), len(live))
+			}
+		})
+	}
+}
+
+// TestAuditCodexFailedCallIsNeverAppendedAfterTheCut pins Decision 5 for a
+// keyed event: live, the call's append fails, its result is retained, and a
+// compaction cut follows. Replayed (with item/started still in the ring, or
+// wrapped out so the completion yields the call), the call's record is at
+// or below the finalized boundary, so it is recorded as loss: appended late
+// it would land after its result and after the cut, with a fresh seq.
+func TestAuditCodexFailedCallIsNeverAppendedAfterTheCut(t *testing.T) {
+	item := func(method, status string) string {
+		return fmt.Sprintf(`{"method":%q,"params":{"threadId":"th1","turnId":"tu1","item":{"type":"commandExecution","id":"call-1","command":"ls","cwd":"/","status":%q,"aggregatedOutput":"ok","exitCode":0}}}`, method, status)
+	}
+	lines := []string{
+		`{"method":"turn/started","params":{"threadId":"th1","turn":{"id":"tu1","status":"inProgress","items":[]}}}`,
+		item("item/started", "inProgress"),
+		item("item/completed", "completed"),
+		`{"method":"item/completed","params":{"threadId":"th1","turnId":"tu1","item":{"type":"contextCompaction","id":"cc-1"}}}`,
+		`{"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"tu1","status":"completed","items":[]}}}`,
+	}
+	for _, from := range []int{1, 3} { // replay the whole ring, or from the completion on
+		t.Run(fmt.Sprintf("replay from %d", from), func(t *testing.T) {
+			sink := newBoundarySink()
+			isCall := func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindToolCall }
+			sink.failEnv = isCall
+			r := newAuditRigWith(t, sink, "h1", newCodexMapper("th1"), codexProtocol{})
+			for _, l := range lines {
+				r.kept(l)
+			}
+			r.end()
+			live := sink.events()
+			if len(find(live, isCall)) != 0 || len(find(live, ofKind(wsaudit.KindToolResult))) != 1 || len(find(live, ofKind(wsaudit.KindCompaction))) != 1 {
+				t.Fatalf("live = %+v, want the result and the cut without the call", live)
+			}
+			sink.failEnv = nil
+
+			r2 := newAuditRigWith(t, sink, "h1", newCodexMapper("th1"), codexProtocol{})
+			for i := from; i <= len(lines); i++ {
+				r2.replayed(uint64(i), lines[i-1])
+			}
+			r2.end()
+			evs := sink.events()
+			if calls := find(evs, isCall); len(calls) != 0 {
+				t.Fatalf("call appended late after its result and the cut: %+v", calls)
+			}
+			if len(evs) != len(live) {
+				t.Fatalf("%d events after replay, live %d; want nothing new", len(evs), len(live))
+			}
+			want := wsaudit.SourceID{Source: "h1", Key: codexCallKey("call-1")}
+			if !slices.Equal(sink.lost, []wsaudit.SourceID{want}) {
+				t.Fatalf("losses = %+v, want only the call %+v", sink.lost, want)
 			}
 		})
 	}

@@ -399,7 +399,8 @@ func (c *auditCapture) run() {
 			c.noteLate()
 			c.closeTee(wsaudit.LossStreamEnd)
 			at := time.Now()
-			c.emit(c.adapter.flush(at), true, nil, at, wsaudit.SourceID{Source: c.source, Key: "end." + strconv.FormatUint(c.boundary, 10)})
+			// The assemblies still open sit at the last kept line mapped.
+			c.emit(c.adapter.flush(at), true, nil, at, wsaudit.SourceID{Source: c.source, Seq: c.boundary}, "end."+strconv.FormatUint(c.boundary, 10))
 			c.finalize()
 			return
 		}
@@ -660,8 +661,9 @@ func (c *auditCapture) closeTee(reason string) {
 
 func (c *auditCapture) mapKept(it auditItem) {
 	recognized, carried, evs := c.adapter.mapLine(it.data, it.at)
-	c.emitCarried(carried, it.at, "asm."+strconv.FormatUint(it.seq, 10))
-	c.emit(evs, recognized, it.data, it.at, wsaudit.SourceID{Source: c.source, Seq: it.seq})
+	rec := wsaudit.SourceID{Source: c.source, Seq: it.seq}
+	c.emitCarried(carried, it.at, rec, "asm."+strconv.FormatUint(it.seq, 10))
+	c.emit(evs, recognized, it.data, it.at, rec, "")
 	if it.seq > c.boundary {
 		c.boundary = it.seq
 	}
@@ -670,38 +672,45 @@ func (c *auditCapture) mapKept(it auditItem) {
 func (c *auditCapture) mapTee(t wsholder.Event) {
 	at := time.Unix(0, t.At)
 	recognized, carried, evs := c.adapter.mapLine(bytes.TrimRight(t.Data, "\r\n"), at)
-	c.emitCarried(carried, at, fmt.Sprintf("asm.t%d.%d", t.Anchor, t.Index))
-	c.emit(evs, recognized, t.Data, at, wsaudit.SourceID{Source: c.source, Tee: true, Anchor: t.Anchor, Index: t.Index})
+	rec := wsaudit.SourceID{Source: c.source, Tee: true, Anchor: t.Anchor, Index: t.Index}
+	c.emitCarried(carried, at, rec, fmt.Sprintf("asm.t%d.%d", t.Anchor, t.Index))
+	c.emit(evs, recognized, t.Data, at, rec, "")
 }
 
-// emitCarried appends the assemblies a source record ended under their own
-// key, apart from the record's identity: they come from tee'd lines, and the
-// record's own events keep ordinals that do not depend on them.
-func (c *auditCapture) emitCarried(evs []auditEvent, at time.Time, key string) {
+// emitCarried appends the assemblies source record rec ended under their
+// own key, apart from rec's identity: they come from tee'd lines, and rec's
+// own events keep ordinals that do not depend on them.
+func (c *auditCapture) emitCarried(evs []auditEvent, at time.Time, rec wsaudit.SourceID, key string) {
 	if len(evs) > 0 {
-		c.emit(evs, true, nil, at, wsaudit.SourceID{Source: c.source, Key: key})
+		c.emit(evs, true, nil, at, rec, key)
 	}
 }
 
-// emit filters one source record's events through the capture policy and
-// appends each under the record's identity, its slot the ordinal.
-func (c *auditCapture) emit(mapped []auditEvent, recognized bool, raw []byte, at time.Time, id wsaudit.SourceID) {
+// emit filters the events source record rec yields through the capture
+// policy and appends each, its slot the ordinal, under rec's identity or,
+// with key set, under that key; an event's own key replaces either. Every
+// one keeps rec as its position for the recovery rule.
+func (c *auditCapture) emit(mapped []auditEvent, recognized bool, raw []byte, at time.Time, rec wsaudit.SourceID, key string) {
+	base := rec
+	if key != "" {
+		base = wsaudit.SourceID{Source: c.source, Key: key}
+	}
 	if !recognized {
 		for i, ev := range wsaudit.CaptureLine(c.session, c.harness, at, string(bytes.TrimRight(raw, "\r\n")), false, nil) {
-			eid := id
+			eid := base
 			eid.Ordinal = i
-			c.append(eid, ev)
+			c.append(eid, rec, ev)
 		}
 		return
 	}
 	for _, m := range mapped {
 		for _, ev := range wsaudit.FilterEvents(c.session, []wsaudit.Envelope{m.ev}) {
-			eid := id
+			eid := base
 			eid.Ordinal = m.slot
 			if m.key != "" {
 				eid = wsaudit.SourceID{Source: c.source, Key: m.key}
 			}
-			c.append(eid, ev)
+			c.append(eid, rec, ev)
 		}
 	}
 }
@@ -725,14 +734,19 @@ func (c *auditCapture) loss(n uint64, reason string, pos uint64) {
 	if !wsaudit.ShouldCapture(c.session, ev.Kind) {
 		return
 	}
-	c.append(wsaudit.SourceID{Source: c.source, Key: fmt.Sprintf("loss.%d.%d", pos, c.losses)}, ev)
+	// A loss marker is a record of its own, never refused as late.
+	id := wsaudit.SourceID{Source: c.source, Key: fmt.Sprintf("loss.%d.%d", pos, c.losses)}
+	c.append(id, id, ev)
 }
 
 // append writes one envelope under id, applying the recovery rule: an
-// identity already retained is skipped, and one at or below the finalized
-// boundary of an earlier capture that is not retained is recorded as loss,
-// never appended late.
-func (c *auditCapture) append(id wsaudit.SourceID, ev wsaudit.Envelope) {
+// identity already retained is skipped, and one whose source record rec
+// sits at or below the finalized boundary of an earlier capture and is not
+// retained is recorded as loss, never appended late. The rule goes by rec,
+// not id, so a keyed event (a carried assembly, a Codex call) is held to
+// its record's place too: appended late it would land after events it
+// precedes (its result, a compaction cut) with a fresh seq.
+func (c *auditCapture) append(id, rec wsaudit.SourceID, ev wsaudit.Envelope) {
 	if ev.ID == "" {
 		ev.ID = id.String()
 	}
@@ -742,7 +756,7 @@ func (c *auditCapture) append(id wsaudit.SourceID, ev wsaudit.Envelope) {
 		if c.sourced.Retained(c.session.ID, id) {
 			return
 		}
-		if b := c.recovery.Boundary; b > 0 && (id.Tee && id.Anchor < b || !id.Tee && id.Key == "" && id.Seq <= b) {
+		if b := c.recovery.Boundary; b > 0 && (rec.Tee && rec.Anchor < b || !rec.Tee && rec.Key == "" && rec.Seq <= b) {
 			if err := c.sourced.RecordLoss(ctx, c.session.ID, id, wsaudit.LossAppendFailed); err != nil {
 				c.logf("record loss of %s: %v", id, err)
 			}
