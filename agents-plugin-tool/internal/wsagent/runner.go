@@ -127,6 +127,10 @@ type Options struct {
 	// AgyModelWaitBackoff returns the delay before automatic continue attempt
 	// n (one-based). Nil uses bounded exponential jitter.
 	AgyModelWaitBackoff func(attempt int) time.Duration
+	// AgyLogDir is where agy writes its acp-worker-*.log files, which a
+	// hosted agy lead's stall cutoff reads. Empty uses agy's own directory
+	// under the user's home.
+	AgyLogDir string
 	// WSMCP is the stdio ws-mcp command serving root, without the runner's
 	// environment; nil refuses profiles that allow ws tools.
 	WSMCP func(root string) (MCPCommand, error)

@@ -212,6 +212,12 @@ const (
 	// Package manifests supply the defaults.
 	ItemAgyModelWaitTimeoutSeconds = "agy.model_wait_timeout_seconds"
 	ItemAgyModelWaitRetries        = "agy.model_wait_retries"
+	// ItemAgyStallLogCheck gates a hosted agy lead's silence cutoff on agy's
+	// own worker log showing no response headers for the current request;
+	// ItemAgyHTTP2FrameTrace starts agy with an HTTP/2 frame trace kept as a
+	// filtered capture file. Both are booleans read at process start.
+	ItemAgyStallLogCheck   = "agy.stall_log_check"
+	ItemAgyHTTP2FrameTrace = "agy.http2_frame_trace"
 
 	// ItemExecNativeToolRemoval is the per-harness rollout switch of the
 	// exec cutover: on (the default) launches a dashboard-hosted session
