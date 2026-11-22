@@ -574,6 +574,21 @@ func guidance() string {
 }
 func terminal(s string) bool { return s == stateSucceeded || s == stateFailed || s == stateCancelled }
 
+// ResolveWorkingDir resolves wd inside root (root itself when empty) and
+// refuses one outside it, as every exec launch does.
+func ResolveWorkingDir(root, wd string) (string, error) { return resolveWorkingDir(root, wd) }
+
+// OverlayEnv is base with env laid over it, the environment a launch runs
+// under.
+func OverlayEnv(base []string, env map[string]string) []string { return overlayEnv(base, env) }
+
+// LegacyShellArgv is the legacy exec.shell argv for command under shell
+// (the platform shell when empty).
+func LegacyShellArgv(shell, command string) []string {
+	bin, args := shellCommand(shell, command)
+	return append([]string{bin}, args...)
+}
+
 func resolveWorkingDir(root, wd string) (string, error) {
 	root = filepath.Clean(root)
 	if strings.TrimSpace(wd) == "" {

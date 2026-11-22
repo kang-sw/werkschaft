@@ -82,6 +82,15 @@ type ServerOptions struct {
 	WorktreeChildren WorktreeChildrenReader
 	// Notes is the daemon's shared presentation cache; nil on standalone servers.
 	Notes *wsnote.Cache
+	// Exec is the daemon's hosted exec jobs; nil on the direct path and on a
+	// daemon that could not open their store. Legacy exec launches then
+	// keep the file-backed path and the hosted exec tools refuse.
+	Exec *execjob.Hosted
+	// Conversation is the hosted conversation a per-session token bound
+	// this connection to (wsdashboard.ProxyHello.Conversation); empty for a
+	// launcher connection. Only it attributes hosted exec jobs: a supplied
+	// session_key grants a root, never ownership.
+	Conversation string
 }
 
 // procEnv is a snapshot of one process's environment.
@@ -170,6 +179,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 		s.observeHarness("hello", opts.Harness)
 	}
 	s.pi.agents = opts.Agents
+	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.pi.worktreeChildren = opts.WorktreeChildren
 	if s.pi.worktreeChildren == nil && opts.Agents != nil {
 		if reader, ok := opts.Agents.(WorktreeChildrenReader); ok {

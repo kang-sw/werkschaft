@@ -1295,7 +1295,8 @@ func execEnvProperty() map[string]any {
 
 // The exec.shell argument families. The schema declares their union at the
 // top level, since a top-level oneOf is not accepted by every harness's tool
-// schema reader; precheckExecShellFamily enforces one family per call.
+// schema reader; the argument precheck (execShellFamily) enforces one family
+// per call.
 var (
 	execShellLegacyOnly = []string{"command", "working_dir", "shell"}
 	execShellNewOnly    = []string{"cmd", "cwd", "async"}
