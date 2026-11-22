@@ -4,7 +4,7 @@ use block2::Block;
 use objc2::{
     define_class, ffi, msg_send,
     rc::Weak,
-    runtime::{AnyClass, AnyObject, ClassBuilder, NSObject, ProtocolObject, Sel},
+    runtime::{AnyClass, AnyObject, NSObject, ProtocolObject, Sel},
     sel, DefinedClass, MainThreadOnly,
 };
 use objc2_foundation::{ns_string, MainThreadMarker, NSError, NSObjectProtocol, NSString};
@@ -228,9 +228,9 @@ fn swallows_cancel(style_mask: usize) -> bool {
     style_mask & STYLE_MASK_FULL_SCREEN != 0
 }
 
-// Wry's web view class, recorded so the override can reach its `super`.
-static WRY_WEB_VIEW: OnceLock<&'static AnyClass> = OnceLock::new();
-static ESCAPE_GUARD: OnceLock<Option<&'static AnyClass>> = OnceLock::new();
+// Superclass of Wry's web view, where the override's `super` call starts.
+static WRY_SUPER: OnceLock<&'static AnyClass> = OnceLock::new();
+static ESCAPE_GUARD: OnceLock<()> = OnceLock::new();
 
 unsafe extern "C-unwind" fn cancel_operation(this: &AnyObject, _: Sel, sender: Option<&AnyObject>) {
     let window: Option<objc2::rc::Retained<AnyObject>> = unsafe { msg_send![this, window] };
@@ -238,8 +238,8 @@ unsafe extern "C-unwind" fn cancel_operation(this: &AnyObject, _: Sel, sender: O
     if swallows_cancel(mask) {
         return;
     }
-    if let Some(wry) = WRY_WEB_VIEW.get() {
-        let _: () = unsafe { msg_send![super(this, *wry), cancelOperation: sender] };
+    if let Some(superclass) = WRY_SUPER.get() {
+        let _: () = unsafe { msg_send![super(this, *superclass), cancelOperation: sender] };
     }
 }
 
@@ -250,27 +250,42 @@ unsafe extern "C-unwind" fn cancel_operation(this: &AnyObject, _: Sel, sender: O
 /// chain), so an Esc the page leaves unhandled reaches AppKit as
 /// `cancelOperation:` and the window exits full screen. Esc still reaches the
 /// page first; only the leftover command is dropped while in full screen.
+///
+/// The method is added to Wry's own class once, never by swapping an object's
+/// isa: an observed view (KVO) reports its original class while its real isa
+/// is a runtime subclass, and replacing that isa drops the observation.
 fn guard_escape(webview: &WKWebView) {
-    let object: &AnyObject = webview;
-    let current = object.class();
-    let guard = ESCAPE_GUARD.get_or_init(|| {
-        let mut builder = ClassBuilder::new(c"WerkschaftWebView", current)?;
-        unsafe {
-            builder.add_method(
-                sel!(cancelOperation:),
-                cancel_operation as unsafe extern "C-unwind" fn(_, _, _),
-            );
+    ESCAPE_GUARD.get_or_init(|| {
+        let object: &AnyObject = webview;
+        let mut class = Some(object.class());
+        while let Some(current) = class {
+            if current.name() == c"WryWebView" {
+                let Some(superclass) = current.superclass() else {
+                    return;
+                };
+                let _ = WRY_SUPER.set(superclass);
+                // Returns NO, adding nothing, if the class already defines
+                // cancelOperation: itself.
+                let added = unsafe {
+                    ffi::class_addMethod(
+                        (current as *const AnyClass).cast_mut(),
+                        sel!(cancelOperation:),
+                        std::mem::transmute::<
+                            unsafe extern "C-unwind" fn(&AnyObject, Sel, Option<&AnyObject>),
+                            objc2::runtime::Imp,
+                        >(cancel_operation),
+                        c"v@:@".as_ptr(),
+                    )
+                };
+                if !added.as_bool() {
+                    eprintln!("Werkschaft: Could not guard Esc in full screen");
+                }
+                return;
+            }
+            class = current.superclass();
         }
-        let _ = WRY_WEB_VIEW.set(current);
-        Some(builder.register())
+        eprintln!("Werkschaft: Web view class not recognized; Esc may leave full screen");
     });
-    // A retry reinstalls on a view that already carries the guard; only a view
-    // still of Wry's own class is switched.
-    if let Some(guard) = guard {
-        if WRY_WEB_VIEW.get().is_some_and(|wry| *wry == current) {
-            unsafe { ffi::object_setClass((object as *const AnyObject).cast_mut(), *guard) };
-        }
-    }
 }
 
 pub fn install(
