@@ -371,19 +371,19 @@
     function invalidated() { dirty = true; schedule(); }
     const railResize = new ResizeObserver(invalidated);
     let observed = [];
-    function observeRail() {
+    function observeRailLayout() {
       const nodes = rail ? [rail, ...rail.querySelectorAll(".rlist, .rfoot, .rws-unreg")] : [];
       if (nodes.length === observed.length && nodes.every((item, i) => item === observed[i])) return;
       railResize.disconnect();
       nodes.forEach(el => railResize.observe(el));
       observed = nodes;
     }
-    const railChanges = new MutationObserver(() => { observeRail(); invalidated(); });
+    const railChanges = new MutationObserver(() => { observeRailLayout(); invalidated(); });
     if (rail) {
       railChanges.observe(rail, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "class"] });
       rail.addEventListener("scroll", invalidated, { ...options, capture: true });
       rail.addEventListener("transitionend", invalidated, options);
-      observeRail();
+      observeRailLayout();
     }
     railChanges.observe(root, { attributes: true, attributeFilter: ["class"] });
     window.addEventListener("resize", invalidated, options);
@@ -726,7 +726,9 @@
       }
       drag.x = clamp(drag.originX + dx, size / 3, vw - size / 3);
       drag.y = clamp(drag.originY + dy, size / 2, vh - 8);
-      physics.swingVel = clamp(physics.swingVel - (event.clientX - drag.lastX) * timing.drag.impulse, -5, 5);
+      if (timing.drag.maxSwing) {
+        physics.swingVel = clamp(physics.swingVel - (event.clientX - drag.lastX) * timing.drag.impulse, -5, 5);
+      }
       drag.lastX = event.clientX;
     }, options);
     function drop(event) {

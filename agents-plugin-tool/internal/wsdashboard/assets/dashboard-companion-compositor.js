@@ -44,7 +44,7 @@
   }
   function solveBezier(p, curve) {
     if (!curve || p <= 0 || p >= 1) return clamp(p, 0, 1);
-    const [x1, y1, x2, y2] = curve;
+    const x1 = curve[0], y1 = curve[1], x2 = curve[2], y2 = curve[3];
     if (x1 === y1 && x2 === y2) return p;
     // X is monotonic, including curves with a horizontal tangent. Bisection
     // keeps the interpolation deterministic at those tangents as well.
@@ -399,7 +399,7 @@
         layers.push(...propLayers("prop-typing-desk"));
       }
       if (head) {
-        layers.push(onHead(finite(headLayer?.z, 30), ctx => egg.forEach(image => draw(ctx, image))));
+        layers.push(onHead(finite(headLayer?.z, 30), ctx => { for (const image of egg) draw(ctx, image); }));
         layers.push(onHead(40, face));
         addHead(hair?.back, 10);
         addHead(hair?.front, 50);
