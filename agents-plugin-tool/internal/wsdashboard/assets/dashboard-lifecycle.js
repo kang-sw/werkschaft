@@ -446,8 +446,13 @@
       return draftUnsaved;
     }));
   }
+  async function persistForWindowClose() {
+    await draftReady;
+    return (await saveDraft()) && !draftUnsaved;
+  }
   if (framed) {
     window.wsSaveSessionDraft = saveDraft;
+    window.wsPersistDraftForWindowClose = persistForWindowClose;
     window.wsPrepareSessionLeave = async function () {
       await draftReady;
       await saveDraft();
@@ -1100,9 +1105,22 @@
   nearTop();
   if (framed) shFrameInit();
   if (shell && window.WsShell) shShellInit();
+  if (window === window.top) {
+    window.wsNativeCloseReady = async function () {
+      if (!shell) return persistForWindowClose();
+      var frames = shFrames.slice();
+      var results = await Promise.all(frames.map(function (entry) {
+        var page = entry.el.contentWindow;
+        return page && typeof page.wsPersistDraftForWindowClose === "function" &&
+          page.wsPersistDraftForWindowClose();
+      }));
+      return shFrames.length === frames.length && frames.every(function (entry, i) {
+        return entry === shFrames[i] && results[i] === true;
+      });
+    };
+  }
   // --- desktop app update
-  // Only the Werkschaft desktop shell's preload defines werkschaftDesktop;
-  // a browser tab (or an older shell) never shows the row or the toasts.
+  // The desktop shell provides the optional bridge before or after page load.
   // Status: { state, version, message, skipped, phase: { phase, version,
   // skipped } }; state drives the toast, phase (unchecked | none |
   // available | ready) the settings line. downloadPage, when the shell sends
@@ -1111,10 +1129,13 @@
   // through the shell's window-open handler. A current shell adds an
   // optional action (canary | stable-return) to statuses and phases of a
   // manual channel selection, and limited to a canary miss at the page cap.
+  var desktopUpdateMounted = false;
   function desktopUpdate() {
+    if (desktopUpdateMounted || window !== window.top) return;
     var api = window.werkschaftDesktop && window.werkschaftDesktop.update;
     var card = gmenu && gmenu.querySelector(".gmenu");
     if (!api || typeof api.onStatus !== "function" || !card || !window.WsToast) return;
+    desktopUpdateMounted = true;
     var note = card.querySelector(".gn");
     function item(id, mark, label) {
       var b = doc.createElement("button");
@@ -1208,6 +1229,7 @@
     });
   }
   if (!shell) trackerStart();
+  window.addEventListener("werkschaft-update-ready", desktopUpdate);
   desktopUpdate();
   syncSpinnerPhases(doc);
   connect();
