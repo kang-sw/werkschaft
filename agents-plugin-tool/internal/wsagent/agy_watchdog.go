@@ -437,6 +437,12 @@ func (c *conv) modelWaitBackoffTimedOut() {
 	if !c.modelWaitArmed || !c.turn || c.proc == nil || c.modelWaitFailErr != "" {
 		return
 	}
+	if checkout := c.released(); checkout != "" {
+		// A turn that outlived its checkout's release is not continued
+		// there; the process is left running, as a release never stops it.
+		fmt.Fprintf(c.r.opts.Log, "agent %s: agy model stream stalled; no automatic continue: its worktree %s was released\n", c.rec.ReplyID, checkout)
+		return
+	}
 	c.noteModelWaitFailure(failure)
 	c.modelWaitRetries++
 	if failure == "" {

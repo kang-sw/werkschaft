@@ -50,7 +50,12 @@ type Record struct {
 	// profile's list_in_index when the conversation last started).
 	Listed    bool   `json:"listed,omitempty"`
 	CreatedAt string `json:"created_at"`
-	ClosedAt  string `json:"closed_at,omitempty"`
+	// CreatedUnixNano is the creation instant at nanosecond precision, which
+	// orders a binding against a worktree release in the same second
+	// (wsgit.BoundBeforeRelease). Additive: a record from before it has 0,
+	// and an older writer keeps it as an unknown member.
+	CreatedUnixNano int64  `json:"created_unix_nano,omitempty"`
+	ClosedAt        string `json:"closed_at,omitempty"`
 
 	// HandedOffAt is when a lead session was handed to a terminal harness
 	// (conv.release): the daemon serves it no more, as it serves no closed

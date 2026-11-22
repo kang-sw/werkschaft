@@ -87,10 +87,37 @@ func TestWorktreeReleaseMarkerRefusesNewerAndMalformedRecords(t *testing.T) {
 	}
 }
 
-// TestBoundBeforeReleaseOrdersWholeSeconds: agent records keep whole seconds,
-// so only a binding a whole second earlier predates the release; the
-// release's own second stays a current binding.
-func TestBoundBeforeReleaseOrdersWholeSeconds(t *testing.T) {
+// TestBoundBeforeReleaseOrdersAtNanosecondPrecision: a binding with a
+// nanosecond instant predates the release only when strictly before it, so
+// one made earlier in the release's own second no longer survives it.
+func TestBoundBeforeReleaseOrdersAtNanosecondPrecision(t *testing.T) {
+	release := time.Date(2026, 11, 22, 10, 0, 5, 900_000_000, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		created time.Time
+		want    bool
+	}{
+		{"same second, earlier", time.Date(2026, 11, 22, 10, 0, 5, 100_000_000, time.UTC), true},
+		{"one nanosecond earlier", release.Add(-time.Nanosecond), true},
+		{"a second earlier", release.Add(-time.Second), true},
+		{"the release instant", release, false},
+		{"same second, later", release.Add(time.Nanosecond), false},
+		{"a second later", release.Add(time.Second), false},
+	} {
+		// The whole-second createdAt agrees with the precise instant, as the
+		// record writes both; the precise one decides.
+		createdAt := tc.created.UTC().Format(time.RFC3339)
+		if got := BoundBeforeRelease(createdAt, tc.created.UnixNano(), release); got != tc.want {
+			t.Errorf("%s: BoundBeforeRelease = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestBoundBeforeReleaseFallsBackToWholeSecondsForOldRecords: a record from
+// before created_unix_nano keeps only whole seconds, so only a binding a whole
+// second earlier predates the release; the release's own second stays a
+// current binding.
+func TestBoundBeforeReleaseFallsBackToWholeSecondsForOldRecords(t *testing.T) {
 	release := time.Date(2026, 11, 22, 10, 0, 5, 900_000_000, time.UTC)
 	for _, tc := range []struct {
 		created string
@@ -104,27 +131,58 @@ func TestBoundBeforeReleaseOrdersWholeSeconds(t *testing.T) {
 		{"", false},
 		{"not a time", false},
 	} {
-		if got := BoundBeforeRelease(tc.created, release); got != tc.want {
-			t.Errorf("BoundBeforeRelease(%q) = %v, want %v", tc.created, got, tc.want)
+		if got := BoundBeforeRelease(tc.created, 0, release); got != tc.want {
+			t.Errorf("BoundBeforeRelease(%q, 0) = %v, want %v", tc.created, got, tc.want)
 		}
 	}
 }
 
-// TestCheckoutRootFindsTheNearestGitEntry maps a working directory below a
-// checkout to that checkout.
-func TestCheckoutRootFindsTheNearestGitEntry(t *testing.T) {
+// TestContainingCheckoutsListsEveryEnclosingCheckout maps a working directory
+// to every checkout that contains it, nearest first, so a directory inside a
+// submodule of a checkout still reaches that checkout.
+func TestContainingCheckoutsListsEveryEnclosingCheckout(t *testing.T) {
 	checkout, _ := linkedCheckout(t)
 	sub := filepath.Join(checkout, "a", "b")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := CheckoutRoot(sub); got != checkout {
-		t.Fatalf("CheckoutRoot(%q) = %q, want %q", sub, got, checkout)
+	if got := ContainingCheckouts(sub); len(got) != 1 || got[0] != checkout {
+		t.Fatalf("ContainingCheckouts(%q) = %q, want [%q]", sub, got, checkout)
 	}
-	if got := CheckoutRoot(checkout); got != checkout {
-		t.Fatalf("CheckoutRoot of the root = %q", got)
+	module := filepath.Join(checkout, "vendor", "mod")
+	inModule := filepath.Join(module, "src")
+	if err := os.MkdirAll(inModule, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if got := CheckoutRoot(""); got != "" {
+	if err := os.WriteFile(filepath.Join(module, ".git"), []byte("gitdir: ../../.git/modules/mod\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ContainingCheckouts(inModule); len(got) != 2 || got[0] != module || got[1] != checkout {
+		t.Fatalf("ContainingCheckouts(in submodule) = %q, want [%q %q]", got, module, checkout)
+	}
+	if got := ContainingCheckouts(""); got != nil {
 		t.Fatalf("empty path = %q", got)
+	}
+}
+
+// TestIsLinkedWorktreeTellsPooledShapedCheckouts: only a gitfile whose admin
+// directory has a commondir is a linked worktree.
+func TestIsLinkedWorktreeTellsPooledShapedCheckouts(t *testing.T) {
+	checkout, admin := linkedCheckout(t)
+	if IsLinkedWorktree(checkout) {
+		t.Fatal("an admin directory without commondir is not a linked worktree")
+	}
+	if err := os.WriteFile(filepath.Join(admin, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !IsLinkedWorktree(checkout) {
+		t.Fatal("a gitfile with a commondir admin directory is a linked worktree")
+	}
+	primary := t.TempDir()
+	if err := os.Mkdir(filepath.Join(primary, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if IsLinkedWorktree(primary) || IsLinkedWorktree(t.TempDir()) {
+		t.Fatal("a primary checkout or a plain directory is not a linked worktree")
 	}
 }

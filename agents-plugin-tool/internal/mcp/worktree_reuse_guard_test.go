@@ -23,18 +23,26 @@ type occupancyFake struct {
 	fakeWorktreeChildren
 	outcomes []wsagent.ReleasedConversation
 	notices  []releaseNotice
+	// observe, when set, runs inside the notice, before it returns.
+	observe func(worktree string, releasedAt time.Time)
 }
 
 type releaseNotice struct {
 	target      string
+	releasedAt  time.Time
 	cancelTurns bool
 }
 
-func (f *occupancyFake) CheckoutReleased(worktree string, cancelTurns bool) []wsagent.ReleasedConversation {
+func (f *occupancyFake) CheckoutReleased(worktree string, releasedAt time.Time, cancelTurns bool) []wsagent.ReleasedConversation {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.notices = append(f.notices, releaseNotice{target: canonicalWorktreeTestPath(worktree), cancelTurns: cancelTurns})
-	return append([]wsagent.ReleasedConversation(nil), f.outcomes...)
+	observe := f.observe
+	f.notices = append(f.notices, releaseNotice{target: canonicalWorktreeTestPath(worktree), releasedAt: releasedAt, cancelTurns: cancelTurns})
+	outcomes := append([]wsagent.ReleasedConversation(nil), f.outcomes...)
+	f.mu.Unlock()
+	if observe != nil {
+		observe(worktree, releasedAt)
+	}
+	return outcomes
 }
 
 func (f *occupancyFake) noticeList() []releaseNotice {
@@ -98,6 +106,7 @@ func TestWorktreeAcquireSkipsOccupiedCheckouts(t *testing.T) {
 			{Address: "id:grandchild", State: wsagent.AgentRunning, Live: true},
 		}},
 		{name: "pre-release child with a live process", children: []wsagent.BoundWorktreeChild{{Address: "id:bg", State: wsagent.AgentIdle, BoundBeforeRelease: true, Live: true}}},
+		{name: "closed child whose process is still stopping", children: []wsagent.BoundWorktreeChild{{Address: "id:closing", State: wsagent.AgentClosed, Live: true}}},
 		{name: "pre-release asleep child", children: []wsagent.BoundWorktreeChild{{Address: "id:asleep", State: wsagent.AgentWaiting, BoundBeforeRelease: true}}, reuse: true},
 		{name: "nothing bound", reuse: true},
 	} {
@@ -230,9 +239,11 @@ func TestWorktreeReleaseIgnoresBindingsFromBeforeTheLastRelease(t *testing.T) {
 	if text := toolText(t, rel); !strings.Contains(text, "id:current03") || strings.Contains(text, "id:stale01") || strings.Contains(text, "id:stale02") {
 		t.Fatalf("refusal must name only the current child: %s", text)
 	}
-	occ.set(acq.Path, stale...)
+	// A closed child listed only because its process is still stopping keeps
+	// acquisition out but is no open child for release.
+	occ.set(acq.Path, append(stale, wsagent.BoundWorktreeChild{Address: "id:closing04", State: wsagent.AgentClosed, Live: true})...)
 	if rel := callToolOnce(t, s, 3, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path}); toolIsError(t, rel) {
-		t.Fatalf("children bound before the last release must not refuse it: %s", rel)
+		t.Fatalf("children bound before the last release, or closed, must not refuse it: %s", rel)
 	}
 	if b := wtBranch(t, acq.Path); b != "HEAD" {
 		t.Fatalf("released worktree not detached: %q", b)
@@ -385,6 +396,11 @@ func TestWorktreeReleaseBoundaryMixedVersions(t *testing.T) {
 	if len(got) != 1 || got[0]["cancel_turns"] != false || canonicalWorktreeTestPath(got[0]["worktree"].(string)) != canonicalWorktreeTestPath(acq.Path) {
 		t.Fatalf("release notice = %+v", got)
 	}
+	// The notice carries the marker's instant, so the daemon need not read
+	// the marker.
+	if at, ok, err := wsgit.WorktreeReleasedAt(acq.Path); err != nil || !ok || got[0]["released_at"] != at.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("release notice released_at = %v, marker %v ok=%v err=%v", got[0]["released_at"], at, ok, err)
+	}
 
 	// An old daemon without the notice route (and nothing bound): the
 	// release still completes and records its boundary, with a warning.
@@ -400,10 +416,127 @@ func TestWorktreeReleaseBoundaryMixedVersions(t *testing.T) {
 	if err := json.Unmarshal([]byte(toolText(t, resp)), &res); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(res.Warnings, "\n"), "could not tell the daemon about this release") {
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "older than this ws-mcp") {
 		t.Fatalf("an old daemon's missing notice route must be a warning: %v", res.Warnings)
 	}
 	if _, ok, err := wsgit.WorktreeReleasedAt(again.Path); err != nil || !ok {
 		t.Fatalf("the boundary is recorded regardless of the daemon: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestWorktreeReleaseFailsAndKeepsTheLeaseWithoutItsBoundary: when the
+// release marker cannot be written the release fails, its lease stays, and no
+// notice reaches the daemon: no release completes without its boundary.
+func TestWorktreeReleaseFailsAndKeepsTheLeaseWithoutItsBoundary(t *testing.T) {
+	s, base, leadA, _ := releaseGuardServer(t)
+	occ := &occupancyFake{}
+	s.pi.worktreeChildren = occ
+	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/no-marker")
+	restore := recordWorktreeRelease
+	recordWorktreeRelease = func(string, time.Time) error { return errors.New("disk full") }
+	defer func() { recordWorktreeRelease = restore }()
+	rel := callToolOnce(t, s, 2, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path})
+	if !toolIsError(t, rel) || !strings.Contains(toolText(t, rel), "boundary could not be recorded") || !strings.Contains(toolText(t, rel), "disk full") {
+		t.Fatalf("a release without its boundary must fail: %s", rel)
+	}
+	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease == nil {
+		t.Fatalf("a release without its boundary keeps the lease: %+v err=%v", lease, err)
+	}
+	if _, ok, err := wsgit.WorktreeReleasedAt(acq.Path); err != nil || ok {
+		t.Fatalf("no boundary was recorded: ok=%v err=%v", ok, err)
+	}
+	if got := occ.noticeList(); len(got) != 0 {
+		t.Fatalf("a failed release must not notify the daemon: %+v", got)
+	}
+	recordWorktreeRelease = restore
+	if rel := callToolOnce(t, s, 3, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path}); toolIsError(t, rel) {
+		t.Fatalf("releasing again once the marker can be written: %s", rel)
+	}
+}
+
+// TestWorktreeReleaseNotifiesAfterTheMarkerUnderTheLock: the daemon hears of
+// a release after its marker is written, with the marker's instant, while
+// the per-worktree lock still holds (no spawn or acquisition claim can pass
+// between them) and before the lease goes.
+func TestWorktreeReleaseNotifiesAfterTheMarkerUnderTheLock(t *testing.T) {
+	s, base, leadA, _ := releaseGuardServer(t)
+	occ := &occupancyFake{}
+	s.pi.worktreeChildren = occ
+	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/order")
+	var markerAt time.Time
+	var markerOK, lockHeld, leaseHeld bool
+	occ.observe = func(worktree string, releasedAt time.Time) {
+		at, ok, err := wsgit.WorktreeReleasedAt(worktree)
+		markerAt, markerOK = at, ok && err == nil && at.Equal(releasedAt)
+		lock, err := wsgit.WorktreeReleaseLock(context.Background(), wsgit.ExecRunner{}, worktree)
+		if err == nil {
+			if locked, err := lock.TryRLock(); err == nil && locked {
+				_ = lock.Unlock()
+			} else {
+				lockHeld = true
+			}
+		}
+		lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, worktree)
+		leaseHeld = err == nil && lease != nil
+	}
+	if rel := callToolOnce(t, s, 2, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path}); toolIsError(t, rel) {
+		t.Fatalf("release failed: %s", rel)
+	}
+	if !markerOK {
+		t.Fatalf("the notice must follow the marker and carry its instant (marker %v)", markerAt)
+	}
+	if !lockHeld {
+		t.Fatal("the notice must be published before the per-worktree lock is let go")
+	}
+	if !leaseHeld {
+		t.Fatal("the notice comes before the lease goes, so a failed lease removal still left the daemon told")
+	}
+	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease != nil {
+		t.Fatalf("the completed release removes the lease: %+v err=%v", lease, err)
+	}
+}
+
+// TestWorktreeForcedReleaseAgainstAnOldDaemonWithABoundChild: an older daemon
+// has no worktree.released route. A root lead's forced release with a child
+// still bound completes and records its boundary, and the warning says
+// plainly that the daemon is older, the earlier bindings were not ended (nor
+// their turns cancelled), and a daemon restart applies the boundary.
+func TestWorktreeForcedReleaseAgainstAnOldDaemonWithABoundChild(t *testing.T) {
+	sLead, root, base, leadKey := worktreeListServer(t)
+	acq := acquireForTest(t, sLead, 1, leadKey, base, "impl/test/old-daemon")
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case wsagent.RoutePrefix + "/by-token/worktree.children":
+			// An old daemon's answer: no release flags, one running child.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"children": []any{map[string]any{"address": "id:bound01", "state": wsagent.AgentRunning}}})
+		default:
+			// Its token route answers an unknown op like this.
+			http.Error(w, "unknown agent route", http.StatusNotFound)
+		}
+	}))
+	defer daemon.Close()
+	worker := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: append(sLead.environ(), wsagent.EnvPiToken+"=tok", wsagent.EnvPiEndpoint+"="+daemon.URL)})
+	defer worker.Close()
+
+	resp := callToolOnce(t, worker, 2, "worktree.release", map[string]any{"session_key": leadKey, "path": acq.Path, "force": true, "format": "json"})
+	if toolIsError(t, resp) {
+		t.Fatalf("a forced release against an old daemon must complete: %s", resp)
+	}
+	var res worktreeReleaseResult
+	if err := json.Unmarshal([]byte(toolText(t, resp)), &res); err != nil {
+		t.Fatal(err)
+	}
+	warnings := strings.Join(res.Warnings, "\n")
+	for _, want := range []string{"older than this ws-mcp", "did not end the bindings", "Restarting the daemon applies the release boundary", "running turns were not cancelled"} {
+		if !strings.Contains(warnings, want) {
+			t.Fatalf("old-daemon warning lacks %q: %v", want, res.Warnings)
+		}
+	}
+	if _, ok, err := wsgit.WorktreeReleasedAt(acq.Path); err != nil || !ok {
+		t.Fatalf("the boundary is recorded regardless of the daemon: ok=%v err=%v", ok, err)
+	}
+	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease != nil {
+		t.Fatalf("the release completed and removed the lease: %+v err=%v", lease, err)
 	}
 }

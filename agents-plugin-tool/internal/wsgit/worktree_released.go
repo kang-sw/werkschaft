@@ -55,10 +55,12 @@ func worktreeAdminDirNoSpawn(target string) string {
 	return dir
 }
 
-// RecordWorktreeRelease writes target's release marker as completed at at,
-// replacing any earlier one atomically. worktree.release calls it once its
-// hygiene and lease removal have succeeded, under the per-worktree release
-// lock, so a spawn registered before the release always predates the marker.
+// RecordWorktreeRelease writes target's release marker as completed at at
+// (released_at, RFC 3339 at nanosecond precision), replacing any earlier one
+// atomically. worktree.release calls it once its hygiene has succeeded and
+// before it removes the lease, under the per-worktree release lock, so a
+// spawn registered before the release always predates the marker and a
+// release whose marker failed keeps its lease.
 func RecordWorktreeRelease(target string, at time.Time) error {
 	dir := worktreeAdminDirNoSpawn(strings.TrimSpace(target))
 	if dir == "" {
@@ -119,13 +121,23 @@ func WorktreeReleasedAt(target string) (at time.Time, ok bool, err error) {
 	return at, true, nil
 }
 
-// BoundBeforeRelease reports whether a binding created at createdAt (an
-// RFC 3339 timestamp, whole seconds as agent records keep it) predates a
-// release completed at releasedAt. Only a binding whole seconds earlier
-// counts: a binding in the release's own second cannot be ordered against it
-// and stays a current binding, which keeps the checkout busy rather than
-// handing it out. An unparsable createdAt is current too.
-func BoundBeforeRelease(createdAt string, releasedAt time.Time) bool {
+// BoundBeforeRelease reports whether a binding predates a release completed
+// at releasedAt (the marker's released_at, written at nanosecond precision by
+// every marker writer). createdUnixNano is the binding instant at nanosecond
+// precision (the agent record's created_unix_nano): a binding strictly before
+// the release instant predates it, so one made earlier in the release's own
+// second no longer survives the release.
+//
+// A record written before created_unix_nano existed (createdUnixNano 0) has
+// only createdAt, an RFC 3339 timestamp in whole seconds. Such a binding
+// keeps the earlier rule: only a binding whole seconds earlier predates the
+// release, and one in the release's own second cannot be ordered against it
+// and stays current, which keeps the checkout busy rather than handing it
+// out. An unparsable createdAt is current too.
+func BoundBeforeRelease(createdAt string, createdUnixNano int64, releasedAt time.Time) bool {
+	if createdUnixNano > 0 {
+		return time.Unix(0, createdUnixNano).Before(releasedAt)
+	}
 	created, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(createdAt))
 	if err != nil {
 		return false
@@ -133,23 +145,43 @@ func BoundBeforeRelease(createdAt string, releasedAt time.Time) bool {
 	return created.Truncate(time.Second).Before(releasedAt.Truncate(time.Second))
 }
 
-// CheckoutRoot is the nearest directory at or above path holding a .git
-// entry, found without starting Git; "" when there is none. It maps a
-// conversation's working directory to the checkout it is bound to.
-func CheckoutRoot(path string) string {
+// ContainingCheckouts lists every checkout at or above path, nearest first:
+// each directory holding a .git entry, found without starting Git. It is the
+// durable side of live occupancy's containment rule (a conversation is bound
+// to a checkout that contains its working directory), so a working directory
+// inside a tracked submodule of a checkout yields the submodule and then the
+// checkout that holds it.
+func ContainingCheckouts(path string) []string {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return ""
+		return nil
 	}
+	var out []string
 	dir := filepath.Clean(path)
 	for {
 		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
-			return dir
+			out = append(out, dir)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			return out
 		}
 		dir = parent
 	}
+}
+
+// IsLinkedWorktree reports whether checkout is a linked worktree (a gitfile
+// whose admin directory has a commondir), the only kind of checkout a pooled
+// worktree is; a primary checkout or a submodule is not.
+func IsLinkedWorktree(checkout string) bool {
+	info, err := os.Lstat(filepath.Join(checkout, ".git"))
+	if err != nil || info.IsDir() {
+		return false
+	}
+	dir := worktreeAdminDirNoSpawn(checkout)
+	if dir == "" {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(dir, "commondir"))
+	return err == nil
 }

@@ -48,13 +48,10 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 		c.mu.Lock()
 		asleep := c.proc == nil && !c.turn
 		rec := c.rec
-		checkout = c.releasedCheckout
+		// From memory: the checkouts and their releases were settled when
+		// the conversation was loaded, and a release's notice updates them.
+		checkout = c.releasedLocked()
 		c.mu.Unlock()
-		if checkout == "" && asleep {
-			// A sleeping conversation's wake reads its checkout's release
-			// marker, as its start would.
-			checkout = releasedCheckoutOf(rec)
-		}
 		switch {
 		case checkout != "":
 			// Its checkout was released after it was bound: no launch, wake

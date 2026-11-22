@@ -106,7 +106,7 @@ func TestWorktreeActiveChildrenAndSpawnReleaseReservation(t *testing.T) {
 	_, err = h.runner.AgentSpawn(lead, AgentSpawnRequest{
 		Prompt: "raced spawn", Tier: "small", Authority: "workdir-write", Worktree: wt,
 	})
-	agentRefused(t, err, http.StatusConflict, "currently being released")
+	agentRefused(t, err, http.StatusConflict, "being released")
 	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 0 {
 		t.Fatalf("refused spawn left bound children: %+v", got)
 	}

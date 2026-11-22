@@ -936,8 +936,12 @@ type worktreeReleaseCaller struct {
 	WorkerKey     string
 	Force         bool
 	CheckChildren func(ctx context.Context, target string) error
-	Released      func(ctx context.Context, target string, cancelTurns bool) []string
+	Released      func(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool) []string
 }
+
+// recordWorktreeRelease writes a release's boundary marker; a variable so a
+// test can make the write fail.
+var recordWorktreeRelease = wsgit.RecordWorktreeRelease
 
 // worktreeOccupancy is the daemon's view of a worktree: its non-closed bound
 // conversations.
@@ -948,7 +952,7 @@ type worktreeOccupancy struct {
 // worktreeReleaseNotifier is the optional release notice of the daemon-side
 // reader (wsagent.Runner implements it).
 type worktreeReleaseNotifier interface {
-	CheckoutReleased(worktree string, cancelTurns bool) []wsagent.ReleasedConversation
+	CheckoutReleased(worktree string, releasedAt time.Time, cancelTurns bool) []wsagent.ReleasedConversation
 }
 
 // worktreeOccupancy reads target's occupancy. Daemon-hosted servers query the
@@ -973,13 +977,15 @@ func (s *Server) worktreeOccupancy(ctx context.Context, target string) (worktree
 	return occ, nil
 }
 
-// currentBindings are the children a release counts: every one but those
-// bound before the worktree's last completed release, which that release
-// already ended. With no recorded release every child counts.
+// currentBindings are the children a release counts: every non-closed one
+// but those bound before the worktree's last completed release, which that
+// release already ended. With no recorded release every non-closed child
+// counts. A closed child still listed because its process is stopping keeps
+// only acquisition out (worktreeBusy); release refuses for open children.
 func currentBindings(children []wsagent.BoundWorktreeChild) []wsagent.BoundWorktreeChild {
 	var out []wsagent.BoundWorktreeChild
 	for _, child := range children {
-		if !child.BoundBeforeRelease {
+		if !child.BoundBeforeRelease && child.State != wsagent.AgentClosed {
 			out = append(out, child)
 		}
 	}
@@ -1012,9 +1018,9 @@ func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) 
 
 // worktreeBusy is acquisition's daemon-side check of a reuse candidate: busy
 // while a conversation bound since its last completed release (or, with none
-// recorded, any bound conversation) is not closed, or while a conversation
-// bound before that release still has a live process. A daemon that cannot
-// answer makes it busy.
+// recorded, any bound conversation) is listed (open, or closed with its
+// process still held), or while a conversation bound before that release
+// still has a live process. A daemon that cannot answer makes it busy.
 func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
 	occ, err := s.worktreeOccupancy(ctx, target)
 	if err != nil {
@@ -1028,37 +1034,39 @@ func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
 	return false
 }
 
-// notifyWorktreeReleased tells the daemon that target's release completed:
-// conversations bound before it take no further input there, and with
-// cancelTurns (a forced release) their running turns are interrupted. Each
-// returned line reports a cancelled turn, a failed interrupt (whose process
-// keeps running; the worktree stays out of reuse while it lives), or a
+// notifyWorktreeReleased tells the daemon that target's release completed at
+// releasedAt: conversations bound before it take no further input there,
+// and with cancelTurns (a forced release) their running turns are
+// interrupted. Each returned line reports a cancelled turn, a failed
+// interrupt (whose process keeps running; the worktree stays out of reuse
+// while it lives), a daemon that cancels no turn for this caller, or a
 // daemon that could not be told.
-func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, cancelTurns bool) []string {
+func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool) []string {
 	var convs []wsagent.ReleasedConversation
+	var lines []string
 	switch {
 	case s.pi.worktreeChildren != nil:
 		notifier, ok := s.pi.worktreeChildren.(worktreeReleaseNotifier)
 		if !ok {
 			return nil
 		}
-		convs = notifier.CheckoutReleased(target, cancelTurns)
+		convs = notifier.CheckoutReleased(target, releasedAt, cancelTurns)
 	case s.piForwards():
 		var answer struct {
 			Conversations []wsagent.ReleasedConversation `json:"conversations"`
+			CancelRefused bool                           `json:"cancel_refused"`
 		}
-		if err := s.piCall(ctx, "worktree.released", map[string]any{"worktree": target, "cancel_turns": cancelTurns}, piForwardTimeout, &answer); err != nil {
-			line := fmt.Sprintf("could not tell the daemon about this release (%v): agents bound here before it still cannot start in this worktree", err)
-			if cancelTurns {
-				line += ", but their running turns were not cancelled"
-			}
-			return []string{line}
+		body := map[string]any{"worktree": target, "released_at": releasedAt.UTC().Format(time.RFC3339Nano), "cancel_turns": cancelTurns}
+		if err := s.piCall(ctx, "worktree.released", body, piForwardTimeout, &answer); err != nil {
+			return []string{worktreeReleaseNoticeFailure(err, cancelTurns)}
 		}
 		convs = answer.Conversations
+		if answer.CancelRefused {
+			lines = append(lines, "the daemon cancels running turns only for a root lead's forced release, so the running turns of agents bound here before this release were not cancelled; their bindings are still ended")
+		}
 	default:
 		return nil
 	}
-	var lines []string
 	for _, conv := range convs {
 		switch {
 		case conv.Error != "":
@@ -1068,6 +1076,25 @@ func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, canc
 		}
 	}
 	return lines
+}
+
+// worktreeReleaseNoticeFailure is the warning of a completed release whose
+// notice the daemon did not take. An older daemon has no worktree.released
+// route and answers its unknown-route refusal; any other error is a daemon
+// that could not be reached or failed. Either way the boundary is on disk
+// and the release stands, but the running daemon did not end the earlier
+// bindings: it reads release markers only when it loads conversations.
+func worktreeReleaseNoticeFailure(err error, cancelTurns bool) string {
+	var line string
+	if strings.Contains(err.Error(), "unknown agent route") {
+		line = "the running ws daemon is older than this ws-mcp and has no release notice, so it did not end the bindings of agents bound here before this release: until the daemon restarts they can still take input in this worktree. Restarting the daemon applies the release boundary from then on"
+	} else {
+		line = fmt.Sprintf("could not tell the daemon about this release (%v), so it did not end the bindings of agents bound here before it: until the daemon restarts, or a later release reaches it, they can still take input in this worktree. Restarting the daemon applies the release boundary from then on", err)
+	}
+	if cancelTurns {
+		line += "; their running turns were not cancelled"
+	}
+	return line
 }
 
 // releaseWorktreeAs is releaseWorktree on behalf of caller (nil: no lease
@@ -1145,21 +1172,27 @@ func releaseWorktreeAs(ctx context.Context, runner wsgit.Runner, env []string, w
 			res.Warnings = append(res.Warnings, "could not record the preserved size in the profile marker: "+err.Error())
 		}
 	}
+	// Record the boundary first, while the per-worktree lock still holds off
+	// spawns and acquisition claims, so every child bound before it predates
+	// the marker. A release that cannot record it fails here with its lease
+	// kept: no release completes without its boundary, since a missing
+	// marker reads as no release at all and earlier bindings would keep
+	// counting (and taking input) unnoticed.
+	releasedAt := time.Now()
+	if err := recordWorktreeRelease(target, releasedAt); err != nil {
+		return res, fmt.Errorf("worktree.release: %q is cleaned and detached, but its release boundary could not be recorded (%v), so it stays leased and agents bound here before keep counting as bound. Nothing else was changed; fix the cause and release again", target, err)
+	}
+	// Publish the notice before the lock is let go, so the daemon learns of
+	// the boundary before any spawn or claim can pass and conversations bound
+	// before it take no further input from here on.
+	if caller != nil && caller.Released != nil {
+		res.Warnings = append(res.Warnings, caller.Released(ctx, target, releasedAt, caller.Force)...)
+	}
 	// Drop the lease only once the worktree is actually back in the pool, so a
 	// failed reset/clean/detach leaves the holder still identifiable.
 	if err := removeWorktreeLease(ctx, runner, target); err != nil {
 		return res, fmt.Errorf("worktree.release: %q is detached, but its worktree lease could not be removed: %w", target, err)
 	}
-	// The release is complete: record its boundary while the per-worktree
-	// lock still holds off spawns, so every child bound before it predates
-	// the marker. Without the marker, earlier bindings keep counting (the
-	// worktree stays busy rather than reused under them).
-	if err := wsgit.RecordWorktreeRelease(target, time.Now()); err != nil {
-		res.Warnings = append(res.Warnings, "could not record the release boundary, so agents bound here before this release still count as bound: "+err.Error())
-	}
 	unlock()
-	if caller != nil && caller.Released != nil {
-		res.Warnings = append(res.Warnings, caller.Released(ctx, target, caller.Force)...)
-	}
 	return res, nil
 }

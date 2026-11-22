@@ -481,7 +481,9 @@ func (c *conv) piLeadCompaction() bool {
 func (c *conv) canSteerCompaction() bool {
 	return c.turn && c.proc != nil && !c.quitting && !c.replaying && !c.wrapHold && !c.closed && !c.hidden &&
 		!c.compacting && !c.compactCommand && c.compactPending == nil && !c.compactHardHandled && !c.compactHardIssued &&
-		(c.rec.Backend != BackendClaude || c.rec.Lead) && (c.caps == nil || c.caps.Allows(ItemSteer))
+		(c.rec.Backend != BackendClaude || c.rec.Lead) && (c.caps == nil || c.caps.Allows(ItemSteer)) &&
+		// A turn that outlived its checkout's release gets no guidance.
+		c.released() == ""
 }
 
 // steerCompaction uses live usage for the first warning and one completed

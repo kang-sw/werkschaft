@@ -76,12 +76,19 @@ func (c *conv) startProcess() error {
 	rec := c.record()
 	// A launch, wake or resume of a spawned conversation in a checkout
 	// released after it was bound is refused: the release ended that binding.
-	if checkout := c.released(); checkout != "" {
+	// The check reads memory only, and it and the starting mark share one mu
+	// hold with the release notice and the occupancy read: a notice either
+	// lands first (this start is refused) or finds the start live.
+	c.mu.Lock()
+	checkout := c.releasedLocked()
+	if checkout == "" {
+		c.starting = true
+	}
+	c.mu.Unlock()
+	if checkout != "" {
 		return checkoutReleasedRefusal(checkout)
 	}
-	if checkout := releasedCheckoutOf(rec); checkout != "" {
-		return checkoutReleasedRefusal(checkout)
-	}
+	defer c.setStatus(func() { c.starting = false })
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
 	if err != nil {
 		return err
@@ -611,8 +618,8 @@ func (c *conv) reattach() {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
 	}
 	// A process that outlived its checkout's release keeps running, but this
-	// daemon gives it no new input there either. Read once per rejoin.
-	c.noteReleased(releasedCheckoutOf(rec))
+	// daemon gives it no new input there either: startConv settled that
+	// before this rejoin.
 }
 
 // checkReattach tells a rejoined process where the holder's replay ends,

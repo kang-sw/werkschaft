@@ -258,10 +258,31 @@ type conv struct {
 	// child counts as asleep. Under mu.
 	wakeRefused bool
 	// releasedCheckout is the checkout whose completed release ended this
-	// spawned conversation's binding, once the runner knows it (a release's
-	// notice, a refused start, or a rejoin); it then takes no input there,
-	// even while its process lives. It is never cleared. Under mu.
+	// spawned conversation's binding, once the runner knows it (from the
+	// runner's in-memory releases, a release's notice, or a refused start);
+	// it then takes no input there, even while its process lives. It is
+	// never cleared. Under mu.
 	releasedCheckout string
+	// canonRoot and canonCwd are the record's Root and Cwd with symlinks
+	// resolved (canonicalWorktreePath), once, in startConv; both fields of
+	// the record are fixed for a conversation's life. Immutable after
+	// startConv.
+	canonRoot, canonCwd string
+	// checkouts are the checkouts this spawned conversation is bound to
+	// (resolveCheckouts), resolved once when it is loaded or spawned; nil for
+	// a conversation no release can end. Immutable after startConv.
+	checkouts []string
+	// starting is set from the moment a process start passed the release
+	// check until that start finished or failed: occupancy counts the
+	// conversation live meanwhile, so no acquisition reuses its checkout
+	// under a backend that is still starting. Under mu, which the release
+	// check and the occupancy read share.
+	starting bool
+	// heldSenders are the senders of mail claimed into the record and not yet
+	// delivered or told of a refused start, in claim order: a refusal found
+	// after the claim (a start deferred past the holder scan, a later kick)
+	// still reaches each of them, once. Memory only. Loop-owned.
+	heldSenders []string
 	// spawnPending is true from registration in r.convs until spawned()'s
 	// first Send (or close), so awakeLocked counts a newly registered spawn
 	// with no gap after pendingSpawns handoff. Under mu.
@@ -373,14 +394,17 @@ func (c *conv) mailChanged() {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: mailbox: %v\n", rec.ReplyID, err)
 	}
 	// A conversation whose checkout was released steers nothing into a
-	// turn that outlived the release.
+	// turn that outlived the release. Its release state was settled when it
+	// was loaded, so a claim made before the first holder scan knows it too.
 	released := c.released()
 	var held []string
 	for _, m := range mail {
 		// Once a steer fails, the rest waits too, so the batch keeps its
-		// order. A held text keeps Drain's text, without a legend.
+		// order. A held text keeps Drain's text, without a legend; its
+		// sender is kept beside it, in memory, for a refusal found later.
 		if released != "" || len(held) > 0 || !c.steerMail(m) {
 			held = append(held, m.Text)
+			c.holdSender(m.Sender)
 		}
 	}
 	if len(held) > 0 {
@@ -404,38 +428,46 @@ func (c *conv) mailChanged() {
 	if len(c.rec.Mail) > 0 {
 		c.kick()
 	}
-	if len(held) > 0 && released != "" {
-		// Told whether or not the kick reached a start: a running turn
-		// defers the kick, and the refusal does not wait for it.
-		c.tellSenders(mail, released, checkoutReleasedRefusal(released).Error())
+	if released != "" {
+		// Told whether or not the kick reached a start: a running turn, or
+		// a start deferred past the first holder scan, defers the kick, and
+		// the refusal does not wait for it.
+		c.tellHeldSenders(released, checkoutReleasedRefusal(released).Error())
 	} else if len(held) > 0 {
-		c.tellRefusedWake(mail)
+		c.tellRefusedWake()
 	}
 }
 
-// tellRefusedWake tells each sender of mail, claimed for a sleeping child
-// whose wake admission kick just refused, that its mail waits
+// tellRefusedWake tells each sender of held mail, claimed for a sleeping
+// child whose wake admission refused, that its mail waits
 // (Options.WakeRefused), once per sender. It runs in the loop.
-func (c *conv) tellRefusedWake(mail []ClaimedMail) {
+func (c *conv) tellRefusedWake() {
 	c.mu.Lock()
 	refused, reason, checkout := c.wakeRefused, c.lastErr, c.releasedCheckout
 	c.mu.Unlock()
 	if !refused {
 		return
 	}
-	c.tellSenders(mail, checkout, reason)
+	c.tellHeldSenders(checkout, reason)
 }
 
-// tellSenders tells each sender of mail, once, that conversation c refused
-// its start (checkout set: by that checkout's release). It runs in the loop.
-func (c *conv) tellSenders(mail []ClaimedMail, checkout, reason string) {
-	told := map[string]bool{}
-	for _, m := range mail {
-		if m.Sender == "" || told[m.Sender] {
-			continue
-		}
-		told[m.Sender] = true
-		c.r.tellRefused(m.Sender, c.rec.ReplyID, checkout, reason)
+// holdSender keeps sender, once, among the senders of mail held in the
+// record (heldSenders). It runs in the loop.
+func (c *conv) holdSender(sender string) {
+	if sender == "" || slices.Contains(c.heldSenders, sender) {
+		return
+	}
+	c.heldSenders = append(c.heldSenders, sender)
+}
+
+// tellHeldSenders tells each sender of held mail not yet told, once, that
+// conversation c refused its start (checkout set: by that checkout's
+// release). It runs in the loop.
+func (c *conv) tellHeldSenders(checkout, reason string) {
+	senders := c.heldSenders
+	c.heldSenders = nil
+	for _, sender := range senders {
+		c.r.tellRefused(sender, c.rec.ReplyID, checkout, reason)
 	}
 }
 
@@ -1246,7 +1278,9 @@ func (c *conv) kick() {
 	if !c.canKick() {
 		return
 	}
-	if c.compactIdle() {
+	// A released binding gets no compaction command, continuation or restore
+	// turn: kickInput refuses whatever input waits instead.
+	if c.released() == "" && c.compactIdle() {
 		return
 	}
 	c.kickInput()
@@ -1274,10 +1308,16 @@ func (c *conv) refuseStart(refused *admissionRefusal) {
 	// Persist the input's coverage so crash recovery cannot expire it as
 	// quiet.
 	c.flushRecord()
+	// The senders of mail held since its claim hear the refusal now, also
+	// when the claim's own kick was deferred (the first holder scan).
+	c.tellHeldSenders(refused.checkout, refused.Error())
 }
 
 func (c *conv) kickInput() {
-	if c.sendCompactionNudge() {
+	// Checked before anything is sent: a released binding gets no
+	// compaction nudge, and no new turn or start below.
+	released := c.released()
+	if released == "" && c.sendCompactionNudge() {
 		return
 	}
 	c.mu.Lock()
@@ -1294,10 +1334,11 @@ func (c *conv) kickInput() {
 		c.voidCancelled()
 		return
 	}
-	if checkout := c.released(); checkout != "" && c.proc != nil {
-		// A live process outlived its checkout's release: it takes no new
-		// turn there. The input stays, as a refused start keeps it.
-		c.refuseStart(checkoutReleasedRefusal(checkout))
+	if released != "" {
+		// Its checkout's release ended the binding: a live process that
+		// outlived it takes no new turn there, and none starts. The input
+		// stays, as a refused start keeps it.
+		c.refuseStart(checkoutReleasedRefusal(released))
 		return
 	}
 	if c.proc == nil {
@@ -1471,6 +1512,10 @@ func (c *conv) kickInput() {
 			rec.TurnOpen, rec.HeldTurn = true, nil
 		}
 	})
+	if len(mail) > 0 {
+		// The held mail reached a turn: no refusal is owed its senders.
+		c.heldSenders = nil
+	}
 	// Mail shows on the page through the session's mail history, so only
 	// the dashboard's own text is a user entry; a turn of mail alone is
 	// marked as mail's.

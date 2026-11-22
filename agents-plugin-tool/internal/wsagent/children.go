@@ -376,7 +376,7 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	}
 	// A release of its checkout after it was bound ended that binding: it is
 	// not reopened there.
-	if checkout := releasedCheckoutOf(rec); checkout != "" {
+	if checkout := r.loadReleasedCheckout(rec); checkout != "" {
 		return nil, conflict("cannot resume Pi subagent %s: %s", id, checkoutReleasedRefusal(checkout).Error())
 	}
 	dir := wsdashboard.SessionDir(r.opts.Dir, id)
@@ -394,6 +394,13 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	c = r.startConv(rec, nil)
 	c.watched()
 	return c, nil
+}
+
+// tokenRootLead reports whether a token's conversation is a root lead (a
+// lead nobody spawned), the only caller worktree.release's force gate admits.
+func tokenRootLead(c *conv) bool {
+	rec := c.record()
+	return rec.Lead && rec.Parent == nil
 }
 
 // tokenRequest is the token route's body: the fields each op reads.
@@ -464,6 +471,7 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 		// (bound before the marker), so a caller cannot reach any other.
 		var body struct {
 			Worktree    string `json:"worktree"`
+			ReleasedAt  string `json:"released_at"`
 			CancelTurns bool   `json:"cancel_turns"`
 		}
 		if !decode(w, req, &body) {
@@ -473,11 +481,25 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 			writeAnswer(w, 0, nil, badRequest("worktree.released: worktree is required"))
 			return
 		}
-		convs := r.CheckoutReleased(body.Worktree, body.CancelTurns)
+		// A notice without released_at (or with one this daemon cannot
+		// read) falls back to the marker on disk.
+		at, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(body.ReleasedAt))
+		// Cancelling turns is a forced release's, which only a root lead may
+		// make (worktree.release's force gate). A token belongs to a spawned
+		// conversation, never to a root lead, so its notice ends the bindings
+		// but cancels no turn: refusing the whole notice instead would leave
+		// a normal release through a worker's ws-mcp with its earlier
+		// bindings still taking input.
+		cancel := body.CancelTurns && tokenRootLead(caller)
+		convs := r.CheckoutReleased(body.Worktree, at, cancel)
 		if convs == nil {
 			convs = []ReleasedConversation{}
 		}
-		writeAnswer(w, http.StatusOK, map[string]any{"conversations": convs}, nil)
+		answer := map[string]any{"conversations": convs}
+		if body.CancelTurns && !cancel {
+			answer["cancel_refused"] = true
+		}
+		writeAnswer(w, http.StatusOK, answer, nil)
 		return
 	}
 	if strings.HasPrefix(op, "agent.") {

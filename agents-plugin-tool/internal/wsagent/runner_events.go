@@ -81,8 +81,9 @@ func (c *conv) handle(ev Event) {
 			if !ev.FinalUsage && !ev.LiveCoalescesTurnEnd {
 				c.steerCompaction(false)
 			}
-			// Pi can report usage after settlement.
-			if c.canKick() && !c.compactIdle() && c.compactionNudgeReady() {
+			// Pi can report usage after settlement. A released binding gets
+			// no compaction turn or nudge.
+			if c.canKick() && c.released() == "" && !c.compactIdle() && c.compactionNudgeReady() {
 				c.kickInput()
 			}
 		}
@@ -1140,6 +1141,7 @@ func (c *conv) finishClose() {
 	if len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 {
 		c.update(func(rec *Record) { rec.Mail, rec.Reports = nil, nil })
 	}
+	c.heldSenders = nil
 	c.r.revokeToken(c.rec.ReplyID)
 	c.hold(nil)
 	c.dropHeld()

@@ -2,7 +2,6 @@
 package wsagent
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -77,6 +76,7 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		system = string(raw)
 	}
 	root, cwd := caller.Root, strings.TrimSpace(req.Cwd)
+	explicit := ""
 	if wt := strings.TrimSpace(req.Worktree); wt != "" {
 		if !filepath.IsAbs(wt) {
 			wt = filepath.Join(caller.base(), wt)
@@ -85,20 +85,21 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		if _, err := os.Lstat(filepath.Join(wt, ".git")); err != nil {
 			return AgentSpawnResult{}, badRequest("%s: worktree %s is not a git worktree root (no .git entry)", tool, wt)
 		}
-		unlockWorktree, err := wsgit.ReserveWorktreeSpawn(wt)
-		if err != nil {
-			if errors.Is(err, wsgit.ErrWorktreeReleasing) {
-				return AgentSpawnResult{}, conflict("%s: worktree %s is currently being released; wait for release to finish and re-acquire before spawning", tool, wt)
-			}
-			return AgentSpawnResult{}, badRequest("%s: reserve worktree %s: %v", tool, wt, err)
-		}
-		defer unlockWorktree()
+		explicit = wt
 		root, cwd = wt, wt
 	} else if cwd == "" {
 		cwd = caller.base()
 	} else if !filepath.IsAbs(cwd) {
 		cwd = filepath.Join(caller.base(), cwd)
 	}
+	// Every pooled worktree the child binds to is reserved, not only an
+	// explicit worktree: a child whose inherited root or chosen cwd lies in
+	// one is bound there just the same.
+	unlockCheckouts, err := reserveSpawnCheckouts(tool, explicit, root, cwd)
+	if err != nil {
+		return AgentSpawnResult{}, err
+	}
+	defer unlockCheckouts()
 	label := req.Label
 	if strings.TrimSpace(label) == "" {
 		label = req.Prompt
@@ -184,7 +185,8 @@ func (r *Runner) AgentInterrupt(caller AgentCaller, address string) (AgentInterr
 	return AgentInterruptResult{Address: AgentAddress(id), Status: AgentStatus(st), Returned: returned}, nil
 }
 
-// BoundWorktreeChild identifies a non-closed conversation bound to a worktree.
+// BoundWorktreeChild identifies a conversation bound to a worktree: a
+// non-closed one, or a closed one whose process is still live.
 // BoundBeforeRelease marks a spawned conversation bound before the worktree's
 // most recent completed release: that release ended its binding, so it never
 // launches, wakes or resumes there, and release ignores it. Live marks one
@@ -200,17 +202,18 @@ type BoundWorktreeChild struct {
 	Live               bool   `json:"live,omitempty"`
 }
 
-// ActiveChildrenInWorktree returns every non-closed conversation in the runner
-// whose canonical root equals worktree or whose canonical working directory is
-// worktree or within it, oldest first then by address. Reads live state from
-// memory; the one file it reads is worktree's release marker.
+// ActiveChildrenInWorktree returns every conversation in the runner whose
+// canonical root equals worktree or whose canonical working directory is
+// worktree or within it, oldest first then by address: each non-closed one,
+// and a closed one whose process the runner still holds (a close marks the
+// conversation closed before it stops the process). It reads memory only,
+// apart from worktree's release marker at its first use in this daemon.
 func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild {
 	target := canonicalWorktreePath(worktree)
 	if target == "" {
 		return nil
 	}
-	releasedAt, released, err := wsgit.WorktreeReleasedAt(target)
-	released = released && err == nil
+	release := r.checkoutReleaseOf(target)
 	type match struct {
 		createdAt string
 		child     BoundWorktreeChild
@@ -218,16 +221,18 @@ func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild 
 	var matches []match
 	for _, c := range r.boundConvs(target) {
 		st := c.memoryState()
-		if st.Status == StatusClosed || st.Status == StatusHandedOff {
-			continue
-		}
 		c.mu.Lock()
 		rec := c.rec
-		live := c.proc != nil || c.turn || c.bgTasks != 0 || rec.HolderID != ""
-		known := c.releasedCheckout
+		// Live while the runner holds a process, whatever the status says,
+		// and while a start that passed the release check is still under way.
+		live := c.proc != nil || c.starting || c.turn || c.bgTasks != 0 || rec.HolderID != ""
+		known := c.releasedLocked()
 		c.mu.Unlock()
-		before := releaseBound(rec) && (released && wsgit.BoundBeforeRelease(rec.CreatedAt, releasedAt) ||
-			sameWorktreePath(canonicalWorktreePath(known), target))
+		if (st.Status == StatusClosed || st.Status == StatusHandedOff) && !live {
+			continue
+		}
+		before := releaseBound(rec) && (release.ok && wsgit.BoundBeforeRelease(rec.CreatedAt, rec.CreatedUnixNano, release.at) ||
+			sameWorktreePath(known, target))
 		matches = append(matches, match{
 			createdAt: st.CreatedAt,
 			child: BoundWorktreeChild{

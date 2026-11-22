@@ -254,6 +254,12 @@ type Runner struct {
 	closed        map[string]Record
 	childrenIndex map[ParentRef]map[string]bool // mu; parent identity is immutable
 	pendingSpawns map[ParentRef]int             // mu; in-flight width-checked spawns until registered
+	// releases is each checkout's most recent completed release as this
+	// daemon knows it, keyed by releaseKey: read from its marker once, at
+	// first use after start, then fed by worktree.release's notice
+	// (worktree_release.go). Under relMu, never held with mu.
+	relMu    sync.Mutex
+	releases map[string]checkoutRelease
 	// expiry is childWaitingExpiry's value, read once (expiryOnce).
 	expiryOnce sync.Once
 	expiry     time.Duration
