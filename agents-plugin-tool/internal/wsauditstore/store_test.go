@@ -742,3 +742,117 @@ func TestStoreCloseDrainsEveryAcceptedJob(t *testing.T) {
 		_ = s2.Close()
 	}
 }
+
+// bigRecord is a sourced record with two bodies at the per-body cap, so each
+// fills most of a segment at the smallest limits.
+func bigRecord(session string, seq uint64, lim Limits) item {
+	it := sourced(session, seq, wsaudit.KindToolResult)
+	body := strings.Repeat("y", int(lim.BodyBytes)-64)
+	it.In, it.Out = body, body
+	return it
+}
+
+// TestStoreLossCountSurvivesWrapAndRestart pins durable loss accounting: a
+// covered loss whose line lands after a rotation's header is counted once
+// after the segment before it wraps away and the store restarts, and a
+// replayed RecordLoss of that identity is not counted again.
+func TestStoreLossCountSurvivesWrapAndRestart(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	root := t.TempDir()
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	var once sync.Once
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		once.Do(func() { entered <- struct{}{}; <-hold })
+		return orig(f, b)
+	}
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	mustAppend(t, s, bigRecord("sess", 1, lim))
+	<-entered // queue the rest behind the first write, so no idle flush splits them
+	if err := s.Finalize(ctx, "sess", "holder:1", 5); err != nil {
+		t.Fatal(err)
+	}
+	lost := wsaudit.SourceID{Source: "holder:1", Seq: 3} // covered by the boundary
+	if err := s.RecordLoss(ctx, "sess", lost, wsaudit.LossDropped); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s, bigRecord("sess", 6, lim)) // rotates: header, then the loss line
+	close(hold)
+	for seq := uint64(7); seq <= 16; seq++ { // wrap the first segments away
+		mustAppend(t, s, bigRecord("sess", seq, lim))
+	}
+	flush(t, s)
+	if _, err := os.Stat(filepath.Join(root, "sess", segmentName(1))); !os.IsNotExist(err) {
+		t.Fatalf("the first segment did not wrap: %v", err)
+	}
+	if n := lossCount(t, s, "sess"); n != 1 {
+		t.Fatalf("loss before restart = %d", n)
+	}
+	_ = s.Close()
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	loaded(t, s2, "sess")
+	if n := lossCount(t, s2, "sess"); n != 1 {
+		t.Fatalf("loss after wrap and restart = %d", n)
+	}
+	if err := s2.RecordLoss(ctx, "sess", lost, wsaudit.LossDropped); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s2, sourced("sess", 3, wsaudit.KindToolCall))
+	flush(t, s2)
+	if n := lossCount(t, s2, "sess"); n != 1 {
+		t.Fatalf("a replayed loss of a counted identity counted again: %d", n)
+	}
+}
+
+// TestStoreLostSetFoldsIntoABoundedHeader pins the header bound of the lost
+// set: thousands of covered losses fold into the lost floor, the rotation
+// header stays within the budget, and replays of folded identities are not
+// counted again across a restart.
+func TestStoreLostSetFoldsIntoABoundedHeader(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	root := t.TempDir()
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	const n = 3000
+	if err := s.Finalize(ctx, "sess", "holder:1", n+1); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(2); seq < n+2; seq++ {
+		if err := s.RecordLoss(ctx, "sess", wsaudit.SourceID{Source: "holder:1", Seq: seq}, wsaudit.LossDropped); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for seq := uint64(n + 2); seq < n+14; seq++ {
+		mustAppend(t, s, bigRecord("sess", seq, lim))
+	}
+	flush(t, s)
+	segs, _, err := listSegments(filepath.Join(root, "sess"))
+	if err != nil || len(segs) < 2 || segs[0].seq == 1 {
+		t.Fatalf("segments %+v %v: want the first wrapped away", segs, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "sess", segmentName(segs[0].seq)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := raw[:bytes.IndexByte(raw, '\n')]
+	if len(header) > lostBudget+4096 {
+		t.Fatalf("rotation header is %d bytes", len(header))
+	}
+	_ = s.Close()
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	loaded(t, s2, "sess")
+	if got := lossCount(t, s2, "sess"); got != n {
+		t.Fatalf("loss after restart = %d, want %d", got, n)
+	}
+	for seq := uint64(2); seq < n+2; seq++ {
+		_ = s2.RecordLoss(ctx, "sess", wsaudit.SourceID{Source: "holder:1", Seq: seq}, wsaudit.LossDropped)
+	}
+	flush(t, s2)
+	if got := lossCount(t, s2, "sess"); got != n {
+		t.Fatalf("replayed losses counted again: %d", got)
+	}
+}

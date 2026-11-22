@@ -78,10 +78,19 @@ type headerState struct {
 	MaxSeq     uint64            `json:"max_seq,omitempty"`
 	Boundaries map[string]uint64 `json:"boundaries,omitempty"`
 	Loss       uint64            `json:"loss,omitempty"`
-	// Lost lists the lost identities the boundaries do not already cover.
-	Lost     []wsaudit.SourceID `json:"lost,omitempty"`
-	LastSeen string             `json:"last_seen,omitempty"`
+	// Lost lists the lost identities already counted in Loss, covered by a
+	// boundary or not, so neither a replayed loss line nor a replayed record
+	// counts one again once the segment holding its loss line is gone.
+	Lost []wsaudit.SourceID `json:"lost,omitempty"`
+	// LostFloor is, per source, the position at or below which every
+	// identity not retained is already counted lost (see ledger.floor).
+	LostFloor map[string]uint64 `json:"lost_floor,omitempty"`
+	LastSeen  string            `json:"last_seen,omitempty"`
 }
+
+// lostBudget bounds the encoded size of a header's Lost list; past it the
+// lowest positions fold into LostFloor.
+const lostBudget = 32 << 10
 
 type segment struct {
 	seq    uint64
@@ -98,16 +107,102 @@ type ledger struct {
 	maxSeq   uint64
 	bounds   map[string]uint64 // per-source finalized boundary
 	retained map[wsaudit.SourceID]struct{}
-	lost     map[wsaudit.SourceID]struct{}
-	loss     uint64
+	// lost holds the identities counted in loss, each with its encoded size;
+	// lostBytes is their sum.
+	lost      map[wsaudit.SourceID]int
+	lostBytes int
+	loss      uint64
+	// floor is, per source, a boundary (in the covered sense) through which
+	// every identity not retained is already counted lost: identities folded
+	// out of lost to keep the header bounded. It never exceeds the source's
+	// finalized boundary unless uncovered identities had to fold.
+	floor map[string]uint64
+	// forced counts uncovered identities folded into a floor, for the
+	// writer's log.
+	forced int
 }
 
 func newLedger() *ledger {
 	return &ledger{
 		bounds:   map[string]uint64{},
 		retained: map[wsaudit.SourceID]struct{}{},
-		lost:     map[wsaudit.SourceID]struct{}{},
+		lost:     map[wsaudit.SourceID]int{},
+		floor:    map[string]uint64{},
 	}
+}
+
+// settled reports whether id is at or below its source's lost floor: already
+// accounted for, so it is neither appended nor counted again. l.mu is held.
+func (l *ledger) settled(id wsaudit.SourceID) bool {
+	return covered(id, l.floor[id.Source])
+}
+
+// addLost records id as counted lost. l.mu is held.
+func (l *ledger) addLost(id wsaudit.SourceID) {
+	if _, ok := l.lost[id]; ok {
+		return
+	}
+	n := 64
+	if raw, err := json.Marshal(id); err == nil {
+		n = len(raw) + 1
+	}
+	l.lost[id] = n
+	l.lostBytes += n
+}
+
+func (l *ledger) dropLost(id wsaudit.SourceID) {
+	if n, ok := l.lost[id]; ok {
+		delete(l.lost, id)
+		l.lostBytes -= n
+	}
+}
+
+// fold keeps the lost set within lostBudget by folding the lowest positions
+// into the per-source floor: covered identities first (the floor then never
+// passes the boundary), uncovered ones only when covered ones do not suffice.
+// It reports the uncovered identities folded. l.mu is held.
+func (l *ledger) fold() (forced int) {
+	if l.lostBytes <= lostBudget {
+		return 0
+	}
+	var cands []wsaudit.SourceID
+	for id := range l.lost {
+		if id.Key == "" {
+			cands = append(cands, id)
+		}
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		ci, cj := covered(cands[i], l.bounds[cands[i].Source]), covered(cands[j], l.bounds[cands[j].Source])
+		if ci != cj {
+			return ci
+		}
+		if cands[i].Position() != cands[j].Position() {
+			return cands[i].Position() < cands[j].Position()
+		}
+		return cands[i].String() < cands[j].String()
+	})
+	for _, id := range cands {
+		if l.lostBytes <= lostBudget/2 {
+			break
+		}
+		if _, ok := l.lost[id]; !ok {
+			continue
+		}
+		if !covered(id, l.bounds[id.Source]) {
+			forced++
+		}
+		f := id.Seq
+		if id.Tee {
+			f = id.Anchor + 1 // a tee is covered by a floor above its anchor
+		}
+		l.floor[id.Source] = max(l.floor[id.Source], f)
+		for other := range l.lost {
+			if other.Source == id.Source && l.settled(other) {
+				l.dropLost(other)
+			}
+		}
+	}
+	return forced
 }
 
 // covered reports whether id is at or below its source's finalized boundary
@@ -214,7 +309,7 @@ func (r *ring) recover() error {
 			}
 			return err
 		}
-		good, newer := r.replaySegment(&segs[i], raw, i == 0)
+		good, newer := r.replaySegment(&segs[i], raw)
 		if newer {
 			r.readOnly = ErrNewerFormat
 		}
@@ -236,6 +331,9 @@ func (r *ring) recover() error {
 			break
 		}
 	}
+	r.led.mu.Lock()
+	r.led.forced += r.led.fold() // headers' unions can carry settled identities
+	r.led.mu.Unlock()
 	if r.readOnly == nil && len(r.segs) > 0 && !r.forceRotate {
 		f, err := openAppend(filepath.Join(r.dir, segmentName(r.segs[len(r.segs)-1].seq)))
 		if err != nil {
@@ -249,7 +347,7 @@ func (r *ring) recover() error {
 
 // replaySegment applies one segment's lines. It returns the byte length of
 // the well-formed prefix and whether the header names a newer format.
-func (r *ring) replaySegment(seg *segment, raw []byte, oldest bool) (good int, newer bool) {
+func (r *ring) replaySegment(seg *segment, raw []byte) (good int, newer bool) {
 	pos := 0
 	first := true
 	for pos < len(raw) {
@@ -273,7 +371,10 @@ func (r *ring) replaySegment(seg *segment, raw []byte, oldest bool) (good int, n
 				if ln.V > RingSchemaVersion {
 					return pos, true
 				}
-				if oldest && ln.State != nil {
+				// Every header seeds: each is a snapshot of the state so far,
+				// and seeding takes maxima and unions, so a header whose
+				// predecessors are gone or headerless still carries it.
+				if ln.State != nil {
 					r.seed(ln.State)
 				}
 				pos = next
@@ -286,7 +387,7 @@ func (r *ring) replaySegment(seg *segment, raw []byte, oldest bool) (good int, n
 	return pos, false
 }
 
-// seed starts recovery from the oldest retained segment's header state.
+// seed merges a segment header's recovery state into the ring's.
 func (r *ring) seed(st *headerState) {
 	l := r.led
 	l.mu.Lock()
@@ -295,8 +396,11 @@ func (r *ring) seed(st *headerState) {
 	for src, b := range st.Boundaries {
 		l.bounds[src] = max(l.bounds[src], b)
 	}
+	for src, f := range st.LostFloor {
+		l.floor[src] = max(l.floor[src], f)
+	}
 	for _, id := range st.Lost {
-		l.lost[id] = struct{}{}
+		l.addLost(id)
 	}
 	l.mu.Unlock()
 	if t, err := time.Parse(time.RFC3339Nano, st.LastSeen); err == nil && t.After(r.lastSeen) {
@@ -339,7 +443,7 @@ func (r *ring) index(ev wsaudit.Envelope, id *wsaudit.SourceID) {
 	l.maxSeq = max(l.maxSeq, ev.Seq)
 	if id != nil {
 		l.retained[*id] = struct{}{}
-		delete(l.lost, *id)
+		l.dropLost(*id)
 	}
 	l.mu.Unlock()
 }
@@ -356,8 +460,12 @@ func (r *ring) markLost(id wsaudit.SourceID) bool {
 	if _, ok := l.retained[id]; ok {
 		return false
 	}
-	l.lost[id] = struct{}{}
+	if l.settled(id) {
+		return false
+	}
+	l.addLost(id)
 	l.loss++
+	l.forced += l.fold()
 	return true
 }
 
@@ -397,6 +505,9 @@ func (r *ring) admit(id *wsaudit.SourceID) int {
 		return admitDuplicate
 	}
 	if _, ok := l.lost[*id]; ok {
+		return admitDuplicate
+	}
+	if l.settled(*id) {
 		return admitDuplicate
 	}
 	if covered(*id, l.bounds[id.Source]) {
@@ -443,8 +554,12 @@ func (r *ring) headerLine() ([]byte, error) {
 		}
 	}
 	for id := range l.lost {
-		if !covered(id, l.bounds[id.Source]) {
-			st.Lost = append(st.Lost, id)
+		st.Lost = append(st.Lost, id)
+	}
+	if len(l.floor) > 0 {
+		st.LostFloor = make(map[string]uint64, len(l.floor))
+		for src, f := range l.floor {
+			st.LostFloor[src] = f
 		}
 	}
 	l.mu.Unlock()
