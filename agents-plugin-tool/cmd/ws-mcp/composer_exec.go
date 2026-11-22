@@ -58,7 +58,10 @@ func (c composerExec) Launch(ctx context.Context, drain <-chan struct{}, req wsd
 	launch.OnConvert = func(v execjob.HostedView) error {
 		// The id is visible in the lead's pending input before the job
 		// can owe its completion notice; a refusal is returned, and the
-		// ordinary notice carries the id instead.
+		// ordinary notice carries the id instead. PassiveHand checks and
+		// stores under one hold, so it either stores the receipt or returns an
+		// error with nothing stored: a refusal never leaves both the receipt
+		// and the ordinary notice.
 		return c.runner.PassiveHand(req.ReplyID, gen, v.ID, wsdashboard.ComposerAsyncReceipt(v.ID))
 	}
 	view, launchErr := c.hosted.Launch(ctx, drain, launch)

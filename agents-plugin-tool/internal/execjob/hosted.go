@@ -784,7 +784,10 @@ type HostedLaunch struct {
 	// visible ahead of the first notice admission: the job is not eligible for
 	// a notice, in memory or in its stored row, until it returns. A job that
 	// ends first converts nothing and never calls it. An error is logged and
-	// leaves the ordinary notice as the one delivery.
+	// leaves the ordinary notice as the one delivery (a lead decision: a refused
+	// publication falls back to the ordinary notice as the single delivery), so
+	// the callback must be all-or-nothing: it returns an error only when nothing
+	// reached the owner or the client, never after a partial publication.
 	OnConvert func(HostedView) error
 }
 
