@@ -538,7 +538,14 @@
       "registered_at": "2026-11-20T12:40:36Z"
     },
     "261121-bug-compaction-advisory-followups": {
-      "registered_at": "2026-11-21T13:31:42Z"
+      "registered_at": "2026-11-21T13:31:42Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "closed",
+        "touched_at": "2026-11-22T00:16:17Z"
+      }
     },
     "261121-bug-ws-agy-reattach-watchdog-sent-input": {
       "registered_at": "2026-11-21T12:39:33Z"
