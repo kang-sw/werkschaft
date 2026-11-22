@@ -52,13 +52,25 @@ type hostedOwnerProof struct {
 // proof that no longer holds; a terminal login is also seen by checkRow and
 // the heartbeat (isForeign). With no proof yet, or one that no longer names
 // this record's process, it falls back to lockSummaryWriter once.
+//
+// The proof holds only while its process runs. A terminal login takes a
+// hosted row only once the row's process is gone (Registration.HostMayRun),
+// which can happen before this daemon consumes the process's exit; a
+// process asked of the OS (Options.Alive: a signal probe, no file) that no
+// longer runs ends the proof, and nothing reaches the slot until a
+// file-fenced write proves the row again.
 func (c *conv) lockSummaryWriterRAM() (func(), bool) {
 	rec := c.record()
 	if !rec.Lead || c.isForeign() {
 		return nil, false
 	}
-	if proof := c.ownerProof.Load(); proof == nil || proof.hostPID != rec.HostPID || proof.backend != rec.Backend {
+	proof := c.ownerProof.Load()
+	if proof == nil || proof.hostPID <= 0 || proof.hostPID != rec.HostPID || proof.backend != rec.Backend {
 		return c.lockSummaryWriter()
+	}
+	if !c.r.opts.Alive(proof.hostPID) {
+		c.ownerProof.CompareAndSwap(proof, nil)
+		return nil, false
 	}
 	release, owned := c.r.lockSummaryOwner(rec.ReplyID, c)
 	if !owned {

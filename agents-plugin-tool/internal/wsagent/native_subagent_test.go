@@ -466,7 +466,7 @@ func TestNativeRowEventsPublishRAMOnly(t *testing.T) {
 	now := time.Unix(1000, 0)
 	base := t.TempDir()
 	dir := filepath.Join(t.TempDir(), "native")
-	r := NewRunner(Options{Dir: base, Now: func() time.Time { return now }, Log: io.Discard})
+	r := NewRunner(Options{Dir: base, Now: func() time.Time { return now }, Log: io.Discard, Alive: func(int) bool { return true }})
 	c := &conv{r: r, dir: dir, rec: Record{ReplyID: "native", WSKey: "key", Root: dir, Backend: BackendAgy, Lead: true, HostPID: 4242}, turn: true}
 	if err := wsdashboard.WriteRegistration(base, wsdashboard.Registration{ReplyID: "native", Project: dir, Harness: BackendAgy, Hosted: true, HostPID: 4242}); err != nil {
 		t.Fatal(err)
@@ -533,6 +533,64 @@ func TestNativeRowEventsPublishRAMOnly(t *testing.T) {
 	c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeCodexPrefix + "late", Label: "late", Status: wslive.StatusRunning}})
 	if _, ok := snapAgent(slot.snapshot, wslive.NativeCodexPrefix+"late"); ok || !reflect.DeepEqual(before, slot.snapshot) {
 		t.Fatal("a native row published after the session's row left the daemon")
+	}
+}
+
+// TestNativeRowRAMProofEndsWithItsProcess: the hosted harness exits with a
+// native event still queued and a terminal login takes the row before the
+// daemon consumes the exit. The old conversation still holds its slot, its
+// summary ownership and the cached proof, yet the queued native row is not
+// published to the transferred session, and the refusal reads no file.
+func TestNativeRowRAMProofEndsWithItsProcess(t *testing.T) {
+	now := time.Unix(1000, 0)
+	base := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "native")
+	alive := true
+	r := NewRunner(Options{Dir: base, Now: func() time.Time { return now }, Log: io.Discard, Alive: func(pid int) bool { return alive && pid == 4242 }})
+	c := &conv{r: r, dir: dir, rec: Record{ReplyID: "native", WSKey: "key", Root: dir, Backend: BackendAgy, Lead: true, HostPID: 4242}, turn: true}
+	if err := wsdashboard.WriteRegistration(base, wsdashboard.Registration{ReplyID: "native", Project: dir, Harness: BackendAgy, Hosted: true, HostPID: 4242}); err != nil {
+		t.Fatal(err)
+	}
+	r.setSummaryOwner("native", c)
+	c.live = newLiveWriter(dir, "key", "agy", r.opts.Now, io.Discard)
+	c.live.owner, c.live.ownerRAM = c.lockSummaryWriter, c.lockSummaryWriterRAM
+	slot := &idleSnapshotSlot{}
+	c.live.slot = slot
+	c.live.wake = slot.RingAppended
+	c.live.writeSnapshot()
+	if c.ownerProof.Load() == nil {
+		t.Fatal("the file-fenced write proved no row")
+	}
+	now = now.Add(2 * wslive.HeartbeatInterval)
+	early := wslive.NativeAgyPrefix + "early"
+	c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: early, Label: "early", Status: wslive.StatusRunning}})
+	if _, ok := snapAgent(slot.snapshot, early); !ok {
+		t.Fatal("a native row under a running host was not published")
+	}
+	// The harness exits; a terminal login rewrites the row.
+	alive = false
+	if err := wsdashboard.WriteRegistration(base, wsdashboard.Registration{ReplyID: "native", Project: dir, Harness: BackendAgy, HarnessPID: 777}); err != nil {
+		t.Fatal(err)
+	}
+	if c.ownerProof.Load() == nil || r.summaryOwner("native") != c || c.live.currentSlot() == nil {
+		t.Fatal("the old proof, summary ownership or slot is already gone")
+	}
+	before, locks, reads := slot.snapshot, c.rowReads.Load(), registrationReads()
+	queued := wslive.NativeAgyPrefix + "queued"
+	c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: queued, Label: "queued", Status: wslive.StatusRunning}})
+	if _, ok := snapAgent(slot.snapshot, queued); ok || !reflect.DeepEqual(before, slot.snapshot) {
+		t.Fatal("the queued native row was published to the transferred session")
+	}
+	if l, rd := c.rowReads.Load()-locks, registrationReads()-reads; l != 0 || rd != 0 {
+		t.Fatalf("the refusal took %d registration locks and %d reads, want none", l, rd)
+	}
+	if c.ownerProof.Load() != nil {
+		t.Fatal("the proof outlived its process")
+	}
+	// The next file-fenced write sees the terminal's row and publishes nothing.
+	c.apply(wslive.Event{Kind: wslive.KindTurnEnd})
+	if _, ok := snapAgent(slot.snapshot, queued); ok {
+		t.Fatal("a file-fenced write published to the transferred session")
 	}
 }
 
