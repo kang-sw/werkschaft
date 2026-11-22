@@ -597,3 +597,41 @@ test('live refresh drains reconnect backlog beyond 200 events', async () => {
   assert.deepEqual(cursors, ['0', '1', '2']);
   assert.equal(ctx.auLatestAfter, '2');
 });
+
+
+test('history end continuation cannot start open-below work after a gap reset', async () => {
+  const t1 = '2026-11-20T10:00:01Z', t2 = '2026-11-20T10:00:02Z';
+  let finish;
+  const urls = [];
+  const { ctx, dom } = raceRowsHarness((url) => {
+    urls.push(url);
+    return new Promise((resolve) => { finish = resolve; });
+  });
+  ctx.auCoveredSince = t2;
+  dom.doc.dispatchEvent({ type: 'ws-history-page', detail: { oldestAt: t1, end: true } });
+  const savedQueue = ctx.auFetchQueue;
+  while (!finish) await new Promise((r) => setTimeout(r, 0));
+  assert.equal(new URL(urls[0], 'http://fixture').searchParams.get('until'), t2);
+  dom.doc.dispatchEvent({ type: 'ws-history-reset' });
+  finish(auditPage({ events: [{ id: 'pre-reset', kind: 'thinking', at: t1 }], end: true }));
+  await savedQueue;
+  assert.equal(urls.length, 1, 'no open-below until=T1 request escapes the old epoch');
+  assert.equal(ctx.auEventsById['pre-reset'], undefined);
+  assert.equal(ctx.auOpenBelowDone, false);
+  assert.equal(ctx.auCoveredSince, '');
+});
+
+test('history end still opens below an already covered interval', async () => {
+  const t1 = '2026-11-20T10:00:01Z';
+  const urls = [];
+  const { ctx, dom } = raceRowsHarness(async (url) => {
+    urls.push(url);
+    return auditPage({ events: [], end: true });
+  });
+  ctx.auCoveredSince = t1;
+  dom.doc.dispatchEvent({ type: 'ws-history-page', detail: { oldestAt: t1, end: true } });
+  await ctx.auFetchQueue;
+  assert.equal(urls.length, 1);
+  assert.equal(new URL(urls[0], 'http://fixture').searchParams.get('until'), t1);
+  assert.equal(ctx.auOpenBelowDone, true);
+});

@@ -486,7 +486,9 @@
       var epoch = auEpoch;
       function run(job) {
         if (epoch !== auEpoch) return Promise.resolve();
-        return Promise.resolve().then(job).catch(function () {
+        return Promise.resolve().then(function () {
+          if (epoch === auEpoch) return job();
+        }).catch(function () {
           if (epoch === auEpoch) auFailedJobs.push(job);
         });
       }
@@ -524,11 +526,12 @@
     }
 
     doc.addEventListener("ws-history-page", function (e) {
+      var pageEpoch = auEpoch;
       var d = (e && e.detail) || {};
       var box = auEntriesContainer();
       var oldest = d.oldestAt || auFirstDataEntryAt(box);
       auEnqueue(function () {
-        var p = Promise.resolve();
+        var p = Promise.resolve({ ok: true, epoch: pageEpoch });
         if (d.empty && d.end && !oldest) {
           if (!auUnboundedDone) {
             p = auFetchInterval("", "", true).then(function (res) {
@@ -541,14 +544,17 @@
           var prevUpper = auCoveredSince;
           p = auFetchInterval(oldest, prevUpper, false).then(function (res) {
             if (res && res.ok && res.epoch === auEpoch) auCoveredSince = oldest;
+            return res;
           });
         } else if (oldest && !auCoveredSince) {
           p = auFetchInterval(oldest, "", true).then(function (res) {
             if (res && res.ok && res.epoch === auEpoch) auCoveredSince = oldest;
+            return res;
           });
         }
         if (d.end && oldest && !auOpenBelowDone) {
-          p = p.then(function () {
+          p = p.then(function (res) {
+            if (pageEpoch !== auEpoch || !res || !res.ok) return;
             return auFetchInterval("", oldest, false).then(function (res) {
               if (res && res.ok && res.epoch === auEpoch) auOpenBelowDone = true;
             });
