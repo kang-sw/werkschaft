@@ -19,34 +19,49 @@ var legacyAdmission struct {
 	// reserved holds the launches past admission and not yet active, each
 	// as its cleaned root and working directory.
 	reserved map[*legacyLaunch]struct{}
-	// fences counts the fences on each form of a fenced target.
-	fences map[string]int
+	// fences holds the live fences on each form of a fenced target, oldest
+	// first; a refusal names the latest one's reason.
+	fences map[string]fenceHolds
 }
 
+// The reasons a worktree fence gives when it refuses a new job.
+const (
+	FenceReleasing = "being released or removed"
+	FenceAcquiring = "being acquired (checked out for a new holder)"
+)
+
 // legacyLaunch is a reserved launch's places: its root and working
-// directory.
-type legacyLaunch struct{ root, wd string }
+// directory, and their resolved spellings (admittedPlaces).
+type legacyLaunch struct {
+	root, wd string
+	real     []string
+}
 
 // beforeLegacyActive, when set (tests only), runs after a legacy job's
 // process started and before it enters the active set.
 var beforeLegacyActive func()
 
-// reserveLegacy admits a legacy launch into root with working directory wd,
-// refused when either lies in a fenced worktree. The returned release is
-// idempotent.
-func reserveLegacy(root, wd string) (func(), error) {
+// afterLegacyAdmission, when set (tests only), runs after a legacy launch
+// is admitted and before its process starts.
+var afterLegacyAdmission func()
+
+// reserveLegacy admits a legacy launch into root with working directory wd
+// (real: their resolved spellings), refused when any of them lies in a
+// fenced worktree. The returned release is idempotent.
+func reserveLegacy(root, wd string, real []string) (func(), error) {
 	root = filepath.Clean(root)
+	places := append([]string{root, wd}, real...)
 	legacyAdmission.mu.Lock()
 	defer legacyAdmission.mu.Unlock()
-	for fenced := range legacyAdmission.fences {
-		if within(fenced, root) || within(fenced, wd) {
-			return nil, fmt.Errorf("exec: %s is being released or removed; launch elsewhere", fenced)
+	for fenced, holds := range legacyAdmission.fences {
+		if placesIn([]string{fenced}, places) {
+			return nil, fmt.Errorf("exec: %s is %s; launch elsewhere", fenced, holds.reason())
 		}
 	}
 	if legacyAdmission.reserved == nil {
 		legacyAdmission.reserved = map[*legacyLaunch]struct{}{}
 	}
-	launch := &legacyLaunch{root: root, wd: filepath.Clean(wd)}
+	launch := &legacyLaunch{root: root, wd: filepath.Clean(wd), real: real}
 	legacyAdmission.reserved[launch] = struct{}{}
 	var once sync.Once
 	return func() {
@@ -65,6 +80,13 @@ func reserveLegacy(root, wd string) (func(), error) {
 // otherwise new legacy launches there are refused until the returned
 // unfence (idempotent) runs.
 func FenceLegacyRoot(target string) (func(), error) {
+	return FenceLegacyRootAs(target, FenceReleasing)
+}
+
+// FenceLegacyRootAs is FenceLegacyRoot whose refusal of a new launch names
+// reason; while fences with different reasons overlap, a refusal names the
+// latest one still held.
+func FenceLegacyRootAs(target, reason string) (func(), error) {
 	forms := rootForms(target)
 	legacyAdmission.mu.Lock()
 	defer legacyAdmission.mu.Unlock()
@@ -78,13 +100,13 @@ func FenceLegacyRoot(target string) (func(), error) {
 		return false
 	}
 	active.Range(func(_, v any) bool {
-		if job := v.(*activeJob); inTarget(filepath.Clean(job.root)) || (job.wd != "" && inTarget(filepath.Clean(job.wd))) {
+		if job := v.(*activeJob); inTarget(filepath.Clean(job.root)) || (job.wd != "" && inTarget(filepath.Clean(job.wd))) || placesIn(forms, job.real) {
 			n++
 		}
 		return true
 	})
 	for launch := range legacyAdmission.reserved {
-		if inTarget(launch.root) || inTarget(launch.wd) {
+		if inTarget(launch.root) || inTarget(launch.wd) || placesIn(forms, launch.real) {
 			n++
 		}
 	}
@@ -92,10 +114,11 @@ func FenceLegacyRoot(target string) (func(), error) {
 		return nil, fmt.Errorf("%d exec job(s) still run in it; abort them with exec.abort, or let them finish, first", n)
 	}
 	if legacyAdmission.fences == nil {
-		legacyAdmission.fences = map[string]int{}
+		legacyAdmission.fences = map[string]fenceHolds{}
 	}
+	hold := &fenceHold{reason: reason}
 	for _, f := range forms {
-		legacyAdmission.fences[f]++
+		legacyAdmission.fences[f] = append(legacyAdmission.fences[f], hold)
 	}
 	var once sync.Once
 	return func() {
@@ -103,7 +126,9 @@ func FenceLegacyRoot(target string) (func(), error) {
 			legacyAdmission.mu.Lock()
 			defer legacyAdmission.mu.Unlock()
 			for _, f := range forms {
-				if legacyAdmission.fences[f]--; legacyAdmission.fences[f] <= 0 {
+				if holds := legacyAdmission.fences[f].drop(hold); len(holds) > 0 {
+					legacyAdmission.fences[f] = holds
+				} else {
 					delete(legacyAdmission.fences, f)
 				}
 			}

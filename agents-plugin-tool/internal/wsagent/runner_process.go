@@ -45,7 +45,9 @@ func (c *conv) setPromptBoundary(rec *Record, startedAt int64, reportable bool) 
 // inbox drain. Internal prompts wait for ACP without opening a parent result.
 // The boundary is recorded only once the holder accepted the prompt: one
 // recorded before it would leave a successor waiting for a response to a
-// prompt that never reached the harness.
+// prompt that never reached the harness. send runs only when the binding
+// survives the last release check (admitInput); otherwise nothing runs and
+// the error is an inputReleasedError, which is no send failure.
 func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
 	// The prompt is a keep-awake member while its send is in flight. A
 	// successful send's caller opens the turn (beginTurn, or compactCommand
@@ -56,7 +58,11 @@ func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
 	defer func() { c.awakeSending = false }()
 	heldAgy := c.record().heldAgyWorker()
 	startedAt := c.r.opts.Now().UnixMilli()
-	if err := send(); err != nil || !heldAgy {
+	var err error
+	if checkout := c.admitInput(func() { err = send() }); checkout != "" {
+		return &inputReleasedError{checkout: checkout}
+	}
+	if err != nil || !heldAgy {
 		return err
 	}
 	c.update(func(rec *Record) { c.setPromptBoundary(rec, startedAt, reportable) })
@@ -71,6 +77,23 @@ func (c *conv) startProcess() error {
 		return conflict("the session is archived; unhide it before starting")
 	}
 	rec := c.record()
+	// A launch, wake or resume of a spawned conversation in a checkout
+	// released after it was bound is refused: the release ended that binding.
+	// A start is a cold path, so the check reads the checkouts' markers, not
+	// memory alone: a release whose notice never reached this daemon still
+	// refuses it. The check and the starting mark share one mu hold with the
+	// release notice and the occupancy read: a notice either lands first
+	// (this start is refused) or finds the start live.
+	c.mu.Lock()
+	checkout := c.releasedOnDiskLocked()
+	if checkout == "" {
+		c.starting = true
+	}
+	c.mu.Unlock()
+	if checkout != "" {
+		return checkoutReleasedRefusal(checkout)
+	}
+	defer c.setStatus(func() { c.starting = false })
 	// Before the profile is read: a removed or edited profile must not mask
 	// a cross-harness refusal (admitWorkerRecord).
 	if err := c.r.admitWorkerRecord(rec); err != nil {
@@ -680,6 +703,9 @@ func (c *conv) reattach() {
 			c.publishAwake(c.wantAwake())
 		}
 	}
+	// A process that outlived its checkout's release keeps running, but this
+	// daemon gives it no new input there either: startConv settled that
+	// before this rejoin.
 }
 
 // checkReattach tells a rejoined process where the holder's replay ends,

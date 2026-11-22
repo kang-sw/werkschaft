@@ -108,6 +108,18 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		settleC:      make(chan struct{}),
 	}
 	c.refreshAmbient()
+	// Its root and effective working directory never change after this:
+	// resolved once here, they serve every occupancy scan (boundConvs) from
+	// memory.
+	c.canonRoot, c.canonCwd = canonicalBinding(rec)
+	if releaseBound(rec) {
+		// The checkouts it is bound to are settled here, once, and whether
+		// a release already ended that binding is read from their markers
+		// before any mail claim or rejoin can ask, so those can answer from
+		// memory; a process start reads the markers again.
+		c.checkouts = resolveCheckouts(rec, c.canonRoot, c.canonCwd)
+		c.releasedCheckout = r.releasedOnDisk(rec, c.checkouts)
+	}
 	// Derived from the record's immutable backend on every load, with no
 	// stored field, and before any profile or config read.
 	refusal := r.admitWorkerRecord(rec)

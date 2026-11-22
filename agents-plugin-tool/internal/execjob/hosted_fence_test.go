@@ -22,6 +22,12 @@ func TestHostedFenceRootRefusesLiveJobsAndNewOnes(t *testing.T) {
 	fx := newHostedFixture(t, time.Second)
 	wt := filepath.Join(t.TempDir(), "wt")
 	other := filepath.Join(t.TempDir(), "other")
+	// A launch's places must exist: one that cannot be resolved is refused.
+	for _, d := range []string{filepath.Join(wt, "sub"), filepath.Join(wt, "deep"), other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	v, err := fx.launch(context.Background(), nil, HostedLaunch{Root: wt, Cwd: filepath.Join(wt, "sub"), Async: true})
 	if err != nil {
 		t.Fatal(err)
@@ -42,8 +48,8 @@ func TestHostedFenceRootRefusesLiveJobsAndNewOnes(t *testing.T) {
 	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: wt, Async: true}); err == nil || !strings.Contains(err.Error(), "being released or removed") {
 		t.Fatalf("a launch into a fenced worktree: %v", err)
 	}
-	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: other, Cwd: filepath.Join(wt, "deep"), Async: true}); err == nil {
-		t.Fatal("a launch whose cwd lies in the fenced worktree started")
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: other, Cwd: filepath.Join(wt, "deep"), Async: true}); err == nil || !strings.Contains(err.Error(), "being released or removed") {
+		t.Fatalf("a launch whose cwd lies in the fenced worktree: %v", err)
 	}
 	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: other, Async: true}); err != nil {
 		t.Fatalf("a launch elsewhere: %v", err)
@@ -52,6 +58,63 @@ func TestHostedFenceRootRefusesLiveJobsAndNewOnes(t *testing.T) {
 	unfence() // idempotent
 	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: wt, Async: true}); err != nil {
 		t.Fatalf("a launch after the fence lifted: %v", err)
+	}
+}
+
+// A fence names its holder's reason in the refusal of a new hosted or
+// legacy job: an acquisition's fence says the worktree is being acquired,
+// a release's keeps its wording, and while fences overlap the refusal
+// names the latest one still held.
+func TestFenceRefusalNamesItsReason(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	wt := gitRoot(t)
+	legacy := func() error {
+		_, err := Launch(LaunchOptions{Root: wt, Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}})
+		return err
+	}
+	assertReason := func(when, want string) {
+		t.Helper()
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: wt, Async: true}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: hosted refusal = %v, want %q", when, err, want)
+		}
+		if err := legacy(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: legacy refusal = %v, want %q", when, err, want)
+		}
+	}
+
+	fence := func(reason string) func() {
+		t.Helper()
+		unHosted, err := fx.h.FenceRootAs(wt, reason)
+		if err != nil {
+			t.Fatal(err)
+		}
+		unLegacy, err := FenceLegacyRootAs(wt, reason)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return func() { unHosted(); unLegacy() }
+	}
+
+	acq := fence(FenceAcquiring)
+	assertReason("acquisition fence", "being acquired")
+	// Overlapping fences: a refusal names the latest one still held, so
+	// lifting either leaves the other's reason, never a lifted one's.
+	rel := fence(FenceReleasing)
+	assertReason("release fence over an acquisition fence", "being released or removed")
+	rel()
+	assertReason("acquisition fence after the release fence lifted", "being acquired")
+	acq()
+
+	rel = fence(FenceReleasing)
+	assertReason("release fence", "being released or removed")
+	acq = fence(FenceAcquiring)
+	assertReason("acquisition fence over a release fence", "being acquired")
+	acq()
+	assertReason("release fence after the acquisition fence lifted", "being released or removed")
+	rel()
+	if err := legacy(); err != nil {
+		t.Fatalf("a legacy launch after the fences lifted: %v", err)
 	}
 }
 

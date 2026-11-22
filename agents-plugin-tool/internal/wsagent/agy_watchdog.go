@@ -587,15 +587,31 @@ func (c *conv) modelWaitBackoffTimedOut() {
 	if !c.modelWaitArmed || !c.turn || c.proc == nil || c.modelWaitFailErr != "" {
 		return
 	}
-	c.noteModelWaitFailure(failure)
-	c.modelWaitRetries++
-	if failure == "" {
-		fmt.Fprintf(c.r.opts.Log, "agent %s: agy model stream stalled for %s; sending automatic continue attempt %d/%d\n", c.rec.ReplyID, formatWatchdogDuration(c.modelWaitTimeout), c.modelWaitRetries, c.modelWaitMaxRetries)
-	} else {
-		fmt.Fprintf(c.r.opts.Log, "agent %s: agy reported terminal in-band model failure; sending automatic continue attempt %d/%d (%s)\n", c.rec.ReplyID, c.modelWaitRetries, c.modelWaitMaxRetries, failure)
+	// A turn that outlived its checkout's release is not continued there.
+	// The check is the last one before the send and shares the release
+	// notice's fence (admitInput); a refused continue is no attempt: it is
+	// neither counted nor a failure, and the process is left running, as a
+	// release never stops it.
+	//
+	// sentAt is taken just before the send, inside the fence, so the
+	// stall boundary it stamps lies at or before the continue it marks.
+	var err error
+	var sentAt time.Time
+	if checkout := c.admitInput(func() {
+		c.noteModelWaitFailure(failure)
+		c.modelWaitRetries++
+		if failure == "" {
+			fmt.Fprintf(c.r.opts.Log, "agent %s: agy model stream stalled for %s; sending automatic continue attempt %d/%d\n", c.rec.ReplyID, formatWatchdogDuration(c.modelWaitTimeout), c.modelWaitRetries, c.modelWaitMaxRetries)
+		} else {
+			fmt.Fprintf(c.r.opts.Log, "agent %s: agy reported terminal in-band model failure; sending automatic continue attempt %d/%d (%s)\n", c.rec.ReplyID, c.modelWaitRetries, c.modelWaitMaxRetries, failure)
+		}
+		sentAt = c.r.opts.Now()
+		err = c.proc.Send("continue")
+	}); checkout != "" {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: agy model stream stalled; no automatic continue: its worktree %s was released\n", c.rec.ReplyID, checkout)
+		return
 	}
-	sentAt := c.r.opts.Now()
-	if err := c.proc.Send("continue"); err != nil {
+	if err != nil {
 		reason := fmt.Sprintf("agy model stream stalled for %s and retry send failed: %v", formatWatchdogDuration(c.modelWaitTimeout), err)
 		if failure != "" {
 			reason = fmt.Sprintf("agy model failure retry send failed: %v (%s)", err, failure)

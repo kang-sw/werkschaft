@@ -219,6 +219,9 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		WSKey:     key,
 		Listed:    rp.Definition.ListInIndex,
 		CreatedAt: now.UTC().Format(time.RFC3339),
+		// The same instant at nanosecond precision, for the release
+		// boundary.
+		CreatedUnixNano: now.UnixNano(),
 	}
 	if lead == nil {
 		rec.SpawnerBackend = spawnerBackend

@@ -30,6 +30,8 @@ func hostedStoreFullRow() HostedJobRow {
 		Tool:       "exec.run",
 		Root:       "/repo",
 		Cwd:        "/repo/sub",
+		RealRoot:   "/private/repo",
+		RealCwd:    "/private/repo/sub",
 		Argv:       []string{"sh", "-c", "echo hi"},
 		Command:    "echo hi",
 		Shell:      "sh",

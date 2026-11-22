@@ -81,8 +81,9 @@ func (c *conv) handle(ev Event) {
 			if !ev.FinalUsage && !ev.LiveCoalescesTurnEnd {
 				c.steerCompaction(false)
 			}
-			// Pi can report usage after settlement.
-			if c.canKick() && !c.compactIdle() && c.compactionNudgeReady() {
+			// Pi can report usage after settlement. A released binding gets
+			// no compaction turn or nudge.
+			if c.canKick() && c.released() == "" && !c.compactIdle() && c.compactionNudgeReady() {
 				c.kickInput()
 			}
 		}
@@ -1041,19 +1042,28 @@ func (c *conv) checkInterrupt() {
 	if err != nil || len(recs) == 0 {
 		return
 	}
-	if c.modelWaitBackoffC != nil {
-		c.cancelModelWaitBackoff()
-		return
-	}
-	if !c.turn || c.proc == nil {
-		return
-	}
-	c.interruptAsked = true
-	c.disarmModelWait()
-	if err := c.proc.Interrupt(); err != nil {
+	if _, err := c.cancelTurn(); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: interrupt: %v\n", c.rec.ReplyID, err)
 		c.stopProcess("")
 	}
+}
+
+// cancelTurn is the turn-cancellation step: it ends a model-wait backoff, or
+// asks the backend to interrupt the running turn. It reports whether a turn
+// or backoff was there to cancel, and the backend's interrupt error. What a
+// failure leads to is the caller's: the page's interrupt stops the process,
+// a forced worktree release only reports it. It runs in the loop.
+func (c *conv) cancelTurn() (bool, error) {
+	if c.modelWaitBackoffC != nil {
+		c.cancelModelWaitBackoff()
+		return true, nil
+	}
+	if !c.turn || c.proc == nil {
+		return false, nil
+	}
+	c.interruptAsked = true
+	c.disarmModelWait()
+	return true, c.proc.Interrupt()
 }
 
 // leverHoldCap bounds how long queued input waits, after a turn that
@@ -1204,6 +1214,7 @@ func (c *conv) finishClose() {
 	if len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 {
 		c.update(func(rec *Record) { rec.Mail, rec.Reports = nil, nil })
 	}
+	c.heldSenders = nil
 	c.r.revokeToken(c.rec.ReplyID)
 	c.hold(nil)
 	c.dropHeld()

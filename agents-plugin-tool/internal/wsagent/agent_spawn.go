@@ -290,53 +290,62 @@ func (r *Runner) AgentInterrupt(caller AgentCaller, address string) (AgentInterr
 	return AgentInterruptResult{Address: AgentAddress(id), Status: AgentStatus(st), Returned: returned}, nil
 }
 
-// BoundWorktreeChild identifies a non-closed conversation bound to a worktree.
+// BoundWorktreeChild identifies a conversation bound to a worktree: a
+// non-closed one, or a closed one whose process is still live.
+// BoundBeforeRelease marks a spawned conversation bound before the worktree's
+// most recent completed release: that release ended its binding, so it never
+// launches, wakes or resumes there, and release ignores it. Live marks one
+// the runner holds a live process for (a running turn, background work, an
+// awake idle process, or a holder whose process may still run); acquisition
+// keeps a worktree busy while a pre-release conversation is live. Both
+// fields are additive: an older reader ignores them and counts every child.
 type BoundWorktreeChild struct {
-	Address string `json:"address"`
-	State   string `json:"state"`
-	Cwd     string `json:"cwd,omitempty"`
+	Address            string `json:"address"`
+	State              string `json:"state"`
+	Cwd                string `json:"cwd,omitempty"`
+	BoundBeforeRelease bool   `json:"bound_before_release,omitempty"`
+	Live               bool   `json:"live,omitempty"`
 }
 
-// ActiveChildrenInWorktree returns every non-closed conversation in the runner
-// whose canonical root or canonical effective working directory (workDir) is
-// worktree or within it, oldest first then by address: a conversation rooted
-// in a nested repo of worktree is bound to worktree too. Reads live state from
-// memory without touching disk records.
+// ActiveChildrenInWorktree returns every conversation in the runner whose
+// canonical root equals worktree or whose canonical working directory is
+// worktree or within it, oldest first then by address: each non-closed one,
+// and a closed one whose process the runner still holds (a close marks the
+// conversation closed before it stops the process). It reads memory only,
+// apart from worktree's release marker.
 func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild {
 	target := canonicalWorktreePath(worktree)
 	if target == "" {
 		return nil
 	}
-	r.mu.Lock()
-	convs := make([]*conv, 0, len(r.convs))
-	for _, c := range r.convs {
-		convs = append(convs, c)
-	}
-	r.mu.Unlock()
+	release := r.readCheckoutRelease(target)
 	type match struct {
 		createdAt string
 		child     BoundWorktreeChild
 	}
 	var matches []match
-	for _, c := range convs {
+	for _, c := range r.boundConvs(target) {
 		st := c.memoryState()
-		if st.Status == StatusClosed || st.Status == StatusHandedOff {
+		c.mu.Lock()
+		rec := c.rec
+		// Live while the runner holds a process, whatever the status says,
+		// and while a start that passed the release check is still under way.
+		live := c.proc != nil || c.starting || c.turn || c.bgTasks != 0 || rec.HolderID != ""
+		known := c.releasedLocked()
+		c.mu.Unlock()
+		if (st.Status == StatusClosed || st.Status == StatusHandedOff) && !live {
 			continue
 		}
-		// The record, not State: State drops a lead's cwd and a cwd equal to
-		// the root, while the process runs in the effective workDir.
-		rec := c.record()
-		convRoot := canonicalWorktreePath(rec.Root)
-		convDir := canonicalWorktreePath(rec.workDir())
-		if !worktreePathContains(target, convRoot) && !worktreePathContains(target, convDir) {
-			continue
-		}
+		before := releaseBound(rec) && (release.ok && wsgit.BoundBeforeRelease(rec.CreatedAt, rec.CreatedUnixNano, release.at) ||
+			sameWorktreePath(known, target))
 		matches = append(matches, match{
 			createdAt: st.CreatedAt,
 			child: BoundWorktreeChild{
-				Address: AgentAddress(st.ID),
-				State:   AgentStatus(st),
-				Cwd:     st.Cwd,
+				Address:            AgentAddress(st.ID),
+				State:              AgentStatus(st),
+				Cwd:                st.Cwd,
+				BoundBeforeRelease: before,
+				Live:               live,
 			},
 		})
 	}

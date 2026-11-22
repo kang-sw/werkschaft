@@ -462,6 +462,9 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// A message that cannot wake its sleeping agent stays queued; its
 		// sender hears why once.
 		WakeRefused: mcp.AgentWakeRefused(logw),
+		// A message for an agent whose worktree was released after it was
+		// bound there never reaches it; its sender hears why.
+		CheckoutReleased: mcp.AgentCheckoutReleased(logw),
 	})
 }
 

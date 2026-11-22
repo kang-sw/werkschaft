@@ -51,6 +51,15 @@ type HostedJobRow struct {
 	Tool string
 	Root string
 	Cwd  string
+	// RealRoot and RealCwd are Root and Cwd as admission resolved them
+	// (admittedPlaces), stored even when equal to them; RealCwd is "" only
+	// for an empty Cwd, and both are "" only in a row an older daemon wrote.
+	// The worktree fence matches a job by them too, so a replaced daemon
+	// keeps the place the job started in even after an alias it was
+	// launched through changed, or its directory was renamed and an alias
+	// put in its place.
+	RealRoot string
+	RealCwd  string
 	// Argv is what ran; Command and Shell are a shell launch's line and
 	// shell, as the legacy record keeps them.
 	Argv    []string
