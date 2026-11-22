@@ -5,7 +5,7 @@ related:
   261117-refactor-playbook-compression: "coordinate playbook migration with the workflow manual's single Choosing a tier section (84)"
 ---
 
-# Role-qualified tiers and named custom tier bundles
+# Tier pointers for playbook roles and named custom bundles
 
 ## Scope
 
@@ -15,7 +15,7 @@ exploration/review on `codex.*`,” becomes one lead-tune config entry with
 Leads can pass the recommendation returned by `playbook.render` to
 `agent.spawn` without a per-lead prompt rule.
 
-The second layer keeps the original named bundle use case. A bundle such as
+The pointer chain keeps the original named bundle use case. A bundle such as
 `discussion` can select a model and effort independently of the four built-in
 slots and be selected by the same name in `agent.spawn` and the dashboard
 new-session dialog. For example, an Antigravity bundle can use
@@ -50,23 +50,43 @@ Go paths are relative to `agents-plugin-tool/internal/`.
   `mcp/server_schemas.go:1181-1189`.
 - `agent.spawn` takes a required string `tier` alongside required
   `authority`. Its resolver handles explicit dotted targets, bare tiers
-  on the caller's harness, then configured aliases. The dashboard dialog
-  submits concrete harness, model, and effort fields, with permission
-  choice handled separately. See `mcp/agent_tools.go:323-339`,
-  `wsagent/agent_tools.go:315-369`, and
+  on the caller's harness, then configured aliases. `agent.tiers` lists
+  the available bare and dotted tiers and each configured alias with its
+  immediate target. The dashboard dialog submits concrete harness, model,
+  and effort fields, with permission choice handled separately. See
+  `mcp/agent_tools.go:265-295,323-339`,
+  `wsagent/agent_tools.go:258-299,315-369`, and
   `wsdashboard/assets/dashboard-leads.js:633-669`.
 
 ## Decisions
 
-- **Owner (1513)=a (2026-11-22 10:42 KST), two layers.** Each playbook
-  declares a recommendation as `<role>:<size>`, such as
-  `explore:small`, `implement:large`, or `review:medium`.
-  `playbook.render` returns it and `agent.spawn` accepts it. Users
-  configure exact mappings such as `explore:small=claude.small` and
-  role wildcards such as `explore:*=codex.*` through lead-tune. A role
-  maps to either `<harness>.<tier>` or the name of a custom
-  `harness | model | effort` bundle. In a target like `codex.*`, the
-  wildcard carries through the requested size.
+Owner decisions (1514)–(1517) were settled on 2026-11-22 at 10:52–10:54 KST.
+
+- **Owner (1513)=a, role recommendations and executable targets.**
+  `playbook.render` returns the tier recommendation and `agent.spawn`
+  accepts it. A recommendation resolves to either a concrete
+  `<harness>.<tier>` or a named `harness | model | effort` bundle.
+- **Owner (1514)=a, pointer chain.** Each playbook declares its own fine
+  role as `<playbook>:<size>`, for example `ticket-worker:large`, and
+  render returns that form. Each tier name resolves step by step to an
+  executable target. The built-in edges route the playbook role through
+  its assigned middle role (`explore`, `implement`, or `review`), then
+  through the bare size to that slot on the caller's harness. For example,
+  an unmapped `ticket-worker:large` on Codex resolves through
+  `implement:large` and `large` to `codex.large`. Users can override
+  pointers at any level in the same lead-tune config entry. A middle-role
+  override such as `review:*=codex.*` affects the group, and a fine-role
+  override such as `ticket-reviewer-design:*=claude.xlarge` affects one
+  playbook. User-defined names can point to other names. Exact mappings
+  such as `explore:small=claude.small` beat wildcards. A target wildcard
+  carries the requested size through, and a concrete target can pin a size.
+- **Owner (1515)=a, assignment by primary work.** Assign `explore`,
+  `reference-discovery`, and ticket selection to `explore`. Assign
+  `implementer`, `ticket-worker`, `ticket-handler`, and `ship-handler`
+  to `implement`. Assign code, ticket, and document reviewers and
+  `review-handler` to `review`. The three middle roles are built-in and
+  fixed. Phase 3 applies the rule to the full playbook inventory and keeps
+  each existing size.
 - **Owner (2026-11-19), authority.** A tier supplies harness, model, and
   effort only. Authority stays with the required spawn argument and the
   dashboard permission choice. The caller supplies the prompt separately.
@@ -74,18 +94,20 @@ Go paths are relative to `agents-plugin-tool/internal/`.
   which kept `agent.spawn` playbook-unaware and rejected a combined preset.
 - **Lead, syntax and fallback (former Open Question 2).** Use `:` for a
   role and keep `.` for a harness. The existing `small`, `medium`,
-  `large`, and `xlarge` slots remain the bare fallbacks. Without a matching
-  mapping, resolve a valid role tier exactly as its bare size on the caller's
-  harness. The absence of a mapping introduces no error. Built-in launch
-  behavior and resolved bindings are byte-for-byte identical to the bare
-  path. The recommendation text now carries the role.
+  `large`, and `xlarge` slots remain the bare fallbacks. Without user
+  config, the built-in chain resolves exactly as the existing bare size
+  on the caller's harness, with byte-for-byte identical launch behavior
+  and resolved bindings. The recommendation text carries the playbook role.
 - **Lead, precedence.** An explicit `<harness>.<tier>` on spawn wins
-  over any mapping. Within the new role mappings, an exact size wins over
-  a wildcard. Preserve the meaning of any exact legacy alias, including
-  a name such as `explore:small`. Resolution checks that legacy alias
-  before interpreting the token as a role tier or named bundle. Surface a
-  collision when tuning a new mapping or bundle so the user can resolve it
-  without changing existing callers implicitly.
+  over any mapping. Existing `agent.tier_aliases` entries are nodes in
+  the same graph and keep their current targets. Preserve exact legacy
+  alias precedence, including for a name such as `explore:small`.
+  Resolution checks that alias before interpreting the token as a role
+  tier or named bundle. Surface collisions when tuning.
+- **Lead, validation and trace.** Reject cycles at config validation.
+  Limit resolution to eight hops and give a clear error when the limit
+  is exceeded. `agent.tiers` and lead-tune show the resolution trace,
+  for example `ticket-reviewer-design:large -> review:large -> codex.large`.
 - **Lead, definition site (former Open Question 1).** Use one lead-tune
   config surface for role mappings and named bundles. Keep the existing
   `agents.tier` slots and `agent.tier_aliases` contract for callers who use
@@ -93,6 +115,12 @@ Go paths are relative to `agents-plugin-tool/internal/`.
   `workflow.profile` continues to select playbook variants under
   `261116-feat-orchestration-profile-foundation`. Tier roles describe the
   work for model selection and leave playbook authority roles separate.
+- **Owner (1516)=a, dashboard picker.** An optional named-tier picker
+  fills the editable harness, model, and effort fields. Manual edits to
+  those fields return the form to manual selection.
+- **Owner (1517)=a, hiring.** `session.request_hire` keeps the optional
+  harness, model, and effort fields and the new-session popover defaults
+  settled in `261115-feat-ws-session-hire-approval` (952).
 - **Lead, workflow guidance.** Use the single “Choosing a tier” section of
   the workflow manual from `261117-refactor-playbook-compression` (84)=ok.
   Spawn sites point there. The section describes sizes by the character of
@@ -114,7 +142,8 @@ Go paths are relative to `agents-plugin-tool/internal/`.
   `agents-plugin/rsrc/lead-workflow-manual/native-spawn-binding.claude.md:3-5`).
   The shipped host and launcher code has no parser for the
   `recommended-tier:` value. Keep the existing bare inputs and metadata
-  layout, and ship role frontmatter with its daemon resolver.
+  layout, add resolution traces alongside existing `agent.tiers` output,
+  and ship role frontmatter with its daemon resolver.
 - **Lead, persisted compatibility.** With a downgraded daemon, **T1**
   covers the older UI's missing bundle choices and older rendering's bare
   recommendations. The old daemon renders its own bundled playbooks, and
@@ -126,80 +155,39 @@ Go paths are relative to `agents-plugin-tool/internal/`.
   `structured_overrides` for a structured value. The v0.50.8 reader
   decodes both maps, unrelated resolver writes mutate only their own keys,
   and the shared writer marshals both maps back. Reopening the new daemon
-  reads the surviving entry and applies it again. A new top-level field would be
-  dropped by that release's writer even though `develop` preserves
-  unknown fields. See `v0.50.8:wsconfig/config.go:34-53,108-120,750-767`,
+  reads the surviving entry and applies it again. The released writer
+  drops unknown top-level fields. See
+  `v0.50.8:wsconfig/config.go:34-53,108-120,750-767`,
   `v0.50.8:wsconfig/resolver.go:299-312,328-345`, and
   `wsconfig/preserve.go:10-39,56-76`. Confirm the chosen storage and
   dashboard paths against `ai-docs/manuals/release-compatibility.md` before
   release.
 
-## Open Decision Queue
-
-Last ID: (1517)
-
-(1514) [open] [policy] Choose the initial role vocabulary.
-
-- a) Start with a documented set of `explore`, `implement`, and `review`.
-- b) Accept any valid role identifier so projects can define additional
-  categories from the start.
-- Recommendation: a. The three roles cover the motivating routing policy and
-  give users a discoverable vocabulary.
-
-(1515) [open] [policy] Assign mixed-purpose playbooks to routing roles.
-
-- a) Group by primary work. Assign `explore`, `reference-discovery`, and
-  ticket selection to `explore`. Assign `implementer`, `ticket-worker`,
-  `ticket-handler`, and `ship-handler` to `implement`. Assign code, ticket,
-  and document reviewers and `review-handler` to `review`.
-- b) Add a separate role such as `coordinate` for mixed coordination
-  playbooks, including `ticket-handler` and `ship-handler`.
-- Recommendation: a. It gives the owner a clear default for each group
-  with the initial vocabulary. Phase 2 records the full assignment,
-  keeping each playbook's current size.
-
-(1516) [open] [policy] Choose how the dashboard applies a named tier.
-
-- a) Offer an optional named-tier picker that fills the editable harness,
-  model, and effort controls. Edits to those values return the form to
-  manual selection.
-- b) Offer a separate named-tier mode that shows the resolved values and
-  requires switching to manual mode to edit them.
-- Recommendation: a. It keeps the existing controls visible and makes
-  adjustments to a selected bundle straightforward.
-
-(1517) [open] [policy] Decide whether `session.request_hire` follows the dashboard.
-
-- a) Keep the optional harness, model, and effort inputs and the new-session
-  popover defaults settled in `261115-feat-ws-session-hire-approval` (952).
-- b) Add optional named bundle selection to hiring, using the same
-  resolution as the dashboard while leaving approval and permissions with
-  the owner.
-- Recommendation: a. Ship the bundle selection where the owner directly
-  chooses a launch configuration, and keep the existing hiring contract.
-
 ## Phases
 
 ### Phase 1: Config and tier resolution
 
-Define the lead-tune surface for mappings and bundles. Teach the daemon to
-resolve them for render and spawn, including precedence, legacy names, and
-the bare fallback. Check callers of `config.resolve_agent` so the manual's
-tier resolution guidance can use the same vocabulary. Preserve existing
-bare `tier_override` behavior. Verify legacy alias collisions, explicit
-targets, built-in parity, and persistence across an older config write.
+Define the lead-tune config for tier pointers and named bundles. Share
+resolution between render, spawn, and the resolution traces. Check
+callers of `config.resolve_agent` so the manual's tier resolution guidance
+can use the same vocabulary. Preserve existing bare `tier_override`
+behavior. Verify the default chain, both override levels, wildcard
+size propagation and pinning, cycle validation, the depth limit,
+legacy alias collisions, explicit targets, and older config writes.
 
 ### Phase 2: Dashboard new-session dialog
 
-After Phase 1, add named bundle selection according to the approved dialog
-behavior. Verify the resolved launch values and the independent permission
-flow. Apply the hiring decision if it extends this phase's scope.
+After Phase 1, add the named-tier picker. Verify that selection fills the
+launch fields, manual edits switch back to manual selection, and the
+permission flow remains independent. The tier configuration UI belongs
+in the lead-tune/config settings surface. The owner plans to request a
+mockup from the UI/UX session once the concept is fixed.
 
 ### Phase 3: Playbook frontmatter migration
 
-After Phase 1, apply the approved role assignments to tier-declaring
-playbooks and carry through their current sizes. Coordinate variants,
-mirrors, and spawn-site wording with
+After Phase 1, give each tier-declaring playbook its own fine role and
+assign it to a middle role by primary work. Carry through its current
+size. Coordinate variants, mirrors, and spawn-site wording with
 `261117-refactor-playbook-compression` and its single “Choosing a tier”
 section. Verify that a returned recommendation can be passed directly
 to spawn and produces the expected binding with and without a mapping.
