@@ -11,6 +11,10 @@ related:
   261114-feat-ws-dashboard-board-toolbar-overview: "sibling darkroom precedent: the board overview dims the shell through layout.dim"
   261113-feat-ws-dashboard-iframe-shell: "session pages are shell frames; layout.dim and the shell's Esc and Ctrl+K forwarding shape the key rules"
   261114-feat-ws-dashboard-conversation-audit-view: "superseded source of (550), (602)-(610), (681) and the approved mockup v2 (asset folder kept in place)"
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 56c6a4610694d9ce
+sage-review-completeness-reviewed: 56c6a4610694d9ce
 ---
 
 # Dashboard conversation audit view
@@ -38,9 +42,10 @@ Its notes panel lists the behaviour this ticket builds:
   - Conversation-wide search covers the stored outputs too. A matching row
     gets a badge such as "출력 3", and the audit window opens on that match.
 - **Audit window.**
-  - Tabs: Input, Output, Meta, Raw, Linked events. Raw is the harness's
-    recorded JSON after the store's pre-write redaction (596), never the
-    original secret.
+  - Tabs: Input, Output, Meta, Raw, Linked events. Raw shows the stored
+    envelope after the store's pre-write redaction (596), never the original
+    secret; only an `other` event also carries the harness's recorded line
+    (Decision 7).
   - Long outputs get line numbers, an in-window search (Ctrl+F, with Enter and
     Shift+Enter for next and previous), a wrap toggle, and copy.
   - What the model saw vs what was stored: the line where the harness
@@ -106,13 +111,15 @@ Stale since the superseded ticket (codex.large read-only research,
 4. **Every byte comes from the query API ((599)).** That covers events, the
    full envelope, search, and the `?call=` lookup. The UI parses no harness
    transcript file and adds no route of its own. Fields used:
-   - On a summary: `duration_ms`, `ctx_after`, `attached`, `model_seen`.
+   - On a summary: `duration_ms`, `request_id`, `ctx_before`, `ctx_after`,
+     `attached`, `model_seen`.
    - In the full envelope: `seen`, `redactions`, `truncated` with the `range`
-     follow-up, and `meta.signature_only`.
-   - On a search hit: `call_id`, `parent_id`.
+     follow-up (`part=in|out|raw`), and `meta.signature_only`.
+   - On a search hit: `event_id`, `kind`, `field`, `line_no`, `line`,
+     `call_id`, `parent_id`.
 5. **The history-to-audit join key is the ring's call ID ((601)).** The
    capture child gives `ToolCallArgs` an optional `id` equal to the store's
-   `call_id`. Calls past `BatchCallCap` in a huge batch get no ID. This ticket's
+   `call_id` (pending 261119-feat-ws-audit-capture-harness-adapters). Calls past `BatchCallCap` in a huge batch get no ID. This ticket's
    template emits the ID as `data-call` on each call row; a call without one
    follows (602).
    - Rejected: joining by time window between ring stamps (ambiguous with
@@ -125,6 +132,13 @@ Stale since the superseded ticket (codex.large read-only research,
    - Hidden-event rows, kind chips and the Raw tab stay as the approved mockup
      shows: (1730)=b keeps hidden events captured as assembled envelopes, with
      `raw` only on `other` rows.
+   - The Raw tab of a mapped event shows the stored normalized envelope with
+     the banner "Normalized envelope"; an `other` event's Raw tab adds the
+     recorded harness line. The approved v3 call tab's banner ("Normalized
+     envelope + verbatim harness stream event") predates (1730)=b, so the
+     LOOK comparison treats the shorter banner on mapped rows as the expected
+     difference. Rejected: editing the approved mockup asset, which stays as
+     the owner approved it.
    - The view is per session page, so a `ws/agent.*` child's page shows that
      child's own audit ((1731)=b). It does not merge a child's events into
      its lead's.
@@ -155,9 +169,12 @@ separate implementation choice.
   `au-` so the CSS collision guard
   (`TestCSSClassesDoNotCollideAcrossModules`) passes. The original form, a
   standalone `assets/audit.js` `WsAudit` module mounted like `WsFiles.mount`
-  plus `assets/audit.css`, predates the fragment assembly. Choose at ready
-  between a new assembled fragment pair and a separately loaded module,
-  following how comparable surfaces load today.
+  plus `assets/audit.css`, predates the fragment assembly. The view is a
+  new assembled fragment pair (a script file in `dashboardScriptFiles` and a
+  style file in `dashboardStyleFiles`, `wsdashboard/pages.go`), as every
+  comparable surface loads today (ticket map, tracker, drawer, companion).
+  Rejected: a separately loaded module, which adds a request and a second
+  loading path that the assembly and the CSS collision guard do not cover.
 - **(604) Window and sheet are built new.**
   - The wide window is a non-modal floating window with header drag and
     corner resize, clamped to the viewport. Its first placement is right of
@@ -197,6 +214,12 @@ separate implementation choice.
     until `end`, deduplicate by event ID, and order equal-nanosecond events by
     sequence. Refresh the unbounded latest interval as new events arrive. UTC
     selects hidden rows; it never guesses a call join.
+  - Once history reports no older page, the oldest interval has no `since`
+    (`until` is the oldest loaded stamp), so hidden events older than the
+    first display entry, such as a session-start event, still appear. With
+    empty display history the one interval has neither bound. Both follow
+    the same event-ID pagination. Rejected: starting every interval at a
+    loaded stamp, which drops those events.
   - Rejected: loading the whole audit log up front.
 - **(608) Pin limit.** At most 4 pinned windows. A fifth pin replaces the
   oldest pinned window and shows a toast. Each new pinned window is offset
@@ -204,11 +227,15 @@ separate implementation choice.
 - **(609) Kind chips** default to all on, as the mockup shows. Their state
   persists per browser in localStorage (`ws.dashboard.auditkinds`), not per
   session, matching the panel-fold precedent (`ws.dashboard.panelshut`).
-- **(610) Token growth** shows as the delta of `ctx_after` against the
-  previous request's `ctx_after` in the same conversation. Parallel calls
-  answered in one request show the delta on the first call and "·" on the
-  others, so a shared growth is not counted several times. Rejected: the same
-  delta on each, which overstates the total.
+- **(610) Token growth** shows as `ctx_after - ctx_before` of the call's
+  request (query API Decision 1). Parallel calls issued in one request
+  (the same `request_id`) show the delta on the first call and "·" on the
+  others, so a shared growth is not counted several times. When either
+  value is null the row shows no growth figure. Rejected: the same delta on
+  each, which overstates the total; and the original formula, `ctx_after`
+  against the previous request's `ctx_after`, which equals this only when
+  the previous request issued a call and otherwise reports the wrong delta
+  (auto-confirmed refinement, 2026-11-22).
 
 ### Reconciliation
 
@@ -222,6 +249,9 @@ separate implementation choice.
 
 ## Constraints
 
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for agents-plugin/, agents-plugin-wsflow/, agents-plugin-tool/)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for agents-plugin-tool/internal/)
+- Convention: ai-docs/manuals/performance.md (declared for agents-plugin-tool/)
 - Implementation conventions (AGENTS.md):
   - `agents-plugin-tool/` -> `ai-docs/manuals/shipped-surface-boundary.md`
   - `agents-plugin-tool/internal/` -> `ai-docs/manuals/release-compatibility.md`
@@ -241,6 +271,27 @@ separate implementation choice.
   HOME=<tmp> <bin> dashboard --port 0`) with a fixture audit store. Never
   contact 127.0.0.1:29417, never run `scripts/dev.py`, and kill
   nothing you did not start.
+
+## Prior Decisions
+
+- 261114-feat-ws-dashboard-conversation-audit-view (2026-11-19, Resolution): "Its approved interaction is carried unchanged into 261119-feat-ws-dashboard-audit-view." — bearing: constrains
+- 261114-feat-ws-conversation-audit-event-store (2026-11-19, Resolution): "(599) and (681) go to 261119-feat-ws-audit-query-api." — bearing: constrains
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | assets/audit.js, assets/audit.css, wsi18n/tables/<lang>.json and template |
+| scope.surface | public-interface | dashboard interaction, keyboard behavior and visible audit data |
+| scope.new_public_symbol | no | no exported code symbol specified |
+| scope.new_type_contract | no | consumes the query API and call ID contracts specified by prerequisite tickets |
+| scope.test_surface | new-files | new Node harness and headless fixture coverage required; paths not specified |
+| complexity.reuse_points | confirmed | dashboardScriptFiles and dashboardStyleFiles in agents-plugin-tool/internal/wsdashboard/pages.go; shell layout message in agents-plugin-tool/internal/wsdashboard/assets/shell.js |
+| complexity.side_effect_risk | moderate | window focus, shell darkroom and history rendering interact |
+| risk.correctness | high | event pagination, call joins and truncation display must remain consistent |
+| risk.fit | high | responsive audit interaction must fit the current shell and both approved mockups |
+| risk.test | high | keyboard scope, multi-window behavior and live paging require browser coverage |
+| risk.security_or_contract | moderate | view must display only redacted stored audit data and preserve the API contract |
 
 ## Phases
 
@@ -289,7 +340,9 @@ Depends on this ticket's Phase 1.
 Verification: interleaving order tests against ring stamps (equal-ns ties),
 adjacent ring-page intervals and timestamp gaps, more than one API page in an
 interval, event-ID deduplication and latest-interval live refresh after
-history rendering. Cover chip persistence, paging both ways, J/K skipping
+history rendering, the open-below oldest interval once history ends
+(a session-start event before the first display entry), and empty display
+history. Cover chip persistence, paging both ways, J/K skipping
 hidden kinds, and LOOK side by side with both mockups.
 
 ### Phase 3: Conversation-wide search
@@ -302,8 +355,15 @@ Depends on this ticket's Phase 2.
   hit's `call_id`.
 - Opening a badged row opens the window on the first matching line, with the
   in-window search pre-filled.
+- Under the search box, a hit list shows every returned hit (kind, field,
+  line number and the line), with a "more" row that follows the `next`
+  cursor. Clicking a hit opens the window by its `event_id` on that line,
+  whether or not a history row exists for it: a call past `BatchCallCap`,
+  an event older than the loaded or retained display history. Rejected:
+  badges alone, which leave such hits unreachable.
 
 Verification: headless search over the fixture store, covering a hit inside a
 truncated body (it pages to the line), a regex hit, a hit on a subagent event
-(it routes through `parent_id`), the empty state, and LOOK side by side with
+(it routes through `parent_id`), a hit with no history row opened from the
+hit list, the "more" row across a cursor, the empty state, and LOOK side by side with
 both mockups.

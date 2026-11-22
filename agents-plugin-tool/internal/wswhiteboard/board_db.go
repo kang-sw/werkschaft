@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -163,25 +164,38 @@ func OpenBoardDBLazy(dir string, legacy func() (*State, error), opts BoardDBOpti
 	if dbExists {
 		board, err := openBoardDBHandle(dir, opts)
 		if err != nil {
-			if boardSQLiteBusy(err) || errors.Is(err, context.DeadlineExceeded) {
-				return nil, fmt.Errorf("whiteboard board DB %s is busy after %s; retry after the owning daemon releases it: %w", path, BoardDBOpenRetryBound, err)
+			return nil, boardDBOpenError(path, err)
+		}
+		loadErr := board.load()
+		if loadErr == nil {
+			if !sentinel {
+				board.finishSentinel()
 			}
-			return nil, boardDBRollbackError(path, err.Error())
+			board.armCheckpointLocked()
+			(FolderStore{Dir: dir}).rememberIncarnation(board.state.LoadedAt)
+			return board, nil
 		}
-		if err := board.load(); err != nil {
-			_ = board.db.Close()
-			return nil, boardDBRollbackError(path, err.Error())
-		}
+		// A first import commits the schema before its single data
+		// transaction. With no sentinel and every table empty, that data
+		// transaction never committed: the legacy folder is still the
+		// authority, so the import below retries under the legacy lock.
+		incomplete := false
 		if !sentinel {
-			board.finishSentinel()
+			incomplete, _ = board.uncommitted()
 		}
-		board.armCheckpointLocked()
-		(FolderStore{Dir: dir}).rememberIncarnation(board.state.LoadedAt)
-		return board, nil
+		_ = board.db.Close()
+		if !incomplete {
+			return nil, boardDBRollbackError(path, loadErr.Error())
+		}
+		board.logf("whiteboard board DB %s: no committed import; retrying from the legacy folder", path)
 	}
 
 	legacyStore := FolderStore{Dir: dir}
 	present, err := boardAuthorityPresent(dir)
+	if dbExists {
+		// Only an uncommitted DB reaches here; it is not board authority.
+		present, err = boardLegacyAuthorityPresent(dir)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +207,8 @@ func OpenBoardDBLazy(dir string, legacy func() (*State, error), opts BoardDBOpti
 				return nil, err
 			}
 		}
-		if legacyState == nil {
+		// An uncommitted DB is still discarded under the lock below.
+		if legacyState == nil && !dbExists {
 			return nil, os.ErrNotExist
 		}
 	}
@@ -202,17 +217,31 @@ func OpenBoardDBLazy(dir string, legacy func() (*State, error), opts BoardDBOpti
 	err = legacyStore.withGuard(true, func() error { return boardLegacyGuard(dir) }, func() error {
 		// Another importer may have committed while this opener waited for
 		// the legacy lock. Re-enter the existing-DB path after releasing it.
-		if _, err := os.Stat(path); err == nil {
-			retryOpen = true
-			return nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return boardDBRollbackError(path, err.Error())
-		}
 		has, err := boardHasSentinel(dir)
 		if err != nil {
 			return err
 		}
-		if has {
+		if _, err := os.Stat(path); err == nil {
+			if has {
+				retryOpen = true
+				return nil
+			}
+			existing, err := openBoardDBHandle(dir, opts)
+			if err != nil {
+				return boardDBOpenError(path, err)
+			}
+			empty, err := existing.uncommitted()
+			_ = existing.db.Close()
+			if err != nil || !empty {
+				retryOpen = true
+				return nil
+			}
+			// Proven uncommitted under the legacy lock: discard it and import
+			// again (or report no board when no legacy authority exists).
+			boardRemoveDBFiles(dir)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return boardDBRollbackError(path, err.Error())
+		} else if has {
 			return boardDBRollbackError(path, "is missing")
 		}
 		state, meta, err := legacyStore.load(legacyState)
@@ -224,6 +253,10 @@ func OpenBoardDBLazy(dir string, legacy func() (*State, error), opts BoardDBOpti
 		}
 		board, err = openBoardDBHandle(dir, opts)
 		if err != nil {
+			return err
+		}
+		if err := board.hit("import-schema-committed"); err != nil {
+			_ = board.db.Close()
 			return err
 		}
 		if err := board.importState(state, meta, legacyStore); err != nil {
@@ -250,10 +283,39 @@ func OpenBoardDBLazy(dir string, legacy func() (*State, error), opts BoardDBOpti
 	return board, nil
 }
 
+func boardDBOpenError(path string, err error) error {
+	if boardSQLiteBusy(err) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("whiteboard board DB %s is busy after %s; retry after the owning daemon releases it: %w", path, BoardDBOpenRetryBound, err)
+	}
+	return boardDBRollbackError(path, err.Error())
+}
+
+// uncommitted reports whether no data transaction ever committed: every
+// table openBoardDBHandle creates is empty.
+func (b *BoardDB) uncommitted() (bool, error) {
+	var n int
+	err := b.db.QueryRow(`SELECT (SELECT COUNT(*) FROM board_meta)+(SELECT COUNT(*) FROM topics)+(SELECT COUNT(*) FROM entries)+(SELECT COUNT(*) FROM panels)+(SELECT COUNT(*) FROM revision_receipts)+(SELECT COUNT(*) FROM load_floors)`).Scan(&n)
+	return err == nil && n == 0, err
+}
+
+func boardRemoveDBFiles(dir string) {
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		_ = os.Remove(filepath.Join(dir, boardDBName+suffix))
+	}
+}
+
 // boardAuthorityPresent checks only authoritative files; a directory or lock
 // alone does not constitute a board.
 func boardAuthorityPresent(dir string) (bool, error) {
-	for _, name := range []string{boardDBName, "meta.json", "pending.json", "committed.json"} {
+	return boardFilesPresent(dir, boardDBName, "meta.json", "pending.json", "committed.json")
+}
+
+func boardLegacyAuthorityPresent(dir string) (bool, error) {
+	return boardFilesPresent(dir, "meta.json", "pending.json", "committed.json")
+}
+
+func boardFilesPresent(dir string, names ...string) (bool, error) {
+	for _, name := range names {
 		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
 			return true, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -284,11 +346,7 @@ func CreateBoardDB(dir string, initial *State, opts BoardDBOptions) (*BoardDB, e
 		if err != nil {
 			return err
 		}
-		cleanup := func() {
-			for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-				_ = os.Remove(filepath.Join(dir, boardDBName+suffix))
-			}
-		}
+		cleanup := func() { boardRemoveDBFiles(dir) }
 		b, err = openBoardDBHandle(dir, opts)
 		if err != nil {
 			cleanup()
@@ -339,7 +397,7 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, boardDBName)
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", boardSQLiteURI(path))
 	if err != nil {
 		return nil, err
 	}
@@ -380,4 +438,33 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 		return nil, fmt.Errorf("migrate board sqlite: %w", err)
 	}
 	return b, nil
+}
+
+// boardSQLiteURI is path as a literal SQLite file: URI. The driver splits a
+// plain DSN at its first '?', so a worktree path containing one would open
+// another file; percent-encoding every byte outside the unreserved set keeps
+// '?', '#' and '%' literal.
+func boardSQLiteURI(path string) string {
+	// A file: URI path is absolute, so a relative root must resolve against
+	// the working directory exactly as the stat, lock and sentinel paths do.
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // C:/x becomes /C:/x, which SQLite's Windows VFS accepts
+	} else if strings.HasPrefix(p, "//") {
+		p = "//" + p // a UNC path keeps an empty URI authority
+	}
+	var b strings.Builder
+	b.WriteString("file:")
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("-._~/:", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
 }

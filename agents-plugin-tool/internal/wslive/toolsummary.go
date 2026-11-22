@@ -70,9 +70,10 @@ type ToolBatch struct {
 	DurationMs int64 `json:"durationMs,omitempty"`
 	// Usage is the request's tokens, when the adapter reported them.
 	Usage *TokenUsage `json:"usage,omitempty"`
-	// CallArgs, when any call the batch carried had an argument preview, is
-	// every carried call's name and preview in call order (up to
-	// BatchCallCap); absent otherwise, as for an adapter that sends none.
+	// CallArgs, when any call the batch carried had an argument preview or
+	// a call ID, is every carried call's name, preview, and ID in call order
+	// (up to BatchCallCap); absent otherwise, as for an adapter that sends
+	// neither.
 	CallArgs []ToolCallArgs `json:"callArgs,omitempty"`
 }
 
@@ -80,6 +81,11 @@ type ToolBatch struct {
 type ToolCallArgs struct {
 	Name        string `json:"name"`
 	ArgsPreview string `json:"argsPreview,omitempty"`
+	// ID is the call's harness tool-call ID as the adapter normalized it
+	// (wsaudit.NormalizeID), the key of the call's audit events (their
+	// call_id); empty for an adapter that sends none and for entries
+	// written before IDs were carried.
+	ID string `json:"id,omitempty"`
 }
 
 // ToolSummary is the lead's finished tool batches over one gap.
@@ -172,9 +178,9 @@ func (g *toolGap) add(b BatchView) {
 		u := *b.Usage
 		tb.Usage = &u
 	}
-	if slices.ContainsFunc(b.Calls, func(c BatchCall) bool { return c.ArgsPreview != "" }) {
+	if slices.ContainsFunc(b.Calls, func(c BatchCall) bool { return c.ArgsPreview != "" || c.ID != "" }) {
 		for _, c := range b.Calls {
-			tb.CallArgs = append(tb.CallArgs, ToolCallArgs{Name: c.Name, ArgsPreview: c.ArgsPreview})
+			tb.CallArgs = append(tb.CallArgs, ToolCallArgs{Name: c.Name, ArgsPreview: c.ArgsPreview, ID: c.ID})
 		}
 	}
 	g.batches = append(g.batches, tb)

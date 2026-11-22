@@ -12,6 +12,9 @@ tauri-build = { version = "=2.7.4", features = [] }
 [dependencies]
 open = "=5.4.5"
 reqwest = { version = "=0.13.5", default-features = false, features = ["native-tls", "system-proxy", "stream"] }
+# The same rfd and features tauri-plugin-dialog uses; called directly for the
+# exit confirmation so a dismissed dialog is told apart from either button.
+rfd = { version = "=0.17.2", default-features = false, features = ["common-controls-v6"] }
 rusqlite = { version = "=0.34.0", features = ["bundled"] }
 semver = "=1.0.28"
 serde = { version = "=1.0.229", features = ["derive"] }

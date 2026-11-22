@@ -1287,7 +1287,24 @@ from a support conversation:
   thinking, and signature delta lines out of its ring and client stream.
   It skips only whole stdout lines that fit one record and match from the
   line's start; split or unmatched lines stay. Skipped lines consume no
-  sequence number.
+  sequence number. A daemon that sets the holder manager's `AuditChannel`
+  offers the holder audit channel on attach (an optional `audit` field; an
+  older holder ignores it and attaches as before, an older daemon never
+  offers it, and a holder without `--ring-skip` declines it). On a negotiated connection the holder tees each skipped line
+  as an unsequenced `audit` event anchored on the last kept stdout sequence
+  and fences every kept run (`audit_fence`); lines skipped while no daemon
+  is attached, or past the audit queue, are only counted in the fence. The
+  daemon's audit capture (`wsagent/audit_capture.go`) orders tee lines
+  before the kept lines a fence releases and never blocks the holder reader
+  or the stream mapper. Capture runs only when the runner has an
+  `AuditSink`; the shipped daemon sets neither yet (the audit store,
+  ticket `261119-feat-ws-audit-ring-store`, wires both). The Claude adapter
+  writes `meta.request = {id, prev_id, ctx}` on every event from a model
+  request (`wsaudit.RequestChain`): one chain for the lead and one per
+  native subagent (`parent_tool_use_id`), advancing once per assistant
+  message ID, text-only messages included; `ctx` is input + cache read +
+  cache creation tokens and is absent without usage. Codex streams carry
+  usage but no request ID, so their events omit it.
 - **Access.** Spawn, settings, stop, restart, close, and an approval answer take the
   trusted gate (`wsdashboard.TrustedWrite`): 404 to any viewer that is not a
   browser on this machine, 403 without the daemon's own `Origin`. A LAN

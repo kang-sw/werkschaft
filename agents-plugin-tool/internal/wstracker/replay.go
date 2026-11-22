@@ -29,7 +29,10 @@ type node struct {
 	status, reason       string // applied | flagged | waiting
 	causalStatus         string // verdict before final-fold concurrency flags
 	ignored              bool
-	clash                bool // flagged only by a fold-order list clash; still in later causal-past checks
+	clash                bool         // flagged only by a fold-order list clash; still in later causal-past checks
+	lostCreate           bool         // a roles.org_set creation the fold-order list flagged (id, name, or head clash)
+	orgCreate            bool         // the roles.org_set the fold-order list took as its id's creation
+	lostTargets          []lostTarget // item.assign org targets dropped: lostOrgRefs
 	markers              []marker
 	superseded           []supersession
 	thread, parentThread string
@@ -291,13 +294,24 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 	// list event is flagged here so names and org heads remain unique and a
 	// removed member cannot become an org head.
 	lf := newState(r.g, r.hb, false)
+	// orgWinner is the create that holds each org id in lf (a removed org keeps
+	// its id, so there is one per id).
+	orgWinner := map[string]*node{}
+	applyList := func(n *node) {
+		if id := n.p.str("org"); n.typ == TypeOrgSet && lf.orgs[id] == nil {
+			orgWinner[id] = n
+			n.orgCreate = true
+		}
+		lf.apply(n)
+	}
 	for _, n := range r.order[:start] {
 		if n.causalStatus == "applied" && isFoldOrderList(n.typ) {
-			lf.apply(n)
+			applyList(n)
 		}
 	}
 	for _, n := range r.order[start:] {
-		n.status, n.reason, n.ignored, n.clash = "", "", false, false
+		n.status, n.reason, n.ignored, n.clash, n.lostCreate, n.orgCreate = "", "", false, false, false, false
+		n.lostTargets = nil
 		if r.rolesOnly && !isRoles(n.typ) {
 			n.status, n.causalStatus = "skipped", "skipped"
 			continue
@@ -305,16 +319,52 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 		switch n.ev.Verdict {
 		case wsledger.Valid:
 			n.status = "applied"
+			creates := false
+			var before *state
 			if !isIdentity(n.typ) {
-				if rej := r.stateBeforeMode(n, true).check(n); rej != "" {
+				before = r.stateBeforeMode(n, true)
+				if rej := before.check(n); rej != "" {
 					n.status, n.reason = "flagged", string(rej)
+				}
+				// Decision 18: a roles.org_set whose writer held no org with
+				// its id creates one, whatever the fold-order list holds.
+				creates = n.typ == TypeOrgSet && before.orgs[n.p.str("org")] == nil
+			}
+			if n.status == "applied" && before != nil {
+				// A create is never lost-ref flagged: its writer held no org
+				// with the id, so a fresh create of a lost id is legal.
+				lost := lostOrgRefs(n, before, orgWinner)
+				if n.typ == TypeItemAssign {
+					// Only the lost org targets drop; the other targets apply,
+					// as an older binary applies them. The reason notes the
+					// dropped ones on the applied event.
+					n.lostTargets = lost
+					for i, x := range lost {
+						if i == 0 {
+							n.reason = "org target dropped: " + x.why
+						} else {
+							n.reason += "; " + x.why
+						}
+					}
+				} else if len(lost) > 0 {
+					n.status, n.reason = "flagged", lost[0].why
 				}
 			}
 			if n.status == "applied" && isFoldOrderList(n.typ) {
-				if rej := lf.listClash(n); rej != "" {
+				// The id clash goes first: it names the create holding the id
+				// even when the name or head clashes too.
+				var rej rejection
+				if creates {
+					rej = lf.orgIDClash(n)
+				}
+				if rej == "" {
+					rej = lf.listClash(n)
+				}
+				if rej != "" {
 					n.status, n.reason, n.clash = "flagged", string(rej), true
+					n.lostCreate = creates
 				} else {
-					lf.apply(n)
+					applyList(n)
 				}
 			}
 		case wsledger.Ignored:
@@ -400,6 +450,7 @@ func (r *replayed) stateBeforeMode(n *node, causal bool) *state {
 	}
 	sort.Ints(cands)
 	S := newState(r.g, r.hb, false)
+	var created map[string]bool // org ids whose winning create n's writer saw
 	last := -1
 	for _, pos := range cands {
 		if pos == last {
@@ -413,6 +464,23 @@ func (r *replayed) stateBeforeMode(n *node, causal bool) *state {
 		}
 		if status != "applied" && !x.clash {
 			continue
+		}
+		if x.lostCreate && r.hb(x, n) {
+			// A lost create folds in a view only while it clashes with nothing
+			// that view holds: a writer who saw what it lost to (the id's
+			// create, the name's or head's holder, the head's removal) sees it
+			// lose, as the fold-order list did.
+			if S.orgIDClash(x) != "" || S.listClash(x) != "" {
+				continue
+			}
+			// A name- or head-lost create can lose its id too, to a create
+			// later in fold order: a writer who saw that sees the winner's org.
+			if created == nil {
+				created = r.orgCreatesSeen(n, cands)
+			}
+			if created[x.p.str("org")] {
+				continue
+			}
 		}
 		if x.typ == TypeItemAssign && !rel[x.p.str("item")] {
 			// Another thread's assign only re-applies the live rules here,
@@ -451,6 +519,109 @@ func (s *state) listClash(n *node) rejection {
 	case TypeOrgRemove:
 		_, r := s.needOrg(n.p.str("org"), true)
 		return r
+	}
+	return ""
+}
+
+// orgRefs lists the org ids n acts on: an org event's org, an org CC's org,
+// and every org-carrying item.assign target.
+func orgRefs(n *node) []string {
+	switch n.typ {
+	case TypeOrgSet, TypeOrgRemove, TypeItemCCOrg, TypeItemUnccOrg:
+		if id := n.p.str("org"); id != "" {
+			return []string{id}
+		}
+	case TypeItemAssign:
+		targets, _ := n.p.list("targets")
+		var out []string
+		for _, x := range targets {
+			if m, ok := x.(map[string]any); ok {
+				if id := obj(m).str("org"); id != "" {
+					out = append(out, id)
+				}
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// orgCreatesSeen is the set of org ids whose winning create (orgCreate) is
+// among cands, n's candidate past in fold order, and happened before n.
+func (r *replayed) orgCreatesSeen(n *node, cands []int) map[string]bool {
+	seen := map[string]bool{}
+	for _, pos := range cands {
+		if w := r.order[pos]; w.orgCreate && r.hb(w, n) {
+			seen[w.p.str("org")] = true
+		}
+	}
+	return seen
+}
+
+// lostTarget is an org id n acts on that its writer knew only from a lost
+// create (by), with the reason.
+type lostTarget struct {
+	org string
+	by  *node
+	why string
+}
+
+// lostOrgRefs lists the org ids n acts on that its writer's view, before,
+// holds only as made by a lost create: n meant an org the fold never
+// created, and must not land on an org some other create made with that id.
+// Any other event is flagged for the first; an item.assign drops those org
+// targets. A create of the id is in no such view, so it is never listed.
+func lostOrgRefs(n *node, before *state, winners map[string]*node) []lostTarget {
+	var out []lostTarget
+	for _, id := range orgRefs(n) {
+		o := before.orgs[id]
+		if o == nil || o.created == nil || !o.created.lostCreate {
+			continue
+		}
+		l := o.created
+		why := "org " + id + " is the org " + alias(l.id) + " created, which a concurrent write overtook (" + l.reason + ")"
+		if w := winners[id]; w != nil {
+			why = "org " + id + " is the org " + alias(l.id) + " created, which lost its id to a concurrent create (" + alias(w.id) + "); the first in fold order keeps the id"
+		}
+		out = append(out, lostTarget{org: id, by: l, why: why})
+	}
+	return out
+}
+
+// allTargetsDropped reports an item.assign whose every target is a dropped
+// org target: it delegates nothing, so it leaves an opening open.
+func (n *node) allTargetsDropped() bool {
+	if len(n.lostTargets) == 0 || n.p.null("targets") {
+		return false
+	}
+	l, _ := n.p.list("targets")
+	for _, x := range l {
+		m, ok := x.(map[string]any)
+		if !ok || !n.droppedOrg(obj(m).str("org")) {
+			return false
+		}
+	}
+	return true
+}
+
+// droppedOrg reports whether org targets are dropped from item.assign n.
+func (n *node) droppedOrg(org string) bool {
+	for _, x := range n.lostTargets {
+		if x.org == org {
+			return true
+		}
+	}
+	return false
+}
+
+// orgIDClash is the rejection of a roles.org_set its writer made as a
+// creation (its causal past held no org with the id) while s, the fold-order
+// list, already holds that id: two admins minted the same id concurrently,
+// and the later in fold order must not rename or rehead the first's org.
+func (s *state) orgIDClash(n *node) rejection {
+	id := n.p.str("org")
+	if o := s.orgs[id]; o != nil {
+		return rejection("org id " + id + " already exists (" + o.name + ", created concurrently; the first in fold order keeps the id)")
 	}
 	return ""
 }

@@ -38,24 +38,42 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	// The program resolves before the approval, so the prompt names the
 	// binary that starts.
 	argv := append([]string(nil), req.Argv...)
-	bin, err := lookProgram(argv[0], req.Environ)
-	if err != nil {
-		return HostedView{}, err
+	bin, lookErr := lookProgram(argv[0], req.Environ)
+	if lookErr != nil && !req.Legacy {
+		return HostedView{}, lookErr
 	}
-	argv[0] = bin
-	call := approvalCall(req, bin)
-	explicit, err := h.opts.Sessions.Approve(ctx, owner.ID, call)
-	if err != nil {
-		return HostedView{}, err
+	// A legacy launch of a missing program answers as the file-backed
+	// launch does: a failed record under a durable key. Nothing runs, so
+	// nothing asks for approval.
+	var call HostedCall
+	explicit := false
+	if lookErr == nil {
+		argv[0] = bin
+		call = approvalCall(req, bin)
+		if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
+			return HostedView{}, err
+		}
 	}
-	id, err := h.newID(req.Legacy)
-	if err != nil {
-		return HostedView{}, err
+	var id string
+	var j *hostedJob
+	for attempt := 1; ; attempt++ {
+		if id, err = h.newID(req.Legacy); err != nil {
+			return HostedView{}, err
+		}
+		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet}
+		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
+		err = h.admit(j)
+		if err == nil {
+			break
+		}
+		h.rings.Release(j.out)
+		// Another launch drew the same id and was admitted first.
+		if !errors.Is(err, errIDTaken) || attempt == 16 {
+			return HostedView{}, err
+		}
 	}
-	j := &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet}
-	j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
-	if err := h.admit(j); err != nil {
-		return HostedView{}, err
+	if lookErr != nil {
+		return h.failStart(j, "", lookErr)
 	}
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
 	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})
@@ -129,13 +147,30 @@ func (h *Hosted) convert(j *hostedJob) HostedView {
 	return h.view(j, OutcomeConverted)
 }
 
-// admit registers j, refusing a new job once the running ones fill the job
-// cap, and drops the oldest finished jobs over it.
+// admit registers j, refusing a new job once the running ones and the
+// dropped ones whose row delete keeps failing fill the job cap, and drops
+// the oldest finished jobs over it. It retries the failed deletes first.
 func (h *Hosted) admit(j *hostedJob) error {
+	h.mu.Lock()
+	var retry []string
+	var claim uint64
+	if !h.closed {
+		retry, claim = h.claimRetriesLocked()
+	}
+	h.mu.Unlock()
+	h.forget(nil, retry, claim)
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return errors.New("exec: the daemon is shutting down")
+	}
+	// newID checked the id without holding h.mu through here: a launch
+	// that drew the same id may have been admitted since.
+	_, taken := h.jobs[j.row.ID]
+	_, pending := h.deleting[j.row.ID]
+	if taken || pending {
+		h.mu.Unlock()
+		return errIDTaken
 	}
 	running := 0
 	var finished []*hostedJob
@@ -153,23 +188,38 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return fmt.Errorf("exec: %d jobs already run; stop one first", running)
 	}
+	if pending := len(h.deleting); running+pending >= HostedMaxJobs {
+		h.mu.Unlock()
+		return fmt.Errorf("exec: %d jobs run and %d finished jobs' records could not be deleted from the job store; retry later, or stop a job", running, pending)
+	}
 	h.jobs[j.row.ID] = j
 	var dropped []*hostedJob
 	var ids []string
+	// The dropped jobs' tombstones are this prune's from the start: no
+	// retry deletes their rows before forget has fenced their writes.
+	drop := h.claimLocked()
 	if over := len(h.jobs) - HostedMaxJobs; over > 0 {
 		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
-		for _, old := range finished[:min(over, len(finished))] {
+		// The batch fits the tombstones' room under the job cap, so even a
+		// failed bulk delete parks no more than the cap; jobs left over
+		// go at a later launch.
+		room := max(HostedMaxJobs-len(h.deleting), 0)
+		for _, old := range finished[:min(over, len(finished), room)] {
 			delete(h.jobs, old.row.ID)
+			if h.byHolder[old.row.HolderID] == old {
+				delete(h.byHolder, old.row.HolderID)
+			}
+			h.deleting[old.row.ID] = &tombstone{holder: old.row.HolderID, claim: drop}
 			h.rings.Release(old.out)
 			dropped = append(dropped, old)
 			ids = append(ids, old.row.ID)
 		}
 	}
 	h.mu.Unlock()
+	// Deferred, so a panicking OnRunning still fences the dropped jobs
+	// and settles their claim.
+	defer h.forget(dropped, ids, drop)
 	h.runningChanged()
-	if len(dropped) > 0 {
-		h.forget(dropped, ids)
-	}
 	return nil
 }
 
@@ -195,6 +245,12 @@ func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView
 	return h.view(j, OutcomeDone), cause
 }
 
+// errIDTaken: admit found the job's id taken; the launch draws again.
+var errIDTaken = errors.New("exec: the drawn exec id is taken")
+
+// newExecKey draws a three-word exec key (a test seam).
+var newExecKey = wskey.Generate
+
 // newID draws an unused exec id: three words for the new tools; for a
 // legacy launch the long legacy key form, whose 64 random bits keep it
 // apart from the file-backed jobs' keys without opening their store.
@@ -208,15 +264,19 @@ func (h *Hosted) newID(legacy bool) (string, error) {
 			}
 			id = "exec-" + strconv.FormatInt(h.opts.Now().UnixMilli(), 10) + "-" + hex.EncodeToString(b[:])
 		} else {
-			key, err := wskey.Generate()
+			key, err := newExecKey()
 			if err != nil {
 				return "", err
 			}
 			id = "exec_" + key
 		}
+		// An id whose dropped row is still being deleted stays reserved:
+		// reusing it would overwrite that row and its exit copy.
 		h.mu.Lock()
 		_, taken := h.jobs[id]
+		_, pending := h.deleting[id]
 		h.mu.Unlock()
+		taken = taken || pending
 		if !taken {
 			return id, nil
 		}

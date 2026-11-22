@@ -60,20 +60,75 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 	if err != nil {
 		return HostedView{}, err
 	}
+	j.writeMu.Lock()
+	defer j.writeMu.Unlock()
 	h.mu.Lock()
-	running, open, holder := !j.row.Terminal(), j.stdinOpen, j.row.HolderID
-	if running && open && eof {
-		j.stdinOpen = false
+	unknown, holder := j.stdinUnknown, j.row.HolderID
+	h.mu.Unlock()
+	if unknown {
+		// A holder that attached after Start reports its stdin now.
+		for _, info := range h.opts.Holders.List().Holders {
+			if info.ID == holder {
+				h.mu.Lock()
+				stdinFromHolderLocked(j, info)
+				h.mu.Unlock()
+			}
+		}
 	}
+	h.mu.Lock()
+	running, open, unknown, spawned := !j.row.Terminal(), j.stdinOpen, j.stdinUnknown, j.row.PID != 0
 	h.mu.Unlock()
 	switch {
 	case !running:
 		return h.view(j, 0), fmt.Errorf("exec job %s is not running (%s)", id, j.row.State)
+	case !spawned:
+		// Its holder runs but the process has not started (an approval
+		// may still be pending): the holder's no_child would read as an
+		// ended process, so the write waits for the spawn.
+		return h.view(j, 0), fmt.Errorf("exec job %s has not started its process yet; retry once it has", id)
+	case unknown:
+		return h.view(j, 0), fmt.Errorf("exec job %s's stdin state is not known yet: its holder is not attached; retry once it is", id)
 	case !open:
 		return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: it was given at launch, closed by eof, or the job is a legacy launch", id)
 	}
 	if err := h.opts.Holders.Input(holder, data, eof); err != nil {
+		var opErr *wsholder.OpError
+		var inErr *wsholder.InputError
+		refused := errors.As(err, &opErr)
+		accepted := 0
+		if errors.As(err, &inErr) {
+			accepted = inErr.Accepted
+		}
+		switch {
+		case refused && (opErr.Code == "input_closed" || opErr.Code == "no_child"):
+			// The child's stdin is gone (an eof closed it, or the child
+			// ended before its exit reached this daemon): no resend helps.
+			h.mu.Lock()
+			j.stdinOpen = false
+			h.mu.Unlock()
+			cause := "an earlier eof closed it"
+			if opErr.Code == "no_child" {
+				cause = "the job's process has ended"
+			}
+			return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: %s (the holder took %d of %d bytes)", id, cause, accepted, len(data))
+		case refused && opErr.Code == "input_overflow":
+			// The child is not reading yet: the eof did not reach it and
+			// stdin stays open; a retry resends only what the holder did
+			// not take.
+			return h.view(j, 0), fmt.Errorf("write to exec job %s: %w; stdin stays open: resend from byte %d of %d", id, err, accepted, len(data))
+		case refused:
+			return h.view(j, 0), fmt.Errorf("write to exec job %s: %w", id, err)
+		case inErr != nil:
+			// The connection failed mid-write: the holder may have taken
+			// the chunk it was sent.
+			return h.view(j, 0), fmt.Errorf("write to exec job %s: %w; check the job before resending from byte %d of %d", id, err, accepted, len(data))
+		}
 		return h.view(j, 0), fmt.Errorf("write to exec job %s: %w", id, err)
+	}
+	if eof {
+		h.mu.Lock()
+		j.stdinOpen = false
+		h.mu.Unlock()
 	}
 	return h.view(j, 0), nil
 }

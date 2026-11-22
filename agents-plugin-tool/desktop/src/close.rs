@@ -5,9 +5,7 @@ use std::{
 };
 
 use tauri::{AppHandle, Manager, WebviewWindow};
-use tauri_plugin_dialog::{
-    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
-};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use crate::{
     endpoint::FullStop,
@@ -57,16 +55,16 @@ pub fn exit_request(code: Option<i32>, rebuilding: bool) -> ExitRequest {
 
 /// Starts an exit unless one is already running. The draft check, the
 /// confirmation, and the full stop run on a worker; every outcome other
-/// than the app's exit restores the window and releases the document.
+/// than the app's exit restores the window and releases every document.
 pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
     if connection.closing.swap(true, Ordering::AcqRel) {
         return;
     }
     thread::spawn(move || {
         let main = app.get_webview_window(MAIN_WINDOW);
-        let drafts_ready = main
-            .as_ref()
-            .is_none_or(|window| drafts_saved(window, &connection));
+        // The exit ends every window, so a secondary's drafts count too.
+        let windows: Vec<_> = app.webview_windows().into_values().collect();
+        let drafts_ready = every(&windows, |window| drafts_saved(window, &connection));
         let done = match kind {
             Exit::Close => close(&app, main.as_ref(), drafts_ready),
             Exit::FullQuit => full_quit(&app, main.as_ref(), &connection, drafts_ready),
@@ -74,8 +72,10 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
         if done {
             app.exit(0);
         } else {
-            if let Some(window) = &main {
+            for window in &windows {
                 release_document(window);
+            }
+            if let Some(window) = &main {
                 let _ = window.set_title("Werkschaft");
             }
             connection.closing.store(false, Ordering::Release);
@@ -83,7 +83,15 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
     });
 }
 
-// Whether the main window's drafts are saved: true for a bundled local page,
+// Whether every item passes, checking each one even after a failure: each
+// window's check is also what asks its page to save its pending draft.
+fn every<T>(items: &[T], mut check: impl FnMut(&T) -> bool) -> bool {
+    items
+        .iter()
+        .fold(true, |passed, item| check(item) && passed)
+}
+
+// Whether a window's drafts are saved: true for a bundled local page,
 // and for the pinned dashboard whose renderer reports its store ready.
 fn drafts_saved(window: &WebviewWindow, connection: &Connection) -> bool {
     let pin = connection.pinned_url();
@@ -261,6 +269,9 @@ fn full_stop_report(outcome: Result<FullStop, &'static str>) -> Report {
 // A dialog needs a visible parent: the hidden main window is shown first.
 fn show(main: Option<&WebviewWindow>) {
     if let Some(window) = main {
+        // The pending-hide state lives on the main thread; this may not.
+        #[cfg(target_os = "macos")]
+        let _ = window.run_on_main_thread(crate::macos::keep_shown);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -268,6 +279,10 @@ fn show(main: Option<&WebviewWindow>) {
 }
 
 // Asks on a worker thread; the safe answer is the default button.
+//
+// rfd is called directly: the dialog plugin maps rfd's raw Cancel (Esc, the
+// close box, a dialog that failed to show) to the second custom button, which
+// here is the one that proceeds. Only that button's own click proceeds.
 fn confirm(
     app: &AppHandle,
     main: Option<&WebviewWindow>,
@@ -277,19 +292,35 @@ fn confirm(
     proceed: &str,
 ) -> bool {
     show(main);
-    let mut dialog = app
-        .dialog()
-        .message(message)
-        .title(title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
+    let mut dialog = rfd::AsyncMessageDialog::new()
+        .set_title(title)
+        .set_description(message)
+        .set_level(rfd::MessageLevel::Warning)
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(
             stay.into(),
             proceed.into(),
         ));
-    if let Some(window) = main {
-        dialog = dialog.parent(window);
+    let parent = main.cloned();
+    let (sender, receiver) = mpsc::channel();
+    // The alert is created on the main thread (macOS requires it there);
+    // its answer is awaited here.
+    let shown = app.run_on_main_thread(move || {
+        if let Some(window) = &parent {
+            dialog = dialog.set_parent(window);
+        }
+        let _ = sender.send(dialog.show());
+    });
+    if shown.is_err() {
+        return false;
     }
-    dialog.blocking_show_with_result() == MessageDialogResult::Custom(proceed.into())
+    match receiver.recv() {
+        Ok(answer) => proceeds(&tauri::async_runtime::block_on(answer), proceed),
+        Err(_) => false,
+    }
+}
+
+fn proceeds(result: &rfd::MessageDialogResult, proceed: &str) -> bool {
+    matches!(result, rfd::MessageDialogResult::Custom(label) if label == proceed)
 }
 
 fn inform(
@@ -444,6 +475,34 @@ mod tests {
                 .message
                 .contains("Nothing was stopped"));
         }
+    }
+
+    #[test]
+    fn every_window_is_asked_even_after_one_is_not_ready() {
+        let mut asked = Vec::new();
+        assert!(!every(&[1, 2, 3], |window| {
+            asked.push(*window);
+            *window != 1
+        }));
+        assert_eq!(asked, [1, 2, 3]);
+        assert!(every(&[1, 2], |_| true));
+        assert!(every::<u8>(&[], |_| false));
+    }
+
+    #[test]
+    fn only_the_proceed_button_proceeds() {
+        use rfd::MessageDialogResult as R;
+        assert!(proceeds(
+            &R::Custom("Stop and Quit".into()),
+            "Stop and Quit"
+        ));
+        assert!(!proceeds(&R::Custom("Cancel".into()), "Stop and Quit"));
+        // A dismissal (Esc, the close box) or a dialog that failed to show.
+        assert!(!proceeds(&R::Cancel, "Stop and Quit"));
+        assert!(!proceeds(&R::Cancel, "Cancel"));
+        assert!(!proceeds(&R::Ok, "Close"));
+        assert!(!proceeds(&R::Yes, "Close"));
+        assert!(!proceeds(&R::No, "Close"));
     }
 
     #[test]

@@ -178,7 +178,10 @@ func (h *holderChild) start(p *streamProcess, cmd *exec.Cmd) error {
 	p.child, p.holder = h, h
 	if h.id != "" {
 		h.replaying = true
+		p.startAudit(h.id)
+		h.auditAttach()
 		h.table.add(h.id, h)
+		h.auditAttach()
 		return nil
 	}
 	raw, err := json.Marshal(h.session)
@@ -196,8 +199,11 @@ func (h *holderChild) start(p *streamProcess, cmd *exec.Cmd) error {
 		return fmt.Errorf("start a session holder: %w", err)
 	}
 	h.id = id
+	p.startAudit(id)
 	// Listed before the spawn, so no record of the child is missed.
+	h.auditAttach()
 	h.table.add(id, h)
+	h.auditAttach()
 	env := map[string]string{}
 	for _, kv := range cmd.Env {
 		if name, value, ok := strings.Cut(kv, "="); ok && name != "" {
@@ -212,6 +218,28 @@ func (h *holderChild) start(p *streamProcess, cmd *exec.Cmd) error {
 	}
 	h.pid = st.PID
 	return nil
+}
+
+// auditAttachHost is a holder host that reports a holder connection's
+// negotiated audit channel (wsholder.Manager.AuditAttach).
+type auditAttachHost interface {
+	AuditAttach(id string) (wsholder.Event, bool)
+}
+
+// auditAttach hands capture the audit attach of the holder's current
+// connection: the client delivered it when it attached, before this
+// process was listed to receive it (a launch attaches before it returns; a
+// rejoin may be listed after the scan). start reads it before and after the
+// listing, so an attach in between is not missed; capture ignores a repeat
+// of the same connection.
+func (h *holderChild) auditAttach() {
+	a, ok := h.host.(auditAttachHost)
+	if !ok || h.proc.audit == nil {
+		return
+	}
+	if ev, ok := a.AuditAttach(h.id); ok {
+		h.proc.audit.holderEvent(ev)
+	}
 }
 
 func (h *holderChild) name() string { return h.base }
@@ -253,6 +281,12 @@ func (h *holderChild) event(ev wsholder.Event) {
 		}
 	}
 	switch ev.Event {
+	case wsholder.EventAudit, wsholder.EventAuditFence, wsholder.EventAuditAttached, wsholder.EventAuditDetached:
+		// The audit channel (audit_capture.go): never a record of the ring.
+		if a := h.proc.audit; a != nil {
+			a.holderEvent(ev)
+		}
+		return
 	case "output":
 		h.seen(ev.Seq)
 		switch ev.Stream {

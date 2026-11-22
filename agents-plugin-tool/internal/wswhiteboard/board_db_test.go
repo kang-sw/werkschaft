@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -308,5 +309,110 @@ func TestBoardDBLazyAbsentAndConversionError(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed open created artifacts: %v", err)
+	}
+}
+
+// A create killed after the schema commit leaves an empty DB and no other
+// authority: the next open reports no board and a create then succeeds.
+func TestBoardDBUncommittedCreateIsAbsent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "board")
+	schemaOnly, err := openBoardDBHandle(dir, BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schemaOnly.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenBoardDB(dir, nil, BoardDBOptions{}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uncommitted open: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, boardDBName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uncommitted DB kept: %v", err)
+	}
+	b, err := CreateBoardDB(dir, boardDBFixture(), BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A schema-only DB beside a session snapshot imports that snapshot.
+	snapDir := filepath.Join(t.TempDir(), "board")
+	if schemaOnly, err = openBoardDBHandle(snapDir, BoardDBOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := schemaOnly.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := boardDBFixture()
+	if got := openTestBoardDB(t, snapDir, want, BoardDBOptions{}).State(); got == nil || got.Seq != want.Seq || len(got.Topics) != len(want.Topics) {
+		t.Fatalf("snapshot import = %s", folderJSON(got))
+	}
+}
+
+// A worktree root with SQLite URI metacharacters keeps the database inside
+// it across create, close and reopen (the driver splits a plain DSN at '?').
+func TestBoardDBRootWithURIMetacharacters(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("'?' is not a valid Windows file name character")
+	}
+	base := t.TempDir()
+	root := "wt?copy#1 %41"
+	dir := filepath.Join(base, root, "board")
+	b, err := CreateBoardDB(dir, boardDBFixture(), BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Update(func(state *State) error { state.Seq += 10; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := b.State()
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, boardDBName)); err != nil || info.Size() == 0 {
+		t.Fatalf("database in the named root: %v %v", err, info)
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != root {
+			t.Fatalf("stray file %q beside the root", e.Name())
+		}
+	}
+	if got := openTestBoardDB(t, dir, nil, BoardDBOptions{}).State(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reopen\nwant %s\ngot %s", folderJSON(want), folderJSON(got))
+	}
+}
+
+func TestBoardDBRelativeRoot(t *testing.T) {
+	base := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	dir := filepath.Join(".ws", "board")
+	b, err := CreateBoardDB(dir, boardDBFixture(), BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Update(func(state *State) error { state.Seq += 10; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := b.State()
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(base, dir, boardDBName)); err != nil || info.Size() == 0 {
+		t.Fatalf("database under the working directory: %v %v", err, info)
+	}
+	if got := openTestBoardDB(t, dir, nil, BoardDBOptions{}).State(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reopen\nwant %s\ngot %s", folderJSON(want), folderJSON(got))
 	}
 }

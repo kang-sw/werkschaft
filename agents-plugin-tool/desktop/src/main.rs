@@ -179,6 +179,8 @@ fn open_secondary(app: AppHandle, state: Arc<Connection>, pin: Url, url: Url) {
 
 fn restore_main(app: &AppHandle, connection: &Arc<Connection>) {
     if let Some(window) = app.get_webview_window(close::MAIN_WINDOW) {
+        #[cfg(target_os = "macos")]
+        macos::keep_shown();
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -362,6 +364,9 @@ fn main() {
             } if close::checks_draft(&label) => {
                 if let Some(window) = app.get_webview_window(&label) {
                     api.prevent_close();
+                    #[cfg(target_os = "macos")]
+                    macos::hide_to_tray(&window);
+                    #[cfg(not(target_os = "macos"))]
                     let _ = window.hide();
                 }
             }

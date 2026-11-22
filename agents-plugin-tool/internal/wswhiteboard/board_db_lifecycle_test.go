@@ -74,7 +74,7 @@ func TestBoardDBProcessKillRecovery(t *testing.T) {
 		}
 		t.Fatal("child did not reach kill stage")
 	}
-	for _, stage := range []string{"import-committed", "transaction-before-commit"} {
+	for _, stage := range []string{"import-schema-committed", "import-committed", "transaction-before-commit"} {
 		t.Run(stage, func(t *testing.T) {
 			dir := t.TempDir()
 			want := makeLegacyBoard(t, dir, boardDBFixture())
@@ -118,9 +118,13 @@ func TestBoardDBProcessKillRecovery(t *testing.T) {
 			if !ready || killErr != nil || waitErr == nil {
 				t.Fatalf("child ready=%v kill=%v wait=%v stderr=%s", ready, killErr, waitErr, stderr.String())
 			}
-			if stage == "import-committed" {
+			if stage == "import-committed" || stage == "import-schema-committed" {
 				if has, err := boardHasSentinel(dir); err != nil || has {
 					t.Fatalf("pre-recovery sentinel = %v, %v", has, err)
+				}
+				// The schema-only window leaves the final DB file behind.
+				if _, err := os.Stat(filepath.Join(dir, boardDBName)); err != nil {
+					t.Fatalf("pre-recovery DB: %v", err)
 				}
 			}
 			reopened := openTestBoardDB(t, dir, nil, BoardDBOptions{})
