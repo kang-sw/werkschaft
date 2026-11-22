@@ -51,7 +51,7 @@ func TestPinnedColumnFillsTheWindowRightOfTheBoard(t *testing.T) {
 // 4th column) keep the gallery fused over #bcol (data-gal="narrow") while the
 // rail stays permanently docked from 1600px; Band 4 activates the 3rd grid track
 // (rail + stage + gallery column) with data-gal="empty", "drag", or "col",
-// gating .bp-edge on [data-pincol].
+// gating .bp-edge on [data-pincol] or [data-gal="empty"].
 func TestGalleryNoReservedColumnWithoutAPage(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, gone := range []string{".bpzone", ".bpins", ".bpcol", "data-drop", "attr(data-label)"} {
@@ -64,7 +64,7 @@ func TestGalleryNoReservedColumnWithoutAPage(t *testing.T) {
 		":root[data-gal] .bgal:not([hidden]) { display: flex; gap: 6px; min-width: 0; min-height: 0; }",
 		".bgal > .bp-edge { display: none; }",
 		`:root[data-gal="narrow"] .bgal:not([hidden]) { position: fixed; z-index: 35; left: var(--gal-left, 0px); top: var(--gal-top, 0px); width: var(--gal-width, 100vw); height: var(--gal-height, 100vh); pointer-events: none; }`,
-		`  :root[data-pincol] .bgal > .bp-edge { display: block; }`,
+		`  :root:is([data-pincol], [data-gal="empty"]) .bgal > .bp-edge { display: block; }`,
 		`  :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .bgal:not([hidden]) { position: relative; z-index: auto; top: auto; bottom: auto; right: auto; width: auto; grid-column: 3; grid-row: 1; }`,
 		`  :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dash:not(.live):not(.history) .bgal:not([hidden]) { position: sticky; top: 12px; height: calc(100vh - 24px); height: calc(100dvh - 24px); }`,
 		// Inactive pages leave the clipped viewport by transform alone, a gap
@@ -171,6 +171,21 @@ check("worktree 2441px fits the board beside its gallery", at(2441, 1, false), [
 board = null;
 opt.split = {};
 check("tabs at 2560px, a page: the narrow view", at(2560, 1, false, true), ["narrow", false, false]);
+boardw = 1100; convow = 532;
+check("Band 4 2560px widened live, no page: stays in empty Band 4", at(2560, 0, false), ["empty", false, false]);
+check("Band 4 2560px widened live, a page: stays in col Band 4", at(2560, 1, false), ["col", true, false]);
+check("Band 3 1920px widened live, no page: collapses out of Band 4", at(1920, 0, false), [null, false, false]);
+check("Band 3 1920px widened live, a page: falls back to Band 3 narrow", at(1920, 1, false), ["narrow", false, false]);
+opt.split = null; convow = 0; boardw = 1300;
+check("Band 4 2560px widened board-first, no page: stays in empty Band 4", at(2560, 0, false), ["empty", false, false]);
+check("Band 3 1920px widened board-first, a page: falls back to Band 3 narrow", at(1920, 1, false), ["narrow", false, false]);
+board = { closest: function (selector) { return selector === ".dgrid.worktree" ? {} : null; } };
+boardw = 1600;
+check("Band 4 2560px widened worktree, no page: stays in empty Band 4", at(2560, 0, false), ["empty", false, false]);
+check("Band 3 1920px widened worktree, a page: falls back to Band 3 narrow", at(1920, 1, false), ["narrow", false, false]);
+board = null;
+boardw = 0; convow = 0;
+opt.split = {};
 rails = 0; at(1920, 1, false); at(2560, 1, false); at(1920, 1, false);
 check("each pincol transition closes the session rail overlay once", rails, 2);
 placed = 0; at(1920, 1, false);
@@ -224,7 +239,7 @@ func TestLiveCellIsTheConversationAndTheBoard(t *testing.T) {
 	css := mustAsset(t, "dashboard.css")
 	for _, want := range []string{
 		".dash:has(> .dwrap .dgrid:is(.live, .history)) { --cvw: var(--convow, calc(var(--boardw) * 5 / 7)); }",
-		`  :root[data-pincol][data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 16px + var(--boardw), 100% - 652px)) minmax(280px, 1fr); }`,
+		`  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 16px + var(--boardw), 100% - 652px)) minmax(280px, 1fr); }`,
 		":root[data-boardw] .dgrid:is(.live, .history) { --dgrid-cols: minmax(320px, min(var(--cvw), 100% - 360px - var(--dgrid-gap))) minmax(0, 1fr); }",
 		".dgrid { --dgrid-cols: minmax(320px, 5fr) minmax(0, 7fr); --dgrid-gap: 16px; }",
 	} {
