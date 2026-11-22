@@ -1089,6 +1089,60 @@ func TestAuditControlReserveExhaustionNeverBlocks(t *testing.T) {
 	}
 }
 
+// TestAuditOverflowedDetachFollowsItsQueuedAttach pins the control fallback
+// when only a connection's detach overflows: its attach took the reserve's
+// last slot. The detach is applied after the queued attach, never before
+// it, so the ended connection is not left live: a kept line after it maps
+// at once instead of waiting for a fence that connection can no longer
+// send (a fence_timeout loss).
+func TestAuditOverflowedDetachFollowsItsQueuedAttach(t *testing.T) {
+	old := auditFenceWait
+	auditFenceWait = 50 * time.Millisecond
+	t.Cleanup(func() { auditFenceWait = old })
+	sink := &memSink{block: make(chan struct{})}
+	unblock := sync.OnceFunc(func() { close(sink.block) })
+	t.Cleanup(unblock)
+	r := newAuditRig(t, sink, "h1")
+	r.conn = 1
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: 1, Next: 1})
+	r.keptRun(`{"type":"system","subtype":"status","status":"first"}`, 0, 0)
+	c := r.p.audit
+	for c.refused.Load() == 0 {
+		r.tee(`{"type":"keep_alive"}`)
+	}
+	// Fill the reserve so the last connection's attach takes its last slot.
+	conn := uint64(2)
+	for cap(c.in)-len(c.in) > 1 {
+		r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: conn, Next: r.seq + 1})
+		if cap(c.in)-len(c.in) > 1 {
+			r.audit(wsholder.Event{Event: wsholder.EventAuditDetached, Conn: conn})
+		}
+		conn++
+	}
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: conn, Next: r.seq + 1})
+	r.audit(wsholder.Event{Event: wsholder.EventAuditDetached, Conn: conn})
+	c.overMu.Lock()
+	over := c.over
+	c.overMu.Unlock()
+	if over.attach != nil || over.detached == nil || over.detached.ev.Conn != conn {
+		t.Fatalf("overflow = %+v, want only connection %d's detach", over, conn)
+	}
+	unblock()
+	waitUntil(t, "the queue to drain", func() bool { return len(c.in) == 0 })
+	r.kept(`{"type":"system","subtype":"status","status":"after"}`)
+	time.Sleep(10 * auditFenceWait)
+	r.end()
+	evs := sink.events()
+	if loss := find(evs, func(ev wsaudit.Envelope) bool {
+		return isLoss(ev) && ev.Meta[wsaudit.MetaLossReason] == wsaudit.LossFenceTimeout
+	}); len(loss) != 0 {
+		t.Fatalf("loss = %+v: the ended connection was left live", loss)
+	}
+	if after := find(evs, func(ev wsaudit.Envelope) bool { return strings.Contains(ev.Out, `"after"`) }); len(after) != 1 {
+		t.Fatalf("the kept line after the detach = %+v", after)
+	}
+}
+
 // TestClaudeAuditTotalLossMarksTheThinking pins that a thinking block whose
 // every delta was dropped still records the loss: the open block takes it
 // (markLoss), and the event that ends the block, the assistant line's empty

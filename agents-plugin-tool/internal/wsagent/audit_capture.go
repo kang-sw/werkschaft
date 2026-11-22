@@ -184,6 +184,11 @@ type auditCapture struct {
 	// timeout closed opens it again.
 	conn uint64
 	live bool
+	// detachAfter is an overflowed detach whose connection's attach had not
+	// been handled yet: the attach was still queued (it took the reserve's
+	// last slot), so the detach waits until the queue has drained past it
+	// (applyDetachAfter), never applying before its attach.
+	detachAfter *auditItem
 	// late counts tee lines lost for arriving after their interval closed,
 	// recorded as one loss before the next other item (noteLate).
 	late uint64
@@ -355,8 +360,25 @@ func (c *auditCapture) takeOverflow() {
 	if o.attach != nil {
 		c.handle(*o.attach)
 	}
-	if o.detached != nil {
+	switch {
+	case o.detached == nil:
+	case o.attach == nil && o.detached.ev.Conn > c.conn:
+		// Its attach is still queued: an attach is never dropped, and one
+		// that overflowed would be here beside it.
+		c.detachAfter = o.detached
+	default:
 		c.handle(*o.detached)
+	}
+}
+
+// applyDetachAfter applies a deferred detach once the queue is empty: every
+// item queued before the detach overflowed, its attach and that
+// connection's tee lines and fences among them, has been handled. A newer
+// connection's attach handled meanwhile has already ended it.
+func (c *auditCapture) applyDetachAfter() {
+	if d := c.detachAfter; d != nil && len(c.in) == 0 && d.ev.Conn <= c.conn {
+		c.detachAfter = nil
+		c.handle(*d)
 	}
 }
 
@@ -395,6 +417,7 @@ func (c *auditCapture) run() {
 					break drain
 				}
 			}
+			c.applyDetachAfter()
 			c.noteRefused()
 			c.noteLate()
 			c.closeTee(wsaudit.LossStreamEnd)
@@ -411,6 +434,7 @@ func (c *auditCapture) run() {
 // reports the finalized boundary once per burst.
 func (c *auditCapture) idle() {
 	c.noteRefused()
+	c.applyDetachAfter()
 	if len(c.in) == 0 {
 		c.finalize()
 	}
