@@ -19,7 +19,12 @@
   // Keyed in localStorage by board identity + item ID, storing a fingerprint
   // of the item's rendered content at hold time. A changed fingerprint clears
   // the hold; answering or withdrawing the item drops it.
-  var HOLD_PREFIX = "ws.wb.holds.";
+  // The holds map keeps the text-only (legacy) fingerprint every release
+  // reads, so a tab still running an older build never sees a mismatch for a
+  // hold a newer tab made. The fingerprint with rationale link targets lives
+  // beside it in its own map; a hold without one (made by an older tab)
+  // is checked on text alone.
+  var HOLD_PREFIX = "ws.wb.holds.", LINKS_PREFIX = "ws.wb.holdlinks.";
   function getStorage() {
     try { return window.localStorage || null; } catch (e) { return null; }
   }
@@ -34,6 +39,7 @@
     return (window.location && window.location.pathname) || "default";
   }
   function holdStorageKey() { return HOLD_PREFIX + boardKey(); }
+  function linksStorageKey() { return LINKS_PREFIX + boardKey(); }
   function itemKey(el) {
     if (!el || !el.getAttribute) return "";
     return el.getAttribute("data-id") || el.getAttribute("id") || "";
@@ -49,9 +55,8 @@
     });
     return out.length ? "\nh:" + out.join("\n") : "";
   }
-  // legacy omits link targets: the fingerprint holds stored before targets
-  // were included, which reconcileHolds migrates instead of clearing. With
-  // no rationale links both forms are equal.
+  // legacy omits link targets: the form stored in the shared holds map (see
+  // above). With no rationale links both forms are equal.
   function itemFingerprint(el, legacy) {
     if (!el) return "";
     var parts = [];
@@ -91,11 +96,11 @@
     }
     return (h >>> 0).toString(36) + ":" + raw.length;
   }
-  function loadHolds() {
+  function loadHolds(key) {
     var ls = getStorage();
     if (!ls) return {};
     try {
-      var raw = ls.getItem(holdStorageKey());
+      var raw = ls.getItem(key || holdStorageKey());
       if (!raw) return {};
       var parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -106,14 +111,20 @@
       return out;
     } catch (e) { return {}; }
   }
-  function saveHolds(map) {
+  function saveMap(key, map) {
     var ls = getStorage();
     if (!ls) return;
     try {
-      var keys = Object.keys(map);
-      if (!keys.length) ls.removeItem(holdStorageKey());
-      else ls.setItem(holdStorageKey(), JSON.stringify(map));
+      if (!Object.keys(map).length) ls.removeItem(key);
+      else ls.setItem(key, JSON.stringify(map));
     } catch (e) {}
+  }
+  // Link fingerprints exist only beside a hold; an older tab that dropped
+  // the hold leaves one behind, which goes with the next write.
+  function saveHolds(map) {
+    Object.keys(links).forEach(function (k) { if (!(k in map)) delete links[k]; });
+    saveMap(holdStorageKey(), map);
+    saveMap(linksStorageKey(), links);
   }
 
   // An item's draft state, read from the same form controls form.js builds
@@ -136,7 +147,12 @@
     return responded(el) || el.classList.contains("sent-sent") || el.classList.contains("sent-held");
   }
 
-  var holds = loadHolds();
+  var holds = loadHolds(), links = loadHolds(linksStorageKey());
+  // matches: the hold was made on this content (see the hold store above).
+  function matches(el, k) {
+    if (holds[k] !== itemFingerprint(el, true)) return false;
+    return !(k in links) || links[k] === itemFingerprint(el);
+  }
   function holdButton(el) {
     var b = el && el.querySelector ? el.querySelector(".wb-hold-toggle") : null;
     return b && b.hasAttribute && b.hasAttribute("data-wb-hold") ? b : null;
@@ -174,12 +190,7 @@
       if (!k) return;
       openIds[k] = true;
       if (!(k in holds)) return;
-      var fp = itemFingerprint(el);
-      if (holds[k] !== fp && holds[k] === itemFingerprint(el, true)) {
-        holds[k] = fp; // held before link targets counted; keep the hold
-        changed = true;
-      }
-      if (answered(el) || holds[k] !== fp) {
+      if (answered(el) || !matches(el, k)) {
         delete holds[k];
         changed = true;
       }
@@ -206,8 +217,7 @@
   }
   function isHeldExternal(el) {
     var k = itemKey(el);
-    if (!k || !(k in holds)) return false;
-    return holds[k] === itemFingerprint(el) || holds[k] === itemFingerprint(el, true);
+    return !!(k && (k in holds) && matches(el, k));
   }
   function toggleHold(el) {
     var k = itemKey(el);
@@ -221,7 +231,8 @@
       return false;
     }
     if (answered(el)) return false;
-    holds[k] = itemFingerprint(el);
+    holds[k] = itemFingerprint(el, true);
+    links[k] = itemFingerprint(el);
     saveHolds(holds);
     syncHoldDOM(el, true);
     retitle();
@@ -495,8 +506,9 @@
   // board may be older than the writer's, so it never writes back a prune
   // or a fingerprint drop decided from it.
   function onStorage(e) {
-    if (!e || (e.key !== null && e.key !== holdStorageKey())) return;
+    if (!e || (e.key !== null && e.key !== holdStorageKey() && e.key !== linksStorageKey())) return;
     holds = loadHolds();
+    links = loadHolds(linksStorageKey());
     applyHoldDOM();
     retitle();
     redrawSoon();

@@ -290,26 +290,44 @@ test('hold auto-clears when item content or re-ask marker changes (fingerprint c
   assert.deepEqual(storage.dump(), {}, 'cleared holds remove empty localStorage entry');
 });
 
-test('a rationale link target change clears the hold; a pre-upgrade hold migrates instead of clearing', () => {
+test('a rationale link target change clears the hold; the shared map keeps the form older tabs read', () => {
   const ask = href => [{ id: 30, top: -200, title: 'Pick a cache', why: { text: 'See the design notes', label: 'design notes', href } }];
+  const holdsKey = 'ws.wb.holds.board-l', linksKey = 'ws.wb.holdlinks.board-l';
   const storage = makeStorage();
   const h1 = makePillHarness(ask('docs/a.md'), { storage, rid: 'board-l' });
   h1.clickHold(h1.items[0]);
   assert.equal(h1.items[0].classList.contains('wb-held'), true);
+  // An older tab compares the shared map's value with its text-only
+  // fingerprint: the new tab must keep writing exactly that form there.
+  const legacy = h1.win.wbPill.fingerprint(h1.items[0], true);
+  assert.notEqual(legacy, h1.win.wbPill.fingerprint(h1.items[0]));
+  assert.deepEqual(JSON.parse(storage.dump()[holdsKey]), { 30: legacy });
+  assert.deepEqual(JSON.parse(storage.dump()[linksKey]), { 30: h1.win.wbPill.fingerprint(h1.items[0]) });
+  h1.run();
+  assert.deepEqual(JSON.parse(storage.dump()[holdsKey]), { 30: legacy }, 'a rerun never replaces it');
+
   const h2 = makePillHarness(ask('docs/b.md'), { storage, rid: 'board-l' });
   assert.equal(h2.items[0].classList.contains('wb-held'), false, 'retargeted link clears the hold');
   assert.equal(h2.titleCounts.at(-1), 1);
+  assert.deepEqual(storage.dump(), {}, 'both maps drop it');
 
-  // A hold stored with the text-only fingerprint (before link targets were
-  // included) is kept and rewritten in the current form.
-  const legacy = h2.win.wbPill.fingerprint(h2.items[0], true);
-  assert.notEqual(legacy, h2.win.wbPill.fingerprint(h2.items[0]));
-  const seeded = makeStorage({ 'ws.wb.holds.board-l': JSON.stringify({ 30: legacy }) });
+  // A hold an older tab stored (text-only map, no link fingerprint) is kept
+  // as is: nothing is rewritten in the shared map, nothing added beside it.
+  const seeded = makeStorage({ [holdsKey]: JSON.stringify({ 30: legacy }) });
   const h3 = makePillHarness(ask('docs/b.md'), { storage: seeded, rid: 'board-l' });
-  assert.equal(h3.items[0].classList.contains('wb-held'), true, 'upgrade keeps an existing hold');
-  assert.deepEqual(JSON.parse(seeded.dump()['ws.wb.holds.board-l']), { 30: h3.win.wbPill.fingerprint(h3.items[0]) });
-  const h4 = makePillHarness(ask('docs/c.md'), { storage: seeded, rid: 'board-l' });
-  assert.equal(h4.items[0].classList.contains('wb-held'), false, 'a later retarget still clears it');
+  assert.equal(h3.items[0].classList.contains('wb-held'), true, 'an older tab\'s hold is honoured');
+  assert.equal(h3.win.wbPill.isHeld(h3.items[0]), true);
+  assert.deepEqual(seeded.dump(), { [holdsKey]: JSON.stringify({ 30: legacy }) });
+  // Its text still decides: an edited title clears it.
+  const h4 = makePillHarness([{ ...ask('docs/b.md')[0], title: 'Pick a store' }], { storage: seeded, rid: 'board-l' });
+  assert.equal(h4.items[0].classList.contains('wb-held'), false);
+
+  // A link fingerprint an older tab left behind (it dropped the hold) goes
+  // with the next write and never judges a later hold.
+  const orphan = makeStorage({ [linksKey]: JSON.stringify({ 30: 'stale:1' }) });
+  const h5 = makePillHarness(ask('docs/b.md'), { storage: orphan, rid: 'board-l' });
+  h5.clickHold(h5.items[0]);
+  assert.deepEqual(JSON.parse(orphan.dump()[linksKey]), { 30: h5.win.wbPill.fingerprint(h5.items[0]) });
 });
 
 test('a storage event from another tab never writes back a prune from this tab\'s board', () => {
