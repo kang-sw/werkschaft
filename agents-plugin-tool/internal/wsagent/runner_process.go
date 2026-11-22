@@ -759,6 +759,9 @@ func (c *conv) replayDone(lost bool) {
 	lost = lost || c.replayGap
 	boundary := c.replayBoundary
 	c.replaying, c.replayAsked, c.replayGap, c.replayBoundary = false, false, false, false
+	// Agy native rows end their observation here, whatever the turn state
+	// and before a worker's lost-turn probe returns early.
+	c.finishAgyNativeReplay()
 	c.queryRecoveryUsage()
 	if !c.rec.Lead && c.rec.Parent != nil {
 		if lost && c.rec.TurnOpen {
@@ -797,8 +800,6 @@ func (c *conv) replayDone(lost bool) {
 	c.rejectCutoverPending()
 	c.allowAgyBypassPending()
 	c.checkAction(false)
-	// Agy native rows end their observation here, whatever the turn state.
-	c.finishAgyNativeReplay()
 	c.live.writeSnapshot()
 	c.r.notify(c.rec.ReplyID, c.rec.Root)
 	// A message steered during the rejoin goes to the turn that still runs.

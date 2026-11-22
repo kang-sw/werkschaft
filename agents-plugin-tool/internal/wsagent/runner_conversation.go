@@ -123,6 +123,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		c.compactNote = restartRestoreMarker
 	}
 	c.refreshHeld()
+	c.live.coverage = c.snapshotCoverage
 	if rec.Lead {
 		_, _, _ = refreshPermissionSelection(dir)
 		r.setSummaryOwner(rec.ReplyID, c)

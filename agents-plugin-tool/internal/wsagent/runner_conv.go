@@ -225,15 +225,12 @@ type conv struct {
 	// until its replay ends: no turn is submitted meanwhile, since the
 	// replay is what tells whether one runs.
 	replaying bool
-	// agyNativeDeferred holds the agy native rows that a live turn end,
-	// accepted while a replay still ran, ended observation of, with that
-	// end's time. They settle once the replay ends (finishAgyNativeReplay),
-	// in this order, so a launch failure buffered later in the same replay
-	// still ends its row failed.
-	agyNativeDeferred []agyNativeSettle
-	// agyNativeReplay is what the running replay showed of agy native rows
-	// (finishAgyNativeReplay).
+	// agyNativeReplay is what the running replay staged of agy native rows
+	// (stageAgyNativeReplay, resolveAgyNativeReplay).
 	agyNativeReplay agyNativeReplayRows
+	// eventSeq is the holder record sequence of the event being handled (0
+	// for the daemon's own child or a synthetic event).
+	eventSeq uint64
 	// rejoinErr is a worker rejoin's start failure: checkReattach ends that
 	// recovery after the scan instead of waiting on a replay with no process.
 	rejoinErr       string
@@ -1208,7 +1205,9 @@ func (c *conv) applyCoalesced(ev wslive.Event, quiet bool) {
 }
 
 func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
-	c.noteAgyNativeReplay(ev, quiet)
+	if c.stageAgyNativeReplay(ev, quiet) {
+		return
+	}
 	if !quiet {
 		c.observeCompaction(ev)
 	}
@@ -1298,40 +1297,76 @@ type agyNativeSettle struct {
 
 // endAgyNativeObservation is a live, accepted logical turn end's effect on
 // agy native rows: agy reports no child end, so observation of every row
-// still running ends at at (EndUnknown). While a replay runs, the rows are
-// noted instead and settle when it ends (finishAgyNativeReplay): a replayed
-// record that only follows the holder's sequence mark, such as a buffered
-// prompt response, is not quiet, yet the replay is not over.
+// still running ends at at (EndUnknown). While a replay runs, the end is
+// staged in order with the rows' events instead (stageAgyNativeReplay) and
+// settles when the replay ends: a replayed record that only follows the
+// holder's sequence mark, such as a buffered prompt response, is not quiet,
+// yet the replay is not over.
 func (c *conv) endAgyNativeObservation(at int64) {
+	if c.replaying {
+		c.agyNativeReplay.staged = append(c.agyNativeReplay.staged, agyNativeStaged{endAt: at})
+		return
+	}
 	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
-		if c.replaying {
-			if !slices.ContainsFunc(c.agyNativeDeferred, func(d agyNativeSettle) bool { return d.id == id }) {
-				c.agyNativeDeferred = append(c.agyNativeDeferred, agyNativeSettle{id, at})
-			}
-			continue
-		}
 		c.settleAgyNative([]agyNativeSettle{{id, at}})
 	}
 }
 
-// finishAgyNativeReplay ends a rejoin's observation of agy native rows.
-// Retention already decided which finished rows the restored snapshot kept,
-// so the rows the replay rebuilt only from records the previous daemon had
-// applied, and which a readable restored snapshot does not list, are dropped
-// (dropAgyNativeRebuilt), not resurrected. Then come the rows a live turn end
-// accepted during the replay, at that end's time and in order, unless a later
-// record of the replay ended them. Last, since observation is not continuous
-// across a daemon replacement and a replayed cancellation cannot be told from
-// a watchdog continuation awaiting its first output, every row still running
-// closes end-unknown at the time agyNativeReplayEnd gives it.
+// agyNativeReplayRows is what a replay staged of agy native rows: their
+// events and the live turn ends between them, in order (staged), the holder
+// record each row was first seen at (start), and the time of the last record
+// past the holder's sequence mark that touched it (live).
+type agyNativeReplayRows struct {
+	staged []agyNativeStaged
+	start  map[string]uint64
+	live   map[string]int64
+}
+
+// agyNativeStaged is one staged step: a row event (quiet when replayed from
+// a record the previous daemon applied), or, with endAt set, a live turn
+// end that ended observation of the rows then running.
+type agyNativeStaged struct {
+	ev    wslive.Event
+	quiet bool
+	endAt int64
+}
+
+// stageAgyNativeReplay holds an agy native row event of a running replay out
+// of the state, and so out of retention, until the replay ends
+// (resolveAgyNativeReplay); it reports whether it held ev. The event keeps
+// the time it arrived at.
+func (c *conv) stageAgyNativeReplay(ev wslive.Event, quiet bool) bool {
+	if !c.replaying || ev.Kind != wslive.KindAgent || !strings.HasPrefix(ev.AgentID, wslive.NativeAgyPrefix) {
+		return false
+	}
+	o := &c.agyNativeReplay
+	if ev.At <= 0 {
+		ev.At = c.r.opts.Now().UnixMilli()
+	}
+	if _, seen := o.start[ev.AgentID]; !seen {
+		if o.start == nil {
+			o.start = map[string]uint64{}
+		}
+		o.start[ev.AgentID] = c.eventSeq
+	}
+	if !quiet {
+		if o.live == nil {
+			o.live = map[string]int64{}
+		}
+		o.live[ev.AgentID] = ev.At
+	}
+	o.staged = append(o.staged, agyNativeStaged{ev: ev, quiet: quiet})
+	return true
+}
+
+// finishAgyNativeReplay ends a rejoin's observation of agy native rows: it
+// resolves what the replay staged (resolveAgyNativeReplay), then, since
+// observation is not continuous across a daemon replacement and a replayed
+// cancellation cannot be told from a watchdog continuation awaiting its
+// first output, closes every row still running end-unknown at the time
+// agyNativeReplayEnd gives it.
 func (c *conv) finishAgyNativeReplay() {
-	restored := c.live.takeRestored()
-	rows := c.agyNativeReplay
-	deferred := c.agyNativeDeferred
-	c.agyNativeReplay, c.agyNativeDeferred = agyNativeReplayRows{}, nil
-	// A dropped row is gone from the state, so its deferred end is skipped.
-	c.dropAgyNativeRebuilt(rows, restored)
-	c.settleAgyNative(deferred)
+	rows, restored := c.resolveAgyNativeReplay()
 	var rest []agyNativeSettle
 	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
 		rest = append(rest, agyNativeSettle{id, c.agyNativeReplayEnd(id, rows, restored)})
@@ -1339,76 +1374,121 @@ func (c *conv) finishAgyNativeReplay() {
 	c.settleAgyNative(rest)
 }
 
-// agyNativeReplayRows is what a replay showed of agy native rows: the rows it
-// created (the state held none when their first record arrived) and, for each
-// row a record past the holder's sequence mark touched, that record's time.
-type agyNativeReplayRows struct {
-	created map[string]bool
-	live    map[string]int64
-}
-
-// noteAgyNativeReplay records an agy native row event of a replay, before it
-// is applied.
-func (c *conv) noteAgyNativeReplay(ev wslive.Event, quiet bool) {
-	if !c.replaying || ev.Kind != wslive.KindAgent || !strings.HasPrefix(ev.AgentID, wslive.NativeAgyPrefix) {
-		return
+// resolveAgyNativeReplay applies what a replay staged of agy native rows,
+// once, and returns it with what the restored snapshot said. Retention
+// already decided which finished rows the restored snapshot kept, so first
+// the rows the snapshot shows evicted are dropped: rows the state does not
+// hold, touched by no record past the holder's sequence mark, whose start
+// the snapshot covers and which it does not list (restoredAgyNative.evicted).
+// Their staged events never reach the state, so they cannot displace a
+// restored row. The surviving events then apply in order (a row started
+// after the snapshot's coverage keeps the terminal record that followed),
+// noting at each staged live turn end the rows it found running; those rows
+// settle at that end's time after every event, so a launch failure buffered
+// later in the same replay still wins. Each apply runs retention, but with
+// the evicted rows gone first and settled native rows unchanging, the rows
+// it keeps are those one retention over the final set keeps. Last, a row the
+// snapshot listed running whose start left the holder ring is seeded from
+// the snapshot and closes end-unknown at the snapshot's write time.
+func (c *conv) resolveAgyNativeReplay() (agyNativeReplayRows, restoredAgyNative) {
+	restored := c.live.takeRestored()
+	rows := c.agyNativeReplay
+	c.agyNativeReplay = agyNativeReplayRows{}
+	holderID := c.rec.HolderID
+	dropped := map[string]bool{}
+	for id, seq := range rows.start {
+		if _, live := rows.live[id]; !live && !c.live.st.HasAgent(id) && restored.evicted(id, holderID, seq) {
+			dropped[id] = true
+		}
 	}
-	o := &c.agyNativeReplay
-	if !quiet {
-		at := ev.At
+	var deferred []agyNativeSettle
+	for _, step := range rows.staged {
+		if step.endAt > 0 {
+			for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
+				if !slices.ContainsFunc(deferred, func(d agyNativeSettle) bool { return d.id == id }) {
+					deferred = append(deferred, agyNativeSettle{id, step.endAt})
+				}
+			}
+			continue
+		}
+		if !dropped[step.ev.AgentID] {
+			c.applyAgyNativeRow(step.ev, step.quiet)
+		}
+	}
+	c.settleAgyNative(deferred)
+	var wrapped []string
+	for id := range restored.running {
+		if !c.live.st.HasAgent(id) && !dropped[id] {
+			wrapped = append(wrapped, id)
+		}
+	}
+	slices.Sort(wrapped)
+	var seeded []agyNativeSettle
+	for _, id := range wrapped {
+		a := restored.running[id]
+		at := restored.updatedAt
 		if at <= 0 {
 			at = c.r.opts.Now().UnixMilli()
 		}
-		if o.live == nil {
-			o.live = map[string]int64{}
+		start := a.StartedAt
+		if start <= 0 || start > at {
+			start = at
 		}
-		o.live[ev.AgentID] = at
-		return
+		c.applyAgyNativeRow(wslive.Event{Kind: wslive.KindAgent, AgentID: id, ParentID: a.ParentID, Label: a.Label, Status: wslive.StatusRunning, At: start}, false)
+		seeded = append(seeded, agyNativeSettle{id, at})
 	}
-	if c.live.st.HasAgent(ev.AgentID) {
-		return
-	}
-	if o.created == nil {
-		o.created = map[string]bool{}
-	}
-	o.created[ev.AgentID] = true
-}
-
-// dropAgyNativeRebuilt removes the agy native rows the replay created from
-// records the previous daemon had applied alone, which a readable restored
-// snapshot does not list: retention evicted them. Without a readable
-// snapshot nothing is dropped (no restored row is there to displace). The
-// process forgets the dropped rows' launch correlations.
-func (c *conv) dropAgyNativeRebuilt(rows agyNativeReplayRows, restored restoredAgyNative) {
-	if !restored.readable {
-		return
-	}
-	var ids []string
-	for id := range rows.created {
-		if _, live := rows.live[id]; !live && !restored.listed[id] {
+	c.settleAgyNative(seeded)
+	if len(dropped) > 0 {
+		ids := make([]string, 0, len(dropped))
+		for id := range dropped {
 			ids = append(ids, id)
 		}
+		slices.Sort(ids)
+		if f, ok := c.proc.(nativeLaunchForgetter); ok {
+			f.forgetNativeLaunches(ids)
+		}
 	}
-	slices.Sort(ids)
-	dropped := c.live.st.DropNativeAgents(ids)
-	if f, ok := c.proc.(nativeLaunchForgetter); ok && len(dropped) > 0 {
-		f.forgetNativeLaunches(dropped)
-	}
+	return rows, restored
 }
 
 // agyNativeReplayEnd is when a rejoin's observation of the agy native row id,
 // still running at the replay's end, ended: the time of the last record past
 // the holder's sequence mark that touched it; else, for a row the restored
 // snapshot listed running, that snapshot's write time; else (no readable
-// snapshot, or a row older than the restored state) the replay's end.
+// snapshot, a row started after the snapshot's coverage, or a later replay)
+// the replay's end.
 func (c *conv) agyNativeReplayEnd(id string, rows agyNativeReplayRows, restored restoredAgyNative) int64 {
 	if at, ok := rows.live[id]; ok {
 		return at
 	}
-	if restored.running[id] && restored.updatedAt > 0 {
+	if _, listed := restored.running[id]; listed && restored.updatedAt > 0 {
 		return restored.updatedAt
 	}
 	return c.r.opts.Now().UnixMilli()
+}
+
+// snapshotCoverage is the holder records the live state applied, for the
+// recovery file (liveWriter.coverage): every whole line of the current
+// holder through c.seq. While a replay runs, the state still lacks what it
+// staged and c.seq already stands at the holder's mark, so the file keeps
+// the coverage of the snapshot the state was restored from. Loop-owned
+// fields, read on the loop like every snapshot write.
+func (c *conv) snapshotCoverage() (string, uint64) {
+	if c.replaying {
+		return c.live.restored.holderID, c.live.restored.coveredSeq
+	}
+	return c.rec.HolderID, c.seq
+}
+
+// applyAgyNativeRow applies an agy native row event straight to the live
+// writer, past replay staging: replayed (quiet) as a replay applies it,
+// else RAM-only like every native row.
+func (c *conv) applyAgyNativeRow(ev wslive.Event, quiet bool) {
+	if quiet {
+		c.live.applyQuiet(ev)
+	} else {
+		c.live.applyRAM(ev)
+	}
 }
 
 // settleAgyNative ends each of rows that still runs done as observation
@@ -1422,7 +1502,7 @@ func (c *conv) settleAgyNative(rows []agyNativeSettle) {
 		if !slices.Contains(c.live.st.RunningAgents(wslive.NativeAgyPrefix), row.id) {
 			continue
 		}
-		c.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: row.id, Status: wslive.StatusDone, EndUnknown: true, At: row.at})
+		c.applyAgyNativeRow(wslive.Event{Kind: wslive.KindAgent, AgentID: row.id, Status: wslive.StatusDone, EndUnknown: true, At: row.at}, false)
 		settled = append(settled, row.id)
 	}
 	if f, ok := c.proc.(nativeLaunchForgetter); ok && len(settled) > 0 {

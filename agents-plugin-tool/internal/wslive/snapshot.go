@@ -193,6 +193,14 @@ type Snapshot struct {
 	// command entry, in the host's own order (a commands event); absent
 	// when the adapter reports none, and then the page sends it no command.
 	Commands []SlashCommand `json:"commands,omitempty"`
+	// HolderID and HolderSeq are what a daemon's recovery file covers: the
+	// state it shows applied every record of holder HolderID through
+	// HolderSeq. A rejoin's replay tells by them whether a row the file
+	// lacks was evicted (its start covered) or started after the write.
+	// Absent without a holder and from a writer that predates them; readers
+	// that know no such member ignore them.
+	HolderID  string `json:"holderId,omitempty"`
+	HolderSeq uint64 `json:"holderSeq,omitempty"`
 }
 
 // Command list caps.

@@ -71,6 +71,9 @@ func parseSnapshot(raw []byte) (parsedSnapshot, error) {
 	var doc map[string]any
 	if json.Unmarshal(raw, &doc) == nil {
 		delete(doc, "updatedAt")
+		// The covered holder record only moves with the writer's input.
+		delete(doc, "holderId")
+		delete(doc, "holderSeq")
 		p.canonical, _ = json.Marshal(doc)
 		p.docOK = true
 	}

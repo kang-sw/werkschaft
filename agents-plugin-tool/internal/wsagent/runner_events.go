@@ -16,6 +16,7 @@ import (
 
 func (c *conv) handle(ev Event) {
 	quiet := ev.Replay
+	c.eventSeq = ev.Seq
 	if ev.Seq > 0 && !ev.Replay {
 		c.lineOpen = ev.Seq
 		if ev.LineEnd {
@@ -863,15 +864,13 @@ func (c *conv) processEnded() {
 	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
 	c.retry, c.alerted = nil, false
 	c.syncHost(true)
-	// A replay the process's end cut short still drops the agy native rows
-	// it rebuilt that retention had evicted, and settles the rows a live
-	// turn end accepted during it, before endAgents fails the rest.
-	rows, deferred := c.agyNativeReplay, c.agyNativeDeferred
-	c.agyNativeDeferred, c.agyNativeReplay = nil, agyNativeReplayRows{}
-	if len(rows.created) > 0 {
-		c.dropAgyNativeRebuilt(rows, c.live.takeRestored())
+	// A replay the process's end cut short still resolves what it staged of
+	// agy native rows (dropping the rows retention had evicted, settling the
+	// rows a live turn end accepted during it), before endAgents fails the
+	// rest.
+	if len(c.agyNativeReplay.staged) > 0 || c.replaying {
+		c.resolveAgyNativeReplay()
 	}
-	c.settleAgyNative(deferred)
 	c.live.endAgents()
 	c.live.writeSnapshot()
 	if !c.closed && !c.quitting && !hadTurn && !hadBackgroundTasks && !hadBgGrace {

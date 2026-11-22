@@ -392,7 +392,7 @@ func TestAgyNativeRowsSettleOnceReplayCompletes(t *testing.T) {
 		quiet(Event{TurnStart: true})
 		quiet(Event{TurnEnd: true})
 		quiet(Event{TurnEnd: true, TurnReason: wslive.TurnAborted})
-		if a, _ := snapAgent(c.live.st.Snapshot(time.Now().UnixMilli()), row); a.Status != wslive.StatusRunning {
+		if a, ok := snapAgent(c.live.st.Snapshot(time.Now().UnixMilli()), row); ok && a.Status != wslive.StatusRunning {
 			t.Errorf("a replayed turn end settled the row: %+v", a)
 		}
 		c.handle(Event{ReplayDone: true})
@@ -441,7 +441,7 @@ func TestAgyNativeRowsWaitForReplayInCatchUp(t *testing.T) {
 		after := c.r.opts.Now().UnixMilli()
 		snap := c.live.st.Snapshot(after)
 		for _, row := range []string{failing, open} {
-			if a, _ := snapAgent(snap, row); a.Status != wslive.StatusRunning {
+			if a, ok := snapAgent(snap, row); ok && a.Status != wslive.StatusRunning {
 				t.Errorf("a live turn end during the replay settled %s: %+v", row, a)
 			}
 		}
@@ -763,14 +763,15 @@ func TestLiveWriterRestoresAgyNativeRows(t *testing.T) {
 		return dir
 	}
 	running, done := wslive.NativeAgyPrefix+"running", wslive.NativeAgyPrefix+"done"
-	snap := wslive.Snapshot{ReplyID: wsmailbox.ReplyID("key"), UpdatedAt: 42_000, Agents: []wslive.Agent{
+	snap := wslive.Snapshot{ReplyID: wsmailbox.ReplyID("key"), UpdatedAt: 42_000, HolderID: "holder-1", HolderSeq: 17, Agents: []wslive.Agent{
 		{ID: running, Status: wslive.StatusRunning, StartedAt: 1},
 		{ID: done, Status: wslive.StatusDone, StartedAt: 1, EndedAt: 2},
 		{ID: wslive.NativeCodexPrefix + "other", Status: wslive.StatusRunning, StartedAt: 1},
 	}}
 	w := newLiveWriter(write(snap), "key", "agy", now, io.Discard)
 	got := w.takeRestored()
-	want := restoredAgyNative{readable: true, updatedAt: 42_000, listed: map[string]bool{running: true, done: true}, running: map[string]bool{running: true}}
+	want := restoredAgyNative{readable: true, updatedAt: 42_000, listed: map[string]bool{running: true, done: true}, running: map[string]wslive.Agent{running: snap.Agents[0]},
+		holderID: "holder-1", coveredSeq: 17}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("restored = %+v, want %+v", got, want)
 	}
@@ -780,5 +781,186 @@ func TestLiveWriterRestoresAgyNativeRows(t *testing.T) {
 	snap.ReplyID = "another"
 	if newLiveWriter(write(snap), "key", "agy", now, io.Discard).takeRestored().readable {
 		t.Fatal("another session's snapshot reads as readable")
+	}
+}
+
+// agyReplayConv starts an agy conversation for a replay test and returns it
+// with the holder its record names (set to one when the harness has none).
+func agyReplayConv(t *testing.T) (*conv, string) {
+	t.Helper()
+	previous := suiteBackend
+	suiteBackend = BackendAgy
+	t.Cleanup(func() { suiteBackend = previous })
+	h := newHarness(t, map[string]string{"chat": chatProfile})
+	id := h.create("chat").ID
+	if _, err := h.runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	p := h.backend.waitProc(t, 0)
+	p.nextSent(t)
+	c := h.runner.conv(id)
+	var holder string
+	c.do(func() {
+		c.mu.Lock()
+		if c.rec.HolderID == "" {
+			c.rec.HolderID = "holder-replay"
+		}
+		holder = c.rec.HolderID
+		c.mu.Unlock()
+	})
+	return c, holder
+}
+
+// seqEvent is ev from holder record seq, replayed (quiet) or not.
+func seqEvent(ev Event, seq uint64, quiet bool) Event {
+	ev.Seq, ev.Replay = seq, quiet
+	return ev
+}
+
+// TestAgyNativeReplayStagesRebuiltFailureOutsideRetention: five saved
+// terminal rows fill the finished cap. The replay rebuilds an older row
+// retention evicted, from a quiet start and a quiet launch failure stamped
+// with the replay's clock. Staged outside retention, that row is dropped
+// before it can rank ahead of a saved row, so all five saved rows remain
+// with their stored values.
+func TestAgyNativeReplayStagesRebuiltFailureOutsideRetention(t *testing.T) {
+	c, holder := agyReplayConv(t)
+	launch := func(i int) string { return wslive.NativeAgyPrefix + "launch-" + strconv.Itoa(i) }
+	c.do(func() {
+		base := time.Now().Add(-time.Hour).UnixMilli()
+		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: base + 7*60_000, HolderID: holder, HolderSeq: 20}
+		for i := 2; i <= 6; i++ {
+			at := base + int64(i)*60_000
+			restored.Agents = append(restored.Agents, wslive.Agent{ID: launch(i), Label: "research", Status: wslive.StatusDone,
+				StartedAt: at - 30_000, EndedAt: at, EndUnknown: true, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: at}})
+		}
+		c.live.st.SeedFinished(restored)
+		c.live.restored = restoredAgyNativeOf(restored, restored.ReplyID)
+		c.replaying = true
+		c.handle(seqEvent(nativeRowEvent(launch(1), "research", wslive.StatusRunning), 3, true))
+		c.handle(seqEvent(nativeRowEvent(launch(1), "", wslive.StatusFailed), 4, true))
+		if c.live.st.HasAgent(launch(1)) {
+			t.Error("a replayed row reached the state before the replay ended")
+		}
+		c.handle(Event{ReplayDone: true})
+		snap := c.live.st.Snapshot(time.Now().UnixMilli())
+		for _, want := range restored.Agents {
+			got, ok := snapAgent(snap, want.ID)
+			if !ok {
+				t.Errorf("saved row %s was evicted by the rebuilt failure", want.ID)
+				continue
+			}
+			if got.Status != want.Status || got.StartedAt != want.StartedAt || got.EndedAt != want.EndedAt || !got.EndUnknown {
+				t.Errorf("saved row %s = %+v, want its stored values %+v", want.ID, got, want)
+			}
+		}
+		if a, ok := snapAgent(snap, launch(1)); ok {
+			t.Errorf("the evicted row came back: %+v", a)
+		}
+	})
+}
+
+// TestAgyNativeReplayKeepsCatchUpFailureOfRunningRow: a row the restored
+// snapshot lists running, whose launch failure arrives past the holder's
+// sequence mark during the replay, ends failed at that record's time.
+func TestAgyNativeReplayKeepsCatchUpFailureOfRunningRow(t *testing.T) {
+	c, holder := agyReplayConv(t)
+	row := wslive.NativeAgyPrefix + "listed-running"
+	c.do(func() {
+		updatedAt := time.Now().Add(-time.Minute).UnixMilli()
+		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: updatedAt, HolderID: holder, HolderSeq: 20, Agents: []wslive.Agent{
+			{ID: row, Label: "research", Status: wslive.StatusRunning, StartedAt: updatedAt - 10_000},
+		}}
+		c.live.restored = restoredAgyNativeOf(restored, restored.ReplyID)
+		c.replaying = true
+		c.handle(seqEvent(nativeRowEvent(row, "research", wslive.StatusRunning), 5, true))
+		failedAt := c.r.opts.Now().UnixMilli() - 3
+		c.handle(seqEvent(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: row, Status: wslive.StatusFailed, At: failedAt}}, 25, false))
+		c.handle(Event{ReplayDone: true})
+		a, ok := snapAgent(c.live.st.Snapshot(c.r.opts.Now().UnixMilli()), row)
+		if !ok || a.Status != wslive.StatusFailed || a.EndUnknown || a.EndedAt != failedAt {
+			t.Fatalf("row = %+v (present %v), want failed at %d", a, ok, failedAt)
+		}
+	})
+}
+
+// TestAgyNativeReplayHonorsSnapshotCoverage: the restored snapshot covers
+// holder records through 10. A rebuilt row it lacks whose start is at or
+// below 10 was evicted and is dropped; one started after 10 (still at or
+// below the saved holder mark, so quiet) survives, closed by the terminal
+// record that followed it or else end-unknown at the replay's end. A row the
+// snapshot lists running whose start left the ring is seeded from the
+// snapshot and closes end-unknown at the snapshot's write time.
+func TestAgyNativeReplayHonorsSnapshotCoverage(t *testing.T) {
+	c, holder := agyReplayConv(t)
+	historical, after, afterFailed, wrapped, saved := wslive.NativeAgyPrefix+"historical", wslive.NativeAgyPrefix+"after", wslive.NativeAgyPrefix+"after-failed", wslive.NativeAgyPrefix+"wrapped", wslive.NativeAgyPrefix+"saved"
+	c.do(func() {
+		updatedAt := time.Now().Add(-time.Minute).UnixMilli()
+		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: updatedAt, HolderID: holder, HolderSeq: 10, Agents: []wslive.Agent{
+			{ID: saved, Label: "saved", Status: wslive.StatusDone, StartedAt: updatedAt - 50_000, EndedAt: updatedAt - 40_000, EndUnknown: true},
+			{ID: wrapped, Label: "wrapped-label", Status: wslive.StatusRunning, StartedAt: updatedAt - 20_000},
+		}}
+		c.live.st.SeedFinished(restored)
+		c.live.restored = restoredAgyNativeOf(restored, restored.ReplyID)
+		c.replaying = true
+		c.handle(seqEvent(nativeRowEvent(historical, "old", wslive.StatusRunning), 5, true))
+		c.handle(seqEvent(nativeRowEvent(after, "new", wslive.StatusRunning), 12, true))
+		c.handle(seqEvent(nativeRowEvent(afterFailed, "new-failed", wslive.StatusRunning), 13, true))
+		c.handle(seqEvent(nativeRowEvent(afterFailed, "", wslive.StatusFailed), 14, true))
+		before := c.r.opts.Now().UnixMilli()
+		c.handle(Event{ReplayDone: true})
+		end := c.r.opts.Now().UnixMilli()
+		snap := c.live.st.Snapshot(end)
+		if a, ok := snapAgent(snap, historical); ok {
+			t.Errorf("a covered historical start came back: %+v", a)
+		}
+		if a, ok := snapAgent(snap, after); !ok || a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt < before || a.EndedAt > end {
+			t.Errorf("row started after the coverage = %+v (present %v), want end-unknown at the replay end (%d..%d)", a, ok, before, end)
+		}
+		if a, ok := snapAgent(snap, afterFailed); !ok || a.Status != wslive.StatusFailed || a.EndUnknown {
+			t.Errorf("row started after the coverage with a failure = %+v (present %v), want failed", a, ok)
+		}
+		if a, ok := snapAgent(snap, wrapped); !ok || a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt != updatedAt || a.StartedAt != updatedAt-20_000 || a.Label != "wrapped-label" {
+			t.Errorf("snapshot-running row with a wrapped start = %+v (present %v), want end-unknown at %d from its stored start", a, ok, updatedAt)
+		}
+		if a, ok := snapAgent(snap, saved); !ok || a.EndedAt != updatedAt-40_000 {
+			t.Errorf("saved row = %+v (present %v), want its stored values", a, ok)
+		}
+	})
+}
+
+// TestSnapshotRecordsHolderCoverage: the recovery file names the holder
+// records the state applied; while a replay runs it keeps the coverage of
+// the snapshot the state was restored from.
+func TestSnapshotRecordsHolderCoverage(t *testing.T) {
+	now := time.Unix(1000, 0)
+	dir := filepath.Join(t.TempDir(), "coverage")
+	r := NewRunner(Options{Dir: dir, Now: func() time.Time { return now }, Log: io.Discard})
+	c := &conv{r: r, dir: dir, rec: Record{ReplyID: "coverage", WSKey: "key", Root: dir, HolderID: "holder-now"}, seq: 9}
+	c.live = newLiveWriter(dir, "key", "agy", r.opts.Now, io.Discard)
+	c.live.coverage = c.snapshotCoverage
+	c.live.restored = restoredAgyNative{readable: true, holderID: "holder-then", coveredSeq: 3}
+	read := func() wslive.Snapshot {
+		t.Helper()
+		snap, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snap
+	}
+	c.replaying = true
+	c.live.forceSnapshot()
+	if snap := read(); snap.HolderID != "holder-then" || snap.HolderSeq != 3 {
+		t.Fatalf("coverage during the replay = %q/%d, want holder-then/3", snap.HolderID, snap.HolderSeq)
+	}
+	c.replaying = false
+	c.live.forceSnapshot()
+	if snap := read(); snap.HolderID != "holder-now" || snap.HolderSeq != 9 {
+		t.Fatalf("coverage after the replay = %q/%d, want holder-now/9", snap.HolderID, snap.HolderSeq)
+	}
+	c.rec.HolderID = ""
+	c.live.forceSnapshot()
+	if snap := read(); snap.HolderID != "" || snap.HolderSeq != 0 {
+		t.Fatalf("coverage without a holder = %q/%d, want none", snap.HolderID, snap.HolderSeq)
 	}
 }

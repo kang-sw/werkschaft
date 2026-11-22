@@ -447,16 +447,39 @@ type liveWriter struct {
 	// restored is what the snapshot an earlier daemon left says of agy
 	// native rows, for the first replay to end (takeRestored).
 	restored restoredAgyNative
+	// coverage names the holder records the state applied, written into the
+	// recovery file (wslive.Snapshot.HolderID, HolderSeq); unset writes none.
+	coverage func() (holderID string, seq uint64)
 }
 
 // restoredAgyNative is what a restored snapshot says of agy native rows: the
-// rows it lists (any status), those it lists running, and its write time.
-// readable is false when no snapshot of this session could be read.
+// rows it lists (any status), those it lists running (as listed), its write
+// time, and the holder records it covers (holderID, coveredSeq; empty from a
+// writer that predates them). readable is false when no snapshot of this
+// session could be read.
 type restoredAgyNative struct {
-	readable  bool
-	updatedAt int64
-	listed    map[string]bool
-	running   map[string]bool
+	readable   bool
+	updatedAt  int64
+	listed     map[string]bool
+	running    map[string]wslive.Agent
+	holderID   string
+	coveredSeq uint64
+}
+
+// evicted reports whether a row a replay rebuilt from records the previous
+// daemon applied alone, first seen at holder record startSeq of holderID,
+// was evicted by retention: the snapshot is readable and does not list it,
+// and its start is one the snapshot covers. Without the snapshot's coverage
+// (an older writer) an unlisted row counts as evicted. Coverage of another
+// holder covers none of this one's records.
+func (r restoredAgyNative) evicted(id, holderID string, startSeq uint64) bool {
+	if !r.readable || r.listed[id] {
+		return false
+	}
+	if r.holderID == "" || r.coveredSeq == 0 {
+		return true
+	}
+	return r.holderID == holderID && startSeq <= r.coveredSeq
 }
 
 // restoredAgyNativeOf reads prev, a snapshot of session replyID.
@@ -464,14 +487,15 @@ func restoredAgyNativeOf(prev wslive.Snapshot, replyID string) restoredAgyNative
 	if prev.ReplyID != replyID {
 		return restoredAgyNative{}
 	}
-	r := restoredAgyNative{readable: true, updatedAt: prev.UpdatedAt, listed: map[string]bool{}, running: map[string]bool{}}
+	r := restoredAgyNative{readable: true, updatedAt: prev.UpdatedAt, listed: map[string]bool{}, running: map[string]wslive.Agent{},
+		holderID: prev.HolderID, coveredSeq: prev.HolderSeq}
 	for _, a := range prev.Agents {
 		if !strings.HasPrefix(a.ID, wslive.NativeAgyPrefix) {
 			continue
 		}
 		r.listed[a.ID] = true
 		if a.Status == wslive.StatusRunning {
-			r.running[a.ID] = true
+			r.running[a.ID] = a
 		}
 	}
 	return r
@@ -759,6 +783,15 @@ func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
 	var raw []byte
 	if err == nil {
 		disk.UpdatedAt = snap.UpdatedAt
+		// The covered holder record is not part of content: a write the
+		// content skips keeps an older, smaller coverage, which only keeps
+		// more rebuilt rows on a rejoin.
+		if w.coverage != nil {
+			disk.HolderID, disk.HolderSeq = w.coverage()
+			if disk.HolderID == "" {
+				disk.HolderSeq = 0
+			}
+		}
 		raw, err = json.Marshal(disk)
 	}
 	if err == nil {

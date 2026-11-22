@@ -633,26 +633,6 @@ func (st *State) HasAgent(id string) bool {
 	return ok
 }
 
-// DropNativeAgents removes the prefixed native subagent rows (NativeAgentID)
-// among ids, as retention evicts a finished row: a later terminal event for
-// one does not bring it back. Other ids are left alone. It returns the ids it
-// removed, in the order given.
-func (st *State) DropNativeAgents(ids []string) []string {
-	var dropped []string
-	for _, id := range ids {
-		if _, ok := st.agents[id]; !ok || !NativeAgentID(id) {
-			continue
-		}
-		delete(st.agents, id)
-		st.evicted = append(st.evicted, id)
-		dropped = append(dropped, id)
-	}
-	if over := len(st.evicted) - evictedCap; over > 0 {
-		st.evicted = slices.Delete(st.evicted, 0, over)
-	}
-	return dropped
-}
-
 // RunningAgents lists the running subagents whose id starts with prefix, in
 // id order.
 func (st *State) RunningAgents(prefix string) []string {
