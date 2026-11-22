@@ -84,9 +84,21 @@ Owner decisions (1514)–(1517) were settled on 2026-11-22 at 10:52–10:54 KST.
   `reference-discovery`, and ticket selection to `explore`. Assign
   `implementer`, `ticket-worker`, `ticket-handler`, and `ship-handler`
   to `implement`. Assign code, ticket, and document reviewers and
-  `review-handler` to `review`. The three middle roles are built-in and
-  fixed. Phase 3 applies the rule to the full playbook inventory and keeps
-  each existing size.
+  `review-handler` to `review`. Phase 3 applies the rule to the full
+  playbook inventory and keeps each existing size.
+- **Owner (1523), (1525)=ok, no fixed layers.** `explore`, `implement`,
+  and `review` are built-in default parent nodes, not a fixed layer. Every
+  tier name (playbook role, built-in group, user-defined name, bare size,
+  terminal target, named bundle) is a node with one default pointer, plus
+  optional per-size exceptions, so the routing is a DAG. User config only
+  re-points edges at any node, for example `ticket-worker:*=review:*`
+  moves one playbook under another group. A node with no pointer of its
+  own falls through `*` to the bare size, which resolves to that slot
+  (`small`, `medium`, `large`, `xlarge`) on the caller's harness; the owner
+  confirmed this terminal fallback (1525). The config UI lays the graph
+  out procedurally from the pointers (depth = hops to a terminal), with no
+  fixed columns. This supersedes the earlier "three middle roles are
+  built-in and fixed" wording of (1515).
 - **Owner (2026-11-19), authority.** A tier supplies harness, model, and
   effort only. Authority stays with the required spawn argument and the
   dashboard permission choice. The caller supplies the prompt separately.
@@ -180,8 +192,12 @@ legacy alias collisions, explicit targets, and older config writes.
 After Phase 1, add the named-tier picker. Verify that selection fills the
 launch fields, manual edits switch back to manual selection, and the
 permission flow remains independent. The tier configuration UI belongs
-in the lead-tune/config settings surface. The owner plans to request a
-mockup from the UI/UX session once the concept is fixed.
+in the lead-tune/config settings surface. Visual reference (owner
+(1525)=ok): `ai-docs/assets/mockups/261122/role-tier-routing/mockup-v3-dag.html`,
+a procedural pointer DAG with click-to-edit modals and inline cycle and
+hop-limit refusal; `mockup.html` (v1) and `mockup-v2-skilltree.html` (v2,
+fixed columns) are superseded. The owner noted the mockup does not make
+the caller-harness fallthrough identifiable; the real UI should show it.
 
 ### Phase 3: Playbook frontmatter migration
 
