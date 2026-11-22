@@ -137,12 +137,14 @@ type composerSub struct {
 	job   ComposerJob
 	// err is a refusal or a failed start's reason.
 	err string
-	// finalized: the result was classified (inline text or file) once.
-	finalized bool
-	inline    string
-	replaced  bool
-	file      string // the output file's path once it exists
-	fileErr   string
+	// finalizing: a goroutine is classifying the ended job (and writing its
+	// output file) outside mu; finalized: the result was classified once.
+	finalizing bool
+	finalized  bool
+	inline     string
+	replaced   bool
+	file       string // the output file's path once it exists
+	fileErr    string
 	// handed: the receipt went to the lead's pending input.
 	handed bool
 }
@@ -343,18 +345,25 @@ func (d *Daemon) composerClaim(replyID, id, line string) (*composerSub, bool) {
 	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running"}
 	c.subs[key] = sub
 	c.order[replyID] = append(c.order[replyID], key)
-	// Keep the newest cards; an unfinished one is never dropped.
+	// Keep the newest cards; an unfinished one is never dropped, and one
+	// that is still active does not hold the finished ones behind it.
 	for len(c.order[replyID]) > composerKeepCards {
-		oldest := c.order[replyID][0]
-		old := c.subs[oldest]
-		old.mu.Lock()
-		active := old.phase == "running" || (old.phase == "async" && !old.finalized)
-		old.mu.Unlock()
-		if active {
+		drop := -1
+		for i, key := range c.order[replyID][:len(c.order[replyID])-composerKeepCards] {
+			old := c.subs[key]
+			old.mu.Lock()
+			active := old.phase == "running" || old.finalizing || (old.phase == "async" && !old.finalized)
+			old.mu.Unlock()
+			if !active {
+				drop = i
+				break
+			}
+		}
+		if drop < 0 {
 			break
 		}
-		delete(c.subs, oldest)
-		c.order[replyID] = c.order[replyID][1:]
+		delete(c.subs, c.order[replyID][drop])
+		c.order[replyID] = append(c.order[replyID][:drop:drop], c.order[replyID][drop+1:]...)
 	}
 	return sub, true
 }
@@ -380,14 +389,16 @@ func (d *Daemon) composerRun(svc ComposerExecService, sub *composerSub) {
 	if err != nil {
 		sub.err = composerErrorText(err)
 	}
-	switch {
-	case job.Terminal():
-		sub.phase = "done"
-		d.composerFinalizeLocked(sub, true, svc)
-	default:
+	if !job.Terminal() {
 		sub.phase, sub.job.Async = "async", true
+		sub.mu.Unlock()
+		return
 	}
+	sub.finalizing = true
 	sub.mu.Unlock()
+	// This is the submission's own goroutine; polls of the card do not wait
+	// for the file write (the card reads as running until it lands).
+	d.composerFinalize(sub, job, true, svc)
 }
 
 func composerErrorText(err error) string {
@@ -397,49 +408,71 @@ func composerErrorText(err error) string {
 	return strings.TrimPrefix(err.Error(), "exec: ")
 }
 
-// composerFinalizeLocked classifies a terminal job's retained output once:
-// 4096 raw combined bytes or fewer inline, more as a private file. hand
-// sends the receipt to the lead (a run that ended inside its window; an
-// async job's end is the ordinary exec notice's). sub.mu is held.
-func (d *Daemon) composerFinalizeLocked(sub *composerSub, hand bool, svc ComposerExecService) {
-	if sub.finalized {
-		return
-	}
-	job := sub.job
-	sub.finalized = true
+// composerFinalize classifies an ended job's retained output once: 4096 raw
+// combined bytes or fewer inline, more as a private file. The file write runs
+// here, with no lock held, so a card poll or another submission never waits
+// on it; the result is then applied under sub.mu. hand sends the receipt to
+// the lead (a run that ended inside its window; an async job's end is the
+// ordinary exec notice's). sub.finalizing was set by the caller.
+func (d *Daemon) composerFinalize(sub *composerSub, job ComposerJob, hand bool, svc ComposerExecService) {
+	var inline, file, fileErr string
+	var replaced bool
+	start := job.Start
 	// The count is the raw combined bytes the job wrote, never a decoded or
 	// tail length.
 	if job.Written <= ComposerInlineMax {
-		text, replaced := decodeComposerText(job.Output)
-		sub.inline, sub.replaced = text, replaced
+		inline, replaced = decodeComposerText(job.Output)
+	} else if len(job.Output) == 0 {
+		// The retained output could not be read back: no empty file stands in
+		// for it.
+		fileErr = "the output is no longer retained"
 	} else {
 		data := job.Output
 		if len(data) > composerFileMax {
 			data = data[len(data)-composerFileMax:]
-			sub.job.Start += int64(len(job.Output) - len(data))
+			start += int64(len(job.Output) - len(data))
 		}
-		text, replaced := decodeComposerText(data)
-		sub.replaced = replaced
+		var text string
+		text, replaced = decodeComposerText(data)
 		path, err := d.composerWriteFile(sub.reply, sub.id, []byte(text))
 		if err != nil {
-			sub.fileErr = "the output file could not be written: " + err.Error()
+			fileErr = "the output file could not be written: " + err.Error()
 			// The card still shows the tail, as the exec result does.
 			tail := job.Output
 			if len(tail) > ComposerInlineMax {
 				tail = tail[len(tail)-ComposerInlineMax:]
 			}
-			sub.inline, _ = decodeComposerText(tail)
+			inline, _ = decodeComposerText(tail)
 		} else {
-			sub.file = path
+			file = path
 		}
 	}
-	if hand && !sub.handed {
-		if err := svc.Hand(sub.reply, sub.job.Gen, sub.job.ExecID, composerReceipt(sub)); err != nil {
-			fmt.Fprintf(d.log, "dashboard: composer result for %s not handed: %v\n", sub.reply, err)
-		} else {
-			sub.handed = true
-		}
+	sub.mu.Lock()
+	if sub.finalized {
+		sub.mu.Unlock()
+		return
 	}
+	async := sub.job.Async
+	sub.job = job
+	sub.job.Async, sub.job.Start = async, start
+	sub.inline, sub.replaced, sub.file, sub.fileErr = inline, replaced, file, fileErr
+	sub.phase, sub.finalized, sub.finalizing = "done", true, false
+	receipt, doHand := "", hand && !sub.handed
+	if doHand {
+		receipt = composerReceipt(sub)
+	}
+	execID, gen := sub.job.ExecID, sub.job.Gen
+	sub.mu.Unlock()
+	if !doHand {
+		return
+	}
+	if err := svc.Hand(sub.reply, gen, execID, receipt); err != nil {
+		fmt.Fprintf(d.log, "dashboard: composer result for %s not handed: %v\n", sub.reply, err)
+		return
+	}
+	sub.mu.Lock()
+	sub.handed = true
+	sub.mu.Unlock()
 }
 
 // decodeComposerText decodes output bytes for display, each invalid UTF-8
@@ -506,7 +539,7 @@ func composerEnd(job ComposerJob) string {
 func (d *Daemon) composerRefresh(svc ComposerExecService, sub *composerSub) {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
-	if sub.phase != "async" || sub.finalized || sub.job.ExecID == "" {
+	if sub.phase != "async" || sub.finalized || sub.finalizing || sub.job.ExecID == "" {
 		return
 	}
 	job, err := svc.Job(sub.reply, sub.job.ExecID)
@@ -516,12 +549,14 @@ func (d *Daemon) composerRefresh(svc ComposerExecService, sub *composerSub) {
 	}
 	sub.err = ""
 	job.Async = true
-	sub.job = job
-	if job.Terminal() {
-		sub.phase = "done"
-		sub.job.Async = true
-		d.composerFinalizeLocked(sub, false, svc)
+	if !job.Terminal() {
+		sub.job = job
+		return
 	}
+	// The file write happens off this request, outside every lock; the card
+	// keeps reading as running until the result lands.
+	sub.finalizing = true
+	go d.composerFinalize(sub, job, false, svc)
 }
 
 func (d *Daemon) composerShow(w http.ResponseWriter, svc ComposerExecService, replyID, id string) {

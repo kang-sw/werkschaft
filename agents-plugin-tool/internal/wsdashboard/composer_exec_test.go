@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -574,5 +575,31 @@ func TestComposerLaunchSurvivesTheClosedTab(t *testing.T) {
 	card := waitCard(t, f.d, "sub-tab-00001", "done")
 	if card.ExecID != "exec_tab" {
 		t.Fatalf("card = %+v", card)
+	}
+}
+
+// TestComposerClaimEvictsFinishedCardsBehindAnActiveOne: an active card is
+// never dropped, and it does not make the finished ones behind it pile up.
+func TestComposerClaimEvictsFinishedCardsBehindAnActiveOne(t *testing.T) {
+	f := startComposerFixture(t)
+	first, _ := f.d.composerClaim("livesession", "claim-active-0", "!sleep 60")
+	for i := 1; i < composerKeepCards+5; i++ {
+		sub, fresh := f.d.composerClaim("livesession", fmt.Sprintf("claim-done-%02d", i), "!true")
+		if !fresh {
+			t.Fatalf("claim %d was not fresh", i)
+		}
+		sub.mu.Lock()
+		sub.phase, sub.finalized = "done", true
+		sub.mu.Unlock()
+	}
+	c := &f.d.composer
+	c.mu.Lock()
+	n, kept := len(c.order["livesession"]), c.subs["livesession\x00claim-active-0"]
+	c.mu.Unlock()
+	if kept != first {
+		t.Fatal("the active card was dropped")
+	}
+	if n > composerKeepCards+1 {
+		t.Fatalf("%d cards kept behind one active card, want at most %d", n, composerKeepCards+1)
 	}
 }
