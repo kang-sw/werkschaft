@@ -366,6 +366,77 @@ session paths, downgrade rejoin, and process behavior with directional writer,
 reader, and reopen evidence. Split any newly found T1+ behavior into its own
 ticket.
 
+### Result (5e35d071a) - 2026-11-23
+
+- **VERIFIED - implementation.** `BackendRegistration` gains two in-memory
+  policy blocks (`internal/wsagent/backend_policy.go`, `registration.go`).
+  `PermissionPolicy` carries the native mode names, the legacy mode map and
+  default, and the live-mode projection flag. `LifecyclePolicy` carries
+  native children, terminal summaries, composed lead instructions, lead
+  HTTP MCP, the lead stdio fallback, usage restore, and turn activity.
+  Executable differences are narrow optional interfaces on the `Backend`
+  instance: `terminalSession` (resume command, session check, adoption) and
+  `nativeModeAdmitter` (Agy bypass admission). They live in the adapter
+  files `{claude,codex,agy,pi}_policy.go`. Common code in `permission.go`,
+  `exec_seams.go`, `runner_{conv,state,create,events,startup,operations,
+  process,lead_start,reattach,summary}.go`, `agent_tools.go`, `children.go`,
+  `spawn.go`, and `handoff.go` now reads that data and no longer compares
+  harness names at those sites. `restoredClaudeUsage` became the unexported
+  `restoredUsage`, gated on `RestoreUsage`.
+- **VERIFIED - parity.** `TestBuiltinBackendPolicyTable` pins every policy
+  value and interface for the four built-ins with literal expectations.
+  `TestRegisteredPolicyDrivesCommonCode` shows that a fixture backend with
+  a declared policy drives common code, and that a built-in name registered
+  without a declaration gets no behavior, so a new backend needs no common
+  edit. `TestNativeModeAdmission`, `TestTerminalSessionAdoption`, and
+  `TestBuiltinRegistrationPolicyIsNotShared` cover admission, takeover and
+  handoff adoption, and clone isolation. Test fixtures that stand a fake
+  process behind a built-in name now declare that name's policy.
+- **VERIFIED - T0.** The policy types have no JSON tags and are not written
+  to a `Profile`, `Record`, holder file, or config, so reader, writer, and
+  reopen bytes are unchanged in both directions. The only symbol rename is
+  unexported. Holder kind `pi-worker` and `PiTierHarness` stay name-based
+  because they are persisted bytes, each annotated at its site (1881) and
+  the holder one pinned by `TestWorkerHolderOwnership`.
+- **VERIFIED - file operations.** The new lookups are in-memory map reads
+  on the registration. Source inspection found no added file operation on
+  start, settlement, restart, rejoin, or handoff paths. No syscall trace
+  was collected.
+- **Decision.** A name with no registration, or a registration without
+  `terminalSession`, now gets the generic "not supported" takeover/handoff
+  refusal. A registered Codex gets the identical text as before. For an
+  extension backend with a lead profile and no `terminalSession`, handoff
+  now returns the 400 class where it previously returned 409 "no
+  conversation to resume"; no built-in is affected.
+- **Deferred to Phase 4's inventory refresh.** `compaction.go` Pi/Claude
+  branches, `exec_cutover.go` Codex/Claude branches, the Agy helpers in
+  `record.go` and `agy_bypass.go`, `newAgyLog` in `runner_lead_start.go`,
+  `heldAgyWorker` and `agyInternalPrompt` in `runner_process.go`, the shim
+  remedy `"claude"` in `backend.go`, and the Pi legacy permission modes in
+  `registration.go` (kept from Phase 1).
+
+**VERIFIED - local checks.** Run from `agents-plugin-tool/` after merging
+develop (`4b52213c3`) into the branch:
+
+```sh
+go build ./...
+go vet ./internal/wsagent ./internal/mcp ./cmd/...
+GOOS=windows go vet ./internal/wsagent ./internal/mcp ./cmd/...
+go test ./internal/wsagent -count=1
+go test ./internal/wsdashboard
+go test ./internal/mcp -count=1 -timeout 45m
+go test ./cmd/ws-mcp
+```
+
+`internal/wsagent` and `internal/mcp` ran again after the develop merge;
+`internal/wsdashboard` and `cmd/ws-mcp` ran on the pre-merge commit and
+were not rerun after it. `internal/wsagent` and `internal/wsdashboard`
+passed. In `internal/mcp` and `cmd/ws-mcp`, only tests that need the gitignored
+`generated/inventory.json` (the dashboard catalog and tier-routing views)
+and the hosted launcher asset test failed. They fail in this checkout for
+that missing-asset reason, which is environmental. No race run was done in
+this phase.
+
 ### Phase 3: Migrate MCP detection, prompt terminology, and dashboard consumers
 
 Move reusable connection/prompt capabilities behind the registered descriptor
