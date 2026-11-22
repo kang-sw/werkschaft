@@ -616,3 +616,90 @@ test('a choices re-read never changes the fields on its own: manual off-catalog 
   start.events.click({ target: start });
   assert.equal(posts.length, 0, 'nothing is launched on another harness');
 });
+
+// A refreshed catalog with an empty model or effort list while the harness
+// stays available (an absent or unreadable model cache after its TTL): the
+// value the form holds stays an enabled option and is sent; with no value
+// held the row keeps today's default.
+for (const field of ['model', 'effort']) {
+  test(`an empty ${field} list on an available harness keeps the shown ${field} enabled and sends it`, () => {
+    class Element {
+      constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+      appendChild(c) { this.children.push(c); return c; }
+      insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+      set textContent(v) { this.children = []; this.text = v; }
+      get textContent() { return this.text || ''; }
+      set value(v) { this._value = v; }
+      get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+      setAttribute(k, v) { this.attrs[k] = v; }
+      getAttribute(k) { return this.attrs[k] || ''; }
+      addEventListener(k, f) { this.events[k] = f; }
+      focus() {}
+    }
+    const pending = [], posts = [];
+    const claude = { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto'], permission_levels: ['read-only'] };
+    const codex = { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] };
+    const hs = [claude, codex];
+    const empty = [claude, { ...codex, [field === 'model' ? 'models' : 'efforts']: [] }];
+    const tiers = [];
+    const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+      localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+      supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+      tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+      gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+      WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+    };
+    vm.createContext(c);
+    const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+    vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+    const p = c.rpLeadMake(), btn = new Element('button');
+    const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+    const find = (el, pred) => all(el, pred)[0];
+    const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+    const sel = field === 'model' ? model : effort;
+    const start = p.el.children.at(-1).children.at(-1);
+    const seg = find(p.el, e => e.attrs['aria-label'] === 'js.sup.harness');
+    const toCodex = () => seg.events.click({ target: { closest: () => find(seg, e => e.attrs['data-harness'] === 'codex') } });
+    const launch = (list) => {
+      start.events.click({ target: start });
+      if (pending.length) pending.shift()(200, list);
+      const sent = posts.shift();
+      return sent && sent.body;
+    };
+
+    // The repro: a picked model and effort, then a re-read whose list for
+    // this field is empty.
+    p.open('root', 'name', btn);
+    pending.shift()(200, { harnesses: hs, tiers });
+    toCodex();
+    model.value = 'gpt-5-mini'; model.events.change(model);
+    effort.value = 'low'; effort.events.change(effort);
+    p.permSync(true);
+    pending.shift()(200, { harnesses: empty, tiers });
+    assert.equal(p.harness, 'codex');
+    const shown = field === 'model' ? 'gpt-5-mini' : 'low';
+    assert.equal(sel.value, shown, `the ${field} stays shown`);
+    assert.ok(sel.children.some(o => o.value === shown), `it is an option`);
+    assert.equal(sel.disabled, false, `the ${field} select stays enabled`);
+    assert.equal(start.disabled, false);
+    p.level = 'read-only';
+    let body = launch({ harnesses: empty, tiers });
+    assert.ok(body, 'Start launched');
+    assert.equal(body.model, 'gpt-5-mini', 'the launch carries the shown model');
+    assert.equal(body.effort, 'low', 'the launch carries the shown effort');
+
+    // With no value held, an empty list keeps the default: the row stays
+    // off and nothing is sent for it.
+    p.open('root', 'name', btn);
+    pending.shift()(200, { harnesses: hs, tiers });
+    toCodex();
+    assert.equal(sel.value, '');
+    p.permSync(true);
+    pending.shift()(200, { harnesses: empty, tiers });
+    assert.equal(sel.disabled, true, `an empty ${field} list with no pick stays disabled`);
+    p.level = 'read-only';
+    body = launch({ harnesses: empty, tiers });
+    assert.ok(body, 'Start launched');
+    assert.equal(body[field], '');
+  });
+}

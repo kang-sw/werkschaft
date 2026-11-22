@@ -382,8 +382,11 @@
   // control right); changed(select) runs on a pick. With adv (the advanced
   // disclosure) inline(false) moves the native mode row there; own(mode,
   // note) shows the mode a permission level decides, the row then fixed,
-  // and free() is the user's own native pick either way.
-  function leadRows(box, changed, adv) {
+  // and free() is the user's own native pick either way. With keep (the
+  // spawn popover) a model or effort the form holds stays a real, enabled
+  // option on an available harness even when the catalog lists none, so
+  // the shown value is the one sent.
+  function leadRows(box, changed, adv, keep) {
     var R = {}, own = "", ownNote = "", free = "", extra = "", inline = true, busyNow = false, cur = { harness: "", active: "", modes: [] };
     function row(label, cls) {
       var r = box.appendChild(mk("div", "sprc")), l = r.appendChild(mk("label", null, label)), s = r.appendChild(mk("select", "spsm" + (cls ? " " + cls : "")));
@@ -447,8 +450,8 @@
       R.disable = function (busy) {
         var unavailable = !!h && (h.lead === true ? h.available !== true : h.available === false);
         busyNow = !!busy;
-        m.sel.disabled = busy || unavailable || !models.length;
-        e.sel.disabled = busy || unavailable || !efforts.length;
+        m.sel.disabled = busy || unavailable || (!models.length && !(keep && v.model));
+        e.sel.disabled = busy || unavailable || (!efforts.length && !(keep && v.effort));
         p.sel.disabled = busy || unavailable || !modes.length || !!own;
       };
       R.disable(false);
@@ -546,7 +549,7 @@
     var opts = el.appendChild(mk("div", "spopts"));
     var adv = el.appendChild(mk("details", "pmadv")), advSum = adv.appendChild(mk("summary", null, wsT("js.perm.adv")));
     var advOwn = advSum.appendChild(mk("span", "pmown", wsT("js.perm.adv.owned")));
-    var rows = leadRows(opts, edited, adv);
+    var rows = leadRows(opts, edited, adv, true);
     // Plugin isolation: which plugins the hosted session loads. The pick goes
     // out as plugin_isolation; Pi's standalone binary supports only isolated.
     var isec = el.appendChild(mk("div", "spsec"));
