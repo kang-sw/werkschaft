@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 7a4ba24d92910c16
 sage-review-completeness-reviewed: 7a4ba24d92910c16
+completed: 2026-11-22
 ---
 
 # Tier pointers for playbook roles and named custom bundles
@@ -539,3 +540,8 @@ Verification, with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`:
 - `agents-plugin-pi` `npm test`: 27 failures, the identical set by name before and after the change (stash baseline at the Phase 1 head).
 
 Review (lite, one pass): clean, no findings.
+
+
+## Resolution (2026-11-22)
+
+All three phases landed on impl/develop/video-tidal-march: Phase 1 config and shared tier resolution (9e02d68f2..5bc67593c), Phase 3 playbook tier-role/tier-parent migration (..d2a967f67), Phase 2 dashboard tier routing DAG editor and new-session named-tier picker (d2a967f67..8f244aec6). The lead compared the Phase 2 graph capture with mockup-v3-dag.html: layout and interactions match, and the caller-harness fallthrough the owner asked for is drawn as its own terminal with a dashed edge and shown in the trace.
