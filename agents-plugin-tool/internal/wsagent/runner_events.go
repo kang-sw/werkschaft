@@ -865,13 +865,13 @@ func (c *conv) stopProcess(reason string) {
 	c.compactUsageFresh = false
 	c.stopCompactWatchdog()
 	c.stopIdle()
-	if c.leadOnlyRetiring {
-		// The retained process is a stream retirement already detached:
+	if c.retiringHolder() {
+		// The retained process is a stream a retirement already detached:
 		// closing it would end nothing, and releaseHolder would then forget
 		// a holder that still runs. Only the holder's own stop ends it; a
 		// failure keeps the holder, the error, and the heartbeat retry.
 		if hp, ok := c.proc.(holderProcess); ok {
-			c.retireLeadOnlyWorker(hp)
+			c.retryRetirement(hp)
 		}
 		return
 	}

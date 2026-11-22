@@ -89,7 +89,7 @@ func TestDowngradeRetirementPersistsSleepingWorker(t *testing.T) {
 }
 
 func TestDowngradeRetirementRetriesStop(t *testing.T) {
-	for _, outcome := range []string{"retry", "already gone", "queued mail"} {
+	for _, outcome := range []string{"retry", "already gone", "queued mail", "user stop"} {
 		t.Run(outcome, func(t *testing.T) { testDowngradeRetirement(t, outcome) })
 	}
 }
@@ -138,6 +138,36 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 				}
 			})
 		}
+		if stopError == "user stop" {
+			// A user's Stop while the retirement retries goes through the
+			// holder's own stop, never the detached stream's Close.
+			st, err := h.runner.Stop(worker.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 2 || !strings.Contains(st.Error, "fixture stop failure") {
+				t.Fatalf("the user's Stop did not retry the holder's stop: %v, error %q", h.holders.opList(), st.Error)
+			}
+			if rec := h.record(worker.ID); rec.HolderID != holder || !rec.TurnOpen || len(reports.list()) != 0 {
+				t.Fatal("a failed user Stop forgot the holder or published the child")
+			}
+			c.do(func() {
+				if !c.workerRetiring || !c.replaying || c.proc == nil {
+					t.Error("a failed user Stop disarmed the retirement retry")
+				}
+			})
+			c.do(c.heartbeat)
+			if h.holders.opCount("stop "+holder) != 3 {
+				t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+			}
+			h.holders.set(func() { h.holders.stopErr = nil })
+			if _, err := h.runner.Stop(worker.ID); err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 4 || h.record(worker.ID).HolderID != "" {
+				t.Fatalf("the succeeding user Stop did not retire the child: %v", h.holders.opList())
+			}
+		}
 		h.holders.set(func() { h.holders.stopErr = nil })
 		if stopError == "already gone" {
 			if err := h.holders.Stop(holder); err != nil {
@@ -168,7 +198,18 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 	}
 	assertSleeping()
 	wantStops := 1
-	if stopError != "" {
+	switch stopError {
+	case "":
+	case "user stop":
+		// Retired once: a later Stop or heartbeat stops nothing more.
+		if _, err := h.runner.Stop(worker.ID); err != nil {
+			t.Fatal(err)
+		}
+		c := h.runner.conv(worker.ID)
+		c.do(c.heartbeat)
+		assertSleeping()
+		wantStops = 4
+	default:
 		wantStops = 2
 	}
 	if h.holders.opCount("stop "+holder) != wantStops {

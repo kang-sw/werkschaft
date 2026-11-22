@@ -645,14 +645,9 @@ func (c *conv) checkReattach() {
 	if !ok {
 		return
 	}
-	if c.workerRetiring {
-		c.retireDowngradedWorker(hp)
-		c.leadOnlyRetired()
-		return
-	}
-	if c.leadOnlyRetiring {
+	if c.retiringHolder() {
 		// The ownership match passed before the first, failed stop.
-		c.retireLeadOnlyWorker(hp)
+		c.retryRetirement(hp)
 		return
 	}
 	id, _, _ := hp.HolderInfo()

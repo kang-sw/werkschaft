@@ -48,8 +48,8 @@ func (c *conv) restoreWorkerMCP() {
 //     association, publishes nothing, and says so. The conversation stays
 //     replaying (it submits nothing), and each heartbeat's checkReattach
 //     tries the stop again (leadOnlyRetiring), as a downgrade retirement
-//     does. Any stopProcess (a user's Stop) retries it here too, never
-//     through the detached stream's Close.
+//     does. Any stopProcess (a user's Stop) retries it too (retryRetirement),
+//     never through the detached stream's Close.
 func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
 	refusal := c.r.admitWorkerRecord(c.rec)
 	if refusal == nil {
@@ -88,9 +88,29 @@ func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
 		rec.forgetMCP()
 	})
 	// processEnded settles an open turn failed with the reason the rejoin
-	// set; leadOnlyRetired then writes the one registration.
+	// set; leadOnlyRetired then makes this matching-holder stop's only
+	// registration write (the mismatch and gone paths keep their own).
 	c.processEnded()
 	c.leadOnlyRetired()
+}
+
+// retiringHolder reports a retirement whose holder stop failed: a downgrade
+// (workerRetiring) or a lead-only one (leadOnlyRetiring). Its c.proc is a
+// stream it already detached, kept until the holder's own stop succeeds.
+func (c *conv) retiringHolder() bool {
+	return c.workerRetiring || c.leadOnlyRetiring
+}
+
+// retryRetirement tries a retiringHolder's holder stop again, from the
+// heartbeat (checkReattach) or from any stopProcess. A failure keeps the
+// holder in the record and the retry armed.
+func (c *conv) retryRetirement(hp holderProcess) {
+	if c.workerRetiring {
+		c.retireDowngradedWorker(hp)
+		c.leadOnlyRetired()
+		return
+	}
+	c.retireLeadOnlyWorker(hp)
 }
 
 // leadOnlyRetired closes a lead-only rejoin on whichever path ended it:
