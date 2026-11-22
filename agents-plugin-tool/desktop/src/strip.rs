@@ -189,6 +189,11 @@ fn build(
     window: &WebviewWindow,
     connection: Arc<Connection>,
 ) -> tauri::Result<()> {
+    // With `unstable`, Tauri keeps the dashboard webview at the full client
+    // area and resets it on every Resized event, which would put it under the
+    // strip. From here on only `snap::layout` places it. `fallback` hands the
+    // sizing back to Tauri.
+    AsRef::<Webview>::as_ref(window).set_auto_resize(false)?;
     let size = window.inner_size()?;
     let logical = size.to_logical::<f64>(window.scale_factor()?);
     let (to_page, from_shell) = mpsc::channel();
