@@ -97,6 +97,15 @@ func (s execSessions) Approve(ctx context.Context, id string, call execjob.Hoste
 
 func (s execSessions) Immediate(id string) (bool, error) { return s.r.ExecImmediate(id) }
 
+// StopNote is the user-stop sentence in id's language (its workflow.lang).
+func (s execSessions) StopNote(id string) string { return s.r.ExecStopNote(id) }
+
+// Hand puts a receipt of the user's own job into the lead's pending input: it
+// wakes no turn (the composer's passive hand-off).
+func (s execSessions) Hand(id string, gen uint64, execID, text string) error {
+	return s.r.PassiveHand(id, gen, execID, text)
+}
+
 func (s execSessions) Notify(id string, gen uint64, eventID, text string) (execjob.NoticeOutcome, error) {
 	out, err := s.r.AdmitCompletion(id, gen, eventID, text)
 	if err != nil {

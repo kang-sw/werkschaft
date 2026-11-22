@@ -70,7 +70,7 @@ const BUNDLED_RUNTIME = JSON.parse(readFileSync(join(TEST_DIR, "..", "runtime.js
 // contract source. Additive common tools are extended from the daemon's
 // schema tests when its public contract changes.
 const LIVE_TOOL_NAMES = [
-  "compact", "runtime.read", "runtime.debug_events", "session.children", "session.request_hire", "session.roster",
+  "compact", "runtime.read", "runtime.debug_events", "session.children", "session.request_hire", "session.roster", "session.register_user_command", "session.unregister_user_command",
   "mailbox.send", "mailbox.recv", "mailbox.lookup_peers",
   "ferrule", "agenda.set", "agenda.clear", "agenda.list",
   "route.resolve_implement", "todo.add", "todo.check",

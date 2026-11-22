@@ -22,7 +22,7 @@ const [login, selectedSession, siblingSession] = process.argv.slice(2);
       return (await response.json()).entries;
     };
     const global = await get('global');
-    for (const [adapter, count] of Object.entries({claude:13, agy:4, pi:15, dashboard:15})) {
+    for (const [adapter, count] of Object.entries({claude:13, agy:4, pi:15, dashboard:22})) {
       assert.equal(global.filter(entry => entry.key.startsWith(adapter + '.')).length, count);
     }
     assert.equal(global.find(e => e.key === 'dashboard.port').type, 'integer');

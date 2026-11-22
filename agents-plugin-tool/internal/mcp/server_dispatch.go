@@ -236,6 +236,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return toolTextResponse(req.ID, "", fmt.Errorf("session default roots were removed; if you are the lead, obtain a session_key per ws:workflow-manual and pass it"))
 	case "session.children":
 		return s.handleSessionChildren(req.ID, params.Arguments)
+	case registerUserCommandTool, unregisterUserCommandTool:
+		return s.handleUserCommandTool(req.ID, params.Name, params.Arguments)
 	case "session.request_hire", "session.roster":
 		return s.handleSessionHire(req.ID, params.Name, params.Arguments)
 	case "agenda.set":

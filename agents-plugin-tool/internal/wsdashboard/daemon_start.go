@@ -92,6 +92,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		agents:          opts.Agents,
 		credentials:     credentials,
 		config:          opts.Config,
+		harnesses:       opts.Harnesses,
 		cardBound:       opts.CardBound,
 		execJobs:        opts.ExecJobs,
 		hostedExecJobs:  opts.HostedExecJobs,
@@ -161,6 +162,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		}
 		d.planUsage = newPlanUsageStore(opts.Dir, home, getenv)
 		d.planUsage.resolveAgy = opts.AgyCommand
+		d.planUsage.harnesses = opts.Harnesses
 	}
 	d.cache = newPageCache(d.broker, stats)
 	d.foreign = newForeignSchedule(opts.foreignInterval, opts.MailWake)

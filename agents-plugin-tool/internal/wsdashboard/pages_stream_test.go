@@ -55,7 +55,9 @@ func nextRegion(t *testing.T, events <-chan sseEvent, timeout time.Duration) (re
 		}
 		// Every stream's first event names the assets identity, which
 		// assets_id_test.go pins; region readers skip it.
-		if ev.name == "assets" {
+		// The exec job revision (execjobs) is no region either: exec_hud_test.go
+		// pins it.
+		if ev.name == "assets" || ev.name == "execjobs" {
 			return nextRegion(t, events, timeout)
 		}
 		if ev.name != "region" {

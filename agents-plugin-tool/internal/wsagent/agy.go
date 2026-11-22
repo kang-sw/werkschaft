@@ -75,6 +75,7 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		},
 		ToolsAlwaysLoad:  true,
 		ManualHarness:    BackendAgy,
+		Dashboard:        agyDashboardTraits(),
 		PlaybookCommands: true,
 		// An agy lead explores with its own subagents and delegates through
 		// agent.spawn, preferring another harness when one fits.

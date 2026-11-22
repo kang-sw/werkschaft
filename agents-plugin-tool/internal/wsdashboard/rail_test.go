@@ -1277,7 +1277,7 @@ func TestRailRowRevive(t *testing.T) {
 	now := time.Now()
 	ended := now.Add(-72 * time.Hour)
 	row := func(edit func(in *railInput)) RailRow {
-		in := railInput{Session: railSession("sess", "/w/repo", ended.Add(-time.Hour), ended), Repo: "/w/repo", CanRevive: true}
+		in := railInput{Session: railSession("sess", "/w/repo", ended.Add(-time.Hour), ended), Repo: "/w/repo", CanRevive: true, Harnesses: testHarnessTraits()}
 		in.Session.Resumable = true
 		edit(&in)
 		return railRow(in, in.Session.Registration.Live(now), now)

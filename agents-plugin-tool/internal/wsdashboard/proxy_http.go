@@ -278,7 +278,7 @@ func (d *Daemon) httpSession(token string, hello ProxyHello, void <-chan struct{
 			"params": map[string]any{
 				"protocolVersion": httpMCPReplayProtocol,
 				"capabilities":    map[string]any{},
-				"clientInfo":      map[string]any{"name": replayClientName(hello.Harness), "version": "replay"},
+				"clientInfo":      map[string]any{"name": d.harnesses.replayClientName(hello.Harness), "version": "replay"},
 			},
 		})
 		if s.writeLineLocked(initialize) == nil {
@@ -287,22 +287,6 @@ func (d *Daemon) httpSession(token string, hello ProxyHello, void <-chan struct{
 	}
 	s.writeMu.Unlock()
 	return s, 0, nil
-}
-
-// replayClientName is a clientInfo name from which the MCP server detects
-// harness (internal/mcp detectHarnessFromInitializeParams).
-func replayClientName(harness string) string {
-	switch harness {
-	case "pi":
-		return "ws-pi-bridge"
-	case "claude":
-		return "claude-code"
-	case "codex":
-		return "codex"
-	case "agy":
-		return "agy"
-	}
-	return "ws-mcp-http-replay"
 }
 
 // serve runs the session until its input ends, then retires it: the

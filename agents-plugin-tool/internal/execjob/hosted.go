@@ -25,6 +25,7 @@ type Hosted struct {
 	rings *OutputRings
 
 	mu       sync.Mutex
+	endSeq   uint64
 	jobs     map[string]*hostedJob
 	byHolder map[string]*hostedJob
 	// deleting holds the ids of the jobs the job cap dropped whose row
@@ -79,16 +80,35 @@ type HostedOptions struct {
 	Now    func() time.Time
 	// JobBytes and TotalBytes replace the ring bounds (a test seam).
 	JobBytes, TotalBytes int64
+	// RetireRetryMin and RetireRetryMax replace the bounds of the delay
+	// between retried holder stops and reconcile scans (a test seam; zero
+	// keeps retireRetryMin and retireRetryMax).
+	RetireRetryMin, RetireRetryMax time.Duration
 	// OnRunning is called, with no lock held, after a job enters or leaves
-	// the running set RunningOwners counts; nil observes nothing. It runs
-	// on the launching or ending goroutine, so it must return promptly.
+	// the running set RunningOwners counts, after a job is spawned and
+	// saved (its start time and process are set), and after a user stop's
+	// notice outcome is recorded (what the job list shows); nil observes
+	// nothing.
+	// It runs on the launching or ending goroutine, so it must return
+	// promptly.
 	OnRunning func()
 }
 
-type hostedJob struct {
-	row  HostedJobRow
-	out  *JobOutput
+// stopAttempt is one in-flight stop of a job: its owner asks the holder and
+// every other stop of the job waits on done and reads err, which the owner
+// wrote before closing done.
+type stopAttempt struct {
 	done chan struct{}
+	err  error
+}
+
+type hostedJob struct {
+	// endSeq is the order the jobs ended in this daemon (0 for a restored
+	// row), the tie-break of equal EndedAt.
+	endSeq uint64
+	row    HostedJobRow
+	out    *JobOutput
+	done   chan struct{}
 	// real holds the resolved root and working directory of a running row
 	// an older daemon stored without them (restoredPlaces at restore, a
 	// fallback the row does not persist). Read under h.mu by the worktree
@@ -105,9 +125,31 @@ type hostedJob struct {
 	stdinUnknown bool
 	writeMu      sync.Mutex
 	// stopping: exec.stop or an interrupt asked for the end; the end is
-	// then HostedStopped and sends no notice.
-	stopping   bool
-	delivering bool
+	// then HostedStopped and sends no completion notice.
+	stopping bool
+	// origin is who launched the job (OriginUser, or "" for an agent's); in
+	// memory only, set at admission.
+	origin string
+	// stopIntent: the stop that set stopping was the user's (stop byUser).
+	// The first stop to set stopping decides it; it clears with stopping
+	// when the holder did not go. userStopped commits it where the job
+	// ends HostedStopped while it is set (endLocked): a stop that did not
+	// end the job, or a job that ended another way first, is never marked.
+	// stopOwed: the marked end owes the owner a notice (a job already
+	// converted to async, past its launch); stopNotice is that notice's
+	// outcome (StopNotice*), written under noticeMu (which orders its
+	// admission) and h.mu, read under h.mu. None of these is stored: a
+	// restart loses them.
+	stopIntent bool
+	// stopAttempt is the stop whose holder stop is in flight; it is the
+	// only caller that asks the holder, and a stop that finds it joins it
+	// (stop). Set and cleared under h.mu.
+	stopAttempt *stopAttempt
+	userStopped bool
+	stopOwed    bool
+	stopNotice  string
+	noticeMu    sync.Mutex
+	delivering  bool
 	// publishing: a converted job's id is being handed to its caller; its
 	// completion notice waits for that (deliver), so the id is out first.
 	publishing bool
@@ -152,6 +194,12 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.RetireRetryMin <= 0 {
+		opts.RetireRetryMin = retireRetryMin
+	}
+	if opts.RetireRetryMax <= 0 {
+		opts.RetireRetryMax = retireRetryMax
 	}
 	if opts.JobBytes <= 0 {
 		opts.JobBytes = hostedJobBytes
@@ -315,7 +363,7 @@ func (h *Hosted) Start() {
 // its exit copy's status (lost without one). The jobs stay running, and
 // fenced, until then. Close ends the retries.
 func (h *Hosted) reconcileUnlisted(jobs []*hostedJob) {
-	delay := retireRetryMin
+	delay := h.opts.RetireRetryMin
 	for {
 		t := time.NewTimer(delay)
 		select {
@@ -327,7 +375,7 @@ func (h *Hosted) reconcileUnlisted(jobs []*hostedJob) {
 		h.opts.Holders.Scan()
 		listing := h.opts.Holders.List()
 		if listing.Incomplete {
-			delay = min(delay*2, retireRetryMax)
+			delay = min(delay*2, h.opts.RetireRetryMax)
 			continue
 		}
 		live := map[string]bool{}
@@ -417,6 +465,7 @@ func (h *Hosted) endFromExitCopy(j *hostedJob, allowLost bool) bool {
 	h.save(j, row, rev)
 	h.dropExitCopy(j)
 	h.deliver(j)
+	h.noticeStopped(j)
 	return true
 }
 
@@ -481,6 +530,7 @@ func (h *Hosted) endFromExit(j *hostedJob, exit wsholder.Exit) {
 	h.save(j, row, rev)
 	h.dropExitCopy(j)
 	h.deliver(j)
+	h.noticeStopped(j)
 }
 
 // HolderEvent takes a job holder's records (wsholder.Sink): output into the
@@ -539,6 +589,7 @@ func (h *Hosted) HolderEvent(id string, ev wsholder.Event) {
 	h.runningChanged()
 	h.save(j, row, rev)
 	h.deliver(j)
+	h.noticeStopped(j)
 	// The process ended; its holder stays until stopped, and its stop takes
 	// the rest of the job's process group with it.
 	go h.stopHolder(id)
@@ -600,16 +651,20 @@ func (h *Hosted) stopGone(holder string) error {
 	return nil
 }
 
-// retireRetryMin and retireRetryMax bound the delay between retried holder
-// stops (a test seam).
-var retireRetryMin, retireRetryMax = time.Second, time.Minute
+// retireRetryMin and retireRetryMax are the default bounds of the delay
+// between retried holder stops; HostedOptions.RetireRetryMin and
+// RetireRetryMax replace them per Hosted (a test seam).
+const (
+	retireRetryMin = time.Second
+	retireRetryMax = time.Minute
+)
 
 // retryRetire retries stopping holder, doubling the delay from
 // retireRetryMin up to retireRetryMax, until it is confirmed gone, and
 // then runs retired. Close ends the retries: the next daemon's start stops
 // the holder.
 func (h *Hosted) retryRetire(holder string, retired func()) {
-	delay := retireRetryMin
+	delay := h.opts.RetireRetryMin
 	for {
 		t := time.NewTimer(delay)
 		select {
@@ -624,7 +679,7 @@ func (h *Hosted) retryRetire(holder string, retired func()) {
 			return
 		}
 		h.logf("stop holder %s: %v; retrying", holder, err)
-		delay = min(delay*2, retireRetryMax)
+		delay = min(delay*2, h.opts.RetireRetryMax)
 	}
 }
 
@@ -632,7 +687,16 @@ func (h *Hosted) retryRetire(holder string, retired func()) {
 // notice owes it from now. h.mu is held.
 func (h *Hosted) endLocked(j *hostedJob) {
 	j.row.EndedAt = h.opts.Now().UnixMilli()
+	// EndedAt is milliseconds: jobs that end in one tick keep their order by
+	// this sequence (the job cap drops the longest-ended first).
+	h.endSeq++
+	j.endSeq = h.endSeq
 	j.stdinOpen = false
+	if j.row.State == HostedStopped && j.stopIntent {
+		// The user's stop is the one that ended it as stopped.
+		j.userStopped = true
+		j.stopOwed = j.row.Notify && !j.starting
+	}
 	if j.row.Notify && !j.stopping && j.row.Notice == NoticeNone {
 		j.row.Notice = NoticePending
 	}
@@ -849,6 +913,10 @@ type HostedLaunch struct {
 	// the callback must be all-or-nothing: it returns an error only when nothing
 	// reached the owner or the client, never after a partial publication.
 	OnConvert func(HostedView) error
+	// Origin is who launched it: OriginUser for the composer's own `!`
+	// command, else (empty) the agent's tool. Kept in memory for the job
+	// list and the stop notice's route.
+	Origin string
 }
 
 // HostedOutcome is how a launch call ended.

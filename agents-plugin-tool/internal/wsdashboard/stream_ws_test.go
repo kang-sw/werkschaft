@@ -188,6 +188,14 @@ func TestWebSocketStreamsSendWhatSSESends(t *testing.T) {
 		if !slices.Contains(got, `tracker:{"rev":0}`) {
 			t.Errorf("connect %s sent no tracker sentinel: %v", p.path, got)
 		}
+		// Every session page stream (not the sessions index) also sends the
+		// exec job revision on connect, the same sentinel; it is not a region,
+		// so drop it from the comparisons below (exec_hud_test.go pins it).
+		hasExec := slices.ContainsFunc(got, func(e string) bool { return strings.HasPrefix(e, `execjobs:{"rev":`) })
+		if want := strings.HasPrefix(p.path, "/s/"); hasExec != want {
+			t.Errorf("connect %s sent the execjobs revision = %v, want %v: %v", p.path, hasExec, want, got)
+		}
+		got = slices.DeleteFunc(got, func(e string) bool { return strings.HasPrefix(e, `execjobs:`) })
 		switch i {
 		case 0:
 			if !slices.Contains(got, regionMode) || !slices.Contains(got, regionEntries) {

@@ -74,9 +74,17 @@ type proxyHost struct {
 	exec atomic.Pointer[execjob.Hosted]
 	// cron is the daemon's scheduler, bound after StartDaemon; nil leaves
 	// the cron tool refusing as unavailable.
-	cron   atomic.Pointer[wscron.Scheduler]
-	boards *mcp.WhiteboardStores
-	notes  *wsnote.Cache
+	cron atomic.Pointer[wscron.Scheduler]
+	// userCmds is the daemon's user commands, bound after the runner starts;
+	// nil leaves the tools unlisted and the dashboard's routes unavailable.
+	userCmds atomic.Pointer[userCommands]
+	// userCmdsReady, when set, is closed once the daemon has settled its user
+	// commands (bound, or unavailable): a hosted lead that connects while the
+	// daemon is still starting waits for it (bounded), so its first tool list
+	// already names the user command tools. nil never waits.
+	userCmdsReady <-chan struct{}
+	boards        *mcp.WhiteboardStores
+	notes         *wsnote.Cache
 	// mailLabels resolves mail sender labels for every hosted server
 	// (mcp.ServerOptions.MailLabels). The servers share the process's group
 	// store, so a recipient on one connection expands a group mail another
@@ -85,6 +93,63 @@ type proxyHost struct {
 	// credentials is the daemon's provider credential store, which a hosted
 	// `credential` command applies through; nil refuses the command.
 	credentials *wscred.Store
+}
+
+// userCommandsReadyWait bounds how long a hosted lead's connection waits for
+// the daemon's user commands to settle at its start.
+var userCommandsReadyWait = 5 * time.Second
+
+// userCommandsFor returns the user command lookup of one connection. A hosted
+// lead that connects while the daemon is still starting waits (bounded, and only
+// inside its own lookup: the first tool list of that one session) until the
+// daemon settled its user commands, so that list already names the tools. The
+// wait is never in Accept: the HTTP route builds a session under a daemon-wide
+// lock, and a session of one token must not delay another's. A worker, or a
+// conversation the runner does not report as an open lead, never waits.
+func (h *proxyHost) userCommandsFor(conversation string) func() mcp.UserCommandHost {
+	deadline := time.Now().Add(userCommandsReadyWait)
+	return func() mcp.UserCommandHost {
+		if u := h.userCommandsNow(); u != nil || conversation == "" || h.userCmdsReady == nil {
+			return u
+		}
+		select {
+		case <-h.userCmdsReady:
+		default:
+			open, ok := h.agents.(interface {
+				ComposerOpen(string) (uint64, error)
+			})
+			if !ok {
+				return nil
+			}
+			if _, err := open.ComposerOpen(conversation); err != nil {
+				return nil
+			}
+			// The budget left is read after the runner lookup, which may itself
+			// have taken the runner's lock.
+			left := time.Until(deadline)
+			if left <= 0 {
+				// Spent: report whatever was bound meanwhile.
+				return h.userCommandsNow()
+			}
+			wait := time.NewTimer(left)
+			defer wait.Stop()
+			select {
+			case <-h.userCmdsReady:
+			case <-wait.C:
+			}
+		}
+		return h.userCommandsNow()
+	}
+}
+
+// userCommandsNow is the daemon's user commands as they are bound this instant,
+// nil before they are (or when they are unavailable). A registration or
+// withdrawal reads this and never waits.
+func (h *proxyHost) userCommandsNow() mcp.UserCommandHost {
+	if u := h.userCmds.Load(); u != nil {
+		return u
+	}
+	return nil
 }
 
 // wait blocks until the replacement goroutine, if any, has ended.
@@ -141,6 +206,8 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		// that owns hosted exec jobs.
 		opts.Exec = h.exec.Load
 		opts.Cron = h.cron.Load
+		opts.UserCommands = h.userCommandsNow
+		opts.UserCommandsDiscovery = h.userCommandsFor(hello.Conversation)
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
 		server := mcp.NewServerWithOptions(opts)

@@ -2,7 +2,53 @@ package wsagent
 
 import (
 	"os"
+	"slices"
+
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
+
+// piConnectionPolicy: a Pi client names itself, its bridge extension
+// identifies it by its own client name, the bridge may opt the client in to
+// delegating through the daemon, and a conversation the daemon runs without
+// the native extension does.
+func piConnectionPolicy() ConnectionPolicy {
+	return ConnectionPolicy{
+		NamedClient:            true,
+		BridgeClientName:       "ws-pi-bridge",
+		ClientDaemonAgents:     true,
+		DelegatesThroughDaemon: piDelegatesThroughDaemon,
+	}
+}
+
+// piDashboardTraits: an ended Pi terminal session can be taken over, and the
+// daemon's replayed initialize presents the bridge's client name, which the
+// MCP server detects Pi from.
+func piDashboardTraits() wsdashboard.HarnessTraits {
+	return wsdashboard.HarnessTraits{TerminalTakeover: true, ReplayClientName: "ws-pi-bridge"}
+}
+
+// piDelegatesThroughDaemon reports whether rec runs without the native ws Pi
+// extension (PiMCPOnly), so it connects through Pi's builtin MCP client,
+// whose clientInfo is not the extension's bridge name and is not detected as
+// Pi. A non-lead's launched profile must also grant agent.spawn and
+// mailbox.send. Records written before the launched-profile snapshot fall
+// back to the profile their name resolves to now (launched).
+func piDelegatesThroughDaemon(rec Record, launched func() *Profile) bool {
+	def := rec.ResolvedDefinition
+	if def == nil && !rec.Lead && launched != nil {
+		def = launched()
+	}
+	if !PiMCPOnly(rec, def) {
+		return false
+	}
+	if rec.Lead {
+		return true
+	}
+	if def == nil {
+		return false
+	}
+	return slices.Contains(def.WSTools, "agent.spawn") && slices.Contains(def.WSTools, "mailbox.send")
+}
 
 var _ terminalSession = PiBackend{}
 

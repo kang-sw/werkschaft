@@ -55,7 +55,7 @@ export function readOnlyWsTools(tools: readonly string[]): string[] {
   return tools.filter(name => name.startsWith("ws__") && READ_WS.has(name.slice(4)));
 }
 // Owner-lead coordination is not inherited, even by workers with lead-scoped MCP keys.
-const OWNER_LEAD_WS_TOOLS: ReadonlySet<string> = new Set(["ws__session_request_hire", "ws__session_roster"]);
+const OWNER_LEAD_WS_TOOLS: ReadonlySet<string> = new Set(["ws__session_request_hire", "ws__session_roster", "ws__session_register_user_command", "ws__session_unregister_user_command"]);
 export function inheritableTools(tools: readonly string[]): string[] {
   return withoutRetiredNativeTools(tools).filter(tool => !OWNER_LEAD_WS_TOOLS.has(tool));
 }

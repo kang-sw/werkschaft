@@ -16,7 +16,7 @@ import (
 func usageTestStore(t *testing.T) *planUsageStore {
 	t.Helper()
 	home := t.TempDir()
-	return newPlanUsageStore(home, home, func(string) string { return "" })
+	return newTestPlanUsageStore(home, home, func(string) string { return "" })
 }
 
 func TestPlanUsageClaudeLatestObservationWins(t *testing.T) {
@@ -42,7 +42,7 @@ func TestPlanUsageClaudeLatestObservationWins(t *testing.T) {
 	if got.Windows[0].Percent != 5 || got.Windows[0].ResetsAt != now+5_000 || got.AsOf != now+2 {
 		t.Fatalf("newer account-switch observation rejected: %+v", got)
 	}
-	restored := newPlanUsageStore(s.dir, s.home, s.getenv)
+	restored := newTestPlanUsageStore(s.dir, s.home, s.getenv)
 	if v := restored.entries(); len(v) != 1 || v[0].Windows[0].Percent != 5 {
 		t.Fatalf("cache not restored: %+v", v)
 	}
@@ -56,7 +56,7 @@ func TestPlanUsageClaudeGETIgnoresStaleSessionHeartbeats(t *testing.T) {
 	s := usageTestStore(t)
 	now := time.Now().UnixMilli()
 	reset := now + time.Hour.Milliseconds()
-	d := &Daemon{dir: s.dir, planUsage: s, index: NewIndex(IndexOptions{Dir: s.dir}), snapshots: &SnapshotCache{}}
+	d := &Daemon{dir: s.dir, planUsage: s, harnesses: testHarnessTraits(), index: NewIndex(IndexOptions{Dir: s.dir}), snapshots: &SnapshotCache{}}
 	writes := usageWriteCounter(s)
 	publish := func(id string, percent float64, observed, updated int64) {
 		d.index.sessions[id] = &indexEntry{session: Session{Registration: Registration{ReplyID: id, Harness: "claude"}}}
@@ -164,7 +164,7 @@ func TestPlanUsageClaudeKeepsLiveAbsentWindow(t *testing.T) {
 	push(now+1, week) // a report without the five-hour window does not end a live one
 	push(now + 2)     // no limits is not a complete report
 	push(now+2, wslive.UsageLimit{Kind: wslive.LimitFiveHour, Percent: -1})
-	for _, store := range []*planUsageStore{s, newPlanUsageStore(s.dir, s.home, s.getenv)} {
+	for _, store := range []*planUsageStore{s, newTestPlanUsageStore(s.dir, s.home, s.getenv)} {
 		entries := store.entries()
 		if len(entries) != 1 || len(entries[0].Windows) != 2 || entries[0].AsOf != now {
 			t.Fatalf("live five-hour window lost or asOf refreshed: %+v", entries)
@@ -190,7 +190,7 @@ func TestPlanUsageClaudeKeepsLiveAbsentWindow(t *testing.T) {
 	if got := claudeKinds(s); len(got) != 1 || got[0] != wslive.LimitSevenDay || writes[planUsageCache] != 1 || writes[planUsageHistoryCache] != 0 {
 		t.Fatalf("expired absent window kept or flapped: %v, writes %v", got, writes)
 	}
-	if entries := newPlanUsageStore(s.dir, s.home, s.getenv).entries(); len(entries) != 1 || len(entries[0].Windows) != 1 || entries[0].AsOf != now {
+	if entries := newTestPlanUsageStore(s.dir, s.home, s.getenv).entries(); len(entries) != 1 || len(entries[0].Windows) != 1 || entries[0].AsOf != now {
 		t.Fatalf("expected only persisted weekly window: %+v", entries)
 	}
 }

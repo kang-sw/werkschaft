@@ -37,6 +37,9 @@ func (s *execTestSessions) Approve(context.Context, string, execjob.HostedCall) 
 
 func (s *execTestSessions) Immediate(string) (bool, error) { return true, nil }
 
+func (s *execTestSessions) StopNote(string) string                    { return "" }
+func (s *execTestSessions) Hand(string, uint64, string, string) error { return nil }
+
 func (s *execTestSessions) Notify(id string, gen uint64, eventID, text string) (execjob.NoticeOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

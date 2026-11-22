@@ -414,7 +414,7 @@
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, gone: onGone }
+      events: { assets: onAssets, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, usercmd: onUsercmd, gone: onGone }
     });
     mainStream = st;
     function onCompanion(config) {
@@ -549,6 +549,12 @@
       // Keyed panels arrive even at an unchanged hash and follow board,
       // tree and entries in the stream's initial region order.
       if (framed && rid && !companionStreamReady && ev.name === "panels") companionStream(true);
+    }
+    // The lead's user commands changed (an opaque revision): the composer's
+    // command strip refetches its list when the revision is not the one it holds.
+    function onUsercmd(ev) {
+      if (!ev || typeof ev.rev !== "string" || !rid) return;
+      if (typeof ucmdWake === "function") ucmdWake(ev.rev);
     }
     // A frame the shell hides reads the tracker once it shows (shShown).
     function onTracker(ev) {

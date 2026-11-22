@@ -37,6 +37,8 @@ func (b PiBackend) registration() (string, BackendRegistration) {
 		// native mode is not Claude's, so every session derives workdir-write.
 		Permission: PermissionPolicy{LegacyDefault: PermissionWorkdirWrite},
 		Lifecycle:  LifecyclePolicy{NativeChildren: true, TerminalSummaries: true},
+		Connection: piConnectionPolicy(),
+		Dashboard:  piDashboardTraits(),
 		// One-shot probe, 2026-11-22, pi 1.5.2: `pi -p --no-session
 		// --no-tools --no-extensions --no-mcp --no-skills
 		// --no-prompt-templates --no-context-files --no-themes

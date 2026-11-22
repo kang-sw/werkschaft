@@ -111,7 +111,7 @@ func (s *planUsageStore) query(ctx context.Context, force bool) {
 		now := time.Now().UnixMilli()
 		var shared, codex5h []planUsageSample
 		for _, sample := range usageSamples(entry) {
-			if sample.Harness == "codex" && sample.Kind == wslive.LimitFiveHour {
+			if s.harnesses.separateFiveHour(sample.Harness) && sample.Kind == wslive.LimitFiveHour {
 				codex5h = append(codex5h, sample)
 			} else {
 				shared = append(shared, sample)
@@ -135,6 +135,8 @@ type codexUsageLimits struct {
 	Secondary *codexUsageWindow `json:"secondary"`
 }
 
+// codexUsageEntry is the ChatGPT-account reader's entry, which keeps its
+// persisted "codex" harness label (1881 survivor; see planUsageStore.entries).
 func codexUsageEntry(limits codexUsageLimits, source string) (planUsageEntry, error) {
 	at := time.Now().UnixMilli()
 	e := planUsageEntry{Harness: "codex", Plan: limits.Plan, Source: source, AsOf: at, Windows: []planUsageWindow{}}

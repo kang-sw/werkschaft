@@ -481,6 +481,128 @@ directional old/new caller and reader-writer evidence. Split any newly found
 T1+ behavior into its own ticket. Tool-list refresh does not prove a removed
 call compatible.
 
+### Result (c60f0a5cb) - 2026-11-23
+
+- **VERIFIED - implementation.** `BackendRegistration` gains two runtime-only
+  blocks (`internal/wsagent/registration.go:110-111`): `ConnectionPolicy`
+  (`backend_policy.go:113`: self-naming client, bridge client name,
+  daemon-agents opt-in, and a per-record `DelegatesThroughDaemon` hook) and
+  `Dashboard`, a `wsdashboard.HarnessTraits` value. `PlaybookTerminology`
+  gains `SpawnIdiomFor` for the namespaced Claude idiom. `wsdashboard` cannot
+  import `wsagent`, so the traits type and set live in
+  `internal/wsdashboard/harness_traits.go`; the composition root passes
+  `Runner.DashboardHarnesses()` through `DaemonOptions.Harnesses`
+  (`cmd/ws-mcp/dashboard.go:174`). Adapter data lives in
+  `{claude,codex,agy,pi}_policy.go`. MCP: `connectionOf`/`lifecycleOf`/
+  `bridgeHarness`/`normalizedHarness` (`server_harness.go:85-190`) read the
+  daemon registry first and the built-in floor for a server with none,
+  `callerDaemonAgents` (`playbook_terminology.go:102`) dispatches on the
+  record's own backend, and the terminal-summary gate reuses
+  `LifecyclePolicy.TerminalSummaries` (`summary_owner.go:18`,
+  `live_snapshot.go:527`). Dashboard: usage push, five-hour history routing,
+  native HUD rows, rail takeover, HUD harness names, and replay client name read
+  the traits (`plan_usage.go:197`, `plan_usage_probe.go:114`,
+  `plan_usage_history.go:412`, `pageview_hud.go:319`,
+  `pageview_rail_row.go:176`, `proxy_http.go`); the agy history member and the
+  shared-history agy exclusion moved into `plan_usage_agy.go`.
+- **VERIFIED - source/target split.** `callerDaemonAgents` keeps the base's
+  record-backend dispatch; detection, terminology rows, and the daemon-agents
+  opt-in keep the connection's detected harness; `pushClaude` keeps the
+  snapshot adapter, the usage scans the session harness, and rail takeover and
+  replay name the registration/hello harness, all exact-match as before.
+- **Survivors (1881),** each with a site comment and a fixture: raw
+  initialize/metadata substring sniff and its codex-before-claude precedence
+  (`TestDetectHarnessFromRawKeepsExternalMarkers`); the `wsPiDaemonAgents`
+  capability key; persisted plan-usage history validators and entry labels
+  (`TestPlanUsageHistoryValidatorsKeepPersistedNames`); the legacy Pi
+  agent-kind marker (`TestHUDHarnessLegacyPiAgentKind`); the Pi session-file
+  location and `pi` record backend in retirement and revival
+  (`TestPruneRegistrationsAgesRetiredLeadsByTheirRow`); stored peer-lead note
+  labels (`TestConversationPresentationPeerNoteIsDisplayOnly`).
+- **Decision.** A registered extension harness is now named by the HUD and
+  accepted as a detected client name through its own registration; the base
+  accepted the four built-ins or a `ManualHarness`. No built-in changes.
+- **Deferred to Phase 4.** `dashboard_tier_routing.go:129` and
+  `server_exec_cutover.go:41` in `internal/mcp`, and the provider-owned
+  Claude/Codex entry labels in `plan_usage.go` and `plan_usage_probe.go`.
+  `config_registry.go` and `compaction.go` held no harness-name literal after
+  Phase 1.
+
+**VERIFIED - T0, directional.** The new types have no JSON tags and reach no
+`Profile`, `Record`, holder file, config, history file, or MCP schema, so the
+schema is unchanged and the values written for the built-in harnesses are
+unchanged. For an extension harness the values can differ: a newly detected
+extension name can now be written into the existing `Registration.Harness`
+string (`mcp/dashboard_sessions.go:415-423`, `wsdashboard/registry.go:84,266`).
+An old reader decodes it, and the base HUD hides unknown harnesses
+(`pageview_hud.go:351-357` at base), so this stays T0 with a T1 display effect
+for extensions only. Old client against new
+server: the same initialize table (four harnesses, padded and wrong-case
+bridge names, raw markers, unknown clients, with and without a daemon registry)
+passes against the base sources through a Go overlay and against the new
+code (`TestInitializeDetectionAcrossHarnesses`,
+`TestDetectHarnessFromRawKeepsExternalMarkers`). New client against old
+server: `TestBuiltinDashboardTraits` pins the replayed `clientInfo` names
+(`ws-pi-bridge`, `claude-code`, `codex`, `agy`, generic fallback), which are
+the names the base's `replayClientName` returned. History files: the
+validators and file names are untouched, and an old or new writer's file reads
+the same in both. Retired and handed-off Pi sessions keep their base
+directory-protection rules (`registry.go:461`). Tool names, arguments, and
+defaults are unchanged: no schema file is touched, and the `internal/mcp`
+suite shows only the base's failures. The new lookups are memory reads
+(`connectionOf` clones the in-memory registry); no file operation was added by
+source inspection, and no syscall trace was collected.
+
+**VERIFIED - local checks.** From `agents-plugin-tool/`:
+
+```sh
+go build ./...
+go vet ./internal/wsagent ./internal/mcp ./internal/wsdashboard ./cmd/... ./desktop-electron/...
+GOOS=windows go vet ./internal/wsagent ./internal/mcp ./internal/wsdashboard ./cmd/... ./desktop-electron/...
+go test ./internal/wsagent ./internal/wsi18n -count=1
+go test ./internal/mcp -count=1 -timeout 45m
+go test ./cmd/ws-mcp -count=1
+go test ./internal/wsdashboard -count=1 -timeout 40m   # WS_PLAYWRIGHT_MODULE, PLAYWRIGHT_BROWSERS_PATH set
+```
+
+`wsagent` and `wsi18n` pass. `internal/mcp` fails exactly the nine tests that
+need the gitignored `generated/inventory.json` (`TestDashboardSettingsCatalog`,
+`TestDashboardSettingsUICatalog`, `TestDashboardCatalogTierRoutingMutation`,
+and six `TestDashboardTierRoutingView...`), the same nine at the base through
+an overlay. `cmd/ws-mcp` fails only
+`TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild` (missing
+`generated/inventory.json`). `internal/wsdashboard` fails 15 tests, identical
+by name to the base run through an overlay: `TestAgentBadgePopoverBrowser`,
+`TestBoardHoldPillBrowser`, `TestBoardTopicUnitsBrowser`, `TestFSPDFBrowser`,
+`TestGalleryBrowser`, `TestPanelRowsBrowser`, `TestRailNavigationBrowser`,
+`TestSettingsAndEmptyRootBrowser`, `TestShellTopbarBrowser`,
+`TestTreeRowsBrowser`, `TestWhiteboardEffectsBrowser`,
+`TestSettingsInteractionBrowser`, `TestSettingsProductionBrowser`,
+`TestSettingsComboboxBrowser`, `TestTierRoutingUIBrowser`. No race run was done
+in this phase.
+
+**Edition (Phase 3, extension registrations).** A codex review passed the
+built-ins (every source/target choice matches the base) and found two
+extension-only defects, both fixed with no built-in behavior change.
+(1) A registration that declares only `ConnectionPolicy.BridgeClientName`
+matched in `detectHarnessFromInitializeParams` but was then rejected by the
+strict re-normalization in `observeHarness`; `initialize` now records the
+harness the detector resolved (`recordHarness`), and the hello and call-metadata
+paths keep the strict `observeHarness` name check.
+`TestInitializeRecordsBridgeOnlyRegistration` drives the initialize path with a
+bridge-only fixture. (2) `HarnessTraits.PushesUsage` read as a generic "reports
+usage" flag, but setting it makes `pushClaude` overwrite the Claude cache and
+history; it is renamed `PushesClaudeUsage` and documented as feeding the Claude
+account slot, so a second provider needs its own accumulation. No new provider
+plumbing. Targeted `internal/mcp` (`Harness|Initialize|Detect|Connection`) fails
+only the known inventory-environment tests; `internal/wsdashboard`
+(`Trait|PlanUsage|Usage`) and `internal/wsagent` pass; build and vet pass on
+darwin and windows. The T0 claim above is therefore "schema unchanged and
+built-in values unchanged", not universally byte-identical: a newly detected
+extension name can now be written into the existing `Registration.Harness`
+string (`mcp/dashboard_sessions.go`, `wsdashboard/registry.go`); old readers
+decode it and the old HUD hides unknown harnesses.
+
 ### Phase 4: Residual audit and parity, compatibility, and performance gate
 
 Repeat the source inventory on the landed prerequisite head. Search non-test Go

@@ -557,6 +557,29 @@ func (s *planUsageStore) agyHistory(now int64) planUsageHistoryProjection {
 	return s.historyFile(&s.agyHist, agyHistorySpec, now)
 }
 
+// entriesWithoutAgy is the entries the shared history projection covers: agy
+// keeps its own grouped history (agyHistoryView).
+func entriesWithoutAgy(entries []planUsageEntry) []planUsageEntry {
+	var filtered []planUsageEntry
+	for _, e := range entries {
+		if e.Harness != "agy" {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
+// agyHistoryMember is the ?history=1 member for agy entries and reports
+// whether one exists; a response without an agy entry carries no member.
+func (s *planUsageStore) agyHistoryMember(entries []planUsageEntry, now int64) (json.RawMessage, bool) {
+	for _, e := range entries {
+		if e.Harness == "agy" {
+			return s.agyHistoryView(entries, now), true
+		}
+	}
+	return nil, false
+}
+
 // agyHistoryView returns the projected ?history=1 member for agy entries.
 func (s *planUsageStore) agyHistoryView(entries []planUsageEntry, now int64) json.RawMessage {
 	if s == nil {

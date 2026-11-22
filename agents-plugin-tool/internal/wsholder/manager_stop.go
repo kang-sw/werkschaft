@@ -29,6 +29,7 @@ func (m *Manager) Stop(id string) error {
 func (m *Manager) stopHolder(id string) error {
 	m.mu.Lock()
 	e := m.entries[id]
+	incomplete := m.incomplete
 	var desc Descriptor
 	var client *Client
 	if e != nil {
@@ -36,6 +37,9 @@ func (m *Manager) stopHolder(id string) error {
 	}
 	m.mu.Unlock()
 	if e == nil {
+		if incomplete {
+			return ErrUnknownHolderIncomplete
+		}
 		return ErrUnknownHolder
 	}
 	if client != nil {
