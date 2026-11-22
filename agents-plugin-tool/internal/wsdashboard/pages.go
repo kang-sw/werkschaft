@@ -46,6 +46,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-composer-pickers.js",
 	"dashboard-composer-selections.js",
 	"dashboard-composer-delivery.js",
+	"dashboard-composer-exec.js",
 	"dashboard-composer-restore.js",
 	"dashboard-composer-status.js",
 	"dashboard-composer-keyboard.js",
@@ -67,11 +68,15 @@ var dashboardScriptFiles = []string{
 	"dashboard-tier-picker.js",
 	"dashboard-session-view.js",
 	"dashboard-companion-relay.js",
+	"dashboard-audit-window.js",
+	"dashboard-audit.js",
 	"dashboard-lifecycle.js",
 }
 
 var companionScriptFiles = []string{
+	"dashboard-companion-builtins.js",
 	"dashboard-companion-packs.js",
+	"dashboard-companion-focus.js",
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
@@ -90,6 +95,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-menus.css",
 	"dashboard-rail.css",
 	"dashboard-shell.css",
+	"dashboard-audit.css",
 }
 
 var trackerScriptFiles = []string{
@@ -374,7 +380,7 @@ func buildDashboardAssets(read func(name string) ([]byte, error)) (*dashboardAss
 		CompanionScript:  template.JS(get("dashboard-companion.js")),
 		CompanionCSS:     template.CSS(get("dashboard-companion.css")),
 		SettingsCSS:      template.CSS(get("dashboard-settings.css") + "\n" + optional("dashboard-settings-extras.css") + "\n" + get("dashboard-settings-tiers.css")),
-		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings.js")),
+		SettingsScript:   template.JS(optional("dashboard-settings-extras.js") + "\n;\n" + get("dashboard-settings-combobox.js") + "\n;\n" + get("dashboard-settings-tiers.js") + "\n;\n" + get("dashboard-settings.js")),
 		SettingsCatalog:  template.JS(get("dashboard-settings-catalog.json")),
 		OverviewScript:   template.JS(get("overview.js")),
 		CardsScript:      template.JS(get("gallery.js") + "\n;\n" + get("cards.js")),

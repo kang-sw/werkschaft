@@ -61,6 +61,22 @@
   // its region updates and skips the clock until it shows.
   var shell = root.hasAttribute("data-shell"), framed = root.hasAttribute("data-frame") && !!window.WsShell, shHidden = false;
   if (framed && window.parent === window) { location.replace(location.pathname + location.hash); return; }
+  // A framed page is loaded by the shell before it is shown (a cold switch
+  // loads it hidden, a preload stays hidden), so it is staged until its first
+  // show: shStage holds the loads nobody sees before then (the tracker's
+  // per-store views, the chat tabs' terminal replay) and the first show runs
+  // them at once (shUnstage). What the first show paints stays immediate. A
+  // page that is not framed is never staged.
+  var shStaged = framed, shStageList = [];
+  function shHolding() { return shStaged; }
+  function shStage(fn) { if (shStaged) shStageList.push(fn); else fn(); }
+  function shUnstage() {
+    if (!shStaged) return;
+    shStaged = false;
+    var held = shStageList;
+    shStageList = [];
+    held.forEach(function (fn) { try { fn(); } catch (e) { /* one deferred load never blocks the rest */ } });
+  }
   function syncPageVisibility() {
     var paused = doc.hidden || shHidden;
     if (root.hasAttribute("data-animation-paused") !== paused) root.toggleAttribute("data-animation-paused", paused);
@@ -332,7 +348,14 @@
       if (!paneFrame) paneFrame = requestAnimationFrame(notePanes);
     }, { passive: true });
   });
+  // Region messages that arrive in one frame (a warm switch's reconnect sends
+  // every region that changed meanwhile) share the first one's snapshot: the
+  // offsets read again after a swap's writes would force a layout per message
+  // and restoreScroll keeps only the first offset of each scroller anyway.
+  // The frame, or the owner's own input, ends the share.
+  var scrollSnap = null;
   function scrollState() {
+    if (scrollSnap) return scrollSnap;
     // The observer owns visibility. Snapshot offsets before swap writes,
     // without getClientRects/style probes or any reads of owned scrollers.
     var s = [];
@@ -341,6 +364,8 @@
       if (el && !el.wbScrollOwner && (paneObserver ? paneVisible[id] : visible(el))) s.push([el, el.scrollTop]);
     });
     if (doc.scrollingElement && !doc.scrollingElement.wbScrollOwner) s.push([doc.scrollingElement, doc.scrollingElement.scrollTop]);
+    scrollSnap = s;
+    requestAnimationFrame(function () { scrollSnap = null; });
     return s;
   }
   // Restore after the swap's writes; collect all current offsets before any
@@ -360,7 +385,7 @@
     });
   }
   ["wheel", "touchstart", "pointerdown", "keydown"].forEach(function (type) {
-    window.addEventListener(type, function () { scrollRestore.clear(); }, { capture: true, passive: true });
+    window.addEventListener(type, function () { scrollRestore.clear(); scrollSnap = null; }, { capture: true, passive: true });
   });
 
   // The conversation stays at the bottom while the user has it there. Its

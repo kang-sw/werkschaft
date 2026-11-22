@@ -92,7 +92,7 @@ var shippedTierRoleInventory = map[string][2]string{
 	"implementer":                  {"implement:*", "medium"},
 	"ticket-worker":                {"implement:*", "medium"},
 	"ticket-worker-elevated":       {"implement:*", "large"},
-	"ticket-handler":               {"implement:*", "medium"},
+	"ticket-handler":               {"implement:*", "large"},
 	"ship-handler":                 {"implement:*", "small"},
 	"reviewer":                     {"review:*", "large"},
 	"code-review-correctness":      {"review:*", "large"},
@@ -101,7 +101,7 @@ var shippedTierRoleInventory = map[string][2]string{
 	"code-review-test":             {"review:*", "medium"},
 	"ticket-reviewer-completeness": {"review:*", "medium"},
 	"ticket-reviewer-design":       {"review:*", "large"},
-	"review-handler":               {"review:*", "medium"},
+	"review-handler":               {"review:*", "large"},
 	"ticket-fact-populator":        {"review:*", "medium"},
 	"fresh-read-doc-auditor":       {"review:*", "large"},
 	"fresh-reader-audit":           {"review:*", "large"},
@@ -150,6 +150,39 @@ func TestShippedPlaybooksDeclareTierRoles(t *testing.T) {
 			meta := metaFromFrontmatter(fm)
 			if meta.Tier != "" && meta.TierRole == "" {
 				t.Errorf("%s: %s declares tier %q without tier-role", dir, rel, meta.Tier)
+			}
+		}
+	}
+}
+
+// A child never exceeds its parent's tier, so a handler spawned below the
+// reviewers it spawns can never start them. The handlers must declare at least
+// the tier of every reviewer they render.
+func TestShippedHandlersDeclareAtLeastTheirReviewersTier(t *testing.T) {
+	rank := map[string]int{"small": 1, "medium": 2, "large": 3, "xlarge": 4}
+	handlers := map[string][]string{
+		"ticket-handler": {"ticket-reviewer-design", "ticket-reviewer-completeness", "ticket-fact-populator"},
+		"review-handler": {"reviewer", "code-review-correctness", "code-review-fit", "code-review-test", "fresh-reader-audit"},
+	}
+	for _, dir := range []string{"agents-plugin", "agents-plugin-wsflow"} {
+		root := filepath.Join("..", "..", "..", dir, "rsrc")
+		tier := func(name string) int {
+			pb, err := Load(root, name, "", "", nil)
+			if err != nil {
+				t.Fatalf("%s: load %s: %v", dir, name, err)
+			}
+			r, ok := rank[pb.Meta.Tier]
+			if !ok {
+				t.Fatalf("%s: %s declares tier %q", dir, name, pb.Meta.Tier)
+			}
+			return r
+		}
+		for handler, spawned := range handlers {
+			floor := tier(handler)
+			for _, name := range spawned {
+				if got := tier(name); got > floor {
+					t.Errorf("%s: %s declares a lower tier than %s, which it spawns", dir, handler, name)
+				}
 			}
 		}
 	}

@@ -57,6 +57,8 @@ function CustomEvent(type) { this.type = type; }
 var suspended = 0, mounted = 0;
 function suspendDocFrames() { suspended++; }
 function mountFramesPaced() { mounted++; }
+var unstaged = 0;
+function shUnstage() { unstaged++; }
 function region() { return null; }
 function $() { return null; }
 var searchOpens = 0, tkApi = { openSearch: function () { searchOpens++; } };
@@ -144,6 +146,7 @@ check("shown, it applies each held region once in arrival order and resumes rend
   [log, Object.keys(hiddenRegions), shTrackerRev, times, mounted, sockets.length, root.hasAttribute("data-animation-paused")],
   [["swap:convlive.4", "swap:board.5"], [], null, 2, 1, 2, false]);
 check("resumed stream requests display work", sockets[1].url, s.url);
+check("a shown message releases the staged loads, a hidden or foreign one does not", unstaged, 1);
 log = [];
 s = sockets[1]; s.onopen({});
 s.msg("region", { name: "board", hash: "6", html: "" });

@@ -20,7 +20,7 @@ func TestAgentSpawnHostedWorkerRows(t *testing.T) {
 	host := &summarySnapshotHost{}
 	h.opts.LiveHost = host
 	backend := &fakeBackend{}
-	h.opts.Backends[BackendCodex] = BackendRegistration{Backend: backend, LeadProfile: LeadProfileCodex, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendCodex)}
+	h.opts.Backends[BackendCodex] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendCodex), Lifecycle: builtinLifecycle(BackendCodex), LeadProfile: LeadProfileCodex, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendCodex)}
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "codex-small", BackendCodex, "high"); err != nil {
 		t.Fatal(err)
@@ -95,8 +95,9 @@ func TestHostedLeadSpawnRowsSurviveDaemonReplacement(t *testing.T) {
 	}
 	waitRows(wslive.StatusRunning, wslive.StatusRunning)
 	// Native feed duplicates preserve native activity, not a second row.
+	nativeKey := h.record(child.ID).WSKey // read on the test goroutine: h.record can t.Fatal
 	h.runner.conv(lead.ID).do(func() {
-		h.runner.conv(lead.ID).apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native-worker", SessionKey: h.record(child.ID).WSKey, Caption: strPtr("native activity")})
+		h.runner.conv(lead.ID).apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native-worker", SessionKey: nativeKey, Caption: strPtr("native activity")})
 	})
 	waitRows(wslive.StatusRunning, wslive.StatusRunning)
 	if a := rows()["pi:"+child.ID]; a.Caption != "native activity" {
@@ -372,6 +373,31 @@ func TestSpawnAgentEventCarriesHarnessAndNeutralLabel(t *testing.T) {
 				t.Fatalf("snapshot = %+v", rows)
 			}
 		})
+	}
+}
+
+// TestSpawnAgentEventClearsDroppedThresholdsOnTheParentRow: a child whose
+// model changes to a smaller window loses its absolute thresholds (they lie
+// beyond the window), so its state holds the new window and no compaction.
+// The parent row must follow, not keep the old scale.
+func TestSpawnAgentEventClearsDroppedThresholdsOnTheParentRow(t *testing.T) {
+	feed := wslive.NewState("lead-key")
+	tokens := float64(100_000)
+	big := State{ID: "child1", Backend: BackendPi, Status: StatusRunning, ContextTokens: &tokens, ContextWindow: 272_000,
+		ContextCompaction: &wslive.UsageCompaction{Soft: 150_000, Hard: 180_000}}
+	if _, err := feed.Apply(SpawnAgentEvent(big, "child-key"), 100); err != nil {
+		t.Fatal(err)
+	}
+	if a := feed.Snapshot(100).Agents[0]; a.ContextCompaction == nil || a.ContextCompaction.Hard != 180_000 {
+		t.Fatalf("scale not carried: %+v", a)
+	}
+	small := big
+	small.ContextWindow, small.ContextCompaction = 128_000, nil
+	if _, err := feed.Apply(SpawnAgentEvent(small, "child-key"), 200); err != nil {
+		t.Fatal(err)
+	}
+	if a := feed.Snapshot(200).Agents[0]; a.ContextWindow != 128_000 || a.ContextCompaction != nil {
+		t.Fatalf("parent row kept the old thresholds: %+v / %+v", a, a.ContextCompaction)
 	}
 }
 

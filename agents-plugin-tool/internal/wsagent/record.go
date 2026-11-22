@@ -51,7 +51,12 @@ type Record struct {
 	// profile's list_in_index when the conversation last started).
 	Listed    bool   `json:"listed,omitempty"`
 	CreatedAt string `json:"created_at"`
-	ClosedAt  string `json:"closed_at,omitempty"`
+	// CreatedUnixNano is the creation instant at nanosecond precision, which
+	// orders a binding against a worktree release in the same second
+	// (wsgit.BoundBeforeRelease). Additive: a record from before it has 0,
+	// and an older writer keeps it as an unknown member.
+	CreatedUnixNano int64  `json:"created_unix_nano,omitempty"`
+	ClosedAt        string `json:"closed_at,omitempty"`
 
 	// HandedOffAt is when a lead session was handed to a terminal harness
 	// (conv.release): the daemon serves it no more, as it serves no closed
@@ -111,6 +116,16 @@ type Record struct {
 	// one-line name its spawner gave it.
 	Parent *ParentRef `json:"parent,omitempty"`
 	Label  string     `json:"label,omitempty"`
+	// SpawnerBackend is the verified backend of the session that spawned
+	// the conversation (AgentCaller.VerifiedBackend), stamped once at
+	// spawn: empty when the spawner had no verified binding, or for a
+	// record made before the stamp, whose startup load derives it from its
+	// parent's record (resolveSpawnerBackends). A backend registered with a
+	// cross-harness refusal admits the record from it (admitWorkerRecord).
+	// It stays out of Parent, whose whole value keys the child index and
+	// parent ownership, and top-level so an older writer keeps it as
+	// unknown data.
+	SpawnerBackend string `json:"spawner_backend,omitempty"`
 	// TurnOpen is set on a conversation with a Parent while one of its
 	// turns runs: a successor rejoins a held process, or reports interruption
 	// when that process is gone.
@@ -418,9 +433,12 @@ type liveWriter struct {
 	// beforeSnapshot refreshes daemon-owned rows in this writer's loop.
 	beforeSnapshot func()
 	owner          func() (func(), bool)
-	wake           func()
-	slotMu         sync.Mutex
-	slot           wsdashboard.HostedSlot
+	// ownerRAM is owner's in-memory fence for a publish that only reaches
+	// the live slot (applyRAM); owner is used when it is unset.
+	ownerRAM func() (func(), bool)
+	wake     func()
+	slotMu   sync.Mutex
+	slot     wsdashboard.HostedSlot
 	// The last successfully written disk projection, without its timestamp.
 	lastSnapshot []byte
 	lastDiskAt   time.Time
@@ -441,6 +459,126 @@ type liveWriter struct {
 	// observedSeeded reports that st seeded from the whole evidence
 	// directory (wsdashboard.ObservedFoldSlot).
 	observedSeeded bool
+	// restored is what the snapshot an earlier daemon left says of agy
+	// native rows, for the first replay to end (takeRestored).
+	restored restoredAgyNative
+	// extra and extraDisk are the session's extra file (wslive.SnapshotExtra)
+	// as last read or written, and its bytes; nil when the file is missing.
+	// It is rewritten ahead of a recovery snapshot write only when the
+	// content to write differs.
+	extra     wslive.SnapshotExtra
+	extraDisk []byte
+	// coverage names the holder records the state applied, written into the
+	// recovery file (wslive.Snapshot.HolderID, HolderSeq); unset writes none
+	// (tests that build a bare writer).
+	coverage func() (holderID string, seq uint64)
+	// diskHold keeps the recovery file as an earlier daemon left it while
+	// a rejoin's replay has not yet folded that file's evidence (its running
+	// agy native rows, its holder coverage) into the state: a write before
+	// then would replace the checkpoint a second interruption recovers
+	// from with one that lacks it. Snapshots still reach the live slot.
+	// Loop-owned; set before the conversation's first write and cleared
+	// once the replay's rows are resolved (conv.finishAgyNativeReplay).
+	diskHold bool
+	// batch holds every snapshot publication and write back while a
+	// rejoin's fold changes many rows (beginBatch, endBatch): readers see
+	// only the folded, retained roster, never an intermediate uncapped one.
+	// Ring and evidence appends still go out as they happen. batchChanged
+	// records that a held change needs the closing write, batchWake that a
+	// held ring append owes file-only readers a wake after it. Loop-owned.
+	batch, batchChanged, batchWake bool
+}
+
+// beginBatch starts holding the writer's publications (batch).
+func (w *liveWriter) beginBatch() {
+	w.batch, w.batchChanged, w.batchWake = true, false, false
+}
+
+// endBatch ends a batch with one snapshot write of the state it left, when
+// anything changed or force asks for it, then the ring wake a held append
+// owed (as write orders them: snapshot first). It reports whether it wrote.
+func (w *liveWriter) endBatch(force bool) bool {
+	changed, wake := w.batchChanged, w.batchWake
+	w.batch, w.batchChanged, w.batchWake = false, false, false
+	if !changed && !force {
+		return false
+	}
+	w.writeSnapshot()
+	if changed && w.wake != nil && (wake || w.currentSlot() == nil) {
+		w.wake()
+	}
+	return true
+}
+
+// restoredAgyNative is what a restored snapshot says of agy native rows: the
+// rows it lists (any status), those it lists running (as listed), its write
+// time, and the holder records it covers (covered, with holderID and
+// coveredSeq; unset from a writer that predates them). readable is false
+// when no snapshot of this session could be read. erased is set when the
+// snapshot lacks coverage although a daemon that records it wrote this
+// session before (wslive.SnapshotExtra.Coverage): an older writer replaced
+// the file and dropped the rows it does not seed, so the file's absences
+// say nothing of retention.
+type restoredAgyNative struct {
+	readable   bool
+	updatedAt  int64
+	listed     map[string]bool
+	running    map[string]wslive.Agent
+	covered    bool
+	erased     bool
+	holderID   string
+	coveredSeq uint64
+}
+
+// evicted reports whether a row a replay rebuilt from records the previous
+// daemon applied alone, first seen at holder record startSeq of holderID,
+// was evicted by retention: the snapshot is readable and does not list it,
+// and its start is one the snapshot covers. Without the snapshot's coverage
+// (a writer that predates it) an unlisted row counts as evicted, unless an
+// older writer replaced a file that had it (erased): that writer removes rows
+// itself, so the row is rebuilt from the holder's retained records, which
+// retention then bounds like any rebuilt roster. Coverage
+// of another holder covers none of this one's records, a known empty
+// coverage (seq 0) none of any, and a snapshot written with no holder
+// (seq 0, no holder ID) none either.
+func (r restoredAgyNative) evicted(id, holderID string, startSeq uint64) bool {
+	if !r.readable || r.listed[id] {
+		return false
+	}
+	if !r.covered {
+		return !r.erased
+	}
+	return r.holderID != "" && r.holderID == holderID && startSeq <= r.coveredSeq
+}
+
+// restoredAgyNativeOf reads prev, a snapshot of session replyID.
+func restoredAgyNativeOf(prev wslive.Snapshot, replyID string) restoredAgyNative {
+	if prev.ReplyID != replyID {
+		return restoredAgyNative{}
+	}
+	r := restoredAgyNative{readable: true, updatedAt: prev.UpdatedAt, listed: map[string]bool{}, running: map[string]wslive.Agent{}}
+	if prev.HolderSeq != nil {
+		r.covered, r.holderID, r.coveredSeq = true, prev.HolderID, *prev.HolderSeq
+	}
+	for _, a := range prev.Agents {
+		if !strings.HasPrefix(a.ID, wslive.NativeAgyPrefix) {
+			continue
+		}
+		r.listed[a.ID] = true
+		if a.Status == wslive.StatusRunning {
+			r.running[a.ID] = a
+		}
+	}
+	return r
+}
+
+// takeRestored returns what the restored snapshot said, once: after the
+// first replay ended, the writer's own state is the record a later one
+// would rebuild against, readable and with nothing restored running.
+func (w *liveWriter) takeRestored() restoredAgyNative {
+	r := w.restored
+	w.restored = restoredAgyNative{readable: true}
+	return r
 }
 
 // newLiveWriter starts from the finished subagents of the snapshot an
@@ -458,7 +596,17 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 	} else if err != nil {
 		folded = false
 	}
+	var restored restoredAgyNative
+	extra, extraFound := wslive.ReadSnapshotExtra(dir)
+	var extraDisk []byte
+	if extraFound {
+		extraDisk, _ = json.Marshal(extra)
+	}
 	if prev, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir)); err == nil {
+		restored = restoredAgyNativeOf(prev, st.ReplyID())
+		restored.erased = restored.readable && !restored.covered && extra.Coverage
+		// Rows an older writer seeded without their scale take it back.
+		prev.OverlayAgentScales(extra.Agents)
 		st.SeedFinished(prev)
 		st.SeedLastTurn(prev)
 		if prev.Lead.OutputRate != nil {
@@ -480,6 +628,9 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 		appendRing:        wslive.AppendRing,
 		observedSeeded:    folded,
 		outputRates:       wslive.NewOutputRateLog(dir),
+		restored:          restored,
+		extra:             extra,
+		extraDisk:         extraDisk,
 	}
 }
 
@@ -493,6 +644,45 @@ func (w *liveWriter) apply(ev wslive.Event) bool {
 // immediately following TurnEnd snapshot.
 func (w *liveWriter) applyCoalesced(ev wslive.Event) bool {
 	return w.applyMode(ev, true)
+}
+
+// applyRAM applies ev and publishes it to the live slot alone, under the
+// in-memory ownership fence (ownerRAM): no file is read or written. What it
+// changed reaches disk with the next snapshot write.
+func (w *liveWriter) applyRAM(ev wslive.Event) bool {
+	res, err := w.st.Apply(ev, w.now().UnixMilli())
+	if err != nil {
+		fmt.Fprintf(w.log, "agent %s: drop %s event: %v\n", w.st.ReplyID(), ev.Kind, err)
+		return false
+	}
+	if len(res.Ring) > 0 || len(res.Observed) > 0 || res.OutputRate != nil {
+		// Not a RAM-only change after all: take the file-fenced path.
+		return w.write(res, nil, ev.Kind, true)
+	}
+	if !res.Changed {
+		return false
+	}
+	if w.batch {
+		w.batchChanged = true
+		return true
+	}
+	slot := w.currentSlot()
+	if slot == nil {
+		return true
+	}
+	fence := w.ownerRAM
+	if fence == nil {
+		fence = w.owner
+	}
+	if fence != nil {
+		release, ok := fence()
+		if !ok {
+			return true
+		}
+		defer release()
+	}
+	slot.Publish(w.st.Snapshot(w.now().UnixMilli()))
+	return true
 }
 
 func (w *liveWriter) applyMode(ev wslive.Event, coalesceTurnEnd bool) bool {
@@ -587,6 +777,11 @@ func (w *liveWriter) write(res wslive.Result, err error, kind string, coalesceTu
 	if !res.Changed && len(res.Ring) == 0 {
 		return false
 	}
+	if w.batch {
+		w.batchChanged = true
+		w.batchWake = w.batchWake || ringAppended
+		return true
+	}
 	if coalesceTurnEnd {
 		w.publishSnapshot(w.st.Snapshot(w.now().UnixMilli()))
 		return true
@@ -644,12 +839,22 @@ func (w *liveWriter) heartbeatSnapshot() { w.flushSnapshot(true, false) }
 func (w *liveWriter) forceSnapshot() { w.flushSnapshot(false, true) }
 
 func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
+	if w.batch {
+		// The batch's closing write goes instead (endBatch).
+		w.batchChanged = true
+		return
+	}
 	if w.beforeSnapshot != nil {
 		w.beforeSnapshot()
 	}
 	now := w.now()
 	snap := w.st.Snapshot(now.UnixMilli())
 	w.publishSnapshot(snap)
+	if w.diskHold {
+		// Pending output-rate evidence waits too: it goes with the first
+		// write after the hold.
+		return
+	}
 	disk := snap.ForDisk()
 	disk.UpdatedAt = 0
 	content, err := json.Marshal(disk)
@@ -678,10 +883,29 @@ func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
 	var raw []byte
 	if err == nil {
 		disk.UpdatedAt = snap.UpdatedAt
+		// The covered holder record is not part of content: a write the
+		// content skips keeps an older, smaller coverage, which only keeps
+		// more rebuilt rows on a rejoin.
+		if w.coverage != nil {
+			// A current writer always names its coverage: a known holder
+			// with its seq, 0 included (no record applied yet), and no
+			// holder as seq 0 with no holder ID, which covers no record of
+			// any holder. Only absent coverage is a writer that predates it.
+			id, seq := w.coverage()
+			if id == "" {
+				seq = 0
+			}
+			disk.HolderID, disk.HolderSeq = id, &seq
+		}
 		raw, err = json.Marshal(disk)
 	}
 	if err == nil {
 		err = w.withOwner(func() error {
+			// The extra file goes first: a snapshot that names coverage never
+			// exists without it.
+			if err := w.writeExtra(snap); err != nil {
+				return err
+			}
 			if err := w.writeSnapshotFile(wslive.SnapshotPath(w.dir), raw, 0o644); err != nil {
 				return err
 			}
@@ -698,6 +922,27 @@ func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
 	if err != nil {
 		fmt.Fprintf(w.log, "agent %s: snapshot write: %v\n", w.st.ReplyID(), err)
 	}
+}
+
+// writeExtra writes the session's extra file (wslive.SnapshotExtra) when its
+// content differs from what the file holds: the coverage mark with a
+// coverage writer's first recovery write, and the scale of the rows snap
+// shows finished when that set or a scale in it changed. Running rows change
+// nothing in it, so a heartbeat or a turn never rewrites the file.
+func (w *liveWriter) writeExtra(snap wslive.Snapshot) error {
+	extra := wslive.SnapshotExtra{Coverage: w.coverage != nil || w.extra.Coverage, Agents: wslive.AgentScales(snap.Agents)}
+	if !extra.Coverage && len(extra.Agents) == 0 && w.extraDisk == nil {
+		return nil
+	}
+	raw, err := json.Marshal(extra)
+	if err != nil || bytes.Equal(raw, w.extraDisk) {
+		return err
+	}
+	if err := w.writeSnapshotFile(wslive.SnapshotExtraPath(w.dir), raw, 0o644); err != nil {
+		return err
+	}
+	w.extra, w.extraDisk = extra, raw
+	return nil
 }
 
 func (w *liveWriter) currentSlot() wsdashboard.HostedSlot {

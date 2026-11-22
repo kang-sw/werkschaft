@@ -35,6 +35,18 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if err != nil {
 		return HostedView{}, fmt.Errorf("exec: the owning session cannot take a job: %w", err)
 	}
+	if req.CheckGen && owner.Gen != req.ExpectGen {
+		return HostedView{}, errors.New("exec: the owning session reopened since this request was made")
+	}
+	// The job's resolved places, so a worktree fence matches it however
+	// its working directory was spelled and the process starts where
+	// admission checked; once per launch, stored with the row. A place that
+	// cannot be resolved refuses the launch (admittedPlaces), before
+	// anything asks for approval.
+	realRoot, realCwd, err := admittedPlaces(req.Root, req.Cwd)
+	if err != nil {
+		return HostedView{}, err
+	}
 	// The program resolves before the approval, so the prompt names the
 	// binary that starts.
 	argv := append([]string(nil), req.Argv...)
@@ -50,7 +62,10 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if lookErr == nil {
 		argv[0] = bin
 		call = approvalCall(req, bin)
-		if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
+		if req.UserApproved {
+			// The user's own request is this invocation's approval.
+			explicit = true
+		} else if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
 			return HostedView{}, err
 		}
 	}
@@ -65,7 +80,7 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		// this job does not record yet, and the job must not be pruned (nor
 		// its id drawn again) until that holder is confirmed gone.
 		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet, starting: true, holderPinned: lookErr == nil}
-		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
+		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, RealRoot: realRoot, RealCwd: realCwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
 		err = h.admit(j)
 		if err == nil {
 			break
@@ -76,11 +91,43 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 			return HostedView{}, err
 		}
 	}
+	// Registered: a close from here on stops this job (StopOwner). A close
+	// and revival that completed between the owner read and the admission
+	// (the fence lifted again) left the job on a generation nobody asked for:
+	// read the live generation once more now, against the one the request was
+	// made under (the owner read's, unless the request names its own).
+	want := owner.Gen
+	if req.CheckGen {
+		want = req.ExpectGen
+	}
+	var recheck error
+	if now, err := h.opts.Sessions.Owner(req.Owner); err != nil {
+		recheck = fmt.Errorf("exec: the owning session cannot take a job: %w", err)
+	} else if now.Gen != want {
+		recheck = errors.New("exec: the owning session reopened since this request was made")
+	}
+	if recheck != nil {
+		// No holder launched yet: nothing is left to retire.
+		h.mu.Lock()
+		j.holderPinned = false
+		h.mu.Unlock()
+		return h.failStart(j, "", recheck)
+	}
 	if lookErr != nil {
 		return h.failStart(j, "", lookErr)
 	}
+	// A daemon replacement began: no new holder starts under it (a job already
+	// started converts on the drain and goes on under its holder).
+	select {
+	case <-drain:
+		h.mu.Lock()
+		j.holderPinned = false
+		h.mu.Unlock()
+		return h.failStart(j, "", errors.New("exec: the daemon is stopping"))
+	default:
+	}
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
-	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})
+	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, RingCeilingBytes: hostedHolderRingCeiling, ExitCopy: h.exitCopyPath(id)})
 	if err != nil {
 		if holder != "" {
 			// The holder registered but could not be attached: it runs, and
@@ -141,7 +188,11 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
-	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: req.Cwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
+	// realCwd is in the ordinary spelling, never the extended-length form:
+	// CreateProcess refuses \\?\ as a current directory. A Windows cwd past
+	// MAX_PATH fails at process start, as it did before admission resolved
+	// it (the path reached the same CreateProcess).
+	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: realCwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
 	close(spawned)
 	if err != nil {
 		if st.PID != 0 {
@@ -164,15 +215,19 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if req.Async {
 		return h.view(j, OutcomeAsync), nil
 	}
-	window := time.NewTimer(h.opts.Window)
+	wait := h.opts.Window
+	if req.Window > 0 {
+		wait = req.Window
+	}
+	window := time.NewTimer(wait)
 	defer window.Stop()
 	select {
 	case <-j.done:
 		return h.view(j, OutcomeDone), nil
 	case <-window.C:
-		return h.convert(j), nil
+		return h.convert(j, req.OnConvert), nil
 	case <-drain:
-		return h.convert(j), nil
+		return h.convert(j, req.OnConvert), nil
 	case <-ctx.Done():
 		h.stop(j)
 		return h.view(j, OutcomeDone), ctx.Err()
@@ -180,18 +235,45 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 }
 
 // convert makes j async when it still runs; an end that won the race is an
-// OutcomeDone.
-func (h *Hosted) convert(j *hostedJob) HostedView {
+// OutcomeDone. The outcome is committed once, under h.mu: a job found running
+// there is converted for good (it owes its notice from that moment), whatever
+// happens after, and one found ended is done and owes none. The caller's
+// onConvert then publishes the job's id while the job is not yet eligible for
+// a notice, live or stored (publishing: the store sees Notify unset and no
+// pending notice, so a daemon that goes away in between restores a job that
+// owes none), so an end that follows can only order its notice after the id.
+// Only once onConvert returned is the conversion stored with its notice. A
+// failed publication leaves the ordinary notice as the one delivery: the id
+// then reaches the owner through it alone.
+func (h *Hosted) convert(j *hostedJob, onConvert func(HostedView) error) HostedView {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
 		return h.view(j, OutcomeDone)
 	}
 	j.row.Notify = true
+	j.publishing = onConvert != nil
+	v := HostedView{HostedJobRow: h.rowLocked(j), Outcome: OutcomeConverted}
+	if onConvert == nil {
+		row, rev := h.snapLocked(j)
+		h.mu.Unlock()
+		h.save(j, row, rev)
+		return v
+	}
+	h.mu.Unlock()
+	err := onConvert(v)
+	h.mu.Lock()
+	j.publishing = false
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
+	if err != nil {
+		h.logf("publish the id of %s: %v", v.ID, err)
+	}
+	// An end that came while the id was being published left its notice
+	// pending; the stored row now says so, and the notice goes.
 	h.save(j, row, rev)
-	return h.view(j, OutcomeConverted)
+	h.deliver(j)
+	return v
 }
 
 // admit registers j, refusing a new job once the running ones and the
@@ -215,9 +297,9 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return errors.New("exec: the owning session is closing")
 	}
-	if root := h.fencedRootLocked(j.row); root != "" {
+	if root, reason := h.fencedRootLocked(j); root != "" {
 		h.mu.Unlock()
-		return fmt.Errorf("exec: the worktree %s is being released or removed", root)
+		return fmt.Errorf("exec: the worktree %s is %s", root, reason)
 	}
 	// newID checked the id without holding h.mu through here: a launch
 	// that drew the same id may have been admitted since.
@@ -458,6 +540,28 @@ func environMap(environ []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// ShellLaunch prepares the hosted launch of one bash line: cwd resolved
+// inside root (cwdArg empty is root itself), environ overlaid with overlay,
+// and the shell chosen by ShellArgv. exec.shell and the dashboard composer
+// both build their launch here, so the shell, the working directory and the
+// environment are one decision. The caller sets what is its own (Async,
+// Stdin, Window, approval).
+func ShellLaunch(owner, tool, root, cwdArg, line string, environ []string, overlay map[string]string) (HostedLaunch, error) {
+	cwd, err := ResolveWorkingDir(root, cwdArg)
+	if err != nil {
+		return HostedLaunch{}, err
+	}
+	if strings.TrimSpace(line) == "" {
+		return HostedLaunch{}, errors.New(tool + ": cmd is required")
+	}
+	environ = OverlayEnv(environ, overlay)
+	argv, err := ShellArgv(line, environ)
+	if err != nil {
+		return HostedLaunch{}, err
+	}
+	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, Environ: environ, Env: overlay, Argv: argv, Display: line, Command: line, Shell: argv[0]}, nil
 }
 
 // ShellArgv is the new exec.shell form's argv for line: Bash on the job's

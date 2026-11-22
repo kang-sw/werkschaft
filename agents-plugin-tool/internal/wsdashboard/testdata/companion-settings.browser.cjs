@@ -90,14 +90,22 @@ async function shot(page, name) {
         expanded: document.querySelector('.ws-companion-gear').getAttribute('aria-expanded'),
         labels: [...d.querySelectorAll('.ws-companion-settings-label')].map(e => e.textContent),
         persona: d.querySelector('.ws-companion-settings-persona').textContent,
-        controls: d.querySelectorAll('.ws-companion-settings-control select, .ws-companion-settings-control input').length };
+        selects: d.querySelectorAll('select').length, numbers: d.querySelectorAll('input[type="number"]').length,
+        colors: [...d.querySelectorAll('input[type="color"]')].map(e => e.closest('.ws-companion-settings-sub').textContent),
+        follow: [...d.querySelectorAll('select')].slice(2).map(s => s.options[0]?.value) };
     });
     assert.equal(modal.modal, false, 'the settings dialog is non-modal');
     assert.ok(modal.l >= 0 && modal.t >= 0 && modal.r <= modal.vw && modal.b <= modal.vh, 'dialog inside the viewport: ' + JSON.stringify(modal));
     assert.ok(modal.beside, 'dialog beside the companion');
     assert.equal(modal.expanded, 'true');
-    assert.deepEqual(modal.labels, ['Pack', 'Preset', 'Agent cooldown', 'Agent hourly cap']);
-    assert.equal(modal.controls, 4);
+    assert.deepEqual(modal.labels, ['Pack', 'Preset', 'Outfit', 'Hair', 'Eyes', 'Attachments', 'Palette', 'Agent cooldown', 'Agent hourly cap']);
+    // Pack, preset, outfit, hair and eyes are selects; the default pack has no
+    // attachment slots, so that row draws no select. Wardrobe selects start
+    // with "follow preset"; every built-in tint channel gets a color input.
+    assert.equal(modal.selects, 5);
+    assert.equal(modal.numbers, 2);
+    assert.deepEqual(modal.follow, ['', '', '']);
+    for (const channel of ['eye', 'hair', 'outfitAccent', 'outfitPrimary', 'skin']) assert.ok(modal.colors.includes(channel), 'color input for ' + channel + ': ' + modal.colors);
     assert.match(modal.persona, /Fixture Fox/);
     assert.match(modal.persona, /short, upbeat lines/);
     // The page behind stays usable while the dialog is open.
@@ -111,6 +119,11 @@ async function shot(page, name) {
     await page.waitForTimeout(150);
     assert.deepEqual(writes.at(-1), { scope: 'global', key: 'dashboard.companion_agent_cooldown_seconds', value: 45 });
     await dialog.locator('select').first().waitFor();
+
+    // A palette pick writes the composed channel pair to the global layer.
+    await dialog.locator('.ws-companion-settings-sub', { hasText: /^skin$/ }).locator('input[type="color"]').fill('#aabbcc');
+    await page.waitForTimeout(150);
+    assert.deepEqual(writes.at(-1), { scope: 'global', key: 'dashboard.companion_palette', value: 'skin=#aabbcc' });
 
     // Escape, a second gear click, and the close button each close it.
     await page.keyboard.press('Escape');

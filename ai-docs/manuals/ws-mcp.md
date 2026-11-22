@@ -59,7 +59,7 @@ python3 <plugin>/bin/ws-mcp-launcher.py serve --stdio --root <repo-root>
 
 Stdin/stdout remains newline-delimited JSON-RPC (MCP protocol `2025-03-26`).
 The same launcher accepts `version`, `doctor`, `runtime`, `tools`, `call`,
-`config`, `path`, `git`, `tickets`, and `mailbox` commands. Only a necessary
+`config`, `path`, `git`, `tickets`, `mailbox`, and `credential` commands. Only a necessary
 `daemon-start`/replacement executes the staged ws binary; there are no
 executable version/capability probes or direct server/CLI fallbacks.
 
@@ -140,6 +140,53 @@ requires explicit `daemon-start --replace`, or `POST /shutdown` then startup).
 An older ws-mcp knows only `keys/`, so once a newer one has moved a session, the older one reports that key unknown. Downgrading loses
 sight of moved sessions the same way; session keys are cache state, so a
 fresh key is the recovery.
+
+### Provider credential store
+
+Provider credentials (an OpenRouter API key today; `internal/wscred`) live
+in one owner-only file, `<cache root>/dashboard/auth/credentials.json`:
+POSIX mode 0600 in a 0700 directory, on Windows a protected DACL granting
+the current user alone; never in a project tree. It sits under the daemon's
+state directory because v0.51.0's file preview already denies that whole
+directory, so a rolled-back daemon cannot show it. A pre-release build kept
+it at `<cache root>/auth/`; the daemon at start, and the offline CLI under
+the daemon lock, move that file once (`Store.MigrateLegacy`). It is a plain file (storage type 5),
+not a SQLite row, so the offline CLI can write it and nothing that copies
+the state databases copies a secret. The daemon reads it once, at the first
+credential use, serves every later read from memory, and rewrites it by
+atomic replace only when a credential changes; while it runs it is the
+file's only writer. A writer keeps members it does not know, and a file
+whose `schema_version` is newer is read but never rewritten. There is no
+environment-variable source: the daemon's environment reaches every hosted
+session and exec subprocess.
+
+`credential set <provider>` (the key on stdin, never in argv),
+`credential show [<provider>]` (masked), and `credential remove <provider>`
+manage it (`--format json` for structured output). The command reads only
+the first stdin line, and the launcher forwards only that line; on a
+terminal both the launcher and a directly run binary prompt for it without
+echo. An unrecognized argument is never echoed back, since it may be a
+misplaced key. Through the launcher the daemon applies the change itself. A
+directly run ws binary sends it to the running daemon's
+`POST /auth/provider/change` (authenticated by the endpoint file's token);
+with no daemon running it writes the file while holding the daemon's
+single-instance lock, so no daemon starts mid-write. A stopping daemon
+closes its store to changes, and lets a change already in flight finish,
+before it releases the lock; a change that arrives later is answered as a
+drain, so the sender retries against the successor.
+
+A hosted harness obtains a credential from `POST /auth/provider/token` with
+its per-session bearer (`WS_MCP_SESSION_TOKEN`); the route is not an MCP
+tool. Only a session whose backend registration sets `ProviderCredentials`
+passes, and no current backend does: the external harnesses bring their own
+logins. The dashboard's file browser denies the credential directory. Keys
+and tokens are never logged.
+
+Trust boundary: the token route's answer to an admitted session is the only
+response that carries a secret; no ws tool output returns one. Processes
+running as the same OS user are trusted. The file's owner-only mode or DACL
+keeps other users out, but not a same-user process such as a hosted exec
+job, which can read the file directly; OS permissions cannot prevent that.
 
 ### Dashboard daemon
 
@@ -1035,11 +1082,13 @@ from a support conversation:
   (`Runner.subagentSteer`); a worker gets it after its key sentence. A lead
   of a backend with `PreferNativeSubagent` (agy) gets a native-first line
   instead, whether or not its catalog names the tool: its native subagent
-  explores without ws tools at the harness's default model, while rendered
-  playbooks, ws-tool work, and tier-specific questions go to `agent.spawn`
-  at a `claude.<size>`, `codex.<size>`, or configured route target (a bare
-  size or own-harness role tier a render recommends gets `claude.` or
-  `codex.` first), and a native subagent is one-shot.
+  explores without ws tools at the harness's default model (a tier-specific
+  question goes to a read-only `agent.spawn` subagent at an external-harness
+  tier), rendered playbooks and ws-tool work go to `agent.spawn` with the
+  rendered tier passed as returned (a role tier may end on agy, which is
+  allowed; the Antigravity terms risk steers it to an external fixed tier
+  such as `claude.small` when another harness fits, never a harness prefix
+  before a role tier), and a native subagent is one-shot.
 - **Playbook commands.** A backend with `PlaybookCommands` (Claude, agy)
   hosts leads with no ws skills: the lead's connection (not a worker's)
   renders under the `ws` server's names whatever package the daemon
@@ -1065,15 +1114,18 @@ from a support conversation:
   selects the native-first prompt line above and, for text the hosted lead
   executes itself (`workflow_manual`, `playbook.read`, the playbook-command
   render), native-first terminology: `ExploreAgent` names its native
-  subagent, `SpawnIdiom` names `agent.spawn` on an external harness with the
-  size-prefix rule, and the continuity tip names `agent.spawn`'s subagents.
+  subagent, `SpawnIdiom` names `agent.spawn` with the same tier rule as the
+  prompt line (`nativeFirstTierRule`, `internal/mcp/playbook_terminology.go`),
+  and the continuity tip names `agent.spawn`'s subagents.
   For that lead's workflow manual, the renderer also rewrites three rendered
   sentences (`nativeFirstManual`; plain text, not declared variables, so the
   resource and caller-context validation are unchanged). The exploration
   bullet loses the "tier the question needs" suffix. A rendered delegate is
-  spawned through `agent.spawn` on an external harness with the returned path
-  and the rendered tier qualified with a harness prefix (no model/effort
-  bindings, which `agent.spawn` does not take).
+  spawned through `agent.spawn` with the returned path and the rendered tier
+  (no model/effort bindings, which `agent.spawn` does not take), and the tier
+  line states the tier rule. agy-to-agy restraint is this prompt only: agy
+  adds no harness-specific count or tier limit, while the generic depth,
+  nested-tier, and width limits of every `agent.spawn` still apply.
   `playbook.render` output is unchanged for every caller: a rendered
   delegate runs on another process.
   `CallFallback` opts hosted lead connections into the compact `call` tool
@@ -1098,14 +1150,80 @@ from a support conversation:
   `WS_MCP_AGENT_SESSION_KEY` in the attached MCP environment; this selects
   spelling only, without the hosted lead's implicit-key rule or authority.
   `WorkerCapable` and `WorkerProfile` admit worker tiers; `WorkerHTTPMCP`
-  selects HTTP attachment. Claude and agy use HTTP, Pi keeps its bridge.
-  agy's `WorkerAutoApprove` answers requests through `AnswerApproval`,
-  preserving the permission trace. Its workers use the default agent with
-  an appended instruction to use `agent.spawn`, never native subagents;
-  see Daemon replacement and process ownership for worker lifetime.
-  agy tier models are base ids with separate effort: launch uses
-  `thought_level` when offered, otherwise a suffixed model id, and logs the
-  mechanism honored. An unhonored worker effort refuses the launch.
+  selects HTTP attachment. Claude uses HTTP, Pi keeps its bridge.
+  **agy workers run for agy callers only** (owner decision (1546),
+  2026-11-22, revising (1545)): Antigravity's terms say its login used
+  through third-party software can get the account suspended and that
+  wrapping its CLI in another coding agent is unsupported on consumer plans,
+  which a Claude, Codex, or Pi session driving an agy worker is; agy-to-agy
+  use is the owner's accepted risk. The registration option
+  `crossHarnessRefusal` (set only for agy, which is `WorkerCapable`) admits
+  a worker on that backend only for a caller verified on the same backend,
+  and is the refusal's text; a backend without it admits every caller. One
+  check (`admitWorker`, `internal/wsagent/agent_tools.go`) decides every
+  worker entry: `agent.spawn` (an `agy.<tier>`, an agy caller's bare tier,
+  an alias, or a graph route or bundle ending on agy), the profile-based
+  `POST /agents` (no spawning session, so 403), and every launch, wake, or
+  rejoin of an existing agy worker record (`admitWorkerRecord`).
+  The caller's backend counts only when verified (`AgentCaller.VerifiedBackend`):
+  on an MCP connection, the backend of the open conversation the connection
+  is authenticated as, read from the daemon runner's memory
+  (`agentAdmissionBackend`, `internal/mcp/agent_tools.go`;
+  `Runner.CallerBackend`): a hosted session token's binding
+  (`ProxyHello.Conversation`, never decoded from a launcher hello) or, on a
+  launcher connection, the worker capability token the runner issued into
+  its environment; on the token route, the holder's record backend for a
+  nested spawn. Hosted-session variables, the registration row, and the
+  record file are not a binding, and no `agent.json` is read on an
+  `agent.*` call. The connection's detected harness (launcher hello,
+  initialize `clientInfo`) selects tiers only; an unbound connection (a
+  lead started outside the daemon) is cross-harness. A spawn stamps the verified caller backend on the child
+  (`Record.SpawnerBackend`, a top-level omitempty field, apart from
+  `Parent`, whose whole value keys the child index); a record without the
+  stamp on an option backend takes its parent record's backend, resolved at
+  startup from all records read before any rejoin
+  (`resolveSpawnerBackends`), and is otherwise refused. The record check
+  reads the backend, lead flag, and stamp before any profile, so an edited
+  or removed profile cannot mask the refusal; a lead is never refused. A
+  refused message, mail, or resume stays queued and the record stays
+  listed, with the refusal as its error; it is derived again on every load,
+  with no stored reason and before any profile, compaction, watchdog, or
+  permission config read.
+  On daemon start a held cross-harness agy worker is never rejoined. Its
+  holder is attached only for the ownership match every held worker passes
+  (`checkReattach`, `workerHolderMatches`), with replay, events, and the MCP
+  bearer kept closed and no profile or config read. A matching holder is
+  then stopped (`retireCrossHarnessWorker`): an open turn settles failed
+  with the refusal. A failed stop keeps the holder in the record and is
+  retried on every heartbeat until it succeeds; a user's Stop meanwhile
+  retries the holder's own stop and keeps the holder if that fails too. A
+  close (directly or through a parent's cascade) also retries that stop
+  first and, if it fails, is refused (`errHolderNotEnded`, HTTP 409). The
+  conversation stays open with its holder and heartbeat retry, the cascade
+  closes no ancestor, and closing again retries. A downgrade retirement
+  whose stop failed behaves the same way. Only the heartbeat's successful
+  retry wakes input queued meanwhile: after a deliberate Stop it waits for
+  the next send. A daemon that dies between clearing the holder and
+  settling the turn leaves the next load to settle it failed with the same
+  refusal, not as interrupted. A mismatched or already rejected holder is
+  never stopped; the record only drops the association. Either way the
+  record stays listed, stopped, and its activity is stamped, so child
+  expiry gives it one full interval. An agy-parented agy worker rejoins
+  and wakes as any other worker.
+  `agent.tiers` and route resolution depend on the caller: for a verified
+  agy caller agy tiers are spawnable; for any other, agy is listed under
+  `Unavailable` with the refusal, and aliases, routes, and bundles ending
+  on agy carry it. The dashboard tier view checks availability for its
+  simulated caller harness (an agy preview admits agy, a Claude preview
+  shows the refusal), and the MCP routed binding (`playbook.render`'s
+  recommendation, `config.resolve_agent`) returns no binding after a
+  refusal, even at the caller fallthrough (`errCallerRefused`,
+  `internal/mcp/tier_routing.go`). Every daemon-hosted connection gets that
+  check (`ServerOptions.CallerBinding`, the runner's read-only memory view),
+  a token-forwarding worker's too, which holds no runner handle. agy leads keep peer mail and the
+  watchdog's automatic `continue`, and may spawn Claude, Codex, Pi, or agy
+  workers. The dashboard's hosted lead popover still offers agy and shows a
+  terms warning while agy is picked.
 - **No ws plugin (Claude).** A Claude lead loads no ws bundle: the installed
   `ws` and `wsflow` plugins are turned off for the launch (`--settings`
   `enabledPlugins`), its ws-mcp is the `--mcp-config` server `ws` (no
@@ -1121,7 +1239,7 @@ from a support conversation:
   hooks remain enabled. `agents.enabled=false` removes native subagents;
   delegation is through `agent.*`.
   An `agent.spawn` worker (`agent-worker-codex`, tiers `codex.<tier>`) uses
-  the same start with no holder and no lead spec, as agy workers do: the
+  the same start with no holder and no lead spec: the
   runner sets `StartSpec.PermissionLevel` from the child's authority.
   Workdir-write authority runs in the `workspace-write` sandbox with approval
   policy `on-request`, which `WorkerAutoApprove` answers and traces; full
@@ -1323,7 +1441,24 @@ from a support conversation:
   thinking, and signature delta lines out of its ring and client stream.
   It skips only whole stdout lines that fit one record and match from the
   line's start; split or unmatched lines stay. Skipped lines consume no
-  sequence number.
+  sequence number. A daemon that sets the holder manager's `AuditChannel`
+  offers the holder audit channel on attach (an optional `audit` field; an
+  older holder ignores it and attaches as before, an older daemon never
+  offers it, and a holder without `--ring-skip` declines it). On a negotiated connection the holder tees each skipped line
+  as an unsequenced `audit` event anchored on the last kept stdout sequence
+  and fences every kept run (`audit_fence`); lines skipped while no daemon
+  is attached, or past the audit queue, are only counted in the fence. The
+  daemon's audit capture (`wsagent/audit_capture.go`) orders tee lines
+  before the kept lines a fence releases and never blocks the holder reader
+  or the stream mapper. Capture runs only when the runner has an
+  `AuditSink`; the shipped daemon sets neither yet (the audit store,
+  ticket `261119-feat-ws-audit-ring-store`, wires both). The Claude adapter
+  writes `meta.request = {id, prev_id, ctx}` on every event from a model
+  request (`wsaudit.RequestChain`): one chain for the lead and one per
+  native subagent (`parent_tool_use_id`), advancing once per assistant
+  message ID, text-only messages included; `ctx` is input + cache read +
+  cache creation tokens and is absent without usage. Codex streams carry
+  usage but no request ID, so their events omit it.
 - **Access.** Spawn, settings, stop, restart, close, and an approval answer take the
   trusted gate (`wsdashboard.TrustedWrite`): 404 to any viewer that is not a
   browser on this machine, 403 without the daemon's own `Origin`. A LAN
@@ -1592,7 +1727,7 @@ continues (`internal/wsagent/runner_events.go` L804-818).
 | Child kind | Owner | Survives graceful replace? | What to do |
 |---|---|---|---|
 | Hosted Claude, Pi, agy, or Codex lead | Session holder (`internal/wsagent/runner_process.go` L229-258, L294-312) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
-| Claude, Codex, agy, or Pi `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
+| Claude, Codex, Pi, or agy-parented agy `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
 | Legacy direct worker still running under an older daemon | Daemon subprocess | No; shutdown stops it | Send a new message after replace; its next launch uses a holder. |
 
 Healthy held leads and workers can continue through a normal daemon replacement.
@@ -1625,6 +1760,14 @@ parent report. A lead parent instead restores its held turn, adopts the child,
 and receives one late report. An old-pruned child leaves an unowned holder for
 the successor's orphan sweep.
 
+A Claude `agent.spawn` worker is launched with session-state lines on and
+reads its harness's background-task list (`StartSpec.SessionState`), as a lead
+does: a worker whose native background task (for example a Bash
+`run_in_background`) still runs is not idle, so neither the idle timer nor the
+stale-route restart (`restartIfDue`) stops it, and its done turn is held until
+the task ends and any wake-up turn it brings settles. A worker started before
+this change has no such lines and keeps the old behaviour until its next launch.
+
 Interrupt remains turn-scoped. Idle timeout, explicit stop, close, and expiry
 end the holder and revoke its tokens. A legacy direct worker's open turn
 settles `interrupted` once before queued input starts its next held process.
@@ -1632,6 +1775,10 @@ Output lost from the holder's ring uses existing backend recovery. A backend
 that cannot reconcile the lost turn reports failure honestly. Re-arming agy's
 model-wait watchdog across replacement remains outside this contract, matching
 held leads.
+A bearer the successor has not registered yet (its startup holder scan is
+still restoring the surviving workers') waits for that rejoin, up to 8 s
+(`mcpRejoinWait`), then resolves; past the rejoin an unknown bearer is a 401 at
+once, so a hard 401 never reaches a restored worker in that window.
 MCP calls during drain may receive 503. Windows survival requires a
 restart-safe holder; one still inside its starter's job object may end with it.
 
@@ -2013,7 +2160,7 @@ Current launcher inputs:
 | `WS_MCP_BOOTSTRAP_URL` | Download a prebuilt binary when no runtime binary exists. |
 | `WS_MCP_BOOTSTRAP_SHA256` | Optional SHA-256 checksum for `WS_MCP_BOOTSTRAP_URL`. |
 | `WS_MCP_RELEASE_REPOSITORY` | Override the GitHub release repository from `runtime.json`. |
-| `WS_MCP_RELEASE_TAG` | Override the release tag from `runtime.json`, for example `v0.50.8`. |
+| `WS_MCP_RELEASE_TAG` | Override the release tag from `runtime.json`, for example `v0.51.0`. |
 | `WS_MCP_RELEASE_BASE_URL` | Override the full release asset base URL; useful for local file or HTTP smoke tests. |
 | `WS_MCP_LAUNCHER_DEBUG` | Print launcher diagnostics to stderr when set to `1`. |
 | `WS_CODESIGN_IDENTITY` | macOS local dev builds only: code-signing identity name or SHA-1 passed to `codesign --force -s "$WS_CODESIGN_IDENTITY" -i dev.ws.mcp <binary>` before SHA-256 metadata generation; unset leaves builds untouched, and a signing failure aborts the build. |
@@ -2074,7 +2221,7 @@ The helper updates plugin manifests, runtime contracts, Go runtime development
 defaults, release workflow references, build script defaults, selected
 documentation references, and the `agents-plugin-pi/` mirrors (`runtime.json`,
 `bin/ws-mcp-launcher.py`, `rsrc/`, resynced byte-for-byte from `agents-plugin/`,
-plus both `ws-pi-bridge` `package.json` versions). Development binaries such as `0.50.8-dev` satisfy the
+plus both `ws-pi-bridge` `package.json` versions). Development binaries such as `0.51.0-dev` satisfy the
 plugin version the helper just set; older or newer minor releases are stale. The
 concrete range lives in `runtime.json.required_mcp` — read it there rather than
 restating a version here, which froze at `0.29.2` for seven minor releases
@@ -2284,7 +2431,7 @@ Level 2 validates local release assets:
 
 ```bash
 cd agents-plugin-tool
-scripts/build-release-assets.sh 0.50.8-dev
+scripts/build-release-assets.sh 0.51.0-dev
 python3 ../agents-plugin/bin/ws-mcp-launcher.py version
 cd dist
 shasum -a 256 -c SHA256SUMS

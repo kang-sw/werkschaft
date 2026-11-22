@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/kang-sw/devenv/internal/wscred"
 )
 
 const (
@@ -102,6 +104,10 @@ func accessExempt(r *http.Request) bool {
 	case ProxyHTTPPath:
 		return loopbackExemptCaller(r) // any method: the route answers 405 itself
 	case "/shutdown", FullStopPath, "/nudge", companionChangedPath:
+		return r.Method == http.MethodPost && loopbackExemptCaller(r)
+	case wscred.TokenRoutePath, credentialChangePath:
+		// The token route checks the session bearer, the change route the
+		// endpoint token (credential_routes.go).
 		return r.Method == http.MethodPost && loopbackExemptCaller(r)
 	}
 	if (r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/agents/by-token/") &&

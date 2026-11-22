@@ -35,7 +35,7 @@
         var v = null;
         try { v = s ? JSON.parse(s) : null; } catch (e) { v = null; }
         done(r.status, v && typeof v === "object" ? v : {}, r.headers.get("ETag") || "", s);
-      });
+      }, function () { done(0, {}); }); // a connection lost mid-body answers as an unreachable daemon
     }, function () { done(0, {}); });
   }
   function tkErrText(status, v) { return v.error ? String(v.error) : status ? "HTTP " + status : wsT("js.post.unreachable"); }
@@ -55,6 +55,8 @@
   // unchanged store is a 304 with no body. tkDirty records that a reload
   // changed the cache (tkReload tells the renderer only then).
   var tkAnswers = {}, tkList = null, tkDirty = false;
+  // tkHeld: the stores whose views the first show still has to read (shStage).
+  var tkHeld = null;
   // tkLent is another session frame's answer for store id, so a frame the
   // shell just opened revalidates it rather than reading the whole view
   // again; null when there is none (or no shell).
@@ -323,14 +325,34 @@
         tkOrder.forEach(function (id) { keep[id] = true; });
         [tkViews, tkErrs, tkSeen, tkAnswers, tkProjections, tkLegacy, tkReads].forEach(function (m) { Object.keys(m).forEach(function (id) { if (!keep[id]) delete m[id]; }); });
       }
+      // The list is what the header's search button and the drawer's tabs
+      // mount from; the views behind them (the heavy reads) wait for the
+      // page's first show when a hidden frame loaded it (shStage). A store
+      // the page's route enters meanwhile (check) reads its own view; the
+      // held pass leaves it and waits for it, so one summary is in flight and
+      // the entry's seen-marking lands on the data it asked for.
+      var ids = status === 200 ? tkOrder.slice() : [], left = ids.length, open = {};
+      ids.forEach(function (id) { open[id] = true; });
+      tkHeld = shHolding() ? open : null;
       listed(status);
-      var left = status === 200 ? tkOrder.length : 0;
-      if (!left) { done(); return; }
-      tkOrder.forEach(function (id) {
-        tkLoadView(id, function (changed) {
-          if (changed) tkDirty = true;
-          if (--left === 0) done();
-          else if (tkApi && changed) tkNotify(true);
+      if (!left) { tkHeld = null; done(); return; }
+      shStage(function () {
+        tkHeld = null;
+        ids.forEach(function (id) {
+          var claim = open[id];
+          if (claim !== true) {
+            // The entry's read may still be out: the reload stays busy until
+            // it lands, so no second read of the store (a nudge from the
+            // check's own revision bump included) supersedes it.
+            if (claim.n) claim.waiters.push(function () { if (--left === 0) done(); });
+            else if (--left === 0) done();
+            return;
+          }
+          tkLoadView(id, function (changed) {
+            if (changed) tkDirty = true;
+            if (--left === 0) done();
+            else if (tkApi && changed) tkNotify(true);
+          });
         });
       });
     }, false, null, held ? held.tag : "");
@@ -443,8 +465,18 @@
       });
     },
     check: function (id, done) {
+      var claim = null;
+      if (tkHeld && tkHeld[id]) {
+        claim = tkHeld[id] === true ? (tkHeld[id] = { n: 0, waiters: [] }) : tkHeld[id];
+        claim.n++;
+      }
       tkFetch(tkUrl(id, "check"), {}, function () {
-        tkLoadView(id, function () { tkNotify(); if (done) done(); });
+        tkLoadView(id, function () {
+          // The claim's bookkeeping runs whatever the renderer's callbacks do:
+          // the held reload waits on it.
+          try { tkNotify(); if (done) done(); }
+          finally { if (claim && --claim.n === 0) claim.waiters.splice(0).forEach(function (fn) { fn(); }); }
+        });
       });
     },
     // The route's pushed is a yes/no; the renderer counts commits, so a push

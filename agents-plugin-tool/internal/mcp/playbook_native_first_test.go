@@ -18,16 +18,19 @@ import (
 // A hosted lead whose backend registration sets PreferNativeSubagent (agy)
 // reads native-first terminology in the text it executes itself
 // (workflow_manual, playbook.read): exploration goes to its native subagent
-// and spawns go to agent.spawn on an external harness. A prompt rendered for
+// and spawns go to agent.spawn with a rendered tier passed as returned, an
+// agy route allowed but restrained toward an external fixed tier by the
+// Antigravity terms risk. A prompt rendered for
 // another process (playbook.render) keeps today's daemon-agent wording.
 
 const (
-	nativeFirstExplore = "your native subagent (no ws tools, your harness's default model; when the question needs a specific tier, a read-only `ws/agent.spawn` subagent at an external-harness tier)"
-	nativeFirstSpawn   = "`ws/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness; authority: at most your own)"
-	nativeFirstTip     = "When a subagent started with `ws/agent.spawn` returns an agent id, use `" + piMCPOnlyContinue + "`"
-	daemonAgentExplore = piMCPOnlyExplore + " at the tier the question needs"
-	daemonAgentSpawn   = "`ws/agent.spawn` (tier: the resolved capability tier, not a model name; authority: at most your own)"
-	genericTip         = "When the subagent returns an agent id, use `" + piMCPOnlyContinue + "`"
+	nativeFirstExplore      = "your native subagent (no ws tools, your harness's default model; when the question needs a specific tier, a read-only `ws/agent.spawn` subagent at an external-harness tier)"
+	wantNativeFirstTierRule = "pass a rendered tier as returned: a role tier keeps its configured route, model and effort, and may end on agy, which is allowed; an agy route carries the Antigravity terms risk, so when another harness fits the work, choose an external fixed tier such as `claude.small` for `playbook-explore:small` instead; never put a harness prefix before a role tier (`claude.playbook-explore:small` is rejected)"
+	nativeFirstSpawn        = "`ws/agent.spawn` (tier: the resolved capability tier, not a model name; " + wantNativeFirstTierRule + "; authority: at most your own)"
+	nativeFirstTip          = "When a subagent started with `ws/agent.spawn` returns an agent id, use `" + piMCPOnlyContinue + "`"
+	daemonAgentExplore      = piMCPOnlyExplore + " at the tier the question needs"
+	daemonAgentSpawn        = "`ws/agent.spawn` (tier: the resolved capability tier, not a model name; authority: at most your own)"
+	genericTip              = "When the subagent returns an agent id, use `" + piMCPOnlyContinue + "`"
 )
 
 // The workflow manual's exploration and spawning bullets and its rendered
@@ -41,9 +44,9 @@ const (
 		"  decision has enough evidence.\n"
 	nativeFirstSpawnBullet = "- Bundled delegate prompt → `ws/playbook.render` with the lead\n" +
 		"  `session_key`; spawn the subagent through\n" +
-		"  `ws/agent.spawn` on an external harness with the returned path and the render's tier, qualified as `### Choosing a tier` states. Delegate works in another worktree →\n" +
+		"  `ws/agent.spawn` with the returned path and the render's tier, chosen as `### Choosing a tier` states. Delegate works in another worktree →\n" +
 		"  select that worktree at render time.\n"
-	nativeFirstTierLine = "- A rendered playbook → the tier its render recommends; as a `ws/agent.spawn` target, put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness.\n"
+	nativeFirstTierLine = "- A rendered playbook → the tier its render recommends; as a `ws/agent.spawn` target, " + wantNativeFirstTierRule + ".\n"
 	todayExploreBullet  = "- Bounded evidence gathering that benefits from an independent read →\n" +
 		"  " + daemonAgentExplore + " (`### Choosing a tier`).\n" +
 		"  English prompt with the scoped question; require cited evidence, gaps, and\n" +
@@ -57,7 +60,7 @@ const (
 )
 
 // nativeFirstMarkers are phrases only the native-first wording carries.
-var nativeFirstMarkers = []string{"your native subagent", "external-harness tier", "on an external harness", "When a subagent started with"}
+var nativeFirstMarkers = []string{"your native subagent", "external-harness tier", "Antigravity terms risk", "When a subagent started with"}
 
 func agyRegistrations(prefer bool) map[string]wsagent.BackendRegistration {
 	regs := descriptorRegistrations()
@@ -201,7 +204,7 @@ func TestNativeFirstManualKeepsCallerContextValidation(t *testing.T) {
 // TestNativeFirstLeavesPlaybookRenderUnchanged: a delegate prompt the agy
 // lead renders (an explore delegate, the design reviewer) runs on another
 // process, so it is byte-identical with and without the option and names no
-// native subagent. TestAgyLeadRenderedTierSpawnsClaudeChild carries its
+// native subagent. TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild carries its
 // recommendation through agent.spawn.
 func TestNativeFirstLeavesPlaybookRenderUnchanged(t *testing.T) {
 	off, on, f := agyLeadConnections(t)
@@ -227,15 +230,19 @@ func TestNativeFirstOtherHarnessesUnchanged(t *testing.T) {
 	}
 }
 
-// TestAgyLeadRenderedTierSpawnsClaudeChild: the render-to-spawn handoff of
-// an agy hosted lead, end to end on one connection served by a real runner
-// with fake Claude and agy backends and no configured external route. The
-// tier and prompt path come from that connection's playbook.render response;
-// the role tier it recommends, qualified with `claude.` as the native-first
-// manual and steer prescribe, reaches agent.spawn, which starts the Claude
-// backend with the rendered prompt, not the agy one. Both halves live in
-// this package because wsagent cannot reach playbook.render.
-func TestAgyLeadRenderedTierSpawnsClaudeChild(t *testing.T) {
+// TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild: the render-to-spawn
+// handoff of an agy hosted lead, end to end on one connection served by a
+// real runner with the packaged tier roles (as production wires
+// Options.TierRoles), the daemon's own agy registration (its cross-harness
+// refusal included) over fake Claude and agy backends, and no configured
+// external route. The tier and prompt path come from that connection's
+// playbook.render response. The role tier's default route falls through to
+// the caller's agy slot: passed as returned, it starts an agy child, which
+// the same-harness admission allows; the external fixed tier the manual
+// steers to when another harness fits (`claude.small`) starts the Claude
+// backend with the rendered prompt. Both halves live in this package
+// because wsagent cannot reach playbook.render.
+func TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild(t *testing.T) {
 	f := newHostedKeyFixture(t)
 	dir, err := NewServer(f.root, "test").dashboard.stateDir()
 	if err != nil {
@@ -254,13 +261,16 @@ func TestAgyLeadRenderedTierSpawnsClaudeChild(t *testing.T) {
 	}
 	claude, agy := &routeBackend{}, &routeBackend{}
 	regs := agyRegistrations(true)
-	agyReg := regs[wsagent.BackendAgy]
-	agyReg.Backend, agyReg.WorkerCapable, agyReg.WorkerProfile = agy, true, wsagent.AgentWorkerProfile(wsagent.BackendAgy)
+	// The shipped agy registration over the fake backend, without the
+	// launch features this fake does not serve (the HTTP MCP route and the
+	// exec cutover); its admission is the shipped one.
+	agyReg := wsagent.BuiltinBackendRegistrations()[wsagent.BackendAgy]
+	agyReg.Backend, agyReg.WorkerHTTPMCP, agyReg.ExecCutover = agy, false, nil
 	regs[wsagent.BackendAgy] = agyReg
 	claudeReg := regs[wsagent.BackendClaude]
 	claudeReg.Backend, claudeReg.WorkerCapable, claudeReg.WorkerProfile = claude, true, wsagent.AgentWorkerProfile(wsagent.BackendClaude)
 	regs[wsagent.BackendClaude] = claudeReg
-	runner := wsagent.NewRunner(wsagent.Options{Dir: dir, Backends: regs, Keys: &routeKeys{}, Config: cfg,
+	runner := wsagent.NewRunner(wsagent.Options{Dir: dir, Backends: regs, Keys: &routeKeys{}, Config: cfg, TierRoles: PackagedTierRoles,
 		WSMCP: func(root string) (wsagent.MCPCommand, error) {
 			return wsagent.MCPCommand{Command: "/bin/ws-mcp", Args: []string{"serve", "--stdio", "--root", root}}, nil
 		}})
@@ -269,7 +279,9 @@ func TestAgyLeadRenderedTierSpawnsClaudeChild(t *testing.T) {
 	runner.SetEndpoint(daemon.URL)
 	runner.Start(nil)
 	defer runner.Close()
-	s.pi.agents = runner
+	// The token binding of the agy lead's connection: the runner holds
+	// its conversation open, loaded from the record.
+	s.pi.agents, s.callerBinding, s.conversation = runner, runner, rec.ReplyID
 
 	out := callToolWithKey(t, s, 2, f.hosted, "playbook.render", map[string]any{"name": "explore"})
 	lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -280,14 +292,39 @@ func TestAgyLeadRenderedTierSpawnsClaudeChild(t *testing.T) {
 		}
 	}
 	prompt, err := os.ReadFile(promptPath)
-	if err != nil || tier != "playbook-explore:small" {
-		t.Fatalf("playbook.render = %q (prompt %v); want a prompt path and the explore role tier", out, err)
+	// The explore role's default route is the caller's own slot, which a
+	// v0.51.0 spawn also accepts as the bare size, so the render returns
+	// that form (TestRenderedTierSurvivesDaemonRollbackBeforeSpawn).
+	if err != nil || tier != "small" {
+		t.Fatalf("playbook.render = %q (prompt %v); want a prompt path and the bare size the explore role resolves to", out, err)
 	}
 
-	// A role tier's qualified form is its size: agent.spawn's dotted tier
-	// takes no role-tier node.
-	_, size, _ := strings.Cut(tier, ":")
-	raw := callToolWithKey(t, s, 3, f.hosted, "agent.spawn", map[string]any{"prompt": "Run the playbook at the system prompt path.", "system_prompt_path": promptPath, "tier": "claude." + size, "authority": "read-only", "format": "json"})
+	// The role tier's default route: the packaged chain falls through to
+	// the caller's own slot, agy's.
+	route, binding, err := s.routedBinding("playbook-explore:small", wsagent.BackendAgy, cfg)
+	if err != nil || !route.CallerFallthrough || route.Harness != wsagent.BackendAgy || route.Size != "small" || binding.Model != "agy-small" {
+		t.Fatalf("default route of the explore role = %+v (%s), binding %+v, %v", route, route.Trace(), binding, err)
+	}
+
+	// Passed as returned, it starts an agy child: agy admits its own lead.
+	raw := callToolWithKey(t, s, 3, f.hosted, "agent.spawn", map[string]any{"prompt": "Run the playbook at the system prompt path.", "system_prompt_path": promptPath, "tier": tier, "authority": "read-only", "format": "json"})
+	var agyRes wsagent.AgentSpawnResult
+	if err := json.Unmarshal([]byte(raw), &agyRes); err != nil || agyRes.Address == "" {
+		t.Fatalf("agent.spawn %s = %q (%v)", tier, raw, err)
+	}
+	agySpec, agyProc := agy.waitStart(t, 0)
+	agyProc.nextSent(t)
+	if agySpec.Model != "agy-small" {
+		t.Fatalf("the agy child's model = %q, want the agy small tier's", agySpec.Model)
+	}
+	agyChild, err := wsagent.ReadRecord(dir, strings.TrimPrefix(agyRes.Address, "id:"))
+	if err != nil || agyChild.Backend != wsagent.BackendAgy || agyChild.SpawnerBackend != wsagent.BackendAgy {
+		t.Fatalf("agy child record = %+v, %v; want an agy child stamped with its agy spawner", agyChild, err)
+	}
+
+	// The external fixed tier qualifies the role tier's size: agent.spawn's
+	// dotted tier takes no role-tier node.
+	raw = callToolWithKey(t, s, 4, f.hosted, "agent.spawn", map[string]any{"prompt": "Run the playbook at the system prompt path.", "system_prompt_path": promptPath, "tier": "claude." + tier, "authority": "read-only", "format": "json"})
 	var res wsagent.AgentSpawnResult
 	if err := json.Unmarshal([]byte(raw), &res); err != nil || res.Address == "" {
 		t.Fatalf("agent.spawn = %q (%v)", raw, err)
@@ -307,7 +344,7 @@ func TestAgyLeadRenderedTierSpawnsClaudeChild(t *testing.T) {
 	}
 	agy.mu.Lock()
 	defer agy.mu.Unlock()
-	if len(agy.starts) != 0 {
-		t.Fatalf("the agy backend started %d process(es)", len(agy.starts))
+	if len(agy.starts) != 1 {
+		t.Fatalf("the agy backend started %d process(es), want the as-returned child only", len(agy.starts))
 	}
 }

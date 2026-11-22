@@ -1,6 +1,7 @@
 package wsdashboard
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
@@ -346,7 +348,30 @@ func TestWorktreeDeletePurgesEndedSessions(t *testing.T) {
 		t.Fatalf("seed worktree_order = %+v, %v", ans, err)
 	}
 
+	// Each session has an audit ring; deleting the worktree's ended
+	// sessions removes theirs and leaves the others (Decision 8).
+	for _, id := range []string{"gone", "other"} {
+		ev, err := wsaudit.NewEnvelope(id, "claude", now, wsaudit.KindToolCall)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.AuditSink().Append(context.Background(), ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.d.AuditStore().Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	f.deleted(t, worktreeDeleteRequest{Path: wt})
+	if err := f.d.AuditStore().Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, auditDirName, "gone")); !os.IsNotExist(err) {
+		t.Fatalf("deleted session kept its audit ring: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, auditDirName, "other")); err != nil {
+		t.Fatalf("another session's audit ring went: %v", err)
+	}
 
 	view := f.d.railView(f.d.pages())
 	var ws *RailWorkspace

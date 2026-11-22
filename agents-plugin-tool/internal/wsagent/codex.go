@@ -38,6 +38,17 @@ func (b CodexBackend) registration() (string, BackendRegistration) {
 		WorkerProfile:     AgentWorkerProfile(BackendCodex),
 		WorkerHTTPMCP:     true,
 		WorkerAutoApprove: true,
+		Permission:        codexPermissionPolicy(),
+		Lifecycle: LifecyclePolicy{
+			ComposedLeadInstructions: true,
+			LeadHTTPMCP:              true,
+		},
+		// No OneShot, probed 2026-11-22 with codex-cli 0.170.0: `codex exec
+		// --ignore-user-config --ephemeral -s read-only -c
+		// features.shell_tool=false -c web_search=disabled` still offered
+		// the model exec, apply_patch, spawn_agent, goal tools, and the
+		// codex_apps connector MCP tools. No `codex exec` flag removes all
+		// tools and MCP servers, so no one-shot mode is verifiable.
 		// features.shell_tool=false, verified on start and resume
 		// (testdata/codex-0.160.0-multi-agent-feature-off.jsonl).
 		ExecCutover: &ExecCutoverSupport{Since: "0.160.0"},
@@ -357,7 +368,7 @@ func codexStartMode(spec StartSpec) (sandbox, policy string, err error) {
 		return codexWorkerMode(spec.PermissionLevel)
 	}
 	if spec.PermissionLevel != "" {
-		return codexMode(nativePermissionMode(BackendCodex, spec.PermissionLevel))
+		return codexMode(codexPermissionPolicy().nativeMode(spec.PermissionLevel))
 	}
 	if spec.Lead.PermissionMode == "" {
 		return "", "", nil

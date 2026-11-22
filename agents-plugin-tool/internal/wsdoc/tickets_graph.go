@@ -247,8 +247,11 @@ func integrityAdvisories(graph *ticketGraph, info TicketInfo, cycle []string) []
 		})
 	}
 
-	// `related:` resolves against ticket stems. Map iteration is random, so the
-	// keys are sorted for a deterministic advisory order.
+	// `related:` resolves against ticket stems. A stem that does not resolve is
+	// CHECK: rather than FIX: because the graph sees only this checkout, so the
+	// stem may name a ticket on an unmerged branch and has no mechanical
+	// remedy. Map iteration is random, so the keys are sorted for a
+	// deterministic advisory order.
 	stems := make([]string, 0, len(info.Related))
 	for stem := range info.Related {
 		stems = append(stems, stem)
@@ -259,8 +262,8 @@ func integrityAdvisories(graph *ticketGraph, info TicketInfo, cycle []string) []
 			continue
 		}
 		out = append(out, VerifyAdvisory{
-			Kind: AdvisoryKindFix,
-			Text: wrapAdvisory("FIX:   ", fmt.Sprintf("related: `%s` resolves to no ticket stem. Correct or remove the entry.", stem)),
+			Kind: AdvisoryKindCheck,
+			Text: wrapAdvisory("CHECK: ", fmt.Sprintf("related: `%s` is not on this branch; if it lives on an unmerged branch, leave it; otherwise correct or remove the entry.", stem)),
 		})
 	}
 

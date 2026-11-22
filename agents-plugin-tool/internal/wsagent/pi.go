@@ -33,6 +33,17 @@ func (b PiBackend) registration() (string, BackendRegistration) {
 		NativeCompaction: PiCompaction(),
 		WorkerCapable:    true,
 		WorkerProfile:    AgentWorkerProfile(BackendPi),
+		// A Pi lead's extension supplies its ws tools, key, and manual; its
+		// native mode is not Claude's, so every session derives workdir-write.
+		Permission: PermissionPolicy{LegacyDefault: PermissionWorkdirWrite},
+		Lifecycle:  LifecyclePolicy{NativeChildren: true, TerminalSummaries: true},
+		// One-shot probe, 2026-11-22, pi 1.5.2: `pi -p --no-session
+		// --no-tools --no-extensions --no-mcp --no-skills
+		// --no-prompt-templates --no-context-files --no-themes
+		// --no-approve --offline [--model M] [--thinking E]`, prompt on
+		// stdin, answered on stdout (exit 0), no session file written;
+		// asked for its tools the model answered NONE.
+		OneShot: &OneShotSupport{Args: piOneShotArgs, Env: piEnv},
 		PlaybookTerminology: PlaybookTerminology{
 			ExploreAgent:  "an exploration agent",
 			SpawnIdiom:    "spawning a subagent",
@@ -57,6 +68,24 @@ func (b PiBackend) registration() (string, BackendRegistration) {
 			leadBuiltinProfile(LeadProfilePi, BackendPi, ""),
 		},
 	}
+}
+
+// piOneShotArgs is the isolated one-shot command line: no tools (built-in,
+// extension, or MCP), extensions, skills, prompt templates, context files,
+// project-local trust, session file, or startup network access.
+func piOneShotArgs(model, effort string) []string {
+	args := []string{
+		"-p", "--no-session", "--no-tools", "--no-extensions", "--no-mcp",
+		"--no-skills", "--no-prompt-templates", "--no-context-files",
+		"--no-themes", "--no-approve", "--offline",
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--thinking", effort)
+	}
+	return args
 }
 
 // piEfforts are pi's thinking levels (--thinking), lowest first.

@@ -538,7 +538,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "worktree.acquire",
-			"description": "Lead-only. Provision a pooled Git worktree of a named profile for a parallel worker: reuse an idle one of that profile or create one, create target_branch on base when absent and check it out, reset the tree, run the profile's hooks, and mint a worker session key bound to it. Refused when the worktree would hide the ticket board its commit tracks; a failing hook quarantines the worktree and fails the call. A result nudge lists stale pooled worktrees: relay it to the user, who decides on worktree.remove. Profiles: builtins full and housekeeping (ai-docs only), plus worktree.profile.<name> (config.list). Text by default.",
+			"description": "Lead-only. Provision a pooled Git worktree of a named profile for a parallel worker: reuse an idle, unleased, unoccupied one of that profile or create one, create target_branch on base when absent and check it out, reset the tree, run the profile's hooks, and mint a worker session key bound to it. Refused when the worktree would hide the ticket board its commit tracks; a failing hook quarantines the worktree and fails the call. A result nudge lists stale pooled worktrees: relay it to the user, who decides on worktree.remove. Profiles: builtins full and housekeeping (ai-docs only), plus worktree.profile.<name> (config.list). Text by default.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -552,13 +552,13 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "worktree.release",
-			"description": "Lead-only. Return a worktree to the pool by path or worker key: run pre_release hooks, reset --hard and clean -ffdx (discarding uncommitted and unpreserved ignored files), detach HEAD, record preserved size and remove its lease. Hook failure leaves it leased. Does not delete the worktree or retire the key. Refuses another holder's lease, a dirty unleased worktree, or a worktree with non-closed bound child agents unless forced. Text by default; format=json for structured output.",
+			"description": "Lead-only. Return a worktree to the pool by path or worker key: run pre_release hooks, reset --hard and clean -ffdx (discarding uncommitted and unpreserved ignored files), detach HEAD, record preserved size and remove its lease. Hook failure leaves it leased. Does not delete the worktree or retire the key. Refuses another holder's lease, a dirty unleased worktree, or child agents bound since its last release unless forced. Agents bound before a release no longer launch, wake or resume there. Text by default; format=json for structured output.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path":   stringProperty("Absolute worktree path to release. Provide path or key."),
 					"key":    stringProperty("A worker session key bound to the worktree to release. Provide path or key."),
-					"force":  boolProperty("Release another holder's lease, a dirty unleased worktree, or a worktree with non-closed bound child agents. Confirm the owner and bound children are gone or agreed first; uncommitted work is discarded."),
+					"force":  boolProperty("Root lead only. Release another holder's lease, a dirty unleased worktree, or one with bound child agents (their turns are interrupted). Confirm the owner and children are gone or agreed first; uncommitted work is discarded."),
 					"format": stringProperty(formatPropertyDescription),
 				},
 			},
@@ -943,6 +943,29 @@ func tools() []map[string]any {
 			},
 		},
 		{
+			"name":        "cron",
+			"description": `Schedule prompts for yourself: when a cron expression matches, the daemon sends the prompt to this session as a cron envelope. Hosted lead sessions only. No arguments lists; add {name, expr, prompt, tz?}; delete takes an id or name. Names are unique. expr: 5-field cron (lists, ranges, steps, names, 7 = Sunday; day-of-month and day-of-week OR when both restricted) or @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly; @reboot and never-firing forms are refused. tz: UTC, Z or +HH:MM/-HH:MM (-12:00 to +14:00), default UTC. A fire arrives as your next turn; while one waits, further fires are dropped. Fires missed while down are skipped, not caught up. 32 schedules per session, 16 KiB a prompt; kept across restarts.`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty("Ignored."),
+					"add": map[string]any{
+						"type":        "object",
+						"description": "Register a schedule.",
+						"properties": map[string]any{
+							"name":   stringProperty("Unique in your session, 64 characters at most."),
+							"expr":   stringProperty("5-field cron or a macro."),
+							"prompt": stringProperty("Message delivered at each match."),
+							"tz":     stringProperty("UTC, Z or +HH:MM/-HH:MM. Default UTC."),
+						},
+						"required": []string{"name", "expr", "prompt"},
+					},
+					"delete": stringProperty("Schedule id or name to delete."),
+					"format": stringProperty(formatPropertyDescription),
+				},
+			},
+		},
+		{
 			"name":        dashboardIntakeTool,
 			"description": `Adapter-only: agents must not call. Applies ordered events to the session's dashboard state; each has a kind and optional at (epoch ms). Kinds: reset (clears live state; send at adapter start); turn_start {origin?: terminal|whiteboard|mail}; turn_end {reason?}; agent {agentId?, parentId?, label?, sessionKey?, status?: running|done|failed, caption?, batches?, model?, effort?, contextTokens?, outputTps?} updates the lead or one subagent; permission {agentId?, tool, args} or {agentId?, clear: true}; reply {text, final?} replaces the reply so far, final moves it to the conversation; user {text, origin?}; status {context?, limits?, cost?}; compact {phase: start|end|failed, trigger?}; commands {commands: [{name, description?, source?, layer?}]}; command {command, text?}. Send replies at most 10 times a second. With the dashboard off nothing is recorded. Send status, compact, commands or command only while the latest result's accepts line names it.`,
 			"inputSchema": map[string]any{
@@ -961,7 +984,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        dashboardInboxDrainTool,
-			"description": `Adapter-only: agents must not claim messages. Atomically claim held messages, steering first then oldest; claimed messages cannot be cancelled or steered. Inject each ws:user envelope as a user message. Run command entries (/name args) natively, not as messages; a batch splits at each. steer_only claims steering at a running turn's tool boundary; interrupt_only claims text-free interrupts: stop a turn started before sent_at, discard older interrupts. Full drain drops interrupts. Works with dashboard off. Text by default; format=json for structured messages.`,
+			"description": `Adapter-only: agents must not claim messages. Atomically claim held messages, steering first then oldest; claimed messages cannot be cancelled or steered. Inject each ws:user envelope, and each scheduled-prompt (cron) envelope, as a user message. Run command entries (/name args) natively, not as messages; a batch splits at each. steer_only claims steering at a running turn's tool boundary; interrupt_only claims text-free interrupts: stop a turn started before sent_at, discard older interrupts. Full drain drops interrupts. Works with dashboard off. Text by default; format=json for structured messages.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -1183,7 +1206,7 @@ func tools() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"kind":  enumStringProperty(`Generated path kind. "review" and "prompt" allocate cache artifacts; "plan" allocates a repo-local implementation plan under ai-docs/.plans/; "clone" allocates a worktree-agnostic shared doc under the clone's SharedDir (readable "<stem>-<suffix>.md" filename), for the note.write clone-layer oversize nudge.`, []string{"review", "prompt", "plan", "clone"}),
+					"kind":  enumStringProperty(`Generated path kind. "review", "report" and "prompt" allocate cache artifacts ("report" is for standalone reports and analyses, in its own directory; an older server refuses it, so check this enum first); "plan" allocates a repo-local implementation plan under ai-docs/.plans/; "clone" allocates a worktree-agnostic shared doc under the clone's SharedDir (readable "<stem>-<suffix>.md" filename), for the note.write clone-layer oversize nudge.`, []string{"review", "report", "prompt", "plan", "clone"}),
 					"stems": stringArrayProperty("Logical file stems to allocate in stable order."),
 				},
 				"required": []string{"kind", "stems"},

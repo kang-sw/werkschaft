@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -62,35 +63,85 @@ func (s *Server) tierGraph(configOpts wsconfig.Options) (*wsconfig.TierGraph, er
 // (routedBinding). ok is false when the tier does not resolve or, past the
 // fallthrough, the spawn could not launch it.
 func (s *Server) renderTierBinding(walkHarness, bareHarness, tier string, configOpts wsconfig.Options) (model, effort string, ok bool) {
+	model, effort, _, ok = s.renderTierBindingCompat(walkHarness, bareHarness, tier, configOpts)
+	return model, effort, ok
+}
+
+// renderTierBindingCompat is renderTierBinding plus the recommendation a
+// v0.51.0 daemon's agent.spawn also accepts for the same target. v0.51.0
+// reads only a bare size (the caller's harness), <harness>.<size>, or an
+// exact legacy alias, and launches that harness's own agents.tier slot, the
+// slot RoutedTierBinding reads; it refuses a role tier. So a walk whose
+// terminal is a slot has an equivalent old-readable form: the bare size when
+// the walk fell through to the caller's harness, else <harness>.<size>. A
+// bundle terminal (its own model and effort) has none, and compat is "" for
+// it, for a token that is not routed, and when the binding does not resolve.
+func (s *Server) renderTierBindingCompat(walkHarness, bareHarness, tier string, configOpts wsconfig.Options) (model, effort, compat string, ok bool) {
 	tier = strings.TrimSpace(tier)
 	if !wsconfig.IsRoutedTierToken(tier) {
 		_, model, effort, err := wsconfig.ResolveAgentForHarnessConfig(configOpts, tier, "", "", bareHarness)
-		return model, effort, err == nil
+		return model, effort, "", err == nil
 	}
 	res, binding, err := s.routedBinding(tier, walkHarness, configOpts)
-	if res.CallerFallthrough {
+	if res.CallerFallthrough && !errors.Is(err, errCallerRefused) {
 		_, model, effort, err := wsconfig.ResolveAgentForHarnessConfig(configOpts, res.Size, "", "", bareHarness)
-		return model, effort, err == nil
+		return model, effort, res.Size, err == nil
 	}
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	return binding.Model, binding.Effort, true
+	if res.Bundle != "" {
+		return binding.Model, binding.Effort, "", true
+	}
+	return binding.Model, binding.Effort, res.Harness + "." + res.Size, true
 }
 
 // harnessAvailability is the runner's per-harness spawn check
-// (*wsagent.Runner); a server without a runner of its own (a forwarding
-// spawned agent) skips it, and agent.tiers stays the availability source.
+// (*wsagent.Runner) for a caller verified on callerBackend; a server without
+// a runner of its own (a forwarding spawned agent) skips it, and agent.tiers
+// stays the availability source.
 type harnessAvailability interface {
-	SpawnableHarness(harness string) string
+	SpawnableHarness(callerBackend, harness string) string
 }
+
+// CallerBindingReader is the daemon runner's read-only, memory-only caller
+// check (*wsagent.Runner), given to every daemon-hosted connection, a
+// token-forwarding worker's too, without the lead runner handle:
+// CallerBackend resolves the conversation a connection is authenticated as
+// (agentAdmissionBackend), and CallerRefusal is a harness's cross-harness
+// refusal of that caller (routedBinding).
+type CallerBindingReader interface {
+	CallerBackend(conversation, capability string) string
+	CallerRefusal(callerBackend, harness string) string
+}
+
+var (
+	_ harnessAvailability = (*wsagent.Runner)(nil)
+	_ CallerBindingReader = (*wsagent.Runner)(nil)
+)
+
+// errCallerRefused marks a routedBinding whose terminal harness refuses this
+// server's caller (its verified backend, agentAdmissionBackend) across
+// harnesses (wsagent Runner.CallerRefusal). A caller fallthrough must not
+// turn it into its bare size's binding: the spawn refuses it too.
+var errCallerRefused = errors.New("the terminal harness refuses this caller")
+
+// callerRefusal is a refused terminal's error: why, matching errCallerRefused.
+type callerRefusal struct{ msg string }
+
+func (e callerRefusal) Error() string        { return e.msg }
+func (e callerRefusal) Is(target error) bool { return target == errCallerRefused }
 
 // routedBinding resolves a routed agent.spawn tier the way the spawn does:
 // the graph walk, the terminal harness's own agents.tier slot with no
-// cross-harness fallback (wsagent.RoutedTierBinding), and, where this server
-// hosts the runner, the harness availability check. The resolution is
-// returned whenever the walk succeeded, even when the binding fails, so a
-// caller can tell a caller-fallthrough terminal apart.
+// cross-harness fallback (wsagent.RoutedTierBinding), and the terminal's
+// refusal of this server's verified caller backend (agentAdmissionBackend;
+// harness, the walk's caller, only selects the fallthrough) on every
+// daemon-hosted connection, forwarding workers included, plus, where this
+// server hosts the runner, the full harness availability check. A
+// cross-harness refusal, checked first, matches errCallerRefused. The resolution is returned whenever the walk succeeded,
+// even when the binding fails, so a caller can tell a caller-fallthrough
+// terminal apart.
 func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options) (wsconfig.TierResolution, wsconfig.AgentTier, error) {
 	graph, err := s.tierGraph(configOpts)
 	if err != nil {
@@ -100,12 +151,18 @@ func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options
 	if err != nil {
 		return wsconfig.TierResolution{}, wsconfig.AgentTier{}, err
 	}
+	caller := s.agentAdmissionBackend()
+	if s.callerBinding != nil {
+		if why := s.callerBinding.CallerRefusal(caller, res.Harness); why != "" {
+			return res, wsconfig.AgentTier{}, callerRefusal{fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why)}
+		}
+	}
 	binding, err := wsagent.RoutedTierBinding(configOpts, res)
 	if err != nil {
 		return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %w", tier, res.Trace(), err)
 	}
-	if check, ok := s.pi.agents.(harnessAvailability); ok {
-		if why := check.SpawnableHarness(res.Harness); why != "" {
+	if check, hosted := s.pi.agents.(harnessAvailability); hosted {
+		if why := check.SpawnableHarness(caller, res.Harness); why != "" {
 			return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %s", tier, res.Trace(), why)
 		}
 	}
@@ -117,16 +174,25 @@ func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options
 // walked for the caller harness agent.spawn uses (playbookHarness), so a
 // mapped recommendation names the binding the spawn launches; a walk that
 // falls through to the bare size resolves it as a bare recommendation for
-// harness would.
+// harness would. A slot terminal is recommended as the bare size or
+// <harness>.<size> that a v0.51.0 spawn also accepts.
 func (s *Server) withRecommendedRenderBindingFor(payload, harness, tier string, configOpts wsconfig.Options) string {
 	if !wsconfig.IsRoutedTierToken(tier) {
 		return withRecommendedRenderBinding(payload, harness, tier, configOpts)
 	}
-	payload = withRecommendedTier(payload, tier)
-	model, effort, ok := s.renderTierBinding(s.playbookHarness(), harness, tier, configOpts)
+	model, effort, compat, ok := s.renderTierBindingCompat(s.playbookHarness(), harness, tier, configOpts)
 	if !ok {
-		return payload
+		return withRecommendedTier(payload, tier)
 	}
+	// The render's caller is told to pass the tier as returned, and a daemon
+	// replaced by v0.51.0 before that spawn refuses a role tier (it reads
+	// only a bare size, <harness>.<size>, or an alias). A slot terminal is
+	// recommended in the form both daemons resolve to the same slot; only a
+	// bundle terminal keeps the role form (see renderTierBindingCompat).
+	if compat != "" {
+		tier = compat
+	}
+	payload = withRecommendedTier(payload, tier)
 	if model = strings.TrimSpace(model); model != "" {
 		payload += "\nrecommended-model: " + model
 	}
@@ -163,7 +229,7 @@ func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult,
 		walk = "<caller>"
 	}
 	res, binding, err := s.routedBinding(tier, walk, opts)
-	if res.CallerFallthrough {
+	if res.CallerFallthrough && !errors.Is(err, errCallerRefused) {
 		backend, model, effort, from, err := wsconfig.ResolveAgentTierForHarness(opts, res.Size, harness)
 		if err != nil {
 			return resolveAgentTierResult{}, err

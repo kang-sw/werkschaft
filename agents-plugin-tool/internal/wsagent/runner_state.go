@@ -47,6 +47,18 @@ type State struct {
 	ContextTokens *float64           `json:"contextTokens,omitempty"`
 	OutputTps     *float64           `json:"outputTps,omitempty"`
 	Batches       []wslive.BatchView `json:"batches,omitempty"`
+	// ContextWindow is the model's native context window and ContextCompaction
+	// the resolved ws compaction thresholds, as the child's last status carried
+	// them; they scale its context bar in a view of its parent.
+	ContextWindow     int64                   `json:"contextWindow,omitempty"`
+	ContextCompaction *wslive.UsageCompaction `json:"contextCompaction,omitempty"`
+	// Compacting is set while a compaction is queued or running, Compactions
+	// counts those completed since the runner loaded the conversation, and
+	// CompactOrigin names the latest's origin (wslive.CompactOriginAuto,
+	// Manual or Native).
+	Compacting    bool   `json:"compacting,omitempty"`
+	Compactions   int    `json:"compactions,omitempty"`
+	CompactOrigin string `json:"compactOrigin,omitempty"`
 	// Held counts the messages waiting for the next turn.
 	Held int `json:"held"`
 	// Page is the conversation's dashboard page path.
@@ -167,9 +179,13 @@ func (r *Runner) closedState(rec Record) State {
 			tokens := float64(*snap.Usage.Context.Tokens)
 			st.ContextTokens = &tokens
 		}
+		if snap.Usage != nil && snap.Usage.Context != nil && snap.Usage.Context.Window > 0 {
+			st.ContextWindow = snap.Usage.Context.Window
+			st.ContextCompaction = cloneUsageCompaction(snap.Usage.Context.Compaction)
+		}
 	}
 	if st.Status == StatusHandedOff {
-		st.ResumeCommand = resumeCommand(rec, wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID))
+		st.ResumeCommand = r.resumeCommand(rec, wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID))
 	} else {
 		if r.closedRows == nil {
 			r.closedRows = map[string]State{}

@@ -63,7 +63,10 @@ impl Connection {
     fn show_local(&self, window: &WebviewWindow, page: &str, reason: &str) {
         *self.daemon.lock().unwrap() = None;
         *self.refusal.lock().unwrap() = None;
-        let _ = window.set_title(&format!("Werkschaft — {reason} — Connection → Retry"));
+        crate::chrome::set_title(
+            window,
+            &format!("Werkschaft — {reason} — Connection → Retry"),
+        );
         if window.navigate(navigation::local_view(page)).is_err() {
             eprintln!("Werkschaft: Could not load the bundled recovery view");
         }
@@ -108,7 +111,7 @@ impl Connection {
         }
         let retained = self.daemon();
         if retained.is_none() {
-            let _ = window.set_title("Werkschaft — Connecting…");
+            crate::chrome::set_title(&window, "Werkschaft — Connecting…");
         }
         let epoch = self.window_epoch();
         let state = self.clone();
@@ -194,7 +197,7 @@ impl Connection {
         let Some((sequence, reason)) = *self.refusal.lock().unwrap() else {
             return;
         };
-        let _ = window.set_title(&format!("Werkschaft — {reason}"));
+        crate::chrome::set_title(window, &format!("Werkschaft — {reason}"));
         if !window
             .url()
             .is_ok_and(|url| destination(&url, Some(&pin)) == Destination::Dashboard)
@@ -219,7 +222,7 @@ impl Connection {
                 let mut refusal = state.refusal.lock().unwrap();
                 if *refusal == Some((sequence, reason)) {
                     *refusal = None;
-                    let _ = result.set_title("Werkschaft");
+                    crate::chrome::set_title(&result, "Werkschaft");
                 }
             });
         });
@@ -267,7 +270,7 @@ impl Connection {
             || "Werkschaft".to_owned(),
             |reason| format!("Werkschaft — {reason}"),
         );
-        let _ = window.set_title(&title);
+        crate::chrome::set_title(window, &title);
         if window.navigate(target).is_err() {
             self.show_local(window, CONNECT_VIEW, "Could not open the dashboard");
         }
@@ -343,7 +346,7 @@ impl Connection {
                 if pinned.as_ref() != Some(&daemon) {
                     return;
                 }
-                if let Some(window) = handle.get_webview_window(MAIN_WINDOW) {
+                if let Some(window) = crate::chrome::get(&handle, MAIN_WINDOW) {
                     drop(pinned);
                     state.recover(window, "Dashboard stopped responding");
                 } else {
@@ -406,7 +409,7 @@ impl Connection {
                         } else {
                             "Could not copy browser login link"
                         };
-                        let _ = target.set_title(&format!("Werkschaft — {status}"));
+                        crate::chrome::set_title(&target, &format!("Werkschaft — {status}"));
                     }
                     ui_state.copying.store(false, Ordering::Release);
                 })

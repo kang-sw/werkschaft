@@ -30,7 +30,7 @@ func childHarness(t *testing.T) (*harness, *reports) {
 	})
 	got := &reports{}
 	h.config.Report = got.add
-	h.config.Backends[BackendPi] = BackendRegistration{Backend: h.backend, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendPi)}
+	h.config.Backends[BackendPi] = BackendRegistration{Backend: h.backend, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendPi)}
 	h.backend.steers = true
 	h.endpoint = "http://127.0.0.1:1"
 	for tier, model := range map[string]string{"small": "prov/small-model", "medium": "prov/medium-model", "large": "prov/large-model"} {
@@ -950,5 +950,20 @@ func TestTokenSpawnCwdFollowsTheHoldersWorkingDirectory(t *testing.T) {
 		if gc.Cwd != tc.want || gc.Root != h.root {
 			t.Fatalf("cwd %q: the child works in %q under root %q, want %q under %q", tc.cwd, gc.Cwd, gc.Root, tc.want, h.root)
 		}
+	}
+}
+
+// TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey: the legacy token
+// pi.spawn route inherits the holder's session-scope config like agent.spawn.
+func TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey(t *testing.T) {
+	h, _ := childHarness(t)
+	worker := h.spawnWorker("medium")
+	workerKey := h.record(worker.ID).WSKey
+	if workerKey == "" {
+		t.Fatal("the worker has no ws key")
+	}
+	kid := h.spawnChild(h.token(0), "small", "review")
+	if got := h.keys.policyParents[h.record(kid.ID).WSKey]; got != workerKey {
+		t.Fatalf("token-spawned child key policy parent = %q, want the holder's key %q", got, workerKey)
 	}
 }

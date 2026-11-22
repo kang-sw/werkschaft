@@ -12,7 +12,7 @@ Asset production and engine development stay strictly decoupled via the `pack.js
 
 1. **Stage 1 — Concept & Static SD Reference Lock (Complete for Standing Master)**
    - **Step 1-A (Character Concept — Locked):** Front + Back full-body turnaround illustration (`ai-docs/assets/companion-pet/mascot-stage1a-turnaround.png`).
-   - **Step 1-B (Target Flat SD Style — Locked):** **Style D ("Lo-Fi Indie Zine Flat")** standing master (`ai-docs/assets/companion-pet/mascot-stage1b-standing-sd.png`): `1:1` square canvas, pure `#FFFFFF` background, ~3.0-head stylized mini-character proportion, clean monoline dark-ink outlines (`#1e2433`), flat unshaded risograph-restrained muted palette, simplified cool half-almond amber eyes with tiny fang smirk, laid-back casual contrapposto stance.
+   - **Step 1-B (Target Flat SD Style — Locked):** **Style D ("Lo-Fi Indie Zine Flat")** standing master (`ai-docs/assets/companion-pet/mascot-stage1b-standing-sd.png`): `1:1` square canvas, pure `#FFFFFF` background, ~2.92-head stylized mini-character proportion (h28: head anchor `[255, 184]`, feet pivot `[256, 503]` on the `512 × 512` canvas; owner 2026-11-22; the standing master itself measures 3.59 heads, so it is the style, line-weight and palette anchor but no longer the proportion reference), clean monoline dark-ink outlines (`#1e2433`), flat unshaded risograph-restrained muted palette, simplified cool half-almond amber eyes with tiny fang smirk, laid-back casual contrapposto stance.
 2. **Stage 2 — Scenario, Timing-Asset Schema, Placement & Scope Contract (Locked)**
    - Governed by this manual: declares the open pose/gesture/expression/prop/FX dictionaries, fully assetized timing dictionaries (`easings`, `motions`, `stageEffects`, `propMotions`, `physics.drag`, `passive`, `scenarios`), hybrid global `#rail` + active-iframe observation, default left-rail-bottom home anchor, hover-only top-right resize handle, and T0 opt-in configuration knobs.
 3. **Stage 3 — Engine v2 Delivery & 1-by-1 Official Art Pack Crafting**
@@ -22,7 +22,7 @@ Asset production and engine development stay strictly decoupled via the `pack.js
 ## Locked Default Mascot (Stage 1-A & 1-B)
 
 - **Canonical Turnaround (Stage 1-A):** `ai-docs/assets/companion-pet/mascot-stage1a-turnaround.png` (`1536 × 1024`, Front + Back full-body turnaround, IP-clean original Werkschaft mascot).
-- **Canonical Standing Official Master (Stage 1-B — Family A, Style D Lo-Fi Indie Zine Flat, D1 Street Scrunchie High Bun):** `ai-docs/assets/companion-pet/mascot-stage1b-standing-sd.png` (`1024 × 1024`, pure `#FFFFFF` background, `#1e2433` monoline ink, flat risograph-muted palette). Use this image as the visual style, line-weight, and **canonical head-size** anchor for all pose families, engine-shared props, and BYO packs.
+- **Canonical Standing Official Master (Stage 1-B — Family A, Style D Lo-Fi Indie Zine Flat, D1 Street Scrunchie High Bun):** `ai-docs/assets/companion-pet/mascot-stage1b-standing-sd.png` (`1024 × 1024`, pure `#FFFFFF` background, `#1e2433` monoline ink, flat risograph-muted palette). Use this image as the visual style, line-weight, and palette anchor for all pose families, engine-shared props, and BYO packs; the canonical head size is the h28 head (§3a).
 - **Engine-Shared Props (`1024 × 1024`, pure `#FFFFFF`):**
   - `prop-drone`: `ai-docs/assets/companion-pet/prop-drone.png` (compact ivory/navy mini-drone with amber rotor and glowing pixel visor; refreshed to Style D monoline flat in pack assembly; padded cleanly at ~`340/512` so it stays crisp and legible at rail scale).
   - `prop-mail`: `ai-docs/assets/companion-pet/prop-mail.png` (chunky ivory envelope with vermilion wax seal + amber pentagon stamp).
@@ -45,12 +45,12 @@ Instead of fragile bare-skin limb articulation, side-view walk cycles, or hardco
    - Unified **Cubic-Bezier Easing & Keyframe Evaluator** driving part `motions`, whole-body `stageEffects`, and `propMotions`
    - Real-time cursor-velocity spring integrator for `pendulum-drag` feeding a live `physics` channel (`swing`, `swingVel`) into per-layer joint inertia (`swingWeight`, `swingLag`)
    - Safety-only Go `pack.json` validation (enforces `stand` presence, safe relative filenames, zero symlinks, size/numeric bounds, and **preserves unknown extension keys** so future asset/grammar additions stay T0).
-2. **Open Asset & Timing Dictionaries (`pack.json`):** `poses`, `gestures`, `expressions`, `props`, `fx`, `hairs`, `presets`, **`easings`**, **`motions`**, **`stageEffects`**, **`propMotions`**, **`physics`**, and **`passive`** are open registries with built-in starter defaults and declarative `fallback` chains.
+2. **Open Asset & Timing Dictionaries (`pack.json`):** `poses`, `gestures`, `expressions`, `props`, `fx`, `hairs`, `outfits`, `eyesets`, `attachments`, `presets`, **`easings`**, **`motions`**, **`stageEffects`**, **`propMotions`**, **`physics`**, and **`passive`** are open registries with built-in starter defaults and declarative `fallback` chains.
 3. **Declarative Scenario Registry (`scenarios`):** Built-in scenarios live as a starter data table (not hardcoded `switch` branches). Packs may override, disable (`"disabled": true`), or declare new pack-specific scenarios and easter eggs purely in `pack.json`.
 
 ### 1. Open `poses` & `gestures` Maps (4 Canonical Starter Poses + Launch Gesture)
 
-Side-view walking (`W. Side-Walk`) is retired from v1/v3.1. Locomotion between landmarks uses **`hop-bounce`** arcs with anticipation-overshoot timing. `poses` is an open map (`stand` required; `typing`, `perched`, `dangle` recommended/optional; custom poses freely declarable with `fallback`). `gestures` is an open map (`cup_hands`, `wave`, `coffee`, `point`, `headrub`, or any custom ID):
+Side-view walking (`W. Side-Walk`) is retired from v1/v3.1. Locomotion between landmarks uses **`hop-bounce`** arcs with anticipation-overshoot timing. `poses` is an open map (`stand` required; `typing`, `perched`, `dangle` recommended/optional; custom poses freely declarable with `fallback`). `gestures` is an open map (`cup_hands`, `wave`, `coffee`, `point`, `headrub`, or any custom ID). Every pose ID and gesture ID is a **column** a scenario can request; these top-level maps are the column registry, and outfit packs bind outfit-baked art to the same columns (§3a). The table below describes the layer composition of the legacy (and implicit single-outfit) stack:
 
 | Starter Pose / Gesture ID | Visual Role | Layer Composition & Anchored Motion | Requirement & Fallback |
 |---|---|---|---|
@@ -79,7 +79,35 @@ To preserve Style D's crisp `#1e2433` monoline ink while enabling instant runtim
 - Every tintable region is split into a **neutral white-base Fill mask** (`*-fill.webp`) and a **fixed dark-ink Line layer** (`*-line.webp`), plus optional untinted **Detail / Accessory** layers (`*-detail.webp`, `*-acc.webp`).
 - At runtime, each Fill mask is multiplied by its target hex color on a cached offscreen `512 × 512` canvas (`multiply` + `destination-in`, keyed by `(assetId, colorHex)`).
 - **Hair layers:** `hair-front-fill/line` (`z50`), `hair-back-fill/line` (`z10`, strictly behind body; may declare subtle `swingWeight` for drag inertia), and optional `hair-acc` (`z55`).
-- **Synced Full-Body Skin & Outfit Channels:** `hair`, `eye`, `skin` (shared identically across `head-egg-fill`, `eye-lid-cover-l/r`, and every pose's `skinFill`), `outfitPrimary` (`jacketFill`), and `outfitAccent` (`accentFill`).
+- **Synced Full-Body Skin & Outfit Channels:** `hair`, `eye`, `skin` (shared identically across `head-egg-fill`, `eye-lid-cover-l/r`, and every pose's `skinFill`), `outfitPrimary` (`jacketFill`), and `outfitAccent` (`accentFill`). The `fills` layer key (§3a) generalizes this to any named channel.
+
+### 3a. Paper Doll: Head Set, Outfit-Baked Columns & Authoring Recipe
+
+All keys below are optional sections under `ws-companion/v1`; a pack without `outfits` is an implicit single-outfit kit and renders `poses.<id>.layers` as before.
+
+- **Head set vs. body set:** the head set (hair | eyes | attachments | colors) combines freely. The body set is an **outfit**: a map from column (pose and gesture IDs) to outfit-baked layers. Slot-level garment mixing and a shared base-body layering model (base library, garment split against base masks, joints, binds, z bands) are not part of this contract.
+- **Outfit-baked column art:** each column's shipped body art already contains its outfit: `line`, outfit fills (`jacketFill`, `accentFill`, `fills`) and a pure-white `skinFill` tinted at runtime by `skin`, the same channel as the head egg and lid covers. No outfit paints skin, and there is no `shade` raster (Style D is flat and unshaded). The neck belongs to the body art and tucks under the head, because the head band draws above every body layer.
+- **Shape:** `outfits.<outfitId>.{poses,gestures}.<column>` plus `outfits.<outfitId>.palette` and a pack-level `defaultOutfit`. A column entry carries `layers`, `headAnchor`, optional `handAnchor`/`seatY`, optional `feetPivot` and, for gestures, `replaces`. Omitted fields are inherited (judged by key presence) from the same-named top-level `poses.<column>`/`gestures.<column>` entry, which also supplies `pose` and `fallback`. That top-level entry is the **column registry**: scenarios, the director and allowed-ID validation read the top-level dictionaries, so a column bound only under `outfits.*` still needs one (it may be layer-less). `layers` is never inherited: the top-level `layers` are the default outfit's legacy projection, and a column is bound only when the outfit entry has `layers`. A second way to perform a motion (for example a slouching stand) is a further column ID with a `fallback` chain, not a variant of the same column.
+- **Resolution:** requested column, then the active outfit's binding. An unbound column follows the column's `fallback` chain within the same outfit, including the implicit `stand` step. If nothing is bound, the compositor draws the legacy projection stack. It never borrows another outfit's column and never draws nothing.
+- **Gestures are columns:** an outfit gesture column draws its own layers, and `replaces` removes layers of the same outfit's pose stack whose `id` or `slot` matches (`slot` matching applies only in outfit mode, so legacy stacks are byte-identical). An outfit that does not bind a requested gesture keeps the gesture's `pose` and anchors but draws no gesture layers; its `replaces` still applies only when the legacy gesture entry has no layers (a pure removal). A declared gesture `headAnchor` positions the head in outfit mode. A held prop is baked into the gesture column art or draws above the hands at `handAnchor`; there are no held-prop grips.
+- **Anchors & registration:** each outfit column declares its own `headAnchor`; seated columns anchor lower with `headScale` `1.0`. `feetPivot` is lint-only registration; the engine keeps bounds-based alignment. An optional pack-level `registration: { headAnchor: [x, y], feetPivot: [x, y], tolerance?: px }` (default tolerance `4`; the h28 values are `[255, 184]` and `[256, 503]`, a BYO pack declares its own) is what `lintCompanionKit` compares against, using each column's resolved (declared or inherited) value: `stand` on both axes, every other column on x only. No `registration` means no drift findings.
+- **Attachments:** top-level `attachments.<id> = { slot, bind: "head" | "body", layers, columns? }`. Slots: head `headdress` | `ears` | `accessory`, body `tail`; extendable with slot IDs matching `^[a-z][a-z0-9_-]{0,31}$`. One attachment per slot. A `head` binding uses the on-head transform. A `body` binding draws `columns.<column>.layers` for the gesture column first, then the resolved pose column, then falls back to `layers`. Hair `acc` stays the legacy hair-bound accessory. Default z by slot: `tail` 11, `ears` 45, `headdress` 56, `accessory` 57; an extended slot defaults to 57 when head-bound and 21 when body-bound; an explicit `z` wins.
+- **Tint channels:** `fills: { "<channel>": "<file>" }` on any layer, each file tinted by `palette[<channel>]`. Built-ins: `skin`, `hair`, `eye`, `outfitPrimary`, `outfitAccent`; custom channel IDs match `^[a-zA-Z][a-zA-Z0-9_-]{0,31}$`. Precedence: built-in < pack `palette` < outfit `palette` < preset `palette` < user config. A channel with no color draws untinted. A `fills`-only layer or frame is valid only in the new sections (outfit columns, attachments); legacy `poses.*.layers` keep the v1 rule.
+- **Eye sets:** `eyesets.<id>` takes the same keys as `head.eyes`, which stays the implicit default. The iris buffer follows the selected eye block.
+- **Presets & selection:** presets gain `outfit`, `eyes` (IDs), `attachments` (`{ "<slot>": "<id>" | "none" }`) and `palette` (`{ "<channel>": "#rrggbb" }`). Selection order is config key > preset > pack default (outfit: `defaultOutfit`, then the first sorted key; hair: the existing default-hair behavior; eyes: `head.eyes`; attachments: none; palette: pack `palette`). Attachments merge per slot and palette per channel across the sources, and `none` clears a slot. An ID the active pack lacks falls back to the preset. Outfit, hair, eye-set and attachment IDs match `^[a-z0-9][a-z0-9_-]{0,63}$`, and `none` is reserved. A wardrobe change clears the view, tinted and decal caches, and a live config broadcast re-dresses without a reload.
+- **Old-daemon projection (T0):** every outfit pack keeps `poses.stand.layers` flattened from the default outfit, using only v1 raster keys (`line`, `jacketFill`, `accentFill`, `skinFill`, `detail`, `file`). An older daemon ignores the new sections, serves only the files it enumerates, and renders that projection.
+- **Kit lint:** non-rejecting `lintCompanionKit` (never changes validation) reports a legacy-projection layer or frame whose only rasters are `fills`; an outfit that binds no `stand` column; an outfit column with no top-level `poses`/`gestures` entry; registration drift; outfit, hair, eye-set and attachment IDs the config patterns cannot select; an attachment slot that does not match the slot pattern; and a pack defining the reserved attachment ID `none`.
+
+#### Authoring recipe (per outfit)
+
+1. **Starter scaffold:** the tracked official authoring scaffold (`ai-docs/assets/companion-pet/scaffold-upright.png`; its derivation source stays local), never shipped in any pack and referenced by no schema field, test or pack file: a neutral tee and shorts with a generic placeholder bob and face, redrawn upright and front-facing. The bob and face only balance outfit design.
+2. **Dress** the starter outfit over the scaffold by image edit, keeping exposed skin a flat tint distinct from every outfit fill so light outfit parts stay separable.
+3. **Redraw** the dressed asset into each pose and gesture; a dressed redraw keeps outfit details consistent where per-pose dressing drifts.
+4. **Split skin:** flat skin color to a pure-white `skinFill` mask.
+5. **Cut the head** off at the neck, under the head anchor.
+6. **Assemble** with the head set and register the column (feet pivot, head anchor).
+
+Articulated columns (`perched` knee-pivot lower legs, `dangle` torso/arms/legs, the 2-frame `typing` hands) get their segments by cutting the whole dressed redraw at assembly; hidden overlap regions are repaired by image edit, with per-column owner sign-off. An outfit column accepts any number of layers, so the schema is unaffected. No split/assemble tool is committed: the pipeline is image-edit driven, and `lintCompanionKit` checks the assembled pack.
 
 ### 4. Canonical `ws-companion/v1` `pack.json` Schema & Assetized Timing Grammar
 
@@ -87,9 +115,9 @@ A pack is a single self-contained `pack.json` plus relative WebP/PNG raster asse
 
 - **Smart defaults & mode inference:**
   - `z` defaults to `20`; `fallback` defaults to `"stand"`; `headScale` defaults to `1.0`.
-  - Layer mode is inferred from keys when `mode` is omitted: `frames` present -> sprite frame loop (`fps`); `line`/`jacketFill`/`accentFill`/`skinFill`/`detail` present -> `semantic-split`; `file` only -> `static` (untinted).
+  - Layer mode is inferred from keys when `mode` is omitted: `frames` present -> sprite frame loop (`fps`); `line`/`jacketFill`/`accentFill`/`skinFill`/`detail` present -> `semantic-split` (so is `fills`, in outfit columns and attachments only); `file` only -> `static` (untinted).
 - **Slot replacement (`gestures.<id>.replaces`) & `handAnchor`:**
-  - Gestures declare `pose` + optional `replaces: ["<layer-id>"]` + additive `layers[]` + optional `handAnchor: [x, y]` (logical canvas coordinates where launched props lift off / land; falls back to pose `handAnchor`, then `[canvasW * 0.5, canvasH * 0.48]`).
+  - Gestures declare `pose` + optional `replaces: ["<layer-id>"]` (outfit gesture columns also match a layer's `slot`, §3a) + additive `layers[]` + optional `handAnchor: [x, y]` (logical canvas coordinates where launched props lift off / land; falls back to pose `handAnchor`, then `[canvasW * 0.5, canvasH * 0.48]`).
 - **Non-rejecting safety-only Go validation & runtime sanitization (pure T0):**
   - None of the v2 timing/physics/anchor fields (`easings`, `stageEffects`, `propMotions`, `physics`, `passive`, `keyframes[].ease`, `handAnchor`, `swingWeight`, `swingLag`, `gazeTiltDeg`, `propGazeTiltDeg`) introduce file paths or security surfaces. Go's `validateCompanionManifest` remains strictly safety-only and **never** rejects a valid `ws-companion/v1` manifest for opaque/malformed timing extensions (preserving 100% unknown-field passthrough in both directions), exposing only a non-rejecting diagnostic linter (`lintCompanionTiming`) for tests/pack authoring; the JS runtime defensively validates and clamps every v2 field against the documented bounds below and falls back cleanly to built-in starter defaults on unexpected shapes.
 - **Assetized `easings` dictionary (T0):**
@@ -117,31 +145,37 @@ A pack is a single self-contained `pack.json` plus relative WebP/PNG raster asse
 - **Assetized `passive` state map & Declarative `scenarios` (`1-beat` + `steps` + `when`):**
   - Top-level `"passive"` lets packs override the resting beat for `idle`, `doze`, `user_typing` (aliases `typing_user`), `thinking`, `tool`, `replying` (aliases `streaming`), `permission`, and `error` (defaults live in the engine's starter table).
   - Pack `"scenarios"` merge by ID over the built-in starter catalog (`"disabled": true` mutes a starter scenario; legacy starter IDs `mailbox_bonk` and `working_tatata` and event alias `session.streaming` remain supported); optional `when` guards allow only safe declarative predicates (`streak`, `windowMs`, `idleMs`, `hourRange`, `routeKind`, `pose`).
-- **Safety-only Go validation & T0 unknown-field passthrough:** Never whitelist open dictionary keys or reject opaque extension fields; validate security/path/size/v1-structural invariants only in Go (`lintCompanionTiming` is advisory/non-rejecting) and sanitize optional timing extensions defensively in JS so future grammar extensions remain strictly T0.
+- **Safety-only Go validation & T0 unknown-field passthrough:** Never whitelist open dictionary keys or reject opaque extension fields; validate security/path/size/v1-structural invariants only in Go (`lintCompanionTiming` and `lintCompanionKit` are advisory/non-rejecting; the validator enumerates the rasters in `outfits.*.{poses,gestures}.*.layers`, `attachments.*.layers`, `attachments.*.columns.*.layers`, `eyesets.*` and the layer key `fills`) and sanitize optional timing extensions defensively in JS so future grammar extensions remain strictly T0.
 
 ### 5. Runtime Z-Stack Compositing Order (Back to Front)
 
 ```text
 z10  Hair Back         (hair-*-back-fill/line — drapes behind body, optional subtle swingWeight)
-z19  Behind-Body Limbs (perched knee-sway legs, articulated dangle legs/arms behind torso)
-z20  Body              (pose torso / seated body / articulated dangle torso)
-z21  Gesture Arm       (optional gesture arm such as cup_hands / wave / coffee with lineless shoulder cap + pivot track)
-z22  Static Prop       (e.g., prop-typing-desk — mode: static, untinted, stationary)
-z24  Foreground Hands  (e.g., typing-hands 2-frame loop above desk, or foreground cup_hands palms)
+z11  Tail Attachment   (body-bound slot `tail`, behind the body)
+z19  Behind-Body Limbs (legacy-pack v1 usage: perched knee-sway legs, articulated dangle legs/arms behind torso)
+z20  Body              (default for body layers: outfit-baked column layers, or the legacy pose torso / seated body / dangle torso)
+z21  Gesture Arm       (legacy-pack v1 usage: optional gesture arm such as cup_hands / wave / coffee with lineless shoulder cap + pivot track) · default of a body-bound custom attachment slot
+z22  Static Prop       (legacy-pack v1 usage: e.g., prop-typing-desk — mode: static, untinted, stationary)
+z24  Foreground Hands  (legacy-pack v1 usage: e.g., typing-hands 2-frame loop above desk, or foreground cup_hands palms)
 z30  Head Egg          (head-egg-fill [skinColor] + head-egg-line)
 z40  Face / Eyes       (Track 1 11-layer live eyes/mouth OR Track 2 anime decal)
+z45  Ears Attachment   (head-bound slot `ears`)
 z50  Hair Front        (hair-*-front-fill/line — masks upper eyelid travel)
 z55  Hair Accessory    (hair-*-acc — untinted, independently toggleable)
+z56  Headdress         (head-bound slot `headdress`)
+z57  Accessory         (head-bound slot `accessory`) · default of a head-bound custom attachment slot
 z60  Floating Props/FX (prop-drone, prop-mail, custom props, speech bubble / comic FX outside scaleX)
 ```
+
+Outfit-baked body layers default to `z20`, below the fixed head band, and any layer or attachment may set an explicit `z`; there are no per-garment z bands.
 
 ## Mandatory Official Art & Motion Craft Gates
 
 Every official shipped pack must satisfy all six gates before replacing dev fixtures:
 
 1. **One-by-One Asset Crafting Cadence (Mandatory Workflow):** Never batch-generate and dump all poses/gestures/props at once. Author and present **one asset unit at a time** (1. `stand` + canonical head/eyes -> 2. `perched` -> 3. `typing` -> 4. articulated `dangle` -> 5. `cup_hands` launch gesture -> 6. remaining gestures one by one -> 7. `prop-drone` & `prop-mail` one by one -> 8. expressions/hair/presets), receiving live preview feedback and explicit owner sign-off on each asset before starting the next.
-2. **Human Visual Sign-Off Required for Shipped Art:** Automated pixel/bbox/seam metrics verify technical invariants (`0.0px` head pop, transparent corners, tint isolation) but cannot catch anatomical awkwardness, elbow pinches, leftover hood fragments, or awkward grips. Every shipped official art pose, gesture, and prop requires explicit owner visual approval.
-3. **Uniform Canonical Head Pixel Scale Across All Poses (`headScale === 1.0`):** Every pose (`stand`, `typing`, `perched`, `dangle`, and any custom pose) must keep the exact same physical `head-egg` pixel diameter as `stand`. Seated poses anchor naturally lower (`headAnchor.y`) rather than scaling up to fill `512 px`.
+2. **Human Visual Sign-Off Required for Shipped Art:** Automated pixel/bbox/seam metrics verify technical invariants (`0.0px` head pop, transparent corners, tint isolation) but cannot catch anatomical awkwardness, elbow pinches, leftover hood fragments, or awkward grips. Every shipped official art pose, gesture, and prop requires explicit owner visual approval. Paper-doll checks: exposed skin matches the head-egg skin at four skin tints, with no outfit paint on `skinFill`; the neck tucks under the head with no gap or double edge at the head anchor; and `lintCompanionKit` reports clean.
+3. **Uniform Canonical Head Pixel Scale Across All Poses (`headScale === 1.0`):** Every pose (`stand`, `typing`, `perched`, `dangle`, and any custom pose) must keep the exact same physical `head-egg` pixel diameter as `stand`; the canonical head diameter is the h28 head. Seated poses anchor naturally lower (`headAnchor.y`) rather than scaling up to fill `512 px`.
 4. **Continuous Knee-Pivot Sway & Restrained Articulated Drag Inertia:** Avoid 2-frame binary swaps for relaxed idle limb motion (`perched` legs use continuous out-of-phase knee `oscillate`). For `dangle`, separate torso, left/right arms, and left/right legs with shoulder/hip pivots and subtle differential `swingWeight` / `swingLag` ("과하지 않게") and **no `prop-grab` overlay**.
 5. **"끙---차!" Cutout Paper-Doll Timing Philosophy (Anticipation → Snap → Overshoot → Settle):** Author joint `keyframes`, `stageEffects`, and `propMotions` with snappy cutout rhythm — a deliberate coiled anticipation dip (e.g., crouching before a hop, lowering shoulders+palms before lifting off a drone/letter), a crisp release snap, slight overshoot, and clean settle — rather than uniform linear or flat sinusoidal motion.
 6. **Lineless Joint Cap & Post-Composite Silhouette Outline (R&D Track):**
@@ -197,12 +231,15 @@ Every official shipped pack must satisfy all six gates before replacing dev fixt
   - Default resting perch sits on the left session rail bottom divider (immediately above `.rws-unreg` / `.rfoot`), reserving clearance via sibling margin (`--companion-slot`) without breaking `.rws-unreg`'s `margin-top: auto`; on collapsed `< 1600 px` viewports it perches above `composer-top` (or bottom-left corner on sessionless routes).
   - Default size targets **`~116 px`** when docked (scaling cleanly with rail width) and exposes a **subtle hover/focus-only top-right resize grip** on `.ws-companion-hit` (`opacity: 0.35`, `0.85` on grip hover) so users can drag to resize freely between **`64 px` and `240 px`**. Size persists in browser `localStorage` (zero file I/O, T0) and updates `--companion-slot` live; the right-click quick menu offers "Reset size" alongside "Return home".
 - **Two-Speed AI:** Local 60 fps 0-token physics/state-machine engine (`rules`) + optional lead-unaware `agent` sidecar director: event-triggered (turn end, tool error, commit/merge, new board ask, long idle) under a user-tunable cooldown and hourly cap, a `small`-tier one-shot harness call per trigger, replies validated into a `companion-command` stream event that overrides the rules engine for a short TTL. The lead gets no companion tool or prompt text. Character voice comes from the pack's optional `persona` (`name`, `voice`, `quipLanguage`). Spec: `261122-feat-ws-companion-director`.
+  - Focus: each shell rail stream hands its shell a `companion-focus` token; in `agent` mode the shell posts its visible session and resolved pack to `POST /api/companion/focus` on every switch and clears while hidden. The daemon keeps one report per live stream (dropped with the stream) and directs only the newest one's session.
+  - The director's allowed IDs are the active pack's dictionaries plus the built-in scenarios and fx of `dashboard-companion-builtins.js`, the one source the shell bundle runs and the daemon parses.
+  - Off and `rules` modes build no digest and spawn nothing; a dropped trigger touches no file. Cooldown and cap are charged only when a process spawns: a session whose harness has no one-shot mode (codex, agy today) drops its triggers from memory, and a `small` tier resolving to another harness drops without a call. Pack dictionary keys outside `[A-Za-z0-9_-]{1,64}` never enter the prompt's allowed-ID lists.
 - **Opt-In Configuration (Default off, global-only):** Entries in `dashboard-config-manifest.json` (mirrored identically in `agents-plugin/`, `agents-plugin-wsflow/`, and `agents-plugin-pi/`), global layer only (synced layer once `261119-feat-ws-config-git-sync` lands):
   - Settings panel: `dashboard.companion_enabled` `false` (default) | `true`; `dashboard.companion_director` `rules` (default) | `agent`.
   - Directed commands: the shell acts only on the visible session's `companion-command`, validates every ID against the active pack (its `fallback` chains, the shared default pack's props and fx, the built-in fx badges, and the scenario registry) and drops unknown fields; the directed beat (`runner.direct`) holds over the rules engine until its TTL (1-15 s; only a drag interrupts it), and its quip is plain text of at most 140 characters in a bubble that never takes the pointer.
-  - Gear-opened floating modal (gear under the resize grip on hover): `dashboard.companion_pack` `default` (default) | `auto` | `<pack-id>`; `dashboard.companion_preset` `werkschaft-d1` (default) | `<preset-id>`; `dashboard.companion_agent_cooldown_seconds` (default 30); `dashboard.companion_agent_hourly_cap` (default 20); read-only persona; reset size.
+  - Gear-opened floating modal (gear under the resize grip on hover): `dashboard.companion_pack` `default` (default) | `auto` | `<pack-id>`; `dashboard.companion_preset` `werkschaft-d1` (default) | `<preset-id>`; `dashboard.companion_agent_cooldown_seconds` (default 30); `dashboard.companion_agent_hourly_cap` (default 20); read-only persona; reset size; wardrobe picks `dashboard.companion_outfit`, `dashboard.companion_hair`, `dashboard.companion_eyes` (pack IDs; empty follows the preset), `dashboard.companion_attachments` (up to 16 `<slot>=<id>` pairs; `none` clears a slot) and `dashboard.companion_palette` (up to 16 `<channel>=#rrggbb` pairs), all global-only scalar strings defaulting to empty. The modal shows them as pickers: outfit, hair and eye selects with "follow preset", one select per attachment slot, a color input per channel, and "Reset colors".
 - **Local BYO Pack Storage (`performance.md` Compliant):** User packs live at `<config-home>/companions/<pack-id>/pack.json` (honoring `WS_CONFIG_HOME`; `"default"` and `"auto"` reserved). Lazily indexed in memory on first companion pack request, refreshed only on `POST /api/companion/packs/reload`, with `ETag`/`304`, `409 Conflict` on stale `?rev=`, and strict raster-only/symlink guards. Packs reach that directory by hand or by source install (see **BYO Packs: Source Install and the Downstream Authoring Kit** below).
-- **Public Repository IP Boundary:** The public repository ships **only** the companion engine, `pack.json` schema, IP-clean original default assets, and the reproducible pack recipe. Third-party or community character packs live strictly outside git under `<config-home>/companions/`.
+- **Public Repository IP Boundary:** The public repository ships **only** the companion engine, `pack.json` schema, IP-clean original default assets, and the reproducible pack recipe. Third-party or community character packs live strictly outside git under `<config-home>/companions/`. Local reproductions of third-party characters stay in local-only BYO packs. The authoring scaffold derived from the local reference is tracked as the official authoring scaffold (`ai-docs/assets/companion-pet/scaffold-upright.png`, owner 2026-11-22 (130)) and never ships in any pack; its derivation source and intermediates stay local. Shipped outfit-baked assets may carry body regions that trace back to it only with every identifying feature removed.
 
 ## BYO Packs: Source Install and the Downstream Authoring Kit
 
@@ -254,5 +291,30 @@ Fields the validator reads strictly (a wrong type fails the pack) are marked *st
 | `scenarios` | *Strict.* Scenario overrides by ID. Keys: `on`, `when`, `steps` (each with `ms` and a beat), `priority`, `cooldownMs`, `durationMs`, `disabled`. |
 | `ms`, `priority`, `cooldownMs`, `durationMs` | Scenario step time in milliseconds; scenario priority; cooldown and total duration in milliseconds (nonnegative). |
 | `expression`, `gesture`, `gaze`, `stage`, `quip` | Beat fields of a scenario or step (`pose` is the sixth): the expression, gesture, gaze target, stage effect, and quip text to play. |
+| `fills` | *Strict.* Tint channel to raster on any layer, frame, egg, or hair part (section 3a). A `fills`-only layer or frame is valid only in `outfits` columns and `attachments`. |
+| `outfits` | *Strict.* Outfits by ID: `poses` and `gestures` maps of columns (`layers`, `headAnchor`, `handAnchor`, `feetPivot`, `replaces`) plus a `palette`. Only `layers` is checked; the rest pass through (section 3a). |
+| `attachments` | *Strict.* Attachments by ID: `slot`, `bind`, `z`, `layers`, and `columns` (per-column `layers` for a body item). Only the layer lists are checked; `slot` and `bind` are lint and runtime fields. |
+| `eyesets` | *Strict.* Eye sets by ID, each with the `head.eyes` keys. |
+| `palette`, `defaultOutfit`, `registration` | Pack palette (`<channel>` to `#rrggbb`), default outfit ID, and the lint registration (`headAnchor`, `feetPivot`, `tolerance`). Pass through. |
 
 For the fields a pack may add on top (`persona`, `props`, `fx`, `motions`, `presets`, `easings`, `stageEffects`, `propMotions`, `physics`, `passive`, `mode`, `fps`, `frames`, `motion`, `z`, `pivot`, `pose`, `fallback`, `headScale`, `handAnchor`, `decal`, `disabled`, `when`, `steps`), see sections 1 to 4 above.
+
+## Generative Edit Toolkit (Erase-and-Infill)
+
+Generative image editing is the core production tool for companion art. Rules and runtime transforms (mesh deform, rotates, layer motion) serve it; they never replace it (owner 2026-11-22 21:44). When a rule-based or runtime approach does not feel right, reach for an edit.
+
+- **Erase-and-infill card.** Erase the region by image edit and let the editor infill it, instead of adding rules. The editor handles this best. Typical uses:
+  - *Head removal:* the headless column master. The edit erases the head and hair and infills the collar, shoulder or hand they hid.
+  - *A pose a deform cannot reach:* shoulder rotation, a large limb swing, or any motion past the safe-range table. Edit the column master: erase the limb and infill it at the new angle. Ship the result as an extra column or a `frames` entry.
+  - *Regions a moving part uncovers:* infill what lies behind a limb or prop once it moves.
+  - *Seams or awkward joints* that a transform leaves at the live preview.
+- **Gate every edit against its master.** Measure it:
+  - alpha IoU of the protected region;
+  - edge displacement;
+  - the anchor and sole rows.
+
+  Add owner visual sign-off on top. The edit output becomes the new master; nothing is composited back onto the old one.
+- **One edit of the whole column beats assembling independently generated parts.** Separate parts drift in outfit detail.
+- **Spend generation passes, not audit turns.** Generation and edit passes are cheap; multi-turn rule-based visual audits and hand repairs by an agent cost more (owner 2026-11-22 22:14). Generate several candidates or rerun the edit, then close the unit with one scripted check and one contact sheet. A failed gate gets another generation pass, not a pixel-repair loop.
+- **Split layers by edit, not by mask rules.** To split one generated asset into stacked layers (front and back hair, for example), run one erase edit per layer on the same source and keep what remains. The editor decides what is in front.
+- **Choose by the live preview, not by rule.** A small runtime transform within its safe range, an erase-and-infill edit, or a full redraw from the dressed master are all valid cards. Use whichever looks better.

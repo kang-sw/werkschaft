@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["packs", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -399,7 +399,7 @@ test("superseded companion loads discard decoded bitmaps after leaving a session
 });
 
 function relayFixture() {
-  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [];
+  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [], treeAgents = [], completed = 0;
   const timers = new Map(), listeners = {}, posts = [], held = [];
   const doc = {
     body: {classList: {contains: () => false}},
@@ -415,7 +415,7 @@ function relayFixture() {
     performance: {now: () => now}, Date: class extends Date { static now() { return now; } },
     setTimeout(fn) { timers.set(++timer, fn); return timer; }, clearTimeout(id) { timers.delete(id); },
     rid: "lead", lead: {}, boardLatest: null, TL_ASK: "ask", companionStreamReady: true,
-    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed: 0}),
+    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : selector.startsWith("#r-tree .agent") ? treeAgents : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed}),
     entriesBox: () => ({children: rows}), $: () => null, pageHidden: () => hidden,
     showRegions: () => { while (held.length) held.shift()(); }, shPost: (_, payload) => posts.push(payload),
     innerHeight: 1000, innerWidth: 1000
@@ -425,7 +425,7 @@ function relayFixture() {
   function update() { now += 300; listeners.change.forEach(fn => fn()); flush(); }
   function events() { return posts.splice(0).flatMap(p => p.events); }
   flush(); events();
-  return {set children(value) { children = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
+  return {set children(value) { children = value; }, set treeAgents(value) { treeAgents = value; }, set completed(value) { completed = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
     update, events, posts, now: () => now,
     input() { listeners.input.forEach(fn => fn({target: {matches: () => true}})); flush(); },
     visibility(value, swap) { hidden = value; if (swap) held.push(swap); listeners.visibilitychange.forEach(fn => fn()); flush(); },
@@ -451,6 +451,52 @@ function relayRow(key, classes, {childId, ms, cause, child, label} = {}) {
       return null;
     }};
 }
+
+// relayAgent is an ended-group row of the expanded tree; native marks the
+// harness's own subagent, unknown a native row whose observation ended with
+// the outcome unknown.
+function relayAgent(id, {unknown = false, native = false} = {}) {
+  const details = {dataset: {key: "agent-" + id}, querySelector: () => null};
+  return {
+    closest: selector => selector === ".tgroup.ended" ? {} : null,
+    querySelector: selector => selector === ":scope > details[data-key]" ? details : null,
+    classList: {contains: name => name === "done" || (native && name === "native")},
+    matches: () => true,
+    hasAttribute: name => unknown && name === "data-end-unknown"
+  };
+}
+
+test("relay emits no subagent.done for a native row whose observation ended", () => {
+  const f = relayFixture(), done = () => f.events().filter(e => e.kind === "subagent.done");
+  f.children = [{id: "agy-native:call_1", state: "thinking", native: true}]; f.update(); f.events();
+  f.children = []; f.treeAgents = [relayAgent("agy-native:call_1", {unknown: true, native: true})]; f.update();
+  assert.equal(done().length, 0);
+  // A native row that ended with a known end is read as done.
+  f.children = [{id: "codex-native:call_2", state: "thinking", native: true}]; f.treeAgents = []; f.update(); f.events();
+  f.children = []; f.treeAgents = [relayAgent("codex-native:call_2", {native: true})]; f.update();
+  assert.equal(done().length, 1);
+  f.dispose();
+});
+
+test("relay reads no finish from evicted native rows or a skipped transition", () => {
+  const f = relayFixture(), done = () => f.events().filter(e => e.kind === "subagent.done").map(e => e.token);
+  const agy = i => "agy-native:call_" + i;
+  f.children = [0, 1, 2, 3, 4, 5].map(i => ({id: agy(i), state: "thinking", native: true})).concat([{id: "w", state: "thinking"}]);
+  f.update(); f.events();
+  // Six observations end with the outcome unknown; the finished-row cap
+  // evicts call_0 before the page sees it. One ordinary child really
+  // finishes and its fold raises the completed count by one.
+  f.children = []; f.completed = 1;
+  f.treeAgents = [1, 2, 3, 4, 5].map(i => relayAgent(agy(i), {unknown: true, native: true})).concat([relayAgent("w")]);
+  f.update();
+  assert.deepEqual(done(), ["subagent.done:lead:w:1"]);
+  // A native row whose done transition the DOM skipped (running, then gone)
+  // spends no later rise either.
+  f.children = [{id: "codex-native:call_9", state: "thinking", native: true}, {id: "v", state: "thinking"}]; f.treeAgents = []; f.update(); f.events();
+  f.children = [{id: "v", state: "thinking"}]; f.completed = 2; f.update();
+  assert.deepEqual(done(), []);
+  f.dispose();
+});
 
 test("relay reconciles both report orders, holding, resume, terminal and stale reports", () => {
   const f = relayFixture(), child = state => [{id: "c", state}];
@@ -685,7 +731,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["packs", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -944,4 +990,873 @@ test("companion settings modal opens, writes typed global values, reverts refuse
   fire(gear, "click");
   assert.ok(dialog.all().filter(c => c.tagName === "SELECT" || c.tagName === "INPUT").every(c => c.disabled), "read-only pages disable every control");
   assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
+});
+
+// wardrobeModal opens the companion modal over a mutable config and a
+// hooks.wardrobe() fixture, and records every config write.
+function wardrobeModal({ config = {}, wardrobe, picks = null, rows, hook = true } = {}) {
+  const { doc, element, fire, Option, sysopen } = modalDom();
+  const writes = [], notices = [];
+  const fetch = async (url, init) => {
+    if (url === "/api/companion/packs") return { ok: true, json: async () => ({ packs: [{ id: "default" }] }) };
+    writes.push(JSON.parse(init.body));
+    return { ok: true };
+  };
+  const C = companion({ document: doc, Option, fetch, wsT: key => key,
+    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const all = rows || catalog.filter(row => row.surface === "companion-modal");
+  const node = element("div"), gear = element("button");
+  const state = { config, wardrobe, picks };
+  const hooks = {
+    rows: () => all, config: () => state.config, persona: () => null,
+    presets: () => ({ available: [] }),
+    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
+    resetSize() {}, applyPreset() {}, notice: key => notices.push(key)
+  };
+  if (hook) hooks.wardrobe = () => state.wardrobe;
+  hooks.picks = () => state.picks;
+  const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, hooks);
+  const dialog = node.children[0];
+  fire(gear, "click");
+  const row = key => dialog.all().filter(c => c.className === "ws-companion-settings-row")[all.findIndex(r => r.key === key)];
+  const subs = key => row(key).all().filter(c => c.className === "ws-companion-settings-sub")
+    .map(sub => ({ name: sub.children[0].textContent, input: sub.children[1] }));
+  const select = key => row(key).all().find(c => c.tagName === "SELECT");
+  const values = input => input.children.map(o => o.value);
+  const pick = async (input, value) => {
+    input.value = value;
+    fire(input, "change");
+    await new Promise(resolve => setImmediate(resolve));
+    return writes.at(-1);
+  };
+  return { C, modal, dialog, state, writes, notices, row, subs, select, values, pick, fire, sysopen, Option };
+}
+
+const wardrobeFixture = () => ({
+  outfits: ["gown", "street"], hairs: ["bob", "bun"], eyesets: ["round"],
+  slots: { headdress: ["cap"], tail: ["tail", "tail2"] }, channels: ["hair", "skin", "trim"]
+});
+
+test("companion wardrobe pickers list the active pack and each pick posts its global payload", async () => {
+  const m = wardrobeModal({
+    config: { pack: "default", preset: "", outfit: "", hair: "gone", eyes: "", attachments: "ears=ears tail=tail", palette: "skin=#AABBCC" },
+    wardrobe: wardrobeFixture(), picks: { palette: { skin: "#ddeeff", hair: "#112233" } }
+  });
+  const label = "js.companion.follow_preset";
+  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "gown", "street"]);
+  assert.equal(m.select("dashboard.companion_outfit").children[0].textContent, label, "follow preset comes first");
+  assert.equal(m.select("dashboard.companion_outfit").children[0].selected, true);
+  assert.deepEqual(m.values(m.select("dashboard.companion_hair")), ["", "bob", "bun", "gone"], "a stored ID the pack lacks stays visible");
+  assert.equal(m.select("dashboard.companion_hair").children[3].selected, true);
+  assert.deepEqual(m.values(m.select("dashboard.companion_eyes")), ["", "round"]);
+
+  const slots = m.subs("dashboard.companion_attachments");
+  assert.deepEqual(slots.map(s => s.name), ["headdress", "tail", "ears"], "pack slots, then the slots only the config names");
+  const [headdress, tail, ears] = slots.map(s => s.input);
+  assert.deepEqual(m.values(headdress), ["", "none", "cap"]);
+  assert.deepEqual(m.values(tail), ["", "none", "tail", "tail2"]);
+  assert.deepEqual(m.values(ears), ["", "none", "ears"]);
+  assert.deepEqual(tail.children.slice(0, 2).map(o => o.textContent), [label, "js.companion.attachment_none"]);
+  assert.deepEqual([headdress, tail, ears].map(s => s.children.find(o => o.selected).value), ["", "tail", "ears"]);
+
+  const channels = m.subs("dashboard.companion_palette");
+  assert.deepEqual(channels.map(c => c.name), ["hair", "skin", "trim"]);
+  assert.deepEqual(channels.map(c => [c.input.type, c.input.value]),
+    [["color", "#112233"], ["color", "#ddeeff"], ["color", "#000000"]], "effective pick, else the config pair, else black");
+
+  const key = name => "dashboard.companion_" + name;
+  assert.deepEqual(await m.pick(m.select(key("outfit")), "gown"), { scope: "global", key: key("outfit"), value: "gown" });
+  assert.deepEqual(await m.pick(m.select(key("outfit")), ""), { scope: "global", key: key("outfit"), value: "" }, "follow preset writes empty");
+  assert.deepEqual(await m.pick(m.select(key("eyes")), "round"), { scope: "global", key: key("eyes"), value: "round" });
+  assert.deepEqual(await m.pick(headdress, "cap"), { scope: "global", key: key("attachments"), value: "ears=ears headdress=cap tail=tail" },
+    "a slot pick composes the whole string in sorted order");
+  assert.deepEqual(await m.pick(tail, "none"), { scope: "global", key: key("attachments"), value: "ears=ears tail=none" });
+  assert.deepEqual(await m.pick(tail, ""), { scope: "global", key: key("attachments"), value: "ears=ears" }, "follow preset drops the slot");
+  assert.deepEqual(await m.pick(ears, ""), { scope: "global", key: key("attachments"), value: "tail=tail" });
+  assert.deepEqual(await m.pick(channels[0].input, "#AABB11"), { scope: "global", key: key("palette"), value: "hair=#aabb11 skin=#aabbcc" },
+    "colors write lowercase");
+  const before = m.writes.length;
+  await m.pick(channels[2].input, "red");
+  assert.equal(m.writes.length, before, "a non-#rrggbb value is never written");
+
+  const reset = m.row(key("palette")).all().find(c => c.tagName === "BUTTON");
+  assert.equal(reset.textContent, "js.companion.reset_colors");
+  m.fire(reset, "click");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(m.writes.at(-1), { scope: "global", key: key("palette"), value: "" });
+
+  // With the last slot cleared the config is empty, which writes "".
+  m.state.config = { ...m.state.config, attachments: "ears=ears" };
+  assert.deepEqual(await m.pick(m.subs(key("attachments")).find(s => s.name === "ears").input, ""),
+    { scope: "global", key: key("attachments"), value: "" });
+});
+
+test("companion wardrobe pickers write at most 16 pairs, keep the changed one and match the server patterns", async () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "../../../agents-plugin/dashboard-config-manifest.json"), "utf8"));
+  const pattern = key => new RegExp(manifest.keys.find(k => k.key === key).pattern);
+  const names = prefix => Array.from({ length: 20 }, (_, i) => prefix + String(i).padStart(2, "0"));
+  const first16 = list => list.slice(0, 16);
+  const m = wardrobeModal({
+    config: {
+      attachments: first16(names("s")).map(n => n + "=a").join(" "),
+      palette: first16(names("c")).map(n => n + "=#000000").join(" ")
+    },
+    wardrobe: { outfits: [], hairs: [], eyesets: [], slots: Object.fromEntries(names("s").map(n => [n, ["a", "b"]])), channels: names("c") }
+  });
+  const slots = m.subs("dashboard.companion_attachments"), channels = m.subs("dashboard.companion_palette");
+  assert.equal(slots.length, 20, "every slot is listed");
+  assert.equal(channels.length, 20, "every channel is listed");
+
+  const wrote = await m.pick(slots[19].input, "b");
+  assert.equal(wrote.key, "dashboard.companion_attachments");
+  assert.match(wrote.value, pattern("dashboard.companion_attachments"));
+  const pairs = wrote.value.split(" ");
+  assert.equal(pairs.length, 16);
+  assert.deepEqual(pairs, [...first16(names("s")).slice(0, 15).map(n => n + "=a"), "s19=b"], "the changed slot stays, the last sorted other drops");
+
+  const palette = await m.pick(channels[19].input, "#FFAA00");
+  assert.match(palette.value, pattern("dashboard.companion_palette"));
+  assert.equal(palette.value.split(" ").length, 16);
+  assert.ok(palette.value.endsWith(" c19=#ffaa00"));
+  assert.ok(!palette.value.includes("c15="));
+
+  // Changing a slot the config already has never grows the string.
+  const same = await m.pick(slots[0].input, "b");
+  assert.equal(same.value.split(" ").length, 16);
+  assert.ok(same.value.startsWith("s00=b s01=a"));
+});
+
+test("companion wardrobe pickers render pack strings as text and read-only pages disable them", async () => {
+  const hostile = "<img src=x onerror=alert(1)>";
+  const m = wardrobeModal({
+    config: {}, wardrobe: { outfits: [hostile, "a-b_c"], hairs: [], eyesets: [], slots: { [hostile]: [hostile, "x-1"] }, channels: [hostile] }
+  });
+  const everything = m.dialog.all();
+  assert.ok(everything.every(c => c.innerHTML === undefined), "no element takes innerHTML");
+  assert.deepEqual(m.select("dashboard.companion_outfit").children.map(o => o.textContent), ["js.companion.follow_preset", hostile, "a-b_c"]);
+  assert.equal(m.subs("dashboard.companion_attachments")[0].name, hostile);
+  assert.equal(m.subs("dashboard.companion_palette")[0].name, hostile);
+  assert.deepEqual(m.subs("dashboard.companion_attachments")[0].input.children.map(o => o.textContent),
+    ["js.companion.follow_preset", "js.companion.attachment_none", hostile, "x-1"]);
+
+  m.modal.hide();
+  m.sysopen.clear();
+  m.modal.show();
+  const wardrobeRows = ["outfit", "hair", "eyes", "attachments", "palette"].map(name => m.row("dashboard.companion_" + name));
+  const controls = wardrobeRows.flatMap(r => r.all().filter(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName)));
+  assert.ok(controls.length >= 6);
+  assert.ok(controls.every(c => c.disabled), "read-only pages disable every wardrobe control");
+  const writesBefore = m.writes.length;
+  await m.pick(m.select("dashboard.companion_outfit"), "a-b_c");
+  assert.equal(m.writes.length, writesBefore, "and a forced change event writes nothing");
+});
+
+test("companion wardrobe rows stay usable without pack options and follow config and pack changes", async () => {
+  const m = wardrobeModal({ config: { outfit: "kept", attachments: "tail=tail", palette: "skin=#010203" } });
+  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "kept"]);
+  assert.deepEqual(m.values(m.select("dashboard.companion_hair")), [""]);
+  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["tail"]);
+  assert.deepEqual(m.subs("dashboard.companion_palette").map(s => [s.name, s.input.value]), [["skin", "#010203"]]);
+
+  const empty = wardrobeModal({ config: {}, hook: false });
+  assert.deepEqual(empty.subs("dashboard.companion_palette"), [], "no channels shows only the reset");
+  assert.ok(empty.row("dashboard.companion_palette").all().some(c => c.tagName === "BUTTON"));
+  assert.deepEqual(empty.subs("dashboard.companion_attachments"), []);
+
+  // A live config push refreshes the pickers; a pack change redraws them.
+  m.state.config = { outfit: "gown", attachments: "ears=ears", palette: "skin=#0a0b0c hair=#ffffff" };
+  m.modal.refresh(null);
+  assert.equal(m.select("dashboard.companion_outfit").children.find(o => o.selected).value, "gown");
+  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["ears"]);
+  assert.deepEqual(m.subs("dashboard.companion_palette").map(s => [s.name, s.input.value]), [["hair", "#ffffff"], ["skin", "#0a0b0c"]]);
+  m.state.wardrobe = wardrobeFixture();
+  m.modal.rebuild();
+  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "gown", "street"]);
+  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["headdress", "tail", "ears"]);
+});
+
+test("companion live config broadcast re-dresses the mounted stage and refreshes the open modal without a reload", async () => {
+  let raf = null, now = 0;
+  const packFetches = [], listeners = new Map();
+  const makeElement = tag => {
+    const el = {
+      tagName: tag.toUpperCase(), className: "", id: "", children: [], dataset: {}, attrs: {}, listeners: {}, value: "", disabled: false,
+      style: { setProperty() {}, removeProperty() {} }, hidden: false, textContent: "", open: false, offsetWidth: 240, offsetHeight: 200,
+      setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; }, removeAttribute() {},
+      addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }, setPointerCapture() {}, remove() {}, focus() {},
+      getBoundingClientRect: () => ({ left: 0, right: 60, top: 0, bottom: 80, width: 60, height: 80 }),
+      append(...items) { this.children.push(...items.filter(item => item && typeof item === "object")); },
+      insertBefore(item) { this.append(item); },
+      replaceChildren(...items) { this.children = []; this.append(...items); },
+      all() { return this.children.flatMap(child => [child, ...(child.all ? child.all() : [])]); },
+      contains(other) { return other === this || this.all().includes(other); },
+      querySelector() { return this.all().find(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName) && !c.disabled) || null; },
+      show() { this.open = true; }, close() { this.open = false; }
+    };
+    if (tag === "canvas") {
+      el.width = 0; el.height = 0; el.drawn = [];
+      const ctx = { canvas: el, save() {}, restore() {}, clearRect() {}, setTransform() {}, translate() {}, rotate() {}, scale() {},
+        fillRect() {}, getImageData: () => ({ data: [] }), drawImage(image) { el.drawn.push(image); } };
+      el.getContext = () => ctx;
+    }
+    return el;
+  };
+  class Canvas {
+    constructor(width, height) { this.width = width; this.height = height; this.drawn = []; }
+    getContext() {
+      return { canvas: this, save() {}, restore() {}, translate() {}, rotate() {}, scale() {}, fillRect() {}, getImageData: () => ({ data: [] }),
+        clearRect: () => { this.drawn.length = 0; }, drawImage: image => { this.drawn.push(image); } };
+    }
+  }
+  class Option { constructor(text, value, _default, selected) { this.tagName = "OPTION"; this.textContent = text; this.value = value; this.selected = selected; } }
+  const body = makeElement("body"), activeRid = "";
+  const doc = {
+    documentElement: { dataset: { rid: activeRid }, classList: { contains: () => false }, hasAttribute: name => name === "data-sysopen" },
+    body, hidden: false, activeElement: null, getElementById: () => null,
+    createElement: makeElement, createElementNS: (ns, tag) => makeElement(tag), addEventListener() {}
+  };
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const win = {
+    WsCompanion: {}, wsCompanionModalRows: catalog.filter(row => row.surface === "companion-modal"),
+    WsShell: { companionContext: routeKind => ({ routeKind: routeKind || "session", activity: "idle", landmarks: {}, events: [] }) },
+    addEventListener() {}, innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1
+  };
+  const manifestData = {
+    id: "default", schema: "ws-companion/v1", canvas: [128, 128],
+    poses: { stand: { layers: [{ file: "legacy.png" }] } },
+    defaultOutfit: "street",
+    outfits: {
+      street: { poses: { stand: { layers: [{ file: "street-stand.png" }] } } },
+      gown: { poses: { stand: { layers: [{ file: "gown-stand.png" }] } } }
+    }
+  };
+  const packs = { resolvedAuto: { packId: "default" }, packs: [{ id: "default", rev: "r1" }] };
+  const context = vm.createContext({
+    window: win, document: doc, URLSearchParams, AbortController, OffscreenCanvas: Canvas, Option,
+    ResizeObserver: class { observe() {} disconnect() {} }, MutationObserver: class { observe() {} disconnect() {} },
+    performance: { now: () => now }, wsT: key => key,
+    requestAnimationFrame: fn => { raf = fn; return 1; }, cancelAnimationFrame: () => { raf = null; },
+    fetch: async url => {
+      if (url.includes("/pack.json?")) { packFetches.push(url); return { ok: true, json: async () => manifestData }; }
+      if (url === "/api/companion/packs" || url.startsWith("/api/companion/packs?")) return { ok: true, json: async () => packs };
+      return { ok: true, blob: async () => url };
+    },
+    createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
+  });
+  for (const name of ["builtins", "packs", "focus", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
+  }
+  const C = win.WsCompanion;
+  C.quickMenu = () => ({ rebuild() {}, measure() {}, place() {}, close() {} });
+  const config = { pack: "default", preset: "", outfit: "", hair: "", eyes: "", attachments: "", palette: "" };
+
+  const stage = C.mount(config, () => {});
+  await new Promise(resolve => setImmediate(resolve));
+  const node = body.children[0], hit = node.children[0];
+  const step = () => { const fn = raf; raf = null; assert.ok(fn, "expected scheduled animation frame"); now += 16; fn(now); };
+  // files lists the layer files the character canvas received on its latest draw.
+  const files = item => item.id ? [item.id] : (item.drawn || []).flatMap(files);
+  const characterCanvas = () => node.all().find(c => c.tagName === "CANVAS");
+  const drawn = () => { const canvas = characterCanvas(); canvas.drawn.length = 0; step(); return canvas.drawn.flatMap(files); };
+
+  assert.equal(packFetches.length, 1);
+  assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["street-stand.png"], "the pack default outfit renders first");
+
+  const gear = hit.children.find(c => c.className === "ws-companion-gear");
+  for (const fn of gear.listeners.click) fn({});
+  const dialog = node.children.find(c => c.tagName === "DIALOG");
+  assert.equal(dialog.open, true);
+  const outfitSelect = () => dialog.all().filter(c => c.className === "ws-companion-settings-row")
+    [win.wsCompanionModalRows.findIndex(r => r.key === "dashboard.companion_outfit")].all().find(c => c.tagName === "SELECT");
+  assert.deepEqual(outfitSelect().children.map(o => o.value), ["", "gown", "street"], "the modal lists the loaded pack's outfits");
+  assert.equal(outfitSelect().children.find(o => o.selected).value, "");
+
+  stage.apply({ ...config, outfit: "gown" });
+  assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["gown-stand.png"], "the next frame draws the new outfit with no stale stack");
+  assert.equal(packFetches.length, 1, "no pack is fetched again");
+  assert.equal(outfitSelect().children.find(o => o.selected).value, "gown", "the open modal shows the broadcast value");
+
+  stage.apply({ ...config, outfit: "gown", palette: "skin=#112233" });
+  assert.equal(packFetches.length, 1, "a palette broadcast does not reload the pack either");
+  assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["gown-stand.png"]);
+  stage.apply(config);
+  assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["street-stand.png"], "clearing the pick returns to the pack default");
+  assert.equal(packFetches.length, 1);
+  stage.dispose();
+});
+
+// pixelCanvas is a small software 2D canvas: nearest-neighbour drawImage under
+// an affine transform, source-over and destination-in drawing, and the
+// multiply fillRect the compositor's tint cache uses.
+function pixelCanvas() {
+  function parse(color) {
+    const hex = color.slice(1);
+    const full = hex.length === 3 ? [...hex].map(c => c + c).join("") : hex;
+    return [0, 2, 4].map(i => parseInt(full.slice(i, i + 2), 16));
+  }
+  class Canvas {
+    constructor(width, height) { this.width = width; this.height = height; this.pixels = new Float64Array(width * height * 4); }
+    getContext() {
+      const canvas = this;
+      let m = [1, 0, 0, 1, 0, 0];
+      const stack = [];
+      const ctx = {
+        canvas, fillStyle: "#000", globalCompositeOperation: "source-over",
+        save() { stack.push([m, ctx.globalCompositeOperation]); },
+        restore() { const top = stack.pop(); if (top) [m, ctx.globalCompositeOperation] = top; },
+        translate(x, y) { m = [m[0], m[1], m[2], m[3], m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]; },
+        scale(x, y) { m = [m[0] * x, m[1] * x, m[2] * y, m[3] * y, m[4], m[5]]; },
+        rotate(theta) {
+          const c = Math.cos(theta), s = Math.sin(theta);
+          m = [m[0] * c + m[2] * s, m[1] * c + m[3] * s, m[2] * c - m[0] * s, m[3] * c - m[1] * s, m[4], m[5]];
+        },
+        clearRect() { canvas.pixels.fill(0); },
+        // each visits every target pixel whose centre maps into the user rect.
+        each(x, y, w, h, fn) {
+          const det = m[0] * m[3] - m[1] * m[2];
+          for (let py = 0; py < canvas.height; py++) {
+            for (let px = 0; px < canvas.width; px++) {
+              const dx = px + 0.5 - m[4], dy = py + 0.5 - m[5];
+              const u = (m[3] * dx - m[2] * dy) / det, v = (m[0] * dy - m[1] * dx) / det;
+              fn((py * canvas.width + px) * 4, u >= x && u < x + w && v >= y && v < y + h, (u - x) / w, (v - y) / h);
+            }
+          }
+        },
+        drawImage(image, x = 0, y = 0, w = image.width, h = image.height) {
+          const out = canvas.pixels, src = image.pixels;
+          ctx.each(x, y, w, h, (i, inside, fu, fv) => {
+            let r = 0, g = 0, b = 0, a = 0;
+            if (inside) {
+              const j = (Math.floor(fv * image.height) * image.width + Math.floor(fu * image.width)) * 4;
+              [r, g, b, a] = [src[j], src[j + 1], src[j + 2], src[j + 3]];
+            }
+            if (ctx.globalCompositeOperation === "destination-in") { out[i + 3] *= a; return; }
+            if (!inside || !a) return;
+            const outA = a + out[i + 3] * (1 - a);
+            for (const [k, value] of [[0, r], [1, g], [2, b]]) out[i + k] = (value * a + out[i + k] * out[i + 3] * (1 - a)) / outA;
+            out[i + 3] = outA;
+          });
+        },
+        fillRect(x, y, w, h) {
+          const [r, g, b] = parse(ctx.fillStyle).map(v => v / 255), out = canvas.pixels;
+          assert.equal(ctx.globalCompositeOperation, "multiply", "the compositor fills only to tint");
+          ctx.each(x, y, w, h, (i, inside) => {
+            if (!inside) return;
+            const back = out[i + 3];
+            for (const [k, value] of [[0, r], [1, g], [2, b]]) out[i + k] = (1 - back) * value + back * out[i + k] * value;
+            out[i + 3] = 1;
+          });
+        },
+        getImageData(x, y, w, h) {
+          const data = new Uint8ClampedArray(w * h * 4);
+          for (let row = 0; row < h; row++) for (let col = 0; col < w; col++) {
+            const i = ((y + row) * canvas.width + x + col) * 4, o = (row * w + col) * 4;
+            for (let k = 0; k < 3; k++) data[o + k] = Math.round(canvas.pixels[i + k] * 255);
+            data[o + 3] = Math.round(canvas.pixels[i + 3] * 255);
+          }
+          return { data };
+        }
+      };
+      return ctx;
+    }
+  }
+  // bitmap paints a white (or given) RGB at alpha 1 wherever cell(x, y) holds.
+  function bitmap(size, cell, rgb = [1, 1, 1]) {
+    const image = new Canvas(size, size);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      if (!cell(x, y)) continue;
+      image.pixels.set([...rgb, 1], (y * size + x) * 4);
+    }
+    return image;
+  }
+  function pixel(canvas, x, y) {
+    const i = (y * canvas.width + x) * 4;
+    return [0, 1, 2, 3].map(k => Math.round(canvas.pixels[i + k] * 255));
+  }
+  return { Canvas, bitmap, pixel, parse };
+}
+
+// paperDollPack is the IP-clean procedural outfit fixture on a 16 x 16 canvas:
+// one head set (egg skinFill + line), two outfits whose exposed skin (arms and
+// legs) is the same pure-white skinFill region, and differently cut fills.
+function paperDollPack(px) {
+  const size = 16;
+  const skin = (x, y) => (y >= 6 && y <= 9 && (x === 3 || x === 4 || x === 11 || x === 12)) ||
+    (y >= 12 && (x === 6 || x === 7 || x === 9 || x === 10));
+  const torso = (x, y) => y >= 5 && y <= 10 && x >= 5 && x <= 10;
+  const files = {
+    "egg-skin.png": (x, y) => y >= 1 && y <= 3 && x >= 6 && x <= 9,
+    "street-skin.png": skin, "street-jacket.png": torso,
+    "street-line.png": [(x, y) => y === 11 && x >= 5 && x <= 10, [30, 36, 51].map(v => v / 255)],
+    "street-typing-skin.png": skin,
+    "gown-skin.png": skin, "gown-fill.png": (x, y) => torso(x, y) || (y === 11 && x >= 4 && x <= 11),
+    "gown-trim.png": (x, y) => y === 5 && x >= 5 && x <= 10,
+    "gown-glow.png": (x, y) => y === 0 && x === 0,
+    "legacy-stand.png": (x, y) => y >= 5 && x >= 2 && x <= 13
+  };
+  const bitmaps = new Map(Object.entries(files).map(([name, spec]) =>
+    [name, Array.isArray(spec) ? px.bitmap(size, spec[0], spec[1]) : px.bitmap(size, spec)]));
+  const manifest = {
+    canvas: [size, size],
+    head: {pivot: [8, 4], egg: {skinFill: "egg-skin.png"}},
+    poses: {
+      stand: {headAnchor: [8, 4], layers: [{file: "legacy-stand.png"}]},
+      typing: {fallback: "stand", headAnchor: [8, 7]}
+    },
+    gestures: {},
+    defaultOutfit: "street",
+    outfits: {
+      street: {poses: {
+        stand: {layers: [{skinFill: "street-skin.png", jacketFill: "street-jacket.png", line: "street-line.png"}]},
+        typing: {layers: [{skinFill: "street-typing-skin.png", jacketFill: "street-jacket.png"}]}
+      }},
+      gown: {palette: {outfitPrimary: "#aa3355", trim: "#123456"}, poses: {
+        stand: {layers: [{fills: {skin: "gown-skin.png", outfitPrimary: "gown-fill.png", trim: "gown-trim.png", glow: "gown-glow.png"}}]}
+      }}
+    }
+  };
+  return {pack: {manifest, bitmaps}, skin, torso};
+}
+
+test("paper doll outfits share exposed-skin pixels tinted by skin at four tints with no outfit fill on skin", () => {
+  const px = pixelCanvas();
+  const { makeRig } = companion({OffscreenCanvas: px.Canvas});
+  const { pack, skin } = paperDollPack(px);
+  const rig = makeRig(pack, null, "");
+  const gaze = {x: 0, y: 0};
+  const torsoByOutfit = {};
+  for (const tint of ["#f4cdb4", "#8d5524", "#ffe0bd", "#3b2219"]) {
+    const rgb = px.parse(tint);
+    for (const outfit of ["street", "gown"]) {
+      rig.setWardrobe({outfit, palette: "skin=" + tint});
+      assert.equal(rig.wardrobe().outfit, outfit);
+      const art = rig.view("stand", null, "idle", []).render(0, gaze);
+      for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+        if (skin(x, y)) assert.deepEqual(px.pixel(art, x, y), [...rgb, 255], `${outfit} ${tint} skin at ${x},${y}`);
+      }
+      // The head egg shares the skin channel, so exposed skin and head match.
+      assert.deepEqual(px.pixel(art, 7, 2), [...rgb, 255], `${outfit} ${tint} head-egg skin`);
+      (torsoByOutfit[outfit] ||= new Set()).add(px.pixel(art, 7, 7).join());
+    }
+  }
+  // Each outfit's body stack is its own: the torso keeps its outfit color
+  // across skin tints and differs between outfits.
+  assert.equal(torsoByOutfit.street.size, 1);
+  assert.equal(torsoByOutfit.gown.size, 1);
+  assert.deepEqual([...torsoByOutfit.street], [[242, 229, 212, 255].join()], "street jacketFill takes the built-in outfitPrimary");
+  assert.deepEqual([...torsoByOutfit.gown], [[170, 51, 85, 255].join()], "gown fills.outfitPrimary takes the outfit palette");
+});
+
+test("paper doll fills channels take their palette color, uncolored channels draw untinted, and seated columns lower the head", () => {
+  const px = pixelCanvas();
+  const { makeRig } = companion({OffscreenCanvas: px.Canvas});
+  const { pack } = paperDollPack(px);
+  const gaze = {x: 0, y: 0};
+  const rig = makeRig(pack, null, "", {outfit: "gown"});
+  let art = rig.view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 5), [0x12, 0x34, 0x56, 255], "custom trim channel tinted by the outfit palette");
+  assert.deepEqual(px.pixel(art, 0, 0), [255, 255, 255, 255], "a channel with no color draws its raster untinted");
+  // Precedence: built-in < pack < outfit < preset < config.
+  pack.manifest.palette = {trim: "#000001", outfitPrimary: "#000004"};
+  art = makeRig(pack, null, "", {outfit: "street"}).view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 7), [0, 0, 4, 255], "the pack palette beats the built-in outfitPrimary");
+  art = makeRig(pack, null, "", {outfit: "gown"}).view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 5), [0x12, 0x34, 0x56, 255], "the outfit palette beats the pack palette");
+  assert.deepEqual(px.pixel(art, 7, 7), [170, 51, 85, 255], "the outfit outfitPrimary beats the pack's");
+  pack.manifest.presets = {p: {palette: {trim: "#000002"}}};
+  const layered = makeRig(pack, null, "p", {outfit: "gown"});
+  art = layered.view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 5), [0, 0, 2, 255], "the preset palette beats the outfit palette");
+  layered.setWardrobe({outfit: "gown", palette: "trim=#000003 skin=bogus glow=#0a0b0c"});
+  art = layered.view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 5), [0, 0, 3, 255], "the config palette beats the preset");
+  assert.deepEqual(px.pixel(art, 0, 0), [10, 11, 12, 255], "a config color adds a channel color");
+  assert.equal(layered.wardrobe().palette.skin, "#f4cdb4", "a malformed config pair is skipped");
+
+  // A seated column anchors the head lower at headScale 1.0: same egg size.
+  const street = makeRig(paperDollPack(px).pack, null, "");
+  const eggRows = view => {
+    const canvas = view.render(0, gaze), rows = [];
+    for (let y = 0; y < 16; y++) if (px.pixel(canvas, 7, y)[0] === 244 && px.pixel(canvas, 7, y)[2] === 180 && px.pixel(canvas, 8, y)[0] === 244) rows.push(y);
+    return rows;
+  };
+  const standView = street.view("stand", null, "idle", []), typingView = street.view("typing", null, "idle", []);
+  assert.equal(typingView.pose, "typing");
+  assert.deepEqual(eggRows(standView).filter(y => y < 5), [1, 2, 3]);
+  assert.deepEqual(eggRows(typingView).filter(y => y >= 4 && y < 8), [4, 5, 6], "the typing column's head sits three rows lower, unscaled");
+});
+
+test("paper doll gesture head anchors move the head only in outfit mode", () => {
+  const px = pixelCanvas();
+  const { makeRig } = companion({OffscreenCanvas: px.Canvas});
+  const gaze = {x: 0, y: 0};
+  const { pack } = paperDollPack(px);
+  pack.manifest.gestures.nod = {pose: "stand", headAnchor: [8, 6]};
+  pack.manifest.outfits.street.gestures = {nod: {headAnchor: [8, 5], layers: [{skinFill: "street-skin.png"}]}};
+  // Egg rows: both centre columns carry the default skin tint.
+  const eggRows = view => {
+    const canvas = view.render(0, gaze), rows = [];
+    for (let y = 0; y < 8; y++) if ([7, 8].every(x => px.pixel(canvas, x, y).join() === "244,205,180,255")) rows.push(y);
+    return rows;
+  };
+  const rig = makeRig(pack, null, "");
+  assert.deepEqual(eggRows(rig.view("stand", null, "idle", [])), [1, 2, 3]);
+  assert.deepEqual(eggRows(rig.view("stand", "nod", "idle", [])), [2, 3, 4], "a bound gesture column's own head anchor wins");
+  rig.setWardrobe({outfit: "gown"});
+  assert.deepEqual(eggRows(rig.view("stand", "nod", "idle", [])), [3, 4, 5], "an unbound gesture keeps the registry head anchor");
+  const { outfits, defaultOutfit, ...legacy } = pack.manifest;
+  const plain = makeRig({manifest: legacy, bitmaps: pack.bitmaps}, null, "");
+  assert.deepEqual(eggRows(plain.view("stand", "nod", "idle", [])), [1, 2, 3], "a legacy pack ignores a gesture head anchor");
+});
+
+// stackCanvas records what each canvas draws; stack() reads a view's drawn
+// layers back as file names (tinted rasters read "<file>@<color>").
+function stackCanvas() {
+  class Canvas {
+    constructor(width, height) { this.width = width; this.height = height; this.drawn = []; }
+    getContext() {
+      const canvas = this;
+      return {
+        canvas, fillStyle: "", globalCompositeOperation: "source-over",
+        save() {}, restore() {}, translate() {}, rotate() {}, scale() {},
+        clearRect() { canvas.drawn.length = 0; },
+        fillRect() { canvas.tint = this.fillStyle; },
+        drawImage(image) { canvas.drawn.push(image); },
+        getImageData: () => ({data: []})
+      };
+    }
+  }
+  // A tint buffer reads "<file>@<color>", another buffer (the iris) lists
+  // what it composited.
+  const label = image => image.file || (image.tint ? image.drawn[0]?.file + "@" + image.tint :
+    "[" + image.drawn.map(item => item.file).join("+") + "]");
+  return { Canvas, stack: (view, t = 0) => Array.from(view.render(t, {x: 0, y: 0}).drawn, label) };
+}
+
+function wardrobePack() {
+  const names = ["legacy-stand", "legacy-typing", "legacy-wave", "street-stand", "street-arm", "street-typing", "street-wave",
+    "gown-stand", "gown-perched", "bare-perched", "egg", "eyes-default", "eyes-round", "iris-round", "hair-bob", "hair-bun",
+    "cap", "ears", "tail", "tail-seated", "tail-cheer"];
+  const bitmaps = new Map(names.map(name => [name + ".png", {file: name + ".png"}]));
+  const manifest = {
+    canvas: [512, 512],
+    head: {egg: {file: "egg.png"}, eyes: {frameLower: "eyes-default.png"}},
+    hairs: {bob: {front: {file: "hair-bob.png"}}, bun: {front: {file: "hair-bun.png"}}},
+    eyesets: {round: {sclera: "eyes-round.png", irisLine: "iris-round.png"}},
+    attachments: {
+      cap: {slot: "headdress", bind: "head", layers: [{file: "cap.png"}]},
+      ears: {slot: "ears", bind: "head", layers: [{file: "ears.png"}]},
+      tail: {slot: "tail", bind: "body", layers: [{file: "tail.png"}],
+        columns: {typing: {layers: [{file: "tail-seated.png"}]}, cheer: {layers: [{file: "tail-cheer.png"}]}}},
+      mislabeled: {slot: "ears", bind: "head", layers: [{file: "cap.png"}]}
+    },
+    poses: {
+      stand: {layers: [{file: "legacy-stand.png"}]},
+      typing: {fallback: "stand", layers: [{file: "legacy-typing.png"}]},
+      slouch: {fallback: "typing"},
+      perched: {}
+    },
+    gestures: {
+      wave: {pose: "stand", replaces: ["arm"], layers: [{file: "legacy-wave.png"}]},
+      tuck: {replaces: ["arm"]},
+      cheer: {pose: "stand", handAnchor: [100, 200]}
+    },
+    presets: {
+      evening: {outfit: "gown", hair: "bun", eyes: "round", attachments: {headdress: "cap", tail: "tail"}},
+      ghost: {outfit: "missing", hair: "missing", eyes: "missing"}
+    },
+    defaultOutfit: "street",
+    outfits: {
+      street: {
+        poses: {
+          stand: {layers: [{id: "body", file: "street-stand.png"}, {slot: "arm", file: "street-arm.png"}]},
+          typing: {layers: [{file: "street-typing.png"}]}
+        },
+        gestures: {wave: {layers: [{file: "street-wave.png"}]}}
+      },
+      gown: {poses: {stand: {layers: [{file: "gown-stand.png"}]}, perched: {headAnchor: [256, 300], layers: [{file: "gown-perched.png"}]}}},
+      bare: {poses: {perched: {layers: [{file: "bare-perched.png"}]}}}
+    }
+  };
+  return {manifest, bitmaps};
+}
+
+test("paper doll columns resolve inside the active outfit, never borrow, and end at the legacy projection", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const rig = makeRig(wardrobePack(), null, "");
+  const body = (pose, gesture = null) => {
+    const view = rig.view(pose, gesture, "idle", []);
+    return [view.pose, stack(view).filter(file => !["egg.png", "eyes-default.png", "hair-bob.png"].includes(file))];
+  };
+  assert.equal(rig.wardrobe().outfit, "street", "pack defaultOutfit");
+  assert.deepEqual(body("stand"), ["stand", ["street-stand.png", "street-arm.png"]]);
+  assert.deepEqual(body("slouch"), ["typing", ["street-typing.png"]], "a custom fallback chain runs inside the outfit");
+  assert.deepEqual(body("perched"), ["stand", ["street-stand.png", "street-arm.png"]], "the implicit stand step runs inside the outfit");
+  rig.setWardrobe({outfit: "gown"});
+  assert.deepEqual(body("typing"), ["stand", ["gown-stand.png"]], "an unbound column never borrows another outfit's column");
+  assert.deepEqual(body("perched"), ["perched", ["gown-perched.png"]]);
+  rig.setWardrobe({outfit: "bare"});
+  assert.deepEqual(body("stand"), ["stand", ["legacy-stand.png"]], "a chain ending unbound draws the legacy projection");
+  assert.deepEqual(body("typing"), ["typing", ["legacy-typing.png"]]);
+  assert.deepEqual(body("perched"), ["perched", ["bare-perched.png"]]);
+});
+
+test("paper doll gesture columns replace by id or slot in their own outfit and never draw another outfit's gesture", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const rig = makeRig(wardrobePack(), null, "");
+  const body = gesture => stack(rig.view("stand", gesture, "idle", [])).filter(file => !["egg.png", "eyes-default.png", "hair-bob.png"].includes(file));
+  assert.deepEqual(body("wave"), ["street-stand.png", "street-wave.png"], "the outfit's wave replaces the slot-matched arm");
+  assert.deepEqual(body("tuck"), ["street-stand.png"], "a pure-removal gesture still removes inside an outfit");
+  rig.setWardrobe({outfit: "gown"});
+  assert.deepEqual(body("wave"), ["gown-stand.png"], "an unbound gesture keeps the outfit's stack and draws no legacy art");
+  const cheer = rig.view("stand", "cheer", "idle", []);
+  assert.deepEqual([...cheer.handAnchor], [100, 200], "an unbound gesture keeps its anchors");
+});
+
+test("paper doll attachments honor an explicit z and fills-only outfit frames draw their channels", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const pack = wardrobePack();
+  pack.manifest.attachments.cap.z = 5;
+  pack.manifest.attachments.tail.z = 25;
+  for (const file of ["frame-a.png", "frame-b.png"]) pack.bitmaps.set(file, {file});
+  pack.manifest.outfits.street.poses.stand.layers = [{fps: 1, frames: [{fills: {skin: "frame-a.png"}}, {fills: {glow: "frame-b.png"}}]}];
+  const rig = makeRig(pack, null, "", {attachments: "headdress=cap tail=tail"});
+  const view = rig.view("stand", null, "idle", []);
+  assert.deepEqual(stack(view), ["cap.png", "frame-a.png@#f4cdb4", "tail.png", "egg.png", "eyes-default.png", "hair-bob.png"],
+    "an explicit z moves the headdress below the body and the tail above it; frame 0 draws its skin channel tinted");
+  assert.deepEqual(stack(view, 1).slice(1, 2), ["frame-b.png"], "frame 1 draws an uncolored channel untinted");
+});
+
+test("paper doll leaves legacy pack stacks unchanged", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const manifest = {
+    canvas: [512, 512],
+    poses: {stand: {headAnchor: [200, 100], layers: [{id: "body", file: "body.png"}, {id: "arm", file: "arm.png"}, {slot: "arm", file: "sleeve.png"}]}},
+    gestures: {wave: {replaces: ["arm"], headAnchor: [10, 10], layers: [{file: "wave.png"}]}}
+  };
+  const bitmaps = new Map(["body.png", "arm.png", "sleeve.png", "wave.png"].map(file => [file, {file}]));
+  for (const wardrobe of [undefined, {outfit: "street", hair: "bob", eyes: "round", attachments: "tail=tail"}]) {
+    const rig = makeRig({manifest, bitmaps}, null, "", wardrobe);
+    assert.deepEqual(stack(rig.view("stand", null, "idle", [])), ["body.png", "arm.png", "sleeve.png"]);
+    assert.deepEqual(stack(rig.view("stand", "wave", "idle", [])), ["body.png", "sleeve.png", "wave.png"], "legacy replaces match ids only");
+    assert.equal(rig.wardrobe().outfit, null);
+  }
+});
+
+test("paper doll head set swaps change only their own layers and selection runs config, preset, pack default", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const rig = makeRig(wardrobePack(), null, "");
+  const draw = (pose = "stand", gesture = null) => stack(rig.view(pose, gesture, "idle", []));
+  const base = draw();
+  assert.deepEqual(base, ["street-stand.png", "street-arm.png", "egg.png", "eyes-default.png", "hair-bob.png"]);
+  const without = (list, ...files) => list.filter(file => !files.includes(file));
+
+  rig.setWardrobe({hair: "bun"});
+  assert.deepEqual(without(draw(), "hair-bun.png"), without(base, "hair-bob.png"), "a hair swap changes only the hair");
+  rig.setWardrobe({attachments: "headdress=cap tail=tail"});
+  const dressed = draw();
+  assert.deepEqual(without(dressed, "cap.png", "tail.png"), base, "attachments add only their own layers");
+  assert.ok(dressed.indexOf("tail.png") < dressed.indexOf("street-stand.png"), "tail defaults behind the body (z11)");
+  assert.ok(dressed.indexOf("cap.png") > dressed.indexOf("hair-bob.png"), "headdress defaults above the front hair (z56)");
+  assert.deepEqual(without(draw("typing"), "egg.png", "eyes-default.png", "hair-bob.png", "cap.png"), ["tail-seated.png", "street-typing.png"],
+    "a body attachment follows the column's layers");
+  assert.ok(draw("stand", "cheer").includes("tail-cheer.png"), "a gesture column entry wins over the pose column");
+  rig.setWardrobe({eyes: "round"});
+  assert.deepEqual(without(draw(), "eyes-round.png", "[iris-round.png+eyes-round.png]"), without(base, "eyes-default.png"),
+    "an eye-set swap changes only the eyes");
+  assert.ok(draw().includes("[iris-round.png+eyes-round.png]"), "the swapped eye set has a sclera, so the iris buffer is recomputed and drawn");
+  rig.setWardrobe({});
+  assert.deepEqual(draw(), base, "clearing the picks re-renders the pack defaults with no stale cache");
+
+  // Selection: config key > preset > pack default; an ID the pack lacks
+  // falls back to the next source; attachments merge per slot.
+  rig.setPreset("evening");
+  assert.deepEqual(JSON.parse(JSON.stringify(rig.wardrobe())), {outfit: "gown", hair: "bun", eyes: "round",
+    attachments: {headdress: "cap", tail: "tail"},
+    palette: {hair: "#ec8468", eye: "#dfa040", skin: "#f4cdb4", outfitPrimary: "#f2e5d4", outfitAccent: "#e6aa34"}},
+    "with no palette in the pack, outfit or preset, the built-in colors apply");
+  rig.setWardrobe({outfit: "street", hair: "bob", eyes: "missing", attachments: "headdress=none ears=ears tail=mislabeled Bad=x ears2"});
+  const picks = rig.wardrobe();
+  assert.equal(picks.outfit, "street");
+  assert.equal(picks.hair, "bob");
+  assert.equal(picks.eyes, "round", "an absent eye set falls back to the preset");
+  assert.deepEqual({...picks.attachments}, {ears: "ears", tail: "tail"}, "none clears, a wrong-slot ID and malformed pairs are skipped");
+  rig.setWardrobe({outfit: "missing", hair: "missing"});
+  assert.equal(rig.wardrobe().outfit, "gown", "an absent outfit falls back to the preset");
+  assert.equal(rig.wardrobe().hair, "bun");
+  rig.setPreset("ghost");
+  rig.setWardrobe({});
+  assert.equal(rig.wardrobe().outfit, "street", "an absent preset outfit falls back to the pack default");
+  assert.equal(rig.wardrobe().eyes, null, "the pack-default eyes are head.eyes");
+});
+
+test("paper doll wardrobe pairs parse flat config strings and skip malformed pairs", () => {
+  const { attachmentPairs, palettePairs } = companion();
+  assert.deepEqual({...attachmentPairs("headdress=cap  tail=none")}, {headdress: "cap", tail: "none"});
+  assert.deepEqual({...attachmentPairs(" Head=cap ears=Ears tail= =x ears ok=a=b tail=tail tail=other ")}, {tail: "tail"});
+  assert.deepEqual({...palettePairs("skin=#AABBCC outfit_2=#010203 eye=#abc hair=red 9x=#000000")}, {skin: "#AABBCC", outfit_2: "#010203"});
+  assert.deepEqual({...attachmentPairs(undefined)}, {});
+  const many = Array.from({length: 20}, (_, i) => "s" + i + "=a").join(" ");
+  assert.equal(Object.keys(attachmentPairs(many)).length, 16, "at most 16 pairs");
+});
+
+test("paper doll wardrobe options list selectable outfits, hairs, eye sets, slots and channels", () => {
+  const { wardrobeOptions } = companion();
+  const manifest = wardrobePack().manifest;
+  manifest.outfits.Fancy = {poses: {}};
+  manifest.attachments.none = {slot: "tail"};
+  manifest.attachments.odd = {slot: "Head"};
+  manifest.palette = {trim: "#000000", "bad id": "#000000"};
+  manifest.outfits.street.poses.stand.layers.push({fills: {glow: "x.png"}, frames: [{fills: {spark: "y.png"}}]});
+  const options = JSON.parse(JSON.stringify(wardrobeOptions(manifest)));
+  assert.deepEqual(options.outfits, ["bare", "gown", "street"]);
+  assert.deepEqual(options.hairs, ["bob", "bun"]);
+  assert.deepEqual(options.eyesets, ["round"]);
+  assert.deepEqual(options.slots, {headdress: ["cap"], ears: ["ears", "mislabeled"], tail: ["tail"]});
+  assert.deepEqual(options.channels, ["eye", "glow", "hair", "outfitAccent", "outfitPrimary", "skin", "spark", "trim"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(wardrobeOptions(null))).outfits, []);
+});
+
+test("companion loader fetches every paper-doll raster the server enumerates", async () => {
+  const requested = [];
+  const manifestData = {
+    id: "kit", schema: "ws-companion/v1", canvas: [512, 512],
+    head: {egg: {skinFill: "egg.png", fills: {blush: "blush.png"}}},
+    hairs: {bob: {front: {line: "hair.png", fills: {tip: "tip.png"}}}},
+    poses: {stand: {layers: [{line: "stand.png", fills: {trim: "trim.png"}}]}},
+    outfits: {o: {poses: {stand: {layers: [{fills: {skin: "o-skin.png"}}, {fps: 2, frames: [{fills: {skin: "o-frame.png"}}, "o-frame2.png"]}]}},
+      gestures: {wave: {layers: [{line: "o-wave.png"}]}}}},
+    attachments: {t: {layers: [{file: "t.png"}], columns: {stand: {layers: [{fills: {hair: "t-col.png"}}]}}}},
+    eyesets: {round: {sclera: "r-sclera.png", irisFill: "r-iris.png", note: "ignored.png"}},
+    future: {file: "never.png"}
+  };
+  const { packLoader } = companion({
+    fetch: async url => {
+      if (url.startsWith("/api/companion/packs?") || url === "/api/companion/packs") {
+        return {ok: true, json: async () => ({resolvedAuto: {packId: "kit"}, packs: [{id: "kit", rev: "r"}, {id: "default", rev: "d"}]})};
+      }
+      if (url.includes("/pack.json?")) return {ok: true, json: async () => ({...manifestData, props: {drone: {}, mail: {}, "prop-typing-desk": {}}})};
+      requested.push(decodeURIComponent(url.split("/assets/")[1].split("?")[0]));
+      return {ok: true, blob: async () => url};
+    },
+    createImageBitmap: async () => ({width: 512, height: 512, close() {}})
+  });
+  await new Promise((done, fail) => packLoader(done, () => fail(new Error("unexpected failure"))).load("kit", {}));
+  assert.deepEqual(requested.sort(), ["blush.png", "egg.png", "hair.png", "o-frame.png", "o-frame2.png", "o-skin.png", "o-wave.png",
+    "r-iris.png", "r-sclera.png", "stand.png", "t-col.png", "t.png", "tip.png", "trim.png"]);
+});
+
+function focusHarness(visibility = "visible") {
+  const listeners = {}, calls = [];
+  const doc = { visibilityState: visibility, addEventListener: (name, fn) => { listeners[name] = fn; } };
+  const env = { document: doc, fetch: (url, init) => {
+    const call = { url, ...init, body: JSON.parse(init.body) };
+    calls.push(call);
+    return env.respond(call);
+  }, respond: () => Promise.resolve({ ok: true, status: 204 }) };
+  const reporter = companion().focusReporter(env);
+  const bodies = () => calls.map(c => c.body);
+  const hide = state => { doc.visibilityState = state; listeners.visibilitychange(); };
+  return { reporter, calls, bodies, env, hide };
+}
+
+const agentConfig = { enabled: true, director: "agent", pack: "auto" };
+
+test("companion focus reports the shown session and resolved pack on switches and dedups", () => {
+  const { reporter, calls, bodies } = focusHarness();
+  reporter.config(agentConfig);
+  reporter.show("rid1", "default");
+  assert.equal(calls.length, 0, "no token yet");
+  reporter.token("t1");
+  assert.deepEqual(bodies(), [{ token: "t1", sessionId: "rid1", pack: "default" }]);
+  assert.equal(calls[0].url, "/api/companion/focus");
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].credentials, "same-origin");
+  assert.equal(calls[0].headers["Content-Type"], "application/json");
+  reporter.show("rid1", "default");
+  reporter.config({ ...agentConfig, preset: "other" });
+  assert.equal(calls.length, 1, "same token, session and pack are not re-sent");
+  reporter.show("rid2", "default");
+  reporter.show("rid2", "mint");
+  assert.deepEqual(bodies().slice(1), [{ token: "t1", sessionId: "rid2", pack: "default" }, { token: "t1", sessionId: "rid2", pack: "mint" }]);
+  reporter.show("rid2", "");
+  assert.deepEqual(bodies().at(-1), { token: "t1", sessionId: "", pack: "" }, "an unresolved pack clears");
+  reporter.show("", "");
+  assert.equal(calls.length, 4, "a second clear is not re-sent");
+});
+
+test("companion focus clears when hidden and reports again when visible", () => {
+  const { reporter, bodies, hide } = focusHarness();
+  reporter.config(agentConfig);
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  hide("hidden");
+  assert.deepEqual(bodies().slice(1), [{ token: "t1", sessionId: "", pack: "" }]);
+  hide("hidden");
+  reporter.show("rid2", "default");
+  assert.equal(bodies().length, 2, "nothing is sent while hidden");
+  hide("visible");
+  assert.deepEqual(bodies().at(-1), { token: "t1", sessionId: "rid2", pack: "default" });
+  assert.equal(bodies().length, 3);
+});
+
+test("companion focus sends nothing in rules mode or when disabled", () => {
+  const { reporter, calls, hide } = focusHarness();
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  for (const config of [{ enabled: true, director: "rules" }, { enabled: false, director: "agent" }, { director: "agent" }, null]) {
+    reporter.config(config);
+    reporter.show("rid2", "default");
+    hide("hidden");
+    hide("visible");
+    reporter.token("t2");
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("companion focus clears on leaving agent mode and reports on token change", () => {
+  const { reporter, bodies } = focusHarness();
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  reporter.config(agentConfig);
+  assert.deepEqual(bodies(), [{ token: "t1", sessionId: "rid1", pack: "default" }]);
+  reporter.token("t2");
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "rid1", pack: "default" }, "a reconnect reports again");
+  reporter.config({ ...agentConfig, director: "rules" });
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "", pack: "" });
+  assert.equal(bodies().length, 3);
+  reporter.config({ ...agentConfig, enabled: false });
+  assert.equal(bodies().length, 3, "no repeat clear");
+  reporter.config(agentConfig);
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "rid1", pack: "default" });
+  reporter.config({ ...agentConfig, enabled: false });
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "", pack: "" });
+  reporter.token("t3");
+  assert.equal(bodies().length, 5, "a new token after a clear sends nothing");
+});
+
+test("companion focus ignores refusals, a gone stream, an older daemon and network errors", async () => {
+  for (const respond of [
+    () => Promise.resolve({ ok: false, status: 404 }),
+    () => Promise.resolve({ ok: false, status: 410 }),
+    () => Promise.resolve({ ok: false, status: 403 }),
+    () => Promise.reject(new Error("offline")),
+    () => { throw new Error("sync failure"); }
+  ]) {
+    const { reporter, calls, env } = focusHarness();
+    env.respond = respond;
+    reporter.config(agentConfig);
+    reporter.token("t1");
+    reporter.show("rid1", "default");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.length, 1, "no retry after a failure");
+    reporter.show("rid2", "default");
+    assert.equal(calls.length, 2, "later state changes still report");
+  }
 });

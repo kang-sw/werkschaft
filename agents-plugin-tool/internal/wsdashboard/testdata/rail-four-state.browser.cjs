@@ -18,6 +18,17 @@ async function where(page, id) {
     return fold ? fold.getAttribute('data-k') : 'live';
   }, id);
 }
+// confirmArchive answers the "Archive this session?" dialog.
+async function confirmArchive(page, accept) {
+  const dlg = page.locator('dialog.ws-confirm');
+  await dlg.waitFor();
+  assert.match(await dlg.locator('h2').textContent(), /보관할까요/, 'archive confirm text');
+  if (accept) {
+    assert.equal((await dlg.locator('button.danger').textContent()).trim(), '보관', 'accept label');
+    await dlg.locator('button.danger').click();
+  } else await dlg.locator('button:not(.danger)').click();
+  await dlg.waitFor({ state: 'detached' });
+}
 async function until(page, what, fn, ms = 8000) {
   const end = Date.now() + ms;
   for (;;) {
@@ -95,7 +106,14 @@ async function behaviour(browser) {
 
     // Archive by the hover button: the row moves into the archived fold.
     await page.locator(row('reviewer')).hover();
+    // Cancel leaves the row where it is and returns focus to the button.
     await page.locator(row('reviewer') + ' .drarch').click();
+    await confirmArchive(page, false);
+    await page.waitForTimeout(400);
+    assert.equal(await where(page, 'reviewer'), 'live', 'cancel does not archive');
+    assert.equal(await page.evaluate((id) => !!document.activeElement.closest('#r-rail .rs[data-rid="' + id + '"]'), 'reviewer'), true, 'cancel returns focus to the row');
+    await page.locator(row('reviewer') + ' .drarch').click();
+    await confirmArchive(page, true);
     await until(page, 'reviewer archived', async () => (await where(page, 'reviewer')) === 'arch');
     assert.equal(await page.locator(`${DEVENV} .rfh[data-k="arch"] .d-n`).textContent(), '4', 'the archived count');
     // It persists across a reload (the daemon's sidecar, not page state).
@@ -112,6 +130,7 @@ async function behaviour(browser) {
     // A 409 archive leaves the row put, says why, and is not retried.
     await page.locator(row('assettidy')).hover();
     await page.locator(row('assettidy') + ' .drarch').click();
+    await confirmArchive(page, true);
     await page.locator('#wstoasts .wstoast', { hasText: '아직 세션 확인 중이라 보관할 수 없습니다' }).waitFor();
     await page.waitForTimeout(1200);
     assert.equal(await where(page, 'assettidy'), 'live', 'a refused archive leaves the row in place');
@@ -119,6 +138,7 @@ async function behaviour(browser) {
     // likewise leaves the row put with a short message, and no retry.
     await page.locator(row('renderer')).hover();
     await page.locator(row('renderer') + ' .drarch').click();
+    await confirmArchive(page, true);
     await page.locator('#wstoasts .wstoast', { hasText: '세션을 멈추지 못해 보관하지 못했습니다' }).waitFor();
     await page.waitForTimeout(1200);
     assert.equal(await where(page, 'renderer'), 'live', 'a failed archive leaves the row in place');
@@ -129,6 +149,13 @@ async function behaviour(browser) {
     const archItem = page.locator('.rpop.rmenu .rmsess .spact', { hasText: '보관' });
     await archItem.first().waitFor();
     await archItem.first().click();
+    await confirmArchive(page, false);
+    await page.waitForTimeout(400);
+    assert.equal(await where(page, 'reviewer'), 'live', 'cancel from the menu does not archive');
+    await page.locator(row('reviewer') + ' .rl').click({ button: 'right' });
+    await archItem.first().waitFor();
+    await archItem.first().click();
+    await confirmArchive(page, true);
     await until(page, 'reviewer archived from the menu', async () => (await where(page, 'reviewer')) === 'arch');
     await page.locator(row('reviewer') + ' .rl').click({ button: 'right' });
     const unItem = page.locator('.rpop.rmenu .rmsess .spact', { hasText: '보관 해제' });

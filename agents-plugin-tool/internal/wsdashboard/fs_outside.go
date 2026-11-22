@@ -110,6 +110,11 @@ var outsideDenied = []string{
 	".config/gcloud", ".azure", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml",
 	".vault-token", ".password-store", "Library/Keychains",
 	".cache/" + wsstate.DefaultCacheDirName + "/dashboard",
+	// The provider credential file (wscred.DefaultPath) lives under the
+	// dashboard directory above, which v0.51.0 already denies. This entry
+	// keeps the pre-release location, where a candidate build wrote it
+	// before MigrateLegacy moves it, denied too.
+	".cache/" + wsstate.DefaultCacheDirName + "/auth",
 }
 
 // OutsideLinkSource is a PageSource that also lists the files outside the

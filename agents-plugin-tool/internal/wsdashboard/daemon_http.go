@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
@@ -54,6 +55,8 @@ func (d *Daemon) Handler() http.Handler {
 			mux.HandleFunc(ProxyHTTPPath, d.handleProxyHTTP)
 		}
 	}
+	mux.HandleFunc(wscred.TokenRoutePath, d.handleProviderToken)
+	mux.HandleFunc(credentialChangePath, d.handleProviderChange)
 	mux.HandleFunc("/nudge", d.handleNudge)
 	mux.HandleFunc(companionChangedPath, d.handleCompanionConfigChange)
 	mux.HandleFunc("/events", d.handleIndexEvents)

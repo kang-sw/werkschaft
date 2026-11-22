@@ -243,6 +243,7 @@ func (s *daemonLiveSlot) Publish(snap wslive.Snapshot) {
 		d.broker.wake(liveDep(s.replyID))
 		d.acks.poke(s.replyID)
 	}
+	d.directorObserveSnapshot(s.replyID, &snap, changed)
 }
 
 func (s *daemonLiveSlot) RingAppended() {
@@ -256,6 +257,7 @@ func (s *daemonLiveSlot) RingAppended() {
 	d.stats.WakeLive.Add(1)
 	d.broker.wake(ringDep(s.replyID))
 	d.acks.poke(s.replyID)
+	d.directorObserveRing(s.replyID)
 }
 
 func (s *daemonLiveSlot) InboxMutated() {

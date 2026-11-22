@@ -13,25 +13,12 @@ import (
 // A release reserves its target outside the pool-wide lock, including while
 // it is detached and unleased. The lock file is shared with agent.spawn's
 // worktree reservation via wsgit.WorktreeReleaseLock so a spawn cannot slip in
-// between release's bound-child check and its reset/clean.
+// between release's bound-child check and its reset/clean. Acquisition takes
+// it exclusively, without waiting, on each reuse candidate it checks and
+// holds it on the claimed one until its lease is published: a held lock (a
+// release, or a spawn registering a child) makes the candidate busy.
 func worktreeReleaseLock(ctx context.Context, runner wsgit.Runner, target string) (*flock.Flock, error) {
 	return wsgit.WorktreeReleaseLock(ctx, runner, target)
-}
-
-// worktreeReleasing is checked under the acquisition lock. Acquirers skip a
-// releasing target rather than waiting for its hooks. If a release starts
-// after this check, its holder check waits for the acquire to publish its
-// lease under that same pool lock before it may change anything.
-func worktreeReleasing(ctx context.Context, runner wsgit.Runner, target string) (bool, error) {
-	lock, err := worktreeReleaseLock(ctx, runner, target)
-	if err != nil {
-		return false, err
-	}
-	locked, err := lock.TryLock()
-	if locked {
-		_ = lock.Unlock()
-	}
-	return !locked, err
 }
 
 func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool string, caller *worktreeReleaseCaller) (string, worktreeEntry, func(), error) {
@@ -92,6 +79,12 @@ func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool
 		} else {
 			err = fmt.Errorf("worktree.release refuses %s: %w. Nothing was changed", target, err)
 		}
+	}
+	// Learn what is bound before the release, so a notice a daemon cannot take
+	// (one that predates release notices) warns naming the agents it leaves
+	// running.
+	if err == nil && caller != nil && caller.CheckNotice != nil {
+		caller.bindings = caller.CheckNotice(ctx, target)
 	}
 	if err != nil {
 		unlock()

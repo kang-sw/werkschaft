@@ -59,6 +59,7 @@ func (r *Runner) SetLiveHost(host wsdashboard.LiveHost) { r.opts.LiveHost = host
 // each write to a conversation's stores, so the daemon re-reads it. The
 // daemon calls Start once it holds its lock.
 func (r *Runner) Start(notify func(replyID, project string)) {
+	r.started.Store(true)
 	startupLoaded := make(chan struct{})
 	r.startupMu.Lock()
 	r.startupLoaded = startupLoaded
@@ -67,7 +68,7 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 		r.notify = notify
 	}
 	entries, _ := wsstate.ReadDir(filepath.Join(r.opts.Dir, "sessions"))
-	var open []Record
+	var all, open []Record
 	for _, e := range entries {
 		if !e.IsDir() || !wsdashboard.ValidReplyID(e.Name()) {
 			continue
@@ -80,6 +81,12 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 			}
 			continue
 		}
+		all = append(all, rec)
+	}
+	// From the full set, before any record is loaded or rejoined, so a
+	// child read before its parent is admitted from that parent.
+	r.resolveSpawnerBackends(all)
+	for _, rec := range all {
 		if rec.ClosedAt != "" || rec.handedOff() {
 			// A handed-off session is a terminal harness's: nothing here
 			// writes its row, watches its mail, or starts a process for it.
@@ -101,7 +108,7 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 		gone[id] = true
 	}
 	open = slices.DeleteFunc(open, func(rec Record) bool { return gone[rec.ReplyID] })
-	orphans := orphansAtStart(open)
+	orphans := r.orphansAtStart(open)
 	startup := make([]*conv, 0, len(open))
 	for _, rec := range open {
 		if orphans[rec.ReplyID] && r.closeAtStart(rec) {
@@ -213,7 +220,7 @@ func (r *Runner) closeAtStart(rec Record) bool {
 // instead of serving (closeAtStart): one whose conversation parent is
 // closed or gone, so no report of it reaches one, or that descends from
 // one. A finished child is not closed: it sleeps (agent_tools.go).
-func orphansAtStart(open []Record) map[string]bool {
+func (r *Runner) orphansAtStart(open []Record) map[string]bool {
 	isOpen := map[string]bool{}
 	for _, rec := range open {
 		isOpen[rec.ReplyID] = true
@@ -227,7 +234,7 @@ func orphansAtStart(open []Record) map[string]bool {
 			// Legacy direct non-Pi children keep their existing next-launch
 			// admission refusal when a parent disappears. Held workers of
 			// every backend use the former Pi orphan cleanup.
-			if done[id] || rec.Lead || rec.Parent == nil || (rec.Backend != BackendPi && rec.HolderID == "") {
+			if done[id] || rec.Lead || rec.Parent == nil || (!r.lifecycle(rec.Backend).NativeChildren && rec.HolderID == "") {
 				continue
 			}
 			if rec.Parent.Kind == ParentConversation && !stays(rec.Parent.ReplyID) {
@@ -317,3 +324,25 @@ func (r *Runner) scanDone() bool {
 // conversations stay open on disk and resume lazily under the next daemon.
 // A lead conversation's process is let go, not ended: it runs on under its
 // session holder, and the next daemon rejoins it.
+
+// resolveSpawnerBackends derives the spawner stamp of each record made before
+// it (Record.SpawnerBackend) on a backend registered with a cross-harness
+// refusal: its parent's record backend, found by Parent.ReplyID among all
+// the records read at startup. A record whose parent has no record keeps no
+// stamp, so admitWorkerRecord refuses it as cross-harness. The one derived
+// value then drives every admission of the record: rejoin classification,
+// holder retirement, wake, and the stop retry. It is kept in memory and
+// rides the record's next write.
+func (r *Runner) resolveSpawnerBackends(all []Record) {
+	backends := make(map[string]string, len(all))
+	for _, rec := range all {
+		backends[rec.ReplyID] = rec.Backend
+	}
+	for i := range all {
+		rec := &all[i]
+		if rec.Lead || rec.Parent == nil || rec.SpawnerBackend != "" || r.opts.Backends[rec.Backend].crossHarnessRefusal == "" {
+			continue
+		}
+		rec.SpawnerBackend = backends[rec.Parent.ReplyID]
+	}
+}

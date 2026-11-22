@@ -33,6 +33,7 @@ var boardOwn = typeof boardOwn !== "undefined" ? boardOwn : {};
 var imgTrash = typeof imgTrash !== "undefined" ? imgTrash : {};
 function inlineEditor() { return null; }
 function inlineRows() { return []; }
+var cexecSend = typeof cexecSend !== "undefined" ? cexecSend : function () { return false; };
 `
 
 // composerSendSource is sendMessage with the outbox section it hands each

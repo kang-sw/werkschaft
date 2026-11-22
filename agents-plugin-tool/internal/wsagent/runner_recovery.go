@@ -205,11 +205,14 @@ func (c *conv) mcpRestartDue() bool {
 // idle point with no background task, and reports whether a new process
 // runs; a failed start leaves none, with its error on the session.
 func (c *conv) restartIfDue() bool {
-	if !(c.mcpStale || c.mcpRestartDue()) || c.proc == nil || !c.idleNow() {
+	storeGone := c.cutoverStoreGone()
+	if !(c.mcpStale || storeGone || c.mcpRestartDue()) || c.proc == nil || !c.idleNow() {
 		return false
 	}
 	if c.mcpStale {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: restart for its stale ws-mcp route\n", c.rec.ReplyID)
+	} else if storeGone {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: restart without the exec cutover: its hosted exec jobs are not open\n", c.rec.ReplyID)
 	} else {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: restart for MCP servers %v\n", c.rec.ReplyID, c.mcpBroken)
 	}

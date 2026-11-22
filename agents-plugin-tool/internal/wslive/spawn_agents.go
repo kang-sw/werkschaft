@@ -55,6 +55,12 @@ func mergeSpawnAgents(agents []Agent, known map[string]string) []Agent {
 		if d.ContextTokens == 0 {
 			d.ContextTokens = a.ContextTokens
 		}
+		if d.ContextWindow == 0 {
+			d.ContextWindow = a.ContextWindow
+		}
+		if d.ContextCompaction == nil {
+			d.ContextCompaction = a.ContextCompaction
+		}
 		if a.OutputTps > 0 {
 			d.OutputTps = a.OutputTps
 		}

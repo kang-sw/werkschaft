@@ -460,8 +460,10 @@ func TestServeStdioGitCommitSurfacesTicketVerifyWarningsAsAdvisories(t *testing.
 // ticketGraphAdvisoryFixture builds the smallest board that exercises all
 // three advisory kinds at once: a .done child of a non-epic parent whose every
 // child is now closed, carrying a dangling related: key. It yields a board
-// block, one fix advisory, and one check advisory, which is what lets the
-// commit-path and standalone renderers be compared over identical input.
+// block, fix advisories, and check advisories, which is what lets the
+// commit-path and standalone renderers be compared over identical input. The
+// dangling related: is a check (the stem may live on an unmerged branch); a
+// second ticket with a dangling parent: supplies the fix.
 func ticketGraphAdvisoryFixture(t *testing.T) (string, []string) {
 	t.Helper()
 	root := t.TempDir()
@@ -470,45 +472,48 @@ func ticketGraphAdvisoryFixture(t *testing.T) (string, []string) {
 	child := "ai-docs/tickets/.done/260726-feat-graph-child.md"
 	mustWrite(t, root, child,
 		"---\ntitle: Graph child\ncompleted: 2026-07-27\nparent: 260726-refactor-graph-parent\nrelated:\n  260726-nope-dangling: no such stem\n---\n\n# Graph child\n")
-	return root, []string{child}
+	orphan := "ai-docs/tickets/.done/260726-feat-graph-orphan.md"
+	mustWrite(t, root, orphan,
+		"---\ntitle: Graph orphan\ncompleted: 2026-07-27\nparent: 260726-epic-graph-missing\n---\n\n# Graph orphan\n")
+	return root, []string{child, orphan}
 }
 
-// TestVerifyAdapterAppendsAmendRecipeToFixAdvisoriesOnly pins the one
+// TestVerifyAdapterAppendsCommitRecipeToFixAdvisoriesOnly pins the one
 // presentation difference {#260723-tickets-verify-tool}'s identical-verdict
 // guarantee permits: the commit path knows a commit already exists, so a
-// mechanical remedy gets the amend recipe. A check or board advisory carries no
+// mechanical remedy gets the follow-up commit recipe. A check or board advisory carries no
 // mechanical remedy, so appending it there would be a false instruction.
-func TestVerifyAdapterAppendsAmendRecipeToFixAdvisoriesOnly(t *testing.T) {
+func TestVerifyAdapterAppendsCommitRecipeToFixAdvisoriesOnly(t *testing.T) {
 	root, paths := ticketGraphAdvisoryFixture(t)
 
 	advisories, err := verifyAdapter(root, paths)
 	if err != nil {
 		t.Fatalf("verifyAdapter returned an error for a non-blocking fixture: %v", err)
 	}
-	if len(advisories) != 3 {
-		t.Fatalf("advisories = %#v, want a board block plus one fix and one check", advisories)
+	if len(advisories) != 4 {
+		t.Fatalf("advisories = %#v, want a board block, one fix and two checks", advisories)
 	}
 
-	const recipe = "Then git commit --amend --no-edit."
+	const recipe = "Then commit the correction (a follow-up git.commit)."
 	var sawFix, sawCheck bool
 	for _, advisory := range advisories {
 		switch {
 		case strings.Contains(advisory, "FIX:"):
 			sawFix = true
 			if !strings.HasSuffix(advisory, "\n       "+recipe) {
-				t.Fatalf("fix advisory missing the amend recipe:\n%s", advisory)
+				t.Fatalf("fix advisory missing the commit recipe:\n%s", advisory)
 			}
 		case strings.Contains(advisory, "CHECK:"):
 			sawCheck = true
-			if strings.Contains(advisory, "--amend") {
-				t.Fatalf("check advisory must not carry the amend recipe:\n%s", advisory)
+			if strings.Contains(advisory, "--amend") || strings.Contains(advisory, recipe) {
+				t.Fatalf("check advisory must not carry the commit recipe:\n%s", advisory)
 			}
 		default:
 			if !strings.HasPrefix(advisory, "## Parent Board") {
 				t.Fatalf("unexpected advisory:\n%s", advisory)
 			}
-			if strings.Contains(advisory, "--amend") {
-				t.Fatalf("board advisory must not carry the amend recipe:\n%s", advisory)
+			if strings.Contains(advisory, "--amend") || strings.Contains(advisory, recipe) {
+				t.Fatalf("board advisory must not carry the commit recipe:\n%s", advisory)
 			}
 		}
 	}
@@ -542,8 +547,8 @@ func TestFormatTicketVerifyRendersAdvisoriesWithoutAmendRecipe(t *testing.T) {
 			t.Fatalf("formatTicketVerify output missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "--amend") {
-		t.Fatalf("standalone verify output leaked the commit-path amend recipe:\n%s", text)
+	if strings.Contains(text, "--amend") || strings.Contains(text, "follow-up git.commit") {
+		t.Fatalf("standalone verify output leaked the commit-path recipe:\n%s", text)
 	}
 	if strings.Contains(text, "should be addressed or explicitly accepted") {
 		t.Fatalf("advisories wrongly fired the warning next_instruction:\n%s", text)
@@ -604,14 +609,18 @@ func TestServeStdioGitCommitSurfacesTicketGraphParentBoard(t *testing.T) {
 	server := NewServer(root, "test")
 
 	textChild := "ai-docs/tickets/.done/260726-feat-graph-e2e-text.md"
-	// The dangling related: makes this commit carry both a multi-line board
-	// block and a single-block FIX:, which is the adjacency that needs a blank
-	// separator in formatGitCommit.
+	// The dangling related: is a CHECK:; the second ticket's dangling parent:
+	// is a FIX:. Together with the board they are the multi-line board block
+	// and the single-block advisories whose adjacency needs a blank separator
+	// in formatGitCommit.
 	mustWrite(t, root, textChild,
 		"---\ntitle: E2E child\ncompleted: 2026-07-27\nparent: 260726-epic-graph-e2e\nrelated:\n  260726-nope-dangling: no such stem\n---\n\n# E2E child\n")
+	textOrphan := "ai-docs/tickets/.done/260726-feat-graph-e2e-orphan.md"
+	mustWrite(t, root, textOrphan,
+		"---\ntitle: E2E orphan\ncompleted: 2026-07-27\nparent: 260726-epic-graph-e2e-missing\n---\n\n# E2E orphan\n")
 
 	var out bytes.Buffer
-	textInput := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git.commit","arguments":{"paths":[%q],"title":"docs(ticket): close the last child of an epic","ai_context":["User intent: prove the parent board reaches the git.commit response."],"expected_branch":%q}}}`, textChild, branch)
+	textInput := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git.commit","arguments":{"paths":[%q,%q],"title":"docs(ticket): close the last child of an epic","ai_context":["User intent: prove the parent board reaches the git.commit response."],"expected_branch":%q}}}`, textChild, textOrphan, branch)
 	if err := serveStdioWithSession(t, server, root, textInput, &out); err != nil {
 		t.Fatalf("ServeStdio commit returned error: %v", err)
 	}
@@ -630,11 +639,11 @@ func TestServeStdioGitCommitSurfacesTicketGraphParentBoard(t *testing.T) {
 		}
 	}
 	// The board block and the FIX: advisory must not run together.
-	if !strings.Contains(text, "\n\n  FIX:") {
+	if !strings.Contains(text, "\n\n  CHECK:") || !strings.Contains(text, "\n  FIX:") {
 		t.Fatalf("git.commit text response missing the blank separator before the FIX: advisory: %q", text)
 	}
-	if !strings.Contains(text, "Then git commit --amend --no-edit.") {
-		t.Fatalf("git.commit text response missing the amend recipe: %q", text)
+	if !strings.Contains(text, "Then commit the correction (a follow-up git.commit).") || strings.Contains(text, "--amend") {
+		t.Fatalf("git.commit text response must carry the follow-up commit recipe and no amend: %q", text)
 	}
 
 	jsonChild := "ai-docs/tickets/.done/260726-feat-graph-e2e-json.md"
@@ -911,5 +920,65 @@ func TestServeStdioGitCommitRejectsNonArrayAIContext(t *testing.T) {
 	newEvent := newEvents[0]
 	if newEvent["type_mismatch"] != true || newEvent["present"] != true {
 		t.Fatalf("type-mismatch debug event = %#v", newEvent)
+	}
+}
+
+// TestGitCommitTextTicketChangesLinesReadAsEdits pins the exact text lines for
+// the three entry shapes: a move keeps from->to, while an edit or an addition
+// has no source status and is worded as such instead of "-->.done".
+func TestGitCommitTextTicketChangesLinesReadAsEdits(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	initGit(t, root)
+	const body = "---\ntitle: Demo\n---\n# Demo\n\n## Phases\n\n### Phase 1: Implement\n\nWork.\n"
+	const result = "\n### Result (abc123) - 2026-05-04\n\nDone.\n"
+	moveFrom := "ai-docs/tickets/todo/260504-feat-move.md"
+	moveTo := "ai-docs/tickets/idea/260504-feat-move.md"
+	closed := "ai-docs/tickets/.done/260504-feat-closed.md"
+	added := "ai-docs/tickets/todo/260504-feat-added.md"
+	mustWrite(t, root, moveFrom, body)
+	mustWrite(t, root, closed, "---\ntitle: Demo\ncompleted: 2026-05-04\n---\n# Demo\n\n## Phases\n\n### Phase 1: Implement\n\nWork.\n"+result)
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+
+	mustWrite(t, root, moveTo, body)
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash(moveFrom))); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, root, closed, "---\ntitle: Demo\ncompleted: 2026-05-04\n---\n# Demo\n\n## Phases\n\n### Phase 1: Implement\n\nWork.\n"+result+"\n#### Edition (def456) - 2026-05-05\n\nAdjusted.\n")
+	mustWrite(t, root, added, body)
+
+	paths, err := json.Marshal([]string{moveFrom, moveTo, closed, added})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git.commit","arguments":{"paths":%s,"title":"test: ticket change lines","ai_context":["Pin the text lines."],"expected_branch":%q}}}`, paths, headBranch(t, root))
+	var out bytes.Buffer
+	if err := serveStdioWithSession(t, NewServer(root, "test"), root, input, &out); err != nil {
+		t.Fatal(err)
+	}
+	byID := responseLinesByID(t, strings.Split(strings.TrimSpace(out.String()), "\n"))
+	if toolIsError(t, byID["1"]) {
+		t.Fatalf("git.commit failed: %s", toolText(t, byID["1"]))
+	}
+	text := toolText(t, byID["1"])
+	for _, want := range []string{
+		"  - 260504-feat-move todo->idea (" + moveTo + ")\n",
+		"  - 260504-feat-closed edited in .done result \"#### Edition (def456) - 2026-05-05\" (" + closed + ")\n",
+		"  - 260504-feat-added added in todo (" + added + ")\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("ticket_changes missing line %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "-->") {
+		t.Fatalf("ticket_changes still renders a dash source:\n%s", text)
+	}
+}
+
+func TestFormatTicketChangeStatusDeletion(t *testing.T) {
+	got := formatTicketChangeStatus(wsgit.TicketChange{Stem: "s", ToStatus: "idea", Kind: "D"})
+	if got != " deleted from idea" {
+		t.Fatalf("deletion = %q", got)
 	}
 }

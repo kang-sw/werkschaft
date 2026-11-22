@@ -140,7 +140,10 @@ func TestCodexMapperRecordedLeadSession(t *testing.T) {
 			}
 		}
 	}
-	if starts != 5 || usage != 10 || limits != 10 || !slices.Equal(approvals, []string{"0", "1"}) || !slices.Equal(settled, approvals) {
+	// Ten usage and ten limits notifications, each published as a status
+	// event carrying both halves: the first usage precedes any limits, and
+	// no later event drops the context.
+	if starts != 5 || usage != 20 || limits != 19 || !slices.Equal(approvals, []string{"0", "1"}) || !slices.Equal(settled, approvals) {
 		t.Fatalf("starts %d usage %d limits %d approvals %v settled %v", starts, usage, limits, approvals, settled)
 	}
 	if got := finalReplies(turns[0]); !slices.Equal(got, []string{"I’ll call `probe_echo` with `hi`.\n", "user rejected MCP tool call\nPROBE-MARKER-7"}) {
@@ -513,5 +516,31 @@ func TestCodexModelsSyntheticAdvertisedEfforts(t *testing.T) {
 	after, afterLevels, _ := (CodexBackend{}).Choices(context.Background())
 	if !reflect.DeepEqual(after, again) || !slices.Equal(afterLevels, againLevels) {
 		t.Fatal("malformed listing replaced advertised choices")
+	}
+}
+
+// The snapshot replaces its usage with each status event, and Codex pushes
+// token usage and rate limits as separate notifications: each status event
+// must carry the other half or the limits notification wipes the context.
+func TestCodexStatusKeepsContextAcrossLimits(t *testing.T) {
+	r := newCodexRun("s")
+	r.feed(`{"method":"turn/started","params":{"threadId":"s","turn":{"id":"t"}}}`)
+	// codex-cli 0.170.0 shape: total/last breakdowns plus modelContextWindow.
+	events := r.feed(`{"method":"thread/tokenUsage/updated","params":{"threadId":"s","turnId":"t","tokenUsage":{"total":{"totalTokens":14971,"inputTokens":14966,"cachedInputTokens":11648,"cacheWriteInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0},"last":{"totalTokens":14971,"inputTokens":14966,"cachedInputTokens":11648,"cacheWriteInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0},"modelContextWindow":258400}}}`)
+	if len(events) != 1 || events[0].Live == nil || events[0].Live.Context == nil {
+		t.Fatalf("usage status: %+v", events)
+	}
+	ctx := events[0].Live.Context
+	if ctx.Tokens == nil || *ctx.Tokens != 14971 || ctx.Window != 258400 || ctx.Percent == nil || ctx.CacheHit == nil {
+		t.Fatalf("context: %+v", ctx)
+	}
+	events = r.feed(`{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":12,"resetsAt":1111111111,"windowDurationMins":300}}}}`)
+	if len(events) != 1 || len(events[0].Live.Limits) != 1 || events[0].Live.Context == nil || *events[0].Live.Context.Tokens != 14971 {
+		t.Fatalf("limits status dropped the context: %+v", events)
+	}
+	// Older shape: only last.totalTokens, no window.
+	events = r.feed(`{"method":"thread/tokenUsage/updated","params":{"threadId":"s","turnId":"t","tokenUsage":{"last":{"totalTokens":500}}}}`)
+	if len(events) != 1 || *events[0].Live.Context.Tokens != 500 || events[0].Live.Context.Window != 0 || len(events[0].Live.Limits) != 1 {
+		t.Fatalf("old shape: %+v", events)
 	}
 }

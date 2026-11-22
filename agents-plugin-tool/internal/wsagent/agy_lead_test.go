@@ -39,10 +39,14 @@ type agyFake struct {
 func newAgyLeadHarness(t *testing.T) (*leadHarness, *agyFake) {
 	t.Helper()
 	h := newLeadHarness(t)
-	h.opts.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: "/opt/harness/agy"}, LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes, Catalog: AgyCatalog()}
+	// The shipped cross-harness refusal: every agy lead test runs under it
+	// (a fixture that runs agy workers adds the worker role).
+	h.opts.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: "/opt/harness/agy"}, Permission: builtinPermission(BackendAgy), Lifecycle: builtinLifecycle(BackendAgy), LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes, Catalog: AgyCatalog(), crossHarnessRefusal: agyCrossHarnessRefusal}
 	h.opts.WSMCP = func(root string) (MCPCommand, error) {
 		return MCPCommand{Command: "python3", Env: map[string]string{"WS_MCP_PROJECT_ROOT": root}}, nil
 	}
+	// The stall log check never reads the real agy log directory.
+	h.opts.AgyLogDir = t.TempDir()
 	f := &agyFake{h: h}
 	h.holders.acp = f.answer
 	return h, f

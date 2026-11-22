@@ -550,9 +550,32 @@ func TestCompanionAuthoringPackSchemaMatchesValidator(t *testing.T) {
 		{"hour range past 24", `{"scenarios":{"s":{"when":{"hourRange":[0,25]}}}}`},
 		{"hour range start 24", `{"scenarios":{"s":{"when":{"hourRange":[24,24]}}}}`},
 		{"non-object preset", `{"presets":{"p":3}}`},
+		// The paper-doll sections and fills.
+		{"fills on a pose layer", `{"poses":{"stand":{"layers":[{"line":"a.png","fills":{"trim":"t.png"}}]}}}`},
+		{"fills-only pose layer", `{"poses":{"stand":{"layers":[{"fills":{"skin":"s.png"}}]}}}`},
+		{"fills-only pose frame", `{"poses":{"stand":{"layers":[{"frames":[{"fills":{"skin":"s.png"}}],"fps":2}]}}}`},
+		{"svg fill", `{"poses":{"stand":{"layers":[{"line":"a.png","fills":{"trim":"t.svg"}}]}}}`},
+		{"fills on a hair part", `{"hairs":{"h":{"front":{"hairFill":"b.png","fills":{"tip":"c.png"}}}}}`},
+		{"fills-only outfit layer", `{"outfits":{"o":{"poses":{"stand":{"layers":[{"fills":{"skin":"s.png"}}]}}}}}`},
+		{"fills-only outfit frame", `{"outfits":{"o":{"gestures":{"wave":{"layers":[{"frames":[{"fills":{"skin":"s.png"}}],"fps":2}]}}}}}`},
+		{"empty outfit layer", `{"outfits":{"o":{"poses":{"stand":{"layers":[{}]}}}}}`},
+		{"outfit column layers not a list", `{"outfits":{"o":{"poses":{"stand":{"layers":3}}}}}`},
+		{"non-object outfit", `{"outfits":{"o":5}}`},
+		{"non-object outfits", `{"outfits":5}`},
+		{"attachment", `{"attachments":{"cap":{"slot":"headdress","bind":"head","layers":[{"fills":{"c":"c.png"}}],"columns":{"typing":{"layers":[{"file":"t.png"}]}}}}}`},
+		{"attachment with an empty layer", `{"attachments":{"cap":{"layers":[{}]}}}`},
+		{"attachment column with an empty layer", `{"attachments":{"tail":{"columns":{"typing":{"layers":[{}]}}}}}`},
+		{"null attachment", `{"attachments":{"cap":null}}`},
+		{"eye set", `{"eyesets":{"round":{"sclera":"r.png","irisFill":"i.webp"}}}`},
+		{"bad eye-set raster", `{"eyesets":{"round":{"sclera":"r.exe"}}}`},
+		{"null eye set", `{"eyesets":{"round":null}}`},
 	} {
 		doc := companionOverlay(minimal, companionParse(t, tc.patch))
 		agree(tc.name, doc)
+	}
+	// The paper-doll fixture, every section at once, matches the schema.
+	if !schema.valid(schema.root, companionDecode(t, []byte(companionKitFixture))) {
+		t.Error("the paper-doll fixture does not match pack.schema.json")
 	}
 }
 

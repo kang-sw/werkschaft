@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -304,11 +305,16 @@ func deleteOverrideInFile(path, itemKey string) error {
 		return nil
 	}
 	_, err := updateConfigFile(path, func(cfg *Config) error {
-		if _, exists := cfg.Overrides[itemKey]; !exists {
+		before := maps.Clone(cfg.Overrides)
+		if _, exists := cfg.Overrides[itemKey]; !exists && !hasOverrideMirror(itemKey) {
 			return errConfigUnchanged
 		}
 		delete(cfg.Overrides, itemKey)
-		return nil
+		mirrorOverride(itemKey, cfg.Overrides, true)
+		if overridesEqual(before, cfg.Overrides) {
+			return errConfigUnchanged
+		}
+		return checkSet(itemKey, cfg.Overrides)
 	})
 	return err
 }
@@ -332,14 +338,19 @@ func setOverrideInFileRMW(path, itemKey string, transform func(current string) s
 	_, err := updateConfigFile(path, func(cfg *Config) error {
 		current, exists := cfg.Overrides[itemKey]
 		value := transform(current)
-		if exists && value == current {
+		if exists && value == current && !hasOverrideMirror(itemKey) {
 			return errConfigUnchanged
 		}
+		before := maps.Clone(cfg.Overrides)
 		if cfg.Overrides == nil {
 			cfg.Overrides = map[string]string{}
 		}
 		cfg.Overrides[itemKey] = value
-		return nil
+		mirrorOverride(itemKey, cfg.Overrides, false)
+		if exists && overridesEqual(before, cfg.Overrides) {
+			return errConfigUnchanged
+		}
+		return checkSet(itemKey, cfg.Overrides)
 	})
 	return err
 }

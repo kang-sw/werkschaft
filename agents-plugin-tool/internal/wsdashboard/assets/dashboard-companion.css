@@ -97,7 +97,7 @@
   font: 16px/1 system-ui, sans-serif;
   cursor: pointer;
 }
-.ws-companion-settings-close:is(:hover, :focus-visible), .ws-companion-settings-action:is(:hover, :focus-visible) { background: var(--wb-wash); }
+.ws-companion-settings-close:is(:hover, :focus-visible), .ws-companion-settings-action:is(:hover, :focus-visible), .ws-companion-settings-reset:is(:hover, :focus-visible) { background: var(--wb-wash); }
 .ws-companion-settings-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .ws-companion-settings-control { display: inline-flex; align-items: center; gap: 4px; }
 .ws-companion-settings select, .ws-companion-settings input {
@@ -110,11 +110,15 @@
   font: inherit;
 }
 .ws-companion-settings input[type="number"] { width: 72px; }
+.ws-companion-settings input[type="color"] { width: 36px; height: 24px; padding: 1px 2px; cursor: pointer; }
+.ws-companion-settings-multi { grid-column: 1 / -1; display: grid; gap: 4px; }
+.ws-companion-settings-sub { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding-left: 8px; }
+.ws-companion-settings-name-tag { color: var(--wb-muted-fg); overflow-wrap: anywhere; }
 .ws-companion-settings-unit, .ws-companion-settings-muted { color: var(--wb-muted-fg); }
 .ws-companion-settings-persona { padding: 6px 8px; border-radius: 8px; background: var(--wb-wash); overflow-wrap: anywhere; }
 .ws-companion-settings-name { font-weight: 600; }
 .ws-companion-settings-voice { white-space: pre-line; max-height: 7.2em; overflow: auto; }
-.ws-companion-settings-action {
+.ws-companion-settings-action, .ws-companion-settings-reset {
   justify-self: start;
   padding: 4px 8px;
   border: 1px solid var(--wb-line);

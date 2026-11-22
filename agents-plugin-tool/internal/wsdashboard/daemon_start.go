@@ -75,6 +75,14 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	if opts.Pprof {
 		enableContentionProfiles()
 	}
+	// A nil *wscred.Store must stay a nil interface: the routes test it.
+	var credentials credentialStore = opts.credentialSource
+	if credentials == nil && opts.Credentials != nil {
+		credentials = opts.Credentials
+	}
+	// Under the lock, before the store's first use: a credential file a
+	// pre-release build left beside this directory moves into it.
+	migrateCredentials(credentials, logw)
 	stats := &streamStats{}
 	d := &Daemon{
 		dir:             opts.Dir,
@@ -82,10 +90,12 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		listener:        listener,
 		log:             logw,
 		agents:          opts.Agents,
+		credentials:     credentials,
 		config:          opts.Config,
 		cardBound:       opts.CardBound,
 		execJobs:        opts.ExecJobs,
 		hostedExecJobs:  opts.HostedExecJobs,
+		forgotten:       opts.SessionForgotten,
 		leadNudges:      opts.LeadNudges,
 		beforeUnlock:    opts.BeforeUnlock,
 		mailWake:        opts.MailWake,
@@ -126,6 +136,8 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			StartedAt:     time.Now().UTC().Format(time.RFC3339),
 		},
 	}
+	d.director.oneShot = opts.CompanionOneShot
+	d.director.hasOneShot = opts.CompanionHasOneShot
 	if err := d.refreshCompanion(); err != nil {
 		fmt.Fprintf(logw, "dashboard: load companion settings: %v\n", err)
 	}
@@ -216,8 +228,9 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			delay = ackCheckDelay
 		}
 		d.acks = &ackChecker{delay: delay, run: d.checkAnswers}
-		d.index = NewIndex(IndexOptions{Dir: opts.Dir, Source: d.source, Log: logw, OnChange: d.sessionChanged})
+		d.index = NewIndex(IndexOptions{Dir: opts.Dir, Source: d.source, Log: logw, OnChange: d.sessionChanged, OnRemove: d.auditSessionRemoved})
 	}
+	d.openAudit(logw)
 	d.server = &http.Server{Handler: d.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	// The runner takes its change hook before the first request can reach
 	// it.
@@ -239,6 +252,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		if d.agents != nil {
 			d.agents.Close()
 		}
+		d.closeAudit()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
 		_ = listener.Close()
 		_ = lock.Unlock()

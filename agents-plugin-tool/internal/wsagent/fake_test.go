@@ -194,6 +194,15 @@ type fakeProc struct {
 	steers    []string
 	cleared   int
 	steerFail func(text string) bool
+	// interruptErr, when set, is every Interrupt's answer (failInterrupts).
+	interruptErr error
+}
+
+// failInterrupts makes every later Interrupt fail with err.
+func (p *fakeProc) failInterrupts(err error) {
+	p.mu.Lock()
+	p.interruptErr = err
+	p.mu.Unlock()
 }
 
 // fakeSteerProc is a fakeProc that takes a child's report mid-turn
@@ -267,8 +276,9 @@ func (p *fakeProc) Send(text string) error {
 func (p *fakeProc) Interrupt() error {
 	p.mu.Lock()
 	p.interrupts++
+	err := p.interruptErr
 	p.mu.Unlock()
-	return nil
+	return err
 }
 
 func (p *fakeProc) SetModel(model string) error {
@@ -331,6 +341,8 @@ type fakeKeys struct {
 	n       int
 	roots   map[string]string
 	ensured []string
+	// policyParents records the parent key of each MintChild key.
+	policyParents map[string]string
 	// mintGates hold the Mint calls for a root until released (gateMint).
 	mintGates map[string]*gate
 }
@@ -366,6 +378,21 @@ func (k *fakeKeys) Mint(root string) (string, error) {
 		k.roots = map[string]string{}
 	}
 	k.roots[key] = root
+	return key, nil
+}
+
+// MintChild mints like Mint and records the key it inherits config from.
+func (k *fakeKeys) MintChild(root, parentKey string) (string, error) {
+	key, err := k.Mint(root)
+	if err != nil {
+		return "", err
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.policyParents == nil {
+		k.policyParents = map[string]string{}
+	}
+	k.policyParents[key] = parentKey
 	return key, nil
 }
 
@@ -432,7 +459,7 @@ func newHarness(t *testing.T, profiles map[string]string) *harness {
 	h.config = Options{
 		Now:      func() time.Time { return now },
 		Dir:      h.dir,
-		Backends: map[string]BackendRegistration{suiteBackend: {Backend: h.backend, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(suiteBackend), WorkerHTTPMCP: suiteBackend == BackendClaude}, otherBackend(): {}},
+		Backends: map[string]BackendRegistration{suiteBackend: {Backend: h.backend, Permission: builtinPermission(suiteBackend), Lifecycle: builtinLifecycle(suiteBackend), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(suiteBackend), WorkerHTTPMCP: suiteBackend == BackendClaude}, otherBackend(): {}},
 		Keys:     h.keys,
 		Config:   testConfig(t),
 		WSMCP: func(root string) (MCPCommand, error) {

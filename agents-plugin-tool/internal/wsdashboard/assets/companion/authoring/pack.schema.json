@@ -51,21 +51,7 @@
       "description": "The shared head: the egg-shaped head layers, the live eye layers, and the mouth rasters.",
       "properties": {
         "egg": { "$ref": "#/$defs/channels" },
-        "eyes": {
-          "type": "object",
-          "properties": {
-            "sclera": { "$ref": "#/$defs/raster" },
-            "irisFill": { "$ref": "#/$defs/raster" },
-            "irisLine": { "$ref": "#/$defs/raster" },
-            "frameLower": { "$ref": "#/$defs/raster" },
-            "lidCoverL": { "$ref": "#/$defs/raster" },
-            "lidCoverR": { "$ref": "#/$defs/raster" },
-            "lidLashL": { "$ref": "#/$defs/raster" },
-            "lidLashR": { "$ref": "#/$defs/raster" },
-            "browL": { "$ref": "#/$defs/raster" },
-            "browR": { "$ref": "#/$defs/raster" }
-          }
-        },
+        "eyes": { "$ref": "#/$defs/eyes" },
         "mouths": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/raster" },
@@ -129,7 +115,7 @@
     },
     "presets": {
       "type": "object",
-      "description": "Palette presets by ID.",
+      "description": "Presets by ID. A preset may also pick an outfit, an eye set, attachments by slot, and palette colors.",
       "additionalProperties": { "type": "object" }
     },
     "scenarios": {
@@ -141,7 +127,56 @@
     "stageEffects": { "type": "object", "description": "Whole-body choreography curves." },
     "propMotions": { "type": "object", "description": "Prop trajectory curves." },
     "physics": { "type": "object", "description": "Drag-inertia tuning." },
-    "passive": { "type": "object", "description": "Resting beats by state." }
+    "passive": { "type": "object", "description": "Resting beats by state." },
+    "palette": { "$ref": "#/$defs/palette" },
+    "outfits": {
+      "type": "object",
+      "description": "Outfits by ID. An outfit maps columns (pose and gesture IDs) to body art that already wears the outfit. Each column also needs its entry under poses or gestures. A pack without outfits draws the layers under poses.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "poses": { "type": "object", "additionalProperties": { "$ref": "#/$defs/column" } },
+          "gestures": { "type": "object", "additionalProperties": { "$ref": "#/$defs/column" } },
+          "palette": { "$ref": "#/$defs/palette" }
+        }
+      }
+    },
+    "defaultOutfit": { "type": "string", "description": "The outfit worn when no preset or setting picks one. Without it, the first outfit ID in sorted order is worn." },
+    "attachments": {
+      "type": "object",
+      "description": "Attachments by ID: worn items such as a hat, ears or a tail. One attachment fills one slot.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "slot": { "type": "string", "description": "The slot the item fills: headdress, ears, accessory, tail, or a slot of your own (a lowercase letter, then up to 31 lowercase letters, digits, - or _)." },
+          "bind": { "description": "head moves the item with the head; body draws it with the body columns." },
+          "z": { "type": "number", "description": "Stacking order; the default depends on the slot." },
+          "layers": { "type": "array", "items": { "$ref": "#/$defs/kitDrawable" } },
+          "columns": {
+            "type": "object",
+            "description": "For a body item: layers per column, used instead of layers while that column is drawn.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": { "layers": { "type": "array", "items": { "$ref": "#/$defs/kitDrawable" } } }
+            }
+          }
+        }
+      }
+    },
+    "eyesets": {
+      "type": "object",
+      "description": "Eye sets by ID, selectable in place of head.eyes. Each takes the keys of head.eyes.",
+      "additionalProperties": { "$ref": "#/$defs/eyes" }
+    },
+    "registration": {
+      "type": "object",
+      "description": "Optional reference points the authoring check compares outfit columns against: headAnchor and feetPivot as [x, y], and an allowed drift in pixels.",
+      "properties": {
+        "headAnchor": { "$ref": "#/$defs/point" },
+        "feetPivot": { "$ref": "#/$defs/point" },
+        "tolerance": { "type": "number", "minimum": 0 }
+      }
+    }
   },
   "$defs": {
     "packId": {
@@ -181,7 +216,33 @@
         "accentFill": { "$ref": "#/$defs/raster" },
         "skinFill": { "$ref": "#/$defs/raster" },
         "detail": { "$ref": "#/$defs/raster" },
-        "hairFill": { "$ref": "#/$defs/raster" }
+        "hairFill": { "$ref": "#/$defs/raster" },
+        "fills": { "$ref": "#/$defs/fills" }
+      }
+    },
+    "fills": {
+      "type": "object",
+      "description": "Tint masks by channel name: each raster is tinted with the palette color of its channel (skin, hair, eye, outfitPrimary, outfitAccent, or a channel of your own). A layer under poses or gestures still needs one of the fixed channels; an outfit or attachment layer may draw with fills alone.",
+      "additionalProperties": { "$ref": "#/$defs/raster" }
+    },
+    "palette": {
+      "type": "object",
+      "description": "Colors by tint channel, each written #rrggbb."
+    },
+    "point": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+    "eyes": {
+      "type": "object",
+      "properties": {
+        "sclera": { "$ref": "#/$defs/raster" },
+        "irisFill": { "$ref": "#/$defs/raster" },
+        "irisLine": { "$ref": "#/$defs/raster" },
+        "frameLower": { "$ref": "#/$defs/raster" },
+        "lidCoverL": { "$ref": "#/$defs/raster" },
+        "lidCoverR": { "$ref": "#/$defs/raster" },
+        "lidLashL": { "$ref": "#/$defs/raster" },
+        "lidLashR": { "$ref": "#/$defs/raster" },
+        "browL": { "$ref": "#/$defs/raster" },
+        "browR": { "$ref": "#/$defs/raster" }
       }
     },
     "layer": {
@@ -213,32 +274,51 @@
             "frames": {
               "type": "array",
               "minItems": 1,
-              "items": {
-                "oneOf": [
-                  { "$ref": "#/$defs/raster" },
-                  {
-                    "$ref": "#/$defs/channels",
-                    "anyOf": [
-                      { "required": ["file"] },
-                      { "required": ["line"] },
-                      { "required": ["jacketFill"] },
-                      { "required": ["accentFill"] },
-                      { "required": ["skinFill"] },
-                      { "required": ["detail"] },
-                      { "required": ["hairFill"] }
-                    ]
-                  }
-                ]
-              },
               "description": "Frames of a loop: raster file names, or objects of channels."
             }
           }
         }
       ]
     },
+    "frame": {
+      "oneOf": [
+        { "$ref": "#/$defs/raster" },
+        {
+          "$ref": "#/$defs/channels",
+          "anyOf": [
+            { "required": ["file"] },
+            { "required": ["line"] },
+            { "required": ["jacketFill"] },
+            { "required": ["accentFill"] },
+            { "required": ["skinFill"] },
+            { "required": ["detail"] },
+            { "required": ["hairFill"] }
+          ]
+        }
+      ]
+    },
+    "kitFrame": {
+      "oneOf": [
+        { "$ref": "#/$defs/raster" },
+        {
+          "$ref": "#/$defs/channels",
+          "anyOf": [
+            { "required": ["file"] },
+            { "required": ["line"] },
+            { "required": ["jacketFill"] },
+            { "required": ["accentFill"] },
+            { "required": ["skinFill"] },
+            { "required": ["detail"] },
+            { "required": ["hairFill"] },
+            { "required": ["fills"] }
+          ]
+        }
+      ]
+    },
     "drawable": {
       "allOf": [
         { "$ref": "#/$defs/layer" },
+        { "properties": { "frames": { "items": { "$ref": "#/$defs/frame" } } } },
         {
           "anyOf": [
             { "required": ["file"] },
@@ -254,6 +334,38 @@
         }
       ],
       "description": "A layer that draws something: a raster, tinted channels, a frame loop, or the shared head."
+    },
+    "kitDrawable": {
+      "allOf": [
+        { "$ref": "#/$defs/layer" },
+        { "properties": { "frames": { "items": { "$ref": "#/$defs/kitFrame" } } } },
+        {
+          "anyOf": [
+            { "required": ["file"] },
+            { "required": ["line"] },
+            { "required": ["jacketFill"] },
+            { "required": ["accentFill"] },
+            { "required": ["skinFill"] },
+            { "required": ["detail"] },
+            { "required": ["hairFill"] },
+            { "required": ["fills"] },
+            { "required": ["frames"] },
+            { "required": ["mode"], "properties": { "mode": { "const": "head-egg" } } }
+          ]
+        }
+      ],
+      "description": "An outfit or attachment layer: a drawable layer that may also draw with fills alone, in the layer or in its frames."
+    },
+    "column": {
+      "type": "object",
+      "description": "An outfit column. Fields it leaves out, except layers, come from the poses or gestures entry of the same ID.",
+      "properties": {
+        "layers": { "type": "array", "items": { "$ref": "#/$defs/kitDrawable" } },
+        "headAnchor": { "$ref": "#/$defs/point" },
+        "handAnchor": { "$ref": "#/$defs/point" },
+        "feetPivot": { "$ref": "#/$defs/point" },
+        "replaces": { "type": "array", "items": { "type": "string" }, "description": "For a gesture column: the layers of the pose it swaps out." }
+      }
     },
     "group": {
       "type": "object",
@@ -272,6 +384,7 @@
         { "$ref": "#/$defs/layer" },
         {
           "properties": {
+            "frames": { "items": { "$ref": "#/$defs/frame" } },
             "layers": { "type": "array", "items": { "$ref": "#/$defs/drawable" } }
           }
         }

@@ -32,6 +32,10 @@ func TestTrackerTkReadAllRendersEachStoreAsItArrives(t *testing.T) {
 var tkApi = {}, tkOrder = [], tkViews = {}, tkErrs = {}, tkSeen = {}, tkHostErr = null, tkSupport = false, tkLastRev = null;
 var pending = {}, log = [], bad = [];
 function wsT(k) { return k; }
+var staged = null;
+function shStage(fn) { if (staged) staged.push(fn); else fn(); }
+function shHolding() { return !!staged; }
+var tkHeld = null;
 function tkUrl(id, op) { return "/tracker/stores/" + id + "/" + op; }
 function tkFetch(path, body, done) {
   if (path === "/tracker/stores") { done(200, { rev: 1, stores: [{ id: "fast" }, { id: "slow" }] }); return; }
@@ -59,6 +63,42 @@ pending["/tracker/stores/slow/view"](500, {});
 check("unmounted, first view landed", log, ["listed:200"]);
 pending["/tracker/stores/fast/view"](200, { view: { v: "new" } });
 check("unmounted, both landed", log, ["listed:200", "done"]);
+
+// A page staged for its first show lists the stores at once but reads no
+// view until the show releases the held reads.
+tkApi = {}; log = []; pending = {}; tkViews = {};
+staged = [];
+tkReadAll(function (status) { log.push("listed:" + status); }, function () { log.push("done"); });
+check("staged: listed, no view requested", [log, Object.keys(pending)], [["listed:200"], []]);
+check("staged: one held read", staged.length, 1);
+staged.shift()();
+staged = null;
+check("released: both views requested", Object.keys(pending).sort(), ["/tracker/stores/fast/view", "/tracker/stores/slow/view"]);
+pending["/tracker/stores/fast/view"](200, { view: { v: "new" } });
+pending["/tracker/stores/slow/view"](200, { view: { v: "new" } });
+check("released: done after both", log[log.length - 1], "done");
+// A store the route entered while the page was held reads its own view: the
+// released pass leaves it, and done waits for that read as well as the others.
+tkApi = {}; log = []; pending = {}; tkViews = {};
+staged = [];
+var claim = { n: 1, waiters: [] };
+tkReadAll(function (status) { log.push("listed:" + status); tkHeld.fast = claim; }, function () { log.push("done"); });
+staged.shift()();
+staged = null;
+check("claimed store not re-read", Object.keys(pending), ["/tracker/stores/slow/view"]);
+pending["/tracker/stores/slow/view"](200, { view: { v: "new" } });
+check("done waits for the claimed read", log.indexOf("done"), -1);
+claim.n = 0; claim.waiters.splice(0).forEach(function (fn) { fn(); });
+check("done after the claimed read lands", log[log.length - 1], "done");
+// A claim that landed before the show leaves nothing to wait for.
+tkApi = {}; log = []; pending = {};
+staged = [];
+claim = { n: 0, waiters: [] };
+tkReadAll(function (status) { tkHeld.fast = claim; }, function () { log.push("done"); });
+staged.shift()();
+staged = null;
+pending["/tracker/stores/slow/view"](200, { view: { v: "new" } });
+check("landed claim: done after the other store", log, ["done"]);
 process.stdout.write(bad.join("\n"));
 `
 	out, err := nodeScript(node, script).CombinedOutput()

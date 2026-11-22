@@ -185,14 +185,29 @@ for (const address of [base, updates]) {
     };
     await shown(false);
     oldHash = await hash();
-    delta(await update('agenda', 'hidden agenda'), ['p-agenda']);
-    delta(await update('todo', 'hidden task'), ['p-todo']);
+    // cd1c99614: a cached (hidden) frame stops its main stream, so no event
+    // arrives while hidden; daemon state accumulates and the frame resyncs
+    // from the full snapshot when shown again.
+    const quiet = async (op, value) => assert.equal((await fetch(updates + '?' + new URLSearchParams({ op, value }))).status, 204);
+    const hiddenStart = events.length;
+    await quiet('agenda', 'hidden agenda');
+    await quiet('todo', 'hidden task');
+    await frame.evaluate(() => new Promise(resolve => setTimeout(resolve, 300)));
+    assert.equal(events.length, hiddenStart, 'a hidden cached frame receives no stream events');
     assert.equal(await hash(), oldHash, 'hidden gate holds DOM');
     await shown(true); await waitHash(oldHash);
     assert((await frame.locator('#p-agenda').textContent()).includes('hidden agenda'));
     assert((await frame.locator('#p-todo').textContent()).includes('hidden task'), 'hidden deltas accumulated across card kinds');
     assert(await step.evaluate(n => n.open), 'hidden replacement retains user-open fold');
     assert.equal(await other.evaluate(n => n.open), false, 'hidden replacement retains user-closed fold');
+    // A hidden cached frame suspends its running child documents (see
+    // suspendDocFrames) and remounts them on show; take the frame baseline again.
+    await frame.evaluate(() => new Promise(resolve => setTimeout(resolve, 1500)));
+    await frame.evaluate(() => {
+      panelRefs.frames = Array.from(document.querySelectorAll('iframe.doc-frame'));
+      panelRefs.windows = panelRefs.frames.map(n => n.contentWindow); panelFrameLoads = 0;
+      panelRefs.frames.forEach(n => n.addEventListener('load', () => panelFrameLoads++));
+    });
 
     // A shell change uses a real full event. Canonical equal card HTML must
     // not be confused with live drawer styling or user disclosure attributes.

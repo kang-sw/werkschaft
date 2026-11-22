@@ -16,6 +16,7 @@ import (
 func (d *Daemon) sessionChanged(replyID string) {
 	if d.index != nil {
 		if session, ok := d.index.Session(replyID); ok {
+			d.auditSessionSeen(session.Registration)
 			d.scheduleAnswerReplay(session.Registration)
 			if d.planUsage != nil && session.Harness == "claude" {
 				d.planUsage.pushClaude(d.snapshots.snapshotWithoutObserved(d.dir, replyID))
@@ -29,6 +30,9 @@ func (d *Daemon) sessionChanged(replyID string) {
 			wslive.DropRing(wslive.RingDir(SessionDir(d.dir, replyID)))
 			if f, ok := d.source.(SessionForgetter); ok {
 				f.ForgetSession(replyID)
+			}
+			if d.forgotten != nil {
+				d.forgotten(replyID)
 			}
 		}
 	}
@@ -93,6 +97,7 @@ func (d *Daemon) poll(interval time.Duration) {
 		interval = DefaultPollInterval
 	}
 	d.index.Refresh()
+	d.auditFirstSweep()
 	d.pokeHires()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -130,6 +135,9 @@ func (d *Daemon) Done() <-chan struct{} { return d.done }
 func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
 		close(d.stop)
+		// The composer's runs and background loop end with the stop (a
+		// running launch converts on it); none writes after Close returns.
+		d.composerWait()
 		if d.hireDone != nil {
 			<-d.hireDone
 		}
@@ -171,7 +179,16 @@ func (d *Daemon) Close() {
 			d.holders.Close()
 		}
 		d.foreign.close()
+		// After the runner and holders let go, so no capture appends race
+		// the final flush.
+		d.closeAudit()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
+		// A credential change still in flight (a hosted call or a change
+		// request the bounded drain left running) lands now or is refused:
+		// once the lock goes, a successor or the offline CLI writes the file.
+		if d.credentials != nil {
+			d.credentials.Close()
+		}
 		if d.beforeUnlock != nil {
 			d.beforeUnlock()
 		}

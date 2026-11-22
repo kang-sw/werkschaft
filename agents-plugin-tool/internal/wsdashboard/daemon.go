@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"errors"
 	"github.com/gofrs/flock"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"io"
 	"net"
 	"net/http"
@@ -117,6 +118,14 @@ type DaemonOptions struct {
 	// AgyCommand resolves the agy CLI program and leading arguments for
 	// user-triggered /usage probes without spawning. Nil skips agy probes.
 	AgyCommand func() (string, []string, error)
+	// CompanionOneShot runs the companion agent director's isolated
+	// single-prompt call (companion_director.go); nil leaves the agent
+	// director inert, and rules mode is unaffected.
+	CompanionOneShot CompanionOneShotFunc
+	// CompanionHasOneShot reports, from memory, whether a harness has a
+	// one-shot mode; a trigger on a harness without one drops before the
+	// limiter charges it. Nil treats every harness as having one.
+	CompanionHasOneShot func(harness string) bool
 	// CardBound reports whether replyID is bound to a subordinate whiteboard
 	// agent card whose Record.Parent stays unset; nil defaults to false.
 	CardBound func(replyID string) bool
@@ -132,6 +141,18 @@ type DaemonOptions struct {
 	// memory only, once per render, nil counts none, and ExecJobsChanged
 	// re-renders the rail after the counts change.
 	HostedExecJobs func() map[string]int
+	// SessionForgotten is called with the reply id of each session that left
+	// the index, after the daemon dropped its caches. A drop from the index
+	// alone is not a session's end (an unmounted project or an identity
+	// mismatch also drops one), so a caller confirms before it acts. It runs
+	// on the index's change path and must not block. Nil is none.
+	SessionForgotten func(replyID string)
+	// Credentials is the provider credential store the daemon owns
+	// (credential_routes.go): while the daemon runs it is the credential
+	// file's only writer. Nil serves no credential and takes no change.
+	// Close closes it to changes before it releases the lock, so a store
+	// serves one daemon.
+	Credentials *wscred.Store
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN
 	// mode on loopback; empty derives it from LAN.
@@ -169,6 +190,9 @@ type DaemonOptions struct {
 	hireNow func() time.Time
 	// authNow is a fixture clock for login codes and failed exchanges.
 	authNow func() time.Time
+	// credentialSource replaces Credentials, so a test sees the requests
+	// the token route makes; nil uses Credentials.
+	credentialSource credentialStore
 	// clipboard replaces the native login-link clipboard writer in tests.
 	// Nil selects the platform writer; it never disables authentication.
 	clipboard clipboardWriter
@@ -203,6 +227,10 @@ type Daemon struct {
 	// companionSources holds the last fetched source zip for its install.
 	companionSources companionSourceCache
 
+	// auditRead, when set, replaces the audit store for the audit query
+	// routes (a test's fixture store).
+	auditRead auditViewer
+
 	dir       string
 	lock      *flock.Flock
 	server    *http.Server
@@ -212,11 +240,19 @@ type Daemon struct {
 	index     *Index
 	source    SessionSource
 	config    *ConfigBackend
+	audit     *auditState
 	companion companionState
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub
-	agents            AgentHost
-	leadNudges        interface {
+	// director is the companion agent director (companion_director.go).
+	director companionDirector
+	agents   AgentHost
+	// composer is the chat composer's `!` command state (composer_exec.go).
+	composer composerExec
+	// credentials is DaemonOptions.Credentials (or a test's
+	// credentialSource), nil without one.
+	credentials credentialStore
+	leadNudges  interface {
 		Start()
 		Close()
 	}
@@ -363,6 +399,8 @@ type Daemon struct {
 	// DaemonOptions.HostedExecJobs.
 	execJobs       func() map[string]int
 	hostedExecJobs func() map[string]int
+	// forgotten is DaemonOptions.SessionForgotten.
+	forgotten func(replyID string)
 
 	closeOnce sync.Once
 	stop      chan struct{}

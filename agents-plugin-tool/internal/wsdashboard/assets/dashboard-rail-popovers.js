@@ -490,9 +490,20 @@
   // 409 on archive is the runner still checking the session; the user may
   // try again, and nothing retries here.
   var archBusy = "";
-  function railArchive(btn) {
+  async function railArchive(btn) {
     var row = btn.closest(".rs"), id = row ? row.getAttribute("data-rid") || "" : "", act = btn.getAttribute("data-act") || "";
     if (!id || archBusy || (act !== "hide" && act !== "unhide")) return;
+    // Archive asks first; unarchive stays one click.
+    if (act === "hide") {
+      archBusy = id;
+      var ok = await window.wsConfirm(wsT("js.lead.archive.confirm"), { opener: btn, accept: wsT("js.lead.archive.accept") });
+      archBusy = "";
+      // The hover-only button is hidden once the dialog covers the pointer, so
+      // focus falls back to the row's name link.
+      if (!ok && row.isConnected && document.activeElement !== btn) { var rl = row.querySelector(".rl"); if (rl) rl.focus({ preventScroll: true }); }
+      if (!ok || !row.isConnected) return;
+    }
+    if (archBusy) return;
     archBusy = id;
     railMarks();
     railPost("/agents/" + encodeURIComponent(id) + "/" + act, {}, function (status, v, s) {

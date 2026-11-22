@@ -376,7 +376,13 @@ impl<R: tauri::Runtime> Controller<R> {
             if connection.window_epoch() != epoch || connection.pinned_url().as_ref() != Some(&pin) {
                 return;
             }
-            let Some(window) = app.get_webview_window("main") else { return };
+            // The dashboard's webview: on Windows its window also holds the
+            // title strip, so Tauri no longer lists it as a webview window.
+            #[cfg(target_os = "macos")]
+            let window = app.get_webview_window("main");
+            #[cfg(windows)]
+            let window = app.get_webview("main");
+            let Some(window) = window else { return };
             if window.url().is_ok_and(|source| authorized(true, &source, Some(&pin))) {
                 let origin = json!(pin.origin().ascii_serialization());
                 let _ = window.eval(format!(

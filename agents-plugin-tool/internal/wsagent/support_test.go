@@ -60,7 +60,7 @@ func newSupportHarness(t *testing.T) *supportHarness {
 		now:     time.Date(2026, 11, 15, 9, 35, 42, 0, time.UTC),
 	}
 	h.config.Now = func() time.Time { return sh.now }
-	h.config.Backends = map[string]BackendRegistration{BackendClaude: {Backend: sh.claude, LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes}, BackendPi: {Backend: sh.pi, LeadProfile: LeadProfilePi}}
+	h.config.Backends = map[string]BackendRegistration{BackendClaude: {Backend: sh.claude, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes}, BackendPi: {Backend: sh.pi, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi}}
 	stubLookPath(t)
 	sh.restart()
 	return sh

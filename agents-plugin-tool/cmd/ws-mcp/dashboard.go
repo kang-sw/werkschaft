@@ -17,6 +17,7 @@ import (
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -102,6 +103,7 @@ func dashboardCommand(args []string) {
 	// The hosted exec jobs bind after StartDaemon (their store opens under
 	// the lock); their holders' records and exits go through execLink.
 	execLink := &hostedExecLink{}
+	cron := &cronHost{}
 	holders := wsholder.New(wsholder.Options{
 		Dir:    filepath.Join(dir, wsholder.DirName),
 		Python: os.Getenv(wsholder.PythonEnv),
@@ -117,7 +119,15 @@ func dashboardCommand(args []string) {
 	agents.ExpectExecJobs()
 	labels.agents.Store(agents)
 	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
-	host := &proxyHost{notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
+	// The one provider credential store: the daemon's token route and its
+	// change route serve it, and hosted `credential` commands apply to it.
+	var credentials *wscred.Store
+	if credPath, err := wscred.DefaultPath(""); err != nil {
+		fmt.Fprintf(logw, "dashboard: credential store unavailable: %v\n", err)
+	} else {
+		credentials = wscred.NewStore(credPath)
+	}
+	host := &proxyHost{credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -160,6 +170,7 @@ func dashboardCommand(args []string) {
 		MailWake:       wswake.Mailbox,
 		AgyCommand:     wsagent.AgyBackend{}.ResolveCommand,
 		Agents:         agents,
+		Credentials:    credentials,
 		LeadNudges:     nudges,
 		Tracker:        &dashboardTracker{h: tracker, err: trackerErr, unregistered: func() { support.CloseUnregistered() }},
 		Holders:        holders,
@@ -171,11 +182,20 @@ func dashboardCommand(args []string) {
 		// A hosted session's jobs run under the hosted exec jobs, which
 		// know their owning conversation; nil until they bind.
 		HostedExecJobs: func() map[string]int { return host.exec.Load().RunningOwners() },
+		// A session that left the index may have ended for good: its
+		// scheduled prompts go once the runner no longer knows it.
+		SessionForgotten: func(id string) { cron.sessionForgotten(agents, id) },
+		// The companion director's isolated one-shot call, dispatched
+		// through the harness's backend registration.
+		CompanionOneShot:    wsagent.RunOneShot,
+		CompanionHasOneShot: wsagent.HasOneShot,
 		BeforeUnlock: func() {
 			if err := boards.Close(); err != nil {
 				fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)
 			}
 			exportMailbox.call()
+			// Under the lock, so the successor never fires the same schedules.
+			cron.close(logw)
 		},
 	})
 	if errors.Is(err, wsdashboard.ErrLocked) {
@@ -225,6 +245,10 @@ func dashboardCommand(args []string) {
 	// a conversation the runner does not know yet would be dropped.
 	hostedExec := openHostedExec(dir, holders, agents, execLink, logw, execJobsChanged)
 	host.exec.Store(hostedExec)
+	if hostedExec != nil {
+		// The dashboard's `!` commands run on the same jobs and runner.
+		daemon.SetComposerExec(composerExec{hosted: hostedExec, runner: agents})
+	}
 	// The jobs a predecessor left are settled: the runner's report holds,
 	// sleep and close cascade read them from now on.
 	if hostedExec != nil {
@@ -235,6 +259,18 @@ func dashboardCommand(args []string) {
 	// Start ran before this Store, so its wakes read no jobs: a job a
 	// predecessor left running reaches the rail with this one.
 	execJobsChanged()
+	// Scheduled prompts open under the lock too, once the runner knows its
+	// conversations: the start reaps schedules of sessions it lost and
+	// rebuilds which fires still wait in an inbox.
+	if sched := openCron(dir, agents, logw); sched != nil {
+		cron.sched.Store(sched)
+		host.cron.Store(sched)
+		agents.BindCron(sched)
+		// A conversation the runner forgot between the start's existence
+		// check and the binding had its notice dropped: reap it now, after the
+		// binding, so none is missed on either side.
+		sched.Reconcile()
+	}
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.
 	nudgeHooks, stopHooks := startTrackerHooks(tracker, trackerErr, dir, daemon.Endpoint().Port, logw)
@@ -277,6 +313,7 @@ func dashboardCommand(args []string) {
 			fmt.Fprintf(logw, "dashboard: hosted exec close: %v\n", err)
 		}
 	}
+	cron.close(logw)
 	stopWatch()
 	stopPoll()
 	stopHooks()
@@ -448,6 +485,9 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// A message that cannot wake its sleeping agent stays queued; its
 		// sender hears why once.
 		WakeRefused: mcp.AgentWakeRefused(logw),
+		// A message for an agent whose worktree was released after it was
+		// bound there never reaches it; its sender hears why.
+		CheckoutReleased: mcp.AgentCheckoutReleased(logw),
 	})
 }
 

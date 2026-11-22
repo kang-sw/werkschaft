@@ -461,6 +461,7 @@ func (s *sessionStore) claimKey(d sessionDirs, key string, payload []byte) (bool
 	// A fresh claim carries no sub-lead marker yet; drop any answer cached
 	// for a pruned key of the same name.
 	s.sublead.Delete(key)
+	s.policyParent.Delete(key)
 	return true, nil
 }
 

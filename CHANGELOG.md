@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+- **Daemon-hosted sessions get a per-session audit record store.** The
+  dashboard daemon keeps the tool calls, tool results and hidden harness
+  events of each session it hosts in an append-only ring of its own under
+  `<daemon state>/audit/`, separate from the conversation history. Capture
+  into it lands with the harness adapters; this release adds the store.
+  Four global settings bound it: `dashboard.audit_session_cap_mib` (256),
+  `dashboard.audit_total_cap_mib` (4096), `dashboard.audit_body_cap_kib`
+  (1024) and `dashboard.audit_retention_days` (7). The byte settings must
+  hold as a set (the per-body cap at most 1/16 of the effective per-session
+  cap, which is at least 4 MiB): such a write is refused, and a hand-edited
+  file that breaks it is adjusted with a warning in the daemon log.
+  - **Secrets are masked best-effort, not guaranteed.** Every body is passed
+    through the same credential masking the dashboard uses before it is
+    written, and each mask records only the rule and the original length.
+    A secret in a shape the rules do not recognize is stored as written.
+    Data leaves the store in three ways only: the oldest records of a
+    session go when it passes its size cap; whole sessions go, least
+    recently active first, when the store passes its total cap; and a
+    session's whole record goes when it has not been seen for the retention
+    period or when the session is deleted. A shorter retention period is
+    the way to keep less on disk. There is no command to purge one record.
+  - A session deleted by an older daemon keeps its audit record until the
+    retention period runs out, since the older daemon does not know the
+    store.
+
 ### Changed
 - **The lead skill surface collapses to five working skills plus
   housekeeping.** Working: `lead-discuss`, `lead-ticket`, `lead-run`,

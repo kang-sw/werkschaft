@@ -132,7 +132,8 @@ type claudeSpawn struct {
 func newClaudeMapper(spec StartSpec) *claudeMapper {
 	m := &claudeMapper{spec: spec, now: time.Now, batches: newBatchTracker("c"), tasks: map[string]bool{}, approvals: map[string]string{},
 		rejected: map[string]int64{}, spawns: map[string]claudeSpawn{}, subs: map[string]*claudeSub{}, wakeTasks: map[string]claudeWakeTask{}, levers: map[string]bool{}}
-	if u := spec.restoredClaudeUsage; u != nil && u.LimitsAsOf > 0 {
+	m.batches.callIDs = true
+	if u := spec.restoredUsage; u != nil && u.LimitsAsOf > 0 {
 		m.limits, m.limitsAsOf = u.Limits, u.LimitsAsOf
 	}
 	return m
@@ -140,6 +141,11 @@ func newClaudeMapper(spec StartSpec) *claudeMapper {
 
 // lead reports a lead conversation's mapper.
 func (m *claudeMapper) lead() bool { return m.spec.Lead != nil }
+
+// sessionState reports a mapper that follows the harness's session-state and
+// background-task lines: a lead's, and an agent.spawn worker's
+// (StartSpec.SessionState).
+func (m *claudeMapper) sessionState() bool { return m.lead() || m.spec.SessionState }
 
 type claudeLine struct {
 	LocalCommandSource json.RawMessage `json:"local_command_source"`

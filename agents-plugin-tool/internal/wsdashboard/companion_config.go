@@ -19,6 +19,11 @@ const (
 	CompanionDirectorKey       = "dashboard.companion_director"
 	CompanionPackKey           = "dashboard.companion_pack"
 	CompanionPresetKey         = "dashboard.companion_preset"
+	CompanionOutfitKey         = "dashboard.companion_outfit"
+	CompanionHairKey           = "dashboard.companion_hair"
+	CompanionEyesKey           = "dashboard.companion_eyes"
+	CompanionAttachmentsKey    = "dashboard.companion_attachments"
+	CompanionPaletteKey        = "dashboard.companion_palette"
 	CompanionAgentCooldownKey  = "dashboard.companion_agent_cooldown_seconds"
 	CompanionAgentHourlyCapKey = "dashboard.companion_agent_hourly_cap"
 	CompanionSourcesKey        = "dashboard.companion_sources"
@@ -68,7 +73,8 @@ func companionModalRows(catalog []byte) (string, error) {
 
 func IsCompanionConfigKey(key string) bool {
 	switch key {
-	case CompanionEnabledKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
+	case CompanionEnabledKey, CompanionModeKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
+		CompanionOutfitKey, CompanionHairKey, CompanionEyesKey, CompanionAttachmentsKey, CompanionPaletteKey,
 		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey, CompanionSourcesKey:
 		return true
 	}
@@ -109,6 +115,11 @@ type CompanionConfig struct {
 	Director             string `json:"director"`
 	Pack                 string `json:"pack"`
 	Preset               string `json:"preset"`
+	Outfit               string `json:"outfit"`
+	Hair                 string `json:"hair"`
+	Eyes                 string `json:"eyes"`
+	Attachments          string `json:"attachments"`
+	Palette              string `json:"palette"`
 	AgentCooldownSeconds int    `json:"agentCooldownSeconds"`
 	AgentHourlyCap       int    `json:"agentHourlyCap"`
 	// Sources is the raw dashboard.companion_sources value. The JSON form adds

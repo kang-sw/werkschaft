@@ -766,3 +766,48 @@ func TestCompanionPackInstallExternalEntry(t *testing.T) {
 		t.Fatalf("url entry without a fetcher = %+v, want a refusal", far)
 	}
 }
+
+// TestCompanionPackInstallPaperDollFiles pins the install allow-list to the
+// validator: every raster the paper-doll sections reference (outfit columns
+// and frames, fills, attachments and their columns, eye sets) installs, and
+// an unreferenced raster beside them still fails the pack.
+func TestCompanionPackInstallPaperDollFiles(t *testing.T) {
+	png8 := companionTestPNG(t, 8, 8)
+	bundle := func(extra ...string) []byte {
+		entries := []companionZipEntry{
+			{name: "marketplace.json", data: companionTestMarket(companionTestEntry("kit", "packs/kit"))},
+			{name: "packs/kit/pack.json", data: []byte(companionKitFixture)},
+		}
+		for _, name := range append(append([]string{}, companionKitFiles...), extra...) {
+			entries = append(entries, companionZipEntry{name: "packs/kit/" + name, data: png8})
+		}
+		return companionTestZip(t, entries...)
+	}
+	home := t.TempDir()
+	store := new(CompanionPackStore)
+	result, err := companionTestRun(store, home, bundle(), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kit := companionListed(result, "kit"); kit == nil || !kit.Installed || kit.Error != nil {
+		t.Fatalf("paper-doll pack: %+v", kit)
+	}
+	want := append([]string{".ws-install.json", "pack.json"}, companionKitFiles...)
+	sort.Strings(want)
+	if got := companionDirFiles(t, filepath.Join(home, "companions", "kit")); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("installed files = %v, want %v", got, want)
+	}
+
+	other := t.TempDir()
+	result, err = companionTestRun(new(CompanionPackStore), other, bundle("unused.png"), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kit := companionListed(result, "kit"); kit == nil || kit.Installed || kit.Error == nil ||
+		!strings.HasSuffix(kit.Error.Path, "unused.png") || !strings.Contains(kit.Error.Message, "not referenced") {
+		t.Fatalf("unreferenced raster beside paper-doll files = %+v, want the pack refused", kit)
+	}
+	if _, err := os.Stat(filepath.Join(other, "companions", "kit")); !os.IsNotExist(err) {
+		t.Fatal("a refused pack left a directory")
+	}
+}

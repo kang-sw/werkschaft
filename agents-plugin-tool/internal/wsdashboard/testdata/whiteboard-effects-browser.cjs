@@ -100,8 +100,8 @@ async function until(check, message) {
           for (const chip of await topic.locator('.wbupdate-items > a.wbupdate-item-id').all()) {
             const target = await chip.getAttribute('data-wb-jump');
             assert(/^item-[1-9]\d{0,5}$/.test(target), 'chips keep validated item targets');
-            assert.equal(await chip.getAttribute('href'), '#' + target);
-            assert.equal(await chip.getAttribute('data-wb-topic'), await topic.getAttribute('data-wb-topic'));
+            assert.equal(await chip.getAttribute('href'), '#' + target, 'chip href points at its validated item target');
+            assert.equal(await chip.getAttribute('data-wb-topic'), await topic.getAttribute('data-wb-topic'), 'chip belongs to its topic group');
           }
         }
       }
@@ -113,9 +113,15 @@ async function until(check, message) {
         assert.equal(await fresh.locator('.wbeffect-details, .wbeffect-values').count(), 0, 'saved-change diagnostics are removed');
         await groupedItems(fresh);
         assert(!(await fresh.textContent()).includes('PANEL-PAYLOAD-ONLY'), 'panel payload stays on the board');
-        assert.equal(await fresh.locator('.wbeffect-fallback, script, img, iframe, strong').count(), 0);
+        assert.equal(await fresh.locator('.wbeffect-fallback, script, img, iframe, strong').count(), 0, 'a fresh effects card has no fallback, script, image, frame or markup');
         assert((await fresh.locator('.wbupdate-log .wbupdate-text').allTextContents()).includes(update.payload), 'newly arriving hostile log remains exact literal text');
         assert.equal(await page.evaluate(() => typeof window.effectsAttack), 'undefined', 'new effects payload never executes');
+      }
+      // Draft restore is an async IndexedDB read; the live frame's #grid stays
+      // inert until it lands (dashboard-lifecycle startDraftRecovery), so read
+      // the composer only after that gate opens.
+      async function draftRestored() {
+        await page.waitForFunction(() => { const g = document.getElementById('grid'); return !!g && !g.inert; });
       }
       async function waitStored(draft) {
         await page.waitForFunction(text => Object.keys(localStorage).some(k => (localStorage.getItem(k) || '').includes(text)), draft);
@@ -145,7 +151,7 @@ async function until(check, message) {
         const values = await effect().locator('.wbupdate-log .wbupdate-text').allTextContents();
         assert(values.some(s => s.includes('<img src=x onerror="window.effectsAttack=1">') && s.includes('**plain text**')), 'valid log stays literal, including HTML and Markdown syntax');
         assert.equal(await effect().locator('script, img, iframe, strong').count(), 0, 'effects never execute/render panel HTML or Markdown');
-        assert.equal(await page.evaluate(() => typeof window.effectsAttack), 'undefined');
+        assert.equal(await page.evaluate(() => typeof window.effectsAttack), 'undefined', 'saved effects payload never executes');
         assert((await effect().textContent()).includes('Panel recap only'), 'panel has a recap');
         assert(!(await effect().textContent()).includes('PANEL-PAYLOAD-ONLY'), 'panel body has no in-chat expansion');
         assert((await fallback().textContent()).includes('Details unavailable or unsupported'));
@@ -194,6 +200,7 @@ async function until(check, message) {
         await action('live');
         await active('live');
         await page.locator('#ctext + .wsc-editor').waitFor();
+        await draftRestored();
         assert.equal(await page.locator('#ctext').inputValue(), draft, 'saved-history reloads do not overwrite stored composer draft');
         await action('absent');
         await page.locator('#dash-banner').waitFor({ state: 'visible' });
@@ -204,7 +211,8 @@ async function until(check, message) {
         await action('live');
         await active('live');
         await page.locator('#ctext + .wsc-editor').waitFor();
-        assert.equal(await page.locator('#ctext').inputValue(), draft);
+        await draftRestored();
+        assert.equal(await page.locator('#ctext').inputValue(), draft, 'the stored draft returns after the no-adapter reload and live re-attach');
         await shot('live-restored-draft');
 
         // Follow a real link in the sandboxed, production-rendered board.
@@ -235,15 +243,61 @@ async function until(check, message) {
           const viewport = tab.viewportSize();
           return { ...geometry, bounds, viewport, inBrowser: !!bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height };
         }
+        // Frame heights settle in a later rAF (dashboard-frames applyFrameHeights)
+        // after scrollIntoViewIfNeeded, so the target's size and place keep moving
+        // for a while. Wait until the board's scroll height and the target's
+        // rect repeat, then put the board explicitly where the target lies outside
+        // its clip (below it, else above it) instead of trusting the earlier scroll.
+        {
+          let last = '', same = 0;
+          await until(async () => {
+            const now = await target.evaluate(e => { const r = e.getBoundingClientRect(), b = e.closest('#bcol, .gal-pbody'); return JSON.stringify([b.scrollHeight, Math.round(r.top), Math.round(r.height), [...document.querySelectorAll('iframe.doc-frame')].map(f => f.style.height).join()]); });
+            same = now === last ? same + 1 : 0;
+            last = now;
+            return same >= 8;
+          }, 'the board target keeps one size and place');
+          await target.evaluate(async e => {
+            const b = e.closest('#bcol, .gal-pbody'), frames = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const clip = () => { const c = b.getBoundingClientRect(); return { top: c.top + b.clientTop, bottom: c.top + b.clientTop + b.clientHeight }; };
+            // The settled panel is taller than the board (its frame's real
+            // height), so it cannot lie wholly outside the clip: what must
+            // start outside is its top edge, the part the jump aligns.
+            const gone = () => { const r = e.getBoundingClientRect(), c = clip(); return r.height > c.bottom - c.top ? r.top < c.top : r.bottom <= c.top || r.top >= c.bottom; };
+            for (const dir of [1, -1]) {
+              for (let i = 0; i < 4 && !gone(); i++) {
+                const r = e.getBoundingClientRect(), c = clip();
+                b.scrollTop += dir > 0 ? r.top - c.top + 24 : r.top - c.bottom - 24;
+                await frames();
+              }
+              if (gone()) return;
+            }
+          });
+        }
         const preJump = await jumpGeometry();
         fs.writeFileSync(path.join(output, `${width}-jump-before.json`), JSON.stringify(preJump, null, 2));
-        assert(preJump.rendered && preJump.offscreen, 'jump target starts outside the board clipping viewport');
-        await body.getByRole('link', { name: 'Jump to target', exact: true }).click();
+        const preTall = preJump.target.bottom - preJump.target.top > preJump.clip.bottom - preJump.clip.top;
+        assert(preJump.rendered && (preTall ? preJump.target.top < preJump.clip.top : preJump.offscreen), 'jump target starts outside the board clipping viewport (its top edge, when taller than the board): ' + JSON.stringify(preJump));
+        // Placing the board off the target can unmount its frame (offscreen board
+        // frames are paced remounts), which detaches the Frame taken before:
+        // bring the link's iframe back into view and resolve the live Frame again.
+        await bodyFrame.scrollIntoViewIfNeeded();
+        let liveBody = null;
+        await until(async () => {
+          const f = await (await bodyFrame.elementHandle()).contentFrame();
+          if (f && (await f.getByRole('link', { name: 'Jump to target', exact: true }).count())) liveBody = f;
+          return !!liveBody;
+        }, 'the navigation frame mounts its jump link');
+        await liveBody.getByRole('link', { name: 'Jump to target', exact: true }).click();
         let postJump = null;
         try {
           await until(async () => {
             postJump = await jumpGeometry();
-            return postJump.open && postJump.rendered && postJump.inBoard && postJump.inBrowser;
+            // A target taller than the board cannot sit inside it: the jump
+            // top-aligns it (stream-view measure), so its top is what must land.
+            const tall = postJump.target.bottom - postJump.target.top > postJump.clip.bottom - postJump.clip.top;
+            const topIn = postJump.target.top >= postJump.clip.top - 1 && postJump.target.top < postJump.clip.bottom;
+            const browserTopIn = !!postJump.bounds && postJump.bounds.y >= 0 && postJump.bounds.y < postJump.viewport.height;
+            return postJump.open && postJump.rendered && (tall ? topIn && browserTopIn : postJump.inBoard && postJump.inBrowser);
           }, 'production jump opens and reveals target inside the board and browser viewports');
         } finally {
           fs.writeFileSync(path.join(output, `${width}-jump-after.json`), JSON.stringify(postJump, null, 2));
@@ -258,7 +312,7 @@ async function until(check, message) {
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         const after = await target.boundingBox();
         assert(after && Math.abs(after.y - before.y) <= 16, 'effects refresh preserves the followed board target');
-        assert.equal(await page.locator('#ctext').inputValue(), draft);
+        assert.equal(await page.locator('#ctext').inputValue(), draft, 'the draft survives the followed-target effects refresh');
         await shot('jump-follow-after-effects-refresh');
 
         // Modal completion runs from the real HTTP response, not an SSE
@@ -268,7 +322,7 @@ async function until(check, message) {
         const start = modal.getByRole('button', { name: 'Start', exact: true });
         await start.click();
         await until(async () => (await action('requests')).count === initialRequests + 1, 'one creation request reaches synthetic host');
-        assert.equal(await start.isDisabled(), true);
+        assert.equal(await start.isDisabled(), true, 'Start is disabled while the creation request is held');
         assert((await modal.textContent()).includes('Starting…'));
         await start.dispatchEvent('click');
         assert.equal((await action('requests')).count, initialRequests + 1, 'busy blocks duplicate creation');
@@ -279,6 +333,7 @@ async function until(check, message) {
         assert.equal(await modal.isVisible(), false, 'HTTP 201 completes and closes active modal without attach events');
         await tab.goto(base + '/s/effectsession');
         await active('live');
+        await draftRestored();
         assert.equal(await page.locator('#ctext').inputValue(), draft, 'modal completion saves the originating session draft');
         modal = await openModal();
         await modal.getByRole('button', { name: 'Start', exact: true }).click();
@@ -289,7 +344,7 @@ async function until(check, message) {
         await tab.waitForURL(base + '/s/createdsession');
         await active('board');
         assert.equal(await modal.isVisible(), true, 'late prior-generation success never closes a newer modal');
-        assert.equal(await modal.getByRole('button', { name: 'Start', exact: true }).isDisabled(), false);
+        assert.equal(await modal.getByRole('button', { name: 'Start', exact: true }).isDisabled(), false, 'the newer modal stays startable');
         await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
         await shot('modal-generation-completed');
         assert.deepEqual(serviceWorkerAttempts, [], 'no service worker registration attempts');

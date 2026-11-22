@@ -70,8 +70,8 @@ func TestNativeFirstSteerForPreferNativeSubagentLead(t *testing.T) {
 	agyLead := Record{Backend: BackendAgy, Lead: true, WSKey: "k-agy"}
 	steer := r.subagentSteer(agyLead)
 	want := "Use your native subagent tool for exploration and research that needs no ws tools; it runs at your harness's default model, so when a question needs a specific tier, use a read-only ws `agent.spawn` subagent at an external-harness tier instead. " +
-		"Run rendered ws playbooks and any work that needs ws tools on an external harness: start it with the ws `agent.spawn` tool at a `claude.<size>`, `codex.<size>`, or configured route target, and continue it with the ws `mailbox.send` tool. " +
-		"When a render recommends a bare size or a role tier that resolves to your own harness, put `claude.` or `codex.` before the size instead of passing it as returned. " +
+		"Run rendered ws playbooks and any work that needs ws tools through the ws `agent.spawn` tool, and continue it with the ws `mailbox.send` tool. " +
+		"Pass a rendered tier as returned: a role tier keeps its configured route, model and effort, and may end on agy, which is allowed. An agy route carries the Antigravity terms risk, so when another harness fits the work, choose an external fixed tier such as `claude.small` for `playbook-explore:small` instead; never put a harness prefix before a role tier. " +
 		"A native subagent is one-shot: ask a follow-up of a new one; `mailbox.send` continues only agents started with `agent.spawn`."
 	if steer != want {
 		t.Fatalf("agy lead steer =\n%s\nwant\n%s", steer, want)
@@ -114,13 +114,13 @@ func TestNativeFirstSteerForPreferNativeSubagentLead(t *testing.T) {
 	}
 }
 
-// TestAgyLeadHarnessQualifiedTierStartsClaudeChild: the explore render's
-// recommendation for an agy lead is a bare size ("small"; mcp's
-// TestAgyLeadRenderedTierSpawnsClaudeChild runs the whole handoff from a
-// real render on one connection). Passed as returned, it
-// resolves to the lead's own harness; with the native-first line's size
-// prefix, agent.spawn admits `claude.small` and starts a Claude child. No
-// external route is configured.
+// TestAgyLeadHarnessQualifiedTierStartsClaudeChild: a bare size ("small")
+// from an agy lead (mcp's TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild
+// runs the whole handoff from a real render on one connection, under the
+// shipped admission). Passed as returned, it resolves to the lead's own
+// harness; as the external fixed tier the native-first line steers to when
+// another harness fits, agent.spawn admits `claude.small` and starts a
+// Claude child. No external route is configured.
 // Role-tier coverage (a role tier resolving to agy, qualified to an
 // external harness) is omitted: the base carries no role routing graph.
 func TestAgyLeadHarnessQualifiedTierStartsClaudeChild(t *testing.T) {
@@ -137,7 +137,7 @@ func TestAgyLeadHarnessQualifiedTierStartsClaudeChild(t *testing.T) {
 
 	bare, _ := h.agentRunning(caller, AgentSpawnRequest{Prompt: "explore", Tier: recommended, Authority: "read-only"})
 	if rec := h.record(bare); rec.Backend != BackendAgy {
-		t.Fatalf("a bare size from an agy lead resolves to %s, want agy (the case the prefix rule avoids)", rec.Backend)
+		t.Fatalf("a bare size from an agy lead resolves to %s, want agy", rec.Backend)
 	}
 
 	qualified, _ := h.agentRunning(caller, AgentSpawnRequest{Prompt: "explore", Tier: "claude." + recommended, Authority: "read-only"})

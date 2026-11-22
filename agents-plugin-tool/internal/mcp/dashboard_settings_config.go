@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsauditstore"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsconfigservice"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -159,8 +160,8 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 // DashboardConfigBackend is the daemon's settings backend for packageName.
 // available is agent.spawn's harness availability check without probes
 // (wsagent Runner.HarnessAvailability) the tier routing view reports at each
-// terminal; nil reports none.
-func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func(), available func(harness string) (why string, known bool)) (*wsdashboard.ConfigBackend, error) {
+// terminal, for the view's simulated caller harness; nil reports none.
+func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func(), available func(caller, harness string) (why string, known bool)) (*wsdashboard.ConfigBackend, error) {
 	catalog, err := DashboardConfigCatalog(packageName)
 	if err != nil {
 		return nil, err
@@ -182,6 +183,9 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 		LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
 			return dashboardCompanionConfig(catalog, opts)
 		},
+		LoadAuditLimits: func() (wsauditstore.Limits, []string, error) {
+			return dashboardAuditLimits(opts)
+		},
 		Session:            src.settingsSession,
 		IsLead:             src.settingsLead,
 		OrchestrateWarning: orchestrateWhitelistWarning,
@@ -198,6 +202,19 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 		return dashboardTierRoutingView(rsrc, backend.Options, draft, harness, available)
 	}
 	return backend, nil
+}
+
+// dashboardAuditLimits reads the global audit knobs (global-only keys) and
+// clamps a stored set that breaks the knob rules to the nearest valid values,
+// one warning per change ((2129)=a).
+func dashboardAuditLimits(opts wsconfig.Options) (wsauditstore.Limits, []string, error) {
+	overrides, err := wsconfig.GlobalOverrides(opts)
+	if err != nil {
+		return wsauditstore.DefaultLimits(), nil, err
+	}
+	limits, warnings := wsauditstore.LimitsFromValues(overrides)
+	limits, clamped := limits.Clamp()
+	return limits, append(warnings, clamped...), nil
 }
 
 func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Options) (wsdashboard.CompanionConfig, error) {
@@ -238,6 +255,8 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 	return wsdashboard.CompanionConfig{
 		Enabled: flag(wsdashboard.CompanionEnabledKey), Director: text(wsdashboard.CompanionDirectorKey),
 		Pack: text(wsdashboard.CompanionPackKey), Preset: text(wsdashboard.CompanionPresetKey),
+		Outfit: text(wsdashboard.CompanionOutfitKey), Hair: text(wsdashboard.CompanionHairKey), Eyes: text(wsdashboard.CompanionEyesKey),
+		Attachments: text(wsdashboard.CompanionAttachmentsKey), Palette: text(wsdashboard.CompanionPaletteKey),
 		AgentCooldownSeconds: number(wsdashboard.CompanionAgentCooldownKey),
 		AgentHourlyCap:       number(wsdashboard.CompanionAgentHourlyCapKey),
 		Sources:              text(wsdashboard.CompanionSourcesKey),

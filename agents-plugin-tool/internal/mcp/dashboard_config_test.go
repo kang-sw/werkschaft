@@ -78,8 +78,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				t.Fatalf("rejected: %v", declared.rejected)
 			}
 			own := loadDeclaredConfig(pkg.own)
-			if len(declared.keys) != len(own.keys)+12 {
-				t.Fatalf("%d keys loaded, want the package's %d plus 12 dashboard keys", len(declared.keys), len(own.keys))
+			if len(declared.keys) != len(own.keys)+22 {
+				t.Fatalf("%d keys loaded, want the package's %d plus 22 dashboard keys", len(declared.keys), len(own.keys))
 			}
 			for _, tc := range []struct {
 				key, kind, pattern string
@@ -89,6 +89,7 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				invalid            []string
 			}{
 				{"dashboard.companion_enabled", "boolean", "", false, nil, "true", []string{"yes", "2"}},
+				{"dashboard.companion_mode", "enum", "", "off", []string{"off", "visual", "full"}, "full", []string{"on", "true", "other"}},
 				{"dashboard.companion_director", "enum", "", "rules", []string{"rules", "agent"}, "agent", []string{"sidecar", "lead-tool", "other"}},
 				{"dashboard.companion_pack", "string", "^[a-z0-9][a-z0-9_-]{0,63}$", "default", nil, "auto", []string{"Bad pack"}},
 				{"dashboard.companion_preset", "string", "^[a-z0-9][a-z0-9_-]{0,63}$", "werkschaft-d1", nil, "preset_1", []string{"-bad"}},
@@ -110,11 +111,6 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 					if _, err := key.parse(invalid); err == nil {
 						t.Errorf("%s accepted %q", tc.key, invalid)
 					}
-				}
-			}
-			for _, removed := range []string{"dashboard.companion_mode"} {
-				if _, ok := declared.lookup(removed); ok {
-					t.Errorf("%s is still declared", removed)
 				}
 			}
 			enabled, ok := declared.lookup(DashboardEnabledKey)

@@ -153,9 +153,7 @@ func (c *conv) execImmediate() bool {
 	if err != nil {
 		return false
 	}
-	if level == "" && rec.Backend == BackendCodex && source == "legacy-derived" && process {
-		level = legacyLeadPermission(Record{Lead: true, Backend: BackendCodex, PermissionMode: active})
-	}
+	level = c.r.projectLiveMode(level, rec, source, active, process)
 	return level == PermissionFull
 }
 
@@ -186,7 +184,7 @@ func (r *Runner) ApproveExec(ctx context.Context, id string, call ExecApproval) 
 	var refusal error
 	if !c.do(func() {
 		if c.closed {
-			refusal = endedError(c.rec)
+			refusal = endedError(c.record())
 			return
 		}
 		if c.execImmediate() {

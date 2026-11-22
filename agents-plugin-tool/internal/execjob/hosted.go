@@ -47,8 +47,8 @@ type Hosted struct {
 	// (retryRetire).
 	quit chan struct{}
 	// ownerFences are the conversations whose new jobs are refused (a close
-	// in progress); rootFences the worktrees being released or removed, each
-	// with its holder count. Both under mu.
+	// in progress); rootFences the worktrees being released, removed or
+	// acquired, each with its live fences. Both under mu.
 	ownerFences map[string]bool
 	rootFences  map[string]*rootFence
 }
@@ -89,6 +89,11 @@ type hostedJob struct {
 	row  HostedJobRow
 	out  *JobOutput
 	done chan struct{}
+	// real holds the resolved root and working directory of a running row
+	// an older daemon stored without them (restoredPlaces at restore, a
+	// fallback the row does not persist). Read under h.mu by the worktree
+	// fence, never rewritten.
+	real []string
 	// lastSeq is the last holder record taken: a replay after a daemon
 	// restart starts from the ring's first record again.
 	lastSeq uint64
@@ -103,6 +108,9 @@ type hostedJob struct {
 	// then HostedStopped and sends no notice.
 	stopping   bool
 	delivering bool
+	// publishing: a converted job's id is being handed to its caller; its
+	// completion notice waits for that (deliver), so the id is out first.
+	publishing bool
 	// starting: Launch admitted the job and has not handed its process to
 	// the holder yet; a stop then ends the job at once, and Launch, seeing
 	// the end, never spawns. spawned is open while that hand-over runs; a
@@ -167,6 +175,12 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 			h.byHolder[row.HolderID] = j
 			j.stdinUnknown = !row.Legacy
 		}
+		if !row.Terminal() && row.RealRoot == "" && row.RealCwd == "" {
+			// No launch-time resolution stored: an admitted launch always
+			// stores its resolved root, so only an older daemon's row lacks
+			// it. Resolve now, as that daemon matched the job.
+			j.real = restoredPlaces(row.Root, row.Cwd)
+		}
 		h.jobs[row.ID] = j
 	}
 	return h, nil
@@ -225,6 +239,10 @@ func (h *Hosted) logf(format string, args ...any) {
 func (h *Hosted) Start() {
 	h.opts.Holders.Scan()
 	listing := h.opts.Holders.List()
+	// An incomplete listing may omit a holder that still runs: a job whose
+	// holder it omits is only ended by an exit copy, never lost on the
+	// listing's word, and is reconciled once a scan reads every holder.
+	settleLost := !listing.Incomplete
 	live := map[string]bool{}
 	for _, info := range listing.Holders {
 		live[info.ID] = true
@@ -277,11 +295,61 @@ func (h *Hosted) Start() {
 			h.logf("replay holder %s: %v", id, err)
 		}
 	}
+	var unsettled []*hostedJob
 	for _, j := range gone {
-		h.endFromExitCopy(j)
+		if !h.endFromExitCopy(j, settleLost) {
+			h.logf("job %s: its holder is not listed and the holder census is incomplete; it stays running until a complete scan", j.row.ID)
+			unsettled = append(unsettled, j)
+		}
+	}
+	if len(unsettled) > 0 {
+		go h.reconcileUnlisted(unsettled)
 	}
 	h.sweepExitCopies()
 	h.deliverPending()
+}
+
+// reconcileUnlisted settles the running jobs Start found no holder for
+// under an incomplete scan, once a scan reads every holder: a job whose
+// holder is listed then replays it, and one whose holder is gone ends with
+// its exit copy's status (lost without one). The jobs stay running, and
+// fenced, until then. Close ends the retries.
+func (h *Hosted) reconcileUnlisted(jobs []*hostedJob) {
+	delay := retireRetryMin
+	for {
+		t := time.NewTimer(delay)
+		select {
+		case <-h.quit:
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		h.opts.Holders.Scan()
+		listing := h.opts.Holders.List()
+		if listing.Incomplete {
+			delay = min(delay*2, retireRetryMax)
+			continue
+		}
+		live := map[string]bool{}
+		for _, info := range listing.Holders {
+			live[info.ID] = true
+		}
+		for _, j := range jobs {
+			h.mu.Lock()
+			ended, holder := j.row.Terminal(), j.row.HolderID
+			h.mu.Unlock()
+			switch {
+			case ended:
+			case live[holder]:
+				if err := h.opts.Holders.Replay(holder); err != nil {
+					h.logf("replay holder %s: %v", holder, err)
+				}
+			default:
+				h.endFromExitCopy(j, true)
+			}
+		}
+		return
+	}
 }
 
 // sweepExitCopies removes the exit copies no job row needs: a removal that
@@ -311,8 +379,9 @@ func (h *Hosted) sweepExitCopies() {
 }
 
 // endFromExitCopy ends job j, whose holder is gone, with the status its
-// exit copy kept.
-func (h *Hosted) endFromExitCopy(j *hostedJob) {
+// exit copy kept. Without a readable copy the job is lost only when
+// allowLost; otherwise it stays running and endFromExitCopy reports false.
+func (h *Hosted) endFromExitCopy(j *hostedJob, allowLost bool) bool {
 	path := h.exitCopyPath(j.row.ID)
 	var exit wsholder.Exit
 	raw, err := os.ReadFile(path)
@@ -322,7 +391,11 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
-		return
+		return true
+	}
+	if err != nil && !allowLost {
+		h.mu.Unlock()
+		return false
 	}
 	if err == nil {
 		j.row.State = HostedExited
@@ -344,6 +417,7 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 	h.save(j, row, rev)
 	h.dropExitCopy(j)
 	h.deliver(j)
+	return true
 }
 
 // HolderGone is the daemon's holder OnExit for an exec job's holder: the
@@ -587,7 +661,12 @@ func (h *Hosted) rowLocked(j *hostedJob) HostedJobRow {
 // snapshot. h.mu is held.
 func (h *Hosted) snapLocked(j *hostedJob) (HostedJobRow, uint64) {
 	j.rev++
-	return h.rowLocked(j), j.rev
+	row := h.rowLocked(j)
+	if j.publishing {
+		// The id is not out yet: the stored row owes no notice.
+		row.Notify, row.Notice = false, NoticeNone
+	}
+	return row, j.rev
 }
 
 // save stores j's snapshot row numbered rev, unless a later one is stored
@@ -747,6 +826,29 @@ type HostedLaunch struct {
 	Async    bool
 	// Legacy launches keep the legacy key and reply shape.
 	Legacy bool
+	// Window overrides the execution window of this launch (zero keeps the
+	// daemon's).
+	Window time.Duration
+	// CheckGen makes ExpectGen binding (zero is a real generation): a
+	// conversation that has reopened since the caller decided refuses the
+	// launch.
+	ExpectGen uint64
+	CheckGen  bool
+	// UserApproved marks a launch the user explicitly asked for through a
+	// trusted dashboard route (the composer's `!`): it is its own one-use
+	// approval, and the agent's approval policy is neither asked nor changed.
+	// Only in-process callers set it; no tool argument reaches it.
+	UserApproved bool
+	// OnConvert runs once when a still-running job converts to async, before
+	// the job owes its completion notice, so a caller can make the exec id
+	// visible ahead of the first notice admission: the job is not eligible for
+	// a notice, in memory or in its stored row, until it returns. A job that
+	// ends first converts nothing and never calls it. An error is logged and
+	// leaves the ordinary notice as the one delivery (a lead decision: a refused
+	// publication falls back to the ordinary notice as the single delivery), so
+	// the callback must be all-or-nothing: it returns an error only when nothing
+	// reached the owner or the client, never after a partial publication.
+	OnConvert func(HostedView) error
 }
 
 // HostedOutcome is how a launch call ended.

@@ -117,8 +117,9 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	daemonAgents := daemonAgentClient && s.agentListed() && s.toolAllowed("agent.spawn") && s.toolAllowed("mailbox.send")
 	terminology := playbookTerminology(harness, daemonAgents, s.runtimeNamespace())
 	// A PreferNativeSubagent lead explores with its own native subagent and
-	// spawns on an external harness, but only in text it executes itself: a
-	// rendered delegate runs elsewhere and keeps the daemon-agent wording.
+	// spawns through agent.spawn under its tier rule, but only in text it
+	// executes itself: a rendered delegate runs elsewhere and keeps the
+	// daemon-agent wording.
 	nativeFirst := selfExecuted && daemonAgents && descriptor.preferNativeSubagent
 	if nativeFirst {
 		terminology = nativeFirstTerminology(s.runtimeNamespace())
@@ -187,9 +188,20 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 			// Splice a clearly-delimited credential block into the body so the
 			// delegate's ws calls are pre-keyed. Prepended so the delegate sees
 			// the key before any procedure text.
+			// A worker-role child of a daemon agent.spawn caller holds two keys:
+			// the delegate-scoped spawn key its system prompt names (which its
+			// todo, agenda and compaction restore are bound to) and this
+			// lead-scoped key. The lead-scoped key reaches only the lead-only
+			// tools the spawn key is refused. Every other role, and a
+			// native-subagent caller whose spliced key is the only key, keeps
+			// the single-key wording; a sublead must use its key for every call.
+			keyUse := "Use this key in all ws tool calls."
+			if daemonAgents && strings.ToLower(strings.TrimSpace(pb.Meta.Role)) == "worker" {
+				keyUse = "Your system prompt's spawn key is your session key for every ws call; use this lead-scoped key only for a lead-only tool the spawn key is refused (for example `tickets.sage_stamp`)."
+			}
 			credBlock := "---\n" +
 				"**Your ws session_key: `" + childKey + "`**\n" +
-				"Use this key in all ws tool calls. You are already authenticated; do not attempt to mint, log in, or escalate session credentials.\n" +
+				keyUse + " You are already authenticated; do not attempt to mint, log in, or escalate session credentials.\n" +
 				"---\n\n"
 			body = credBlock + body
 		}

@@ -32,6 +32,38 @@
       "description": "Minutes a message may remain unread in its recipient's mailbox queue before the daemon sends its sender one system notice. The message stays queued and may still be read; a late read sends no follow-up notice. System mail never triggers notices. Only the global value applies, since the daemon serves every project on the machine. Read again every sweep (30 seconds), so a tune applies without a restart."
     },
     {
+      "key": "dashboard.audit_session_cap_mib",
+      "type": "integer",
+      "minimum": 4,
+      "default": 256,
+      "default_scope": "global",
+      "description": "Most disk space, in MiB, one daemon-hosted session's audit record may use. The audit record keeps every tool call, tool result and hidden harness event of a session the dashboard daemon hosts, with recognized secrets masked before they are written (masking is best-effort: a secret in an unrecognized shape is kept as written). When a session's record would grow past this size, its oldest records are removed first, a segment at a time. The value that applies is the smaller of this and dashboard.audit_total_cap_mib, and at least 4. The per-body cap must stay at most 1/16 of it: a write that breaks this is refused, and a stored set that breaks it is adjusted to the nearest valid values with a warning in the daemon log. Only the global value applies, since one daemon serves every session on the machine; read when the daemon starts."
+    },
+    {
+      "key": "dashboard.audit_total_cap_mib",
+      "type": "integer",
+      "minimum": 4,
+      "default": 4096,
+      "default_scope": "global",
+      "description": "Most disk space, in MiB, all sessions' audit records together may use. When a new record would pass this size, the daemon removes whole sessions' audit records, the least recently active first, keeping the session being written for last; that session alone keeps at least its newest segment. Only audit records are removed; conversations and their history stay. The same consistency rule as dashboard.audit_session_cap_mib applies. Only the global value applies; read when the daemon starts."
+    },
+    {
+      "key": "dashboard.audit_body_cap_kib",
+      "type": "integer",
+      "minimum": 4,
+      "default": 1024,
+      "default_scope": "global",
+      "description": "Most stored size, in KiB, of each tool input, tool output or raw line in the audit record, measured as written to disk. A longer body is stored as its first and last halves with a marker giving its full size; the middle is not kept and cannot be searched. Secrets are masked over the whole body before it is cut. It must stay at most 1/16 of the effective per-session cap (see dashboard.audit_session_cap_mib). Only the global value applies; read when the daemon starts."
+    },
+    {
+      "key": "dashboard.audit_retention_days",
+      "type": "integer",
+      "minimum": 1,
+      "default": 7,
+      "default_scope": "global",
+      "description": "Days a session's audit record is kept after the session was last seen (registered, heartbeating, ended or captured). After that the whole record is removed, even when the session's conversation is kept longer, and deleting a session removes its record at once. A record a session deleted by an older daemon left behind ages out by this period. A shorter period limits how long masked-but-imperfect secret handling keeps data on disk. Only the global value applies; read when the daemon starts and checked hourly."
+    },
+    {
       "key": "dashboard.pi_spawn_enabled",
       "type": "boolean",
       "default": false,
@@ -45,6 +77,18 @@
       "description": "When true, the dashboard shows the companion character beside the conversation. Only the global value applies."
     },
     {
+      "key": "dashboard.companion_mode",
+      "type": "enum",
+      "enum": [
+        "off",
+        "visual",
+        "full"
+      ],
+      "default": "off",
+      "default_scope": "global",
+      "description": "Deprecated alias of dashboard.companion_enabled, kept so 0.51.0 clients and scripts keep working: off hides the companion; visual and full both show it and behave the same. A write to either key updates the other, and a value stored here by an older version decides whether the companion shows. Use dashboard.companion_enabled instead. Only the global value applies."
+    },
+    {
       "key": "dashboard.companion_director",
       "type": "enum",
       "enum": [
@@ -53,7 +97,7 @@
       ],
       "default": "rules",
       "default_scope": "global",
-      "description": "Selects what drives the companion: rules (built-in reactions to session events) or agent (a separate lightweight agent writes the reactions). Only the global value applies."
+      "description": "Selects what drives the companion: rules (built-in reactions to session events) or agent (a separate lightweight agent writes the reactions). The 0.51.0 values sidecar and lead-tool are deprecated; config.tune still accepts them and stores rules. Only the global value applies."
     },
     {
       "key": "dashboard.companion_pack",
@@ -70,6 +114,46 @@
       "default": "werkschaft-d1",
       "default_scope": "global",
       "description": "Selects the companion preset by ID. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_outfit",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_-]{0,63})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Selects the companion outfit set by ID. Empty follows the preset, and an ID the active pack does not define is ignored. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_hair",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_-]{0,63})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Selects the companion hair set by ID. Empty follows the preset, and an ID the active pack does not define is ignored. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_eyes",
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9_-]{0,63})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Selects the companion eye set by ID. Empty follows the preset, and an ID the active pack does not define is ignored. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_attachments",
+      "type": "string",
+      "pattern": "^([a-z][a-z0-9_-]{0,31}=[a-z0-9][a-z0-9_-]{0,63}( [a-z][a-z0-9_-]{0,31}=[a-z0-9][a-z0-9_-]{0,63}){0,15})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Chooses companion attachments as up to 16 space-separated <slot>=<id> pairs, one attachment per slot; the ID none clears that slot. Empty follows the preset. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_palette",
+      "type": "string",
+      "pattern": "^([a-zA-Z][a-zA-Z0-9_-]{0,31}=#[0-9a-fA-F]{6}( [a-zA-Z][a-zA-Z0-9_-]{0,31}=#[0-9a-fA-F]{6}){0,15})?$",
+      "default": "",
+      "default_scope": "global",
+      "description": "Overrides companion tint channel colors as up to 16 space-separated <channel>=#rrggbb pairs. Empty follows the preset. Only the global value applies."
     },
     {
       "key": "dashboard.companion_agent_cooldown_seconds",

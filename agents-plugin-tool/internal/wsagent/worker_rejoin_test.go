@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -92,7 +94,7 @@ func TestDowngradeRetirementPersistsSleepingWorker(t *testing.T) {
 }
 
 func TestDowngradeRetirementRetriesStop(t *testing.T) {
-	for _, outcome := range []string{"retry", "already gone", "queued mail"} {
+	for _, outcome := range []string{"retry", "already gone", "queued mail", "user stop", "queued then user stop", "close", "parent close"} {
 		t.Run(outcome, func(t *testing.T) { testDowngradeRetirement(t, outcome) })
 	}
 }
@@ -141,6 +143,123 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 				}
 			})
 		}
+		if stopError == "user stop" {
+			// A user's Stop while the retirement retries goes through the
+			// holder's own stop, never the detached stream's Close.
+			st, err := h.runner.Stop(worker.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 2 || !strings.Contains(st.Error, "fixture stop failure") {
+				t.Fatalf("the user's Stop did not retry the holder's stop: %v, error %q", h.holders.opList(), st.Error)
+			}
+			if rec := h.record(worker.ID); rec.HolderID != holder || !rec.TurnOpen || len(reports.list()) != 0 {
+				t.Fatal("a failed user Stop forgot the holder or published the child")
+			}
+			c.do(func() {
+				if !c.workerRetiring || !c.replaying || c.proc == nil {
+					t.Error("a failed user Stop disarmed the retirement retry")
+				}
+			})
+			c.do(c.heartbeat)
+			if h.holders.opCount("stop "+holder) != 3 {
+				t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+			}
+			h.holders.set(func() { h.holders.stopErr = nil })
+			if _, err := h.runner.Stop(worker.ID); err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 4 || h.record(worker.ID).HolderID != "" {
+				t.Fatalf("the succeeding user Stop did not retire the child: %v", h.holders.opList())
+			}
+		}
+		if stopError == "queued then user stop" {
+			// Input queued while the retirement retries stays held when a
+			// deliberate Stop ends the holder: only the next send wakes it.
+			h.send(worker.ID, "held until the next send")
+			c.do(func() {
+				if !c.replaying || c.rec.HolderID != holder {
+					t.Error("queued input disturbed the failing retirement")
+				}
+			})
+			h.holders.set(func() { h.holders.stopErr = nil })
+			if _, err := h.runner.Stop(worker.ID); err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 2 || h.record(worker.ID).HolderID != "" {
+				t.Fatalf("the user's Stop did not retire the child: %v", h.holders.opList())
+			}
+			launches := h.holders.opCount("launch")
+			for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				c.do(func() {})
+				if rec := h.record(worker.ID); rec.HolderID != "" || rec.TurnOpen || h.holders.opCount("launch") != launches {
+					t.Fatalf("a deliberate Stop relaunched the child for input queued during the retry: %+v, ops %v", rec, h.holders.opList())
+				}
+			}
+			h.send(worker.ID, "the next send")
+			eventually(t, "the next send wakes the held input", func() bool {
+				rec := h.record(worker.ID)
+				return rec.HolderID != "" && rec.HolderID != holder && rec.TurnOpen && rec.TurnMark > child.TurnMark
+			})
+			if len(reports.list()) != 0 || h.holders.opCount("stop "+holder) != 2 {
+				t.Fatal("the deliberate Stop duplicated the old report or stop")
+			}
+			return
+		}
+		if stopError == "close" || stopError == "parent close" {
+			// A close (and a parent's cascade) while the retirement retries
+			// stops the holder first; a failure refuses the close and keeps
+			// the conversation, its holder, and the heartbeat retry.
+			target := worker.ID
+			if stopError == "parent close" {
+				target = "zzparent"
+			}
+			_, err := h.runner.CloseConversation(target)
+			if !errors.Is(err, errHolderNotEnded) || !strings.Contains(err.Error(), "fixture stop failure") {
+				t.Fatalf("close error = %v", err)
+			}
+			if h.holders.opCount("stop "+holder) != 2 {
+				t.Fatalf("the close did not retry the holder's stop: %v", h.holders.opList())
+			}
+			if h.runner.conv(worker.ID) == nil || h.runner.conv("zzparent") == nil {
+				t.Fatal("a refused close dropped a conversation from the runner")
+			}
+			if rec := h.record(worker.ID); rec.HolderID != holder || !rec.TurnOpen || rec.ClosedAt != "" || len(reports.list()) != 0 {
+				t.Fatalf("a refused close forgot the holder, closed, or published: %+v", rec)
+			}
+			if h.record("zzparent").ClosedAt != "" {
+				t.Fatal("the cascade closed the parent over a child it could not close")
+			}
+			c.do(func() {
+				if !c.workerRetiring || !c.replaying || c.proc == nil || c.closed {
+					t.Error("a refused close disarmed the retirement retry")
+				}
+			})
+			c.do(c.heartbeat)
+			if h.holders.opCount("stop "+holder) != 3 {
+				t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+			}
+			h.holders.set(func() { h.holders.stopErr = nil })
+			if _, err := h.runner.CloseConversation(target); err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 4 || h.runner.conv(worker.ID) != nil {
+				t.Fatalf("the close did not retire and close the child: %v", h.holders.opList())
+			}
+			if rec := h.record(worker.ID); rec.HolderID != "" || rec.TurnOpen || rec.ClosedAt == "" {
+				t.Fatalf("closed child = %+v", rec)
+			}
+			if stopError == "parent close" && (h.runner.conv("zzparent") != nil || h.record("zzparent").ClosedAt == "") {
+				t.Fatal("the cascade did not close the parent once the child closed")
+			}
+			if _, err := h.runner.CloseConversation(target); err == nil {
+				t.Fatal("a closed conversation closed again")
+			}
+			if h.holders.opCount("stop "+holder) != 4 || len(reports.list()) != 0 {
+				t.Fatalf("closed twice or published: %v, reports %+v", h.holders.opList(), reports.list())
+			}
+			return
+		}
 		h.holders.set(func() { h.holders.stopErr = nil })
 		if stopError == "already gone" {
 			if err := h.holders.Stop(holder); err != nil {
@@ -171,7 +290,18 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 	}
 	assertSleeping()
 	wantStops := 1
-	if stopError != "" {
+	switch stopError {
+	case "":
+	case "user stop":
+		// Retired once: a later Stop or heartbeat stops nothing more.
+		if _, err := h.runner.Stop(worker.ID); err != nil {
+			t.Fatal(err)
+		}
+		c := h.runner.conv(worker.ID)
+		c.do(c.heartbeat)
+		assertSleeping()
+		wantStops = 4
+	default:
 		wantStops = 2
 	}
 	if h.holders.opCount("stop "+holder) != wantStops {
@@ -459,4 +589,104 @@ func heldWorkerRejoinFailureClears(t *testing.T, steered bool) {
 		return len(last) >= 2 && last[len(last)-1].Result.Status == TurnDone &&
 			strings.Contains(last[len(last)-1].Result.Message, "after rejoin") && !h.record(id).TurnOpen
 	})
+}
+
+// TestWorkerMCPTokenWaitsForStartupRejoin: a graceful replace serves the MCP
+// route before the first holder scan restored the surviving workers'
+// bearers. A request with a restored worker's token in that window waits for
+// the scan and then resolves, instead of a hard 401 the harness would take
+// for "this server needs auth" and drop for the rest of its process; a token
+// never registered stays refused, at the scan's end.
+func TestWorkerMCPTokenWaitsForStartupRejoin(t *testing.T) {
+	h, _ := workerRecoveryHarness(t, BackendCodex, true)
+	id, _ := spawnHeldRecoveryWorker(t, h, BackendCodex, "workdir-write")
+	token := h.record(id).MCPToken
+	if token == "" {
+		t.Fatal("worker has no persisted MCP token")
+	}
+	h.runner.Close()
+	h.holders.restart()
+	entered, release := h.gateScan()
+	defer release()
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "the startup scan to be held open", entered)
+
+	// The route's decision, as wsdashboard.handleProxyHTTP takes it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		tok := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+		if _, _, ok := h.runner.ResolveMCPToken(tok); !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	post := func(tok string) <-chan int {
+		out := make(chan int, 1)
+		go func() {
+			req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
+			req.Header.Set("Authorization", "Bearer "+tok)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				out <- -1
+				return
+			}
+			resp.Body.Close()
+			out <- resp.StatusCode
+		}()
+		return out
+	}
+	restored, stranger := post(token), post("never-registered-token")
+	select {
+	case code := <-restored:
+		t.Fatalf("a restored worker's request answered %d while the startup scan was open", code)
+	case code := <-stranger:
+		t.Fatalf("an unknown token answered %d while the startup scan was open", code)
+	case <-time.After(300 * time.Millisecond):
+	}
+	release()
+	for name, want := range map[string]struct {
+		ch   <-chan int
+		code int
+	}{"restored": {restored, http.StatusOK}, "never-registered": {stranger, http.StatusUnauthorized}} {
+		select {
+		case code := <-want.ch:
+			if code != want.code {
+				t.Errorf("%s token answered %d, want %d", name, code, want.code)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s token's request never answered after the scan", name)
+		}
+	}
+	wait(t, "rejoin", h.runner.rejoined)
+	// Past the rejoin an unknown token is refused at once.
+	begin := time.Now()
+	if _, _, ok := h.runner.ResolveMCPToken("another-unknown"); ok || time.Since(begin) > time.Second {
+		t.Fatalf("after the rejoin an unknown token resolved (%v) or waited (%v)", ok, time.Since(begin))
+	}
+}
+
+// TestMCPTokenRestoredBetweenLookupAndWait: a token the first lookup misses
+// and the startup rejoin then restores, closing rejoined before the wait
+// begins, resolves; it is not refused for a rejoin that is already done.
+func TestMCPTokenRestoredBetweenLookupAndWait(t *testing.T) {
+	r := NewRunner(Options{Dir: t.TempDir()})
+	r.started.Store(true)
+	r.SetEndpoint("http://127.0.0.1:7")
+	restore := mcpAfterMiss
+	t.Cleanup(func() { mcpAfterMiss = restore })
+	var session *MCPSession
+	mcpAfterMiss = func() {
+		// The rejoin restores the token and finishes in the gap.
+		session = r.attachMCP("c1", "restored-token", map[string]string{"X": "1"}, "/w", 1, BackendCodex)
+		session.Started(nil, 1)
+		r.rejoinOnce.Do(func() { close(r.rejoined) })
+	}
+	begin := time.Now()
+	if _, _, ok := r.ResolveMCPToken("restored-token"); !ok {
+		t.Fatal("a token restored between the lookup and the wait was refused")
+	}
+	if time.Since(begin) > time.Second {
+		t.Fatalf("an already-finished rejoin was waited for: %v", time.Since(begin))
+	}
 }

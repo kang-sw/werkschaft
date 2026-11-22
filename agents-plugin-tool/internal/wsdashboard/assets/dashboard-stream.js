@@ -414,13 +414,20 @@
         trackerLost();
         retry(connect, 3000);
       },
-      events: { assets: onAssets, companion: onCompanion, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, gone: onGone }
+      events: { assets: onAssets, companion: onCompanion, "companion-focus": onCompanionFocus, "companion-command": onCompanionCommand, region: onRegion, "board-topics": onBoardTopics, "rail-rows": onRailRows, "tree-rows": onTreeRows, "entry-rows": onEntryRows, "panel-rows": onPanelRows, tracker: onTracker, gone: onGone }
     });
     mainStream = st;
     function onCompanion(config) {
       if (!shell || !current() || !config) return;
       window.wsCompanionConfig = config;
       doc.dispatchEvent(new CustomEvent("ws-companion-config", { detail: config }));
+    }
+    // The daemon hands each shell stream a token its focus report echoes; a
+    // reconnect gets a new one.
+    function onCompanionFocus(focus) {
+      if (!shell || !current() || !focus || typeof focus.token !== "string") return;
+      window.wsCompanionFocusToken = focus.token;
+      doc.dispatchEvent(new CustomEvent("ws-companion-focus", { detail: focus.token }));
     }
     // An agent-director command is broadcast to every shell; the companion
     // keeps only those for the session it shows.

@@ -155,11 +155,12 @@ name-free.
   migration-relevant prerequisite, because it adds Codex permission mapping to
   `support.go`/launch sites in this inventory. Keep this ticket in `todo/`
   until that phase has landed on `develop`. Not prerequisites: that ticket's
-  Phase 4 (agy, owner-account gated) and Phase 5, and
-  `261118-feat-ws-agy-tool-names-and-worker-role` Phase 3 (knob-gated probes),
-  because they wait on external gates and would hold this umbrella
-  indefinitely; any site they add must use the (1880) seam, and Phase 4's
-  residual audit catches what they move. `261117-feat-ws-exec-tools` and the
+  Phase 4 (agy, owner-account gated) and Phase 5, because they wait on
+  external gates and would hold this umbrella indefinitely; any site they add
+  must use the (1880) seam, and Phase 4's residual audit catches what they
+  move. `261118-feat-ws-agy-tool-names-and-worker-role` Phase 3 is not a
+  prerequisite either: it was retired by owner decision (1545) and adds no
+  sites. `261117-feat-ws-exec-tools` and the
   child-session tickets add new code under the same seam rule and are not
   prerequisites. Neither are `261114-feat-ws-live-reasoning-summary` and
   `261115-feat-ws-claude-reasoning-summary-producer`, although they touch
@@ -353,7 +354,10 @@ interpreted through registration data ((1881)).
 Verification: `internal/wsagent` package tests plus focused fixtures for
 permissions, worker admission, cwd/key ownership, holder restart/rejoin,
 handoff/takeover, native steer and child revival, Pi summaries, and the Agy
-settled-activity callback. Run four-harness lead and worker parity checks and
+settled-activity callback. Run four-harness lead parity and Claude/Codex/Pi
+worker parity checks, asserting agy worker same-harness admission and
+cross-harness refusal (owner (1546), revising (1545):
+`261122-feat-ws-agy-same-harness-workers`), and
 measure file operations on start, turn settlement, restart, rejoin, and
 handoff; the migration must not add interactive-path file I/O.
 
@@ -361,6 +365,93 @@ Compatibility verification ((1883)): prove T0 for record/holder JSON, legacy Pi
 session paths, downgrade rejoin, and process behavior with directional writer,
 reader, and reopen evidence. Split any newly found T1+ behavior into its own
 ticket.
+
+### Result (5e35d071a) - 2026-11-23
+
+- **VERIFIED - implementation.** `BackendRegistration` gains two in-memory
+  policy blocks (`internal/wsagent/backend_policy.go`, `registration.go`).
+  `PermissionPolicy` carries the native mode names, the legacy mode map and
+  default, and the live-mode projection flag. `LifecyclePolicy` carries
+  native children, terminal summaries, composed lead instructions, lead
+  HTTP MCP, the lead stdio fallback, usage restore, and turn activity.
+  Executable differences are narrow optional interfaces on the `Backend`
+  instance: `terminalSession` (resume command, session check, adoption) and
+  `nativeModeAdmitter` (Agy bypass admission). They live in the adapter
+  files `{claude,codex,agy,pi}_policy.go`. Common code in `permission.go`,
+  `exec_seams.go`, `runner_{conv,state,create,events,startup,operations,
+  process,lead_start,reattach,summary}.go`, `agent_tools.go`, `children.go`,
+  `spawn.go`, and `handoff.go` now reads that data and no longer compares
+  harness names at those sites. `restoredClaudeUsage` became the unexported
+  `restoredUsage`, gated on `RestoreUsage`.
+- **VERIFIED - parity.** `TestBuiltinBackendPolicyTable` pins every policy
+  value and interface for the four built-ins with literal expectations.
+  `TestRegisteredPolicyDrivesCommonCode` shows that a fixture backend with
+  a declared policy drives common code, and that a built-in name registered
+  without a declaration gets no behavior, so a new backend needs no common
+  edit. `TestNativeModeAdmission`, `TestTerminalSessionAdoption`, and
+  `TestBuiltinRegistrationPolicyIsNotShared` cover admission, takeover and
+  handoff adoption, and clone isolation. Test fixtures that stand a fake
+  process behind a built-in name now declare that name's policy.
+- **VERIFIED - T0.** The policy types have no JSON tags and are not written
+  to a `Profile`, `Record`, holder file, or config, so reader, writer, and
+  reopen bytes are unchanged in both directions. The only symbol rename is
+  unexported. Holder kind `pi-worker` and `PiTierHarness` stay name-based
+  because they are persisted bytes, each annotated at its site (1881) and
+  the holder one pinned by `TestWorkerHolderOwnership`.
+- **VERIFIED - file operations.** The new lookups are in-memory map reads
+  on the registration. Source inspection found no added file operation on
+  start, settlement, restart, rejoin, or handoff paths. No syscall trace
+  was collected.
+- **Decision.** A name with no registration, or a registration without
+  `terminalSession`, now gets the generic "not supported" takeover/handoff
+  refusal. A registered Codex gets the identical text as before. For an
+  extension backend with a lead profile and no `terminalSession`, handoff
+  now returns the 400 class where it previously returned 409 "no
+  conversation to resume"; no built-in is affected.
+- **Deferred to Phase 4's inventory refresh.** `compaction.go` Pi/Claude
+  branches, `exec_cutover.go` Codex/Claude branches, the Agy helpers in
+  `record.go` and `agy_bypass.go`, `newAgyLog` in `runner_lead_start.go`,
+  `heldAgyWorker` and `agyInternalPrompt` in `runner_process.go`, the shim
+  remedy `"claude"` in `backend.go`, and the Pi legacy permission modes in
+  `registration.go` (kept from Phase 1).
+
+**VERIFIED - local checks.** Run from `agents-plugin-tool/` after merging
+develop (`4b52213c3`) into the branch:
+
+```sh
+go build ./...
+go vet ./internal/wsagent ./internal/mcp ./cmd/...
+GOOS=windows go vet ./internal/wsagent ./internal/mcp ./cmd/...
+go test ./internal/wsagent -count=1
+go test ./internal/wsdashboard
+go test ./internal/mcp -count=1 -timeout 45m
+go test ./cmd/ws-mcp
+```
+
+`internal/wsagent` and `internal/mcp` ran again after the develop merge;
+`internal/wsdashboard` and `cmd/ws-mcp` ran on the pre-merge commit and
+were not rerun after it. `internal/wsagent` and `internal/wsdashboard`
+passed. In `internal/mcp` and `cmd/ws-mcp`, only tests that need the gitignored
+`generated/inventory.json` (the dashboard catalog and tier-routing views)
+and the hosted launcher asset test failed. They fail in this checkout for
+that missing-asset reason, which is environmental. No race run was done in
+this phase.
+
+**Edition (Phase 2, takeover adoption).** A codex review found that
+takeover adoption followed the source harness while the record is stamped
+with the resolved profile backend. A whole-profile override can make those
+differ. Base behavior chose the permission clear and the `SessionFile` versus
+`SessionID` write by the resolved target. The source harness's
+`terminalSession` now only validates the terminal session
+(`checkTerminalSession`). `Runner.adoptTerminalSession` adopts under
+`rec.Backend`. A target with no `terminalSession` (Codex) gets the generic
+adoption, which clears the native mode and sets the session id, as before.
+`TestTakeoverAdoptsUnderTheResolvedTargetBackend` pins the record shape for a
+Pi terminal under a Claude profile and a Claude terminal under a Pi profile,
+and fails against the source-keyed adoption. It also checks the first
+launch's resume flag and permission mode and, for the Claude target, the
+hand-off resume command end to end. `go test ./internal/wsagent`,
+`go vet` on darwin and `GOOS=windows` pass.
 
 ### Phase 3: Migrate MCP detection, prompt terminology, and dashboard consumers
 
@@ -409,7 +500,9 @@ reasoning-summary tickets) then has to route harness differences through the
 (1880) seam or extend the allowlist under (1881)'s rule in its own diff.
 
 Verification: the Phase 1-3 package suites together; four-harness hosted lead
-and `agent.spawn` worker parity; restart/rejoin/handoff and downgrade fixtures;
+parity and Claude/Codex/Pi `agent.spawn` worker parity with agy worker
+same-harness admission and cross-harness refusal asserted ((1546));
+restart/rejoin/handoff and downgrade fixtures;
 MCP legacy-call and detector fixtures; race coverage for touched lifecycle
 paths; and syscall/file-operation measurements against the pre-change
 baseline. For each retained common-code name check, verify its regression
