@@ -11,6 +11,12 @@
 
   var TERMINALS = ".bcard[data-kind='terminal'], .tm-host, .xterm";
   var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, TEMPLATE: 1, TEXTAREA: 1, INPUT: 1, SELECT: 1, SVG: 1, NOSCRIPT: 1 };
+  // Phrasing elements a match may run across (doc-frame.js keeps the same set).
+  var INLINE_TAGS = { A: 1, ABBR: 1, B: 1, BDI: 1, BDO: 1, CITE: 1, CODE: 1, DATA: 1, DEL: 1, DFN: 1, EM: 1, FONT: 1, I: 1, INS: 1, KBD: 1, LABEL: 1, MARK: 1, Q: 1, S: 1, SAMP: 1, SMALL: 1, SPAN: 1, STRONG: 1, SUB: 1, SUP: 1, TIME: 1, U: 1, VAR: 1 };
+  // A frame reports its own match count; the host keeps one index segment
+  // per frame and caps what it accepts, so a frame's script cannot make the
+  // host allocate or walk an arbitrary number of entries.
+  var FRAME_MATCH_MAX = 100000;
 
   function elOf(node) { return node && (node.nodeType === 1 ? node : node.parentElement); }
   function visible(el) {
@@ -91,7 +97,8 @@
     var walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, {
       acceptNode: function (node) {
         var p = node.parentElement;
-        if (!p || !node.nodeValue || !node.nodeValue.trim()) return 2 /* FILTER_REJECT */;
+        // Whitespace-only nodes stay: they join words across inline tags.
+        if (!p || !node.nodeValue) return 2 /* FILTER_REJECT */;
         if (skipEl && (p === skipEl || skipEl.contains(p))) return 2;
         if (SKIP_TAGS[p.tagName]) return 2;
         if (p.closest && p.closest(".wb-find-bar, script, style, template, textarea, input, select, svg")) return 2;
@@ -103,32 +110,66 @@
     while ((n = walker.nextNode())) nodes.push(n);
     return nodes;
   }
+  function blockOf(node, root) {
+    var p = node.parentElement;
+    while (p && p !== root && INLINE_TAGS[p.tagName]) p = p.parentElement;
+    return p;
+  }
+  // markRuns wraps each case-insensitive match of needle in mark.wb-find-hit.
+  // A block's consecutive text nodes are searched as one string, so a phrase
+  // crossing <strong> or <a> still matches. A match may need several marks;
+  // the first is returned and carries all of them as wbFindGroup.
+  function markRuns(d, nodes, needle, root) {
+    var out = [], i = 0, k;
+    while (i < nodes.length) {
+      var block = blockOf(nodes[i], root), run = [], starts = [], text = "";
+      while (i < nodes.length && blockOf(nodes[i], root) === block) {
+        var val = nodes[i].nodeValue, low = val.toLowerCase();
+        if (low.length !== val.length) low = val; // keep offsets aligned
+        run.push(nodes[i]);
+        starts.push(text.length);
+        text += low;
+        i++;
+      }
+      var cuts = run.map(function () { return []; }), groups = [];
+      for (var idx = text.indexOf(needle); idx >= 0; idx = text.indexOf(needle, idx + needle.length)) {
+        var end = idx + needle.length, g = [];
+        for (k = 0; k < run.length; k++) {
+          var s0 = starts[k], e0 = s0 + run[k].nodeValue.length;
+          if (e0 > idx && s0 < end) cuts[k].push([Math.max(idx, s0) - s0, Math.min(end, e0) - s0, g]);
+        }
+        groups.push(g);
+      }
+      for (k = 0; k < run.length; k++) {
+        if (!cuts[k].length) continue;
+        var node = run[k], v = node.nodeValue, frag = d.createDocumentFragment(), pos = 0;
+        cuts[k].forEach(function (c) {
+          if (c[0] > pos) frag.appendChild(d.createTextNode(v.slice(pos, c[0])));
+          var mark = d.createElement("mark");
+          mark.className = "wb-find-hit";
+          mark.textContent = v.slice(c[0], c[1]);
+          frag.appendChild(mark);
+          c[2].push(mark);
+          pos = c[1];
+        });
+        if (pos < v.length) frag.appendChild(d.createTextNode(v.slice(pos)));
+        if (node.parentNode) node.parentNode.replaceChild(frag, node);
+      }
+      groups.forEach(function (g) {
+        if (!g.length) return;
+        g[0].wbFindGroup = g;
+        out.push(g[0]);
+      });
+    }
+    return out;
+  }
+  function hitMarks(m) { return m.wbFindGroup || [m]; }
   function highlightNode(root, query, skipEl) {
     clearHighlights(root);
     if (!root || !query) return [];
-    var needle = query.toLowerCase(), len = needle.length;
-    if (!len) return [];
-    var textNodes = collectTextNodes(root, skipEl);
-    var marks = [];
-    textNodes.forEach(function (node) {
-      var val = node.nodeValue, lower = val.toLowerCase();
-      var idx = lower.indexOf(needle);
-      if (idx < 0) return;
-      var frag = doc.createDocumentFragment(), pos = 0;
-      while (idx >= 0) {
-        if (idx > pos) frag.appendChild(doc.createTextNode(val.slice(pos, idx)));
-        var mark = doc.createElement("mark");
-        mark.className = "wb-find-hit";
-        mark.textContent = val.slice(idx, idx + len);
-        frag.appendChild(mark);
-        marks.push(mark);
-        pos = idx + len;
-        idx = lower.indexOf(needle, pos);
-      }
-      if (pos < val.length) frag.appendChild(doc.createTextNode(val.slice(pos)));
-      if (node.parentNode) node.parentNode.replaceChild(frag, node);
-    });
-    return marks;
+    var needle = query.toLowerCase();
+    if (!needle.length) return [];
+    return markRuns(doc, collectTextNodes(root, skipEl), needle, root);
   }
 
   var state = {
@@ -142,7 +183,8 @@
     seq: 0,
     hostMarks: [],
     frames: [],       // [{ el, count }]
-    items: [],        // [{ kind: "host", el } | { kind: "frame", frame, local }]
+    items: [],        // DOM-ordered segments: { kind: "host", el, start } | { kind: "frame", frame, count, start }
+    total: 0,         // matches across all segments
     index: -1,
     restoreFocus: null
   };
@@ -242,7 +284,6 @@
   }
 
   function rebuildIndex(resetPos) {
-    var list = [];
     // Order matches in DOM order by comparing host marks and frame elements.
     var parts = [];
     state.hostMarks.forEach(function (m) { parts.push({ kind: "host", node: m, el: m }); });
@@ -254,19 +295,32 @@
       if (!a.node.compareDocumentPosition) return 0;
       return (a.node.compareDocumentPosition(b.node) & 4) ? -1 : 1;
     });
+    // A frame stays one segment of count matches; itemAt resolves an index.
+    var total = 0;
     parts.forEach(function (p) {
-      if (p.kind === "host") list.push({ kind: "host", el: p.el });
-      else for (var i = 0; i < p.count; i++) list.push({ kind: "frame", frame: p.frame, local: i });
+      p.start = total;
+      total += p.kind === "host" ? 1 : p.count;
     });
-    state.items = list;
-    if (!list.length) state.index = -1;
-    else if (resetPos || state.index < 0 || state.index >= list.length) state.index = 0;
+    state.items = parts;
+    state.total = total;
+    if (!total) state.index = -1;
+    else if (resetPos || state.index < 0 || state.index >= total) state.index = 0;
     paintCount();
     focusCurrent(resetPos);
   }
+  function itemAt(index) {
+    if (index < 0 || index >= state.total) return null;
+    for (var i = 0; i < state.items.length; i++) {
+      var p = state.items[i], n = p.kind === "host" ? 1 : p.count;
+      if (index < p.start + n) {
+        return p.kind === "host" ? { kind: "host", el: p.el } : { kind: "frame", frame: p.frame, local: index - p.start };
+      }
+    }
+    return null;
+  }
   function paintCount() {
     if (!state.countEl) return;
-    var q = state.query, total = state.items.length;
+    var q = state.query, total = state.total;
     if (!q) {
       state.countEl.textContent = "";
       state.countEl.classList.remove("wb-find-none");
@@ -279,8 +333,10 @@
     if (state.nextBtn) state.nextBtn.disabled = dis;
   }
   function focusCurrent(scroll) {
-    state.hostMarks.forEach(function (m) { m.classList.remove("wb-find-cur"); });
-    var cur = state.index >= 0 ? state.items[state.index] : null;
+    state.hostMarks.forEach(function (m) {
+      hitMarks(m).forEach(function (h) { h.classList.remove("wb-find-cur"); });
+    });
+    var cur = itemAt(state.index);
     state.frames.forEach(function (fr) {
       if (!cur || cur.kind !== "frame" || cur.frame !== fr.el) {
         postToFrame(fr.el, { wbDoc: "find-focus", seq: state.seq, index: -1 });
@@ -288,7 +344,7 @@
     });
     if (!cur) return;
     if (cur.kind === "host") {
-      cur.el.classList.add("wb-find-cur");
+      hitMarks(cur.el).forEach(function (h) { h.classList.add("wb-find-cur"); });
       if (scroll && cur.el.scrollIntoView) cur.el.scrollIntoView({ block: "center", behavior: "auto" });
     } else if (cur.kind === "frame") {
       postToFrame(cur.frame, { wbDoc: "find-focus", seq: state.seq, index: cur.local, scroll: !!scroll });
@@ -325,8 +381,8 @@
     rebuildIndex(resetPos);
   }
   function step(delta) {
-    if (!state.items.length) return;
-    state.index = stepIndex(state.index, state.items.length, delta);
+    if (!state.total) return;
+    state.index = stepIndex(state.index, state.total, delta);
     paintCount();
     focusCurrent(true);
   }
@@ -346,6 +402,7 @@
     state.hostMarks = [];
     state.frames = [];
     state.items = [];
+    state.total = 0;
     state.index = -1;
     state.restoreFocus = null;
     if (prevFocus && prevFocus.isConnected && prevFocus.focus) {
@@ -390,7 +447,7 @@
     if (!state.card || seq !== state.seq) return;
     var entry = state.frames.filter(function (f) { return f.el === frame; })[0];
     if (!entry) return;
-    entry.count = Math.max(0, count | 0);
+    entry.count = Math.min(FRAME_MATCH_MAX, Math.max(0, count | 0));
     rebuildIndex(state.index < 0);
   }
   function onFrameScroll(frame, seq, top, height) {
@@ -450,6 +507,7 @@
     setHoveredFrame: setHoveredFrame,
     onFrameResult: onFrameResult,
     onFrameScroll: onFrameScroll,
+    itemAt: itemAt,
     state: state
   };
 })();
