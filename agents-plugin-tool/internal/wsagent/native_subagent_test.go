@@ -594,3 +594,57 @@ func TestAgyNativeLaunchCorrelationEndsWithTheRow(t *testing.T) {
 		t.Fatalf("forgotten correlations after the replay = %v", proc.forgot)
 	}
 }
+
+// TestAgyNativeReplayKeepsHistoricalRetention: six agy launches in separate
+// completed turns leave the newest five rows in the recovery cache. A rejoin
+// whose holder ring still holds all six starts replays the oldest one, whose
+// settlement left no record. That row closes end-unknown at the replay's end
+// without displacing the five newer restored rows, which keep their stored
+// values.
+func TestAgyNativeReplayKeepsHistoricalRetention(t *testing.T) {
+	previous := suiteBackend
+	suiteBackend = BackendAgy
+	t.Cleanup(func() { suiteBackend = previous })
+	h := newHarness(t, map[string]string{"chat": chatProfile})
+	id := h.create("chat").ID
+	if _, err := h.runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	p := h.backend.waitProc(t, 0)
+	p.nextSent(t)
+	c := h.runner.conv(id)
+	launch := func(i int) string { return wslive.NativeAgyPrefix + "launch-" + strconv.Itoa(i) }
+	c.do(func() {
+		var restored wslive.Snapshot
+		restored.ReplyID = c.live.st.ReplyID()
+		base := time.Now().Add(-time.Hour).UnixMilli()
+		for i := 2; i <= 6; i++ {
+			at := base + int64(i)*60_000
+			restored.Agents = append(restored.Agents, wslive.Agent{ID: launch(i), Label: "research", Status: wslive.StatusDone,
+				StartedAt: at - 30_000, EndedAt: at, EndUnknown: true, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: at}})
+		}
+		c.live.st.SeedFinished(restored)
+		c.replaying = true
+		quiet := func(ev Event) { ev.Replay = true; c.handle(ev) }
+		for i := 1; i <= 6; i++ {
+			quiet(Event{TurnStart: true})
+			quiet(nativeRowEvent(launch(i), "research", wslive.StatusRunning))
+			quiet(Event{TurnEnd: true})
+		}
+		c.handle(Event{ReplayDone: true})
+		snap := c.live.st.Snapshot(time.Now().UnixMilli())
+		for _, want := range restored.Agents {
+			got, ok := snapAgent(snap, want.ID)
+			if !ok {
+				t.Errorf("restored row %s was displaced", want.ID)
+				continue
+			}
+			if got.Status != want.Status || got.StartedAt != want.StartedAt || got.EndedAt != want.EndedAt || !got.EndUnknown {
+				t.Errorf("restored row %s = %+v, want its stored values %+v", want.ID, got, want)
+			}
+		}
+		if a, ok := snapAgent(snap, launch(1)); ok {
+			t.Errorf("the oldest launch displaced a newer restored row: %+v", a)
+		}
+	})
+}

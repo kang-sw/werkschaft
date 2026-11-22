@@ -867,7 +867,7 @@ func (c *conv) processEnded() {
 	// rows a live turn end accepted during it, before endAgents fails the
 	// rest.
 	deferred := c.agyNativeDeferred
-	c.agyNativeDeferred = nil
+	c.agyNativeDeferred, c.agyNativeReplay = nil, agyNativeReplayOrder{}
 	c.settleAgyNative(deferred)
 	c.live.endAgents()
 	c.live.writeSnapshot()

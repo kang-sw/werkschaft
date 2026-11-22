@@ -218,6 +218,9 @@ type conv struct {
 	// in this order, so a launch failure buffered later in the same replay
 	// still ends its row failed.
 	agyNativeDeferred []agyNativeSettle
+	// agyNativeReplay places the agy native rows a replay rebuilds in the
+	// history the restored recovery cache holds (agyNativeReplayEnd).
+	agyNativeReplay agyNativeReplayOrder
 	// rejoinErr is a worker rejoin's start failure: checkReattach ends that
 	// recovery after the scan instead of waiting on a replay with no process.
 	rejoinErr       string
@@ -1189,6 +1192,7 @@ func (c *conv) applyCoalesced(ev wslive.Event, quiet bool) {
 }
 
 func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
+	c.noteAgyNativeReplay(ev, quiet)
 	if !quiet {
 		c.observeCompaction(ev)
 	}
@@ -1309,13 +1313,75 @@ func (c *conv) finishAgyNativeReplay() {
 	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
 		rest = append(rest, agyNativeSettle{id, c.agyNativeReplayEnd(id)})
 	}
+	c.agyNativeReplay = agyNativeReplayOrder{}
 	c.settleAgyNative(rest)
 }
 
+// agyNativeReplayOrder places the agy native rows a replay rebuilds. Holder
+// records carry no time, so a replayed record maps at the replay's clock;
+// the restored rows the replay passes (rows the recovery cache kept, which
+// the reducer leaves as they are) give the history its order instead.
+type agyNativeReplayOrder struct {
+	// anchor is the latest end of a restored row the replay passed so far,
+	// floor the earliest one.
+	anchor, floor int64
+	// quiet maps a row the replay rebuilt from records the previous daemon
+	// applied to the anchor at its last record; live holds a row a record
+	// past the holder's sequence mark touched.
+	quiet map[string]int64
+	live  map[string]bool
+}
+
+// noteAgyNativeReplay records where an agy native row event of a replay
+// falls in the restored history, before it is applied.
+func (c *conv) noteAgyNativeReplay(ev wslive.Event, quiet bool) {
+	if !c.replaying || ev.Kind != wslive.KindAgent || !strings.HasPrefix(ev.AgentID, wslive.NativeAgyPrefix) {
+		return
+	}
+	o := &c.agyNativeReplay
+	_, rebuilt := o.quiet[ev.AgentID]
+	if endedAt, ended, ok := c.live.st.AgentEnd(ev.AgentID); ok && ended && !rebuilt && !o.live[ev.AgentID] {
+		if endedAt > 0 {
+			o.anchor = max(o.anchor, endedAt)
+			if o.floor == 0 || endedAt < o.floor {
+				o.floor = endedAt
+			}
+		}
+		return
+	}
+	if !quiet {
+		if o.live == nil {
+			o.live = map[string]bool{}
+		}
+		o.live[ev.AgentID] = true
+		return
+	}
+	if o.quiet == nil {
+		o.quiet = map[string]int64{}
+	}
+	o.quiet[ev.AgentID] = o.anchor
+}
+
 // agyNativeReplayEnd is when a rejoin's observation of the agy native row id
-// ended.
-func (c *conv) agyNativeReplayEnd(string) int64 {
-	return c.r.opts.Now().UnixMilli()
+// ended, for its retention rank. A row records past the holder's sequence
+// mark touched was observed until now. A row rebuilt only from records the
+// previous daemon applied keeps its historical place: the end of the latest
+// restored row the replay passed before its last record, or, before every
+// one, just under the earliest such end. Without restored rows in the
+// replay, now.
+func (c *conv) agyNativeReplayEnd(id string) int64 {
+	o := c.agyNativeReplay
+	now := c.r.opts.Now().UnixMilli()
+	anchor, rebuilt := o.quiet[id]
+	switch {
+	case o.live[id] || !rebuilt:
+		return now
+	case anchor > 0:
+		return anchor
+	case o.floor > 1:
+		return o.floor - 1
+	}
+	return now
 }
 
 // settleAgyNative ends each of rows that still runs done as observation

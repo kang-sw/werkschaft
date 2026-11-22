@@ -627,6 +627,16 @@ func (st *State) nativeSettled(ev Event) bool {
 	return ok && a.status != StatusRunning
 }
 
+// AgentEnd reports subagent id's end time and whether it ended (done or
+// failed); ok is false when the state holds no such row.
+func (st *State) AgentEnd(id string) (endedAt int64, ended, ok bool) {
+	a, ok := st.agents[id]
+	if !ok {
+		return 0, false, false
+	}
+	return a.endedAt, a.status != StatusRunning, true
+}
+
 // RunningAgents lists the running subagents whose id starts with prefix, in
 // id order.
 func (st *State) RunningAgents(prefix string) []string {
@@ -710,8 +720,11 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		if a.status == StatusRunning && ev.EndUnknown && a.kind != AgentKindPi {
 			// Observation ended, not necessarily the subagent: the end time
 			// is the observation's end, flagged unknown, and the unobserved
-			// span adds no work.
-			a.endedAt, a.turnStartedAt, a.endUnknown = max(at, a.startedAt), 0, true
+			// span adds no work. An observation end placed before the row's
+			// start (a row a replay rebuilt, whose start carries the replay's
+			// clock, ranked by its historical place) moves the start to it.
+			a.startedAt = min(a.startedAt, at)
+			a.endedAt, a.turnStartedAt, a.endUnknown = at, 0, true
 		} else if a.status == StatusRunning {
 			a.endedAt, a.endUnknown = at, false
 			if a.kind != AgentKindPi {
