@@ -228,6 +228,11 @@ type agyLogLine struct {
 // parseAgyStallTail judges a tail against the request boundary, in the
 // boundary's location:
 //   - coverage: the first complete glog line is before boundary-skew;
+//   - currency (headerless only): the last glog line is at or after
+//     boundary-skew. A tail that ends before the window may be a cached log
+//     its worker stopped writing (agy replaced the worker under the same
+//     front process and the current request logs elsewhere), so it proves
+//     nothing about the current request;
 //   - format: at least one streamGenerateContent header line (main or
 //     monitor) is in this tail;
 //   - a header line counts as main unless its goroutine logged an
@@ -239,8 +244,9 @@ type agyLogLine struct {
 // in the tail, inside the window or not.
 //
 // An ambiguous local time counts on the side that never cuts: a header in
-// the window under either reading is in the window, and the first line
-// covers the boundary only if both readings precede the window.
+// the window under either reading is in the window, the first line covers
+// the boundary only if both readings precede the window, and the last line
+// is current only if both readings are in the window.
 func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.Duration) (verdict agyStallVerdict, anyMain bool, reason string) {
 	if boundary.IsZero() {
 		return agyStallUnknown, false, "no request boundary"
@@ -289,6 +295,8 @@ func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.
 		return agyStallUnknown, anyMain, "the agy log tail holds no recognized streamGenerateContent header line"
 	case main:
 		return agyStallHeader, anyMain, ""
+	case lines[len(lines)-1].at.Before(window):
+		return agyStallUnknown, anyMain, "the agy log tail ends before the request boundary"
 	}
 	return agyStallHeaderless, anyMain, ""
 }

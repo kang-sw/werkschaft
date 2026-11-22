@@ -112,6 +112,10 @@ type fakeHolders struct {
 	timeouts    int
 	// spawnErr fails Spawn and stopErr Stop (the holder stays).
 	spawnErr, stopErr error
+	// captureBlock, when set, holds every CaptureNote until it closes;
+	// captureCalls counts the CaptureNote calls begun.
+	captureBlock chan struct{}
+	captureCalls int
 	// refuse answers a control request of a subtype with an error; any
 	// other control request written to a child is answered with success,
 	// as a harness answers it.
@@ -404,6 +408,13 @@ func (f *fakeHolders) Input(id string, data []byte, eof bool) error {
 // CaptureNote is the holder's capture_note operation: a holder whose child
 // was spawned with a frame capture takes the note, any other answers false.
 func (f *fakeHolders) CaptureNote(id, text string) (bool, error) {
+	f.mu.Lock()
+	f.captureCalls++
+	block := f.captureBlock
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
 	if err := f.call(id, "capture_note"); err != nil {
 		return false, err
 	}
@@ -418,6 +429,13 @@ func (f *fakeHolders) CaptureNote(id, text string) (bool, error) {
 	}
 	h.notes = append(h.notes, text)
 	return true, nil
+}
+
+// captureCallCount is the number of CaptureNote calls begun.
+func (f *fakeHolders) captureCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.captureCalls
 }
 
 // captureNotes are the capture notes holder id took.

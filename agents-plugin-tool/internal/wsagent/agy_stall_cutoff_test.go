@@ -154,7 +154,8 @@ func (r *stallRig) writeLog(lines ...string) {
 // baseLog is a verified tail with no main header since the boundary:
 // covered from a minute before it, naming the session, holding one monitor
 // header, and one main header of an earlier request of this process (the
-// first-request safeguard is past).
+// first-request safeguard is past). extra lines join it in time order, as
+// agy writes them (glog lines of one month sort by their text).
 func (r *stallRig) baseLog(extra ...string) {
 	b := r.boundary
 	lines := []string{
@@ -164,7 +165,9 @@ func (r *stallRig) baseLog(extra ...string) {
 		agyGlogMonitor(b.Add(time.Second), 7),
 		agyGlogHeader(b.Add(time.Second), 7),
 	}
-	r.writeLog(append(lines, extra...)...)
+	lines = append(lines, extra...)
+	slices.SortStableFunc(lines, func(a, b string) int { return strings.Compare(a[:21], b[:21]) })
+	r.writeLog(lines...)
 }
 
 // monitorOnlyLog is a verified tail whose only headers are a monitor's: the
@@ -205,6 +208,13 @@ func (r *stallRig) fireSilence(after time.Duration) {
 	r.t.Helper()
 	r.sync()
 	r.clock.advance(after)
+	r.timers.fire(r.t, r.newestSilenceTimer())
+	r.sync()
+}
+
+// newestSilenceTimer is the index of the last silence timer started.
+func (r *stallRig) newestSilenceTimer() int {
+	r.t.Helper()
 	r.timers.mu.Lock()
 	idx := -1
 	for i, d := range r.timers.durs {
@@ -216,8 +226,7 @@ func (r *stallRig) fireSilence(after time.Duration) {
 	if idx < 0 {
 		r.t.Fatal("no silence timer was started")
 	}
-	r.timers.fire(r.t, idx)
-	r.sync()
+	return idx
 }
 
 func (r *stallRig) cancels() int {
@@ -303,80 +312,59 @@ func TestAgyStallCutoffAfterPromptWithNoMainHeader(t *testing.T) {
 	}
 }
 
-func TestAgyStallCutoffAfterToolCompletionWithNoNewHeader(t *testing.T) {
+// A tool completion has no time known to precede agy's next request, so
+// that request has no boundary: the silence timer stays off and even a
+// firing that raced the completion does not cut, though the log shows no
+// header since.
+func TestAgyStallCutoffToolCompletionSuppressesTheCut(t *testing.T) {
 	r := newStallRig(t, 45, 3, nil)
 	r.out(agyToolStartLine)
 	r.until("the pending tool call", func(c *conv) bool { return c.modelWaitPending == 1 })
 	if r.armed() {
 		t.Fatal("a pending tool call left the silence timer running")
 	}
-	// The request that produced the tool call had headers before the
-	// tool finished; they do not count for the request after it.
-	r.baseLog(agyGlogHeader(r.boundary.Add(5*time.Second), 9))
-	done := r.clock.advance(100 * time.Second)
+	r.baseLog()
+	r.clock.advance(100 * time.Second)
 	r.out(agyToolDoneLine)
 	r.until("the tool completion", func(c *conv) bool { return c.modelWaitPending == 0 })
-	if b := r.boundaryNow(); !b.Equal(done) {
-		t.Fatalf("boundary = %v, want the tool completion %v", b, done)
-	}
-	r.fireSilence(stallTimeout)
-	if got := r.cancels(); got != 1 {
-		t.Fatalf("cancels = %d, want one interrupt after the tool's request stalled", got)
-	}
+	r.expectNoBoundaryNoCut("after a tool completion")
 }
 
-// The stream reader stamps a tool completion when it receives the line,
-// before the event queue: a loop that handles the completion seconds later
-// still keeps the next request's header, logged in between, in the window.
-func TestAgyStallCutoffToolCompletionBoundaryIsTheReaderTime(t *testing.T) {
+// The completion reaches the mapper late (held behind the holder's ring or
+// the stream's backpressure) while agy's next request already has its main
+// header, logged outside the skew window before the late receipt: no
+// boundary from the receipt, so no cut.
+func TestAgyStallCutoffLateDeliveredToolCompletionNeverCuts(t *testing.T) {
 	r := newStallRig(t, 45, 3, nil)
 	r.out(agyToolStartLine)
 	r.until("the pending tool call", func(c *conv) bool { return c.modelWaitPending == 1 })
-	r.baseLog()
 	done := r.clock.advance(100 * time.Second)
-	c := r.conv()
-	c.do(func() {
-		// The loop is busy: the reader takes the completion now, and the
-		// loop handles it only after agy's next request has headers.
-		queued := len(c.events)
-		r.h.holders.out(r.holder, agyToolDoneLine)
-		deadline := time.Now().Add(5 * time.Second)
-		for len(c.events) == queued && time.Now().Before(deadline) {
-			time.Sleep(time.Millisecond)
-		}
-		r.clock.advance(4 * time.Second)
-		r.baseLog(agyGlogHeader(done.Add(time.Second), 9))
-	})
+	// agy finished the tool at done and started its next request a second
+	// later; the completion line is delivered five seconds after that.
+	r.baseLog(agyGlogHeader(done.Add(time.Second), 9))
+	r.clock.advance(5 * time.Second)
+	r.out(agyToolDoneLine)
 	r.until("the tool completion", func(c *conv) bool { return c.modelWaitPending == 0 })
-	if b := r.boundaryNow(); !b.Equal(done) {
-		t.Fatalf("boundary = %v, want the reader's receipt %v (loop handled it at %v)", b, done, r.clock.Now())
-	}
-	r.fireSilence(stallTimeout)
-	if got, spent := r.cancels(), r.retries(); got != 0 || spent != 0 {
-		t.Fatalf("a request with headers after a late-handled completion: cancels=%d retries=%d", got, spent)
-	}
+	r.expectNoBoundaryNoCut("after a late-delivered tool completion")
 }
 
-// A completion event with no reader time leaves the attempt without a
-// boundary: no silence timer, no cut.
-func TestAgyStallCutoffCompletionWithoutReaderTimeNeverCuts(t *testing.T) {
-	r := newStallRig(t, 45, 3, nil)
-	r.baseLog()
-	c := r.conv()
-	c.do(func() {
-		c.onModelActivity(1, false, time.Time{})
-		c.onModelActivity(0, false, time.Time{})
-	})
+// expectNoBoundaryNoCut checks an attempt with no boundary: no silence
+// timer, and a firing that raced its disarm (run directly) neither cuts nor
+// spends a retry.
+func (r *stallRig) expectNoBoundaryNoCut(what string) {
+	r.t.Helper()
 	if b := r.boundaryNow(); !b.IsZero() {
-		t.Fatalf("boundary = %v, want none", b)
+		r.t.Fatalf("%s: boundary = %v, want none", what, b)
 	}
 	if r.armed() {
-		t.Fatal("the silence timer runs with no boundary")
+		r.t.Fatalf("%s: the silence timer runs with no boundary", what)
 	}
+	r.clock.advance(10 * time.Minute)
+	c := r.conv()
 	c.do(func() { c.modelWaitTimedOut() })
 	r.sync()
-	if got := r.cancels(); got != 0 {
-		t.Fatalf("cancels = %d with no boundary", got)
+	if got, spent := r.cancels(), r.retries(); got != 0 || spent != 0 {
+		r.t.Fatalf("%s: cancels=%d retries=%d, want none", what, got, spent)
 	}
 }
 
@@ -499,6 +487,8 @@ func TestAgyStallCutoffContinueStartsAFreshWindow(t *testing.T) {
 	if b := r.boundaryNow(); !b.Equal(continued) {
 		t.Fatalf("boundary = %v, want the automatic continue %v", b, continued)
 	}
+	// agy logs the continue's prompt and no header after it.
+	r.baseLog(agyGlogHeader(r.boundary.Add(5*time.Second), 9), agyGlogUserMessage(continued, 2, "agy-s1"))
 	r.fireSilence(stallTimeout)
 	if got, spent := r.cancels(), r.retries(); got != 2 || spent != 1 {
 		t.Fatalf("after continue: cancels=%d retries=%d, want a second cut on the shared budget", got, spent)
@@ -692,6 +682,8 @@ func TestAgyFrameTraceOnAddsGODEBUGCaptureAndCutoffMarker(t *testing.T) {
 	if r.cancels() != 1 {
 		t.Fatal("no cutoff")
 	}
+	// The marker is asked for off the loop, after the interrupt.
+	eventually(t, "the cutoff marker", func() bool { return len(r.h.holders.captureNotes(r.holder)) == 1 })
 	notes := r.h.holders.captureNotes(r.holder)
 	if len(notes) != 1 || !strings.HasPrefix(notes[0], "ws: headerless cutoff boundary="+r.boundary.Local().Format(time.RFC3339Nano)+" cutoff=") {
 		t.Fatalf("capture notes = %q", notes)
@@ -718,6 +710,7 @@ func TestAgyFrameTraceMarkerFollowsTheRunningHolder(t *testing.T) {
 	if r.cancels() != 1 {
 		t.Fatal("no cutoff")
 	}
+	eventually(t, "the marker request", func() bool { return r.h.holders.captureCallCount() == 1 })
 	if notes := r.h.holders.captureNotes(r.holder); len(notes) != 0 {
 		t.Fatalf("a holder spawned without a capture took notes %q", notes)
 	}
@@ -734,9 +727,36 @@ func TestAgyFrameTraceMarkerFollowsTheRunningHolder(t *testing.T) {
 	oc.do(func() { oc.loadModelWait() })
 	on.baseLog()
 	on.fireSilence(stallTimeout)
+	eventually(t, "the marker", func() bool { return len(on.h.holders.captureNotes(on.holder)) == 1 })
 	if notes := on.h.holders.captureNotes(on.holder); on.cancels() != 1 || len(notes) != 1 {
 		t.Fatalf("knob turned off on a capturing holder: cancels=%d notes=%q", on.cancels(), notes)
 	}
+}
+
+// The marker is a diagnostic: the interrupt goes out while the holder's
+// capture_note is still blocked, and the note lands once the holder
+// answers.
+func TestAgyFrameTraceMarkerNeverDelaysTheInterrupt(t *testing.T) {
+	r := newStallRig(t, 45, 3, map[string]string{wsconfig.ItemAgyHTTP2FrameTrace: "true"})
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	r.h.holders.mu.Lock()
+	r.h.holders.captureBlock = release
+	r.h.holders.mu.Unlock()
+	r.baseLog()
+	r.sync()
+	r.clock.advance(stallTimeout)
+	r.timers.fire(t, r.newestSilenceTimer())
+	// No quiesce: a loop held by the marker would never answer one.
+	eventually(t, "the interrupt", func() bool { return r.cancels() == 1 })
+	eventually(t, "the blocked marker request", func() bool { return r.h.holders.captureCallCount() == 1 })
+	if notes := r.h.holders.captureNotes(r.holder); len(notes) != 0 {
+		t.Fatalf("notes %q landed while the holder was blocked", notes)
+	}
+	unblock()
+	eventually(t, "the marker after the holder answers", func() bool { return len(r.h.holders.captureNotes(r.holder)) == 1 })
 }
 
 func TestAgyFrameTraceOffAddsNeither(t *testing.T) {

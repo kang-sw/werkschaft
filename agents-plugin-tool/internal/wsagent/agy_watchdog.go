@@ -185,9 +185,7 @@ func (c *conv) loadModelWait() {
 
 // markModelWaitBoundary records that a fresh model request started at or
 // after at: a user-turn prompt with no turn running or the watchdog's own
-// automatic continue (at is taken before the send reaches the holder), or
-// the last pending tool call of the turn reaching a terminal status (at is
-// when the stream reader received that update, before the event queue). A
+// automatic continue, with at taken before the send reaches the holder. A
 // steer and a background tool completion are not boundaries. A zero at
 // means no trustworthy time: the attempt has no boundary and never cuts.
 func (c *conv) markModelWaitBoundary(at time.Time) {
@@ -236,20 +234,25 @@ func (c *conv) headerlessStall() bool {
 	return false
 }
 
-// noteAgyFrameCutoff asks the running holder to add one marker line to its
-// frame capture, so the stalled stream can be found by its time. The holder
-// owns the capture file and its cap: it writes the line only when its child
-// was spawned with a capture, whatever the daemon's settings say now, and a
-// holder that predates the operation writes nothing.
-func (c *conv) noteAgyFrameCutoff(cutoff time.Time) {
-	noter, ok := c.proc.(frameCaptureNoter)
+// noteAgyFrameCutoff asks proc's holder to add one marker line to its frame
+// capture, so the stalled stream can be found by its time. The holder owns
+// the capture file and its cap: it writes the line only when its child was
+// spawned with a capture, whatever the daemon's settings say now, and a
+// holder that predates the operation writes nothing. The marker is a
+// diagnostic: it is asked for after the interrupt went out and off the
+// loop, so a slow holder reply never delays the cut and its failure only
+// logs.
+func (c *conv) noteAgyFrameCutoff(proc Process, boundary, cutoff time.Time) {
+	noter, ok := proc.(frameCaptureNoter)
 	if !ok {
 		return
 	}
-	text := fmt.Sprintf("ws: headerless cutoff boundary=%s cutoff=%s", c.modelWaitBoundary.Local().Format(time.RFC3339Nano), cutoff.Local().Format(time.RFC3339Nano))
-	if err := noter.NoteFrameCapture(text); err != nil {
-		fmt.Fprintf(c.r.opts.Log, "agent %s: agy frame trace marker: %v\n", c.rec.ReplyID, err)
-	}
+	text := fmt.Sprintf("ws: headerless cutoff boundary=%s cutoff=%s", boundary.Local().Format(time.RFC3339Nano), cutoff.Local().Format(time.RFC3339Nano))
+	go func() {
+		if err := noter.NoteFrameCapture(text); err != nil {
+			c.do(func() { fmt.Fprintf(c.r.opts.Log, "agent %s: agy frame trace marker: %v\n", c.rec.ReplyID, err) })
+		}
+	}()
 }
 
 // startModelWait resets per-turn state for a freshly sent ordinary prompt;
@@ -341,18 +344,21 @@ func (c *conv) disarmModelWait() {
 
 // onModelActivity handles a raw ACP session/update activity signal carrying
 // the current count of pending tool calls (including daemon run_command
-// calls), whether the update carried model content, and when the stream
-// reader received it (zero when unknown).
-func (c *conv) onModelActivity(pending int, content bool, received time.Time) {
+// calls) and whether the update carried model content.
+func (c *conv) onModelActivity(pending int, content bool) {
 	if !c.modelWaitArmed {
 		return
 	}
 	// The turn's last pending tool call (one that paused the timer)
 	// reached a terminal status: agy's next model request follows its
-	// result. A background command that outlived an earlier turn is not
-	// among the pending calls, so its completion moves nothing.
+	// result. No time at or before that completion is known (the update
+	// can wait behind the holder's ring and the stream's backpressure while
+	// agy already logs the next request's header), so that request has no
+	// boundary and the headerless cutoff stays off until the next prompt or
+	// automatic continue. A background command that outlived an earlier
+	// turn is not among the pending calls, so its completion moves nothing.
 	if pending < c.modelWaitPending && pending == 0 {
-		c.markModelWaitBoundary(received)
+		c.markModelWaitBoundary(time.Time{})
 	} else if content {
 		c.modelWaitContent = true
 	}
@@ -464,7 +470,8 @@ func (c *conv) modelWaitTimedOut() {
 			c.resetModelWaitTimer()
 			return
 		}
-		c.noteAgyFrameCutoff(c.r.opts.Now())
+		// The marker follows the interrupt below, whichever branch sends it.
+		defer c.noteAgyFrameCutoff(c.proc, c.modelWaitBoundary, c.r.opts.Now())
 	}
 	c.noteModelWaitFailure("")
 	dur := formatWatchdogDuration(c.modelWaitTimeout)

@@ -133,9 +133,6 @@ type LeadSpec struct {
 	// frame trace: agy starts with GODEBUG=http2debug=2 and its holder
 	// keeps only filtered frame summaries of that stderr output there.
 	FrameTrace string
-	// Now is the runner's clock, for the time the stream reader stamps on
-	// a received update (Event.ReceivedAt); nil uses time.Now.
-	Now func() time.Time
 }
 
 // MCPCommand is a stdio MCP server's launch command.
@@ -464,10 +461,6 @@ type Event struct {
 	// (agent text, thought, or plan): the current model request has a
 	// response, so it is not a headerless stall.
 	ModelContent bool
-	// ReceivedAt is when the stream reader received a ModelActivity
-	// update's line, before the event queue; zero when unknown. A tool
-	// completion's request boundary is taken from it.
-	ReceivedAt time.Time
 	// agyReplay carries the mapper's in-memory observation at ReplayDone.
 	agyReplay *agyReplayObservation
 	// CompactRequested (with TurnEnd): the ending turn carried a successful

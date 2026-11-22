@@ -58,7 +58,7 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 		},
 		{
 			name: "only an earlier request's header",
-			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9),
+			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogUserMessage(b, 2, "s1"),
 			want: agyStallHeaderless,
 		},
 		{
@@ -78,8 +78,14 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 		},
 		{
 			name: "continuation lines are ignored",
-			tail: agyGlogStart(before, 1) + "  a wrapped continuation streamGenerateContent\n" + agyGlogHeader(b.Add(-20*time.Second), 9) + "not glog\n",
+			tail: agyGlogStart(before, 1) + "  a wrapped continuation streamGenerateContent\n" + agyGlogHeader(b.Add(-20*time.Second), 9) + "not glog\n" + agyGlogUserMessage(b, 2, "s1"),
 			want: agyStallHeaderless,
+		},
+		{
+			name:   "verified tail that ends before the window",
+			tail:   agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9),
+			want:   agyStallUnknown,
+			reason: "ends before",
 		},
 		{
 			name:   "tail starting after the boundary minus the skew margin",
@@ -127,7 +133,7 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 func TestParseAgyStallTailClippedFirstLine(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
 	partial := agyGlogHeader(b.Add(time.Second), 9)[5:]
-	tail := partial + agyGlogStart(b.Add(-time.Minute), 1) + agyGlogHeader(b.Add(-30*time.Second), 9)
+	tail := partial + agyGlogStart(b.Add(-time.Minute), 1) + agyGlogHeader(b.Add(-30*time.Second), 9) + agyGlogUserMessage(b, 2, "s1")
 	if got, _, reason := parseAgyStallTail([]byte(tail), true, b, agyStallSkew); got != agyStallHeaderless {
 		t.Fatalf("clipped tail verdict = %v (%q), want headerless", got, reason)
 	}
@@ -140,7 +146,7 @@ func TestParseAgyStallTailClippedFirstLine(t *testing.T) {
 // is unknown even though the earlier read was verified.
 func TestParseAgyStallTailFormatDriftAfterValidTail(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
-	first := agyGlogStart(b.Add(-time.Minute), 1) + agyGlogMonitor(b.Add(-50*time.Second), 7) + agyGlogHeader(b.Add(-50*time.Second), 7)
+	first := agyGlogStart(b.Add(-time.Minute), 1) + agyGlogMonitor(b.Add(-50*time.Second), 7) + agyGlogHeader(b.Add(-50*time.Second), 7) + agyGlogUserMessage(b, 2, "s1")
 	if got, _, reason := parseAgyStallTail([]byte(first), false, b, agyStallSkew); got != agyStallHeaderless {
 		t.Fatalf("first tail = %v (%q), want headerless", got, reason)
 	}
@@ -156,11 +162,12 @@ func TestParseAgyStallTailFormatDriftAfterValidTail(t *testing.T) {
 func TestParseAgyStallTailReportsAnyMainHeader(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
 	before := b.Add(-30 * time.Second)
+	current := agyGlogUserMessage(b, 2, "s1")
 	monitorOnly := agyGlogStart(before, 1) + agyGlogMonitor(before, 7) + agyGlogHeader(before, 7)
-	if got, anyMain, _ := parseAgyStallTail([]byte(monitorOnly), false, b, agyStallSkew); got != agyStallHeaderless || anyMain {
+	if got, anyMain, _ := parseAgyStallTail([]byte(monitorOnly+current), false, b, agyStallSkew); got != agyStallHeaderless || anyMain {
 		t.Fatalf("monitor only = %v anyMain=%v, want headerless with no main", got, anyMain)
 	}
-	earlierMain := monitorOnly + agyGlogHeader(b.Add(-10*time.Second), 9)
+	earlierMain := monitorOnly + agyGlogHeader(b.Add(-10*time.Second), 9) + current
 	if got, anyMain, _ := parseAgyStallTail([]byte(earlierMain), false, b, agyStallSkew); got != agyStallHeaderless || !anyMain {
 		t.Fatalf("earlier main = %v anyMain=%v, want headerless with a main", got, anyMain)
 	}
@@ -297,7 +304,7 @@ func TestAgyStallLogVerdictUnknownCases(t *testing.T) {
 	t.Run("unreadable", func(t *testing.T) {
 		dir := t.TempDir()
 		l := newAgyStallLog(dir, started)
-		path := writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogUserMessage(b, 1, "s1")+agyGlogHeader(b.Add(-30*time.Second), 3), time.Now())
+		path := writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(-30*time.Second), 3)+agyGlogUserMessage(b, 1, "s1"), time.Now())
 		if got, _ := l.verdict("s1", b); got != agyStallHeaderless {
 			t.Fatalf("readable log = %v, want headerless", got)
 		}
@@ -339,13 +346,29 @@ func TestAgyStallLogVerdictUnknownCases(t *testing.T) {
 			t.Fatalf("main header no longer in the tail = %v (%q), want headerless", got, reason)
 		}
 	})
+	t.Run("worker replaced after the log was cached", func(t *testing.T) {
+		// Worker A serves the first request; its log is located and cached.
+		dir := t.TempDir()
+		l := newAgyStallLog(dir, started)
+		writeAgyLog(t, dir, "acp-worker-20261122_115900-100.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogUserMessage(b, 1, "s1")+agyGlogHeader(b.Add(time.Second), 3), time.Now())
+		if got, reason := l.verdict("s1", b); got != agyStallHeader {
+			t.Fatalf("worker A's request = %v (%q), want header", got, reason)
+		}
+		// A stops; worker B, under the same front process, takes a fresh
+		// prompt and logs its main header in its own file.
+		b2 := b.Add(5 * time.Minute)
+		writeAgyLog(t, dir, "acp-worker-20261122_120400-200.log", agyGlogStart(b2.Add(-time.Minute), 1)+agyGlogUserMessage(b2, 1, "s1")+agyGlogHeader(b2.Add(time.Second), 4), time.Now())
+		if got, reason := l.verdict("s1", b2); got != agyStallUnknown || !strings.Contains(reason, "ends before the request boundary") {
+			t.Fatalf("cached predecessor log for B's request = %v (%q), want unknown", got, reason)
+		}
+	})
 	t.Run("locates once", func(t *testing.T) {
 		dir := t.TempDir()
 		l := newAgyStallLog(dir, started)
 		if got, _ := l.verdict("s1", b); got != agyStallUnknown {
 			t.Fatalf("empty dir = %v", got)
 		}
-		writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogUserMessage(b, 1, "s1")+agyGlogHeader(b.Add(-30*time.Second), 3), time.Now())
+		writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(-30*time.Second), 3)+agyGlogUserMessage(b, 1, "s1"), time.Now())
 		if got, _ := l.verdict("s1", b); got != agyStallUnknown {
 			t.Fatalf("a second firing scanned again: %v", got)
 		}
