@@ -92,6 +92,52 @@ Reproduced with real git and through the MCP tools (`tickets.create_empty` -> `t
 
 Under the pool acquisition lock, check candidate lease and daemon-wide bound-child state before selecting a clean detached checkout, using the last-completed-release boundary in Decision 2 for both acquisition and release. Add an additive per-checkout marker if the daemon does not record that boundary, and verify old/new readers, writers, and recovery under the compatibility manual. Acceptance: acquisition skips every extant lease and every qualifying non-closed child, including nested children and children on an unleased checkout; it selects another candidate or creates one and preserves the original lease/checkout. Release refuses qualifying children unless forced by the root lead, but ignores bindings older than the last completed release. With no recorded release all non-closed bindings count. Cover those cases, force authority, marker persistence and mixed-version behavior, and acquisition racing release or spawn at the existing admission boundary. A child bound before forced release must be refused when mailed and the sender receives the refusal naming the released checkout; a child bound after release launches normally. Verify the same rule for normal release and for root and cwd launch paths. A forced release with a running bound child cancels its turn and concurrent acquisition skips the checkout while its process lives. A child with background work keeps it ineligible after its turn ends and frees it when its process exits or sleeps. A live exec job still refuses forced release. A failed backend interrupt reports the outcome without stopping the process, and the checkout remains ineligible while that process lives.
 
+### Result (a5cb27805) - 2026-11-22
+
+Commits caeba62f1 (implementation), 64c8c9805 (tests), fb2f39b89 (tool schemas), 3e79b204e (exec-job guard handed to 261117), cdb8f0683 and a5cb27805 (review-driven tests).
+
+- Release boundary: `worktree.release` writes a new marker `ws-worktree-released.json` (`schema_version`, `released_at`) in the checkout's git admin dir, after lease removal and under the per-worktree release lock (`wsgit.RecordWorktreeRelease` / `WorktreeReleasedAt`). A spawned non-lead conversation is bound before a release iff its `CreatedAt` second is strictly before the marker's second. A binding in the same second counts as current (conservative). Lead bindings always count. With no marker, every binding counts. A malformed or newer-schema marker reads as no recorded release.
+- Launch/wake/resume refusal: `startProcess`, a live-process kick, `Deliver`, mailbox claims (`mailChanged`/`steer`) and Pi resume refuse a conversation bound before its root's or cwd's checkout release. The refusal is an admission refusal: input is kept, the conversation counts as asleep, and the sender gets a system mail naming the released worktree (`Options.CheckoutReleased`, falling back to `WakeRefused`). Interactive paths read an in-memory `releasedCheckout`. It is set by the release notice (`Runner.CheckoutReleased`, token route `worktree.released`), by a refused start, or once at rejoin. Only process start and an asleep `Deliver` read the marker file. A child bound after the release launches normally.
+- Acquisition: each candidate's per-worktree release lock is try-locked exclusively and held on the claimed candidate until the lease is published. A held lock (a release, or a spawn registering a child) skips the candidate. Any lease, or an unreadable lease, skips it. A current binding (direct or nested, on an unleased checkout) skips it. A pre-release binding whose process is live skips it (`proc`, turn, background tasks, or holder). A daemon that cannot answer skips it. `worktree.children` gains additive `bound_before_release` and `live` fields per child. The exec-job condition is one stub call site, `checkoutHasLiveExecActivity` (always false), for the follow-up below.
+- Release: the non-forced check ignores bindings from before the last completed release. Force is limited to the root lead (`isTopLevelLead`, per 261116 (1188)=b), and a non-root force is refused with nothing changed. A forced release asks the daemon to interrupt pre-release running turns through the turn-cancellation path (`cancelTurn`), which never falls back to `stopProcess`. Cancellations and failed interrupts are reported as result warnings, and a failed interrupt leaves the process running and the checkout ineligible while it lives.
+- Exec jobs (lead redirect): the release refusal over live exec jobs comes from 261117 Phase 2 (3ace814da on its own branch). This branch builds no second guard. **Deferred, not done:** the acquisition-side exec predicate (wire `checkoutHasLiveExecActivity` to the 261117 fence) and the acceptance line "A live exec job still refuses forced release". Both are a follow-up after that branch merges into develop.
+- Fixture change: the lease-write failure fixtures (`worktree_lease_test.go`, `worktree_acquire_concurrent_test.go`) used to pre-create a directory at the lease path. They now create it at claim time, because the selector now skips an unreadable lease.
+- Schema: the `worktree.acquire`/`worktree.release`/`force` descriptions now cover the boundary and root-lead force, trimmed to the 1450 B listed-tool cap.
+- Compatibility re-grade: T0.
+  - The marker is a new file that old binaries neither read nor write. An old release leaves an earlier marker in place, so its bindings stay current, which is conservative.
+  - Wire fields are additive.
+  - An old daemon refuses the new `worktree.released` route; the release still completes, with a "could not tell the daemon" warning.
+  - No Record field was added.
+- Tests:
+  - wsgit marker round trip, malformed and newer records, whole-second boundary, `CheckoutRoot`.
+  - wsagent:
+    - `TestCheckoutReleaseEndsEarlierBindings`: forced cancel, failed interrupt, no stop, Deliver refusal, post-release child launches.
+    - `TestCheckoutReleaseBackgroundWorkKeepsBindingLive`.
+    - `TestCheckoutReleaseRefusesMailboxMail`: a live child, and an asleep child after a restart.
+    - `TestCheckoutReleaseRefusesWakeByRootOrCwdAfterRestart`.
+    - `TestCheckoutReleaseKeepsLeadBindings`.
+  - mcp:
+    - Lease skip and occupied-checkout skip, including a daemon-unreachable case.
+    - Claim vs spawn exclusion.
+    - Pre-release bindings ignored by release.
+    - Root-lead force.
+    - Forced-release cancel outcomes.
+    - Mixed-version token route.
+  - Mutation checks confirmed the tests catch removal of the `startProcess` marker gate, the live-process kick gate, the no-stop rule on interrupt failure, the lease skip, the force gate, and the `mailChanged` gate.
+- Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+  - Whole packages: `go test ./internal/wsgit ./internal/execjob`, and `./internal/wsagent` (run before the exec-guard removal).
+  - After the exec-guard removal: `./internal/wsagent -run 'CheckoutRelease|Worktree|Children|Wake|Mail|Interrupt|Resume|Deliver'`.
+  - `./internal/mcp -run 'Worktree|Acquire|PoolReuse|Release|AgentWake|AgentTools|Schema|ToolList|ToolsList|Description'`.
+  - The narrow `./cmd/ws-mcp` agent-runner set.
+  - `go build ./...` and `go vet` clean on the changed packages.
+  - Lite review: one Important (mailbox route untested), fixed by a5cb27805. Five Minors left open:
+    - A same-second binding survives a forced release.
+    - The daemon `worktree.released` route has no root-lead check of its own; it reaches only bindings already ended.
+    - `reattach`/`resumePiChild` refusal is untested.
+    - The claim-exclusion test name also claims release.
+    - Forwarded occupancy queries run per candidate under the pool lock (latency only).
+- Not verified: Windows, the live daemon, and the exec admission race (left to 261117).
+
 ### Phase 3: Allocate reports through an explicit path kind
 
 Expose the `report` kind consistently in schema and allocator with the same allocation authority as `review`, while preserving the four existing kinds and all write-profile boundaries. Acceptance: `path.generate(kind: "report")` returns a valid artifact path under the report subdirectory; callers with an existing write route can write it, and callers without that authority gain none. Existing `review`, `prompt`, `plan`, and `clone` behavior remains intact; callers discover the enum before sending the new kind to an old server. Cover native and already-authorized `path.write` routes and Pi mini-lead authority.
