@@ -1343,7 +1343,7 @@ kbd { font: 10px var(--wb-mono); padding: 0 4px; border: 1px solid var(--wb-line
       '<span class="ar">' + hl(c.args) + '</span>' +
       (h ? '<span class="hit">출력 ' + h + '</span>' : '') +
       (c.att.length && !S.emptyAudit ? '<span class="att" title="Linked events">◆' + c.att.length + '</span>' : '') +
-      '<span class="nm">' + c.dur + ' · ' + c.tok + '</span></div>' +
+      (S.emptyAudit ? '' : '<span class="nm">' + c.dur + ' · ' + c.tok + '</span>') + '</div>' +
       (S.emptyAudit ? '' : c.att.map(function (a, i) {
         if (!S.filters[a.k]) return '';
         var rid = id + '#' + i;
@@ -1366,9 +1366,11 @@ kbd { font: 10px var(--wb-mono); padding: 0 4px; border: 1px solid var(--wb-line
         var ch = e.chips ? '<div class="hchips">' + e.chips.map(function (c) { return '<span class="icapsule"><span class="icapsule-head">' + esc(c) + '</span></span>'; }).join('') + '</div>' : '';
         h += '<div class="msg lead"><div class="mh"><b>Claude</b><span>' + e.at + '</span></div><div class="bub">' + ch + hl(e.text) + '</div></div>';
       } else if (e.t === 'hid') {
-        if (S.filters[HID[e.id].k]) h += hidRow(e.id);
+        if (!S.emptyAudit && S.filters[HID[e.id].k]) h += hidRow(e.id);
       } else if (e.t === 'sys') {
-        if (S.filters.system) {
+        if (S.emptyAudit) {
+          h += '<div class="sysrow' + (S.sel === e.id ? ' sel' : '') + '" data-id="' + e.id + '">No audit data for this session · retention expired or capture off — click to inspect</div>';
+        } else if (S.filters.system) {
           var n = hits(e.id);
           h += '<div class="sysrow' + (S.sel === e.id ? ' sel' : '') + '" data-id="' + e.id + '">⚙ ' + esc(e.label) + (n ? ' <span class="hit">출력 ' + n + '</span>' : '') + ' — click to audit</div>';
         }
@@ -1376,7 +1378,10 @@ kbd { font: 10px var(--wb-mono); padding: 0 4px; border: 1px solid var(--wb-line
         var ex = S.expand[ei] || S.q;
         var show = ex ? e.calls : e.calls.slice(0, 3);
         var fail = e.calls.filter(function (c) { return CALLS[c].st === 'fail'; }).length;
-        h += '<div class="strip"><div class="shead" data-x="' + ei + '">Calls ' + e.calls.length + (fail ? ' · <b style="color:var(--wb-fail)">' + fail + ' failed</b>' : '') + ' · ' + e.dur + '</div>' +
+        var shead = S.emptyAudit
+          ? 'Calls ' + e.calls.length + ' · no stored audit payload'
+          : 'Calls ' + e.calls.length + (fail ? ' · <b style="color:var(--wb-fail)">' + fail + ' failed</b>' : '') + ' · ' + e.dur;
+        h += '<div class="strip"><div class="shead" data-x="' + ei + '">' + shead + '</div>' +
           show.map(callRow).join('') +
           (e.calls.length > show.length ? '<div class="more" data-x="' + ei + '">+ ' + (e.calls.length - show.length) + ' more</div>' : '') +
           '</div>';
