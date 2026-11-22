@@ -766,8 +766,8 @@ func TestHiringRoster(t *testing.T) {
 	snap.UpdatedAt = now.UnixMilli()
 	writeSnapshot(t, f.dir, "boardsession", snap)
 	rows, _ = f.d.sessionRoster("livesession")
-	if rows[0].State != "idle" || rows[0].RunningSubagents != 0 || rows[0].Model != nil {
-		t.Fatalf("ended roster: %+v", rows)
+	if len(rows) != 0 {
+		t.Fatalf("deleted session still listed: %+v", rows)
 	}
 	reg.EndedAt = ""
 	reg.HeartbeatAt = now.UTC().Format(time.RFC3339)
@@ -789,5 +789,36 @@ func TestHiringRoster(t *testing.T) {
 	rows, _ = f.d.sessionRoster("livesession")
 	if len(rows) != 0 {
 		t.Fatalf("detached still listed: %+v", rows)
+	}
+}
+
+// A deleted nested child never appears in the roster, while a live sibling
+// does: the rail keeps deleted rows only in its collapsed deleted fold.
+func TestHiringRosterOmitsDeletedChild(t *testing.T) {
+	f := startPageFixture(t)
+	register(t, f.dir, "deletedkid", f.project, time.Now())
+	f.d.index.Refresh()
+	for _, kid := range []string{"boardsession", "deletedkid"} {
+		if res := hirePost(f.d, railLayoutRoute, `{"op":"attach","rid":"`+kid+`","parent":"livesession"}`); res.Code != 200 {
+			t.Fatal(res.Body)
+		}
+	}
+	f.d.index.Refresh()
+	rows, err := f.d.sessionRoster("livesession")
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("both children should be listed: %+v %v", rows, err)
+	}
+	reg, err := ReadRegistration(f.dir, "deletedkid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.EndedAt = time.Now().UTC().Format(time.RFC3339)
+	if err = WriteRegistration(f.dir, reg); err != nil {
+		t.Fatal(err)
+	}
+	f.d.index.Refresh()
+	rows, err = f.d.sessionRoster("livesession")
+	if err != nil || len(rows) != 1 || rows[0].Mailbox != "id:boardsession" {
+		t.Fatalf("roster after delete: %+v %v", rows, err)
 	}
 }
