@@ -283,7 +283,7 @@ func (c *conv) settleTurn(status, errText string, mark uint64) {
 		return
 	}
 	c.hold(nil)
-	c.publish(res)
+	c.publish(res, false)
 }
 
 // finishActiveTurn closes a child turn once, including on interruption. Clearing
@@ -317,8 +317,9 @@ func (c *conv) hold(res *TurnResult) {
 // it: to Options.Report, and to a conversation parent through
 // Record.PendingReports, unless that parent's own wait took it (wait). The
 // settle, the turn-open mark's clearing, and the pending report are one
-// record update, so a parent never reads its child between them.
-func (c *conv) publish(res TurnResult) {
+// record update, so a parent never reads its child between them. keepOpen
+// preserves a successor's boundary when reporting a result held earlier.
+func (c *conv) publish(res TurnResult, keepOpen bool) {
 	parent := c.rec.Parent
 	toConv := parent != nil && parent.Kind == ParentConversation
 	waited := false
@@ -334,8 +335,11 @@ func (c *conv) publish(res TurnResult) {
 	} else {
 		c.update(func(rec *Record) {
 			settle()
-			finishActiveTurn(rec, c.r.opts.Now().UnixMilli())
-			rec.TurnOpen, rec.HeldTurn = false, nil
+			if !keepOpen {
+				finishActiveTurn(rec, c.r.opts.Now().UnixMilli())
+				rec.TurnOpen = false
+			}
+			rec.HeldTurn = nil
 			if toConv {
 				if waited = c.parentWaitTakes(res.mark); !waited {
 					id := newReportID()

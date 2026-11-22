@@ -149,7 +149,9 @@ type Record struct {
 	Sends            uint64 `json:"sends,omitempty"`
 	Drained          uint64 `json:"drained,omitempty"`
 	TurnMark         uint64 `json:"turn_mark,omitempty"`
-	TurnStartedAt    int64  `json:"turn_started_at,omitempty"`
+	// An agy worker can also have a prompt outstanding with TurnOpen false:
+	// an internal compaction prompt has no result to report to its parent.
+	TurnStartedAt int64 `json:"turn_started_at,omitempty"`
 
 	// MCPToken is a held process's ws-mcp session token
 	// (mcp_session.go), kept so a later daemon rejoining the process
@@ -734,6 +736,14 @@ func registration(rec Record, now time.Time) wsdashboard.Registration {
 
 func (rec Record) heldWorker() bool {
 	return wsdashboard.HeldAgentWorker(rec.Lead, rec.HolderID, rec.HandedOffAt)
+}
+
+func (rec Record) heldAgyWorker() bool {
+	return rec.Backend == BackendAgy && rec.Parent != nil && rec.heldWorker()
+}
+
+func (rec Record) agyInternalPrompt() bool {
+	return rec.Backend == BackendAgy && rec.Parent != nil && !rec.TurnOpen && rec.TurnStartedAt != 0
 }
 
 func (rec Record) handedOff() bool {

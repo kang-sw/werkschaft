@@ -304,9 +304,8 @@ func (c *conv) stopBgGrace() {
 	}
 }
 
-// beginTurn opens a turn the harness began with no send of the runner's: a
-// background task's completion, a compaction, a pushed message. A turn the
-// runner's own send opened is already running.
+// beginTurn projects a harness-initiated turn or a standalone prompt after
+// its send succeeds. Ordinary input turns publish their start in kickInput.
 func (c *conv) beginTurn(quiet bool) {
 	if c.turn {
 		return
@@ -322,15 +321,15 @@ func (c *conv) beginTurn(quiet bool) {
 	c.apply(wslive.Event{Kind: wslive.KindTurnStart}, quiet)
 	c.reply, c.replayTurnError = "", ""
 	if !quiet {
-		// Not the runner's send: the turn holds no new message, so it
-		// keeps the last turn's mark.
-		c.reply = ""
+		// There is no newly drained input, so the turn keeps the last mark.
 		if !c.compactCommand && !c.compactInternalTurn {
 			c.hold(nil)
-			if c.rec.Parent != nil {
+			if c.rec.Parent != nil && (!c.rec.TurnOpen || c.rec.HeldTurn != nil || c.rec.TurnStartedAt == 0) {
 				c.update(func(rec *Record) {
+					if !rec.TurnOpen || rec.TurnStartedAt == 0 {
+						rec.TurnStartSeq = c.seq
+					}
 					rec.TurnOpen, rec.HeldTurn = true, nil
-					rec.TurnStartSeq = c.seq
 				})
 			}
 		}
@@ -371,10 +370,14 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		c.apply(wslive.Event{Kind: wslive.KindTurnEnd, Reason: c.summaryReason}, quiet)
 	}
 	c.turnSettled(turnErr, quiet)
+	internalPrompt := c.clearAgyInternalPrompt()
 	if c.replaying && c.rec.Parent != nil {
 		c.replayTurnError = turnErr
 	}
 	if quiet {
+		if internalPrompt {
+			c.compactInternalTurn = false
+		}
 		return
 	}
 	if ran && !compactCommand && !c.replaying {
@@ -742,6 +745,7 @@ func (c *conv) processEnded() {
 	hadTurn := c.turn
 	internal := c.compactInternalTurn
 	c.compactInternalTurn = false
+	c.clearAgyInternalPrompt()
 	if c.turn {
 		var reason string
 		c.setStatus(func() {
@@ -800,6 +804,14 @@ func (c *conv) processEnded() {
 		c.watched()
 	}
 	c.r.notify(c.rec.ReplyID, c.rec.Root)
+}
+
+func (c *conv) clearAgyInternalPrompt() bool {
+	if !c.rec.agyInternalPrompt() {
+		return false
+	}
+	c.update(func(rec *Record) { rec.TurnStartedAt = 0 })
+	return true
 }
 
 // releaseHolder forgets the holder of an ended lead process, unless it

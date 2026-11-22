@@ -828,7 +828,7 @@ func (c *conv) releaseHeld() {
 	}
 	res := *c.heldRes
 	c.hold(nil)
-	c.publish(res)
+	c.publish(res, false)
 }
 
 // releaseLater releases conversation id's done turn held for its
