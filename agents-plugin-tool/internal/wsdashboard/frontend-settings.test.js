@@ -520,11 +520,11 @@ test("settings combobox offers the pickers' models beside the harnesses, with th
   assert.equal(JSON.stringify(cb.effortOptions("werk").map(e => e.id)), JSON.stringify(["low", "high"]));
 });
 
-test("settings combobox asks again when a picker's model list is still being fetched", async () => {
+test("settings combobox asks again when a picker's model list is still being fetched and refreshes the open list", async () => {
   const { doc, win, FakeEvent } = createFakeDOM();
   const answers = [
     { harnesses: [{ harness: "claude", available: true, models: [], efforts: [] }], pickers_pending: true },
-    { harnesses: [{ harness: "claude", available: true, models: [], efforts: [] }], pickers: [{ harness: "werk", available: true, models: [{ id: "vendor/m" }], efforts: ["low"] }] }
+    { harnesses: [{ harness: "claude", available: true, models: [], efforts: [] }], pickers: [{ harness: "werk", available: true, models: [{ id: "vendor/m" }, { id: "vendor/n" }], efforts: ["low"] }] }
   ];
   let fetches = 0;
   const timers = [];
@@ -538,12 +538,29 @@ test("settings combobox asks again when a picker's model list is still being fet
   win.window = win;
   vm.runInNewContext(read("dashboard-settings-combobox.js"), ctx);
   const cb = win.WsSettingsCombobox;
-  await cb.loadChoices();
+
+  const container = doc.createElement("div");
+  doc.body.appendChild(container);
+  const input = doc.createElement("input");
+  input.className = "inp mono";
+  input.setAttribute("aria-label", "werk · Model");
+  container.appendChild(input);
+  const ctrl = cb.attach(input, { getOptions: () => cb.modelOptions("werk") });
+
+  // The picker is opened while the first, pending answer has no models.
+  ctrl.button.click();
+  await new Promise(r => setImmediate(r));
+  assert.equal(fetches, 1);
   assert.equal(cb.modelOptions("werk").length, 0, "the first answer has no picker yet");
-  await cb.loadChoices();
-  assert.equal(fetches, 1, "the pending answer is reused until its retry timer fires");
-  timers.forEach(fn => fn());
-  await cb.loadChoices();
+  assert.equal(input.getAttribute("aria-expanded"), "false", "nothing to list yet");
+  assert.equal(timers.length, 1, "a pending answer schedules one retry");
+
+  // The retry fires on its own; the open picker re-renders with no further
+  // interaction from the test or the user.
+  timers.shift()();
+  await new Promise(r => setImmediate(r));
   assert.equal(fetches, 2);
-  assert.equal(JSON.stringify(cb.modelOptions("werk")), JSON.stringify([{ id: "vendor/m", thinking: false }]));
+  assert.equal(input.getAttribute("aria-expanded"), "true", "the open picker opens once its models arrive");
+  assert.deepEqual(ctrl.popup.children.map(li => li.dataset.value), ["vendor/m", "vendor/n"]);
+  assert.equal(timers.length, 0, "an answer that is not pending schedules no retry");
 });
