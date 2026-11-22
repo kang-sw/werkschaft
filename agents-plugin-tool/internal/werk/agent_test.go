@@ -767,11 +767,12 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 		reply(callOf("c1", "read", `{"path":"a.txt"}`), callOf("c2", "read", `{"path":"a.txt"}`)),
 		reply(msgItem("done")),
 	}}
-	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(item json.RawMessage) {
+	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(item json.RawMessage) error {
 		<-release
 		mu.Lock()
 		written = append(written, string(item))
 		mu.Unlock()
+		return nil
 	}})
 	r.user("go")
 	// The writer is held at its first item; the loop still makes both model
@@ -841,7 +842,7 @@ func TestMutatingCallWaitsForDurableCallIntent(t *testing.T) {
 		reply(callOf("c2", "write", `{"path":"b.txt","content":"x"}`)),
 		reply(msgItem("done")),
 	}}
-	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(json.RawMessage) { <-release }})
+	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(json.RawMessage) error { <-release; return nil }})
 	r.user("go")
 	// The read finishes while the writer is held: two requests were made.
 	deadline := time.Now().Add(5 * time.Second)
@@ -864,6 +865,91 @@ func TestMutatingCallWaitsForDurableCallIntent(t *testing.T) {
 	}
 }
 
+// A log that cannot be written fails closed: a call that may change something
+// is not run, and the model is told why; a read still runs.
+func TestMutatingCallIsRefusedWhenTheLogFails(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(callOf("c1", "read", `{"path":"a.txt"}`), callOf("c2", "write", `{"path":"b.txt","content":"x"}`)),
+		reply(msgItem("done")),
+	}}
+	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(json.RawMessage) error {
+		return errors.New("disk full")
+	}})
+	r.user("go")
+	if end := r.waitTurnEnd(1); end.Reason != ReasonDone {
+		t.Fatalf("turn end %+v", end)
+	}
+	if _, err := os.Stat(filepath.Join(root, "b.txt")); err == nil {
+		t.Fatal("the write ran although its intent could not be persisted")
+	}
+	outputs := map[string]string{}
+	for _, l := range r.out.lines() {
+		if l.T == LineToolEnd {
+			outputs[l.Call] = l.Output
+			if l.Call == "c2" && !l.Failed {
+				t.Error("the refused call is not marked failed")
+			}
+		}
+	}
+	if out := outputs["c2"]; !strings.Contains(out, "disk full") || !strings.Contains(out, "not run") {
+		t.Errorf("the refusal does not name the log failure: %q", out)
+	}
+	if out := outputs["c1"]; !strings.Contains(out, "hello") {
+		t.Errorf("the read did not run: %q", out)
+	}
+	sawNotice := false
+	for _, l := range r.out.lines() {
+		if l.T == LineNotice && strings.Contains(l.Text, "could not be saved") {
+			sawNotice = true
+		}
+	}
+	if !sawNotice {
+		t.Error("the log failure was not reported")
+	}
+}
+
+// A turn interrupted while a mutating call waits for the log does not run it:
+// the writer is held, the turn interrupted, the writer released, and the
+// write never happens; the call is answered as interrupted.
+func TestInterruptWhileWaitingForTheLogDoesNotRunTheMutation(t *testing.T) {
+	root := t.TempDir()
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	open := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(open)
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(callOf("c1", "write", `{"path":"b.txt","content":"x"}`)),
+		reply(msgItem("must not be asked")),
+	}}
+	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(json.RawMessage) error { <-release; return nil }})
+	r.user("go")
+	r.waitFor("tool_start", func(l Line) bool { return l.T == LineToolStart })
+	time.Sleep(100 * time.Millisecond)
+	r.send(Command{Type: CmdInterrupt})
+	time.Sleep(100 * time.Millisecond)
+	open()
+	end := r.waitTurnEnd(1)
+	if end.Reason != ReasonAborted {
+		t.Fatalf("turn end %+v", end)
+	}
+	if _, err := os.Stat(filepath.Join(root, "b.txt")); err == nil {
+		t.Fatal("the write ran after the interrupt")
+	}
+	var out string
+	for _, l := range r.out.lines() {
+		if l.T == LineToolEnd && l.Call == "c1" {
+			out = l.Output
+		}
+	}
+	if out != interruptedOutput {
+		t.Errorf("the call was answered %q, want the interruption result", out)
+	}
+}
+
 // Parallel read results reach the log in the order the transcript holds them.
 func TestParallelResultsKeepLogOrder(t *testing.T) {
 	root := t.TempDir()
@@ -879,10 +965,11 @@ func TestParallelResultsKeepLogOrder(t *testing.T) {
 	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
 		reply(calls...), reply(msgItem("done")),
 	}}
-	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(item json.RawMessage) {
+	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(item json.RawMessage) error {
 		mu.Lock()
 		written = append(written, string(item))
 		mu.Unlock()
+		return nil
 	}})
 	r.user("go")
 	r.waitTurnEnd(1)

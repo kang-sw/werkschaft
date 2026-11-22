@@ -21,8 +21,10 @@ import (
 // interrupt), shutdown, and Close.
 type writer struct {
 	store *Store
-	// before runs ahead of each append (a seam for a test to delay the write).
-	before func(json.RawMessage)
+	// before runs ahead of each append (a seam for a test to delay or fail
+	// the write); an error from it is a failed write, and the item is not
+	// appended.
+	before func(json.RawMessage) error
 	// onErr reports the first failed write; the writer goes on.
 	onErr func(error)
 
@@ -31,11 +33,11 @@ type writer struct {
 	queue    []json.RawMessage
 	inflight bool
 	closed   bool
-	failed   bool
+	err      error // the first failed write; sticky
 	done     chan struct{}
 }
 
-func newWriter(store *Store, before func(json.RawMessage), onErr func(error)) *writer {
+func newWriter(store *Store, before func(json.RawMessage) error, onErr func(error)) *writer {
 	w := &writer{store: store, before: before, onErr: onErr, done: make(chan struct{})}
 	w.cond = sync.NewCond(&w.mu)
 	go w.run()
@@ -70,13 +72,19 @@ func (w *writer) run() {
 		w.mu.Unlock()
 
 		for _, item := range batch {
+			var err error
 			if w.before != nil {
-				w.before(item)
+				err = w.before(item)
 			}
-			if err := w.store.Append(item); err != nil {
+			if err == nil {
+				err = w.store.Append(item)
+			}
+			if err != nil {
 				w.mu.Lock()
-				first := !w.failed
-				w.failed = true
+				first := w.err == nil
+				if first {
+					w.err = err
+				}
 				w.mu.Unlock()
 				if first && w.onErr != nil {
 					w.onErr(err)
@@ -91,13 +99,16 @@ func (w *writer) run() {
 	}
 }
 
-// Flush returns once every item added before it has been written.
-func (w *writer) Flush() {
+// Flush returns once every item added before it has been written. It returns
+// the first write failure the log has had, if any: a log that has failed once
+// is not durable, and a caller that needs durability must not go on.
+func (w *writer) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for len(w.queue) > 0 || w.inflight {
 		w.cond.Wait()
 	}
+	return w.err
 }
 
 // Close writes what is queued and stops the writer; the store stays open.

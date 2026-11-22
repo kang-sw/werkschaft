@@ -473,7 +473,13 @@ under `release-compatibility.md`), and is left as it stands.
   now happen under one lock, so parallel results reach the log in the order
   memory holds them. The writer is also flushed before `LineTurnEnd` is
   published, so no unpersisted window extends past a reported turn end. Tests: `TestMutatingCallWaitsForDurableCallIntent`,
-  `TestParallelResultsKeepLogOrder`.
+  `TestParallelResultsKeepLogOrder`. A third pass tightened the barrier: the
+  writer's `Flush` returns the first write failure, and a mutating call is
+  refused, with a tool error naming the log failure, when the log has failed,
+  so a failing log never lets an edit run without durable intent; and a turn
+  interrupted while the call waited for the log does not run it, the call being
+  answered as interrupted. Tests: `TestMutatingCallIsRefusedWhenTheLogFails`,
+  `TestInterruptWhileWaitingForTheLogDoesNotRunTheMutation`.
 - **Symlink resolution.** The earlier dangling-link fix cleaned link payloads
   lexically, so a relative link through a directory link followed by `..`
   collapsed inside the tree while the OS resolved it outside. `realPath` no

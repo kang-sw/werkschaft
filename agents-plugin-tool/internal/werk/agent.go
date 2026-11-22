@@ -72,7 +72,7 @@ type Config struct {
 
 	// BeforeAppend, when set, runs in the background writer ahead of each log
 	// append (a seam for tests that delay the write).
-	BeforeAppend func(json.RawMessage)
+	BeforeAppend func(json.RawMessage) error
 }
 
 // Limits of the loop.
@@ -816,18 +816,32 @@ func clip(s string, max int) string {
 // transcript, end line.
 func (a *Agent) runCall(ctx context.Context, turn int, response string, tools map[string]toolEntry, c functionCall) {
 	a.out.line(Line{T: LineToolStart, Turn: turn, Response: response, Call: c.CallID, Name: c.Name, Args: clip(c.Arguments, ToolArgsLineBytes), Truncated: len(c.Arguments) > ToolArgsLineBytes})
-	if e, ok := tools[c.Name]; !ok || !e.readOnly {
-		// Durable call intent: a call that may change something runs only
-		// once the log holds its function_call line (and everything before
-		// it). A worker killed mid-call then resumes with the call on record
-		// and answers it as interrupted, never running it again. Read-only
-		// calls and model requests do not wait.
-		a.log.Flush()
+	var output string
+	var failed bool
+	if e, ok := tools[c.Name]; ok && e.readOnly {
+		output, failed = a.invoke(ctx, tools, c)
+	} else {
+		output, failed = a.invokeMutating(ctx, tools, c)
 	}
-	output, failed := a.invoke(ctx, tools, c)
 	shown, cut := TruncateOutput(output, ToolOutputBytes)
 	a.append(functionOutputItem(c.CallID, shown))
 	a.out.line(Line{T: LineToolEnd, Turn: turn, Call: c.CallID, Name: c.Name, Output: shown, Truncated: cut, Failed: failed})
+}
+
+// invokeMutating runs a call that may change something, after the log holds
+// its function_call line (and everything before it): a worker killed mid-call
+// then resumes with the call on record and answers it as interrupted, never
+// running it again. It fails closed: when the log has failed, the intent
+// cannot be made durable and the call is not run; when the turn was
+// interrupted while the call waited for the log, it is not run either.
+func (a *Agent) invokeMutating(ctx context.Context, tools map[string]toolEntry, c functionCall) (string, bool) {
+	if err := a.log.Flush(); err != nil {
+		return "Error: this call was not run: the conversation log could not be written (" + err.Error() + "), so the call could not be recorded before it ran. Nothing was changed. Tell the user the session's log is failing.", true
+	}
+	if ctx.Err() != nil {
+		return interruptedOutput, true
+	}
+	return a.invoke(ctx, tools, c)
 }
 
 // invoke runs the tool a call names and returns the text the model sees.
