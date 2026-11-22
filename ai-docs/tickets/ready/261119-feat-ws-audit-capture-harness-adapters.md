@@ -687,3 +687,38 @@ answers zero: against the real store with the session ring not yet loaded,
 or with an equivalent delayed load. The call is recorded as loss and never
 appended after the result and the cut. Run it for a keyed Codex call and a
 keyed Claude carried assembly.
+
+### Result (d28086a1a) - 2026-11-22
+
+Phase 5 landed on `impl/develop/mural-kitty-yeast`. The store side was
+already in place from the ring-store work: `Store.AppendSourced(ctx, id,
+rec, ev)` admits in the writer through `ring.admit`, which checks
+`rec.Covered(l.bounds[rec.Source])` against the live ledger, so boundaries
+finalized since the recovery snapshot count (6681dc004). This phase adds the
+integrated checks, test-only, in `wsagent/audit_store_test.go`:
+
+- `TestAuditStoreRestartReplayResumesWithoutDuplicates`: five records
+  captured into the real store, store closed and reopened, holder replay,
+  then record 6. Retained identities are not duplicated (the first five
+  events are unchanged), seq resumes above the recovered maximum, and a
+  clean replay persists no loss. Warm (ring loaded, `Recover` asserted) and
+  cold (`Recover` answers zero).
+- `TestAuditStoreReplayRecordsAFailedAppendAsLoss`: append of source seq 10
+  fails, 11 succeeds, restart, replay, record 12. Record 10 is persisted as
+  the single loss and never appended after 11; seq resumes above the
+  recovered max. Warm (capture judges) and cold (the store judges).
+- `TestAuditColdReplayAgainstTheStoreNeverAppendsAKeyedEventLate` (already
+  present): the keyed Codex call (failed call, retained result, compaction
+  cut) and the keyed Claude carried assembly, replayed while `Recover`
+  answers zero against the real store. Mutation check: admitting by
+  `id.Covered` instead of `rec.Covered` fails both subtests.
+
+Compat tier: no shape change in this phase (tests only). The earlier
+`AppendSourced` `rec` parameter stays as 5b2f6fb8d recorded it.
+
+Verification (macOS): `go test -count=1 ./internal/wsagent/
+./internal/wsauditstore/ ./internal/wsaudit/`: all ok; `go vet` darwin and
+`GOOS=windows`: clean. `internal/mcp` untouched, not run. Lite review: clean,
+two optional minors (warm `Recover` not asserted in the failed-append test;
+`persistedLosses` ignores unparsable lines, guarded by the loss-present
+assertion).
