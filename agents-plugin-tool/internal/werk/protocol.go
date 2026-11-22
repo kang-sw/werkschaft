@@ -1,0 +1,182 @@
+// Package werk is the builtin Go agent harness's runtime: the process a
+// session holder keeps alive for one agent.spawn worker (ticket
+// 261122-feat-ws-builtin-agent-harness, Phase 1). It runs the model loop
+// (request, tool calls, tool results, repeat) against an OpenAI-Responses
+// compatible endpoint, serves the file tools, reaches the daemon's ws tools
+// as an MCP client over the per-session bearer, and keeps its conversation
+// in memory with one appended JSONL delta per change.
+//
+// The daemon side (internal/wsagent) never imports this package's loop; it
+// speaks the line protocol below to the process: one JSON object per line on
+// the child's standard input (Command) and output (Line). The line protocol
+// is the harness's own event stream, which the daemon maps to the common
+// event contract and to the audit envelope.
+package werk
+
+import (
+	"encoding/json"
+)
+
+// ProtocolVersion is the harness version the process reports in its init
+// line. It versions this line protocol and the loop's behavior, not the ws
+// release, so a ws upgrade never moves a recorded catalog range.
+const ProtocolVersion = "1.0.0"
+
+// Environment names a werk process reads. The session URL and token are the
+// daemon's HTTP MCP route and the per-session bearer; the daemon's provider
+// token route is derived from the URL (wscred.DaemonBaseURL).
+const (
+	EnvSessionURL   = "WS_MCP_SESSION_URL"
+	EnvSessionToken = "WS_MCP_SESSION_TOKEN"
+)
+
+// Authority is a worker's permission level, in the daemon's spelling.
+type Authority string
+
+const (
+	AuthorityReadOnly     Authority = "read-only"
+	AuthorityWorkdirWrite Authority = "workdir-write"
+	AuthorityFull         Authority = "full"
+)
+
+// Valid reports whether a is one of the three levels.
+func (a Authority) Valid() bool {
+	switch a {
+	case AuthorityReadOnly, AuthorityWorkdirWrite, AuthorityFull:
+		return true
+	}
+	return false
+}
+
+// Command types, daemon to process.
+const (
+	// CmdUser starts a turn with Text.
+	CmdUser = "user"
+	// CmdSteer carries Text into the running turn at its next model request;
+	// the process answers it with a LineSteerAck carrying ID, and reports the
+	// request that took it with a LineUserTaken.
+	CmdSteer = "steer"
+	// CmdClearSteered drops the steered messages no request took.
+	CmdClearSteered = "clear_steered"
+	// CmdInterrupt stops the running turn; the turn still ends with a
+	// LineTurnEnd.
+	CmdInterrupt = "interrupt"
+	// CmdStatus asks whether a turn runs and what the last one ended with; the
+	// process answers with a LineStatus carrying ID.
+	CmdStatus = "status"
+	// CmdSet changes Model and, when Effort is present, the reasoning effort
+	// for the next request.
+	CmdSet = "set"
+)
+
+// Command is one line of the process's standard input.
+type Command struct {
+	Type   string  `json:"type"`
+	ID     string  `json:"id,omitempty"`
+	Text   string  `json:"text,omitempty"`
+	Model  string  `json:"model,omitempty"`
+	Effort *string `json:"effort,omitempty"`
+}
+
+// Line types, process to daemon.
+const (
+	LineInit      = "init"
+	LineUser      = "user"
+	LineTurnStart = "turn_start"
+	LineReply     = "reply"
+	LineReasoning = "reasoning"
+	LineToolStart = "tool_start"
+	LineToolEnd   = "tool_end"
+	LineUsage     = "usage"
+	LineRetry     = "retry"
+	LineTurnEnd   = "turn_end"
+	LineSteerAck  = "steer_ack"
+	LineUserTaken = "user_taken"
+	LineNotice    = "notice"
+	LineStatus    = "status"
+)
+
+// Turn end reasons.
+const (
+	ReasonDone    = "done"
+	ReasonAborted = "aborted"
+	ReasonError   = "error"
+)
+
+// Line is one line of the process's standard output. Which fields a line
+// carries follows its type; T is always set. Free text is bounded by the
+// process (ToolOutputBytes for a tool result).
+type Line struct {
+	T string `json:"t"`
+	// At is the line's wall time, epoch milliseconds.
+	At int64 `json:"at,omitempty"`
+
+	// init
+	Session string `json:"session,omitempty"`
+	Version string `json:"version,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	// Resumed counts the conversation items an init recovered from the
+	// session's persisted deltas.
+	Resumed int `json:"resumed,omitempty"`
+
+	// Turn is the turn counter (1-based) a turn-scoped line belongs to.
+	Turn int `json:"turn,omitempty"`
+
+	// reply, reasoning, user, user_taken, notice, turn_end
+	Item  string `json:"item,omitempty"`
+	Text  string `json:"text,omitempty"`
+	Final bool   `json:"final,omitempty"`
+	// Encrypted marks a reasoning item that carries opaque content with no
+	// readable summary.
+	Encrypted bool `json:"encrypted,omitempty"`
+
+	// tool_start, tool_end
+	Call string `json:"call,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Args is the call's argument JSON as the model wrote it.
+	Args string `json:"args,omitempty"`
+	// Output is a tool result, bounded; Truncated says it was cut.
+	Output    string `json:"output,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Failed    bool   `json:"failed,omitempty"`
+
+	// usage: one model request's figures. CostUSD is the provider's own
+	// figure when the response carried one.
+	InputTokens     int64    `json:"input_tokens,omitempty"`
+	OutputTokens    int64    `json:"output_tokens,omitempty"`
+	CachedTokens    int64    `json:"cached_tokens,omitempty"`
+	ReasoningTokens int64    `json:"reasoning_tokens,omitempty"`
+	CostUSD         *float64 `json:"cost_usd,omitempty"`
+	// Context is the request's input size in tokens, the context window's
+	// occupancy; Window is the model's window when the process knows it.
+	Context int64 `json:"context,omitempty"`
+	Window  int64 `json:"window,omitempty"`
+
+	// retry
+	Attempt    int   `json:"attempt,omitempty"`
+	MaxRetries int   `json:"max_retries,omitempty"`
+	DelayMS    int64 `json:"delay_ms,omitempty"`
+	Status     int   `json:"status,omitempty"`
+
+	// turn_end
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error,omitempty"`
+
+	// steer_ack, status
+	ID      string `json:"id,omitempty"`
+	Refusal string `json:"refusal,omitempty"`
+
+	// status: Running is whether a turn runs; Text, Reason and Error describe
+	// the last turn's final reply and end; Taken lists the steered messages
+	// that turn took.
+	Running bool     `json:"running,omitempty"`
+	Taken   []string `json:"taken,omitempty"`
+}
+
+// ParseLine decodes one output line.
+func ParseLine(raw []byte) (Line, error) {
+	var l Line
+	err := json.Unmarshal(raw, &l)
+	return l, err
+}
