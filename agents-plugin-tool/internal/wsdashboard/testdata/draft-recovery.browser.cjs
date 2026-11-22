@@ -334,6 +334,39 @@ async function legacyImageAcrossWindows(browser) {
   } finally { await context.close(); }
 }
 
+async function removalAcrossWindows(browser) {
+  const context = await browser.newContext();
+  try {
+    const first = await context.newPage();
+    await first.goto(base + session);
+    const one = await frameFor(first);
+    await type(one, 'Removal draft');
+    await paste(one, 'gone.png');
+    await one.locator('#cimgs img[alt="gone.png"]').waitFor();
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    const second = await context.newPage();
+    await second.goto(base + session);
+    const two = await frameFor(second);
+    await two.locator('#cimgs img[alt="gone.png"]').waitFor();
+
+    // The first window removes the image; the stale second window still
+    // holds it and saves an edit; the first window's next save is clean.
+    await type(one, 'Removal draft');
+    await one.locator('#cimgs img[alt="gone.png"]').waitFor({ state: 'detached' });
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    await type(two, await two.locator('#ctext').inputValue() + ' stale edit');
+    assert.equal(await two.evaluate(() => window.wsSaveSessionDraft()), true);
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    assert.deepEqual((await recoveryRow(one)).images, [], 'removal wins over the stale window');
+
+    // The removing window's own undo brings it back.
+    await type(one, 'Removal draft [Image #1]');
+    await one.locator('#cimgs img[alt="gone.png"]').waitFor();
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    assert.deepEqual((await recoveryRow(one)).images.map(p => p.name), ['gone.png'], 'an undo in the removing window restores it');
+  } finally { await context.close(); }
+}
+
 async function failedStorage(browser) {
   const context = await browser.newContext();
   try {
@@ -470,6 +503,7 @@ async function queueAcrossTabs(browser) {
       await imagesAcrossWindows(browser);
       await rollingUpgradeImages(browser);
       await legacyImageAcrossWindows(browser);
+      await removalAcrossWindows(browser);
       await failedStorage(browser);
       await ackWithUnavailableLegacyStorage(browser);
       await queueAcrossTabs(browser);

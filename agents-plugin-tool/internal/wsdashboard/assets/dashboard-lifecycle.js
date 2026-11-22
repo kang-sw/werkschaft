@@ -177,6 +177,10 @@
   function draftImageID(p) { return p.id || "legacy:" + draftImageSig(p).slice(4); }
   function draftKnow(p) { draftKnownImages.add(draftImageID(p)); draftKnownImages.add(draftImageSig(p)); }
   function draftImageKnown(p) { return draftKnownImages.has(p.id || draftImageSig(p)); }
+  // Removal wins: an image ID this renderer knew and no longer holds goes in
+  // the row's removed set, so a stale window cannot bring it back. Only the
+  // renderer that removed it lifts it again (an undo, a returned send).
+  var draftTombstoned = new Set(), DRAFT_TOMBSTONES = 64;
 
   function draftDatabase() {
     return new Promise(function (resolve) {
@@ -330,16 +334,28 @@
       // Another window may have committed images this one never loaded.
       // Keep their bytes; a restore reattaches them as loose markers.
       var current = existing && existing.active, active = record;
+      var removed = new Set(existing && Array.isArray(existing.removed) ? existing.removed : []), own = new Set();
+      images.forEach(function (p) {
+        var id = draftImageID(p);
+        own.add(id);
+        if (draftTombstoned.delete(id)) removed.delete(id);
+      });
+      draftKnownImages.forEach(function (id) {
+        if (id.indexOf("sig:") !== 0 && !own.has(id) && !draftTombstoned.has(id)) { draftTombstoned.add(id); removed.add(id); }
+      });
+      var kept = function (p) { return !removed.has(draftImageID(p)); };
       // An ID-less entry from an older page counts as foreign unless its
       // content matches an image this renderer loaded or wrote.
       var foreign = current && Array.isArray(current.images) ? current.images.filter(function (p) {
-        return p && !draftImageKnown(p);
+        return p && !draftImageKnown(p) && kept(p);
       }) : [];
-      if (foreign.length) {
+      if (foreign.length || record && !record.images.every(kept)) {
         active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [] });
-        active.images = active.images.concat(foreign);
+        active.images = active.images.filter(kept).concat(foreign);
       }
-      return active || Object.keys(merged).length ? { active: active, deliveries: merged } : null;
+      var tombstones = Array.from(removed).slice(-DRAFT_TOMBSTONES);
+      if (!active && !Object.keys(merged).length && !tombstones.length) return null;
+      return { active: active, deliveries: merged, removed: tombstones };
     }).then(function () {
       if (draftWrite !== write) return true;
       draftWrite = null;
@@ -382,7 +398,10 @@
       draftDB = db;
       return db ? draftTransaction(false).catch(function () { draftDB = null; return null; }) : null;
     }).then(function (record) {
-      var active = record && record.active;
+      var active = record && record.active, removed = new Set(record && Array.isArray(record.removed) ? record.removed : []);
+      if (active && Array.isArray(active.images) && removed.size) {
+        active = Object.assign({}, active, { images: active.images.filter(function (p) { return !removed.has(draftImageID(p)); }) });
+      }
       var useActive = active && (draftLegacy === active.base || draftLegacy === active.projection);
       var prepared = useActive ? active.draft : legacy;
       if (!ctext) {
