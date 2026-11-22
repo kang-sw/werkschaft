@@ -194,6 +194,7 @@ type Daemon struct {
 	index      *Index
 	source     SessionSource
 	config     *ConfigBackend
+	companion  companionState
 	agents     AgentHost
 	leadNudges interface {
 		Start()

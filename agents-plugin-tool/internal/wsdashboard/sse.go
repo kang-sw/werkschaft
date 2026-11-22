@@ -583,6 +583,16 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				return
 			}
 		}
+		var companionWake <-chan struct{}
+		sendCompanion := func() bool {
+			snapshot := d.companion.current()
+			companionWake = snapshot.wake
+			payload, _ := json.Marshal(snapshot.config)
+			return sink.event("companion", payload) == nil && sink.flush() == nil
+		}
+		if src.key.kind == regionRail && !sendCompanion() {
+			return
+		}
 		send := func(pr pageRender, at uint64) bool {
 			d.broker.follow(sub, pr.deps, at)
 			if pr.err != nil {
@@ -649,6 +659,11 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				return
 			case <-d.stop:
 				return
+			case <-companionWake:
+				if !sendCompanion() {
+					return
+				}
+				continue
 			case <-keepAlive.C:
 				if sink.keepAlive() != nil {
 					return

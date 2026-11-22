@@ -1,9 +1,42 @@
 package mcp
 
 import (
+	"context"
+	"net/http"
+
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
+
+func (s *Server) notifyScalarTune(key string, opts wsconfig.Options) {
+	notifyCompactionTune(key)
+	if key == wsconfig.ItemWorkflowLang {
+		s.refreshAgentAmbient()
+	}
+	if !wsdashboard.IsCompanionConfigKey(key) {
+		return
+	}
+	path, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		return
+	}
+	dir, err := s.dashboard.stateDir()
+	if err != nil {
+		return
+	}
+	if host, ok := s.live.host.(wsdashboard.CompanionConfigHost); ok && host.NotifyCompanionConfigChange(dir, path) {
+		return
+	}
+	endpoint, err := wsdashboard.ReadEndpoint(dir)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dashboardNudgeTimeout)
+	defer cancel()
+	if err := wsdashboard.SendCompanionConfigChange(ctx, http.DefaultClient, endpoint, path); err != nil {
+		s.debugEvent("dashboard.companion_notification_failed", map[string]any{"error": err.Error()})
+	}
+}
 
 // The dashboard keys live in a "dashboard."-namespace manifest each package
 // ships beside its own manifest. ws-mcp declares no built-in value for them:
@@ -26,11 +59,16 @@ const (
 // manifestGlobalOnlyKeys are manifest-declared keys that pin themselves
 // global-only through wsconfig. The manifest namespace check treats a
 // registered key as ws-mcp's own, so it skips these.
-var manifestGlobalOnlyKeys = map[string]struct{}{DashboardLANKey: {}, DashboardMailboxUndeliveredKey: {}}
+var manifestGlobalOnlyKeys = map[string]struct{}{
+	DashboardLANKey: {}, DashboardMailboxUndeliveredKey: {},
+	wsdashboard.CompanionModeKey: {}, wsdashboard.CompanionDirectorKey: {},
+	wsdashboard.CompanionPackKey: {}, wsdashboard.CompanionPresetKey: {},
+}
 
 func init() {
-	wsconfig.RegisterGlobalOnly(DashboardLANKey)
-	wsconfig.RegisterGlobalOnly(DashboardMailboxUndeliveredKey)
+	for key := range manifestGlobalOnlyKeys {
+		wsconfig.RegisterGlobalOnly(key)
+	}
 }
 
 // DashboardSettings is the dashboard configuration a stdio server reads once

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -25,6 +26,7 @@ type ConfigBackend struct {
 	OrchestrateWarning func(string) string
 	IsLead             func(Registration) bool
 	Changed            func(string)
+	LoadCompanion      func() (CompanionConfig, error)
 }
 
 type configContext struct {
@@ -40,8 +42,9 @@ type configSelection struct {
 
 type configSnapshot struct {
 	configSelection
-	Path    *string                 `json:"path"`
-	Entries []wsconfigservice.Entry `json:"entries"`
+	Path      *string                 `json:"path"`
+	Entries   []wsconfigservice.Entry `json:"entries"`
+	Companion CompanionConfig         `json:"companion"`
 }
 
 type configRequest struct {
@@ -320,7 +323,7 @@ func (d *Daemon) handleConfigSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeConfigError(w, failure)
 		return
 	}
-	writeJSON(w, http.StatusOK, configSnapshot{configSelection: sel, Path: resolved.path, Entries: d.config.Catalog.Entries(sel.Scope, layers)})
+	writeJSON(w, http.StatusOK, configSnapshot{configSelection: sel, Path: resolved.path, Entries: d.config.Catalog.Entries(sel.Scope, layers), Companion: d.companion.current().config})
 }
 
 func decodeConfigRequest(w http.ResponseWriter, r *http.Request, target any) bool {
@@ -382,6 +385,11 @@ func (d *Daemon) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.config.Changed != nil {
 		d.config.Changed(mutation.Key)
+	}
+	if IsCompanionConfigKey(mutation.Key) {
+		if err := d.refreshCompanion(); err != nil {
+			fmt.Fprintf(d.log, "dashboard: refresh companion settings: %v\n", err)
+		}
 	}
 	warnings := []configWarning{}
 	if refreshed, _, _, failure := d.configLayers(resolved); failure.status == 0 {

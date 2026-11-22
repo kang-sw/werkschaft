@@ -330,10 +330,15 @@ func (r *Resolver) GetBool(sessionKey, itemKey string) (bool, Scope, error) {
 // (for example an integer increment). current is "" when the key is absent.
 func setOverrideInFileRMW(path, itemKey string, transform func(current string) string) error {
 	_, err := updateConfigFile(path, func(cfg *Config) error {
+		current, exists := cfg.Overrides[itemKey]
+		value := transform(current)
+		if exists && value == current {
+			return errConfigUnchanged
+		}
 		if cfg.Overrides == nil {
 			cfg.Overrides = map[string]string{}
 		}
-		cfg.Overrides[itemKey] = transform(cfg.Overrides[itemKey])
+		cfg.Overrides[itemKey] = value
 		return nil
 	})
 	return err

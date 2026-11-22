@@ -540,10 +540,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if err := resolver.Unset(storeKey, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
 				return toolTextResponse(req.ID, "", fmt.Errorf("config.tune: %w", err))
 			}
-			notifyCompactionTune(entry.Key)
-			if entry.Key == wsconfig.ItemWorkflowLang {
-				s.refreshAgentAmbient()
-			}
+			s.notifyScalarTune(entry.Key, writeOpts)
 			// The echo reads through the session-anchored resolver so a reset
 			// reports the value that now applies (a committed repo value
 			// included). The reset already happened, so an echo load failure is
@@ -604,10 +601,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if err := resolver.Set(storeKey, value, wsconfig.SetOptions{ExplicitScope: explicitScope, SessionKey: sessionKey}); err != nil {
 				return toolTextResponse(req.ID, "", fmt.Errorf("config.tune: %w", err))
 			}
-			notifyCompactionTune(entry.Key)
-			if entry.Key == wsconfig.ItemWorkflowLang {
-				s.refreshAgentAmbient()
-			}
+			s.notifyScalarTune(entry.Key, writeOpts)
 			resolvedScope := explicitScope
 			if resolvedScope == "" {
 				resolvedScope = entry.DefaultScope()

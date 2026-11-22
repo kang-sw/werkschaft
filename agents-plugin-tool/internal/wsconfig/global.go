@@ -33,12 +33,18 @@ func GlobalPath(opts Options) (string, error) {
 // overrides, and whether it is set: the file's own text, through no
 // manifest and no resolution. A missing file is an unset key.
 func GlobalOverride(opts Options, key string) (string, bool) {
-	cfg, err := loadGlobalConfig(opts)
+	overrides, err := GlobalOverrides(opts)
 	if err != nil {
 		return "", false
 	}
-	value, ok := cfg.Overrides[key]
+	value, ok := overrides[key]
 	return value, ok
+}
+
+// GlobalOverrides reads the persisted scalar overrides from one global snapshot.
+func GlobalOverrides(opts Options) (map[string]string, error) {
+	cfg, err := loadGlobalConfig(opts)
+	return cfg.Overrides, err
 }
 
 // loadGlobalConfig reads the global config file. A missing file returns an
