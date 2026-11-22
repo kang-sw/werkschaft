@@ -168,7 +168,10 @@ jobs:
           else
             files=( "$RUNNER_TEMP/ws-mcp-assets/"* "${desktop[@]}" "$feed" )
             if release=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets,isDraft); then
-              published=$(jq -r '.assets[].name' <<< "$release")
+              # Only a finished upload counts; an interrupted one stays as a non-uploaded
+              # asset of the same name, which upload --clobber deletes and replaces.
+              uploaded='.assets[] | select(.state == "uploaded") | .name'
+              published=$(jq -r "$uploaded" <<< "$release")
               missing() {
                 for file in "${files[@]}"; do
                   grep -Fxq -- "${file##*/}" <<< "$published" || return 0
@@ -177,7 +180,7 @@ jobs:
               }
               if missing; then
                 gh release upload "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-                published=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+                published=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq "$uploaded")
                 if missing; then
                   echo "::error::Release $GITHUB_REF_NAME is still missing assets after the upload."
                   exit 1
