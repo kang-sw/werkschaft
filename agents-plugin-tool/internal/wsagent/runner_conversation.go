@@ -14,6 +14,9 @@ import (
 func (r *Runner) Close() {
 	r.once.Do(func() { close(r.quit) })
 	r.wg.Wait()
+	// Every loop has removed its membership; drain the backend so no late
+	// acquisition outlives the runner.
+	r.awake.Close()
 }
 
 // InboxChanged tells the runner a conversation's inbox changed from the

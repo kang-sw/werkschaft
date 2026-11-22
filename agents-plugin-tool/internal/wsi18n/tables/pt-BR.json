@@ -2933,6 +2933,8 @@
   "js.settings.tier_routing.save": "Salvar",
   "js.settings.key.agent.child_waiting_days.label": "Retenção de agentes filhos em espera",
   "js.settings.key.agent.child_waiting_days.description": "Dias até o daemon limpar os agentes filhos em espera e seus descendentes.",
+  "js.settings.key.agent.keep_awake_during_turns.label": "Manter ativo durante turnos",
+  "js.settings.key.agent.keep_awake_during_turns.description": "Impede a suspensão por inatividade enquanto um turno de agente é executado (macOS e Windows). Desligar a tela e fechar a tampa continuam valendo.",
   "js.settings.key.agent.git_search_roots.label": "Caminhos extras de busca Git",
   "js.settings.key.agent.git_search_roots.description": "Diretórios absolutos que os agentes hospedados podem ler por meio da busca Git.",
   "js.settings.key.compaction.lead_advisory.label": "Limite do aviso de compactação do líder",

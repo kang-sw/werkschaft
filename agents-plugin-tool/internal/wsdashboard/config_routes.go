@@ -438,6 +438,9 @@ func (d *Daemon) handleConfigMutation(w http.ResponseWriter, r *http.Request) {
 	if d.config.Changed != nil {
 		d.config.Changed(mutation.Key)
 	}
+	if mutation.Key == wsconfig.ItemAgentKeepAwakeDuringTurns {
+		d.reloadAgentGlobalConfig()
+	}
 	if IsCompanionConfigKey(mutation.Key) {
 		if err := d.refreshCompanion(); err != nil {
 			fmt.Fprintf(d.log, "dashboard: refresh companion settings: %v\n", err)

@@ -2933,6 +2933,8 @@
   "js.settings.tier_routing.save": "保存",
   "js.settings.key.agent.child_waiting_days.label": "等待中的子智能体保留期",
   "js.settings.key.agent.child_waiting_days.description": "守护进程清理等待中的子智能体及其后代前的天数。",
+  "js.settings.key.agent.keep_awake_during_turns.label": "轮次运行时保持唤醒",
+  "js.settings.key.agent.keep_awake_during_turns.description": "任一智能体轮次运行期间阻止系统空闲睡眠（macOS 和 Windows）。屏幕关闭和合上盖子仍照常生效。",
   "js.settings.key.agent.git_search_roots.label": "额外的 Git 搜索目录",
   "js.settings.key.agent.git_search_roots.description": "托管智能体可通过 Git 搜索读取的绝对目录。",
   "js.settings.key.compaction.lead_advisory.label": "主会话压缩建议阈值",
