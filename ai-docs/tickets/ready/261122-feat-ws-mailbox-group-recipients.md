@@ -293,6 +293,147 @@ Verification:
   `./internal/wsdashboard` mail-wake tests); never the whole `internal/mcp`
   or `internal/wsdashboard` package. Record exact commands in the Result.
 
+### Result (59e8209c5) - 2026-11-22
+
+Landed in 10b1c65f9, with the review fix in 59e8209c5:
+
+- Each fan-out copy opens with
+  `[<ns> group mail <gid>: <n> public recipients; mailbox.recipients lists them]`.
+  The marker follows the peer-lead note and replaces the audience header. A
+  scalar send carries no marker. The group is recorded before the first copy
+  is sent.
+- `internal/mcp/mailbox_groups.go` adds the group store. It is a process-wide
+  in-memory `MailGroupStore`:
+  - gids are `g-<16 hex generation>-<n>`;
+  - it keeps at most 1024 groups and 4 MiB of retained bytes, evicting the
+    oldest first and always keeping the newest;
+  - membership compares routes, never display strings. A route is the named
+    inbox, the ring identity (new `wsmailbox.Store.RingIdentity`), the
+    worktree path and the reply queue;
+  - BCC recipients are kept as routes only.
+- `mailbox.recipients` returns id, sender, sent_at, To and CC, with labels.
+  Every refusal returns the same text: `group not found or no longer kept`.
+- Sender legend: `[senders: <handle> = <label>; ...]`.
+  - The label is the runner's spawn label, else the dashboard title.
+    `cmd/ws-mcp` wires both through `ServerOptions.MailLabels` and
+    `Options.MailLegend`.
+  - Labels are cleaned: a newline becomes a space, `;` and `]` are dropped,
+    and the label is cut to 32 runes.
+  - Three paths render it: `mailbox.recv` text output, `label` on the
+    structured envelopes, and each hosted steer and turn through
+    `LeadMailbox.Legend`. In a hosted submission it sits on the batch head's
+    second line, or forms its own first paragraph when there is no head.
+  - Drain texts and `Record.Mail` never hold a legend. A child's steered mail
+    also keeps Drain's text (`steeredReport.Mail`), so a requeued steer gets a
+    fresh legend.
+- Dashboard batch-head consumers read only the head's first line. They also
+  skip a standalone legend paragraph: without that, a labeled peer mail
+  steered into the middle of a batch would break nudge grouping.
+- `mailbox.recipients` is in `ChildSafeWSTools` and in the three runtime
+  manifests (`>=0.50.8-dev <0.51.0`; the agents-plugin and agents-plugin-pi
+  manifests are byte-identical). Its schema and the shortened `mailbox.send`
+  description fit the 1450 B cap.
+
+Verification. All commands ran from agents-plugin-tool with the prefix
+`GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`:
+
+- `go test ./internal/wsmailbox -count=1`: ok.
+- `go test ./internal/mcp -count=1 -run '^(<names>)$'`: ok. `<names>` is all
+  153 Test functions in these `_test.go` files: agent_mail_routing,
+  agent_tools, hosted_login, lead_mail, mailbox_correspondents,
+  mailbox_fanout, mailbox_groups, mailbox_history, mailbox_legend,
+  mailbox_recv_concurrency, mailbox_runtime, mailbox_tools, mailbox_wake,
+  session_lifecycle, session_mail_access, tool_aliases, tool_schema_size, and
+  the five whiteboard_nudges* files.
+- `go test ./internal/wsagent -count=1 -run '^(<names>)$'`: ok. `<names>` is
+  all 190 Test functions in these `_test.go` files: builtin,
+  builtin_lead_fallback, child_safe_mcp_tools, children, idle_children,
+  lead_runner, mail_routing, pi_send, wake, worker_holder_recovery, agy,
+  agy_lead, agy_output_rate, child_sleep, compaction_advisory,
+  lead_claude_approval, pi, pi_worker_recovery.
+- `go test ./internal/wsdashboard -count=1 -run
+  'TestConversationMailWake|TestConversationBoardNudge'`: ok.
+- `go test ./cmd/ws-mcp -count=1 -run
+  'TestRuntimeCapabilitiesCommand|TestToolsCommandBareListMatchesToolsList|TestToolsCommandShowMatchesInputSchema|TestAgent|TestProxy|TestHostedCLI'`:
+  ok, except `TestProxyWhiteboardLinkHasNoLoginCode`. That test fails the
+  same way on the base commit 1356f7f67, so the failure predates this
+  change and comes from the environment.
+- `go test ./internal/wsrsrc -count=1 -run 'TestPiMirrorUpToDate|TestWsflow'`:
+  ok.
+- `go vet` on mcp, wsagent, wsmailbox, wsdashboard and cmd/ws-mcp is clean,
+  and gofmt is clean on every touched file.
+- The tests that pin the verification items:
+  - fan-out marker: `TestMailboxFanOut*` and `TestMailboxGroupMarker`;
+  - recipient listing: `TestMailboxRecipientsListsThePublicAudienceToEveryMember`;
+  - refusals (outsider, same slug in another worktree, another cache root,
+    unknown, malformed, evicted, restarted):
+    `TestMailboxRecipientsRefusesOutsidersAlike`;
+  - record-before-copy: `TestMailboxGroupRecordPrecedesEveryCopy`;
+  - tool admission: `TestMailboxRecipientsTransportAdmission`;
+  - eviction (count, byte, oversized newest): `TestMailGroupStore*`;
+  - labels and legend: `TestCleanMailLabel`, `TestMailLegendLine`,
+    `TestMailboxRecvShowsTheSenderLegend`, `TestLeadMailboxLegendPlacement`
+    (including a literal `[senders: x = y]` body line) and
+    `TestLeadMailboxDrainKeepsTextsWithoutALegend`;
+  - hosted submission: `TestMailLegendRidesEachSubmission`,
+    `TestMailLegendRefreshesOnARequeuedSteer` and
+    `TestSpawnLabelNamesASpawnedChild`;
+  - dashboard: `TestConversationBoardNudgeBatchSurvivesASenderLegend`.
+
+Decisions:
+
+- The group store is process-wide by default (`ServerOptions.MailGroups`
+  nil), so the per-connection servers share it.
+- Recipient labels are snapshotted at send time. The sender's label is read
+  at lookup time.
+- The `261115` closed allowlist is not in the code yet. The test models it
+  with an explicit `WS_MCP_ALLOWED_TOOLS` list.
+- A child's steered text keeps its legend in `steeredReport.Text`, because
+  the harness's taken messages are matched against it (steerTaken and
+  recovery). `Mail` holds the text to requeue. Swapping the two would make a
+  downgraded daemon miss that match and resend the steer.
+- A turn's reports and held mail share one legend, placed on the first mail
+  text. A child report never gets a legend.
+
+Compatibility verdict: T1. The only degradation is display-only, on an older
+dashboard.
+
+- v0.50.8 Return of a labeled held text: T0. This binary never stores a
+  legend in held text:
+  - `internal/wsagent/runner_conv.go:365,370` hold Drain's `m.Text`;
+  - `:1299,1337,1424` use the labeled copy only for the Send and the wake;
+  - `:1050-1052` Return receives `rec.Mail`.
+
+  A labeled head would still round-trip: in v0.50.8
+  `internal/mcp/lead_mail.go`, `:199,212` route Return through parseMailText,
+  and `:235-238` drop the head region up to the first blank line.
+- Older dashboard: T1. In v0.50.8
+  `internal/wsdashboard/conversation_mail_wake.go`, `:16` anchors the
+  batch-head regex to a single line, and `:30,34` match it against the whole
+  head region. A two-line head therefore fails, and the wake shows as its own
+  row instead of linking to its mail. `:95-96,99,179` make nudge grouping
+  fall back the same way. Display only.
+- Older adapter reading `label` beside an address: T0.
+  `agents-plugin/hooks/claude-mod/watcher.ts:429` and
+  `agents-plugin-pi/src/mailbox-waiter.ts:135` (the same lines at v0.50.8)
+  prefer `from`/`reply_to` over `label` for the head. Pi's `:145` carries
+  `label` only in the structured details.
+- Record shape: T0. `steered_reports[].mail` is a new omitempty field. A
+  v0.50.8 daemon ignores it and requeues the labeled text, which shows a
+  stale label (display only). A record written by v0.50.8 has no `mail` and
+  requeues as before. The new tool, the marker (plain body text) and the
+  in-memory store change no stored shape.
+
+Minor review findings left open:
+
+- A named sender whose mail crossed worktrees gets its label resolved
+  against the recipient's root. This comes from the existing relation
+  mapping.
+- The runner test drives a fake legend; the real `LeadMailbox.Legend` is
+  pinned separately in mcp.
+- agy's direct tool list lacks `mailbox.recipients`. That list is outside
+  the ticket's loadout scope.
+
 ### Phase 2: Sender legend in the Claude/wsflow watcher and Pi
 
 Render the legend from the structured envelopes' `label`, for senders that
