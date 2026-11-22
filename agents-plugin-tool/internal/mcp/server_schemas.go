@@ -829,14 +829,22 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "mailbox.send",
-			"description": `Send a message to another harness session by stable address, without blocking. "to" is either "<slug>@<scope>" (scope one of "machine", "worktree", "clone") to reach a named inbox, or "id:<reply-id>" to reply to whatever mailbox.recv/mailbox.lookup_peers most recently surfaced as your_reply_id/reply_id for that peer. Works even when the caller has no mailbox identity of its own (WS_MAILBOX/WS_MAILBOX_AUTO unset): the first send from any session opens that session's own reply-id return channel, so a reply sent back to "id:<your reply-id>" is always retrievable via mailbox.recv. A top-level lead's sends are prefixed with a "[<product> note: from a peer lead session ...]" line, <product> being this server's namespace, telling the receiver the sender is a peer lead, not its worker.`,
+			"description": `Send a message to another harness session by stable address, without blocking. An address is "slug@scope" (scope machine, worktree, or clone) for a named inbox, or "id:" plus a reply-id that mailbox.recv or mailbox.lookup_peers surfaced. Any send, even with no mailbox identity of your own, opens your reply-id return channel, so replies reach your mailbox.recv. A top-level lead's sends open with a note line saying a peer lead, not the receiver's worker, sent it. With an array to, cc, or bcc, each recipient gets its own copy whose body, after any note line, opens with a generated line naming To and CC (never BCC), then your content unchanged; the receipt lists delivered and failed recipients.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_key": stringProperty(sessionKeyPropertyDescription),
-					"to":          stringProperty(`Recipient address: "<slug>@<scope>" or "id:<reply-id>".`),
-					"content":     stringProperty("Message body."),
-					"format":      stringProperty(formatPropertyDescription),
+					"to": map[string]any{
+						"description": "Recipient address, or an array of them.",
+						"anyOf": []any{
+							map[string]any{"type": "string"},
+							map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						},
+					},
+					"cc":      stringArrayProperty("Public copy recipients: every copy names them."),
+					"bcc":     stringArrayProperty("Hidden recipients: no copy names them."),
+					"content": stringProperty("Message body."),
+					"format":  stringProperty(formatPropertyDescription),
 				},
 				"required": []string{"session_key", "to", "content"},
 			},

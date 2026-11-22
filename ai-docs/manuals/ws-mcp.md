@@ -1582,6 +1582,8 @@ held leads.
 MCP calls during drain may receive 503. Windows survival requires a
 restart-safe holder; one still inside its starter's job object may end with it.
 
+After rolling back the daemon, terminal sessions refresh their tool list.
+
 Session holders: a holder is a small Python process (standard library only,
 3.10 or newer) that owns one child process, over pipes or a PTY (ConPTY on
 Windows), and outlives the daemon, so the child survives a daemon restart
