@@ -8,6 +8,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsrsrc"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -217,6 +218,20 @@ func isReservedNamespaceVar(name string) bool {
 	return false
 }
 
+// undeclaredContextHint tells a caller whose render context carried an
+// undeclared key what the playbook does declare, and where per-run data goes:
+// a render context fills declared placeholders only, so a path or branch the
+// delegate needs belongs in its spawn prompt.
+func undeclaredContextHint(declared []string) string {
+	names := "none"
+	if len(declared) > 0 {
+		sorted := append([]string(nil), declared...)
+		sort.Strings(sorted)
+		names = strings.Join(sorted, ", ")
+	}
+	return "declared variables: " + names + "; per-run data (paths, branches) belongs in the spawn prompt, not the render context"
+}
+
 // buildPlaybookVars assembles the final vars map for wsrsrc.Load.
 //
 // Merge rules:
@@ -248,7 +263,7 @@ func buildPlaybookVars(declared []string, callerContext map[string]string, harne
 	// Check caller context keys against declared — fail loudly on undeclared.
 	for k := range callerContext {
 		if !declaredSet[k] && !isReservedNamespaceVar(k) {
-			return nil, wsrsrc.ErrUndeclaredVar{Name: k}
+			return nil, wsrsrc.ErrUndeclaredVar{Name: k, Hint: undeclaredContextHint(declared)}
 		}
 	}
 

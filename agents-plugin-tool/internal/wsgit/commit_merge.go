@@ -25,6 +25,27 @@ type commitMergePins struct {
 	indexRaw  []byte
 }
 
+// commitMergeGrantMaxPaths bounds how many paths a refusal names.
+const commitMergeGrantMaxPaths = 20
+
+// commitMergeGrantError reports staged paths outside the grant that fail the
+// per-path admission checks (equality with unchanged-HEAD incoming content,
+// and no file/directory relationship). It is the one refusal that lists every
+// offending path.
+type commitMergeGrantError struct {
+	paths []string
+}
+
+func (e *commitMergeGrantError) Error() string {
+	shown := e.paths
+	more := ""
+	if len(shown) > commitMergeGrantMaxPaths {
+		more = fmt.Sprintf(" (+%d more)", len(shown)-commitMergeGrantMaxPaths)
+		shown = shown[:commitMergeGrantMaxPaths]
+	}
+	return "staged paths that need an explicit grant; re-run git.commit adding them to paths: " + strings.Join(shown, ", ") + more
+}
+
 // admitMergeStaging runs only when ordinary path membership would refuse the
 // commit. It never stages anything outside the grant. Equality proves allowed
 // tree bytes, not which actor staged them; a filename or MERGE_HEAD alone does
@@ -66,18 +87,22 @@ func admitMergeStaging(ctx context.Context, runner Runner, root string, grant []
 	if err != nil {
 		return nil, nil, err
 	}
-	var admitted []string
+	var admitted, needGrant []string
 	for _, path := range commitNULPaths(changedOut) {
 		if pathInCommitSet(path, grant) {
 			continue
 		}
-		if head[path] != base[path] || index[path] != incoming[path] {
-			return nil, nil, fmt.Errorf("staged path %q does not equal unchanged-HEAD incoming content", path)
-		}
-		if commitFileDirectoryRelationship(path, base, head, incoming, index) {
-			return nil, nil, fmt.Errorf("unsupported file/directory relationship at %q", path)
+		// Collect every path that fails a per-path check, so one refusal
+		// names everything the caller must add to the grant.
+		if head[path] != base[path] || index[path] != incoming[path] ||
+			commitFileDirectoryRelationship(path, base, head, incoming, index) {
+			needGrant = append(needGrant, path)
+			continue
 		}
 		admitted = append(admitted, path)
+	}
+	if len(needGrant) > 0 {
+		return nil, nil, &commitMergeGrantError{paths: needGrant}
 	}
 	if len(admitted) == 0 {
 		return nil, nil, fmt.Errorf("no incoming staged paths can be admitted")

@@ -723,11 +723,27 @@ var wsSettingsChoiceLabels = {
     var cell = el("td", "tname", entry.selectors.tier);
     var fields = ["backend", "model", "effort"];
     var value = (scope === "builtin" ? entry.default : selected(entry) ?? entry.value) || {};
+    var combos = {};
+    var cb = window.WsSettingsCombobox;
     var inputs = fields.map(function (field) {
       var input = textInput(value[field], entry.selectors.tier + " · " + tr(tierLabels[field]), !canEdit);
+      var combo = cb.attach(input, {
+        getOptions: function () {
+          if (field === "backend") return cb.backendOptions();
+          var backendVal = inputs[0] ? inputs[0].value : value.backend;
+          return field === "model"
+            ? cb.modelOptions(backendVal)
+            : cb.effortOptions(backendVal);
+        }
+      });
+      combos[field] = combo;
       row.append(el("td"));
-      row.lastChild.append(input);
+      row.lastChild.append(combo.node);
       return input;
+    });
+    inputs[0].addEventListener("input", function () {
+      combos.model.refresh();
+      combos.effort.refresh();
     });
     row.prepend(cell);
     var status = el("span", "hint");

@@ -108,6 +108,18 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		settleC:      make(chan struct{}),
 	}
 	c.refreshAmbient()
+	// Its root and effective working directory never change after this:
+	// resolved once here, they serve every occupancy scan (boundConvs) from
+	// memory.
+	c.canonRoot, c.canonCwd = canonicalBinding(rec)
+	if releaseBound(rec) {
+		// The checkouts it is bound to are settled here, once, and whether
+		// a release already ended that binding is read from their markers
+		// before any mail claim or rejoin can ask, so those can answer from
+		// memory; a process start reads the markers again.
+		c.checkouts = resolveCheckouts(rec, c.canonRoot, c.canonCwd)
+		c.releasedCheckout = r.releasedOnDisk(rec, c.checkouts)
+	}
 	// Derived from the record's immutable backend on every load, with no
 	// stored field, and before any profile or config read.
 	refusal := r.admitWorkerRecord(rec)
@@ -126,10 +138,12 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		c.compactNote = restartRestoreMarker
 	}
 	c.refreshHeld()
+	c.live.coverage = c.snapshotCoverage
 	if rec.Lead {
 		_, _, _ = refreshPermissionSelection(dir)
 		r.setSummaryOwner(rec.ReplyID, c)
 		c.live.owner = c.lockSummaryWriter
+		c.live.ownerRAM = c.lockSummaryWriterRAM
 	}
 	if rec.Lead {
 		hidden, err := wsdashboard.ReadSessionHidden(r.opts.Dir, rec.ReplyID)
@@ -162,6 +176,10 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 	if usage := own.Usage; usage != nil && usage.Context != nil && usage.Context.Tokens != nil {
 		tokens := float64(*usage.Context.Tokens)
 		c.contextTokens = &tokens
+	}
+	if usage := own.Usage; usage != nil && usage.Context != nil && usage.Context.Window > 0 {
+		c.contextWindow = usage.Context.Window
+		c.contextCompaction = cloneUsageCompaction(usage.Context.Compaction)
 	}
 	if seed == nil && rec.Lead {
 		// A rejoined lead's list is its snapshot's, which an earlier daemon
@@ -216,6 +234,10 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 			// Bind after the slot is fixed: summary retries can wake off-loop.
 			c.live.summaryStore().SetWake(c.live.wake)
 		}
+		// A rejoin keeps the recovery file an earlier daemon left until its
+		// replay folds that file's evidence (finishAgyNativeReplay): this
+		// write, and any before then, reaches the live slot alone.
+		c.live.diskHold = rec.HolderID != ""
 		c.live.writeSnapshot()
 	}
 	if rec.HolderID != "" && !foreign {

@@ -1110,8 +1110,42 @@ check("a double click on the split handle holds the board", widths(), [null, "70
 store = {};
 start(false);
 page.gridCols = "500px 700px";
+page.width = 1920; page.W.relayout();
 drag(page.split.querySelector(".dcv-edge"), 40);
-check("without the column the split handle leaves the board's width alone", widths(), ["540px", null, false]);
+check("without the column (Band 3) the split handle leaves the board's width alone", widths(), ["540px", null, false]);
+store = {};
+start(false);
+page.width = 2560; page.W.relayout();
+page.gridCols = "532px 744px"; colW = 880;
+be = page.col.querySelector(".bp-edge"); ce = page.split.querySelector(".dcv-edge");
+drag(be, 240);
+check("empty dock .bp-edge freezes convo, widens board, keeps empty Band 4",
+  [widths(), saved(), page.states[page.states.length - 1].empty, page.states[page.states.length - 1].column],
+  [["532px", "984px", true], [532, 984, undefined], true, false]);
+page.gridCols = "532px 984px"; colW = 640;
+drag(ce, 60);
+check("empty dock .dcv-edge pushes board into empty dock while keeping boardw fixed",
+  [widths(), saved(), page.states[page.states.length - 1].empty],
+  [["592px", "984px", true], [592, 984, undefined], true]);
+page.gridCols = "592px 984px"; colW = 580;
+drag(ce, 5000);
+check("empty dock .dcv-edge stops where empty dock keeps PINW_MIN",
+  [widths(), page.states[page.states.length - 1].empty],
+  [["892px", "984px", true], true]);
+be.fire("dblclick", {});
+check("empty dock .bp-edge double-click resets boardw, holds convo, stays empty Band 4",
+  [widths(), saved(), page.states[page.states.length - 1].empty],
+  [["892px", null, false], [892, 0, undefined], true]);
+page.gridCols = "892px 400px"; colW = 864;
+drag(be, 100);
+clickPin(A);
+check("pinning after resizing in empty mode preserves convo and board widths",
+  [widths(), page.states[page.states.length - 1].column, page.states[page.states.length - 1].empty],
+  [["892px", "500px", true], true, false]);
+clickPin(A);
+check("unpinning back to empty mode preserves convo and board widths",
+  [widths(), page.states[page.states.length - 1].column, page.states[page.states.length - 1].empty],
+  [["892px", "500px", true], false, true]);
 store = { cards: JSON.stringify({ cards: [], topics: [], bw: 1200, cw: 0 }) };
 start(false);
 check("a bw from before the split is dropped", [widths(), saved()], [[null, null, false], [undefined, undefined, undefined]]);

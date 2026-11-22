@@ -14,6 +14,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsgit"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -327,6 +328,8 @@ func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
 		Prompt:  req.Prompt,
 		Label:   label,
 		Parent:  &ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID},
+		// The child's key inherits the holder's session-scope config.
+		policyKey: rec.WSKey,
 		// The token holder is the verified spawner.
 		spawnerBackend: rec.Backend,
 	})
@@ -376,6 +379,11 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 			return nil, conflict("cannot resume Pi subagent %s: its parent conversation is closed", id)
 		}
 	}
+	// A release of its checkout after it was bound ended that binding: it is
+	// not reopened there.
+	if checkout := r.loadReleasedCheckout(rec); checkout != "" {
+		return nil, conflict("cannot resume Pi subagent %s: %s", id, checkoutReleasedRefusal(checkout).Error())
+	}
 	dir := wsdashboard.SessionDir(r.opts.Dir, id)
 	file := piSessionFile(dir)
 	if !PiSessionAvailable(dir) {
@@ -399,6 +407,38 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	c = r.startConv(rec, nil)
 	c.watched()
 	return c, nil
+}
+
+// tokenReleaseNoticeInstant is the release instant a worker token's
+// worktree.released notice for worktree may act on: the instant worktree's
+// release marker records. The marker is written before the notice is sent,
+// under the per-worktree release lock that also covers the notice, so a true
+// notice always finds it, with the instant it claims when it claims one. A
+// notice for a checkout with no marker, or claiming a different instant, is
+// refused (conflict); an unreadable marker refuses too.
+func tokenReleaseNoticeInstant(worktree, claimed string) (time.Time, error) {
+	target := canonicalWorktreePath(worktree)
+	at, ok, err := wsgit.WorktreeReleasedAt(target)
+	if err != nil {
+		return time.Time{}, conflict("worktree.released: cannot read the release marker of %s: %v", worktree, err)
+	}
+	if !ok {
+		return time.Time{}, conflict("worktree.released: %s has no release marker; a release notice is accepted only after worktree.release recorded the release", worktree)
+	}
+	if claimed = strings.TrimSpace(claimed); claimed != "" {
+		want, err := time.Parse(time.RFC3339Nano, claimed)
+		if err != nil || !want.Equal(at) {
+			return time.Time{}, conflict("worktree.released: released_at %q does not match the release marker of %s (%s)", claimed, worktree, at.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	return at, nil
+}
+
+// tokenRootLead reports whether a token's conversation is a root lead (a
+// lead nobody spawned), the only caller worktree.release's force gate admits.
+func tokenRootLead(c *conv) bool {
+	rec := c.record()
+	return rec.Lead && rec.Parent == nil
 }
 
 // tokenRequest is the token route's body: the fields each op reads.
@@ -461,6 +501,59 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 			children = []BoundWorktreeChild{}
 		}
 		writeAnswer(w, http.StatusOK, map[string]any{"children": children}, nil)
+		return
+	}
+	if op == "worktree.released" {
+		// worktree.release's notice after it recorded the worktree's release
+		// marker. It touches only conversations that release already ended
+		// (bound before the marker), so a caller cannot reach any other.
+		var body struct {
+			Worktree    string `json:"worktree"`
+			ReleasedAt  string `json:"released_at"`
+			CancelTurns bool   `json:"cancel_turns"`
+			// Probe asks only whether this daemon takes release notices:
+			// worktree.release asks before it changes anything, and refuses
+			// while live agents are bound to a daemon that would not take
+			// the notice (an older one answers its unknown-route refusal).
+			Probe bool `json:"probe"`
+		}
+		if !decode(w, req, &body) {
+			return
+		}
+		if body.Probe {
+			writeAnswer(w, http.StatusOK, map[string]any{"probe": true}, nil)
+			return
+		}
+		if strings.TrimSpace(body.Worktree) == "" {
+			writeAnswer(w, 0, nil, badRequest("worktree.released: worktree is required"))
+			return
+		}
+		// A worker token's notice is believed only as far as the durable
+		// marker bears it out: the release instant is the marker's, and a
+		// notice for a checkout with no marker, or one naming another
+		// instant, is refused and touches nothing. Otherwise any worker could
+		// retire every binding of a checkout that was never released.
+		at, err := tokenReleaseNoticeInstant(body.Worktree, body.ReleasedAt)
+		if err != nil {
+			writeAnswer(w, 0, nil, err)
+			return
+		}
+		// Cancelling turns is a forced release's, which only a root lead may
+		// make (worktree.release's force gate). A token belongs to a spawned
+		// conversation, never to a root lead, so its notice ends the bindings
+		// but cancels no turn: refusing the whole notice instead would leave
+		// a normal release through a worker's ws-mcp with its earlier
+		// bindings still taking input.
+		cancel := body.CancelTurns && tokenRootLead(caller)
+		convs := r.CheckoutReleased(body.Worktree, at, cancel)
+		if convs == nil {
+			convs = []ReleasedConversation{}
+		}
+		answer := map[string]any{"conversations": convs}
+		if body.CancelTurns && !cancel {
+			answer["cancel_refused"] = true
+		}
+		writeAnswer(w, http.StatusOK, answer, nil)
 		return
 	}
 	if strings.HasPrefix(op, "agent.") {
@@ -707,7 +800,12 @@ func (c *conv) takeSteer(text string, mark uint64) {
 		seq := c.steerSeq
 		c.steered = append(c.steered, steeredReport{Text: text, Seq: seq, Mark: mark})
 		c.saveSteered()
-		err := st.Steer(text)
+		var err error
+		if refusedBy := c.admitInput(func() { err = st.Steer(text) }); refusedBy != "" {
+			// Its checkout's release ended the binding after the caller's
+			// snapshot: kept for a next turn, which kick refuses.
+			err = checkoutReleasedRefusal(refusedBy)
+		}
 		if err == nil {
 			c.apply(wslive.Event{Kind: wslive.KindUser, Origin: wslive.OriginWhiteboard, Text: text})
 			c.changed(false)

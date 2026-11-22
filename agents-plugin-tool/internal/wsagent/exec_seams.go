@@ -186,7 +186,7 @@ func (r *Runner) ApproveExec(ctx context.Context, id string, call ExecApproval) 
 	var refusal error
 	if !c.do(func() {
 		if c.closed {
-			refusal = endedError(c.rec)
+			refusal = endedError(c.record())
 			return
 		}
 		if c.execImmediate() {

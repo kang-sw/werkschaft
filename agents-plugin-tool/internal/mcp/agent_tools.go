@@ -69,6 +69,7 @@ func (s *Server) handleAgentTool(ctx context.Context, id json.RawMessage, tool s
 	// so agent.tiers and bare agent.spawn tiers agree.
 	caller := wsagent.LeadCaller(s.mailboxReplyID(key), entry.root, s.playbookHarness(), s.sessionConfigOptions(key))
 	caller.VerifiedBackend = s.agentAdmissionBackend()
+	caller.PolicyKey = key
 	runner := s.pi.agents
 	switch tool {
 	case "agent.spawn":
@@ -366,6 +367,27 @@ func AgentWakeRefused(log io.Writer) func(from, id, reason string) {
 		if err := (wsmailbox.Paths{}).Store().PostSystem(from, "agent:"+id, content, time.Now()); err != nil {
 			if log != nil {
 				fmt.Fprintf(log, "agent %s: wake refusal to %s: %v\n", id, from, err)
+			}
+			return
+		}
+		wswake.Mailbox.Wake()
+	}
+}
+
+// AgentCheckoutReleased is the daemon runner's Options.CheckoutReleased: it
+// tells the sender of a message for an agent whose worktree was released
+// after the agent was bound there, with one system mail naming that
+// worktree, and wakes the mailbox waits. A failed post is logged to log.
+func AgentCheckoutReleased(log io.Writer) func(from, id, checkout, reason string) {
+	return func(from, id, checkout, reason string) {
+		address := wsagent.AgentAddress(id)
+		if strings.TrimSpace(reason) == "" {
+			reason = fmt.Sprintf("its worktree %s was released after it was bound there", checkout)
+		}
+		content := fmt.Sprintf("Your message did not reach agent %s and will not: %s.\nReleased worktree: %s", address, strings.TrimSuffix(strings.TrimSpace(reason), "."), checkout)
+		if err := (wsmailbox.Paths{}).Store().PostSystem(from, "agent:"+id, content, time.Now()); err != nil {
+			if log != nil {
+				fmt.Fprintf(log, "agent %s: checkout release refusal to %s: %v\n", id, from, err)
 			}
 			return
 		}

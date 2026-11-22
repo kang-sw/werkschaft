@@ -504,6 +504,187 @@ class RingSkipTest(HolderTestCase):
         self.assertNotIn(b"thought", b"".join(output))
 
 
+class AuditChannelTest(HolderTestCase):
+    """The negotiated audit channel: skipped stdout lines tee'd with an
+    anchor, fences at kept-run boundaries, and nothing for an old client."""
+
+    def attach_audit(self, holder, offer=1, stream=True):
+        client = self.connect(holder)
+        rid = client._next_id()
+        msg = {"op": "attach", "id": rid, "token": holder.token, "protocol": holder_mod.PROTOCOL_VERSION}
+        if offer is not None:
+            msg["audit"] = offer
+        client.send(msg)
+        reply = client.wait_reply(rid)
+        self.assertTrue(reply["ok"], reply)
+        if stream:
+            self.assertTrue(client.request("replay", {"from": 0})["ok"])
+        return client, reply
+
+    CODE = (
+        "import sys\n"
+        "sys.stdout.buffer.write(b'keep 1\\ndrop a\\ndrop b\\nkeep 2\\nkeep 3\\ndrop c\\n')\n"
+        "sys.stdout.flush()\n"
+    )
+
+    def test_a_client_that_offers_no_audit_gets_none(self):
+        holder = self.start_holder(ring_skip="^drop")
+        client, reply = self.attach_audit(holder, offer=None)
+        self.assertNotIn("audit", reply)
+        self.spawn(client, py_child(self.CODE), mode="pipe")
+        events = client.events_until(lambda m: m.get("event") == "exit")
+        self.assertFalse([m for m in events if str(m.get("event", "")).startswith("audit")])
+        self.assertEqual([decode(m) for m in events if m.get("stream") == "stdout"], [b"keep 1\n", b"keep 2\n", b"keep 3\n"])
+
+    def test_skipped_lines_are_teed_with_anchors_and_fenced_in_order(self):
+        holder = self.start_holder(ring_skip="^drop")
+        client, reply = self.attach_audit(holder)
+        self.assertEqual(reply["audit"], holder_mod.AUDIT_VERSION)
+        self.spawn(client, py_child(self.CODE), mode="pipe")
+        events = client.events_until(lambda m: m.get("event") == "exit")
+        seq_of = {decode(m): m["seq"] for m in events if m.get("stream") == "stdout"}
+        k1, k2, k3 = seq_of[b"keep 1\n"], seq_of[b"keep 2\n"], seq_of[b"keep 3\n"]
+        tees = [m for m in events if m.get("event") == "audit"]
+        self.assertEqual([decode(m) for m in tees], [b"drop a\n", b"drop b\n", b"drop c\n"])
+        self.assertEqual([(m["anchor"], m["index"]) for m in tees], [(k1, 1), (k1, 2), (k3, 1)])
+        for m in tees:
+            self.assertIsInstance(m["at"], int)
+            self.assertNotIn("seq", m)
+        fences = [m for m in events if m.get("event") == "audit_fence"]
+        # The interval before keep 1 (no skips), after keep 1 (two sent),
+        # and the final one after keep 3 (one sent).
+        self.assertEqual(
+            [(f["anchor"], f.get("next"), f.get("through"), f["tee_count_sent"], f["dropped_count"], f.get("final", False)) for f in fences],
+            [(0, k1, k1, 0, 0, False), (k1, k2, k3, 2, 0, False), (k3, None, None, 1, 0, True)],
+        )
+        order = [m for m in events if m.get("event") in ("audit", "audit_fence") or m.get("stream") == "stdout"]
+        pos = {id(m): i for i, m in enumerate(order)}
+        # Audit messages go ahead of ring records: in one chunk, a tee line
+        # reaches the client before the kept line it is anchored on. The
+        # daemon's capture orders them by anchor, not by arrival.
+        k1_msg = next(m for m in order if m.get("seq") == k1)
+        self.assertLess(pos[id(tees[0])], pos[id(k1_msg)])
+        # Each interval's tee lines precede its fence, and a fence precedes
+        # the kept lines it releases.
+        self.assertLess(pos[id(tees[1])], pos[id(fences[1])])
+        k2_msg = next(m for m in order if m.get("seq") == k2)
+        self.assertLess(pos[id(fences[1])], pos[id(k2_msg)])
+        self.assertLess(pos[id(tees[2])], pos[id(fences[2])])
+
+    def test_lines_skipped_while_no_daemon_is_attached_are_counted_dropped(self):
+        holder = self.start_holder(ring_skip="^drop")
+        client = self.attached(holder)
+        code = (
+            "import sys, time\n"
+            "print('keep 1', flush=True)\n"
+            "sys.stdin.readline()\n"
+            "print('drop x', flush=True)\n"
+            "print('drop y', flush=True)\n"
+            "sys.stdin.readline()\n"
+            "print('keep 2', flush=True)\n"
+        )
+        self.spawn(client, py_child(code), mode="pipe")
+        client.events_until(lambda m: is_output(m, b"keep 1"))
+        client.close()
+        self.assertTrue(wait_until(lambda: holder.attachment is None))
+        holder.cond.acquire()
+        try:
+            holder._queue_input(b"go\n", False)
+        finally:
+            holder.cond.release()
+        self.assertTrue(wait_until(lambda: holder.tee_dropped == 2))
+        client2, _ = self.attach_audit(holder)
+        self.assertTrue(client2.request("input", {"data": base64.b64encode(b"go\n").decode()})["ok"])
+        events = client2.events_until(lambda m: m.get("event") == "exit")
+        self.assertFalse([m for m in events if m.get("event") == "audit"])
+        fences = [m for m in events if m.get("event") == "audit_fence" and not m.get("final")]
+        self.assertEqual([(f["tee_count_sent"], f["dropped_count"]) for f in fences], [(0, 2)])
+
+    def test_a_holder_without_a_skip_pattern_does_not_take_the_channel(self):
+        holder = self.start_holder()
+        client, reply = self.attach_audit(holder)
+        self.assertNotIn("audit", reply)
+        self.spawn(client, py_child("print('one')\nprint('two')\n"), mode="pipe")
+        events = client.events_until(lambda m: m.get("event") == "exit")
+        self.assertFalse([m for m in events if str(m.get("event", "")).startswith("audit")])
+
+    def test_drops_of_intervals_fenced_while_detached_reach_the_next_fence(self):
+        holder = self.start_holder(ring_skip="^drop")
+        client = self.attached(holder)
+        code = (
+            "import sys\n"
+            "print('keep 1', flush=True)\n"
+            "sys.stdin.readline()\n"
+            "print('drop x', flush=True)\n"
+            "print('keep 2', flush=True)\n"
+            "print('drop y', flush=True)\n"
+            "print('drop z', flush=True)\n"
+            "print('keep 3', flush=True)\n"
+            "sys.stdin.readline()\n"
+            "print('keep 4', flush=True)\n"
+        )
+        self.spawn(client, py_child(code), mode="pipe")
+        client.events_until(lambda m: is_output(m, b"keep 1"))
+        client.close()
+        self.assertTrue(wait_until(lambda: holder.attachment is None))
+        with holder.cond:
+            holder._queue_input(b"go\n", False)
+        self.assertTrue(wait_until(lambda: holder.tee_carry == 3))
+        client2, _ = self.attach_audit(holder)
+        self.assertTrue(client2.request("input", {"data": base64.b64encode(b"go\n").decode()})["ok"])
+        events = client2.events_until(lambda m: m.get("event") == "exit")
+        fences = [m for m in events if m.get("event") == "audit_fence" and not m.get("final")]
+        self.assertEqual([(f["tee_count_sent"], f["dropped_count"], f.get("lost_before", 0)) for f in fences], [(0, 0, 3)])
+
+    def test_a_read_ending_in_a_cut_line_head_fences_its_whole_lines(self):
+        # One read holds a whole kept line and the head of a line longer
+        # than one record (a 4 KiB ring cuts at 4 KiB, under the 64 KiB
+        # read). The whole line's fence goes out at once; only the cut
+        # line's run waits for the line's end, which the child holds back
+        # until its input arrives.
+        holder = self.start_holder(ring_skip="^drop", ring_bytes=4096, ring_ceiling_bytes=1 << 20)
+        client, _ = self.attach_audit(holder)
+        code = (
+            "import sys\n"
+            "sys.stdout.buffer.write(b'keep 1\\n' + b'x' * 10000)\n"
+            "sys.stdout.flush()\n"
+            "sys.stdin.readline()\n"
+            "sys.stdout.buffer.write(b'y' * 100 + b'\\ndrop a\\nkeep 2\\n')\n"
+            "sys.stdout.flush()\n"
+        )
+        self.spawn(client, py_child(code), mode="pipe")
+        early = client.events_until(lambda m: m.get("event") == "audit_fence" and m.get("through"))
+        seq_of = {decode(m): m["seq"] for m in early if m.get("stream") == "stdout"}
+        fence = early[-1]
+        k1 = fence["through"]
+        self.assertEqual((fence["anchor"], fence["next"], fence["tee_count_sent"]), (0, k1, 0))
+        self.assertTrue(client.request("input", {"data": base64.b64encode(b"go\n").decode()})["ok"])
+        events = early + client.events_until(lambda m: m.get("event") == "exit")
+        records = [m for m in events if m.get("stream") == "stdout"]
+        seq_of = {decode(m): m["seq"] for m in records}
+        self.assertEqual(seq_of[b"keep 1\n"], k1)
+        cut = [m["seq"] for m in records if m.get("partial") or decode(m).startswith(b"x") or decode(m).startswith(b"y")]
+        k2 = seq_of[b"keep 2\n"]
+        fences = [m for m in events if m.get("event") == "audit_fence"]
+        # keep 1 alone, then the cut line (its head is no line's anchor),
+        # then keep 2 after the teed drop, then the final interval.
+        self.assertEqual(
+            [(f["anchor"], f.get("next"), f.get("through"), f["tee_count_sent"], f.get("final", False)) for f in fences],
+            [(0, k1, k1, 0, False), (k1, cut[0], cut[-1], 0, False), (cut[-1], k2, k2, 1, False), (k2, None, None, 0, True)],
+        )
+
+    def test_a_full_audit_queue_drops_tee_lines_and_counts_them(self):
+        holder = self.start_holder(ring_skip="^drop")
+        client, _ = self.attach_audit(holder)
+        with mock.patch.object(holder_mod, "AUDIT_QUEUE_BYTES", 0):
+            self.spawn(client, py_child(self.CODE), mode="pipe")
+            events = client.events_until(lambda m: m.get("event") == "exit")
+        self.assertFalse([m for m in events if m.get("event") == "audit"])
+        fences = [m for m in events if m.get("event") == "audit_fence"]
+        self.assertEqual([(f["tee_count_sent"], f["dropped_count"]) for f in fences], [(0, 0), (0, 2), (0, 1)])
+        self.assertEqual(len([m for m in events if m.get("stream") == "stdout"]), 3)
+
+
 # Synthetic Go HTTP/2 debug lines (GODEBUG=http2debug=2) in the shapes Go's
 # framer and transport log; the values are made up.
 HTTP2_STDERR = (

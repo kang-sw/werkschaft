@@ -16,6 +16,7 @@ import (
 
 func (c *conv) handle(ev Event) {
 	quiet := ev.Replay
+	c.eventSeq = ev.Seq
 	if ev.Seq > 0 && !ev.Replay {
 		c.lineOpen = ev.Seq
 		if ev.LineEnd {
@@ -81,8 +82,9 @@ func (c *conv) handle(ev Event) {
 			if !ev.FinalUsage && !ev.LiveCoalescesTurnEnd {
 				c.steerCompaction(false)
 			}
-			// Pi can report usage after settlement.
-			if c.canKick() && !c.compactIdle() && c.compactionNudgeReady() {
+			// Pi can report usage after settlement. A released binding gets
+			// no compaction turn or nudge.
+			if c.canKick() && c.released() == "" && !c.compactIdle() && c.compactionNudgeReady() {
 				c.kickInput()
 			}
 		}
@@ -376,6 +378,15 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed, Text: turnErr})
 		}
+	}
+	if !quiet {
+		// The runner accepted the logical turn's end (a watchdog continue
+		// returned before reaching here), so agy native rows stop being
+		// observed; settling them before the turn end's forced snapshot
+		// puts them on disk in that write. A replayed (quiet) end never
+		// settles them, and a live end during a replay only notes them:
+		// replayDone settles them, once.
+		c.endAgyNativeObservation(c.r.opts.Now().UnixMilli())
 	}
 	if c.wrapHold && !c.rec.Lead && c.rec.Parent != nil && !quiet {
 		// A gap while streaming is reconciled at agent_settled, not left
@@ -854,8 +865,20 @@ func (c *conv) processEnded() {
 	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
 	c.retry, c.alerted = nil, false
 	c.syncHost(true)
-	c.live.endAgents()
-	c.live.writeSnapshot()
+	// A replay the process's end cut short still resolves what it staged of
+	// agy native rows and what the restored recovery file held (dropping
+	// the rows retention had evicted, settling the rows a live turn end
+	// accepted during it), before endAgents fails the rest; a path that
+	// cleared replaying first still holds the file (diskHold). The fold's
+	// single write carries this end's other changes too.
+	if len(c.agyNativeReplay.staged) > 0 || c.replaying || c.live.diskHold {
+		if !c.finishAgyNativeReplay(true) {
+			c.live.writeSnapshot()
+		}
+	} else {
+		c.live.endAgents()
+		c.live.writeSnapshot()
+	}
 	if !c.closed && !c.quitting && !hadTurn && !hadBackgroundTasks && !hadBgGrace {
 		c.watched()
 	}
@@ -1041,19 +1064,28 @@ func (c *conv) checkInterrupt() {
 	if err != nil || len(recs) == 0 {
 		return
 	}
-	if c.modelWaitBackoffC != nil {
-		c.cancelModelWaitBackoff()
-		return
-	}
-	if !c.turn || c.proc == nil {
-		return
-	}
-	c.interruptAsked = true
-	c.disarmModelWait()
-	if err := c.proc.Interrupt(); err != nil {
+	if _, err := c.cancelTurn(); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: interrupt: %v\n", c.rec.ReplyID, err)
 		c.stopProcess("")
 	}
+}
+
+// cancelTurn is the turn-cancellation step: it ends a model-wait backoff, or
+// asks the backend to interrupt the running turn. It reports whether a turn
+// or backoff was there to cancel, and the backend's interrupt error. What a
+// failure leads to is the caller's: the page's interrupt stops the process,
+// a forced worktree release only reports it. It runs in the loop.
+func (c *conv) cancelTurn() (bool, error) {
+	if c.modelWaitBackoffC != nil {
+		c.cancelModelWaitBackoff()
+		return true, nil
+	}
+	if !c.turn || c.proc == nil {
+		return false, nil
+	}
+	c.interruptAsked = true
+	c.disarmModelWait()
+	return true, c.proc.Interrupt()
 }
 
 // leverHoldCap bounds how long queued input waits, after a turn that
@@ -1204,6 +1236,7 @@ func (c *conv) finishClose() {
 	if len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 {
 		c.update(func(rec *Record) { rec.Mail, rec.Reports = nil, nil })
 	}
+	c.heldSenders = nil
 	c.r.revokeToken(c.rec.ReplyID)
 	c.hold(nil)
 	c.dropHeld()

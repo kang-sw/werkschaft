@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Werkschaft — Windows title strip, mockup v2 (drawer tone)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  MOCKUP ONLY (no implementation). v2 of the Windows title strip: same layout as v1, tone taken from
+  the dashboard drawer (internal/wsdashboard/assets/dashboard-drawer.css; tokens from
+  internal/wswhiteboard/assets/page.css). Caption glyphs are inline SVG (not Segoe Fluent Icons
+  E921/E922/E923/E8BB): identical on any machine, no font dependency.
+-->
+<style>
+  /* ---- theme tokens: same names/values as the dashboard (page.css owns --wb-*) ---- */
+  .light {
+    --wb-bg: #f3f3f0; --wb-fg: #1b1d21; --wb-card: #ffffff; --wb-muted: #e9e8e3;
+    --wb-muted-fg: #5f646b; --wb-primary: #2b62d9; --wb-primary-fg: #ffffff;
+    --wb-shadow: 0 1px 2px rgb(0 0 0 / .14), 0 2px 6px rgb(0 0 0 / .06);
+    --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .16), 0 6px 18px rgb(0 0 0 / .10);
+    --win-edge: rgb(0 0 0 / .22);
+  }
+  .dark {
+    --wb-bg: #141518; --wb-fg: #e7e7e4; --wb-card: #1e2024; --wb-muted: #2b2d32;
+    --wb-muted-fg: #a2a6ad; --wb-primary: #7aa2ff; --wb-primary-fg: #0c1424;
+    --wb-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+    --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+    --win-edge: rgb(255 255 255 / .16);
+  }
+  .light, .dark {
+    --wb-line: color-mix(in srgb, var(--wb-fg) 16%, transparent);
+    --wb-wash: color-mix(in srgb, var(--wb-fg) 6%, transparent);
+    --wb-radius: 12px;
+    --wb-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+    --wb-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --strip-h: 34px;                              /* = --toph / .dr-handle / .gh: the drawer tabs' height */
+    --close-bg: #c42b1c; --close-press: #b22a1b; --close-fg: #ffffff;
+  }
+
+  /* ---- page chrome around the mockup (not part of the design) ---- */
+  html { background: #6b6f76; }
+  body { margin: 0; padding: 28px 24px 56px; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; color: #eef0f3; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .lede { max-width: 1280px; margin: 0 0 12px; color: #d5d8de; }
+  .lede code, .note code, .map code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  .map { max-width: 1280px; margin: 0 0 22px; padding: 8px 12px; border-radius: 8px; background: rgb(0 0 0 / .22); color: #e6e8ec; font-size: 12.5px; }
+  .case { margin: 0 0 26px; width: max-content; max-width: 100%; }
+  .case > h2 { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: #fff; }
+  .case > h2 span { font-weight: 400; color: #cfd3da; }
+  .note { max-width: 1280px; margin: 8px 0 0; color: #d5d8de; font-size: 12.5px; }
+
+  /* ---- fake window ---- */
+  .win {
+    position: relative; overflow: hidden; border-radius: 8px;
+    background: var(--wb-bg); color: var(--wb-fg); font-family: var(--wb-sans);
+    box-shadow: 0 0 0 1px var(--win-edge), 0 12px 32px rgb(0 0 0 / .35);
+  }
+  .win.w1280 { width: 1280px; }
+  .win.w720 { width: 720px; }
+  .win.w600 { width: 600px; }
+  .win.wfloor { width: 560px; }
+
+  /* ================= THE STRIP, in the drawer's language =================
+     One full-width handle: .dr-handle / .gh surface (--wb-card), 0 0 8px 8px radii,
+     --wb-shadow-hi cast onto the page, bold 12px --wb-muted-fg text that goes to
+     --wb-fg on hover, and the open state's inset 2px --wb-primary underline. */
+  .strip {
+    position: relative; z-index: 2; display: flex; align-items: stretch; height: var(--strip-h); box-sizing: border-box;
+    padding-top: 2px;                              /* the drawer tabs' optical centring: padding 2px 0 0 */
+    background: var(--wb-card); border-radius: 0 0 8px 8px; box-shadow: var(--wb-shadow-hi);
+    color: var(--wb-muted-fg); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1;
+    container-type: inline-size;
+    -webkit-user-select: none; user-select: none; cursor: default;
+  }
+  .strip .app { flex: 0 1 auto; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; min-width: 0; }
+  .strip .app img { width: 16px; height: 16px; display: block; flex: none; }
+  .strip .app .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wb-fg); padding-right: 6px; }
+  /* below 600px the title would be a meaningless "W…" sliver: drop it, keep the icon */
+  @container (max-width: 599px) { .strip .title { display: none; } .strip .app { padding-right: 2px; } }
+  .strip .menus { flex: none; display: flex; align-items: center; padding: 0 2px; }
+  .strip .menu {
+    all: unset; box-sizing: border-box; position: relative; display: flex; align-items: center; height: 26px; padding: 0 9px;
+    border-radius: 6px;                            /* .wtrow's 6px row radius */
+    color: var(--wb-muted-fg); font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: default;
+  }
+  .strip .menu:hover, .strip .menu.is-hover { color: var(--wb-fg); background: var(--wb-muted); }     /* .dr-handle:hover colour + .ghead surface */
+  .strip .menu:active, .strip .menu.is-pressed { color: var(--wb-fg); background: var(--wb-muted); }  /* pressed = the menu is open */
+  .strip .menu:active::after, .strip .menu.is-pressed::after {                                        /* .gh.open's 2px primary underline, at the strip's bottom edge */
+    content: ""; position: absolute; left: 9px; right: 9px; bottom: -4px; height: 2px; border-radius: 2px 2px 0 0; background: var(--wb-primary);
+  }
+  .strip .menu:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: -2px; }
+  .strip .drag { flex: 1 1 0; min-width: 48px; }
+  .strip .caps { flex: none; display: flex; margin-top: -2px; /* buttons run the full strip height, over the 2px optical padding */ border-radius: 0 0 8px 0; overflow: hidden; }
+  .strip .cap {
+    all: unset; box-sizing: border-box; width: 46px; height: var(--strip-h);
+    display: grid; place-items: center; color: var(--wb-muted-fg); cursor: default;
+  }
+  .strip .cap svg { width: 10px; height: 10px; display: block; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
+  .strip .cap:hover, .strip .cap.is-hover { color: var(--wb-fg); background: var(--wb-muted); }
+  .strip .cap:active, .strip .cap.is-pressed { color: var(--wb-fg); background: color-mix(in srgb, var(--wb-fg) 13%, var(--wb-muted)); }
+  .strip .cap.close:hover, .strip .cap.close.is-hover { background: var(--close-bg); color: var(--close-fg); }
+  .strip .cap.close:active, .strip .cap.close.is-pressed { background: var(--close-press); color: var(--close-fg); opacity: .9; }
+  .strip .cap:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: -2px; }
+  .win.maximized { border-radius: 0; }
+
+  /* Unfocused: the whole handle steps down one shadow level (--wb-shadow, the card elevation), text and icon dim */
+  .win.unfocused .strip { box-shadow: var(--wb-shadow); }
+  .win.unfocused .strip .app .title, .win.unfocused .strip .menu, .win.unfocused .strip .cap { color: color-mix(in srgb, var(--wb-muted-fg) 62%, transparent); }
+  .win.unfocused .strip .app img { opacity: .5; }
+  .win.unfocused { box-shadow: 0 0 0 1px color-mix(in srgb, var(--win-edge) 60%, transparent), 0 6px 18px rgb(0 0 0 / .22); }
+
+  /* ================= FAKE DASHBOARD (colours only; layout is a rough stand-in) ================= */
+  .dash { padding: 0 16px 16px; height: 180px; box-sizing: border-box; position: relative; overflow: hidden; }
+  .dash .top { display: flex; gap: 10px; align-items: flex-start; height: 34px; padding-top: 10px; box-sizing: content-box; }
+  .dash .tph {
+    height: 34px; box-sizing: border-box; display: inline-flex; align-items: center; gap: 8px; padding: 2px 12px 0;
+    background: var(--wb-card); color: var(--wb-muted-fg); border-radius: 0 0 8px 8px; box-shadow: var(--wb-shadow-hi);
+    font-size: 12px; font-weight: 700; white-space: nowrap; margin-top: -10px; position: relative; top: 0;
+  }
+  .dash .tph b { color: var(--wb-fg); font-weight: 700; }
+  .dash .chip { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--wb-muted); color: var(--wb-muted-fg); }
+  .dash .chip.pri { background: var(--wb-primary); color: var(--wb-primary-fg); }
+  .dash .spacer { flex: 1; }
+  .dash .cards { display: grid; grid-template-columns: 220px 1fr 1fr; gap: 12px; margin-top: 20px; }
+  /* cards as the drawer's .gpanel / .ghead */
+  .dash .card { display: flex; flex-direction: column; background: var(--wb-card); border-radius: var(--wb-radius); box-shadow: var(--wb-shadow); min-width: 0; height: 108px; box-sizing: border-box; overflow: hidden; }
+  .dash .ghead { flex: none; display: flex; align-items: center; min-height: 30px; padding: 4px 8px 4px 12px; background: var(--wb-muted); font-size: 13px; box-sizing: border-box; }
+  .dash .cbody { padding: 4px 14px; }
+  .dash .ln { height: 8px; border-radius: 4px; background: var(--wb-wash); margin: 8px 0; }
+  .dash .ln.s { width: 55%; } .dash .ln.m { width: 78%; }
+  .win.w720 .dash .cards, .win.w600 .dash .cards, .win.wfloor .dash .cards { grid-template-columns: 1fr 1fr; }
+  .win.w720 .dash .cards .card:first-child, .win.w600 .dash .cards .card:first-child, .win.wfloor .dash .cards .card:first-child { display: none; }
+
+  /* ---- state legend ---- */
+  .legend { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .legend .cell { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: #d5d8de; }
+  .legend .swatch { border-radius: 8px; overflow: visible; padding-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>Werkschaft — Windows title strip <span style="font-weight:400;color:#cfd3da">v2 mockup · drawer tone</span></h1>
+<p class="lede">
+  Same layout as v1, re-toned as one full-width drawer handle. Height <b>34px</b> (v1: 32): the drawer's tabs, <code>.tph</code> and the header are all 34px (<code>--toph</code>),
+  so the strip and the tabs hanging under it share one rhythm; the native Win11 caption is 32px, the 2px is the price of that alignment.
+  Hover and press every label and caption button in any frame.
+</p>
+<p class="map"><b>Drawer rules per part —</b>
+  strip fill/radii/shadow: <code>.dr-handle</code>/<code>.gh</code> (<code>--wb-card</code>, <code>0 0 8px 8px</code>, <code>--wb-shadow-hi</code>);
+  text: <code>12px / 700 / --wb-muted-fg</code> → <code>--wb-fg</code> on <code>:hover</code>;
+  label hover surface: <code>.ghead</code>'s <code>--wb-muted</code> at <code>.wtrow</code>'s 6px radius;
+  menu-open state: <code>.gh.open</code>'s 2px <code>--wb-primary</code> underline; focus ring: <code>1.5px --wb-primary, -2px offset</code>;
+  caption hover: <code>--wb-muted</code> (close keeps #c42b1c); unfocused: drops to <code>--wb-shadow</code>.</p>
+
+<!-- (1) -->
+<section class="case">
+  <h2>1 · Light, normal <span>— 1280px</span></h2>
+  <div class="win light w1280">
+    <div class="strip">
+      <div class="app"><img src="../../../../../agents-plugin-tool/desktop/icons/icon.png" alt=""><span class="title">Werkschaft</span></div>
+      <div class="menus">
+        <button class="menu">File</button><button class="menu">Edit</button><button class="menu">Window</button>
+        <button class="menu">Help</button><button class="menu">Connection</button><button class="menu">View</button>
+      </div>
+      <div class="drag" data-tauri-drag-region></div>
+      <div class="caps">
+        <button class="cap min" aria-label="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+        <button class="cap max" aria-label="Maximize"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg></button>
+        <button class="cap close" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button>
+      </div>
+    </div>
+    <div class="dash">
+      <div class="top"><span class="tph"><b>my-project</b> · refactor-session</span><span class="tph"><span class="chip pri">claude</span><span class="chip">idle</span></span><span class="spacer"></span><span class="tph">5h 42% · 7d 18%</span></div>
+      <div class="cards">
+        <div class="card"><div class="ghead">Agents</div><div class="cbody"><div class="ln m"></div></div><div class="ln s"></div><div class="ln"></div></div>
+        <div class="card"><div class="ghead">Conversation</div><div class="cbody"><div class="ln"></div></div><div class="ln m"></div><div class="ln s"></div></div>
+        <div class="card"><div class="ghead">Board</div><div class="cbody"><div class="ln m"></div></div><div class="ln"></div><div class="ln s"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- (2) -->
+<section class="case">
+  <h2>2 · Dark, normal <span>— 1280px</span></h2>
+  <div class="win dark w1280">
+    <div class="strip">
+      <div class="app"><img src="../../../../../agents-plugin-tool/desktop/icons/icon.png" alt=""><span class="title">Werkschaft</span></div>
+      <div class="menus">
+        <button class="menu">File</button><button class="menu">Edit</button><button class="menu">Window</button>
+        <button class="menu">Help</button><button class="menu">Connection</button><button class="menu">View</button>
+      </div>
+      <div class="drag" data-tauri-drag-region></div>
+      <div class="caps">
+        <button class="cap min" aria-label="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+        <button class="cap max" aria-label="Maximize"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg></button>
+        <button class="cap close" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button>
+      </div>
+    </div>
+    <div class="dash">
+      <div class="top"><span class="tph"><b>my-project</b> · refactor-session</span><span class="tph"><span class="chip pri">claude</span><span class="chip">idle</span></span><span class="spacer"></span><span class="tph">5h 42% · 7d 18%</span></div>
+      <div class="cards">
+        <div class="card"><div class="ghead">Agents</div><div class="cbody"><div class="ln m"></div></div><div class="ln s"></div><div class="ln"></div></div>
+        <div class="card"><div class="ghead">Conversation</div><div class="cbody"><div class="ln"></div></div><div class="ln m"></div><div class="ln s"></div></div>
+        <div class="card"><div class="ghead">Board</div><div class="cbody"><div class="ln m"></div></div><div class="ln"></div><div class="ln s"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- (3) -->
+<section class="case">
+  <h2>3 · Dark, "Window" label hovered + Close hovered <span>— 1280px (forced via .is-hover; real CSS uses :hover)</span></h2>
+  <div class="win dark w1280">
+    <div class="strip">
+      <div class="app"><img src="../../../../../agents-plugin-tool/desktop/icons/icon.png" alt=""><span class="title">Werkschaft</span></div>
+      <div class="menus">
+        <button class="menu">File</button><button class="menu">Edit</button><button class="menu is-hover">Window</button>
+        <button class="menu">Help</button><button class="menu">Connection</button><button class="menu">View</button>
+      </div>
+      <div class="drag" data-tauri-drag-region></div>
+      <div class="caps">
+        <button class="cap min" aria-label="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+        <button class="cap max" aria-label="Maximize"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg></button>
+        <button class="cap close is-hover" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button>
+      </div>
+    </div>
+    <div class="dash">
+      <div class="top"><span class="tph"><b>my-project</b> · refactor-session</span><span class="tph"><span class="chip pri">claude</span><span class="chip">idle</span></span><span class="spacer"></span><span class="tph">5h 42% · 7d 18%</span></div>
+      <div class="cards">
+        <div class="card"><div class="ghead">Agents</div><div class="cbody"><div class="ln m"></div></div><div class="ln s"></div><div class="ln"></div></div>
+        <div class="card"><div class="ghead">Conversation</div><div class="cbody"><div class="ln"></div></div><div class="ln m"></div><div class="ln s"></div></div>
+        <div class="card"><div class="ghead">Board</div><div class="cbody"><div class="ln m"></div></div><div class="ln"></div><div class="ln s"></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="legend">
+    <div class="cell">label pressed (menu open)
+      <div class="swatch dark"><div class="strip" style="width:150px"><div class="menus" style="padding:0 6px"><button class="menu is-pressed">Connection</button></div></div></div></div>
+    <div class="cell">caption hover / pressed (light)
+      <div class="swatch light"><div class="strip" style="width:276px;justify-content:flex-end"><div class="caps"><button class="cap is-hover"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button><button class="cap is-pressed"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg></button><button class="cap close is-hover"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button></div></div></div></div>
+    <div class="cell">close pressed (#b22a1b)
+      <div class="swatch light"><div class="strip" style="width:92px;justify-content:flex-end"><div class="caps"><button class="cap close is-pressed"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button></div></div></div></div>
+  </div>
+</section>
+
+<!-- (4) -->
+<section class="case">
+  <h2>4 · Light, unfocused + maximized <span>— 1280px (restore glyph, square corners, dimmed text)</span></h2>
+  <div class="win light w1280 unfocused maximized">
+    <div class="strip">
+      <div class="app"><img src="../../../../../agents-plugin-tool/desktop/icons/icon.png" alt=""><span class="title">Werkschaft</span></div>
+      <div class="menus">
+        <button class="menu">File</button><button class="menu">Edit</button><button class="menu">Window</button>
+        <button class="menu">Help</button><button class="menu">Connection</button><button class="menu">View</button>
+      </div>
+      <div class="drag" data-tauri-drag-region></div>
+      <div class="caps">
+        <button class="cap min" aria-label="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+        <button class="cap max" aria-label="Restore"><svg viewBox="0 0 10 10"><path d="M2.5 2.5V.5h7v7h-2"/><rect x=".5" y="2.5" width="7" height="7"/></svg></button>
+        <button class="cap close" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button>
+      </div>
+    </div>
+    <div class="dash">
+      <div class="top"><span class="tph"><b>my-project</b> · refactor-session</span><span class="tph"><span class="chip pri">claude</span><span class="chip">idle</span></span><span class="spacer"></span><span class="tph">5h 42% · 7d 18%</span></div>
+      <div class="cards">
+        <div class="card"><div class="ghead">Agents</div><div class="cbody"><div class="ln m"></div></div><div class="ln s"></div><div class="ln"></div></div>
+        <div class="card"><div class="ghead">Conversation</div><div class="cbody"><div class="ln"></div></div><div class="ln m"></div><div class="ln s"></div></div>
+        <div class="card"><div class="ghead">Board</div><div class="cbody"><div class="ln m"></div></div><div class="ln"></div><div class="ln s"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- (5) narrow -->
+<section class="case">
+  <h2>5 · Narrow widths, dark <span>— 720px, 600px, 560px (the floor)</span></h2>
+  <div class="win dark w720" style="margin-bottom:14px">
+    <div class="strip">
+      <div class="app"><img src="../../../../../agents-plugin-tool/desktop/icons/icon.png" alt=""><span class="title">Werkschaft</span></div>
+      <div class="menus">
+        <button class="menu">File</button><button class="menu">Edit</button><button class="menu">Window</button>
+        <button class="menu">Help</button><button class="menu">Connection</button><button class="menu">View</button>
+      </div>
+      <div class="drag" data-tauri-drag-region></div>
+      <div class="caps">
+        <button class="cap min" aria-label="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+        <button class="cap max" aria-label="Maximize"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg></button>
+        <button class="cap close" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button>
+      </div>
+    </div>
+    <div class="dash" style="height:120px"><div class="top"><span class="tph"><b>my-project</b> · refactor-session</span><span class="spacer"></span><span class="tph">5h 42%</span></div>
+      <div class="cards"><div class="card"><div class="ghead">Agents</div></div><div class="card"><div class="ghead">Agents</div></div></div></div>
+  </div>
+  <div class="win dark w600">
+    <div class="strip">
+      <div class="app"><img src="../../../../../agents-plugin-tool/desktop/icons/icon.png" alt=""><span class="title">Werkschaft</span></div>
+      <div class="menus">
+        <button class="menu">File</button><button class="menu">Edit</button><button class="menu">Window</button>
+        <button class="menu">Help</button><button class="menu">Connection</button><button class="menu">View</button>
+      </div>
+      <div class="drag" data-tauri-drag-region></div>
+      <div class="caps">
+        <button class="cap min" aria-label="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+        <button class="cap max" aria-label="Maximize"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg></button>
+        <button class="cap close" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button>
+      </div>
+    </div>
+    <div class="dash" style="height:120px"><div class="top"><span class="tph"><b>my-project</b></span><span class="spacer"></span><span class="tph">5h 42%</span></div>
+      <div class="cards"><div class="card"><div class="ghead">Agents</div></div><div class="card"><div class="ghead">Agents</div></div></div></div>
+  </div>
+  <div style="height:14px"></div>
+  <div class="win dark wfloor">
+    <div class="strip">
+      <div class="app"><img src="../../../../../agents-plugin-tool/desktop/icons/icon.png" alt=""><span class="title">Werkschaft</span></div>
+      <div class="menus">
+        <button class="menu">File</button><button class="menu">Edit</button><button class="menu">Window</button>
+        <button class="menu">Help</button><button class="menu">Connection</button><button class="menu">View</button>
+      </div>
+      <div class="drag" data-tauri-drag-region></div>
+      <div class="caps">
+        <button class="cap min" aria-label="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+        <button class="cap max" aria-label="Maximize"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg></button>
+        <button class="cap close" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button>
+      </div>
+    </div>
+    <div class="dash" style="height:120px"><div class="top"><span class="tph"><b>my-project</b></span><span class="spacer"></span><span class="tph">5h 42%</span></div>
+      <div class="cards"><div class="card"><div class="ghead">Agents</div></div><div class="card"><div class="ghead">Agents</div></div></div></div>
+  </div>
+  <p class="note">
+    <b>Chosen behaviour:</b> menu labels never shrink or hide; the title text is the only element that gives way
+    (<code>text-overflow: ellipsis</code>, then to nothing, leaving the icon), and the drag area keeps a floor of 48px.
+    At 720px everything fits and the drag area is still ~133px. Below ~635px the title ellipsizes (600px frame: "We…");
+    below 600px it is dropped and only the icon remains (560px frame). 560px is the recommended minimum window width: icon + six labels + 48px drag + three caption buttons.
+  </p>
+</section>
+
+</body>
+</html>

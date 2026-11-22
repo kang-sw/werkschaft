@@ -255,9 +255,17 @@ func TestDeliverCronFileOperationsAtTheProductionSeam(t *testing.T) {
 	// land in the sample; what is pinned is that the two writes the delivery
 	// itself makes are there and that each was one temp file plus one atomic
 	// replace.
-	for _, site := range []string{"wsinbox/inbox_store.go:65:create_temp", "wsagent/record.go:393:create_temp"} {
-		if sites[site] < 1 {
-			t.Errorf("no %s in %v", site, sites)
+	// Sites are matched by file and kind, not line: the line moves with every
+	// edit to those files.
+	for _, want := range []struct{ file, kind string }{{"wsinbox/inbox_store.go:", ":create_temp"}, {"wsagent/record.go:", ":create_temp"}} {
+		found := false
+		for site := range sites {
+			if strings.HasPrefix(site, want.file) && strings.HasSuffix(site, want.kind) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no %s*%s in %v", want.file, want.kind, sites)
 		}
 	}
 	if kinds["file_io_create_temp"] < 2 || kinds["file_io_atomic_replace"] < 2 {

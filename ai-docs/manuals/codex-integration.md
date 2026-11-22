@@ -125,6 +125,12 @@ Behaviours to keep in mind when reading the sections below:
   and URL are not written to the rollout, so they are re-passed on resume.
 - `config.agents.enabled=false` removes the native subagent tools.
   `features.multi_agent=false` only makes spawning fail.
+- Probed 2026-11-22 against `codex-cli 0.170.0`: `thread/tokenUsage/updated`
+  still carries `tokenUsage.{total,last}` breakdowns plus `modelContextWindow`
+  (shape unchanged since 0.160.0) and arrives before `turn/completed`, followed
+  by a separate `account/rateLimits/updated`. A ws status event replaces the
+  snapshot's whole usage, so the mapper re-publishes the retained context with
+  every limits event (and vice versa).
 - `turn/interrupt` can leave a tool item open. Its `item/completed` may arrive
   during a later turn, still naming the interrupted `turnId`.
 

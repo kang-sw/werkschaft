@@ -116,7 +116,10 @@ type activeJob struct {
 	// wd is the job's working directory, which may lie in another
 	// worktree than root (FenceLegacyRoot counts the job in both).
 	root, wd, key string
-	cmd           *exec.Cmd
+	// real: root and wd as admission resolved them (admittedPlaces),
+	// taken once at launch.
+	real []string
+	cmd  *exec.Cmd
 }
 
 // activeObserver is SetActiveObserver's function; nil observes nothing.
@@ -195,11 +198,19 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	}
 	// Admitted against a worktree release before anything starts; the
 	// reservation counts the job until it is active (legacy_fence.go).
-	release, err := reserveLegacy(opts.Root, wd)
+	realRoot, realWd, err := admittedPlaces(opts.Root, wd)
+	if err != nil {
+		return Response{}, err
+	}
+	real := []string{realRoot, realWd}
+	release, err := reserveLegacy(opts.Root, wd, real)
 	if err != nil {
 		return Response{}, err
 	}
 	defer release()
+	if afterLegacyAdmission != nil {
+		afterLegacyAdmission()
+	}
 	key, err := st.newKey(opts.Root)
 	if err != nil {
 		return Response{}, err
@@ -269,7 +280,13 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 		cmd = program(opts.Cmd, opts.Args...)
 		rec.Argv = argv
 	}
-	cmd.Dir = wd
+	// The process starts where admission checked (admittedPlaces); the
+	// record keeps the working directory as given. realWd is in the
+	// ordinary spelling, never the extended-length form: CreateProcess
+	// refuses \\?\ as a current directory. A Windows working directory past
+	// MAX_PATH fails at process start, as it did before admission resolved
+	// it.
+	cmd.Dir = realWd
 	cmd.Env = env
 	rec.Env = opts.Env
 	if opts.Stdin != "" {
@@ -304,7 +321,7 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	if beforeLegacyActive != nil {
 		beforeLegacyActive()
 	}
-	active.Store(activeKey(opts.Root, key), &activeJob{root: opts.Root, wd: wd, key: key, cmd: cmd})
+	active.Store(activeKey(opts.Root, key), &activeJob{root: opts.Root, wd: wd, real: real, key: key, cmd: cmd})
 	release()
 	notifyActive()
 	done := make(chan struct{})

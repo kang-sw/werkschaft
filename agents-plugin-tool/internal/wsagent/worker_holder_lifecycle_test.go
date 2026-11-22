@@ -16,6 +16,10 @@ func TestHeldWorkerLaunchFailureHasNoDirectFallback(t *testing.T) {
 			wait(t, "initial scan", h.runner.rejoined)
 			h.holders.set(func() { h.holders.spawnErr = errors.New("fixture holder launch refused") })
 			caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
+			if backend == BackendAgy {
+				// agy admits workers from an agy session alone.
+				caller = verifiedLeadCaller(leadParent.ReplyID, h.root, BackendAgy, h.opts.Config)
+			}
 			child, err := h.runner.AgentSpawn(caller, AgentSpawnRequest{Prompt: "work", Tier: backend + ".small", Authority: "workdir-write"})
 			if err != nil {
 				t.Fatal(err)

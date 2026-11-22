@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsauditstore"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsconfigservice"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -182,6 +183,9 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 		LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
 			return dashboardCompanionConfig(catalog, opts)
 		},
+		LoadAuditLimits: func() (wsauditstore.Limits, []string, error) {
+			return dashboardAuditLimits(opts)
+		},
 		Session:            src.settingsSession,
 		IsLead:             src.settingsLead,
 		OrchestrateWarning: orchestrateWhitelistWarning,
@@ -198,6 +202,19 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 		return dashboardTierRoutingView(rsrc, backend.Options, draft, harness, available)
 	}
 	return backend, nil
+}
+
+// dashboardAuditLimits reads the global audit knobs (global-only keys) and
+// clamps a stored set that breaks the knob rules to the nearest valid values,
+// one warning per change ((2129)=a).
+func dashboardAuditLimits(opts wsconfig.Options) (wsauditstore.Limits, []string, error) {
+	overrides, err := wsconfig.GlobalOverrides(opts)
+	if err != nil {
+		return wsauditstore.DefaultLimits(), nil, err
+	}
+	limits, warnings := wsauditstore.LimitsFromValues(overrides)
+	limits, clamped := limits.Clamp()
+	return limits, append(warnings, clamped...), nil
 }
 
 func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Options) (wsdashboard.CompanionConfig, error) {

@@ -791,10 +791,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if err != nil {
 			return toolTextResponse(req.ID, "", fmt.Errorf("worktree.acquire: %w", err))
 		}
-		result, err := acquireWorktree(ctx, s.gitRunner(), s.environ(), entry.root, base, targetBranch, profile, poolRV.Value, key, func(mintPath string) (string, error) {
+		result, err := acquireWorktreeWith(ctx, s.gitRunner(), s.environ(), entry.root, base, targetBranch, profile, poolRV.Value, key, func(mintPath string) (string, error) {
 			resolved, err := s.resolveSession(sessionAccess{mode: sessionAccessMintIdentity, root: mintPath, scope: roleLead, parent: key})
 			return resolved.key, err
-		})
+		}, s.worktreeBusy, s.worktreeAcquireExecFence)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}
@@ -837,7 +837,14 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		force, _ := params.Arguments["force"].(bool)
-		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, CheckExecJobs: s.checkWorktreeLiveExecJobs, FenceExec: s.worktreeExecFence}
+		if force {
+			// force cleans another holder's worktree and cancels the turns of
+			// agents bound before it, so only a root lead session may use it.
+			if lead, ok := s.lookupSession(key); !ok || !lead.isTopLevelLead() {
+				return toolTextResponse(req.ID, "", fmt.Errorf("worktree.release refuses force: only a root lead session (a lead key with no parent) may force a release; this key is a worker's or a child's. Nothing was changed. Release by identity, or ask the root lead"))
+			}
+		}
+		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, CheckExecJobs: s.checkWorktreeLiveExecJobs, FenceExec: s.worktreeExecFence, CheckNotice: s.checkWorktreeReleaseNotice, Released: s.notifyWorktreeReleased}
 		result, err := releaseWorktreeAs(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, lookup, caller)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
@@ -1016,7 +1023,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		commitKey, _ := params.Arguments["session_key"].(string)
 		commitKey = strings.TrimSpace(commitKey)
 		if commitKey != "" {
-			if rec, ok := s.sessions.readState(commitKey, partTodos); ok && len(rec.Todos) > 0 {
+			// An all-done or all-deferred list has nothing to update, and its
+			// summary renders as a bare "..." block, so it adds no reminder.
+			if rec, ok := s.sessions.readState(commitKey, partTodos); ok && hasActiveTodo(rec.Todos) {
 				commitText += fmt.Sprintf("\n## TODO(%s reminder: update this if stale)\n%s\n", s.runtimeNamespace(), renderTodos(rec.Todos, false))
 			}
 		}
@@ -1252,8 +1261,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if nudge := implementCloseMergeReviewNudge(s.gitClient(), root); nudge != "" {
 			text += "next_instruction: " + nudge + "\n"
 		}
-		if reviewNudge := wsreview.CheckpointNudgeWith(context.Background(), s.gitRunner(), root); reviewNudge != "" {
-			text += "review-watermark: " + reviewNudge + "\n"
+		if s.reviewNudgeWanted(callerKey) {
+			if reviewNudge := wsreview.CheckpointNudgeWith(context.Background(), s.gitRunner(), root); reviewNudge != "" {
+				text += "review-watermark: " + reviewNudge + "\n"
+			}
 		}
 		return toolTextResponse(req.ID, text, nil)
 	case "review.marker":

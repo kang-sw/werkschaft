@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsawake"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -22,6 +23,14 @@ type KeyStore interface {
 	// Ensure keeps key usable for root: it refreshes the key's record, or
 	// writes it again when the key store pruned it.
 	Ensure(root, key string) error
+}
+
+// ChildKeyStore is a KeyStore that can mint a spawned child's key so the key
+// inherits its spawner's session-scope config (review_phase, the sage knobs).
+// The runner uses it when the spawning caller supplies its ws key
+// (AgentCaller.PolicyKey) and falls back to Mint otherwise.
+type ChildKeyStore interface {
+	MintChild(root, parentKey string) (string, error)
 }
 
 // LeadKeyStore mints and keeps the lead ws session key of each hosted lead
@@ -179,6 +188,13 @@ type Options struct {
 	Holders  HolderHost
 	LeadKeys LeadKeyStore
 	Mail     LeadMail
+	// AuditSink receives the audit capture of every daemon-hosted lead and
+	// worker process whose backend has an audit adapter (audit_capture.go);
+	// nil captures nothing. A sink that also implements wsaudit.SourcedSink
+	// gets source identities, so capture resumes across a restart without
+	// duplicates. The holder manager should offer its audit channel
+	// (wsholder.Options.AuditChannel) when this is set.
+	AuditSink wsaudit.Sink
 	// MailLegend places the sender legend on one submission of claimed mail
 	// (a steer, or a turn's held mail): texts are exactly the mail texts
 	// submitted together, in order, and senders the reply-ids Drain gave
@@ -237,6 +253,12 @@ type Options struct {
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
 	WakeRefused func(from, id, reason string)
+	// CheckoutReleased, when not nil, tells the sender of a message for a
+	// spawned conversation whose checkout was released after it was bound
+	// (from: the sender's reply-id, id: the conversation, checkout: the
+	// released checkout, reason). Such a conversation never launches, wakes
+	// or resumes there again. Nil falls back to WakeRefused.
+	CheckoutReleased func(from, id, checkout, reason string)
 	// ChildWaitingDays overrides agent.child_waiting_days; 0 reads it.
 	ChildWaitingDays int
 	// keepAwake replaces the platform's idle-sleep backend in tests.
@@ -265,6 +287,13 @@ type Runner struct {
 	closed        map[string]Record
 	childrenIndex map[ParentRef]map[string]bool // mu; parent identity is immutable
 	pendingSpawns map[ParentRef]int             // mu; in-flight width-checked spawns until registered
+	// releases is each checkout's latest completed release this daemon
+	// knows of, keyed by releaseKey: fed by worktree.release's notice and by
+	// every marker a cold check reads. It holds only releases found, never
+	// their absence, and only ever moves later (worktree_release.go). Under
+	// relMu, never held with mu.
+	relMu    sync.Mutex
+	releases map[string]time.Time
 	// expiry is childWaitingExpiry's value, read once (expiryOnce).
 	expiryOnce sync.Once
 	expiry     time.Duration

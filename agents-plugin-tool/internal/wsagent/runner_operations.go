@@ -497,7 +497,7 @@ func (r *Runner) act(id string, fn func(c *conv) error) (State, error) {
 	}
 	if !c.do(func() {
 		if c.closed {
-			err = endedError(c.rec)
+			err = endedError(c.record())
 			return
 		}
 		err = fn(c)

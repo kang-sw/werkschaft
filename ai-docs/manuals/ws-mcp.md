@@ -1437,7 +1437,24 @@ from a support conversation:
   thinking, and signature delta lines out of its ring and client stream.
   It skips only whole stdout lines that fit one record and match from the
   line's start; split or unmatched lines stay. Skipped lines consume no
-  sequence number.
+  sequence number. A daemon that sets the holder manager's `AuditChannel`
+  offers the holder audit channel on attach (an optional `audit` field; an
+  older holder ignores it and attaches as before, an older daemon never
+  offers it, and a holder without `--ring-skip` declines it). On a negotiated connection the holder tees each skipped line
+  as an unsequenced `audit` event anchored on the last kept stdout sequence
+  and fences every kept run (`audit_fence`); lines skipped while no daemon
+  is attached, or past the audit queue, are only counted in the fence. The
+  daemon's audit capture (`wsagent/audit_capture.go`) orders tee lines
+  before the kept lines a fence releases and never blocks the holder reader
+  or the stream mapper. Capture runs only when the runner has an
+  `AuditSink`; the shipped daemon sets neither yet (the audit store,
+  ticket `261119-feat-ws-audit-ring-store`, wires both). The Claude adapter
+  writes `meta.request = {id, prev_id, ctx}` on every event from a model
+  request (`wsaudit.RequestChain`): one chain for the lead and one per
+  native subagent (`parent_tool_use_id`), advancing once per assistant
+  message ID, text-only messages included; `ctx` is input + cache read +
+  cache creation tokens and is absent without usage. Codex streams carry
+  usage but no request ID, so their events omit it.
 - **Access.** Spawn, settings, stop, restart, close, and an approval answer take the
   trusted gate (`wsdashboard.TrustedWrite`): 404 to any viewer that is not a
   browser on this machine, 403 without the daemon's own `Origin`. A LAN
@@ -2127,7 +2144,7 @@ Current launcher inputs:
 | `WS_MCP_BOOTSTRAP_URL` | Download a prebuilt binary when no runtime binary exists. |
 | `WS_MCP_BOOTSTRAP_SHA256` | Optional SHA-256 checksum for `WS_MCP_BOOTSTRAP_URL`. |
 | `WS_MCP_RELEASE_REPOSITORY` | Override the GitHub release repository from `runtime.json`. |
-| `WS_MCP_RELEASE_TAG` | Override the release tag from `runtime.json`, for example `v0.50.8`. |
+| `WS_MCP_RELEASE_TAG` | Override the release tag from `runtime.json`, for example `v0.51.0`. |
 | `WS_MCP_RELEASE_BASE_URL` | Override the full release asset base URL; useful for local file or HTTP smoke tests. |
 | `WS_MCP_LAUNCHER_DEBUG` | Print launcher diagnostics to stderr when set to `1`. |
 | `WS_CODESIGN_IDENTITY` | macOS local dev builds only: code-signing identity name or SHA-1 passed to `codesign --force -s "$WS_CODESIGN_IDENTITY" -i dev.ws.mcp <binary>` before SHA-256 metadata generation; unset leaves builds untouched, and a signing failure aborts the build. |
@@ -2188,7 +2205,7 @@ The helper updates plugin manifests, runtime contracts, Go runtime development
 defaults, release workflow references, build script defaults, selected
 documentation references, and the `agents-plugin-pi/` mirrors (`runtime.json`,
 `bin/ws-mcp-launcher.py`, `rsrc/`, resynced byte-for-byte from `agents-plugin/`,
-plus both `ws-pi-bridge` `package.json` versions). Development binaries such as `0.50.8-dev` satisfy the
+plus both `ws-pi-bridge` `package.json` versions). Development binaries such as `0.51.0-dev` satisfy the
 plugin version the helper just set; older or newer minor releases are stale. The
 concrete range lives in `runtime.json.required_mcp` — read it there rather than
 restating a version here, which froze at `0.29.2` for seven minor releases
@@ -2398,7 +2415,7 @@ Level 2 validates local release assets:
 
 ```bash
 cd agents-plugin-tool
-scripts/build-release-assets.sh 0.50.8-dev
+scripts/build-release-assets.sh 0.51.0-dev
 python3 ../agents-plugin/bin/ws-mcp-launcher.py version
 cd dist
 shasum -a 256 -c SHA256SUMS

@@ -2,6 +2,7 @@ package wsgit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -193,7 +194,8 @@ func TestCommitMergeRefusesUnapprovedStaging(t *testing.T) {
 			indexBefore := string(sparseTestRunGitOutput(t, f.root, "ls-files", "--stage", "-z"))
 			mergeBefore, mergeErr := os.ReadFile(f.mergeFile(t))
 			_, err := (Client{}).Commit(context.Background(), f.root, f.opts())
-			if err == nil || !strings.Contains(err.Error(), test.want) || !strings.Contains(err.Error(), "existing paths grant") {
+			if err == nil || !strings.Contains(err.Error(), test.want) ||
+				(!strings.Contains(err.Error(), "existing paths grant") && !strings.Contains(err.Error(), "adding them to paths")) {
 				t.Fatalf("error = %v, want %q and explicit recovery", err, test.want)
 			}
 			if after := strings.TrimSpace(string(sparseTestRunGitOutput(t, f.root, "rev-parse", "HEAD"))); after != f.ours {
@@ -207,6 +209,62 @@ func TestCommitMergeRefusesUnapprovedStaging(t *testing.T) {
 				t.Fatal("refusal altered merge state")
 			}
 		})
+	}
+}
+
+func TestValidateCommitMergeRenamesStaysASingleWholeMergeRefusal(t *testing.T) {
+	// An incoming rename whose endpoints are both admitted but whose ours side
+	// also renamed it is refused as one error naming the rename, never as a
+	// path list for the grant.
+	raw := []byte("R100\x00old.txt\x00new.txt\x00")
+	err := validateCommitMergeRenames(raw, []string{"new.txt"}, true, nil, nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "unsupported rename relationship") {
+		t.Fatalf("rename refusal = %v", err)
+	}
+	var grantErr *commitMergeGrantError
+	if errors.As(err, &grantErr) {
+		t.Fatalf("rename refusal must not be a grant list: %v", err)
+	}
+}
+
+func TestCommitMergeRefusalNamesEveryPathTheCallerMustAdd(t *testing.T) {
+	f := newCommitMergeFixture(t, nil, nil)
+	sparseTestRunGit(t, f.root, "add", "conflict.txt")
+	mustWriteGitTestFixture(t, f.root, "unrelated.txt", "unapproved edit\n")
+	mustWriteGitTestFixture(t, f.root, "unrelated-added.txt", "unapproved addition\n")
+	sparseTestRunGit(t, f.root, "add", "unrelated.txt", "unrelated-added.txt")
+	_, err := (Client{}).Commit(context.Background(), f.root, f.opts())
+	if err == nil {
+		t.Fatal("unapproved staging admitted")
+	}
+	want := "staged paths that need an explicit grant; re-run git.commit adding them to paths: "
+	if !strings.Contains(err.Error(), want) ||
+		!strings.Contains(err.Error(), "unrelated-added.txt") || !strings.Contains(err.Error(), "unrelated.txt") {
+		t.Fatalf("refusal must name both paths: %v", err)
+	}
+	if strings.Contains(err.Error(), "auto-merged") || strings.Contains(err.Error(), "automatic merge admission") {
+		t.Fatalf("refusal kept the auto-merged jargon: %v", err)
+	}
+	// The named paths are exactly what recovery needs.
+	if _, err := (Client{}).Commit(context.Background(), f.root, f.opts("conflict.txt", "unrelated.txt", "unrelated-added.txt")); err != nil {
+		t.Fatalf("listed grant did not recover: %v", err)
+	}
+}
+
+func TestCommitMergeRefusalTruncatesLongPathLists(t *testing.T) {
+	f := newCommitMergeFixture(t, nil, nil)
+	sparseTestRunGit(t, f.root, "add", "conflict.txt")
+	for i := 0; i < 25; i++ {
+		name := fmt.Sprintf("extra/file-%02d.txt", i)
+		mustWriteGitTestFixture(t, f.root, name, "unapproved\n")
+		sparseTestRunGit(t, f.root, "add", name)
+	}
+	_, err := (Client{}).Commit(context.Background(), f.root, f.opts())
+	if err == nil || !strings.Contains(err.Error(), "(+5 more)") {
+		t.Fatalf("error = %v, want a list truncated with (+5 more)", err)
+	}
+	if got := strings.Count(err.Error(), "extra/file-"); got != 20 {
+		t.Fatalf("named %d paths, want 20: %v", got, err)
 	}
 }
 
@@ -247,8 +305,14 @@ func TestCommitMergeRenameAndFileDirectoryBoundaries(t *testing.T) {
 		}, func(root string) {
 			mustWriteGitTestFixture(t, root, "files/rename.txt", strings.Repeat("rename source content\n", 20)+"incoming edit\n")
 		})
-		if _, err := (Client{}).Commit(context.Background(), f.root, f.opts()); err == nil || !strings.Contains(err.Error(), "files/ours.txt") {
+		_, err := (Client{}).Commit(context.Background(), f.root, f.opts())
+		if err == nil || !strings.Contains(err.Error(), "files/ours.txt") {
 			t.Fatalf("our rename admitted: %v", err)
+		}
+		// Both rename endpoints fail the per-path equality check, so the
+		// refusal lists them for the grant.
+		if !strings.Contains(err.Error(), "adding them to paths") {
+			t.Fatalf("rename endpoints were not worded as a grant list: %v", err)
 		}
 		if _, err := (Client{}).Commit(context.Background(), f.root, f.opts("conflict.txt", "files")); err != nil {
 			t.Fatal(err)
@@ -259,7 +323,7 @@ func TestCommitMergeRenameAndFileDirectoryBoundaries(t *testing.T) {
 			sparseTestRunGit(t, root, "rm", "shape")
 			mustWriteGitTestFixture(t, root, "shape/child.txt", "directory replacement\n")
 		})
-		if _, err := (Client{}).Commit(context.Background(), f.root, f.opts()); err == nil || !strings.Contains(err.Error(), "file/directory") {
+		if _, err := (Client{}).Commit(context.Background(), f.root, f.opts()); err == nil || !strings.Contains(err.Error(), "shape") {
 			t.Fatalf("file/directory replacement admitted: %v", err)
 		}
 		if _, err := (Client{}).Commit(context.Background(), f.root, f.opts("conflict.txt", "shape")); err != nil {

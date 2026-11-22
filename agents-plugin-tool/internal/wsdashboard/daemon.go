@@ -223,6 +223,10 @@ type NudgeBody struct {
 type Daemon struct {
 	companionPacks CompanionPackStore
 
+	// auditRead, when set, replaces the audit store for the audit query
+	// routes (a test's fixture store).
+	auditRead auditViewer
+
 	dir       string
 	lock      *flock.Flock
 	server    *http.Server
@@ -232,6 +236,7 @@ type Daemon struct {
 	index     *Index
 	source    SessionSource
 	config    *ConfigBackend
+	audit     *auditState
 	companion companionState
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub

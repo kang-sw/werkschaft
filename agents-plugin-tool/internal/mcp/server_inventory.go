@@ -144,7 +144,14 @@ func (s *Server) sessionToolAccess(name, key string, entry sessionEntry) (*suble
 	// A forwarding worker's delegation tools use its token, not its key.
 	piByToken := (isPiTool(name) || isAgentTool(name)) && s.piForwards()
 	if entry.scope != roleLead && !piByToken && (isLeadOnlyTool(name) || !roleAllowsTool(entry.scope, name)) {
-		return nil, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name)
+		msg := fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name)
+		if entry.scope == roleDelegate && isLeadOnlyTool(name) {
+			// A spawn key is delegate-scoped by design; the lead-scoped key a
+			// worker-role render spliced in is the only one a lead-only tool
+			// admits.
+			msg += "; this key is delegate-scoped; a lead-only tool needs the lead-scoped key a worker-role playbook.render spliced into your prompt."
+		}
+		return nil, msg
 	}
 	if isNoteMutationTool(name) && !entry.isTopLevelLead() {
 		return nil, noteReadOnlyDenial(name)

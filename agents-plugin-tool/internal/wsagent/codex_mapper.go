@@ -3,6 +3,7 @@ package wsagent
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -45,7 +46,12 @@ type codexItem struct {
 	Result    json.RawMessage `json:"result"`
 	Error     json.RawMessage `json:"error"`
 	ExitCode  *int            `json:"exitCode"`
-	Content   []struct {
+	// Kind, AgentThreadID, and AgentPath are a subAgentActivity item's: the
+	// transition (started or completed), the child's thread, and its path.
+	Kind          string `json:"kind"`
+	AgentThreadID string `json:"agentThreadId"`
+	AgentPath     string `json:"agentPath"`
+	Content       []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -96,17 +102,37 @@ type codexMapper struct {
 	// runner is declined here instead of resting on Codex never sending one.
 	readOnlyWorker bool
 	worker         bool
+	// nativeSeen holds the subAgentActivity item ids already mapped (its
+	// item/started and item/completed envelopes are one transition), oldest
+	// first in nativeOrder and bounded by codexNativeSeenCap; nativeOpen maps
+	// a running native child's thread to its row id. Neither is turn-scoped.
+	nativeSeen  map[string]bool
+	nativeOrder []string
+	nativeOpen  map[string]string
+	// context and limits are the latest figures of each half of the
+	// session's usage. A status event replaces the snapshot's whole usage,
+	// and Codex pushes the halves as separate notifications, so every status
+	// event carries both.
+	context *wslive.UsageContext
+	limits  []wslive.UsageLimit
 }
+
+// codexNativeSeenCap bounds the remembered subAgentActivity ids; an id
+// forgotten past it is harmless, since the reducer keeps a settled native
+// row from changing again.
+const codexNativeSeenCap = 256
 
 func newCodexMapper(session string) *codexMapper {
 	return &codexMapper{
-		sessionID: session,
-		batches:   newBatchTracker("codex"),
-		texts:     map[string]string{},
-		started:   map[string]bool{},
-		finished:  map[string]bool{},
-		persisted: map[string]bool{},
-		approvals: map[string]*codexPendingApproval{},
+		sessionID:  session,
+		batches:    batchTracker{epoch: newBatchTracker("codex").epoch, callIDs: true},
+		texts:      map[string]string{},
+		started:    map[string]bool{},
+		finished:   map[string]bool{},
+		persisted:  map[string]bool{},
+		approvals:  map[string]*codexPendingApproval{},
+		nativeSeen: map[string]bool{},
+		nativeOpen: map[string]string{},
 	}
 }
 
@@ -149,7 +175,7 @@ func (m *codexMapper) mapLine(line []byte, replies lineReplies) []Event {
 	case msg.Method == "" && hasID:
 		return m.response(msg, replies, now)
 	case msg.Method == "account/rateLimits/updated":
-		return codexLimits(msg.Params)
+		return m.limitsStatus(codexLimits(msg.Params))
 	}
 
 	var p struct {
@@ -161,6 +187,8 @@ func (m *codexMapper) mapLine(line []byte, replies lineReplies) []Event {
 		Delta          string          `json:"delta"`
 		Status         codexStatus     `json:"status"`
 		RequestID      json.RawMessage `json:"requestId"`
+		StartedAtMs    int64           `json:"startedAtMs"`
+		CompletedAtMs  int64           `json:"completedAtMs"`
 		Error          codexError      `json:"error"`
 		WillRetry      bool            `json:"willRetry"`
 		ThreadSettings struct {
@@ -213,6 +241,17 @@ func (m *codexMapper) mapLine(line []byte, replies lineReplies) []Event {
 		return append(codexAlert(&p.Error), Event{Notice: "codex: " + p.Error.Message})
 	}
 
+	// A native subagent's lifecycle is the parent thread's, not its turn's:
+	// its completion can arrive after the parent turn settled, or after a
+	// replay gap. Foreign-thread traffic stays dropped above.
+	if (msg.Method == "item/started" || msg.Method == "item/completed") && p.Item.Type == "subAgentActivity" {
+		at := p.StartedAtMs
+		if msg.Method == "item/completed" {
+			at = p.CompletedAtMs
+		}
+		return m.subAgentActivity(p.Item, at)
+	}
+
 	// Items and token usage are turn-local, unlike the thread-wide status
 	// and approval-resolution notifications handled above.
 	if p.TurnID == "" || p.TurnID != m.turnID {
@@ -233,7 +272,7 @@ func (m *codexMapper) mapLine(line []byte, replies lineReplies) []Event {
 	case "item/completed":
 		return m.item(p.TurnID, p.Item, true, now)
 	case "thread/tokenUsage/updated":
-		return codexUsage(msg.Params)
+		return m.contextStatus(codexUsage(msg.Params))
 	}
 	return nil
 }
@@ -424,6 +463,54 @@ func (m *codexMapper) item(turn string, item codexItem, done bool, now int64) []
 			phase = wslive.CompactEnd
 		}
 		return []Event{{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: phase}}}
+	}
+	return nil
+}
+
+// subAgentActivity maps one parent-thread subAgentActivity envelope to a
+// native subagent row transition at the envelope's time (0 leaves it to
+// intake). An activity's item/started and item/completed envelopes are one
+// transition, mapped once by item id. kind started opens row
+// codex-native:<item id>, labelled by agentPath's last segment, unless that
+// child thread already has an open row; kind completed ends the open row of
+// that child thread done, and is dropped when none is open.
+func (m *codexMapper) subAgentActivity(item codexItem, at int64) []Event {
+	if item.ID == "" || m.nativeSeen[item.ID] {
+		return nil
+	}
+	m.nativeSeen[item.ID] = true
+	m.nativeOrder = append(m.nativeOrder, item.ID)
+	if over := len(m.nativeOrder) - codexNativeSeenCap; over > 0 {
+		for _, id := range m.nativeOrder[:over] {
+			delete(m.nativeSeen, id)
+		}
+		m.nativeOrder = slices.Delete(m.nativeOrder, 0, over)
+	}
+	at = max(at, 0)
+	switch item.Kind {
+	case "started":
+		if item.AgentThreadID == "" {
+			return nil
+		}
+		if _, open := m.nativeOpen[item.AgentThreadID]; open {
+			// A second start for a child thread whose row is still open
+			// keeps that row: replacing it would orphan it running.
+			return nil
+		}
+		row := wslive.NativeCodexPrefix + item.ID
+		label := path.Base(strings.TrimRight(item.AgentPath, "/"))
+		if label == "." || label == "/" || label == "" {
+			label = "subagent"
+		}
+		m.nativeOpen[item.AgentThreadID] = row
+		return []Event{{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: row, Label: label, Status: wslive.StatusRunning, At: at}}}
+	case "completed":
+		row, ok := m.nativeOpen[item.AgentThreadID]
+		if !ok || item.AgentThreadID == "" {
+			return nil
+		}
+		delete(m.nativeOpen, item.AgentThreadID)
+		return []Event{{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: row, Status: wslive.StatusDone, At: at}}}
 	}
 	return nil
 }
@@ -638,7 +725,7 @@ func codexModels(raw json.RawMessage) {
 	codexChoices.models, codexChoices.efforts, codexChoices.at = models, efforts, time.Now()
 }
 
-func codexUsage(raw json.RawMessage) []Event {
+func codexUsage(raw json.RawMessage) *wslive.UsageContext {
 	var p struct {
 		TokenUsage struct {
 			Last *struct {
@@ -662,7 +749,7 @@ func codexUsage(raw json.RawMessage) []Event {
 		hit := float64(last.Cached) * 100 / float64(last.Input)
 		context.CacheHit = &hit
 	}
-	return []Event{{Live: &wslive.Event{Kind: wslive.KindStatus, Context: context}}}
+	return context
 }
 
 type codexLimit struct {
@@ -671,7 +758,7 @@ type codexLimit struct {
 	Reset   int64   `json:"resetsAt"`
 }
 
-func codexLimits(raw json.RawMessage) []Event {
+func codexLimits(raw json.RawMessage) []wslive.UsageLimit {
 	var p struct {
 		RateLimits struct {
 			Primary   *codexLimit `json:"primary"`
@@ -697,8 +784,30 @@ func codexLimits(raw json.RawMessage) []Event {
 			limits = append(limits, wslive.UsageLimit{Kind: kind, Percent: limit.Percent, ResetsAt: limit.Reset * 1000})
 		}
 	}
+	return limits
+}
+
+// contextStatus remembers a context figure and publishes it with the
+// retained limits; nil when the notification carried no figure.
+func (m *codexMapper) contextStatus(context *wslive.UsageContext) []Event {
+	if context == nil {
+		return nil
+	}
+	m.context = context
+	return m.status()
+}
+
+// limitsStatus remembers the limits of a rate-limit notification and
+// publishes them with the retained context; nil when it named no known limit.
+func (m *codexMapper) limitsStatus(limits []wslive.UsageLimit) []Event {
 	if len(limits) == 0 {
 		return nil
 	}
-	return []Event{{Live: &wslive.Event{Kind: wslive.KindStatus, Limits: limits}}}
+	m.limits = limits
+	return m.status()
+}
+
+func (m *codexMapper) status() []Event {
+	ev := wslive.Event{Kind: wslive.KindStatus, Limits: slices.Clone(m.limits), Context: cloneUsageContext(m.context)}
+	return []Event{{Live: &ev}}
 }

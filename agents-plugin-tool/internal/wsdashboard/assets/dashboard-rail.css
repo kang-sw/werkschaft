@@ -187,13 +187,13 @@
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dwrap:not(.narrow),
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dgrid.board { max-width: none; margin: 0; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody { grid-template-columns: 340px minmax(0, min(var(--boardw, min(var(--pbw), 100% - 852px)), 100% - 652px)) minmax(280px, 1fr); }
-  :root[data-pincol][data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 16px + var(--boardw), 100% - 652px)) minmax(280px, 1fr); }
+  :root[data-boardw]:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody:has(> .dgrid:is(.live, .history)) { grid-template-columns: 340px minmax(0, min(var(--cvw) + 16px + var(--boardw), 100% - 652px)) minmax(280px, 1fr); }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .rail { grid-column: 1; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .dgrid,
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dbody > .tk-spage { grid-column: 2; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .bgal:not([hidden]) { position: relative; z-index: auto; top: auto; bottom: auto; right: auto; width: auto; grid-column: 3; grid-row: 1; }
   :root:is([data-gal="col"], [data-gal="empty"], [data-gal="drag"]) .dash:not(.live):not(.history) .bgal:not([hidden]) { position: sticky; top: 12px; height: calc(100vh - 24px); height: calc(100dvh - 24px); }
-  :root[data-pincol] .bgal > .bp-edge { display: block; }
+  :root:is([data-pincol], [data-gal="empty"]) .bgal > .bp-edge { display: block; }
 }
 /* An empty board (no topic or card in it; the placeholder may follow a future toolbar card) is a quiet dashed placeholder. In the live page it fills its column (.bcol), a scroll box with its own offsets (padding, the .top-classed pill wrapper's margin, the rail wrappers' margins), so it is pinned to the column's padding box rather than sized by height: 100%, which overflowed by those offsets. Elsewhere (no sized column) it stays a short strip. */
 .r-board:not(:has(> .topic, > .bcard)) > .empty { box-sizing: border-box; min-height: 54px; margin: 0; display: grid; place-items: center; border: 2px dashed color-mix(in srgb, var(--wb-muted-fg) 40%, transparent); font-weight: 700; }
@@ -235,7 +235,7 @@ html:not([data-sysopen]) .rail .rsleep { display: none; }
 .rail .wsbar .wsi { display: inline-flex; flex: none; opacity: .8; margin-right: -2px; }
 .rail .wsbar .nm { font-size: 13px; font-weight: 700; white-space: nowrap; }
 .rail .wsbar .pp { font-family: var(--wb-mono); font-size: 11px; opacity: .65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
-.rail .wsbar .ct { margin-left: auto; font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 999px; background: rgb(127 127 127 / .28); flex: none; }
+.rail .wsbar .ct { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 999px; background: rgb(127 127 127 / .28); flex: none; }
 .rail .rws.col .wsbody { display: none; }
 /* the + buttons (a worktree row's new session among them), forget, and a
    worktree row's delete: quiet until their line is hovered or they are
@@ -656,8 +656,10 @@ dialog.rsleepdlg { line-height: 1.4; }
 .sess .hostc { display: inline-flex; align-items: center; gap: 4px; justify-self: start; min-width: 0; }
 .chip.perm { background: var(--wb-ph-perm); color: var(--wb-on-ph-perm); }
 .rail .s2.ap .who { color: var(--wb-perm-ink); }
-.rail .wsbar .chip.perm + .ct { margin-left: 0; }
 .rail .wsbar .chip.perm { margin-left: auto; }
+:root .rail .wsbar .chip.perm ~ .r-config-gear,
+:root .rail .wsbar .chip.perm ~ .r-config-gear + *,
+:root .rail .wsbar .chip.perm ~ .ct { margin-left: 0; }
 html:not([data-sysopen]) .rail .rnew { display: none; }
 html:not([data-sysopen]) .rail .rdel { display: none; }
 html:not([data-sysopen]) .rail .rgit { display: none; }
@@ -781,7 +783,7 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 /* what the picked level asks for, then how this harness carries it */
 .rpop .pmwhat { margin: 2px 0 0; font-size: 11.5px; color: var(--wb-fg); }
 .rpop .pmmap { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; margin: 0; font-size: 11.5px; color: var(--wb-muted-fg); }
-.rpop .pmmap code, .pmstate code, .rdeldlg .pmc, .chip.pmhead code { font-family: var(--wb-mono); font-size: 11px; color: var(--wb-fg); background: var(--wb-muted); padding: 0 5px; border-radius: 4px; }
+.rpop .pmmap code, .pmstate code, .rdeldlg .pmc { font-family: var(--wb-mono); font-size: 11px; color: var(--wb-fg); background: var(--wb-muted); padding: 0 5px; border-radius: 4px; }
 .rpop .pmfine { margin: 0; font-size: 11px; color: var(--wb-muted-fg); }
 /* evidence quality pills; there is deliberately no "enforced" style */
 .pmq { display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 700; padding: 0 7px; border-radius: 999px; line-height: 17px; white-space: nowrap; }
@@ -806,10 +808,8 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
 .rdeldlg .pmack { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 45%, transparent); cursor: pointer; font-weight: 600; }
 .rdeldlg .pmack input { margin: 2px 0 0; accent-color: var(--wb-fail); flex: none; }
 /* the head chip beside the harness chip */
-.chip.pmhead { display: inline-flex; align-items: center; gap: 4px; height: 20px; box-sizing: border-box; margin-left: 6px; padding: 0 7px; border-radius: 999px; background: var(--wb-muted); color: var(--wb-fg); font-size: 11.5px; font-weight: 700; white-space: nowrap; flex: none; }
+.chip.pmhead { display: inline-flex; align-items: center; justify-content: center; height: 20px; width: 20px; box-sizing: border-box; margin-left: 6px; padding: 0; border-radius: 999px; background: var(--wb-muted); color: color-mix(in srgb, var(--wb-warn-ink) 80%, var(--wb-fg)); white-space: nowrap; flex: none; }
 .chip.pmhead .i { width: 11px; height: 11px; }
-.chip.pmhead .pmq { line-height: 15px; padding: 0 5px; margin-right: -4px; }
-.chip.pmhead .pmtag { background: var(--wb-card); }
 .chip.pmhead[role="button"] { cursor: pointer; }
 .chip.pmhead[role="button"]:hover { background: color-mix(in srgb, var(--wb-primary) 16%, var(--wb-muted)); }
 .chip.pmhead:focus-visible { outline: 1.5px solid var(--wb-primary); outline-offset: 1px; }
@@ -1089,6 +1089,8 @@ html:not([data-sysopen]) .rail .drarch { display: none; }
   transition: opacity .14s, background .12s, color .12s;
 }
 :root[data-can-control] .rail .wsbar .r-config-gear { color: inherit; }
+:root[data-can-control] .rail .wsbar > .r-config-gear,
+:root:not([data-can-control]) .rail .wsbar > .r-config-gear + * { margin-left: auto; }
 .rail .r-config-gear .i { width: 13px; height: 13px; }
 .rail .rs .r-config-gear { margin-right: 5px; }
 .rail .rs .dracts { right: 32px; }
