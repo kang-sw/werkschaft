@@ -722,7 +722,7 @@ func (c *conv) checkReattach() {
 				var meta holderSession
 				// A cross-harness retirement stops the holder, so a holder already
 				// rejected grants it no stop authority either.
-				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.rec, meta, info.Child) ||
+				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.record(), meta, info.Child) ||
 					c.crossHarnessRejoin && c.r.holders.isRejected(id) {
 					// Never stop a holder that failed the ownership check.
 					c.r.holders.reject(id)
