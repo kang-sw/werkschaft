@@ -2,6 +2,7 @@ package wsholder
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -106,15 +107,19 @@ func TestAuditChannelTeesSkippedLinesToANegotiatingDaemon(t *testing.T) {
 }
 
 // TestAuditChannelOldHolderAttachesWithoutIt pins the new-daemon,
-// old-holder direction: a holder that predates the channel ignores the
-// offer, the attach succeeds as before, and no audit event (not even the
-// client's markers) reaches the sinks.
+// old-holder direction against the shipped holder that predates the channel
+// (testdata/holder-pre-audit.py, main's holder.py when the channel was
+// added): it ignores the offer, the attach succeeds as before, and no audit
+// event (not even the client's markers) reaches the sinks.
 func TestAuditChannelOldHolderAttachesWithoutIt(t *testing.T) {
-	current := script
-	old := bytes.Replace(current, []byte(`offered = req.get("audit")`), []byte(`offered = None`), 1)
-	if bytes.Equal(old, current) {
-		t.Fatal("the negotiation line moved; update this test's stand-in for an old holder")
+	old, err := os.ReadFile("testdata/holder-pre-audit.py")
+	if err != nil {
+		t.Fatal(err)
 	}
+	if bytes.Contains(old, []byte(`"audit"`)) {
+		t.Fatal("the stand-in for an old holder knows the audit channel")
+	}
+	current := script
 	script = old
 	t.Cleanup(func() { script = current })
 	evs := runAuditHolder(t, true)
