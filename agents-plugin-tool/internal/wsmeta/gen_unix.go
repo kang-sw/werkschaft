@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin && !linux
 
 package wsmeta
 
@@ -8,10 +8,12 @@ import (
 	"syscall"
 )
 
-// dirGeneration identifies one incarnation of a session directory: its
-// device and inode, so a directory pruned and recreated under the same
-// reply-id reads as a different generation (inode reuse aside).
-func dirGeneration(info os.FileInfo) string {
+// dirGeneration identifies one incarnation of a session directory by its
+// device and inode. A directory pruned and recreated under the same reply-id
+// can reuse the inode here; a missed recreation is harmless because every
+// capture row is still re-validated against its live file and a fence is
+// proven only by the migration's sentinel (fenceProven).
+func dirGeneration(_ string, info os.FileInfo) string {
 	if st, ok := info.Sys().(*syscall.Stat_t); ok && st != nil {
 		return fmt.Sprintf("ino:%d:%d", uint64(st.Dev), uint64(st.Ino))
 	}

@@ -766,6 +766,10 @@ func (s *Store) confirmUnread(ctx context.Context, tx *sql.Tx, rel, readErr stri
 	return err == nil, err
 }
 
+// generationOf is the platform's directory generation (gen_*.go; a test
+// seam that simulates a missed recreation).
+var generationOf = dirGeneration
+
 // sessionGenerations lists the session directories and their generations.
 func (s *Store) sessionGenerations() (map[string]string, error) {
 	out := map[string]string{}
@@ -787,7 +791,7 @@ func (s *Store) sessionGenerations() (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[e.Name()] = dirGeneration(info)
+		out[e.Name()] = generationOf(filepath.Join(s.dir, sessionsDirName, e.Name()), info)
 	}
 	return out, nil
 }
@@ -805,7 +809,7 @@ func (s *Store) sessionGeneration(id string) (string, bool, error) {
 	if !info.IsDir() {
 		return "", false, nil
 	}
-	return dirGeneration(info), true, nil
+	return generationOf(filepath.Join(s.dir, sessionsDirName, id), info), true, nil
 }
 
 const (

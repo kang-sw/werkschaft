@@ -249,3 +249,43 @@ func TestFenceRefusesUnstagedPathsAndPrunedSessions(t *testing.T) {
 		t.Fatalf("pruned session recreated: %v", err)
 	}
 }
+
+// A session pruned and recreated where the generation cannot tell (an inode
+// reused without a birth time) never hands the deleted session's staged
+// original to the new one, even when the new file has the fence's exact
+// bytes: only the migration's sentinel proves a fence.
+func TestMissedRecreationNeverReusesTheDeletedSessionsOriginal(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	prev := generationOf
+	generationOf = func(path string, _ os.FileInfo) string { return "same:" + filepath.Base(path) }
+	t.Cleanup(func() { generationOf = prev })
+	s := openTest(t, dir, testOpts())
+	if _, err := s.Stage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "sessions", "hostedlead")); err != nil {
+		t.Fatal(err)
+	}
+	put(t, dir, fencePerm, string(fencedSelector))
+	res, err := s.Stage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Discarded != 0 {
+		t.Fatalf("the simulated reuse was detected: %+v", res)
+	}
+	if res.Reused != 0 || !reflect.DeepEqual(res.Pending, []string{fencePerm}) {
+		t.Fatalf("stage = %+v, want the new file staged and its fence pending", res)
+	}
+	caps := captureMap(t, s)
+	if c := caps[fencePerm]; string(c.Bytes) != string(fencedSelector) {
+		t.Fatalf("capture = %q, want the new session's bytes", c.Bytes)
+	}
+	if c := caps["sessions/hostedlead/agent.json"]; c.State != CaptureAbsent {
+		t.Fatalf("deleted session's record still staged: %+v", c)
+	}
+}
