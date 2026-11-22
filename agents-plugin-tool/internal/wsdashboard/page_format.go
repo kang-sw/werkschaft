@@ -87,7 +87,9 @@ func pageFuncs(lang string, icons map[string]bool) template.FuncMap {
 		// i18n the inline script giving the page scripts their table.
 		"lang":  func() string { return effectiveLang(lang) },
 		"langs": wsi18n.Languages,
-		"i18n":  func() template.JS { return wsi18n.ScriptExcept(lang, "js.settings.") },
+		"i18n": func() template.JS {
+			return wsi18n.ScriptExceptKeeping(lang, []string{"js.settings."}, shellSettingsStrings)
+		},
 		// pwa is a page head's manifest link and theme-color metas (pwa.go).
 		"pwa":        pwaHead,
 		"firstPaint": firstPaintStyle,

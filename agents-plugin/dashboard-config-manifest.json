@@ -38,28 +38,22 @@
       "description": "When true, this MCP server lists the pi.* tools, through which a session spawns, steers, and collects Pi subagents: headless Pi coding agents the dashboard daemon runs for it, each reporting a finished turn to the session's mailbox. When false, it does not list them. They are listed only when the server also runs in the dashboard daemon (not a ws-mcp process of its own) and the installed pi reports version 1.0 or later. Read from the project, global, and built-in values when the server starts, so a change applies at the session's next start or reconnect."
     },
     {
-      "key": "dashboard.companion_mode",
-      "type": "enum",
-      "enum": [
-        "off",
-        "visual",
-        "full"
-      ],
-      "default": "off",
+      "key": "dashboard.companion_enabled",
+      "type": "boolean",
+      "default": false,
       "default_scope": "global",
-      "description": "Controls the companion: off, visual only, or full. Only the global value applies."
+      "description": "When true, the dashboard shows the companion character beside the conversation. Only the global value applies."
     },
     {
       "key": "dashboard.companion_director",
       "type": "enum",
       "enum": [
         "rules",
-        "sidecar",
-        "lead-tool"
+        "agent"
       ],
       "default": "rules",
       "default_scope": "global",
-      "description": "Selects the companion director. Only the global value applies."
+      "description": "Selects what drives the companion: rules (built-in reactions to session events) or agent (a separate lightweight agent writes the reactions). Only the global value applies."
     },
     {
       "key": "dashboard.companion_pack",
@@ -76,6 +70,24 @@
       "default": "werkschaft-d1",
       "default_scope": "global",
       "description": "Selects the companion preset by ID. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_agent_cooldown_seconds",
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 3600,
+      "default": 30,
+      "default_scope": "global",
+      "description": "Minimum seconds between two calls of the agent companion director; a trigger inside the cooldown is dropped. Only the global value applies."
+    },
+    {
+      "key": "dashboard.companion_agent_hourly_cap",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120,
+      "default": 20,
+      "default_scope": "global",
+      "description": "Maximum calls of the agent companion director in a rolling hour; a trigger over the cap is dropped. Only the global value applies."
     }
   ]
 }

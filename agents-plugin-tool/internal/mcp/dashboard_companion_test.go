@@ -19,6 +19,56 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+var companionKeys = []string{
+	wsdashboard.CompanionEnabledKey, wsdashboard.CompanionDirectorKey, wsdashboard.CompanionPackKey,
+	wsdashboard.CompanionPresetKey, wsdashboard.CompanionAgentCooldownKey, wsdashboard.CompanionAgentHourlyCapKey,
+}
+
+func TestCompanionConfigTypedValues(t *testing.T) {
+	catalog, err := DashboardConfigCatalog("ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range companionKeys {
+		if !wsdashboard.IsCompanionConfigKey(key) || !wsconfig.GlobalOnly(key) {
+			t.Errorf("%s is not a companion key registered global-only", key)
+		}
+	}
+	defaults := wsdashboard.CompanionConfig{Director: "rules", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 30, AgentHourlyCap: 20}
+	for _, tc := range []struct {
+		name, overrides string
+		want            wsdashboard.CompanionConfig
+	}{
+		{"unset", `{}`, defaults},
+		{"valid", `{"overrides":{"dashboard.companion_enabled":"true","dashboard.companion_director":"agent",` +
+			`"dashboard.companion_agent_cooldown_seconds":"45","dashboard.companion_agent_hourly_cap":"120"}}`,
+			wsdashboard.CompanionConfig{Enabled: true, Director: "agent", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 45, AgentHourlyCap: 120}},
+		{"bounds", `{"overrides":{"dashboard.companion_agent_cooldown_seconds":"10","dashboard.companion_agent_hourly_cap":"1"}}`,
+			wsdashboard.CompanionConfig{Director: "rules", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 10, AgentHourlyCap: 1}},
+		{"invalid stored values fall back to defaults", `{"overrides":{"dashboard.companion_enabled":"maybe",` +
+			`"dashboard.companion_director":"sidecar","dashboard.companion_agent_cooldown_seconds":"9",` +
+			`"dashboard.companion_agent_hourly_cap":"121"}}`, defaults},
+		{"removed and non-numeric values fall back to defaults", `{"overrides":{"dashboard.companion_enabled":"visual",` +
+			`"dashboard.companion_director":"lead-tool","dashboard.companion_agent_cooldown_seconds":"soon",` +
+			`"dashboard.companion_agent_hourly_cap":""}}`, defaults},
+		{"one invalid value leaves its neighbors", `{"overrides":{"dashboard.companion_enabled":"true","dashboard.companion_agent_hourly_cap":"0"}}`,
+			wsdashboard.CompanionConfig{Enabled: true, Director: "rules", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 30, AgentHourlyCap: 20}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := wsconfig.Options{CacheHome: t.TempDir(), ConfigHome: t.TempDir()}
+			path, err := wsconfig.GlobalPath(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWrite(t, filepath.Dir(path), filepath.Base(path), tc.overrides)
+			got, err := dashboardCompanionConfig(catalog, opts)
+			if err != nil || got != tc.want {
+				t.Fatalf("config = %+v, %v; want %+v", got, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestCompanionGlobalOnly(t *testing.T) {
 	s := dashboardServer(t, dashboardPackages[0].dashboard)
 	key, err := s.sessions.mint(s.root, roleLead, "")
@@ -32,11 +82,11 @@ func TestCompanionGlobalOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo, _ := wsconfig.RepoPath(opts)
-	mode := wsdashboard.CompanionModeKey
+	enabled := wsdashboard.CompanionEnabledKey
 	for _, path := range []string{project, repo} {
-		mustWrite(t, filepath.Dir(path), filepath.Base(path), `{"overrides":{"dashboard.companion_mode":"full"}}`)
+		mustWrite(t, filepath.Dir(path), filepath.Base(path), `{"overrides":{"dashboard.companion_enabled":"true","dashboard.companion_agent_hourly_cap":"99"}}`)
 	}
-	if err := s.sessions.setOverride(key, mode, "visual"); err != nil {
+	if err := s.sessions.setOverride(key, enabled, "true"); err != nil {
 		t.Fatal(err)
 	}
 	catalog, err := DashboardConfigCatalog("wsflow")
@@ -44,8 +94,11 @@ func TestCompanionGlobalOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	tune := wsconfig.NewResolver(opts, nil, nil, nil)
+	if len(companionKeys) != 6 {
+		t.Fatalf("companion keys = %v, want the six reshaped keys", companionKeys)
+	}
 	for _, scope := range []wsconfig.Scope{wsconfig.ScopeProject, wsconfig.ScopeRepo, wsconfig.ScopeSession} {
-		for _, item := range []string{mode, wsdashboard.CompanionDirectorKey, wsdashboard.CompanionPackKey, wsdashboard.CompanionPresetKey} {
+		for _, item := range companionKeys {
 			if !wsconfig.GlobalOnly(item) {
 				t.Fatalf("%s is not registered global-only", item)
 			}
@@ -67,17 +120,17 @@ func TestCompanionGlobalOnly(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"off", "visual"} {
-		got, err := s.resolveConfigGet(key, mode)
+	for _, want := range []bool{false, true} {
+		got, err := s.resolveConfigGet(key, enabled)
 		if err != nil || got.Value != want {
-			t.Fatalf("resolved mode = %v, %v; want %q", got.Value, err, want)
+			t.Fatalf("resolved enabled = %v, %v; want %v", got.Value, err, want)
 		}
 		shell, err := dashboardCompanionConfig(catalog, opts)
-		if err != nil || shell.Mode != want {
-			t.Fatalf("shell mode = %q, %v; want %q", shell.Mode, err, want)
+		if err != nil || shell.Enabled != want || shell.AgentHourlyCap != 20 {
+			t.Fatalf("shell = %+v, %v; want enabled %v and the default hourly cap 20 (project, repo, and session layers must not apply)", shell, err, want)
 		}
-		if want == "off" {
-			if err := tune.Set(mode, "visual", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+		if !want {
+			if err := tune.Set(enabled, "true", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -96,7 +149,7 @@ func TestCompanionGlobalOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tune.Set(mode, "visual", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+	if err := tune.Set(enabled, "true", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
 		t.Fatal(err)
 	}
 	if after, err := os.Stat(path); err != nil || !os.SameFile(before, after) {
@@ -147,7 +200,7 @@ func TestCompanionStdioHandoff(t *testing.T) {
 		t.Cleanup(func() { _ = conn.Close() })
 		return conn
 	}
-	want := wsdashboard.CompanionConfig{Mode: "off", Director: "rules", Pack: "default", Preset: "werkschaft-d1"}
+	want := wsdashboard.CompanionConfig{Director: "rules", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 30, AgentHourlyCap: 20}
 	stream, disconnected := open(), open()
 	expectCompanion(t, stream, want)
 	expectCompanion(t, disconnected, want)
@@ -170,8 +223,8 @@ func TestCompanionStdioHandoff(t *testing.T) {
 			t.Fatalf("stdio config.tune: %v, %s", err, raw)
 		}
 	}
-	tune(opts.ConfigHome, `{"key":"dashboard.companion_mode","value":"visual"}`)
-	want.Mode = "visual"
+	tune(opts.ConfigHome, `{"key":"dashboard.companion_enabled","value":"true"}`)
+	want.Enabled = true
 	expectCompanion(t, stream, want)
 	reconnected := open()
 	expectCompanion(t, reconnected, want)
@@ -196,9 +249,9 @@ func TestCompanionStdioHandoff(t *testing.T) {
 	expectCompanion(t, stream, want)
 	expectCompanion(t, reconnected, want)
 
-	tune(t.TempDir(), `{"key":"dashboard.companion_mode","value":"full"}`)
-	tune(opts.ConfigHome, `{"key":"dashboard.companion_mode","reset":true}`)
-	want.Mode = "off"
+	tune(t.TempDir(), `{"key":"dashboard.companion_enabled","value":"true"}`)
+	tune(opts.ConfigHome, `{"key":"dashboard.companion_enabled","reset":true}`)
+	want.Enabled = false
 	expectCompanion(t, stream, want)
 	expectCompanion(t, reconnected, want)
 
