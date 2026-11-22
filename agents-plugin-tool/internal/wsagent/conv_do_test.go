@@ -42,13 +42,15 @@ func TestConvDoReturnsWhenTheCallbackExitsItsGoroutine(t *testing.T) {
 func (c *conv) doT(t testing.TB, fn func(failf func(format string, args ...any))) {
 	t.Helper()
 	var failure string
-	c.do(func() {
+	if !c.do(func() {
 		fn(func(format string, args ...any) {
 			if failure == "" {
 				failure = fmt.Sprintf(format, args...)
 			}
 		})
-	})
+	}) {
+		t.Fatal("conversation loop ended before the callback ran")
+	}
 	if failure != "" {
 		t.Fatal(failure)
 	}

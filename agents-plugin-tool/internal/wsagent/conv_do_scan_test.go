@@ -12,7 +12,8 @@ import (
 )
 
 // doCallbacks calls visit for every function literal passed as an argument to
-// a method named do, with the position of the call.
+// a method named do or doT (the failf-reporting wrapper), with the position of
+// the call.
 func doCallbacks(file *ast.File, visit func(lit *ast.FuncLit)) {
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -20,7 +21,7 @@ func doCallbacks(file *ast.File, visit func(lit *ast.FuncLit)) {
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "do" {
+		if !ok || (sel.Sel.Name != "do" && sel.Sel.Name != "doT") {
 			return true
 		}
 		for _, arg := range call.Args {
@@ -128,6 +129,7 @@ func TestDoCallbacksNeverExitTheLoopGoroutine(t *testing.T) {
 		"package p\nfunc f() { c.do(func() { h.t.Fatalf(\"x\") }) }\n",
 		"package p\nfunc f() { h.runner.conv(id).do(func() { t.FailNow() }) }\n",
 		"package p\nfunc f() { c.do(func() { if x { t.Skip() } }) }\n",
+		"package p\nfunc f() { c.doT(t, func(failf func(string, ...any)) { t.Fatal(\"x\") }) }\n",
 	} {
 		fset, file := parseGoSource(t, "planted.go", src)
 		if got := doCallbackTestExits(fset, file); len(got) != 1 {
