@@ -51,6 +51,7 @@ function makePillHarness(itemSpecs, opts = {}) {
     }
     querySelectorAll(sel) {
       if (sel in this.q) return this.q[sel];
+      if (sel === 'a[href]') return this.all([]).filter(e => e.tag === 'a' && 'href' in e.attrs);
       if (sel[0] === '.') {
         const cls = sel.slice(1).split('.');
         return this.all([]).filter(e => cls.every(c => e.cls[c]));
@@ -85,58 +86,48 @@ function makePillHarness(itemSpecs, opts = {}) {
     scrollIntoView() { jumped.push(this.attrs['data-id'] || this.attrs.id); }
   }
 
+  // Item markup follows page.tmpl: a policy card (cbar head title, ask jump,
+  // hold button; cbody with the rationale as .ctx.md, links, options) or an
+  // ack row (label.ack > .atext with the rationale as .why lines).
+  function child(parent, tag, cls, text) {
+    const e = new El(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return parent.appendChild(e);
+  }
+  function rationale(parent, cls, r) {
+    if (typeof r === 'string') { child(parent, cls === 'why' ? 'span' : 'div', cls, r); return; }
+    const box = child(parent, cls === 'why' ? 'span' : 'div', cls, r.text + ' ' + r.label);
+    child(box, 'a', '', r.label).attrs.href = r.href;
+  }
   function makeItem(spec) {
     const el = new El('div');
-    el.className = spec.cls || 'card policy';
+    const ack = spec.kind === 'ack';
+    el.className = spec.cls || (ack ? 'arow' : 'card policy');
     el.attrs.id = 'item-' + spec.id;
     el.attrs['data-id'] = String(spec.id);
     el.top = spec.top;
-    const title = new El('span');
-    title.className = 'title';
-    title.textContent = spec.title || ('Question ' + spec.id);
-    el.appendChild(title);
-    if (spec.ctx) {
-      const ctx = new El('div');
-      ctx.className = 'ctx';
-      ctx.textContent = spec.ctx;
-      el.appendChild(ctx);
-    }
-    if (spec.why) {
-      const why = new El('span');
-      why.className = 'why';
-      why.textContent = spec.why.text;
-      const a = new El('a');
-      a.attrs.href = spec.why.href;
-      a.textContent = spec.why.label;
-      why.q['a[href]'] = [a];
-      el.appendChild(why);
-    }
+    const bar = ack ? child(child(el, 'label', 'ack'), 'span', 'atext') : child(el, 'div', 'cbar');
+    const head = child(bar, 'span', 'head');
+    child(head, 'span', 'id', String(spec.id));
+    child(head, 'span', 'title', spec.title || ('Question ' + spec.id));
+    const body = ack ? bar : child(el, 'div', 'cbody');
+    const why = spec.rationale || spec.ctx;
+    if (why) rationale(body, ack ? 'why' : 'ctx md', why);
     if (spec.options) {
+      const opts = child(body, 'div', 'opts');
       spec.options.forEach((opt, i) => {
-        const o = new El('button');
-        o.className = 'opt';
-        o.attrs['data-opt'] = String.fromCharCode(97 + i);
-        o.textContent = opt;
-        el.appendChild(o);
+        child(opts, 'button', 'opt', opt).attrs['data-opt'] = String.fromCharCode(97 + i);
       });
     }
     if (spec.askEntry) {
-      const jump = new El('a');
-      jump.className = 'wb-askjump';
+      const jump = child(bar, 'a', 'wb-askjump');
       jump.attrs.href = '#' + spec.askEntry;
-      if (spec.reasked) {
-        const re = new El('span');
-        re.className = 'wb-askre';
-        re.textContent = 'Asked again ' + spec.reasked;
-        jump.appendChild(re);
-      }
-      el.appendChild(jump);
+      if (spec.reasked) child(jump, 'span', 'wb-askre', 'Asked again ' + spec.reasked);
     }
-    const holdBtn = new El('button');
-    holdBtn.className = 'btn mini wb-hold-toggle';
+    const holdBtn = child(ack ? el : bar, 'button', 'btn mini wb-hold-toggle');
     holdBtn.attrs['data-wb-hold'] = '';
     holdBtn.attrs['aria-pressed'] = 'false';
-    el.appendChild(holdBtn);
     el.holdBtn = holdBtn;
     if (spec.picked) el.q['.opt[data-opt][aria-pressed="true"]'] = [new El('button')];
     if (spec.note) {
@@ -290,8 +281,8 @@ test('hold auto-clears when item content or re-ask marker changes (fingerprint c
   assert.deepEqual(storage.dump(), {}, 'cleared holds remove empty localStorage entry');
 });
 
-test('a rationale link target change clears the hold; the shared map keeps the form older tabs read', () => {
-  const ask = href => [{ id: 30, top: -200, title: 'Pick a cache', why: { text: 'See the design notes', label: 'design notes', href } }];
+for (const kind of ['policy', 'ack']) test(kind + ': a rationale link target change clears the hold; the shared map keeps the form older tabs read', () => {
+  const ask = href => [{ id: 30, kind, top: -200, title: 'Pick a cache', rationale: { text: 'See the', label: 'design notes', href } }];
   const holdsKey = 'ws.wb.holds.board-l', linksKey = 'ws.wb.holdlinks.board-l';
   const storage = makeStorage();
   const h1 = makePillHarness(ask('docs/a.md'), { storage, rid: 'board-l' });
@@ -382,7 +373,7 @@ test('a storage redraw on a lagging board keeps a newer hold on an item it shows
   assert.equal(b.items[0].classList.contains('wb-held'), false, 'shown as held only on the content it was made on');
   // A rendered the held content; when its own board then changes that item,
   // the hold is provably stale and goes.
-  a.items[0].children[0].textContent = 'Newest wording';
+  a.items[0].querySelector('.title').textContent = 'Newest wording';
   a.win.wbPill.update();
   a.flush();
   assert.deepEqual(storage.dump(), {}, 'the tab that saw the held content change drops it');

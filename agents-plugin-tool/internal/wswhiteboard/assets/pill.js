@@ -45,8 +45,9 @@
     return el.getAttribute("data-id") || el.getAttribute("id") || "";
   }
   function normText(s) { return String(s || "").replace(/\s+/g, " ").trim(); }
-  // Authored link destinations in a rationale: a patch may change only a
-  // link's target and keep its label. Script-built controls are skipped.
+  // Authored link destinations in a rationale (a policy's .ctx markdown, an
+  // ack's .why lines): a patch may change only a link's target and keep its
+  // label. Script-built controls are skipped.
   function linkTargets(el) {
     var out = [];
     Array.prototype.forEach.call((el.querySelectorAll && el.querySelectorAll("a[href]")) || [], function (a) {
@@ -63,7 +64,7 @@
     var title = el.querySelector && el.querySelector(".title");
     if (title) parts.push("t:" + normText(title.textContent));
     var ctx = el.querySelector && el.querySelector(".ctx");
-    if (ctx) parts.push("c:" + normText(ctx.textContent));
+    if (ctx) parts.push("c:" + normText(ctx.textContent) + (legacy ? "" : linkTargets(ctx)));
     if (el.querySelectorAll) {
       Array.prototype.forEach.call(el.querySelectorAll(".why") || [], function (w) {
         parts.push("w:" + normText(w.textContent) + (legacy ? "" : linkTargets(w)));
