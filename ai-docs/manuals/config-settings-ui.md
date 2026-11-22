@@ -72,5 +72,5 @@ type or selectors:
 
 ```sh
 python3 agents-plugin-tool/scripts/generate-package-assets.py --check
-go -C agents-plugin-tool test ./internal/mcp ./internal/wsi18n ./internal/wspackage -run 'Settings|Manifest|Keys'
+go -C agents-plugin-tool test ./internal/mcp ./internal/wsi18n ./internal/wspackage -run 'Settings|Manifest'
 ```
