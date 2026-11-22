@@ -764,7 +764,15 @@ func (c *conv) recoveryFailed(reason string) {
 	if c.rec.TurnOpen {
 		c.settleTurn(TurnFailed, text, c.turnMark)
 	}
+	hadProc := c.proc != nil
 	c.stopProcess("")
+	if !hadProc {
+		// A failed rejoin has no process, so stopProcess returned before
+		// processEnded; the state restored for the held process (an
+		// internal compaction turn, steered reports) still needs that
+		// end-of-process cleanup, or it discards or blocks the next turn.
+		c.processEnded()
+	}
 	c.r.revokeToken(c.rec.ReplyID)
 	if c.rec.Capability != "" || c.rec.MCPToken != "" {
 		c.update(func(rec *Record) { rec.Capability = ""; rec.forgetMCP() })
