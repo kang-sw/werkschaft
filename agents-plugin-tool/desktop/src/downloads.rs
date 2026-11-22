@@ -65,15 +65,12 @@ pub fn handler<R: Runtime>(
             }
         }
         DownloadEvent::Finished { url, success, .. } => {
-            let ended = ACTIVE.lock().unwrap().finish(&url, Instant::now());
-            if let Some(ended) = ended {
-                let name = ended.and_then(|path| {
-                    path.file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                });
-                let detail = name.as_deref().unwrap_or("");
-                announce(&webview, success, detail);
-            }
+            let path = ACTIVE.lock().unwrap().finish(&url, Instant::now());
+            let name = path
+                .as_deref()
+                .and_then(Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned());
+            announce(&webview, success, name.as_deref().unwrap_or(""));
             true
         }
         _ => true,
@@ -89,11 +86,14 @@ pub enum Begin {
 }
 
 /// Downloads accepted and not yet finished. A completion names only its URL
-/// (WKWebView gives no path, and WebView2 may report a refused download too),
-/// so a URL's downloads are matched oldest first and a file is named only
-/// when the match is certain. Nothing is held past `HOLD`.
+/// (WKWebView gives no path, and completions of one URL can arrive in any
+/// order), so a file is named only when the match is certain: its URL has had
+/// one download at a time. Nothing is held past `HOLD`.
 pub struct Active {
     reserved: Vec<Reservation>,
+    /// URLs that have had two reservations at once; their completions name no
+    /// file until the count returns to zero.
+    ambiguous: Vec<Url>,
 }
 
 struct Reservation {
@@ -106,12 +106,21 @@ impl Active {
     pub const fn new() -> Self {
         Self {
             reserved: Vec::new(),
+            ambiguous: Vec::new(),
         }
     }
 
     fn expire(&mut self, now: Instant) {
         self.reserved
             .retain(|held| now.saturating_duration_since(held.at) < HOLD);
+        self.clear_idle();
+    }
+
+    /// An ambiguity ends when its URL has no reservation left.
+    fn clear_idle(&mut self) {
+        let reserved = &self.reserved;
+        self.ambiguous
+            .retain(|url| reserved.iter().any(|held| held.url == *url));
     }
 
     /// Reserves a path for `url`, unique among files and reservations;
@@ -131,6 +140,9 @@ impl Active {
         }) else {
             return Begin::NoName;
         };
+        if self.reserved.iter().any(|held| held.url == url) && !self.ambiguous.contains(&url) {
+            self.ambiguous.push(url.clone());
+        }
         self.reserved.push(Reservation {
             url,
             path: path.clone(),
@@ -139,20 +151,18 @@ impl Active {
         Begin::Reserved(path)
     }
 
-    /// Ends the oldest download of `url`. None when it has no reservation.
-    /// Some(Some(path)) when it had exactly one, so the file is certain;
-    /// Some(None) when several were in flight and the file is not.
-    pub fn finish(&mut self, url: &Url, now: Instant) -> Option<Option<PathBuf>> {
+    /// Ends the oldest download of `url`; every completion is announced.
+    /// Returns its file only when that is certain: the URL's one reservation,
+    /// never overlapped. None for several, an ambiguous URL, an unknown URL,
+    /// or an expired reservation.
+    pub fn finish(&mut self, url: &Url, now: Instant) -> Option<PathBuf> {
         self.expire(now);
-        let mut matching = self
-            .reserved
-            .iter()
-            .enumerate()
-            .filter(|(_, h)| h.url == *url);
-        let (oldest, _) = matching.next()?;
-        let certain = matching.next().is_none();
+        let count = self.reserved.iter().filter(|held| held.url == *url).count();
+        let certain = count == 1 && !self.ambiguous.contains(url);
+        let oldest = self.reserved.iter().position(|held| held.url == *url)?;
         let path = self.reserved.remove(oldest).path;
-        Some(certain.then_some(path))
+        self.clear_idle();
+        certain.then_some(path)
     }
 }
 
@@ -467,33 +477,52 @@ mod tests {
             active.begin(board.clone(), folder, "board.zip", |_| false, now),
             Begin::Reserved(folder.join("board (1).zip"))
         );
-        // Two in flight: the oldest is released, but no file is named.
-        assert_eq!(active.finish(&board, now), Some(None));
-        // One left: its file is certain, and it is the newer one.
-        assert_eq!(
-            active.finish(&board, now),
-            Some(Some(folder.join("board (1).zip")))
-        );
+        // Two in flight: no completion names a file, even the last one.
+        assert_eq!(active.finish(&board, now), None);
         assert_eq!(active.finish(&board, now), None);
     }
 
     #[test]
-    fn a_completion_without_a_reservation_does_nothing() {
+    fn a_lone_download_is_named_and_its_url_can_start_over() {
         let folder = Path::new("/dl");
         let board = url("http://127.0.0.1:1/board.zip");
         let now = Instant::now();
         let mut active = Active::new();
-        assert_eq!(active.finish(&board, now), None);
         active.begin(board.clone(), folder, "board.zip", |_| false, now);
         // Another URL's completion releases nothing here.
-        assert_eq!(active.finish(&url("https://x.test/z"), now), None);
-        assert_eq!(
-            active.finish(&board, now),
-            Some(Some(folder.join("board.zip")))
-        );
-        // A late extra completion finds nothing and takes no new reservation.
+        active.finish(&url("https://x.test/z"), now);
+        assert_eq!(active.finish(&board, now), Some(folder.join("board.zip")));
         active.begin(board.clone(), folder, "board.zip", |_| false, now);
-        assert!(active.finish(&board, now).is_some());
+        assert_eq!(active.finish(&board, now), Some(folder.join("board.zip")));
+    }
+
+    #[test]
+    fn overlapping_downloads_of_a_url_stay_unnamed_until_none_is_left() {
+        let folder = Path::new("/dl");
+        let board = url("http://127.0.0.1:1/board.zip");
+        let now = Instant::now();
+        let mut active = Active::new();
+        active.begin(board.clone(), folder, "board.zip", |_| false, now);
+        active.begin(board.clone(), folder, "board.zip", |_| false, now);
+        // The newer one finishes first, then the older one: with one
+        // reservation left the name would be the wrong file, so none is given.
+        assert_eq!(active.finish(&board, now), None);
+        assert_eq!(active.finish(&board, now), None);
+        // The count reached zero, so the mark is gone.
+        active.begin(board.clone(), folder, "board.zip", |_| false, now);
+        assert_eq!(active.finish(&board, now), Some(folder.join("board.zip")));
+    }
+
+    #[test]
+    fn an_unknown_completion_is_generic_and_takes_nothing() {
+        let folder = Path::new("/dl");
+        let board = url("http://127.0.0.1:1/board.zip");
+        let now = Instant::now();
+        let mut active = Active::new();
+        // Announced with no name by the handler; the ledger holds nothing.
+        assert_eq!(active.finish(&board, now), None);
+        active.begin(board.clone(), folder, "board.zip", |_| false, now);
+        assert_eq!(active.finish(&board, now), Some(folder.join("board.zip")));
         assert_eq!(active.finish(&board, now), None);
     }
 
@@ -505,21 +534,22 @@ mod tests {
         let mut active = Active::new();
         active.begin(board.clone(), folder, "board.zip", |_| false, start);
         let late = start + HOLD;
-        // The held name is free again, and the dead completion finds nothing.
+        // The held name is free again, and the expired one leaves no overlap.
         assert_eq!(
             active.begin(board.clone(), folder, "board.zip", |_| false, late),
             Begin::Reserved(folder.join("board.zip"))
         );
-        assert_eq!(
-            active.finish(&board, late),
-            Some(Some(folder.join("board.zip")))
-        );
-        let before = start + HOLD - Duration::from_secs(1);
+        assert_eq!(active.finish(&board, late), Some(folder.join("board.zip")));
+        // Just before expiry the reservation still answers.
         active.begin(board.clone(), folder, "board.zip", |_| false, start);
+        let before = start + HOLD - Duration::from_secs(1);
         assert_eq!(
             active.finish(&board, before),
-            Some(Some(folder.join("board.zip")))
+            Some(folder.join("board.zip"))
         );
+        // The completion of an expired download is generic.
+        active.begin(board.clone(), folder, "board.zip", |_| false, start);
+        assert_eq!(active.finish(&board, late), None);
     }
 
     #[test]
