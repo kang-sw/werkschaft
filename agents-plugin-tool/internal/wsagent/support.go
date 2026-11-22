@@ -445,6 +445,11 @@ type ChoicesAnswer struct {
 	// those concrete fields. TiersError says why none can be listed.
 	Tiers      []SupportTier `json:"tiers"`
 	TiersError string        `json:"tiers_error,omitempty"`
+	// Pickers are the harnesses that list models for a picker but run no
+	// support conversation and no lead (a worker-only backend that lists
+	// choices): the settings model picker reads them beside Harnesses, and the
+	// support and lead dialogs, which offer only what they can open, do not.
+	Pickers []SupportHarness `json:"pickers,omitempty"`
 }
 
 // SupportTier is one named bundle: its trace and the binding it resolves
@@ -527,8 +532,44 @@ func (s *Support) Choices(ctx context.Context) ChoicesAnswer {
 		hs = append(hs, h)
 	}
 	s.listChoices(ctx, hs)
+	pickers := s.pickers(ctx, seen)
 	tiers, tiersErr := s.namedTiers()
-	return ChoicesAnswer{Harnesses: hs, Last: s.selection(hs), Tiers: tiers, TiersError: tiersErr}
+	return ChoicesAnswer{Harnesses: hs, Last: s.selection(hs), Tiers: tiers, TiersError: tiersErr, Pickers: pickers}
+}
+
+// pickers lists the registered worker-only backends that list their choices
+// (no lead, no support profile), which the harnesses above leave out. A
+// listing needs only the executable: the models are public, so a harness that
+// still lacks a setup step (a credential) lists them and says in Error why
+// it is not available yet. skip names the harnesses already listed.
+func (s *Support) pickers(ctx context.Context, skip map[string]bool) []SupportHarness {
+	var names []string
+	for name, reg := range s.opts.Runner.opts.Backends {
+		if _, ok := reg.Backend.(ChoiceLister); ok && reg.WorkerCapable && reg.LeadProfile == "" && !skip[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	var out []SupportHarness
+	for _, name := range names {
+		reg := s.opts.Runner.opts.Backends[name]
+		h := SupportHarness{Harness: name, Available: true, Models: []ModelChoice{}, Efforts: []string{}}
+		if lister := reg.Backend.(ChoiceLister); lister != nil {
+			if _, err := lookPath(lister.Executable()); err != nil {
+				h.Available, h.Error = false, fmt.Sprintf("%s is not installed: %v", lister.Executable(), err)
+			}
+		}
+		one := []SupportHarness{h}
+		s.listChoices(ctx, one)
+		h = one[0]
+		// The listing is done; what the harness still lacks (a credential)
+		// makes it unavailable, whatever the listing said.
+		if ok, why := supportBackendAvailability(name, reg.Backend); !ok {
+			h.Available, h.Error = false, why
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 // Store reads the store's conversation and the current selection, without

@@ -495,3 +495,27 @@ test("settings stage caps width at 1280px and centers cleanly at wide and ultraw
   assert.match(wideStage[1], /justify-self:\s*center/);
   assert.match(wideStage[1], /align-self:\s*stretch/);
 });
+
+test("settings combobox offers the pickers' models beside the harnesses, with their availability", async () => {
+  const { doc, win, FakeEvent } = createFakeDOM();
+  const ctx = {
+    window: win,
+    document: doc,
+    Event: FakeEvent,
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({
+        harnesses: [{ harness: "claude", available: true, models: [{ id: "sonnet" }], efforts: ["low"] }],
+        pickers: [{ harness: "werk", available: false, error: "no key", models: [{ id: "vendor/m", thinking: true }], efforts: ["low", "high"] }]
+      })
+    })
+  };
+  win.window = win;
+  vm.runInNewContext(read("dashboard-settings-combobox.js"), ctx);
+  const cb = win.WsSettingsCombobox;
+  await cb.loadChoices();
+  assert.equal(JSON.stringify(cb.backendOptions().map(o => o.id)), JSON.stringify(["claude", "werk"]));
+  assert.equal(cb.backendOptions()[1].unavailable, true, "a picker harness that is not available yet says so");
+  assert.equal(JSON.stringify(cb.modelOptions("werk")), JSON.stringify([{ id: "vendor/m", thinking: true }]));
+  assert.equal(JSON.stringify(cb.effortOptions("werk").map(e => e.id)), JSON.stringify(["low", "high"]));
+});

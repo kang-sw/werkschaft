@@ -351,6 +351,7 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .hud-emblem[data-h="codex"]  { background: #f2f2f2; color: #18181b; box-shadow: inset 0 0 0 1px rgb(24 24 27 / .18); }
 .hud-emblem[data-h="agy"]    { background: #3b7be8; color: #ffffff; }
 .hud-emblem[data-h="pi"]     { background: #0b0b0c; color: #e6e6e6; box-shadow: inset 0 0 0 1px #5a5a5a; }
+.hud-emblem[data-h="werk"]   { background: #2f6f5e; color: #ffffff; }
 .hud-ring { position: absolute; inset: 0; border-radius: 7px; pointer-events: none; z-index: 2; }
 .hud-node[data-state="thinking"] .hud-ring { padding: 1.5px; background: conic-gradient(from var(--hud-spin-a), var(--ring-think) 0deg 128deg, transparent 140deg 360deg), linear-gradient(color-mix(in srgb, var(--ring-think) 24%, transparent), color-mix(in srgb, var(--ring-think) 24%, transparent)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); animation: hud-spin-think 1.15s linear infinite; }
 @keyframes hud-spin-think { to { --hud-spin-a: 388deg; } }

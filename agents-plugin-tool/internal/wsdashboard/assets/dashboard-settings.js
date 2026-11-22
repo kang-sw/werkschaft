@@ -843,7 +843,7 @@ var wsSettingsChoiceLabels = {
   }
 
   function harnessChoices(entries) {
-    var order = ["*", "default", "claude", "codex", "pi", "agy"];
+    var order = ["*", "default", "claude", "codex", "pi", "agy", "werk"];
     return [...new Set(entries.map(function (entry) { return entry.selectors.harness; }).filter(Boolean))].sort(function (a, b) {
       return (order.indexOf(a) + order.length + 1) % (order.length + 1) - (order.indexOf(b) + order.length + 1) % (order.length + 1);
     });

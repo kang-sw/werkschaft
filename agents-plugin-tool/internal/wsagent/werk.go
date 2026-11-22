@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"slices"
@@ -51,6 +52,10 @@ type WerkBackend struct {
 	// which blocks nothing: the first request then fails with the auth
 	// layer's own refusal.
 	credentialStatus func(provider string) (configured bool, err error)
+	// modelsURL and httpClient stand in for OpenRouter's model list endpoint
+	// and its client; a test sets them, a daemon never does.
+	modelsURL  string
+	httpClient *http.Client
 }
 
 // werkWorkerText is the instruction text of the harness's worker profile.

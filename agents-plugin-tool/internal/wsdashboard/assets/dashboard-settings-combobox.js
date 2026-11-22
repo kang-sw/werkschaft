@@ -1,6 +1,6 @@
 var WsSettingsCombobox = (function () {
   "use strict";
-  var FALLBACK_HARNESSES = ["claude", "codex", "pi", "agy"];
+  var FALLBACK_HARNESSES = ["claude", "codex", "pi", "agy", "werk"];
   var choicesPromise = null;
   var choicesData = null;
   var seq = 0;
@@ -25,7 +25,9 @@ var WsSettingsCombobox = (function () {
       })
       .then(function (json) {
         if (!json || !Array.isArray(json.harnesses)) throw new Error("invalid choices");
-        choicesData = { harnesses: json.harnesses, failed: false };
+        // pickers are harnesses that list models for this picker but open no
+        // support conversation or lead (a worker-only backend): beside the rest here.
+        choicesData = { harnesses: json.harnesses.concat(Array.isArray(json.pickers) ? json.pickers : []), failed: false };
         return choicesData;
       })
       .catch(function () {

@@ -209,6 +209,8 @@ html[data-can-control] .tph.child-close:disabled { opacity: .5; cursor: default;
 .hb[data-h="codex"]::before { content: "Co"; }
 .hb[data-h="agy"] { background: #3b7be8; color: #fff; }
 .hb[data-h="agy"]::before { content: "Ag"; }
+.hb[data-h="werk"] { background: #2f6f5e; color: #fff; }
+.hb[data-h="werk"]::before { content: "Wk"; }
 @property --hba { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
 .hb .hbr { position: absolute; inset: -2px; box-sizing: border-box; padding: 2px; border-radius: 6.5px; z-index: 2; pointer-events: none; background: conic-gradient(from var(--hba), #d6dde8 0 100deg, transparent 100deg 360deg);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); animation: hbspin 1.1s linear infinite; }
