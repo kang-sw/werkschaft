@@ -5,6 +5,7 @@ compile_error!("Werkschaft supports macOS and Windows");
 
 #[cfg(any(windows, test))]
 mod accelerator;
+mod chrome;
 mod close;
 mod daemon;
 mod daemon_package;
@@ -18,6 +19,12 @@ mod navigation;
 mod notify;
 mod python;
 mod shell;
+#[cfg(windows)]
+mod snap;
+#[cfg(windows)]
+mod strip;
+#[cfg(any(windows, test))]
+mod strip_msg;
 mod tray;
 mod updates;
 #[cfg(windows)]
@@ -80,6 +87,12 @@ fn build_webview(
                     notice.show_refusal(&window);
                     updates::inject(&window, payload.url());
                     notify::inject(&window, payload.url());
+                    #[cfg(windows)]
+                    strip::inject_theme_bridge(
+                        &window,
+                        payload.url(),
+                        notice.pinned_url().as_ref(),
+                    );
                 } else if dashboard {
                     notify::mark_secondary(&window);
                 }
@@ -108,6 +121,14 @@ fn build_webview(
     #[cfg(windows)]
     let window = {
         let state = connection.clone();
+        // The main window draws its own title strip; see strip.rs. A window's
+        // webview is a child webview here, so another window has it follow the
+        // window's size.
+        let builder = if main {
+            builder.decorations(false)
+        } else {
+            builder.auto_resize()
+        };
         builder
             .on_navigation(
                 move |url| match destination(url, state.pinned_url().as_ref()) {
@@ -122,6 +143,15 @@ fn build_webview(
             .build()?
     };
 
+    #[cfg(windows)]
+    {
+        chrome::register(app, &window);
+        if main {
+            if let Err(error) = strip::attach(app, &window, connection.clone()) {
+                eprintln!("Werkschaft: Could not build the title strip ({error}); using the system title bar");
+            }
+        }
+    }
     let _ = window.set_zoom(app.state::<Zoom>().current());
     if let Err(error) = install_webview(&window, connection.clone(), target) {
         webview_setup_failed(&window, &connection);
@@ -180,7 +210,7 @@ fn open_secondary(app: AppHandle, state: Arc<Connection>, pin: Url, url: Url) {
 }
 
 fn restore_main(app: &AppHandle, connection: &Arc<Connection>) {
-    if let Some(window) = app.get_webview_window(close::MAIN_WINDOW) {
+    if let Some(window) = chrome::get(app, close::MAIN_WINDOW) {
         #[cfg(target_os = "macos")]
         macos::keep_shown();
         let _ = window.show();
@@ -255,7 +285,7 @@ fn install_menu(app: &AppHandle) -> tauri::Result<()> {
 
 fn menu_action(window: WebviewWindow, state: &Arc<Connection>, id: &str) {
     let window = if matches!(id, "retry" | "replace_daemon" | "copy_login") {
-        let Some(main) = window.app_handle().get_webview_window(close::MAIN_WINDOW) else {
+        let Some(main) = chrome::get(window.app_handle(), close::MAIN_WINDOW) else {
             if id == "retry" {
                 restore_main(window.app_handle(), state);
             }
@@ -277,6 +307,10 @@ fn menu_action(window: WebviewWindow, state: &Arc<Connection>, id: &str) {
         "retry" => state.connect(window, Intent::Connect),
         "replace_daemon" => state.connect(window, Intent::Replace),
         "copy_login" => state.copy_login_link(window),
+        #[cfg(windows)]
+        "minimize" => {
+            let _ = window.minimize();
+        }
         "devtools" | "devtools_f12" => {
             #[cfg(target_os = "macos")]
             if window.is_devtools_open() {
@@ -291,7 +325,7 @@ fn menu_action(window: WebviewWindow, state: &Arc<Connection>, id: &str) {
                     .state::<Zoom>()
                     .change(step, |level| window.set_zoom(level).is_ok())
                 {
-                    for other in window.app_handle().webview_windows().into_values() {
+                    for other in chrome::all(window.app_handle()) {
                         if other.label() != window.label() {
                             let _ = other.set_zoom(level);
                         }
@@ -307,7 +341,16 @@ fn main() {
     let menu_state = state.clone();
     let setup_state = state.clone();
     let instance_state = state.clone();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        strip::strip_popup,
+        strip::strip_minimize,
+        strip::strip_toggle_maximize,
+        strip::strip_close,
+        strip::strip_drag,
+    ]);
+    builder
         .plugin(tauri_plugin_single_instance::init(
             move |app, _args, _cwd| {
                 let target = app.clone();
@@ -325,11 +368,10 @@ fn main() {
                 }
                 None => (),
             }
-            let window = app
-                .webview_windows()
-                .into_values()
+            let window = chrome::all(app)
+                .into_iter()
                 .find(|window| window.is_focused().unwrap_or(false))
-                .or_else(|| app.get_webview_window(close::MAIN_WINDOW));
+                .or_else(|| chrome::get(app, close::MAIN_WINDOW));
             if let Some(window) = window {
                 menu_action(window, &menu_state, event.id().as_ref());
             }
@@ -345,6 +387,11 @@ fn main() {
                     Zoom::default()
                 });
             app.manage(zoom);
+            #[cfg(windows)]
+            {
+                chrome::manage(app.handle());
+                strip::manage(app.handle());
+            }
             install_menu(app.handle())?;
             notify::manage(app.handle(), setup_state.clone());
             let tray_state = setup_state.clone();
@@ -364,7 +411,7 @@ fn main() {
                 event: WindowEvent::CloseRequested { api, .. },
                 ..
             } if close::checks_draft(&label) => {
-                if let Some(window) = app.get_webview_window(&label) {
+                if let Some(window) = chrome::get(app, &label) {
                     api.prevent_close();
                     #[cfg(target_os = "macos")]
                     macos::hide_to_tray(&window);
@@ -387,7 +434,7 @@ fn main() {
             RunEvent::Reopen {
                 has_visible_windows,
                 ..
-            } if !has_visible_windows || app.get_webview_window(close::MAIN_WINDOW).is_none() => {
+            } if !has_visible_windows || chrome::get(app, close::MAIN_WINDOW).is_none() => {
                 restore_main(app, &state);
             }
             #[cfg(windows)]
@@ -428,12 +475,51 @@ mod tests {
         let app = &config["app"];
         assert_eq!(app["withGlobalTauri"], false);
         let capabilities = app["security"]["capabilities"].as_array().unwrap();
-        assert_eq!(capabilities.len(), 1);
+        assert_eq!(capabilities.len(), 2);
+        // No page but the strip has a permission: this capability covers the
+        // whole main window, the dashboard included, and grants nothing.
         assert_eq!(capabilities[0]["local"], false);
         assert!(capabilities[0].get("remote").is_none());
         assert!(capabilities[0]["permissions"]
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    // The strip page is the one bundled page with IPC. It is granted by webview
+    // label, not by window (the dashboard shares the window), only the shell's
+    // fixed strip commands, and no plugin or core permission.
+    #[test]
+    fn only_the_title_strip_webview_has_permissions() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let capabilities = config["app"]["security"]["capabilities"]
+            .as_array()
+            .unwrap();
+        let strip = &capabilities[1];
+        assert_eq!(strip["identifier"], "title-strip");
+        assert_eq!(strip["webviews"], serde_json::json!(["main-strip"]));
+        assert!(strip.get("windows").is_none());
+        assert!(strip.get("remote").is_none());
+        let granted: Vec<&str> = strip["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|permission| permission.as_str().unwrap())
+            .collect();
+        let build = include_str!("../build.rs");
+        for permission in &granted {
+            let command = permission.strip_prefix("allow-").unwrap().replace('-', "_");
+            assert!(
+                build.contains(&format!("\"{command}\"")),
+                "{permission} grants a command build.rs does not declare"
+            );
+        }
+        assert_eq!(granted.len(), 5);
+        // The strip page may reach only the shell's own origin for IPC.
+        let csp = config["app"]["security"]["csp"].as_str().unwrap();
+        assert!(csp.contains("default-src 'none'"));
+        assert!(csp.contains("connect-src ipc: http://ipc.localhost;"));
+        assert!(!csp.contains("unsafe-"));
     }
 }

@@ -101,6 +101,7 @@ updates, and workflow artifacts.
 Run the packaging checks with `node --test scripts/test-package.cjs`.
 Run the notice browser test with `WS_PLAYWRIGHT_MODULE` pointing to
 Playwright and `node --test scripts/test-daemon-notice.cjs`.
+Run the theme bridge test with `node --test scripts/test-theme-bridge.cjs`.
 
 `scripts/build-slot.py` remains the bounded debug build runner from the
 attach-only research. Its process-group regressions can run without Cargo:
@@ -116,11 +117,11 @@ python3 -m unittest discover -s scripts -p test_build_slot.py -v
   login gate when cookie setup fails. **Copy Browser Login Link to Clipboard**
   mints a path-scoped link and writes it directly to the system clipboard.
 - The app allows its connection and Python guide only as top-level bundled
-  documents. Those pages and the dashboard have no Tauri IPC permissions.
-  Approved dashboard frames stay on the pinned origin or use blank/srcdoc
-  documents. External HTTP(S) links open in the system browser from top-level
-  links and popups. Other schemes are blocked. Popup requests never create a
-  second webview.
+  documents. Those pages and the dashboard have no Tauri IPC permissions; the
+  one page with any is the Windows title strip, below. Approved dashboard
+  frames stay on the pinned origin or use blank/srcdoc documents. External
+  HTTP(S) links open in the system browser from top-level links and popups.
+  Other schemes are blocked. Popup requests never create a second webview.
 - Downloads are accepted only from the pinned dashboard origin and saved to the
   user's Downloads folder under the server's file name, cleaned to one path
   component and numbered `name (1).ext` rather than overwriting; a native
@@ -134,6 +135,41 @@ python3 -m unittest discover -s scripts -p test_build_slot.py -v
 - The View menu provides zoom and release DevTools
   (`Cmd+Option+I` on macOS, `Ctrl+Shift+I` on Windows, or `F12`).
   Starting a second instance restores the original window.
+- On Windows the main window has no system title bar or menu bar. One strip
+  (34 logical pixels, the bundled `ui/strip.html`) across its top holds the
+  icon, the window title, the menu labels (File, Edit, Window, Help,
+  Connection, View) and the minimize, maximize and close buttons; the dashboard
+  fills the rest. The strip is its own child webview, labelled `main-strip`,
+  and it is the only page with Tauri IPC. The `title-strip` capability grants
+  it, by webview label and not by window, five fixed commands and no plugin or
+  core permission: `strip_popup` (show one of the existing native menus at a
+  label), `strip_minimize`, `strip_toggle_maximize`, `strip_close` and
+  `strip_drag`. Each command also refuses any other webview. The menu items,
+  accelerators and actions are the same ones the macOS menu bar has. The
+  shell pushes state into the strip with fixed scripts (maximized, focused,
+  title, theme, and the maximize button's hover, which the shell hit-tests so
+  Windows 11 can offer its snap layouts there), and the page sends only the
+  five commands.
+  The close button takes the window's usual close, which hides the app to the
+  tray. The strip's webview cannot navigate away from its page, opens no
+  windows, and has DevTools, context menus and the browser's keys off. Page
+  zoom changes only the dashboard's webview. Secondary windows keep the system
+  title bar and menu bar.
+- The strip follows the dashboard's theme. The dashboard's page gets a small
+  injected bridge (`theme-bridge.js`, installed like the notify bridge in the
+  main window's pinned top frame only) that posts the resolved theme, the
+  pinned `data-theme` or else the OS preference, as the exact text
+  `werkschaft:theme:light` or `werkschaft:theme:dark` through
+  `chrome.webview.postMessage`. The shell accepts it only from the pinned
+  dashboard origin's top frame in the current window generation, and parses
+  nothing else out of it. Until the dashboard reports, the strip follows the OS
+  preference.
+- Without a menu bar, **F10** and a lone **Alt** open the File menu and
+  **Alt+F/E/W/H/C/V** open File, Edit, Window, Help, Connection and View, from
+  the dashboard or the strip. The shortcuts the menu items carry still work
+  from the focused webview as before, and **Ctrl+M** minimizes, as the Window
+  menu's item does. The maximize button offers the Windows 11 snap layouts: it
+  is a native hit-test region, not part of the strip page.
 
 ## Shell updates
 
