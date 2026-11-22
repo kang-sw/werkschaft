@@ -667,6 +667,9 @@
         }
       }
     },
+    "261122-feat-ws-cron-scheduled-prompts": {
+      "registered_at": "2026-11-22T11:25:33Z"
+    },
     "261122-feat-ws-dashboard-session-stats": {
       "registered_at": "2026-11-22T10:16:59Z"
     },
