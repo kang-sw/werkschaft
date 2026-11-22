@@ -40,6 +40,132 @@ test("companion knee tracks rotate continuously with independently phased pivots
   assert.equal(motion("wave-pivot")(0).rotDeg, -22);
 });
 
+test("companion easing supports anticipation, overshoot, declared and inline curves", () => {
+  const { motion, solveBezier } = companion();
+  const track = ease => ({loop: false, keyframes: [{t: 0, tx: 0, ease}, {t: 1, tx: 100}]});
+  assert.ok(motion(track("anticipate"))(0.2).tx < 0);
+  assert.ok(motion(track("overshoot"))(0.7).tx > 100);
+  const custom = [0.1, 0.8, 0.2, 0.9];
+  assert.ok(motion(track(custom))(0.5).tx > 80);
+  assert.equal(motion(track("custom"), {}, {custom})(0.5).tx, motion(track(custom))(0.5).tx);
+  assert.equal(motion(track([0, 0, 1.1, 3]))(0.5).tx, 50);
+  assert.equal(motion(track(123))(0.5).tx, 50);
+  assert.equal(solveBezier(1, custom), 1);
+});
+
+test("companion timing overrides safe curves and falls back from opaque v1 extensions", () => {
+  const { timing } = companion();
+  const defaults = timing({passive: "custom", easings: 123});
+  const edited = timing({
+    stageEffects: {stay: {keyframes: [{p: 0, lift: 0}, {p: 1, lift: -1}]}},
+    propMotions: {attach: {keyframes: [{p: 0, scale: 1}, {p: 1, scale: 2}], edge: "left"},
+      "hand-liftoff": {keyframes: [{p: 0, alpha: 2}]},
+      broken: {keyframes: [{p: 0.5}, {p: 0.4}]}},
+    physics: {drag: {stiffness: 300, damping: 0, impulse: 0, maxDeg: 45, bodyFallbackScale: 0}},
+    passive: {typing_user: {gesture: "point"}, streaming: {pose: "legacy", gaze: "prop:drone"}, thinking: {gesture: "bad path"}}
+  });
+  assert.equal(edited.stage.stay.sample(0.5, {}).lift, -0.5);
+  assert.equal(edited.prop.attach.sample(0.5, {}).scale, 1.5);
+  assert.equal(edited.prop.attach.edge, "left");
+  assert.equal(edited.prop["hand-liftoff"].sample(0.3, {}).along, defaults.prop["hand-liftoff"].sample(0.3, {}).along);
+  assert.equal(edited.prop.broken, undefined);
+  assert.equal(edited.drag.stiffness, 300);
+  assert.equal(edited.drag.damping, 7.5);
+  assert.equal(edited.drag.impulse, 0);
+  assert.equal(edited.drag.maxSwing, Math.PI / 4);
+  assert.equal(edited.drag.bodyFallbackScale, 0);
+  assert.equal(edited.passive.typing_user, edited.passive.user_typing);
+  assert.equal(edited.passive.user_typing.gesture, "point");
+  assert.equal(edited.passive.replying.pose, "legacy");
+  assert.equal(edited.passive.replying.gaze, "prop:drone");
+  assert.equal(timing({passive: {replying: {}, streaming: {pose: "legacy"}}}).passive.replying.pose, "typing");
+  assert.equal(edited.passive.thinking.gesture, "coffee");
+  assert.equal(defaults.passive.thinking.fx, "ponder");
+});
+
+test("companion starters select motion per beat while preserving legacy scenario overrides", () => {
+  const { scenarioRunner } = companion();
+  const guards = {routeKind: "session", pose: "stand", idleMs: 0};
+  const runner = scenarioRunner({legacy: {on: "session.streaming", pose: "perched"}});
+  runner.fire("mail.send", 0, guards);
+  assert.equal(runner.tick(0).beat.prop.motion, "hand-liftoff");
+  assert.equal(runner.tick(0).beat.prop.from, "hand");
+  runner.fire("mail.recv", 1, guards);
+  assert.equal(runner.tick(1).beat.prop.motion, "bonk-from-edge");
+  assert.equal(runner.tick(1).beat.prop.id, "mail");
+  runner.fire("mail.recv", 2, guards);
+  assert.equal(runner.tick(2).count, 2);
+  runner.fire("user.drag", 3, guards);
+  assert.equal(runner.tick(3, true).beat.prop, undefined);
+  runner.clear();
+  runner.fire("session.streaming", 4, guards);
+  assert.equal(runner.tick(4).entry.id, "legacy");
+  runner.fire("session.replying", 5, guards);
+  assert.equal(runner.tick(5).entry.id, "working_tatata");
+  const override = scenarioRunner({mailbox_bonk: {prop: "mail", durationMs: 500}});
+  override.fire("mail.recv", 0, guards);
+  assert.equal(override.tick(0).beat.prop, "mail");
+  assert.equal(override.tick(500), null);
+});
+
+function technicalRig() {
+  const manifest = {
+    canvas: [512, 512],
+    head: {egg: {file: "egg.png"}, pivot: [256, 130], eyes: {sclera: "eyes.png", irisLine: "iris.png", maxPan: [13, 8]},
+      gazeTiltDeg: 2, propGazeTiltDeg: 17},
+    poses: {
+      stand: {handAnchor: [250, 275], layers: [{file: "body.png"}]},
+      dangle: {layers: [{file: "body.png"},
+        {file: "arm.png", pivot: [180, 240], swingWeight: 0.8, swingLag: 0.1},
+        {file: "leg.png", pivot: [285, 325], swingWeight: -0.5, swingLag: 0.03}]}
+    },
+    gestures: {
+      cup_hands: {handAnchor: [210, 270], layers: [{file: "hands.png"}]},
+      invalid: {handAnchor: [-1, 999]}
+    }
+  };
+  const bitmaps = new Map(["egg", "eyes", "iris", "body", "arm", "leg", "hands"].map(id => [id + ".png", {id}]));
+  return {manifest, bitmaps};
+}
+
+test("technical rig uses gesture and pose anchors, independent limb inertia, and head plus pupil prop tracking", () => {
+  const paints = [], rotations = [], pivots = [];
+  class Canvas {
+    getContext() {
+      return {
+        canvas: this, save() {}, restore() {}, clearRect() {}, scale() {},
+        translate(x, y) { pivots.push([x, y]); },
+        rotate(theta) { rotations.push(theta); },
+        drawImage(image, x, y) { paints.push([image.id, x, y]); },
+        getImageData: () => ({data: []})
+      };
+    }
+  }
+  const { makeRig, RAD } = companion({OffscreenCanvas: Canvas});
+  const rig = makeRig(technicalRig(), null, "");
+  assert.deepEqual([...rig.view("stand", "cup_hands", "idle", []).handAnchor], [210, 270]);
+  assert.deepEqual([...rig.view("stand", "invalid", "idle", []).handAnchor], [250, 275]);
+  const stand = rig.view("stand", null, "idle", []), dangle = rig.view("dangle", null, "idle", []);
+  assert.deepEqual([...dangle.handAnchor], [256, 512 * 0.48]);
+  assert.equal(stand.articulatedDrag, false);
+  assert.equal(dangle.articulatedDrag, true);
+  function render(view, gaze, physics) {
+    rotations.length = pivots.length = paints.length = 0;
+    view.render(0, gaze, physics);
+  }
+  render(dangle, {x: 0, y: 0}, {swing: 0.25, swingVel: 0.5});
+  assert.ok(pivots.some(([x, y]) => x === 180 && y === 240));
+  assert.ok(pivots.some(([x, y]) => x === 285 && y === 325));
+  assert.ok(Math.abs(rotations[0] - 0.15) < 1e-12);
+  assert.ok(Math.abs(rotations[1] + 0.14) < 1e-12);
+  render(stand, {x: 1, y: -1, prop: true});
+  assert.ok(rotations.includes(17 * RAD));
+  assert.ok(paints.some(([id, x, y]) => id === "iris" && x === 13 && y === -8));
+  render(stand, {x: -1, y: 0});
+  assert.ok(rotations.includes(-2 * RAD));
+  assert.ok(paints.some(([id, x]) => id === "iris" && x === -13));
+});
+
 test("companion gestures can select a pose or remove slots without adding layers", () => {
   class Canvas {
     constructor(width, height) {
