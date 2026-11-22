@@ -106,13 +106,15 @@ type tmCorpus struct {
 	vecs  [][]tmVecEntry  // per node, sorted by id, L2-normalized
 	kw    [][]TicketMapTerm
 
-	sim      []float64 // dense n×n, mention boost applied
+	pairS    map[[2]int32]float64 // score of every kept neighbor pair, mention boost applied
 	mention  map[[2]int32]bool
 	explicit map[[2]int32]bool
 	nbrs     [][]int32 // per node: top-25 neighbors
 }
 
-func (c *tmCorpus) s(i, j int32) float64 { return c.sim[int(i)*c.n+int(j)] }
+// s is the similarity of a pair where one side lists the other in nbrs; every
+// consumer reads only such pairs.
+func (c *tmCorpus) s(i, j int32) float64 { return c.pairS[tmPairKey(i, j)] }
 
 func tmPairKey(i, j int32) [2]int32 {
 	if i > j {
@@ -170,7 +172,6 @@ func analyzeTicketMap(nodes []mapNode, edges []mapEdge) mapAnalysis {
 	c.buildVectors()
 	out.kw = c.kw
 	out.mentionPairs = c.buildSimilarity()
-	c.buildNeighbors()
 	out.sim = c.simRows()
 
 	part, misc := c.cluster(&out)
@@ -417,8 +418,14 @@ func (c *tmCorpus) buildVectors() {
 }
 
 // buildSimilarity computes cosine similarity through an inverted index
-// (terms in sorted order, postings in node order) and applies the body-mention
-// boost; it returns the number of boosted pairs.
+// (terms in sorted order, postings in node order), applies the body-mention
+// boost, and keeps per node the neighbors scoring at least 0.08, sorted by
+// score descending then stem, up to 25. Rows are computed one at a time into
+// an n-sized scratch, and only the kept neighbor pairs' scores are retained,
+// so memory stays linear in n. It returns the number of boosted pairs.
+//
+// Row i sums e.w(i)·w(j) over shared terms in term-id order, which is the
+// same sequence row j sums, so s(i,j) == s(j,i) exactly.
 func (c *tmCorpus) buildSimilarity() int {
 	V := len(c.vocab)
 	off := make([]int32, V+1)
@@ -440,22 +447,6 @@ func (c *tmCorpus) buildSimilarity() int {
 		}
 	}
 	n := c.n
-	c.sim = make([]float64, n*n)
-	for i, vec := range c.vecs {
-		row := c.sim[i*n : (i+1)*n]
-		for _, e := range vec {
-			for p := off[e.id]; p < off[e.id+1]; p++ {
-				if j := postNode[p]; int(j) > i {
-					row[j] += e.w * postW[p]
-				}
-			}
-		}
-	}
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			c.sim[j*n+i] = c.sim[i*n+j]
-		}
-	}
 
 	c.explicit = map[[2]int32]bool{}
 	for _, e := range c.edges {
@@ -466,7 +457,8 @@ func (c *tmCorpus) buildSimilarity() int {
 		index[node.info.Stem] = int32(i)
 	}
 	c.mention = map[[2]int32]bool{}
-	var pairs [][2]int32
+	mentionOf := make([][]int32, n)
+	pairs := 0
 	for i, node := range c.nodes {
 		for _, stem := range node.doc.Mentions {
 			j, ok := index[stem]
@@ -478,28 +470,43 @@ func (c *tmCorpus) buildSimilarity() int {
 				continue
 			}
 			c.mention[key] = true
-			pairs = append(pairs, key)
+			mentionOf[key[0]] = append(mentionOf[key[0]], key[1])
+			mentionOf[key[1]] = append(mentionOf[key[1]], key[0])
+			pairs++
 		}
 	}
-	for _, key := range pairs {
-		s := min(tmMentionCap, c.s(key[0], key[1])+tmMentionBoost)
-		c.sim[int(key[0])*n+int(key[1])] = s
-		c.sim[int(key[1])*n+int(key[0])] = s
-	}
-	return len(pairs)
-}
 
-// buildNeighbors keeps, per node, the nodes scoring at least 0.08, sorted by
-// score descending then stem, up to 25.
-func (c *tmCorpus) buildNeighbors() {
-	c.nbrs = make([][]int32, c.n)
-	var buf []int32
-	for i := 0; i < c.n; i++ {
+	c.pairS = map[[2]int32]float64{}
+	c.nbrs = make([][]int32, n)
+	row := make([]float64, n)
+	seen := make([]bool, n)
+	var touched, buf []int32
+	for i, vec := range c.vecs {
+		touched = touched[:0]
+		for _, e := range vec {
+			for p := off[e.id]; p < off[e.id+1]; p++ {
+				j := postNode[p]
+				if int(j) == i {
+					continue
+				}
+				if !seen[j] {
+					seen[j] = true
+					touched = append(touched, j)
+				}
+				row[j] += e.w * postW[p]
+			}
+		}
+		for _, j := range mentionOf[i] {
+			if !seen[j] {
+				seen[j] = true
+				touched = append(touched, j)
+			}
+			row[j] = min(tmMentionCap, row[j]+tmMentionBoost)
+		}
 		buf = buf[:0]
-		row := c.sim[i*c.n : (i+1)*c.n]
-		for j, s := range row {
-			if j != i && s >= tmSimNeighbor {
-				buf = append(buf, int32(j))
+		for _, j := range touched {
+			if row[j] >= tmSimNeighbor {
+				buf = append(buf, j)
 			}
 		}
 		slices.SortFunc(buf, func(a, b int32) int {
@@ -512,7 +519,14 @@ func (c *tmCorpus) buildNeighbors() {
 			return strings.Compare(c.nodes[a].info.Stem, c.nodes[b].info.Stem)
 		})
 		c.nbrs[i] = slices.Clone(buf[:min(len(buf), tmNeighborKeep)])
+		for _, j := range c.nbrs[i] {
+			c.pairS[tmPairKey(int32(i), j)] = row[j]
+		}
+		for _, j := range touched {
+			row[j], seen[j] = 0, false
+		}
 	}
+	return pairs
 }
 
 // simRows lists every pair where either side is in the other's top 25, sorted
