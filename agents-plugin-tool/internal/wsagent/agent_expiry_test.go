@@ -150,7 +150,13 @@ func TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop(t *testing.T) {
 	card := h.card()
 	young, yp := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "x", Tier: "small", Authority: "read-only"})
 	yp.reply("done")
-	eventually(t, "the young child's turn settled", func() bool { return h.state(young).Status == StatusIdle })
+	// Status turns idle before the settle's record write, which stamps
+	// LastActiveAt with the current time; wait for that write, or it
+	// overwrites the refresh below.
+	eventually(t, "the young child's turn settled", func() bool {
+		rec := h.record(young)
+		return h.state(young).Status == StatusIdle && rec.LastTurn != nil && !rec.TurnOpen
+	})
 	h.runner.conv(young).update(func(rec *Record) { rec.LastActiveAt = clk.Now().Add(2 * day).UTC().Format(time.RFC3339) })
 	h.runner.Close()
 	clk.advance(3 * day)
