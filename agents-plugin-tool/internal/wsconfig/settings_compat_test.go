@@ -179,3 +179,58 @@ func TestJSONFoldNameMatchesDecoder(t *testing.T) {
 		}
 	}
 }
+
+// TestSettingsConfigWriteMergesEveryCasedSpellingOfAMember: the writer before
+// case folding kept "Agents" as an unknown member beside the canonical
+// "agents", so a file can hold both. The decoder reads both into one field;
+// a write keeps the unknown members of every spelling under the canonical
+// one, the canonical spelling winning a conflicting leaf.
+func TestSettingsConfigWriteMergesEveryCasedSpellingOfAMember(t *testing.T) {
+	opts := Options{ConfigHome: t.TempDir(), CacheHome: t.TempDir()}
+	path, err := GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"schema_version":1,"Agents":{"future_agent":true,"clash":"cased","model_aliases":{"small":{"codex":{"backend":"codex","model":"before","future_leaf":{"flag":true}}}}},"agents":{"clash":"canonical","model_aliases":{"large":{"pi":{"backend":"pi","model":"kept"}}}}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver := NewResolver(opts, nil, nil, nil)
+	if err := resolver.Set("workflow.lang", "Korean", SetOptions{ExplicitScope: ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetGlobalAgentsTierForHarness(opts, "small", "codex", "after", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Agents map[string]json.RawMessage `json:"agents"`
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(out, &members); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := members["Agents"]; ok {
+		t.Errorf("write kept the cased spelling: %s", out)
+	}
+	if err := json.Unmarshal(members["agents"], &doc.Agents); err != nil {
+		t.Fatal(err)
+	}
+	if string(doc.Agents["future_agent"]) != "true" || string(doc.Agents["clash"]) != `"canonical"` {
+		t.Errorf("write lost an unknown member of a cased spelling or let it win: %s", out)
+	}
+	if !strings.Contains(string(out), `"future_leaf"`) || !strings.Contains(string(out), `"after"`) {
+		t.Errorf("write lost a cased spelling's tier leaf: %s", out)
+	}
+	files, err := FileLayers(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliases := files[ScopeGlobal].Agents.ModelAliases
+	if aliases["small"]["codex"].Model != "after" || aliases["large"]["pi"].Model != "kept" || files[ScopeGlobal].Overrides["workflow.lang"] != "Korean" {
+		t.Errorf("merged write read back as %#v", files[ScopeGlobal])
+	}
+}

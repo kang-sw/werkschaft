@@ -2,6 +2,7 @@ package wsconfig
 
 import (
 	"encoding/json"
+	"sort"
 	"unicode"
 	"unicode/utf8"
 )
@@ -111,18 +112,48 @@ func jsonNameIs(key string, names ...string) bool {
 	return false
 }
 
-// foldedMember is the member the decoder reads for the field name: the exact
-// spelling when present, else a differently cased one.
+// foldedMember is what the decoder reads for the field name: every member
+// spelled as name, merged. The decoder fills one field from each spelling
+// in turn, so an older writer that kept a second spelling ("Agents" beside
+// "agents") left unknown members in either; they merge here, nested objects
+// member by member, with the exact spelling applied last so it wins a
+// conflicting leaf.
 func foldedMember(members map[string]json.RawMessage, name string) json.RawMessage {
-	if value, ok := members[name]; ok {
-		return value
-	}
-	for key, value := range members {
-		if jsonNameIs(key, name) {
-			return value
+	var keys []string
+	for key := range members {
+		if key != name && jsonNameIs(key, name) {
+			keys = append(keys, key)
 		}
 	}
-	return nil
+	sort.Strings(keys)
+	if _, ok := members[name]; ok {
+		keys = append(keys, name)
+	}
+	var out json.RawMessage
+	for _, key := range keys {
+		out = mergeJSONMembers(out, members[key])
+	}
+	return out
+}
+
+// mergeJSONMembers merges over into base: two objects merge member by
+// member, recursively; anything else is over.
+func mergeJSONMembers(base, over json.RawMessage) json.RawMessage {
+	if base == nil {
+		return over
+	}
+	var a, b map[string]json.RawMessage
+	if json.Unmarshal(base, &a) != nil || json.Unmarshal(over, &b) != nil || a == nil || b == nil {
+		return over
+	}
+	for key, value := range b {
+		a[key] = mergeJSONMembers(a[key], value)
+	}
+	merged, err := json.Marshal(a)
+	if err != nil {
+		return over
+	}
+	return merged
 }
 
 // jsonFoldName folds name as encoding/json's appendFoldedName does: ASCII
