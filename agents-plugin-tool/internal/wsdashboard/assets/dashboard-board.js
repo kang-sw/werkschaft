@@ -1529,6 +1529,20 @@
     boardScrollTimer = 0;
     boardViewedExposure();
   }
+  // A hand scroll home keeps ordinary main-board holds (the click-only badge
+  // contract of the raw-scroll guard). That guard only cancels an already
+  // queued frame; an IO report or scrollend can queue a fresh implicit flush at
+  // home, where the departing panel would then release the hold. Docked-pane
+  // blockers still release on their own exposure changes.
+  function boardHomeHold() {
+    var w = window.wbHistory, boxes = boardBoxes(), box = boxes[0], ref = box && (box.firstElementChild || box);
+    var s = ref && w && w.keep && w.keep(ref, { capture: false }).scroller;
+    if (!s || s.scrollTop > 4) return false;
+    return Object.keys(boardPending).every(function (k) {
+      var b = boardPending[k];
+      return !Array.isArray(b) || b.every(function (n) { return boxes.some(function (x) { return x.contains(n); }); });
+    });
+  }
   function boardViewedExposure(report) {
     if (report && report.node) {
       if (report.node.wbViewedExposure === report.visible) return;
@@ -1536,7 +1550,7 @@
     }
     if (!boardReleaseFrame && Object.keys(boardPending).length) boardReleaseFrame = requestAnimationFrame(function () {
       boardReleaseFrame = 0;
-      if (Object.keys(boardPending).length && boardReleaseDue()) boardFlushViewed(false);
+      if (Object.keys(boardPending).length && !boardHomeHold() && boardReleaseDue()) boardFlushViewed(false);
     });
   }
   doc.addEventListener("scroll", boardViewedScroll, { capture: true, passive: true });
