@@ -52,7 +52,7 @@ func TestHostedAgyLeadAgentTiersOffersAgyTiers(t *testing.T) {
 }
 
 // A connection that only declares agy (a launcher hello's harness, or the
-// initialize clientInfo name) without a daemon-bound agy record is refused
+// initialize clientInfo name) without a daemon-bound agy conversation is refused
 // agy workers: agent.tiers lists agy under Unavailable with the
 // cross-harness text and agent.spawn of an agy tier, explicit or bare, is
 // refused with it. The declared harness still selects tiers.
@@ -70,7 +70,8 @@ func TestDeclaredAgyConnectionWithoutAnAgyRecordIsRefusedAgyWorkers(t *testing.T
 		{"unhosted connection whose initialize declares agy", func(t *testing.T) (*Server, string) {
 			f := newHostedKeyFixture(t)
 			s := NewServer(f.root, "test")
-			s.pi.agents = wsagent.NewRunner(wsagent.Options{Backends: shippedAgyRegistrations()})
+			runner := wsagent.NewRunner(wsagent.Options{Backends: shippedAgyRegistrations()})
+			s.pi.agents, s.callerBinding = runner, runner
 			var out bytes.Buffer
 			line := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"agy","version":"0"}}}` + "\n"
 			if err := s.ServeStdio(context.Background(), strings.NewReader(line), &out); err != nil {
@@ -103,7 +104,7 @@ func TestDeclaredAgyConnectionWithoutAnAgyRecordIsRefusedAgyWorkers(t *testing.T
 
 // The MCP routed binding (playbook.render's recommendation, and
 // config.resolve_agent) refuses a route whose terminal refuses the
-// connection's verified caller: a role tier falling through to agy returns
+// connection's verified caller (its token-bound conversation's backend): a role tier falling through to agy returns
 // no binding for a connection not verified on agy, even at the caller
 // fallthrough, and the binding for a verified agy lead.
 func TestRoutedBindingReturnsNoBindingAfterACrossHarnessRefusal(t *testing.T) {
@@ -131,5 +132,60 @@ func TestRoutedBindingReturnsNoBindingAfterACrossHarnessRefusal(t *testing.T) {
 	}
 	if got, err := agy.resolveAgentTier(tier, wsagent.BackendAgy); err != nil || got.Backend != wsagent.BackendAgy {
 		t.Fatalf("an agy lead's config.resolve_agent = %+v, %v", got, err)
+	}
+}
+
+// A connection whose hosted-session variables and on-disk record name an
+// agy lead, but which no session token binds to that conversation, is
+// refused agy workers: the record file is not the binding.
+func TestHostedAgyRecordWithoutATokenBindingIsRefusedAgyWorkers(t *testing.T) {
+	s, f := hostedBackendConnection(t, wsagent.BackendAgy, shippedAgyRegistrations())
+	s.conversation = ""
+	if s.hostedSessionKey() != f.hosted {
+		t.Fatal("precondition: the variables name the hosted agy lead")
+	}
+	if got := s.agentAdmissionBackend(); got != "" {
+		t.Fatalf("admission backend = %q, want none", got)
+	}
+	tiers := agentTiersJSON(t, s, f.hosted, "agent.tiers")
+	if len(tiers.Native) != 0 || !slices.Contains(tiers.Unavailable, "agy: "+agyCrossHarnessText) {
+		t.Fatalf("native %+v, unavailable %v", tiers.Native, tiers.Unavailable)
+	}
+}
+
+// A forwarding worker's server holds no runner (its agent.* calls go over
+// the capability token), yet its routed bindings still check the caller it
+// is authenticated as against the runner's memory: a Claude worker is
+// refused an agy-ending route and keeps its Claude one, and an agy worker
+// resolves the agy route.
+func TestForwardingServerRoutedBindingChecksItsAuthenticatedCaller(t *testing.T) {
+	const tier = "playbook-explore:small"
+	f := newHostedKeyFixture(t)
+	runner := wsagent.NewRunner(wsagent.Options{Backends: shippedAgyRegistrations()})
+	binding := boundCallers{Runner: runner, backends: map[string]string{"token:claude-capability": wsagent.BackendClaude, "agyworker": wsagent.BackendAgy}}
+	t.Setenv(wsagent.EnvPiToken, "claude-capability")
+	claude := NewServer(f.root, "test")
+	claude.callerBinding = binding
+	if claude.pi.agents != nil || claude.agentAdmissionBackend() != wsagent.BackendClaude {
+		t.Fatalf("precondition: a forwarding Claude worker (runner %v, caller %q)", claude.pi.agents, claude.agentAdmissionBackend())
+	}
+	opts := claude.configOptions()
+	if _, err := claude.resolveAgentTier("agy.small", wsagent.BackendClaude); err == nil || !strings.Contains(err.Error(), agyCrossHarnessText) {
+		t.Fatalf("a Claude worker's agy.small = %v", err)
+	}
+	if model, _, ok := claude.renderTierBinding(wsagent.BackendAgy, wsagent.BackendAgy, tier, opts); ok || model != "" {
+		t.Fatalf("a Claude worker's agy fallthrough render binding = %q %v", model, ok)
+	}
+	if got, err := claude.resolveAgentTier("claude.small", wsagent.BackendClaude); err != nil || got.Backend != wsagent.BackendClaude {
+		t.Fatalf("a Claude worker's claude.small = %+v, %v", got, err)
+	}
+
+	agy := NewServer(f.root, "test")
+	agy.callerBinding, agy.conversation = binding, "agyworker"
+	if got, err := agy.resolveAgentTier("agy.small", wsagent.BackendAgy); err != nil || got.Backend != wsagent.BackendAgy {
+		t.Fatalf("an agy worker's agy.small = %+v, %v", got, err)
+	}
+	if model, _, ok := agy.renderTierBinding(wsagent.BackendAgy, wsagent.BackendAgy, tier, agy.configOptions()); !ok || model == "" {
+		t.Fatalf("an agy worker's render binding = %q %v", model, ok)
 	}
 }

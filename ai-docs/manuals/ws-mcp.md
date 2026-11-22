@@ -1103,11 +1103,18 @@ from a support conversation:
   `POST /agents` (no spawning session, so 403), and every launch, wake, or
   rejoin of an existing agy worker record (`admitWorkerRecord`).
   The caller's backend counts only when verified (`AgentCaller.VerifiedBackend`):
-  a daemon-hosted lead's own record backend (`agentAdmissionBackend`,
-  `internal/mcp/agent_tools.go`) or a token holder's record backend for a
-  nested spawn. The connection's detected harness (launcher hello,
-  initialize `clientInfo`) selects tiers only; no verified binding is
-  cross-harness. A spawn stamps the verified caller backend on the child
+  on an MCP connection, the backend of the open conversation the connection
+  is authenticated as, read from the daemon runner's memory
+  (`agentAdmissionBackend`, `internal/mcp/agent_tools.go`;
+  `Runner.CallerBackend`): a hosted session token's binding
+  (`ProxyHello.Conversation`, never decoded from a launcher hello) or, on a
+  launcher connection, the worker capability token the runner issued into
+  its environment; on the token route, the holder's record backend for a
+  nested spawn. Hosted-session variables, the registration row, and the
+  record file are not a binding, and no `agent.json` is read on an
+  `agent.*` call. The connection's detected harness (launcher hello,
+  initialize `clientInfo`) selects tiers only; an unbound connection (a
+  lead started outside the daemon) is cross-harness. A spawn stamps the verified caller backend on the child
   (`Record.SpawnerBackend`, a top-level omitempty field, apart from
   `Parent`, whose whole value keys the child index); a record without the
   stamp on an option backend takes its parent record's backend, resolved at
@@ -1148,7 +1155,9 @@ from a support conversation:
   shows the refusal), and the MCP routed binding (`playbook.render`'s
   recommendation, `config.resolve_agent`) returns no binding after a
   refusal, even at the caller fallthrough (`errCallerRefused`,
-  `internal/mcp/tier_routing.go`). agy leads keep peer mail and the
+  `internal/mcp/tier_routing.go`). Every daemon-hosted connection gets that
+  check (`ServerOptions.CallerBinding`, the runner's read-only memory view),
+  a token-forwarding worker's too, which holds no runner handle. agy leads keep peer mail and the
   watchdog's automatic `continue`, and may spawn Claude, Codex, Pi, or agy
   workers. The dashboard's hosted lead popover still offers agy and shows a
   terms warning while agy is picked.

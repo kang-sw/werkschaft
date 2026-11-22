@@ -279,7 +279,9 @@ func TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild(t *testing.T) {
 	runner.SetEndpoint(daemon.URL)
 	runner.Start(nil)
 	defer runner.Close()
-	s.pi.agents = runner
+	// The token binding of the agy lead's connection: the runner holds
+	// its conversation open, loaded from the record.
+	s.pi.agents, s.callerBinding, s.conversation = runner, runner, rec.ReplyID
 
 	out := callToolWithKey(t, s, 2, f.hosted, "playbook.render", map[string]any{"name": "explore"})
 	lines := strings.Split(strings.TrimSpace(out), "\n")

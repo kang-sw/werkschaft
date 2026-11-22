@@ -618,6 +618,34 @@ func (r *Runner) CallerRefusal(callerBackend, harness string) string {
 	return ""
 }
 
+// CallerBackend is the backend of the open conversation a ws-mcp connection
+// is authenticated as, read from the runner's memory alone (no record file):
+// conversation is the binding a hosted session token resolved to
+// (wsdashboard.ProxyHello.Conversation), capability the worker capability
+// token a launcher connection's environment carries (issueToken). A bound
+// conversation decides alone; "" is an unbound connection, or one whose
+// conversation is closed or unknown here. It is the verified caller backend
+// (AgentCaller.VerifiedBackend) of an MCP server's admission decisions.
+func (r *Runner) CallerBackend(conversation, capability string) string {
+	var c *conv
+	if conversation != "" {
+		r.mu.Lock()
+		c = r.convs[conversation]
+		r.mu.Unlock()
+	} else if holder, err := r.tokenHolder(capability); err == nil {
+		c = holder
+	}
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return ""
+	}
+	return c.rec.Backend
+}
+
 // HarnessAvailability is SpawnableHarness for an interactive view: it never
 // runs a probe subprocess. The child check (Pi's version) answers from
 // ChildCheckKnown; while that needs a probe, or no ChildCheckKnown is set,
