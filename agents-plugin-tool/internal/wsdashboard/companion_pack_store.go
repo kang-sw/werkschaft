@@ -38,6 +38,10 @@ type CompanionPackStore struct {
 	active atomic.Pointer[companionSnapshot]
 	scanMu sync.Mutex
 	open   companionPackOpen // nil selects the disk implementation
+	// installMu serializes install, update, uninstall, and dry runs. It is
+	// always taken before scanMu, never while holding it.
+	installMu sync.Mutex
+	trace     func(op string) // counts installer file operations in tests
 }
 
 type companionPackOpen func(parent companionPackFile, name string, directory bool) (companionPackFile, error)
@@ -61,6 +65,9 @@ type companionPackInfo struct {
 	// Persona is the validated pack persona; the shell's companion modal
 	// reads it here rather than from the raw manifest.
 	Persona *CompanionPersona `json:"persona,omitempty"`
+	// Origin is the install sidecar of an installed local pack, read during
+	// a scan; a hand-made pack or a malformed sidecar has none.
+	Origin *companionSidecar `json:"origin,omitempty"`
 }
 
 type companionPackError struct {
@@ -222,9 +229,12 @@ func loadCompanionLocal(open companionPackOpen, root companionPackFile, id strin
 		return readCompanionLocalFile(open, dir, name, limit)
 	})
 	if err != nil {
-		name = id + "/" + name
+		return pack, id + "/" + name, err
 	}
-	return pack, name, err
+	// The sidecar is read here only, during a scan or reload; warm requests
+	// serve the snapshot. It is not counted against the cache budget.
+	pack.info.Origin = readCompanionSidecar(open, dir)
+	return pack, name, nil
 }
 
 func companionDirectory(f companionPackFile) bool {
