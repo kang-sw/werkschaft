@@ -21,15 +21,15 @@ async function type(frame, value) {
     field.dispatchEvent(new Event('input', { bubbles: true }));
   }, value);
 }
-async function paste(frame) {
-  await frame.evaluate(png64 => {
+async function paste(frame, name = 'draft.png') {
+  await frame.evaluate(([png64, name]) => {
     const bytes = Uint8Array.from(atob(png64), char => char.charCodeAt(0));
     const transfer = new DataTransfer();
-    transfer.items.add(new File([bytes], 'draft.png', { type: 'image/png' }));
+    transfer.items.add(new File([bytes], name, { type: 'image/png' }));
     document.querySelector('#ctext').dispatchEvent(new ClipboardEvent('paste', {
       clipboardData: transfer, bubbles: true, cancelable: true
     }));
-  }, png64);
+  }, [png64, name]);
 }
 async function send(frame, command) {
   if (command) await frame.evaluate(() => {
@@ -213,6 +213,44 @@ async function recoverImage(browser) {
   } finally { await context.close(); }
 }
 
+async function imagesAcrossWindows(browser) {
+  const context = await browser.newContext();
+  try {
+    const first = await context.newPage();
+    await first.goto(base + session);
+    const one = await frameFor(first);
+    await type(one, 'Shared image draft');
+    await paste(one, 'first.png');
+    await one.locator('#cimgs img[alt="first.png"]').waitFor();
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    const second = await context.newPage();
+    await second.goto(base + session);
+    const two = await frameFor(second);
+    await two.locator('#cimgs img[alt="first.png"]').waitFor();
+
+    // The first window adds an image the second window never loaded.
+    await paste(one, 'newer.png');
+    await one.locator('#cimgs img[alt="newer.png"]').waitFor();
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    // A later save from the stale second window keeps the newer bytes.
+    await type(two, await two.locator('#ctext').inputValue() + ' edited in the second window');
+    assert.equal(await two.evaluate(() => window.wsSaveSessionDraft()), true);
+    await first.close();
+    await second.close();
+
+    const reopened = await context.newPage();
+    await reopened.goto(base + session);
+    const frame = await frameFor(reopened);
+    await frame.locator('#cimgs img[alt="newer.png"]').waitFor();
+    assert.equal(await frame.locator('#cimgs img').count(), 2);
+    assert.match(await frame.locator('#ctext').inputValue(), /Shared image draft.*edited in the second window/s);
+    assert.deepEqual(await frame.locator('#cimgs img[alt="newer.png"]').evaluate(async image => {
+      const blob = await (await fetch(image.src)).blob();
+      return Array.from(new Uint8Array(await blob.arrayBuffer()));
+    }), [...Buffer.from(png64, 'base64')]);
+  } finally { await context.close(); }
+}
+
 async function failedStorage(browser) {
   const context = await browser.newContext();
   try {
@@ -346,6 +384,7 @@ async function queueAcrossTabs(browser) {
     if (!before) {
       for (const accepted of [false, true]) await delivery(browser, { theme: 'dark', accepted, command: true });
       await recoverImage(browser);
+      await imagesAcrossWindows(browser);
       await failedStorage(browser);
       await ackWithUnavailableLegacyStorage(browser);
       await queueAcrossTabs(browser);

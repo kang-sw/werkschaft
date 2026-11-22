@@ -165,6 +165,9 @@
   var draftDB = null, draftReady = null, draftLoaded = false;
   var draftLegacy = null, draftCommitted = null, draftWrite = null, draftWriteKey = "";
   var draftDeliveryState = new Map(), draftRetained = null, draftRetainedImages = [];
+  // Image IDs this renderer has loaded or written. Another window's newer
+  // image in the shared active record is carried over, never dropped.
+  var draftKnownImages = new Set();
 
   function draftDatabase() {
     return new Promise(function (resolve) {
@@ -194,10 +197,13 @@
     });
   }
   function draftProjection(d) { return WsRail.emptyDraft(d) ? null : JSON.stringify(d); }
-  function savedImage(p) { return { n: p.n, name: p.name, ref: p.ref, blob: p.blob }; }
+  function savedImage(p) {
+    if (!p.id) p.id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    return { id: p.id, n: p.n, name: p.name, ref: p.ref, blob: p.blob };
+  }
   function loadDraftImage(p) {
-    return p.ref ? { n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
-      { n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
+    return p.ref ? { id: p.id, n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
+      { id: p.id, n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
   }
   function imageData(blob) {
     return new Promise(function (resolve, reject) {
@@ -254,6 +260,7 @@
     draftTimer = null;
     var d = readDraft(), projection = draftProjection(d), previous = draftLegacy;
     var images = ctext ? imgs.filter(function (p) { return !p.ref && p.blob; }).map(savedImage) : draftRetainedImages;
+    images.forEach(function (p) { if (p.id) draftKnownImages.add(p.id); });
     var deliveries = outbox.filter(function (m) { return !m.acked; }).map(function (m) {
       var body = Object.assign({}, m.body);
       delete body.images;
@@ -310,7 +317,17 @@
         }
         merged[m.id] = m;
       });
-      return record || Object.keys(merged).length ? { active: record, deliveries: merged } : null;
+      // Another window may have committed images this one never loaded.
+      // Keep their bytes; a restore reattaches them as loose markers.
+      var current = existing && existing.active, active = record;
+      var foreign = current && Array.isArray(current.images) ? current.images.filter(function (p) {
+        return p && p.id && !draftKnownImages.has(p.id);
+      }) : [];
+      if (foreign.length) {
+        active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [] });
+        active.images = active.images.concat(foreign);
+      }
+      return active || Object.keys(merged).length ? { active: active, deliveries: merged } : null;
     }).then(function () {
       if (draftWrite !== write) return true;
       draftWrite = null;
@@ -360,6 +377,7 @@
         draftRetained = prepared && boardDraft(JSON.parse(JSON.stringify(prepared)));
         draftRetainedImages = active ? active.images : [];
       }
+      (active ? active.images : []).forEach(function (p) { if (p.id) draftKnownImages.add(p.id); });
       restoreDraft(prepared, useActive ? active.images : []);
       if (active && !useActive && ctext) {
         // An older page used the legacy draft in the meantime. Keep its
