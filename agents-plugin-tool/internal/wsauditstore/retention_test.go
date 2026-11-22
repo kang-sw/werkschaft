@@ -2,6 +2,8 @@ package wsauditstore
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -323,5 +325,89 @@ func TestLimitsValidateAndClamp(t *testing.T) {
 	s, log := openTest(t, t.TempDir(), func(o *Options) { o.Limits = bad })
 	if s.Limits() != got || !strings.Contains(log.String(), KeyBodyCapKiB+" lowered") {
 		t.Fatalf("Open used %+v, log %q", s.Limits(), log.String())
+	}
+}
+
+// diskRingBytes sums the segment files under root.
+func diskRingBytes(t *testing.T, root string) int64 {
+	t.Helper()
+	var n int64
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && segmentPattern.MatchString(d.Name()) {
+			if info, err := d.Info(); err == nil {
+				n += info.Size()
+			}
+		}
+		return nil
+	})
+	return n
+}
+
+func storeTotal(s *Store) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.total
+}
+
+// TestFailedEvictionsReportAndKeepTheirAccounting pins eviction against a
+// deletion the filesystem refuses (a Windows sharing violation): the failure
+// is logged, the segment or ring stays accounted, and the store total still
+// equals the bytes on disk.
+func TestFailedEvictionsReportAndKeepTheirAccounting(t *testing.T) {
+	origFile, origAll := removeFile, removeAll
+	t.Cleanup(func() { removeFile, removeAll = origFile, origAll })
+	refuse := errors.New("sharing violation")
+	removeFile = func(path string) error {
+		if filepath.Base(path) == segmentName(1) {
+			return refuse
+		}
+		return origFile(path)
+	}
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	root := t.TempDir()
+	s, log := openTest(t, root, func(o *Options) { o.Limits = lim })
+	for seq := uint64(1); seq <= 12; seq++ {
+		mustAppend(t, s, bigRecord("sess", seq, lim))
+	}
+	flush(t, s)
+	if _, err := os.Stat(filepath.Join(root, "sess", segmentName(1))); err != nil {
+		t.Fatalf("the refused segment is gone: %v", err)
+	}
+	if got := events(t, s, "sess"); len(got) == 0 || got[0].Seq != 1 {
+		t.Fatal("the index dropped the events of a segment still on disk")
+	}
+	if !strings.Contains(log.String(), "delete segment 1") || !strings.Contains(log.String(), "sharing violation") {
+		t.Fatalf("failed segment deletion not logged: %s", log.String())
+	}
+	if disk, total := diskRingBytes(t, root), storeTotal(s); disk != total {
+		t.Fatalf("store total %d, disk %d", total, disk)
+	}
+	_ = s.Close()
+
+	removeFile = origFile
+	removeAll = func(path string) error {
+		if filepath.Base(path) == "old" {
+			return refuse
+		}
+		return origAll(path)
+	}
+	root2 := t.TempDir()
+	lim2 := Limits{SessionBytes: 4 * mib, TotalBytes: 6 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	s2, log2 := openTest(t, root2, func(o *Options) { o.Limits = lim2; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 6; seq++ {
+		mustAppend(t, s2, bigRecord("old", seq, lim2))
+	}
+	flush(t, s2)
+	clock.Advance(time.Hour)
+	for seq := uint64(1); seq <= 6; seq++ {
+		mustAppend(t, s2, bigRecord("new", seq, lim2))
+	}
+	flush(t, s2)
+	if !strings.Contains(log2.String(), "remove audit ring of session old") {
+		t.Fatalf("failed ring removal not logged: %s", log2.String())
+	}
+	if disk, total := diskRingBytes(t, root2), storeTotal(s2); disk != total {
+		t.Fatalf("store total %d, disk %d", total, disk)
 	}
 }

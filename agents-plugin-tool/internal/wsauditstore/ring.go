@@ -253,6 +253,9 @@ type ring struct {
 	pendingFin  map[string]uint64
 	lastSeen    time.Time
 	bytes       int64
+	// evictErr is the first segment deletion that failed since the store
+	// last looked; the segment and its bytes stay accounted.
+	evictErr error
 }
 
 func newRing(session, dir string) *ring {
@@ -624,7 +627,11 @@ func (r *ring) write(payload []byte, segBytes, capBytes int64) (evicted int64, e
 		r.segs = append(r.segs, segment{seq: seq})
 	}
 	for r.bytes+n > capBytes && len(r.segs) > 1 {
-		evicted += r.dropOldest()
+		dropped, err := r.dropOldest()
+		if err != nil {
+			break // the ring runs over its cap until a later write retries
+		}
+		evicted += dropped
 	}
 	written, werr := writeFile(r.file, payload)
 	r.segs[len(r.segs)-1].size += int64(written)
@@ -638,13 +645,20 @@ func (r *ring) write(payload []byte, segBytes, capBytes int64) (evicted int64, e
 }
 
 // dropOldest deletes the oldest segment file and its events from the index.
-// The newest segment is never dropped.
-func (r *ring) dropOldest() int64 {
+// The newest segment is never dropped. A deletion that fails (a sharing
+// refusal on Windows) leaves the segment, its events, and its bytes in place
+// and is reported, also through evictErr.
+func (r *ring) dropOldest() (int64, error) {
 	if len(r.segs) < 2 {
-		return 0
+		return 0, nil
 	}
 	seg := r.segs[0]
-	_ = removeFile(filepath.Join(r.dir, segmentName(seg.seq)))
+	if err := removeFile(filepath.Join(r.dir, segmentName(seg.seq))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if r.evictErr == nil {
+			r.evictErr = fmt.Errorf("delete segment %d: %w", seg.seq, err)
+		}
+		return 0, err
+	}
 	r.segs = r.segs[1:]
 	r.bytes -= seg.size
 	r.led.mu.Lock()
@@ -656,7 +670,7 @@ func (r *ring) dropOldest() int64 {
 	r.led.mu.Unlock()
 	r.events = append([]wsaudit.Envelope(nil), r.events[seg.events:]...)
 	r.ids = append([]*wsaudit.SourceID(nil), r.ids[seg.events:]...)
-	return seg.size
+	return seg.size, nil
 }
 
 // trimTo drops oldest segments until the ring holds at most capBytes,
@@ -664,7 +678,11 @@ func (r *ring) dropOldest() int64 {
 func (r *ring) trimTo(capBytes int64) int64 {
 	var evicted int64
 	for r.bytes > capBytes && len(r.segs) > 1 {
-		evicted += r.dropOldest()
+		dropped, err := r.dropOldest()
+		if err != nil {
+			break
+		}
+		evicted += dropped
 	}
 	return evicted
 }

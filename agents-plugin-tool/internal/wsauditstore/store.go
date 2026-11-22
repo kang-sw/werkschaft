@@ -487,6 +487,7 @@ func (s *Store) shutdown() {
 				if _, err := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes()); err == nil {
 					r.clearPending()
 				}
+				s.noteEvictErr(info)
 				s.account(info)
 			}
 			r.close()
@@ -643,11 +644,21 @@ func (s *Store) writeLocked(info *sessionInfo, payload []byte) error {
 	r := info.ring
 	s.makeRoom(info, int64(len(payload))+s.headerAllowance(r, int64(len(payload))))
 	_, err := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes())
+	s.noteEvictErr(info)
 	s.mu.Lock()
 	s.total += r.bytes - info.bytes
 	info.bytes = r.bytes
 	s.mu.Unlock()
 	return err
+}
+
+// noteEvictErr logs a segment deletion the ring could not make; the segment
+// stays accounted, so the caps are retried on later writes. info.mu is held.
+func (s *Store) noteEvictErr(info *sessionInfo) {
+	if r := info.ring; r != nil && r.evictErr != nil {
+		s.logf("session %s: %v; the ring stays over its cap until a later write retries", info.dir, r.evictErr)
+		r.evictErr = nil
+	}
 }
 
 // headerAllowance is the header line a write of n bytes would add by
@@ -725,6 +736,7 @@ func (s *Store) finalize(session, source string, boundary uint64) {
 // within the effective per-session cap, which never exceeds the total, so
 // it alone always fits.
 func (s *Store) makeRoom(active *sessionInfo, need int64) {
+	failed := map[*sessionInfo]bool{}
 	for {
 		s.mu.Lock()
 		if s.total+need <= s.limits.TotalBytes {
@@ -733,7 +745,7 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 		}
 		var victim *sessionInfo
 		for _, info := range s.sessions {
-			if info == active || info.bytes == 0 {
+			if info == active || info.bytes == 0 || failed[info] {
 				continue
 			}
 			if victim == nil || info.lastSeen.Before(victim.lastSeen) ||
@@ -748,6 +760,7 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 				room := s.limits.TotalBytes - (s.total - active.bytes) - need
 				s.mu.Unlock()
 				r.trimTo(max(room, 0))
+				s.noteEvictErr(active)
 				s.mu.Lock()
 				s.total += r.bytes - active.bytes
 				active.bytes = r.bytes
@@ -756,20 +769,42 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 			return
 		}
 		s.logf("store total cap: evict audit ring of session %s (%d bytes, last seen %s)", victim.dir, victim.bytes, formatTime(victim.lastSeen))
-		s.removeRing(victim, false)
+		if err := s.removeRing(victim, false); err != nil {
+			s.logf("store total cap: %v", err)
+			failed[victim] = true
+		}
 	}
 }
 
 // removeRing deletes a ring's directory. A loaded ring that lost only its
 // data to store-wide eviction keeps its recovery state, so a later record
-// cannot replay what was already finalized; forget drops the entry whole.
-func (s *Store) removeRing(info *sessionInfo, forget bool) {
+// cannot replay what was already finalized; forget drops the entry whole. A
+// deletion that fails is reported and leaves what remains on disk accounted;
+// the ring is then reloaded from it on next use.
+func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 	info.mu.Lock()
 	r := info.ring
 	if r != nil {
 		r.close()
 	}
-	_ = removeAll(filepath.Join(s.opts.Root, info.dir))
+	dir := filepath.Join(s.opts.Root, info.dir)
+	if err := removeAll(dir); err != nil {
+		var left int64
+		if segs, _, lerr := listSegments(dir); lerr == nil {
+			for _, seg := range segs {
+				left += seg.size
+			}
+		}
+		info.ring = nil
+		info.led.Store(nil)
+		delete(s.dirty, info)
+		info.mu.Unlock()
+		s.mu.Lock()
+		s.total += left - info.bytes
+		info.bytes = left
+		s.mu.Unlock()
+		return fmt.Errorf("remove audit ring of session %s: %w (%d bytes remain)", info.dir, err, left)
+	}
 	keep := r != nil && !forget
 	if keep {
 		r.segs, r.events, r.ids, r.bytes = nil, nil, nil, 0
@@ -790,6 +825,7 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) {
 		delete(s.sessions, info.dir)
 	}
 	s.mu.Unlock()
+	return nil
 }
 
 func (s *Store) deleteSession(session string) error {
@@ -800,8 +836,7 @@ func (s *Store) deleteSession(session string) error {
 	if info == nil {
 		return removeAll(filepath.Join(s.opts.Root, dir))
 	}
-	s.removeRing(info, true)
-	return nil
+	return s.removeRing(info, true)
 }
 
 func (s *Store) touch(session string, at time.Time) {
@@ -864,7 +899,9 @@ func (s *Store) sweep() {
 			}
 		}
 		s.logf("retention: remove audit ring of session %s (last seen %s)", info.dir, formatTime(info.lastSeen))
-		s.removeRing(info, true)
+		if err := s.removeRing(info, true); err != nil {
+			s.logf("retention: %v", err)
+		}
 	}
 }
 

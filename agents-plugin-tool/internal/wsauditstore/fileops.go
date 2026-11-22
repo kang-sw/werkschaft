@@ -38,12 +38,12 @@ func closeFile(f *os.File) error {
 	return f.Close()
 }
 
-func removeFile(path string) error {
+var removeFile = func(path string) error {
 	wsstate.CountFileIO("remove")
 	return os.Remove(path)
 }
 
-func removeAll(path string) error {
+var removeAll = func(path string) error {
 	wsstate.CountFileIO("remove_all")
 	return os.RemoveAll(path)
 }
