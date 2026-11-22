@@ -353,6 +353,8 @@ func TestCronToolEndsWithItsSession(t *testing.T) {
 		t.Fatal(text)
 	}
 	// The runner's permanent-removal notice (ForgetClosed -> ConversationGone).
+	// The real ForgetClosed on a hosted lead, with the stored rows checked at
+	// once, is wsagent's TestForgetClosedRemovesAHostedLeadsStoredSchedules.
 	f.sess.leads["lead"] = false
 	f.sess.workers["lead"] = false
 	f.sched.ConversationGone("lead")

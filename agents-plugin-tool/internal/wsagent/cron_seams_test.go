@@ -1,12 +1,15 @@
 package wsagent
 
 import (
+	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wscron"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wsstate"
@@ -270,5 +273,91 @@ func TestDeliverCronFileOperationsAtTheProductionSeam(t *testing.T) {
 	t.Logf("suppressed delivery: file operations by kind %v by site %v", kinds, sites)
 	if kinds["file_io_total"] != 0 {
 		t.Errorf("a suppressed delivery ran file operations: %v %v", kinds, sites)
+	}
+}
+
+// runnerCronSessions is the runner as the real scheduler's target side, the
+// way the daemon wires it (cmd/ws-mcp cronSessions).
+type runnerCronSessions struct{ r *Runner }
+
+func (s runnerCronSessions) IsLead(id string) (bool, error) { return s.r.CronIsLead(id) }
+func (s runnerCronSessions) Exists(id string) bool          { return s.r.CronKnown(id) }
+func (s runnerCronSessions) HeldSchedules(id string) []string {
+	return s.r.CronHeld(id)
+}
+func (s runnerCronSessions) Deliver(id string, mark wsinbox.Cron, prompt string) (wscron.Delivery, error) {
+	ok, err := s.r.DeliverCron(id, mark, prompt)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return wscron.Suppressed, nil
+	}
+	return wscron.Delivered, nil
+}
+
+// TestForgetClosedRemovesAHostedLeadsStoredSchedules drives a hosted lead
+// through close and the real ForgetClosed with the real scheduler and store:
+// the rows are gone the moment ForgetClosed returns (no restart reaping), a
+// close alone keeps them, and the lead's retained binding is refused after.
+func TestForgetClosedRemovesAHostedLeadsStoredSchedules(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id, holder := h.runLead("one")
+	h.holders.out(holder, turnLines("sess-1", "u1", "done")...)
+	h.idle(id)
+	store, err := wscron.OpenStore(filepath.Join(t.TempDir(), wscron.StoreName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sched, err := wscron.New(wscron.Options{Store: store, Sessions: runnerCronSessions{r: h.runner}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sched.Close() })
+	h.runner.BindCron(sched)
+	t.Cleanup(func() { h.runner.BindCron(nil) })
+	rows := func() int {
+		got, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+	for _, name := range []string{"a", "b"} {
+		if _, _, err := sched.Add(id, name, "@daily", "tick", ""); err != nil {
+			t.Fatalf("add %s: %v", name, err)
+		}
+	}
+	if rows() != 2 {
+		t.Fatalf("stored rows = %d, want 2", rows())
+	}
+
+	// A close keeps the schedules: the conversation is closed, not gone.
+	if _, err := h.runner.CloseConversation(id); err != nil {
+		t.Fatal(err)
+	}
+	if rows() != 2 || len(sched.List(id)) != 2 {
+		t.Fatalf("a close removed schedules: %d rows, %d live", rows(), len(sched.List(id)))
+	}
+	// The retained binding is refused while closed: no delivery target.
+	if lead, err := sched.IsLead(id); lead || err == nil {
+		t.Fatalf("a closed lead is a target: %v, %v", lead, err)
+	}
+
+	h.runner.ForgetClosed(id)
+	if got := rows(); got != 0 {
+		t.Fatalf("stored rows right after ForgetClosed = %d, want 0", got)
+	}
+	if got := len(sched.List(id)); got != 0 {
+		t.Fatalf("%d live schedules after ForgetClosed", got)
+	}
+	if lead, err := sched.IsLead(id); lead || err == nil {
+		t.Fatalf("a forgotten lead is a target: %v, %v", lead, err)
+	}
+	if _, _, err := sched.Add(id, "late", "@daily", "tick", ""); !errors.Is(err, wscron.ErrNotLead) {
+		t.Fatalf("add through the retained binding = %v, want ErrNotLead", err)
+	}
+	if got := rows(); got != 0 {
+		t.Fatalf("a refused add wrote %d rows", got)
 	}
 }
