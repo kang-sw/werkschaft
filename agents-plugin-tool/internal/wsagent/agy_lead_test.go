@@ -45,6 +45,8 @@ func newAgyLeadHarness(t *testing.T) (*leadHarness, *agyFake) {
 	h.opts.WSMCP = func(root string) (MCPCommand, error) {
 		return MCPCommand{Command: "python3", Env: map[string]string{"WS_MCP_PROJECT_ROOT": root}}, nil
 	}
+	// The stall log check never reads the real agy log directory.
+	h.opts.AgyLogDir = t.TempDir()
 	f := &agyFake{h: h}
 	h.holders.acp = f.answer
 	return h, f

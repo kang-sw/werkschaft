@@ -471,12 +471,22 @@ func TestAgyModelWaitInBandFailureContinuesHostedLeadTurn(t *testing.T) {
 	timers := &leverTimers{}
 	h.opts.Timer = timers.start
 	h.opts.AgyModelWaitBackoff = func(int) time.Duration { return 0 }
+	// A hosted lead's log-confirmed silence cutoff (agy.stall_log_check)
+	// would arm the first timer; off, the in-band failure drain is the
+	// only one, which is what this test drives.
+	resolver := wsconfig.NewResolver(h.opts.Config, nil, nil, nil)
+	if err := resolver.Set(wsconfig.ItemAgyStallLogCheck, "false", wsconfig.SetOptions{ExplicitScope: wsconfig.ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
 	h.startAt("http://127.0.0.1:1")
 	id := h.lead(BackendAgy, LeadOptions{}).ID
 	f.replyID = id
 	h.send(id, "work")
 	holder := h.holder(id)
 	eventually(t, "hosted lead first prompt", func() bool { return len(agyPromptIDs(h, holder)) == 1 })
+	if started, _ := timers.counts(); started != 0 {
+		t.Fatalf("a silence timer armed with agy.stall_log_check off: %d timers", started)
+	}
 
 	h.holders.out(holder, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"\n⚠ API error (attempt 1): stream idle timeout\n"}}}}`)
 	fireWatchdog(t, timers, 0) // the in-band failure drain; no silence timer runs
