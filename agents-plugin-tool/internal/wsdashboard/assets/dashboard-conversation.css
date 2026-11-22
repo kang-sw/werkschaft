@@ -364,6 +364,12 @@ button.sbadge:focus-visible { outline: 1.5px solid var(--wb-primary); outline-of
 .tt-ctx .fill { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 999px; }
 .tt-ctx .m-soft { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--wb-card); box-shadow: 0 0 0 1px color-mix(in srgb, var(--wb-fg) 26%, transparent); transform: translateX(-50%); }
 .tt-ctx .tok { flex: none; font: 600 10.5px/1 var(--wb-mono); color: var(--wb-muted-fg); white-space: nowrap; }
+.tt-cmp { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 10.5px; color: var(--wb-muted-fg); }
+.tt-cmp .d-now { flex: none; height: 16px; padding: 0 6px; border-radius: 999px; line-height: 16px; font-weight: 800; background: color-mix(in srgb, var(--wb-primary) 18%, transparent); color: var(--wb-primary); }
+.tt-cmp .d-now::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: currentColor; vertical-align: 1px; animation: tt-cmp-pulse 1.2s ease-in-out infinite; }
+@keyframes tt-cmp-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .tt-cmp .d-now::before { animation: none; } }
+.tt-cmp .cnt { font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-ctx.d-unknown .tok { font-weight: 500; }
 .tt-chain { font-size: 10.5px; color: var(--wb-muted-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tt-task { font-size: 11px; color: var(--wb-fg); opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

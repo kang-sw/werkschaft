@@ -20,6 +20,9 @@ func (c *conv) runCommand(cmd wsinbox.Command) error {
 	p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 	isCompact := cmd.Name == "compact" && p.DetectsLifecycle()
 	if isCompact && !c.compacting {
+		if c.compactOrigin == "" {
+			c.compactOrigin = wslive.CompactOriginManual
+		}
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 		if p.CommandEndConfirms {
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: wslive.TriggerManual})

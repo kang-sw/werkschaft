@@ -452,3 +452,51 @@ func TestHUDNodeContextFigures(t *testing.T) {
 		t.Fatalf("unknown context leaked into %s", raw)
 	}
 }
+
+// TestHUDNodeCompactionState pins the hover card's compaction fields: they are
+// the row's own (compacting now, completed count, latest origin), a node that
+// never compacted carries none of them in its JSON, and a negative count is
+// not carried.
+func TestHUDNodeCompactionState(t *testing.T) {
+	now := testNow
+	run := func(a wslive.Agent) HUDNode {
+		t.Helper()
+		v := buildSessionView(pageInputs{
+			Session:  liveSession("self", "/p", now),
+			Snapshot: liveSnap(now, wslive.Lead{}, a), Now: now,
+			Lookup: lookupOf(map[string]Session{"self": liveSession("self", "/p", now)}, nil),
+		})
+		if len(v.Tree.HUD.Roots) != 1 {
+			t.Fatalf("roots = %+v", v.Tree.HUD.Roots)
+		}
+		return v.Tree.HUD.Roots[0]
+	}
+	row := wslive.Agent{ID: "pi:r1", AgentKind: wslive.AgentKindPi, Status: wslive.StatusRunning, ContextTokens: 7}
+
+	// D: compacting now with two behind it.
+	d := row
+	d.Compacting, d.Compactions, d.CompactOrigin = true, 2, wslive.CompactOriginAuto
+	if n := run(d); !n.Compacting || n.Compactions != 2 || n.CompactOrigin != "auto" {
+		t.Fatalf("compacting now = %+v", n)
+	}
+	// E: idle with a count, whatever the origin.
+	for _, origin := range []string{"auto", "manual", "native", ""} {
+		e := row
+		e.Compactions, e.CompactOrigin = 3, origin
+		if n := run(e); n.Compacting || n.Compactions != 3 || n.CompactOrigin != origin {
+			t.Fatalf("count only (%q) = %+v", origin, n)
+		}
+	}
+	// F: never compacted carries nothing.
+	raw, _ := json.Marshal(run(row))
+	for _, k := range []string{"compacting", "compactions", "compactOrigin"} {
+		if strings.Contains(string(raw), k) {
+			t.Fatalf("never compacted leaked %s into %s", k, raw)
+		}
+	}
+	neg := row
+	neg.Compactions = -4
+	if n := run(neg); n.Compactions != 0 {
+		t.Fatalf("negative count = %+v", n)
+	}
+}

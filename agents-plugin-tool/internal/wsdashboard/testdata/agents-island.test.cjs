@@ -252,6 +252,38 @@ hudRoots.listeners.mouseover[0]({ target: buttons[0] });
 assert.equal(ctxRow(), null, 'a node that lost its figure drops the row');
 hudRoots.listeners.mouseout[0]({ target: buttons[0], relatedTarget: null });
 
+// Compaction line: D compacting now (chip, then count and origin), E count only,
+// F none; absent fields reset on an in-place update, and an unknown origin shows
+// the count alone.
+const cmpRow = () => tooltip.querySelector('.tt-cmp');
+Object.assign(hudPayload.roots[0], { contextTokens: 156000, contextWindow: 200000, contextSoft: 140000, contextLevel: 'warn', contextText: '156k / 200k' });
+ctx.agSwapped();
+hudRoots.listeners.mouseover[0]({ target: buttons[0] });
+assert.equal(cmpRow(), null, 'F: never compacted, no line');
+Object.assign(hudPayload.roots[0], { compacting: true, compactions: 2, compactOrigin: 'auto' });
+ctx.agSwapped();
+assert.equal(cmpRow().querySelector('.d-now').textContent, 'js.hud.compacting', 'D: chip while compacting');
+assert.equal(cmpRow().querySelector('.cnt').textContent, 'js.hud.compactions:2 \u00b7 js.hud.compactorigin.auto');
+assert.equal(tooltip.children.indexOf(cmpRow()), tooltip.children.indexOf(ctxRow()) + 1, 'line sits right under the context row');
+Object.assign(hudPayload.roots[0], { compacting: false, compactions: 3, compactOrigin: 'manual' });
+ctx.agSwapped();
+assert.equal(cmpRow().querySelector('.d-now'), null, 'E: no chip when not compacting');
+assert.equal(cmpRow().querySelector('.cnt').textContent, 'js.hud.compactions:3 \u00b7 js.hud.compactorigin.manual');
+Object.assign(hudPayload.roots[0], { compactOrigin: 'native' });
+ctx.agSwapped();
+assert.equal(cmpRow().querySelector('.cnt').textContent, 'js.hud.compactions:3 \u00b7 js.hud.compactorigin.native');
+Object.assign(hudPayload.roots[0], { compactOrigin: '' });
+ctx.agSwapped();
+assert.equal(cmpRow().querySelector('.cnt').textContent, 'js.hud.compactions:3', 'unknown origin: count alone');
+Object.assign(hudPayload.roots[0], { compacting: true, compactions: 0, compactOrigin: '' });
+ctx.agSwapped();
+assert.equal(cmpRow().querySelector('.d-now').textContent, 'js.hud.compacting', 'compacting with no completed one: chip alone');
+assert.equal(cmpRow().querySelector('.cnt'), null);
+delete hudPayload.roots[0].compacting; delete hudPayload.roots[0].compactions; delete hudPayload.roots[0].compactOrigin;
+ctx.agSwapped();
+assert.equal(cmpRow(), null, 'absent fields drop the line in place');
+hudRoots.listeners.mouseout[0]({ target: buttons[0], relatedTarget: null });
+
 // .hud-folded hover shows tooltip, updates in place when count changes, and click opens #agpop
 hudRoots.listeners.mouseover[0]({ target: foldedBtn });
 assert.equal(tooltip.hidden, false);

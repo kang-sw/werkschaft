@@ -68,6 +68,18 @@ const (
 	TriggerManual = "manual"
 )
 
+// Compaction origins a hosted agent row names for its latest completed
+// compaction: ws's own threshold request, a request a user or lead made
+// through ws, or the harness compacting on its own.
+const (
+	CompactOriginAuto   = "auto"
+	CompactOriginManual = "manual"
+	CompactOriginNative = "native"
+)
+
+// MaxCompactions bounds a row's reported compaction count.
+const MaxCompactions = 1_000_000
+
 // OptionalKinds are the event kinds an older ws-mcp refuses: the intake
 // result names them in an "accepts:" line, and an adapter sends one only
 // while the latest result it received names it.
@@ -111,6 +123,12 @@ type Event struct {
 	// Holding and Alive carry live hosted-worker liveness onto Pi agent rows.
 	Holding bool `json:"holding,omitempty"`
 	Alive   bool `json:"alive,omitempty"`
+	// Compacting, Compactions and CompactOrigin carry a Pi agent's compaction
+	// state (Agent.Compacting, Agent.Compactions, Agent.CompactOrigin). Like
+	// Holding they are authoritative on a Pi event, zero values included.
+	Compacting    bool   `json:"compacting,omitempty"`
+	Compactions   int    `json:"compactions,omitempty"`
+	CompactOrigin string `json:"compactOrigin,omitempty"`
 	// Caption replaces the caption when present; "" clears it.
 	Caption *string `json:"caption,omitempty"`
 	// Batches replaces the agent's batch list when present.
@@ -218,6 +236,11 @@ type agentState struct {
 	outputTps                            float64
 	bgTasks                              int
 	holding, alive                       bool
+	// compacting is whether a compaction is queued or running; compactions
+	// counts the completed ones and compactOrigin names the latest's origin.
+	compacting    bool
+	compactions   int
+	compactOrigin string
 	// endUnknown marks a row whose observation ended with the outcome
 	// unknown (Event.EndUnknown); endedAt is then the observation's end.
 	endUnknown bool
@@ -706,7 +729,7 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		batches = st.normalizeBatches(ev.Batches)
 	}
 	if ev.AgentID == "" {
-		if ev.Status != "" || ev.ParentID != "" || ev.Label != "" || ev.SessionKey != "" || ev.AgentKind != "" || ev.Harness != "" || ev.ActiveMs != 0 || ev.TurnStartedAt != 0 || ev.BackgroundTasks != 0 || ev.Holding || ev.Alive || hasTelemetry(ev) || ev.Observed != nil || ev.OutputRate != nil {
+		if ev.Status != "" || ev.ParentID != "" || ev.Label != "" || ev.SessionKey != "" || ev.AgentKind != "" || ev.Harness != "" || ev.ActiveMs != 0 || ev.TurnStartedAt != 0 || ev.BackgroundTasks != 0 || ev.Holding || ev.Alive || ev.Compacting || ev.Compactions != 0 || ev.CompactOrigin != "" || hasTelemetry(ev) || ev.Observed != nil || ev.OutputRate != nil {
 			return fmt.Errorf("the lead takes only batches and caption; set agentId for a subagent")
 		}
 		st.setActivity(&st.lead, ev, batches)
@@ -768,7 +791,7 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		a.status = ev.Status
 		a.permission = nil
 		if ev.AgentKind != AgentKindPi {
-			a.holding, a.alive = false, false
+			a.holding, a.alive, a.compacting = false, false, false
 		}
 		st.batchesEnded += uint64(len(closeBatches(&a.activityState, at)))
 	}
@@ -781,6 +804,9 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		a.bgTasks = max(ev.BackgroundTasks, 0)
 		a.holding = ev.Holding
 		a.alive = ev.Alive
+		a.compacting = ev.Compacting
+		a.compactions = min(max(ev.Compactions, 0), MaxCompactions)
+		a.compactOrigin = knownCompactOrigin(ev.CompactOrigin)
 	} else if ev.BackgroundTasks > 0 || ev.Status == StatusFailed {
 		a.bgTasks = max(ev.BackgroundTasks, 0)
 	}
@@ -797,6 +823,15 @@ const (
 	// pi.* tools), which the daemon's agent runner hosts.
 	AgentKindPi = "pi"
 )
+
+// knownCompactOrigin is origin when it is a known compaction origin, else "".
+func knownCompactOrigin(origin string) string {
+	switch origin {
+	case CompactOriginAuto, CompactOriginManual, CompactOriginNative:
+		return origin
+	}
+	return ""
+}
 
 // knownAgentKind is kind when it is a known agent kind, else "".
 func knownAgentKind(kind string) string {
@@ -1160,6 +1195,9 @@ func (st *State) SeedFinished(prev Snapshot) {
 			effort:        cleanLine(st.scrub.scrub(p.Effort), EffortRunes),
 			contextTokens: p.ContextTokens,
 			contextWindow: max(p.ContextWindow, 0),
+			// Compacting is not seeded, as Holding and Alive are not (T0).
+			compactions:   min(max(p.Compactions, 0), MaxCompactions),
+			compactOrigin: knownCompactOrigin(p.CompactOrigin),
 		}
 		a.contextCompaction = normalizeCompaction(p.ContextCompaction)
 		if p.ParentID != p.ID && agentIDPattern.MatchString(p.ParentID) {
@@ -1235,6 +1273,9 @@ func (st *State) Snapshot(now int64) Snapshot {
 			BackgroundTasks:   a.bgTasks,
 			Holding:           a.holding,
 			Alive:             a.alive,
+			Compacting:        a.compacting,
+			Compactions:       a.compactions,
+			CompactOrigin:     a.compactOrigin,
 		})
 	}
 	sort.Slice(snap.Agents, func(i, j int) bool {
