@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -1240,9 +1241,14 @@ func TestRemovalNeverClearsAWitnessThroughAnAlternateName(t *testing.T) {
 	}
 }
 
+// mustSymlink creates link, skipping the test only where Windows refuses
+// symbolic links for lack of the privilege (Developer Mode off).
 func mustSymlink(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) { // ERROR_PRIVILEGE_NOT_HELD
+			t.Skipf("symbolic links need Developer Mode or the privilege: %v", err)
+		}
 		t.Fatal(err)
 	}
 }
