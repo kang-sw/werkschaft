@@ -665,3 +665,28 @@ func TestWorkerMCPTokenWaitsForStartupRejoin(t *testing.T) {
 		t.Fatalf("after the rejoin an unknown token resolved (%v) or waited (%v)", ok, time.Since(begin))
 	}
 }
+
+// TestMCPTokenRestoredBetweenLookupAndWait: a token the first lookup misses
+// and the startup rejoin then restores, closing rejoined before the wait
+// begins, resolves; it is not refused for a rejoin that is already done.
+func TestMCPTokenRestoredBetweenLookupAndWait(t *testing.T) {
+	r := NewRunner(Options{Dir: t.TempDir()})
+	r.started.Store(true)
+	r.SetEndpoint("http://127.0.0.1:7")
+	restore := mcpAfterMiss
+	t.Cleanup(func() { mcpAfterMiss = restore })
+	var session *MCPSession
+	mcpAfterMiss = func() {
+		// The rejoin restores the token and finishes in the gap.
+		session = r.attachMCP("c1", "restored-token", map[string]string{"X": "1"}, "/w", 1, BackendCodex)
+		session.Started(nil, 1)
+		r.rejoinOnce.Do(func() { close(r.rejoined) })
+	}
+	begin := time.Now()
+	if _, _, ok := r.ResolveMCPToken("restored-token"); !ok {
+		t.Fatal("a token restored between the lookup and the wait was refused")
+	}
+	if time.Since(begin) > time.Second {
+		t.Fatalf("an already-finished rejoin was waited for: %v", time.Since(begin))
+	}
+}

@@ -53,6 +53,10 @@ var mcpStartWait = 10 * time.Second
 // process. Past the bound the token is refused as any unknown one.
 var mcpRejoinWait = 8 * time.Second
 
+// mcpAfterMiss is a test hook: it runs between an unknown token's first
+// lookup and its wait for the rejoin.
+var mcpAfterMiss func()
+
 // MCPSession attaches a harness's ws-mcp over the daemon's HTTP route
 // instead of the stdio launcher.
 type MCPSession struct {
@@ -209,6 +213,9 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 		// Unknown until the startup rejoin finished: the token may be a
 		// surviving worker's, restored by that scan. Afterwards it is
 		// unknown for good.
+		if mcpAfterMiss != nil {
+			mcpAfterMiss()
+		}
 		select {
 		case <-r.rejoined:
 		default:
@@ -219,10 +226,13 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 			case <-wait.C:
 			}
 			wait.Stop()
-			r.mu.Lock()
-			t = r.mcpTokens[token]
-			r.mu.Unlock()
 		}
+		// Read again whichever way the wait ended: the rejoin may have
+		// restored the token between the first lookup and the wait, so a
+		// rejoin that was already done is no reason to refuse it.
+		r.mu.Lock()
+		t = r.mcpTokens[token]
+		r.mu.Unlock()
 	}
 	if t == nil {
 		return wsdashboard.ProxyHello{}, nil, false
