@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "Es läuft kein Prozess. Die nächste Nachricht oder Mail startet einen.",
   "js.lead.archive": "Archivieren",
   "js.lead.archive.note": "Blendet sie in der Leiste aus. Mails wecken sie nicht; sie werden nach dem Zurückholen zugestellt.",
+  "js.lead.archive.confirm": "Diese Sitzung archivieren? Sie lässt sich aus der Liste archivierter Sitzungen wiederherstellen.",
+  "js.lead.archive.accept": "Archivieren",
   "js.lead.unarchive": "Aus dem Archiv holen",
   "js.lead.unarchive.note": "Zurück in den Ruhezustand in der Leiste. Wartende Mails werden dann zugestellt.",
   "js.rail.deletes": "gelöscht in {0}",

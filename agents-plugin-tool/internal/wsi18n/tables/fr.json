@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "Aucun processus ne tourne. Le prochain message ou mail en lance un.",
   "js.lead.archive": "Archiver",
   "js.lead.archive.note": "La masque du panneau. Le courrier ne la réveille pas ; il est livré après le désarchivage.",
+  "js.lead.archive.confirm": "Archiver cette session ? Vous pourrez la restaurer depuis la liste des archivées.",
+  "js.lead.archive.accept": "Archiver",
   "js.lead.unarchive": "Désarchiver",
   "js.lead.unarchive.note": "Revient en veille dans le panneau. Le courrier en attente est alors livré.",
   "js.rail.deletes": "supprimée dans {0}",

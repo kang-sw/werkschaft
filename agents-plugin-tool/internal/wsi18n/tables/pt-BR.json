@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "Nenhum processo em execução. A próxima mensagem ou e-mail inicia um.",
   "js.lead.archive": "Arquivar",
   "js.lead.archive.note": "Oculta do painel. O e-mail não a acorda; ele é entregue depois de desarquivar.",
+  "js.lead.archive.confirm": "Arquivar esta sessão? Você pode restaurá-la na lista de arquivadas.",
+  "js.lead.archive.accept": "Arquivar",
   "js.lead.unarchive": "Desarquivar",
   "js.lead.unarchive.note": "Volta a dormir no painel. O e-mail na fila é então entregue.",
   "js.rail.deletes": "excluída em {0}",

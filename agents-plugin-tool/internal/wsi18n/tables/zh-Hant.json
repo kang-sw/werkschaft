@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "沒有處理程序在執行。下一則訊息或郵件會啟動一個。",
   "js.lead.archive": "封存",
   "js.lead.archive.note": "從側欄隱藏。郵件不會喚醒它；取消封存後投遞郵件。",
+  "js.lead.archive.confirm": "封存此工作階段？可在已封存列表中還原。",
+  "js.lead.archive.accept": "封存",
   "js.lead.unarchive": "取消封存",
   "js.lead.unarchive.note": "回到側欄的休眠狀態。屆時投遞排隊的郵件。",
   "js.rail.deletes": "{0}後刪除",
