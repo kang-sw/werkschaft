@@ -125,7 +125,9 @@
       return y;
     }
     function scrollerTop(scroller) { return scroller === docScroller() ? 0 : scroller.getBoundingClientRect().top + (scroller.clientTop || 0); }
-    function viewport(scroller, read) {
+    // bare leaves out the sticky heads: their rects move with the scroll
+    // position, so a destination measured against them is too.
+    function viewport(scroller, read, bare) {
       read = read || function (n) { return n.getBoundingClientRect(); };
       var main = scroller === docScroller(), r = main ? { top: 0, bottom: win.innerHeight || scroller.clientHeight } : read(scroller);
       var top = Math.max(0, r.top + (main ? 0 : scroller.clientTop || 0));
@@ -133,7 +135,7 @@
       var style = win.getComputedStyle(scroller);
       top += parseFloat(style.scrollPaddingTop) || 0;
       // The rail publishes its clearance on sticky heads, not on the host.
-      Array.from((main ? doc : scroller).querySelectorAll('.tophead, .bc-hd, .wb-rail-wrap.up .wb-rail-stack')).filter(rendered).forEach(function (head) {
+      if (!bare) Array.from((main ? doc : scroller).querySelectorAll('.tophead, .bc-hd, .wb-rail-wrap.up .wb-rail-stack')).filter(rendered).forEach(function (head) {
         var hs = win.getComputedStyle(head), h = read(head);
         if ((hs.position === 'sticky' || head.matches('.wb-rail-stack')) && h.height && h.top <= top + (parseFloat(hs.top) || 0) + 1 && h.bottom > top)
           top = Math.max(top, h.bottom);
@@ -365,17 +367,31 @@
       s.cancel = function () { end('user'); };
       s.jump = function (node, opt) {
         if (s.follow) s.follow.off();
-        var block = opt.block || "center", raf = 0, cap = 0, stable = 0, quiet = 0, last, position;
+        var block = opt.block || "center", raf = 0, cap = 0, stable = 0, quiet = 0, last, position, held, grown = false;
         function off() {
           win.cancelAnimationFrame(raf);
           win.clearTimeout(cap);
+        }
+        // Centered navigation re-measures every frame, so what it clears must
+        // not follow the scroll it issues, or the two alternate (a sticky head
+        // crossing the line where it would count, a rail capsule appearing).
+        // It clears the scroller's own top and the caller's clearance, never
+        // a sticky head's rect. The clearance may drop from the origin's
+        // state until it first grows (the floating pill settling); from then
+        // on it holds its maximum.
+        function clearance() {
+          var c = typeof opt.clearance === "function" ? opt.clearance() : opt.clearance || 0;
+          if (held === undefined) held = c;
+          else if (c > held) { held = c; grown = true; }
+          else if (c < held && !grown) held = c;
+          return held;
         }
         function measure() {
           if (typeof opt.top === 'number') return opt.top;
           var r = node.getBoundingClientRect();
           if (opt.centerVisible) {
-            var view = viewport(scroller), clearance = typeof opt.clearance === "function" ? opt.clearance() : opt.clearance || 0;
-            var top = Math.max(view.top, scrollerTop(scroller) + clearance);
+            var view = viewport(scroller, null, true);
+            var top = Math.max(view.top, scrollerTop(scroller) + clearance());
             var height = Math.max(0, view.bottom - top);
             var desired = r.height > height ? top : top + (height - r.height) / 2;
             return Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + r.top - desired));
