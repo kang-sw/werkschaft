@@ -113,7 +113,7 @@ func TestReadOnlyWorkerExecAllowlist(t *testing.T) {
 			if isErr || !strings.Contains(text, "a\\ b\n") {
 				t.Fatalf("exec.run echo a\\ b = %v %s", isErr, text)
 			}
-			for _, word := range []string{`a"b`, "@rsp"} {
+			for _, word := range []string{`a"b`, "@rsp", `e f\`} {
 				text, isErr = w.call("exec.run", map[string]any{"exe": "echo", "args": []string{word}})
 				if goruntime.GOOS == "windows" && (!isErr || !strings.Contains(text, "Windows")) {
 					t.Errorf("exec.run echo %q on Windows = %v %s, want a refusal", word, isErr, text)

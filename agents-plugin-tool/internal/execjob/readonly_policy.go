@@ -135,6 +135,11 @@ func windowsWordRefusal(words []string) error {
 		if strings.Contains(w, `"`) {
 			return refuse("word %q: a double quote is refused on Windows, where the command line is parsed again by the MSYS runtime", w)
 		}
+		// Python quotes a word with whitespace (or an empty one) and doubles
+		// its trailing backslashes; MSYS keeps them doubled.
+		if (w == "" || strings.ContainsAny(w, " \t")) && strings.HasSuffix(w, `\`) {
+			return refuse("word %q: a word with whitespace that ends in a backslash is refused on Windows, where the command line is parsed again by the MSYS runtime", w)
+		}
 		if strings.HasPrefix(w, "@") {
 			return refuse("word %q: a word starting with @ is refused on Windows, where the MSYS runtime reads it as a response file", w)
 		}
