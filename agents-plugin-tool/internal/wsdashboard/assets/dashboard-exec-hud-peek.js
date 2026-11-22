@@ -752,23 +752,21 @@
       // The label follows the outcome: copyText resolves to whether it copied.
       var old = a.getAttribute("data-xlabel") || a.textContent;
       a.setAttribute("data-xlabel", old);
-      // Where the keyboard stays while the copy runs. The fallback borrows focus for
-      // a scratch field and drops it; the button gets the keyboard back only when
-      // the user's last focus was the button or the panel, not the composer they
-      // moved to while a slow clipboard answered.
+      // Where the keyboard stays while the copy runs: the last element the user had
+      // (the focus the fallback's scratch field borrows and drops is not theirs).
       var last = doc.activeElement;
       var track = function (ev) { var t = ev.target; if (t && !(t.tagName === "TEXTAREA" && t.readOnly)) last = t; };
       doc.addEventListener("focusin", track, true);
       Promise.resolve(copyText(j.command, true)).then(function (ok) { return ok === true; }, function () { return false; }).then(function (ok) {
         doc.removeEventListener("focusin", track, true);
         // The scratch field of the fallback borrowed the keyboard and left it on the page:
-        // it goes back to where the user last had it, whether or not the panel was redrawn
-        // meanwhile: the button they were on (the redrawn one, when it was replaced), or the
-        // element they moved to, when that is still there.
+        // it goes back to where the user last had it, if that is still there. Only when it
+        // was the Copy button the panel has since replaced does the current Copy button take
+        // it; a control of another job (its Wrap, say) keeps it.
         if (!doc.activeElement || doc.activeElement === doc.body) {
-          var own = !!last && (last === a || (xhPeekEl && xhPeekEl.contains(last)));
-          var back = own ? (a.isConnected ? a : (xhPeekEl && xhPeekEl.querySelector('[data-xact="copy"]'))) : last;
-          if (back && back !== doc.body && back.isConnected && back.focus) back.focus();
+          var back = last && last !== doc.body && last.isConnected && last.getClientRects().length ? last : null;
+          if (!back && last === a && xhPeekEl) back = xhPeekEl.querySelector('[data-xact="copy"]');
+          if (back && back.focus) back.focus();
         }
         if (!a.isConnected) return;
         a.textContent = ok ? "✓ " + wsT("js.xhud.pk.copied") : "⚠ " + wsT("js.xhud.pk.copyfail");

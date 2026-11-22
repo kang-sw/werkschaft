@@ -63,11 +63,15 @@ type hudBrowserSvc struct {
 	// answers waiting at a gate, their snapshots already taken. outGone makes an
 	// output read answer 404 for the listed jobs, and outHang makes it never answer
 	// (until released or 25 s).
-	stopGate chan struct{}
-	listGate chan struct{}
-	held     map[string]int
-	outGone  map[string]bool
-	outHang  chan struct{}
+	// stopBlock holds a stop before it takes effect (the job is still running while
+	// it waits). quit is closed when the test ends, and releases every wait at once.
+	stopGate  chan struct{}
+	stopBlock chan struct{}
+	listGate  chan struct{}
+	quit      chan struct{}
+	held      map[string]int
+	outGone   map[string]bool
+	outHang   chan struct{}
 }
 
 // waitGate waits at a gate: the snapshot is taken, the answer is held.
@@ -77,6 +81,7 @@ func (s *hudBrowserSvc) waitGate(kind string, gate chan struct{}) {
 	s.mu.Unlock()
 	select {
 	case <-gate:
+	case <-s.quit:
 	case <-time.After(25 * time.Second):
 	}
 	s.mu.Lock()
@@ -131,6 +136,7 @@ func (s *hudBrowserSvc) ReadOutput(owner, id string, from int64, limit int) (exe
 	if hang != nil {
 		select {
 		case <-hang:
+		case <-s.quit:
 		case <-time.After(25 * time.Second):
 		}
 	}
@@ -189,8 +195,11 @@ func (s *hudBrowserSvc) StopByUser(owner, id string) (execjob.HostedSummary, err
 	s.mu.Lock()
 	s.counts["stop"]++
 	s.counts["stop:"+id]++
-	ms := s.stopMs
+	ms, block := s.stopMs, s.stopBlock
 	s.mu.Unlock()
+	if block != nil {
+		s.waitGate("stopblock", block)
+	}
 	if ms > 0 {
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
@@ -275,7 +284,8 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 		return ComposerJob{ExecID: "exec_hi", Gen: 4, State: "exited", ExitCode: &zero, Command: req.Line, Written: 3, Output: []byte("hi\n")}, nil
 	}
 	f.svc.mu.Unlock()
-	svc := &hudBrowserSvc{counts: map[string]int{}, failedOne: map[string]bool{}, notice: "sent", d: f.d, fromLog: map[string][]int64{}, inflight: map[string]int{}, maxInflight: map[string]int{}, outGone: map[string]bool{}, held: map[string]int{}}
+	svc := &hudBrowserSvc{counts: map[string]int{}, failedOne: map[string]bool{}, notice: "sent", d: f.d, fromLog: map[string][]int64{}, inflight: map[string]int{}, maxInflight: map[string]int{}, outGone: map[string]bool{}, held: map[string]int{}, quit: make(chan struct{})}
+	t.Cleanup(func() { close(svc.quit) })
 	f.d.SetExecJobs(svc)
 	ctl := http.NewServeMux()
 	reply := func(w http.ResponseWriter, v any) {
@@ -319,6 +329,7 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 			StopMs     int      `json:"stopMs"`
 			OutDelayMs int      `json:"outDelayMs"`
 			StopHold   bool     `json:"stopHold"`
+			StopBlock  bool     `json:"stopBlock"`
 			ListHold   bool     `json:"listHold"`
 			Gone       []string `json:"outGone"`
 			Hang       bool     `json:"outHang"`
@@ -338,6 +349,12 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 		} else if !in.StopHold && svc.stopGate != nil {
 			close(svc.stopGate)
 			svc.stopGate = nil
+		}
+		if in.StopBlock && svc.stopBlock == nil {
+			svc.stopBlock = make(chan struct{})
+		} else if !in.StopBlock && svc.stopBlock != nil {
+			close(svc.stopBlock)
+			svc.stopBlock = nil
 		}
 		if in.ListHold && svc.listGate == nil {
 			svc.listGate = make(chan struct{})

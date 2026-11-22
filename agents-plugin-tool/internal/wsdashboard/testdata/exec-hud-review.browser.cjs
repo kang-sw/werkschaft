@@ -463,6 +463,28 @@ async function run(browser, { lang, scheme }) {
     await closePeek(page, view).catch(async () => { await view.evaluate(() => document.querySelector('.xpeek [data-xact="close"]').click()); });
   });
 
+  // COPY-WRAP (round 5): a delayed Copy on one job, the panel switched to another job and the keyboard put on that
+  // job's Wrap; the late rejection must leave it on Wrap (not move it to the other job's Copy).
+  await sect('COPY-WRAP', async () => {
+    await setJobs([J('exec_ca', 'echo a', { started_at: Date.now() - 20000 }), J('exec_cb', 'echo b', { started_at: Date.now() - 10000 })]);
+    await view.waitForSelector('.xchip[data-xid="exec_cb"]', { state: 'attached' });
+    await openChip(view, 'exec_ca');
+    await view.evaluate(() => { window.__rej = null; navigator.clipboard.writeText = () => new Promise((_, rej) => { window.__rej = rej; }); document.execCommand = () => false; });
+    await view.click('.xpeek [data-xact="pin"]');
+    await view.locator('.xpeek [data-xact="copy"]').focus();
+    await page.keyboard.press('Enter');
+    await view.waitForFunction(() => !!window.__rej, null, { timeout: 3000 });
+    await view.evaluate(() => { window.__oldCopy = document.querySelector('.xpeek [data-xact="copy"]'); });
+    await view.click('.xp-tab[data-xtab="exec_cb"]');
+    await view.waitForFunction(() => !window.__oldCopy.isConnected, null, { timeout: 3000 });
+    await view.locator('.xpeek [data-xact="wrap"]').focus();
+    assert.equal((await focusInfo(view)).act, 'wrap', 'COPY-WRAP: the keyboard is on the other job\'s Wrap');
+    await view.evaluate(() => { window.__rej(new Error('denied')); return new Promise(r => setTimeout(r, 0)); });
+    assert.equal((await focusInfo(view)).act, 'wrap', 'COPY-WRAP: the late rejection leaves the keyboard on Wrap: ' + JSON.stringify(await focusInfo(view)));
+    await view.click('.xpeek [data-xact="pin"]');
+    await closePeek(page, view).catch(async () => { await view.evaluate(() => document.querySelector('.xpeek [data-xact="close"]').click()); });
+  });
+
   // ORDER (round 2, I1): a stop or retry answer is one snapshot among others; the newest list wins, and
   // a real retry (failed -> pending -> sent) reaches a second tab.
   const stopped = (id, cmd, notice, o = {}) => J(id, cmd, Object.assign({ state: 'stopped', stopped_by_user: true, stop_notice: notice, started_at: Date.now() - 30000, ended_at: Date.now() - 5000 }, o));
@@ -501,21 +523,22 @@ async function run(browser, { lang, scheme }) {
       window.__ns = [];
       new MutationObserver(() => { const c = document.querySelector('.xpeek .xnotice'), v = c ? c.getAttribute('data-ns') : '-'; if (window.__ns[window.__ns.length - 1] !== v) window.__ns.push(v); }).observe(document.querySelector('.xpeek'), { subtree: true, childList: true, attributes: true });
     });
-    // the list taken before the retry (failed) is held at the daemon; the retry is answered and shown; the job
-    // then moves on to sent, and only then is the old list released: its answer comes first, the next read
-    // (taken after it) says sent, which is the barrier that the old answer has been dealt with.
-    await post('/set', { notice: 'pending', listHold: true });
+    // the list taken before the retry (failed) is held at the daemon, with a sibling job only that list carries;
+    // the retry's own answer (closed: the agent's session is gone, not an optimistic state) is shown; then the old
+    // list is released, and the sibling's chip appearing is the barrier that the old answer has been taken
+    await post('/set', { notice: 'closed', listHold: true });
+    await post('/jobs', [stopped('exec_o1', 'deploy --prod', 'failed'), J('exec_o9', 'late sibling', { started_at: Date.now() - 9000 })]);
     await post('/bump');
     await waitStat(s => (s.held.list || 0) >= 1, 3000, 'the list taken before the retry, held');
+    assert.equal(await view.locator('.xchip[data-xid="exec_o9"]').count(), 0, 'ORDER: the held list is not on the page yet');
     await view.click('.xnotice [data-xact="retry"]');
-    await view.waitForSelector('.xpeek .xnotice[data-ns="sending"]', { timeout: 4000 });
-    await post('/patch', { id: 'exec_o1', state: 'stopped', stopped_by_user: true, stop_notice: 'sent' });
-    await post('/set', { notice: 'pending' });
-    await view.waitForSelector('.xpeek .xnotice[data-ns="sent"]', { timeout: 6000 });
+    await view.waitForSelector('.xpeek .xnotice[data-ns="closed"]', { timeout: 4000 });
+    await post('/set', { notice: 'closed' });
+    await view.waitForSelector('.xchip[data-xid="exec_o9"]', { state: 'attached', timeout: 6000 });
     const ns = await view.evaluate(() => window.__ns);
-    const firstSending = ns.indexOf('sending');
-    assert.ok(firstSending >= 0, 'ORDER: the retry shows sending: ' + JSON.stringify(ns));
-    assert.ok(!ns.slice(firstSending).includes('failed'), 'ORDER: an older list answered late does not bring the failed notice back: ' + JSON.stringify(ns));
+    const firstClosed = ns.indexOf('closed');
+    assert.ok(firstClosed >= 0, 'ORDER: the retry shows its answer: ' + JSON.stringify(ns));
+    assert.ok(!ns.slice(firstClosed).includes('failed'), 'ORDER: an older list answered late does not bring the failed notice back: ' + JSON.stringify(ns));
     await post('/set', { notice: 'sent' });
     await closeAny();
   });
@@ -563,18 +586,19 @@ async function run(browser, { lang, scheme }) {
       window.__tn = 0;
       new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.classList && n.classList.contains('xtt-text')) window.__tn++; }))).observe(document.querySelector('.xtoast'), { childList: true });
     });
-    // the stop takes effect 3 s after its request reached the daemon
-    await post('/set', { notice: 'pending', stopMs: 3000 });
+    // the stop waits at the daemon, before it takes effect, until the lists are held
+    await post('/set', { notice: 'pending', stopBlock: true });
     await view.click('.xpeek [data-xact="stop"]');
     await view.waitForSelector('.xconf');
     await view.click('.xconf [data-xact="confirm"]');
     await view.click('.xp-tab[data-xtab="exec_s2"]');
-    await waitStat(s => (s.counts['stop:exec_s1'] || 0) >= 1, 3000, 'the stop request at the daemon');
+    await waitStat(s => (s.held.stopblock || 0) >= 1, 3000, 'the stop request waiting at the daemon');
     // a list taken after the stop request, while the job still runs; a third job appearing shows the page took it
     await setJobs(run3.concat([J('exec_s3', 'worker three', { started_at: Date.now() - 40000 })]));
     await view.waitForSelector('.xchip[data-xid="exec_s3"]', { state: 'attached', timeout: 3000 });
     assert.equal(await view.locator('.xchip[data-xid="exec_s1"] .xnode[data-st="running"], .xchip[data-xid="exec_s1"] .xnode[data-st="stopping"]').count(), 1, 'STOP-TERMINAL: the page holds the running list');
-    // from here every list is held at the daemon (its snapshot taken, its answer not sent)
+    // every list is held at the daemon (its snapshot taken, its answer not sent) before the stop is let through
+    await post('/set', { notice: 'pending', stopBlock: true, listHold: true });
     await post('/set', { notice: 'pending', listHold: true });
     // the stop's own answer alone: the chip turns stopped and the toast appears (the lists are held)
     await view.waitForSelector('.xchip[data-xid="exec_s1"] .xnode[data-st="stopped"]', { state: 'attached', timeout: 8000 });
@@ -593,18 +617,30 @@ async function run(browser, { lang, scheme }) {
   // LIST-RETRY (round 3, I2): the one event that announced a change is not repeated; a list read that fails
   // (rejected, then aborted) is retried after a pause, one at a time, until it answers.
   await sect('LIST-RETRY', async () => {
-    // drain the setup: the previous section's jobs are gone from the page before the failures are armed
-    await setJobs([J('exec_seed', 'seed job')]);
-    await view.waitForSelector('.xchip[data-xid="exec_seed"]', { state: 'attached', timeout: 4000 });
-    await setJobs([]);
-    await view.waitForSelector('.xchip[data-xid="exec_seed"]', { state: 'detached', timeout: 4000 });
+    // the route passes lists through (counting the ones that completed) until it is armed. The setup revision's own
+    // list is waited for before that, so no earlier wake can use up a simulated failure.
+    let armed = false, requested = 0, completed = 0;
     const times = [];
     await ctx.route('**/exec/jobs', async route => {
-      times.push(Date.now());
-      if (times.length === 1) await route.fulfill({ status: 503, body: 'unavailable' });
-      else if (times.length === 2) await route.abort('failed');
-      else await route.continue();
+      requested++;
+      if (armed) {
+        times.push(Date.now());
+        if (times.length === 1) return route.fulfill({ status: 503, body: 'unavailable' });
+        if (times.length === 2) return route.abort('failed');
+      }
+      const r = await route.fetch();
+      await route.fulfill({ response: r });
+      completed++;
     });
+    await setJobs([J('exec_seed', 'seed job')]);
+    await view.waitForSelector('.xchip[data-xid="exec_seed"]', { state: 'attached', timeout: 4000 });
+    for (let t = 0; t < 4000 && completed < requested; t += 25) await sleep(25);
+    const c0 = completed;
+    await setJobs([]);
+    await view.waitForSelector('.xchip[data-xid="exec_seed"]', { state: 'detached', timeout: 4000 });
+    for (let t = 0; t < 4000 && completed < c0 + 1; t += 25) await sleep(25);
+    assert.ok(completed >= c0 + 1, 'LIST-RETRY: the setup revision was read');
+    armed = true;
     await post('/jobs', [J('exec_lr', 'late list', { started_at: Date.now() - 5000 })]);
     await post('/bump');
     await view.waitForSelector('.xchip[data-xid="exec_lr"]', { timeout: 12000 });
@@ -638,17 +674,28 @@ async function run(browser, { lang, scheme }) {
     await view.waitForSelector('.xchip[data-xid="exec_gone"]');
     // the first read is held at the daemon (it will answer 404); a wake arrives while it is in flight (a
     // synchronous event, so the page has seen it when the call returns); then the read is released
+    // the browser's own view of the output requests: each must be answered 404 (no abort, no transport failure
+    // that could stand in for the 404 retry)
+    const rs = [], rf = [];
+    const onRes = r => { if (r.url().includes('/exec/exec_gone/output')) rs.push(r.status()); };
+    const onFail = r => { if (r.url().includes('/exec/exec_gone/output')) rf.push(String(r.failure() && r.failure().errorText)); };
+    page.on('response', onRes);
+    page.on('requestfailed', onFail);
     await post('/set', { notice: 'sent', outGone: ['exec_gone'], outHang: true });
     await post('/reset');
     await openChip(view, 'exec_gone');
     await waitStat(s => (s.inflight.exec_gone || 0) === 1, 3000, 'the first read, held');
     await view.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await post('/set', { notice: 'sent', outGone: ['exec_gone'] });
-    await waitStat(s => (s.counts['output:exec_gone'] || 0) >= 2, 4000, 'the wake that came during the 404 read led to another read');
+    for (let t = 0; t < 4000 && rs.length < 2; t += 25) await sleep(25);
+    assert.deepEqual(rs, [404, 404], 'POLL: the first read was answered 404 and the wake that came during it led to a second read: ' + JSON.stringify({ rs, rf }));
     // the job is gone for the output route: exactly those two reads, and then quiet, also after the job leaves
     await sleep(3600);
     st = await get('/stats');
     assert.equal(st.counts['output:exec_gone'], 2, 'POLL: exactly two reads for the running job, then quiescence: ' + JSON.stringify(st.counts));
+    assert.deepEqual({ rs, rf }, { rs: [404, 404], rf: [] }, 'POLL: both reads were answered, none failed');
+    page.off('response', onRes);
+    page.off('requestfailed', onFail);
     await setJobs([]);
     await view.waitForSelector('.xchip[data-xid="exec_gone"]', { state: 'detached', timeout: 4000 });
     await sleep(1500);
