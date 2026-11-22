@@ -79,6 +79,8 @@ type composerJobClock struct {
 	since func() time.Time
 }
 
+func (c *composerJobClock) Open(reply string) (uint64, error) { return c.svc.Open(reply) }
+
 func (c *composerJobClock) Launch(ctx context.Context, drain <-chan struct{}, req ComposerLaunch) (ComposerJob, error) {
 	return c.svc.Launch(ctx, drain, req)
 }

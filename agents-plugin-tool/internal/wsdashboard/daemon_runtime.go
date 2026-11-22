@@ -130,6 +130,9 @@ func (d *Daemon) Done() <-chan struct{} { return d.done }
 func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
 		close(d.stop)
+		// The composer's runs and background loop end with the stop (a
+		// running launch converts on it); none writes after Close returns.
+		d.composerWait()
 		if d.hireDone != nil {
 			<-d.hireDone
 		}

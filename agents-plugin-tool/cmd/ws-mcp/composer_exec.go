@@ -21,9 +21,14 @@ type composerExec struct {
 // composerRunner is the runner side the composer launch reads: the open
 // hosted lead's own target, and the passive hand-off of a result.
 type composerRunner interface {
+	ComposerOpen(id string) (uint64, error)
 	ComposerTarget(id string) (wsagent.ComposerTarget, error)
 	PassiveHand(id string, gen uint64, execID, text string) error
 }
+
+// Open is the live authority of the dashboard's private command routes: the
+// open generation of an open hosted lead, read from the runner's memory.
+func (c composerExec) Open(replyID string) (uint64, error) { return c.runner.ComposerOpen(replyID) }
 
 // Launch runs the `!` line as the lead's own exec.shell job, shell and
 // working directory chosen as exec.shell does with no cwd argument, empty
@@ -41,13 +46,19 @@ func (c composerExec) Launch(ctx context.Context, drain <-chan struct{}, req wsd
 	// composer lacks.
 	launch.Stdin, launch.StdinSet = nil, true
 	launch.Window = req.Window
-	launch.ExpectGen, launch.CheckGen = target.Owner.Gen, true
+	// The generation the route read before it acknowledged the submission, not
+	// whatever is open by now: a lead closed and revived in between refuses it
+	// here and again at the job's registration.
+	if target.Owner.Gen != req.Gen {
+		return wsdashboard.ComposerJob{}, errors.New("the lead reopened since this command was submitted")
+	}
+	launch.ExpectGen, launch.CheckGen = req.Gen, true
 	launch.UserApproved = true
 	gen := target.Owner.Gen
 	launch.OnConvert = func(v execjob.HostedView) {
 		// The id is visible in the lead's pending input before the job
 		// can owe its completion notice.
-		_ = c.runner.PassiveHand(req.ReplyID, gen, v.ID, wsdashboard.ComposerAsyncReceipt(req.Line, v.ID))
+		_ = c.runner.PassiveHand(req.ReplyID, gen, v.ID, wsdashboard.ComposerAsyncReceipt(v.ID))
 	}
 	view, launchErr := c.hosted.Launch(ctx, drain, launch)
 	if view.ID == "" {
@@ -55,7 +66,9 @@ func (c composerExec) Launch(ctx context.Context, drain <-chan struct{}, req wsd
 	}
 	job := composerJob(view)
 	job.Gen = gen
-	if view.Terminal() {
+	// A converted job's end is the ordinary notice's; only a run that ended
+	// inside its window has its output read back here.
+	if view.Terminal() && !job.Async {
 		_, out, err := c.hosted.Retained(req.ReplyID, view.ID)
 		if err == nil {
 			job.Output, job.Start = out.Data, out.Start

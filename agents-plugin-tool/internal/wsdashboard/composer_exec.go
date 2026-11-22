@@ -47,12 +47,31 @@ const (
 	composerKeepCards = 64
 	// composerBodyLimit bounds a composer-exec request body.
 	composerBodyLimit = 256 << 10
+	// composerFenceMax bounds the replay fence: the submission ids this
+	// daemon remembers having admitted, whatever became of their cards.
+	composerFenceMax = 4096
+	// composerReceiptCommand bounds the command text a receipt repeats.
+	composerReceiptCommand = 1024
+)
+
+// The background loop's default periods: settling the active async cards,
+// and the output files' retention (first after the start, then on a period; a
+// write also asks for one at once). A composerExec's own fields, when set
+// before the service is bound, replace them (tests).
+const (
+	composerSettleEvery = time.Second
+	composerSweepFirst  = time.Minute
+	composerSweepEvery  = 30 * time.Minute
 )
 
 // ComposerLaunch is one `!` line's launch for an open hosted lead.
 type ComposerLaunch struct {
 	ReplyID string
-	Line    string
+	// Gen is the open generation the route read (Open) before it
+	// acknowledged the submission: the launch is refused when the lead is on
+	// another one by the time it is admitted.
+	Gen  uint64
+	Line string
 	// Window is the wait before conversion.
 	Window time.Duration
 }
@@ -87,6 +106,10 @@ func (j ComposerJob) Terminal() bool { return j.State != "running" && j.State !=
 // Everything about owner, generation, worktree and environment comes from
 // server-side runner state; none of it from the browser.
 type ComposerExecService interface {
+	// Open is the live authority check: the open generation of replyID when
+	// it is an open hosted lead right now, an error otherwise. It reads
+	// memory only; every private route asks it.
+	Open(replyID string) (gen uint64, err error)
 	// Launch runs req.Line for lead req.ReplyID under that lead's own job
 	// owner, bound worktree and environment, as the user's own one-use
 	// approval, and waits through req.Window; drain ends the wait without
@@ -110,8 +133,26 @@ type composerExec struct {
 
 	mu   sync.Mutex
 	subs map[string]*composerSub
-	// order keeps each session's claims oldest first (composerKeepCards).
+	// order keeps each session's cards oldest first (composerKeepCards).
 	order map[string][]string
+	// fence is the replay fence: every submission id admitted, newest
+	// composerFenceMax of them, independent of the cards. An id in it never
+	// launches again in this daemon, whatever became of its card; an id it
+	// does not hold (after a restart, or older than the bound) launches only
+	// as a fresh submission, never as a retry.
+	fence  map[string]struct{}
+	fenceQ []string
+
+	// wg counts the goroutines that run or finalize submissions and the
+	// background loop; Close waits for them. loopOnce starts the loop; wake
+	// asks it to settle active cards; kick asks it for a retention sweep.
+	wg       sync.WaitGroup
+	loopOnce sync.Once
+	wake     chan struct{}
+	kick     chan struct{}
+	// settleEvery, sweepFirst and sweepEvery are the loop's periods; zero
+	// takes the default.
+	settleEvery, sweepFirst, sweepEvery time.Duration
 }
 
 // SetComposerExec binds the service the composer route runs on; before it
@@ -122,7 +163,24 @@ func (d *Daemon) SetComposerExec(svc ComposerExecService) {
 		return
 	}
 	d.composer.svc.Store(&svc)
+	d.composer.loopOnce.Do(func() {
+		c := &d.composer
+		c.wake, c.kick = make(chan struct{}, 1), make(chan struct{}, 1)
+		for _, p := range []struct {
+			v   *time.Duration
+			def time.Duration
+		}{{&c.settleEvery, composerSettleEvery}, {&c.sweepFirst, composerSweepFirst}, {&c.sweepEvery, composerSweepEvery}} {
+			if *p.v <= 0 {
+				*p.v = p.def
+			}
+		}
+		c.wg.Add(1)
+		go d.composerLoop()
+	})
 }
+
+// composerWait waits for the composer's goroutines (Close, after d.stop).
+func (d *Daemon) composerWait() { d.composer.wg.Wait() }
 
 // composerSub is one claimed submission: the submission ID maps to exactly
 // one job. Guarded by mu.
@@ -144,9 +202,12 @@ type composerSub struct {
 	inline     string
 	replaced   bool
 	file       string // the output file's path once it exists
+	fileAt     time.Time
 	fileErr    string
 	// handed: the receipt went to the lead's pending input.
 	handed bool
+	// gen is the open generation the submission was admitted under.
+	gen uint64
 }
 
 var composerSubmissionID = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
@@ -176,6 +237,9 @@ type composerCard struct {
 	FileError string `json:"file_error,omitempty"`
 	// Truncated is how many leading bytes the retention dropped.
 	Truncated int64 `json:"truncated,omitempty"`
+	// Unknown: this daemon cannot say what became of the submission (it
+	// restarted, or forgot it); nothing was or will be run for it.
+	Unknown   bool  `json:"unknown,omitempty"`
 	StartedAt int64 `json:"started_at,omitempty"`
 	EndedAt   int64 `json:"ended_at,omitempty"`
 }
@@ -233,16 +297,24 @@ func (d *Daemon) handleComposerExec(w http.ResponseWriter, r *http.Request, repl
 		return
 	}
 	svc := *svcp
+	// The live authority, for reads as for writes: a closed lead keeps its
+	// registration (and its index flag), but its commands, results and files
+	// are no longer served.
+	gen, err := svc.Open(replyID)
+	if err != nil {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
 	switch {
 	case rest == "" && write:
-		d.composerSubmit(w, r, svc, replyID)
+		d.composerSubmit(w, r, svc, replyID, gen)
 	case rest == "" && !write:
-		d.composerList(w, svc, replyID)
+		d.composerList(w, replyID)
 	case !write:
 		id, tail, _ := strings.Cut(rest, "/")
 		switch tail {
 		case "":
-			d.composerShow(w, svc, replyID, id)
+			d.composerShow(w, replyID, id)
 		case "output":
 			d.composerOutput(w, r, replyID, id)
 		default:
@@ -257,10 +329,15 @@ func (d *Daemon) handleComposerExec(w http.ResponseWriter, r *http.Request, repl
 // candidate text and its submission ID. Attachment fields are accepted only
 // to be refused.
 type composerRequest struct {
-	SubmissionID string            `json:"submission_id"`
-	Text         string            `json:"text"`
-	Images       []json.RawMessage `json:"images"`
-	Refs         []json.RawMessage `json:"refs"`
+	SubmissionID string `json:"submission_id"`
+	Text         string `json:"text"`
+	// Retry marks a resend of an attempt whose outcome the browser never
+	// learned (it recorded the attempt before sending). A retry never starts
+	// a command: it maps to the card of the one admission, or reports the
+	// outcome unknown.
+	Retry  bool              `json:"retry"`
+	Images []json.RawMessage `json:"images"`
+	Refs   []json.RawMessage `json:"refs"`
 }
 
 // composerLine applies the `!` grammar to a raw composer text: the first
@@ -280,7 +357,7 @@ func composerLine(text string) (line string, status int, msg string) {
 	return line, 0, ""
 }
 
-func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc ComposerExecService, replyID string) {
+func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc ComposerExecService, replyID string, gen uint64) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, composerBodyLimit+1))
 	if err != nil || len(raw) > composerBodyLimit {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -304,9 +381,25 @@ func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc Comp
 		http.Error(w, msg, status)
 		return
 	}
-	sub, fresh := d.composerClaim(replyID, req.SubmissionID, line)
-	if !fresh {
-		// A retry after a lost response: the claim maps to its one job.
+	sub, admission := d.composerAdmit(replyID, req.SubmissionID, line, gen, req.Retry)
+	w.Header().Set("Cache-Control", "no-store")
+	switch admission {
+	case composerFresh:
+		// The run happens after the acknowledgement, under the daemon's own
+		// lifetime: closing the tab does not cancel a submitted command. It
+		// carries the generation read above, not whatever is open later.
+		d.composer.wg.Add(1)
+		go func() {
+			defer d.composer.wg.Done()
+			d.composerRun(svc, sub)
+		}()
+		sub.mu.Lock()
+		card := sub.cardLocked()
+		sub.mu.Unlock()
+		writeJSON(w, http.StatusAccepted, card)
+	case composerKnown:
+		// A resend after a lost response, or a duplicate: the admission maps
+		// to its one job.
 		sub.mu.Lock()
 		same := sub.line == line
 		card := sub.cardLocked()
@@ -315,38 +408,61 @@ func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc Comp
 			http.Error(w, "this submission id was used for another command", http.StatusConflict)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, card)
-		return
+	default:
+		// Not known to this daemon (a restart, or an id its replay fence
+		// forgot cards of): nothing is run; the card says so and the user
+		// sends again deliberately.
+		writeJSON(w, http.StatusOK, composerCard{ID: req.SubmissionID, Command: line, Phase: "done", Unknown: true})
 	}
-	// The run happens after the acknowledgement, under the daemon's own
-	// lifetime: closing the tab does not cancel a submitted command.
-	go d.composerRun(svc, sub)
-	sub.mu.Lock()
-	card := sub.cardLocked()
-	sub.mu.Unlock()
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusAccepted, card)
 }
 
-// composerClaim claims submission id of session replyID for line, or returns
-// the claim an earlier request made (fresh false).
-func (d *Daemon) composerClaim(replyID, id, line string) (*composerSub, bool) {
+// composerAdmission is how a submission id met the daemon.
+type composerAdmission int
+
+const (
+	// composerFresh: admitted now; its command runs.
+	composerFresh composerAdmission = iota
+	// composerKnown: an earlier admission's card is returned.
+	composerKnown
+	// composerUnknown: the id cannot be admitted again and has no card (a
+	// retry of an unknown attempt, or an id the fence holds whose card was
+	// evicted).
+	composerUnknown
+)
+
+// composerAdmit admits submission id of session replyID for line under open
+// generation gen. Fresh and retry differ: only a fresh submission whose id
+// neither a card nor the replay fence holds is admitted and runs; a retry
+// maps to its card, or reports the outcome unknown, and never launches, so a
+// forgotten id (an evicted card, a restarted daemon) cannot run a command
+// twice.
+func (d *Daemon) composerAdmit(replyID, id, line string, gen uint64, retry bool) (*composerSub, composerAdmission) {
 	key := replyID + "\x00" + id
 	c := &d.composer
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if sub, ok := c.subs[key]; ok {
-		return sub, false
+		return sub, composerKnown
+	}
+	if _, ok := c.fence[key]; ok || retry {
+		return nil, composerUnknown
 	}
 	if c.subs == nil {
-		c.subs, c.order = map[string]*composerSub{}, map[string][]string{}
+		c.subs, c.order, c.fence = map[string]*composerSub{}, map[string][]string{}, map[string]struct{}{}
 	}
-	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running"}
+	c.fence[key] = struct{}{}
+	c.fenceQ = append(c.fenceQ, key)
+	if len(c.fenceQ) > composerFenceMax {
+		delete(c.fence, c.fenceQ[0])
+		c.fenceQ = c.fenceQ[1:]
+	}
+	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running", gen: gen}
 	c.subs[key] = sub
 	c.order[replyID] = append(c.order[replyID], key)
 	// Keep the newest cards; an unfinished one is never dropped, and one
-	// that is still active does not hold the finished ones behind it.
+	// that is still active does not hold the finished ones behind it. The
+	// fence outlives the card.
 	for len(c.order[replyID]) > composerKeepCards {
 		drop := -1
 		for i, key := range c.order[replyID][:len(c.order[replyID])-composerKeepCards] {
@@ -365,7 +481,7 @@ func (d *Daemon) composerClaim(replyID, id, line string) (*composerSub, bool) {
 		delete(c.subs, c.order[replyID][drop])
 		c.order[replyID] = append(c.order[replyID][:drop:drop], c.order[replyID][drop+1:]...)
 	}
-	return sub, true
+	return sub, composerFresh
 }
 
 func (d *Daemon) composerFind(replyID, id string) *composerSub {
@@ -375,10 +491,13 @@ func (d *Daemon) composerFind(replyID, id string) *composerSub {
 	return c.subs[replyID+"\x00"+id]
 }
 
-// composerRun launches the claimed submission and settles its card; a run
-// that ended inside the window is classified and handed to the lead.
+// composerRun launches the admitted submission and settles its card; a run
+// that ended inside the window is classified and handed to the lead. A run
+// that converted is the ordinary exec notice's from then on: its card settles
+// in the background and the dashboard hands nothing more, whatever state the
+// job reached since.
 func (d *Daemon) composerRun(svc ComposerExecService, sub *composerSub) {
-	job, err := svc.Launch(context.Background(), d.stop, ComposerLaunch{ReplyID: sub.reply, Line: sub.line, Window: ComposerWindow})
+	job, err := svc.Launch(context.Background(), d.stop, ComposerLaunch{ReplyID: sub.reply, Gen: sub.gen, Line: sub.line, Window: ComposerWindow})
 	sub.mu.Lock()
 	if job.ExecID == "" {
 		sub.phase, sub.err = "refused", composerErrorText(err)
@@ -389,9 +508,14 @@ func (d *Daemon) composerRun(svc ComposerExecService, sub *composerSub) {
 	if err != nil {
 		sub.err = composerErrorText(err)
 	}
-	if !job.Terminal() {
+	if job.Async || !job.Terminal() {
 		sub.phase, sub.job.Async = "async", true
+		sub.job.Output = nil
 		sub.mu.Unlock()
+		select {
+		case d.composer.wake <- struct{}{}:
+		default:
+		}
 		return
 	}
 	sub.finalizing = true
@@ -408,33 +532,93 @@ func composerErrorText(err error) string {
 	return strings.TrimPrefix(err.Error(), "exec: ")
 }
 
+// composerText is output bytes as the card, the receipt and the file show
+// them: UTF-8 text, each invalid byte as U+FFFD (the exec reply's decoding)
+// and each NUL byte as U+2400, so a harness's text reader (it refuses a file
+// with a NUL in its head as binary) takes the artifact. replaced reports any
+// substitution.
+func composerText(b []byte) (string, bool) {
+	text, replaced := execjob.DecodeText(b)
+	if strings.IndexByte(text, 0) >= 0 {
+		text, replaced = strings.ReplaceAll(text, "\x00", "\u2400"), true
+	}
+	return text, replaced
+}
+
+// composerArtifactBytes is what composerText will make of raw, in bytes: a
+// valid rune its own width, an invalid byte or a NUL three.
+func composerArtifactBytes(raw []byte) int {
+	n := 0
+	for len(raw) > 0 {
+		r, size := utf8.DecodeRune(raw)
+		switch {
+		case r == utf8.RuneError && size == 1, r == 0:
+			n += 3
+		default:
+			n += size
+		}
+		raw = raw[size:]
+	}
+	return n
+}
+
+// composerFileWindow is the newest part of raw whose artifact text fits max
+// bytes (so the file stays within the cap after the substitutions), cut on a
+// rune boundary, and how many leading raw bytes it dropped.
+func composerFileWindow(raw []byte, max int) ([]byte, int) {
+	size := composerArtifactBytes(raw)
+	i := 0
+	for size > max && i < len(raw) {
+		r, n := utf8.DecodeRune(raw[i:])
+		w := n
+		if (r == utf8.RuneError && n == 1) || r == 0 {
+			w = 3
+		}
+		size -= w
+		i += n
+	}
+	return raw[i:], i
+}
+
+// ComposerArtifact is the output file's content for raw combined output: the
+// newest range of raw whose text fits the per-file cap, as composerText shows
+// it, with how many leading raw bytes it dropped and whether any byte was
+// substituted. Exported so the harness-side reader's limits can be checked
+// against the real representation.
+func ComposerArtifact(raw []byte) (text []byte, dropped int, replaced bool) {
+	window, dropped := composerFileWindow(raw, composerFileMax)
+	s, replaced := composerText(window)
+	return []byte(s), dropped, replaced
+}
+
 // composerFinalize classifies an ended job's retained output once: 4096 raw
 // combined bytes or fewer inline, more as a private file. The file write runs
 // here, with no lock held, so a card poll or another submission never waits
-// on it; the result is then applied under sub.mu. hand sends the receipt to
-// the lead (a run that ended inside its window; an async job's end is the
-// ordinary exec notice's). sub.finalizing was set by the caller.
+// on it; the result is then applied under sub.mu, and the whole snapshot is
+// dropped (the hosted ring is the one retained copy). hand sends the receipt
+// to the lead (a run that ended inside its window; a converted job's end is
+// the ordinary exec notice's). sub.finalizing was set by the caller.
 func (d *Daemon) composerFinalize(sub *composerSub, job ComposerJob, hand bool, svc ComposerExecService) {
 	var inline, file, fileErr string
 	var replaced bool
+	var fileAt time.Time
 	start := job.Start
 	// The count is the raw combined bytes the job wrote, never a decoded or
 	// tail length.
-	if job.Written <= ComposerInlineMax {
-		inline, replaced = decodeComposerText(job.Output)
-	} else if len(job.Output) == 0 {
+	if job.Written > 0 && len(job.Output) == 0 {
 		// The retained output could not be read back: no empty file stands in
 		// for it.
 		fileErr = "the output is no longer retained"
+	} else if job.Written <= ComposerInlineMax {
+		inline, replaced = composerText(job.Output)
 	} else {
-		data := job.Output
-		if len(data) > composerFileMax {
-			data = data[len(data)-composerFileMax:]
-			start += int64(len(job.Output) - len(data))
-		}
-		var text string
-		text, replaced = decodeComposerText(data)
-		path, err := d.composerWriteFile(sub.reply, sub.id, []byte(text))
+		// The file holds the newest raw range whose text fits the cap; Start
+		// says how many leading bytes of the output it lacks.
+		text, dropped, rep := ComposerArtifact(job.Output)
+		start += int64(dropped)
+		replaced = rep
+		path, err := d.composerWriteFile(sub.reply, sub.id, text)
+		fileAt = time.Now()
 		if err != nil {
 			fileErr = "the output file could not be written: " + err.Error()
 			// The card still shows the tail, as the exec result does.
@@ -442,9 +626,14 @@ func (d *Daemon) composerFinalize(sub *composerSub, job ComposerJob, hand bool, 
 			if len(tail) > ComposerInlineMax {
 				tail = tail[len(tail)-ComposerInlineMax:]
 			}
-			inline, _ = decodeComposerText(tail)
+			inline, _ = composerText(tail)
 		} else {
 			file = path
+			// Retention is the background loop's: this write only asks.
+			select {
+			case d.composer.kick <- struct{}{}:
+			default:
+			}
 		}
 	}
 	sub.mu.Lock()
@@ -454,14 +643,17 @@ func (d *Daemon) composerFinalize(sub *composerSub, job ComposerJob, hand bool, 
 	}
 	async := sub.job.Async
 	sub.job = job
-	sub.job.Async, sub.job.Start = async, start
+	sub.job.Async, sub.job.Start, sub.job.Output = async, start, nil
 	sub.inline, sub.replaced, sub.file, sub.fileErr = inline, replaced, file, fileErr
+	if file != "" {
+		sub.fileAt = fileAt
+	}
 	sub.phase, sub.finalized, sub.finalizing = "done", true, false
 	receipt, doHand := "", hand && !sub.handed
 	if doHand {
 		receipt = composerReceipt(sub)
 	}
-	execID, gen := sub.job.ExecID, sub.job.Gen
+	execID, gen := sub.job.ExecID, sub.gen
 	sub.mu.Unlock()
 	if !doHand {
 		return
@@ -475,10 +667,6 @@ func (d *Daemon) composerFinalize(sub *composerSub, job ComposerJob, hand bool, 
 	sub.mu.Unlock()
 }
 
-// decodeComposerText decodes output bytes for display, each invalid UTF-8
-// byte as U+FFFD (the exec reply's decoding).
-func decodeComposerText(b []byte) (string, bool) { return execjob.DecodeText(b) }
-
 // composerReceipt is the text the lead's next turn carries for a finished
 // composer run: the command, how it ended, and its output inline or as a
 // file path.
@@ -489,12 +677,15 @@ func composerReceipt(sub *composerSub) string {
 	if job.StartedAt > 0 && job.EndedAt >= job.StartedAt {
 		fmt.Fprintf(&b, " after %s", (time.Duration(job.EndedAt-job.StartedAt) * time.Millisecond).Round(100*time.Millisecond))
 	}
-	b.WriteString(".\ncommand: " + sub.line + "\n")
+	b.WriteString(".\ncommand: " + composerCut(sub.line, composerReceiptCommand) + "\n")
 	switch {
 	case sub.file != "":
 		fmt.Fprintf(&b, "output (%d bytes) is in the file: %s\n", job.Written, sub.file)
 		if job.Start > 0 {
 			fmt.Fprintf(&b, "the file starts at byte %d of the output; earlier bytes were not retained.\n", job.Start)
+		}
+		if sub.replaced {
+			b.WriteString("the file is UTF-8 text: invalid bytes appear as U+FFFD and NUL bytes as U+2400.\n")
 		}
 	case sub.fileErr != "":
 		fmt.Fprintf(&b, "%s; output tail (%d bytes of %d):\n%s\n", sub.fileErr, len(sub.inline), job.Written, sub.inline)
@@ -509,11 +700,23 @@ func composerReceipt(sub *composerSub) string {
 	return b.String()
 }
 
+// composerCut is text cut to max bytes on a rune boundary, marked.
+func composerCut(text string, max int) string {
+	if len(text) <= max {
+		return text
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s …[command cut at %d of %d bytes]", text[:cut], cut, len(text))
+}
+
 // ComposerAsyncReceipt is the receipt of a composer run that converted to
-// async: only the job's id (its completion arrives as the ordinary exec
-// notice).
-func ComposerAsyncReceipt(line, execID string) string {
-	return fmt.Sprintf("[user ran from the dashboard] exec_id %s is still running after %s; its completion arrives as a message (exec.tail exec_id %s reads its output).\ncommand: %s", execID, ComposerWindow, execID, line)
+// async: the job's id only (its completion arrives as the ordinary exec
+// notice, which carries the command).
+func ComposerAsyncReceipt(execID string) string {
+	return fmt.Sprintf("[user ran from the dashboard] exec_id %s ran past %s and continues as an async job; its completion arrives as a message (exec.tail exec_id %s reads its output).", execID, ComposerWindow, execID)
 }
 
 func composerEnd(job ComposerJob) string {
@@ -534,32 +737,70 @@ func composerEnd(job ComposerJob) string {
 	return "ended"
 }
 
-// composerRefresh brings an async submission's card up to date from its job
-// and finalizes it once the job ended.
-func (d *Daemon) composerRefresh(svc ComposerExecService, sub *composerSub) {
-	sub.mu.Lock()
-	defer sub.mu.Unlock()
-	if sub.phase != "async" || sub.finalized || sub.finalizing || sub.job.ExecID == "" {
-		return
+// composerSettle brings every active converted submission's card up to date
+// from its job and finalizes the ones that ended, whether or not a page
+// polls; a job its service no longer knows (pruned) retires its card as
+// finished. It reports whether any card is still active. Memory reads only
+// (the file write of a finalization runs on its own goroutine).
+func (d *Daemon) composerSettle() bool {
+	svcp := d.composer.svc.Load()
+	if svcp == nil {
+		return false
 	}
-	job, err := svc.Job(sub.reply, sub.job.ExecID)
-	if err != nil {
-		sub.err = "the job is no longer queryable: " + composerErrorText(err)
-		return
+	svc := *svcp
+	c := &d.composer
+	c.mu.Lock()
+	var active []*composerSub
+	for _, subs := range c.order {
+		for _, key := range subs {
+			active = append(active, c.subs[key])
+		}
 	}
-	sub.err = ""
-	job.Async = true
-	if !job.Terminal() {
-		sub.job = job
-		return
+	c.mu.Unlock()
+	more := false
+	for _, sub := range active {
+		sub.mu.Lock()
+		skip := sub.phase != "async" || sub.finalized || sub.finalizing || sub.job.ExecID == ""
+		reply, execID := sub.reply, sub.job.ExecID
+		sub.mu.Unlock()
+		if skip {
+			sub.mu.Lock()
+			more = more || sub.phase == "running" || sub.finalizing
+			sub.mu.Unlock()
+			continue
+		}
+		job, err := svc.Job(reply, execID)
+		sub.mu.Lock()
+		switch {
+		case sub.finalized || sub.finalizing:
+		case err != nil:
+			// Pruned or no longer ours: the card ends here, unfinalized
+			// output and all (nothing is left to read it from).
+			sub.err = "the job is no longer queryable: " + composerErrorText(err)
+			sub.phase, sub.finalized = "done", true
+		case !job.Terminal():
+			job.Async = true
+			sub.job = job
+			more = true
+		default:
+			job.Async = true
+			sub.finalizing = true
+			c.wg.Add(1)
+			go func() {
+				defer c.wg.Done()
+				d.composerFinalize(sub, job, false, svc)
+			}()
+			more = true
+		}
+		sub.mu.Unlock()
 	}
-	// The file write happens off this request, outside every lock; the card
-	// keeps reading as running until the result lands.
-	sub.finalizing = true
-	go d.composerFinalize(sub, job, false, svc)
+	return more
 }
 
-func (d *Daemon) composerShow(w http.ResponseWriter, svc ComposerExecService, replyID, id string) {
+// composerShow and composerList answer from memory only: the background loop
+// keeps the cards current, so a page poll never queries a job, writes or
+// reads a file.
+func (d *Daemon) composerShow(w http.ResponseWriter, replyID, id string) {
 	sub := d.composerFind(replyID, id)
 	if sub == nil {
 		// Unknown to this daemon (a restart, or an id it never saw): the
@@ -567,7 +808,6 @@ func (d *Daemon) composerShow(w http.ResponseWriter, svc ComposerExecService, re
 		http.Error(w, "unknown submission", http.StatusNotFound)
 		return
 	}
-	d.composerRefresh(svc, sub)
 	sub.mu.Lock()
 	card := sub.cardLocked()
 	sub.mu.Unlock()
@@ -575,7 +815,7 @@ func (d *Daemon) composerShow(w http.ResponseWriter, svc ComposerExecService, re
 	writeJSON(w, http.StatusOK, card)
 }
 
-func (d *Daemon) composerList(w http.ResponseWriter, svc ComposerExecService, replyID string) {
+func (d *Daemon) composerList(w http.ResponseWriter, replyID string) {
 	c := &d.composer
 	c.mu.Lock()
 	var subs []*composerSub
@@ -585,7 +825,6 @@ func (d *Daemon) composerList(w http.ResponseWriter, svc ComposerExecService, re
 	c.mu.Unlock()
 	cards := make([]composerCard, 0, len(subs))
 	for _, sub := range subs {
-		d.composerRefresh(svc, sub)
 		sub.mu.Lock()
 		cards = append(cards, sub.cardLocked())
 		sub.mu.Unlock()
@@ -633,9 +872,9 @@ func (d *Daemon) composerFilePath(replyID, id string) string {
 	return filepath.Join(d.dir, composerOutputDir, hex.EncodeToString(sum[:12])+".out")
 }
 
-// composerWriteFile writes data as the submission's output file, atomically,
-// then applies the retention. It runs on the submission's own goroutine, off
-// the page and send paths.
+// composerWriteFile writes data as the submission's output file, atomically.
+// It runs on the finalizing goroutine, off the page and send paths; the
+// retention is the background loop's.
 func (d *Daemon) composerWriteFile(replyID, id string, data []byte) (string, error) {
 	path := d.composerFilePath(replyID, id)
 	dir := filepath.Dir(path)
@@ -660,19 +899,83 @@ func (d *Daemon) composerWriteFile(replyID, id string, data []byte) (string, err
 		_ = os.Remove(tmp.Name())
 		return "", err
 	}
-	composerPrune(dir, time.Now())
 	return path, nil
 }
 
-// composerPrune deletes whole output files: those older than the age
-// bound, then the oldest until the total fits.
-func composerPrune(dir string, now time.Time) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+// composerLoop is the composer's one background goroutine: it settles active
+// converted cards, and it runs the output files' retention (at start, on a
+// period, and when a write asks), so neither depends on a page being open
+// and both stay off the card, acknowledgement and send paths. It idles with
+// no timer running while no card is active.
+func (d *Daemon) composerLoop() {
+	c := &d.composer
+	defer c.wg.Done()
+	sweep := time.NewTimer(c.sweepFirst)
+	defer sweep.Stop()
+	settle := time.NewTimer(time.Hour)
+	settle.Stop()
+	defer settle.Stop()
+	for {
+		select {
+		case <-d.stop:
+			return
+		case <-c.wake:
+			settle.Reset(c.settleEvery)
+		case <-settle.C:
+			if d.composerSettle() {
+				settle.Reset(c.settleEvery)
+			}
+		case <-c.kick:
+			d.composerSweep()
+		case <-sweep.C:
+			d.composerSweep()
+			sweep.Reset(c.sweepEvery)
+		}
+	}
+}
+
+// composerSweep applies the retention to the output directory and publishes
+// the absence of every file a card still shows that is no longer there
+// (removed by the retention, or by anyone else), so the card stops offering
+// it. Only the loop calls it, so two sweeps never race.
+func (d *Daemon) composerSweep() {
+	dir := filepath.Join(d.dir, composerOutputDir)
+	scanned := time.Now()
+	present, ok := composerPrune(dir, scanned)
+	if !ok {
 		return
 	}
+	c := &d.composer
+	c.mu.Lock()
+	var subs []*composerSub
+	for _, sub := range c.subs {
+		subs = append(subs, sub)
+	}
+	c.mu.Unlock()
+	for _, sub := range subs {
+		sub.mu.Lock()
+		// A file written after the scan began is not judged by it.
+		if sub.file != "" && sub.fileAt.Before(scanned) {
+			if _, ok := present[filepath.Base(sub.file)]; !ok {
+				sub.file, sub.fileErr = "", "the output file was removed (retention keeps 7 days and 100 MiB)"
+			}
+		}
+		sub.mu.Unlock()
+	}
+}
+
+// composerPrune deletes whole output files: those older than the age bound,
+// then the oldest until the total fits. It returns the names that remain. A
+// file that is already gone counts as removed, never as still taking room.
+func composerPrune(dir string, now time.Time) (map[string]struct{}, bool) {
+	present := map[string]struct{}{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		// No directory yet holds no file; any other failure says nothing.
+		return present, errors.Is(err, os.ErrNotExist)
+	}
 	type file struct {
-		path string
+		name string
 		mod  time.Time
 		size int64
 	}
@@ -686,21 +989,29 @@ func composerPrune(dir string, now time.Time) {
 		if err != nil {
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
 		if now.Sub(info.ModTime()) > composerFileAge {
-			_ = os.Remove(path)
-			continue
+			if err := os.Remove(filepath.Join(dir, e.Name())); err == nil || errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 		}
-		files = append(files, file{path, info.ModTime(), info.Size()})
+		files = append(files, file{e.Name(), info.ModTime(), info.Size()})
 		total += info.Size()
 	}
 	sort.Slice(files, func(a, b int) bool { return files[a].mod.Before(files[b].mod) })
-	for _, f := range files {
+	for i := range files {
 		if total <= composerFilesTotal {
 			break
 		}
-		if os.Remove(f.path) == nil {
-			total -= f.size
+		err := os.Remove(filepath.Join(dir, files[i].name))
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			total -= files[i].size
+			files[i].size = -1
 		}
 	}
+	for _, f := range files {
+		if f.size >= 0 {
+			present[f.name] = struct{}{}
+		}
+	}
+	return present, true
 }

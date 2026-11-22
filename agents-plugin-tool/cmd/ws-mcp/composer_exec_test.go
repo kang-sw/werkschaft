@@ -24,6 +24,10 @@ type composerRunnerFake struct {
 	events *[]string
 }
 
+func (r *composerRunnerFake) ComposerOpen(id string) (uint64, error) {
+	return r.target.Owner.Gen, r.err
+}
+
 func (r *composerRunnerFake) ComposerTarget(id string) (wsagent.ComposerTarget, error) {
 	return r.target, r.err
 }
@@ -47,10 +51,21 @@ type denySessions struct {
 	gen      uint64
 	events   *[]string
 	notified chan struct{}
+	// ownerCalls counts Owner calls; afterOwner runs after call n has read
+	// its generation (a test's interleaving point).
+	ownerCalls int
+	afterOwner func(call int)
 }
 
 func (s *denySessions) Owner(id string) (execjob.HostedOwner, error) {
-	return execjob.HostedOwner{ID: id, Gen: s.gen, Lead: true}, nil
+	s.mu.Lock()
+	s.ownerCalls++
+	call, gen, hook := s.ownerCalls, s.gen, s.afterOwner
+	s.mu.Unlock()
+	if hook != nil {
+		defer hook(call)
+	}
+	return execjob.HostedOwner{ID: id, Gen: gen, Lead: true}, nil
 }
 func (s *denySessions) Approve(context.Context, string, execjob.HostedCall) (bool, error) {
 	s.mu.Lock()
@@ -96,7 +111,7 @@ func openComposerFixture(t *testing.T, gen uint64) (*composerExec, *composerRunn
 func TestComposerExecRunsTheLinesAsTheLeadsOwnExecShell(t *testing.T) {
 	c, runner, sessions, _, root, _ := openComposerFixture(t, 1)
 	run := func(line string, window time.Duration) (wsdashboard.ComposerJob, error) {
-		return c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Line: line, Window: window})
+		return c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: runner.target.Owner.Gen, Line: line, Window: window})
 	}
 	// A multiline source runs as one script, in the lead's bound worktree,
 	// with stdin at EOF (cat returns), and stderr joins the combined bytes.
@@ -148,11 +163,11 @@ func TestComposerExecRunsTheLinesAsTheLeadsOwnExecShell(t *testing.T) {
 // like an exec.shell job.
 func TestComposerExecConvertsPastTheWindowAndMakesTheIDVisibleFirst(t *testing.T) {
 	c, runner, sessions, _, _, events := openComposerFixture(t, 2)
-	job, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Line: "sleep 0.4; echo late", Window: 100 * time.Millisecond})
+	job, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 2, Line: "sleep 0.4; echo late", Window: 100 * time.Millisecond})
 	if err != nil || job.Terminal() || !job.Async || job.ExecID == "" || job.Gen != 2 {
 		t.Fatalf("converted job = %+v, %v", job, err)
 	}
-	if len(runner.hands) == 0 || !strings.HasPrefix(runner.hands[0], job.ExecID+"|") || !strings.Contains(runner.hands[0], "still running") {
+	if len(runner.hands) == 0 || !strings.HasPrefix(runner.hands[0], job.ExecID+"|") || !strings.Contains(runner.hands[0], "ran past") {
 		t.Fatalf("the id was not visible in the pending input: %v", runner.hands)
 	}
 	select {
@@ -177,7 +192,7 @@ func TestComposerExecConvertsPastTheWindowAndMakesTheIDVisibleFirst(t *testing.T
 	}
 
 	// The close cascade: stopping the lead's jobs stops a composer job.
-	long, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Line: "sleep 30", Window: 100 * time.Millisecond})
+	long, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 2, Line: "sleep 30", Window: 100 * time.Millisecond})
 	if err != nil || long.Terminal() {
 		t.Fatalf("long job = %+v, %v", long, err)
 	}
@@ -189,7 +204,46 @@ func TestComposerExecConvertsPastTheWindowAndMakesTheIDVisibleFirst(t *testing.T
 	}
 	// A stale open generation is refused at launch.
 	runner.target.Owner.Gen = 1
-	if _, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Line: "echo stale", Window: time.Second}); err == nil || !strings.Contains(err.Error(), "reopened") {
+	if _, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 2, Line: "echo stale", Window: time.Second}); err == nil || !strings.Contains(err.Error(), "reopened") {
 		t.Fatalf("stale generation launch = %v", err)
 	}
+}
+
+// TestComposerExecGenerationInterleavingsFromZero: a submission acknowledged
+// under open generation 0 never runs on the generation a close and revival
+// produced, whichever side of the launch the revival lands on: before the
+// binding reads the runner, or between that read and the job's registration.
+func TestComposerExecGenerationInterleavingsFromZero(t *testing.T) {
+	t.Run("revived before the binding reads the runner", func(t *testing.T) {
+		c, runner, _, _, _, _ := openComposerFixture(t, 0)
+		jobs, _ := c.hosted.List("lead")
+		before := len(jobs)
+		runner.target.Owner.Gen = 1 // closed and revived after the route read 0
+		_, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 0, Line: "echo never", Window: time.Second})
+		if err == nil || !strings.Contains(err.Error(), "reopened") {
+			t.Fatalf("launch on a revived generation = %v", err)
+		}
+		if jobs, _ := c.hosted.List("lead"); len(jobs) != before {
+			t.Fatalf("a job exists for the stale submission: %d -> %d", before, len(jobs))
+		}
+	})
+	t.Run("revived between the read and the registration", func(t *testing.T) {
+		c, _, sessions, _, root, _ := openComposerFixture(t, 0)
+		marker := filepath.Join(root, "ran")
+		sessions.afterOwner = func(call int) {
+			if call == 1 { // the launch's first read; the revival lands right after it
+				sessions.mu.Lock()
+				sessions.gen = 1
+				sessions.mu.Unlock()
+			}
+		}
+		_, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 0, Line: "touch " + marker, Window: time.Second})
+		if err == nil || !strings.Contains(err.Error(), "reopened") {
+			t.Fatalf("launch across the revival = %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
+		if _, statErr := os.Stat(marker); statErr == nil {
+			t.Fatal("the command ran on the revived generation")
+		}
+	})
 }
