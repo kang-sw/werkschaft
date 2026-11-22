@@ -574,7 +574,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T01:14:36Z"
+        "touched_at": "2026-11-22T01:17:10Z",
+        "impl": {
+          "branch": "impl/develop/june-cut-saved"
+        }
       }
     },
     "261122-feat-ws-companion-director": {
