@@ -1,6 +1,9 @@
 package wsdashboard
 
-import "net/http"
+import (
+	"html/template"
+	"net/http"
+)
 
 // themeCookie is the browser cookie holding the gear menu's theme choice:
 // "light" or "dark". No cookie means auto, the page following the OS. The
@@ -20,4 +23,18 @@ func requestTheme(r *http.Request) string {
 		return c.Value
 	}
 	return ""
+}
+
+// firstPaintStyle returns an inline <style> block placed early in <head>
+// so the shell and every framed page paint their theme background and
+// matching color-scheme before external stylesheets load. Without it, a
+// freshly loaded dark-theme iframe paints an opaque white canvas while its
+// linked stylesheets are still uncached.
+func firstPaintStyle() template.HTML {
+	return template.HTML(`<style id="ws-first-paint">` +
+		`html{background:var(--wb-bg,` + themeColorLight + `);color-scheme:light dark}` +
+		`@media(prefers-color-scheme:dark){html:not([data-theme="light"]){background:var(--wb-bg,` + themeColorDark + `)}}` +
+		`html[data-theme="dark"]{background:var(--wb-bg,` + themeColorDark + `);color-scheme:dark}` +
+		`html[data-theme="light"]{color-scheme:light}` +
+		`</style>`)
 }

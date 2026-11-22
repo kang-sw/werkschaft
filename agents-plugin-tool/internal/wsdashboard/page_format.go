@@ -89,7 +89,8 @@ func pageFuncs(lang string, icons map[string]bool) template.FuncMap {
 		"langs": wsi18n.Languages,
 		"i18n":  func() template.JS { return wsi18n.ScriptExcept(lang, "js.settings.") },
 		// pwa is a page head's manifest link and theme-color metas (pwa.go).
-		"pwa": pwaHead,
+		"pwa":        pwaHead,
+		"firstPaint": firstPaintStyle,
 		// repoURL is the Settings footer's link to the ws repository.
 		"repoURL": func() string { return "https://github.com/" + releaseRepository },
 		// guideshot is a landing guide step's screenshot (landing_guide.go).

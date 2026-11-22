@@ -29,12 +29,12 @@ var findingTmpl = template.Must(template.New("finding").Parse(`<!DOCTYPE html>
 {{.PWA}}
 <title>{{.Finding}}</title>
 <style>
-:root{color-scheme:light dark;--bg:#fff;--fg:#1f2328;--dim:#656d76}
-@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0d1117;--fg:#e6edf3;--dim:#8b949e}}
-:root[data-theme=dark]{color-scheme:dark;--bg:#0d1117;--fg:#e6edf3;--dim:#8b949e}
+:root{color-scheme:light dark;--bg:` + themeColorLight + `;--fg:#1f2328;--dim:#656d76}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:` + themeColorDark + `;--fg:#e6edf3;--dim:#8b949e}}
+:root[data-theme=dark]{color-scheme:dark;--bg:` + themeColorDark + `;--fg:#e6edf3;--dim:#8b949e}
 :root[data-theme=light]{color-scheme:light}
-html,body{height:100%;margin:0}
-body{display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif}
+html,body{height:100%;margin:0;background:var(--bg)}
+body{display:flex;align-items:center;justify-content:center;color:var(--fg);font:15px system-ui,sans-serif}
 #finding{display:flex;align-items:center;gap:12px;color:var(--dim)}
 .spin{width:18px;height:18px;border:2px solid var(--dim);border-top-color:transparent;border-radius:50%;animation:s 1s linear infinite}
 @keyframes s{to{transform:rotate(360deg)}}
