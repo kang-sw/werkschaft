@@ -944,23 +944,23 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "cron",
-			"description": `Schedule prompts for yourself. Each time a schedule's cron expression matches, the daemon sends its prompt to this session as a message wrapped in a cron envelope that carries the schedule's id, name, and the matched minute (at), the way a user message arrives wrapped in its own envelope. Hosted lead sessions only: a worker, a plain CLI session, and a connection the dashboard does not host are refused. The arguments are mutually exclusive: none lists your schedules, each as {id, name, expr, tz, next_at, last_at, pending, dropped}; add {name, expr, prompt, tz?} registers one and returns {id, next_at}; delete takes a schedule id or name. A name is unique within your session and an add never overwrites, so to change a schedule delete it, then add it again. expr is standard 5-field Linux cron (minute hour day-of-month month day-of-week): lists, ranges, steps, JAN-DEC and SUN-SAT names, 0 or 7 for Sunday, and the day-of-month/day-of-week OR rule when both are restricted (a field starting with * counts as unrestricted); or @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly. @reboot, a seconds field, and an expression that can never fire (such as February 30) are refused. tz is UTC, Z, or a fixed offset +HH:MM or -HH:MM from -12:00 to +14:00, and defaults to UTC whatever the host's own zone; zone names and daylight saving are not supported. A fire reaches you as your next turn's input and never interrupts a running turn. At most one fire per schedule waits at a time: a fire that finds the previous one still undelivered is dropped and counted in dropped, and pending is true while a fire waits. Fires missed while the daemon was down or the machine slept are skipped, not caught up. At most 32 schedules per session and 16 KiB per prompt. Schedules survive a daemon restart and are removed when the session is deleted or expires. Text by default; format=json for structured output.`,
+			"description": `Schedule prompts for yourself: when a cron expression matches, the daemon sends the prompt to this session as a cron envelope. Hosted lead sessions only. No arguments lists; add {name, expr, prompt, tz?}; delete takes an id or name. Names are unique. expr: 5-field cron (lists, ranges, steps, names, 7 = Sunday; day-of-month and day-of-week OR when both restricted) or @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly; @reboot and never-firing forms are refused. tz: UTC, Z or +HH:MM/-HH:MM (-12:00 to +14:00), default UTC. A fire arrives as your next turn; while one waits, further fires are dropped. Fires missed while down are skipped, not caught up. 32 schedules per session, 16 KiB a prompt; kept across restarts.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"session_key": stringProperty(sessionKeyPropertyDescription + " Accepted for convenience; the schedule always belongs to the calling session."),
+					"session_key": stringProperty("Ignored."),
 					"add": map[string]any{
 						"type":        "object",
-						"description": "Register a schedule. Mutually exclusive with delete.",
+						"description": "Register a schedule.",
 						"properties": map[string]any{
-							"name":   stringProperty("Unique within your session; at most 64 characters, no control characters, and not of the form cron- followed by hex (that is the id form)."),
-							"expr":   stringProperty("5-field cron expression or a macro such as @daily."),
-							"prompt": stringProperty("The message delivered at each match; at most 16 KiB."),
-							"tz":     stringProperty("UTC, Z, or a fixed offset +HH:MM / -HH:MM (-12:00 to +14:00). Default UTC."),
+							"name":   stringProperty("Unique in your session, 64 characters at most."),
+							"expr":   stringProperty("5-field cron or a macro."),
+							"prompt": stringProperty("Message delivered at each match."),
+							"tz":     stringProperty("UTC, Z or +HH:MM/-HH:MM. Default UTC."),
 						},
 						"required": []string{"name", "expr", "prompt"},
 					},
-					"delete": stringProperty("Delete the schedule with this id or name. Mutually exclusive with add."),
+					"delete": stringProperty("Schedule id or name to delete."),
 					"format": stringProperty(formatPropertyDescription),
 				},
 			},
