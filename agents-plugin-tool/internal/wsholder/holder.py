@@ -973,6 +973,11 @@ class Holder:
         # Lines dropped in intervals whose fence reached no daemon; the next
         # delivered fence reports them as lost_before.
         self.tee_carry = 0
+        # The first sequence of a kept run whose last record so far is a cut
+        # line's head (partial): the run is fenced only once the line ends,
+        # because a daemon maps whole lines and an anchor or a through on a
+        # cut record names a sequence no line carries.
+        self.tee_run_first = 0
         self.cond = threading.Condition()
         self.attachment: Attachment | None = None
         self.child = None
@@ -1401,7 +1406,8 @@ class Holder:
                     self._append_run(stream, run)
                     run = []
                 self._audit_tee(data, at)
-            if skipped and self.ring_pulse is not None:
+            # The pulse is a line of its own: never inside a cut line.
+            if skipped and self.ring_pulse is not None and not marked[-1][2]:
                 now = time.monotonic()
                 if now - self.ring_pulse_at >= self.ring_pulse_seconds:
                     run.append((self.ring_pulse, False))
@@ -1412,11 +1418,19 @@ class Holder:
 
     def _append_run(self, stream: str, run) -> None:
         """Append consecutive kept pieces and fence the interval before them
-        (called with cond held)."""
-        first = last = 0
+        (called with cond held). A run ending in a cut line's head waits for
+        the line's end: no line ends inside it, so no skipped line can follow
+        it before the line's rest, and the fence names whole lines only."""
+        first = self.tee_run_first
+        last = 0
+        partial = False
         for data, partial in run:
             last = self.ring.append("output", stream, data, partial).seq
             first = first or last
+        if partial:
+            self.tee_run_first = first
+            return
+        self.tee_run_first = 0
         self._audit_fence(first, last)
 
     def _audit_tee(self, data: bytes, at: int) -> None:

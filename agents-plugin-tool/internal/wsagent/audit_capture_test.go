@@ -466,6 +466,43 @@ func TestAuditLateTeesCoalesceAndAFenceReopensTheStream(t *testing.T) {
 // attaches before the process is listed, and capture still learns of the
 // attach (Manager.AuditAttach), so the ring-skipped deltas are assembled.
 func TestAuditRealHolderAttachReachesCapture(t *testing.T) {
+	lines := []string{thinkStart, thinkBlock, thinkDelta("real "), thinkDelta("holder"), thinkStop, thinkLine, auditResultLine}
+	sink := runRealHolderCapture(t, lines, 5)
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if th[0].Out != "real holder" || th[0].Meta[wsaudit.MetaIncomplete] != nil {
+		t.Fatalf("thinking = %+v, want the teed deltas from the real holder", th[0])
+	}
+	if loss := find(sink.events(), isLoss); len(loss) != 0 {
+		t.Fatalf("loss = %+v", loss)
+	}
+}
+
+// TestAuditRealHolderLineCutAcrossReads pins the fence of a kept line longer
+// than one holder record that reaches the holder in two reads: the head is
+// a cut record no daemon line carries, so the holder fences the run only
+// when the line ends. A fence anchored on the head would leave its interval
+// waiting for a line that never maps, and the bounded wait would close the
+// tee stream with a false loss.
+func TestAuditRealHolderLineCutAcrossReads(t *testing.T) {
+	long := `{"type":"assistant","message":{"id":"msg_1","content":[{"type":"text","text":"FILL"}]}}`
+	lines := []string{thinkStart, thinkBlock, "SPLIT" + long, thinkDelta("after "), thinkDelta("the cut"), thinkStop, thinkLine, auditResultLine}
+	sink := runRealHolderCapture(t, lines, 6)
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if th[0].Out != "after the cut" || th[0].Meta[wsaudit.MetaIncomplete] != nil {
+		t.Fatalf("thinking = %+v, want the deltas teed after the cut line", th[0])
+	}
+	if loss := find(sink.events(), isLoss); len(loss) != 0 {
+		t.Fatalf("loss = %+v", loss)
+	}
+}
+
+// runRealHolderCapture runs lines through a real holder.py with the Claude
+// lead's ring skip under capture, and waits for kept display lines and one
+// thinking event. A line prefixed SPLIT has its FILL replaced by 1.5 MiB,
+// over one record of the lead's ring (1 MiB), and is written in two writes
+// 300ms apart, so the holder cuts it and reads the cut head in its own chunk.
+func runRealHolderCapture(t *testing.T, lines []string, kept int) *memSink {
+	t.Helper()
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("no python3")
@@ -482,8 +519,7 @@ func TestAuditRealHolderAttachReachesCapture(t *testing.T) {
 	p := newStreamProcess(mapper, claudeProtocol{})
 	p.prepareAudit(StartSpec{audit: &auditTap{Session: wsaudit.Session{ID: "s1", Class: wsaudit.SessionHostedLead}, Sink: sink}}, mapper)
 	h := &holderChild{host: ManagerHost{m}, table: &table, session: holderSession{Kind: holderKindLead, ReplyID: "s1"}, ringSkip: claudeRingSkip}
-	lines := []string{thinkStart, thinkBlock, thinkDelta("real "), thinkDelta("holder"), thinkStop, thinkLine, auditResultLine}
-	script := "import sys\nfor l in sys.argv[1:]:\n    sys.stdout.write(l + '\\n')\n    sys.stdout.flush()\nsys.stdin.read()\n"
+	script := "import sys, time\nfor l in sys.argv[1:]:\n    if l.startswith('SPLIT'):\n        l = l[5:].replace('FILL', 'x' * (3 << 19))\n        h = len(l) * 3 // 4\n        sys.stdout.write(l[:h])\n        sys.stdout.flush()\n        time.sleep(0.3)\n        l = l[h:]\n    sys.stdout.write(l + '\\n')\n    sys.stdout.flush()\nsys.stdin.read()\n"
 	cmd := exec.Command(python, append([]string{"-c", script}, lines...)...)
 	if err := h.start(p, cmd); err != nil {
 		t.Fatalf("start: %v", err)
@@ -500,15 +536,9 @@ func TestAuditRealHolderAttachReachesCapture(t *testing.T) {
 			}
 		}
 	}()
-	waitUntil(t, "the kept lines", func() bool { mu.Lock(); defer mu.Unlock(); return ended == 5 })
+	waitUntil(t, "the kept lines", func() bool { mu.Lock(); defer mu.Unlock(); return ended >= kept })
 	waitUntil(t, "the assembled thinking", func() bool { return len(find(sink.events(), ofKind(wsaudit.KindThinking))) == 1 })
-	th := find(sink.events(), ofKind(wsaudit.KindThinking))
-	if th[0].Out != "real holder" || th[0].Meta[wsaudit.MetaIncomplete] != nil {
-		t.Fatalf("thinking = %+v, want the teed deltas from the real holder", th[0])
-	}
-	if loss := find(sink.events(), isLoss); len(loss) != 0 {
-		t.Fatalf("loss = %+v", loss)
-	}
+	return sink
 }
 
 // TestAuditFenceAheadOfItsAnchorLineWaitsForIt pins the other wire order:
