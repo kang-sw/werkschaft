@@ -75,7 +75,9 @@ type ImportResult struct {
 // completion marker. After it returns nil, SQLite owns the bundled stores and
 // a later Stage, fence or Commit leaves them alone. A commit whose pass finds
 // a fenced file unfenced again fails with ErrFenceInvalidated and changes
-// nothing; the caller stages and fences again. A pass that cannot read a
+// nothing; the caller stages and fences again. An unreadable hooks config
+// refuses the cutover (ErrRemovalUnreadable) ahead of either fence error,
+// since no fence can publish it. A pass that cannot read a
 // bundled file for a transient reason fails with ErrLegacyUnread and changes
 // nothing; the caller retries.
 func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, error) {
@@ -99,6 +101,14 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 		if res.Stage, err = s.stagePass(ctx, tx, attempt); err != nil {
 			return err
 		}
+		if hooks, err := unreadableRemoval(ctx, tx); err != nil {
+			return err
+		} else if hooks != "" {
+			// Its bytes can never be published at the new input path, so
+			// nothing is imported and the legacy file is kept. Ahead of a
+			// pending or invalidated fence: applying it again cannot help.
+			return s.refuseCutover(ctx, tx, fmt.Errorf("%w: %s", ErrRemovalUnreadable, hooks))
+		}
 		if len(res.Stage.Unfenced) > 0 {
 			return fmt.Errorf("%w: %s", ErrFenceInvalidated, strings.Join(res.Stage.Unfenced, ", "))
 		}
@@ -106,13 +116,6 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 			// A fence invalidated and re-staged earlier still has to land
 			// before the legacy path stops being writable authority.
 			return fmt.Errorf("%w: %s", ErrFencePending, strings.Join(res.Stage.Pending, ", "))
-		}
-		if hooks, err := unreadableRemoval(ctx, tx); err != nil {
-			return err
-		} else if hooks != "" {
-			// Its bytes can never be published at the new input path, so
-			// nothing is imported and the legacy file is kept.
-			return s.refuseCutover(ctx, tx, fmt.Errorf("%w: %s", ErrRemovalUnreadable, hooks))
 		}
 		if len(res.Stage.Unread) > 0 {
 			// Importing it as invalid would lose the record or setting for

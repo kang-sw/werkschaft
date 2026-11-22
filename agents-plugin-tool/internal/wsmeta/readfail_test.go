@@ -455,3 +455,41 @@ func TestUnreadableOriginalRefusesTheCutover(t *testing.T) {
 		}
 	})
 }
+
+// A hooks config made unreadable for good after its removal fence is a
+// cutover refusal, not a fence the caller can apply again: Commit reports
+// ErrRemovalUnreadable (interrupted) ahead of the pending or invalidated
+// fence, on every attempt.
+func TestUnreadableRemovalOutranksAPendingFence(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	prev := classifyReadError
+	classifyReadError = func(err error) readClass {
+		if errors.Is(err, errACLDenied) {
+			return classStable
+		}
+		return classTransient
+	}
+	t.Cleanup(func() { classifyReadError = prev })
+	denied := false
+	s := openTest(t, dir, failingReads(dir, &denied, errACLDenied, fenceHooks))
+	mustStage(t, s)
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatal(err)
+	}
+	put(t, dir, fenceHooks, hooksBytes)
+	denied = true
+	for i := 0; i < 2; i++ {
+		_, err := s.Commit(ctx, testCommit())
+		if !errors.Is(err, ErrRemovalUnreadable) || !errors.Is(err, ErrCutoverInterrupted) {
+			t.Fatalf("commit %d = %v, want ErrRemovalUnreadable and ErrCutoverInterrupted", i+1, err)
+		}
+		mustStage(t, s)
+	}
+	if got := readRel(t, dir, fenceHooks); got != hooksBytes {
+		t.Fatalf("legacy hooks config = %q, want it kept", got)
+	}
+	if done, err := s.ImportComplete(ctx); err != nil || done {
+		t.Fatalf("import complete = %v, %v", done, err)
+	}
+}
