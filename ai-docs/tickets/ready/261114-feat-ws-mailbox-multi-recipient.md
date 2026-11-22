@@ -1,5 +1,9 @@
 ---
 title: "공개 To/CC와 비공개 BCC를 지원하는 명시적 mailbox 다중 수신자 발송"
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-completeness-reviewed: e879ecc845e23815
+sage-review-design-reviewed: e879ecc845e23815
 ---
 
 # Explicit mailbox multi-recipient sends with public To/CC and hidden BCC
@@ -18,6 +22,9 @@ Existing routing, ordinary envelope queues and per-session history remain the su
 - **Compatibility: T0, additive arguments only.** Retain the current mailbox store and envelope shapes, including ordinary history records. No new store fields, shared-message object, schema-version change, protocol change or grouped-history replacement belongs to this feature.
 - **Owner correction: no schema-check or old-daemon guidance.** The daemon serves the tool list; a session that sees `cc` already sees the new daemon's tool surface. Reject the source report's proposed capability-probing instruction, old-daemon argument fallback and additional schema-discovery gate.
 - **Header placement after the peer-lead note (lead, 2026-11-22).** A top-level lead's send stamps a peer-lead note as the body's first line (`internal/mcp/mailbox_tools.go#L91-L93`), and the dashboard recognizes that note only on the first line (`internal/wsdashboard/conversation_presentation.go#L69`). Insert the generated public To/CC header after that note line and before the supplied body, so the note stays first. A send without the note puts the header first. Copies of a scalar-`to` send with no CC or BCC carry no header, so existing single-recipient bodies stay byte-identical.
+- **Raw body on fan-out (lead, 2026-11-22).** The scalar path trims content through `stringArg` (`internal/mcp/mailbox_tools.go#L37-L47`, `session_state.go#L899-L915`). For a fan-out send (array To, CC or BCC), validate that content is non-empty after trimming, then deliver the supplied bytes unchanged after the generated header. Legacy scalar sends keep the existing trimmed path.
+- **Existing leading note (lead, 2026-11-22).** `stampPeerLeadNote` returns content unchanged when it already starts with a peer-lead note, including one from the other product (`mailbox_tools.go#L668-L692`). Treat such a recognized leading note as the note line. Every copy then carries exactly one note, then the public header, then the rest of the message.
+- **Mixed outcomes (lead, 2026-11-22).** Enqueue each destination independently, so one recipient's routing or enqueue failure neither rolls back nor stops the other copies, their history entries or their wakes. Today one shared `Store.Update` error discards every staged copy (`wsmailbox/memstore.go#L300-L314`), and the error path drops the success payload (`server_util.go#L98-L128`). A fan-out call returns a sender-facing text receipt that lists the delivered recipients and each failed recipient with its error. When every destination fails, it returns a tool error that carries the same list. This is response text only, not a persisted batch protocol. Scalar responses stay unchanged.
 - **Rollback sentence location (lead, 2026-11-22).** `ai-docs/manuals/ws-mcp.md` has no separate rollback runbook. Put the settled sentence in its `### Daemon replacement and process ownership` section, the section that governs daemon swaps. Do not create a rollback procedure; `261115-feat-ws-dev-daemon-accepted-build-recovery` owns that.
 - **Only residual rollback instruction:** add one line to the rollback runbook: "After rolling back the daemon, terminal sessions refresh their tool list." This is not a new feature-negotiation procedure or a release-time approval gate.
 
@@ -59,7 +66,10 @@ Verification:
 
 - Existing scalar To addressing still routes correctly. Array To, CC and BCC reach their explicit destinations through independent ordinary copies, including supported named-address/reply-ID routes.
 - A top-level lead's multi-recipient send keeps the peer-lead note on the first line, followed by the public To/CC header and then the body, and the dashboard still recognizes the note. A scalar send with no CC or BCC produces the same body as before.
-- Every delivered copy shows the generated public To/CC header and original message body, while no co-recipient can recover the BCC list from its received envelope/body/history or dashboard rendering.
+- Every delivered copy of a multi-recipient send (array To, CC or BCC) shows the generated public To/CC header and original message body, while no co-recipient can recover the BCC list from its received envelope/body/history or dashboard rendering.
+- A fan-out send preserves the supplied body bytes, including leading indentation and trailing whitespace, after the header. A scalar send keeps today's trimmed body.
+- Forwarding content that already starts with a peer-lead note, from either product, yields one note, then the public header, then the message, and the dashboard still recognizes the note.
+- With one failing destination among several, the successful copies are enqueued, recorded in history and woken. The sender's receipt lists delivered and failed recipients, and an all-failed call returns a tool error with that list.
 - Receiving one copy leaves other recipients' copies intact. Existing sender/reply identity, queue/drain and per-session history behavior remain functional.
 - Store/envelope serialization remains unchanged and no schema-version bump is introduced. Existing body-based host delivery renders the public audience without a new adapter metadata contract.
 - The advertised arguments match `to: string | string[]`, optional `cc: string[]`, optional `bcc: string[]`; no all-peers selector is added.
