@@ -251,3 +251,82 @@ Decisions:
 - Left open (minor): rejoin of a parentless, profile-created agy worker with a
   live holder is not covered by a test. Such a record opens no turn, so only
   the settlement branch differs from the covered case.
+
+#### Edition (b81d94e34) - 2026-11-22
+
+The pre-merge codex review of `2bafac925..d6983408b` came back fix-needed.
+The lead settled each item; `b81d94e34` fixes them.
+
+1. **Rejoin ownership (important).** The first version stopped a lead-only
+   worker's holder by its stored `HolderID` alone. Now a held agy worker is
+   attached only for the ownership match every held worker passes
+   (`checkReattach`, `workerHolderMatches`: role, backend, reply ID,
+   directory, capability, child PID). Replay, events, and the MCP bearer stay
+   closed during that attach. Only a matching holder is stopped
+   (`retireLeadOnlyWorker`). A mismatched holder, a hosted lead's holder, or
+   an already rejected one (`isRejected`) is never stopped: it goes through
+   the existing mismatch path, and the record still shows the agy reason.
+   The match needs the child PID, which only an attached holder reports, so
+   the existing gated attach is reused.
+2. **One admission (important).** `admitWorkerBackend` gives both the
+   decision and the text for spawn resolution (`registeredWorker`), create,
+   wake and rejoin (`admitWorkerRecord`), and the tier listing
+   (`workerHarnesses`, `unusableHarnessError`).
+3. **Wake before profile (important).** `startProcess` and `Deliver` admit on
+   the record's immutable backend and lead flag before resolving the
+   profile. A removed profile, or one that now names another backend or a
+   lead, no longer masks the agy reason or fails the turn.
+4. **Expiry.** A lead-only retirement stamps `LastActiveAt`, so the refused
+   record lasts one full child expiry interval with its reason visible.
+   Normal expiry is unchanged.
+5. **Reason after restart (minor).** `State.Error` derives the agy reason
+   from the record's backend on every load, with no stored field.
+6. **Test descriptions (minor).** The Result's "adapter-level fixture"
+   wording was inaccurate. The tests that call the real `Runner.AgentSpawn`
+   or the MCP surface with a synthetic worker-capable agy registration go
+   through public entry points:
+   - `agy_worker_test.go` (`TestAgyWorkerLaunchApprovalAndResume` and
+     related tests);
+   - `workerRecoveryHarness` and `spawnHeldRecoveryWorker` in
+     `worker_holder_recovery_test.go`;
+   - `TestHostedAgyAgentTiersUsesDescriptorHarness`.
+
+   They are kept as tests of the agy worker adapter, the holder, and the MCP
+   surface under a worker-capable registration the daemon no longer ships.
+   They are not shipped-posture tests: refusals under the shipped
+   registration are asserted in `agy_lead_only_test.go`. Added
+   `TestHostedAgyLeadSpawnsACodexWorker`: a hosted agy lead's `agent_spawn`
+   of `codex.small` reaches a fake runner as the agy lead's own request and
+   succeeds.
+
+Tests added to `agy_lead_only_test.go`:
+- `TestAgyWorkerRejoinNeverStopsAHolderThatFailsOwnership`: foreign
+  directory, lead holder, and rejected holder. In each case nothing is
+  stopped and the agy reason shows.
+- `TestAgyWorkerRetirementRestartsTheExpiryClock`: an idle worker whose last
+  activity is older than the interval survives the next sweep.
+- `TestAgyWorkerRefusalReasonSurvivesARestart`: a parentless worker and an
+  idle parented one each keep the reason after retire and restart.
+- `TestAgyWorkerRecordRefusalIgnoresItsProfile`: removed profile, profile on
+  another backend, and profile now a lead.
+
+The parentless restart case also closes the Result's left-open minor (rejoin
+of a parentless worker). `ai-docs/manuals/ws-mcp.md` now describes the
+ownership-matched rejoin, the record-first admission, and the expiry stamp.
+
+Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+- `go test ./internal/wsagent -run 'Agy|Agent|Worker|Held|Tier|Lead|Spawn|Child|REST|Registration|Wake|Deliver|Rejoin|Codex|Expir|Ownership|Downgrade|Reattach|Recovery'`:
+  ok (83.8s).
+- `go test ./internal/mcp -run 'TestHostedAgy|DashboardTierRouting|AgentTiers|TestAgentLead|TestAgyWorkerConnection'`:
+  ok.
+- `go vet ./internal/wsagent ./internal/mcp`: clean. gofmt is clean on the
+  touched files.
+- Mutation checks: each of the following fails its new test:
+  - removing the rejected-holder guard;
+  - retiring before the ownership match;
+  - removing the `startProcess` record admission;
+  - removing the retirement stamp;
+  - removing the load derivation.
+- One run of the earlier, narrower filter timed out once in
+  `TestAgyModelWaitWatchdogPublishesExhaustionToHostedLeadConversation`. It
+  passed three times in isolation and in the broad run above.
