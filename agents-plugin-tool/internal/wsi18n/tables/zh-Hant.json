@@ -517,6 +517,7 @@
   "js.board.filter.wait": "等待中",
   "js.board.filter.closed": "已關閉",
   "js.board.filter.cards": "卡片",
+  "js.board.filter.tickets": "未完成工單",
   "js.board.hold.pill": "看板更新",
   "js.board.hold.pull": "在目前位置套用變更",
   "js.board.hold.pill.title": "返回頂部",

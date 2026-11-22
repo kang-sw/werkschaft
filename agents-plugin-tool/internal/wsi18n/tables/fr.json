@@ -517,6 +517,7 @@
   "js.board.filter.wait": "En attente",
   "js.board.filter.closed": "Fermés",
   "js.board.filter.cards": "Cartes",
+  "js.board.filter.tickets": "Tickets ouverts",
   "js.board.hold.pill": "Mises à jour du tableau",
   "js.board.hold.pull": "Appliquer les modifications sur place",
   "js.board.hold.pill.title": "Retour en haut",

@@ -517,6 +517,7 @@
   "js.board.filter.wait": "待機中",
   "js.board.filter.closed": "終了",
   "js.board.filter.cards": "カード",
+  "js.board.filter.tickets": "未完了チケット",
   "js.board.hold.pill": "ボード更新",
   "js.board.hold.pull": "位置を保って変更を反映",
   "js.board.hold.pill.title": "一番上へ戻る",

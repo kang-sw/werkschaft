@@ -147,16 +147,19 @@ func TestTopicTicketIcon(t *testing.T) {
 		"261112-refactor-gone": TicketDropped,
 		"261112-research-open": TicketReady,
 		"261112-chore-idea":    TicketIdea,
+		"261112-epic-plan":     TicketReady,
 	}
 	cases := []struct {
 		tickets string
 		live    bool
+		hasOpen bool
 	}{
-		{"261112-feat-live 261112-bug-shipped", true},
-		{"261112-chore-idea", true},
-		{"261112-bug-shipped 261112-refactor-gone", false},
-		{"261112-research-open", false},
-		{"261112-feat-missing", false},
+		{"261112-feat-live 261112-bug-shipped", true, true},
+		{"261112-chore-idea", true, true},
+		{"261112-epic-plan", false, true},
+		{"261112-bug-shipped 261112-refactor-gone", false, false},
+		{"261112-research-open", false, false},
+		{"261112-feat-missing", false, false},
 	}
 	for _, c := range cases {
 		st := &State{}
@@ -164,6 +167,9 @@ func TestTopicTicketIcon(t *testing.T) {
 		view := BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "r", Tickets: resolve})
 		if got := view.Topics[0].Live; got != c.live {
 			t.Errorf("%s: live = %v, want %v", c.tickets, got, c.live)
+		}
+		if got := view.Topics[0].HasOpenTickets; got != c.hasOpen {
+			t.Errorf("%s: HasOpenTickets = %v, want %v", c.tickets, got, c.hasOpen)
 		}
 		if got := topicTickets(st, "t"); !slices.Equal(got, strings.Fields(c.tickets)) {
 			t.Errorf("%s: stored tickets = %v", c.tickets, got)
@@ -183,7 +189,7 @@ func TestTopicTicketIcon(t *testing.T) {
 		t.Fatalf("badges = %+v", badges)
 	}
 	unknown := BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "r"}).Topics[0]
-	if len(unknown.Tickets) != len(want) || unknown.Live {
+	if len(unknown.Tickets) != len(want) || unknown.Live || unknown.HasOpenTickets {
 		t.Fatalf("no-resolver metadata = %+v", unknown)
 	}
 	for i, badge := range unknown.Tickets {
@@ -197,10 +203,19 @@ func TestTopicTicketIcon(t *testing.T) {
 	// elements follow (time, chips, or the note button).
 	tail := regexp.MustCompile(`<span class="dw wbtk">.*?</span></span></span></span>(?:<time class="tago"|<span class="chip|<button)`)
 	type row struct{ stem, status, group, text string }
-	check := func(t *testing.T, page string, rows []row, body bool) {
+	check := func(t *testing.T, page string, rows []row, body, hasOpen bool) {
 		t.Helper()
 		if glow.MatchString(page) {
 			t.Error("rendered a ticket-derived topic glow")
+		}
+		if got := strings.Contains(page, `data-open-tickets="true"`); got != hasOpen {
+			t.Errorf(`data-open-tickets="true" present = %v, want %v`, got, hasOpen)
+		}
+		if got := strings.Contains(page, `<span class="dw wbtk"><button type="button" class="dbtn open"`); got != hasOpen {
+			t.Errorf(`.dbtn.open present = %v, want %v`, got, hasOpen)
+		}
+		if !hasOpen {
+			wantAll(t, page, `<span class="dw wbtk"><button type="button" class="dbtn"`)
 		}
 		if n := strings.Count(page, `class="dw wbtk"`); n != 1 {
 			t.Fatalf("ticket icon count = %d, want 1", n)
@@ -229,16 +244,22 @@ func TestTopicTicketIcon(t *testing.T) {
 		name    string
 		tickets string
 		resolve fakeTickets
+		hasOpen bool
 		rows    []row
 	}{
-		{"resolved", "261112-feat-live 261112-bug-shipped 261112-refactor-gone 261112-chore-idea", resolve, []row{
+		{"resolved", "261112-feat-live 261112-bug-shipped 261112-refactor-gone 261112-chore-idea", resolve, true, []row{
 			{"261112-feat-live", "todo", "open", "Open · todo"},
 			{"261112-bug-shipped", "done", "done", "Done"},
 			{"261112-refactor-gone", "dropped", "dropped", "Dropped"},
 			{"261112-chore-idea", "idea", "open", "Open · idea"},
 		}},
-		{"missing", "261112-feat-missing", resolve, []row{{"261112-feat-missing", "unknown", "unknown", "Unknown"}}},
-		{"no-resolver", "261112-feat-live", nil, []row{{"261112-feat-live", "unknown", "unknown", "Unknown"}}},
+		{"research-only", "261112-research-open", resolve, false, []row{{"261112-research-open", "ready", "open", "Open · ready"}}},
+		{"done-dropped", "261112-bug-shipped 261112-refactor-gone", resolve, false, []row{
+			{"261112-bug-shipped", "done", "done", "Done"},
+			{"261112-refactor-gone", "dropped", "dropped", "Dropped"},
+		}},
+		{"missing", "261112-feat-missing", resolve, false, []row{{"261112-feat-missing", "unknown", "unknown", "Unknown"}}},
+		{"no-resolver", "261112-feat-live", nil, false, []row{{"261112-feat-live", "unknown", "unknown", "Unknown"}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := &State{}
@@ -253,7 +274,7 @@ func TestTopicTicketIcon(t *testing.T) {
 				}
 				for name, layout := range layouts() {
 					t.Run(name+state, func(t *testing.T) {
-						check(t, render(t, BuildView(st, ViewInput{Layout: layout, ReplyID: "r", Tickets: c.resolve})), c.rows, layout == LayoutFull)
+						check(t, render(t, BuildView(st, ViewInput{Layout: layout, ReplyID: "r", Tickets: c.resolve})), c.rows, layout == LayoutFull, c.hasOpen)
 					})
 				}
 				view := BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "r", Tickets: c.resolve})
@@ -261,20 +282,20 @@ func TestTopicTicketIcon(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				check(t, string(regions.Board), c.rows, true)
+				check(t, string(regions.Board), c.rows, true, c.hasOpen)
 				if closed {
 					page, err := RenderClosedTopics(BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "r", Tickets: c.resolve, Closed: &ClosedWindow{From: 0, N: 30}}))
 					if err != nil {
 						t.Fatal(err)
 					}
-					check(t, string(page), c.rows, true)
+					check(t, string(page), c.rows, true, c.hasOpen)
 				}
 			}
 			// Clearing the links removes the icon.
 			mustApply(t, st, `<wb:topic name="t" tickets=""/>`)
 			for name, layout := range layouts() {
-				if page := render(t, BuildView(st, ViewInput{Layout: layout, ReplyID: "r", Tickets: c.resolve})); strings.Contains(page, `class="dw wbtk"`) || strings.Contains(page, `href="#i-ticket"`) || strings.Contains(page, `data-ticket=`) {
-					t.Errorf("%s: a topic without tickets renders the ticket icon", name)
+				if page := render(t, BuildView(st, ViewInput{Layout: layout, ReplyID: "r", Tickets: c.resolve})); strings.Contains(page, `class="dw wbtk"`) || strings.Contains(page, `href="#i-ticket"`) || strings.Contains(page, `data-ticket=`) || strings.Contains(page, `data-open-tickets=`) {
+					t.Errorf("%s: a topic without tickets renders the ticket icon or open marker", name)
 				}
 			}
 		})

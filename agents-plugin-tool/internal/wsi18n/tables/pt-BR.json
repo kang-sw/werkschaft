@@ -517,6 +517,7 @@
   "js.board.filter.wait": "Aguardando",
   "js.board.filter.closed": "Fechados",
   "js.board.filter.cards": "Cartões",
+  "js.board.filter.tickets": "Tickets abertos",
   "js.board.hold.pill": "Atualizações do quadro",
   "js.board.hold.pull": "Aplicar alterações sem rolar",
   "js.board.hold.pill.title": "Voltar ao topo",

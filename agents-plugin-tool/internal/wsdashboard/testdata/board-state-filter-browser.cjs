@@ -7,8 +7,8 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
 const [base, control, output, reference] = process.argv.slice(2);
 // Eight operational topics, one legacy topic, and no research topics or
 // framework roots. The asks filter counts topics, not individual items.
-const values = ['all', 'asks', 'researching', 'discussing', 'waiting', 'implementing', 'awaiting-confirmation', 'closed', 'cards'];
-const labels = ['전체', '연구 중', '논의 중', '대기 중', '진행 중', '확인 대기', '종료', '카드'];
+const values = ['all', 'asks', 'researching', 'discussing', 'waiting', 'implementing', 'awaiting-confirmation', 'closed', 'cards', 'tickets'];
+const labels = ['전체', '연구 중', '논의 중', '대기 중', '진행 중', '확인 대기', '종료', '카드', '열린 티켓'];
 for (const address of [base, control]) {
   const u = new URL(address);
   assert(['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname));
@@ -77,7 +77,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         return route.continue();
       });
       tab = await context.newPage();
-      tab.on('pageerror', e => errors.push({ theme, message: e.message }));
+      tab.on('pageerror', e => errors.push({ theme, message: e.message, stack: e.stack }));
       async function settle() { await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))); }
       async function active() {
         await until(async () => {
@@ -103,7 +103,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           await tab.setViewportSize({ width: Math.round(tab.viewportSize().width + target - actual), height: 1000 });
         }
         await until(async () => Math.abs((await page.locator('.board-toolbar').boundingBox()).width - target) < 0.1, 'actual toolbar outer width ' + target);
-        await until(async () => await page.locator('.board-state-trigger').isVisible() === (target < 540), 'responsive presentation at actual width ' + target);
+        await until(async () => await page.locator('.board-state-trigger').isVisible() === (target < 600), 'responsive presentation at actual width ' + target);
         measurements.push({ theme, requestedToolbarWidth: target, viewport: tab.viewportSize(), outer: await page.locator('.board-toolbar').boundingBox(), inline: await page.locator('.board-state-inline').isVisible(), selected: await page.locator('.board-state-radio[aria-checked="true"]').getAttribute('data-filter') });
         write('measurements', measurements);
       }
@@ -130,11 +130,11 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         assert.deepEqual(await page.locator('.board-state-option:not([data-filter="asks"]) .board-state-count').allTextContents(), expected.map(String));
       }
       async function eligible(value) {
-        const nodes = await page.locator('section.topic[data-topic]').evaluateAll(nodes => nodes.map(n => ({ name: n.dataset.topic, state: n.dataset.state, closed: n.classList.contains('closed'), asks: n.dataset.openAsks === 'true', hidden: n.hasAttribute('data-state-filtered'), display: getComputedStyle(n).display })));
+        const nodes = await page.locator('section.topic[data-topic]').evaluateAll(nodes => nodes.map(n => ({ name: n.dataset.topic, state: n.dataset.state, closed: n.classList.contains('closed'), asks: n.dataset.openAsks === 'true', tickets: n.dataset.openTickets === 'true', hidden: n.hasAttribute('data-state-filtered'), display: getComputedStyle(n).display })));
         for (const n of nodes) {
           // 32dec7255 countTopics: Cards excludes every topic, including legacy
           // topics and topic-internal panels; only framework roots are eligible.
-          const visible = value !== 'cards' && (value === 'all' || (value === 'asks' ? n.asks : n.closed ? value === 'closed' : value !== 'closed' && n.state === value));
+          const visible = value !== 'cards' && (value === 'all' || (value === 'asks' ? n.asks : value === 'tickets' ? n.tickets : n.closed ? value === 'closed' : value !== 'closed' && n.state === value));
           assert.equal(n.hidden, !visible, 'eligibility ' + n.name + ' under ' + value);
           if (!visible) assert.equal(n.display, 'none');
         }
@@ -190,14 +190,14 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
             const layout = await page.locator('.board-toolbar').evaluate(n => ({
               outerWidth: n.getBoundingClientRect().width,
               containerWidth: n.firstElementChild.clientWidth,
+              fit: n.getAttribute('data-toolbar-fit') || '',
               labels: [...n.querySelectorAll('.board-action .board-label')].map(n => ({ text: n.textContent, visible: !!n.getClientRects().length }))
             }));
             measurements.push({ name: 'default-split-1440', lang, ...layout }); write('measurements', measurements);
             assert.equal(layout.labels.length, 5);
-            assert(layout.labels.every(n => n.visible), lang + ' default split retains every action label');
-            // The original 760px rule already wraps English at this width;
-            // preserve its labels while retaining Korean's single-row layout.
-            await geometry('default-split-1440-' + lang, lang === 'ko');
+            // Measured fitToolbar collapses action labels before wrapping at 804px
+            // split width once all 10 filter segments are inline; assert single-row inline geometry.
+            await geometry('default-split-1440-' + lang, true);
             await capture('filterlive-dark-1440' + (lang === 'en' ? '-en' : ''));
           }
           await context.addCookies([{ name: 'ws_dashboard_lang', value: 'ko', url: base }]);
@@ -210,17 +210,17 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         }
         await select('discussing');
         const inlineCurrent = () => page.locator('.board-state-radio[aria-checked="true"]');
-        for (const [key, value] of [['ArrowRight', 'waiting'], ['ArrowDown', 'implementing'], ['ArrowLeft', 'waiting'], ['ArrowUp', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'asks'], ['ArrowLeft', 'all'], ['ArrowRight', 'asks'], ['ArrowRight', 'researching'], ['Home', 'all'], ['ArrowLeft', 'cards'], ['ArrowUp', 'closed'], ['ArrowDown', 'cards'], ['ArrowRight', 'all'], ['End', 'cards'], ['ArrowDown', 'all'], ['ArrowUp', 'cards']]) {
+        for (const [key, value] of [['ArrowRight', 'waiting'], ['ArrowDown', 'implementing'], ['ArrowLeft', 'waiting'], ['ArrowUp', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'asks'], ['ArrowLeft', 'all'], ['ArrowRight', 'asks'], ['ArrowRight', 'researching'], ['Home', 'all'], ['ArrowLeft', 'tickets'], ['ArrowUp', 'cards'], ['ArrowLeft', 'closed'], ['ArrowRight', 'cards'], ['ArrowDown', 'tickets'], ['ArrowRight', 'all'], ['End', 'tickets'], ['ArrowDown', 'all'], ['ArrowUp', 'tickets']]) {
           await inlineCurrent().press(key);
           assert.equal(await inlineCurrent().getAttribute('data-filter'), value);
           assert.equal(await inlineCurrent().evaluate(n => document.activeElement === n), true);
           assert.equal(await page.evaluate(id => localStorage.getItem('ws.dashboard.cards.' + id + '.state-filter'), id), value);
         }
         await select('all');
-        await counts([closed + 9, 0, 2, 2, 2, 2, closed, 0]);
+        await counts([closed + 9, 0, 2, 2, 2, 2, closed, 0, 2]);
         assert.equal(await page.locator('section.topic.closed').count(), 30);
         assert.equal(await page.locator('.closed-more').getAttribute('data-closed-more'), String(closed - 30));
-        await page.locator('section.topic').evaluateAll(nodes => nodes.forEach(n => { n.filterOriginalNode = n; const f = n.querySelector('iframe'); if (f) n.filterOriginalFrame = f; }));
+        await page.locator('section.topic').evaluateAll(nodes => nodes.forEach(n => { n.filterOriginalNode = n; n.filterOriginalFrames = [...n.querySelectorAll('iframe')]; }));
         const order = await page.locator('section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic));
         for (const value of values) {
           await select(value); await eligible(value);
@@ -228,16 +228,16 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
           const shot = await capture(name);
           if (value === 'discussing' || value === 'all') await pair(name, shot, refs[`v1-${theme}-900`]);
           await geometry(name, true);
-          assert.equal(await page.locator('section.topic').evaluateAll(nodes => nodes.every(n => n.filterOriginalNode === n && (!n.filterOriginalFrame || n.querySelector('iframe') === n.filterOriginalFrame))), true, 'filter retains nodes and body iframes');
+          assert.equal(await page.locator('section.topic').evaluateAll(nodes => nodes.every(n => n.filterOriginalNode === n && n.filterOriginalFrames.every(f => f.isConnected && n.contains(f)))), true, 'filter retains nodes and body iframes');
         }
         await select('all');
         assert.deepEqual(await page.locator('section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic)), order, 'All restores original order');
         // Threshold uses the actual toolbar, not the browser viewport.
         await select('discussing');
         await page.locator('.board-state-radio[data-filter="discussing"]').focus();
-        await width(540); await counts([closed + 9, 0, 2, 2, 2, 2, closed, 0]);
+        await width(700); await counts([closed + 9, 0, 2, 2, 2, 2, closed, 0, 2]);
         assert.equal(await page.locator('.board-state-inline').isVisible(), true);
-        await capture(`${id}-${theme}-540-inline`);
+        await capture(`${id}-${theme}-700-inline`);
         await width(539);
         assert.equal(await page.locator('.board-state-trigger').evaluate(n => document.activeElement === n), true, 'focus transfers to pill');
         assert.equal(await page.locator('.board-state-trigger').getAttribute('data-filter'), 'discussing');
@@ -256,7 +256,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         let shot = await capture(`${id}-${theme}-539-open`);
         await pair(`${id}-${theme}-539-open`, shot, refs[`v2-${theme}-1280`]);
         const current = () => page.locator('.board-state-option[aria-checked="true"]');
-        for (const [key, value] of [['ArrowDown', 'waiting'], ['ArrowUp', 'discussing'], ['ArrowRight', 'waiting'], ['ArrowLeft', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'asks'], ['ArrowLeft', 'all'], ['ArrowRight', 'asks'], ['ArrowRight', 'researching'], ['End', 'cards'], ['ArrowUp', 'closed'], ['ArrowDown', 'cards'], ['ArrowRight', 'all'], ['ArrowLeft', 'cards'], ['Home', 'all'], ['ArrowUp', 'cards'], ['ArrowDown', 'all']]) {
+        for (const [key, value] of [['ArrowDown', 'waiting'], ['ArrowUp', 'discussing'], ['ArrowRight', 'waiting'], ['ArrowLeft', 'discussing'], ['ArrowUp', 'researching'], ['ArrowLeft', 'asks'], ['ArrowLeft', 'all'], ['ArrowRight', 'asks'], ['ArrowRight', 'researching'], ['End', 'tickets'], ['ArrowUp', 'cards'], ['ArrowDown', 'tickets'], ['ArrowRight', 'all'], ['ArrowLeft', 'tickets'], ['Home', 'all'], ['ArrowUp', 'tickets'], ['ArrowDown', 'all']]) {
           await current().press(key);
           assert.equal(await current().getAttribute('data-filter'), value);
           assert.equal(await current().evaluate(n => document.activeElement === n), true);
@@ -277,7 +277,7 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         assert.equal(await page.locator('.board-state-pop').isVisible(), false, 'outside click dismisses');
         await select('discussing');
         await page.locator('.board-state-trigger').focus();
-        await width(540);
+        await width(700);
         assert.equal(await page.locator('.board-state-radio[data-filter="discussing"]').evaluate(n => document.activeElement === n), true, 'focus returns to checked inline radio');
         await width(539);
         await width(360); await geometry(`${id}-${theme}-360`, false);
@@ -289,15 +289,15 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await until(async () => await page.locator('.board-state-trigger').getAttribute('data-filter') === 'discussing', 'per-session persistence');
         await eligible('discussing');
         await width(800); await select('waiting');
-        await update(id, 'transition', [closed + 9, 0, 4, 0, 2, 2, closed, 0]); await eligible('waiting');
+        await update(id, 'transition', [closed + 9, 0, 4, 0, 2, 2, closed, 0, 2]); await eligible('waiting');
         assert.equal(await page.locator('section.topic:not([data-state-filtered])').count(), 0, 'zero transition has no invented eligibility');
-        await select('discussing'); await update(id, 'close', [closed + 9, 0, 3, 0, 2, 2, closed + 1, 0]);
+        await select('discussing'); await update(id, 'close', [closed + 9, 0, 3, 0, 2, 2, closed + 1, 0, 2]);
         await eligible('discussing');
         await select('closed');
         const paging = tab.waitForResponse(r => new URL(r.url()).pathname === `/s/${id}/closed` && r.status() === 200);
         await page.locator('.closed-more').click(); await paging;
         await until(async () => await page.locator('section.topic.closed').count() > 30, 'real closed history appended');
-        await counts([closed + 9, 0, 3, 0, 2, 2, closed + 1, 0]); await eligible('closed');
+        await counts([closed + 9, 0, 3, 0, 2, 2, closed + 1, 0, 2]); await eligible('closed');
         await select('all');
         // Real scroll ownership differs for ordinary and saved-history boards.
         const scroll = await page.locator('#bcol').evaluate(b => {
@@ -340,13 +340,20 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
         await tab.keyboard.press('Enter');
         assert.equal(await page.locator('.board-overview').getAttribute('aria-pressed'), 'false', 'topic selection still exits Overview');
         assert.equal(await page.evaluate(() => document.activeElement.dataset.topic), filteredNames[0], 'topic selection expands selected eligible row');
-        checks.push({ theme, id, matrix: '800 all eight selected labels; 540 inline; 539 pop keyboard; 360 pill; reload; stream transition/close; real closed paging; floating; Overview' });
+        checks.push({ theme, id, matrix: '800 all ten filters; 700 inline; 539 pop keyboard; 360 pill; reload; stream transition/close; real closed paging; floating; Overview' });
       }
-      // Real rendered open check/policy/ack, assumed check, and answered check.
+      // Real rendered open check/policy/ack, assumed check, answered check, and open-ticket markers.
       await action('filterordinary', 'reset'); await load('filterordinary'); await width(800);
       for (const [name, expected] of [['discussing0', 'true'], ['discussing1', 'true'], ['waiting0', null], ['waiting1', 'true'], ['implementing0', null]]) {
         assert.equal(await page.locator(`section.topic[data-topic="${name}"]`).getAttribute('data-open-asks'), expected, name + ' rendered ask marker');
       }
+      for (const [name, expected] of [['discussing1', 'true'], ['archive034', 'true'], ['waiting0', null], ['implementing0', null]]) {
+        assert.equal(await page.locator(`section.topic[data-topic="${name}"]`).getAttribute('data-open-tickets'), expected, name + ' rendered open-tickets marker');
+      }
+      assert.equal(await page.locator('.board-state-radio[data-filter="tickets"] .board-state-icon use').getAttribute('href'), '#i-ticket');
+      assert.equal(await page.locator('.board-state-option[data-filter="tickets"] .board-state-icon use').getAttribute('href'), '#i-ticket');
+      await select('tickets'); await eligible('tickets');
+      assert.equal(await page.locator('.board-state-radio[data-filter="tickets"] .board-state-count').textContent(), '2');
       await select('asks'); await eligible('asks');
       assert.equal(await page.locator('.board-state-radio[data-filter="asks"] .board-state-count').textContent(), '3');
       await tab.reload(); await active();
@@ -359,7 +366,9 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
       await until(async () => await page.locator('.board-state-radio[data-filter="asks"] .board-state-count').textContent() === '1', 'answered asks recount');
       await eligible('asks');
       // Wide pin column uses real production pin actions and keeps hidden nodes.
-      await load('filterordinary'); await tab.setViewportSize({ width: 1900, height: 1000 }); await select('all');
+      await load('filterordinary'); await tab.setViewportSize({ width: 2800, height: 1000 });
+      await until(async () => await page.evaluate(() => document.documentElement.getAttribute('data-gal') === 'empty'), 'wide 4-column gallery slot ready');
+      await select('all');
       const pinTopic = page.locator('section.topic[data-topic="implementing0"]');
       const pin = pinTopic.locator('.tpin');
       await pin.click();
@@ -374,7 +383,9 @@ function alive(pid) { try { process.kill(pid, 0); return true; } catch (_) { ret
       await select('all');
       assert.deepEqual(await page.locator('#bgal section.topic').evaluateAll(nodes => nodes.map(n => n.dataset.topic)), pinOrder, 'All restores multi-pin order');
       await capture(`wide-pins-${theme}`);
-      await pin.click(); await secondPinTopic.locator('.tpin').click();
+      await secondPinTopic.locator('.tpin').click();
+      await until(async () => (await page.locator('#bgal .gal-dot').count()) === 2, 'second pin page removed');
+      await pin.click();
       assert.deepEqual(errors, [], 'no production page errors'); assert.deepEqual(unexpected, [], 'requests isolated to owned listeners');
       console.log(`PASS ${theme}: ${JSON.stringify(checks.filter(c => c.theme === theme))}; wide pin identity/order`);
       await context.close(); context = null;

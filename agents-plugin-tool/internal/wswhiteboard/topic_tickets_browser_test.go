@@ -29,11 +29,14 @@ func TestTopicTicketIconBrowser(t *testing.T) {
 	mustApply(t, st, `<wb:topic name="none" label="연관 티켓 없음"><wb:log>티켓 없이 기다리는 토픽</wb:log><wb:state value="waiting" on="exec:worker"/></wb:topic>`)
 	mustApply(t, st, `<wb:topic name="one" label="기록 접기 규칙(N개 로그 항목)" tickets="261114-feat-history-fold-rule"><wb:log>후속 작업을 티켓으로 미룸</wb:log><wb:state value="waiting" on="exec:worker"/></wb:topic>`)
 	mustApply(t, st, `<wb:topic name="three" label="화이트보드 토픽 상태와 리드 알림 정리 — 아주 긴 토픽 제목이 좁은 화면에서 줄바꿈되어도 아이콘이 밀려나지 않아야 함" tickets="261114-feat-ws-whiteboard-topic-state-and-lead-nudges 261113-bug-board-ticket-status-resolver 261112-refactor-retired-badge-glow"><wb:log>세 티켓을 연결함</wb:log><wb:state value="waiting" on="exec:worker"/></wb:topic>`)
+	mustApply(t, st, `<wb:topic name="research" label="조사 티켓만 연결된 토픽" tickets="261114-research-topic-filter"><wb:log>조사 티켓만 열려 있어 중립 아이콘이어야 함</wb:log><wb:state value="waiting" on="exec:worker"/></wb:topic>`)
+	mustApply(t, st, `<wb:topic name="finished" label="완료·취소 티켓만 연결된 종료 토픽" tickets="261113-bug-board-ticket-status-resolver 261112-refactor-retired-badge-glow"><wb:log>열린 티켓이 없어 중립 아이콘이어야 함</wb:log><wb:state value="waiting" on="exec:worker"/></wb:topic>`)
 	view := BuildView(st, ViewInput{Layout: LayoutFull, ReplyID: "tickets", Location: time.UTC, Tickets: fakeTickets{
 		"261114-feat-history-fold-rule":                         TicketTodo,
 		"261114-feat-ws-whiteboard-topic-state-and-lead-nudges": TicketReady,
 		"261113-bug-board-ticket-status-resolver":               TicketDone,
 		"261112-refactor-retired-badge-glow":                    TicketDropped,
+		"261114-research-topic-filter":                          TicketReady,
 	}})
 	view.Lang = "ko"
 	regions, err := RenderRegions(view)

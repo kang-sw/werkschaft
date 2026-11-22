@@ -225,6 +225,9 @@ type TopicView struct {
 	// actionable ticket still idea, todo, or ready. The board renders no glow
 	// for it; this is non-visible view metadata.
 	Live bool
+	// HasOpenTickets reports whether at least one linked ticket is open
+	// (idea, todo, or ready) and belongs to a non-research category.
+	HasOpenTickets bool
 }
 
 // Linked ticket statuses: a ticket's status directory, or TicketUnknown for
@@ -279,6 +282,23 @@ func (b TicketBadge) live() bool {
 	}
 	parts := strings.SplitN(b.Name, "-", 2)
 	return slices.Contains(liveCategories, parts[0])
+}
+
+// isOpenNonResearch reports whether the badge's ticket is open (idea, todo,
+// or ready) and its category (first segment of Name / second segment of Stem)
+// is not "research".
+func (b TicketBadge) isOpenNonResearch() bool {
+	if !b.Open() {
+		return false
+	}
+	name := b.Name
+	if name == "" {
+		if _, rest, cut := strings.Cut(b.Stem, "-"); cut {
+			name = rest
+		}
+	}
+	cat, _, _ := strings.Cut(name, "-")
+	return cat != "research"
 }
 
 // ticketBadges resolves stems through resolve (nil resolves none), caching
@@ -619,6 +639,7 @@ func BuildView(state *State, in ViewInput) View {
 		block := blockOf(doc.Name)
 		block.Tickets = ticketBadges(doc.Tickets, in.Tickets, ticketStatus)
 		block.Live = slices.ContainsFunc(block.Tickets, TicketBadge.live)
+		block.HasOpenTickets = slices.ContainsFunc(block.Tickets, TicketBadge.isOpenNonResearch)
 		block.Doc = doc.Body
 		if _, migrated := doc.legacyContentPanel(); migrated {
 			// Body is retained for old callers, not a duplicate rendering surface.

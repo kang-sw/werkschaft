@@ -22,6 +22,13 @@ import (
 // Synthetic capability only: even an accidental request cannot start a shell.
 type stateFilterTerminalHost struct{ *fakeHolders }
 
+type fakeDashboardTickets map[string]string
+
+func (f fakeDashboardTickets) TicketStatus(stem string) (string, bool) {
+	s, ok := f[stem]
+	return s, ok
+}
+
 func (*stateFilterTerminalHost) Scan()                          {}
 func (*stateFilterTerminalHost) AddSink(wsholder.Sink)          {}
 func (*stateFilterTerminalHost) Client(string) *wsholder.Client { return nil }
@@ -131,7 +138,11 @@ func TestBoardStateFilterBrowser(t *testing.T) {
 			n = 135
 		}
 		for i := 0; i < n; i++ {
-			if err := apply(st, fmt.Sprintf(`<wb:topic name="archive%03d"><wb:body>Historical stateless body %d.</wb:body><wb:close result="Archived"/></wb:topic>`, i, i)); err != nil {
+			ticketsAttr := ""
+			if i == n-1 {
+				ticketsAttr = ` tickets="261114-bug-filter-closed"`
+			}
+			if err := apply(st, fmt.Sprintf(`<wb:topic name="archive%03d"%s><wb:body>Historical stateless body %d.</wb:body><wb:close result="Archived"/></wb:topic>`, i, ticketsAttr, i)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -141,9 +152,18 @@ func TestBoardStateFilterBrowser(t *testing.T) {
 				if state == "implementing" {
 					attrs = ` owner="fixture-executor" eta_minutes="30"`
 				}
-				text := fmt.Sprintf(`<wb:topic name="%s%d" label="%s %d"><wb:body># Owned board body
+				topicAttrs := ""
+				switch fmt.Sprintf("%s%d", state, i) {
+				case "discussing1":
+					topicAttrs = ` tickets="261114-feat-filter-open"`
+				case "waiting0":
+					topicAttrs = ` tickets="261114-research-filter-only"`
+				case "implementing0":
+					topicAttrs = ` tickets="261114-bug-filter-done"`
+				}
+				text := fmt.Sprintf(`<wb:topic name="%s%d" label="%s %d"%s><wb:body># Owned board body
 
-State filter frame identity sentinel.</wb:body><wb:panel recap="Panel history">Panel payload.</wb:panel><wb:log>First history entry.</wb:log><wb:state value="%s"%s/></wb:topic>`, state, i, state, i, state, attrs)
+State filter frame identity sentinel.</wb:body><wb:panel recap="Panel history">Panel payload.</wb:panel><wb:log>First history entry.</wb:log><wb:state value="%s"%s/></wb:topic>`, state, i, state, i, topicAttrs, state, attrs)
 				if err := apply(st, text); err != nil {
 					t.Fatal(err)
 				}
@@ -169,9 +189,15 @@ State filter frame identity sentinel.</wb:body><wb:panel recap="Panel history">P
 		}
 	}
 	seq := 1
+	ticketResolver := fakeDashboardTickets{
+		"261114-feat-filter-open":     wswhiteboard.TicketTodo,
+		"261114-bug-filter-closed":    wswhiteboard.TicketReady,
+		"261114-research-filter-only": wswhiteboard.TicketReady,
+		"261114-bug-filter-done":      wswhiteboard.TicketDone,
+	}
 	publish := func(id string) error {
 		st := states[id]
-		view := wswhiteboard.BuildView(st, wswhiteboard.ViewInput{Layout: wswhiteboard.LayoutFull, ReplyID: id})
+		view := wswhiteboard.BuildView(st, wswhiteboard.ViewInput{Layout: wswhiteboard.LayoutFull, ReplyID: id, Tickets: ticketResolver})
 		view.Lang = "ko"
 		board, err := wswhiteboard.RenderRegions(view)
 		if err != nil {
