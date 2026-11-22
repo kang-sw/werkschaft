@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: d0270f493acca53c
 sage-review-completeness-reviewed: d0270f493acca53c
+completed: 2026-11-23
 ---
 
 # Companion Mesh Deform: Leg and Breath Articulation on Outfit Columns
@@ -263,3 +264,65 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
     blindly.
   - `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go -C agents-plugin-tool test
     ./internal/wsdashboard` and the companion node suite pass.
+
+### Result (3c461394b) - 2026-11-23
+
+Landed the mesh deform pass, the `deform` schema, kit lint and the rigging
+manual section.
+
+- **Engine:** new asset `dashboard-companion-deform.js` (`C.deform`: grid,
+  bones, region weights, hierarchical coefficients, chain, compile, instance).
+  The compositor splits each column into static layers (one cached composed
+  canvas, keyed by outfit, column and replaced layers, cleared in `select()`)
+  and rigid layers drawn at their own z. It draws the mesh as clipped affine
+  triangles with a 0.5 px seam overlap, takes the identity short-circuit when
+  every bone is at rest, and merges still cells into one clip. It displaces the
+  head anchor by the deform field and applies `deform.roll` as a rigid rotation
+  of the composed stack. No per-frame allocation.
+- **Schema and lint:** `deform` is read from the outfit entry only. Lint checks
+  bone ids, pivots, regions, parents and cycles, grid, motion names, roll pivot
+  and rigid-between-static z order, and warns on a registry-column `deform`.
+  T0: the Go validator ignores `deform`.
+- **Manual:** `companion-pet-rigging.md` §3b (schema, amplitude table, region
+  authoring), the recipe, craft gates 4 and 6, the lint list.
+- **Fixture:** IP-clean `testdata/companion-deform-fixture.cjs` (two-bone legs,
+  breath bone, roll).
+
+**Verification**
+- `go -C agents-plugin-tool test ./internal/wsdashboard`: ok, 595 s, exit 0.
+- Node `frontend-companion.test.js` + `frontend-companion-deform.test.js`:
+  65/65 pass, exit 0 (17 new deform tests).
+- Generators `generate-package-assets.py --check`,
+  `prepare-workflow-bundles.py --check`: rc 0. `prepare-native-payload.py
+  --first-party-only`: rc 0, nothing changed. No settings change, so no
+  settings digests were affected.
+- Frame cost (headless Chromium, SwiftShader software GL on the dev Mac, 240 px
+  draw plus 1 px readback): mesh median 1.8 ms (p95 1.9 to 2.0), rigid 0.5 ms;
+  render only 1.7 ms vs 0.4 ms. Under the 2 ms threshold, though a hardware GPU
+  was not measured.
+- Seams: solid-block interior alpha holes 0 across 16 phases.
+- Captures (local, gitignored), in `ai-docs/assets/mockups/companion-mesh-deform/`:
+  `deform-before-after-sheet.png`, `deform-{rest,breath-4px,legs-roll-low,legs-roll-high}-{160,240,512}.png`,
+  `deform-solid-legs-roll-high-512.png`, `deform-noline-legs-roll-high-512.png`.
+  "Before" is the rigid rest.
+- Lite review: no Critical or Important findings. Three minor items are left
+  (below).
+
+**Decisions**
+- `ctx.transform` instead of `setTransform`, so the roll wrapper's matrix
+  composes (cosmetic deviation from the ticket text).
+- New asset file, registered in `pages.go`, the asset source test and the test
+  loaders.
+- Roll comes from the gesture deform if declared, else the pose deform. The head
+  shift follows the deform of the column that supplies the head anchor.
+- The Route Facts notes about `skinFill` and `lintCompanionKit` being pending
+  were stale, since paper-doll had landed. They are left unedited.
+
+**Minor, left open**
+- The 0.5 px seam overlap draws partially transparent antialiased line pixels
+  twice in those bands.
+- Lint counts raw region entries and treats any `motion` key as rigid, where the
+  engine requires valid numeric pairs and resolvable motion names (advisory
+  only).
+- No test covers the unreadable-canvas fallback in `compile`, or a gesture
+  deform without `roll` over a pose that has one.
