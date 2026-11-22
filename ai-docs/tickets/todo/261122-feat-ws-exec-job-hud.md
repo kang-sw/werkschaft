@@ -139,9 +139,10 @@ Each carries its source evidence at develop `daf510d17`.
   notice's outcome (`NoticeAccepted | Duplicate | Dropped | Deferred`) is
   held in memory next to the stopped marker and maps to the HUD states sent /
   closed / failed (Retry offered on failed); it is NOT written to the row's
-  persisted `Notice` column. The mockup's "steered" vs "woken" shares one
-  user-visible line (the tooltip does); if the toast must distinguish them,
-  derive it from the conversation's running-turn state, memory only. For `!`
+  persisted `Notice` column. The UI collapses the mockup's "steered" and
+  "woken" into one "agent notified" outcome (the mockup's tooltip already
+  words them alike; the toast follows). Rejected: new `AdmitCompletion` return
+  plumbing for a cosmetic distinction. For `!`
   jobs the 261121 pending-input seam carries a "stopped" receipt instead and
   no notice is admitted (no wake). Rejected: a `wsinbox` kind other than the
   existing steered entry; reusing the row's `Notice` state machine
@@ -151,15 +152,21 @@ Each carries its source evidence at develop `daf510d17`.
   free-form scalar (`internal/mcp/config_registry.go:581`), not a dashboard
   language code. `wsi18n` tables hold page chrome only and state that
   machine-facing strings never pass through them (`internal/wsi18n/i18n.go`
-  header), so the notice does NOT use them. Default: a small notice-sentence
-  table in `wsagent` keyed by normalized language (`ko`, `en`), English for
-  an unrecognized value, inside a fixed machine-readable envelope (the
-  mockup's `<ws-notice source="dashboard" kind="exec-stopped-by-user">`
-  sample: job id, command head, cwd, runtime, output bytes, the
-  `exec.tail` pointer, and "deliberate: do not relaunch unless the user
-  asks"). Rejected: LLM-translated text; the UI language. This default is a
-  technical choice the implementer may revise if workflow.lang values prove
-  too irregular to key; record the change in the Result.
+  header). Decision: a small notice-sentence table in `wsagent` keyed by
+  normalized `workflow.lang` (`ko`, `en`), English for an unrecognized
+  value. Rejected: routing machine-facing text through `wsi18n` tables;
+  LLM-translated text; the UI language. If `workflow.lang` values prove too
+  irregular to key, the implementer may narrow the table; record it in the
+  Result.
+- **Notice envelope.** The user-stop notice reuses the existing completion
+  notice format (`noticeText`, `internal/execjob/hosted_notice.go`: the
+  `[ws exec] <id> was stopped after <runtime>.` head, `command:` line, output
+  tail and the `exec.tail` pointer) and extends it with a stopped-by-user
+  line carrying the command, cwd, runtime, output size and "deliberate; do
+  not relaunch unless the user asks" (sentence from the language table
+  above). Rejected: a new `<ws-notice>` envelope (a second machine format for
+  the same event family). The mockup's notice sample text is illustrative
+  only; the `[ws exec]` format wins over it.
 - **Stopped-by-user marker.** An in-memory field on the hosted job
   (alongside `stopping`, `hosted_types.go` / `hosted.go:88`), set inside
   `stop()` under `h.mu` at the point `stopping` is set (`hosted_ops.go:25`),
@@ -297,7 +304,9 @@ Behavioral boundaries:
   (Decision 1); this is a verified layout property, not a visual hope.
 - Out of scope: stdin control for jobs from the HUD (`exec.write`),
   re-run / restart actions, jobs owned by spawned child conversations (the
-  HUD shows the open conversation's own jobs, as the rail's own count does),
+  HUD shows the open conversation's own jobs only, the precedent being the
+  rail's `OwnExecJobs`; a child agent has its own chat view and roster row; a
+  cross-child job view is out of scope),
   terminal sessions (`261117-feat-ws-exec-mux-terminal`), and any change to
   the MCP exec tools.
 
@@ -327,11 +336,11 @@ Behavioral boundaries:
 
 ### Phase 1: Backend: stop, notice, origin, feed and output read
 
-Depends on 261121 Phase 1 for the `!`-job pieces only (origin tag from its
-submission->job mapping, the stopped receipt through its pending-input seam,
-the shared typed dashboard binding). The agent-job path (stop, notice, feed,
-peek read) does not depend on it and can be built and tested first; the `!`
-pieces land when 261121 Phase 1 has a Result.
+Relation to 261121: no `blocked-by` (kept `related:`). The agent-job paths
+(stop, notice, feed, peek read) do not wait on 261121 Phase 1. The `!`-job
+pieces (origin tag from its submission->job mapping, the stopped receipt
+through its pending-input seam, the shared typed dashboard binding) land
+after 261121 Phase 1 merges; implementation starts after that merge anyway.
 
 Goal: the daemon exposes everything the HUD needs, with no UI.
 
