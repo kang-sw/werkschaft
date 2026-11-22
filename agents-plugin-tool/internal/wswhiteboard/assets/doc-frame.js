@@ -300,7 +300,7 @@
       // frame and has nowhere to go.
       e.preventDefault();
       var id = href.slice(1);
-      if (!/^(?:item-[0-9]{1,6}|p[1-9][0-9]*)$/.test(id)) return;
+      if (!/^(?:(?:item|check)-[0-9]+|p[1-9][0-9]*)$/.test(id)) return;
       post({ wbDoc: "jump", id: id });
       return;
     }

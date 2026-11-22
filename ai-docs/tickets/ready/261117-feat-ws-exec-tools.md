@@ -331,6 +331,13 @@ Decisions 19–22 record technical settlements.
     `#L406-L415`). If the turn has ended, queue the completion for ordinary
     next-turn delivery. See S7 and S14 in
     `261122-feat-ws-agent-turn-semaphore`.
+23. **Downgrade boundary (2026-11-22).** Owner (2165)=a, 2026-11-22:
+    legacy-shaped hosted `exec.spawn`/`exec.shell` jobs launched by a 0.51
+    daemon live only in `exec-jobs.db`. A v0.50.8 daemon cannot read, return
+    results for, or abort their `exec_key` ("not found"). Re-upgrading
+    recovers status from the retained row and exit copy. Accepted as T3
+    within the 0.51 minor boundary. Rejected: mirroring legacy launches to the
+    file store.
 
 ## Constraints
 
@@ -637,6 +644,28 @@ Verification:
   - The binding is tested in two halves: `ResolveMCPToken` sets it, and the
     token route carries it to the jobs. No single test runs both halves end
     to end.
+
+#### Edition (f70eacba7) - 2026-11-22
+
+Corrects the two post-restart items under Known limits above, checked
+against the source at this edition:
+
+- The running-job item no longer holds. Holder output events carry absolute
+  offsets (`wsholder/client.go`, `Offset` and `CombinedOffset`). A rejoin
+  replays them through `OutputRings.AppendAt` (`execjob/hosted.go:401-413`,
+  `execjob/hosted_ring.go:162-188`), which counts the bytes the holder no
+  longer has as written and evicted. Offsets stay absolute, and a read below
+  them reports the gap instead of resuming at the oldest ring record.
+- The finished-job item keeps its preview-only limit: a finished job keeps
+  only its 4 KiB previews.
+- New remaining limit: absolute totals are lost when the job and its holder
+  both finish while the daemon is absent. The holder's exit totals
+  (`stream_bytes`, `output_bytes`, added in `73859f4ed`) travel only on the
+  live exit event. The exit copy and `exit.json` still store status alone
+  (`wsholder/holder.py:1003-1024`, `write_exit_record`; `wsholder.Exit` in
+  `wsholder/manager.go`). `endFromExitCopy` (`execjob/hosted.go:284`) and
+  `endFromExit` (`execjob/hosted.go:358`) end such a job from status alone,
+  so its byte counters are not advanced.
 
 ### Phase 2: Harness cutover, report hold, and session and worktree lifecycle
 
