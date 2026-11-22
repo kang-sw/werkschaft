@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: c98d790faf26af94
 sage-review-completeness-reviewed: c98d790faf26af94
+completed: 2026-11-22
 ---
 
 # App-Scoped Shell Overlay, Left-Rail-Bottom Home Anchor, v3.1 Canvas Compositor & Active-View Relay
@@ -124,3 +125,20 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
   - `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go -C agents-plugin-tool test ./internal/wsi18n`
   - `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go -C agents-plugin-tool build ./...`
   - Headless Playwright verification script exercising dark/light themes, session switches, rail collapse/resize, `409` reload recovery, drag-and-drop, and `off`/`visual` live toggle with `0` console errors.
+
+### Result (9865e081c) - 2026-11-22
+
+- The outer shell owns the stage and swaps decoded packs atomically after a revision-consistent load. The compositor handles both eye and expression tracks, sparse rigs, reusable motions, props and effects. The scenario runner merges the 12 starter scenarios with pack definitions.
+- The active frame relays context and deterministic events through the gated shell channel. Reconciled board IDs seed the reconnect baseline even when the board delays mounting a new ask. Settings clears session landmarks and the `auto` hint on activation.
+- Localized the quick menu in all 11 locales and corrected the Korean Visual and Full settings labels to `시각 전용` and `전체` in `e6f9fd005`. The shell uses the existing local write capability for persisted presets and pack reloads.
+- Fixed the lite review finding in `86fd46346` and added regression coverage for pose-only and layer-replacement-only gestures. Compatibility remains T0 because the feature adds frontend behavior behind the existing default-off setting.
+
+Verification used `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local` for all Go commands.
+
+- `go -C agents-plugin-tool test ./internal/wsdashboard -run 'AssetSource|Companion|Page'` passed in 29.112s.
+- `go -C agents-plugin-tool test ./internal/wsi18n` passed in 3.308s.
+- `go -C agents-plugin-tool build ./...` exited 0.
+- `GOOS=windows go -C agents-plugin-tool vet ./internal/wsdashboard/... ./internal/wsi18n/...` exited 0.
+- `node --test agents-plugin-tool/internal/wsdashboard/frontend-companion.test.js agents-plugin-tool/internal/wsdashboard/frontend-settings.test.js` passed all 14 tests.
+- Headless Playwright against a disposable local dashboard passed all 20 Goal 5 cases across Korean and English in light and dark themes. It recorded zero unexpected console or page errors and four intentional HTTP responses each for `409`, `403` and `404`. The simulated visibility check and the stricter rail placement check each passed in all four variants.
+- Saved 44 PNGs outside Git, including docked and collapsed rail placement, drag, quick menu and off mode in every language and theme combination.
