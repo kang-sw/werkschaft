@@ -83,10 +83,17 @@ type Client struct {
 	// StallTimeout cuts a stream that delivers nothing for this long; zero
 	// is DefaultStallTimeout.
 	StallTimeout time.Duration
+	// HeaderTimeout cuts a request whose response headers do not arrive in
+	// this long (a server that accepted the connection and went quiet); zero
+	// is DefaultHeaderTimeout. The cut is retryable, like a stalled stream.
+	HeaderTimeout time.Duration
 }
 
 // DefaultStallTimeout is how long a response stream may stay silent.
 const DefaultStallTimeout = 2 * time.Minute
+
+// DefaultHeaderTimeout is how long the response headers may take.
+const DefaultHeaderTimeout = 2 * time.Minute
 
 // maxStreamLine bounds one server-sent line: an encrypted reasoning item can
 // be large.
@@ -269,10 +276,23 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	secret := token
 	token = ""
+	// The header watchdog: Do returns only once the headers arrive, so a
+	// server that never sends them would hold the request until the context
+	// ends. The timer cancels the request; the stream's own watchdog takes
+	// over once the headers are in.
+	header := c.HeaderTimeout
+	if header <= 0 {
+		header = DefaultHeaderTimeout
+	}
+	headerTimer := time.AfterFunc(header, cancel)
 	resp, err := c.httpClient().Do(httpReq)
+	waited := !headerTimer.Stop()
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if waited {
+			return nil, fmt.Errorf("%w: no response headers within %s", ErrStreamCut, header)
 		}
 		// Redacted by construction: a transport error names the URL, never
 		// the request headers.

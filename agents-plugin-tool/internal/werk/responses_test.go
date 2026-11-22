@@ -270,3 +270,52 @@ func TestProviderErrorTextIsScrubbed(t *testing.T) {
 		})
 	}
 }
+
+// A server that accepts the connection and never sends headers is cut by the
+// header watchdog, and the cut is retryable under the loop's policy.
+func TestRespondHeaderStallIsCutAndRetryable(t *testing.T) {
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	client := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		// The body is read first: the server notices a closed connection
+		// only once it has, and Close would otherwise wait on this handler.
+		io.Copy(io.Discard, r.Body)
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	})
+	client.HeaderTimeout = 100 * time.Millisecond
+	start := time.Now()
+	_, err := client.Respond(context.Background(), Request{Model: "m"}, StreamHandler{})
+	if !errors.Is(err, ErrStreamCut) || !strings.Contains(err.Error(), "no response headers") {
+		t.Fatalf("err = %v", err)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Errorf("the cut took %v", time.Since(start))
+	}
+	if _, ok := Retryable(err); !ok {
+		t.Error("a header stall is retryable")
+	}
+}
+
+// The caller's own cancel during the header wait is the context's error, not
+// a stall.
+func TestRespondCancelDuringHeaderWait(t *testing.T) {
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	client := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		// The body is read first: the server notices a closed connection
+		// only once it has, and Close would otherwise wait on this handler.
+		io.Copy(io.Discard, r.Body)
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := client.Respond(ctx, Request{Model: "m"}, StreamHandler{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+}
