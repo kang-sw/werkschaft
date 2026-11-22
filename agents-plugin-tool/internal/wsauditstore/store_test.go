@@ -2,6 +2,7 @@ package wsauditstore
 
 import (
 	"bytes"
+	"encoding/json"
 	"context"
 	"errors"
 	"fmt"
@@ -854,5 +855,46 @@ func TestStoreLostSetFoldsIntoABoundedHeader(t *testing.T) {
 	flush(t, s2)
 	if got := lossCount(t, s2, "sess"); got != n {
 		t.Fatalf("replayed losses counted again: %d", got)
+	}
+}
+
+// TestStoreTornHeaderNeverLeavesAHeaderlessLiveSegment pins recovery from a
+// segment whose header line is torn (a crash right after rotation): the
+// next write opens a new segment with a valid header instead of appending
+// headerless lines, and every event survives another restart.
+func TestStoreTornHeaderNeverLeavesAHeaderlessLiveSegment(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	_ = s.Close()
+	for i, torn := range []string{`{"t":"h","v":1,"sess`, `{"t":"h","v":1,garbage}` + "\n"} {
+		segs, _, _ := listSegments(filepath.Join(root, "sess"))
+		next := segs[len(segs)-1].seq + 1
+		if err := os.WriteFile(filepath.Join(root, "sess", segmentName(next)), []byte(torn), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s2, _ := openTest(t, root, nil)
+		mustAppend(t, s2, sourced("sess", uint64(i+2), wsaudit.KindToolCall))
+		flush(t, s2)
+		_ = s2.Close()
+	}
+	segs, _, _ := listSegments(filepath.Join(root, "sess"))
+	for _, seg := range segs {
+		raw, err := os.ReadFile(filepath.Join(root, "sess", segmentName(seg.seq)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(raw, []byte(`"t":"e"`)) {
+			continue
+		}
+		var ln line
+		if nl := bytes.IndexByte(raw, '\n'); nl < 0 || json.Unmarshal(raw[:nl], &ln) != nil || ln.T != lineHeader {
+			t.Fatalf("segment %d holds events without a valid header:\n%s", seg.seq, raw)
+		}
+	}
+	s3, _ := openTest(t, root, nil)
+	if got := fmt.Sprint(sourceSeqs(t, s3, "sess")); got != "[1 2 3]" {
+		t.Fatalf("recovered %s", got)
 	}
 }

@@ -309,7 +309,7 @@ func (r *ring) recover() error {
 			}
 			return err
 		}
-		good, newer := r.replaySegment(&segs[i], raw)
+		good, newer, header := r.replaySegment(&segs[i], raw)
 		if newer {
 			r.readOnly = ErrNewerFormat
 		}
@@ -319,6 +319,12 @@ func (r *ring) recover() error {
 			} else {
 				segs[i].size = int64(good)
 			}
+		}
+		if newest && !header {
+			// A torn or missing header: appending here would leave a live
+			// segment no reader can version or seed from, so the next write
+			// opens a new segment with a valid header.
+			r.forceRotate = true
 		}
 		r.segs = append(r.segs, segs[i])
 		r.bytes += segs[i].size
@@ -346,30 +352,33 @@ func (r *ring) recover() error {
 }
 
 // replaySegment applies one segment's lines. It returns the byte length of
-// the well-formed prefix and whether the header names a newer format.
-func (r *ring) replaySegment(seg *segment, raw []byte) (good int, newer bool) {
+// the well-formed prefix, whether the header names a newer format, and
+// whether the segment opens with a well-formed header line.
+func (r *ring) replaySegment(seg *segment, raw []byte) (good int, newer, header bool) {
 	pos := 0
 	first := true
 	for pos < len(raw) {
 		nl := bytes.IndexByte(raw[pos:], '\n')
 		if nl < 0 {
-			return pos, false // torn last line
+			return pos, false, header // torn last line
 		}
 		text := raw[pos : pos+nl]
 		next := pos + nl + 1
 		var ln line
 		if err := json.Unmarshal(text, &ln); err != nil {
 			if next == len(raw) {
-				return pos, false
+				return pos, false, header
 			}
-			pos = next // a damaged line mid-ring is skipped
+			first = false // a damaged first line is no header
+			pos = next    // a damaged line mid-ring is skipped
 			continue
 		}
 		if first {
 			first = false
 			if ln.T == lineHeader {
+				header = true
 				if ln.V > RingSchemaVersion {
-					return pos, true
+					return pos, true, header
 				}
 				// Every header seeds: each is a snapshot of the state so far,
 				// and seeding takes maxima and unions, so a header whose
@@ -384,7 +393,7 @@ func (r *ring) replaySegment(seg *segment, raw []byte) (good int, newer bool) {
 		r.apply(ln, seg)
 		pos = next
 	}
-	return pos, false
+	return pos, false, header
 }
 
 // seed merges a segment header's recovery state into the ring's.
