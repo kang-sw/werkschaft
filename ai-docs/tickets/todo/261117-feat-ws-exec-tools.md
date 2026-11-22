@@ -8,7 +8,7 @@ related:
   261112-feat-pi-subagent-long-shell-auto-background: "absorbed; dropped (43); origin of the exec concept (owner, 2026-11-13)"
   261117-feat-ws-exec-mux-terminal: "owns the PTY mux direction split out of this ticket (51)=a"
   261119-epic-ws-conversation-audit: "future consumer of daemon-visible exec I/O; supersedes the dropped 261114-feat-ws-conversation-audit-event-store"
-  261115-feat-ws-permission-profile: "prerequisite; landed Phase 2 supplies the current permission profile used for exec approval"
+  261115-feat-ws-permission-profile: "prerequisite; landed Phase 2 supplies hosted permission controls and the effective full selection"
   261117-feat-ws-harness-capability-catalog: "default tool removal range and native subagent removability items"
   261117-feat-ws-agent-tools-mailbox-routing: "shares the sleep-not-close and cascading-close rules for child agents"
   261117-research-ws-daemon-file-touch-map: "release-gate file-touch constraint; not edited from here"
@@ -83,22 +83,24 @@ Decisions 19–22 record technical settlements.
    preserve access to old records and raw byte offsets. See
    `260524-epic-async-exec-job-surface` (54-77) and
    `260524-feat-wsstore-runtime-metadata-migration-gate` (247-272).
-4. **Daemon-owned advisory approval (18), (1505)=a.** Apply ws command
-   rules first, including denies under `full`, then ask through the
-   existing dashboard approval UI when the rules require a decision.
-   Bind approval to the normalized launch and its owning session. The
-   current `answerApproval` requires a native answerer
-   (`wsagent/runner_events.go#L584-L609`), so exec approvals need a daemon
-   owner. The current `permissionRefusal` only checks the worker's launch
-   authority against a static tool list (`mcp/permission_gate.go#L17-L37`).
-   Add the exec gate and use the conversation's current permission profile
-   at approval and at start. Enforcement is advisory, and the owner accepts
-   the loss of the native Codex OS sandbox for read-only Codex sessions.
-   Future LLM intent
-   judgment belongs to `261118-feat-ws-exec-intent-filter`.
-   Rejected: retain native sandboxed shells for read-only sessions ((1505)=b)
-   or implement OS confinement in ws/exec ((1505)=c).
-   Approval shape: pending owner decision (1512).
+4. **Daemon-owned advisory approval (1512)=b, 2026-11-22.** Approval
+   depends on session role and mode, without command parsing or rule
+   matching. Spawned workers run permitted exec calls immediately, as
+   their native requests are auto-resolved today. Hosted leads in bypass
+   or `full` run immediately. Hosted leads in other modes get one prompt
+   per call in the existing dashboard approval UI. Bind the answer to
+   the command and owning session and route it to a daemon-owned answer
+   path. The current `answerApproval` requires a native answerer
+   (`wsagent/runner_events.go#L584-L609`). Re-read live mode before
+   approving or starting the command. For an agy lead without a common
+   permission profile, use its effective ws bypass state
+   (`wsagent/agy_bypass.go#L9-L17`, `#L47-L61`); prompt when bypass is
+   off. Enforcement is advisory, and the owner accepted losing the
+   native Codex OS sandbox ((1505)=a).
+   Rejected: (1512)=a would run all lead calls without asking.
+   (1512)=c would add a configuration list and command matching. This
+   decision supersedes (1511) and the approval mechanism in (18).
+   Command-content judgment stays in `261118-feat-ws-exec-intent-filter`.
 5. **Claude permission pipeline.** Allowlist `ws/exec.*` to avoid a second
    prompt. Verify in Phase 1 whether Claude raises `can_use_tool` for MCP
    tools.
@@ -116,6 +118,12 @@ Decisions 19–22 record technical settlements.
      builder), verified on 0.160.0
      in `261115-feat-ws-hosted-codex-adapter-contract` (193, 218) and
      `wsagent/codex_fixture_test.go:365-370`.
+     Check whether each supported version has a native read/search tool
+     independent of its shell. If none is available, apply the replacement
+     exclusion in (1506) to preserve native shell for hosted leads outside
+     bypass or `full`. Otherwise these leads would have to approve each
+     file read under Decision 4. Codex workers remain eligible because their
+     exec calls run without a prompt.
    - Pi hosted launches omit bash from `--tools`. Worker argument
      construction is in `wsagent/pi_launch.go:62-89`, and hosted leads
      use the separate `piLeadArgs` path. The lead's MCP-only fallback,
@@ -356,8 +364,9 @@ showing which version writes and reads each surface and what survives reopening.
 
 Implement the six exec tools and the T0 legacy contracts from Decisions 1-3
 over `internal/execjob` and the landed holder-per-process lifecycle. Bind jobs
-and daemon-owned approval to the authenticated conversation and enforce the
-same approval policy for hosted legacy launches. Implement the process-group
+and daemon-owned approval to the authenticated conversation. Apply the role
+and live-mode approval policy in Decision 4 to new and legacy hosted
+launches. Implement the process-group
 lifecycle, output retention, and session-scoped `exec.list` read seam.
 Deliver durable async completion with the existing steer, idle-turn, and
 next-turn routes, fenced by session generation and deduplicated at enqueue.
@@ -391,12 +400,17 @@ Verification:
   process boundary. Check Bash resolution, raw Windows bytes and validated
   UTF-8 decoding, 4 KiB previews, per-job and total-ring eviction offsets,
   finite metadata and list bounds, and session-scoped listings.
-- Verify command-rule allow and deny, deny under `full`, dashboard approvals
-  bound to launch and owner, live profile changes before approval or start,
-  legacy shape enforcement, and rejection of owner selection by a descendant
-  key. Verify that unauthenticated origin claims in a launcher hello or tool
-  arguments cannot confer hosted job ownership. Pin the Claude `can_use_tool`
-  finding and verify one approval path.
+- Verify worker launches never prompt and hosted leads in bypass or
+  `full` run immediately. Verify other hosted lead modes prompt once per
+  call via the dashboard and honor approval and denial. For an agy lead
+  without a common profile, test ws bypass both on and off. Change the
+  mode while approval is pending and between preflight and process start.
+  Verify that both approval and launch use the live mode. Apply these
+  checks to new and legacy launches and verify that the approval binds
+  the command and owning session.
+  Verify that descendant keys or unauthenticated launcher hello fields
+  cannot confer hosted job ownership. Pin the Claude `can_use_tool` finding
+  and verify one approval path.
 - Measure syscalls/s on the owner's PC and account for cold-start and exit
   holder files. Verify that new hosted jobs create no per-job output files
   and that interactive paths stay off file I/O.
@@ -430,6 +444,11 @@ Verification:
   Claude CLI tier, missing replacement tools, existing and reattached sessions,
   and unverified versions. Verify that the Pi bridge and Claude stdio fallback
   retain native tools when the trusted binding is absent.
+- Check supported Codex versions for an available native read/search path
+  outside shell, including experimental `read_file`, `list_dir` and
+  `grep_files`. Where none is available, verify on start and resume that
+  hosted leads outside bypass or `full` retain native shell. Verify shell
+  removal for otherwise eligible bypass/full leads and Codex workers.
 - Verify agy default launch on new, resumed, and reattached sessions with
   a saved non-default mode, the `reject_once` exception under bypass and worker
   auto-approval, and mode changes and reconciliation during the process
