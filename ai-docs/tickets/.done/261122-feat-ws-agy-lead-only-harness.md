@@ -412,3 +412,52 @@ Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
     is not caught. The fake holder stays `Attached` after `Detach`, so the
     normal ownership path retries too. The branch stays so that a holder
     reporting itself detached is still retried.
+
+#### Edition (73dd8b4cf) - 2026-11-22
+
+The codex delta review of the second Edition came back fix-needed with one
+item, a regression from item 7. `73dd8b4cf` fixes it.
+
+**Stop during a failed retirement (important).** After a failed holder stop,
+the retirement keeps `c.proc` pointing at a stream it has already detached.
+A user's Stop then ran `stopProcess`. The stream's `Close` did nothing,
+because `Detach` had already used the same `sync.Once`. `StopError` was nil,
+because the failed stop was a separate `Holders.Stop`. So `releaseHolder`
+cleared a `HolderID` whose holder still ran, `replaying` was cleared, and
+the heartbeat retry stopped: the agy holder was orphaned.
+
+The fix: while `leadOnlyRetiring` is set, `stopProcess` (so every caller,
+including a user's Stop) goes through `retireLeadOnlyWorker`, which calls
+the holder's own stop on the retained `HolderID`. It never reaches the
+stream's `Close` or `releaseHolder`.
+- If that stop fails too, `HolderID`, `leadOnlyRetiring`, `replaying`, and
+  the detached association stay. `State.Error` shows the agy reason and the
+  stop error, as `releaseHolder` does with a `StopError`. `Runner.Stop`
+  still returns no error.
+- If it succeeds, the holder and credentials are cleared, the turn settles
+  failed with the agy reason, and it is reported once.
+
+Test `TestAgyWorkerUserStopDuringAFailedRetirementStopsTheHolder` drives
+each retry by hand (heartbeat set to one hour):
+- The retirement's stop fails. A user Stop calls the holder's stop again,
+  which fails: the holder and the open turn are kept, the error shows,
+  nothing is published, and the retry stays armed. A manual heartbeat still
+  retries.
+- With the stop now succeeding, the next user Stop calls the holder's stop
+  once. The holder, the turn, and the credentials are cleared, and one
+  failed report carries the agy reason.
+- Another heartbeat and another Stop cause no further stop, report, or
+  launch.
+
+Not fixed, outside this item: the downgrade retirement (`workerRetiring`)
+also keeps a detached `c.proc` while it retries. A user Stop during it would
+take the same no-op `Close` and `releaseHolder` path.
+
+Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+- `go test ./internal/wsagent -count=3 -run 'TestAgyWorker|TestAgyLeadOnly'`:
+  ok.
+- `go test ./internal/wsagent -run 'Agy|Agent|Worker|Held|Tier|Lead|Spawn|Child|REST|Registration|Wake|Deliver|Rejoin|Codex|Expir|Ownership|Downgrade|Reattach|Recovery|Interrupt|Watchdog|ModelWait|Stop|Archive|Hidden|Idle'`:
+  ok (88.7s).
+- `go vet ./internal/wsagent`: clean. gofmt is clean on the touched files.
+- Mutation check: disabling the `stopProcess` guard fails the new test,
+  because the user's Stop makes no holder stop.
