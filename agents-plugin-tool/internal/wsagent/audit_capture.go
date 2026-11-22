@@ -70,7 +70,7 @@ const (
 	// auditControlItems is queue room only attach and detach markers use:
 	// a lost attach would fail every later tee and fence of its connection
 	// (its Conn would be unknown), so they are never refused for the lines
-	// filling the queue.
+	// filling the queue. Past it they coalesce (auditCapture.over).
 	auditControlItems = 64
 	// auditSinkTimeout bounds one sink call's context; the Sink contract
 	// already requires a prompt return.
@@ -129,8 +129,16 @@ type auditCapture struct {
 	log     io.Writer
 	wait    time.Duration
 
-	in       chan auditItem
-	refused  atomic.Uint64
+	in      chan auditItem
+	refused atomic.Uint64
+	// over holds the control markers the queue had no room for, coalesced
+	// to the newest connection's (Conn grows with every attach, and a newer
+	// connection's attach supersedes every older one): its attach and its
+	// detach. overWake tells the capture goroutine; a marker goes here, not
+	// to the queue, while over holds any, so markers never pass each other.
+	overMu   sync.Mutex
+	over     overflowControl
+	overWake chan struct{}
 	stop     chan struct{}
 	stopOnce sync.Once
 	done     chan struct{}
@@ -190,7 +198,8 @@ func newAuditCapture(tap *auditTap, harness, source string, adapter auditAdapter
 	c := &auditCapture{
 		session: tap.Session, harness: harness, source: source, sink: tap.Sink, adapter: adapter,
 		log: tap.Log, wait: auditFenceWait,
-		in: make(chan auditItem, auditQueueItems+auditControlItems), stop: make(chan struct{}), done: make(chan struct{}),
+		in: make(chan auditItem, auditQueueItems+auditControlItems), overWake: make(chan struct{}, 1),
+		stop: make(chan struct{}), done: make(chan struct{}),
 		pending: map[uint64][]wsholder.Event{}, nextSeq: 1,
 	}
 	if c.log == nil {
@@ -258,13 +267,70 @@ func (c *auditCapture) enqueue(it auditItem) {
 	}
 }
 
+// overflowControl is the coalesced control markers past the reserve: the
+// newest connection's attach and detach (nil when none came).
+type overflowControl struct {
+	conn             uint64
+	attach, detached *auditItem
+}
+
+func (o *overflowControl) empty() bool { return o.attach == nil && o.detached == nil }
+
 // enqueueControl queues an attach or detach marker in order with the items
-// before it; it blocks only when the control room is exhausted too, which
-// takes auditControlItems connections opening while capture is stalled.
+// before it. It never blocks: once the control room is exhausted too (more
+// connections opening than it holds while capture is stalled), the marker
+// coalesces into over, which capture applies ahead of the queue as a resync.
 func (c *auditCapture) enqueueControl(it auditItem) {
 	select {
-	case c.in <- it:
 	case <-c.stop:
+		return
+	default:
+	}
+	c.overMu.Lock()
+	defer c.overMu.Unlock()
+	if c.over.empty() {
+		select {
+		case c.in <- it:
+			return
+		default:
+		}
+	}
+	o := &c.over
+	switch conn := it.ev.Conn; {
+	case o.empty() || conn > o.conn:
+		*o = overflowControl{conn: conn}
+	case conn < o.conn:
+		return // an older connection's marker: the newer attach supersedes it
+	}
+	if it.kind == auditItemAttached {
+		o.attach = &it
+	} else {
+		o.detached = &it
+	}
+	select {
+	case c.overWake <- struct{}{}:
+	default:
+	}
+}
+
+// takeOverflow applies the coalesced control markers, if any, recording
+// the resync as one loss: the items of connections whose markers coalesced
+// away, and those queued ahead of the markers, map as late or are ignored.
+func (c *auditCapture) takeOverflow() {
+	c.overMu.Lock()
+	o := c.over
+	c.over = overflowControl{}
+	c.overMu.Unlock()
+	if o.empty() {
+		return
+	}
+	c.noteLate()
+	c.loss(0, wsaudit.LossQueueFull, c.boundary)
+	if o.attach != nil {
+		c.handle(*o.attach)
+	}
+	if o.detached != nil {
+		c.handle(*o.detached)
 	}
 }
 
@@ -276,13 +342,18 @@ func (c *auditCapture) close() {
 func (c *auditCapture) run() {
 	defer close(c.done)
 	for {
+		c.takeOverflow()
 		var timeout <-chan time.Time
 		if !c.stuckAt.IsZero() {
 			timeout = time.After(max(c.wait-time.Since(c.stuckAt), 0))
 		}
 		select {
 		case it := <-c.in:
+			c.takeOverflow()
 			c.handle(it)
+			c.idle()
+		case <-c.overWake:
+			c.takeOverflow()
 			c.idle()
 		case <-timeout:
 			c.closeTee(wsaudit.LossFenceTimeout)
@@ -290,6 +361,7 @@ func (c *auditCapture) run() {
 		case <-c.stop:
 		drain:
 			for {
+				c.takeOverflow()
 				select {
 				case it := <-c.in:
 					c.handle(it)
@@ -423,8 +495,10 @@ func (c *auditCapture) handle(it auditItem) {
 		}
 		c.pump()
 	case auditItemAttached:
-		if c.live && it.ev.Conn == c.conn {
-			return // the same attach, read from the manager and delivered too
+		if c.live && it.ev.Conn == c.conn || it.ev.Conn < c.conn {
+			// The same attach, read from the manager and delivered too, or an
+			// older connection's, delivered after its successor's.
+			return
 		}
 		if c.teeOn {
 			c.closeTee(wsaudit.LossDisconnect)

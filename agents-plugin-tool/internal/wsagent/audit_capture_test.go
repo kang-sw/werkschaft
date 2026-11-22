@@ -841,6 +841,66 @@ func TestAuditAttachIsNeverRefusedByAFullQueue(t *testing.T) {
 	}
 }
 
+// TestAuditControlReserveExhaustionNeverBlocks pins the nonblocking holder
+// reader once the control reserve is gone too: with capture stalled and its
+// queue full, more reconnects than the reserve holds never block the
+// delivering reader. The markers past the reserve coalesce to the newest
+// connection's, which capture adopts (recording the resync as loss), so the
+// newest connection's tee lines and fences are accepted and its thinking is
+// assembled whole; a stale attach queued earlier never displaces it.
+func TestAuditControlReserveExhaustionNeverBlocks(t *testing.T) {
+	sink := &memSink{block: make(chan struct{})}
+	unblock := sync.OnceFunc(func() { close(sink.block) })
+	t.Cleanup(unblock)
+	r := newAuditRig(t, sink, "h1")
+	r.conn = 1
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: 1, Next: 1})
+	r.keptRun(`{"type":"system","subtype":"status","status":"first"}`, 0, 0)
+	for i := 0; i < auditQueueItems+100; i++ {
+		r.tee(`{"type":"keep_alive"}`)
+	}
+	if r.p.audit.refused.Load() == 0 {
+		t.Fatal("the queue never filled")
+	}
+	last := uint64(2 + 3*auditControlItems)
+	delivered := make(chan struct{})
+	go func() {
+		defer close(delivered)
+		for conn := uint64(2); conn <= last; conn++ {
+			r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: conn, Next: r.seq + 1})
+			if conn < last {
+				r.audit(wsholder.Event{Event: wsholder.EventAuditDetached, Conn: conn})
+			}
+		}
+		// The manager's copy of an older connection's attach, delivered late.
+		r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Conn: last - 1, Next: r.seq + 1})
+	}()
+	select {
+	case <-delivered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the holder reader blocked on a full control reserve")
+	}
+	unblock()
+	waitUntil(t, "the queue to drain", func() bool { return len(r.p.audit.in) == 0 })
+	r.conn, r.index = last, 0
+	r.keptRun(thinkStart, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	r.tee(thinkDelta("newest "))
+	r.tee(thinkDelta("connection"))
+	r.keptRun(thinkStop, 2, 0)
+	r.keptRun(thinkLine, 0, 0)
+	r.end()
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "newest connection" || th[0].Meta[wsaudit.MetaIncomplete] != nil {
+		t.Fatalf("thinking = %+v, want the newest connection's deltas assembled whole", th)
+	}
+	if loss := find(sink.events(), func(ev wsaudit.Envelope) bool {
+		return isLoss(ev) && ev.Meta[wsaudit.MetaLossReason] == wsaudit.LossQueueFull
+	}); len(loss) == 0 {
+		t.Fatal("the refused items and the resync were not recorded as loss")
+	}
+}
+
 // TestClaudeAuditTotalLossMarksTheThinking pins that a thinking block whose
 // every delta was dropped still records the loss: the open block takes it
 // (markLoss), and the event that ends the block, the assistant line's empty
