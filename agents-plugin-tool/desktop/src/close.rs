@@ -5,9 +5,7 @@ use std::{
 };
 
 use tauri::{AppHandle, Manager, WebviewWindow};
-use tauri_plugin_dialog::{
-    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
-};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use crate::{
     endpoint::FullStop,
@@ -268,6 +266,10 @@ fn show(main: Option<&WebviewWindow>) {
 }
 
 // Asks on a worker thread; the safe answer is the default button.
+//
+// rfd is called directly: the dialog plugin maps rfd's raw Cancel (Esc, the
+// close box, a dialog that failed to show) to the second custom button, which
+// here is the one that proceeds. Only that button's own click proceeds.
 fn confirm(
     app: &AppHandle,
     main: Option<&WebviewWindow>,
@@ -277,19 +279,35 @@ fn confirm(
     proceed: &str,
 ) -> bool {
     show(main);
-    let mut dialog = app
-        .dialog()
-        .message(message)
-        .title(title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
+    let mut dialog = rfd::AsyncMessageDialog::new()
+        .set_title(title)
+        .set_description(message)
+        .set_level(rfd::MessageLevel::Warning)
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(
             stay.into(),
             proceed.into(),
         ));
-    if let Some(window) = main {
-        dialog = dialog.parent(window);
+    let parent = main.cloned();
+    let (sender, receiver) = mpsc::channel();
+    // The alert is created on the main thread (macOS requires it there);
+    // its answer is awaited here.
+    let shown = app.run_on_main_thread(move || {
+        if let Some(window) = &parent {
+            dialog = dialog.set_parent(window);
+        }
+        let _ = sender.send(dialog.show());
+    });
+    if shown.is_err() {
+        return false;
     }
-    dialog.blocking_show_with_result() == MessageDialogResult::Custom(proceed.into())
+    match receiver.recv() {
+        Ok(answer) => proceeds(&tauri::async_runtime::block_on(answer), proceed),
+        Err(_) => false,
+    }
+}
+
+fn proceeds(result: &rfd::MessageDialogResult, proceed: &str) -> bool {
+    matches!(result, rfd::MessageDialogResult::Custom(label) if label == proceed)
 }
 
 fn inform(
@@ -444,6 +462,22 @@ mod tests {
                 .message
                 .contains("Nothing was stopped"));
         }
+    }
+
+    #[test]
+    fn only_the_proceed_button_proceeds() {
+        use rfd::MessageDialogResult as R;
+        assert!(proceeds(
+            &R::Custom("Stop and Quit".into()),
+            "Stop and Quit"
+        ));
+        assert!(!proceeds(&R::Custom("Cancel".into()), "Stop and Quit"));
+        // A dismissal (Esc, the close box) or a dialog that failed to show.
+        assert!(!proceeds(&R::Cancel, "Stop and Quit"));
+        assert!(!proceeds(&R::Cancel, "Cancel"));
+        assert!(!proceeds(&R::Ok, "Close"));
+        assert!(!proceeds(&R::Yes, "Close"));
+        assert!(!proceeds(&R::No, "Close"));
     }
 
     #[test]
