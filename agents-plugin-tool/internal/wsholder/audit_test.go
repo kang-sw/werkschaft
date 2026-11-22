@@ -8,8 +8,11 @@ import (
 )
 
 // auditChild writes kept and ring-skipped lines, then waits for its input
-// to close, so the connection outlives the output.
+// to close, so the connection outlives the output. The reconfigure keeps
+// Python's text-mode stdout from turning each "\n" into "\r\n" on Windows:
+// the holder relays the child's bytes as written, and the test asserts LF.
 const auditChild = `import sys
+sys.stdout.reconfigure(newline="\n")
 sys.stdout.write("keep 1\ndrop a\ndrop b\nkeep 2\n")
 sys.stdout.flush()
 sys.stdin.read()
