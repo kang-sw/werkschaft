@@ -117,6 +117,10 @@ type DaemonOptions struct {
 	// AgyCommand resolves the agy CLI program and leading arguments for
 	// user-triggered /usage probes without spawning. Nil skips agy probes.
 	AgyCommand func() (string, []string, error)
+	// CompanionOneShot runs the companion agent director's isolated
+	// single-prompt call (companion_director.go); nil leaves the agent
+	// director inert, and rules mode is unaffected.
+	CompanionOneShot CompanionOneShotFunc
 	// CardBound reports whether replyID is bound to a subordinate whiteboard
 	// agent card whose Record.Parent stays unset; nil defaults to false.
 	CardBound func(replyID string) bool
@@ -211,6 +215,8 @@ type Daemon struct {
 	companion companionState
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub
+	// director is the companion agent director (companion_director.go).
+	director          companionDirector
 	agents            AgentHost
 	leadNudges        interface {
 		Start()
