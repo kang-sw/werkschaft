@@ -82,7 +82,9 @@ func storeEvents(t *testing.T, s *storeSink) []wsaudit.Envelope {
 	return evs
 }
 
-// persistedLosses reads the loss lines of every ring segment under root.
+// persistedLosses reads the loss lines of every file under root; a malformed
+// line fails the test, so a changed on-disk format cannot pass a no-loss check
+// vacuously.
 func persistedLosses(t *testing.T, root string) []wsaudit.SourceID {
 	t.Helper()
 	var out []wsaudit.SourceID
@@ -102,7 +104,10 @@ func persistedLosses(t *testing.T, root string) []wsaudit.SourceID {
 				T  string            `json:"t"`
 				ID *wsaudit.SourceID `json:"id"`
 			}
-			if json.Unmarshal(sc.Bytes(), &ln) == nil && ln.T == "loss" && ln.ID != nil {
+			if err := json.Unmarshal(sc.Bytes(), &ln); err != nil {
+				return fmt.Errorf("%s: malformed line %q: %w", path, sc.Bytes(), err)
+			}
+			if ln.T == "loss" && ln.ID != nil {
 				out = append(out, *ln.ID)
 			}
 		}
@@ -367,8 +372,21 @@ func TestAuditStoreReplayRecordsAFailedAppendAsLoss(t *testing.T) {
 				t.Fatalf("last = %+v, want record 12 above recovered max seq %d", last, first[9].Seq)
 			}
 			want := wsaudit.SourceID{Source: "h1", Seq: 10}
+			// Warm: capture's Recover finds boundary 11 and judges record 10
+			// itself. Cold: Recover answers zero, so capture records nothing
+			// and the store's writer judges it. Either way one loss persists.
+			sink2.mu.Lock()
+			captured := slices.Clone(sink2.captured)
+			sink2.mu.Unlock()
+			wantCaptured := []wsaudit.SourceID(nil)
+			if mode == "warm" {
+				wantCaptured = []wsaudit.SourceID{want}
+			}
+			if !slices.Equal(captured, wantCaptured) {
+				t.Fatalf("capture recorded losses %+v, want %+v (%s)", captured, wantCaptured, mode)
+			}
 			if got := persistedLosses(t, root); !slices.Equal(got, []wsaudit.SourceID{want}) {
-				t.Fatalf("persisted losses = %+v, want record 10 only (capture's own: %+v)", got, sink2.captured)
+				t.Fatalf("persisted losses = %+v, want record 10 only", got)
 			}
 		})
 	}
