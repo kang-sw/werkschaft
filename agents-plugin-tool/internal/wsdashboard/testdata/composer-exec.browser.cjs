@@ -134,6 +134,65 @@ const card = (view, n) => view.locator('.d-cexec .cexec').nth(n);
       assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.attachments), () => false), 'the attachment refusal is shown');
       await shot('attachments');
 
+      // any attached composer state refuses the command, whatever its kind:
+      // an inline pick capsule after the bang keeps the first byte intact
+      await type(view, '!echo ');
+      await view.evaluate(() => document.querySelector('#ctext').wsc.insertCapsule('pick', { label: 'div.x', anchor: '[pick:div.x]', plain: 'div.x', pick: { selector: 'div.x', text: '' } }));
+      const beforePick = posts.length, cardsPick = await view.locator('.d-cexec .cexec').count();
+      await view.click('#csend');
+      await page.waitForTimeout(500);
+      assert.equal(posts.length, beforePick, 'a command with a pick capsule posts nothing: ' + posts.slice(beforePick));
+      assert.ok((await draft(view)).includes('[pick:div.x]'), 'the pick capsule stays in the draft');
+      assert.equal(await view.locator('.d-cexec .cexec').count(), cardsPick, 'no card for a refused submission');
+      assert.ok(await view.locator('.ws-toast, [role=status], #toasts').first().innerText().then(s => s.includes(t.attachments), () => false), 'the refusal is shown');
+      await view.evaluate(() => { const e = document.querySelector('#ctext').wsc; e.ordered().slice().forEach(r => e.remove(r.kind, r.key)); });
+
+      // a slow acknowledgement clears only the acknowledged draft: what was
+      // typed while the request was pending stays
+      await page.route('**/composer-exec', async route => {
+        if (route.request().method() === 'POST') await new Promise(r => setTimeout(r, 900));
+        await route.continue();
+      });
+      await send(view, '!echo slowack');
+      await editor(view).click();
+      await view.page().keyboard.press('End');
+      await view.page().keyboard.insertText(' typed meanwhile');
+      await view.waitForSelector('.cexec code:text-is("echo slowack")');
+      assert.equal(await draft(view), ' typed meanwhile', 'text typed while the request was pending is kept');
+      await page.unroute('**/composer-exec');
+
+      // a lost response: the first request ran on the daemon but its answer
+      // never arrived; sending the same text again is a retry of the same
+      // submission and the command runs once
+      let lostN = 0;
+      await page.route('**/composer-exec', async route => {
+        if (route.request().method() === 'POST' && lostN++ === 0) { await route.fetch(); await route.abort('failed'); return; }
+        await route.continue();
+      });
+      await send(view, '!echo lost-once');
+      await page.waitForTimeout(600);
+      assert.equal(await draft(view), '!echo lost-once', 'the draft is kept when the answer was lost');
+      assert.equal(await view.evaluate(k => !!window.sessionStorage.getItem(k), 'ws.cexec.attempt.livesession'), true, 'the attempt was recorded before it was sent');
+      await view.click('#csend');
+      await view.waitForSelector('.cexec code:text-is("echo lost-once")');
+      assert.equal(await draft(view), '', 'the retry settles the draft');
+      assert.equal(await view.evaluate(k => window.sessionStorage.getItem(k), 'ws.cexec.attempt.livesession'), null, 'the settled attempt is forgotten');
+      assert.equal(await view.locator('.cexec code:text-is("echo lost-once")').count(), 1, 'one card for one submission');
+      await page.unroute('**/composer-exec');
+
+      // remembered cards render only after a successful private list read
+      await page.route('**/composer-exec', route => route.request().method() === 'GET' ? route.fulfill({ status: 404, contentType: 'text/plain', body: 'unknown session' }) : route.continue());
+      await page.reload();
+      view = await sessionFrame(page);
+      await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' });
+      await page.waitForTimeout(700);
+      assert.equal(await view.locator('.d-cexec .cexec').count(), 0, 'a denied list read renders none of the remembered commands');
+      assert.ok(!(await view.locator('body').innerText()).includes('echo slowack'), 'no remembered command text is shown');
+      await page.unroute('**/composer-exec');
+      await page.reload();
+      view = await sessionFrame(page);
+      await view.waitForSelector('.d-cexec .cexec');
+
       // an old daemon: the route is unknown. It fails closed: nothing sent
       // as a prompt, the draft stays.
       await page.reload();

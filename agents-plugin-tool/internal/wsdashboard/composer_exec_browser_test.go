@@ -66,6 +66,18 @@ func TestComposerExecBrowser(t *testing.T) {
 	if n := f.svc.launchCount(); n < 5 {
 		t.Fatalf("launches = %d", n)
 	}
+	// The retried submission after a lost response ran once per language run.
+	f.svc.mu.Lock()
+	lost := 0
+	for _, l := range f.svc.launches {
+		if strings.Contains(l.Line, "lost-once") {
+			lost++
+		}
+	}
+	f.svc.mu.Unlock()
+	if lost != 2 {
+		t.Fatalf("the lost-response command launched %d times over 2 runs, want once each", lost)
+	}
 	hands := f.svc.handList()
 	if len(hands) == 0 {
 		t.Fatal("no receipt reached the lead")
