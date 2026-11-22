@@ -29,6 +29,20 @@ authoritative and may add more):
 4. A 0.51.0 local preview can read 0.51.1's new credential file after a
    rollback (security).
 
+## Decisions
+
+- Blocker 3 (forced `worktree.release` against a v0.51.0 daemon): against an
+  old daemon only, a forced release warns and proceeds as v0.51.0 itself did;
+  against a current daemon the refusal from `6617d5657` stays. Owner (2182)=a.
+  Rejected: closing children through the dashboard machine credential (moves an
+  authority boundary); keeping the refusal (a T3 in a patch); stopping only
+  the caller's own children (still refuses on others).
+- Blocker 8 (agy cross-harness spawn and wake refused): ships in 0.51.1 as a
+  recorded compliance exception to the patch tier rule, because Antigravity's
+  consumer terms never allowed the blocked use. Owner (2181)=a. Rejected: a
+  0.52.0 minor bump (locks out every previous-minor plugin session); deferring
+  the restriction (keeps shipping a terms violation).
+
 ## Constraints
 
 - Lower each blocker to T0–T2 with a source-cited verdict per
