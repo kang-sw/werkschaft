@@ -3,6 +3,7 @@ package wsauditstore
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -343,6 +344,55 @@ func TestPrepareMetaOverflowKeepsRequiredAndMarks(t *testing.T) {
 	// The cut still finds the compaction and its estimate.
 	if cut := wsaudit.FindModelSeenCut([]wsaudit.Envelope{got}); !cut.Estimated {
 		t.Fatal("cut lost the estimate")
+	}
+}
+
+// TestPrepareMetaOverflowKeepsTheRequestObject pins capture-harness-adapters
+// Decision 7: meta.request is reader-required, so a record whose metadata
+// exceeds the bound (thousands of redactions and oversized optional meta)
+// keeps it whole and unchanged, while optional keys sorting before it are
+// dropped and redactions collapse. The store does not normalize its values.
+func TestPrepareMetaOverflowKeepsTheRequestObject(t *testing.T) {
+	ev := testEnvelope(t, wsaudit.KindToolCall)
+	var in strings.Builder
+	for i := 0; i < 4000; i++ {
+		fmt.Fprintf(&in, "token=s%04d ", i)
+	}
+	ev.In = in.String()
+	request := map[string]any{
+		"id":      "msg_" + strings.Repeat("a", 300), // as given: no store digest
+		"prev_id": "sha256:not-a-digest",
+		"ctx":     int64(123456),
+	}
+	ev.Meta = map[string]any{metaRequestKey: request}
+	for i := 0; i < 2000; i++ {
+		ev.Meta[fmt.Sprintf("k%04d", i)] = strings.Repeat("v", 60)
+	}
+	if size, _ := metadataSize(ev); size <= int(MetadataBound) {
+		t.Fatalf("test record metadata %d bytes does not exceed the bound", size)
+	}
+	got, err := prepare(ev, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Meta[metaRequestKey], request) {
+		t.Fatalf("meta.request = %#v, want %#v", got.Meta[metaRequestKey], request)
+	}
+	if _, ok := got.Meta[MetaTruncated]; !ok {
+		t.Fatal("optional meta was not truncated")
+	}
+	if _, ok := got.Meta["k1999"]; ok {
+		t.Fatal("optional key kept over the bound")
+	}
+	collapsed := false
+	for _, r := range got.Redactions {
+		collapsed = collapsed || r.Count > 0
+	}
+	if !collapsed {
+		t.Fatalf("redactions did not collapse: %d entries", len(got.Redactions))
+	}
+	if size, _ := metadataSize(got); size > int(MetadataBound) {
+		t.Fatalf("metadata is %d bytes", size)
 	}
 }
 

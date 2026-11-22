@@ -15,9 +15,18 @@ import (
 // MetadataBound. Its value is {"dropped_keys": n, "dropped_bytes": b}.
 const MetaTruncated = "meta_truncated"
 
-// requiredMetaKeys are meta keys readers depend on; the metadata bound keeps
-// them before any optional entry (Decision 3, (2138)).
+// requiredMetaKeys are Boolean meta keys readers depend on; the metadata
+// bound keeps them before any optional entry (Decision 3, (2138)).
 var requiredMetaKeys = []string{wsaudit.MetaEstimated, wsaudit.MetaSignatureOnly}
+
+// metaRequestKey is the meta key of an event's model request object
+// {id, prev_id, ctx} (capture-harness-adapters Decision 7). Readers derive
+// request usage only from it, so the metadata bound reserves it whole,
+// beside the required Boolean keys: overflow collapses redaction entries and
+// drops optional keys, never this one. The adapter normalizes its IDs; the
+// store keeps the value exactly as given. The literal matches the capture
+// side's wsaudit.MetaRequest, which lands with that branch.
+const metaRequestKey = "request"
 
 // prepare turns a captured envelope into the record the store persists:
 // identifiers normalized, every body redacted in full, model-seen bounds
@@ -232,14 +241,17 @@ func summarize(rest []wsaudit.Redaction) []wsaudit.Redaction {
 	return out
 }
 
-// requiredMeta is meta's required keys with their bool values: what
-// bounding always keeps.
+// requiredMeta is what bounding always keeps: meta's required Boolean keys
+// with their bool values, and the request object as given.
 func requiredMeta(meta map[string]any) map[string]any {
 	kept := map[string]any{}
 	for _, key := range requiredMetaKeys {
 		if v, ok := meta[key].(bool); ok {
 			kept[key] = v
 		}
+	}
+	if v, ok := meta[metaRequestKey]; ok && v != nil {
+		kept[metaRequestKey] = v
 	}
 	return kept
 }
