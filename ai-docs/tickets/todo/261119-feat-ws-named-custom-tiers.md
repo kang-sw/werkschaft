@@ -1,78 +1,205 @@
 ---
-title: "이름 붙은 커스텀 티어: 하네스|모델|effort 묶음"
+title: "역할별 티어 매핑과 이름 붙은 커스텀 티어"
 parent: 261114-epic-ws-common-session-foundation
+related:
+  261117-refactor-playbook-compression: "coordinate playbook migration with the workflow manual's single Choosing a tier section (84)"
 ---
 
-# Named custom tiers: harness | model | effort bundles
+# Role-qualified tiers and named custom tier bundles
 
-## Scope & Owner Decision
+## Scope
 
-- **Idea (owner 2026-11-19 17:25-17:29):** Support user-defined named tiers
-  that bundle `harness | model | effort` (for example a `"discussion"` tier,
-  or Claude Opus through Antigravity such as `claude-opus-4-6-thinking`, which
-  `agy`'s model list offers alongside Gemini models, see
-  `agents-plugin-tool/internal/wsagent/testdata/agy-1.5.9-subagent-baseline.jsonl:4`
-  and `261118-feat-ws-hosted-model-list-and-agy-bypass`). Selectable by the
-  same name from both the dashboard new-session dialog (`POST /agents/leads`,
-  `agents-plugin-tool/internal/wsdashboard/assets/dashboard-leads.js:249`) and
-  `agent.spawn` `tier` (`agents-plugin-tool/internal/mcp/agent_tools.go:344`).
-- **Owner decision — no authority in tiers:** `authority`/auth is NOT part of
-  a tier; it stays on `agent.spawn`'s required `authority` argument and the
-  new-session permission choice, so tier and `agent.spawn` roles do not blur.
+The owner’s current routing directive, “implementation on `claude.*` workers,
+exploration/review on `codex.*`,” becomes one lead-tune config entry with
+`implement:*=claude.*`, `explore:*=codex.*`, and `review:*=codex.*`.
+Leads can pass the recommendation returned by `playbook.render` to
+`agent.spawn` without a per-lead prompt rule.
 
-## Background / Related
+The second layer keeps the original named bundle use case. A bundle such as
+`discussion` can select a model and effort independently of the four built-in
+slots and be selected by the same name in `agent.spawn` and the dashboard
+new-session dialog. For example, an Antigravity bundle can use
+`claude-opus-4-6-thinking`, a model listed in
+`agents-plugin-tool/internal/wsagent/testdata/agy-1.5.9-subagent-baseline.jsonl:4`.
+See `261118-feat-ws-hosted-model-list-and-agy-bypass` for the hosted model catalog.
 
-- **Current state (arbitrary custom tiers not possible today):**
-  - `agents.tier` (`agents-plugin-tool/internal/wsconfig/config.go:640-667`,
-    `agents-plugin-tool/internal/mcp/config_registry.go:514-548`) maps four
-    fixed tier names (`small`, `medium`, `large`, `xlarge`; synonyms
-    `light`/`core`/`deep`/`haiku`/`sonnet`/`opus` collapse via `NormalizedTier`
-    at `config.go:892-916`) to `{backend, model, effort}` per harness bucket
-    (`default`, `codex`, `claude`, `pi`, `agy`).
-  - `agent.tier_aliases` (`config.go:541-560`,
-    `agents-plugin-tool/internal/wsagent/agent_tools.go:320-369`) lets users
-    define custom names, but `ParseTierAliases` forces every target to
-    `<harness>.<tier>` where `<tier>` must normalize to `small..xlarge`. It
-    cannot define a new `(harness, model, effort)` tuple independent of those
-    four slots.
-- **Related tickets:**
-  - `261117-feat-ws-agent-tools-mailbox-routing` Decision 17 (`(53)=a`):
-    rejected `agent.spawn` `preset?` (`{tier, authority, system_prompt_path}`)
-    so spawn stays playbook-unaware with explicit arguments. Custom tiers
-    bundle only `harness | model | effort` (no `authority`, no prompt).
-  - `261115-feat-ws-session-hire-approval` decision `(952)` (`no tier`):
-    rejected a tier word on `session.request_hire` in favor of optional
-    `harness`, `model`, `effort` falling back to new-session popover defaults.
-  - `261116-feat-orchestration-profile-foundation` (`track/playbook`): adds
-    `workflow.profile` (`direct` / `orchestrate`) for playbook/include
-    selection; check overlap with role/mode-like tier names such as
-    `"discussion"`.
+## Current Behavior
 
-## Open Questions
+Source references below use `develop` at `bb564f0ef` unless versioned.
+Go paths are relative to `agents-plugin-tool/internal/`.
 
-1. **Definition site & config key shape:** Where are named tiers defined (e.g.,
-   generalizing `agent.tier_aliases` vs. a dedicated config key vs. extending
-   `agents.model_aliases`), and at which scopes (`global` / `project`)?
-2. **Built-in tiers:** Do `small..xlarge` become instances of the same
-   mechanism, or stay distinct per-harness fallback slots?
-3. **New-session dialog UX:** How does the dashboard new-session dialog list
-   and apply named tiers alongside harness/model/effort controls (and should
-   `session.request_hire` stay out or follow)?
-4. **Compatibility tier:** Expected **T0** for an additive config key and
-   optional UI/spawn selector; confirm against
-   `ai-docs/manuals/release-compatibility.md` (note
-   `agents-plugin-tool/internal/wsconfig/agy_tiers_test.go:82-110` for
-   unknown-field preservation in `agents.model_aliases`).
+- `agents.tier` configures `small`, `medium`, `large`, and `xlarge`
+  per harness as `{backend, model, effort}`. Built-in buckets cover
+  `default`, `codex`, `claude`, and `agy`. Pi uses configured entries
+  for spawn. `NormalizedTier` folds `light`/`haiku` to `small`,
+  `core`/`sonnet` to `medium`, and `deep`/`opus` to `large`.
+  See `mcp/config_registry.go:517-553` and
+  `wsconfig/config.go:512-532,640-667,892-916`.
+- `agent.tier_aliases` is global-only. `ParseTierAliases` accepts
+  whitespace-separated `name=<harness>.<tier>` pairs and requires the
+  target tier to normalize to one of the four slots. An alias name may
+  contain `:`, while `.` and recognized tier spellings are rejected.
+  See `wsconfig/config.go:535-560` and `wsagent/agent_tools.go:302-351`.
+- A playbook declares `tier:` in frontmatter. Render returns the declared
+  first-class tier on the `recommended-tier:` line and may append
+  `recommended-model:` and `recommended-reasoning-effort:`. The
+  `tier_override` schema advertises the four sizes. The handler validates
+  overrides, canonicalizes accepted spellings, and rejects unknown ones.
+  See `wsrsrc/loader.go:323-330`, `mcp/playbook_render.go:135-143`,
+  `mcp/playbook_vars.go:16-41,317-352`, and
+  `mcp/server_schemas.go:1181-1189`.
+- `agent.spawn` takes a required string `tier` alongside required
+  `authority`. Its resolver handles explicit dotted targets, bare tiers
+  on the caller's harness, then configured aliases. The dashboard dialog
+  submits concrete harness, model, and effort fields, with permission
+  choice handled separately. See `mcp/agent_tools.go:323-339`,
+  `wsagent/agent_tools.go:315-369`, and
+  `wsdashboard/assets/dashboard-leads.js:633-669`.
+
+## Decisions
+
+- **Owner (1513)=a (2026-11-22 10:42 KST), two layers.** Each playbook
+  declares a recommendation as `<role>:<size>`, such as
+  `explore:small`, `implement:large`, or `review:medium`.
+  `playbook.render` returns it and `agent.spawn` accepts it. Users
+  configure exact mappings such as `explore:small=claude.small` and
+  role wildcards such as `explore:*=codex.*` through lead-tune. A role
+  maps to either `<harness>.<tier>` or the name of a custom
+  `harness | model | effort` bundle. In a target like `codex.*`, the
+  wildcard carries through the requested size.
+- **Owner (2026-11-19), authority.** A tier supplies harness, model, and
+  effort only. Authority stays with the required spawn argument and the
+  dashboard permission choice. The caller supplies the prompt separately.
+  This follows `261117-feat-ws-agent-tools-mailbox-routing` (53)=a,
+  which kept `agent.spawn` playbook-unaware and rejected a combined preset.
+- **Lead, syntax and fallback (former Open Question 2).** Use `:` for a
+  role and keep `.` for a harness. The existing `small`, `medium`,
+  `large`, and `xlarge` slots remain the bare fallbacks. Without a matching
+  mapping, resolve a valid role tier exactly as its bare size on the caller's
+  harness. The absence of a mapping introduces no error. Built-in launch
+  behavior and resolved bindings are byte-for-byte identical to the bare
+  path. The recommendation text now carries the role.
+- **Lead, precedence.** An explicit `<harness>.<tier>` on spawn wins
+  over any mapping. Within the new role mappings, an exact size wins over
+  a wildcard. Preserve the meaning of any exact legacy alias, including
+  a name such as `explore:small`. Resolution checks that legacy alias
+  before interpreting the token as a role tier or named bundle. Surface a
+  collision when tuning a new mapping or bundle so the user can resolve it
+  without changing existing callers implicitly.
+- **Lead, definition site (former Open Question 1).** Use one lead-tune
+  config surface for role mappings and named bundles. Keep the existing
+  `agents.tier` slots and `agent.tier_aliases` contract for callers who use
+  them directly. Phase 1 specifies the key, encoding, and supported scopes.
+  `workflow.profile` continues to select playbook variants under
+  `261116-feat-orchestration-profile-foundation`. Tier roles describe the
+  work for model selection and leave playbook authority roles separate.
+- **Lead, workflow guidance.** Use the single “Choosing a tier” section of
+  the workflow manual from `261117-refactor-playbook-compression` (84)=ok.
+  Spawn sites point there. The section describes sizes by the character of
+  the work and tells callers to pass the rendered recommendation.
+- **Lead, compatibility (former Open Question 4).** Target **T0** for
+  same-minor clients talking to the new daemon and for existing calls.
+  The new daemon serves both the playbook and the spawn resolver
+  (`wspackage/package.go:68-94`, `mcp/server_dispatch.go:1663-1679`,
+  `mcp/agent_tools.go:56-85`). The Python launcher forwards JSON-RPC lines
+  without reading tool payload fields
+  (`agents-plugin/bin/ws-mcp-launcher.py:1965-1985,2067-2078`). Pi reads
+  the first line as the prompt path and passes the text through its guidance
+  adapter. Its provenance check reads `kind` and `role` from local
+  frontmatter (`agents-plugin-pi/src/bridge.ts:1193-1202,1229-1230`,
+  `agents-plugin-pi/src/daemon-agent-compat.ts:25-36`,
+  `agents-plugin-pi/src/delegation-policy.ts:128-144`). The checked-in
+  Codex and Claude native guidance consumes the model and effort lines
+  (`agents-plugin/rsrc/lead-workflow-manual/native-spawn-binding.codex.md:3-8`,
+  `agents-plugin/rsrc/lead-workflow-manual/native-spawn-binding.claude.md:3-5`).
+  The shipped host and launcher code has no parser for the
+  `recommended-tier:` value. Keep the existing bare inputs and metadata
+  layout, and ship role frontmatter with its daemon resolver.
+- **Lead, persisted compatibility.** With a downgraded daemon, **T1**
+  covers the older UI's missing bundle choices and older rendering's bare
+  recommendations. The old daemon renders its own bundled playbooks, and
+  a pre-feature daemon that already serves spawn keeps its legacy resolver.
+  See `v0.50.8:wsdashboard/assets/dashboard-leads.js:224`,
+  `v0.50.8:mcp/playbook_tools.go:503-512,1022-1030`, and
+  `wsagent/agent_tools.go:315-351`. Store the new config as an additive
+  key in an existing round-tripped map, `overrides` for a string or
+  `structured_overrides` for a structured value. The v0.50.8 reader
+  decodes both maps, unrelated resolver writes mutate only their own keys,
+  and the shared writer marshals both maps back. Reopening the new daemon
+  reads the surviving entry and applies it again. A new top-level field would be
+  dropped by that release's writer even though `develop` preserves
+  unknown fields. See `v0.50.8:wsconfig/config.go:34-53,108-120,750-767`,
+  `v0.50.8:wsconfig/resolver.go:299-312,328-345`, and
+  `wsconfig/preserve.go:10-39,56-76`. Confirm the chosen storage and
+  dashboard paths against `ai-docs/manuals/release-compatibility.md` before
+  release.
+
+## Open Decision Queue
+
+Last ID: (1517)
+
+(1514) [open] [policy] Choose the initial role vocabulary.
+
+- a) Start with a documented set of `explore`, `implement`, and `review`.
+- b) Accept any valid role identifier so projects can define additional
+  categories from the start.
+- Recommendation: a. The three roles cover the motivating routing policy and
+  give users a discoverable vocabulary.
+
+(1515) [open] [policy] Assign mixed-purpose playbooks to routing roles.
+
+- a) Group by primary work. Assign `explore`, `reference-discovery`, and
+  ticket selection to `explore`. Assign `implementer`, `ticket-worker`,
+  `ticket-handler`, and `ship-handler` to `implement`. Assign code, ticket,
+  and document reviewers and `review-handler` to `review`.
+- b) Add a separate role such as `coordinate` for mixed coordination
+  playbooks, including `ticket-handler` and `ship-handler`.
+- Recommendation: a. It gives the owner a clear default for each group
+  with the initial vocabulary. Phase 2 records the full assignment,
+  keeping each playbook's current size.
+
+(1516) [open] [policy] Choose how the dashboard applies a named tier.
+
+- a) Offer an optional named-tier picker that fills the editable harness,
+  model, and effort controls. Edits to those values return the form to
+  manual selection.
+- b) Offer a separate named-tier mode that shows the resolved values and
+  requires switching to manual mode to edit them.
+- Recommendation: a. It keeps the existing controls visible and makes
+  adjustments to a selected bundle straightforward.
+
+(1517) [open] [policy] Decide whether `session.request_hire` follows the dashboard.
+
+- a) Keep the optional harness, model, and effort inputs and the new-session
+  popover defaults settled in `261115-feat-ws-session-hire-approval` (952).
+- b) Add optional named bundle selection to hiring, using the same
+  resolution as the dashboard while leaving approval and permissions with
+  the owner.
+- Recommendation: a. Ship the bundle selection where the owner directly
+  chooses a launch configuration, and keep the existing hiring contract.
 
 ## Phases
 
-Rough outline pending owner discussion (do not populate or promote to `ready/`
-until the open questions above are settled):
+### Phase 1: Config and tier resolution
 
-### Phase 1: Config schema, `agent.tiers`, and `agent.spawn` resolution
+Define the lead-tune surface for mappings and bundles. Teach the daemon to
+resolve them for render and spawn, including precedence, legacy names, and
+the bare fallback. Check callers of `config.resolve_agent` so the manual's
+tier resolution guidance can use the same vocabulary. Preserve existing
+bare `tier_override` behavior. Verify legacy alias collisions, explicit
+targets, built-in parity, and persistence across an older config write.
 
-TBD after owner discussion.
+### Phase 2: Dashboard new-session dialog
 
-### Phase 2: Dashboard new-session dialog integration
+After Phase 1, add named bundle selection according to the approved dialog
+behavior. Verify the resolved launch values and the independent permission
+flow. Apply the hiring decision if it extends this phase's scope.
 
-TBD after owner discussion.
+### Phase 3: Playbook frontmatter migration
+
+After Phase 1, apply the approved role assignments to tier-declaring
+playbooks and carry through their current sizes. Coordinate variants,
+mirrors, and spawn-site wording with
+`261117-refactor-playbook-compression` and its single “Choosing a tier”
+section. Verify that a returned recommendation can be passed directly
+to spawn and produces the expected binding with and without a mapping.
