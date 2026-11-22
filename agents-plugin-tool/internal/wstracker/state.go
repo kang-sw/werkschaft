@@ -222,6 +222,7 @@ type label struct {
 type org struct {
 	id, name, head string
 	removed        *node
+	created        *node // the roles.org_set that created it
 }
 
 // attachment is attachment metadata as folded; oid is the content's sha256.
