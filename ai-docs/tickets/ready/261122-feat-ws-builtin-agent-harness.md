@@ -458,6 +458,45 @@ pass against the changed assets. The full `./internal/wsdashboard` browser suite
 was run once and timed out at its ten-minute limit with many other browser
 tests failing at their start; it was not used as evidence.
 
+#### Edition (d988440e3) - 2026-11-23
+
+A second review pass over `cfcfb94f1..7060956d6` found five more defects; each
+is fixed with a test. The T0/T1 paragraph of the Edition above is not part of
+this pass: it is held for the owner (an old binary refusing the read is T3
+under `release-compatibility.md`), and is left as it stands.
+
+- **Durable call intent.** The async log writer could lose the `function_call`
+  line itself, so a worker killed after a mutating tool ran could resume and
+  repeat the edit. `runCall` now flushes the writer before any call that is not
+  known read-only (edit, write, exec launch); read-only calls and model
+  requests stay non-blocking. The transcript append and the writer enqueue
+  now happen under one lock, so parallel results reach the log in the order
+  memory holds them. Tests: `TestMutatingCallWaitsForDurableCallIntent`,
+  `TestParallelResultsKeepLogOrder`.
+- **Symlink resolution.** The earlier dangling-link fix cleaned link payloads
+  lexically, so a relative link through a directory link followed by `..`
+  collapsed inside the tree while the OS resolved it outside. `realPath` no
+  longer reads link payloads: `EvalSymlinks` resolves, and a link that does
+  not resolve (dangling or a loop) is refused for a write. A dangling link
+  that pointed inside the tree is refused too, which is a behavior change from
+  the first fix. Tests: `TestDanglingSymlinkWriteBoundary`,
+  `TestRelativeLinkThroughDirectoryLinkAndDotDot`.
+- **Error-body stall.** A 429 or 5xx with headers and then a stalled body held
+  the request. The body read is under the stream stall deadline (and the
+  existing 64 KiB cap); what was read is used, and the status decides the
+  retry (429, 408 and 5xx retry, honoring Retry-After). A stalled 4xx is not
+  retried. Test: `TestErrorBodyStallIsCutAndRetryable`, `TestErrorBodyIsCapped`.
+- **Open picker refresh.** The pending retry now refetches by itself and
+  re-renders every open or waiting picker when the list lands, capped at 20
+  attempts. The Node test no longer calls `loadChoices` itself.
+- **Code redaction.** `FailedError.Code` and the JSON error body's code are
+  masked like the messages.
+
+Verification: `go build` and `go vet` clean on darwin and `GOOS=windows`;
+`./internal/werk` with `-race`, `./internal/wsagent` (full), `./internal/wscred`
+and `./internal/wsi18n` pass; `frontend-settings.test.js` passes 14 of 14. The
+browser tests for the settings page were not rerun in this pass.
+
 ### Phase 2: Lead role and OpenAI SIWC
 
 - Hosted lead registration: lead profile, permission levels, dashboard steer
