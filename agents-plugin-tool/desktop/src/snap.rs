@@ -17,7 +17,7 @@
 // webviews every one of them is. The left, right and bottom borders are the
 // window's own, which the system hit-tests outside the client area.
 
-use std::sync::OnceLock;
+use std::{cell::Cell, sync::OnceLock};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller;
 use windows::{
@@ -48,13 +48,16 @@ pub enum Event {
     MaxPressed(bool),
 }
 
+// Window procedures re-enter each other: `layout` moves child windows, and the
+// move sends them messages while `layout` still holds the state. So the state is
+// only ever borrowed shared, and what changes after install sits in cells.
 struct Data {
     top: HWND,
     dashboard: ICoreWebView2Controller,
     strip: ICoreWebView2Controller,
-    overlay: HWND,
-    band: HWND,
-    tracking: bool,
+    overlay: Cell<HWND>,
+    band: Cell<HWND>,
+    tracking: Cell<bool>,
     emit: Box<dyn Fn(Event)>,
 }
 
@@ -110,9 +113,9 @@ pub unsafe fn install(
         top,
         dashboard,
         strip,
-        overlay: HWND::default(),
-        band: HWND::default(),
-        tracking: false,
+        overlay: Cell::new(HWND::default()),
+        band: Cell::new(HWND::default()),
+        tracking: Cell::new(false),
         emit: Box::new(emit),
     }));
     let child = |title: PCWSTR| {
@@ -133,21 +136,21 @@ pub unsafe fn install(
         .map_err(step("CreateWindowExW"))
     };
     match child(w!("Werkschaft maximize button")) {
-        Ok(overlay) => (*data).overlay = overlay,
+        Ok(overlay) => (*data).overlay.set(overlay),
         Err(error) => {
             discard(data);
             return Err(error);
         }
     }
     match child(w!("Werkschaft resize border")) {
-        Ok(band) => (*data).band = band,
+        Ok(band) => (*data).band.set(band),
         Err(error) => {
             discard(data);
             return Err(error);
         }
     }
-    SetWindowLongPtrW((*data).overlay, GWLP_USERDATA, data as isize);
-    SetWindowLongPtrW((*data).band, GWLP_USERDATA, data as isize);
+    SetWindowLongPtrW((*data).overlay.get(), GWLP_USERDATA, data as isize);
+    SetWindowLongPtrW((*data).band.get(), GWLP_USERDATA, data as isize);
     if !SetWindowSubclass(top, Some(subclass), SUBCLASS_ID, data as usize).as_bool() {
         discard(data);
         return Err(windows::core::Error::new(
@@ -162,7 +165,7 @@ pub unsafe fn install(
 /// Destroys the child windows `data` knows and frees it. Their user data goes
 /// first, so no message can reach a window procedure holding the pointer.
 unsafe fn discard(data: *mut Data) {
-    for child in [(*data).overlay, (*data).band] {
+    for child in [(*data).overlay.get(), (*data).band.get()] {
         if !child.is_invalid() {
             SetWindowLongPtrW(child, GWLP_USERDATA, 0);
             let _ = DestroyWindow(child);
@@ -213,7 +216,7 @@ unsafe fn layout(data: &Data) {
     place(&data.dashboard, 0, strip, width, (height - strip).max(0));
     let button = scaled(CAPTION_WIDTH, dpi);
     let _ = SetWindowPos(
-        data.overlay,
+        data.overlay.get(),
         Some(HWND_TOP),
         (width - 2 * button).max(0),
         0,
@@ -225,7 +228,7 @@ unsafe fn layout(data: &Data) {
     // when the window cannot be resized by its edge.
     let (frame, _) = frame_size(data.top);
     let _ = SetWindowPos(
-        data.band,
+        data.band.get(),
         Some(HWND_TOP),
         0,
         0,
@@ -234,7 +237,7 @@ unsafe fn layout(data: &Data) {
         SWP_NOACTIVATE,
     );
     let _ = ShowWindow(
-        data.band,
+        data.band.get(),
         if IsZoomed(data.top).as_bool() {
             SW_HIDE
         } else {
@@ -288,7 +291,7 @@ unsafe extern "system" fn subclass(
             let result = DefSubclassProc(hwnd, message, wparam, lparam);
             // The children are normally gone by now; any that is not must not
             // reach the freed state.
-            for child in [state.overlay, state.band] {
+            for child in [state.overlay.get(), state.band.get()] {
                 if IsWindow(Some(child)).as_bool() {
                     SetWindowLongPtrW(child, GWLP_USERDATA, 0);
                 }
@@ -310,8 +313,8 @@ unsafe extern "system" fn overlay_proc(
     if data.is_null() {
         return DefWindowProcW(hwnd, message, wparam, lparam);
     }
-    let state = &mut *data;
-    if hwnd == state.band {
+    let state = &*data;
+    if hwnd == state.band.get() {
         return border_proc(state, hwnd, message, wparam, lparam);
     }
     match message {
@@ -324,20 +327,20 @@ unsafe extern "system" fn overlay_proc(
             LRESULT(0)
         }
         WM_NCMOUSEMOVE => {
-            if !state.tracking {
+            if !state.tracking.get() {
                 let mut track = TRACKMOUSEEVENT {
                     cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                     dwFlags: TME_LEAVE | TME_NONCLIENT,
                     hwndTrack: hwnd,
                     dwHoverTime: 0,
                 };
-                state.tracking = TrackMouseEvent(&mut track).is_ok();
+                state.tracking.set(TrackMouseEvent(&mut track).is_ok());
                 (state.emit)(Event::MaxHover(true));
             }
             LRESULT(0)
         }
         WM_NCMOUSELEAVE => {
-            state.tracking = false;
+            state.tracking.set(false);
             (state.emit)(Event::MaxHover(false));
             (state.emit)(Event::MaxPressed(false));
             LRESULT(0)
