@@ -364,6 +364,15 @@ func canonicalWorktreePath(p string) string {
 	return p
 }
 
+// CanonicalWorktreePath and WorktreePathContains expose the path comparison
+// ActiveChildrenInWorktree uses, so worktree.release judges a hosted exec job's
+// cwd against its target the same way it judges a bound conversation.
+func CanonicalWorktreePath(p string) string { return canonicalWorktreePath(p) }
+
+// WorktreePathContains reports whether path is root or lies under it; both
+// are expected canonical (CanonicalWorktreePath).
+func WorktreePathContains(root, path string) bool { return worktreePathContains(root, path) }
+
 func worktreePathContains(root, path string) bool {
 	if root == "" || path == "" {
 		return false
