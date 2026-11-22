@@ -159,6 +159,14 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 	if err != nil {
 		return nil, err
 	}
+	pkg, err := wspackage.Open(packageName)
+	if err != nil {
+		return nil, err
+	}
+	rsrc, err := fs.Sub(pkg, "rsrc")
+	if err != nil {
+		return nil, err
+	}
 	structured := builtinWorktreeProfiles()
 	for key, value := range wsagent.BuiltinProfiles() {
 		structured[key] = value
@@ -167,6 +175,9 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 		Catalog: catalog, Options: opts, Structured: structured,
 		LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
 			return dashboardCompanionConfig(catalog, opts)
+		},
+		TierRouting: func(draft json.RawMessage, harness string) (any, error) {
+			return dashboardTierRoutingView(rsrc, opts, draft, harness)
 		},
 		Session:            src.settingsSession,
 		IsLead:             src.settingsLead,

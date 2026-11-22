@@ -57,7 +57,7 @@ func (c *Catalog) Validate(scope wsconfig.Scope, op Operation) (Mutation, error)
 		if op.Action == "set" {
 			value, err := rule.NormalizeObject(op.Value, scope)
 			if err != nil {
-				return Mutation{}, ErrInvalid
+				return Mutation{}, InvalidValue{Reason: err}
 			}
 			m.Structured = value
 		}

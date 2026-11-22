@@ -16,6 +16,14 @@ var (
 	ErrScope   = errors.New("unsupported configuration scope")
 )
 
+// InvalidValue is ErrInvalid for a structured value its rule refused, with
+// the rule's reason (a graph validation message, for example) for a surface
+// that shows it.
+type InvalidValue struct{ Reason error }
+
+func (e InvalidValue) Error() string        { return ErrInvalid.Error() + ": " + e.Reason.Error() }
+func (e InvalidValue) Is(target error) bool { return target == ErrInvalid }
+
 type Rule struct {
 	Key, Type        string
 	Default          string
