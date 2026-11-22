@@ -63,11 +63,19 @@ func (d *Daemon) agentChanged(replyID, _ string) {
 // streams as a layout change does, and their render reuses its cached
 // inputs, asking ExecJobs again. Wakes coalesce in the broker's window and
 // the rail's minimum interval, so a burst of jobs renders once.
+//
+// It also bumps the revision of the hosted exec job set and wakes every
+// stream, which sends it as the opaque execjobs event (never any job
+// content: every viewer shares the stream, and a page refetches the list
+// from the localhost-only job route). It fires on every job start and end
+// and when a user stop's notice outcome is recorded.
 func (d *Daemon) ExecJobsChanged() {
 	if d.broker == nil {
 		return
 	}
+	d.execRev.Add(1)
 	d.broker.wake(railListRepoKey)
+	d.broker.signalAll()
 }
 
 // AgyActivity schedules a usage refresh after a hosted agy turn settles.

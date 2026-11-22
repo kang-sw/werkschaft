@@ -33,6 +33,8 @@ func (allowSessions) Immediate(string) (bool, error) { return true, nil }
 func (allowSessions) Notify(string, uint64, string, string) (execjob.NoticeOutcome, error) {
 	return execjob.NoticeAccepted, nil
 }
+func (allowSessions) StopNote(string) string                    { return "" }
+func (allowSessions) Hand(string, uint64, string, string) error { return nil }
 
 // TestHostedExecOverTheTokenRouteFollowsTheBinding: a session the daemon
 // reaches over its per-session token route gets the hosted exec tools, owned

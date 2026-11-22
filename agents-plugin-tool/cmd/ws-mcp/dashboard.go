@@ -258,6 +258,8 @@ func dashboardCommand(args []string) {
 	if hostedExec != nil {
 		// The dashboard's `!` commands run on the same jobs and runner.
 		daemon.SetComposerExec(composerExec{hosted: hostedExec, runner: agents})
+		// And the job HUD's reads and stop: the same binding.
+		daemon.SetExecJobs(composerExec{hosted: hostedExec, runner: agents})
 	}
 	// The user commands (command slots) open under the lock too, once the
 	// runner knows its conversations: the commands of a conversation it lost

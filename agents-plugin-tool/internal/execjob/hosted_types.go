@@ -141,6 +141,15 @@ const (
 	NoticeDeferred
 )
 
+// Origins of a hosted job: who launched it. The origin is in memory only: a
+// job a restarted daemon restores reads as an agent's.
+const (
+	// OriginAgent: launched by the owning agent's exec tool (the zero value).
+	OriginAgent = "agent"
+	// OriginUser: launched by the user's own composer `!` command.
+	OriginUser = "user"
+)
+
 // HostedSessions is the owning conversations' side (the agent runner):
 // identity, daemon-owned approval, and once-only notice admission.
 type HostedSessions interface {
@@ -157,6 +166,15 @@ type HostedSessions interface {
 	// Notify admits the completion notice text of event eventID for id
 	// under generation gen, once per event.
 	Notify(id string, gen uint64, eventID, text string) (NoticeOutcome, error)
+	// StopNote is the sentence a user-stop notice carries, in id's
+	// language: the stop was deliberate, do not relaunch unless the user
+	// asks, and the job's command and output are data. English for a
+	// conversation with no known language.
+	StopNote(id string) string
+	// Hand puts a receipt of job execID into the pending input of id under
+	// generation gen, for its next accepted send; it starts or steers no
+	// turn (the passive hand-off of the user's own composer jobs).
+	Hand(id string, gen uint64, execID, text string) error
 }
 
 // HostedHolders is the holder manager as the hosted jobs use it.

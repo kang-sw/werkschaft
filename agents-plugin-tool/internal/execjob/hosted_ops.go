@@ -14,12 +14,28 @@ import (
 // stop ends j's process group through its holder and waits for the end. A
 // job whose process was not handed to its holder yet ends at once (Launch
 // then never spawns it); one whose hand-over runs is waited for first. An
-// error means the holder did not go and the job may still run.
-func (h *Hosted) stop(j *hostedJob) error {
+// error means the holder did not go and the job may still run. byUser marks
+// the stop as the user's own (the HUD's): the first stop to set stopping
+// decides it, and the job is marked stopped-by-user only where this stop's
+// intent ends it as stopped (endLocked). Only one stop at a time asks the
+// holder: one that finds a stop's holder stop in flight joins it and gets its
+// outcome, so a failed attempt clears stopping and the intent once and a stop
+// after it decides afresh.
+func (h *Hosted) stop(j *hostedJob, byUser bool) error {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
 		return nil
+	}
+	if a := j.stopAttempt; a != nil {
+		// A stop is already asking the holder: this one joins it, and sees
+		// its outcome, rather than asking again.
+		h.mu.Unlock()
+		<-a.done
+		return a.err
+	}
+	if !j.stopping {
+		j.stopIntent = byUser
 	}
 	j.stopping = true
 	if j.starting {
@@ -46,6 +62,31 @@ func (h *Hosted) stop(j *hostedJob) error {
 		}
 		return nil
 	}
+	a := &stopAttempt{done: make(chan struct{})}
+	j.stopAttempt = a
+	h.mu.Unlock()
+	err := h.stopHolderOf(j)
+	h.mu.Lock()
+	if err != nil && !j.row.Terminal() {
+		// The holder did not go: the job may still run, and nothing marks
+		// it as stopped. Cleared here, once, with the attempt, so a stop
+		// that follows starts afresh and its own intent stands.
+		j.stopping, j.stopIntent = false, false
+	}
+	a.err = err
+	j.stopAttempt = nil
+	h.mu.Unlock()
+	close(a.done)
+	return err
+}
+
+// stopHolderOf is the owning stop's holder stop and end: it waits for a
+// hand-over in progress, stops j's holder, and ends the job itself when the
+// holder went without its exit record. An error means the holder did not go
+// (or, for a holder the manager does not know, that an incomplete census
+// leaves it unproven that it is gone).
+func (h *Hosted) stopHolderOf(j *hostedJob) error {
+	h.mu.Lock()
 	if wait := j.spawned; wait != nil {
 		h.mu.Unlock()
 		<-wait
@@ -68,9 +109,20 @@ func (h *Hosted) stop(j *hostedJob) error {
 	}
 	if err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
 		// The holder did not go: the job may still run.
-		j.stopping = false
 		h.mu.Unlock()
 		return fmt.Errorf("stop exec job %s: %w", j.row.ID, err)
+	}
+	if errors.Is(err, wsholder.ErrUnknownHolderIncomplete) {
+		// Unknown to the manager is proof of absence only from a census that
+		// read every holder: an incomplete one may omit a live holder (an
+		// unreadable descriptor), and ending the job here would hide it from
+		// the reconciliation that settles it once a scan reads them all. The
+		// manager took this answer with its index lookup, so a scan that
+		// indexes the holder afterwards cannot turn it into a success. The job
+		// stays running; the stop keeps failing until the holder is indexed or
+		// a scan completes the census, and can then be retried.
+		h.mu.Unlock()
+		return fmt.Errorf("stop exec job %s: %w; retry once a scan reads every holder", j.row.ID, err)
 	}
 	// The holder is gone and its exit record did not arrive first.
 	j.row.State = HostedStopped
@@ -88,7 +140,7 @@ func (h *Hosted) Stop(owner, id string) (HostedView, error) {
 	if err != nil {
 		return HostedView{}, err
 	}
-	if err := h.stop(j); err != nil {
+	if err := h.stop(j, false); err != nil {
 		return h.view(j, 0), err
 	}
 	return h.view(j, 0), nil
@@ -319,7 +371,7 @@ func (h *Hosted) StopOwner(owner string) error {
 	h.mu.Unlock()
 	var errs []error
 	for _, j := range jobs {
-		if err := h.stop(j); err != nil {
+		if err := h.stop(j, false); err != nil {
 			errs = append(errs, err)
 		}
 	}

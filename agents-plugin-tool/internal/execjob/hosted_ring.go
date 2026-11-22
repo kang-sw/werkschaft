@@ -524,6 +524,101 @@ func (j *JobOutput) Read(s Stream, offset, limit int64) Slice {
 	return Slice{Stream: s, Data: j.copyRange(s, start, end), Start: start, End: end, Written: written, Evicted: evicted}
 }
 
+// Segment is one run of combined output from one stream. Stream is
+// StreamStdout or StreamStderr, or StreamCombined for a run restored from a
+// preview (the stream is not known).
+type Segment struct {
+	Stream Stream
+	Data   []byte
+}
+
+// SegmentRead is a stream-attributed read of the combined stream: Segments
+// are contiguous from Start to End (absolute combined offsets); Written and
+// Evicted are the stream's totals at the read.
+type SegmentRead struct {
+	Segments         []Segment
+	Start, End       int64
+	Written, Evicted int64
+}
+
+// ReadSegments returns the combined bytes [max(offset, Evicted), +limit) as
+// runs that keep the stream each arrived on (Read on the combined stream
+// returns the same bytes flat). An offset past Written clamps to Written;
+// limit <= 0 means textreader.DefaultReadLimit and is capped at
+// textreader.MaxReadLimit. holdPartial (a job still running) and a read that
+// stops short of Written both leave an incomplete UTF-8 sequence at the end
+// for the next read, so a reader that decodes each read never splits a
+// character. It copies retained memory and does no I/O.
+func (j *JobOutput) ReadSegments(offset, limit int64, holdPartial bool) SegmentRead {
+	if limit <= 0 {
+		limit = textreader.DefaultReadLimit
+	}
+	if limit > textreader.MaxReadLimit {
+		limit = textreader.MaxReadLimit
+	}
+	j.rings.mu.Lock()
+	defer j.rings.mu.Unlock()
+	written, evicted := j.written[StreamCombined], j.evicted[StreamCombined]
+	start := max(offset, evicted)
+	if start > written {
+		start = written
+	}
+	end := min(start+limit, written)
+	out := SegmentRead{Start: start, End: end, Written: written, Evicted: evicted}
+	if start >= end {
+		out.End = start
+		return out
+	}
+	first := j.head
+	for i := len(j.recs) - 1; i >= j.head; i-- {
+		if rec := &j.recs[i]; rec.combined && rec.cstart <= start {
+			first = i
+			break
+		}
+	}
+	for i := first; i < len(j.recs); i++ {
+		rec := &j.recs[i]
+		if !rec.combined {
+			continue
+		}
+		rs := rec.cstart
+		if rs >= end {
+			break
+		}
+		re := rs + int64(len(rec.data))
+		if re <= start {
+			continue
+		}
+		data := append([]byte(nil), rec.data[max(start, rs)-rs:min(end, re)-rs]...)
+		if n := len(out.Segments); n > 0 && out.Segments[n-1].Stream == rec.stream {
+			out.Segments[n-1].Data = append(out.Segments[n-1].Data, data...)
+			continue
+		}
+		out.Segments = append(out.Segments, Segment{Stream: rec.stream, Data: data})
+	}
+	if end < written || holdPartial {
+		if n := len(out.Segments); n > 0 {
+			last := out.Segments[n-1].Data
+			for k := 1; k <= utf8.UTFMax && k <= len(last); k++ {
+				if !utf8.RuneStart(last[len(last)-k]) {
+					continue
+				}
+				if !utf8.FullRune(last[len(last)-k:]) {
+					last = last[:len(last)-k]
+					out.End -= int64(k)
+				}
+				break
+			}
+			if len(last) == 0 {
+				out.Segments = out.Segments[:n-1]
+			} else {
+				out.Segments[n-1].Data = last
+			}
+		}
+	}
+	return out
+}
+
 // Retained returns every retained byte of s in one slice: [Evicted, Written).
 // It is bounded by the job's ring (one copy of at most the per-job cap).
 func (j *JobOutput) Retained(s Stream) Slice {

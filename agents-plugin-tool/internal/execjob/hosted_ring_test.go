@@ -503,3 +503,101 @@ func TestOutputRingsConcurrentAppendRead(t *testing.T) {
 		}
 	}
 }
+
+// flatten joins segments' bytes.
+func flatten(segs []Segment) string {
+	var b strings.Builder
+	for _, s := range segs {
+		b.Write(s.Data)
+	}
+	return b.String()
+}
+
+// TestReadSegmentsKeepsStreamAndContiguousOffsets: the merged read returns
+// the combined bytes in arrival order, each run on the stream it came from,
+// contiguous with the next read's start.
+func TestReadSegmentsKeepsStreamAndContiguousOffsets(t *testing.T) {
+	r := NewOutputRings(0, 0)
+	j := r.NewJob()
+	r.Append(j, StreamStdout, []byte("out1\n"))
+	r.Append(j, StreamStderr, []byte("err1\n"))
+	r.Append(j, StreamStdout, []byte("out2\n"))
+	got := j.ReadSegments(0, 0, false)
+	want := []Segment{{StreamStdout, []byte("out1\n")}, {StreamStderr, []byte("err1\n")}, {StreamStdout, []byte("out2\n")}}
+	if len(got.Segments) != 3 || got.Start != 0 || got.End != 15 || got.Written != 15 {
+		t.Fatalf("read = %+v", got)
+	}
+	for i, s := range want {
+		if got.Segments[i].Stream != s.Stream || string(got.Segments[i].Data) != string(s.Data) {
+			t.Fatalf("segment %d = %+v, want %+v", i, got.Segments[i], s)
+		}
+	}
+	// A read in two parts is contiguous: the second starts where the first ended.
+	a := j.ReadSegments(0, 7, false)
+	b := j.ReadSegments(a.End, 100, false)
+	if a.End != 7 || b.Start != 7 || flatten(a.Segments)+flatten(b.Segments) != "out1\nerr1\nout2\n" {
+		t.Fatalf("parts = %+v %+v", a, b)
+	}
+	if a.Segments[len(a.Segments)-1].Stream != StreamStderr {
+		t.Fatalf("a cut inside a stderr run keeps its stream: %+v", a.Segments)
+	}
+}
+
+// TestReadSegmentsGapAndClamp: an offset below the retained start begins at
+// Evicted; one past Written clamps and returns nothing.
+func TestReadSegmentsGapAndClamp(t *testing.T) {
+	r := NewOutputRings(8, 0)
+	j := r.NewJob()
+	r.Append(j, StreamStdout, []byte("0123456789ABCDEF"))
+	got := j.ReadSegments(0, 100, false)
+	if got.Evicted == 0 || got.Start != got.Evicted || got.End != 16 || flatten(got.Segments) != "89ABCDEF"[8-int(16-got.Evicted):] {
+		t.Fatalf("read below Evicted = %+v %q", got, flatten(got.Segments))
+	}
+	past := j.ReadSegments(999, 100, false)
+	if past.Start != 16 || past.End != 16 || len(past.Segments) != 0 {
+		t.Fatalf("read past Written = %+v", past)
+	}
+}
+
+// TestReadSegmentsLimitAndPartialRune: a read never returns more than the
+// limit (capped at textreader.MaxReadLimit), and a cut inside a character
+// (or the end of a still-running job's output inside one) is left for the
+// next read.
+func TestReadSegmentsLimitAndPartialRune(t *testing.T) {
+	r := NewOutputRings(0, 0)
+	j := r.NewJob()
+	r.Append(j, StreamStdout, bytes.Repeat([]byte("x"), textreader.MaxReadLimit*2))
+	if got := j.ReadSegments(0, 1<<30, false); got.End-got.Start != textreader.MaxReadLimit || len(flatten(got.Segments)) != textreader.MaxReadLimit {
+		t.Fatalf("read = %d bytes", got.End-got.Start)
+	}
+	k := r.NewJob()
+	r.Append(k, StreamStdout, []byte("ab\u20ac\u20ac")) // two 3-byte runes
+	cut := k.ReadSegments(0, 4, false)
+	if flatten(cut.Segments) != "ab" || cut.End != 2 {
+		t.Fatalf("cut inside a rune = %q end %d", flatten(cut.Segments), cut.End)
+	}
+	next := k.ReadSegments(cut.End, 100, false)
+	if flatten(next.Segments) != "\u20ac\u20ac" {
+		t.Fatalf("next = %q", flatten(next.Segments))
+	}
+	// A running job's last, incomplete character waits too.
+	r.Append(k, StreamStdout, []byte{0xe2, 0x82})
+	if got := k.ReadSegments(0, 100, true); flatten(got.Segments) != "ab\u20ac\u20ac" || !utf8.ValidString(flatten(got.Segments)) {
+		t.Fatalf("running read = %q", flatten(got.Segments))
+	}
+	if got := k.ReadSegments(0, 100, false); got.End != got.Written {
+		t.Fatalf("an ended job's read is whole: %+v", got)
+	}
+}
+
+// TestReadSegmentsRestoredPreviewIsUntinted: a preview restored after a
+// restart is combined-only, so its run carries no stream.
+func TestReadSegmentsRestoredPreviewIsUntinted(t *testing.T) {
+	r := NewOutputRings(0, 0)
+	j := r.NewJob()
+	r.Restore(j, [3]int64{10, 6, 4}, []byte("out1\n\n"), []byte("err1"), []byte("0123456789"))
+	got := j.ReadSegments(0, 100, false)
+	if len(got.Segments) != 1 || got.Segments[0].Stream != StreamCombined || flatten(got.Segments) != "0123456789" {
+		t.Fatalf("restored read = %+v", got)
+	}
+}

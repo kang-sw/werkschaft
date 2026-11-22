@@ -277,8 +277,13 @@ type Daemon struct {
 	// the data revision the cached page reads are keyed by (trackerAnswers,
 	// tracker_answers.go): TrackerChanged bumps it too, a change the daemon
 	// applies to those answers itself (the seen marks) does not.
-	tracker        TrackerHost
-	trackerRev     atomic.Int64
+	tracker    TrackerHost
+	trackerRev atomic.Int64
+	// execHUD is the job HUD's service (SetExecJobs); execRev the revision of
+	// the hosted exec job set the streams send as the opaque execjobs event
+	// (ExecJobsChanged bumps it).
+	execHUD        atomic.Pointer[ExecJobsService]
+	execRev        atomic.Int64
 	trackerData    atomic.Int64
 	trackerAnswers trackerAnswers
 	// entries caches rendered conversation entries per session.

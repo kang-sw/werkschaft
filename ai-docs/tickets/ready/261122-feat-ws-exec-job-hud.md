@@ -71,7 +71,9 @@ below are the behavior it fixes):
 6. **Stop.** Stop asks an inline confirmation (focus on Cancel, 8 s auto
    revert, Esc cancels). The wording is "Stop job", distinct from
    "Interrupt" (which stops the agent's turn); the text says the process
-   group is killed with no cleanup (there is no separate force level). After
+   group gets TERM and, after a grace period, KILL (a pipe job on POSIX; Windows
+   force-kills the process tree), so the job may run its own cleanup first
+   (there is no separate force level). After
    a stop: a notice card in the peek and a toast.
 7. **Stop consequences.**
    - Stopping the user's own `!` job does NOT wake the agent; the "stopped"
@@ -110,8 +112,10 @@ below are the behavior it fixes):
   behavior tests cover reload.
 - **Notice language** is the agent session's language.
 - **No force-kill level.** Stop is already SIGKILL of the process group
-  (`Hosted.stop` -> `Holders.Stop`, `internal/execjob/hosted_ops.go:18-83`);
-  the confirm text says "no cleanup". Rejected: a second "force" tier.
+  (`Hosted.stop` -> `Holders.Stop`, `internal/execjob/hosted_ops.go`); the
+  holder sends TERM and KILLs after a grace period on POSIX (a forced tree
+  kill on Windows), so the confirm text must not promise "no cleanup" (see
+  the Phase 1 Edition). Rejected: a second "force" tier.
 
 ### Lead technical decisions (auto-confirmed 2026-11-22)
 
@@ -211,9 +215,11 @@ Each carries its source evidence at develop `daf510d17`.
   "Stopped by you" applies only to a marked job, whose row state is
   `stopped`. A stop issued by the close cascade (`StopOwner`,
   `hosted_ops.go:297`) or the agent's own
-  `exec.stop` is not "by user". Not persisted: lost on daemon restart, which
-  is acceptable because the notice was already delivered and the row still
-  shows `stopped`. Rejected: a new `exec_jobs` column (a compatibility
+  `exec.stop` is not "by user". Not persisted: lost on daemon restart. A
+  restart after the stop's notice was admitted loses only the "Stopped by
+  you" label (the row still shows `stopped`); a restart inside the windows
+  recorded in the Phase 1 Edition can lose or mis-kind the notice, which is
+  accepted. Rejected: a new `exec_jobs` column (a compatibility
   surface for little value). T0.
 - **Job feed.** The page learns of changes through a new opaque SSE event
   `event: execjobs`, data `{"rev":N}`, and refetches the list. Shape:
@@ -455,6 +461,271 @@ Verification boundary:
   on the remote host only).
 - Performance: the measurements listed under Constraints for the daemon
   paths (list, event wake, output read, stop).
+
+### Result (bd1a2a2e2) - 2026-11-23
+
+Landed in 2eb404138, a5cdef804 and bd1a2a2e2 (backend only; no UI).
+
+- Marker and notice: `stop(j, byUser)` sets a stop intent only where it is the
+  first to set `stopping`; `endLocked` commits "stopped by user" only when the
+  job ends stopped under that intent; a failed holder stop clears both. An
+  agent's converted job gets one steered notice (event
+  `exec:<id>:stopped-by-user`, deduplicated by `AdmitCompletion`); the user's
+  own `!` job gets a passive receipt through `Sessions.Hand` and wakes
+  nothing. A job stopped while starting or inside the sync launch wait owes no
+  notice. Outcomes (sent, closed, failed) live in memory only; a repeated stop
+  of a failed one is the Retry. `noticeMu` is taken before `h.mu`.
+- Origin: `HostedLaunch.Origin` (agent or user); the composer sets user.
+- Feed and read: `Hosted.Jobs(owner)` (uncapped, no tail), `ReadOutput` by
+  offset over the merged stream with stream-attributed segments, a gap at
+  `Evicted`, a 16 KiB cap and a clamp past `Written`. Routes under
+  `/s/<id>/exec/` (list, output, stop) are local-write, same-origin, open-lead
+  only and owner-scoped; an unbound service answers 404. The `execjobs` SSE
+  event carries only `{"rev":N}` and goes to session streams.
+- Notice language: the stop note follows the normalized `workflow.lang`
+  (ko or en, English otherwise), cached beside the ambient block, so the
+  notice path reads memory only.
+- Compatibility: T0 on every surface. No schema or `user_version` change
+  (`hosted_store.go` and the row struct are unchanged); after a restart a
+  user-stopped job reads as an ordinary stopped job. An old page ignores the
+  unknown event; the new routes 404 on an old daemon, so no HUD.
+- Performance (file operations counted with `FileIOCounters`): each route
+  makes 4 operations per request, the same as the localhost guard baseline,
+  at 0, 1, 50 and 200 jobs. List p50 about 100 us at 0 jobs and 163 us at 200
+  jobs (39.8 KB). `Jobs()` p50 is 125 ns at 1 job, 10.7 us at 50, 46.8 us at
+  200. A 16 KiB output poll on a full 1 MiB ring takes about 0.8 us; draining
+  it takes 64 polls, about 84 us. A user stop takes about 57 us and writes one
+  store row, as an agent's stop does. A 200-change burst over 4 streams:
+  before, the rail key alone signalled 8 (7 shared, 0 renders); after,
+  22 signals (15 shared), 6 events delivered, 0 session renders, 0 file ops.
+- Review (lite, one pass): no Critical. Two Important findings, the race
+  boundary and the user-stop-first ordering being untested, fixed in
+  bd1a2a2e2 (a loop test of a stop against a natural exit, both orderings hit,
+  and a real agent stop joining a held user stop).
+- Verification: `go test -race` on `./internal/execjob` (full), and the new
+  tests of wsagent, wsdashboard (`TestExecHUD*`, `TestExecJobsEvent*`, the
+  stream tests) and cmd/ws-mcp (`TestComposer*`); `GOOS=windows go vet` on
+  execjob, wsagent, wsdashboard, cmd/ws-mcp and internal/mcp, all clean.
+- Known, not from this change: `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`
+  fails in a checkout where `internal/wspackage/generated` is only the
+  placeholder.
+- Minor review notes, not fixed: a marked job whose admission was skipped
+  while the daemon was not started or was closing shows no notice outcome and
+  has no Retry path until a later stop; an async launch stopped between spawn
+  and the launch return can give the agent both the stopped view and a notice;
+  a repeated stop of a closed-outcome job answers 200 without a retry, untested
+  at the route level.
+
+#### Edition (5e5b5885f) - 2026-11-23
+
+Round 1 of the pre-merge review (FIX-FIRST) after merging develop into the
+branch (abcf7b21c). Fixes are in 02ecec950 and 5e5b5885f.
+
+- **Critical, the agent stop notice reaches the shared chat: lead decision, no
+  code change.** The completion notice (`deliver`/`noticeText`,
+  `internal/execjob/hosted_notice.go:11-80`) already carries `command:` and the
+  output tail through the same steered inbox entry (`AdmitCompletion` ->
+  `wsinbox.Send`, `internal/wsagent/exec_seams.go:390`), so LAN viewers see
+  both today, and the agent's own `exec.shell` call and result in the
+  transcript show the command, cwd and output to the same viewers. The
+  "Notice envelope" decision chose this format on purpose. Decision 8's
+  localhost boundary governs the HUD surfaces (the list, output and stop
+  routes and the HUD), which the review verified stay localhost-only. So the
+  stop notice adds no new exposure class. Guard, now pinned by a test: the
+  notice holds the completion notice's tail size (`HostedPreviewBytes`) and
+  no more, and its cwd is the one the agent launched with.
+- **Important 1, overlapping stops: fixed.** The holder stop has one owner
+  (`stopAttempt`). A stop that finds one in flight joins it, asks the holder
+  no second time, and gets its outcome. A failed attempt clears `stopping`,
+  the intent and the attempt in one critical section, so every joiner sees the
+  failure and a following user stop decides afresh. Tests: a user-first stop
+  with an agent stop joining; a failed first attempt with a joiner, then a user
+  stop that ends marked with its stop notice and no `:exit` notice.
+- **Important 2, deferred notices: fixed.** `NoticeDeferred` records
+  `pending`, not `sent`; the completion notices' timer (`deliverPending`)
+  re-admits it with the same event id, and a repeated stop does so at once. The
+  deferred test now expects `pending`, then `sent` after the retry pass.
+- **Important 3, restart windows: accepted, no persistence, no new column.**
+  Known limitations, exact windows: (a) after the terminal save and before the
+  stop notice is admitted, a restart leaves a plain `stopped` row and no
+  replayed notice; (b) before the terminal save, while the row is persisted
+  `running`, a restart restores no `stopping`, so the holder's exit replay
+  can end the job `exited` and send `exec:<id>:exit` instead of the stop
+  notice, including for a converted `!` job that would have been stopped
+  silently. The effect is the wrong notice kind, not data loss. The
+  Decisions wording ("acceptable because the notice was already delivered")
+  overstated this and is corrected in place.
+- **Important 4, production measurement: done.** See the table below.
+- **Important 5, start time wake: fixed.** `OnRunning` (the revision) now also
+  fires once the job is spawned and saved, so no refetch keeps a zero start.
+  Test: the last revision of a launch sees a start time (it failed before the
+  change); the OnRunning call-count expectations now name admit, spawn, end.
+- **Minor, UTF-8 across interleaved streams: fixed cheaply.** The output route
+  carries a run's incomplete trailing bytes to that stream's next run. Such a
+  character shows slightly after its place in the merged order. Bytes still
+  incomplete at the window's end decode as replacement characters. Two-stream
+  test added.
+- **Minor, async launch reporting a stopped view and a notice:** already
+  recorded; no change.
+- **Minor, "no cleanup" wording: corrected.** POSIX pipe jobs get TERM, then
+  KILL after a grace period (5 s default); Windows force-kills the process
+  tree. The confirm text must not promise "no cleanup".
+
+**File operations per action** (`wsstate.FileIOCounters`, macOS, a real
+`Hosted` over a real holder process; notices admitted by a real `Runner`;
+`TestExecHUDStopAndReadsThroughProductionPaths`). The test's lead harness
+writes its own heartbeat (about 176 counted operations per 2.2 s: conversation
+record `create_temp` + `atomic_replace`, registry `read_file`); a control
+window of the same length measured that and it is excluded below.
+
+| Action | Counted file operations | Latency |
+|---|---|---|
+| Localhost guard's cookie revalidation (pre-existing baseline, every authenticated request; the 404 route) | 4 | about 100 us |
+| List (`Hosted.Jobs`, 3 jobs; 200 jobs through the route, see Result) | 0 beyond the guard | 12 us (163 us route at 200 jobs) |
+| Output read, 16 KiB window | 0 beyond the guard | 2 us |
+| Stop of an agent job, notice steered into a running turn | 19 attributable: inbox write and list (`wsinbox` read_file 5, read_dir 6, stat 4, create_temp 1) and live ring (`wslive` create_temp 1, atomic_replace 1, read_dir 1) | 2.2 s (holder stop) |
+| Stop of the user's `!` job, receipt handed | 0 beyond the control | 2.2 s (holder stop) |
+| Stop of an agent job, notice wakes an idle turn | 17 attributable (same sites, `wsinbox` 14, `wslive` 3) | 2.2 s |
+| Repeated stop of a stopped job | 0 | 2 us |
+
+The inbox write and the conversation record for an agent notice are inherent
+to admitting a steered entry; they are reported, not removed. The
+conversation record's own sites (`record.go`) move by +2 to +6 over the
+control, inside the heartbeat's variation, so they are not separable. Not
+seen by the wrapper counters, from reading the code: the one `exec_jobs`
+upsert (one SQLite commit, as an agent's stop makes), the holder manager's
+`exit.json` read and recursive removal of the holder's directory
+(`manager_scan.go` cleanup, inherent to ending any exec job), and the holder
+process's own file work. The route's own cost is the guard row above plus the
+service row. The 2.2 s is the real holder's stop through its grace period for
+this shell job, as `exec.stop` has.
+
+- Verification after round 1: `go test -race -count=1 ./internal/execjob`
+  (full) ok; `./internal/wsagent -run 'StopNote|UserStop|TestExecHUDStopAndReads'`
+  ok; `./cmd/ws-mcp -run TestComposer` ok; `./internal/wsdashboard -run
+  'TestExecHUD|TestExecJobsEvent'` ok and the stream filter
+  (`Stream|SSE|WS|Event|Visib|Foreign|Wake|Broker|Coalesc`) ok;
+  `GOOS=windows go vet` clean on execjob, wsagent, wsdashboard, cmd/ws-mcp and
+  internal/mcp. `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`
+  still fails only where `internal/wspackage/generated` is the placeholder.
+
+#### Edition (d0b0f4716) - 2026-11-23
+
+Round 2 of the pre-merge review (FIX-FIRST) on 4315796cd. The fix is
+d0b0f4716. The notice-exposure Critical stays closed by lead decision (round 1).
+
+- **Important 1, an incomplete census made a user stop a false success: fixed.**
+  `stopHolderOf` took the manager's `ErrUnknownHolder` as "gone". Under an
+  incomplete census (an unreadable descriptor) a live holder can be missing
+  from the manager's index, and ending the job hid it from the reconciliation
+  that settles it later. Now an unknown holder is proof of absence only when
+  `Holders.List().Incomplete` is false; otherwise the stop is an error, the job
+  stays running and unmarked, no notice is admitted, and a retry works once a
+  scan reads every holder. This also closes the same gap in the `exec.stop`
+  tool, which shares `Hosted.stop`. Test: a fake holder unknown to the manager
+  under an incomplete listing refuses both stops, then a complete one stops
+  and marks.
+- **Important 2, spawn-failure cleanup raced a waiting stop: fixed.** The
+  launch now opens the hand-over wait only after `failStart` has stopped the
+  holder and settled the row, so a stop waiting for the hand-over finds the job
+  ended (failed, not a user's stop, no notice) and returns; the holder is
+  stopped once. Test: failure after holder allocation with a user stop already
+  waiting. Accepted, unchanged: a stop that cancels a launch before its spawn
+  ends the job before holder retirement returns, so a caller may see success
+  before the holder is gone; the job stays pinned until it is.
+- **Important 3, deferred retries: fixed.** A deferred notice tried again and
+  deferred again no longer moves the revision (the recorded outcome is
+  compared with the one retried), a retry that does not run leaves its outcome
+  and its retry as they were, and terminal-row pruning keeps a job whose stop
+  notice is still pending, as it keeps one with a pending completion notice.
+  Both tested; the pruning test fails without the fix. The first Decision's
+  "Deferred counts as sent" is superseded by Edition 5e5b5885f.
+- **Important 4, measurement scope: docs only.** The table above is a
+  service-side measurement: it calls the service directly, with no HTTP guard
+  and no production `OnRunning` binding; its output is short, so the 16 KiB
+  figure is the response's cap, not a measured large read; stop timing ends at
+  the service's return. The guard's four-operation row is a separate baseline
+  from another fixture, to be added to the service rows for a route's cost.
+  All figures are macOS; the Windows and antivirus budget is unverified.
+- **Minor, restart wording:** the Phase 1 text says only the label is lost
+  after notice admission; the user's passive receipt is in memory too
+  (`wsagent/passive_input.go`), so a restart loses it with the label. Same
+  window (a).
+- **Minor, stop wording:** the first Decision's opening "Stop is already
+  SIGKILL" is shorthand: a POSIX pipe job gets TERM and a grace period before
+  KILL, and Windows kills the process tree (see Edition 5e5b5885f).
+- **Accepted as is:** the extra post-spawn SSE wake and owner-count scan per
+  launch.
+
+Verification: `go test -race -count=1 ./internal/execjob` (full) ok;
+`./internal/wsagent -run 'StopNote|UserStop|TestExecHUDStopAndReads'`,
+`./cmd/ws-mcp -run TestComposer` and `./internal/wsdashboard -run
+'TestExecHUD|TestExecJobsEvent'` ok; `GOOS=windows go vet` clean on execjob,
+wsagent, wsdashboard, cmd/ws-mcp and internal/mcp. Ten concurrent race runs of
+the execjob test binary showed two flakes that this change did not cause: a
+data race between a test cleanup writing the package-level `retireRetryMin`
+and `retireRetryMax` and an earlier test's retire goroutine reading them, and
+`TestHostedJobStoppedDuringItsHolderLaunchStaysUntilTheHolderGoes` depending
+on millisecond ordering of `EndedAt` when pruning.
+
+#### Edition (899877ad6) - 2026-11-23
+
+Round 3 of the pre-merge review (FIX-FIRST) on 1204ac3cc. The fix is 899877ad6;
+the test-hygiene commit 83343849d (below) sits between. The notice-exposure
+Critical stays closed by lead decision (round 1).
+
+- **Important 1, absence decided by a separate `List`: fixed.**
+  `Manager.Stop` now answers `wsholder.ErrUnknownHolderIncomplete` (wrapping
+  `ErrUnknownHolder`, so every `errors.Is` consumer is unchanged) when the id
+  is not indexed and the last scan was incomplete, both read under the one lock
+  of the lookup. `Hosted.stopHolderOf` acts only on that answer and calls no
+  `List`, so a scan that indexes the holder and completes the census after the
+  lookup cannot turn it into a success. Tests: the manager's three answers
+  (complete, incomplete, complete again); a fake whose scan indexes the holder
+  and completes the census right after the answer (the stop still fails, the
+  job stays running and unmarked, and the next stop ends it). Trade-off,
+  accepted: under a persistently incomplete census an absent target cannot be
+  stopped; the stop keeps failing until the target is indexed or a scan
+  completes the census (the job stays visible and fenced meanwhile, which is
+  what reconciliation needs).
+- **Important 2, pending stop rows past the cap: accepted, no code.** A
+  pending stop row follows the existing completion-notice exemption
+  (`row.Notice`), which has the same unbounded-under-permanent-deferral
+  property; growth needs more than 200 user-stopped jobs whose owner sessions
+  stay handed off. Bounding both notice kinds is a follow-up candidate.
+- **Important 3, a gap before the first outcome: fixed.** `stopNoticeOwedLocked`
+  keeps a user-stopped row from pruning from `endLocked` through the first
+  recorded outcome (none) as well as while pending. Test: 200 running jobs, one
+  stopped with its first admission held in flight, a 201st admitted (pruning
+  runs); the stopped row is kept, its deferred outcome is pending, and the
+  timer's retry finds it. It fails when the keep is reduced to pending.
+- **Important 4, the start failure's end rewrite: fixed.** `failStart`'s
+  `wasEnded` branch moves the revision when it changes what a list shows
+  (stopped or exited, possibly marked stopped-by-user, to failed). Test with a
+  fake whose `Stop` sends the exit record of a never-started job, as a real
+  holder's does: the last revision sees `failed` and the job ends unmarked. It
+  fails without the change. Accepted: when the cleanup's own holder stop
+  fails, the waiting stop owner asks the holder again after the hand-over
+  opens; two sequential stops, not concurrent ones.
+- **Minor, release arming:** the hand-over release is armed before `Spawn`, so
+  a recovered panic there cannot strand a waiting stop.
+- **Minor, tests:** the 100 ms hand-over window is replaced by a wait for the
+  stop to own its attempt (it can then only be waiting for the hand-over); the
+  prune tests use a frozen clock so only `endSeq` ranks jobs.
+
+Test-hygiene commit 83343849d (separate): the retire retry bounds are per-Hosted
+options (`HostedOptions.RetireRetryMin/Max`) instead of package variables a test
+rewrote, and pruning breaks equal-millisecond `EndedAt` ties by the order the
+jobs ended in (`endSeq`; production order changes only among equal `EndedAt`).
+Ten concurrent runs of the race-built execjob test binary: 4 of 10 failed
+before (3 data races, 1 prune test); 0 of 30 after that commit and 0 of 30
+again after 899877ad6.
+
+Verification: `go test -race -count=1 ./internal/execjob` (full) ok;
+`./internal/wsholder -run 'Stop|Scan|Unknown'`, `./internal/wsagent -run
+'StopNote|UserStop|TestExecHUDStopAndReads'` and `./cmd/ws-mcp -run
+TestComposer` ok; `GOOS=windows go vet` clean on execjob, wsholder, wsagent,
+wsdashboard, cmd/ws-mcp and internal/mcp.
 
 ### Phase 2: HUD UI
 
