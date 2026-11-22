@@ -110,6 +110,19 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if info, err := wsstate.Stat(root); err != nil || !info.IsDir() {
 		return State{}, badRequest("root %s is not a directory", root)
 	}
+	// Every path that opens a conversation (agent.spawn, pi.spawn, a lead)
+	// holds the worktree's shared release reservation until the conversation
+	// is registered, so worktree.release cannot check for bound children in
+	// between and then reset and clean under it.
+	boundCwd := ""
+	if spawn != nil {
+		boundCwd = spawn.Cwd
+	}
+	unlockBound, err := reserveBoundWorktrees(root, boundCwd)
+	if err != nil {
+		return State{}, conflict("%v; wait for the release to finish before opening a conversation there", err)
+	}
+	defer unlockBound()
 	rp, err := r.resolve(profile, root)
 	if err != nil {
 		return State{}, err

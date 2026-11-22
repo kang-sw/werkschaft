@@ -143,6 +143,25 @@ func TestWorktreeActiveChildrenAndSpawnReleaseReservation(t *testing.T) {
 		Prompt: "nested work", Tier: "small", Authority: "read-only",
 	})
 
+	// A child bound only through its inherited root (cwd outside the
+	// worktree), or inheriting the holder's worktree as cwd, is refused the
+	// same way while a release holds the lock.
+	if err := releaseLock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	for _, cwd := range []string{t.TempDir(), ""} {
+		_, err = h.runner.AgentSpawn(h.runner.holderCaller(directRec), AgentSpawnRequest{
+			Prompt: "raced inherited spawn", Tier: "small", Authority: "read-only", Cwd: cwd,
+		})
+		agentRefused(t, err, http.StatusConflict, "currently being released")
+	}
+	if err := releaseLock.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 2 {
+		t.Fatalf("refused inherited spawns changed bound children: %+v", got)
+	}
+
 	// Daemon-wide query sees both direct and nested children (and ignores an
 	// unrelated child running on h.root).
 	otherID, otherProc := h.agentRunning(lead, AgentSpawnRequest{
