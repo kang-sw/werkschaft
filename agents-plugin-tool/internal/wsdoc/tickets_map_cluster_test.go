@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -476,5 +477,33 @@ func TestTicketMapSimilarityMemoryIsLinear(t *testing.T) {
 	dense := uint64(n) * uint64(n) * 8
 	if got := after.TotalAlloc - before.TotalAlloc; got >= dense/2 {
 		t.Fatalf("analysis allocated %d bytes for n=%d; a dense matrix is %d", got, n, dense)
+	}
+}
+
+// TestTicketMapRefPlacementIgnoresOtherRefs pins that a closed ref scores only
+// against open members: a ref whose only tie is similarity to another ref
+// lands in Misc whether that ref's stem sorts before or after it.
+func TestTicketMapRefPlacementIgnoresOtherRefs(t *testing.T) {
+	for _, tc := range []struct{ near, lone string }{
+		{"260101-feat-alpha-archive", "260102-feat-beta-archive"},
+		{"260103-feat-alpha-archive", "260102-feat-beta-archive"},
+	} {
+		resetTicketMapState(t)
+		root := t.TempDir()
+		writeMapBoard(t, root, map[string]string{
+			"todo/260110-feat-orchard-pruning": mapTicket("Orchard pruning", "related:", "  "+tc.near+": source"),
+			"todo/260111-feat-orchard-ladder":  mapTicket("Orchard ladder", "parent: 260110-feat-orchard-pruning"),
+			"idea/260112-feat-nebula-drift":    mapTicket("Nebula drift", "related:", "  "+tc.lone+": aside"),
+		})
+		writeOldTicket(t, root, TicketsDir+"/.done/"+tc.near+".md", mapTicket("Quartz lattice resonator tuning"), time.Hour)
+		writeOldTicket(t, root, TicketsDir+"/.done/"+tc.lone+".md", mapTicket("Quartz lattice resonator tuning copy"), time.Hour)
+		r := buildTicketMap(t, root)
+		near, lone := r.Nodes[mapNodeIndex(t, r, tc.near)], r.Nodes[mapNodeIndex(t, r, tc.lone)]
+		if r.Clusters[near.Cluster].Misc {
+			t.Fatalf("%s: related ref landed in Misc", tc.near)
+		}
+		if !r.Clusters[lone.Cluster].Misc {
+			t.Fatalf("%s placed with %s in cluster %d via ref-to-ref similarity", tc.lone, tc.near, lone.Cluster)
+		}
 	}
 }

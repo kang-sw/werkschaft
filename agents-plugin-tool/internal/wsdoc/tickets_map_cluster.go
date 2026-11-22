@@ -742,9 +742,11 @@ func (c *tmCorpus) cluster(out *mapAnalysis) ([]int32, bool) {
 		if c.nodes[r].open {
 			continue
 		}
+		// Score against open members only: part[j] of an earlier ref is
+		// already set, which would make placement depend on stem order.
 		list := c.nbrs[r]
 		for _, j := range list[:min(len(list), tmRefNeighbors)] {
-			if part[j] >= 0 {
+			if c.nodes[j].open && part[j] >= 0 {
 				scoreOf(r)[part[j]] += c.s(int32(r), j) * tmSemScale
 			}
 		}
