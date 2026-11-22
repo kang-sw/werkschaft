@@ -117,16 +117,20 @@ type Store struct {
 	opts   Options
 	limits Limits
 
-	jobs chan job
-	wake chan struct{}
-	stop chan struct{}
-	done chan struct{}
+	// The writer's queue: one FIFO for every job, so a job never overtakes
+	// one queued before it. Appends count against QueueDepth and are dropped
+	// past it; control jobs (boundaries, losses, barriers) are never dropped.
+	// closed is set under qmu, so every job accepted before Close is drained.
+	qmu     sync.Mutex
+	queue   []job
+	appends int
+	closed  bool
+	wake    chan struct{}
+	done    chan struct{}
 
 	mu       sync.Mutex
 	sessions map[string]*sessionInfo // by ring directory name
 	total    int64
-	deferred []job
-	closed   bool
 
 	idx   *indexLog                 // writer goroutine only
 	dirty map[*sessionInfo]struct{} // rings with pending control lines; writer only
@@ -173,8 +177,7 @@ func Open(opts Options) (*Store, error) {
 	}
 	s := &Store{
 		opts: opts, limits: limits,
-		jobs: make(chan job, opts.QueueDepth), wake: make(chan struct{}, 1),
-		stop: make(chan struct{}), done: make(chan struct{}),
+		wake: make(chan struct{}, 1), done: make(chan struct{}),
 		sessions: map[string]*sessionInfo{}, idx: idx, dirty: map[*sessionInfo]struct{}{},
 	}
 	entries, err := readDir(opts.Root)
@@ -233,7 +236,7 @@ func (s *Store) logf(format string, args ...any) {
 // ErrQueueFull when the writer is behind; the event is then dropped and the
 // caller logs and moves on.
 func (s *Store) Append(_ context.Context, ev wsaudit.Envelope) error {
-	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev})
+	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev}, true)
 }
 
 // AppendSourced hands ev to the writer under source identity id, like Append.
@@ -246,23 +249,49 @@ func (s *Store) AppendSourced(_ context.Context, id wsaudit.SourceID, ev wsaudit
 	if l := s.ledgerOf(ev.Session); l != nil && l.isRetained(id) {
 		return wsaudit.ErrDuplicateSource
 	}
-	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev, id: &id})
+	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev, id: &id}, true)
 }
 
-func (s *Store) enqueue(j job) error {
-	select {
-	case <-s.stop:
+// enqueue appends j to the writer's queue in call order. A droppable job
+// (an append) is refused with ErrQueueFull once QueueDepth appends wait.
+func (s *Store) enqueue(j job, droppable bool) error {
+	s.qmu.Lock()
+	if s.closed {
+		s.qmu.Unlock()
 		return ErrClosed
-	default:
 	}
-	select {
-	case s.jobs <- j:
-		return nil
-	default:
+	if droppable && s.appends >= s.opts.QueueDepth {
+		s.qmu.Unlock()
 		s.dropped.Add(1)
 		s.logf("drop %s event of session %s: write queue full", j.ev.Kind, j.ev.Session)
 		return ErrQueueFull
 	}
+	s.queue = append(s.queue, j)
+	if droppable {
+		s.appends++
+	}
+	s.qmu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// take removes every queued job, oldest first.
+func (s *Store) take() []job {
+	s.qmu.Lock()
+	defer s.qmu.Unlock()
+	batch := s.queue
+	s.queue = nil
+	s.appends = 0
+	return batch
+}
+
+func (s *Store) isClosed() bool {
+	s.qmu.Lock()
+	defer s.qmu.Unlock()
+	return s.closed && len(s.queue) == 0
 }
 
 // Recover reports what is retained for session and source, from memory. For
@@ -313,9 +342,8 @@ func (s *Store) ledgerOf(session string) *ledger {
 }
 
 // Finalize advances a source's finalized boundary (wsaudit.Recovery.Boundary).
-// It is ordered after every Append made before it and is never dropped: when
-// the queue is full it runs once the queue drains, which only ever applies a
-// boundary later. The boundary is persisted ahead of the ring's next record,
+// It runs in call order with every other job and is never dropped. The
+// boundary is persisted ahead of the ring's next record,
 // or when the writer next idles.
 func (s *Store) Finalize(_ context.Context, session, source string, boundary uint64) error {
 	return s.control(job{kind: jobFinalize, session: session, source: source, seq: boundary})
@@ -364,25 +392,7 @@ func (s *Store) Sweep(ctx context.Context) error {
 
 // control queues a job that must not be dropped.
 func (s *Store) control(j job) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return ErrClosed
-	}
-	s.mu.Unlock()
-	select {
-	case s.jobs <- j:
-		return nil
-	default:
-	}
-	s.mu.Lock()
-	s.deferred = append(s.deferred, j)
-	s.mu.Unlock()
-	select {
-	case s.wake <- struct{}{}:
-	default:
-	}
-	return nil
+	return s.enqueue(j, false)
 }
 
 func (s *Store) call(ctx context.Context, j job) (jobResult, error) {
@@ -403,15 +413,13 @@ func (s *Store) call(ctx context.Context, j job) (jobResult, error) {
 // Close drains the queue, writes any pending control lines, and closes every
 // held handle.
 func (s *Store) Close() error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		<-s.done
-		return nil
-	}
+	s.qmu.Lock()
 	s.closed = true
-	s.mu.Unlock()
-	close(s.stop)
+	s.qmu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
 	<-s.done
 	return nil
 }
@@ -426,19 +434,23 @@ func (s *Store) run() {
 	}
 	for {
 		select {
-		case j := <-s.jobs:
-			s.handle(j)
 		case <-s.wake:
 		case <-tick:
 			s.sweep()
-		case <-s.stop:
-			s.drain()
+		}
+		for {
+			batch := s.take()
+			if len(batch) == 0 {
+				break
+			}
+			for _, j := range batch {
+				s.handle(j)
+			}
+		}
+		s.flushPending()
+		if s.isClosed() {
 			s.shutdown()
 			return
-		}
-		if len(s.jobs) == 0 {
-			s.runDeferred()
-			s.flushPending()
 		}
 	}
 }
@@ -458,35 +470,6 @@ func (s *Store) flushPending() {
 			}
 		}
 		info.mu.Unlock()
-	}
-}
-
-func (s *Store) runDeferred() {
-	for {
-		s.mu.Lock()
-		list := s.deferred
-		s.deferred = nil
-		s.mu.Unlock()
-		if len(list) == 0 {
-			return
-		}
-		for _, j := range list {
-			s.handle(j)
-		}
-	}
-}
-
-func (s *Store) drain() {
-	for {
-		select {
-		case j := <-s.jobs:
-			s.handle(j)
-		default:
-			s.runDeferred()
-			if len(s.jobs) == 0 {
-				return
-			}
-		}
 	}
 }
 

@@ -659,3 +659,86 @@ func TestStoreDisplayKeyLookupNormalizesRawIDsExactlyOnce(t *testing.T) {
 	s2, _ := openTest(t, root, nil)
 	check(s2)
 }
+
+// TestStoreJobsRunInCallOrder pins one ordered writer queue: with the queue
+// full, a RecordLoss and a Finalize are not overtaken by an append that finds
+// a freed slot after them, and a Flush returns only after both ran.
+func TestStoreJobsRunInCallOrder(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	tokens := make(chan struct{})
+	entered := make(chan struct{}, 64)
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		entered <- struct{}{}
+		<-tokens
+		return orig(f, b)
+	}
+	s, _ := openTest(t, t.TempDir(), func(o *Options) { o.QueueDepth = 2 })
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	<-entered // the writer is inside the write of 1
+	mustAppend(t, s, sourced("sess", 2, wsaudit.KindToolCall))
+	mustAppend(t, s, sourced("sess", 3, wsaudit.KindToolCall))
+	four := sourced("sess", 4, wsaudit.KindToolCall)
+	if err := s.AppendSourced(ctx, four.id, four.Envelope); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("append past the queue depth = %v", err)
+	}
+	if err := s.RecordLoss(ctx, "sess", four.id, wsaudit.LossQueueFull); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finalize(ctx, "sess", "holder:1", 4); err != nil {
+		t.Fatal(err)
+	}
+	tokens <- struct{}{} // finish 1; the writer moves on to 2 and frees a slot
+	<-entered
+	late := tee("sess", 3, 1) // anchored below the boundary finalized before it
+	if err := s.AppendSourced(ctx, late.id, late.Envelope); err != nil {
+		t.Fatalf("append into a freed slot = %v", err)
+	}
+	close(tokens)
+	flush(t, s)
+	if rec := s.Recover("sess", "holder:1"); rec.Boundary != 4 {
+		t.Fatalf("flush returned before the queued Finalize ran: %+v", rec)
+	}
+	want := "[holder:1/s1#0 holder:1/s2#0 holder:1/s3#0]"
+	if got := fmt.Sprint(retainedIDs(t, s, "sess")); got != want || lossCount(t, s, "sess") != 2 {
+		t.Fatalf("retained %s, loss %d", got, lossCount(t, s, "sess"))
+	}
+}
+
+// TestStoreCloseDrainsEveryAcceptedJob pins Close against concurrent
+// producers: every control job accepted before Close reaches disk.
+func TestStoreCloseDrainsEveryAcceptedJob(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		root := t.TempDir()
+		s, _ := openTest(t, root, nil)
+		mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+		flush(t, s)
+		var mu sync.Mutex
+		var accepted uint64
+		var wg sync.WaitGroup
+		for g := 0; g < 4; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				for b := uint64(g + 2); ; b += 4 {
+					if s.Finalize(context.Background(), "sess", "holder:1", b) != nil {
+						return
+					}
+					mu.Lock()
+					accepted = max(accepted, b)
+					mu.Unlock()
+				}
+			}(g)
+		}
+		time.Sleep(time.Millisecond)
+		_ = s.Close()
+		wg.Wait()
+		s2, _ := openTest(t, root, nil)
+		loaded(t, s2, "sess")
+		if rec := s2.Recover("sess", "holder:1"); rec.Boundary != accepted {
+			t.Fatalf("round %d: recovered boundary %d, accepted up to %d", round, rec.Boundary, accepted)
+		}
+		_ = s2.Close()
+	}
+}
