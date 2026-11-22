@@ -198,7 +198,7 @@ func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
 	// The push is the one pushed-usage provider's persisted shape (the
 	// "claude" cache entry and the "Claude push" history source), kept under
 	// its own name (1881); which snapshots may feed it is the harness's trait.
-	if s == nil || snap == nil || !s.harnesses.pushesUsage(snap.Adapter) || snap.Usage == nil {
+	if s == nil || snap == nil || !s.harnesses.pushesClaudeUsage(snap.Adapter) || snap.Usage == nil {
 		return
 	}
 	// Legacy snapshots can contain limits without an observation time.
@@ -441,7 +441,7 @@ func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.index != nil {
 		for _, session := range d.index.Sessions() {
-			if d.harnesses.pushesUsage(session.Harness) {
+			if d.harnesses.pushesClaudeUsage(session.Harness) {
 				d.planUsage.pushClaude(d.snapshots.snapshotWithoutObserved(d.dir, session.ReplyID))
 			}
 		}

@@ -263,7 +263,7 @@ func builtinLifecycle(backend string) LifecyclePolicy {
 // these because that package cannot import this one.
 func TestBuiltinDashboardTraits(t *testing.T) {
 	want := wsdashboard.HarnessTraitSet{
-		BackendClaude: {PushesUsage: true, UntaggedRowsNative: true, TerminalTakeover: true, ReplayClientName: "claude-code"},
+		BackendClaude: {PushesClaudeUsage: true, UntaggedRowsNative: true, TerminalTakeover: true, ReplayClientName: "claude-code"},
 		BackendCodex:  {SeparateFiveHourHistory: true, ReplayClientName: "codex"},
 		BackendPi:     {TerminalTakeover: true, ReplayClientName: "ws-pi-bridge"},
 		BackendAgy:    {ReplayClientName: "agy"},

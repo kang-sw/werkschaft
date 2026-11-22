@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -138,5 +139,31 @@ func TestConnectionDeclarationDrivesCapabilities(t *testing.T) {
 		if got := bare.lifecycleOf(harness).TerminalSummaries; got != want {
 			t.Errorf("no registry: %q takes terminal summaries = %v, want %v", harness, got, want)
 		}
+	}
+}
+
+// TestInitializeRecordsBridgeOnlyRegistration: a registration that declares
+// only a bridge client name (no NamedClient, no ManualHarness) is recorded by
+// the initialize request itself, not just matched by the detector.
+func TestInitializeRecordsBridgeOnlyRegistration(t *testing.T) {
+	regs := wsagent.BuiltinBackendRegistrations()
+	regs["bridgeonly"] = wsagent.BackendRegistration{
+		LeadProfile: "bridgeonly-lead",
+		Connection:  wsagent.ConnectionPolicy{BridgeClientName: "bridgeonly-bridge"},
+	}
+	s := registryServer(t, regs)
+	if got := s.normalizedHarness("bridgeonly"); got != "" {
+		t.Fatalf("fixture must be rejected by name normalization, got %q", got)
+	}
+	params := json.RawMessage(`{"clientInfo":{"name":"bridgeonly-bridge"}}`)
+	s.handle(context.Background(), request{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "initialize", Params: params})
+	if got := s.currentHarness(); got != "bridgeonly" {
+		t.Fatalf("initialize recorded harness %q, want bridgeonly", got)
+	}
+	// A hello (observeHarness) keeps the strict name check.
+	strict := registryServer(t, regs)
+	strict.observeHarness("hello", "bridgeonly")
+	if got := strict.currentHarness(); got != "" {
+		t.Fatalf("hello recorded %q for a bridge-only name, want none", got)
 	}
 }

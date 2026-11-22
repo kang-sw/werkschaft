@@ -47,7 +47,7 @@ func claudeConnectionPolicy() ConnectionPolicy {
 // initialize presents the CLI's client name.
 func claudeDashboardTraits() wsdashboard.HarnessTraits {
 	return wsdashboard.HarnessTraits{
-		PushesUsage:        true,
+		PushesClaudeUsage:  true,
 		UntaggedRowsNative: true,
 		TerminalTakeover:   true,
 		ReplayClientName:   "claude-code",

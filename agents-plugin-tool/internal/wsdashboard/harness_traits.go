@@ -9,9 +9,12 @@ import "strings"
 // a record, profile, config, or history file. The zero value is a harness
 // with nothing special.
 type HarnessTraits struct {
-	// PushesUsage marks a harness whose live snapshots report the account's
-	// usage limits, which the plan-usage store keeps (pushClaude).
-	PushesUsage bool
+	// PushesClaudeUsage marks a harness whose live snapshots feed the Claude
+	// account slot of the plan-usage store (pushClaude): the snapshot's limits
+	// overwrite the cache and history kept under the "claude" provider and
+	// its "Claude push" entry. It is not a generic "reports usage" flag; a
+	// second provider needs its own accumulation, not this trait.
+	PushesClaudeUsage bool
 	// SeparateFiveHourHistory marks a harness whose five-hour usage samples go
 	// to their own history file and projection instead of the shared one.
 	SeparateFiveHourHistory bool
@@ -46,7 +49,7 @@ func (s HarnessTraitSet) normalize(h string) string {
 	return ""
 }
 
-func (s HarnessTraitSet) pushesUsage(h string) bool { return s[h].PushesUsage }
+func (s HarnessTraitSet) pushesClaudeUsage(h string) bool { return s[h].PushesClaudeUsage }
 
 func (s HarnessTraitSet) separateFiveHour(h string) bool { return s[h].SeparateFiveHourHistory }
 

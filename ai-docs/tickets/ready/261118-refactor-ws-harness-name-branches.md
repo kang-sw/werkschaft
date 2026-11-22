@@ -575,6 +575,24 @@ by name to the base run through an overlay: `TestAgentBadgePopoverBrowser`,
 `TestSettingsComboboxBrowser`, `TestTierRoutingUIBrowser`. No race run was done
 in this phase.
 
+**Edition (Phase 3, extension registrations).** A codex review passed the
+built-ins (every source/target choice matches the base) and found two
+extension-only defects, both fixed with no built-in behavior change.
+(1) A registration that declares only `ConnectionPolicy.BridgeClientName`
+matched in `detectHarnessFromInitializeParams` but was then rejected by the
+strict re-normalization in `observeHarness`; `initialize` now records the
+harness the detector resolved (`recordHarness`), and the hello and call-metadata
+paths keep the strict `observeHarness` name check.
+`TestInitializeRecordsBridgeOnlyRegistration` drives the initialize path with a
+bridge-only fixture. (2) `HarnessTraits.PushesUsage` read as a generic "reports
+usage" flag, but setting it makes `pushClaude` overwrite the Claude cache and
+history; it is renamed `PushesClaudeUsage` and documented as feeding the Claude
+account slot, so a second provider needs its own accumulation. No new provider
+plumbing. Targeted `internal/mcp` (`Harness|Initialize|Detect|Connection`) fails
+only the known inventory-environment tests; `internal/wsdashboard`
+(`Trait|PlanUsage|Usage`) and `internal/wsagent` pass; build and vet pass on
+darwin and windows.
+
 ### Phase 4: Residual audit and parity, compatibility, and performance gate
 
 Repeat the source inventory on the landed prerequisite head. Search non-test Go

@@ -13,7 +13,7 @@ import (
 // harness's dashboard behavior declares the same traits itself.
 func testHarnessTraits() HarnessTraitSet {
 	return HarnessTraitSet{
-		"claude": {PushesUsage: true, UntaggedRowsNative: true, TerminalTakeover: true, ReplayClientName: "claude-code"},
+		"claude": {PushesClaudeUsage: true, UntaggedRowsNative: true, TerminalTakeover: true, ReplayClientName: "claude-code"},
 		"codex":  {SeparateFiveHourHistory: true, ReplayClientName: "codex"},
 		"pi":     {TerminalTakeover: true, ReplayClientName: "ws-pi-bridge"},
 		"agy":    {ReplayClientName: "agy"},
@@ -68,7 +68,7 @@ func newTestPlanUsageStore(dir, home string, getenv func(string) string) *planUs
 // declared trait of the harness it is given, so an extension that declares a
 // trait gets the behavior and a harness the set does not register gets none.
 func TestHarnessTraitsDriveDashboardBehavior(t *testing.T) {
-	ext := HarnessTraitSet{"fixture": {PushesUsage: true, SeparateFiveHourHistory: true, UntaggedRowsNative: true, TerminalTakeover: true}}
+	ext := HarnessTraitSet{"fixture": {PushesClaudeUsage: true, SeparateFiveHourHistory: true, UntaggedRowsNative: true, TerminalTakeover: true}}
 	t.Run("untagged rows are native", func(t *testing.T) {
 		row := wslive.Agent{ID: "plain"}
 		if !hudNative(row, "fixture", ext) || !hudNative(row, " Fixture", ext) {

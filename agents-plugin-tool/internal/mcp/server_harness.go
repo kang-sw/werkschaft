@@ -25,8 +25,17 @@ func codexWorkspaceRoots(meta map[string]any) []string {
 	return roots
 }
 
+// observeHarness records a harness name a client reported (a hello, call
+// metadata), accepted only when normalizedHarness knows it.
 func (s *Server) observeHarness(source, harness string) {
-	harness = s.normalizedHarness(harness)
+	s.recordHarness(source, s.normalizedHarness(harness))
+}
+
+// recordHarness records a harness the caller already resolved, without
+// re-normalizing it: initialize detection resolves a bridge-only registration
+// (ConnectionPolicy.BridgeClientName without NamedClient or ManualHarness),
+// which the strict name check above would reject a second time.
+func (s *Server) recordHarness(source, harness string) {
 	if harness == "" {
 		return
 	}
