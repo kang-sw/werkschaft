@@ -1005,3 +1005,225 @@ func TestCompanionPackUninstalledPackIsNotResurrected(t *testing.T) {
 		t.Fatalf("alpha directory back: %v", err)
 	}
 }
+
+// companionTestBackupRemovalFails makes removal fail for every staging run
+// (a run's deferred cleanup) and, with backups set, for a moved-aside "."
+// backup as well.
+func companionTestBackupRemovalFails(store *CompanionPackStore, backups bool) {
+	store.removeAll = func(path string) error {
+		base := filepath.Base(path)
+		if strings.HasPrefix(base, "run-") || (backups && strings.HasPrefix(base, companionSwapAside)) {
+			return errors.New("injected removal failure")
+		}
+		return os.RemoveAll(path)
+	}
+}
+
+func companionTestUpdatedAlpha(t *testing.T) []byte {
+	entries := companionTestBundle(t, "", "alpha")
+	entries[2].data = companionTestPNG(t, 9, 9)
+	return companionTestZip(t, entries...)
+}
+
+func TestCompanionPackStaleSwapBackupNeverResurrects(t *testing.T) {
+	home := t.TempDir()
+	opts := wsconfig.Options{ConfigHome: home}
+	store := new(CompanionPackStore)
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	// The update succeeds but its run, holding the old pack as run/.alpha, cannot be removed.
+	companionTestBackupRemovalFails(store, false)
+	if _, err := companionTestRun(store, home, companionTestUpdatedAlpha(t), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if stale, _ := filepath.Glob(filepath.Join(home, companionStagingName, "run-*", ".alpha")); len(stale) != 1 {
+		t.Fatalf("stale backup not left behind: %v", stale)
+	}
+	// The uninstall removes the stale backup first, then the live pack; its own run removal fails too.
+	if _, err := store.uninstall(opts, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if stale, _ := filepath.Glob(filepath.Join(home, companionStagingName, "run-*", ".alpha")); len(stale) != 0 {
+		t.Fatalf("stale backup survived the uninstall: %v", stale)
+	}
+	store.removeAll = nil
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "beta")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if s := store.snapshot(opts); s.byID["alpha"] != nil || s.byID["beta"] == nil {
+		t.Fatalf("old pack resurrected: %+v", s.packs)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "companions", "alpha")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("alpha directory back: %v", err)
+	}
+}
+
+func TestCompanionPackStaleSwapBackupRemovalFailureRefuses(t *testing.T) {
+	home := t.TempDir()
+	opts := wsconfig.Options{ConfigHome: home}
+	store := new(CompanionPackStore)
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	companionTestBackupRemovalFails(store, true)
+	if _, err := companionTestRun(store, home, companionTestUpdatedAlpha(t), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.uninstall(opts, "alpha"); err == nil {
+		t.Fatal("uninstall proceeded past a stale backup it could not remove")
+	}
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "beta")...), nil, false); err == nil {
+		t.Fatal("install proceeded past a stale backup it could not remove")
+	}
+	if store.snapshot(opts).byID["alpha"] == nil {
+		t.Fatal("refused uninstall removed the pack")
+	}
+	store.removeAll = nil
+	if _, err := store.uninstall(opts, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if store.snapshot(opts).byID["alpha"] != nil {
+		t.Fatal("alpha still installed")
+	}
+}
+
+// companionTestMoveAside moves installed packs into staging backups
+// run/.<id>, as a crash or failed rollback leaves them.
+func companionTestMoveAside(t *testing.T, home, run string, ids ...string) {
+	t.Helper()
+	dir := filepath.Join(home, companionStagingName, run)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if err := os.Rename(filepath.Join(home, "companions", id), filepath.Join(dir, "."+id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCompanionPackRecoveryRefusesAmbiguousBackups(t *testing.T) {
+	home := t.TempDir()
+	opts := wsconfig.Options{ConfigHome: home}
+	store := new(CompanionPackStore)
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	// Two runs each hold a backup of alpha while alpha is absent.
+	companionTestMoveAside(t, home, "run-1", "alpha")
+	second := filepath.Join(home, companionStagingName, "run-2", ".alpha")
+	if err := os.MkdirAll(filepath.Dir(second), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(second, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.uninstall(opts, "alpha"); err == nil {
+		t.Fatal("recovery picked between two backups")
+	}
+	if _, err := os.Lstat(filepath.Join(home, "companions", "alpha")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a backup was restored anyway: %v", err)
+	}
+	for _, run := range []string{"run-1", "run-2"} {
+		if _, err := os.Lstat(filepath.Join(home, companionStagingName, run, ".alpha")); err != nil {
+			t.Fatalf("%s backup deleted: %v", run, err)
+		}
+	}
+}
+
+func TestCompanionPackPartialRecoveryPublishesRestoredPacks(t *testing.T) {
+	home := t.TempDir()
+	opts := wsconfig.Options{ConfigHome: home}
+	store := new(CompanionPackStore)
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha", "beta")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	companionTestMoveAside(t, home, "run-1", "alpha", "beta")
+	store.reload(opts)
+	if s := store.snapshot(opts); s.byID["alpha"] != nil || s.byID["beta"] != nil {
+		t.Fatalf("setup: packs still loaded: %+v", s.packs)
+	}
+	// alpha is restored, then beta's rename fails.
+	beta := filepath.Join(home, "companions", "beta")
+	store.rename = func(oldPath, newPath string) error {
+		if newPath == beta {
+			return errors.New("injected rename failure")
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	if _, err := store.uninstall(opts, "gamma"); err == nil {
+		t.Fatal("partial recovery reported success")
+	}
+	if store.snapshot(opts).byID["alpha"] == nil {
+		t.Fatal("restored pack is not in the published snapshot")
+	}
+	// A later attempt restores the rest.
+	store.rename = nil
+	if _, err := store.uninstall(opts, "gamma"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("second attempt: %v", err)
+	}
+	if s := store.snapshot(opts); s.byID["alpha"] == nil || s.byID["beta"] == nil {
+		t.Fatalf("packs not restored: %+v", s.packs)
+	}
+}
+
+// companionTestMismatchedSizes rewrites the central directory so every entry
+// declares an uncompressed size of 10 bytes, which archive/zip's checksum
+// reader reports as an overrun and discards the bytes of.
+func companionTestMismatchedSizes(data []byte) []byte {
+	out := append([]byte(nil), data...)
+	for i := 0; i+46 <= len(out); i++ {
+		if binary.LittleEndian.Uint32(out[i:]) == 0x02014b50 {
+			binary.LittleEndian.PutUint32(out[i+24:], 10)
+		}
+	}
+	return out
+}
+
+func TestCompanionArchiveMeterBoundsFailedEntries(t *testing.T) {
+	const size, limit = 100 << 10, 100 << 10
+	var entries []companionZipEntry
+	for i := range 4 {
+		entries = append(entries, companionZipEntry{name: fmt.Sprintf("bad%d.bin", i), data: bytes.Repeat([]byte{byte(i + 1)}, size), store: true})
+	}
+	data := companionTestMismatchedSizes(companionTestZip(t, entries...))
+	inflate := &companionInflate{left: 250 << 10}
+	archive, err := openCompanionArchive(data, inflate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := inflate.left
+	for i := range 4 {
+		before := inflate.left
+		if _, err := archive.read(archive.files[fmt.Sprintf("bad%d.bin", i)], limit); err == nil {
+			t.Fatalf("entry %d: size mismatch accepted", i)
+		}
+		if want := min(before, limit); before-inflate.left < want {
+			t.Fatalf("entry %d: charged %d of %d, want at least %d", i, before-inflate.left, before, want)
+		}
+	}
+	if inflate.left != 0 || start-inflate.left > 250<<10 {
+		t.Fatalf("failed entries left budget %d of %d", inflate.left, start)
+	}
+}
+
+func TestCompanionArchiveZeroBudgetRefusesWithoutReading(t *testing.T) {
+	data := companionTestZip(t, companionZipEntry{name: "a.bin", data: []byte("hello"), store: true})
+	inflate := &companionInflate{left: 1 << 20}
+	archive, err := openCompanionArchive(data, inflate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An entry that could not even be opened shows the read never reaches it.
+	f := archive.files["a.bin"]
+	f.Method = 99
+	inflate.left = 0
+	_, err = archive.read(f, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "byte limit") {
+		t.Fatalf("zero budget: %v", err)
+	}
+	if inflate.left != 0 {
+		t.Fatalf("budget changed: %d", inflate.left)
+	}
+}
