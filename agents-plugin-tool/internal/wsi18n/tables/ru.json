@@ -3101,5 +3101,8 @@
   "js.tk.pm.chip.asg.org.pend.other": "{1} · ожидание ({0})",
   "js.tk.pm.vac.tip": "Нельзя выбрать организацию без руководителя",
   "js.tk.pm.vac.hint": "Администратор должен назначить руководителя",
-  "js.tk.pm.stale": "Изменено в другом месте. Откройте заново."
+  "js.tk.pm.stale": "Изменено в другом месте. Откройте заново.",
+  "js.settings.combo.toggle": "Показать варианты",
+  "js.settings.combo.thinking": "рассуждение",
+  "js.settings.combo.unavailable": "недоступно"
 }

@@ -3101,5 +3101,8 @@
   "js.tk.pm.chip.asg.org.pend.other": "{1} · in attesa ({0})",
   "js.tk.pm.vac.tip": "Le organizzazioni senza responsabile non possono essere selezionate",
   "js.tk.pm.vac.hint": "Un amministratore deve assegnare un responsabile per selezionare",
-  "js.tk.pm.stale": "Modificato altrove. Riapri la finestra."
+  "js.tk.pm.stale": "Modificato altrove. Riapri la finestra.",
+  "js.settings.combo.toggle": "Mostra opzioni",
+  "js.settings.combo.thinking": "ragionamento",
+  "js.settings.combo.unavailable": "non disponibile"
 }

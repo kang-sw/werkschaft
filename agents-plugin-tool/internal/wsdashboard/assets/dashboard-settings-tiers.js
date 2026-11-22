@@ -775,16 +775,31 @@
       const harness = el("select", "sel mono tr-bundle-harness");
       view.harnesses.forEach(function (h) { harness.append(option(h, h)); });
       harness.value = bundle.harness;
-      harness.addEventListener("change", changed);
       const model = el("input", "inp mono tr-bundle-model");
       model.type = "text";
       model.value = bundle.model;
+      model.disabled = readOnly;
+      model.setAttribute("aria-label", tr("js.settings.tier_routing.model"));
       model.addEventListener("input", changed);
       const effort = el("input", "inp mono tr-bundle-effort");
       effort.type = "text";
       effort.value = bundle.effort || "";
+      effort.disabled = readOnly;
+      effort.setAttribute("aria-label", tr("js.settings.tier_routing.effort"));
       effort.addEventListener("input", changed);
-      m.content.append(field(tr("js.settings.tier_routing.harness"), harness), field(tr("js.settings.tier_routing.model"), model), field(tr("js.settings.tier_routing.effort"), effort));
+      const cb = typeof window !== "undefined" ? window.WsSettingsCombobox : null;
+      const modelCtrl = cb ? cb.attach(model, { getOptions: function () { return cb.modelOptions(harness.value); } }) : null;
+      const effortCtrl = cb ? cb.attach(effort, { getOptions: function () { return cb.effortOptions(harness.value); } }) : null;
+      harness.addEventListener("change", function () {
+        if (modelCtrl) modelCtrl.refresh();
+        if (effortCtrl) effortCtrl.refresh();
+        changed();
+      });
+      m.content.append(
+        field(tr("js.settings.tier_routing.harness"), harness),
+        field(tr("js.settings.tier_routing.model"), modelCtrl ? modelCtrl.node : model),
+        field(tr("js.settings.tier_routing.effort"), effortCtrl ? effortCtrl.node : effort)
+      );
       if (bundle.inbound.length) m.content.append(el("p", "hint tr-inbound", tr("js.settings.tier_routing.inbound", refsText(bundle.inbound))));
       const traceBox = el("div", "tr-modal-trace");
       traceBox.append(el("b", "", tr("js.settings.tier_routing.live_trace", view.harness)));
