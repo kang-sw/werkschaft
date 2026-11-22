@@ -197,14 +197,22 @@ func boundReservationRefusal(err error) error {
 }
 
 // enclosingWorktreeRoots returns every directory at or above path's
-// canonical form (canonicalWorktreePath, the form release compares) that
-// holds a .git entry, innermost first. Only an absent entry (not found, or a
-// path component that is no directory) means no worktree there; any other
-// error could hide one, so it is returned and the create refuses.
+// canonical form (the EvalSymlinks form release compares) that holds a .git
+// entry, innermost first. Only definite absence (not found, or a path
+// component that is no directory) means no worktree there: a path that does
+// not exist (yet, or any more) is walked as written, as canonicalWorktreePath
+// does. Any other error, resolving the path or looking for an entry, could
+// hide a worktree, so it is returned and the create refuses.
 func enclosingWorktreeRoots(path string) ([]string, error) {
-	path = canonicalWorktreePath(path)
+	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, nil
+	}
+	path = filepath.Clean(path)
+	if resolved, err := resolveWorktreeAlias(path); err == nil {
+		path = filepath.Clean(resolved)
+	} else if !pathAbsent(err) {
+		return nil, fmt.Errorf("could not resolve %s to look for its worktree: %w", path, err)
 	}
 	var roots []string
 	for dir := path; ; {
@@ -213,7 +221,7 @@ func enclosingWorktreeRoots(path string) ([]string, error) {
 		switch {
 		case err == nil:
 			roots = append(roots, dir)
-		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+		case pathAbsent(err):
 		default:
 			return nil, fmt.Errorf("could not check %s for a worktree: %w", dotGit, err)
 		}
@@ -223,6 +231,16 @@ func enclosingWorktreeRoots(path string) ([]string, error) {
 		}
 		dir = parent
 	}
+}
+
+// resolveWorktreeAlias is filepath.EvalSymlinks; a test replaces it to stand
+// in for a resolution error the kernel would not also raise at the first
+// .git lookup (a Windows reparse point or ACL, say).
+var resolveWorktreeAlias = filepath.EvalSymlinks
+
+// pathAbsent reports whether err says definitely that no such path exists.
+func pathAbsent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 func readBounded(path string, limit int64) ([]byte, error) {

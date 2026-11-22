@@ -302,6 +302,35 @@ func TestWorktreeDiscoveryErrorRefusesTheCreate(t *testing.T) {
 	agentRefused(t, err, http.StatusConflict, "could not check", "try again")
 }
 
+// TestWorktreeAliasResolutionErrorRefusesTheCreate verifies that a cwd whose
+// symlinks cannot be resolved, for any reason but definite absence, refuses
+// the create instead of walking the unresolved alias, which could miss the
+// worktree it leads into. A cwd that does not exist is still walked as
+// written.
+func TestWorktreeAliasResolutionErrorRefusesTheCreate(t *testing.T) {
+	h, _ := agentHarness(t, nil)
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.MkdirAll(alias, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(t.TempDir(), "gone")
+	orig := resolveWorktreeAlias
+	resolveWorktreeAlias = func(path string) (string, error) {
+		if path == alias {
+			return "", &fs.PathError{Op: "readlink", Path: path, Err: fs.ErrPermission}
+		}
+		return orig(path)
+	}
+	t.Cleanup(func() { resolveWorktreeAlias = orig })
+	_, err := h.runner.AgentSpawn(h.leadCaller(), AgentSpawnRequest{
+		Prompt: "unresolvable spawn", Tier: "small", Authority: "read-only", Cwd: alias,
+	})
+	agentRefused(t, err, http.StatusConflict, "could not resolve", "try again")
+	if dirs, err := enclosingWorktreeRoots(gone); err != nil || len(dirs) != 0 {
+		t.Fatalf("a missing cwd = %v, %v; want it walked as written and nothing found", dirs, err)
+	}
+}
+
 // TestWorktreeActiveChildrenAndSpawnReleaseReservation verifies daemon-wide
 // bound-child discovery (direct, nested grandchild, sleeping/waiting non-closed
 // children, and closed exclusion), the /agents/by-token/worktree.children
