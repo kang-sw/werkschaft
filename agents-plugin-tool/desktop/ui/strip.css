@@ -1,0 +1,78 @@
+/* The Windows title strip: one 34px row holding the icon, title, menu labels
+   and caption buttons, in the dashboard drawer's tone. The token values are
+   copied from the dashboard (wswhiteboard/assets/page.css): this page cannot
+   load dashboard CSS. The geometry (34px strip, 46px caption buttons) is
+   mirrored in src/strip.rs and src/snap.rs. */
+:root {
+  color-scheme: light;
+  --wb-bg: #f3f3f0; --wb-fg: #1b1d21; --wb-card: #ffffff; --wb-muted: #e9e8e3;
+  --wb-muted-fg: #5f646b; --wb-primary: #2b62d9;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .14), 0 2px 6px rgb(0 0 0 / .06);
+  --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .16), 0 6px 18px rgb(0 0 0 / .10);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --wb-bg: #141518; --wb-fg: #e7e7e4; --wb-card: #1e2024; --wb-muted: #2b2d32;
+    --wb-muted-fg: #a2a6ad; --wb-primary: #7aa2ff;
+    --wb-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+    --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --wb-bg: #141518; --wb-fg: #e7e7e4; --wb-card: #1e2024; --wb-muted: #2b2d32;
+  --wb-muted-fg: #a2a6ad; --wb-primary: #7aa2ff;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --wb-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+}
+:root {
+  --wb-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --strip-h: 34px;
+  --close-bg: #c42b1c; --close-press: #b22a1b; --close-fg: #ffffff;
+}
+
+html, body { margin: 0; height: var(--strip-h); overflow: hidden; background: var(--wb-bg); }
+body { font-family: var(--wb-sans); }
+
+.strip {
+  position: relative; z-index: 2; display: flex; align-items: stretch; height: var(--strip-h); box-sizing: border-box;
+  padding-top: 2px;
+  background: var(--wb-card); border-radius: 0 0 8px 8px; box-shadow: var(--wb-shadow-hi);
+  color: var(--wb-muted-fg); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1;
+  container-type: inline-size;
+  -webkit-user-select: none; user-select: none; cursor: default;
+}
+.app { flex: 0 1 auto; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; min-width: 0; }
+.app img { width: 16px; height: 16px; display: block; flex: none; }
+.title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wb-fg); padding-right: 6px; }
+/* Below 600px the title would be a meaningless sliver: drop it, keep the icon. */
+@container (max-width: 599px) { .title { display: none; } .app { padding-right: 2px; } }
+.menus { flex: none; display: flex; align-items: center; padding: 0 2px; }
+.menu {
+  all: unset; box-sizing: border-box; position: relative; display: flex; align-items: center; height: 26px; padding: 0 9px;
+  border-radius: 6px;
+  color: var(--wb-muted-fg); font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: default;
+}
+.menu:hover, .menu.is-open { color: var(--wb-fg); background: var(--wb-muted); }
+.menu.is-open::after {
+  content: ""; position: absolute; left: 9px; right: 9px; bottom: -4px; height: 2px; border-radius: 2px 2px 0 0; background: var(--wb-primary);
+}
+.drag { flex: 1 1 0; min-width: 48px; }
+.caps { flex: none; display: flex; margin-top: -2px; border-radius: 0 0 8px 0; overflow: hidden; }
+.cap {
+  all: unset; box-sizing: border-box; width: 46px; height: var(--strip-h);
+  display: grid; place-items: center; color: var(--wb-muted-fg); cursor: default;
+}
+.cap svg { width: 10px; height: 10px; display: block; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
+.cap:hover, .cap.is-hover { color: var(--wb-fg); background: var(--wb-muted); }
+.cap:active, .cap.is-pressed { color: var(--wb-fg); background: color-mix(in srgb, var(--wb-fg) 13%, var(--wb-muted)); }
+.cap.close:hover { background: var(--close-bg); color: var(--close-fg); }
+.cap.close:active { background: var(--close-press); color: var(--close-fg); opacity: .9; }
+.cap .restore, .maximized .cap .maximize { display: none; }
+.maximized .cap .restore { display: block; }
+
+/* Unfocused: the handle steps down one shadow level and text and icon dim. */
+.unfocused .strip { box-shadow: var(--wb-shadow); }
+.unfocused .title, .unfocused .menu:not(:hover, .is-open), .unfocused .cap:not(:hover, :active, .is-hover, .is-pressed) { color: color-mix(in srgb, var(--wb-muted-fg) 62%, transparent); }
+.unfocused .app img { opacity: .5; }
