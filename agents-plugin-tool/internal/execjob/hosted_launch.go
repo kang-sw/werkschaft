@@ -247,19 +247,27 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return fmt.Errorf("exec: %d jobs already run; stop one first", running)
 	}
-	if pending := len(h.deleting); running+pending >= HostedMaxJobs {
-		h.mu.Unlock()
-		return fmt.Errorf("exec: %d jobs run and %d finished jobs' records could not be deleted from the job store; retry later, or stop a job", running, pending)
-	}
+	orphans := 0
 	for id := range h.retiring {
 		if _, ok := h.jobs[id]; !ok {
 			// A predecessor's holder no job owns holds its id the same way.
-			held++
+			orphans++
 		}
 	}
-	if running+held >= HostedMaxJobs {
+	held += orphans
+	// Every id that stays taken fills the cap together: the running jobs,
+	// the dropped jobs whose row delete keeps failing, and the ended jobs
+	// (or bare ids) whose holders are still being stopped.
+	if pending := len(h.deleting); running+pending+held >= HostedMaxJobs {
 		h.mu.Unlock()
-		return fmt.Errorf("exec: %d jobs run and %d ended jobs wait for their holders to stop; retry later, or stop a job", running, held)
+		var waits []string
+		if pending > 0 {
+			waits = append(waits, fmt.Sprintf("%d finished jobs' records could not be deleted from the job store", pending))
+		}
+		if held > 0 {
+			waits = append(waits, fmt.Sprintf("%d ended jobs wait for their holders to stop", held))
+		}
+		return fmt.Errorf("exec: %d jobs run and %s; retry later, or stop a job", running, strings.Join(waits, " and "))
 	}
 	h.jobs[j.row.ID] = j
 	var dropped []*hostedJob
@@ -267,7 +275,8 @@ func (h *Hosted) admit(j *hostedJob) error {
 	// The dropped jobs' tombstones are this prune's from the start: no
 	// retry deletes their rows before forget has fenced their writes.
 	drop := h.claimLocked()
-	if over := len(h.jobs) - HostedMaxJobs; over > 0 {
+	// The bare reserved ids take room under the cap as job rows do.
+	if over := len(h.jobs) + orphans - HostedMaxJobs; over > 0 {
 		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
 		// The batch fits the tombstones' room under the job cap, so even a
 		// failed bulk delete parks no more than the cap; jobs left over

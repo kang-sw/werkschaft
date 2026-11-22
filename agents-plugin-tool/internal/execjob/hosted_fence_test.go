@@ -467,6 +467,53 @@ func TestHostedPinnedJobsCountTowardTheCap(t *testing.T) {
 	}
 }
 
+// The cap counts every id that stays taken together: undeletable dropped
+// rows plus pinned ended jobs refuse a launch once they fill it, and bare
+// reserved ids take room in the prune as job rows do.
+func TestHostedCapCountsTombstonesPinsAndReservationsTogether(t *testing.T) {
+	half := HostedMaxJobs / 2
+	t.Run("tombstones and pins", func(t *testing.T) {
+		fx := newHostedFixture(t, time.Second)
+		fx.store.mu.Lock()
+		fx.store.failDelete = true
+		fx.store.mu.Unlock()
+		fx.h.mu.Lock()
+		for i := 0; i < half; i++ {
+			fx.h.deleting[fmt.Sprintf("exec_dropped-%d", i)] = &tombstone{}
+			id := fmt.Sprintf("exec_pinned-%d", i)
+			j := &hostedJob{done: make(chan struct{}), out: fx.h.rings.NewJob(), holderPinned: true}
+			j.row = HostedJobRow{ID: id, Owner: "lead", State: HostedStopped, EndedAt: int64(i + 1)}
+			close(j.done)
+			fx.h.jobs[id] = j
+		}
+		fx.h.mu.Unlock()
+		_, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+		if err == nil || !strings.Contains(err.Error(), "could not be deleted") || !strings.Contains(err.Error(), "wait for their holders to stop") {
+			t.Fatalf("a launch over %d undeletable rows and %d pinned jobs: %v", half, half, err)
+		}
+	})
+	t.Run("reservations in the prune", func(t *testing.T) {
+		fx := newHostedFixture(t, time.Second)
+		fx.quickJobs()
+		for i := 0; i < half; i++ {
+			fx.launchFinished()
+		}
+		reserved := half + half/2
+		fx.h.mu.Lock()
+		for i := 0; i < reserved; i++ {
+			fx.h.retiring[fmt.Sprintf("exec_reserved-%d", i)] = 1
+		}
+		fx.h.mu.Unlock()
+		fx.launchFinished()
+		fx.h.mu.Lock()
+		jobs := len(fx.h.jobs)
+		fx.h.mu.Unlock()
+		if jobs+reserved > HostedMaxJobs {
+			t.Fatalf("%d jobs and %d reserved ids, over the cap of %d", jobs, reserved, HostedMaxJobs)
+		}
+	})
+}
+
 // A job stopped while LaunchWith still runs is pinned from the start of
 // that launch: admissions meanwhile neither prune it nor free its id, since
 // the holder being launched will write the exit copy at that id's path.
