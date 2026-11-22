@@ -310,7 +310,7 @@ func companionGuideExamples(t testing.TB) map[string][]byte {
 		}
 		out[m[1]] = []byte(m[2])
 	}
-	for _, name := range []string{"pack-minimal", "pack-full", "marketplace", "marketplace-external-entry"} {
+	for _, name := range []string{"pack-minimal", "pack-full", "pack-kit", "marketplace", "marketplace-external-entry"} {
 		if out[name] == nil {
 			t.Fatalf("the guide has no example:%s block", name)
 		}
@@ -351,9 +351,22 @@ func TestCompanionAuthoringExamplesPassPipeline(t *testing.T) {
 	path := listed[0].(map[string]any)["path"].(string)
 	id := listed[0].(map[string]any)["id"].(string)
 
-	for _, packExample := range []string{"pack-minimal", "pack-full"} {
+	for _, packExample := range []string{"pack-minimal", "pack-full", "pack-kit"} {
 		t.Run(packExample, func(t *testing.T) {
 			raw := examples[packExample]
+			if packExample == "pack-kit" {
+				// The kit example takes its own pack ID, so it is installed
+				// under that ID rather than the marketplace example's.
+				if _, _, err := validateCompanionManifest(raw, "fixture-fox"); err != nil {
+					t.Fatalf("the kit example under its own ID: %v", err)
+				}
+				doc := companionDecode(t, raw)
+				doc["id"] = id
+				raw = companionEncode(t, doc)
+				if issues := lintCompanionKit(raw); len(issues) != 0 {
+					t.Fatalf("the kit example has advisory findings: %q", issues)
+				}
+			}
 			if got := companionDecode(t, raw)["id"]; got != id {
 				t.Fatalf("pack id %v differs from the marketplace example id %s", got, id)
 			}
@@ -409,7 +422,7 @@ func TestCompanionAuthoringExamplesMatchSchemas(t *testing.T) {
 	examples := companionGuideExamples(t)
 	pack := companionSchemaEval{t, companionAuthoringSchema(t, "pack.schema.json")}
 	market := companionSchemaEval{t, companionAuthoringSchema(t, "marketplace.schema.json")}
-	for _, name := range []string{"pack-minimal", "pack-full"} {
+	for _, name := range []string{"pack-minimal", "pack-full", "pack-kit"} {
 		if !pack.valid(pack.root, companionDecode(t, examples[name])) {
 			t.Errorf("%s does not match pack.schema.json", name)
 		}

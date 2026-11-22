@@ -126,6 +126,227 @@ What the optional parts do:
 not fail the pack, so newer packs still load in older dashboards. Names inside
 open maps (the pose, gesture, prop and expression IDs) are yours to choose.
 
+## Kit packs: outfits, attachments and eye sets
+
+A **kit pack** is a pack that lets the user dress the character: swap outfits,
+eye sets and worn items, and recolor tinted parts. It is the same
+`ws-companion/v1` file with more optional sections. A pack without them stays a
+plain pack and draws the layers under `poses` as before.
+
+The head set and the body set are separate. Hair, eyes, attachments and colors
+combine freely. The body set is an **outfit**: art that already wears the
+outfit, drawn per column. A column is a pose or gesture ID such as `stand`.
+
+```json example:pack-kit
+{
+  "schema": "ws-companion/v1",
+  "id": "fixture-fox",
+  "name": "Fixture Fox",
+  "canvas": [512, 512],
+  "registration": { "headAnchor": [255, 184], "feetPivot": [256, 503], "tolerance": 4 },
+  "palette": { "skin": "#f2c9a5", "hair": "#6b3f1d", "outfitPrimary": "#2a4d69" },
+  "defaultOutfit": "casual",
+  "head": {
+    "egg": { "skinFill": "egg-fill.png", "line": "egg-line.png" },
+    "eyes": { "sclera": "eyes-sclera.png" }
+  },
+  "poses": {
+    "stand": {
+      "headAnchor": [255, 184],
+      "layers": [
+        { "line": "casual-stand-line.png", "jacketFill": "casual-stand-jacket.png", "skinFill": "casual-stand-skin.png" }
+      ]
+    },
+    "typing": { "fallback": "stand", "headAnchor": [255, 240] }
+  },
+  "gestures": { "wave": { "pose": "stand" } },
+  "outfits": {
+    "casual": {
+      "palette": { "outfitPrimary": "#2a4d69" },
+      "poses": {
+        "stand": {
+          "layers": [
+            { "id": "arm", "line": "casual-stand-line.png", "skinFill": "casual-stand-skin.png", "fills": { "outfitPrimary": "casual-stand-jacket.png" } }
+          ]
+        },
+        "typing": {
+          "headAnchor": [255, 240],
+          "layers": [{ "line": "casual-typing-line.png", "fills": { "skin": "casual-typing-skin.png" } }]
+        }
+      },
+      "gestures": {
+        "wave": { "replaces": ["arm"], "layers": [{ "line": "casual-wave-line.png", "fills": { "skin": "casual-wave-skin.png" } }] }
+      }
+    },
+    "formal": {
+      "poses": {
+        "stand": { "layers": [{ "line": "formal-stand-line.png", "fills": { "skin": "formal-stand-skin.png", "outfitPrimary": "formal-stand-fill.png" } }] }
+      }
+    }
+  },
+  "attachments": {
+    "cap": { "slot": "headdress", "bind": "head", "layers": [{ "line": "cap-line.png", "fills": { "capFill": "cap-fill.png" } }] },
+    "tail": {
+      "slot": "tail",
+      "bind": "body",
+      "layers": [{ "file": "tail.png" }],
+      "columns": { "typing": { "layers": [{ "file": "tail-seated.png" }] } }
+    }
+  },
+  "eyesets": { "round": { "sclera": "round-sclera.png", "irisFill": "round-iris.png" } }
+}
+```
+
+### Outfits
+
+`outfits.<id>` holds `poses` and `gestures` maps of columns, plus an optional
+`palette`. Each column carries:
+
+- `layers`, the outfit's art for that column. Every layer is validated like a
+  pose layer, except that it may draw with `fills` alone.
+- Optional `headAnchor`, `handAnchor` and `feetPivot` (`[x, y]` in canvas
+  pixels), and for a gesture `replaces`.
+
+The art is outfit-baked: each column's rasters already contain the outfit. Draw
+the skin as a flat, pure-white `skinFill` mask so the `skin` color tints it, the
+same as the head. The head is drawn above every body layer, so the body art
+tucks its neck under the head.
+
+**Column registry.** A column an outfit binds still needs an entry under the
+top-level `poses` or `gestures`, even a layer-less one (`"typing"` above).
+Scenarios and the choice of pose read those top-level maps. A field a column
+leaves out (`headAnchor`, `handAnchor`, `feetPivot`, `replaces`, and the
+`pose` and `fallback` names) is taken from the top-level entry of the same ID.
+`layers` is never inherited: a column is drawn from an outfit only when its own
+entry has `layers`.
+
+**Resolution.** The wanted column is looked up in the worn outfit. If the outfit
+does not bind it, the column's `fallback` chain is followed inside the same
+outfit, ending at `stand`. If nothing is bound, the layers under top-level
+`poses` are drawn. An outfit never borrows a column from another outfit, and the
+character is never drawn empty. Bind `stand` in every outfit.
+
+An outfit gesture column draws its own layers. Its `replaces` list removes
+layers of the same outfit's pose column whose `id` or `slot` matches.
+
+**Default and choice.** `defaultOutfit` names the outfit worn when no preset or
+setting picks one; without it the first outfit ID in sorted order is worn.
+Outfit, eye-set and attachment IDs use the pack ID characters (lowercase
+letters, digits, `-`, `_`), and the attachment ID `none` is reserved because it
+clears a slot. A preset may choose `outfit`, `eyes` (an eye-set ID),
+`attachments` (`{ "<slot>": "<id>" }`, with `"none"` to clear a slot) and
+`palette`. A setting the user makes beats the preset, and the preset beats the
+pack default. An ID the pack does not have is ignored.
+
+### Tint channels and the palette
+
+`fills` is a map from a channel name to a raster, valid on a layer or a frame.
+Each raster is a neutral white mask that is multiplied by the color of its
+channel. The built-in channels are `skin`, `hair`, `eye`, `outfitPrimary` and
+`outfitAccent`. Your own channel names start with a letter and use letters,
+digits, `-` and `_`, up to 32 characters (`capFill` above).
+
+`palette` maps a channel to a `#rrggbb` color. It may sit on the pack and on an
+outfit. A channel's color comes from, lowest to highest: the engine default,
+the pack `palette`, the worn outfit's `palette`, the preset's `palette`, the
+user's setting. A channel with no color draws untinted.
+
+Every raster named in `fills` is a file of the pack like any other, so it
+counts toward the data-only rule and the limits below.
+
+### Attachments
+
+`attachments.<id>` is a worn item: `slot`, `bind`, `layers`, optional `z`, and
+optional `columns`. One attachment fills one slot at a time.
+
+- `slot` is `headdress`, `ears`, `accessory` or `tail`, or a slot name of your
+  own (a lowercase letter, then up to 31 lowercase letters, digits, `-` or `_`).
+- `bind: "head"` moves the item with the head. `bind: "body"` draws it with the
+  body: for a body item, `columns.<column>.layers` is used for the column being
+  drawn (the gesture column first, then the pose column), and `layers` is the
+  fallback.
+- `z` sets the stacking order. Without it the slot decides: `tail` 11, `ears`
+  45, `headdress` 56, `accessory` 57; a slot of your own gets 57 when
+  head-bound and 21 when body-bound.
+
+The validator checks only the layer lists of an attachment. It never reads
+`slot` or `bind`, and the schema describes them without enforcing them, so a
+misspelled slot or binding is not caught: check them yourself.
+
+### Eye sets
+
+`eyesets.<id>` takes the same keys as `head.eyes` (`sclera`, `irisFill`,
+`irisLine`, `frameLower`, `lidCoverL`, `lidCoverR`, `lidLashL`, `lidLashR`,
+`browL`, `browR`). `head.eyes` stays the default set. The user or a preset picks
+another by ID.
+
+### Registration
+
+`registration` is optional: `headAnchor` and `feetPivot` as `[x, y]`, and a
+`tolerance` in pixels (default 4). It states where your columns are meant to
+line up. The engine does not move art by it, and the validator does not check
+it; it is a reference for your own checks. Compare each column's own or
+inherited `headAnchor` with it: on both axes for `stand`, on x for the other
+columns, since seated columns anchor lower by design. Likewise `feetPivot` is
+informational only; the engine aligns columns by their bounds.
+
+### The legacy `poses` projection
+
+A kit pack must still be a valid plain pack. The validator requires the
+top-level `poses.stand` with at least one layer, and the layers under top-level
+`poses` and `gestures` follow the plain-pack rules: each layer or frame needs a
+fixed raster key (`file`, `line`, `jacketFill`, `accentFill`, `skinFill`,
+`detail` or `hairFill`), and `fills` alone are not enough there. Fill your
+`poses.stand.layers` from your default outfit using only those keys. A dashboard
+that predates kit packs ignores the new sections and draws only that
+projection, and it serves only files it can find there, so a layer that carries
+only `fills` is rejected by it. The same layers are the final fallback of the
+resolution above.
+
+### Mesh deform
+
+An outfit column may declare a `deform` object so one piece of body art bends
+(a breathing shoulder, swinging knees) without being cut into parts. It is
+optional, only read on outfit columns, and ignored on a top-level `poses` or
+`gestures` entry. The validator does not check it, and a dashboard that does not
+know it draws the column rigid.
+
+```json
+"deform": {
+  "grid": [12, 16],
+  "bones": {
+    "hip": { "pivot": [235, 330], "region": [[200, 300], [260, 300], [260, 420], [200, 420]], "feather": 24,
+             "motion": { "oscillate": { "rotDeg": [-4, 4], "hz": 0.8 } } },
+    "knee": { "pivot": [238, 410], "parent": "hip", "region": [[200, 400], [260, 400], [260, 500], [200, 500]],
+              "motion": { "oscillate": { "rotDeg": [-6, 6], "hz": 0.8, "phase": 0.17 } } }
+  },
+  "roll": { "pivot": [256, 184], "motion": { "oscillate": { "rotDeg": [-2, 2], "hz": 0.5 } } }
+}
+```
+
+- `grid` is `[columns, rows]` of the mesh laid over the column's drawn area.
+  The default is `[12, 16]`; each value is clamped to 2 to 32.
+- `bones` is a map of at most 16 bones. A bone ID is a lowercase letter, then up
+  to 31 letters, digits, `-` or `_`. `pivot` is a canvas point. `region` is a
+  polygon of at least 3 canvas points (at most 64 are read). `parent` names
+  another bone; a child's transform applies after its parent's. `feather` is the
+  distance in pixels over which a region's influence fades out (default 24, 0 to
+  256). Keep it no tighter than about one grid cell.
+- A bone's `motion` is the name of an entry in `motions`, a built-in motion
+  name, or an inline motion like a layer's. Only `tx`, `ty` (canvas pixels) and
+  `rotDeg` apply.
+- `roll` rotates the whole composed column, head and attachments included,
+  about `pivot` (default the column's `headAnchor`). Only `rotDeg` applies.
+- The head is not meshed, but it follows the deformed neck point so it stays
+  seated.
+- Layers with `frames`, a `motion` or `swingWeight`, body attachments and
+  `replaces` removals are drawn rigidly and are never meshed. The meshed art
+  draws at the lowest `z` of the column's static layers, so do not put a rigid
+  layer's `z` between the static layers.
+- Each column declares its own `deform`; nothing is inherited. Keep motions
+  small: a bend of a few degrees or a few pixels stays clean, and large angles
+  thin or tear the line art. Preview at rest and at the extreme of each motion.
+
 ## The marketplace manifest
 
 A pack is installed from a **source**: a collection that holds a
