@@ -84,7 +84,7 @@ To preserve Style D's crisp `#1e2433` monoline ink while enabling instant runtim
 
 ### 4. Canonical `ws-companion/v1` `pack.json` Schema & Motion Tracks
 
-A pack is a single self-contained `pack.json` plus relative WebP/PNG/SVG assets (minimizing file touches on Windows AV). Smart defaults keep minimal BYO packs to 7 lines while full packs remain concise and scannable:
+A pack is a single self-contained `pack.json` plus relative WebP/PNG raster assets (`.svg` is rejected on pack asset routes to eliminate same-origin active-SVG script XSS; single-file `pack.json` minimizes file touches on Windows AV). Smart defaults keep minimal BYO packs to 7 lines while full packs remain concise and scannable:
 
 - **Smart defaults & mode inference:**
   - `z` defaults to `20`; `fallback` defaults to `"stand"`; `headScale` defaults to `1.0`.
@@ -285,5 +285,5 @@ The 12 canonical scenarios below form the **built-in starter registry**; packs c
   - `dashboard.companion_director`: `rules` (default) | `sidecar` | `lead-tool`
   - `dashboard.companion_pack`: `default` (default) | `auto` | `<pack-id>`
   - `dashboard.companion_preset`: `werkschaft-d1` (default) | `<preset-id>`
-- **Local BYO Pack Storage (`performance.md` Compliant):** User packs live at `<config-home>/companions/<pack-id>/pack.json` (resolved alongside `wsconfig.GlobalPath`, honoring `WS_CONFIG_HOME`). Served by the daemon from a startup/explicit-reload in-memory index with ETag/304 caching and strict path-traversal/symlink guards so interactive frames perform zero disk I/O on Windows AV.
+- **Local BYO Pack Storage (`performance.md` Compliant):** User packs live at `<config-home>/companions/<pack-id>/pack.json` (resolved alongside `wsconfig.GlobalPath`, honoring `WS_CONFIG_HOME`; `"default"` and `"auto"` are reserved selector IDs and rejected as local pack directories). Indexed lazily in memory on the first companion pack request and refreshed only on explicit `POST /api/companion/packs/reload`, with `ETag`/`304`, `409 Conflict` on stale `?rev=`, and strict raster-only/symlink guards so daemon boot (when `off`) and steady-state warm hits perform zero pack-store disk I/O on Windows AV.
 - **Public Repository IP Boundary:** The public repository ships **only** the companion engine, `pack.json` schema, IP-clean original default assets, and the reproducible pack recipe. Third-party or community character packs live strictly outside git under `<config-home>/companions/`.
