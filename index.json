@@ -517,16 +517,6 @@
     "261119-refactor-ws-config-drop-candidate-cleanup": {
       "registered_at": "2026-11-19T14:03:33Z"
     },
-    "261120-feat-ws-agy-timeout-process-respawn": {
-      "registered_at": "2026-11-20T14:49:51Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T11:52:11Z"
-      }
-    },
     "261120-feat-ws-dashboard-numbers-screen": {
       "registered_at": "2026-11-20T11:31:45Z"
     },
@@ -625,19 +615,6 @@
     "261122-feat-ws-dashboard-session-stats": {
       "registered_at": "2026-11-22T10:16:59Z"
     },
-    "261122-feat-ws-native-subagent-roster": {
-      "registered_at": "2026-11-22T09:16:51Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T09:33:24Z",
-        "impl": {
-          "branch": "impl/develop/heat-showy-lego"
-        }
-      }
-    },
     "261122-feat-ws-provider-auth-layer": {
       "registered_at": "2026-11-22T08:45:21Z",
       "lease": {
@@ -653,19 +630,6 @@
     },
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
-    },
-    "261122-fix-ws-dogfood-surprises-batch": {
-      "registered_at": "2026-11-22T10:47:31Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T11:15:20Z",
-        "impl": {
-          "branch": "impl/develop/press-diner-sift"
-        }
-      }
     }
   }
 }
