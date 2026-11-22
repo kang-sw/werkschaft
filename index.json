@@ -637,9 +637,9 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T05:05:04Z",
+        "touched_at": "2026-11-22T05:07:56Z",
         "impl": {
-          "branch": "impl/develop/companion-engine-v2"
+          "branch": "impl/develop/crock-ashes-amigo"
         }
       }
     }
