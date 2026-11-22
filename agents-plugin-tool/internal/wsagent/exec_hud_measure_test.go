@@ -64,18 +64,29 @@ func (l *measureLink) HolderEvent(id string, ev wsholder.Event) {
 // siteDelta is the counted file operations between two FileIOCounters reads,
 // by source site, and their total.
 func siteDelta(before, after map[string]int64) (int64, string) {
+	total, sites := siteDeltas(before, after)
 	var parts []string
+	for site, d := range sites {
+		parts = append(parts, fmt.Sprintf("%s=%d", site, d))
+	}
+	sort.Strings(parts)
+	return total, strings.Join(parts, " ")
+}
+
+// siteDeltas is the per-site form of siteDelta: site -> counted operations
+// between the two reads (only sites that grew).
+func siteDeltas(before, after map[string]int64) (int64, map[string]int64) {
+	sites := map[string]int64{}
 	for k, v := range after {
 		site, ok := strings.CutPrefix(k, "file_io_site:")
 		if !ok {
 			continue
 		}
 		if d := v - before[k]; d > 0 {
-			parts = append(parts, fmt.Sprintf("%s=%d", site, d))
+			sites[site] = d
 		}
 	}
-	sort.Strings(parts)
-	return after["file_io_total"] - before["file_io_total"], strings.Join(parts, " ")
+	return after["file_io_total"] - before["file_io_total"], sites
 }
 
 // TestExecHUDStopAndReadsThroughProductionPaths measures the HUD's service
@@ -148,28 +159,59 @@ func TestExecHUDStopAndReadsThroughProductionPaths(t *testing.T) {
 		})
 		return v.ID
 	}
+	// background is the set of sites the harness itself touches while nothing
+	// is asked of the service (filled from the control measurement below). The
+	// counters are process-wide, so a heartbeat can land inside a microsecond
+	// window; the zero-op assertions therefore count only sites outside it.
+	// Any site the code under test could touch (the Hosted, holder, inbox and
+	// ring stores) is absent from the control, so it is still counted.
+	background := map[string]bool{}
+	var measuredSites map[string]int64
 	measure := func(name string, do func()) int64 {
 		t.Helper()
 		before := wsstate.FileIOCounters()
 		start := time.Now()
 		do()
 		took := time.Since(start)
-		ops, sites := siteDelta(before, wsstate.FileIOCounters())
+		after := wsstate.FileIOCounters()
+		ops, sites := siteDelta(before, after)
+		_, measuredSites = siteDeltas(before, after)
 		t.Logf("%-46s %3d counted file ops, %v  [%s]", name, ops, took.Round(time.Microsecond), sites)
 		return ops
+	}
+	// foreign is the last measurement's operations at sites outside the
+	// background set, and their description.
+	foreign := func() (int64, string) {
+		var n int64
+		var parts []string
+		for site, d := range measuredSites {
+			if !background[site] {
+				n += d
+				parts = append(parts, fmt.Sprintf("%s=%d", site, d))
+			}
+		}
+		sort.Strings(parts)
+		return n, strings.Join(parts, " ")
 	}
 
 	a, b, c := launch(""), launch(""), launch(execjob.OriginUser)
 	// Control: the same wait with no action, so the harness's own
 	// background file operations (its heartbeat) can be told apart.
-	measure("control: 2.2 s of nothing", func() { time.Sleep(2200 * time.Millisecond) })
+	if ops := measure("control: 2.2 s of nothing", func() { time.Sleep(2200 * time.Millisecond) }); ops == 0 {
+		t.Fatal("the control saw no background file operations; the harness heartbeat is not being counted")
+	}
+	for site := range measuredSites {
+		background[site] = true
+	}
 	// Reads: memory only, at any job count (here 3 jobs and a read of the
 	// retained output).
-	if ops := measure("list (Hosted.Jobs, 3 jobs)", func() { _ = hosted.Jobs(id) }); ops != 0 {
-		t.Fatalf("the list touched %d files", ops)
+	measure("list (Hosted.Jobs, 3 jobs)", func() { _ = hosted.Jobs(id) })
+	if n, sites := foreign(); n != 0 {
+		t.Fatalf("the list touched %d files [%s]", n, sites)
 	}
-	if ops := measure("output read (16 KiB window)", func() { _, _ = hosted.ReadOutput(id, a, 0, 0) }); ops != 0 {
-		t.Fatalf("the output read touched %d files", ops)
+	measure("output read (16 KiB window)", func() { _, _ = hosted.ReadOutput(id, a, 0, 0) })
+	if n, sites := foreign(); n != 0 {
+		t.Fatalf("the output read touched %d files [%s]", n, sites)
 	}
 	// The agent job's stop while its conversation runs a turn: the notice
 	// steers into it.
@@ -206,7 +248,8 @@ func TestExecHUDStopAndReadsThroughProductionPaths(t *testing.T) {
 		}
 	}
 	// The same stop of a job that is already stopped is an I/O-free no-op.
-	if ops := measure("repeated stop (already stopped, notice sent)", func() { _, _ = hosted.StopByUser(id, a) }); ops != 0 {
-		t.Fatalf("a repeated stop touched %d files", ops)
+	measure("repeated stop (already stopped, notice sent)", func() { _, _ = hosted.StopByUser(id, a) })
+	if n, sites := foreign(); n != 0 {
+		t.Fatalf("a repeated stop touched %d files [%s]", n, sites)
 	}
 }
