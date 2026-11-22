@@ -145,14 +145,12 @@ func (h *Hosted) convert(j *hostedJob) HostedView {
 func (h *Hosted) admit(j *hostedJob) error {
 	h.mu.Lock()
 	var retry []string
-	for id := range h.deleting {
-		retry = append(retry, id)
+	var claim uint64
+	if !h.closed {
+		retry, claim = h.claimRetriesLocked()
 	}
-	closed := h.closed
 	h.mu.Unlock()
-	if !closed {
-		h.forget(nil, retry)
-	}
+	h.forget(nil, retry, claim)
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -181,6 +179,9 @@ func (h *Hosted) admit(j *hostedJob) error {
 	h.jobs[j.row.ID] = j
 	var dropped []*hostedJob
 	var ids []string
+	// The dropped jobs' tombstones are this prune's from the start: no
+	// retry deletes their rows before forget has fenced their writes.
+	drop := h.claimLocked()
 	if over := len(h.jobs) - HostedMaxJobs; over > 0 {
 		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
 		for _, old := range finished[:min(over, len(finished))] {
@@ -188,7 +189,7 @@ func (h *Hosted) admit(j *hostedJob) error {
 			if h.byHolder[old.row.HolderID] == old {
 				delete(h.byHolder, old.row.HolderID)
 			}
-			h.deleting[old.row.ID] = old.row.HolderID
+			h.deleting[old.row.ID] = &tombstone{holder: old.row.HolderID, claim: drop}
 			h.rings.Release(old.out)
 			dropped = append(dropped, old)
 			ids = append(ids, old.row.ID)
@@ -197,7 +198,7 @@ func (h *Hosted) admit(j *hostedJob) error {
 	h.mu.Unlock()
 	h.runningChanged()
 	if len(dropped) > 0 {
-		h.forget(dropped, ids)
+		h.forget(dropped, ids, drop)
 	}
 	return nil
 }

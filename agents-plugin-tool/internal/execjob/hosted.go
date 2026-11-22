@@ -28,14 +28,25 @@ type Hosted struct {
 	jobs     map[string]*hostedJob
 	byHolder map[string]*hostedJob
 	// deleting holds the ids of the jobs the job cap dropped whose row
-	// delete has not succeeded (still under way, or failed), each with its
-	// holder id: a holder's end for one of them leaves the exit copy to the
-	// delete, the id draw skips them, and admit retries their delete and
-	// counts them toward the job cap, so a failing store bounds them.
-	deleting map[string]string
-	started  bool
-	closed   bool
-	retry    *time.Timer
+	// delete has not succeeded (still under way, or failed): a holder's end
+	// for one of them leaves the exit copy to the delete, the id draw skips
+	// them, and admit retries their delete and counts them toward the job
+	// cap, so a failing store bounds them. deleteGen numbers the claims.
+	deleting  map[string]*tombstone
+	deleteGen uint64
+	started   bool
+	closed    bool
+	retry     *time.Timer
+}
+
+// tombstone is a dropped job whose row delete has not succeeded.
+type tombstone struct {
+	holder string
+	// claim is the delete under way for the id (its claim number), 0 when
+	// none: one delete at a time owns a tombstone, from fencing its job's
+	// row writes through the copy's removal or the claim's release, so a
+	// retry never deletes the row of a later job under the same id.
+	claim uint64
 }
 
 // HostedOptions configures Hosted. Holders, Store and Sessions are
@@ -113,7 +124,7 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 	if opts.TotalBytes <= 0 {
 		opts.TotalBytes = hostedTotalBytes
 	}
-	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]string{}}
+	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*tombstone{}}
 	rows, err := opts.Store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load hosted exec jobs: %w", err)
@@ -515,29 +526,77 @@ func (h *Hosted) removeExitCopy(id string) {
 	}
 }
 
+// claimLocked starts a delete claim: the caller owns the tombstones it
+// marks with the returned number. h.mu is held.
+func (h *Hosted) claimLocked() uint64 {
+	h.deleteGen++
+	return h.deleteGen
+}
+
+// claimRetriesLocked claims every tombstone no delete owns, for a retry.
+// h.mu is held.
+func (h *Hosted) claimRetriesLocked() ([]string, uint64) {
+	var ids []string
+	claim := h.claimLocked()
+	for id, t := range h.deleting {
+		if t.claim == 0 {
+			t.claim = claim
+			ids = append(ids, id)
+		}
+	}
+	return ids, claim
+}
+
+// ownedLocked keeps the ids whose tombstone claim still holds. h.mu is
+// held.
+func (h *Hosted) ownedLocked(ids []string, claim uint64) []string {
+	var out []string
+	for _, id := range ids {
+		if t := h.deleting[id]; t != nil && t.claim == claim {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // forget marks dropped jobs never to be written again, then deletes the
-// rows of ids (admit has put them in h.deleting): a write already under
-// way finishes before the delete. Only a delete that succeeded removes
-// their exit copies and their h.deleting entries; after a failure the rows
-// and copies stay together for a successor, and the next admit retries.
-func (h *Hosted) forget(dropped []*hostedJob, ids []string) {
+// rows of ids, whose tombstones claim owns: a write already under way
+// finishes before the delete. Only a delete that succeeded removes their
+// exit copies and their tombstones; after a failure the rows and copies
+// stay together for a successor, and the claim is released for the next
+// admit's retry.
+func (h *Hosted) forget(dropped []*hostedJob, ids []string, claim uint64) {
 	for _, j := range dropped {
 		j.saveMu.Lock()
 		j.saved = ^uint64(0)
 		j.saveMu.Unlock()
 	}
+	h.mu.Lock()
+	ids = h.ownedLocked(ids, claim)
+	h.mu.Unlock()
 	if len(ids) == 0 {
 		return
 	}
-	if err := h.opts.Store.Delete(ids...); err != nil {
+	err := h.opts.Store.Delete(ids...)
+	h.mu.Lock()
+	ids = h.ownedLocked(ids, claim)
+	if err != nil {
+		for _, id := range ids {
+			h.deleting[id].claim = 0
+		}
+	}
+	h.mu.Unlock()
+	if err != nil {
 		h.logf("drop finished jobs: %v", err)
 		return
 	}
+	// Still claimed, so still reserved: no job under these ids can own
+	// the copies yet.
 	for _, id := range ids {
 		h.removeExitCopy(id)
 	}
 	h.mu.Lock()
-	for _, id := range ids {
+	for _, id := range h.ownedLocked(ids, claim) {
 		delete(h.deleting, id)
 	}
 	h.mu.Unlock()

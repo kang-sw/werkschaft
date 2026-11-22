@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsholder"
+	"github.com/kang-sw/devenv/internal/wskey"
 )
 
 // memHostedStore is an in-memory HostedStore.
@@ -1805,5 +1806,97 @@ func TestHostedStartSweepsExitCopiesWithoutARow(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("%s went at the start: %v", filepath.Base(p), err)
 		}
+	}
+}
+
+// TestHostedCompetingRetriesNeverDeleteAReusedID: two launches retry the
+// failed deletes at once. The first's retry clears an id and a new job
+// takes that id; the second launch, which came in while the first's
+// delete was under way, must not delete the new job's row or exit copy.
+func TestHostedCompetingRetriesNeverDeleteAReusedID(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.store.mu.Lock()
+	fx.store.failDelete = true
+	fx.store.mu.Unlock()
+	fx.launchFinished() // drops one job; its delete fails
+	var reused string
+	fx.h.mu.Lock()
+	for id := range fx.h.deleting {
+		reused = id
+	}
+	fx.h.mu.Unlock()
+	if reused == "" {
+		t.Fatal("no job is pending delete")
+	}
+
+	// The first retry's delete waits inside the store until a second
+	// launch's retry also reached the store for the same id (or a while
+	// passed: a claimed id is not retried twice); the second retry's
+	// delete then waits until the id has been reused.
+	secondIn, reusedNow, competed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var calls int
+	var callsMu sync.Mutex
+	fx.store.mu.Lock()
+	fx.store.failDelete = false
+	fx.store.duringDelete = func(ids []string) {
+		if !slices.Contains(ids, reused) {
+			return
+		}
+		callsMu.Lock()
+		calls++
+		n := calls
+		callsMu.Unlock()
+		switch n {
+		case 1:
+			go func() {
+				defer close(competed)
+				v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+				if err != nil || v.Outcome != OutcomeDone {
+					t.Errorf("the competing launch = %+v, %v", v, err)
+				}
+			}()
+			select {
+			case <-secondIn:
+			case <-time.After(300 * time.Millisecond):
+			}
+		case 2:
+			close(secondIn)
+			<-reusedNow
+		}
+	}
+	fx.store.mu.Unlock()
+	fx.launchFinished() // the first retry clears reused
+
+	defer func(old func() (string, error)) { newExecKey = old }(newExecKey)
+	newExecKey = func() (string, error) { return strings.TrimPrefix(reused, "exec_"), nil }
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	newExecKey = func() (string, error) { return wskey.Generate() }
+	if err != nil || v.ID != reused {
+		t.Fatalf("the reusing launch = %+v, %v; want id %s", v, err, reused)
+	}
+	copyPath := filepath.Join(fx.exitDir, reused+".json")
+	if err := os.WriteFile(copyPath, []byte(`{"reason":"child_exited"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	callsMu.Lock()
+	second := calls >= 2
+	callsMu.Unlock()
+	if second {
+		close(reusedNow)
+	}
+	select {
+	case <-competed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the competing launch never finished")
+	}
+	if row, ok := fx.store.row(reused); !ok || row.HolderID != v.HolderID {
+		t.Fatalf("the new job's row under the reused id = %+v, %v", row, ok)
+	}
+	if _, err := os.Stat(copyPath); err != nil {
+		t.Fatalf("the new job's exit copy went: %v", err)
 	}
 }
