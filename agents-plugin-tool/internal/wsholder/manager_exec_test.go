@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 // exitEvent is id's exit record once it has arrived.
@@ -106,6 +107,8 @@ func TestSpawnDeliversFiniteInput(t *testing.T) {
 	m := testManager(t, dir, sink)
 	python := testPython(t)
 	long := []byte("long\n" + strings.Repeat("x", inputChunk*2+123))
+	// Multibyte text whose 256 KiB marks fall inside runes.
+	wide := []byte("wide\n" + strings.Repeat("가é😀", inputChunk/4))
 	for _, tc := range []struct {
 		name  string
 		code  string
@@ -115,6 +118,7 @@ func TestSpawnDeliversFiniteInput(t *testing.T) {
 	}{
 		{"in the spawn", readToEOF, []byte("alpha\nbeta\n"), "len=11 first=alpha\n", 0},
 		{"longer than a chunk", readToEOF, long, "len=" + strconv.Itoa(len(long)) + " first=long\n", 0},
+		{"multibyte across chunks", readToEOF, wide, "len=" + strconv.Itoa(len(wide)) + " first=wide\n", 0},
 		{"eof alone", readToEOF, nil, "len=0 first=\n", 0},
 		{"exits before reading", "import sys; sys.exit(3)", long, "", 3},
 	} {
@@ -148,8 +152,27 @@ func TestSpawnDeliversFiniteInput(t *testing.T) {
 // TestInputReportsWhatTheHolderTook pins InputError: input to a child that
 // does not read fills the holder's unread-input limit partway through a
 // multi-chunk Input, and the error says how many bytes the holder queued
-// and that it refused the rest, so a retry resends only those.
+// and that it refused the rest, so a retry resends only those. For
+// multibyte text the count ends between runes, so the rest is still text.
 func TestInputReportsWhatTheHolderTook(t *testing.T) {
+	t.Run("binary", func(t *testing.T) {
+		data := make([]byte, 9<<20)
+		accepted := inputUntilRefused(t, data)
+		if accepted%inputChunk != 0 {
+			t.Fatalf("accepted = %d, want whole chunks", accepted)
+		}
+	})
+	t.Run("multibyte text", func(t *testing.T) {
+		data := []byte(strings.Repeat("가é😀a", 1<<20))
+		accepted := inputUntilRefused(t, data)
+		if !utf8.Valid(data[:accepted]) || !utf8.Valid(data[accepted:]) {
+			t.Fatalf("accepted = %d splits a rune", accepted)
+		}
+	})
+}
+
+func inputUntilRefused(t *testing.T, data []byte) int {
+	t.Helper()
 	dir := testHoldersDir(t)
 	m := testManager(t, dir, newCollector())
 	id, err := m.Launch(json.RawMessage(`{"kind":"test"}`))
@@ -160,7 +183,6 @@ func TestInputReportsWhatTheHolderTook(t *testing.T) {
 	if _, err := m.Client(id).Spawn(SpawnSpec{Argv: []string{testPython(t), "-c", "import time; time.sleep(60)"}, Mode: "pipe"}); err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	data := make([]byte, 9<<20)
 	err = m.Client(id).Input(data, true)
 	var inErr *InputError
 	if !errors.As(err, &inErr) {
@@ -170,7 +192,29 @@ func TestInputReportsWhatTheHolderTook(t *testing.T) {
 	if !inErr.Refused || !errors.As(err, &opErr) || opErr.Code != "input_overflow" {
 		t.Fatalf("Input error = %+v, want a refusal for input_overflow", inErr)
 	}
-	if inErr.Accepted <= 0 || inErr.Accepted >= len(data) || inErr.Accepted%inputChunk != 0 {
-		t.Fatalf("accepted = %d of %d, want whole chunks short of all", inErr.Accepted, len(data))
+	if inErr.Accepted <= 0 || inErr.Accepted >= len(data) {
+		t.Fatalf("accepted = %d of %d, want part of it", inErr.Accepted, len(data))
+	}
+	return inErr.Accepted
+}
+
+// TestChunkEndKeepsRunesWhole: a chunk of valid UTF-8 ends at a rune start
+// whichever byte of a 2-, 3- or 4-byte rune the 256 KiB mark falls on;
+// other data is cut at the mark.
+func TestChunkEndKeepsRunesWhole(t *testing.T) {
+	for _, r := range []string{"é", "가", "😀"} {
+		for shift := 0; shift < len(r); shift++ {
+			data := []byte(strings.Repeat("a", shift) + strings.Repeat(r, inputChunk/len(r)+2))
+			n := chunkEnd(data, true)
+			if n > inputChunk || n <= inputChunk-utf8.UTFMax || !utf8.Valid(data[:n]) || !utf8.Valid(data[n:]) {
+				t.Fatalf("%q shifted %d: chunk ends at %d", r, shift, n)
+			}
+		}
+	}
+	if n := chunkEnd([]byte(strings.Repeat("가", inputChunk)), false); n != inputChunk {
+		t.Fatalf("non-text chunk ends at %d", n)
+	}
+	if n := chunkEnd([]byte("short"), true); n != 5 {
+		t.Fatalf("short data chunk ends at %d", n)
 	}
 }

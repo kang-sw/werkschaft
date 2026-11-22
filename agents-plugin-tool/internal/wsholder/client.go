@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Cause is why the daemon is not attached to a holder.
@@ -341,8 +342,8 @@ func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 		fields["rows"], fields["cols"] = spec.Rows, spec.Cols
 	}
 	first, rest := spec.Input, []byte(nil)
-	if len(first) > inputChunk {
-		first, rest = first[:inputChunk], first[inputChunk:]
+	if n := chunkEnd(first, utf8.Valid(first)); n < len(first) {
+		first, rest = first[:n], first[n:]
 	}
 	if len(first) > 0 {
 		fields["input"] = first
@@ -367,6 +368,23 @@ func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 // inputChunk bounds one input operation's bytes, well under the holder's
 // request line limit once encoded.
 const inputChunk = 256 << 10
+
+// chunkEnd is the length of data's first input chunk: all of it within
+// inputChunk, else inputChunk bytes, moved back to the start of a rune
+// when text is set, so every chunk boundary (and an InputError's Accepted)
+// splits valid UTF-8 between runes and the rest stays expressible as text.
+func chunkEnd(data []byte, text bool) int {
+	if len(data) <= inputChunk {
+		return len(data)
+	}
+	n := inputChunk
+	if text {
+		for n > inputChunk-utf8.UTFMax && !utf8.RuneStart(data[n]) {
+			n--
+		}
+	}
+	return n
+}
 
 // InputError is an Input call that did not complete. The holder queued
 // the first Accepted bytes of its data, in chunks it acknowledged. Refused
@@ -399,12 +417,14 @@ func (c *Client) Input(data []byte, eof bool) error {
 		var opErr *OpError
 		return &InputError{Accepted: accepted, Refused: errors.As(err, &opErr), Err: err}
 	}
+	text := utf8.Valid(data)
 	for len(data) > inputChunk {
-		if _, err := c.call("input", map[string]any{"data": data[:inputChunk]}); err != nil {
+		n := chunkEnd(data, text)
+		if _, err := c.call("input", map[string]any{"data": data[:n]}); err != nil {
 			return fail(err)
 		}
-		data = data[inputChunk:]
-		accepted += inputChunk
+		data = data[n:]
+		accepted += n
 	}
 	fields := map[string]any{"data": data}
 	if eof {
