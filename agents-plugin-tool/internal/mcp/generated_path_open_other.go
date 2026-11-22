@@ -10,3 +10,9 @@ import "os"
 func openGeneratedPathGrant(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_RDWR, 0)
 }
+
+// lstatGeneratedPath is the identity probe paired with
+// openGeneratedPathGrant: it inspects the same path form the grant opens.
+func lstatGeneratedPath(path string) (os.FileInfo, error) {
+	return os.Lstat(path)
+}

@@ -34,6 +34,13 @@ func openGeneratedPathGrant(path string) (*os.File, error) {
 	return os.NewFile(uintptr(handle), path), nil
 }
 
+// lstatGeneratedPath is the identity probe paired with
+// openGeneratedPathGrant: it inspects the same extended-length path form the
+// grant opens, so a path that needs the prefix compares like for like.
+func lstatGeneratedPath(path string) (os.FileInfo, error) {
+	return os.Lstat(extendedLengthPath(path))
+}
+
 // extendedLengthPath is path in the extended-length (\\?\ or \\?\UNC\) form
 // when it is too long for the MAX_PATH-limited API, as os.OpenFile's
 // internal fixLongPath produces; a raw CreateFile call does not get that

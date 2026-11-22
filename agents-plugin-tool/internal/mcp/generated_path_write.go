@@ -70,7 +70,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: writable cache artifact %q has no creation identity", item.Path)
 		}
-		before, err := os.Lstat(item.Path)
+		before, err := lstatGeneratedPath(item.Path)
 		if err != nil {
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: inspect writable cache artifact %q: %w", item.Path, err)
@@ -164,7 +164,7 @@ func (g *generatedPathWrites) write(sessionKey, path, content string) error {
 		grant.mu.Unlock()
 	}()
 
-	pathInfo, err := os.Lstat(path)
+	pathInfo, err := lstatGeneratedPath(path)
 	if err != nil {
 		return fmt.Errorf("path.write inspect target: %w", err)
 	}
