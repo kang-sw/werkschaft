@@ -60,7 +60,11 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		if id, err = h.newID(req.Legacy); err != nil {
 			return HostedView{}, err
 		}
-		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet, starting: true}
+		// A job that will launch a holder is pinned from its admission: a
+		// stop that ends it before or while LaunchWith runs leaves a holder
+		// this job does not record yet, and the job must not be pruned (nor
+		// its id drawn again) until that holder is confirmed gone.
+		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet, starting: true, holderPinned: lookErr == nil}
 		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
 		err = h.admit(j)
 		if err == nil {
@@ -76,13 +80,6 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		return h.failStart(j, "", lookErr)
 	}
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
-	// Pinned from before the holder launch: a stop that ends the job while
-	// LaunchWith runs leaves a holder this job does not record yet, and the
-	// job must not be pruned (nor its id drawn again) until that holder is
-	// confirmed gone.
-	h.mu.Lock()
-	j.holderPinned = true
-	h.mu.Unlock()
 	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})
 	if err != nil {
 		h.mu.Lock()

@@ -31,7 +31,7 @@ func (h *Hosted) stop(j *hostedJob) error {
 		if j.row.StartedAt == 0 {
 			j.row.StartedAt = h.opts.Now().UnixMilli()
 		}
-		// A launch still inside LaunchWith pinned the job already
+		// A launch not past LaunchWith pinned the job at its admission
 		// (holder == ""); one past it pins on its recorded holder.
 		if holder != "" {
 			j.holderPinned = true

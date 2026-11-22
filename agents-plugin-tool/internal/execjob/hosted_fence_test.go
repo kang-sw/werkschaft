@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -515,6 +516,56 @@ func TestHostedJobStoppedInsideItsHolderLaunchIsNotPrunedMeanwhile(t *testing.T)
 	if v := <-launched; v.ID != id {
 		t.Fatalf("the blocked launch answered job %q, want %q", v.ID, id)
 	}
+}
+
+// A job stopped right after its admission, before its launch reaches
+// LaunchWith, is pinned already: admissions in that window neither prune it
+// nor free its id for the holder the launch still starts under it.
+func TestHostedJobStoppedBeforeItsHolderLaunchIsNotPrunedMeanwhile(t *testing.T) {
+	fx := &hostedFixture{t: t, holders: newFakeExecHolders(), sessions: newFakeExecSessions(), store: newMemHostedStore(), exitDir: t.TempDir()}
+	var armed atomic.Bool
+	var id string
+	var kept, dropped bool
+	fx.onRunning = func() {
+		if !armed.CompareAndSwap(true, false) {
+			return
+		}
+		fx.h.mu.Lock()
+		for have := range fx.h.jobs {
+			id = have
+		}
+		fx.h.mu.Unlock()
+		if err := fx.h.StopOwner("lead"); err != nil {
+			t.Error(err)
+		}
+		// It is the oldest finished job by its end: the prune's first pick.
+		time.Sleep(5 * time.Millisecond)
+		fx.quickJobs()
+		for i := 0; i < HostedMaxJobs; i++ {
+			fx.launchFinished()
+		}
+		fx.h.mu.Lock()
+		_, kept = fx.h.jobs[id]
+		fx.h.mu.Unlock()
+		fx.store.mu.Lock()
+		dropped = slices.Contains(fx.store.deleted, id)
+		fx.store.mu.Unlock()
+	}
+	fx.open(time.Second)
+	armed.Store(true)
+	v, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if !kept || dropped {
+		t.Fatalf("job %s stopped before its holder launch: kept %v, row deleted %v", id, kept, dropped)
+	}
+	if v.ID != id {
+		t.Fatalf("the launch answered job %q, want %q", v.ID, id)
+	}
+	eventuallyExec(t, "the late holder's stop to lift the pin", func() bool {
+		fx.h.mu.Lock()
+		defer fx.h.mu.Unlock()
+		j := fx.h.jobs[id]
+		return j != nil && !j.holderPinned
+	})
 }
 
 // A predecessor's holders that a new daemon's start stops keep their exec

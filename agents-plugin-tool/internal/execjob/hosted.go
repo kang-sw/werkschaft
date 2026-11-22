@@ -110,7 +110,7 @@ type hostedJob struct {
 	starting bool
 	spawned  chan struct{}
 	// holderPinned: a holder launched for j may run without j recording
-	// it: set from before LaunchWith until j records the holder, and kept
+	// it: set from j's admission until j records the holder, and kept
 	// when j ended meanwhile (a stop during the launch). That holder writes
 	// the exit copy at j's id's path as it goes, so j is not pruned, and
 	// its id not reused, until the holder is confirmed gone
