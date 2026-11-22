@@ -270,17 +270,20 @@
         if (!res.ok) { fail(failure(res)); return; }
         if (listing) state.panel = { mode: "listing", source: panel.source, listing };
         // HTTP 200 only means the request ran; the pack's own result says whether it was written.
-        const outcome = outcomeFor(listing?.packs, pack.id);
+        const outcome = outcomeFor(listing?.packs, panel.listing.packs, pack);
         if (outcome?.installed === true && !record(outcome.error)) done(t("js.companion.sources.done_install", text(pack.name) || pack.id));
         else fail(packFailure(outcome, res));
         applyCatalog(res.body.catalog);
       });
     }
 
-    // A marketplace may carry an invalid and a valid row under one ID; the row that was written is the
-    // one the user selected, so prefer it over a duplicate's error.
-    function outcomeFor(packs, id) {
-      const rows = (packs || []).filter(item => record(item) && item.id === id);
+    // A marketplace may carry an invalid and a valid row under one ID. The result lists rows in the
+    // order of the listing that was acted on, so the selected row's place among its same-ID rows
+    // finds its own outcome, success or failure; a duplicate's error is never reported for it.
+    function outcomeFor(packs, before, selected) {
+      const same = list => (list || []).filter(item => record(item) && item.id === selected.id);
+      const rows = same(packs), index = same(before).indexOf(selected);
+      if (index >= 0 && rows.length === same(before).length) return rows[index];
       return rows.find(item => item.installed === true && !record(item.error)) || rows[0];
     }
 
@@ -329,7 +332,15 @@
     function canPick(pack) { return !record(pack.error) && importable.has(pack.status); }
 
     function runImport(panel) {
-      const ids = panel.listing.packs.filter(pack => panel.selected.has(pack.id)).map(pack => pack.id);
+      // One row per selected ID: the first pickable one, which is the row the user ticked.
+      const rows = [];
+      for (const pack of panel.listing.packs) {
+        if (panel.selected.has(pack.id) && !rows.some(row => row.id === pack.id) && canPick(pack)) rows.push(pack);
+      }
+      for (const pack of panel.listing.packs) {
+        if (panel.selected.has(pack.id) && !rows.some(row => row.id === pack.id)) rows.push(pack);
+      }
+      const ids = rows.map(pack => pack.id);
       if (!ids.length) return;
       guard(async () => {
         const res = await send(importURL("import", panel.file, ids), { headers: { "Content-Type": "application/zip" }, body: panel.file });
@@ -339,7 +350,7 @@
         if (listing) state.panel = { mode: "result", source: "", name: panel.name, listing };
         else state.panel = null;
         // Count what was written, not what was asked for; failed packs keep their error on the result cards.
-        const outcomes = ids.map(id => outcomeFor(listing?.packs, id)).filter(Boolean);
+        const outcomes = rows.map(row => outcomeFor(listing?.packs, panel.listing.packs, row)).filter(Boolean);
         const written = outcomes.filter(item => item.installed === true && !record(item.error));
         const failed = outcomes.filter(item => !written.includes(item));
         if (!listing) done(t("js.companion.sources.done_import", ids.length));
