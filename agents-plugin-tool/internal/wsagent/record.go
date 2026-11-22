@@ -322,14 +322,30 @@ func readRecord(sessionDir string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+	return decodeRecord(recordPath(sessionDir), filepath.Base(sessionDir), raw)
+}
+
+// decodeRecord is readRecord's decode of the agent.json at path in the
+// session directory of replyID.
+func decodeRecord(path, replyID string, raw []byte) (Record, error) {
 	var rec Record
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return Record{}, fmt.Errorf("parse %s: %w", recordPath(sessionDir), err)
+		return Record{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if rec.ReplyID != filepath.Base(sessionDir) || rec.WSKey == "" || rec.Root == "" {
-		return Record{}, fmt.Errorf("%s is not a complete agent record", recordPath(sessionDir))
+	if rec.ReplyID != replyID || rec.WSKey == "" || rec.Root == "" {
+		return Record{}, fmt.Errorf("%s is not a complete agent record", path)
 	}
 	return rec, nil
+}
+
+// ValidateLegacyRecord reports whether readRecord would accept raw as the
+// agent.json of replyID's session directory. The daemon metadata import uses
+// it as its agent_record validator (wsmeta.LegacyValidator: rel, the
+// capture's dashboard-relative path, is not needed), so a record the legacy
+// reader rejects stays out of the live store.
+func ValidateLegacyRecord(_, replyID string, raw []byte) error {
+	_, err := decodeRecord(recordFileName, replyID, raw)
+	return err
 }
 
 func writeRecord(sessionDir string, rec Record) error {
