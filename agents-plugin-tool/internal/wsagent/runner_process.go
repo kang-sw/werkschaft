@@ -300,7 +300,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 				rec.HandedOffAt = c.r.opts.Now().UTC().Format(time.RFC3339)
 				rec.forgetMCP()
 				if s := spec.MCPSession; s != nil {
-					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, spec.WSMCP.Env, id
+					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, spec.ExecCutover), spec.WSMCP.Env, id
 				}
 			})
 		}
@@ -459,7 +459,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		// daemon that keeps the record's members without knowing them: it
 		// loaded the bundle's stdio server, and the token is no one's.
 		c.update(func(rec *Record) { rec.forgetMCP() })
-	case attach && rec.MCPToken != "" && (rec.MCPURL != c.r.mcpURL() || rec.MCPEnv == nil):
+	case attach && rec.MCPToken != "" && (!c.r.servesMCPURL(rec.MCPURL) || rec.MCPEnv == nil):
 		// The process sends its token to a route this daemon does not
 		// serve (it listens on another port), or its hello is unknown:
 		// its ws-mcp is gone until it restarts, at its first idle point
@@ -569,7 +569,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		rec.ExecCutoverHolder = cutoverHolder(cutover, id)
 		rec.forgetMCP()
 		if s := spec.MCPSession; s != nil {
-			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, mcpEnv, id
+			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, cutover), mcpEnv, id
 		}
 	})
 	c.writeRegistration()

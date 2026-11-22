@@ -200,6 +200,31 @@ func (c *conv) rejoinExecCutover(rec Record) bool {
 	return on
 }
 
+// execCutoverRouteMark ends the ws-mcp route a cutover process's record
+// names (Record.MCPURL). The process itself is given the plain route; the
+// mark is a URL fragment, never sent. This daemon reads the marked route as
+// its own (servesMCPURL). An older daemon on the same port compares the
+// route literally, finds it is not its own, and restarts the process at its
+// first idle point without the cutover (its stale-route path): a process
+// whose native tools are removed is never left to a daemon that cannot
+// serve their replacement.
+const execCutoverRouteMark = "#exec-cutover"
+
+// recordedMCPURL is the route a start records for its process: url, marked
+// when the process runs under the cutover.
+func recordedMCPURL(url string, cutover bool) string {
+	if cutover && url != "" {
+		return url + execCutoverRouteMark
+	}
+	return url
+}
+
+// servesMCPURL reports whether a recorded route is this daemon's, marked
+// or not.
+func (r *Runner) servesMCPURL(recorded string) bool {
+	return strings.TrimSuffix(recorded, execCutoverRouteMark) == r.mcpURL()
+}
+
 // cutoverToolsFor returns the tools of want that p's ws tools admit, in
 // want's order: all of them when p names no ws tools (a lead, whose ws-mcp
 // lists every tool; a worker without an allowlist has no ws-mcp and never

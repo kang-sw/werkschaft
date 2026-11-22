@@ -320,6 +320,13 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	if !ok || hello.Conversation != st.ID || hello.ExecCutover != BackendClaude {
 		t.Fatalf("token hello = %+v %v", hello, ok)
 	}
+	// An older daemon on the same port compares the recorded route
+	// literally (474f3a301 runner_process.go:445, worker_rejoin.go:28): the
+	// mark makes it restart this process at its first idle point without
+	// the cutover, instead of serving it without exec tools.
+	if rec.MCPURL != h.runner.mcpURL()+execCutoverRouteMark || rec.MCPURL == h.runner.mcpURL() {
+		t.Fatalf("cutover lead records route %q, daemon route %q", rec.MCPURL, h.runner.mcpURL())
+	}
 
 	// A daemon restart rejoins the process and keeps its cutover.
 	h.runner.Close()
@@ -345,6 +352,9 @@ func TestExecCutoverDecisionAtAHostedLeadStart(t *testing.T) {
 	}
 	if rec.ExecCutoverHolder != "" {
 		t.Fatalf("switched-off lead records cutover holder %q", rec.ExecCutoverHolder)
+	}
+	if rec.MCPURL != h.runner.mcpURL() {
+		t.Fatalf("switched-off lead records route %q, want the plain %q", rec.MCPURL, h.runner.mcpURL())
 	}
 	if hello, _, _ := h.runner.ResolveMCPToken(rec.MCPToken); hello.ExecCutover != "" {
 		t.Fatalf("switched-off token hello cutover = %q", hello.ExecCutover)
