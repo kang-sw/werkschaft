@@ -263,6 +263,30 @@ type State struct {
 	// most evictedCap), so a late event for one does not bring it back as a
 	// running agent (staleEvent).
 	evicted []string
+	// retentionHeld defers retain (HoldRetention) while a caller folds a
+	// batch of agent lifecycles.
+	retentionHeld bool
+}
+
+// HoldRetention defers agent retention while the caller applies a batch of
+// agent events whose final lifecycles, not their intermediate ones, decide
+// what is kept (a rejoin's staged native rows): no running or finished cap
+// applies until the returned release, which runs one retention pass over
+// the folded roster. Release is idempotent.
+func (st *State) HoldRetention() (release func()) {
+	if st.retentionHeld {
+		return func() {}
+	}
+	st.retentionHeld = true
+	done := false
+	return func() {
+		if done {
+			return
+		}
+		done = true
+		st.retentionHeld = false
+		st.retain()
+	}
 }
 
 // evictedCap bounds State.evicted; an id forgotten past it is recreated by a
@@ -514,7 +538,9 @@ func (st *State) Apply(ev Event, now int64) (Result, error) {
 		}
 	}
 	st.refreshPhases(at)
-	st.retain()
+	if !st.retentionHeld {
+		st.retain()
+	}
 	if st.lead.phase != leadPhase || st.reply != leadReply {
 		res.Urgent = true
 	}

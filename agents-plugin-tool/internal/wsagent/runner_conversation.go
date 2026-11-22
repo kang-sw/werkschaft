@@ -209,6 +209,10 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 			// Bind after the slot is fixed: summary retries can wake off-loop.
 			c.live.summaryStore().SetWake(c.live.wake)
 		}
+		// A rejoin keeps the recovery file an earlier daemon left until its
+		// replay folds that file's evidence (finishAgyNativeReplay): this
+		// write, and any before then, reaches the live slot alone.
+		c.live.diskHold = rec.HolderID != ""
 		c.live.writeSnapshot()
 	}
 	if rec.HolderID != "" && !foreign {

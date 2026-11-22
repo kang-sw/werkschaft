@@ -1364,14 +1364,29 @@ func (c *conv) stageAgyNativeReplay(ev wslive.Event, quiet bool) bool {
 // observation is not continuous across a daemon replacement and a replayed
 // cancellation cannot be told from a watchdog continuation awaiting its
 // first output, closes every row still running end-unknown at the time
-// agyNativeReplayEnd gives it.
-func (c *conv) finishAgyNativeReplay() {
+// agyNativeReplayEnd gives it; with processGone, the process ended instead,
+// and endAgents fails every subagent still running, as at any process end.
+//
+// Retention waits for the whole fold (wslive.State.HoldRetention): applied
+// one by one, the staged starts of a long replay could reach the running
+// cap and evict a row a later failure would have left the oldest open
+// observation, so caps apply once, to the final lifecycles. Last, the
+// restored recovery file's evidence is in the state, so the file may be
+// replaced (liveWriter.diskHold).
+func (c *conv) finishAgyNativeReplay(processGone bool) {
+	release := c.live.st.HoldRetention()
 	rows, restored := c.resolveAgyNativeReplay()
-	var rest []agyNativeSettle
-	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
-		rest = append(rest, agyNativeSettle{id, c.agyNativeReplayEnd(id, rows, restored)})
+	if processGone {
+		c.live.endAgents()
+	} else {
+		var rest []agyNativeSettle
+		for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
+			rest = append(rest, agyNativeSettle{id, c.agyNativeReplayEnd(id, rows, restored)})
+		}
+		c.settleAgyNative(rest)
 	}
-	c.settleAgyNative(rest)
+	release()
+	c.live.diskHold = false
 }
 
 // resolveAgyNativeReplay applies what a replay staged of agy native rows,
@@ -1385,9 +1400,9 @@ func (c *conv) finishAgyNativeReplay() {
 // after the snapshot's coverage keeps the terminal record that followed),
 // noting at each staged live turn end the rows it found running; those rows
 // settle at that end's time after every event, so a launch failure buffered
-// later in the same replay still wins. Each apply runs retention, but with
-// the evicted rows gone first and settled native rows unchanging, the rows
-// it keeps are those one retention over the final set keeps. Last, a row the
+// later in the same replay still wins. The caller holds retention across
+// the fold (finishAgyNativeReplay), so no cap sees an intermediate roster.
+// Last, a row the
 // snapshot listed running whose start left the holder ring is seeded from
 // the snapshot and closes end-unknown at the snapshot's write time.
 func (c *conv) resolveAgyNativeReplay() (agyNativeReplayRows, restoredAgyNative) {
@@ -1469,14 +1484,11 @@ func (c *conv) agyNativeReplayEnd(id string, rows agyNativeReplayRows, restored 
 
 // snapshotCoverage is the holder records the live state applied, for the
 // recovery file (liveWriter.coverage): every whole line of the current
-// holder through c.seq. While a replay runs, the state still lacks what it
-// staged and c.seq already stands at the holder's mark, so the file keeps
-// the coverage of the snapshot the state was restored from. Loop-owned
+// holder through c.seq. A rejoin's replay writes no file until it folded
+// what it staged (liveWriter.diskHold), so c.seq, already at the holder's
+// mark while it runs, is never written ahead of the state. Loop-owned
 // fields, read on the loop like every snapshot write.
 func (c *conv) snapshotCoverage() (string, uint64) {
-	if c.replaying {
-		return c.live.restored.holderID, c.live.restored.coveredSeq
-	}
 	return c.rec.HolderID, c.seq
 }
 

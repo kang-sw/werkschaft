@@ -110,8 +110,9 @@ type fakeHolders struct {
 	// calls that ran into it.
 	callTimeout time.Duration
 	timeouts    int
-	// spawnErr fails Spawn and stopErr Stop (the holder stays).
-	spawnErr, stopErr error
+	// spawnErr fails Spawn and stopErr Stop (the holder stays); statusErr
+	// fails Status, so a rejoin's replay never learns where it ends.
+	spawnErr, stopErr, statusErr error
 	// captureHook, when set, runs as each CaptureNote begins (and may
 	// block it); captureCalls counts the CaptureNote calls begun.
 	captureHook  func()
@@ -454,6 +455,9 @@ func (f *fakeHolders) Status(id string) (wsholder.AttachInfo, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.statusErr != nil {
+		return wsholder.AttachInfo{}, f.statusErr
+	}
 	h := f.holders[id]
 	if h == nil {
 		return wsholder.AttachInfo{}, wsholder.ErrDetached

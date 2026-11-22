@@ -53,30 +53,55 @@ type hostedOwnerProof struct {
 // the heartbeat (isForeign). With no proof yet, or one that no longer names
 // this record's process, it falls back to lockSummaryWriter once.
 //
-// The proof holds only while its process runs. A terminal login takes a
-// hosted row only once the row's process is gone (Registration.HostMayRun),
-// which can happen before this daemon consumes the process's exit; a
-// process asked of the OS (Options.Alive: a signal probe, no file) that no
-// longer runs ends the proof, and nothing reaches the slot until a
-// file-fenced write proves the row again.
+// The publish holds only while the record's process runs. A terminal login
+// takes a hosted row only once the row's process is gone
+// (Registration.HostMayRun), which can happen before this daemon consumes
+// the process's exit, and the registration still names that process until
+// then; so a process asked of the OS (Options.Alive: a signal probe, no
+// file) that no longer runs refuses the publish, with or without a proof,
+// ends the proof, and nothing reaches the slot until a file-fenced write
+// proves the row again. The probe runs again once the locks are held,
+// right before the caller publishes: the summary lock can wait behind a
+// heartbeat sweep's registration I/O, long enough for the process to end
+// and a terminal to take the row. What remains is the window between that
+// last probe and the publish under the same lock, which is accepted: no
+// probe short of a fence the terminal's login takes too closes it.
 func (c *conv) lockSummaryWriterRAM() (func(), bool) {
 	rec := c.record()
 	if !rec.Lead || c.isForeign() {
 		return nil, false
 	}
-	proof := c.ownerProof.Load()
-	if proof == nil || proof.hostPID <= 0 || proof.hostPID != rec.HostPID || proof.backend != rec.Backend {
-		return c.lockSummaryWriter()
-	}
-	if !c.r.opts.Alive(proof.hostPID) {
-		c.ownerProof.CompareAndSwap(proof, nil)
+	if c.hostGone(rec.HostPID) {
 		return nil, false
 	}
-	release, owned := c.r.lockSummaryOwner(rec.ReplyID, c)
+	var release func()
+	var owned bool
+	if proof := c.ownerProof.Load(); proof == nil || proof.hostPID <= 0 || proof.hostPID != rec.HostPID || proof.backend != rec.Backend {
+		release, owned = c.lockSummaryWriter()
+	} else {
+		release, owned = c.r.lockSummaryOwner(rec.ReplyID, c)
+	}
 	if !owned {
 		return nil, false
 	}
+	if c.hostGone(rec.HostPID) {
+		release()
+		return nil, false
+	}
 	return release, true
+}
+
+// hostGone reports whether the hosted process pid no longer runs and, when
+// it does not, ends the RAM publish proof that names it. A pid of 0 or less
+// names no process to ask about.
+func (c *conv) hostGone(pid int) bool {
+	if pid <= 0 || c.r.opts.Alive(pid) {
+		return false
+	}
+	if proof := c.ownerProof.Load(); proof != nil && proof.hostPID == pid {
+		c.ownerProof.CompareAndSwap(proof, nil)
+	}
+	return true
 }
 
 // lockSummaryOwner pins replyID's summary owner to want: it takes the

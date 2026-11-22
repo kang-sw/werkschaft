@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -648,7 +650,7 @@ func TestAgyNativeLaunchCorrelationEndsWithTheRow(t *testing.T) {
 	replayed := wslive.NativeAgyPrefix + "replayed"
 	c.replaying = true
 	c.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: replayed, Status: wslive.StatusRunning}, true)
-	c.finishAgyNativeReplay()
+	c.finishAgyNativeReplay(false)
 	if !reflect.DeepEqual(proc.forgot, []string{row, replayed}) {
 		t.Fatalf("forgotten correlations after the replay = %v", proc.forgot)
 	}
@@ -821,7 +823,7 @@ func TestLiveWriterRestoresAgyNativeRows(t *testing.T) {
 		return dir
 	}
 	running, done := wslive.NativeAgyPrefix+"running", wslive.NativeAgyPrefix+"done"
-	snap := wslive.Snapshot{ReplyID: wsmailbox.ReplyID("key"), UpdatedAt: 42_000, HolderID: "holder-1", HolderSeq: 17, Agents: []wslive.Agent{
+	snap := wslive.Snapshot{ReplyID: wsmailbox.ReplyID("key"), UpdatedAt: 42_000, HolderID: "holder-1", HolderSeq: covered(17), Agents: []wslive.Agent{
 		{ID: running, Status: wslive.StatusRunning, StartedAt: 1},
 		{ID: done, Status: wslive.StatusDone, StartedAt: 1, EndedAt: 2},
 		{ID: wslive.NativeCodexPrefix + "other", Status: wslive.StatusRunning, StartedAt: 1},
@@ -829,7 +831,7 @@ func TestLiveWriterRestoresAgyNativeRows(t *testing.T) {
 	w := newLiveWriter(write(snap), "key", "agy", now, io.Discard)
 	got := w.takeRestored()
 	want := restoredAgyNative{readable: true, updatedAt: 42_000, listed: map[string]bool{running: true, done: true}, running: map[string]wslive.Agent{running: snap.Agents[0]},
-		holderID: "holder-1", coveredSeq: 17}
+		covered: true, holderID: "holder-1", coveredSeq: 17}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("restored = %+v, want %+v", got, want)
 	}
@@ -886,7 +888,7 @@ func TestAgyNativeReplayStagesRebuiltFailureOutsideRetention(t *testing.T) {
 	launch := func(i int) string { return wslive.NativeAgyPrefix + "launch-" + strconv.Itoa(i) }
 	c.do(func() {
 		base := time.Now().Add(-time.Hour).UnixMilli()
-		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: base + 7*60_000, HolderID: holder, HolderSeq: 20}
+		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: base + 7*60_000, HolderID: holder, HolderSeq: covered(20)}
 		for i := 2; i <= 6; i++ {
 			at := base + int64(i)*60_000
 			restored.Agents = append(restored.Agents, wslive.Agent{ID: launch(i), Label: "research", Status: wslive.StatusDone,
@@ -926,7 +928,7 @@ func TestAgyNativeReplayKeepsCatchUpFailureOfRunningRow(t *testing.T) {
 	row := wslive.NativeAgyPrefix + "listed-running"
 	c.do(func() {
 		updatedAt := time.Now().Add(-time.Minute).UnixMilli()
-		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: updatedAt, HolderID: holder, HolderSeq: 20, Agents: []wslive.Agent{
+		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: updatedAt, HolderID: holder, HolderSeq: covered(20), Agents: []wslive.Agent{
 			{ID: row, Label: "research", Status: wslive.StatusRunning, StartedAt: updatedAt - 10_000},
 		}}
 		c.live.restored = restoredAgyNativeOf(restored, restored.ReplyID)
@@ -937,7 +939,8 @@ func TestAgyNativeReplayKeepsCatchUpFailureOfRunningRow(t *testing.T) {
 		c.handle(Event{ReplayDone: true})
 		a, ok := snapAgent(c.live.st.Snapshot(c.r.opts.Now().UnixMilli()), row)
 		if !ok || a.Status != wslive.StatusFailed || a.EndUnknown || a.EndedAt != failedAt {
-			t.Fatalf("row = %+v (present %v), want failed at %d", a, ok, failedAt)
+			t.Errorf("row = %+v (present %v), want failed at %d", a, ok, failedAt)
+			return // t.Fatalf would end the loop goroutine, not the test
 		}
 	})
 }
@@ -954,7 +957,7 @@ func TestAgyNativeReplayHonorsSnapshotCoverage(t *testing.T) {
 	historical, after, afterFailed, wrapped, saved := wslive.NativeAgyPrefix+"historical", wslive.NativeAgyPrefix+"after", wslive.NativeAgyPrefix+"after-failed", wslive.NativeAgyPrefix+"wrapped", wslive.NativeAgyPrefix+"saved"
 	c.do(func() {
 		updatedAt := time.Now().Add(-time.Minute).UnixMilli()
-		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: updatedAt, HolderID: holder, HolderSeq: 10, Agents: []wslive.Agent{
+		restored := wslive.Snapshot{ReplyID: c.live.st.ReplyID(), UpdatedAt: updatedAt, HolderID: holder, HolderSeq: covered(10), Agents: []wslive.Agent{
 			{ID: saved, Label: "saved", Status: wslive.StatusDone, StartedAt: updatedAt - 50_000, EndedAt: updatedAt - 40_000, EndUnknown: true},
 			{ID: wrapped, Label: "wrapped-label", Status: wslive.StatusRunning, StartedAt: updatedAt - 20_000},
 		}}
@@ -987,9 +990,13 @@ func TestAgyNativeReplayHonorsSnapshotCoverage(t *testing.T) {
 	})
 }
 
+// covered is a snapshot's holder coverage through seq (wslive.Snapshot.HolderSeq).
+func covered(seq uint64) *uint64 { return &seq }
+
 // TestSnapshotRecordsHolderCoverage: the recovery file names the holder
-// records the state applied; while a replay runs it keeps the coverage of
-// the snapshot the state was restored from.
+// records the state applied. A known holder with no record applied yet
+// still names its coverage, 0, and no holder names none; while the
+// recovery file is held for a rejoin (diskHold) nothing is written.
 func TestSnapshotRecordsHolderCoverage(t *testing.T) {
 	now := time.Unix(1000, 0)
 	dir := filepath.Join(t.TempDir(), "coverage")
@@ -997,28 +1004,296 @@ func TestSnapshotRecordsHolderCoverage(t *testing.T) {
 	c := &conv{r: r, dir: dir, rec: Record{ReplyID: "coverage", WSKey: "key", Root: dir, HolderID: "holder-now"}, seq: 9}
 	c.live = newLiveWriter(dir, "key", "agy", r.opts.Now, io.Discard)
 	c.live.coverage = c.snapshotCoverage
-	c.live.restored = restoredAgyNative{readable: true, holderID: "holder-then", coveredSeq: 3}
-	read := func() wslive.Snapshot {
+	path := wslive.SnapshotPath(dir)
+	read := func() (wslive.Snapshot, map[string]json.RawMessage) {
 		t.Helper()
-		snap, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir))
+		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return snap
+		var snap wslive.Snapshot
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &snap); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &members); err != nil {
+			t.Fatal(err)
+		}
+		return snap, members
 	}
-	c.replaying = true
 	c.live.forceSnapshot()
-	if snap := read(); snap.HolderID != "holder-then" || snap.HolderSeq != 3 {
-		t.Fatalf("coverage during the replay = %q/%d, want holder-then/3", snap.HolderID, snap.HolderSeq)
+	if snap, _ := read(); snap.HolderID != "holder-now" || snap.HolderSeq == nil || *snap.HolderSeq != 9 {
+		t.Fatalf("coverage = %q/%v, want holder-now/9", snap.HolderID, snap.HolderSeq)
 	}
-	c.replaying = false
+	c.seq = 0
 	c.live.forceSnapshot()
-	if snap := read(); snap.HolderID != "holder-now" || snap.HolderSeq != 9 {
-		t.Fatalf("coverage after the replay = %q/%d, want holder-now/9", snap.HolderID, snap.HolderSeq)
+	if snap, members := read(); snap.HolderID != "holder-now" || snap.HolderSeq == nil || *snap.HolderSeq != 0 || string(members["holderSeq"]) != "0" {
+		t.Fatalf("known empty coverage = %q/%v (raw %s), want holder-now/0 serialized", snap.HolderID, snap.HolderSeq, members["holderSeq"])
+	}
+	if !restoredAgyNativeOf(func() wslive.Snapshot { s, _ := read(); return s }(), wsmailbox.ReplyID("key")).covered {
+		t.Fatal("known empty coverage reads back as absent")
 	}
 	c.rec.HolderID = ""
 	c.live.forceSnapshot()
-	if snap := read(); snap.HolderID != "" || snap.HolderSeq != 0 {
-		t.Fatalf("coverage without a holder = %q/%d, want none", snap.HolderID, snap.HolderSeq)
+	if snap, members := read(); snap.HolderID != "" || snap.HolderSeq != nil || members["holderSeq"] != nil || members["holderId"] != nil {
+		t.Fatalf("coverage without a holder = %q/%v, want none", snap.HolderID, snap.HolderSeq)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.rec.HolderID, c.seq = "holder-later", 4
+	c.live.diskHold = true
+	c.live.apply(wslive.Event{Kind: wslive.KindTurnEnd})
+	c.live.forceSnapshot()
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Fatalf("a held recovery file was replaced:\n%s\nwas\n%s", after, before)
+	}
+}
+
+// TestRestoredAgyNativeCoverageBoundary: a rebuilt row the restored snapshot
+// does not list counts as evicted only when the snapshot's coverage of the
+// same holder includes its start. A known empty coverage (holderSeq 0)
+// covers nothing; an absent one (a writer that predates coverage) falls
+// back to dropping every unlisted row.
+func TestRestoredAgyNativeCoverageBoundary(t *testing.T) {
+	row := wslive.NativeAgyPrefix + "rebuilt"
+	of := func(holderID string, seq *uint64) restoredAgyNative {
+		return restoredAgyNativeOf(wslive.Snapshot{ReplyID: "r", HolderID: holderID, HolderSeq: seq}, "r")
+	}
+	for _, tc := range []struct {
+		name     string
+		restored restoredAgyNative
+		start    uint64
+		want     bool
+	}{
+		{"known empty coverage", of("h", covered(0)), 1, false},
+		{"absent coverage", of("h", nil), 1, true},
+		{"no holder", of("", nil), 1, true},
+		{"covered start", of("h", covered(10)), 10, true},
+		{"start after coverage", of("h", covered(10)), 11, false},
+		{"another holder", of("other", covered(10)), 5, false},
+		{"unreadable", restoredAgyNative{}, 1, false},
+	} {
+		if got := tc.restored.evicted(row, "h", tc.start); got != tc.want {
+			t.Errorf("%s: evicted = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestAgyNativeReplayFoldsLifecyclesBeforeRetention: with no readable
+// snapshot, a replay stages 65 starts with ascending times, then launch
+// failures for the last 64. One at a time, the 65th start would push the
+// first row past the running cap before the failures free it; folded
+// first, the first row is the one observation left open, closes
+// end-unknown at the replay's end, and ranks among the newest finished.
+func TestAgyNativeReplayFoldsLifecyclesBeforeRetention(t *testing.T) {
+	c, _ := agyReplayConv(t)
+	row := func(i int) string { return wslive.NativeAgyPrefix + "fold-" + strconv.Itoa(i) }
+	c.do(func() {
+		c.live.restored = restoredAgyNative{}
+		c.replaying = true
+		base := time.Now().Add(-time.Hour).UnixMilli()
+		seq := uint64(0)
+		next := func() uint64 { seq++; return seq }
+		for i := 0; i <= wslive.RunningAgentCap; i++ {
+			c.handle(seqEvent(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: row(i), Label: "research", Status: wslive.StatusRunning, At: base + int64(i)*1_000}}, next(), true))
+		}
+		for i := 1; i <= wslive.RunningAgentCap; i++ {
+			c.handle(seqEvent(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: row(i), Status: wslive.StatusFailed, At: base + 100_000 + int64(i)*1_000}}, next(), true))
+		}
+		before := c.r.opts.Now().UnixMilli()
+		c.handle(Event{ReplayDone: true})
+		end := c.r.opts.Now().UnixMilli()
+		snap := c.live.st.Snapshot(end)
+		a, ok := snapAgent(snap, row(0))
+		if !ok || a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt < before || a.EndedAt > end {
+			t.Errorf("first row = %+v (present %v), want end-unknown at the replay end (%d..%d)", a, ok, before, end)
+			return // t.Fatalf would end the loop goroutine, not the test
+		}
+		var native []string
+		for _, a := range snap.Agents {
+			if strings.HasPrefix(a.ID, wslive.NativeAgyPrefix) {
+				native = append(native, a.ID)
+			}
+		}
+		slices.Sort(native)
+		want := []string{row(0), row(61), row(62), row(63), row(64)}
+		slices.Sort(want)
+		if !slices.Equal(native, want) {
+			t.Errorf("kept rows = %v, want %v", native, want)
+			return // t.Fatalf would end the loop goroutine, not the test
+		}
+	})
+}
+
+// TestNativeRowRAMReprobesAfterTheSummaryLock: a native row event passes the
+// liveness probe, then waits for the summary lock behind another holder;
+// the hosted process ends meanwhile. The probe after the lock refuses the
+// publish and ends the proof. With no proof, a registration that still
+// names the dead process refuses the fallback too.
+func TestNativeRowRAMReprobesAfterTheSummaryLock(t *testing.T) {
+	now := time.Unix(1000, 0)
+	base := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "native")
+	var alive atomic.Bool
+	alive.Store(true)
+	probed := make(chan struct{}, 16)
+	r := NewRunner(Options{Dir: base, Now: func() time.Time { return now }, Log: io.Discard, Alive: func(pid int) bool {
+		running := alive.Load() && pid == 4242
+		select {
+		case probed <- struct{}{}:
+		default:
+		}
+		return running
+	}})
+	c := &conv{r: r, dir: dir, rec: Record{ReplyID: "native", WSKey: "key", Root: dir, Backend: BackendAgy, Lead: true, HostPID: 4242}, turn: true}
+	if err := wsdashboard.WriteRegistration(base, wsdashboard.Registration{ReplyID: "native", Project: dir, Harness: BackendAgy, Hosted: true, HostPID: 4242}); err != nil {
+		t.Fatal(err)
+	}
+	r.setSummaryOwner("native", c)
+	c.live = newLiveWriter(dir, "key", "agy", r.opts.Now, io.Discard)
+	c.live.owner, c.live.ownerRAM = c.lockSummaryWriter, c.lockSummaryWriterRAM
+	slot := &idleSnapshotSlot{}
+	c.live.slot = slot
+	c.live.writeSnapshot()
+	if c.ownerProof.Load() == nil {
+		t.Fatal("the file-fenced write proved no row")
+	}
+	for len(probed) > 0 {
+		<-probed
+	}
+	before := slot.snapshot
+	row := wslive.NativeAgyPrefix + "blocked"
+	lock := r.summaryLock("native")
+	lock.Lock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: row, Label: "blocked", Status: wslive.StatusRunning}})
+	}()
+	select {
+	case <-probed:
+	case <-time.After(5 * time.Second):
+		lock.Unlock()
+		t.Fatal("the publish never probed the process")
+	}
+	// The probe passed and the publish now waits for the lock; the process ends.
+	alive.Store(false)
+	lock.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the publish did not finish")
+	}
+	if _, ok := snapAgent(slot.snapshot, row); ok || !reflect.DeepEqual(before, slot.snapshot) {
+		t.Fatal("a native row was published after its process ended behind the summary lock")
+	}
+	if c.ownerProof.Load() != nil {
+		t.Fatal("the proof outlived its process")
+	}
+	// No proof: the registration still names 4242, yet nothing is published.
+	locks := c.rowReads.Load()
+	c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + "fallback", Label: "fallback", Status: wslive.StatusRunning}})
+	if _, ok := snapAgent(slot.snapshot, wslive.NativeAgyPrefix+"fallback"); ok || !reflect.DeepEqual(before, slot.snapshot) {
+		t.Fatal("the nil-proof fallback published under a registration naming a dead process")
+	}
+	if c.rowReads.Load() != locks {
+		t.Fatal("the dead-process refusal took the registration lock")
+	}
+}
+
+// TestRejoinKeepsTheRecoveryFileUntilItsReplayFolds: a daemon leaves a
+// recovery file that lists an agy native row running whose start is in no
+// holder record any more (wrapped), with the holder coverage it applied.
+// The next daemon starts its rejoin, but its replay never ends before a
+// second interruption: the file stays byte for byte as it was, so the
+// third daemon, whose replay ends, still recovers the running row (closed
+// end-unknown at the file's write time) and writes its own coverage.
+func TestRejoinKeepsTheRecoveryFileUntilItsReplayFolds(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id, holder := h.runLead("one")
+	h.holders.out(holder, turnLines("sess-1", "u1", "first")...)
+	h.idle(id)
+	h.runner.Close()
+	path := wslive.SnapshotPath(wsdashboard.SessionDir(h.dir, id))
+	snap, err := wslive.ReadSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.HolderID != holder || snap.HolderSeq == nil {
+		t.Fatalf("the first daemon's coverage = %q/%v, want holder %s", snap.HolderID, snap.HolderSeq, holder)
+	}
+	wrapped := wslive.NativeAgyPrefix + "wrapped"
+	startedAt := snap.UpdatedAt - 10_000
+	snap.Agents = append(snap.Agents, wslive.Agent{ID: wrapped, Label: "research", Status: wslive.StatusRunning, StartedAt: startedAt,
+		Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: startedAt}})
+	original, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unchanged := func(when string) {
+		t.Helper()
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(original) {
+			t.Fatalf("%s the recovery file was replaced:\n%s\nwas\n%s", when, got, original)
+		}
+	}
+
+	// The second daemon: the holder never says where its replay ends.
+	h.holders.restart()
+	h.holders.set(func() { h.holders.statusErr = errors.New("status held") })
+	h.start()
+	eventually(t, "the rejoin to start replaying", func() bool {
+		c := h.runner.conv(id)
+		if c == nil {
+			return false
+		}
+		replaying, applied := false, uint64(0)
+		c.do(func() { replaying, applied = c.replaying, c.seq })
+		return replaying && applied >= uint64(h.holders.records(holder))
+	})
+	unchanged("while the replay runs")
+	h.runner.Close()
+	unchanged("after a second interruption before the replay ended")
+
+	// The third daemon's replay ends.
+	h.holders.restart()
+	h.holders.set(func() { h.holders.statusErr = nil })
+	h.start()
+	eventually(t, "the recovered row in the recovery file", func() bool {
+		snap, err := wslive.ReadSnapshot(path)
+		if err != nil {
+			return false
+		}
+		a, ok := snapAgent(snap, wrapped)
+		return ok && a.Status != wslive.StatusRunning
+	})
+	h.quiesce(id)
+	got, err := wslive.ReadSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := snapAgent(got, wrapped)
+	if a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt != snap.UpdatedAt || a.StartedAt != startedAt || a.Label != "research" {
+		t.Fatalf("recovered row = %+v, want end-unknown at %d from its stored start %d", a, snap.UpdatedAt, startedAt)
+	}
+	var applied uint64
+	h.runner.conv(id).do(func() { applied = h.runner.conv(id).seq })
+	// The fold's write names what the replay applied; a record that came
+	// after it with no change to show leaves that coverage (smaller only
+	// keeps more rebuilt rows).
+	if got.HolderID != holder || got.HolderSeq == nil || *got.HolderSeq < *snap.HolderSeq || *got.HolderSeq > applied {
+		var seq any = got.HolderSeq
+		if got.HolderSeq != nil {
+			seq = *got.HolderSeq
+		}
+		t.Fatalf("coverage after the replay = %q/%v, want %s/%d..%d", got.HolderID, seq, holder, *snap.HolderSeq, applied)
 	}
 }

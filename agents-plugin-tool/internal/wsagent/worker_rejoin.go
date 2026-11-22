@@ -90,6 +90,11 @@ func (c *conv) retireDowngradedWorker(hp holderProcess) bool {
 	})
 	c.setStatus(func() { c.turn = false })
 	c.replaying, c.replayAsked = false, false
+	if c.live.diskHold {
+		// The retired process's replay never folds the recovery file.
+		c.finishAgyNativeReplay(false)
+		c.live.writeSnapshot()
+	}
 	c.workerRetiring = false
 	c.seqDirty, c.live.ringDirty = false, false
 	c.writeRegistration()

@@ -650,6 +650,11 @@ func (c *conv) reattach() {
 				c.setStatus(func() { c.turn = false })
 				c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnEnd})
 			}
+			// No replay will fold the recovery file's evidence: fold it
+			// now (rows it showed running end unknown at its write time)
+			// and let the file be replaced.
+			c.finishAgyNativeReplay(false)
+			c.live.writeSnapshot()
 			c.publishAwake(c.wantAwake())
 		}
 	}
@@ -761,7 +766,7 @@ func (c *conv) replayDone(lost bool) {
 	c.replaying, c.replayAsked, c.replayGap, c.replayBoundary = false, false, false, false
 	// Agy native rows end their observation here, whatever the turn state
 	// and before a worker's lost-turn probe returns early.
-	c.finishAgyNativeReplay()
+	c.finishAgyNativeReplay(false)
 	c.queryRecoveryUsage()
 	if !c.rec.Lead && c.rec.Parent != nil {
 		if lost && c.rec.TurnOpen {

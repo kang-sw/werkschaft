@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -277,5 +278,40 @@ func TestEndUnknownRowSurvivesAnOlderWriter(t *testing.T) {
 	upgraded.SeedFinished(flagless)
 	if a, ok := nativeRow(t, upgraded.Snapshot(8_000), agy); !ok || !a.EndUnknown || a.EndedAt != 5_000 {
 		t.Fatalf("row seeded after the upgrade = %+v, want end-unknown at 5000", a)
+	}
+}
+
+// TestHoldRetentionAppliesCapsOnceToTheFoldedRoster: while retention is
+// held no cap applies, so a row an intermediate running cap would evict
+// survives until the release, which retains once over the final roster.
+func TestHoldRetentionAppliesCapsOnceToTheFoldedRoster(t *testing.T) {
+	st := NewState("key")
+	id := func(i int) string { return NativeAgyPrefix + "held-" + strconv.Itoa(i) }
+	release := st.HoldRetention()
+	for i := 0; i <= RunningAgentCap; i++ {
+		if _, err := st.Apply(Event{Kind: KindAgent, AgentID: id(i), Status: StatusRunning, At: int64(1_000 + i)}, int64(1_000+i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !st.HasAgent(id(0)) {
+		t.Fatal("a held state applied the running cap")
+	}
+	for i := 1; i <= RunningAgentCap; i++ {
+		if _, err := st.Apply(Event{Kind: KindAgent, AgentID: id(i), Status: StatusFailed, At: int64(10_000 + i)}, int64(10_000+i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st.HoldRetention()() // nested: no effect while held
+	if n := len(st.Snapshot(20_000).Agents); n != RunningAgentCap+1 {
+		t.Fatalf("held roster = %d rows, want %d", n, RunningAgentCap+1)
+	}
+	release()
+	release()
+	snap := st.Snapshot(20_000)
+	if len(snap.Agents) != 1+FinishedAgentCap {
+		t.Fatalf("released roster = %d rows, want 1 running + %d finished", len(snap.Agents), FinishedAgentCap)
+	}
+	if a, ok := nativeRow(t, snap, id(0)); !ok || a.Status != StatusRunning {
+		t.Fatalf("first row = %+v (present %v), want still running", a, ok)
 	}
 }

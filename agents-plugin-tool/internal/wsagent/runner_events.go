@@ -865,13 +865,15 @@ func (c *conv) processEnded() {
 	c.retry, c.alerted = nil, false
 	c.syncHost(true)
 	// A replay the process's end cut short still resolves what it staged of
-	// agy native rows (dropping the rows retention had evicted, settling the
-	// rows a live turn end accepted during it), before endAgents fails the
-	// rest.
-	if len(c.agyNativeReplay.staged) > 0 || c.replaying {
-		c.resolveAgyNativeReplay()
+	// agy native rows and what the restored recovery file held (dropping
+	// the rows retention had evicted, settling the rows a live turn end
+	// accepted during it), before endAgents fails the rest; a path that
+	// cleared replaying first still holds the file (diskHold).
+	if len(c.agyNativeReplay.staged) > 0 || c.replaying || c.live.diskHold {
+		c.finishAgyNativeReplay(true)
+	} else {
+		c.live.endAgents()
 	}
-	c.live.endAgents()
 	c.live.writeSnapshot()
 	if !c.closed && !c.quitting && !hadTurn && !hadBackgroundTasks && !hadBgGrace {
 		c.watched()
