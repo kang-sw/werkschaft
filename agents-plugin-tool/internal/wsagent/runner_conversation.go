@@ -207,7 +207,8 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		c.live.writeSnapshot()
 	}
 	if rec.HolderID != "" && !foreign {
-		if rec.Parent != nil && rec.TurnOpen {
+		c.compactInternalTurn = rec.agyInternalPrompt()
+		if rec.Parent != nil && (rec.TurnOpen || c.compactInternalTurn) {
 			c.turn = true
 			c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnStart})
 		}

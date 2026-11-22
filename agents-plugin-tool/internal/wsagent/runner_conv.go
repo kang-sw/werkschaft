@@ -833,24 +833,25 @@ func (c *conv) record() Record {
 
 // update changes the record under mu and persists it; wmu keeps the
 // writes in the order of the changes.
-func (c *conv) update(fn func(rec *Record)) {
+func (c *conv) update(fn func(rec *Record)) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	c.mu.Lock()
 	fn(&c.rec)
 	c.mu.Unlock()
-	c.persistRecord()
+	return c.persistRecord()
 }
 
 // persistRecord requires wmu, so an immediate write also flushes deferred sends
 // without letting an older copy overwrite a newer change.
-func (c *conv) persistRecord() {
+func (c *conv) persistRecord() error {
 	rec := c.record()
 	err := writeRecord(c.dir, rec)
 	c.recordDirty = err != nil
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: record write: %v\n", rec.ReplyID, err)
 	}
+	return err
 }
 
 func (c *conv) flushRecord() {
@@ -1264,11 +1265,6 @@ func (c *conv) kickInput() {
 		}
 		return
 	}
-	if len(recs) > 0 {
-		// Drained entries are no longer in the inbox: until a turn sent
-		// them, the record holds them.
-		c.update(func(rec *Record) { rec.Queued = queue })
-	}
 	cmd, parts, rest := nextTurn(queue)
 	if cmd != nil {
 		mail, reports = nil, nil
@@ -1283,6 +1279,22 @@ func (c *conv) kickInput() {
 	}
 	c.stopIdle()
 	startedAt := c.r.opts.Now().UnixMilli()
+	before := c.record()
+	heldAgy := before.heldAgyWorker()
+	var startErr error
+	if len(recs) > 0 || heldAgy {
+		// Keep drained input recoverable until the send succeeds. An agy
+		// holder can outlive the daemon as soon as it accepts the prompt.
+		err := c.update(func(rec *Record) {
+			rec.Queued = queue
+			if heldAgy {
+				c.setPromptBoundary(rec, startedAt, true)
+			}
+		})
+		if heldAgy {
+			startErr = err
+		}
+	}
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	// The turn reaches the page only once its send went through: a failed
 	// send leaves no user entry or turn line of its own (its error shows),
@@ -1290,7 +1302,9 @@ func (c *conv) kickInput() {
 	// turn are handled by this loop after kick returns, so they still
 	// follow the turn's start.
 	ordinary := cmd == nil
-	if cmd == nil {
+	if startErr != nil {
+		err = fmt.Errorf("persist turn start: %w", startErr)
+	} else if cmd == nil {
 		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), reports...), mail...), "\n\n")))
 	} else if text, ok := c.playbookTurn(*cmd); ok {
 		// The runner expands a playbook command itself: the harness has
@@ -1300,7 +1314,10 @@ func (c *conv) kickInput() {
 	} else {
 		err = c.runCommand(*cmd)
 	}
-	if err != nil && cmd != nil && cmd.Name == "compact" {
+	if err != nil && heldAgy {
+		c.restorePromptBoundary(before)
+	}
+	if err != nil && startErr == nil && cmd != nil && cmd.Name == "compact" {
 		c.setStatus(func() { c.turn, c.lastErr = false, "compaction: "+err.Error() })
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
@@ -1344,7 +1361,7 @@ func (c *conv) kickInput() {
 	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 {
 		res := *c.heldRes
 		c.hold(nil)
-		c.publish(res)
+		c.publish(res, heldAgy)
 	} else {
 		c.hold(nil)
 	}

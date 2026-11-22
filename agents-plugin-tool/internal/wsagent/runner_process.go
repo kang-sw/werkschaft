@@ -35,6 +35,37 @@ func (c *conv) runCommand(cmd wsinbox.Command) error {
 	return err
 }
 
+func (c *conv) setPromptBoundary(rec *Record, startedAt int64, reportable bool) {
+	rec.TurnOpen = reportable
+	rec.TurnStartedAt = startedAt
+	rec.TurnStartSeq = max(c.seq, c.lineOpen)
+}
+
+func (c *conv) restorePromptBoundary(before Record) {
+	c.update(func(rec *Record) {
+		rec.TurnOpen, rec.TurnStartedAt, rec.TurnStartSeq = before.TurnOpen, before.TurnStartedAt, before.TurnStartSeq
+	})
+}
+
+// sendStandalonePrompt persists the boundary for prompts sent outside the
+// inbox drain. Internal prompts wait for ACP without opening a parent result.
+func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
+	before := c.record()
+	if !before.heldAgyWorker() {
+		return send()
+	}
+	err := c.update(func(rec *Record) { c.setPromptBoundary(rec, c.r.opts.Now().UnixMilli(), reportable) })
+	if err != nil {
+		err = fmt.Errorf("persist turn start: %w", err)
+	} else {
+		err = send()
+	}
+	if err != nil {
+		c.restorePromptBoundary(before)
+	}
+	return err
+}
+
 // startProcess resolves the profile again (it may have changed since the
 // conversation opened) and starts the backend process, resuming the
 // recorded backend session.
@@ -157,7 +188,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	if attach {
 		// Harness-initiated wakeups also set TurnOpen. Only a runner send
 		// saves the start time alongside it.
-		if rec.TurnOpen && rec.TurnStartedAt != 0 {
+		if rec.TurnStartedAt != 0 && (rec.TurnOpen || rec.agyInternalPrompt()) {
 			startSeq := rec.TurnStartSeq
 			spec.reattachedPromptAfter = &startSeq
 		}

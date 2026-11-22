@@ -395,7 +395,7 @@ func (c *conv) compactIdle() bool {
 		if p, ok := c.proc.(*piProcess); req.auto && ok && p.mapper.compactPreparation.Load() {
 			cmd.Args = "<!-- ws-pi-daemon-auto-compact -->"
 		}
-		if err := c.runCommand(cmd); err != nil {
+		if err := c.sendStandalonePrompt(false, func() error { return c.runCommand(cmd) }); err != nil {
 			req.err = err
 			c.compactCommand = false
 			c.stopCompactWatchdog()
@@ -410,7 +410,7 @@ func (c *conv) compactIdle() bool {
 	if c.compactResume && c.compactNote != "" && c.proc != nil {
 		text := c.renderPendingNote(c.compactNote) + "\nContinue the work that was pending."
 		c.compactResume = false
-		if err := c.proc.Send(text); err != nil {
+		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
 			c.compactResumeInternal = false
 			c.setStatus(func() { c.lastErr = err.Error() })
 			c.releaseHeld()
@@ -428,7 +428,7 @@ func (c *conv) compactIdle() bool {
 			return false
 		}
 		text := c.renderPendingNote(c.compactNote)
-		if err := c.proc.Send(text); err != nil {
+		if err := c.sendStandalonePrompt(true, func() error { return c.proc.Send(text) }); err != nil {
 			c.setStatus(func() { c.lastErr = err.Error() })
 			c.releaseHeld()
 			return false
@@ -634,7 +634,7 @@ func (c *conv) sendCompactionNudge() bool {
 		return false
 	}
 	c.releaseHeld()
-	if err := c.proc.Send(c.compactNudge.text); err != nil {
+	if err := c.sendStandalonePrompt(false, func() error { return c.proc.Send(c.compactNudge.text) }); err != nil {
 		// Leave the crossing unconsumed for the next fresh usage sample.
 		// Ordinary input, if any, can restart the harness.
 		c.setStatus(func() { c.lastErr = "send compaction advisory: " + err.Error() })

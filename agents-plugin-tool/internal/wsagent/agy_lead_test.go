@@ -829,6 +829,7 @@ func TestAgyWorkerReattachWaitsForPromptResponse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, got := workerRecoveryHarness(t, BackendAgy)
+			atSend := observeAgyWorkerPromptStarts(h)
 			id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
 			before := h.record(id)
 			h.holders.out(holder,
@@ -836,18 +837,10 @@ func TestAgyWorkerReattachWaitsForPromptResponse(t *testing.T) {
 				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}}`,
 			)
 			eventually(t, "the first tool call completed", func() bool { return h.record(id).HolderSeq >= before.HolderSeq+2 })
-			h.runner.Close()
-			h.holders.restart()
-			h.startAt("http://127.0.0.1:1")
-			eventually(t, "the worker rejoined its holder", func() bool {
-				c := h.runner.conv(id)
-				if c == nil {
-					return false
-				}
-				ready := false
-				c.do(func() { ready = c.proc != nil && !c.replaying })
-				return ready
-			})
+			rejoinAgyWorker(t, h, id)
+			if start := <-atSend; !start.TurnOpen || start.TurnStartedAt == 0 || start.TurnStartedAt != h.record(id).TurnStartedAt || start.TurnStartSeq != h.record(id).TurnStartSeq {
+				t.Fatalf("first prompt boundary at send: open=%v time=%d seq=%d", start.TurnOpen, start.TurnStartedAt, start.TurnStartSeq)
+			}
 
 			if tc.usage {
 				h.holders.out(holder, `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":9404,"size":1048576}}}`)
@@ -877,6 +870,116 @@ func TestAgyWorkerReattachWaitsForPromptResponse(t *testing.T) {
 			eventually(t, "the unsolicited worker wakeup settled", func() bool { return len(got.list()) == 2 })
 			if result := got.list()[1].Result; result.Status != TurnDone || result.Message != "unsolicited wakeup" {
 				t.Fatalf("unsolicited wakeup result: %+v", result)
+			}
+		})
+	}
+}
+
+// Observe the durable record from the fake holder's synchronous ACP write.
+func observeAgyWorkerPromptStarts(h *leadHarness) <-chan Record {
+	starts := make(chan Record, 8)
+	h.holders.set(func() {
+		answer := h.holders.acp
+		h.holders.acp = func(holder, method string, params json.RawMessage) (string, string, bool) {
+			if method == "session/prompt" {
+				h.holders.mu.Lock()
+				var meta holderSession
+				_ = json.Unmarshal(h.holders.holders[holder].session, &meta)
+				h.holders.mu.Unlock()
+				rec, _ := ReadRecord(h.dir, meta.ReplyID)
+				starts <- rec
+			}
+			return answer(holder, method, params)
+		}
+	})
+	return starts
+}
+
+func rejoinAgyWorker(t *testing.T, h *leadHarness, id string) {
+	t.Helper()
+	h.runner.Close()
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the worker rejoined its holder", func() bool {
+		c := h.runner.conv(id)
+		if c == nil {
+			return false
+		}
+		ready := false
+		c.do(func() { ready = c.proc != nil && !c.replaying })
+		return ready
+	})
+}
+
+func TestAgyWorkerCompactionPromptSurvivesReattach(t *testing.T) {
+	const quiet = 40 * time.Millisecond
+	restoreUsage := agyWakeUsageQuiet
+	agyWakeUsageQuiet = quiet
+	t.Cleanup(func() { agyWakeUsageQuiet = restoreUsage })
+
+	for _, tc := range []struct {
+		name        string
+		reportable  bool
+		prepare     func(*conv)
+		wantReports int
+	}{
+		{"advisory", false, func(c *conv) {
+			c.compactNudge = compactionNudge{text: "write agenda before compacting", level: 1, standalone: true}
+			c.compactUsageFresh = true
+			c.kickInput()
+		}, 1},
+		{"native command", false, func(c *conv) {
+			c.compactPending = &compactRequest{}
+			c.kick()
+		}, 1},
+		{"continuation", true, func(c *conv) {
+			c.compactNote, c.compactResume = "restored agenda", true
+			c.kick()
+		}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, got := workerRecoveryHarness(t, BackendAgy)
+			atSend := observeAgyWorkerPromptStarts(h)
+			id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+			<-atSend
+			completeRecoveryWorker(t, h, BackendAgy, holder)
+			eventually(t, "the original result", func() bool { return len(got.list()) == 1 })
+			c := h.runner.conv(id)
+			c.do(func() { tc.prepare(c) })
+			var start Record
+			select {
+			case start = <-atSend:
+			default:
+				t.Fatal("the standalone compaction prompt did not reach the holder")
+			}
+
+			rejoinAgyWorker(t, h, id)
+			h.holders.out(holder,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"quiet","name":"read_file","status":"completed"}}}`,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","used":9404,"size":1048576}}}`,
+			)
+			eventually(t, "the worker applied usage", func() bool {
+				used := h.state(id).ContextTokens
+				return used != nil && *used == 9404
+			})
+			time.Sleep(3 * quiet)
+			if count, status := len(got.list()), h.state(id).Status; count != 1 || status != StatusRunning {
+				t.Fatalf("compaction prompt settled during quiet: reports=%d status=%s", count, status)
+			}
+			if rec := h.record(id); start.TurnOpen != tc.reportable || start.TurnStartedAt == 0 || rec.TurnStartedAt != start.TurnStartedAt || rec.TurnStartSeq != start.TurnStartSeq {
+				t.Fatalf("compaction boundary at send: open=%v time=%d seq=%d", start.TurnOpen, start.TurnStartedAt, start.TurnStartSeq)
+			}
+			prompt := agyPromptIDs(h, holder)[1]
+			h.holders.out(holder,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"continued"}}}}`,
+				jsonLine(map[string]any{"jsonrpc": "2.0", "id": prompt, "result": map[string]any{"stopReason": "end_turn"}}),
+			)
+			eventually(t, "the prompt response cleared the boundary", func() bool {
+				rec := h.record(id)
+				return !rec.TurnOpen && rec.TurnStartedAt == 0 && h.state(id).Status == StatusIdle && len(got.list()) == tc.wantReports
+			})
+			if tc.reportable && got.list()[1].Result.Message != "continued" {
+				t.Fatalf("continuation result: %+v", got.list()[1].Result)
 			}
 		})
 	}
