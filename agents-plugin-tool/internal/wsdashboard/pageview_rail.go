@@ -218,6 +218,11 @@ type RailRow struct {
 	// Subagents counts the running agents the lead itself spawned (level 1),
 	// zero without a live adapter.
 	Subagents int
+	// runningAgents counts every running agent in the lead's snapshot, at
+	// any depth (a grandchild a settled direct child started included),
+	// zero without a live adapter: the full-idle gate (railSetBusy) reads
+	// it, while Subagents keeps the level-1 badge count.
+	runningAgents int
 	// ExecJobs counts the live exec jobs this daemon runs whose worktree
 	// root is the row's Project or holds it (railExecJobs). A job counts on
 	// every row of its worktree, not only the session that launched it.
@@ -818,6 +823,11 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 		row.Working = leadWorking(snap.Lead.Phase)
 		row.permission = snap.Lead.Phase == wslive.PhasePermission
 		row.Subagents = levelOneRunning(snap.Agents)
+		for _, a := range snap.Agents {
+			if a.Status == wslive.StatusRunning {
+				row.runningAgents++
+			}
+		}
 		bg, mon := taskBadgeCounts(snap)
 		row.BackgroundTasks = bg + mon
 		if live {
