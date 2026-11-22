@@ -88,7 +88,8 @@ const snapshot = '/api/config/snapshot';
         assert.equal(railClosed.visibility, 'hidden');
         assert.equal(railClosed.overflowX, false);
         const stageRect = await frame().locator('[data-settings-view]').boundingBox();
-        assert(stageRect && stageRect.width >= 1380, 'expected full stage width on 1440x960, got ' + JSON.stringify(stageRect));
+        assert(stageRect && Math.abs(stageRect.width - 1280) <= 2, 'expected capped 1280px stage width on 1440x960, got ' + JSON.stringify(stageRect));
+        assert(Math.abs((stageRect.x + stageRect.width / 2) - 720) <= 2, 'expected centered stage on 1440x960, got ' + JSON.stringify(stageRect));
 
         await ensureRailOpen();
         const railOpenRect = await page.locator('#rail').boundingBox();
@@ -180,6 +181,8 @@ const snapshot = '/api/config/snapshot';
           assert.equal(docked.pos, 'relative');
           assert(docked.width >= 335, 'expected >=335px (340px) docked rail on 1680x1050, got ' + docked.width);
           assert.equal(docked.overflowX, false);
+          const wideStage = await frame().locator('[data-settings-view]').boundingBox();
+          assert(wideStage && Math.abs(wideStage.width - 1280) <= 2, 'expected capped 1280px stage width on 1680x1050, got ' + JSON.stringify(wideStage));
           await page.screenshot({path: path.join(captures, 'wide-1680-dark-workflow.png')});
           await page.setViewportSize({ width: 1440, height: 960 });
         }
