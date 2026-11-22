@@ -229,6 +229,73 @@ func TestOrgCCOnClashedOrgIsDropped(t *testing.T) {
 	}
 }
 
+// TestSameIDOrgCollisionKeepsWinnerOrg covers two admins minting one org id
+// offline: views that saw both creates see the winner's org, and events whose
+// writer saw only the losing create never land on the winner's org.
+func TestSameIDOrgCollisionKeepsWinnerOrg(t *testing.T) {
+	t.Run("later writer sees the winner", func(t *testing.T) {
+		tm := newTeam(t)
+		it := tm.do("maya.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Winner CC"})
+		tm.goOffline("ada.pc")
+		tm.goOffline("bo.pc")
+		tm.do("ada.pc", TypeOrgSet, orgSetPayload("o-x", "Active", "maya"))
+		lost := tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-x", "Vacant", ""))
+		tm.comeOnline("ada.pc")
+		tm.comeOnline("bo.pc")
+		cc := tm.do("raj.pc", TypeItemCCOrg, map[string]any{"item": it, "org": "o-x"})
+		for _, who := range []string{"ada.pc", "bo.pc", "raj.pc"} {
+			v := tm.view(who)
+			wantEq(t, who+" losing create", event(t, v, lost).Status, "flagged")
+			wantEq(t, who+" CC against the winner's active org", event(t, v, cc).Status, "applied")
+			o := tm.clone(who).r.S.orgs["o-x"]
+			wantEq(t, who+" winner name", o.name, "Active")
+			wantEq(t, who+" winner head", o.head, "maya")
+			wantIn(t, who+" CC reaches the winner's head", ccMembers(tm.clone(who).r.S.items[it]), "maya")
+		}
+	})
+
+	t.Run("losing writer's own events stay off the winner", func(t *testing.T) {
+		tm := newTeam(t)
+		it := tm.do("maya.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Loser CC"})
+		own := tm.do("bo.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Loser assign"})
+		tm.goOffline("ada.pc")
+		tm.goOffline("bo.pc")
+		tm.do("ada.pc", TypeOrgSet, orgSetPayload("o-x", "Alpha", "maya"))
+		tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-x", "Beta", "raj"))
+		edit := tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-x", "Beta Renamed", "raj"))
+		cc := tm.do("bo.pc", TypeItemCCOrg, map[string]any{"item": it, "org": "o-x"})
+		assign := tm.do("bo.pc", TypeItemAssign, map[string]any{"item": own, "targets": []any{map[string]any{"root": "raj", "org": "o-x", "include_root": true}}})
+		rm := tm.do("bo.pc", TypeOrgRemove, map[string]any{"org": "o-x"})
+		tm.comeOnline("ada.pc")
+		tm.comeOnline("bo.pc")
+		for _, who := range []string{"ada.pc", "bo.pc"} {
+			v := tm.view(who)
+			for name, id := range map[string]string{"edit": edit, "cc": cc, "assign": assign, "remove": rm} {
+				wantEq(t, who+" losing writer's "+name, event(t, v, id).Status, "flagged")
+			}
+			S := tm.clone(who).r.S
+			o := S.orgs["o-x"]
+			wantEq(t, who+" winner keeps name", o.name, "Alpha")
+			wantEq(t, who+" winner keeps head", o.head, "maya")
+			wantEq(t, who+" winner not removed", o.removed == nil, true)
+			if reg := S.ccOrgs[ccOrgKey(it, "o-x")]; reg != nil {
+				t.Fatalf("%s: losing CC registered on the winner's org: %+v", who, reg)
+			}
+			if len(S.liveRules(own)) != 0 || len(S.openRules(own)) != 0 {
+				t.Fatalf("%s: losing assign made a rule", who)
+			}
+		}
+	})
+}
+
+func ccMembers(it *item) []string {
+	var out []string
+	for _, e := range it.cc {
+		out = append(out, e.member)
+	}
+	return out
+}
+
 func TestRemovedChildOrgFallsBackToParent(t *testing.T) {
 	tm := newTeam(t)
 	tm.do("ada.pc", TypeSetLead, map[string]any{"member": "omar", "leads": []string{"lena"}})

@@ -30,6 +30,7 @@ type node struct {
 	causalStatus         string // verdict before final-fold concurrency flags
 	ignored              bool
 	clash                bool // flagged only by a fold-order list clash; still in later causal-past checks
+	idWinner             *node // a roles.org_set create that lost its id to this earlier create (orgIDClash)
 	markers              []marker
 	superseded           []supersession
 	thread, parentThread string
@@ -291,13 +292,25 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 	// list event is flagged here so names and org heads remain unique and a
 	// removed member cannot become an org head.
 	lf := newState(r.g, r.hb, false)
+	// orgWinner is the create that holds each org id in lf; orgLosers are the
+	// creates orgIDClash flagged, per id, in fold order.
+	orgWinner, orgLosers := map[string]*node{}, map[string][]*node{}
+	applyList := func(n *node) {
+		if id := n.p.str("org"); n.typ == TypeOrgSet && lf.orgs[id] == nil {
+			orgWinner[id] = n
+		}
+		lf.apply(n)
+	}
 	for _, n := range r.order[:start] {
+		if n.idWinner != nil {
+			orgLosers[n.p.str("org")] = append(orgLosers[n.p.str("org")], n)
+		}
 		if n.causalStatus == "applied" && isFoldOrderList(n.typ) {
-			lf.apply(n)
+			applyList(n)
 		}
 	}
 	for _, n := range r.order[start:] {
-		n.status, n.reason, n.ignored, n.clash = "", "", false, false
+		n.status, n.reason, n.ignored, n.clash, n.idWinner = "", "", false, false, nil
 		if r.rolesOnly && !isRoles(n.typ) {
 			n.status, n.causalStatus = "skipped", "skipped"
 			continue
@@ -315,15 +328,29 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 				// its id creates one, whatever the fold-order list holds.
 				creates = n.typ == TypeOrgSet && before.orgs[n.p.str("org")] == nil
 			}
+			if n.status == "applied" {
+				if rej := r.lostOrgRef(n, orgLosers); rej != "" {
+					n.status, n.reason = "flagged", string(rej)
+				}
+			}
 			if n.status == "applied" && isFoldOrderList(n.typ) {
-				rej := lf.listClash(n)
-				if rej == "" && creates {
-					rej = lf.orgIDClash(n)
+				// The id clash goes first: a losing create must be marked as
+				// such even when its name or head clashes too.
+				var rej rejection
+				if creates {
+					if rej = lf.orgIDClash(n); rej != "" {
+						id := n.p.str("org")
+						n.idWinner = orgWinner[id]
+						orgLosers[id] = append(orgLosers[id], n)
+					}
+				}
+				if rej == "" {
+					rej = lf.listClash(n)
 				}
 				if rej != "" {
 					n.status, n.reason, n.clash = "flagged", string(rej), true
 				} else {
-					lf.apply(n)
+					applyList(n)
 				}
 			}
 		case wsledger.Ignored:
@@ -423,6 +450,10 @@ func (r *replayed) stateBeforeMode(n *node, causal bool) *state {
 		if status != "applied" && !x.clash {
 			continue
 		}
+		if x.idWinner != nil && r.hb(x.idWinner, n) {
+			// n's writer saw both creates of the id: it sees the winner's org.
+			continue
+		}
 		if x.typ == TypeItemAssign && !rel[x.p.str("item")] {
 			// Another thread's assign only re-applies the live rules here,
 			// and a record a rule adds displaces that item's fallback.
@@ -462,6 +493,51 @@ func (s *state) listClash(n *node) rejection {
 		return r
 	}
 	return ""
+}
+
+// orgRefs lists the org ids n acts on: an org event's org, an org CC's org,
+// and every org-carrying item.assign target.
+func orgRefs(n *node) []string {
+	switch n.typ {
+	case TypeOrgSet, TypeOrgRemove, TypeItemCCOrg, TypeItemUnccOrg:
+		if id := n.p.str("org"); id != "" {
+			return []string{id}
+		}
+	case TypeItemAssign:
+		targets, _ := n.p.list("targets")
+		var out []string
+		for _, x := range targets {
+			if m, ok := x.(map[string]any); ok {
+				if id := obj(m).str("org"); id != "" {
+					out = append(out, id)
+				}
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// lostOrgRef is the rejection of an event acting on an org id whose create
+// its writer saw only in the losing form: a create orgIDClash flagged is in
+// n's causal past but the winning create is not, so n meant the losing org,
+// which the fold never created, and must not land on the winner's org.
+func (r *replayed) lostOrgRef(n *node, losers map[string][]*node) rejection {
+	for _, id := range orgRefs(n) {
+		for _, l := range losers[id] {
+			if r.hb(l, n) && (l.idWinner == nil || !r.hb(l.idWinner, n)) {
+				return rejection("org " + id + " is the org " + alias(l.id) + " created, which lost its id to a concurrent create (" + orgWinnerAlias(l) + "); the first in fold order keeps the id")
+			}
+		}
+	}
+	return ""
+}
+
+func orgWinnerAlias(l *node) string {
+	if l.idWinner == nil {
+		return "unknown"
+	}
+	return alias(l.idWinner.id)
 }
 
 // orgIDClash is the rejection of a roles.org_set its writer made as a

@@ -152,3 +152,39 @@ func TestIncrementalFoldOrgConflictMatchesFullReplay(t *testing.T) {
 		t.Fatalf("incremental org conflict = %s %q", n.status, n.reason)
 	}
 }
+
+// TestIncrementalFoldSameIDOrgCollisionMatchesFullReplay folds a same-id org
+// collision with the losing writer's dependents and a later writer's CC, in
+// two arrival orders (the winner arriving last inserts mid-order), against a
+// fresh full replay after every arrival.
+func TestIncrementalFoldSameIDOrgCollisionMatchesFullReplay(t *testing.T) {
+	g := json.RawMessage(`{"admins":["a","b"],"members":[{"id":"a","keys":["a"]},{"id":"b","keys":["b"]},{"id":"c","keys":["c"]},{"id":"h","keys":["h"]},{"id":"k","keys":["k"]}]}`)
+	item := incrementalEvent("c", 1, TypeItemCreate, `{"kind":"task","title":"collision"}`, 1, nil)
+	winner := incrementalEvent("a", 1, TypeOrgSet, `{"org":"o-x","name":"Active","head":"h"}`, 2, map[string]int{"c.pc": 1})
+	loser := incrementalEvent("b", 1, TypeOrgSet, `{"org":"o-x","name":"Vacant","head":""}`, 3, map[string]int{"c.pc": 1})
+	edit := incrementalEvent("b", 2, TypeOrgSet, `{"org":"o-x","name":"Renamed","head":"k"}`, 4, map[string]int{"c.pc": 1})
+	lostCC := incrementalEvent("b", 3, TypeItemCCOrg, `{"item":"c.pc#1","org":"o-x"}`, 5, map[string]int{"c.pc": 1})
+	laterCC := incrementalEvent("c", 2, TypeItemCCOrg, `{"item":"c.pc#1","org":"o-x"}`, 6, map[string]int{"a.pc": 1, "b.pc": 3})
+	for name, arrivals := range map[string][]wsledger.Event{
+		"winner first": {winner, loser, edit, lostCC, laterCC},
+		"winner last":  {loser, edit, lostCC, winner, laterCC},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := newMemSource(g, "c.pc", []wsledger.Event{item})
+			tr := New(src, src.stream)
+			for _, ev := range arrivals {
+				src.add(ev)
+				assertIncrementalFold(t, tr, src)
+			}
+			for id, want := range map[wsledger.EventID]string{winner.ID: "applied", loser.ID: "flagged", edit.ID: "flagged", lostCC.ID: "flagged", laterCC.ID: "applied"} {
+				if n := tr.r.byID[id.String()]; n.status != want {
+					t.Fatalf("%s = %s (%s), want %s", id, n.status, n.reason, want)
+				}
+			}
+			o := tr.r.S.orgs["o-x"]
+			if o == nil || o.name != "Active" || o.head != "h" {
+				t.Fatalf("winner org = %+v", o)
+			}
+		})
+	}
+}
