@@ -18,8 +18,9 @@ type GeneratedPath struct {
 	Path string `json:"path"`
 	// Created is the identity of the file this call created at Path (review
 	// and prompt kinds), read from the exclusive-create handle before it
-	// closed. A consumer compares it with os.SameFile to tell the
-	// reservation it made from an entry another process put there since.
+	// closed; nil when that read failed. A consumer compares it with
+	// os.SameFile to tell the reservation it made from an entry another
+	// process put there since, and treats nil as unknown (fail closed).
 	Created os.FileInfo `json:"-"`
 }
 

@@ -268,39 +268,32 @@ func TestPathGenerateGrantAllowsReplaceSaveAndRefusesReplacedTarget(t *testing.T
 	}
 }
 
-// A refused path.generate removes only the reservations it created that
-// are still its own empty files: content another process saved into one,
-// or an entry that replaced one, stays.
-func TestPathGenerateRefusalDiscardsOnlyItsOwnEmptyReservations(t *testing.T) {
+// A grant needs the reservation's creation identity: a GeneratedPath with
+// none is refused (fail closed), and the refusal deletes nothing.
+func TestPathGenerateGrantRefusesUnknownIdentityAndKeepsFiles(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
 	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
 	root := t.TempDir()
 	initGit(t, root)
-	generated, err := wsstate.NewManager(wsstate.Options{}).GeneratePaths(root, "review", []string{"untouched", "saved", "replaced"})
+	generated, err := wsstate.NewManager(wsstate.Options{}).GeneratePaths(root, "review", []string{"known", "unknown"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	untouched, saved, replaced := generated[0].Path, generated[1].Path, generated[2].Path
-	if err := os.WriteFile(saved, []byte("saved by another process"), 0o644); err != nil {
+	if generated[0].Created == nil || generated[1].Created == nil {
+		t.Fatal("GeneratePaths did not record creation identities")
+	}
+	if err := os.WriteFile(generated[0].Path, []byte("saved by another process"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(replaced); err != nil {
-		t.Fatal(err)
+	generated[1].Created = nil
+	if err := processGeneratedWrites.grant("unknown-identity-key", generated); err == nil || !strings.Contains(err.Error(), "no creation identity") {
+		t.Fatalf("grant with an unknown creation identity = %v", err)
 	}
-	if err := os.WriteFile(replaced, nil, 0o644); err != nil {
-		t.Fatal(err)
+	if got, err := os.ReadFile(generated[0].Path); err != nil || string(got) != "saved by another process" {
+		t.Fatalf("saved reservation after refusal = %q, %v", got, err)
 	}
-
-	discardGeneratedCacheArtifacts(generated)
-
-	if _, err := os.Lstat(untouched); !os.IsNotExist(err) {
-		t.Fatalf("own empty reservation was kept: %v", err)
-	}
-	if got, err := os.ReadFile(saved); err != nil || string(got) != "saved by another process" {
-		t.Fatalf("saved reservation = %q, %v", got, err)
-	}
-	if _, err := os.Lstat(replaced); err != nil {
-		t.Fatalf("replacing entry was removed: %v", err)
+	if _, err := os.Lstat(generated[1].Path); err != nil {
+		t.Fatalf("refused reservation was deleted: %v", err)
 	}
 }
 
