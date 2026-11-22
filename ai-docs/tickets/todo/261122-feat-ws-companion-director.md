@@ -48,7 +48,7 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
 ### Phase 1: Director Event Contract, Lead-Only `ws/emotion` & Optional Sidecar/Persona Integration
 
 - **Goals:**
-  1. Define the bounded daemon-to-shell companion command payload (`{ move_to?, pose?, mood?, quip?, ttl_ms }`) delivered over the existing shell WebSocket stream, with safe fallback when `dashboard.companion_mode === "off"`.
+  1. Define the bounded daemon-to-shell companion command payload (`{ move_to?, scenario?, pose?, gesture?, expression?, prop?, fx?, quip?, ttl_ms }`) delivered over the existing shell WebSocket stream — accepting either any open `scenario` ID or a direct primitive asset combo resolved through the active pack's open dictionaries with graceful `fallback` degradation for unknown IDs, and inert when `dashboard.companion_mode === "off"`.
   2. Implement the pluggable lead-only `ws/emotion` MCP tool (registered only when `dashboard.companion_mode !== "off"` and `dashboard.companion_director === "lead-tool"`, or gated cleanly at call time without breaking static tool schemas — finalize during `ready/` design review).
   3. Implement the settled sidecar delta-cached narrative director (per `(47)`) and arbitration TTL (per `(48)`), plus the `full`-mode `User preferences` speaking-style guardrail sourced from the active pack's optional `personaPrompt` field.
   4. Render compact, auto-dismissing flip-safe speech quip bubbles on the outer shell stage above the companion without blocking pointer events on underlying UI.
