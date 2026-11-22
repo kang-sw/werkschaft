@@ -328,8 +328,9 @@ func (h *Hosted) HolderGone(desc wsholder.Descriptor, exit wsholder.Exit) {
 	if j != nil && j.row.HolderID != desc.ID {
 		// A holder of an earlier job under a reused id: the live job, and
 		// the exit copy at its id's path, are not this holder's.
+		current := j.row.HolderID
 		h.mu.Unlock()
-		h.logf("holder %s ended: job %s runs under holder %s, so it stays", desc.ID, execID, j.row.HolderID)
+		h.logf("holder %s ended: job %s runs under holder %q, so it stays", desc.ID, execID, current)
 		return
 	}
 	if b := h.byHolder[desc.ID]; b != nil && b.row.ID == execID {

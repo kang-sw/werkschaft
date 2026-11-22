@@ -119,6 +119,9 @@ type fakeExecHolders struct {
 	// onSpawn runs after a spawn, outside the lock (the child's own
 	// behaviour: output, exit).
 	onSpawn func(id string)
+	// onLaunch runs inside LaunchWith, outside the lock, before the new
+	// holder's id reaches the job.
+	onLaunch func(id string)
 }
 
 func newFakeExecHolders() *fakeExecHolders {
@@ -132,6 +135,12 @@ func (f *fakeExecHolders) LaunchWith(spec wsholder.LaunchSpec) (string, error) {
 	id := fmt.Sprintf("h%012d", f.n)
 	f.launched[id] = spec
 	f.live[id] = spec.Session
+	if f.onLaunch != nil {
+		hook := f.onLaunch
+		f.mu.Unlock()
+		hook(id)
+		f.mu.Lock()
+	}
 	return id, nil
 }
 
@@ -1953,4 +1962,29 @@ func TestHostedWriteBeforeTheSpawnKeepsStdin(t *testing.T) {
 	if got := fx.holders.inputOf(r.v.HolderID); !slices.Equal(got, []string{"later\n<EOF>"}) {
 		t.Fatalf("inputs = %q", got)
 	}
+}
+
+// TestHostedEarlyHolderEndReadsTheJobUnderTheLock: a holder that ends
+// before the launch has recorded it on its job takes HolderGone's mismatch
+// path while the launch records the holder; the log reads the job's
+// holder under h.mu (run with -race: the read raced the launch's write).
+func TestHostedEarlyHolderEndReadsTheJobUnderTheLock(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	done := make(chan struct{})
+	fx.holders.mu.Lock()
+	fx.holders.onLaunch = func(holder string) {
+		fx.holders.mu.Lock()
+		session := fx.holders.launched[holder].Session
+		fx.holders.mu.Unlock()
+		go func() {
+			defer close(done)
+			fx.h.HolderGone(wsholder.Descriptor{ID: holder, Session: session}, wsholder.Exit{Reason: "killed"})
+		}()
+		time.Sleep(50 * time.Millisecond)
+	}
+	fx.holders.mu.Unlock()
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
+		t.Fatal(err)
+	}
+	<-done
 }
