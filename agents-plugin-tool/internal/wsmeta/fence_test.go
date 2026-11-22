@@ -653,3 +653,49 @@ func TestInconclusiveSessionIdentityKeepsItsJournal(t *testing.T) {
 		t.Fatalf("permission = %+v, want the staged original", p)
 	}
 }
+
+// A retry in an environment that cannot read birth times (a seccomp filter
+// rejecting statx) reports the same directory without one. That is the same
+// incarnation: the session keeps its journal rows and its fenced original.
+func TestIdentityWithoutBirthTimeIsTheSameSession(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	prev := generationOf
+	t.Cleanup(func() { generationOf = prev })
+	btime := true
+	generationOf = func(p string, _ os.FileInfo) (string, error) {
+		gen := "ino:8:1:" + filepath.Base(p)
+		if btime {
+			gen += btimeTag + "1700000000.000000001"
+		}
+		return gen, nil
+	}
+	s := openTest(t, dir, testOpts())
+	mustStage(t, s)
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	btime = false
+	res := mustStage(t, s)
+	if res.Discarded != 0 || len(res.Pending) != 0 {
+		t.Fatalf("stage without birth times = %+v", res)
+	}
+	if c := captureMap(t, s)[fencePerm]; string(c.Bytes) != permOriginal {
+		t.Fatalf("fenced original = %q", c.Bytes)
+	}
+	// A different identity, or two different birth times, is another
+	// incarnation.
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{"ino:8:1:5", "ino:8:1:5" + btimeTag + "1.0", true},
+		{"ino:8:1:5" + btimeTag + "1.0", "ino:8:1:5" + btimeTag + "2.0", false},
+		{"ino:8:1:5", "ino:8:1:6", false},
+		{"ino:8:1:5" + btimeTag + "1.0", "ino:8:1:6" + btimeTag + "1.0", false},
+	} {
+		if got := sameGeneration(c.a, c.b); got != c.same {
+			t.Errorf("sameGeneration(%q, %q) = %v", c.a, c.b, got)
+		}
+	}
+}

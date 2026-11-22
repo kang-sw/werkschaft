@@ -851,7 +851,7 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		return err
 	}
 	for id, gen := range knownSessions {
-		if cur, ok := current[id]; !ok || cur != gen {
+		if cur, ok := current[id]; !ok || !sameGeneration(cur, gen) {
 			if err := discard(id); err != nil {
 				return res, err
 			}
@@ -873,7 +873,7 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		// read; such a session is not imported and is never recreated.
 		if again, ok, err := s.sessionGeneration(id); err != nil {
 			return res, err
-		} else if !ok || again != gen {
+		} else if !ok || !sameGeneration(again, gen) {
 			if err := discard(id); err != nil {
 				return res, err
 			}

@@ -17,14 +17,14 @@ import (
 // pruned and recreated under the same reply-id reads as another generation,
 // even when its inode is reused.
 //
-// The token's form must not change between passes for the same directory,
-// or the session would read as recreated and lose its journal rows. So a
-// statx call that fails is not answered with a weaker token. A kernel or
-// sandbox without statx (ENOSYS, or EPERM from a seccomp filter) always gets
-// the device-and-inode token. Any other failure is returned as inconclusive.
-// Without a birth time, a missed recreation is harmless: every capture row
-// is still re-validated against its live file, and a fence is proven only by
-// the migration's sentinel (fenceProven).
+// A kernel or sandbox without statx (ENOSYS, or EPERM from a seccomp filter)
+// gets the same device (major:minor) and inode components without the birth
+// time, and the journal outlives the environment of the pass that wrote it.
+// So tokens are compared with sameGeneration, which compares the birth time
+// only when both tokens carry one. Any other statx failure is returned as
+// inconclusive. Without a birth time, a missed recreation is harmless: every
+// capture row is still re-validated against its live file, and a fence is
+// proven only by the migration's sentinel (fenceProven).
 func dirGeneration(path string, _ os.FileInfo) (string, error) {
 	var stx unix.Statx_t
 	wsstate.CountFileIO("stat")
@@ -41,7 +41,7 @@ func dirGeneration(path string, _ os.FileInfo) (string, error) {
 			}
 			return "", err
 		}
-		return fmt.Sprintf("ino:%d:%d", uint64(st.Dev), uint64(st.Ino)), nil
+		return fmt.Sprintf("ino:%d:%d:%d", unix.Major(uint64(st.Dev)), unix.Minor(uint64(st.Dev)), uint64(st.Ino)), nil
 	default:
 		return "", err
 	}
