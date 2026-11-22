@@ -479,11 +479,16 @@
   // Every read and every stop answer is a snapshot taken between its request and
   // its response, and answers arrive in any order. Each request takes the next
   // number when it is issued; a job record carries the number of the request that
-  // produced it, and an answer only replaces a record that is not newer. After a
-  // stop or a retry settles, the list is read again, and that newest list wins.
-  // An ended job never runs again whatever the numbers say.
+  // produced it, and an answer only replaces a record that is not newer. Two
+  // moves do not wait for the numbers: a job that ended never runs again, and a
+  // job that ended is never shown running again; an answer that says it ended
+  // replaces a running record whatever its number (the issue order is not the
+  // order the daemon took the snapshots in). After a stop or a retry settles, the
+  // list is read again, and that newest list wins.
   function xhStale(old, job, q) {
-    return (old._q || 0) > q || (old.state !== "running" && job.state === "running");
+    if (old.state !== "running" && job.state === "running") return true;
+    if (old.state === "running" && job.state !== "running") return false;
+    return (old._q || 0) > q;
   }
   function xhApplyJobs(jobs, q) {
     var now = Date.now(), seen = Object.create(null);
@@ -512,9 +517,20 @@
       return r.json().then(function (b) { return { status: r.status, body: b }; });
     }).then(function (v) { clearTimeout(t); return v; }, function (e) { clearTimeout(t); throw e; });
   }
+  // A list read that fails (a network error, a timeout, a 5xx) keeps the refresh
+  // owed: it is read again after a growing pause, one read in flight, until it
+  // answers. The events that asked for it came once and do not repeat.
+  var xhRetryT = 0, xhRetryMs = 0;
+  function xhRetryLater() {
+    clearTimeout(xhRetryT);
+    xhRetryMs = Math.min(15000, xhRetryMs ? xhRetryMs * 2 : 1000);
+    xhRetryT = setTimeout(function () { xhRetryT = 0; xhFetch(); }, xhRetryMs);
+  }
   function xhFetch() {
     if (!xhEnabled || xhAbsent) return;
     if (xhFetching) { xhDirty = true; return; }
+    clearTimeout(xhRetryT);
+    xhRetryT = 0;
     xhFetching = true;
     xhDirty = false;
     var q = ++xhSeq;
@@ -526,18 +542,21 @@
     }).then(function (res) {
       xhFetching = false;
       if (res && Array.isArray(res.jobs)) {
+        xhRetryMs = 0;
         xhRev = typeof res.rev === "number" ? res.rev : xhRev;
         xhApplyJobs(res.jobs, q);
         xhRender(false);
         xhPeekJobsChanged();
+        xhStopSettle();
       } else if (xhAbsent) xhUnmount();
       if (xhDirty) xhFetch();
     }, function () {
       xhFetching = false;
-      if (xhDirty) xhFetch();
+      if (xhDirty) xhFetch(); else xhRetryLater();
     });
   }
   function xhUnmount() {
+    clearTimeout(xhRetryT);
     xhJobs = [];
     xhById = Object.create(null);
     if (xhGroup) { xhGroup.hidden = true; xhGroup.textContent = ""; }

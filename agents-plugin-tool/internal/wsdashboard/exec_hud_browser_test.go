@@ -87,6 +87,11 @@ func (s *hudBrowserSvc) Jobs(owner string) []execjob.HostedSummary {
 	if delay > 0 {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
+	// listDone counts the lists whose answer is on its way to the page: the
+	// handshake a test waits on instead of a sleep.
+	s.mu.Lock()
+	s.counts["listDone"]++
+	s.mu.Unlock()
 	return out
 }
 

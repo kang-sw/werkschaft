@@ -6,7 +6,7 @@
 // timer once the job ended and was drained. Command and output are text nodes,
 // never markup. Strip and list: dashboard-exec-hud.js.
   var xhPk = { open: false, id: "", origin: "", confirm: "", pinned: false, follow: true, pending: 0, wrap: true, cmdOpen: false, sig: "" };
-  var xhPeekEl = null, xhToastEl = null, xhOutEl = null, xhNewBtn = null, xhFoot = null, xhOut = null, xhPollT = 0, xhPollGen = 0, xhConfT = 0, xhConfLeft = 0, xhToastT = 0, xhNoticeBusy = Object.create(null), xhCopiedT = 0;
+  var xhPeekEl = null, xhToastEl = null, xhOutEl = null, xhNewBtn = null, xhFoot = null, xhOut = null, xhPollT = 0, xhPollGen = 0, xhConfT = 0, xhConfLeft = 0, xhToastT = 0, xhNoticeBusy = Object.create(null), xhCopiedT = 0, xhStopWait = Object.create(null);
   var XH_TAIL_BYTES = 16384, XH_MAX_LINES = 1500, XH_MAX_UNITS = 196608, XH_CONFIRM_S = 8, XH_POLL_MIN = 350, XH_POLL_MAX = 3000;
   function xhPeekOpen() { return xhPk.open; }
   function xhPeekId() { return xhPk.id; }
@@ -110,6 +110,7 @@
   function xhPeekDestroy() {
     xhPk.open = false;
     clearInterval(xhConfT);
+    xhStopWait = Object.create(null);
     xhPollStop();
     if (xhPeekEl) xhPeekEl.hidden = true;
     if (xhToastEl) xhToastEl.hidden = true;
@@ -539,6 +540,7 @@
     xhJobs[xhJobs.indexOf(old)] = job;
     xhById[job.id] = job;
     if (prev !== xhSt(job) + "|" + (job.stop_notice || "") + "|" + job.written) { xhRender(false); xhPeekRender(false); }
+    xhStopSettle();
   }
   // --- stop --------------------------------------------------------------------
   function xhAskStop(id, origin) {
@@ -598,11 +600,15 @@
     if (sel) sel.focus();
     xhStopRequest(id, function (r, body, text, q) {
       delete xhStopping[id];
+      var accepted = !!(r && r.ok && body && body.job);
+      // The stop was accepted: its outcome toast is owed once the job is seen ended,
+      // by this answer, by a list, or by a read, whichever comes first.
+      if (accepted) xhStopWait[id] = Date.now();
       if (body && body.job) xhMergeJob(body.job, q);
       // The answer is one snapshot among others and may be older than a list that
       // already arrived: the list is read again now, and the newest one wins.
       xhFetch();
-      if (r && r.ok && body && body.job) { xhAfterStop(id); return; }
+      if (accepted) { xhAfterStop(id); return; }
       // The job may still run (its holder did not go), or is not found.
       xhRender(true);
       xhPeekRender(false);
@@ -613,12 +619,26 @@
   // afterStop shows the job as it stands now (not as the answer said, which a
   // newer list may have overtaken).
   function xhAfterStop(id) {
-    var job = xhById[id];
     xhRender(true);
     xhPeekRender(false);
-    if (!job) return;
     if (xhOut && xhOut.id === id) xhPollNow();
-    if (job.state !== "running" && !(xhPk.open && xhPk.id === id)) xhToast(job);
+    xhStopSettle();
+  }
+  // stopSettle shows the toast of every stop this page made, once, when the job
+  // is first seen ended (and nowhere the panel already shows it: that has the
+  // notice card). A stop's answer can be rejected as older than a list, or the
+  // list read after it can still be running; the toast waits for the ended state
+  // to land, up to XH_STOP_WAIT_MS, and is dropped with a job that left the list.
+  var XH_STOP_WAIT_MS = 30000;
+  function xhStopSettle() {
+    var now = Date.now();
+    Object.keys(xhStopWait).forEach(function (id) {
+      var j = xhById[id];
+      if (!j || now - xhStopWait[id] > XH_STOP_WAIT_MS) { delete xhStopWait[id]; return; }
+      if (j.state === "running") return;
+      delete xhStopWait[id];
+      if (!(xhPk.open && xhPk.id === id)) xhToast(j);
+    });
   }
   function xhRetryNotice(id) {
     var j = xhById[id];
@@ -743,7 +763,13 @@
         doc.removeEventListener("focusin", track, true);
         if (!a.isConnected) return;
         var own = !!last && (last === a || (xhPeekEl && xhPeekEl.contains(last)));
-        if (own && (!doc.activeElement || doc.activeElement === doc.body)) a.focus();
+        // The scratch field of the fallback borrowed the keyboard and left it on the page:
+        // it goes back to where the user last had it (Copy, or the element they moved to,
+        // when that is still there).
+        if (!doc.activeElement || doc.activeElement === doc.body) {
+          var back = own ? a : last;
+          if (back && back !== doc.body && back.isConnected && back.focus) back.focus();
+        }
         a.textContent = ok ? "✓ " + wsT("js.xhud.pk.copied") : "⚠ " + wsT("js.xhud.pk.copyfail");
         clearTimeout(xhCopiedT);
         xhCopiedT = setTimeout(function () { a.textContent = old; }, 1400);
