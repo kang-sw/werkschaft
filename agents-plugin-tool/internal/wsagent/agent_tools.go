@@ -287,6 +287,20 @@ func agentID(address string) string {
 // spawnableHarness reports why harness has no spawnable tier now: not
 // registered, lead-only, or not installed. "" is spawnable.
 func (r *Runner) spawnableHarness(harness string) string {
+	if why := r.registeredWorker(harness); why != "" {
+		return why
+	}
+	if harness == BackendPi && r.opts.ChildCheck != nil {
+		if err := r.opts.ChildCheck(); err != nil {
+			return err.Error()
+		}
+	}
+	return ""
+}
+
+// registeredWorker is spawnableHarness before the child check: registration,
+// the worker role, and the executable on PATH. It runs no subprocess.
+func (r *Runner) registeredWorker(harness string) string {
 	reg, ok := r.opts.Backends[harness]
 	if !ok || reg.Backend == nil {
 		return fmt.Sprintf("harness %q is not registered in this daemon", harness)
@@ -296,11 +310,6 @@ func (r *Runner) spawnableHarness(harness string) string {
 	}
 	if ok, why := supportBackendAvailability(harness, reg.Backend); !ok {
 		return why
-	}
-	if harness == BackendPi && r.opts.ChildCheck != nil {
-		if err := r.opts.ChildCheck(); err != nil {
-			return err.Error()
-		}
 	}
 	return ""
 }
@@ -535,6 +544,30 @@ func RoutedTierBinding(cfg wsconfig.Options, res wsconfig.TierResolution) (wscon
 // SpawnableHarness reports why agent.spawn cannot launch harness now ("" when
 // it can): the availability check a routed tier's terminal harness passes.
 func (r *Runner) SpawnableHarness(harness string) string { return r.spawnableHarness(harness) }
+
+// HarnessAvailability is SpawnableHarness for an interactive view: it never
+// runs a probe subprocess. The child check (Pi's version) answers from
+// ChildCheckKnown; while that needs a probe, or no ChildCheckKnown is set,
+// known is false and why is empty: availability is not known yet.
+func (r *Runner) HarnessAvailability(harness string) (why string, known bool) {
+	if why := r.registeredWorker(harness); why != "" {
+		return why, true
+	}
+	if harness != BackendPi || r.opts.ChildCheck == nil {
+		return "", true
+	}
+	if r.opts.ChildCheckKnown == nil {
+		return "", false
+	}
+	known, err := r.opts.ChildCheckKnown()
+	switch {
+	case !known:
+		return "", false
+	case err != nil:
+		return err.Error(), true
+	}
+	return "", true
+}
 
 // tierRefusal is a 400 naming why and every tier caller may spawn now.
 func (r *Runner) tierRefusal(caller AgentCaller, why string) error {

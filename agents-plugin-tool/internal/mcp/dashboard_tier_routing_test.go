@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -235,15 +236,20 @@ func TestDashboardTierRoutingViewNamesTheStoredRevision(t *testing.T) {
 // terminal: a route ending on a harness the runner cannot launch now (an
 // explicit pointer, a bundle, or the caller fallthrough) has no binding and
 // names why, as the spawn would refuse it, and the view lists the harness.
+// Only harnesses some route ends on are checked, and a harness whose check
+// cannot answer without a probe is reported unknown, never waited for.
 func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
 	rsrc, opts := dashboardTierFixture(t)
 	calls := map[string]int{}
-	available := func(harness string) string {
+	available := func(harness string) (string, bool) {
 		calls[harness]++
-		if harness == "codex" || harness == "agy" {
-			return fmt.Sprintf("harness %q is not installed", harness)
+		switch harness {
+		case "codex", "agy":
+			return fmt.Sprintf("harness %q is not installed", harness), true
+		case "pi":
+			return "", false
 		}
-		return ""
+		return "", true
 	}
 	draft := json.RawMessage(`{"nodes":{"review":{"*":"codex.*"},"ticket-selector":{"*":"fast"}},"bundles":{"fast":{"harness":"agy","model":"gemini-flash","effort":"low"}}}`)
 	view, err := dashboardTierRoutingView(rsrc, opts, draft, "claude", available)
@@ -256,10 +262,8 @@ func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
 	if view.Unavailable["codex"] != `harness "codex" is not installed` || view.Unavailable["agy"] == "" || view.Unavailable["claude"] != "" {
 		t.Fatalf("unavailable = %v", view.Unavailable)
 	}
-	for harness, n := range calls {
-		if n != 1 {
-			t.Fatalf("harness %s checked %d times, want once per view", harness, n)
-		}
+	if want := map[string]int{"claude": 1, "codex": 1, "agy": 1}; !maps.Equal(calls, want) {
+		t.Fatalf("checks = %v, want each harness a route ends on once (%v)", calls, want)
 	}
 	r := tierViewRoute(t, tierViewNode(t, view, "review"), "large")
 	if r.Trace != "review:large -> codex.large" || r.Unavailable != `harness "codex" is not installed` || r.BindingError != r.Unavailable || r.Model != "" {
@@ -281,6 +285,16 @@ func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
 	}
 	if r := tierViewRoute(t, tierViewNode(t, view, "implement"), "large"); !r.CallerFallthrough || r.Unavailable != `harness "codex" is not installed` || r.Model != "" {
 		t.Fatalf("implement:large on an unavailable caller = %+v", r)
+	}
+	// A harness whose check would need a probe is unknown: the route keeps
+	// its binding answer and says so; nothing is refused.
+	view, err = dashboardTierRoutingView(rsrc, opts, json.RawMessage(`{"nodes":{"review":{"*":"pi.*"}}}`), "claude", available)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = tierViewRoute(t, tierViewNode(t, view, "review"), "large")
+	if r.Harness != "pi" || r.AvailabilityUnknown == "" || r.Unavailable != "" || view.AvailabilityUnknown["pi"] != r.AvailabilityUnknown || view.Unavailable["pi"] != "" {
+		t.Fatalf("review:large on an unknown pi = %+v (view unknown %v, unavailable %v)", r, view.AvailabilityUnknown, view.Unavailable)
 	}
 	// Without a check, nothing is marked.
 	view, err = dashboardTierRoutingView(rsrc, opts, draft, "claude", nil)

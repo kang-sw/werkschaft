@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"slices"
 
@@ -32,13 +33,17 @@ type dashboardTierView struct {
 	// Error is why the value does not parse or validate; a draft with an
 	// error is refused on save. Empty when the graph is usable.
 	Error string `json:"error,omitempty"`
-	// Unavailable names each harness agent.spawn cannot launch on now, with
-	// why (the runner's availability check); a route ending there carries
-	// the same reason. Empty without a runner to ask.
-	Unavailable map[string]string     `json:"unavailable,omitempty"`
-	Collisions  []string              `json:"collisions"`
-	Nodes       []dashboardTierNode   `json:"nodes"`
-	Bundles     []dashboardTierBundle `json:"bundles"`
+	// Unavailable names each harness a route ends on that agent.spawn
+	// cannot launch on now, with why (the runner's availability check); a
+	// route ending there carries the same reason. Empty without a runner to
+	// ask. AvailabilityUnknown names each such harness whose check would
+	// need a probe that has not run yet (Pi's version): the view never
+	// waits for one.
+	Unavailable         map[string]string     `json:"unavailable,omitempty"`
+	AvailabilityUnknown map[string]string     `json:"availability_unknown,omitempty"`
+	Collisions          []string              `json:"collisions"`
+	Nodes               []dashboardTierNode   `json:"nodes"`
+	Bundles             []dashboardTierBundle `json:"bundles"`
 }
 
 // dashboardTierNode is one routing node. Pointers are effective (packaged
@@ -75,21 +80,23 @@ type dashboardTierEdge struct {
 // a bare bundle name), Resolved the routed size, and Model and Effort the
 // binding agent.spawn launches (BindingError when it has none). Unavailable
 // is why agent.spawn cannot launch the terminal harness now; the route then
-// has no binding and BindingError says the same.
+// has no binding and BindingError says the same. AvailabilityUnknown says
+// the harness's availability is not known yet; the binding is still shown.
 type dashboardTierRoute struct {
-	Token             string             `json:"token"`
-	Size              string             `json:"size,omitempty"`
-	Trace             string             `json:"trace,omitempty"`
-	Hops              []wsconfig.TierHop `json:"hops,omitempty"`
-	Harness           string             `json:"harness,omitempty"`
-	Resolved          string             `json:"resolved,omitempty"`
-	Bundle            string             `json:"bundle,omitempty"`
-	Model             string             `json:"model,omitempty"`
-	Effort            string             `json:"effort,omitempty"`
-	CallerFallthrough bool               `json:"caller_fallthrough,omitempty"`
-	BindingError      string             `json:"binding_error,omitempty"`
-	Unavailable       string             `json:"unavailable,omitempty"`
-	Error             string             `json:"error,omitempty"`
+	Token               string             `json:"token"`
+	Size                string             `json:"size,omitempty"`
+	Trace               string             `json:"trace,omitempty"`
+	Hops                []wsconfig.TierHop `json:"hops,omitempty"`
+	Harness             string             `json:"harness,omitempty"`
+	Resolved            string             `json:"resolved,omitempty"`
+	Bundle              string             `json:"bundle,omitempty"`
+	Model               string             `json:"model,omitempty"`
+	Effort              string             `json:"effort,omitempty"`
+	CallerFallthrough   bool               `json:"caller_fallthrough,omitempty"`
+	BindingError        string             `json:"binding_error,omitempty"`
+	Unavailable         string             `json:"unavailable,omitempty"`
+	AvailabilityUnknown string             `json:"availability_unknown,omitempty"`
+	Error               string             `json:"error,omitempty"`
 }
 
 type dashboardTierBundle struct {
@@ -103,11 +110,13 @@ type dashboardTierBundle struct {
 // with traces for harness (empty or unknown: claude, else the first known
 // harness). Validation matches the dashboard write rule: packaged roles and
 // the built-in harnesses; legacy aliases apply at resolution as they do for
-// agent.spawn. available is the spawn's harness availability check
-// (wsagent Runner.SpawnableHarness: why a harness cannot launch now, ""
-// when it can); it runs once per harness and marks every route ending on an
-// unavailable harness, as agent.spawn would refuse it. Nil skips it.
-func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(string) string) (dashboardTierView, error) {
+// agent.spawn. available is the spawn's harness availability check for an
+// interactive view (wsagent Runner.HarnessAvailability: why a harness
+// cannot launch now, "" when it can, known false while that would need a
+// probe); it runs once per harness a route ends on, never for one no route
+// reaches, and marks every route ending on an unavailable harness, as
+// agent.spawn would refuse it. Nil skips it.
+func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawMessage, harness string, available func(string) (string, bool)) (dashboardTierView, error) {
 	roles, err := packagedTierRoles(rsrc)
 	if err != nil {
 		return dashboardTierView{}, err
@@ -122,26 +131,35 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 	}
 	view := dashboardTierView{Harness: harness, Harnesses: harnesses, Sizes: wsconfig.TierSizes, MaxHops: wsconfig.TierRoutingMaxHops, Collisions: []string{}, Nodes: []dashboardTierNode{}, Bundles: []dashboardTierBundle{}}
-	checked := map[string]string{}
-	unavailable := func(h string) string {
+	type availability struct {
+		why   string
+		known bool
+	}
+	checked := map[string]availability{}
+	check := func(h string) (string, bool) {
 		if available == nil || h == "" {
-			return ""
+			return "", true
 		}
-		why, ok := checked[h]
+		a, ok := checked[h]
 		if !ok {
-			why = available(h)
-			checked[h] = why
-		}
-		return why
-	}
-	for _, h := range harnesses {
-		if why := unavailable(h); why != "" {
-			if view.Unavailable == nil {
-				view.Unavailable = map[string]string{}
+			a.why, a.known = available(h)
+			checked[h] = a
+			switch {
+			case !a.known:
+				if view.AvailabilityUnknown == nil {
+					view.AvailabilityUnknown = map[string]string{}
+				}
+				view.AvailabilityUnknown[h] = fmt.Sprintf("%s availability is not known yet: this daemon has not checked it", h)
+			case a.why != "":
+				if view.Unavailable == nil {
+					view.Unavailable = map[string]string{}
+				}
+				view.Unavailable[h] = a.why
 			}
-			view.Unavailable[h] = why
 		}
+		return a.why, a.known
 	}
+	unknown := func(h string) string { return view.AvailabilityUnknown[h] }
 	var routing wsconfig.TierRouting
 	var parseErr error
 	if draft == nil {
@@ -205,11 +223,11 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 		view.Nodes[i].Depth = tierNodeDepth(view.Nodes, index, i, map[int]bool{}, depths)
 		for _, size := range wsconfig.TierSizes {
-			view.Nodes[i].Routes = append(view.Nodes[i].Routes, dashboardTierResolve(graph, opts, view.Nodes[i].Name+":"+size, size, harness, unavailable))
+			view.Nodes[i].Routes = append(view.Nodes[i].Routes, dashboardTierResolve(graph, opts, view.Nodes[i].Name+":"+size, size, harness, check, unknown))
 		}
 	}
 	for _, name := range sortedKeys(bundles) {
-		b := dashboardTierBundle{Name: name, TierBundle: bundles[name], Inbound: []string{}, Route: dashboardTierResolve(graph, opts, name, "", harness, unavailable)}
+		b := dashboardTierBundle{Name: name, TierBundle: bundles[name], Inbound: []string{}, Route: dashboardTierResolve(graph, opts, name, "", harness, check, unknown)}
 		if refs := inbound[name]; refs != nil {
 			b.Inbound = refs
 		}
@@ -266,10 +284,11 @@ func tierNodeDepth(nodes []dashboardTierNode, index map[string]int, i int, seen 
 }
 
 // dashboardTierResolve resolves token as agent.spawn does for a caller on
-// harness, with the binding it would launch: none when unavailable reports
-// that the terminal harness cannot launch now, which agent.spawn checks
-// before the harness's tier slot.
-func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, token, size, harness string, unavailable func(string) string) dashboardTierRoute {
+// harness, with the binding it would launch: none when check reports that
+// the terminal harness cannot launch now, which agent.spawn checks before
+// the harness's tier slot. A harness check cannot answer yet keeps its
+// binding and carries unknown's note.
+func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, token, size, harness string, check func(string) (string, bool), unknown func(string) string) dashboardTierRoute {
 	route := dashboardTierRoute{Token: token, Size: size}
 	res, err := graph.Resolve(token, harness)
 	if err != nil {
@@ -278,9 +297,13 @@ func dashboardTierResolve(graph *wsconfig.TierGraph, opts wsconfig.Options, toke
 	}
 	route.Trace, route.Hops, route.Harness, route.Resolved, route.Bundle = res.Trace(), res.Hops, res.Harness, res.Size, res.Bundle
 	route.CallerFallthrough = res.CallerFallthrough
-	if why := unavailable(res.Harness); why != "" {
+	why, known := check(res.Harness)
+	if why != "" {
 		route.Unavailable, route.BindingError = why, why
 		return route
+	}
+	if !known {
+		route.AvailabilityUnknown = unknown(res.Harness)
 	}
 	binding, err := wsagent.RoutedTierBinding(opts, res)
 	if err != nil {

@@ -91,6 +91,7 @@
 .tr-err { color: var(--wb-fail); font-weight: 600; }
 .tr-node.unavail, .tr-term.unavail { border-color: color-mix(in srgb, var(--wb-fail) 55%, var(--wb-line)); }
 .tr-ptr.tr-unavail { color: var(--wb-fail); white-space: normal; }
+.tr-unknown { color: var(--wb-muted-fg); font-style: italic; white-space: normal; }
 .tr-unavail-mark { flex: none; font-size: 9.5px; font-weight: 800; line-height: 15px; width: 15px; text-align: center; border-radius: 50%; background: color-mix(in srgb, var(--wb-fail) 14%, var(--wb-card)); color: var(--wb-fail); }
 
 .tr-modal { width: min(620px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--wb-line); border-radius: 12px; background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow); font-family: var(--wb-sans); }

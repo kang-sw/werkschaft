@@ -131,7 +131,7 @@ func dashboardCommand(args []string) {
 	packageName, _, packageErr := wsagent.ResolveHostedPackage()
 	var settings *wsdashboard.ConfigBackend
 	if packageErr == nil {
-		settings, packageErr = mcp.DashboardConfigBackend(packageName, wsconfig.Options{}, sessions, agents.RefreshAmbient, agents.SpawnableHarness)
+		settings, packageErr = mcp.DashboardConfigBackend(packageName, wsconfig.Options{}, sessions, agents.RefreshAmbient, agents.HarnessAvailability)
 	}
 	if packageErr != nil {
 		fmt.Fprintln(logw, "dashboard: settings catalog unavailable:", packageErr)
@@ -410,6 +410,9 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// A Pi subagent's own pi.* calls (the token route) need a usable
 		// Pi, as a lead's do.
 		ChildCheck: mcp.PiReady,
+		// The dashboard's tier routing view asks availability without
+		// running pi --version (Runner.HarnessAvailability).
+		ChildCheckKnown: mcp.PiReadyKnown,
 		// agent.spawn routes role tiers through the packaged playbook
 		// roles' agent.tier_routing graph.
 		TierRoles: mcp.PackagedTierRoles,

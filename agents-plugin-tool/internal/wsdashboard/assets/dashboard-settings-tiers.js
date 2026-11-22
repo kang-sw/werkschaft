@@ -384,10 +384,16 @@
       // The daemon's availability check for the terminal's harness.
       const harness = term.kind === "bundle" ? term.bundle.harness : term.name;
       const why = view.unavailable && view.unavailable[harness];
+      const unknown = view.availability_unknown && view.availability_unknown[harness];
       if (why) {
         card.classList.add("unavail");
         const line = el("span", "tr-ptr tr-unavail", why);
         line.dataset.tierUnavailable = harness;
+        card.append(line);
+      } else if (unknown) {
+        // Not checked yet: the daemon never waits on a probe for the view.
+        const line = el("span", "tr-ptr tr-unknown", unknown);
+        line.dataset.tierAvailabilityUnknown = harness;
         card.append(line);
       }
       if (term.kind === "bundle") {
@@ -495,6 +501,11 @@
         el("span", "tr-binding", [route.harness, route.model, route.effort].filter(Boolean).join(" · "));
       if (route.unavailable) binding.dataset.tierUnavailable = route.harness;
       wrap.append(binding);
+      if (route.availability_unknown) {
+        const note = el("span", "tr-unknown", route.availability_unknown);
+        note.dataset.tierAvailabilityUnknown = route.harness;
+        wrap.append(note);
+      }
       return wrap;
     }
 
