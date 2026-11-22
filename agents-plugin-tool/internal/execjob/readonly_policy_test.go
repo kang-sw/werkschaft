@@ -169,8 +169,10 @@ func TestReadOnlyExecutableMustBeAbsoluteNative(t *testing.T) {
 			t.Error(err)
 		}
 		got := strings.Join(readOnlyEnvironment(os.Environ()), "\n")
-		if !strings.Contains(got, "MSYS_NO_PATHCONV=1") || !strings.Contains(got, "MSYS2_ARG_CONV_EXCL=*") {
-			t.Errorf("Windows environment lacks the MSYS conversion exclusions:\n%s", got)
+		for _, want := range []string{"MSYS_NO_PATHCONV=1", "MSYS2_ARG_CONV_EXCL=*", "MSYS=noglob", "CYGWIN=noglob"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Windows environment lacks %s:\n%s", want, got)
+			}
 		}
 	} else if _, err := checkReadOnlyExecutable("git", abs); err != nil {
 		t.Error(err)

@@ -407,7 +407,9 @@ func readOnlyEnvironment(environ []string) []string {
 		"GIT_CONFIG_KEY_1=log.diffMerges", "GIT_CONFIG_VALUE_1=separate")
 	if win {
 		// Git Bash must pass the checked words to a native process as they are.
-		out = append(out, "MSYS_NO_PATHCONV=1", "MSYS2_ARG_CONV_EXCL=*")
+		// MSYS/Cygwin programs also expand wildcards in their own command
+		// line at startup; noglob keeps the argv as checked.
+		out = append(out, "MSYS_NO_PATHCONV=1", "MSYS2_ARG_CONV_EXCL=*", "MSYS=noglob", "CYGWIN=noglob")
 	}
 	return out
 }
