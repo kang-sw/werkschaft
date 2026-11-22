@@ -259,6 +259,9 @@ func TestTakeoverRefusals(t *testing.T) {
 	if _, err := h.runner.TakeOver("nosess"); !isConflict(err) || !strings.Contains(err.Error(), TakeoverNoSession) {
 		t.Fatalf("TakeOver with no recorded conversation = %v", err)
 	}
+	// Codex is registered with a lead profile and no terminal session: its
+	// takeover is refused by what the registration lacks, not by its name.
+	h.runner.opts.Backends[BackendCodex] = BuiltinBackendRegistrations()[BackendCodex]
 	h.terminalSession("codexsess", LeadSession{Key: "k2", Harness: "codex", Session: "s", Cwd: h.root}, nil)
 	if _, err := h.runner.TakeOver("codexsess"); err == nil || isConflict(err) || !strings.Contains(err.Error(), "codex terminal takeover is not supported") {
 		t.Fatalf("TakeOver of a codex session = %v", err)
@@ -497,7 +500,7 @@ func TestResumeCommand(t *testing.T) {
 			if windows {
 				want = c.window
 			}
-			if got := resumeCommand(c.rec, dir); got != want {
+			if got := builtinResumeCommand(c.rec, dir); got != want {
 				t.Errorf("windows=%v resumeCommand(%+v) = %q, want %q", windows, c.rec, got, want)
 			}
 		}
@@ -511,11 +514,11 @@ func TestResumeCommand(t *testing.T) {
 	// The temp directory is plain on Linux but holds backslashes (and an
 	// 8.3 "~") on Windows, which a POSIX shell must see quoted.
 	setHostWindows(t, false)
-	if got, want := resumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "cd /w/repo && pi --session "+shellQuote(own); got != want {
+	if got, want := builtinResumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "cd /w/repo && pi --session "+shellQuote(own); got != want {
 		t.Errorf("a daemon-started pi session = %q, want %q", got, want)
 	}
 	setHostWindows(t, true)
-	if got, want := resumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "Set-Location -LiteralPath '/w/repo' -ErrorAction Stop; pi --session "+psQuote(own); got != want {
+	if got, want := builtinResumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "Set-Location -LiteralPath '/w/repo' -ErrorAction Stop; pi --session "+psQuote(own); got != want {
 		t.Errorf("a daemon-started pi session on Windows = %q, want %q", got, want)
 	}
 }
@@ -540,4 +543,9 @@ func TestHandOffNeedsTheProcessEnded(t *testing.T) {
 	if err != nil || st.Status != StatusHandedOff || h.row(id).Hosted {
 		t.Fatalf("HandOff once the holder ends = %+v, %v", st, err)
 	}
+}
+
+// builtinResumeCommand is the resume command the built-in registrations give.
+func builtinResumeCommand(rec Record, dir string) string {
+	return (&Runner{opts: Options{Backends: BuiltinBackendRegistrations()}}).resumeCommand(rec, dir)
 }

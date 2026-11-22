@@ -19,6 +19,7 @@ import (
 // holds for. The row says 0 until the process exists, so a harness that
 // reads it early waits rather than misreading an older PID.
 func (c *conv) startLead(rec Record, def Profile, attach bool) error {
+	life := c.r.lifecycle(rec.Backend)
 	c.loadCompaction()
 	c.loadModelWait()
 	// Each agy process writes its own worker log: locate it afresh.
@@ -59,7 +60,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			return fmt.Errorf("ws session key: %w", err)
 		}
 		c.setStatus(func() { c.rejoinKeyPending = false })
-		if rec.Backend == BackendClaude || rec.Backend == BackendAgy || rec.Backend == BackendCodex {
+		if life.ComposedLeadInstructions {
 			// Written on every launch, --resume included, so each process
 			// carries the key and the manual in its prompt. Pi leads get
 			// them from their extension, or from its bridge fallback
@@ -167,7 +168,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		// (restartIfDue).
 		fmt.Fprintf(c.r.opts.Log, "agent %s: the process's ws-mcp route %s is not this daemon's; it restarts at its first idle point\n", rec.ReplyID, rec.MCPURL)
 		c.mcpStale = true
-	case attach && rec.MCPToken == "" && (rec.Backend == BackendAgy || rec.Backend == BackendCodex):
+	case attach && rec.MCPToken == "" && life.LeadHTTPMCP && !life.LeadStdioFallback:
 		// A start the last daemon did not finish: Spawned named the
 		// process before its token was recorded. These HTTP-only backends
 		// have no stdio fallback; restart at a known-safe idle point,
@@ -177,7 +178,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	case attach && rec.MCPToken != "":
 		// The recorded token and hello, as the process was started with.
 		spec.MCPSession = c.r.attachMCP(rec.ReplyID, rec.MCPToken, rec.MCPEnv, rec.workDir(), rec.HostPID, rec.Backend)
-	case (rec.Backend == BackendClaude || rec.Backend == BackendAgy || rec.Backend == BackendCodex) && !attach:
+	case life.LeadHTTPMCP && !attach:
 		// The lead's ws-mcp goes over the daemon's HTTP route with a new
 		// token. Without a route a Claude lead runs the same server over
 		// stdio (its --mcp-config entry); an agy lead has no stdio
@@ -189,7 +190,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			spec.Lead.WSMCPErr = err
 			break
 		}
-		if rec.Backend == BackendClaude {
+		if life.LeadStdioFallback {
 			spec.WSMCP, spec.Lead.PluginNote = &cmd, cmd.PluginWarning
 		}
 		if spec.MCPSession = c.r.attachMCP(rec.ReplyID, "", cmd.Env, rec.workDir(), 0, rec.Backend); spec.MCPSession != nil {
@@ -204,7 +205,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	cutover = spec.ExecCutover
 	if source == "explicit" {
 		spec.PermissionLevel = level
-		if mode := nativePermissionMode(rec.Backend, level); mode != "" {
+		if mode := c.r.permissionPolicy(rec.Backend).nativeMode(level); mode != "" {
 			spec.Lead.PermissionMode = mode
 		}
 	}

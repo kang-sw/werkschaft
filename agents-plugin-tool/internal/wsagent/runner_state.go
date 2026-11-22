@@ -169,7 +169,7 @@ func (r *Runner) closedState(rec Record) State {
 		}
 	}
 	if st.Status == StatusHandedOff {
-		st.ResumeCommand = resumeCommand(rec, wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID))
+		st.ResumeCommand = r.resumeCommand(rec, wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID))
 	} else {
 		if r.closedRows == nil {
 			r.closedRows = map[string]State{}

@@ -80,13 +80,15 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	if backend == "" {
 		backend = row.Harness
 	}
-	// Codex's first hosted slice does not adopt terminal conversations.
-	// Registering its lead profile must not implicitly grant that parity.
-	if backend == BackendCodex {
-		return State{}, badRequest("codex terminal takeover is not supported; create a hosted lead instead")
+	// A backend adopts terminal conversations only through terminalSession:
+	// registering its lead profile does not implicitly grant that parity
+	// (Codex's first hosted slice has none).
+	terminal := r.terminalSessionOf(backend)
+	if terminal == nil && r.opts.Backends[backend].Backend != nil {
+		return State{}, badRequest("%s terminal takeover is not supported; create a hosted lead instead", backend)
 	}
 	profile := LeadProfileFor(backend, r.opts.Backends)
-	if profile == "" {
+	if profile == "" || terminal == nil {
 		return State{}, badRequest("only a claude or pi session can be taken over; this one ran under %q", backend)
 	}
 	if ls.Session == "" {
@@ -97,10 +99,8 @@ func (r *Runner) TakeOver(id string) (State, error) {
 			return State{}, conflict("the directory the session ran in is gone: %s", ls.Cwd)
 		}
 	}
-	if backend == BackendPi {
-		if info, err := os.Stat(ls.Session); err != nil || !info.Mode().IsRegular() {
-			return State{}, conflict("the session's file is gone: %s", ls.Session)
-		}
+	if err := terminal.checkTerminalSession(ls.Session); err != nil {
+		return State{}, err
 	}
 	rp, err := r.resolve(profile, ls.Root)
 	if err != nil {
@@ -165,18 +165,11 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	}
 	rec.Profile, rec.Backend, rec.Root, rec.WSKey = rp.Name, rp.Definition.Backend, ls.Root, ls.Key
 	rec.Lead, rec.Listed = true, rp.Definition.ListInIndex
-	if rec.Backend != BackendClaude {
-		rec.PermissionMode = ""
-	}
 	rec.Cwd, rec.SessionFile = "", ""
 	if ls.Cwd != "" && ls.Cwd != ls.Root {
 		rec.Cwd = ls.Cwd
 	}
-	if rec.Backend == BackendPi {
-		rec.SessionFile = ls.Session
-	} else {
-		rec.SessionID = ls.Session
-	}
+	terminal.adoptTerminalSession(&rec, ls.Session)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return State{}, err
 	}
@@ -211,10 +204,10 @@ func (c *conv) handOff() error {
 	if !c.rec.Lead {
 		return badRequest("hand to terminal applies to a lead session only")
 	}
-	if c.rec.Backend == BackendCodex {
-		return badRequest("codex terminal handoff is not supported")
+	if c.r.terminalSessionOf(c.rec.Backend) == nil {
+		return badRequest("%s terminal handoff is not supported", c.rec.Backend)
 	}
-	if resumeCommand(c.record(), c.dir) == "" {
+	if c.r.resumeCommand(c.record(), c.dir) == "" {
 		return conflict("the session has no conversation to resume in a terminal. You can delete it from the dashboard")
 	}
 	c.stopProcess("")
@@ -310,40 +303,6 @@ func (r *Runner) Reopen(id string) (State, error) {
 		return State{}, err
 	}
 	return r.startConv(rec, nil).state(), nil
-}
-
-// resumeCommand is the shell command that resumes a lead session's harness
-// conversation in a terminal, or "" when it has none yet: the directory
-// the harness resolves its sessions by, then the harness's own resume. A
-// pi session is named by its file, since pi resolves a bare id only inside
-// its session directory and a session the daemon started keeps its file in
-// the daemon's.
-func resumeCommand(rec Record, sessionDir string) string {
-	if !rec.Lead {
-		return ""
-	}
-	switch rec.Backend {
-	case BackendClaude:
-		if rec.SessionID == "" {
-			return ""
-		}
-		return resumeLine(rec.workDir(), "claude", "--resume", rec.SessionID)
-	case BackendAgy:
-		if rec.SessionID == "" {
-			return ""
-		}
-		return resumeLine(rec.workDir(), "agy", "--conversation", rec.SessionID)
-	case BackendPi:
-		file := rec.SessionFile
-		if file == "" {
-			file = piSessionFile(sessionDir)
-			if _, err := os.Stat(file); err != nil {
-				return ""
-			}
-		}
-		return resumeLine(rec.workDir(), "pi", "--session", file)
-	}
-	return ""
 }
 
 // resumeLine renders "change to dir, then run harness name with flag arg"

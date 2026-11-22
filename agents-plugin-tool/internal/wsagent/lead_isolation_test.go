@@ -105,7 +105,7 @@ func TestLeadIsolationRejectsUnknownValue(t *testing.T) {
 func TestLegacyLeadIsolationDefaultsAtLaunch(t *testing.T) {
 	h := newLeadHarness(t)
 	backend := &isolationBackend{starts: make(chan StartSpec, 1)}
-	h.opts.Backends[BackendPi] = BackendRegistration{Backend: backend, LeadProfile: LeadProfilePi}
+	h.opts.Backends[BackendPi] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi}
 	h.start()
 	st := h.lead(BackendPi, LeadOptions{})
 	_, err := h.runner.act(st.ID, func(c *conv) error {
@@ -195,7 +195,7 @@ func TestLegacyPiLeadWithoutSDKStartsIsolated(t *testing.T) {
 			}
 			piLeadFile(t, command, "")
 			backend := &piLaunchBackend{command: command, starts: make(chan piLaunch, 1)}
-			h.opts.Backends[BackendPi] = BackendRegistration{Backend: backend, LeadProfile: LeadProfilePi}
+			h.opts.Backends[BackendPi] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi}
 			h.start()
 			st := h.lead(BackendPi, LeadOptions{})
 			if _, err := h.runner.act(st.ID, func(c *conv) error {

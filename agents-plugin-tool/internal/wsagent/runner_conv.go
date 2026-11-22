@@ -953,7 +953,7 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		st.Status, st.ClosedAt = StatusClosed, c.rec.ClosedAt
 		if c.rec.ClosedAt == "" && c.rec.handedOff() {
 			st.Status, st.HandedOffAt = StatusHandedOff, c.rec.HandedOffAt
-			st.ResumeCommand = resumeCommand(c.rec, c.dir)
+			st.ResumeCommand = c.r.resumeCommand(c.rec, c.dir)
 		}
 	}
 	st.Process = c.proc != nil
@@ -1007,7 +1007,7 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		st.PermissionLevel = c.workerPermissionLevel
 		st.PermissionSource = c.workerPermissionSource
 		if st.PermissionLevel != "" {
-			st.PermissionEnforcement = permissionQuality(c.rec.Backend, st.PermissionLevel, "")
+			st.PermissionEnforcement = c.r.permissionPolicy(c.rec.Backend).quality(st.PermissionLevel, "")
 		}
 	}
 	st.IsChild = c.r.isChildRecord(c.rec)

@@ -175,6 +175,8 @@ func startCompactionTestRunner(t *testing.T, s *Server) (*wsagent.Runner, *compa
 		Backends: map[string]wsagent.BackendRegistration{
 			wsagent.BackendClaude: {
 				Backend:         backend,
+				Permission:      wsagent.BuiltinBackendRegistrations()[wsagent.BackendClaude].Permission,
+				Lifecycle:       wsagent.BuiltinBackendRegistrations()[wsagent.BackendClaude].Lifecycle,
 				Catalog:         wsagent.ClaudeCatalog(),
 				LeadProfile:     wsagent.LeadProfileClaude,
 				PermissionModes: wsagent.LeadPermissionModes,

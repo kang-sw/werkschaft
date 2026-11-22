@@ -113,6 +113,7 @@ func (c *conv) startProcess() error {
 }
 
 func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
+	native := c.r.lifecycle(rec.Backend).NativeChildren
 	releaseAdmission := func() {}
 	if !attach {
 		releaseAdmission = c.r.holdParentAdmission(rec.Parent)
@@ -126,7 +127,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		c.loadCompaction()
 		c.loadModelWait()
 	}
-	if rec.Backend == BackendPi && !attach {
+	if c.r.lifecycle(rec.Backend).NativeChildren && !attach {
 		if err := c.r.checkChildProfile(rec.Parent, rec.Profile, def); err != nil {
 			return err
 		}
@@ -171,13 +172,13 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	instructions := ""
 	if !attach {
 		keyRoot := rec.Root
-		if rec.Backend == BackendPi {
+		if native {
 			keyRoot = rec.workDir()
 		}
 		if err := c.r.opts.Keys.Ensure(keyRoot, rec.WSKey); err != nil {
 			// 0.49.x bound Pi child keys to Root even when Cwd differed.
 			// Ensure still checks root and scope: a foreign key fails both.
-			if rec.Backend != BackendPi || rec.Parent == nil || keyRoot == rec.Root {
+			if !native || rec.Parent == nil || keyRoot == rec.Root {
 				return fmt.Errorf("ws session key: %w", err)
 			}
 			if err := c.r.opts.Keys.Ensure(rec.Root, rec.WSKey); err != nil {
@@ -296,7 +297,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		}
 		c.decideExecCutover(rec, def, &spec, mcpEnv)
 	}
-	if rec.Backend == BackendPi && !attach {
+	if native && !attach {
 		// Persist exactly the definition checked above and passed to Start,
 		// after retiring the previous process. Reattachment keeps this copy.
 		c.update(func(rec *Record) { rec.ResolvedDefinition = &def })

@@ -153,7 +153,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if spawn != nil {
 		releaseAdmission := r.holdParentAdmission(spawn.Parent)
 		defer releaseAdmission()
-		if spawn.Tier != "" && rp.Definition.Backend != BackendPi && !isAgentWorkerProfile(rp.Name) {
+		if spawn.Tier != "" && !r.lifecycle(rp.Definition.Backend).NativeChildren && !isAgentWorkerProfile(rp.Name) {
 			return State{}, badRequest("pi.spawn: profile %q must be a non-lead Pi profile", rp.Name)
 		}
 		if err := r.checkChildProfile(spawn.Parent, rp.Name, rp.Definition); err != nil {
@@ -185,7 +185,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		if !r.supportsLeadPermission(base.Backend, lead.PermissionLevel) {
 			return State{}, badRequest("permission_level %q is not supported on %s", lead.PermissionLevel, base.Backend)
 		}
-		if err := authorizePermission(legacyLeadPermission(base), lead.PermissionLevel, lead.permissionUser, lead.PermissionFullAck); err != nil {
+		if err := authorizePermission(r.legacyLeadPermission(base), lead.PermissionLevel, lead.permissionUser, lead.PermissionFullAck); err != nil {
 			return State{}, err
 		}
 	}
@@ -201,7 +201,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		}
 	} else {
 		keyRoot := root
-		if spawn != nil && rp.Definition.Backend == BackendPi && spawn.Cwd != "" {
+		if spawn != nil && r.lifecycle(rp.Definition.Backend).NativeChildren && spawn.Cwd != "" {
 			keyRoot = spawn.Cwd
 		}
 		if child, ok := r.opts.Keys.(ChildKeyStore); ok && spawn != nil && spawn.policyKey != "" {
@@ -263,7 +263,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		if err := writePermissionSelection(dir, lead.PermissionLevel); err != nil {
 			return State{}, err
 		}
-		if mode := nativePermissionMode(rec.Backend, lead.PermissionLevel); mode != "" {
+		if mode := r.permissionPolicy(rec.Backend).nativeMode(lead.PermissionLevel); mode != "" {
 			rec.PermissionMode = mode
 		}
 	}
@@ -397,8 +397,8 @@ func (c *conv) startBackend(spec StartSpec) (Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.rec.Backend == BackendClaude && spec.Holder != nil && spec.Holder.id != "" {
-		spec.restoredClaudeUsage = c.live.st.Snapshot(c.live.now().UnixMilli()).Usage
+	if c.r.lifecycle(c.rec.Backend).RestoreUsage && spec.Holder != nil && spec.Holder.id != "" {
+		spec.restoredUsage = c.live.st.Snapshot(c.live.now().UnixMilli()).Usage
 	}
 	proc, err := backend.Start(context.Background(), spec)
 	return proc, categorized(ErrLaunchFailed, err)
