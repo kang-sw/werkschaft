@@ -695,13 +695,16 @@ func (s *Store) loseLocked(info *sessionInfo, id wsaudit.SourceID, reason string
 		return
 	}
 	r.led.mu.Lock()
-	forced := r.led.forced
-	r.led.forced = 0
+	forgot := r.led.forgot
+	r.led.forgot = 0
 	r.led.mu.Unlock()
-	if forced > 0 {
-		s.logf("session %s: lost-identity list over %d bytes; %d unfinalized identities folded into the lost floor", info.dir, lostBudget, forced)
+	if forgot > 0 {
+		s.logf("session %s: lost-identity list over %d bytes; %d lost identities forgotten (a replay of one after its loss line is gone may count again)", info.dir, lostBudget, forgot)
 	}
-	if ln, err := encodeLine(line{T: lineLoss, ID: &id, Reason: reason}); err == nil {
+	r.led.mu.Lock()
+	n := r.led.loss
+	r.led.mu.Unlock()
+	if ln, err := encodeLine(line{T: lineLoss, ID: &id, Reason: reason, N: n}); err == nil {
 		r.pendingLoss = append(r.pendingLoss, ln)
 		s.dirty[info] = struct{}{}
 	}

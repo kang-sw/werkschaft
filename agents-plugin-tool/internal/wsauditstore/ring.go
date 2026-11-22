@@ -59,8 +59,11 @@ type line struct {
 	Event *wsaudit.Envelope `json:"e,omitempty"`
 	ID    *wsaudit.SourceID `json:"id,omitempty"`
 	// Loss ("loss"): the source record ID finalized without being retained,
-	// and why.
+	// why, and the session's loss count with it (N), so replay takes the
+	// count as a maximum and never counts a line twice — not even one whose
+	// identity a later header no longer lists.
 	Reason string `json:"reason,omitempty"`
+	N      uint64 `json:"n,omitempty"`
 	// Boundary ("fin"): a source's finalized boundary (Recovery.Boundary).
 	Source string `json:"src,omitempty"`
 	Seq    uint64 `json:"seq,omitempty"`
@@ -82,14 +85,16 @@ type headerState struct {
 	// boundary or not, so neither a replayed loss line nor a replayed record
 	// counts one again once the segment holding its loss line is gone.
 	Lost []wsaudit.SourceID `json:"lost,omitempty"`
-	// LostFloor is, per source, the position at or below which every
-	// identity not retained is already counted lost (see ledger.floor).
+	// LostFloor is, per source, the sequence at or below which every
+	// sequenced identity not retained is already counted lost (see
+	// ledger.floor).
 	LostFloor map[string]uint64 `json:"lost_floor,omitempty"`
 	LastSeen  string            `json:"last_seen,omitempty"`
 }
 
-// lostBudget bounds the encoded size of a header's Lost list; past it the
-// lowest positions fold into LostFloor.
+// lostBudget bounds the encoded size of a header's Lost list; past it a
+// contiguous accounted prefix folds into LostFloor, and what still does not
+// fit is forgotten (see ledger.fold).
 const lostBudget = 32 << 10
 
 type segment struct {
@@ -112,14 +117,15 @@ type ledger struct {
 	lost      map[wsaudit.SourceID]int
 	lostBytes int
 	loss      uint64
-	// floor is, per source, a boundary (in the covered sense) through which
-	// every identity not retained is already counted lost: identities folded
-	// out of lost to keep the header bounded. It never exceeds the source's
-	// finalized boundary unless uncovered identities had to fold.
+	// floor is, per source, a sequence through which every sequenced
+	// identity is accounted for — retained once or counted lost — folded out
+	// of lost to keep the header bounded. It only ever covers a contiguous
+	// run of accounted sequences at or below the finalized boundary, so no
+	// identity never seen falls under it.
 	floor map[string]uint64
-	// forced counts uncovered identities folded into a floor, for the
-	// writer's log.
-	forced int
+	// forgot counts lost identities dropped from lost because folding could
+	// not bound it, for the writer's log.
+	forgot int
 }
 
 func newLedger() *ledger {
@@ -131,10 +137,17 @@ func newLedger() *ledger {
 	}
 }
 
-// settled reports whether id is at or below its source's lost floor: already
-// accounted for, so it is neither appended nor counted again. l.mu is held.
+// settled reports whether id is a sequenced identity at or below its
+// source's lost floor: already accounted for, so it is neither appended nor
+// counted again. Tee and keyed identities are never settled by a floor.
+// l.mu is held.
 func (l *ledger) settled(id wsaudit.SourceID) bool {
-	return covered(id, l.floor[id.Source])
+	return sequenced(id) && id.Seq <= l.floor[id.Source]
+}
+
+// sequenced reports whether id names a sequenced source line.
+func sequenced(id wsaudit.SourceID) bool {
+	return !id.Tee && id.Key == "" && id.Seq > 0
 }
 
 // addLost records id as counted lost. l.mu is held.
@@ -157,19 +170,56 @@ func (l *ledger) dropLost(id wsaudit.SourceID) {
 	}
 }
 
-// fold keeps the lost set within lostBudget by folding the lowest positions
-// into the per-source floor: covered identities first (the floor then never
-// passes the boundary), uncovered ones only when covered ones do not suffice.
-// It reports the uncovered identities folded. l.mu is held.
-func (l *ledger) fold() (forced int) {
+// fold keeps the lost set within lostBudget. First each source's floor
+// advances over the contiguous run of sequences above it that are accounted
+// for (a sequenced identity at that sequence retained or counted lost) and
+// covered by the finalized boundary, and the lost entries it settles go.
+// Only when that leaves the set over three quarters of the budget are the
+// lowest entries — covered ones first — forgotten down to half of it: never
+// folded, so a record never seen is never refused for it. A forgotten
+// identity replayed after the segment holding its loss line is gone counts
+// again, or (uncovered) is appended; the count may run high, a record is
+// never dropped. It reports the identities forgotten. l.mu is held.
+func (l *ledger) fold() (forgot int) {
 	if l.lostBytes <= lostBudget {
 		return 0
 	}
-	var cands []wsaudit.SourceID
-	for id := range l.lost {
-		if id.Key == "" {
-			cands = append(cands, id)
+	accounted := map[string]map[uint64]bool{}
+	mark := func(id wsaudit.SourceID) {
+		if !sequenced(id) || id.Seq <= l.floor[id.Source] || id.Seq > l.bounds[id.Source] {
+			return
 		}
+		set := accounted[id.Source]
+		if set == nil {
+			set = map[uint64]bool{}
+			accounted[id.Source] = set
+		}
+		set[id.Seq] = true
+	}
+	for id := range l.lost {
+		mark(id)
+	}
+	for id := range l.retained {
+		mark(id)
+	}
+	for src, set := range accounted {
+		f := l.floor[src]
+		for set[f+1] {
+			f++
+		}
+		l.floor[src] = f
+	}
+	for id := range l.lost {
+		if l.settled(id) {
+			l.dropLost(id)
+		}
+	}
+	if l.lostBytes <= lostBudget*3/4 {
+		return 0
+	}
+	cands := make([]wsaudit.SourceID, 0, len(l.lost))
+	for id := range l.lost {
+		cands = append(cands, id)
 	}
 	sort.Slice(cands, func(i, j int) bool {
 		ci, cj := covered(cands[i], l.bounds[cands[i].Source]), covered(cands[j], l.bounds[cands[j].Source])
@@ -185,24 +235,10 @@ func (l *ledger) fold() (forced int) {
 		if l.lostBytes <= lostBudget/2 {
 			break
 		}
-		if _, ok := l.lost[id]; !ok {
-			continue
-		}
-		if !covered(id, l.bounds[id.Source]) {
-			forced++
-		}
-		f := id.Seq
-		if id.Tee {
-			f = id.Anchor + 1 // a tee is covered by a floor above its anchor
-		}
-		l.floor[id.Source] = max(l.floor[id.Source], f)
-		for other := range l.lost {
-			if other.Source == id.Source && l.settled(other) {
-				l.dropLost(other)
-			}
-		}
+		l.dropLost(id)
+		forgot++
 	}
-	return forced
+	return forgot
 }
 
 // covered reports whether id is at or below its source's finalized boundary
@@ -460,7 +496,7 @@ func (r *ring) recover() error {
 		}
 	}
 	r.led.mu.Lock()
-	r.led.forced += r.led.fold() // headers' unions can carry settled identities
+	r.led.forgot += r.led.fold() // headers' unions can run over the budget
 	r.led.mu.Unlock()
 	if r.readOnly == nil && len(r.segs) > 0 && !r.forceRotate {
 		f, err := openAppend(filepath.Join(r.dir, segmentName(r.segs[len(r.segs)-1].seq)))
@@ -598,7 +634,7 @@ func (r *ring) apply(ln line, seg *segment) {
 		}
 	case lineLoss:
 		if ln.ID != nil {
-			r.markLost(*ln.ID)
+			r.replayLost(*ln.ID, ln.N)
 		}
 	case lineFin:
 		r.finalize(ln.Source, ln.Seq)
@@ -645,8 +681,32 @@ func (r *ring) markLost(id wsaudit.SourceID) bool {
 	}
 	l.addLost(id)
 	l.loss++
-	l.forced += l.fold()
+	l.forgot += l.fold()
 	return true
+}
+
+// replayLost applies a persisted loss line: the identity joins the lost set
+// unless already accounted for, and the loss count rises to the line's
+// cumulative count n (a line without one counts a new identity once).
+func (r *ring) replayLost(id wsaudit.SourceID, n uint64) {
+	l := r.led
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, lost := l.lost[id]
+	_, kept := l.retained[id]
+	fresh := !lost && !kept && !l.settled(id)
+	if fresh {
+		l.addLost(id)
+	}
+	switch {
+	case n > 0:
+		l.loss = max(l.loss, n)
+	case fresh:
+		l.loss++
+	}
+	if fresh {
+		l.forgot += l.fold()
+	}
 }
 
 // finalize advances a source's finalized boundary, reporting whether it

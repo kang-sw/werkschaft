@@ -870,6 +870,52 @@ func TestStoreLostSetFoldsIntoABoundedHeader(t *testing.T) {
 	}
 }
 
+// TestStoreSparseLossesNeverSettleUnseenIdentities pins that bounding the
+// lost set never settles an identity it has not seen: with thousands of
+// sparse losses (every even sequence) over the budget, a never-seen odd
+// record below them is still counted as a loss when covered by the boundary,
+// and still appended when not — before and after a restart.
+func TestStoreSparseLossesNeverSettleUnseenIdentities(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	root := t.TempDir()
+	s, log := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	const top = 3000
+	if err := s.Finalize(ctx, "covered", "holder:1", top+1); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []string{"covered", "open"} {
+		for seq := uint64(2); seq <= top; seq += 2 {
+			if err := s.RecordLoss(ctx, session, wsaudit.SourceID{Source: "holder:1", Seq: seq}, wsaudit.LossDropped); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	flush(t, s)
+	if !strings.Contains(log.String(), "lost identities forgotten") {
+		t.Fatalf("setup: the lost set never ran over its budget: %s", log.String())
+	}
+	const losses = top / 2
+	check := func(s *Store, odd uint64, wantLoss uint64) {
+		t.Helper()
+		mustAppend(t, s, sourced("covered", odd, wsaudit.KindToolCall))
+		mustAppend(t, s, sourced("open", odd, wsaudit.KindToolCall))
+		flush(t, s)
+		if got := lossCount(t, s, "covered"); got != wantLoss {
+			t.Fatalf("covered never-seen record %d: loss %d, want %d", odd, got, wantLoss)
+		}
+		if seqs := sourceSeqs(t, s, "open"); len(seqs) == 0 || seqs[len(seqs)-1] != odd {
+			t.Fatalf("uncovered never-seen record %d was not appended: %v", odd, seqs)
+		}
+	}
+	check(s, 3, losses+1)
+	_ = s.Close()
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	loaded(t, s2, "covered")
+	loaded(t, s2, "open")
+	check(s2, 5, losses+2)
+}
+
 // TestStoreTornHeaderNeverLeavesAHeaderlessLiveSegment pins recovery from a
 // segment whose header line is torn (a crash right after rotation): the
 // next write opens a new segment with a valid header instead of appending
