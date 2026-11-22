@@ -55,16 +55,18 @@ pub fn exit_request(code: Option<i32>, rebuilding: bool) -> ExitRequest {
 
 /// Starts an exit unless one is already running. The draft check, the
 /// confirmation, and the full stop run on a worker; every outcome other
-/// than the app's exit restores the window and releases the document.
+/// than the app's exit restores the window and releases every document.
 pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
     if connection.closing.swap(true, Ordering::AcqRel) {
         return;
     }
     thread::spawn(move || {
         let main = app.get_webview_window(MAIN_WINDOW);
-        let drafts_ready = main
-            .as_ref()
-            .is_none_or(|window| drafts_saved(window, &connection));
+        // The exit ends every window, so a secondary's drafts count too.
+        let windows: Vec<_> = app.webview_windows().into_values().collect();
+        let drafts_ready = windows
+            .iter()
+            .all(|window| drafts_saved(window, &connection));
         let done = match kind {
             Exit::Close => close(&app, main.as_ref(), drafts_ready),
             Exit::FullQuit => full_quit(&app, main.as_ref(), &connection, drafts_ready),
@@ -72,8 +74,10 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
         if done {
             app.exit(0);
         } else {
-            if let Some(window) = &main {
+            for window in &windows {
                 release_document(window);
+            }
+            if let Some(window) = &main {
                 let _ = window.set_title("Werkschaft");
             }
             connection.closing.store(false, Ordering::Release);
@@ -81,7 +85,7 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
     });
 }
 
-// Whether the main window's drafts are saved: true for a bundled local page,
+// Whether a window's drafts are saved: true for a bundled local page,
 // and for the pinned dashboard whose renderer reports its store ready.
 fn drafts_saved(window: &WebviewWindow, connection: &Connection) -> bool {
     let pin = connection.pinned_url();
