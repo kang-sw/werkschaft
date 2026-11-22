@@ -55,6 +55,12 @@ func TestRailBusy(t *testing.T) {
 		{"running subagent", row("s", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Agents = []wslive.Agent{{ID: "kid", Status: wslive.StatusRunning}}
 		}), nil), true, true},
+		// A settled direct child's running grandchild (an unlisted worker
+		// the child started) keeps the lead busy, though the level-1 badge
+		// count is zero.
+		{"running grandchild of a settled child", row("g", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
+			s.Agents = []wslive.Agent{{ID: "kid", Status: wslive.StatusDone}, {ID: "grandkid", ParentID: "kid", Status: wslive.StatusRunning}}
+		}), nil), true, true},
 		{"background tasks", row("b", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Usage = &wslive.Usage{Background: n(2)}
 		}), nil), true, true},
@@ -74,6 +80,9 @@ func TestRailBusy(t *testing.T) {
 	}
 	for _, c := range cases {
 		r := c.row
+		if c.name == "running grandchild of a settled child" && r.Subagents != 0 {
+			t.Errorf("%s: Subagents badge = %d, want the level-1 count 0", c.name, r.Subagents)
+		}
 		if got := railSetBusy(&r); got != c.want || r.Busy != c.want {
 			t.Errorf("%s: Busy = %v, want %v (row %+v)", c.name, r.Busy, c.want, r)
 		}

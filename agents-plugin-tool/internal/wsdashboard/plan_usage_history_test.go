@@ -431,3 +431,58 @@ func TestPlanUsageHistoryViewTwoWindowsTiesAndLateSamples(t *testing.T) {
 		t.Fatalf("projection: %+v\nwant %+v", got, want)
 	}
 }
+
+// TestPlanUsageCodexFiveHourHistoryViewSingleCachedRead: a poll without a
+// Codex five-hour entry never touches the Codex history file; with one, an
+// unchanged file costs one stat and no read, and presence and projection
+// come from the same memoized view.
+func TestPlanUsageCodexFiveHourHistoryViewSingleCachedRead(t *testing.T) {
+	s := usageTestStore(t)
+	now := time.Now().UnixMilli()
+	five := planUsageSample{Harness: "codex", Kind: wslive.LimitFiveHour, Source: "via Pi", ResetsAt: now + int64(time.Hour/time.Millisecond), AsOf: now - 2, Percent: 10}
+	s.mu.Lock()
+	s.appendHistoryFileLocked(&s.codexHist, codexFiveHourHistorySpec, []planUsageSample{five}, now)
+	s.mu.Unlock()
+	codexPath := filepath.Join(s.dir, planUsageCodexHistoryCache)
+	var stats, reads int
+	s.statFile = func(path string) (os.FileInfo, error) {
+		if path == codexPath {
+			stats++
+		}
+		return os.Stat(path)
+	}
+	s.readFile = func(path string) ([]byte, error) {
+		if path == codexPath {
+			reads++
+		}
+		return os.ReadFile(path)
+	}
+
+	weekly := []planUsageEntry{{Harness: "codex", Source: "via Pi", Windows: []planUsageWindow{{Kind: "seven_day", Percent: 5, AsOf: now}}}}
+	if raw, ok := s.codexFiveHourHistoryView(weekly, now); ok || raw != nil || stats != 0 || reads != 0 {
+		t.Fatalf("no five-hour entry: ok=%v raw=%s stats=%d reads=%d, want no member and no file access", ok, raw, stats, reads)
+	}
+
+	entries := []planUsageEntry{{Harness: "codex", Source: "via Pi", Windows: []planUsageWindow{{Kind: wslive.LimitFiveHour, Percent: 11, ResetsAt: five.ResetsAt, AsOf: now}}}}
+	var first json.RawMessage
+	for i := 0; i < 3; i++ {
+		raw, ok := s.codexFiveHourHistoryView(entries, now)
+		if !ok || !bytes.Contains(raw, []byte(`"status":"ok"`)) {
+			t.Fatalf("poll %d: ok=%v raw=%s", i, ok, raw)
+		}
+		if first == nil {
+			first = raw
+		} else if !bytes.Equal(raw, first) {
+			t.Fatalf("poll %d projection changed: %s vs %s", i, raw, first)
+		}
+	}
+	if stats != 3 || reads != 0 {
+		t.Fatalf("three polls of an unchanged file: stats=%d reads=%d, want 3 and 0", stats, reads)
+	}
+
+	// Expired samples: the memoized view reports no member.
+	later := now + planUsageHistoryAge.Milliseconds() + 10
+	if raw, ok := s.codexFiveHourHistoryView(entries, later); ok {
+		t.Fatalf("expired history still reported: %s", raw)
+	}
+}

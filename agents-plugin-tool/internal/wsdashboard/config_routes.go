@@ -132,11 +132,23 @@ func settingsID(kind, root string) string {
 
 func (w RailWorkspace) SettingsID() string { return settingsID("workspace", w.Path) }
 func (w RailWorktree) SettingsID() string  { return settingsID("worktree", w.Path) }
-func (r RailRow) SettingsWorktree() string { return settingsID("worktree", r.Project) }
 
-func (d *Daemon) settingsTargets() (map[string]string, map[string]configWorktree) {
+// SettingsWorktree is the settings ID of the worktree or plain folder the
+// rail placed the session under, the bound worktree its gear opens with.
+func (r RailRow) SettingsWorktree() string {
+	if r.settingsWorktree != "" {
+		return r.settingsWorktree
+	}
+	return settingsID("worktree", r.Project)
+}
+
+// settingsTargets indexes the rail inventory: workspaces and worktrees by
+// settings ID, and each listed session's bound worktree ID by reply ID, from
+// the same membership the rail's gears are rendered from.
+func (d *Daemon) settingsTargets() (map[string]string, map[string]configWorktree, map[string]string) {
 	workspaces := make(map[string]string)
 	worktrees := make(map[string]configWorktree)
+	sessions := make(map[string]string)
 	// Use the rail's daemon-maintained inventory. No browser input is
 	// interpreted as a path or used to enumerate the filesystem.
 	view := d.railBaseView(d.pagesIn("en"))
@@ -149,8 +161,11 @@ func (d *Daemon) settingsTargets() (map[string]string, map[string]configWorktree
 		if !workspace.Repo {
 			worktrees[settingsID("worktree", workspace.Path)] = configWorktree{workspace.Path, id}
 		}
+		for _, row := range workspace.AllSessions() {
+			sessions[row.ReplyID] = row.SettingsWorktree()
+		}
 	}
-	return workspaces, worktrees
+	return workspaces, worktrees, sessions
 }
 
 func (d *Daemon) settingsSession(id string) (Registration, bool) {
@@ -169,8 +184,9 @@ func (d *Daemon) resolveConfig(selection configSelection) (configResolved, confi
 	result.opts = d.config.Options
 	var workspaces map[string]string
 	var worktrees map[string]configWorktree
+	var sessionWorktrees map[string]string
 	if selection.Context.Worktree != "" || selection.Scope == wsconfig.ScopeProject || selection.Scope == wsconfig.ScopeRepo {
-		workspaces, worktrees = d.settingsTargets()
+		workspaces, worktrees, sessionWorktrees = d.settingsTargets()
 	}
 	var path string
 	var err error
@@ -225,7 +241,7 @@ func (d *Daemon) resolveConfig(selection configSelection) (configResolved, confi
 	}
 	if ctx.Session != "" {
 		session, ok := d.settingsSession(ctx.Session)
-		if !ok || ctx.Worktree == "" || settingsID("worktree", session.Project) != ctx.Worktree {
+		if !ok || ctx.Worktree == "" || sessionWorktrees[ctx.Session] != ctx.Worktree {
 			return result, badConfigContext
 		}
 		result.session = session

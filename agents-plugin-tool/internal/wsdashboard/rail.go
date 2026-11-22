@@ -143,10 +143,17 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 	}
 	// A stored repository's worktrees are listed whether or not a session
 	// runs in it.
+	// A spelling of a root a session already names (case-folded on
+	// Windows) is that list, read with the session's registrations.
 	stored := d.workspaces.workspaces()
+	named := make(map[string]bool, len(wanted))
+	for p := range wanted {
+		named[admissionPathKey(p)] = true
+	}
 	for _, w := range stored {
-		if _, ok := wanted[w.Path]; w.Repo && !ok {
+		if w.Repo && !named[admissionPathKey(w.Path)] {
 			wanted[w.Path] = nil
+			named[admissionPathKey(w.Path)] = true
 		}
 	}
 	view := buildRailView(inputs, d.rail.lists(wanted), stored, now)

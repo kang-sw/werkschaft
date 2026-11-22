@@ -2600,6 +2600,7 @@
   "js.ws.admission.toast.undone": "Workspace wieder ausstehend",
   "js.ws.admission.toast.partial": "{0} angewendet; {1} wurde verweigert. Auswahl bleibt erhalten.",
   "js.ws.admission.failed": "Workspace-Auswahl konnte nicht angewendet werden. Auswahl bleibt erhalten.",
+  "js.ws.admission.uncertain": "Die Workspace-Auswahl wurde nur teilweise gespeichert. Die Leiste zeigt den gespeicherten Stand; vor dem Wiederholen prüfen.",
   "js.ws.admission.toast.both": "{0} und {1} angewendet",
   "js.ws.admission.group.workspaces": "Workspaces",
   "js.ws.admission.group.worktrees": "Worktrees",

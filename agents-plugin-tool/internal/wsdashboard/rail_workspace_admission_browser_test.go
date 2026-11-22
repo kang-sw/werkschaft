@@ -45,7 +45,7 @@ func TestRailWorkspaceAdmissionBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
-	refuseWorkspace, worktreeCalls := false, 0
+	refuseWorkspace, uncertainWorkspace, worktreeCalls := false, false, 0
 	conns := map[*websocket.Conn]bool{}
 	render := func() renderedRegion {
 		r, err := renderRailRegion(d.railView(d.pagesIn("ko")), "ko")
@@ -83,6 +83,33 @@ func TestRailWorkspaceAdmissionBrowser(t *testing.T) {
 		if refuseWorkspace {
 			w.WriteHeader(http.StatusConflict)
 			fmt.Fprint(w, `{"applied":false}`)
+			return
+		}
+		if uncertainWorkspace {
+			// The route's answer when the admission write and the undo of
+			// its approvals both failed: the approvals stayed stored.
+			var req workspaceAdmissionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range req.Selections {
+				if s.Action == "approve" {
+					if _, err := d.workspaces.add(s.Path, false); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			d.layout.mu.Lock()
+			d.layout.gen++
+			d.layout.mu.Unlock()
+			view := d.railView(d.pagesIn("ko"))
+			region, err := renderRailRegion(view, "ko")
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(workspaceAdmissionReply{Uncertain: true, Gen: view.LayoutGen, Message: "storefailed", HTML: string(region.HTML)})
 			return
 		}
 		d.handleWorkspaceAdmission(w, r)
@@ -123,7 +150,9 @@ func TestRailWorkspaceAdmissionBrowser(t *testing.T) {
 		case "refuse":
 			refuseWorkspace = true
 		case "allow":
-			refuseWorkspace = false
+			refuseWorkspace, uncertainWorkspace = false, false
+		case "uncertain":
+			uncertainWorkspace = true
 		case "calls":
 			json.NewEncoder(w).Encode(worktreeCalls)
 			return

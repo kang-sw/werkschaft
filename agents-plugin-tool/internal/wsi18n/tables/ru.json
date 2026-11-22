@@ -2600,6 +2600,7 @@
   "js.ws.admission.toast.undone": "Область возвращена в ожидающие",
   "js.ws.admission.toast.partial": "Применено {0}; {1} отклонено. Выбор сохранён.",
   "js.ws.admission.failed": "Не удалось применить. Выбор сохранён.",
+  "js.ws.admission.uncertain": "Выбор сохранён лишь частично. Панель показывает сохранённое; проверьте перед повтором.",
   "js.ws.admission.toast.both": "Применены {0} и {1}",
   "js.ws.admission.group.workspaces": "рабочие области",
   "js.ws.admission.group.worktrees": "рабочие деревья",
