@@ -166,6 +166,7 @@ func (h *Hosted) admit(j *hostedJob) error {
 		}
 	}
 	h.mu.Unlock()
+	h.runningChanged()
 	if len(dropped) > 0 {
 		h.forget(dropped, ids)
 	}
@@ -189,6 +190,7 @@ func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView
 	h.endLocked(j)
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
+	h.runningChanged()
 	h.save(j, row, rev)
 	return h.view(j, OutcomeDone), cause
 }

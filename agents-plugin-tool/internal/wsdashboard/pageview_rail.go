@@ -203,22 +203,27 @@ type RailRow struct {
 	// root is the row's Project or holds it (railExecJobs). A job counts on
 	// every row of its worktree, not only the session that launched it.
 	ExecJobs int
+	// OwnExecJobs counts the hosted exec jobs this session owns that still
+	// run. Unlike ExecJobs they are known by their owning conversation, so
+	// they count on this row alone.
+	OwnExecJobs int
 	// Busy reports a live session not yet fully idle, rendered as
 	// data-busy="1": the lead works or waits on a permission (an approval
 	// or a terminal's prompt), or a ws-known activity remains: a running
-	// subagent, a background task, an exec job (ExecJobs), or a busy live
-	// child row at any depth. The rail layout sets it once the children are
-	// nested (orderTree, railSetBusy). A harness that reports no background
-	// task count (taskBadgeCounts clamps its unknown count to zero) is
-	// fully idle once its turn ended and none of the rest remains, so such
-	// a session may read idle while unseen background work still runs.
+	// subagent, a background task, an exec job (ExecJobs, OwnExecJobs), or
+	// a busy live child row at any depth. The rail layout sets it once the
+	// children are nested (orderTree, railSetBusy). A harness that reports
+	// no background task count (taskBadgeCounts clamps its unknown count to
+	// zero) is fully idle once its turn ended and none of the rest remains,
+	// so such a session may read idle while unseen background work still
+	// runs.
 	Busy bool
 	// Active is Busy by the session's own activity, rendered as
-	// data-active="1": everything Busy counts except exec jobs, which are
-	// known only by worktree and so also keep other sessions there busy. A
-	// page notifies a finish only for a busy span that was active at some
-	// point, so a session busy only through another one's job never reads
-	// as finished.
+	// data-active="1": everything Busy counts except ExecJobs, which are
+	// known only by worktree and so also keep other sessions there busy;
+	// the session's own hosted jobs (OwnExecJobs) count. A page notifies a
+	// finish only for a busy span that was active at some point, so a
+	// session busy only through another one's job never reads as finished.
 	Active bool
 	// permission is the lead's permission wait, from a present adapter,
 	// for any session: a hosted one also has Approval, a terminal one waits
@@ -380,8 +385,11 @@ type railInput struct {
 	// then carries how it comes back (railRevive).
 	CanRevive bool
 	// ExecJobs is the live exec job count under the session's project
-	// (railExecJobs), as RailRow.ExecJobs.
-	ExecJobs int
+	// (railExecJobs), as RailRow.ExecJobs; OwnExecJobs is the session's own
+	// running hosted exec jobs (DaemonOptions.HostedExecJobs), as
+	// RailRow.OwnExecJobs.
+	ExecJobs    int
+	OwnExecJobs int
 }
 
 // railExecJobs sums the live exec jobs (DaemonOptions.ExecJobs, by root)
@@ -766,6 +774,7 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 		Exit:        hostExit(reg),
 		Hover:       sessionHover(reg, in.Snapshot, live, now),
 		ExecJobs:    in.ExecJobs,
+		OwnExecJobs: in.OwnExecJobs,
 	}
 	if !live {
 		row.Revive, row.ReviveBlocked = railRevive(in)

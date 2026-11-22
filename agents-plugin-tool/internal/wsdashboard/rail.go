@@ -76,9 +76,12 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 	now := r.clock()
 	var inputs []railInput
 	wanted := map[string][]Registration{}
-	var jobs map[string]int
+	var jobs, owned map[string]int
 	if d.execJobs != nil {
 		jobs = d.execJobs() // once per render, from memory
+	}
+	if d.hostedExecJobs != nil {
+		owned = d.hostedExecJobs() // once per render, from memory
 	}
 	d.railInputs.mu.Lock()
 	defer d.railInputs.mu.Unlock()
@@ -127,6 +130,7 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 		}
 		in.Session, in.CanRevive = s, d.agents != nil
 		in.ExecJobs = railExecJobs(jobs, reg.Project)
+		in.OwnExecJobs = owned[reg.ReplyID]
 		if in.Repo != "" {
 			wanted[in.Repo] = append(wanted[in.Repo], reg)
 		}

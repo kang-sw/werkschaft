@@ -39,6 +39,7 @@ func (h *Hosted) stop(j *hostedJob) {
 	h.endLocked(j)
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
+	h.runningChanged()
 	h.save(j, row, rev)
 }
 

@@ -35,6 +35,12 @@ func TestRailBusy(t *testing.T) {
 		return railRow(in, live, now)
 	}
 	idle := func(id string) RailRow { return row(id, false, true, snap(wslive.PhaseIdle, nil), nil) }
+	// own is a hosted session whose turn ended with n of its own hosted
+	// exec jobs still running.
+	own := func(id string, live bool, n int) RailRow {
+		in := railInput{Session: Session{Registration: reg(id, true)}, Snapshot: snap(wslive.PhaseIdle, nil), OwnExecJobs: n}
+		return railRow(in, live, now)
+	}
 	cases := []struct {
 		name   string
 		row    RailRow
@@ -60,6 +66,8 @@ func TestRailBusy(t *testing.T) {
 		{"exec job under the project", row("e", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/repo/wt": 1, "/w/other": 3}), true, false},
 		{"exec job at a root holding the project", row("e2", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/repo/": 1}), true, false},
 		{"exec job in an unrelated root", row("u", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/other": 3, "/w/repo/wt2": 1, "/w/repo/wt/sub": 1}), false, false},
+		{"own hosted exec job", own("h", true, 1), true, true},
+		{"own hosted exec job, not live", own("h2", false, 2), false, false},
 		{"not live", row("x", false, false, snap(wslive.PhaseTool, func(s *wslive.Snapshot) {
 			s.Usage = &wslive.Usage{Background: n(1)}
 		}), map[string]int{project: 1}), false, false},
@@ -69,8 +77,8 @@ func TestRailBusy(t *testing.T) {
 		if got := railSetBusy(&r); got != c.want || r.Busy != c.want {
 			t.Errorf("%s: Busy = %v, want %v (row %+v)", c.name, r.Busy, c.want, r)
 		}
-		// Exec jobs are known only by worktree: they keep a row busy but
-		// never make it active (its own activity).
+		// Exec jobs known only by worktree keep a row busy but never make
+		// it active (its own activity); its own hosted jobs do.
 		if r.Active != c.active {
 			t.Errorf("%s: Active = %v, want %v (row %+v)", c.name, r.Active, c.active, r)
 		}
@@ -113,7 +121,11 @@ func TestRailBusy(t *testing.T) {
 	if !railSetBusy(&deep) || !deep.Active || !deep.Children[0].Active {
 		t.Errorf("an active grandchild did not keep its ancestors active: %+v", deep)
 	}
-	deep.Children[0].Children[0].Working = false
+	deep.Children[0].Children[0].Working, deep.Children[0].Children[0].OwnExecJobs = false, 1
+	if !railSetBusy(&deep) || !deep.Active || !deep.Children[0].Active {
+		t.Errorf("a grandchild's own hosted job did not keep its ancestors active: %+v", deep)
+	}
+	deep.Children[0].Children[0].OwnExecJobs = 0
 	if railSetBusy(&deep) || deep.Active {
 		t.Errorf("an all-idle tree reads busy or active: %+v", deep)
 	}
@@ -143,21 +155,25 @@ func TestRailMarkupBusy(t *testing.T) {
 }
 
 // TestExecJobsChangedReachesTheRailStream pins the wake: a changed exec job
-// count reaches an open rail stream on ExecJobsChanged alone, rendered from
-// the cached rail inputs (no session input is read again).
+// count, by worktree (ExecJobs) or by owning session (HostedExecJobs),
+// reaches an open rail stream on ExecJobsChanged alone, rendered from the
+// cached rail inputs (no session input is read again). A hosted job counts
+// on its owner's row only, and makes it active.
 func TestExecJobsChangedReachesTheRailStream(t *testing.T) {
 	var mu sync.Mutex
-	jobs := map[string]int{}
-	f := startPageFixture(t, withWorkspaces(t), func(o *DaemonOptions) {
-		o.ExecJobs = func() map[string]int {
-			mu.Lock()
-			defer mu.Unlock()
-			out := map[string]int{}
-			for k, v := range jobs {
-				out[k] = v
-			}
-			return out
+	jobs, owned := map[string]int{}, map[string]int{}
+	clone := func(m map[string]int) map[string]int {
+		mu.Lock()
+		defer mu.Unlock()
+		out := map[string]int{}
+		for k, v := range m {
+			out[k] = v
 		}
+		return out
+	}
+	f := startPageFixture(t, withWorkspaces(t), func(o *DaemonOptions) {
+		o.ExecJobs = func() map[string]int { return clone(jobs) }
+		o.HostedExecJobs = func() map[string]int { return clone(owned) }
 	})
 	if _, err := f.d.workspaces.add(f.project, false); err != nil {
 		t.Fatal(err)
@@ -216,5 +232,25 @@ func TestExecJobsChangedReachesTheRailStream(t *testing.T) {
 	f.d.ExecJobsChanged()
 	if third := railHTML(); strings.Contains(rowOf(third, "boardsession"), "data-busy") {
 		t.Fatalf("the finished job still keeps boardsession busy: %s", rowOf(third, "boardsession"))
+	}
+
+	// Its own hosted job makes boardsession busy and active; once that job
+	// ends, another conversation's hosted job still running leaves it idle.
+	mu.Lock()
+	owned["boardsession"], owned["someoneelse"] = 1, 2
+	mu.Unlock()
+	f.d.ExecJobsChanged()
+	if html := railHTML(); !strings.Contains(rowOf(html, "boardsession"), `data-busy="1" data-active="1"`) {
+		t.Fatalf("boardsession's own hosted job did not make it busy and active: %s", rowOf(html, "boardsession"))
+	}
+	mu.Lock()
+	delete(owned, "boardsession")
+	mu.Unlock()
+	f.d.ExecJobsChanged()
+	if html := railHTML(); strings.Contains(rowOf(html, "boardsession"), "data-busy") {
+		t.Fatalf("another session's hosted job keeps boardsession busy: %s", rowOf(html, "boardsession"))
+	}
+	if n := reads.Load(); n != 0 {
+		t.Errorf("ExecJobsChanged re-read %d session inputs", n)
 	}
 }

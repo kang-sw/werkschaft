@@ -165,6 +165,9 @@ func dashboardCommand(args []string) {
 		// The servers this daemon hosts for launcher sessions run their exec
 		// jobs in this process, so its own job set is what the rail counts.
 		ExecJobs: execjob.ActiveRoots,
+		// A hosted session's jobs run under the hosted exec jobs, which
+		// know their owning conversation; nil until they bind.
+		HostedExecJobs: func() map[string]int { return host.exec.Load().RunningOwners() },
 		BeforeUnlock: func() {
 			if err := boards.Close(); err != nil {
 				fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)
@@ -207,15 +210,16 @@ func dashboardCommand(args []string) {
 	agyActivity.set(daemon.AgyActivity)
 	host.live.Store(daemon)
 	labels.daemon.Store(daemon)
-	execjob.SetActiveObserver(func() {
+	execJobsChanged := func() {
 		if d := host.live.Load(); d != nil {
 			d.ExecJobsChanged()
 		}
-	})
+	}
+	execjob.SetActiveObserver(execJobsChanged)
 	defer execjob.SetActiveObserver(nil)
 	// Under the lock and with the runner started: a completion notice for
 	// a conversation the runner does not know yet would be dropped.
-	host.exec.Store(openHostedExec(dir, holders, agents, execLink, logw))
+	host.exec.Store(openHostedExec(dir, holders, agents, execLink, logw, execJobsChanged))
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.
 	nudgeHooks, stopHooks := startTrackerHooks(tracker, trackerErr, dir, daemon.Endpoint().Port, logw)
