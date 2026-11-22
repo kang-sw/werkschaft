@@ -2,10 +2,12 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wspackage"
@@ -162,6 +164,30 @@ func TestDashboardTierRoutingViewRefusesCyclesAndTheHopLimit(t *testing.T) {
 	}
 	if stored, err := wsconfig.LoadTierRouting(opts); err != nil || stored.Nodes != nil {
 		t.Fatalf("a preview wrote: %+v %v", stored, err)
+	}
+	// A dense draft where every node points at every other on each selector
+	// is refused promptly; the depth walk stays bounded.
+	dense := map[string]map[string]string{}
+	for i := 0; i < 16; i++ {
+		pointers := map[string]string{}
+		for s, size := range append([]string{"*"}, wsconfig.TierSizes...) {
+			pointers[size] = fmt.Sprintf("d%d", (i+s+1)%16)
+		}
+		dense[fmt.Sprintf("d%d", i)] = pointers
+	}
+	raw, _ = json.Marshal(map[string]any{"nodes": dense})
+	start := time.Now()
+	view, err = dashboardTierRoutingView(rsrc, opts, raw, "claude")
+	if err != nil || view.Error == "" {
+		t.Fatalf("dense cyclic draft: %v %q", err, view.Error)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("dense draft took %v", elapsed)
+	}
+	for _, node := range view.Nodes {
+		if node.Depth > wsconfig.TierRoutingMaxHops+1 {
+			t.Fatalf("depth %d past the cap", node.Depth)
+		}
 	}
 	if view, _ := dashboardTierRoutingView(rsrc, opts, json.RawMessage(`{"nodes":{"Bad Name":{}}}`), "claude"); view.Error == "" {
 		t.Fatal("unparsable draft accepted")

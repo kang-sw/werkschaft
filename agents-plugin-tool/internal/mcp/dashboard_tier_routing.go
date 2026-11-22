@@ -163,11 +163,12 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 		}
 		view.Nodes = append(view.Nodes, node)
 	}
+	depths := map[int]int{}
 	for i := range view.Nodes {
 		if refs := inbound[view.Nodes[i].Name]; refs != nil {
 			view.Nodes[i].Inbound = refs
 		}
-		view.Nodes[i].Depth = tierNodeDepth(view.Nodes, index, i, map[int]bool{})
+		view.Nodes[i].Depth = tierNodeDepth(view.Nodes, index, i, map[int]bool{}, depths)
 		for _, size := range wsconfig.TierSizes {
 			view.Nodes[i].Routes = append(view.Nodes[i].Routes, dashboardTierResolve(graph, opts, view.Nodes[i].Name+":"+size, size, harness))
 		}
@@ -196,9 +197,16 @@ func tierTargetShape(target string) (kind, to, size string) {
 	return "bundle", target, ""
 }
 
-// tierNodeDepth is the longest edge path from node i to a terminal. A cycle
-// (an invalid draft) stops at the repeated node.
-func tierNodeDepth(nodes []dashboardTierNode, index map[string]int, i int, seen map[int]bool) int {
+// tierNodeDepth is the longest edge path from node i to a terminal, capped
+// one past the hop limit. A cycle (an invalid draft) stops at the repeated
+// node. depths memoizes each node, so the walk is linear in the edges even
+// for a densely cross-pointing draft; in a cyclic draft the memo may record
+// a depth cut at whichever node closed the cycle first, which only affects
+// the column an invalid draft would be drawn in.
+func tierNodeDepth(nodes []dashboardTierNode, index map[string]int, i int, seen map[int]bool, depths map[int]int) int {
+	if d, ok := depths[i]; ok {
+		return d
+	}
 	if seen[i] {
 		return 0
 	}
@@ -210,11 +218,15 @@ func tierNodeDepth(nodes []dashboardTierNode, index map[string]int, i int, seen 
 			continue
 		}
 		if j, ok := index[edge.To]; ok {
-			if d := tierNodeDepth(nodes, index, j, seen) + 1; d > depth {
+			if d := tierNodeDepth(nodes, index, j, seen, depths) + 1; d > depth {
 				depth = d
 			}
 		}
 	}
+	if limit := wsconfig.TierRoutingMaxHops + 1; depth > limit {
+		depth = limit
+	}
+	depths[i] = depth
 	return depth
 }
 

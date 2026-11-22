@@ -162,6 +162,12 @@ test('a named tier fills harness, model and effort; a hand edit returns to manua
   assert.equal(holder.hidden, false);
   assert.deepEqual(picker.children.map(o => [o.value, !!o.disabled]), [['', false], ['broken', true], ['deep', false], ['far', true]]);
   assert.equal(p.harness, 'claude');
+  // A level the tier's harness does not offer stays the user's pick (the
+  // form shows it as dropped and does not send it); the tier never clears it.
+  p.level = 'workdir-write';
+  picker.value = 'deep'; picker.events.change();
+  assert.equal(p.harness, 'codex');
+  assert.equal(p.level, 'workdir-write', 'the tier does not rewrite the permission pick');
   p.level = 'read-only';
 
   // Picking fills the editable fields; the permission level is untouched.

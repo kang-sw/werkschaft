@@ -546,14 +546,16 @@
 
     // previewer debounces daemon previews of draft(); show(view|null, why)
     // receives the daemon's description, or why the draft is not ready.
+    // Every edit bumps seq, so a response to an older draft is dropped even
+    // when the newer draft is still debouncing or never reaches the daemon.
     function previewer(draft, show) {
       let timer = 0, seq = 0;
       return function () {
+        const mine = ++seq;
         clearTimeout(timer);
         timer = setTimeout(async function () {
           const built = draft();
           if (built.problem) { show(null, built.problem, built); return; }
-          const mine = ++seq;
           const result = await call("/api/config/tier-routing/preview", { harness: state.harness, value: built.value });
           if (mine !== seq) return;
           if (!result.ok) { show(null, result.error || tr("js.settings.error." + result.code), built); return; }
@@ -691,7 +693,7 @@
         if (result && !result.error && !unchanged) pending = built;
         saveBtn.disabled = readOnly || !pending;
       });
-      function changed() { saveBtn.disabled = true; preview(); }
+      function changed() { pending = null; saveBtn.disabled = true; preview(); }
       async function commit(value) {
         saveBtn.disabled = true;
         const saved = await save(value, m);
@@ -776,7 +778,7 @@
         if (result && !result.error && !unchanged) pending = built;
         saveBtn.disabled = readOnly || !pending;
       });
-      function changed() { saveBtn.disabled = true; preview(); }
+      function changed() { pending = null; saveBtn.disabled = true; preview(); }
       async function commit(value) {
         saveBtn.disabled = true;
         const saved = await save(value, m);

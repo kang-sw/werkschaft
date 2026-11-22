@@ -124,8 +124,12 @@ const shot = name => shots ? path.join(shots, name) : undefined;
     assert.equal(routeOf(v, 'ticket-reviewer-design', 'medium').trace, 'ticket-reviewer-design:medium -> codex.small');
     console.log('edit: passthrough, pinning, and exception precedence saved and resolved by the daemon');
 
-    // 4. Reset returns the node to its packaged default.
+    // 4. Removing the exception drops its precedence; reset returns the node
+    // to its packaged default.
     modal = await openNode('ticket-reviewer-design');
+    await edit(() => modal.locator('.tr-exc-row').first().locator('.tr-exc-remove').click());
+    assert.equal(await modal.locator('.tr-exc-row').count(), 0);
+    assert.match((await chips(traceRow(modal, 'large'))).at(-1), /^codex\.small$/, 'without the exception large follows *');
     await save(modal, '.tr-reset-node');
     v = await view();
     assert.equal(nodeOf(v, 'ticket-reviewer-design').overrides, undefined);
@@ -215,6 +219,52 @@ const shot = name => shots ? path.join(shots, name) : undefined;
     assert.equal(nodeOf(v, 'lead-review').kind, 'user');
     assert.equal(routeOf(v, 'lead-review', 'small').trace, 'lead-review:small -> discussion');
     console.log('create: bundle discussion and node lead-review saved');
+
+    // 8b. An unreferenced user node can be deleted.
+    await card.locator('.tr-add-node').click();
+    modal = frame.locator('dialog[data-tier-modal=node]');
+    await modal.waitFor();
+    await edit(() => modal.locator('.tr-name-input').fill('scratch'));
+    await edit(() => modal.locator('.tr-prow').first().locator('.tr-target').selectOption('harness:codex'));
+    await save(modal);
+    assert.ok(nodeOf(await view(), 'scratch'));
+    modal = await openNode('scratch');
+    await save(modal, '.tr-delete');
+    assert.equal(nodeOf(await view(), 'scratch'), undefined);
+    console.log('delete: an unreferenced user node is removed');
+
+    // 8c. A late preview of an older draft never revives Save for a newer
+    // draft the editor refuses before asking the daemon.
+    const previewPath = '**/api/config/tier-routing/preview';
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let holding = true;
+    await page.route(previewPath, async route => {
+      if (holding) { holding = false; await held; }
+      await route.continue();
+    });
+    await card.locator('.tr-add-bundle').click();
+    modal = frame.locator('dialog[data-tier-modal=bundle]');
+    await modal.waitFor();
+    await modal.locator('.tr-bundle-harness').selectOption('codex');
+    await modal.locator('.tr-bundle-model').fill('gpt-5.5');
+    await modal.locator('.tr-bundle-effort').fill('high');
+    const sent = page.waitForRequest(r => new URL(r.url()).pathname === '/api/config/tier-routing/preview');
+    await modal.locator('.tr-name-input').fill('late');
+    await sent;
+    await modal.locator('.tr-name-input').fill('');
+    await page.waitForTimeout(300);
+    assert.match(await modal.locator('.tr-modal-err').textContent(), /Enter a name/);
+    const late = responded('/api/config/tier-routing/preview');
+    release();
+    await late;
+    await page.waitForTimeout(150);
+    assert.match(await modal.locator('.tr-modal-err').textContent(), /Enter a name/, 'the late response does not clear the refusal');
+    assert.equal(await modal.locator('.tr-save').isDisabled(), true, 'the late response does not enable Save');
+    await page.unroute(previewPath);
+    await modal.locator('.tr-modal-x').click();
+    assert.equal((await view()).bundles.some(b => b.name === 'late'), false);
+    console.log('stale: a late preview of an older draft is dropped');
 
     // 9. After a reload the drawn graph and traces match the daemon's.
     await page.reload();

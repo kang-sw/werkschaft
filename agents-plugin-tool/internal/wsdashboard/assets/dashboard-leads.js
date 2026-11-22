@@ -571,11 +571,12 @@
       return !!t.harness && !!hbtn[t.harness] && !off(t.harness) && (!t.model || leadModels(t.harness).length > 0) && (!t.effort || leadEfforts(t.harness).length > 0);
     }
     // applyTier fills harness, model, and effort from a picked named tier.
-    // The permission level stays wherever this harness offers it; the
-    // native mode and plugin isolation stay the user's.
+    // The permission level, native mode, and plugin isolation stay the
+    // user's: a level the new harness does not offer shows as dropped (not
+    // sent), and one picked while support is unknown stays visible.
     function applyTier(t) {
       if (P.busy || P.loading) return;
-      var level = P.level, mode = rows.free();
+      var mode = rows.free();
       if (t.harness !== P.harness) {
         picks[P.harness] = currentPick();
         P.harness = t.harness;
@@ -584,7 +585,6 @@
         mode = pick(t.harness).mode;
       }
       rows.set(P.harness, { model: t.model || "", effort: t.effort || "", mode: mode });
-      P.level = level && (permLevels(P.harness) || []).indexOf(level) >= 0 ? level : "";
       edited();
     }
     function off(k) {
