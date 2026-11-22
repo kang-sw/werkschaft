@@ -94,8 +94,11 @@
   function collectTextNodes(root, skipEl) {
     var nodes = [];
     if (!root || !doc.createTreeWalker) return nodes;
-    var walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */, {
+    // Elements are walked too: a non-inline one (even empty, hidden or
+    // skipped) becomes a null boundary so text on either side never joins.
+    var walker = doc.createTreeWalker(root, 5 /* SHOW_ELEMENT | SHOW_TEXT */, {
       acceptNode: function (node) {
+        if (node.nodeType === 1) return INLINE_TAGS[node.tagName] ? 3 /* FILTER_SKIP */ : 1;
         var p = node.parentElement;
         // Whitespace-only nodes stay: they join words across inline tags.
         if (!p || !node.nodeValue) return 2 /* FILTER_REJECT */;
@@ -107,7 +110,10 @@
       }
     });
     var n;
-    while ((n = walker.nextNode())) nodes.push(n);
+    while ((n = walker.nextNode())) {
+      if (n.nodeType !== 1) nodes.push(n);
+      else if (nodes.length && nodes[nodes.length - 1]) nodes.push(null);
+    }
     return nodes;
   }
   function blockOf(node, root) {
@@ -122,21 +128,25 @@
   function markRuns(d, nodes, needle, root) {
     var out = [], i = 0, k;
     while (i < nodes.length) {
-      var block = blockOf(nodes[i], root), run = [], starts = [], text = "";
-      while (i < nodes.length && blockOf(nodes[i], root) === block) {
+      if (!nodes[i]) { i++; continue; } // block boundary
+      var block = blockOf(nodes[i], root), run = [], starts = [], ends = [], text = "";
+      while (i < nodes.length && nodes[i] && blockOf(nodes[i], root) === block) {
         var val = nodes[i].nodeValue, low = val.toLowerCase();
         if (low.length !== val.length) low = val; // keep offsets aligned
         run.push(nodes[i]);
         starts.push(text.length);
         text += low;
+        ends.push(text.length);
         i++;
       }
-      var cuts = run.map(function () { return []; }), groups = [];
+      // Matches arrive in order and never overlap, so one forward walk maps
+      // them to nodes: linear in nodes plus matches.
+      var cuts = run.map(function () { return []; }), groups = [], k0 = 0;
       for (var idx = text.indexOf(needle); idx >= 0; idx = text.indexOf(needle, idx + needle.length)) {
         var end = idx + needle.length, g = [];
-        for (k = 0; k < run.length; k++) {
-          var s0 = starts[k], e0 = s0 + run[k].nodeValue.length;
-          if (e0 > idx && s0 < end) cuts[k].push([Math.max(idx, s0) - s0, Math.min(end, e0) - s0, g]);
+        while (k0 < run.length && ends[k0] <= idx) k0++;
+        for (k = k0; k < run.length && starts[k] < end; k++) {
+          cuts[k].push([Math.max(idx, starts[k]) - starts[k], Math.min(end, ends[k]) - starts[k], g]);
         }
         groups.push(g);
       }

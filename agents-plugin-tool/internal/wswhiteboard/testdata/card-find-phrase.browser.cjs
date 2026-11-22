@@ -41,6 +41,34 @@ const html = '<section class="topic"><p>Then restart the <strong>service</strong
     assert.deepEqual(framed.out, ['restart the |service', 'restart| |the| service']);
     assert.equal(framed.left, 0);
     assert.equal(framed.html, html);
+
+    // Empty, hidden and skipped block elements are boundaries, not bridges.
+    const blocks = '<section class="topic"><div>one<div></div>two</div><div>one<div hidden>x</div>two</div><div>one<br>two</div></section>';
+    // A paragraph of N inline nodes with N one-letter matches: the match to
+    // node mapping must stay linear (counted as Node.nodeValue reads).
+    const n = 2000;
+    const wide = '<section class="topic"><p>' + '<span>a</span>'.repeat(n) + '</p></section>';
+    const probe = (page, src) => page.evaluate(({ src, blocks, wide }) => {
+      const desc = Object.getOwnPropertyDescriptor(Node.prototype, 'nodeValue');
+      let reads = 0;
+      Object.defineProperty(Node.prototype, 'nodeValue', { configurable: true, set: desc.set, get() { reads++; return desc.get.call(this); } });
+      const find = src ? (() => {
+        const api = new Function('d', 'body', src + '\nreturn { runFind: runFind, clearFind: clearFind };')(document, document.body);
+        return q => { const c = api.runFind(q); api.clearFind(); return c; };
+      })() : q => { const root = document.querySelector('section.topic'); const c = window.wbCardFind.highlightNode(root, q).length; window.wbCardFind.clearHighlights(root); return c; };
+      document.body.innerHTML = blocks;
+      const bridged = find('onetwo');
+      document.body.innerHTML = wide;
+      reads = 0;
+      const count = find('a');
+      return { bridged, count, reads };
+    }, { src, blocks, wide });
+    for (const [label, tab, src] of [['host', page, null], ['frame', page2, frame]]) {
+      const got = await probe(tab, src);
+      assert.equal(got.bridged, 0, label + ' bridges a block boundary');
+      assert.equal(got.count, n, label + ' match count');
+      assert.ok(got.reads < 20 * n, label + ' match mapping is quadratic: ' + got.reads + ' nodeValue reads for ' + n + ' nodes');
+    }
     console.log('card-find phrase ok');
   } finally {
     await browser.close();

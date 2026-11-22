@@ -140,8 +140,11 @@
     if (!query) return 0;
     var needle = String(query).toLowerCase(), len = needle.length;
     if (!len || !d.createTreeWalker) return 0;
-    var nodes = [], walker = d.createTreeWalker(body, 4, {
+    // Elements are walked too: a non-inline one (even empty, hidden or
+    // skipped) becomes a null boundary so text on either side never joins.
+    var nodes = [], walker = d.createTreeWalker(body, 5, {
       acceptNode: function (node) {
+        if (node.nodeType === 1) return FIND_INLINE[node.tagName] ? 3 : 1;
         var p = node.parentElement;
         // Whitespace-only nodes stay: they join words across inline tags.
         if (!p || !node.nodeValue) return 2;
@@ -153,26 +156,32 @@
       }
     });
     var n;
-    while ((n = walker.nextNode())) nodes.push(n);
+    while ((n = walker.nextNode())) {
+      if (n.nodeType !== 1) nodes.push(n);
+      else if (nodes.length && nodes[nodes.length - 1]) nodes.push(null);
+    }
     // A block's consecutive text nodes are searched as one string, then each
     // match is cut back into per-node marks.
     var i = 0, k;
     while (i < nodes.length) {
-      var block = findBlock(nodes[i]), run = [], starts = [], text = "";
-      while (i < nodes.length && findBlock(nodes[i]) === block) {
+      if (!nodes[i]) { i++; continue; } // block boundary
+      var block = findBlock(nodes[i]), run = [], starts = [], ends = [], text = "";
+      while (i < nodes.length && nodes[i] && findBlock(nodes[i]) === block) {
         var val = nodes[i].nodeValue, low = val.toLowerCase();
         if (low.length !== val.length) low = val; // keep offsets aligned
         run.push(nodes[i]);
         starts.push(text.length);
         text += low;
+        ends.push(text.length);
         i++;
       }
-      var cuts = run.map(function () { return []; }), groups = [];
+      // Matches arrive in order and never overlap: one forward walk.
+      var cuts = run.map(function () { return []; }), groups = [], k0 = 0;
       for (var idx = text.indexOf(needle); idx >= 0; idx = text.indexOf(needle, idx + len)) {
         var end = idx + len, g = [];
-        for (k = 0; k < run.length; k++) {
-          var s0 = starts[k], e0 = s0 + run[k].nodeValue.length;
-          if (e0 > idx && s0 < end) cuts[k].push([Math.max(idx, s0) - s0, Math.min(end, e0) - s0, g]);
+        while (k0 < run.length && ends[k0] <= idx) k0++;
+        for (k = k0; k < run.length && starts[k] < end; k++) {
+          cuts[k].push([Math.max(idx, starts[k]) - starts[k], Math.min(end, ends[k]) - starts[k], g]);
         }
         groups.push(g);
       }
