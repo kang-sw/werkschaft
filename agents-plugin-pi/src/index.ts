@@ -229,7 +229,7 @@ import { ChildApprovalGate } from "./approval-protocol.ts";
 import { isLeadOrFork, readSpawnRole, type SpawnRole } from "./process-role.ts";
 import { createApprovalRelay, registerExecuteGateway } from "./execute-gateway.ts";
 import { registerBackgroundTaskShutdown } from "./background-tasks.ts";
-import { afterCompactionHold, boardSteerDeps, buildMailboxPushMessage, buildWhiteboardHeldMessage, createBridgeDrain, createBridgeInboxDrain, createBridgeInterruptDrain, createMailboxWaiterSlot, createSubprocessWait, reportDistinctLinesOnce, resolveMailboxSelfSlug, sessionMailboxWaitOptions, shouldArmMailboxWaiter, startMailboxWaiter, type MailboxToolCall, type MailboxWaiterHandle } from "./mailbox-waiter.ts";
+import { afterCompactionHold, boardSteerDeps, buildMailboxPushMessages, buildWhiteboardHeldMessage, createBridgeDrain, createBridgeInboxDrain, createBridgeInterruptDrain, createMailboxWaiterSlot, createSubprocessWait, reportDistinctLinesOnce, resolveMailboxSelfSlug, sessionMailboxWaitOptions, shouldArmMailboxWaiter, startMailboxWaiter, type MailboxToolCall, type MailboxWaiterHandle } from "./mailbox-waiter.ts";
 import {
   createThreadRegistryHandle,
   type ThreadRegistryHandle,
@@ -1025,7 +1025,7 @@ export default async function wsPiBridgeExtension(pi: ExtensionAPI) {
             drainMail: createBridgeDrain(mailboxCallTool, key),
             admit: (envelopes) => {
               dashboardFeed?.noteMailWake();
-              sendBatchToLead(pi, envelopes.map(buildMailboxPushMessage), "steer");
+              sendBatchToLead(pi, buildMailboxPushMessages(envelopes), "steer");
             },
             onError: reportMailboxWaiterDiagnostic,
             // Messages the user sent from the dashboard page, submitted as

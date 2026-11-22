@@ -829,7 +829,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "mailbox.send",
-			"description": `Send a message to another harness session by stable address, without blocking. An address is "slug@scope" (scope machine, worktree, or clone) for a named inbox, or "id:" plus a reply-id that mailbox.recv or mailbox.lookup_peers surfaced. Any send, even with no mailbox identity of your own, opens your reply-id return channel, so replies reach your mailbox.recv. A top-level lead's sends open with a note line saying a peer lead, not the receiver's worker, sent it. With an array to, cc, or bcc, each recipient gets its own copy whose body, after any note line, opens with a generated line naming To and CC (never BCC), then your content unchanged; the receipt lists delivered and failed recipients.`,
+			"description": `Send a message to another harness session by stable address, without blocking. An address is "slug@scope" (scope machine, worktree, or clone) for a named inbox, or "id:" plus a reply-id that mailbox.recv or mailbox.lookup_peers surfaced. Any send, even with no mailbox identity of your own, opens your reply-id return channel, so replies reach your mailbox.recv. A top-level lead's sends open with a note line saying a peer lead, not the receiver's worker, sent it. With an array to, cc, or bcc, each recipient gets its own copy whose body, after any note line, opens with a generated group line (its id and public recipient count; mailbox.recipients lists To and CC, never BCC), then your content unchanged; the receipt lists delivered and failed recipients.`,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -887,6 +887,19 @@ func tools() []map[string]any {
 					"format":      stringProperty(formatPropertyDescription),
 				},
 				"required": []string{"session_key"},
+			},
+		},
+		{
+			"name":        "mailbox.recipients",
+			"description": `Read-only: list the public audience of a group mail. A copy of a mail sent to several recipients opens with a "group mail <id>" line; pass that id. Returns the sender, the sent time, and the To and CC addresses, each with a display label when known; BCC recipients are never listed. Only the sender and the mail's own recipients can read a group. Groups are kept in memory for a bounded window and lost when the daemon restarts; an unknown, expired, or foreign id answers "group not found or no longer kept".`,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_key": stringProperty(sessionKeyPropertyDescription),
+					"id":          stringProperty("Group id from the mail's group line, such as g-0123456789abcdef-7."),
+					"format":      stringProperty(formatPropertyDescription),
+				},
+				"required": []string{"session_key", "id"},
 			},
 		},
 		{

@@ -68,6 +68,11 @@ type proxyHost struct {
 	agents mcp.PiAgents
 	boards *mcp.WhiteboardStores
 	notes  *wsnote.Cache
+	// mailLabels resolves mail sender labels for every hosted server
+	// (mcp.ServerOptions.MailLabels). The servers share the process's group
+	// store, so a recipient on one connection expands a group mail another
+	// connection sent.
+	mailLabels mcp.MailLabelFunc
 }
 
 // wait blocks until the replacement goroutine, if any, has ended.
@@ -97,6 +102,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 			OwnerPID:     hello.OwnerPID,
 			Harness:      hello.Harness,
 			Diag:         prefixedWriter{w: h.logw, prefix: fmt.Sprintf("dashboard: session pid %d: ", hello.OwnerPID)},
+			MailLabels:   h.mailLabels,
 		}
 		if d := h.live.Load(); d != nil {
 			opts.Live = d

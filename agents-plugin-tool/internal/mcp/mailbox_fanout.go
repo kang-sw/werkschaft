@@ -12,9 +12,11 @@ import (
 // mailbox_fanout.go is mailbox.send's explicit multi-recipient path: an
 // array "to", or any "cc" or "bcc". Each recipient gets one ordinary
 // envelope through the same per-copy delivery a scalar send uses; there is
-// no group, broadcast, or new store field. The public audience (To and CC,
-// never BCC) travels as a generated header line inside the body, so every
-// existing reader, history entry, and host adapter shows it unchanged.
+// no broadcast and no new store field. The public audience (To and CC,
+// never BCC) is kept in the in-memory group store (mailbox_groups.go), and
+// every copy carries one generated marker line naming the group id and the
+// public count, which every existing reader, history entry, and host adapter
+// shows unchanged; mailbox.recipients expands it on demand.
 
 // Recipient roles, in delivery and receipt order.
 const (
@@ -26,7 +28,7 @@ const (
 // mailboxRecipient is one distinct destination of a fan-out send.
 type mailboxRecipient struct {
 	addr    wsmailbox.Address
-	address string // canonical form, as shown in the header and receipt
+	address string // canonical form, as listed by the group and the receipt
 	role    string
 }
 
@@ -41,8 +43,8 @@ type mailboxFanOut struct {
 // parseMailboxFanOut returns nil for a legacy scalar send (a string "to"
 // with no cc or bcc), which keeps its existing path byte for byte, and the
 // validated fan-out otherwise. Any malformed address refuses the whole call
-// before a copy is sent: an unparsed value must never reach the public
-// header.
+// before a copy is sent: an unparsed value must never reach the group
+// listing.
 func parseMailboxFanOut(tool string, args map[string]any) (*mailboxFanOut, error) {
 	toList, toIsArray, err := mailboxToArgument(tool, args["to"])
 	if err != nil {
@@ -135,27 +137,17 @@ func mailboxAddressListArgument(tool, name string, raw any) ([]string, error) {
 	return nil, fmt.Errorf("%s: %s must be an array of address strings", tool, name)
 }
 
-// mailboxAudienceHeader is the generated public-audience line every copy of a
-// fan-out send carries. It names To and CC only; BCC never appears.
-func mailboxAudienceHeader(namespace string, to, cc []string) string {
-	header := "[" + namespace + " mail to: " + strings.Join(to, ", ")
-	if len(cc) > 0 {
-		header += "; cc: " + strings.Join(cc, ", ")
-	}
-	return header + "]"
-}
-
-// composeMailboxFanOutBody places the public header in the supplied body: a
+// composeMailboxFanOutBody places the group marker in the supplied body: a
 // leading peer-lead note (one the caller supplied, from either product, or
 // the one a top-level lead's send stamps) stays the first line, so the
-// dashboard still recognizes it; the header follows; then the supplied bytes,
-// untrimmed.
-func composeMailboxFanOutBody(content, header string, topLevelLead bool, harness, namespace string) string {
+// dashboard still recognizes it; the marker follows; then the supplied
+// bytes, untrimmed.
+func composeMailboxFanOutBody(content, marker string, topLevelLead bool, harness, namespace string) string {
 	if hasPeerLeadNote(content, namespace) {
 		note, rest, _ := strings.Cut(content, "\n")
-		return note + "\n" + header + "\n" + rest
+		return note + "\n" + marker + "\n" + rest
 	}
-	body := header + "\n" + content
+	body := marker + "\n" + content
 	if topLevelLead {
 		body = stampPeerLeadNote(body, harness, namespace)
 	}
@@ -173,16 +165,19 @@ type mailboxFanOutResult struct {
 
 // handleMailboxFanOut delivers one ordinary copy per recipient, each in its
 // own store transaction, so one recipient's routing or enqueue failure
-// neither rolls back nor stops the others. The receipt lists every outcome;
-// when no copy went, the call is a tool error carrying the same list.
+// neither rolls back nor stops the others. The group record is kept before
+// the first copy is enqueued. The receipt lists every outcome, BCC included
+// (hidden from co-recipients, not from the sender); when no copy went, the
+// call is a tool error carrying the same list.
 func (s *Server) handleMailboxFanOut(id json.RawMessage, args map[string]any, sessionKey string, entry sessionEntry, f *mailboxFanOut) response {
 	const tool = "mailbox.send"
 	namespace := s.runtimeNamespace()
-	header := mailboxAudienceHeader(namespace, f.to, f.cc)
-	content := composeMailboxFanOutBody(f.content, header, entry.isTopLevelLead(), s.currentHarness(), namespace)
-
 	sender := s.mailboxSendIdentity(sessionKey, entry)
 	now := mailboxNowString()
+	gid := s.recordMailGroup(sessionKey, entry, sender, f, now)
+	marker := mailboxGroupMarker(namespace, gid, len(f.to)+len(f.cc))
+	content := composeMailboxFanOutBody(f.content, marker, entry.isTopLevelLead(), s.currentHarness(), namespace)
+
 	var delivered, failed []mailboxFanOutResult
 	var history []mailboxHistoryEntry
 	var historyNames []string

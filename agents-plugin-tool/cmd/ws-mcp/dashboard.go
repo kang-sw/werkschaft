@@ -104,9 +104,12 @@ func dashboardCommand(args []string) {
 		Log:    logw,
 		OnExit: persistHolderExit(dir),
 	})
-	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards)
+	// Mail sender labels read the runner and the daemon once each exists.
+	labels := &mailLabels{}
+	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label)
+	labels.agents.Store(agents)
 	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
-	host := &proxyHost{notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards}
+	host := &proxyHost{notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -195,6 +198,7 @@ func dashboardCommand(args []string) {
 	trackerChanged.set(daemon.TrackerChanged)
 	agyActivity.set(daemon.AgyActivity)
 	host.live.Store(daemon)
+	labels.daemon.Store(daemon)
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.
 	nudgeHooks, stopHooks := startTrackerHooks(tracker, trackerErr, dir, daemon.Endpoint().Port, logw)
@@ -315,12 +319,36 @@ func trackerStoreRoot(h *wstrackerhost.Host, newErr error) func(id string) (stri
 	}
 }
 
+// mailLabels is the daemon's mail sender-label view (mcp.MailLabelFunc): a
+// spawned child's agent.spawn label, else a session's dashboard title, both
+// read from memory. Each source binds once it exists; until then a sender
+// has no label from it.
+type mailLabels struct {
+	agents atomic.Pointer[wsagent.Runner]
+	daemon atomic.Pointer[wsdashboard.Daemon]
+}
+
+func (l *mailLabels) label(replyID string) string {
+	if r := l.agents.Load(); r != nil {
+		if label := r.SpawnLabel(replyID); label != "" {
+			return label
+		}
+	}
+	if d := l.daemon.Load(); d != nil {
+		if s, ok := d.Index().Session(replyID); ok {
+			return s.Label
+		}
+	}
+	return ""
+}
+
 // newAgentRunner is the daemon's agent runner: the claude and pi backends,
 // ws-mcp's key store for conversation keys, and the plugin's Python launcher
 // for the ws-mcp it attaches to a conversation whose profile allows ws tools.
 // trackerChanged runs after a conversation's successful tracker write;
-// agyActivity runs after a hosted agy turn settles.
-func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores) *wsagent.Runner {
+// agyActivity runs after a hosted agy turn settles. labels resolves the
+// sender legend of the mail the runner delivers; nil shows none.
+func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
@@ -328,6 +356,7 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 	}
 	keys := mcp.NewAgentKeyStore(boards)
 	backends := wsagent.BuiltinBackendRegistrations()
+	mail := mcp.NewLeadMailbox(dir).WithLabels(labels)
 	return wsagent.NewRunner(wsagent.Options{
 		Dir:                        dir,
 		DaemonVersion:              version,
@@ -340,8 +369,9 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		Holders:  wsagent.ManagerHost{Manager: holders},
 		LeadKeys: keys,
 		// The daemon, not the session's own mailbox wait, delivers a lead
-		// session's mail.
-		Mail: mcp.NewLeadMailbox(dir),
+		// session's mail, each submission with its sender legend.
+		Mail:       mail,
+		MailLegend: mail.Legend,
 		WSMCP: func(root string) (wsagent.MCPCommand, error) {
 			return agentMCPCommand(root, version)
 		},

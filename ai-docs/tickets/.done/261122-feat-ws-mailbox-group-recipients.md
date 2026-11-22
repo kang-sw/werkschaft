@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: fbc8215b7fb98e1c
 sage-review-completeness-reviewed: fbc8215b7fb98e1c
+completed: 2026-11-22
 ---
 
 # Fan-out mail: collapse the recipient list behind mailbox.recipients, show sender labels
@@ -293,6 +294,167 @@ Verification:
   `./internal/wsdashboard` mail-wake tests); never the whole `internal/mcp`
   or `internal/wsdashboard` package. Record exact commands in the Result.
 
+### Result (e9f9f0cc8) - 2026-11-22
+
+Landed in 10b1c65f9, with the review fix in 59e8209c5 and its tests in
+e9f9f0cc8:
+
+- Each fan-out copy opens with
+  `[<ns> group mail <gid>: <n> public recipients; mailbox.recipients lists them]`.
+  The marker follows the peer-lead note and replaces the audience header. A
+  scalar send carries no marker. The group is recorded before the first copy
+  is sent.
+- `internal/mcp/mailbox_groups.go` adds the group store. It is a process-wide
+  in-memory `MailGroupStore`:
+  - gids are `g-<16 hex generation>-<n>`;
+  - it keeps at most 1024 groups and 4 MiB of retained bytes, evicting the
+    oldest first and always keeping the newest;
+  - membership compares routes, never display strings. A route is the named
+    inbox, the ring identity (new `wsmailbox.Store.RingIdentity`), the
+    worktree path and the reply queue;
+  - BCC recipients are kept as routes only.
+- `mailbox.recipients` returns id, sender, sent_at, To and CC, with labels.
+  Every refusal returns the same text: `group not found or no longer kept`.
+- Sender legend: `[senders: <handle> = <label>; ...]`.
+  - The label is the runner's spawn label, else the dashboard title.
+    `cmd/ws-mcp` wires both through `ServerOptions.MailLabels` and
+    `Options.MailLegend`.
+  - Labels are cleaned: a newline becomes a space, `;` and `]` are dropped,
+    and the label is cut to 32 runes.
+  - Three paths render it: `mailbox.recv` text output, `label` on the
+    structured envelopes, and each hosted steer and turn through
+    `LeadMailbox.Legend`. In a hosted submission it sits on the batch head's
+    second line, or forms its own first paragraph when there is no head.
+  - Drain texts and `Record.Mail` never hold a legend. A child's steered mail
+    also keeps Drain's text (`steeredReport.Mail`), so a requeued steer gets a
+    fresh legend.
+- Dashboard batch-head consumers read only the head's first line. They also
+  skip a standalone legend paragraph: without that, a labeled peer mail
+  steered into the middle of a batch would break nudge grouping. Only the
+  generated shape is skipped: a one-line `[senders: ...]` paragraph closed by
+  `]` and a blank line, ahead of a `mail from` head. An author's text cannot
+  come before that head. The mcp copy of `trimMailLegend` applies the same
+  rule.
+- `mailbox.recipients` is in `ChildSafeWSTools` and in the three runtime
+  manifests (`>=0.50.8-dev <0.51.0`; the agents-plugin and agents-plugin-pi
+  manifests are byte-identical). Its schema and the shortened `mailbox.send`
+  description fit the 1450 B cap.
+
+Verification. All commands ran from agents-plugin-tool with the prefix
+`GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`:
+
+- `go test ./internal/wsmailbox -count=1`: ok.
+- `go test ./internal/mcp -count=1 -run '^(<names>)$'`: ok. `<names>` is all
+  154 Test functions in these `_test.go` files: agent_mail_routing,
+  agent_tools, hosted_login, lead_mail, mailbox_correspondents,
+  mailbox_fanout, mailbox_groups, mailbox_history, mailbox_legend,
+  mailbox_recv_concurrency, mailbox_runtime, mailbox_tools, mailbox_wake,
+  session_lifecycle, session_mail_access, tool_aliases, tool_schema_size, and
+  the five whiteboard_nudges* files.
+- `go test ./internal/wsagent -count=1 -run '^(<names>)$'`: ok. `<names>` is
+  all 190 Test functions in these `_test.go` files: builtin,
+  builtin_lead_fallback, child_safe_mcp_tools, children, idle_children,
+  lead_runner, mail_routing, pi_send, wake, worker_holder_recovery, agy,
+  agy_lead, agy_output_rate, child_sleep, compaction_advisory,
+  lead_claude_approval, pi, pi_worker_recovery.
+- `go test ./internal/wsdashboard -count=1 -run
+  'TestConversationMailWake|TestConversationBoardNudge'`: ok.
+- `go test ./cmd/ws-mcp -count=1 -run
+  'TestRuntimeCapabilitiesCommand|TestToolsCommandBareListMatchesToolsList|TestToolsCommandShowMatchesInputSchema|TestAgent|TestProxy|TestHostedCLI'`:
+  ok, except `TestProxyWhiteboardLinkHasNoLoginCode`. That test fails the
+  same way on the base commit 1356f7f67, so the failure predates this
+  change and comes from the environment.
+- `go test ./internal/wsrsrc -count=1 -run 'TestPiMirrorUpToDate|TestWsflow'`:
+  ok.
+- `go vet` on mcp, wsagent, wsmailbox, wsdashboard and cmd/ws-mcp is clean,
+  and gofmt is clean on every touched file.
+- The tests that pin the verification items:
+  - fan-out marker: `TestMailboxFanOut*` and `TestMailboxGroupMarker`;
+  - recipient listing: `TestMailboxRecipientsListsThePublicAudienceToEveryMember`;
+  - refusals (outsider, same slug in another worktree, another cache root,
+    unknown, malformed, evicted, restarted):
+    `TestMailboxRecipientsRefusesOutsidersAlike`;
+  - record-before-copy: `TestMailboxGroupRecordPrecedesEveryCopy`;
+  - tool admission: `TestMailboxRecipientsTransportAdmission`;
+  - eviction (count, byte, oversized newest): `TestMailGroupStore*`;
+  - labels and legend: `TestCleanMailLabel`, `TestMailLegendLine`,
+    `TestMailboxRecvShowsTheSenderLegend`, `TestLeadMailboxLegendPlacement`
+    (including a literal `[senders: x = y]` body line, and a turn led by a
+    child report), `TestLeadMailboxDrainKeepsTextsWithoutALegend` and
+    `TestTrimMailLegendTakesOnlyTheGeneratedLine`;
+  - hosted submission: `TestMailLegendRidesEachSubmission`,
+    `TestMailLegendRefreshesOnARequeuedSteer` (a requeue and resubmit
+    yields exactly one legend, with the current label) and
+    `TestSpawnLabelNamesASpawnedChild`;
+  - dashboard: `TestConversationBoardNudgeBatchSurvivesASenderLegend` and
+    `TestConversationMailWakeTrimsOnlyTheGeneratedLegend`.
+
+Decisions:
+
+- The group store is process-wide by default (`ServerOptions.MailGroups`
+  nil), so the per-connection servers share it.
+- Recipient labels are snapshotted at send time. The sender's label is read
+  at lookup time.
+- The `261115` closed allowlist is not in the code yet. The test models it
+  with an explicit `WS_MCP_ALLOWED_TOOLS` list. Forward item for `261115`:
+  when that allowlist lands, `TestMailboxRecipientsTransportAdmission`
+  should drive the real list in place of the explicit one.
+- The steer record (`Record.Steered`, written at
+  `internal/wsagent/children.go:779`) keeps the labeled steer in
+  `steeredReport.Text`. That text is only a match key and is never
+  resubmitted:
+  - `children.go:724` (steerTaken) compares it with the text the harness
+    reports it took;
+  - `runner_process.go:196` passes it as `RecoveredSteers`, which
+    `agy.go:1018-1022` only replays as that same acknowledgement.
+
+  Both requeue paths, `children.go:709` (a refused steer) and `:766`
+  (requeueSteered), take `steeredReport.requeued()`, which returns Drain's
+  legend-free text (`Mail`). The turn then adds one legend resolved at
+  submission (`runner_conv.go:1299`). Swapping `Text` and `Mail` would make
+  a downgraded daemon miss the acknowledgement match and resend the steer.
+- A turn's reports and held mail share one legend, placed on the first mail
+  text. A child report never gets a legend.
+
+Compatibility verdict: T1. The only degradation is display-only, on an older
+dashboard.
+
+- v0.50.8 Return of a labeled held text: T0. This binary never stores a
+  legend in held text:
+  - `internal/wsagent/runner_conv.go:365,370` hold Drain's `m.Text`;
+  - `:1299,1337,1424` use the labeled copy only for the Send and the wake;
+  - `:1050-1052` Return receives `rec.Mail`.
+
+  A labeled head would still round-trip: in v0.50.8
+  `internal/mcp/lead_mail.go`, `:199,212` route Return through parseMailText,
+  and `:235-238` drop the head region up to the first blank line.
+- Older dashboard: T1. In v0.50.8
+  `internal/wsdashboard/conversation_mail_wake.go`, `:16` anchors the
+  batch-head regex to a single line, and `:30,34` match it against the whole
+  head region. A two-line head therefore fails, and the wake shows as its own
+  row instead of linking to its mail. `:95-96,99,179` make nudge grouping
+  fall back the same way. Display only.
+- Older adapter reading `label` beside an address: T0.
+  `agents-plugin/hooks/claude-mod/watcher.ts:429` and
+  `agents-plugin-pi/src/mailbox-waiter.ts:135` (the same lines at v0.50.8)
+  prefer `from`/`reply_to` over `label` for the head. Pi's `:145` carries
+  `label` only in the structured details.
+- Record shape: T0. `steered_reports[].mail` is a new omitempty field. A
+  v0.50.8 daemon ignores it and requeues the labeled text, which shows a
+  stale label (display only). A record written by v0.50.8 has no `mail` and
+  requeues as before. The new tool, the marker (plain body text) and the
+  in-memory store change no stored shape.
+
+Minor review findings left open:
+
+- A named sender whose mail crossed worktrees gets its label resolved
+  against the recipient's root. This comes from the existing relation
+  mapping.
+- The runner test drives a fake legend; the real `LeadMailbox.Legend` is
+  pinned separately in mcp.
+- agy's direct tool list lacks `mailbox.recipients`. That list is outside
+  the ticket's loadout scope.
+
 ### Phase 2: Sender legend in the Claude/wsflow watcher and Pi
 
 Render the legend from the structured envelopes' `label`, for senders that
@@ -312,3 +474,70 @@ Verification:
   (install missing dependencies; compare any failure names against
   `develop`); the wsflow mirror test passes. Record exact commands in the
   Result.
+
+### Result (d10a5f980) - 2026-11-22
+
+Landed in d10a5f980.
+
+- Claude watcher: `agents-plugin/hooks/claude-mod/watcher.ts` adds
+  `mailLegend`. `formatBatch` puts its line second in the batch head, as the
+  daemon does for a hosted head. The wsflow copy is the rsync mirror.
+- Pi: `mailboxLegend` and `buildMailboxPushMessages` in
+  `agents-plugin-pi/src/mailbox-waiter.ts`, used by the `admit` mapping in
+  `index.ts`.
+  - Pi has no per-mail batch head. The envelopes enter the generic
+    `ws-push-batch` wrapper through `sendBatchToLead`, so the legend is a
+    first line and a blank line on the batch's first `ws-mailbox` message,
+    ahead of its `mail from` head. This is the daemon's own placement for a
+    submission with no batch head.
+  - The ticket named `spawner-push.ts` as the header site. It needed no edit.
+- Both adapters follow the Phase 1 contract:
+  - Entries are addressed senders (`from`, else `reply_to`) whose envelope
+    carries a `label`, one per distinct handle, in first-appearance order.
+  - A senderless envelope's `label` is its handle, so it never gets an entry.
+  - No labeled sender means no legend line, and the output is byte-identical
+    to before.
+  - Heads, bodies and Pi's `details` are unchanged.
+  - Each adapter re-cleans the label (newline to space, `;` and `]` dropped,
+    32 code points), in case a daemon of another version sent it raw.
+- Pi bundles and native payloads were regenerated (`npm run bundle`, then
+  `prepare-workflow-bundles.py` and `prepare-native-payload.py --first-party-only`).
+- agy: its direct tool list is a plain list, `DirectTools` in
+  `agents-plugin-tool/internal/wsagent/agy.go`. `mailbox.recipients` is added
+  beside `mailbox.send` and `mailbox.recv`, with
+  `TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt`. The Phase 1
+  minor finding about it is resolved. `mailbox.lookup_peers` was never on the
+  list and stays off it.
+
+Verification:
+
+- `claude plugin test` from `agents-plugin`: 850 pass, 0 fail across 20 files.
+  It includes `the sender legend names each labeled addressed sender once and
+  leaves heads and bodies alone` and `a labeled drain submits one prompt with
+  one legend ahead of the mail`. The wsflow copy is byte-identical, and
+  `TestWsflowHooksMirrorUpToDate` passes.
+- `npm ci --ignore-scripts && npm test` from `agents-plugin-pi`: 2696 tests,
+  2665 pass, 27 fail. Failing test names were compared against an export of
+  base commit 6fe652406 (`git archive`, same dependencies): it failed 52
+  tests, the 27 here are a subset of those 52, and none are new. The new
+  tests, `test/push-render.test.ts` and `test/mailbox-waiter.test.ts` (131
+  tests), pass. The Pi test `a labeled drain reaches the model as one steer
+  batch with one sender legend ahead of the mail` drives the real drain, then
+  `sendBatchToLead` and the FIFO batch materialization.
+  - The one bundle-freshness failure present before regeneration (`committed
+    Pi bundle matches the launcher's current input hash`) is gone after it.
+- `python3 -m unittest discover agents-plugin-wsflow/tests`: 22 tests, OK
+  (2 skipped).
+- From `agents-plugin-tool`, with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`:
+  - `go test ./internal/wsrsrc -count=1 -run 'TestPiMirrorUpToDate|TestWsflow'`: ok.
+  - `go test ./internal/wsagent -count=1 -run 'TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt|TestChildSafe'`: ok.
+  - `go test ./internal/mcp -count=1 -run 'TestHostedDirectToolDiscovery|TestHostedAgyToolsAlwaysLoad'`: ok.
+  - `go vet ./internal/wsagent`: clean.
+
+Review: one lite pass, clean, no findings.
+
+Decisions:
+
+- The legend sits on the batch head's second line in the watcher and on the
+  first mail message in Pi, matching the daemon's two placements.
+- Adapter-side cleaning duplicates the daemon's, as a guard only.

@@ -695,3 +695,31 @@ func TestMemStoreInPlaceContactWritePersists(t *testing.T) {
 		t.Fatalf("contact cwd after a restart = %q, want /after", cwd)
 	}
 }
+
+// TestStoreRingIdentityNamesTheCacheRoot pins the identity a mailbox group
+// compares routes by: every spelling of one cache root (here a symlink to
+// it) names the same ring, another cache root names another one, and a
+// store that did not resolve names none.
+func TestStoreRingIdentityNamesTheCacheRoot(t *testing.T) {
+	cache := t.TempDir()
+	link := filepath.Join(t.TempDir(), "cache-link")
+	if err := os.Symlink(cache, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	config := wsconfig.Options{ConfigHome: t.TempDir()}
+	direct := Paths{Config: config, State: wsstate.Options{CacheHome: cache}}.Store().RingIdentity()
+	viaLink := Paths{Config: config, State: wsstate.Options{CacheHome: link}}.Store().RingIdentity()
+	other := Paths{Config: config, State: wsstate.Options{CacheHome: t.TempDir()}}.Store().RingIdentity()
+	if direct == "" || direct != viaLink {
+		t.Fatalf("one cache root names one ring: direct %q, via a symlink %q", direct, viaLink)
+	}
+	if filepath.Base(direct) != RingDirName {
+		t.Fatalf("the identity is the ring directory, got %q", direct)
+	}
+	if other == "" || other == direct {
+		t.Fatalf("another cache root names another ring: %q vs %q", other, direct)
+	}
+	if got := (Store{err: fmt.Errorf("unresolved")}).RingIdentity(); got != "" {
+		t.Fatalf("an unresolved store names no ring, got %q", got)
+	}
+}

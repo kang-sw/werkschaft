@@ -28,7 +28,7 @@ import { buildPushContent, heldPushQueue, leadIdleRef, PUSH_FAMILIES, sendBatchT
 const AGENT_PUSH_FAMILIES = PUSH_FAMILIES.filter((family) => family.startsWith("ws-agent-"));
 import { approximateCodePointWidth } from "../src/tool-result-render.ts";
 import { PUSH_BATCH_CUSTOM_TYPE } from "../src/push-protocol.ts";
-import { buildMailboxPushMessage } from "../src/mailbox-waiter.ts";
+import { buildMailboxPushMessage, buildMailboxPushMessages, createBridgeDrain } from "../src/mailbox-waiter.ts";
 
 describe("buildPushRenderLines", () => {
   test("splits a real pushed message into head, payload and status", () => {
@@ -542,6 +542,39 @@ describe("buildPushBatchComponent", () => {
       heldPushQueue.length = 0;
       leadIdleRef.current = undefined;
     }
+  });
+
+  test("a labeled drain reaches the model as one steer batch with one sender legend ahead of the mail", async () => {
+    const sent: Array<{ message: any; options: any }> = [];
+    const pi = { sendMessage(message: unknown, options: unknown) { sent.push({ message, options }); } };
+    // The drain a live session runs, then the admit mapping index.ts hands the FIFO.
+    const wire = [
+      { reply_to: "id:worker", label: "Worker A", content: "one", sent_at: "2026-11-22T00:00:00Z" },
+      { from: "scout@worktree", content: "two" },
+      { reply_to: "id:worker", label: "Worker A", content: "three" },
+    ];
+    const envelopes = await createBridgeDrain(async () => ({ content: [{ type: "text", text: JSON.stringify(wire) }] }) as never, "k")();
+    leadIdleRef.current = () => false;
+    try {
+      sendBatchToLead(pi as never, buildMailboxPushMessages(envelopes), "steer");
+
+      assert.equal(sent.length, 1);
+      const content: string = sent[0]!.message.content;
+      assert.equal(content.split("[senders:").length, 2, "one legend per batch");
+      assert.ok(content.includes('[senders: id:worker = Worker A]\n\nmail from id:worker (2026-11-22T00:00:00Z):\none</message>'));
+      assert.ok(content.includes("mail from scout@worktree:\ntwo</message>"));
+      assert.ok(content.includes("mail from id:worker:\nthree</message>"));
+      // The structured details carry the envelopes as drained, bodies untouched.
+      assert.deepEqual(sent[0]!.message.details.items.map((item: any) => item.details.content), ["one", "two", "three"]);
+    } finally {
+      heldPushQueue.length = 0;
+      leadIdleRef.current = undefined;
+    }
+  });
+
+  test("an unlabeled drain has no legend and builds the same messages as before", () => {
+    const envelopes = [{ reply_to: "id:a", content: "x" }, { label: "pi:childone", content: "system" }];
+    assert.deepEqual(buildMailboxPushMessages(envelopes), envelopes.map(buildMailboxPushMessage));
   });
 
   test("a multi-mail drain behind a held prefix is queued whole, in order", () => {

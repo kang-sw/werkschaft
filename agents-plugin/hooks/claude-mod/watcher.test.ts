@@ -23,6 +23,7 @@ import {
   formatEnvelope,
   formatNotice,
   mailItems,
+  mailLegend,
   mapWaitExit,
   nextBackoff,
   parseRecvText,
@@ -386,6 +387,26 @@ describe('direct mode', () => {
     expect(h.submitted[0]).toContain('mail from id:a (t1):\nfirst')
     expect(h.submitted[0]).toContain('mail from p@machine:\nsecond')
     expect(h.waits.length).toBe(2)
+  })
+
+  test('a labeled drain submits one prompt with one legend ahead of the mail', async () => {
+    const h = harness('direct')
+    const w = createWatcher(h.edges)
+    w.bind('k1')
+    await tick()
+    h.drainQueue.push({
+      kind: 'mail',
+      mail: [
+        { reply_to: 'id:a', label: 'Worker A', content: 'first', sent_at: 't1' },
+        { from: 'p@machine', content: 'second' },
+        { reply_to: 'id:a', label: 'Worker A', content: 'third' },
+      ],
+    })
+    h.waits[0]!.d.resolve('mail')
+    await tick()
+    expect(h.submitted.length).toBe(1)
+    expect(h.submitted[0]!.split('[senders:').length).toBe(2)
+    expect(h.submitted[0]).toContain('\n[senders: id:a = Worker A]\n\nmail from id:a (t1):\nfirst\n\nmail from p@machine:\nsecond\n\nmail from id:a:\nthird')
   })
 
   test('an empty drain backs off instead of hot-looping', async () => {
@@ -1230,6 +1251,29 @@ describe('pure helpers', () => {
     expect(formatEnvelope({ ...mail, reply_to: 'id:abc123' })).toContain('mail from id:abc123 (')
     expect(formatEnvelope({ content: 'old shape' })).toBe('mail from unknown:\nold shape')
     expect(parseRecvText('[{"content":"bad label","label":5}]')).toEqual([{ raw: '{"content":"bad label","label":5}' }])
+  })
+
+  test('the sender legend names each labeled addressed sender once and leaves heads and bodies alone', () => {
+    const a = { reply_to: 'id:a', label: 'Worker A', content: 'one', sent_at: 't1' }
+    const b = { from: 'p@machine', label: 'Peer', content: 'two' }
+    const a2 = { reply_to: 'id:a', label: 'Worker A', content: 'three' }
+    const plain = { from: 'q@machine', content: 'no label' }
+    const system = { label: 'pi:childone', content: 'system mail' }
+    expect(mailLegend([a, b, a2, plain, system])).toBe('[senders: id:a = Worker A; p@machine = Peer]')
+    // No labeled addressed sender: no legend. A senderless label is its handle, not an entry.
+    expect(mailLegend([plain, system, { raw: 'x' }])).toBe('')
+    expect(mailLegend([])).toBe('')
+    // A label is one line without ';' or ']' and at most 32 code points.
+    expect(mailLegend([{ from: 'x@y', label: 'a;b]\nc', content: 'm' }])).toBe('[senders: x@y = ab c]')
+    expect(mailLegend([{ from: 'x@y', label: ';]', content: 'm' }])).toBe('')
+    expect(mailLegend([{ from: 'x@y', label: '가'.repeat(40), content: 'm' }])).toBe(`[senders: x@y = ${'가'.repeat(32)}]`)
+
+    const head = '[ws mailbox] 3 message(s) arrived for session_key k. They were already received through R; do not call it again for these.'
+    const batch = formatBatch('ws mailbox', 'R', 'k', [a, plain, a2])
+    expect(batch).toBe(`${head}\n[senders: id:a = Worker A]\n\n${formatEnvelope(a)}\n\n${formatEnvelope(plain)}\n\n${formatEnvelope(a2)}`)
+    // Heads and bodies are what they are without labels.
+    expect(formatEnvelope(a)).toBe('mail from id:a (t1):\none')
+    expect(formatBatch('ws mailbox', 'R', 'k', [plain])).toBe(`${head.replace('3 message', '1 message')}\n\n${formatEnvelope(plain)}`)
   })
 
   test('raw items and odd envelope fields format without throwing', () => {
