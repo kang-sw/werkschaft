@@ -63,11 +63,26 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 	j.writeMu.Lock()
 	defer j.writeMu.Unlock()
 	h.mu.Lock()
-	running, open, holder := !j.row.Terminal(), j.stdinOpen, j.row.HolderID
+	unknown, holder := j.stdinUnknown, j.row.HolderID
+	h.mu.Unlock()
+	if unknown {
+		// A holder that attached after Start reports its stdin now.
+		for _, info := range h.opts.Holders.List().Holders {
+			if info.ID == holder {
+				h.mu.Lock()
+				stdinFromHolderLocked(j, info)
+				h.mu.Unlock()
+			}
+		}
+	}
+	h.mu.Lock()
+	running, open, unknown := !j.row.Terminal(), j.stdinOpen, j.stdinUnknown
 	h.mu.Unlock()
 	switch {
 	case !running:
 		return h.view(j, 0), fmt.Errorf("exec job %s is not running (%s)", id, j.row.State)
+	case unknown:
+		return h.view(j, 0), fmt.Errorf("exec job %s's stdin state is not known yet: its holder is not attached; retry once it is", id)
 	case !open:
 		return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: it was given at launch, closed by eof, or the job is a legacy launch", id)
 	}

@@ -112,13 +112,16 @@ type fakeExecHolders struct {
 	inputClosed  map[string]bool
 	noInputState bool
 	inputCalls   int
+	// unattached lists holders the manager has not attached (yet): the
+	// listing gives them no child status.
+	unattached map[string]bool
 	// onSpawn runs after a spawn, outside the lock (the child's own
 	// behaviour: output, exit).
 	onSpawn func(id string)
 }
 
 func newFakeExecHolders() *fakeExecHolders {
-	return &fakeExecHolders{launched: map[string]wsholder.LaunchSpec{}, spawned: map[string]wsholder.SpawnSpec{}, inputs: map[string][]string{}, live: map[string]json.RawMessage{}, exited: map[string]bool{}, seq: map[string]uint64{}, inputClosed: map[string]bool{}}
+	return &fakeExecHolders{launched: map[string]wsholder.LaunchSpec{}, spawned: map[string]wsholder.SpawnSpec{}, inputs: map[string][]string{}, live: map[string]json.RawMessage{}, exited: map[string]bool{}, seq: map[string]uint64{}, inputClosed: map[string]bool{}, unattached: map[string]bool{}}
 }
 
 func (f *fakeExecHolders) LaunchWith(spec wsholder.LaunchSpec) (string, error) {
@@ -201,6 +204,10 @@ func (f *fakeExecHolders) List() wsholder.Listing {
 	defer f.mu.Unlock()
 	out := wsholder.Listing{}
 	for id, session := range f.live {
+		if f.unattached[id] {
+			out.Holders = append(out.Holders, wsholder.Info{ID: id, Cause: wsholder.CauseNoAnswer, Session: session})
+			continue
+		}
 		child := &wsholder.ChildStatus{State: "running"}
 		if f.exited[id] {
 			child.State = "exited"
@@ -859,6 +866,38 @@ func TestHostedPartialWriteSaysWhatToResend(t *testing.T) {
 	fx.holders.mu.Unlock()
 	if _, err := fx.h.Write("lead", v.ID, data[512<<10:], true); err != nil {
 		t.Fatalf("the resend after a partial write = %v", err)
+	}
+}
+
+// TestHostedStdinSettlesOnALaterAttach: a rejoined job whose holder did
+// not attach by Start has an unknown stdin; a write refuses without
+// reaching the holder until the holder attaches, then delivers.
+func TestHostedStdinSettlesOnALaterAttach(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.holders.mu.Lock()
+	fx.holders.unattached[v.HolderID] = true
+	fx.holders.mu.Unlock()
+	fx.open(10 * time.Millisecond)
+	if _, err := fx.h.Write("lead", v.ID, []byte("early\n"), false); err == nil || !strings.Contains(err.Error(), "not known yet") {
+		t.Fatalf("a write before the holder attached = %v", err)
+	}
+	// The manager's rescan attaches the holder.
+	fx.holders.mu.Lock()
+	delete(fx.holders.unattached, v.HolderID)
+	fx.holders.mu.Unlock()
+	if _, err := fx.h.Write("lead", v.ID, []byte("later\n"), true); err != nil {
+		t.Fatalf("a write after the holder attached = %v", err)
+	}
+	if got := fx.holders.inputOf(v.HolderID); !slices.Equal(got, []string{"later\n<EOF>"}) {
+		t.Fatalf("inputs = %q", got)
+	}
+	if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil || !strings.Contains(err.Error(), "no open stdin") {
+		t.Fatalf("a write after the eof = %v", err)
 	}
 }
 

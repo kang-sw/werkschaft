@@ -67,7 +67,10 @@ type hostedJob struct {
 	// stdinOpen: the job's stdin takes exec.write. writeMu orders the
 	// writes, so an eof closes it only once its holder took the eof.
 	stdinOpen bool
-	writeMu   sync.Mutex
+	// stdinUnknown: a rejoined job whose holder has not reported its
+	// stdin yet (not attached); a write asks the listing again first.
+	stdinUnknown bool
+	writeMu      sync.Mutex
 	// stopping: exec.stop or an interrupt asked for the end; the end is
 	// then HostedStopped and sends no notice.
 	stopping   bool
@@ -121,13 +124,29 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 			h.rings.Restore(j.out, row.Written, row.Tails[StreamStdout], row.Tails[StreamStderr], row.Tails[StreamCombined])
 			close(j.done)
 		} else if row.HolderID != "" {
-			// stdin stays closed until Start reads the live holder's
-			// report: the row does not record an eof exec.write sent.
+			// stdin waits for the live holder's report (Start, or a later
+			// write): the row does not record an eof exec.write sent.
 			h.byHolder[row.HolderID] = j
+			j.stdinUnknown = !row.Legacy
 		}
 		h.jobs[row.ID] = j
 	}
 	return h, nil
+}
+
+// stdinFromHolderLocked settles a rejoined job's unknown stdin from its
+// holder's listing. The holder keeps a pipe child's stdin across a daemon
+// replacement and says whether an eof closed it; an attached holder that
+// does not say (one that predates the field) leaves it closed, so no write
+// claims success. An unattached holder (no child status) leaves it
+// unknown for a later look. h.mu is held.
+func stdinFromHolderLocked(j *hostedJob, info wsholder.Info) {
+	if !j.stdinUnknown || info.Child == nil {
+		return
+	}
+	j.stdinUnknown = false
+	c := info.Child
+	j.stdinOpen = c.State == "running" && c.InputClosed != nil && !*c.InputClosed
 }
 
 // RunningOwners counts the jobs still running by their owning conversation
@@ -179,11 +198,8 @@ func (h *Hosted) Start() {
 		j := h.jobs[execID]
 		owned := j != nil && j.row.HolderID == info.ID
 		ended := owned && j.row.Terminal()
-		if owned && !ended && !j.row.Legacy {
-			// The holder keeps a pipe child's stdin across a daemon
-			// replacement and says whether an eof closed it; one that
-			// does not say leaves it closed, so no write claims success.
-			j.stdinOpen = info.Child != nil && info.Child.State == "running" && info.Child.InputClosed != nil && !*info.Child.InputClosed
+		if owned && !ended {
+			stdinFromHolderLocked(j, info)
 		}
 		h.mu.Unlock()
 		switch {
