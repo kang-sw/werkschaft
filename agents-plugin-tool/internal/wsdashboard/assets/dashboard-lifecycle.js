@@ -1295,6 +1295,10 @@
         return page && typeof page.wsPersistDraftForWindowClose === "function" &&
           page.wsPersistDraftForWindowClose();
       }));
+      // Settings repo proposals live in this window's memory
+      // (dashboard-settings-extras.js) and outlive a dropped Settings frame.
+      var settingsDrafts = window.wsSettingsRepoDrafts;
+      if (settingsDrafts && Array.from(settingsDrafts.values()).some(function (draft) { return draft && draft.size > 0; })) return false;
       return shFrames.length === frames.length && frames.every(function (entry, i) {
         return entry === shFrames[i] && results[i] === true;
       });

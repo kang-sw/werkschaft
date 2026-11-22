@@ -347,6 +347,19 @@ const snapshot = '/api/config/snapshot';
     await proposal('copy').waitFor({ state:'hidden' });
     assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'cleared repo proposal releases native close');
 
+    // The shell keeps a staged proposal after the Settings frame is gone; a
+    // ready session frame must not let the native close skip its prompt.
+    await setLanguage('Staged before leaving', null, false);
+    await ensureRailOpen();
+    await page.locator('.rs[data-rid=' + JSON.stringify(session) + '] .rl').click();
+    await page.locator('.ws-confirm button', { hasText: '나가기' }).click();
+    await page.waitForFunction(() => document.querySelector('iframe.sframe.on') && !document.querySelector('iframe.sframe[src^="/settings"]'));
+    await page.frameLocator('iframe.sframe.on').locator('#grid:not([inert])').waitFor();
+    assert.equal(await page.evaluate(() => [...window.wsSettingsRepoDrafts.values()].some(d => d.size > 0)), true, 'the shell still holds the staged proposal');
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), false, 'a staged proposal holds native close after leaving Settings');
+    await page.evaluate(() => window.wsSettingsRepoDrafts.clear());
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'the ready session frame alone lets native close go');
+
     assert.deepEqual(errors, []);
     console.log('Verified settings scopes, navigation, authorization, mutations, profiles, prompt diff, proposals and 8 visual captures.');
   } finally {
