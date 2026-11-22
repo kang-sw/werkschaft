@@ -579,6 +579,9 @@
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
     },
+    "261123-bug-ws-daemon-replace-gap-older-daemon": {
+      "registered_at": "2026-11-22T20:54:14Z"
+    },
     "261123-bug-ws-exec-cutover-worker-authority": {
       "registered_at": "2026-11-22T20:28:58Z"
     },
