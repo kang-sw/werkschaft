@@ -184,7 +184,8 @@ async function checkKeyedRebuild(frame) {
 
       // Hover-card context row: A normal bar (linked h2), B past the ws soft
       // threshold (the same linked session after a refresh, updated in place
-      // while hovered), C window unknown (unlinked h5, tokens only).
+      // while hovered), D an unlinked hosted child with the ws thresholds on its row (h5),
+      // C no scale at all (unlinked h10, tokens only).
       {
         const tip = frame.locator('#hud-tooltip');
         const row = tip.locator('.tt-ctx');
@@ -204,7 +205,14 @@ async function checkKeyedRebuild(frame) {
         assert.equal(await row.locator('.pct').textContent(), '78%');
         assert.equal(await row.locator('.m-soft').count(), 1);
         if (shots) await tip.screenshot({ path: `${shots}/hud-ctx-B-${scheme}.png` });
+        // D: an unlinked hosted child, scaled by the ws thresholds on its own row.
         await frame.locator('#agcompact .hud-node[data-id="h5"]').hover();
+        await frame.waitForFunction(() => document.querySelector('#hud-tooltip .tt-ctx.warn'));
+        assert.equal(await row.locator('.pct').textContent(), '78%');
+        assert.equal(await row.locator('.tok').textContent(), '156k / 200k');
+        assert.equal(await row.locator('.m-soft').count(), 1);
+        if (shots) await tip.screenshot({ path: `${shots}/hud-ctx-D-unlinked-${scheme}.png` });
+        await frame.locator('#agcompact .hud-node[data-id="h10"]').hover();
         await frame.waitForFunction(() => document.querySelector('#hud-tooltip .tt-ctx.d-unknown'));
         assert.equal(await row.locator('.bar').count(), 0, 'C: no bar');
         assert.equal(await row.locator('.tok').textContent(), '컨텍스트 41.0k');

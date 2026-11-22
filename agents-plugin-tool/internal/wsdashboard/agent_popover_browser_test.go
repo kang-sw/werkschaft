@@ -245,12 +245,19 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 		Agents: foldedAgents,
 	}
 
-	// Context figures for the hover card: h5 is an unlinked agent with tokens
-	// and no window (variant C); the linked rows take boardsession's own usage,
+	// Context figures for the hover card: h5 is an unlinked hosted agent with
+	// ws thresholds on its row (a bar), h10 an unlinked agent with tokens and
+	// no scale (variant C); the linked rows take boardsession's own usage,
 	// normal (variant A) by default and past its ws soft threshold (variant B)
 	// when a scenario asks for usage=soft.
 	for i := range heavy.Agents {
-		if heavy.Agents[i].ID == "h5" {
+		switch heavy.Agents[i].ID {
+		case "h5":
+			// Unlinked hosted child: its runner carried the ws thresholds on the row.
+			heavy.Agents[i].ContextTokens = 156_000
+			heavy.Agents[i].ContextWindow = 1_000_000
+			heavy.Agents[i].ContextCompaction = &wslive.UsageCompaction{Soft: 140_000, Hard: 200_000}
+		case "h10":
 			heavy.Agents[i].ContextTokens = 41_000
 		}
 	}
