@@ -279,16 +279,20 @@ pub fn sanitize(name: &str) -> Option<String> {
     if cleaned.is_empty() {
         return None;
     }
-    let (stem, ext) = split_extension(cleaned);
-    let stem = if is_reserved_device(stem) {
-        format!("_{stem}")
+    // Windows takes the device name from before the first dot, so
+    // "nul.tar.gz" and "con.a.b" are as unusable as "nul".
+    let first = cleaned.split('.').next().unwrap_or_default();
+    let cleaned = if is_reserved_device(first) {
+        format!("_{cleaned}")
     } else {
-        stem.to_owned()
+        cleaned.to_owned()
     };
-    Some(clip(&stem, ext, NAME_MAX))
+    let (stem, ext) = split_extension(&cleaned);
+    Some(clip(stem, ext, NAME_MAX))
 }
 
-/// Windows device names, with or without an extension, name no file.
+/// Windows device names, with or without extensions, name no file; `stem` is
+/// the name up to its first dot.
 fn is_reserved_device(stem: &str) -> bool {
     let stem = stem.trim_end().to_ascii_uppercase();
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
@@ -415,6 +419,12 @@ mod tests {
             ("nul.txt", "_nul.txt"),
             ("com1.log", "_com1.log"),
             ("com10.log", "com10.log"),
+            ("nul.tar.gz", "_nul.tar.gz"),
+            ("con.report.final.txt", "_con.report.final.txt"),
+            ("Aux.v1.2.zip", "_Aux.v1.2.zip"),
+            ("lpt1 .a.b", "_lpt1 .a.b"),
+            ("console.a.b", "console.a.b"),
+            ("a.con.txt", "a.con.txt"),
         ] {
             assert_eq!(sanitize(raw).as_deref(), Some(want), "{raw:?}");
         }
