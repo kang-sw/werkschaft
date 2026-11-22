@@ -333,6 +333,36 @@ var configRegistry = []configKeyEntry{
 		ResolverBacked:        true,
 	},
 	{
+		Key:        wsconfig.ItemExecNativeToolRemoval,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{
+			{
+				Name:        "harness",
+				Description: "Harness bucket the value applies to. When omitted, defaults to the current session's detected harness. Use * explicitly for every harness (all).",
+				Enum:        promptHarnessEnum,
+			},
+			{
+				Name:        "scope",
+				Description: "Storage scope. When omitted the write lands in the item's declared default scope (global).",
+				Enum:        wsconfig.ScopeSchemaEnum(),
+			},
+		},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "on removes a dashboard-hosted session's native shell and background process tools at its next process start, in favour of the ws exec tools; off keeps them. Omit when reset is true.",
+			Enum:        onOffEnum,
+		}},
+		HarnessApplicable: true,
+		// Agentless ws-mcp has no exec tools, so the switch has nothing to
+		// act on there.
+		NoAgentVisible: false,
+		// A lead-only knob: it changes what every hosted session of the
+		// harness can run, so a write needs a lead session_key.
+		RequiresLeadAuthority: true,
+		ResolverBacked:        true,
+	},
+	{
 		Key:        wsconfig.ItemWorkflowProfile,
 		WriterTool: "config.tune",
 		ResetTool:  "config.tune",

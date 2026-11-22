@@ -122,6 +122,9 @@ type fakeHolders struct {
 	// scanHook, when set, runs at the start of each Scan, before it takes
 	// the lock (gateScan).
 	scanHook func()
+	// incomplete is the listing's Incomplete: the last scan could not read
+	// every holder's registration.
+	incomplete bool
 	// failInput fails the next n inputs whose first line has a type (a
 	// negative n fails every one), as a write to a gone child does; the
 	// failed input reaches no child.
@@ -223,7 +226,7 @@ func (f *fakeHolders) Scan() {
 func (f *fakeHolders) List() wsholder.Listing {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out wsholder.Listing
+	out := wsholder.Listing{Incomplete: f.incomplete}
 	for _, id := range f.order {
 		h := f.holders[id]
 		if h == nil || !h.known {
@@ -785,16 +788,19 @@ func (b *logBuffer) String() string {
 // fake holder host: nothing is executed, and the test writes the harness's
 // output lines itself.
 type leadHarness struct {
-	t       *testing.T
-	dir     string
-	root    string
-	opts    Options
-	holders *fakeHolders
-	keys    *fakeLeadKeys
-	mail    *fakeMail
-	log     *logBuffer
-	runner  *Runner
-	syncs   int
+	// execJobs, when set, is bound as the hosted exec jobs of every runner
+	// the harness starts.
+	execJobs ExecJobs
+	t        *testing.T
+	dir      string
+	root     string
+	opts     Options
+	holders  *fakeHolders
+	keys     *fakeLeadKeys
+	mail     *fakeMail
+	log      *logBuffer
+	runner   *Runner
+	syncs    int
 	// notes counts the runner's page notifications.
 	notes atomic.Int64
 }
@@ -912,6 +918,9 @@ func leadLauncherPlugin(t *testing.T, argv []string) string {
 func (h *leadHarness) start() *leadHarness {
 	h.runner = NewRunner(h.opts)
 	h.runner.Start(func(string, string) { h.notes.Add(1) })
+	if h.execJobs != nil {
+		h.runner.BindExecJobs(h.execJobs)
+	}
 	h.t.Cleanup(h.runner.Close)
 	return h
 }

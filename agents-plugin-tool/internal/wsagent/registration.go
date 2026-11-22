@@ -74,6 +74,9 @@ type BackendRegistration struct {
 	Profiles []BuiltinProfileRegistration
 	// PlaybookTerminology supplies static harness wording for playbook renders.
 	PlaybookTerminology PlaybookTerminology
+	// ExecCutover is the backend's verified native process tool removal
+	// (exec_cutover.go); nil keeps every session's native tools.
+	ExecCutover *ExecCutoverSupport
 }
 
 // PlaybookTerminology holds static native-tool idioms. Model, effort, and

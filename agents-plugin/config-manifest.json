@@ -82,6 +82,13 @@
       "minimum": 1,
       "default": 10,
       "description": "Claude Code only (unused on other hosts): how many minutes apart the MCP watchdog (claude.mcp_watchdog_enabled) looks at whether this plugin's MCP server still has tools listed; the first look comes one interval after session start. Only used when claude.mcp_watchdog_enabled is true. Read at session start, so a change applies from the next session. Only the project, global, and built-in values apply; a session- or repo-scope tune is not read. A failed or refused read, or a value that is not a positive integer, takes this package's built-in value."
+    },
+    {
+      "key": "claude.exec_cutover_enabled",
+      "type": "boolean",
+      "default": false,
+      "default_scope": "global",
+      "description": "Claude Code only (unused on other hosts): when true, a dashboard-hosted Claude Code session may start under the exec cutover: launched without its native shell and background process tools (Bash, PowerShell, Monitor, TaskStop, BashOutput, KillShell), it runs commands through the ws exec tools over its ws-mcp session route (/mcp/session) instead. Every other cutover condition still applies, including exec.native_tool_removal for claude, a verified Claude Code version, and the trusted ws-mcp binding. When false (the default), Claude sessions keep their native tools and their commands do not depend on that route. Turning it on blocks pre-0.51 sessions from that path: a ws daemon older than 0.51 (0.50.8 and earlier) answers a cutover session's /mcp/session calls with 401 and lists no exec tools, so such a session runs without a shell until that daemon restarts it; leave it off while a pre-0.51 daemon may take over these sessions. Read at each new process start, so a running process keeps what it started with. Session, repo, project, global, and built-in values apply."
     }
   ]
 }

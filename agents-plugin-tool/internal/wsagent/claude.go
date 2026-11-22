@@ -36,6 +36,9 @@ func (b ClaudeBackend) registration() (string, BackendRegistration) {
 		WorkerCapable:    true,
 		WorkerProfile:    AgentWorkerProfile(BackendClaude),
 		WorkerHTTPMCP:    true,
+		// --disallowedTools claudeNativeProcessTools, verified on 2.1.330
+		// (testdata/claude-2.1.330-native-process-tools.jsonl).
+		ExecCutover: &ExecCutoverSupport{Since: "2.1.330"},
 		PlaybookTerminology: PlaybookTerminology{
 			ExploreAgent:  "the Explore agent",
 			ContinueIdiom: "SendMessage(to: <agentId>)",
@@ -160,6 +163,14 @@ func claudeLeadArgs(spec StartSpec) ([]string, error) {
 	return append(args, "--allowedTools", "mcp__"+claudeNamePart(ReservedMCPServer)), nil
 }
 
+// claudeNativeProcessTools are the built-in process tools the exec cutover
+// removes: the shell (Bash, and PowerShell where Claude offers it), the
+// background-shell monitor and task stop, and the older background-shell
+// names (BashOutput, KillShell). Claude 2.1.330 accepts the names it does
+// not have and, without Bash, lists native Glob and Grep instead
+// (testdata/claude-2.1.330-native-process-tools.jsonl).
+var claudeNativeProcessTools = []string{"Bash", "PowerShell", "Monitor", "TaskStop", "BashOutput", "KillShell"}
+
 // claudeRemovedTools are the built-in tools spec's launch removes with
 // --disallowedTools, over a worker's --tools and a lead's own settings.
 // The variadic option receives the list as one comma-separated value.
@@ -167,6 +178,9 @@ func claudeRemovedTools(spec StartSpec) []string {
 	var removed []string
 	if spec.RemoveSubagents {
 		removed = append(removed, claudeSubagentTool, claudeInitToolNames[claudeSubagentTool])
+	}
+	if spec.ExecCutover {
+		removed = append(removed, claudeNativeProcessTools...)
 	}
 	if spec.Lead == nil && !spec.Profile.Skills {
 		// The slash-command switch disables native /compact. Deny model
@@ -248,6 +262,10 @@ func claudeAllowedRules(spec StartSpec) []string {
 		wsTools := spec.Profile.WSTools
 		if spec.PermissionLevel == PermissionReadOnly {
 			wsTools = childSafeWSToolsFor(spec.Profile)
+			if spec.ExecCutover {
+				// The exec tools replace the removed shell at every authority.
+				wsTools = append(wsTools, cutoverToolsFor(spec.Profile, ExecWSTools)...)
+			}
 		}
 		for _, name := range wsTools {
 			rules = append(rules, claudeMCPToolName(ReservedMCPServer, name))
