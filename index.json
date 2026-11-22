@@ -638,19 +638,6 @@
         }
       }
     },
-    "261122-feat-ws-agy-stream-stall-cutoff": {
-      "registered_at": "2026-11-22T08:42:05Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T08:55:45Z",
-        "impl": {
-          "branch": "impl/develop/silk-tibia-palm"
-        }
-      }
-    },
     "261122-feat-ws-builtin-agent-harness": {
       "registered_at": "2026-11-22T08:45:27Z"
     },
@@ -704,6 +691,9 @@
     },
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
+    },
+    "261122-fix-ws-dogfood-surprises-batch": {
+      "registered_at": "2026-11-22T10:47:31Z"
     }
   }
 }
