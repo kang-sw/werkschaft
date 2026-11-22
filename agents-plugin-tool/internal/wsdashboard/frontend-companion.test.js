@@ -6,11 +6,72 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["packs", "compositor", "scenarios"]) {
+  for (const name of ["packs", "compositor", "scenarios", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
 }
+
+function snapshot(...entries) {
+  const nodes = entries.map(([rid, x = {}]) => ({
+    dataset: {rid, asks: x.asks ?? "", busy: x.busy ? "1" : "", active: x.active ? "1" : ""},
+    matches: () => !!x.ended,
+    hasAttribute: key => key === "data-ap" ? !!x.approval : key === "data-g" && !!x.parent,
+    querySelector: key => (key === ".hb.err" && x.failure || key === ".kap" && x.rollup) ? {} : null,
+    closest: key => key === ".rkids" && x.parent ? {dataset: {parent: x.parent}} : null
+  }));
+  return {querySelectorAll: key => { assert.equal(key, ".rs[data-rid]"); return nodes; }};
+}
+
+test("companion rail snapshots baseline silently and arbitrate error, child approval, asks and background turns", () => {
+  const { railSignals } = companion(), observer = railSignals();
+  const busy = {busy: true, active: true};
+  assert.equal(observer.read(snapshot(["active"], ["background", busy], ["parent"], ["child", {parent: "parent"}]), "active", true), null);
+  assert.equal(observer.posture("active", "idle").activity, "tool");
+  assert.equal(observer.posture("background", "idle").activity, "idle");
+  const failed = observer.read(snapshot(["active", {asks: "3 4"}], ["background", {failure: true}],
+    ["parent", {rollup: true}], ["child", {parent: "parent", approval: true}]), "active", false);
+  assert.equal(failed.kind, "session.error");
+  assert.equal(failed.rid, "background");
+  assert.equal(observer.posture("active", "thinking").rid, "child");
+  assert.equal(observer.posture("active", "error").activity, "permission");
+  assert.equal(observer.posture("active", "permission").rid, "active");
+  assert.equal(observer.read(snapshot(["active", {asks: "4"}], ["background"], ["parent"], ["child", {parent: "parent"}]), "active", false), null);
+  const approved = observer.read(snapshot(["active", {asks: "4"}], ["background", {asks: "1"}],
+    ["parent", {rollup: true}], ["child", {parent: "parent", approval: true}]), "active", false);
+  assert.equal(approved.token, "perm:child");
+  assert.equal(observer.read(snapshot(["active", {asks: "4"}], ["background", {asks: "1"}], ["parent", {rollup: true}]), "active", false).token, "perm:parent");
+  assert.equal(observer.read(snapshot(["active", {asks: "4 7"}], ["background", {approval: true}]), "active", false).token, "ask:active:7");
+  assert.equal(observer.read(snapshot(["active", busy], ["background", busy]), "active", true), null);
+  assert.equal(observer.read(snapshot(["active", busy], ["background", {busy: true}]), "active", false), null);
+  const done = observer.read(snapshot(["active"], ["background"]), "active", false);
+  assert.equal(done.rid, "background");
+  assert.equal(done.kind, "global.session_done");
+  assert.equal(observer.read(snapshot(["active"], ["background", {failure: true, asks: "11"}]), "active", true), null);
+  assert.equal(observer.posture("active", "typing_user").activity, "error");
+  assert.equal(observer.read(snapshot(["active"], ["background", {failure: true, asks: "11"}]), "active", false), null);
+});
+
+test("companion cross-source ask and permission dedup prefers the frame in either arrival order", () => {
+  const { signalPairs, scenarioRunner } = companion(), pairs = signalPairs(), runner = scenarioRunner();
+  const state = {routeKind: "session", pose: "stand", idleMs: 0};
+  for (const [token, first, second] of [["ask:current:4", "rail", "frame"], ["perm:current", "frame", "rail"]]) {
+    assert.equal(pairs.observe({token, source: first}, 0), false);
+    assert.equal(pairs.observe({token, source: second}, 200), true);
+    assert.equal(pairs.observe({token, source: first}, 400), false);
+  }
+  const rail = {token: "ask:other:3", source: "rail", rid: "other"};
+  const frame = {token: "ask:current:4", source: "frame", rid: "current"};
+  runner.fire("ask.open", 0, state, rail);
+  runner.fire("ask.open", 100, state, frame);
+  runner.fire("ask.open", 110, state, rail);
+  assert.equal(runner.tick(110).signal.rid, "current");
+  runner.reset();
+  runner.fire("ask.open", 200, state, rail);
+  runner.preferFrame({...rail, source: "frame"});
+  assert.equal(runner.tick(300).start, 200);
+  assert.equal(runner.tick(300).signal.source, "frame");
+});
 
 test("companion keyframes run in seconds, preserve step jumps and hold non-looping endpoints", () => {
   const { motion } = companion();

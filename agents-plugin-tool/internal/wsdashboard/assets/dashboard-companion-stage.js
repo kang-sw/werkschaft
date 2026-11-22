@@ -9,6 +9,87 @@
     sparkle: { kind: "particles", glyphs: ["✦", "✧", "✦"], color: "#e6aa34" },
     zzz: { kind: "float", text: "Zzz", color: "#8fa0b8" }
   };
+  const railRowSelector = ".rs[data-rid]";
+  let mountedRailObserver;
+
+  function railSignals() {
+    let rows = new Map();
+
+    function read(fragment, activeRid, baseline) {
+      const nodes = fragment.querySelectorAll(railRowSelector), next = new Map();
+      const childApprovals = new Set();
+      for (const row of nodes) {
+        if (!row.matches(".ended, .stopped") && row.hasAttribute("data-ap")) {
+          const parent = row.closest(".rkids")?.dataset.parent;
+          if (parent) childApprovals.add(parent);
+        }
+      }
+      let winner = null;
+      function offer(id, kind, priority, order, token) {
+        const active = id === activeRid;
+        const rank = priority * 4 + (active ? 2 : 0) + order;
+        if (!winner || rank > winner.rank) winner = { rid: id, kind, token, rank, source: "rail" };
+      }
+      for (const row of nodes) {
+        const id = row.dataset.rid;
+        if (!id || next.has(id) || row.matches(".ended, .stopped")) continue;
+        const previous = rows.get(id), busy = row.dataset.busy === "1", top = !row.hasAttribute("data-g");
+        const active = row.dataset.active === "1";
+        const ownedWork = busy && (active || !!(previous?.busy && previous.ownedWork));
+        const approval = row.hasAttribute("data-ap") || top && !childApprovals.has(id) && !!row.querySelector(".kap");
+        const failure = !!row.querySelector(".hb.err");
+        const asks = row.dataset.asks === undefined ? null : new Set(row.dataset.asks.trim().split(/\s+/).filter(Boolean));
+        next.set(id, { busy, ownedWork, active, top, approval, failure, asks });
+        if (baseline) continue;
+        if (failure && !previous?.failure) offer(id, "session.error", 70, 0);
+        if (approval && !previous?.approval) offer(id, "ask.open", 65, 1, "perm:" + id);
+        if (asks && previous?.asks) {
+          for (const ask of asks) {
+            if (!previous.asks.has(ask)) offer(id, "ask.open", 65, 0, "ask:" + id + ":" + ask);
+          }
+        }
+        if (id !== activeRid && top && previous?.top && previous.busy && previous.ownedWork && !busy && !approval && !failure) {
+          offer(id, "global.session_done", 52, 0);
+        }
+      }
+      rows = next;
+      return winner;
+    }
+
+    function posture(activeRid, activity) {
+      let permission = "", failure = "", working = 0;
+      for (const [id, row] of rows) {
+        if (row.approval && (!permission || id === activeRid)) permission = id;
+        if (row.failure && (!failure || id === activeRid)) failure = id;
+        if (id !== activeRid && row.active && !row.approval && !row.failure) working++;
+      }
+      if (activity === "permission") return { activity, rid: activeRid };
+      if (permission) return { activity: "permission", rid: permission };
+      if (activity === "error") return { activity, rid: activeRid };
+      if (failure) return { activity: "error", rid: failure };
+      if (activity === "idle" && working) return { activity: "tool", rid: "" };
+      return { activity, rid: "" };
+    }
+    return { read, posture };
+  }
+
+  function signalPairs() {
+    const pending = new Map();
+    return {
+      observe(signal, stamp) {
+        if (!/^(?:ask|perm):/.test(signal.token || "")) return false;
+        for (const [key, prior] of pending) if (stamp - prior.stamp > 1250) pending.delete(key);
+        const prior = pending.get(signal.token);
+        if (prior && prior.source !== signal.source) {
+          pending.delete(signal.token);
+          return true;
+        }
+        pending.set(signal.token, { source: signal.source, stamp });
+        return false;
+      },
+      clear() { pending.clear(); }
+    };
+  }
 
   function mount(config, mute) {
     const doc = document, root = doc.documentElement, rail = doc.getElementById("rail");
@@ -36,6 +117,9 @@
 
     let model, rig, view, runner = C.scenarioRunner(), timing = C.timing(), fxContext = null;
     let state = window.WsShell.companionContext();
+    let activeRid = root.dataset.rid || "", posture = { activity: "idle", rid: "" }, switchedAt = -Infinity;
+    let markedRid, railMark;
+    const railEvents = railSignals(), pairs = signalPairs();
     let currentConfig = config, preset = config.preset;
     let frame = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
     let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, lastCount;
@@ -59,6 +143,7 @@
       rig = next;
       runner = C.scenarioRunner(pack.manifest.scenarios);
       timing = C.timing(pack.manifest);
+      if (now - switchedAt < 900) runner.fire("route.switch", switchedAt, guards);
       viewBeat = null;
       dirty = true;
       node.dataset.pack = pack.id;
@@ -97,14 +182,19 @@
       loader.load(currentConfig.pack || "default", state, force);
     }
 
-    function reset() {
+    function reset(id, switched) {
       if (custom?.mark) custom = { x: position.x, y: position.y };
-      state = window.WsShell.companionContext();
+      activeRid = id || "";
+      state = window.WsShell.companionContext(activeRid ? "session" : "home");
       marks = Object.create(null);
       runner.reset();
+      pairs.clear();
       viewBeat = null;
       nextIdle = now + 45000;
       lastBusy = now;
+      switchedAt = switched ? now : -Infinity;
+      if (switched) fire("route.switch");
+      updatePosture();
       requestPack();
       invalidated();
     }
@@ -125,16 +215,41 @@
       if (composer?.left !== previousComposer?.left || composer?.y !== previousComposer?.y) dirty = true;
       requestPack();
       if (previous === "replying" && state.activity !== "replying") runner.endReply();
-      if (previous !== state.activity) { lastBusy = now; nextIdle = now + 45000; }
-      for (const event of payload.events) if (event && typeof event.kind === "string") fire(event.kind);
+      updatePosture();
+      for (const event of payload.events) {
+        if (!event || typeof event.kind !== "string") continue;
+        const token = typeof event.token === "string" ? event.token : "";
+        const rid = token.startsWith("perm:") ? token.slice(5) : payload.sessionId;
+        receiveSignal({ kind: event.kind, token, rid, source: "frame" });
+      }
       schedule();
     }
 
-    function fire(kind) {
+    function updatePosture() {
+      const next = railEvents.posture(activeRid, state.activity);
+      if (next.activity !== posture.activity) { lastBusy = now; nextIdle = now + 45000; }
+      posture = next;
+    }
+
+    function receiveSignal(signal) {
+      if (pairs.observe(signal, performance.now())) {
+        if (signal.source === "frame") runner.preferFrame(signal);
+      } else fire(signal.kind, signal);
+    }
+
+    function observeRail(fragment, id, baseline) {
+      activeRid = id || "";
+      const signal = railEvents.read(fragment, activeRid, baseline);
+      updatePosture();
+      if (signal) receiveSignal(signal);
+      schedule();
+    }
+
+    function fire(kind, signal) {
       guards.routeKind = state.routeKind;
       guards.pose = view?.pose || "stand";
-      guards.idleMs = state.activity === "idle" ? now - lastBusy : 0;
-      runner.fire(kind, now, guards);
+      guards.idleMs = posture.activity === "idle" ? now - lastBusy : 0;
+      runner.fire(kind, now, guards, signal);
       if (kind.startsWith("user.")) {
         lastBusy = now;
         nextIdle = now + 45000;
@@ -143,6 +258,7 @@
 
     function layout() {
       dirty = false;
+      markedRid = undefined;
       vw = window.innerWidth;
       vh = window.innerHeight;
       dpr = window.devicePixelRatio || 1;
@@ -195,7 +311,7 @@
     }
     const railChanges = new MutationObserver(() => { observeRail(); invalidated(); });
     if (rail) {
-      railChanges.observe(rail, { childList: true, subtree: true, attributes: true, attributeFilter: ["open"] });
+      railChanges.observe(rail, { childList: true, subtree: true, attributes: true, attributeFilter: ["open", "class"] });
       rail.addEventListener("scroll", invalidated, { ...options, capture: true });
       rail.addEventListener("transitionend", invalidated, options);
       observeRail();
@@ -205,6 +321,31 @@
 
     function target() {
       return custom?.mark ? marks[custom.mark] || custom : custom || home;
+    }
+
+    function railLandmark(id) {
+      if (markedRid === id) return railMark;
+      markedRid = id;
+      railMark = null;
+      if (!id || !rail) return railMark;
+      const row = rail.querySelector('.rs[data-rid="' + CSS.escape(id) + '"]');
+      let rect = row?.getBoundingClientRect();
+      const parent = row?.closest(".rkids")?.previousElementSibling;
+      if ((!rect?.width || !rect.height) && parent?.matches(railRowSelector)) rect = parent.getBoundingClientRect();
+      if (rect?.width && rect.height && rect.right > 0 && rect.bottom > 0 && rect.left < vw && rect.top < vh) {
+        railMark = { x: rect.left + rect.width / 2, y: rect.top };
+      }
+      return railMark;
+    }
+
+    function gazeMark(key, playing) {
+      const signal = playing?.signal;
+      const rid = signal?.rid || (!playing ? posture.rid : "");
+      if (key === "rail-alert") return railLandmark(rid);
+      if (key === "whiteboard-ask" && rid) {
+        return (signal?.source === "frame" || rid === activeRid ? marks[key] : null) || railLandmark(rid);
+      }
+      return C.own(marks, key === "caret" ? "composer-top" : key);
     }
 
     function measureCharacter() {
@@ -389,10 +530,10 @@
       if (quip && !quip.hidden) quip.style.transform = "translate3d(" + position.x + "px," + (position.y - size * 0.95) + "px,0)";
     }
 
-    function look(age, dt) {
+    function look(age, dt, playing) {
       const key = beat.gaze;
       let x = (cursor.x - position.x) / 150, y = (cursor.y - position.y + size * 0.6) / 120;
-      const mark = C.own(marks, key === "caret" ? "composer-top" : key);
+      const mark = gazeMark(key, playing);
       gaze.prop = !!prop && key === "prop:" + propAction(beat.prop);
       if (gaze.prop) {
         x = (propPosition.x - position.x) / size;
@@ -415,11 +556,13 @@
       last = stamp;
       if (!rig) return;
       if (dirty) layout();
-      if (state.activity !== "idle" || drag) nextIdle = now + 45000;
+      if (posture.activity !== "idle" || drag) nextIdle = now + 45000;
       else if (now >= nextIdle) { fire("idle.long"); nextIdle = now + 45000; }
       const playing = runner.tick(now, !!drag?.moving);
       const beats = timing.passive;
-      const passive = state.activity === "idle" && now - lastBusy > 45000 ? beats.doze : C.own(beats, state.activity) || beats.idle;
+      const idleMs = now - lastBusy;
+      const dozing = posture.activity === "idle" && idleMs > 45000 && (idleMs - 45000) % 45000 < 32000;
+      const passive = dozing ? beats.doze : C.own(beats, posture.activity) || beats.idle;
       const next = playing?.beat || passive;
       if (viewBeat !== next || viewPlaying !== playing) setBeat(next, playing);
       const rest = target();
@@ -428,7 +571,7 @@
       if (drag?.moving) { x = drag.x; y = drag.y; }
       const age = (now - viewStart) / 1000;
       const progress = playing?.beat.ms ? clamp((now - playing.start) / playing.beat.ms, 0, 1) : playing ? 0 : age % 2.3 / 2.3;
-      const mark = next.stage === "hop-bounce" && C.own(marks, next.gaze);
+      const mark = playing && next.stage === "hop-bounce" && gazeMark(next.gaze, playing);
       if (mark && !drag?.moving) {
         const toward = progress * progress * (3 - 2 * progress);
         x = mix(beatOrigin.x, clamp(mark.x, size / 2, vw - size / 2), toward);
@@ -452,7 +595,7 @@
       propRecoil(progress);
       measureCharacter();
       positionProp(progress, age);
-      look(age, dt);
+      look(age, dt, playing);
       placeCharacter(age);
       effects(playing, progress, age);
       schedule();
@@ -539,10 +682,13 @@
     hit.addEventListener("click", () => { if (!suppressClick) fire("user.poke"); suppressClick = false; }, options);
     hit.addEventListener("dblclick", returnHome, options);
 
+    mountedRailObserver = observeRail;
+    if (rail) observeRail(rail, activeRid, true);
     requestPack();
     return {
       apply, reset, context, trackFrame, closeMenu: controls.close,
       dispose() {
+        if (mountedRailObserver === observeRail) mountedRailObserver = null;
         cancel.abort();
         frameInput?.abort();
         cancelAnimationFrame(frame);
@@ -556,5 +702,6 @@
     };
   }
 
-  C.mount = mount;
+  Object.assign(C, { mount, railSignals, signalPairs,
+    observeRail(fragment, activeRid, baseline) { mountedRailObserver?.(fragment, activeRid, baseline); } });
 })(window.WsCompanion);

@@ -142,11 +142,12 @@
         samples.push(now);
         if (samples.length > limit) samples.shift();
       }
+      const simultaneous = playing?.signal && now - playing.start < 300;
       const entry = registry.get(event).find(choice =>
         (playing?.entry.priority ?? -Infinity) <= choice.priority &&
-        !(signal?.source === "rail" && playing?.signal?.source === "frame" &&
-          playing.entry.priority === choice.priority && now - playing.start < 300) &&
-        now - (starts.get(choice.id) ?? -Infinity) >= choice.cooldown &&
+        !(simultaneous && signal?.source === "rail" && playing.signal.source === "frame" && playing.entry.priority === choice.priority) &&
+        (now - (starts.get(choice.id) ?? -Infinity) >= choice.cooldown ||
+          simultaneous && signal?.source === "frame" && playing.signal.source === "rail" && playing.entry === choice) &&
         matches(choice.when, samples, now, state));
       if (!entry) return;
       if (playing?.entry === entry && event === "mail.recv") {
