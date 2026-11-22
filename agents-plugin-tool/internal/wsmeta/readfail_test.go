@@ -388,3 +388,71 @@ func TestConfirmedDenialTakesItsFence(t *testing.T) {
 		t.Fatalf("denied selector imported as %+v, want invalid", p)
 	}
 }
+
+// A confirmed read denial moves with the file: a removal over a confirmed
+// unreadable original is proven by the witness's identity while the same
+// denial persists there, and a copy at the witness proves nothing.
+func TestConfirmedDenialMovesWithTheWitness(t *testing.T) {
+	ctx := context.Background()
+	setup := func(t *testing.T) (string, *Store) {
+		dir := legacyFixture(t)
+		prev := classifyReadError
+		classifyReadError = func(err error) readClass {
+			if errors.Is(err, errACLDenied) {
+				return classConfirmable
+			}
+			return classTransient
+		}
+		t.Cleanup(func() { classifyReadError = prev })
+		now := testNow
+		opts := testOpts()
+		opts.Now = func() time.Time { return now }
+		// The ACL travels with the hooks config's bytes, wherever it is.
+		opts.ReadFile = func(p string) ([]byte, error) {
+			raw, err := os.ReadFile(p)
+			if err == nil && string(raw) == hooksBytes {
+				return nil, &fs.PathError{Op: "open", Path: p, Err: errACLDenied}
+			}
+			return raw, err
+		}
+		s := openTest(t, dir, opts)
+		for i := 0; i < UnreadConfirmPasses; i++ {
+			mustStage(t, s)
+			now = now.Add(UnreadConfirmAfter)
+		}
+		if c := captureMap(t, s)[fenceHooks]; c.State != CaptureUnreadable {
+			t.Fatalf("denied hooks config = %+v", c)
+		}
+		return dir, s
+	}
+
+	t.Run("proven by identity", func(t *testing.T) {
+		_, s := setup(t)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+			t.Fatal(err)
+		}
+		if res := mustStage(t, s); len(res.Unread) != 0 || len(res.Pending) != 0 || len(res.Unfenced) != 0 {
+			t.Fatalf("stage after the removal = %+v, want it proven", res)
+		}
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+			t.Fatalf("re-applied removal = %v", err)
+		}
+		if _, err := s.Commit(ctx, testCommit()); err != nil {
+			t.Fatal(err)
+		}
+		if c := captureMap(t, s)[fenceHooks]; c.State != CaptureUnreadable {
+			t.Fatalf("hooks capture = %+v, want the confirmed denial kept", c)
+		}
+	})
+
+	t.Run("a copy at the witness proves nothing", func(t *testing.T) {
+		dir, s := setup(t)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+			t.Fatal(err)
+		}
+		replaceWith(t, dir, hooksWitness, hooksBytes)
+		if res := mustStage(t, s); !reflect.DeepEqual(res.Unfenced, []string{fenceHooks}) {
+			t.Fatalf("stage over a copied witness = %+v, want the removal unfenced", res)
+		}
+	})
+}

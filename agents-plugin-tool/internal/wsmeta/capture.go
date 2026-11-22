@@ -865,6 +865,12 @@ func (s *Store) fenceProven(prev captureMeta, got legacyRead) (proven, unread bo
 		}
 		wabs := filepath.Join(s.dir, filepath.FromSlash(prev.fenceWitness))
 		w := readLegacy(wabs, s.opts.ReadFile)
+		if w.confirmable && prev.state == CaptureUnreadable {
+			// A confirmed denial moves with the file (its ACL travels with
+			// it), so it is the witness's state while it persists; the
+			// identity below tells the moved file from a copy.
+			w = legacyRead{state: CaptureUnreadable, err: w.err}
+		}
 		if w.transient {
 			return false, true
 		}
