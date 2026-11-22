@@ -2,6 +2,7 @@ package execjob
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -84,7 +85,7 @@ func TestHostedConvertCommitsOneOutcome(t *testing.T) {
 	var mu sync.Mutex
 	var seen []string
 	var noticesAtConvert int
-	v, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "slow", Window: 20 * time.Millisecond, OnConvert: func(v HostedView) {
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "slow", Window: 20 * time.Millisecond, OnConvert: func(v HostedView) error {
 		mu.Lock()
 		defer mu.Unlock()
 		noticesAtConvert = len(fx.sessions.noticeList())
@@ -96,6 +97,7 @@ func TestHostedConvertCommitsOneOutcome(t *testing.T) {
 		if n := len(fx.sessions.noticeList()); n != 0 {
 			noticesAtConvert = n
 		}
+		return nil
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +120,7 @@ func TestHostedConvertCommitsOneOutcome(t *testing.T) {
 	fx2 := newHostedFixture(t, 5*time.Second)
 	fx2.holders.onSpawn = func(id string) { go fx2.holders.exit(id, 0) }
 	called := false
-	if v, err := fx2.launch(context.Background(), nil, HostedLaunch{Display: "quick", OnConvert: func(HostedView) { called = true }}); err != nil || v.Outcome != OutcomeDone || called {
+	if v, err := fx2.launch(context.Background(), nil, HostedLaunch{Display: "quick", OnConvert: func(HostedView) error { called = true; return nil }}); err != nil || v.Outcome != OutcomeDone || called {
 		t.Fatalf("quick launch = %+v, %v, converted=%v", v, err, called)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -134,10 +136,11 @@ func TestHostedConvertEndAfterTheViewKeepsOneNotice(t *testing.T) {
 	fx := newHostedFixture(t, 5*time.Second)
 	var order []string
 	var mu sync.Mutex
-	v, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "slow", Window: 20 * time.Millisecond, OnConvert: func(v HostedView) {
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "slow", Window: 20 * time.Millisecond, OnConvert: func(v HostedView) error {
 		mu.Lock()
 		order = append(order, "id:"+v.ID)
 		mu.Unlock()
+		return nil
 	}})
 	if err != nil || v.Outcome != OutcomeConverted {
 		t.Fatalf("launch = %+v, %v", v, err)
@@ -226,5 +229,59 @@ func TestHostedRetainedIsTheWholeCombinedOutput(t *testing.T) {
 	}
 	if _, _, err := fx.h.Retained("other", v.ID); err == nil {
 		t.Fatal("another owner read the output")
+	}
+}
+
+// TestHostedConvertIsNotNoticeEligibleUntilPublished: until OnConvert returns,
+// neither the live job nor its stored row owes a notice, at any moment of the
+// publication, including one in which the job ended; a daemon that goes away
+// there restores a job that owes none. Once the id is out the stored row owes
+// the notice and the one notice goes. A failed publication leaves the
+// ordinary notice as the one delivery.
+func TestHostedConvertIsNotNoticeEligibleUntilPublished(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		fx := newHostedFixture(t, 5*time.Second)
+		var during []HostedJobRow
+		var restored []HostedJobRow
+		var noticesDuring int
+		v, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "slow", Window: 20 * time.Millisecond, OnConvert: func(v HostedView) error {
+			rows, _ := fx.store.Load()
+			during = append(during, rows...)
+			// The job ends while its id is being published: the end's row is
+			// stored too.
+			fx.holders.exit(v.HolderID, 0)
+			eventuallyExec(t, "the end stored", func() bool {
+				rows, _ := fx.store.Load()
+				return len(rows) == 1 && rows[0].Terminal()
+			})
+			rows, _ = fx.store.Load()
+			during = append(during, rows...)
+			// A daemon restarting right here reads exactly these rows.
+			restored = append(restored, rows...)
+			noticesDuring = len(fx.sessions.noticeList())
+			if fail {
+				return errors.New("the conversation reopened")
+			}
+			return nil
+		}})
+		if err != nil || v.Outcome != OutcomeConverted {
+			t.Fatalf("launch = %+v, %v", v, err)
+		}
+		if len(during) != 2 {
+			t.Fatalf("stored rows during publication = %d", len(during))
+		}
+		for _, r := range append(during, restored...) {
+			if r.Notify || r.Notice != NoticeNone {
+				t.Fatalf("the stored row owed a notice before the id was published (fail=%v): %+v", fail, r)
+			}
+		}
+		if noticesDuring != 0 {
+			t.Fatalf("a notice was admitted before publication returned (fail=%v)", fail)
+		}
+		eventuallyExec(t, "the one notice", func() bool { return len(fx.sessions.noticeList()) == 1 })
+		eventuallyExec(t, "the delivered row stored", func() bool {
+			rows, _ := fx.store.Load()
+			return len(rows) == 1 && rows[0].Notify && rows[0].Notice == NoticeDelivered
+		})
 	}
 }

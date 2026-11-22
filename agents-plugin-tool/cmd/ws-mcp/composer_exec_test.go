@@ -269,9 +269,9 @@ func TestComposerExecConversionProbe(t *testing.T) {
 		}
 		launch.Stdin, launch.StdinSet, launch.Window, launch.UserApproved = nil, true, window, true
 		var published time.Time
-		launch.OnConvert = func(v execjob.HostedView) {
+		launch.OnConvert = func(v execjob.HostedView) error {
 			published = time.Now()
-			_ = runner.PassiveHand("lead", 1, v.ID, wsdashboard.ComposerAsyncReceipt(v.ID))
+			return runner.PassiveHand("lead", 1, v.ID, wsdashboard.ComposerAsyncReceipt(v.ID))
 		}
 		start := time.Now()
 		v, err := c.hosted.Launch(context.Background(), make(chan struct{}), launch)

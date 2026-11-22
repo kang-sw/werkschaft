@@ -228,10 +228,14 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 // OutcomeDone. The outcome is committed once, under h.mu: a job found running
 // there is converted for good (it owes its notice from that moment), whatever
 // happens after, and one found ended is done and owes none. The caller's
-// onConvert then publishes the job's id with the completion notice held back
-// (publishing), so an end that follows can only order its notice after the id,
-// and the converted view is the one taken at the commit.
-func (h *Hosted) convert(j *hostedJob, onConvert func(HostedView)) HostedView {
+// onConvert then publishes the job's id while the job is not yet eligible for
+// a notice, live or stored (publishing: the store sees Notify unset and no
+// pending notice, so a daemon that goes away in between restores a job that
+// owes none), so an end that follows can only order its notice after the id.
+// Only once onConvert returned is the conversion stored with its notice. A
+// failed publication leaves the ordinary notice as the one delivery: the id
+// then reaches the owner through it alone.
+func (h *Hosted) convert(j *hostedJob, onConvert func(HostedView) error) HostedView {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
@@ -240,22 +244,25 @@ func (h *Hosted) convert(j *hostedJob, onConvert func(HostedView)) HostedView {
 	j.row.Notify = true
 	j.publishing = onConvert != nil
 	v := HostedView{HostedJobRow: h.rowLocked(j), Outcome: OutcomeConverted}
+	if onConvert == nil {
+		row, rev := h.snapLocked(j)
+		h.mu.Unlock()
+		h.save(j, row, rev)
+		return v
+	}
+	h.mu.Unlock()
+	err := onConvert(v)
+	h.mu.Lock()
+	j.publishing = false
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.save(j, row, rev)
-	if onConvert != nil {
-		func() {
-			defer func() {
-				h.mu.Lock()
-				j.publishing = false
-				h.mu.Unlock()
-				// An end that came while the id was being published left its
-				// notice pending; it goes now.
-				h.deliver(j)
-			}()
-			onConvert(v)
-		}()
+	if err != nil {
+		h.logf("publish the id of %s: %v", v.ID, err)
 	}
+	// An end that came while the id was being published left its notice
+	// pending; the stored row now says so, and the notice goes.
+	h.save(j, row, rev)
+	h.deliver(j)
 	return v
 }
 

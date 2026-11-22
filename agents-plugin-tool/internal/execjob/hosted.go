@@ -601,7 +601,12 @@ func (h *Hosted) rowLocked(j *hostedJob) HostedJobRow {
 // snapshot. h.mu is held.
 func (h *Hosted) snapLocked(j *hostedJob) (HostedJobRow, uint64) {
 	j.rev++
-	return h.rowLocked(j), j.rev
+	row := h.rowLocked(j)
+	if j.publishing {
+		// The id is not out yet: the stored row owes no notice.
+		row.Notify, row.Notice = false, NoticeNone
+	}
+	return row, j.rev
 }
 
 // save stores j's snapshot row numbered rev, unless a later one is stored
@@ -776,9 +781,11 @@ type HostedLaunch struct {
 	UserApproved bool
 	// OnConvert runs once when a still-running job converts to async, before
 	// the job owes its completion notice, so a caller can make the exec id
-	// visible ahead of the first notice admission. A job that ends first
-	// converts nothing and never calls it.
-	OnConvert func(HostedView)
+	// visible ahead of the first notice admission: the job is not eligible for
+	// a notice, in memory or in its stored row, until it returns. A job that
+	// ends first converts nothing and never calls it. An error is logged and
+	// leaves the ordinary notice as the one delivery.
+	OnConvert func(HostedView) error
 }
 
 // HostedOutcome is how a launch call ended.

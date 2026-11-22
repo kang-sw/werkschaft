@@ -55,10 +55,11 @@ func (c composerExec) Launch(ctx context.Context, drain <-chan struct{}, req wsd
 	launch.ExpectGen, launch.CheckGen = req.Gen, true
 	launch.UserApproved = true
 	gen := target.Owner.Gen
-	launch.OnConvert = func(v execjob.HostedView) {
+	launch.OnConvert = func(v execjob.HostedView) error {
 		// The id is visible in the lead's pending input before the job
-		// can owe its completion notice.
-		_ = c.runner.PassiveHand(req.ReplyID, gen, v.ID, wsdashboard.ComposerAsyncReceipt(v.ID))
+		// can owe its completion notice; a refusal is returned, and the
+		// ordinary notice carries the id instead.
+		return c.runner.PassiveHand(req.ReplyID, gen, v.ID, wsdashboard.ComposerAsyncReceipt(v.ID))
 	}
 	view, launchErr := c.hosted.Launch(ctx, drain, launch)
 	if view.ID == "" {
