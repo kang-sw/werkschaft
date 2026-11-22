@@ -532,6 +532,17 @@ func composerErrorText(err error) string {
 	return strings.TrimPrefix(err.Error(), "exec: ")
 }
 
+// composerFileHook, when set, sees every file operation the composer makes
+// by name (a test seam: the interactive paths must show none, the
+// finalization and the sweep exactly the ones documented).
+var composerFileHook atomic.Pointer[func(op string)]
+
+func composerFileOp(op string) {
+	if p := composerFileHook.Load(); p != nil {
+		(*p)(op)
+	}
+}
+
 // composerText is output bytes as the card, the receipt and the file show
 // them: UTF-8 text, each invalid byte as U+FFFD (the exec reply's decoding)
 // and each NUL byte as U+2400, so a harness's text reader (it refuses a file
@@ -849,6 +860,7 @@ func (d *Daemon) composerOutput(w http.ResponseWriter, r *http.Request, replyID,
 		http.Error(w, "no output file", http.StatusNotFound)
 		return
 	}
+	composerFileOp("open")
 	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "the output file is gone (retention removed it)", http.StatusGone)
@@ -878,23 +890,29 @@ func (d *Daemon) composerFilePath(replyID, id string) string {
 func (d *Daemon) composerWriteFile(replyID, id string, data []byte) (string, error) {
 	path := d.composerFilePath(replyID, id)
 	dir := filepath.Dir(path)
+	composerFileOp("mkdir")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
+	composerFileOp("createtemp")
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return "", err
 	}
+	composerFileOp("write")
 	_, werr := tmp.Write(data)
+	composerFileOp("close")
 	cerr := tmp.Close()
 	if err := errors.Join(werr, cerr); err != nil {
 		_ = os.Remove(tmp.Name())
 		return "", err
 	}
+	composerFileOp("chmod")
 	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
 		_ = os.Remove(tmp.Name())
 		return "", err
 	}
+	composerFileOp("rename")
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		_ = os.Remove(tmp.Name())
 		return "", err
@@ -969,6 +987,7 @@ func (d *Daemon) composerSweep() {
 // file that is already gone counts as removed, never as still taking room.
 func composerPrune(dir string, now time.Time) (map[string]struct{}, bool) {
 	present := map[string]struct{}{}
+	composerFileOp("readdir")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		// No directory yet holds no file; any other failure says nothing.
@@ -985,11 +1004,13 @@ func composerPrune(dir string, now time.Time) (map[string]struct{}, bool) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".out") {
 			continue
 		}
+		composerFileOp("stat")
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
 		if now.Sub(info.ModTime()) > composerFileAge {
+			composerFileOp("remove")
 			if err := os.Remove(filepath.Join(dir, e.Name())); err == nil || errors.Is(err, os.ErrNotExist) {
 				continue
 			}
@@ -1002,6 +1023,7 @@ func composerPrune(dir string, now time.Time) (map[string]struct{}, bool) {
 		if total <= composerFilesTotal {
 			break
 		}
+		composerFileOp("remove")
 		err := os.Remove(filepath.Join(dir, files[i].name))
 		if err == nil || errors.Is(err, os.ErrNotExist) {
 			total -= files[i].size

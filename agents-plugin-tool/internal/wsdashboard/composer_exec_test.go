@@ -1022,3 +1022,76 @@ func TestComposerRetentionRunsWithoutNewOutput(t *testing.T) {
 		t.Fatalf("the expired file's route = %d", res.Code)
 	}
 }
+
+// TestComposerArtifactSurvivesDaemonReplacement is the output directory's
+// part of the new -> old -> new cycle (the job rows' part is cmd/ws-mcp's
+// TestHostedExecSurvivesAnOldDaemonAndReopens): a daemon writes an artifact
+// and goes; an older daemon, which has no reference to the composer-exec
+// directory, leaves it alone; the new daemon reopens with the directory and
+// file intact and its retention still governs them. The recovery is exactly
+// this: the claim map is memory, so the replaced daemon's card and file link
+// are gone (the page shows "outcome unknown" and a retry runs nothing), while
+// the file stays readable by its path (the lead's receipt carries it) until
+// the retention removes it.
+func TestComposerArtifactSurvivesDaemonReplacement(t *testing.T) {
+	f := startComposerFixture(t)
+	zero := 0
+	out := []byte(strings.Repeat("persist", 1000))
+	f.svc.mu.Lock()
+	f.svc.launch = func(req ComposerLaunch) (ComposerJob, error) {
+		return ComposerJob{ExecID: "exec_persist", Gen: 4, State: "exited", ExitCode: &zero, Written: int64(len(out)), Output: out}, nil
+	}
+	f.svc.mu.Unlock()
+	composerPost(f.d, "replace-0001", "!big")
+	card := waitCard(t, f.d, "replace-0001", "done")
+	if card.File == "" {
+		t.Fatalf("no artifact: %+v", card)
+	}
+	before, err := os.ReadFile(card.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirBefore, _ := os.ReadDir(filepath.Dir(card.File))
+
+	// The daemon goes. The older daemon does not know the directory (the base
+	// tree has no reference to it); nothing changes it while it runs.
+	f.d.Close()
+
+	// The new daemon reopens on the same state directory.
+	d2 := startIndexedDaemon(t, f.dir, f.src, time.Hour, func(o *DaemonOptions) { o.noGitBadge = true })
+	svc2 := &composerFake{jobs: map[string]ComposerJob{}}
+	d2.composer.settleEvery, d2.composer.sweepFirst, d2.composer.sweepEvery = 20*time.Millisecond, time.Hour, time.Hour
+	waitFor(t, "the hosted registration", func() bool { s, ok := d2.Index().Session("livesession"); return ok && s.Hosted })
+	d2.SetComposerExec(svc2)
+	if res := composerGet(d2, "/s/livesession/composer-exec"); res.Code != 200 || strings.Contains(res.Body.String(), "replace-0001") {
+		t.Fatalf("the replaced daemon's list = %d %s", res.Code, res.Body)
+	}
+	// The claim is gone with the old process: no card, no link, and a retry
+	// reports the outcome unknown without running anything.
+	if res := composerGet(d2, "/s/livesession/composer-exec/replace-0001"); res.Code != 404 {
+		t.Fatalf("card after the replacement = %d", res.Code)
+	}
+	if res := composerGet(d2, card.FileURL); res.Code != 404 {
+		t.Fatalf("file link after the replacement = %d", res.Code)
+	}
+	if res := composerPostAs(d2, "livesession", "replace-0001", "!big", true); decodeCard(t, res).Unknown != true || svc2.launchCount() != 0 {
+		t.Fatalf("retry after the replacement = %d %s, launches %d", res.Code, res.Body, svc2.launchCount())
+	}
+	// The artifact itself is intact and its retention still applies.
+	d2.composerSweep()
+	after, err := os.ReadFile(card.File)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("the artifact changed across the replacement: %v", err)
+	}
+	if dirAfter, _ := os.ReadDir(filepath.Dir(card.File)); len(dirAfter) != len(dirBefore) {
+		t.Fatalf("the directory changed: %d -> %d entries", len(dirBefore), len(dirAfter))
+	}
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	if err := os.Chtimes(card.File, old, old); err != nil {
+		t.Fatal(err)
+	}
+	d2.composerSweep()
+	if _, err := os.Stat(card.File); !os.IsNotExist(err) {
+		t.Fatalf("the reopened daemon's retention did not expire the old artifact: %v", err)
+	}
+}

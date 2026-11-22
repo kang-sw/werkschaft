@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -246,4 +247,52 @@ func TestComposerExecGenerationInterleavingsFromZero(t *testing.T) {
 			t.Fatal("the command ran on the revived generation")
 		}
 	})
+}
+
+// TestComposerExecConversionProbe prints, for the release record
+// (WS_COMPOSER_PERF=1), what a real conversion costs: a real hosted launch of
+// a long job with a 100 ms window, the time the conversion itself takes (from
+// the window's end to the converted answer: the commit, the id's publication
+// to the pending input and the notice release), against a quick run's whole
+// launch (holder start, process, end).
+func TestComposerExecConversionProbe(t *testing.T) {
+	if os.Getenv("WS_COMPOSER_PERF") == "" {
+		t.Skip("set WS_COMPOSER_PERF=1 to print the conversion probe")
+	}
+	c, runner, _, _, root, _ := openComposerFixture(t, 1)
+	const window = 100 * time.Millisecond
+	var convert, whole, quick []time.Duration
+	for i := 0; i < 10; i++ {
+		launch, err := execjob.ShellLaunch("lead", "exec.shell", root, "", "sleep 30", os.Environ(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		launch.Stdin, launch.StdinSet, launch.Window, launch.UserApproved = nil, true, window, true
+		var published time.Time
+		launch.OnConvert = func(v execjob.HostedView) {
+			published = time.Now()
+			_ = runner.PassiveHand("lead", 1, v.ID, wsdashboard.ComposerAsyncReceipt(v.ID))
+		}
+		start := time.Now()
+		v, err := c.hosted.Launch(context.Background(), make(chan struct{}), launch)
+		end := time.Now()
+		if err != nil || v.Outcome != execjob.OutcomeConverted || published.IsZero() {
+			t.Fatalf("conversion = %+v, %v", v, err)
+		}
+		convert = append(convert, end.Sub(published))
+		whole = append(whole, end.Sub(start)-window)
+		start = time.Now()
+		if q, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: runner.target.Owner.Gen, Line: "true", Window: window}); err != nil || q.Async {
+			t.Fatalf("quick = %+v, %v", q, err)
+		}
+		quick = append(quick, time.Since(start))
+	}
+	_ = c.hosted.StopOwner("lead")
+	stat := func(name string, d []time.Duration) {
+		sort.Slice(d, func(a, b int) bool { return d[a] < d[b] })
+		t.Logf("%-50s n=%-3d p50=%-10s p95=%-10s max=%s", name, len(d), d[len(d)/2], d[len(d)*95/100], d[len(d)-1])
+	}
+	stat("conversion decision + id publication + release", convert)
+	stat("long run: launch time beyond the window (holder start)", whole)
+	stat("quick run: whole launch (holder start, process, end)", quick)
 }
