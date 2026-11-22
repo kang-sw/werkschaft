@@ -310,3 +310,41 @@ func TestBoardDBLazyAbsentAndConversionError(t *testing.T) {
 		t.Fatalf("failed open created artifacts: %v", err)
 	}
 }
+
+// A create killed after the schema commit leaves an empty DB and no other
+// authority: the next open reports no board and a create then succeeds.
+func TestBoardDBUncommittedCreateIsAbsent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "board")
+	schemaOnly, err := openBoardDBHandle(dir, BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schemaOnly.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenBoardDB(dir, nil, BoardDBOptions{}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uncommitted open: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, boardDBName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("uncommitted DB kept: %v", err)
+	}
+	b, err := CreateBoardDB(dir, boardDBFixture(), BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A schema-only DB beside a session snapshot imports that snapshot.
+	snapDir := filepath.Join(t.TempDir(), "board")
+	if schemaOnly, err = openBoardDBHandle(snapDir, BoardDBOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := schemaOnly.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := boardDBFixture()
+	if got := openTestBoardDB(t, snapDir, want, BoardDBOptions{}).State(); got == nil || got.Seq != want.Seq || len(got.Topics) != len(want.Topics) {
+		t.Fatalf("snapshot import = %s", folderJSON(got))
+	}
+}
