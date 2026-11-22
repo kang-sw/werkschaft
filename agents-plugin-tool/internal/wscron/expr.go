@@ -144,9 +144,6 @@ func parseItem(item string, spec fieldSpec) (uint64, error) {
 		if err != nil || stepPart == "" || stepPart[0] == '+' || stepPart[0] == '-' || n < 1 {
 			return 0, fmt.Errorf("%s field: step %q in %q must be a positive number", spec.name, stepPart, item)
 		}
-		if n > spec.max-spec.min+1 {
-			return 0, fmt.Errorf("%s field: step %d in %q is larger than the field's %d values", spec.name, n, item, spec.max-spec.min+1)
-		}
 		step = n
 	}
 	var lo, hi int

@@ -47,10 +47,7 @@ func TestParseRefusals(t *testing.T) {
 		{"* * * * 8", "day-of-week field: 8"},
 		{"*/0 * * * *", "minute field: step"},
 		{"5-1 * * * *", "reversed"},
-		{"2-3/9223372036854775807 * * * *", "larger than the field"},
-		{"2-3/61 * * * *", "larger than the field's 60 values"},
-		{"* * * * */9", "larger than the field's 8 values"},
-		{"* 5-6/25 * * *", "larger than the field's 24 values"},
+		{"*/9223372036854775808 * * * *", "must be a positive number"},
 		{"1,,2 * * * *", "empty list item"},
 		{"* * * * MON/2", "step"},
 		{"* * * * 1-5/MON", "step"},
@@ -72,14 +69,18 @@ func TestParseRefusals(t *testing.T) {
 	}
 }
 
-// A step at most the field's value count never moves a bit outside the range,
-// whatever the range's start: 2-3/60 sets only 2, and 58-59/60 only 58.
+// A positive step, however large, never moves a bit outside its range,
+// whatever the range's start: 2-3/60 and 2-3/61 set only 2, and the largest
+// machine step does not wrap the counter into other minutes.
 func TestStepStaysInsideItsRange(t *testing.T) {
 	for _, c := range []struct {
 		expr string
 		min  []int
 	}{
 		{"2-3/60 * * * *", []int{2}},
+		{"2-3/61 * * * *", []int{2}},
+		{"2-3/9223372036854775807 * * * *", []int{2}},
+		{"5-59/9223372036854775807 * * * *", []int{5}},
 		{"58-59/60 * * * *", []int{58}},
 		{"10-20/7 * * * *", []int{10, 17}},
 		{"59-59/1 * * * *", []int{59}},
