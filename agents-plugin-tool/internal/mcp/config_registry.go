@@ -242,9 +242,6 @@ func resolveHarnessBucketed(resolver *wsconfig.Resolver, sessionKey, key, harnes
 	return rv, key, nil
 }
 
-// configRegistry holds the static per-key entries. The dynamic prompt.*
-// family is not represented here — it is generated per discovered override
-// point by promptKnobEntry at catalog-build time (see buildTuningCatalog).
 // keepAwakeDuringTurnsKey types agent.keep_awake_during_turns as a boolean.
 var keepAwakeDuringTurnsKey = declaredConfigKey{
 	Key:          wsconfig.ItemAgentKeepAwakeDuringTurns,
@@ -258,6 +255,9 @@ var keepAwakeDuringTurnsKey = declaredConfigKey{
 // keepAwakeDuringTurnsHelp is the knob's help text in config.list.
 const keepAwakeDuringTurnsHelp = "Keep this computer from idle system sleep while any hosted lead or spawned agent turn runs (builtin false). The dashboard daemon holds one idle-sleep assertion from the first live turn to the last, on macOS (the system caffeinate helper) and Windows; elsewhere it has no effect. Display sleep and sleep you ask for, including closing a laptop lid, stay under the operating system's control. Idle sessions, queued messages and background jobs outside a turn do not count. Applies at once to turns already running. Global-only."
 
+// configRegistry holds the static per-key entries. The dynamic prompt.*
+// family is not represented here — it is generated per discovered override
+// point by promptKnobEntry at catalog-build time (see buildTuningCatalog).
 var configRegistry = []configKeyEntry{
 	compactionKeyEntry("compaction.lead_advisory"),
 	compactionKeyEntry("compaction.lead_hard"),
