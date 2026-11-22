@@ -61,25 +61,9 @@ func (s *state) refreshOrgRules() {
 	}
 }
 
-// refreshItemRules is Decision 16's re-extension right after n ended an org
-// rule. A person whose live record n ended but another live rule still covers
-// keeps that record's status and note on the new record, as a handoff does
-// (290): their coverage continued, so their recorded progress does too.
 func (s *state) refreshItemRules(item string, n *node) {
-	ended := map[string]*rec{}
-	for _, x := range s.byItem[item] {
-		if x.ended == n && x.state == "unassigned" {
-			ended[x.to] = x
-		}
-	}
-	from := len(s.byItem[item])
 	for _, ru := range s.liveRules(item) {
 		s.extendRule(ru, n, true)
-	}
-	for _, r := range s.byItem[item][from:] {
-		if x := ended[r.to]; x != nil {
-			r.status, r.note, r.noteBy = x.status, x.note, x.noteBy
-		}
 	}
 }
 
