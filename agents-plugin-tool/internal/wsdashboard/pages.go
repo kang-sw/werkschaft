@@ -68,6 +68,8 @@ var dashboardScriptFiles = []string{
 	"dashboard-tier-picker.js",
 	"dashboard-session-view.js",
 	"dashboard-companion-relay.js",
+	"dashboard-audit-window.js",
+	"dashboard-audit.js",
 	"dashboard-lifecycle.js",
 }
 
@@ -92,6 +94,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-menus.css",
 	"dashboard-rail.css",
 	"dashboard-shell.css",
+	"dashboard-audit.css",
 }
 
 var trackerScriptFiles = []string{

@@ -60,7 +60,11 @@ func conversation(lead wslive.Lead, ring []wslive.RingRecord, bodies map[string]
 	_, cv.Running, cv.Generating = splitBatches(lead.Batches)
 	cv.ToolGap = lead.ToolGap
 	for _, r := range ring {
-		e := ConvEntry{RingEntry: r.RingEntry, Key: r.Name, At: r.At.UnixMilli()}
+		atRFC := ""
+		if !r.At.IsZero() {
+			atRFC = r.At.UTC().Format(time.RFC3339Nano)
+		}
+		e := ConvEntry{RingEntry: r.RingEntry, Key: r.Name, At: r.At.UnixMilli(), AtRFC: atRFC}
 		switch r.Kind {
 		case wslive.RingUser:
 			cv.Users++

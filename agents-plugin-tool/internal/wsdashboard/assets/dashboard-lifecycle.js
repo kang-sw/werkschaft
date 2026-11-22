@@ -1252,7 +1252,7 @@
         try { modal = d.matches(":modal"); } catch (x) { modal = false; }
         if (modal) a = Math.max(a, window.WsShell.alpha(getComputedStyle(d, "::backdrop").backgroundColor));
       });
-      q(".tk-iwin-back:not([hidden]), .gwin-back:not([hidden]), .wbv:not([hidden]), .bc-scrim:not([hidden]), .d-tm-back:not([hidden])").forEach(function (el) {
+      q(".tk-iwin-back:not([hidden]), .gwin-back:not([hidden]), .wbv:not([hidden]), .bc-scrim:not([hidden]), .d-tm-back:not([hidden]), .au-scrim:not([hidden])").forEach(function (el) {
         if (el.getClientRects().length) a = Math.max(a, window.WsShell.alpha(getComputedStyle(el).backgroundColor));
       });
       return Math.round(a * 100) / 100;
@@ -1290,6 +1290,7 @@
     function queue() { if (!shHidden && !queued) queued = requestAnimationFrame(post); }
     function queueHead() { headDirty = true; queue(); }
     doc.addEventListener("ws-overview", queue);
+    doc.addEventListener("ws-audit", queue);
     var top = doc.querySelector(".dwrap > .top");
     if (window.ResizeObserver && top) new ResizeObserver(queueHead).observe(top);
     window.addEventListener("resize", queueHead);
