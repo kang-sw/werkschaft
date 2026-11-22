@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: ef56a4a38cfc41b3
 sage-review-completeness-reviewed: ef56a4a38cfc41b3
+completed: 2026-11-22
 ---
 
 # ws/cron: scheduled prompt tool
@@ -301,6 +302,11 @@ No runtime wiring.
   check that `Next(t)` is strictly after `t` and matches the parsed fields.
 - Deferred: the scheduler, store and any wiring (Phase 2).
 
+### Result (c82d25ce3) - 2026-11-22
+
+- Added the `wscron` package's parser and next-fire search: `Parse` (5-field Vixie grammar, the seven macros, names for month and day-of-week, `7` as Sunday, steps over ranges), `(*Expr).Next(after, loc)` walking days then fields within a 10-year horizon, `Matches`, `ParseTZ` (`UTC`, `Z`, `±HH:MM` from -12:00 to +14:00, `-00:00` normalized to `+00:00`) and `ErrNeverMatches`. A field starting with `*` is unrestricted, so the day-of-month/day-of-week rule is AND then and OR otherwise; a step on a single value and a name as a step are refused, as are `@reboot`, 6- and 7-field forms.
+- Verification: table tests covering each Decision 4 feature, every macro, every refusal and month-end, year-end and leap-day cases in UTC, `+09:00` and `-05:30`; a property test and a fuzz target checking `Next(t)` is strictly after `t` and matches the fields. `go test ./internal/wscron -race` passes (also repeated 20 times) plus a 10 s fuzz run.
+
 ### Phase 2: Scheduler, store, delivery and lifecycle
 
 Depends on Phase 1. Add the daemon-held scheduler with an injectable clock
@@ -425,6 +431,14 @@ reconciliation. No MCP tool yet; tests drive the scheduler directly.
 - Deferred: the MCP tool and daemon wiring (Phase 3); dashboard display of
   schedules.
 
+### Result (ff6449e0b) - 2026-11-22
+
+- Added the scheduler (in-memory schedules, one timer armed for the earliest next fire, injectable clock), its own SQLite store `cron-schedules.db` (`user_version` checked before the WAL pragma so a newer file is refused unchanged; one connection; retry on busy), the `wsinbox.Entry.Cron` marker with the `<ws:cron id name at>` envelope (body `</ws:cron` and attributes escaped; `ParseUserMessages` takes it whole as one plain block), a refusal to steer a held scheduled prompt (`ErrNotSteerable`, and a 409 on the dashboard steer route), a removal observer fired from cancel, interrupt and drain, and the runner seam (`BindCron`, `CronIsLead`, `CronKnown`, `CronHeld`, `DeliverCron`) with `forgetClosed` reporting a permanent end only when the runner no longer knows the conversation.
+- Decisions: pending is marked under the scheduler lock before the hand-off and rolled back when delivery fails or is suppressed; a fire more than one minute late is skipped, never caught up (Decision 18); overlapping fires are dropped and counted; last-fire deltas are written by a coalescing writer after delivery. A global wsinbox observer clears pending because removal points are spread over wsdashboard and wsagent. Lock order: runner `c.mu`, then scheduler `mu`; the scheduler never holds `mu` across a runner call.
+- Review (fix commit de35122d8): the lite review found one Important (the held entries were read before the removal observer was registered, so an entry drained in that gap left a schedule pending until the next restart); the fix registers the observer first and remembers removals while loading, with a regression test, and also re-checks the schedule before a hand-off so a delete or close is honored by a fire already past its lock. Unfixed minors: an `Add` racing `ConversationGone` can insert a schedule for a gone session (reaped on the next restart, each fire a counted drop); the lead gate in Phase 3 reports one refusal for non-lead and closed-lead callers.
+- Performance, measured with a fake runner over a real inbox and the `wsstate` counters: a fire does no store operation and no read_file or read_dir; file operations per fire were 2 (the inbox entry write, one create_temp), and the record write the send counters cause is the runner's and is not counted here; the last-fire delta is one coalesced store commit afterwards. Add and delete are one store commit each.
+- Verification: `go test ./internal/wscron -race` (repeated), `./internal/wsinbox -race`, the wsagent cron, forget and child-safe tests with `-race`, the wsdashboard steer test, `go vet ./...`, and `GOOS=windows go vet` on the touched packages all pass. Not covered: one integrated test of `ForgetClosed` on a real hosted lead removing store rows (the two halves are tested separately).
+
 ### Phase 3: `cron` MCP tool, daemon wiring and tool-surface parity
 
 Depends on Phase 2. Expose the scheduler as the `cron` tool and wire it into
@@ -496,3 +510,13 @@ the daemon.
     wsflow package tests pass.
 - Deferred: dashboard UI for schedules, worker support, catch-up, config keys,
   IANA zones.
+
+### Result (7b70dec14) - 2026-11-22
+
+- Added the `cron` tool: schema (`add` object, `delete` string, optional `session_key` and `format`) in `server_schemas.go`, dispatch in `server_dispatch.go`, handler in `server_cron.go`. Gate order: hosted binding, then scheduler present, then lead check, each refusal with its own message and nothing written; `session_key` never selects the owner. The description avoids the literal `ws:` spelling because the wsflow namespace rewrite would change it. The dashboard daemon opens the scheduler after the runner is up, binds it to the runner, closes it in the before-unlock hook and at shutdown, and a new `SessionForgotten` daemon hook ends a conversation's schedules.
+- Parity: `ChildSafeWSTools` excludes `cron` (the existing exclusion test lists it); `cron` is listed in the three `runtime.json` files (`>=0.50.8-dev <0.51.0`) and the Pi workflow bundles and native payloads were regenerated; an agy lead reaches it through the `call` fallback; the drain description now names the `ws:cron` envelope and the test pinning it was updated.
+- The first description listed at 2955 B and failed the per-tool schema cap test (1450 B, set by agy's 1500 B limit) on all three surfaces; the follow-up commit e5906a99c trims it to about 1.4 KB. The phase's narrow test filter had missed that test; a Tool-filtered mcp run catches it.
+- Compatibility as implemented: the tool and the new database file are T0; the inbox marker is T1 (an older reader drops the field and shows `<ws:user>`). No T3 and no minor bump.
+- Verification: tool tests (add, list, delete by id and name, refusals, session end, restart persistence and a fire after restart), `cmd/ws-mcp` cron host tests, the runtime capability and wsrsrc mirror/drift tests, `go vet ./...`, `GOOS=windows go vet` on the touched packages; the Tool-filtered mcp tests (including the schema cap); the wsflow Python package tests pass (22 run, 2 skipped).
+- Deferred, as in the ticket: dashboard UI, worker support, catch-up, config keys, IANA zones.
+- Not verified here: the full `cmd/ws-mcp` run fails `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild` because the gitignored embedded workflow package assets are absent in this worktree (`open generated/inventory.json: file does not exist`); the cron tests in that package pass.
