@@ -1411,7 +1411,12 @@ test("paper doll fills channels take their palette color, uncolored channels dra
   assert.deepEqual(px.pixel(art, 7, 5), [0x12, 0x34, 0x56, 255], "custom trim channel tinted by the outfit palette");
   assert.deepEqual(px.pixel(art, 0, 0), [255, 255, 255, 255], "a channel with no color draws its raster untinted");
   // Precedence: built-in < pack < outfit < preset < config.
-  pack.manifest.palette = {trim: "#000001"};
+  pack.manifest.palette = {trim: "#000001", outfitPrimary: "#000004"};
+  art = makeRig(pack, null, "", {outfit: "street"}).view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 7), [0, 0, 4, 255], "the pack palette beats the built-in outfitPrimary");
+  art = makeRig(pack, null, "", {outfit: "gown"}).view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 5), [0x12, 0x34, 0x56, 255], "the outfit palette beats the pack palette");
+  assert.deepEqual(px.pixel(art, 7, 7), [170, 51, 85, 255], "the outfit outfitPrimary beats the pack's");
   pack.manifest.presets = {p: {palette: {trim: "#000002"}}};
   const layered = makeRig(pack, null, "p", {outfit: "gown"});
   art = layered.view("stand", null, "idle", []).render(0, gaze);
@@ -1435,6 +1440,29 @@ test("paper doll fills channels take their palette color, uncolored channels dra
   assert.deepEqual(eggRows(typingView).filter(y => y >= 4 && y < 8), [4, 5, 6], "the typing column's head sits three rows lower, unscaled");
 });
 
+test("paper doll gesture head anchors move the head only in outfit mode", () => {
+  const px = pixelCanvas();
+  const { makeRig } = companion({OffscreenCanvas: px.Canvas});
+  const gaze = {x: 0, y: 0};
+  const { pack } = paperDollPack(px);
+  pack.manifest.gestures.nod = {pose: "stand", headAnchor: [8, 6]};
+  pack.manifest.outfits.street.gestures = {nod: {headAnchor: [8, 5], layers: [{skinFill: "street-skin.png"}]}};
+  // Egg rows: both centre columns carry the default skin tint.
+  const eggRows = view => {
+    const canvas = view.render(0, gaze), rows = [];
+    for (let y = 0; y < 8; y++) if ([7, 8].every(x => px.pixel(canvas, x, y).join() === "244,205,180,255")) rows.push(y);
+    return rows;
+  };
+  const rig = makeRig(pack, null, "");
+  assert.deepEqual(eggRows(rig.view("stand", null, "idle", [])), [1, 2, 3]);
+  assert.deepEqual(eggRows(rig.view("stand", "nod", "idle", [])), [2, 3, 4], "a bound gesture column's own head anchor wins");
+  rig.setWardrobe({outfit: "gown"});
+  assert.deepEqual(eggRows(rig.view("stand", "nod", "idle", [])), [3, 4, 5], "an unbound gesture keeps the registry head anchor");
+  const { outfits, defaultOutfit, ...legacy } = pack.manifest;
+  const plain = makeRig({manifest: legacy, bitmaps: pack.bitmaps}, null, "");
+  assert.deepEqual(eggRows(plain.view("stand", "nod", "idle", [])), [1, 2, 3], "a legacy pack ignores a gesture head anchor");
+});
+
 // stackCanvas records what each canvas draws; stack() reads a view's drawn
 // layers back as file names (tinted rasters read "<file>@<color>").
 function stackCanvas() {
@@ -1456,7 +1484,7 @@ function stackCanvas() {
   // what it composited.
   const label = image => image.file || (image.tint ? image.drawn[0]?.file + "@" + image.tint :
     "[" + image.drawn.map(item => item.file).join("+") + "]");
-  return { Canvas, stack: view => Array.from(view.render(0, {x: 0, y: 0}).drawn, label) };
+  return { Canvas, stack: (view, t = 0) => Array.from(view.render(t, {x: 0, y: 0}).drawn, label) };
 }
 
 function wardrobePack() {
@@ -1541,6 +1569,21 @@ test("paper doll gesture columns replace by id or slot in their own outfit and n
   assert.deepEqual([...cheer.handAnchor], [100, 200], "an unbound gesture keeps its anchors");
 });
 
+test("paper doll attachments honor an explicit z and fills-only outfit frames draw their channels", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const pack = wardrobePack();
+  pack.manifest.attachments.cap.z = 5;
+  pack.manifest.attachments.tail.z = 25;
+  for (const file of ["frame-a.png", "frame-b.png"]) pack.bitmaps.set(file, {file});
+  pack.manifest.outfits.street.poses.stand.layers = [{fps: 1, frames: [{fills: {skin: "frame-a.png"}}, {fills: {glow: "frame-b.png"}}]}];
+  const rig = makeRig(pack, null, "", {attachments: "headdress=cap tail=tail"});
+  const view = rig.view("stand", null, "idle", []);
+  assert.deepEqual(stack(view), ["cap.png", "frame-a.png@#f4cdb4", "tail.png", "egg.png", "eyes-default.png", "hair-bob.png"],
+    "an explicit z moves the headdress below the body and the tail above it; frame 0 draws its skin channel tinted");
+  assert.deepEqual(stack(view, 1).slice(1, 2), ["frame-b.png"], "frame 1 draws an uncolored channel untinted");
+});
+
 test("paper doll leaves legacy pack stacks unchanged", () => {
   const { Canvas, stack } = stackCanvas();
   const { makeRig } = companion({OffscreenCanvas: Canvas});
@@ -1588,7 +1631,9 @@ test("paper doll head set swaps change only their own layers and selection runs 
   // falls back to the next source; attachments merge per slot.
   rig.setPreset("evening");
   assert.deepEqual(JSON.parse(JSON.stringify(rig.wardrobe())), {outfit: "gown", hair: "bun", eyes: "round",
-    attachments: {headdress: "cap", tail: "tail"}, palette: JSON.parse(JSON.stringify(rig.wardrobe().palette))});
+    attachments: {headdress: "cap", tail: "tail"},
+    palette: {hair: "#ec8468", eye: "#dfa040", skin: "#f4cdb4", outfitPrimary: "#f2e5d4", outfitAccent: "#e6aa34"}},
+    "with no palette in the pack, outfit or preset, the built-in colors apply");
   rig.setWardrobe({outfit: "street", hair: "bob", eyes: "missing", attachments: "headdress=none ears=ears tail=mislabeled Bad=x ears2"});
   const picks = rig.wardrobe();
   assert.equal(picks.outfit, "street");
