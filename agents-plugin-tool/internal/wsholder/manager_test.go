@@ -1102,3 +1102,45 @@ func TestScanReportsADescriptorItCouldNotRead(t *testing.T) {
 		t.Fatal("a scan that read every descriptor still listed as incomplete")
 	}
 }
+
+// TestScanKeepsAnAgedDirectoryWhoseDescriptorDoesNotRead: past the orphan
+// grace, a holder directory with no descriptor is cleared and the listing
+// is complete, but one whose descriptor exists and does not parse may still
+// belong to a live holder: it stays, and the listing stays incomplete.
+func TestScanKeepsAnAgedDirectoryWhoseDescriptorDoesNotRead(t *testing.T) {
+	dir := testHoldersDir(t)
+	long := time.Now().Add(-2 * orphanDirGrace)
+	empty := filepath.Join(dir, "empty")
+	corrupt := filepath.Join(dir, "corrupt")
+	for _, d := range []string{empty, corrupt} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(corrupt, descriptorName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{empty, corrupt} {
+		if err := os.Chtimes(d, long, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := testManager(t, dir, nil)
+	m.Scan()
+	if _, err := os.Stat(empty); !os.IsNotExist(err) {
+		t.Errorf("the aged directory with no descriptor was not cleared: %v", err)
+	}
+	if _, err := os.Stat(corrupt); err != nil {
+		t.Errorf("the aged directory whose descriptor does not read was removed: %v", err)
+	}
+	if !m.List().Incomplete {
+		t.Error("a scan that could not read an existing descriptor listed as complete")
+	}
+	if err := os.RemoveAll(corrupt); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if m.List().Incomplete {
+		t.Error("a scan with only cleared orphans still listed as incomplete")
+	}
+}

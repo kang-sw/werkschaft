@@ -298,7 +298,12 @@ func (m *Manager) scan() {
 			info, statErr := os.Stat(dir)
 			// A directory gone meanwhile is a holder that exited.
 			removed := errors.Is(statErr, os.ErrNotExist)
-			if statErr == nil && time.Since(info.ModTime()) > orphanDirGrace {
+			// Only a directory with no descriptor at all is an orphan to
+			// clear once aged; one whose descriptor exists but does not read
+			// or is invalid may still belong to a live holder, so it stays
+			// and keeps the listing incomplete.
+			missing := errors.Is(err, os.ErrNotExist)
+			if statErr == nil && missing && time.Since(info.ModTime()) > orphanDirGrace {
 				removed = os.RemoveAll(dir) == nil
 			}
 			if !removed {
