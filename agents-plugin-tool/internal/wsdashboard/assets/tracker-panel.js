@@ -443,14 +443,18 @@
   function listRelated() {
     var R = VS.my.related || {}, cc = listOf(R.cc).filter(keepItem), mn = listOf(R.mentioned).filter(keepItem);
     if (showHidden()) {
-      var v = VS.viewer.member, seenCC = {}, seenMn = {};
+      var v = VS.viewer.member, seenCC = {}, seenMn = {}, inComment = {};
       cc.forEach(function (id) { seenCC[id] = true; });
       mn.forEach(function (id) { seenMn[id] = true; });
+      // the daemon's mention sources (view.go related): the item body and shown comments by others
+      vals(VS.comments || {}).forEach(function (c) {
+        if (c && !c.hidden && c.author !== v && listOf(c.mentions).indexOf(v) >= 0) inComment[c.item] = true;
+      });
       VS.itemOrder.forEach(function (id) {
         var it = VS.items[id];
         if (!it || !it.hidden || !keepItem(id)) return;
         if (!seenCC[id] && listOf(it.cc).indexOf(v) >= 0) { seenCC[id] = true; cc.push(id); }
-        if (!seenMn[id] && listOf(it.mentions).indexOf(v) >= 0) { seenMn[id] = true; mn.push(id); }
+        if (!seenMn[id] && (listOf(it.mentions).indexOf(v) >= 0 || inComment[id])) { seenMn[id] = true; mn.push(id); }
       });
     }
     listOf(R.closed).filter(keepItem).forEach(function (id) { addClosed(closeTs(VS.items[id]), 1, irow({ rk: 'rel:x:' + id, item: id, closed: true }), recentlyClosed(id)); });
