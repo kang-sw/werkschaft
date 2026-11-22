@@ -144,6 +144,30 @@ func TestWorktreeReleaseRefusesSpawnsThatResolveIntoIt(t *testing.T) {
 	}
 }
 
+// TestWorktreeReleaseCountsAChildRootedInANestedRepo verifies that a child
+// spawned into a nested repo of a worktree (root and cwd both the nested
+// repo, so State carries no cwd) is bound to the outer worktree after its
+// spawn lets the reservation go.
+func TestWorktreeReleaseCountsAChildRootedInANestedRepo(t *testing.T) {
+	h, _ := agentHarness(t, nil)
+	wt := releaseTestWorktree(t, h.root)
+	nested := filepath.Join(wt, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "init")
+	cmd.Dir = nested
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init nested: %v\n%s", err, out)
+	}
+	id := h.agentSpawn(h.leadCaller(), AgentSpawnRequest{Prompt: "nested root", Tier: "small", Authority: "read-only", Worktree: nested})
+	for _, target := range []string{wt, nested} {
+		if got := h.runner.ActiveChildrenInWorktree(target); len(got) != 1 || got[0].Address != AgentAddress(id) {
+			t.Fatalf("bound to %s = %+v, want the nested-rooted child", target, got)
+		}
+	}
+}
+
 // TestWorktreeReservationFailureRefusesTheCreate verifies that a create whose
 // release reservation cannot be taken is refused rather than admitted
 // unreserved, since a release may already hold the lock it failed to reach.
@@ -219,7 +243,7 @@ func TestWorktreeSpawnReservationSpansRegistrationOnly(t *testing.T) {
 	creates := 0
 	observe := func(sessionDir string, rec Record) {
 		target := canonicalWorktreePath(wt)
-		bound := sameWorktreePath(canonicalWorktreePath(rec.Root), target) || worktreePathContains(target, canonicalWorktreePath(rec.Cwd))
+		bound := worktreePathContains(target, canonicalWorktreePath(rec.Root)) || worktreePathContains(target, canonicalWorktreePath(rec.workDir()))
 		if rec.Parent == nil || !bound || h.runner.conv(rec.ReplyID) != nil {
 			return
 		}

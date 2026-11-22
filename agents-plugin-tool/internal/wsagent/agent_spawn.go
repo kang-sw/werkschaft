@@ -264,8 +264,9 @@ type BoundWorktreeChild struct {
 }
 
 // ActiveChildrenInWorktree returns every non-closed conversation in the runner
-// whose canonical root equals worktree or whose canonical working directory is
-// worktree or within it, oldest first then by address. Reads live state from
+// whose canonical root or canonical effective working directory (workDir) is
+// worktree or within it, oldest first then by address: a conversation rooted
+// in a nested repo of worktree is bound to worktree too. Reads live state from
 // memory without touching disk records.
 func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild {
 	target := canonicalWorktreePath(worktree)
@@ -288,9 +289,12 @@ func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild 
 		if st.Status == StatusClosed || st.Status == StatusHandedOff {
 			continue
 		}
-		convRoot := canonicalWorktreePath(st.Root)
-		convCwd := canonicalWorktreePath(st.Cwd)
-		if !sameWorktreePath(convRoot, target) && !worktreePathContains(target, convCwd) {
+		// The record, not State: State drops a lead's cwd and a cwd equal to
+		// the root, while the process runs in the effective workDir.
+		rec := c.record()
+		convRoot := canonicalWorktreePath(rec.Root)
+		convDir := canonicalWorktreePath(rec.workDir())
+		if !worktreePathContains(target, convRoot) && !worktreePathContains(target, convDir) {
 			continue
 		}
 		matches = append(matches, match{
@@ -325,16 +329,6 @@ func canonicalWorktreePath(p string) string {
 		return filepath.Clean(resolved)
 	}
 	return p
-}
-
-func sameWorktreePath(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
 }
 
 func worktreePathContains(root, path string) bool {

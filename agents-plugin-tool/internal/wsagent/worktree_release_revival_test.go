@@ -74,6 +74,33 @@ func TestReleaseRefusesALeadTakeover(t *testing.T) {
 	}
 }
 
+// TestReleaseCountsATakenOverLeadRunningInAnotherWorktree: a terminal lead
+// rooted in one repository whose harness ran in a worktree elsewhere stays
+// bound to that worktree after the takeover, so its release is refused while
+// the lead is open, though State carries no cwd for a lead.
+func TestReleaseCountsATakenOverLeadRunningInAnotherWorktree(t *testing.T) {
+	h := newLeadHarness(t).start()
+	other := releaseTestWorktree(t, h.root)
+	const id = "termsess"
+	h.terminalSession(id, LeadSession{Key: "terminal-lead-key", Harness: BackendClaude, Session: "sess-term", Cwd: other}, func(row *wsdashboard.Registration) { row.HarnessPID = 4002 })
+	if _, err := h.runner.TakeOver(id); err != nil {
+		t.Fatal(err)
+	}
+	if rec := h.record(id); rec.Root != h.root || rec.Cwd != other {
+		t.Fatalf("taken-over record root=%q cwd=%q, want %q and %q", rec.Root, rec.Cwd, h.root, other)
+	}
+	got := h.runner.ActiveChildrenInWorktree(other)
+	if len(got) != 1 || got[0].Address != AgentAddress(id) {
+		t.Fatalf("bound to the harness's worktree = %+v, want the taken-over lead", got)
+	}
+	if _, err := h.runner.CloseConversation(id); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.runner.ActiveChildrenInWorktree(other); len(got) != 0 {
+		t.Fatalf("a closed lead stays bound: %+v", got)
+	}
+}
+
 // TestReleaseRefusesALeadReopen: a closed lead does not reopen into a
 // worktree being released, and stays closed.
 func TestReleaseRefusesALeadReopen(t *testing.T) {
