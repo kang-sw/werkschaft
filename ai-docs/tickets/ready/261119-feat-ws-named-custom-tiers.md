@@ -426,6 +426,85 @@ the visible caller-harness fallthrough. Record that the editor shows
 global scope and that deletion with inbound references is refused, per
 (1526) and (1529). V3 demonstrates project scope and automatic rewiring.
 
+### Result (a181443e6) - 2026-11-22
+
+Landed in d5501a31b (daemon), bc72da4e5 (UI), f1b46f8cd (locales) and a181443e6 (lite-review fixes).
+
+- **Daemon.**
+  - `mcp/dashboard_tier_routing.go` builds the editor's view from `TierGraph` for the stored value or a draft, plus a caller harness. The view covers:
+    - nodes with effective, packaged and own pointers
+    - typed edges, including an implicit `caller` edge when a node has no `*` pointer
+    - depth (longest path to a terminal; memoized, capped at hops+1)
+    - inbound references
+    - per-size `Resolve` traces with the launch binding
+    - bundles, collisions, and the validation error
+  - Routes: `GET /api/config/tier-routing?harness=` and `POST /api/config/tier-routing/preview`. The preview accepts invalid drafts and writes nothing.
+  - Saving uses the ordinary `/api/config/set` and `/reset` routes. A refused `agent.tier_routing` value now returns its reason (cycle, hop limit, launchability) instead of a generic invalid. The carrier for that reason is `wsconfigservice.InvalidValue`.
+  - `wsagent` `Support.Choices` now lists `tiers`: each bundle resolved through the graph and `RoutedTierBinding`.
+- **Settings editor** (`dashboard-settings-tiers.js`/`.css`, catalog control `tier_routing`):
+  - A global-scope pill. Depth columns run from deepest to Terminal.
+  - Clicking a node or bundle opens a modal with:
+    - the default pointer, as a target plus `*` (passthrough) or a pinned size
+    - per-size exceptions to add and remove
+    - the inbound list and a live daemon trace
+    - reset to default, delete, and save
+  - Toolbar: + Node, + Bundle (harness/model/effort), reset all, and a caller-harness switch.
+  - Every draft is previewed by the daemon. A cycle or a ninth hop shows the daemon's error inline and disables Save; the stored graph stays in force. Every edit invalidates earlier in-flight previews.
+  - Deleting a node or bundle with inbound references is refused and lists them (no automatic rewiring).
+  - The client does no resolution of its own.
+- **New-session picker** (`dashboard-tier-picker.js`, used by `rpLeadMake`):
+  - It is optional and hidden when there are no bundles. It reads `/support/choices` `tiers`.
+  - Picking a tier fills harness, model and effort. Editing any of them, or switching harness, returns the picker to manual.
+  - The permission level, native mode and plugin isolation stay the user's.
+  - The launch payload carries only concrete fields.
+  - `session.request_hire` is unchanged, because the dashboard has no hire UI that consumes these fields (1517).
+- **Caller-harness fallthrough is visible** (`graph.png`, `graph-caller-codex.png`):
+  - A node with no `*` pointer reads "No pointer: * falls through to the bare size on claude (caller)". An example is `implement` or the empty user node `lead-explore`.
+  - Its edge is dashed orange and runs to a distinct "Caller · claude.*" terminal marked "Caller fallthrough".
+  - Its trace shows `medium · bare size` → `claude.medium · caller`.
+  - Switching the caller to codex moves the terminal and the trace to `codex.*`.
+
+Verification, with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`:
+- `TestTierRoutingUIBrowser` (headless Chromium, production config backend) passes. It covers:
+  - the graph and its edges matching the daemon
+  - fallthrough and the caller switch
+  - passthrough, pinning, and exception precedence and removal
+  - reset
+  - an inline cycle and ninth hop, with nothing stored
+  - refused delete of a referenced bundle and user node, and successful delete once the references moved or none existed
+  - creation of a bundle and a pointer node
+  - a late stale preview dropped (this step fails on the earlier guard)
+  - reload against the daemon's traces
+  - the picker fill, manual flip, and the concrete launch POST with an independent read-only level
+- `go test ./internal/mcp -run 'DashboardTier|TierRouting|Catalog|Settings|ConfigTune|ConfigList'` passes. This includes `TestDashboardTierRoutingView*` and a dense 16-node cyclic draft.
+- `go test ./internal/wsdashboard` narrow runs pass: `TestSettingsTierRoutingRoutes` and `TestDashboardAssetSourceAssembly`. `go test ./internal/wsi18n ./internal/wsagent` passes. An earlier `wsagent` run under parallel package load failed with no test named; it passed when rerun alone.
+- `node --test` passes for `new-session.test.js` (3), `frontend-settings.test.js` (7), `testdata/lead-popover.test.cjs` and `testdata/permission-controls.test.cjs`.
+- Captures are in `ai-docs/assets/captures/261122/tier-routing/` (not committed). They were compared side by side with `mockup-v3-dag.html` and match its layout and interactions. The captures are:
+  - `graph.png`, `graph-caller-codex.png`, `graph-after-edits.png`
+  - `modal.png`, `modal-page.png`, `modal-edit.png`, `modal-cycle.png`, `modal-hop-limit.png`, `modal-delete-refused.png`, `modal-new-bundle.png`
+  - `picker.png`, `picker-filled.png`, `picker-manual.png`
+- Visual differences from v3:
+  - The scope is global, not project (1526).
+  - Delete with references is refused, not rewired (1529).
+  - An explicit caller terminal replaces the `caller:*` pseudo-node.
+  - Only referenced harness terminals are drawn; idle `agy.*`/`pi.*` cards are not.
+  - Role cards show their default pointer on a second line.
+  - There is no diagnostics button.
+  - The trace bar follows hover or focus.
+  - Deep graphs scroll horizontally.
+
+Decisions:
+- `wsconfigservice.Rule.Editable` lets `agent.tier_routing` be edited although it is a structured key; it is set only there. Other structured keys stay profile read-only.
+- `dashboard-leads.js` and `dashboard-settings.js` stay small. The editor and the picker live in new modules, since the repository enforces no size cap.
+- The 10 non-English locale tables are machine-mirrored from `en.json` (f1b46f8cd). Tests check parity and placeholders, not native wording.
+- The captures directory is not gitignored. PNGs there must stay out of commits by hand.
+- Lite review: one Important finding (stale preview re-enabling Save) and two Minors (the picker cleared an unsupported or unknown permission level; the depth walk was unbounded) were fixed in a181443e6.
+- Coverage gaps the review noted were left open (Minor):
+  - the editor in a read-only non-global scope
+  - an end-to-end `namedTiers` → `/support/choices` → picker join (the two halves are tested separately)
+  - picker bundles whose model is outside the harness list, or whose harness lists no models
+  - `namedTiers` with an exact legacy alias shadowing a bundle
+
 ### Phase 3: Playbook frontmatter migration
 
 After Phase 1, give each tier-declaring playbook its own role and point
