@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 5a150743ee687858
 sage-review-completeness-reviewed: 5a150743ee687858
+completed: 2026-11-22
 ---
 
 # Dogfood tool surprises: ticket move commit, pooled worktree reuse, and report path
@@ -174,3 +175,8 @@ The reported flow was reproduced against current source and showed no remaining 
 - Verification (`GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`): `go vet ./internal/mcp` clean; `go test ./internal/mcp -run 'TestImplIdentity|TestDeriveImplementBranchPlan|Recreate|ResolveImplBranch|PoolReuse|TestObserveImplementBranch'` passed. Lite review: clean, two Minors left open (the stop cases assert only the action, not the reason; no row for an unmerged leftover without a vouch).
 - Dogfood surprise, not fixed: the stop for an unvouched clean provisioned branch carries no suspected owner, so its next instruction ("report the branch safety blocker") does not tell the worker that a lead `identity_vouch` resolves it. The text could name the vouch route.
 - Not done: the exec-job follow-up (Phase 2) and ticket closure, left to the lead.
+
+
+## Resolution (2026-11-22)
+
+All four phases have Results on impl/develop/briar-blurb-prune (P1 38f7c23bb, P2 a52b7003d, P3 d44c2909c, P4 2545130994). One Phase 2 acceptance line is deferred, not done: "a live exec job still refuses forced release" and wiring the acquisition predicate checkoutHasLiveExecActivity (a stub returning false, 3e79b204e) both depend on the 261117 Phase 2 exec guard (3ace814da), which is not yet on develop. The lead wires both as a follow-up commit once that guard merges, rather than holding this ticket open.
