@@ -19,6 +19,26 @@ pub struct Candidate {
     fingerprints: BTreeMap<PathBuf, [u8; 32]>,
 }
 
+/// A staged copy that is removed when dropped, unless a launch takes it with
+/// [`Staged::keep`] first: a stage no process ever used does not accumulate.
+pub struct Staged {
+    candidate: Candidate,
+    directory: tempfile::TempDir,
+}
+
+impl Staged {
+    #[cfg(test)]
+    fn candidate(&self) -> &Candidate {
+        &self.candidate
+    }
+
+    /// Keeps the directory for good, before any process may reference it.
+    pub fn keep(self) -> Candidate {
+        let _ = self.directory.keep();
+        self.candidate
+    }
+}
+
 fn safe_relative(value: &str) -> bool {
     !value.is_empty()
         && !value.contains(['\\', ':'])
@@ -308,11 +328,15 @@ impl Candidate {
         validate(development.unwrap_or(bundled), development.is_some())
     }
 
-    pub fn stage(&self, user_data: &Path, app_resource_root: &Path) -> Result<Self, &'static str> {
+    pub fn stage(
+        &self,
+        user_data: &Path,
+        app_resource_root: &Path,
+    ) -> Result<Staged, &'static str> {
         if !user_data.is_absolute() || !app_resource_root.is_absolute() {
             return Err(STAGE);
         }
-        let result = || -> Result<Self, &'static str> {
+        let result = || -> Result<Staged, &'static str> {
             let container = user_data.join("daemon-stages");
             fs::create_dir_all(&container).map_err(|_| STAGE)?;
             let actual = fs::canonicalize(&container).map_err(|_| STAGE)?;
@@ -360,8 +384,8 @@ impl Candidate {
             if fingerprints(&self.root, &after)? != self.fingerprints {
                 return Err(STAGE);
             }
-            let root = partial.keep();
-            Ok(Candidate {
+            let root = partial.path().to_path_buf();
+            let candidate = Candidate {
                 binary: root.join(
                     staged
                         .binary
@@ -380,6 +404,10 @@ impl Candidate {
                 root,
                 version: staged.version,
                 fingerprints: staged.fingerprints,
+            };
+            Ok(Staged {
+                candidate,
+                directory: partial,
             })
         };
         result().map_err(|_| STAGE)
@@ -457,8 +485,8 @@ mod tests {
         );
         assert!(Candidate::select(&bundled, Some(&temp.path().join("missing"))).is_err());
         let user = temp.path().join("user");
-        let a = b.stage(&user, &temp.path().join("app")).unwrap();
-        let c = b.stage(&user, &temp.path().join("app")).unwrap();
+        let a = b.stage(&user, &temp.path().join("app")).unwrap().keep();
+        let c = b.stage(&user, &temp.path().join("app")).unwrap().keep();
         assert_ne!(a.root, c.root);
         assert!(b
             .stage(&temp.path().join("app"), &temp.path().join("app"))
@@ -477,6 +505,26 @@ mod tests {
                 fs::metadata(&c.binary).unwrap().ino()
             );
         }
+    }
+    #[test]
+    fn a_stage_no_launch_took_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundled = temp.path().join("app/daemon");
+        fixture(&bundled, "1.2.3");
+        let candidate = Candidate::select(&bundled, None).unwrap();
+        let user = temp.path().join("user");
+        let abandoned = candidate.stage(&user, &temp.path().join("app")).unwrap();
+        let root = abandoned.candidate().root.clone();
+        assert!(root.starts_with(fs::canonicalize(user.join("daemon-stages")).unwrap()));
+        assert!(abandoned.candidate().binary.is_file());
+        drop(abandoned);
+        assert!(!root.exists());
+        let kept = candidate
+            .stage(&user, &temp.path().join("app"))
+            .unwrap()
+            .keep();
+        assert!(kept.binary.is_file());
+        assert_eq!(fs::read_dir(user.join("daemon-stages")).unwrap().count(), 1);
     }
     #[test]
     fn rejects_tampering_inventory_and_unsafe_references() {
