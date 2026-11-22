@@ -206,3 +206,21 @@ Every official shipped pack must satisfy all six gates before replacing dev fixt
   - Gear-opened floating modal (gear under the resize grip on hover): `dashboard.companion_pack` `default` (default) | `auto` | `<pack-id>`; `dashboard.companion_preset` `werkschaft-d1` (default) | `<preset-id>`; `dashboard.companion_agent_cooldown_seconds` (default 30); `dashboard.companion_agent_hourly_cap` (default 20); read-only persona; reset size.
 - **Local BYO Pack Storage (`performance.md` Compliant):** User packs live at `<config-home>/companions/<pack-id>/pack.json` (honoring `WS_CONFIG_HOME`; `"default"` and `"auto"` reserved). Lazily indexed in memory on first companion pack request, refreshed only on `POST /api/companion/packs/reload`, with `ETag`/`304`, `409 Conflict` on stale `?rev=`, and strict raster-only/symlink guards.
 - **Public Repository IP Boundary:** The public repository ships **only** the companion engine, `pack.json` schema, IP-clean original default assets, and the reproducible pack recipe. Third-party or community character packs live strictly outside git under `<config-home>/companions/`.
+
+## Generative Edit Toolkit (Erase-and-Infill)
+
+Generative image editing is the core production tool for companion art. Rules and runtime transforms (mesh deform, rotates, layer motion) serve it; they never replace it (owner 2026-11-22 21:44). When a rule-based or runtime approach does not feel right, reach for an edit.
+
+- **Erase-and-infill card.** Erase the region by image edit and let the editor infill it, instead of adding rules. The editor handles this best. Typical uses:
+  - *Head removal:* the headless column master. The edit erases the head and hair and infills the collar, shoulder or hand they hid.
+  - *A pose a deform cannot reach:* shoulder rotation, a large limb swing, or any motion past the safe-range table. Edit the column master: erase the limb and infill it at the new angle. Ship the result as an extra column or a `frames` entry.
+  - *Regions a moving part uncovers:* infill what lies behind a limb or prop once it moves.
+  - *Seams or awkward joints* that a transform leaves at the live preview.
+- **Gate every edit against its master.** Measure it:
+  - alpha IoU of the protected region;
+  - edge displacement;
+  - the anchor and sole rows.
+
+  Add owner visual sign-off on top. The edit output becomes the new master; nothing is composited back onto the old one.
+- **One edit of the whole column beats assembling independently generated parts.** Separate parts drift in outfit detail.
+- **Choose by the live preview, not by rule.** A small runtime transform within its safe range, an erase-and-infill edit, or a full redraw from the dressed master are all valid cards. Use whichever looks better.
