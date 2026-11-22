@@ -2019,3 +2019,55 @@ func TestHostedBulkPruneFitsTheTombstoneRoom(t *testing.T) {
 		t.Fatalf("%d deletes pending after a failed bulk prune, want at most %d", pending, HostedMaxJobs)
 	}
 }
+
+// TestHostedLaunchesDrawingOneIDBothRun: two launches that draw the same
+// id before either is admitted do not share it: the second admission
+// finds it taken and draws again.
+func TestHostedLaunchesDrawingOneIDBothRun(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	var mu sync.Mutex
+	draws := 0
+	both := make(chan struct{})
+	defer func(old func() (string, error)) { newExecKey = old }(newExecKey)
+	newExecKey = func() (string, error) {
+		mu.Lock()
+		draws++
+		n := draws
+		mu.Unlock()
+		switch n {
+		case 1:
+			<-both
+			return "same-drawn-key", nil
+		case 2:
+			close(both)
+			return "same-drawn-key", nil
+		}
+		return fmt.Sprintf("fresh-drawn-key%d", n), nil
+	}
+	views := make(chan HostedView, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+			if err != nil {
+				t.Errorf("launch = %v", err)
+			}
+			views <- v
+		}()
+	}
+	wg.Wait()
+	close(views)
+	var ids []string
+	for v := range views {
+		ids = append(ids, v.ID)
+	}
+	if len(ids) != 2 || ids[0] == ids[1] {
+		t.Fatalf("the two launches got ids %q, want two different ones", ids)
+	}
+	listed, _ := fx.h.List("lead")
+	if len(listed) != 2 {
+		t.Fatalf("listed jobs = %d, want 2", len(listed))
+	}
+}

@@ -54,15 +54,23 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 			return HostedView{}, err
 		}
 	}
-	id, err := h.newID(req.Legacy)
-	if err != nil {
-		return HostedView{}, err
-	}
-	j := &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet}
-	j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
-	if err := h.admit(j); err != nil {
+	var id string
+	var j *hostedJob
+	for attempt := 1; ; attempt++ {
+		if id, err = h.newID(req.Legacy); err != nil {
+			return HostedView{}, err
+		}
+		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet}
+		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
+		err = h.admit(j)
+		if err == nil {
+			break
+		}
 		h.rings.Release(j.out)
-		return HostedView{}, err
+		// Another launch drew the same id and was admitted first.
+		if !errors.Is(err, errIDTaken) || attempt == 16 {
+			return HostedView{}, err
+		}
 	}
 	if lookErr != nil {
 		return h.failStart(j, "", lookErr)
@@ -156,6 +164,14 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return errors.New("exec: the daemon is shutting down")
 	}
+	// newID checked the id without holding h.mu through here: a launch
+	// that drew the same id may have been admitted since.
+	_, taken := h.jobs[j.row.ID]
+	_, pending := h.deleting[j.row.ID]
+	if taken || pending {
+		h.mu.Unlock()
+		return errIDTaken
+	}
 	running := 0
 	var finished []*hostedJob
 	for _, have := range h.jobs {
@@ -228,6 +244,9 @@ func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView
 	h.save(j, row, rev)
 	return h.view(j, OutcomeDone), cause
 }
+
+// errIDTaken: admit found the job's id taken; the launch draws again.
+var errIDTaken = errors.New("exec: the drawn exec id is taken")
 
 // newExecKey draws a three-word exec key (a test seam).
 var newExecKey = wskey.Generate
