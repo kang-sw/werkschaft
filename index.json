@@ -467,35 +467,9 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T05:05:29Z",
+        "touched_at": "2026-11-22T13:48:32Z",
         "impl": {
           "branch": "impl/develop/mural-kitty-yeast"
-        }
-      }
-    },
-    "261119-feat-ws-audit-query-api": {
-      "registered_at": "2026-11-19T14:04:43Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T09:38:03Z",
-        "impl": {
-          "branch": "impl/develop/envy-salt-drone"
-        }
-      }
-    },
-    "261119-feat-ws-audit-ring-store": {
-      "registered_at": "2026-11-22T01:18:35Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T05:05:24Z",
-        "impl": {
-          "branch": "impl/develop/silk-dairy-cane"
         }
       }
     },
