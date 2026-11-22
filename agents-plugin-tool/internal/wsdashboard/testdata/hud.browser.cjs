@@ -182,6 +182,40 @@ async function checkKeyedRebuild(frame) {
       if (shots) await tab.screenshot({ path: `${shots}/compact-${scheme}.png` });
       if (shots) await frame.locator('#agcompact').screenshot({ path: `${shots}/hud-${scheme}.png` });
 
+      // Hover-card context row: A normal bar (linked h2), B past the ws soft
+      // threshold (the same linked session after a refresh, updated in place
+      // while hovered), C window unknown (unlinked h5, tokens only).
+      {
+        const tip = frame.locator('#hud-tooltip');
+        const row = tip.locator('.tt-ctx');
+        await frame.locator('#agcompact .hud-node[data-id="h2"]').hover();
+        await row.locator('.bar').waitFor();
+        assert.equal(await row.getAttribute('class'), 'tt-ctx', 'A: normal colour');
+        assert.equal(await row.locator('.pct').textContent(), '38%');
+        assert.equal(await row.locator('.tok').textContent(), '104k / 272k');
+        assert.equal(await row.locator('.m-soft').count(), 0);
+        const meta = await tip.locator('.tt-meta').boundingBox(), ctxBox = await row.boundingBox();
+        assert(ctxBox.y >= meta.y + meta.height - 1 && ctxBox.y < meta.y + meta.height + 12, 'row sits right under the meta row');
+        assert(ctxBox.x >= (await tip.boundingBox()).x && ctxBox.x + ctxBox.width <= (await tip.boundingBox()).x + (await tip.boundingBox()).width, 'row stays inside the card');
+        if (shots) await tip.screenshot({ path: `${shots}/hud-ctx-A-${scheme}.png` });
+        await fetch(`${switcher}?s=heavy&usage=soft`);
+        await row.locator('.warn, .tok:text("156k / 200k")').first().waitFor();
+        await frame.waitForFunction(() => document.querySelector('#hud-tooltip .tt-ctx.warn'));
+        assert.equal(await row.locator('.pct').textContent(), '78%');
+        assert.equal(await row.locator('.m-soft').count(), 1);
+        if (shots) await tip.screenshot({ path: `${shots}/hud-ctx-B-${scheme}.png` });
+        await frame.locator('#agcompact .hud-node[data-id="h5"]').hover();
+        await frame.waitForFunction(() => document.querySelector('#hud-tooltip .tt-ctx.d-unknown'));
+        assert.equal(await row.locator('.bar').count(), 0, 'C: no bar');
+        assert.equal(await row.locator('.tok').textContent(), '컨텍스트 41.0k');
+        if (shots) await tip.screenshot({ path: `${shots}/hud-ctx-C-${scheme}.png` });
+        await frame.locator('#agcompact .hud-node[data-id="h7"]').hover();
+        assert.equal(await tip.locator('.tt-ctx').count(), 0, 'unknown tokens: no row');
+        await fetch(`${switcher}?s=heavy`);
+        await frame.waitForTimeout(350);
+        await tab.mouse.move(2, 400);
+      }
+
       // Node and close controls keep their own actions in each theme.
       await frame.click('#agcompact .hud-node[data-id="h3"]');
       await frame.locator('#agisland[data-mode="full"]').waitFor();

@@ -2581,6 +2581,7 @@
   "js.hud.state.permission": "承認待ち",
   "js.hud.state.failed": "失敗",
   "js.hud.deeper": "+{0} 下位",
+  "js.hud.context": "コンテキスト {0}",
   "js.hud.hint.link": "クリック: セッションを開く /s/{0}",
   "js.hud.hint.details": "クリック: ツリー詳細を開く",
   "js.hud.lead": "リード",
