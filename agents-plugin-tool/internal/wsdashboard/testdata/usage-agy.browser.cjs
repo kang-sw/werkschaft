@@ -1,6 +1,6 @@
 // Source-only, fake-data browser verification and UI capture of the plan-usage
-// header handle and popover showing both agy model groups alongside Claude and
-// Codex, including footer age, disabled bucket dimming, and per-group history.
+// header handle and popover showing single and dual agy model groups alongside
+// Claude and Codex, including disabled bucket dimming, and per-group history.
 // PLAYWRIGHT_BROWSERS_PATH=... WS_PLAYWRIGHT_MODULE=... node <this-file> <shots-dir>
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -68,6 +68,26 @@ const payload = {
     ],
   },
 };
+const singleAgyPayload = {
+  warnPercent: 80,
+  critPercent: 95,
+  entries: [
+    payload.entries[0],
+    payload.entries[1],
+    payload.entries[2],
+    {
+      harness: 'agy',
+      group: 'claude_gpt',
+      label: 'Claude and GPT models',
+      source: 'via agy CLI',
+      asOf: agyObserved,
+      windows: [
+        w('five_hour', 84, 0.60, agyObserved, true),
+        w('seven_day', 29, 0.40, agyObserved, true),
+      ],
+    },
+  ],
+};
 const pendingPayload = {
   warnPercent: 80,
   critPercent: 95,
@@ -109,21 +129,35 @@ const pendingPayload = {
       for (const content of scripts) await page.addScriptTag({ content });
       assert.deepEqual(errors, [], `${theme}: init errors`);
 
-      await page.locator('.usage-group-age').first().waitFor();
+      await page.locator('.usage-group-label').first().waitFor();
       // Header handle checks: single 34px row, 4 harness groups (Claude, Codex, Gemini, Claude/GPT),
-      // disabled 5h bucket omitted in footer (2 + 1 + 2 + 1 = 6 columns).
+      // disabled 5h bucket omitted in footer (2 + 1 + 2 + 1 = 6 columns), compact group labels without age.
       const handle = await page.locator('.usage-toggle').boundingBox();
       assert.equal(handle.height, 34, `${theme}: single 34px handle row`);
       assert.equal(await page.locator('.usage-harness').count(), 4);
       assert.equal(await page.locator('.usage-column').count(), 6);
-      assert.equal(await page.locator('.usage-group-age').count(), 2);
-      await page.locator('.usage-toggle').screenshot({ path: path.join(output, `agy-gutter-${theme}.png`) });
+      assert.equal(await page.locator('.usage-group').count(), 0);
+      assert.equal(await page.locator('.usage-group-age').count(), 0);
+      assert.deepEqual(await page.locator('.usage-group-label').allTextContents(), ['Gemini', 'Claude/GPT']);
+      const labelCentered = await page.evaluate(() => [...document.querySelectorAll('.usage-group-label')].every(lab => {
+        const parent = lab.closest('.usage-harness').getBoundingClientRect();
+        const box = lab.getBoundingClientRect();
+        const parentCenter = parent.top + parent.height / 2;
+        const labelCenter = box.top + box.height / 2;
+        return Math.abs(parentCenter - labelCenter) <= 2 && box.height < 16;
+      }));
+      assert.ok(labelCentered, `${theme}: single-line group labels vertically centered`);
+      await page.locator('.usage-toggle').screenshot({ path: path.join(output, `dual-agy-${theme}.png`) });
 
-      // Open popover and verify both agy groups, dimmed disabled card, and per-group charts.
+      // Open popover and verify both agy groups, full headings, timestamps, dimmed disabled card, and charts.
       await page.locator('.usage-toggle').click();
       const pop = page.locator('.usage-pop');
       await pop.waitFor({ state: 'visible' });
       assert.equal(await pop.locator('.usage-account').count(), 4);
+      const popHeadings = await pop.locator('.usage-account .usage-heading b').allTextContents();
+      assert.ok(popHeadings.includes('Gemini Models'), `${theme}: popover keeps Gemini Models heading`);
+      assert.ok(popHeadings.includes('Claude and GPT models'), `${theme}: popover keeps Claude and GPT models heading`);
+      assert.deepEqual(await pop.locator('.usage-account .usage-vage').allTextContents(), ['0m ago', '0m ago', '12m ago', '12m ago']);
       assert.equal(await pop.locator('.usage-window-card.usage-disabled').count(), 1);
       const disabledOpacity = await pop.locator('.usage-window-card.usage-disabled').evaluate(e => parseFloat(getComputedStyle(e).opacity));
       assert.ok(disabledOpacity < 0.7, `${theme}: disabled card dimmed (${disabledOpacity})`);
@@ -186,6 +220,23 @@ const pendingPayload = {
       assert.ok(pendingNarrow.width <= 404, `${theme}: pending narrow popover width ${pendingNarrow.width}`);
       assert.ok(pendingNarrow.pageWidth <= pendingNarrow.viewportWidth, `${theme}: pending has no horizontal page scroll`);
       await pop.screenshot({ path: path.join(output, `agy-pending-narrow-${theme}.png`) });
+
+      // Single active agy group (claude_gpt all disabled): header omits group label and age.
+      await page.setViewportSize({ width: 1280, height: 2200 });
+      await page.locator('.usage-pop .usage-close').click();
+      await pop.waitFor({ state: 'hidden' });
+      await page.evaluate(single => {
+        window.__usagePayload = single;
+        document.dispatchEvent(new Event('visibilitychange'));
+      }, singleAgyPayload);
+      await page.waitForFunction(() => document.querySelectorAll('.usage-harness').length === 3);
+      assert.equal(await page.locator('.usage-group').count(), 0);
+      assert.equal(await page.locator('.usage-group-label').count(), 0);
+      assert.equal(await page.locator('.usage-group-age').count(), 0);
+      assert.equal(await page.locator('.usage-harness').nth(2).getAttribute('title'), 'Gemini Models');
+      const singleHandle = await page.locator('.usage-toggle').boundingBox();
+      assert.equal(singleHandle.height, 34, `${theme}: single-agy 34px handle row`);
+      await page.locator('.usage-toggle').screenshot({ path: path.join(output, `single-agy-${theme}.png`) });
 
       assert.deepEqual(requests, [], `${theme}: no network requests`);
       assert.deepEqual(errors, [], `${theme}: runtime errors`);

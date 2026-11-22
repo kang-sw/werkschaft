@@ -569,20 +569,22 @@ test('empty login state and hidden-page cadence', async () => {
   env.doc.hidden = false; env.doc.events.visibilitychange(); await flush(); assert.equal(env.calls.length, before + 1);
 });
 
-test('agy renders two per-group entries with shared badge, visible footer age, and disabled-bucket rules', async () => {
+test('agy renders compactly when single, shows group labels without footer age when dual, and keeps popover intact', async () => {
   const at = Date.UTC(2026, 10, 19, 12, 0), observed = at - 12 * 60000, env = environment(at);
   const reset5h = observed + 3 * 3600000, resetWk = observed + 4 * 86400000;
+  const geminiEntry = { harness: 'agy', group: 'gemini', label: 'Gemini Models', source: 'via agy CLI', asOf: observed, windows: [
+    { kind: 'five_hour', percent: 40, asOf: observed, resetsAt: reset5h },
+    { kind: 'seven_day', percent: 55, asOf: observed, resetsAt: resetWk }
+  ] };
+  const claudeGptEntry = { harness: 'agy', group: 'claude_gpt', label: 'Claude and GPT models', source: 'via agy CLI', asOf: observed, windows: [
+    { kind: 'five_hour', percent: 80, asOf: observed, resetsAt: reset5h, disabled: true },
+    { kind: 'seven_day', percent: 30, asOf: observed, resetsAt: resetWk }
+  ] };
   env.set({
     entries: [
       { harness: 'claude', asOf: at, windows: [{ kind: 'five_hour', percent: 25, asOf: at, resetsAt: reset5h }] },
-      { harness: 'agy', group: 'gemini', label: 'Gemini Models', source: 'via agy CLI', asOf: observed, windows: [
-        { kind: 'five_hour', percent: 40, asOf: observed, resetsAt: reset5h },
-        { kind: 'seven_day', percent: 55, asOf: observed, resetsAt: resetWk }
-      ] },
-      { harness: 'agy', group: 'claude_gpt', label: 'Claude and GPT models', source: 'via agy CLI', asOf: observed, windows: [
-        { kind: 'five_hour', percent: 80, asOf: observed, resetsAt: reset5h, disabled: true },
-        { kind: 'seven_day', percent: 30, asOf: observed, resetsAt: resetWk }
-      ] }
+      geminiEntry,
+      claudeGptEntry
     ],
     agyHistory: { schema_version: 1, status: 'ok', samples: [
       { harness: 'agy', group: 'gemini', kind: 'five_hour', source: 'via agy CLI', resetsAt: reset5h, asOf: observed - 20 * 60000, percent: 15 },
@@ -596,12 +598,13 @@ test('agy renders two per-group entries with shared badge, visible footer age, a
   assert.equal(footerGroups.length, 3);
   const agyFooter = footerGroups.slice(1);
   assert.deepEqual(agyFooter.map(g => g.querySelector('.hb').attributes['data-h']), ['agy', 'agy']);
-  assert.deepEqual(agyFooter.map(g => g.querySelector('.usage-group-label').textContent), ['Gemini', 'Claude/GPT']);
-  assert.deepEqual(agyFooter.map(g => g.querySelector('.usage-group-age').textContent), ['12m ago', '12m ago']);
-  assert.equal(agyFooter[0].querySelector('.usage-group-age').title, 'value from 12 min ago');
+  assert.deepEqual(nodes(env.button, '.usage-group-label').map(n => n.textContent), ['Gemini', 'Claude/GPT']);
+  assert.equal(nodes(env.button, '.usage-group').length, 0);
+  assert.equal(nodes(env.button, '.usage-group-age').length, 0);
   assert.equal(agyFooter[0].querySelector('.usage-columns').children.length, 2);
   assert.equal(agyFooter[1].querySelector('.usage-columns').children.length, 1);
   assert.equal(agyFooter[1].querySelector('.usage-number').textContent, '30%');
+  assert.match(agyFooter[0].querySelector('.usage-column').title, /value from 12 min ago/);
 
   const pop = mounted.makePopover(() => {}, () => {}); pop.open(); await flush();
   const sections = nodes(pop.el, '.usage-account');
@@ -611,14 +614,46 @@ test('agy renders two per-group entries with shared badge, visible footer age, a
   assert.ok(titles.includes('Claude and GPT models'));
   assert.equal(sections.filter(s => s.querySelector('.hb').attributes['data-h'] === 'agy').length, 2);
   const cgSection = sections.find(s => s.querySelector('.usage-heading').textContent === 'Claude and GPT models');
+  assert.equal(cgSection.querySelector('.usage-vage').textContent, '12m ago');
+  assert.equal(cgSection.querySelector('.usage-vage').title, 'value from 12 min ago');
   const cgCards = nodes(cgSection, '.usage-window-card');
   assert.equal(cgCards.length, 2);
   assert.ok(cgCards[0].className.includes('usage-disabled'));
   assert.equal(cgCards[0].querySelector('.usage-disabled-tag').textContent, 'disabled');
   assert.ok(!cgCards[1].className.includes('usage-disabled'));
   const gemSection = sections.find(s => s.querySelector('.usage-heading').textContent === 'Gemini Models');
+  assert.equal(gemSection.querySelector('.usage-vage').textContent, '12m ago');
   assert.ok(nodes(nodes(gemSection, '.usage-window-card')[0], '.usage-actual').length >= 1);
   assert.equal(nodes(cgCards[0], '.usage-actual').length, 0);
+
+  // Single rendered agy group (when claude_gpt has all windows disabled): omits label & age.
+  env.set({ entries: [
+    { harness: 'claude', asOf: at, windows: [{ kind: 'five_hour', percent: 25, asOf: at, resetsAt: reset5h }] },
+    geminiEntry,
+    { harness: 'agy', group: 'claude_gpt', label: 'Claude and GPT models', source: 'via agy CLI', asOf: observed, windows: [
+      { kind: 'five_hour', percent: 80, asOf: observed, resetsAt: reset5h, disabled: true },
+      { kind: 'seven_day', percent: 30, asOf: observed, resetsAt: resetWk, disabled: true }
+    ] }
+  ] });
+  env.ticks[0].fn(); await flush();
+  assert.equal(groups(env.button).length, 2);
+  assert.equal(nodes(env.button, '.usage-group').length, 0);
+  assert.equal(nodes(env.button, '.usage-group-label').length, 0);
+  assert.equal(nodes(env.button, '.usage-group-age').length, 0);
+  assert.equal(groups(env.button)[1].title, 'Gemini Models');
+  assert.match(groups(env.button)[1].querySelector('.usage-column').title, /value from 12 min ago/);
+
+  // Single rendered agy group (when claude_gpt is absent): omits label & age.
+  env.set({ entries: [
+    { harness: 'claude', asOf: at, windows: [{ kind: 'five_hour', percent: 25, asOf: at, resetsAt: reset5h }] },
+    geminiEntry
+  ] });
+  env.ticks[0].fn(); await flush();
+  assert.equal(groups(env.button).length, 2);
+  assert.equal(nodes(env.button, '.usage-group').length, 0);
+  assert.equal(nodes(env.button, '.usage-group-label').length, 0);
+  assert.equal(nodes(env.button, '.usage-group-age').length, 0);
+  assert.equal(groups(env.button)[1].title, 'Gemini Models');
 
   env.set({ entries: [
     { harness: 'agy', group: 'gemini', label: 'Gemini Models', source: 'via agy CLI', asOf: observed, windows: [

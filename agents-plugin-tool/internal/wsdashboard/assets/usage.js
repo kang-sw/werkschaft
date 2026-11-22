@@ -215,24 +215,22 @@
       var now = Date.now(), rendered = 0;
       button.textContent = "";
       button.appendChild(mini());
+      var items = [];
       sorted(data.entries).forEach(function (entry) {
         if (entry.pending) return;
         var windows = active(entry, now), enabled = windows.filter(function (v) { return !v.disabled; });
         if (windows.length && !enabled.length) return;
+        items.push({ entry: entry, enabled: enabled });
+      });
+      var agyCount = items.filter(function (item) { return item.entry.harness === "agy"; }).length;
+      items.forEach(function (item) {
+        var entry = item.entry, enabled = item.enabled;
         var group = el("span", "usage-harness");
         var mark = el("span", "usage-mark"), columns = el("span", "usage-columns"), hasStale = false;
         var name = entryName(entry), groupLabel = footerGroupLabel(entry);
         mark.appendChild(icon(entry, true)); group.appendChild(mark);
-        if (groupLabel) {
-          var meta = el("span", "usage-group");
-          meta.appendChild(el("span", "usage-group-label", groupLabel));
-          var groupAt = entry.asOf || (enabled[0] && enabled[0].asOf) || 0;
-          if (groupAt) {
-            var ageEl = el("span", "usage-group-age", shortAge(groupAt, now));
-            ageEl.title = age(groupAt, now);
-            meta.appendChild(ageEl);
-          }
-          group.appendChild(meta);
+        if (agyCount >= 2 && groupLabel) {
+          group.appendChild(el("span", "usage-group-label", groupLabel));
         }
         ["five_hour", "seven_day"].forEach(function (kind) {
           var w = enabled.filter(function (v) { return v.kind === kind; })[0];
