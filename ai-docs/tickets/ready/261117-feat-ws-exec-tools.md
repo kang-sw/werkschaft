@@ -331,13 +331,12 @@ Decisions 19–22 record technical settlements.
     `#L406-L415`). If the turn has ended, queue the completion for ordinary
     next-turn delivery. See S7 and S14 in
     `261122-feat-ws-agent-turn-semaphore`.
-23. **Downgrade boundary (2026-11-22).** Owner (2165)=a, 2026-11-22:
-    legacy-shaped hosted `exec.spawn`/`exec.shell` jobs launched by a 0.51
-    daemon live only in `exec-jobs.db`. A v0.50.8 daemon cannot read, return
-    results for, or abort their `exec_key` ("not found"). Re-upgrading
-    recovers status from the retained row and exit copy. Accepted as T3
-    within the 0.51 minor boundary. Rejected: mirroring legacy launches to the
-    file store.
+23. Downgrade boundary (owner (2165)=a, 2026-11-22): legacy-shaped hosted
+    `exec.spawn`/`exec.shell` jobs launched by a 0.51 daemon live only in
+    `exec-jobs.db`. A v0.50.8 daemon cannot read, return results for, or abort
+    their `exec_key` ("not found"). Re-upgrading recovers status from the
+    retained row and exit copy. Accepted as T3 within the 0.51 minor boundary.
+    Rejected: mirroring legacy launches to the file store.
 
 ## Constraints
 
