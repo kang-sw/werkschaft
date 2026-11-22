@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -81,7 +82,9 @@ func storeEvents(t *testing.T, s *storeSink) []wsaudit.Envelope {
 	return evs
 }
 
-// persistedLosses reads the loss lines of every ring segment under root.
+// persistedLosses reads the loss lines of every file under root; a malformed
+// line fails the test, so a changed on-disk format cannot pass a no-loss check
+// vacuously.
 func persistedLosses(t *testing.T, root string) []wsaudit.SourceID {
 	t.Helper()
 	var out []wsaudit.SourceID
@@ -101,7 +104,10 @@ func persistedLosses(t *testing.T, root string) []wsaudit.SourceID {
 				T  string            `json:"t"`
 				ID *wsaudit.SourceID `json:"id"`
 			}
-			if json.Unmarshal(sc.Bytes(), &ln) == nil && ln.T == "loss" && ln.ID != nil {
+			if err := json.Unmarshal(sc.Bytes(), &ln); err != nil {
+				return fmt.Errorf("%s: malformed line %q: %w", path, sc.Bytes(), err)
+			}
+			if ln.T == "loss" && ln.ID != nil {
 				out = append(out, *ln.ID)
 			}
 		}
@@ -234,4 +240,154 @@ func TestAuditColdReplayAgainstTheStoreNeverAppendsAKeyedEventLate(t *testing.T)
 			t.Fatalf("persisted losses = %+v, want only the tool call %+v", got, want)
 		}
 	})
+}
+
+// waitStoreLoaded waits until the restarted store has loaded the session's
+// ring, so Recover answers from the recovered ledger (the warm case).
+func waitStoreLoaded(t *testing.T, s *storeSink, boundary uint64) {
+	t.Helper()
+	s.Preload("s1")
+	waitUntil(t, "ring loaded", func() bool { return s.Store.Recover("s1", "h1").Boundary >= boundary })
+}
+
+func storeSeqsAscend(t *testing.T, evs []wsaudit.Envelope) {
+	t.Helper()
+	for i := 1; i < len(evs); i++ {
+		if evs[i].Seq <= evs[i-1].Seq {
+			t.Fatalf("envelope seq not ascending at %d: %d after %d", i, evs[i].Seq, evs[i-1].Seq)
+		}
+	}
+}
+
+// TestAuditStoreRestartReplayResumesWithoutDuplicates is the Phase 5
+// integrated restart check (ticket
+// 261119-feat-ws-audit-capture-harness-adapters): capture appends into the
+// real store, the daemon restarts, the holder replays its ring and capture
+// appends again. Retained source identities are not duplicated and envelope
+// seq resumes above the recovered maximum, whether capture's Recover finds
+// the ring loaded (warm) or still loading (cold).
+func TestAuditStoreRestartReplayResumesWithoutDuplicates(t *testing.T) {
+	line := func(i int) string { return fmt.Sprintf(`{"type":"system","subtype":"status","status":"n%d"}`, i) }
+	for _, mode := range []string{"warm", "cold"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			sink := openStoreSink(t, root)
+			r := newAuditRig(t, sink, "h1")
+			for i := 1; i <= 5; i++ {
+				r.kept(line(i))
+			}
+			r.end()
+			first := storeEvents(t, sink)
+			if len(first) != 5 {
+				t.Fatalf("first daemon retained %d events, want 5", len(first))
+			}
+			if err := sink.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			sink2 := openStoreSink(t, root)
+			if mode == "warm" {
+				waitStoreLoaded(t, sink2, 5)
+				if rec := sink2.Recover("s1", "h1"); rec.MaxSeq != first[4].Seq || rec.Boundary != 5 {
+					t.Fatalf("recovered %+v, want max seq %d and boundary 5", rec, first[4].Seq)
+				}
+			} else {
+				sink2.cold = true
+			}
+			r2 := newAuditRig(t, sink2, "h1")
+			for i := 1; i <= 5; i++ {
+				r2.replayed(uint64(i), line(i))
+			}
+			r2.seq = 5
+			r2.kept(line(6))
+			r2.end()
+			evs := storeEvents(t, sink2)
+			if len(evs) != 6 {
+				t.Fatalf("after replay %d events, want the 5 retained plus record 6: %+v", len(evs), evs)
+			}
+			storeSeqsAscend(t, evs)
+			for i := range first {
+				if evs[i].Seq != first[i].Seq || evs[i].Out != first[i].Out {
+					t.Fatalf("event %d changed across restart: %+v -> %+v", i, first[i], evs[i])
+				}
+			}
+			if last := evs[5]; last.Seq <= first[4].Seq || !strings.Contains(last.Out, `"n6"`) {
+				t.Fatalf("last = %+v, want record 6 above recovered max seq %d", last, first[4].Seq)
+			}
+			if got := persistedLosses(t, root); len(got) != 0 {
+				t.Fatalf("a clean replay recorded losses: %+v", got)
+			}
+		})
+	}
+}
+
+// TestAuditStoreReplayRecordsAFailedAppendAsLoss is the integrated form of
+// the fake-sink scenario: append of source sequence 10 fails, 11 succeeds;
+// after a restart and replay, 10 is recorded as loss, never appended after
+// 11, and the seq resumes above the recovered maximum.
+func TestAuditStoreReplayRecordsAFailedAppendAsLoss(t *testing.T) {
+	line := func(i int) string { return fmt.Sprintf(`{"type":"system","subtype":"status","status":"n%d"}`, i) }
+	for _, mode := range []string{"warm", "cold"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			sink := openStoreSink(t, root)
+			sink.failEnv = func(ev wsaudit.Envelope) bool { return strings.Contains(ev.Out, `"n10"`) }
+			r := newAuditRig(t, sink, "h1")
+			for i := 1; i <= 11; i++ {
+				r.kept(line(i))
+			}
+			r.end()
+			first := storeEvents(t, sink)
+			if len(first) != 10 {
+				t.Fatalf("first daemon retained %d events, want 10 (record 10 failed)", len(first))
+			}
+			if err := sink.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			sink2 := openStoreSink(t, root)
+			if mode == "warm" {
+				waitStoreLoaded(t, sink2, 11)
+			} else {
+				sink2.cold = true
+			}
+			r2 := newAuditRig(t, sink2, "h1")
+			for i := 1; i <= 11; i++ {
+				r2.replayed(uint64(i), line(i))
+			}
+			r2.seq = 11
+			r2.kept(line(12))
+			r2.end()
+			evs := storeEvents(t, sink2)
+			if len(evs) != 11 {
+				t.Fatalf("after replay %d events, want the 10 retained plus record 12", len(evs))
+			}
+			storeSeqsAscend(t, evs)
+			for _, ev := range evs {
+				if strings.Contains(ev.Out, `"n10"`) {
+					t.Fatalf("record 10 was appended late: %+v", ev)
+				}
+			}
+			if last := evs[10]; !strings.Contains(last.Out, `"n12"`) || last.Seq <= first[9].Seq {
+				t.Fatalf("last = %+v, want record 12 above recovered max seq %d", last, first[9].Seq)
+			}
+			want := wsaudit.SourceID{Source: "h1", Seq: 10}
+			// Warm: capture's Recover finds boundary 11 and judges record 10
+			// itself. Cold: Recover answers zero, so capture records nothing
+			// and the store's writer judges it. Either way one loss persists.
+			sink2.mu.Lock()
+			captured := slices.Clone(sink2.captured)
+			sink2.mu.Unlock()
+			wantCaptured := []wsaudit.SourceID(nil)
+			if mode == "warm" {
+				wantCaptured = []wsaudit.SourceID{want}
+			}
+			if !slices.Equal(captured, wantCaptured) {
+				t.Fatalf("capture recorded losses %+v, want %+v (%s)", captured, wantCaptured, mode)
+			}
+			if got := persistedLosses(t, root); !slices.Equal(got, []wsaudit.SourceID{want}) {
+				t.Fatalf("persisted losses = %+v, want record 10 only", got)
+			}
+		})
+	}
 }
