@@ -456,6 +456,60 @@ Verification boundary:
 - Performance: the measurements listed under Constraints for the daemon
   paths (list, event wake, output read, stop).
 
+### Result (bd1a2a2e2) - 2026-11-23
+
+Landed in 2eb404138, a5cdef804 and bd1a2a2e2 (backend only; no UI).
+
+- Marker and notice: `stop(j, byUser)` sets a stop intent only where it is the
+  first to set `stopping`; `endLocked` commits "stopped by user" only when the
+  job ends stopped under that intent; a failed holder stop clears both. An
+  agent's converted job gets one steered notice (event
+  `exec:<id>:stopped-by-user`, deduplicated by `AdmitCompletion`); the user's
+  own `!` job gets a passive receipt through `Sessions.Hand` and wakes
+  nothing. A job stopped while starting or inside the sync launch wait owes no
+  notice. Outcomes (sent, closed, failed) live in memory only; a repeated stop
+  of a failed one is the Retry. `noticeMu` is taken before `h.mu`.
+- Origin: `HostedLaunch.Origin` (agent or user); the composer sets user.
+- Feed and read: `Hosted.Jobs(owner)` (uncapped, no tail), `ReadOutput` by
+  offset over the merged stream with stream-attributed segments, a gap at
+  `Evicted`, a 16 KiB cap and a clamp past `Written`. Routes under
+  `/s/<id>/exec/` (list, output, stop) are local-write, same-origin, open-lead
+  only and owner-scoped; an unbound service answers 404. The `execjobs` SSE
+  event carries only `{"rev":N}` and goes to session streams.
+- Notice language: the stop note follows the normalized `workflow.lang`
+  (ko or en, English otherwise), cached beside the ambient block, so the
+  notice path reads memory only.
+- Compatibility: T0 on every surface. No schema or `user_version` change
+  (`hosted_store.go` and the row struct are unchanged); after a restart a
+  user-stopped job reads as an ordinary stopped job. An old page ignores the
+  unknown event; the new routes 404 on an old daemon, so no HUD.
+- Performance (file operations counted with `FileIOCounters`): each route
+  makes 4 operations per request, the same as the localhost guard baseline,
+  at 0, 1, 50 and 200 jobs. List p50 about 100 us at 0 jobs and 163 us at 200
+  jobs (39.8 KB). `Jobs()` p50 is 125 ns at 1 job, 10.7 us at 50, 46.8 us at
+  200. A 16 KiB output poll on a full 1 MiB ring takes about 0.8 us; draining
+  it takes 64 polls, about 84 us. A user stop takes about 57 us and writes one
+  store row, as an agent's stop does. A 200-change burst over 4 streams:
+  before, the rail key alone signalled 8 (7 shared, 0 renders); after,
+  22 signals (15 shared), 6 events delivered, 0 session renders, 0 file ops.
+- Review (lite, one pass): no Critical. Two Important findings, the race
+  boundary and the user-stop-first ordering being untested, fixed in
+  bd1a2a2e2 (a loop test of a stop against a natural exit, both orderings hit,
+  and a real agent stop joining a held user stop).
+- Verification: `go test -race` on `./internal/execjob` (full), and the new
+  tests of wsagent, wsdashboard (`TestExecHUD*`, `TestExecJobsEvent*`, the
+  stream tests) and cmd/ws-mcp (`TestComposer*`); `GOOS=windows go vet` on
+  execjob, wsagent, wsdashboard, cmd/ws-mcp and internal/mcp, all clean.
+- Known, not from this change: `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`
+  fails in a checkout where `internal/wspackage/generated` is only the
+  placeholder.
+- Minor review notes, not fixed: a marked job whose admission was skipped
+  while the daemon was not started or was closing shows no notice outcome and
+  has no Retry path until a later stop; an async launch stopped between spawn
+  and the launch return can give the agent both the stopped view and a notice;
+  a repeated stop of a closed-outcome job answers 200 without a retry, untested
+  at the route level.
+
 ### Phase 2: HUD UI
 
 Depends on Phase 1.
