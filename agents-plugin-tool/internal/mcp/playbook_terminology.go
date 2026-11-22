@@ -32,6 +32,10 @@ var reservedToolVarNames = func() map[string]bool {
 		"ContinueIdiom": true,
 		"RoleModel":     true,
 		"WorkflowLang":  true,
+		// The workflow manual's spawning clauses (withManualClauses).
+		"ExploreTierClause":   true,
+		"RenderedSpawnClause": true,
+		"RenderedTierClause":  true,
 	}
 	for _, name := range wsrsrc.ImplicitVariableNames {
 		set[name] = true
@@ -166,6 +170,32 @@ func nativeFirstTerminology(namespace string) map[string]string {
 	terms["ExploreAgent"] = "your native subagent (no ws tools, your harness's default model; when the question needs a specific tier, a read-only `" + namespace + "/agent.spawn` subagent at an external-harness tier)"
 	terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness; authority: at most your own)"
 	return terms
+}
+
+// withManualClauses is terminology plus the workflow manual's spawning
+// clauses: ExploreTierClause follows {{.ExploreAgent}} in the exploration
+// bullet, RenderedSpawnClause says how a rendered delegate is spawned, and
+// RenderedTierClause names a rendered playbook's tier. By default they are
+// the manual's own wording. For nativeFirst (nativeFirstTerminology's
+// caller), whose bare size would resolve to its own harness, the rendered
+// tier gets the external-harness prefix and the exploration bullet drops
+// the "tier the question needs" suffix, which its native subagent cannot
+// honor. The caller's terminology map is not modified.
+func withManualClauses(terminology map[string]string, nativeFirst bool, namespace string) map[string]string {
+	out := make(map[string]string, len(terminology)+3)
+	for k, v := range terminology {
+		out[k] = v
+	}
+	if nativeFirst {
+		out["ExploreTierClause"] = "; pick that tier by `### Choosing a tier`"
+		out["RenderedSpawnClause"] = "bindings the render returns through `" + namespace + "/agent.spawn` on an external harness, at the render's tier qualified as `### Choosing a tier` states"
+		out["RenderedTierClause"] = "the tier its render recommends; as a `" + namespace + "/agent.spawn` target, put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness"
+		return out
+	}
+	out["ExploreTierClause"] = " at the tier the question needs (`### Choosing a tier`)"
+	out["RenderedSpawnClause"] = "tier and bindings the render returns"
+	out["RenderedTierClause"] = "the tier its render recommends"
+	return out
 }
 
 // claudeSpawnIdiom is the Claude SpawnIdiom value. Claude's Agent tool takes a

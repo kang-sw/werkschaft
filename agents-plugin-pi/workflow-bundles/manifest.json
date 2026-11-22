@@ -1,6 +1,6 @@
 {
   "ws": {
-    "archive_sha256": "f169ad411162bf5f25c6589be9bc2ee84a4a3a972f1be5ad5f0baea7537139e5",
+    "archive_sha256": "2c356949b36c3ae0ee53853331396c22b49aa9d3f4de4f57fb34559a4ade3ee2",
     "files": {
       ".claude-plugin/plugin.json": "ab391c9b4b8f55831caddc04c3ceef91392b67d684461220238b438ead48bba0",
       ".codex-plugin/hooks.json": "e3f3ea60f82fb0795c63bf54b9208647f39cb3779f050d1c755fabdc8a434490",
@@ -64,11 +64,11 @@
       "rsrc/lead-use-mailbox/arm-the-wait.pi.md": "fce77e67ab83ae06a1698df262c7f51f7f20ef662b64a90e5e1bdbe08807480a",
       "rsrc/lead-use-mailbox/lead-use-mailbox.md": "f8ce356a3f8173520a6866b2d85fd2a1dcda418040447838a78e8071b22450a6",
       "rsrc/lead-workflow-manual/command-syntax.md": "0c7d0acb56260b0ff1ae8df4e8123d89c925f25782f612fadc29176003a5a331",
-      "rsrc/lead-workflow-manual/lead-workflow-manual.md": "ffd4c251f160a9011b704b8337969f8c8accd18793df03aaca1d6d96ebfe8e51",
+      "rsrc/lead-workflow-manual/lead-workflow-manual.md": "56831cb00aa739c42ce4ef96609cc490525b03cf3cc296c6d6461ec9433989fd",
       "rsrc/lead-workflow-manual/native-spawn-binding.claude.md": "fc7258226abd15ad2baef2ef8a361f6777d8390868a595853f61812def0cf310",
       "rsrc/lead-workflow-manual/native-spawn-binding.codex.md": "ea1977984de016a95df292c3384e93982aa67b12bbd5e8850c7ed792acbdf284",
       "rsrc/lead-workflow-manual/native-spawn-binding.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "rsrc/manifest.json": "49e935b0fecee5b80525359895b1f7c718da80123289af672530ae4de3a29c6f",
+      "rsrc/manifest.json": "ddeb17ba687c0390e8f06c61597b064d52e5a1cab0723eb19d73c1231be92b8f",
       "rsrc/reference-discovery/reference-discovery.md": "4492f45ecff14ec454754cd9af4775b33a0df1f9cd5cf705b3f75bad75defba2",
       "rsrc/review-config/review-config.md": "dfbbf5be52c83cfb4f86edb862f8e7b135afcc7f5efb9433e808d08ac37ff53b",
       "rsrc/review-handler/review-handler.md": "fa49e4d9c9252065f01e928d02e6a4ba292e12e70e309fa5579b832f88719fb3",
@@ -115,7 +115,7 @@
     }
   },
   "wsflow": {
-    "archive_sha256": "a968878fe535d090b19530e5cdfb45da67e5b0e0690ba10a5ab39896d5a0fbb7",
+    "archive_sha256": "5fdf1953494d26755e770c40f4ab1d446f133be4bcd5a0d327259894d9e237d0",
     "files": {
       ".claude-plugin/plugin.json": "86ff6069699a7f64dc452778abeb6c5cfb62cebc7d4a2bcc05ad3dbd3f8c3888",
       ".codex-plugin/plugin.json": "f85cb89d304896083240c613f80a9eb2abd63ba8eb6db1796ff503b44abd710f",
@@ -178,11 +178,11 @@
       "rsrc/lead-use-mailbox/arm-the-wait.pi.md": "fce77e67ab83ae06a1698df262c7f51f7f20ef662b64a90e5e1bdbe08807480a",
       "rsrc/lead-use-mailbox/lead-use-mailbox.md": "f8ce356a3f8173520a6866b2d85fd2a1dcda418040447838a78e8071b22450a6",
       "rsrc/lead-workflow-manual/command-syntax.md": "0c7d0acb56260b0ff1ae8df4e8123d89c925f25782f612fadc29176003a5a331",
-      "rsrc/lead-workflow-manual/lead-workflow-manual.md": "ffd4c251f160a9011b704b8337969f8c8accd18793df03aaca1d6d96ebfe8e51",
+      "rsrc/lead-workflow-manual/lead-workflow-manual.md": "56831cb00aa739c42ce4ef96609cc490525b03cf3cc296c6d6461ec9433989fd",
       "rsrc/lead-workflow-manual/native-spawn-binding.claude.md": "fc7258226abd15ad2baef2ef8a361f6777d8390868a595853f61812def0cf310",
       "rsrc/lead-workflow-manual/native-spawn-binding.codex.md": "ea1977984de016a95df292c3384e93982aa67b12bbd5e8850c7ed792acbdf284",
       "rsrc/lead-workflow-manual/native-spawn-binding.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "rsrc/manifest.json": "49e935b0fecee5b80525359895b1f7c718da80123289af672530ae4de3a29c6f",
+      "rsrc/manifest.json": "ddeb17ba687c0390e8f06c61597b064d52e5a1cab0723eb19d73c1231be92b8f",
       "rsrc/reference-discovery/reference-discovery.md": "4492f45ecff14ec454754cd9af4775b33a0df1f9cd5cf705b3f75bad75defba2",
       "rsrc/review-config/review-config.md": "dfbbf5be52c83cfb4f86edb862f8e7b135afcc7f5efb9433e808d08ac37ff53b",
       "rsrc/review-handler/review-handler.md": "fa49e4d9c9252065f01e928d02e6a4ba292e12e70e309fa5579b832f88719fb3",

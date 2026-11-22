@@ -1,11 +1,16 @@
 package mcp
 
 import (
+	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
+	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
 // A hosted lead whose backend registration sets PreferNativeSubagent (agy)
@@ -21,6 +26,32 @@ const (
 	daemonAgentExplore = piMCPOnlyExplore + " at the tier the question needs"
 	daemonAgentSpawn   = "`ws/agent.spawn` (tier: the resolved capability tier, not a model name; authority: at most your own)"
 	genericTip         = "When the subagent returns an agent id, use `" + piMCPOnlyContinue + "`"
+)
+
+// The workflow manual's exploration and spawning bullets and its rendered
+// playbook tier line, complete, as the agy lead reads them with and without
+// the option.
+const (
+	nativeFirstExploreBullet = "- Bounded evidence gathering that benefits from an independent read →\n" +
+		"  " + nativeFirstExplore + "; pick that tier by `### Choosing a tier`.\n" +
+		"  English prompt with the scoped question; require cited evidence, gaps, and\n" +
+		"  follow-ups. Run independent questions in parallel; synthesize once the\n" +
+		"  decision has enough evidence.\n"
+	nativeFirstSpawnBullet = "- Bundled delegate prompt → `ws/playbook.render` with the lead\n" +
+		"  `session_key`; give the subagent the returned path and spawn it with the\n" +
+		"  bindings the render returns through `ws/agent.spawn` on an external harness, at the render's tier qualified as `### Choosing a tier` states. Delegate works in another worktree →\n" +
+		"  select that worktree at render time.\n"
+	nativeFirstTierLine = "- A rendered playbook → the tier its render recommends; as a `ws/agent.spawn` target, put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness.\n"
+	todayExploreBullet  = "- Bounded evidence gathering that benefits from an independent read →\n" +
+		"  " + daemonAgentExplore + " (`### Choosing a tier`).\n" +
+		"  English prompt with the scoped question; require cited evidence, gaps, and\n" +
+		"  follow-ups. Run independent questions in parallel; synthesize once the\n" +
+		"  decision has enough evidence.\n"
+	todaySpawnBullet = "- Bundled delegate prompt → `ws/playbook.render` with the lead\n" +
+		"  `session_key`; give the subagent the returned path and spawn it with the\n" +
+		"  tier and bindings the render returns. Delegate works in another worktree →\n" +
+		"  select that worktree at render time.\n"
+	todayTierLine = "- A rendered playbook → the tier its render recommends.\n"
 )
 
 // nativeFirstMarkers are phrases only the native-first wording carries.
@@ -112,10 +143,11 @@ func TestNativeFirstLeadExecutedText(t *testing.T) {
 	off, on, f := agyLeadConnections(t)
 
 	manual := connectionManual(t, on, f.hosted)
-	assertContains(t, "native-first manual", manual, nativeFirstExplore+" at the tier the question needs")
-	assertLacks(t, "native-first manual", manual, daemonAgentExplore, "{{")
-	assertContains(t, "today's manual", connectionManual(t, off, f.hosted), daemonAgentExplore)
-	assertLacks(t, "today's manual", connectionManual(t, off, f.hosted), nativeFirstMarkers...)
+	assertContains(t, "native-first manual", manual, nativeFirstExploreBullet, nativeFirstSpawnBullet, nativeFirstTierLine)
+	assertLacks(t, "native-first manual", manual, daemonAgentExplore, "at the tier the question needs", "tier and bindings the render returns", "{{")
+	offManual := connectionManual(t, off, f.hosted)
+	assertContains(t, "today's manual", offManual, todayExploreBullet, todaySpawnBullet, todayTierLine)
+	assertLacks(t, "today's manual", offManual, nativeFirstMarkers...)
 
 	run := connectionRead(t, on, f.hosted, "lead-run")
 	assertContains(t, "native-first lead-run", run, nativeFirstSpawn)
@@ -152,9 +184,8 @@ func TestNativeFirstLeadExecutedText(t *testing.T) {
 // TestNativeFirstLeavesPlaybookRenderUnchanged: a delegate prompt the agy
 // lead renders (an explore delegate, the design reviewer) runs on another
 // process, so it is byte-identical with and without the option and names no
-// native subagent. The explore render recommends a bare size; the lead's
-// size-prefix rule qualifies it to the Claude target that wsagent's
-// TestAgyLeadHarnessQualifiedTierStartsClaudeChild admits.
+// native subagent. TestAgyLeadRenderedTierSpawnsClaudeChild carries its
+// recommendation through agent.spawn.
 func TestNativeFirstLeavesPlaybookRenderUnchanged(t *testing.T) {
 	off, on, f := agyLeadConnections(t)
 	for _, name := range []string{"explore", "ticket-reviewer-design"} {
@@ -165,38 +196,98 @@ func TestNativeFirstLeavesPlaybookRenderUnchanged(t *testing.T) {
 		}
 		assertLacks(t, name+" render", after, nativeFirstMarkers...)
 		assertContains(t, name+" render", after, piMCPOnlyExplore)
-		if name == "explore" {
-			if afterTier != "small" {
-				t.Fatalf("explore recommends %q; the size-prefix rule expects a bare size", afterTier)
-			}
-			if qualified := "claude." + afterTier; qualified != "claude.small" {
-				t.Fatalf("qualified target = %q", qualified)
-			}
+	}
+}
+
+// TestNativeFirstOtherHarnessesUnchanged: only agy sets
+// PreferNativeSubagent; TestHarnessWordingGolden pins the Claude, Codex, and
+// Pi hosted leads' outputs byte-identical to the base.
+func TestNativeFirstOtherHarnessesUnchanged(t *testing.T) {
+	for backend, reg := range wsagent.BuiltinBackendRegistrations() {
+		if reg.PreferNativeSubagent != (backend == wsagent.BackendAgy) {
+			t.Errorf("%s PreferNativeSubagent = %v", backend, reg.PreferNativeSubagent)
 		}
 	}
 }
 
-// TestNativeFirstOtherHarnessesUnchanged: Claude, Codex, and Pi do not set
-// PreferNativeSubagent, so none of their hosted leads' manual,
-// playbook.read, or playbook.render outputs carries the native-first
-// wording; the exact-wording tests of those rows pin the rest unchanged.
-func TestNativeFirstOtherHarnessesUnchanged(t *testing.T) {
-	for _, backend := range []string{wsagent.BackendClaude, wsagent.BackendCodex, wsagent.BackendPi} {
-		regs := wsagent.BuiltinBackendRegistrations()
-		if regs[backend].PreferNativeSubagent {
-			t.Fatalf("%s sets PreferNativeSubagent", backend)
+// TestAgyLeadRenderedTierSpawnsClaudeChild: the render-to-spawn handoff of
+// an agy hosted lead, end to end on one connection served by a real runner
+// with fake Claude and agy backends and no configured external route. The
+// tier and prompt path come from that connection's playbook.render response;
+// the bare size it recommends, qualified with `claude.` as the native-first
+// manual and steer prescribe, reaches agent.spawn, which starts the Claude
+// backend with the rendered prompt, not the agy one. Both halves live in
+// this package because wsagent cannot reach playbook.render.
+func TestAgyLeadRenderedTierSpawnsClaudeChild(t *testing.T) {
+	f := newHostedKeyFixture(t)
+	dir, err := NewServer(f.root, "test").dashboard.stateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := wsagent.Record{ReplyID: wsmailbox.ReplyID(f.hosted), WSKey: f.hosted, Root: f.root, CreatedAt: time.Now().UTC().Format(time.RFC3339), Backend: wsagent.BackendAgy, Lead: true}
+	if err := wsagent.WriteRecordForTest(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	s := f.connect(t)
+	cfg := s.sessionConfigOptions(f.hosted)
+	for harness, model := range map[string]string{wsagent.BackendClaude: "claude-small", wsagent.BackendAgy: "agy-small"} {
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(cfg, "small", "", model, harness, "high"); err != nil {
+			t.Fatal(err)
 		}
-		s, f := hostedBackendConnection(t, backend, regs)
-		for label, text := range map[string]string{
-			"manual":       connectionManual(t, s, f.hosted),
-			"lead-run":     connectionRead(t, s, f.hosted, "lead-run"),
-			"lead-discuss": connectionRead(t, s, f.hosted, "lead-discuss"),
-		} {
-			assertLacks(t, backend+" "+label, text, nativeFirstMarkers...)
+	}
+	claude, agy := &routeBackend{}, &routeBackend{}
+	regs := agyRegistrations(true)
+	agyReg := regs[wsagent.BackendAgy]
+	agyReg.Backend, agyReg.WorkerCapable, agyReg.WorkerProfile = agy, true, wsagent.AgentWorkerProfile(wsagent.BackendAgy)
+	regs[wsagent.BackendAgy] = agyReg
+	claudeReg := regs[wsagent.BackendClaude]
+	claudeReg.Backend, claudeReg.WorkerCapable, claudeReg.WorkerProfile = claude, true, wsagent.AgentWorkerProfile(wsagent.BackendClaude)
+	regs[wsagent.BackendClaude] = claudeReg
+	runner := wsagent.NewRunner(wsagent.Options{Dir: dir, Backends: regs, Keys: &routeKeys{}, Config: cfg,
+		WSMCP: func(root string) (wsagent.MCPCommand, error) {
+			return wsagent.MCPCommand{Command: "/bin/ws-mcp", Args: []string{"serve", "--stdio", "--root", root}}, nil
+		}})
+	daemon := httptest.NewServer(runner.Handler())
+	defer daemon.Close()
+	runner.SetEndpoint(daemon.URL)
+	runner.Start(nil)
+	defer runner.Close()
+	s.pi.agents = runner
+
+	out := callToolWithKey(t, s, 2, f.hosted, "playbook.render", map[string]any{"name": "explore"})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	promptPath, tier := strings.TrimSpace(lines[0]), ""
+	for _, line := range lines[1:] {
+		if v, ok := strings.CutPrefix(line, "recommended-tier: "); ok {
+			tier = strings.TrimSpace(v)
 		}
-		for _, name := range []string{"explore", "ticket-reviewer-design"} {
-			body, _ := connectionRender(t, s, f.hosted, f.root, name)
-			assertLacks(t, backend+" "+name+" render", body, nativeFirstMarkers...)
-		}
+	}
+	prompt, err := os.ReadFile(promptPath)
+	if err != nil || tier != "small" {
+		t.Fatalf("playbook.render = %q (prompt %v); want a prompt path and a bare size", out, err)
+	}
+
+	raw := callToolWithKey(t, s, 3, f.hosted, "agent.spawn", map[string]any{"prompt": "Run the playbook at the system prompt path.", "system_prompt_path": promptPath, "tier": "claude." + tier, "authority": "read-only", "format": "json"})
+	var res wsagent.AgentSpawnResult
+	if err := json.Unmarshal([]byte(raw), &res); err != nil || res.Address == "" {
+		t.Fatalf("agent.spawn = %q (%v)", raw, err)
+	}
+	spec, proc := claude.waitStart(t, 0)
+	proc.nextSent(t)
+	if spec.Model != "claude-small" {
+		t.Fatalf("the Claude child's model = %q, want the claude small tier's", spec.Model)
+	}
+	instructions, err := os.ReadFile(spec.Instructions)
+	if err != nil || !strings.Contains(string(instructions), strings.TrimSpace(string(prompt))) {
+		t.Fatalf("the Claude child's instructions lack the rendered prompt: %v\n%s", err, instructions)
+	}
+	child, err := wsagent.ReadRecord(dir, strings.TrimPrefix(res.Address, "id:"))
+	if err != nil || child.Backend != wsagent.BackendClaude {
+		t.Fatalf("child record = %+v, %v; want a Claude child", child, err)
+	}
+	agy.mu.Lock()
+	defer agy.mu.Unlock()
+	if len(agy.starts) != 0 {
+		t.Fatalf("the agy backend started %d process(es)", len(agy.starts))
 	}
 }

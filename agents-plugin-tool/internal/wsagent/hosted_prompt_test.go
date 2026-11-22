@@ -115,8 +115,9 @@ func TestNativeFirstSteerForPreferNativeSubagentLead(t *testing.T) {
 }
 
 // TestAgyLeadHarnessQualifiedTierStartsClaudeChild: the explore render's
-// recommendation for an agy lead is a bare size ("small", pinned by mcp's
-// TestNativeFirstLeavesPlaybookRenderUnchanged). Passed as returned, it
+// recommendation for an agy lead is a bare size ("small"; mcp's
+// TestAgyLeadRenderedTierSpawnsClaudeChild runs the whole handoff from a
+// real render on one connection). Passed as returned, it
 // resolves to the lead's own harness; with the native-first line's size
 // prefix, agent.spawn admits `claude.small` and starts a Claude child. No
 // external route is configured.

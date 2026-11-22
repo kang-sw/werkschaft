@@ -150,7 +150,7 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 		return "", "", err
 	}
 
-	vars, err := buildPlaybookVars(pb.Meta.Variables, callerContext, harness, terminology, recommendedTier, configOpts, workflowLang, s.runtimeNamespace())
+	vars, err := buildPlaybookVars(pb.Meta.Variables, callerContext, harness, withManualClauses(terminology, nativeFirst, s.runtimeNamespace()), recommendedTier, configOpts, workflowLang, s.runtimeNamespace())
 	if err != nil {
 		return "", "", err
 	}
