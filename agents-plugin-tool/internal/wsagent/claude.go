@@ -39,6 +39,15 @@ func (b ClaudeBackend) registration() (string, BackendRegistration) {
 		// --disallowedTools claudeNativeProcessTools, verified on 2.1.330
 		// (testdata/claude-2.1.330-native-process-tools.jsonl).
 		ExecCutover: &ExecCutoverSupport{Since: "2.1.330"},
+		// One-shot probe, 2026-11-22, claude 2.1.330: `claude -p
+		// --output-format text --setting-sources "" --strict-mcp-config
+		// --tools "" --permission-mode dontAsk --no-session-persistence
+		// --disable-slash-commands --model haiku --effort low`, prompt on
+		// stdin, answered on stdout (exit 0). --no-session-persistence
+		// writes no transcript under ~/.claude/projects (the same call
+		// without it writes one); it still creates an empty auto-memory
+		// directory there. Every flag is listed by `claude --help`.
+		OneShot: &OneShotSupport{Args: claudeOneShotArgs, Env: claudeEnv},
 		PlaybookTerminology: PlaybookTerminology{
 			ExploreAgent:  "the Explore agent",
 			ContinueIdiom: "SendMessage(to: <agentId>)",
@@ -188,6 +197,29 @@ func claudeRemovedTools(spec StartSpec) []string {
 		removed = append(removed, "Skill")
 	}
 	return removed
+}
+
+// claudeOneShotArgs is the isolated one-shot command line: the worker launch
+// pattern (claudeArgs) without MCP servers, plugins, or tools, plus no
+// session file and no skills or slash commands.
+func claudeOneShotArgs(model, effort string) []string {
+	args := []string{
+		"-p",
+		"--output-format", "text",
+		"--setting-sources", "",
+		"--strict-mcp-config",
+		"--tools", "",
+		"--permission-mode", "dontAsk",
+		"--no-session-persistence",
+		"--disable-slash-commands",
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--effort", effort)
+	}
+	return args
 }
 
 // claudeArgs is the claude command line for spec, without the executable.

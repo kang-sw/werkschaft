@@ -118,6 +118,14 @@ type DaemonOptions struct {
 	// AgyCommand resolves the agy CLI program and leading arguments for
 	// user-triggered /usage probes without spawning. Nil skips agy probes.
 	AgyCommand func() (string, []string, error)
+	// CompanionOneShot runs the companion agent director's isolated
+	// single-prompt call (companion_director.go); nil leaves the agent
+	// director inert, and rules mode is unaffected.
+	CompanionOneShot CompanionOneShotFunc
+	// CompanionHasOneShot reports, from memory, whether a harness has a
+	// one-shot mode; a trigger on a harness without one drops before the
+	// limiter charges it. Nil treats every harness as having one.
+	CompanionHasOneShot func(harness string) bool
 	// CardBound reports whether replyID is bound to a subordinate whiteboard
 	// agent card whose Record.Parent stays unset; nil defaults to false.
 	CardBound func(replyID string) bool
@@ -221,7 +229,9 @@ type Daemon struct {
 	companion companionState
 	// companionCommands broadcasts agent-director commands to rail streams.
 	companionCommands companionCommandHub
-	agents            AgentHost
+	// director is the companion agent director (companion_director.go).
+	director companionDirector
+	agents   AgentHost
 	// credentials is DaemonOptions.Credentials (or a test's
 	// credentialSource), nil without one.
 	credentials credentialStore

@@ -181,6 +181,10 @@ func dashboardCommand(args []string) {
 		// A hosted session's jobs run under the hosted exec jobs, which
 		// know their owning conversation; nil until they bind.
 		HostedExecJobs: func() map[string]int { return host.exec.Load().RunningOwners() },
+		// The companion director's isolated one-shot call, dispatched
+		// through the harness's backend registration.
+		CompanionOneShot:    wsagent.RunOneShot,
+		CompanionHasOneShot: wsagent.HasOneShot,
 		BeforeUnlock: func() {
 			if err := boards.Close(); err != nil {
 				fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)

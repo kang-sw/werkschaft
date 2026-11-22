@@ -593,6 +593,16 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		if src.key.kind == regionRail && !sendCompanion() {
 			return
 		}
+		// A shell's rail stream hands it the token its companion focus
+		// reports carry (companion_director.go); the report ends with it.
+		if src.key.kind == regionRail {
+			token := d.director.openStream()
+			defer d.director.closeStream(token)
+			payload, _ := json.Marshal(companionFocusEventPayload{Token: token})
+			if token != "" && (sink.event(companionFocusEvent, payload) != nil || sink.flush() != nil) {
+				return
+			}
+		}
 		// Only a shell's rail stream carries director commands, and only
 		// those published after it connected.
 		var commandWake <-chan struct{}

@@ -77,6 +77,9 @@ type BackendRegistration struct {
 	// ExecCutover is the backend's verified native process tool removal
 	// (exec_cutover.go); nil keeps every session's native tools.
 	ExecCutover *ExecCutoverSupport
+	// OneShot is the backend's isolated single-prompt mode (oneshot.go);
+	// nil means the harness has none and a one-shot call is refused.
+	OneShot *OneShotSupport
 	// ProviderCredentials admits this backend's hosted sessions to the
 	// daemon's provider token route (Runner.ResolveCredentialToken): a
 	// session may obtain a provider credential with its per-session token.
@@ -197,6 +200,10 @@ func cloneBackendRegistration(reg BackendRegistration) BackendRegistration {
 	reg.PermissionLevels = slices.Clone(reg.PermissionLevels)
 	reg.DirectTools = slices.Clone(reg.DirectTools)
 	reg.Profiles = cloneBuiltinProfiles(reg.Profiles)
+	if reg.OneShot != nil {
+		oneShot := *reg.OneShot
+		reg.OneShot = &oneShot
+	}
 	return reg
 }
 
