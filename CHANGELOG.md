@@ -6,8 +6,13 @@
 - **Daemon-hosted sessions get a per-session audit record store.** The
   dashboard daemon keeps the tool calls, tool results and hidden harness
   events of each session it hosts in an append-only ring of its own under
-  `<daemon state>/audit/`, separate from the conversation history. Capture
-  into it lands with the harness adapters; this release adds the store.
+  `<daemon state>/audit/`, separate from the conversation history. Hosted
+  Claude and Codex sessions are captured into it; agy and Pi capture is
+  still to come. The dashboard reads the store over
+  `/s/<reply-id>/audit/`, behind the same viewer guard as the session's
+  history, and the conversation view interleaves the
+  recorded calls, results and hidden events as rows with an inspector and
+  paging.
   Four global settings bound it: `dashboard.audit_session_cap_mib` (256),
   `dashboard.audit_total_cap_mib` (4096), `dashboard.audit_body_cap_kib`
   (1024) and `dashboard.audit_retention_days` (7). The byte settings must
