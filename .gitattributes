@@ -44,3 +44,4 @@ agents-plugin-tool/internal/wswhiteboard/assets/mermaid/mermaid.min.js linguist-
 /agents-plugin-tool/internal/wsagent/lead_runner_test.go ws-size-guard=1300
 /agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings.js ws-size-guard=1300
 /ai-docs/assets/mockups/261122/config-settings-ui-v3/mockup.html -ws-size-guard
+/ai-docs/assets/mockups/** -ws-size-guard
