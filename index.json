@@ -658,7 +658,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T11:11:08Z"
+        "touched_at": "2026-11-22T11:12:02Z",
+        "impl": {
+          "branch": "impl/develop/grab-stack-jelly"
+        }
       }
     },
     "261122-feat-ws-dashboard-session-stats": {
