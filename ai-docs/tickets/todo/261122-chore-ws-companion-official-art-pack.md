@@ -47,6 +47,8 @@ On 2026-11-22 the owner also replaced the flattened per-pose body with the paper
   3. Dress the outfit over a tinted copy of the base by image edit (paper-doll (82)).
   4. Split the garment using the split base as the reference.
   5. Assemble the column in `pack.json` and preview it live.
+- **Base-body source (owner 2026-11-22 19:35–19:37; (121)=a, (122)=ok):** the `stand` base derives from a local reference image that already has drawn hands (hand on hip, V sign), instead of inventing hands on the D1 master. Probes showed that adding hands to a body without them costs repeated redraws (mannequin v1–v3). Under the epic's base-body exception, hair, eyes and every face or costume mark are removed, leaving a bald featureless white body. The derivation source and intermediate files stay in the git-excluded local folder; only the finished featureless base enters this pack. Further variants (for example a demure stand with clasped hands) are generated from this same base by image edit, so identity stays consistent.
+  - Rejected: keeping the v3 D1-derived mannequin (hands redrawn twice and still weak), and regenerating a base from the D1 master (owner preferred the hand-complete base).
 - **Base-library requirements:**
   - Hands are simple fingered chibi hands and feet are shaped feet, not the probe's mitten hands and flattened feet (paper-doll (101)).
   - The mannequin line layer keeps the D1 master's line detail: articulated fingers, knuckle and wrist lines, and elbow, knee and ankle form lines. A featureless fill does not mean a featureless line (owner 2026-11-22 18:56 feedback on the v1 mannequin's hip hand).
@@ -70,7 +72,7 @@ On 2026-11-22 the owner also replaced the flattened per-pose body with the paper
 
 Required manuals (per `AGENTS.md` `### Implementation Conventions`):
 - `ai-docs/manuals/companion-pet-rigging.md` — locked Style D D1 palette, `#1e2433` monoline ink, silhouette anchors, `ws-companion/v1` assetized timing schema, the paper-doll section, and all six craft gates.
-- `ai-docs/manuals/shipped-surface-boundary.md` — 100% IP-clean original Werkschaft mascot only; zero third-party character assets or reference artist names anywhere in git or pack metadata. Local reproductions of third-party characters stay in local-only BYO packs and never enter this pack (paper-doll (75)).
+- `ai-docs/manuals/shipped-surface-boundary.md` — 100% IP-clean original Werkschaft mascot only; zero third-party character assets or reference artist names anywhere in git or pack metadata. Local reproductions of third-party characters stay in local-only BYO packs and never enter this pack (paper-doll (75)). The single exception is the featureless mannequin base body (epic Public repository IP boundary, base-body exception).
 - `ai-docs/manuals/performance.md` — keep the embedded default pack compact for fast cold load and low memory footprint. Set the byte budget by measurement after the first finished column, with a 3 MiB hard ceiling (paper-doll (99)). The former 1.2 MiB cap is rejected because probe data shows it cannot hold a kit.
 
 ## Phases
