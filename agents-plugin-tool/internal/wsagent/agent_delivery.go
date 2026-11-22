@@ -214,6 +214,16 @@ func (r *Runner) ForgetClosed(id string) {
 }
 
 func (r *Runner) forgetClosed(id string) (Record, bool) {
+	rec, ok := r.dropClosed(id)
+	// Gone from the runner for good (not merely closed, and not open under
+	// the same id): its scheduled prompts go with it.
+	if !r.CronKnown(id) {
+		r.cronGone(id)
+	}
+	return rec, ok
+}
+
+func (r *Runner) dropClosed(id string) (Record, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rec, ok := r.closed[id]

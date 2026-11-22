@@ -29,6 +29,9 @@ func Normalize(e Entry) (Entry, error) {
 	if e.Command != nil {
 		return normalizeCommand(e)
 	}
+	if e.Cron != nil {
+		return normalizeCron(e)
+	}
 	out := Entry{SchemaVersion: SchemaVersion, SentAt: e.SentAt, Steer: e.Steer, EventID: strings.TrimSpace(e.EventID), UTCOffsetMinutes: e.UTCOffsetMinutes}
 	size, selectionMentions := 0, 0
 	for _, p := range e.Parts {

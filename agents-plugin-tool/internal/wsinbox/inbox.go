@@ -208,6 +208,11 @@ type Entry struct {
 	// Command marks a command entry: one slash command for the adapter to
 	// run natively. It carries no other content but SentAt.
 	Command *Command `json:"command,omitempty"`
+	// Cron marks a scheduled prompt a daemon-held schedule sent (cron.go).
+	// Its one part is the prompt; Text wraps it as <ws:cron> instead of
+	// <ws:user>. It is never steered and never merged. A reader that does
+	// not know the field shows the prompt under the <ws:user> envelope.
+	Cron *Cron `json:"cron,omitempty"`
 }
 
 // Command is a slash command as the composer picked it: the name without

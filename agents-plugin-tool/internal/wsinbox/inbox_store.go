@@ -261,6 +261,11 @@ func SteerWithAdmission(dir, name string, admit func(Entry) error) (string, erro
 		_ = rename(claimed, filepath.Join(dir, name))
 		return "", ErrGone
 	}
+	if err == nil && entry.Cron != nil {
+		// A scheduled prompt waits for the turn end; it never steers.
+		_ = rename(claimed, filepath.Join(dir, name))
+		return "", ErrNotSteerable
+	}
 	if err == nil && admit != nil {
 		if err := admit(entry); err != nil {
 			_ = rename(claimed, filepath.Join(dir, name))
@@ -312,5 +317,6 @@ func Cancel(dir, name string) (Entry, error) {
 		return Entry{}, ErrGone
 	}
 	_ = remove(claimed)
+	notifyCronRemoved(entry)
 	return entry, nil
 }

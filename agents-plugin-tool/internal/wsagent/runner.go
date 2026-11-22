@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsawake"
@@ -314,6 +315,10 @@ type Runner struct {
 
 	// holders routes the session holders' events to the lead processes.
 	holders holderTable
+
+	// cron is the daemon's scheduler, told when a conversation is gone
+	// for good (BindCron).
+	cron atomic.Pointer[cronLink]
 
 	// watchers are Watch's callbacks, by registration (watchMu).
 	watchMu  sync.Mutex
