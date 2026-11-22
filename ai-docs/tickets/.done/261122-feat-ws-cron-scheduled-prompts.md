@@ -548,6 +548,10 @@ the daemon.
 - Round-2 note: `TestDashboardInboxDrainNudgesOnlyAfterClaiming` (`mcp/dashboard_inbox_test.go:370`), which the reviewer saw time out, passes here when run alone (`-count=10`) and with the cron-filtered `mcp` run; nothing in these changes touches that path.
 - Verification: `go test -race -count=5 ./internal/wscron`, `go vet` and `GOOS=windows go vet` on the touched packages.
 
+#### Edition (e65eef7c2) - 2026-11-22
+
+- Round-3 review (Critical): two overlapping successful deliveries of one schedule finishing in reverse order moved `last_at` backwards, in memory and in the queued delta, and `SetLastFire` replaced the row unconditionally. A fire now records the newer of the current and its own minute, in memory and in the delta (`wscron/scheduler.go`), and the write is monotonic (`last_fire = MAX(last_fire, ?)`, `store.go`). `TestLastFireNeverMovesBackwardsWhenDeliveriesFinishOutOfOrder` publishes two deliveries in order, releases their outcomes in reverse, and checks the newer minute in memory and after a reopen; `TestStoreLastFireOnlyMovesForward` pins the store write alone. Both fail without the fix; `go test -race -count=5 ./internal/wscron` passes.
+
 ### Result (7b70dec14) - 2026-11-22
 
 - Added the `cron` tool: schema (`add` object, `delete` string, optional `session_key` and `format`) in `server_schemas.go`, dispatch in `server_dispatch.go`, handler in `server_cron.go`. Gate order: hosted binding, then scheduler present, then lead check, each refusal with its own message and nothing written; `session_key` never selects the owner. The description avoids the literal `ws:` spelling because the wsflow namespace rewrite would change it. The dashboard daemon opens the scheduler after the runner is up, binds it to the runner, closes it in the before-unlock hook and at shutdown, and a new `SessionForgotten` daemon hook ends a conversation's schedules.
