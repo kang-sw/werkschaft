@@ -901,8 +901,14 @@ type worktreeReleaseCaller struct {
 	Force         bool
 	CheckChildren func(ctx context.Context, target string) error
 	// CheckExecJobs is the running-hosted-exec-job check, run next to
-	// CheckChildren under the same lock.
+	// CheckChildren under the same lock; it names the jobs to a non-forced
+	// release.
 	CheckExecJobs func(target string) error
+	// FenceExec, when set, refuses the release while an exec job runs in
+	// the target and otherwise holds new jobs there off until the returned
+	// unfence (worktreeExecFence); run under the per-worktree lock, force or
+	// not.
+	FenceExec func(target string) (func(), error)
 }
 
 // checkWorktreeBoundChildren refuses a non-forced worktree.release while any
@@ -966,7 +972,7 @@ func (s *Server) checkWorktreeLiveExecJobs(target string) error {
 	if len(parts) == 0 {
 		return nil
 	}
-	return fmt.Errorf("worktree.release refuses %s: running exec job(s) have their cwd in this worktree (%s). Nothing was changed. Wait for them to end or stop them with exec.stop, then release again; pass force: true only if you intend to clean the worktree under them", target, strings.Join(parts, ", "))
+	return fmt.Errorf("worktree.release refuses %s: running exec job(s) have their cwd in this worktree (%s). Nothing was changed. Wait for them to end or stop them with exec.stop, then release again; force: true does not override a running exec job", target, strings.Join(parts, ", "))
 }
 
 // releaseWorktreeAs is releaseWorktree on behalf of caller (nil: no lease

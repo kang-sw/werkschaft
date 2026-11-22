@@ -218,6 +218,10 @@ func piToolSurface(spec StartSpec) piSurface {
 		}
 	}
 	for _, entry := range spec.Profile.Tools {
+		if spec.ExecCutover && strings.EqualFold(ToolBase(entry), piShellTool) {
+			// The exec cutover replaces the shell with the ws exec tools.
+			continue
+		}
 		add(ToolBase(entry))
 	}
 	if spec.WSMCP != nil {

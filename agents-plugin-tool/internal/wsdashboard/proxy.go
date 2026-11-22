@@ -81,6 +81,10 @@ type ProxyHello struct {
 	// session the daemon started. It is never decoded from a launcher's
 	// hello, so a client cannot name one.
 	Conversation string `json:"-"`
+	// ExecCutover is that conversation's harness when its current process
+	// launched under the exec cutover (native shell tools removed in favour
+	// of the ws exec tools); set with Conversation and never decoded.
+	ExecCutover string `json:"-"`
 }
 
 // ProxyAccept is the daemon's one-line answer to the hello: accepted, and

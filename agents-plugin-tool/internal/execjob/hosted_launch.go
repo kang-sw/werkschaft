@@ -60,7 +60,11 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		if id, err = h.newID(req.Legacy); err != nil {
 			return HostedView{}, err
 		}
-		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet}
+		// A job that will launch a holder is pinned from its admission: a
+		// stop that ends it before or while LaunchWith runs leaves a holder
+		// this job does not record yet, and the job must not be pruned (nor
+		// its id drawn again) until that holder is confirmed gone.
+		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet, starting: true, holderPinned: lookErr == nil}
 		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
 		err = h.admit(j)
 		if err == nil {
@@ -78,9 +82,30 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
 	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})
 	if err != nil {
+		if holder != "" {
+			// The holder registered but could not be attached: it runs, and
+			// may write the exit copy at this job's id's path, so the job
+			// stays pinned until that holder is confirmed gone.
+			view, failed := h.failStart(j, "", fmt.Errorf("start the job's holder: %w", err))
+			go h.retireHolder(j, holder)
+			return view, failed
+		}
+		h.mu.Lock()
+		j.holderPinned = false
+		h.mu.Unlock()
 		return h.failStart(j, "", fmt.Errorf("start the job's holder: %w", err))
 	}
 	h.mu.Lock()
+	if j.row.Terminal() {
+		// Stopped (its owner closing) while the holder launched: the
+		// process never starts, and the job stays pinned until its holder
+		// is gone.
+		h.mu.Unlock()
+		go h.retireHolder(j, holder)
+		return h.view(j, OutcomeDone), errClosedBeforeStart
+	}
+	// The job records its holder now: its end and stop handle that holder.
+	j.holderPinned = false
 	j.row.HolderID = holder
 	h.byHolder[holder] = j
 	h.mu.Unlock()
@@ -99,10 +124,32 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		}
 	}
 	h.mu.Lock()
+	if j.stopping || h.ownerFences[owner.ID] {
+		// Its owner closed (or the job was stopped) while it waited for
+		// approval: the process never starts. A stop already ended the job
+		// and its holder (stop); a fence alone fails the start here.
+		if j.row.Terminal() {
+			h.mu.Unlock()
+			return h.view(j, OutcomeDone), errClosedBeforeStart
+		}
+		h.mu.Unlock()
+		return h.failStart(j, holder, errClosedBeforeStart)
+	}
+	// From here a stop waits for the hand-over and then ends the process.
+	j.starting = false
+	spawned := make(chan struct{})
+	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
 	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: req.Cwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
+	close(spawned)
 	if err != nil {
+		if st.PID != 0 {
+			// The child started and only its remaining input failed.
+			h.mu.Lock()
+			j.row.PID = st.PID
+			h.mu.Unlock()
+		}
 		return h.failStart(j, holder, fmt.Errorf("start %s: %w", argv[0], err))
 	}
 	h.mu.Lock()
@@ -164,20 +211,32 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return errors.New("exec: the daemon is shutting down")
 	}
+	if h.ownerFences[j.row.Owner] {
+		h.mu.Unlock()
+		return errors.New("exec: the owning session is closing")
+	}
+	if root := h.fencedRootLocked(j.row); root != "" {
+		h.mu.Unlock()
+		return fmt.Errorf("exec: the worktree %s is being released or removed", root)
+	}
 	// newID checked the id without holding h.mu through here: a launch
 	// that drew the same id may have been admitted since.
 	_, taken := h.jobs[j.row.ID]
 	_, pending := h.deleting[j.row.ID]
-	if taken || pending {
+	if taken || pending || h.retiring[j.row.ID] > 0 {
 		h.mu.Unlock()
 		return errIDTaken
 	}
-	running := 0
+	running, held := 0, 0
 	var finished []*hostedJob
 	for _, have := range h.jobs {
 		switch {
 		case !have.row.Terminal():
 			running++
+		case have.holderPinned || h.retiring[have.row.ID] > 0:
+			// A holder of it may still write its exit copy: it stays, and
+			// counts toward the cap, until that holder is gone.
+			held++
 		case have.row.Notice == NoticePending || have.delivering:
 			// Its notice is still owed; it stays until delivered.
 		default:
@@ -188,9 +247,27 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return fmt.Errorf("exec: %d jobs already run; stop one first", running)
 	}
-	if pending := len(h.deleting); running+pending >= HostedMaxJobs {
+	orphans := 0
+	for id := range h.retiring {
+		if _, ok := h.jobs[id]; !ok {
+			// A predecessor's holder no job owns holds its id the same way.
+			orphans++
+		}
+	}
+	held += orphans
+	// Every id that stays taken fills the cap together: the running jobs,
+	// the dropped jobs whose row delete keeps failing, and the ended jobs
+	// (or bare ids) whose holders are still being stopped.
+	if pending := len(h.deleting); running+pending+held >= HostedMaxJobs {
 		h.mu.Unlock()
-		return fmt.Errorf("exec: %d jobs run and %d finished jobs' records could not be deleted from the job store; retry later, or stop a job", running, pending)
+		var waits []string
+		if pending > 0 {
+			waits = append(waits, fmt.Sprintf("%d finished jobs' records could not be deleted from the job store", pending))
+		}
+		if held > 0 {
+			waits = append(waits, fmt.Sprintf("%d ended jobs wait for their holders to stop", held))
+		}
+		return fmt.Errorf("exec: %d jobs run and %s; retry later, or stop a job", running, strings.Join(waits, " and "))
 	}
 	h.jobs[j.row.ID] = j
 	var dropped []*hostedJob
@@ -198,7 +275,8 @@ func (h *Hosted) admit(j *hostedJob) error {
 	// The dropped jobs' tombstones are this prune's from the start: no
 	// retry deletes their rows before forget has fenced their writes.
 	drop := h.claimLocked()
-	if over := len(h.jobs) - HostedMaxJobs; over > 0 {
+	// The bare reserved ids take room under the cap as job rows do.
+	if over := len(h.jobs) + orphans - HostedMaxJobs; over > 0 {
 		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
 		// The batch fits the tombstones' room under the job cap, so even a
 		// failed bulk delete parks no more than the cap; jobs left over
@@ -223,24 +301,64 @@ func (h *Hosted) admit(j *hostedJob) error {
 	return nil
 }
 
-// failStart ends j before its process ran, stopping its holder.
+// errClosedBeforeStart answers a launch whose owner closed (or whose job
+// was stopped) before its process started.
+var errClosedBeforeStart = errors.New("exec: the owning session closed before the job started")
+
+// failStart ends j, whose process did not start as asked, and its holder.
+// The holder is stopped first, because a child may run under it (a spawn
+// that failed only on its remaining input): until that stop is confirmed
+// the job stays running, so its owner's close and the running counts still
+// see it, and a later stop retries the holder. A job a stop already ended
+// keeps that end.
 func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView, error) {
+	h.mu.Lock()
+	if j.row.Terminal() {
+		if holder != "" {
+			delete(h.byHolder, holder)
+		}
+		h.mu.Unlock()
+		if holder != "" {
+			go h.stopHolder(holder)
+		}
+		return h.view(j, OutcomeDone), cause
+	}
+	j.row.Notify = false
+	j.stopping = true
+	h.mu.Unlock()
 	if holder != "" {
-		go h.stopHolder(holder)
+		if err := h.opts.Holders.Stop(holder); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+			h.mu.Lock()
+			if !j.row.Terminal() {
+				j.stopping = false
+				j.row.Error = cause.Error() + "; its holder did not stop, so the job may still run: " + err.Error()
+				row, rev := h.snapLocked(j)
+				h.mu.Unlock()
+				h.save(j, row, rev)
+				return h.view(j, 0), fmt.Errorf("%w; its holder did not stop, so the job may still run: %v", cause, err)
+			}
+			h.mu.Unlock()
+		}
 	}
 	h.mu.Lock()
 	if holder != "" {
 		delete(h.byHolder, holder)
 	}
+	// An exit record the stop brought ended the job as stopped; the start's
+	// failure is still its story.
+	wasEnded := j.row.Terminal()
 	j.row.State, j.row.Error = HostedFailed, cause.Error()
-	j.row.Notify = false
 	if j.row.StartedAt == 0 {
 		j.row.StartedAt = h.opts.Now().UnixMilli()
 	}
-	h.endLocked(j)
+	if !wasEnded {
+		h.endLocked(j)
+	}
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.runningChanged()
+	if !wasEnded {
+		h.runningChanged()
+	}
 	h.save(j, row, rev)
 	return h.view(j, OutcomeDone), cause
 }
@@ -271,12 +389,14 @@ func (h *Hosted) newID(legacy bool) (string, error) {
 			id = "exec_" + key
 		}
 		// An id whose dropped row is still being deleted stays reserved:
-		// reusing it would overwrite that row and its exit copy.
+		// reusing it would overwrite that row and its exit copy. So does
+		// one a predecessor's holder still being stopped runs under.
 		h.mu.Lock()
 		_, taken := h.jobs[id]
 		_, pending := h.deleting[id]
+		retiring := h.retiring[id] > 0
 		h.mu.Unlock()
-		taken = taken || pending
+		taken = taken || pending || retiring
 		if !taken {
 			return id, nil
 		}

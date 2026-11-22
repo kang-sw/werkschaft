@@ -25,12 +25,13 @@ func (c *conv) restoreWorkerMCP() {
 	if !c.r.opts.Backends[rec.Backend].WorkerHTTPMCP {
 		return
 	}
-	if rec.MCPToken == "" || rec.MCPHolder != rec.HolderID || rec.MCPURL != c.r.mcpURL() || rec.MCPEnv == nil {
+	if rec.MCPToken == "" || rec.MCPHolder != rec.HolderID || !c.r.servesMCPURL(rec.MCPURL) || rec.MCPEnv == nil {
 		c.mcpStale = true
 		return
 	}
 	session := c.r.attachMCP(rec.ReplyID, rec.MCPToken, rec.MCPEnv, rec.workDir(), rec.HostPID, rec.Backend)
 	if session != nil {
+		c.rejoinExecCutover(rec)
 		session.Started(c.workerMCPEnv, rec.HostPID)
 		c.workerMCPEnv = nil
 	}

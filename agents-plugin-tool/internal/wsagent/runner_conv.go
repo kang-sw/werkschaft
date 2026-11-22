@@ -64,11 +64,36 @@ type conv struct {
 	acceptedEvents map[string]struct{}
 	// mcpCalls counts the ws MCP tool calls in flight on the conversation's
 	// session token (Runner.MCPCallBegin).
-	mcpCalls   atomic.Int64
-	activeMode string
-	bgTasks    int
-	background *int
-	monitors   *int
+	mcpCalls atomic.Int64
+	// execCutover reports whether the current process started under the
+	// exec cutover (exec_cutover.go): its native process tools removed in
+	// favour of the ws exec tools. Set at each start and rejoin.
+	execCutover bool
+	// launchBinary fingerprints the binary the current process launched
+	// from (harnessBinaryOf), "" for one this daemon did not launch or a
+	// backend without a cutover mechanism. Set with execCutover.
+	launchBinary string
+	// cutoverNudge is the current turn's first refused or unrequested
+	// native command under the cutover, whose instruction prompt the
+	// turn's end sends (sendCutoverInstruction); loop-owned.
+	cutoverNudge string
+	// cutoverInstructing reports that a turn's instruction prompt is on
+	// its way to the inbox, or in it and not yet taken by a turn: a
+	// worker's done report waits for the turn it starts (holdsReport);
+	// loop-owned.
+	cutoverInstructing bool
+	// cutoverQueued: the instruction was admitted to the inbox while
+	// cutoverInstructing holds, so its absence from the held entries means
+	// it left (cutoverInstructionGone); loop-owned.
+	cutoverQueued bool
+	// cutoverInstructed counts the instruction prompts the current process
+	// was sent (cutoverInstructionCap); loop-owned, reset at each start
+	// and rejoin.
+	cutoverInstructed int
+	activeMode        string
+	bgTasks           int
+	background        *int
+	monitors          *int
 	// actionNeeded is State.ActionNeeded.
 	actionNeeded string
 	// Worker permission projection is transient. Explicit selection lives in
@@ -514,6 +539,7 @@ func (c *conv) mailLegend(texts, senders []string) []string {
 // messages, starting the process when needed (kick). It runs in the loop.
 func (c *conv) inboxChanged() {
 	c.refreshHeld()
+	c.cutoverInstructionGone()
 	if c.modelWaitBackoffC != nil && c.held > 0 {
 		c.cancelModelWaitBackoff()
 	}
@@ -565,6 +591,7 @@ func (c *conv) steer() {
 	c.held = max(0, c.held-len(recs))
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
+	c.cutoverInstructionLeft(recs)
 	var parts []string
 	for _, rec := range recs {
 		if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
@@ -1116,11 +1143,14 @@ func (c *conv) dropHeld() {
 	}
 	removed := 0
 	if held, err := wsinbox.Held(c.inbox); err == nil {
+		var dropped []wsinbox.Record
 		for _, rec := range held {
 			if _, err := wsinbox.Cancel(c.inbox, rec.Name); err == nil {
 				removed++
+				dropped = append(dropped, rec)
 			}
 		}
+		c.cutoverInstructionLeft(dropped)
 	}
 	c.inboxMutated(removed)
 	_, _ = wsinbox.DrainInterrupt(c.inbox)
@@ -1299,6 +1329,7 @@ func (c *conv) kickInput() {
 	from := c.drained
 	c.drained = covered
 	queue := slices.Clone(c.rec.Queued)
+	c.cutoverInstructionLeft(recs)
 	for _, rec := range recs {
 		if cmd := rec.Entry.Command; cmd != nil {
 			cmd := *cmd
@@ -1434,7 +1465,9 @@ func (c *conv) kickInput() {
 	// that waited for it. Publish that turn before opening the report's
 	// successor. Legacy pi-worker turns, and report-free successors such as
 	// background follow-ups, retain their interim-supersession behavior.
-	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 {
+	// A worker that still owns a live exec job keeps holding: its report
+	// waits for the job, and this successor's own turn reports later.
+	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 && !c.ownsLiveExec() {
 		res := *c.heldRes
 		c.hold(nil)
 		c.publish(res, heldAgy)
