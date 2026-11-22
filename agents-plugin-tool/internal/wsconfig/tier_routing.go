@@ -523,7 +523,7 @@ func (g *TierGraph) Resolve(token, callerHarness string) (TierResolution, error)
 		res.Bundle, res.Harness, res.Model, res.Effort = raw, bundle.Harness, bundle.Model, bundle.Effort
 		return res, nil
 	}
-	return res, fmt.Errorf("tier %q is neither a tier, <harness>.<tier>, an alias in %s, a <node>:<size> tier, nor a bundle in %s", token, ItemAgentTierAliases, ItemAgentTierRouting)
+	return res, fmt.Errorf("tier %q is neither a tier, <harness>.<tier>, nor an alias in %s, and no bundle in %s", token, ItemAgentTierAliases, ItemAgentTierRouting)
 }
 
 // walk follows pointers from node at size. useAliases applies exact legacy

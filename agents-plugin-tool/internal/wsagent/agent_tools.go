@@ -174,6 +174,77 @@ type AgentTiers struct {
 	// Unavailable names each registered worker harness no tier of which is
 	// spawnable now, and why.
 	Unavailable []string `json:"unavailable,omitempty"`
+	// Routing is the agent.tier_routing graph this daemon resolves role
+	// tiers and bundles through. A daemon without the graph omits it, so
+	// its absence is how a caller detects that role tiers are unsupported.
+	Routing *AgentRouting `json:"routing,omitempty"`
+}
+
+// AgentRouting is agent.tiers' routing section: whether role tiers resolve
+// here, why the graph is unusable when it is not (Error), each bundle and
+// node route with its trace, and the legacy aliases that shadow graph names.
+type AgentRouting struct {
+	Supported  bool              `json:"supported"`
+	Error      string            `json:"error,omitempty"`
+	Bundles    []AgentRouteEntry `json:"bundles"`
+	Routes     []AgentRouteEntry `json:"routes"`
+	Collisions []string          `json:"collisions,omitempty"`
+}
+
+// AgentRouteEntry is one routed tier: the token, its resolution trace, and
+// the binding it spawns with now; Error says why it is not spawnable.
+type AgentRouteEntry struct {
+	Tier    string `json:"tier"`
+	Trace   string `json:"trace,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// TierHarnesses are the harness names a tier route or bundle may name: the
+// built-in harnesses and every registered backend. A known harness that is
+// unavailable stays valid in config and reports at resolution.
+func TierHarnesses(registries ...map[string]BackendRegistration) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	for _, name := range BuiltinHarnessNames() {
+		add(name)
+	}
+	for _, reg := range registries {
+		for _, name := range sortedRegistrationNames(reg) {
+			add(name)
+		}
+	}
+	return out
+}
+
+func sortedRegistrationNames(reg map[string]BackendRegistration) []string {
+	names := make([]string, 0, len(reg))
+	for name := range reg {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// tierGraph is the effective agent.tier_routing graph for caller: the
+// packaged playbook roles (Options.TierRoles) with the user's overrides.
+func (r *Runner) tierGraph(caller AgentCaller) (*wsconfig.TierGraph, error) {
+	var roles []wsconfig.TierRole
+	if r.opts.TierRoles != nil {
+		var err error
+		if roles, err = r.opts.TierRoles(); err != nil {
+			return nil, fmt.Errorf("read packaged tier roles: %w", err)
+		}
+	}
+	return wsconfig.LoadTierGraph(caller.Config, roles, TierHarnesses(r.opts.Backends))
 }
 
 // Agent statuses: a turn runs; turn ended with background work running; the
@@ -296,6 +367,67 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 		}
 		out.Aliases = append(out.Aliases, entry)
 	}
+	routing, err := r.agentRouting(caller, usable)
+	if err != nil {
+		return AgentTiers{}, err
+	}
+	out.Routing = routing
+	return out, nil
+}
+
+// agentRouting lists the routing graph for caller: each bundle, each role
+// at the size its playbook declares, and each group and user node at all
+// four sizes, with the binding each spawns with given usable (the
+// spawnable harnesses' tiers).
+func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]wsconfig.AgentTier) (*AgentRouting, error) {
+	graph, err := r.tierGraph(caller)
+	if err != nil {
+		return &AgentRouting{Supported: true, Error: err.Error(), Bundles: []AgentRouteEntry{}, Routes: []AgentRouteEntry{}}, nil
+	}
+	out := &AgentRouting{Supported: true, Bundles: []AgentRouteEntry{}, Routes: []AgentRouteEntry{}, Collisions: graph.Collisions()}
+	if gerr := graph.Err(); gerr != nil {
+		out.Error = gerr.Error()
+		return out, nil
+	}
+	entry := func(token string) AgentRouteEntry {
+		res, err := graph.Resolve(token, caller.Harness)
+		if err != nil {
+			return AgentRouteEntry{Tier: token, Error: err.Error()}
+		}
+		e := AgentRouteEntry{Tier: token, Trace: res.Trace(), Harness: res.Harness}
+		tiers, ok := usable[res.Harness]
+		switch {
+		case !ok:
+			e.Error = fmt.Sprintf("harness %q has no spawnable tier now", res.Harness)
+		case res.Bundle != "":
+			e.Model, e.Effort = res.Model, res.Effort
+		default:
+			if m, ok := tiers[res.Size]; ok {
+				e.Model, e.Effort = m.Model, m.Effort
+			} else {
+				e.Error = fmt.Sprintf("tier %q is not set for %s", res.Size, res.Harness)
+			}
+		}
+		return e
+	}
+	bundles := graph.Bundles()
+	names := make([]string, 0, len(bundles))
+	for name := range bundles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out.Bundles = append(out.Bundles, entry(name))
+	}
+	for _, node := range graph.Nodes() {
+		if node.Kind == wsconfig.TierNodeRole && node.Size != "" {
+			out.Routes = append(out.Routes, entry(node.Name+":"+node.Size))
+			continue
+		}
+		for _, size := range wsconfig.TierSizes {
+			out.Routes = append(out.Routes, entry(node.Name+":"+size))
+		}
+	}
 	return out, nil
 }
 
@@ -310,8 +442,11 @@ func tierAliases(cfg wsconfig.Options) (map[string]string, error) {
 }
 
 // resolveTier resolves agent.spawn's tier for caller: a bare tier on the
-// caller's harness, <harness>.<tier>, or an alias. A tier no spawnable
-// harness sets fails with the valid list.
+// caller's harness, <harness>.<tier>, an alias, or, through the
+// agent.tier_routing graph, a <node>:<size> role tier or a bundle name. A
+// tier no spawnable harness sets fails with the valid list. bare is the
+// tier rank the child records: the routed size, or xlarge for a bare bundle
+// name, which supplies its model and effort directly.
 func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare string, mapping wsconfig.AgentTier, err error) {
 	raw := strings.ToLower(strings.TrimSpace(tier))
 	if raw == "" {
@@ -329,7 +464,25 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 		}
 		target, ok := aliases[raw]
 		if !ok {
-			return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q is neither a tier, <harness>.<tier>, nor an alias in %s", tier, wsconfig.ItemAgentTierAliases))
+			// Not a legacy token: resolve it through the routing graph.
+			// Exact aliases already won above, so the graph's own alias
+			// checks only apply at the nodes a walk passes.
+			graph, gerr := r.tierGraph(caller)
+			if gerr != nil {
+				return "", "", mapping, gerr
+			}
+			res, rerr := graph.Resolve(raw, caller.Harness)
+			if rerr != nil {
+				return "", "", mapping, r.tierRefusal(caller, rerr.Error())
+			}
+			if res.Bundle != "" {
+				if why := r.spawnableHarness(res.Harness); why != "" {
+					return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
+				}
+				return res.Harness, res.Rank(), wsconfig.AgentTier{Backend: res.Harness, Model: res.Model, Effort: res.Effort}, nil
+			}
+			harness, bare = res.Harness, res.Size
+			break
 		}
 		h, t, _ := strings.Cut(target, ".")
 		harness, bare = h, t
@@ -364,6 +517,13 @@ func (r *Runner) tierRefusal(caller AgentCaller, why string) error {
 		for _, a := range list.Aliases {
 			if a.Error == "" {
 				valid = append(valid, a.Alias)
+			}
+		}
+		if list.Routing != nil {
+			for _, b := range list.Routing.Bundles {
+				if b.Error == "" {
+					valid = append(valid, b.Tier)
+				}
 			}
 		}
 	}
