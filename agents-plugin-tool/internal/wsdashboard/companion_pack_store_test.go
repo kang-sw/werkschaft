@@ -3,12 +3,15 @@ package wsdashboard
 import (
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 func companionTestManifest(id, file, extra string) []byte {
@@ -39,9 +42,10 @@ func companionTestError(s *companionSnapshot, id string) bool {
 
 func TestCompanionPackStoreCatalogAndResolution(t *testing.T) {
 	home := t.TempDir()
-	raw := companionTestManifest("alpha", "stand.webp", `,"autoMatch":{"harnesses":["Codex"],"models":["gpt"]}`)
+	raw := companionTestManifest("alpha", "stand.webp", `,"autoMatch":{"harnesses":["fixture-harness"],"models":["needle"]}`)
 	companionTestPack(t, home, "alpha", raw)
-	companionTestPack(t, home, "beta", companionTestManifest("beta", "stand.webp", `,"autoMatch":{"models":["GPT"]}`))
+	companionTestPack(t, home, "beta", companionTestManifest("beta", "stand.webp",
+		`,"autoMatch":{"harnesses":["other-harness"],"models":["NEEDLE","boost"]}`))
 	for _, id := range []string{"default", "auto", "Bad"} {
 		companionTestPack(t, home, id, companionTestManifest(id, "stand.webp", ""))
 	}
@@ -59,7 +63,14 @@ func TestCompanionPackStoreCatalogAndResolution(t *testing.T) {
 			t.Errorf("missing error for %s: %+v", id, s.errors)
 		}
 	}
-	for _, tc := range []struct{ h, m, id, by string }{{"", "", "default", "default"}, {"other", "none", "default", "default"}, {"CODEX", "", "alpha", "harness"}, {"", "GPT-4", "alpha", "model"}, {"codex", "gpt", "alpha", "model"}} {
+	for _, tc := range []struct{ h, m, id, by string }{
+		{"", "", "default", "default"},
+		{"fixture-harness-variant", "unrelated", "default", "default"},
+		{"FIXTURE-HARNESS", "", "alpha", "harness"},
+		{"", "family-Needle-1", "alpha", "model"},
+		{"fixture-harness", "family-boost-1", "beta", "model"},
+		{"OTHER-HARNESS", "family-needle-1", "beta", "model"},
+	} {
 		got := s.catalog(tc.h, tc.m).ResolvedAuto
 		if got.PackID != tc.id || got.MatchedBy != tc.by {
 			t.Errorf("%+v: %+v", tc, got)
@@ -106,6 +117,56 @@ func TestCompanionPackSymlinks(t *testing.T) {
 		t.Fatalf("root symlink accepted: %+v", s)
 	}
 }
+
+func TestCompanionPackPinnedDirectories(t *testing.T) {
+	for _, tc := range []struct {
+		name, beforeOpen string
+		moveRoot         bool
+	}{
+		{"root replaced before pack open", "one", true},
+		{"pack replaced before manifest open", "pack.json", false},
+		{"pack replaced before asset open", "stand.webp", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			raw := companionTestManifest("one", "stand.webp", "")
+			original := companionTestPack(t, home, "one", raw)
+			replacement := companionTestPack(t, t.TempDir(), "one",
+				companionTestManifest("one", "stand.webp", `,"replacement":true`))
+			if err := os.WriteFile(filepath.Join(replacement, "stand.webp"), []byte("replacement"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.moveRoot {
+				original, replacement = filepath.Dir(original), filepath.Dir(replacement)
+			}
+
+			// The lookup hook runs after the parent opened and before its
+			// child opens. The same lexical path now reaches different bytes.
+			swapped := false
+			store := &CompanionPackStore{open: func(parent companionPackFile, name string, directory bool) (companionPackFile, error) {
+				if name == tc.beforeOpen {
+					if parent == nil || swapped {
+						t.Fatalf("unexpected lookup of %q", name)
+					}
+					if err := os.Rename(original, original+"-held"); err != nil {
+						t.Fatalf("rename open directory: %v", err)
+					}
+					if err := os.Rename(replacement, original); err != nil {
+						t.Fatalf("replace open directory path: %v", err)
+					}
+					swapped = true
+				}
+				return openCompanionPackEntry(parent, name, directory)
+			}}
+			snapshot := store.snapshot(wsconfig.Options{ConfigHome: home})
+			pack := snapshot.byID["one"]
+			if !swapped || pack == nil || string(pack.manifest) != string(raw) || string(pack.assets["stand.webp"]) != "raster" {
+				t.Fatalf("open directory did not keep its original pack: swapped=%t, pack=%v, errors=%v", swapped, pack, snapshot.errors)
+			}
+		})
+	}
+}
+
 func TestCompanionPackLimits(t *testing.T) {
 	t.Run("files and count", func(t *testing.T) {
 		home := t.TempDir()
@@ -206,24 +267,64 @@ func (f *companionCountingFile) ReadDir(n int) ([]fs.DirEntry, error) {
 func TestCompanionPackIOCounts(t *testing.T) {
 	home := t.TempDir()
 	companionTestPack(t, home, "one", companionTestManifest("one", "stand.webp", ""))
+	d := authFixture(t)
+	d.config = &ConfigBackend{Options: wsconfig.Options{ConfigHome: home}}
+	cookie := authCookie(t, d)
+	old := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(filepath.Join(d.dir, localhostSecretFile), old, old); err != nil {
+		t.Fatal(err)
+	}
 	opens, stats, dirs := 0, 0, 0
-	s := &CompanionPackStore{open: func(p companionPackFile, n string, d bool) (companionPackFile, error) {
+	d.companionPacks.open = func(p companionPackFile, n string, d bool) (companionPackFile, error) {
 		opens++
-		f, e := openCompanionPackEntry(p, n, d)
-		if e != nil {
-			return nil, e
+		f, err := openCompanionPackEntry(p, n, d)
+		if err != nil {
+			return nil, err
 		}
 		return &companionCountingFile{f, &stats, &dirs}, nil
-	}}
-	opts := wsconfig.Options{ConfigHome: home}
-	s.snapshot(opts)
+	}
+	if d.companionPacks.active.Load() != nil || opens != 0 {
+		t.Fatal("pack store loaded before a request")
+	}
+	beforeStats, beforeReads := companionAuthIOCounts()
+	if w := companionTestRequest(d, cookie, http.MethodGet, companionPacksRoute, ""); w.Code != http.StatusOK {
+		t.Fatalf("cold catalog: %d %s", w.Code, w.Body)
+	}
 	if opens != 4 || stats != 4 || dirs != 1 {
 		t.Fatalf("cold opens=%d stats=%d readdir=%d", opens, stats, dirs)
 	}
+	afterStats, afterReads := companionAuthIOCounts()
+	if afterStats-beforeStats != 1 || afterReads-beforeReads != 1 {
+		t.Fatalf("cold auth stats=%d reads=%d", afterStats-beforeStats, afterReads-beforeReads)
+	}
 	opens, stats, dirs = 0, 0, 0
-	s.snapshot(opts).catalog("", "")
+	for _, suffix := range []string{"", "/one/pack.json", "/one/assets/stand.webp"} {
+		if w := companionTestRequest(d, cookie, http.MethodGet, companionPacksRoute+suffix, ""); w.Code != http.StatusOK {
+			t.Fatalf("warm %s: %d %s", suffix, w.Code, w.Body)
+		}
+	}
 	if opens != 0 || stats != 0 || dirs != 0 {
 		t.Fatalf("warm opens=%d stats=%d readdir=%d", opens, stats, dirs)
 	}
-	t.Log("pack store cold: 4 opens, 4 stats, 1 ReadDir; warm: zero; auth credential stat excluded")
+	warmStats, warmReads := companionAuthIOCounts()
+	if warmStats-afterStats != 3 || warmReads-afterReads != 0 {
+		t.Fatalf("warm auth stats=%d reads=%d", warmStats-afterStats, warmReads-afterReads)
+	}
+	t.Log("pack store cold: 4 opens, 4 stats, 1 ReadDir. Warm: zero on catalog, manifest and asset.")
+	t.Log("auth credential cold: 1 stat and 1 file read. Warm: 1 stat per request and zero file reads.")
+}
+
+func companionAuthIOCounts() (stats, reads int64) {
+	for site, n := range wsstate.FileIOCounters() {
+		if !strings.HasPrefix(site, "file_io_site:wsstate/read_cache.go:") {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(site, ":stat"):
+			stats += n
+		case strings.HasSuffix(site, ":read_file"):
+			reads += n
+		}
+	}
+	return stats, reads
 }

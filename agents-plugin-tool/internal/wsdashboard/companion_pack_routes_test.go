@@ -12,6 +12,8 @@ import (
 	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
+const companionTestOrigin = "http://127.0.0.1:43210"
+
 func companionTestRequest(d *Daemon, cookie *http.Cookie, method, path, origin string) *httptest.ResponseRecorder {
 	r := authRequest(method, path, "")
 	if cookie != nil {
@@ -22,29 +24,47 @@ func companionTestRequest(d *Daemon, cookie *http.Cookie, method, path, origin s
 	}
 	return authServe(d, r)
 }
+
 func TestCompanionPackHTTP(t *testing.T) {
 	home := t.TempDir()
-	dir := companionTestPack(t, home, "one", companionTestManifest("one", "stand.webp", ""))
-	os.WriteFile(filepath.Join(dir, "hidden.png"), []byte("hidden"), 0600)
+	manifest := companionTestManifest("one", "stand.webp", "")
+	dir := companionTestPack(t, home, "one", manifest)
+	if err := os.WriteFile(filepath.Join(dir, "hidden.png"), []byte("hidden"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	d := authFixture(t)
 	d.config = &ConfigBackend{Options: wsconfig.Options{ConfigHome: home}}
+	d.lan = true
 	cookie := authCookie(t, d)
 	base := companionPacksRoute
 	if w := companionTestRequest(d, nil, "GET", base, ""); w.Code != 401 {
 		t.Fatalf("unauth read: %d", w.Code)
 	}
-	if w := companionTestRequest(d, nil, "POST", base+"/reload", "http://127.0.0.1:43210"); w.Code != 401 {
+	if w := companionTestRequest(d, nil, "POST", base+"/reload", companionTestOrigin); w.Code != 401 {
 		t.Fatalf("unauth reload: %d", w.Code)
 	}
 	if w := companionTestRequest(d, cookie, "POST", base+"/reload", "http://evil.test"); w.Code != 403 {
 		t.Fatalf("cross-origin reload: %d", w.Code)
 	}
-	r := authRequest("POST", base+"/reload", "")
-	r.AddCookie(cookie)
-	r.RemoteAddr = "192.0.2.1:1234"
-	r.Header.Set("Origin", "http://127.0.0.1:43210")
-	if w := authServe(d, r); w.Code == 200 {
-		t.Fatal("remote reload accepted")
+	token, err := d.lanToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lanRequest := func(method, path string) *httptest.ResponseRecorder {
+		r := authRequest(method, path, "")
+		r.Host, r.RemoteAddr = "192.0.2.1:43210", "192.0.2.2:1234"
+		r.AddCookie(&http.Cookie{Name: lanTokenCookie, Value: token})
+		r.Header.Set("Origin", "http://"+r.Host)
+		return authServe(d, r)
+	}
+	if w := lanRequest("POST", base+"/reload"); w.Code != http.StatusNotFound {
+		t.Fatalf("LAN reload: %d", w.Code)
+	}
+	if d.companionPacks.active.Load() != nil {
+		t.Fatal("unauthorized request activated the store")
+	}
+	if w := lanRequest("GET", base); w.Code != http.StatusOK {
+		t.Fatalf("LAN read: %d", w.Code)
 	}
 	w := companionTestRequest(d, cookie, "GET", base, "")
 	var cat companionCatalog
@@ -59,6 +79,13 @@ func TestCompanionPackHTTP(t *testing.T) {
 	}
 	if rev == "" {
 		t.Fatal("local pack missing")
+	}
+	if w := companionTestRequest(d, cookie, "GET", base+"/one/pack.json", ""); w.Body.String() != string(manifest) {
+		t.Fatalf("manifest body changed: %s", w.Body)
+	}
+	if w := companionTestRequest(d, cookie, "GET", base+"/default/assets/stand.png", ""); w.Code != 200 ||
+		w.Header().Get("Content-Type") != "image/png" || w.Header().Get("Content-Security-Policy") != "default-src 'none'; sandbox" {
+		t.Fatalf("embedded PNG: %d %+v", w.Code, w.Header())
 	}
 	for _, tc := range []struct{ path, typ string }{{"/one/pack.json", "application/json"}, {"/one/assets/stand.webp", "image/webp"}} {
 		for _, query := range []string{"", "?rev=" + rev} {
@@ -90,13 +117,15 @@ func TestCompanionPackHTTP(t *testing.T) {
 			t.Errorf("%s: %d", path, w.Code)
 		}
 	}
-	os.WriteFile(filepath.Join(dir, "stand.webp"), []byte("new raster"), 0600)
-	w = companionTestRequest(d, cookie, "POST", base+"/reload", "http://127.0.0.1:43210")
+	if err := os.WriteFile(filepath.Join(dir, "stand.webp"), []byte("new raster"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w = companionTestRequest(d, cookie, "POST", base+"/reload", companionTestOrigin)
 	if w.Code != 200 {
 		t.Fatalf("reload %d %s", w.Code, w.Body.String())
 	}
 	w = companionTestRequest(d, cookie, "GET", base+"/one/assets/stand.webp?rev="+rev, "")
-	r = authRequest("GET", base+"/one/assets/stand.webp?rev="+rev, "")
+	r := authRequest("GET", base+"/one/assets/stand.webp?rev="+rev, "")
 	r.AddCookie(cookie)
 	r.Header.Set("If-None-Match", `"`+rev+`"`)
 	if stale := authServe(d, r); stale.Code != http.StatusConflict {
@@ -109,17 +138,32 @@ func TestCompanionPackHTTP(t *testing.T) {
 	if w = companionTestRequest(d, cookie, "GET", base+"/one/assets/stand.webp?rev="+newRev, ""); w.Code != 200 || w.Body.String() != "new raster" {
 		t.Fatalf("new revision: %d %s", w.Code, w.Body.String())
 	}
-	os.Remove(filepath.Join(dir, "stand.webp"))
-	companionTestRequest(d, cookie, "POST", base+"/reload", "http://127.0.0.1:43210")
+	if err := os.Remove(filepath.Join(dir, "stand.webp")); err != nil {
+		t.Fatal(err)
+	}
+	if w := companionTestRequest(d, cookie, "POST", base+"/reload", companionTestOrigin); w.Code != 200 {
+		t.Fatalf("reload after removing asset: %d %s", w.Code, w.Body)
+	}
 	if w = companionTestRequest(d, cookie, "GET", base+"/one/assets/stand.webp?rev="+newRev, ""); w.Code != 404 {
 		t.Fatalf("removed file: %d", w.Code)
 	}
-	os.RemoveAll(dir)
-	companionTestRequest(d, cookie, "POST", base+"/reload", "http://127.0.0.1:43210")
+	if err := os.Remove(filepath.Join(dir, "hidden.png")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "pack.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if w := companionTestRequest(d, cookie, "POST", base+"/reload", companionTestOrigin); w.Code != 200 {
+		t.Fatalf("reload after removing pack: %d %s", w.Code, w.Body)
+	}
 	if w = companionTestRequest(d, cookie, "GET", base+"/one/pack.json?rev="+newRev, ""); w.Code != 404 {
 		t.Fatalf("removed pack: %d", w.Code)
 	}
 }
+
 func TestCompanionPackConcurrentReload(t *testing.T) {
 	home := t.TempDir()
 	dir := companionTestPack(t, home, "one", companionTestManifest("one", "stand.webp", ""))
@@ -132,8 +176,17 @@ func TestCompanionPackConcurrentReload(t *testing.T) {
 	if w.Code != 200 || len(old) < 2 {
 		t.Fatalf("initial: %d", w.Code)
 	}
-	os.WriteFile(filepath.Join(dir, "stand.webp"), []byte("changed"), 0600)
+	if err := os.WriteFile(filepath.Join(dir, "stand.webp"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	entered, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 	d.companionPacks.open = func(p companionPackFile, n string, dir bool) (companionPackFile, error) {
 		if p == nil {
 			close(entered)
@@ -142,7 +195,7 @@ func TestCompanionPackConcurrentReload(t *testing.T) {
 		return openCompanionPackEntry(p, n, dir)
 	}
 	done := make(chan *httptest.ResponseRecorder, 1)
-	go func() { done <- companionTestRequest(d, cookie, "POST", base+"/reload", "http://127.0.0.1:43210") }()
+	go func() { done <- companionTestRequest(d, cookie, "POST", base+"/reload", companionTestOrigin) }()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -163,7 +216,7 @@ func TestCompanionPackConcurrentReload(t *testing.T) {
 		t.Fatalf("reload: %d", got.Code)
 	}
 	rev := old[1 : len(old)-1]
-	if got := companionTestRequest(d, cookie, "GET", base+"/one/pack.json?rev="+rev, ""); got.Code != 409 {
+	if got := companionTestRequest(d, cookie, "GET", base+"/one/assets/stand.webp?rev="+rev, ""); got.Code != 409 || got.Header().Get("X-Companion-Current-Rev") == "" {
 		t.Fatalf("stale after reload: %d", got.Code)
 	}
 }
