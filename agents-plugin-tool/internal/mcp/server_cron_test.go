@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -92,7 +93,7 @@ func (s *cronTestSessions) IsLead(id string) (bool, error) {
 	if s.workers[id] {
 		return false, nil
 	}
-	return false, wscron.ErrUnknownSchedule
+	return false, errors.New("conversation is closed or unknown")
 }
 
 func (s *cronTestSessions) Exists(id string) bool { return s.leads[id] || s.workers[id] }
@@ -308,7 +309,7 @@ func TestCronToolRefusals(t *testing.T) {
 	}
 	// A token that resolves to a conversation the daemon does not know.
 	f.s.conversation = "ghost"
-	if text, isErr := f.call(nil); !isErr || !strings.Contains(text, "lead session only") {
+	if text, isErr := f.call(nil); !isErr || !strings.Contains(text, "no longer known") || strings.Contains(text, "worker") {
 		t.Fatalf("unknown conversation = %q, %v", text, isErr)
 	}
 	// A daemon whose store failed to open.
@@ -325,8 +326,8 @@ func TestCronToolRefusals(t *testing.T) {
 	if n := len(f.sched.List("lead")) + len(f.sched.List("worker")) + len(f.sched.List("ghost")); n != 0 {
 		t.Fatalf("a refused call wrote %d schedules", n)
 	}
-	msgs := map[string]bool{errCronNotHosted.Error(): true, errCronLeadOnly.Error(): true, errCronUnavailable.Error(): true}
-	if len(msgs) != 3 {
+	msgs := map[string]bool{errCronNotHosted.Error(): true, errCronLeadOnly.Error(): true, errCronUnavailable.Error(): true, errCronEnded.Error(): true}
+	if len(msgs) != 4 {
 		t.Fatal("refusal messages are not distinct")
 	}
 
@@ -355,7 +356,7 @@ func TestCronToolEndsWithItsSession(t *testing.T) {
 	f.sess.leads["lead"] = false
 	f.sess.workers["lead"] = false
 	f.sched.ConversationGone("lead")
-	if text, isErr := f.call(nil); !isErr || !strings.Contains(text, "lead session only") {
+	if text, isErr := f.call(nil); !isErr || !strings.Contains(text, "no longer known") || strings.Contains(text, "worker") {
 		t.Fatalf("list for the dead session = %q, %v", text, isErr)
 	}
 	f.restart()

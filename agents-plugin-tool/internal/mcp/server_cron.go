@@ -15,6 +15,7 @@ var (
 	errCronNotHosted   = errors.New("cron schedules prompts for a session the dashboard hosts, and this connection is not one (its own session token names the session a schedule delivers to; a supplied session_key never does)")
 	errCronUnavailable = errors.New("cron is unavailable: the daemon could not open its schedule store")
 	errCronLeadOnly    = errors.New("cron is available to a hosted lead session only; a worker cannot receive scheduled prompts")
+	errCronEnded       = errors.New("cron cannot reach this session: it is closed, handed off or no longer known")
 )
 
 // cronScheduler is the daemon's scheduler, nil when there is none.
@@ -43,7 +44,13 @@ func (s *Server) handleCron(id json.RawMessage, args map[string]any) response {
 		return toolTextResponse(id, "", fmt.Errorf("cron: %w", errCronUnavailable))
 	}
 	owner := s.conversation
-	if lead, err := sched.IsLead(owner); err != nil || !lead {
+	// A live non-lead is a worker; a session the runner can no longer deliver to
+	// is refused with the runner's own reason, not misnamed a worker.
+	lead, err := sched.IsLead(owner)
+	if err != nil {
+		return toolTextResponse(id, "", fmt.Errorf("cron: %w (%v)", errCronEnded, err))
+	}
+	if !lead {
 		return toolTextResponse(id, "", fmt.Errorf("cron: %w", errCronLeadOnly))
 	}
 	asJSON := wantsJSON(args)
