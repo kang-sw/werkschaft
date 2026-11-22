@@ -386,3 +386,33 @@ func TestBoardDBRootWithURIMetacharacters(t *testing.T) {
 		t.Fatalf("reopen\nwant %s\ngot %s", folderJSON(want), folderJSON(got))
 	}
 }
+
+func TestBoardDBRelativeRoot(t *testing.T) {
+	base := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	dir := filepath.Join(".ws", "board")
+	b, err := CreateBoardDB(dir, boardDBFixture(), BoardDBOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Update(func(state *State) error { state.Seq += 10; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := b.State()
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(base, dir, boardDBName)); err != nil || info.Size() == 0 {
+		t.Fatalf("database under the working directory: %v %v", err, info)
+	}
+	if got := openTestBoardDB(t, dir, nil, BoardDBOptions{}).State(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reopen\nwant %s\ngot %s", folderJSON(want), folderJSON(got))
+	}
+}

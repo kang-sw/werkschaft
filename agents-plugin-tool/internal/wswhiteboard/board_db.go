@@ -445,6 +445,11 @@ func openBoardDBHandle(dir string, opts BoardDBOptions) (*BoardDB, error) {
 // another file; percent-encoding every byte outside the unreserved set keeps
 // '?', '#' and '%' literal.
 func boardSQLiteURI(path string) string {
+	// A file: URI path is absolute, so a relative root must resolve against
+	// the working directory exactly as the stat, lock and sentinel paths do.
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	p := filepath.ToSlash(path)
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p // C:/x becomes /C:/x, which SQLite's Windows VFS accepts
