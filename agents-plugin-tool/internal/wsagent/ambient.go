@@ -62,9 +62,19 @@ func (c *conv) refreshAmbient() {
 	c.ambient = block
 }
 
-// turnInput composes model-only turn input. Compaction notes go first, and
-// ambient stays last. Both are kept out of dashboard and history user text.
+// turnInput composes model-only turn input. Compaction notes go first, then
+// the passive receipts of dashboard-run commands, and ambient stays last. Both are kept out of dashboard and history user text.
 func (c *conv) turnInput(text string) string {
+	if block, took := c.passive.render(c.openGen()); block != "" {
+		// Passive receipts of dashboard-run commands ride this send; they are
+		// acknowledged only once the send is accepted (passiveTook).
+		c.passiveTook = took
+		if strings.TrimSpace(text) == "" {
+			text = block
+		} else {
+			text = block + "\n\n" + text
+		}
+	}
 	text = c.compactInput(text)
 	if c.ambient == "" {
 		return text
