@@ -192,20 +192,30 @@ background.
 
 Implement native notifications for user questions and session completion at full idle after all children and background tasks finish. Map native failure to browser fallback without duplicate delivery. Verify questions, child completion while work remains, final idle, a session with an unknown background-task count per (2146), permissions, denied or failed native delivery and fallback.
 
-### Result (a17dc8f71) - 2026-11-22
+### Result (db5fbfdcf) - 2026-11-22
 
 The daemon now marks each rail row with `data-busy="1"` while its live
 session is not fully idle (commits 292daa65d, 42fd05cc8). That covers a
 working lead, a permission or approval wait, a running subagent, a known
 background task, a ws-known exec job, or any busy live child row at any
 depth (`agents-plugin-tool/internal/wsdashboard/rail_layout.go:1174`,
-`pageview_rail.go:206-222,383-389`). Exec jobs are counted from the daemon
-process's own live set (`internal/execjob/execjob.go:122,134`), the process
-that hosts the launchers' MCP servers. A job counts on every session row in
-its worktree. A job change wakes the rail stream once from cached inputs
-(`daemon_runtime.go:62`), with no file read and no ticker. The row also
-carries `data-active="1"` while it is busy by its own work, meaning
-everything above except exec jobs (commit 115623bca).
+`pageview_rail.go:202-227,386-392`). Exec jobs are counted in two ways:
+- A hosted session's jobs (`exec.run`, `exec.shell`, and legacy
+  `exec.spawn` on a hosted connection) run under `execjob.Hosted`. Each
+  carries its owning conversation, so its count lands on the owner's row
+  only (`RailRow.OwnExecJobs`; `internal/execjob/hosted.go:120`,
+  `internal/wsdashboard/rail.go:133`, `daemon.go:129-134`,
+  `cmd/ws-mcp/dashboard.go:170`; commit ccbec2a96).
+- A launcher (terminal) session's jobs are counted from the daemon
+  process's own live set (`internal/execjob/execjob.go:122,134`), the
+  process that hosts the launchers' MCP servers. That set knows only the
+  worktree, so each such job counts on every session row in its worktree.
+
+A change in either set wakes the rail stream once from cached inputs
+(`daemon_runtime.go:62`, `hosted.go:53`), with no file read and no ticker.
+The row also carries `data-active="1"` while it is busy by its own work
+(commit 115623bca): everything above, including its own hosted jobs, except
+launcher jobs known only by worktree.
 
 The shell page that owns the rail selects three events from each rail read
 (`assets/rail.js:585-613`, wired in `assets/dashboard-lifecycle.js:16,79-97,116`):
@@ -216,9 +226,10 @@ The shell page that owns the rail selects three events from each rail read
 - board question IDs new in a row's `data-asks`.
 
 A child that finishes under a busy parent does not notify, because the
-parent row stays busy. A session that sat idle while another session's exec
-job kept its worktree busy does not notify when that job ends. A session
-whose turn ended while its own job ran notifies when the job ends. A row's first read and a reconnect's first full rail
+parent row stays busy. A session that sat idle while another session's
+launcher job kept its worktree busy does not notify when that job ends. A
+session whose turn ended while its own job ran notifies when the job ends.
+A row's first read and a reconnect's first full rail
 only set the baseline. A row that ends, stops, or disappears does not
 notify. The viewed session in a visible, focused tab is skipped, as
 approvals already were. Tags are `ws-approval:<rid>\n<tool>\n<args>`,
@@ -262,11 +273,26 @@ WebView2 secondary window cannot add a browser duplicate.
   ids stay unique across pages (016a608fa, 22297992c). The bridge replaces
   a lone surrogate in its input with U+FFFD even where the WebView lacks
   `toWellFormed` (a17dc8f71). Rejected: crediting
-  each exec job to the session that launched it. Exec tools carry no
-  session identity, and 261117 owns that surface.
-- Limits: a session's real finish waits while another session's long exec
-  job keeps its worktree busy, because jobs are not credited to the session
-  that launched them. A page against a daemon that never renders
+  each launcher job to the session that launched it. Launcher exec tools
+  carry no session identity, and 261117 owns that surface.
+- Develop merges (90e9fb2d1, 023e70b50) brought the exec tools. A hosted
+  session's own exec jobs then ran under `execjob.Hosted`, outside the set
+  the rail counted, so such a session read idle mid-job. Lead decision
+  (important): fix it on this branch, because the merge introduced the
+  regression. Hosted jobs now count per owner and make the owner's row
+  active. `HostedOptions.OnRunning` wakes the rail when a job is admitted
+  and on every end, outside the lock (ccbec2a96). Rejected: deferring to
+  261117. Launcher jobs keep the worktree-wide path.
+- The full-quit count includes exec-job holders, so the confirmation now
+  says "running sessions and jobs (agent sessions, subagents, terminals,
+  and exec jobs)". The incomplete report says "sessions or jobs", and the
+  count is unchanged (db5fbfdcf). The native shell's strings are
+  English-only in `desktop/src/close.rs`, and no locale table carries them.
+  A row busy only by others' work gets no visual cue; the lead accepted
+  that, as the ticket specifies.
+- Limits: a session's real finish waits while another session's long
+  launcher job keeps its worktree busy, because launcher jobs are not
+  credited to the session that launched them. A page against a daemon that never renders
   `data-active` (mixed versions) gives no finish notices. Clicking a native
   notification does not open the session, because the bridge has no click
   callback. Browser notifications and toasts do open
@@ -302,7 +328,7 @@ WebView2 secondary window cannot add a browser duplicate.
   `rail-attention.test.cjs` and `desktop/scripts/test-notify-bridge.cjs`
   (now in the Tauri CI step; covers emoji and lone-surrogate cuts and ids
   across pages) pass. Go tests `TestRailBusy` (busy and active, including
-  the rule that exec jobs never make a row active), `TestRailMarkupBusy`,
+  the rule that launcher jobs never make a row active), `TestRailMarkupBusy`,
   `TestExecJobsChangedReachesTheRailStream`, and
   `TestActiveRootsAndObserverFollowAJobsLifetime` pass. `cargo test --locked
   --features custom-protocol -- --include-ignored` passes 56 at `4caa66a1b`,
@@ -314,7 +340,29 @@ WebView2 secondary window cannot add a browser duplicate.
   and `wsagent` suites pass. In the full `wsdashboard` and `cmd/ws-mcp`
   suites, only the four tests named in Phase 1 fail, and they fail on base
   too.
-- Performance: the rail render calls the in-memory job count once per
+
+  After the develop merges and the follow-up (ccbec2a96, db5fbfdcf), these
+  pass:
+  - `go build ./...`, and `go vet` of `cmd/ws-mcp`, `execjob`, and
+    `wsdashboard`;
+  - the `execjob` (with the new `TestHostedRunningOwnersFollowEachJob`) and
+    `wsholder` suites;
+  - `cmd/ws-mcp -run 'Exec|Hosted'`;
+  - `wsdashboard -run 'Rail|Notification|Busy|ExecJobs|FullStop|Shutdown'`,
+    where only the pre-existing
+    `TestShellStreamsTheRailAndItsFramesTheirRegions` fails. That subset
+    includes the own-hosted-job cases of `TestRailBusy` and
+    `TestExecJobsChangedReachesTheRailStream` through `HostedExecJobs`;
+  - the three node tests;
+  - `cargo test --locked --features custom-protocol`, which passes 56.
+
+  Each of these mutations fails a test: dropping the admit notification,
+  dropping `OwnExecJobs` from Active, or keying jobs by another id. Headless
+  Playwright captures of busy, active, and idle rows (EN and KO, light and
+  dark) were taken against a scratch daemon, with no GUI. They are stored,
+  untracked, under `ai-docs/assets/captures/261122/tray-rail-busy/`. The
+  follow-up changes nothing visible in the rail.
+- Performance: the rail render reads the two in-memory job counts once per
   render. Selection is one pass over rows per rail update, in tab memory,
   with no timers. The shell holds only the tags it is showing at that
   moment and persists nothing.
