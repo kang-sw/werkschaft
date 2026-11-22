@@ -202,7 +202,7 @@ async function run(browser, { lang, scheme }) {
     assert.ok((st.maxInflight.exec_d2 || 0) <= 1, 'I2: a burst of events keeps one read in flight: ' + JSON.stringify(st.maxInflight));
     assert.ok((st.counts['output:exec_d2'] || 0) <= 4, 'I2: wake-ups coalesce into a few reads: ' + JSON.stringify(st.counts));
     assert.equal(await lineCount(view, 'D2-LINE'), 1, 'I2: no repeated output after the end');
-    assert.equal(await view.evaluate(re => [...document.querySelectorAll('.xout .l.sys')].filter(n => new RegExp(re).test(n.textContent)).length, T.exit0.source), 1, 'I2: one terminal marker');
+    assert.equal(await view.evaluate(re => [...document.querySelectorAll('.xout .l.xp-sys')].filter(n => new RegExp(re).test(n.textContent)).length, T.exit0.source), 1, 'I2: one terminal marker');
     await post('/set', { notice: 'sent', outDelayMs: 0 });
     await view.evaluate(() => { const p = document.querySelector('.xpeek'); if (p && !p.hidden) document.querySelector('.xpeek [data-xact="close"]').click(); });
   });
@@ -735,7 +735,7 @@ async function run(browser, { lang, scheme }) {
     st = await get('/stats');
     assert.equal(st.fromLog.exec_gap[0], 0, 'GAP: the first read used the stale list size: ' + JSON.stringify(st.fromLog));
     assert.ok(st.fromLog.exec_gap[1] > 400000, 'GAP: it was then re-seated at the tail: ' + JSON.stringify(st.fromLog));
-    assert.equal(await view.evaluate(re => [...document.querySelectorAll('.xout .l.sys')].filter(n => new RegExp(re).test(n.textContent)).length, T.gap.source), 1, 'GAP: the eviction notice is shown once');
+    assert.equal(await view.evaluate(re => [...document.querySelectorAll('.xout .l.xp-sys')].filter(n => new RegExp(re).test(n.textContent)).length, T.gap.source), 1, 'GAP: the eviction notice is shown once');
     await closePeek(page, view);
   });
 

@@ -116,9 +116,9 @@
 .xbtn .xspinr { width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: xh-spinr .8s steps(12) infinite; }
 @keyframes xh-spinr { to { transform: rotate(360deg); } }
 .xp-cmd { display: grid; gap: 3px; min-width: 0; }
-.xp-cmd code.cl { display: block; padding: 6px 9px; border-radius: 7px; background: color-mix(in srgb, var(--wb-fg) 6%, var(--wb-card)); font-size: 11.5px; line-height: 1.4; white-space: pre-wrap; word-break: break-all; max-height: 2.9em; overflow: hidden; cursor: pointer; position: relative; }
-.xp-cmd code.cl.open { max-height: 9em; overflow: auto; cursor: default; }
-.xp-cmd code.cl::before { content: "$ "; color: var(--wb-muted-fg); }
+.xp-cmd code.xp-cl { display: block; padding: 6px 9px; border-radius: 7px; background: color-mix(in srgb, var(--wb-fg) 6%, var(--wb-card)); font-size: 11.5px; line-height: 1.4; white-space: pre-wrap; word-break: break-all; max-height: 2.9em; overflow: hidden; cursor: pointer; position: relative; }
+.xp-cmd code.xp-cl.open { max-height: 9em; overflow: auto; cursor: default; }
+.xp-cmd code.xp-cl::before { content: "$ "; color: var(--wb-muted-fg); }
 .xp-cmd .cwd { font: 11px var(--wb-mono); color: var(--wb-muted-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xconf { display: grid; gap: 6px; padding: 8px 10px; border-radius: 9px; background: color-mix(in srgb, var(--wb-fail) 8%, var(--wb-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-fail) 38%, transparent); }
 .xconf b { font-size: 12.5px; }
@@ -130,7 +130,7 @@
 .xout .l { display: block; }
 .xout .l.e { color: var(--wb-fail); box-shadow: inset 2px 0 0 var(--wb-fail); padding-left: 7px; margin-left: -3px; }
 .xout .l.cut::before { content: "\2026"; color: var(--wb-muted-fg); }
-.xout .l.sys { color: var(--wb-muted-fg); font-style: italic; }
+.xout .l.xp-sys { color: var(--wb-muted-fg); font-style: italic; }
 .xout.live::after { content: "\258D"; color: var(--wb-muted-fg); animation: xh-blink 1s steps(2) infinite; }
 .xout.nowrap { white-space: pre; word-break: normal; }
 .xout .xempty { color: var(--wb-muted-fg); }
@@ -140,7 +140,7 @@
 .xp-foot .xlive { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; }
 .xp-foot .xlive::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--wb-ok); animation: xh-pulse 1.2s ease-in-out infinite; }
 .xp-foot .xlive.off::before { background: var(--wb-muted-fg); animation: none; }
-.xp-foot .sp { margin-left: auto; }
+.xp-foot .xp-sp { margin-left: auto; }
 .xnotice { display: grid; gap: 5px; padding: 8px 10px; border-radius: 9px; background: color-mix(in srgb, var(--wb-ok) 8%, var(--wb-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-ok) 32%, transparent); font-size: 11.5px; }
 .xnotice[data-ns="sending"] { background: var(--wb-muted); box-shadow: inset 0 0 0 1px var(--xh-line); }
 .xnotice[data-ns="failed"], .xnotice[data-ns="closed"] { background: color-mix(in srgb, var(--wb-warn-ink) 9%, var(--wb-card)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-warn-ink) 40%, transparent); }
