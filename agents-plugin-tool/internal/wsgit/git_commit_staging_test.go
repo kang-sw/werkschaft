@@ -632,3 +632,71 @@ func TestCommitNeverStagesUntrackedTicketSibling(t *testing.T) {
 		t.Fatalf("commits = %s, want only the seed", n)
 	}
 }
+
+// TestExpandTicketMoveAddsUntrackedCopiesOnlyWithoutAStagedMove: beside a
+// staged ticket move an untracked copy of the stem is no part of it and is
+// not added; with nothing of the stem staged an untracked entry is an
+// unstaged move's destination and is added.
+func TestExpandTicketMoveAddsUntrackedCopiesOnlyWithoutAStagedMove(t *testing.T) {
+	const idea = "ai-docs/tickets/idea/260810-feat-demo.md"
+	const todo = "ai-docs/tickets/todo/260810-feat-demo.md"
+	const ready = "ai-docs/tickets/ready/260810-feat-demo.md"
+	staged := StatusResult{ChangedFiles: []FileStatus{
+		{Path: todo, Status: "A.", IndexStatus: "A", WorktreeStatus: "."},
+		{Path: ready, Status: "?"},
+	}}
+	if got := expandCommitPathsForTicketMoves(staged, []string{idea}); !reflect.DeepEqual(got, []string{idea, todo}) {
+		t.Fatalf("beside a staged move = %q, want the named path and the staged addition only", got)
+	}
+	if got := expandCommitPathsForTicketMoves(staged, []string{idea, ready}); !reflect.DeepEqual(got, []string{idea, ready, todo}) {
+		t.Fatalf("a named untracked copy stays named: %q", got)
+	}
+	unstaged := StatusResult{ChangedFiles: []FileStatus{
+		{Path: idea, Status: ".D", IndexStatus: ".", WorktreeStatus: "D"},
+		{Path: todo, Status: "?"},
+	}}
+	if got := expandCommitPathsForTicketMoves(unstaged, []string{idea}); !reflect.DeepEqual(got, []string{idea, todo}) {
+		t.Fatalf("an unstaged move's untracked destination = %q, want it added", got)
+	}
+}
+
+// TestCommitLeavesAnUntrackedCopyBesideAStagedTicketMove: a ticket created
+// and moved before its first commit (staged straight to its destination),
+// committed by its vanished source path, commits the destination alone; a
+// third, untracked copy of the stem stays untracked.
+func TestCommitLeavesAnUntrackedCopyBesideAStagedTicketMove(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	const named = "ai-docs/tickets/idea/260810-feat-demo.md"
+	const dest = "ai-docs/tickets/todo/260810-feat-demo.md"
+	const copy = "ai-docs/tickets/ready/260810-feat-demo.md"
+	root := t.TempDir()
+	sparseTestInitGit(t, root)
+	mustWriteGitTestFixture(t, root, "README.md", "x\n")
+	// A tracked file in the copy's directory makes status list the
+	// untracked copy itself rather than its directory.
+	mustWriteGitTestFixture(t, root, "ai-docs/tickets/ready/.keep", "")
+	sparseTestRunGit(t, root, "add", "README.md", "ai-docs/tickets/ready/.keep")
+	sparseTestRunGit(t, root, "commit", "-m", "seed")
+	mustWriteGitTestFixture(t, root, dest, "# Demo\n")
+	sparseTestRunGit(t, root, "add", dest)
+	mustWriteGitTestFixture(t, root, copy, "# Stray copy\n")
+
+	branch := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "rev-parse", "--abbrev-ref", "HEAD")))
+	client := Client{Runner: ExecRunner{}, Verifier: func(string, []string) ([]string, error) { return nil, nil }}
+	if _, err := client.Commit(context.Background(), root, CommitOptions{
+		Paths:          []string{named},
+		Title:          "docs(ticket): add demo",
+		AIContext:      []string{"User intent: commit a ticket moved before its first commit."},
+		ExpectedBranch: branch,
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if out := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "show", "--name-only", "--format=", "HEAD"))); out != dest {
+		t.Fatalf("committed = %q, want the staged destination alone", out)
+	}
+	if out := strings.TrimSpace(string(sparseTestRunGitOutput(t, root, "status", "--porcelain"))); out != "?? "+copy {
+		t.Fatalf("status = %q, want the copy still untracked", out)
+	}
+}

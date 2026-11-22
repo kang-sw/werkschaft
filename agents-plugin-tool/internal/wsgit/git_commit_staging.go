@@ -129,6 +129,14 @@ func validateCommitStatus(status StatusResult, paths []string) error {
 	return nil
 }
 
+// expandCommitPathsForTicketMoves adds, for each ticket stem among paths, the
+// other status entries of that stem: naming one side of a ticket move
+// commits the whole move. An untracked (or ignored) entry of a stem that has
+// a staged entry is not added: the staged entries are the move (tickets.move
+// and tickets.close stage it), so an untracked copy beside them is no part of
+// it and is staged only when the caller names it. With nothing of the stem
+// staged, an untracked entry is the destination of an unstaged move (a plain
+// mv) and is added as before.
 func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []string {
 	stems := map[string]bool{}
 	for _, path := range paths {
@@ -139,18 +147,30 @@ func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []stri
 	if len(stems) == 0 {
 		return paths
 	}
+	staged := map[string]bool{}
+	for _, file := range status.ChangedFiles {
+		if file.IndexStatus == "" || file.IndexStatus == "." {
+			continue
+		}
+		for _, path := range []string{file.Path, file.OldPath} {
+			if _, stem, ok := ticketStatusStem(path); path != "" && ok {
+				staged[stem] = true
+			}
+		}
+	}
 	expanded := append([]string(nil), paths...)
 	seen := map[string]bool{}
 	for _, path := range paths {
 		seen[filepath.ToSlash(filepath.Clean(path))] = true
 	}
 	for _, file := range status.ChangedFiles {
+		untracked := file.Status == "?" || file.Status == "!"
 		for _, path := range []string{file.Path, file.OldPath} {
 			if path == "" {
 				continue
 			}
 			_, stem, ok := ticketStatusStem(path)
-			if !ok || !stems[stem] {
+			if !ok || !stems[stem] || (untracked && staged[stem]) {
 				continue
 			}
 			cleaned := filepath.ToSlash(filepath.Clean(path))
@@ -176,8 +196,11 @@ func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []stri
 // from HEAD too: a HEAD entry missing from the index is a staged deletion in
 // status. That keeps a mistyped path with no sibling an error, leaves tracked
 // moves untouched (their old path still carries a deletion or rename entry),
-// and never lets an untracked or unstaged sibling stand in for the move: such
-// a sibling is staged only when the caller names it.
+// and never lets an untracked sibling stand in for the move: with no staged
+// addition nothing is dropped, so the missing path still fails the commit,
+// and beside a staged addition the expansion
+// (expandCommitPathsForTicketMoves) adds no untracked copy of the stem, which
+// is staged only when the caller names it.
 func dropVanishedTicketMoveSources(status StatusResult, paths []string, indexed map[string]bool) []string {
 	vanished := map[string]bool{}
 	for _, path := range vanishedTicketMoveSources(status, paths) {
