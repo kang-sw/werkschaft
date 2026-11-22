@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsawake"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -233,6 +234,8 @@ type Options struct {
 	WakeRefused func(from, id, reason string)
 	// ChildWaitingDays overrides agent.child_waiting_days; 0 reads it.
 	ChildWaitingDays int
+	// keepAwake replaces the platform's idle-sleep backend in tests.
+	keepAwake wsawake.Backend
 	// spawnListed observes global spawn-projection listings in tests.
 	spawnListed func(string)
 	// stateInboxRead observes state-held inbox scans in tests.
@@ -260,9 +263,14 @@ type Runner struct {
 	// expiry is childWaitingExpiry's value, read once (expiryOnce).
 	expiryOnce sync.Once
 	expiry     time.Duration
-	quit       chan struct{}
-	wg         sync.WaitGroup
-	once       sync.Once
+	// awake holds the idle-sleep assertion while live turns run and
+	// agent.keep_awake_during_turns is on (keep_awake.go); awakeReloadMu
+	// serializes the setting's read with its publish.
+	awake         *wsawake.Core
+	awakeReloadMu sync.Mutex
+	quit          chan struct{}
+	wg            sync.WaitGroup
+	once          sync.Once
 	// summaryMu only guards the two maps below, briefly; it is never held
 	// across another lock or I/O (summaryLock, setSummaryOwner,
 	// summaryOwner). summaryLocks holds one mutex per reply-id, created

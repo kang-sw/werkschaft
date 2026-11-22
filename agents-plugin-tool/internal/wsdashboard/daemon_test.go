@@ -848,6 +848,53 @@ func TestAgentHostStartsBeforeTheDaemonIsReachable(t *testing.T) {
 	}
 }
 
+// startupReloadAgents is an agent host that keeps global configuration in
+// memory; it records whether the endpoint was published at each reread.
+type startupReloadAgents struct {
+	startOrderAgents
+	mu        sync.Mutex
+	published []bool
+}
+
+func (a *startupReloadAgents) ReloadGlobalConfig() {
+	_, err := ReadEndpoint(a.dir)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.published = append(a.published, err == nil)
+}
+
+func (a *startupReloadAgents) reloads() []bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]bool(nil), a.published...)
+}
+
+// TestDaemonStartupRereadsAgentGlobalConfig: the daemon rereads the agent
+// host's global settings once the endpoint is published, and once more when
+// Serve starts accepting, so a writer whose single notification attempt
+// could not be served in between is still observed; nothing rereads after
+// that without a notification.
+func TestDaemonStartupRereadsAgentGlobalConfig(t *testing.T) {
+	dir := t.TempDir()
+	agents := &startupReloadAgents{startOrderAgents: startOrderAgents{dir: dir}}
+	d, err := StartDaemon(DaemonOptions{Dir: dir, Port: 0, Version: "1.0.0", LockWait: 200 * time.Millisecond, Agents: agents})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
+	if got := agents.reloads(); len(got) == 0 || !got[0] {
+		t.Fatalf("startup reread before the endpoint was published: %v", got)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(agents.reloads()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if got := agents.reloads(); len(got) != 2 || !got[1] {
+		t.Fatalf("startup rereads = %v, want two after the endpoint was published", got)
+	}
+}
+
 // TestSupportHandlerMountedUnderItsPrefix: the support handler serves
 // /support and everything under it, behind the access guard; without one
 // the prefix falls through to the index.

@@ -2943,6 +2943,8 @@
   "js.settings.tier_routing.save": "Save",
   "js.settings.key.agent.child_waiting_days.label": "Waiting child retention",
   "js.settings.key.agent.child_waiting_days.description": "Days before the daemon cleans up waiting child agents and their descendants.",
+  "js.settings.key.agent.keep_awake_during_turns.label": "Keep awake during turns",
+  "js.settings.key.agent.keep_awake_during_turns.description": "Prevent idle system sleep while any agent turn runs (macOS and Windows). Display sleep and closing the lid still apply.",
   "js.settings.key.agent.git_search_roots.label": "Additional Git search roots",
   "js.settings.key.agent.git_search_roots.description": "Absolute directories that hosted agents may read through Git search.",
   "js.settings.key.compaction.lead_advisory.label": "Lead compaction advisory threshold",

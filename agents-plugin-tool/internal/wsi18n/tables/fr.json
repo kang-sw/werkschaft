@@ -2943,6 +2943,8 @@
   "js.settings.tier_routing.save": "Enregistrer",
   "js.settings.key.agent.child_waiting_days.label": "Conservation des agents enfants en attente",
   "js.settings.key.agent.child_waiting_days.description": "Jours avant le nettoyage des agents enfants en attente et de leurs descendants.",
+  "js.settings.key.agent.keep_awake_during_turns.label": "Rester éveillé pendant les tours",
+  "js.settings.key.agent.keep_awake_during_turns.description": "Empêche la mise en veille pour inactivité tant qu'un tour d'agent s'exécute (macOS et Windows). La veille de l'écran et la fermeture du capot s'appliquent toujours.",
   "js.settings.key.agent.git_search_roots.label": "Chemins supplémentaires de recherche Git",
   "js.settings.key.agent.git_search_roots.description": "Répertoires absolus accessibles aux agents hébergés via la recherche Git.",
   "js.settings.key.compaction.lead_advisory.label": "Seuil d’avis de compactage du responsable",
