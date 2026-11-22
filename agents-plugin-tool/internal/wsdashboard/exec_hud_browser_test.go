@@ -57,14 +57,31 @@ type hudBrowserSvc struct {
 	outDelayMs  int
 	inflight    map[string]int
 	maxInflight map[string]int
-	// stopAfterMs holds a stop's answer back after its snapshot is taken, and
-	// listDelayMs does the same for the job list (answers that arrive late, after
-	// newer ones); outGone makes an output read answer 404 for the listed jobs, and
-	// outHang makes it never answer (until released or 25 s).
-	stopAfterMs int
-	listDelayMs int
-	outGone     map[string]bool
-	outHang     chan struct{}
+	// stopGate holds every stop's answer back after its snapshot is taken, and
+	// listGate does the same for the job list (answers that arrive late, after
+	// newer ones), until the gate is released (25 s at most); held counts the
+	// answers waiting at a gate, their snapshots already taken. outGone makes an
+	// output read answer 404 for the listed jobs, and outHang makes it never answer
+	// (until released or 25 s).
+	stopGate chan struct{}
+	listGate chan struct{}
+	held     map[string]int
+	outGone  map[string]bool
+	outHang  chan struct{}
+}
+
+// waitGate waits at a gate: the snapshot is taken, the answer is held.
+func (s *hudBrowserSvc) waitGate(kind string, gate chan struct{}) {
+	s.mu.Lock()
+	s.held[kind]++
+	s.mu.Unlock()
+	select {
+	case <-gate:
+	case <-time.After(25 * time.Second):
+	}
+	s.mu.Lock()
+	s.held[kind]--
+	s.mu.Unlock()
 }
 
 func (s *hudBrowserSvc) Open(string) (uint64, error) { return 4, nil }
@@ -81,17 +98,12 @@ func (s *hudBrowserSvc) Jobs(owner string) []execjob.HostedSummary {
 	for _, j := range s.jobs {
 		out = append(out, s.summary(j))
 	}
-	delay := s.listDelayMs
+	gate := s.listGate
 	s.mu.Unlock()
-	// The snapshot is taken: a slow answer reaches the page after the job moved on.
-	if delay > 0 {
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+	// The snapshot is taken: a held answer reaches the page after the job moved on.
+	if gate != nil {
+		s.waitGate("list", gate)
 	}
-	// listDone counts the lists whose answer is on its way to the page: the
-	// handshake a test waits on instead of a sleep.
-	s.mu.Lock()
-	s.counts["listDone"]++
-	s.mu.Unlock()
 	return out
 }
 
@@ -210,10 +222,10 @@ func (s *hudBrowserSvc) StopByUser(owner, id string) (execjob.HostedSummary, err
 		}
 	}
 	sum := s.summary(j)
-	d, after := s.d, s.stopAfterMs
-	if after > 0 {
+	d, gate := s.d, s.stopGate
+	if gate != nil {
 		s.mu.Unlock()
-		time.Sleep(time.Duration(after) * time.Millisecond)
+		s.waitGate("stop", gate)
 		s.mu.Lock()
 	}
 	go d.ExecJobsChanged()
@@ -263,7 +275,7 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 		return ComposerJob{ExecID: "exec_hi", Gen: 4, State: "exited", ExitCode: &zero, Command: req.Line, Written: 3, Output: []byte("hi\n")}, nil
 	}
 	f.svc.mu.Unlock()
-	svc := &hudBrowserSvc{counts: map[string]int{}, failedOne: map[string]bool{}, notice: "sent", d: f.d, fromLog: map[string][]int64{}, inflight: map[string]int{}, maxInflight: map[string]int{}, outGone: map[string]bool{}}
+	svc := &hudBrowserSvc{counts: map[string]int{}, failedOne: map[string]bool{}, notice: "sent", d: f.d, fromLog: map[string][]int64{}, inflight: map[string]int{}, maxInflight: map[string]int{}, outGone: map[string]bool{}, held: map[string]int{}}
 	f.d.SetExecJobs(svc)
 	ctl := http.NewServeMux()
 	reply := func(w http.ResponseWriter, v any) {
@@ -306,8 +318,8 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 			Notice     string   `json:"notice"`
 			StopMs     int      `json:"stopMs"`
 			OutDelayMs int      `json:"outDelayMs"`
-			StopAfter  int      `json:"stopAfterMs"`
-			ListDelay  int      `json:"listDelayMs"`
+			StopHold   bool     `json:"stopHold"`
+			ListHold   bool     `json:"listHold"`
 			Gone       []string `json:"outGone"`
 			Hang       bool     `json:"outHang"`
 			Unbind     bool     `json:"unbind"`
@@ -320,8 +332,19 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 		}
 		svc.stopMs = in.StopMs
 		svc.outDelayMs = in.OutDelayMs
-		svc.stopAfterMs = in.StopAfter
-		svc.listDelayMs = in.ListDelay
+		// A hold stays until a /set without it: that releases every answer held.
+		if in.StopHold && svc.stopGate == nil {
+			svc.stopGate = make(chan struct{})
+		} else if !in.StopHold && svc.stopGate != nil {
+			close(svc.stopGate)
+			svc.stopGate = nil
+		}
+		if in.ListHold && svc.listGate == nil {
+			svc.listGate = make(chan struct{})
+		} else if !in.ListHold && svc.listGate != nil {
+			close(svc.listGate)
+			svc.listGate = nil
+		}
 		svc.outGone = map[string]bool{}
 		for _, id := range in.Gone {
 			svc.outGone[id] = true
@@ -379,7 +402,7 @@ func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 	ctl.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()
-		reply(w, map[string]any{"counts": svc.counts, "from": svc.lastFrom, "fromLog": svc.fromLog, "maxInflight": svc.maxInflight, "inflight": svc.inflight})
+		reply(w, map[string]any{"counts": svc.counts, "from": svc.lastFrom, "fromLog": svc.fromLog, "maxInflight": svc.maxInflight, "inflight": svc.inflight, "held": svc.held})
 	})
 	ctl.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
 		svc.mu.Lock()

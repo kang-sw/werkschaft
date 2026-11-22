@@ -761,15 +761,16 @@
       doc.addEventListener("focusin", track, true);
       Promise.resolve(copyText(j.command, true)).then(function (ok) { return ok === true; }, function () { return false; }).then(function (ok) {
         doc.removeEventListener("focusin", track, true);
-        if (!a.isConnected) return;
-        var own = !!last && (last === a || (xhPeekEl && xhPeekEl.contains(last)));
         // The scratch field of the fallback borrowed the keyboard and left it on the page:
-        // it goes back to where the user last had it (Copy, or the element they moved to,
-        // when that is still there).
+        // it goes back to where the user last had it, whether or not the panel was redrawn
+        // meanwhile: the button they were on (the redrawn one, when it was replaced), or the
+        // element they moved to, when that is still there.
         if (!doc.activeElement || doc.activeElement === doc.body) {
-          var back = own ? a : last;
+          var own = !!last && (last === a || (xhPeekEl && xhPeekEl.contains(last)));
+          var back = own ? (a.isConnected ? a : (xhPeekEl && xhPeekEl.querySelector('[data-xact="copy"]'))) : last;
           if (back && back !== doc.body && back.isConnected && back.focus) back.focus();
         }
+        if (!a.isConnected) return;
         a.textContent = ok ? "✓ " + wsT("js.xhud.pk.copied") : "⚠ " + wsT("js.xhud.pk.copyfail");
         clearTimeout(xhCopiedT);
         xhCopiedT = setTimeout(function () { a.textContent = old; }, 1400);
