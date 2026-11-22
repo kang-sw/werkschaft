@@ -457,6 +457,42 @@ func TestWorkflowManualGitCommitReinjection(t *testing.T) {
 	}
 }
 
+func TestGitCommitOmitsTodoReminderForAnAllDoneList(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	initGit(t, root)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	server := NewServer(root, "test")
+	key, _ := parseLoginResponse(t, callLogin(t, server, 5500, root, nil))
+
+	commit := func(id int, name string) string {
+		file := filepath.Join(root, name)
+		if err := os.WriteFile(file, []byte(name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return callToolWithKey(t, server, id, key, "git.commit", map[string]any{
+			"paths":           []any{name},
+			"title":           "test: " + name,
+			"ai_context":      []any{"todo reminder test"},
+			"expected_branch": headBranch(t, root),
+		})
+	}
+
+	callToolWithKey(t, server, 5501, key, "todo.add", map[string]any{"key": "only", "title": "the only step"})
+	if resp := commit(5502, "one.txt"); !strings.Contains(resp, "## TODO(ws reminder: update this if stale)") {
+		t.Fatalf("a list with a pending item lost its reminder:\n%s", resp)
+	}
+
+	callToolWithKey(t, server, 5503, key, "todo.check", map[string]any{"key": "only", "status": "done"})
+	resp := commit(5504, "two.txt")
+	if strings.Contains(resp, "## TODO(") {
+		t.Fatalf("an all-done list still appended a reminder:\n%s", resp)
+	}
+	if !strings.Contains(resp, "tip: preserve this session key: "+key) {
+		t.Fatalf("session-key tip lost:\n%s", resp)
+	}
+}
+
 func TestAppendSessionKeyTip(t *testing.T) {
 	const key = "scarily-imminent-ploy-plated-84"
 	withKey := appendSessionKeyTip("commit ok", key)

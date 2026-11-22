@@ -130,6 +130,12 @@ func TestPlaybookPrintUndeclaredCallerVar(t *testing.T) {
 	if undecl.Name != "Undeclared" {
 		t.Errorf("ErrUndeclaredVar.Name = %q, want Undeclared", undecl.Name)
 	}
+	// The error lists the declared variables and says where per-run data goes.
+	for _, want := range []string{"declared variables: WorktreeID", "per-run data (paths, branches) belongs in the spawn prompt"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("undeclared-variable error %q lacks %q", err, want)
+		}
+	}
 }
 
 func TestPlaybookPrintUnprovidedVar(t *testing.T) {

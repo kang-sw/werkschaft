@@ -67,6 +67,10 @@ type AgentCaller struct {
 	VerifiedBackend string
 	// Config is where agents.tier and agent.tier_aliases are read.
 	Config wsconfig.Options
+	// PolicyKey is the caller's own ws session key. A child's key inherits
+	// the caller's session-scope config through it (ChildKeyStore); empty
+	// mints an independent key.
+	PolicyKey string
 	// holder is a token holder's own record (a nested spawn): its depth
 	// and tier cap the child's. Nil for a lead.
 	holder *Record
@@ -91,6 +95,7 @@ func (r *Runner) holderCaller(rec Record) AgentCaller {
 		Harness:         rec.Backend,
 		VerifiedBackend: rec.Backend,
 		Config:          cfg,
+		PolicyKey:       rec.WSKey,
 		holder:          &rec,
 	}
 }

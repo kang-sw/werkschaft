@@ -3,6 +3,7 @@ package wsgit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -124,6 +125,10 @@ func (c Client) Commit(ctx context.Context, root string, opts CommitOptions) (Co
 		}
 		admitted, pins, err := admitMergeStaging(ctx, runner, root, opts.Paths)
 		if err != nil {
+			var grantErr *commitMergeGrantError
+			if errors.As(err, &grantErr) {
+				return CommitResult{}, fmt.Errorf("merge commit refused: %w", grantErr)
+			}
 			return CommitResult{}, fmt.Errorf("%w; automatic merge admission unavailable: %v; include the intended staged paths in the existing paths grant explicitly", statusErr, err)
 		}
 		opts.Paths = append(opts.Paths, admitted...)

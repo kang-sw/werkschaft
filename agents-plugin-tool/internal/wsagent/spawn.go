@@ -105,6 +105,9 @@ type SpawnSpec struct {
 	// it (admitWorker), and the record keeps it (Record.SpawnerBackend).
 	// Empty is none.
 	spawnerBackend string
+	// policyKey is the spawning caller's ws key (AgentCaller.PolicyKey): the
+	// child's key inherits that session's config. Empty is none.
+	policyKey string
 	// SystemPrompt is appended to the harness's system prompt at every
 	// process start; empty is none.
 	SystemPrompt string

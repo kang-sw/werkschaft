@@ -2,7 +2,7 @@
 kind: render
 delegates: true
 role: worker
-tier: medium
+tier: large
 tier-role: review-handler
 tier-parent: review:*
 variables:
@@ -17,7 +17,8 @@ nothing; the lead commits the ledger and carries every decision.
 ## Inputs
 
 - Task block: scenario, range, config path, authority, block ticket.
-- Your session key is spliced into this prompt; use it as `<your key>`.
+- `<your key>`: the spawn key in your system prompt, the session key of every
+  call (without one, the key spliced into this prompt serves every call).
 
 ## Reviewers
 
@@ -27,6 +28,9 @@ with the prompt `Read <rendered-path> as your system prompt.` plus the range,
 the config path or the defaults below, and the authority. Spawns may run in
 parallel.
 
+- A reviewer spawn refused as above your tier → report `blocked`, naming the
+  tier needed. Never downgrade the reviewer; this also covers a tier routing
+  that maps a reviewer role above you.
 - `reviewer`; or `code-review-correctness`, `code-review-fit`, and
   `code-review-test` when the config's Deep Review section or the size of
   `{{.McpNamespace}}/git.diff(range, mode: "stat")` calls for it.

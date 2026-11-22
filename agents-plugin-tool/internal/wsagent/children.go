@@ -328,6 +328,8 @@ func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
 		Prompt:  req.Prompt,
 		Label:   label,
 		Parent:  &ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID},
+		// The child's key inherits the holder's session-scope config.
+		policyKey: rec.WSKey,
 		// The token holder is the verified spawner.
 		spawnerBackend: rec.Backend,
 	})

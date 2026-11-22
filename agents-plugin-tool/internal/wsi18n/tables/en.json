@@ -3036,7 +3036,7 @@
   "js.settings.key.pi.display_summary_style.label": "Display summary style",
   "js.settings.key.pi.display_summary_style.description": "Style guidance for generated display summaries.",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "Model wait timeout",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "Time to wait for a model response before a retry.",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "Seconds of silence (no raw ACP update) before a hosted agy lead acts. With agy.stall_log_check on, the lead first checks agy's own log and interrupts and continues only if the log confirms no response; 0 turns the watchdog off.",
   "js.settings.key.agy.model_wait_retries.label": "Model wait retries",
   "js.settings.key.agy.model_wait_retries.description": "Number of times to retry after the model wait timeout.",
   "js.settings.key.agy.stall_log_check.label": "Log-confirmed stall cutoff",

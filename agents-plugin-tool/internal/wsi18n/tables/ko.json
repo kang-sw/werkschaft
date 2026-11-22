@@ -3036,7 +3036,7 @@
   "js.settings.key.pi.display_summary_style.label": "Pi 캡션 스타일 지침",
   "js.settings.key.pi.display_summary_style.description": "Pi 표시 요약 프롬프트의 길이·어조·상세도 지침. 설정 시 기본 문구 전체를 대체합니다.",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "모델 응답 침묵 타임아웃",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "호스팅된 Antigravity (agy) 리드·워커에서 raw ACP session/update가 없을 때 중단·복구를 시작할 대기 초 (0은 끔).",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "호스팅된 agy 리드가 조치하기 전에 raw ACP 업데이트가 없는 상태가 이어지는 초 수. agy.stall_log_check가 켜져 있으면 리드가 먼저 agy 자체 로그를 확인하고, 로그에 응답이 없을 때만 중단 후 이어서 진행합니다. 0이면 꺼집니다.",
   "js.settings.key.agy.model_wait_retries.label": "자동 재시도 최대 횟수",
   "js.settings.key.agy.model_wait_retries.description": "모델 대기 침묵 또는 인밴드 모델 실패 시 논리적 턴당 자동 재개(continue) 최대 시도 횟수 (0은 끔).",
   "js.settings.key.agy.stall_log_check.label": "로그 확인 스톨 차단",

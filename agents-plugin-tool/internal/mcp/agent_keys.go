@@ -47,6 +47,14 @@ func (a *AgentKeyStore) Mint(root string) (string, error) {
 	return a.store.mint(root, roleDelegate, "")
 }
 
+// MintChild creates a new agent key rooted at root that inherits
+// session-scope overrides (review_phase, the sage knobs) from parentKey, the
+// ws key of the lead or worker that spawned it. The key stays parentless for
+// authority purposes: Ensure and scope checks are unchanged.
+func (a *AgentKeyStore) MintChild(root, parentKey string) (string, error) {
+	return a.store.mintWithPolicyParent(root, roleDelegate, "", parentKey)
+}
+
 // MintLead creates a parent-less lead key at root's canonical git root, the
 // record a top-lead ferrule mint writes, so the session's later ferrule
 // re-login at the same root accepts it. The daemon mints a hosted lead

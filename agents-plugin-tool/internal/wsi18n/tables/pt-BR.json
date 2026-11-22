@@ -3036,7 +3036,7 @@
   "js.settings.key.pi.display_summary_style.label": "Estilo do resumo de exibição",
   "js.settings.key.pi.display_summary_style.description": "Instruções de estilo para resumos gerados para exibição.",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "Tempo limite de resposta do modelo",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "Tempo de espera pela resposta do modelo antes de tentar novamente.",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "Segundos de silêncio (sem atualização ACP bruta) antes de um lead agy hospedado agir. Com agy.stall_log_check ativo, o lead verifica primeiro o log do agy e só interrompe e continua se o log não mostrar resposta; 0 desativa o monitoramento.",
   "js.settings.key.agy.model_wait_retries.label": "Tentativas após o tempo limite",
   "js.settings.key.agy.model_wait_retries.description": "Número de novas tentativas se o tempo de resposta do modelo expirar.",
   "js.settings.key.agy.stall_log_check.label": "Corte de travamento confirmado pelo log",

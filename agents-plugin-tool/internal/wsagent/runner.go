@@ -23,6 +23,14 @@ type KeyStore interface {
 	Ensure(root, key string) error
 }
 
+// ChildKeyStore is a KeyStore that can mint a spawned child's key so the key
+// inherits its spawner's session-scope config (review_phase, the sage knobs).
+// The runner uses it when the spawning caller supplies its ws key
+// (AgentCaller.PolicyKey) and falls back to Mint otherwise.
+type ChildKeyStore interface {
+	MintChild(root, parentKey string) (string, error)
+}
+
 // LeadKeyStore mints and keeps the lead ws session key of each hosted lead
 // session (Profile.Lead); ws-mcp's key store implements it.
 type LeadKeyStore interface {

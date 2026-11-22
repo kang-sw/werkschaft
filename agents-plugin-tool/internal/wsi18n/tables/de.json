@@ -3036,7 +3036,7 @@
   "js.settings.key.pi.display_summary_style.label": "Stil für Anzeigezusammenfassungen",
   "js.settings.key.pi.display_summary_style.description": "Stilvorgabe für generierte Anzeigezusammenfassungen.",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "Zeitlimit für Modellantwort",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "Wartezeit auf eine Modellantwort vor einem erneuten Versuch.",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "Sekunden ohne rohes ACP-Update, bevor ein gehosteter agy-Lead handelt. Bei aktivem agy.stall_log_check prüft der Lead zuerst agys eigenes Log und unterbricht und setzt nur fort, wenn das Log keine Antwort zeigt; 0 schaltet die Überwachung aus.",
   "js.settings.key.agy.model_wait_retries.label": "Wiederholungen bei Modell-Timeout",
   "js.settings.key.agy.model_wait_retries.description": "Anzahl der Versuche nach Ablauf des Zeitlimits für Modellantworten.",
   "js.settings.key.agy.stall_log_check.label": "Log-bestätigter Stillstandsabbruch",

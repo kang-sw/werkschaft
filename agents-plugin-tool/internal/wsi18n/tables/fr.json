@@ -3036,7 +3036,7 @@
   "js.settings.key.pi.display_summary_style.label": "Style des résumés affichés",
   "js.settings.key.pi.display_summary_style.description": "Consignes de style pour les résumés générés à l’affichage.",
   "js.settings.key.agy.model_wait_timeout_seconds.label": "Délai de réponse du modèle",
-  "js.settings.key.agy.model_wait_timeout_seconds.description": "Temps d’attente d’une réponse du modèle avant une nouvelle tentative.",
+  "js.settings.key.agy.model_wait_timeout_seconds.description": "Secondes de silence (aucune mise à jour ACP brute) avant qu’un lead agy hébergé n’agisse. Avec agy.stall_log_check actif, le lead consulte d’abord le journal d’agy et n’interrompt puis ne continue que si le journal ne montre aucune réponse ; 0 désactive la surveillance.",
   "js.settings.key.agy.model_wait_retries.label": "Tentatives après expiration du délai",
   "js.settings.key.agy.model_wait_retries.description": "Nombre de nouvelles tentatives après expiration du délai du modèle.",
   "js.settings.key.agy.stall_log_check.label": "Coupure de blocage confirmée par le journal",

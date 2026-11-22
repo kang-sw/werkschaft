@@ -204,7 +204,12 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		if spawn != nil && rp.Definition.Backend == BackendPi && spawn.Cwd != "" {
 			keyRoot = spawn.Cwd
 		}
-		if key, err = r.opts.Keys.Mint(keyRoot); err != nil {
+		if child, ok := r.opts.Keys.(ChildKeyStore); ok && spawn != nil && spawn.policyKey != "" {
+			key, err = child.MintChild(keyRoot, spawn.policyKey)
+		} else {
+			key, err = r.opts.Keys.Mint(keyRoot)
+		}
+		if err != nil {
 			return State{}, fmt.Errorf("mint ws session key: %w", err)
 		}
 	}

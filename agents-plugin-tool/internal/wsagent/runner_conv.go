@@ -400,11 +400,15 @@ type conv struct {
 	steerAnswers  int
 }
 
-// do runs fn in the loop and waits for it; false when the loop has ended.
+// do runs fn in the loop and waits for it; false when the loop has ended. The
+// wrapper closes ran in a defer, so a fn that exits its goroutine (a test's
+// t.Fatal runs runtime.Goexit) still releases the caller instead of leaving it
+// parked until the package timeout; the loop goroutine itself is then gone.
+// Tests copy values out inside fn and assert on their own goroutine.
 func (c *conv) do(fn func()) bool {
 	ran := make(chan struct{})
 	select {
-	case c.reqs <- func() { fn(); close(ran) }:
+	case c.reqs <- func() { defer close(ran); fn() }:
 		<-ran
 		return true
 	case <-c.done:
