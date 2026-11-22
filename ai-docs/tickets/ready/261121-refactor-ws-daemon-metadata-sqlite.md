@@ -1332,6 +1332,50 @@ Verification (macOS arm64):
 - `go build ./...`: ok.
 - `gofmt`: clean.
 
+#### Edition (19e629158) - 2026-11-22
+
+Round 8: fixes from the codex re-review of d89e955ee, as graded by the
+lead. This is post-cut work, not in 0.51.0. Each fix has a test that
+failed before it.
+
+- **Compare before delete (018ba7047).** `ApplyRemovalFence` reads `rel`
+  again right before deleting it. Only the planned version, which is the
+  one published at the witness, is retired. An owner save made in between
+  is kept, and the call returns `ErrFenceStale`; the caller stages and
+  applies again. An original staged absent and created in the window is
+  handled the same way.
+  - The gap between that read and the deletion is not fenced. The lead
+    accepted narrowing it to a check right before the delete.
+  - Test: `TestRemovalKeepsAnOwnerSaveMadeDuringIt`.
+- **An unreadable removal outranks fence errors at commit (2907271ae).**
+  `Commit` checks for an unreadable hooks config before it checks for
+  invalidated or pending fences. The caller gets `ErrRemovalUnreadable`
+  with its classification instead of a fence retry that cannot succeed.
+  - Test: `TestUnreadableRemovalOutranksAPendingFence`.
+- **A fence waits for its session (19e629158).** `planFence` refuses a
+  session row with `ErrFenceStale` and writes nothing while either holds:
+  - the session is marked missing (or has no `legacy_sessions` row);
+  - its live directory is absent or of another generation than the row.
+
+  A pass that confirms the directory lifts the refusal.
+  - Test: `TestFenceWaitsForAPassToConfirmTheSession`.
+- **Accepted without a fix (minor follow-up):** suppose the process
+  crashes after the witness publish and before the legacy deletion. If the
+  owner deletes the legacy file before the retry, the retry commits the
+  staged bytes. This needs a crash in that window plus a manual deletion
+  before restart, and the owner can delete the config again.
+
+Verification (macOS arm64):
+
+- `go test -count=1 -v ./internal/wsmeta`: ok, 90 PASS lines, no failures
+  or skips.
+- `go test -race -count=1 ./internal/wsmeta`: ok (16.5 s).
+- `go vet ./internal/wsmeta`, also with `GOOS=windows` and `GOOS=linux`:
+  ok.
+- `GOOS=windows go test -c ./internal/wsmeta`: builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
 
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
