@@ -64,9 +64,7 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
         let main = app.get_webview_window(MAIN_WINDOW);
         // The exit ends every window, so a secondary's drafts count too.
         let windows: Vec<_> = app.webview_windows().into_values().collect();
-        let drafts_ready = windows
-            .iter()
-            .all(|window| drafts_saved(window, &connection));
+        let drafts_ready = every(&windows, |window| drafts_saved(window, &connection));
         let done = match kind {
             Exit::Close => close(&app, main.as_ref(), drafts_ready),
             Exit::FullQuit => full_quit(&app, main.as_ref(), &connection, drafts_ready),
@@ -83,6 +81,14 @@ pub fn exit(app: AppHandle, connection: Arc<Connection>, kind: Exit) {
             connection.closing.store(false, Ordering::Release);
         }
     });
+}
+
+// Whether every item passes, checking each one even after a failure: each
+// window's check is also what asks its page to save its pending draft.
+fn every<T>(items: &[T], mut check: impl FnMut(&T) -> bool) -> bool {
+    items
+        .iter()
+        .fold(true, |passed, item| check(item) && passed)
 }
 
 // Whether a window's drafts are saved: true for a bundled local page,
@@ -466,6 +472,18 @@ mod tests {
                 .message
                 .contains("Nothing was stopped"));
         }
+    }
+
+    #[test]
+    fn every_window_is_asked_even_after_one_is_not_ready() {
+        let mut asked = Vec::new();
+        assert!(!every(&[1, 2, 3], |window| {
+            asked.push(*window);
+            *window != 1
+        }));
+        assert_eq!(asked, [1, 2, 3]);
+        assert!(every(&[1, 2], |_| true));
+        assert!(every::<u8>(&[], |_| false));
     }
 
     #[test]
