@@ -324,35 +324,28 @@ func TestDanglingSymlinkWriteBoundary(t *testing.T) {
 	outside := t.TempDir()
 	f := &Files{Root: root, Cwd: root, Authority: AuthorityWorkdirWrite}
 
-	t.Run("out of the tree is refused", func(t *testing.T) {
+	t.Run("a dangling link is refused wherever it points", func(t *testing.T) {
 		missing := filepath.Join(outside, "not-yet", "planted.txt")
 		must(t, os.Symlink(missing, filepath.Join(root, "dangling")))
-		// A relative link and a chain of two links leave the tree the same way.
 		must(t, os.Symlink(filepath.Join("..", filepath.Base(outside), "relative.txt"), filepath.Join(root, "rel")))
 		must(t, os.Symlink("dangling", filepath.Join(root, "chain")))
-		for _, name := range []string{"dangling", "chain"} {
-			if _, err := call(t, f, "write", map[string]any{"path": name, "content": "no"}); err == nil || !strings.Contains(err.Error(), "outside the session's worktree") {
-				t.Errorf("write through %s: err = %v", name, err)
+		// A dangling link that points inside the tree is refused as well.
+		must(t, os.Symlink(filepath.Join(root, "src", "made.txt"), filepath.Join(root, "inside")))
+		for _, name := range []string{"dangling", "rel", "chain", "inside", "dangling/child"} {
+			if _, err := call(t, f, "write", map[string]any{"path": name, "content": "no"}); err == nil {
+				t.Errorf("write through %s was allowed", name)
 			}
 			if _, err := call(t, f, "edit", map[string]any{"path": name, "edits": []map[string]string{{"oldText": "a", "newText": "b"}}}); err == nil {
 				t.Errorf("edit through %s was allowed", name)
 			}
 		}
-		if _, err := os.Lstat(missing); err == nil {
-			t.Error("the file was created outside the worktree")
+		for _, p := range []string{missing, filepath.Join(outside, "relative.txt"), filepath.Join(root, "src", "made.txt")} {
+			if _, err := os.Lstat(p); err == nil {
+				t.Errorf("%s was created", p)
+			}
 		}
 		if _, err := os.Stat(filepath.Join(outside, "not-yet")); err == nil {
 			t.Error("the outside directory was created")
-		}
-	})
-
-	t.Run("inside the tree is allowed and lands there", func(t *testing.T) {
-		must(t, os.Symlink(filepath.Join(root, "src", "made.txt"), filepath.Join(root, "inside")))
-		if _, err := call(t, f, "write", map[string]any{"path": "inside", "content": "yes"}); err != nil {
-			t.Fatalf("write through an inside link: %v", err)
-		}
-		if b, _ := os.ReadFile(filepath.Join(root, "src", "made.txt")); string(b) != "yes" {
-			t.Errorf("content = %q", b)
 		}
 	})
 
@@ -363,4 +356,36 @@ func TestDanglingSymlinkWriteBoundary(t *testing.T) {
 			t.Error("a write through a link loop was allowed")
 		}
 	})
+}
+
+// A relative link whose payload walks through a directory link and then ".."
+// resolves, in the operating system, relative to the directory link's real
+// target. Cleaning the payload lexically would collapse it inside the tree.
+func TestRelativeLinkThroughDirectoryLinkAndDotDot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links need privileges on Windows")
+	}
+	root := newTree(t)
+	outside := t.TempDir()
+	deep := filepath.Join(outside, "a", "b")
+	must(t, os.MkdirAll(deep, 0o755))
+	f := &Files{Root: root, Cwd: root, Authority: AuthorityWorkdirWrite}
+	// root/hop -> outside/a/b ; root/esc -> hop/../planted.txt
+	// The OS resolves esc as outside/a/planted.txt; lexically it is root/planted.txt.
+	must(t, os.Symlink(deep, filepath.Join(root, "hop")))
+	must(t, os.Symlink("hop/../planted.txt", filepath.Join(root, "esc")))
+	if _, err := call(t, f, "write", map[string]any{"path": "esc", "content": "no"}); err == nil {
+		t.Error("write through the link escaped the tree check")
+	}
+	for _, p := range []string{filepath.Join(outside, "a", "planted.txt"), filepath.Join(root, "planted.txt")} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Errorf("%s was created", p)
+		}
+	}
+	// An existing target reached the same way is judged where it really is.
+	must(t, os.WriteFile(filepath.Join(outside, "a", "real.txt"), []byte("x"), 0o644))
+	must(t, os.Symlink("hop/../real.txt", filepath.Join(root, "esc2")))
+	if _, err := call(t, f, "write", map[string]any{"path": "esc2", "content": "no"}); err == nil || !strings.Contains(err.Error(), "outside the session's worktree") {
+		t.Errorf("write to an existing target through the link: err = %v", err)
+	}
 }

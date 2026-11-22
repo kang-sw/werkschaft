@@ -155,38 +155,18 @@ func (f *Files) abs(path string) (string, error) {
 
 // realPath resolves symbolic links of the deepest existing ancestor of p and
 // appends the rest, so a path that does not exist yet is judged where it
-// would land. A symbolic link whose target is missing is followed to where it
-// points: a write through it creates the target, so that is where it lands.
+// would land. Link targets are never cleaned lexically here: EvalSymlinks
+// resolves them as the operating system does, so a relative link through a
+// directory link followed by ".." is judged where it really lands. A symbolic
+// link whose target is missing (dangling, or a loop) is refused: a write
+// through it would create the target where the link points, and judging that
+// place would mean re-implementing the resolver.
 func realPath(p string) (string, error) {
-	return realPathDepth(p, 0)
-}
-
-// maxLinkHops bounds the dangling links one path may chain through.
-const maxLinkHops = 40
-
-func realPathDepth(p string, hops int) (string, error) {
-	if hops > maxLinkHops {
-		return "", errors.New("too many levels of symbolic links")
-	}
 	p = filepath.Clean(p)
 	var rest []string
 	cur := p
 	for {
 		real, err := filepath.EvalSymlinks(cur)
-		if err != nil && errors.Is(err, fs.ErrNotExist) {
-			// EvalSymlinks reports a link with a missing target as a missing
-			// path; the link itself is there, and a write follows it.
-			if info, lerr := os.Lstat(cur); lerr == nil && info.Mode()&fs.ModeSymlink != 0 {
-				target, rerr := os.Readlink(cur)
-				if rerr != nil {
-					return "", rerr
-				}
-				if !filepath.IsAbs(target) {
-					target = filepath.Join(filepath.Dir(cur), target)
-				}
-				real, err = realPathDepth(target, hops+1)
-			}
-		}
 		if err == nil {
 			for i := len(rest) - 1; i >= 0; i-- {
 				real = filepath.Join(real, rest[i])
@@ -195,6 +175,11 @@ func realPathDepth(p string, hops int) (string, error) {
 		}
 		if !errors.Is(err, fs.ErrNotExist) {
 			return "", err
+		}
+		// EvalSymlinks reports a link with a missing target as a missing
+		// path; the link itself is there.
+		if info, lerr := os.Lstat(cur); lerr == nil && info.Mode()&fs.ModeSymlink != 0 {
+			return "", fmt.Errorf("%s is a symbolic link whose target does not exist; it is not followed for a write", cur)
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
