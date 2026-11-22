@@ -30,6 +30,11 @@ type mailboxRecipient struct {
 	addr    wsmailbox.Address
 	address string // canonical form, as listed by the group and the receipt
 	role    string
+	// path is the named store path the send resolved once for this copy
+	// (resolveMailboxFanOutPaths), shared by its group route and its
+	// enqueue; pathErr is that resolution's failure. Unused for id:.
+	path    string
+	pathErr error
 }
 
 // mailboxFanOut is a validated fan-out send.
@@ -163,6 +168,19 @@ type mailboxFanOutResult struct {
 	Error      string `json:"error,omitempty"`
 }
 
+// resolveMailboxFanOutPaths resolves each named recipient's store path once,
+// fresh, against the sender's root, so the group route recorded for a copy
+// is the exact path that copy is enqueued at.
+func (s *Server) resolveMailboxFanOutPaths(f *mailboxFanOut, root string) {
+	for i := range f.recipients {
+		r := &f.recipients[i]
+		if r.addr.Kind != wsmailbox.AddressSlug {
+			continue
+		}
+		r.path, r.pathErr = s.mailboxPaths().ForScope(r.addr.Scope, root)
+	}
+}
+
 // handleMailboxFanOut delivers one ordinary copy per recipient, each in its
 // own store transaction, so one recipient's routing or enqueue failure
 // neither rolls back nor stops the others. The group record is kept before
@@ -174,6 +192,7 @@ func (s *Server) handleMailboxFanOut(id json.RawMessage, args map[string]any, se
 	namespace := s.runtimeNamespace()
 	sender := s.mailboxSendIdentity(sessionKey, entry)
 	now := mailboxNowString()
+	s.resolveMailboxFanOutPaths(f, entry.root)
 	gid := s.recordMailGroup(sessionKey, entry, sender, f, now)
 	marker := mailboxGroupMarker(namespace, gid, len(f.to)+len(f.cc))
 	content := composeMailboxFanOutBody(f.content, marker, entry.isTopLevelLead(), s.currentHarness(), namespace)
@@ -182,7 +201,7 @@ func (s *Server) handleMailboxFanOut(id json.RawMessage, args map[string]any, se
 	var history []mailboxHistoryEntry
 	var historyNames []string
 	for _, r := range f.recipients {
-		d, err := s.deliverMailboxCopy(sessionKey, entry, sender, r.addr, content, now)
+		d, err := s.deliverMailboxCopyAt(sessionKey, entry, sender, r.addr, r.path, r.pathErr, content, now)
 		if err != nil {
 			s.debugEvent("mailbox.fanout_copy_error", map[string]any{"role": r.role, "error": err.Error()})
 			failed = append(failed, mailboxFanOutResult{Address: r.address, Role: r.role, Error: err.Error()})

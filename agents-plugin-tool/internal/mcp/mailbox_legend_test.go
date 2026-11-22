@@ -143,10 +143,12 @@ func TestMailboxRecvShowsTheSenderLegend(t *testing.T) {
 	}
 }
 
-// TestMailSenderLabelLookupAddsNoLayoutIO pins that resolving a named
-// sender's reply-id for the delivery legend reuses the memoized store path:
-// after the first lookup, a later one does not run wsstate's layout Ensure,
-// observed as a removed layout directory staying absent.
+// TestMailSenderLabelLookupAddsNoLayoutIO pins the split between display
+// and decision lookups of a named sender: the label lookup reuses the
+// memoized store path, so after the first one a later one does not run
+// wsstate's layout Ensure (observed as a removed layout directory staying
+// absent), while addressReplyID, which owner and wake decisions read,
+// always resolves fresh.
 func TestMailSenderLabelLookupAddsNoLayoutIO(t *testing.T) {
 	f := newFanOutFixture(t)
 	addr, err := wsmailbox.ParseAddress("alice@worktree")
@@ -154,8 +156,8 @@ func TestMailSenderLabelLookupAddsNoLayoutIO(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := wsmailbox.ReplyID(f.aliceKey)
-	if got := f.alice.addressReplyID(addr, f.root); got != want {
-		t.Fatalf("first named sender reply-id = %q, want %q", got, want)
+	if got := f.alice.labelAddressReplyID(addr, f.root); got != want {
+		t.Fatalf("first label reply-id = %q, want %q", got, want)
 	}
 	layout, _, _, err := wsstate.NewManager(f.alice.stateOptions()).Resolve(f.root)
 	if err != nil {
@@ -165,12 +167,18 @@ func TestMailSenderLabelLookupAddsNoLayoutIO(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if got := f.alice.addressReplyID(addr, f.root); got != want {
-			t.Fatalf("repeat named sender reply-id = %q, want %q", got, want)
+		if got := f.alice.labelAddressReplyID(addr, f.root); got != want {
+			t.Fatalf("repeat label reply-id = %q, want %q", got, want)
 		}
 	}
 	if _, err := os.Stat(layout.TmpDir); !os.IsNotExist(err) {
 		t.Fatalf("a repeat label lookup re-ran layout Ensure (tmp dir stat err = %v)", err)
+	}
+	if got := f.alice.addressReplyID(addr, f.root); got != want {
+		t.Fatalf("decision reply-id = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(layout.TmpDir); err != nil {
+		t.Fatalf("addressReplyID did not resolve fresh (tmp dir stat err = %v)", err)
 	}
 }
 

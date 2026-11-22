@@ -48,11 +48,11 @@ func (s *Server) mailLegendLine(senders []mailLegendSender) string {
 
 // envelopeLegendSenders are the legend senders of envelopes as mailbox.recv
 // shows them (mailboxSender), each with its sender's reply-id
-// (mailSenderReplyID).
+// (labelSenderReplyID).
 func (s *Server) envelopeLegendSenders(envelopes []wsmailbox.Envelope, root string) []mailLegendSender {
 	out := make([]mailLegendSender, 0, len(envelopes))
 	for _, m := range envelopes {
-		out = append(out, mailLegendSender{handle: mailboxSender(m), replyID: s.mailSenderReplyID(m, root)})
+		out = append(out, mailLegendSender{handle: mailboxSender(m), replyID: s.labelSenderReplyID(m, root)})
 	}
 	return out
 }
@@ -70,7 +70,7 @@ func (s *Server) labelEnvelopes(envelopes []wsmailbox.Envelope, root string) []w
 		if m.From == "" && m.ReplyTo == "" {
 			continue
 		}
-		if label := s.mailLabel(s.mailSenderReplyID(m, root)); label != "" {
+		if label := s.mailLabel(s.labelSenderReplyID(m, root)); label != "" {
 			out[i].Label = label
 		}
 	}
@@ -108,7 +108,7 @@ func (m *LeadMailbox) Legend(root string, texts, senders []string) []string {
 			replyID = senders[i]
 		}
 		if replyID == "" {
-			replyID = m.server.handleReplyID(handle, root)
+			replyID = m.server.labelHandleReplyID(handle, root)
 		}
 		list = append(list, mailLegendSender{handle: handle, replyID: replyID})
 	}

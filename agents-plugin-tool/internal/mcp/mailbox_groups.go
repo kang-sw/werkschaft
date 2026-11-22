@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -218,30 +219,42 @@ func (s *Server) routeLabel(addr wsmailbox.Address, route mailGroupRoute) string
 	return s.mailLabel(s.namedOwnerReplyID(route.path, addr.Name))
 }
 
-// mailboxScopePaths memoizes the named-store path of a (homes, GIT_* env,
-// scope, root) for the label and group-route lookups. Resolving it through
+// mailboxLabelPaths memoizes the named-store path of a (homes, GIT_* env,
+// scope, root) for display-label lookups only: the sender legend and the
+// labels mailbox.recv fills in. Resolving it through
 // wsmailbox.Paths.ForScope runs wsstate.Manager.Ensure (directory creation
-// and metadata checks) on every call; delivery's sender legend and fan-out
-// labels must add no per-message file work (performance manual, rules 1 and
-// 5). A root's store path changes only when its Git identity does, which a
-// daemon restart picks up; these lookups are display and read-only
-// membership, never the send's own enqueue resolution.
-var mailboxScopePaths sync.Map
+// and metadata checks) on every call, and a delivered sender's label must add
+// no per-message file work (performance manual, rules 1 and 5). The key
+// cannot see a root's Git identity without a file touch, so a linked
+// worktree path reused by another clone can keep a stale entry until the
+// daemon restarts; that only mislabels or drops a label. Group routes,
+// mailbox.recipients membership, and owner decisions (addressReplyID) never
+// read this memo: they resolve fresh, as the send's own enqueue does.
+var mailboxLabelPaths sync.Map
 
-// mailboxScopePathsMax bounds the memo; past it the memo is dropped whole
+// mailboxLabelPathsMax bounds the memo; past it the memo is dropped whole
 // and refills from the next lookups.
-const mailboxScopePathsMax = 1024
+const mailboxLabelPathsMax = 1024
 
-var mailboxScopePathsCount atomic.Int64
+var mailboxLabelPathsCount atomic.Int64
 
-// mailboxScopePath is s.mailboxPaths().ForScope(scope, root), memoized in
-// mailboxScopePaths after its first success.
-func (s *Server) mailboxScopePath(scope wsmailbox.Scope, root string) (string, error) {
+// mailboxLabelPath is s.mailboxPaths().ForScope(scope, root), memoized in
+// mailboxLabelPaths after its first success. The key carries every
+// environment input ForScope reads: the caller's and the process's
+// WS_CONFIG_HOME and WS_CACHE_HOME (wsconfig.GlobalPath, wsstate.CacheRoot
+// fall back to the process environment), the process home directory, and
+// the caller's GIT_* variables (wsstate's Git identity).
+func (s *Server) mailboxLabelPath(scope wsmailbox.Scope, root string) (string, error) {
+	home, _ := os.UserHomeDir()
 	var key strings.Builder
-	key.WriteString(s.getenv(wsconfig.EnvConfigHome))
-	key.WriteByte(0)
-	key.WriteString(s.getenv(wsstate.EnvCacheHome))
-	key.WriteByte(0)
+	for _, part := range []string{
+		s.getenv(wsconfig.EnvConfigHome), os.Getenv(wsconfig.EnvConfigHome),
+		s.getenv(wsstate.EnvCacheHome), os.Getenv(wsstate.EnvCacheHome),
+		home,
+	} {
+		key.WriteString(part)
+		key.WriteByte(0)
+	}
 	key.WriteString(string(scope))
 	key.WriteByte(0)
 	key.WriteString(root)
@@ -252,30 +265,44 @@ func (s *Server) mailboxScopePath(scope wsmailbox.Scope, root string) (string, e
 		}
 	}
 	k := key.String()
-	if cached, ok := mailboxScopePaths.Load(k); ok {
+	if cached, ok := mailboxLabelPaths.Load(k); ok {
 		return cached.(string), nil
 	}
 	path, err := s.mailboxPaths().ForScope(scope, root)
 	if err != nil {
 		return "", err
 	}
-	if mailboxScopePathsCount.Add(1) > mailboxScopePathsMax {
-		mailboxScopePaths.Clear()
-		mailboxScopePathsCount.Store(1)
+	if mailboxLabelPathsCount.Add(1) > mailboxLabelPathsMax {
+		mailboxLabelPaths.Clear()
+		mailboxLabelPathsCount.Store(1)
 	}
-	mailboxScopePaths.Store(k, path)
+	mailboxLabelPaths.Store(k, path)
 	return path, nil
 }
 
 // addressReplyID is the reply-id behind a mailbox address, "" for none: an
 // id: handle's own, or the reply-id of the session that owns a named
-// address now (resolved against root, as a send resolves it). It reads the
-// store's memory only.
+// address now (resolved fresh against root, as a send resolves it). Owner
+// decisions read it, so it never uses the display memo.
 func (s *Server) addressReplyID(addr wsmailbox.Address, root string) string {
 	if addr.Kind == wsmailbox.AddressReplyID {
 		return addr.ReplyID
 	}
-	path, err := s.mailboxScopePath(addr.Scope, root)
+	path, err := s.mailboxPaths().ForScope(addr.Scope, root)
+	if err != nil {
+		return ""
+	}
+	return s.namedOwnerReplyID(path, addr.Name)
+}
+
+// labelAddressReplyID is addressReplyID for a display label only: a named
+// address resolves its store path through the display memo
+// (mailboxLabelPath), so a delivered sender's label adds no file work.
+func (s *Server) labelAddressReplyID(addr wsmailbox.Address, root string) string {
+	if addr.Kind == wsmailbox.AddressReplyID {
+		return addr.ReplyID
+	}
+	path, err := s.mailboxLabelPath(addr.Scope, root)
 	if err != nil {
 		return ""
 	}
@@ -293,25 +320,28 @@ func (s *Server) namedOwnerReplyID(path, name string) string {
 	return s.mailboxReplyID(presence.Owner)
 }
 
-// handleReplyID is addressReplyID for a head handle, "" when it is not an
-// address (a display label, "unknown", system).
-func (s *Server) handleReplyID(handle, root string) string {
+// labelHandleReplyID is labelAddressReplyID for a head handle, "" when it
+// is not an address (a display label, "unknown", system). It feeds the
+// sender legend only.
+func (s *Server) labelHandleReplyID(handle, root string) string {
 	addr, err := wsmailbox.ParseAddress(handle)
 	if handle == "" || err != nil {
 		return ""
 	}
-	return s.addressReplyID(addr, root)
+	return s.labelAddressReplyID(addr, root)
 }
 
-// mailGroupRouteFor is the route of a copy sent to addr from a session at
-// root: the queue the copy was enqueued in.
-func (s *Server) mailGroupRouteFor(addr wsmailbox.Address, root, ring string) mailGroupRoute {
-	if addr.Kind == wsmailbox.AddressReplyID {
-		return mailGroupRoute{ring: ring, queue: addr.ReplyID}
+// mailGroupRouteFor is the route of the copy sent to r: the queue the copy
+// is enqueued in, at the store path the send itself resolved for it
+// (resolveMailboxFanOutPaths). A named recipient whose path failed to
+// resolve keeps path "" and can never match.
+func mailGroupRouteFor(r mailboxRecipient, ring string) mailGroupRoute {
+	if r.addr.Kind == wsmailbox.AddressReplyID {
+		return mailGroupRoute{ring: ring, queue: r.addr.ReplyID}
 	}
-	route := mailGroupRoute{named: true, ring: ring, queue: addr.Name}
-	if path, err := s.mailboxScopePath(addr.Scope, root); err == nil {
-		route.path = filepath.Clean(path)
+	route := mailGroupRoute{named: true, ring: ring, queue: r.addr.Name}
+	if r.pathErr == nil && r.path != "" {
+		route.path = filepath.Clean(r.path)
 	}
 	return route
 }
@@ -328,7 +358,7 @@ func (s *Server) recordMailGroup(sessionKey string, entry sessionEntry, sender m
 	}
 	g := mailGroup{sentAt: sentAt, sender: mailGroupMember{address: address, route: mailGroupRoute{ring: ring, queue: replyID}}}
 	for _, r := range f.recipients {
-		route := s.mailGroupRouteFor(r.addr, entry.root, ring)
+		route := mailGroupRouteFor(r, ring)
 		switch r.role {
 		case mailboxRoleTo:
 			g.to = append(g.to, mailGroupMember{address: r.address, label: s.routeLabel(r.addr, route), route: route})
@@ -353,7 +383,7 @@ func (s *Server) inMailGroup(g mailGroup, sessionKey string, entry sessionEntry)
 	reply := mailGroupRoute{ring: ring, queue: s.mailboxReplyID(sessionKey)}
 	var named mailGroupRoute
 	if isOwner, identity, err := s.mailboxOwnerCheck(sessionKey, entry.root); err == nil && isOwner {
-		if path, perr := s.mailboxScopePath(identity.Scope, entry.root); perr == nil {
+		if path, perr := s.mailboxPaths().ForScope(identity.Scope, entry.root); perr == nil {
 			named = mailGroupRoute{named: true, ring: ring, path: filepath.Clean(path), queue: identity.Name}
 		}
 	}
