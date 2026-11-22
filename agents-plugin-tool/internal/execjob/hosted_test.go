@@ -998,6 +998,31 @@ func TestHostedJobCapDropsOldestFinished(t *testing.T) {
 	}
 }
 
+// TestHostedRefusedLaunchKeepsNoRing: a launch the running-job cap
+// refuses leaves no output ring behind.
+func TestHostedRefusedLaunchKeepsNoRing(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	for i := 0; i < HostedMaxJobs; i++ {
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rings := func() int {
+		fx.h.rings.mu.Lock()
+		defer fx.h.rings.mu.Unlock()
+		return len(fx.h.rings.jobs)
+	}
+	before := rings()
+	for i := 0; i < 3; i++ {
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err == nil || !strings.Contains(err.Error(), "already run") {
+			t.Fatalf("launch over the cap = %v", err)
+		}
+	}
+	if after := rings(); after != before {
+		t.Fatalf("refused launches left rings: %d before, %d after", before, after)
+	}
+}
+
 // TestHostedLegacyShapeAndReaders: a hosted legacy launch answers the
 // legacy Response, and the legacy readers find it by root.
 func TestHostedLegacyShapeAndReaders(t *testing.T) {
