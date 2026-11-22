@@ -327,6 +327,8 @@ func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
 		Prompt:  req.Prompt,
 		Label:   label,
 		Parent:  &ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID},
+		// The token holder is the verified spawner.
+		spawnerBackend: rec.Backend,
 	})
 	if err != nil {
 		return State{}, err

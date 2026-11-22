@@ -190,7 +190,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		}
 	}
 	if refusal != nil {
-		// A worker on a lead-only backend shows why it does not run,
+		// A cross-harness worker shows why it does not run,
 		// whatever its last turn says (interrupted settles a turn left
 		// open with this reason too).
 		c.lastErr = refusal.Error()

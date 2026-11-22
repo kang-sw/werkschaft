@@ -1020,11 +1020,13 @@ from a support conversation:
   (`Runner.subagentSteer`); a worker gets it after its key sentence. A lead
   of a backend with `PreferNativeSubagent` (agy) gets a native-first line
   instead, whether or not its catalog names the tool: its native subagent
-  explores without ws tools at the harness's default model, while rendered
-  playbooks, ws-tool work, and tier-specific questions go to `agent.spawn`
-  at a `claude.<size>`, `codex.<size>`, or configured route target (a bare
-  size or own-harness role tier a render recommends gets `claude.` or
-  `codex.` first), and a native subagent is one-shot.
+  explores without ws tools at the harness's default model (a tier-specific
+  question goes to a read-only `agent.spawn` subagent at an external-harness
+  tier), rendered playbooks and ws-tool work go to `agent.spawn` with the
+  rendered tier passed as returned (a role tier may end on agy, which is
+  allowed; the Antigravity terms risk steers it to an external fixed tier
+  such as `claude.small` when another harness fits, never a harness prefix
+  before a role tier), and a native subagent is one-shot.
 - **Playbook commands.** A backend with `PlaybookCommands` (Claude, agy)
   hosts leads with no ws skills: the lead's connection (not a worker's)
   renders under the `ws` server's names whatever package the daemon
@@ -1050,15 +1052,17 @@ from a support conversation:
   selects the native-first prompt line above and, for text the hosted lead
   executes itself (`workflow_manual`, `playbook.read`, the playbook-command
   render), native-first terminology: `ExploreAgent` names its native
-  subagent, `SpawnIdiom` names `agent.spawn` on an external harness with the
-  size-prefix rule, and the continuity tip names `agent.spawn`'s subagents.
+  subagent, `SpawnIdiom` names `agent.spawn` with the same tier rule as the
+  prompt line (`nativeFirstTierRule`, `internal/mcp/playbook_terminology.go`),
+  and the continuity tip names `agent.spawn`'s subagents.
   For that lead's workflow manual, the renderer also rewrites three rendered
   sentences (`nativeFirstManual`; plain text, not declared variables, so the
   resource and caller-context validation are unchanged). The exploration
   bullet loses the "tier the question needs" suffix. A rendered delegate is
-  spawned through `agent.spawn` on an external harness with the returned path
-  and the rendered tier qualified with a harness prefix (no model/effort
-  bindings, which `agent.spawn` does not take).
+  spawned through `agent.spawn` with the returned path and the rendered tier
+  (no model/effort bindings, which `agent.spawn` does not take), and the tier
+  line states the tier rule. agy-to-agy restraint is this prompt only: no
+  count or tier limit applies.
   `playbook.render` output is unchanged for every caller: a rendered
   delegate runs on another process.
   `CallFallback` opts hosted lead connections into the compact `call` tool
@@ -1084,49 +1088,70 @@ from a support conversation:
   spelling only, without the hosted lead's implicit-key rule or authority.
   `WorkerCapable` and `WorkerProfile` admit worker tiers; `WorkerHTTPMCP`
   selects HTTP attachment. Claude uses HTTP, Pi keeps its bridge.
-  **agy is a hosted lead only** (owner decision (1545), 2026-11-22):
-  Antigravity's terms say its login used through third-party software can
-  get the account suspended and that wrapping its CLI in another coding
-  agent is unsupported on consumer plans. Its registration sets
-  `WorkerCapable: false` with a lead-only reason, and one check
-  (`admitWorkerBackend`, `internal/wsagent/agent_tools.go`) refuses every
-  worker entry with that reason: `agent.spawn` (an `agy.<tier>`, an agy
-  caller's bare tier, an alias, or a graph route or bundle ending on agy),
-  the profile-based `POST /agents` (403), and every launch or wake of an
-  existing agy worker record (`admitWorkerRecord`). The record check reads
-  the record's own backend and lead flag before any profile, so an edited
-  or removed profile cannot mask the reason. A refused message, mail, or
-  resume stays queued and the record stays listed, with the reason as its
-  error; the reason is derived again on every load, with no stored field
-  and before any profile, compaction, watchdog, or permission config read.
-  On daemon start a held agy worker is never rejoined. Its holder is
-  attached only for the ownership match every held worker passes
+  **agy workers run for agy callers only** (owner decision (1546),
+  2026-11-22, revising (1545)): Antigravity's terms say its login used
+  through third-party software can get the account suspended and that
+  wrapping its CLI in another coding agent is unsupported on consumer plans,
+  which a Claude, Codex, or Pi session driving an agy worker is; agy-to-agy
+  use is the owner's accepted risk. The registration option
+  `crossHarnessRefusal` (set only for agy, which is `WorkerCapable`) admits
+  a worker on that backend only for a caller verified on the same backend,
+  and is the refusal's text; a backend without it admits every caller. One
+  check (`admitWorker`, `internal/wsagent/agent_tools.go`) decides every
+  worker entry: `agent.spawn` (an `agy.<tier>`, an agy caller's bare tier,
+  an alias, or a graph route or bundle ending on agy), the profile-based
+  `POST /agents` (no spawning session, so 403), and every launch, wake, or
+  rejoin of an existing agy worker record (`admitWorkerRecord`).
+  The caller's backend counts only when verified (`AgentCaller.VerifiedBackend`):
+  a daemon-hosted lead's own record backend (`agentAdmissionBackend`,
+  `internal/mcp/agent_tools.go`) or a token holder's record backend for a
+  nested spawn. The connection's detected harness (launcher hello,
+  initialize `clientInfo`) selects tiers only; no verified binding is
+  cross-harness. A spawn stamps the verified caller backend on the child
+  (`Record.SpawnerBackend`, a top-level omitempty field, apart from
+  `Parent`, whose whole value keys the child index); a record without the
+  stamp on an option backend takes its parent record's backend, resolved at
+  startup from all records read before any rejoin
+  (`resolveSpawnerBackends`), and is otherwise refused. The record check
+  reads the backend, lead flag, and stamp before any profile, so an edited
+  or removed profile cannot mask the refusal; a lead is never refused. A
+  refused message, mail, or resume stays queued and the record stays
+  listed, with the refusal as its error; it is derived again on every load,
+  with no stored reason and before any profile, compaction, watchdog, or
+  permission config read.
+  On daemon start a held cross-harness agy worker is never rejoined. Its
+  holder is attached only for the ownership match every held worker passes
   (`checkReattach`, `workerHolderMatches`), with replay, events, and the MCP
   bearer kept closed and no profile or config read. A matching holder is
-  then stopped (`retireLeadOnlyWorker`): an open turn settles failed with
-  the reason. A failed stop keeps the holder in the record and is retried
-  on every heartbeat until it succeeds; a user's Stop meanwhile retries the
-  holder's own stop and keeps the holder if that fails too. A close
-  (directly or through a parent's cascade) also retries that stop first and,
-  if it fails, is refused (`errHolderNotEnded`, HTTP 409). The conversation
-  stays open with its holder and heartbeat retry, the cascade closes no
-  ancestor, and closing again retries. A downgrade retirement whose stop
-  failed behaves the same way. Only the heartbeat's successful retry wakes
-  input queued meanwhile: after a deliberate Stop it waits for the next
-  send. A daemon that dies between clearing
-  the holder and settling the turn leaves the next load to settle it failed
-  with the same reason, not as interrupted. A mismatched or already
-  rejected holder is never stopped; the record only drops the association.
-  Either way the record stays listed, stopped, and its activity is stamped,
-  so child expiry gives it one full interval.
-  `agent.tiers` lists agy under `Unavailable`, and aliases, routes,
-  bundles, and the dashboard tier view carry the same reason. The agy
-  worker profile stays registered so old records resolve; the agy worker
-  adapter (`WorkerAutoApprove`, `thought_level` effort, the default agent
-  with the `agent.spawn` instruction) stays for adapter-level tests only.
-  agy leads keep peer mail and the watchdog's automatic `continue`, and may
-  spawn Claude, Codex, or Pi workers. The dashboard's hosted lead popover
-  still offers agy and shows a terms warning while agy is picked.
+  then stopped (`retireCrossHarnessWorker`): an open turn settles failed
+  with the refusal. A failed stop keeps the holder in the record and is
+  retried on every heartbeat until it succeeds; a user's Stop meanwhile
+  retries the holder's own stop and keeps the holder if that fails too. A
+  close (directly or through a parent's cascade) also retries that stop
+  first and, if it fails, is refused (`errHolderNotEnded`, HTTP 409). The
+  conversation stays open with its holder and heartbeat retry, the cascade
+  closes no ancestor, and closing again retries. A downgrade retirement
+  whose stop failed behaves the same way. Only the heartbeat's successful
+  retry wakes input queued meanwhile: after a deliberate Stop it waits for
+  the next send. A daemon that dies between clearing the holder and
+  settling the turn leaves the next load to settle it failed with the same
+  refusal, not as interrupted. A mismatched or already rejected holder is
+  never stopped; the record only drops the association. Either way the
+  record stays listed, stopped, and its activity is stamped, so child
+  expiry gives it one full interval. An agy-parented agy worker rejoins
+  and wakes as any other worker.
+  `agent.tiers` and route resolution depend on the caller: for a verified
+  agy caller agy tiers are spawnable; for any other, agy is listed under
+  `Unavailable` with the refusal, and aliases, routes, and bundles ending
+  on agy carry it. The dashboard tier view checks availability for its
+  simulated caller harness (an agy preview admits agy, a Claude preview
+  shows the refusal), and the MCP routed binding (`playbook.render`'s
+  recommendation, `config.resolve_agent`) returns no binding after a
+  refusal, even at the caller fallthrough (`errCallerRefused`,
+  `internal/mcp/tier_routing.go`). agy leads keep peer mail and the
+  watchdog's automatic `continue`, and may spawn Claude, Codex, Pi, or agy
+  workers. The dashboard's hosted lead popover still offers agy and shows a
+  terms warning while agy is picked.
 - **No ws plugin (Claude).** A Claude lead loads no ws bundle: the installed
   `ws` and `wsflow` plugins are turned off for the launch (`--settings`
   `enabledPlugins`), its ws-mcp is the `--mcp-config` server `ws` (no
@@ -1613,7 +1638,7 @@ continues (`internal/wsagent/runner_events.go` L804-818).
 | Child kind | Owner | Survives graceful replace? | What to do |
 |---|---|---|---|
 | Hosted Claude, Pi, agy, or Codex lead | Session holder (`internal/wsagent/runner_process.go` L229-258, L294-312) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
-| Claude, Codex, or Pi `agent.spawn` worker (agy is lead-only) | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
+| Claude, Codex, Pi, or agy-parented agy `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
 | Legacy direct worker still running under an older daemon | Daemon subprocess | No; shutdown stops it | Send a new message after replace; its next launch uses a holder. |
 
 Healthy held leads and workers can continue through a normal daemon replacement.

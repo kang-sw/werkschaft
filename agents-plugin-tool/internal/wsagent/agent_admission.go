@@ -117,8 +117,8 @@ func (r *Runner) childAdmission(rec Record, def Profile) (PermissionLevel, strin
 	if rec.Lead {
 		return "", "", nil
 	}
-	// A worker record on a lead-only backend is kept but never launched
-	// or woken again.
+	// A cross-harness worker record (admitWorkerRecord) is kept but never
+	// launched or woken again.
 	if err := r.admitWorkerRecord(rec); err != nil {
 		return "", "", err
 	}

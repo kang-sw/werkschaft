@@ -2,8 +2,6 @@ package mcp
 
 import (
 	"encoding/json"
-	"slices"
-	"strings"
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
@@ -15,7 +13,8 @@ func TestHostedAgyAgentTiersUsesDescriptorHarness(t *testing.T) {
 	reg := regs[wsagent.BackendAgy]
 	// A transport-only backend makes tiers available without an agy install
 	// or provider call. The MCP handler and tier resolver remain real. The
-	// worker role is this fixture's: the shipped agy is lead-only (below).
+	// worker role is this fixture's (agy_same_harness_test.go covers the
+	// shipped registration).
 	reg.Backend = &lifecycleBackend{}
 	reg.WorkerCapable = true
 	reg.WorkerProfile = wsagent.AgentWorkerProfile(wsagent.BackendAgy)
@@ -50,9 +49,10 @@ func TestHostedAgyAgentTiersUsesDescriptorHarness(t *testing.T) {
 }
 
 // A hosted agy lead's agent.spawn of a codex worker reaches the runner as
-// the agy lead's own request and succeeds: lead-only agy refuses agy
-// workers, not agy leads' spawns. The runner is a fake; the wsagent tests
-// cover the real resolution (TestAgyLeadOnlyRefusesEverySpawnRouteAndListsWhy).
+// the agy lead's own request, verified on its agy record, and succeeds. The
+// runner is a fake; the wsagent tests cover the real resolution
+// (TestAgyLeadSpawnsAgyWorkersOnEveryRoute,
+// TestAgyCrossHarnessCallersAreRefusedOnEveryRoute).
 func TestHostedAgyLeadSpawnsACodexWorker(t *testing.T) {
 	s, f := hostedBackendConnection(t, wsagent.BackendAgy, descriptorRegistrations())
 	// The connection reads its agy descriptor (sanitized tool names) through
@@ -74,36 +74,10 @@ func TestHostedAgyLeadSpawnsACodexWorker(t *testing.T) {
 		t.Fatalf("calls: callers %+v, requests %+v", agents.agent.callers, agents.agent.requests)
 	}
 	caller, req := agents.agent.callers[0], agents.agent.requests[0]
-	if caller.Harness != wsagent.BackendAgy || caller.Parent != (wsagent.ParentRef{Kind: wsagent.ParentLead, ReplyID: wsmailbox.ReplyID(f.hosted)}) {
+	if caller.Harness != wsagent.BackendAgy || caller.VerifiedBackend != wsagent.BackendAgy || caller.Parent != (wsagent.ParentRef{Kind: wsagent.ParentLead, ReplyID: wsmailbox.ReplyID(f.hosted)}) {
 		t.Fatalf("caller = %+v", caller)
 	}
 	if req.Tier != "codex.small" || req.Authority != "read-only" || req.Prompt != "review" {
 		t.Fatalf("request = %+v", req)
-	}
-}
-
-// With the daemon's own lead-only agy registration, a hosted agy lead's
-// agent.tiers offers no bare tier and names agy under Unavailable with the
-// agy reason.
-func TestHostedAgyAgentTiersListsTheLeadOnlyReason(t *testing.T) {
-	regs := descriptorRegistrations()
-	shipped := wsagent.BuiltinBackendRegistrations()[wsagent.BackendAgy]
-	shipped.Backend = &lifecycleBackend{}
-	regs[wsagent.BackendAgy] = shipped
-	s, _ := hostedBackendConnection(t, wsagent.BackendAgy, regs)
-	raw := callToolOnce(t, s, 1, "agent_tiers", map[string]any{"format": "json"})
-	if toolIsError(t, raw) {
-		t.Fatal(raw)
-	}
-	var tiers wsagent.AgentTiers
-	if err := json.Unmarshal([]byte(toolText(t, raw)), &tiers); err != nil {
-		t.Fatal(err)
-	}
-	if tiers.Harness != "agy" || len(tiers.Native) != 0 {
-		t.Fatalf("harness %q, native %+v", tiers.Harness, tiers.Native)
-	}
-	i := slices.IndexFunc(tiers.Unavailable, func(e string) bool { return strings.HasPrefix(e, "agy: ") })
-	if i < 0 || !strings.Contains(tiers.Unavailable[i], "hosted lead only") || !strings.Contains(tiers.Unavailable[i], "Antigravity") {
-		t.Fatalf("unavailable = %v", tiers.Unavailable)
 	}
 }

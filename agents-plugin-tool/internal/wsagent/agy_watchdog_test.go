@@ -450,7 +450,7 @@ func TestAgyModelWaitWatchdogPublishesExhaustionToHostedLeadConversation(t *test
 	}
 }
 
-// The shipped posture's hosted agy lead (lead-only registration, silence
+// The shipped posture's hosted agy lead (cross-harness registration, silence
 // watchdog off) takes an in-band provider failure in its reply stream to the
 // automatic continue: the drain cancels the prompt, and the cancelled
 // prompt's answer sends continue on the same session.
@@ -459,8 +459,8 @@ func TestAgyModelWaitInBandFailureContinuesHostedLeadTurn(t *testing.T) {
 		t.Fatal("silence watchdog must be off by default")
 	}
 	h, f := newAgyLeadHarness(t)
-	if reg := h.opts.Backends[BackendAgy]; reg.WorkerCapable || reg.leadOnlyReason != agyLeadOnlyReason {
-		t.Fatalf("fixture is not the shipped lead-only posture: %+v", reg)
+	if reg := h.opts.Backends[BackendAgy]; reg.crossHarnessRefusal != agyCrossHarnessRefusal {
+		t.Fatalf("fixture is not the shipped cross-harness posture: %+v", reg)
 	}
 	timers := &leverTimers{}
 	h.opts.Timer = timers.start

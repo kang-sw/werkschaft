@@ -71,17 +71,17 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		ToolsAlwaysLoad:  true,
 		ManualHarness:    BackendAgy,
 		PlaybookCommands: true,
-		// An agy lead explores with its own subagents and reaches the other
-		// harnesses through agent.spawn.
+		// An agy lead explores with its own subagents and delegates through
+		// agent.spawn, preferring another harness when one fits.
 		PreferNativeSubagent: true,
-		// Lead-only: no worker of any caller runs on agy. The worker
-		// profile stays registered so existing worker records resolve and
-		// stay listable; admitWorkerBackend refuses every worker entry.
-		WorkerCapable:     false,
-		leadOnlyReason:    agyLeadOnlyReason,
-		WorkerProfile:     AgentWorkerProfile(BackendAgy),
-		WorkerHTTPMCP:     true,
-		WorkerAutoApprove: true,
+		// Same-harness workers only: an agy session (a hosted agy lead, or
+		// an agy worker spawning a nested child) may run agy workers; every
+		// other caller, and a creation with none, is refused (admitWorker).
+		WorkerCapable:       true,
+		crossHarnessRefusal: agyCrossHarnessRefusal,
+		WorkerProfile:       AgentWorkerProfile(BackendAgy),
+		WorkerHTTPMCP:       true,
+		WorkerAutoApprove:   true,
 		// Native default mode asks before each run_command, and the daemon
 		// refuses it (agy 1.5.14 live probe: native auto and
 		// --dangerously-skip-permissions run commands without asking, and
@@ -94,11 +94,13 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 	}
 }
 
-// agyLeadOnlyReason refuses every agy worker entry. Antigravity's FAQ says
-// an Antigravity login used through third-party software violates its terms
-// and that wrapping its CLI in another coding agent is unsupported on
-// consumer plans, which is what a ws worker under another agent is.
-const agyLeadOnlyReason = `harness "agy" is available as a hosted lead only: Antigravity's consumer terms do not support running agy under another agent, so no agy worker is spawned or started`
+// agyCrossHarnessRefusal refuses an agy worker entry whose caller is not an
+// agy session. Antigravity's FAQ says an Antigravity login used through
+// third-party software violates its terms and that wrapping its CLI in
+// another coding agent is unsupported on consumer plans, which is what an
+// agy worker under a Claude, Codex, or Pi session is. agy-to-agy use is the
+// owner's accepted risk, restrained by the lead's manual alone.
+const agyCrossHarnessRefusal = `harness "agy" accepts workers only from an agy session: Antigravity's consumer terms do not support running agy under another agent`
 
 // AgyPermissionModes are the hosted lead choices. bypass is ws-side intent;
 // the process still runs in agy's native default mode.

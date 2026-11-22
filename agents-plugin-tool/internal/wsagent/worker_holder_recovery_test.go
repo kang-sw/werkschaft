@@ -32,9 +32,8 @@ func workerRecoveryHarness(t *testing.T, backend string, autoApprove ...bool) (*
 	h.opts.Report = got.add
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	reg := h.opts.Backends[backend]
-	// An agy worker here is an adapter-level fixture of a worker-capable
-	// agy registration; the shipped one is lead-only (agy_lead_only_test.go).
-	reg.leadOnlyReason = ""
+	// An agy registration keeps the shipped cross-harness refusal: its
+	// workers are spawned by a verified agy lead (spawnHeldRecoveryWorker).
 	reg.WorkerCapable = true
 	reg.WorkerProfile = AgentWorkerProfile(backend)
 	reg.WorkerHTTPMCP = backend != BackendPi
@@ -59,6 +58,10 @@ func workerRecoveryHarness(t *testing.T, backend string, autoApprove ...bool) (*
 func spawnHeldRecoveryWorker(t *testing.T, h *leadHarness, backend, authority string) (string, string) {
 	t.Helper()
 	caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
+	if backend == BackendAgy {
+		// agy admits workers from an agy session alone.
+		caller = verifiedLeadCaller(leadParent.ReplyID, h.root, BackendAgy, h.opts.Config)
+	}
 	res, err := h.runner.AgentSpawn(caller, AgentSpawnRequest{Prompt: "work", Tier: backend + ".small", Authority: authority})
 	if err != nil {
 		t.Fatal(err)
@@ -508,7 +511,7 @@ func TestAgyHeldFinalAndSuccessorPersistTogether(t *testing.T) {
 func agyHeldFinalAndSuccessor(t *testing.T, viaReport bool) {
 	h, got := workerRecoveryHarness(t, BackendAgy)
 	parent, parentHolder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
-	childCaller := AgentCaller{Parent: ParentRef{Kind: ParentConversation, ReplyID: parent}, Root: h.root, Harness: BackendAgy, Config: h.opts.Config}
+	childCaller := AgentCaller{Parent: ParentRef{Kind: ParentConversation, ReplyID: parent}, Root: h.root, Harness: BackendAgy, VerifiedBackend: BackendAgy, Config: h.opts.Config}
 	childResult, err := h.runner.AgentSpawn(childCaller, AgentSpawnRequest{Prompt: "inner work", Tier: "agy.small", Authority: "workdir-write"})
 	if err != nil {
 		t.Fatal(err)

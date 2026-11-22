@@ -355,8 +355,9 @@ Verification: `internal/wsagent` package tests plus focused fixtures for
 permissions, worker admission, cwd/key ownership, holder restart/rejoin,
 handoff/takeover, native steer and child revival, Pi summaries, and the Agy
 settled-activity callback. Run four-harness lead parity and Claude/Codex/Pi
-worker parity checks, asserting the agy worker refusal (owner (1545): agy is
-lead-only, `261122-feat-ws-agy-lead-only-harness`), and
+worker parity checks, asserting agy worker same-harness admission and
+cross-harness refusal (owner (1546), revising (1545):
+`261122-feat-ws-agy-same-harness-workers`), and
 measure file operations on start, turn settlement, restart, rejoin, and
 handoff; the migration must not add interactive-path file I/O.
 
@@ -412,8 +413,9 @@ reasoning-summary tickets) then has to route harness differences through the
 (1880) seam or extend the allowlist under (1881)'s rule in its own diff.
 
 Verification: the Phase 1-3 package suites together; four-harness hosted lead
-parity and Claude/Codex/Pi `agent.spawn` worker parity with the agy worker
-refusal asserted ((1545)); restart/rejoin/handoff and downgrade fixtures;
+parity and Claude/Codex/Pi `agent.spawn` worker parity with agy worker
+same-harness admission and cross-harness refusal asserted ((1546));
+restart/rejoin/handoff and downgrade fixtures;
 MCP legacy-call and detector fixtures; race coverage for touched lifecycle
 paths; and syscall/file-operation measurements against the pre-change
 baseline. For each retained common-code name check, verify its regression

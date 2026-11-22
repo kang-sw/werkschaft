@@ -49,7 +49,7 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 		rec := c.rec
 		c.mu.Unlock()
 		if asleep {
-			// Ahead of the profile: its edits never mask a lead-only refusal.
+			// Ahead of the profile: its edits never mask a cross-harness refusal.
 			if refusal = r.admitWorkerRecord(rec); refusal == nil {
 				if rp, resolveErr := r.resolve(rec.Profile, rec.Root); resolveErr != nil {
 					refusal = resolveErr

@@ -100,6 +100,11 @@ type SpawnSpec struct {
 	// delegatedAuthority is set only by agent.spawn, whose authority is an
 	// already-bounded delegation rather than a generic worker raise.
 	delegatedAuthority bool
+	// spawnerBackend is the spawning caller's verified backend
+	// (AgentCaller.VerifiedBackend): the create gate admits the worker for
+	// it (admitWorker), and the record keeps it (Record.SpawnerBackend).
+	// Empty is none.
+	spawnerBackend string
 	// SystemPrompt is appended to the harness's system prompt at every
 	// process start; empty is none.
 	SystemPrompt string
@@ -397,7 +402,7 @@ func (c *conv) interrupted() {
 	}
 	status, reason := TurnInterrupted, "the dashboard daemon exited while the turn ran"
 	if refusal := c.r.admitWorkerRecord(c.rec); refusal != nil {
-		// A lead-only worker whose holder a daemon ended just before it
+		// A cross-harness worker whose holder a daemon ended just before it
 		// died: the turn fails as the retirement would have settled it.
 		status, reason = TurnFailed, refusal.Error()
 	}

@@ -260,16 +260,16 @@ type conv struct {
 	// Backend-filtered hello environment captured at attach, before token restore.
 	workerMCPEnv   []string
 	workerRetiring bool // validated downgrade retirement retries before replay
-	// leadOnlyRejoin is a held worker on a lead-only backend that reattach
-	// attached for the ownership match only. checkReattach ends a matching
-	// holder (retireLeadOnlyWorker) and never stops a mismatched one.
-	leadOnlyRejoin bool
-	// leadOnlyRetiring is a matched lead-only holder whose stop failed; each
+	// crossHarnessRejoin is a held worker admitWorkerRecord refuses (a
+	// cross-harness worker) that reattach attached for the ownership match only. checkReattach ends a matching
+	// holder (retireCrossHarnessWorker) and never stops a mismatched one.
+	crossHarnessRejoin bool
+	// crossHarnessRetiring is a matched cross-harness holder whose stop failed; each
 	// heartbeat's checkReattach retries it until it ends.
-	leadOnlyRetiring bool
-	mcpChecking      bool
-	mcpAgain         bool
-	mcpAgainNames    []string
+	crossHarnessRetiring bool
+	mcpChecking          bool
+	mcpAgain             bool
+	mcpAgainNames        []string
 	// retry is the API request retry under way; alerted that the running
 	// turn brought a typed failure, so its end clears none.
 	retry   *wslive.Retry

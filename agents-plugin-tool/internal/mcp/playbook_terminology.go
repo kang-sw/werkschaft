@@ -159,24 +159,30 @@ func piMCPOnlyTerminology(namespace string) map[string]string {
 // hosted lead executes itself (wsagent.BackendRegistration.PreferNativeSubagent):
 // exploration goes to its own native subagent, which has no ws tools and
 // runs at the harness's default model, and a spawn is piMCPOnlyTerminology's
-// agent.spawn on an external harness, a bare size or own-harness role tier
-// qualified with a harness first. ContinueIdiom is unchanged.
+// agent.spawn with a rendered tier passed as returned (an agy route is
+// allowed for an agy lead), restrained by the Antigravity terms risk toward
+// an external fixed tier when another harness fits (nativeFirstTierRule).
+// ContinueIdiom is unchanged.
 func nativeFirstTerminology(namespace string) map[string]string {
 	terms := piMCPOnlyTerminology(namespace)
 	terms["ExploreAgent"] = "your native subagent (no ws tools, your harness's default model; when the question needs a specific tier, a read-only `" + namespace + "/agent.spawn` subagent at an external-harness tier)"
-	terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness; authority: at most your own)"
+	terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` (tier: the resolved capability tier, not a model name; " + nativeFirstTierRule + "; authority: at most your own)"
 	return terms
 }
+
+// nativeFirstTierRule is the agy lead's tier rule for agent.spawn, shared by
+// its SpawnIdiom and its manual's tier line. Restraint of agy-to-agy spawns
+// is this prompt alone: no count or tier limit applies.
+const nativeFirstTierRule = "pass a rendered tier as returned: a role tier keeps its configured route, model and effort, and may end on agy, which is allowed; an agy route carries the Antigravity terms risk, so when another harness fits the work, choose an external fixed tier such as `claude.small` for `playbook-explore:small` instead; never put a harness prefix before a role tier (`claude.playbook-explore:small` is rejected)"
 
 // nativeFirstManualRewrites are the workflow manual sentences a
 // nativeFirstTerminology caller reads differently, as (today's rendered
 // text, its replacement) pairs, applied by nativeFirstManual. Its native
-// subagent cannot run at "the tier the question needs", and a bare size its
-// render recommends would resolve to its own harness, so the exploration
-// bullet loses that suffix and the rendered-delegate bullet and tier line
-// spawn through agent.spawn with the prompt path and the tier qualified with
-// an external harness. agent.spawn takes no model or effort, so the native
-// wording names no render bindings.
+// subagent cannot run at "the tier the question needs", so the exploration
+// bullet loses that suffix; the rendered-delegate bullet spawns through
+// agent.spawn with the prompt path and the render's tier, and the tier line
+// states nativeFirstTierRule. agent.spawn takes no model or effort, so the
+// native wording names no render bindings.
 func nativeFirstManualRewrites(namespace string) []string {
 	explore := nativeFirstTerminology(namespace)["ExploreAgent"]
 	spawn := "`" + namespace + "/agent.spawn`"
@@ -184,9 +190,9 @@ func nativeFirstManualRewrites(namespace string) []string {
 		explore + " at the tier the question needs (`### Choosing a tier`).",
 		explore + "; pick that tier by `### Choosing a tier`.",
 		"give the subagent the returned path and spawn it with the\n  tier and bindings the render returns.",
-		"spawn the subagent through\n  " + spawn + " on an external harness with the returned path and the render's tier, qualified as `### Choosing a tier` states.",
+		"spawn the subagent through\n  " + spawn + " with the returned path and the render's tier, chosen as `### Choosing a tier` states.",
 		"- A rendered playbook → the tier its render recommends, passed as returned;\n  a role tier such as `ticket-worker:large` is valid there.\n",
-		"- A rendered playbook → the tier its render recommends; as a " + spawn + " target, put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness.\n",
+		"- A rendered playbook → the tier its render recommends; as a " + spawn + " target, " + nativeFirstTierRule + ".\n",
 	}
 }
 

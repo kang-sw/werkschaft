@@ -37,45 +37,46 @@ func (c *conv) restoreWorkerMCP() {
 	}
 }
 
-// retireLeadOnlyWorker ends the held process of a worker record on a
-// lead-only backend. checkReattach calls it only after the holder passed the
-// ownership match and the rejected-holder guard; a mismatched holder is never
-// stopped. Replay, events, and the MCP bearer were never opened.
-//   - The record stays listable, stopped, with the lead-only reason as its
-//     error.
+// retireCrossHarnessWorker ends the held process of a cross-harness worker
+// record (admitWorkerRecord refuses it). checkReattach calls it only after
+// the holder passed the ownership match and the rejected-holder guard; a
+// mismatched holder is never stopped. Replay, events, and the MCP bearer were
+// never opened.
+//   - The record stays listable, stopped, with the cross-harness refusal as
+//     its error.
 //   - An open turn settles failed with that reason, as a process gone at
 //     rejoin does (processGone).
 //   - A failed stop keeps the holder in the record and the detached
 //     association, publishes nothing, and says so. The conversation stays
 //     replaying (it submits nothing), and each heartbeat's checkReattach
-//     tries the stop again (leadOnlyRetiring), as a downgrade retirement
+//     tries the stop again (crossHarnessRetiring), as a downgrade retirement
 //     does. Any stopProcess (a user's Stop) retries it too (retryRetirement),
 //     never through the detached stream's Close, and a close is refused
 //     while it fails (errHolderNotEnded).
-func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
+func (c *conv) retireCrossHarnessWorker(hp holderProcess) {
 	refusal := c.r.admitWorkerRecord(c.rec)
 	if refusal == nil {
 		return
 	}
 	reason := refusal.Error()
 	id := c.rec.HolderID
-	if !c.leadOnlyRetiring {
+	if !c.crossHarnessRetiring {
 		hp.Detach()
 		c.events = nil
 	}
 	if err := c.r.opts.Holders.Stop(id); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
-		c.leadOnlyRetiring = true
+		c.crossHarnessRetiring = true
 		// The next beat asks again; replaying keeps checkReattach running.
 		c.replayAsked = false
 		msg := fmt.Sprintf("%s; the session's previous process could not be ended (holder %s): %v", reason, id, err)
 		if msg != c.lastErr {
 			c.setStatus(func() { c.lastErr = msg })
-			fmt.Fprintf(c.r.opts.Log, "agent %s: end lead-only worker holder %s: %v\n", c.rec.ReplyID, id, err)
+			fmt.Fprintf(c.r.opts.Log, "agent %s: end cross-harness worker holder %s: %v\n", c.rec.ReplyID, id, err)
 			c.writeRegistration()
 		}
 		return
 	}
-	c.leadOnlyRetiring = false
+	c.crossHarnessRetiring = false
 	c.replaying, c.replayAsked = false, false
 	// A failed attempt's stop error no longer applies.
 	c.setStatus(func() { c.proc, c.lastErr = nil, reason })
@@ -90,17 +91,17 @@ func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
 		rec.forgetMCP()
 	})
 	// processEnded settles an open turn failed with the reason the rejoin
-	// set; leadOnlyRetired then makes this matching-holder stop's only
+	// set; crossHarnessRetired then makes this matching-holder stop's only
 	// registration write (the mismatch and gone paths keep their own).
 	c.processEnded()
-	c.leadOnlyRetired()
+	c.crossHarnessRetired()
 }
 
 // retiringHolder reports a retirement whose holder stop failed: a downgrade
-// (workerRetiring) or a lead-only one (leadOnlyRetiring). Its c.proc is a
+// (workerRetiring) or a cross-harness one (crossHarnessRetiring). Its c.proc is a
 // stream it already detached, kept until the holder's own stop succeeds.
 func (c *conv) retiringHolder() bool {
-	return c.workerRetiring || c.leadOnlyRetiring
+	return c.workerRetiring || c.crossHarnessRetiring
 }
 
 // retryRetirement tries a retiringHolder's holder stop again, from the
@@ -111,14 +112,14 @@ func (c *conv) retiringHolder() bool {
 func (c *conv) retryRetirement(hp holderProcess, wake bool) {
 	if c.workerRetiring {
 		c.retireDowngradedWorker(hp, wake)
-		c.leadOnlyRetired()
+		c.crossHarnessRetired()
 		return
 	}
-	c.retireLeadOnlyWorker(hp)
+	c.retireCrossHarnessWorker(hp)
 }
 
-// leadOnlyRetired closes a lead-only rejoin on whichever path ended it:
-//   - the holder was ended (retireLeadOnlyWorker);
+// crossHarnessRetired closes a cross-harness rejoin on whichever path ended it:
+//   - the holder was ended (retireCrossHarnessWorker);
 //   - it was gone (processGone);
 //   - it failed the ownership match;
 //   - a downgrade retired it.
@@ -127,15 +128,15 @@ func (c *conv) retryRetirement(hp holderProcess, wake bool) {
 // expiry runs one full interval with the reason visible, not at once from
 // an old stamp. It does nothing while a retirement is still retrying
 // (workerRetiring).
-func (c *conv) leadOnlyRetired() {
-	if !c.leadOnlyRejoin || c.workerRetiring {
+func (c *conv) crossHarnessRetired() {
+	if !c.crossHarnessRejoin || c.workerRetiring {
 		return
 	}
 	refusal := c.r.admitWorkerRecord(c.rec)
 	if refusal == nil {
 		return
 	}
-	c.leadOnlyRejoin = false
+	c.crossHarnessRejoin = false
 	c.setStatus(func() { c.lastErr, c.wakeRefused = refusal.Error(), true })
 	c.update(func(rec *Record) { rec.LastActiveAt = c.r.opts.Now().UTC().Format(time.RFC3339) })
 	c.writeRegistration()

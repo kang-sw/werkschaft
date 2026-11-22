@@ -22,11 +22,14 @@ type BackendRegistration struct {
 	// the internal profile it launches; both must be set to expose tiers.
 	WorkerCapable bool
 	WorkerProfile string
-	// leadOnlyReason, set only with WorkerCapable false, makes the backend
-	// lead-only for every worker entry, not agent.spawn alone: a profile
-	// create, a wake, and a rejoin are refused too (admitWorkerBackend), and
-	// it is the refusal's text. Existing worker records stay listable.
-	leadOnlyReason string
+	// crossHarnessRefusal, when set, admits a worker on this backend only
+	// for a caller verified to run on this same backend (a hosted lead's
+	// record, or the token holder spawning a nested child), on every worker
+	// entry, not agent.spawn alone: a profile create, a wake, and a rejoin
+	// are refused too for any other caller or none (admitWorker), and it is
+	// the refusal's text. Existing worker records stay listable. Empty
+	// admits every caller.
+	crossHarnessRefusal string
 	// WorkerHTTPMCP attaches a worker's ws tools through the daemon's
 	// HTTP route rather than a stdio launcher. Workers never persist it.
 	WorkerHTTPMCP bool
@@ -68,7 +71,8 @@ type BackendRegistration struct {
 	PlaybookCommands bool
 	// PreferNativeSubagent marks a backend whose hosted lead keeps its own
 	// native subagent tool for exploration that needs no ws tools and starts
-	// every other delegate through agent.spawn on an external harness. Its
+	// every other delegate through agent.spawn, preferring an external
+	// harness when one fits (a prompt rule, not a gate). Its
 	// lead's prompt line (Runner.subagentSteer) and the playbook text it
 	// executes itself (workflow_manual, playbook.read) say so; text rendered
 	// for another process (playbook.render) is unchanged.
