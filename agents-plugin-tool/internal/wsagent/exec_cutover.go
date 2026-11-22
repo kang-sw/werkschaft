@@ -256,6 +256,19 @@ func (r *Runner) servesMCPURL(recorded string) bool {
 	return strings.TrimSuffix(recorded, legacyExecCutoverRouteMark) == r.mcpURL()
 }
 
+// cutoverStoreGone reports whether c's process runs under the cutover while
+// this daemon's hosted exec jobs are bound without a store (BindExecJobs(nil):
+// the store failed to open). ws-mcp lists the exec tools only over open
+// hosted jobs, so a process rejoined from a predecessor's record has had
+// its native tools removed with nothing to replace them: it restarts at its
+// first idle point, which decides the cutover afresh (execCutoverFor keeps
+// native tools without hosted jobs). Before the daemon binds, nothing is
+// known: BindExecJobs signals every conversation (execReconsider) and this
+// is read then.
+func (c *conv) cutoverStoreGone() bool {
+	return c.execCutover && c.r.exec.bound.Load() && c.r.execJobs() == nil
+}
+
 // cutoverToolsFor returns the tools of want that p's ws tools admit, in
 // want's order: all of them when p names no ws tools (a lead, whose ws-mcp
 // lists every tool; a worker without an allowlist has no ws-mcp and never

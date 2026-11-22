@@ -3,6 +3,7 @@ package wsagent
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -123,5 +124,61 @@ func TestExecCutoverLegacyRouteMarkIsStillServed(t *testing.T) {
 	url := h.runner.mcpURL()
 	if !h.runner.servesMCPURL(url) || !h.runner.servesMCPURL(url+legacyExecCutoverRouteMark) || h.runner.servesMCPURL(url+"#other") || h.runner.servesMCPURL("") {
 		t.Fatal("servesMCPURL")
+	}
+}
+
+// A process the cutover removed the native tools of, rejoined by a daemon
+// whose hosted exec jobs did not open, would have no command tools: it
+// restarts at its idle point, and the new start keeps the native tools.
+func TestExecCutoverRejoinWithoutHostedJobsRestartsWithNativeTools(t *testing.T) {
+	h := cutoverHarness(t)
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	_, rec := leadLaunch(t, h, st.ID)
+	holder := rec.HolderID
+	if rec.ExecCutoverHolder != holder {
+		t.Fatalf("the lead did not start under the cutover: %+v", rec)
+	}
+	h.holders.out(holder, stateLine(HarnessRunning), replyLine("u1", "ok"), resultLine(), stateLine(HarnessIdle))
+	h.idle(st.ID)
+
+	h.runner.Close()
+	h.holders.restart()
+	h.execJobs = nil
+	h.startAt("http://127.0.0.1:1")
+	h.runner.BindExecJobs(nil)
+	eventually(t, "the restart without the cutover", func() bool {
+		return h.holders.opCount("stop "+holder) == 1 && h.holder(st.ID) != holder
+	})
+	h.quiesce(st.ID)
+	argv := h.holders.spawned(h.holder(st.ID)).Argv
+	if got, _ := flagValue(argv, "--disallowedTools"); strings.Contains(got, "Bash") {
+		t.Fatalf("the restarted process removes %q", got)
+	}
+	if now := h.record(st.ID); now.ExecCutoverHolder != "" {
+		t.Fatalf("the restarted process records cutover holder %q", now.ExecCutoverHolder)
+	}
+	if !strings.Contains(h.log.String(), "restart without the exec cutover: its hosted exec jobs are not open") {
+		t.Fatalf("log: %s", h.log.String())
+	}
+}
+
+// With the hosted jobs open, the same rejoin keeps its process and cutover.
+func TestExecCutoverRejoinWithHostedJobsKeepsTheProcess(t *testing.T) {
+	h := cutoverHarness(t)
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	_, rec := leadLaunch(t, h, st.ID)
+	holder := rec.HolderID
+	h.holders.out(holder, stateLine(HarnessRunning), replyLine("u1", "ok"), resultLine(), stateLine(HarnessIdle))
+	h.idle(st.ID)
+
+	h.runner.Close()
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	h.quiesce(st.ID)
+	if h.holders.opCount("stop "+holder) != 0 || h.holder(st.ID) != holder {
+		t.Fatalf("a rejoin over open hosted jobs restarted the process: %v", h.holders.opList())
+	}
+	if hello, _, ok := h.runner.ResolveMCPToken(rec.MCPToken); !ok || hello.ExecCutover != BackendClaude {
+		t.Fatalf("rejoined token hello = %+v %v", hello, ok)
 	}
 }

@@ -244,7 +244,7 @@ func (c *conv) replayDone(lost bool) {
 	// before it takes input; any other restart waits for its usual idle
 	// point, as before a rejoin. A failed restart leaves no process: what
 	// is held then starts one, as with no process at all.
-	if c.mcpStale && c.restartIfDue() {
+	if (c.mcpStale || c.cutoverStoreGone()) && c.restartIfDue() {
 		return
 	}
 	if !c.turn {
