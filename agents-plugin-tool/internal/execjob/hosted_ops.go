@@ -348,60 +348,63 @@ func within(root, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-// rootForms are root's spellings a job row may carry: as given and with
-// its symlinks resolved (a temp directory under /var is /private/var on
-// macOS). A file lookup, on the release path only.
+// rootForms are root's spellings a job row may carry: as given and as
+// resolvePath sees it (a temp directory under /var is /private/var on
+// macOS; a junction is its target on Windows). The candidate side of every
+// fence and live-job count, resolved by the same resolver as the job side
+// (admittedPlaces) so both compare in one form. A file lookup, on the
+// release and acquire paths only.
 func rootForms(root string) []string {
 	root = filepath.Clean(root)
 	forms := []string{root}
-	if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
+	if real, err := resolvePath(root); err == nil && real != root {
 		forms = append(forms, real)
 	}
 	return forms
 }
 
-// resolvedPlace is p with its symlinks resolved, "" when that is p itself
-// (or p is empty or cannot be resolved).
-func resolvedPlace(p string) string {
-	if p == "" {
-		return ""
+// admittedPlaces are a job's root and working directory as resolvePath
+// sees them, always filled when err is nil (equal to the recorded spelling
+// where no link intervenes); realCwd is "" only for an empty cwd. A working
+// directory reached through a link passed only a lexical containment check,
+// so the process may run inside another worktree than either recorded path
+// names. Taken once per job, at admission: a fence matches the job in
+// either spelling with no file lookup of its own, and the process starts
+// in the place admission checked. A path that cannot be resolved is an
+// error, and the launch is refused: its spelling is unchecked, and could
+// appear as a link into a worktree fenced before the process starts. One
+// lookup when the two are the same path, two otherwise.
+func admittedPlaces(root, cwd string) (realRoot, realCwd string, err error) {
+	root = filepath.Clean(root)
+	if realRoot, err = resolvePath(root); err != nil {
+		return "", "", fmt.Errorf("exec: the worktree root %q cannot be resolved, so the launch is refused: %w", root, err)
 	}
-	p = filepath.Clean(p)
-	real, err := filepath.EvalSymlinks(p)
-	if err != nil || real == p {
-		return ""
-	}
-	return real
-}
-
-// resolvedPlaces are a job's root and working directory with their
-// symlinks resolved, each "" where it is already its own resolution. A
-// working directory reached through a symlink passed only a lexical
-// containment check, so the process may run inside another worktree than
-// either recorded path names. Taken once per job, at admission, so a fence
-// matches the job in either spelling with no file lookup of its own and
-// the process starts in the place admission checked: one lookup when the
-// two are the same path, two otherwise.
-func resolvedPlaces(root, cwd string) (realRoot, realCwd string) {
-	realRoot = resolvedPlace(root)
 	switch {
 	case cwd == "":
-	case filepath.Clean(cwd) == filepath.Clean(root):
+	case filepath.Clean(cwd) == root:
 		realCwd = realRoot
 	default:
-		realCwd = resolvedPlace(cwd)
+		if realCwd, err = resolvePath(filepath.Clean(cwd)); err != nil {
+			return "", "", fmt.Errorf("exec: the working directory %q cannot be resolved, so the launch is refused: %w", cwd, err)
+		}
 	}
-	return realRoot, realCwd
+	return realRoot, realCwd, nil
 }
 
-// spawnDir is where a job's process starts: its working directory as
-// resolved at admission, so a symlink repointed since cannot move it into
-// a worktree fenced meanwhile; the recorded spelling stays for display.
-func spawnDir(cwd, realCwd string) string {
-	if realCwd != "" {
-		return realCwd
+// restoredPlaces are admittedPlaces for a running row an older daemon
+// stored without them: its process already runs, so a path that no longer
+// resolves keeps only its recorded spelling ("" here).
+func restoredPlaces(root, cwd string) []string {
+	var places []string
+	if real, err := resolvePath(filepath.Clean(root)); err == nil {
+		places = append(places, real)
 	}
-	return cwd
+	if cwd != "" {
+		if real, err := resolvePath(filepath.Clean(cwd)); err == nil {
+			places = append(places, real)
+		}
+	}
+	return places
 }
 
 // placesIn reports whether one of a job's places lies in one of a

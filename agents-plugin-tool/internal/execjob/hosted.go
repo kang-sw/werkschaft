@@ -90,7 +90,7 @@ type hostedJob struct {
 	out  *JobOutput
 	done chan struct{}
 	// real holds the resolved root and working directory of a running row
-	// an older daemon stored without them (resolvedPlaces at restore, a
+	// an older daemon stored without them (restoredPlaces at restore, a
 	// fallback the row does not persist). Read under h.mu by the worktree
 	// fence, never rewritten.
 	real []string
@@ -173,10 +173,10 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 			j.stdinUnknown = !row.Legacy
 		}
 		if !row.Terminal() && row.RealRoot == "" && row.RealCwd == "" {
-			// No launch-time resolution stored (an older daemon's row, or
-			// paths that resolved to themselves): resolve now.
-			realRoot, realCwd := resolvedPlaces(row.Root, row.Cwd)
-			j.real = []string{realRoot, realCwd}
+			// No launch-time resolution stored: an admitted launch always
+			// stores its resolved root, so only an older daemon's row lacks
+			// it. Resolve now, as that daemon matched the job.
+			j.real = restoredPlaces(row.Root, row.Cwd)
 		}
 		h.jobs[row.ID] = j
 	}

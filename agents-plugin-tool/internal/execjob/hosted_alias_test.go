@@ -154,6 +154,80 @@ func TestHostedRestoreKeepsAdmittedPlaceAfterAliasRepointed(t *testing.T) {
 	}
 }
 
+// A launch whose working directory cannot be resolved at admission is
+// refused, hosted and legacy alike, before anything asks for approval or
+// starts: its spelling was checked only lexically, and could appear as a
+// link into a worktree fenced before the process starts.
+func TestLaunchRefusesAnUnresolvablePlace(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	root := gitRoot(t)
+	missing := filepath.Join(root, "missing")
+	const want = "cannot be resolved, so the launch is refused"
+
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: root, Cwd: missing, Async: true}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("hosted launch in an unresolvable cwd = %v, want %q", err, want)
+	}
+	fx.holders.mu.Lock()
+	launched := len(fx.holders.launched)
+	fx.holders.mu.Unlock()
+	fx.sessions.mu.Lock()
+	approvals := len(fx.sessions.approvals)
+	fx.sessions.mu.Unlock()
+	fx.store.mu.Lock()
+	rows := len(fx.store.rows)
+	fx.store.mu.Unlock()
+	if launched != 0 || approvals != 0 || rows != 0 {
+		t.Fatalf("a refused hosted launch left %d holder(s), %d approval(s), %d row(s)", launched, approvals, rows)
+	}
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: filepath.Join(root, "gone"), Async: true}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("hosted launch under an unresolvable root = %v, want %q", err, want)
+	}
+
+	if _, err := Launch(LaunchOptions{Root: root, WorkingDir: "missing", Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("legacy launch in an unresolvable cwd = %v, want %q", err, want)
+	}
+}
+
+// A job's admission places are stored even when they equal its recorded
+// ones, so a replaced daemon does not resolve them again: a directory the
+// job started in, renamed while it runs and replaced by an alias into an
+// idle pooled checkout, leaves that checkout reusable after restore.
+func TestHostedRestoreOfARenamedPlaceLeavesTheCandidateReusable(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, wt, _ := aliasPlaces(t, root)
+	work := filepath.Join(root, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Root: root, Cwd: work, Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row, ok := fx.store.row(v.ID); !ok || row.RealRoot != root || row.RealCwd != work {
+		t.Fatalf("stored row = %+v, want RealRoot %q RealCwd %q", row, root, work)
+	}
+	_ = fx.h.Close()
+	if err := os.Rename(work, work+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	pointAlias(t, work, wt)
+	fx.open(time.Second)
+	t.Cleanup(func() { fx.h.Close() })
+	if n := fx.h.LiveIn(wt); n != 0 {
+		t.Fatalf("LiveIn(candidate) after restore = %d, want 0: the job never ran in it", n)
+	}
+	unfence, err := fx.h.FenceRootAs(wt, FenceAcquiring)
+	if err != nil {
+		t.Fatalf("acquire's fence on the candidate refused after restore: %v", err)
+	}
+	unfence()
+}
+
 // The resolved-place columns are a compatible addition to schema version 1:
 // a version-1 table an older daemon created gains them on open with its rows
 // intact, and an older daemon's upsert (naming only its own columns) leaves

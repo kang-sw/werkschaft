@@ -35,6 +35,15 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if err != nil {
 		return HostedView{}, fmt.Errorf("exec: the owning session cannot take a job: %w", err)
 	}
+	// The job's resolved places, so a worktree fence matches it however
+	// its working directory was spelled and the process starts where
+	// admission checked; once per launch, stored with the row. A place that
+	// cannot be resolved refuses the launch (admittedPlaces), before
+	// anything asks for approval.
+	realRoot, realCwd, err := admittedPlaces(req.Root, req.Cwd)
+	if err != nil {
+		return HostedView{}, err
+	}
 	// The program resolves before the approval, so the prompt names the
 	// binary that starts.
 	argv := append([]string(nil), req.Argv...)
@@ -54,10 +63,6 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 			return HostedView{}, err
 		}
 	}
-	// The job's resolved places, so a worktree fence matches it however
-	// its working directory was spelled and the process starts where
-	// admission checked; once per launch, stored with the row.
-	realRoot, realCwd := resolvedPlaces(filepath.Clean(req.Root), req.Cwd)
 	var id string
 	var j *hostedJob
 	for attempt := 1; ; attempt++ {
@@ -145,7 +150,7 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
-	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: spawnDir(req.Cwd, realCwd), Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
+	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: realCwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
 	close(spawned)
 	if err != nil {
 		if st.PID != 0 {

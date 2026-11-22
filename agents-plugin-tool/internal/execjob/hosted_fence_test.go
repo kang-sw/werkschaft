@@ -22,6 +22,12 @@ func TestHostedFenceRootRefusesLiveJobsAndNewOnes(t *testing.T) {
 	fx := newHostedFixture(t, time.Second)
 	wt := filepath.Join(t.TempDir(), "wt")
 	other := filepath.Join(t.TempDir(), "other")
+	// A launch's places must exist: one that cannot be resolved is refused.
+	for _, d := range []string{filepath.Join(wt, "sub"), filepath.Join(wt, "deep"), other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	v, err := fx.launch(context.Background(), nil, HostedLaunch{Root: wt, Cwd: filepath.Join(wt, "sub"), Async: true})
 	if err != nil {
 		t.Fatal(err)
@@ -42,8 +48,8 @@ func TestHostedFenceRootRefusesLiveJobsAndNewOnes(t *testing.T) {
 	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: wt, Async: true}); err == nil || !strings.Contains(err.Error(), "being released or removed") {
 		t.Fatalf("a launch into a fenced worktree: %v", err)
 	}
-	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: other, Cwd: filepath.Join(wt, "deep"), Async: true}); err == nil {
-		t.Fatal("a launch whose cwd lies in the fenced worktree started")
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: other, Cwd: filepath.Join(wt, "deep"), Async: true}); err == nil || !strings.Contains(err.Error(), "being released or removed") {
+		t.Fatalf("a launch whose cwd lies in the fenced worktree: %v", err)
 	}
 	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Root: other, Async: true}); err != nil {
 		t.Fatalf("a launch elsewhere: %v", err)

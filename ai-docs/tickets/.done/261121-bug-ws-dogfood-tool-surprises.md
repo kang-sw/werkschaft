@@ -155,6 +155,21 @@ The deferred exec-job follow-up is done on impl/develop/briar-blurb-prune, after
   - Covered by `TestHostedStoreResolvedPlaceColumnsAreCompatible`.
 - Not verified: Windows symlink and junction behaviour (vet only), the live daemon, and a real mixed-version daemon pair. The compatibility test simulates the older daemon with its statements.
 
+#### Edition (1793cab62) - 2026-11-22
+
+This pass hardens the exec-job follow-up after review of 1793cab62.
+
+- Fail closed: admission (`admittedPlaces`) refuses a hosted or legacy launch whose root or working directory cannot be resolved. Previously a failed lookup fell back to the unchecked spelling, which could appear as a link into a fenced checkout before spawn. Resolution now runs before the approval prompt, so a refused launch asks nothing and records nothing. A resolved path is always filled in, so the process always starts in the admitted place.
+- Windows junctions: `resolvePath` opens the path with `FILE_FLAG_BACKUP_SEMANTICS`, reads `GetFinalPathNameByHandle`, strips `\\?\` (and `\\?\UNC\`), and cleans the result. `filepath.EvalSymlinks` keeps a junction as spelled on Go 1.23+. The candidate side of every fence and live-job count (`rootForms`) uses the same resolver, so both sides compare in one form. Other OSes keep `EvalSymlinks`.
+- Stored places: `real_root` and `real_cwd` are now written whenever admission resolves them, even when they equal the recorded paths. An empty pair therefore means only a row written by an older daemon, and restore resolves again only for those rows (`execjob/hosted.go:175`). A new job whose directory is renamed and replaced by an alias into a candidate no longer makes a replaced daemon count it in that candidate.
+- Compatibility stays T0. The columns, migration and statements are unchanged. Rows an older daemon writes still carry empty values, so the new daemon treats them as it did before. An older daemon reading new rows ignores the columns.
+- Tests:
+  - `TestLaunchRefusesAnUnresolvablePlace` covers hosted and legacy launches, a missing cwd and a missing root.
+  - `TestHostedRestoreOfARenamedPlaceLeavesTheCandidateReusable` checks that acquire's hosted fence and `LiveIn` still allow the candidate after restore.
+  - `TestResolvePathSeesThroughADirectoryJunction` is Windows only, uses `mklink /J`, and was compiled with vet only.
+  - Two mutations made the tests fail: falling back to the raw spelling, and storing empty values for equal paths (which then fails both the stored-row check and `LiveIn`).
+- Not verified: Windows runtime (the junction test and the file-operation counts and latency `performance.md` asks for), the live daemon, and the end-to-end acquire across a daemon replacement. Regression (b) checks the fence that acquire uses rather than calling acquire itself.
+
 ### Phase 3: Allocate reports through an explicit path kind
 
 Expose the `report` kind consistently in schema and allocator with the same allocation authority as `review`, while preserving the four existing kinds and all write-profile boundaries. Acceptance: `path.generate(kind: "report")` returns a valid artifact path under the report subdirectory; callers with an existing write route can write it, and callers without that authority gain none. Existing `review`, `prompt`, `plan`, and `clone` behavior remains intact; callers discover the enum before sending the new kind to an old server. Cover native and already-authorized `path.write` routes and Pi mini-lead authority.

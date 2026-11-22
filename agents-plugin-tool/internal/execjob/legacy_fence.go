@@ -31,7 +31,7 @@ const (
 )
 
 // legacyLaunch is a reserved launch's places: its root and working
-// directory, and their resolved spellings (resolvedPlaces).
+// directory, and their resolved spellings (admittedPlaces).
 type legacyLaunch struct {
 	root, wd string
 	real     []string
