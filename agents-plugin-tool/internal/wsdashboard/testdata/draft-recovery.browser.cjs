@@ -367,6 +367,23 @@ async function removalAcrossWindows(browser) {
   } finally { await context.close(); }
 }
 
+async function mergedImageCap(browser) {
+  const context = await browser.newContext();
+  try {
+    const pages = [await context.newPage(), await context.newPage()], frames = [];
+    for (const page of pages) { await page.goto(base + session); frames.push(await frameFor(page)); }
+    // Each window holds a full message's worth (IMG_MAX = 8) the other never loaded.
+    for (const [w, frame] of frames.entries()) {
+      await type(frame, 'Cap draft ' + w);
+      for (let i = 0; i < 8; i++) await paste(frame, `w${w}-${i}.png`);
+      await frame.locator(`#cimgs img[alt="w${w}-7.png"]`).waitFor();
+      assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    }
+    const row = await recoveryRow(frames[1]);
+    assert.deepEqual(row.images.map(p => p.name), [0, 1, 2, 3, 4, 5, 6, 7].map(i => `w1-${i}.png`), 'the merge keeps the 8 most recent');
+  } finally { await context.close(); }
+}
+
 async function failedStorage(browser) {
   const context = await browser.newContext();
   try {
@@ -504,6 +521,7 @@ async function queueAcrossTabs(browser) {
       await rollingUpgradeImages(browser);
       await legacyImageAcrossWindows(browser);
       await removalAcrossWindows(browser);
+      await mergedImageCap(browser);
       await failedStorage(browser);
       await ackWithUnavailableLegacyStorage(browser);
       await queueAcrossTabs(browser);

@@ -212,12 +212,13 @@
   function draftProjection(d) { return WsRail.emptyDraft(d) ? null : JSON.stringify(d); }
   function savedImage(p) {
     if (!p.id) p.id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
-    return { id: p.id, n: p.n, name: p.name, ref: p.ref, blob: p.blob };
+    if (p.ts == null) p.ts = Date.now();
+    return { id: p.id, ts: p.ts, n: p.n, name: p.name, ref: p.ref, blob: p.blob };
   }
   function loadDraftImage(p) {
-    var id = draftImageID(p);
-    return p.ref ? { id: id, n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
-      { id: id, n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
+    var id = draftImageID(p), ts = p.ts || 0;
+    return p.ref ? { id: id, ts: ts, n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
+      { id: id, ts: ts, n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
   }
   function imageData(blob) {
     return new Promise(function (resolve, reject) {
@@ -352,6 +353,13 @@
       if (foreign.length || record && !record.images.every(kept)) {
         active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [] });
         active.images = active.images.filter(kept).concat(foreign);
+      }
+      // Two windows' images may merge past what one message carries
+      // (IMG_MAX, wsinbox.MaxImages): keep the most recent, in order.
+      if (active && active.images.length > IMG_MAX) {
+        active = Object.assign({}, active, { images: active.images.map(function (p, i) { return { p: p, i: i }; })
+          .sort(function (a, b) { return (b.p.ts || 0) - (a.p.ts || 0) || a.i - b.i; }).slice(0, IMG_MAX)
+          .sort(function (a, b) { return a.i - b.i; }).map(function (x) { return x.p; }) });
       }
       var tombstones = Array.from(removed).slice(-DRAFT_TOMBSTONES);
       if (!active && !Object.keys(merged).length && !tombstones.length) return null;
