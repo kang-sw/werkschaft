@@ -1348,16 +1348,22 @@ func (s *Store) View(ctx context.Context, session string) (View, error) {
 	dir := sessionDirName(wsaudit.NormalizeID(session))
 	wait := time.Millisecond
 	for try := 0; ; try++ {
+		// The generation is sampled with the entry, under s.mu, so before the
+		// entry can be retired (removal advances it before the entry leaves
+		// the map) and before the ring is found unloaded (a load published
+		// afterwards advances it): the cold read below never accepts files a
+		// loaded ring, or a replacement entry's ring, was writing meanwhile.
 		s.mu.Lock()
 		info := s.sessions[dir]
+		var gen uint64
+		if info != nil {
+			gen = info.gen.Load()
+		}
 		s.mu.Unlock()
 		if info == nil {
 			return View{}, nil
 		}
-		// The generation is sampled before the ring is found unloaded: a load
-		// published after this point has advanced it, so the cold read below
-		// never accepts files a loaded ring was writing meanwhile.
-		gen := info.gen.Load()
+		viewLookupGap()
 		if r := info.view.Load(); r != nil {
 			r.view.RLock()
 			v := View{Events: r.events[:len(r.events):len(r.events)], Cut: r.cut}
@@ -1385,9 +1391,13 @@ func (s *Store) View(ctx context.Context, session string) (View, error) {
 // changing (about ten seconds of waits).
 const coldTries = 160
 
-// viewColdGap runs between View finding a ring unloaded and reading it cold;
-// tests hold a reader there.
-var viewColdGap = func() {}
+// viewLookupGap runs between View finding a ring's entry and checking
+// whether it is loaded, and viewColdGap between finding it unloaded and
+// reading it cold; tests hold a reader there.
+var (
+	viewLookupGap = func() {}
+	viewColdGap   = func() {}
+)
 
 // coldCurrent reports that info is still unloaded at generation gen with no
 // change under way: what was read at gen is what the ring holds.

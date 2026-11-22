@@ -339,17 +339,18 @@ func TestColdViewNeverSpansAnEviction(t *testing.T) {
 	}
 }
 
-// holdColdGap holds the first View to reach viewColdGap there until the
-// returned release runs (also at cleanup, registered before the store's).
-func holdColdGap(t *testing.T) (entered <-chan struct{}, release func()) {
+// holdGap holds the first View to reach the gap hook (viewLookupGap or
+// viewColdGap) there until the returned release runs (also at cleanup,
+// registered before the store's).
+func holdGap(t *testing.T, gap *func()) (entered <-chan struct{}, release func()) {
 	t.Helper()
 	in, out := make(chan struct{}), make(chan struct{})
 	var held atomic.Bool
 	var freed sync.Once
 	release = func() { freed.Do(func() { close(out) }) }
-	orig := viewColdGap
-	t.Cleanup(func() { release(); viewColdGap = orig })
-	viewColdGap = func() {
+	orig := *gap
+	t.Cleanup(func() { release(); *gap = orig })
+	*gap = func() {
 		if held.CompareAndSwap(false, true) {
 			close(in)
 			<-out
@@ -377,7 +378,7 @@ func TestColdViewNeverSpansAWarmTransition(t *testing.T) {
 	}
 
 	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
-	gapEntered, gapRelease := holdColdGap(t)
+	gapEntered, gapRelease := holdGap(t, &viewColdGap)
 	orig := readFile
 	t.Cleanup(func() { readFile = orig })
 	readEntered, readRelease := make(chan struct{}), make(chan struct{})
@@ -440,6 +441,102 @@ func TestColdViewNeverSpansAWarmTransition(t *testing.T) {
 	}
 }
 
+// TestColdViewNeverReadsAReplacementRingAsTheRetiredOne pins that a reader
+// holding a session entry that retention retires, and a replacement entry
+// recreates for the same directory, never reads the replacement's files as
+// the retired ring's: held right after the lookup across the expiry and the
+// replacement's appends, then (if it reads the files) after the replacement's
+// oldest segment while appends past the cap drop it, the read answers the
+// replacement's view — not its evicted prefix glued to later records as
+// uncut.
+func TestColdViewNeverReadsAReplacementRingAsTheRetiredOne(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	lim := smallLimits(64 * mib)
+	clock := &fakeClock{now: time.Now()}
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	fill(t, s, "sess", 1, 24) // the ring retention will retire, unloaded below
+	_ = s.Close()
+	ringDir := filepath.Join(root, sessionDirName("sess"))
+
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	gapEntered, gapRelease := holdGap(t, &viewLookupGap)
+	orig := readFile
+	t.Cleanup(func() { readFile = orig })
+	readEntered, readRelease := make(chan struct{}), make(chan struct{})
+	var armed, held atomic.Bool
+	var freed sync.Once
+	t.Cleanup(func() { freed.Do(func() { close(readRelease) }) })
+	second := filepath.Join(ringDir, segmentName(2))
+	readFile = func(path string) ([]byte, error) {
+		if armed.Load() && path == second && held.CompareAndSwap(false, true) {
+			close(readEntered)
+			<-readRelease
+		}
+		return orig(path)
+	}
+	type answer struct {
+		v   View
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		v, err := s2.View(ctx, "sess")
+		got <- answer{v, err}
+	}()
+	<-gapEntered // holds the retiring entry
+	s2.mu.Lock()
+	retired := s2.sessions[sessionDirName("sess")]
+	s2.mu.Unlock()
+	clock.Advance(10 * 24 * time.Hour)
+	if err := s2.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fill(t, s2, "sess", 1, 60) // the replacement, most of the cap in four segments
+	s2.mu.Lock()
+	replacement := s2.sessions[sessionDirName("sess")]
+	s2.mu.Unlock()
+	if replacement == nil || replacement == retired || retired.view.Load() != nil {
+		t.Fatalf("fixture: no replacement entry (retired %p, replacement %p)", retired, replacement)
+	}
+	armed.Store(true)
+	gapRelease()
+
+	// The answer must be a view the replacement held: the one at the time
+	// when the reader answers without reading the files, else the one after
+	// the appends it was held across.
+	var a answer
+	var want View
+	select {
+	case <-readEntered: // a read of the replacement's files is under way
+		fill(t, s2, "sess", 61, 10) // past the cap: the oldest segment goes
+		if _, err := os.Stat(filepath.Join(ringDir, segmentName(1))); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("fixture: the oldest segment survived the appends: %v", err)
+		}
+		if _, err := os.Stat(second); err != nil {
+			t.Fatalf("fixture: the held segment went too: %v", err)
+		}
+		freed.Do(func() { close(readRelease) })
+		a = <-got
+		want = view(t, s2, "sess")
+	case a = <-got:
+		want = view(t, s2, "sess")
+	case <-time.After(2 * time.Minute):
+		t.Fatal("the view neither answered nor read")
+	}
+	if a.err != nil {
+		t.Fatal(a.err)
+	}
+	if fmt.Sprint(ids(a.v.Events)) != fmt.Sprint(ids(want.Events)) || a.v.Cut != want.Cut {
+		first := uint64(0)
+		if len(a.v.Events) > 0 {
+			first = a.v.Events[0].Seq
+		}
+		t.Fatalf("view across the expiry and recreation = %d events from seq %d (cut %v); the replacement holds %d (cut %v)",
+			len(a.v.Events), first, a.v.Cut, len(want.Events), want.Cut)
+	}
+}
+
 // TestColdViewOldGenerationNeverDisplacesANewerRead pins the coalescing of
 // cold reads across generations: a reader held with the generation sampled
 // before a writer change that leaves the ring unloaded, released while a
@@ -458,7 +555,7 @@ func TestColdViewOldGenerationNeverDisplacesANewerRead(t *testing.T) {
 	}
 
 	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
-	gapEntered, gapRelease := holdColdGap(t)
+	gapEntered, gapRelease := holdGap(t, &viewColdGap)
 	type answer struct {
 		v   View
 		err error
