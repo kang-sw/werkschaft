@@ -71,7 +71,14 @@
       "registered_at": "2026-10-02T13:27:17Z"
     },
     "261003-feat-pi-execute-readonly-auto-approval": {
-      "registered_at": "2026-10-03T04:05:29Z"
+      "registered_at": "2026-10-03T04:05:29Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "closed",
+        "touched_at": "2026-11-22T08:49:45Z"
+      }
     },
     "261007-bug-pi-fork-lineage-keeps-bootstrap-key-after-adoption": {
       "registered_at": "2026-10-07T08:41:34Z"
