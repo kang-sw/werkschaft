@@ -645,8 +645,9 @@ func TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays(t *testing.T) {
 		t.Fatalf("the second release removed the lease: %+v err=%v", lease, err)
 	}
 
-	// A daemon-side reader that takes no notice: the partial report says the
-	// notice was not applied, so running bindings may still take input.
+	// A daemon-side reader that takes no notice: no notice was sent, so the
+	// partial report says no daemon was told (not that one declined it), and
+	// claims the cold-path refusal only of a release-aware daemon.
 	s.pi.worktreeChildren = &fakeWorktreeChildren{}
 	unheard := acquireForTest(t, s, 4, leadA, base, "impl/test/lease-stays-unheard")
 	removeReleasedWorktreeLease = func(context.Context, wsgit.Runner, string) error { return errors.New("lease store read-only") }
@@ -654,10 +655,149 @@ func TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays(t *testing.T) {
 	if !toolIsError(t, rel) {
 		t.Fatalf("a release that kept its lease must not report success: %s", rel)
 	}
-	for _, want := range []string{"partly released", "release boundary is recorded", "the running daemon did not apply the release notice", "can take input in this worktree", "no ws daemon was told about this release"} {
-		if !strings.Contains(toolText(t, rel), want) {
-			t.Fatalf("unapplied partial release report lacks %q: %s", want, toolText(t, rel))
+	text := toolText(t, rel)
+	for _, want := range []string{"partly released", "release boundary is recorded", "no daemon was told of the release", "can take input in this worktree", "no ws daemon was told about this release", "a release-aware daemon reads the boundary at any later start or wake here"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("unsent partial release report lacks %q: %s", want, text)
 		}
+	}
+	for _, unwanted := range []string{"did not apply", "refused the release notice", "unconfirmed", "reads the boundary and is refused"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("an unsent notice's partial report must not say %q: %s", unwanted, text)
+		}
+	}
+}
+
+// TestWorktreeReleaseReportsAForwardedNoticeOutcome: over a forwarded
+// notice, the warning and a partial release's error say applied only on the
+// daemon's answer, not applied only on its written refusal, and unconfirmed
+// when the answer was lost (the daemon applies a notice before it answers);
+// an older daemon's unknown-route refusal is not followed by a promise that
+// it refuses a later start or wake.
+func TestWorktreeReleaseReportsAForwardedNoticeOutcome(t *testing.T) {
+	sLead, root, base, leadKey := worktreeListServer(t)
+	var mu sync.Mutex
+	mode := ""
+	noticed := 0
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case wsagent.RoutePrefix + "/by-token/worktree.children":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"children": []any{}})
+		case wsagent.RoutePrefix + "/by-token/worktree.released":
+			mu.Lock()
+			m := mode
+			noticed++
+			mu.Unlock()
+			switch m {
+			case "garbled":
+				// Applied, but its answer cannot be decoded.
+				_, _ = w.Write([]byte("<html>gateway</html>"))
+			case "dropped":
+				// Applied, then the connection is lost before any answer.
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+			case "refused":
+				http.Error(w, "worktree.released: no release recorded", http.StatusConflict)
+			case "old":
+				http.Error(w, "unknown agent route", http.StatusNotFound)
+			}
+		default:
+			http.Error(w, "unknown agent route", http.StatusNotFound)
+		}
+	}))
+	defer daemon.Close()
+	worker := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: append(sLead.environ(), wsagent.EnvPiToken+"=tok", wsagent.EnvPiEndpoint+"="+daemon.URL)})
+	defer worker.Close()
+
+	restore := removeReleasedWorktreeLease
+	defer func() { removeReleasedWorktreeLease = restore }()
+	cases := []struct {
+		mode             string
+		warning, partial []string
+		unwanted         []string
+	}{
+		{
+			mode:     "garbled",
+			warning:  []string{"was not read", "is unconfirmed", "not JSON", "a release-aware daemon reads the boundary"},
+			partial:  []string{"whether the running daemon applied the release notice is unconfirmed", "may still take input", "a release-aware daemon reads the boundary"},
+			unwanted: []string{"did not apply", "did not end", "refused the release notice", "no daemon was told"},
+		},
+		{
+			mode:     "dropped",
+			warning:  []string{"was not read", "is unconfirmed", "did not answer"},
+			partial:  []string{"whether the running daemon applied the release notice is unconfirmed"},
+			unwanted: []string{"did not apply", "did not end", "refused the release notice", "no daemon was told"},
+		},
+		{
+			mode:     "refused",
+			warning:  []string{"the daemon refused the notice of this release", "no release recorded", "did not end the bindings", "a release-aware daemon reads the boundary"},
+			partial:  []string{"the running daemon refused the release notice", "can take input in this worktree", "a release-aware daemon reads the boundary"},
+			unwanted: []string{"unconfirmed", "no daemon was told"},
+		},
+		{
+			mode:     "old",
+			warning:  []string{"predates release notices", "no live agent was bound here", "restarting the same older daemon binary does not help"},
+			partial:  []string{"the running daemon predates release notices and did not apply the release notice", "does not read the boundary at a later start or wake here either", "only a release-aware daemon build refuses those"},
+			unwanted: []string{"unconfirmed", "no daemon was told", "a release-aware daemon reads the boundary at any later start", "reads the boundary and is refused"},
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.mode, func(t *testing.T) {
+			mu.Lock()
+			mode, noticed = tc.mode, 0
+			mu.Unlock()
+
+			// A completed release: the notice outcome is its warning.
+			removeReleasedWorktreeLease = restore
+			acq := acquireForTest(t, sLead, 20+4*i, leadKey, base, "impl/test/notice-"+tc.mode)
+			resp := callToolOnce(t, worker, 21+4*i, "worktree.release", map[string]any{"session_key": acq.WorkerKey, "path": acq.Path, "format": "json"})
+			if toolIsError(t, resp) {
+				t.Fatalf("the release must complete whatever the notice's outcome: %s", resp)
+			}
+			var res worktreeReleaseResult
+			if err := json.Unmarshal([]byte(toolText(t, resp)), &res); err != nil {
+				t.Fatal(err)
+			}
+			warnings := strings.Join(res.Warnings, "\n")
+			for _, want := range tc.warning {
+				if !strings.Contains(warnings, want) {
+					t.Fatalf("warning lacks %q: %v", want, res.Warnings)
+				}
+			}
+			for _, unwanted := range tc.unwanted {
+				if strings.Contains(warnings, unwanted) {
+					t.Fatalf("warning must not say %q: %v", unwanted, res.Warnings)
+				}
+			}
+
+			// A partial release: its error states the same outcome.
+			removeReleasedWorktreeLease = func(context.Context, wsgit.Runner, string) error { return errors.New("lease store read-only") }
+			part := acquireForTest(t, sLead, 22+4*i, leadKey, base, "impl/test/notice-partial-"+tc.mode)
+			rel := callToolOnce(t, worker, 23+4*i, "worktree.release", map[string]any{"session_key": part.WorkerKey, "path": part.Path})
+			if !toolIsError(t, rel) {
+				t.Fatalf("a release that kept its lease must not report success: %s", rel)
+			}
+			text := toolText(t, rel)
+			for _, want := range append([]string{"partly released", "release boundary is recorded"}, tc.partial...) {
+				if !strings.Contains(text, want) {
+					t.Fatalf("partial release report lacks %q: %s", want, text)
+				}
+			}
+			for _, unwanted := range tc.unwanted {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("partial release report must not say %q: %s", unwanted, text)
+				}
+			}
+			mu.Lock()
+			n := noticed
+			mu.Unlock()
+			if n != 2 {
+				t.Fatalf("each release sends its notice once: %d notices", n)
+			}
+		})
 	}
 }
 
