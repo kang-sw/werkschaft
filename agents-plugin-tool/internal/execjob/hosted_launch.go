@@ -38,15 +38,21 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	// The program resolves before the approval, so the prompt names the
 	// binary that starts.
 	argv := append([]string(nil), req.Argv...)
-	bin, err := lookProgram(argv[0], req.Environ)
-	if err != nil {
-		return HostedView{}, err
+	bin, lookErr := lookProgram(argv[0], req.Environ)
+	if lookErr != nil && !req.Legacy {
+		return HostedView{}, lookErr
 	}
-	argv[0] = bin
-	call := approvalCall(req, bin)
-	explicit, err := h.opts.Sessions.Approve(ctx, owner.ID, call)
-	if err != nil {
-		return HostedView{}, err
+	// A legacy launch of a missing program answers as the file-backed
+	// launch does: a failed record under a durable key. Nothing runs, so
+	// nothing asks for approval.
+	var call HostedCall
+	explicit := false
+	if lookErr == nil {
+		argv[0] = bin
+		call = approvalCall(req, bin)
+		if explicit, err = h.opts.Sessions.Approve(ctx, owner.ID, call); err != nil {
+			return HostedView{}, err
+		}
 	}
 	id, err := h.newID(req.Legacy)
 	if err != nil {
@@ -57,6 +63,9 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if err := h.admit(j); err != nil {
 		h.rings.Release(j.out)
 		return HostedView{}, err
+	}
+	if lookErr != nil {
+		return h.failStart(j, "", lookErr)
 	}
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
 	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})

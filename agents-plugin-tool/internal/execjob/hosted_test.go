@@ -1173,6 +1173,25 @@ func TestHostedApprovalShowsWhatRuns(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("a missing program prompted: %d approvals", n)
 	}
+
+	// A legacy launch of a missing program keeps the file-backed answer: a
+	// failed record under a legacy key the legacy readers find, unprompted.
+	lv, err := fx.launch(context.Background(), nil, HostedLaunch{Legacy: true, Tool: "exec.spawn", Argv: []string{"missing-tool"}, Environ: []string{"PATH=" + bin}})
+	if err == nil || lv.State != HostedFailed || !keyPattern.MatchString(lv.ID) || !strings.Contains(lv.Error, "not on the job's PATH") {
+		t.Fatalf("a legacy missing program = %+v, %v", lv, err)
+	}
+	if st, ok := fx.h.LegacyStatus(fx.exitDir, lv.ID); !ok || st.Status != stateFailed || !st.ResultReady || st.ExecKey != lv.ID {
+		t.Fatalf("legacy status of the failed start = %+v, %v", st, ok)
+	}
+	if row, ok := fx.store.row(lv.ID); !ok || row.State != HostedFailed {
+		t.Fatalf("stored failed start = %+v, %v", row, ok)
+	}
+	fx.sessions.mu.Lock()
+	n = len(fx.sessions.approvals)
+	fx.sessions.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("a legacy missing program prompted: %d approvals", n)
+	}
 }
 
 // TestHostedLaunchRefusals: no argv, an unknown owner, and a spawn failure.
