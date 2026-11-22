@@ -23,6 +23,8 @@ type composerRunnerFake struct {
 	err    error
 	hands  []string
 	events *[]string
+	// handErr refuses PassiveHand.
+	handErr error
 }
 
 func (r *composerRunnerFake) ComposerOpen(id string) (uint64, error) {
@@ -36,6 +38,9 @@ func (r *composerRunnerFake) ComposerTarget(id string) (wsagent.ComposerTarget, 
 func (r *composerRunnerFake) PassiveHand(id string, gen uint64, execID, text string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.handErr != nil {
+		return r.handErr
+	}
 	r.hands = append(r.hands, execID+"|"+text)
 	if r.events != nil {
 		*r.events = append(*r.events, "hand:"+execID)
@@ -93,6 +98,14 @@ func (s *denySessions) Notify(id string, gen uint64, eventID, text string) (exec
 func openComposerFixture(t *testing.T, gen uint64) (*composerExec, *composerRunnerFake, *denySessions, *hostedExecDaemon, string, *[]string) {
 	t.Helper()
 	skipWithoutPOSIXShell(t)
+	return openComposerFixtureAnyShell(t, gen)
+}
+
+// openComposerFixtureAnyShell is the fixture without the POSIX-shell skip: its
+// jobs run through execjob.ShellArgv, the shell exec.shell itself picks (Git
+// Bash on Windows).
+func openComposerFixtureAnyShell(t *testing.T, gen uint64) (*composerExec, *composerRunnerFake, *denySessions, *hostedExecDaemon, string, *[]string) {
+	t.Helper()
 	state := t.TempDir()
 	var events []string
 	sessions := &denySessions{gen: gen, events: &events}
@@ -156,6 +169,38 @@ func TestComposerExecRunsTheLinesAsTheLeadsOwnExecShell(t *testing.T) {
 		t.Fatalf("a refused target left a job: %d -> %d", len(before), len(after))
 	}
 	runner.err = nil
+}
+
+// TestComposerExecSelectsItsShellThroughShellArgv runs a line on any platform
+// through the shell execjob.ShellArgv picks for the job (Git Bash on Windows,
+// bash or /bin/sh elsewhere), as exec.shell does: the lines are portable shell
+// (echo, redirection, cat at EOF), the recorded shell is ShellArgv's, and the
+// job runs in the lead's bound worktree. It skips only where there is no such
+// shell at all.
+func TestComposerExecSelectsItsShellThroughShellArgv(t *testing.T) {
+	want, err := execjob.ShellArgv("true", os.Environ())
+	if err != nil {
+		t.Skipf("no shell for exec.shell here: %v", err)
+	}
+	c, runner, sessions, _, root, _ := openComposerFixtureAnyShell(t, 1)
+	job, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: runner.target.Owner.Gen, Line: "echo out\necho err 1>&2\ncat\n", Window: 60 * time.Second})
+	if err != nil || !job.Terminal() || job.State != "exited" || job.ExitCode == nil || *job.ExitCode != 0 {
+		t.Fatalf("job = %+v, %v", job, err)
+	}
+	got := strings.ReplaceAll(string(job.Output), "\r\n", "\n")
+	if !strings.Contains(got, "out\n") || !strings.Contains(got, "err\n") || job.Written != int64(len(job.Output)) {
+		t.Fatalf("output %q written %d", job.Output, job.Written)
+	}
+	views, _ := c.hosted.List("lead")
+	if len(views) != 1 || views[0].Tool != "exec.shell" || views[0].Shell != want[0] || !strings.EqualFold(filepath.Clean(views[0].Cwd), filepath.Clean(root)) {
+		t.Fatalf("listing = %+v, want shell %q in %q", views, want[0], root)
+	}
+	sessions.mu.Lock()
+	asked := sessions.asked
+	sessions.mu.Unlock()
+	if asked != 0 {
+		t.Fatalf("the agent's approval policy was consulted %d times", asked)
+	}
 }
 
 // TestComposerExecConvertsPastTheWindowAndMakesTheIDVisibleFirst: a command
@@ -295,4 +340,28 @@ func TestComposerExecConversionProbe(t *testing.T) {
 	stat("conversion decision + id publication + release", convert)
 	stat("long run: launch time beyond the window (holder start)", whole)
 	stat("quick run: whole launch (holder start, process, end)", quick)
+}
+
+// TestComposerExecRefusedHandOffLeavesTheOrdinaryNotice: when the lead's
+// pending input refuses the converted job's id (the conversation reopened), the
+// job still converts and its one completion notice, which carries the id,
+// reaches the lead: nothing was handed, so the notice is the single delivery.
+func TestComposerExecRefusedHandOffLeavesTheOrdinaryNotice(t *testing.T) {
+	c, runner, sessions, _, _, _ := openComposerFixture(t, 1)
+	runner.handErr = errors.New("the conversation reopened since this command was submitted")
+	job, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 1, Line: "sleep 0.3; echo late", Window: 100 * time.Millisecond})
+	if err != nil || !job.Async || job.Terminal() {
+		t.Fatalf("converted job = %+v, %v", job, err)
+	}
+	select {
+	case n := <-sessions.recordingSessions.notices:
+		if !strings.HasPrefix(n, "exec:"+job.ExecID+":exit|") || !strings.Contains(n, job.ExecID) {
+			t.Fatalf("notice = %q", n)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the ordinary notice never came after a refused hand-off")
+	}
+	if len(runner.hands) != 0 {
+		t.Fatalf("a refused hand-off recorded %v", runner.hands)
+	}
 }
