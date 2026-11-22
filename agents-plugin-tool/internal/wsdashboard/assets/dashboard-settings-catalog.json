@@ -13,6 +13,7 @@
   {"key": "preference.*", "section": "workflow", "control": "textarea", "label": "js.settings.key.preference.*.label", "description": "js.settings.key.preference.*.description", "selectors": []},
   {"key": "agents.tier", "section": "agents", "control": "tier", "label": "js.settings.key.agents.tier.label", "description": "js.settings.key.agents.tier.description", "selectors": ["harness", "tier"]},
   {"key": "agent.tier_aliases", "section": "agents", "control": "text", "label": "js.settings.key.agent.tier_aliases.label", "description": "js.settings.key.agent.tier_aliases.description", "selectors": []},
+  {"key": "agent.tier_routing", "section": "agents", "control": "tier_routing", "label": "js.settings.key.agent.tier_routing.label", "description": "js.settings.key.agent.tier_routing.description", "selectors": []},
   {"key": "agent.child_waiting_days", "section": "agents", "control": "number", "label": "js.settings.key.agent.child_waiting_days.label", "description": "js.settings.key.agent.child_waiting_days.description", "selectors": [], "unit": "js.settings.unit.days"},
   {"key": "agent.git_search_roots", "section": "agents", "control": "text", "label": "js.settings.key.agent.git_search_roots.label", "description": "js.settings.key.agent.git_search_roots.description", "selectors": []},
   {"key": "compaction.lead_advisory", "section": "compaction", "control": "threshold", "label": "js.settings.key.compaction.lead_advisory.label", "description": "js.settings.key.compaction.lead_advisory.description", "selectors": ["harness"]},

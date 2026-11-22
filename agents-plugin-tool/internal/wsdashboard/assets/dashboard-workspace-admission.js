@@ -122,18 +122,23 @@
       return res.json().then(function (value) { return { status: res.status, value: value }; });
     }).then(function (answer) {
       var value = answer.value, applied = answer.status === 200 && value.applied === true;
-      if (applied) {
+      // A refused batch whose undo failed kept its approvals: the reply
+      // carries the rail as it now is, and the approvals leave the draft.
+      var uncertain = !applied && value.uncertain === true && !!value.html;
+      if (applied || uncertain) {
         wsAdmissionDraft = wsAdmissionDraft.filter(function (d) {
-          return !selections.some(function (s) { return s.path === d.path && s.action === d.action; });
+          return !selections.some(function (s) { return s.path === d.path && s.action === d.action && (applied || s.action === "approve"); });
         });
         save(WS_ADMISSION_KEY, wsAdmissionDraft.length ? JSON.stringify(wsAdmissionDraft) : null);
         railMinGen = Math.max(railMinGen, +value.gen || 0);
       }
       clearTimeout(timer); wsAdmissionBusy = false; railSaving--;
-      if (applied && value.html) swap("rail", "workspace-admission:" + value.gen + ":" + Date.now(), value.html);
+      if ((applied || uncertain) && value.html) swap("rail", "workspace-admission:" + value.gen + ":" + Date.now(), value.html);
       admissionSync(); railRelease();
-      if (!applied && !quietFailure) wsAdmissionToast(wsT(answer.status === 409 ? "js.ws.admission.stale" : "js.ws.admission.failed"), false);
-      return applied;
+      if (uncertain) wsAdmissionToast(wsT("js.ws.admission.uncertain"), false);
+      else if (!applied && !quietFailure) wsAdmissionToast(wsT(answer.status === 409 ? "js.ws.admission.stale" : "js.ws.admission.failed"), false);
+      // null: partly saved, already said; the caller adds no message.
+      return uncertain ? null : applied;
     }).catch(function () {
       clearTimeout(timer);
       if (wsAdmissionBusy) { wsAdmissionBusy = false; railSaving--; admissionSync(); railRelease(); }
@@ -148,7 +153,7 @@
     var reject = selections.length - approve;
     wsAdmissionPost(selections, worktrees.length > 0).then(function (applied) {
       if (!applied) {
-        if (worktrees.length) wsAdmissionToast(wsT("js.ws.admission.toast.none", wsT("js.ws.admission.group.workspaces"), wsT("js.ws.admission.group.worktrees")), false);
+        if (worktrees.length && applied !== null) wsAdmissionToast(wsT("js.ws.admission.toast.none", wsT("js.ws.admission.group.workspaces"), wsT("js.ws.admission.group.worktrees")), false);
         return;
       }
       if (worktrees.length) {

@@ -100,7 +100,7 @@ func TestWhiteboardCommandAcceptanceFirstTextRetryAndSequence(t *testing.T) {
 	_ = f.servedPage(t)
 	entry, _ := f.s.sessions.lookup(f.key)
 	frags, ok := f.source.ReadTopicHistory(wsdashboard.Registration{ReplyID: f.replyID(), Project: entry.root}, "", []string{"t"}, "")
-	if !ok || len(frags) != 1 || !strings.Contains(string(frags[0].HTML), "user commented") {
+	if !ok || len(frags) != 1 || !strings.Contains(string(frags[0].HTML), "Commented") {
 		t.Fatal("comment label missing")
 	}
 	if !reflect.DeepEqual(st.Items[0].Options, []string{"One", "Two"}) {

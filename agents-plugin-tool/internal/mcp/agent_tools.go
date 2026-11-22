@@ -292,7 +292,47 @@ func formatAgentTiers(t wsagent.AgentTiers) string {
 			fmt.Fprintf(&b, "  %s\n", oneLine(u))
 		}
 	}
+	formatAgentRouting(&b, t.Routing)
 	return b.String()
+}
+
+// formatAgentRouting is agent.tiers' routing section in text: each bundle
+// and routed tier with its trace and binding, then the aliases that shadow
+// graph names. Nil (no graph) writes nothing.
+func formatAgentRouting(b *strings.Builder, r *wsagent.AgentRouting) {
+	if r == nil {
+		return
+	}
+	b.WriteString("routing (agent.tier_routing; pass a <role>:<size> render recommendation or a bundle name as tier):\n")
+	if r.Error != "" {
+		fmt.Fprintf(b, "  unavailable: %s\n", oneLine(r.Error))
+		return
+	}
+	entry := func(e wsagent.AgentRouteEntry) {
+		if e.Error != "" {
+			name := e.Trace
+			if name == "" {
+				name = e.Tier
+			}
+			fmt.Fprintf(b, "  %s: not spawnable now: %s\n", name, oneLine(e.Error))
+			return
+		}
+		fmt.Fprintf(b, "  %s: %s/%s\n", e.Trace, orDash(e.Model), orDash(e.Effort))
+	}
+	b.WriteString(" bundles:\n")
+	if len(r.Bundles) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, e := range r.Bundles {
+		entry(e)
+	}
+	b.WriteString(" routes:\n")
+	for _, e := range r.Routes {
+		entry(e)
+	}
+	for _, c := range r.Collisions {
+		fmt.Fprintf(b, "  collision: %s\n", c)
+	}
 }
 
 // AgentWakeRefused is the daemon runner's Options.WakeRefused: it tells the

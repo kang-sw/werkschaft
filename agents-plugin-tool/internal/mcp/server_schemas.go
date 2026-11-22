@@ -379,7 +379,7 @@ func tools() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"tier":    stringProperty("Fixed tier to resolve: small, medium, large, or xlarge."),
+					"tier":    stringProperty("Tier to resolve: small, medium, large, or xlarge; any other agent.spawn tier (a rendered role tier, alias, <harness>.<tier>, or bundle) resolves through agent.tier_routing and reports its trace."),
 					"harness": stringProperty("Optional harness selector (e.g. codex, claude, pi). When omitted, defaults to the current session's detected harness, or default when none is known."),
 					"format":  stringProperty(formatPropertyDescription),
 				},

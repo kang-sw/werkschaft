@@ -3,8 +3,10 @@ package wsdashboard
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -92,6 +94,8 @@ type planUsageHistoryMemo struct {
 	viewKey   string
 	viewUntil int64
 	view      json.RawMessage
+	// viewHas reports whether view's history held any unexpired sample.
+	viewHas bool
 }
 
 // planUsageHistoryStat identifies the file version the memo reflects.
@@ -426,21 +430,31 @@ func (s *planUsageStore) codexFiveHourHistoryView(entries []planUsageEntry, now 
 			filtered = append(filtered, copyEntry)
 		}
 	}
-	s.mu.Lock()
-	h, err := s.readHistoryFileLocked(&s.codexHist, codexFiveHourHistorySpec)
-	hasSamples := err == nil && len(prunePlanUsageHistory(h.Records, now)) > 0
-	s.mu.Unlock()
-	if !hasSamples {
+	// Only a Codex five-hour entry reads this member (usage.js), so a poll
+	// without one touches no file; otherwise one memoized read answers both
+	// the presence and the projection.
+	if len(filtered) == 0 {
 		return nil, false
 	}
-	return s.historyFileView(&s.codexHist, codexFiveHourHistorySpec, filtered, now), true
+	raw, has := s.historyFileViewHas(&s.codexHist, codexFiveHourHistorySpec, filtered, now)
+	if !has {
+		return nil, false
+	}
+	return raw, true
 }
 
 func (s *planUsageStore) historyFileView(memo *planUsageHistoryMemo, spec planUsageHistorySpec, entries []planUsageEntry, now int64) json.RawMessage {
+	raw, _ := s.historyFileViewHas(memo, spec, entries, now)
+	return raw
+}
+
+// historyFileViewHas is historyFileView, also reporting whether the history
+// holds any unexpired sample (false when it is unavailable).
+func (s *planUsageStore) historyFileViewHas(memo *planUsageHistoryMemo, spec planUsageHistorySpec, entries []planUsageEntry, now int64) (json.RawMessage, bool) {
 	p := planUsageHistoryProjection{SchemaVersion: 1, Status: "empty", Samples: []planUsageSample{}}
 	if s == nil {
 		raw, _ := json.Marshal(p)
-		return raw
+		return raw, false
 	}
 	key, _ := json.Marshal(entries)
 	s.mu.Lock()
@@ -449,10 +463,10 @@ func (s *planUsageStore) historyFileView(memo *planUsageHistoryMemo, spec planUs
 	if err != nil {
 		p.Status = "unavailable"
 		raw, _ := json.Marshal(p)
-		return raw
+		return raw, false
 	}
 	if memo.view != nil && memo.viewRev == memo.rev && memo.viewKey == string(key) && now <= memo.viewUntil {
-		return memo.view
+		return memo.view, memo.viewHas
 	}
 	pruned := prunePlanUsageHistory(h.Records, now)
 	until := int64(math.MaxInt64)
@@ -466,10 +480,10 @@ func (s *planUsageStore) historyFileView(memo *planUsageHistoryMemo, spec planUs
 	raw, err := json.Marshal(p)
 	if err != nil {
 		raw, _ = json.Marshal(planUsageHistoryProjection{SchemaVersion: 1, Status: "unavailable", Samples: []planUsageSample{}})
-		return raw
+		return raw, false
 	}
-	memo.viewRev, memo.viewKey, memo.viewUntil, memo.view = memo.rev, string(key), until, raw
-	return raw
+	memo.viewRev, memo.viewKey, memo.viewUntil, memo.view, memo.viewHas = memo.rev, string(key), until, raw, len(pruned) > 0
+	return raw, len(pruned) > 0
 }
 
 // projectPlanUsageHistory keeps, per harness/group/kind, only what trend() can
@@ -546,4 +560,26 @@ func usageSamples(entry planUsageEntry) []planUsageSample {
 		samples = append(samples, planUsageSample{Harness: entry.Harness, Group: entry.Group, Kind: w.Kind, Source: entry.Source, ResetsAt: w.ResetsAt, AsOf: w.AsOf, Percent: w.Percent})
 	}
 	return samples
+}
+
+// ValidateLegacyUsageHistory reports whether the usage history reader would
+// accept raw as the cache file at rel (plan-usage-history.json,
+// plan-usage-codex-history.json or plan-usage-agy-history.json, relative to
+// the dashboard directory): schema 1, a samples array, and every sample
+// valid for that history with its required members. The daemon metadata
+// import uses it as its usage history validator (wsmeta.LegacyValidator; a
+// dashboard file has no reply-id), so a history this reader protects from
+// append and rewrite stays out of the live store.
+func ValidateLegacyUsageHistory(rel, _ string, raw []byte) error {
+	name := path.Base(rel)
+	if path.Dir(rel) != "." {
+		return fmt.Errorf("unknown usage history %q", rel)
+	}
+	for _, spec := range []planUsageHistorySpec{defaultHistorySpec, codexFiveHourHistorySpec, agyHistorySpec} {
+		if spec.cacheName == name {
+			_, err := parsePlanUsageHistoryWith(raw, spec)
+			return err
+		}
+	}
+	return fmt.Errorf("unknown usage history %q", name)
 }

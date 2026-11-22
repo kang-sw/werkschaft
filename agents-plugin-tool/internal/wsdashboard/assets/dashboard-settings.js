@@ -807,6 +807,21 @@ var wsSettingsChoiceLabels = {
     return append(card, top, append(el("div", "tier-scroll"), table));
   }
 
+  // tierRoutingRow is the agent.tier_routing graph editor
+  // (dashboard-settings-tiers.js); a save refreshes this row's entry.
+  function tierRoutingRow(entry, spec) {
+    return window.WsSettingsTierRouting.render({
+      entry: entry, editable: editable(entry, spec), label: window.wsT(spec.label), description: window.wsT(spec.description),
+      lockText: tr(reasons[rowReason(entry, spec)] || reasons.scope_unsupported),
+      onSaved: function (result) {
+        if (!result || !result.entry) return;
+        var affected = new Map((result.affected_entries || [result.entry]).map(item => [entryID(item), item]));
+        snapshot.entries = snapshot.entries.map(item => affected.get(entryID(item)) || item);
+        renderCounts();
+      }
+    });
+  }
+
   function group(key) {
     return snapshot.entries.filter(function (entry) { return entry.key === key; });
   }
@@ -1022,7 +1037,10 @@ var wsSettingsChoiceLabels = {
         var bucket = activeBucket(groupKey, rows);
         var selectedRow = rows.find(function (entry) { return entry.selectors.harness === bucket; });
         if (selectedRow && matches(selectedRow, spec)) {
-          if (spec.control === "profile" || spec.control === "prompt") {
+          if (spec.control === "tier_routing" && window.WsSettingsTierRouting) {
+            rowGroup = null;
+            list.append(tierRoutingRow(selectedRow, spec));
+          } else if (spec.control === "profile" || spec.control === "prompt") {
             rowGroup = null;
             list.append(renderRow(selectedRow, spec));
           } else {

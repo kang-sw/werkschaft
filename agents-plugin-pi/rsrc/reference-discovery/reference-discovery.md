@@ -3,6 +3,8 @@ kind: render
 delegates: false
 role: delegate
 tier: small
+tier-role: reference-discovery
+tier-parent: explore:*
 variables:
   - RoleModel
 ---

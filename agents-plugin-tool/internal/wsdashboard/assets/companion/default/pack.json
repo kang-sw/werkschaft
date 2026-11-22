@@ -30,12 +30,6 @@
       "behavior": "bonk-from-edge",
       "coalesceMs": 1000
     },
-    "grab": {
-      "file": "grab.png",
-      "z": 25,
-      "behavior": "attach",
-      "anchor": "behind-head"
-    },
     "prop-typing-desk": {
       "file": "typing-desk.png",
       "mode": "static",

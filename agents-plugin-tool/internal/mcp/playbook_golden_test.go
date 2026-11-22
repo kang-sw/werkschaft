@@ -161,8 +161,8 @@ func TestPlaybookPrintGoldenExploreClaudeHarness(t *testing.T) {
 	if !strings.Contains(body, "SendMessage(to: <agentId>)") {
 		t.Errorf("golden body %q: expected hardcoded claude ContinueIdiom 'SendMessage(to: <agentId>)'", body)
 	}
-	if !strings.Contains(body, "Continuity tip") {
-		t.Errorf("golden body %q: expected delegation tip (delegates:true)", body)
+	if strings.Contains(body, "Continuity tip") {
+		t.Errorf("golden body %q: unexpected continuity tip (explore is agent-facing, no delegates:true)", body)
 	}
 }
 
@@ -189,8 +189,8 @@ func TestPlaybookPrintGoldenExploreCodexHarness(t *testing.T) {
 	if !strings.Contains(body, "resuming the agent using its task id") {
 		t.Errorf("golden body %q: expected hardcoded codex ContinueIdiom", body)
 	}
-	if !strings.Contains(body, "Continuity tip") {
-		t.Errorf("golden body %q: expected delegation tip (delegates:true)", body)
+	if strings.Contains(body, "Continuity tip") {
+		t.Errorf("golden body %q: unexpected continuity tip (explore is agent-facing, no delegates:true)", body)
 	}
 }
 
@@ -216,8 +216,8 @@ func TestPlaybookPrintGoldenExploreUnknownHarness(t *testing.T) {
 	if !strings.Contains(body, "resuming the agent using its returned id") {
 		t.Errorf("golden body %q: expected hardcoded neutral ContinueIdiom", body)
 	}
-	if !strings.Contains(body, "Continuity tip") {
-		t.Errorf("golden body %q: expected delegation tip (delegates:true)", body)
+	if strings.Contains(body, "Continuity tip") {
+		t.Errorf("golden body %q: unexpected continuity tip (explore is agent-facing, no delegates:true)", body)
 	}
 }
 
@@ -245,8 +245,8 @@ func TestPlaybookPrintGoldenExploreJunkHarness(t *testing.T) {
 	if !strings.Contains(body, "resuming the agent using its returned id") {
 		t.Errorf("golden body %q: expected hardcoded neutral ContinueIdiom", body)
 	}
-	if !strings.Contains(body, "Continuity tip") {
-		t.Errorf("golden body %q: expected delegation tip (delegates:true)", body)
+	if strings.Contains(body, "Continuity tip") {
+		t.Errorf("golden body %q: unexpected continuity tip (explore is agent-facing, no delegates:true)", body)
 	}
 }
 

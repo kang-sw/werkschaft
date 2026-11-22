@@ -207,8 +207,9 @@ func TestPathGenerateOversizedBatchReturnsAllPathsAndBoundsGrants(t *testing.T) 
 
 // A legacy caller may save a generated artifact by replace (write a sibling,
 // rename over the path, or delete and recreate) while the daemon holds the
-// path.write grant. On Windows this requires the held handle to share delete
-// access; the replaced file must then fail path.write's identity check.
+// path.write grant. On Windows this requires that no handle stays open between
+// path.generate and path.write; the replaced file must then fail path.write's
+// identity check.
 func TestPathGenerateGrantAllowsReplaceSaveAndRefusesReplacedTarget(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
 	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))

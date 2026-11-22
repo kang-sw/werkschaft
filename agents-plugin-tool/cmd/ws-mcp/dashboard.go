@@ -132,7 +132,7 @@ func dashboardCommand(args []string) {
 	packageName, _, packageErr := wsagent.ResolveHostedPackage()
 	var settings *wsdashboard.ConfigBackend
 	if packageErr == nil {
-		settings, packageErr = mcp.DashboardConfigBackend(packageName, wsconfig.Options{}, sessions, agents.RefreshAmbient)
+		settings, packageErr = mcp.DashboardConfigBackend(packageName, wsconfig.Options{}, sessions, agents.RefreshAmbient, agents.HarnessAvailability)
 	}
 	if packageErr != nil {
 		fmt.Fprintln(logw, "dashboard: settings catalog unavailable:", packageErr)
@@ -427,6 +427,12 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// A Pi subagent's own pi.* calls (the token route) need a usable
 		// Pi, as a lead's do.
 		ChildCheck: mcp.PiReady,
+		// The dashboard's tier routing view asks availability without
+		// running pi --version (Runner.HarnessAvailability).
+		ChildCheckKnown: mcp.PiReadyKnown,
+		// agent.spawn routes role tiers through the packaged playbook
+		// roles' agent.tier_routing graph.
+		TierRoles: mcp.PackagedTierRoles,
 		// A message that cannot wake its sleeping agent stays queued; its
 		// sender hears why once.
 		WakeRefused: mcp.AgentWakeRefused(logw),
@@ -540,5 +546,5 @@ func serveDashboard(server *mcp.Server) {
 // hostedRender is what reg says about text the daemon renders for its
 // hosted lead.
 func hostedRender(reg wsagent.BackendRegistration, boards *mcp.WhiteboardStores) mcp.HostedRender {
-	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
+	return mcp.HostedRender{Harness: reg.ManualHarness, PlaybookCommands: reg.PlaybookCommands, PreferNativeSubagent: reg.PreferNativeSubagent, ToolNameScheme: reg.ToolNameScheme, CallFallback: reg.CallFallback, DirectTools: reg.DirectTools, Boards: boards}
 }

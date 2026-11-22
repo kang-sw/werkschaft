@@ -44,7 +44,9 @@ func TestProxyWhiteboardLinkHasNoLoginCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	h := &proxyHost{logw: io.Discard}
+	boards := mcp.NewWhiteboardStores(io.Discard)
+	defer boards.Close()
+	h := &proxyHost{logw: io.Discard, boards: boards}
 	h.live.Store(d)
 	session, err := h.Accept(wsdashboard.ProxyHello{
 		Mode: wsdashboard.ProxyModeMCP, Cwd: root, ProjectRoot: root, OwnerPID: os.Getpid(),

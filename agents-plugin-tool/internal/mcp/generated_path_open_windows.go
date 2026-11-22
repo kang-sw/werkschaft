@@ -8,12 +8,20 @@ import (
 	"syscall"
 )
 
-// openGeneratedPathGrant opens the held path.write descriptor with
-// FILE_SHARE_DELETE, which os.OpenFile omits. A caller whose editor saves a
-// generated review/prompt by delete-or-rename-replace must not hit a sharing
-// violation while the daemon holds the grant, as it did not when path.generate
-// closed its reservation before returning. A replaced path is a different file,
-// so path.write's file-identity check still refuses it.
+// holdGeneratedPathGrant is false on Windows: NTFS refuses a rename-replace
+// (MoveFileEx MOVEFILE_REPLACE_EXISTING, used by Go os.Rename and Node
+// fs.rename) over a file that any handle has open, FILE_SHARE_DELETE or not,
+// and likewise a rename of a directory with an open handle beneath it. Holding
+// the descriptor from path.generate to path.write would break a caller that
+// saves the generated file by write-temp-then-rename, which worked when
+// path.generate closed its reservation before returning. The grant records the
+// file identity (volume serial and file index) instead, and path.write
+// reopens the path and refuses a file whose identity differs.
+const holdGeneratedPathGrant = false
+
+// openGeneratedPathGrant opens the path.write descriptor with
+// FILE_SHARE_DELETE, which os.OpenFile omits, so a concurrent delete-save does
+// not hit a sharing violation during the brief open at grant and write time.
 func openGeneratedPathGrant(path string) (*os.File, error) {
 	namep, err := syscall.UTF16PtrFromString(extendedLengthPath(path))
 	if err != nil {
