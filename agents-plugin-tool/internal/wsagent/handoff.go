@@ -99,6 +99,7 @@ func (r *Runner) TakeOver(id string) (State, error) {
 			return State{}, conflict("the directory the session ran in is gone: %s", ls.Cwd)
 		}
 	}
+	// The source harness decides whether its terminal session can be adopted.
 	if err := terminal.checkTerminalSession(ls.Session); err != nil {
 		return State{}, err
 	}
@@ -169,7 +170,9 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	if ls.Cwd != "" && ls.Cwd != ls.Root {
 		rec.Cwd = ls.Cwd
 	}
-	terminal.adoptTerminalSession(&rec, ls.Session)
+	// The target backend adopts the session, not the source harness: a profile
+	// override may re-route the lead (see Runner.adoptTerminalSession).
+	r.adoptTerminalSession(&rec, ls.Session)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return State{}, err
 	}

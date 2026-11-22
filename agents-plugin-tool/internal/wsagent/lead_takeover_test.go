@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -240,6 +241,55 @@ func TestTakeoverOfAPiSessionRunsOnItsOwnSessionFile(t *testing.T) {
 	spec := h.holders.spawned(h.holder(id))
 	if session, _ := flagValue(spec.Argv, "--session"); session != file || slices.Contains(spec.Argv, "--session-dir") || spec.Cwd != h.root {
 		t.Fatalf("spawn = %v in %q, want --session %s and no --session-dir", spec.Argv, spec.Cwd, file)
+	}
+}
+
+// TestTakeoverAdoptsUnderTheResolvedTargetBackend: the source harness decides
+// whether its terminal session can be taken over, but the record is adopted
+// under the backend the lead profile resolves to, which a profile override can
+// make a different one. The record shape is the resolved target's, as before
+// adoption moved into registration data.
+func TestTakeoverAdoptsUnderTheResolvedTargetBackend(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, profile, override string
+		want                            Record
+	}{
+		{"pi terminal under a claude profile", BackendPi, LeadProfilePi, `{"backend":"claude","lead":true,"permission_mode":"acceptEdits"}`,
+			Record{Backend: BackendClaude, PermissionMode: "acceptEdits", SessionID: "SESSION"}},
+		{"claude terminal under a pi profile", BackendClaude, LeadProfileClaude, `{"backend":"pi","lead":true}`,
+			Record{Backend: BackendPi, SessionFile: "SESSION"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newLeadHarness(t).start()
+			session := "sess-term"
+			if tc.source == BackendPi {
+				session = filepath.Join(t.TempDir(), "pi-sessions", "s.jsonl")
+				if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(session, []byte("{}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.globalProfile(tc.profile, tc.override)
+			const id = "overridden"
+			h.terminalSession(id, LeadSession{Key: "override-key", Harness: tc.source, Session: session, Cwd: h.root}, nil)
+			if _, err := h.runner.TakeOver(id); err != nil {
+				t.Fatal(err)
+			}
+			rec := h.record(id)
+			got := Record{Backend: rec.Backend, PermissionMode: rec.PermissionMode, SessionID: rec.SessionID, SessionFile: rec.SessionFile}
+			want := tc.want
+			if want.SessionID != "" {
+				want.SessionID = session
+			}
+			if want.SessionFile != "" {
+				want.SessionFile = session
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("record = %+v, want %+v", got, want)
+			}
+		})
 	}
 }
 

@@ -144,6 +144,20 @@ func (r *Runner) terminalSessionOf(backend string) terminalSession {
 	return ts
 }
 
+// adoptTerminalSession points rec at a terminal session under rec's own
+// backend, which is the resolved profile's target and may differ from the
+// harness the terminal ran (a profile override can re-route a lead). A target
+// without terminalSession gets the generic adoption: its native mode cleared,
+// the session id set.
+func (r *Runner) adoptTerminalSession(rec *Record, session string) {
+	if ts := r.terminalSessionOf(rec.Backend); ts != nil {
+		ts.adoptTerminalSession(rec, session)
+		return
+	}
+	rec.PermissionMode = ""
+	rec.SessionID = session
+}
+
 // resumeCommand is the shell command that resumes a lead session's harness
 // conversation in a terminal, or "" when its backend has none or the
 // conversation has none yet.

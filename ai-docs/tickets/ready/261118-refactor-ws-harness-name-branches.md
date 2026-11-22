@@ -437,6 +437,20 @@ and the hosted launcher asset test failed. They fail in this checkout for
 that missing-asset reason, which is environmental. No race run was done in
 this phase.
 
+**Edition (Phase 2, takeover adoption).** A codex review found that
+takeover adoption followed the source harness while the record is stamped
+with the resolved profile backend. A whole-profile override can make those
+differ. Base behavior chose the permission clear and the `SessionFile` versus
+`SessionID` write by the resolved target. The source harness's
+`terminalSession` now only validates the terminal session
+(`checkTerminalSession`). `Runner.adoptTerminalSession` adopts under
+`rec.Backend`. A target with no `terminalSession` (Codex) gets the generic
+adoption, which clears the native mode and sets the session id, as before.
+`TestTakeoverAdoptsUnderTheResolvedTargetBackend` pins the record shape for a
+Pi terminal under a Claude profile and a Claude terminal under a Pi profile,
+and fails against the source-keyed adoption. `go test ./internal/wsagent`,
+`go vet` on darwin and `GOOS=windows` pass.
+
 ### Phase 3: Migrate MCP detection, prompt terminology, and dashboard consumers
 
 Move reusable connection/prompt capabilities behind the registered descriptor
