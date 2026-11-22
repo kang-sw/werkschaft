@@ -103,6 +103,7 @@ type schedule struct {
 	pending         bool
 	dropped         int
 	closedLogged    bool
+	delivering      bool // a delivery of this schedule is admitted and not yet recorded
 }
 
 // Scheduler holds the daemon's schedules and one timer armed for the
@@ -126,6 +127,11 @@ type Scheduler struct {
 	closed  bool
 	dirty   map[string]int64 // last-fire deltas waiting for the writer
 	stopObs func()
+	// inflight counts deliveries admitted (past the recheck, handed to the
+	// runner, outcome not yet recorded); delivered signals when one ends.
+	// Delete waits for its schedule's, Close for all of them.
+	inflight  int
+	delivered *sync.Cond
 	// loadRemoved holds the cron entries seen leaving an inbox while New
 	// loads; nil afterwards.
 	loadRemoved map[string]bool
@@ -148,6 +154,7 @@ func New(opts Options) (*Scheduler, error) {
 		byID: map[string]*schedule{}, byOwner: map[string]map[string]*schedule{}, dirty: map[string]int64{},
 		writeKick: make(chan struct{}, 1), writeDone: make(chan struct{}), writeQuit: make(chan struct{}),
 	}
+	s.delivered = sync.NewCond(&s.mu)
 	if s.clock == nil {
 		s.clock = realClock{}
 	}
@@ -326,15 +333,22 @@ func (s *Scheduler) fire(gen uint64) {
 
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].id < jobs[j].id })
 	for _, job := range jobs {
-		// A schedule deleted, or a scheduler closed, since the jobs were built
-		// does not deliver.
+		// Admission: a schedule deleted, or a scheduler closed, since the jobs
+		// were built does not deliver; one admitted here is waited for by a
+		// Delete of its schedule and by Close, so neither returns with a
+		// prompt still on its way to the inbox.
 		s.mu.Lock()
 		if s.closed || s.byID[job.id] != job.sch {
 			s.mu.Unlock()
 			continue
 		}
+		job.sch.delivering = true
+		s.inflight++
 		s.mu.Unlock()
+
 		out, err := s.sessions.Deliver(job.owner, job.mark, job.prompt)
+
+		var note string
 		s.mu.Lock()
 		switch {
 		case err != nil || out != Delivered:
@@ -343,9 +357,9 @@ func (s *Scheduler) fire(gen uint64) {
 			if !job.sch.closedLogged {
 				job.sch.closedLogged = true
 				if err != nil {
-					fmt.Fprintf(s.log, "cron: schedule %s (%s) not delivered: %v\n", job.id, job.sch.name, err)
+					note = fmt.Sprintf("cron: schedule %s (%s) not delivered: %v\n", job.id, job.sch.name, err)
 				} else {
-					fmt.Fprintf(s.log, "cron: schedule %s (%s) not delivered: its session is closed or handed off\n", job.id, job.sch.name)
+					note = fmt.Sprintf("cron: schedule %s (%s) not delivered: its session is closed or handed off\n", job.id, job.sch.name)
 				}
 			}
 		default:
@@ -357,7 +371,16 @@ func (s *Scheduler) fire(gen uint64) {
 			default:
 			}
 		}
+		job.sch.delivering = false
+		s.inflight--
+		s.delivered.Broadcast()
 		s.mu.Unlock()
+		if note != "" {
+			// The diagnostic goes out after the lock: a slow log never holds up
+			// the list and removal callbacks, and it is written once per run of
+			// refusals (closedLogged).
+			io.WriteString(s.log, note)
+		}
 	}
 }
 
@@ -475,6 +498,13 @@ func (s *Scheduler) Add(owner, name, expr, prompt, tz string) (id, nextAt string
 
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
+	// The owner is checked again while serialized with ConversationGone: the
+	// runner forgets a conversation before it tells the scheduler, so an owner
+	// that is gone by now is refused here, and one that goes after this check
+	// is purged by the ConversationGone that waits behind this Add.
+	if !s.sessions.Exists(owner) {
+		return "", "", fmt.Errorf("%w: the session has ended", ErrNotLead)
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -536,6 +566,11 @@ func (s *Scheduler) Delete(owner, key string) error {
 	s.removeLocked(target)
 	delete(s.dirty, target.id)
 	s.armLocked()
+	// Out of the maps no new delivery is admitted; one already admitted is
+	// waited for, so a prompt is never published after Delete returned.
+	for target.delivering {
+		s.delivered.Wait()
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -573,6 +608,11 @@ func (s *Scheduler) List(owner string) []Info {
 func (s *Scheduler) ConversationGone(owner string) {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
+	s.goneLocked(owner)
+}
+
+// goneLocked deletes owner's schedules; opMu is held.
+func (s *Scheduler) goneLocked(owner string) {
 	s.mu.Lock()
 	n := len(s.byOwner[owner])
 	s.mu.Unlock()
@@ -591,9 +631,10 @@ func (s *Scheduler) ConversationGone(owner string) {
 	s.mu.Unlock()
 }
 
-// Close stops the timer, writes the waiting last-fire deltas and closes the
-// store. It is idempotent; a fire past its lock checks for Close before its
-// hand-off, but one already inside Deliver may still complete.
+// Close stops the timer, fences new deliveries, waits for the admitted ones,
+// writes the waiting last-fire deltas and closes the store. It is idempotent
+// and returns only once nothing the scheduler started is still running, so a
+// caller may release daemon ownership after it.
 func (s *Scheduler) Close() error {
 	s.opMu.Lock()
 	s.mu.Lock()
@@ -607,6 +648,9 @@ func (s *Scheduler) Close() error {
 		s.timer.Stop()
 		s.timer = nil
 	}
+	for s.inflight > 0 {
+		s.delivered.Wait()
+	}
 	s.mu.Unlock()
 	s.opMu.Unlock()
 	if s.stopObs != nil {
@@ -615,4 +659,24 @@ func (s *Scheduler) Close() error {
 	close(s.writeQuit)
 	<-s.writeDone
 	return s.store.Close()
+}
+
+// Reconcile deletes the schedules of every conversation the runner no longer
+// knows. The daemon runs it right after binding ConversationGone, so a
+// conversation forgotten between New's existence check and the binding, whose
+// notice went nowhere, is still reaped.
+func (s *Scheduler) Reconcile() {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	owners := make([]string, 0, len(s.byOwner))
+	for owner := range s.byOwner {
+		owners = append(owners, owner)
+	}
+	s.mu.Unlock()
+	for _, owner := range owners {
+		if !s.sessions.Exists(owner) {
+			s.goneLocked(owner)
+		}
+	}
 }

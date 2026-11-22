@@ -262,6 +262,10 @@ func dashboardCommand(args []string) {
 		cron.sched.Store(sched)
 		host.cron.Store(sched)
 		agents.BindCron(sched)
+		// A conversation the runner forgot between the start's existence
+		// check and the binding had its notice dropped: reap it now, after the
+		// binding, so none is missed on either side.
+		sched.Reconcile()
 	}
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.

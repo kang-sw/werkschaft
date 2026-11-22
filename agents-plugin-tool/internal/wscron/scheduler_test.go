@@ -123,6 +123,12 @@ type fakeSessions struct {
 	fail  error
 	// afterHeld runs once the held read returned (a lead draining mid-start).
 	afterHeld func(owner string)
+	// afterLead and afterExists run after IsLead / Exists decided (outside the
+	// fake's lock); gate runs at the start of Deliver, before anything is
+	// written. They are blocking seams for the interleaving tests, set before
+	// the goroutines that reach them start.
+	afterLead, afterExists func(owner string)
+	gate                   func(owner string)
 }
 
 func newSessions(t *testing.T, owners ...string) *fakeSessions {
@@ -137,20 +143,38 @@ func (s *fakeSessions) inbox(owner string) string { return wsinbox.Dir(filepath.
 
 func (s *fakeSessions) IsLead(id string) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.known[id] {
+	known, lead := s.known[id], s.lead[id]
+	s.mu.Unlock()
+	if s.afterLead != nil {
+		s.afterLead(id)
+	}
+	if !known {
 		return false, errors.New("unknown conversation")
 	}
-	return s.lead[id], nil
+	return lead, nil
 }
 
 func (s *fakeSessions) Exists(id string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.known[id]
+	known := s.known[id]
+	s.mu.Unlock()
+	if s.afterExists != nil {
+		s.afterExists(id)
+	}
+	return known
+}
+
+// forget makes the runner forget id without telling the scheduler.
+func (s *fakeSessions) forget(id string) {
+	s.mu.Lock()
+	s.known[id] = false
+	s.mu.Unlock()
 }
 
 func (s *fakeSessions) Deliver(id string, mark wsinbox.Cron, prompt string) (Delivery, error) {
+	if s.gate != nil {
+		s.gate(id)
+	}
 	s.mu.Lock()
 	shut, drain, fail := s.shut[id], s.drain[id], s.fail
 	s.mu.Unlock()
@@ -785,4 +809,166 @@ func TestSchedulerRace(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// The runner forgets an owner after Add's lead check and before Add serializes
+// with the purge: the purge finds nothing, so Add itself must refuse.
+func TestAddRefusedWhenTheOwnerIsForgottenAfterTheLeadCheck(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	var once sync.Once
+	e.sess.afterLead = func(owner string) {
+		once.Do(func() {
+			e.sess.forget(owner)
+			e.s.ConversationGone(owner) // the runner's notice: no rows yet
+		})
+	}
+	if _, _, err := e.s.Add("lead", "tick", "* * * * *", "x", ""); !errors.Is(err, ErrNotLead) {
+		t.Fatalf("add for a forgotten owner = %v", err)
+	}
+	e.storeRowsAre(0)
+	if len(e.s.List("lead")) != 0 {
+		t.Fatal("an in-memory schedule of a forgotten owner")
+	}
+}
+
+// The runner forgets the owner after Add's serialized check: the purge waits
+// behind Add and then removes the schedule Add inserted.
+func TestPurgeWaitsBehindAnAddAndRemovesItsSchedule(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	purged := make(chan struct{})
+	var once sync.Once
+	e.sess.afterExists = func(owner string) {
+		once.Do(func() {
+			e.sess.forget(owner)
+			go func() { e.s.ConversationGone(owner); close(purged) }()
+		})
+	}
+	if _, _, err := e.s.Add("lead", "tick", "* * * * *", "x", ""); err != nil {
+		t.Fatalf("add = %v", err)
+	}
+	<-purged
+	e.storeRowsAre(0)
+	if len(e.s.List("lead")) != 0 {
+		t.Fatal("the purge left the schedule")
+	}
+}
+
+// A conversation forgotten while no removal callback was bound (the daemon's
+// start gap) is reaped by Reconcile.
+func TestReconcileReapsAnOwnerForgottenBeforeTheCallbackWasBound(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead", "other")
+	e.add("lead", "a", "* * * * *", "")
+	e.add("other", "b", "* * * * *", "")
+	e.sess.forget("lead")
+	e.s.Reconcile()
+	if len(e.s.List("lead")) != 0 || len(e.s.List("other")) != 1 {
+		t.Fatalf("reconcile: %+v %+v", e.s.List("lead"), e.s.List("other"))
+	}
+	e.storeRowsAre(1)
+	e.s.Reconcile() // idempotent
+	e.storeRowsAre(1)
+}
+
+func (e *env) storeRowsAre(n int) {
+	e.t.Helper()
+	rows, err := e.s.store.Load()
+	if err != nil || len(rows) != n {
+		e.t.Fatalf("stored rows = %d (%v), want %d", len(rows), err, n)
+	}
+}
+
+// blockedFire fires the schedule's minute with Deliver held at the runner's
+// admission point; the returned release lets it go and fired closes when the
+// fire returned.
+func blockedFire(t *testing.T, e *env, advance time.Duration) (entered <-chan struct{}, release func(), fired <-chan struct{}) {
+	t.Helper()
+	in, out, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	e.sess.gate = func(string) {
+		once.Do(func() { close(in); <-out })
+	}
+	go func() { e.clock.Advance(advance); close(done) }()
+	<-in
+	return in, func() { close(out) }, done
+}
+
+// eventually polls cond until it holds; each probe yields, and the bound is
+// generous, so it never decides an outcome, it only waits for one.
+func eventually(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition never held")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A fire admitted at the runner before Delete: Delete waits for it, so the
+// prompt is in the inbox before Delete returns and nothing arrives after.
+func TestDeleteWaitsForAnAdmittedDelivery(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	e.add("lead", "tick", "* * * * *", "")
+	_, release, fired := blockedFire(t, e, 30*time.Second)
+	deleted := make(chan error, 1)
+	go func() { deleted <- e.s.Delete("lead", "tick") }()
+	eventually(t, func() bool { return len(e.s.List("lead")) == 0 }) // removed; now waiting
+	if n := len(e.sess.held("lead")); n != 0 {
+		t.Fatalf("published before the gate opened: %d", n)
+	}
+	select {
+	case err := <-deleted:
+		t.Fatalf("Delete returned (%v) while a delivery was admitted", err)
+	default:
+	}
+	release()
+	if err := <-deleted; err != nil {
+		t.Fatal(err)
+	}
+	<-fired
+	if n := len(e.sess.held("lead")); n != 1 {
+		t.Fatalf("the admitted delivery was lost: %d entries", n)
+	}
+	e.clock.Advance(5 * time.Minute)
+	if n := len(e.sess.held("lead")); n != 1 {
+		t.Fatalf("a prompt arrived after Delete returned: %d entries", n)
+	}
+	e.storeRowsAre(0)
+}
+
+// Close fences new fires, joins the admitted delivery, and persists its
+// last fire before the store closes.
+func TestCloseJoinsAnAdmittedDeliveryAndKeepsItsLastFire(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	e.add("lead", "tick", "* * * * *", "")
+	_, release, fired := blockedFire(t, e, 30*time.Second)
+	closed := make(chan error, 1)
+	go func() { closed <- e.s.Close() }()
+	eventually(t, func() bool {
+		e.s.mu.Lock()
+		defer e.s.mu.Unlock()
+		return e.s.closed
+	})
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned (%v) while a delivery was admitted", err)
+	default:
+	}
+	release()
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	<-fired
+	if _, _, err := e.s.Add("lead", "late", "* * * * *", "x", ""); !errors.Is(err, ErrClosed) {
+		t.Fatalf("add after close = %v", err)
+	}
+	e.clock.Advance(3 * time.Minute)
+	if n := len(e.sess.held("lead")); n != 1 {
+		t.Fatalf("a closed scheduler delivered: %d entries", n)
+	}
+	e.open() // a successor: the persisted last fire survived
+	if i := e.info("lead", "tick"); i.LastAt != "2026-03-10T00:01:00Z" {
+		t.Fatalf("last fire after Close = %q", i.LastAt)
+	}
 }
