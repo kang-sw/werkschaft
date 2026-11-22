@@ -155,8 +155,13 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []auditEve
 				setMeta(&res, "error", compactJSON(it.Error))
 			}
 			// The record's only slotted event, whether or not it also
-			// yields the call.
-			out = append(out, auditEvent{ev: res})
+			// yields the call; past slot 0, which an unkeyed call (an item
+			// without an id) takes in the same record.
+			slot := 0
+			if codexCallKey(it.ID) == "" {
+				slot = 1
+			}
+			out = append(out, auditEvent{slot: slot, ev: res})
 		}
 		return out
 	case it.Type == "reasoning":
@@ -216,7 +221,8 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []auditEve
 // only when the started one never mapped (wrapped out of the ring before a
 // replay, or before this capture attached), and then finds the started
 // one's call retained instead of shifting the result or recording a loss.
-// An item without an id keeps its record's identity.
+// An item without an id keeps its record's identity (slot 0; its result
+// takes slot 1).
 func codexCallKey(id string) string {
 	if id == "" {
 		return ""

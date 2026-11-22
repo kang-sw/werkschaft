@@ -967,6 +967,28 @@ func TestAuditCodexFailedCallIsNeverAppendedAfterTheCut(t *testing.T) {
 	}
 }
 
+// TestAuditCodexItemWithoutAnIDKeepsCallAndResultApart pins the fallback
+// for a tool item with no id: its call cannot be keyed by item, so it keeps
+// its record's identity, and the completion that yields both the call and
+// the result gives them distinct ordinals; both are stored.
+func TestAuditCodexItemWithoutAnIDKeepsCallAndResultApart(t *testing.T) {
+	sink := newBoundarySink()
+	r := newAuditRigWith(t, sink, "h1", newCodexMapper("th1"), codexProtocol{})
+	r.kept(`{"method":"turn/started","params":{"threadId":"th1","turn":{"id":"tu1","status":"inProgress","items":[]}}}`)
+	seq := r.kept(`{"method":"item/completed","params":{"threadId":"th1","turnId":"tu1","item":{"type":"commandExecution","id":"","command":"ls","cwd":"/","status":"completed","aggregatedOutput":"ok","exitCode":0}}}`)
+	r.end()
+	var ids []string
+	for _, ev := range sink.events() {
+		if ev.Kind == wsaudit.KindToolCall || ev.Kind == wsaudit.KindToolResult {
+			ids = append(ids, string(ev.Kind)+" "+ev.ID)
+		}
+	}
+	want := []string{fmt.Sprintf("tool_call h1/s%d#0", seq), fmt.Sprintf("tool_result h1/s%d#1", seq)}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("stored = %q, want %q", ids, want)
+	}
+}
+
 // TestAuditAttachIsNeverRefusedByAFullQueue pins that the attach marker of
 // a new holder connection survives a full capture queue: the lines and tee
 // lines filling it are refused and recorded as loss, but the attach is
