@@ -24,7 +24,7 @@ func TestClaudeRateLimitObservationTimeSurvivesOtherStatuses(t *testing.T) {
 
 func TestClaudeRateLimitHolderReplayPreservesObservation(t *testing.T) {
 	spec := leadSpec()
-	spec.restoredClaudeUsage = &wslive.Usage{
+	spec.restoredUsage = &wslive.Usage{
 		LimitsAsOf: 1_000,
 		Limits:     []wslive.UsageLimit{{Kind: wslive.LimitSevenDay, Percent: 69, ResetsAt: 2_000_000_000_000}},
 	}

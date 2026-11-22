@@ -464,10 +464,7 @@ func TestHostedJobStoppedDuringItsHolderLaunchStaysUntilTheHolderGoes(t *testing
 // A late holder whose stop failed is retried with backoff until it goes,
 // which lifts its job's pin with no further stop asked for.
 func TestHostedRetiredHolderStopIsRetriedUntilItGoes(t *testing.T) {
-	prevMin, prevMax := retireRetryMin, retireRetryMax
-	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
-	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
-	fx := newHostedFixture(t, time.Second)
+	fx := newFastRetireFixture(t, time.Second)
 	t.Cleanup(func() { fx.h.Close() })
 	entered, release := make(chan struct{}), make(chan struct{})
 	fx.holders.mu.Lock()
@@ -682,10 +679,7 @@ func TestHostedJobStoppedBeforeItsHolderLaunchIsNotPrunedMeanwhile(t *testing.T)
 // is stopped, its job pinned (not pruned, its id not drawn) until that stop
 // is confirmed.
 func TestHostedHolderLaunchThatFailsToAttachStopsTheHolder(t *testing.T) {
-	prevMin, prevMax := retireRetryMin, retireRetryMax
-	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
-	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
-	fx := newHostedFixture(t, time.Second)
+	fx := newFastRetireFixture(t, time.Second)
 	t.Cleanup(func() { fx.h.Close() })
 	fx.holders.mu.Lock()
 	fx.holders.attachErr = errors.New("attach refused")
@@ -734,13 +728,10 @@ func TestHostedHolderLaunchThatFailsToAttachStopsTheHolder(t *testing.T) {
 // from being drawn, one of an ended job keeps that job from being pruned.
 // Once the stops go through, the reservations lift.
 func TestHostedStartReservesTheIDsOfHoldersItStops(t *testing.T) {
-	prevMin, prevMax := retireRetryMin, retireRetryMax
-	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
-	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
 	prevKey := newExecKey
 	t.Cleanup(func() { newExecKey = prevKey })
 
-	fx := newHostedFixture(t, 10*time.Millisecond)
+	fx := newFastRetireFixture(t, 10*time.Millisecond)
 	ended, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
 	_ = fx.h.Close()
 	code := 0

@@ -154,6 +154,12 @@ func TestConversationPresentationPeerNoteIsDisplayOnly(t *testing.T) {
 		{note + "\npreview <b>not HTML</b>", true, true},
 		{strings.Replace(note, "ws note", "wsflow note", 1) + "\npreview", true, true},
 		{note, true, true},
+		// The stored labels are the historical three; a label no earlier
+		// version wrote, or a label-less note, is read as written.
+		{strings.Replace(note, "pi,", "claude,", 1) + "\npreview", true, true},
+		{strings.Replace(note, "pi,", "codex,", 1) + "\npreview", true, true},
+		{strings.Replace(note, " (pi, not a worker)", " (not a worker)", 1) + "\npreview", true, true},
+		{strings.Replace(note, "pi,", "agy,", 1) + "\npreview", true, false},
 		{"prefix\n" + note, true, false},
 		{" " + note, true, false},
 		{strings.Replace(note, "not a worker", "worker", 1), true, false},

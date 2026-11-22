@@ -38,6 +38,14 @@ func (b CodexBackend) registration() (string, BackendRegistration) {
 		WorkerProfile:     AgentWorkerProfile(BackendCodex),
 		WorkerHTTPMCP:     true,
 		WorkerAutoApprove: true,
+		Permission:        codexPermissionPolicy(),
+		Connection:        codexConnectionPolicy(),
+		Dashboard:         codexDashboardTraits(),
+		Lifecycle: LifecyclePolicy{
+			ComposedLeadInstructions: true,
+			LeadHTTPMCP:              true,
+			ExecReadTools:            true,
+		},
 		// No OneShot, probed 2026-11-22 with codex-cli 0.170.0: `codex exec
 		// --ignore-user-config --ephemeral -s read-only -c
 		// features.shell_tool=false -c web_search=disabled` still offered
@@ -363,7 +371,7 @@ func codexStartMode(spec StartSpec) (sandbox, policy string, err error) {
 		return codexWorkerMode(spec.PermissionLevel)
 	}
 	if spec.PermissionLevel != "" {
-		return codexMode(nativePermissionMode(BackendCodex, spec.PermissionLevel))
+		return codexMode(codexPermissionPolicy().nativeMode(spec.PermissionLevel))
 	}
 	if spec.Lead.PermissionMode == "" {
 		return "", "", nil

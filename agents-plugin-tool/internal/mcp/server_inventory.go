@@ -27,7 +27,7 @@ import (
 // preserved no-op, since the pre-rename tickets.sage_record was reachable by
 // a delegate-scoped key.
 func isLeadOnlyTool(name string) bool {
-	return sessionHireTool(name) || isPiTool(name) || isAgentTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
+	return sessionHireTool(name) || userCommandTool(name) || isPiTool(name) || isAgentTool(name) || name == bootstrapToolName || name == "workflow_manual" || name == "workflow_state" || name == "tickets.sage_stamp" || name == "tickets.index_init" || name == "git.merge" || name == "worktree.acquire" || name == "worktree.release" || name == "worktree.remove" || name == "worktree.list" || strings.HasPrefix(name, "lead.") || workflowPreferenceWriterTool(name)
 }
 
 func workflowPreferenceWriterTool(name string) bool {
@@ -85,6 +85,11 @@ func (s *Server) filteredTools() []map[string]any {
 			// are deleted.
 			continue
 		}
+		if userCommandTool(name) && !s.userCommandsListed() {
+			// Advertised only to an authenticated open hosted lead: its
+			// trusted binding, not a supplied key, names the session.
+			continue
+		}
 		if isAgentTool(name) {
 			// Listed where a runner answers them, the daemon's or the token
 			// route's; the agentless product mode keeps them, since
@@ -105,6 +110,8 @@ func (s *Server) filteredTools() []map[string]any {
 						meta[key] = value
 					}
 				}
+				// Retained name check: the _meta key is Antigravity's own, read by its client
+				// (TestHostedAgyToolsAlwaysLoad).
 				meta["antigravity/alwaysLoad"] = true
 				definition["_meta"] = meta
 			}

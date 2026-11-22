@@ -524,7 +524,7 @@ func (s *Server) handleDashboardIntake(id json.RawMessage, args map[string]any) 
 	}
 	ordered := s.intake != nil && s.intake.enabled()
 	var release func()
-	if optional && (!capable || adapter != "pi") {
+	if optional && (!capable || adapter != s.currentHarness()) {
 		return toolTextResponse(id, "", fmt.Errorf("reasoning summary not negotiated by this receiver"))
 	}
 	if optional || (ordered && capable) {

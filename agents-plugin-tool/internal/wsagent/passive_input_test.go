@@ -3,6 +3,7 @@ package wsagent
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -137,6 +138,72 @@ func TestComposerTargetNeedsAnOpenHostedLead(t *testing.T) {
 	}
 	if _, err := h.runner.ComposerOpen("missing"); err == nil {
 		t.Fatal("an unknown conversation was open for a command")
+	}
+}
+
+// TestComposerRootIsTheTargetsWorktree: the user commands' scope is the same
+// owner, generation and worktree a command launch targets, with the same
+// refusals, and it builds no environment.
+func TestComposerRootIsTheTargetsWorktree(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id := h.lead(BackendClaude, LeadOptions{}).ID
+	target, err := h.runner.ComposerTarget(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, root, err := h.runner.ComposerRoot(id)
+	if err != nil || owner != target.Owner || root != target.Root {
+		t.Fatalf("ComposerRoot = %+v %q, %v; want %+v %q", owner, root, err, target.Owner, target.Root)
+	}
+	if _, _, err := h.runner.ComposerRoot("missing"); err == nil {
+		t.Fatal("an unknown conversation had a worktree")
+	}
+}
+
+// rootCountingKeys is a key store that answers a (different) bound root and
+// counts every ask: the production store reads a record file for it.
+type rootCountingKeys struct {
+	*fakeKeys
+	mu    sync.Mutex
+	roots int
+}
+
+func (k *rootCountingKeys) Root(string) (string, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.roots++
+	return "/elsewhere", true
+}
+
+func (k *rootCountingKeys) asked() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.roots
+}
+
+// TestComposerRootReadsRunnerMemoryNotTheKeyRecord: the worktree a user command
+// is scoped to, and a launch runs in, is the runner record's root; the key
+// store (a record file in production) is never asked.
+func TestComposerRootReadsRunnerMemoryNotTheKeyRecord(t *testing.T) {
+	h := newLeadHarness(t)
+	keys := &rootCountingKeys{fakeKeys: &fakeKeys{}}
+	h.opts.Keys = keys
+	h.start()
+	id := h.lead(BackendClaude, LeadOptions{}).ID
+	base := keys.asked()
+	for range 20 {
+		if _, root, err := h.runner.ComposerRoot(id); err != nil || root == "" || root == "/elsewhere" {
+			t.Fatalf("ComposerRoot = %q, %v", root, err)
+		}
+		if _, err := h.runner.ComposerTarget(id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.runner.ComposerOpen(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := keys.asked() - base; got != 0 {
+		t.Fatalf("the key store was asked %d times", got)
 	}
 }
 

@@ -332,6 +332,10 @@ type conv struct {
 	// at conversation creation/restoration and refreshed by config.tune,
 	// never by the send path.
 	ambient string
+	// ambientLang is the workflow.lang value ambient was rendered from,
+	// published with it for readers off the loop; nil before the first
+	// resolution.
+	ambientLang atomic.Pointer[string]
 	// expiring is set while a child-agent-waiting expiry is dispatched
 	// (expireIfDue) and not yet decided; loop-owned.
 	expiring bool
@@ -975,7 +979,7 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		st.Status, st.ClosedAt = StatusClosed, c.rec.ClosedAt
 		if c.rec.ClosedAt == "" && c.rec.handedOff() {
 			st.Status, st.HandedOffAt = StatusHandedOff, c.rec.HandedOffAt
-			st.ResumeCommand = resumeCommand(c.rec, c.dir)
+			st.ResumeCommand = c.r.resumeCommand(c.rec, c.dir)
 		}
 	}
 	st.Process = c.proc != nil
@@ -1031,7 +1035,7 @@ func (c *conv) stateWithKeyCheck(checkKey bool) State {
 		st.PermissionLevel = c.workerPermissionLevel
 		st.PermissionSource = c.workerPermissionSource
 		if st.PermissionLevel != "" {
-			st.PermissionEnforcement = permissionQuality(c.rec.Backend, st.PermissionLevel, "")
+			st.PermissionEnforcement = c.r.permissionPolicy(c.rec.Backend).quality(st.PermissionLevel, "")
 		}
 	}
 	st.IsChild = c.r.isChildRecord(c.rec)
@@ -1820,7 +1824,7 @@ func (c *conv) kickInput() {
 	// prompt's delivery.
 	sentAt := c.r.opts.Now()
 	startedAt := sentAt.UnixMilli()
-	heldAgy := c.record().heldAgyWorker()
+	heldAgy := c.r.heldInternalWorker(c.record())
 	if len(recs) > 0 {
 		// Keep drained input recoverable until the send succeeds.
 		c.update(func(rec *Record) { rec.Queued = queue })

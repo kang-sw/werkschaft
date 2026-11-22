@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -51,6 +52,7 @@ func main() {
 	must(os.WriteFile(wslive.SnapshotPath(wsdashboard.SessionDir(dir, "electronfixture")), raw, 0600))
 	d, err := wsdashboard.StartDaemon(wsdashboard.DaemonOptions{
 		Dir: dir, Port: 0, Version: "electron-fixture", Sessions: source{}, Log: os.Stderr,
+		Harnesses: wsagent.BuiltinDashboardHarnesses(),
 	})
 	must(err)
 	d.Index().Refresh()

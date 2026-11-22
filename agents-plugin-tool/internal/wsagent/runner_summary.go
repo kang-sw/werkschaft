@@ -125,14 +125,14 @@ func (r *Runner) lockSummaryOwner(replyID string, want *conv) (unlock func(), ok
 }
 
 func (c *conv) summaryStart(ev Event) {
-	if !c.rec.Lead || c.rec.Backend != BackendPi || c.live.summarySource != "" || c.summaryGap || ev.Seq == 0 || c.rec.HolderID == "" {
+	if !c.rec.Lead || !c.r.lifecycle(c.rec.Backend).TerminalSummaries || c.live.summarySource != "" || c.summaryGap || ev.Seq == 0 || c.rec.HolderID == "" {
 		return
 	}
 	c.live.summarySource = fmt.Sprintf("%s/%d", c.rec.HolderID, ev.Seq)
 }
 
 func (c *conv) summaryProjection(ev Event, quiet bool) {
-	if !c.rec.Lead || c.rec.Backend != BackendPi || !c.turn || c.summaryGap || c.live.summarySource == "" || ev.Seq == 0 || ev.ReasoningSummary == nil {
+	if !c.rec.Lead || !c.r.lifecycle(c.rec.Backend).TerminalSummaries || !c.turn || c.summaryGap || c.live.summarySource == "" || ev.Seq == 0 || ev.ReasoningSummary == nil {
 		return
 	}
 	// No reset/start/end, accounting, or other authority is copied from UI.

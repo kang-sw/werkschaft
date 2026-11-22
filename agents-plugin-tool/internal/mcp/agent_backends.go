@@ -10,6 +10,26 @@ type AgentBackendRegistry interface {
 	BackendRegistrations() map[string]wsagent.BackendRegistration
 }
 
+// backendPolicyLookup is the optional per-name read of a registry source: the
+// daemon runner answers it without cloning every registration, which the
+// per-call policy reads (the fs.* gate, tools/list) would otherwise pay.
+type backendPolicyLookup interface {
+	BackendLifecycle(name string) (wsagent.LifecyclePolicy, bool)
+	BackendConnection(name string) (wsagent.ConnectionPolicy, bool)
+}
+
+// policyLookup is the connection's per-name registry reader, nil when it has
+// no registry or the registry offers only the full copy.
+func (s *Server) policyLookup() backendPolicyLookup {
+	// The same source precedence as agentBackends: the dedicated source wins.
+	if s.agentBackendSource != nil {
+		lookup, _ := s.agentBackendSource.(backendPolicyLookup)
+		return lookup
+	}
+	lookup, _ := s.pi.agents.(backendPolicyLookup)
+	return lookup
+}
+
 // ambientRefresher is an optional in-memory capability of the daemon runner.
 type ambientRefresher interface {
 	RefreshAmbient()

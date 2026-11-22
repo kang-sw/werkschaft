@@ -40,6 +40,8 @@ func mailboxCommand(args []string) {
 	switch args[0] {
 	case "wait":
 		mailboxWait(args[1:])
+	// Retained name check: the subcommand Codex's stored hook configuration
+	// invokes (TestMailboxCodexStopHookBlocksWhenNamedInboxHasUnreadMail).
 	case "codex-stop-hook":
 		mailboxCodexStopHook(args[1:])
 	default:
@@ -49,6 +51,7 @@ func mailboxCommand(args []string) {
 }
 
 func mailboxUsage() {
+	// Retained name check: the usage line names the Codex hook subcommand.
 	fmt.Fprintln(os.Stderr, "usage: ws-mcp mailbox <wait|codex-stop-hook>")
 }
 
@@ -417,6 +420,8 @@ func mailboxCodexStopHook(args []string) {
 // runCodexStopHook is shared by the direct CLI and daemon hosting.
 // Input and stores belong to this invocation, never the daemon process.
 func runCodexStopHook(args []string, stdin io.Reader, stdout, stderr io.Writer, cwd string, getenv func(string) string, paths wsmailbox.Paths) int {
+	// Retained name check: the subcommand name Codex's stored hook configuration
+	// invokes (TestMailboxCodexStopHookBlocksWhenNamedInboxHasUnreadMail).
 	fs := flag.NewFlagSet("mailbox codex-stop-hook", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	root := fs.String("root", ".", "caller's own worktree/clone root; only needed to resolve a worktree/clone-scope slug. Falls back to the Stop payload's own cwd, then WS_MCP_PROJECT_ROOT, when left at its default")

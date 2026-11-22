@@ -55,7 +55,9 @@ func nextRegion(t *testing.T, events <-chan sseEvent, timeout time.Duration) (re
 		}
 		// Every stream's first event names the assets identity, which
 		// assets_id_test.go pins; region readers skip it.
-		if ev.name == "assets" {
+		// The exec job revision (execjobs) is no region either: exec_hud_test.go
+		// pins it.
+		if ev.name == "assets" || ev.name == "execjobs" {
 			return nextRegion(t, events, timeout)
 		}
 		if ev.name != "region" {
@@ -313,11 +315,12 @@ func TestRenderedCompaction(t *testing.T) {
 		t.Errorf("tree's lead row lacks the compacting phase: %s", tree)
 	}
 	entries := string(set[regionEntries].HTML)
+	atAttr := ` data-at="` + now.UTC().Format(time.RFC3339Nano) + `"`
 	for _, want := range []string{
-		`<div class="sysline compaction" data-entry="20261107T000000.000000001Z-a1.json"><span class="mk">✓</span>context compacted (auto)`,
-		`<div class="sysline compaction" data-entry="20261107T000000.000000002Z-a2.json"><span class="mk">✓</span>context compacted (manual)`,
-		`<div class="sysline compaction fail" data-entry="20261107T000000.000000003Z-a3.json"><span class="mk">✗</span><span class="nt">context compaction failed</span><time`,
-		`<div class="sysline compaction fail" data-entry="20261107T000000.000000004Z-a4.json"><span class="mk">✗</span><span class="nt">context compaction failed: Conversation too long</span><time`,
+		`<div class="sysline compaction" data-entry="20261107T000000.000000001Z-a1.json"` + atAttr + `><span class="mk">✓</span>context compacted (auto)`,
+		`<div class="sysline compaction" data-entry="20261107T000000.000000002Z-a2.json"` + atAttr + `><span class="mk">✓</span>context compacted (manual)`,
+		`<div class="sysline compaction fail" data-entry="20261107T000000.000000003Z-a3.json"` + atAttr + `><span class="mk">✗</span><span class="nt">context compaction failed</span><time`,
+		`<div class="sysline compaction fail" data-entry="20261107T000000.000000004Z-a4.json"` + atAttr + `><span class="mk">✗</span><span class="nt">context compaction failed: Conversation too long</span><time`,
 	} {
 		if !strings.Contains(entries, want) {
 			t.Errorf("entries region lacks %q: %s", want, entries)

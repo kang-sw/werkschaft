@@ -78,8 +78,8 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				t.Fatalf("rejected: %v", declared.rejected)
 			}
 			own := loadDeclaredConfig(pkg.own)
-			if len(declared.keys) != len(own.keys)+16 {
-				t.Fatalf("%d keys loaded, want the package's %d plus 16 dashboard keys", len(declared.keys), len(own.keys))
+			if len(declared.keys) != len(own.keys)+22 {
+				t.Fatalf("%d keys loaded, want the package's %d plus 22 dashboard keys", len(declared.keys), len(own.keys))
 			}
 			for _, tc := range []struct {
 				key, kind, pattern string
@@ -95,6 +95,9 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				{"dashboard.companion_preset", "string", "^[a-z0-9][a-z0-9_-]{0,63}$", "werkschaft-d1", nil, "preset_1", []string{"-bad"}},
 				{"dashboard.companion_agent_cooldown_seconds", "integer", "", int64(30), nil, "3600", []string{"9", "3601", "soon"}},
 				{"dashboard.companion_agent_hourly_cap", "integer", "", int64(20), nil, "120", []string{"0", "121", "many"}},
+				// Entries are judged one by one in the modal, so the key itself
+				// accepts any text; an invalid entry never fails the whole key.
+				{"dashboard.companion_sources", "string", "", "", nil, "https://example.invalid/packs.git http://bad", nil},
 			} {
 				key, ok := declared.lookup(tc.key)
 				if !ok || key.Type != tc.kind || key.DefaultValue != tc.def || key.DefaultScope != wsconfig.ScopeGlobal || key.Pattern != tc.pattern || !reflect.DeepEqual(key.Enum, tc.enum) {

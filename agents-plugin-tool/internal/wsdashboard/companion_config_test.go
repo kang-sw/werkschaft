@@ -88,7 +88,11 @@ func TestCompanionModalRowsAndShellStrings(t *testing.T) {
 	for _, row := range rows {
 		keys = append(keys, row.Key)
 	}
-	want := []string{CompanionPackKey, CompanionPresetKey, CompanionAgentCooldownKey, CompanionAgentHourlyCapKey}
+	want := []string{
+		CompanionPackKey, CompanionPresetKey, CompanionOutfitKey, CompanionHairKey, CompanionEyesKey,
+		CompanionAttachmentsKey, CompanionPaletteKey, CompanionAgentCooldownKey, CompanionAgentHourlyCapKey,
+		CompanionSourcesKey,
+	}
 	if !slices.Equal(keys, want) {
 		t.Fatalf("modal rows = %v, want %v", keys, want)
 	}
@@ -106,8 +110,10 @@ func TestCompanionModalRowsAndShellStrings(t *testing.T) {
 				t.Errorf("%s: the shell keeps settings-page string %s", lang.Code, dropped)
 			}
 		}
-		if !strings.Contains(script, strconv.Quote("js.companion.settings")) {
-			t.Errorf("%s: the shell lacks the companion modal title", lang.Code)
+		for _, id := range []string{"js.companion.settings", "js.companion.follow_preset", "js.companion.attachment_none", "js.companion.reset_colors"} {
+			if !strings.Contains(script, strconv.Quote(id)) {
+				t.Errorf("%s: the shell lacks the companion modal string %s", lang.Code, id)
+			}
 		}
 	}
 	if _, err := companionModalRows([]byte("{")); err == nil {

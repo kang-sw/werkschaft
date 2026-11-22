@@ -115,6 +115,10 @@ type DaemonOptions struct {
 	// before its session is checked, since the nudge's sender may have
 	// written mail any waiter watches. Nil wakes none.
 	MailWake MailWaker
+	// Harnesses declares how each registered harness differs on dashboard
+	// surfaces (harness_traits.go), by harness name. Nil registers none, so
+	// no harness has special behavior and the HUD names none.
+	Harnesses HarnessTraitSet
 	// AgyCommand resolves the agy CLI program and leading arguments for
 	// user-triggered /usage probes without spawning. Nil skips agy probes.
 	AgyCommand func() (string, []string, error)
@@ -222,6 +226,10 @@ type NudgeBody struct {
 // endpoint file.
 type Daemon struct {
 	companionPacks CompanionPackStore
+	// companionFetch downloads pack sources, only on a user's click.
+	companionFetch companionFetcher
+	// companionSources holds the last fetched source zip for its install.
+	companionSources companionSourceCache
 
 	// auditRead, when set, replaces the audit store for the audit query
 	// routes (a test's fixture store).
@@ -245,6 +253,8 @@ type Daemon struct {
 	agents   AgentHost
 	// composer is the chat composer's `!` command state (composer_exec.go).
 	composer composerExec
+	// userCmds is the user commands' service (composer_usercmd.go), nil until bound.
+	userCmds atomic.Pointer[UserCommandService]
 	// credentials is DaemonOptions.Credentials (or a test's
 	// credentialSource), nil without one.
 	credentials credentialStore
@@ -271,8 +281,13 @@ type Daemon struct {
 	// the data revision the cached page reads are keyed by (trackerAnswers,
 	// tracker_answers.go): TrackerChanged bumps it too, a change the daemon
 	// applies to those answers itself (the seen marks) does not.
-	tracker        TrackerHost
-	trackerRev     atomic.Int64
+	tracker    TrackerHost
+	trackerRev atomic.Int64
+	// execHUD is the job HUD's service (SetExecJobs); execRev the revision of
+	// the hosted exec job set the streams send as the opaque execjobs event
+	// (ExecJobsChanged bumps it).
+	execHUD        atomic.Pointer[ExecJobsService]
+	execRev        atomic.Int64
 	trackerData    atomic.Int64
 	trackerAnswers trackerAnswers
 	// entries caches rendered conversation entries per session.
@@ -305,6 +320,8 @@ type Daemon struct {
 	// write (a test seam; nil in production).
 	beforeConfigWrite func(key string)
 	planUsage         *planUsageStore // daemon-private account usage, never credentials
+	// harnesses is DaemonOptions.Harnesses.
+	harnesses HarnessTraitSet
 	// pprof serves the pprof routes (pprofHandler).
 	pprof bool
 	// buildTime is the build time /health reports; zero is unknown.

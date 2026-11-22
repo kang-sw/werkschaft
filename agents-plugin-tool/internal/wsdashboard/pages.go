@@ -47,6 +47,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-composer-selections.js",
 	"dashboard-composer-delivery.js",
 	"dashboard-composer-exec.js",
+	"dashboard-composer-ucmd.js",
 	"dashboard-composer-restore.js",
 	"dashboard-composer-status.js",
 	"dashboard-composer-keyboard.js",
@@ -68,6 +69,9 @@ var dashboardScriptFiles = []string{
 	"dashboard-tier-picker.js",
 	"dashboard-session-view.js",
 	"dashboard-companion-relay.js",
+	"dashboard-audit-window.js",
+	"dashboard-audit.js",
+	"dashboard-audit-rows.js",
 	"dashboard-lifecycle.js",
 }
 
@@ -75,9 +79,11 @@ var companionScriptFiles = []string{
 	"dashboard-companion-builtins.js",
 	"dashboard-companion-packs.js",
 	"dashboard-companion-focus.js",
+	"dashboard-companion-deform.js",
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
+	"dashboard-companion-sources.js",
 	"dashboard-companion-settings.js",
 	"dashboard-companion-stage.js",
 }
@@ -92,6 +98,8 @@ var dashboardStyleFiles = []string{
 	"dashboard-menus.css",
 	"dashboard-rail.css",
 	"dashboard-shell.css",
+	"dashboard-audit.css",
+	"dashboard-audit-rows.css",
 }
 
 var trackerScriptFiles = []string{

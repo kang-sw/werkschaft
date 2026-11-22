@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: b71e948adb14f634
 sage-review-completeness-reviewed: b71e948adb14f634
+completed: 2026-11-23
 ---
 
 # Chat composer `!` commands and command slots
@@ -798,3 +799,257 @@ Verification boundary:
   and `en`.
 - Performance: slot registration and list/page-load file-operation counts
   against the Windows baseline.
+
+### Result (bc6fa0448) - 2026-11-23
+
+Landed (develop 1679c7691..bc6fa0448, one commit): the `wsusercmd` registry
+and its own `user-commands.db` (held connection, WAL, one commit per changed
+row, none for an unchanged definition, memory read model; scope is the lead's
+reply ID plus its bound worktree; 32 per scope, label 64, description 256,
+line 4 KiB; revisions clock-seeded and never reused across withdrawal and
+restart; startup reconcile drops forgotten conversations); the dashboard
+routes behind `composerGate` (`GET /s/<id>/user-commands`, `POST .../<slot>/run`
+and `.../remove`, strict bodies that never carry command text); the run path
+through the Phase 1 composer admission (`composerAdmitSlot`, known-card and
+retry answers first, 409 `stale`/`withdrawn` with the fresh list, a card that
+shows the slot label); the opaque `usercmd` stream event (local viewers with
+a reply ID, on connect and on change); the `session.register_user_command`
+and `session.unregister_user_command` tools (trusted binding owner only,
+listed only to an open hosted lead, lead-only for keys, in `LeadToolNames`,
+the three `runtime.json` files and the Pi owner-lead set); the slot strip UI
+and eleven i18n tables; the `ws-mcp.md` store bullet.
+
+Verification (narrow `-run`, no whole-package runs of `internal/mcp` or
+`wsdashboard` as a filter-less sweep):
+- `wsusercmd` (all, including concurrency and a newer-schema refusal),
+  `wsdashboard` user-command route/authority/stale/withdrawn/idempotency/
+  stream tests, `mcp` user-command tool tests (listing, lead-only,
+  forged owner argument, limits, shipped-text), `cmd/ws-mcp` binding tests
+  (scope, 10 s root cache, restart and older-daemon reload), `wsagent`
+  `ComposerRoot`: pass. The wsdashboard package also passed in full once.
+- `TestUserCommandBrowser` (Playwright; captures left untracked) passes in
+  `ko` and `en`. i18n key tests and the asset-source list test pass.
+- Pi: bridge and child-tool-inheritance tests pass; two other Pi tests fail
+  identically on the base commit (pre-existing).
+- `GOOS=windows go vet` on wsusercmd, wsdashboard, wsagent, mcp, cmd/ws-mcp:
+  clean. The Windows host run and the Git Bash run are not done here.
+- T0 evidence: no change under `internal/execjob`; `exec_jobs` and its
+  `user_version` are untouched; `TestUserCommandsReloadAfterARestartAndAnOldDaemon`
+  opens the older daemon's stores in the same directory, leaves the slot
+  database byte-identical, and a reopen restores every command; an older
+  daemon refuses the unknown tool name.
+- File operations (`TestUserCommandInteractivePathsTouchNoStore`): list,
+  page load, stream connect and click acknowledgement touch the store zero
+  times; an unchanged registration commits nothing; a registration, a
+  replacement and a removal each make one commit. macOS probe
+  (`WS_COMPOSER_PERF=1`): register p50 28 µs, unchanged 0.5 µs, replace 21 µs,
+  remove 69 µs, list read 96 µs, session page with and without the binding
+  3.2 ms / 3.0 ms, click acknowledgement 94 µs. The worktree root is read from
+  the key record, so page reads reuse it for 10 s per open generation; a click,
+  a removal and the tools read it fresh. The Windows baseline comparison is
+  left to the lead.
+
+Decisions: the browser sends the slot ID and displayed revision, never text,
+and the daemon runs the stored line only while its revision matches; the
+owner is the trusted conversation binding, never a key or an argument; the
+stream event is opaque and the page refetches (no polling); a slot click
+reuses the Phase 1 submission, token and card machinery rather than a second
+exec path.
+
+Review (lite, one pass): no Critical or Important. Four Minor left unfixed:
+the list can show the previous worktree's commands for up to 10 s after a
+rebind (a click re-reads fresh, so nothing wrong can run); removal is
+check-then-act and skips the revision check when none is sent (the page
+always sends it); every local stream gets a `usercmd` event on connect;
+`Reconcile` does not notify (it only runs at startup).
+
+Not tested here: LAN stream gating of the event beyond the unit gate, a run
+against a real older binary, the Windows host and Git Bash.
+
+#### Edition (33319f024) - 2026-11-23
+
+Round 1 of the pre-merge review (five Important, four Minor), fixed in one
+commit on top of bc6fa0448.
+
+- Revision reuse after a restart: `user-commands.db` now keeps the highest
+  revision ever issued (a `meta` row, schema version 2), raised in the same
+  transaction as every set and every removal and never lowered; the counter
+  seeds from that high-water, the surviving rows and the clock, so a clock set
+  back or frozen cannot reissue one. The test injects the clock (same instant,
+  set back, forward) instead of relying on millisecond resolution.
+- Stale list: `Registry.Snapshot` returns the commands and the stream revision
+  from one read under one lock; a test interleaves writes with snapshots and
+  asserts one revision never carries two lists.
+- Browser removal: the route refuses a missing, zero or negative revision
+  (400), and `RemoveIf` compares the revision under the registry writer lock in
+  the same step as the removal (`stale` or `withdrawn` answers carry the fresh
+  list). The agent's unregister tool keeps its by-id removal.
+- Production file I/O: `ComposerRoot` and `ComposerTarget` take the lead's
+  worktree from the runner record in memory and no longer ask the key store,
+  so Run, a cold list and every refetch touch no key record; the 10 s root
+  cache is gone. A test over the real runner and the production key store
+  deletes the lead's key record from disk and shows list, revision, lookup and
+  conditional removal still answer; a wsagent test counts zero key-store calls.
+- One ordering point: a click's known-card, fence and token answers, its
+  revision check (`resolve`) and its claim run under the composer's admission
+  lock. The registry read inside `resolve` is the ordering point against a
+  withdrawal: one committed before it refuses the click and claims nothing, one
+  after it follows the click, which runs the line the user saw (the admission
+  lock does not exclude registry writers; it makes a second request with the
+  same submission id wait and get the first one's card). A test races five
+  concurrent requests with one submission id against a withdrawal for 40 rounds
+  and asserts a single outcome.
+- Minor: the worktree a line was read for travels with the admission to the
+  launch, which refuses another (tested at the launch binding), and the stream
+  revision carries the worktree so the strip refetches when it changes; the
+  busy table is a null-prototype object (a command named `constructor` is
+  runnable; browser test); a double click is one run (clicks after the first of
+  a count are ignored, and the slot stays guarded for 600 ms after its answer;
+  browser tests with a real `dblclick` and with two scripted rapid clicks, the
+  latter verified to fail without the guard); a hosted lead that connects while
+  the daemon is starting waits (bounded, 5 s) for its user commands to settle,
+  chosen over a tool-list refresh because no list-changed notification exists
+  (round 2 moved this wait out of the connection's acceptance; see below).
+
+File operations per interactive path (store operations, composer file
+operations, key-record reads), measured by the tests above: list, page load,
+stream connect, click acknowledgement and a short click's whole run make 0, 0,
+0. A registration, a replacement and a removal make one store commit each, an
+unchanged registration none. The localhost guard's cookie revalidation (one
+stat of the secret file per localhost request) is the pre-existing baseline and
+is not counted against this feature.
+
+Verification: `wsusercmd` and the `wsdashboard` filter
+`TestComposer|UserCommand|Usercmd|TestI18N|TestAssetSource|TestCloseRequestComposerLifecycle|Steer|Inbox`
+with `-race` (Playwright included), `mcp` `UserCommand|Inventory|Shipped|Schema`,
+`cmd/ws-mcp` `UserCommand|Usercmd|Composer|Exec|Dashboard`, `wsagent`
+`ComposerRoot|Exec|Passive`: pass; `GOOS=windows go vet` on the five touched
+packages: clean. The Windows host run is the lead's.
+
+#### Edition (fdae6fa40) - 2026-11-23
+
+Round 2 of the pre-merge review (two Important, four Minor), fixed in one
+commit on top of the round-1 Edition.
+
+- Startup wait: it no longer runs in `Accept`, where the HTTP route builds a
+  session under the daemon-wide session lock. It sits in the connection's own
+  user command lookup (`userCommandsFor`): only the first tool list of a hosted
+  lead, while the daemon's user commands are unsettled, waits (bounded, 5 s per
+  connection), and only when the runner reports the conversation as an open
+  lead (a memory read). A worker, a conversation that is not an open lead, a
+  connection with no conversation, another token's establishment and a request
+  on an already-open session never wait. A test over the real HTTP route holds
+  readiness open and asserts that a worker's establishment and tool list, a
+  second lead token's establishment, a request on the open worker session and
+  the first lead's own establishment all finish while the first lead's tool list
+  waits, that the list then names the tools once readiness closes, and that the
+  worker never lists them; it fails with the wait put back in `Accept`.
+- Out-of-order browser answers: the strip applies a list only if it is not
+  older than the one on screen. The revision is `epoch.N.rootTag`; within one
+  epoch and root tag an `N` below the shown one is dropped, and a different
+  epoch (daemon restart), a different root tag (the lead's worktree changed) or
+  an unparseable revision always wins, as does a stream wake. A browser test
+  holds a removal's answer after the daemon processed it, registers another
+  command so the stream-triggered read shows the newer list, then releases the
+  older answer and asserts the newer list stays; it fails with the check off.
+- Minor: the admission comment and the round-1 Edition now name the registry
+  read as the ordering point (corrected above). The store migration backfills
+  `meta` from the highest surviving revision when upgrading a version-1
+  database (tested, though version 1 never shipped). The rapid-click browser
+  test waits for the first click's acknowledgement before the second click
+  instead of a fixed 150 ms delay.
+- Windows `\\?\` database path: the exec and cron stores open the same driver
+  with the plain path (`sql.Open("sqlite", path)`), exactly as this store does,
+  so the extended-length path and the driver's `?` split are a known shared edge
+  and are left as is; no new DSN scheme was added.
+
+Verification: `wsusercmd` (full, `-race`); `wsdashboard`
+`TestComposer|UserCommand|Usercmd|TestI18N|TestAssetSource|TestCloseRequestComposerLifecycle|Steer|Inbox`
+with `-race` (Playwright included); `mcp`
+`UserCommand|TestHostedExec|Inventory|Shipped|Schema|Session`; `cmd/ws-mcp`
+`UserCommand|Usercmd|Composer|Exec|Dashboard|RuntimeCapabilities|HostedLead`
+plus the new connection tests; `wsagent` with `-race`
+`ComposerRoot|Exec|Passive|Inbox|Held|Handoff|Takeover|Relogin`: pass.
+`GOOS=windows go vet` on the five touched packages: clean. The Windows host run
+is the lead's.
+
+#### Edition (0e918e11f) - 2026-11-23
+
+Round 3 of the pre-merge review (two Important, four Minor, one accepted), fixed
+in one commit on top of the round-2 Edition. The text above is left as written;
+where it says a withdrawal is "committed", read "published in the registry":
+the store transaction can finish before the writer takes the memory lock, and
+the registry read in a click is the ordering point against the moment the
+change is published there.
+
+- A delayed write answer can no longer rewind the strip. The answer of a
+  removal or a refused run is only a snapshot taken at the write: it applies
+  only when its epoch and worktree tag equal the shown ones and its revision is
+  not older than the shown one; any other (an older revision, a different epoch
+  after a daemon restart the page survived, a different worktree) is dropped and
+  one read fetches the current list. A read's own answer keeps the earlier rule
+  (an older revision is dropped, a different epoch or worktree wins, since it is
+  the page's own current view). A browser test holds a removal's answer until the
+  strip shows the current list, rewrites it to another epoch with an empty list
+  and releases it: the current list stays and a read fires; it fails when write
+  answers use the read rule.
+- A failed read no longer drops a pending wake. A read that completes, failed
+  or not, after a newer stream wake arrived during it issues exactly one more
+  read (the flag is set only by a wake and cleared when a read starts, so there
+  is no loop and no polling). A read that fails for a reason that may pass (a 503
+  while the daemon starts, any other server error, a lost connection, a bad body)
+  leaves the strip as it was; one that is refused for good (401, 403, 404, 405:
+  a LAN page, a closed or unknown lead, an old daemon) still clears it. Browser
+  tests: a wake pending during a read that fails with 503 is answered by exactly
+  one more read, and a failed read leaves a strip that already showed a list and
+  the next change catches it up; each fails with its rule disabled.
+- Readiness wait scope: only discovery waits. `ServerOptions.UserCommandsDiscovery`
+  is the lookup the tool list (and the schema and manual discovery that filter
+  by it) reads; a registration or withdrawal keeps `UserCommands`, which never
+  waits. An answer for "not ready" already existed in shape (the nil host makes a
+  mutation refuse before it writes anything), but its text said the daemon could
+  not open the store; it now says the store is not open yet (still starting, or
+  it could not open it). So the second option (cancellation through the wait) was
+  not needed. The remaining 5 s budget is read after the runner lookup, so the
+  runner's lock time no longer extends it. A Go test through the HTTP route shows
+  a second lead's registration refused at once, with the not-ready text, while
+  the first lead's tool list is still waiting; it fails if the registration used
+  the waiting lookup.
+- The rapid-click browser test now waits for the first click's acknowledgement
+  and for its card to render before the second click, so the second click lands
+  inside the 600 ms guard that began with the rendered answer.
+- Windows `\\?\` database path: accepted as the shared edge with the exec and
+  cron stores; unchanged.
+
+Verification: `wsusercmd` (full, `-race`); `wsdashboard`
+`TestComposer|UserCommand|Usercmd|TestI18N|TestAssetSource|TestCloseRequestComposerLifecycle|Steer|Inbox`
+with `-race` (Playwright included); `mcp`
+`UserCommand|TestHostedExec|Inventory|Shipped|Schema|Session`; `cmd/ws-mcp`
+`UserCommand|Usercmd|Composer|Exec|Dashboard|RuntimeCapabilities|HostedLead|HostedConnections|HostedWorkerOverHTTP`;
+`wsagent` with `-race`
+`ComposerRoot|Exec|Passive|Inbox|Held|Handoff|Takeover|Relogin`: pass.
+`GOOS=windows go vet` on the five touched packages: clean. The Windows host run
+is the lead's.
+
+#### Edition (8c096b4c7) - 2026-11-23
+
+Round 4 of the pre-merge review (one Important, one Minor), fixed in one commit
+on top of the round-3 Edition.
+
+- A write answer after a refused read: a removal or refused-run answer now
+  applies only when its comparison with the shown revision is equal or newer, so
+  not when nothing is shown (a read refused with 401, 403, 404 or 405 had
+  cleared the strip); it is dropped and one read asks again. Browser regression:
+  a removal's answer is held, a read is refused (the strip clears), the answer is
+  released, and the strip stays hidden while one more read fires; it fails with
+  the round-3 rule.
+- Spent wait: a lead's discovery whose 5 s budget is already spent returns the
+  user commands bound in the meantime (the store may bind during the lead check)
+  instead of nothing; the cap is unchanged (the constant became a variable so a
+  test can spend it). Go test: the runner's lead check binds the store after the
+  budget is spent and the lookup reports it; it fails with the old `nil` return.
+
+Verification: `wsdashboard` `-race` `UserCommand|Usercmd|TestComposer`
+(Playwright included) and `cmd/ws-mcp`
+`UserCommand|Usercmd|HostedLead|HostedConnections`: pass; `GOOS=windows go vet`
+on both: clean.

@@ -42,15 +42,21 @@ func (h *Hosted) deliver(j *hostedJob) {
 // deliverPending tries every pending notice.
 func (h *Hosted) deliverPending() {
 	h.mu.Lock()
-	var pending []*hostedJob
+	var pending, stopPending []*hostedJob
 	for _, j := range h.jobs {
 		if j.row.Notice == NoticePending {
 			pending = append(pending, j)
+		}
+		if j.userStopped && j.stopNotice == StopNoticePending {
+			stopPending = append(stopPending, j)
 		}
 	}
 	h.mu.Unlock()
 	for _, j := range pending {
 		h.deliver(j)
+	}
+	for _, j := range stopPending {
+		h.retryStopNotice(j)
 	}
 }
 
@@ -77,11 +83,19 @@ func noticeText(row HostedJobRow, out *JobOutput) string {
 	if cmd := displayCommand(row); cmd != "" {
 		fmt.Fprintf(&b, "command: %s\n", cmd)
 	}
+	writeOutputTail(&b, out)
+	fmt.Fprintf(&b, "Read more with exec.tail (exec_id %s).", row.ID)
+	return b.String()
+}
+
+// writeOutputTail writes out's last HostedPreviewBytes of combined output,
+// or says there is none.
+func writeOutputTail(b *strings.Builder, out *JobOutput) {
 	tail := out.Tail(StreamCombined, HostedPreviewBytes)
 	if len(tail.Data) > 0 {
 		text, _ := DecodeText(tail.Data)
 		if tail.Start > 0 {
-			fmt.Fprintf(&b, "output (last %d of %d bytes):\n", len(tail.Data), tail.Written)
+			fmt.Fprintf(b, "output (last %d of %d bytes):\n", len(tail.Data), tail.Written)
 		} else {
 			b.WriteString("output:\n")
 		}
@@ -92,8 +106,6 @@ func noticeText(row HostedJobRow, out *JobOutput) string {
 	} else {
 		b.WriteString("no output.\n")
 	}
-	fmt.Fprintf(&b, "Read more with exec.tail (exec_id %s).", row.ID)
-	return b.String()
 }
 
 // endText says how a finished job ended.

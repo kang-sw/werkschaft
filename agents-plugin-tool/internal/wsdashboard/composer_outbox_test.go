@@ -95,7 +95,7 @@ func TestComposerOutboxLeavesOnDelivery(t *testing.T) {
 		}
 		entries[n] = string(set[regionEntries].HTML)
 	}
-	if !strings.Contains(entries[1], `<div class="user-batch" data-entry="`+ring[1].Name+`">`) || strings.Count(entries[1], `class="msg user"`) != 3 {
+	if !strings.Contains(entries[1], `<div class="user-batch" data-entry="`+ring[1].Name+`" data-at="`+ring[1].At.UTC().Format(time.RFC3339Nano)+`">`) || strings.Count(entries[1], `class="msg user"`) != 3 {
 		t.Fatalf("the batch render changed shape; the outbox reads its key from .user-batch:\n%s", entries[1])
 	}
 	if regexp.MustCompile(`class="msg user" data-entry="` + regexp.QuoteMeta(ring[1].Name) + `"`).MatchString(entries[1]) {

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
 // BackendRegistration is the admission descriptor of one registered backend.
@@ -95,12 +97,34 @@ type BackendRegistration struct {
 	// Only a harness that makes model requests itself, for the signed-in
 	// user, sets it; a harness that brings its own login never does.
 	ProviderCredentials bool
+	// Permission relates the backend's native permission modes to the common
+	// levels; Lifecycle declares how its hosted sessions start, run, and end
+	// (backend_policy.go). Both are runtime-only, and their zero values ask
+	// for no special behavior.
+	Permission PermissionPolicy
+	Lifecycle  LifecyclePolicy
+	// Connection is how the backend's client connects and how the daemon's MCP
+	// server treats that connection (backend_policy.go); Dashboard is how the
+	// dashboard's surfaces treat the backend (wsdashboard.HarnessTraits).
+	// Both are runtime-only registration data.
+	Connection ConnectionPolicy
+	Dashboard  wsdashboard.HarnessTraits
 }
 
 // PlaybookTerminology holds static native-tool idioms. Model, effort, and
 // namespace-dependent bindings are resolved when a playbook is rendered.
 type PlaybookTerminology struct {
 	ExploreAgent, SpawnIdiom, ContinueIdiom string
+	// SpawnIdiomFor, when set, spells SpawnIdiom for the runtime namespace of
+	// the rendering server and replaces SpawnIdiom, which a namespaced idiom
+	// cannot state statically.
+	SpawnIdiomFor func(namespace string) string
+}
+
+// IsZero reports whether no wording is declared, so a render uses the
+// host-neutral one.
+func (t PlaybookTerminology) IsZero() bool {
+	return t.ExploreAgent == "" && t.SpawnIdiom == "" && t.ContinueIdiom == "" && t.SpawnIdiomFor == nil
 }
 
 // BuiltinProfileRegistration is one builtin profile owned by a backend's
@@ -153,6 +177,37 @@ func BuiltinHarnessNames() []string {
 // values when the harness uses the host-neutral wording.
 func BuiltinPlaybookTerminology(harness string) PlaybookTerminology {
 	return builtinRegistration(harness).PlaybookTerminology
+}
+
+// BuiltinLifecycle is the built-in backend's lifecycle declaration; the zero
+// value for a name that is not built in. It reads the shared floor.
+func BuiltinLifecycle(name string) LifecyclePolicy {
+	return builtinRegistration(name).Lifecycle
+}
+
+// BuiltinConnection is the built-in backend's connection declaration; the zero
+// value for a name that is not built in. It reads the shared floor, which
+// callers never modify.
+func BuiltinConnection(name string) ConnectionPolicy {
+	return builtinRegistration(name).Connection
+}
+
+// NamedConnection is a backend's name with its connection declaration.
+type NamedConnection struct {
+	Name       string
+	Connection ConnectionPolicy
+}
+
+// BuiltinConnections lists every built-in backend's connection declaration in
+// config listing order, for a connection that has no daemon registry. The
+// policies are shared and read-only.
+func BuiltinConnections() []NamedConnection {
+	values := builtinRegistrations()
+	out := make([]NamedConnection, 0, len(values))
+	for _, value := range values {
+		out = append(out, NamedConnection{Name: value.name, Connection: value.reg.Connection})
+	}
+	return out
 }
 
 // BuiltinBackendRegistrations returns fresh runtime descriptors for every
@@ -208,6 +263,7 @@ func cloneBackendRegistration(reg BackendRegistration) BackendRegistration {
 	reg.PermissionModes = slices.Clone(reg.PermissionModes)
 	reg.PermissionLevels = slices.Clone(reg.PermissionLevels)
 	reg.DirectTools = slices.Clone(reg.DirectTools)
+	reg.Permission = clonePermissionPolicy(reg.Permission)
 	reg.Profiles = cloneBuiltinProfiles(reg.Profiles)
 	if reg.OneShot != nil {
 		oneShot := *reg.OneShot
@@ -247,6 +303,43 @@ func (r *Runner) BackendRegistrations() map[string]BackendRegistration {
 	return out
 }
 
+// BackendLifecycle is the registered backend name's lifecycle declaration, for
+// a caller on a hot path that must not clone the whole registry. ok is false
+// for a name the runner does not register. The policy is a plain value.
+func (r *Runner) BackendLifecycle(name string) (LifecyclePolicy, bool) {
+	reg, ok := r.opts.Backends[name]
+	return reg.Lifecycle, ok
+}
+
+// BackendConnection is BackendLifecycle for a backend's connection declaration.
+func (r *Runner) BackendConnection(name string) (ConnectionPolicy, bool) {
+	reg, ok := r.opts.Backends[name]
+	return reg.Connection, ok
+}
+
+// BuiltinDashboardHarnesses is the built-in backends' dashboard traits by
+// name, for a daemon embedded without a runner (a fixture) that still shows
+// built-in harnesses.
+func BuiltinDashboardHarnesses() wsdashboard.HarnessTraitSet {
+	values := builtinRegistrations()
+	out := make(wsdashboard.HarnessTraitSet, len(values))
+	for _, value := range values {
+		out[value.name] = value.reg.Dashboard
+	}
+	return out
+}
+
+// DashboardHarnesses is the registered backends' dashboard traits by name,
+// for DaemonOptions.Harnesses. Every registered name is present, a backend
+// with nothing to declare as the zero traits.
+func (r *Runner) DashboardHarnesses() wsdashboard.HarnessTraitSet {
+	out := make(wsdashboard.HarnessTraitSet, len(r.opts.Backends))
+	for name, reg := range r.opts.Backends {
+		out[name] = reg.Dashboard
+	}
+	return out
+}
+
 // leadHarnesses are the registered backends with a lead profile, sorted.
 func (r *Runner) leadHarnesses() []string {
 	var names []string
@@ -277,6 +370,8 @@ func profileBackends(registries []map[string]BackendRegistration) []string {
 
 // permissionModes preserves legacy Pi values accepted on reads and ignored at
 // launch. Registered extensions use their own modes, not the Pi fallback.
+// Retained name check: legacy Pi permission values are persisted bytes read
+// back by name (TestPermissionModesLegacyFallback).
 func permissionModes(backend string, registries []map[string]BackendRegistration) []string {
 	if backend == BackendPi {
 		return LeadPermissionModes

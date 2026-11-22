@@ -41,7 +41,7 @@ func newAgyLeadHarness(t *testing.T) (*leadHarness, *agyFake) {
 	h := newLeadHarness(t)
 	// The shipped cross-harness refusal: every agy lead test runs under it
 	// (a fixture that runs agy workers adds the worker role).
-	h.opts.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: fakeHarness("agy")}, LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes, Catalog: AgyCatalog(), crossHarnessRefusal: agyCrossHarnessRefusal}
+	h.opts.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: fakeHarness("agy")}, Permission: builtinPermission(BackendAgy), Lifecycle: builtinLifecycle(BackendAgy), LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes, Catalog: AgyCatalog(), crossHarnessRefusal: agyCrossHarnessRefusal}
 	h.opts.WSMCP = func(root string) (MCPCommand, error) {
 		return MCPCommand{Command: "python3", Env: map[string]string{"WS_MCP_PROJECT_ROOT": root}}, nil
 	}

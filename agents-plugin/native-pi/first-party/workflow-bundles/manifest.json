@@ -1,6 +1,6 @@
 {
   "ws": {
-    "archive_sha256": "c75a766aa45a1006e72d0c4a8a9fe8482b81ee3e6194173dbcbdf829b7c38cef",
+    "archive_sha256": "3f40b95a6c0ac4c7f6946b7debfeb4a5746d38a732395bc319eea5775b9a87cc",
     "files": {
       ".claude-plugin/plugin.json": "3f030047539e6ad6eaed23ab25e4f466b8af5d7bd2d99ab136d57ec46cd7263b",
       ".codex-plugin/hooks.json": "e3f3ea60f82fb0795c63bf54b9208647f39cb3779f050d1c755fabdc8a434490",
@@ -17,7 +17,7 @@
       "claude-agents/effort-medium.md": "f795e9dda59cb032cf1637ffd96d122765fbb221524bb8d9804b3060a944afc2",
       "claude-agents/effort-xhigh.md": "c00ceaba0634c1ccbf3155dc62ea6fe6d821ecf644a1b62eb3a7eec26b8424c4",
       "config-manifest.json": "973e2d264bad322113b13cd64de7c3296c07715de4a1e8625ffea6d2f96099ad",
-      "dashboard-config-manifest.json": "c98126e9622df73efa5fff7112198f25e7405a83236d005c23738e2761ff01c8",
+      "dashboard-config-manifest.json": "2e8430e9677a3f9605ab6090b4eb886344c640786c21e00bd54add0b629f735a",
       "hooks/claude-mod/band.tsx": "73b448da33fac9939e98edd923e57c69b4ebe8f37097202365d5b591bb5e598b",
       "hooks/claude-mod/captions.tsx": "cb9c350bb9e63cf502140dd61633be2df40256db152b467fb667d7f751925feb",
       "hooks/claude-mod/compaction.ts": "e1526f655cede90f4f75b3967562a7dd07566cc9fd56eecc827b7041e360f5b9",
@@ -95,7 +95,7 @@
       "rsrc/tracker/tracker.md": "5860dae79f27761fb517b809e646f53262f632055580389ce52cf394f51f5150",
       "rsrc/whiteboard/whiteboard.md": "379c6ebb0cfdfa24004e0dbf628489d6127f3ec9578e8c7b069c59f0a1e9e1e6",
       "rsrc/worker-stop-protocol.md": "d5b404e80e04d30d5563598898751833726688d7af5a6e743cd749902828d8b8",
-      "runtime.json": "a6ad3357a741ad53673a41c7e2cd452ed2a67e3a9cf022fba0bf33c2cc11564e",
+      "runtime.json": "ebe67e9c1757223fd97fa5023a9926e522c98758f8f6e2bec017983c99a653e6",
       "skills/lead-audit-doc/SKILL.md": "910af43a6f9921271580584d590e14c76effba51350a502197c6fa307971df67",
       "skills/lead-bootstrap/AGENTS.template.md": "0d110240d487ceb39258a57fc0050d5b9d726d5d8f171c25f77fc150490be383",
       "skills/lead-bootstrap/SKILL.md": "4348b34724245c3d7de35c4cae2ee0a447c81131551932e388cfcf973149ddc2",
@@ -115,7 +115,7 @@
     }
   },
   "wsflow": {
-    "archive_sha256": "13fa8dbdedae79e8b39bb64b6acfad3245135f7830c4e585a9aec577f7f22612",
+    "archive_sha256": "ead881c23c2315ee9bdaf7e9704fc402fa3c5ea531bb2ceb3542758a5cb2baf8",
     "files": {
       ".claude-plugin/plugin.json": "a117c6804ccb269784a9b826e02f2e31507b02a07ed759bc070653fde6e60e4c",
       ".codex-plugin/plugin.json": "5cb61aab81400142a9a1195d3d306fe274291e17d79113f35ae2759f051b97bb",
@@ -131,7 +131,7 @@
       "claude-agents/effort-medium.md": "f795e9dda59cb032cf1637ffd96d122765fbb221524bb8d9804b3060a944afc2",
       "claude-agents/effort-xhigh.md": "c00ceaba0634c1ccbf3155dc62ea6fe6d821ecf644a1b62eb3a7eec26b8424c4",
       "config-manifest.json": "71471746ed1a455c9126695f3aa2469aadc516050a9a25ae587c08050e0b220a",
-      "dashboard-config-manifest.json": "6d9c0804357488ef72dedb6462f4facf47178f1ff707e976a7a684e7ab09d4e9",
+      "dashboard-config-manifest.json": "3540f0b42b5e7615b3c22081f8e3282ce186ef8fdec5fb4736cec83d6fba824f",
       "hooks/claude-mod/band.tsx": "73b448da33fac9939e98edd923e57c69b4ebe8f37097202365d5b591bb5e598b",
       "hooks/claude-mod/captions.tsx": "cb9c350bb9e63cf502140dd61633be2df40256db152b467fb667d7f751925feb",
       "hooks/claude-mod/compaction.ts": "e1526f655cede90f4f75b3967562a7dd07566cc9fd56eecc827b7041e360f5b9",
@@ -209,7 +209,7 @@
       "rsrc/tracker/tracker.md": "5860dae79f27761fb517b809e646f53262f632055580389ce52cf394f51f5150",
       "rsrc/whiteboard/whiteboard.md": "379c6ebb0cfdfa24004e0dbf628489d6127f3ec9578e8c7b069c59f0a1e9e1e6",
       "rsrc/worker-stop-protocol.md": "d5b404e80e04d30d5563598898751833726688d7af5a6e743cd749902828d8b8",
-      "runtime.json": "24b479ce9485fdb24e09dbaefd9d94c976109ece72dfd856910c39629eaeca8b",
+      "runtime.json": "09890d520acc9c7bf23ddd5f6a484fe91a1faefaa662eadb25420d49a2b9b11a",
       "skills/lead-audit-doc/SKILL.md": "a42494d1687900d3cd18bdccda893182b4f8a323338f4d913ed4e0fe9469b715",
       "skills/lead-bootstrap/AGENTS.template.md": "61ee71602aeec9b0b17cf4ee9fd30ad724c5e2f0edc0ec62b1a8bff0b72415fc",
       "skills/lead-bootstrap/SKILL.md": "04719ed8a7f27d73cc5a7fa82461930060f66918870e92662406aed9fb1176fe",

@@ -75,6 +75,7 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		},
 		ToolsAlwaysLoad:  true,
 		ManualHarness:    BackendAgy,
+		Dashboard:        agyDashboardTraits(),
 		PlaybookCommands: true,
 		// An agy lead explores with its own subagents and delegates through
 		// agent.spawn, preferring another harness when one fits.
@@ -87,6 +88,14 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		WorkerProfile:       AgentWorkerProfile(BackendAgy),
 		WorkerHTTPMCP:       true,
 		WorkerAutoApprove:   true,
+		Lifecycle: LifecyclePolicy{
+			ComposedLeadInstructions: true,
+			// No stdio fallback: an agy lead has no ws-mcp without the route.
+			LeadHTTPMCP:   true,
+			TurnActivity:  true,
+			InternalTurns: true,
+			WorkerLog:     true,
+		},
 		// Native default mode asks before each run_command, and the daemon
 		// refuses it (agy 1.5.14 live probe: native auto and
 		// --dangerously-skip-permissions run commands without asking, and

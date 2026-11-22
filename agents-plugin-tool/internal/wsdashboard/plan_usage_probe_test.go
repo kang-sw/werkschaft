@@ -220,7 +220,7 @@ func TestPlanUsageCancelledViewerStoresSuccess(t *testing.T) {
 			if s.lastQuery.Before(<-finished) {
 				t.Fatal("query cadence starts before completion")
 			}
-			restored := newPlanUsageStore(s.dir, s.home, s.getenv)
+			restored := newTestPlanUsageStore(s.dir, s.home, s.getenv)
 			if restored.gpt.Status != "" || len(restored.gpt.Windows) != 1 || restored.gpt.Windows[0].Percent != 41 {
 				t.Fatal("successful result not persisted")
 			}

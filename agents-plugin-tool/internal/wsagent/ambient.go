@@ -31,9 +31,9 @@ func ambientBlock(instruction string) string {
 // resolveAmbient resolves one conversation's ambient block outside its send
 // path. The key store is an optional session-layer reader; older/test stores
 // without that capability still resolve global, repo, and builtin values.
-func (c *conv) resolveAmbient() (string, error) {
+func (c *conv) resolveAmbient() (block, lang string, err error) {
 	if !c.rec.Lead {
-		return "", nil
+		return "", "", nil
 	}
 	cfg := c.r.opts.Config
 	cfg.RepoRoot = c.rec.Root
@@ -46,20 +46,23 @@ func (c *conv) resolveAmbient() (string, error) {
 	resolver := wsconfig.NewResolver(cfg, nil, reader, nil)
 	resolved, err := resolver.Get(c.rec.WSKey, wsconfig.ItemWorkflowLang)
 	if err != nil {
-		return "", fmt.Errorf("resolve workflow.lang ambient: %w", err)
+		return "", "", fmt.Errorf("resolve workflow.lang ambient: %w", err)
 	}
-	return ambientBlock(WorkflowLanguageInstruction(resolved.Value)), nil
+	return ambientBlock(WorkflowLanguageInstruction(resolved.Value)), strings.TrimSpace(resolved.Value), nil
 }
 
 // refreshAmbient replaces the loop-owned cache after creation/restoration or
 // a successful config.tune. A failed refresh keeps the last known-good block.
 func (c *conv) refreshAmbient() {
-	block, err := c.resolveAmbient()
+	block, lang, err := c.resolveAmbient()
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: %v\n", c.rec.ReplyID, err)
 		return
 	}
 	c.ambient = block
+	// The same resolution, kept for readers outside the loop (the language
+	// of a machine-facing notice; ExecStopNote).
+	c.ambientLang.Store(&lang)
 }
 
 // turnInput composes model-only turn input. Compaction notes go first, then

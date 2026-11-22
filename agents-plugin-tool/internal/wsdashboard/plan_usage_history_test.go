@@ -91,6 +91,38 @@ func TestPlanUsageHistoryValidation(t *testing.T) {
 	}
 }
 
+// TestPlanUsageHistoryValidatorsKeepPersistedNames pins the (1881) survivors:
+// the validators read the harness and source names stored in the history
+// files, whatever the daemon's harness registrations say.
+func TestPlanUsageHistoryValidatorsKeepPersistedNames(t *testing.T) {
+	at := time.Now().UnixMilli()
+	sample := func(harness, kind, source string) planUsageSample {
+		return planUsageSample{Harness: harness, Kind: kind, Source: source, AsOf: at, ResetsAt: at + 1000, Percent: 10}
+	}
+	for _, tc := range []struct {
+		s              planUsageSample
+		shared, codex5 bool
+	}{
+		{sample("claude", "seven_day", "Claude push"), true, false},
+		{sample("claude", "five_hour", "Claude push"), true, false},
+		{sample("codex", "seven_day", "via Codex CLI"), true, false},
+		{sample("codex", "seven_day", "via Pi"), true, false},
+		// Codex's five-hour samples live only in their own file.
+		{sample("codex", "five_hour", "via Codex CLI"), false, true},
+		{sample("codex", "five_hour", "via Pi"), false, true},
+		{sample("claude", "seven_day", "via Codex CLI"), false, false},
+		{sample("agy", "seven_day", "Claude push"), false, false},
+		{sample("pi", "seven_day", "via Pi"), false, false},
+	} {
+		if got := validPlanUsageSample(tc.s); got != tc.shared {
+			t.Errorf("shared history accepts %+v = %v, want %v", tc.s, got, tc.shared)
+		}
+		if got := validCodexFiveHourSample(tc.s); got != tc.codex5 {
+			t.Errorf("codex five-hour history accepts %+v = %v, want %v", tc.s, got, tc.codex5)
+		}
+	}
+}
+
 func TestPlanUsageHistoryUnknownFieldsUpsertAndPrivateFile(t *testing.T) {
 	s := usageTestStore(t)
 	at := time.Now().UnixMilli()
@@ -174,7 +206,7 @@ func TestPlanUsageHistoryClaudeAcceptanceAndCacheRereads(t *testing.T) {
 	push(now+3, 55, reset-1) // accepted equal-time value replaces the same real observation
 	push(now+4, 5, reset+1)
 	before := historyBytes(t, s)
-	restored := newPlanUsageStore(s.dir, s.home, s.getenv)
+	restored := newTestPlanUsageStore(s.dir, s.home, s.getenv)
 	for i := 0; i < 3; i++ {
 		_ = restored.entries()
 		_ = restored.history(now)
@@ -301,7 +333,7 @@ func TestPlanUsageHistoryMemoStatValidated(t *testing.T) {
 	if reads != 0 || len(got.Samples) != 3 || got.Samples[1] != external {
 		t.Fatalf("write after a changed stat lost the other writer's sample: %+v (reads %d)", got, reads)
 	}
-	if fresh := newPlanUsageStore(s.dir, s.home, s.getenv).history(now); !reflect.DeepEqual(fresh, got) {
+	if fresh := newTestPlanUsageStore(s.dir, s.home, s.getenv).history(now); !reflect.DeepEqual(fresh, got) {
 		t.Fatalf("memo differs from disk: %+v vs %+v", got, fresh)
 	}
 	// A transient read failure is not memoized as "unavailable".

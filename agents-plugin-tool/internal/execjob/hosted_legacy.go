@@ -157,7 +157,7 @@ func (h *Hosted) LegacyAbort(root, key string) (Response, bool) {
 	if j == nil {
 		return Response{}, false
 	}
-	h.stop(j)
+	h.stop(j, false)
 	return h.LegacyResponse(h.view(j, 0), false), true
 }
 

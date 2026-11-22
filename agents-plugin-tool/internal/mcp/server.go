@@ -68,6 +68,12 @@ type Server struct {
 	// cron returns the daemon's scheduler (ServerOptions.Cron); nil where
 	// there is none.
 	cron func() *wscron.Scheduler
+	// userCommands returns the daemon's user commands (ServerOptions
+	// .UserCommands); nil where there are none.
+	userCommands func() UserCommandHost
+	// userCommandsDiscovery is the lookup the tool list uses (ServerOptions
+	// .UserCommandsDiscovery); nil uses userCommands.
+	userCommandsDiscovery func() UserCommandHost
 	// execCutover is the harness of the bound conversation when its
 	// process launched with native shell tools removed (wsagent's exec
 	// cutover): the exec tools are listed, and Codex's fs.* read tools
@@ -385,7 +391,7 @@ func (s *Server) handle(ctx context.Context, req request) response {
 	switch req.Method {
 	case "initialize":
 		s.observePiDaemonAgents(req.Params)
-		s.observeHarness("initialize", s.detectHarnessFromInitializeParams(req.Params))
+		s.recordHarness("initialize", s.detectHarnessFromInitializeParams(req.Params))
 		// No session/root exists yet at this call: a machine-scope identity
 		// registers immediately (needs no root); a worktree/clone identity
 		// defers until a session-bound root arrives via the owning ferrule

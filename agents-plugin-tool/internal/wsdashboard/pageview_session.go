@@ -79,8 +79,9 @@ type ConvEntry struct {
 	// Key is the ring entry's file name, the element key the page keeps an
 	// expanded mail line open by.
 	Key string
-	// At is the entry's time (epoch ms).
-	At int64
+	// At is the entry's time (epoch ms), and AtRFC its UTC RFC3339Nano form.
+	At    int64
+	AtRFC string
 	// UserBlocks keeps per-envelope bubbles under one stable ring/stream key.
 	// EnvelopeAt is the original offset-bearing timestamp of one such bubble.
 	UserBlocks []ConvEntry
@@ -185,6 +186,8 @@ type sessionLookup struct {
 	observed func(replyID string) *wslive.Snapshot
 	// piDeleted checks revival only for settled Pi rows, never native rows.
 	piDeleted func(replyID string) bool
+	// harnesses declares the registered harnesses' traits (DaemonOptions.Harnesses).
+	harnesses HarnessTraitSet
 }
 
 // get returns a session this daemon serves.
@@ -307,12 +310,12 @@ func buildSessionView(in pageInputs) SessionView {
 	v.Host = in.Snapshot.Host
 	v.Background, v.Monitors = taskBadgeCounts(in.Snapshot)
 	v.Tree.Agents = agentTree(in.Snapshot.Agents, lookup)
-	markNativeAgents(v.Tree.Agents, v.Harness)
+	markNativeAgents(v.Tree.Agents, v.Harness, lookup.harnesses)
 	for _, a := range in.Snapshot.Agents {
 		switch {
 		case a.Status == wslive.StatusRunning:
 			v.Tree.Running++
-		case hudEndUnknown(a, hudNative(a, v.Harness)):
+		case hudEndUnknown(a, hudNative(a, v.Harness, lookup.harnesses)):
 			// Observation ended, outcome unknown: neither done nor failed.
 		case a.Status == wslive.StatusFailed:
 			v.Tree.Failed++
@@ -421,6 +424,8 @@ func agentTree(agents []wslive.Agent, lookup sessionLookup) []AgentNode {
 				node.Slots = liveSlots(node.Permission, node.Finished, node.Running, node.Generating)
 			}
 			if a.ReplyID != "" {
+				// Retained name check: a finished Pi child row is told apart by its
+				// persisted agent kind (TestPiSpawnDisplayRefreshesAfterSessionRemoval).
 				if a.AgentKind == wslive.AgentKindPi && a.Status == wslive.StatusDone && lookup.piDeleted != nil {
 					node.PiDeleted = lookup.piDeleted(a.ReplyID)
 				}
@@ -440,13 +445,13 @@ func agentTree(agents []wslive.Agent, lookup sessionLookup) []AgentNode {
 
 // markNativeAgents marks the harness's own subagents of a session whose
 // harness is ownerHarness (hudNative), at every depth.
-func markNativeAgents(nodes []AgentNode, ownerHarness string) {
+func markNativeAgents(nodes []AgentNode, ownerHarness string, set HarnessTraitSet) {
 	for i := range nodes {
-		nodes[i].Native = hudNative(nodes[i].Agent, ownerHarness)
+		nodes[i].Native = hudNative(nodes[i].Agent, ownerHarness, set)
 		if nodes[i].Native {
 			nodes[i].Linked = false
 		}
-		markNativeAgents(nodes[i].Children, ownerHarness)
+		markNativeAgents(nodes[i].Children, ownerHarness, set)
 	}
 }
 

@@ -162,11 +162,12 @@ func TestHostedRecoveryAndFailures(t *testing.T) {
 			t.Errorf("live region lacks %s:\n%s", want, live)
 		}
 	}
+	atAttr := ` data-at="` + now.UTC().Format(time.RFC3339Nano) + `"`
 	for _, want := range []string{
-		`<div class="sysline notice fail" data-entry="20261107T000000.000000001Z-n1.json" data-notice="login"><span class="mk">✗</span><span class="nt"><b>login needed</b>: Please run /login</span><time`,
-		`<div class="sysline notice fail" data-entry="20261107T000000.000000002Z-n2.json" data-notice="model"><span class="mk">✗</span><span class="nt"><b>model unavailable</b></span><time`,
-		`<div class="sysline notice fail" data-entry="20261107T000000.000000003Z-n3.json" data-notice="usage_limit"><span class="mk">✗</span><span class="nt"><b>usage limit reached</b> · resets <time class="t" data-ms="` + fmt.Sprint(reset) + `" data-f="dt">` + clockText(reset) + `</time>: Limit reached</span><time`,
-		`<div class="sysline notice fail" data-entry="20261107T000000.000000004Z-n4.json" data-notice="usage_limit"><span class="mk">✗</span><span class="nt"><b>usage limit reached</b></span><time`,
+		`<div class="sysline notice fail" data-entry="20261107T000000.000000001Z-n1.json" data-notice="login"` + atAttr + `><span class="mk">✗</span><span class="nt"><b>login needed</b>: Please run /login</span><time`,
+		`<div class="sysline notice fail" data-entry="20261107T000000.000000002Z-n2.json" data-notice="model"` + atAttr + `><span class="mk">✗</span><span class="nt"><b>model unavailable</b></span><time`,
+		`<div class="sysline notice fail" data-entry="20261107T000000.000000003Z-n3.json" data-notice="usage_limit"` + atAttr + `><span class="mk">✗</span><span class="nt"><b>usage limit reached</b> · resets <time class="t" data-ms="` + fmt.Sprint(reset) + `" data-f="dt">` + clockText(reset) + `</time>: Limit reached</span><time`,
+		`<div class="sysline notice fail" data-entry="20261107T000000.000000004Z-n4.json" data-notice="usage_limit"` + atAttr + `><span class="mk">✗</span><span class="nt"><b>usage limit reached</b></span><time`,
 	} {
 		if !strings.Contains(entries, want) {
 			t.Errorf("entries lack %s:\n%s", want, entries)

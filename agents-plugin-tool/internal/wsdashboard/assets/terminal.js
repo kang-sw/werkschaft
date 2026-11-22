@@ -763,6 +763,9 @@
     tabFocusPending = true;
     if (hooks.setCtab) hooks.setCtab("term");
     tabFocusPending = false;
+    // Selecting a tab whose replay a hidden page still holds (hooks.stage)
+    // starts it now, so the pane never shows an empty emulator.
+    activate(target);
     if (target.tabEl.scrollIntoView) target.tabEl.scrollIntoView({ block: "nearest", inline: "nearest" });
     if (!hooks.setCtab && target.t.term && shows(target)) {
       fit(target);
@@ -881,7 +884,11 @@
     tabList.push(tab);
     saveTabStore();
     if (shouldActivate) activateTab(t.id);
-    activate(tab);
+    // A chat tab's replay (the whole ring from offset 0) is work nobody sees
+    // until its pane shows: a page the shell loaded hidden holds it for its
+    // first show (hooks.stage), while a pane showing now starts at once.
+    if (hooks.stage && !shows(tab)) hooks.stage(function () { activate(tab); });
+    else activate(tab);
     return tab;
   }
   function reconcileTabs(known, terminals, asked) {

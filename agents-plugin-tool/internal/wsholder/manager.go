@@ -78,6 +78,13 @@ const (
 var (
 	// ErrUnknownHolder is Stop's answer for an id no holder has.
 	ErrUnknownHolder = errors.New("unknown holder")
+	// ErrUnknownHolderIncomplete is ErrUnknownHolder whose answer came from
+	// an incomplete census (Listing.Incomplete): the last scan could not
+	// read every registration, so the holder may run unindexed. It is
+	// decided under the same lock as the index lookup, so a scan that
+	// indexes the holder right after cannot turn it into proof of absence.
+	// errors.Is(err, ErrUnknownHolder) also holds for it.
+	ErrUnknownHolderIncomplete = fmt.Errorf("%w, and the holder census is incomplete: it may still run", ErrUnknownHolder)
 	// ErrStartTimeMismatch refuses a guarded kill: the process under the
 	// holder's PID is not the one that wrote the descriptor.
 	ErrStartTimeMismatch = errors.New("the process under the holder's PID does not match its recorded start time; not killed")

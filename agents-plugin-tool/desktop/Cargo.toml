@@ -38,10 +38,14 @@ objc2-foundation = "=0.3.2"
 objc2-web-kit = "=0.3.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# Several webviews in one window (the title strip) need tauri's `unstable`.
+# Windows only: it also makes a window's content webview a child webview, which
+# macOS neither needs nor gets.
+tauri = { version = "=2.12.5", features = ["unstable"] }
 clipboard-win = "=5.4.3"
 tauri-winrt-notification = "=0.8.1"
 webview2-com = "=0.39.1"
-windows = { version = "=0.62.2", features = ["Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "=0.62.2", features = ["Win32_System_Com", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

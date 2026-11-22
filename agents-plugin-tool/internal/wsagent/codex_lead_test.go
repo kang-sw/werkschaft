@@ -43,7 +43,7 @@ type codexFake struct {
 func newCodexLeadHarness(t *testing.T) (*leadHarness, *codexFake) {
 	t.Helper()
 	h := newLeadHarness(t)
-	h.opts.Backends[BackendCodex] = BackendRegistration{Backend: CodexBackend{Command: fakeHarness("codex")}, LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes, PermissionLevels: LeadPermissionLevels(), Catalog: CodexCatalog()}
+	h.opts.Backends[BackendCodex] = BackendRegistration{Backend: CodexBackend{Command: fakeHarness("codex")}, Permission: builtinPermission(BackendCodex), Lifecycle: builtinLifecycle(BackendCodex), LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes, PermissionLevels: LeadPermissionLevels(), Catalog: CodexCatalog()}
 	h.opts.WSMCP = func(root string) (MCPCommand, error) {
 		return MCPCommand{Command: "/opt/harness/python3", Env: map[string]string{"WS_MCP_PROJECT_ROOT": root}}, nil
 	}

@@ -324,6 +324,33 @@ Verification:
   (placement) and mockup v2 (interaction). The superseded ticket used 420 and
   1200, which predate the redesign.
 
+### Result (1ed77b481) - 2026-11-23
+
+Implemented Phase 1 (call rows, lazy cursor-paged hydration, floating audit window / 72% narrow bottom sheet, wide darkroom, 5 tabs, stored-truncation + seen-cut + redaction rendering, range load-more, keyboard scope, pinning, and 11-locale i18n) on `impl/develop/slept-crier-power` (rebased onto `develop@3baf39044`: commits `9effb0b10`, `52ae05839`, `1ed77b481`). The ticket remains in `ready/` because Phases 2 and 3 follow after `0.51.1`.
+
+What landed:
+- Call-list rendering (`data-call`, `data-at`, 3 visible rows + `+n` fold) with Decision `(602)` legacy `<details class="toolsline">` fallback preserved when ring entries lack call IDs (`pageview_session.go`, `pageview_conversation.go`, `page_format.go`, `assets/dashboard.tmpl`, `conversation_tools_test.go`).
+- Assembled audit fragment pair (`pages.go`, `asset_source_test.go`, `css_collision_test.go`):
+  - `assets/dashboard-audit-window.js` (434 lines): window/sheet DOM, body renderer with line numbers, in-window search, wrap/copy, hatched redaction chips, `stored_trunc` omitted-byte row + seam seen-cut marker, range `Load more`, Meta grid, Raw tab (normalized envelope banner vs `other` raw line), Linked events tab, calm empty & 410/404/503 error states.
+  - `assets/dashboard-audit.js` (1,064 lines): call-row controller, paired `tool_call` + `tool_result` (`subagent:tool_result`) envelope loading with isolated result error handling and result-targeted range `Load more`, cursor-paged hydration (`kinds=tool_call,tool_result&n=500`, `before`/`after`, 410 single reset, 503 retry without premature marking), Decision `(610)` token-growth dedup by `request_id`, Decision `(605)` `inAuditWin`-scoped `Escape`/`ArrowLeft`/`ArrowRight`/`Ctrl+F`, Decision `(606)` wide-view darkroom (`au-scrim` + `ws-audit` / `layout.dim`), Decision `(608)` 4-window pin cap with 24px stagger, viewport-clamped drag and SE corner resize.
+  - `assets/dashboard-audit.css` (824 lines): `au-*` styles for dark and light themes, wide floating window and narrow 72% bottom sheet.
+  - `assets/dashboard-lifecycle.js`: `.au-scrim:not([hidden])` and `ws-audit` dim integration compatible with `shell-vanish` (`fa4a76286`).
+- 63 `js.audit.*` i18n keys added identically across all 11 `wsi18n/tables/*.json` tables.
+
+Compatibility: T0 — additive HTML attributes, new assembled dashboard JS/CSS fragments, and additive `js.audit.*` i18n keys only; consumes existing read-only `/s/<id>/audit/*` routes with zero route, MCP, store, or tracker changes.
+
+Verification:
+- `git diff --check`, `gofmt -l`, `go -C agents-plugin-tool vet ./...`, `go -C agents-plugin-tool build ./...`: PASS.
+- `go -C agents-plugin-tool test -count=1 ./internal/wsi18n ./internal/wsaudit`: PASS.
+- `node --test agents-plugin-tool/internal/wsdashboard/frontend-audit.test.js`: 9/9 PASS (row/token formatting, Decision 605 key scope, darkroom, backward/forward hydration + scheduler live-row & empty-session refresh, 503 retry, 410 reset).
+- Isolated Playwright Chromium suite (`TestAuditViewBrowser`, `TestShellVanishBrowser`, `TestDashboardAssetSourceAssembly`, `TestCSSClassesDoNotCollideAcrossModules`): PASS against realistic separated `tool_call` / `tool_result` fixture and integrated `/shell` darkroom (`fa4a76286`).
+- LOOK captures visually inspected by lead (`/tmp/audit-view-phase1-captures/audit-{wide,narrow}-{dark,light}.png`, untracked) against approved mockups v2 and v3.
+- `codex.medium` review (`id:thicketcroaksixteentill`): **PASS** after two review-fix rounds (resolved P1 `tool_result` output/status/range separation, P2 `inAuditWin` key scope, P2 cursor-paged hydration + scheduler live-row refresh + 503 recovery, P2 SE resize viewport clamping, and `develop@3baf39044` 11-locale rebase parity).
+
+Left for Phases 2 and 3 (next release):
+- Phase 2: hidden-event rows interleaved by `at`/`seq` via `(607)`/`(681)` half-open UTC paging, attached hooks/reminders indented under calls, `ws.dashboard.auditkinds` kind chips, `J`/`K`/`Enter` conversation-pane navigation, `.hb` conversation header badge, session-start system prompt row, and `other` rows opening on Raw.
+- Phase 3: conversation-wide `audit/search` UI (text/regex/case/kind filter), `<field> <count>` row badges, hit list with `next` cursor and `event_id` open for unrendered/older/subagent hits.
+
 ### Phase 2: Hidden-event rows, kind chips and keys
 
 Depends on this ticket's Phase 1.
@@ -344,6 +371,47 @@ history rendering, the open-below oldest interval once history ends
 (a session-start event before the first display entry), and empty display
 history. Cover chip persistence, paging both ways, J/K skipping
 hidden kinds, and LOOK side by side with both mockups.
+
+### Result (0dc7dfdc) - 2026-11-23
+
+- Added hidden-event rows in `dashboard-audit-rows.js` (699 lines) and
+  `dashboard-audit-rows.css` (201 lines), `data-at` on every `ConvEntry`
+  wrapper, the `.hb` conversation header badge, a centered `.au-sysrow`
+  session-start system prompt banner, and `.au-inner` call-attached rows
+  with chronological orphan fallback.
+- Implemented (607)/(681) half-open UTC `[since, until)` paging, open-below
+  fetching on `end: true`, empty-history fallback, multi-page live `after=`
+  refresh drain, `503`/network retries without poisoning coverage, a single
+  `410` reset, and epoch guards on `ws-history-reset` fetches and
+  `ws-history-page` continuations.
+- Added `dashboard-conversation.js` `[data-entry]` child guards in
+  `firstEntryEl`, `lastEntryEl`, `mergeEntries`, `gapped`, `evictEntries`,
+  and `loadHistory`, plus `ws-history-page`, `ws-entries-merged`, and
+  `ws-history-reset` CustomEvents.
+- Added `WsAudit.openEvent` with `reqToken` invalidation on cached and
+  uncached switches. Default tabs select Raw for `other`, Output for
+  out-only non-call events, and Input when input is present; ←/→ step
+  across visible audit rows.
+- Added seven-kind filter chips persisted under `ws.dashboard.auditkinds`,
+  conversation-scoped J/K/Enter navigation skipping hidden kinds, and
+  11-locale i18n parity (+9 keys, 3,231 total).
+
+Verification:
+- Node audit suites: 22/22 PASS, including reset/continuation races,
+  failed second-page retry, multi-page live refresh, and cached-event switches.
+- Full non-browser Go suites (`wsdashboard` and `wsi18n`): PASS before
+  review fixes; targeted dashboard Go tests and i18n suite: PASS after rebase.
+- Final isolated Chromium `TestAuditViewBrowser` and
+  `TestAuditViewPhase2Browser`: PASS (6.412s).
+- Four LOOK captures visually inspected by lead:
+  `/tmp/audit-view-phase2-captures/audit-p2-{wide,narrow}-{dark,light}.png`
+  (untracked).
+- Read-only `codex.medium` review: **PASS** at `0dc7dfdc`.
+- `git diff --check`: PASS; merge-tree against `develop@42969d3e3`:
+  zero conflicts.
+
+Phase 3 remains: conversation-wide search, field-count badges, and paged
+hit-list navigation. The ticket stays in `ready/`.
 
 ### Phase 3: Conversation-wide search
 

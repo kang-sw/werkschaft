@@ -183,9 +183,9 @@ func railRevive(in railInput) (revive, blocked string) {
 			return "", ""
 		}
 		return ReviveReopen, ""
-	case in.Repo == "" || (reg.Harness != "claude" && reg.Harness != "pi"):
-		// A lead key lives at a git root, and the daemon hosts these two
-		// harnesses alone.
+	case in.Repo == "" || !in.Harnesses.terminalTakeover(reg.Harness):
+		// A lead key lives at a git root, and the daemon takes over only the
+		// harnesses that declare it (HarnessTraits.TerminalTakeover).
 		return "", ""
 	case !in.Session.Resumable:
 		return ReviveTakeover, ReviveNoSession

@@ -47,7 +47,7 @@ func fakeAgyEnv(t *testing.T, scriptBody string) (*planUsageStore, string, strin
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+"/usr/bin:/bin")
-	s := newPlanUsageStore(cache, home, func(string) string { return "" })
+	s := newTestPlanUsageStore(cache, home, func(string) string { return "" })
 	s.resolveAgy = func() (string, []string, error) {
 		p, err := exec.LookPath("agy")
 		return p, nil, err
@@ -136,8 +136,10 @@ func TestPlanUsageAgyActivityDoesNotWaitForStoreLock(t *testing.T) {
 	d := &Daemon{planUsage: s}
 	s.mu.Lock()
 	returned := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
-		d.AgyActivity()
+		// Same call AgyActivity makes, with its refresh goroutine's completion exposed.
+		d.agyActivity(done)
 		close(returned)
 	}()
 	select {
@@ -153,6 +155,13 @@ func TestPlanUsageAgyActivityDoesNotWaitForStoreLock(t *testing.T) {
 	}
 	if got := fakeAgyCallCount(countFile); got != 1 {
 		t.Fatalf("activity probe count = %d, want 1", got)
+	}
+	// Wait for the refresh goroutine itself: probes.Wait alone has no
+	// happens-before edge to its read of d.planUsage.
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("agy activity refresh did not finish")
 	}
 	s.probes.Wait()
 }
@@ -462,7 +471,7 @@ func TestPlanUsageAgyParseClampMalformedAndDisabled(t *testing.T) {
 	}
 
 	// Reopening store restores cached agy groups without spawning.
-	reopened := newPlanUsageStore(s.dir, s.home, s.getenv)
+	reopened := newTestPlanUsageStore(s.dir, s.home, s.getenv)
 	reopened.now = func() time.Time { return base }
 	if got := reopened.entries(); len(got) != 2 || got[0].Group != "gemini" || got[1].Group != "claude_gpt" {
 		t.Fatalf("reopened store did not restore agy groups: %+v", got)
@@ -688,7 +697,7 @@ func TestPlanUsageAgyMissingBinarySkipsSpawn(t *testing.T) {
 	emptyBin := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", emptyBin)
-	s := newPlanUsageStore(cache, home, func(string) string { return "" })
+	s := newTestPlanUsageStore(cache, home, func(string) string { return "" })
 	s.resolveAgy = func() (string, []string, error) {
 		p, err := exec.LookPath("agy")
 		return p, nil, err

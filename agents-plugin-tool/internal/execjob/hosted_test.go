@@ -127,10 +127,20 @@ type fakeExecHolders struct {
 	// LaunchWith, outside the lock (a test holds the hand-over there).
 	beforeSpawn  func(id string)
 	beforeLaunch func()
+	// beforeStop, when set, runs at the start of Stop, outside the lock
+	// (a test holds one stop in flight there).
+	beforeStop func(id string)
+	// afterUnknownStop, when set, runs once Stop has found its id unknown
+	// and read the census flag, before it answers (a scan that completes
+	// the census in that gap).
+	afterUnknownStop func()
 	// stopErr fails Stop: the holder stays, its child runs on. stopCalls
 	// counts Stop calls, failed ones included.
 	stopErr   error
 	stopCalls int
+	// stopEmitsExit makes Stop send the exit record of a holder whose
+	// process never started too, as a real holder's does for its job.
+	stopEmitsExit bool
 	// onLaunch runs inside LaunchWith, outside the lock, before the new
 	// holder's id reaches the job.
 	onLaunch func(id string)
@@ -216,17 +226,31 @@ func (f *fakeExecHolders) Input(id string, data []byte, eof bool) error {
 // its exit record, as the real holder sends before it goes.
 func (f *fakeExecHolders) Stop(id string) error {
 	f.mu.Lock()
+	hook := f.beforeStop
+	f.mu.Unlock()
+	if hook != nil {
+		hook(id)
+	}
+	f.mu.Lock()
 	f.stopCalls++
 	if err := f.stopErr; err != nil {
 		f.mu.Unlock()
 		return err
 	}
 	if _, ok := f.live[id]; !ok {
+		incomplete, after := f.incomplete, f.afterUnknownStop
 		f.mu.Unlock()
+		if after != nil {
+			after()
+		}
+		if incomplete {
+			// Decided with the lookup, as the manager does.
+			return wsholder.ErrUnknownHolderIncomplete
+		}
 		return wsholder.ErrUnknownHolder
 	}
 	f.stopped = append(f.stopped, id)
-	running := !f.exited[id] && f.spawned[id].Argv != nil
+	running := !f.exited[id] && (f.spawned[id].Argv != nil || f.stopEmitsExit)
 	f.mu.Unlock()
 	if running {
 		sig := 15
@@ -329,10 +353,17 @@ type fakeExecSessions struct {
 	notices   []execNotice
 	seen      map[string]bool
 	outcome   NoticeOutcome
+	// notifyErr fails every Notify; handErr every Hand; hands are the
+	// passive receipts handed.
+	notifyErr, handErr error
+	hands              []execNotice
 	// ownerCalls counts Owner calls; ownerHook runs at the start of call n
 	// (1-based), outside the lock: a test's interleaving point.
 	ownerCalls int
 	ownerHook  func(call int)
+	// beforeNotify, when set, runs at the start of Notify with the event id,
+	// outside the lock (a test holds an admission in flight there).
+	beforeNotify func(eventID string)
 }
 
 func newFakeExecSessions() *fakeExecSessions {
@@ -378,9 +409,36 @@ func (s *fakeExecSessions) Immediate(id string) (bool, error) {
 	return true, nil
 }
 
-func (s *fakeExecSessions) Notify(id string, gen uint64, eventID, text string) (NoticeOutcome, error) {
+func (s *fakeExecSessions) StopNote(id string) string { return "NOTE: deliberate stop" }
+
+func (s *fakeExecSessions) Hand(id string, gen uint64, execID, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.handErr != nil {
+		return s.handErr
+	}
+	s.hands = append(s.hands, execNotice{owner: id, gen: gen, event: execID, text: text})
+	return nil
+}
+
+func (s *fakeExecSessions) handList() []execNotice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.hands)
+}
+
+func (s *fakeExecSessions) Notify(id string, gen uint64, eventID, text string) (NoticeOutcome, error) {
+	s.mu.Lock()
+	hook := s.beforeNotify
+	s.mu.Unlock()
+	if hook != nil {
+		hook(eventID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notifyErr != nil {
+		return 0, s.notifyErr
+	}
 	if s.outcome == NoticeDeferred || s.outcome == NoticeDropped {
 		return s.outcome, nil
 	}
@@ -407,6 +465,11 @@ type hostedFixture struct {
 	exitDir  string
 	// onRunning is the next open's HostedOptions.OnRunning.
 	onRunning func()
+	// fastRetire makes the next open retry holder stops within
+	// milliseconds (HostedOptions.RetireRetryMin and RetireRetryMax).
+	fastRetire bool
+	// now is the next open's HostedOptions.Now (nil: the wall clock).
+	now func() time.Time
 }
 
 func newHostedFixture(t *testing.T, window time.Duration) *hostedFixture {
@@ -416,10 +479,23 @@ func newHostedFixture(t *testing.T, window time.Duration) *hostedFixture {
 	return fx
 }
 
+// newFastRetireFixture is newHostedFixture whose Hosted retries holder stops
+// within milliseconds.
+func newFastRetireFixture(t *testing.T, window time.Duration) *hostedFixture {
+	t.Helper()
+	fx := &hostedFixture{t: t, holders: newFakeExecHolders(), sessions: newFakeExecSessions(), store: newMemHostedStore(), exitDir: t.TempDir(), fastRetire: true}
+	fx.open(window)
+	return fx
+}
+
 // open builds a Hosted over the fixture's store, as a daemon start does.
 func (fx *hostedFixture) open(window time.Duration) {
 	fx.t.Helper()
-	h, err := NewHosted(HostedOptions{Holders: fx.holders, Store: fx.store, Sessions: fx.sessions, ExitDir: fx.exitDir, Window: window, OnRunning: fx.onRunning})
+	opts := HostedOptions{Holders: fx.holders, Store: fx.store, Sessions: fx.sessions, ExitDir: fx.exitDir, Window: window, OnRunning: fx.onRunning, Now: fx.now}
+	if fx.fastRetire {
+		opts.RetireRetryMin, opts.RetireRetryMax = time.Millisecond, 4*time.Millisecond
+	}
+	h, err := NewHosted(opts)
 	if err != nil {
 		fx.t.Fatal(err)
 	}
@@ -607,8 +683,8 @@ func TestHostedAsyncAnswersAtOnce(t *testing.T) {
 
 // TestHostedRunningOwnersFollowEachJob: RunningOwners counts the running
 // jobs by owning conversation; OnRunning runs, with no lock held, once a
-// job is admitted and once it ends, whether it exits, is stopped, or never
-// starts; a reopened Hosted counts a running job its predecessor left.
+// job is admitted, once it is spawned and saved (its start time is set), and
+// once it ends, whether it exits, is stopped, or never starts; a reopened Hosted counts a running job its predecessor left.
 func TestHostedRunningOwnersFollowEachJob(t *testing.T) {
 	fx := newHostedFixture(t, time.Hour)
 	var mu sync.Mutex
@@ -648,7 +724,9 @@ func TestHostedRunningOwnersFollowEachJob(t *testing.T) {
 	mu.Unlock()
 	want := []map[string]int{
 		{"lead": 1},             // lead admitted
+		{"lead": 1},             // lead spawned (its start time is set)
 		{"lead": 1, "other": 1}, // other admitted
+		{"lead": 1, "other": 1}, // other spawned
 		{"other": 1},            // lead exited
 		{},                      // other stopped
 		{"lead": 1},             // the failing launch admitted
@@ -701,6 +779,7 @@ func TestHostedRunningOwnersFollowEachJob(t *testing.T) {
 	mu.Unlock()
 	want = []map[string]int{
 		{"lead": 1, "other": 1}, // other admitted beside the kept job
+		{"lead": 1, "other": 1}, // other spawned
 		{"other": 1},            // the kept job's holder left (HolderGone)
 		{},                      // the next start found other's holder gone
 	}
@@ -2186,9 +2265,9 @@ func TestHostedPanicsReleaseTheDeleteClaim(t *testing.T) {
 				fx.store.failDelete = true
 			}
 			fx.store.mu.Unlock()
-			// Each finished job's admission and end have called OnRunning,
-			// so the armed panic hits this launch's admission only.
-			eventuallyExec(t, "the finished jobs' running updates", func() bool { return calls.Load() == 2*HostedMaxJobs })
+			// Each finished job's admission, spawn and end have called
+			// OnRunning, so the armed panic hits this launch's admission only.
+			eventuallyExec(t, "the finished jobs' running updates", func() bool { return calls.Load() == 3*HostedMaxJobs })
 			armed.Store(where == "on running")
 			func() {
 				defer func() { _ = recover() }()
@@ -2227,11 +2306,8 @@ func TestHostedPanicsReleaseTheDeleteClaim(t *testing.T) {
 // then ends it from its exit copy or, with none, as lost; a holder that
 // the later scan lists is replayed and its job lives on.
 func TestHostedIncompleteCensusKeepsLivingJobFenced(t *testing.T) {
-	prevMin, prevMax := retireRetryMin, retireRetryMax
-	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
-	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
 
-	fx := newHostedFixture(t, 10*time.Millisecond)
+	fx := newFastRetireFixture(t, 10*time.Millisecond)
 	unreadable, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "unreadable"})
 	copied, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "copied"})
 	vanished, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "vanished"})

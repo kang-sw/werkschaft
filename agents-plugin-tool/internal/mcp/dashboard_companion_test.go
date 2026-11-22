@@ -21,7 +21,9 @@ import (
 
 var companionKeys = []string{
 	wsdashboard.CompanionEnabledKey, wsdashboard.CompanionDirectorKey, wsdashboard.CompanionPackKey,
-	wsdashboard.CompanionPresetKey, wsdashboard.CompanionAgentCooldownKey, wsdashboard.CompanionAgentHourlyCapKey,
+	wsdashboard.CompanionPresetKey, wsdashboard.CompanionOutfitKey, wsdashboard.CompanionHairKey,
+	wsdashboard.CompanionEyesKey, wsdashboard.CompanionAttachmentsKey, wsdashboard.CompanionPaletteKey,
+	wsdashboard.CompanionAgentCooldownKey, wsdashboard.CompanionAgentHourlyCapKey, wsdashboard.CompanionSourcesKey,
 }
 
 func TestCompanionConfigTypedValues(t *testing.T) {
@@ -41,8 +43,10 @@ func TestCompanionConfigTypedValues(t *testing.T) {
 	}{
 		{"unset", `{}`, defaults},
 		{"valid", `{"overrides":{"dashboard.companion_enabled":"true","dashboard.companion_director":"agent",` +
-			`"dashboard.companion_agent_cooldown_seconds":"45","dashboard.companion_agent_hourly_cap":"120"}}`,
-			wsdashboard.CompanionConfig{Enabled: true, Director: "agent", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 45, AgentHourlyCap: 120}},
+			`"dashboard.companion_agent_cooldown_seconds":"45","dashboard.companion_agent_hourly_cap":"120",` +
+			`"dashboard.companion_sources":"https://example.invalid/a.git https://example.invalid/b.zip"}}`,
+			wsdashboard.CompanionConfig{Enabled: true, Director: "agent", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 45, AgentHourlyCap: 120,
+				Sources: "https://example.invalid/a.git https://example.invalid/b.zip"}},
 		{"bounds", `{"overrides":{"dashboard.companion_agent_cooldown_seconds":"10","dashboard.companion_agent_hourly_cap":"1"}}`,
 			wsdashboard.CompanionConfig{Director: "rules", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 10, AgentHourlyCap: 1}},
 		{"invalid stored values fall back to defaults", `{"overrides":{"dashboard.companion_enabled":"maybe",` +
@@ -66,6 +70,74 @@ func TestCompanionConfigTypedValues(t *testing.T) {
 				t.Fatalf("config = %+v, %v; want %+v", got, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestCompanionWardrobeConfig(t *testing.T) {
+	catalog, err := DashboardConfigCatalog("ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := func(n int) string {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = fmt.Sprintf("s%d=a%d", i, i)
+		}
+		return strings.Join(parts, " ")
+	}
+	id64 := strings.Repeat("a", 64)
+	accept := map[string][]string{
+		wsdashboard.CompanionOutfitKey:      {"", "street", "a_b-c9", id64},
+		wsdashboard.CompanionHairKey:        {"", "street"},
+		wsdashboard.CompanionEyesKey:        {"", "street"},
+		wsdashboard.CompanionAttachmentsKey: {"", "headdress=cap", "headdress=cap tail=none", pair(16)},
+		wsdashboard.CompanionPaletteKey:     {"", "skin=#AABBCC", "skin=#AABBCC trim=#010203", "Skin=#aabbcc"},
+	}
+	reject := map[string][]string{
+		wsdashboard.CompanionOutfitKey:      {"Street", "-x", id64 + "a", " street", "street ", "a b"},
+		wsdashboard.CompanionHairKey:        {"Street", "-x", id64 + "a"},
+		wsdashboard.CompanionEyesKey:        {"Street", "-x", id64 + "a"},
+		wsdashboard.CompanionAttachmentsKey: {"headdress=cap  tail=x", "tail=", "tail", pair(17), " headdress=cap", "headdress=cap ", "Head=cap", "head=Cap"},
+		wsdashboard.CompanionPaletteKey:     {"skin=#abc", "skin=red", "skin=#GGGGGG", " skin=#aabbcc", "skin=#aabbcc ", "skin=#aabbcc  trim=#010203"},
+	}
+	for key, values := range accept {
+		for _, value := range values {
+			if _, err := catalog.Validate(wsconfig.ScopeGlobal, wsconfigservice.Operation{Key: key, Action: "set", Value: value}); err != nil {
+				t.Errorf("%s rejects %q: %v", key, value, err)
+			}
+		}
+	}
+	for key, values := range reject {
+		for _, value := range values {
+			if _, err := catalog.Validate(wsconfig.ScopeGlobal, wsconfigservice.Operation{Key: key, Action: "set", Value: value}); err == nil {
+				t.Errorf("%s accepts %q", key, value)
+			}
+		}
+	}
+
+	opts := wsconfig.Options{CacheHome: t.TempDir(), ConfigHome: t.TempDir()}
+	path, err := wsconfig.GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Dir(path), filepath.Base(path), `{"overrides":{"dashboard.companion_outfit":"street","dashboard.companion_hair":"bob",`+
+		`"dashboard.companion_eyes":"wide","dashboard.companion_attachments":"headdress=cap tail=none","dashboard.companion_palette":"skin=#AABBCC"}}`)
+	got, err := dashboardCompanionConfig(catalog, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Outfit != "street" || got.Hair != "bob" || got.Eyes != "wide" ||
+		got.Attachments != "headdress=cap tail=none" || got.Palette != "skin=#AABBCC" {
+		t.Fatalf("wardrobe config = %+v", got)
+	}
+	mustWrite(t, filepath.Dir(path), filepath.Base(path), `{"overrides":{"dashboard.companion_outfit":"Street","dashboard.companion_hair":"-x",`+
+		`"dashboard.companion_eyes":"a b","dashboard.companion_attachments":"tail=","dashboard.companion_palette":"skin=red"}}`)
+	got, err = dashboardCompanionConfig(catalog, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Outfit != "" || got.Hair != "" || got.Eyes != "" || got.Attachments != "" || got.Palette != "" {
+		t.Fatalf("invalid stored wardrobe values did not fall back: %+v", got)
 	}
 }
 
@@ -94,8 +166,8 @@ func TestCompanionGlobalOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	tune := wsconfig.NewResolver(opts, nil, nil, nil)
-	if len(companionKeys) != 6 {
-		t.Fatalf("companion keys = %v, want the six reshaped keys", companionKeys)
+	if len(companionKeys) != 12 {
+		t.Fatalf("companion keys = %v, want the eleven companion keys and the source list", companionKeys)
 	}
 	for _, scope := range []wsconfig.Scope{wsconfig.ScopeProject, wsconfig.ScopeRepo, wsconfig.ScopeSession} {
 		for _, item := range companionKeys {
@@ -298,6 +370,15 @@ func expectCompanion(t *testing.T, conn *websocket.Conn, want wsdashboard.Compan
 		}
 		if frame.Event != "companion" {
 			continue
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(frame.Data, &fields); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"outfit", "hair", "eyes", "attachments", "palette"} {
+			if _, ok := fields[name]; !ok {
+				t.Fatalf("companion event lacks %q: %s", name, raw)
+			}
 		}
 		var got wsdashboard.CompanionConfig
 		if err := json.Unmarshal(frame.Data, &got); err != nil || got != want {

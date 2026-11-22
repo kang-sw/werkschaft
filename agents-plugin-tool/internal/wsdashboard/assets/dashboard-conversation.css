@@ -1,5 +1,6 @@
 /* ===== conversation ===== */
 .d-jump-wrap { position: sticky; top: 8px; height: 0; z-index: 3; pointer-events: none; }
+.convo:has(> .au-bar) .d-jump-wrap { top: 44px; }
 .d-jump-btn { position: absolute; left: 8px; top: 0; pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 999px; background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow-hi), inset 0 0 0 1px var(--wb-line); cursor: pointer; transition: background-color .15s, color .15s; }
 .d-jump-btn[hidden] { display: none; }
 .d-jump-btn .i { width: 14px; height: 14px; stroke-width: 2; transition: transform .15s; }
@@ -125,6 +126,22 @@
 .cexec .cexec-x:focus-visible, .cexec .cexec-copy:focus-visible { outline: 2px solid var(--wb-primary); }
 .cexec-file { display: flex; align-items: center; gap: 8px; padding-left: 18px; font-size: 11.5px; min-width: 0; }
 .cexec-file a { overflow-wrap: anywhere; min-width: 0; flex: 1 1 auto; font-family: var(--wb-mono); }
+.cexec .cexec-label { font-weight: 700; color: var(--wb-fg); flex: none; }
+/* The lead's user commands ("command slots"): a strip over the composer's result
+   cards, one row per command with its exact stored line, localhost-only. */
+.d-ucmd { padding: 4px 2px 2px; font-size: 12px; }
+.d-ucmd[hidden] { display: none; }
+.d-ucmd > summary { cursor: pointer; color: var(--wb-muted-fg); font-size: 11.5px; padding: 2px 0; user-select: none; }
+.d-ucmd-list { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 6px; max-height: 30vh; overflow: auto; }
+.ucmd { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ucmd-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ucmd-run { cursor: pointer; border: 0; border-radius: 8px; padding: 3px 10px; font: inherit; font-weight: 600; background: var(--wb-card); color: var(--wb-fg); box-shadow: var(--wb-shadow); flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ucmd-run:hover:not(:disabled) { color: var(--wb-primary); }
+.ucmd-run:disabled { opacity: .55; cursor: progress; }
+.ucmd-desc { color: var(--wb-muted-fg); min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+.ucmd-x { margin-left: auto; cursor: pointer; border: 0; border-radius: 6px; padding: 1px 6px; font: inherit; background: transparent; color: var(--wb-muted-fg); flex: none; }
+.ucmd-run:focus-visible, .ucmd-x:focus-visible, .d-ucmd > summary:focus-visible { outline: 2px solid var(--wb-primary); }
+.ucmd-line { display: block; padding-left: 4px; font-family: var(--wb-mono); font-size: 11.5px; color: var(--wb-muted-fg); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6.5em; overflow: auto; }
 .caret { display: inline-block; width: 7px; height: 13px; background: currentColor; vertical-align: -2px; margin-left: 2px; animation: dash-blink 1s steps(1) infinite; }
 @keyframes dash-blink { 50% { opacity: 0; } }
 .permwait { display: flex; gap: 8px; align-items: center; background: color-mix(in srgb, var(--wb-ph-perm) 16%, var(--wb-card)); border-radius: 10px; padding: 7px 11px; font-size: 13px; }

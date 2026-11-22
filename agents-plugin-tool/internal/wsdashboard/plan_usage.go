@@ -61,7 +61,10 @@ type planUsageStore struct {
 	// agy state is kept separate from Claude/Codex so plan-usage.json and
 	// plan-usage-history.json stay byte-identical (T0). All fields below
 	// except resolveAgy, agyDebounce, agyTimeout, agyEnv, and now are guarded by mu.
-	resolveAgy     func() (string, []string, error)
+	resolveAgy func() (string, []string, error)
+	// harnesses declares which harnesses push usage and keep a separate
+	// five-hour history (DaemonOptions.Harnesses); set before use, read-only.
+	harnesses      HarnessTraitSet
 	agyGroups      []planUsageEntry
 	agyLastSaved   []byte
 	agyLastProbe   time.Time
@@ -123,6 +126,8 @@ func newPlanUsageStore(dir, home string, getenv func(string) string) *planUsageS
 		client:         &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 	var saved struct {
+		// Retained name check: the plan-usage file's member names are persisted bytes
+		// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 		Claude planUsageEntry `json:"claude"`
 		GPT    planUsageEntry `json:"gpt"`
 	}
@@ -177,6 +182,8 @@ func (s *planUsageStore) nowTime() time.Time {
 	return time.Now()
 }
 func (s *planUsageStore) saveLocked() {
+	// Retained name check: the plan-usage file's claude member is persisted bytes
+	// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 	raw, err := json.Marshal(struct {
 		Claude planUsageEntry `json:"claude"`
 		GPT    planUsageEntry `json:"gpt"`
@@ -192,7 +199,10 @@ func validUsage(percent float64) bool {
 }
 
 func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
-	if s == nil || snap == nil || snap.Adapter != "claude" || snap.Usage == nil {
+	// The push is the one pushed-usage provider's persisted shape (the
+	// "claude" cache entry and the "Claude push" history source), kept under
+	// its own name (1881); which snapshots may feed it is the harness's trait.
+	if s == nil || snap == nil || !s.harnesses.pushesClaudeUsage(snap.Adapter) || snap.Usage == nil {
 		return
 	}
 	// Legacy snapshots can contain limits without an observation time.
@@ -260,6 +270,8 @@ func (s *planUsageStore) pushClaude(snap *wslive.Snapshot) {
 			s.claude.Windows = append(s.claude.Windows, next)
 		}
 		changed = true
+		// Retained name check: the persisted history harness and source labels
+		// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 		samples = append(samples, planUsageSample{Harness: "claude", Kind: next.Kind, Source: "Claude push", ResetsAt: next.ResetsAt, AsOf: next.AsOf, Percent: next.Percent})
 		if next.AsOf > s.claude.AsOf {
 			s.claude.AsOf = next.AsOf
@@ -308,6 +320,8 @@ func (s *planUsageStore) configHome(key, fallback string) string {
 // credential access failures remain retryable even without metadata changes.
 func (s *planUsageStore) detect() (claudePlan string, codexLogin, piLogin bool) {
 	paths := [3]string{
+		// Retained name check: each provider's own credential location, read to learn
+		// whether the provider is signed in (TestPlanUsageCodexHomeSelection).
 		filepath.Join(s.configHome("CLAUDE_CONFIG_DIR", ".claude"), ".credentials.json"),
 		filepath.Join(s.configHome("CODEX_HOME", ".codex"), "auth.json"),
 		filepath.Join(s.home, ".pi", "agent", "auth.json"),
@@ -347,6 +361,7 @@ func (s *planUsageStore) detect() (claudePlan string, codexLogin, piLogin bool) 
 		}
 		return json.Unmarshal(raw, out) == nil
 	}
+	// Retained name check: the provider's credential file member, claudeAiOauth.
 	var claude struct {
 		OAuth struct {
 			Plan string `json:"subscriptionType"`
@@ -389,6 +404,12 @@ func currentUsage(e planUsageEntry, now int64) planUsageEntry {
 	}
 	return e
 }
+
+// entries lists the usage providers' current entries. Each provider labels its
+// entry with the persisted "harness" value its cache and history files and the
+// /usage answer have always carried: the Claude push provider "claude" and the
+// ChatGPT-account reader "codex" (agy labels its own in plan_usage_agy.go).
+// These are persisted names, not behavior branches (1881 survivor).
 func (s *planUsageStore) entries() []planUsageEntry {
 	plan, codex, pi := s.detect()
 	s.mu.Lock()
@@ -429,7 +450,7 @@ func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.index != nil {
 		for _, session := range d.index.Sessions() {
-			if session.Harness == "claude" {
+			if d.harnesses.pushesClaudeUsage(session.Harness) {
 				d.planUsage.pushClaude(d.snapshots.snapshotWithoutObserved(d.dir, session.ReplyID))
 			}
 		}
@@ -443,14 +464,10 @@ func (d *Daemon) handlePlanUsage(w http.ResponseWriter, r *http.Request) {
 		now := d.planUsage.nowTime().UnixMilli()
 		body["history"] = d.planUsage.historyView(entries, now)
 		if codexHist, ok := d.planUsage.codexFiveHourHistoryView(entries, now); ok {
+			// Retained name check: the response member the dashboard page reads.
 			body["codexFiveHourHistory"] = codexHist
 		}
-		for _, e := range entries {
-			if e.Harness == "agy" {
-				body["agyHistory"] = d.planUsage.agyHistoryView(entries, now)
-				break
-			}
-		}
+		d.planUsage.addAgyHistory(body, entries, now)
 	}
 	_ = json.NewEncoder(w).Encode(body)
 }

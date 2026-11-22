@@ -1252,7 +1252,7 @@
         try { modal = d.matches(":modal"); } catch (x) { modal = false; }
         if (modal) a = Math.max(a, window.WsShell.alpha(getComputedStyle(d, "::backdrop").backgroundColor));
       });
-      q(".tk-iwin-back:not([hidden]), .gwin-back:not([hidden]), .wbv:not([hidden]), .bc-scrim:not([hidden]), .d-tm-back:not([hidden])").forEach(function (el) {
+      q(".tk-iwin-back:not([hidden]), .gwin-back:not([hidden]), .wbv:not([hidden]), .bc-scrim:not([hidden]), .d-tm-back:not([hidden]), .au-scrim:not([hidden])").forEach(function (el) {
         if (el.getClientRects().length) a = Math.max(a, window.WsShell.alpha(getComputedStyle(el).backgroundColor));
       });
       return Math.round(a * 100) / 100;
@@ -1290,6 +1290,7 @@
     function queue() { if (!shHidden && !queued) queued = requestAnimationFrame(post); }
     function queueHead() { headDirty = true; queue(); }
     doc.addEventListener("ws-overview", queue);
+    doc.addEventListener("ws-audit", queue);
     var top = doc.querySelector(".dwrap > .top");
     if (window.ResizeObserver && top) new ResizeObserver(queueHead).observe(top);
     window.addEventListener("resize", queueHead);
@@ -1337,6 +1338,7 @@
         shHidden = !m.shown;
         if (shHidden && queued) { cancelAnimationFrame(queued); queued = null; }
         syncPageVisibility();
+        if (m.shown) shUnstage();
         if (shHidden) {
           // Opaque author scripts have no safe general pause API. Retain
           // their placeholder heights, not their running child documents.
@@ -1380,10 +1382,16 @@
     history.replaceState(Object.assign({}, history.state, { wsShellIndex: shIndex }), "", location.href);
     var ent = shAdd(el, f);
     shOn = ent;
-    if (f.hash) { el.src = window.WsShell.src(f); return; }
+    // A hash lands as a fragment-only src change, which loads nothing again
+    // when the document already finished: the readiness below still stands.
+    if (f.hash) el.src = window.WsShell.src(f);
     try { ent.loaded = el.contentDocument.readyState === "complete"; } catch (x) { /* not yet */ }
     shSend(ent, "sync");
-    if (ent.loaded) shSettings(ent);
+    if (ent.loaded) {
+      shSettings(ent);
+      // No load event will tell this frame it is the shown one.
+      shSend(ent, "shown", { shown: true });
+    }
   }
 
   if (live || gmenu) {

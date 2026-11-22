@@ -143,7 +143,6 @@ func (m *claudeMapper) taskWake(l claudeLine) []Event {
 // It carries JSON live-event lines like the agent widget, but never allows
 // an extension to reset the runner's state or replace its usage or turns.
 const piEventsWidgetKey = "ws-dashboard-events"
-const piCompactCapability = "pi_compaction_preparation_v1"
 
 func piHostedEvents(raw json.RawMessage) []Event {
 	var lines []string

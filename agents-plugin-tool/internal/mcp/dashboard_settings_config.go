@@ -255,8 +255,11 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 	return wsdashboard.CompanionConfig{
 		Enabled: flag(wsdashboard.CompanionEnabledKey), Director: text(wsdashboard.CompanionDirectorKey),
 		Pack: text(wsdashboard.CompanionPackKey), Preset: text(wsdashboard.CompanionPresetKey),
+		Outfit: text(wsdashboard.CompanionOutfitKey), Hair: text(wsdashboard.CompanionHairKey), Eyes: text(wsdashboard.CompanionEyesKey),
+		Attachments: text(wsdashboard.CompanionAttachmentsKey), Palette: text(wsdashboard.CompanionPaletteKey),
 		AgentCooldownSeconds: number(wsdashboard.CompanionAgentCooldownKey),
 		AgentHourlyCap:       number(wsdashboard.CompanionAgentHourlyCapKey),
+		Sources:              text(wsdashboard.CompanionSourcesKey),
 	}, nil
 }
 
@@ -297,6 +300,9 @@ func (src *DashboardSessionSource) settingsSession(reg wsdashboard.Registration)
 // accepting its historical config.tune arguments.
 func dashboardAdapterReadLimits(key string) (noRepo, noSession bool) {
 	switch key {
+	// Retained name check: the settings page routes the harness-bucketed config
+	// keys a user's config may hold by group; the keys are persisted names
+	// (TestDashboardSettingsReadTunedValues).
 	case "claude.status_band_enabled":
 		return false, false
 	case "pi.runaway_threshold", "pi.settle_delay_ms", "pi.compaction_advisory_percent", "pi.compaction_hard_percent",
