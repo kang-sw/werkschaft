@@ -293,9 +293,10 @@ Verification:
   `./internal/wsdashboard` mail-wake tests); never the whole `internal/mcp`
   or `internal/wsdashboard` package. Record exact commands in the Result.
 
-### Result (59e8209c5) - 2026-11-22
+### Result (e9f9f0cc8) - 2026-11-22
 
-Landed in 10b1c65f9, with the review fix in 59e8209c5:
+Landed in 10b1c65f9, with the review fix in 59e8209c5 and its tests in
+e9f9f0cc8:
 
 - Each fan-out copy opens with
   `[<ns> group mail <gid>: <n> public recipients; mailbox.recipients lists them]`.
@@ -328,7 +329,11 @@ Landed in 10b1c65f9, with the review fix in 59e8209c5:
     fresh legend.
 - Dashboard batch-head consumers read only the head's first line. They also
   skip a standalone legend paragraph: without that, a labeled peer mail
-  steered into the middle of a batch would break nudge grouping.
+  steered into the middle of a batch would break nudge grouping. Only the
+  generated shape is skipped: a one-line `[senders: ...]` paragraph closed by
+  `]` and a blank line, ahead of a `mail from` head. An author's text cannot
+  come before that head. The mcp copy of `trimMailLegend` applies the same
+  rule.
 - `mailbox.recipients` is in `ChildSafeWSTools` and in the three runtime
   manifests (`>=0.50.8-dev <0.51.0`; the agents-plugin and agents-plugin-pi
   manifests are byte-identical). Its schema and the shortened `mailbox.send`
@@ -339,7 +344,7 @@ Verification. All commands ran from agents-plugin-tool with the prefix
 
 - `go test ./internal/wsmailbox -count=1`: ok.
 - `go test ./internal/mcp -count=1 -run '^(<names>)$'`: ok. `<names>` is all
-  153 Test functions in these `_test.go` files: agent_mail_routing,
+  154 Test functions in these `_test.go` files: agent_mail_routing,
   agent_tools, hosted_login, lead_mail, mailbox_correspondents,
   mailbox_fanout, mailbox_groups, mailbox_history, mailbox_legend,
   mailbox_recv_concurrency, mailbox_runtime, mailbox_tools, mailbox_wake,
@@ -373,12 +378,15 @@ Verification. All commands ran from agents-plugin-tool with the prefix
   - eviction (count, byte, oversized newest): `TestMailGroupStore*`;
   - labels and legend: `TestCleanMailLabel`, `TestMailLegendLine`,
     `TestMailboxRecvShowsTheSenderLegend`, `TestLeadMailboxLegendPlacement`
-    (including a literal `[senders: x = y]` body line) and
-    `TestLeadMailboxDrainKeepsTextsWithoutALegend`;
+    (including a literal `[senders: x = y]` body line, and a turn led by a
+    child report), `TestLeadMailboxDrainKeepsTextsWithoutALegend` and
+    `TestTrimMailLegendTakesOnlyTheGeneratedLine`;
   - hosted submission: `TestMailLegendRidesEachSubmission`,
-    `TestMailLegendRefreshesOnARequeuedSteer` and
+    `TestMailLegendRefreshesOnARequeuedSteer` (a requeue and resubmit
+    yields exactly one legend, with the current label) and
     `TestSpawnLabelNamesASpawnedChild`;
-  - dashboard: `TestConversationBoardNudgeBatchSurvivesASenderLegend`.
+  - dashboard: `TestConversationBoardNudgeBatchSurvivesASenderLegend` and
+    `TestConversationMailWakeTrimsOnlyTheGeneratedLegend`.
 
 Decisions:
 
@@ -387,11 +395,23 @@ Decisions:
 - Recipient labels are snapshotted at send time. The sender's label is read
   at lookup time.
 - The `261115` closed allowlist is not in the code yet. The test models it
-  with an explicit `WS_MCP_ALLOWED_TOOLS` list.
-- A child's steered text keeps its legend in `steeredReport.Text`, because
-  the harness's taken messages are matched against it (steerTaken and
-  recovery). `Mail` holds the text to requeue. Swapping the two would make a
-  downgraded daemon miss that match and resend the steer.
+  with an explicit `WS_MCP_ALLOWED_TOOLS` list. Forward item for `261115`:
+  when that allowlist lands, `TestMailboxRecipientsTransportAdmission`
+  should drive the real list in place of the explicit one.
+- The steer record (`Record.Steered`, written at
+  `internal/wsagent/children.go:779`) keeps the labeled steer in
+  `steeredReport.Text`. That text is only a match key and is never
+  resubmitted:
+  - `children.go:724` (steerTaken) compares it with the text the harness
+    reports it took;
+  - `runner_process.go:196` passes it as `RecoveredSteers`, which
+    `agy.go:1018-1022` only replays as that same acknowledgement.
+
+  Both requeue paths, `children.go:709` (a refused steer) and `:766`
+  (requeueSteered), take `steeredReport.requeued()`, which returns Drain's
+  legend-free text (`Mail`). The turn then adds one legend resolved at
+  submission (`runner_conv.go:1299`). Swapping `Text` and `Mail` would make
+  a downgraded daemon miss the acknowledgement match and resend the steer.
 - A turn's reports and held mail share one legend, placed on the first mail
   text. A child report never gets a legend.
 
