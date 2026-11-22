@@ -133,16 +133,24 @@ var (
 // Redaction records one secret match masked before persistence. It stores the
 // field, byte offset in the redacted body before any per-body cap, rule name,
 // and original secret byte length — never the secret text itself.
+//
+// A Count above 1 marks a summary entry the store wrote when the per-span
+// entries overflowed its metadata bound: it stands for Count masked spans of
+// one (field, rule) starting at Offset, and Length is their total original
+// length.
 type Redaction struct {
 	Field  string `json:"field"`
 	Offset int    `json:"offset"`
 	Rule   string `json:"rule"`
 	Length int    `json:"length"`
+	Count  int    `json:"count,omitempty"`
 }
 
 // SeenBounds records how many bytes of a body the harness delivered to the
 // model when that is less than the stored body. A nil SeenBounds or nil field
-// means fully seen or unknown.
+// means fully seen or unknown. Capture sets it in raw body bytes; the audit
+// store maps it through redaction and its per-body cap, so a persisted bound
+// is a byte offset in the stored body.
 type SeenBounds struct {
 	In  *int `json:"in,omitempty"`
 	Out *int `json:"out,omitempty"`
@@ -208,6 +216,9 @@ type Envelope struct {
 	Redactions  []Redaction    `json:"redactions,omitempty"`
 	Seen        *SeenBounds    `json:"seen,omitempty"`
 	StoredTrunc *StoredTrunc   `json:"stored_trunc,omitempty"`
+	// Source is the durable source identity the store deduplicates replayed
+	// records by; nil for an envelope with no replayable source.
+	Source *SourceID `json:"source,omitempty"`
 }
 
 // NewEnvelope builds a versioned Envelope for a known kind with a UTC
@@ -305,6 +316,9 @@ func (e Envelope) Validate() error {
 		if r.Rule == "" {
 			return fmt.Errorf("%w: redactions[%d] rule is required", ErrInvalidEnvelope, i)
 		}
+		if r.Count < 0 {
+			return fmt.Errorf("%w: redactions[%d] negative count %d", ErrInvalidEnvelope, i, r.Count)
+		}
 	}
 	return nil
 }
@@ -348,6 +362,9 @@ type wireEnvelope struct {
 	Redactions  []Redaction    `json:"redactions,omitempty"`
 	Seen        *SeenBounds    `json:"seen,omitempty"`
 	StoredTrunc *StoredTrunc   `json:"stored_trunc,omitempty"`
+	// Source is the durable source identity the store deduplicates replayed
+	// records by; nil for an envelope with no replayable source.
+	Source *SourceID `json:"source,omitempty"`
 }
 
 // MarshalJSON encodes e with schema version v (defaulting 0 to SchemaVersion),
@@ -394,6 +411,7 @@ func (e Envelope) MarshalJSON() ([]byte, error) {
 		Redactions:  e.Redactions,
 		Seen:        seen,
 		StoredTrunc: trunc,
+		Source:      e.Source,
 	})
 }
 
@@ -433,6 +451,7 @@ func (e *Envelope) UnmarshalJSON(data []byte) error {
 		Redactions:  w.Redactions,
 		Seen:        w.Seen,
 		StoredTrunc: w.StoredTrunc,
+		Source:      w.Source,
 	}
 	return nil
 }
