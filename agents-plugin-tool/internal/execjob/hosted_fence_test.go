@@ -2,7 +2,9 @@ package execjob
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -112,5 +114,100 @@ func TestHostedOwnerFenceAndStopOwner(t *testing.T) {
 	}
 	if n := fx.h.LiveCount("other"); n != 0 {
 		t.Fatalf("live after the refused start: %d", n)
+	}
+}
+
+// A close that lands while a job's process is being handed to its holder
+// waits for the hand-over and ends the process it started: no process runs
+// after StopOwner returns.
+func TestHostedStopOwnerWaitsForAnInFlightSpawn(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	entered, release := make(chan string, 1), make(chan struct{})
+	fx.holders.mu.Lock()
+	fx.holders.beforeSpawn = func(id string) {
+		entered <- id
+		<-release
+	}
+	fx.holders.mu.Unlock()
+	launched := make(chan error, 1)
+	go func() {
+		_, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+		launched <- err
+	}()
+	holder := <-entered
+	fx.h.FenceOwner("lead")
+	stopped := make(chan error, 1)
+	go func() { stopped <- fx.h.StopOwner("lead") }()
+	select {
+	case err := <-stopped:
+		t.Fatalf("StopOwner returned while the spawn ran: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	<-launched
+	if !slices.Contains(fx.holders.stops(), holder) || fx.holders.spawnOf(holder).Argv == nil {
+		t.Fatalf("the spawned holder was not stopped after its spawn: stops %v", fx.holders.stops())
+	}
+	if n := fx.h.LiveCount("lead"); n != 0 {
+		t.Fatalf("live after StopOwner: %d", n)
+	}
+}
+
+// A close that lands while a job's holder is still launching ends the job
+// at once and, once the holder is up, stops it unspawned.
+func TestHostedStopOwnerEndsAJobWhoseHolderIsLaunching(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	fx.holders.mu.Lock()
+	fx.holders.beforeLaunch = func() {
+		entered <- struct{}{}
+		<-release
+	}
+	fx.holders.mu.Unlock()
+	launched := make(chan error, 1)
+	go func() {
+		_, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+		launched <- err
+	}()
+	<-entered
+	fx.h.FenceOwner("lead")
+	if err := fx.h.StopOwner("lead"); err != nil {
+		t.Fatal(err)
+	}
+	if n := fx.h.LiveCount("lead"); n != 0 {
+		t.Fatalf("StopOwner returned with the job live: %d", n)
+	}
+	close(release)
+	if err := <-launched; err == nil || !strings.Contains(err.Error(), "closed before the job started") {
+		t.Fatalf("launch after the close: %v", err)
+	}
+	eventuallyExec(t, "the unspawned holder's stop", func() bool { return len(fx.holders.stops()) == 1 })
+	fx.holders.mu.Lock()
+	spawned := len(fx.holders.spawned)
+	fx.holders.mu.Unlock()
+	if spawned != 0 {
+		t.Fatal("a job whose owner closed during its holder launch spawned")
+	}
+}
+
+// A holder that does not go fails StopOwner: the job may still run, and
+// the close must not report success.
+func TestHostedStopOwnerReportsAHolderThatDidNotGo(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.holders.mu.Lock()
+	fx.holders.stopErr = errors.New("holder busy")
+	fx.holders.mu.Unlock()
+	if err := fx.h.StopOwner("lead"); err == nil || !strings.Contains(err.Error(), v.ID) || !strings.Contains(err.Error(), "holder busy") {
+		t.Fatalf("StopOwner over a holder that did not go: %v", err)
+	}
+	if got, _ := fx.h.Get("lead", v.ID); got.State != HostedRunning {
+		t.Fatalf("job state %s", got.State)
 	}
 }

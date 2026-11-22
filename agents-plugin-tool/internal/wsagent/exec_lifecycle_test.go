@@ -2,8 +2,10 @@ package wsagent
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +18,8 @@ type fakeExecJobs struct {
 	counts map[string]int
 	calls  []string
 	fenced map[string]bool
+	// stopErr, by owner, fails that owner's stops: its jobs keep running.
+	stopErr map[string]error
 }
 
 func newFakeExecJobs() *fakeExecJobs {
@@ -34,11 +38,15 @@ func (f *fakeExecJobs) RunningOwners() map[string]int {
 	return out
 }
 
-func (f *fakeExecJobs) StopOwner(owner string) {
+func (f *fakeExecJobs) StopOwner(owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "stop "+owner)
+	if err := f.stopErr[owner]; err != nil {
+		return err
+	}
 	f.counts[owner] = 0
+	return nil
 }
 
 func (f *fakeExecJobs) FenceOwner(owner string) {
@@ -247,5 +255,35 @@ func TestExecCloseFencesThenStopsDeepestFirst(t *testing.T) {
 	}
 	if h.state(child.ID).Status != StatusClosed || h.state(parent.ID).Status != StatusClosed {
 		t.Fatal("both closed")
+	}
+}
+
+// A job that does not stop keeps its conversation, and every conversation
+// above it, open and unfenced; the close says why.
+func TestExecCloseKeepsTheTreeOpenWhenAJobDoesNotStop(t *testing.T) {
+	h, _ := newFakePiRecoveryHarness(t)
+	jobs := newFakeExecJobs()
+	jobs.stopErr = map[string]error{}
+	h.runner.BindExecJobs(jobs)
+	parent, _ := spawnRecoveryWorker(t, h)
+	child, err := h.runner.Spawn(SpawnSpec{Profile: PiWorkerProfile, Root: h.root, Prompt: "child", Tier: "small", Parent: &ParentRef{Kind: ParentConversation, ReplyID: parent.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.holder(child.ID)
+	jobs.set(child.ID, 1)
+	jobs.stopErr[child.ID] = errors.New("holder did not go")
+	h.runner.ExecJobsChanged()
+	if _, err := h.runner.CloseConversation(parent.ID); err == nil || !strings.Contains(err.Error(), "did not stop") || !strings.Contains(err.Error(), "holder did not go") {
+		t.Fatalf("close over a job that did not stop: %v", err)
+	}
+	if h.state(child.ID).Status == StatusClosed || h.state(parent.ID).Status == StatusClosed {
+		t.Fatal("a conversation closed over a job that may still run")
+	}
+	jobs.mu.Lock()
+	fenced := maps.Clone(jobs.fenced)
+	jobs.mu.Unlock()
+	if len(fenced) != 0 {
+		t.Fatalf("still fenced: %v", fenced)
 	}
 }

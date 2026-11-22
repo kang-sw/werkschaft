@@ -88,6 +88,12 @@ type fakeExecHolders struct {
 	// onSpawn runs after a spawn, outside the lock (the child's own
 	// behaviour: output, exit).
 	onSpawn func(id string)
+	// beforeSpawn and beforeLaunch, when set, run at the start of Spawn and
+	// LaunchWith, outside the lock (a test holds the hand-over there).
+	beforeSpawn  func(id string)
+	beforeLaunch func()
+	// stopErr fails Stop: the holder stays, its child runs on.
+	stopErr error
 }
 
 func newFakeExecHolders() *fakeExecHolders {
@@ -95,6 +101,12 @@ func newFakeExecHolders() *fakeExecHolders {
 }
 
 func (f *fakeExecHolders) LaunchWith(spec wsholder.LaunchSpec) (string, error) {
+	f.mu.Lock()
+	hold := f.beforeLaunch
+	f.mu.Unlock()
+	if hold != nil {
+		hold()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.n++
@@ -105,6 +117,12 @@ func (f *fakeExecHolders) LaunchWith(spec wsholder.LaunchSpec) (string, error) {
 }
 
 func (f *fakeExecHolders) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.ChildStatus, error) {
+	f.mu.Lock()
+	hold := f.beforeSpawn
+	f.mu.Unlock()
+	if hold != nil {
+		hold(id)
+	}
 	f.mu.Lock()
 	if f.spawnErr != nil {
 		f.mu.Unlock()
@@ -134,6 +152,10 @@ func (f *fakeExecHolders) Input(id string, data []byte, eof bool) error {
 // its exit record, as the real holder sends before it goes.
 func (f *fakeExecHolders) Stop(id string) error {
 	f.mu.Lock()
+	if f.stopErr != nil {
+		f.mu.Unlock()
+		return f.stopErr
+	}
 	if _, ok := f.live[id]; !ok {
 		f.mu.Unlock()
 		return wsholder.ErrUnknownHolder

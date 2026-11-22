@@ -2,6 +2,7 @@
 package wsagent
 
 import (
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -375,15 +376,29 @@ func (r *Runner) CloseConversation(id string) (State, error) {
 	descendants := r.descendants(id)
 	// New exec jobs are refused before anything closes; each conversation's
 	// jobs end (whole process groups, no notice) before it closes, deepest
-	// first.
-	r.fenceExec(append(slices.Clone(descendants), id))
-	for _, d := range descendants {
-		r.stopExec([]string{d})
-		_, _ = r.closeOne(d)
+	// first. A job that does not stop keeps its conversation and every
+	// ancestor of it open, and lifts their fences: nothing closes over a
+	// job that may still run. A conversation whose close fails keeps
+	// running, so it may own jobs again.
+	order := append(slices.Clone(descendants), id)
+	r.fenceExec(order)
+	for i, d := range order {
+		if err := r.stopExec(d); err != nil {
+			for _, rest := range order[i:] {
+				r.unfenceExec(rest)
+			}
+			return State{}, fmt.Errorf("close %s: an exec job did not stop, so it and the sessions above it stay open: %w", d, err)
+		}
+		if d == id {
+			break
+		}
+		if _, err := r.closeOne(d); err != nil {
+			r.unfenceExec(d)
+		}
 	}
-	r.stopExec([]string{id})
 	st, err := r.closeOne(id)
 	if err != nil {
+		r.unfenceExec(id)
 		return st, err
 	}
 	r.releaseParent(id)

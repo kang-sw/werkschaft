@@ -52,7 +52,7 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	if err != nil {
 		return HostedView{}, err
 	}
-	j := &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet}
+	j := &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet, starting: true}
 	j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
 	if err := h.admit(j); err != nil {
 		return HostedView{}, err
@@ -63,6 +63,13 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		return h.failStart(j, "", fmt.Errorf("start the job's holder: %w", err))
 	}
 	h.mu.Lock()
+	if j.row.Terminal() {
+		// Stopped (its owner closing) while the holder launched: the
+		// process never starts.
+		h.mu.Unlock()
+		go h.stopHolder(holder)
+		return h.view(j, OutcomeDone), errClosedBeforeStart
+	}
 	j.row.HolderID = holder
 	h.byHolder[holder] = j
 	h.mu.Unlock()
@@ -83,20 +90,23 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	h.mu.Lock()
 	if j.stopping || h.ownerFences[owner.ID] {
 		// Its owner closed (or the job was stopped) while it waited for
-		// approval: the process never starts. A stop that already ended the
-		// job keeps its stopped end.
-		cause := errors.New("exec: the owning session closed before the job started")
+		// approval: the process never starts. A stop already ended the job
+		// and its holder (stop); a fence alone fails the start here.
 		if j.row.Terminal() {
-			delete(h.byHolder, holder)
 			h.mu.Unlock()
-			return h.view(j, OutcomeDone), cause
+			return h.view(j, OutcomeDone), errClosedBeforeStart
 		}
 		h.mu.Unlock()
-		return h.failStart(j, holder, cause)
+		return h.failStart(j, holder, errClosedBeforeStart)
 	}
+	// From here a stop waits for the hand-over and then ends the process.
+	j.starting = false
+	spawned := make(chan struct{})
+	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
 	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: req.Cwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
+	close(spawned)
 	if err != nil {
 		return h.failStart(j, holder, fmt.Errorf("start %s: %w", argv[0], err))
 	}
@@ -194,12 +204,24 @@ func (h *Hosted) admit(j *hostedJob) error {
 	return nil
 }
 
-// failStart ends j before its process ran, stopping its holder.
+// errClosedBeforeStart answers a launch whose owner closed (or whose job
+// was stopped) before its process started.
+var errClosedBeforeStart = errors.New("exec: the owning session closed before the job started")
+
+// failStart ends j before its process ran, stopping its holder. A job a
+// stop already ended keeps that end.
 func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView, error) {
 	if holder != "" {
 		go h.stopHolder(holder)
 	}
 	h.mu.Lock()
+	if j.row.Terminal() {
+		if holder != "" {
+			delete(h.byHolder, holder)
+		}
+		h.mu.Unlock()
+		return h.view(j, OutcomeDone), cause
+	}
 	if holder != "" {
 		delete(h.byHolder, holder)
 	}

@@ -71,6 +71,12 @@ type hostedJob struct {
 	// then HostedStopped and sends no notice.
 	stopping   bool
 	delivering bool
+	// starting: Launch admitted the job and has not handed its process to
+	// the holder yet; a stop then ends the job at once, and Launch, seeing
+	// the end, never spawns. spawned is open while that hand-over runs; a
+	// stop waits for it, so the process it starts is the one it ends.
+	starting bool
+	spawned  chan struct{}
 	// rev numbers j's row snapshots for the store (snapLocked, under h.mu);
 	// saveMu orders their writes and saved is the last one written, so a
 	// snapshot taken before the job's end never lands after it. A dropped

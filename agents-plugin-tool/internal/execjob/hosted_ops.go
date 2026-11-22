@@ -11,21 +11,47 @@ import (
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
-// stop ends j's process group through its holder and waits for the end.
-func (h *Hosted) stop(j *hostedJob) {
+// stop ends j's process group through its holder and waits for the end. A
+// job whose process was not handed to its holder yet ends at once (Launch
+// then never spawns it); one whose hand-over runs is waited for first. An
+// error means the holder did not go and the job may still run.
+func (h *Hosted) stop(j *hostedJob) error {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
-		return
+		return nil
 	}
 	j.stopping = true
+	if j.starting {
+		holder := j.row.HolderID
+		if holder != "" {
+			delete(h.byHolder, holder)
+		}
+		j.row.State = HostedStopped
+		if j.row.StartedAt == 0 {
+			j.row.StartedAt = h.opts.Now().UnixMilli()
+		}
+		h.endLocked(j)
+		row, rev := h.snapLocked(j)
+		h.mu.Unlock()
+		if holder != "" {
+			h.stopHolder(holder)
+		}
+		h.runningChanged()
+		h.save(j, row, rev)
+		return nil
+	}
+	if wait := j.spawned; wait != nil {
+		h.mu.Unlock()
+		<-wait
+		h.mu.Lock()
+		if j.row.Terminal() {
+			h.mu.Unlock()
+			return nil
+		}
+	}
 	holder := j.row.HolderID
 	h.mu.Unlock()
-	if holder == "" {
-		// Its holder is not started yet: Launch sees stopping and fails
-		// the start.
-		return
-	}
 	err := h.opts.Holders.Stop(holder)
 	if err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
 		h.logf("stop job %s: %v", j.row.ID, err)
@@ -33,13 +59,13 @@ func (h *Hosted) stop(j *hostedJob) {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
-		return
+		return nil
 	}
 	if err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
 		// The holder did not go: the job may still run.
 		j.stopping = false
 		h.mu.Unlock()
-		return
+		return fmt.Errorf("stop exec job %s: %w", j.row.ID, err)
 	}
 	// The holder is gone and its exit record did not arrive first.
 	j.row.State = HostedStopped
@@ -48,6 +74,7 @@ func (h *Hosted) stop(j *hostedJob) {
 	h.mu.Unlock()
 	h.runningChanged()
 	h.save(j, row, rev)
+	return nil
 }
 
 // Stop stops owner's job id and returns its view after the end.
@@ -56,7 +83,9 @@ func (h *Hosted) Stop(owner, id string) (HostedView, error) {
 	if err != nil {
 		return HostedView{}, err
 	}
-	h.stop(j)
+	if err := h.stop(j); err != nil {
+		return h.view(j, 0), err
+	}
 	return h.view(j, 0), nil
 }
 
@@ -182,9 +211,10 @@ func (h *Hosted) view(j *hostedJob, outcome HostedOutcome) HostedView {
 
 // StopOwner stops every running job of owner, each with its whole process
 // group, and returns once they ended. A stop sends no completion notice.
-func (h *Hosted) StopOwner(owner string) {
+// The error names each job whose holder did not go (it may still run).
+func (h *Hosted) StopOwner(owner string) error {
 	if h == nil || owner == "" {
-		return
+		return nil
 	}
 	h.mu.Lock()
 	var jobs []*hostedJob
@@ -194,9 +224,13 @@ func (h *Hosted) StopOwner(owner string) {
 		}
 	}
 	h.mu.Unlock()
+	var errs []error
 	for _, j := range jobs {
-		h.stop(j)
+		if err := h.stop(j); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	return errors.Join(errs...)
 }
 
 // FenceOwner refuses owner's new jobs until UnfenceOwner; a job already

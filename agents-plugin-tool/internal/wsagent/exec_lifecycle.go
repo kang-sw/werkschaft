@@ -18,8 +18,8 @@ type ExecJobs interface {
 	RunningOwners() map[string]int
 	// StopOwner stops every running job of conversation owner (its whole
 	// process group) and returns once they ended; its end sends no
-	// completion notice.
-	StopOwner(owner string)
+	// completion notice. An error means a job may still run.
+	StopOwner(owner string) error
 	// FenceOwner refuses owner's new jobs from now on (a close in
 	// progress); UnfenceOwner lifts that for a revival.
 	FenceOwner(owner string)
@@ -165,14 +165,12 @@ func (r *Runner) unfenceExec(id string) {
 	}
 }
 
-// stopExec ends the live exec jobs of ids, in order (deepest first), each
-// owner's whole process groups before the next owner's.
-func (r *Runner) stopExec(ids []string) {
+// stopExec ends conversation id's live exec jobs, each one's whole process
+// group; an error means one may still run.
+func (r *Runner) stopExec(id string) error {
 	src := r.execJobs()
 	if src == nil {
-		return
+		return nil
 	}
-	for _, id := range ids {
-		src.StopOwner(id)
-	}
+	return src.StopOwner(id)
 }
