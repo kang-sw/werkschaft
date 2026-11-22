@@ -1434,21 +1434,25 @@ func (c *conv) kickInput() {
 	} else {
 		c.hold(nil)
 	}
-	c.update(func(rec *Record) {
-		rec.Queued = rest
-		rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
-		rec.TurnStartedAt = startedAt
-		rec.TurnStartSeq = max(c.seq, c.lineOpen)
-		if len(mail) > 0 {
-			rec.Mail = nil
-		}
-		if len(reports) > 0 {
-			rec.Reports = nil
-		}
-		if rec.Parent != nil {
-			rec.TurnOpen, rec.HeldTurn = true, nil
-		}
-	})
+	if !heldAgy {
+		// A held agy worker wrote all of this when its holder accepted
+		// the prompt (above); a second identical write would only cost.
+		c.update(func(rec *Record) {
+			rec.Queued = rest
+			rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
+			rec.TurnStartedAt = startedAt
+			rec.TurnStartSeq = max(c.seq, c.lineOpen)
+			if len(mail) > 0 {
+				rec.Mail = nil
+			}
+			if len(reports) > 0 {
+				rec.Reports = nil
+			}
+			if rec.Parent != nil {
+				rec.TurnOpen, rec.HeldTurn = true, nil
+			}
+		})
+	}
 	// Mail shows on the page through the session's mail history, so only
 	// the dashboard's own text is a user entry; a turn of mail alone is
 	// marked as mail's.

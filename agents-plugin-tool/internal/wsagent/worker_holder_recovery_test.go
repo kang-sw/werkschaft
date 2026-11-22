@@ -593,3 +593,44 @@ func agyHeldFinalAndSuccessor(t *testing.T, viaReport bool) {
 		t.Fatalf("parent reports: held=%d successor=%d (%+v)", held, acks, got.lead())
 	}
 }
+
+// TestAgyHeldTurnStartWritesTheRecordTwice pins the record writes of a held
+// agy worker's turn start from freshly drained input: the drain checkpoint
+// that keeps the input recoverable, then the one write once the holder
+// accepted the prompt. Nothing rewrites the same fields after it.
+func TestAgyHeldTurnStartWritesTheRecordTwice(t *testing.T) {
+	h, _ := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	completeRecoveryWorker(t, h, BackendAgy, holder)
+	eventually(t, "the first turn settled", func() bool { return !h.record(id).TurnOpen })
+	time.Sleep(200 * time.Millisecond) // let the settle's own writes land
+	dir := wsdashboard.SessionDir(h.dir, id)
+	var mu sync.Mutex
+	var writes []Record
+	observe := func(d string, rec Record) {
+		if d == dir {
+			mu.Lock()
+			writes = append(writes, rec)
+			mu.Unlock()
+		}
+	}
+	recordWritten.Store(&observe)
+	t.Cleanup(func() { recordWritten.Store(nil) })
+	h.send(id, "next")
+	eventually(t, "the second prompt", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
+	eventually(t, "the accepted write", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(writes) >= 2
+	})
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(writes) != 2 {
+		t.Fatalf("turn start wrote the record %d times, want 2", len(writes))
+	}
+	if drain, accepted := writes[0], writes[1]; drain.TurnOpen || len(drain.Queued) != 1 || !accepted.TurnOpen || len(accepted.Queued) != 0 || accepted.TurnStartedAt == 0 {
+		t.Fatalf("turn start writes: drain open=%v queued=%d, accepted open=%v queued=%d started=%d",
+			drain.TurnOpen, len(drain.Queued), accepted.TurnOpen, len(accepted.Queued), accepted.TurnStartedAt)
+	}
+}
