@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -92,7 +93,18 @@ func TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild(t *testing.T)
 				t.Fatal("successor did not replace the original daemon")
 			}
 			assertRead(successorVersion)
+			// A direct daemon-start spawns the daemon from its own path (the
+			// hosted launcher stages a copy before it calls daemon-start), so
+			// the successor daemon still runs from successor here. Windows
+			// refuses to delete a running image but permits renaming it,
+			// which equally takes the original path away.
 			for _, original := range []string{bin, successor} {
+				if runtime.GOOS == "windows" {
+					if err := os.Rename(original, filepath.Join(t.TempDir(), "moved.exe")); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
 				if err := os.Remove(original); err != nil {
 					t.Fatal(err)
 				}

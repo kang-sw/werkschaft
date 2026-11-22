@@ -3,6 +3,8 @@ kind: render
 delegates: false
 role: delegate
 tier: small
+tier-role: ship-handler
+tier-parent: implement:*
 includes:
   - delegate-report
 ---

@@ -9,7 +9,7 @@
     permission: "js.hud.state.permission",
     failed: "js.hud.state.failed"
   };
-  var hudRegistry = {}, hudEdges = [], hudHoveredId = "", hudLead = "", hudBound = false, hudRO = null, hudRaf = 0;
+  var hudRegistry = {}, hudEdges = [], hudHoveredId = "", hudFoldedHovered = false, hudFoldedBtn = null, hudFoldedCount = 0, hudLead = "", hudBound = false, hudRO = null, hudRaf = 0;
 
   function hudCanControl() {
     return typeof root !== "undefined" && root.hasAttribute("data-can-control");
@@ -27,6 +27,7 @@
     return {
       lead: typeof raw.lead === "string" ? raw.lead : "",
       completed: Number(raw.completed) || 0,
+      folded: Number(raw.folded) || 0,
       peers: Number(raw.peers) || 0,
       roots: Array.isArray(raw.roots) ? raw.roots : []
     };
@@ -123,8 +124,39 @@
         hudReconcile(kidsEl, children, existing, ownTasks, node.id, seen);
       } else if (kidsEl) kidsEl.remove();
     });
-    while (parent.children.length > nodes.length) {
-      parent.lastElementChild.remove();
+    for (var r = parent.children.length - 1; r >= nodes.length; r--) {
+      var extra = parent.children[r];
+      if (!extra.classList || !extra.classList.contains("hud-folded")) extra.remove();
+    }
+  }
+  function hudFindFolded(rootsEl) {
+    for (var i = 0; i < rootsEl.children.length; i++) {
+      var child = rootsEl.children[i];
+      if (child.classList && child.classList.contains("hud-folded")) return child;
+    }
+    return null;
+  }
+  function hudUpdateFolded(rootsEl, count) {
+    var btn = hudFindFolded(rootsEl);
+    if (count > 0) {
+      if (!btn) {
+        btn = doc.createElement("button");
+        btn.type = "button";
+        btn.className = "hud-folded";
+        rootsEl.appendChild(btn);
+      } else if (rootsEl.lastElementChild !== btn) {
+        rootsEl.appendChild(btn);
+      }
+      var text = "+" + count;
+      if (btn.textContent !== text) btn.textContent = text;
+      var aria = wsT("js.hud.folded.aria", count);
+      if (btn.getAttribute("aria-label") !== aria) btn.setAttribute("aria-label", aria);
+      hudFoldedBtn = btn;
+      hudFoldedCount = count;
+    } else {
+      if (btn) btn.remove();
+      hudFoldedBtn = null;
+      hudFoldedCount = 0;
     }
   }
   function hudDrawConnectors(agcompact) {
@@ -182,6 +214,7 @@
       hudRaf = 0;
       hudDrawConnectors($("agcompact"));
       if (hudHoveredId) hudShowTooltip(hudHoveredId);
+      else if (hudFoldedHovered) hudShowFoldedTooltip();
     });
   }
   function hudPositionTooltip(tt, btn) {
@@ -202,19 +235,44 @@
   }
   function hudHideTooltip() {
     hudHoveredId = "";
+    hudFoldedHovered = false;
     Object.keys(hudRegistry).forEach(function (k) {
       if (hudRegistry[k].el.classList) hudRegistry[k].el.classList.remove("is-hovered");
     });
+    if (hudFoldedBtn && hudFoldedBtn.classList) hudFoldedBtn.classList.remove("is-hovered");
     var tt = $("hud-tooltip");
     if (tt) tt.hidden = true;
+  }
+  function hudShowFoldedTooltip() {
+    var tt = $("hud-tooltip");
+    if (!tt || !hudFoldedBtn || hudFoldedCount <= 0) { hudHideTooltip(); return; }
+    hudHoveredId = "";
+    hudFoldedHovered = true;
+    Object.keys(hudRegistry).forEach(function (k) {
+      if (hudRegistry[k].el.classList) hudRegistry[k].el.classList.remove("is-hovered");
+    });
+    if (hudFoldedBtn.classList) hudFoldedBtn.classList.add("is-hovered");
+    tt.textContent = "";
+    var head = doc.createElement("div"); head.className = "tt-head";
+    var title = doc.createElement("span"); title.className = "tt-title"; title.textContent = wsT("js.hud.folded.title", hudFoldedCount);
+    var pill = doc.createElement("span"); pill.className = "tt-pill"; pill.setAttribute("data-state", "idle"); pill.textContent = "+" + hudFoldedCount;
+    head.appendChild(title); head.appendChild(pill);
+    tt.appendChild(head);
+    var hint = doc.createElement("div"); hint.className = "tt-hint";
+    hint.textContent = wsT("js.hud.hint.details");
+    tt.appendChild(hint);
+    tt.hidden = false;
+    hudPositionTooltip(tt, hudFoldedBtn);
   }
   function hudShowTooltip(id) {
     var tt = $("hud-tooltip"), entry = hudRegistry[id];
     if (!tt || !entry) { hudHideTooltip(); return; }
     hudHoveredId = id;
+    hudFoldedHovered = false;
     Object.keys(hudRegistry).forEach(function (k) {
       if (hudRegistry[k].el.classList) hudRegistry[k].el.classList.toggle("is-hovered", hudRegistry[k].el === entry.el);
     });
+    if (hudFoldedBtn && hudFoldedBtn.classList) hudFoldedBtn.classList.remove("is-hovered");
     var d = entry.data;
     tt.textContent = "";
     var head = doc.createElement("div"); head.className = "tt-head";
@@ -273,7 +331,7 @@
     var rootsEl = agcompact.querySelector(".hud-roots");
     var canvas = agcompact.querySelector(".hud-canvas"), island = $("agisland");
     agcompact.addEventListener("click", function (e) {
-      if (e.target && e.target.closest && (e.target.closest(".hud-node") || e.target.closest(".hud-close"))) return;
+      if (e.target && e.target.closest && (e.target.closest(".hud-node") || e.target.closest(".hud-close") || e.target.closest(".hud-folded"))) return;
       agOpenFn(true);
     });
     agcompact.addEventListener("keydown", function (e) {
@@ -281,14 +339,20 @@
     });
     if (rootsEl) {
       rootsEl.addEventListener("mouseover", function (e) {
+        var folded = e.target && e.target.closest && e.target.closest(".hud-folded");
+        if (folded) { hudShowFoldedTooltip(); return; }
         var btn = e.target && e.target.closest && e.target.closest(".hud-node");
         if (btn) hudShowTooltip(btn.getAttribute("data-id"));
       });
       rootsEl.addEventListener("mouseout", function (e) {
+        var folded = e.target && e.target.closest && e.target.closest(".hud-folded");
+        if (folded && (!e.relatedTarget || !folded.contains(e.relatedTarget))) { hudHideTooltip(); return; }
         var btn = e.target && e.target.closest && e.target.closest(".hud-node");
         if (btn && (!e.relatedTarget || !btn.contains(e.relatedTarget))) hudHideTooltip();
       });
       rootsEl.addEventListener("focusin", function (e) {
+        var folded = e.target && e.target.closest && e.target.closest(".hud-folded");
+        if (folded) { hudShowFoldedTooltip(); return; }
         var btn = e.target && e.target.closest && e.target.closest(".hud-node");
         if (btn) hudShowTooltip(btn.getAttribute("data-id"));
       });
@@ -296,6 +360,14 @@
         if (!e.relatedTarget || !rootsEl.contains(e.relatedTarget)) hudHideTooltip();
       });
       rootsEl.addEventListener("click", function (e) {
+        var folded = e.target && e.target.closest && e.target.closest(".hud-folded");
+        if (folded) {
+          if (e.preventDefault) e.preventDefault();
+          if (e.stopPropagation) e.stopPropagation();
+          hudHideTooltip();
+          agOpenFn(true);
+          return;
+        }
         var close = e.target && e.target.closest && e.target.closest(".hud-close");
         if (close) {
           e.preventDefault(); e.stopPropagation();
@@ -357,13 +429,17 @@
       var seen = Object.create(null);
       hudReconcile(rootsEl, hud.roots, existing, ownTasks, "", seen);
       Object.keys(hudRegistry).forEach(function (id) { if (!seen[id]) delete hudRegistry[id]; });
+      hudUpdateFolded(rootsEl, hud.roots.length > 0 ? hud.folded : 0);
     }
     hudBindEvents(agcompact, agpop, agOpenFn);
     if (hudHoveredId) {
       if (hudRegistry[hudHoveredId] && agpop && agpop.hidden) hudShowTooltip(hudHoveredId);
       else hudHideTooltip();
+    } else if (hudFoldedHovered) {
+      if (hudFoldedBtn && hudFoldedCount > 0 && agpop && agpop.hidden) hudShowFoldedTooltip();
+      else hudHideTooltip();
     }
     hudScheduleConnectors();
-    return { visibleCount: hud.roots.length, completed: hud.completed, peers: hud.peers };
+    return { visibleCount: hud.roots.length, folded: hud.folded, completed: hud.completed, peers: hud.peers };
   }
   window.wsHud = { project: hudProject, drawConnectors: hudScheduleConnectors, hideTooltip: hudHideTooltip };

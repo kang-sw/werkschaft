@@ -40,6 +40,8 @@ func (p *HarnessProfile) NativeSubagentTool(role CatalogRole) string {
 // can physically remove), and only where the backend's catalog names that
 // tool. "" otherwise: a session outside the policy, such as a tracker
 // support conversation, gets none, and the CLI tier never reads this text.
+// A lead of a backend with BackendRegistration.PreferNativeSubagent gets
+// nativeFirstSteer instead: its native subagent tool stays in use.
 func (r *Runner) subagentSteer(rec Record) string {
 	if !RemovesSubagents(rec) {
 		return ""
@@ -48,11 +50,31 @@ func (r *Runner) subagentSteer(rec Record) string {
 	if rec.Lead {
 		role = RoleLead
 	}
-	tool := r.opts.Backends[rec.Backend].Catalog.NativeSubagentTool(role)
+	reg := r.opts.Backends[rec.Backend]
+	tool := reg.Catalog.NativeSubagentTool(role)
+	if rec.Lead && reg.PreferNativeSubagent {
+		return nativeFirstSteer(tool)
+	}
 	if tool == "" {
 		return ""
 	}
 	return fmt.Sprintf("Never use the native `%s` tool. Start a subagent only with the ws `agent.spawn` tool, and continue one with the ws `mailbox.send` tool.", tool)
+}
+
+// nativeFirstSteer is the delegation line of a PreferNativeSubagent lead:
+// its native subagent tool (named only when the catalog names it) explores
+// without ws tools at the harness's default model, and anything that needs
+// ws tools or a specific tier runs on an external harness through
+// agent.spawn, its bare-size recommendations qualified with a harness.
+func nativeFirstSteer(tool string) string {
+	native := "your native subagent tool"
+	if tool != "" {
+		native = "your native `" + tool + "` tool"
+	}
+	return "Use " + native + " for exploration and research that needs no ws tools; it runs at your harness's default model, so when a question needs a specific tier, use a read-only ws `agent.spawn` subagent at an external-harness tier instead. " +
+		"Run rendered ws playbooks and any work that needs ws tools on an external harness: start it with the ws `agent.spawn` tool at a `claude.<size>`, `codex.<size>`, or configured route target, and continue it with the ws `mailbox.send` tool. " +
+		"When a render recommends a bare size or a role tier that resolves to your own harness, put `claude.` or `codex.` before the size instead of passing it as returned. " +
+		"A native subagent is one-shot: ask a follow-up of a new one; `mailbox.send` continues only agents started with `agent.spawn`."
 }
 
 // playbookCommands is the lead playbook command list a hosted lead of
