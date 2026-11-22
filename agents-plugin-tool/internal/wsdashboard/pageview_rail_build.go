@@ -27,6 +27,9 @@ type railInput struct {
 	// CanRevive reports a daemon that hosts lead sessions: an ended row
 	// then carries how it comes back (railRevive).
 	CanRevive bool
+	// Harnesses declares which harnesses' ended terminal sessions can be
+	// taken over (DaemonOptions.Harnesses).
+	Harnesses HarnessTraitSet
 	// ExecJobs is the live exec job count under the session's project
 	// (railExecJobs), as RailRow.ExecJobs; OwnExecJobs is the session's own
 	// running hosted exec jobs (DaemonOptions.HostedExecJobs), as

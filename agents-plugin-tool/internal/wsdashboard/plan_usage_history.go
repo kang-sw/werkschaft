@@ -64,6 +64,11 @@ var codexFiveHourHistorySpec = planUsageHistorySpec{
 	requiredKeys: []string{"harness", "kind", "source", "resetsAt", "asOf", "percent"},
 }
 
+// validCodexFiveHourSample and validPlanUsageSample read persisted history
+// bytes (plan-usage-codex-history.json, plan-usage-history.json), whose
+// "harness" and "source" values were written under these names. They name the
+// harnesses in the file's own format, which registration data cannot reread
+// ((1881) survivor; TestPlanUsageHistoryValidatorsKeepPersistedNames).
 func validCodexFiveHourSample(v planUsageSample) bool {
 	if v.Group != "" {
 		return false
@@ -390,13 +395,7 @@ func (s *planUsageStore) historyView(entries []planUsageEntry, now int64) json.R
 		raw, _ := json.Marshal(planUsageHistoryProjection{SchemaVersion: 1, Status: "empty", Samples: []planUsageSample{}})
 		return raw
 	}
-	var filtered []planUsageEntry
-	for _, e := range entries {
-		if e.Harness != "agy" {
-			filtered = append(filtered, e)
-		}
-	}
-	return s.historyFileView(&s.hist, defaultHistorySpec, filtered, now)
+	return s.historyFileView(&s.hist, defaultHistorySpec, entriesWithoutAgy(entries), now)
 }
 
 func (s *planUsageStore) codexFiveHourHistory(now int64) planUsageHistoryProjection {
@@ -415,7 +414,7 @@ func (s *planUsageStore) codexFiveHourHistoryView(entries []planUsageEntry, now 
 	}
 	var filtered []planUsageEntry
 	for _, e := range entries {
-		if e.Harness != "codex" {
+		if !s.harnesses.separateFiveHour(e.Harness) {
 			continue
 		}
 		var windows []planUsageWindow

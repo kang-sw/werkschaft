@@ -170,6 +170,9 @@ func dashboardCommand(args []string) {
 		Worktrees:      sessions,
 		MailWake:       wswake.Mailbox,
 		AgyCommand:     wsagent.AgyBackend{}.ResolveCommand,
+		// How each registered harness differs on the dashboard's surfaces,
+		// from its registration.
+		Harnesses:      agents.DashboardHarnesses(),
 		Agents:         agents,
 		Credentials:    credentials,
 		LeadNudges:     nudges,

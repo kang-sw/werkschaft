@@ -186,6 +186,8 @@ type sessionLookup struct {
 	observed func(replyID string) *wslive.Snapshot
 	// piDeleted checks revival only for settled Pi rows, never native rows.
 	piDeleted func(replyID string) bool
+	// harnesses declares the registered harnesses' traits (DaemonOptions.Harnesses).
+	harnesses HarnessTraitSet
 }
 
 // get returns a session this daemon serves.
@@ -308,12 +310,12 @@ func buildSessionView(in pageInputs) SessionView {
 	v.Host = in.Snapshot.Host
 	v.Background, v.Monitors = taskBadgeCounts(in.Snapshot)
 	v.Tree.Agents = agentTree(in.Snapshot.Agents, lookup)
-	markNativeAgents(v.Tree.Agents, v.Harness)
+	markNativeAgents(v.Tree.Agents, v.Harness, lookup.harnesses)
 	for _, a := range in.Snapshot.Agents {
 		switch {
 		case a.Status == wslive.StatusRunning:
 			v.Tree.Running++
-		case hudEndUnknown(a, hudNative(a, v.Harness)):
+		case hudEndUnknown(a, hudNative(a, v.Harness, lookup.harnesses)):
 			// Observation ended, outcome unknown: neither done nor failed.
 		case a.Status == wslive.StatusFailed:
 			v.Tree.Failed++
@@ -441,13 +443,13 @@ func agentTree(agents []wslive.Agent, lookup sessionLookup) []AgentNode {
 
 // markNativeAgents marks the harness's own subagents of a session whose
 // harness is ownerHarness (hudNative), at every depth.
-func markNativeAgents(nodes []AgentNode, ownerHarness string) {
+func markNativeAgents(nodes []AgentNode, ownerHarness string, set HarnessTraitSet) {
 	for i := range nodes {
-		nodes[i].Native = hudNative(nodes[i].Agent, ownerHarness)
+		nodes[i].Native = hudNative(nodes[i].Agent, ownerHarness, set)
 		if nodes[i].Native {
 			nodes[i].Linked = false
 		}
-		markNativeAgents(nodes[i].Children, ownerHarness)
+		markNativeAgents(nodes[i].Children, ownerHarness, set)
 	}
 }
 

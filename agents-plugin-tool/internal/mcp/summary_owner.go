@@ -15,7 +15,7 @@ func (s *Server) terminalRowOwned(dir, replyID string) bool {
 
 func (s *Server) summaryCapable(ls *liveSession) bool {
 	_, owned := ls.slot.(wsdashboard.LiveSlotOwner)
-	return s.intake != nil && owned && s.ownerPID > 0 && s.harnessPID() > 0 && s.currentHarness() == "pi" && s.hostedSessionKey() == ""
+	return s.intake != nil && owned && s.ownerPID > 0 && s.harnessPID() > 0 && s.hostedSessionKey() == "" && s.lifecycleOf(s.currentHarness()).TerminalSummaries
 }
 
 // lockSummaryOwner fences both the actual daemon slot generation and the

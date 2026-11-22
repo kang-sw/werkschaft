@@ -115,6 +115,10 @@ type DaemonOptions struct {
 	// before its session is checked, since the nudge's sender may have
 	// written mail any waiter watches. Nil wakes none.
 	MailWake MailWaker
+	// Harnesses declares how each registered harness differs on dashboard
+	// surfaces (harness_traits.go), by harness name. Nil registers none, so
+	// no harness has special behavior and the HUD names none.
+	Harnesses HarnessTraitSet
 	// AgyCommand resolves the agy CLI program and leading arguments for
 	// user-triggered /usage probes without spawning. Nil skips agy probes.
 	AgyCommand func() (string, []string, error)
@@ -307,6 +311,8 @@ type Daemon struct {
 	// write (a test seam; nil in production).
 	beforeConfigWrite func(key string)
 	planUsage         *planUsageStore // daemon-private account usage, never credentials
+	// harnesses is DaemonOptions.Harnesses.
+	harnesses HarnessTraitSet
 	// pprof serves the pprof routes (pprofHandler).
 	pprof bool
 	// buildTime is the build time /health reports; zero is unknown.

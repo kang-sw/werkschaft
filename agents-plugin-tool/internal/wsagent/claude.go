@@ -60,7 +60,10 @@ func (b ClaudeBackend) registration() (string, BackendRegistration) {
 		PlaybookTerminology: PlaybookTerminology{
 			ExploreAgent:  "the Explore agent",
 			ContinueIdiom: "SendMessage(to: <agentId>)",
+			SpawnIdiomFor: claudeSpawnIdiom,
 		},
+		Connection: claudeConnectionPolicy(),
+		Dashboard:  claudeDashboardTraits(),
 		Profiles: []BuiltinProfileRegistration{
 			supportBuiltinProfile(SupportProfileClaude, BackendClaude, SupportClaudeTools),
 			agentWorkerBuiltinProfile(BackendClaude, AgentClaudeTools),

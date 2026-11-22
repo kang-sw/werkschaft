@@ -453,6 +453,11 @@ type agentRecordEnd struct {
 // that file, so from the hand-off on the directory holds a conversation
 // the user's terminal harness owns, and deleting it would delete that
 // conversation. A claude conversation lives in the harness's own store.
+//
+// The "pi" record backend and the pi/session.jsonl location are persisted
+// bytes the Pi adapter wrote under the daemon's session directory (1881
+// survivor); no registration describes where a stored conversation lives
+// (TestPruneRegistrationsAgesRetiredLeadsByTheirRow).
 func (r agentRecordEnd) terminalConversation(sessionDir string) bool {
 	if !r.Lead || r.HandedOffAt == "" || r.Backend != "pi" {
 		return false
@@ -471,6 +476,9 @@ func (r agentRecordEnd) retired() bool {
 // Pi spawn row. An open record may still be creating its first session file.
 // A removed record/directory, like a closed record without a regular session
 // file, cannot revive. Keep the file check aligned with wsagent.PiSessionAvailable.
+//
+// The pi/session.jsonl location is persisted bytes the Pi adapter wrote (1881
+// survivor), watched for revival by the page reader beside it.
 func piChildDeleted(dir, id string) bool {
 	if !ValidReplyID(id) {
 		return false

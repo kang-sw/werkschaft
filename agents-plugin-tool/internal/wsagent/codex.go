@@ -39,6 +39,8 @@ func (b CodexBackend) registration() (string, BackendRegistration) {
 		WorkerHTTPMCP:     true,
 		WorkerAutoApprove: true,
 		Permission:        codexPermissionPolicy(),
+		Connection:        codexConnectionPolicy(),
+		Dashboard:         codexDashboardTraits(),
 		Lifecycle: LifecyclePolicy{
 			ComposedLeadInstructions: true,
 			LeadHTTPMCP:              true,

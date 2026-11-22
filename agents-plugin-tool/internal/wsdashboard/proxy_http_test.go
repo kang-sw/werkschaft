@@ -265,7 +265,7 @@ func (s *rpcSession) waitServed(t *testing.T) {
 func startHTTPProxyDaemon(t *testing.T) (*Daemon, *rpcHandler, *tokenAgents) {
 	t.Helper()
 	h, a := &rpcHandler{}, &tokenAgents{}
-	d, err := StartDaemon(DaemonOptions{Dir: t.TempDir(), Port: 0, Version: "1.2.3", LockWait: 200 * time.Millisecond, Proxy: h, Agents: a})
+	d, err := StartDaemon(DaemonOptions{Dir: t.TempDir(), Port: 0, Version: "1.2.3", LockWait: 200 * time.Millisecond, Proxy: h, Agents: a, Harnesses: testHarnessTraits()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,9 +522,6 @@ func TestProxyHTTPReplaysInitializeForARestoredToken(t *testing.T) {
 	}
 	if got[1] != `{"jsonrpc":"2.0","method":"notifications/initialized"}` || !strings.Contains(got[2], `"method":"tools/call"`) {
 		t.Fatalf("session lines = %q", got)
-	}
-	if replayClientName("pi") != "ws-pi-bridge" || replayClientName("codex") != "codex" || replayClientName("agy") != "agy" || replayClientName("") != "ws-mcp-http-replay" {
-		t.Fatal("replay client names do not map to their harnesses")
 	}
 }
 

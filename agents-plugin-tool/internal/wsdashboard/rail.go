@@ -129,6 +129,7 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 			in.Snapshot = &snap
 		}
 		in.Session, in.CanRevive = s, d.agents != nil
+		in.Harnesses = d.harnesses
 		in.ExecJobs = railExecJobs(jobs, reg.Project)
 		in.OwnExecJobs = owned[reg.ReplyID]
 		if in.Repo != "" {

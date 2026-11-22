@@ -314,7 +314,7 @@ func TestPlanUsageCodexRESTHistoryOldWriterReopen(t *testing.T) {
 		t.Fatalf("old writers changed latest cache: %v", err)
 	}
 
-	reopened := newPlanUsageStore(s.dir, s.home, s.getenv)
+	reopened := newTestPlanUsageStore(s.dir, s.home, s.getenv)
 	if !reflect.DeepEqual(reopened.claude, wantClaude) || !reflect.DeepEqual(reopened.gpt, wantGPT) {
 		t.Fatalf("new reopen lost latest windows/source/asOf: claude=%+v gpt=%+v", reopened.claude, reopened.gpt)
 	}
@@ -347,7 +347,7 @@ func TestPlanUsageHistoryMixedVersionNonDestruction(t *testing.T) {
 	if !bytes.Equal(latest, baseline) {
 		t.Fatal("new latest cache bytes differ from pinned writer")
 	}
-	restored := newPlanUsageStore(s.dir, s.home, s.getenv)
+	restored := newTestPlanUsageStore(s.dir, s.home, s.getenv)
 	restored.saveLocked()
 	latest, _ = os.ReadFile(filepath.Join(s.dir, planUsageCache))
 	if !bytes.Equal(latest, baseline) || !bytes.Equal(history, historyBytes(t, s)) {
@@ -408,7 +408,7 @@ func TestPlanUsageAgyT0CompatibilityLeavesExistingFilesUnchanged(t *testing.T) {
 	oldHist.pinnedHistoryAppend([]pinnedHistorySample{appended}, appended.AsOf)
 
 	// New store reopen restores Claude, Codex, and both agy files intact.
-	reopened := newPlanUsageStore(s.dir, s.home, s.getenv)
+	reopened := newTestPlanUsageStore(s.dir, s.home, s.getenv)
 	reopened.now = func() time.Time { return now }
 	if len(reopened.agyGroups) != 2 {
 		t.Fatalf("reopened store lost agy cache after old writer ran: %+v", reopened.agyGroups)

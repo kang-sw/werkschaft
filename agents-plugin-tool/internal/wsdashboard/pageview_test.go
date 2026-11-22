@@ -65,7 +65,8 @@ func lookupOf(sessions map[string]Session, snaps map[string]*wslive.Snapshot) se
 			s, ok := sessions[id]
 			return s, ok
 		},
-		snapshot: func(id string) *wslive.Snapshot { return snaps[id] },
+		snapshot:  func(id string) *wslive.Snapshot { return snaps[id] },
+		harnesses: testHarnessTraits(),
 	}
 }
 
