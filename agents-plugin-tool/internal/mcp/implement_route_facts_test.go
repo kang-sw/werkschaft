@@ -432,6 +432,69 @@ func TestDaemonWorkerKeyInheritsReviewPolicyFromItsSpawner(t *testing.T) {
 	}
 }
 
+// TestPolicyParentSurvivesAnOlderWritersKeyRewrite pins the mixed-version
+// guarantee of the policy-parent link: an older daemon (whose sessionKeyRecord
+// has no policy field) re-marshals key.json on an ordinary mutation (the
+// first mailbox.send on a key, an override write) and atomically replaces the
+// file. The link lives in its own file in the key directory, outside
+// recordParts, so that rewrite cannot drop it. A cold reader (a restarted
+// process: no memoized read) still resolves the lead's session policy.
+func TestPolicyParentSurvivesAnOlderWritersKeyRewrite(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	initGit(t, root)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	server := NewServer(root, "test")
+	leadKey, _ := parseLoginResponse(t, callLogin(t, server, 1, root, nil))
+	if tune := callToolWithKey(t, server, 2, leadKey, "config.tune", map[string]any{"key": "review_phase", "value": "off", "scope": "session"}); !strings.Contains(tune, "review_phase: off [scope:session]") {
+		t.Fatalf("session tune response = %s", tune)
+	}
+	inherited, err := NewAgentKeyStore().MintChild(root, leadKey)
+	if err != nil {
+		t.Fatalf("MintChild: %v", err)
+	}
+	d, err := server.sessions.dirs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyFile := d.partPath(inherited, partKey)
+	before, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(before), leadKey) {
+		t.Fatalf("key.json names the policy parent, so an older writer's rewrite would drop it: %s", before)
+	}
+	// The older writer: decode key.json into the record shape it knows and
+	// marshal it back over the file, the whole-file replace of its mutation
+	// path (the current sessionKeyRecord carries no policy field).
+	var old sessionKeyRecord
+	if err := json.Unmarshal(before, &old); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, rewritten, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A real record mutation on top of it, as the first mailbox.send does.
+	if err := server.sessions.setReviewTrackNudgeShown(inherited); err != nil {
+		t.Fatalf("mutation: %v", err)
+	}
+	// A restarted reader has no memoized marker read.
+	cold := NewServer(root, "test")
+	var result implementResult
+	if err := json.Unmarshal([]byte(callToolWithKey(t, cold, 5, inherited, "route.resolve_implement", implementSkipDocsArgs("json"))), &result); err != nil {
+		t.Fatalf("json verdict did not parse: %v", err)
+	}
+	if result.Verdict.ReviewAlloc != "none" {
+		t.Fatalf("review after an older writer's key rewrite = %q, want the lead's none", result.Verdict.ReviewAlloc)
+	}
+}
+
 // TestTicketsQueryTextFlagsReadyTicketWithoutRouteFacts pins the listing
 // signal: a ready implementation ticket with no ## Route Facts section carries
 // `route_facts: missing`, while one with the section, a non-ready ticket and a

@@ -57,13 +57,6 @@ type sessionKeyRecord struct {
 	Root          string `json:"root"`
 	Scope         string `json:"scope"`
 	Parent        string `json:"parent,omitempty"`
-	// PolicyParent is the key whose session-scope overrides this key inherits
-	// when it has no Parent. A daemon-spawned worker's key is a root of its
-	// own (no Parent: it is never a top-level lead, and Ensure accepts only
-	// parentless records), yet the lead that spawned it set review_phase and
-	// the sage knobs for it. Only the override lineage (walkLineage) follows
-	// this field; authority, scope and adjacency never do.
-	PolicyParent string `json:"policy_parent,omitempty"`
 	// Overrides is the session-scope generic config overlay. Keys are item
 	// identifiers; values are string-encoded config values. Added as an additive
 	// field; existing records without it parse with a nil map.
@@ -208,6 +201,9 @@ type sessionStore struct {
 	// sublead memoizes each key's sub-lead marker read (key ->
 	// subleadCacheEntry); see subleadPlaybook.
 	sublead sync.Map
+	// policyParent memoizes each key's policy-parent marker read (key ->
+	// policyParentEntry); see policyParentOf.
+	policyParent sync.Map
 }
 
 func newSessionStore() *sessionStore {
@@ -226,7 +222,7 @@ func (s *sessionStore) mint(root string, scope toolRole, parent string) (string,
 }
 
 // mintWithPolicyParent is mint for a key that also inherits session-scope
-// overrides from policyParent (sessionKeyRecord.PolicyParent).
+// overrides from policyParent (session_policy_parent.go).
 func (s *sessionStore) mintWithPolicyParent(root string, scope toolRole, parent, policyParent string) (string, error) {
 	d, err := s.dirs()
 	if err != nil {
@@ -241,7 +237,6 @@ func (s *sessionStore) mintWithPolicyParent(root string, scope toolRole, parent,
 		Root:          root,
 		Scope:         string(scope),
 		Parent:        parent,
-		PolicyParent:  policyParent,
 	})
 	if err != nil {
 		return "", err
@@ -260,6 +255,15 @@ func (s *sessionStore) mintWithPolicyParent(root string, scope toolRole, parent,
 			return "", err
 		}
 		if claimed {
+			if policyParent != "" {
+				// Right after the claim, before the key is handed out. A
+				// failed write must not leave a key that silently resolves
+				// the lead's policy as the builtin.
+				if err := s.writePolicyParent(d, candidate, policyParent); err != nil {
+					_ = os.RemoveAll(d.keyDir(candidate))
+					return "", err
+				}
+			}
 			return candidate, nil
 		}
 		// rare collision; generate a fresh candidate and retry
@@ -595,7 +599,7 @@ func (s *sessionStore) walkLineage(d sessionDirs, key string, record sessionReco
 		}
 		parent := record.Parent
 		if parent == "" {
-			parent = record.PolicyParent
+			parent, _ = s.policyParentOf(d, key)
 		}
 		if parent == "" {
 			return
@@ -608,7 +612,7 @@ func (s *sessionStore) walkLineage(d sessionDirs, key string, record sessionReco
 		if !ok {
 			return
 		}
-		record = next
+		key, record = parent, next
 	}
 }
 
