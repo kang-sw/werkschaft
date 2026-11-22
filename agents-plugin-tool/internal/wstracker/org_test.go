@@ -140,6 +140,24 @@ func TestConcurrentOrgListConflictsUseFoldOrder(t *testing.T) {
 		wantEq(t, "fold-order winner", tm.clone("ada.pc").r.S.orgs["o-a"].name, "Second")
 	})
 
+	t.Run("same id concurrent creates", func(t *testing.T) {
+		tm := newTeam(t)
+		tm.goOffline("ada.pc")
+		tm.goOffline("bo.pc")
+		a := tm.do("ada.pc", TypeOrgSet, orgSetPayload("o-a", "Alpha", "maya"))
+		b := tm.do("bo.pc", TypeOrgSet, orgSetPayload("o-a", "Beta", "raj"))
+		tm.comeOnline("ada.pc")
+		tm.comeOnline("bo.pc")
+		for _, who := range []string{"ada.pc", "bo.pc"} {
+			v := tm.view(who)
+			wantEq(t, who+" first create", event(t, v, a).Status, "applied")
+			wantEq(t, who+" later create of the same id", event(t, v, b).Status, "flagged")
+			o := tm.clone(who).r.S.orgs["o-a"]
+			wantEq(t, who+" first creator keeps name", o.name, "Alpha")
+			wantEq(t, who+" first creator keeps head", o.head, "maya")
+		}
+	})
+
 	t.Run("duplicate live names", func(t *testing.T) {
 		tm := newTeam(t)
 		tm.goOffline("ada.pc")

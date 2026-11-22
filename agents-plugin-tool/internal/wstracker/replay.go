@@ -305,13 +305,22 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 		switch n.ev.Verdict {
 		case wsledger.Valid:
 			n.status = "applied"
+			creates := false
 			if !isIdentity(n.typ) {
-				if rej := r.stateBeforeMode(n, true).check(n); rej != "" {
+				before := r.stateBeforeMode(n, true)
+				if rej := before.check(n); rej != "" {
 					n.status, n.reason = "flagged", string(rej)
 				}
+				// Decision 18: a roles.org_set whose writer held no org with
+				// its id creates one, whatever the fold-order list holds.
+				creates = n.typ == TypeOrgSet && before.orgs[n.p.str("org")] == nil
 			}
 			if n.status == "applied" && isFoldOrderList(n.typ) {
-				if rej := lf.listClash(n); rej != "" {
+				rej := lf.listClash(n)
+				if rej == "" && creates {
+					rej = lf.orgIDClash(n)
+				}
+				if rej != "" {
 					n.status, n.reason, n.clash = "flagged", string(rej), true
 				} else {
 					lf.apply(n)
@@ -451,6 +460,18 @@ func (s *state) listClash(n *node) rejection {
 	case TypeOrgRemove:
 		_, r := s.needOrg(n.p.str("org"), true)
 		return r
+	}
+	return ""
+}
+
+// orgIDClash is the rejection of a roles.org_set its writer made as a
+// creation (its causal past held no org with the id) while s, the fold-order
+// list, already holds that id: two admins minted the same id concurrently,
+// and the later in fold order must not rename or rehead the first's org.
+func (s *state) orgIDClash(n *node) rejection {
+	id := n.p.str("org")
+	if o := s.orgs[id]; o != nil {
+		return rejection("org id " + id + " already exists (" + o.name + ", created concurrently; the first in fold order keeps the id)")
 	}
 	return ""
 }
