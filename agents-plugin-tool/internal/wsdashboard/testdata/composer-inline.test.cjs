@@ -17,6 +17,7 @@ const edit = {
 field.wsc = edit;
 const topic = { value: 'review topic', dispatchEvent() {} };
 const context = vm.createContext({
+  cexecSend: () => false,
   window: { WsCapsules: { command: () => null } }, ctext: field, cchips: {},
   bselections: [], bmentions: [], wpicks: [], wconsoles: [], closeRequests: [], imgs: [], mpend: null,
   restoring: false, draftStore: null, cmdSel: null, boardOwn: {}, boardIncarnation: '', rid: 'r1',

@@ -412,6 +412,337 @@ Verification boundary:
 - Performance: the file-operation and latency measurements listed under
   Constraints for the composer paths.
 
+### Result (1321e061b) - 2026-11-22
+
+Landed (develop 02147864c..1321e061b, six commits): 2510c5f03 execjob
+per-launch window, `UserApproved`, `ExpectGen`/`CheckGen`, `OnConvert` and
+`ShellLaunch` (exec.shell now shares it); f9a112a45 runner pending-input
+source consumed at the `turnInput` seam; e0a88cd80 the `composer-exec` route,
+claim map, output file store and the ws-mcp binding; 11caef152 the composer
+UI, card, JS, CSS and eleven i18n tables; 0bf851713 end-to-end binding tests
+over real holders, the latency probe and the `sendMessage` node-fixture stubs;
+1321e061b review follow-up (below).
+
+Verification (each run with a narrow `-run`, `-race` where noted):
+- execjob composer tests, wsagent passive tests (`-race`), wsdashboard
+  composer route/claim/classification/authority/idempotency/async/output-route
+  tests (`-race`), `TestComposerExecBrowser` (Playwright, passes), cmd/ws-mcp
+  composer binding tests: all pass. The node fixtures that run `sendMessage`
+  in isolation (`TestCloseRequestComposerLifecycle`,
+  `TestComposerInlineWireAndHelpers`, capsules and the toast stub) pass with
+  a `cexecSend` stub.
+- `GOOS=windows go vet` on wsagent, wsdashboard, cmd/ws-mcp, execjob: clean.
+  The Windows Git Bash run was not done here; shell selection is
+  `ShellArgv`, identical to exec.shell.
+- Unrelated and environmental: `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`
+  in cmd/ws-mcp fails in a fresh worktree because the embedded workflow
+  packages lack `generated/inventory.json`; every other cmd/ws-mcp test passes.
+
+T0 compatibility evidence:
+- The diff touches no `hosted_store`, proxy/hello, dispatch/tool_arguments,
+  wsinbox, wslive, wsholder or tracker file: no `exec_jobs` schema or
+  `user_version` change, no inbox kind, hello field or holder shape.
+- Composer jobs are ordinary `exec_jobs` rows (tool `exec.shell`), so the
+  existing new -> old -> new test `TestHostedExecSurvivesAnOldDaemonAndReopens`
+  covers them; the output directory is independent of the job store; pending
+  input and receipts are memory only.
+- New client assets against an old daemon fail closed (route 404/405, no
+  `message` POST, draft kept), asserted in the browser test. Old assets keep
+  using `message`, unchanged.
+
+Performance: the route ack, card read and page load touch memory only. The
+oversize result's file operations (MkdirAll, CreateTemp, write, close, chmod,
+rename, ReadDir/Stat/Remove prune sweep) run on the submission goroutine or
+the async finalizer goroutine, never in a request handler and never under the
+claim or submission lock. Short sends add no dashboard file writes beyond the
+job-row WAL commits exec.shell already makes. Latencies were measured on macOS
+only (the probe in `composer_exec_perf_test.go`); a Windows file-touch
+baseline could not be measured here and stays unmeasured.
+
+Decisions:
+- Cards render in a strip above the composer (`.d-cexec` inside `#composer`)
+  rather than in the transcript region: regions are swapped by SSE, so a
+  stable DOM host is needed; the card is still absent from the shared
+  transcript, asserted in the browser test.
+- A LAN viewer typing `!` fails closed: the draft is kept and a hint says to
+  start with a space; the route itself refuses non-`TrustedWrite`.
+- One-use approval is the in-process `UserApproved` launch field; no tool
+  argument can set it and the agent's approval policy is never consulted
+  (tests). `CheckGen` is a separate boolean because generation 0 is real.
+- `OnConvert` runs before `Notify` is set so the exec id is in the lead's
+  pending input before the completion notice can exist; the dashboard's final
+  receipt upserts by exec id, so exactly one outcome reaches the lead (a
+  real-holder test proves the order `hand` then `notice`).
+- Async jobs are finalized lazily when a page polls the card, off the request
+  goroutine (review follow-up); the card reads as running until the file lands.
+
+Review (lite, one pass): the node-fixture finding was already fixed at
+0bf851713; the finalize-in-GET-handler finding is fixed in 1321e061b, along
+with eviction behind an active card, an unreadable retained output (now an
+explicit file error, not an empty file) and `</ws-user-exec>` inside output
+(escaped in the frame). Left open (minor): the input is cleared when a slow
+success response arrives, discarding anything typed meanwhile; async jobs
+that no page polls are never finalized (their completion still reaches the
+lead as the ordinary exec notice); no test of the end-between-OnConvert-and-
+Notify interleaving beyond the unit cases.
+
+Not verified: that a real harness (for example Codex `fs.read`) can read the
+output file, which lives under the daemon state directory.
+
+Left for Phase 2: the slot store, the `session.*_user_command` tools, the
+user-commands SSE event, slot list/Run/remove routes and the revision gate.
+Phase 2 reuses the route, binding, passive hand-off, output file and card.
+
+#### Edition (1e7dfcdc2) - 2026-11-22
+
+Pre-merge review (FIX-FIRST: 3 Critical, 9 Important) found the Phase 1 Result
+overstated several things. This Edition corrects the wording of the
+Decisions and of the Result above to what the code does after the fixes
+(commits 567241777, 60f4e94ca, 76e6157c3, ce20146ad, 1e7dfcdc2);
+the frozen text above is not edited.
+
+Corrections to the recovery behavior (Decisions "Submission-ID
+idempotency", "Slot store and output directory", the Result's compatibility
+and "Decisions" bullets):
+- Admission is two-part. The card map holds at most 64 cards per session,
+  evicting finished ones. A separate in-memory replay fence holds the newest
+  4096 admitted submission ids, independent of the cards. A resend that
+  carries `retry` (the browser records its attempt in session storage before
+  sending and marks only a resend of an unresolved attempt) never launches: it
+  maps to the card, or, when the daemon has no card for it, answers "outcome
+  unknown". An id the fence holds without a card also answers unknown. Only a
+  fresh submission under an id neither holds launches. After a daemon restart
+  both maps are empty: the page shows "outcome unknown", a retry runs nothing,
+  and the user's deliberate resend is a fresh submission. Exactly-once across a
+  crash is still not promised.
+- Reopening output after a daemon replacement: the `composer-exec` directory
+  and its files survive a replacement (verified new -> old -> new: an older
+  daemon has no reference to the directory, the reopened daemon leaves the
+  files intact and its retention still governs them), but the claim map does
+  not. The replaced daemon's card and file link are gone: the page shows
+  outcome unknown and the link route answers not found. The file stays
+  readable by its path (the lead's receipt carries it) until the retention
+  removes it. The Decisions' "reopens both" means the directory, not the
+  links.
+- Authority: every private read and write (list, card, output file, submit)
+  asks the live open-hosted-lead check (`Runner.ComposerOpen`, memory only),
+  not the index's `Hosted` flag, which a closed lead's registration keeps.
+- Generation: the route reads the open lead and its generation before
+  acknowledging; the launch carries it; the binding refuses a lead that moved
+  on, and `Hosted.Launch` reads the owner's live generation again after the
+  job is registered, so a close and revival that completes between the
+  owner read and the admission cannot leave a job on a generation nobody asked
+  for (tested from generation 0 on both sides).
+- Conversion decides once: a job found running at the window is converted for
+  good (it owes its notice), its id is published to the lead's pending input
+  while the notice is held back, then the notice is admitted; a job found
+  ended is done and publishes nothing. A converted run's end is only the
+  ordinary notice's, whatever state the job has reached since; the dashboard
+  hands only a run that ended inside its window. The converted receipt
+  carries the job id only.
+- Passive hand-off bound (Decisions' "16 receipts and 16 KiB"): measured on the
+  rendered block, with the frame, the closing-tag escaping and the separators
+  inside 16 KiB. Whole receipts stay at 16; collapsed id lines are not whole
+  receipts, share the byte bound and a 64-entry cap, and the oldest lines
+  drop first.
+- Output artifact representation: UTF-8 text, an invalid byte shown as U+FFFD
+  and a NUL as U+2400 (so the file stays within 1 MiB after the
+  substitutions and a harness text reader does not refuse it as binary), the
+  newest raw range that fits, with the number of dropped leading raw bytes
+  reported. `fs.read` (internal/mcp/server_fs.go) refuses a file with a NUL
+  in its first 8192 bytes, scans up to 64 MiB, cuts lines at 512 bytes and
+  budgets each reply at 4096 bytes with offset continuation; a test reads the
+  artifact of hostile output (invalid UTF-8, NULs, over the cap) with the real
+  `fsRead`. Reading through a real harness session was not exercised.
+- Retention: one background loop, not the write path. It sweeps at start (after
+  a minute), every 30 minutes and when a write asks, expires idle files,
+  treats an already-removed file as removed (no over-delete when sweeps
+  overlap), and publishes the absence of a file to its card. It also settles
+  converted cards and retires a card whose job was pruned, without a page
+  poll; card and list reads are memory only.
+
+Performance, measured on macOS (the probes under `WS_COMPOSER_PERF=1`,
+`composer_exec_perf_test.go` and `TestComposerExecConversionProbe`; p50 / p95):
+- Session page (shared cached render): 3.3 / 5.0 ms with the composer unbound
+  and 4.2 / 9.3 ms bound, the same code path (the template carries one
+  attribute), so the difference is run order and noise. What the change adds
+  to a page load is bytes: dashboard-composer-exec.js is 13.9 KB (4.5 KB
+  gzipped), the stylesheet grew 1.2 KB, the send script 0.2 KB, plus the
+  20 `js.cexec.*` strings per language table; and one list read, 0.11 / 0.14
+  ms, only when the browser remembers cards.
+- Acknowledgement of a send: 0.10 / 0.14 ms; a card read 0.09 / 0.12 ms;
+  a short send submit to card done 0.19 ms / 10.7 ms (the p95 is the
+  probe's own 10 ms poll step, not the daemon); a 1 MiB oversize result submit to card done 11.4 / 13.0 ms
+  (one atomic file write); a converted run's end to its card done 21 / 22 ms (the
+  settle tick, 20 ms in the probe, 1 s in production); a retention sweep
+  of the directory listing 0.07 / 0.14 ms.
+- Real hosted conversion: the decision, the id's publication and the
+  notice release take 34 us / 106 us; the 114 / 374 ms before the window is
+  the holder start every launch pays, and a quick run's whole launch is 245 /
+  250 ms.
+- File operations (counted by a hook and pinned by
+  `TestComposerInteractivePathsTouchNoFiles`): the acknowledgement, card and
+  list reads, the page and the settle ticks make none; a short send writes no
+  file; an oversize result is mkdir, create-temp, write, close, chmod and
+  rename, then the background sweep's readdir and one stat per file; the
+  output route opens the file. The shared localhost cookie guard's one stat per
+  authenticated request is the common baseline of every route, not the
+  composer's. Short sends add no dashboard file write beyond the job-row WAL
+  commits exec.shell already makes.
+- Pending, lead-owned (needs the Windows host, which workers do not access):
+  the Windows file-touch baseline comparison the performance manual asks
+  for, and the Windows Git Bash fallback run of the composer shell selection.
+  Only `GOOS=windows go vet` of the touched packages was run here.
+
+Review items resolved: C1 replay fence and retry/fresh, C2 generation at the
+route and at registration, C3 single conversion outcome, I1 attached state,
+I2 acknowledged-revision clearing, I3 live authority and the restore gate,
+I4 background settle and snapshot drop, I5 artifact representation, I6
+retention loop, I7 rendered hand-off bound, I8 artifact directory cycle and
+this wording, I9 measurement (Windows part pending as above).
+
+For Phase 2: the HUD ticket's chip Jump-to-card action should connect to this
+private card; the slot Run reuses the same admission (a fresh submission id per
+click, `retry` only for an unresolved attempt), the live authority check and
+the generation captured at the route.
+
+#### Edition (15ade9428) - 2026-11-22
+
+Round-2 review of the fixes above (FIX-FIRST: 3 Critical, 5 Important, 1
+Minor) plus three failures from the Windows host. Commits 4e84b388d, 2389cfcf2,
+2dd837ec0, 15ade9428. The frozen text and the Edition above are not edited;
+where they differ from what follows, this Edition governs.
+
+Replay (supersedes the admission bullet of the Edition above): a fresh
+submission is admitted only when the daemon can prove it was made after
+everything the daemon forgot. The page holds an admission token, the daemon
+instance's random epoch and the admission count the page last saw, and sends it
+with every fresh submission. A token of another epoch (a restart), a missing
+token, or one older than the fence's eviction horizon (the count at the newest
+id the fence evicted) is refused as "outcome unknown": nothing runs, the
+response carries the current token, the draft stays, and a deliberate rerun is
+a new submission id with that token. So the unchanged original request replayed
+after a restart, or after the 4096-id fence forgot its id, never launches; the
+restart test that expected it to launch again was replaced. The token reaches
+the page on its private list read at load (and from every submit response)
+instead of being rendered into the template, because a rendered page can be
+served from a cache while the count part must be current; a fresh submission
+that finds no token reads the list first. A retry still never launches.
+
+Conversion (C2): neither the live nor the stored job owes a notice until the id
+is published. While `OnConvert` runs the stored snapshot carries no Notify and
+no pending notice (a daemon lost in that interval restores a job that owes
+none); after it returns the conversion and the notice are stored once.
+`OnConvert` now returns an error: a refused passive hand-off is logged and the
+ordinary notice, which carries the id, is the single delivery. Tested at the
+stored rows, with the job ending inside the publication, for success and
+refusal.
+
+Shutdown (C3): composer state (channels, periods, epoch, maps) is built before
+the service is stored; admission counts its worker in the wait group under the
+lock that sets `closing`, so Close never waits past a request it accepted and
+no Add follows the Wait; an arriving request is refused with 503. A launch that
+meets a closed drain starts no holder. Tested with an admitted request held
+across Close and with a burst racing Close under the race detector.
+
+Client and body (I1, I2): the server decodes the body strictly and refuses any
+field other than the submission id, text, retry flag and token, naming
+attachments. The browser test now covers refusal followed by a regular send:
+the same draft, made an ordinary message, carries its pick once and a second
+click sends nothing. An acknowledgement clears the draft only while it is still
+the acknowledged revision (only plain appends at the very end of the draft keep
+it so), so a replacement that begins with the submitted text and the same text
+typed again are left whole, and an append made meanwhile is kept.
+
+Settlement (I3): a wake arms the settle timer only when it is not armed, so a
+stream of conversions never postpones a due tick, and each settlement trims
+finished cards over the 64-card bound. Tested with a continuous wake stream and
+with a burst that goes idle above the bound.
+
+Artifact reading (I4): the receipt of a file result says how to read it: the ws
+fs read tool by lines (offset and limit count lines; a line over 512 bytes is
+cut), or by byte range through exec (`head -c`, `tail -c`, `tail -c +START`)
+for long or single-line output. The real `fsRead` test stays. Reading the path
+in a live hosted session through its real harness and permission context is
+lead acceptance after the merge; it was not exercised here.
+
+Downgrade cycle (I5), correcting the Edition above: the artifact's new -> old
+-> new cycle was not run with an old binary. The wording "verified new -> old
+-> new" for the output directory rests on source evidence only, agreed with the
+lead: at 02147864c `cmd/ws-mcp/exec_hosted.go` (lines 18-19 and 58-71) opens
+only `exec-jobs.db` and `exec-exits`, and the head writes the independent
+`composer-exec` directory, so an older daemon has no reference to it. The
+runtime evidence is `TestComposerArtifactSurvivesDaemonReplacement` (a new
+daemon after a new daemon on the same state directory) and the job rows'
+existing `TestHostedExecSurvivesAnOldDaemonAndReopens`.
+
+Minor: the card's replacement note names both substitutions (invalid UTF-8 as
+U+FFFD, NUL as U+2400) in all ten languages, as the receipt does.
+
+Windows host findings against efef5eef2, fixed: retention sweeps are serialized
+by a mutex and a failed remove whose file is gone or delete-pending (access
+denied on Windows) counts as removed, so a lost remove race no longer deletes a
+newer file (`TestComposerPruneSweepsRaceWithoutOverDeleting` kept as is); the
+0o600 mode assertion is gated to non-Windows (Windows reports 0666); and the
+composer shell test has a sibling, `TestComposerExecSelectsItsShellThroughShellArgv`,
+that runs portable lines through the shell `execjob.ShellArgv` picks (Git Bash
+on Windows) and skips only where exec.shell has no shell. Its Windows run is
+lead-owned and pending; here it ran against bash and `GOOS=windows go vet` of
+the touched packages is clean.
+
+#### Edition (b6537dfcc) - 2026-11-22
+
+Round-3 review of the round-2 fixes (FIX-FIRST: 3 Critical, 4 Important),
+commits 986c24dc3, eff415549, b6537dfcc. The
+frozen text and the Editions above are not edited; where they differ from what
+follows, this Edition governs.
+
+Replay token (C1, refines the replay bullet of the Edition above): a token is
+current only for a count the daemon has issued, from the eviction horizon
+through its current sequence, inclusive. A future count is refused as "outcome
+unknown" like a stale one, so it can neither admit a request nor stay
+admissible after the fence evicts that request's id.
+
+Publication (C2, a lead exception next to decision 2):
+notice eligibility stays off during publication; a refused publication falls
+back to the ordinary notice as the single delivery. This is a lead exception to
+the rule that a notice follows only a successful publication, and the pin is
+`TestComposerExecRefusedHandOffLeavesTheOrdinaryNotice`. It holds only because
+publication is all-or-nothing: `OnConvert` returns an error only when nothing
+reached the owner or the client, and `PassiveHand` checks the generation and
+stores the receipt under one hold, so a refusal never leaves both the receipt
+and the notice. The contract is stated on `HostedLaunch.OnConvert`.
+
+Shutdown (C3): the background loop is registered under the same mutex as
+admission and `composerWait`, and the service is published only while
+admission is open, so a Close racing the binding neither waits past the loop's
+registration nor lets a closed daemon publish a service. Tested with a Close
+before the binding and a Close racing it under the race detector.
+
+Body (I1): after the one JSON object a second decode must return end of input;
+a stray delimiter, a second value or garbage is malformed and launches nothing
+(`Decoder.More` is a container check and passed them).
+
+Trimming (I2): the card bound is also applied when a submission's own goroutine
+finishes its run, so a burst whose every job ends inside its window (no
+conversion, no settle tick) trims without another request. Tested with a burst
+held unfinished until all of it is admitted.
+
+Client (I3): the first private list read routes a body that fails to read or
+parse after good headers into the same completion callback as a transport
+failure, so the send clears its busy state and keeps the draft. Covered in the
+browser test (a cut-short list body, then a working read).
+
+Windows retention (I4): a removal counts as done only on success, an absent
+file, or Windows errno 303 (ERROR_DELETE_PENDING). Access denied (5) and a
+sharing violation (32), the answers for a file another handle holds without
+share-delete, leave the file present: its size stays counted, its card keeps
+its link, and the failure is logged by the sweep. The errno check is a small
+per-OS helper (`composer_remove_windows.go` and a stub); the classifier is
+unit-tested with synthetic errors in the portable suite, and the 303 case in a
+Windows-only test the lead runs on the host. The earlier Lstat-based
+`composerGone` and its mapping of permission errors to removed are gone.
+
 ### Phase 2: Command slots
 
 Depends on Phase 1 (the route, launch binding, passive hand-off, output file

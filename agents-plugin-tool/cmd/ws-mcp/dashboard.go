@@ -245,6 +245,10 @@ func dashboardCommand(args []string) {
 	// a conversation the runner does not know yet would be dropped.
 	hostedExec := openHostedExec(dir, holders, agents, execLink, logw, execJobsChanged)
 	host.exec.Store(hostedExec)
+	if hostedExec != nil {
+		// The dashboard's `!` commands run on the same jobs and runner.
+		daemon.SetComposerExec(composerExec{hosted: hostedExec, runner: agents})
+	}
 	// The jobs a predecessor left are settled: the runner's report holds,
 	// sleep and close cascade read them from now on.
 	if hostedExec != nil {

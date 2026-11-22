@@ -243,6 +243,8 @@ type Daemon struct {
 	// director is the companion agent director (companion_director.go).
 	director companionDirector
 	agents   AgentHost
+	// composer is the chat composer's `!` command state (composer_exec.go).
+	composer composerExec
 	// credentials is DaemonOptions.Credentials (or a test's
 	// credentialSource), nil without one.
 	credentials credentialStore

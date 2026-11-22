@@ -108,6 +108,9 @@ type hostedJob struct {
 	// then HostedStopped and sends no notice.
 	stopping   bool
 	delivering bool
+	// publishing: a converted job's id is being handed to its caller; its
+	// completion notice waits for that (deliver), so the id is out first.
+	publishing bool
 	// starting: Launch admitted the job and has not handed its process to
 	// the holder yet; a stop then ends the job at once, and Launch, seeing
 	// the end, never spawns. spawned is open while that hand-over runs; a
@@ -598,7 +601,12 @@ func (h *Hosted) rowLocked(j *hostedJob) HostedJobRow {
 // snapshot. h.mu is held.
 func (h *Hosted) snapLocked(j *hostedJob) (HostedJobRow, uint64) {
 	j.rev++
-	return h.rowLocked(j), j.rev
+	row := h.rowLocked(j)
+	if j.publishing {
+		// The id is not out yet: the stored row owes no notice.
+		row.Notify, row.Notice = false, NoticeNone
+	}
+	return row, j.rev
 }
 
 // save stores j's snapshot row numbered rev, unless a later one is stored
@@ -758,6 +766,29 @@ type HostedLaunch struct {
 	Async    bool
 	// Legacy launches keep the legacy key and reply shape.
 	Legacy bool
+	// Window overrides the execution window of this launch (zero keeps the
+	// daemon's).
+	Window time.Duration
+	// CheckGen makes ExpectGen binding (zero is a real generation): a
+	// conversation that has reopened since the caller decided refuses the
+	// launch.
+	ExpectGen uint64
+	CheckGen  bool
+	// UserApproved marks a launch the user explicitly asked for through a
+	// trusted dashboard route (the composer's `!`): it is its own one-use
+	// approval, and the agent's approval policy is neither asked nor changed.
+	// Only in-process callers set it; no tool argument reaches it.
+	UserApproved bool
+	// OnConvert runs once when a still-running job converts to async, before
+	// the job owes its completion notice, so a caller can make the exec id
+	// visible ahead of the first notice admission: the job is not eligible for
+	// a notice, in memory or in its stored row, until it returns. A job that
+	// ends first converts nothing and never calls it. An error is logged and
+	// leaves the ordinary notice as the one delivery (a lead decision: a refused
+	// publication falls back to the ordinary notice as the single delivery), so
+	// the callback must be all-or-nothing: it returns an error only when nothing
+	// reached the owner or the client, never after a partial publication.
+	OnConvert func(HostedView) error
 }
 
 // HostedOutcome is how a launch call ended.

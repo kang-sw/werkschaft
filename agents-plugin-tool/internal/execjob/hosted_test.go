@@ -318,6 +318,10 @@ type fakeExecSessions struct {
 	notices   []execNotice
 	seen      map[string]bool
 	outcome   NoticeOutcome
+	// ownerCalls counts Owner calls; ownerHook runs at the start of call n
+	// (1-based), outside the lock: a test's interleaving point.
+	ownerCalls int
+	ownerHook  func(call int)
 }
 
 func newFakeExecSessions() *fakeExecSessions {
@@ -325,6 +329,13 @@ func newFakeExecSessions() *fakeExecSessions {
 }
 
 func (s *fakeExecSessions) Owner(id string) (HostedOwner, error) {
+	s.mu.Lock()
+	s.ownerCalls++
+	call, hook := s.ownerCalls, s.ownerHook
+	s.mu.Unlock()
+	if hook != nil {
+		hook(call)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o, ok := s.owners[id]

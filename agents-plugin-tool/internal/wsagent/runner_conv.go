@@ -125,6 +125,11 @@ type conv struct {
 	compactC                                  <-chan time.Time
 	compactStop                               func()
 	compactNote                               string
+	// passive is the pending hand-off of dashboard-run exec results
+	// (passive_input.go); passiveTook is what the send being built took,
+	// set by turnInput in the loop and acknowledged when that send succeeds.
+	passive     passiveInput
+	passiveTook []passiveTake
 
 	// compactOrigin is the origin (wslive.CompactOriginAuto or Manual) of the
 	// compaction ws itself requested, from its dispatch until its end or
@@ -1835,6 +1840,7 @@ func (c *conv) kickInput() {
 		// tried; a failed send clears turn below, and the loop step's sync
 		// drops it. A refused input never sets turn, so it never joins.
 		c.syncAwake()
+		c.passiveTook = nil
 		if cmd == nil {
 			err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
 		} else if text, ok := c.playbookTurn(*cmd); ok {
@@ -1917,6 +1923,8 @@ func (c *conv) kickInput() {
 	}
 	if ordinary {
 		c.compactNote = ""
+		c.passive.ack(c.passiveTook)
+		c.passiveTook = nil
 		if !c.compactNudge.standalone {
 			c.consumeCompactionNudge()
 		}
