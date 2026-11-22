@@ -15,7 +15,14 @@ import (
 // environment come from the runner, never from the browser.
 type composerExec struct {
 	hosted *execjob.Hosted
-	runner *wsagent.Runner
+	runner composerRunner
+}
+
+// composerRunner is the runner side the composer launch reads: the open
+// hosted lead's own target, and the passive hand-off of a result.
+type composerRunner interface {
+	ComposerTarget(id string) (wsagent.ComposerTarget, error)
+	PassiveHand(id string, gen uint64, execID, text string) error
 }
 
 // Launch runs the `!` line as the lead's own exec.shell job, shell and
