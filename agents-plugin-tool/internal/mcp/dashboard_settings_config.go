@@ -240,6 +240,7 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 		Pack: text(wsdashboard.CompanionPackKey), Preset: text(wsdashboard.CompanionPresetKey),
 		AgentCooldownSeconds: number(wsdashboard.CompanionAgentCooldownKey),
 		AgentHourlyCap:       number(wsdashboard.CompanionAgentHourlyCapKey),
+		Sources:              text(wsdashboard.CompanionSourcesKey),
 	}, nil
 }
 

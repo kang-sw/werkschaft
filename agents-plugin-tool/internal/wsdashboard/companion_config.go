@@ -21,6 +21,7 @@ const (
 	CompanionPresetKey         = "dashboard.companion_preset"
 	CompanionAgentCooldownKey  = "dashboard.companion_agent_cooldown_seconds"
 	CompanionAgentHourlyCapKey = "dashboard.companion_agent_hourly_cap"
+	CompanionSourcesKey        = "dashboard.companion_sources"
 
 	companionChangedPath  = "/config/companion-changed"
 	companionConfigHeader = "X-WS-Global-Config"
@@ -68,7 +69,7 @@ func companionModalRows(catalog []byte) (string, error) {
 func IsCompanionConfigKey(key string) bool {
 	switch key {
 	case CompanionEnabledKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
-		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey:
+		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey, CompanionSourcesKey:
 		return true
 	}
 	return false
@@ -110,6 +111,9 @@ type CompanionConfig struct {
 	Preset               string `json:"preset"`
 	AgentCooldownSeconds int    `json:"agentCooldownSeconds"`
 	AgentHourlyCap       int    `json:"agentHourlyCap"`
+	// Sources is the raw dashboard.companion_sources value; the modal splits
+	// it and shows each invalid entry (parseCompanionSources).
+	Sources string `json:"sources"`
 }
 
 type companionConfigSnapshot struct {

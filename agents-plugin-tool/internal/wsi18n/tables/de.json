@@ -2749,6 +2749,8 @@
   "js.settings.key.dashboard.companion_agent_cooldown_seconds.description": "Mindestzahl an Sekunden zwischen zwei Aufrufen der Agent-Steuerung. Es gilt nur der globale Wert.",
   "js.settings.key.dashboard.companion_agent_hourly_cap.label": "Agent-Stundenlimit",
   "js.settings.key.dashboard.companion_agent_hourly_cap.description": "Höchstzahl an Aufrufen der Agent-Steuerung in einer gleitenden Stunde. Es gilt nur der globale Wert.",
+  "js.settings.key.dashboard.companion_sources.label": "Paketquellen",
+  "js.settings.key.dashboard.companion_sources.description": "Adressen von Paketquellen, durch Leerzeichen getrennt: Git-Repositorys oder ZIP-Dateien über https, höchstens 16. Eine Quelle wird nur auf Ihre Anforderung abgerufen. Es gilt nur der globale Wert.",
   "js.companion.character": "Begleiter",
   "js.companion.return_home": "Zur Startposition",
   "js.companion.reset_size": "Größe zurücksetzen",

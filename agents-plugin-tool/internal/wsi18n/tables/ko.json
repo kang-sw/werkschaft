@@ -2749,6 +2749,8 @@
   "js.settings.key.dashboard.companion_agent_cooldown_seconds.description": "에이전트 디렉터를 두 번 호출하는 사이의 최소 간격(초)입니다. 전역 값만 적용됩니다.",
   "js.settings.key.dashboard.companion_agent_hourly_cap.label": "에이전트 시간당 한도",
   "js.settings.key.dashboard.companion_agent_hourly_cap.description": "에이전트 디렉터를 최근 1시간 동안 호출할 수 있는 최대 횟수입니다. 전역 값만 적용됩니다.",
+  "js.settings.key.dashboard.companion_sources.label": "팩 소스",
+  "js.settings.key.dashboard.companion_sources.description": "팩 소스 URL을 공백으로 구분해 적습니다. https의 git 저장소나 zip 파일이며 최대 16개입니다. 소스는 직접 요청할 때만 가져옵니다. 전역 값만 적용됩니다.",
   "js.companion.character": "컴패니언",
   "js.companion.return_home": "집으로 돌아가기",
   "js.companion.reset_size": "크기 초기화",

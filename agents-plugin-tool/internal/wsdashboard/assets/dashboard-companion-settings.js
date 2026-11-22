@@ -7,7 +7,8 @@
     "dashboard.companion_pack": "pack",
     "dashboard.companion_preset": "preset",
     "dashboard.companion_agent_cooldown_seconds": "agentCooldownSeconds",
-    "dashboard.companion_agent_hourly_cap": "agentHourlyCap"
+    "dashboard.companion_agent_hourly_cap": "agentHourlyCap",
+    "dashboard.companion_sources": "sources"
   };
   const voicePreview = 240;
 

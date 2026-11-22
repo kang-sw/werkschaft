@@ -2749,6 +2749,8 @@
   "js.settings.key.dashboard.companion_agent_cooldown_seconds.description": "Минимум секунд между двумя вызовами агентного управления. Применяется только глобальное значение.",
   "js.settings.key.dashboard.companion_agent_hourly_cap.label": "Часовой лимит агента",
   "js.settings.key.dashboard.companion_agent_hourly_cap.description": "Максимум вызовов агентного управления за скользящий час. Применяется только глобальное значение.",
+  "js.settings.key.dashboard.companion_sources.label": "Источники пакетов",
+  "js.settings.key.dashboard.companion_sources.description": "Адреса источников пакетов через пробел: git-репозитории или zip-файлы по https, не больше 16. Источник загружается только по вашему запросу. Применяется только глобальное значение.",
   "js.companion.character": "Компаньон",
   "js.companion.return_home": "Вернуться домой",
   "js.companion.reset_size": "Сбросить размер",

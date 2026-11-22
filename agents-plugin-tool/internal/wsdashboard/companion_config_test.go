@@ -88,7 +88,7 @@ func TestCompanionModalRowsAndShellStrings(t *testing.T) {
 	for _, row := range rows {
 		keys = append(keys, row.Key)
 	}
-	want := []string{CompanionPackKey, CompanionPresetKey, CompanionAgentCooldownKey, CompanionAgentHourlyCapKey}
+	want := []string{CompanionPackKey, CompanionPresetKey, CompanionAgentCooldownKey, CompanionAgentHourlyCapKey, CompanionSourcesKey}
 	if !slices.Equal(keys, want) {
 		t.Fatalf("modal rows = %v, want %v", keys, want)
 	}

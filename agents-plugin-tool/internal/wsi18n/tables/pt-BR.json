@@ -2749,6 +2749,8 @@
   "js.settings.key.dashboard.companion_agent_cooldown_seconds.description": "Mínimo de segundos entre duas chamadas ao diretor agente. Somente o valor global se aplica.",
   "js.settings.key.dashboard.companion_agent_hourly_cap.label": "Limite horário do agente",
   "js.settings.key.dashboard.companion_agent_hourly_cap.description": "Máximo de chamadas ao diretor agente em uma hora móvel. Somente o valor global se aplica.",
+  "js.settings.key.dashboard.companion_sources.label": "Fontes de pacotes",
+  "js.settings.key.dashboard.companion_sources.description": "URLs de fontes de pacotes separadas por espaços: repositórios git ou arquivos zip por https, no máximo 16. Uma fonte só é baixada quando você pede. Somente o valor global se aplica.",
   "js.companion.character": "Companheiro",
   "js.companion.return_home": "Voltar para casa",
   "js.companion.reset_size": "Redefinir tamanho",

@@ -66,6 +66,7 @@ var manifestGlobalOnlyKeys = map[string]struct{}{
 	wsdashboard.CompanionEnabledKey: {}, wsdashboard.CompanionDirectorKey: {},
 	wsdashboard.CompanionPackKey: {}, wsdashboard.CompanionPresetKey: {},
 	wsdashboard.CompanionAgentCooldownKey: {}, wsdashboard.CompanionAgentHourlyCapKey: {},
+	wsdashboard.CompanionSourcesKey: {},
 }
 
 func init() {

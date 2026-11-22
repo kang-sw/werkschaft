@@ -2749,6 +2749,8 @@
   "js.settings.key.dashboard.companion_agent_cooldown_seconds.description": "Nombre minimal de secondes entre deux appels de la direction par agent. Seule la valeur globale s'applique.",
   "js.settings.key.dashboard.companion_agent_hourly_cap.label": "Plafond horaire de l'agent",
   "js.settings.key.dashboard.companion_agent_hourly_cap.description": "Nombre maximal d'appels de la direction par agent sur une heure glissante. Seule la valeur globale s'applique.",
+  "js.settings.key.dashboard.companion_sources.label": "Sources de packs",
+  "js.settings.key.dashboard.companion_sources.description": "URL des sources de packs, séparées par des espaces : dépôts git ou fichiers zip en https, 16 au maximum. Une source n'est téléchargée qu'à votre demande. Seule la valeur globale s'applique.",
   "js.companion.character": "Compagnon",
   "js.companion.return_home": "Retour à l’accueil",
   "js.companion.reset_size": "Réinitialiser la taille",

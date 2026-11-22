@@ -2749,6 +2749,8 @@
   "js.settings.key.dashboard.companion_agent_cooldown_seconds.description": "兩次呼叫代理控制器之間的最短間隔(秒)。僅全域值生效。",
   "js.settings.key.dashboard.companion_agent_hourly_cap.label": "代理每小時上限",
   "js.settings.key.dashboard.companion_agent_hourly_cap.description": "滾動一小時內呼叫代理控制器的最大次數。僅全域值生效。",
+  "js.settings.key.dashboard.companion_sources.label": "資源包來源",
+  "js.settings.key.dashboard.companion_sources.description": "以空格分隔的資源包來源 URL：透過 https 存取的 git 儲存庫或 zip 檔案，最多 16 個。只有在你要求時才會取得來源。僅全域值生效。",
   "js.companion.character": "夥伴",
   "js.companion.return_home": "返回首頁",
   "js.companion.reset_size": "重設大小",
