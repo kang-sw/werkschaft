@@ -1,0 +1,3348 @@
+<style>
+.rt3-root {
+  --rt3-bg: var(--wb-bg, #f3f3f0);
+  --rt3-fg: var(--wb-fg, #1b1d21);
+  --rt3-card: var(--wb-card, #ffffff);
+  --rt3-muted: var(--wb-muted, #e9e8e3);
+  --rt3-muted-fg: var(--wb-muted-fg, #5f646b);
+  --rt3-primary: var(--wb-primary, #2b62d9);
+  --rt3-primary-fg: var(--wb-primary-fg, #ffffff);
+  --rt3-line: var(--wb-line, color-mix(in srgb, #1b1d21 14%, transparent));
+  --rt3-wash: var(--wb-wash, color-mix(in srgb, #1b1d21 5%, transparent));
+  --rt3-technical: var(--wb-technical, #2457c5);
+  --rt3-ok: var(--wb-ok, #1d7348);
+  --rt3-fail: var(--wb-fail, #a72e36);
+  --rt3-warn: var(--wb-warn, #986300);
+  --rt3-warn-ink: var(--wb-warn-ink, #7a4c00);
+  --rt3-bundle: #6e44c7;
+  --rt3-exc: #0d7a71;
+  --rt3-user: #b85600;
+  --rt3-shadow: var(--wb-shadow, 0 1px 2px rgb(0 0 0 / .10), 0 2px 6px rgb(0 0 0 / .05));
+  --rt3-shadow-hi: var(--wb-shadow-hi, 0 4px 12px rgb(0 0 0 / .16), 0 12px 32px rgb(0 0 0 / .12));
+  --rt3-radius: var(--wb-radius, 12px);
+  --rt3-mono: var(--wb-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  --rt3-sans: var(--wb-sans, system-ui, -apple-system, "Segoe UI", Roboto, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif);
+  font-family: var(--rt3-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--rt3-fg);
+  background: var(--rt3-bg);
+  padding: 8px 10px;
+  border-radius: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+:root[data-theme="dark"] .rt3-root:not([data-rt3-theme="light"]),
+.rt3-root[data-rt3-theme="dark"] {
+  --rt3-bg: #141518;
+  --rt3-fg: #e7e7e4;
+  --rt3-card: #1e2024;
+  --rt3-muted: #2b2d32;
+  --rt3-muted-fg: #a2a6ad;
+  --rt3-primary: #7aa2ff;
+  --rt3-primary-fg: #0c1424;
+  --rt3-line: color-mix(in srgb, #e7e7e4 16%, transparent);
+  --rt3-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+  --rt3-technical: #26385e;
+  --rt3-ok: #6cc39a;
+  --rt3-fail: #f1888e;
+  --rt3-warn: #e0a741;
+  --rt3-warn-ink: #f6c76b;
+  --rt3-bundle: #b497ff;
+  --rt3-exc: #52d1c4;
+  --rt3-user: #f3a45f;
+  --rt3-shadow: 0 1px 2px rgb(0 0 0 / .45), 0 2px 8px rgb(0 0 0 / .25);
+  --rt3-shadow-hi: 0 6px 18px rgb(0 0 0 / .55), 0 14px 36px rgb(0 0 0 / .42);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rt3-root:not([data-rt3-theme="light"]) {
+    --rt3-bg: #141518;
+    --rt3-fg: #e7e7e4;
+    --rt3-card: #1e2024;
+    --rt3-muted: #2b2d32;
+    --rt3-muted-fg: #a2a6ad;
+    --rt3-primary: #7aa2ff;
+    --rt3-primary-fg: #0c1424;
+    --rt3-line: color-mix(in srgb, #e7e7e4 16%, transparent);
+    --rt3-wash: color-mix(in srgb, #e7e7e4 6%, transparent);
+    --rt3-technical: #26385e;
+    --rt3-ok: #6cc39a;
+    --rt3-fail: #f1888e;
+    --rt3-warn: #e0a741;
+    --rt3-warn-ink: #f6c76b;
+    --rt3-bundle: #b497ff;
+    --rt3-exc: #52d1c4;
+    --rt3-user: #f3a45f;
+    --rt3-shadow: 0 1px 2px rgb(0 0 0 / .45), 0 2px 8px rgb(0 0 0 / .25);
+    --rt3-shadow-hi: 0 6px 18px rgb(0 0 0 / .55), 0 14px 36px rgb(0 0 0 / .42);
+  }
+}
+.rt3-root[data-rt3-theme="light"] {
+  --rt3-bg: #f3f3f0;
+  --rt3-fg: #1b1d21;
+  --rt3-card: #ffffff;
+  --rt3-muted: #e9e8e3;
+  --rt3-muted-fg: #5f646b;
+  --rt3-primary: #2b62d9;
+  --rt3-primary-fg: #ffffff;
+  --rt3-line: color-mix(in srgb, #1b1d21 14%, transparent);
+  --rt3-wash: color-mix(in srgb, #1b1d21 5%, transparent);
+  --rt3-technical: #2457c5;
+  --rt3-ok: #1d7348;
+  --rt3-fail: #a72e36;
+  --rt3-warn: #986300;
+  --rt3-warn-ink: #7a4c00;
+  --rt3-bundle: #6e44c7;
+  --rt3-exc: #0d7a71;
+  --rt3-user: #b85600;
+  --rt3-shadow: 0 1px 2px rgb(0 0 0 / .10), 0 2px 6px rgb(0 0 0 / .05);
+  --rt3-shadow-hi: 0 4px 12px rgb(0 0 0 / .16), 0 12px 32px rgb(0 0 0 / .12);
+}
+.rt3-root *, .rt3-root *::before, .rt3-root *::after { box-sizing: border-box; }
+.rt3-root [hidden] { display: none !important; }
+.rt3-root button, .rt3-root input, .rt3-root select { font: inherit; color: inherit; }
+.rt3-root .rt3-i {
+  width: 13px; height: 13px; flex: none; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.85;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.rt3-root button:focus-visible,
+.rt3-root input:focus-visible,
+.rt3-root select:focus-visible { outline: 2px solid var(--rt3-primary); outline-offset: 1px; }
+
+/* Top Bar */
+.rt3-topbar {
+  display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap;
+  padding: 5px 10px;
+  background: var(--rt3-card);
+  border: 1px solid var(--rt3-line);
+  border-radius: 10px;
+  box-shadow: var(--rt3-shadow);
+}
+.rt3-brand {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 800; white-space: nowrap; word-break: keep-all;
+}
+.rt3-ticket-chip {
+  font-family: var(--rt3-mono); font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 5px;
+  background: var(--rt3-wash); color: var(--rt3-muted-fg);
+}
+.rt3-tabs {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px; border-radius: 8px; background: var(--rt3-muted);
+}
+.rt3-tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 25px; padding: 0 11px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--rt3-muted-fg);
+  font-size: 11.5px; font-weight: 700; cursor: pointer;
+  white-space: nowrap; word-break: keep-all;
+}
+.rt3-tab:hover { color: var(--rt3-fg); }
+.rt3-tab[aria-selected="true"] {
+  background: var(--rt3-card); color: var(--rt3-fg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .14), inset 0 0 0 1px color-mix(in srgb, var(--rt3-line) 70%, transparent);
+}
+.rt3-topbar-right { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.rt3-theme-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 26px; padding: 0 9px; border-radius: 7px;
+  border: 1px solid var(--rt3-line); background: var(--rt3-card);
+  color: var(--rt3-fg); font-size: 11px; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+}
+.rt3-theme-btn:hover { background: var(--rt3-muted); }
+
+/* Stage Frame */
+.rt3-stage {
+  background: var(--rt3-card);
+  border-radius: var(--rt3-radius);
+  box-shadow: var(--rt3-shadow);
+  border: 1px solid color-mix(in srgb, var(--rt3-line) 65%, transparent);
+  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+}
+.rt3-shd { flex: none; background: var(--rt3-card); }
+.rt3-shd-top {
+  min-height: 36px; padding: 4px 12px;
+  display: flex; align-items: center; gap: 7px 9px; flex-wrap: wrap;
+  border-bottom: 1px solid color-mix(in srgb, var(--rt3-muted) 80%, transparent);
+}
+.rt3-shd-title { display: flex; align-items: center; gap: 6px; }
+.rt3-shd-title .rt3-i { width: 14px; height: 14px; color: var(--rt3-primary); }
+.rt3-shd-title h1 {
+  margin: 0; font-size: 13px; font-weight: 800; letter-spacing: -.01em;
+  white-space: nowrap; word-break: keep-all;
+}
+.rt3-route-pill {
+  font-family: var(--rt3-mono); font-size: 10px; font-weight: 700;
+  padding: 2px 7px; border-radius: 999px;
+  background: var(--rt3-wash); color: var(--rt3-muted-fg); white-space: nowrap;
+}
+.rt3-scope-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 20px; padding: 0 8px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700;
+  background: color-mix(in srgb, var(--rt3-primary) 13%, var(--rt3-card));
+  color: var(--rt3-primary); white-space: nowrap;
+}
+.rt3-prec-inline {
+  display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  font-size: 10px; color: var(--rt3-muted-fg); margin-left: 4px;
+}
+.rt3-prec-node {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 6px;
+  border-radius: 999px; font-size: 10px; font-weight: 700;
+  border: 1px solid color-mix(in srgb, var(--rt3-line) 80%, transparent);
+  background: var(--rt3-bg); color: var(--rt3-muted-fg);
+}
+.rt3-prec-node.active {
+  background: var(--rt3-primary); color: var(--rt3-primary-fg); border-color: var(--rt3-primary);
+}
+.rt3-shd-status { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+
+/* Pills & Buttons */
+.rt3-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 19px; padding: 0 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 700;
+  background: var(--rt3-muted); color: var(--rt3-muted-fg);
+  white-space: nowrap; word-break: keep-all;
+}
+.rt3-pill.pri {
+  background: color-mix(in srgb, var(--rt3-primary) 14%, var(--rt3-card));
+  color: var(--rt3-primary);
+  border: 1px solid color-mix(in srgb, var(--rt3-primary) 35%, transparent);
+}
+.rt3-pill.ok {
+  background: color-mix(in srgb, var(--rt3-ok) 14%, var(--rt3-card));
+  color: var(--rt3-ok);
+  border: 1px solid color-mix(in srgb, var(--rt3-ok) 34%, transparent);
+}
+.rt3-pill.warn {
+  background: color-mix(in srgb, var(--rt3-warn) 15%, var(--rt3-card));
+  color: var(--rt3-warn-ink);
+  border: 1px solid color-mix(in srgb, var(--rt3-warn) 42%, transparent);
+}
+.rt3-pill.fail {
+  background: color-mix(in srgb, var(--rt3-fail) 15%, var(--rt3-card));
+  color: var(--rt3-fail);
+  border: 1px solid color-mix(in srgb, var(--rt3-fail) 44%, transparent);
+}
+.rt3-pill.bun {
+  background: color-mix(in srgb, var(--rt3-bundle) 15%, var(--rt3-card));
+  color: var(--rt3-bundle);
+  border: 1px solid color-mix(in srgb, var(--rt3-bundle) 38%, transparent);
+}
+.rt3-pill.exc {
+  background: color-mix(in srgb, var(--rt3-exc) 14%, var(--rt3-card));
+  color: var(--rt3-exc);
+  border: 1px solid color-mix(in srgb, var(--rt3-exc) 36%, transparent);
+}
+.rt3-pill.usr {
+  background: color-mix(in srgb, var(--rt3-user) 14%, var(--rt3-card));
+  color: var(--rt3-user);
+  border: 1px solid color-mix(in srgb, var(--rt3-user) 36%, transparent);
+}
+
+.rt3-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  height: 26px; padding: 0 10px; border-radius: 7px;
+  border: 1px solid var(--rt3-line); background: var(--rt3-card);
+  color: var(--rt3-fg); font-size: 11px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; word-break: keep-all;
+}
+.rt3-btn:hover:not(:disabled) { background: var(--rt3-muted); }
+.rt3-btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--rt3-primary) 14%, var(--rt3-card));
+  color: var(--rt3-primary);
+  border-color: color-mix(in srgb, var(--rt3-primary) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rt3-primary) 28%, transparent);
+}
+.rt3-btn.diag-btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--rt3-fail) 14%, var(--rt3-card));
+  color: var(--rt3-fail);
+  border-color: color-mix(in srgb, var(--rt3-fail) 50%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rt3-fail) 24%, transparent);
+}
+.rt3-btn.pri { background: var(--rt3-primary); color: var(--rt3-primary-fg); border-color: var(--rt3-primary); }
+.rt3-btn.pri:hover:not(:disabled) { filter: brightness(1.06); }
+.rt3-btn.danger { color: var(--rt3-fail); border-color: color-mix(in srgb, var(--rt3-fail) 45%, transparent); }
+.rt3-btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--rt3-fail) 12%, var(--rt3-card)); }
+.rt3-btn.sm { height: 22px; padding: 0 7px; font-size: 10.5px; }
+.rt3-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.rt3-seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  width: fit-content; max-width: 100%; height: 26px; padding: 2px;
+  border-radius: 7px; background: var(--rt3-muted);
+}
+.rt3-seg button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  border: 0; background: transparent; border-radius: 5px;
+  height: 22px; padding: 0 7px; font-size: 10.5px; font-weight: 700;
+  color: var(--rt3-muted-fg); cursor: pointer; white-space: nowrap; word-break: keep-all;
+}
+.rt3-seg button:hover:not(:disabled) { color: var(--rt3-fg); }
+.rt3-seg button[aria-pressed="true"] {
+  background: var(--rt3-card); color: var(--rt3-fg);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .12), inset 0 0 0 1px color-mix(in srgb, var(--rt3-line) 70%, transparent);
+}
+.rt3-err-cnt {
+  font-family: var(--rt3-mono); font-size: 9.5px; font-weight: 800;
+  padding: 0 5px; border-radius: 999px;
+  background: color-mix(in srgb, var(--rt3-fail) 18%, transparent);
+  color: var(--rt3-fail);
+}
+
+/* Toolbar */
+.rt3-toolbar {
+  display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--rt3-muted) 22%, var(--rt3-card));
+  border-bottom: 1px solid color-mix(in srgb, var(--rt3-muted) 85%, transparent);
+}
+.rt3-ctrl-grp { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.rt3-ctrl-lbl { font-size: 10.5px; font-weight: 800; color: var(--rt3-muted-fg); white-space: nowrap; }
+.rt3-legend {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 10px; color: var(--rt3-muted-fg);
+}
+.rt3-leg-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.rt3-leg-sw { width: 14px; height: 2.5px; border-radius: 2px; display: inline-block; }
+.rt3-leg-sw.def { background: color-mix(in srgb, var(--rt3-muted-fg) 42%, transparent); }
+.rt3-leg-sw.ov { background: var(--rt3-primary); }
+.rt3-leg-sw.exc { background: repeating-linear-gradient(90deg, var(--rt3-exc) 0 4px, transparent 4px 7px); }
+.rt3-leg-sw.bun { background: var(--rt3-bundle); }
+
+/* Procedural DAG Canvas */
+.rt3-canvas-wrap {
+  position: relative;
+  padding: 12px 14px 14px;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--rt3-fg) 8.5%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
+    color-mix(in srgb, var(--rt3-bg) 52%, var(--rt3-card));
+  overflow: hidden;
+}
+.rt3-edges {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+}
+.rt3-edge-path {
+  fill: none;
+  stroke-linecap: round;
+  transition: opacity .15s, stroke-width .15s;
+}
+.rt3-edge-path.default {
+  stroke: color-mix(in srgb, var(--rt3-muted-fg) 36%, transparent);
+  stroke-width: 1.45;
+}
+.rt3-edge-path.override {
+  stroke: var(--rt3-primary);
+  stroke-width: 2.1;
+}
+.rt3-edge-path.bundle {
+  stroke: var(--rt3-bundle);
+  stroke-width: 2.1;
+}
+.rt3-edge-path.exception {
+  stroke: var(--rt3-exc);
+  stroke-width: 2.0;
+  stroke-dasharray: 4.5 3;
+}
+.rt3-edge-path.warn {
+  stroke: var(--rt3-warn);
+  stroke-width: 2.1;
+  stroke-dasharray: 5 3;
+}
+.rt3-edge-path.err {
+  stroke: var(--rt3-fail);
+  stroke-width: 2.25;
+  stroke-dasharray: 5 3;
+}
+.rt3-edge-path.dim { opacity: .10 !important; }
+.rt3-edge-path.lit { opacity: 1 !important; stroke-width: 2.9 !important; }
+.rt3-edge-label { transition: opacity .15s; pointer-events: none; }
+.rt3-edge-label.dim { opacity: .12 !important; }
+.rt3-edge-dot { transition: opacity .15s; }
+.rt3-edge-dot.dim { opacity: .10 !important; }
+
+/* Procedural Depth Grid */
+.rt3-dag-grid {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  column-gap: clamp(40px, 4.3vw, 62px);
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+}
+.rt3-depth-col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.rt3-depth-hdr {
+  display: flex; align-items: center; justify-content: space-between; gap: 4px;
+  font-size: 9.5px; font-weight: 800; letter-spacing: .02em;
+  color: var(--rt3-muted-fg);
+  padding: 0 3px 4px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--rt3-line) 70%, transparent);
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+.rt3-depth-hdr code { font-family: var(--rt3-mono); font-size: 9px; opacity: .85; }
+.rt3-col-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Unified First-Class DAG Nodes */
+.rt3-node {
+  position: relative;
+  width: 100%; min-width: 0; text-align: left;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--rt3-line) 85%, transparent);
+  background: var(--rt3-card);
+  box-shadow: var(--rt3-shadow);
+  cursor: pointer;
+  transition: border-color .12s, box-shadow .12s, opacity .15s, background .12s;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 5px 8px;
+}
+.rt3-node:hover {
+  border-color: var(--rt3-primary);
+  box-shadow: var(--rt3-shadow-hi);
+}
+/* Compact single-row playbook node (~26-28px height) */
+.rt3-node.kind-playbook {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 7px;
+  border-radius: 6px;
+}
+.rt3-node.kind-group {
+  border-color: color-mix(in srgb, var(--rt3-line) 95%, transparent);
+}
+.rt3-node.kind-user {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--rt3-user) 52%, var(--rt3-line));
+  background: color-mix(in srgb, var(--rt3-user) 5%, var(--rt3-card));
+}
+.rt3-node.kind-caller {
+  border-color: color-mix(in srgb, var(--rt3-technical) 48%, var(--rt3-line));
+  background: color-mix(in srgb, var(--rt3-technical) 5%, var(--rt3-card));
+}
+.rt3-node.kind-bundle {
+  border-color: color-mix(in srgb, var(--rt3-bundle) 55%, var(--rt3-line));
+  background: color-mix(in srgb, var(--rt3-bundle) 5%, var(--rt3-card));
+}
+.rt3-node.kind-terminal {
+  border-color: color-mix(in srgb, var(--rt3-ok) 40%, var(--rt3-line));
+}
+.rt3-node.is-ov {
+  border-color: color-mix(in srgb, var(--rt3-primary) 72%, var(--rt3-line));
+  background: color-mix(in srgb, var(--rt3-primary) 7%, var(--rt3-card));
+}
+.rt3-node.is-bun-ref {
+  border-color: color-mix(in srgb, var(--rt3-bundle) 72%, var(--rt3-line));
+  background: color-mix(in srgb, var(--rt3-bundle) 8%, var(--rt3-card));
+}
+.rt3-node.is-warn {
+  border-color: var(--rt3-warn) !important;
+  background: color-mix(in srgb, var(--rt3-warn) 9%, var(--rt3-card)) !important;
+}
+.rt3-node.is-err {
+  border-color: var(--rt3-fail) !important;
+  background: color-mix(in srgb, var(--rt3-fail) 9%, var(--rt3-card)) !important;
+}
+.rt3-node.is-ghost {
+  border-style: dashed;
+  border-color: var(--rt3-fail);
+  background: color-mix(in srgb, var(--rt3-fail) 8%, var(--rt3-card));
+}
+.rt3-node.dim { opacity: .24; }
+.rt3-node.lit {
+  opacity: 1 !important;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--rt3-primary) 42%, transparent), var(--rt3-shadow-hi);
+}
+.rt3-node.selected {
+  opacity: 1 !important;
+  border-color: var(--rt3-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rt3-primary) 42%, transparent), var(--rt3-shadow-hi);
+}
+.rt3-node.is-err.lit, .rt3-node.is-err.selected {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rt3-fail) 42%, transparent), var(--rt3-shadow-hi);
+}
+
+.rt3-pb-l { display: inline-flex; align-items: center; gap: 5px; min-width: 0; flex: 1 1 auto; }
+.rt3-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: color-mix(in srgb, var(--rt3-muted-fg) 42%, transparent);
+}
+.rt3-node.is-ov .rt3-dot { background: var(--rt3-primary); }
+.rt3-node.is-bun-ref .rt3-dot { background: var(--rt3-bundle); }
+.rt3-node.is-warn .rt3-dot { background: var(--rt3-warn); }
+.rt3-node.is-err .rt3-dot { background: var(--rt3-fail); }
+.rt3-node.kind-user .rt3-dot { background: var(--rt3-user); }
+.rt3-pb-name {
+  font-family: var(--rt3-mono); font-size: 10px; font-weight: 700;
+  color: var(--rt3-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt3-pb-r { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+.rt3-sz {
+  font-family: var(--rt3-mono); font-size: 9px; font-weight: 800;
+  padding: 0 4px; border-radius: 4px; line-height: 15px;
+  background: var(--rt3-wash); color: var(--rt3-muted-fg);
+}
+.rt3-mtag {
+  font-size: 8.5px; font-weight: 800; padding: 0 4px; border-radius: 4px; line-height: 14px;
+  white-space: nowrap; background: var(--rt3-wash); color: var(--rt3-muted-fg);
+}
+.rt3-mtag.pri { background: color-mix(in srgb, var(--rt3-primary) 16%, var(--rt3-card)); color: var(--rt3-primary); }
+.rt3-mtag.bun { background: color-mix(in srgb, var(--rt3-bundle) 16%, var(--rt3-card)); color: var(--rt3-bundle); }
+.rt3-mtag.exc { background: color-mix(in srgb, var(--rt3-exc) 16%, var(--rt3-card)); color: var(--rt3-exc); }
+.rt3-mtag.usr { background: color-mix(in srgb, var(--rt3-user) 16%, var(--rt3-card)); color: var(--rt3-user); }
+.rt3-mtag.warn { background: color-mix(in srgb, var(--rt3-warn) 22%, var(--rt3-card)); color: var(--rt3-warn-ink); }
+.rt3-mtag.fail { background: color-mix(in srgb, var(--rt3-fail) 20%, var(--rt3-card)); color: var(--rt3-fail); }
+
+.rt3-node-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0;
+}
+.rt3-node-title {
+  font-family: var(--rt3-mono); font-size: 10.8px; font-weight: 800; color: var(--rt3-fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt3-node-sub {
+  font-family: var(--rt3-mono); font-size: 9.5px; color: var(--rt3-muted-fg);
+  display: flex; align-items: center; justify-content: space-between; gap: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt3-node-excs {
+  display: flex; align-items: center; gap: 3px; flex-wrap: wrap; margin-top: 1px;
+}
+.rt3-slots { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.rt3-slot {
+  font-family: var(--rt3-mono); font-size: 8.5px; font-weight: 800;
+  padding: 0 4px; border-radius: 3px; line-height: 14px;
+  background: var(--rt3-wash); color: var(--rt3-muted-fg);
+}
+.rt3-slot.active {
+  background: color-mix(in srgb, var(--rt3-primary) 15%, var(--rt3-card));
+  color: var(--rt3-primary);
+}
+.rt3-slot.pinned { background: var(--rt3-primary); color: var(--rt3-primary-fg); }
+
+/* Diagnostic Strip inside Canvas when Diagnostics Active */
+.rt3-diag-strip {
+  position: relative; z-index: 2;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px dashed color-mix(in srgb, var(--rt3-fail) 45%, transparent);
+  background: color-mix(in srgb, var(--rt3-fail) 5%, var(--rt3-card));
+  display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap;
+}
+.rt3-diag-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--rt3-fail) 42%, transparent);
+  background: var(--rt3-card); cursor: pointer;
+  font-size: 10.5px; font-weight: 700; color: var(--rt3-fg);
+}
+.rt3-diag-chip:hover { border-color: var(--rt3-fail); }
+.rt3-diag-chip.warn { border-color: color-mix(in srgb, var(--rt3-warn) 48%, transparent); }
+.rt3-diag-chip.ok { border-color: color-mix(in srgb, var(--rt3-ok) 48%, transparent); }
+.rt3-diag-chip code { font-family: var(--rt3-mono); font-size: 9.5px; }
+
+/* Bottom Trace HUD */
+.rt3-trace-hud {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  min-height: 36px; padding: 5px 12px;
+  background: color-mix(in srgb, var(--rt3-muted) 26%, var(--rt3-card));
+  border-top: 1px solid color-mix(in srgb, var(--rt3-muted) 90%, transparent);
+  font-size: 11px;
+}
+.rt3-hud-lbl { font-size: 10.5px; font-weight: 800; color: var(--rt3-muted-fg); white-space: nowrap; }
+.rt3-hud-chain {
+  display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  font-family: var(--rt3-mono); font-size: 10.8px; font-weight: 700;
+}
+.rt3-hud-chip {
+  padding: 1px 6px; border-radius: 5px;
+  background: var(--rt3-card);
+  border: 1px solid color-mix(in srgb, var(--rt3-line) 80%, transparent);
+}
+.rt3-hud-chip.end {
+  background: color-mix(in srgb, var(--rt3-ok) 14%, var(--rt3-card));
+  border-color: color-mix(in srgb, var(--rt3-ok) 36%, transparent);
+  color: var(--rt3-ok);
+}
+.rt3-hud-chip.exc {
+  background: color-mix(in srgb, var(--rt3-exc) 14%, var(--rt3-card));
+  border-color: color-mix(in srgb, var(--rt3-exc) 36%, transparent);
+  color: var(--rt3-exc);
+}
+.rt3-hud-chip.warn {
+  background: color-mix(in srgb, var(--rt3-warn) 16%, var(--rt3-card));
+  border-color: color-mix(in srgb, var(--rt3-warn) 45%, transparent);
+  color: var(--rt3-warn-ink);
+}
+.rt3-hud-chip.fail {
+  background: color-mix(in srgb, var(--rt3-fail) 15%, var(--rt3-card));
+  border-color: color-mix(in srgb, var(--rt3-fail) 46%, transparent);
+  color: var(--rt3-fail);
+}
+.rt3-hud-right { margin-left: auto; font-size: 10px; color: var(--rt3-muted-fg); white-space: nowrap; }
+
+/* Edit / Add / Diagnostic Modal */
+.rt3-modal-backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgb(10 12 16 / .52);
+  backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.rt3-modal {
+  width: min(600px, 100%);
+  max-height: 90vh; overflow-y: auto;
+  background: var(--rt3-card); color: var(--rt3-fg);
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--rt3-line) 90%, transparent);
+  box-shadow: var(--rt3-shadow-hi);
+  display: flex; flex-direction: column;
+}
+.rt3-modal-hd {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 11px 15px;
+  border-bottom: 1px solid color-mix(in srgb, var(--rt3-muted) 88%, transparent);
+}
+.rt3-modal-title-wrap { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.rt3-modal-title-wrap h2 { margin: 0; font-size: 13.5px; font-weight: 800; word-break: keep-all; }
+.rt3-modal-close {
+  width: 26px; height: 26px; border-radius: 6px; border: 0;
+  background: transparent; color: var(--rt3-muted-fg);
+  cursor: pointer; display: inline-grid; place-items: center;
+}
+.rt3-modal-close:hover { background: var(--rt3-muted); color: var(--rt3-fg); }
+.rt3-modal-body { padding: 13px 15px; display: flex; flex-direction: column; gap: 11px; }
+.rt3-modal-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  padding: 10px 15px;
+  border-top: 1px solid color-mix(in srgb, var(--rt3-muted) 88%, transparent);
+  background: color-mix(in srgb, var(--rt3-muted) 18%, var(--rt3-card));
+}
+.rt3-banner {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 11px; border-radius: 8px; font-size: 11.5px; line-height: 1.45;
+  word-break: keep-all;
+}
+.rt3-banner.fail {
+  background: color-mix(in srgb, var(--rt3-fail) 12%, var(--rt3-card));
+  border: 1px solid color-mix(in srgb, var(--rt3-fail) 42%, transparent);
+  color: var(--rt3-fail); font-weight: 700;
+}
+.rt3-banner.warn {
+  background: color-mix(in srgb, var(--rt3-warn) 12%, var(--rt3-card));
+  border: 1px solid color-mix(in srgb, var(--rt3-warn) 42%, transparent);
+  color: var(--rt3-warn-ink); font-weight: 600;
+}
+.rt3-banner.info {
+  background: color-mix(in srgb, var(--rt3-primary) 9%, var(--rt3-card));
+  border: 1px solid color-mix(in srgb, var(--rt3-primary) 32%, transparent);
+  color: var(--rt3-fg);
+}
+.rt3-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rt3-field label { font-size: 11px; font-weight: 700; color: var(--rt3-muted-fg); }
+.rt3-inp, .rt3-sel {
+  height: 30px; padding: 0 9px;
+  border: 1px solid var(--rt3-line); border-radius: 7px;
+  background: var(--rt3-bg); color: var(--rt3-fg);
+  font-size: 11.5px; min-width: 0; width: 100%;
+}
+.rt3-inp.mono, .rt3-sel.mono { font-family: var(--rt3-mono); }
+.rt3-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+.rt3-exc-box {
+  border: 1px solid var(--rt3-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--rt3-muted) 16%, var(--rt3-card));
+  display: flex; flex-direction: column; gap: 7px;
+}
+.rt3-exc-list { display: flex; flex-direction: column; gap: 5px; }
+.rt3-exc-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 4px 8px; border-radius: 6px;
+  background: var(--rt3-card); border: 1px solid var(--rt3-line);
+  font-family: var(--rt3-mono); font-size: 11px;
+}
+.rt3-exc-add {
+  display: grid; grid-template-columns: 82px minmax(0, 1fr) 92px auto; gap: 6px; align-items: center;
+}
+.rt3-trace-list {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px; border-radius: 8px;
+  background: var(--rt3-bg); border: 1px solid var(--rt3-line);
+  font-family: var(--rt3-mono); font-size: 10.5px;
+}
+.rt3-trace-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.rt3-trace-sz {
+  min-width: 52px; font-weight: 800; color: var(--rt3-muted-fg);
+}
+.rt3-suggest-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.rt3-suggest-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 9px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--rt3-primary) 42%, transparent);
+  background: color-mix(in srgb, var(--rt3-primary) 10%, var(--rt3-card));
+  color: var(--rt3-primary); font-family: var(--rt3-mono); font-size: 11px; font-weight: 700;
+  cursor: pointer;
+}
+.rt3-suggest-chip:hover { background: color-mix(in srgb, var(--rt3-primary) 18%, var(--rt3-card)); }
+
+/* Tab 2: New-Session Dialog ((1516)=a) */
+.rt3-ns-body { padding: 14px 16px; }
+.rt3-ns-layout {
+  display: grid; grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 14px; align-items: start;
+}
+.rt3-rpop {
+  background: var(--rt3-card); color: var(--rt3-fg);
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--rt3-line) 85%, transparent);
+  box-shadow: var(--rt3-shadow-hi);
+  padding: 13px 15px;
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+}
+.rt3-sphd { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 800; }
+.rt3-sploc {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: -4px; font-size: 11px; color: var(--rt3-muted-fg); font-family: var(--rt3-mono);
+}
+.rt3-sploc b { color: var(--rt3-fg); }
+.rt3-spsec { display: grid; gap: 5px; min-width: 0; }
+.rt3-splbl {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 11px; font-weight: 700; color: var(--rt3-muted-fg);
+}
+.rt3-spseg {
+  display: flex; flex-wrap: wrap; gap: 2px; width: fit-content; max-width: 100%;
+  background: var(--rt3-muted); border-radius: 999px; padding: 2px;
+}
+.rt3-spseg button {
+  font: inherit; font-size: 11px; font-weight: 600; border: 0;
+  border-radius: 999px; padding: 3px 10px;
+  background: transparent; color: var(--rt3-muted-fg); cursor: pointer;
+}
+.rt3-spseg button[aria-checked="true"] {
+  background: var(--rt3-card); color: var(--rt3-fg); box-shadow: inset 0 0 0 1px var(--rt3-line);
+}
+.rt3-spopts { display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--rt3-muted); }
+.rt3-sprc { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+.rt3-sprc label { font-size: 11px; font-weight: 700; color: var(--rt3-muted-fg); white-space: nowrap; }
+.rt3-spsm {
+  width: 210px; max-width: 65%; height: 28px; padding: 0 7px;
+  border: 0; border-radius: 7px; background: var(--rt3-muted); color: var(--rt3-fg);
+  font-size: 11px; font-family: var(--rt3-mono);
+}
+.rt3-microhint {
+  margin: 0; padding: 5px 8px; border-radius: 7px;
+  font-size: 11px; line-height: 1.4; background: var(--rt3-wash); color: var(--rt3-muted-fg);
+}
+.rt3-microhint.applied {
+  background: color-mix(in srgb, var(--rt3-primary) 11%, var(--rt3-card));
+  color: var(--rt3-primary); font-weight: 600;
+}
+.rt3-microhint.reverted {
+  background: color-mix(in srgb, var(--rt3-warn) 13%, var(--rt3-card));
+  color: var(--rt3-warn-ink); font-weight: 600;
+}
+.rt3-spdiv { border-top: 1px solid var(--rt3-muted); padding-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.rt3-spdesc { margin: 0; font-size: 11px; color: var(--rt3-muted-fg); }
+.rt3-sprow {
+  display: flex; align-items: center; gap: 6px; padding-top: 6px; border-top: 1px solid var(--rt3-muted);
+}
+.rt3-sprow-note {
+  margin-right: auto; font-family: var(--rt3-mono); font-size: 10.5px; color: var(--rt3-muted-fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt3-pbtn {
+  height: 27px; padding: 0 12px; border-radius: 999px; border: 0;
+  font-size: 11px; font-weight: 700; cursor: pointer;
+  background: var(--rt3-muted); color: var(--rt3-muted-fg);
+}
+.rt3-pbtn.go { background: var(--rt3-primary); color: var(--rt3-primary-fg); }
+.rt3-flow-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rt3-step-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.rt3-step-card {
+  display: flex; flex-direction: column; gap: 5px; text-align: left;
+  padding: 9px 10px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--rt3-line) 78%, transparent);
+  background: var(--rt3-card); cursor: pointer;
+}
+.rt3-step-card:hover { border-color: var(--rt3-primary); }
+.rt3-step-card.active {
+  border-color: var(--rt3-primary);
+  background: color-mix(in srgb, var(--rt3-primary) 7%, var(--rt3-card));
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--rt3-primary) 35%, transparent);
+}
+.rt3-step-title { font-size: 11.5px; font-weight: 800; }
+.rt3-step-kv {
+  display: flex; flex-direction: column; gap: 2px;
+  font-family: var(--rt3-mono); font-size: 10px; color: var(--rt3-muted-fg);
+}
+.rt3-step-kv span b { color: var(--rt3-fg); }
+.rt3-wire-box {
+  border: 1px solid color-mix(in srgb, var(--rt3-line) 78%, transparent);
+  border-radius: 9px; background: var(--rt3-card);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.rt3-pre {
+  margin: 0; padding: 8px 10px; border-radius: 7px;
+  border: 1px solid var(--rt3-line); background: var(--rt3-bg);
+  font-family: var(--rt3-mono); font-size: 11px; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+@media (max-width: 1080px) {
+  .rt3-dag-grid { column-gap: 28px; }
+  .rt3-canvas-wrap { padding: 10px 8px 12px; }
+  .rt3-pb-name { font-size: 9px; }
+  .rt3-node-title { font-size: 9.6px; }
+  .rt3-node-sub { font-size: 8.6px; }
+  .rt3-ns-layout { grid-template-columns: minmax(0, 1fr); }
+  .rt3-step-strip { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 680px) {
+  .rt3-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .rt3-exc-add { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+
+<div class="rt3-root" id="rt3-root">
+  <!-- Top Bar -->
+  <div class="rt3-topbar">
+    <div class="rt3-brand">
+      <svg class="rt3-i" viewBox="0 0 24 24"><circle cx="5" cy="6" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 6h4a3 3 0 0 1 3 3v1.5M7.5 18h4a3 3 0 0 0 3-3v-1.5M14.5 12h2"/></svg>
+      <span>절차적 포인터 DAG · 티어 라우팅 v3</span>
+      <span class="rt3-ticket-chip">261119-feat-ws-named-custom-tiers</span>
+    </div>
+    <div class="rt3-tabs" role="tablist" aria-label="목업 화면 전환">
+      <button type="button" class="rt3-tab" role="tab" data-rt3-tab="dag" aria-selected="true">포인터 DAG</button>
+      <button type="button" class="rt3-tab" role="tab" data-rt3-tab="newsession" aria-selected="false">새 세션 티어 선택 ((1516)=a)</button>
+    </div>
+    <div class="rt3-topbar-right">
+      <button type="button" class="rt3-theme-btn" id="rt3-theme-toggle" aria-label="테마 전환">
+        <svg class="rt3-i" id="rt3-theme-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <span id="rt3-theme-label">다크</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- TAB 1: Procedural Pointer DAG -->
+  <section class="rt3-stage" id="rt3-panel-dag" role="tabpanel">
+    <div class="rt3-shd">
+      <div class="rt3-shd-top">
+        <div class="rt3-shd-title">
+          <svg class="rt3-i" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <h1>설정</h1>
+        </div>
+        <span class="rt3-route-pill">/settings &gt; 에이전트 · 통합 포인터 DAG</span>
+        <span class="rt3-scope-pill">프로젝트 · devenv</span>
+        <div class="rt3-prec-inline" aria-label="범위 우선순위">
+          <span>우선순위:</span>
+          <span class="rt3-prec-node">세션</span><span>›</span>
+          <span class="rt3-prec-node active">프로젝트</span><span>›</span>
+          <span class="rt3-prec-node">레포</span><span>›</span>
+          <span class="rt3-prec-node">전역</span><span>›</span>
+          <span class="rt3-prec-node">기본값</span>
+        </div>
+        <div class="rt3-shd-status">
+          <span class="rt3-pill ok" id="rt3-stage-status-pill">DAG 유효 · 최대 3홉 (8홉 이내)</span>
+        </div>
+      </div>
+
+      <div class="rt3-toolbar">
+        <div class="rt3-ctrl-grp">
+          <button type="button" class="rt3-btn" id="rt3-demo-reparent" aria-pressed="false" title="클릭하여 ticket-worker의 부모 포인터를 review:*로 전환">예시: ticket-worker → review:*</button>
+          <button type="button" class="rt3-btn pri" id="rt3-add-node-btn">+ 노드 추가</button>
+          <button type="button" class="rt3-btn diag-btn" id="rt3-diag-toggle" aria-pressed="false">오류·경고 진단 <span class="rt3-err-cnt" id="rt3-err-badge-cnt">4</span></button>
+          <button type="button" class="rt3-btn" id="rt3-reset-defaults-btn">기본값 복원</button>
+        </div>
+        <div class="rt3-ctrl-grp">
+          <span class="rt3-ctrl-lbl">caller:</span>
+          <div class="rt3-seg" id="rt3-caller-seg" role="group" aria-label="호출 하네스">
+            <button type="button" data-caller="codex" aria-pressed="false">codex</button>
+            <button type="button" data-caller="claude" aria-pressed="true">claude</button>
+            <button type="button" data-caller="agy" aria-pressed="false">agy</button>
+            <button type="button" data-caller="pi" aria-pressed="false">pi</button>
+          </div>
+        </div>
+        <div class="rt3-legend" aria-label="간선 범례">
+          <span class="rt3-leg-item"><span class="rt3-leg-sw def"></span>기본 포인터</span>
+          <span class="rt3-leg-item"><span class="rt3-leg-sw ov"></span>사용자 지정</span>
+          <span class="rt3-leg-item"><span class="rt3-leg-sw exc"></span>크기 예외</span>
+          <span class="rt3-leg-item"><span class="rt3-leg-sw bun"></span>번들</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Procedural Pointer DAG Canvas -->
+    <div class="rt3-canvas-wrap" id="rt3-canvas">
+      <svg class="rt3-edges" id="rt3-edges-svg" aria-hidden="true"></svg>
+      <div class="rt3-dag-grid" id="rt3-dag-grid"></div>
+      <div class="rt3-diag-strip" id="rt3-diag-strip" hidden></div>
+    </div>
+
+    <!-- Bottom Resolution Trace HUD -->
+    <div class="rt3-trace-hud" id="rt3-trace-hud">
+      <span class="rt3-hud-lbl">해석 추적:</span>
+      <div class="rt3-hud-chain" id="rt3-hud-chain"></div>
+      <span class="rt3-hud-right">호버: 도달 경로 강조 · 클릭: 포인터·예외 편집 (순환/8홉 검증)</span>
+    </div>
+  </section>
+
+  <!-- TAB 2: New-Session Dialog ((1516)=a) -->
+  <section class="rt3-stage" id="rt3-panel-newsession" role="tabpanel" hidden>
+    <div class="rt3-shd">
+      <div class="rt3-shd-top">
+        <div class="rt3-shd-title">
+          <svg class="rt3-i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 10h8m-8 4h5"/></svg>
+          <h1>대시보드 · 새 세션 대화상자</h1>
+        </div>
+        <span class="rt3-route-pill">dashboard-leads.js · rpLeadMake</span>
+        <span class="rt3-scope-pill">계약 유지: session.request_hire</span>
+      </div>
+    </div>
+    <div class="rt3-ns-body">
+      <div class="rt3-ns-layout">
+        <div class="rt3-rpop" aria-label="새 리드 세션 대화상자">
+          <div class="rt3-sphd">
+            <span>새 리드 세션</span>
+            <span class="rt3-pill pri" id="rt3-ns-mode-pill">직접 선택</span>
+          </div>
+          <div class="rt3-sploc">
+            <svg class="rt3-i" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <b>devenv</b><span>·</span><span>develop</span>
+          </div>
+          <div class="rt3-spsec">
+            <div class="rt3-splbl">
+              <label for="rt3-ns-bundle">커스텀 번들 프리셋 (선택)</label>
+              <span style="font-weight:500">선택 시 하네스·모델·강도 채움</span>
+            </div>
+            <select class="rt3-sel mono" id="rt3-ns-bundle"></select>
+          </div>
+          <div class="rt3-spsec">
+            <div class="rt3-splbl"><span>하네스</span></div>
+            <div class="rt3-spseg" id="rt3-ns-harness-seg" role="radiogroup" aria-label="하네스">
+              <button type="button" role="radio" data-ns-h="claude" aria-checked="true">Claude</button>
+              <button type="button" role="radio" data-ns-h="codex" aria-checked="false">Codex</button>
+              <button type="button" role="radio" data-ns-h="agy" aria-checked="false">AGY</button>
+              <button type="button" role="radio" data-ns-h="pi" aria-checked="false">Pi</button>
+            </div>
+          </div>
+          <div class="rt3-spopts">
+            <div class="rt3-sprc">
+              <label for="rt3-ns-model">모델</label>
+              <select class="rt3-spsm" id="rt3-ns-model"></select>
+            </div>
+            <div class="rt3-sprc">
+              <label for="rt3-ns-effort">추론 강도</label>
+              <select class="rt3-spsm" id="rt3-ns-effort"></select>
+            </div>
+            <p class="rt3-microhint" id="rt3-ns-hint">번들을 선택하지 않으면 각 필드를 직접 선택합니다.</p>
+          </div>
+          <div class="rt3-spdiv">
+            <div class="rt3-spsec">
+              <div class="rt3-splbl"><span>권한 수준</span><span style="font-weight:500">번들과 독립</span></div>
+              <div class="rt3-spseg" id="rt3-ns-perm-seg" role="radiogroup" aria-label="권한 수준">
+                <button type="button" role="radio" data-ns-perm="default" aria-checked="true">기본</button>
+                <button type="button" role="radio" data-ns-perm="workdir-write" aria-checked="false">작업 디렉터리</button>
+                <button type="button" role="radio" data-ns-perm="full" aria-checked="false">전체 권한</button>
+              </div>
+              <p class="rt3-spdesc" id="rt3-ns-perm-desc">하네스 기본 권한 정책을 따릅니다.</p>
+            </div>
+            <div class="rt3-spsec">
+              <div class="rt3-splbl"><span>플러그인 격리</span><span style="font-weight:500">번들과 독립</span></div>
+              <div class="rt3-spseg" id="rt3-ns-iso-seg" role="radiogroup" aria-label="격리 모드">
+                <button type="button" role="radio" data-ns-iso="default" aria-checked="true">기본</button>
+                <button type="button" role="radio" data-ns-iso="isolated" aria-checked="false">격리</button>
+              </div>
+              <p class="rt3-spdesc">번들 선택은 권한 수준이나 플러그인 격리를 변경하지 않습니다.</p>
+            </div>
+          </div>
+          <div class="rt3-sprow">
+            <span class="rt3-sprow-note" id="rt3-ns-loc">devenv · develop · Claude</span>
+            <button type="button" class="rt3-pbtn" id="rt3-ns-reset">초기화</button>
+            <button type="button" class="rt3-pbtn go" id="rt3-ns-start">세션 시작</button>
+          </div>
+        </div>
+
+        <div class="rt3-flow-panel">
+          <div>
+            <h2 style="margin:0 0 2px;font-size:13px;font-weight:800">(1516)=a 상호작용 흐름 · DAG 번들 실시간 동기화</h2>
+            <p class="rt3-spdesc">포인터 DAG에서 추가·편집한 커스텀 번들이 왼쪽 프리셋 목록에 즉시 반영됩니다. 필드 수동 수정 시 즉시 직접 선택으로 복귀합니다.</p>
+          </div>
+          <div class="rt3-step-strip" id="rt3-step-strip">
+            <button type="button" class="rt3-step-card active" data-step="manual">
+              <span class="rt3-pill">① 번들 선택 전</span>
+              <span class="rt3-step-title">직접 선택 (수동)</span>
+              <div class="rt3-step-kv">
+                <span>프리셋: <b>직접 선택 (수동)</b></span>
+                <span>하네스: <b>Claude</b></span>
+                <span>모델/강도: <b>사용자 지정</b></span>
+              </div>
+            </button>
+            <button type="button" class="rt3-step-card" data-step="bundle">
+              <span class="rt3-pill pri">② 번들 선택 시</span>
+              <span class="rt3-step-title">자동 채움 (deep-design)</span>
+              <div class="rt3-step-kv">
+                <span>프리셋: <b>deep-design</b></span>
+                <span>하네스: <b>Claude</b></span>
+                <span>모델/강도: <b>opus-4-6 · high</b></span>
+              </div>
+            </button>
+            <button type="button" class="rt3-step-card" data-step="reverted">
+              <span class="rt3-pill warn">③ 필드 수동 수정 시</span>
+              <span class="rt3-step-title">즉시 수동 복귀</span>
+              <div class="rt3-step-kv">
+                <span>프리셋: <b>직접 선택 (복귀)</b></span>
+                <span>수정: <b>추론 강도 → medium</b></span>
+                <span>힌트: <b>수동 수정됨 표시</b></span>
+              </div>
+            </button>
+          </div>
+          <div class="rt3-wire-box">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <b style="font-size:12px">전달 페이로드 미리보기 (POST /agents/leads)</b>
+              <span class="rt3-pill ok" id="rt3-ns-submit-badge">실시간 동기화</span>
+            </div>
+            <p class="rt3-spdesc">번들은 UI 입력 보조 전용이며, 실제 요청에는 <code>harness</code>·<code>model</code>·<code>effort</code>와 독립된 <code>permission_level</code>·<code>plugin_isolation</code>만 전달됩니다.</p>
+            <pre class="rt3-pre" id="rt3-ns-payload"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Modal -->
+  <div class="rt3-modal-backdrop" id="rt3-modal-backdrop" hidden>
+    <div class="rt3-modal" id="rt3-modal" role="dialog" aria-modal="true" aria-labelledby="rt3-modal-title">
+      <div class="rt3-modal-hd">
+        <div class="rt3-modal-title-wrap">
+          <h2 id="rt3-modal-title">노드 편집</h2>
+          <span class="rt3-pill" id="rt3-modal-badge"></span>
+        </div>
+        <button type="button" class="rt3-modal-close" id="rt3-modal-x" aria-label="모달 닫기">
+          <svg class="rt3-i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="rt3-modal-body" id="rt3-modal-body"></div>
+      <div class="rt3-modal-foot" id="rt3-modal-foot"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.getElementById("rt3-root");
+  if (!root) return;
+
+  var SIZES = ["small", "medium", "large", "xlarge"];
+  var SIZE_SHORT = { small: "S", medium: "M", large: "L", xlarge: "XL" };
+  var HARNESS_ORDER = ["claude", "codex", "agy", "pi"];
+  var HARNESS_LABELS = { claude: "Claude", codex: "Codex", agy: "AGY", pi: "Pi" };
+  var HARNESS_MODELS = {
+    claude: ["opus-4-6", "sonnet-4-6", "haiku-4-5"],
+    codex: ["gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"],
+    agy: ["gemini-flash", "claude-opus-4-6-thinking", "claude-sonnet-4-6"],
+    pi: ["sonnet-4-6", "opus-4-6", "gpt-5.3-codex-spark"]
+  };
+  var HARNESS_EFFORTS = {
+    claude: ["low", "medium", "high", "max"],
+    codex: ["low", "medium", "high", "xhigh"],
+    agy: ["low", "medium", "high"],
+    pi: ["low", "medium", "high"]
+  };
+  var HARNESS_TIER_DEFAULTS = {
+    claude: {
+      small: { model: "haiku-4-5", effort: "low" },
+      medium: { model: "sonnet-4-6", effort: "medium" },
+      large: { model: "opus-4-6", effort: "high" },
+      xlarge: { model: "opus-4-6", effort: "max" }
+    },
+    codex: {
+      small: { model: "gpt-5.3-codex-spark", effort: "low" },
+      medium: { model: "gpt-5.3-codex", effort: "medium" },
+      large: { model: "gpt-5.3-codex", effort: "high" },
+      xlarge: { model: "gpt-5.4", effort: "xhigh" }
+    },
+    agy: {
+      small: { model: "gemini-flash", effort: "low" },
+      medium: { model: "claude-sonnet-4-6", effort: "medium" },
+      large: { model: "claude-opus-4-6-thinking", effort: "high" },
+      xlarge: { model: "claude-opus-4-6-thinking", effort: "high" }
+    },
+    pi: {
+      small: { model: "gpt-5.3-codex-spark", effort: "low" },
+      medium: { model: "sonnet-4-6", effort: "medium" },
+      large: { model: "opus-4-6", effort: "high" },
+      xlarge: { model: "opus-4-6", effort: "high" }
+    }
+  };
+
+  /* All 21 real tier-declaring playbooks under agents-plugin/rsrc/ */
+  var PLAYBOOK_DEFS = [
+    { name: "explore", size: "small", defGrp: "grp:explore", desc: "코드베이스 탐색 및 맥락 수집" },
+    { name: "reference-discovery", size: "small", defGrp: "grp:explore", desc: "관련 문서·심볼·참조 위치 탐색" },
+    { name: "ticket-selector", size: "small", defGrp: "grp:explore", desc: "단일 실행 티어 후보 선별" },
+    { name: "ticket-batch-selector", size: "medium", defGrp: "grp:explore", desc: "다중 티켓 배치 선택 및 우선순위" },
+    { name: "ticket-classifier", size: "medium", defGrp: "grp:explore", desc: "티켓 유형 및 난이도 분류" },
+    { name: "ticket-fact-populator", size: "medium", defGrp: "grp:explore", desc: "구현 제약·매뉴얼 사실 채우기" },
+
+    { name: "implementer", size: "medium", defGrp: "grp:implement", desc: "위임 작업 구현 워커" },
+    { name: "ticket-worker", size: "medium", defGrp: "grp:implement", desc: "표준 티켓 구현 워커" },
+    { name: "ticket-worker-elevated", size: "large", defGrp: "grp:implement", desc: "고난도·다모듈 티켓 워커" },
+    { name: "ticket-handler", size: "medium", defGrp: "grp:implement", desc: "티켓 작성 및 구조화 핸들러" },
+    { name: "ship-handler", size: "small", defGrp: "grp:implement", desc: "릴리스 게이트·배포 처리" },
+
+    { name: "reviewer", size: "large", defGrp: "grp:review", desc: "범용 코드·변경 검토자" },
+    { name: "review-handler", size: "medium", defGrp: "grp:review", desc: "리뷰 라우팅·판정 조율" },
+    { name: "code-review-correctness", size: "large", defGrp: "grp:review", desc: "정확성·동시성·경계 검토" },
+    { name: "code-review-fit", size: "medium", defGrp: "grp:review", desc: "아키텍처·패턴 적합성 검토" },
+    { name: "code-review-test", size: "medium", defGrp: "grp:review", desc: "테스트 커버리지·신뢰성 검토" },
+    { name: "code-review-lite", size: "medium", defGrp: "grp:review", desc: "경량 빠른 변경 검토" },
+    { name: "ticket-reviewer-design", size: "large", defGrp: "grp:review", desc: "티켓 설계·아키텍처 심층 검토" },
+    { name: "ticket-reviewer-completeness", size: "medium", defGrp: "grp:review", desc: "티켓 명세·인수 조건 누락 검토" },
+    { name: "fresh-reader-audit", size: "large", defGrp: "grp:review", desc: "사전 문맥 없는 신규 독자 감사" },
+    { name: "fresh-read-doc-auditor", size: "large", defGrp: "grp:review", desc: "문서·스킬 독립 정독 감사" }
+  ];
+
+  function createInitialNodes(useOwnerSeed) {
+    var map = {};
+    HARNESS_ORDER.forEach(function (h) {
+      map["term:" + h] = { id: "term:" + h, label: h, kind: "terminal", harness: h };
+    });
+
+    map["bun:fast-triage"] = {
+      id: "bun:fast-triage", label: "fast-triage", kind: "bundle",
+      harness: "agy", model: "gemini-flash", effort: "low"
+    };
+    map["bun:deep-design"] = {
+      id: "bun:deep-design", label: "deep-design", kind: "bundle",
+      harness: "claude", model: "opus-4-6", effort: "high"
+    };
+
+    map["caller"] = {
+      id: "caller", label: "caller", kind: "caller",
+      desc: "현재 호출자의 하네스로 크기를 그대로 전달합니다."
+    };
+
+    map["grp:implement"] = {
+      id: "grp:implement", label: "implement", kind: "group",
+      defaultTarget: "caller",
+      target: useOwnerSeed ? "term:claude" : "caller",
+      sizeMode: "*",
+      exceptions: [],
+      desc: "구현·작성 계열 플레이북의 기본 부모 노드"
+    };
+    map["grp:explore"] = {
+      id: "grp:explore", label: "explore", kind: "group",
+      defaultTarget: "caller",
+      target: useOwnerSeed ? "term:codex" : "caller",
+      sizeMode: "*",
+      exceptions: useOwnerSeed ? [{ size: "small", target: "term:claude", sizeMode: "small" }] : [],
+      desc: "탐색·분류 계열 플레이북의 기본 부모 노드"
+    };
+    map["grp:review"] = {
+      id: "grp:review", label: "review", kind: "group",
+      defaultTarget: "caller",
+      target: useOwnerSeed ? "term:codex" : "caller",
+      sizeMode: "*",
+      exceptions: [],
+      desc: "검토·감사 계열 플레이북의 기본 부모 노드"
+    };
+
+    if (useOwnerSeed) {
+      map["usr:discussion"] = {
+        id: "usr:discussion", label: "discussion", kind: "user",
+        defaultTarget: "term:claude",
+        target: "term:claude", sizeMode: "*", exceptions: [],
+        desc: "사용자 정의 중간 라우팅 노드"
+      };
+      map["usr:lead-explore"] = {
+        id: "usr:lead-explore", label: "lead-explore", kind: "user",
+        defaultTarget: "usr:discussion",
+        target: "usr:discussion", sizeMode: "*", exceptions: [],
+        desc: "사용자 정의 중간 라우팅 노드 (다단계 체인 예시)"
+      };
+      map["usr:deep-review"] = {
+        id: "usr:deep-review", label: "deep-review", kind: "user",
+        defaultTarget: "bun:deep-design",
+        target: "bun:deep-design", sizeMode: "*", exceptions: [],
+        desc: "사용자 정의 중간 라우팅 노드 → 커스텀 번들 연결"
+      };
+    }
+
+    PLAYBOOK_DEFS.forEach(function (pb) {
+      var target = pb.defGrp;
+      if (useOwnerSeed) {
+        if (pb.name === "reference-discovery") target = "usr:lead-explore";
+        else if (pb.name === "ticket-reviewer-design") target = "usr:deep-review";
+        else if (pb.name === "ticket-selector") target = "bun:fast-triage";
+      }
+      map["pb:" + pb.name] = {
+        id: "pb:" + pb.name,
+        label: pb.name,
+        kind: "playbook",
+        defaultSize: pb.size,
+        defaultTarget: pb.defGrp,
+        target: target,
+        sizeMode: "*",
+        exceptions: [],
+        desc: pb.desc
+      };
+    });
+
+    return map;
+  }
+
+  var state = {
+    activeTab: "dag",
+    callerHarness: "claude",
+    diagMode: false,
+    diagFixes: {
+      cycleFixed: false,
+      hopFixed: false,
+      legacyDismissed: false,
+      unknownFixTarget: ""
+    },
+    nodes: createInitialNodes(true),
+    hoverNodeId: null,
+    selectedNodeId: null,
+    modalOpen: false,
+    newSession: {
+      bundle: "",
+      harness: "claude",
+      model: "opus-4-6",
+      effort: "high",
+      perm: "default",
+      iso: "default",
+      hintState: "manual"
+    }
+  };
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = text;
+    return n;
+  }
+
+  function cloneNodes(nodeMap) {
+    var out = {};
+    Object.keys(nodeMap).forEach(function (id) {
+      var n = nodeMap[id];
+      var copy = Object.assign({}, n);
+      if (n.exceptions) {
+        copy.exceptions = n.exceptions.map(function (ex) { return Object.assign({}, ex); });
+      }
+      out[id] = copy;
+    });
+    return out;
+  }
+
+  function displayNodeRef(node, sizeMode) {
+    if (!node) return "?";
+    if (node.kind === "terminal") return node.label + "." + (sizeMode || "*");
+    if (node.kind === "bundle") return node.label;
+    if (node.kind === "playbook") return node.label + (sizeMode && sizeMode !== "*" ? ":" + sizeMode : "");
+    return node.label + ":" + (sizeMode || "*");
+  }
+
+  function displayTargetString(nodeMap, targetId, sizeMode) {
+    var t = nodeMap[targetId];
+    if (!t) return targetId;
+    if (t.kind === "bundle") return t.label;
+    if (t.kind === "terminal") return t.label + "." + (sizeMode || "*");
+    return t.label + ":" + (sizeMode || "*");
+  }
+
+  function getActiveNodeMap() {
+    if (!state.diagMode) return state.nodes;
+    var map = cloneNodes(state.nodes);
+
+    /* 1. CycleDetected synthetic pair */
+    map["diag:cycle-a"] = {
+      id: "diag:cycle-a", label: "cycle-a", kind: "user", diagTag: "cycle",
+      defaultTarget: "diag:cycle-b",
+      target: "diag:cycle-b", sizeMode: "*", exceptions: [],
+      desc: "진단 예시: cycle-a ↔ cycle-b 순환 참조"
+    };
+    map["diag:cycle-b"] = {
+      id: "diag:cycle-b", label: "cycle-b", kind: "user", diagTag: "cycle",
+      defaultTarget: "diag:cycle-a",
+      target: state.diagFixes.cycleFixed ? "term:claude" : "diag:cycle-a",
+      sizeMode: state.diagFixes.cycleFixed ? "large" : "*", exceptions: [],
+      desc: "진단 예시: cycle-b 순환 대상"
+    };
+
+    /* 2. HopLimitExceeded synthetic chain (condensed visually for 900px fit) */
+    map["diag:hop-p1"] = {
+      id: "diag:hop-p1", label: "hop-1…7", kind: "user", diagTag: "hop",
+      defaultTarget: "diag:hop-p8",
+      target: state.diagFixes.hopFixed ? "bun:deep-design" : "diag:hop-p8",
+      sizeMode: "*", exceptions: [],
+      desc: "진단 예시: 8홉 초과 체인 (hop-1 → … → hop-8 → hop-9)"
+    };
+    if (!state.diagFixes.hopFixed) {
+      map["diag:hop-p8"] = {
+        id: "diag:hop-p8", label: "hop-8", kind: "user", diagTag: "hop",
+        defaultTarget: "diag:hop-p9",
+        target: "diag:hop-p9", sizeMode: "*", exceptions: [],
+        desc: "진단 예시: 8번째 홉"
+      };
+      map["diag:hop-p9"] = {
+        id: "diag:hop-p9", label: "hop-9 (9/8)", kind: "ghost", diagTag: "hop",
+        desc: "진단 예시: 9홉 도달 (최대 8홉 제한 초과)"
+      };
+    }
+
+    /* 4. UnknownTarget ghost */
+    if (!state.diagFixes.unknownFixTarget) {
+      map["ghost:fast-model-v9"] = {
+        id: "ghost:fast-model-v9", label: "fast-model-v9", kind: "ghost", diagTag: "unknown",
+        desc: "미정의 대상 (UnknownTarget)"
+      };
+      if (map["pb:ticket-worker-elevated"]) {
+        map["pb:ticket-worker-elevated"].target = "ghost:fast-model-v9";
+        map["pb:ticket-worker-elevated"].diagTag = "unknown";
+      }
+    } else if (map["pb:ticket-worker-elevated"]) {
+      map["pb:ticket-worker-elevated"].target = state.diagFixes.unknownFixTarget;
+      map["pb:ticket-worker-elevated"].diagFixed = true;
+    }
+
+    return map;
+  }
+
+  function getOutgoingEdges(node, nodeMap) {
+    if (!node) return [];
+    if (node.kind === "terminal" || node.kind === "bundle" || node.kind === "ghost") return [];
+    if (node.kind === "caller") {
+      return [{ to: "term:" + state.callerHarness, sizeMode: "*", isException: false, isDefault: true }];
+    }
+    var edges = [];
+    if (node.target && nodeMap[node.target]) {
+      edges.push({
+        to: node.target,
+        sizeMode: node.sizeMode || "*",
+        isException: false,
+        isDefault: node.target === node.defaultTarget && (node.sizeMode || "*") === "*"
+      });
+    } else if (node.target) {
+      edges.push({ to: node.target, sizeMode: node.sizeMode || "*", isException: false, isDefault: false, unknown: true });
+    }
+    if (node.exceptions && node.exceptions.length) {
+      node.exceptions.forEach(function (ex) {
+        edges.push({
+          to: ex.target,
+          sizeMode: ex.sizeMode || "*",
+          excSize: ex.size,
+          isException: true,
+          isDefault: false,
+          unknown: !nodeMap[ex.target]
+        });
+      });
+    }
+    return edges;
+  }
+
+  function resolveNodeAtSize(startId, reqSize, nodeMap, callerH) {
+    var curId = startId;
+    var curSize = reqSize || "medium";
+    var visited = {};
+    var chain = [];
+    var hops = 0;
+
+    while (hops <= 12) {
+      var node = nodeMap[curId];
+      if (!node) {
+        chain.push({ id: curId, text: curId + " (미정의)", cls: "fail" });
+        return { ok: false, error: "UnknownTarget", chain: chain, hops: hops };
+      }
+      if (node.kind === "ghost") {
+        chain.push({ id: curId, text: node.label + " (" + (node.diagTag === "hop" ? "9/8 홉 초과" : "UnknownTarget") + ")", cls: "fail" });
+        return { ok: false, error: node.diagTag === "hop" ? "HopLimitExceeded" : "UnknownTarget", chain: chain, hops: hops };
+      }
+      if (node.kind === "terminal") {
+        var h = node.harness;
+        var def = HARNESS_TIER_DEFAULTS[h][curSize] || HARNESS_TIER_DEFAULTS[h].medium;
+        chain.push({ id: curId, text: h + "." + curSize, cls: "end" });
+        return {
+          ok: true,
+          terminalId: curId,
+          harness: h,
+          resolvedSize: curSize,
+          concrete: h + " · " + def.model + " · " + def.effort,
+          chain: chain,
+          hops: hops
+        };
+      }
+      if (node.kind === "bundle") {
+        chain.push({ id: curId, text: node.label + " (" + node.harness + " · " + node.model + " · " + node.effort + ")", cls: "end" });
+        return {
+          ok: true,
+          terminalId: curId,
+          harness: node.harness,
+          resolvedSize: node.effort,
+          concrete: node.harness + " · " + node.model + " · " + node.effort,
+          chain: chain,
+          hops: hops
+        };
+      }
+
+      var stateKey = curId + ":" + curSize;
+      if (visited[stateKey]) {
+        chain.push({ id: curId, text: node.label + ":" + curSize + " (순환)", cls: "fail" });
+        return { ok: false, error: "CycleDetected", chain: chain, hops: hops };
+      }
+      visited[stateKey] = true;
+
+      var stepLabel = node.kind === "caller" ? ("caller:" + curSize) : (node.label + ":" + curSize);
+      var usedExc = null;
+      var nextId = "";
+      var nextMode = "*";
+
+      if (node.kind === "caller") {
+        nextId = "term:" + (callerH || state.callerHarness);
+        nextMode = "*";
+      } else {
+        if (node.exceptions && node.exceptions.length) {
+          for (var i = 0; i < node.exceptions.length; i++) {
+            if (node.exceptions[i].size === curSize) {
+              usedExc = node.exceptions[i];
+              break;
+            }
+          }
+        }
+        nextId = usedExc ? usedExc.target : node.target;
+        nextMode = usedExc ? (usedExc.sizeMode || "*") : (node.sizeMode || "*");
+      }
+
+      chain.push({
+        id: curId,
+        text: stepLabel + (usedExc ? " (예외)" : ""),
+        cls: usedExc ? "exc" : ""
+      });
+
+      hops += 1;
+      if (hops > 8) {
+        chain.push({ id: nextId, text: (nodeMap[nextId] ? nodeMap[nextId].label : nextId) + " (" + hops + "/8 홉 초과)", cls: "fail" });
+        return { ok: false, error: "HopLimitExceeded", chain: chain, hops: hops };
+      }
+
+      var nextNode = nodeMap[nextId];
+      if (nextNode && nextNode.kind === "bundle") {
+        curSize = nextSizeOrKeep(curSize, nextMode);
+      } else if (nextMode && nextMode !== "*") {
+        curSize = nextMode;
+      }
+      curId = nextId;
+    }
+
+    return { ok: false, error: "HopLimitExceeded", chain: chain, hops: hops };
+  }
+
+  function nextSizeOrKeep(cur, mode) {
+    return (mode && mode !== "*") ? mode : cur;
+  }
+
+  function validateGraph(nodeMap, callerH) {
+    var ids = Object.keys(nodeMap);
+    for (var i = 0; i < ids.length; i++) {
+      var n = nodeMap[ids[i]];
+      if (n.kind === "terminal" || n.kind === "bundle" || n.kind === "ghost" || n.kind === "caller") continue;
+      for (var s = 0; s < SIZES.length; s++) {
+        var res = resolveNodeAtSize(n.id, SIZES[s], nodeMap, callerH);
+        if (!res.ok) {
+          return { ok: false, code: res.error, nodeId: n.id, size: SIZES[s], chain: res.chain };
+        }
+      }
+    }
+    return { ok: true };
+  }
+
+  /* Procedural DAG Depth & Barycenter Ordering */
+  function computeProceduralLayout(nodeMap) {
+    var ids = Object.keys(nodeMap);
+    var depth = {};
+    var visiting = {};
+
+    function calcDepth(id) {
+      if (depth[id] !== undefined) return depth[id];
+      var node = nodeMap[id];
+      if (!node || node.kind === "terminal" || node.kind === "bundle" || node.kind === "ghost") {
+        depth[id] = 0;
+        return 0;
+      }
+      if (visiting[id]) {
+        /* Break cycle deterministically for layout rendering */
+        return 0;
+      }
+      visiting[id] = true;
+      var outs = getOutgoingEdges(node, nodeMap);
+      var maxChild = 0;
+      outs.forEach(function (e) {
+        var d = calcDepth(e.to);
+        if (d + 1 > maxChild) maxChild = d + 1;
+      });
+      delete visiting[id];
+      depth[id] = Math.max(1, maxChild);
+      return depth[id];
+    }
+
+    ids.forEach(calcDepth);
+
+    /* Ensure cycle-a sits to the left of cycle-b visually in diagMode */
+    if (state.diagMode && !state.diagFixes.cycleFixed && depth["diag:cycle-a"] !== undefined && depth["diag:cycle-b"] !== undefined) {
+      depth["diag:cycle-b"] = 1;
+      depth["diag:cycle-a"] = 2;
+    }
+
+    var maxDepth = 0;
+    ids.forEach(function (id) {
+      if (depth[id] > maxDepth) maxDepth = depth[id];
+    });
+
+    /* Canonical tie-break order */
+    var canonicalOrder = {};
+    var seq = 0;
+    HARNESS_ORDER.forEach(function (h) { canonicalOrder["term:" + h] = seq++; });
+    ids.forEach(function (id) {
+      if (nodeMap[id].kind === "bundle") canonicalOrder[id] = seq++;
+    });
+    ids.forEach(function (id) {
+      if (nodeMap[id].kind === "ghost") canonicalOrder[id] = seq++;
+    });
+    canonicalOrder["caller"] = seq++;
+    ["grp:implement", "grp:explore", "grp:review"].forEach(function (gid) { canonicalOrder[gid] = seq++; });
+    ids.forEach(function (id) {
+      if (nodeMap[id].kind === "user") canonicalOrder[id] = seq++;
+    });
+    PLAYBOOK_DEFS.forEach(function (pb) { canonicalOrder["pb:" + pb.name] = seq++; });
+
+    var columns = {};
+    for (var d = 0; d <= maxDepth; d++) columns[d] = [];
+    ids.forEach(function (id) {
+      columns[depth[id]].push(id);
+    });
+
+    /* Order Depth 0 (Terminals) cleanly */
+    columns[0].sort(function (a, b) {
+      return (canonicalOrder[a] || 999) - (canonicalOrder[b] || 999);
+    });
+
+    var yNorm = {};
+    for (var i = 0; i < columns[0].length; i++) {
+      yNorm[columns[0][i]] = columns[0].length <= 1 ? 0.5 : i / (columns[0].length - 1);
+    }
+
+    /* Right-to-left procedural parent-tree affinity + barycenter ordering */
+    for (var d = 1; d <= maxDepth; d++) {
+      var list = columns[d];
+      list.sort(function (a, b) {
+        var na = nodeMap[a], nb = nodeMap[b];
+        var ea = getOutgoingEdges(na, nodeMap);
+        var eb = getOutgoingEdges(nb, nodeMap);
+        var pa = ea.length ? (yNorm[ea[0].to] !== undefined ? yNorm[ea[0].to] : 0.5) : 0.5;
+        var pb = eb.length ? (yNorm[eb[0].to] !== undefined ? yNorm[eb[0].to] : 0.5) : 0.5;
+        if (Math.abs(pa - pb) > 0.001) return pa - pb;
+
+        /* Secondary barycenter across all outgoing edges */
+        function avgOut(edges) {
+          if (!edges.length) return 0.5;
+          var sum = 0;
+          edges.forEach(function (e) { sum += (yNorm[e.to] !== undefined ? yNorm[e.to] : 0.5); });
+          return sum / edges.length;
+        }
+        var ba = avgOut(ea), bb = avgOut(eb);
+        if (Math.abs(ba - bb) > 0.001) return ba - bb;
+
+        /* Group/intermediate nodes gently lead playbooks inside the same parent cluster */
+        var wa = na.kind === "playbook" ? 1 : 0;
+        var wb = nb.kind === "playbook" ? 1 : 0;
+        if (wa !== wb) return wa - wb;
+        return (canonicalOrder[a] || 999) - (canonicalOrder[b] || 999);
+      });
+
+      for (var k = 0; k < list.length; k++) {
+        yNorm[list[k]] = list.length <= 1 ? 0.5 : k / (list.length - 1);
+      }
+    }
+
+    return { depth: depth, maxDepth: maxDepth, columns: columns };
+  }
+
+  function getReachableSubgraph(startId, nodeMap) {
+    var set = {};
+    if (!startId || !nodeMap[startId]) return set;
+    set[startId] = true;
+
+    /* Downstream BFS */
+    var qDown = [startId];
+    while (qDown.length) {
+      var cur = qDown.shift();
+      var outs = getOutgoingEdges(nodeMap[cur], nodeMap);
+      outs.forEach(function (e) {
+        if (!set[e.to] && nodeMap[e.to]) {
+          set[e.to] = true;
+          qDown.push(e.to);
+        }
+      });
+    }
+
+    /* Upstream BFS */
+    var qUp = [startId];
+    var allIds = Object.keys(nodeMap);
+    while (qUp.length) {
+      var target = qUp.shift();
+      allIds.forEach(function (nid) {
+        if (set[nid]) return;
+        var outs = getOutgoingEdges(nodeMap[nid], nodeMap);
+        for (var i = 0; i < outs.length; i++) {
+          if (outs[i].to === target) {
+            set[nid] = true;
+            qUp.push(nid);
+            break;
+          }
+        }
+      });
+    }
+
+    return set;
+  }
+
+  function diagnosticSummary() {
+    var errs = (state.diagFixes.cycleFixed ? 0 : 1) +
+               (state.diagFixes.hopFixed ? 0 : 1) +
+               (state.diagFixes.unknownFixTarget ? 0 : 1);
+    var warns = state.diagFixes.legacyDismissed ? 0 : 1;
+    return { errors: errs, warnings: warns, total: errs + warns };
+  }
+
+  function renderTraceHud(nodeId) {
+    var chainEl = document.getElementById("rt3-hud-chain");
+    chainEl.textContent = "";
+    var nodeMap = getActiveNodeMap();
+    var targetId = nodeId && nodeMap[nodeId] ? nodeId : (state.selectedNodeId && nodeMap[state.selectedNodeId] ? state.selectedNodeId : "pb:ticket-worker");
+    var node = nodeMap[targetId];
+    if (!node) return;
+
+    var items = [];
+    if (node.kind === "terminal") {
+      var h = node.harness;
+      items = [
+        { text: h + ".* (터미널)", cls: "" },
+        { text: "small: " + HARNESS_TIER_DEFAULTS[h].small.model + " / large: " + HARNESS_TIER_DEFAULTS[h].large.model, cls: "end" }
+      ];
+    } else if (node.kind === "bundle") {
+      items = [
+        { text: node.label + " (커스텀 번들)", cls: "" },
+        { text: node.harness + " · " + node.model + " · " + node.effort, cls: "end" },
+        { text: "권한(authority) 미포함", cls: "" }
+      ];
+    } else if (node.kind === "ghost") {
+      items = [
+        { text: node.label, cls: "fail" },
+        { text: node.diagTag === "hop" ? "HopLimitExceeded (9/8 홉 초과)" : "UnknownTarget (미정의 대상)", cls: "fail" }
+      ];
+    } else {
+      /* Show primary large trace (or small exception if explore) */
+      var traceSize = (node.id === "pb:ticket-worker") ? "large" : (node.defaultSize || "medium");
+      var res = resolveNodeAtSize(node.id, traceSize, nodeMap, state.callerHarness);
+      items = res.chain.slice();
+      if (node.exceptions && node.exceptions.length) {
+        var ex = node.exceptions[0];
+        var exRes = resolveNodeAtSize(node.id, ex.size, nodeMap, state.callerHarness);
+        var endTxt = exRes.chain.length ? exRes.chain[exRes.chain.length - 1].text : ex.target;
+        items.push({ text: "|", cls: "sep" });
+        items.push({ text: node.label + ":" + ex.size + " → " + endTxt + " (예외)", cls: "exc" });
+      }
+    }
+
+    items.forEach(function (it, idx) {
+      if (it.cls === "sep") {
+        chainEl.appendChild(el("span", "", "·"));
+        return;
+      }
+      if (idx > 0 && items[idx - 1].cls !== "sep") chainEl.appendChild(el("span", "", "→"));
+      chainEl.appendChild(el("span", "rt3-hud-chip " + (it.cls || ""), it.text));
+    });
+  }
+
+  function applyFocusVisuals() {
+    var nodeMap = getActiveNodeMap();
+    var focusId = state.hoverNodeId || state.selectedNodeId;
+    var conn = focusId ? getReachableSubgraph(focusId, nodeMap) : null;
+
+    root.querySelectorAll(".rt3-node[data-node-id]").forEach(function (elN) {
+      var id = elN.getAttribute("data-node-id");
+      elN.classList.toggle("selected", id === state.selectedNodeId);
+      if (!conn) {
+        elN.classList.remove("dim", "lit");
+      } else if (conn[id]) {
+        elN.classList.remove("dim");
+        elN.classList.add("lit");
+      } else {
+        elN.classList.add("dim");
+        elN.classList.remove("lit");
+      }
+    });
+
+    root.querySelectorAll(".rt3-edge-path").forEach(function (p) {
+      if (!conn) {
+        p.classList.remove("dim", "lit");
+        return;
+      }
+      var f = p.getAttribute("data-from");
+      var t = p.getAttribute("data-to");
+      var hit = !!(conn[f] && conn[t]);
+      p.classList.toggle("dim", !hit);
+      p.classList.toggle("lit", hit);
+    });
+
+    root.querySelectorAll(".rt3-edge-label, .rt3-edge-dot").forEach(function (lbl) {
+      if (!conn) {
+        lbl.classList.remove("dim");
+        return;
+      }
+      var f = lbl.getAttribute("data-from");
+      var t = lbl.getAttribute("data-to");
+      lbl.classList.toggle("dim", !(conn[f] && conn[t]));
+    });
+
+    renderTraceHud(focusId);
+  }
+
+  function bindNodeEvents(elm, nodeId) {
+    elm.setAttribute("data-node-id", nodeId);
+    elm.addEventListener("mouseenter", function () {
+      state.hoverNodeId = nodeId;
+      applyFocusVisuals();
+    });
+    elm.addEventListener("mouseleave", function () {
+      if (state.hoverNodeId === nodeId) {
+        state.hoverNodeId = null;
+        applyFocusVisuals();
+      }
+    });
+    elm.addEventListener("click", function () {
+      state.selectedNodeId = nodeId;
+      applyFocusVisuals();
+      if (nodeId.indexOf("diag:") === 0 || nodeId.indexOf("ghost:") === 0) {
+        if (nodeId.indexOf("cycle") >= 0) openDiagnosticModal("cycle");
+        else if (nodeId.indexOf("hop") >= 0) openDiagnosticModal("hop");
+        else openDiagnosticModal("unknown");
+      } else {
+        openNodeEditModal(nodeId);
+      }
+    });
+  }
+
+  function renderDAG() {
+    var nodeMap = getActiveNodeMap();
+    var layout = computeProceduralLayout(nodeMap);
+    var dSum = diagnosticSummary();
+
+    /* Header status & buttons */
+    var tw = state.nodes["pb:ticket-worker"];
+    var demoBtn = document.getElementById("rt3-demo-reparent");
+    demoBtn.setAttribute("aria-pressed", String(!!(tw && tw.target === "grp:review")));
+
+    var diagBtn = document.getElementById("rt3-diag-toggle");
+    diagBtn.setAttribute("aria-pressed", String(state.diagMode));
+    document.getElementById("rt3-err-badge-cnt").textContent = String(dSum.total);
+
+    document.querySelectorAll("#rt3-caller-seg button").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-caller") === state.callerHarness));
+    });
+
+    var statusPill = document.getElementById("rt3-stage-status-pill");
+    if (state.diagMode && dSum.errors > 0) {
+      statusPill.className = "rt3-pill fail";
+      statusPill.textContent = "진단 활성 · 오류 " + dSum.errors + "건 · 경고 " + dSum.warnings + "건";
+    } else if (state.diagMode && dSum.warnings > 0) {
+      statusPill.className = "rt3-pill warn";
+      statusPill.textContent = "치명 오류 해소 · 경고 " + dSum.warnings + "건";
+    } else {
+      statusPill.className = "rt3-pill ok";
+      statusPill.textContent = "DAG 유효 · 깊이 " + (layout.maxDepth + 1) + "단계 (최대 " + layout.maxDepth + "홉)";
+    }
+
+    /* Count incoming references for terminals/bundles */
+    var terminalHits = {};
+    PLAYBOOK_DEFS.forEach(function (pb) {
+      var r = resolveNodeAtSize("pb:" + pb.name, pb.size, nodeMap, state.callerHarness);
+      if (r.ok && r.terminalId) {
+        terminalHits[r.terminalId] = (terminalHits[r.terminalId] || 0) + 1;
+      }
+    });
+
+    /* Build dynamic depth columns left-to-right (maxDepth -> 0) */
+    var grid = document.getElementById("rt3-dag-grid");
+    grid.textContent = "";
+
+    var colTracks = [];
+    for (var d = layout.maxDepth; d >= 0; d--) {
+      var list = layout.columns[d];
+      var hasPlaybook = list.some(function (id) { return nodeMap[id].kind === "playbook"; });
+      var isTerm = d === 0;
+      if (hasPlaybook) colTracks.push("minmax(0, 1.24fr)");
+      else if (isTerm) colTracks.push("minmax(0, 1.02fr)");
+      else colTracks.push("minmax(0, 0.88fr)");
+
+      var colDiv = el("div", "rt3-depth-col");
+      colDiv.setAttribute("data-depth-col", String(d));
+
+      var hdr = el("div", "rt3-depth-hdr");
+      hdr.appendChild(el("span", "", d === 0 ? "Depth 0 · Terminal" : ("Depth " + d)));
+      hdr.appendChild(el("code", "", d === 0 ? ("실행 대상 (" + list.length + ")") : (d + " hop" + (d > 1 ? "s" : "") + " (" + list.length + ")")));
+      colDiv.appendChild(hdr);
+
+      var stack = el("div", "rt3-col-stack");
+      stack.setAttribute("data-depth-stack", String(d));
+
+      list.forEach(function (nid) {
+        var node = nodeMap[nid];
+        var btn = el("button", "rt3-node kind-" + node.kind);
+        btn.type = "button";
+
+        var edges = getOutgoingEdges(node, nodeMap);
+        var prim = edges[0];
+        var isOverridden = (node.kind === "playbook" || node.kind === "group") &&
+                           prim && (prim.to !== node.defaultTarget || prim.sizeMode !== "*");
+        var pointsToBundle = prim && nodeMap[prim.to] && nodeMap[prim.to].kind === "bundle";
+
+        if (isOverridden && !pointsToBundle) btn.classList.add("is-ov");
+        if (pointsToBundle) btn.classList.add("is-bun-ref");
+
+        if (state.diagMode) {
+          if (node.kind === "ghost") btn.classList.add("is-ghost", "is-err");
+          if (node.diagTag === "cycle" && !state.diagFixes.cycleFixed) btn.classList.add("is-err");
+          if (node.diagTag === "hop" && !state.diagFixes.hopFixed) btn.classList.add("is-err");
+          if (node.diagTag === "unknown" && !state.diagFixes.unknownFixTarget) btn.classList.add("is-err");
+          if (node.id === "grp:explore" && !state.diagFixes.legacyDismissed && node.exceptions && node.exceptions.length) {
+            btn.classList.add("is-warn");
+          }
+        }
+
+        if (node.kind === "playbook") {
+          var l = el("span", "rt3-pb-l");
+          l.appendChild(el("span", "rt3-dot"));
+          l.appendChild(el("span", "rt3-pb-name", node.label));
+          btn.appendChild(l);
+
+          var r = el("span", "rt3-pb-r");
+          if (state.diagMode && node.diagTag === "unknown" && !state.diagFixes.unknownFixTarget) {
+            r.appendChild(el("span", "rt3-mtag fail", "Unknown"));
+          } else if (node.exceptions && node.exceptions.length) {
+            r.appendChild(el("span", "rt3-mtag exc", "+" + node.exceptions.length));
+          } else if (pointsToBundle) {
+            r.appendChild(el("span", "rt3-mtag bun", nodeMap[prim.to].label));
+          } else if (isOverridden) {
+            r.appendChild(el("span", "rt3-mtag pri", displayTargetString(nodeMap, prim.to, prim.sizeMode)));
+          }
+          r.appendChild(el("span", "rt3-sz", SIZE_SHORT[node.defaultSize]));
+          btn.appendChild(r);
+          btn.title = node.label + ":" + node.defaultSize + " → " + displayTargetString(nodeMap, node.target, node.sizeMode);
+        } else if (node.kind === "group" || node.kind === "user" || node.kind === "caller") {
+          var top = el("div", "rt3-node-top");
+          top.appendChild(el("span", "rt3-node-title", node.label + ":*"));
+          if (state.diagMode && node.id === "grp:explore" && !state.diagFixes.legacyDismissed && node.exceptions && node.exceptions.length) {
+            top.appendChild(el("span", "rt3-mtag warn", "별칭 충돌"));
+          } else if (state.diagMode && node.diagTag === "cycle" && !state.diagFixes.cycleFixed) {
+            top.appendChild(el("span", "rt3-mtag fail", "Cycle"));
+          } else if (state.diagMode && node.diagTag === "hop" && !state.diagFixes.hopFixed) {
+            top.appendChild(el("span", "rt3-mtag fail", "Hop 초과"));
+          } else if (node.kind === "group") {
+            top.appendChild(el("span", "rt3-mtag", "기본"));
+          } else if (node.kind === "user") {
+            top.appendChild(el("span", "rt3-mtag usr", "사용자"));
+          } else {
+            top.appendChild(el("span", "rt3-mtag pri", "호출자"));
+          }
+          btn.appendChild(top);
+
+          var arrowTxt = node.kind === "caller"
+            ? ("→ " + state.callerHarness + ".* (S/M/L/XL)")
+            : ("→ " + displayTargetString(nodeMap, node.target, node.sizeMode));
+          btn.appendChild(el("div", "rt3-node-sub", arrowTxt));
+
+          if (node.exceptions && node.exceptions.length) {
+            var exWrap = el("div", "rt3-node-excs");
+            node.exceptions.forEach(function (ex) {
+              exWrap.appendChild(el("span", "rt3-mtag exc", ":" + ex.size + " → " + displayTargetString(nodeMap, ex.target, ex.sizeMode)));
+            });
+            btn.appendChild(exWrap);
+          }
+        } else if (node.kind === "bundle") {
+          var bTop = el("div", "rt3-node-top");
+          bTop.appendChild(el("span", "rt3-node-title", node.label));
+          bTop.appendChild(el("span", "rt3-mtag bun", "번들"));
+          btn.appendChild(bTop);
+          btn.appendChild(el("div", "rt3-node-sub", node.harness + " | " + node.model + " | " + node.effort));
+        } else if (node.kind === "terminal") {
+          var h = node.harness;
+          var hits = terminalHits[node.id] || 0;
+          var tTop = el("div", "rt3-node-top");
+          tTop.appendChild(el("span", "rt3-node-title", h + ".*" + (h === state.callerHarness ? " (caller)" : "")));
+          tTop.appendChild(el("span", "rt3-mtag " + (hits ? "pri" : ""), hits + "건"));
+          btn.appendChild(tTop);
+
+          var slots = el("div", "rt3-slots");
+          SIZES.forEach(function (sz) {
+            var sCls = "rt3-slot";
+            if (hits > 0) sCls += " active";
+            slots.appendChild(el("span", sCls, SIZE_SHORT[sz]));
+          });
+          btn.appendChild(slots);
+        } else if (node.kind === "ghost") {
+          var gTop = el("div", "rt3-node-top");
+          gTop.appendChild(el("span", "rt3-node-title", node.label));
+          gTop.appendChild(el("span", "rt3-mtag fail", node.diagTag === "hop" ? "9/8 홉" : "미정의"));
+          btn.appendChild(gTop);
+          btn.appendChild(el("div", "rt3-node-sub", node.diagTag === "hop" ? "HopLimitExceeded · 클릭" : "UnknownTarget · 클릭"));
+        }
+
+        bindNodeEvents(btn, node.id);
+        stack.appendChild(btn);
+      });
+
+      colDiv.appendChild(stack);
+      grid.appendChild(colDiv);
+    }
+
+    grid.style.gridTemplateColumns = colTracks.join(" ");
+
+    /* Diagnostic summary strip */
+    var diagStrip = document.getElementById("rt3-diag-strip");
+    diagStrip.hidden = !state.diagMode;
+    diagStrip.textContent = "";
+    if (state.diagMode) {
+      diagStrip.appendChild(el("span", "rt3-hud-lbl", "진단 항목 (클릭하여 해결):"));
+      var items = [
+        {
+          key: "cycle", code: "CycleDetected", cls: state.diagFixes.cycleFixed ? "ok" : "",
+          text: state.diagFixes.cycleFixed ? "cycle-b → claude.large (해소됨)" : "cycle-a ↔ cycle-b"
+        },
+        {
+          key: "hop", code: "HopLimitExceeded", cls: state.diagFixes.hopFixed ? "ok" : "",
+          text: state.diagFixes.hopFixed ? "hop-1 → deep-design (1/8 홉)" : "hop-1 → … → hop-9 (9/8 홉)"
+        },
+        {
+          key: "legacy", code: "LegacyAliasCollision", cls: state.diagFixes.legacyDismissed ? "ok" : "warn",
+          text: state.diagFixes.legacyDismissed ? "우선순위 확인 완료" : "explore:small ↔ explore:*"
+        },
+        {
+          key: "unknown", code: "UnknownTarget", cls: state.diagFixes.unknownFixTarget ? "ok" : "",
+          text: state.diagFixes.unknownFixTarget ? ("→ " + state.diagFixes.unknownFixTarget) : "fast-model-v9 (?)"
+        }
+      ];
+      items.forEach(function (it) {
+        var c = el("button", "rt3-diag-chip " + it.cls);
+        c.type = "button";
+        c.appendChild(el("span", "rt3-mtag " + (it.cls === "ok" ? "pri" : it.cls === "warn" ? "warn" : "fail"), it.code));
+        c.appendChild(el("code", "", it.text));
+        c.addEventListener("click", function () { openDiagnosticModal(it.key); });
+        diagStrip.appendChild(c);
+      });
+    }
+
+    applyFocusVisuals();
+    scheduleLayoutAndEdges(nodeMap, layout);
+  }
+
+  /* Procedural Vertical Parent-Tree Alignment + SVG Edge Drawing */
+  var rafId = 0;
+  var pendingNodeMap = null;
+  var pendingLayout = null;
+
+  function scheduleLayoutAndEdges(nodeMap, layout) {
+    pendingNodeMap = nodeMap;
+    pendingLayout = layout;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(function () {
+      rafId = 0;
+      if (state.activeTab !== "dag" || !pendingNodeMap || !pendingLayout) return;
+      alignParentTreeVertically(pendingNodeMap, pendingLayout);
+      drawEdges(pendingNodeMap, pendingLayout);
+    });
+  }
+
+  function alignParentTreeVertically(nodeMap, layout) {
+    var grid = document.getElementById("rt3-dag-grid");
+    if (!grid) return;
+
+    /* Reset previous margins so we measure natural heights */
+    grid.querySelectorAll(".rt3-node").forEach(function (n) { n.style.marginTop = ""; });
+
+    /* Find the reference (tallest) stack height */
+    var maxStackH = 0;
+    for (var d = 0; d <= layout.maxDepth; d++) {
+      var st = grid.querySelector('[data-depth-stack="' + d + '"]');
+      if (st) maxStackH = Math.max(maxStackH, st.getBoundingClientRect().height);
+    }
+    if (maxStackH < 60) return;
+
+    /* Build reverse-adjacency for each node's children */
+    var incoming = {};
+    Object.keys(nodeMap).forEach(function (id) {
+      getOutgoingEdges(nodeMap[id], nodeMap).forEach(function (e) {
+        if (!incoming[e.to]) incoming[e.to] = [];
+        incoming[e.to].push(id);
+      });
+    });
+
+    /* Align each non-tallest column around connected nodes' natural centers */
+    var colStackTops = {};
+    for (var d = layout.maxDepth; d >= 0; d--) {
+      var stack = grid.querySelector('[data-depth-stack="' + d + '"]');
+      if (!stack) continue;
+      colStackTops[d] = stack.getBoundingClientRect().top;
+    }
+
+    /* Two gentle passes: first align shorter columns with taller neighbors */
+    for (var pass = 0; pass < 2; pass++) {
+      for (var d = 0; d <= layout.maxDepth; d++) {
+        var stack = grid.querySelector('[data-depth-stack="' + d + '"]');
+        if (!stack) continue;
+        var items = Array.prototype.slice.call(stack.querySelectorAll(".rt3-node"));
+        if (!items.length) continue;
+
+        var stRect = stack.getBoundingClientRect();
+        if (stRect.height >= maxStackH - 24) continue; /* Reference tallest column stays tightly packed */
+
+        var gap = 4;
+        var heights = items.map(function (elN) { return elN.getBoundingClientRect().height; });
+        var baseTop = stRect.top;
+
+        var desiredTops = items.map(function (elN, idx) {
+          var nid = elN.getAttribute("data-node-id");
+          var h = heights[idx];
+          var refs = [];
+          (incoming[nid] || []).forEach(function (cid) {
+            var cel = grid.querySelector('[data-node-id="' + CSS.escape(cid) + '"]');
+            if (cel) {
+              var r = cel.getBoundingClientRect();
+              refs.push((r.top + r.bottom) / 2 - baseTop);
+            }
+          });
+          if (!refs.length) {
+            getOutgoingEdges(nodeMap[nid], nodeMap).forEach(function (e) {
+              var tel = grid.querySelector('[data-node-id="' + CSS.escape(e.to) + '"]');
+              if (tel) {
+                var r = tel.getBoundingClientRect();
+                refs.push((r.top + r.bottom) / 2 - baseTop);
+              }
+            });
+          }
+          if (!refs.length) {
+            return (idx / Math.max(1, items.length)) * maxStackH;
+          }
+          var sum = 0;
+          refs.forEach(function (v) { sum += v; });
+          return (sum / refs.length) - h / 2;
+        });
+
+        /* Clamp downward then upward inside [0, maxStackH] */
+        var tops = [];
+        var cursor = 0;
+        for (var i = 0; i < items.length; i++) {
+          var t = Math.max(cursor, desiredTops[i]);
+          tops.push(t);
+          cursor = t + heights[i] + 8;
+        }
+        var overflow = (tops[tops.length - 1] + heights[heights.length - 1]) - maxStackH;
+        if (overflow > 0) {
+          tops[tops.length - 1] -= overflow;
+          for (var j = tops.length - 2; j >= 0; j--) {
+            tops[j] = Math.min(tops[j], tops[j + 1] - heights[j] - 8);
+          }
+          if (tops[0] < 0) {
+            var shift = -tops[0];
+            for (var k = 0; k < tops.length; k++) tops[k] += shift;
+          }
+        }
+
+        var prevBottom = 0;
+        for (var m = 0; m < items.length; m++) {
+          var extra = m === 0 ? Math.max(0, tops[m]) : Math.max(0, tops[m] - prevBottom - gap);
+          items[m].style.marginTop = extra.toFixed(1) + "px";
+          prevBottom = tops[m] + heights[m];
+        }
+      }
+    }
+  }
+
+  function drawEdges(nodeMap, layout) {
+    var canvas = document.getElementById("rt3-canvas");
+    var svg = document.getElementById("rt3-edges-svg");
+    if (!canvas || !svg) return;
+    svg.textContent = "";
+
+    var cRect = canvas.getBoundingClientRect();
+    if (cRect.width < 20 || cRect.height < 20) return;
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    var defs = document.createElementNS(svgNS, "defs");
+
+    function makeMarker(id, color) {
+      var m = document.createElementNS(svgNS, "marker");
+      m.setAttribute("id", id);
+      m.setAttribute("viewBox", "0 0 8 8");
+      m.setAttribute("refX", "7");
+      m.setAttribute("refY", "4");
+      m.setAttribute("markerWidth", "5.5");
+      m.setAttribute("markerHeight", "5.5");
+      m.setAttribute("orient", "auto");
+      var p = document.createElementNS(svgNS, "path");
+      p.setAttribute("d", "M 1 1.3 L 7 4 L 1 6.7 z");
+      p.setAttribute("fill", color);
+      m.appendChild(p);
+      return m;
+    }
+    defs.appendChild(makeMarker("rt3-arr-def", "color-mix(in srgb, var(--rt3-muted-fg) 55%, transparent)"));
+    defs.appendChild(makeMarker("rt3-arr-ov", "var(--rt3-primary)"));
+    defs.appendChild(makeMarker("rt3-arr-bun", "var(--rt3-bundle)"));
+    defs.appendChild(makeMarker("rt3-arr-exc", "var(--rt3-exc)"));
+    defs.appendChild(makeMarker("rt3-arr-warn", "var(--rt3-warn)"));
+    defs.appendChild(makeMarker("rt3-arr-err", "var(--rt3-fail)"));
+    svg.appendChild(defs);
+
+    function boxOf(elm) {
+      var r = elm.getBoundingClientRect();
+      return {
+        left: r.left - cRect.left,
+        right: r.right - cRect.left,
+        top: r.top - cRect.top,
+        bottom: r.bottom - cRect.top,
+        cy: (r.top + r.bottom) / 2 - cRect.top
+      };
+    }
+
+    var colRects = {};
+    for (var d = 0; d <= layout.maxDepth; d++) {
+      var colEl = canvas.querySelector('[data-depth-col="' + d + '"]');
+      if (colEl) colRects[d] = boxOf(colEl);
+    }
+
+    var edgeGroup = document.createElementNS(svgNS, "g");
+    var labelGroup = document.createElementNS(svgNS, "g");
+    svg.appendChild(edgeGroup);
+    svg.appendChild(labelGroup);
+
+    function cubicAt(p0, p1, p2, p3, t) {
+      var u = 1 - t;
+      return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+    }
+
+    Object.keys(nodeMap).forEach(function (nid) {
+      var node = nodeMap[nid];
+      var fEl = canvas.querySelector('[data-node-id="' + CSS.escape(nid) + '"]');
+      if (!fEl) return;
+      var fb = boxOf(fEl);
+      var edges = getOutgoingEdges(node, nodeMap);
+
+      edges.forEach(function (edge, eIdx) {
+        var tEl = canvas.querySelector('[data-node-id="' + CSS.escape(edge.to) + '"]');
+        if (!tEl) return;
+        var tb = boxOf(tEl);
+
+        var yOffset = edges.length > 1 ? (eIdx === 0 ? -3.5 : 3.5 * eIdx) : 0;
+        var x1 = fb.right;
+        var y1 = fb.cy + yOffset;
+        var x2 = tb.left - 1;
+        var y2 = tb.cy;
+
+        var dFrom = layout.depth[nid];
+        var dTo = layout.depth[edge.to];
+        var pathD = "";
+        var labelPos = null;
+
+        if (dFrom <= dTo) {
+          /* Back-edge (e.g. CycleDetected) */
+          var loopArc = Math.max(24, Math.abs(x1 - x2) * 0.25);
+          pathD = "M " + fb.left.toFixed(1) + " " + (fb.cy + 5).toFixed(1) +
+                  " C " + (fb.left - loopArc).toFixed(1) + " " + (fb.cy + 28).toFixed(1) + ", " +
+                  (tb.right + loopArc).toFixed(1) + " " + (tb.cy + 28).toFixed(1) + ", " +
+                  tb.right.toFixed(1) + " " + (tb.cy + 5).toFixed(1);
+        } else if (dFrom - dTo > 1) {
+          /* Skip-column edge: bow gently above/below intermediate column obstacles */
+          var midY = (y1 + y2) / 2;
+          var bow = (midY < cRect.height * 0.5) ? -22 : 22;
+          var ctrlY = midY + bow;
+          var dx = (x2 - x1) * 0.35;
+          pathD = "M " + x1.toFixed(1) + " " + y1.toFixed(1) +
+                  " C " + (x1 + dx).toFixed(1) + " " + ctrlY.toFixed(1) + ", " +
+                  (x2 - dx).toFixed(1) + " " + ctrlY.toFixed(1) + ", " +
+                  x2.toFixed(1) + " " + y2.toFixed(1);
+          labelPos = {
+            x: cubicAt(x1, x1 + dx, x2 - dx, x2, 0.24),
+            y: cubicAt(y1, ctrlY, ctrlY, y2, 0.24)
+          };
+        } else {
+          var dx = Math.max(18, Math.abs(x2 - x1) * 0.48);
+          pathD = "M " + x1.toFixed(1) + " " + y1.toFixed(1) +
+                  " C " + (x1 + dx).toFixed(1) + " " + y1.toFixed(1) + ", " +
+                  (x2 - dx).toFixed(1) + " " + y2.toFixed(1) + ", " +
+                  x2.toFixed(1) + " " + y2.toFixed(1);
+          var tLbl = edge.isException ? 0.32 : 0.48;
+          labelPos = {
+            x: cubicAt(x1, x1 + dx, x2 - dx, x2, tLbl),
+            y: cubicAt(y1, y1, y2, y2, tLbl)
+          };
+        }
+
+        var kind = "default";
+        var markerId = "rt3-arr-def";
+        var targetNode = nodeMap[edge.to];
+        if (state.diagMode && ((node.diagTag === "cycle" && !state.diagFixes.cycleFixed) ||
+            (node.diagTag === "hop" && !state.diagFixes.hopFixed) ||
+            (targetNode && targetNode.kind === "ghost"))) {
+          kind = "err";
+          markerId = "rt3-arr-err";
+        } else if (state.diagMode && node.id === "grp:explore" && edge.isException && !state.diagFixes.legacyDismissed) {
+          kind = "warn";
+          markerId = "rt3-arr-warn";
+        } else if (edge.isException) {
+          kind = "exception";
+          markerId = "rt3-arr-exc";
+        } else if (targetNode && targetNode.kind === "bundle") {
+          kind = "bundle";
+          markerId = "rt3-arr-bun";
+        } else if (!edge.isDefault) {
+          kind = "override";
+          markerId = "rt3-arr-ov";
+        }
+
+        var p = document.createElementNS(svgNS, "path");
+        p.setAttribute("class", "rt3-edge-path " + kind);
+        p.setAttribute("data-from", nid);
+        p.setAttribute("data-to", edge.to);
+        p.setAttribute("d", pathD);
+        p.setAttribute("marker-end", "url(#" + markerId + ")");
+        edgeGroup.appendChild(p);
+
+        /* Compact inline edge pill for exceptions or pinned sizes (rendered on top pass) */
+        var badgeTxt = "";
+        if (edge.isException) badgeTxt = ":" + edge.excSize;
+        else if (edge.sizeMode && edge.sizeMode !== "*" && targetNode && targetNode.kind !== "bundle") badgeTxt = "." + edge.sizeMode;
+
+        if (badgeTxt && labelPos) {
+          var g = document.createElementNS(svgNS, "g");
+          g.setAttribute("class", "rt3-edge-label");
+          g.setAttribute("data-from", nid);
+          g.setAttribute("data-to", edge.to);
+
+          var w = badgeTxt.length * 5.2 + 8;
+          var rect = document.createElementNS(svgNS, "rect");
+          rect.setAttribute("x", (labelPos.x - w / 2).toFixed(1));
+          rect.setAttribute("y", (labelPos.y - 7).toFixed(1));
+          rect.setAttribute("width", w.toFixed(1));
+          rect.setAttribute("height", "14");
+          rect.setAttribute("rx", "4");
+          rect.setAttribute("fill", "var(--rt3-card)");
+          rect.setAttribute("stroke", kind === "warn" ? "var(--rt3-warn)" : kind === "exception" ? "var(--rt3-exc)" : "var(--rt3-primary)");
+          rect.setAttribute("stroke-width", "1");
+          g.appendChild(rect);
+
+          var txt = document.createElementNS(svgNS, "text");
+          txt.setAttribute("x", labelPos.x.toFixed(1));
+          txt.setAttribute("y", (labelPos.y + 3).toFixed(1));
+          txt.setAttribute("text-anchor", "middle");
+          txt.setAttribute("font-family", "var(--rt3-mono)");
+          txt.setAttribute("font-size", "8.5");
+          txt.setAttribute("font-weight", "800");
+          txt.setAttribute("fill", kind === "warn" ? "var(--rt3-warn-ink)" : kind === "exception" ? "var(--rt3-exc)" : "var(--rt3-primary)");
+          txt.textContent = badgeTxt;
+          g.appendChild(txt);
+          labelGroup.appendChild(g);
+        }
+      });
+    });
+  }
+
+  /* Modal Helpers */
+  function openModal(title, badgeText, badgeCls, buildFn) {
+    var backdrop = document.getElementById("rt3-modal-backdrop");
+    document.getElementById("rt3-modal-title").textContent = title;
+    var badge = document.getElementById("rt3-modal-badge");
+    badge.className = "rt3-pill " + (badgeCls || "");
+    badge.textContent = badgeText || "";
+    badge.hidden = !badgeText;
+
+    var body = document.getElementById("rt3-modal-body");
+    var foot = document.getElementById("rt3-modal-foot");
+    body.textContent = "";
+    foot.textContent = "";
+
+    buildFn(body, foot);
+    backdrop.hidden = false;
+    state.modalOpen = true;
+  }
+
+  function closeModal() {
+    document.getElementById("rt3-modal-backdrop").hidden = true;
+    state.modalOpen = false;
+  }
+
+  function populateNodeTargetSelect(sel, selfId, currentVal, nodeMap) {
+    sel.textContent = "";
+
+    function addGroup(lbl, list, fmt) {
+      if (!list.length) return;
+      var og = el("optgroup");
+      og.label = lbl;
+      list.forEach(function (n) {
+        if (n.id === selfId) return;
+        var o = el("option", "", fmt(n));
+        o.value = n.id;
+        og.appendChild(o);
+      });
+      if (og.children.length) sel.appendChild(og);
+    }
+
+    var groups = ["grp:implement", "grp:explore", "grp:review"].map(function (id) { return nodeMap[id]; }).filter(Boolean);
+    var users = Object.keys(nodeMap).map(function (id) { return nodeMap[id]; }).filter(function (n) { return n.kind === "user"; });
+    var callers = nodeMap["caller"] ? [nodeMap["caller"]] : [];
+    var terms = HARNESS_ORDER.map(function (h) { return nodeMap["term:" + h]; }).filter(Boolean);
+    var bundles = Object.keys(nodeMap).map(function (id) { return nodeMap[id]; }).filter(function (n) { return n.kind === "bundle"; });
+    var playbooks = PLAYBOOK_DEFS.map(function (p) { return nodeMap["pb:" + p.name]; }).filter(Boolean);
+
+    addGroup("기본 그룹 노드", groups, function (n) { return n.label + ":* (기본 그룹)"; });
+    addGroup("사용자 중간 노드", users, function (n) { return n.label + ":*"; });
+    addGroup("호출자 상속", callers, function () { return "caller:* (호출자 하네스 · " + state.callerHarness + ")"; });
+    addGroup("하네스 터미널", terms, function (n) { return n.label + ".*"; });
+    addGroup("커스텀 번들 (권한 미포함)", bundles, function (n) { return n.label + " (" + n.harness + " · " + n.effort + ")"; });
+    addGroup("플레이북 노드 (다른 역할 체인)", playbooks, function (n) { return n.label + ":" + n.defaultSize; });
+
+    sel.value = currentVal || "";
+  }
+
+  function openNodeEditModal(nodeId) {
+    var node = state.nodes[nodeId];
+    if (!node) return;
+
+    if (node.kind === "terminal") {
+      openTerminalModal(node);
+      return;
+    }
+    if (node.kind === "caller") {
+      openCallerModal();
+      return;
+    }
+    if (node.kind === "bundle") {
+      openBundleModal("edit", node);
+      return;
+    }
+
+    var kindLabel = node.kind === "playbook" ? "플레이북" : (node.kind === "group" ? "기본 그룹" : "사용자 노드");
+    var kindCls = node.kind === "user" ? "usr" : "pri";
+    var draftTarget = node.target;
+    var draftMode = node.sizeMode || "*";
+    var draftExcs = (node.exceptions || []).map(function (x) { return Object.assign({}, x); });
+
+    openModal("노드 편집 · " + displayNodeRef(node, "*"), kindLabel, kindCls, function (body, foot) {
+      if (node.desc) body.appendChild(el("p", "rt3-spdesc", node.desc));
+
+      var grid = el("div", "rt3-form-grid");
+      var fTgt = el("div", "rt3-field");
+      fTgt.appendChild(el("label", "", "기본 포인터 대상 (Primary Target)"));
+      var tSel = el("select", "rt3-sel mono");
+      tSel.id = "rt3-edit-target";
+      populateNodeTargetSelect(tSel, node.id, draftTarget, state.nodes);
+      fTgt.appendChild(tSel);
+      grid.appendChild(fTgt);
+
+      var fSz = el("div", "rt3-field");
+      fSz.appendChild(el("label", "", "크기 전달 / 고정 (Size Mode)"));
+      var szSel = el("select", "rt3-sel mono");
+      szSel.id = "rt3-edit-sizemode";
+      var optWild = el("option", "", "* (요청 크기 전달)");
+      optWild.value = "*";
+      szSel.appendChild(optWild);
+      SIZES.forEach(function (sz) {
+        var o = el("option", "", sz + " (고정 핀)");
+        o.value = sz;
+        szSel.appendChild(o);
+      });
+      szSel.value = draftMode;
+      fSz.appendChild(szSel);
+      grid.appendChild(fSz);
+      body.appendChild(grid);
+
+      /* Per-size exceptions editor */
+      var excBox = el("div", "rt3-exc-box");
+      var excHdr = el("div", "rt3-splbl");
+      excHdr.appendChild(el("span", "", "크기별 예외 포인터 (Per-Size Exceptions)"));
+      excHdr.appendChild(el("span", "rt3-pill exc", "DAG 다중 간선"));
+      excBox.appendChild(excHdr);
+
+      var excListEl = el("div", "rt3-exc-list");
+      excBox.appendChild(excListEl);
+
+      var excAddRow = el("div", "rt3-exc-add");
+      var addSzSel = el("select", "rt3-sel mono");
+      SIZES.forEach(function (sz) {
+        var o = el("option", "", ":" + sz);
+        o.value = sz;
+        addSzSel.appendChild(o);
+      });
+      var addTgtSel = el("select", "rt3-sel mono");
+      populateNodeTargetSelect(addTgtSel, node.id, "term:claude", state.nodes);
+      var addModeSel = el("select", "rt3-sel mono");
+      var oM0 = el("option", "", "*"); oM0.value = "*"; addModeSel.appendChild(oM0);
+      SIZES.forEach(function (sz) { var om = el("option", "", "." + sz); om.value = sz; addModeSel.appendChild(om); });
+      addModeSel.value = "small";
+      var addExcBtn = el("button", "rt3-btn sm", "+ 예외");
+      addExcBtn.type = "button";
+      excAddRow.appendChild(addSzSel);
+      excAddRow.appendChild(addTgtSel);
+      excAddRow.appendChild(addModeSel);
+      excAddRow.appendChild(addExcBtn);
+      excBox.appendChild(excAddRow);
+      body.appendChild(excBox);
+
+      /* Live validation error banner + live resolution trace */
+      var errBanner = el("div", "rt3-banner fail");
+      errBanner.id = "rt3-edit-error";
+      errBanner.hidden = true;
+      body.appendChild(errBanner);
+
+      var traceTitle = el("div", "rt3-splbl");
+      traceTitle.appendChild(el("span", "", "실시간 해석 추적 (Live Resolution Trace)"));
+      body.appendChild(traceTitle);
+
+      var traceList = el("div", "rt3-trace-list");
+      traceList.id = "rt3-edit-trace";
+      body.appendChild(traceList);
+
+      /* Footer buttons */
+      var leftActs = el("div", "");
+      leftActs.style.display = "inline-flex";
+      leftActs.style.gap = "6px";
+      if (node.defaultTarget) {
+        var defBtn = el("button", "rt3-btn", "기본값 복원");
+        defBtn.type = "button";
+        defBtn.addEventListener("click", function () {
+          draftTarget = node.defaultTarget;
+          draftMode = "*";
+          draftExcs = [];
+          tSel.value = draftTarget;
+          szSel.value = draftMode;
+          refreshModalLive();
+        });
+        leftActs.appendChild(defBtn);
+      }
+      if (node.kind === "user") {
+        var delBtn = el("button", "rt3-btn danger", "노드 삭제");
+        delBtn.type = "button";
+        delBtn.addEventListener("click", function () {
+          Object.keys(state.nodes).forEach(function (k) {
+            var n = state.nodes[k];
+            if (n.target === node.id) n.target = n.defaultTarget || "caller";
+            if (n.exceptions) n.exceptions = n.exceptions.filter(function (ex) { return ex.target !== node.id; });
+          });
+          delete state.nodes[node.id];
+          if (state.selectedNodeId === node.id) state.selectedNodeId = null;
+          renderDAG();
+          closeModal();
+        });
+        leftActs.appendChild(delBtn);
+      }
+      foot.appendChild(leftActs);
+
+      var rightActs = el("div", "");
+      rightActs.style.display = "inline-flex";
+      rightActs.style.gap = "6px";
+      var cancelBtn = el("button", "rt3-btn", "취소");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", closeModal);
+      var saveBtn = el("button", "rt3-btn pri", "저장");
+      saveBtn.type = "button";
+      saveBtn.id = "rt3-edit-save";
+      rightActs.appendChild(cancelBtn);
+      rightActs.appendChild(saveBtn);
+      foot.appendChild(rightActs);
+
+      function renderExcs() {
+        excListEl.textContent = "";
+        if (!draftExcs.length) {
+          excListEl.appendChild(el("span", "rt3-spdesc", "등록된 크기별 예외가 없습니다. (모든 크기가 기본 포인터 사용)"));
+          return;
+        }
+        draftExcs.forEach(function (ex, idx) {
+          var row = el("div", "rt3-exc-row");
+          row.appendChild(el("span", "", node.label + ":" + ex.size + " → " + displayTargetString(state.nodes, ex.target, ex.sizeMode)));
+          var rm = el("button", "rt3-btn sm danger", "삭제");
+          rm.type = "button";
+          rm.addEventListener("click", function () {
+            draftExcs.splice(idx, 1);
+            refreshModalLive();
+          });
+          row.appendChild(rm);
+          excListEl.appendChild(row);
+        });
+      }
+
+      function refreshModalLive() {
+        var tgtNode = state.nodes[draftTarget];
+        szSel.disabled = !!(tgtNode && tgtNode.kind === "bundle");
+        if (szSel.disabled) {
+          szSel.value = "*";
+          draftMode = "*";
+        }
+        var addTgtNode = state.nodes[addTgtSel.value];
+        addModeSel.disabled = !!(addTgtNode && addTgtNode.kind === "bundle");
+        if (addModeSel.disabled) addModeSel.value = "*";
+
+        renderExcs();
+
+        var sim = cloneNodes(state.nodes);
+        sim[node.id].target = draftTarget;
+        sim[node.id].sizeMode = draftMode;
+        sim[node.id].exceptions = draftExcs.map(function (x) { return Object.assign({}, x); });
+
+        var val = validateGraph(sim, state.callerHarness);
+        if (!val.ok) {
+          var pathStr = val.chain.map(function (c) { return c.text; }).join(" → ");
+          errBanner.textContent = "저장 거부 (" + val.code + "): " + pathStr;
+          errBanner.hidden = false;
+          saveBtn.disabled = true;
+        } else {
+          errBanner.hidden = true;
+          saveBtn.disabled = false;
+        }
+
+        traceList.textContent = "";
+        SIZES.forEach(function (sz) {
+          var res = resolveNodeAtSize(node.id, sz, sim, state.callerHarness);
+          var row = el("div", "rt3-trace-row");
+          row.appendChild(el("span", "rt3-trace-sz", sz + ":"));
+          res.chain.forEach(function (c, idx) {
+            if (idx > 0) row.appendChild(el("span", "", "→"));
+            row.appendChild(el("span", "rt3-hud-chip " + (c.cls || ""), c.text));
+          });
+          traceList.appendChild(row);
+        });
+      }
+
+      tSel.addEventListener("change", function () {
+        draftTarget = tSel.value;
+        refreshModalLive();
+      });
+      szSel.addEventListener("change", function () {
+        draftMode = szSel.value;
+        refreshModalLive();
+      });
+      addTgtSel.addEventListener("change", function () {
+        var n = state.nodes[addTgtSel.value];
+        addModeSel.disabled = !!(n && n.kind === "bundle");
+        if (addModeSel.disabled) addModeSel.value = "*";
+      });
+      addExcBtn.addEventListener("click", function () {
+        var sz = addSzSel.value;
+        var tgt = addTgtSel.value;
+        var md = addModeSel.disabled ? "*" : addModeSel.value;
+        draftExcs = draftExcs.filter(function (x) { return x.size !== sz; });
+        draftExcs.push({ size: sz, target: tgt, sizeMode: md });
+        refreshModalLive();
+      });
+
+      saveBtn.addEventListener("click", function () {
+        var sim = cloneNodes(state.nodes);
+        sim[node.id].target = draftTarget;
+        sim[node.id].sizeMode = draftMode;
+        sim[node.id].exceptions = draftExcs.map(function (x) { return Object.assign({}, x); });
+        if (!validateGraph(sim, state.callerHarness).ok) return;
+
+        state.nodes[node.id].target = draftTarget;
+        state.nodes[node.id].sizeMode = draftMode;
+        state.nodes[node.id].exceptions = draftExcs;
+        state.selectedNodeId = node.id;
+        renderDAG();
+        closeModal();
+      });
+
+      refreshModalLive();
+    });
+  }
+
+  function openAddNodeModal() {
+    var mode = "user"; // "user" | "bundle"
+    var uDraft = { name: "", target: "term:claude", sizeMode: "*" };
+    var bDraft = { name: "", harness: "codex", model: "gpt-5.4", effort: "high" };
+
+    openModal("새 노드 추가", "DAG 통합 노드", "pri", function (body, foot) {
+      var modeSeg = el("div", "rt3-seg");
+      var btnUser = el("button", "", "중간 라우팅 노드 (사용자 이름)");
+      btnUser.type = "button";
+      btnUser.setAttribute("data-add-mode", "user");
+      var btnBun = el("button", "", "커스텀 번들 (터미널)");
+      btnBun.type = "button";
+      btnBun.setAttribute("data-add-mode", "bundle");
+      modeSeg.appendChild(btnUser);
+      modeSeg.appendChild(btnBun);
+      body.appendChild(modeSeg);
+
+      var formWrap = el("div", "");
+      formWrap.style.display = "flex";
+      formWrap.style.flexDirection = "column";
+      formWrap.style.gap = "10px";
+      body.appendChild(formWrap);
+
+      var errBox = el("div", "rt3-banner fail");
+      errBox.hidden = true;
+      body.appendChild(errBox);
+
+      var cancelBtn = el("button", "rt3-btn", "취소");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", closeModal);
+      var saveBtn = el("button", "rt3-btn pri", "DAG에 추가");
+      saveBtn.type = "button";
+      saveBtn.id = "rt3-add-save";
+
+      foot.appendChild(el("span", "rt3-spdesc", "추가 즉시 절차적 깊이 레이아웃이 재계산됩니다."));
+      var rActs = el("div", "");
+      rActs.style.display = "inline-flex";
+      rActs.style.gap = "6px";
+      rActs.appendChild(cancelBtn);
+      rActs.appendChild(saveBtn);
+      foot.appendChild(rActs);
+
+      function renderForm() {
+        btnUser.setAttribute("aria-pressed", String(mode === "user"));
+        btnBun.setAttribute("aria-pressed", String(mode === "bundle"));
+        formWrap.textContent = "";
+        errBox.hidden = true;
+
+        if (mode === "user") {
+          formWrap.appendChild(el("div", "rt3-banner info", "다른 노드(플레이북·그룹·다른 사용자 노드)가 참조할 수 있는 중간 라우팅 노드를 만듭니다."));
+          var g = el("div", "rt3-form-grid");
+          var fN = el("div", "rt3-field");
+          fN.appendChild(el("label", "", "노드 이름 (slug)"));
+          var inp = el("input", "rt3-inp mono");
+          inp.id = "rt3-add-name";
+          inp.placeholder = "예: quick-audit";
+          inp.value = uDraft.name;
+          inp.addEventListener("input", function () { uDraft.name = inp.value; });
+          fN.appendChild(inp);
+          g.appendChild(fN);
+
+          var fT = el("div", "rt3-field");
+          fT.appendChild(el("label", "", "초기 대상 (Target)"));
+          var tSel = el("select", "rt3-sel mono");
+          populateNodeTargetSelect(tSel, "", uDraft.target, state.nodes);
+          tSel.addEventListener("change", function () {
+            uDraft.target = tSel.value;
+            var tn = state.nodes[uDraft.target];
+            szSel.disabled = !!(tn && tn.kind === "bundle");
+            if (szSel.disabled) { szSel.value = "*"; uDraft.sizeMode = "*"; }
+          });
+          fT.appendChild(tSel);
+          g.appendChild(fT);
+
+          var fS = el("div", "rt3-field");
+          fS.appendChild(el("label", "", "크기 전달 / 고정"));
+          var szSel = el("select", "rt3-sel mono");
+          var oW = el("option", "", "* (요청 크기 전달)"); oW.value = "*"; szSel.appendChild(oW);
+          SIZES.forEach(function (sz) { var o = el("option", "", sz + " (고정 핀)"); o.value = sz; szSel.appendChild(o); });
+          szSel.value = uDraft.sizeMode;
+          szSel.addEventListener("change", function () { uDraft.sizeMode = szSel.value; });
+          fS.appendChild(szSel);
+          g.appendChild(fS);
+
+          formWrap.appendChild(g);
+        } else {
+          formWrap.appendChild(el("div", "rt3-banner info", "하네스 · 모델 · 추론 강도만 정의합니다 (authority 미포함). DAG 터미널 및 새 세션 대화상자에 즉시 반영됩니다."));
+          var gb = el("div", "rt3-form-grid");
+          var fBN = el("div", "rt3-field");
+          fBN.appendChild(el("label", "", "번들 이름 (slug)"));
+          var bInp = el("input", "rt3-inp mono");
+          bInp.id = "rt3-add-name";
+          bInp.placeholder = "예: architect-max";
+          bInp.value = bDraft.name;
+          bInp.addEventListener("input", function () { bDraft.name = bInp.value; });
+          fBN.appendChild(bInp);
+          gb.appendChild(fBN);
+
+          var fBH = el("div", "rt3-field");
+          fBH.appendChild(el("label", "", "하네스"));
+          var hSeg = el("div", "rt3-seg");
+          HARNESS_ORDER.forEach(function (h) {
+            var b = el("button", "", HARNESS_LABELS[h]);
+            b.type = "button";
+            b.setAttribute("aria-pressed", String(bDraft.harness === h));
+            b.addEventListener("click", function () {
+              bDraft.harness = h;
+              bDraft.model = HARNESS_MODELS[h][0];
+              bDraft.effort = HARNESS_EFFORTS[h][1] || "high";
+              renderForm();
+            });
+            hSeg.appendChild(b);
+          });
+          fBH.appendChild(hSeg);
+          gb.appendChild(fBH);
+
+          var fBM = el("div", "rt3-field");
+          fBM.appendChild(el("label", "", "모델"));
+          var mSel = el("select", "rt3-sel mono");
+          (HARNESS_MODELS[bDraft.harness] || []).forEach(function (m) {
+            var o = el("option", "", m); o.value = m; mSel.appendChild(o);
+          });
+          if ((HARNESS_MODELS[bDraft.harness] || []).indexOf(bDraft.model) < 0) bDraft.model = mSel.options[0].value;
+          mSel.value = bDraft.model;
+          mSel.addEventListener("change", function () { bDraft.model = mSel.value; });
+          fBM.appendChild(mSel);
+          gb.appendChild(fBM);
+
+          var fBE = el("div", "rt3-field");
+          fBE.appendChild(el("label", "", "추론 강도"));
+          var eSeg = el("div", "rt3-seg");
+          (HARNESS_EFFORTS[bDraft.harness] || []).forEach(function (ef) {
+            var b = el("button", "", ef);
+            b.type = "button";
+            b.setAttribute("aria-pressed", String(bDraft.effort === ef));
+            b.addEventListener("click", function () { bDraft.effort = ef; renderForm(); });
+            eSeg.appendChild(b);
+          });
+          fBE.appendChild(eSeg);
+          gb.appendChild(fBE);
+
+          formWrap.appendChild(gb);
+        }
+      }
+
+      btnUser.addEventListener("click", function () { mode = "user"; renderForm(); });
+      btnBun.addEventListener("click", function () { mode = "bundle"; renderForm(); });
+
+      saveBtn.addEventListener("click", function () {
+        var raw = mode === "user" ? uDraft.name : bDraft.name;
+        var clean = String(raw || "").trim().toLowerCase();
+        var reserved = ["small", "medium", "large", "xlarge", "explore", "implement", "review", "caller", "claude", "codex", "agy", "pi"];
+        if (!/^[a-z][a-z0-9-]{1,30}$/.test(clean)) {
+          errBox.textContent = "이름은 영문 소문자로 시작하는 2~31자 슬러그여야 합니다.";
+          errBox.hidden = false;
+          return;
+        }
+        if (reserved.indexOf(clean) >= 0) {
+          errBox.textContent = "'" + clean + "'은(는) 예약된 이름입니다.";
+          errBox.hidden = false;
+          return;
+        }
+        var exists = Object.keys(state.nodes).some(function (id) { return state.nodes[id].label === clean; });
+        if (exists) {
+          errBox.textContent = "동일한 이름의 노드가 이미 존재합니다.";
+          errBox.hidden = false;
+          return;
+        }
+
+        if (mode === "user") {
+          var nid = "usr:" + clean;
+          state.nodes[nid] = {
+            id: nid, label: clean, kind: "user",
+            defaultTarget: uDraft.target,
+            target: uDraft.target, sizeMode: uDraft.sizeMode, exceptions: [],
+            desc: "사용자 정의 중간 라우팅 노드"
+          };
+          state.selectedNodeId = nid;
+        } else {
+          var bid = "bun:" + clean;
+          state.nodes[bid] = {
+            id: bid, label: clean, kind: "bundle",
+            harness: bDraft.harness, model: bDraft.model, effort: bDraft.effort
+          };
+          state.selectedNodeId = bid;
+          renderNewSession();
+        }
+        renderDAG();
+        closeModal();
+      });
+
+      renderForm();
+    });
+  }
+
+  function openBundleModal(mode, bundle) {
+    var draft = { harness: bundle.harness, model: bundle.model, effort: bundle.effort };
+    openModal("커스텀 번들 편집 · " + bundle.label, "권한 미포함", "bun", function (body, foot) {
+      body.appendChild(el("div", "rt3-banner info", "하네스 · 모델 · 추론 강도만 정의합니다 (authority 미포함). 저장 시 DAG와 새 세션 대화상자에 즉시 동기화됩니다."));
+      var gb = el("div", "rt3-form-grid");
+      var fH = el("div", "rt3-field");
+      fH.appendChild(el("label", "", "하네스"));
+      var hSeg = el("div", "rt3-seg");
+      fH.appendChild(hSeg);
+      gb.appendChild(fH);
+
+      var fM = el("div", "rt3-field");
+      fM.appendChild(el("label", "", "모델"));
+      var mSel = el("select", "rt3-sel mono");
+      mSel.addEventListener("change", function () { draft.model = mSel.value; });
+      fM.appendChild(mSel);
+      gb.appendChild(fM);
+
+      var fE = el("div", "rt3-field");
+      fE.appendChild(el("label", "", "추론 강도"));
+      var eSeg = el("div", "rt3-seg");
+      fE.appendChild(eSeg);
+      gb.appendChild(fE);
+      body.appendChild(gb);
+
+      function syncCtrls() {
+        hSeg.textContent = "";
+        HARNESS_ORDER.forEach(function (h) {
+          var b = el("button", "", HARNESS_LABELS[h]);
+          b.type = "button";
+          b.setAttribute("aria-pressed", String(draft.harness === h));
+          b.addEventListener("click", function () {
+            draft.harness = h;
+            draft.model = HARNESS_MODELS[h][0];
+            draft.effort = HARNESS_EFFORTS[h][1] || "high";
+            syncCtrls();
+          });
+          hSeg.appendChild(b);
+        });
+        mSel.textContent = "";
+        (HARNESS_MODELS[draft.harness] || []).forEach(function (m) {
+          var o = el("option", "", m); o.value = m; mSel.appendChild(o);
+        });
+        if ((HARNESS_MODELS[draft.harness] || []).indexOf(draft.model) < 0) draft.model = mSel.options[0].value;
+        mSel.value = draft.model;
+
+        eSeg.textContent = "";
+        (HARNESS_EFFORTS[draft.harness] || []).forEach(function (ef) {
+          var b = el("button", "", ef);
+          b.type = "button";
+          b.setAttribute("aria-pressed", String(draft.effort === ef));
+          b.addEventListener("click", function () { draft.effort = ef; syncCtrls(); });
+          eSeg.appendChild(b);
+        });
+      }
+      syncCtrls();
+
+      var left = el("div", "");
+      var allBundles = Object.keys(state.nodes).filter(function (k) { return state.nodes[k].kind === "bundle"; });
+      if (allBundles.length > 1) {
+        var delBtn = el("button", "rt3-btn danger", "번들 삭제");
+        delBtn.type = "button";
+        delBtn.addEventListener("click", function () {
+          Object.keys(state.nodes).forEach(function (k) {
+            var n = state.nodes[k];
+            if (n.target === bundle.id) n.target = n.defaultTarget || "caller";
+            if (n.exceptions) n.exceptions = n.exceptions.filter(function (ex) { return ex.target !== bundle.id; });
+          });
+          delete state.nodes[bundle.id];
+          if (state.newSession.bundle === bundle.label) state.newSession.bundle = "";
+          if (state.selectedNodeId === bundle.id) state.selectedNodeId = null;
+          renderDAG();
+          renderNewSession();
+          closeModal();
+        });
+        left.appendChild(delBtn);
+      }
+      foot.appendChild(left);
+
+      var right = el("div", "");
+      right.style.display = "inline-flex";
+      right.style.gap = "6px";
+      var cBtn = el("button", "rt3-btn", "취소"); cBtn.type = "button"; cBtn.addEventListener("click", closeModal);
+      var sBtn = el("button", "rt3-btn pri", "저장"); sBtn.type = "button";
+      sBtn.addEventListener("click", function () {
+        bundle.harness = draft.harness;
+        bundle.model = draft.model;
+        bundle.effort = draft.effort;
+        renderDAG();
+        renderNewSession();
+        closeModal();
+      });
+      right.appendChild(cBtn);
+      right.appendChild(sBtn);
+      foot.appendChild(right);
+    });
+  }
+
+  function openTerminalModal(node) {
+    var h = node.harness;
+    openModal("실행 터미널 · " + h + ".*", HARNESS_LABELS[h], "ok", function (body, foot) {
+      var list = el("div", "rt3-trace-list");
+      SIZES.forEach(function (sz) {
+        var row = el("div", "rt3-trace-row");
+        row.style.justifyContent = "space-between";
+        row.appendChild(el("span", "", h + "." + sz));
+        row.appendChild(el("span", "rt3-hud-chip end", HARNESS_TIER_DEFAULTS[h][sz].model + " · " + HARNESS_TIER_DEFAULTS[h][sz].effort));
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+
+      var setBtn = el("button", "rt3-btn pri", "호출 하네스(caller)로 설정");
+      setBtn.type = "button";
+      setBtn.disabled = state.callerHarness === h;
+      setBtn.addEventListener("click", function () {
+        state.callerHarness = h;
+        renderDAG();
+        closeModal();
+      });
+      foot.appendChild(setBtn);
+      var closeBtn = el("button", "rt3-btn", "닫기"); closeBtn.type = "button"; closeBtn.addEventListener("click", closeModal);
+      foot.appendChild(closeBtn);
+    });
+  }
+
+  function openCallerModal() {
+    openModal("호출자 노드 · caller:*", "현재: " + state.callerHarness, "pri", function (body, foot) {
+      body.appendChild(el("div", "rt3-banner info", "기본 그룹(implement/explore/review)이 오버라이드되지 않았을 때 caller:*를 통해 현재 호출자의 하네스로 크기를 그대로 전달합니다."));
+      var seg = el("div", "rt3-seg");
+      HARNESS_ORDER.forEach(function (h) {
+        var b = el("button", "", h);
+        b.type = "button";
+        b.setAttribute("aria-pressed", String(state.callerHarness === h));
+        b.addEventListener("click", function () {
+          state.callerHarness = h;
+          renderDAG();
+          closeModal();
+        });
+        seg.appendChild(b);
+      });
+      body.appendChild(seg);
+      foot.appendChild(el("span", "rt3-spdesc", "하네스를 선택하면 DAG가 즉시 재계산됩니다."));
+      var closeBtn = el("button", "rt3-btn", "닫기"); closeBtn.type = "button"; closeBtn.addEventListener("click", closeModal);
+      foot.appendChild(closeBtn);
+    });
+  }
+
+  function openDiagnosticModal(kind) {
+    var titles = {
+      cycle: "진단 · 순환 참조 오류",
+      hop: "진단 · 최대 홉 제한 초과",
+      legacy: "진단 · 레거시 별칭 우선순위 충돌",
+      unknown: "진단 · 알 수 없는 대상 오류"
+    };
+    var codes = { cycle: "CycleDetected", hop: "HopLimitExceeded", legacy: "LegacyAliasCollision", unknown: "UnknownTarget" };
+    var isWarn = kind === "legacy";
+
+    openModal(titles[kind], codes[kind], isWarn ? "warn" : "fail", function (body, foot) {
+      var banner = el("div", "rt3-banner " + (isWarn ? "warn" : "fail"));
+      var tr = el("div", "rt3-trace-list");
+      var row = el("div", "rt3-trace-row");
+
+      if (kind === "cycle") {
+        banner.textContent = state.diagFixes.cycleFixed
+          ? "해결됨: cycle-b → claude.large로 지정되어 순환이 제거되었습니다."
+          : "저장 차단됨 (CycleDetected): 순환 포인터 체인이 감지되어 저장이 거부됩니다.";
+        var cArr = state.diagFixes.cycleFixed ? ["cycle-a", "cycle-b", "claude.large (해결)"] : ["cycle-a", "cycle-b", "cycle-a (이미 방문)"];
+        cArr.forEach(function (t, i) {
+          if (i > 0) row.appendChild(el("span", "", "→"));
+          row.appendChild(el("span", "rt3-hud-chip " + (i === 2 ? (state.diagFixes.cycleFixed ? "end" : "fail") : ""), t));
+        });
+        tr.appendChild(row);
+        body.appendChild(banner);
+        body.appendChild(tr);
+        var sRow = el("div", "rt3-suggest-row");
+        var fixBtn = el("button", "rt3-suggest-chip", state.diagFixes.cycleFixed ? "오류 상태 복원" : "빠른 수정: cycle-b → claude.large");
+        fixBtn.type = "button";
+        fixBtn.addEventListener("click", function () {
+          state.diagFixes.cycleFixed = !state.diagFixes.cycleFixed;
+          renderDAG();
+          openDiagnosticModal("cycle");
+        });
+        sRow.appendChild(fixBtn);
+        body.appendChild(sRow);
+      } else if (kind === "hop") {
+        banner.textContent = state.diagFixes.hopFixed
+          ? "해결됨: hop-1 → deep-design (1/8 홉)으로 단축되었습니다."
+          : "저장 차단됨 (HopLimitExceeded): 최대 해석 깊이 8홉을 초과하여 9홉에 도달했습니다.";
+        var hArr = state.diagFixes.hopFixed ? ["hop-1", "deep-design (1/8 홉)"] : ["hop-1", "hop-2…8", "hop-9 (9/8 홉 초과)"];
+        hArr.forEach(function (t, i) {
+          if (i > 0) row.appendChild(el("span", "", "→"));
+          row.appendChild(el("span", "rt3-hud-chip " + (i === hArr.length - 1 ? (state.diagFixes.hopFixed ? "end" : "fail") : ""), t));
+        });
+        tr.appendChild(row);
+        body.appendChild(banner);
+        body.appendChild(tr);
+        var hRow = el("div", "rt3-suggest-row");
+        var hBtn = el("button", "rt3-suggest-chip", state.diagFixes.hopFixed ? "오류 상태 복원" : "빠른 수정: hop-1 → deep-design");
+        hBtn.type = "button";
+        hBtn.addEventListener("click", function () {
+          state.diagFixes.hopFixed = !state.diagFixes.hopFixed;
+          renderDAG();
+          openDiagnosticModal("hop");
+        });
+        hRow.appendChild(hBtn);
+        body.appendChild(hRow);
+      } else if (kind === "legacy") {
+        banner.textContent = "우선순위 경고 (LegacyAliasCollision): 전역 agent.tier_aliases['explore:small']='claude.small' 정확 일치 규칙이 explore:* → codex.*보다 우선 적용됩니다.";
+        row.appendChild(el("span", "rt3-hud-chip", "explore:small"));
+        row.appendChild(el("span", "", "→"));
+        row.appendChild(el("span", "rt3-hud-chip warn", "claude.small [정확 일치 우선]"));
+        tr.appendChild(row);
+        body.appendChild(banner);
+        body.appendChild(tr);
+        var lRow = el("div", "rt3-suggest-row");
+        var lBtn = el("button", "rt3-suggest-chip", state.diagFixes.legacyDismissed ? "경고 다시 표시" : "우선순위 확인 및 경고 해제");
+        lBtn.type = "button";
+        lBtn.addEventListener("click", function () {
+          state.diagFixes.legacyDismissed = !state.diagFixes.legacyDismissed;
+          renderDAG();
+          openDiagnosticModal("legacy");
+        });
+        lRow.appendChild(lBtn);
+        body.appendChild(lRow);
+      } else {
+        var cur = state.diagFixes.unknownFixTarget;
+        banner.textContent = cur
+          ? ("해결됨: ticket-worker-elevated → " + displayTargetString(state.nodes, cur, "*") + " 으로 정상 해석됩니다.")
+          : "저장 차단됨 (UnknownTarget): 'fast-model-v9'은(는) 등록된 노드, 번들 또는 <harness>.<tier> 대상이 아닙니다.";
+        row.appendChild(el("span", "rt3-hud-chip", "ticket-worker-elevated"));
+        row.appendChild(el("span", "", "→"));
+        row.appendChild(el("span", "rt3-hud-chip " + (cur ? "end" : "fail"), cur ? displayTargetString(state.nodes, cur, "*") : "fast-model-v9 [미정의]"));
+        tr.appendChild(row);
+        body.appendChild(banner);
+        body.appendChild(tr);
+        var uRow = el("div", "rt3-suggest-row");
+        [["grp:implement", "implement:*"], ["term:claude", "claude.*"], ["bun:deep-design", "deep-design"]].forEach(function (pair) {
+          var c = el("button", "rt3-suggest-chip", pair[1]);
+          c.type = "button";
+          c.addEventListener("click", function () {
+            state.diagFixes.unknownFixTarget = pair[0];
+            renderDAG();
+            openDiagnosticModal("unknown");
+          });
+          uRow.appendChild(c);
+        });
+        body.appendChild(uRow);
+      }
+
+      foot.appendChild(el("span", "rt3-pill " + (isWarn ? "warn" : "fail"), isWarn ? "런타임 우선순위 경고" : "오류 해소 전 저장 차단"));
+      var okBtn = el("button", "rt3-btn pri", "닫기"); okBtn.type = "button"; okBtn.addEventListener("click", closeModal);
+      foot.appendChild(okBtn);
+    });
+  }
+
+  /* Tab 2: New-Session Dialog */
+  function getBundlesList() {
+    return Object.keys(state.nodes)
+      .map(function (id) { return state.nodes[id]; })
+      .filter(function (n) { return n.kind === "bundle"; });
+  }
+
+  function findBundleByLabel(lbl) {
+    var list = getBundlesList();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].label === lbl) return list[i];
+    }
+    return null;
+  }
+
+  function renderNewSession() {
+    var ns = state.newSession;
+    var sel = document.getElementById("rt3-ns-bundle");
+    sel.textContent = "";
+    var optNone = el("option", "", "직접 선택 (수동)");
+    optNone.value = "";
+    sel.appendChild(optNone);
+    getBundlesList().forEach(function (b) {
+      var o = el("option", "", b.label + " (" + b.harness + " · " + b.model + " · " + b.effort + ")");
+      o.value = b.label;
+      sel.appendChild(o);
+    });
+    sel.value = ns.bundle && findBundleByLabel(ns.bundle) ? ns.bundle : "";
+
+    document.querySelectorAll("#rt3-ns-harness-seg button").forEach(function (b) {
+      b.setAttribute("aria-checked", String(b.getAttribute("data-ns-h") === ns.harness));
+    });
+
+    var mSel = document.getElementById("rt3-ns-model");
+    mSel.textContent = "";
+    var models = HARNESS_MODELS[ns.harness] || [];
+    if (models.indexOf(ns.model) < 0) ns.model = models[0] || "";
+    models.forEach(function (m) { var o = el("option", "", m); o.value = m; mSel.appendChild(o); });
+    mSel.value = ns.model;
+
+    var eSel = document.getElementById("rt3-ns-effort");
+    eSel.textContent = "";
+    var efforts = HARNESS_EFFORTS[ns.harness] || ["low", "medium", "high"];
+    if (efforts.indexOf(ns.effort) < 0) ns.effort = efforts[efforts.length - 1];
+    efforts.forEach(function (ef) { var o = el("option", "", ef); o.value = ef; eSel.appendChild(o); });
+    eSel.value = ns.effort;
+
+    document.querySelectorAll("#rt3-ns-perm-seg button").forEach(function (b) {
+      b.setAttribute("aria-checked", String(b.getAttribute("data-ns-perm") === ns.perm));
+    });
+    var permDescriptions = {
+      "default": "하네스 기본 권한 정책을 따릅니다.",
+      "workdir-write": "현재 작업 디렉터리 내 편집을 자동 승인합니다.",
+      "full": "확인 프롬프트 없이 모든 도구 실행을 허용합니다."
+    };
+    document.getElementById("rt3-ns-perm-desc").textContent = permDescriptions[ns.perm] || "";
+
+    document.querySelectorAll("#rt3-ns-iso-seg button").forEach(function (b) {
+      b.setAttribute("aria-checked", String(b.getAttribute("data-ns-iso") === ns.iso));
+    });
+
+    var modePill = document.getElementById("rt3-ns-mode-pill");
+    var hintEl = document.getElementById("rt3-ns-hint");
+    if (ns.bundle) {
+      modePill.className = "rt3-pill pri";
+      modePill.textContent = "번들 적용됨: " + ns.bundle;
+      hintEl.className = "rt3-microhint applied";
+      hintEl.textContent = ns.bundle + " 번들에서 하네스·모델·추론 강도가 채워졌습니다. 아무 필드나 수정하면 직접 선택으로 복귀합니다.";
+    } else if (ns.hintState === "reverted") {
+      modePill.className = "rt3-pill warn";
+      modePill.textContent = "직접 선택 (수동 수정됨)";
+      hintEl.className = "rt3-microhint reverted";
+      hintEl.textContent = "수동 수정됨 — 직접 선택 모드로 전환되었습니다. (권한·격리는 변경 없음)";
+    } else {
+      modePill.className = "rt3-pill";
+      modePill.textContent = "직접 선택";
+      hintEl.className = "rt3-microhint";
+      hintEl.textContent = "번들을 선택하지 않으면 각 필드를 직접 선택합니다.";
+    }
+
+    document.getElementById("rt3-ns-loc").textContent = "devenv · develop · " + (HARNESS_LABELS[ns.harness] || ns.harness);
+
+    var activeStep = ns.bundle ? "bundle" : (ns.hintState === "reverted" ? "reverted" : "manual");
+    document.querySelectorAll("#rt3-step-strip .rt3-step-card").forEach(function (c) {
+      c.classList.toggle("active", c.getAttribute("data-step") === activeStep);
+    });
+
+    var payload = {
+      root: "/Users/kang-sw/repos/devenv",
+      harness: ns.harness,
+      model: ns.model,
+      effort: ns.effort,
+      permission_level: ns.perm === "default" ? "" : ns.perm,
+      plugin_isolation: ns.iso
+    };
+    document.getElementById("rt3-ns-payload").textContent = JSON.stringify(payload, null, 2);
+  }
+
+  /* Toolbar & Tab Event Bindings */
+  var tabPanels = {
+    dag: document.getElementById("rt3-panel-dag"),
+    newsession: document.getElementById("rt3-panel-newsession")
+  };
+  document.querySelectorAll(".rt3-tab").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var t = btn.getAttribute("data-rt3-tab");
+      state.activeTab = t;
+      document.querySelectorAll(".rt3-tab").forEach(function (b) {
+        b.setAttribute("aria-selected", String(b === btn));
+      });
+      Object.keys(tabPanels).forEach(function (k) { tabPanels[k].hidden = k !== t; });
+      if (t === "dag") renderDAG();
+    });
+  });
+
+  function currentResolvedTheme() {
+    var attr = root.getAttribute("data-rt3-theme");
+    if (attr === "dark" || attr === "light") return attr;
+    var docTheme = document.documentElement.getAttribute("data-theme");
+    if (docTheme === "dark" || docTheme === "light") return docTheme;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function syncThemeButton() {
+    var isDark = currentResolvedTheme() === "dark";
+    document.getElementById("rt3-theme-label").textContent = isDark ? "다크" : "라이트";
+    document.getElementById("rt3-theme-icon").innerHTML = isDark
+      ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
+      : '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>';
+  }
+  document.getElementById("rt3-theme-toggle").addEventListener("click", function () {
+    var next = currentResolvedTheme() === "dark" ? "light" : "dark";
+    root.setAttribute("data-rt3-theme", next);
+    syncThemeButton();
+  });
+
+  document.getElementById("rt3-demo-reparent").addEventListener("click", function () {
+    var tw = state.nodes["pb:ticket-worker"];
+    if (!tw) return;
+    tw.target = (tw.target === "grp:review") ? tw.defaultTarget : "grp:review";
+    state.selectedNodeId = "pb:ticket-worker";
+    renderDAG();
+  });
+
+  document.getElementById("rt3-add-node-btn").addEventListener("click", openAddNodeModal);
+
+  document.getElementById("rt3-diag-toggle").addEventListener("click", function () {
+    state.diagMode = !state.diagMode;
+    state.selectedNodeId = null;
+    state.hoverNodeId = null;
+    renderDAG();
+  });
+
+  document.getElementById("rt3-canvas").addEventListener("click", function (e) {
+    if (!e.target.closest(".rt3-node") && !e.target.closest(".rt3-diag-chip") && state.selectedNodeId) {
+      state.selectedNodeId = null;
+      applyFocusVisuals();
+    }
+  });
+
+  document.getElementById("rt3-reset-defaults-btn").addEventListener("click", function () {
+    state.nodes = createInitialNodes(false);
+    state.selectedNodeId = null;
+    state.hoverNodeId = null;
+    state.diagMode = false;
+    renderDAG();
+    renderNewSession();
+  });
+
+  document.querySelectorAll("#rt3-caller-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.callerHarness = b.getAttribute("data-caller");
+      renderDAG();
+    });
+  });
+
+  /* Modal Close */
+  document.getElementById("rt3-modal-x").addEventListener("click", closeModal);
+  document.getElementById("rt3-modal-backdrop").addEventListener("click", function (e) {
+    if (e.target === this) closeModal();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && state.modalOpen) closeModal();
+  });
+
+  /* Tab 2 Handlers */
+  document.getElementById("rt3-ns-bundle").addEventListener("change", function (e) {
+    var lbl = e.target.value;
+    if (!lbl) {
+      state.newSession.bundle = "";
+      state.newSession.hintState = "manual";
+    } else {
+      var b = findBundleByLabel(lbl);
+      if (b) {
+        state.newSession.bundle = b.label;
+        state.newSession.harness = b.harness;
+        state.newSession.model = b.model;
+        state.newSession.effort = b.effort;
+        state.newSession.hintState = "applied";
+      }
+    }
+    renderNewSession();
+  });
+  function manualFieldEdit() {
+    if (state.newSession.bundle) {
+      state.newSession.bundle = "";
+      state.newSession.hintState = "reverted";
+    } else {
+      state.newSession.hintState = "manual";
+    }
+  }
+  document.querySelectorAll("#rt3-ns-harness-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var h = b.getAttribute("data-ns-h");
+      if (state.newSession.harness === h) return;
+      state.newSession.harness = h;
+      state.newSession.model = (HARNESS_MODELS[h] || [])[0] || "";
+      state.newSession.effort = (HARNESS_EFFORTS[h] || ["high"]).slice(-1)[0];
+      manualFieldEdit();
+      renderNewSession();
+    });
+  });
+  document.getElementById("rt3-ns-model").addEventListener("change", function (e) {
+    state.newSession.model = e.target.value;
+    manualFieldEdit();
+    renderNewSession();
+  });
+  document.getElementById("rt3-ns-effort").addEventListener("change", function (e) {
+    state.newSession.effort = e.target.value;
+    manualFieldEdit();
+    renderNewSession();
+  });
+  document.querySelectorAll("#rt3-ns-perm-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.newSession.perm = b.getAttribute("data-ns-perm");
+      renderNewSession();
+    });
+  });
+  document.querySelectorAll("#rt3-ns-iso-seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.newSession.iso = b.getAttribute("data-ns-iso");
+      renderNewSession();
+    });
+  });
+  document.getElementById("rt3-ns-reset").addEventListener("click", function () {
+    state.newSession = { bundle: "", harness: "claude", model: "opus-4-6", effort: "high", perm: "default", iso: "default", hintState: "manual" };
+    document.getElementById("rt3-ns-submit-badge").textContent = "실시간 동기화";
+    renderNewSession();
+  });
+  document.getElementById("rt3-ns-start").addEventListener("click", function () {
+    document.getElementById("rt3-ns-submit-badge").textContent = "session.request_hire 전송됨 (모의)";
+  });
+  document.querySelectorAll("#rt3-step-strip .rt3-step-card").forEach(function (card) {
+    card.addEventListener("click", function () {
+      var step = card.getAttribute("data-step");
+      var dd = findBundleByLabel("deep-design") || getBundlesList()[0];
+      if (step === "manual") {
+        state.newSession.bundle = "";
+        state.newSession.harness = "claude";
+        state.newSession.model = "opus-4-6";
+        state.newSession.effort = "high";
+        state.newSession.hintState = "manual";
+      } else if (step === "bundle" && dd) {
+        state.newSession.bundle = dd.label;
+        state.newSession.harness = dd.harness;
+        state.newSession.model = dd.model;
+        state.newSession.effort = dd.effort;
+        state.newSession.hintState = "applied";
+      } else if (step === "reverted" && dd) {
+        state.newSession.bundle = "";
+        state.newSession.harness = dd.harness;
+        state.newSession.model = dd.model;
+        state.newSession.effort = "medium";
+        state.newSession.hintState = "reverted";
+      }
+      renderNewSession();
+    });
+  });
+
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(function () {
+      if (state.activeTab === "dag") {
+        var nm = getActiveNodeMap();
+        scheduleLayoutAndEdges(nm, computeProceduralLayout(nm));
+      }
+    });
+    ro.observe(document.getElementById("rt3-canvas"));
+  }
+  window.addEventListener("resize", function () {
+    if (state.activeTab === "dag") {
+      var nm = getActiveNodeMap();
+      scheduleLayoutAndEdges(nm, computeProceduralLayout(nm));
+    }
+  });
+
+  syncThemeButton();
+  renderDAG();
+  renderNewSession();
+})();
+</script>
