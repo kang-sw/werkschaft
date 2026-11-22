@@ -235,6 +235,11 @@ func (d *Daemon) sessionRoster(replyID string) ([]SessionRosterRow, error) {
 			if !scope.child(row.ReplyID) || scope.parent(row.ReplyID) != replyID {
 				continue
 			}
+			// A deleted session sits only in the rail's collapsed deleted
+			// fold, not its session list; the roster never offers it.
+			if row.Lifecycle == SessionPendingDeletion {
+				continue
+			}
 			item := SessionRosterRow{Mailbox: "id:" + row.ReplyID, Harness: row.Harness, Label: row.Label, State: "idle"}
 			if row.Live && row.Exit == nil && !row.Hover.Stale {
 				if row.Working {
