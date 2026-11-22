@@ -23,7 +23,7 @@ import (
 
 const (
 	nativeFirstExplore = "your native subagent (no ws tools, your harness's default model; when the question needs a specific tier, a read-only `ws/agent.spawn` subagent at an external-harness tier)"
-	nativeFirstSpawn   = "`ws/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness; authority: at most your own)"
+	nativeFirstSpawn   = "`ws/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness; authority: at most your own)"
 	nativeFirstTip     = "When a subagent started with `ws/agent.spawn` returns an agent id, use `" + piMCPOnlyContinue + "`"
 	daemonAgentExplore = piMCPOnlyExplore + " at the tier the question needs"
 	daemonAgentSpawn   = "`ws/agent.spawn` (tier: the resolved capability tier, not a model name; authority: at most your own)"
@@ -43,7 +43,7 @@ const (
 		"  `session_key`; spawn the subagent through\n" +
 		"  `ws/agent.spawn` on an external harness with the returned path and the render's tier, qualified as `### Choosing a tier` states. Delegate works in another worktree →\n" +
 		"  select that worktree at render time.\n"
-	nativeFirstTierLine = "- A rendered playbook → the tier its render recommends; as a `ws/agent.spawn` target, put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness.\n"
+	nativeFirstTierLine = "- A rendered playbook → the tier its render recommends; as a `ws/agent.spawn` target, put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness.\n"
 	todayExploreBullet  = "- Bounded evidence gathering that benefits from an independent read →\n" +
 		"  " + daemonAgentExplore + " (`### Choosing a tier`).\n" +
 		"  English prompt with the scoped question; require cited evidence, gaps, and\n" +
@@ -53,7 +53,7 @@ const (
 		"  `session_key`; give the subagent the returned path and spawn it with the\n" +
 		"  tier and bindings the render returns. Delegate works in another worktree →\n" +
 		"  select that worktree at render time.\n"
-	todayTierLine = "- A rendered playbook → the tier its render recommends.\n"
+	todayTierLine = "- A rendered playbook → the tier its render recommends, passed as returned;\n  a role tier such as `ticket-worker:large` is valid there.\n"
 )
 
 // nativeFirstMarkers are phrases only the native-first wording carries.
@@ -231,7 +231,7 @@ func TestNativeFirstOtherHarnessesUnchanged(t *testing.T) {
 // an agy hosted lead, end to end on one connection served by a real runner
 // with fake Claude and agy backends and no configured external route. The
 // tier and prompt path come from that connection's playbook.render response;
-// the bare size it recommends, qualified with `claude.` as the native-first
+// the role tier it recommends, qualified with `claude.` as the native-first
 // manual and steer prescribe, reaches agent.spawn, which starts the Claude
 // backend with the rendered prompt, not the agy one. Both halves live in
 // this package because wsagent cannot reach playbook.render.
@@ -280,11 +280,14 @@ func TestAgyLeadRenderedTierSpawnsClaudeChild(t *testing.T) {
 		}
 	}
 	prompt, err := os.ReadFile(promptPath)
-	if err != nil || tier != "small" {
-		t.Fatalf("playbook.render = %q (prompt %v); want a prompt path and a bare size", out, err)
+	if err != nil || tier != "playbook-explore:small" {
+		t.Fatalf("playbook.render = %q (prompt %v); want a prompt path and the explore role tier", out, err)
 	}
 
-	raw := callToolWithKey(t, s, 3, f.hosted, "agent.spawn", map[string]any{"prompt": "Run the playbook at the system prompt path.", "system_prompt_path": promptPath, "tier": "claude." + tier, "authority": "read-only", "format": "json"})
+	// A role tier's qualified form is its size: agent.spawn's dotted tier
+	// takes no role-tier node.
+	_, size, _ := strings.Cut(tier, ":")
+	raw := callToolWithKey(t, s, 3, f.hosted, "agent.spawn", map[string]any{"prompt": "Run the playbook at the system prompt path.", "system_prompt_path": promptPath, "tier": "claude." + size, "authority": "read-only", "format": "json"})
 	var res wsagent.AgentSpawnResult
 	if err := json.Unmarshal([]byte(raw), &res); err != nil || res.Address == "" {
 		t.Fatalf("agent.spawn = %q (%v)", raw, err)

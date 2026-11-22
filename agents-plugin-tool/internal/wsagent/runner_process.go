@@ -49,6 +49,13 @@ func (c *conv) setPromptBoundary(rec *Record, startedAt int64, reportable bool) 
 // survives the last release check (admitInput); otherwise nothing runs and
 // the error is an inputReleasedError, which is no send failure.
 func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
+	// The prompt is a keep-awake member while its send is in flight. A
+	// successful send's caller opens the turn (beginTurn, or compactCommand
+	// for a native compaction) before the loop step ends, so membership
+	// carries over; a failed one is dropped by that step's sync.
+	c.awakeSending = true
+	c.syncAwake()
+	defer func() { c.awakeSending = false }()
 	heldAgy := c.record().heldAgyWorker()
 	startedAt := c.r.opts.Now().UnixMilli()
 	var err error
@@ -644,7 +651,23 @@ func (c *conv) reattach() {
 		// The holder stays in the record: the next start ends it first.
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
 		if !rec.Lead {
+			// A worker keeps replaying until checkReattach reads this after
+			// the holder scan and ends the recovery (recoveryFailed drops
+			// the open turn). The scan can take long, so the failure leaves
+			// keep-awake membership now (wantAwake) instead of waiting for it.
 			c.rejoinErr = err.Error()
+			c.publishAwake(c.wantAwake())
+		} else {
+			// No process came back, so no replay will ever settle the turn
+			// the record showed open: end the replay and drop that turn, or
+			// the keep-awake membership it froze would hold the assertion
+			// for good.
+			c.replaying = false
+			if c.turn {
+				c.setStatus(func() { c.turn = false })
+				c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnEnd})
+			}
+			c.publishAwake(c.wantAwake())
 		}
 	}
 	// A process that outlived its checkout's release keeps running, but this

@@ -970,6 +970,21 @@ Pi calls share this route; the Pi-specific legacy behavior follows:
   themselves. A process stop (the stop route, an idle stop, a settings change)
   does not cascade, and a child's report resumes the stopped parent. A report
   to a closed parent stays in the child's record.
+- **Keep-awake.** With the global-only `agent.keep_awake_during_turns` on
+  (default false), the runner holds one idle-system-sleep assertion while any
+  conversation instance has a live turn (`wsagent/keep_awake.go`,
+  `internal/wsawake`). A turn counts from admission, before its send, through
+  tool calls, approvals and retries, to its end, transport loss, close,
+  hand-off or shutdown; a standalone prompt counts during its send and a
+  native `/compact` until its command settles. A rejoin keeps the membership
+  it had while replaying and then publishes what the replay rebuilt. Queued
+  input, idle processes, terminal sessions and exec jobs never count. The
+  daemon reads the value after publishing its endpoint and rereads it on the
+  companion-changed invalidation (`config.tune` set or reset) and on a
+  settings write. One worker goroutine makes every OS call: `caffeinate -i -w
+  <daemon pid>` on macOS, `SetThreadExecutionState` on one locked thread on
+  Windows, nothing elsewhere. A failed assertion is logged once and retried
+  only at the next activation.
 
 The runner also hosts lead sessions: a headless Claude Code, Pi, agy, or Codex
 process that loads the user's own harness setup (no profile allowlist or

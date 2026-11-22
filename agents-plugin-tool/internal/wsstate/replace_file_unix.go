@@ -13,9 +13,11 @@ func AtomicReplaceFile(tmp, path string) error {
 }
 
 // ReadFile reads path. POSIX opens never meet a sharing violation, so there
-// is nothing to retry (see the Windows variant).
+// is nothing to retry (see the Windows variant). The read counts at
+// ReadFile's caller, as on Windows.
 func ReadFile(path string) ([]byte, error) {
-	return ReadFileOnce(path)
+	countFileIO("read_file")
+	return os.ReadFile(path)
 }
 
 // RemoveFile removes path. POSIX unlinks a file other handles hold open, so
