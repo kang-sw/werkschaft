@@ -208,12 +208,13 @@ func TestCompactionHardFallbackContinuesWithRestoreWithoutRequest(t *testing.T) 
 	h := compactionHarness(t)
 	id, holder := h.runLead("work")
 	c := h.runner.conv(id)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		usage := compactionUsage(90_000)
 		usage.FinalUsage = true
 		c.handle(usage)
 		if got := h.userInputs(holder); len(got) != 1 {
-			t.Fatalf("hard usage cut the active turn: %q", got)
+			failf("hard usage cut the active turn: %q", got)
+			return
 		}
 		c.endTurn("", false)
 	})

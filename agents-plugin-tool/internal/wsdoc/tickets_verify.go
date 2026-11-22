@@ -157,6 +157,12 @@ func verifyTicketFile(env []string, root, path, status, stem string, result *Ver
 	}
 
 	if status == "ready" {
+		// Soft: tickets.move and sage_gate cover the normal promotion, but a
+		// git mv or a ticket written straight into ready/ reaches a worker
+		// with no facts, and the worker can only stop.
+		if missingRouteFacts(absPath, stem) {
+			addWarning("route-facts", routeFactsMissingWarning)
+		}
 		designRequired, completenessRequired := sageReviewStageRequirement(stem)
 		design, completeness := effectiveSageReviewPostures(frontmatter(absPath))
 		for _, problem := range readyPostureProblems(designRequired, design, completenessRequired, completeness) {
@@ -194,6 +200,8 @@ func verifyTicketFile(env []string, root, path, status, stem string, result *Ver
 		addFinding("phase-result-heading", problem)
 	}
 }
+
+const routeFactsMissingWarning = "ready ticket has no ## Route Facts section; the implementation route reads its facts from it and a worker stops without them. Run ticket-fact-populator on it before dispatching."
 
 func sageReviewFreshnessWarningMessage(freshness sageReviewFreshness) string {
 	return fmt.Sprintf("completed sage review may be stale for stage(s): %s; review baseline: %s; %s", strings.Join(freshness.Stages, ", "), freshness.Baseline, freshness.Instruction)

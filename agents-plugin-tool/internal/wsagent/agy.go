@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsharnessenv"
+	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -52,6 +54,10 @@ type AgyBackend struct {
 }
 
 func (b AgyBackend) registration() (string, BackendRegistration) {
+	// No OneShot, probed 2026-11-22 with agy 1.5.14: `agy -p` (stdin or
+	// argument, --output-format text, --disable-slash-commands) has no flag
+	// that removes its tools or MCP servers; --mode and --sandbox restrict or
+	// gate them without disabling them, so no one-shot mode is verifiable.
 	return BackendAgy, BackendRegistration{
 		Backend:         b,
 		LeadProfile:     LeadProfileAgy,
@@ -67,19 +73,39 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 			"worktree.acquire", "worktree.release", "note.query", "note.write",
 			"config.resolve_agent", "todo.list", "todo.check",
 		},
-		ToolsAlwaysLoad:   true,
-		ManualHarness:     BackendAgy,
-		PlaybookCommands:  true,
-		WorkerCapable:     true,
-		WorkerProfile:     AgentWorkerProfile(BackendAgy),
-		WorkerHTTPMCP:     true,
-		WorkerAutoApprove: true,
+		ToolsAlwaysLoad:  true,
+		ManualHarness:    BackendAgy,
+		PlaybookCommands: true,
+		// An agy lead explores with its own subagents and delegates through
+		// agent.spawn, preferring another harness when one fits.
+		PreferNativeSubagent: true,
+		// Same-harness workers only: an agy session (a hosted agy lead, or
+		// an agy worker spawning a nested child) may run agy workers; every
+		// other caller, and a creation with none, is refused (admitWorker).
+		WorkerCapable:       true,
+		crossHarnessRefusal: agyCrossHarnessRefusal,
+		WorkerProfile:       AgentWorkerProfile(BackendAgy),
+		WorkerHTTPMCP:       true,
+		WorkerAutoApprove:   true,
+		// Native default mode asks before each run_command, and the daemon
+		// refuses it (agy 1.5.14 live probe: native auto and
+		// --dangerously-skip-permissions run commands without asking, and
+		// top-level --settings rules do not reach ACP sessions).
+		ExecCutover: &ExecCutoverSupport{Since: "1.5.14", LaunchMode: agyCutoverMode, RejectTools: []string{agyCommandTool}, Instruction: agyExecCutoverInstruction},
 		Profiles: []BuiltinProfileRegistration{
 			agentWorkerBuiltinProfile(BackendAgy, nil),
 			leadBuiltinProfile(LeadProfileAgy, BackendAgy, ""),
 		},
 	}
 }
+
+// agyCrossHarnessRefusal refuses an agy worker entry whose caller is not an
+// agy session. Antigravity's FAQ says an Antigravity login used through
+// third-party software violates its terms and that wrapping its CLI in
+// another coding agent is unsupported on consumer plans, which is what an
+// agy worker under a Claude, Codex, or Pi session is. agy-to-agy use is the
+// owner's accepted risk, restrained by the lead's manual alone.
+const agyCrossHarnessRefusal = `harness "agy" accepts workers only from an agy session: Antigravity's consumer terms do not support running agy under another agent`
 
 // AgyPermissionModes are the hosted lead choices. bypass is ws-side intent;
 // the process still runs in agy's native default mode.
@@ -114,10 +140,21 @@ var (
 // without. wsharnessenv.Drop removes ws's own session identity.
 var agyDropEnv = []string{"CLAUDE", "CODEX_", "PI_", "ORCA_"}
 
-// agyLeadBgShellRule is appended to a hosted agy lead's system prompt so it
-// overrides Antigravity's reactive-wakeup guidance for background commands;
-// workers carry the matching rule in instructions/agent-worker-agy.md.
-const agyLeadBgShellRule = `Never end your turn while a non-daemon ` + "`run_command`" + ` task you started is still running (ignore this for ` + "`IsDaemon: true`" + ` processes). Override Antigravity's "end the turn and wait" / reactive-wakeup guidance for background commands: stay in the same turn — do other work or check status with ` + "`manage_task`" + ` — until it finishes.`
+// agyBgShellRule is appended to the system prompt of an agy session
+// outside the exec cutover (lead or worker), overriding Antigravity's
+// reactive-wakeup guidance for background commands: the daemon tracks a
+// running non-daemon run_command and keeps the session awake for it.
+const agyBgShellRule = `Never end your turn while a non-daemon ` + "`run_command`" + ` task you started is still running (ignore this for ` + "`IsDaemon: true`" + ` processes). Override Antigravity's "end the turn and wait" / reactive-wakeup guidance for background commands: stay in the same turn — do other work or check status with ` + "`manage_task`" + ` — until it finishes.`
+
+// agyCutoverMode is the native mode a cutover agy session runs in: the one
+// that asks before each run_command, so the daemon can refuse it.
+const agyCutoverMode = "default"
+
+// agyExecCutoverInstruction is appended to a cutover agy session's system
+// prompt at session creation, and sent once as a prompt at the end of a
+// turn whose run_command call the daemon refused (or that ran one without
+// a permission request): agy shows the model no refusal text of its own.
+const agyExecCutoverInstruction = "Shell commands do not run through `run_command` in this session: every `run_command` call is refused. Run commands with the ws exec tools instead: `exec_shell` (cmd: one shell line) or `exec_run` (exe and args, no shell). Each waits up to its execution window, then answers with an exec id it keeps running under (async answers with the id at once); follow a running job with `exec_tail`, `exec_write`, `exec_stop` and `exec_list`. A job that outlives its call reports its completion to you as a message, so you need not wait in the turn for it."
 
 // agyRingSkip matches agy's thought chunks, which the mapper drops: a
 // lead's holder keeps them out of its ring. A line whose shape this no
@@ -168,7 +205,32 @@ func agyEnv(spec StartSpec) []string {
 			set[name] = value
 		}
 	}
-	return harnessEnv(wsharnessenv.Drop(spec.Env), agyDropEnv, nil, set)
+	env := harnessEnv(wsharnessenv.Drop(spec.Env), agyDropEnv, nil, set)
+	if spec.Lead != nil && spec.Lead.FrameTrace != "" {
+		env = withGODEBUG(env, agyFrameTraceGODEBUG)
+	}
+	return env
+}
+
+// agyFrameTraceGODEBUG turns on Go's verbose HTTP/2 frame logging: level 2
+// adds the framer read and write lines, whose framer pointer tells
+// connections apart and whose stream id tells requests apart.
+const agyFrameTraceGODEBUG = "http2debug=2"
+
+// withGODEBUG adds setting to env's GODEBUG, after any settings already
+// there (a later setting of the same name wins).
+func withGODEBUG(env []string, setting string) []string {
+	for i, kv := range env {
+		if value, ok := strings.CutPrefix(kv, "GODEBUG="); ok {
+			if value != "" {
+				setting = value + "," + setting
+			}
+			out := slices.Clone(env)
+			out[i] = "GODEBUG=" + setting
+			return out
+		}
+	}
+	return append(slices.Clone(env), "GODEBUG="+setting)
 }
 
 // Start launches `agy acp` for spec and, unless it rejoins a held process,
@@ -195,8 +257,15 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 	if spec.Holder != nil {
 		spec.Holder.ringSkip = agyRingSkip
 		spec.Holder.ringPulse = agyRingPulse
+		if spec.Lead != nil && spec.Lead.FrameTrace != "" {
+			// The holder filters the trace out of stderr before its ring.
+			spec.Holder.http2Capture = &wsholder.HTTP2Capture{Path: spec.Lead.FrameTrace, MaxBytes: agyFrameCaptureMaxBytes}
+		}
 	}
 	m := newAgyMapper(spec.SessionID)
+	// Set before startChild: a rejoin's holder replay maps through m too.
+	m.lead = spec.Lead != nil
+	m.cutover = spec.ExecCutover
 	m.recoveredSteers = slices.Clone(spec.RecoveredSteers)
 	m.reattachedPromptAfter = spec.reattachedPromptAfter
 	sp, err := startChild(spec, cmd, m, agyProtocol{})
@@ -259,6 +328,20 @@ func agyIDKind(id string) (string, bool) {
 }
 
 // agyProcess is one `agy acp` process serving one session.
+// frameCaptureNoter is a process whose holder may keep a frame capture.
+type frameCaptureNoter interface {
+	NoteFrameCapture(text string) error
+}
+
+// NoteFrameCapture adds text to the holder's frame capture, when the holder
+// keeps one for this process.
+func (p *agyProcess) NoteFrameCapture(text string) error {
+	if p.holder == nil {
+		return nil
+	}
+	return p.holder.noteCapture(text)
+}
+
 type agyProcess struct {
 	*streamProcess
 	m *agyMapper
@@ -338,12 +421,17 @@ func (p *agyProcess) open(spec StartSpec) error {
 		}
 		appendText = string(text)
 	}
-	if spec.Lead != nil {
-		if trimmed := strings.TrimRight(appendText, "\n"); trimmed != "" {
-			appendText = trimmed + "\n\n" + agyLeadBgShellRule + "\n"
-		} else {
-			appendText = agyLeadBgShellRule + "\n"
-		}
+	// A cutover session runs commands through the ws exec tools, whose
+	// completions come as messages; one outside it keeps run_command and
+	// the rule that keeps its turn open while a background one runs.
+	rule := agyBgShellRule
+	if spec.ExecCutover {
+		rule = agyExecCutoverInstruction
+	}
+	if trimmed := strings.TrimRight(appendText, "\n"); trimmed != "" {
+		appendText = trimmed + "\n\n" + rule + "\n"
+	} else {
+		appendText = rule + "\n"
 	}
 	if appendText != "" {
 		params["_meta"] = map[string]any{"antigravity": map[string]any{"systemPrompt": map[string]any{"append": appendText}}}
@@ -378,11 +466,18 @@ func (p *agyProcess) open(spec StartSpec) error {
 			return fmt.Errorf("effort: %w", err)
 		}
 	}
+	mode := ""
 	if spec.Lead != nil {
-		if mode := spec.Lead.PermissionMode; mode != "" && mode != p.m.mode() {
-			if err := p.SetPermissionMode(mode); err != nil {
-				return fmt.Errorf("permission mode: %w", err)
-			}
+		mode = spec.Lead.PermissionMode
+	}
+	if spec.ExecCutover {
+		// A cutover worker too: a resumed session reopens in whatever
+		// mode it last ran in, and native auto runs commands unasked.
+		mode = agyCutoverMode
+	}
+	if mode != "" && mode != p.m.mode() {
+		if err := p.SetPermissionMode(mode); err != nil {
+			return fmt.Errorf("permission mode: %w", err)
 		}
 	}
 	return nil
@@ -652,13 +747,24 @@ type agyMapper struct {
 	pendingTools    map[string]bool
 	openBg          map[string]bool
 	bgCalls         map[string]bool
-	modelFailure    string
-	turnSeq         int
-	group           int
-	groupCalls      bool
-	reply           strings.Builder
-	replyAt         int64
-	batches         batchTracker
+	// cutover marks a process started under the exec cutover: its
+	// run_command calls are refused, so no background command is tracked
+	// (openBg, bgCalls), and requested and ranUnrequested correlate the
+	// permission requests and execution evidence of its commands by tool
+	// call id (Event.UnrequestedCommand).
+	cutover        bool
+	requested      map[string]bool
+	ranUnrequested map[string]bool
+	modelFailure   string
+	// content is set while mapping one session/update that carried model
+	// content (text, thought, its holder pulse, or a plan).
+	content    bool
+	turnSeq    int
+	group      int
+	groupCalls bool
+	reply      strings.Builder
+	replyAt    int64
+	batches    batchTracker
 
 	wakeTimer      *time.Timer
 	wakeGeneration uint64
@@ -668,6 +774,13 @@ type agyMapper struct {
 	// approvalOf their ids by tool call.
 	approvals  map[string]*agyApproval
 	approvalOf map[string]string
+
+	// lead marks the hosted lead's mapper: only it maps native subagents
+	// (agy's invoke_subagent) to rows; a worker's emits none. nativeLaunch
+	// holds the invoke_subagent calls whose launch has not reported a final
+	// status yet, so a failed launch can end its row.
+	lead         bool
+	nativeLaunch map[string]bool
 
 	// lastContext retains the latest usage_update context so KindStatus rate
 	// events preserve it instead of clearing Usage.Context.
@@ -679,17 +792,42 @@ type agyMapper struct {
 
 func newAgyMapper(sessionID string) *agyMapper {
 	return &agyMapper{
-		sessionID:    sessionID,
-		outstanding:  map[string]bool{},
-		steerText:    map[string]string{},
-		openCalls:    map[string]bool{},
-		pendingTools: map[string]bool{},
-		openBg:       map[string]bool{},
-		bgCalls:      map[string]bool{},
-		batches:      newBatchTracker("agy"),
-		approvals:    map[string]*agyApproval{},
-		approvalOf:   map[string]string{},
+		sessionID:      sessionID,
+		outstanding:    map[string]bool{},
+		steerText:      map[string]string{},
+		openCalls:      map[string]bool{},
+		pendingTools:   map[string]bool{},
+		openBg:         map[string]bool{},
+		bgCalls:        map[string]bool{},
+		batches:        newBatchTracker("agy"),
+		approvals:      map[string]*agyApproval{},
+		approvalOf:     map[string]string{},
+		requested:      map[string]bool{},
+		ranUnrequested: map[string]bool{},
+		nativeLaunch:   map[string]bool{},
 	}
+}
+
+// agyCommandTool is agy's native process tool.
+const agyCommandTool = "run_command"
+
+// agyCorrelationCap bounds the tool call ids a mapper correlates; past it
+// both sets restart (ids are unique per call, so only a long process's
+// oldest calls are forgotten).
+const agyCorrelationCap = 4096
+
+// agyCommandRan reports execution evidence in a run_command update's raw
+// output: an exit code, or any output at all. A refused call ends failed
+// with an empty output and no exit code.
+func agyCommandRan(raw json.RawMessage) bool {
+	var out struct {
+		Output   string          `json:"output"`
+		ExitCode json.RawMessage `json:"exit_code"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &out) != nil {
+		return false
+	}
+	return len(out.ExitCode) > 0 && string(out.ExitCode) != "null" || strings.TrimSpace(out.Output) != ""
 }
 
 func (m *agyMapper) setWakeClose(fn func(uint64)) {
@@ -860,7 +998,11 @@ func (m *agyMapper) promptDropped(id string) {
 	m.mu.Unlock()
 }
 
-// answerFor is the raw request id and option id that answer approval id.
+// answerFor is the raw request id and option id that answer approval id. A
+// denial is reject_once only: reject_always would make agy refuse that
+// tool for the rest of the session, past the one request denied. A request
+// without reject_once gets no answer (AnswerApproval: errNoApprovalAnswer)
+// and stays for the user.
 func (m *agyMapper) answerFor(id string, allow bool) (json.RawMessage, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -868,7 +1010,7 @@ func (m *agyMapper) answerFor(id string, allow bool) (json.RawMessage, string, e
 	if a == nil {
 		return nil, "", fmt.Errorf("agy has no pending permission request %q", id)
 	}
-	kinds := []string{"reject_once", "reject_always"}
+	kinds := []string{"reject_once"}
 	if allow {
 		kinds = []string{"allow_once", "allow_always"}
 	}
@@ -914,10 +1056,11 @@ func (m *agyMapper) mapAgyLine(line []byte, replies lineReplies, seq uint64) []E
 		return m.request(msg, replies, now)
 	case msg.Method == "session/update":
 		oldFailure := m.modelFailure
+		m.content = false
 		out := m.update(msg.Params, replies, now)
 		if _, replaying := replies.(silentReplies); !replaying {
 			n := len(m.pendingTools)
-			out = append(out, Event{ModelActivity: &n})
+			out = append(out, Event{ModelActivity: &n, ModelContent: m.content})
 			if oldFailure != m.modelFailure {
 				if oldFailure != "" && m.modelFailure == "" {
 					out = append(out, Event{Notice: "agy recovered after in-band model failure: " + oldFailure})
@@ -964,6 +1107,11 @@ func (m *agyMapper) request(msg agyMessage, replies lineReplies, now int64) []Ev
 	m.approvals[id] = &agyApproval{raw: raw, toolCallID: p.ToolCall.ToolCallID, options: p.Options}
 	if p.ToolCall.ToolCallID != "" {
 		m.approvalOf[p.ToolCall.ToolCallID] = id
+		if len(m.requested) >= agyCorrelationCap {
+			clear(m.requested)
+			clear(m.ranUnrequested)
+		}
+		m.requested[p.ToolCall.ToolCallID] = true
 	}
 	input := p.ToolCall.Args
 	if len(input) == 0 {
@@ -1344,6 +1492,7 @@ type agyUpdate struct {
 	Title             string            `json:"title"`
 	Status            string            `json:"status"`
 	Args              json.RawMessage   `json:"args"`
+	RawOutput         json.RawMessage   `json:"rawOutput"`
 	Used              *int64            `json:"used"`
 	Size              int64             `json:"size"`
 	CurrentModeID     string            `json:"currentModeId"`
@@ -1362,6 +1511,11 @@ func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int6
 	_, replaying := replies.(silentReplies)
 	if u.SessionUpdate != "agent_message_chunk" {
 		m.rate.breakRun(replaying)
+	}
+	switch u.SessionUpdate {
+	case "agent_message_chunk", "agent_thought_chunk", "ws_activity", "plan":
+		// A holder pulse stands in for dropped thought lines.
+		m.content = true
 	}
 	switch u.SessionUpdate {
 	case "agent_message_chunk":
@@ -1430,13 +1584,13 @@ func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int6
 		if u.ToolCallID != "" && u.Status != "completed" && u.Status != "failed" {
 			m.pendingTools[u.ToolCallID] = true
 			isDaemon := false
-			if name == "run_command" {
+			if name == agyCommandTool {
 				var args struct {
 					IsDaemon bool `json:"IsDaemon"`
 				}
 				_ = json.Unmarshal(u.Args, &args)
 				isDaemon = args.IsDaemon
-				if !isDaemon {
+				if !isDaemon && !m.cutover {
 					m.openBg[u.ToolCallID] = true
 				}
 			}
@@ -1446,6 +1600,9 @@ func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int6
 		}
 		out = append(out, m.batches.addCall(m.groupID(), u.ToolCallID, name, argsPreview(u.Args), now)...)
 		m.groupCalls = true
+		if name == agyInvokeSubagentTool {
+			out = append(out, m.nativeStart(u, now)...)
+		}
 		return append(out, m.toolStatus(u, replaying, now)...)
 	case "tool_call_update":
 		return m.toolStatus(u, replaying, now)
@@ -1499,10 +1656,26 @@ func (m *agyMapper) toolStatus(u agyUpdate, replaying bool, now int64) []Event {
 		return nil
 	}
 	failed := u.Status == "failed"
+	var out []Event
+	if name := cmp.Or(u.Name, u.Title); name == agyCommandTool && u.ToolCallID != "" && !m.requested[u.ToolCallID] && !m.ranUnrequested[u.ToolCallID] && agyCommandRan(u.RawOutput) {
+		// An in_progress announcement may precede the request; only output
+		// or an exit code shows the command actually ran without one.
+		m.ranUnrequested[u.ToolCallID] = true
+		out = append(out, Event{UnrequestedCommand: u.ToolCallID})
+	}
 	delete(m.pendingTools, u.ToolCallID)
 	delete(m.openCalls, u.ToolCallID)
 	delete(m.openBg, u.ToolCallID)
-	out := m.batches.endCall(u.ToolCallID, failed, now)
+	out = append(out, m.batches.endCall(u.ToolCallID, failed, now)...)
+	if m.nativeLaunch[u.ToolCallID] {
+		// A completed launch only means the child runs asynchronously; its
+		// row stays running until the runner settles it at the parent's
+		// logical turn end. A failed launch ends the row here.
+		delete(m.nativeLaunch, u.ToolCallID)
+		if failed {
+			out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Status: wslive.StatusFailed, At: now}})
+		}
+	}
 	if id, ok := m.approvalOf[u.ToolCallID]; ok {
 		delete(m.approvalOf, u.ToolCallID)
 		delete(m.approvals, id)
@@ -1517,6 +1690,57 @@ func (m *agyMapper) toolStatus(u agyUpdate, replaying bool, now int64) []Event {
 		out = append(out, resultEvents(TrackerWriteTool, "")...)
 	}
 	m.armWakeIfReadyLocked(replaying)
+	return out
+}
+
+// forgetNativeLaunches drops the launch correlation of native rows the
+// runner settled (cancellation, a replay's end, an accepted turn end): no
+// launch failure can change a settled row, so a launch that never reports
+// a final status leaves nothing behind. A watchdog continuation settles
+// nothing, so a launch failure reported after it still ends its row.
+func (p *agyProcess) forgetNativeLaunches(rowIDs []string) {
+	p.m.mu.Lock()
+	defer p.m.mu.Unlock()
+	for _, id := range rowIDs {
+		delete(p.m.nativeLaunch, strings.TrimPrefix(id, wslive.NativeAgyPrefix))
+	}
+}
+
+// agyInvokeSubagentTool is agy's native subagent launch tool. It stays an
+// adapter-local name: the catalog's native-subagent removal entry is left
+// unset on purpose, since filling it adds a "never use" line to the hosted
+// lead prompt.
+const agyInvokeSubagentTool = "invoke_subagent"
+
+// nativeStart opens a running native subagent row for a hosted lead's
+// invoke_subagent call: id agy-native:<toolCallId>, labelled by Role, else
+// TypeName, else "subagent". The Prompt argument is never read into the row.
+// agy reports no child id, progress, or end, so the row carries no wake,
+// turn, or batch authority and ends only by a failed launch (toolStatus) or
+// the runner's end-unknown settlement.
+func (m *agyMapper) nativeStart(u agyUpdate, now int64) []Event {
+	if !m.lead || u.ToolCallID == "" {
+		return nil
+	}
+	var args struct {
+		Role     string `json:"Role"`
+		TypeName string `json:"TypeName"`
+	}
+	_ = json.Unmarshal(u.Args, &args)
+	label := strings.TrimSpace(args.Role)
+	if label == "" {
+		label = strings.TrimSpace(args.TypeName)
+	}
+	if label == "" {
+		label = "subagent"
+	}
+	if u.Status != "completed" && u.Status != "failed" {
+		m.nativeLaunch[u.ToolCallID] = true
+	}
+	out := []Event{{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Label: label, Status: wslive.StatusRunning, At: now}}}
+	if u.Status == "failed" {
+		out = append(out, Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + u.ToolCallID, Status: wslive.StatusFailed, At: now}})
+	}
 	return out
 }
 

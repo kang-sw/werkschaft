@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1018,5 +1019,219 @@ for line in sys.stdin:
 	})
 	if n := lost(); n != 0 {
 		t.Errorf("after a consumer's replay the holder has lost %d records, want none: the manager received them all", n)
+	}
+}
+
+// TestSpawnHTTP2CaptureFiltersStderr: a spawn's HTTP2Capture reaches a real
+// holder, which keeps framer summaries in the capture file and every Go
+// HTTP/2 debug line out of the records the daemon receives; ordinary stderr
+// still arrives. The trace text is synthetic.
+func TestSpawnHTTP2CaptureFiltersStderr(t *testing.T) {
+	dir := testHoldersDir(t)
+	sink := newCollector()
+	m := testManager(t, dir, sink)
+	id, err := m.Launch(json.RawMessage(`{"kind":"test"}`))
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	capture := filepath.Join(t.TempDir(), "frames.log")
+	child := `
+import sys
+sys.stderr.write("plain before\n")
+sys.stderr.write("2026/11/22 12:00:00 http2: Transport encoding header \"authorization\" = \"Bearer SECRET\"\n")
+sys.stderr.write("2026/11/22 12:00:00 http2: Framer 0xc0001: wrote HEADERS flags=END_HEADERS stream=1 len=300\n")
+sys.stderr.write("http2: Framer 0xc0001: read DATA stream=1 len=20 data=\"SECRET reply\"\n")
+sys.stderr.write("plain after\n")
+sys.stderr.flush()
+`
+	if _, err := m.Client(id).Spawn(SpawnSpec{Argv: []string{testPython(t), "-c", child}, Mode: "pipe", HTTP2Capture: &HTTP2Capture{Path: capture, MaxBytes: 1 << 20}}); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	waitFor(t, "the child's exit record", func() bool {
+		for _, ev := range sink.snapshot(id) {
+			if ev.Event == "exit" {
+				return true
+			}
+		}
+		return false
+	})
+	if got := sink.output(id); got != "plain before\nplain after\n" {
+		t.Fatalf("records = %q, want only the plain stderr lines", got)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		_, rest, _ := strings.Cut(line, " ")
+		kept = append(kept, rest)
+	}
+	want := []string{"Framer 0xc0001: wrote HEADERS flags=END_HEADERS stream=1 len=300", "Framer 0xc0001: read DATA stream=1 len=20"}
+	if !slices.Equal(kept, want) || strings.Contains(string(data), "SECRET") {
+		t.Fatalf("capture = %q, want %q", data, want)
+	}
+}
+
+// The daemon's cutoff marker goes through the holder's capture, which is
+// the file's only writer; a child spawned without a capture gets none.
+func TestCaptureNoteWritesThroughTheHolderCapture(t *testing.T) {
+	dir := testHoldersDir(t)
+	sink := newCollector()
+	m := testManager(t, dir, sink)
+	child := "import sys\nprint('ready', flush=True)\nsys.stdin.read()\n"
+	for _, withCapture := range []bool{true, false} {
+		id, err := m.Launch(json.RawMessage(`{"kind":"test"}`))
+		if err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		capture := filepath.Join(t.TempDir(), "frames.log")
+		spec := SpawnSpec{Argv: []string{testPython(t), "-c", child}, Mode: "pipe"}
+		if withCapture {
+			spec.HTTP2Capture = &HTTP2Capture{Path: capture, MaxBytes: 1 << 20}
+		}
+		c := m.Client(id)
+		if _, err := c.Spawn(spec); err != nil {
+			t.Fatalf("spawn: %v", err)
+		}
+		waitFor(t, "the child's ready line", func() bool { return strings.Contains(sink.output(id), "ready") })
+		captured, err := c.CaptureNote("ws: headerless cutoff boundary=b cutoff=c")
+		if err != nil || captured != withCapture {
+			t.Fatalf("capture %v: CaptureNote = %v, %v", withCapture, captured, err)
+		}
+		data, err := os.ReadFile(capture)
+		switch {
+		case withCapture && (err != nil || !strings.HasSuffix(string(data), " ws: headerless cutoff boundary=b cutoff=c\n")):
+			t.Fatalf("capture = %q, %v", data, err)
+		case !withCapture && !os.IsNotExist(err):
+			t.Fatalf("a child without a capture got a file: %q, %v", data, err)
+		}
+		if err := c.Input(nil, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestLaunchThatFailsToAttachReturnsTheHolderID: a holder that registered
+// but could not be attached runs on, so LaunchWith's failure names it and
+// the caller can stop it.
+func TestLaunchThatFailsToAttachReturnsTheHolderID(t *testing.T) {
+	python := testPython(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	var started string
+	applies := false
+	m := New(Options{
+		Dir:       testHoldersDir(t),
+		Python:    python,
+		breakaway: &applies,
+		start: func(exe string, args []string, cwd string, breakaway bool) (*exec.Cmd, error) {
+			var dir string
+			for i := 0; i+1 < len(args); i++ {
+				switch args[i] {
+				case "--dir":
+					dir = args[i+1]
+				case "--id":
+					started = args[i+1]
+				}
+			}
+			// A process that registers a port nothing answers on.
+			cmd := exec.Command(python, "-c", "import time; time.sleep(60)")
+			if err := cmd.Start(); err != nil {
+				return nil, err
+			}
+			t.Cleanup(func() { _ = cmd.Process.Kill() })
+			raw, _ := json.Marshal(Descriptor{Schema: 1, ID: started, PID: cmd.Process.Pid, Port: port, Token: "t", Protocol: protocolVersion})
+			if err := os.WriteFile(filepath.Join(dir, descriptorName), raw, 0o600); err != nil {
+				_ = cmd.Process.Kill()
+				return nil, err
+			}
+			return cmd, nil
+		},
+	})
+	t.Cleanup(m.Close)
+	id, err := m.LaunchWith(LaunchSpec{})
+	if err == nil {
+		t.Fatal("LaunchWith with a holder that does not answer succeeded")
+	}
+	if id == "" || id != started {
+		t.Fatalf("LaunchWith's failure named holder %q, want %q (%v)", id, started, err)
+	}
+}
+
+// TestScanReportsADescriptorItCouldNotRead: a holder directory whose
+// descriptor does not read (and is too fresh to clear as an orphan) may
+// hold a running holder, so the listing says it is incomplete until a scan
+// reads every registration again.
+func TestScanReportsADescriptorItCouldNotRead(t *testing.T) {
+	dir := testHoldersDir(t)
+	m := testManager(t, dir, nil)
+	m.Scan()
+	if m.List().Incomplete {
+		t.Fatal("an empty holders directory listed as incomplete")
+	}
+	holderDir := filepath.Join(dir, "unreadable")
+	if err := os.MkdirAll(holderDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(holderDir, descriptorName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if !m.List().Incomplete {
+		t.Fatal("a scan that could not read a holder's descriptor listed as complete")
+	}
+	if err := os.RemoveAll(holderDir); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if m.List().Incomplete {
+		t.Fatal("a scan that read every descriptor still listed as incomplete")
+	}
+}
+
+// TestScanKeepsAnAgedDirectoryWhoseDescriptorDoesNotRead: past the orphan
+// grace, a holder directory with no descriptor is cleared and the listing
+// is complete, but one whose descriptor exists and does not parse may still
+// belong to a live holder: it stays, and the listing stays incomplete.
+func TestScanKeepsAnAgedDirectoryWhoseDescriptorDoesNotRead(t *testing.T) {
+	dir := testHoldersDir(t)
+	long := time.Now().Add(-2 * orphanDirGrace)
+	empty := filepath.Join(dir, "empty")
+	corrupt := filepath.Join(dir, "corrupt")
+	for _, d := range []string{empty, corrupt} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(corrupt, descriptorName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{empty, corrupt} {
+		if err := os.Chtimes(d, long, long); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := testManager(t, dir, nil)
+	m.Scan()
+	if _, err := os.Stat(empty); !os.IsNotExist(err) {
+		t.Errorf("the aged directory with no descriptor was not cleared: %v", err)
+	}
+	if _, err := os.Stat(corrupt); err != nil {
+		t.Errorf("the aged directory whose descriptor does not read was removed: %v", err)
+	}
+	if !m.List().Incomplete {
+		t.Error("a scan that could not read an existing descriptor listed as complete")
+	}
+	if err := os.RemoveAll(corrupt); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if m.List().Incomplete {
+		t.Error("a scan with only cleared orphans still listed as incomplete")
 	}
 }

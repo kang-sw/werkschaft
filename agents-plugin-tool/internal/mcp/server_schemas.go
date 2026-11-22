@@ -299,6 +299,21 @@ func tools() []map[string]any {
 			"inputSchema": execWriteSchema(),
 		},
 		{
+			"name":        "fs.read",
+			"description": "Read a text file's lines, numbered from one. offset is how many lines to skip and limit how many to return (default 200, at most 2000). A binary file is refused. The reply holds at most 4 KiB and says where to continue when cut.",
+			"inputSchema": fsReadSchema(),
+		},
+		{
+			"name":        "fs.grep",
+			"description": "Search a file, or every text file under a directory, for lines matching a regular expression (RE2 syntax). Matches come back as path:line:text with one-based line numbers; binary files and .git directories are skipped, and glob filters file names. At most 100 matches and 4 KiB per reply, with the cut said.",
+			"inputSchema": fsGrepSchema(),
+		},
+		{
+			"name":        "fs.list",
+			"description": "List a directory's entries, sorted, with a trailing / on directories; glob filters names. At most 500 entries and 4 KiB per reply, with the cut said.",
+			"inputSchema": fsListSchema(),
+		},
+		{
 			"name":        "exec.status",
 			"description": "Return lifecycle status and stream sizes for a durable exec job.",
 			"inputSchema": execKeySchema(),
@@ -379,7 +394,7 @@ func tools() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"tier":    stringProperty("Fixed tier to resolve: small, medium, large, or xlarge."),
+					"tier":    stringProperty("Tier to resolve: small, medium, large, or xlarge; any other agent.spawn tier (a rendered role tier, alias, <harness>.<tier>, or bundle) resolves through agent.tier_routing and reports its trace."),
 					"harness": stringProperty("Optional harness selector (e.g. codex, claude, pi). When omitted, defaults to the current session's detected harness, or default when none is known."),
 					"format":  stringProperty(formatPropertyDescription),
 				},
@@ -523,7 +538,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "worktree.acquire",
-			"description": "Lead-only. Provision a pooled Git worktree of a named profile for a parallel worker: reuse an idle one of that profile or create one, create target_branch on base when absent and check it out, reset the tree, run the profile's hooks, and mint a worker session key bound to it. Refused when the worktree would hide the ticket board its commit tracks; a failing hook quarantines the worktree and fails the call. A result nudge lists stale pooled worktrees: relay it to the user, who decides on worktree.remove. Profiles: builtins full and housekeeping (ai-docs only), plus worktree.profile.<name> (config.list). Text by default.",
+			"description": "Lead-only. Provision a pooled Git worktree of a named profile for a parallel worker: reuse an idle, unleased, unoccupied one of that profile or create one, create target_branch on base when absent and check it out, reset the tree, run the profile's hooks, and mint a worker session key bound to it. Refused when the worktree would hide the ticket board its commit tracks; a failing hook quarantines the worktree and fails the call. A result nudge lists stale pooled worktrees: relay it to the user, who decides on worktree.remove. Profiles: builtins full and housekeeping (ai-docs only), plus worktree.profile.<name> (config.list). Text by default.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -537,13 +552,13 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "worktree.release",
-			"description": "Lead-only. Return a worktree to the pool by path or worker key: run pre_release hooks, reset --hard and clean -ffdx (discarding uncommitted and unpreserved ignored files), detach HEAD, record preserved size and remove its lease. Hook failure leaves it leased. Does not delete the worktree or retire the key. Refuses another holder's lease, a dirty unleased worktree, or a worktree with non-closed bound child agents unless forced. Text by default; format=json for structured output.",
+			"description": "Lead-only. Return a worktree to the pool by path or worker key: run pre_release hooks, reset --hard and clean -ffdx (discarding uncommitted and unpreserved ignored files), detach HEAD, record preserved size and remove its lease. Hook failure leaves it leased. Does not delete the worktree or retire the key. Refuses another holder's lease, a dirty unleased worktree, or child agents bound since its last release unless forced. Agents bound before a release no longer launch, wake or resume there. Text by default; format=json for structured output.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path":   stringProperty("Absolute worktree path to release. Provide path or key."),
 					"key":    stringProperty("A worker session key bound to the worktree to release. Provide path or key."),
-					"force":  boolProperty("Release another holder's lease, a dirty unleased worktree, or a worktree with non-closed bound child agents. Confirm the owner and bound children are gone or agreed first; uncommitted work is discarded."),
+					"force":  boolProperty("Root lead only. Release another holder's lease, a dirty unleased worktree, or one with bound child agents (their turns are interrupted). Confirm the owner and children are gone or agreed first; uncommitted work is discarded."),
 					"format": stringProperty(formatPropertyDescription),
 				},
 			},
@@ -1168,7 +1183,7 @@ func tools() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"kind":  enumStringProperty(`Generated path kind. "review" and "prompt" allocate cache artifacts; "plan" allocates a repo-local implementation plan under ai-docs/.plans/; "clone" allocates a worktree-agnostic shared doc under the clone's SharedDir (readable "<stem>-<suffix>.md" filename), for the note.write clone-layer oversize nudge.`, []string{"review", "prompt", "plan", "clone"}),
+					"kind":  enumStringProperty(`Generated path kind. "review", "report" and "prompt" allocate cache artifacts ("report" is for standalone reports and analyses, in its own directory; an older server refuses it, so check this enum first); "plan" allocates a repo-local implementation plan under ai-docs/.plans/; "clone" allocates a worktree-agnostic shared doc under the clone's SharedDir (readable "<stem>-<suffix>.md" filename), for the note.write clone-layer oversize nudge.`, []string{"review", "report", "prompt", "plan", "clone"}),
 					"stems": stringArrayProperty("Logical file stems to allocate in stable order."),
 				},
 				"required": []string{"kind", "stems"},
@@ -1272,6 +1287,7 @@ func toolSchemaRequiresSessionKey(name string) bool {
 	case "api.list",
 		"exec.spawn", "exec.shell", "exec.status", "exec.result", "exec.abort", "exec.raw.tail", "exec.raw.read", "exec.raw.grep",
 		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write",
+		"fs.read", "fs.grep", "fs.list",
 		"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.merge",
 		"rationale.query", "git.followups",
 		"project_tree",
@@ -1538,4 +1554,32 @@ func objectArrayProperty(description string) map[string]any {
 		"description": description,
 		"items":       map[string]any{"type": "object"},
 	}
+}
+
+// fsPathProperty is the path every fs.* tool reads.
+func fsPathProperty(what string) map[string]string {
+	return stringProperty(what + " A relative path resolves beneath the session's worktree root; an absolute path is read as given.")
+}
+
+func fsReadSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path":   fsPathProperty("The file to read."),
+		"offset": integerProperty("How many lines to skip before the first returned line. Defaults to 0."),
+		"limit":  integerProperty("How many lines to return. Defaults to 200; at most 2000."),
+	}, "required": []string{"path"}}
+}
+
+func fsGrepSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"pattern": stringProperty("The regular expression (RE2 syntax) a line must match."),
+		"path":    fsPathProperty("The file or directory to search."),
+		"glob":    stringProperty("Optional file-name pattern (for example *.go) a searched file's name must match."),
+	}, "required": []string{"pattern", "path"}}
+}
+
+func fsListSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path": fsPathProperty("The directory to list."),
+		"glob": stringProperty("Optional name pattern (for example *.md) an entry's name must match."),
+	}, "required": []string{"path"}}
 }

@@ -17,6 +17,10 @@ type TicketChange struct {
 	ToStatus      string `json:"to_status,omitempty"`
 	ResultAdded   bool   `json:"result_added,omitempty"`
 	ResultHeading string `json:"result_heading,omitempty"`
+	// Kind is the first letter of the name-status code (A, M, D, R, ...). It
+	// lets the text formatter word an entry with no source status as an edit,
+	// an addition or a deletion; the JSON shape is unchanged.
+	Kind string `json:"-"`
 }
 
 func detectTicketChanges(ctx context.Context, runner Runner, root string) []TicketChange {
@@ -72,6 +76,7 @@ func parseTicketNameStatus(out []byte) []TicketChange {
 		if !ok {
 			continue
 		}
+		change.Kind = code[:1]
 		if oldPath != "" {
 			if oldChange, ok := ticketChangeForPath(oldPath); ok {
 				change.OldPath = oldPath

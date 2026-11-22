@@ -51,6 +51,15 @@ type HostedJobRow struct {
 	Tool string
 	Root string
 	Cwd  string
+	// RealRoot and RealCwd are Root and Cwd as admission resolved them
+	// (admittedPlaces), stored even when equal to them; RealCwd is "" only
+	// for an empty Cwd, and both are "" only in a row an older daemon wrote.
+	// The worktree fence matches a job by them too, so a replaced daemon
+	// keeps the place the job started in even after an alias it was
+	// launched through changed, or its directory was renamed and an alias
+	// put in its place.
+	RealRoot string
+	RealCwd  string
 	// Argv is what ran; Command and Shell are a shell launch's line and
 	// shell, as the legacy record keeps them.
 	Argv    []string
@@ -152,6 +161,8 @@ type HostedSessions interface {
 
 // HostedHolders is the holder manager as the hosted jobs use it.
 type HostedHolders interface {
+	// LaunchWith's failure with an id is a holder that registered and runs
+	// unattached; the caller stops it.
 	LaunchWith(spec wsholder.LaunchSpec) (string, error)
 	Spawn(id string, spec wsholder.SpawnSpec) (wsholder.ChildStatus, error)
 	Input(id string, data []byte, eof bool) error

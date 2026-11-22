@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -54,17 +55,31 @@ type AgentCaller struct {
 	// what a relative cwd, worktree or system_prompt_path is joined to.
 	Root    string
 	WorkDir string
-	// Harness is the caller's own harness: a bare tier resolves there.
+	// Harness is the caller's own harness: a bare tier resolves there. A
+	// lead's comes from its connection's detection, so it selects tiers
+	// only and never admits a worker.
 	Harness string
+	// VerifiedBackend is the backend the caller is verified to run on: a
+	// daemon-hosted lead's own record backend, or a token holder's record
+	// backend. Empty is no verified binding, which a backend registered
+	// with a cross-harness refusal treats as another harness (admitWorker).
+	// A spawn stamps it on the child (Record.SpawnerBackend).
+	VerifiedBackend string
 	// Config is where agents.tier and agent.tier_aliases are read.
 	Config wsconfig.Options
+	// PolicyKey is the caller's own ws session key. A child's key inherits
+	// the caller's session-scope config through it (ChildKeyStore); empty
+	// mints an independent key.
+	PolicyKey string
 	// holder is a token holder's own record (a nested spawn): its depth
 	// and tier cap the child's. Nil for a lead.
 	holder *Record
 }
 
 // LeadCaller is a lead session's agent.* caller: replyID is the lead's
-// mailbox reply-id, the parent its children record.
+// mailbox reply-id, the parent its children record. It carries no
+// VerifiedBackend; a daemon-hosted lead's server sets it from the lead's
+// own record.
 func LeadCaller(replyID, root, harness string, cfg wsconfig.Options) AgentCaller {
 	return AgentCaller{Parent: ParentRef{Kind: ParentLead, ReplyID: replyID}, Root: root, Harness: harness, Config: cfg}
 }
@@ -74,12 +89,14 @@ func (r *Runner) holderCaller(rec Record) AgentCaller {
 	cfg := r.opts.Config
 	cfg.RepoRoot = rec.Root
 	return AgentCaller{
-		Parent:  ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID},
-		Root:    rec.Root,
-		WorkDir: rec.workDir(),
-		Harness: rec.Backend,
-		Config:  cfg,
-		holder:  &rec,
+		Parent:          ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID},
+		Root:            rec.Root,
+		WorkDir:         rec.workDir(),
+		Harness:         rec.Backend,
+		VerifiedBackend: rec.Backend,
+		Config:          cfg,
+		PolicyKey:       rec.WSKey,
+		holder:          &rec,
 	}
 }
 
@@ -174,6 +191,77 @@ type AgentTiers struct {
 	// Unavailable names each registered worker harness no tier of which is
 	// spawnable now, and why.
 	Unavailable []string `json:"unavailable,omitempty"`
+	// Routing is the agent.tier_routing graph this daemon resolves role
+	// tiers and bundles through. A daemon without the graph omits it, so
+	// its absence is how a caller detects that role tiers are unsupported.
+	Routing *AgentRouting `json:"routing,omitempty"`
+}
+
+// AgentRouting is agent.tiers' routing section: whether role tiers resolve
+// here, why the graph is unusable when it is not (Error), each bundle and
+// node route with its trace, and the legacy aliases that shadow graph names.
+type AgentRouting struct {
+	Supported  bool              `json:"supported"`
+	Error      string            `json:"error,omitempty"`
+	Bundles    []AgentRouteEntry `json:"bundles"`
+	Routes     []AgentRouteEntry `json:"routes"`
+	Collisions []string          `json:"collisions,omitempty"`
+}
+
+// AgentRouteEntry is one routed tier: the token, its resolution trace, and
+// the binding it spawns with now; Error says why it is not spawnable.
+type AgentRouteEntry struct {
+	Tier    string `json:"tier"`
+	Trace   string `json:"trace,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// TierHarnesses are the harness names a tier route or bundle may name: the
+// built-in harnesses and every registered backend. A known harness that is
+// unavailable stays valid in config and reports at resolution.
+func TierHarnesses(registries ...map[string]BackendRegistration) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	for _, name := range BuiltinHarnessNames() {
+		add(name)
+	}
+	for _, reg := range registries {
+		for _, name := range sortedRegistrationNames(reg) {
+			add(name)
+		}
+	}
+	return out
+}
+
+func sortedRegistrationNames(reg map[string]BackendRegistration) []string {
+	names := make([]string, 0, len(reg))
+	for name := range reg {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// tierGraph is the effective agent.tier_routing graph for caller: the
+// packaged playbook roles (Options.TierRoles) with the user's overrides.
+func (r *Runner) tierGraph(caller AgentCaller) (*wsconfig.TierGraph, error) {
+	var roles []wsconfig.TierRole
+	if r.opts.TierRoles != nil {
+		var err error
+		if roles, err = r.opts.TierRoles(); err != nil {
+			return nil, fmt.Errorf("read packaged tier roles: %w", err)
+		}
+	}
+	return wsconfig.LoadTierGraph(caller.Config, roles, TierHarnesses(r.opts.Backends))
 }
 
 // Agent statuses: a turn runs; turn ended with background work running; the
@@ -212,17 +300,11 @@ func agentID(address string) string {
 	return strings.TrimPrefix(strings.TrimSpace(address), "id:")
 }
 
-// spawnableHarness reports why harness has no spawnable tier now: not
-// registered, lead-only, or not installed. "" is spawnable.
-func (r *Runner) spawnableHarness(harness string) string {
-	reg, ok := r.opts.Backends[harness]
-	if !ok || reg.Backend == nil {
-		return fmt.Sprintf("harness %q is not registered in this daemon", harness)
-	}
-	if !reg.WorkerCapable || reg.WorkerProfile == "" {
-		return fmt.Sprintf("harness %q is registered for hosted leads only, not for spawned workers", harness)
-	}
-	if ok, why := supportBackendAvailability(harness, reg.Backend); !ok {
+// spawnableHarness reports why harness has no spawnable tier now for a
+// caller verified on callerBackend: not registered, refused across
+// harnesses, or not installed. "" is spawnable.
+func (r *Runner) spawnableHarness(callerBackend, harness string) string {
+	if why := r.registeredWorker(callerBackend, harness); why != "" {
 		return why
 	}
 	if harness == BackendPi && r.opts.ChildCheck != nil {
@@ -231,6 +313,58 @@ func (r *Runner) spawnableHarness(harness string) string {
 		}
 	}
 	return ""
+}
+
+// registeredWorker is spawnableHarness before the child check: registration,
+// the caller admission, the worker role, and the executable on PATH. It runs
+// no subprocess.
+func (r *Runner) registeredWorker(callerBackend, harness string) string {
+	reg, ok := r.opts.Backends[harness]
+	if !ok || reg.Backend == nil {
+		return fmt.Sprintf("harness %q is not registered in this daemon", harness)
+	}
+	if err := r.admitWorker(harness, callerBackend); err != nil {
+		return err.Error()
+	}
+	if !reg.WorkerCapable || reg.WorkerProfile == "" {
+		return fmt.Sprintf("harness %q is registered for hosted leads only, not for spawned workers", harness)
+	}
+	if ok, why := supportBackendAvailability(harness, reg.Backend); !ok {
+		return why
+	}
+	return ""
+}
+
+// admitWorker is the one cross-harness worker admission, for both the
+// decision and its text: a worker on backend for a caller verified on
+// callerBackend ("" is none). Every worker entry passes it:
+//   - agent.spawn's tier resolution (spawnableHarness, registeredWorker);
+//   - a profile create (create), whose spawner is its spawn's caller and
+//     none for a dashboard or REST creation;
+//   - every launch or wake of an existing worker record (admitWorkerRecord);
+//   - a rejoin (reattach, checkReattach).
+//
+// The tier listing and the dashboard trace quote it too (registeredWorker,
+// unusableHarnessError). It refuses only a backend registered with a
+// cross-harness refusal, and only for a caller not verified on that same
+// backend; the record itself is kept.
+func (r *Runner) admitWorker(backend, callerBackend string) error {
+	if reason := r.opts.Backends[backend].crossHarnessRefusal; reason != "" && callerBackend != backend {
+		return &admissionRefusal{reason: reason}
+	}
+	return nil
+}
+
+// admitWorkerRecord is admitWorker for an existing record. It decides from
+// the record's immutable backend, lead flag, and spawner stamp (a legacy
+// record's is derived from its parent's record at startup,
+// resolveSpawnerBackends), before any profile resolution, so an edited or
+// removed profile cannot mask the refusal. A lead is never refused.
+func (r *Runner) admitWorkerRecord(rec Record) error {
+	if rec.Lead {
+		return nil
+	}
+	return r.admitWorker(rec.Backend, rec.SpawnerBackend)
 }
 
 // workerHarnesses are the registered worker-role backends, sorted.
@@ -243,6 +377,16 @@ func (r *Runner) workerHarnesses() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// unusableHarnessError is an alias or route entry's error for a harness with
+// no usable tiers for a caller verified on callerBackend: admitWorker's
+// refusal text, else the generic text.
+func (r *Runner) unusableHarnessError(callerBackend, harness string) string {
+	if err := r.admitWorker(harness, callerBackend); err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("harness %q has no spawnable tier now", harness)
 }
 
 func tierEntries(prefix string, tiers map[string]wsconfig.AgentTier) []AgentTierEntry {
@@ -260,7 +404,7 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 	out := AgentTiers{Harness: caller.Harness, Native: []AgentTierEntry{}, Ext: []AgentTierEntry{}, Aliases: []AgentAliasEntry{}}
 	usable := map[string]map[string]wsconfig.AgentTier{}
 	for _, h := range r.workerHarnesses() {
-		if why := r.spawnableHarness(h); why != "" {
+		if why := r.spawnableHarness(caller.VerifiedBackend, h); why != "" {
 			out.Unavailable = append(out.Unavailable, h+": "+why)
 			continue
 		}
@@ -288,13 +432,68 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 		entry := AgentAliasEntry{Alias: name, Target: target}
 		h, t, _ := strings.Cut(target, ".")
 		if tiers, ok := usable[h]; !ok {
-			entry.Error = fmt.Sprintf("harness %q has no spawnable tier now", h)
+			entry.Error = r.unusableHarnessError(caller.VerifiedBackend, h)
 		} else if m, ok := tiers[t]; !ok {
 			entry.Error = fmt.Sprintf("tier %q is not set for %s", t, h)
 		} else {
 			entry.Model, entry.Effort = m.Model, m.Effort
 		}
 		out.Aliases = append(out.Aliases, entry)
+	}
+	routing, err := r.agentRouting(caller, usable)
+	if err != nil {
+		return AgentTiers{}, err
+	}
+	out.Routing = routing
+	return out, nil
+}
+
+// agentRouting lists the routing graph for caller: each bundle, each role
+// at the size its playbook declares, and each group and user node at all
+// four sizes, with the binding each spawns with given usable (the
+// spawnable harnesses' tiers).
+func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]wsconfig.AgentTier) (*AgentRouting, error) {
+	graph, err := r.tierGraph(caller)
+	if err != nil {
+		return &AgentRouting{Supported: true, Error: err.Error(), Bundles: []AgentRouteEntry{}, Routes: []AgentRouteEntry{}}, nil
+	}
+	out := &AgentRouting{Supported: true, Bundles: []AgentRouteEntry{}, Routes: []AgentRouteEntry{}, Collisions: graph.Collisions()}
+	if gerr := graph.Err(); gerr != nil {
+		out.Error = gerr.Error()
+		return out, nil
+	}
+	entry := func(token string) AgentRouteEntry {
+		res, err := graph.Resolve(token, caller.Harness)
+		if err != nil {
+			return AgentRouteEntry{Tier: token, Error: err.Error()}
+		}
+		e := AgentRouteEntry{Tier: token, Trace: res.Trace(), Harness: res.Harness}
+		tiers, ok := usable[res.Harness]
+		switch {
+		case !ok:
+			e.Error = r.unusableHarnessError(caller.VerifiedBackend, res.Harness)
+		case res.Bundle != "":
+			e.Model, e.Effort = res.Model, res.Effort
+		default:
+			if m, ok := tiers[res.Size]; ok {
+				e.Model, e.Effort = m.Model, m.Effort
+			} else {
+				e.Error = fmt.Sprintf("tier %q is not set for %s", res.Size, res.Harness)
+			}
+		}
+		return e
+	}
+	bundles := graph.Bundles()
+	names := make([]string, 0, len(bundles))
+	for name := range bundles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out.Bundles = append(out.Bundles, entry(name))
+	}
+	for _, token := range graph.RouteTokens() {
+		out.Routes = append(out.Routes, entry(token))
 	}
 	return out, nil
 }
@@ -310,8 +509,11 @@ func tierAliases(cfg wsconfig.Options) (map[string]string, error) {
 }
 
 // resolveTier resolves agent.spawn's tier for caller: a bare tier on the
-// caller's harness, <harness>.<tier>, or an alias. A tier no spawnable
-// harness sets fails with the valid list.
+// caller's harness, <harness>.<tier>, an alias, or, through the
+// agent.tier_routing graph, a <node>:<size> role tier or a bundle name. A
+// tier no spawnable harness sets fails with the valid list. bare is the
+// tier rank the child records: the routed size, or xlarge for a bare bundle
+// name, which supplies its model and effort directly.
 func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare string, mapping wsconfig.AgentTier, err error) {
 	raw := strings.ToLower(strings.TrimSpace(tier))
 	if raw == "" {
@@ -329,7 +531,25 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 		}
 		target, ok := aliases[raw]
 		if !ok {
-			return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q is neither a tier, <harness>.<tier>, nor an alias in %s", tier, wsconfig.ItemAgentTierAliases))
+			// Not a legacy token: resolve it through the routing graph.
+			// Exact aliases already won above, so the graph's own alias
+			// checks only apply at the nodes a walk passes.
+			graph, gerr := r.tierGraph(caller)
+			if gerr != nil {
+				return "", "", mapping, gerr
+			}
+			res, rerr := graph.Resolve(raw, caller.Harness)
+			if rerr != nil {
+				return "", "", mapping, r.tierRefusal(caller, rerr.Error())
+			}
+			if res.Bundle != "" {
+				if why := r.spawnableHarness(caller.VerifiedBackend, res.Harness); why != "" {
+					return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why))
+				}
+				return res.Harness, res.Rank(), wsconfig.AgentTier{Backend: res.Harness, Model: res.Model, Effort: res.Effort}, nil
+			}
+			harness, bare = res.Harness, res.Size
+			break
 		}
 		h, t, _ := strings.Cut(target, ".")
 		harness, bare = h, t
@@ -337,18 +557,123 @@ func (r *Runner) resolveTier(caller AgentCaller, tier string) (harness, bare str
 	if bare == "" {
 		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q names no tier (small, medium, large, xlarge)", tier))
 	}
-	if why := r.spawnableHarness(harness); why != "" {
+	if why := r.spawnableHarness(caller.VerifiedBackend, harness); why != "" {
 		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s", tier, why))
 	}
-	tiers, err := wsconfig.HarnessTiers(caller.Config, harness)
+	mapping, err = harnessSlot(caller.Config, harness, bare)
+	var noSlot noTierSlotError
+	if errors.As(err, &noSlot) {
+		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %v", tier, err))
+	}
 	if err != nil {
-		return "", "", mapping, fmt.Errorf("read agents.tier: %w", err)
+		return "", "", mapping, err
+	}
+	return harness, bare, mapping, nil
+}
+
+// noTierSlotError is a harness with no agents.tier model at a size.
+type noTierSlotError struct{ harness, size string }
+
+func (e noTierSlotError) Error() string {
+	return fmt.Sprintf("%s.%s has no model in agents.tier (config.tune key \"agents.tier\" sets one)", e.harness, e.size)
+}
+
+// harnessSlot is the agents.tier model agent.spawn launches for harness at
+// bare: the harness's own slot, with no cross-harness fallback.
+func harnessSlot(cfg wsconfig.Options, harness, bare string) (wsconfig.AgentTier, error) {
+	tiers, err := wsconfig.HarnessTiers(cfg, harness)
+	if err != nil {
+		return wsconfig.AgentTier{}, fmt.Errorf("read agents.tier: %w", err)
 	}
 	mapping, ok := tiers[bare]
 	if !ok {
-		return "", "", mapping, r.tierRefusal(caller, fmt.Sprintf("tier %q: %s.%s has no model in agents.tier (config.tune key \"agents.tier\" sets one)", tier, harness, bare))
+		return mapping, noTierSlotError{harness, bare}
 	}
-	return harness, bare, mapping, nil
+	return mapping, nil
+}
+
+// RoutedTierBinding is the binding agent.spawn launches for a routing-graph
+// resolution, before harness availability: a bundle's own fields, else the
+// resolved harness's agents.tier slot at the resolved size. It never falls
+// back to another harness's slot, so a surface that reports it (render,
+// config.resolve_agent) names what the spawn uses or fails as it does.
+func RoutedTierBinding(cfg wsconfig.Options, res wsconfig.TierResolution) (wsconfig.AgentTier, error) {
+	if res.Bundle != "" {
+		return wsconfig.AgentTier{Backend: res.Harness, Model: res.Model, Effort: res.Effort}, nil
+	}
+	return harnessSlot(cfg, res.Harness, res.Size)
+}
+
+// SpawnableHarness reports why agent.spawn cannot launch harness now for a
+// caller verified on callerBackend ("" when it can): the availability check
+// a routed tier's terminal harness passes. callerBackend "" is a caller with
+// no verified binding.
+func (r *Runner) SpawnableHarness(callerBackend, harness string) string {
+	return r.spawnableHarness(callerBackend, harness)
+}
+
+// CallerRefusal is admitWorker's text for a worker on harness and a caller
+// verified on callerBackend ("" is none): why the harness refuses that
+// caller across harnesses, "" when it admits it. SpawnableHarness includes
+// it; a surface that must not fall back past a refusal asks it alone.
+func (r *Runner) CallerRefusal(callerBackend, harness string) string {
+	if err := r.admitWorker(harness, callerBackend); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// CallerBackend is the backend of the open conversation a ws-mcp connection
+// is authenticated as, read from the runner's memory alone (no record file):
+// conversation is the binding a hosted session token resolved to
+// (wsdashboard.ProxyHello.Conversation), capability the worker capability
+// token a launcher connection's environment carries (issueToken). A bound
+// conversation decides alone; "" is an unbound connection, or one whose
+// conversation is closed or unknown here. It is the verified caller backend
+// (AgentCaller.VerifiedBackend) of an MCP server's admission decisions.
+func (r *Runner) CallerBackend(conversation, capability string) string {
+	var c *conv
+	if conversation != "" {
+		r.mu.Lock()
+		c = r.convs[conversation]
+		r.mu.Unlock()
+	} else if holder, err := r.tokenHolder(capability); err == nil {
+		c = holder
+	}
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return ""
+	}
+	return c.rec.Backend
+}
+
+// HarnessAvailability is SpawnableHarness for an interactive view: it never
+// runs a probe subprocess. The child check (Pi's version) answers from
+// ChildCheckKnown; while that needs a probe, or no ChildCheckKnown is set,
+// known is false and why is empty: availability is not known yet. caller is
+// the view's caller harness, admitted as SpawnableHarness's callerBackend.
+func (r *Runner) HarnessAvailability(caller, harness string) (why string, known bool) {
+	if why := r.registeredWorker(caller, harness); why != "" {
+		return why, true
+	}
+	if harness != BackendPi || r.opts.ChildCheck == nil {
+		return "", true
+	}
+	if r.opts.ChildCheckKnown == nil {
+		return "", false
+	}
+	known, err := r.opts.ChildCheckKnown()
+	switch {
+	case !known:
+		return "", false
+	case err != nil:
+		return err.Error(), true
+	}
+	return "", true
 }
 
 // tierRefusal is a 400 naming why and every tier caller may spawn now.
@@ -364,6 +689,13 @@ func (r *Runner) tierRefusal(caller AgentCaller, why string) error {
 		for _, a := range list.Aliases {
 			if a.Error == "" {
 				valid = append(valid, a.Alias)
+			}
+		}
+		if list.Routing != nil {
+			for _, b := range list.Routing.Bundles {
+				if b.Error == "" {
+					valid = append(valid, b.Tier)
+				}
 			}
 		}
 	}

@@ -28,12 +28,15 @@ type fakeStream struct {
 	cond *sync.Cond
 	q    []func()
 	dead bool
+	// done is closed when the stream's goroutine returns.
+	done chan struct{}
 }
 
 func newFakeStream() *fakeStream {
-	s := &fakeStream{}
+	s := &fakeStream{done: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
 	go func() {
+		defer close(s.done)
 		for {
 			s.mu.Lock()
 			for len(s.q) == 0 && !s.dead {
@@ -61,6 +64,20 @@ func (s *fakeStream) push(fn func()) {
 	s.cond.Signal()
 }
 
+// drain waits until every record pushed before it has been delivered, or,
+// for a killed stream, until its goroutine has returned, so nothing of a
+// finished test is still running on this stream (and the test's own
+// goroutine is ordered after what it did).
+func (s *fakeStream) drain() {
+	sent := make(chan struct{})
+	s.push(func() { close(sent) })
+	select {
+	case <-sent:
+	case <-s.done:
+	case <-time.After(5 * time.Second):
+	}
+}
+
 func (s *fakeStream) kill() {
 	s.mu.Lock()
 	s.dead, s.q = true, nil
@@ -83,6 +100,7 @@ type fakeHolder struct {
 	ringBytes        int
 	ringSkip         string
 	inputs           []string
+	notes            []string
 	attached         bool
 	exited           bool
 	stream           *fakeStream
@@ -101,6 +119,8 @@ type fakeHolders struct {
 	sinks   []wsholder.Sink
 	holders map[string]*fakeHolder
 	order   []string
+	// streams is every delivery stream made, for drain.
+	streams []*fakeStream
 	// ops lists the launches, spawns, and stops asked for, in order
 	// ("launch h1", "spawn h1", "stop h1").
 	ops  []string
@@ -109,8 +129,13 @@ type fakeHolders struct {
 	// calls that ran into it.
 	callTimeout time.Duration
 	timeouts    int
-	// spawnErr fails Spawn and stopErr Stop (the holder stays).
-	spawnErr, stopErr error
+	// spawnErr fails Spawn and stopErr Stop (the holder stays); statusErr
+	// fails Status, so a rejoin's replay never learns where it ends.
+	spawnErr, stopErr, statusErr error
+	// captureHook, when set, runs as each CaptureNote begins (and may
+	// block it); captureCalls counts the CaptureNote calls begun.
+	captureHook  func()
+	captureCalls int
 	// refuse answers a control request of a subtype with an error; any
 	// other control request written to a child is answered with success,
 	// as a harness answers it.
@@ -122,6 +147,9 @@ type fakeHolders struct {
 	// scanHook, when set, runs at the start of each Scan, before it takes
 	// the lock (gateScan).
 	scanHook func()
+	// incomplete is the listing's Incomplete: the last scan could not read
+	// every holder's registration.
+	incomplete bool
 	// failInput fails the next n inputs whose first line has a type (a
 	// negative n fails every one), as a write to a gone child does; the
 	// failed input reaches no child.
@@ -206,7 +234,7 @@ func (f *fakeHolders) Scan() {
 		if h.attached {
 			continue
 		}
-		h.attached, h.stream = true, newFakeStream()
+		h.attached, h.stream = true, f.newStreamLocked()
 		for _, ev := range h.ring[h.first:] {
 			if ev.Seq >= h.lostFrom && ev.Seq < h.lostTo {
 				if ev.Seq == h.lostFrom {
@@ -223,7 +251,7 @@ func (f *fakeHolders) Scan() {
 func (f *fakeHolders) List() wsholder.Listing {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out wsholder.Listing
+	out := wsholder.Listing{Incomplete: f.incomplete}
 	for _, id := range f.order {
 		h := f.holders[id]
 		if h == nil || !h.known {
@@ -253,7 +281,7 @@ func (f *fakeHolders) newLocked(session json.RawMessage, attached bool) *fakeHol
 	f.next++
 	h := &fakeHolder{id: fmt.Sprintf("h%d", f.next), pid: 4000 + f.next, session: session, attached: attached, known: attached}
 	if attached {
-		h.stream = newFakeStream()
+		h.stream = f.newStreamLocked()
 	}
 	f.holders[h.id] = h
 	f.order = append(f.order, h.id)
@@ -397,12 +425,58 @@ func (f *fakeHolders) Input(id string, data []byte, eof bool) error {
 	return f.call(id, "input")
 }
 
+// CaptureNote is the holder's capture_note operation: a holder whose child
+// was spawned with a frame capture takes the note, any other answers false.
+func (f *fakeHolders) CaptureNote(id, text string) (bool, error) {
+	f.mu.Lock()
+	f.captureCalls++
+	hook := f.captureHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err := f.call(id, "capture_note"); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.holders[id]
+	if h == nil {
+		return false, wsholder.ErrDetached
+	}
+	if h.spec == nil || h.spec.HTTP2Capture == nil {
+		return false, nil
+	}
+	h.notes = append(h.notes, text)
+	return true, nil
+}
+
+// captureCallCount is the number of CaptureNote calls begun.
+func (f *fakeHolders) captureCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.captureCalls
+}
+
+// captureNotes are the capture notes holder id took.
+func (f *fakeHolders) captureNotes(id string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if h := f.holders[id]; h != nil {
+		return slices.Clone(h.notes)
+	}
+	return nil
+}
+
 func (f *fakeHolders) Status(id string) (wsholder.AttachInfo, error) {
 	if err := f.call(id, "status"); err != nil {
 		return wsholder.AttachInfo{}, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.statusErr != nil {
+		return wsholder.AttachInfo{}, f.statusErr
+	}
 	h := f.holders[id]
 	if h == nil {
 		return wsholder.AttachInfo{}, wsholder.ErrDetached
@@ -491,6 +565,25 @@ func (f *fakeHolders) exit(id string, code int) {
 
 // restart is the daemon's end: every connection closes, and the holders
 // run on for the next daemon to find.
+// newStreamLocked makes a holder's delivery stream and remembers it for
+// drain, killed or not.
+func (f *fakeHolders) newStreamLocked() *fakeStream {
+	s := newFakeStream()
+	f.streams = append(f.streams, s)
+	return s
+}
+
+// drain waits for every stream the holders ever had to deliver what it was
+// given (or, if killed, to stop).
+func (f *fakeHolders) drain() {
+	f.mu.Lock()
+	streams := slices.Clone(f.streams)
+	f.mu.Unlock()
+	for _, s := range streams {
+		s.drain()
+	}
+}
+
 func (f *fakeHolders) restart() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -785,16 +878,19 @@ func (b *logBuffer) String() string {
 // fake holder host: nothing is executed, and the test writes the harness's
 // output lines itself.
 type leadHarness struct {
-	t       *testing.T
-	dir     string
-	root    string
-	opts    Options
-	holders *fakeHolders
-	keys    *fakeLeadKeys
-	mail    *fakeMail
-	log     *logBuffer
-	runner  *Runner
-	syncs   int
+	// execJobs, when set, is bound as the hosted exec jobs of every runner
+	// the harness starts.
+	execJobs ExecJobs
+	t        *testing.T
+	dir      string
+	root     string
+	opts     Options
+	holders  *fakeHolders
+	keys     *fakeLeadKeys
+	mail     *fakeMail
+	log      *logBuffer
+	runner   *Runner
+	syncs    int
 	// notes counts the runner's page notifications.
 	notes atomic.Int64
 }
@@ -912,7 +1008,14 @@ func leadLauncherPlugin(t *testing.T, argv []string) string {
 func (h *leadHarness) start() *leadHarness {
 	h.runner = NewRunner(h.opts)
 	h.runner.Start(func(string, string) { h.notes.Add(1) })
+	if h.execJobs != nil {
+		h.runner.BindExecJobs(h.execJobs)
+	}
 	h.t.Cleanup(h.runner.Close)
+	// Runs before Close: the holders' streams deliver on goroutines of their
+	// own, and what they still have to deliver must not outlive the test (it
+	// would race with the package-global changes of the next one).
+	h.t.Cleanup(h.holders.drain)
 	return h
 }
 

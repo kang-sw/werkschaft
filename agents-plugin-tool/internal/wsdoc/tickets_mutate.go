@@ -367,6 +367,14 @@ func invalidRouteFactValues(path, stem string) error {
 	return nil
 }
 
+// TicketOwesRouteFacts reports whether a ticket of this stem is routed and
+// implemented, so a ready/ copy of it must carry a `## Route Facts` section.
+// Epic, research and workset tickets are board artifacts and owe none.
+func TicketOwesRouteFacts(stem string) bool {
+	match := ticketCategoryRE.FindStringSubmatch(stem)
+	return len(match) != 2 || !nonImplementationCategories[match[1]]
+}
+
 // missingRouteFacts reports whether a ticket landing in ready/ owes a
 // `## Route Facts` section and does not have one. Value validation is a
 // separate check. A ticket with no implementation phases is never routed, so

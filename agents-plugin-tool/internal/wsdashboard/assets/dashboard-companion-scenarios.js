@@ -1,69 +1,15 @@
 (function (C) {
   "use strict";
-  const starters = {
-    idle_roam: {
-      on: ["session.idle", "idle.long"], priority: 5, cooldownMs: 5000, durationMs: 1250,
-      pose: "stand", expression: "idle", gaze: "cursor", stage: "hop-bounce"
-    },
-    working_tatata: {
-      on: "session.replying", priority: 10, durationMs: 1800,
-      pose: "typing", expression: "focused", gaze: "scan"
-    },
-    attention_point: {
-      on: "ask.open", priority: 65, cooldownMs: 900, durationMs: 1700,
-      pose: "stand", gesture: "point", expression: "oo", gaze: "whiteboard-ask", stage: "hop-bounce", fx: "alert"
-    },
-    startled_poke: {
-      on: "user.poke", priority: 45, durationMs: 550,
-      pose: "stand", expression: "oo", stage: "squash-pop", fx: "shock"
-    },
-    drag_dangle: {
-      on: "user.drag", priority: 100, durationMs: 0,
-      pose: "dangle", expression: "oo", stage: "pendulum-drag"
-    },
-    gloom_fail: {
-      on: "session.error", priority: 70, cooldownMs: 1000, durationMs: 2100,
-      pose: "stand", gesture: "headrub", expression: "cry", gaze: "down"
-    },
-    celebrate_done: {
-      on: "session.celebrate", priority: 60, cooldownMs: 1000, durationMs: 1400,
-      pose: "stand", gesture: "wave", expression: "happy", stage: "double-hop", fx: "sparkle"
-    },
-    subagent_dispatch: {
-      on: "subagent.spawn", priority: 55, cooldownMs: 500, durationMs: 2400,
-      pose: "stand", gesture: "cup_hands", expression: "oo", stage: "anticipate-launch", gaze: "prop:drone",
-      prop: { id: "drone", motion: "hand-liftoff", action: "launch", from: "hand", to: "hud-roster" }
-    },
-    subagent_return: {
-      on: "subagent.done", priority: 56, cooldownMs: 500,
-      steps: [
-        { ms: 2200, pose: "stand", gesture: "cup_hands", expression: "oo", gaze: "prop:drone",
-          prop: { id: "drone", motion: "hand-liftoff", action: "return", from: "hud-roster", to: "hand" } },
-        { ms: 280, pose: "stand", gesture: "cup_hands", expression: "happy", stage: "settle-sigh" }
-      ]
-    },
-    mail_send: {
-      on: "mail.send", priority: 54, durationMs: 2000,
-      pose: "stand", gesture: "cup_hands", expression: "oo", stage: "anticipate-launch", gaze: "prop:mail",
-      prop: { id: "mail", motion: "hand-liftoff", from: "hand", to: "hud-roster" }
-    },
-    mailbox_bonk: {
-      on: "mail.recv", priority: 57, durationMs: 2000,
-      pose: "stand", expression: "oo", gaze: "prop:mail", prop: { id: "mail", motion: "bonk-from-edge" }
-    },
-    global_session_done: {
-      on: "global.session_done", priority: 52, durationMs: 1600,
-      pose: "stand", gesture: "wave", expression: "happy", gaze: "rail-alert"
-    },
-    session_compacted: {
-      on: "session.compacted", priority: 48, durationMs: 1600,
-      pose: "stand", expression: "half_lid", stage: "settle-sigh"
-    },
-    route_switch: {
-      on: "route.switch", priority: 25, durationMs: 900,
-      pose: "stand", expression: "idle", gaze: "cursor", stage: "hop-bounce"
-    }
-  };
+  // The built-in scenarios and effect badges (a pack's fx registry may omit
+  // them) come from dashboard-companion-builtins.js, which the daemon's agent
+  // director reads too.
+  const { scenarios: starters, fx: fxDefaults } = window.WsCompanionBuiltins;
+
+  // A directed beat outranks every rules scenario except the drag dangle, so
+  // the character still hangs from the pointer while it is dragged.
+  const directedPriority = 99;
+  const directedTTL = { min: 1000, max: 15000 };
+  const quipLimit = 140;
 
   const passive = {
     idle: { pose: "stand", expression: "idle", gaze: "cursor" },
@@ -161,6 +107,16 @@
     function tick(now, dragging) {
       while (playing) {
         const { beat, entry, start } = playing;
+        if (playing.until !== undefined) {
+          // A directed beat runs its steps, holds the last one until the TTL
+          // ends, then hands the stage back to the rules engine.
+          if (now >= playing.until) { playing = null; break; }
+          if (beat.stage === "pendulum-drag" && dragging || now - start < beat.ms ||
+              playing.index >= entry.beats.length - 1) return playing;
+          playing.start += beat.ms;
+          playing.beat = entry.beats[++playing.index];
+          continue;
+        }
         if (beat.stage === "pendulum-drag" && dragging || now - start < beat.ms) return playing;
         if (++playing.index >= entry.beats.length) playing = null;
         else {
@@ -171,12 +127,29 @@
       return null;
     }
 
+    // direct plays beat (one beat or a scenario's steps) over the rules
+    // engine until ttlMs (clamped to 1-15 s) ends. A newer call replaces it.
+    function direct(beat, now, ttlMs, id = "directed") {
+      const beats = (Array.isArray(beat) ? beat : [beat]).filter(C.record);
+      if (!beats.length) return;
+      const ttl = C.clamp(Number.isFinite(ttlMs) ? ttlMs : 0, directedTTL.min, directedTTL.max);
+      const entry = { id, priority: directedPriority, cooldown: 0, beats };
+      playing = { entry, index: 0, start: now, beat: beats[0], count: 1, until: now + ttl };
+    }
+
     return {
-      fire, tick,
+      fire, tick, direct,
+      scenario(id) {
+        for (const list of registry.values()) {
+          const entry = list.find(choice => choice.id === id);
+          if (entry) return entry;
+        }
+        return null;
+      },
       preferFrame(signal) {
         if (playing?.signal?.token === signal.token) playing.signal = { ...playing.signal, ...signal };
       },
-      endReply() { if (playing?.entry.id === "working_tatata") playing = null; },
+      endReply() { if (playing?.entry.id === "working_tatata" && playing.until === undefined) playing = null; },
       clear() { playing = null; },
       reset() { playing = null; history.clear(); starts.clear(); }
     };
@@ -256,5 +229,50 @@
     };
   }
 
-  Object.assign(C, { scenarioRunner, timing });
+  // commandId returns id when a registry holds it, applying that registry's
+  // fallback chain, or when it is a built-in; otherwise "" (the field drops).
+  function commandId(id, registries, builtins) {
+    if (!C.timingId(id)) return "";
+    for (const registry of registries) {
+      if (!C.record(registry) || !Object.hasOwn(registry, id)) continue;
+      const found = C.resolveEntry(registry, id, null);
+      if (found) return found.id;
+    }
+    return builtins && Object.hasOwn(builtins, id) ? id : "";
+  }
+
+  function commandQuip(text) {
+    if (typeof text !== "string") return "";
+    return Array.from(text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim()).slice(0, quipLimit).join("").trim();
+  }
+
+  // directedCommand validates a companion-command payload against the active
+  // pack (and the shared default pack for props and fx), the built-in fx
+  // badges, and the runner's scenarios. An unknown ID drops only its field;
+  // a command left with nothing to show is null. The quip is plain text of at
+  // most 140 code points.
+  function directedCommand(command, pack, shared, runner) {
+    if (!C.record(command)) return null;
+    const manifest = pack?.manifest || {}, sharedManifest = shared?.manifest || {};
+    const patch = {};
+    const fields = [
+      ["expression", [manifest.expressions]],
+      ["gesture", [manifest.gestures]],
+      ["prop", [manifest.props, sharedManifest.props]],
+      ["fx", [manifest.fx, sharedManifest.fx], fxDefaults]
+    ];
+    for (const [field, registries, builtins] of fields) {
+      const id = commandId(command[field], registries, builtins);
+      if (id) patch[field] = id;
+    }
+    const quip = commandQuip(command.quip);
+    if (quip) patch.quip = quip;
+    const scenario = C.timingId(command.scenario) ? runner.scenario(command.scenario) : null;
+    if (!scenario && !Object.keys(patch).length) return null;
+    const ttl = C.clamp(Number.isFinite(command.ttl_ms) ? command.ttl_ms : 0, directedTTL.min, directedTTL.max);
+    const steps = scenario ? scenario.beats : [{ ...passive.idle, ms: ttl }];
+    return { id: scenario?.id || "directed", ttl, beats: steps.map(step => ({ ...step, ...patch })) };
+  }
+
+  Object.assign(C, { scenarioRunner, timing, directedCommand, fxDefaults });
 })(window.WsCompanion);

@@ -173,7 +173,7 @@ pub fn mark_secondary(window: &WebviewWindow) {
 const SECONDARY_SCRIPT: &str = "if (window === window.top && !('werkschaftSecondary' in window)) Object.defineProperty(window, 'werkschaftSecondary', { value: true });";
 
 #[cfg(target_os = "macos")]
-fn show(identifier: &str, title: &str, body: &str) -> bool {
+pub(crate) fn show(identifier: &str, title: &str, body: &str) -> bool {
     use std::sync::OnceLock;
     // The application is set once per process; an unsigned app may be
     // refused, which every later notification then reports.
@@ -190,7 +190,7 @@ fn show(identifier: &str, title: &str, body: &str) -> bool {
 }
 
 #[cfg(windows)]
-fn show(identifier: &str, title: &str, body: &str) -> bool {
+pub(crate) fn show(identifier: &str, title: &str, body: &str) -> bool {
     // The app identifier is the toast's AppUserModelID; a portable copy that
     // no shortcut registers may be refused, which reports a failure.
     tauri_winrt_notification::Toast::new(identifier)

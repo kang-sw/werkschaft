@@ -288,6 +288,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	case "exec.spawn", "exec.shell", "exec.status", "exec.result", "exec.abort", "exec.raw.tail", "exec.raw.read", "exec.raw.grep",
 		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write":
 		return s.callExec(ctx, req.ID, params.Name, params.Arguments, params.Meta)
+	case "fs.read", "fs.grep", "fs.list":
+		if !s.codexReadTools() {
+			return toolTextResponse(req.ID, "", fmt.Errorf("%s: %w", params.Name, errNoCodexReadTools))
+		}
+		return s.callFS(req.ID, params.Name, params.Arguments, params.Meta)
 	case "config.list":
 		// Read-only combined config surface (260814 Phase 2): subsumes config.show
 		// (resolved-scope View) AND config.tuning (per-key tuning knob catalog),
@@ -547,6 +552,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if entry.Key == wsconfig.ItemWorkflowProfile && value == "orchestrate" {
 				text += orchestrateWhitelistWarning(harness)
 			}
+			if entry.Key == wsconfig.ItemAgentTierAliases {
+				// Informational: an alias that overlaps the routing graph keeps
+				// exact-name precedence, so the write stands and says where.
+				text += s.tierCollisionLines()
+			}
 			return toolTextResponse(req.ID, text, nil)
 		}
 
@@ -592,15 +602,18 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if harness == "" {
 			harness = s.currentHarness()
 		}
-		backend, model, effort, resolvedFrom, err := wsconfig.ResolveAgentTierForHarness(s.configOptions(), tier, harness)
+		result, err := s.resolveAgentTier(tier, harness)
 		if err != nil {
 			return toolTextResponse(req.ID, "", fmt.Errorf("config.resolve_agent: %w", err))
 		}
-		result := resolveAgentTierResult{Backend: backend, Model: model, Effort: effort, ResolvedFrom: resolvedFrom}
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, result, nil)
 		}
-		return toolTextResponse(req.ID, fmt.Sprintf("backend: %s\nmodel: %s\neffort: %s\nresolved_from: %s\n", backend, model, formatEffortForText(effort), resolvedFrom), nil)
+		text := fmt.Sprintf("backend: %s\nmodel: %s\neffort: %s\nresolved_from: %s\n", result.Backend, result.Model, formatEffortForText(result.Effort), result.ResolvedFrom)
+		if result.Trace != "" {
+			text += "trace: " + result.Trace + "\n"
+		}
+		return toolTextResponse(req.ID, text, nil)
 
 	case "git.status":
 		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
@@ -778,10 +791,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if err != nil {
 			return toolTextResponse(req.ID, "", fmt.Errorf("worktree.acquire: %w", err))
 		}
-		result, err := acquireWorktree(ctx, s.gitRunner(), s.environ(), entry.root, base, targetBranch, profile, poolRV.Value, key, func(mintPath string) (string, error) {
+		result, err := acquireWorktreeWith(ctx, s.gitRunner(), s.environ(), entry.root, base, targetBranch, profile, poolRV.Value, key, func(mintPath string) (string, error) {
 			resolved, err := s.resolveSession(sessionAccess{mode: sessionAccessMintIdentity, root: mintPath, scope: roleLead, parent: key})
 			return resolved.key, err
-		})
+		}, s.worktreeBusy, s.worktreeAcquireExecFence)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}
@@ -824,7 +837,14 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		force, _ := params.Arguments["force"].(bool)
-		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, CheckExecJobs: s.checkWorktreeLiveExecJobs}
+		if force {
+			// force cleans another holder's worktree and cancels the turns of
+			// agents bound before it, so only a root lead session may use it.
+			if lead, ok := s.lookupSession(key); !ok || !lead.isTopLevelLead() {
+				return toolTextResponse(req.ID, "", fmt.Errorf("worktree.release refuses force: only a root lead session (a lead key with no parent) may force a release; this key is a worker's or a child's. Nothing was changed. Release by identity, or ask the root lead"))
+			}
+		}
+		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, CheckExecJobs: s.checkWorktreeLiveExecJobs, FenceExec: s.worktreeExecFence, CheckNotice: s.checkWorktreeReleaseNotice, Released: s.notifyWorktreeReleased}
 		result, err := releaseWorktreeAs(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, lookup, caller)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
@@ -862,7 +882,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		staleAfter, _ := worktreeNudgeThresholds(&resolver, key)
-		result, err := removeWorktree(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup)
+		result, err := removeWorktreeFenced(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup, s.worktreeExecFence)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}
@@ -1003,7 +1023,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		commitKey, _ := params.Arguments["session_key"].(string)
 		commitKey = strings.TrimSpace(commitKey)
 		if commitKey != "" {
-			if rec, ok := s.sessions.readState(commitKey, partTodos); ok && len(rec.Todos) > 0 {
+			// An all-done or all-deferred list has nothing to update, and its
+			// summary renders as a bare "..." block, so it adds no reminder.
+			if rec, ok := s.sessions.readState(commitKey, partTodos); ok && hasActiveTodo(rec.Todos) {
 				commitText += fmt.Sprintf("\n## TODO(%s reminder: update this if stale)\n%s\n", s.runtimeNamespace(), renderTodos(rec.Todos, false))
 			}
 		}
@@ -1239,8 +1261,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if nudge := implementCloseMergeReviewNudge(s.gitClient(), root); nudge != "" {
 			text += "next_instruction: " + nudge + "\n"
 		}
-		if reviewNudge := wsreview.CheckpointNudgeWith(context.Background(), s.gitRunner(), root); reviewNudge != "" {
-			text += "review-watermark: " + reviewNudge + "\n"
+		if s.reviewNudgeWanted(callerKey) {
+			if reviewNudge := wsreview.CheckpointNudgeWith(context.Background(), s.gitRunner(), root); reviewNudge != "" {
+				text += "review-watermark: " + reviewNudge + "\n"
+			}
 		}
 		return toolTextResponse(req.ID, text, nil)
 	case "review.marker":
@@ -1589,7 +1613,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return toolTextResponse(req.ID, "", err)
 		}
 		path, planPath, recommendedTier, err := renderPlaybookWithPlan(s, strings.TrimSpace(renderSessionKey), renderProfile, rsrcRoot, worktreeRoot, name, callerContext, s.configOptions(), mintRoot, parentKey, renderWorkflowLangRV.Value, renderOverrideLookup, tierOverride, planStem)
-		text := withRecommendedRenderBinding(path, s.currentHarness(), recommendedTier, s.configOptions())
+		text := s.withRecommendedRenderBindingFor(path, s.currentHarness(), recommendedTier, s.configOptions())
 		if planPath != "" {
 			text += "\n" + planPathLinePrefix + planPath
 		}

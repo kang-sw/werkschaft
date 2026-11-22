@@ -38,6 +38,15 @@ func (b CodexBackend) registration() (string, BackendRegistration) {
 		WorkerProfile:     AgentWorkerProfile(BackendCodex),
 		WorkerHTTPMCP:     true,
 		WorkerAutoApprove: true,
+		// No OneShot, probed 2026-11-22 with codex-cli 0.170.0: `codex exec
+		// --ignore-user-config --ephemeral -s read-only -c
+		// features.shell_tool=false -c web_search=disabled` still offered
+		// the model exec, apply_patch, spawn_agent, goal tools, and the
+		// codex_apps connector MCP tools. No `codex exec` flag removes all
+		// tools and MCP servers, so no one-shot mode is verifiable.
+		// features.shell_tool=false, verified on start and resume
+		// (testdata/codex-0.160.0-multi-agent-feature-off.jsonl).
+		ExecCutover: &ExecCutoverSupport{Since: "0.160.0"},
 		PlaybookTerminology: PlaybookTerminology{
 			ExploreAgent:  "an explorer subagent",
 			SpawnIdiom:    "creating a new Codex task",
@@ -261,23 +270,42 @@ func (p *codexProcess) open(spec StartSpec) error {
 // workers (spec.Lead == nil), harmless ws tools in ChildSafeWSTools are
 // pre-approved via mcp_servers.ws.tools.<name>.approval_mode = "approve" so
 // read-only workers (approvalPolicy "never") can call them without widening
-// mutating tools; leads stay unchanged.
+// mutating tools; leads stay unchanged. Under the exec cutover the exec and
+// fs.* tools are pre-approved too, for leads and workers, and
+// features.shell_tool is false.
 func codexThreadConfig(spec StartSpec) map[string]any {
 	server := map[string]any{
 		"url": spec.MCPSession.URL, "bearer_token_env_var": EnvMCPSessionToken, "required": true,
 	}
+	tools := map[string]any{}
 	if spec.Lead == nil {
-		if tools := codexChildSafeTools(spec); len(tools) > 0 {
-			server["tools"] = tools
+		tools = codexChildSafeTools(spec)
+	}
+	if spec.ExecCutover {
+		// The tools that replace the disabled shell run without a Codex-side
+		// prompt or refusal at every approval policy, the read-only worker's
+		// never included: ws decides an exec call's approval itself, and the
+		// fs.* reads need none.
+		for _, name := range cutoverToolsFor(spec.Profile, append(append([]string{}, ExecWSTools...), CodexReadWSTools...)) {
+			tools[name] = map[string]any{"approval_mode": "approve"}
 		}
 	}
-	return map[string]any{
+	if len(tools) > 0 {
+		server["tools"] = tools
+	}
+	config := map[string]any{
 		"agents": map[string]any{"enabled": false},
 		"mcp_servers": map[string]any{
 			"ws":     server,
 			"wsflow": map[string]any{"url": spec.MCPSession.URL, "enabled": false},
 		},
 	}
+	if spec.ExecCutover {
+		// The shell tool is off on start and resume alike; a later
+		// permission mode change keeps it off and reopens nothing.
+		config["features"] = map[string]any{"shell_tool": false}
+	}
+	return config
 }
 
 func codexChildSafeTools(spec StartSpec) map[string]any {

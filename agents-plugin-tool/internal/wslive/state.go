@@ -93,6 +93,14 @@ type Event struct {
 	// "pi", "codex", "agy"); absent for native subagents or legacy producers.
 	Harness string `json:"harness,omitempty"`
 	Status  string `json:"status,omitempty"`
+	// EndUnknown, on a subagent's terminal status, ends a running row as
+	// observation ended with the outcome unknown: the adapter stopped
+	// observing it and does not know when, or whether, it finished (an agy
+	// native subagent at its parent's turn end). The row's end time is the
+	// observation's end (the event time), the unobserved span adds no work
+	// to ActiveMs, and the row carries Agent.EndUnknown. The event flag is a
+	// daemon-internal runtime input, never accepted from the wire.
+	EndUnknown bool `json:"-"`
 	// ActiveMs is closed-turn work; TurnStartedAt is the current turn's
 	// epoch-millisecond start, or zero when no turn is working. Pi agent
 	// events carry authoritative values, including zero.
@@ -202,6 +210,9 @@ type agentState struct {
 	outputTps                            float64
 	bgTasks                              int
 	holding, alive                       bool
+	// endUnknown marks a row whose observation ended with the outcome
+	// unknown (Event.EndUnknown); endedAt is then the observation's end.
+	endUnknown bool
 }
 
 // State is one session's live state: the reducer from adapter events to a
@@ -252,6 +263,30 @@ type State struct {
 	// most evictedCap), so a late event for one does not bring it back as a
 	// running agent (staleEvent).
 	evicted []string
+	// retentionHeld defers retain (HoldRetention) while a caller folds a
+	// batch of agent lifecycles.
+	retentionHeld bool
+}
+
+// HoldRetention defers agent retention while the caller applies a batch of
+// agent events whose final lifecycles, not their intermediate ones, decide
+// what is kept (a rejoin's staged native rows): no running or finished cap
+// applies until the returned release, which runs one retention pass over
+// the folded roster. Release is idempotent.
+func (st *State) HoldRetention() (release func()) {
+	if st.retentionHeld {
+		return func() {}
+	}
+	st.retentionHeld = true
+	done := false
+	return func() {
+		if done {
+			return
+		}
+		done = true
+		st.retentionHeld = false
+		st.retain()
+	}
 }
 
 // evictedCap bounds State.evicted; an id forgotten past it is recreated by a
@@ -359,7 +394,7 @@ func (st *State) Apply(ev Event, now int64) (Result, error) {
 		st.turnStartedAt, st.turnOrigin = 0, ""
 		res.Changed = true
 	case KindAgent:
-		if st.staleEvent(ev) {
+		if st.staleEvent(ev) || st.nativeSettled(ev) {
 			return res, nil
 		}
 		if err := st.applyAgent(ev, at); err != nil {
@@ -503,7 +538,9 @@ func (st *State) Apply(ev Event, now int64) (Result, error) {
 		}
 	}
 	st.refreshPhases(at)
-	st.retain()
+	if !st.retentionHeld {
+		st.retain()
+	}
 	if st.lead.phase != leadPhase || st.reply != leadReply {
 		res.Urgent = true
 	}
@@ -603,6 +640,38 @@ func (st *State) staleEvent(ev Event) bool {
 	return ev.Status != StatusRunning && slices.Contains(st.evicted, ev.AgentID)
 }
 
+// nativeSettled reports whether ev, an agent event, names a prefixed native
+// subagent row (NativeAgentID) that already ended: native transitions are
+// monotonic, so a later running or terminal event for it (a holder replay
+// over a restored row, a duplicate protocol envelope) changes nothing and the
+// row keeps its status, end time (or its absence), and ActiveMs.
+func (st *State) nativeSettled(ev Event) bool {
+	if !NativeAgentID(ev.AgentID) {
+		return false
+	}
+	a, ok := st.agents[ev.AgentID]
+	return ok && a.status != StatusRunning
+}
+
+// HasAgent reports whether the state holds the subagent row id.
+func (st *State) HasAgent(id string) bool {
+	_, ok := st.agents[id]
+	return ok
+}
+
+// RunningAgents lists the running subagents whose id starts with prefix, in
+// id order.
+func (st *State) RunningAgents(prefix string) []string {
+	var out []string
+	for id, a := range st.agents {
+		if a.status == StatusRunning && strings.HasPrefix(id, prefix) {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // activityFor is the lead's activity for an empty id, else the subagent's,
 // created running when new.
 func (st *State) activityFor(id string, at int64) (*activityState, error) {
@@ -668,10 +737,19 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		if a.status != StatusRunning && a.kind != AgentKindPi {
 			a.turnStartedAt = at
 		}
-		a.status, a.endedAt = StatusRunning, 0
+		a.status, a.endedAt, a.endUnknown = StatusRunning, 0, false
 	case StatusDone, StatusFailed:
-		if a.status == StatusRunning {
-			a.endedAt = at
+		if a.status == StatusRunning && ev.EndUnknown && a.kind != AgentKindPi {
+			// Observation ended, not necessarily the subagent: the end time
+			// is the observation's end, flagged unknown, and the unobserved
+			// span adds no work. An observation end before the row's start
+			// (a row a replay rebuilt, whose start carries the replay's
+			// clock, closed at its restored snapshot's time) moves the start
+			// to it.
+			a.startedAt = min(a.startedAt, at)
+			a.endedAt, a.turnStartedAt, a.endUnknown = at, 0, true
+		} else if a.status == StatusRunning {
+			a.endedAt, a.endUnknown = at, false
 			if a.kind != AgentKindPi {
 				if a.turnStartedAt > 0 && at > a.turnStartedAt {
 					a.activeMs += at - a.turnStartedAt
@@ -1054,6 +1132,7 @@ func (st *State) SeedFinished(prev Snapshot) {
 			status:        p.Status,
 			startedAt:     p.StartedAt,
 			endedAt:       p.EndedAt,
+			endUnknown:    p.EndUnknown || AgyObservationEnded(p.ID, p.Status),
 			activeMs:      p.ActiveMs,
 			touched:       p.EndedAt,
 			// Holding and Alive are intentionally not seeded from disk (T0):
@@ -1119,6 +1198,7 @@ func (st *State) Snapshot(now int64) Snapshot {
 			Status:        a.status,
 			StartedAt:     a.startedAt,
 			EndedAt:       a.endedAt,
+			EndUnknown:    a.endUnknown,
 			ActiveMs:      a.activeMs,
 			TurnStartedAt: a.turnStartedAt,
 			AgentKind:     a.kind,

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -367,15 +368,22 @@ func TestWorktreeAcquireRollbackRetainsLock(t *testing.T) {
 					t.Fatal(err)
 				}
 				blocker = filepath.Join(admin, worktreeLeaseFileName)
-				if err := os.MkdirAll(filepath.Join(blocker, "block"), 0o755); err != nil {
-					t.Fatal(err)
-				}
 			}
 			held, resume, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-			var once sync.Once
+			var once, blockOnce sync.Once
 			resumeHolder := func() { once.Do(func() { close(resume) }) }
 			t.Cleanup(resumeHolder)
 			runner := acquireRunnerFunc(func(ctx context.Context, path string, args ...string) ([]byte, error) {
+				// Block the lease path only once the candidate is claimed (its
+				// hygiene runs): a candidate whose lease is unreadable is never
+				// claimed.
+				if blocker != "" && slices.Contains(args, "reset") {
+					blockOnce.Do(func() {
+						if err := os.MkdirAll(filepath.Join(blocker, "block"), 0o755); err != nil {
+							t.Error(err)
+						}
+					})
+				}
 				if reflect.DeepEqual(args, noSubmoduleRecurse("checkout", "--detach")) {
 					close(held)
 					select {

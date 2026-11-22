@@ -1098,7 +1098,7 @@ async function routeTerminal(context) {
           plusWidth: Math.round(pb.width), galWidth: Math.round(gb.width), boardWidth: Math.round(b.width), right: Math.round(b.right), galLeft: Math.round(gb.left), w: innerWidth };
       });
       let l = await layout();
-      assert.deepEqual([l.gal, l.pincol, l.hidden, l.railHidden, l.edge, l.plusVisible], ['empty', false, false, true, false, true], '2560 with no page: idle empty slot in Col 3, rail and handle hidden');
+      assert.deepEqual([l.gal, l.pincol, l.hidden, l.railHidden, l.edge, l.plusVisible], ['empty', false, false, true, true, true], '2560 with no page: idle empty slot in Col 3, rail hidden and handle visible');
       assert(l.galLeft >= l.right, '2560 idle empty slot stands right of the board');
       assert(l.plusWidth >= l.boardWidth && l.galWidth >= l.boardWidth, '2560 idle .gal-plus spans >= board width: ' + JSON.stringify(l));
       const zeroCols = l.cols;
@@ -1118,17 +1118,18 @@ async function routeTerminal(context) {
         await tab.mouse.move(p.x, p.y, { steps: 6 });
         await until(() => page.evaluate(() => document.querySelector('#bgal .gal-plus').classList.contains('drop')), '.gal-plus lights as drop target');
         return page.evaluate(() => {
-          const g = document.getElementById('bgal'), rail = g.querySelector('.gal-rail'), plus = g.querySelector('.gal-plus');
+          const g = document.getElementById('bgal'), rail = g.querySelector('.gal-rail'), plus = g.querySelector('.gal-plus'), edge = g.querySelector('.bp-edge');
           return { gal: document.documentElement.getAttribute('data-gal'), galWidth: Math.round(g.getBoundingClientRect().width),
-            railHidden: !rail || rail.hidden || getComputedStyle(rail).display === 'none', plusDrop: plus.classList.contains('drop') };
+            railHidden: !rail || rail.hidden || getComputedStyle(rail).display === 'none', plusDrop: plus.classList.contains('drop'),
+            edgeHidden: !edge || getComputedStyle(edge).display === 'none' };
         });
       });
-      assert.deepEqual(wide, { gal: 'drag', galWidth: l.galWidth, railHidden: false, plusDrop: true }, '2560 drag keeps exact Col 3 width with rail shown and .gal-plus lit');
+      assert.deepEqual(wide, { gal: 'drag', galWidth: l.galWidth, railHidden: false, plusDrop: true, edgeHidden: true }, '2560 drag keeps exact Col 3 width with rail shown, handle hidden, and .gal-plus lit');
       await until(async () => JSON.stringify(await pages(page)) === '[["beta"]]', 'direct drop on .gal-plus docks beta onto Page 1');
       l = await layout();
       assert.deepEqual([l.gal, l.pincol, l.hidden, l.railHidden, l.edge, l.cols], ['col', true, false, false, true, zeroCols], '2560 with a page: the gallery column with its handle, zero column-count jump');
       assert(l.galLeft >= l.right, 'the gallery stands right of the board');
-      done.push('2560 idle empty slot (no rail/edge/pull pill), zero-jump drag, direct drop onto .gal-plus docks Page 1');
+      done.push('2560 idle empty slot (no rail/pull pill, visible handle), zero-jump drag, direct drop onto .gal-plus docks Page 1');
       // Band 3 (1800px): fused narrow gallery on #bcol, permanently docked rail on left, centered stage.
       await tab.setViewportSize({ width: 1800, height: 1000 });
       await until(async () => (await layout()).w === 1800, 'resize 1800');
@@ -1156,6 +1157,87 @@ async function routeTerminal(context) {
       done.push('layout modes: 1400 narrow, 1800 docked-rail + fused narrow, 2560 idle empty slot, tabs narrow at 2560');
       assert.deepEqual(errors, []);
       await context.close();
+    }
+
+    // ---- Band 4 empty dock sizer (.bp-edge): resize, pin/unpin width retention, double-click reset ----
+    {
+      const emptyShots = process.env.WS_EMPTY_DOCK_CAPTURES;
+      if (emptyShots) fs.mkdirSync(emptyShots, { recursive: true });
+      const measure = page => page.evaluate(() => {
+        const r = document.documentElement;
+        return {
+          gal: r.getAttribute('data-gal'),
+          pincol: r.hasAttribute('data-pincol'),
+          hasBoardw: r.hasAttribute('data-boardw'),
+          boardwVar: r.style.getPropertyValue('--boardw'),
+          convoW: Math.round(document.getElementById('convo').getBoundingClientRect().width),
+          boardW: Math.round(document.getElementById('bcol').getBoundingClientRect().width),
+          galW: Math.round(document.getElementById('bgal').getBoundingClientRect().width),
+          edgeDisp: getComputedStyle(document.querySelector('#bgal .bp-edge')).display,
+        };
+      });
+      const context = await browser.newContext({ viewport: { width: 2560, height: 1000 }, colorScheme: 'dark', locale: 'en-US', reducedMotion: 'reduce' });
+      await seed(context, 'livesession', {});
+      const { tab, page, errors } = await open(context, 'livesession');
+      const consoleErrors = [];
+      tab.on('console', msg => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
+      const edgeLoc = page.locator('#bgal .bp-edge');
+      await until(() => edgeLoc.isVisible(), '.bp-edge visible in empty Band 4');
+      const before = await measure(page);
+      assert.deepEqual([before.gal, before.pincol, before.edgeDisp], ['empty', false, 'block'], '2560 empty mode shows .bp-edge');
+      if (emptyShots) await tab.screenshot({ path: path.join(emptyShots, 'empty-idle-dark.png') });
+
+      const from = await center(edgeLoc);
+      await drag(tab, from, () => ({ x: from.x + 240, y: from.y }));
+      await until(() => page.evaluate(() => document.documentElement.hasAttribute('data-boardw')), '--boardw applied after .bp-edge drag');
+      const widened = await measure(page);
+      assert.deepEqual([widened.gal, widened.pincol, widened.hasBoardw], ['empty', false, true], 'widening .bp-edge in empty mode stays in Band 4 empty');
+      assert(Math.abs((widened.boardW - before.boardW) - 240) <= 2, `widened #bcol by +240px (${before.boardW} -> ${widened.boardW})`);
+      assert(Math.abs(widened.convoW - before.convoW) <= 2, `kept #convo width stable (${before.convoW} -> ${widened.convoW})`);
+      assert(widened.galW >= 280 && Math.abs((before.galW - widened.galW) - 240) <= 2, `shrank #bgal cleanly down towards PINW_MIN (${before.galW} -> ${widened.galW})`);
+      const persisted = await page.evaluate(() => window.__gal.rec());
+      assert(persisted.bb > before.boardW, 'persisted bb reflects widened board: ' + JSON.stringify(persisted));
+      assert.equal(widened.boardwVar, persisted.bb + 'px', '--boardw matches persisted bb');
+      if (emptyShots) await tab.screenshot({ path: path.join(emptyShots, 'empty-widened-dark.png') });
+
+      await bar(page, 'beta').locator('.tpin').click();
+      await until(async () => (await measure(page)).gal === 'col', 'pinning beta switches to col');
+      const pinned = await measure(page);
+      assert(Math.abs(pinned.convoW - widened.convoW) <= 2 && Math.abs(pinned.boardW - widened.boardW) <= 2,
+        `pinning preserves convo+board widths (${JSON.stringify(widened)} -> ${JSON.stringify(pinned)})`);
+
+      await bar(page, 'beta').locator('.tpin').click();
+      await until(async () => (await measure(page)).gal === 'empty', 'unpinning beta returns to empty');
+      const unpinned = await measure(page);
+      assert.deepEqual([unpinned.gal, unpinned.pincol, unpinned.hasBoardw], ['empty', false, true], 'unpinned back to empty retains data-boardw');
+      assert(Math.abs(unpinned.convoW - widened.convoW) <= 2 && Math.abs(unpinned.boardW - widened.boardW) <= 2,
+        `unpinning back to empty retains convo+board widths without crushing (${JSON.stringify(widened)} -> ${JSON.stringify(unpinned)})`);
+      if (emptyShots) await tab.screenshot({ path: path.join(emptyShots, 'empty-after-unpin-dark.png') });
+
+      const resetPos = await center(edgeLoc);
+      await tab.mouse.dblclick(resetPos.x, resetPos.y);
+      await until(() => page.evaluate(() => !document.documentElement.hasAttribute('data-boardw')), 'dblclick clears --boardw in empty mode');
+      const reset = await measure(page);
+      assert.deepEqual([reset.gal, reset.hasBoardw, reset.boardwVar], ['empty', false, ''], 'dblclick resets --boardw to default in empty mode');
+      assert(Math.abs(reset.boardW - before.boardW) <= 2, `dblclick restores default #bcol width (${before.boardW} -> ${reset.boardW})`);
+      assert.equal((await page.evaluate(() => window.__gal.rec())).bb, 0, 'dblclick persists bb = 0');
+      assert.deepEqual(errors, [], 'no page errors (empty dock sizer)');
+      assert.deepEqual(consoleErrors, [], 'no console errors (empty dock sizer)');
+      await context.close();
+
+      if (emptyShots) {
+        const lightCtx = await browser.newContext({ viewport: { width: 2560, height: 1000 }, colorScheme: 'light', locale: 'en-US', reducedMotion: 'reduce' });
+        await seed(lightCtx, 'livesession', {});
+        const light = await open(lightCtx, 'livesession');
+        await until(() => light.page.locator('#bgal .bp-edge').isVisible(), 'light .bp-edge visible');
+        const lf = await center(light.page.locator('#bgal .bp-edge'));
+        await drag(light.tab, lf, () => ({ x: lf.x + 240, y: lf.y }));
+        await until(() => light.page.evaluate(() => document.documentElement.hasAttribute('data-boardw')), 'light --boardw applied');
+        await light.tab.screenshot({ path: path.join(emptyShots, 'empty-widened-light.png') });
+        assert.deepEqual(light.errors, [], 'no page errors (empty dock sizer light)');
+        await lightCtx.close();
+      }
+      done.push('2560 empty dock sizer (.bp-edge): visible, widens #bcol keeping Band 4 empty, pin/unpin keeps widths, dblclick resets');
     }
 
     // ---- Band 3 (1800x1000) with 0 pages: hidden at rest, fused narrow rail on drag ----

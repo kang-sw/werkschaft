@@ -172,6 +172,12 @@ func (d *Daemon) Close() {
 		}
 		d.foreign.close()
 		_ = wslive.UnpinRingsUnder(filepath.Join(d.dir, sessionsDirName))
+		// A credential change still in flight (a hosted call or a change
+		// request the bounded drain left running) lands now or is refused:
+		// once the lock goes, a successor or the offline CLI writes the file.
+		if d.credentials != nil {
+			d.credentials.Close()
+		}
 		if d.beforeUnlock != nil {
 			d.beforeUnlock()
 		}

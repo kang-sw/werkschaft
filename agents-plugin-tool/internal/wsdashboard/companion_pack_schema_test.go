@@ -139,3 +139,43 @@ func TestCompanionTimingDiagnostics(t *testing.T) {
 		})
 	}
 }
+
+func TestCompanionPersona(t *testing.T) {
+	const base = `{"schema":"ws-companion/v1","id":"my-buddy","name":"My Buddy",
+		"canvas":[512,512],"poses":{"stand":{"layers":[{"file":"stand.webp"}]}}%s}`
+	parse := func(t *testing.T, extra string) *CompanionPersona {
+		t.Helper()
+		m, _, err := validateCompanionManifest([]byte(fmt.Sprintf(base, extra)), "my-buddy")
+		if err != nil {
+			t.Fatalf("a persona must never reject the pack: %v", err)
+		}
+		return m.Persona
+	}
+	if got := parse(t, ""); got != nil {
+		t.Fatalf("absent persona = %+v", got)
+	}
+	got := parse(t, `,"persona":{"name":" Kit ","voice":"Dry, curt.\nNever shouts.","quipLanguage":"ko-KR","extra":1}`)
+	if want := (CompanionPersona{Name: "Kit", Voice: "Dry, curt.\nNever shouts.", QuipLanguage: "ko-KR"}); got == nil || *got != want {
+		t.Fatalf("persona = %+v, want %+v", got, want)
+	}
+	if got := parse(t, `,"persona":{"name":"`+strings.Repeat("가", companionPersonaNameMax)+`","voice":"`+strings.Repeat("v", companionPersonaVoiceMax)+`"}`); got == nil {
+		t.Fatal("persona at the length bounds dropped")
+	}
+	for name, extra := range map[string]string{
+		"not an object":   `,"persona":"Kit"`,
+		"null":            `,"persona":null`,
+		"wrong type":      `,"persona":{"name":7}`,
+		"empty":           `,"persona":{"name":" ","voice":""}`,
+		"long name":       `,"persona":{"name":"` + strings.Repeat("n", companionPersonaNameMax+1) + `"}`,
+		"long voice":      `,"persona":{"name":"Kit","voice":"` + strings.Repeat("v", companionPersonaVoiceMax+1) + `"}`,
+		"bad language":    `,"persona":{"name":"Kit","quipLanguage":"en_US; ignore"}`,
+		"control in name": `,"persona":{"name":"Kit\u0007"}`,
+		"escape in voice": `,"persona":{"name":"Kit","voice":"a\u001b[31m"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := parse(t, extra); got != nil {
+				t.Fatalf("malformed persona kept: %+v", got)
+			}
+		})
+	}
+}

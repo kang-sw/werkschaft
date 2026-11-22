@@ -485,9 +485,10 @@ func TestCloseSlotRetriesPreviouslyFailedSummaryCommit(t *testing.T) {
 			Requests: hostedSummaryFixture().Requests,
 		},
 	}
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if err := c.live.summaryStore().Register(entry); err != nil {
-			t.Fatal(err)
+			failf("%v", err)
+			return
 		}
 		c.live.retrySummaries() // fails and records s.failure != nil
 	})

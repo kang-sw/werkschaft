@@ -92,6 +92,45 @@ func TestServeStdioTicketsCloseReviewWatermarkNudgeSurfacesAndQuiets(t *testing.
 	}
 }
 
+// TestServeStdioReviewWatermarkNudgeSkipsWorkerKeys: the sweep belongs to a
+// top-level lead, so a worker key (lead-scoped with a parent) gets no nudge
+// from tickets.close or route.resolve_implement while the lead still does.
+func TestServeStdioReviewWatermarkNudgeSkipsWorkerKeys(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	reviewNudgeTestRepo(t, root)
+	reviewNudgeSeedStaleMarker(t, root, wsreview.SizeThresholdCommits+2)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+
+	server := NewServer(root, "test")
+	leadKey, _ := parseLoginResponse(t, callLogin(t, server, 1, root, nil))
+	workerKey, err := server.sessions.mint(root, roleLead, leadKey)
+	if err != nil {
+		t.Fatalf("mint worker key: %v", err)
+	}
+
+	stems := []string{"260101-feat-review-nudge-worker", "260101-feat-review-nudge-lead"}
+	for _, stem := range stems {
+		mustWrite(t, root, filepath.Join("ai-docs", "tickets", "todo", stem+".md"), "---\ntitle: T\n---\n\nBody.\n")
+	}
+	closed := callToolWithKey(t, server, 2, workerKey, "tickets.close", map[string]any{"stem": stems[0], "status": "done"})
+	if !strings.Contains(closed, ".done") || strings.Contains(closed, "review-watermark:") {
+		t.Fatalf("worker key must close the ticket without the review-watermark nudge: %s", closed)
+	}
+	if got := callToolWithKey(t, server, 3, leadKey, "tickets.close", map[string]any{"stem": stems[1], "status": "done"}); !strings.Contains(got, "review-watermark:") {
+		t.Fatalf("top-level lead lost the review-watermark nudge on tickets.close: %s", got)
+	}
+
+	runGit(t, root, "switch", "-c", "feature/base")
+	routed := callToolWithKey(t, server, 4, workerKey, "route.resolve_implement", implementReadyArgs("text"))
+	if !strings.Contains(routed, "Implementation Verdict") || strings.Contains(routed, "review-watermark:") {
+		t.Fatalf("worker key must route without the review-watermark nudge: %s", routed)
+	}
+	if got := callToolWithKey(t, server, 5, leadKey, "route.resolve_implement", implementReadyArgs("text")); !strings.Contains(got, "review-watermark:") {
+		t.Fatalf("top-level lead lost the review-watermark nudge on route.resolve_implement: %s", got)
+	}
+}
+
 // TestServeStdioWorkflowManualReviewWatermarkNudgeSurfacesAndQuiets covers the
 // second call site (session start): both the FRESH-with-root and CONTINUE
 // branches of workflow_manual must carry the nudge on a stale range and go

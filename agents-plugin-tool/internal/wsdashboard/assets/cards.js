@@ -1226,27 +1226,31 @@
     if (col) col.addEventListener("wheel", onHomeWheel, { passive: false });
   }
   // canFitFourCol activates the 4-column layout (rail + stage + gallery
-  // column) iff !tabs, viewport >= WIDE, and spare right width >= board width.
+  // column) iff !tabs, viewport >= WIDE, and spare right width >= board width
+  // (or, once the user widens the board, the unresized default fits Band 4).
   function canFitFourCol(vw, tabs) {
     if (tabs || !(vw >= G.C.WIDE)) return false;
     var stageW = vw - 32 - 356, gap = 16;
     var split = !!(opt && (opt.split || (board && board.closest && board.closest(".dgrid.live, .dgrid.history"))));
     var worktree = !!(board && board.closest && board.closest(".dgrid.worktree"));
-    var gridW, boardW;
-    if (worktree) {
-      gridW = boardw || 1292;
-      boardW = (gridW - gap) * 7 / 12;
-    } else if (!split) {
-      boardW = boardw || 900;
-      gridW = boardW;
-    } else if (boardw) {
-      boardW = boardw;
-      gridW = (convow || (boardw * 5 / 7)) + gap + boardW;
-    } else {
-      gridW = 1292;
-      boardW = convow ? (gridW - gap - Math.max(CONVW_MIN, Math.min(convow, gridW - gap - SPLITB_MIN))) : ((gridW - gap) * 7 / 12);
+    function fitMetrics(bw, cw) {
+      var gridW, boardW;
+      if (worktree) {
+        gridW = bw || 1292;
+        boardW = (gridW - gap) * 7 / 12;
+      } else if (!split) {
+        boardW = bw || 900;
+        gridW = boardW;
+      } else if (bw) {
+        boardW = bw;
+        gridW = (cw || (bw * 5 / 7)) + gap + boardW;
+      } else {
+        gridW = 1292;
+        boardW = cw ? (gridW - gap - Math.max(CONVW_MIN, Math.min(cw, gridW - gap - SPLITB_MIN))) : ((gridW - gap) * 7 / 12);
+      }
+      return stageW - gridW - gap >= boardW;
     }
-    return stageW - gridW - gap >= boardW;
+    return fitMetrics(boardw, convow) || (boardw > 0 && fitMetrics(0, 0));
   }
   // relayout asks the page what it shows (opt.mode: its width and whether
   // the layout menu shows one column at a time), maps that to the
@@ -2179,8 +2183,8 @@
   }
   function boardCell() { return board.closest && board.closest(".dgrid"); }
   // colShown tells whether the wide view shows the gallery as a column
-  // beside the board (not while a drag alone shows it).
-  function colShown() { return !!(lay && lay.column && gal.pages.length); }
+  // beside the board (including the idle empty slot, not while a drag alone shows it).
+  function colShown() { return !!(lay && ((lay.column && gal.pages.length) || lay.empty)); }
   function edgeHandle() {
     grab("bp-edge", galEl, function () {
       freeze();

@@ -2,12 +2,14 @@ package wsagent
 
 import (
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -48,6 +50,99 @@ func TestSubagentSteerFollowsPolicyAndCatalog(t *testing.T) {
 	var none *HarnessProfile
 	if got := none.NativeSubagentTool(RoleLead); got != "" {
 		t.Fatalf("a nil catalog names %q", got)
+	}
+}
+
+// TestNativeFirstSteerForPreferNativeSubagentLead: the registered agy
+// backend sets PreferNativeSubagent, and nothing else does, so an agy hosted
+// lead's composed instructions carry the native-first line (native
+// exploration, external-harness spawns, the size-prefix rule, the one-shot
+// note) and no never-use line, while Claude and Codex leads keep theirs
+// byte for byte. An agy worker is outside the option (it is the lead's).
+func TestNativeFirstSteerForPreferNativeSubagentLead(t *testing.T) {
+	regs := BuiltinBackendRegistrations()
+	for name, reg := range regs {
+		if reg.PreferNativeSubagent != (name == BackendAgy) {
+			t.Fatalf("%s PreferNativeSubagent = %v", name, reg.PreferNativeSubagent)
+		}
+	}
+	r := &Runner{opts: Options{Backends: regs}}
+	agyLead := Record{Backend: BackendAgy, Lead: true, WSKey: "k-agy"}
+	steer := r.subagentSteer(agyLead)
+	want := "Use your native subagent tool for exploration and research that needs no ws tools; it runs at your harness's default model, so when a question needs a specific tier, use a read-only ws `agent.spawn` subagent at an external-harness tier instead. " +
+		"Run rendered ws playbooks and any work that needs ws tools through the ws `agent.spawn` tool, and continue it with the ws `mailbox.send` tool. " +
+		"Pass a rendered tier as returned: a role tier keeps its configured route, model and effort, and may end on agy, which is allowed. An agy route carries the Antigravity terms risk, so when another harness fits the work, choose an external fixed tier such as `claude.small` for `playbook-explore:small` instead; never put a harness prefix before a role tier. " +
+		"A native subagent is one-shot: ask a follow-up of a new one; `mailbox.send` continues only agents started with `agent.spawn`."
+	if steer != want {
+		t.Fatalf("agy lead steer =\n%s\nwant\n%s", steer, want)
+	}
+	path, err := composeLeadInstructions(t.TempDir(), agyLead, "# Workflow Manual\nrendered", steer, regs[BackendAgy].PlaybookCommands)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, leadKeySentence("k-agy")+want+" ") || strings.Contains(text, "Never use the native") {
+		t.Fatalf("agy lead instructions =\n%s", text)
+	}
+
+	never := func(tool string) string {
+		return "Never use the native `" + tool + "` tool. Start a subagent only with the ws `agent.spawn` tool, and continue one with the ws `mailbox.send` tool."
+	}
+	for _, tc := range []struct {
+		rec  Record
+		want string
+	}{
+		{Record{Backend: BackendClaude, Lead: true}, never("Agent")},
+		{Record{Backend: BackendCodex, Lead: true}, never("spawn_agent")},
+		{Record{Backend: BackendPi, Lead: true}, ""},
+	} {
+		if got := r.subagentSteer(tc.rec); got != tc.want {
+			t.Errorf("%s lead=%v steer = %q, want %q", tc.rec.Backend, tc.rec.Lead, got, tc.want)
+		}
+	}
+	if got := r.subagentSteer(Record{Backend: BackendAgy, Profile: AgentWorkerProfile(BackendAgy)}); strings.Contains(got, "Use your native") {
+		t.Fatalf("an agy worker takes the lead-only native-first line: %q", got)
+	}
+	// A catalog that names the tool gets it named; the wording is otherwise
+	// the same.
+	if got := nativeFirstSteer("invoke_subagent"); !strings.HasPrefix(got, "Use your native `invoke_subagent` tool for exploration") {
+		t.Fatalf("named native-first steer = %q", got)
+	}
+}
+
+// TestAgyLeadHarnessQualifiedTierStartsClaudeChild: a bare size ("small")
+// from an agy lead (mcp's TestAgyLeadRenderedTierSpawnsAsReturnedOrClaudeChild
+// runs the whole handoff from a real render on one connection, under the
+// shipped admission). Passed as returned, it resolves to the lead's own
+// harness; as the external fixed tier the native-first line steers to when
+// another harness fits, agent.spawn admits `claude.small` and starts a
+// Claude child. No external route is configured.
+// Role-tier coverage (a role tier resolving to agy, qualified to an
+// external harness) is omitted: the base carries no role routing graph.
+func TestAgyLeadHarnessQualifiedTierStartsClaudeChild(t *testing.T) {
+	h, _ := agentHarness(t, func(o *Options) {
+		claude := o.Backends[BackendClaude]
+		o.Backends[BackendAgy] = BackendRegistration{Backend: claude.Backend, LeadProfile: LeadProfileAgy, PreferNativeSubagent: true,
+			WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy)}
+		if _, err := wsconfig.SetGlobalAgentsTierForHarness(o.Config, "small", "", "agy-small", BackendAgy, "high"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	caller := LeadCaller(leadParent.ReplyID, h.root, BackendAgy, h.config.Config)
+	const recommended = "small"
+
+	bare, _ := h.agentRunning(caller, AgentSpawnRequest{Prompt: "explore", Tier: recommended, Authority: "read-only"})
+	if rec := h.record(bare); rec.Backend != BackendAgy {
+		t.Fatalf("a bare size from an agy lead resolves to %s, want agy", rec.Backend)
+	}
+
+	qualified, _ := h.agentRunning(caller, AgentSpawnRequest{Prompt: "explore", Tier: "claude." + recommended, Authority: "read-only"})
+	if rec := h.record(qualified); rec.Backend != BackendClaude || rec.Profile != AgentWorkerProfile(BackendClaude) || rec.Model != "claude-small" {
+		t.Fatalf("claude.%s child record: %+v", recommended, rec)
 	}
 }
 

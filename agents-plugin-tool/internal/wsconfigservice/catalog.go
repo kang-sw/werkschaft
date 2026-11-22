@@ -16,6 +16,14 @@ var (
 	ErrScope   = errors.New("unsupported configuration scope")
 )
 
+// InvalidValue is ErrInvalid for a structured value its rule refused, with
+// the rule's reason (a graph validation message, for example) for a surface
+// that shows it.
+type InvalidValue struct{ Reason error }
+
+func (e InvalidValue) Error() string        { return ErrInvalid.Error() + ": " + e.Reason.Error() }
+func (e InvalidValue) Is(target error) bool { return target == ErrInvalid }
+
 type Rule struct {
 	Key, Type        string
 	Default          string
@@ -27,13 +35,17 @@ type Rule struct {
 	NoSession        bool
 	NoRepo           bool
 	ReadOnly         bool
-	Structured       bool
-	Compaction       bool
-	Normalize        func(string) (string, error)
-	Decode           func(string) (any, error)
-	ValidateName     func(string) error
-	NormalizeObject  func(any, wsconfig.Scope) (json.RawMessage, error)
-	LegacyKey        func(harness string) string
+	// Editable marks a structured key the settings page edits with its own
+	// control (the agent.tier_routing graph editor) instead of inspecting it
+	// read-only like a profile.
+	Editable        bool
+	Structured      bool
+	Compaction      bool
+	Normalize       func(string) (string, error)
+	Decode          func(string) (any, error)
+	ValidateName    func(string) error
+	NormalizeObject func(any, wsconfig.Scope) (json.RawMessage, error)
+	LegacyKey       func(harness string) string
 }
 
 type Catalog struct {
@@ -117,7 +129,9 @@ func (r Rule) scopeReason(scope wsconfig.Scope) string {
 	switch {
 	case scope == wsconfig.ScopeBuiltin:
 		return "builtin_read_only"
-	case r.Structured:
+	case r.Structured && r.GlobalOnly && scope != wsconfig.ScopeGlobal:
+		return "global_only"
+	case r.Structured && !r.Editable:
 		return "profile_read_only"
 	case r.ReadOnly:
 		return "setting_read_only"

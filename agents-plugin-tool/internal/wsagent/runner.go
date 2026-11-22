@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsawake"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -20,6 +21,14 @@ type KeyStore interface {
 	// Ensure keeps key usable for root: it refreshes the key's record, or
 	// writes it again when the key store pruned it.
 	Ensure(root, key string) error
+}
+
+// ChildKeyStore is a KeyStore that can mint a spawned child's key so the key
+// inherits its spawner's session-scope config (review_phase, the sage knobs).
+// The runner uses it when the spawning caller supplies its ws key
+// (AgentCaller.PolicyKey) and falls back to Mint otherwise.
+type ChildKeyStore interface {
+	MintChild(root, parentKey string) (string, error)
 }
 
 // LeadKeyStore mints and keeps the lead ws session key of each hosted lead
@@ -126,6 +135,10 @@ type Options struct {
 	// AgyModelWaitBackoff returns the delay before automatic continue attempt
 	// n (one-based). Nil uses bounded exponential jitter.
 	AgyModelWaitBackoff func(attempt int) time.Duration
+	// AgyLogDir is where agy writes its acp-worker-*.log files, which a
+	// hosted agy lead's stall cutoff reads. Empty uses agy's own directory
+	// under the user's home.
+	AgyLogDir string
 	// WSMCP is the stdio ws-mcp command serving root, without the runner's
 	// environment; nil refuses profiles that allow ws tools.
 	WSMCP func(root string) (MCPCommand, error)
@@ -216,14 +229,31 @@ type Options struct {
 	// route (children.go): an error refuses the call with its text (no
 	// usable Pi, say).
 	ChildCheck func() error
+	// ChildCheckKnown, when not nil, is ChildCheck's answer without running
+	// a probe: known is false while the answer would need one (a Pi
+	// version not yet probed). HarnessAvailability asks it, never
+	// ChildCheck.
+	ChildCheckKnown func() (known bool, err error)
+	// TierRoles, when not nil, lists the packaged playbook role nodes of
+	// the agent.tier_routing graph agent.spawn and agent.tiers resolve
+	// through. Nil leaves only the built-in groups and user nodes.
+	TierRoles func() ([]wsconfig.TierRole, error)
 	// heartbeat overrides wslive.HeartbeatInterval for tests.
 	heartbeat time.Duration
 	// WakeRefused, when not nil, tells the sender of a message Deliver
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
 	WakeRefused func(from, id, reason string)
+	// CheckoutReleased, when not nil, tells the sender of a message for a
+	// spawned conversation whose checkout was released after it was bound
+	// (from: the sender's reply-id, id: the conversation, checkout: the
+	// released checkout, reason). Such a conversation never launches, wakes
+	// or resumes there again. Nil falls back to WakeRefused.
+	CheckoutReleased func(from, id, checkout, reason string)
 	// ChildWaitingDays overrides agent.child_waiting_days; 0 reads it.
 	ChildWaitingDays int
+	// keepAwake replaces the platform's idle-sleep backend in tests.
+	keepAwake wsawake.Backend
 	// spawnListed observes global spawn-projection listings in tests.
 	spawnListed func(string)
 	// stateInboxRead observes state-held inbox scans in tests.
@@ -248,12 +278,24 @@ type Runner struct {
 	closed        map[string]Record
 	childrenIndex map[ParentRef]map[string]bool // mu; parent identity is immutable
 	pendingSpawns map[ParentRef]int             // mu; in-flight width-checked spawns until registered
+	// releases is each checkout's latest completed release this daemon
+	// knows of, keyed by releaseKey: fed by worktree.release's notice and by
+	// every marker a cold check reads. It holds only releases found, never
+	// their absence, and only ever moves later (worktree_release.go). Under
+	// relMu, never held with mu.
+	relMu    sync.Mutex
+	releases map[string]time.Time
 	// expiry is childWaitingExpiry's value, read once (expiryOnce).
 	expiryOnce sync.Once
 	expiry     time.Duration
-	quit       chan struct{}
-	wg         sync.WaitGroup
-	once       sync.Once
+	// awake holds the idle-sleep assertion while live turns run and
+	// agent.keep_awake_during_turns is on (keep_awake.go); awakeReloadMu
+	// serializes the setting's read with its publish.
+	awake         *wsawake.Core
+	awakeReloadMu sync.Mutex
+	quit          chan struct{}
+	wg            sync.WaitGroup
+	once          sync.Once
 	// summaryMu only guards the two maps below, briefly; it is never held
 	// across another lock or I/O (summaryLock, setSummaryOwner,
 	// summaryOwner). summaryLocks holds one mutex per reply-id, created
@@ -308,6 +350,11 @@ type Runner struct {
 	// token, and mcpTokenOf by conversation id.
 	mcpTokens  map[string]*mcpToken
 	mcpTokenOf map[string]string
+	// versions are the harness versions processes last reported, by
+	// backend (harness_versions.go).
+	versions *harnessVersions
+	// exec is the hosted exec jobs' view (exec_lifecycle.go).
+	exec execState
 }
 
 // NewRunner returns a runner; Start loads its conversations.

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
@@ -54,6 +55,8 @@ func (d *Daemon) Handler() http.Handler {
 			mux.HandleFunc(ProxyHTTPPath, d.handleProxyHTTP)
 		}
 	}
+	mux.HandleFunc(wscred.TokenRoutePath, d.handleProviderToken)
+	mux.HandleFunc(credentialChangePath, d.handleProviderChange)
 	mux.HandleFunc("/nudge", d.handleNudge)
 	mux.HandleFunc(companionChangedPath, d.handleCompanionConfigChange)
 	mux.HandleFunc("/events", d.handleIndexEvents)
@@ -65,6 +68,8 @@ func (d *Daemon) Handler() http.Handler {
 	mux.HandleFunc("/api/config/set", d.handleConfigMutation)
 	mux.HandleFunc("/api/config/reset", d.handleConfigMutation)
 	mux.HandleFunc("/api/config/proposal", d.handleConfigProposal)
+	mux.HandleFunc("/api/config/tier-routing", d.handleTierRouting)
+	mux.HandleFunc("/api/config/tier-routing/preview", d.handleTierRouting)
 	d.registerCompanionPackRoutes(mux)
 	mux.HandleFunc(railRoute, d.handleRailRefresh)
 	mux.HandleFunc(railLayoutRoute, d.handleRailLayout)

@@ -75,7 +75,7 @@ func (s *Server) filteredTools() []map[string]any {
 	filtered := make([]map[string]any, 0, len(base))
 	for _, tool := range base {
 		name, _ := tool["name"].(string)
-		if permanentlyHiddenTool(name) {
+		if permanentlyHiddenTool(name) && !s.cutoverListed(name) {
 			continue
 		}
 		if isPiTool(name) {
@@ -144,7 +144,14 @@ func (s *Server) sessionToolAccess(name, key string, entry sessionEntry) (*suble
 	// A forwarding worker's delegation tools use its token, not its key.
 	piByToken := (isPiTool(name) || isAgentTool(name)) && s.piForwards()
 	if entry.scope != roleLead && !piByToken && (isLeadOnlyTool(name) || !roleAllowsTool(entry.scope, name)) {
-		return nil, fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name)
+		msg := fmt.Sprintf("tool not available in current %s MCP profile: %s", s.runtimeNamespace(), name)
+		if entry.scope == roleDelegate && isLeadOnlyTool(name) {
+			// A spawn key is delegate-scoped by design; the lead-scoped key a
+			// worker-role render spliced in is the only one a lead-only tool
+			// admits.
+			msg += "; this key is delegate-scoped; a lead-only tool needs the lead-scoped key a worker-role playbook.render spliced into your prompt."
+		}
+		return nil, msg
 	}
 	if isNoteMutationTool(name) && !entry.isTopLevelLead() {
 		return nil, noteReadOnlyDenial(name)
@@ -292,12 +299,11 @@ func namespaceValue(value any, namespace string) any {
 	}
 }
 
-// permanentlyHiddenTool returns true for tools that must never appear on the
-// public MCP surface regardless of mode. exec.* tools are under active
-// development (epic 260524) and not yet documented in lead-workflow-manual;
-// they are hidden until the surface stabilizes.
+// permanentlyHiddenTool reports a tool no ordinary inventory lists: the exec
+// tools and the fs.* read tools, which only a cutover session's connection
+// lists (cutoverListed).
 func permanentlyHiddenTool(name string) bool {
-	return strings.HasPrefix(name, "exec.")
+	return strings.HasPrefix(name, "exec.") || isCodexReadTool(name)
 }
 
 func noAgentHiddenTool(name string) bool {

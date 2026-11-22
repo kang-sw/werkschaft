@@ -3,6 +3,7 @@ package wsgit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -100,6 +101,13 @@ func (c Client) Commit(ctx context.Context, root string, opts CommitOptions) (Co
 	}
 	preStatus := ParseStatus(preStatusOut)
 	opts.Paths = expandCommitPathsForTicketMoves(preStatus, opts.Paths)
+	if candidates := vanishedTicketMoveSources(preStatus, opts.Paths); len(candidates) > 0 {
+		indexed, err := indexedPaths(ctx, runner, root, candidates)
+		if err != nil {
+			return CommitResult{}, err
+		}
+		opts.Paths = dropVanishedTicketMoveSources(preStatus, opts.Paths, indexed)
+	}
 	for _, args := range stagingCommandsForCommit(opts.Paths, preStatus, opts.SparseScopeActive) {
 		if _, err := runner.RunGit(ctx, root, args...); err != nil {
 			return CommitResult{}, err
@@ -117,6 +125,10 @@ func (c Client) Commit(ctx context.Context, root string, opts CommitOptions) (Co
 		}
 		admitted, pins, err := admitMergeStaging(ctx, runner, root, opts.Paths)
 		if err != nil {
+			var grantErr *commitMergeGrantError
+			if errors.As(err, &grantErr) {
+				return CommitResult{}, fmt.Errorf("merge commit refused: %w", grantErr)
+			}
 			return CommitResult{}, fmt.Errorf("%w; automatic merge admission unavailable: %v; include the intended staged paths in the existing paths grant explicitly", statusErr, err)
 		}
 		opts.Paths = append(opts.Paths, admitted...)

@@ -11,7 +11,7 @@ const legacy = [
   { harness: 'pi', available: true, models: [{ id: 'pi-model' }], efforts: ['off'] }
 ];
 
-function fixture(harness, choices = legacy, delayed = false) {
+function fixture(harness, choices = legacy, delayed = false, translate = k => k) {
   const nodes = [], events = [], requests = [], storage = {};
   function mk(tag, cls, text) {
     const n = { tag, cls, textContent: text || '', value: '', hidden: false, disabled: false,
@@ -36,7 +36,7 @@ function fixture(harness, choices = legacy, delayed = false) {
   }
   let active, answerChoices, seq = 0;
   const ctx = vm.createContext({
-    mk, wsT: k => k, rpPop: () => mk('div'), rpBtn: (cls, text) => mk('button', cls, text),
+    mk, wsT: translate, rpPop: () => mk('div'), rpBtn: (cls, text) => mk('button', cls, text),
     supChoices: delayed ? null : { harnesses: choices },
     rpId: () => 'row-' + ++seq,
     tkFetch: (route, options, done) => { assert.equal(route, '/support/choices'); answerChoices = () => done(200, { harnesses: choices }); },
@@ -52,23 +52,24 @@ function fixture(harness, choices = legacy, delayed = false) {
   });
   vm.runInContext(rail, ctx);
   ctx.WsRail = ctx.window.WsRail;
-  vm.runInContext(source.match(/\n  function supHarness\(name\) \{[\s\S]*?\n  \}\n/)[0] + maker[0], ctx);
+  vm.runInContext(source.match(/\n  function supHarness\(name\) \{[\s\S]*?\n  \}\n/)[0] + source.match(/\n  function leadTierPicker\([\s\S]*?\n  \}\n/)[0] + maker[0], ctx);
   const p = active = ctx.rpLeadMake();
   p.open('/repo', 'repo', mk('button'));
   p.el.hidden = false;
-  const harnessGroup = nodes.find(n => n.listeners.click && n.attrs['aria-label'] === 'js.sup.harness');
+  const harnessGroup = nodes.find(n => n.listeners.click && n.attrs['aria-label'] === translate('js.sup.harness'));
   function pick(key) {
     const button = harnessGroup.children.find(n => n.attrs['data-harness'] === key);
     assert(button, 'harness button exists: ' + key);
     harnessGroup.listeners.click({ target: { closest: () => button } });
   }
   if (harness) pick(harness);
-  const selects = nodes.filter(n => n.tag === 'select');
+  const selects = nodes.filter(n => n.tag === 'select' && !n.attrs['data-tier-picker']);
   return { p, nodes, events, requests, storage, pick, harnessGroup,
+    terms: nodes.find(n => n.cls === 'spnote spterms'),
     choicesReady() { answerChoices(); },
     model: selects[0], mode: selects[1], effort: selects[2],
     newRows(key, values) { const rows = ctx.leadRows(mk('div'), () => {}); rows.set(key, values); return rows; },
-    start: nodes.find(n => n.tag === 'button' && n.textContent === 'js.lead.start'),
+    start: nodes.find(n => n.tag === 'button' && n.textContent === translate('js.lead.start')),
     status: nodes.find(n => n.tag === 'span' && n.cls === 'spnote'),
     error: nodes.find(n => n.cls === 'spnote err'),
     dismiss() { active = null; p.el.hidden = true; } };
@@ -331,4 +332,38 @@ const optionNames = sel => sel.children.map(n => n.value);
   ctx.harnessDraw(late);
   assert.deepEqual(calls[3], { text: 'Unavailable in this session: late-toast.', kind: 'warn' });
   assert.equal(calls.length, 4, 'an unavailable toast API does not consume the notice key');
+}
+
+// agy is still a hosted lead harness: picking it shows the Antigravity
+// terms warning in the dashboard's locale, and Start still creates the
+// lead. No other harness shows it.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const tables = Object.fromEntries(['en', 'ko'].map(lang => [lang,
+    JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../wsi18n/tables', lang + '.json'), 'utf8'))]));
+  const withAgy = [...legacy.map(h => ({ ...h, lead: true })), { harness: 'agy', lead: true, available: true, models: [{ id: 'gemini' }], efforts: ['high'] }];
+  for (const lang of ['en', 'ko']) {
+    const text = tables[lang]['js.lead.agy.terms'];
+    assert(text && text.includes('Antigravity'), lang + ' table carries the agy terms warning');
+    const f = fixture('agy', withAgy, false, k => tables[lang][k] || k);
+    assert(f.terms, 'the warning element exists');
+    assert.equal(f.terms.hidden, false, lang + ': agy shows the warning');
+    assert.equal(f.terms.textContent, text);
+    assert.equal(f.terms.attrs.role, 'note');
+    assert.equal(f.start.disabled, false, lang + ': the warning does not block creation');
+    f.start.listeners.click();
+    assert.equal(f.requests.length, 1, lang + ': creation still submits');
+    assert.equal(f.requests[0].route, '/agents/leads');
+    assert.equal(f.requests[0].body.harness, 'agy');
+  }
+  const f = fixture('claude', withAgy);
+  assert.equal(f.terms.hidden, true, 'claude shows no agy warning');
+  f.pick('agy');
+  assert.equal(f.terms.hidden, false);
+  f.pick('pi');
+  assert.equal(f.terms.hidden, true, 'leaving agy hides the warning');
+  for (const harness of ['claude', 'pi']) {
+    assert.equal(fixture(harness).terms.hidden, true, harness + ' shows no agy warning');
+  }
 }

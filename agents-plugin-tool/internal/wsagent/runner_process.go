@@ -45,11 +45,24 @@ func (c *conv) setPromptBoundary(rec *Record, startedAt int64, reportable bool) 
 // inbox drain. Internal prompts wait for ACP without opening a parent result.
 // The boundary is recorded only once the holder accepted the prompt: one
 // recorded before it would leave a successor waiting for a response to a
-// prompt that never reached the harness.
+// prompt that never reached the harness. send runs only when the binding
+// survives the last release check (admitInput); otherwise nothing runs and
+// the error is an inputReleasedError, which is no send failure.
 func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
+	// The prompt is a keep-awake member while its send is in flight. A
+	// successful send's caller opens the turn (beginTurn, or compactCommand
+	// for a native compaction) before the loop step ends, so membership
+	// carries over; a failed one is dropped by that step's sync.
+	c.awakeSending = true
+	c.syncAwake()
+	defer func() { c.awakeSending = false }()
 	heldAgy := c.record().heldAgyWorker()
 	startedAt := c.r.opts.Now().UnixMilli()
-	if err := send(); err != nil || !heldAgy {
+	var err error
+	if checkout := c.admitInput(func() { err = send() }); checkout != "" {
+		return &inputReleasedError{checkout: checkout}
+	}
+	if err != nil || !heldAgy {
 		return err
 	}
 	c.update(func(rec *Record) { c.setPromptBoundary(rec, startedAt, reportable) })
@@ -64,6 +77,28 @@ func (c *conv) startProcess() error {
 		return conflict("the session is archived; unhide it before starting")
 	}
 	rec := c.record()
+	// A launch, wake or resume of a spawned conversation in a checkout
+	// released after it was bound is refused: the release ended that binding.
+	// A start is a cold path, so the check reads the checkouts' markers, not
+	// memory alone: a release whose notice never reached this daemon still
+	// refuses it. The check and the starting mark share one mu hold with the
+	// release notice and the occupancy read: a notice either lands first
+	// (this start is refused) or finds the start live.
+	c.mu.Lock()
+	checkout := c.releasedOnDiskLocked()
+	if checkout == "" {
+		c.starting = true
+	}
+	c.mu.Unlock()
+	if checkout != "" {
+		return checkoutReleasedRefusal(checkout)
+	}
+	defer c.setStatus(func() { c.starting = false })
+	// Before the profile is read: a removed or edited profile must not mask
+	// a cross-harness refusal (admitWorkerRecord).
+	if err := c.r.admitWorkerRecord(rec); err != nil {
+		return err
+	}
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
 	if err != nil {
 		return err
@@ -87,15 +122,23 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 	}
 	defer releaseAdmission()
 	c.mcpStale = false
-	c.loadCompaction()
-	c.loadModelWait()
+	// A cross-harness rejoin attaches only to match ownership and end the
+	// holder: no compaction, agy watchdog, or permission config is read.
+	refused := attach && c.crossHarnessRejoin
+	if !refused {
+		c.loadCompaction()
+		c.loadModelWait()
+	}
 	if rec.Backend == BackendPi && !attach {
 		if err := c.r.checkChildProfile(rec.Parent, rec.Profile, def); err != nil {
 			return err
 		}
 	}
 	level, source := PermissionLevel(""), ""
-	if attach {
+	if refused {
+		// Keeps the level startConv left (none for a refused record).
+		level, source = c.workerPermissionLevel, c.workerPermissionSource
+	} else if attach {
 		var err error
 		level, source, err = c.r.workerPermission(rec, def, c.dir)
 		if err != nil {
@@ -245,6 +288,17 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		// do not register a bearer before checkReattach validates ownership.
 		spec.MCPSession = &MCPSession{Started: func(env []string, _ int) { c.workerMCPEnv = env }}
 	}
+	if attach {
+		// The token is restored after ownership validation
+		// (restoreWorkerMCP), which marks it again.
+		spec.ExecCutover = c.rejoinExecCutover(rec)
+	} else {
+		var mcpEnv map[string]string
+		if spec.WSMCP != nil {
+			mcpEnv = spec.WSMCP.Env
+		}
+		c.decideExecCutover(rec, def, &spec, mcpEnv)
+	}
 	if rec.Backend == BackendPi && !attach {
 		// Persist exactly the definition checked above and passed to Start,
 		// after retiring the previous process. Reattachment keeps this copy.
@@ -274,11 +328,12 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 			c.seq, c.seqDirty, c.live.ringDirty = 0, false, false
 			c.update(func(rec *Record) {
 				rec.HolderID, rec.HostPID, rec.HolderSeq = id, pid, 0
+				rec.ExecCutoverHolder = cutoverHolder(spec.ExecCutover, id)
 				rec.SteerSeq, rec.SteerAnswers, rec.SteerAnswerSeq = 0, 0, 0
 				rec.HandedOffAt = c.r.opts.Now().UTC().Format(time.RFC3339)
 				rec.forgetMCP()
 				if s := spec.MCPSession; s != nil {
-					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, spec.WSMCP.Env, id
+					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, spec.ExecCutover), spec.WSMCP.Env, id
 				}
 			})
 		}
@@ -304,6 +359,11 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	c.loadCompaction()
 	c.loadModelWait()
+	// Each agy process writes its own worker log: locate it afresh.
+	c.agyLog = nil
+	if rec.Backend == BackendAgy {
+		c.agyLog = c.newAgyLog()
+	}
 	level, source, err := c.r.leadPermission(rec, c.dir)
 	if err != nil {
 		if !attach {
@@ -361,6 +421,8 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	}
 	// spawned: the backend recorded its process before Start returned (LeadSpec.Spawned).
 	var spawned bool
+	// cutover is this start's exec cutover, settled below before the start.
+	var cutover bool
 	spec := StartSpec{
 		Root:         rec.Root,
 		Dir:          c.dir,
@@ -416,10 +478,14 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 				EnvHostedSessionKey: rec.WSKey,
 				EnvHostedSessionRow: wsdashboard.RegistrationPath(c.r.opts.Dir, rec.ReplyID),
 			},
-			Manual: func() string { return c.leadManual(rec) },
+			Manual:     func() string { return c.leadManual(rec) },
+			FrameTrace: c.agyFrameTrace,
 			Spawned: func(holderID string, pid int) {
 				spawned = true
-				c.update(func(rec *Record) { rec.HolderID, rec.HostPID, rec.HolderSeq = holderID, pid, 0 })
+				c.update(func(rec *Record) {
+					rec.HolderID, rec.HostPID, rec.HolderSeq = holderID, pid, 0
+					rec.ExecCutoverHolder = cutoverHolder(cutover, holderID)
+				})
 				c.writeRegistration()
 			},
 		},
@@ -432,7 +498,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		// daemon that keeps the record's members without knowing them: it
 		// loaded the bundle's stdio server, and the token is no one's.
 		c.update(func(rec *Record) { rec.forgetMCP() })
-	case attach && rec.MCPToken != "" && (rec.MCPURL != c.r.mcpURL() || rec.MCPEnv == nil):
+	case attach && rec.MCPToken != "" && (!c.r.servesMCPURL(rec.MCPURL) || rec.MCPEnv == nil):
 		// The process sends its token to a route this daemon does not
 		// serve (it listens on another port), or its hello is unknown:
 		// its ws-mcp is gone until it restarts, at its first idle point
@@ -468,11 +534,22 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			mcpEnv = cmd.Env
 		}
 	}
+	if attach {
+		spec.ExecCutover = c.rejoinExecCutover(rec)
+	} else {
+		c.decideExecCutover(rec, def, &spec, mcpEnv)
+	}
+	cutover = spec.ExecCutover
 	if source == "explicit" {
 		spec.PermissionLevel = level
 		if mode := nativePermissionMode(rec.Backend, level); mode != "" {
 			spec.Lead.PermissionMode = mode
 		}
+	}
+	if mode := c.cutoverLaunchMode(); mode != "" {
+		// The cutover's native mode wins over the saved one, which stays on
+		// record for a start outside the cutover.
+		spec.Lead.PermissionMode = mode
 	}
 	if !attach {
 		c.permissionNudge(level, false, "")
@@ -528,9 +605,10 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 	c.seq, c.seqDirty, c.live.ringDirty = 0, false, false
 	c.update(func(rec *Record) {
 		rec.HolderID, rec.HostPID, rec.HolderSeq = id, pid, 0
+		rec.ExecCutoverHolder = cutoverHolder(cutover, id)
 		rec.forgetMCP()
 		if s := spec.MCPSession; s != nil {
-			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, mcpEnv, id
+			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, cutover), mcpEnv, id
 		}
 	})
 	c.writeRegistration()
@@ -572,14 +650,28 @@ func (c *conv) retireHolder() error {
 // scan.
 func (c *conv) reattach() {
 	rec := c.record()
+	if err := c.r.admitWorkerRecord(rec); err != nil {
+		// Never rejoined. The attach below only lets checkReattach run
+		// the ownership match every held worker passes. Replay, events,
+		// and the MCP bearer stay closed. A matching holder is then
+		// ended (retireCrossHarnessWorker); a mismatched one is never
+		// stopped. The record stays, stopped, either way.
+		c.crossHarnessRejoin = true
+		c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), true })
+		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s refused: %v\n", rec.ReplyID, rec.HolderID, err)
+	}
+	// A cross-harness rejoin never runs, so it reads no profile (startWorker
+	// skips its config reads too).
 	def := Profile{Backend: rec.Backend, Lead: rec.Lead}
-	if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
-		def = *rec.ResolvedDefinition
-	} else if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
-		// Best-effort mapping for a legacy held process is not evidence of
-		// what it launched with. Keep its child ceiling unavailable until
-		// an actual startWorker launch records the checked definition.
-		def = rp.Definition
+	if !c.crossHarnessRejoin {
+		if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
+			def = *rec.ResolvedDefinition
+		} else if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
+			// Best-effort mapping for a legacy held process is not evidence of
+			// what it launched with. Keep its child ceiling unavailable until
+			// an actual startWorker launch records the checked definition.
+			def = rp.Definition
+		}
 	}
 	var err error
 	if rec.Lead {
@@ -592,9 +684,34 @@ func (c *conv) reattach() {
 		// The holder stays in the record: the next start ends it first.
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
 		if !rec.Lead {
+			// A worker keeps replaying until checkReattach reads this after
+			// the holder scan and ends the recovery (recoveryFailed drops
+			// the open turn). The scan can take long, so the failure leaves
+			// keep-awake membership now (wantAwake) instead of waiting for it.
 			c.rejoinErr = err.Error()
+			c.publishAwake(c.wantAwake())
+		} else {
+			// No process came back, so no replay will ever settle the turn
+			// the record showed open: end the replay and drop that turn, or
+			// the keep-awake membership it froze would hold the assertion
+			// for good.
+			c.replaying = false
+			if c.turn {
+				c.setStatus(func() { c.turn = false })
+				c.live.applyQuiet(wslive.Event{Kind: wslive.KindTurnEnd})
+			}
+			// No replay will fold the recovery file's evidence: fold it
+			// now (rows it showed running end unknown at its write time)
+			// and let the file be replaced.
+			if !c.finishAgyNativeReplay(false) {
+				c.live.writeSnapshot()
+			}
+			c.publishAwake(c.wantAwake())
 		}
 	}
+	// A process that outlived its checkout's release keeps running, but this
+	// daemon gives it no new input there either: startConv settled that
+	// before this rejoin.
 }
 
 // checkReattach tells a rejoined process where the holder's replay ends,
@@ -620,8 +737,9 @@ func (c *conv) checkReattach() {
 	if !ok {
 		return
 	}
-	if c.workerRetiring {
-		c.retireDowngradedWorker(hp)
+	if c.retiringHolder() {
+		// The ownership match passed before the first, failed stop.
+		c.retryRetirement(hp, true)
 		return
 	}
 	id, _, _ := hp.HolderInfo()
@@ -634,7 +752,10 @@ func (c *conv) checkReattach() {
 			}
 			if !c.rec.Lead {
 				var meta holderSession
-				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.rec, meta, info.Child) {
+				// A cross-harness retirement stops the holder, so a holder already
+				// rejected grants it no stop authority either.
+				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.record(), meta, info.Child) ||
+					c.crossHarnessRejoin && c.r.holders.isRejected(id) {
 					// Never stop a holder that failed the ownership check.
 					c.r.holders.reject(id)
 					hp.Detach()
@@ -647,9 +768,16 @@ func (c *conv) checkReattach() {
 						}
 					})
 					c.recoveryFailed("held process association does not match the worker record")
+					c.crossHarnessRetired()
 					return
 				}
-				if c.retireDowngradedWorker(hp) {
+				if c.retireDowngradedWorker(hp, true) {
+					c.crossHarnessRetired()
+					return
+				}
+				if c.crossHarnessRejoin {
+					// Ownership matched: end the holder instead of rejoining it.
+					c.retireCrossHarnessWorker(hp)
 					return
 				}
 				rec := c.record()
@@ -670,6 +798,7 @@ func (c *conv) checkReattach() {
 	}
 	if !listed {
 		c.processGone()
+		c.crossHarnessRetired()
 		return
 	}
 	if !attached {
@@ -701,6 +830,9 @@ func (c *conv) replayDone(lost bool) {
 	lost = lost || c.replayGap
 	boundary := c.replayBoundary
 	c.replaying, c.replayAsked, c.replayGap, c.replayBoundary = false, false, false, false
+	// Agy native rows end their observation here, whatever the turn state
+	// and before a worker's lost-turn probe returns early.
+	c.finishAgyNativeReplay(false)
 	c.queryRecoveryUsage()
 	if !c.rec.Lead && c.rec.Parent != nil {
 		if lost && c.rec.TurnOpen {
@@ -734,6 +866,9 @@ func (c *conv) replayDone(lost bool) {
 		c.armModelWait()
 	}
 	c.reconcileLeadPermission()
+	// A rejoined cutover worker's process keeps the mode it ran in.
+	c.holdWorkerCutoverMode(c.activeMode)
+	c.rejectCutoverPending()
 	c.allowAgyBypassPending()
 	c.checkAction(false)
 	c.live.writeSnapshot()

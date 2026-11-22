@@ -8,7 +8,13 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
-type admissionRefusal struct{ reason string }
+// admissionRefusal refuses a process start while keeping its input. checkout
+// is set when the refusal is a release of the conversation's checkout
+// (checkoutReleasedRefusal), which no later admission lifts.
+type admissionRefusal struct {
+	reason   string
+	checkout string
+}
 
 func (e *admissionRefusal) Error() string { return e.reason }
 
@@ -117,6 +123,11 @@ func (r *Runner) childAdmission(rec Record, def Profile) (PermissionLevel, strin
 	if rec.Lead {
 		return "", "", nil
 	}
+	// A cross-harness worker record (admitWorkerRecord) is kept but never
+	// launched or woken again.
+	if err := r.admitWorkerRecord(rec); err != nil {
+		return "", "", err
+	}
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)
 	level, source, err := r.workerPermission(rec, def, dir)
 	if err != nil {
@@ -141,13 +152,29 @@ func childLevel(dir string) PermissionLevel {
 	return level
 }
 
-// awakeLocked reports an awake child for the width cap and its parent's
-// sleep: a process, a turn or background task, a held done turn, an initial
-// spawn before its first Send, or input or claimed mail it has not taken
-// whose start was not refused. Under mu.
+// awakeLocked reports an awake child for the width cap and its expiry:
+// its process, or the one sleep predicate (keepsAwakeLocked). Under mu.
 func (c *conv) awakeLocked() bool {
-	return !c.closed && (c.proc != nil || c.turn || c.bgTasks != 0 || c.holding || c.spawnPending ||
+	return !c.closed && (c.proc != nil || c.keepsAwakeLocked())
+}
+
+// keepsAwakeLocked is the one sleep predicate, which a parent's idle gate
+// (idleNow) reads for each child: work of its own (workingLocked), an
+// initial spawn before its first Send, or input or claimed mail it has not
+// taken whose start was not refused. A sleeping child, or one whose
+// finished process merely waits for its own idle stop, keeps no parent
+// awake. Under mu.
+func (c *conv) keepsAwakeLocked() bool {
+	return !c.closed && (c.workingLocked() || c.spawnPending ||
 		(!c.wakeRefused && (c.sends > max(c.settled.mark, c.voided) || len(c.rec.Mail) > 0)))
+}
+
+// workingLocked reports the conversation's own work: a running turn, a
+// live job (a harness background task, monitors included, or a hosted exec
+// job it owns), or a done turn held for its children. Under mu or in the
+// loop.
+func (c *conv) workingLocked() bool {
+	return c.turn || c.bgTasks != 0 || c.holding || c.ownsLiveExec()
 }
 
 // awakeChildren counts parent's open, awake direct children.

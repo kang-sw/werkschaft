@@ -3,6 +3,8 @@ kind: render
 delegates: false
 role: delegate
 tier: medium
+tier-role: ticket-batch-selector
+tier-parent: explore:*
 variables:
   - RoleModel
 ---

@@ -257,6 +257,9 @@ type implementRouteFactsSource struct {
 	Facts  implementFactsInput
 	Status string // "ticket" | "absent" | "unreadable" | "ad-hoc"
 	Detail string
+	// Ticket names the target ticket (its path, else its stem) for the stop
+	// instruction's remedy.
+	Ticket string
 }
 
 // routeFactGroups maps each accepted `## Route Facts` row key to the fact group
@@ -284,6 +287,14 @@ var routeFactGroups = map[string]string{
 // facts rather than an error, so a fact problem is reported in the verdict the
 // caller reads rather than swallowing the branch plan the caller also needs.
 func loadImplementRouteFacts(root string, target implementTargetInput, env []string) implementRouteFactsSource {
+	source := readImplementRouteFacts(root, target, env)
+	if target.Kind == "ticket" {
+		source.Ticket = firstNonEmpty(strings.TrimSpace(target.TicketPath), strings.TrimSpace(target.TicketStem))
+	}
+	return source
+}
+
+func readImplementRouteFacts(root string, target implementTargetInput, env []string) implementRouteFactsSource {
 	if target.Kind != "ticket" {
 		return implementRouteFactsSource{Status: "ad-hoc"}
 	}
@@ -1012,7 +1023,7 @@ func implementNextInstruction(verdict implementVerdict, source implementRouteFac
 func implementRouteFactsPreamble(source implementRouteFactsSource) string {
 	switch {
 	case routeFactsMissing(source.Status):
-		return fmt.Sprintf("Stop and report missing route facts: %s. They are populated once at ticket authoring, so a run that reaches this point was handed over out of order; do not re-derive them here. If you continue anyway, note that every fact below resolved to unknown. ", source.Detail)
+		return fmt.Sprintf("Stop and report missing route facts: %s. Report blocked with `proposed_resolution: run ticket-fact-populator on %s`; the facts are populated once at ticket authoring, so a run that reaches this point was handed over out of order, and you do not re-derive them here. If you continue anyway, note that every fact below resolved to unknown. ", source.Detail, firstNonEmpty(source.Ticket, "<ticket path>"))
 	case source.Status == "ad-hoc":
 		return "Ad-hoc target: the description in your task block is the contract, and no ticket is read. Proceed from it and stop only on your stop protocol's closed list. "
 	default:

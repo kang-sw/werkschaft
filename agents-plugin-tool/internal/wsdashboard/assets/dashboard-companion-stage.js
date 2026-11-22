@@ -2,13 +2,6 @@
   "use strict";
   const { clamp, mix, finite } = C;
   const landmarks = ["composer-top", "whiteboard-ask", "hud-roster"];
-  const fxDefaults = {
-    alert: { kind: "badge", text: "!", color: "#e2582c" },
-    ponder: { kind: "float", text: "…", color: "#8fa0b8" },
-    shock: { kind: "badge", text: "!?", color: "#e2582c" },
-    sparkle: { kind: "particles", glyphs: ["✦", "✧", "✦"], color: "#e6aa34" },
-    zzz: { kind: "float", text: "Zzz", color: "#8fa0b8" }
-  };
   const railRowSelector = ".rs[data-rid]";
   let mountedRailObserver;
 
@@ -148,6 +141,21 @@
     };
   }
 
+  function gearIcon(doc) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = doc.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const teeth = doc.createElementNS(ns, "circle");
+    for (const [name, value] of [["cx", "12"], ["cy", "12"], ["r", "8"], ["fill", "none"], ["stroke", "currentColor"],
+      ["stroke-width", "4"], ["stroke-dasharray", "3.14 3.14"]]) teeth.setAttribute(name, value);
+    const ring = doc.createElementNS(ns, "circle");
+    for (const [name, value] of [["cx", "12"], ["cy", "12"], ["r", "5"], ["fill", "none"], ["stroke", "currentColor"],
+      ["stroke-width", "2.5"]]) ring.setAttribute(name, value);
+    svg.append(teeth, ring);
+    return svg;
+  }
+
   function mount(config, mute) {
     const doc = document, root = doc.documentElement, rail = doc.getElementById("rail");
     const cancel = new AbortController(), options = { signal: cancel.signal };
@@ -171,7 +179,13 @@
     grip.setAttribute("role", "slider");
     grip.setAttribute("aria-label", wsT("js.companion.resize"));
     grip.setAttribute("aria-valuemin", "64");
-    hit.append(character, grip);
+    const gear = doc.createElement("button");
+    gear.type = "button";
+    gear.className = "ws-companion-gear";
+    gear.title = wsT("js.companion.settings");
+    gear.setAttribute("aria-label", gear.title);
+    gear.append(gearIcon(doc));
+    hit.append(character, grip, gear);
     hit.hidden = true;
     const ctx = canvas.getContext("2d");
     const menu = doc.createElement("div");
@@ -181,14 +195,14 @@
     node.append(hit, menu);
     doc.body.append(node);
 
-    let model, rig, view, runner = C.scenarioRunner(), timing = C.timing(), fxContext = null;
+    let model, sharedPack = null, rig, view, runner = C.scenarioRunner(), timing = C.timing(), fxContext = null;
     let state = window.WsShell.companionContext();
     let activeRid = root.dataset.rid || "", posture = { activity: "idle", rid: "" }, switchedAt = -Infinity;
     let markedRid, railMark;
     const railEvents = railSignals(), pairs = signalPairs();
     let currentConfig = config, preset = config.preset;
     let frame = 0, last = 0, now = 0, viewStart = 0, lastBusy = 0, nextIdle = 45000;
-    let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, lastCount;
+    let beat = null, viewBeat, viewPlaying, prop, fx, propCanvas, propCtx, decoration, quip, quipWidth = 0, lastCount;
     let size = 96, dpr = 1, vw = 0, vh = 0, dirty = true;
     let frameElement = null, frameInput = null, frameBox = null;
     let home = { x: 60, y: 96 }, arrived = false, custom = null, drag = null, suppressClick = false;
@@ -200,12 +214,16 @@
     const guards = { routeKind: "home", pose: "stand", idleMs: 0 };
     let marks = Object.create(null);
 
+    // The focus report carries the session this stage shows and the pack it
+    // renders; before the first pack is drawn nothing is reported.
+    function reportFocus() { C.focus?.show(activeRid, model?.id || ""); }
     function notice(key) { window.WsToast?.show(wsT("js.companion." + key), { kind: "notice" }); }
     const loader = C.packLoader((pack, shared) => {
       const next = C.makeRig(pack, shared, preset);
       // Prepare the neutral body and its tint cache before replacing the active rig.
       next.view("stand", null, "idle", []);
       model = pack;
+      sharedPack = shared || null;
       rig = next;
       runner = C.scenarioRunner(pack.manifest.scenarios);
       timing = C.timing(pack.manifest);
@@ -215,7 +233,9 @@
       node.dataset.pack = pack.id;
       node.dataset.rev = pack.rev;
       hit.hidden = false;
+      reportFocus();
       if (!menu.hidden) controls.rebuild();
+      settings?.rebuild();
       schedule();
     }, () => notice("pack_failed"));
 
@@ -233,6 +253,20 @@
       currentConfig = next;
       if (changed) applyPreset(next.preset);
       requestPack();
+      settings.refresh();
+    }
+
+    // command plays an agent-director command for the shown session over the
+    // rules engine until its TTL ends. Commands for other sessions, and
+    // fields naming IDs the active pack does not know, are dropped.
+    function command(payload) {
+      if (!rig || !activeRid || !C.record(payload) || payload.sessionId !== activeRid) return false;
+      const directed = C.directedCommand(payload, model, sharedPack, runner);
+      if (!directed) return false;
+      runner.direct(directed.beats, now, directed.ttl, directed.id);
+      viewBeat = null;
+      schedule();
+      return true;
     }
 
     function applyPreset(id) {
@@ -263,6 +297,7 @@
       updatePosture();
       requestPack();
       invalidated();
+      reportFocus();
     }
 
     function context(payload, frameRect) {
@@ -306,6 +341,7 @@
     function observeRail(fragment, id, baseline) {
       activeRid = id || "";
       const signal = railEvents.read(fragment, activeRid, baseline);
+      reportFocus();
       updatePosture();
       if (signal) receiveSignal(signal);
       schedule();
@@ -325,6 +361,16 @@
     const sizing = resizeControl(grip, options, () => size, invalidated);
 
     function resetSize() { sizing.reset(); controls.close(); }
+
+    const settings = C.settingsModal(node, gear, options, {
+      rows: () => window.wsCompanionModalRows,
+      config: () => currentConfig,
+      persona: () => model?.persona || null,
+      presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
+      anchor: () => hit.getBoundingClientRect(),
+      resetSize() { sizing.reset(); },
+      applyPreset, notice
+    });
 
     function layout() {
       dirty = false;
@@ -469,7 +515,7 @@
       node.dataset.scenario = playing?.entry.id || "";
       prop = !attached && attach.data ? attach : null;
       fx = rig.prop(propAction(next.fx), "fx");
-      if (!fx.data) fx.data = C.own(fxDefaults, propAction(next.fx));
+      if (!fx.data) fx.data = C.own(C.fxDefaults, propAction(next.fx));
       lastCount = null;
       if (quip) quip.hidden = !next.quip;
       if (next.quip) {
@@ -478,7 +524,9 @@
           quip.className = "ws-companion-quip";
           node.append(quip);
         }
+        // Text only: a quip may come from a model and must never become markup.
         quip.textContent = next.quip;
+        quipWidth = quip.offsetWidth || 0;
       }
     }
 
@@ -597,7 +645,10 @@
           }
         }
       }
-      if (quip && !quip.hidden) quip.style.transform = "translate3d(" + position.x + "px," + (position.y - size * 0.95) + "px,0)";
+      if (quip && !quip.hidden) {
+        const left = clamp(position.x - quipWidth / 2, 6, Math.max(6, vw - quipWidth - 6));
+        quip.style.transform = "translate3d(" + left + "px," + (position.y - size * 0.95) + "px,0)";
+      }
     }
 
     function look(age, dt, playing) {
@@ -758,7 +809,7 @@
     if (rail) observeRail(rail, activeRid, true);
     requestPack();
     return {
-      apply, reset, context, trackFrame, closeMenu: controls.close,
+      apply, reset, context, trackFrame, command, closeMenu: controls.close,
       dispose() {
         if (mountedRailObserver === observeRail) mountedRailObserver = null;
         cancel.abort();
@@ -770,6 +821,7 @@
         rail?.style.removeProperty("--companion-slot");
         loader.dispose();
         node.remove();
+        C.focus?.show("", "");
       }
     };
   }

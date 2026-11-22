@@ -176,6 +176,26 @@ func formatMergeBase(result wsgit.MergeBaseResult) string {
 	return fmt.Sprintf("merge_base: %s (%s %s)\n", result.MergeBase, result.Base, result.Head)
 }
 
+// formatTicketChangeStatus words the status part of a ticket_changes line. A
+// move keeps from->to; an entry with no source status is an edit, an addition
+// or a deletion inside one status directory, never a move from nothing.
+func formatTicketChangeStatus(change wsgit.TicketChange) string {
+	if change.FromStatus != "" {
+		return fmt.Sprintf(" %s->%s", change.FromStatus, displayOrDash(change.ToStatus))
+	}
+	if change.ToStatus == "" {
+		return ""
+	}
+	switch change.Kind {
+	case "A":
+		return " added in " + change.ToStatus
+	case "D":
+		return " deleted from " + change.ToStatus
+	default:
+		return " edited in " + change.ToStatus
+	}
+}
+
 func formatGitCommit(result wsgit.CommitResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "commit: %s\n", result.Hash)
@@ -190,9 +210,7 @@ func formatGitCommit(result wsgit.CommitResult) string {
 		b.WriteString("ticket_changes:\n")
 		for _, change := range result.TicketChanges {
 			fmt.Fprintf(&b, "  - %s", change.Stem)
-			if change.FromStatus != "" || change.ToStatus != "" {
-				fmt.Fprintf(&b, " %s->%s", displayOrDash(change.FromStatus), displayOrDash(change.ToStatus))
-			}
+			b.WriteString(formatTicketChangeStatus(change))
 			if change.ResultAdded {
 				b.WriteString(" result")
 				if change.ResultHeading != "" {

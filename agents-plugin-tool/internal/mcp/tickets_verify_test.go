@@ -196,6 +196,45 @@ func TestTicketsVerifySageFreshnessWarningDoesNotBlockCommit(t *testing.T) {
 	}
 }
 
+func TestTicketsVerifyResultAppendKeepsSageReviewFresh(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	initGit(t, root)
+
+	path := "ai-docs/tickets/ready/260723-feat-result-append.md"
+	body := "---\n" +
+		"title: Result append\n" +
+		"sage-review-design: completed\n" +
+		"sage-review-completeness: completed\n" +
+		"---\n\n## Phases\n\n### Phase 1: One\n\nBody.\n"
+	mustWrite(t, root, path, body)
+	runGit(t, root, "add", "ai-docs")
+	runGit(t, root, "commit", "-m", "stamp review")
+	mustWrite(t, root, path, body+"\n### Result (abc1234) - 2026-11-22\n\nLanded.\n")
+
+	server := NewServer(root, "test")
+	input := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tickets.verify","arguments":{"paths":["` + path + `"]}}}` + "\n"
+	var out bytes.Buffer
+	if err := serveStdioWithSession(t, server, root, input, &out); err != nil {
+		t.Fatalf("ServeStdio returned error: %v", err)
+	}
+	byID := responseLinesByID(t, strings.Split(strings.TrimSpace(out.String()), "\n"))
+	if text := toolText(t, byID["1"]); strings.Contains(text, "sage-review-freshness") {
+		t.Fatalf("appending a Result produced a freshness warning: %q", text)
+	}
+
+	// A body edit outside the Result still warns.
+	mustWrite(t, root, path, strings.Replace(body, "Body.", "Body edited.", 1)+"\n### Result (abc1234) - 2026-11-22\n\nLanded.\n")
+	out.Reset()
+	if err := serveStdioWithSession(t, server, root, input, &out); err != nil {
+		t.Fatalf("ServeStdio returned error: %v", err)
+	}
+	byID = responseLinesByID(t, strings.Split(strings.TrimSpace(out.String()), "\n"))
+	if text := toolText(t, byID["1"]); !strings.Contains(text, "WARN [sage-review-freshness]") {
+		t.Fatalf("body edit outside Result lost its freshness warning: %q", text)
+	}
+}
+
 func TestGitCommitIgnoresStaleSageReviewOnUntouchedTicket(t *testing.T) {
 	useLeadProfile(t)
 	root := t.TempDir()

@@ -169,6 +169,13 @@ func piLeadArgs(spec StartSpec) []string {
 	return args
 }
 
+// piShellTool is Pi's built-in shell tool, which the exec cutover removes
+// from a worker's --tools. A lead passes no --tools (it would filter the ws
+// extension's tools too); its tools are the extension's to reshape, and a
+// Pi lead has no trusted ws-mcp binding, so it never starts under the
+// cutover (execCutoverFor).
+const piShellTool = "bash"
+
 // piEnv is the child's environment: env without the ws Pi package's
 // process-role and bootstrap variables a parent Pi session leaves behind,
 // and without inherited ws harness identity.

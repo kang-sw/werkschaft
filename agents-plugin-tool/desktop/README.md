@@ -65,8 +65,8 @@ For example, from the repository root on macOS arm64:
 ```sh
 cd agents-plugin-tool
 python3 scripts/generate-package-assets.py
-go build -trimpath -ldflags '-s -w -X main.version=0.50.8-dev' -o /tmp/ws-mcp-darwin-arm64 ./cmd/ws-mcp
-python3 scripts/write-runtime-metadata.py /tmp/ws-mcp-darwin-arm64 --version 0.50.8-dev
+go build -trimpath -ldflags '-s -w -X main.version=0.51.0-dev' -o /tmp/ws-mcp-darwin-arm64 ./cmd/ws-mcp
+python3 scripts/write-runtime-metadata.py /tmp/ws-mcp-darwin-arm64 --version 0.51.0-dev
 node desktop-electron/scripts/assemble-daemon-input.cjs --binary /tmp/ws-mcp-darwin-arm64 --out /tmp/werkschaft-daemon-input --platform darwin
 cd desktop
 npm ci --ignore-scripts --no-audit --no-fund
@@ -83,8 +83,8 @@ On Windows x64, from `agents-plugin-tool` in PowerShell:
 
 ```powershell
 python scripts/generate-package-assets.py
-go build -trimpath -ldflags '-s -w -X main.version=0.50.8-dev' -o "$env:TEMP\ws-mcp-windows-amd64.exe" ./cmd/ws-mcp
-python scripts/write-runtime-metadata.py "$env:TEMP\ws-mcp-windows-amd64.exe" --version 0.50.8-dev
+go build -trimpath -ldflags '-s -w -X main.version=0.51.0-dev' -o "$env:TEMP\ws-mcp-windows-amd64.exe" ./cmd/ws-mcp
+python scripts/write-runtime-metadata.py "$env:TEMP\ws-mcp-windows-amd64.exe" --version 0.51.0-dev
 node desktop-electron/scripts/assemble-daemon-input.cjs --binary "$env:TEMP\ws-mcp-windows-amd64.exe" --out "$env:TEMP\werkschaft-daemon-input" --platform win32
 cd desktop
 npm ci --ignore-scripts --no-audit --no-fund
@@ -121,6 +121,12 @@ python3 -m unittest discover -s scripts -p test_build_slot.py -v
   documents. External HTTP(S) links open in the system browser from top-level
   links and popups. Other schemes are blocked. Popup requests never create a
   second webview.
+- Downloads are accepted only from the pinned dashboard origin and saved to the
+  user's Downloads folder under the server's file name, cleaned to one path
+  component and numbered `name (1).ext` rather than overwriting; a native
+  notification reports the end. macOS needs the navigation delegate to hand
+  WebKit's download to Wry; on Windows the same handler replaces WebView2's
+  default download UI (Wry already suppresses it).
 - The renderer uses the dashboard's existing draft storage. The native close
   asks the pinned top-level renderer whether it recovered the draft and shows
   the native **Stay / Close** prompt if recovery fails or the renderer is too

@@ -126,7 +126,7 @@ func TestTicketGraphResolvesHiddenRelatedTargetUnderScope(t *testing.T) {
 	// Live control: "no FIX for the hidden stem" alone cannot distinguish a
 	// correctly resolved hidden stem from an integrity check that silently
 	// stopped running over a partial board.
-	requireContainsFlat(t, text, "related: `260199-feat-absent` resolves to no ticket stem.")
+	requireContainsFlat(t, text, "related: `260199-feat-absent` is not on this branch")
 }
 
 // --- F2: epic with a hidden open child -------------------------------------
@@ -639,7 +639,7 @@ func TestTicketScopeGateIsInertWithoutSparseCheckout(t *testing.T) {
 		if len(result.Advisories) == 0 {
 			t.Fatalf("%s: no advisories; the dangling related: check stopped running", label)
 		}
-		requireContainsFlat(t, result.Advisories[0].Text, "related: `260199-feat-absent` resolves to no ticket stem")
+		requireContainsFlat(t, result.Advisories[0].Text, "related: `260199-feat-absent` is not on this branch")
 		scope, err := TicketScope(f.root, nil)
 		if err != nil {
 			t.Fatalf("%s: TicketScope returned error: %v", label, err)

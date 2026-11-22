@@ -126,7 +126,7 @@ func TestBuiltinPiWorkerProfileResolves(t *testing.T) {
 	if want := []string{"read", "bash", "edit", "write", "grep", "find", "ls"}; !slices.Equal(p.Tools, want) {
 		t.Errorf("pi-worker tools = %v, want %v", p.Tools, want)
 	}
-	if want := []string{"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.resolve_impl_branch", "tickets.create_empty", "tickets.verify", "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait", "compact", "agenda.set"}; !slices.Equal(p.WSTools, want) {
+	if want := []string{"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.resolve_impl_branch", "tickets.create_empty", "tickets.verify", "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait", "compact", "agenda.set", "exec.run", "exec.shell", "exec.stop", "exec.tail", "exec.list", "exec.write"}; !slices.Equal(p.WSTools, want) {
 		t.Errorf("pi-worker ws_tools = %v, want %v", p.WSTools, want)
 	}
 	var pi []string
@@ -159,6 +159,11 @@ func TestBuiltinPiMiniLeadProfileResolves(t *testing.T) {
 	want := append(append([]string{}, PiWorkerWSTools...), "tickets.query", "tickets.acquire", "tickets.release", "tickets.close", "tickets.move", "tickets.checklist", "note.query", "playbook.read", "playbook.render", "path.generate", "route.resolve_implement")
 	if !slices.Equal(p.WSTools, want) {
 		t.Fatalf("mini-lead ws_tools = %v, want %v", p.WSTools, want)
+	}
+	// path.generate(kind: "report") is allocation only; the mini-lead keeps no
+	// path.write and gains no write authority from the new kind.
+	if !slices.Contains(p.WSTools, "path.generate") || slices.Contains(p.WSTools, "path.write") {
+		t.Fatalf("mini-lead must allocate but not write generated paths: %v", p.WSTools)
 	}
 }
 

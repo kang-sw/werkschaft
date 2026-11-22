@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["packs", "compositor", "scenarios", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "compositor", "scenarios", "menu", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -399,7 +399,7 @@ test("superseded companion loads discard decoded bitmaps after leaving a session
 });
 
 function relayFixture() {
-  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [];
+  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [], treeAgents = [], completed = 0;
   const timers = new Map(), listeners = {}, posts = [], held = [];
   const doc = {
     body: {classList: {contains: () => false}},
@@ -415,7 +415,7 @@ function relayFixture() {
     performance: {now: () => now}, Date: class extends Date { static now() { return now; } },
     setTimeout(fn) { timers.set(++timer, fn); return timer; }, clearTimeout(id) { timers.delete(id); },
     rid: "lead", lead: {}, boardLatest: null, TL_ASK: "ask", companionStreamReady: true,
-    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed: 0}),
+    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : selector.startsWith("#r-tree .agent") ? treeAgents : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed}),
     entriesBox: () => ({children: rows}), $: () => null, pageHidden: () => hidden,
     showRegions: () => { while (held.length) held.shift()(); }, shPost: (_, payload) => posts.push(payload),
     innerHeight: 1000, innerWidth: 1000
@@ -425,7 +425,7 @@ function relayFixture() {
   function update() { now += 300; listeners.change.forEach(fn => fn()); flush(); }
   function events() { return posts.splice(0).flatMap(p => p.events); }
   flush(); events();
-  return {set children(value) { children = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
+  return {set children(value) { children = value; }, set treeAgents(value) { treeAgents = value; }, set completed(value) { completed = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
     update, events, posts, now: () => now,
     input() { listeners.input.forEach(fn => fn({target: {matches: () => true}})); flush(); },
     visibility(value, swap) { hidden = value; if (swap) held.push(swap); listeners.visibilitychange.forEach(fn => fn()); flush(); },
@@ -451,6 +451,52 @@ function relayRow(key, classes, {childId, ms, cause, child, label} = {}) {
       return null;
     }};
 }
+
+// relayAgent is an ended-group row of the expanded tree; native marks the
+// harness's own subagent, unknown a native row whose observation ended with
+// the outcome unknown.
+function relayAgent(id, {unknown = false, native = false} = {}) {
+  const details = {dataset: {key: "agent-" + id}, querySelector: () => null};
+  return {
+    closest: selector => selector === ".tgroup.ended" ? {} : null,
+    querySelector: selector => selector === ":scope > details[data-key]" ? details : null,
+    classList: {contains: name => name === "done" || (native && name === "native")},
+    matches: () => true,
+    hasAttribute: name => unknown && name === "data-end-unknown"
+  };
+}
+
+test("relay emits no subagent.done for a native row whose observation ended", () => {
+  const f = relayFixture(), done = () => f.events().filter(e => e.kind === "subagent.done");
+  f.children = [{id: "agy-native:call_1", state: "thinking", native: true}]; f.update(); f.events();
+  f.children = []; f.treeAgents = [relayAgent("agy-native:call_1", {unknown: true, native: true})]; f.update();
+  assert.equal(done().length, 0);
+  // A native row that ended with a known end is read as done.
+  f.children = [{id: "codex-native:call_2", state: "thinking", native: true}]; f.treeAgents = []; f.update(); f.events();
+  f.children = []; f.treeAgents = [relayAgent("codex-native:call_2", {native: true})]; f.update();
+  assert.equal(done().length, 1);
+  f.dispose();
+});
+
+test("relay reads no finish from evicted native rows or a skipped transition", () => {
+  const f = relayFixture(), done = () => f.events().filter(e => e.kind === "subagent.done").map(e => e.token);
+  const agy = i => "agy-native:call_" + i;
+  f.children = [0, 1, 2, 3, 4, 5].map(i => ({id: agy(i), state: "thinking", native: true})).concat([{id: "w", state: "thinking"}]);
+  f.update(); f.events();
+  // Six observations end with the outcome unknown; the finished-row cap
+  // evicts call_0 before the page sees it. One ordinary child really
+  // finishes and its fold raises the completed count by one.
+  f.children = []; f.completed = 1;
+  f.treeAgents = [1, 2, 3, 4, 5].map(i => relayAgent(agy(i), {unknown: true, native: true})).concat([relayAgent("w")]);
+  f.update();
+  assert.deepEqual(done(), ["subagent.done:lead:w:1"]);
+  // A native row whose done transition the DOM skipped (running, then gone)
+  // spends no later rise either.
+  f.children = [{id: "codex-native:call_9", state: "thinking", native: true}, {id: "v", state: "thinking"}]; f.treeAgents = []; f.update(); f.events();
+  f.children = [{id: "v", state: "thinking"}]; f.completed = 2; f.update();
+  assert.deepEqual(done(), []);
+  f.dispose();
+});
 
 test("relay reconciles both report orders, holding, resume, terminal and stale reports", () => {
   const f = relayFixture(), child = state => [{id: "c", state}];
@@ -661,6 +707,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     body, hidden: false,
     getElementById: () => null,
     createElement: makeElement,
+    createElementNS: (ns, tag) => makeElement(tag),
     addEventListener() {}
   };
   const win = {
@@ -684,7 +731,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["packs", "compositor", "scenarios", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "compositor", "scenarios", "menu", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -750,5 +797,305 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
   trigger("idle", "session.error");
   assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:?");
 
+  // Directed commands: only the shown session's, quips as text, TTL expiry.
+  step(50);
+  const quipNode = () => root.children.find(child => child.className === "ws-companion-quip");
+  assert.equal(stage.command({ sessionId: "s1", quip: "too early", ttl_ms: 1000 }), false, "no shown session yet");
+  stage.reset("s1");
+  step();
+  assert.equal(stage.command({ sessionId: "other", quip: "not mine", ttl_ms: 1000 }), false);
+  assert.equal(stage.command({ sessionId: "s1", fx: "unknown", quip: "   " }), false, "nothing valid to show");
+  assert.equal(stage.command({ sessionId: "s1", fx: "badge", gesture: "unknown", quip: "<img src=x onerror=alert(1)>", ttl_ms: 1000 }), true);
+  step();
+  assert.equal(root.dataset.scenario, "directed");
+  assert.equal(quipNode().textContent, "<img src=x onerror=alert(1)>", "the quip is set as text");
+  assert.equal(quipNode().innerHTML, undefined, "the quip never goes through innerHTML");
+  assert.equal(quipNode().hidden, false);
+  assert.equal(fxNode().children.map(el => el.tagName + ":" + el.textContent).join(","), "SPAN:!");
+  for (let i = 0; i < 22; i++) step(50);
+  assert.equal(quipNode().hidden, true, "the quip dismisses when the TTL ends");
+  assert.equal(root.dataset.scenario, "", "the rules engine resumes");
+
   stage.dispose();
+});
+
+test("companion commands validate IDs against the pack, its fallback chains, shared props and built-in fx", () => {
+  const { directedCommand, scenarioRunner } = companion();
+  const runner = scenarioRunner();
+  const pack = { manifest: {
+    expressions: { happy: { decal: "happy.png" }, grin: { fallback: "happy" }, ghost: { fallback: "missing" } },
+    gestures: { wave: { pose: "stand" } }, props: {}, fx: {}
+  } };
+  const shared = { manifest: { props: { drone: { file: "drone.png" } }, fx: {} } };
+  const long = "<b>hi</b>\nthere " + "x".repeat(200);
+  const full = directedCommand({ sessionId: "s1", scenario: "celebrate_done", expression: "grin", gesture: "nope",
+    prop: "drone", fx: "sparkle", quip: long, ttl_ms: 60000 }, pack, shared, runner);
+  assert.equal(full.id, "celebrate_done");
+  assert.equal(full.ttl, 15000, "TTL clamps to 15 s");
+  assert.equal(full.beats.length, 1);
+  const beat = full.beats[0];
+  assert.equal(beat.expression, "happy", "a fallback chain resolves to its usable entry");
+  assert.equal(beat.gesture, "wave", "an unknown gesture drops; the scenario's own stays");
+  assert.equal(beat.prop, "drone", "props may come from the shared default pack");
+  assert.equal(beat.fx, "sparkle", "built-in fx badges are known");
+  assert.equal(Array.from(beat.quip).length, 140, "quips cut to 140 code points");
+  assert.ok(beat.quip.startsWith("<b>hi</b> there"), "control characters fold to spaces; markup stays literal text");
+
+  const plain = directedCommand({ sessionId: "s1", expression: "ghost", gesture: "wave", ttl_ms: 10 }, pack, shared, runner);
+  assert.equal(plain.id, "directed");
+  assert.equal(plain.ttl, 1000, "TTL clamps to 1 s");
+  assert.deepEqual(JSON.parse(JSON.stringify(plain.beats)),
+    [{ pose: "stand", expression: "idle", gaze: "cursor", ms: 1000, gesture: "wave" }],
+    "a fallback chain ending nowhere drops the field");
+  assert.equal(directedCommand({ sessionId: "s1", scenario: "no_such", expression: "Bad ID!", fx: "nope", quip: " \n " },
+    pack, shared, runner), null, "a command with nothing valid is dropped");
+  assert.equal(directedCommand({ sessionId: "s1", prop: "drone" }, pack, null, runner), null, "no shared pack, no shared props");
+  assert.equal(directedCommand("not a command", pack, shared, runner), null);
+});
+
+test("companion directed beats override the rules engine until the TTL, then the rules resume", () => {
+  const { scenarioRunner } = companion();
+  const runner = scenarioRunner(), guards = { routeKind: "session", pose: "stand", idleMs: 0 };
+  runner.direct([{ pose: "stand", expression: "happy", ms: 400 }, { pose: "stand", expression: "oo", ms: 300 }], 0, 2000);
+  assert.equal(runner.tick(100).entry.id, "directed");
+  runner.fire("user.poke", 150, guards);
+  runner.fire("ask.open", 160, guards);
+  assert.equal(runner.tick(200).beat.expression, "happy", "rules scenarios do not replace a directed beat");
+  assert.equal(runner.tick(500).beat.expression, "oo", "directed steps advance");
+  assert.equal(runner.tick(1900).beat.expression, "oo", "the last step holds until the TTL");
+  runner.endReply();
+  assert.ok(runner.tick(1950), "a reply ending leaves a directed beat alone");
+  assert.equal(runner.tick(2000), null, "the TTL ends the directed beat");
+  runner.fire("user.poke", 2100, guards);
+  assert.equal(runner.tick(2150).entry.id, "startled_poke", "the rules engine resumes");
+
+  runner.direct({ expression: "happy", ms: 5000 }, 3000, 10000);
+  runner.direct({ expression: "cry", ms: 5000 }, 3500, 1000);
+  assert.equal(runner.tick(3600).beat.expression, "cry", "a newer command replaces an older one");
+  assert.equal(runner.tick(4500), null, "with its own TTL");
+  runner.direct({ expression: "happy", ms: 5000 }, 5000, 5000);
+  runner.fire("user.drag", 5100, guards);
+  assert.equal(runner.tick(5200, true).entry.id, "drag_dangle", "dragging still dangles the character");
+  runner.direct({ expression: "happy" }, 6000, Number.NaN);
+  assert.equal(runner.tick(6999).entry.id, "directed");
+  assert.equal(runner.tick(7000), null, "a missing TTL clamps to 1 s");
+});
+
+function modalDom() {
+  const listeners = new Map();
+  const on = (target, type, fn) => { (target.listeners[type] ||= []).push(fn); };
+  const fire = (target, type, event = {}) => { for (const fn of target.listeners[type] || []) fn({ preventDefault() {}, ...event }); };
+  const doc = { listeners: {}, activeElement: null };
+  function element(tag) {
+    const el = {
+      tagName: tag.toUpperCase(), className: "", id: "", title: "", textContent: "", value: "", type: "", disabled: false,
+      children: [], attrs: {}, listeners: {}, style: {}, offsetWidth: 240, offsetHeight: 200, open: false,
+      setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
+      addEventListener(type, fn) { on(this, type, fn); },
+      append(...items) { this.children.push(...items); },
+      replaceChildren(...items) { this.children = [...items]; },
+      focus() { doc.activeElement = this; },
+      all() { return this.children.flatMap(child => [child, ...(child.all ? child.all() : [])]); },
+      contains(other) { return other === this || this.all().includes(other); },
+      querySelector() { return this.all().find(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName) && !c.disabled) || null; },
+      show() { this.open = true; }, close() { this.open = false; }
+    };
+    return el;
+  }
+  class Option { constructor(text, value, _default, selected) { this.tagName = "OPTION"; this.textContent = text; this.value = value; this.selected = selected; } }
+  const sysopen = new Set(["data-sysopen"]);
+  Object.assign(doc, {
+    createElement: element, addEventListener(type, fn) { on(doc, type, fn); },
+    documentElement: { hasAttribute: name => sysopen.has(name) }
+  });
+  return { doc, element, fire, Option, sysopen };
+}
+
+test("companion settings modal opens, writes typed global values, reverts refused input and closes", async () => {
+  const { doc, element, fire, Option, sysopen } = modalDom();
+  const writes = [], notices = [];
+  let fail = false, resets = 0;
+  const fetch = async (url, init) => {
+    if (url === "/api/companion/packs") return { ok: true, json: async () => ({ packs: [{ id: "default" }, { id: "fox" }] }) };
+    writes.push(JSON.parse(init.body));
+    return { ok: !fail };
+  };
+  const C = companion({ document: doc, Option, fetch, wsT: key => key,
+    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const rows = catalog.filter(row => row.surface === "companion-modal");
+  const config = { pack: "default", preset: "werkschaft-d1", agentCooldownSeconds: 30, agentHourlyCap: 20 };
+  const node = element("div"), gear = element("button");
+  const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, {
+    rows: () => rows, config: () => config, persona: () => ({ name: "Fixture Fox", voice: "Short lines." }),
+    presets: () => ({ available: ["werkschaft-d1", "werkschaft-d2"] }),
+    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
+    resetSize: () => { resets++; }, applyPreset() {}, notice: key => notices.push(key)
+  });
+  const dialog = node.children[0];
+  const find = (cls) => dialog.all().filter(c => c.className === cls);
+  const control = key => {
+    const row = dialog.all().filter(c => c.className === "ws-companion-settings-row")[rows.findIndex(r => r.key === key)];
+    return row.all().find(c => c.tagName === "SELECT" || c.tagName === "INPUT");
+  };
+
+  fire(gear, "click");
+  assert.equal(modal.open, true);
+  assert.equal(gear.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(find("ws-companion-settings-label").map(c => c.textContent), rows.map(r => r.label));
+  assert.equal(find("ws-companion-settings-name")[0].textContent, "Fixture Fox");
+  assert.equal(dialog.style.left, "168px", "placed to the right of the character");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(control("dashboard.companion_pack").children.map(o => o.value), ["default", "auto", "fox"]);
+
+  const cooldown = control("dashboard.companion_agent_cooldown_seconds");
+  cooldown.value = "45";
+  fire(cooldown, "change");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(writes.at(-1), { scope: "global", key: "dashboard.companion_agent_cooldown_seconds", value: 45 });
+  cooldown.focus();
+  cooldown.value = "4.5";
+  fire(cooldown, "change");
+  assert.equal(writes.length, 1, "a non-integer is never written");
+  assert.equal(cooldown.value, "30", "and the focused input reverts to the live value");
+
+  // A config push spares the focused select; a failed write reverts and notices.
+  const pack = control("dashboard.companion_pack");
+  pack.focus();
+  const before = pack.children;
+  modal.refresh();
+  assert.equal(pack.children, before, "a focused select is not refilled by a config push");
+  fail = true;
+  pack.value = "fox";
+  fire(pack, "change");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(writes.at(-1), { scope: "global", key: "dashboard.companion_pack", value: "fox" });
+  assert.deepEqual(notices, ["settings_failed"]);
+  assert.notEqual(pack.children, before, "the failed write refills the select from the live config");
+
+  fire(find("ws-companion-settings-action")[0], "click");
+  assert.equal(resets, 1);
+  fire(doc, "keydown", { key: "Escape" });
+  assert.equal(modal.open, false, "Escape closes");
+  assert.equal(doc.activeElement, gear);
+  fire(gear, "click");
+  fire(gear, "click");
+  assert.equal(modal.open, false, "a second gear click closes");
+  fire(gear, "click");
+  fire(find("ws-companion-settings-close")[0], "click");
+  assert.equal(modal.open, false, "the close button closes");
+
+  sysopen.clear();
+  fire(gear, "click");
+  assert.ok(dialog.all().filter(c => c.tagName === "SELECT" || c.tagName === "INPUT").every(c => c.disabled), "read-only pages disable every control");
+  assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
+});
+
+function focusHarness(visibility = "visible") {
+  const listeners = {}, calls = [];
+  const doc = { visibilityState: visibility, addEventListener: (name, fn) => { listeners[name] = fn; } };
+  const env = { document: doc, fetch: (url, init) => {
+    const call = { url, ...init, body: JSON.parse(init.body) };
+    calls.push(call);
+    return env.respond(call);
+  }, respond: () => Promise.resolve({ ok: true, status: 204 }) };
+  const reporter = companion().focusReporter(env);
+  const bodies = () => calls.map(c => c.body);
+  const hide = state => { doc.visibilityState = state; listeners.visibilitychange(); };
+  return { reporter, calls, bodies, env, hide };
+}
+
+const agentConfig = { enabled: true, director: "agent", pack: "auto" };
+
+test("companion focus reports the shown session and resolved pack on switches and dedups", () => {
+  const { reporter, calls, bodies } = focusHarness();
+  reporter.config(agentConfig);
+  reporter.show("rid1", "default");
+  assert.equal(calls.length, 0, "no token yet");
+  reporter.token("t1");
+  assert.deepEqual(bodies(), [{ token: "t1", sessionId: "rid1", pack: "default" }]);
+  assert.equal(calls[0].url, "/api/companion/focus");
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].credentials, "same-origin");
+  assert.equal(calls[0].headers["Content-Type"], "application/json");
+  reporter.show("rid1", "default");
+  reporter.config({ ...agentConfig, preset: "other" });
+  assert.equal(calls.length, 1, "same token, session and pack are not re-sent");
+  reporter.show("rid2", "default");
+  reporter.show("rid2", "mint");
+  assert.deepEqual(bodies().slice(1), [{ token: "t1", sessionId: "rid2", pack: "default" }, { token: "t1", sessionId: "rid2", pack: "mint" }]);
+  reporter.show("rid2", "");
+  assert.deepEqual(bodies().at(-1), { token: "t1", sessionId: "", pack: "" }, "an unresolved pack clears");
+  reporter.show("", "");
+  assert.equal(calls.length, 4, "a second clear is not re-sent");
+});
+
+test("companion focus clears when hidden and reports again when visible", () => {
+  const { reporter, bodies, hide } = focusHarness();
+  reporter.config(agentConfig);
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  hide("hidden");
+  assert.deepEqual(bodies().slice(1), [{ token: "t1", sessionId: "", pack: "" }]);
+  hide("hidden");
+  reporter.show("rid2", "default");
+  assert.equal(bodies().length, 2, "nothing is sent while hidden");
+  hide("visible");
+  assert.deepEqual(bodies().at(-1), { token: "t1", sessionId: "rid2", pack: "default" });
+  assert.equal(bodies().length, 3);
+});
+
+test("companion focus sends nothing in rules mode or when disabled", () => {
+  const { reporter, calls, hide } = focusHarness();
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  for (const config of [{ enabled: true, director: "rules" }, { enabled: false, director: "agent" }, { director: "agent" }, null]) {
+    reporter.config(config);
+    reporter.show("rid2", "default");
+    hide("hidden");
+    hide("visible");
+    reporter.token("t2");
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("companion focus clears on leaving agent mode and reports on token change", () => {
+  const { reporter, bodies } = focusHarness();
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  reporter.config(agentConfig);
+  assert.deepEqual(bodies(), [{ token: "t1", sessionId: "rid1", pack: "default" }]);
+  reporter.token("t2");
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "rid1", pack: "default" }, "a reconnect reports again");
+  reporter.config({ ...agentConfig, director: "rules" });
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "", pack: "" });
+  assert.equal(bodies().length, 3);
+  reporter.config({ ...agentConfig, enabled: false });
+  assert.equal(bodies().length, 3, "no repeat clear");
+  reporter.config(agentConfig);
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "rid1", pack: "default" });
+  reporter.config({ ...agentConfig, enabled: false });
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "", pack: "" });
+  reporter.token("t3");
+  assert.equal(bodies().length, 5, "a new token after a clear sends nothing");
+});
+
+test("companion focus ignores refusals, a gone stream, an older daemon and network errors", async () => {
+  for (const respond of [
+    () => Promise.resolve({ ok: false, status: 404 }),
+    () => Promise.resolve({ ok: false, status: 410 }),
+    () => Promise.resolve({ ok: false, status: 403 }),
+    () => Promise.reject(new Error("offline")),
+    () => { throw new Error("sync failure"); }
+  ]) {
+    const { reporter, calls, env } = focusHarness();
+    env.respond = respond;
+    reporter.config(agentConfig);
+    reporter.token("t1");
+    reporter.show("rid1", "default");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.length, 1, "no retry after a failure");
+    reporter.show("rid2", "default");
+    assert.equal(calls.length, 2, "later state changes still report");
+  }
 });

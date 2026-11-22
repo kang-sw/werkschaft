@@ -196,11 +196,31 @@ Every official shipped pack must satisfy all six gates before replacing dev fixt
 - **Default Home Anchor & Hover-Only Top-Right Resize Grip:**
   - Default resting perch sits on the left session rail bottom divider (immediately above `.rws-unreg` / `.rfoot`), reserving clearance via sibling margin (`--companion-slot`) without breaking `.rws-unreg`'s `margin-top: auto`; on collapsed `< 1600 px` viewports it perches above `composer-top` (or bottom-left corner on sessionless routes).
   - Default size targets **`~116 px`** when docked (scaling cleanly with rail width) and exposes a **subtle hover/focus-only top-right resize grip** on `.ws-companion-hit` (`opacity: 0.35`, `0.85` on grip hover) so users can drag to resize freely between **`64 px` and `240 px`**. Size persists in browser `localStorage` (zero file I/O, T0) and updates `--companion-slot` live; the right-click quick menu offers "Reset size" alongside "Return home".
-- **Two-Speed AI:** Local 60 fps 0-token physics/state-machine engine + optional delta-cached sidecar narrative director + pluggable lead-only `ws/emotion`.
-- **Opt-In Configuration (Verified T0, Default `off`):** Scalar string entries in `dashboard-config-manifest.json` (mirrored identically in `agents-plugin/`, `agents-plugin-wsflow/`, and `agents-plugin-pi/`, stored in `overrides` only):
-  - `dashboard.companion_mode`: `off` (default) | `visual` | `full`
-  - `dashboard.companion_director`: `rules` (default) | `sidecar` | `lead-tool`
-  - `dashboard.companion_pack`: `default` (default) | `auto` | `<pack-id>`
-  - `dashboard.companion_preset`: `werkschaft-d1` (default) | `<preset-id>`
+- **Two-Speed AI:** Local 60 fps 0-token physics/state-machine engine (`rules`) + optional lead-unaware `agent` sidecar director: event-triggered (turn end, tool error, commit/merge, new board ask, long idle) under a user-tunable cooldown and hourly cap, a `small`-tier one-shot harness call per trigger, replies validated into a `companion-command` stream event that overrides the rules engine for a short TTL. The lead gets no companion tool or prompt text. Character voice comes from the pack's optional `persona` (`name`, `voice`, `quipLanguage`). Spec: `261122-feat-ws-companion-director`.
+  - Focus: each shell rail stream hands its shell a `companion-focus` token; in `agent` mode the shell posts its visible session and resolved pack to `POST /api/companion/focus` on every switch and clears while hidden. The daemon keeps one report per live stream (dropped with the stream) and directs only the newest one's session.
+  - The director's allowed IDs are the active pack's dictionaries plus the built-in scenarios and fx of `dashboard-companion-builtins.js`, the one source the shell bundle runs and the daemon parses.
+  - Off and `rules` modes build no digest and spawn nothing; a dropped trigger touches no file. Cooldown and cap are charged only when a process spawns: a session whose harness has no one-shot mode (codex, agy today) drops its triggers from memory, and a `small` tier resolving to another harness drops without a call. Pack dictionary keys outside `[A-Za-z0-9_-]{1,64}` never enter the prompt's allowed-ID lists.
+- **Opt-In Configuration (Default off, global-only):** Entries in `dashboard-config-manifest.json` (mirrored identically in `agents-plugin/`, `agents-plugin-wsflow/`, and `agents-plugin-pi/`), global layer only (synced layer once `261119-feat-ws-config-git-sync` lands):
+  - Settings panel: `dashboard.companion_enabled` `false` (default) | `true`; `dashboard.companion_director` `rules` (default) | `agent`.
+  - Directed commands: the shell acts only on the visible session's `companion-command`, validates every ID against the active pack (its `fallback` chains, the shared default pack's props and fx, the built-in fx badges, and the scenario registry) and drops unknown fields; the directed beat (`runner.direct`) holds over the rules engine until its TTL (1-15 s; only a drag interrupts it), and its quip is plain text of at most 140 characters in a bubble that never takes the pointer.
+  - Gear-opened floating modal (gear under the resize grip on hover): `dashboard.companion_pack` `default` (default) | `auto` | `<pack-id>`; `dashboard.companion_preset` `werkschaft-d1` (default) | `<preset-id>`; `dashboard.companion_agent_cooldown_seconds` (default 30); `dashboard.companion_agent_hourly_cap` (default 20); read-only persona; reset size.
 - **Local BYO Pack Storage (`performance.md` Compliant):** User packs live at `<config-home>/companions/<pack-id>/pack.json` (honoring `WS_CONFIG_HOME`; `"default"` and `"auto"` reserved). Lazily indexed in memory on first companion pack request, refreshed only on `POST /api/companion/packs/reload`, with `ETag`/`304`, `409 Conflict` on stale `?rev=`, and strict raster-only/symlink guards.
 - **Public Repository IP Boundary:** The public repository ships **only** the companion engine, `pack.json` schema, IP-clean original default assets, and the reproducible pack recipe. Third-party or community character packs live strictly outside git under `<config-home>/companions/`.
+
+## Generative Edit Toolkit (Erase-and-Infill)
+
+Generative image editing is the core production tool for companion art. Rules and runtime transforms (mesh deform, rotates, layer motion) serve it; they never replace it (owner 2026-11-22 21:44). When a rule-based or runtime approach does not feel right, reach for an edit.
+
+- **Erase-and-infill card.** Erase the region by image edit and let the editor infill it, instead of adding rules. The editor handles this best. Typical uses:
+  - *Head removal:* the headless column master. The edit erases the head and hair and infills the collar, shoulder or hand they hid.
+  - *A pose a deform cannot reach:* shoulder rotation, a large limb swing, or any motion past the safe-range table. Edit the column master: erase the limb and infill it at the new angle. Ship the result as an extra column or a `frames` entry.
+  - *Regions a moving part uncovers:* infill what lies behind a limb or prop once it moves.
+  - *Seams or awkward joints* that a transform leaves at the live preview.
+- **Gate every edit against its master.** Measure it:
+  - alpha IoU of the protected region;
+  - edge displacement;
+  - the anchor and sole rows.
+
+  Add owner visual sign-off on top. The edit output becomes the new master; nothing is composited back onto the old one.
+- **One edit of the whole column beats assembling independently generated parts.** Separate parts drift in outfit detail.
+- **Choose by the live preview, not by rule.** A small runtime transform within its safe range, an erase-and-infill edit, or a full redraw from the dressed master are all valid cards. Use whichever looks better.

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -42,6 +43,61 @@ type companionManifest struct {
 	Motions     map[string]companionObject
 	Presets     map[string]companionObject
 	Scenarios   map[string]companionObject
+	Persona     *CompanionPersona
+}
+
+// CompanionPersona is a pack's optional character voice. The agent director
+// quotes it as data in its prompt; it never reaches a lead or worker prompt.
+type CompanionPersona struct {
+	Name         string `json:"name,omitempty"`
+	Voice        string `json:"voice,omitempty"`
+	QuipLanguage string `json:"quipLanguage,omitempty"`
+}
+
+const (
+	companionPersonaNameMax  = 40
+	companionPersonaVoiceMax = 800
+)
+
+var companionLanguageTag = regexp.MustCompile(`^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8}){0,4}$`)
+
+// companionPersonaField returns the validated persona, or nil when the field
+// is absent, malformed, oversize, or carries control characters (the voice
+// may hold line breaks and tabs). Lengths count Unicode code points.
+func companionPersonaField(obj companionObject) *CompanionPersona {
+	raw, ok := obj["persona"]
+	if !ok {
+		return nil
+	}
+	fields, err := parseCompanionObject(raw)
+	if err != nil {
+		return nil
+	}
+	var p CompanionPersona
+	if fields.fields(map[string]any{"name": &p.Name, "voice": &p.Voice, "quipLanguage": &p.QuipLanguage}) != nil {
+		return nil
+	}
+	p.Name, p.Voice, p.QuipLanguage = strings.TrimSpace(p.Name), strings.TrimSpace(p.Voice), strings.TrimSpace(p.QuipLanguage)
+	if p.Name == "" && p.Voice == "" {
+		return nil
+	}
+	if utf8.RuneCountInString(p.Name) > companionPersonaNameMax || utf8.RuneCountInString(p.Voice) > companionPersonaVoiceMax {
+		return nil
+	}
+	if p.QuipLanguage != "" && !companionLanguageTag.MatchString(p.QuipLanguage) {
+		return nil
+	}
+	for _, r := range p.Name {
+		if unicode.IsControl(r) {
+			return nil
+		}
+	}
+	for _, r := range p.Voice {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return nil
+		}
+	}
+	return &p
 }
 
 type companionAutoMatch struct {
@@ -114,6 +170,9 @@ func validateCompanionManifest(raw []byte, id string) (companionManifest, []stri
 	if err != nil {
 		return m, nil, err
 	}
+	// persona is optional voice data: a malformed or oversize entry drops the
+	// field, never the pack, so it is read apart from the strict fields.
+	m.Persona = companionPersonaField(obj)
 	var auto companionObject
 	if err := obj.fields(map[string]any{
 		"id": &m.ID, "name": &m.Name, "schema": &m.Schema, "canvas": &m.Canvas,

@@ -3,6 +3,8 @@ kind: render
 delegates: true
 role: worker
 tier: large
+tier-role: ticket-worker-elevated
+tier-parent: implement:*
 includes:
   - worker-stop-protocol
 variables:
@@ -13,7 +15,7 @@ variables:
 # Ticket Worker
 
 Execute the ticket in your task block starting from the branch named there,
-using the session key spliced into this file. You are an orchestrating
+using your session key: the spawn key in your system prompt serves every ws call, and a key spliced into this file is for a lead-only tool the spawn key is refused (without a spawn key, the spliced key serves every call). You are an orchestrating
 mini-lead: drive its remaining phases to a close, keeping the interface and
 hard core in your context while pushing decomposable implementation into
 fresh-context leaves. The Worker Protocol appended below governs; read it
