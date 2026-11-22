@@ -55,8 +55,9 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		}
 	}
 	// The job's resolved places, so a worktree fence matches it however
-	// its working directory was spelled; once per launch.
-	real := realPlaces(req.Root, req.Cwd)
+	// its working directory was spelled and the process starts where
+	// admission checked; once per launch, stored with the row.
+	realRoot, realCwd := resolvedPlaces(filepath.Clean(req.Root), req.Cwd)
 	var id string
 	var j *hostedJob
 	for attempt := 1; ; attempt++ {
@@ -67,8 +68,8 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		// stop that ends it before or while LaunchWith runs leaves a holder
 		// this job does not record yet, and the job must not be pruned (nor
 		// its id drawn again) until that holder is confirmed gone.
-		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), real: real, stdinOpen: !req.Legacy && !req.StdinSet, starting: true, holderPinned: lookErr == nil}
-		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
+		j = &hostedJob{done: make(chan struct{}), out: h.rings.NewJob(), stdinOpen: !req.Legacy && !req.StdinSet, starting: true, holderPinned: lookErr == nil}
+		j.row = HostedJobRow{ID: id, Legacy: req.Legacy, Owner: owner.ID, Gen: owner.Gen, Tool: req.Tool, Root: filepath.Clean(req.Root), Cwd: req.Cwd, RealRoot: realRoot, RealCwd: realCwd, Argv: argv, Command: req.Command, Shell: req.Shell, State: HostedRunning, StdinBytes: int64(len(req.Stdin)), Notify: req.Async}
 		err = h.admit(j)
 		if err == nil {
 			break
@@ -144,7 +145,7 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
-	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: req.Cwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
+	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: spawnDir(req.Cwd, realCwd), Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
 	close(spawned)
 	if err != nil {
 		if st.PID != 0 {

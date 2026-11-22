@@ -89,9 +89,10 @@ type hostedJob struct {
 	row  HostedJobRow
 	out  *JobOutput
 	done chan struct{}
-	// real holds the row's root and working directory with symlinks
-	// resolved where that differs (realPlaces): taken at admission or
-	// restore, read under h.mu by the worktree fence, never rewritten.
+	// real holds the resolved root and working directory of a running row
+	// an older daemon stored without them (resolvedPlaces at restore, a
+	// fallback the row does not persist). Read under h.mu by the worktree
+	// fence, never rewritten.
 	real []string
 	// lastSeq is the last holder record taken: a replay after a daemon
 	// restart starts from the ring's first record again.
@@ -171,8 +172,11 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 			h.byHolder[row.HolderID] = j
 			j.stdinUnknown = !row.Legacy
 		}
-		if !row.Terminal() {
-			j.real = realPlaces(row.Root, row.Cwd)
+		if !row.Terminal() && row.RealRoot == "" && row.RealCwd == "" {
+			// No launch-time resolution stored (an older daemon's row, or
+			// paths that resolved to themselves): resolve now.
+			realRoot, realCwd := resolvedPlaces(row.Root, row.Cwd)
+			j.real = []string{realRoot, realCwd}
 		}
 		h.jobs[row.ID] = j
 	}

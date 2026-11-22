@@ -139,6 +139,22 @@ Commits caeba62f1 (implementation), 64c8c9805 (tests), fb2f39b89 (tool schemas),
     - Forwarded occupancy queries run per candidate under the pool lock (latency only).
 - Not verified: Windows, the live daemon, and the exec admission race (left to 261117).
 
+#### Edition (d3a0700d0) - 2026-11-22
+
+The deferred exec-job follow-up is done on impl/develop/briar-blurb-prune, after 261117 Phase 2 merged.
+
+- Forced release: develop's `FenceExec` refuses any release, force included, while an exec job runs in the checkout. This branch's duplicate guard was dropped in the 56ae7e389 merge.
+- Acquisition: `checkoutHasLiveExecActivity` is gone. Each eligible candidate takes the exec fence (`worktreeAcquireExecFence`, reason "being acquired") after its flock and the reuse checks. A refusal skips the candidate, and only a granted claim publishes its profile marker. The fence is held through checkout, hooks, mint and lease publication, so hosted and legacy launches into the candidate are refused in that span.
+- Symlink aliases: each job's root and working directory are resolved once at admission. The fence and launch admission match the recorded or the resolved form. The process starts in the resolved working directory, so a link repointed after admission cannot move it into a fenced checkout. A refusal names the newest fence still held.
+- Hosted restore: rows persist the resolved paths in new columns `real_root` and `real_cwd`, written only when they differ from the recorded paths and carried by the existing row write. Restore uses them, and resolves again only for a row without them.
+- Compatibility, T0:
+  - The columns are added to schema version 1 by `hostedStoreAddColumns` (`execjob/hosted_store.go:59-66, 145-191`), with no version bump.
+  - An older daemon names only its own columns: its SELECT (`hosted_store.go:158` on develop) and its INSERT and `ON CONFLICT ... DO UPDATE SET` (`hosted_store.go:59-79` on develop). So it reads the rows normally, and its upsert leaves both columns as they are.
+  - A row an older daemon inserts has them empty, and the new daemon then resolves at restore (`execjob/hosted.go:175`), which was the previous behaviour.
+  - The older daemon's version check (`hosted_store.go:135` on develop) sees version 1 and skips migration.
+  - Covered by `TestHostedStoreResolvedPlaceColumnsAreCompatible`.
+- Not verified: Windows symlink and junction behaviour (vet only), the live daemon, and a real mixed-version daemon pair. The compatibility test simulates the older daemon with its statements.
+
 ### Phase 3: Allocate reports through an explicit path kind
 
 Expose the `report` kind consistently in schema and allocator with the same allocation authority as `review`, while preserving the four existing kinds and all write-profile boundaries. Acceptance: `path.generate(kind: "report")` returns a valid artifact path under the report subdirectory; callers with an existing write route can write it, and callers without that authority gain none. Existing `review`, `prompt`, `plan`, and `clone` behavior remains intact; callers discover the enum before sending the new kind to an old server. Cover native and already-authorized `path.write` routes and Pi mini-lead authority.

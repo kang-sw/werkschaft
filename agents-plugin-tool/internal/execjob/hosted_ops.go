@@ -360,36 +360,48 @@ func rootForms(root string) []string {
 	return forms
 }
 
-// realPlaces are a job's root and working directory with their symlinks
-// resolved, each only where it differs from the spelling given. A working
-// directory reached through a symlink passed only a lexical containment
-// check, so the process may run inside another worktree than either
-// recorded path names. Resolved once per job, at its admission or restore,
-// so a fence matches the job in either spelling with no file lookup of its
-// own.
-func realPlaces(root, cwd string) []string {
-	var out []string
-	add := func(p string) {
-		if p == "" {
-			return
-		}
-		p = filepath.Clean(p)
-		real, err := filepath.EvalSymlinks(p)
-		if err != nil || real == p {
-			return
-		}
-		for _, have := range out {
-			if have == real {
-				return
-			}
-		}
-		out = append(out, real)
+// resolvedPlace is p with its symlinks resolved, "" when that is p itself
+// (or p is empty or cannot be resolved).
+func resolvedPlace(p string) string {
+	if p == "" {
+		return ""
 	}
-	add(root)
-	if cwd != "" && filepath.Clean(cwd) != filepath.Clean(root) {
-		add(cwd)
+	p = filepath.Clean(p)
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil || real == p {
+		return ""
 	}
-	return out
+	return real
+}
+
+// resolvedPlaces are a job's root and working directory with their
+// symlinks resolved, each "" where it is already its own resolution. A
+// working directory reached through a symlink passed only a lexical
+// containment check, so the process may run inside another worktree than
+// either recorded path names. Taken once per job, at admission, so a fence
+// matches the job in either spelling with no file lookup of its own and
+// the process starts in the place admission checked: one lookup when the
+// two are the same path, two otherwise.
+func resolvedPlaces(root, cwd string) (realRoot, realCwd string) {
+	realRoot = resolvedPlace(root)
+	switch {
+	case cwd == "":
+	case filepath.Clean(cwd) == filepath.Clean(root):
+		realCwd = realRoot
+	default:
+		realCwd = resolvedPlace(cwd)
+	}
+	return realRoot, realCwd
+}
+
+// spawnDir is where a job's process starts: its working directory as
+// resolved at admission, so a symlink repointed since cannot move it into
+// a worktree fenced meanwhile; the recorded spelling stays for display.
+func spawnDir(cwd, realCwd string) string {
+	if realCwd != "" {
+		return realCwd
+	}
+	return cwd
 }
 
 // placesIn reports whether one of a job's places lies in one of a
@@ -406,9 +418,10 @@ func placesIn(forms, places []string) bool {
 }
 
 // jobIn reports whether j runs in one of a worktree's forms, by its
-// recorded root and working directory or their resolved spellings.
+// recorded root and working directory or their resolved spellings (from
+// admission, or from restore for a row an older daemon wrote).
 func jobIn(forms []string, j *hostedJob) bool {
-	return placesIn(forms, []string{j.row.Root, j.row.Cwd}) || placesIn(forms, j.real)
+	return placesIn(forms, []string{j.row.Root, j.row.Cwd, j.row.RealRoot, j.row.RealCwd}) || placesIn(forms, j.real)
 }
 
 // fencedRootLocked is the fenced worktree j would run in, "" when none,

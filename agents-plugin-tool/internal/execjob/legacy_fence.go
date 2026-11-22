@@ -31,7 +31,7 @@ const (
 )
 
 // legacyLaunch is a reserved launch's places: its root and working
-// directory, and their resolved spellings (realPlaces).
+// directory, and their resolved spellings (resolvedPlaces).
 type legacyLaunch struct {
 	root, wd string
 	real     []string
@@ -40,6 +40,10 @@ type legacyLaunch struct {
 // beforeLegacyActive, when set (tests only), runs after a legacy job's
 // process started and before it enters the active set.
 var beforeLegacyActive func()
+
+// afterLegacyAdmission, when set (tests only), runs after a legacy launch
+// is admitted and before its process starts.
+var afterLegacyAdmission func()
 
 // reserveLegacy admits a legacy launch into root with working directory wd
 // (real: their resolved spellings), refused when any of them lies in a

@@ -117,7 +117,7 @@ type activeJob struct {
 	// worktree than root (FenceLegacyRoot counts the job in both).
 	root, wd, key string
 	// real: root and wd with symlinks resolved where that differs
-	// (realPlaces), taken once at launch.
+	// (resolvedPlaces), taken once at launch.
 	real []string
 	cmd  *exec.Cmd
 }
@@ -198,12 +198,16 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	}
 	// Admitted against a worktree release before anything starts; the
 	// reservation counts the job until it is active (legacy_fence.go).
-	real := realPlaces(opts.Root, wd)
+	realRoot, realWd := resolvedPlaces(filepath.Clean(opts.Root), wd)
+	real := []string{realRoot, realWd}
 	release, err := reserveLegacy(opts.Root, wd, real)
 	if err != nil {
 		return Response{}, err
 	}
 	defer release()
+	if afterLegacyAdmission != nil {
+		afterLegacyAdmission()
+	}
 	key, err := st.newKey(opts.Root)
 	if err != nil {
 		return Response{}, err
@@ -273,7 +277,9 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 		cmd = program(opts.Cmd, opts.Args...)
 		rec.Argv = argv
 	}
-	cmd.Dir = wd
+	// The process starts where admission checked (spawnDir); the record
+	// keeps the working directory as given.
+	cmd.Dir = spawnDir(wd, realWd)
 	cmd.Env = env
 	rec.Env = opts.Env
 	if opts.Stdin != "" {
