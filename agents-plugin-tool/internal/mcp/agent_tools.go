@@ -69,6 +69,7 @@ func (s *Server) handleAgentTool(ctx context.Context, id json.RawMessage, tool s
 	// so agent.tiers and bare agent.spawn tiers agree.
 	caller := wsagent.LeadCaller(s.mailboxReplyID(key), entry.root, s.playbookHarness(), s.sessionConfigOptions(key))
 	caller.VerifiedBackend = s.agentAdmissionBackend()
+	caller.PolicyKey = key
 	runner := s.pi.agents
 	switch tool {
 	case "agent.spawn":

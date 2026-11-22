@@ -372,6 +372,66 @@ func TestEnterImplementReviewPhaseResolvesThroughParentSession(t *testing.T) {
 	}
 }
 
+// TestDaemonWorkerKeyInheritsReviewPolicyFromItsSpawner pins the daemon-worker
+// path of review_phase: the spawn key is a parentless delegate key (never a
+// top-level lead, and Ensure accepts only parentless records), yet a lead that
+// set review_phase=off must still resolve to no review for the worker's
+// route.resolve_implement, while a spawn key minted without the lead stays at
+// the builtin lite. Route state, todo and agenda stay on the spawn key.
+func TestDaemonWorkerKeyInheritsReviewPolicyFromItsSpawner(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	initGit(t, root)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	server := NewServer(root, "test")
+	leadKey, _ := parseLoginResponse(t, callLogin(t, server, 1, root, nil))
+	if tune := callToolWithKey(t, server, 2, leadKey, "config.tune", map[string]any{"key": "review_phase", "value": "off", "scope": "session"}); !strings.Contains(tune, "review_phase: off [scope:session]") {
+		t.Fatalf("session tune response = %s", tune)
+	}
+	keys := NewAgentKeyStore()
+	inherited, err := keys.MintChild(root, leadKey)
+	if err != nil {
+		t.Fatalf("MintChild: %v", err)
+	}
+	independent, err := keys.Mint(root)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	// The inheriting key is still a parentless delegate key at its root, so
+	// the daemon's rejoin Ensure accepts it.
+	if entry, ok := server.sessions.lookup(inherited); !ok || entry.scope != roleDelegate || entry.parent != "" || entry.root != root {
+		t.Fatalf("inheriting key = %+v %v, want a parentless delegate key", entry, ok)
+	}
+	if err := keys.Ensure(root, inherited); err != nil {
+		t.Fatalf("Ensure of an inheriting key: %v", err)
+	}
+	for _, tc := range []struct {
+		name      string
+		key       string
+		wantAlloc string
+	}{
+		{name: "worker key minted under the tuned lead", key: inherited, wantAlloc: "none"},
+		{name: "worker key minted without it", key: independent, wantAlloc: "lite"},
+	} {
+		var result implementResult
+		if err := json.Unmarshal([]byte(callToolWithKey(t, server, 5, tc.key, "route.resolve_implement", implementSkipDocsArgs("json"))), &result); err != nil {
+			t.Fatalf("%s: json verdict did not parse: %v", tc.name, err)
+		}
+		if result.Verdict.ReviewAlloc != tc.wantAlloc {
+			t.Fatalf("%s: review = %q, want %q", tc.name, result.Verdict.ReviewAlloc, tc.wantAlloc)
+		}
+		record, ok := server.sessions.readState(tc.key, partAll)
+		if !ok || record.Agenda["implement"] == nil {
+			t.Fatalf("%s: the route state was not stored on the key it was called with", tc.name)
+		}
+	}
+	// Nothing was written to the lead's own key by the workers' routes.
+	if record, ok := server.sessions.readState(leadKey, partAll); !ok || record.Agenda["implement"] != nil {
+		t.Fatalf("a worker's route wrote the lead key's agenda: %+v", record.Agenda)
+	}
+}
+
 // TestTicketsQueryTextFlagsReadyTicketWithoutRouteFacts pins the listing
 // signal: a ready implementation ticket with no ## Route Facts section carries
 // `route_facts: missing`, while one with the section, a non-ready ticket and a

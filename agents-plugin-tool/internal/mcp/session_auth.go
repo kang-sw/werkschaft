@@ -57,6 +57,13 @@ type sessionKeyRecord struct {
 	Root          string `json:"root"`
 	Scope         string `json:"scope"`
 	Parent        string `json:"parent,omitempty"`
+	// PolicyParent is the key whose session-scope overrides this key inherits
+	// when it has no Parent. A daemon-spawned worker's key is a root of its
+	// own (no Parent: it is never a top-level lead, and Ensure accepts only
+	// parentless records), yet the lead that spawned it set review_phase and
+	// the sage knobs for it. Only the override lineage (walkLineage) follows
+	// this field; authority, scope and adjacency never do.
+	PolicyParent string `json:"policy_parent,omitempty"`
 	// Overrides is the session-scope generic config overlay. Keys are item
 	// identifiers; values are string-encoded config values. Added as an additive
 	// field; existing records without it parse with a nil map.
@@ -215,6 +222,12 @@ func newSessionStore() *sessionStore {
 // candidate a legacy record file already holds is taken too. Only the split
 // layout is ever minted into.
 func (s *sessionStore) mint(root string, scope toolRole, parent string) (string, error) {
+	return s.mintWithPolicyParent(root, scope, parent, "")
+}
+
+// mintWithPolicyParent is mint for a key that also inherits session-scope
+// overrides from policyParent (sessionKeyRecord.PolicyParent).
+func (s *sessionStore) mintWithPolicyParent(root string, scope toolRole, parent, policyParent string) (string, error) {
 	d, err := s.dirs()
 	if err != nil {
 		return "", err
@@ -228,6 +241,7 @@ func (s *sessionStore) mint(root string, scope toolRole, parent string) (string,
 		Root:          root,
 		Scope:         string(scope),
 		Parent:        parent,
+		PolicyParent:  policyParent,
 	})
 	if err != nil {
 		return "", err
@@ -580,6 +594,9 @@ func (s *sessionStore) walkLineage(d sessionDirs, key string, record sessionReco
 			return
 		}
 		parent := record.Parent
+		if parent == "" {
+			parent = record.PolicyParent
+		}
 		if parent == "" {
 			return
 		}
