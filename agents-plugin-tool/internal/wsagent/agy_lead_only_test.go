@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -213,14 +214,7 @@ func TestAgyWorkerRecordRefusesMessageContinueAndResume(t *testing.T) {
 func TestAgyWorkerRejoinEndsTheHolderAndKeepsTheRecord(t *testing.T) {
 	h, got := workerRecoveryHarness(t, BackendAgy)
 	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
-	h.runner.Close()
-	if h.holders.opCount("stop") != 0 {
-		t.Fatalf("runner shutdown stopped the worker: %v", h.holders.opList())
-	}
-	reg := h.opts.Backends[BackendAgy]
-	reg.WorkerCapable, reg.leadOnlyReason = false, agyLeadOnlyReason
-	h.opts.Backends[BackendAgy] = reg
-	h.holders.restart()
+	leadOnlyAgyNextDaemon(t, h)
 	h.startAt("http://127.0.0.1:1")
 
 	eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
@@ -253,11 +247,7 @@ func TestAgyWorkerRejoinEndsTheHolderAndKeepsTheRecord(t *testing.T) {
 func TestAgyWorkerRejoinFailedStopKeepsTheHolderForTheNextDaemon(t *testing.T) {
 	h, got := workerRecoveryHarness(t, BackendAgy)
 	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
-	h.runner.Close()
-	reg := h.opts.Backends[BackendAgy]
-	reg.WorkerCapable, reg.leadOnlyReason = false, agyLeadOnlyReason
-	h.opts.Backends[BackendAgy] = reg
-	h.holders.restart()
+	leadOnlyAgyNextDaemon(t, h)
 	h.holders.set(func() { h.holders.stopErr = errors.New("holder busy") })
 	h.startAt("http://127.0.0.1:1")
 	wait(t, "holder scan", h.runner.rejoined)
@@ -285,6 +275,196 @@ func TestAgyWorkerRejoinFailedStopKeepsTheHolderForTheNextDaemon(t *testing.T) {
 		t.Fatalf("report = %+v", rep.Result)
 	}
 	eventually(t, "the record to forget the holder", func() bool { rec := h.record(id); return rec.HolderID == "" && !rec.TurnOpen })
+}
+
+// leadOnlyAgyNextDaemon ends the daemon, its held processes running on, and
+// gives the next one the shipped lead-only agy posture.
+func leadOnlyAgyNextDaemon(t *testing.T, h *leadHarness) {
+	t.Helper()
+	h.runner.Close()
+	if h.holders.opCount("stop") != 0 {
+		t.Fatalf("runner shutdown stopped a worker: %v", h.holders.opList())
+	}
+	reg := h.opts.Backends[BackendAgy]
+	reg.WorkerCapable, reg.leadOnlyReason = false, agyLeadOnlyReason
+	h.opts.Backends[BackendAgy] = reg
+	h.holders.restart()
+}
+
+// idleHeldAgyWorker is a held agy worker whose turn ended, its process idle
+// under its holder.
+func idleHeldAgyWorker(t *testing.T, h *leadHarness) (string, string) {
+	t.Helper()
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	completeRecoveryWorker(t, h, BackendAgy, holder)
+	eventually(t, "the turn to settle", func() bool { return !h.record(id).TurnOpen })
+	return id, holder
+}
+
+// rewriteRecord edits id's record on disk while no daemon runs.
+func rewriteRecord(t *testing.T, h *leadHarness, id string, edit func(*Record)) {
+	t.Helper()
+	rec := h.record(id)
+	edit(&rec)
+	if err := writeRecord(wsdashboard.SessionDir(h.opts.Dir, id), rec); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A lead-only rejoin runs the ownership match every held worker passes. It
+// never stops a holder that fails the match: one whose descriptor names
+// another directory, one that is a hosted lead's holder, or one already
+// rejected. The record still drops the association and shows the agy
+// reason.
+func TestAgyWorkerRejoinNeverStopsAHolderThatFailsOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		edit   func(*holderSession)
+		reject bool
+	}{
+		{name: "foreign directory", edit: func(m *holderSession) { m.Cwd = "/foreign" }},
+		{name: "lead holder", edit: func(m *holderSession) { m.Kind = holderKindLead }},
+		{name: "rejected holder", reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := workerRecoveryHarness(t, BackendAgy)
+			id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+			leadOnlyAgyNextDaemon(t, h)
+			if tc.edit != nil {
+				h.holders.set(func() {
+					var meta holderSession
+					if err := json.Unmarshal(h.holders.holders[holder].session, &meta); err != nil {
+						t.Fatal(err)
+					}
+					tc.edit(&meta)
+					raw, _ := json.Marshal(meta)
+					h.holders.holders[holder].session = raw
+				})
+			}
+			entered, release := h.gateScan()
+			defer release()
+			h.startAt("http://127.0.0.1:1")
+			wait(t, "blocked scan", entered)
+			if tc.reject {
+				h.runner.holders.reject(holder)
+			}
+			release()
+			wait(t, "holder scan", h.runner.rejoined)
+			eventually(t, "the association dropped", func() bool { return h.record(id).HolderID == "" })
+			eventually(t, "the agy reason", func() bool { return h.state(id).Error == agyLeadOnlyReason })
+			if h.holders.opCount("stop") != 0 {
+				t.Fatalf("a holder that failed ownership was stopped: %v", h.holders.opList())
+			}
+			if st := h.state(id); st.Process || st.Status == StatusClosed {
+				t.Fatalf("state = %+v", st)
+			}
+			caller := LeadCaller(leadParent.ReplyID, h.root, BackendClaude, h.opts.Config)
+			if child := findAgent(t, h.runner.AgentList(caller), id); child.State == AgentClosed || child.Error != agyLeadOnlyReason {
+				t.Fatalf("listed child = %+v", child)
+			}
+			if h.holders.opCount("spawn") != 1 || h.holders.opCount("launch") != 1 {
+				t.Fatalf("a lead-only rejoin launched a process: %v", h.holders.opList())
+			}
+		})
+	}
+}
+
+// Retirement stamps the record's activity, so a record whose last activity
+// is older than the whole child expiry interval is not deleted at the next
+// sweep: it stays one interval with the agy reason visible.
+func TestAgyWorkerRetirementRestartsTheExpiryClock(t *testing.T) {
+	h, _ := workerRecoveryHarness(t, BackendAgy)
+	id, holder := idleHeldAgyWorker(t, h)
+	leadOnlyAgyNextDaemon(t, h)
+	old := time.Now().Add(-(time.Duration(DefaultChildWaitingDays)*24*time.Hour + time.Hour)).UTC()
+	rewriteRecord(t, h, id, func(rec *Record) { rec.LastActiveAt = old.Format(time.RFC3339) })
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+	eventually(t, "the record to forget the holder", func() bool { return h.record(id).HolderID == "" })
+	if at := lastActive(h.record(id)); time.Since(at) > time.Hour {
+		t.Fatalf("last activity %v was not stamped at retirement", at)
+	}
+	c := h.runner.conv(id)
+	expiring := true
+	c.do(func() {
+		c.expireIfDue()
+		expiring = c.expiring
+	})
+	if expiring {
+		t.Fatal("the retired record is due for deletion at once")
+	}
+	if st := h.state(id); st.Status == StatusClosed || st.Error != agyLeadOnlyReason {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+// The agy reason is derived from the record's backend on every load, with no
+// stored field, so it survives the restart after the retirement. This holds
+// for a parentless worker (no last turn) and an idle parented one (a done
+// last turn).
+func TestAgyWorkerRefusalReasonSurvivesARestart(t *testing.T) {
+	for _, parentless := range []bool{true, false} {
+		t.Run(fmt.Sprintf("parentless=%v", parentless), func(t *testing.T) {
+			h, _ := workerRecoveryHarness(t, BackendAgy)
+			id, holder := idleHeldAgyWorker(t, h)
+			leadOnlyAgyNextDaemon(t, h)
+			if parentless {
+				rewriteRecord(t, h, id, func(rec *Record) { rec.Parent, rec.LastTurn = nil, nil })
+			}
+			h.startAt("http://127.0.0.1:1")
+			eventually(t, "the holder ended", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+			eventually(t, "the retirement", func() bool { return h.record(id).HolderID == "" })
+			if st := h.state(id); st.Error != agyLeadOnlyReason {
+				t.Fatalf("after retirement: state error = %q", st.Error)
+			}
+			h.runner.Close()
+			h.holders.restart()
+			h.startAt("http://127.0.0.1:1")
+			if st := h.state(id); st.Error != agyLeadOnlyReason || st.Status == StatusClosed {
+				t.Fatalf("after the next restart: state = %+v", st)
+			}
+		})
+	}
+}
+
+// A legacy custom agy worker is refused on its record's backend and lead
+// flag, before its profile is read: a removed profile, or one that now names
+// another backend or a lead, cannot mask the agy reason or fail the turn.
+func TestAgyWorkerRecordRefusalIgnoresItsProfile(t *testing.T) {
+	for _, tc := range []struct{ name, profile string }{
+		{name: "profile removed"},
+		{name: "profile on another backend", profile: `{"backend":"claude","model":"haiku","instructions":"agent.md"}`},
+		{name: "profile now a lead", profile: `{"backend":"agy","lead":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, map[string]string{"agy-custom": `{"backend":"agy","model":"gemini","instructions":"agent.md"}`})
+			h.runner.Close()
+			h.config.Backends[BackendAgy] = BackendRegistration{Backend: h.backend, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy)}
+			h.start()
+			id := h.create("agy-custom").ID
+			h.runner.Close()
+			values := map[string]string{}
+			if tc.profile != "" {
+				values[ProfilePrefix+"agy-custom"] = tc.profile
+			}
+			writeStructured(t, filepath.Join(h.root, ".ws-workflow", "config.json"), values)
+			h.config.Backends[BackendAgy] = shippedAgyRegistration(h.backend)
+			h.start()
+			starts := h.backend.startCount()
+			if _, err := h.runner.Send(id, "hello"); err != nil {
+				t.Fatal(err)
+			}
+			c := h.runner.conv(id)
+			eventually(t, "the refused wake", func() bool {
+				refused := false
+				c.do(func() { refused = c.wakeRefused })
+				return refused
+			})
+			if st := h.state(id); st.Error != agyLeadOnlyReason || st.Process || st.Status == StatusClosed || h.backend.startCount() != starts {
+				t.Fatalf("state = %+v, starts %d (was %d)", st, h.backend.startCount(), starts)
+			}
+		})
+	}
 }
 
 // Peer mail still reaches a hosted agy lead under the lead-only posture.

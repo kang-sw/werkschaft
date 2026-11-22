@@ -233,7 +233,8 @@ type conv struct {
 	workerMCPEnv   []string
 	workerRetiring bool // validated downgrade retirement retries before replay
 	// leadOnlyRejoin is a held worker on a lead-only backend that reattach
-	// left unattached; holdersScanned ends its holder (retireLeadOnlyWorker).
+	// attached for the ownership match only. checkReattach ends a matching
+	// holder (retireLeadOnlyWorker) and never stops a mismatched one.
 	leadOnlyRejoin bool
 	mcpChecking    bool
 	mcpAgain       bool

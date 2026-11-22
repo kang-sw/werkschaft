@@ -1072,11 +1072,19 @@ from a support conversation:
   worker entry with that reason: `agent.spawn` (an `agy.<tier>`, an agy
   caller's bare tier, an alias, or a graph route or bundle ending on agy),
   the profile-based `POST /agents` (403), and every launch or wake of an
-  existing agy worker record (`childAdmission`: a message, mail, or resume
-  stays queued and the record stays listed, with the reason as its error).
-  On daemon start a held agy worker is not reattached: after the first
-  holder scan its holder is stopped through `retireHolder`, an open turn
-  settles failed with the reason, and the record stays listed, stopped.
+  existing agy worker record (`admitWorkerRecord`). The record check reads
+  the record's own backend and lead flag before any profile, so an edited
+  or removed profile cannot mask the reason. A refused message, mail, or
+  resume stays queued and the record stays listed, with the reason as its
+  error; the reason is derived again on every load, with no stored field.
+  On daemon start a held agy worker is never rejoined. Its holder is
+  attached only for the ownership match every held worker passes
+  (`checkReattach`, `workerHolderMatches`), with replay, events, and the MCP
+  bearer kept closed. A matching holder is then stopped
+  (`retireLeadOnlyWorker`): an open turn settles failed with the reason. A
+  mismatched or already rejected holder is never stopped; the record only
+  drops the association. Either way the record stays listed, stopped, and
+  its activity is stamped, so child expiry gives it one full interval.
   `agent.tiers` lists agy under `Unavailable`, and aliases, routes,
   bundles, and the dashboard tier view carry the same reason. The agy
   worker profile stays registered so old records resolve; the agy worker

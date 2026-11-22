@@ -186,6 +186,12 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 			c.lastErr = last.Result.Error
 		}
 	}
+	if refusal := r.admitWorkerRecord(rec); refusal != nil {
+		// Derived from the record's immutable backend on every load, with no
+		// stored field: a worker on a lead-only backend shows why it does not
+		// run, whatever its last turn says.
+		c.lastErr = refusal.Error()
+	}
 	c.writeRegistration()
 	// A row a terminal login took while no daemon ran: the loop lets the
 	// session go before it takes anything else (settle), and nothing below

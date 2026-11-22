@@ -36,24 +36,71 @@ func (c *conv) restoreWorkerMCP() {
 	}
 }
 
-// retireLeadOnlyWorker ends the holder of a worker record on a lead-only
-// backend that reattach left unattached, after the first scan, through the
-// ordinary holder stop (retireHolder). The record stays listable, stopped,
-// with the lead-only reason as its error; an open turn settles failed with
-// that reason, as a process gone at rejoin does (processGone). A failed stop
-// keeps the holder in the record and says so; the next daemon tries again.
-func (c *conv) retireLeadOnlyWorker() {
-	reason := c.r.opts.Backends[c.rec.Backend].leadOnlyReason
-	if err := c.retireHolder(); err != nil {
-		c.setStatus(func() { c.lastErr = reason + "; " + err.Error() })
-		fmt.Fprintf(c.r.opts.Log, "agent %s: end lead-only worker holder: %v\n", c.rec.ReplyID, err)
+// retireLeadOnlyWorker ends the held process of a worker record on a
+// lead-only backend. checkReattach calls it only after the holder passed the
+// ownership match and the rejected-holder guard; a mismatched holder is never
+// stopped. Replay, events, and the MCP bearer were never opened.
+//   - The record stays listable, stopped, with the lead-only reason as its
+//     error.
+//   - An open turn settles failed with that reason, as a process gone at
+//     rejoin does (processGone).
+//   - A failed stop keeps the holder in the record, publishes nothing, and
+//     says so; the next daemon's rejoin tries again.
+func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
+	refusal := c.r.admitWorkerRecord(c.rec)
+	if refusal == nil {
+		return
+	}
+	reason := refusal.Error()
+	id := c.rec.HolderID
+	hp.Detach()
+	c.events = nil
+	c.replaying, c.replayAsked = false, false
+	if err := c.r.opts.Holders.Stop(id); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+		c.setStatus(func() {
+			c.proc = nil
+			c.lastErr = fmt.Sprintf("%s; the session's previous process could not be ended (holder %s): %v", reason, id, err)
+		})
+		fmt.Fprintf(c.r.opts.Log, "agent %s: end lead-only worker holder %s: %v\n", c.rec.ReplyID, id, err)
+		c.writeRegistration()
+		return
+	}
+	c.setStatus(func() { c.proc = nil })
+	c.r.revokeToken(c.rec.ReplyID)
+	// The holder and the credentials it carried go in one write.
+	c.update(func(rec *Record) {
+		rec.HolderID, rec.HostPID, rec.HolderSeq = "", 0, 0
+		rec.HandedOffAt = ""
+		rec.Capability = ""
+		rec.forgetMCP()
+	})
+	c.leadOnlyRetired()
+	c.processEnded()
+	c.setStatus(func() { c.lastErr = reason })
+	c.writeRegistration()
+}
+
+// leadOnlyRetired closes a lead-only rejoin on whichever path ended it:
+//   - the holder was ended (retireLeadOnlyWorker);
+//   - it was gone (processGone);
+//   - it failed the ownership match;
+//   - a downgrade retired it.
+//
+// The record shows the refusal and gets a fresh activity stamp, so its child
+// expiry runs one full interval with the reason visible, not at once from
+// an old stamp. It does nothing while a retirement is still retrying
+// (workerRetiring).
+func (c *conv) leadOnlyRetired() {
+	if !c.leadOnlyRejoin || c.workerRetiring {
+		return
+	}
+	refusal := c.r.admitWorkerRecord(c.rec)
+	if refusal == nil {
 		return
 	}
 	c.leadOnlyRejoin = false
-	c.replaying, c.replayAsked = false, false
-	c.setStatus(func() { c.lastErr, c.wakeRefused = reason, true })
-	c.processEnded()
-	c.setStatus(func() { c.lastErr = reason })
+	c.setStatus(func() { c.lastErr, c.wakeRefused = refusal.Error(), true })
+	c.update(func(rec *Record) { rec.LastActiveAt = c.r.opts.Now().UTC().Format(time.RFC3339) })
 	c.writeRegistration()
 }
 

@@ -49,11 +49,13 @@ func (r *Runner) Deliver(id string, d Delivery) (State, error) {
 		rec := c.rec
 		c.mu.Unlock()
 		if asleep {
-			rp, resolveErr := r.resolve(rec.Profile, rec.Root)
-			if resolveErr != nil {
-				refusal = resolveErr
-			} else {
-				_, _, refusal = r.childAdmission(rec, rp.Definition)
+			// Ahead of the profile: its edits never mask a lead-only refusal.
+			if refusal = r.admitWorkerRecord(rec); refusal == nil {
+				if rp, resolveErr := r.resolve(rec.Profile, rec.Root); resolveErr != nil {
+					refusal = resolveErr
+				} else {
+					_, _, refusal = r.childAdmission(rec, rp.Definition)
+				}
 			}
 		}
 	}

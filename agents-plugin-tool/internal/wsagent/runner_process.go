@@ -74,6 +74,11 @@ func (c *conv) startProcess() error {
 		return conflict("the session is archived; unhide it before starting")
 	}
 	rec := c.record()
+	// Before the profile is read: a removed or edited profile must not mask
+	// a lead-only backend's refusal (admitWorkerRecord).
+	if err := c.r.admitWorkerRecord(rec); err != nil {
+		return err
+	}
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
 	if err != nil {
 		return err
@@ -582,15 +587,15 @@ func (c *conv) retireHolder() error {
 // scan.
 func (c *conv) reattach() {
 	rec := c.record()
-	if !rec.Lead {
-		if err := c.r.admitWorkerBackend(rec.Backend); err != nil {
-			// Not rejoined: the holder is ended once the first scan lists
-			// it (holdersScanned), and the record stays, stopped.
-			c.leadOnlyRejoin = true
-			c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), true })
-			fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s refused: %v\n", rec.ReplyID, rec.HolderID, err)
-			return
-		}
+	if err := c.r.admitWorkerRecord(rec); err != nil {
+		// Never rejoined. The attach below only lets checkReattach run
+		// the ownership match every held worker passes. Replay, events,
+		// and the MCP bearer stay closed. A matching holder is then
+		// ended (retireLeadOnlyWorker); a mismatched one is never
+		// stopped. The record stays, stopped, either way.
+		c.leadOnlyRejoin = true
+		c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), true })
+		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s refused: %v\n", rec.ReplyID, rec.HolderID, err)
 	}
 	def := Profile{Backend: rec.Backend, Lead: rec.Lead}
 	if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
@@ -630,6 +635,7 @@ func (c *conv) checkReattach() {
 	}
 	if c.workerRetiring {
 		c.retireDowngradedWorker(hp)
+		c.leadOnlyRetired()
 		return
 	}
 	id, _, _ := hp.HolderInfo()
@@ -642,7 +648,10 @@ func (c *conv) checkReattach() {
 			}
 			if !c.rec.Lead {
 				var meta holderSession
-				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.rec, meta, info.Child) {
+				// A lead-only retirement stops the holder, so a holder already
+				// rejected grants it no stop authority either.
+				if json.Unmarshal(info.Session, &meta) != nil || !workerHolderMatches(c.rec, meta, info.Child) ||
+					c.leadOnlyRejoin && c.r.holders.isRejected(id) {
 					// Never stop a holder that failed the ownership check.
 					c.r.holders.reject(id)
 					hp.Detach()
@@ -655,9 +664,16 @@ func (c *conv) checkReattach() {
 						}
 					})
 					c.recoveryFailed("held process association does not match the worker record")
+					c.leadOnlyRetired()
 					return
 				}
 				if c.retireDowngradedWorker(hp) {
+					c.leadOnlyRetired()
+					return
+				}
+				if c.leadOnlyRejoin {
+					// Ownership matched: end the holder instead of rejoining it.
+					c.retireLeadOnlyWorker(hp)
 					return
 				}
 				rec := c.record()
@@ -678,6 +694,7 @@ func (c *conv) checkReattach() {
 	}
 	if !listed {
 		c.processGone()
+		c.leadOnlyRetired()
 		return
 	}
 	if !attached {

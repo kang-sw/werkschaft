@@ -119,7 +119,7 @@ func (r *Runner) childAdmission(rec Record, def Profile) (PermissionLevel, strin
 	}
 	// A worker record on a lead-only backend is kept but never launched
 	// or woken again.
-	if err := r.admitWorkerBackend(rec.Backend); err != nil {
+	if err := r.admitWorkerRecord(rec); err != nil {
 		return "", "", err
 	}
 	dir := wsdashboard.SessionDir(r.opts.Dir, rec.ReplyID)

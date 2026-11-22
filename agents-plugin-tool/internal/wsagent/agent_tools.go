@@ -305,8 +305,8 @@ func (r *Runner) registeredWorker(harness string) string {
 	if !ok || reg.Backend == nil {
 		return fmt.Sprintf("harness %q is not registered in this daemon", harness)
 	}
-	if reg.leadOnlyReason != "" {
-		return reg.leadOnlyReason
+	if err := r.admitWorkerBackend(harness); err != nil {
+		return err.Error()
 	}
 	if !reg.WorkerCapable || reg.WorkerProfile == "" {
 		return fmt.Sprintf("harness %q is registered for hosted leads only, not for spawned workers", harness)
@@ -317,10 +317,15 @@ func (r *Runner) registeredWorker(harness string) string {
 	return ""
 }
 
-// admitWorkerBackend is the one lead-only check every worker entry passes:
-// agent.spawn and a profile create (create), and every launch or wake of an
-// existing worker record (childAdmission). A rejoin does not attach such a
-// worker either (reattach, holdersScanned). It refuses only a backend
+// admitWorkerBackend is the one lead-only worker admission, for both the
+// decision and its text. Every worker entry passes it:
+//   - agent.spawn's tier resolution (spawnableHarness, registeredWorker);
+//   - a profile create (create);
+//   - every launch or wake of an existing worker record (admitWorkerRecord);
+//   - a rejoin (reattach, checkReattach).
+//
+// The tier listing and the dashboard trace quote it too (registeredWorker,
+// workerHarnesses, unusableHarnessError). It refuses only a backend
 // registered with a lead-only reason; the record itself is kept.
 func (r *Runner) admitWorkerBackend(backend string) error {
 	if reason := r.opts.Backends[backend].leadOnlyReason; reason != "" {
@@ -329,13 +334,23 @@ func (r *Runner) admitWorkerBackend(backend string) error {
 	return nil
 }
 
+// admitWorkerRecord is admitWorkerBackend for an existing record. It decides
+// from the record's immutable backend and lead flag, before any profile
+// resolution, so an edited or removed profile cannot mask the refusal.
+func (r *Runner) admitWorkerRecord(rec Record) error {
+	if rec.Lead {
+		return nil
+	}
+	return r.admitWorkerBackend(rec.Backend)
+}
+
 // workerHarnesses are the registered worker-role backends, sorted, with the
-// lead-only backends whose registration says why (agent.tiers lists those
-// under Unavailable).
+// backends admitWorkerBackend refuses (agent.tiers lists those under
+// Unavailable, with the refusal's text).
 func (r *Runner) workerHarnesses() []string {
 	var out []string
 	for name, reg := range r.opts.Backends {
-		if reg.WorkerCapable && reg.WorkerProfile != "" || reg.leadOnlyReason != "" {
+		if reg.WorkerCapable && reg.WorkerProfile != "" || r.admitWorkerBackend(name) != nil {
 			out = append(out, name)
 		}
 	}
@@ -344,11 +359,10 @@ func (r *Runner) workerHarnesses() []string {
 }
 
 // unusableHarnessError is an alias or route entry's error for a harness with
-// no usable tiers: a lead-only registration's own reason, else the generic
-// text.
+// no usable tiers: admitWorkerBackend's refusal text, else the generic text.
 func (r *Runner) unusableHarnessError(harness string) string {
-	if reason := r.opts.Backends[harness].leadOnlyReason; reason != "" {
-		return reason
+	if err := r.admitWorkerBackend(harness); err != nil {
+		return err.Error()
 	}
 	return fmt.Sprintf("harness %q has no spawnable tier now", harness)
 }
