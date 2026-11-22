@@ -1199,3 +1199,56 @@ func TestMovedAsideSessionKeepsItsJournal(t *testing.T) {
 		restoredAndCommitted(t, s, session, aside)
 	})
 }
+
+// An owner save to the legacy config after the removal planned it is never
+// deleted: the removal retires only the version it published at the witness
+// and goes stale otherwise, so the newer version is staged and published by
+// the next application.
+func TestRemovalKeepsAnOwnerSaveMadeDuringIt(t *testing.T) {
+	ctx := context.Background()
+	const saved = `{"hooks":"saved during the removal"}`
+	for _, tc := range []struct {
+		name   string
+		absent bool
+	}{{"present original", false}, {"absent original", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := legacyFixture(t)
+			if tc.absent {
+				if err := os.Remove(filepath.Join(dir, fenceHooks)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			armed := false
+			opts := testOpts()
+			opts.Fault = func(stage string) error {
+				if armed && stage == "fence-prepared" {
+					armed = false
+					put(t, dir, fenceHooks, saved)
+				}
+				return nil
+			}
+			s := openTest(t, dir, opts)
+			mustStage(t, s)
+			armed = true
+			if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrFenceStale) {
+				t.Fatalf("removal over an owner save = %v, want ErrFenceStale", err)
+			}
+			if got := readRel(t, dir, fenceHooks); got != saved {
+				t.Fatalf("legacy config = %q, want the owner's save kept", got)
+			}
+			mustStage(t, s)
+			if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+				t.Fatalf("re-applied removal = %v", err)
+			}
+			if _, err := s.Commit(ctx, testCommit()); err != nil {
+				t.Fatal(err)
+			}
+			if got := readRel(t, dir, hooksWitness); got != saved {
+				t.Fatalf("witness = %q, want the owner's save", got)
+			}
+			if c := captureMap(t, s)[fenceHooks]; string(c.Bytes) != saved {
+				t.Fatalf("staged original = %q, want the owner's save", c.Bytes)
+			}
+		})
+	}
+}

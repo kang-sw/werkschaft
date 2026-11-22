@@ -336,6 +336,10 @@ func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error
 // The witness path holding anything the migration did not publish refuses
 // the removal (ErrWitnessOccupied).
 //
+// Right before the deletion rel is read again; a version other than the
+// planned one is kept and the removal returns ErrFenceStale (stage, then
+// apply again).
+//
 // A pass proves the removal only while rel is absent and the witness holds
 // the publication, so an owner's own deletion of rel is never taken for the
 // fence, and the import never undoes it (2135). Re-applying follows
@@ -369,6 +373,17 @@ func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) erro
 	}
 	switch _, err := wsstate.Lstat(abs); {
 	case err == nil:
+		// Compare before delete: only the planned version, the one published
+		// at the witness, is retired. An owner's save since then is kept and
+		// the fence goes stale, so a pass stages the newer version. The
+		// window between this read and the deletion is not fenced.
+		now := readLegacy(abs, s.opts.ReadFile)
+		if now.transient {
+			return fmt.Errorf("%w: %s: %s", ErrLegacyUnread, rel, now.err)
+		}
+		if now.state != plan.state || now.digest != plan.digest {
+			return fmt.Errorf("%w: %s", ErrFenceStale, rel)
+		}
 		if err := s.removeDurably(abs); err != nil {
 			return err
 		}
