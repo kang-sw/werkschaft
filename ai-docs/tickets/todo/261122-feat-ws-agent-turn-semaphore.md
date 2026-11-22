@@ -6,6 +6,8 @@ related:
   261117-feat-ws-exec-tools: "prerequisite; Phase 1 supplies the authenticated origin and completion steer-or-wake seams"
   261121-bug-ws-agy-reattach-watchdog-sent-input: "agy watchdog recovery and reattached turn boundaries"
   261120-feat-ws-agy-timeout-process-respawn: "agy timeout recovery and process replacement boundaries"
+sage-review-design: required
+sage-review-completeness: required
 ---
 
 # Agent turn semaphore
@@ -27,7 +29,7 @@ The owner asked for a daemon-side semaphore tunable through `lead-tune`
 ## Decisions
 
 S1–S11 were owner-confirmed on 2026-11-22 by (1509)=ok except where an
-individual decision ID is listed. S12–S14 record technical settlements.
+individual decision ID is listed. S12–S16 record technical settlements.
 
 - **S1. Per-harness model-active turns.** Keep a turn-granular semaphore in
   daemon memory for each harness backend. Count model-active worker and
@@ -63,7 +65,10 @@ individual decision ID is listed. S12–S14 record technical settlements.
   status component.
 - **S7. Exec completion.** A notice steered into a running turn takes no
   new slot. A completion notice that opens a worker turn queues like
-  other worker turns.
+  other worker turns. Agy steer replaces the running ACP prompt. If the
+  turn has yielded its slot, wait for the MCP response and slot
+  reacquisition before steering, or queue for the next turn if that
+  turn ended. Hosted leads count immediately. See exec Decision 22.
 - **S8. Config (1500)=a.** Provide a nonnegative per-harness
   `max_concurrent_turns` setting through `lead-tune`, starting with
   `agy.max_concurrent_turns` in
@@ -75,8 +80,9 @@ individual decision ID is listed. S12–S14 record technical settlements.
   MCP calls in the foreground regardless of `tools.<name>.background`.
   The model waited while the ws call was in flight, so S4 applies to agy.
 - **S10. Slot lifetime.** Keep all accounting in memory with zero file I/O.
-  Release any held slot exactly once on completion, cancel, panic, EOF,
-  or process replacement. Hold no lock across waits.
+  Release any held slot exactly once on turn completion, turn cancellation,
+  terminal turn failure, EOF, or process replacement. An MCP handler panic
+  returns a tool error through S14. Hold no lock across waits.
 - **S11. Lead and child progress.** A lead ends its turn while waiting
   for children, freeing its slot so children can run. Pin this in a
   no-deadlock test.
@@ -94,15 +100,35 @@ individual decision ID is listed. S12–S14 record technical settlements.
   turns still count toward finite caps. Finite-cap workers use the FIFO.
   Compare the head waiter's own cap when considering its admission.
 - **S14. In-flight call and response accounting.** Scope each wait and reply
-  to the originating turn and process generation. An overlapping group of
-  calls releases the slot once. The first ready result or error re-acquires
-  once before any reply, using the existing worker FIFO and 20 s ceiling.
+  to the originating turn and process generation at ingress, before any
+  intake or handler wait. Use one state machine for all qualifying responses,
+  including normal responses, early intake errors and recovered panics
+  (`mcp/server.go#L294-L327`). An overlapping group of calls releases the
+  slot once. The first ready result or error re-acquires once before any
+  reply, using the worker FIFO and 20 s ceiling. Wait outside the Runner
+  loop and the response writer lock so unrelated responses and slot releases
+  can proceed.
   Keep counting the turn until that group drains because the first response
   can resume model work. HTTP cancellation stops waiting immediately and
   counts a still-live originating turn without waiting, since the client may
   resume on its local timeout. Ignore late accounting callbacks after that
   turn ends or its process is replaced. This prevents duplicate releases
   and gives reply and cancellation races one owner.
+- **S15. Restore active counts.** After daemon replacement, rebuild each
+  harness's active count from trusted holder replay before admitting new
+  finite-cap worker turns. Follow the Runner's conservative recovery
+  boundary: when replay leaves the turn unresolved, count it as running
+  until there is evidence it ended (`wsagent/runner_process.go#L698-L732`).
+  Keep the rebuilt count in memory. Otherwise, an empty count after
+  replacement would admit new work while existing model requests run.
+- **S16. Queue before input consumption.** Queue a new worker turn before
+  draining input, persisting an open prompt boundary, marking it active,
+  or starting any failure timer (`wsagent/runner_conv.go#L1240-L1315`).
+  Post grants to the Runner loop and revalidate the waiting operation there
+  before taking input or sending. Cancelled and superseded waits leave
+  pending input recoverable and start no timers. Apply the same sequence
+  to standalone sends and completion wakes so a wait changes neither
+  persisted prompt state nor the timeout budget.
 
 ## Constraints
 
@@ -159,7 +185,7 @@ after an intervening old-version config edit.
 
 ### Phase 1: Daemon turn semaphore and agy configuration
 
-Implement S1–S14 in one phase. Gate normal prompt sends
+Implement S1–S16 in one phase. Gate normal prompt sends
 (`agents-plugin-tool/internal/wsagent/runner_conv.go#L1304-L1313`), compaction sends
 (`wsagent/compaction.go:413`, 431, 637), watchdog continue
 (`wsagent/agy_watchdog.go:447`), and standalone prompts through
@@ -182,23 +208,37 @@ Verification:
 - Exercise per-harness counting, FIFO worker admission, nonblocking hosted
   lead turns, and unsolicited ACP wakes that count without waiting. Verify
   queued position in the existing `agent.list` status text and dashboard
-  rail and verify failure timers stay off while queued.
+  rail. Verify pending input stays recoverable and the turn boundary,
+  active mark and timers stay untouched while waiting and on cancellation
+  or supersession, including standalone prompts and completion wakes.
 - Exercise slot reuse on retries, ws continue, watchdog continue, compaction,
   and standalone prompts, including standalone send rollback. Verify a
-  completion steer takes no new slot and a completion wake queues.
+  completion steer takes no new slot and a completion wake queues. For
+  agy, verify a completion waits for the tool reply and slot reacquisition,
+  including immediate reacquisition for leads, and queues to the next
+  turn if the original turn ends first.
 - Verify S4 releases and re-acquires around a ws `tools/call`, counts the
   call once through its envelope, excludes nonqualifying requests, and
   returns the result after a maximum 20 s wait when no slot is available;
   a hosted lead turn re-acquires without waiting.
   Cover nested dispatch through `call`, schema-only `call` discovery,
-  overlapping replies and errors, agy's foreground MCP behavior, and an HTTP
-  cancel racing a pending grant or turn replacement. Verify that a descendant's
-  tool-supplied key cannot move slot accounting.
-- Verify exactly-once slot release on completion, cancel, panic, EOF, and
-  process replacement. Verify a lead waiting for children frees its slot
-  and the children can progress.
+  overlapping replies, intake failures and handler panic errors, agy's
+  foreground MCP behavior, and an HTTP cancel racing a pending grant or turn
+  replacement. Verify an unrelated reply can write during reacquisition.
+  Verify that a key or caller-supplied hello alone cannot grant turn
+  attribution, and that a descendant key cannot move slot accounting.
+- Verify exactly-once slot release on turn completion, cancellation,
+  terminal failure, EOF and process replacement. Verify a lead waiting
+  for children frees its slot and the children can progress. Simulate
+  daemon replacement with active lead and worker holders, including a
+  replay gap that leaves a turn running. Check new finite-cap workers
+  wait for the rebuilt count and a late callback from a replaced process
+  cannot change the successor's count.
 - Verify shipped default `0` applies no gating, both agy manifests expose
   the setting through the existing tuning and settings surfaces, and the
-  repository override is `3`. Use two repositories with different caps to
-  prove they share an active count while each applies its own cap, including
-  an unlimited request entering while a finite-cap worker waits.
+  repository override is `3`. With two different finite project caps,
+  place the lower-cap worker at the FIFO head and a higher-cap worker
+  behind it. Verify the tail cannot bypass the head even when only the
+  tail's cap permits admission. After admitting the head, check the next
+  worker against its own cap using the updated shared count. Verify a
+  cap-`0` request can enter while a finite-cap worker waits.

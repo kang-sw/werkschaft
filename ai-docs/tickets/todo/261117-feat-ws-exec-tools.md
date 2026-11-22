@@ -15,6 +15,8 @@ related:
   261117-feat-ws-hosted-compaction-lifecycle: "consumes the Phase 1 exec.list seam in a later restore-bundle edition"
   261120-feat-ws-agy-timeout-process-respawn: "shares the harness-kill survival fixture first established by exec Phase 1"
   261122-feat-ws-agent-turn-semaphore: "downstream consumer of Phase 1 conversation attribution and completion delivery"
+sage-review-design: required
+sage-review-completeness: required
 ---
 
 # ws/exec tools
@@ -36,7 +38,7 @@ workers in `261120-refactor-ws-agent-workers-under-holders` (merge `92c12990a`).
 ## Decisions
 
 Decisions 1–18 reflect the owner-confirmed plan as of 2026-11-22.
-Decisions 19–20 record technical settlements.
+Decisions 19–22 record technical settlements.
 
 1. **Surface (16), (18), (40), (42), (50), (51)=a.**
    - `exec.run(exe, args[], cwd?, env?, stdin?, async?)` runs argv directly.
@@ -96,6 +98,7 @@ Decisions 19–20 record technical settlements.
    judgment belongs to `261118-feat-ws-exec-intent-filter`.
    Rejected: retain native sandboxed shells for read-only sessions ((1505)=b)
    or implement OS confinement in ws/exec ((1505)=c).
+   Approval shape: pending owner decision (1512).
 5. **Claude permission pipeline.** Allowlist `ws/exec.*` to avoid a second
    prompt. Verify in Phase 1 whether Claude raises `can_use_tool` for MCP
    tools.
@@ -117,16 +120,18 @@ Decisions 19–20 record technical settlements.
      construction is in `wsagent/pi_launch.go:62-89`, and hosted leads
      use the separate `piLeadArgs` path. The lead's MCP-only fallback,
      taken when the bundled extension is unavailable
-     (`wsagent/pi_lead.go:80-90`), bypasses the extension's tool reshaping,
-     so the removal must hold on that path too.
+     (`wsagent/pi_lead.go:80-90`), bypasses the extension's tool reshaping.
+     Verify its launch flags when it has the trusted binding in Decision 13.
    - agy uses the daemon rejection in Decision 11.
    - Default the rollout on per harness with a verified mechanism and
      provide a per-harness config key to revert. Exclude the frozen Claude
      CLI tier, sessions without a permitted ws/exec replacement such as
      wsflow agentless, sessions already running or reattached before
-     cutover, and unverified harness versions. Add the exec tools to worker
-     allowlists before removing native tools (`wsagent/builtin.go:83-94`
-     and `261115-feat-ws-worker-profile-session-spawn`).
+     cutover, and unverified harness versions. Pi bridge and Claude stdio
+     fallback connections keep native process tools until they have the
+     trusted binding in Decision 13. Add the exec tools to worker allowlists
+     before removing native tools (`wsagent/builtin.go:83-94` and
+     `261115-feat-ws-worker-profile-session-spawn`).
 7. **Job lifetime and sleep (18), (1507)=b.** Interrupt stops only a job
    still inside its synchronous window. Async and converted jobs survive
    interrupt, harness restart, handoff, compaction, and daemon replacement.
@@ -158,8 +163,8 @@ Decisions 19–20 record technical settlements.
     notice. Suppress completion after the session closes. `Runner.Deliver`
     delegates to `Runner.Send`, which currently marks steer only for spawned
     Pi children (`wsagent/runner_operations.go:118`). Phase 1 extends steer
-    marking to every harness path that supports steering. Rejected:
-    next-turn-only delivery.
+    marking to every harness path that supports steering, subject to
+    Decisions 21–22. Rejected: next-turn-only delivery.
 11. **agy command blocking (1503), after the agy 1.5.14 live probe on
     2026-11-22.** The settled launch policy is native `default` mode.
     Native `auto` and `--dangerously-skip-permissions` are never used.
@@ -170,7 +175,12 @@ Decisions 19–20 record technical settlements.
     their current mode.
     ws bypass and worker auto-approval stay daemon-side
     (`wsagent/agy_bypass.go:15-36`), except that the daemon answers
-    `run_command` permission requests with `reject_once`.
+    `run_command` permission requests with `reject_once`. Apply the same
+    guard to live settings updates, in-stream mode changes, reconciliation
+    and replayed approvals so a mode transition cannot bypass the launch
+    policy (`wsagent/permission.go#L365-L406`,
+    `wsagent/runner_events.go#L1031-L1068`). Preserve the saved preference
+    for the revert path.
     - In `default`, each tested `run_command` (`ls`, `git status`, `echo`,
       and an `IsDaemon:true` background sleep) raised
       `session/request_permission`. Both native `auto` and
@@ -179,11 +189,17 @@ Decisions 19–20 record technical settlements.
       no retry. ACP provides no model-visible custom rejection text, and
       an immediate post-rejection steer failed with `-32603`. Append the
       instruction to use the ws exec tools to the system prompt at
-      session creation. Once the rejected turn ends, the daemon sends
-      that instruction as a new prompt.
-    - A `run_command` that starts without a permission request is detected,
-      logged as a warning, and answered with the same instruction prompt.
-      A user-home always-allow rule is a possible, untested path.
+      session creation. Send one instruction prompt at the turn boundary
+      even when the rejected turn returns empty output. Deduplicate the
+      follow-up across replay of the same turn.
+    - Correlate permission requests and actual execution evidence by ACP
+      `toolCallId` within the process and turn. Require execution evidence
+      such as process-start or exit data before treating a command as having
+      run. An initial `in_progress` tool announcement can precede the
+      permission request (see `wsagent/testdata/agy-1.5.10-hosted-lead.jsonl`).
+      If a command ran without a request, log a warning and send the same
+      single instruction prompt at the turn boundary. A user-home
+      always-allow rule is a possible, untested path.
     - `read_file`, `manage_task`, and `invoke_subagent` raised no permission
       request. Retain the existing advisory steer for native subagents.
     - Rejected: custom main agent, which replaces the default prompt and
@@ -203,7 +219,13 @@ Decisions 19–20 record technical settlements.
     exec job and the semaphore turn. Validate a supplied `session_key`
     only as a cwd/worktree grant. A descendant key cannot choose the owner
     (`mcp/server_sessions.go:286-298`, `mcp/hosted_key.go:17-48`). Apply
-    the new approval policy to every hosted legacy launch shape.
+    the new approval policy to every hosted legacy launch shape. Set the
+    conversation and process identity in server-side request context after
+    transport validation. The HTTP token resolves to a Runner binding
+    (`wsagent/mcp_session.go#L153-L188`), while launcher hello fields come
+    from the client (`wsdashboard/proxy.go#L186-L206`). A supplied key or
+    hello field alone grants neither hosted job ownership nor turn
+    attribution. Require a trusted binding for a hosted exec replacement.
 14. **Process tree.** Put each job in a dedicated process group. On Windows
     use a job object or `taskkill /T`. Stop and close kill the whole group.
     Detached processes are outside the guarantee. Current holder stop
@@ -230,8 +252,12 @@ Decisions 19–20 record technical settlements.
 19. **Legacy hosted timing.** Apply the approved 30 s execution window to
     hosted `exec.spawn` and legacy-form `exec.shell`. Keep their legacy
     launch arguments, shell resolution, `exec_key` and reply shape, including
-    the running response and its reader guidance after time expires. This
-    follows Decision 3's explicit replacement of `ForegroundWindow` and
+    the running response and its reader guidance after time expires.
+    Preserve finite stdin for these holder launches: EOF after supplied
+    bytes or immediate EOF when stdin is absent
+    (`internal/execjob/execjob.go#L226-L233`). Programs that read to EOF
+    must still finish without any later `exec.write`. The timing follows
+    Decision 3's explicit replacement of `ForegroundWindow` and
     keeps old clients able to use the returned key in legacy readers and
     `exec.abort`. Non-hosted legacy launches retain the existing 5 s window
     because the rollout targets hosted sessions. The old timed branch is
@@ -244,6 +270,26 @@ Decisions 19–20 record technical settlements.
     fixture also lands here, using an independently stoppable harness and
     live job holder. These producer-side checks establish the handoff before
     the semaphore and the agy recovery ticket exercise their own behavior.
+21. **Idempotent completion admission.** Use the stable event ID at Runner
+    admission, with a durable acceptance record recoverable together with
+    the inbox enqueue. A crash before enqueue leaves the completion
+    retryable. A crash after enqueue recovers its acceptance without a
+    second entry. Preserve deduplication after inbox drain and while the
+    source event can still replay. Check the owning session's open
+    generation in the same fence as acceptance so an explicit close
+    invalidates pending delivery, including after manual revival. Completion
+    must never take the closed-Pi auto-revival path for ordinary input
+    (`wsagent/agent_delivery.go#L44-L67`,
+    `wsagent/runner_operations.go#L75-L119`,
+    `wsinbox/inbox_store.go#L199-L233`). This keeps recovery from duplicating
+    an accepted notice or reopening a human-closed session.
+22. **agy completion while the slot is yielded.** agy steer sends a
+    replacement ACP prompt (`wsagent/agy.go#L401-L426`). When the current
+    turn has yielded its semaphore slot for an MCP call, hold the completion
+    steer until the response is returned and that turn has re-acquired its
+    slot. A lead counts immediately on reacquisition. If the turn has ended,
+    queue the completion for ordinary next-turn delivery. This prevents the
+    steer from replacing the prompt while it is still waiting on the tool.
 
 ## Constraints
 
@@ -314,7 +360,8 @@ and daemon-owned approval to the authenticated conversation and enforce the
 same approval policy for hosted legacy launches. Implement the process-group
 lifecycle, output retention, and session-scoped `exec.list` read seam.
 Deliver durable async completion with the existing steer, idle-turn, and
-next-turn routes. Implement the independent 30 s hosted execution window and
+next-turn routes, fenced by session generation and deduplicated at enqueue.
+Implement the independent 30 s hosted execution window and
 check Claude's MCP approval path. Phase 2 uses this surface before removing
 native tools. The semaphore and restore bundle integrate with the Phase 1
 seams in their respective tickets.
@@ -326,13 +373,17 @@ Verification:
   readers, and preserved old records and raw byte offsets. Compare the timed
   running response on a hosted legacy call with the existing non-hosted 5 s
   path, including an older client's follow-up status, result, and abort.
+  Use a command that reads to EOF through both legacy holder launch shapes,
+  with supplied stdin bytes and with stdin absent.
 - Exercise sync, async, conversion in the current turn, and pipe stdin via
   `exec.write`. Prove preflight, approval, and slot re-acquisition do not
   consume the 30 s conversion window. Verify running, idle, and next-turn
   completion delivery on every steer-capable harness, once across daemon
-  replacement and replay by its stable event ID, including suppression
-  after close and absence of notices for synchronous completions. Exercise
-  the delivery seam through ordinary Runner admission without a semaphore.
+  replacement and replay by its stable event ID. Inject exits immediately
+  before and after enqueue and replay again after inbox drain. Race completion
+  with close and manual revival of a Pi child. Verify no automatic revival,
+  no stale notice after manual revival and no notices for synchronous
+  completions. Exercise ordinary Runner admission without a semaphore.
 - Verify T0 with an old daemon running the new holder, then holder exit, then
   new-daemon reopen and terminal-status retrieval. Share the harness-kill
   survival case with `261120-feat-ws-agy-timeout-process-respawn`.
@@ -343,7 +394,9 @@ Verification:
 - Verify command-rule allow and deny, deny under `full`, dashboard approvals
   bound to launch and owner, live profile changes before approval or start,
   legacy shape enforcement, and rejection of owner selection by a descendant
-  key. Pin the Claude `can_use_tool` finding and verify one approval path.
+  key. Verify that unauthenticated origin claims in a launcher hello or tool
+  arguments cannot confer hosted job ownership. Pin the Claude `can_use_tool`
+  finding and verify one approval path.
 - Measure syscalls/s on the owner's PC and account for cold-start and exit
   holder files. Verify that new hosted jobs create no per-job output files
   and that interactive paths stay off file I/O.
@@ -353,11 +406,12 @@ Verification:
 After Phase 1, add the exec tools to worker allowlists and then enable verified
 per-harness native process tool removal with its rollout switch and exclusions.
 Use the existing config registry and settings catalog for the rollout switch.
-On agy, use the native default launch mode and daemon `reject_once` for
-`run_command`; preserve daemon-side bypass for other requests and handle
-commands that start without a request. Append the creation-time instruction,
-send its new-prompt follow-up after rejected turns, and remove the old agy
-background prompt rules after cutover.
+On agy, enforce native default mode at startup, during live settings changes,
+and on reconciliation. Apply daemon `reject_once` to live and replayed
+`run_command` permission requests. Preserve daemon-side bypass for other
+requests. Correlate executions that lack a request and deliver the instruction
+at the turn boundary. Append the creation-time instruction and remove the
+old agy background prompt rules after cutover.
 
 Hold worker done reports while owned exec jobs remain live, including the child
 report successor and recovery replay paths. Keep legacy agy background tracking
@@ -374,13 +428,17 @@ Verification:
   including the lead's MCP-only fallback, preserved tools, worker allowlist
   ordering, default-on behavior, and per-harness revert. Cover the frozen
   Claude CLI tier, missing replacement tools, existing and reattached sessions,
-  and unverified versions.
+  and unverified versions. Verify that the Pi bridge and Claude stdio fallback
+  retain native tools when the trusted binding is absent.
 - Verify agy default launch on new, resumed, and reattached sessions with
   a saved non-default mode, the `reject_once` exception under bypass and worker
-  auto-approval, command-request detection for foreground and daemon jobs,
-  prompt append, new prompt after turn end, and the warning and instruction
-  path when a command starts without a request. Cover the advisory-only
-  native subagent path and update both prompt regression tests in Decision 18.
+  auto-approval, and mode changes and reconciliation during the process
+  lifetime. Include replayed approvals. Exercise foreground and daemon jobs,
+  an announcement followed by a permission request for the same tool ID,
+  and actual execution without a request. Verify the warning and single
+  instruction prompt at turn end, including replay and a rejection with
+  empty output. Cover the advisory-only native subagent path and update
+  both prompt regression tests in Decision 18.
 - Verify interrupt during the sync window and survival of async or converted
   jobs across interrupt, harness restart, handoff, compaction, and daemon
   replacement. Check the common sleep predicate with a running turn, live
