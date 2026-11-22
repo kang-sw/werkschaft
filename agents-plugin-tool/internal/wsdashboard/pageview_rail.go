@@ -213,6 +213,13 @@ type RailRow struct {
 	// fully idle once its turn ended and none of the rest remains, so such
 	// a session may read idle while unseen background work still runs.
 	Busy bool
+	// Active is Busy by the session's own activity, rendered as
+	// data-active="1": everything Busy counts except exec jobs, which are
+	// known only by worktree and so also keep other sessions there busy. A
+	// page notifies a finish only for a busy span that was active at some
+	// point, so a session busy only through another one's job never reads
+	// as finished.
+	Active bool
 	// permission is the lead's permission wait, from a present adapter,
 	// for any session: a hosted one also has Approval, a terminal one waits
 	// on its own prompt. Busy reads it.

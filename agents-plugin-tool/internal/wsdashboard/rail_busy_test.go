@@ -36,37 +36,43 @@ func TestRailBusy(t *testing.T) {
 	}
 	idle := func(id string) RailRow { return row(id, false, true, snap(wslive.PhaseIdle, nil), nil) }
 	cases := []struct {
-		name string
-		row  RailRow
-		want bool
+		name   string
+		row    RailRow
+		want   bool
+		active bool
 	}{
-		{"working lead", row("w", false, true, snap(wslive.PhaseTool, nil), nil), true},
+		{"working lead", row("w", false, true, snap(wslive.PhaseTool, nil), nil), true, true},
 		{"hosted approval wait", row("a", true, true, snap(wslive.PhasePermission, func(s *wslive.Snapshot) {
 			s.Lead.Permission = &wslive.Permission{ToolName: "Bash"}
-		}), nil), true},
-		{"terminal permission wait", row("p", false, true, snap(wslive.PhasePermission, nil), nil), true},
+		}), nil), true, true},
+		{"terminal permission wait", row("p", false, true, snap(wslive.PhasePermission, nil), nil), true, true},
 		{"running subagent", row("s", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Agents = []wslive.Agent{{ID: "kid", Status: wslive.StatusRunning}}
-		}), nil), true},
+		}), nil), true, true},
 		{"background tasks", row("b", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Usage = &wslive.Usage{Background: n(2)}
-		}), nil), true},
+		}), nil), true, true},
 		{"unknown background count, idle", row("c", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Adapter = "codex"
 			s.Usage = &wslive.Usage{Background: n(-1)}
-		}), nil), false},
-		{"idle", idle("i"), false},
-		{"exec job under the project", row("e", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/repo/wt": 1, "/w/other": 3}), true},
-		{"exec job at a root holding the project", row("e2", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/repo/": 1}), true},
-		{"exec job in an unrelated root", row("u", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/other": 3, "/w/repo/wt2": 1, "/w/repo/wt/sub": 1}), false},
+		}), nil), false, false},
+		{"idle", idle("i"), false, false},
+		{"exec job under the project", row("e", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/repo/wt": 1, "/w/other": 3}), true, false},
+		{"exec job at a root holding the project", row("e2", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/repo/": 1}), true, false},
+		{"exec job in an unrelated root", row("u", false, true, snap(wslive.PhaseIdle, nil), map[string]int{"/w/other": 3, "/w/repo/wt2": 1, "/w/repo/wt/sub": 1}), false, false},
 		{"not live", row("x", false, false, snap(wslive.PhaseTool, func(s *wslive.Snapshot) {
 			s.Usage = &wslive.Usage{Background: n(1)}
-		}), map[string]int{project: 1}), false},
+		}), map[string]int{project: 1}), false, false},
 	}
 	for _, c := range cases {
 		r := c.row
 		if got := railSetBusy(&r); got != c.want || r.Busy != c.want {
 			t.Errorf("%s: Busy = %v, want %v (row %+v)", c.name, r.Busy, c.want, r)
+		}
+		// Exec jobs are known only by worktree: they keep a row busy but
+		// never make it active (its own activity).
+		if r.Active != c.active {
+			t.Errorf("%s: Active = %v, want %v (row %+v)", c.name, r.Active, c.active, r)
 		}
 	}
 
@@ -81,14 +87,14 @@ func TestRailBusy(t *testing.T) {
 	doc.Workspaces["/w/plain"] = &railLayoutWS{Children: map[string][]string{"par": {"kidw"}, "par2": {"kid2"}}}
 	orderRailView(&view, doc, f)
 	ws := view.Workspaces[0]
-	got := map[string]bool{}
+	got, active := map[string]bool{}, map[string]bool{}
 	for _, r := range ws.AllSessions() {
-		got[r.ReplyID] = r.Busy
+		got[r.ReplyID], active[r.ReplyID] = r.Busy, r.Active
 	}
 	want := map[string]bool{"par": true, "kidw": true, "par2": false, "kid2": false, "gone": false}
 	for id, w := range want {
-		if b, ok := got[id]; !ok || b != w {
-			t.Errorf("layout row %s: Busy = %v (listed %v), want %v", id, b, ok, w)
+		if b, ok := got[id]; !ok || b != w || active[id] != w {
+			t.Errorf("layout row %s: Busy = %v, Active = %v (listed %v), want %v", id, b, active[id], ok, w)
 		}
 	}
 	if len(ws.Sessions) != 2 || len(ws.Sessions[0].Children) != 1 {
@@ -100,17 +106,25 @@ func TestRailBusy(t *testing.T) {
 	if !railSetBusy(&deep) || !deep.Children[0].Busy || !deep.Children[0].Children[0].Busy {
 		t.Errorf("a busy grandchild did not keep its ancestors busy: %+v", deep)
 	}
-	deep.Children[0].Children[0].ExecJobs = 0
-	if railSetBusy(&deep) {
-		t.Errorf("an all-idle tree reads busy: %+v", deep)
+	if deep.Active || deep.Children[0].Active || deep.Children[0].Children[0].Active {
+		t.Errorf("an exec job made a tree active: %+v", deep)
+	}
+	deep.Children[0].Children[0].ExecJobs, deep.Children[0].Children[0].Working = 0, true
+	if !railSetBusy(&deep) || !deep.Active || !deep.Children[0].Active {
+		t.Errorf("an active grandchild did not keep its ancestors active: %+v", deep)
+	}
+	deep.Children[0].Children[0].Working = false
+	if railSetBusy(&deep) || deep.Active {
+		t.Errorf("an all-idle tree reads busy or active: %+v", deep)
 	}
 }
 
-// TestRailMarkupBusy pins the attribute a page reads: data-busy="1" on a
-// busy row, top-level and child alike, and none on an idle row.
+// TestRailMarkupBusy pins the attributes a page reads: data-busy="1" on a
+// busy row, top-level and child alike, data-active="1" only on one busy by
+// its own activity, and neither on an idle row.
 func TestRailMarkupBusy(t *testing.T) {
 	kid := RailRow{ReplyID: "kid", Harness: "pi", Live: true, Child: true, Group: "/w/folder", Busy: true}
-	par := RailRow{ReplyID: "par", Harness: "claude", Live: true, HasChildren: true, Children: []RailRow{kid}, Busy: true}
+	par := RailRow{ReplyID: "par", Harness: "claude", Live: true, HasChildren: true, Children: []RailRow{kid}, Busy: true, Active: true}
 	idle := RailRow{ReplyID: "idle", Harness: "claude", Live: true}
 	view := RailView{Workspaces: []RailWorkspace{{Name: "folder", Path: "/w/folder", Repo: true, Worktrees: []RailWorktree{{Path: "/w/folder", Sessions: []RailRow{par, idle}}}}}}
 	region, err := renderRailRegion(view, "en")
@@ -118,12 +132,12 @@ func TestRailMarkupBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(region.HTML)
-	for _, want := range []string{`data-rid="par" data-asks="" data-busy="1"`, `data-rid="kid" data-asks="" data-busy="1"`} {
+	for _, want := range []string{`data-rid="par" data-asks="" data-busy="1" data-active="1" `, `data-rid="kid" data-asks="" data-busy="1" data-star=`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("the rail lacks %s:\n%s", want, html)
 		}
 	}
-	if !strings.Contains(html, `data-rid="idle" data-asks="" data-star=`) || strings.Count(html, "data-busy") != 2 {
+	if !strings.Contains(html, `data-rid="idle" data-asks="" data-star=`) || strings.Count(html, "data-busy") != 2 || strings.Count(html, "data-active") != 1 {
 		t.Errorf("an idle row carries data-busy:\n%s", html)
 	}
 }
@@ -188,6 +202,9 @@ func TestExecJobsChangedReachesTheRailStream(t *testing.T) {
 	second := railHTML()
 	if !strings.Contains(rowOf(second, "boardsession"), `data-busy="1"`) {
 		t.Fatalf("an exec job under the project did not reach the stream: %s", rowOf(second, "boardsession"))
+	}
+	if strings.Contains(rowOf(second, "boardsession"), "data-active") {
+		t.Fatalf("an exec job made boardsession active: %s", rowOf(second, "boardsession"))
 	}
 	if n := reads.Load(); n != 0 {
 		t.Errorf("ExecJobsChanged re-read %d session inputs", n)
