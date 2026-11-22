@@ -98,8 +98,21 @@
     return '<span class="au-red" title="' + auEsc(wsT("js.audit.redacted.title", rule || "secret", length || 0)) + '">\ud83d\udd12 ' + auEsc(rule || "secret") + " \u00b7 " + auEsc(String(length || 0)) + "B" + auEsc(extra) + "</span>";
   }
 
+  function auBuildSearchMatcher(query, regex, caseSensitive) {
+    if (!query) return null;
+    var q = String(query);
+    if (regex) {
+      try {
+        return { regex: new RegExp(q, caseSensitive ? "g" : "gi") };
+      } catch (e) {
+        return null;
+      }
+    }
+    return { needle: caseSensitive ? q : q.toLowerCase(), caseSensitive: !!caseSensitive };
+  }
+
   // Applies highlight matches AND literal redacted markers onto a plain line slice.
-  function auRenderLineText(text, lineStartByte, lineRedactions, queryLower, matchState) {
+  function auRenderLineText(text, lineStartByte, lineRedactions, queryMatcher, matchState) {
     // 1. Replace stored "***" redactions whose byte offset falls inside this line,
     // and any inline ⟦REDACTED:rule:len⟧ markers if present.
     var segments = [];
@@ -142,14 +155,39 @@
         continue;
       }
       var val = part.value;
-      if (!queryLower) { html += auEsc(val); continue; }
-      var lower = val.toLowerCase(), cursor = 0, idx;
-      while ((idx = lower.indexOf(queryLower, cursor)) >= 0) {
+      var matcher = typeof queryMatcher === "string"
+        ? (queryMatcher ? { needle: queryMatcher, caseSensitive: false } : null)
+        : queryMatcher;
+      if (!matcher) { html += auEsc(val); continue; }
+      if (matcher.regex) {
+        var re = matcher.regex;
+        re.lastIndex = 0;
+        var m, rcursor = 0;
+        while ((m = re.exec(val)) !== null) {
+          if (m[0].length === 0) {
+            if (re.lastIndex >= val.length) break;
+            re.lastIndex++;
+            continue;
+          }
+          var mStart = m.index, mEnd = mStart + m[0].length;
+          if (mStart > rcursor) html += auEsc(val.slice(rcursor, mStart));
+          var isCurR = matchState.total === matchState.activeIndex;
+          html += '<mark class="au-hit' + (isCurR ? " au-hit-cur" : "") + '" data-au-hit="' + matchState.total + '">' + auEsc(m[0]) + "</mark>";
+          matchState.total++;
+          rcursor = mEnd;
+        }
+        if (rcursor < val.length) html += auEsc(val.slice(rcursor));
+        continue;
+      }
+      var hay = matcher.caseSensitive ? val : val.toLowerCase();
+      var needle = matcher.needle;
+      var cursor = 0, idx;
+      while ((idx = hay.indexOf(needle, cursor)) >= 0) {
         if (idx > cursor) html += auEsc(val.slice(cursor, idx));
         var isCur = matchState.total === matchState.activeIndex;
-        html += '<mark class="au-hit' + (isCur ? " au-hit-cur" : "") + '" data-au-hit="' + matchState.total + '">' + auEsc(val.slice(idx, idx + queryLower.length)) + "</mark>";
+        html += '<mark class="au-hit' + (isCur ? " au-hit-cur" : "") + '" data-au-hit="' + matchState.total + '">' + auEsc(val.slice(idx, idx + needle.length)) + "</mark>";
         matchState.total++;
-        cursor = idx + queryLower.length;
+        cursor = idx + needle.length;
       }
       if (cursor < val.length) html += auEsc(val.slice(cursor));
     }
@@ -188,7 +226,7 @@
     return { head: head, tail: tail, omitted: omitted };
   }
 
-  function auRenderLinesBlock(lines, startLineNo, redactionsList, seenLocalByte, wholeUnseen, queryLower, matchState) {
+  function auRenderLinesBlock(lines, startLineNo, redactionsList, seenLocalByte, wholeUnseen, queryMatcher, matchState) {
     var html = "", seenDrawn = false;
     for (var i = 0; i < lines.length; i++) {
       var ln = lines[i], no = startLineNo + i;
@@ -205,8 +243,9 @@
         }
       }
       var unseen = wholeUnseen || (seenLocalByte != null && seenLocalByte >= 0 && ln.startByte >= seenLocalByte);
-      var lineHtml = auRenderLineText(ln.text, ln.startByte, lineReds, queryLower, matchState);
-      html += '<div class="au-line' + (unseen ? " au-unseen" : "") + '"><span class="au-lnum">' + no + '</span><span class="au-ltxt">' + (lineHtml || " ") + "</span></div>";
+      var lineHtml = auRenderLineText(ln.text, ln.startByte, lineReds, queryMatcher, matchState);
+      var isTarget = matchState && matchState.targetLine === no;
+      html += '<div class="au-line' + (unseen ? " au-unseen" : "") + (isTarget ? " au-ln-target" : "") + '" data-line="' + no + '"><span class="au-lnum">' + no + '</span><span class="au-ltxt">' + (lineHtml || " ") + "</span></div>";
       if (!seenDrawn && seenLocalByte != null && seenLocalByte > ln.startByte && seenLocalByte <= ln.endByte) {
         html += '<div class="au-seencut">' + auEsc(wsT("js.audit.seen.cut")) + "</div>";
         seenDrawn = true;
@@ -233,8 +272,8 @@
     }
 
     var reds = auBuildRedactionsIndex(ev, field, storedTrunc);
-    var queryLower = opts.search ? String(opts.search).toLowerCase() : "";
-    var matchState = { total: 0, activeIndex: typeof opts.activeMatch === "number" ? opts.activeMatch : 0 };
+    var queryMatcher = auBuildSearchMatcher(opts.search, !!opts.regex, !!opts.caseSensitive);
+    var matchState = { total: 0, activeIndex: typeof opts.activeMatch === "number" ? opts.activeMatch : 0, targetLine: typeof opts.targetLine === "number" ? opts.targetLine : 0 };
     var outHtml = "";
 
     if (!modelSeen) {
@@ -268,13 +307,13 @@
           tailSeen = seenBound - storedTrunc.head_bytes;
         }
       }
-      outHtml += auRenderLinesBlock(headLines, 1, reds.head, headSeen, !modelSeen, queryLower, matchState);
+      outHtml += auRenderLinesBlock(headLines, 1, reds.head, headSeen, !modelSeen, queryMatcher, matchState);
       outHtml += '<div class="au-trunc-row"><span>' + auEsc(wsT("js.audit.stored.trunc", auFmtBytes(omitted))) + "</span>" +
         (seamSeenCut ? '<span class="au-seencut-badge">' + auEsc(wsT("js.audit.seen.cut")) + "</span>" : "") + "</div>";
-      outHtml += auRenderLinesBlock(tailLines, headLines.length + 1, reds.tail, tailSeen, tailAllUnseen, queryLower, matchState);
+      outHtml += auRenderLinesBlock(tailLines, headLines.length + 1, reds.tail, tailSeen, tailAllUnseen, queryMatcher, matchState);
     } else {
       var lines = auSplitLinesWithBytes(body, 0);
-      outHtml += auRenderLinesBlock(lines, 1, reds.head, modelSeen ? seenBound : null, !modelSeen, queryLower, matchState);
+      outHtml += auRenderLinesBlock(lines, 1, reds.head, modelSeen ? seenBound : null, !modelSeen, queryMatcher, matchState);
     }
     outHtml += "</div>";
 
