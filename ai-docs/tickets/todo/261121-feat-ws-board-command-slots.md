@@ -23,7 +23,7 @@ The feature has two parts:
    dashboard chat composer and the line runs immediately as a (git-)bash
    command instead of being sent as a prompt. The result reaches the lead's
    context like an agent-run exec result, but does not start or steer a turn.
-2. **Command slots.** Bash lines the agent registers so the user need not type
+2. **Command slots (user commands).** Bash lines the agent registers so the user need not type
    `!...`; a click runs the stored line through the same path.
 
 The design was settled by a static source review of develop `b87d0e96d`
@@ -139,17 +139,29 @@ Technical decisions below were settled by the lead and auto-confirmed on
   an unchanged state), separate from the agent-authored whiteboard DB and its
   export. Scoped to the lead reply ID and bound worktree. A slot is a stable
   ID, label, optional description, raw shell line and revision; no per-output
-  storage. The MCP tool `exec.slot.set` (plus a withdraw operation) registers,
-  replaces or withdraws a definition and returns the stored revision. It is
-  advertised only to an authenticated hosted lead using its own binding. Run
-  sends the slot ID and the displayed revision; the server resolves the stored
-  definition so the displayed command is exactly what runs, and a stale
-  revision rejects and refreshes the list. Rejected: slots as whiteboard
-  content (executable registration inside an agent-authored, exportable
-  store); direct-argv slots (the contract is bash lines); overloading
-  `exec.shell` arguments (an old daemon refuses unknown arguments, a version
-  trap). Tokenless Pi / Claude fallback transports cannot be authenticated by
-  the hosted-exec bearer alone and get no slot registration in this ticket.
+  storage. Run sends the slot ID and the displayed revision; the server
+  resolves the stored definition so the displayed command is exactly what
+  runs, and a stale revision rejects and refreshes the list. Rejected: slots
+  as whiteboard content (executable registration inside an agent-authored,
+  exportable store); direct-argv slots (the contract is bash lines);
+  overloading `exec.shell` arguments (an old daemon refuses unknown
+  arguments, a version trap). Tokenless Pi / Claude fallback transports
+  cannot be authenticated by the hosted-exec bearer alone and get no
+  registration in this ticket.
+- **Registration tools: `session.register_user_command` and
+  `session.unregister_user_command` (owner-confirmed 2026-11-22).** The
+  concept is called "user commands" in the tool surface and code; the UI
+  label may stay "command slots". `session.register_user_command` upserts by
+  slot ID (stable ID, label, optional description, raw shell line) and
+  returns the stored revision; `session.unregister_user_command` withdraws by
+  slot ID. They live in the `session.*` namespace beside `session.roster`
+  (`internal/mcp/session_hire.go:18,128`, `internal/mcp/server_dispatch.go:239`);
+  the owner's "daemon.(same namespace as roster)" referred to this
+  namespace, and no `daemon.*` namespace exists. Advertisement rule: only to
+  an authenticated hosted lead using its own binding. Rejected:
+  `exec.slot.set` / `exec.slot.withdraw` (couples registration to the `exec`
+  namespace and to native exec cutover); a `daemon.*` name (no such
+  namespace).
 - **UI.** A private command card in chat reusing the existing command-card
   treatment (literal command, state, exit, inline result or output link,
   existing `copyText` action for the path) with escaped text rendering. It is
@@ -177,7 +189,7 @@ Technical decisions below were settled by the lead and auto-confirmed on
     accepting existing inbox traffic
     (`internal/wsdashboard/page_routes.go:49–69,139–188`,
     `internal/wsdashboard/assets/dashboard-composer-delivery.js:632–648,666–671`).
-  - *MCP slot tools.* New names, advertised only to an authenticated hosted
+  - *MCP user-command tools.* New `session.*` names, advertised only to an authenticated hosted
     lead; no existing tool name, argument or result changes. New callers gate
     on discovery; an old daemon refuses an unknown name
     (`internal/mcp/server_dispatch.go:76–105,1634–1640`,
@@ -209,7 +221,7 @@ Conventions`); read each before editing a covered file:
 - `agents-plugin-tool/internal/` → `ai-docs/manuals/release-compatibility.md`
   (T0 target above; run its scenario sheet for the new → old → new cycle).
 - `agents-plugin-tool/internal/mcp/` → `ai-docs/manuals/ws-mcp.md` (the new
-  `exec.slot.*` tools).
+  `session.register_user_command` / `session.unregister_user_command` tools).
 - `ai-docs/manuals/config-settings-ui.md` does not apply: retention limits are
   fixed constants in this ticket, not settings. It applies only if a later
   change exposes them as settings.
@@ -344,9 +356,10 @@ sees them as buttons in that lead's chat and a click runs the stored line
 through the Phase 1 path as a one-use approval of the displayed revision.
 
 Scope: the Type 2 slot store with its in-memory read model; the MCP
-`exec.slot.set` and withdraw operations advertised only to an authenticated
-hosted lead (direct exposure and profile allowlists wired like the other exec
-tools, not tied to native exec cutover); the localhost-only slot list and Run
+`session.register_user_command` and `session.unregister_user_command` tools
+advertised only to an authenticated hosted lead (direct exposure and profile
+allowlists wired like the other `session.*` tools, not tied to native exec
+cutover); the localhost-only slot list and Run
 route; slot buttons showing label, description and the exact command in
 dashboard chrome with i18n; the revision gate with stale rejection and
 refresh; a click carrying its own submission ID into the Phase 1 idempotent
@@ -361,7 +374,7 @@ Verification boundary:
   commits nothing; the in-memory read model serves list and page with no file
   I/O; restart and daemon replacement reload definitions scoped to the lead
   reply ID and worktree; another lead or worktree never sees them.
-- Authority and discovery: `exec.slot.*` is listed only for an authenticated
+- Authority and discovery: the `session.*_user_command` tools are listed only for an authenticated
   hosted lead using its own binding and refused for tokenless transports, a
   non-lead, or an arbitrary caller-supplied reply ID; an old daemon refuses
   the unknown tool name.
