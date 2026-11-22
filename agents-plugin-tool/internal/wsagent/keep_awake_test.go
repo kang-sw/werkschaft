@@ -641,7 +641,19 @@ func TestKeepAwakeFailedWorkerRejoin(t *testing.T) {
 	reg := h.opts.Backends[BackendPi]
 	reg.Backend = attachFails{reg.Backend}
 	h.opts.Backends[BackendPi] = reg
+	// The recovery settles only after the first holder scan, which waits on
+	// every other holder in turn: the failed worker must already be out of
+	// the count while that scan is still gated.
+	entered, release := h.gateScan()
+	defer release()
 	start()
+	wait(t, "the gated holder scan", entered)
+	h.quiesce(worker.ID)
+	if st := h.state(worker.ID); st.Status != StatusRunning {
+		t.Fatalf("the worker should still show its restored turn before the scan settles it: %+v", st)
+	}
+	awaitAwake(t, h.runner, fake, 0, false)
+	release()
 	wait(t, "the holder scan", h.runner.rejoined)
 	h.quiesce(worker.ID)
 	awaitAwake(t, h.runner, fake, 0, false)

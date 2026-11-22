@@ -61,9 +61,13 @@ func (r *Runner) readKeepAwake() bool {
 	return err == nil && on
 }
 
-// wantAwake is the conversation's membership as its loop state shows it.
+// wantAwake is the conversation's membership as its loop state shows it. A
+// worker whose rejoin already failed has no process whose replay could settle
+// the turn its record showed open, and checkReattach only ends that recovery
+// after the whole first holder scan, which waits on every other holder in
+// turn: until then the dead turn must not hold the assertion.
 func (c *conv) wantAwake() bool {
-	return !c.closed && (c.turn || c.compactCommand || c.awakeSending)
+	return !c.closed && c.rejoinErr == "" && (c.turn || c.compactCommand || c.awakeSending)
 }
 
 // syncAwake publishes the conversation's membership when it changed. It runs

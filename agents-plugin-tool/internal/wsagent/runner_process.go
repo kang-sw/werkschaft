@@ -630,9 +630,10 @@ func (c *conv) reattach() {
 		if !rec.Lead {
 			// A worker keeps replaying until checkReattach reads this after
 			// the holder scan and ends the recovery (recoveryFailed drops
-			// the open turn); the next loop step's sync then releases the
-			// keep-awake membership.
+			// the open turn). The scan can take long, so the failure leaves
+			// keep-awake membership now (wantAwake) instead of waiting for it.
 			c.rejoinErr = err.Error()
+			c.publishAwake(c.wantAwake())
 		} else {
 			// No process came back, so no replay will ever settle the turn
 			// the record showed open: end the replay and drop that turn, or
