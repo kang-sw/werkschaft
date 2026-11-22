@@ -14,6 +14,8 @@ var testMutatingAndExcludedWSTools = []string{
 	"tickets.acquire",
 	"tickets.release",
 	"review.stamp",
+	"tickets.sage_gate",
+	"tickets.sage_stamp",
 	"note.write",
 	"worktree.acquire",
 	"worktree.release",
@@ -237,5 +239,21 @@ func TestCodexThreadConfigJSONRoundTrip(t *testing.T) {
 	}
 	if _, ok := wsTools["git.commit"]; ok {
 		t.Fatalf("decoded ws.tools unexpectedly includes git.commit")
+	}
+}
+
+// TestAgentWSToolsListSageGateAndStamp: a spawned ticket-handler runs
+// tickets.sage_gate and tickets.sage_stamp, so every agent.spawn child lists
+// them; the pi worker, mini-lead, and child-safe loadouts never do.
+func TestAgentWSToolsListSageGateAndStamp(t *testing.T) {
+	for _, name := range []string{"tickets.sage_gate", "tickets.sage_stamp"} {
+		if !slices.Contains(AgentWSTools, name) {
+			t.Errorf("AgentWSTools lacks %s", name)
+		}
+		for loadout, tools := range map[string][]string{"PiWorkerWSTools": PiWorkerWSTools, "PiMiniLeadWSTools": PiMiniLeadWSTools, "ChildSafeWSTools": ChildSafeWSTools} {
+			if slices.Contains(tools, name) {
+				t.Errorf("%s must not list %s", loadout, name)
+			}
+		}
 	}
 }

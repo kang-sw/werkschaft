@@ -484,6 +484,110 @@ func TestAgentWSToolsIncludeReviewLedgerToolsUnderReadOnlyGate(t *testing.T) {
 	})
 }
 
+// TestAgentChildSageToolsFollowKeyScope: a spawned ticket-handler lists the
+// sage gate and stamp (AgentWSTools) and runs them with the lead-scoped key its
+// worker-role playbook.render minted into its prompt, while a delegate-scoped
+// key (what an implementer or reviewer prompt carries, and the agent key itself)
+// stays refused for the stamp and a read-only authority refuses both whatever
+// the key's scope.
+func TestAgentChildSageToolsFollowKeyScope(t *testing.T) {
+	setupMailboxTestEnv(t)
+	const stem = "260101-feat-sr"
+	ticketRel := filepath.Join("ai-docs", "tickets", "todo", stem+".md")
+	newChildServer := func(t *testing.T, level wsagent.PermissionLevel) (*Server, string) {
+		t.Helper()
+		root := t.TempDir()
+		mustWrite(t, root, ticketRel,
+			"---\ntitle: Sage\nsage-review-design: required\n---\n\n## Route Facts\n\n| fact | value |\n|---|---|\n| scope.span | single-file |\n\nBody.\n")
+		initGit(t, root)
+		env := append(os.Environ(),
+			envAllowedTools+"="+strings.Join(wsagent.AgentWSTools, ","),
+			wsagent.EnvPermissionLevel+"="+string(level),
+		)
+		s := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: env})
+		t.Cleanup(s.Close)
+		return s, root
+	}
+	stampArgs := func(key string) map[string]any {
+		return map[string]any{
+			"session_key": key,
+			"stem":        stem,
+			"stage":       "design",
+			"verdicts":    []any{map[string]any{"reviewer": "design", "verdict": "pass"}},
+		}
+	}
+	gateArgs := func(key string) map[string]any {
+		return map[string]any{"session_key": key, "stem": stem, "landing": "ready"}
+	}
+
+	t.Run("listed", func(t *testing.T) {
+		s, _ := newChildServer(t, wsagent.PermissionWorkdirWrite)
+		listed := map[string]bool{}
+		for _, tool := range s.filteredTools() {
+			listed[tool["name"].(string)] = true
+		}
+		for _, name := range []string{"tickets.sage_gate", "tickets.sage_stamp"} {
+			if !listed[name] {
+				t.Errorf("an agent child's tools/list lacks %s", name)
+			}
+		}
+	})
+
+	t.Run("lead-scoped key stamps", func(t *testing.T) {
+		s, root := newChildServer(t, wsagent.PermissionWorkdirWrite)
+		key, err := s.sessions.mint(root, roleLead, "parent-key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out := callToolWithKey(t, s, 1, key, "tickets.sage_gate", gateArgs(key)); strings.Contains(out, "permission denied") || strings.Contains(out, "tool not available") {
+			t.Fatalf("lead-scoped sage_gate was refused: %s", out)
+		}
+		out := callToolWithKey(t, s, 2, key, "tickets.sage_stamp", stampArgs(key))
+		if !strings.Contains(out, "verdict: pass") || !strings.Contains(out, "sage-review-design: completed") {
+			t.Fatalf("lead-scoped sage_stamp = %s", out)
+		}
+	})
+
+	t.Run("delegate-scoped key refused for stamp", func(t *testing.T) {
+		s, root := newChildServer(t, wsagent.PermissionWorkdirWrite)
+		key, err := s.sessions.mint(root, roleDelegate, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw := callToolOnce(t, s, 1, "tickets.sage_stamp", stampArgs(key))
+		if !strings.Contains(raw, "tool not available in current") {
+			t.Fatalf("delegate-scoped sage_stamp = %s", raw)
+		}
+		body, err := os.ReadFile(filepath.Join(root, ticketRel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "sage-review-design: completed") {
+			t.Fatalf("refused delegate stamp wrote posture:\n%s", body)
+		}
+	})
+
+	t.Run("read-only refuses both", func(t *testing.T) {
+		s, root := newChildServer(t, wsagent.PermissionReadOnly)
+		key, err := s.sessions.mint(root, roleLead, "parent-key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for tool, args := range map[string]map[string]any{"tickets.sage_gate": gateArgs(key), "tickets.sage_stamp": stampArgs(key)} {
+			if out := callToolWithKey(t, s, 1, key, tool, args); !strings.Contains(out, "permission denied") {
+				t.Fatalf("read-only %s = %s", tool, out)
+			}
+		}
+		body, err := os.ReadFile(filepath.Join(root, ticketRel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "sage-review-design: completed") {
+			t.Fatalf("read-only calls wrote posture:\n%s", body)
+		}
+	})
+}
+
 // TestReadOnlyAgentRefusesMutatingTools: a read-only agent's ws-mcp, from
 // its process env or a hosted session's hello env, refuses the loadout's
 // mutating tools naming the level; mailbox.send and every tool of a
@@ -492,7 +596,7 @@ func TestReadOnlyAgentRefusesMutatingTools(t *testing.T) {
 	setupMailboxTestEnv(t)
 	root := t.TempDir()
 	initGit(t, root)
-	mutating := []string{"git.commit", "tickets.create_empty", "tickets.acquire", "tickets.release", "tickets.close", "tickets.move", "review.stamp"}
+	mutating := []string{"git.commit", "tickets.create_empty", "tickets.acquire", "tickets.release", "tickets.close", "tickets.move", "review.stamp", "tickets.sage_gate", "tickets.sage_stamp"}
 	servers := map[string]func(t *testing.T, level string) *Server{
 		"process env": func(t *testing.T, level string) *Server {
 			t.Setenv(wsagent.EnvPermissionLevel, level)
