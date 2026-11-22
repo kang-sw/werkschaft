@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -164,6 +165,85 @@ func TestWorktreeReservationFailureRefusesTheCreate(t *testing.T) {
 	agentRefused(t, err, http.StatusConflict, "could not take the release reservation", "broken-wt", "try again")
 	if got := h.runner.ActiveChildrenInWorktree(broken); len(got) != 0 {
 		t.Fatalf("refused create left bound children: %+v", got)
+	}
+}
+
+// TestWorktreeSpawnReservationSpansRegistrationOnly verifies the
+// create-before-release interleave: release cannot take the lock while a
+// spawn writes its record before registering, and once the child is
+// registered (release counts it) the spawn's first send no longer holds the
+// lock, so it cannot use up release's wait.
+func TestWorktreeSpawnReservationSpansRegistrationOnly(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		wt       string
+		h        *harness
+		failures []string
+	)
+	fail := func(format string, args ...any) {
+		mu.Lock()
+		failures = append(failures, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+	// releaseFree reports whether release could take wt's lock right now.
+	releaseFree := func() bool {
+		lock, err := wsgit.WorktreeReleaseLock(context.Background(), wsgit.ExecRunner{}, wt)
+		if err != nil {
+			fail("release lock: %v", err)
+			return false
+		}
+		locked, err := lock.TryLock()
+		if err != nil {
+			fail("release TryLock: %v", err)
+		}
+		if locked {
+			_ = lock.Unlock()
+		}
+		return locked
+	}
+	sends := 0
+	h, _ = agentHarness(t, func(o *Options) {
+		o.sendAdmitting = func(id string) {
+			mu.Lock()
+			sends++
+			mu.Unlock()
+			if len(h.runner.ActiveChildrenInWorktree(wt)) == 0 {
+				fail("first send of %s before release counts the child", id)
+			}
+			if !releaseFree() {
+				fail("first send of %s still holds the release reservation", id)
+			}
+		}
+	})
+	wt = releaseTestWorktree(t, h.root)
+	creates := 0
+	observe := func(sessionDir string, rec Record) {
+		target := canonicalWorktreePath(wt)
+		bound := sameWorktreePath(canonicalWorktreePath(rec.Root), target) || worktreePathContains(target, canonicalWorktreePath(rec.Cwd))
+		if rec.Parent == nil || !bound || h.runner.conv(rec.ReplyID) != nil {
+			return
+		}
+		mu.Lock()
+		creates++
+		mu.Unlock()
+		if releaseFree() {
+			fail("create of %s wrote its record unreserved before registering", rec.ReplyID)
+		}
+	}
+	recordWritten.Store(&observe)
+	t.Cleanup(func() { recordWritten.Store(nil) })
+
+	lead := h.leadCaller()
+	h.agentSpawn(lead, AgentSpawnRequest{Prompt: "explicit", Tier: "small", Authority: "read-only", Worktree: wt})
+	h.agentSpawn(lead, AgentSpawnRequest{Prompt: "by cwd", Tier: "small", Authority: "read-only", Cwd: wt})
+	recordWritten.Store(nil)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(failures) > 0 {
+		t.Fatal(strings.Join(failures, "\n"))
+	}
+	if creates < 2 || sends < 2 {
+		t.Fatalf("observed %d pre-registration writes and %d first sends, want 2 each", creates, sends)
 	}
 }
 

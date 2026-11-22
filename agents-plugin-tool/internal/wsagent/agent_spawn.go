@@ -85,6 +85,8 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		if _, err := os.Lstat(filepath.Join(wt, ".git")); err != nil {
 			return AgentSpawnResult{}, badRequest("%s: worktree %s is not a git worktree root (no .git entry)", tool, wt)
 		}
+		// An early check for the refusal that names re-acquiring; the create
+		// below holds the reservation itself until the child is registered.
 		unlockWorktree, err := wsgit.ReserveWorktreeSpawn(wt)
 		if err != nil {
 			if errors.Is(err, wsgit.ErrWorktreeReleasing) {
@@ -92,7 +94,7 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 			}
 			return AgentSpawnResult{}, badRequest("%s: reserve worktree %s: %v", tool, wt, err)
 		}
-		defer unlockWorktree()
+		unlockWorktree()
 		root, cwd = wt, wt
 	} else if cwd == "" {
 		cwd = caller.base()
