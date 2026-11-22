@@ -401,7 +401,7 @@ func (c *conv) interrupted() {
 		return
 	}
 	status, reason := TurnInterrupted, "the dashboard daemon exited while the turn ran"
-	if refusal := c.r.admitWorkerRecord(c.rec); refusal != nil {
+	if refusal := c.r.admitWorkerRecord(c.record()); refusal != nil {
 		// A cross-harness worker whose holder a daemon ended just before it
 		// died: the turn fails as the retirement would have settled it.
 		status, reason = TurnFailed, refusal.Error()

@@ -54,7 +54,7 @@ func (c *conv) restoreWorkerMCP() {
 //     never through the detached stream's Close, and a close is refused
 //     while it fails (errHolderNotEnded).
 func (c *conv) retireCrossHarnessWorker(hp holderProcess) {
-	refusal := c.r.admitWorkerRecord(c.rec)
+	refusal := c.r.admitWorkerRecord(c.record())
 	if refusal == nil {
 		return
 	}
@@ -132,7 +132,7 @@ func (c *conv) crossHarnessRetired() {
 	if !c.crossHarnessRejoin || c.workerRetiring {
 		return
 	}
-	refusal := c.r.admitWorkerRecord(c.rec)
+	refusal := c.r.admitWorkerRecord(c.record())
 	if refusal == nil {
 		return
 	}
