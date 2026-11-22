@@ -366,6 +366,11 @@
 
   var ASSETS_TRIED = "ws.dashboard.assetsreload";
   var mainStream = null, mainRetry = null, mainProbe = null, mainEpoch = 0, mainPaused = false;
+  var companionRelay = null, companionStreamReady = !window.WebSocket;
+  function companionStream(ready) {
+    companionStreamReady = ready;
+    if (companionRelay) companionRelay.reconcile(ready);
+  }
   function stopMainStream() {
     mainEpoch++;
     if (mainRetry !== null) { clearTimeout(mainRetry); mainRetry = null; }
@@ -382,6 +387,7 @@
   doc.addEventListener("ws-page-visibility", syncMainStream);
   function connect(withoutBoard) {
     if (!window.WebSocket || shHidden) return;
+    if (framed && rid) companionStream(false);
     stopMainStream();
     var epoch = mainEpoch;
     function current() { return epoch === mainEpoch && !shHidden; }
@@ -403,6 +409,7 @@
       // Reopen with the hashes held now, so a reconnect sends only what
       // changed since.
       drop: function () {
+        if (framed && rid) companionStream(false);
         connected(false);
         trackerLost();
         retry(connect, 3000);
@@ -502,6 +509,7 @@
       receiveRegion({ name: "board", hash: ev.hash, html: next });
     }
     function receiveRegion(ev) {
+      if (ev.name === "board" && companionRelay) companionRelay.board(ev.html);
       // Observe even held updates: an ask may open and close while hidden
       // or during a drag. Reconnect's first full rail silently baselines.
       if (ev.name === "rail" && railAttention) railAttention.observe(q(".rs", frag(WsRail.rowInputHTML(ev.html))), rid, railBaseline);
@@ -514,10 +522,17 @@
         hiddenRegions[ev.name] = { hash: ev.hash, html: ev.html };
         tlHold(ev.name, ev.hash, ev.html);
         if (ev.name === "rail" || ev.name === "sessions") apScan(frag(ev.name === "rail" && WsRail ? WsRail.rowInputHTML(ev.html) : ev.html));
+        companionSettled(ev);
         return;
       }
       if (ev.name === "board" && boardReturnTimer) boardReturnFresh = true;
       swap(ev.name, ev.hash, ev.html);
+      companionSettled(ev);
+    }
+    function companionSettled(ev) {
+      // Keyed panels arrive even at an unchanged hash and follow board,
+      // tree and entries in the stream's initial region order.
+      if (framed && rid && !companionStreamReady && ev.name === "panels") companionStream(true);
     }
     // A frame the shell hides reads the tracker once it shows (shShown).
     function onTracker(ev) {
@@ -552,6 +567,7 @@
     // the stream can reopen with the hashes held then.
     function onGone() {
       st.close();
+      if (framed && rid) companionStream(false);
       connected(false);
       trackerLost();
       retry(recheckGone, 3000);

@@ -1,0 +1,70 @@
+.ws-companion {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-popovers, 60) - 2);
+  overflow: hidden;
+  pointer-events: none;
+}
+.ws-companion-hit {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  overflow: visible;
+  transform-origin: 50% 80%;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+.ws-companion-hit:active { cursor: grabbing; }
+.ws-companion-hit:focus-visible { outline: 2px solid var(--wb-primary); outline-offset: 3px; border-radius: 9px; }
+.ws-companion-hit canvas { position: absolute; pointer-events: none; }
+.ws-companion-menu {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  gap: 3px;
+  padding: 5px;
+  max-width: min(220px, calc(100vw - 12px));
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow-hi);
+  font: 12px/1.4 var(--wb-sans, system-ui, sans-serif);
+  pointer-events: auto;
+}
+.ws-companion [hidden] { display: none; }
+.ws-companion-menu button, .ws-companion-menu select {
+  color: inherit;
+  background: none;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  text-align: start;
+  font: inherit;
+}
+.ws-companion-menu select { background: var(--wb-bg); max-width: 100%; }
+.ws-companion-menu button { cursor: pointer; }
+.ws-companion-menu button:is(:hover, :focus-visible) { background: var(--wb-wash); }
+.ws-companion-menu label { display: grid; gap: 3px; padding: 5px 8px; }
+.ws-companion-prop, .ws-companion-fx, .ws-companion-quip { position: absolute; top: 0; left: 0; }
+.ws-companion-fx { font: 800 17px/1 system-ui, sans-serif; text-shadow: 0 1px 2px var(--wb-card); }
+.ws-companion-fx > span { display: inline-block; }
+.ws-companion-fx[data-kind="particles"] > span:not(:first-child) { position: absolute; left: 0; }
+.ws-companion-quip {
+  max-width: 170px;
+  padding: 4px 7px;
+  border-radius: 7px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  box-shadow: var(--wb-shadow);
+  font: 12px/1.4 var(--wb-sans, system-ui, sans-serif);
+  overflow-wrap: anywhere;
+}
+.rail[data-companion-dock="unregistered"] .rws-unreg { margin-top: var(--companion-slot); }
+.rail[data-companion-dock="footer"] .rfoot { margin-top: var(--companion-slot); }

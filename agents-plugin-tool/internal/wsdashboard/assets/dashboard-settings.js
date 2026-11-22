@@ -126,12 +126,17 @@ var wsSettingsChoiceLabels = {
     send("title", {title: document.title});
   }
 
+  function publishCompanionContext() {
+    send("companion-context", window.WsShell.companionContext("settings"));
+  }
+
   window.addEventListener("message", function (event) {
     if (event.source !== window.parent || event.origin !== location.origin) return;
     var message = window.WsShell.message(event.data);
     if (!message) return;
     switch (message.wsShell) {
       case "sync": syncShell(); break;
+      case "companion-gate": if (message.active) publishCompanionContext(); break;
       case "theme":
         if (message.theme) document.documentElement.dataset.theme = message.theme;
         else delete document.documentElement.dataset.theme;

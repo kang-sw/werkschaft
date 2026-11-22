@@ -96,6 +96,7 @@ function fetch() { return Promise.resolve({ status: 404 }); }
 var mode = "session", rid = "rid1", worktree = "", heldNow = "board.1,head.2", hiddenRegions = {}, modeHash = "", liveMode = false;
 function held() { return heldNow; }
 function boardInputFull() { return null; }
+function panelInputFull() { return null; }
 function trackerLost() { log.push("lost"); }
 function trackerNudge(rev) { log.push("nudge:" + rev); }
 function swap(name, hash, html) { log.push("swap:" + name + "." + hash); }
@@ -157,6 +158,13 @@ connect();
 check("the frame requests tree but not absent rail rows", sockets[4].url, "ws://localhost:1234/s/rid1/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&treerows=1&entryrows=1&panelrows=1&display=1");
 sockets[4].msg("companion", {mode: "off"});
 check("a frame leaves the shell companion settings alone", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
+var companionReads = [];
+companionRelay = { board: function (html) { companionReads.push(html); }, reconcile: function (ready) { companionReads.push(ready); } };
+sockets[4].msg("region", {name: "board", hash: "catch-up", html: "<p>reconciled board</p>"});
+sockets[4].msg("region", {name: "panels", hash: "held", html: ""});
+sockets[4].msg("region", {name: "panels", hash: "live", html: ""});
+check("companion baselines the canonical board at the first panel render", companionReads, ["<p>reconciled board</p>", true]);
+companionRelay = null;
 worktree = "/fixture";
 connect();
 check("worktree excludes tree rows", sockets[5].url, "ws://localhost:1234/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&display=1");
