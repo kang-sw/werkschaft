@@ -96,4 +96,12 @@ assert.equal(flashing(heldRow), false, 'later patches do not replay held flash')
 held.observe([row('held', '8')], 'shown');
 held.mark([heldRow], 'held', 'New question');
 assert.equal(flagged(heldRow), false, 'successful show clears a held flag');
-console.log('PASS: rail attention baseline, ID deltas, current/show, patch, reconnect, old server, held updates');
+
+const railCss = fs.readFileSync(path.join(__dirname, '../assets/dashboard-rail.css'), 'utf8');
+assert.match(railCss, /\.rail \.rs\.attn::before\s*\{[^}]*linear-gradient\(90deg,[^}]*animation:\s*attn-breathe 1s ease-in-out infinite;/s, 'settled unread row pulses smoothly at 1Hz with amber gradient');
+assert.match(railCss, /\.rail \.rs\.attn \.hb::after\s*\{[^}]*animation:\s*attn-breathe-ring 1s ease-in-out infinite;/s, 'settled unread badge ring pulses at 1Hz');
+assert.match(railCss, /\.rail \.rs\.attn\.attn-flash::before\s*\{\s*animation:\s*attn-flash \.38s ease-in-out 3,\s*attn-breathe 1s ease-in-out 1\.14s infinite;\s*\}/, 'fresh arrival flashes 3x then chains seamlessly into 1Hz pulse');
+assert.match(railCss, /\.rail \.rs\.attn\.attn-flash \.hb::after\s*\{\s*animation:\s*attn-flash-ring \.38s ease-in-out 3,\s*attn-breathe-ring 1s ease-in-out 1\.14s infinite;\s*\}/, 'fresh arrival badge ring flashes 3x then chains seamlessly into 1Hz pulse');
+assert.match(railCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.rail \.rs\.attn::before\s*\{\s*animation:\s*none !important;\s*opacity:\s*\.16;\s*\}\s*\.rail \.rs\.attn \.hb::after\s*\{\s*animation:\s*none !important;\s*box-shadow:\s*0 0 0 2px color-mix\(/s, 'reduced motion disables unread pulse and keeps static amber tint and 2px ring');
+
+console.log('PASS: rail attention baseline, ID deltas, current/show, patch, reconnect, old server, held updates, CSS pulse');

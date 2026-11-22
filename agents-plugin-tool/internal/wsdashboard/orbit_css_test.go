@@ -55,3 +55,25 @@ func TestHarnessBadgeFont(t *testing.T) {
 		t.Error("the badge font face does not point at the served name")
 	}
 }
+
+// TestRailUnreadAttentionCSS pins the unread session attention animation:
+// a 3x fast flash on arrival chaining seamlessly at 1.14s into a continuous
+// 1Hz gradient pulse, plus a static amber fallback under reduced motion.
+func TestRailUnreadAttentionCSS(t *testing.T) {
+	css := mustAsset(t, "dashboard.css")
+	for _, want := range []string{
+		"background: linear-gradient(90deg, var(--wb-accent-policy) 0%, color-mix(in srgb, var(--wb-accent-policy) 68%, transparent) 60%, color-mix(in srgb, var(--wb-accent-policy) 18%, transparent) 100%);",
+		"animation: attn-breathe 1s ease-in-out infinite;",
+		"animation: attn-breathe-ring 1s ease-in-out infinite;",
+		".rail .rs.attn.attn-flash::before { animation: attn-flash .38s ease-in-out 3, attn-breathe 1s ease-in-out 1.14s infinite; }",
+		".rail .rs.attn.attn-flash .hb::after { animation: attn-flash-ring .38s ease-in-out 3, attn-breathe-ring 1s ease-in-out 1.14s infinite; }",
+		"@keyframes attn-flash { 0%, 100% { opacity: .04; } 50% { opacity: .44; } }",
+		"@keyframes attn-breathe { 0%, 100% { opacity: .04; } 50% { opacity: .28; } }",
+		".rail .rs.attn::before { animation: none !important; opacity: .16; }",
+		".rail .rs.attn .hb::after { animation: none !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent-policy) 55%, transparent); }",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("dashboard.css lacks %q", want)
+		}
+	}
+}
