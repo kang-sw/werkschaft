@@ -25,7 +25,6 @@ import (
 	"math"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -140,6 +139,26 @@ type sessionInfo struct {
 	// reads and deletions on every append, and the next sweep clears it to
 	// retry once.
 	evictFailed bool
+
+	// gen and busy publish the writer's changes to the ring's files while a
+	// cold reader could be reading them — loading, eviction, trimming and
+	// removal: busy counts the changes under way, and gen advances as each
+	// starts and ends. A cold View keeps what it read only when busy was zero
+	// and gen unchanged across the read, so it never returns segments read
+	// across a change, and the writer never waits on it.
+	gen  atomic.Uint64
+	busy atomic.Int32
+}
+
+// changing marks a writer change to info's files until the returned func
+// runs. Changes may nest.
+func (info *sessionInfo) changing() func() {
+	info.busy.Add(1)
+	info.gen.Add(1)
+	return func() {
+		info.gen.Add(1)
+		info.busy.Add(-1)
+	}
 }
 
 // Store is the audit segment ring store. It implements wsaudit.SourcedSink.
@@ -168,17 +187,31 @@ type Store struct {
 	dropped    atomic.Uint64
 	queueDrops atomic.Uint64 // queue-full drops not yet logged
 
-	// cold caches the views View read from unloaded rings, by ring directory
-	// name, each keyed by the segment listing it was read from.
-	coldMu sync.Mutex
-	cold   map[string]coldView
+	// cold caches the views View read from unloaded rings, and flights the
+	// reads under way, by ring directory name.
+	coldMu  sync.Mutex
+	cold    map[string]coldView
+	flights map[string]*coldFlight
 }
 
-// coldView is a cached View of an unloaded ring and the segment listing
-// (sequence numbers and sizes) it was read from.
+// coldView is a cached View of an unloaded ring, valid while the ring's
+// entry and generation are the ones it was read at.
 type coldView struct {
-	listing string
-	view    View
+	info *sessionInfo
+	gen  uint64
+	view View
+}
+
+// coldFlight is one cold read of a ring generation, shared by every reader
+// that misses the cache meanwhile. view, ok and err are set before done
+// closes.
+type coldFlight struct {
+	info *sessionInfo
+	gen  uint64
+	done chan struct{}
+	view View
+	ok   bool
+	err  error
 }
 
 // coldViews bounds the cached cold views.
@@ -608,6 +641,7 @@ func (s *Store) info(session string, create bool) (*sessionInfo, error) {
 	if info.ring != nil {
 		return info, nil
 	}
+	defer info.changing()() // recovery may truncate a torn tail
 	r := newRing(session, filepath.Join(s.opts.Root, dir))
 	if err := r.recover(); err != nil {
 		return nil, err
@@ -906,6 +940,7 @@ func (s *Store) trimRingLocked(info *sessionInfo, capBytes int64) {
 		s.account(info)
 		return
 	}
+	defer info.changing()()
 	dir := filepath.Join(s.opts.Root, info.dir)
 	segs, _, err := listSegments(dir)
 	if err != nil {
@@ -1010,6 +1045,7 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 		return s.forgetRing(info)
 	}
 	info.mu.Lock()
+	defer info.changing()()
 	r := info.ring
 	cold := r == nil
 	dir := filepath.Join(s.opts.Root, info.dir)
@@ -1105,6 +1141,7 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 // from on next use.
 func (s *Store) forgetRing(info *sessionInfo) error {
 	info.mu.Lock()
+	defer info.changing()()
 	if r := info.ring; r != nil {
 		r.close()
 	}
@@ -1304,79 +1341,140 @@ type View struct {
 // likes never holds up the writer, which only appends past the snapshot's
 // length or replaces the slice. An unloaded ring is read from disk on the
 // caller's goroutine (coldRead), never through the writer, so a query never
-// delays capture. An unknown session yields an empty View.
+// delays capture; while the writer is changing its files the read waits for
+// the change to end and answers what follows it. An unknown session yields an
+// empty View.
 func (s *Store) View(ctx context.Context, session string) (View, error) {
 	dir := sessionDirName(wsaudit.NormalizeID(session))
-	s.mu.Lock()
-	info := s.sessions[dir]
-	s.mu.Unlock()
-	if info == nil {
-		return View{}, nil
+	wait := time.Millisecond
+	for try := 0; ; try++ {
+		s.mu.Lock()
+		info := s.sessions[dir]
+		s.mu.Unlock()
+		if info == nil {
+			return View{}, nil
+		}
+		if r := info.view.Load(); r != nil {
+			r.view.RLock()
+			v := View{Events: r.events[:len(r.events):len(r.events)], Cut: r.cut}
+			r.view.RUnlock()
+			return v, nil
+		}
+		v, ok, err := s.coldRead(ctx, info, session)
+		if ok || err != nil {
+			return v, err
+		}
+		if try == coldTries {
+			return View{}, fmt.Errorf("audit ring of session %s: changed under %d reads; retry later", dir, coldTries)
+		}
+		select {
+		case <-ctx.Done():
+			return View{}, ctx.Err()
+		case <-time.After(wait):
+		}
+		wait = min(2*wait, 64*time.Millisecond)
 	}
-	if r := info.view.Load(); r != nil {
-		r.view.RLock()
-		v := View{Events: r.events[:len(r.events):len(r.events)], Cut: r.cut}
-		r.view.RUnlock()
-		return v, nil
-	}
-	return s.coldRead(ctx, dir, session)
 }
 
-// coldRead reads an unloaded ring's segments into a View without loading
-// the ring: nothing is truncated, opened for writing, or published, and a
-// torn last line is left out as recovery would. The writer may evict or
-// load the ring meanwhile; a segment deleted since the listing is skipped.
-// The view is cached by the listing it was read from, so paging through a
-// cold session reads its segments once.
-func (s *Store) coldRead(ctx context.Context, dirName, session string) (View, error) {
-	dir := filepath.Join(s.opts.Root, dirName)
-	segs, _, err := listSegments(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return View{}, nil
-	}
-	if err != nil {
-		return View{}, err
-	}
-	var key strings.Builder
-	for _, seg := range segs {
-		fmt.Fprintf(&key, "%d:%d,", seg.seq, seg.size)
+// coldTries bounds the cold reads View makes of a ring the writer keeps
+// changing (about ten seconds of waits).
+const coldTries = 160
+
+// coldRead answers an unloaded ring's View at its current generation: from
+// the cache without touching the disk, else by joining the read of that
+// generation another reader has under way, else by reading it (replayCold)
+// and caching it. ok is false, without error, when the writer changed the
+// ring's files during the read: what was read is dropped, never cached.
+func (s *Store) coldRead(ctx context.Context, info *sessionInfo, session string) (View, bool, error) {
+	gen := info.gen.Load()
+	if info.busy.Load() != 0 {
+		return View{}, false, nil
 	}
 	s.coldMu.Lock()
-	c, ok := s.cold[dirName]
+	if c, ok := s.cold[info.dir]; ok && c.info == info && c.gen == gen {
+		s.coldMu.Unlock()
+		return c.view, true, nil
+	}
+	f := s.flights[info.dir]
+	if f != nil && f.info == info && f.gen == gen {
+		s.coldMu.Unlock()
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			return View{}, false, ctx.Err()
+		}
+		if errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded) {
+			return View{}, false, nil // its reader gave up; read again
+		}
+		return f.view, f.ok, f.err
+	}
+	f = &coldFlight{info: info, gen: gen, done: make(chan struct{})}
+	if s.flights == nil {
+		s.flights = map[string]*coldFlight{}
+	}
+	s.flights[info.dir] = f
 	s.coldMu.Unlock()
-	if ok && c.listing == key.String() {
-		return c.view, nil
+
+	f.view, f.ok, f.err = s.replayCold(ctx, info, session, gen)
+
+	s.coldMu.Lock()
+	if s.flights[info.dir] == f {
+		delete(s.flights, info.dir)
+	}
+	if f.ok {
+		if s.cold == nil {
+			s.cold = map[string]coldView{}
+		}
+		if _, ok := s.cold[info.dir]; !ok && len(s.cold) >= coldViews {
+			for k := range s.cold {
+				delete(s.cold, k) // any one: a miss only costs a reread
+				break
+			}
+		}
+		s.cold[info.dir] = coldView{info: info, gen: gen, view: f.view}
+	}
+	s.coldMu.Unlock()
+	close(f.done)
+	return f.view, f.ok, f.err
+}
+
+// replayCold reads an unloaded ring's segments into a View without loading
+// the ring: nothing is truncated, opened for writing, or published, and a
+// torn last line is left out as recovery would. ok reports that the writer
+// left the ring's files alone (generation gen, no change under way) from
+// before the listing until after the last read; otherwise the result is
+// dropped, and so is a read error the change may have caused.
+func (s *Store) replayCold(ctx context.Context, info *sessionInfo, session string, gen uint64) (View, bool, error) {
+	stable := func() bool { return info.busy.Load() == 0 && info.gen.Load() == gen }
+	dir := filepath.Join(s.opts.Root, info.dir)
+	segs, _, err := listSegments(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return View{}, stable(), nil
+	}
+	if err != nil {
+		if !stable() {
+			return View{}, false, nil
+		}
+		return View{}, false, err
 	}
 	r := newRing(session, dir)
 	for i := range segs {
 		if err := ctx.Err(); err != nil {
-			return View{}, err
+			return View{}, false, err
 		}
 		raw, err := readFile(filepath.Join(dir, segmentName(segs[i].seq)))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
 		if err != nil {
-			return View{}, err
+			if !stable() {
+				return View{}, false, nil
+			}
+			return View{}, false, err
 		}
 		if _, newer, _ := r.replaySegment(&segs[i], raw); newer {
 			break // later segments of a newer ring are not ours to parse
 		}
 	}
 	v := View{Events: r.events[:len(r.events):len(r.events)], Cut: len(segs) > 0 && segs[0].seq > 1}
-	s.coldMu.Lock()
-	if s.cold == nil {
-		s.cold = map[string]coldView{}
-	}
-	if _, ok := s.cold[dirName]; !ok && len(s.cold) >= coldViews {
-		for k := range s.cold {
-			delete(s.cold, k) // any one: a miss only costs a reread
-			break
-		}
-	}
-	s.cold[dirName] = coldView{listing: key.String(), view: v}
-	s.coldMu.Unlock()
-	return v, nil
+	return v, stable(), nil
 }
 
 // Events returns the session's retained events, oldest first, from memory.

@@ -2,10 +2,14 @@ package wsauditstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,6 +163,7 @@ func TestColdViewNeverOccupiesTheWriter(t *testing.T) {
 	if a.err != nil || len(a.v.Events) != 5 || a.v.Cut {
 		t.Fatalf("cold view = %d events, cut %v, err %v", len(a.v.Events), a.v.Cut, a.err)
 	}
+	listings, infos := countListings(t, filepath.Join(root, sessionDirName("cold")))
 	again := view(t, s2, "cold")
 	reads.Range(func(path, n any) bool {
 		if *n.(*int) != 1 {
@@ -166,11 +171,202 @@ func TestColdViewNeverOccupiesTheWriter(t *testing.T) {
 		}
 		return true
 	})
+	if listings.Load() != 0 || infos.Load() != 0 {
+		t.Errorf("a repeat cold view listed the ring %d times and statted %d entries", listings.Load(), infos.Load())
+	}
 	loaded(t, s2, "cold")
 	warm := view(t, s2, "cold")
 	if fmt.Sprint(ids(again.Events)) != fmt.Sprint(ids(warm.Events)) || again.Cut != warm.Cut {
 		t.Fatalf("cold view %v (cut %v) differs from the loaded ring's %v (cut %v)", ids(again.Events), again.Cut, ids(warm.Events), warm.Cut)
 	}
+}
+
+// TestColdViewFirstReadsShareOneReplay pins that simultaneous first reads
+// of an unloaded ring share one replay: eight Views racing the first one
+// (held inside its first segment read) list the ring once, stat each
+// segment once, read each segment once, and all answer the same events.
+func TestColdViewFirstReadsShareOneReplay(t *testing.T) {
+	root := t.TempDir()
+	lim := smallLimits(64 * mib)
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	fill(t, s, "cold", 1, 24) // two segments
+	_ = s.Close()
+	ringDir := filepath.Join(root, sessionDirName("cold"))
+	segs, _, err := listSegments(ringDir)
+	if err != nil || len(segs) < 2 {
+		t.Fatalf("fixture: %+v %v", segs, err)
+	}
+
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	listings, infos := countListings(t, ringDir)
+	orig := readFile
+	t.Cleanup(func() { readFile = orig })
+	entered, release := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	var freed sync.Once
+	t.Cleanup(func() { freed.Do(func() { close(release) }) }) // before s2 closes
+	var mu sync.Mutex
+	reads := map[string]int{}
+	readFile = func(path string) ([]byte, error) {
+		if filepath.Dir(path) == ringDir {
+			mu.Lock()
+			reads[path]++
+			mu.Unlock()
+			if held.CompareAndSwap(false, true) {
+				close(entered)
+				<-release
+			}
+		}
+		return orig(path)
+	}
+	const readers = 8
+	type answer struct {
+		v   View
+		err error
+	}
+	got := make(chan answer, readers)
+	read := func() {
+		v, err := s2.View(context.Background(), "cold")
+		got <- answer{v, err}
+	}
+	go read()
+	<-entered
+	for i := 1; i < readers; i++ {
+		go read()
+	}
+	time.Sleep(200 * time.Millisecond) // the racers reach the shared read
+	freed.Do(func() { close(release) })
+	var first []string
+	for i := 0; i < readers; i++ {
+		a := <-got
+		if a.err != nil || len(a.v.Events) != 24 {
+			t.Fatalf("view %d: %d events, err %v", i, len(a.v.Events), a.err)
+		}
+		if i == 0 {
+			first = ids(a.v.Events)
+		} else if fmt.Sprint(ids(a.v.Events)) != fmt.Sprint(first) {
+			t.Fatalf("view %d answered other events", i)
+		}
+	}
+	if listings.Load() != 1 || infos.Load() != int64(len(segs)) {
+		t.Errorf("%d simultaneous first reads listed the ring %d times and statted %d entries (want 1 and %d)", readers, listings.Load(), infos.Load(), len(segs))
+	}
+	for path, n := range reads {
+		if n != 1 {
+			t.Errorf("%s read %d times by %d simultaneous first reads", path, n, readers)
+		}
+	}
+}
+
+// TestColdViewNeverSpansAnEviction pins that a cold read never answers
+// segments read across a change of the ring's files: held after reading the
+// oldest of two segments, while store-wide eviction persists the ring's
+// recovery state and deletes both, the read answers what the evicted ring
+// holds — not the older segment's events alone, which were never retained
+// on their own and would read as uncut.
+func TestColdViewNeverSpansAnEviction(t *testing.T) {
+	root := t.TempDir()
+	lim := smallLimits(64 * mib)
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	fill(t, s, "old", 1, 24) // two segments
+	if err := s.Finalize(context.Background(), "old", "holder:1", 24); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	_ = s.Close()
+	ringDir := filepath.Join(root, sessionDirName("old"))
+	segs, _, err := listSegments(ringDir)
+	if err != nil || len(segs) != 2 {
+		t.Fatalf("fixture: %+v %v", segs, err)
+	}
+	second := filepath.Join(ringDir, segmentName(segs[1].seq))
+
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	orig := readFile
+	t.Cleanup(func() { readFile = orig })
+	entered, release := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	var freed sync.Once
+	t.Cleanup(func() { freed.Do(func() { close(release) }) }) // before s2 closes
+	readFile = func(path string) ([]byte, error) {
+		// The cold reader's read of the second segment is held; the
+		// evicting writer's own read of it passes.
+		if path == second && held.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+		return orig(path)
+	}
+	type answer struct {
+		v   View
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		v, err := s2.View(context.Background(), "old")
+		got <- answer{v, err}
+	}()
+	<-entered // the oldest segment is read; the second is not
+
+	if _, err := s2.call(context.Background(), job{kind: jobBarrier, fn: func() {
+		s2.mu.Lock()
+		info := s2.sessions[sessionDirName("old")]
+		s2.mu.Unlock()
+		if err := s2.removeRing(info, false); err != nil {
+			t.Errorf("evict: %v", err)
+		}
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, seg := range segs {
+		if _, err := os.Stat(filepath.Join(ringDir, segmentName(seg.seq))); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("fixture: segment %d survived the eviction: %v", seg.seq, err)
+		}
+	}
+	freed.Do(func() { close(release) })
+	a := <-got
+	if a.err != nil {
+		t.Fatal(a.err)
+	}
+	after := view(t, s2, "old")
+	if fmt.Sprint(ids(a.v.Events)) != fmt.Sprint(ids(after.Events)) || a.v.Cut != after.Cut {
+		t.Fatalf("cold view across the eviction = %d events (cut %v); the evicted ring holds %d (cut %v)",
+			len(a.v.Events), a.v.Cut, len(after.Events), after.Cut)
+	}
+	if rec := s2.Recover("old", "holder:1"); rec.Boundary != 24 {
+		t.Fatalf("evicted ring lost its boundary: %+v", rec)
+	}
+}
+
+// countListings counts, from now until the test ends, the listings of dir
+// and the metadata reads of the entries they return.
+func countListings(t *testing.T, dir string) (listings, infos *atomic.Int64) {
+	t.Helper()
+	listings, infos = new(atomic.Int64), new(atomic.Int64)
+	orig := readDir
+	t.Cleanup(func() { readDir = orig })
+	readDir = func(path string) ([]os.DirEntry, error) {
+		entries, err := orig(path)
+		if path != dir {
+			return entries, err
+		}
+		listings.Add(1)
+		for i, e := range entries {
+			entries[i] = countedEntry{e, infos}
+		}
+		return entries, err
+	}
+	return listings, infos
+}
+
+type countedEntry struct {
+	os.DirEntry
+	infos *atomic.Int64
+}
+
+func (e countedEntry) Info() (fs.FileInfo, error) {
+	e.infos.Add(1)
+	return e.DirEntry.Info()
 }
 
 func ids(evs []wsaudit.Envelope) []string {
