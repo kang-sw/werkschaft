@@ -265,8 +265,9 @@ func TestAuditEventsPagesEqualNanosecondEventsWithoutGaps(t *testing.T) {
 // TestAuditSummariesLinkCallsAndRequests pins attached, duration_ms, and the
 // request fields: parallel calls of one request share request_id and its
 // values, ctx_after is the immediately following request's (by prev_id),
-// null after a text-only following request, and two successive requests
-// with equal totals stay apart.
+// null after a text-only following request (captured without usage, or not
+// captured at all while a later event has usage), and two successive
+// requests with equal totals stay apart.
 func TestAuditSummariesLinkCallsAndRequests(t *testing.T) {
 	req := func(id, prev string, ctx any) map[string]any {
 		m := map[string]any{"id": id}
@@ -312,6 +313,15 @@ func TestAuditSummariesLinkCallsAndRequests(t *testing.T) {
 		ev(15, wsaudit.KindAssistantText, 7000, func(e *wsaudit.Envelope) { e.Meta = req("r4", "r3", nil) }),
 		ev(16, wsaudit.KindToolCall, 8000, func(e *wsaudit.Envelope) { e.CallID = "c5" }),
 		ev(17, wsaudit.KindToolCall, 9000, func(e *wsaudit.Envelope) { e.CallID, e.Meta = "c6", req("r5", "r4", int64(2000)) }),
+		// r6 follows r5; r6's follower r7 is a text-only reply that was
+		// never captured, and the next captured event (r8, after r7) has
+		// usage: c7's ctx_after is still null, not r8's ctx.
+		ev(18, wsaudit.KindToolCall, 10000, func(e *wsaudit.Envelope) { e.CallID, e.Meta = "c7", req("r6", "r5", int64(3000)) }),
+		ev(19, wsaudit.KindToolCall, 11000, func(e *wsaudit.Envelope) { e.CallID, e.Meta = "c8", req("r8", "r7", int64(4000)) }),
+		// An event naming r8 as prev_id without ctx settles r8's ctx_after
+		// as null, though a later event with the same prev_id has usage.
+		ev(20, wsaudit.KindAssistantText, 12000, func(e *wsaudit.Envelope) { e.Meta = req("r9", "r8", nil) }),
+		ev(21, wsaudit.KindThinking, 12000, func(e *wsaudit.Envelope) { e.Meta = req("r9", "r8", int64(5000)) }),
 	}
 	fx := &fixtureAudit{}
 	fx.set("sess", wsauditstore.View{Events: evs})
@@ -347,7 +357,9 @@ func TestAuditSummariesLinkCallsAndRequests(t *testing.T) {
 	check("e10", map[string]any{"attached": "[e11]"})
 	check("e13", map[string]any{"duration_ms": 1000, "request_id": "r3", "ctx_before": 1500, "ctx_after": null})
 	check("e16", map[string]any{"duration_ms": null, "request_id": null, "ctx_before": null, "ctx_after": null, "attached": "[]"})
-	check("e17", map[string]any{"duration_ms": null, "request_id": "r5", "ctx_before": 2000, "ctx_after": null})
+	check("e17", map[string]any{"duration_ms": null, "request_id": "r5", "ctx_before": 2000, "ctx_after": 3000})
+	check("e18", map[string]any{"request_id": "r6", "ctx_before": 3000, "ctx_after": null})
+	check("e19", map[string]any{"request_id": "r8", "ctx_before": 4000, "ctx_after": null})
 	for _, id := range []string{"e4", "e7", "e9", "e10", "e15"} {
 		if _, ok := byID[id]["duration_ms"]; ok {
 			t.Errorf("non-tool_call %s carries the call fields: %v", id, byID[id])
@@ -363,6 +375,15 @@ func TestAuditSummariesLinkCallsAndRequests(t *testing.T) {
 	p = auditJSON[pageOut](t, d, "/s/sess/audit/events?n=1", 200)
 	if v, ok := p.Events[0]["duration_ms"]; !ok || v != nil {
 		t.Fatalf("running call duration = %v (present %v)", v, ok)
+	}
+	// A page with no call ID or request to resolve: its tool_call still
+	// carries the call fields, as null.
+	fx.set("sess", wsauditstore.View{Events: []wsaudit.Envelope{auditEv(1, wsaudit.KindToolCall, auditBase)}})
+	p = auditJSON[pageOut](t, d, "/s/sess/audit/events", 200)
+	for _, k := range []string{"duration_ms", "request_id", "ctx_before", "ctx_after"} {
+		if v, ok := p.Events[0][k]; !ok || v != nil {
+			t.Fatalf("unlinked tool_call %s = %v (present %v)", k, v, ok)
+		}
 	}
 	fx.set("sess", wsauditstore.View{Events: evs})
 
@@ -510,7 +531,8 @@ func TestAuditEventServesTruncatedBodiesWithRangeFollowUps(t *testing.T) {
 // TestAuditStoredTruncBodyKeepsItsMarkerAndMiddleOut pins the store-level
 // truncation through the API: stored_trunc returned unchanged, summary
 // lengths and range offsets in stored bytes, and search never finding the
-// omitted middle, nor a match glued across the seam.
+// omitted middle, nor a match glued across the seam, while line numbers
+// count the stored body's lines.
 func TestAuditStoredTruncBodyKeepsItsMarkerAndMiddleOut(t *testing.T) {
 	head, tail := "line one\nhead ends alpha", "beta tail starts\nlast line"
 	ev := auditEv(1, wsaudit.KindToolResult, auditBase)
@@ -548,11 +570,17 @@ func TestAuditStoredTruncBodyKeepsItsMarkerAndMiddleOut(t *testing.T) {
 			t.Errorf("search %q found %v", q, s.Hits)
 		}
 	}
-	// The tail starts a new line: line one, head ends alpha, beta tail
-	// starts, last line.
-	s := auditJSON[searchOut](t, d, "/s/sess/audit/search?q=beta", 200)
-	if len(s.Hits) != 1 || s.Hits[0]["line_no"] != float64(3) || s.Hits[0]["line"] != "beta tail starts" {
-		t.Fatalf("tail hit = %v", s.Hits)
+	// The stored body's lines are "line one", "head ends alphabeta tail
+	// starts" (the seam inside it), "last line": a hit on either side of the
+	// seam is line 2, shown as the stored line, and the line after it is 3.
+	for q, want := range map[string]string{"alpha": "2", "beta": "2", "last": "3"} {
+		s := auditJSON[searchOut](t, d, "/s/sess/audit/search?q="+q, 200)
+		if len(s.Hits) != 1 || fmt.Sprint(s.Hits[0]["line_no"]) != want {
+			t.Fatalf("search %s = %v, want line %s", q, s.Hits, want)
+		}
+		if want == "2" && s.Hits[0]["line"] != "head ends alphabeta tail starts" {
+			t.Fatalf("seam line hit = %v", s.Hits[0])
+		}
 	}
 }
 
@@ -596,6 +624,15 @@ func TestAuditSearchHitsPagesAndRefusals(t *testing.T) {
 	}
 	if total != 1+6*3 {
 		t.Fatalf("paged %d hits", total)
+	}
+	// A page ending on the oldest hit has a null next.
+	if s := auditJSON[searchOut](t, d, "/s/sess/audit/search?q=needle&n=19", 200); len(s.Hits) != 19 || s.Next != nil {
+		t.Fatalf("page ending on the oldest hit: %d hits, next %v", len(s.Hits), s.Next)
+	}
+	if s := auditJSON[searchOut](t, d, "/s/sess/audit/search?q=needle&n=18", 200); len(s.Hits) != 18 || s.Next == nil {
+		t.Fatalf("page before the oldest hit: %d hits, next %v", len(s.Hits), s.Next)
+	} else if last := auditJSON[searchOut](t, d, "/s/sess/audit/search?q=needle&n=18&cursor="+url.QueryEscape(*s.Next), 200); len(last.Hits) != 1 || last.Hits[0]["event_id"] != "e1" || fmt.Sprint(last.Hits[0]["line_no"]) != "4" || last.Next != nil {
+		t.Fatalf("last page = %v", last)
 	}
 	if s := auditJSON[searchOut](t, d, "/s/sess/audit/search?q=Needle&case=1", 200); len(s.Hits) != 6 || s.Next != nil {
 		t.Fatalf("case-sensitive: %d hits", len(s.Hits))

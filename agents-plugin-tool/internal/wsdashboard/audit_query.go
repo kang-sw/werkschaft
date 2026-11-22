@@ -290,13 +290,15 @@ func summarize(evs []wsaudit.Envelope, idx []int) []auditSummary {
 			}
 		}
 	}
-	if len(calls) == 0 && len(requests) == 0 {
-		return out
-	}
 	attached := map[string][]int{}
 	resultAt := map[string]time.Time{}
-	ctxAfter := map[string]int64{}
-	for i := range evs {
+	// ctxAfter maps a request to the ctx of the first event naming it as
+	// prev_id, nil when that event carries no ctx.
+	ctxAfter := map[string]*int64{}
+	// The scan is skipped when the page has no call or request to resolve;
+	// its tool_calls still carry their (null) call fields below.
+	scan := len(calls) > 0 || len(requests) > 0
+	for i := 0; scan && i < len(evs); i++ {
 		ev := &evs[i]
 		// An event is tied to the call its call ID names (its result, an
 		// approval request) and to the call its parent ID names (a native
@@ -311,9 +313,13 @@ func summarize(evs []wsaudit.Envelope, idx []int) []auditSummary {
 			attached[ev.ParentID] = append(attached[ev.ParentID], i)
 		}
 		if len(requests) > 0 {
-			if _, prev, ctx, ok := auditRequest(ev); ok && prev != "" && requests[prev] {
+			if _, prev, ctx, ok := auditRequest(ev); prev != "" && requests[prev] {
 				if _, seen := ctxAfter[prev]; !seen {
-					ctxAfter[prev] = ctx
+					if ok {
+						ctxAfter[prev] = &ctx
+					} else {
+						ctxAfter[prev] = nil
+					}
 				}
 			}
 		}
@@ -340,9 +346,7 @@ func summarize(evs []wsaudit.Envelope, idx []int) []auditSummary {
 			if hasCtx {
 				cf.CtxBefore = &ctx
 			}
-			if after, ok := ctxAfter[id]; ok {
-				cf.CtxAfter = &after
-			}
+			cf.CtxAfter = ctxAfter[id]
 		} else if hasCtx {
 			cf.CtxBefore = &ctx
 		}
@@ -580,9 +584,11 @@ func decodeSearchCursor(s, query string) (searchPos, error) {
 
 // run scans the stored in and out bodies of evs newest first (each body's
 // lines in order, in before out), from the cursor when one is given, until n
-// hits or the scan budget. A stored_trunc body is scanned as its stored head
-// and tail apart, so no hit spans the omitted middle; its tail starts a new
-// line. done reports cancellation (the request ended).
+// hits or the scan budget. Line numbers count the stored body's lines; in a
+// stored_trunc body the line holding the seam is matched as its head piece
+// and its tail piece apart, so no hit spans the omitted middle. After the
+// n-th hit the scan looks ahead for one more, so next is null once the
+// oldest hit is returned. done reports cancellation (the request ended).
 func (s auditSearch) run(evs []wsaudit.Envelope, cursor *searchPos, done func() bool) (auditSearchAnswer, error) {
 	ans := auditSearchAnswer{Hits: []auditHit{}}
 	i := len(evs) - 1
@@ -597,54 +603,83 @@ func (s auditSearch) run(evs []wsaudit.Envelope, cursor *searchPos, done func() 
 		}
 		i, field, fromLine = k, cursor.Field, cursor.Line
 	}
+	// pending is the cursor after the n-th hit, issued once the lookahead
+	// finds another hit or the scan stops early.
+	var pending *string
+	stopAt := func(ev *wsaudit.Envelope, field, line int) (auditSearchAnswer, error) {
+		if pending == nil {
+			next := encodeSearchCursor(searchPos{Seq: ev.Seq, ID: ev.ID, Field: field, Line: line, Query: s.query})
+			pending = &next
+		}
+		ans.Next = pending
+		return ans, nil
+	}
 	scanned := 0
 	for ; i >= 0; i, field, fromLine = i-1, 0, 1 {
+		ev := &evs[i]
 		if done() {
+			if pending != nil || len(ans.Hits) > 0 {
+				return stopAt(ev, field, fromLine)
+			}
 			return ans, nil
 		}
-		ev := &evs[i]
 		if len(s.kinds) > 0 && !s.kinds[ev.Kind] {
 			continue
 		}
 		for ; field <= 1; field, fromLine = field+1, 1 {
 			if scanned >= auditSearchBudget {
-				next := encodeSearchCursor(searchPos{Seq: ev.Seq, ID: ev.ID, Field: field, Line: fromLine, Query: s.query})
-				ans.Next = &next
-				return ans, nil
+				return stopAt(ev, field, fromLine)
 			}
 			name, body, trunc := wsaudit.FieldIn, ev.In, storedTrunc(ev, wsaudit.FieldIn)
 			if field == 1 {
 				name, body, trunc = wsaudit.FieldOut, ev.Out, storedTrunc(ev, wsaudit.FieldOut)
 			}
 			scanned += len(body)
-			full := false
-			eachLine(body, trunc, func(no int, line string) bool {
+			stop := false
+			eachLine(body, trunc, func(no int, line string, seam int) bool {
 				if no < fromLine {
 					return true
 				}
-				start, end, ok := s.match(line)
+				start, end, ok := s.matchLine(line, seam)
 				if !ok {
 					return true
+				}
+				if pending != nil {
+					ans.Next, stop = pending, true
+					return false
 				}
 				text, clipped := excerpt(line, start, end)
 				ans.Hits = append(ans.Hits, auditHit{
 					EventID: ev.ID, Kind: ev.Kind, Field: name, LineNo: no, Line: text, Clipped: clipped,
 					CallID: ev.CallID, ParentID: ev.ParentID,
 				})
-				if len(ans.Hits) < s.n {
-					return true
+				if len(ans.Hits) == s.n {
+					next := encodeSearchCursor(searchPos{Seq: ev.Seq, ID: ev.ID, Field: field, Line: no + 1, Query: s.query})
+					pending = &next
 				}
-				next := encodeSearchCursor(searchPos{Seq: ev.Seq, ID: ev.ID, Field: field, Line: no + 1, Query: s.query})
-				ans.Next = &next
-				full = true
-				return false
+				return true
 			})
-			if full {
+			if stop {
 				return ans, nil
 			}
 		}
 	}
 	return ans, nil
+}
+
+// matchLine matches one stored line. A line holding a stored_trunc seam
+// (seam >= 0) is matched as its head piece, then its tail piece, so a match
+// never joins text from both sides of the omitted middle; offsets are in the
+// whole line.
+func (s auditSearch) matchLine(line string, seam int) (int, int, bool) {
+	if seam < 0 {
+		return s.match(line)
+	}
+	if start, end, ok := s.match(line[:seam]); ok {
+		return start, end, true
+	}
+	start, end, ok := s.match(line[seam:])
+	return start + seam, end + seam, ok
 }
 
 // storedTrunc is the stored head length of a body the store kept as head
@@ -668,23 +703,26 @@ func storedTrunc(ev *wsaudit.Envelope, field string) int {
 
 // eachLine calls fn with each line of body and its 1-based number until fn
 // returns false. Lines end at '\n' (a trailing '\r' is dropped); a final
-// '\n' opens no line. With head >= 0 the body is a stored head and tail:
-// they are split apart, the tail's first piece starting a new line.
-func eachLine(body string, head int, fn func(no int, line string) bool) {
-	parts := []string{body}
-	if head >= 0 && head <= len(body) {
-		parts = []string{body[:head], body[head:]}
-	}
-	no := 0
-	for _, part := range parts {
-		for part != "" {
-			line, rest, _ := strings.Cut(part, "\n")
-			part = rest
-			no++
-			if !fn(no, strings.TrimSuffix(line, "\r")) {
-				return
-			}
+// '\n' opens no line. head >= 0 is a stored_trunc body's head length: the
+// line the head ends inside, without a line break at the seam, gets the
+// seam's offset within it, else seam is -1.
+func eachLine(body string, head int, fn func(no int, line string, seam int) bool) {
+	for no, at := 1, 0; at < len(body); no++ {
+		end := strings.IndexByte(body[at:], '\n')
+		if end < 0 {
+			end = len(body)
+		} else {
+			end += at
 		}
+		line := strings.TrimSuffix(body[at:end], "\r")
+		seam := -1
+		if head > at && head < at+len(line) {
+			seam = head - at
+		}
+		if !fn(no, line, seam) {
+			return
+		}
+		at = end + 1
 	}
 }
 
