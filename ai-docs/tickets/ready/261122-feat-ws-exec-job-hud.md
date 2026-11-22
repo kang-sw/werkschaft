@@ -71,7 +71,9 @@ below are the behavior it fixes):
 6. **Stop.** Stop asks an inline confirmation (focus on Cancel, 8 s auto
    revert, Esc cancels). The wording is "Stop job", distinct from
    "Interrupt" (which stops the agent's turn); the text says the process
-   group is killed with no cleanup (there is no separate force level). After
+   group gets TERM and, after a grace period, KILL (a pipe job on POSIX; Windows
+   force-kills the process tree), so the job may run its own cleanup first
+   (there is no separate force level). After
    a stop: a notice card in the peek and a toast.
 7. **Stop consequences.**
    - Stopping the user's own `!` job does NOT wake the agent; the "stopped"
@@ -110,8 +112,10 @@ below are the behavior it fixes):
   behavior tests cover reload.
 - **Notice language** is the agent session's language.
 - **No force-kill level.** Stop is already SIGKILL of the process group
-  (`Hosted.stop` -> `Holders.Stop`, `internal/execjob/hosted_ops.go:18-83`);
-  the confirm text says "no cleanup". Rejected: a second "force" tier.
+  (`Hosted.stop` -> `Holders.Stop`, `internal/execjob/hosted_ops.go`); the
+  holder sends TERM and KILLs after a grace period on POSIX (a forced tree
+  kill on Windows), so the confirm text must not promise "no cleanup" (see
+  the Phase 1 Edition). Rejected: a second "force" tier.
 
 ### Lead technical decisions (auto-confirmed 2026-11-22)
 
@@ -211,9 +215,11 @@ Each carries its source evidence at develop `daf510d17`.
   "Stopped by you" applies only to a marked job, whose row state is
   `stopped`. A stop issued by the close cascade (`StopOwner`,
   `hosted_ops.go:297`) or the agent's own
-  `exec.stop` is not "by user". Not persisted: lost on daemon restart, which
-  is acceptable because the notice was already delivered and the row still
-  shows `stopped`. Rejected: a new `exec_jobs` column (a compatibility
+  `exec.stop` is not "by user". Not persisted: lost on daemon restart. A
+  restart after the stop's notice was admitted loses only the "Stopped by
+  you" label (the row still shows `stopped`); a restart inside the windows
+  recorded in the Phase 1 Edition can lose or mis-kind the notice, which is
+  accepted. Rejected: a new `exec_jobs` column (a compatibility
   surface for little value). T0.
 - **Job feed.** The page learns of changes through a new opaque SSE event
   `event: execjobs`, data `{"rev":N}`, and refetches the list. Shape:
@@ -509,6 +515,99 @@ Landed in 2eb404138, a5cdef804 and bd1a2a2e2 (backend only; no UI).
   and the launch return can give the agent both the stopped view and a notice;
   a repeated stop of a closed-outcome job answers 200 without a retry, untested
   at the route level.
+
+#### Edition (5e5b5885f) - 2026-11-23
+
+Round 1 of the pre-merge review (FIX-FIRST) after merging develop into the
+branch (abcf7b21c). Fixes are in 02ecec950 and 5e5b5885f.
+
+- **Critical, the agent stop notice reaches the shared chat: lead decision, no
+  code change.** The completion notice (`deliver`/`noticeText`,
+  `internal/execjob/hosted_notice.go:11-80`) already carries `command:` and the
+  output tail through the same steered inbox entry (`AdmitCompletion` ->
+  `wsinbox.Send`, `internal/wsagent/exec_seams.go:390`), so LAN viewers see
+  both today, and the agent's own `exec.shell` call and result in the
+  transcript show the command, cwd and output to the same viewers. The
+  "Notice envelope" decision chose this format on purpose. Decision 8's
+  localhost boundary governs the HUD surfaces (the list, output and stop
+  routes and the HUD), which the review verified stay localhost-only. So the
+  stop notice adds no new exposure class. Guard, now pinned by a test: the
+  notice holds the completion notice's tail size (`HostedPreviewBytes`) and
+  no more, and its cwd is the one the agent launched with.
+- **Important 1, overlapping stops: fixed.** The holder stop has one owner
+  (`stopAttempt`). A stop that finds one in flight joins it, asks the holder
+  no second time, and gets its outcome. A failed attempt clears `stopping`,
+  the intent and the attempt in one critical section, so every joiner sees the
+  failure and a following user stop decides afresh. Tests: a user-first stop
+  with an agent stop joining; a failed first attempt with a joiner, then a user
+  stop that ends marked with its stop notice and no `:exit` notice.
+- **Important 2, deferred notices: fixed.** `NoticeDeferred` records
+  `pending`, not `sent`; the completion notices' timer (`deliverPending`)
+  re-admits it with the same event id, and a repeated stop does so at once. The
+  deferred test now expects `pending`, then `sent` after the retry pass.
+- **Important 3, restart windows: accepted, no persistence, no new column.**
+  Known limitations, exact windows: (a) after the terminal save and before the
+  stop notice is admitted, a restart leaves a plain `stopped` row and no
+  replayed notice; (b) before the terminal save, while the row is persisted
+  `running`, a restart restores no `stopping`, so the holder's exit replay
+  can end the job `exited` and send `exec:<id>:exit` instead of the stop
+  notice, including for a converted `!` job that would have been stopped
+  silently. The effect is the wrong notice kind, not data loss. The
+  Decisions wording ("acceptable because the notice was already delivered")
+  overstated this and is corrected in place.
+- **Important 4, production measurement: done.** See the table below.
+- **Important 5, start time wake: fixed.** `OnRunning` (the revision) now also
+  fires once the job is spawned and saved, so no refetch keeps a zero start.
+  Test: the last revision of a launch sees a start time (it failed before the
+  change); the OnRunning call-count expectations now name admit, spawn, end.
+- **Minor, UTF-8 across interleaved streams: fixed cheaply.** The output route
+  carries a run's incomplete trailing bytes to that stream's next run. Such a
+  character shows slightly after its place in the merged order. Bytes still
+  incomplete at the window's end decode as replacement characters. Two-stream
+  test added.
+- **Minor, async launch reporting a stopped view and a notice:** already
+  recorded; no change.
+- **Minor, "no cleanup" wording: corrected.** POSIX pipe jobs get TERM, then
+  KILL after a grace period (5 s default); Windows force-kills the process
+  tree. The confirm text must not promise "no cleanup".
+
+**File operations per action** (`wsstate.FileIOCounters`, macOS, a real
+`Hosted` over a real holder process; notices admitted by a real `Runner`;
+`TestExecHUDStopAndReadsThroughProductionPaths`). The test's lead harness
+writes its own heartbeat (about 176 counted operations per 2.2 s: conversation
+record `create_temp` + `atomic_replace`, registry `read_file`); a control
+window of the same length measured that and it is excluded below.
+
+| Action | Counted file operations | Latency |
+|---|---|---|
+| Localhost guard's cookie revalidation (pre-existing baseline, every authenticated request; the 404 route) | 4 | about 100 us |
+| List (`Hosted.Jobs`, 3 jobs; 200 jobs through the route, see Result) | 0 beyond the guard | 12 us (163 us route at 200 jobs) |
+| Output read, 16 KiB window | 0 beyond the guard | 2 us |
+| Stop of an agent job, notice steered into a running turn | 19 attributable: inbox write and list (`wsinbox` read_file 5, read_dir 6, stat 4, create_temp 1) and live ring (`wslive` create_temp 1, atomic_replace 1, read_dir 1) | 2.2 s (holder stop) |
+| Stop of the user's `!` job, receipt handed | 0 beyond the control | 2.2 s (holder stop) |
+| Stop of an agent job, notice wakes an idle turn | 17 attributable (same sites, `wsinbox` 14, `wslive` 3) | 2.2 s |
+| Repeated stop of a stopped job | 0 | 2 us |
+
+The inbox write and the conversation record for an agent notice are inherent
+to admitting a steered entry; they are reported, not removed. The
+conversation record's own sites (`record.go`) move by +2 to +6 over the
+control, inside the heartbeat's variation, so they are not separable. Not
+seen by the wrapper counters, from reading the code: the one `exec_jobs`
+upsert (one SQLite commit, as an agent's stop makes), the holder manager's
+`exit.json` read and recursive removal of the holder's directory
+(`manager_scan.go` cleanup, inherent to ending any exec job), and the holder
+process's own file work. The route's own cost is the guard row above plus the
+service row. The 2.2 s is the real holder's stop through its grace period for
+this shell job, as `exec.stop` has.
+
+- Verification after round 1: `go test -race -count=1 ./internal/execjob`
+  (full) ok; `./internal/wsagent -run 'StopNote|UserStop|TestExecHUDStopAndReads'`
+  ok; `./cmd/ws-mcp -run TestComposer` ok; `./internal/wsdashboard -run
+  'TestExecHUD|TestExecJobsEvent'` ok and the stream filter
+  (`Stream|SSE|WS|Event|Visib|Foreign|Wake|Broker|Coalesc`) ok;
+  `GOOS=windows go vet` clean on execjob, wsagent, wsdashboard, cmd/ws-mcp and
+  internal/mcp. `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`
+  still fails only where `internal/wspackage/generated` is the placeholder.
 
 ### Phase 2: HUD UI
 
