@@ -18,11 +18,13 @@ function installWerkschaftNotifyBridge(origin) {
   };
   Object.defineProperty(window, '__werkschaftNotifyResult', { value: settle });
   // Fields are cut by code point, as the shell clips them, never inside a
-  // surrogate pair, whose half the shell's JSON parser would refuse.
-  const text = (value, limit) => {
-    const s = String(value ?? '');
-    return Array.from(s.toWellFormed ? s.toWellFormed() : s).slice(0, limit).join('');
-  };
+  // surrogate pair, and a lone half already in the input becomes U+FFFD
+  // (as toWellFormed does, which older WebViews lack): the shell's JSON
+  // parser would refuse either.
+  const text = (value, limit) =>
+    Array.from(String(value ?? ''), (c) => (c.length === 1 && c >= '\uD800' && c <= '\uDFFF' ? '�' : c))
+      .slice(0, limit)
+      .join('');
   // notify resolves true once the shell showed the notification natively
   // (or is showing the same tag right now), and false when it could not:
   // the page then uses its browser notification instead, so nothing shows

@@ -75,12 +75,12 @@ test('fields are bounded before they leave the page', () => {
   assert.deepEqual([sent.title.length, sent.body.length, sent.tag.length], [200, 1000, 300]);
   // Cut by code point, never inside a surrogate pair (the shell's JSON
   // parser refuses a lone half), and a lone half in the input is replaced.
-  ctx.werkschaftNotify.notify('a' + '\u{1F600}'.repeat(250), 'x\uD800y', 'tag');
+  ctx.werkschaftNotify.notify('a' + '\u{1F600}'.repeat(250), 'x\uD800y\uDC00z', 'tag');
   const emoji = payload(posted[1]);
   assert.equal(Array.from(emoji.title).length, 200);
   assert.ok(emoji.title.endsWith('\u{1F600}'));
   assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:[^\uD800-\uDBFF]|^)[\uDC00-\uDFFF]/.test(emoji.title + emoji.body), 'no lone surrogate');
-  assert.equal(emoji.body, 'x\uFFFDy');
+  assert.equal(emoji.body, 'x\uFFFDy\uFFFDz');
 });
 
 test('ids continue past an earlier page in the same window', () => {
