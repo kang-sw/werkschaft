@@ -569,14 +569,17 @@ func TestAuditStoredTruncBodyKeepsItsMarkerAndMiddleOut(t *testing.T) {
 	}
 	// Nor do zero-width assertions answer at the seam as if it were a line
 	// end or a word boundary: "alphabeta" is one word of one stored line.
-	for _, q := range []string{"MIDDLE", "alphabeta", "alpha.*beta", `alpha$`, `^beta`, `\bbeta`, `alpha\b`, `alpha\z`, `\Abeta`} {
+	for _, q := range []string{"MIDDLE", "alphabeta", "alpha.*beta", `alpha$`, `^beta`, `\bbeta`, `alpha\b`, `alpha\z`, `\Abeta`, `^head ends alpha$`, `^beta tail starts$`} {
 		if s := auditJSON[searchOut](t, d, "/s/sess/audit/search?regex=1&q="+url.QueryEscape(q), 200); len(s.Hits) != 0 {
 			t.Errorf("search %q found %v", q, s.Hits)
 		}
 	}
 	// They still answer at the stored line's real boundaries, on both sides
-	// of the seam, and a match hidden inside a crossing one is found.
-	for _, q := range []string{`^head ends`, `starts$`, `\bends alpha`, `\bbeta\B|\btail\b`, `head|alpha.*tail`} {
+	// of the seam, and a match hidden inside a crossing one is found — also
+	// one ending or starting at the seam, whose assertions see the other
+	// side's neighbour ("alpha\B": a word goes on past the seam).
+	for _, q := range []string{`^head ends`, `starts$`, `\bends alpha`, `\bbeta\B|\btail\b`, `head|alpha.*tail`,
+		`^head.*`, `.*starts$`, `alpha\B`, `\Bbeta tail`} {
 		s := auditJSON[searchOut](t, d, "/s/sess/audit/search?regex=1&q="+url.QueryEscape(q), 200)
 		if len(s.Hits) != 1 || fmt.Sprint(s.Hits[0]["line_no"]) != "2" {
 			t.Errorf("search %q = %v, want one hit on line 2", q, s.Hits)
@@ -593,6 +596,26 @@ func TestAuditStoredTruncBodyKeepsItsMarkerAndMiddleOut(t *testing.T) {
 		if want == "2" && s.Hits[0]["line"] != "head ends alphabeta tail starts" {
 			t.Fatalf("seam line hit = %v", s.Hits[0])
 		}
+	}
+}
+
+// TestAuditSeamSearchAllocationsDoNotGrowWithMatches pins that matching a
+// pattern holding an assertion on a stored line with a seam allocates a
+// bounded amount however many matches the line holds: "^|." matches at every
+// byte of a 1 MiB line, and one hit is all the line is matched for.
+func TestAuditSeamSearchAllocationsDoNotGrowWithMatches(t *testing.T) {
+	s, err := newAuditSearch(`^|.`, true, true, nil, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Repeat("a", 1<<20)
+	seam := len(line) / 2
+	if start, end, ok := s.matchLine(line, seam); !ok || start != 0 || end != 0 {
+		t.Fatalf("seam match = %d, %d, %v; want the empty match at the line start", start, end, ok)
+	}
+	allocs := testing.AllocsPerRun(3, func() { s.matchLine(line, seam) })
+	if allocs > 16 {
+		t.Fatalf("matching a 1 MiB seam line made %.0f allocations", allocs)
 	}
 }
 

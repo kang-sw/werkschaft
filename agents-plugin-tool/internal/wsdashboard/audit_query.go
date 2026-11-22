@@ -511,14 +511,13 @@ type auditSearchAnswer struct {
 // it was issued for.
 type auditSearch struct {
 	match func(line string) (start, end int, ok bool)
-	// re is the compiled pattern (nil for a case-sensitive literal);
-	// asserts is set when it holds a zero-width assertion (^ $ \A \z \b
-	// \B), whose answer depends on the text around a position.
-	re      *regexp.Regexp
-	asserts bool
-	kinds   map[wsaudit.Kind]bool
-	n       int
-	query   string
+	// seamed matches a line holding a stored_trunc seam with a pattern that
+	// holds a zero-width assertion (^ $ \A \z \b \B), whose answer depends
+	// on the text around a position; nil for a pattern without one.
+	seamed *seamMatcher
+	kinds  map[wsaudit.Kind]bool
+	n      int
+	query  string
 }
 
 // newAuditSearch compiles q: a regular expression (RE2, linear time) when
@@ -545,9 +544,10 @@ func newAuditSearch(q string, regex, caseSensitive bool, kinds map[wsaudit.Kind]
 	if err != nil {
 		return s, err
 	}
-	s.re = re
-	if tree, err := syntax.Parse(pattern, syntax.Perl); err == nil {
-		s.asserts = hasAssertion(tree)
+	if tree, err := syntax.Parse(pattern, syntax.Perl); err == nil && hasAssertion(tree) {
+		if s.seamed, err = newSeamMatcher(pattern); err != nil {
+			return s, err
+		}
 	}
 	s.match = func(line string) (int, int, bool) {
 		loc := re.FindStringIndex(line)
@@ -701,35 +701,72 @@ func (s auditSearch) run(evs []wsaudit.Envelope, cursor *searchPos, done func() 
 // matchLine matches one stored line. In a line holding a stored_trunc seam
 // (seam >= 0) no match consumes text from both sides of the omitted middle.
 // A pattern without zero-width assertions is matched against the head piece,
-// then the tail piece. One with assertions is matched against the whole
-// line, so ^ $ \b see the line's real boundaries and neighbours, not the
-// pieces' ends, and a match crossing the seam is passed over; a match hidden
-// inside a crossing one is still found in a piece when it does not touch the
-// seam (where the piece's end would answer the assertion). Offsets are in
-// the whole line.
+// then the tail piece. One with assertions is matched by seamMatcher, so ^ $
+// \b see the line's real boundaries and neighbours, not the pieces' ends.
+// Offsets are in the whole line.
 func (s auditSearch) matchLine(line string, seam int) (int, int, bool) {
 	if seam < 0 {
 		return s.match(line)
 	}
-	if s.asserts {
-		for _, loc := range s.re.FindAllStringIndex(line, -1) {
-			if loc[1] <= seam || loc[0] >= seam {
-				return loc[0], loc[1], true
-			}
-		}
-		if start, end, ok := s.match(line[:seam]); ok && end < seam {
-			return start, end, true
-		}
-		if start, end, ok := s.match(line[seam:]); ok && start > 0 {
-			return start + seam, end + seam, true
-		}
-		return 0, 0, false
+	if s.seamed != nil {
+		return s.seamed.match(line, seam)
 	}
 	if start, end, ok := s.match(line[:seam]); ok {
 		return start, end, true
 	}
 	start, end, ok := s.match(line[seam:])
 	return start + seam, end + seam, ok
+}
+
+// seamMatcher finds a match of a pattern holding zero-width assertions on
+// one side of a seam inside a line (0 < seam < len(line)), evaluating every
+// assertion against the whole line. Each side is matched with the other
+// side's adjacent character stood in for by a sentinel of the same word
+// class (the only context ^ $ \A \z \b \B read in a line without line
+// breaks): the head as head+sentinel, keeping the pattern's match ending at
+// or before the seam; the tail as sentinel+tail, keeping its match starting
+// at or after it. Matching allocates the two side copies and the submatch
+// indexes, however many matches the line holds.
+type seamMatcher struct {
+	// head[w] and tail[w] use a word (w=1) or non-word (w=0) sentinel.
+	head, tail [2]*regexp.Regexp
+}
+
+// seamSentinels are the sentinel characters by word class.
+var seamSentinels = [2]string{"\x00", "_"}
+
+func newSeamMatcher(pattern string) (*seamMatcher, error) {
+	m := &seamMatcher{}
+	for w, sentinel := range seamSentinels {
+		var err error
+		// Group 1 is the pattern's match; the sentinel ends (starts) the text.
+		if m.head[w], err = regexp.Compile(`((?:` + pattern + `))(?s:.*)` + regexp.QuoteMeta(sentinel) + `\z`); err != nil {
+			return nil, err
+		}
+		if m.tail[w], err = regexp.Compile(`\A` + regexp.QuoteMeta(sentinel) + `(?s:.*?)((?:` + pattern + `))`); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
+func (m *seamMatcher) match(line string, seam int) (int, int, bool) {
+	if loc := m.head[wordClass(line[seam])].FindStringSubmatchIndex(line[:seam] + seamSentinels[wordClass(line[seam])]); loc != nil {
+		return loc[2], loc[3], true
+	}
+	if loc := m.tail[wordClass(line[seam-1])].FindStringSubmatchIndex(seamSentinels[wordClass(line[seam-1])] + line[seam:]); loc != nil {
+		return loc[2] - 1 + seam, loc[3] - 1 + seam, true
+	}
+	return 0, 0, false
+}
+
+// wordClass is 1 for an ASCII word byte (what \b counts as a word
+// character), else 0.
+func wordClass(b byte) int {
+	if b == '_' || '0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' {
+		return 1
+	}
+	return 0
 }
 
 // storedTrunc is the stored head length of a body the store kept as head
