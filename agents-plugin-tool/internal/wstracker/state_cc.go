@@ -69,9 +69,14 @@ func (s *state) applyCC(n *node) {
 	}
 }
 
+// applyCCOrg folds item.cc_org or item.uncc_org. A registration whose org
+// this fold never created is dropped: the writer saw an org_set the
+// fold-order pass flagged (a concurrent name, head or id clash), so the org
+// exists only in that writer's history and the registration could never be
+// removed from the folded state.
 func (s *state) applyCCOrg(n *node) {
 	it, orgID := s.items[n.p.str("item")], n.p.str("org")
-	if it == nil || orgID == "" {
+	if it == nil || orgID == "" || s.orgs[orgID] == nil {
 		return
 	}
 	k := ccOrgKey(it.id, orgID)

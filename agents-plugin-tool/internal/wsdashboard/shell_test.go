@@ -191,22 +191,25 @@ func TestShellStreamsTheRailAndItsFramesTheirRegions(t *testing.T) {
 	rail := openStream(t, f.base+railEventsRoute)
 	framed := openStream(t, f.base+"/s/livesession/events?frame=1")
 	alone := openStream(t, f.base+"/s/livesession/events")
-	// The rail stream also carries the companion configuration (sse.go
-	// sends it on connect and on each companion change); every other event
-	// is the rail region, and a first one arrives.
 	first := quiet(t, rail)
-	railRegions := 0
+	if len(first) == 0 {
+		t.Fatal("the rail stream sent no first rail")
+	}
+	// The rail stream also carries the daemon's companion settings (event
+	// "companion", commit fa2b5d917), so the shells stay in step; any other
+	// non-rail event is a leak.
+	sawRail := false
 	for _, ev := range first {
 		switch ev.Name {
 		case regionRail:
-			railRegions++
-		case "event:companion": // nextRegion's name for a non-region event
+			sawRail = true
+		case "event:companion":
 		default:
 			t.Errorf("the rail stream sent %s", ev.Name)
 		}
 	}
-	if railRegions == 0 {
-		t.Fatalf("the rail stream sent no first rail: %+v", first)
+	if !sawRail {
+		t.Error("the rail stream sent no rail region")
 	}
 	for _, ev := range quiet(t, framed) {
 		if ev.Name == regionRail {
@@ -228,7 +231,7 @@ func TestShellStreamsTheRailAndItsFramesTheirRegions(t *testing.T) {
 		}
 	}
 	for _, ev := range quiet(t, rail) {
-		if ev.Name != regionRail && ev.Name != "event:companion" {
+		if ev.Name != regionRail {
 			t.Errorf("the rail stream sent %s", ev.Name)
 		}
 	}
