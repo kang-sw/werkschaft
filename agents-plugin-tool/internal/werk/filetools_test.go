@@ -313,3 +313,54 @@ func TestTruncateOutputKeepsHeadAndTail(t *testing.T) {
 		t.Errorf("short = %q, %v", same, cut)
 	}
 }
+
+// A symbolic link whose target does not exist yet is followed by a write,
+// which creates the target: the boundary is judged where the link points.
+func TestDanglingSymlinkWriteBoundary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links need privileges on Windows")
+	}
+	root := newTree(t)
+	outside := t.TempDir()
+	f := &Files{Root: root, Cwd: root, Authority: AuthorityWorkdirWrite}
+
+	t.Run("out of the tree is refused", func(t *testing.T) {
+		missing := filepath.Join(outside, "not-yet", "planted.txt")
+		must(t, os.Symlink(missing, filepath.Join(root, "dangling")))
+		// A relative link and a chain of two links leave the tree the same way.
+		must(t, os.Symlink(filepath.Join("..", filepath.Base(outside), "relative.txt"), filepath.Join(root, "rel")))
+		must(t, os.Symlink("dangling", filepath.Join(root, "chain")))
+		for _, name := range []string{"dangling", "chain"} {
+			if _, err := call(t, f, "write", map[string]any{"path": name, "content": "no"}); err == nil || !strings.Contains(err.Error(), "outside the session's worktree") {
+				t.Errorf("write through %s: err = %v", name, err)
+			}
+			if _, err := call(t, f, "edit", map[string]any{"path": name, "edits": []map[string]string{{"oldText": "a", "newText": "b"}}}); err == nil {
+				t.Errorf("edit through %s was allowed", name)
+			}
+		}
+		if _, err := os.Lstat(missing); err == nil {
+			t.Error("the file was created outside the worktree")
+		}
+		if _, err := os.Stat(filepath.Join(outside, "not-yet")); err == nil {
+			t.Error("the outside directory was created")
+		}
+	})
+
+	t.Run("inside the tree is allowed and lands there", func(t *testing.T) {
+		must(t, os.Symlink(filepath.Join(root, "src", "made.txt"), filepath.Join(root, "inside")))
+		if _, err := call(t, f, "write", map[string]any{"path": "inside", "content": "yes"}); err != nil {
+			t.Fatalf("write through an inside link: %v", err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(root, "src", "made.txt")); string(b) != "yes" {
+			t.Errorf("content = %q", b)
+		}
+	})
+
+	t.Run("a loop is refused", func(t *testing.T) {
+		must(t, os.Symlink("loop-b", filepath.Join(root, "loop-a")))
+		must(t, os.Symlink("loop-a", filepath.Join(root, "loop-b")))
+		if _, err := call(t, f, "write", map[string]any{"path": "loop-a", "content": "no"}); err == nil {
+			t.Error("a write through a link loop was allowed")
+		}
+	})
+}
