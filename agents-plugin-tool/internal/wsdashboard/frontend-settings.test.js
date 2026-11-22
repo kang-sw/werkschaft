@@ -353,7 +353,7 @@ test("settings combobox lazy-loads /support/choices once, filters, preserves cus
     }
   };
   win.window = win;
-  vm.runInNewContext(read("dashboard-settings.js"), ctx);
+  vm.runInNewContext(read("dashboard-settings-combobox.js"), ctx);
   const cb = win.WsSettingsCombobox;
   assert.ok(cb, "WsSettingsCombobox is exported on window");
   assert.equal(fetchCount, 0, "must not fetch /support/choices until opened or focused");
@@ -462,7 +462,7 @@ test("settings combobox degrades gracefully when /support/choices fails", async 
     fetch: async () => ({ ok: false, status: 500 })
   };
   win.window = win;
-  vm.runInNewContext(read("dashboard-settings.js"), ctx);
+  vm.runInNewContext(read("dashboard-settings-combobox.js"), ctx);
   const cb = win.WsSettingsCombobox;
   const input = doc.createElement("input");
   doc.body.appendChild(input);
