@@ -962,3 +962,46 @@ func TestCompanionArchiveChargesBytesOfFailedRead(t *testing.T) {
 		t.Fatalf("failed read charged %d bytes, want at least the %d it produced", used, 10<<10)
 	}
 }
+
+func TestCompanionPackUninstalledPackIsNotResurrected(t *testing.T) {
+	home := t.TempDir()
+	opts := wsconfig.Options{ConfigHome: home}
+	store := new(CompanionPackStore)
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "alpha")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	// Make the run's removal fail partway: the moved-aside pack loses its
+	// write permission, so RemoveAll cannot empty it.
+	store.rename = func(oldPath, newPath string) error {
+		if err := os.Rename(oldPath, newPath); err != nil {
+			return err
+		}
+		return os.Chmod(newPath, 0o500)
+	}
+	if _, err := store.uninstall(opts, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	store.rename = nil
+	left, _ := filepath.Glob(filepath.Join(home, companionStagingName, "run-*", "*alpha", "pack.json"))
+	if len(left) == 0 {
+		t.Skip("run removal succeeded (permissions not enforced); leftover not reproducible")
+	}
+	t.Cleanup(func() {
+		filepath.WalkDir(filepath.Join(home, companionStagingName), func(p string, d fs.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				os.Chmod(p, 0o755)
+			}
+			return nil
+		})
+	})
+	if _, err := companionTestRun(store, home, companionTestZip(t, companionTestBundle(t, "", "beta")...), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	s := store.snapshot(opts)
+	if s.byID["alpha"] != nil || s.byID["beta"] == nil {
+		t.Fatalf("uninstalled pack resurrected: %+v", s.packs)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "companions", "alpha")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("alpha directory back: %v", err)
+	}
+}

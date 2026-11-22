@@ -222,8 +222,18 @@ func (s *CompanionPackStore) checkPacksRoot(paths companionInstallPaths) error {
 	return nil
 }
 
+// Moved-aside names in a staging run: "." + id is a previous pack displaced by
+// an install swap, and recoverStaging may put it back; "~" + id is a pack an
+// uninstall removed, which must stay removed, so recoverStaging never touches
+// it. Neither prefix can start a pack ID.
+const (
+	companionSwapAside      = "."
+	companionUninstallAside = "~"
+)
+
 // recoverStaging puts back a previous pack that a crash or a failed rollback
-// left in a staging run (swapIn moves it to <run>/.<id>). A moved-aside copy is
+// left in a staging run (swapIn moves it to <run>/.<id>; an uninstall's
+// <run>/~<id> is never restored). A moved-aside copy is
 // deleted only after its target is confirmed in place, which prepareStaging's
 // removal of the run then does. Callers hold installMu and run it before
 // prepareStaging.
@@ -252,7 +262,7 @@ func (s *CompanionPackStore) recoverStaging(opts wsconfig.Options, paths compani
 			return fail()
 		}
 		for _, child := range children {
-			id, dotted := strings.CutPrefix(child.Name(), ".")
+			id, dotted := strings.CutPrefix(child.Name(), companionSwapAside)
 			if !dotted || !child.IsDir() || !companionPackID.MatchString(id) {
 				continue
 			}
@@ -660,9 +670,9 @@ func (s *CompanionPackStore) writeNew(name string, data []byte) error {
 // holds scanMu through swapAndLoad.
 func (s *CompanionPackStore) swapIn(paths companionInstallPaths, run, id string) error {
 	// A pack ID never starts with a dot, so the moved-aside name cannot meet
-	// another staged pack.
+	// another staged pack. recoverStaging restores only this "." name.
 	target := filepath.Join(paths.packs, id)
-	old := filepath.Join(run, "."+id)
+	old := filepath.Join(run, companionSwapAside+id)
 	s.fsop("lstat")
 	_, err := os.Lstat(target)
 	replacing := err == nil
@@ -720,7 +730,7 @@ func (s *CompanionPackStore) uninstall(opts wsconfig.Options, id string) (*compa
 	}()
 	var moved error
 	snapshot := s.swapAndLoad(opts, func() {
-		moved = s.renameFile(target, filepath.Join(run, "."+id))
+		moved = s.renameFile(target, filepath.Join(run, companionUninstallAside+id))
 	})
 	if moved != nil {
 		return snapshot, companionRefuse(http.StatusInternalServerError, "cannot remove the pack directory")
