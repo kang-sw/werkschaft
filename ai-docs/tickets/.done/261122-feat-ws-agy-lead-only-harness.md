@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 1ca7fb90f009058b
 sage-review-completeness-reviewed: 1ca7fb90f009058b
+completed: 2026-11-22
 ---
 
 # Make agy a lead-only harness and warn about Antigravity ToS at agy lead creation
@@ -163,3 +164,90 @@ Verification:
   warning (ko and en) and creation still submits; other harnesses show no
   warning.
 - Headless browser capture of the warning (untracked PNG, path reported).
+
+### Result (87e3c4f92) - 2026-11-22
+
+Landed in `3f49b51d4` (implementation) and `87e3c4f92` (failed-stop rejoin
+test), based on `2bafac925`.
+
+- **Lead-only agy.** The agy registration (`wsagent/agy.go`) is now
+  `WorkerCapable: false` with a new unexported `leadOnlyReason`
+  (`agyLeadOnlyReason`, the consumer-terms text). The agy worker profile, its
+  HTTP MCP, and auto-approve settings stay registered, so existing records
+  still resolve. Other lead-only harnesses keep the generic text
+  (`registeredWorker`).
+- **One worker-admission check.** `Runner.admitWorkerBackend`
+  (`agent_tools.go`) returns an `admissionRefusal` carrying the reason. It is
+  called from:
+  - `create` (POST /agents and spawns, as 403);
+  - `childAdmission` (every worker launch or wake, so message, continue, and
+    resume keep their input queued and `wakeRefused` is set);
+  - `reattach`.
+
+  Rejoin: `reattach` only marks `leadOnlyRejoin`. After the first holder scan,
+  `holdersScanned` calls `retireLeadOnlyWorker` (`worker_rejoin.go`), which
+  ends the holder through `retireHolder`, settles any open turn failed with
+  the reason (`processEnded`), and leaves the record listable and stopped. If
+  the stop fails, the holder stays in the record, the error is shown, and the
+  next daemon tries again.
+- **Tier routing.** `agent.tiers` lists agy under `Unavailable` with the
+  reason. Alias, graph-route, and bundle entries that resolve to `agy.*` carry
+  it (`unusableHarnessError`), and so does the dashboard trace (through
+  `HarnessAvailability`).
+- **Dashboard.** The hosted lead popover (`dashboard-leads.js` `rpLeadMake`)
+  shows a `role="note"` warning (`js.lead.agy.terms`, in all 11 i18n tables,
+  including ko and en) only when agy is selected. Start stays enabled. Styling
+  is in `dashboard-rail.css`.
+- **Docs.** `ai-docs/manuals/ws-mcp.md` now states the lead-only agy posture.
+  The lifetime table names Claude, Codex, and Pi as the spawnable workers.
+
+Verification (all with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+- `go test ./internal/wsagent -run 'Agy|Agent|Worker|Held|Tier|Lead|Spawn|Child|REST|Registration|Wake|Deliver|Rejoin|Codex'`: ok.
+  This covers the new `agy_lead_only_test.go`:
+  - spawn by explicit tier, an agy caller's bare tier, an alias, a graph
+    route, and a bundle, all refused with the reason;
+  - the tiers listing;
+  - POST /agents refused;
+  - message, continue, and resume refused with the record kept;
+  - rejoin ends the holder and keeps the record;
+  - a failed stop is retried by the next daemon;
+  - an agy lead still spawns `claude.small`;
+  - peer mail still reaches an agy lead.
+
+  The existing agy lead rejoin and watchdog `continue` tests now run under
+  the shipped lead-only registration (`newAgyLeadHarness`).
+- `go test ./internal/mcp -run 'DashboardTierRouting|AgentTiers|HostedAgy'`:
+  ok. This needs `scripts/generate-package-assets.py` for the gitignored
+  `generated/inventory.json`.
+- `go test` for wsi18n (ok) and for wsdashboard with
+  `-run 'LeadPopover|AssetSource|PermissionControl|NewSession'` (ok).
+- `go vet` on wsagent, mcp, wsdashboard, and wsi18n: clean.
+- Dashboard JS tests: `lead-popover.test.cjs` covers the agy warning in en and
+  ko, that submission still works, and that other harnesses show no warning.
+  It passes, as do `permission-controls.test.cjs` and `new-session.test.js`.
+- Mutation checks: removing the `retireLeadOnlyWorker` call fails the rejoin
+  test, and removing the `hwarn.hidden` toggle fails the JS test.
+- Headless Chromium capture (untracked, gitignored):
+  `ai-docs/assets/mockups/261122-agy-lead-only/agy-terms-{ko,en}-{dark,light}{,-popover}.png`.
+  The capture checks that the warning is visible for agy and hidden for
+  claude, that Start is enabled, and that the POST carries `harness: agy`.
+  There is no approved visual reference to compare against.
+- Code review (lite) found no Critical or Important issues. Minor 1, the
+  untested failed-stop branch, was fixed in `87e3c4f92`.
+
+Decisions:
+- Adapter-level fixture tests were kept: tests that build their own
+  worker-capable agy registration still exercise the adapter. These include
+  the launch, approval, and resume tests; the reattach tests; the agy entries
+  in the worker holder recovery loops (`workerRecoveryHarness` clears
+  `leadOnlyReason`); and the agy watchdog worker tests. Every path through the
+  shipped registration is asserted as a refusal.
+- An agy lead's bare tier now resolves to agy and is refused. Agy leads spawn
+  workers with `claude.<tier>`, `codex.<tier>`, or a route.
+- The ticket's `dashboard-leads.js:717-744` citation is stale. The popover is
+  `rpLeadMake`.
+- No shipped playbook names agy as a worker tier, so no `agents-plugin/rsrc/`
+  edits were made.
+- Left open (minor): rejoin of a parentless, profile-created agy worker with a
+  live holder is not covered by a test. Such a record opens no turn, so only
+  the settlement branch differs from the covered case.
