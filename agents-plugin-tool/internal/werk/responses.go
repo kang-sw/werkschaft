@@ -300,7 +300,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, httpFailure(resp, secret)
+		return nil, httpFailure(resp, secret, stall, cancel)
 	}
 	timer := time.AfterFunc(stall, cancel)
 	defer timer.Stop()
@@ -308,6 +308,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	var failed *FailedError
 	if errors.As(err, &failed) {
 		failed.Message = Scrub(failed.Message, secret)
+		failed.Code = Scrub(failed.Code, secret)
 	}
 	if err != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -315,9 +316,15 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	return out, err
 }
 
-// httpFailure reads a refused request into an HTTPError.
-func httpFailure(resp *http.Response, secret string) error {
+// httpFailure reads a refused request into an HTTPError. The body read is
+// bounded in size (maxErrorBody) and in time: a server that sends headers and
+// then stalls cannot hold the request past the stall deadline. Whatever was
+// read by then is used, and the status decides whether the request is
+// retried, as for a body that arrived whole (a 429 or 5xx is retried).
+func httpFailure(resp *http.Response, secret string, stall time.Duration, cancel func()) error {
+	timer := time.AfterFunc(stall, cancel)
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	timer.Stop()
 	e := &HTTPError{Status: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	var wrap struct {
 		Error struct {
@@ -331,7 +338,7 @@ func httpFailure(resp *http.Response, secret string) error {
 		if e.Message == "" {
 			e.Message = wrap.Message
 		}
-		e.Code = strings.Trim(string(wrap.Error.Code), `"`)
+		e.Code = Scrub(strings.Trim(string(wrap.Error.Code), `"`), secret)
 	}
 	if e.Message == "" {
 		// Masked before it is cut, so a cut cannot leave a key's head.

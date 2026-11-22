@@ -254,6 +254,16 @@ func TestProviderErrorTextIsScrubbed(t *testing.T) {
 		"error event": func(w http.ResponseWriter, r *http.Request) {
 			streamOK(w, sse(ev("error", `{"type":"error","code":"x","message":"bad Bearer abcdef123456"}`)))
 		},
+		"error event code": func(w http.ResponseWriter, r *http.Request) {
+			streamOK(w, sse(ev("error", `{"type":"error","code":"`+key+`","message":"bad"}`)))
+		},
+		"response.failed code": func(w http.ResponseWriter, r *http.Request) {
+			streamOK(w, sse(ev("response.failed", `{"type":"response.failed","response":{"error":{"code":"sk-test-secret","message":"m"}}}`)))
+		},
+		"json body code": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"m","code":"`+key+`"}}`)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			client := serve(t, handler)
@@ -262,6 +272,14 @@ func TestProviderErrorTextIsScrubbed(t *testing.T) {
 				t.Fatal("no error")
 			}
 			text := err.Error()
+			var he *HTTPError
+			var fe *FailedError
+			switch {
+			case errors.As(err, &he):
+				text += " " + he.Code
+			case errors.As(err, &fe):
+				text += " " + fe.Code
+			}
 			for _, leak := range []string{key, "0123456789abcdef", "abcdef123456", "sk-test-secret"} {
 				if strings.Contains(text, leak) {
 					t.Errorf("error text keeps %q: %s", leak, text)
@@ -316,6 +334,59 @@ func TestRespondCancelDuringHeaderWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	if _, err := client.Respond(ctx, Request{Model: "m"}, StreamHandler{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A refused request whose body stalls after the headers is cut at the stall
+// deadline and still classified by its status: a 429 or 5xx is retried, with
+// the Retry-After its headers carried.
+func TestErrorBodyStallIsCutAndRetryable(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		block := make(chan struct{})
+		client := serve(t, func(w http.ResponseWriter, r *http.Request) {
+			io.Copy(io.Discard, r.Body)
+			w.Header().Set("Retry-After", "7")
+			w.Header().Set("Content-Length", "5000")
+			w.WriteHeader(status)
+			io.WriteString(w, `{"error":{"message":"slow`)
+			w.(http.Flusher).Flush()
+			select {
+			case <-block:
+			case <-r.Context().Done():
+			}
+		})
+		client.StallTimeout = 150 * time.Millisecond
+		start := time.Now()
+		_, err := client.Respond(context.Background(), Request{Model: "m"}, StreamHandler{})
+		close(block)
+		var he *HTTPError
+		if !errors.As(err, &he) || he.Status != status {
+			t.Fatalf("status %d: err = %v", status, err)
+		}
+		if d, ok := Retryable(err); !ok || d != 7*time.Second {
+			t.Errorf("status %d: retryable = %v after %v", status, ok, d)
+		}
+		if time.Since(start) > 3*time.Second {
+			t.Errorf("status %d: the cut took %v", status, time.Since(start))
+		}
+	}
+}
+
+// An error body is read up to a cap, however much the server sends.
+func TestErrorBodyIsCapped(t *testing.T) {
+	client := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		chunk := strings.Repeat("y", 1<<16)
+		for i := 0; i < 64; i++ {
+			if _, err := io.WriteString(w, chunk); err != nil {
+				return
+			}
+		}
+	})
+	_, err := client.Respond(context.Background(), Request{Model: "m"}, StreamHandler{})
+	var he *HTTPError
+	if !errors.As(err, &he) || len(he.Message) > 300 {
 		t.Fatalf("err = %v", err)
 	}
 }
