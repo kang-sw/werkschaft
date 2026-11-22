@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
@@ -307,12 +309,12 @@ func resumeCommand(rec Record, sessionDir string) string {
 		if rec.SessionID == "" {
 			return ""
 		}
-		return resumeLine(rec.workDir(), "claude --resume", rec.SessionID)
+		return resumeLine(rec.workDir(), "claude", "--resume", rec.SessionID)
 	case BackendAgy:
 		if rec.SessionID == "" {
 			return ""
 		}
-		return resumeLine(rec.workDir(), "agy --conversation", rec.SessionID)
+		return resumeLine(rec.workDir(), "agy", "--conversation", rec.SessionID)
 	case BackendPi:
 		file := rec.SessionFile
 		if file == "" {
@@ -321,21 +323,58 @@ func resumeCommand(rec Record, sessionDir string) string {
 				return ""
 			}
 		}
-		return resumeLine(rec.workDir(), "pi --session", file)
+		return resumeLine(rec.workDir(), "pi", "--session", file)
 	}
 	return ""
 }
 
-// resumeLine renders "change to dir, then run command with arg" for the
-// host's terminal shell. On Windows that is PowerShell, which the daemon's
-// own pickShell prefers and Windows Terminal opens by default; Windows
-// PowerShell 5.1 rejects "&&", so the line uses Set-Location and ";" and
-// a failed Set-Location stops it. cmd.exe cannot run this line.
-func resumeLine(dir, command, arg string) string {
-	if hostWindows {
-		return "Set-Location -LiteralPath " + psQuote(dir) + " -ErrorAction Stop; " + command + " " + psQuote(arg)
+// resumeLine renders "change to dir, then run harness name with flag arg"
+// for the host's terminal shell. On Windows that is PowerShell, which the
+// daemon's own pickShell prefers and Windows Terminal opens by default;
+// Windows PowerShell 5.1 rejects "&&", so the line uses Set-Location and
+// ";" and a failed Set-Location stops it. cmd.exe cannot run this line.
+// An arg PowerShell cannot hand the harness intact (psNativeArgSafe) gets
+// the steps as comments instead of a line that would run it mangled.
+func resumeLine(dir, name, flag, arg string) string {
+	if !hostWindows {
+		return "cd " + shellQuote(dir) + " && " + name + " " + flag + " " + shellQuote(arg)
 	}
-	return "cd " + shellQuote(dir) + " && " + command + " " + shellQuote(arg)
+	if psNativeArgSafe(arg) {
+		return "Set-Location -LiteralPath " + psQuote(dir) + " -ErrorAction Stop; " + name + " " + flag + " " + psQuote(arg)
+	}
+	return "# PowerShell cannot pass this session's " + flag + " value to " + name + " intact; resume it by hand:\n" +
+		"# 1. Change to the directory: " + resumeShown(dir) + "\n" +
+		"# 2. Run " + name + " " + flag + " with exactly this value: " + resumeShown(arg)
+}
+
+// psNativeArgSafe reports whether PowerShell hands arg to a native harness
+// unchanged, whichever way the harness resolves. Windows PowerShell 5.1
+// quotes an argument holding whitespace without escaping a double quote
+// in it or a trailing backslash before its closing quote, so the program's
+// argv splits it differently. A harness that resolves to an npm .cmd/.bat
+// shim runs through cmd.exe, which re-reads & | < > ^ outside quotes and
+// %...% anywhere. Session ids and file paths almost never hold these.
+func psNativeArgSafe(arg string) bool {
+	if arg == "" || strings.HasSuffix(arg, `\`) || strings.ContainsAny(arg, "\"&|<>^%") {
+		return false
+	}
+	for _, r := range arg {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// resumeShown is s as a step shows it: as is, or Go-quoted when it holds a
+// control character (a line break would end the comment).
+func resumeShown(s string) string {
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return strconv.Quote(s)
+		}
+	}
+	return s
 }
 
 // psQuote single-quotes s as a PowerShell verbatim string, where only a

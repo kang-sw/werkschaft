@@ -308,7 +308,7 @@ func TestHandOffGivesTheSessionToTheTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := resumeLine(h.root, "claude --resume", "sess-1")
+	want := resumeLine(h.root, "claude", "--resume", "sess-1")
 	if st.Status != StatusHandedOff || st.Lifecycle != wsdashboard.SessionStopped || st.Process || st.ResumeCommand != want {
 		t.Fatalf("handed-off state = %+v, want the resume command %q", st, want)
 	}
@@ -387,7 +387,7 @@ func TestHandOffThroughTheRoute(t *testing.T) {
 	h.holders.out(holder, turnLines("sess 1", "u1", "done")...)
 	h.idle(id)
 	r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/handoff", nil)
-	if st := decodeState(t, r); r.status != http.StatusOK || st.Status != StatusHandedOff || st.ResumeCommand != resumeLine(h.root, "claude --resume", "sess 1") {
+	if st := decodeState(t, r); r.status != http.StatusOK || st.Status != StatusHandedOff || st.ResumeCommand != resumeLine(h.root, "claude", "--resume", "sess 1") {
 		t.Fatalf("handoff = %d %s", r.status, r.body)
 	}
 	if r := h.route(localBrowser, http.MethodPost, "/agents/"+id+"/handoff", nil); r.status != http.StatusConflict {
@@ -477,6 +477,12 @@ func TestResumeCommand(t *testing.T) {
 			`cd 'C:\w\repo' && agy --conversation 'agy 1'`,
 			`Set-Location -LiteralPath 'C:\w\repo' -ErrorAction Stop; agy --conversation 'agy 1'`},
 		{Record{Lead: true, Backend: BackendAgy, Root: "/w/repo"}, "", ""},
+		// A value PowerShell would hand the harness mangled gets steps.
+		{Record{Lead: true, Backend: BackendAgy, Root: `C:\w`, SessionID: `x"y`},
+			`cd 'C:\w' && agy --conversation 'x"y'`,
+			"# PowerShell cannot pass this session's --conversation value to agy intact; resume it by hand:\n" +
+				"# 1. Change to the directory: C:\\w\n" +
+				"# 2. Run agy --conversation with exactly this value: x\"y"},
 		{Record{Lead: true, Backend: BackendPi, Root: `C:\Users\O'Neil\repo`, SessionFile: "C:\\h\\.pi\\s \u2019$x.jsonl"},
 			"cd 'C:\\Users\\O'\\''Neil\\repo' && pi --session 'C:\\h\\.pi\\s \u2019$x.jsonl'",
 			"Set-Location -LiteralPath 'C:\\Users\\O''Neil\\repo' -ErrorAction Stop; pi --session 'C:\\h\\.pi\\s \u2019\u2019$x.jsonl'"},
