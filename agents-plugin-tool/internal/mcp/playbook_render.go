@@ -92,17 +92,22 @@ func (s *Server) resolveRsrcRoot(rsrcRootOverride string) (fs.FS, error) {
 //
 // Returns (body, recommendedTier, error): recommendedTier is the first-class tier
 // declared in the playbook frontmatter, or tierOverride when supplied, surfaced
-// so the caller can pick the delegate's model from one render call.
+// so the caller can pick the delegate's model from one render call. For a
+// caller that delegates through daemon-owned agent.spawn, a playbook that
+// declares tier-role recommends <role>:<that tier> instead.
 func renderPlaybookBody(s *Server, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, mintRoot string, parentKey string, workflowLang string, overrideLookup overrideLookupFn, tierOverride string) (string, string, error) {
-	return renderPlaybookBodyForCaller(s, "", "", rsrcRoot, name, callerContext, configOpts, mintRoot, parentKey, workflowLang, overrideLookup, tierOverride)
+	return renderPlaybookBodyForCaller(s, "", "", rsrcRoot, name, callerContext, configOpts, mintRoot, parentKey, workflowLang, overrideLookup, tierOverride, false)
 }
 
 // renderPlaybookBodyForCaller is renderPlaybookBody for the caller holding
 // callerKey (empty for a keyless render): the caller's own launch record, not
 // only the connection's detected harness, selects its terminology row (see
 // playbookTerminology). profile is the caller's playbook profile ("" for the
-// base files; see callerPlaybookProfile).
-func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, mintRoot string, parentKey string, workflowLang string, overrideLookup overrideLookupFn, tierOverride string) (string, string, error) {
+// base files; see callerPlaybookProfile). selfExecuted marks text the
+// caller runs itself (playbook.read, workflow_manual), as opposed to a
+// prompt rendered for another process (playbook.render): only that text
+// takes a PreferNativeSubagent lead's native-first wording.
+func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, mintRoot string, parentKey string, workflowLang string, overrideLookup overrideLookupFn, tierOverride string, selfExecuted bool) (string, string, error) {
 	harness := s.playbookHarness()
 	descriptor := s.connectionDescriptor()
 	// A hosted lead with no ws skills (playbookCommands) is under the
@@ -111,6 +116,14 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	daemonAgentClient := (harness == "pi" && s.clientPiDaemonAgents()) || descriptor.playbookCommands || s.callerDaemonAgents(callerKey)
 	daemonAgents := daemonAgentClient && s.agentListed() && s.toolAllowed("agent.spawn") && s.toolAllowed("mailbox.send")
 	terminology := playbookTerminology(harness, daemonAgents, s.runtimeNamespace())
+	// A PreferNativeSubagent lead explores with its own native subagent and
+	// spawns through agent.spawn under its tier rule, but only in text it
+	// executes itself: a rendered delegate runs elsewhere and keeps the
+	// daemon-agent wording.
+	nativeFirst := selfExecuted && daemonAgents && descriptor.preferNativeSubagent
+	if nativeFirst {
+		terminology = nativeFirstTerminology(s.runtimeNamespace())
+	}
 
 	// The workflow manual's harness overlay maps a render onto that
 	// harness's own spawn tool; a caller delegating through agent.spawn reads
@@ -148,8 +161,15 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	if err != nil {
 		return "", "", err
 	}
+	if nativeFirst && name == workflowManualPlaybookName {
+		body = nativeFirstManual(body, s.runtimeNamespace())
+	}
 	if pb.Meta.Delegates {
-		body += delegationTip(terminology)
+		spawnedWith := ""
+		if nativeFirst {
+			spawnedWith = s.runtimeNamespace() + "/agent.spawn"
+		}
+		body += delegationTip(terminology, spawnedWith)
 	}
 
 	// Unit 1: render-minted child key — only when caller is lead (mintRoot != "").
@@ -168,9 +188,20 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 			// Splice a clearly-delimited credential block into the body so the
 			// delegate's ws calls are pre-keyed. Prepended so the delegate sees
 			// the key before any procedure text.
+			// A worker-role child of a daemon agent.spawn caller holds two keys:
+			// the delegate-scoped spawn key its system prompt names (which its
+			// todo, agenda and compaction restore are bound to) and this
+			// lead-scoped key. The lead-scoped key reaches only the lead-only
+			// tools the spawn key is refused. Every other role, and a
+			// native-subagent caller whose spliced key is the only key, keeps
+			// the single-key wording; a sublead must use its key for every call.
+			keyUse := "Use this key in all ws tool calls."
+			if daemonAgents && strings.ToLower(strings.TrimSpace(pb.Meta.Role)) == "worker" {
+				keyUse = "Your system prompt's spawn key is your session key for every ws call; use this lead-scoped key only for a lead-only tool the spawn key is refused (for example `tickets.sage_stamp`)."
+			}
 			credBlock := "---\n" +
 				"**Your ws session_key: `" + childKey + "`**\n" +
-				"Use this key in all ws tool calls. You are already authenticated; do not attempt to mint, log in, or escalate session credentials.\n" +
+				keyUse + " You are already authenticated; do not attempt to mint, log in, or escalate session credentials.\n" +
 				"---\n\n"
 			body = credBlock + body
 		}
@@ -188,7 +219,10 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 		return "", "", err
 	}
 
-	return renderProductModePlaybookBody(body, s.noAgentMode()), recommendedTier, nil
+	// A daemon-agent caller is recommended the playbook's role tier, which
+	// agent.spawn routes through agent.tier_routing; the body above used
+	// the bare size either way.
+	return renderProductModePlaybookBody(body, s.noAgentMode()), roleRecommendedTier(daemonAgents, pb.Meta.TierRole, recommendedTier), nil
 }
 
 func substitutePlaybookVars(body string, declared []string, vars map[string]string) (string, error) {

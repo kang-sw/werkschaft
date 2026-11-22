@@ -385,17 +385,29 @@ func (c *conv) compactIdle() bool {
 		c.compactPending = nil
 		c.compactResume, c.compactCommand = req.resume, true
 		c.compactResumeInternal = req.resume && req.internal
-		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 		trigger := wslive.TriggerManual
 		if req.auto {
 			trigger = wslive.TriggerAuto
 		}
-		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: trigger})
 		cmd := wsinbox.Command{Name: "compact"}
 		if p, ok := c.proc.(*piProcess); req.auto && ok && p.mapper.compactPreparation.Load() {
 			cmd.Args = "<!-- ws-pi-daemon-auto-compact -->"
 		}
-		if err := c.sendStandalonePrompt(false, func() error { return c.runCommand(cmd) }); err != nil {
+		// The compaction starts with its command, behind the last release
+		// check: a refused one leaves no started compaction to unwind.
+		err := c.sendStandalonePrompt(false, func() error {
+			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
+			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: trigger})
+			return c.runCommand(cmd)
+		})
+		if checkout, ok := releasedInput(err); ok {
+			req.err = err
+			c.compactCommand, c.compactResume, c.compactResumeInternal = false, false, false
+			c.dropReleasedInput("compaction", checkout)
+			c.releaseHeld()
+			return false
+		}
+		if err != nil {
 			req.err = err
 			c.compactCommand = false
 			c.stopCompactWatchdog()
@@ -412,6 +424,11 @@ func (c *conv) compactIdle() bool {
 		c.compactResume = false
 		if err := c.sendStandalonePrompt(!c.compactResumeInternal, func() error { return c.proc.Send(text) }); err != nil {
 			c.compactResumeInternal = false
+			if checkout, ok := releasedInput(err); ok {
+				c.dropReleasedInput("continuation after compaction", checkout)
+				c.releaseHeld()
+				return false
+			}
 			c.setStatus(func() { c.lastErr = err.Error() })
 			c.releaseHeld()
 			return false
@@ -429,6 +446,11 @@ func (c *conv) compactIdle() bool {
 		}
 		text := c.renderPendingNote(c.compactNote)
 		if err := c.sendStandalonePrompt(true, func() error { return c.proc.Send(text) }); err != nil {
+			if checkout, ok := releasedInput(err); ok {
+				c.dropReleasedInput("restore turn", checkout)
+				c.releaseHeld()
+				return false
+			}
 			c.setStatus(func() { c.lastErr = err.Error() })
 			c.releaseHeld()
 			return false
@@ -475,13 +497,15 @@ func (c *conv) compactionStateInstruction() string {
 }
 
 func (c *conv) piLeadCompaction() bool {
-	return c.rec.Lead && c.rec.Backend == BackendPi && !PiMCPOnly(c.rec, nil)
+	return c.rec.Lead && c.rec.Backend == BackendPi && !PiMCPOnly(c.record(), nil)
 }
 
 func (c *conv) canSteerCompaction() bool {
 	return c.turn && c.proc != nil && !c.quitting && !c.replaying && !c.wrapHold && !c.closed && !c.hidden &&
 		!c.compacting && !c.compactCommand && c.compactPending == nil && !c.compactHardHandled && !c.compactHardIssued &&
-		(c.rec.Backend != BackendClaude || c.rec.Lead) && (c.caps == nil || c.caps.Allows(ItemSteer))
+		(c.rec.Backend != BackendClaude || c.rec.Lead) && (c.caps == nil || c.caps.Allows(ItemSteer)) &&
+		// A turn that outlived its checkout's release gets no guidance.
+		c.released() == ""
 }
 
 // steerCompaction uses live usage for the first warning and one completed
@@ -510,10 +534,17 @@ func (c *conv) steerCompaction(boundary bool) {
 	}
 	var id string
 	var err error
-	if advisory, ok := st.(interface{ steerCompaction(string) (string, error) }); ok {
-		id, err = advisory.steerCompaction(text)
-	} else {
-		err = st.Steer(text)
+	// canSteerCompaction's release check is a snapshot; the steer is
+	// admitted against it once more, and a refused one is dropped quietly.
+	if checkout := c.admitInput(func() {
+		if advisory, ok := st.(interface{ steerCompaction(string) (string, error) }); ok {
+			id, err = advisory.steerCompaction(text)
+		} else {
+			err = st.Steer(text)
+		}
+	}); checkout != "" {
+		c.dropReleasedInput("compaction guidance", checkout)
+		return
 	}
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: steer compaction guidance: %v\n", c.rec.ReplyID, err)
@@ -539,7 +570,12 @@ func (c *conv) compactSteerAnswered(reply compactSteerReply) {
 		reply.id = steer.id
 		if reply.refusal != "" && c.canSteerCompaction() && c.aboveCompactHard() {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: Pi refused the numeric compaction steer ID (%s). Retrying once with a string ID.\n", c.rec.ReplyID, reply.refusal)
-			id, err := p.fallbackCompactSteer(steer.text)
+			var id string
+			var err error
+			if checkout := c.admitInput(func() { id, err = p.fallbackCompactSteer(steer.text) }); checkout != "" {
+				c.dropReleasedInput("compaction guidance retry", checkout)
+				return
+			}
 			if err == nil {
 				if c.compactHardSteerID == reply.id {
 					c.compactHardSteerID = id
@@ -635,6 +671,13 @@ func (c *conv) sendCompactionNudge() bool {
 	}
 	c.releaseHeld()
 	if err := c.sendStandalonePrompt(false, func() error { return c.proc.Send(c.compactNudge.text) }); err != nil {
+		if checkout, ok := releasedInput(err); ok {
+			// A release refused the nudge: nothing was sent, and the
+			// process keeps running; the input that waits meets the same
+			// refusal in kickInput.
+			c.dropReleasedInput("compaction advisory", checkout)
+			return false
+		}
 		// Leave the crossing unconsumed for the next fresh usage sample.
 		// Ordinary input, if any, can restart the harness.
 		c.setStatus(func() { c.lastErr = "send compaction advisory: " + err.Error() })

@@ -247,7 +247,9 @@ func legacyWorkerPermission(def Profile) PermissionLevel {
 	}
 	for _, tool := range def.WSTools {
 		switch tool {
-		case "git.status", "git.diff", "git.log", "git.merge_base":
+		// The runner adds compact to every hosted worker at launch (resolve),
+		// and it runs at read-only authority: it cannot raise the level.
+		case "git.status", "git.diff", "git.log", "git.merge_base", "compact":
 		default:
 			if slices.Contains(PiWorkerWSTools, tool) || slices.Contains(PiMiniLeadWSTools, tool) {
 				mutable = true
@@ -404,6 +406,7 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 		if !c.turn {
 			c.applySettings()
 		}
+		c.rejectCutoverPending()
 		c.allowAgyBypassPending()
 		c.recheckExecApprovals()
 	}
@@ -417,6 +420,14 @@ func (c *conv) reconcileLeadPermission() {
 	// The loop owns permission state, but Send updates the shared record
 	// concurrently. Copy it under mu before passing it by value.
 	rec := c.record()
+	if mode := c.cutoverLaunchMode(); mode != "" {
+		// The cutover's mode, never the saved one, is what the process must
+		// run in; the record keeps the saved preference.
+		if !c.dirtyMode && c.activeMode != "" && c.activeMode != mode {
+			c.dirtyMode, c.reconcileMode = true, true
+		}
+		return
+	}
 	if !rec.Lead || nativePermissionMode(rec.Backend, PermissionReadOnly) == "" || c.dirtyMode {
 		return
 	}

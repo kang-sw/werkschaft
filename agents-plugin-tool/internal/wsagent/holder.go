@@ -145,6 +145,8 @@ type holderChild struct {
 	// ringPulse is the launch's wsholder.LaunchSpec.RingPulse: a content-free
 	// replacement emitted at a bounded rate for skipped output.
 	ringPulse string
+	// http2Capture is the spawn's wsholder.SpawnSpec.HTTP2Capture.
+	http2Capture *wsholder.HTTP2Capture
 
 	// Worker replay waits for record/descriptor ownership validation. The
 	// holder's replay reply precedes its events, so Scan can finish while
@@ -210,7 +212,7 @@ func (h *holderChild) start(p *streamProcess, cmd *exec.Cmd) error {
 			env[name] = value
 		}
 	}
-	st, err := h.host.Spawn(id, wsholder.SpawnSpec{Argv: append([]string{cmd.Path}, cmd.Args[1:]...), Cwd: cmd.Dir, Env: env, Mode: "pipe"})
+	st, err := h.host.Spawn(id, wsholder.SpawnSpec{Argv: append([]string{cmd.Path}, cmd.Args[1:]...), Cwd: cmd.Dir, Env: env, Mode: "pipe", HTTP2Capture: h.http2Capture})
 	if err != nil {
 		h.table.remove(id, h)
 		_ = h.host.Stop(id)
@@ -245,6 +247,36 @@ func (h *holderChild) auditAttach() {
 func (h *holderChild) name() string { return h.base }
 
 func (h *holderChild) write(line []byte) error { return h.host.Input(h.id, line, false) }
+
+// HolderCaptureNoter is the optional HolderHost operation that adds a line
+// to a holder's frame capture (ManagerHost; wsholder.Client.CaptureNote).
+type HolderCaptureNoter interface {
+	CaptureNote(id, text string) (bool, error)
+}
+
+func (h ManagerHost) CaptureNote(id, text string) (bool, error) {
+	c := h.Client(id)
+	if c == nil {
+		return false, wsholder.ErrDetached
+	}
+	return c.CaptureNote(text)
+}
+
+// noteCapture adds text to the holder's frame capture. The holder writes it
+// only when its child was spawned with a capture; a holder that predates
+// the operation answers unknown_op, which is no error here.
+func (h *holderChild) noteCapture(text string) error {
+	noter, ok := h.host.(HolderCaptureNoter)
+	if !ok {
+		return nil
+	}
+	_, err := noter.CaptureNote(h.id, text)
+	var opErr *wsholder.OpError
+	if errors.As(err, &opErr) && opErr.Code == "unknown_op" {
+		return nil
+	}
+	return err
+}
 
 // kill may run on the holder's reader goroutine, which a stop's answer
 // arrives on, so it does not wait.

@@ -25,6 +25,13 @@ type PlaybookMeta struct {
 	// Recognized here (parse-only) and surfaced as playbook.render's
 	// recommended tier. Empty when absent from frontmatter.
 	Tier string
+	// TierRole is the playbook's own tier-routing role node (frontmatter
+	// tier-role), so a daemon-agent render recommends <TierRole>:<Tier>.
+	// Empty when absent: the render recommends the bare Tier.
+	TierRole string
+	// TierParent is the role node's packaged default pointer (frontmatter
+	// tier-parent), such as implement:*. Meaningful only with TierRole.
+	TierParent string
 	// Includes is the ordered list of bare text-dep names to auto-include.
 	Includes []string
 	// Variables is the ordered list of declared substitution variable names.
@@ -108,10 +115,19 @@ func (e ErrPlaybookNotFound) Error() string {
 // ErrUndeclaredVar is returned by substituteVars when a variable is referenced
 // (either supplied in vars or found as {{.Name}} in the body) but is absent
 // from the playbook's declared variables list.
-type ErrUndeclaredVar struct{ Name string }
+type ErrUndeclaredVar struct {
+	Name string
+	// Hint, when set, is appended to the message: the caller-context check
+	// uses it to list the declared variables and say where per-run data goes.
+	Hint string
+}
 
 func (e ErrUndeclaredVar) Error() string {
-	return fmt.Sprintf("variable %q is not declared in playbook", e.Name)
+	msg := fmt.Sprintf("variable %q is not declared in playbook", e.Name)
+	if e.Hint != "" {
+		msg += "; " + e.Hint
+	}
+	return msg
 }
 
 // ErrUnprovidedVar is returned by substituteVars when a declared variable's

@@ -166,6 +166,10 @@ func TestHostedLiveOutputRateDefersSidecarToRecoveryFlush(t *testing.T) {
 	fastLive(t, 5*time.Millisecond)
 	host := &fakeLiveHost{serve: true}
 	f.server.live.host = host
+	// The session holds its rate log's append handle open by design; Windows
+	// cannot delete the file under it, so close the server before the temp
+	// directory is removed.
+	t.Cleanup(func() { f.server.Close() })
 	directIntake(t, f.server, f.keyA, map[string]any{"kind": "turn_start"})
 	slot := host.slot(t)
 	waitFor(t, "initial hosted snapshot", func() bool { return len(slot.published()) > 0 })

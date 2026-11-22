@@ -150,6 +150,13 @@ const (
 	// integer; global-only. Builtin default: 15.
 	ItemAgentChildWaitingDays = "agent.child_waiting_days"
 
+	// ItemAgentKeepAwakeDuringTurns makes the dashboard daemon hold one
+	// idle-system-sleep assertion while any hosted lead or spawned agent turn
+	// runs. Values: "true" or "false" (builtin default: false). Global-only:
+	// one daemon serves every project and harness, so the value must not
+	// depend on which project or package started it.
+	ItemAgentKeepAwakeDuringTurns = "agent.keep_awake_during_turns"
+
 	// ItemTicketAssigneeAware is the opt-in project gate for ticket assignee
 	// awareness. Values: "on" or "off" (builtin default: off). It is meant to be
 	// a shared, deterministic team decision, so a downstream project sets it in
@@ -205,6 +212,28 @@ const (
 	// Package manifests supply the defaults.
 	ItemAgyModelWaitTimeoutSeconds = "agy.model_wait_timeout_seconds"
 	ItemAgyModelWaitRetries        = "agy.model_wait_retries"
+	// ItemAgyStallLogCheck gates a hosted agy lead's silence cutoff on agy's
+	// own worker log showing no response headers for the current request;
+	// ItemAgyHTTP2FrameTrace starts agy with an HTTP/2 frame trace kept as a
+	// filtered capture file. Both are booleans read at process start.
+	ItemAgyStallLogCheck   = "agy.stall_log_check"
+	ItemAgyHTTP2FrameTrace = "agy.http2_frame_trace"
+
+	// ItemExecNativeToolRemoval is the per-harness rollout switch of the
+	// exec cutover: on (the default) launches a dashboard-hosted session
+	// with its native process tools removed in favour of the ws exec tools,
+	// off keeps them. Stored per harness bucket as
+	// ItemExecNativeToolRemoval+"."+<claude|codex|pi|agy|all>; a process
+	// reads it at its start.
+	ItemExecNativeToolRemoval = "exec.native_tool_removal"
+
+	// ItemClaudeExecCutoverEnabled is the Claude opt-in to the exec cutover
+	// (owner tier decision 2161=b): a hosted Claude process starts under the
+	// cutover only when it is true, on top of every other condition. Both
+	// Claude package manifests (ws and wsflow) default it to false, so the
+	// default Claude path never depends on the ws-mcp session route for
+	// commands, which a daemon older than 0.51 refuses.
+	ItemClaudeExecCutoverEnabled = "claude.exec_cutover_enabled"
 )
 
 func init() {
@@ -224,6 +253,12 @@ func init() {
 	for _, bucket := range []string{"claude", "codex", "pi", "agy", "all"} {
 		RegisterDefaultScope(ItemWorkflowTrackerEnabled+"."+bucket, ScopeGlobal)
 	}
+	// exec.native_tool_removal is a machine-wide rollout switch, global on
+	// the bare key and every bucket key.
+	RegisterDefaultScope(ItemExecNativeToolRemoval, ScopeGlobal)
+	for _, bucket := range []string{"claude", "codex", "pi", "agy", "all"} {
+		RegisterDefaultScope(ItemExecNativeToolRemoval+"."+bucket, ScopeGlobal)
+	}
 	// workflow.profile is the same cross-project habit, so it takes the same
 	// global default on the bare key and every bucket key.
 	RegisterDefaultScope(ItemWorkflowProfile, ScopeGlobal)
@@ -235,6 +270,7 @@ func init() {
 	RegisterGlobalOnly(ItemAgentGitSearchRoots)
 	RegisterGlobalOnly(ItemAgentTierAliases)
 	RegisterGlobalOnly(ItemAgentChildWaitingDays)
+	RegisterGlobalOnly(ItemAgentKeepAwakeDuringTurns)
 	// sage_review* keys default to project scope: they are project-level opt-ins
 	// that should persist across sessions for the same project.
 	RegisterDefaultScope(ItemSageReview, ScopeProject)

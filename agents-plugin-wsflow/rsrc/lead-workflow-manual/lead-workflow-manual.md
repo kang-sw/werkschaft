@@ -96,7 +96,8 @@ IDs, unique within the conversation so the user can cite any item:
 Pass the tier to `{{.McpNamespace}}/config.resolve_agent(tier)` rather than
 naming a model.
 
-- A rendered playbook → the tier its render recommends.
+- A rendered playbook → the tier its render recommends, passed as returned;
+  a role tier such as `ticket-worker:large` is valid there.
 - small: well-specified work with no design calls — mechanical edits,
   running and reading commands, lookups, straightforward investigation.
 - medium: ordinary engineering with a clear target and approach — a scoped
@@ -154,9 +155,9 @@ naming a model.
   2. Release it with `{{.McpNamespace}}/worktree.release(key: <that key>)`
      before anything checks the parent branch out elsewhere;
      `{{.McpNamespace}}/git.merge` into a branch still held there is refused.
-- Every `{{.McpNamespace}}/worktree.acquire` names a profile from the
-  resolved list below. Worker → `full`, unless a listed project profile
-  describes the work: the builtin `housekeeping` materializes only
+- Every checkout comes from `{{.McpNamespace}}/worktree.acquire`, which names a
+  profile from the resolved list below. Worker → `full`, unless a listed project
+  profile describes the work: the builtin `housekeeping` materializes only
   `ai-docs`, so a worker there cannot build. A pooled worktree is reused only
   by an acquire naming the same profile.
 - An acquire result carries `nudge` entries → relay each to the user.

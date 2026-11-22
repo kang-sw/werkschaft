@@ -200,6 +200,18 @@ backend + UI/tests, or cross-cutting refactor + performance constraints):
   `ready-for-check` build barrier, max 2 peer round-trips per topic before
   escalating to mini-lead, and mandatory summary of peer agreements in
   checkpoint reports.
+- **Batch-boundary compile by the sub-lead (owner memo, 2026-11-21 idea
+  triage, board topic `idea-workflow` item 6):** peers editing concurrently
+  over subagent mail never build on their own. At each batch boundary, the
+  sub-lead compiles and tests the shared tree once and routes the failures
+  back to the owning peers. This sharpens the build-barrier guardrail above:
+  the barrier is a named batch boundary declared by the sub-lead, not a
+  quiescence guess. That also bears on Open Question 3.
+- **Next pilot candidate (lead proposal, 2026-11-22):** run Prototype C on
+  the next medium-size ready ticket that has a natural design seam (for
+  example `261121-feat-ws-board-command-slots` Phase 1, once it is ready),
+  and compare it with the serial-leaf baseline on the metrics above. Owner
+  sign-off is needed before a pilot spends the extra tokens.
 - **Audit escalation option:** if playbook-level checkpoint summaries prove
   insufficient, evaluate a parent-scoped read-only peer-mail audit primitive
   in the daemon (T0 MCP addition) and dashboard visualization.

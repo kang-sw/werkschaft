@@ -14,7 +14,9 @@ func (s *Server) notifyScalarTune(key string, opts wsconfig.Options) {
 	if key == wsconfig.ItemWorkflowLang {
 		s.refreshAgentAmbient()
 	}
-	if !wsdashboard.IsCompanionConfigKey(key) {
+	// The daemon holds these global keys in memory; the notification only
+	// invalidates them, and the daemon rereads its own global file.
+	if !wsdashboard.IsDaemonGlobalConfigKey(key) {
 		return
 	}
 	path, err := wsconfig.GlobalPath(opts)
@@ -62,10 +64,11 @@ const (
 // registered key as ws-mcp's own, so it skips these.
 var manifestGlobalOnlyKeys = map[string]struct{}{
 	DashboardLANKey: {}, DashboardMailboxUndeliveredKey: {},
-	wsdashboard.CompanionModeKey: {}, wsdashboard.CompanionDirectorKey: {},
+	wsdashboard.CompanionEnabledKey: {}, wsdashboard.CompanionDirectorKey: {},
 	wsdashboard.CompanionPackKey: {}, wsdashboard.CompanionPresetKey: {},
 	wsauditstore.KeySessionCapMiB: {}, wsauditstore.KeyTotalCapMiB: {},
 	wsauditstore.KeyBodyCapKiB: {}, wsauditstore.KeyRetentionDays: {},
+	wsdashboard.CompanionAgentCooldownKey: {}, wsdashboard.CompanionAgentHourlyCapKey: {},
 }
 
 func init() {

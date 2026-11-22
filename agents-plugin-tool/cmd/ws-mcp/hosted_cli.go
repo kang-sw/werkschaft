@@ -162,6 +162,8 @@ func (c *hostedCLI) run() int {
 		}
 	case "tools", "call":
 		return c.mcpCommand(args[0], args[1:])
+	case "credential":
+		return c.credentialCommand(args[1:])
 	case "runtime":
 		if len(args) < 2 {
 			return c.usage()
@@ -256,7 +258,7 @@ func (c *hostedCLI) run() int {
 }
 
 func (c *hostedCLI) usage() int {
-	fmt.Fprintln(c.stderr, "usage: ws-mcp <version|doctor|runtime|serve|smoke|config|path|git|tickets|mailbox|dashboard|daemon-start>")
+	fmt.Fprintln(c.stderr, "usage: ws-mcp <version|doctor|runtime|serve|smoke|config|path|git|tickets|mailbox|credential|dashboard|daemon-start>")
 	return 2
 }
 

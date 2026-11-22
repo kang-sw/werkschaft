@@ -87,6 +87,13 @@
     throw failure;
   }
 
+  function personaOf(persona) {
+    if (!persona || typeof persona !== "object") return null;
+    const text = value => typeof value === "string" ? value : "";
+    const result = { name: text(persona.name), voice: text(persona.voice), quipLanguage: text(persona.quipLanguage) };
+    return result.name || result.voice ? result : null;
+  }
+
   function retryable(error) { return error.status === 409 || error.status === 404; }
   function query(selector, hints) {
     const params = new URLSearchParams();
@@ -134,8 +141,10 @@
             const defaultInfo = catalog.packs.find(pack => pack.id === "default");
             if (!info?.rev) throw Object.assign(new Error("Companion pack missing"), { status: 404 });
             candidate = matching(id, info.rev) || await decode(info, signal);
+            // The catalog carries the validated persona; the raw manifest is not trusted for it.
+            candidate.persona = personaOf(info.persona);
             const needsDefaults = id !== "default" && defaultInfo?.rev &&
-              ["drone", "mail", "grab", "prop-typing-desk"].some(prop => !own(candidate.manifest.props, prop));
+              ["drone", "mail", "prop-typing-desk"].some(prop => !own(candidate.manifest.props, prop));
             if (needsDefaults) defaults = matching("default", defaultInfo.rev) || await decode(defaultInfo, signal);
             if (gen !== loadGen) return;
             if (candidate === current && (defaults || null) === (shared || null)) return;

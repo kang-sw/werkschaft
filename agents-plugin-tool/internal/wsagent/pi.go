@@ -33,6 +33,13 @@ func (b PiBackend) registration() (string, BackendRegistration) {
 		NativeCompaction: PiCompaction(),
 		WorkerCapable:    true,
 		WorkerProfile:    AgentWorkerProfile(BackendPi),
+		// One-shot probe, 2026-11-22, pi 1.5.2: `pi -p --no-session
+		// --no-tools --no-extensions --no-mcp --no-skills
+		// --no-prompt-templates --no-context-files --no-themes
+		// --no-approve --offline [--model M] [--thinking E]`, prompt on
+		// stdin, answered on stdout (exit 0), no session file written;
+		// asked for its tools the model answered NONE.
+		OneShot: &OneShotSupport{Args: piOneShotArgs, Env: piEnv},
 		PlaybookTerminology: PlaybookTerminology{
 			ExploreAgent:  "an exploration agent",
 			SpawnIdiom:    "spawning a subagent",
@@ -57,6 +64,24 @@ func (b PiBackend) registration() (string, BackendRegistration) {
 			leadBuiltinProfile(LeadProfilePi, BackendPi, ""),
 		},
 	}
+}
+
+// piOneShotArgs is the isolated one-shot command line: no tools (built-in,
+// extension, or MCP), extensions, skills, prompt templates, context files,
+// project-local trust, session file, or startup network access.
+func piOneShotArgs(model, effort string) []string {
+	args := []string{
+		"-p", "--no-session", "--no-tools", "--no-extensions", "--no-mcp",
+		"--no-skills", "--no-prompt-templates", "--no-context-files",
+		"--no-themes", "--no-approve", "--offline",
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--thinking", effort)
+	}
+	return args
 }
 
 // piEfforts are pi's thinking levels (--thinking), lowest first.
@@ -218,6 +243,10 @@ func piToolSurface(spec StartSpec) piSurface {
 		}
 	}
 	for _, entry := range spec.Profile.Tools {
+		if spec.ExecCutover && strings.EqualFold(ToolBase(entry), piShellTool) {
+			// The exec cutover replaces the shell with the ws exec tools.
+			continue
+		}
 		add(ToolBase(entry))
 	}
 	if spec.WSMCP != nil {
@@ -298,6 +327,21 @@ func PiVersion(ctx context.Context) (string, error) {
 		cache.save(piProbeNow(), version)
 	}
 	return version, err
+}
+
+// PiVersionCached is PiVersion's answer from its on-disk probe record alone:
+// it looks pi up on PATH and stats and reads files, but never runs pi. ok is
+// false when no fresh record matches the installed pi.
+func PiVersionCached() (version string, ok bool) {
+	command, pre, err := harnessCommand("", "pi")
+	if err != nil {
+		return "", false
+	}
+	record, ok := newPiProbeCache("version", command, pre, piEnv(environ())).load(piProbeNow())
+	if !ok {
+		return "", false
+	}
+	return record.version()
 }
 
 func parsePiVersion(out []byte) (string, error) {

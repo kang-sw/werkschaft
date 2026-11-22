@@ -110,8 +110,9 @@ verdict line. The worker implements and verifies; you edit no source.
   with `proposed_resolution:`, the worker's tier, and `branch`; `done` →
   resume worker, `blocked` → user.
 - `blocked` + `next: vouch` → judge branch ownership from cross-ticket
-  context or a bounded explore; if it belongs to this ticket, resume with a
-  vouch matching branch and ticket, else leave stopped.
+  context or a bounded explore; if it belongs to this ticket, resume with
+  `vouch: policy.branch.identity_vouch {branch: <branch>, ticket_stem: <stem>}`
+  matching branch and ticket, else leave stopped.
 - `blocked` + `next: stop` → report `blocker` and `tell_user` to the user.
 
 Resume through the host's continuation mechanism; if none or the agent is

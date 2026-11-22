@@ -95,8 +95,9 @@ func TestHostedLeadSpawnRowsSurviveDaemonReplacement(t *testing.T) {
 	}
 	waitRows(wslive.StatusRunning, wslive.StatusRunning)
 	// Native feed duplicates preserve native activity, not a second row.
+	nativeKey := h.record(child.ID).WSKey // read on the test goroutine: h.record can t.Fatal
 	h.runner.conv(lead.ID).do(func() {
-		h.runner.conv(lead.ID).apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native-worker", SessionKey: h.record(child.ID).WSKey, Caption: strPtr("native activity")})
+		h.runner.conv(lead.ID).apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native-worker", SessionKey: nativeKey, Caption: strPtr("native activity")})
 	})
 	waitRows(wslive.StatusRunning, wslive.StatusRunning)
 	if a := rows()["pi:"+child.ID]; a.Caption != "native activity" {

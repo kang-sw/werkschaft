@@ -242,6 +242,19 @@ func resolveHarnessBucketed(resolver *wsconfig.Resolver, sessionKey, key, harnes
 	return rv, key, nil
 }
 
+// keepAwakeDuringTurnsKey types agent.keep_awake_during_turns as a boolean.
+var keepAwakeDuringTurnsKey = declaredConfigKey{
+	Key:          wsconfig.ItemAgentKeepAwakeDuringTurns,
+	Type:         declaredTypeBoolean,
+	Description:  keepAwakeDuringTurnsHelp,
+	DefaultScope: wsconfig.ScopeGlobal,
+	Default:      "false",
+	DefaultValue: false,
+}
+
+// keepAwakeDuringTurnsHelp is the knob's help text in config.list.
+const keepAwakeDuringTurnsHelp = "Keep this computer from idle system sleep while any hosted lead or spawned agent turn runs (builtin false). The dashboard daemon holds one idle-sleep assertion from the first live turn to the last, on macOS (the system caffeinate helper) and Windows; elsewhere it has no effect. Display sleep and sleep you ask for, including closing a laptop lid, stay under the operating system's control. Idle sessions, queued messages and background jobs outside a turn do not count. Applies at once to turns already running. Global-only."
+
 // configRegistry holds the static per-key entries. The dynamic prompt.*
 // family is not represented here — it is generated per discovered override
 // point by promptKnobEntry at catalog-build time (see buildTuningCatalog).
@@ -333,6 +346,36 @@ var configRegistry = []configKeyEntry{
 		ResolverBacked:        true,
 	},
 	{
+		Key:        wsconfig.ItemExecNativeToolRemoval,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{
+			{
+				Name:        "harness",
+				Description: "Harness bucket the value applies to. When omitted, defaults to the current session's detected harness. Use * explicitly for every harness (all).",
+				Enum:        promptHarnessEnum,
+			},
+			{
+				Name:        "scope",
+				Description: "Storage scope. When omitted the write lands in the item's declared default scope (global).",
+				Enum:        wsconfig.ScopeSchemaEnum(),
+			},
+		},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "on removes a dashboard-hosted session's native shell and background process tools at its next process start, in favour of the ws exec tools; off keeps them. Omit when reset is true.",
+			Enum:        onOffEnum,
+		}},
+		HarnessApplicable: true,
+		// Agentless ws-mcp has no exec tools, so the switch has nothing to
+		// act on there.
+		NoAgentVisible: false,
+		// A lead-only knob: it changes what every hosted session of the
+		// harness can run, so a write needs a lead session_key.
+		RequiresLeadAuthority: true,
+		ResolverBacked:        true,
+	},
+	{
 		Key:        wsconfig.ItemWorkflowProfile,
 		WriterTool: "config.tune",
 		ResetTool:  "config.tune",
@@ -408,6 +451,29 @@ var configRegistry = []configKeyEntry{
 		},
 	},
 	{
+		// One structured (JSON object) value in the global file's
+		// structured_overrides member, written through config.tune's
+		// structured path. Global-only: one graph keeps validation and reset
+		// atomic across every worktree that references a node.
+		Key:        wsconfig.ItemAgentTierRouting,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		SelectorFields: []tuningField{{
+			Name:        "scope",
+			Description: "Storage scope. Only global; omit it.",
+			Enum:        []string{string(wsconfig.ScopeGlobal)},
+		}},
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "The whole routing object (see value_schema): {\"nodes\": {<node>: {\"*\" or small|medium|large|xlarge: <target>}}, \"bundles\": {<name>: {harness, model, effort}}}. A target is <node>:<size|*>, <harness>.<size|*>, or a bundle name. It replaces the stored routing as a whole; omit when reset is true.",
+			Required:    true,
+		}},
+		NoAgentVisible:        true,
+		RequiresLeadAuthority: wsconfig.GlobalOnly(wsconfig.ItemAgentTierRouting),
+		ResolverBacked:        true,
+		Structured:            true,
+	},
+	{
 		Key:        wsconfig.ItemAgentChildWaitingDays,
 		WriterTool: "config.tune",
 		ResetTool:  "config.tune",
@@ -425,6 +491,23 @@ var configRegistry = []configKeyEntry{
 			}
 			return strconv.Itoa(n), nil
 		},
+	},
+	{
+		// A typed boolean stored as "true"/"false" in the global overrides
+		// map; Declared gives it the boolean domain config.tune and the
+		// settings toggle share. Global-only, which also makes it lead-only.
+		Key:        wsconfig.ItemAgentKeepAwakeDuringTurns,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "true or false. Omit when reset is true.",
+			Enum:        []string{"true", "false"},
+		}},
+		NoAgentVisible:        true,
+		RequiresLeadAuthority: wsconfig.GlobalOnly(wsconfig.ItemAgentKeepAwakeDuringTurns),
+		ResolverBacked:        true,
+		Declared:              &keepAwakeDuringTurnsKey,
 	},
 	{
 		Key:        wsconfig.ItemSageReview,

@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -30,15 +31,22 @@ type agyFake struct {
 	// model is the session's model: a Claude model offers no thought
 	// level, as in agy.
 	model string
+	// openMode, when set, is the mode a session opens in (a resumed
+	// session's last one); native default otherwise.
+	openMode string
 }
 
 func newAgyLeadHarness(t *testing.T) (*leadHarness, *agyFake) {
 	t.Helper()
 	h := newLeadHarness(t)
-	h.opts.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: "/opt/harness/agy"}, LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes, Catalog: AgyCatalog()}
+	// The shipped cross-harness refusal: every agy lead test runs under it
+	// (a fixture that runs agy workers adds the worker role).
+	h.opts.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: "/opt/harness/agy"}, LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes, Catalog: AgyCatalog(), crossHarnessRefusal: agyCrossHarnessRefusal}
 	h.opts.WSMCP = func(root string) (MCPCommand, error) {
 		return MCPCommand{Command: "python3", Env: map[string]string{"WS_MCP_PROJECT_ROOT": root}}, nil
 	}
+	// The stall log check never reads the real agy log directory.
+	h.opts.AgyLogDir = t.TempDir()
 	f := &agyFake{h: h}
 	h.holders.acp = f.answer
 	return h, f
@@ -115,7 +123,10 @@ func (f *agyFake) answer(_, method string, params json.RawMessage) (string, stri
 		if sid == "" {
 			sid = "agy-s1"
 		}
-		return `{"sessionId":"` + sid + `","modes":{"currentModeId":"default","availableModes":[{"id":"default"},{"id":"accept-edits"},{"id":"auto"},{"id":"plan"}]},"configOptions":` + f.config("", "") + `}`, "", true
+		f.mu.Lock()
+		openMode := cmp.Or(f.openMode, "default")
+		f.mu.Unlock()
+		return `{"sessionId":"` + sid + `","modes":{"currentModeId":"` + openMode + `","availableModes":[{"id":"default"},{"id":"accept-edits"},{"id":"auto"},{"id":"plan"}]},"configOptions":` + f.config("", "") + `}`, "", true
 	case "session/set_config_option":
 		var p struct {
 			ConfigID string `json:"configId"`
@@ -308,7 +319,7 @@ func TestAgyLeadOverACP(t *testing.T) {
 	h.holders.out(holder, `{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"`+ids[1]+`"}`)
 	h.idle(id)
 	st, err := h.runner.HandOff(id)
-	if err != nil || st.Status != StatusHandedOff || st.ResumeCommand != "cd "+shellQuote(h.root)+" && agy --conversation agy-s1" {
+	if err != nil || st.Status != StatusHandedOff || st.ResumeCommand != resumeLine(h.root, "agy", "--conversation", "agy-s1") {
 		t.Fatalf("agy handoff = %+v, %v", st, err)
 	}
 }
@@ -444,14 +455,31 @@ func TestAgyLeadRejoinOfMovedRouteRestartsWithSessionResume(t *testing.T) {
 // request appends its key sentence and the manual the daemon rendered for
 // agy, its directory, and its key to agy's system prompt
 // (_meta.antigravity.systemPrompt.append); with no manual it appends the
-// key sentence and the call to fetch it.
+// key sentence and the call to fetch it. A lead under the exec cutover
+// then appends the exec instruction; one outside it (the rollout switch
+// off, an unverified version) keeps the background-command rule its
+// run_command still needs.
 func TestAgyLeadPromptCarriesTheWorkflowManual(t *testing.T) {
-	for name, manual := range map[string]*leadManualRender{
-		"manual":    {text: "# Workflow Manual\n\n## Session Key\nrendered"},
-		"no manual": nil,
+	for name, tc := range map[string]struct {
+		manual  *leadManualRender
+		cutover bool
+	}{
+		"manual":             {manual: &leadManualRender{text: "# Workflow Manual\n\n## Session Key\nrendered"}},
+		"no manual":          {},
+		"manual, cutover":    {manual: &leadManualRender{text: "# Workflow Manual\n\n## Session Key\nrendered"}, cutover: true},
+		"no manual, cutover": {cutover: true},
 	} {
+		manual := tc.manual
 		t.Run(name, func(t *testing.T) {
 			h, f := newAgyLeadHarness(t)
+			if tc.cutover {
+				agy := h.opts.Backends[BackendAgy]
+				_, real := AgyBackend{}.registration()
+				agy.ExecCutover = real.ExecCutover
+				h.opts.Backends[BackendAgy] = agy
+				seedHarnessVersions(t, h, map[string]string{BackendAgy: real.ExecCutover.Since})
+				h.execJobs = newFakeExecJobs()
+			}
 			if manual != nil {
 				h.opts.LeadManual = manual.render
 			}
@@ -467,16 +495,26 @@ func TestAgyLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 				t.Fatalf("one session request: %d", len(news))
 			}
 			text, _ := acpField(t, news[0], "_meta", "antigravity", "systemPrompt", "append").(string)
-			want := strings.TrimRight(leadKeySentence(key)+leadManualOnly, "\n") + "\n\n" + agyLeadBgShellRule + "\n"
+			base := leadKeySentence(key) + leadManualOnly
 			if manual != nil {
-				want = leadKeySentence(key) + "The workflow manual below is binding and stays in this prompt across compaction. " +
+				base = leadKeySentence(key) + "The workflow manual below is binding and stays in this prompt across compaction. " +
 					"Use the session state delivered with your first turn or in a restore bundle. For fresh session state, call the workflow_state tool with this key.\n\n" +
-					manual.text + "\n\n" + agyLeadBgShellRule + "\n"
+					manual.text
 				if calls := manual.list(); len(calls) != 1 || calls[0][0] != BackendAgy || !sameDir(calls[0][1], h.root) || calls[0][2] != key {
 					t.Fatalf("the manual renders once, for agy, the lead's directory, and its key: %v", calls)
 				}
 			}
-			if text != want {
+			if tc.cutover == strings.Contains(text, "Never end your turn") {
+				t.Fatalf("cutover %v, background-command rule present %v: %q", tc.cutover, !tc.cutover, text)
+			}
+			got, want := strings.TrimRight(text, "\n"), strings.TrimRight(base, "\n")+"\n\n"+agyBgShellRule
+			if tc.cutover {
+				want = strings.TrimRight(base, "\n") + "\n\n" + agyExecCutoverInstruction
+			}
+			if !strings.HasSuffix(text, "\n") {
+				t.Fatalf("the appended rule ends the prompt with a newline: %q", text)
+			}
+			if got != want {
 				t.Fatalf("session/new appends %q, want %q", text, want)
 			}
 		})
@@ -541,9 +579,16 @@ func TestAgyWorkerProfile(t *testing.T) {
 		t.Fatalf("worker profile: %+v, %v", p, err)
 	}
 	text, ok := p.BuiltinInstructions()
-	for _, want := range []string{"agent.spawn", "mailbox.send", "Do not use", "invoke_subagent", "define_subagent", "manage_subagents", "Never end your turn", "run_command", "manage_task"} {
+	for _, want := range []string{"agent.spawn", "mailbox.send", "Do not use", "invoke_subagent", "define_subagent", "manage_subagents"} {
 		if !ok || !strings.Contains(text, want) {
 			t.Errorf("worker instructions lack %q: %q", want, text)
+		}
+	}
+	// The background-command rule went with the exec cutover: a cutover
+	// worker gets the exec instruction in its session request instead.
+	for _, gone := range []string{"Never end your turn", "run_command", "manage_task"} {
+		if strings.Contains(text, gone) {
+			t.Errorf("worker instructions still carry %q: %q", gone, text)
 		}
 	}
 	if _, err := (AgyBackend{}).Start(context.Background(), StartSpec{}); err == nil || !strings.Contains(err.Error(), "HTTP MCP route") {
@@ -832,14 +877,20 @@ func TestAgyWorkerReattachWaitsForPromptResponse(t *testing.T) {
 			atSend := observeAgyWorkerPromptStarts(h)
 			id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
 			before := h.record(id)
+			if atWrite := <-atSend; atWrite.TurnOpen || atWrite.TurnStartedAt != 0 {
+				t.Fatalf("first prompt boundary recorded before the holder accepted it: open=%v time=%d", atWrite.TurnOpen, atWrite.TurnStartedAt)
+			}
+			if !before.TurnOpen || before.TurnStartedAt == 0 || len(before.Queued) != 0 {
+				t.Fatalf("first prompt after acceptance: open=%v time=%d queued=%+v", before.TurnOpen, before.TurnStartedAt, before.Queued)
+			}
 			h.holders.out(holder,
 				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"t1","name":"read_file","status":"in_progress"}}}`,
 				`{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}}`,
 			)
 			eventually(t, "the first tool call completed", func() bool { return h.record(id).HolderSeq >= before.HolderSeq+2 })
 			rejoinAgyWorker(t, h, id)
-			if start := <-atSend; !start.TurnOpen || start.TurnStartedAt == 0 || start.TurnStartedAt != h.record(id).TurnStartedAt || start.TurnStartSeq != h.record(id).TurnStartSeq {
-				t.Fatalf("first prompt boundary at send: open=%v time=%d seq=%d", start.TurnOpen, start.TurnStartedAt, start.TurnStartSeq)
+			if rec := h.record(id); !rec.TurnOpen || rec.TurnStartedAt != before.TurnStartedAt || rec.TurnStartSeq != before.TurnStartSeq {
+				t.Fatalf("first prompt boundary after rejoin: open=%v time=%d seq=%d", rec.TurnOpen, rec.TurnStartedAt, rec.TurnStartSeq)
 			}
 
 			if tc.usage {
@@ -911,6 +962,66 @@ func rejoinAgyWorker(t *testing.T, h *leadHarness, id string) {
 	})
 }
 
+// The record names an agy worker's prompt only once the holder took it. A
+// daemon that dies at the holder write leaves the input queued and no prompt
+// open: its successor submits the input once and does not wait for a response
+// to a prompt that never reached the harness. A daemon that dies right after
+// the holder took it leaves no input to submit again.
+func TestAgyWorkerPromptRecordedOnlyOnceAccepted(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	atSend := observeAgyWorkerPromptStarts(h)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	atWrite := <-atSend
+	if atWrite.TurnOpen || atWrite.TurnStartedAt != 0 || len(atWrite.Queued) != 1 || atWrite.Queued[0].Text == "" {
+		t.Fatalf("record at the holder write: open=%v time=%d queued=%+v", atWrite.TurnOpen, atWrite.TurnStartedAt, atWrite.Queued)
+	}
+	accepted := h.record(id)
+	if !accepted.TurnOpen || accepted.TurnStartedAt == 0 || len(accepted.Queued) != 0 {
+		t.Fatalf("record after acceptance: open=%v time=%d queued=%+v", accepted.TurnOpen, accepted.TurnStartedAt, accepted.Queued)
+	}
+	replace := func(rec Record) {
+		t.Helper()
+		h.runner.Close()
+		if err := WriteRecordForTest(h.dir, rec); err != nil {
+			t.Fatal(err)
+		}
+		h.holders.restart()
+		h.startAt("http://127.0.0.1:1")
+		eventually(t, "the worker rejoined its holder", func() bool {
+			c := h.runner.conv(id)
+			if c == nil {
+				return false
+			}
+			ready := false
+			c.do(func() { ready = c.proc != nil && !c.replaying })
+			return ready
+		})
+		h.quiesce(id)
+	}
+
+	// The daemon died right after the holder took the prompt.
+	replace(accepted)
+	if n, rec := len(agyPromptIDs(h, holder)), h.record(id); n != 1 || !rec.TurnOpen || len(rec.Queued) != 0 {
+		t.Fatalf("after a replacement past acceptance: prompts=%d open=%v queued=%+v", n, rec.TurnOpen, rec.Queued)
+	}
+
+	// The daemon died before the holder took the prompt.
+	replace(atWrite)
+	eventually(t, "the queued input submitted once more", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
+	eventually(t, "the resubmitted prompt's record", func() bool {
+		rec := h.record(id)
+		return rec.TurnOpen && rec.TurnStartedAt != 0 && len(rec.Queued) == 0
+	})
+	prompt := agyPromptIDs(h, holder)[1]
+	h.holders.out(holder,
+		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"resubmitted result"}}}}`,
+		jsonLine(map[string]any{"jsonrpc": "2.0", "id": prompt, "result": map[string]any{"stopReason": "end_turn"}}))
+	eventually(t, "one worker result", func() bool { return len(got.list()) == 1 })
+	if result := got.list()[0].Result; result.Status != TurnDone || result.Message != "resubmitted result" {
+		t.Fatalf("resubmitted result: %+v", result)
+	}
+}
+
 func TestAgyWorkerCompactionPromptSurvivesReattach(t *testing.T) {
 	const quiet = 40 * time.Millisecond
 	restoreUsage := agyWakeUsageQuiet
@@ -946,12 +1057,15 @@ func TestAgyWorkerCompactionPromptSurvivesReattach(t *testing.T) {
 			eventually(t, "the original result", func() bool { return len(got.list()) == 1 })
 			c := h.runner.conv(id)
 			c.do(func() { tc.prepare(c) })
-			var start Record
 			select {
-			case start = <-atSend:
+			case atWrite := <-atSend:
+				if atWrite.TurnStartedAt != 0 {
+					t.Fatalf("compaction boundary recorded before the holder accepted it: open=%v time=%d", atWrite.TurnOpen, atWrite.TurnStartedAt)
+				}
 			default:
 				t.Fatal("the standalone compaction prompt did not reach the holder")
 			}
+			start := h.record(id)
 
 			rejoinAgyWorker(t, h, id)
 			h.holders.out(holder,
@@ -967,7 +1081,7 @@ func TestAgyWorkerCompactionPromptSurvivesReattach(t *testing.T) {
 				t.Fatalf("compaction prompt settled during quiet: reports=%d status=%s", count, status)
 			}
 			if rec := h.record(id); start.TurnOpen != tc.reportable || start.TurnStartedAt == 0 || rec.TurnStartedAt != start.TurnStartedAt || rec.TurnStartSeq != start.TurnStartSeq {
-				t.Fatalf("compaction boundary at send: open=%v time=%d seq=%d", start.TurnOpen, start.TurnStartedAt, start.TurnStartSeq)
+				t.Fatalf("compaction boundary after acceptance: open=%v time=%d seq=%d", start.TurnOpen, start.TurnStartedAt, start.TurnStartSeq)
 			}
 			prompt := agyPromptIDs(h, holder)[1]
 			h.holders.out(holder,

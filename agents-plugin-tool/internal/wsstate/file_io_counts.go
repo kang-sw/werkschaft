@@ -16,9 +16,18 @@ import (
 // kernel calls hidden inside os, directory-entry Info, or third-party flock.
 var fileIOSites sync.Map // operation + source location -> *atomic.Int64
 
-func countFileIO(operation string) {
-	_, file, line, _ := runtime.Caller(2)
-	site := fmt.Sprintf("file_io_site:%s/%s:%d:%s", filepath.Base(filepath.Dir(file)), filepath.Base(file), line, operation)
+// countFileIO counts operation at the site that called its caller: the
+// source line calling a wrapper such as Stat or ReadFile.
+func countFileIO(operation string) { countFileIOAt(fileIOSite(3, operation)) }
+
+// fileIOSite names the counter site of operation at the caller skip frames
+// above fileIOSite itself.
+func fileIOSite(skip int, operation string) string {
+	_, file, line, _ := runtime.Caller(skip)
+	return fmt.Sprintf("file_io_site:%s/%s:%d:%s", filepath.Base(filepath.Dir(file)), filepath.Base(file), line, operation)
+}
+
+func countFileIOAt(site string) {
 	v, ok := fileIOSites.Load(site)
 	if !ok {
 		v, _ = fileIOSites.LoadOrStore(site, new(atomic.Int64))

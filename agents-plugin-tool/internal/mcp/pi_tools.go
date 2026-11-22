@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
@@ -76,15 +77,24 @@ const piHarness = wsagent.PiTierHarness
 
 // piProbe runs `pi --version` (a test seam); piVersion caches its answer
 // for the process: every server the daemon hosts shares one probe.
+// piProbeRecord reads the probe's on-disk record without running pi (a test
+// seam).
 var (
-	piProbe   = wsagent.PiVersion
-	piVersion = new(piVersionCache)
+	piProbe       = wsagent.PiVersion
+	piProbeRecord = wsagent.PiVersionCached
+	piVersion     = new(piVersionCache)
 )
 
 type piVersionCache struct {
 	once    sync.Once
+	done    atomic.Bool // set once version and err hold the probe's answer
 	version string
 	err     error
+	// recordOnce reads the probe's on-disk record at most once per process
+	// for PiReadyKnown; record and recorded hold what it found.
+	recordOnce sync.Once
+	record     string
+	recorded   bool
 }
 
 // installedPiVersion is the installed Pi's version, probed once per process.
@@ -94,6 +104,7 @@ func installedPiVersion() (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		cache.version, cache.err = piProbe(ctx)
+		cache.done.Store(true)
 	})
 	return cache.version, cache.err
 }
@@ -522,7 +533,26 @@ func piToolsLine(r wslive.RingRecord) string {
 // least piMinMajor.piMinMinor, probed once per process as for a lead's
 // pi.* tools.
 func PiReady() error {
-	version, err := installedPiVersion()
+	return piReadyVersion(installedPiVersion())
+}
+
+// PiReadyKnown is the daemon runner's Options.ChildCheckKnown: PiReady's
+// answer without running pi. It answers from the process's probe once that
+// ran, else from a fresh on-disk probe record read once per process (as the
+// probe itself runs once); known is false otherwise.
+func PiReadyKnown() (known bool, err error) {
+	cache := piVersion
+	if cache.done.Load() {
+		return true, piReadyVersion(cache.version, cache.err)
+	}
+	cache.recordOnce.Do(func() { cache.record, cache.recorded = piProbeRecord() })
+	if !cache.recorded {
+		return false, nil
+	}
+	return true, piReadyVersion(cache.record, nil)
+}
+
+func piReadyVersion(version string, err error) error {
 	if err != nil {
 		return fmt.Errorf("no usable pi: %v", err)
 	}

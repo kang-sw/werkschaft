@@ -10,7 +10,10 @@
 //     a new daemon, and a pid recorded in that file is never used to signal or
 //     kill anything.
 //   - Only a daemon process takes the lock. ws-mcp never probes it, so a probe
-//     can never make a starting daemon believe another one holds it.
+//     can never make a starting daemon believe another one holds it. The one
+//     exception is an offline credential change (ApplyCredentialChange),
+//     which holds the lock for the moment of its file write, so no daemon
+//     starts mid-write; a starting daemon outwaits it within its lock wait.
 //   - A ws-mcp that cannot reach the recorded daemon starts a new one; when the
 //     old holder is alive but hung, the new daemon finds the lock held, waits
 //     its bounded lock wait, and exits. Nothing is terminated.

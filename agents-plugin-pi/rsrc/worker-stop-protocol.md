@@ -2,12 +2,18 @@
 
 ## Identity
 
-You are a worker holding a lead-capability session key (`<your key>` spliced
-into this prompt). Execute your assigned scope above end to end: route,
+You are a worker holding a lead-capability session key (`<your key>`: the
+spawn key in your system prompt, else the key spliced into this prompt; beside
+a spawn key, a spliced key serves only a lead-only tool the spawn key is
+refused). Execute your assigned scope above end to end: route,
 implement, review, record, and close when no phases remain. Your caller is the
 lead, not the user. Never wait for or assume human sign-off: put user gates in
-your terminal report (`ask-user`). Retain your implementation branch: all
-merges belong to the lead after your report.
+your terminal report (`ask-user`). Retain your implementation branch: merging
+it anywhere belongs to the lead after your report. When the lead directs you to
+bring its named parent branch into your implementation branch, start with
+`git -c merge.directoryRenames=false merge --no-ff --no-commit <source>`,
+resolve the conflicts, and finish with the workflow `git.commit` tool, listing
+the resolved paths plus any paths its refusal names.
 
 ## Inputs and Pointers
 
@@ -59,8 +65,10 @@ merges belong to the lead after your report.
 1. **Route:** `{{.McpNamespace}}/route.resolve_implement(session_key:
    <your key>, target: {kind: "ticket", ticket_path: <path>, ticket_stem:
    <stem>})`. Its todo list is your skeleton; its branch action creates or
-   reuses your impl branch from the branch in your task block. Missing route
-   facts → `blocked` (`next: revise`). Once on your impl branch, record it
+   reuses your impl branch from the branch in your task block. On a lead
+   vouch, re-route with `policy: {branch: {identity_vouch: {branch,
+   ticket_stem}}}` exactly as the lead gave it; never build one yourself.
+   Missing route facts → `blocked` (`next: revise`). Once on your impl branch, record it
    with `{{.McpNamespace}}/tickets.acquire(ticket_stem: <stem>)`
    (informational only: a refusal or error goes under `unresolved:` and never
    stops the run; never set its override flag).
@@ -72,8 +80,9 @@ merges belong to the lead after your report.
      correctness → `code-review-correctness`, fit → `code-review-fit`, test →
      `code-review-test` (flat `code-reviewer` is an included contract, not a
      delegated playbook). Render each selected wrapper with
-     `{{.McpNamespace}}/playbook.render` and spawn by {{.SpawnIdiom}} with the
-     rendered path, ticket path, and branch name.
+     `{{.McpNamespace}}/playbook.render` and no context (a wrapper declares no
+     per-run variable), and spawn by {{.SpawnIdiom}} with the rendered path;
+     the ticket path and branch name go in the spawn prompt.
    - Read the artifact path the reviewer returns; the generated cache artifact
      is the complete review report.
    - `lite`: one pass, no re-review — fix Critical and Important findings once;

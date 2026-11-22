@@ -433,6 +433,60 @@ type ChoicesAnswer struct {
 	Harnesses []SupportHarness `json:"harnesses"`
 	// Last is the selection a new conversation starts with.
 	Last Selection `json:"last"`
+	// Tiers are the agent.tier_routing named bundles the new-session dialog
+	// offers as presets, resolved by the daemon (an exact legacy alias of
+	// the same name wins, as it does for agent.spawn). Selecting one only
+	// fills the dialog's harness, model, and effort; the launch still sends
+	// those concrete fields. TiersError says why none can be listed.
+	Tiers      []SupportTier `json:"tiers"`
+	TiersError string        `json:"tiers_error,omitempty"`
+}
+
+// SupportTier is one named bundle: its trace and the binding it resolves
+// to, or why it does not resolve. Availability is the harness's own.
+type SupportTier struct {
+	Name    string `json:"name"`
+	Trace   string `json:"trace,omitempty"`
+	Harness string `json:"harness,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// namedTiers resolves every named bundle of the global routing graph.
+func (s *Support) namedTiers() ([]SupportTier, string) {
+	out := []SupportTier{}
+	caller := AgentCaller{Config: s.opts.Config}
+	graph, err := s.opts.Runner.tierGraph(caller)
+	if err != nil {
+		return out, err.Error()
+	}
+	if err := graph.Err(); err != nil {
+		return out, err.Error()
+	}
+	bundles := graph.Bundles()
+	names := make([]string, 0, len(bundles))
+	for name := range bundles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		tier := SupportTier{Name: name}
+		res, err := graph.Resolve(name, "")
+		if err != nil {
+			tier.Error = err.Error()
+			out = append(out, tier)
+			continue
+		}
+		tier.Trace, tier.Harness = res.Trace(), res.Harness
+		if binding, err := RoutedTierBinding(caller.Config, res); err != nil {
+			tier.Error = err.Error()
+		} else {
+			tier.Model, tier.Effort = binding.Model, binding.Effort
+		}
+		out = append(out, tier)
+	}
+	return out, ""
 }
 
 func (s *Support) leadPermissionLevels(backend string) []PermissionLevel {
@@ -468,7 +522,8 @@ func (s *Support) Choices(ctx context.Context) ChoicesAnswer {
 		hs = append(hs, h)
 	}
 	s.listChoices(ctx, hs)
-	return ChoicesAnswer{Harnesses: hs, Last: s.selection(hs)}
+	tiers, tiersErr := s.namedTiers()
+	return ChoicesAnswer{Harnesses: hs, Last: s.selection(hs), Tiers: tiers, TiersError: tiersErr}
 }
 
 // Store reads the store's conversation and the current selection, without

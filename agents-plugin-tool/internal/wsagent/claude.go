@@ -36,6 +36,18 @@ func (b ClaudeBackend) registration() (string, BackendRegistration) {
 		WorkerCapable:    true,
 		WorkerProfile:    AgentWorkerProfile(BackendClaude),
 		WorkerHTTPMCP:    true,
+		// --disallowedTools claudeNativeProcessTools, verified on 2.1.330
+		// (testdata/claude-2.1.330-native-process-tools.jsonl).
+		ExecCutover: &ExecCutoverSupport{Since: "2.1.330"},
+		// One-shot probe, 2026-11-22, claude 2.1.330: `claude -p
+		// --output-format text --setting-sources "" --strict-mcp-config
+		// --tools "" --permission-mode dontAsk --no-session-persistence
+		// --disable-slash-commands --model haiku --effort low`, prompt on
+		// stdin, answered on stdout (exit 0). --no-session-persistence
+		// writes no transcript under ~/.claude/projects (the same call
+		// without it writes one); it still creates an empty auto-memory
+		// directory there. Every flag is listed by `claude --help`.
+		OneShot: &OneShotSupport{Args: claudeOneShotArgs, Env: claudeEnv},
 		PlaybookTerminology: PlaybookTerminology{
 			ExploreAgent:  "the Explore agent",
 			ContinueIdiom: "SendMessage(to: <agentId>)",
@@ -160,6 +172,14 @@ func claudeLeadArgs(spec StartSpec) ([]string, error) {
 	return append(args, "--allowedTools", "mcp__"+claudeNamePart(ReservedMCPServer)), nil
 }
 
+// claudeNativeProcessTools are the built-in process tools the exec cutover
+// removes: the shell (Bash, and PowerShell where Claude offers it), the
+// background-shell monitor and task stop, and the older background-shell
+// names (BashOutput, KillShell). Claude 2.1.330 accepts the names it does
+// not have and, without Bash, lists native Glob and Grep instead
+// (testdata/claude-2.1.330-native-process-tools.jsonl).
+var claudeNativeProcessTools = []string{"Bash", "PowerShell", "Monitor", "TaskStop", "BashOutput", "KillShell"}
+
 // claudeRemovedTools are the built-in tools spec's launch removes with
 // --disallowedTools, over a worker's --tools and a lead's own settings.
 // The variadic option receives the list as one comma-separated value.
@@ -168,12 +188,38 @@ func claudeRemovedTools(spec StartSpec) []string {
 	if spec.RemoveSubagents {
 		removed = append(removed, claudeSubagentTool, claudeInitToolNames[claudeSubagentTool])
 	}
+	if spec.ExecCutover {
+		removed = append(removed, claudeNativeProcessTools...)
+	}
 	if spec.Lead == nil && !spec.Profile.Skills {
 		// The slash-command switch disables native /compact. Deny model
 		// invocation through Skill while preserving typed local commands.
 		removed = append(removed, "Skill")
 	}
 	return removed
+}
+
+// claudeOneShotArgs is the isolated one-shot command line: the worker launch
+// pattern (claudeArgs) without MCP servers, plugins, or tools, plus no
+// session file and no skills or slash commands.
+func claudeOneShotArgs(model, effort string) []string {
+	args := []string{
+		"-p",
+		"--output-format", "text",
+		"--setting-sources", "",
+		"--strict-mcp-config",
+		"--tools", "",
+		"--permission-mode", "dontAsk",
+		"--no-session-persistence",
+		"--disable-slash-commands",
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--effort", effort)
+	}
+	return args
 }
 
 // claudeArgs is the claude command line for spec, without the executable.
@@ -248,6 +294,10 @@ func claudeAllowedRules(spec StartSpec) []string {
 		wsTools := spec.Profile.WSTools
 		if spec.PermissionLevel == PermissionReadOnly {
 			wsTools = childSafeWSToolsFor(spec.Profile)
+			if spec.ExecCutover {
+				// The exec tools replace the removed shell at every authority.
+				wsTools = append(wsTools, cutoverToolsFor(spec.Profile, ExecWSTools)...)
+			}
 		}
 		for _, name := range wsTools {
 			rules = append(rules, claudeMCPToolName(ReservedMCPServer, name))

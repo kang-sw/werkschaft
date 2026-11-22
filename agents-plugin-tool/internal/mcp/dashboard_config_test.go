@@ -78,18 +78,22 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				t.Fatalf("rejected: %v", declared.rejected)
 			}
 			own := loadDeclaredConfig(pkg.own)
-			if len(declared.keys) != len(own.keys)+13 {
-				t.Fatalf("%d keys loaded, want the package's %d plus 13 dashboard keys", len(declared.keys), len(own.keys))
+			if len(declared.keys) != len(own.keys)+15 {
+				t.Fatalf("%d keys loaded, want the package's %d plus 15 dashboard keys", len(declared.keys), len(own.keys))
 			}
 			for _, tc := range []struct {
-				key, kind, def, pattern string
-				enum                    []string
-				valid, invalid          string
+				key, kind, pattern string
+				def                any
+				enum               []string
+				valid              string
+				invalid            []string
 			}{
-				{"dashboard.companion_mode", "enum", "off", "", []string{"off", "visual", "full"}, "visual", "other"},
-				{"dashboard.companion_director", "enum", "rules", "", []string{"rules", "sidecar", "lead-tool"}, "lead-tool", "other"},
-				{"dashboard.companion_pack", "string", "default", "^[a-z0-9][a-z0-9_-]{0,63}$", nil, "auto", "Bad pack"},
-				{"dashboard.companion_preset", "string", "werkschaft-d1", "^[a-z0-9][a-z0-9_-]{0,63}$", nil, "preset_1", "-bad"},
+				{"dashboard.companion_enabled", "boolean", "", false, nil, "true", []string{"yes", "2"}},
+				{"dashboard.companion_director", "enum", "", "rules", []string{"rules", "agent"}, "agent", []string{"sidecar", "lead-tool", "other"}},
+				{"dashboard.companion_pack", "string", "^[a-z0-9][a-z0-9_-]{0,63}$", "default", nil, "auto", []string{"Bad pack"}},
+				{"dashboard.companion_preset", "string", "^[a-z0-9][a-z0-9_-]{0,63}$", "werkschaft-d1", nil, "preset_1", []string{"-bad"}},
+				{"dashboard.companion_agent_cooldown_seconds", "integer", "", int64(30), nil, "3600", []string{"9", "3601", "soon"}},
+				{"dashboard.companion_agent_hourly_cap", "integer", "", int64(20), nil, "120", []string{"0", "121", "many"}},
 			} {
 				key, ok := declared.lookup(tc.key)
 				if !ok || key.Type != tc.kind || key.DefaultValue != tc.def || key.DefaultScope != wsconfig.ScopeGlobal || key.Pattern != tc.pattern || !reflect.DeepEqual(key.Enum, tc.enum) {
@@ -99,8 +103,15 @@ func TestShippedDashboardManifestsLoadBesideEachPackageManifest(t *testing.T) {
 				if _, err := key.parse(tc.valid); err != nil {
 					t.Errorf("%s rejected %q: %v", tc.key, tc.valid, err)
 				}
-				if _, err := key.parse(tc.invalid); err == nil {
-					t.Errorf("%s accepted %q", tc.key, tc.invalid)
+				for _, invalid := range tc.invalid {
+					if _, err := key.parse(invalid); err == nil {
+						t.Errorf("%s accepted %q", tc.key, invalid)
+					}
+				}
+			}
+			for _, removed := range []string{"dashboard.companion_mode"} {
+				if _, ok := declared.lookup(removed); ok {
+					t.Errorf("%s is still declared", removed)
 				}
 			}
 			enabled, ok := declared.lookup(DashboardEnabledKey)

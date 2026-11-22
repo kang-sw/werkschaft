@@ -702,6 +702,9 @@ func TestCodexLeadSyntheticRequiredMCPFailure(t *testing.T) {
 	h, f := newCodexLeadHarness(t)
 	f.openError = "required MCP servers failed to initialize: ws: HTTP 401"
 	h.startAt(codexSyntheticEndpoint)
+	// The startup scan kicks every processless conversation once it ends and
+	// would retry the failed start's held input as a second start.
+	wait(t, "the initial holder scan", h.runner.rejoined)
 	id := h.lead(BackendCodex, LeadOptions{}).ID
 	f.replyID = id
 	if _, err := h.runner.Send(id, "hello"); err != nil {

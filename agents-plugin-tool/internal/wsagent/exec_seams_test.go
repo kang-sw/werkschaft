@@ -69,7 +69,13 @@ func TestExecApprovalPromptsALeadOutsideFullAndBindsTheCall(t *testing.T) {
 
 	res := askExec(context.Background(), h, id, "make test")
 	p := execPrompt(t, h, id)
-	if p.Tool != "exec.shell" || !strings.HasPrefix(p.ID, "exec-") || !strings.Contains(string(p.Input), "make test") || !strings.Contains(string(p.Input), h.root) {
+	// The input is JSON, so a Windows root's backslashes arrive escaped:
+	// compare the decoded cwd, not the raw bytes.
+	var in struct{ Command, Cwd string }
+	if err := json.Unmarshal(p.Input, &in); err != nil {
+		t.Fatalf("prompt input %s: %v", p.Input, err)
+	}
+	if p.Tool != "exec.shell" || !strings.HasPrefix(p.ID, "exec-") || !strings.Contains(in.Command, "make test") || in.Cwd != h.root {
 		t.Fatalf("prompt = %+v %s", p, p.Input)
 	}
 	if _, err := h.runner.AnswerApproval(id, p.ID, true, ""); err != nil {

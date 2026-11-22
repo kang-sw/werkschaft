@@ -141,6 +141,26 @@ const key = 'ws.dashboard.workspace-admission.drafts';
   assert.equal((await worktreeResponse).status(),409);
   await page.waitForFunction(()=>document.querySelector('#rail > .rtoast.on')?.textContent.includes('워크트리'));
   assert.equal((await page.evaluate(k=>JSON.parse(localStorage.getItem(k)||'[]'),worktreeKey)).length,1);
+  // A refused batch whose undo failed kept its approval: the 500 carries the
+  // rail as it now is, which applies, and the toast says the batch was only
+  // partly saved, not that nothing was applied.
+  const fourth=page.locator('.unreg-row[data-unreg-path='+JSON.stringify(paths[3])+']');
+  const fifth=page.locator('.unreg-row[data-unreg-path='+JSON.stringify(paths[4])+']');
+  await fourth.locator('.tg.ap').click();
+  await fifth.locator('.tg.rj').click();
+  await (await fetch(base+'/fixture-control?op=uncertain')).json();
+  const partial=page.waitForResponse(r=>r.url()===base+'/rail/workspaces/admission');
+  await page.locator('[data-admission-apply]').click();
+  assert.equal((await partial).status(),500);
+  await page.waitForFunction(p=>!!document.querySelector('#rlist > .rws[data-ws='+JSON.stringify(p)+']'),paths[3]);
+  await page.waitForFunction(()=>document.querySelector('#rail > .rtoast.on')?.textContent.includes('일부만 저장'));
+  assert.ok(!(await page.locator('#rail > .rtoast.on').textContent()).includes('모두 적용되지'));
+  assert.equal(await (await fetch(base+'/fixture-control?op=calls')).json(),1,'a partly saved workspace batch does not send the worktree batch');
+  assert.deepEqual(await page.evaluate(k=>JSON.parse(localStorage.getItem(k)||'[]'),key),[{path:paths[4],action:'reject'}]);
+  await (await fetch(base+'/fixture-control?op=allow')).json();
+  await fifth.locator('.tg.rj').click();
+  assert.equal((await page.evaluate(k=>JSON.parse(localStorage.getItem(k)||'[]'),key)).length,0);
+  assert.equal((await page.evaluate(k=>JSON.parse(localStorage.getItem(k)||'[]'),worktreeKey)).length,1);
   const third=page.locator('.unreg-row[data-unreg-path='+JSON.stringify(paths[2])+']');
   await third.locator('.tg.ap').click();
   await (await fetch(base+'/fixture-control?op=refuse')).json();

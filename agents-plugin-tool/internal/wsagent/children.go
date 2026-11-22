@@ -14,6 +14,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsgit"
 	"github.com/kang-sw/devenv/internal/wsinbox"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -327,6 +328,10 @@ func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
 		Prompt:  req.Prompt,
 		Label:   label,
 		Parent:  &ParentRef{Kind: ParentConversation, ReplyID: rec.ReplyID},
+		// The child's key inherits the holder's session-scope config.
+		policyKey: rec.WSKey,
+		// The token holder is the verified spawner.
+		spawnerBackend: rec.Backend,
 	})
 	if err != nil {
 		return State{}, err
@@ -374,11 +379,23 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 			return nil, conflict("cannot resume Pi subagent %s: its parent conversation is closed", id)
 		}
 	}
+	// A release of its checkout after it was bound ended that binding: it is
+	// not reopened there.
+	if checkout := r.loadReleasedCheckout(rec); checkout != "" {
+		return nil, conflict("cannot resume Pi subagent %s: %s", id, checkoutReleasedRefusal(checkout).Error())
+	}
 	dir := wsdashboard.SessionDir(r.opts.Dir, id)
 	file := piSessionFile(dir)
 	if !PiSessionAvailable(dir) {
 		return nil, conflict("cannot resume Pi subagent %s: its session file is missing, inaccessible, or not a regular file: %s", id, file)
 	}
+	// A revived child binds to its worktree again: hold the release
+	// reservation until it is registered (Runner.create).
+	unlockBound, err := reserveBoundWorktrees(rec.Root, rec.Cwd)
+	if err != nil {
+		return nil, boundReservationRefusal(err)
+	}
+	defer unlockBound()
 	rec.ClosedAt = ""
 	// A done turn held for descendants was abandoned by the close, not
 	// left waiting for this new turn to publish it.
@@ -386,9 +403,42 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	if err := writeRecord(dir, rec); err != nil {
 		return nil, err
 	}
+	r.unfenceExec(id)
 	c = r.startConv(rec, nil)
 	c.watched()
 	return c, nil
+}
+
+// tokenReleaseNoticeInstant is the release instant a worker token's
+// worktree.released notice for worktree may act on: the instant worktree's
+// release marker records. The marker is written before the notice is sent,
+// under the per-worktree release lock that also covers the notice, so a true
+// notice always finds it, with the instant it claims when it claims one. A
+// notice for a checkout with no marker, or claiming a different instant, is
+// refused (conflict); an unreadable marker refuses too.
+func tokenReleaseNoticeInstant(worktree, claimed string) (time.Time, error) {
+	target := canonicalWorktreePath(worktree)
+	at, ok, err := wsgit.WorktreeReleasedAt(target)
+	if err != nil {
+		return time.Time{}, conflict("worktree.released: cannot read the release marker of %s: %v", worktree, err)
+	}
+	if !ok {
+		return time.Time{}, conflict("worktree.released: %s has no release marker; a release notice is accepted only after worktree.release recorded the release", worktree)
+	}
+	if claimed = strings.TrimSpace(claimed); claimed != "" {
+		want, err := time.Parse(time.RFC3339Nano, claimed)
+		if err != nil || !want.Equal(at) {
+			return time.Time{}, conflict("worktree.released: released_at %q does not match the release marker of %s (%s)", claimed, worktree, at.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	return at, nil
+}
+
+// tokenRootLead reports whether a token's conversation is a root lead (a
+// lead nobody spawned), the only caller worktree.release's force gate admits.
+func tokenRootLead(c *conv) bool {
+	rec := c.record()
+	return rec.Lead && rec.Parent == nil
 }
 
 // tokenRequest is the token route's body: the fields each op reads.
@@ -451,6 +501,59 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 			children = []BoundWorktreeChild{}
 		}
 		writeAnswer(w, http.StatusOK, map[string]any{"children": children}, nil)
+		return
+	}
+	if op == "worktree.released" {
+		// worktree.release's notice after it recorded the worktree's release
+		// marker. It touches only conversations that release already ended
+		// (bound before the marker), so a caller cannot reach any other.
+		var body struct {
+			Worktree    string `json:"worktree"`
+			ReleasedAt  string `json:"released_at"`
+			CancelTurns bool   `json:"cancel_turns"`
+			// Probe asks only whether this daemon takes release notices:
+			// worktree.release asks before it changes anything, and refuses
+			// while live agents are bound to a daemon that would not take
+			// the notice (an older one answers its unknown-route refusal).
+			Probe bool `json:"probe"`
+		}
+		if !decode(w, req, &body) {
+			return
+		}
+		if body.Probe {
+			writeAnswer(w, http.StatusOK, map[string]any{"probe": true}, nil)
+			return
+		}
+		if strings.TrimSpace(body.Worktree) == "" {
+			writeAnswer(w, 0, nil, badRequest("worktree.released: worktree is required"))
+			return
+		}
+		// A worker token's notice is believed only as far as the durable
+		// marker bears it out: the release instant is the marker's, and a
+		// notice for a checkout with no marker, or one naming another
+		// instant, is refused and touches nothing. Otherwise any worker could
+		// retire every binding of a checkout that was never released.
+		at, err := tokenReleaseNoticeInstant(body.Worktree, body.ReleasedAt)
+		if err != nil {
+			writeAnswer(w, 0, nil, err)
+			return
+		}
+		// Cancelling turns is a forced release's, which only a root lead may
+		// make (worktree.release's force gate). A token belongs to a spawned
+		// conversation, never to a root lead, so its notice ends the bindings
+		// but cancels no turn: refusing the whole notice instead would leave
+		// a normal release through a worker's ws-mcp with its earlier
+		// bindings still taking input.
+		cancel := body.CancelTurns && tokenRootLead(caller)
+		convs := r.CheckoutReleased(body.Worktree, at, cancel)
+		if convs == nil {
+			convs = []ReleasedConversation{}
+		}
+		answer := map[string]any{"conversations": convs}
+		if body.CancelTurns && !cancel {
+			answer["cancel_refused"] = true
+		}
+		writeAnswer(w, http.StatusOK, answer, nil)
 		return
 	}
 	if strings.HasPrefix(op, "agent.") {
@@ -552,8 +655,13 @@ func (r *Runner) deliverLater(id string) {
 // (Record.PendingReports) to its open conversation parent, taking them
 // from the child's record in the same step of the parent's loop, so the
 // parent never reads the child with a report in neither place
-// (holdsReport). A report whose parent is closed or unknown, or whose own
-// conversation closed, stays where it is.
+// (holdsReport). That step runs inside a step of the child's own loop,
+// which waits for it: the child's record is its loop's to copy unlocked,
+// so the take must not overlap the loop's other work. Neither loop waits
+// on another conversation's loop elsewhere, and a parent is never its
+// child's descendant, so the nesting cannot cycle. A report whose parent
+// is closed or unknown, or whose own conversation closed, stays where it
+// is.
 func (r *Runner) deliver(id string) {
 	child := r.conv(id)
 	if child == nil {
@@ -567,23 +675,28 @@ func (r *Runner) deliver(id string) {
 	if parent == nil {
 		return
 	}
-	var taken []PendingReport
-	parent.do(func() {
-		if parent.closed {
+	child.do(func() {
+		if child.closed {
 			return
 		}
-		child.update(func(rec *Record) {
-			if !child.closed {
-				taken, rec.PendingReports = rec.PendingReports, nil
+		var taken []PendingReport
+		parent.do(func() {
+			if parent.closed {
+				return
+			}
+			child.update(func(rec *Record) {
+				if !child.closed {
+					taken, rec.PendingReports = rec.PendingReports, nil
+				}
+			})
+			if len(taken) == 0 {
+				return
+			}
+			st := child.state()
+			for _, rep := range taken {
+				parent.takeReport(ReportText(TurnReport{Parent: *rec.Parent, Child: st, Result: rep.Result}))
 			}
 		})
-		if len(taken) == 0 {
-			return
-		}
-		st := child.state()
-		for _, rep := range taken {
-			parent.takeReport(ReportText(TurnReport{Parent: *rec.Parent, Child: st, Result: rep.Result}))
-		}
 	})
 }
 
@@ -656,6 +769,7 @@ func (c *conv) steerWorker() {
 	covered := c.sends
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
+	c.cutoverInstructionLeft(recs)
 	var parts []string
 	for _, rec := range recs {
 		if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
@@ -686,7 +800,12 @@ func (c *conv) takeSteer(text string, mark uint64) {
 		seq := c.steerSeq
 		c.steered = append(c.steered, steeredReport{Text: text, Seq: seq, Mark: mark})
 		c.saveSteered()
-		err := st.Steer(text)
+		var err error
+		if refusedBy := c.admitInput(func() { err = st.Steer(text) }); refusedBy != "" {
+			// Its checkout's release ended the binding after the caller's
+			// snapshot: kept for a next turn, which kick refuses.
+			err = checkoutReleasedRefusal(refusedBy)
+		}
 		if err == nil {
 			c.apply(wslive.Event{Kind: wslive.KindUser, Origin: wslive.OriginWhiteboard, Text: text})
 			c.changed(false)
@@ -799,11 +918,13 @@ func (c *conv) saveSteered() {
 
 // holdsReport reports whether a done turn of the conversation waits for
 // running background tasks or its children: background work still running on
-// a worker, a child's report it holds and no turn took yet (steered and not
-// taken, or kept for the next turn), or a child of its own that is open
-// (openChildOf). It runs in the loop.
+// a worker (a harness background task, or a hosted exec job it owns), an
+// exec cutover instruction a worker's turn owes and no turn took yet
+// (sendCutoverInstruction), a child's report it holds and no turn took yet
+// (steered and not taken, or kept for the next turn), or a child of its own
+// that is open (openChildOf). It runs in the loop.
 func (c *conv) holdsReport() bool {
-	if (!c.rec.Lead && (c.bgTasks > 0 || c.bgGraceTimer != nil)) || len(c.steered) > 0 || len(c.rec.Reports) > 0 || c.compactHoldsReport() {
+	if (!c.rec.Lead && (c.bgTasks > 0 || c.bgGraceTimer != nil || c.ownsLiveExec() || c.cutoverNudge != "" || c.cutoverInstructing)) || len(c.steered) > 0 || len(c.rec.Reports) > 0 || c.compactHoldsReport() {
 		return true
 	}
 	ref := ParentRef{Kind: ParentConversation, ReplyID: c.rec.ReplyID}
@@ -953,12 +1074,19 @@ func (r *Runner) wait(ctx context.Context, id string, timeout time.Duration, asP
 			// still waits in the record: one the runner took meanwhile
 			// already reached the parent, so the answer says so instead
 			// of repeating it.
+			// The take runs in the child's loop, whose record copies it
+			// must not overlap (deliver); a loop that ended copies none.
 			handed := false
-			c.update(func(rec *Record) {
-				n := len(rec.PendingReports)
-				rec.PendingReports = slices.DeleteFunc(rec.PendingReports, func(p PendingReport) bool { return p.ID == report })
-				handed = len(rec.PendingReports) == n
-			})
+			take := func() {
+				c.update(func(rec *Record) {
+					n := len(rec.PendingReports)
+					rec.PendingReports = slices.DeleteFunc(rec.PendingReports, func(p PendingReport) bool { return p.ID == report })
+					handed = len(rec.PendingReports) == n
+				})
+			}
+			if !c.do(take) {
+				take()
+			}
 			if handed {
 				last.Message, last.Error, last.Delivered = "", "", true
 			}

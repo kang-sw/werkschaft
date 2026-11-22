@@ -84,6 +84,10 @@ type StartSpec struct {
 	// conversation delegates through agent.spawn (RemovesSubagents). A
 	// backend whose harness has no such tool ignores it.
 	RemoveSubagents bool
+	// ExecCutover starts the process with its harness's native process tools
+	// (shell, background shell, monitor) removed, the ws exec tools standing
+	// in for them (exec_cutover.go). A backend without such tools ignores it.
+	ExecCutover bool
 	// RecoveredSteers are the unconsumed worker steers persisted before a
 	// holder reattach. A backend may use them to map replayed acknowledgements
 	// back to the runner without persisting backend request ids.
@@ -129,6 +133,10 @@ type LeadSpec struct {
 	// request): ws-mcp confirms a hosted session by the registration's
 	// host_pid, so the row must name the process first.
 	Spawned func(holderID string, pid int)
+	// FrameTrace, when not empty, is the capture file of an opt-in HTTP/2
+	// frame trace: agy starts with GODEBUG=http2debug=2 and its holder
+	// keeps only filtered frame summaries of that stderr output there.
+	FrameTrace string
 }
 
 // MCPCommand is a stdio MCP server's launch command.
@@ -369,6 +377,9 @@ type Event struct {
 	// tool call returned.
 	Approval     *ApprovalRequest
 	ApprovalDone string
+	// UnrequestedCommand names (by tool call id) a native process tool call
+	// whose execution the stream shows with no permission request for it.
+	UnrequestedCommand string
 	// PermissionMode is the permission mode the harness reports it runs in.
 	PermissionMode string
 	// HarnessState is the state the harness reports it moved to
@@ -450,6 +461,10 @@ type Event struct {
 	// during a turn, carrying the count of currently pending tool calls
 	// (including daemon commands) so the model-wait watchdog can reset or pause.
 	ModelActivity *int
+	// ModelContent marks a ModelActivity update that carried model content
+	// (agent text, thought, or plan): the current model request has a
+	// response, so it is not a headerless stall.
+	ModelContent bool
 	// agyReplay carries the mapper's in-memory observation at ReplayDone.
 	agyReplay *agyReplayObservation
 	// CompactRequested (with TurnEnd): the ending turn carried a successful

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -74,6 +75,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	if opts.Pprof {
 		enableContentionProfiles()
 	}
+	// A nil *wscred.Store must stay a nil interface: the routes test it.
+	var credentials credentialStore = opts.credentialSource
+	if credentials == nil && opts.Credentials != nil {
+		credentials = opts.Credentials
+	}
 	stats := &streamStats{}
 	d := &Daemon{
 		dir:             opts.Dir,
@@ -81,6 +87,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		listener:        listener,
 		log:             logw,
 		agents:          opts.Agents,
+		credentials:     credentials,
 		config:          opts.Config,
 		cardBound:       opts.CardBound,
 		execJobs:        opts.ExecJobs,
@@ -125,6 +132,8 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 			StartedAt:     time.Now().UTC().Format(time.RFC3339),
 		},
 	}
+	d.director.oneShot = opts.CompanionOneShot
+	d.director.hasOneShot = opts.CompanionHasOneShot
 	if err := d.refreshCompanion(); err != nil {
 		fmt.Fprintf(logw, "dashboard: load companion settings: %v\n", err)
 	}
@@ -245,11 +254,19 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		_ = lock.Unlock()
 		return nil, fmt.Errorf("write endpoint file: %w", err)
 	}
+	// Read the agents' global settings only now that the endpoint is
+	// published: a writer that committed while no endpoint was discoverable
+	// could not notify, and this serialized read still observes its value.
+	d.reloadAgentGlobalConfig()
 	if d.leadNudges != nil {
 		d.leadNudges.Start()
 	}
+	// Read them once more as Serve starts accepting: a writer's notification
+	// is one attempt with a timeout, so one that could not be served before
+	// this point committed before this read, and every later one is served.
+	serving := &servingListener{Listener: listener, first: func() { go d.reloadAgentGlobalConfig() }}
 	go func() {
-		if err := d.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := d.server.Serve(serving); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(d.log, "dashboard: serve: %v\n", err)
 			d.Close()
 		}
@@ -273,6 +290,20 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	}
 	fmt.Fprintf(d.log, "dashboard: version %s listening on %s (lan %v, pid %d)\n", d.endpoint.Version, listener.Addr(), d.lan, d.endpoint.PID)
 	return d, nil
+}
+
+// servingListener runs first once, on Serve's goroutine, when Serve first
+// asks for a connection: from then on the daemon serves what it accepts.
+// first must not block, or it holds up the accept loop.
+type servingListener struct {
+	net.Listener
+	once  sync.Once
+	first func()
+}
+
+func (l *servingListener) Accept() (net.Conn, error) {
+	l.once.Do(l.first)
+	return l.Listener.Accept()
 }
 
 // bindHostFor is the address a daemon binds: loopback, or every interface

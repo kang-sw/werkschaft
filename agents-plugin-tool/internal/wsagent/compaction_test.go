@@ -298,11 +298,12 @@ func TestCompactionRestoreBundleLeadAndChildFreshExactlyOnce(t *testing.T) {
 		if calls := probe.snapshot(); len(calls) != 1 || calls[0].key != key || calls[0].cause != RestoreCompaction {
 			t.Fatalf("lead restore calls = %+v", calls)
 		}
-		h.runner.conv(id).do(func() {
+		h.runner.conv(id).doT(t, func(failf func(string, ...any)) {
 			c := h.runner.conv(id)
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactEnd})
 			if c.compactNote != "" {
-				t.Fatalf("duplicate compact end queued %q", c.compactNote)
+				failf("duplicate compact end queued %q", c.compactNote)
+				return
 			}
 		})
 		if calls := probe.snapshot(); len(calls) != 1 {
@@ -601,9 +602,10 @@ func TestCompactionNeverWedgesOnPiUnknownEndTurnOrTimeout(t *testing.T) {
 	h.holders.out(holder, resultLine(), stateLine(HarnessIdle))
 	h.sync(id, holder)
 	c := h.runner.conv(id)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if c.compacting || c.compactCommand {
-			t.Fatalf("endTurn without error left compaction stuck: compacting=%v cmd=%v", c.compacting, c.compactCommand)
+			failf("endTurn without error left compaction stuck: compacting=%v cmd=%v", c.compacting, c.compactCommand)
+			return
 		}
 	})
 	h.send(id, "after-silent-compact")
@@ -624,7 +626,7 @@ func TestCompactionNeverWedgesOnPiUnknownEndTurnOrTimeout(t *testing.T) {
 		{"CompactFailed", Event{Live: &wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c.do(func() {
+			c.doT(t, func(failf func(string, ...any)) {
 				c.idleAfter = time.Hour
 				c.stopIdle()
 				c.compacting = true
@@ -633,10 +635,12 @@ func TestCompactionNeverWedgesOnPiUnknownEndTurnOrTimeout(t *testing.T) {
 				}
 				c.handle(tc.ev)
 				if c.compacting || c.compactCommand {
-					t.Fatalf("%s left compaction active: compacting=%v cmd=%v", tc.name, c.compacting, c.compactCommand)
+					failf("%s left compaction active: compacting=%v cmd=%v", tc.name, c.compacting, c.compactCommand)
+					return
 				}
 				if c.idle == nil {
-					t.Fatalf("%s did not re-arm idle timer", tc.name)
+					failf("%s did not re-arm idle timer", tc.name)
+					return
 				}
 				c.stopIdle()
 				c.idleAfter = 0
@@ -708,9 +712,10 @@ func TestCompactionNeverWedgesOnPiUnknownEndTurnOrTimeout(t *testing.T) {
 	if !foundFailed || foundSuccess {
 		t.Fatalf("watchdog ring entries wrong (failed=%v success=%v): %+v", foundFailed, foundSuccess, wh.ring(wid))
 	}
-	wc.do(func() {
+	wc.doT(t, func(failf func(string, ...any)) {
 		if wc.compactNote != "" {
-			t.Fatalf("late completion queued restore note after watchdog stop: %q", wc.compactNote)
+			failf("late completion queued restore note after watchdog stop: %q", wc.compactNote)
+			return
 		}
 	})
 }
@@ -808,10 +813,11 @@ func TestCompactionAdvisoryTurnAtIdle(t *testing.T) {
 	}
 	h.holders.out(holder, turnLines("sess-1", "u2", "advisory handled")...)
 	h.idle(id)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		c.handle(compactionUsage(56000))
 		if !c.compactAdvised || c.compactResume {
-			t.Fatalf("advisory not consumed: advised=%v resume=%v", c.compactAdvised, c.compactResume)
+			failf("advisory not consumed: advised=%v resume=%v", c.compactAdvised, c.compactResume)
+			return
 		}
 		c.handle(compactionUsage(75000))
 	})
@@ -926,10 +932,11 @@ func TestCompactionFailedAdvisorySendKeepsCrossingUnlatched(t *testing.T) {
 	h.idle(id)
 	h.holders.failInputs("user", 1)
 	c := h.runner.conv(id)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		c.handle(compactionUsage(75000))
 		if c.compactAdvised || c.compactM1Issued || c.compactM2Issued || c.compactNudge.text == "" {
-			t.Fatalf("failed send consumed the crossing: %+v", c.compactNudge)
+			failf("failed send consumed the crossing: %+v", c.compactNudge)
+			return
 		}
 		c.kick()
 	})
@@ -1005,9 +1012,10 @@ func TestCompactionWorkerAdvisoryIsInternal(t *testing.T) {
 	eventually(t, "original report settled", func() bool { return len(got.list()) == 1 })
 	h.holders.out(holder, `{"type":"response","command":"get_session_stats","success":true,"data":{"contextUsage":{"tokens":55000,"contextWindow":100000}}}`)
 	eventually(t, "late idle Pi stats triggered advisory", func() bool { return len(h.holders.inputs(holder, "prompt")) == 2 })
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if !c.turn || c.rec.TurnOpen || c.rec.LastTurn == nil || c.rec.LastTurn.Result.Message != "settled work" {
-			t.Fatalf("internal turn disturbed the settled result: open=%v result=%+v", c.rec.TurnOpen, c.rec.LastTurn)
+			failf("internal turn disturbed the settled result: open=%v result=%+v", c.rec.TurnOpen, c.rec.LastTurn)
+			return
 		}
 	})
 	h.holders.out(holder, recoveryPiReply("advisory reply")...)
@@ -1151,7 +1159,7 @@ func TestCompactionStatusRespectsKickGuards(t *testing.T) {
 			h.idle(id)
 			c := h.runner.conv(id)
 			high := int64(90000)
-			c.do(func() {
+			c.doT(t, func(failf func(string, ...any)) {
 				switch guard {
 				case "leverC":
 					c.leverC = make(chan time.Time)
@@ -1164,7 +1172,8 @@ func TestCompactionStatusRespectsKickGuards(t *testing.T) {
 				}
 				c.handle(Event{Live: &wslive.Event{Kind: wslive.KindStatus, Context: &wslive.UsageContext{Tokens: &high, Window: 100000}}})
 				if c.compacting || c.compactCommand {
-					t.Fatalf("KindStatus bypassed %s guard and triggered compaction", guard)
+					failf("KindStatus bypassed %s guard and triggered compaction", guard)
+					return
 				}
 				c.leverC, c.hidden, c.closed, c.steered = nil, false, false, nil
 			})
@@ -1221,9 +1230,10 @@ func TestCompactionStopProcessWithLiveProcessReleasesHeldReport(t *testing.T) {
 	}
 	// Stop the live worker process while turn-1 report is held for compaction resume.
 	c := h.runner.conv(child.ID)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if c.proc == nil {
-			t.Fatal("expected live process before stopProcess")
+			failf("expected live process before stopProcess")
+			return
 		}
 		c.stopProcess("test_stop")
 	})
@@ -1353,9 +1363,10 @@ func TestCompactionAgyCommandAndPromptResponse(t *testing.T) {
 		if compacts != 1 {
 			t.Fatalf("expected exactly 1 RingCompact, got %d: %+v", compacts, h.ring(id))
 		}
-		c.do(func() {
+		c.doT(t, func(failf func(string, ...any)) {
 			if c.compactNote != "" {
-				t.Fatalf("post-compaction drop queued duplicate restore note: %q", c.compactNote)
+				failf("post-compaction drop queued duplicate restore note: %q", c.compactNote)
+				return
 			}
 		})
 	})
@@ -1437,9 +1448,10 @@ func TestCompactionAgyCommandAndPromptResponse(t *testing.T) {
 			t.Fatalf("cancelled /compact ring counts failed=%d succeeded=%d: %+v", failed, succeeded, h.ring(id))
 		}
 		c := h.runner.conv(id)
-		c.do(func() {
+		c.doT(t, func(failf func(string, ...any)) {
 			if c.compactNote != "" {
-				t.Fatalf("cancelled /compact queued restore note: %q", c.compactNote)
+				failf("cancelled /compact queued restore note: %q", c.compactNote)
+				return
 			}
 		})
 	})
@@ -1474,9 +1486,10 @@ func TestCompactionAgyUsageDropAutoDetection(t *testing.T) {
 	)
 	h.idle(id)
 	c := h.runner.conv(id)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if c.compactNote != "" {
-			t.Fatalf("fluctuation or model switch triggered restore note: %q", c.compactNote)
+			failf("fluctuation or model switch triggered restore note: %q", c.compactNote)
+			return
 		}
 	})
 	for _, entry := range h.ring(id) {
@@ -1547,13 +1560,15 @@ func TestCompactionLiveReloadAndSteadyStateMemoryOnly(t *testing.T) {
 
 	// 60% is below initial 80% advisory: no note queued.
 	tokens := int64(60000)
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		c.observeCompaction(wslive.Event{Kind: wslive.KindStatus, Context: &wslive.UsageContext{Tokens: &tokens, Window: 100000}})
 		if c.compactIdle() {
-			t.Fatal("unexpected compaction at 60% with hard=95%")
+			failf("unexpected compaction at 60% with hard=95%")
+			return
 		}
 		if c.compactNote != "" || c.compactAdvised {
-			t.Fatalf("unexpected advisory at 60%% with advisory=80%%: advised=%v note=%q", c.compactAdvised, c.compactNote)
+			failf("unexpected advisory at 60%% with advisory=80%%: advised=%v note=%q", c.compactAdvised, c.compactNote)
+			return
 		}
 	})
 
@@ -1576,12 +1591,14 @@ func TestCompactionLiveReloadAndSteadyStateMemoryOnly(t *testing.T) {
 	}
 	NotifyCompactionConfigChanged()
 
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		if c.compactIdle() {
-			t.Fatal("advisory started a turn")
+			failf("advisory started a turn")
+			return
 		}
 		if !strings.Contains(c.compactNudge.text, "advisory point 50000") {
-			t.Fatalf("lowered advisory did not apply live: note=%q", c.compactNudge.text)
+			failf("lowered advisory did not apply live: note=%q", c.compactNudge.text)
+			return
 		}
 		c.consumeCompactionNudge()
 	})
@@ -1593,18 +1610,21 @@ func TestCompactionLiveReloadAndSteadyStateMemoryOnly(t *testing.T) {
 	}
 	NotifyCompactionConfigChanged()
 
-	c.do(func() {
+	c.doT(t, func(failf func(string, ...any)) {
 		c.observeCompaction(wslive.Event{Kind: wslive.KindStatus, Context: &wslive.UsageContext{Tokens: &tokens, Window: 100000}})
 		if c.compactAdvised {
-			t.Fatal("raising advisory above current usage did not clear latch")
+			failf("raising advisory above current usage did not clear latch")
+			return
 		}
 		higher := int64(76000)
 		c.observeCompaction(wslive.Event{Kind: wslive.KindStatus, Context: &wslive.UsageContext{Tokens: &higher, Window: 100000}})
 		if c.compactIdle() {
-			t.Fatal("advisory started a turn")
+			failf("advisory started a turn")
+			return
 		}
 		if !strings.Contains(c.compactNudge.text, "advisory point 75000") {
-			t.Fatalf("raised advisory did not apply at 76%%: note=%q", c.compactNudge.text)
+			failf("raised advisory did not apply at 76%%: note=%q", c.compactNudge.text)
+			return
 		}
 	})
 

@@ -168,7 +168,7 @@ func verifyAdapterEnv(env []string, root string, paths []string) ([]string, erro
 		text := advisory.Text
 		if advisory.Kind == wsdoc.AdvisoryKindFix {
 			// 7-space continuation, matching the FIX:/CHECK: hanging indent.
-			text += "\n       Then git commit --amend --no-edit."
+			text += "\n       Then commit the correction (a follow-up git.commit)."
 		}
 		advisories = append(advisories, text)
 	}
@@ -351,10 +351,14 @@ func formatSageRecord(result wsdoc.SageRecordResult) string {
 	return b.String()
 }
 
-// sageRestampAfterFixes closes every non-block autonomous-issue routing clause: apply the
-// fixes, re-stamp with the same verdicts so the recorded digest covers the fixed
-// body, and only then commit.
-const sageRestampAfterFixes = " Once those edits are in the ticket, call ws/tickets.sage_stamp again with the same verdicts: the digest recorded now covers the body as it stands at this stamp, and only the re-stamp makes it cover the fixed body. Commit after that second stamp, not before it."
+// sageRestampAfterFixes closes every non-block autonomous-issue routing clause.
+// The tool cannot tell whether the lead applied the fixes before or after this
+// stamp, so the clause is conditional: fixes not yet in the ticket need a
+// same-verdict re-stamp so the recorded digest covers the fixed body; fixes
+// already applied are covered by the digest this stamp just took.
+func sageRestampAfterFixes(autonomous int) string {
+	return fmt.Sprintf(" If any of those %d autonomous issue(s) are not yet in the ticket, fix them, then call ws/tickets.sage_stamp again with the same verdicts before committing: only the re-stamp makes the recorded digest cover the fixed body. If they were applied before this stamp, its digest already covers the fixed body and no re-stamp is needed.", autonomous)
+}
 
 // sageRecordIssueRouting renders the per-resolution routing clause that leads
 // every next_instruction carrying issues. Both reviewer playbooks classify each
@@ -362,10 +366,11 @@ const sageRestampAfterFixes = " Once those edits are in the ticket, call ws/tick
 // (a policy choice those stages cannot make); this is the consumer of that
 // split. Empty when the stage recorded no issues, so a clean pass stays terse.
 //
-// An autonomous fix edits the ticket body after this stamp took its digest, so
-// every non-block autonomous branch also orders a re-stamp: without it the digest this
-// call recorded is stale the moment the fixes land, tickets.verify warns, and
-// the next sage_gate asks to rerun the reviewers whose findings were applied.
+// An autonomous fix that lands after this stamp took its digest leaves that
+// digest stale, so every non-block autonomous branch orders a re-stamp for fixes
+// not yet in the ticket (conditionally: see sageRestampAfterFixes): without it
+// tickets.verify warns and the next sage_gate asks to rerun the reviewers whose
+// findings were applied.
 //
 // A block is the exception: its recorded verdict comes from the reviewer
 // verdict field, not from the issue counts, so a re-stamp with the same
@@ -376,7 +381,7 @@ const sageRestampAfterFixes = " Once those edits are in the ticket, call ws/tick
 // autonomous-only block loops the same way, and a mixed concern or pass is not
 // blocked and still needs the re-stamp to refresh its digest.
 func sageRecordIssueRouting(result wsdoc.SageRecordResult) string {
-	closing := sageRestampAfterFixes
+	closing := sageRestampAfterFixes(result.Autonomous)
 	missingClosing := ""
 	if result.Verdict == "block" {
 		closing = sageNoSameVerdictRestamp
@@ -536,6 +541,11 @@ func formatTickets(tickets []wsdoc.TicketInfo) string {
 		// confused with the typed dispatch_blocked gate above. Emitted on every
 		// projection because the queue selector reads it from the discovery
 		// inventory; the heading is verbatim, its currency is the caller's to judge.
+		// A ready implementation ticket with no ## Route Facts section stops its
+		// worker; a hidden entry has no file to inspect, so it is never reported.
+		if ticket.Status == "ready" && !ticket.Hidden && !ticket.RouteFactsPresent && wsdoc.TicketOwesRouteFacts(ticket.Stem) {
+			b.WriteString("  route_facts: missing\n")
+		}
 		for _, heading := range ticket.BlockedHeadings {
 			fmt.Fprintf(&b, "  blocked_marker: %s\n", heading)
 		}

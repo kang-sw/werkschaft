@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
@@ -59,7 +60,37 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 		if rule.Compaction {
 			rule.LegacyKey = func(harness string) string { return wsagent.BuiltinCompaction(harness).LegacyKey(entry.Key) }
 		}
-		if entry.Structured {
+		if entry.Key == wsconfig.ItemAgentTierRouting {
+			// The one exact-key structured setting: no name part, validated as
+			// a whole graph against the package's roles and the built-in
+			// harnesses, the daemon runner's registered backends
+			// (cmd/ws-mcp newAgentRunner), so a dashboard write cannot store a
+			// graph config.tune and agent.spawn would refuse. A known harness
+			// that is not installed still validates.
+			rule.Type = "object"
+			rule.Editable = true
+			rule.NormalizeObject = func(value any, scope wsconfig.Scope) (json.RawMessage, error) {
+				if _, ok := value.(map[string]any); !ok || scope != wsconfig.ScopeGlobal {
+					return nil, wsconfigservice.ErrInvalid
+				}
+				raw, err := json.Marshal(value)
+				if err != nil {
+					return nil, err
+				}
+				routing, err := wsconfig.ParseTierRouting(raw)
+				if err != nil {
+					return nil, err
+				}
+				roles, err := packagedTierRoles(rsrc)
+				if err != nil {
+					return nil, err
+				}
+				if err := wsconfig.NewTierGraph(roles, routing, nil, wsagent.TierHarnesses()).Err(); err != nil {
+					return nil, err
+				}
+				return json.Marshal(routing)
+			}
+		} else if entry.Structured {
 			rule.Type = "object"
 			family := worktreeProfileFamily
 			if strings.HasPrefix(entry.Key, wsagent.ProfilePrefix) {
@@ -126,8 +157,20 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 	return wsconfigservice.NewCatalog(rules)
 }
 
-func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func()) (*wsdashboard.ConfigBackend, error) {
+// DashboardConfigBackend is the daemon's settings backend for packageName.
+// available is agent.spawn's harness availability check without probes
+// (wsagent Runner.HarnessAvailability) the tier routing view reports at each
+// terminal, for the view's simulated caller harness; nil reports none.
+func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func(), available func(caller, harness string) (why string, known bool)) (*wsdashboard.ConfigBackend, error) {
 	catalog, err := DashboardConfigCatalog(packageName)
+	if err != nil {
+		return nil, err
+	}
+	pkg, err := wspackage.Open(packageName)
+	if err != nil {
+		return nil, err
+	}
+	rsrc, err := fs.Sub(pkg, "rsrc")
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +178,7 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 	for key, value := range wsagent.BuiltinProfiles() {
 		structured[key] = value
 	}
-	return &wsdashboard.ConfigBackend{
+	backend := &wsdashboard.ConfigBackend{
 		Catalog: catalog, Options: opts, Structured: structured,
 		LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
 			return dashboardCompanionConfig(catalog, opts)
@@ -152,7 +195,13 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 				ambient()
 			}
 		},
-	}, nil
+	}
+	// The graph view reads the backend's options at call time, the same
+	// config the snapshot and writes use.
+	backend.TierRouting = func(draft json.RawMessage, harness string) (any, error) {
+		return dashboardTierRoutingView(rsrc, backend.Options, draft, harness, available)
+	}
+	return backend, nil
 }
 
 // dashboardAuditLimits reads the global audit knobs (global-only keys) and
@@ -173,20 +222,41 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 	if err != nil {
 		return wsdashboard.CompanionConfig{}, err
 	}
-	value := func(key string) string {
-		if raw, ok := overrides[key]; ok {
-			mutation, err := catalog.Validate(wsconfig.ScopeGlobal, wsconfigservice.Operation{Key: key, Action: "set", Value: raw})
-			if err == nil {
-				return mutation.Scalar
-			}
-		}
+	// resolved returns the catalog-validated global override, or the manifest
+	// default when the key is unset or its stored value no longer validates
+	// (as config.get does). The default's dynamic type is the key's type.
+	resolved := func(key string) any {
 		entry := catalog.Entry(key, nil, wsconfig.ScopeGlobal, wsconfigservice.Layers{})
-		fallback, _ := entry.Default.(string)
-		return fallback
+		raw, ok := overrides[key]
+		if !ok {
+			return entry.Default
+		}
+		mutation, err := catalog.Validate(wsconfig.ScopeGlobal, wsconfigservice.Operation{Key: key, Action: "set", Value: raw})
+		if err != nil {
+			return entry.Default
+		}
+		switch entry.Default.(type) {
+		case bool:
+			if parsed, err := strconv.ParseBool(mutation.Scalar); err == nil {
+				return parsed
+			}
+		case int64:
+			if parsed, err := strconv.ParseInt(mutation.Scalar, 10, 64); err == nil {
+				return parsed
+			}
+		default:
+			return mutation.Scalar
+		}
+		return entry.Default
 	}
+	text := func(key string) string { s, _ := resolved(key).(string); return s }
+	flag := func(key string) bool { b, _ := resolved(key).(bool); return b }
+	number := func(key string) int { n, _ := resolved(key).(int64); return int(n) }
 	return wsdashboard.CompanionConfig{
-		Mode: value(wsdashboard.CompanionModeKey), Director: value(wsdashboard.CompanionDirectorKey),
-		Pack: value(wsdashboard.CompanionPackKey), Preset: value(wsdashboard.CompanionPresetKey),
+		Enabled: flag(wsdashboard.CompanionEnabledKey), Director: text(wsdashboard.CompanionDirectorKey),
+		Pack: text(wsdashboard.CompanionPackKey), Preset: text(wsdashboard.CompanionPresetKey),
+		AgentCooldownSeconds: number(wsdashboard.CompanionAgentCooldownKey),
+		AgentHourlyCap:       number(wsdashboard.CompanionAgentHourlyCapKey),
 	}, nil
 }
 
@@ -232,7 +302,7 @@ func dashboardAdapterReadLimits(key string) (noRepo, noSession bool) {
 	case "pi.runaway_threshold", "pi.settle_delay_ms", "pi.compaction_advisory_percent", "pi.compaction_hard_percent",
 		"pi.context_window_override", "pi.compaction_dialog_budget_bytes", "pi.compaction_reread_budget_bytes":
 		return false, false
-	case "agy.model_wait_timeout_seconds", "agy.model_wait_retries":
+	case "agy.model_wait_timeout_seconds", "agy.model_wait_retries", "agy.stall_log_check", "agy.http2_frame_trace":
 		return false, true
 	case DashboardPortKey, "dashboard.pi_spawn_enabled":
 		return true, true

@@ -49,6 +49,9 @@
   var tabIdentity = worktree ? "wt:" + worktree : rid;
   var TAB_KEY = "ws.dashboard.cterm." + tabIdentity;
   var tabList = [], activeTabId = null, tabCreating = 0, tabUI = {};
+  // Only an explicit tab activation moves focus into xterm; a resize or
+  // layout pass that re-syncs the panes leaves the composer's focus alone.
+  var tabFocusPending = false;
 
   function mk(tag, cls, text) {
     var e = doc.createElement(tag);
@@ -757,7 +760,9 @@
       tab.btnEl.setAttribute("aria-pressed", String(on));
       tab.paneEl.toggleAttribute("data-active", on);
     });
+    tabFocusPending = true;
     if (hooks.setCtab) hooks.setCtab("term");
+    tabFocusPending = false;
     if (target.tabEl.scrollIntoView) target.tabEl.scrollIntoView({ block: "nearest", inline: "nearest" });
     if (!hooks.setCtab && target.t.term && shows(target)) {
       fit(target);
@@ -784,7 +789,7 @@
     });
     if (panesVisible && cur.t.term && shows(cur)) {
       fit(cur);
-      cur.t.term.focus();
+      if (tabFocusPending) cur.t.term.focus();
     }
   }
   function removeTab(tid) {

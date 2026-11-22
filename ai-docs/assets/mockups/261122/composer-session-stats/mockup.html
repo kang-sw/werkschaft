@@ -1,0 +1,1132 @@
+<style>
+.cs-stats-mock,
+.cs-stats-mock *,
+.cs-stats-mock *::before,
+.cs-stats-mock *::after {
+  box-sizing: border-box;
+}
+.cs-stats-mock[data-preview-theme="light"] {
+  --m-bg: #f3f3f0;
+  --m-fg: #1b1d21;
+  --m-card: #ffffff;
+  --m-muted: #e9e8e3;
+  --m-muted-fg: #5f646b;
+  --m-primary: #2b62d9;
+  --m-primary-fg: #ffffff;
+  --m-line: color-mix(in srgb, #1b1d21 15%, transparent);
+  --m-wash: color-mix(in srgb, #1b1d21 7%, transparent);
+  --m-ok: #1d7348;
+  --m-warn: #c27a00;
+  --m-fail: #c0262d;
+  --m-shadow: 0 1px 2px rgb(0 0 0 / .14), 0 2px 6px rgb(0 0 0 / .06);
+  --m-shadow-hi: 0 2px 4px rgb(0 0 0 / .16), 0 6px 18px rgb(0 0 0 / .10);
+}
+.cs-stats-mock[data-preview-theme="dark"] {
+  --m-bg: #141518;
+  --m-fg: #e7e7e4;
+  --m-card: #1e2024;
+  --m-muted: #2b2d32;
+  --m-muted-fg: #a2a6ad;
+  --m-primary: #7aa2ff;
+  --m-primary-fg: #0c1424;
+  --m-line: color-mix(in srgb, #e7e7e4 14%, transparent);
+  --m-wash: color-mix(in srgb, #e7e7e4 8%, transparent);
+  --m-ok: #6cc39a;
+  --m-warn: #e0a36c;
+  --m-fail: #f0797e;
+  --m-shadow: 0 1px 2px rgb(0 0 0 / .5), 0 2px 8px rgb(0 0 0 / .3);
+  --m-shadow-hi: 0 2px 4px rgb(0 0 0 / .55), 0 8px 22px rgb(0 0 0 / .4);
+}
+.cs-stats-mock {
+  --m-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+  --m-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --c-uncached: #3b82f6;
+  --c-cache-r: #10b981;
+  --c-cache-w: #8b5cf6;
+  --c-output: #f59e0b;
+  background: var(--m-bg);
+  color: var(--m-fg);
+  font: 400 12px/1.45 var(--m-sans);
+  border: 1px solid var(--m-line);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.cs-stats-mock .m-num {
+  font-family: var(--m-mono);
+  font-variant-numeric: tabular-nums;
+}
+.cs-stats-mock .m-ico {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  display: inline-block;
+  vertical-align: middle;
+}
+.cs-stats-mock .m-ctrl-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  background: var(--m-card);
+  border: 1px solid var(--m-line);
+  border-radius: 10px;
+  box-shadow: var(--m-shadow);
+  align-items: center;
+}
+.cs-stats-mock .m-ctrl-grp {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cs-stats-mock .m-ctrl-lbl {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--m-muted-fg);
+  margin-right: 2px;
+}
+.cs-stats-mock .m-seg {
+  display: inline-flex;
+  background: var(--m-muted);
+  padding: 2px;
+  border-radius: 7px;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.cs-stats-mock .m-seg button {
+  border: 0;
+  background: transparent;
+  color: var(--m-muted-fg);
+  font: 500 11px/1.2 var(--m-sans);
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.cs-stats-mock .m-seg button:hover {
+  color: var(--m-fg);
+}
+.cs-stats-mock .m-seg button[aria-pressed="true"] {
+  background: var(--m-card);
+  color: var(--m-fg);
+  box-shadow: var(--m-shadow);
+}
+.cs-stats-mock .m-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 6px 6px;
+  background: color-mix(in srgb, var(--m-muted) 45%, transparent);
+  border: 1px dashed var(--m-line);
+  border-radius: 12px;
+}
+.cs-stats-mock .m-shell {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: width .18s ease;
+}
+.cs-stats-mock[data-width="narrow"] .m-shell {
+  width: min(320px, 100%);
+}
+.cs-stats-mock .m-pop-slot {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+.cs-stats-mock .m-pop-slot[hidden] {
+  display: none;
+}
+.cs-stats-mock .m-pop {
+  width: min(328px, 100%);
+  background: var(--m-card);
+  border: 1px solid var(--m-line);
+  border-radius: 12px;
+  box-shadow: var(--m-shadow-hi);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cs-stats-mock[data-width="narrow"] .m-pop {
+  width: 100%;
+}
+.cs-stats-mock .m-pop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cs-stats-mock .m-pop-cost-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.cs-stats-mock .m-pop-cost {
+  font: 700 20px/1.1 var(--m-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.cs-stats-mock .m-pop-cost.is-unpriced {
+  font-family: var(--m-sans);
+  font-size: 15px;
+  color: var(--m-muted-fg);
+}
+.cs-stats-mock .m-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font: 600 10px/1.3 var(--m-sans);
+  white-space: nowrap;
+}
+.cs-stats-mock .m-badge.is-ok {
+  background: color-mix(in srgb, var(--m-ok) 15%, transparent);
+  color: var(--m-ok);
+}
+.cs-stats-mock .m-badge.is-primary {
+  background: color-mix(in srgb, var(--m-primary) 15%, transparent);
+  color: var(--m-primary);
+}
+.cs-stats-mock .m-badge.is-warn {
+  background: color-mix(in srgb, var(--m-warn) 16%, transparent);
+  color: var(--m-warn);
+}
+.cs-stats-mock .m-badge.is-muted {
+  background: var(--m-muted);
+  color: var(--m-muted-fg);
+}
+.cs-stats-mock .m-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.cs-stats-mock .m-kpi {
+  background: var(--m-wash);
+  border-radius: 8px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cs-stats-mock .m-kpi-lbl {
+  font-size: 10px;
+  color: var(--m-muted-fg);
+  white-space: nowrap;
+}
+.cs-stats-mock .m-kpi-val {
+  font: 600 12px/1.25 var(--m-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cs-stats-mock .m-kpi-sub {
+  font: 500 10px/1.2 var(--m-sans);
+  color: var(--m-ok);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cs-stats-mock .m-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cs-stats-mock .m-sec-ttl {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--m-muted-fg);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.cs-stats-mock .m-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--m-muted);
+  overflow: hidden;
+  display: flex;
+  gap: 1px;
+}
+.cs-stats-mock .m-bar-seg {
+  height: 100%;
+  min-width: 2px;
+}
+.cs-stats-mock .m-tbl {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cs-stats-mock .m-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.cs-stats-mock .m-row-lbl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--m-fg);
+}
+.cs-stats-mock .m-row-lbl span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-stats-mock .m-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+.cs-stats-mock .m-row-tok {
+  color: var(--m-muted-fg);
+  text-align: right;
+  font-size: 11px;
+}
+.cs-stats-mock .m-row-usd {
+  min-width: 52px;
+  text-align: right;
+  font-weight: 600;
+  font-size: 11px;
+}
+.cs-stats-mock .m-mod-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--m-wash);
+}
+.cs-stats-mock .m-mod-name {
+  font-family: var(--m-mono);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-stats-mock [hidden] {
+  display: none !important;
+}
+.cs-stats-mock .m-rollup {
+  background: color-mix(in srgb, var(--m-primary) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--m-primary) 24%, transparent);
+  border-radius: 8px;
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+}
+.cs-stats-mock .m-rollup-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+.cs-stats-mock .m-pop-foot {
+  border-top: 1px solid var(--m-line);
+  padding-top: 7px;
+  font-size: 10px;
+  color: var(--m-muted-fg);
+  line-height: 1.35;
+}
+.cs-stats-mock .m-comp-wrap {
+  position: relative;
+  padding-top: 14px;
+}
+.cs-stats-mock .m-child-pill {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--m-card);
+  border: 1px solid var(--m-line);
+  box-shadow: var(--m-shadow);
+  font: 600 10.5px/1.3 var(--m-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--m-fg);
+}
+.cs-stats-mock .m-composer {
+  background: var(--m-card);
+  border-radius: 12px;
+  box-shadow: var(--m-shadow-hi);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+.cs-stats-mock .m-ctx {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: var(--m-muted-fg);
+}
+.cs-stats-mock .m-ctx-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--m-muted);
+  overflow: hidden;
+}
+.cs-stats-mock .m-ctx-fill {
+  height: 100%;
+  width: 32%;
+  border-radius: 999px;
+  background: var(--m-primary);
+}
+.cs-stats-mock .m-ctx-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--m-fg) 26%, transparent);
+}
+.cs-stats-mock[data-width="narrow"] .m-ctx-win {
+  display: none;
+}
+.cs-stats-mock .m-inrow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.cs-stats-mock .m-ta {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  color: var(--m-fg);
+  font: 400 12.5px/1.4 var(--m-sans);
+  padding: 2px;
+  outline: none;
+}
+.cs-stats-mock .m-ta::placeholder {
+  color: var(--m-muted-fg);
+}
+.cs-stats-mock .m-send {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 8px;
+  background: var(--m-primary);
+  color: var(--m-primary-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.cs-stats-mock .m-cfoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  min-width: 0;
+}
+.cs-stats-mock .m-fpills {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+.cs-stats-mock .m-fpill,
+.cs-stats-mock .m-stats-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--m-muted-fg);
+  font: 500 11px/1.2 var(--m-sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cs-stats-mock .m-fpill {
+  min-width: 0;
+}
+.cs-stats-mock .m-fpill-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-stats-mock .m-fpill:hover,
+.cs-stats-mock .m-stats-btn:hover {
+  background: var(--m-wash);
+  color: var(--m-fg);
+}
+.cs-stats-mock .m-stats-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.cs-stats-mock .m-stats-btn[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--m-primary) 12%, transparent);
+  color: var(--m-primary);
+}
+.cs-stats-mock .m-foot-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--m-line);
+  flex: 0 0 auto;
+}
+.cs-stats-mock .m-gal {
+  background: var(--m-card);
+  border: 1px solid var(--m-line);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--m-shadow);
+}
+.cs-stats-mock .m-gal-ttl {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--m-fg);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.cs-stats-mock .m-gal-sub {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--m-muted-fg);
+}
+.cs-stats-mock .m-gal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.cs-stats-mock .m-gal-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  border: 1px solid var(--m-line);
+  background: color-mix(in srgb, var(--m-muted) 35%, transparent);
+}
+.cs-stats-mock .m-gal-lbl {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--m-muted-fg);
+}
+.cs-stats-mock .m-gal-foot-box {
+  background: var(--m-card);
+  border-radius: 8px;
+  padding: 4px 8px;
+  box-shadow: var(--m-shadow);
+  max-width: 100%;
+}
+.cs-stats-mock .m-gal-foot-box.is-narrow {
+  width: min(300px, 100%);
+}
+</style>
+
+<div class="cs-stats-mock" data-preview-theme="dark" data-width="normal" data-variant="A" data-scenario="claude" data-scope="self">
+  <div class="m-ctrl-bar">
+    <div class="m-ctrl-grp">
+      <span class="m-ctrl-lbl">테마</span>
+      <div class="m-seg" data-ctrl="theme">
+        <button type="button" data-val="dark" aria-pressed="true">다크</button>
+        <button type="button" data-val="light" aria-pressed="false">라이트</button>
+      </div>
+    </div>
+    <div class="m-ctrl-grp">
+      <span class="m-ctrl-lbl">폭</span>
+      <div class="m-seg" data-ctrl="width">
+        <button type="button" data-val="normal" aria-pressed="true">기본 (560px)</button>
+        <button type="button" data-val="narrow" aria-pressed="false">좁음 (320px)</button>
+      </div>
+    </div>
+    <div class="m-ctrl-grp">
+      <span class="m-ctrl-lbl">우하단 트리거 비교안</span>
+      <div class="m-seg" data-ctrl="variant">
+        <button type="button" data-val="A" aria-pressed="true">A안 (추천)</button>
+        <button type="button" data-val="B" aria-pressed="false">B안</button>
+        <button type="button" data-val="C" aria-pressed="false">C안</button>
+      </div>
+    </div>
+    <div class="m-ctrl-grp">
+      <span class="m-ctrl-lbl">하네스 시나리오</span>
+      <div class="m-seg" data-ctrl="scenario">
+        <button type="button" data-val="claude" aria-pressed="true">Claude</button>
+        <button type="button" data-val="codex" aria-pressed="false">Codex</button>
+        <button type="button" data-val="agy-part" aria-pressed="false">Agy (일부 미등록)</button>
+        <button type="button" data-val="agy-none" aria-pressed="false">Agy (전면 미등록)</button>
+        <button type="button" data-val="pi" aria-pressed="false">Pi</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="m-stage">
+    <div class="m-shell">
+      <div class="m-pop-slot" id="cs-pop-slot">
+        <div class="m-pop" role="dialog" aria-label="세션 누적 통계 및 추정 비용">
+          <div class="m-pop-head">
+            <div class="m-pop-cost-wrap">
+              <span class="m-pop-cost m-num" id="cs-pop-total">$1.84</span>
+              <span class="m-badge is-ok" id="cs-pop-badge">네이티브 집계</span>
+            </div>
+            <div class="m-seg" data-ctrl="scope">
+              <button type="button" data-val="self" aria-pressed="true">본 세션</button>
+              <button type="button" data-val="tree" aria-pressed="false">자식 포함</button>
+            </div>
+          </div>
+
+          <div class="m-kpis">
+            <div class="m-kpi">
+              <span class="m-kpi-lbl">누적 토큰</span>
+              <span class="m-kpi-val m-num" id="cs-kpi-tok">1.42M</span>
+              <span class="m-kpi-sub" id="cs-kpi-tok-sub">캐시 포함 합계</span>
+            </div>
+            <div class="m-kpi">
+              <span class="m-kpi-lbl">캐시 히트</span>
+              <span class="m-kpi-val m-num" id="cs-kpi-hit">88%</span>
+              <span class="m-kpi-sub m-num" id="cs-kpi-save">~$3.12 절감</span>
+            </div>
+            <div class="m-kpi">
+              <span class="m-kpi-lbl">턴 · 호출</span>
+              <span class="m-kpi-val m-num" id="cs-kpi-turns">14 · 38회</span>
+              <span class="m-kpi-sub" id="cs-kpi-turns-sub">세션 누적</span>
+            </div>
+          </div>
+
+          <div class="m-sec">
+            <div class="m-sec-ttl">
+              <span>토큰 구성</span>
+              <span class="m-num" id="cs-bar-sum">1.42M</span>
+            </div>
+            <div class="m-bar" id="cs-bar"></div>
+            <div class="m-tbl" id="cs-bk"></div>
+          </div>
+
+          <div class="m-sec">
+            <div class="m-sec-ttl">
+              <span>모델별 내역</span>
+            </div>
+            <div class="m-tbl" id="cs-models"></div>
+          </div>
+
+          <div class="m-rollup" id="cs-rollup" hidden></div>
+
+          <div class="m-pop-foot" id="cs-pop-foot"></div>
+        </div>
+      </div>
+
+      <div class="m-comp-wrap">
+        <div class="m-child-pill" title="실행 중/누적 자식 에이전트">
+          <svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+          <span id="cs-child-cnt">4</span>
+        </div>
+
+        <div class="m-composer">
+          <div class="m-ctx">
+            <span class="m-num">32%</span>
+            <div class="m-ctx-track">
+              <div class="m-ctx-fill"></div>
+              <span class="m-ctx-tick" style="left:60%"></span>
+              <span class="m-ctx-tick" style="left:80%"></span>
+            </div>
+            <span class="m-num">80,580 / 250K</span>
+            <span class="m-num m-ctx-win">(1.0M)</span>
+          </div>
+
+          <div class="m-inrow">
+            <textarea class="m-ta" rows="2" placeholder="이 세션에 메시지를 보냅니다. Enter로 전송, Shift+Enter로 줄 바꿈."></textarea>
+            <button type="button" class="m-send" aria-label="전송">
+              <svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+            </button>
+          </div>
+
+          <div class="m-cfoot">
+            <div class="m-fpills">
+              <button type="button" class="m-fpill">
+                <svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+                <span class="m-fpill-txt" id="cs-foot-model">claude-sonnet-5-5</span>
+                <svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <button type="button" class="m-fpill">
+                <svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
+                <span class="m-fpill-txt">high</span>
+                <svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+            </div>
+            <span class="m-foot-sep"></span>
+            <button type="button" class="m-stats-btn" id="cs-stats-btn" aria-expanded="true" title="세션 누적 통계 및 비용 보기">
+              <svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16v-6"/></svg>
+              <span class="m-num" id="cs-trigger-txt">$1.84</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="m-gal">
+    <div class="m-gal-ttl">
+      <span>우하단 트리거 한눈에 비교</span>
+      <span class="m-gal-sub">기존 모델/추론 필 우측 배치 · 실제 폭 기준</span>
+    </div>
+    <div class="m-gal-list">
+      <div class="m-gal-item">
+        <span class="m-gal-lbl">1. A안 (추천 · 슬림 금액)</span>
+        <div class="m-gal-foot-box">
+          <div class="m-cfoot">
+            <div class="m-fpills">
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><span class="m-fpill-txt">claude-sonnet-5-5</span></span>
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg><span>high</span></span>
+            </div>
+            <span class="m-foot-sep"></span>
+            <span class="m-stats-btn"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16v-6"/></svg><span class="m-num">$1.84</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="m-gal-item">
+        <span class="m-gal-lbl">2. B안 (금액 + 캐시율)</span>
+        <div class="m-gal-foot-box">
+          <div class="m-cfoot">
+            <div class="m-fpills">
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><span class="m-fpill-txt">claude-sonnet-5-5</span></span>
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg><span>high</span></span>
+            </div>
+            <span class="m-foot-sep"></span>
+            <span class="m-stats-btn"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16v-6"/></svg><span class="m-num">$1.84 · 캐시 88%</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="m-gal-item">
+        <span class="m-gal-lbl">3. C안 (미니멀 stats)</span>
+        <div class="m-gal-foot-box">
+          <div class="m-cfoot">
+            <div class="m-fpills">
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><span class="m-fpill-txt">claude-sonnet-5-5</span></span>
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg><span>high</span></span>
+            </div>
+            <span class="m-foot-sep"></span>
+            <span class="m-stats-btn"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16v-6"/></svg><span>stats</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="m-gal-item">
+        <span class="m-gal-lbl">4. 좁은 폭 320px (자동 축약)</span>
+        <div class="m-gal-foot-box is-narrow">
+          <div class="m-cfoot">
+            <div class="m-fpills">
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><span class="m-fpill-txt">gpt-6.1-sol</span></span>
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg><span>high</span></span>
+            </div>
+            <span class="m-foot-sep"></span>
+            <span class="m-stats-btn"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16v-6"/></svg><span class="m-num">~$0.92</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="m-gal-item">
+        <span class="m-gal-lbl">5. 단가 미등록 폴백 (토큰 표시)</span>
+        <div class="m-gal-foot-box">
+          <div class="m-cfoot">
+            <div class="m-fpills">
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg><span class="m-fpill-txt">gemini-4-neon</span></span>
+              <span class="m-fpill"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg><span>high</span></span>
+            </div>
+            <span class="m-foot-sep"></span>
+            <span class="m-stats-btn"><svg class="m-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16v-6"/></svg><span class="m-num">418K tok</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.querySelector(".cs-stats-mock");
+  if (!root) return;
+
+  var DATA = {
+    claude: {
+      footModel: "claude-sonnet-5-5",
+      childCount: 4,
+      provenance: { text: "네이티브 집계", cls: "is-ok" },
+      foot: "Claude result.total_cost_usd 기준 · 본 세션 직접 집계",
+      self: {
+        cost: "$1.84",
+        chipCost: "$1.84",
+        unpriced: false,
+        tokens: "1.42M",
+        cacheHit: "88%",
+        cacheSave: "~$3.12 절감",
+        turns: "14 · 38회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "110K", usd: "$0.33", pct: 8, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "1.14M", usd: "$0.34", pct: 80, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "108K", usd: "$0.41", pct: 8, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "62K", usd: "$0.76", pct: 4, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "claude-sonnet-5-5", tok: "1.18M", usd: "$1.69" },
+          { name: "claude-haiku-5-5", tok: "240K", usd: "$0.15" }
+        ]
+      },
+      tree: {
+        cost: "~$4.00",
+        chipCost: "~$4.00",
+        unpriced: false,
+        tokens: "3.18M",
+        cacheHit: "86%",
+        cacheSave: "~$6.48 절감",
+        turns: "34 · 92회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "260K", usd: "$0.74", pct: 8, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "2.52M", usd: "$0.76", pct: 79, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "245K", usd: "$0.92", pct: 8, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "155K", usd: "$1.58", pct: 5, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "claude-sonnet-5-5", tok: "2.48M", usd: "$3.56" },
+          { name: "claude-haiku-5-5", tok: "700K", usd: "$0.44" }
+        ],
+        rollup: { selfLbl: "본 세션", selfVal: "$1.84", childLbl: "자식 4개", childVal: "~$2.16", totalVal: "~$4.00" }
+      }
+    },
+    codex: {
+      footModel: "gpt-6.1-sol",
+      childCount: 2,
+      provenance: { text: "API 단가 추정", cls: "is-primary" },
+      foot: "표준 API 단가 기준 추정 · 구독 플랜 실제 청구와 다를 수 있음",
+      self: {
+        cost: "~$0.92",
+        chipCost: "~$0.92",
+        unpriced: false,
+        tokens: "982K",
+        cacheHit: "82%",
+        cacheSave: "~$1.64 절감",
+        turns: "11 · 29회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "148K", usd: "~$0.37", pct: 15, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "762K", usd: "~$0.19", pct: 78, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "0", usd: "—", pct: 0, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "72K (추론 24K)", usd: "~$0.36", pct: 7, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "gpt-6.1-sol", tok: "982K", usd: "~$0.92" }
+        ]
+      },
+      tree: {
+        cost: "~$1.33",
+        chipCost: "~$1.33",
+        unpriced: false,
+        tokens: "1.44M",
+        cacheHit: "81%",
+        cacheSave: "~$2.38 절감",
+        turns: "19 · 47회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "218K", usd: "~$0.54", pct: 15, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "1.11M", usd: "~$0.28", pct: 77, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "0", usd: "—", pct: 0, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "112K (추론 38K)", usd: "~$0.51", pct: 8, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "gpt-6.1-sol", tok: "1.44M", usd: "~$1.33" }
+        ],
+        rollup: { selfLbl: "본 세션", selfVal: "~$0.92", childLbl: "자식 2개", childVal: "~$0.41", totalVal: "~$1.33" }
+      }
+    },
+    "agy-part": {
+      footModel: "gemini-4-neon",
+      childCount: 1,
+      provenance: { text: "일부 미등록", cls: "is-warn" },
+      foot: "표준 API 단가 기준 추정 · 미등록 모델 비용 제외됨(+ 표기)",
+      self: {
+        cost: "~$0.48+",
+        chipCost: "~$0.48+",
+        unpriced: false,
+        tokens: "418K",
+        cacheHit: "76%",
+        cacheSave: "~$0.71 절감",
+        turns: "9 · 21회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "76K", usd: "~$0.14+", pct: 18, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "294K", usd: "~$0.09+", pct: 70, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "0", usd: "—", pct: 0, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "48K (추론 19K)", usd: "~$0.25+", pct: 12, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "gemini-4-hydrogen", tok: "264K", usd: "~$0.48" },
+          { name: "gemini-4-neon", tok: "154K", badge: "단가 미등록" }
+        ]
+      },
+      tree: {
+        cost: "~$0.67+",
+        chipCost: "~$0.67+",
+        unpriced: false,
+        tokens: "596K",
+        cacheHit: "75%",
+        cacheSave: "~$0.99 절감",
+        turns: "14 · 32회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "108K", usd: "~$0.20+", pct: 18, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "418K", usd: "~$0.13+", pct: 70, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "0", usd: "—", pct: 0, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "70K (추론 26K)", usd: "~$0.34+", pct: 12, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "gemini-4-hydrogen", tok: "442K", usd: "~$0.67" },
+          { name: "gemini-4-neon", tok: "154K", badge: "단가 미등록" }
+        ],
+        rollup: { selfLbl: "본 세션", selfVal: "~$0.48+", childLbl: "자식 1개", childVal: "~$0.19", totalVal: "~$0.67+" }
+      }
+    },
+    "agy-none": {
+      footModel: "gemini-4-neon",
+      childCount: 1,
+      provenance: { text: "단가 미등록", cls: "is-muted" },
+      foot: "등록된 모델 단가가 없어 토큰·캐시 히트 중심만 표시합니다",
+      self: {
+        cost: "418K tok",
+        chipCost: "418K tok",
+        unpriced: true,
+        tokens: "418K",
+        cacheHit: "76%",
+        cacheSave: "추정 불가",
+        turns: "9 · 21회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "76K", usd: "—", pct: 18, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "294K", usd: "—", pct: 70, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "0", usd: "—", pct: 0, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "48K (추론 19K)", usd: "—", pct: 12, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "gemini-4-neon", tok: "418K", badge: "단가 미등록" }
+        ]
+      },
+      tree: {
+        cost: "596K tok",
+        chipCost: "596K tok",
+        unpriced: true,
+        tokens: "596K",
+        cacheHit: "75%",
+        cacheSave: "추정 불가",
+        turns: "14 · 32회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "108K", usd: "—", pct: 18, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "418K", usd: "—", pct: 70, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "0", usd: "—", pct: 0, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "70K (추론 26K)", usd: "—", pct: 12, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "gemini-4-neon", tok: "596K", badge: "단가 미등록" }
+        ],
+        rollup: { selfLbl: "본 세션", selfVal: "418K tok", childLbl: "자식 1개", childVal: "178K tok", totalVal: "596K tok" }
+      }
+    },
+    pi: {
+      footModel: "gpt-6.1-sol",
+      childCount: 0,
+      provenance: { text: "네이티브 집계", cls: "is-ok" },
+      foot: "Pi message.usage.cost.total 기준 · 본 세션 직접 집계",
+      self: {
+        cost: "$0.31",
+        chipCost: "$0.31",
+        unpriced: false,
+        tokens: "312K",
+        cacheHit: "79%",
+        cacheSave: "~$0.52 절감",
+        turns: "8 · 19회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "44K", usd: "$0.11", pct: 14, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "242K", usd: "$0.06", pct: 78, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "0", usd: "—", pct: 0, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "26K", usd: "$0.14", pct: 8, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "gpt-6.1-sol", tok: "312K", usd: "$0.31" }
+        ]
+      },
+      tree: {
+        cost: "$0.31",
+        chipCost: "$0.31",
+        unpriced: false,
+        tokens: "312K",
+        cacheHit: "79%",
+        cacheSave: "~$0.52 절감",
+        turns: "8 · 19회",
+        bk: [
+          { lbl: "비캐시 입력", tok: "44K", usd: "$0.11", pct: 14, col: "var(--c-uncached)" },
+          { lbl: "캐시 읽기", tok: "242K", usd: "$0.06", pct: 78, col: "var(--c-cache-r)" },
+          { lbl: "캐시 쓰기", tok: "0", usd: "—", pct: 0, col: "var(--c-cache-w)" },
+          { lbl: "출력·추론", tok: "26K", usd: "$0.14", pct: 8, col: "var(--c-output)" }
+        ],
+        models: [
+          { name: "gpt-6.1-sol", tok: "312K", usd: "$0.31" }
+        ],
+        rollup: { selfLbl: "본 세션", selfVal: "$0.31", childLbl: "자식 0개", childVal: "$0.00", totalVal: "$0.31" }
+      }
+    }
+  };
+
+  var state = { theme: "dark", width: "normal", variant: "A", scenario: "claude", scope: "self", open: true };
+
+  function el(tag, cls, txt) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (txt !== undefined) n.textContent = txt;
+    return n;
+  }
+
+  function render() {
+    root.setAttribute("data-preview-theme", state.theme);
+    root.setAttribute("data-width", state.width);
+
+    var sc = DATA[state.scenario];
+    var view = sc[state.scope];
+
+    root.querySelectorAll(".m-seg[data-ctrl]").forEach(function (grp) {
+      var k = grp.getAttribute("data-ctrl");
+      grp.querySelectorAll("button").forEach(function (b) {
+        b.setAttribute("aria-pressed", String(b.getAttribute("data-val") === state[k]));
+      });
+    });
+
+    var popSlot = root.querySelector("#cs-pop-slot");
+    var statsBtn = root.querySelector("#cs-stats-btn");
+    popSlot.hidden = !state.open;
+    statsBtn.setAttribute("aria-expanded", String(state.open));
+
+    var trig = root.querySelector("#cs-trigger-txt");
+    if (state.variant === "C") {
+      trig.textContent = "stats";
+      trig.classList.remove("m-num");
+    } else if (state.variant === "B") {
+      trig.classList.add("m-num");
+      trig.textContent = state.width === "narrow" ? view.chipCost : (view.chipCost + " · 캐시 " + view.cacheHit);
+    } else {
+      trig.classList.add("m-num");
+      trig.textContent = view.chipCost;
+    }
+
+    root.querySelector("#cs-foot-model").textContent = sc.footModel;
+    root.querySelector("#cs-child-cnt").textContent = String(sc.childCount);
+
+    var costEl = root.querySelector("#cs-pop-total");
+    costEl.textContent = view.cost;
+    costEl.classList.toggle("is-unpriced", Boolean(view.unpriced));
+
+    var badge = root.querySelector("#cs-pop-badge");
+    badge.textContent = sc.provenance.text;
+    badge.className = "m-badge " + sc.provenance.cls;
+
+    root.querySelector("#cs-kpi-tok").textContent = view.tokens;
+    root.querySelector("#cs-kpi-hit").textContent = view.cacheHit;
+    root.querySelector("#cs-kpi-save").textContent = view.cacheSave;
+    root.querySelector("#cs-kpi-turns").textContent = view.turns;
+    root.querySelector("#cs-kpi-turns-sub").textContent = state.scope === "tree" ? "세션 + 자식 합산" : "세션 누적";
+    root.querySelector("#cs-bar-sum").textContent = view.tokens;
+
+    var bar = root.querySelector("#cs-bar");
+    var bk = root.querySelector("#cs-bk");
+    bar.innerHTML = "";
+    bk.innerHTML = "";
+    view.bk.forEach(function (r) {
+      if (r.pct > 0) {
+        var seg = el("span", "m-bar-seg");
+        seg.style.width = r.pct + "%";
+        seg.style.background = r.col;
+        bar.appendChild(seg);
+      }
+      var row = el("div", "m-row");
+      var lbl = el("span", "m-row-lbl");
+      var dot = el("span", "m-dot");
+      dot.style.background = r.col;
+      lbl.appendChild(dot);
+      lbl.appendChild(el("span", "", r.lbl));
+      row.appendChild(lbl);
+      row.appendChild(el("span", "m-row-tok m-num", r.tok));
+      row.appendChild(el("span", "m-row-usd m-num", r.usd));
+      bk.appendChild(row);
+    });
+
+    var mods = root.querySelector("#cs-models");
+    mods.innerHTML = "";
+    view.models.forEach(function (m) {
+      var row = el("div", "m-mod-row");
+      row.appendChild(el("span", "m-mod-name", m.name));
+      row.appendChild(el("span", "m-row-tok m-num", m.tok));
+      if (m.badge) {
+        var b = el("span", "m-badge is-muted", m.badge);
+        row.appendChild(b);
+      } else {
+        row.appendChild(el("span", "m-row-usd m-num", m.usd));
+      }
+      mods.appendChild(row);
+    });
+
+    var roll = root.querySelector("#cs-rollup");
+    if (state.scope === "tree" && view.rollup) {
+      roll.hidden = false;
+      roll.innerHTML = "";
+      var l1 = el("div", "m-rollup-line");
+      l1.appendChild(el("span", "", view.rollup.selfLbl + " (" + view.rollup.selfVal + ") + " + view.rollup.childLbl));
+      l1.appendChild(el("span", "m-num", view.rollup.childVal));
+      var l2 = el("div", "m-rollup-line");
+      l2.appendChild(el("strong", "", "합계"));
+      l2.appendChild(el("strong", "m-num", view.rollup.totalVal));
+      roll.appendChild(l1);
+      roll.appendChild(l2);
+    } else {
+      roll.hidden = true;
+    }
+
+    root.querySelector("#cs-pop-foot").textContent = sc.foot;
+  }
+
+  root.addEventListener("click", function (ev) {
+    var btn = ev.target.closest(".m-seg[data-ctrl] button");
+    if (btn) {
+      var k = btn.parentElement.getAttribute("data-ctrl");
+      state[k] = btn.getAttribute("data-val");
+      render();
+      return;
+    }
+    if (ev.target.closest("#cs-stats-btn")) {
+      state.open = !state.open;
+      render();
+    }
+  });
+
+  render();
+})();
+</script>

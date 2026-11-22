@@ -558,6 +558,11 @@ func TestAgentChildSageToolsFollowKeyScope(t *testing.T) {
 		if !strings.Contains(raw, "tool not available in current") {
 			t.Fatalf("delegate-scoped sage_stamp = %s", raw)
 		}
+		for _, want := range []string{"this key is delegate-scoped", "lead-only tool needs the lead-scoped key a worker-role playbook.render spliced into your prompt"} {
+			if !strings.Contains(raw, want) {
+				t.Fatalf("delegate-scoped sage_stamp refusal lacks %q: %s", want, raw)
+			}
+		}
 		body, err := os.ReadFile(filepath.Join(root, ticketRel))
 		if err != nil {
 			t.Fatal(err)

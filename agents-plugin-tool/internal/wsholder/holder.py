@@ -87,6 +87,18 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
             which its stdin stays open; without them stdin stays open for
             later input operations. A bad input refuses the spawn before the
             child starts. A holder that predates these fields ignores them.
+            "http2_capture": {"path": "...", "max_bytes": n}, optional, routes
+            a pipe child's stderr lines that are Go HTTP/2 debug log lines
+            ("http2: ...", after an optional log timestamp) to a filter and
+            never to the ring: only framer summary lines ("Framer 0x..:
+            wrote|read <TYPE>"), cut after their allowlisted fields
+            (stream, len, flags, ErrCode, LastStreamID, incr), are appended
+            to path with the holder's wall-clock time. max_bytes (64 MiB by
+            default) bounds the whole file: lines stop where one stop marker
+            line still fits, the marker is written once, and a file found
+            at or over the cap, or already ending in the marker, gets
+            nothing more. A line cut into several records is classified by
+            its first record. A holder that predates the field ignores it.
     input   {"data": "<base64>", "eof": false}   eof closes a pipe child's
             stdin after the data.
     resize  {"rows": n, "cols": n}               PTY children only.
@@ -94,6 +106,13 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
     stop    {}   ends the child (TERM, then KILL after a grace period) and
             exits the holder.
     status  {} -> {"child": <status>, "first_seq": n, "next_seq": n}
+    capture_note {"text": "..."} -> {"captured": bool}
+            Appends one line of text (at most 512 bytes, line ends
+            replaced) to the spawn's http2_capture file, under the same cap
+            and with the holder's wall-clock time; captured is false when
+            the child has no capture or the capture has stopped. The
+            daemon marks a cutoff this way, so the capture file has a
+            single writer. A holder that predates it answers unknown_op.
     replay  {"from": n} -> {"first_seq": n, "next_seq": n}
             Starts the record stream at sequence n; n <= 0 means the whole
             ring. When n has already left the ring the stream begins with
@@ -211,6 +230,10 @@ MAX_PENDING_INPUT = 8 << 20
 # One writer pass sends at most this many records and bytes.
 SEND_BATCH_RECORDS = 256
 SEND_BATCH_BYTES = 256 << 10
+# An HTTP/2 frame capture file stops at this size by default.
+HTTP2_CAPTURE_MAX_BYTES = 64 << 20
+# The head of one HTTP/2 trace line the filter looks at; the rest is dropped.
+HTTP2_LINE_KEEP = 4096
 
 WINDOWS = os.name == "nt"
 
@@ -343,6 +366,143 @@ def split_skipped(pattern, pieces, at_start: bool):
         marked.append((not skip, data, partial))
         at_start = not partial
     return marked, at_start
+
+
+# Go's HTTP/2 debug log lines (GODEBUG=http2debug), after the log package's
+# optional date and time.
+HTTP2_LOG_PREFIX = re.compile(rb"^(?:\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? )?http2: ")
+HTTP2_FRAMER = re.compile(
+    rb"^(?:\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? )?http2: "
+    rb"(Framer 0x[0-9a-f]+: (?:wrote|read) [A-Z][A-Z0-9_]*)(?=[ \r\n]|$)"
+)
+HTTP2_FIELD = re.compile(rb"^(stream|len|flags|ErrCode|LastStreamID|incr)=([A-Za-z0-9_|]+),?$")
+
+
+def http2_frame_summary(line: bytes):
+    """The kept part of an HTTP/2 framer summary line, or None for every
+    other line: the framer, direction, and frame type, then the leading
+    allowlisted fields, cut at the first token that is not one of them
+    (header values, data previews, settings, debug data)."""
+    m = HTTP2_FRAMER.match(line)
+    if not m:
+        return None
+    kept = [m.group(1)]
+    for token in line[m.end(1) :].split():
+        if token == b"(conn)":
+            kept.append(token)
+            continue
+        field = HTTP2_FIELD.match(token)
+        if not field:
+            break
+        kept.append(field.group(1) + b"=" + field.group(2))
+    return b" ".join(kept)
+
+
+HTTP2_CAPTURE_STOP = b"ws holder: frame capture stopped at its byte cap\n"
+HTTP2_NOTE_MAX = 512
+
+
+class Http2Capture:
+    """An append-only frame capture file, opened on its first line and held
+    open. The cap counts every byte, the stop marker's included: lines stop
+    where the marker still fits, the marker (HTTP2_CAPTURE_STOP) is written
+    once, and a file reopened at or over the cap, or already ending in the
+    marker, gets nothing more."""
+
+    def __init__(self, path: str, max_bytes: int, log) -> None:
+        self.path = path
+        self.max_bytes = max_bytes
+        self.log = log
+        self.fd = None
+        self.size = 0
+        self.done = False
+        self.lock = threading.Lock()
+
+    def write(self, kept: bytes) -> bool:
+        """Appends kept with the wall-clock time; False when it was not
+        written (the capture has stopped)."""
+        with self.lock:
+            if self.done:
+                return False
+            stamp = datetime.datetime.now().astimezone().isoformat(timespec="microseconds").encode("ascii")
+            try:
+                if self.fd is None and not self._open():
+                    return False
+                line = stamp + b" " + kept + b"\n"
+                if self.size + len(line) + len(HTTP2_CAPTURE_STOP) > self.max_bytes:
+                    if self.size + len(HTTP2_CAPTURE_STOP) <= self.max_bytes:
+                        os.write(self.fd, HTTP2_CAPTURE_STOP)
+                        self.size += len(HTTP2_CAPTURE_STOP)
+                    self.done = True
+                    return False
+                os.write(self.fd, line)
+                self.size += len(line)
+                return True
+            except OSError as exc:
+                self.done = True
+                self.log(f"http2 capture {self.path}: {exc}")
+                return False
+
+    def _open(self) -> bool:
+        # O_BINARY keeps Windows from translating line ends, which would
+        # break the byte count.
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        self.fd = os.open(self.path, flags, 0o600)
+        self.size = os.fstat(self.fd).st_size
+        if self.size >= self.max_bytes:
+            self.done = True
+            return False
+        mark = len(HTTP2_CAPTURE_STOP)
+        if self.size >= mark:
+            # Appends still go to the end; the position only serves this
+            # one read (os.pread is not on Windows).
+            os.lseek(self.fd, self.size - mark, os.SEEK_SET)
+            if os.read(self.fd, mark) == HTTP2_CAPTURE_STOP:
+                self.done = True
+                return False
+        return True
+
+    def close(self) -> None:
+        with self.lock:
+            self.done = True
+            if self.fd is not None:
+                try:
+                    os.close(self.fd)
+                except OSError:
+                    pass
+                self.fd = None
+
+
+class Http2Router:
+    """Splits one pipe stream's records into the ones the ring keeps and
+    the HTTP/2 trace lines it never sees. A logical line is classified by
+    its first record; every continuation record follows it."""
+
+    def __init__(self, capture: Http2Capture) -> None:
+        self.capture = capture
+        self.at_start = True
+        self.trace = False
+        self.head = bytearray()
+
+    def route(self, pieces):
+        kept = []
+        for data, partial in pieces:
+            if self.at_start:
+                self.trace = HTTP2_LOG_PREFIX.match(data) is not None
+                self.head = bytearray()
+            if self.trace:
+                room = HTTP2_LINE_KEEP - len(self.head)
+                if room > 0:
+                    self.head += data[:room]
+                if not partial:
+                    summary = http2_frame_summary(bytes(self.head).rstrip(b"\r\n"))
+                    self.head = bytearray()
+                    if summary is not None:
+                        self.capture.write(summary)
+            else:
+                kept.append((data, partial))
+            self.at_start = not partial
+        return kept
 
 
 class LineSplitter:
@@ -793,7 +953,16 @@ def parse_spawn_spec(req: dict) -> dict:
     data = parse_input_data(req.get("input"))
     if len(data) > MAX_PENDING_INPUT:
         raise OpError("input_overflow", "the spawn input exceeds the unread input limit")
+    capture = req.get("http2_capture")
+    if capture is not None:
+        if not isinstance(capture, dict) or not isinstance(capture.get("path"), str) or not capture["path"]:
+            raise OpError("bad_request", "spawn http2_capture needs a path string")
+        limit = capture.get("max_bytes", HTTP2_CAPTURE_MAX_BYTES)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise OpError("bad_request", "spawn http2_capture max_bytes must be a positive integer")
+        capture = {"path": capture["path"], "max_bytes": limit}
     return {
+        "http2_capture": capture,
         "argv": argv,
         "cwd": cwd,
         "env": env,
@@ -1011,6 +1180,7 @@ class Holder:
         self.cond = threading.Condition()
         self.attachment: Attachment | None = None
         self.child = None
+        self.http2_capture: Http2Capture | None = None
         self.child_status: dict = {"state": "none"}
         self.input_queue: list = []
         self.input_pending = 0
@@ -1309,6 +1479,9 @@ class Holder:
         except Exception as exc:  # OSError, a ctypes failure, a bad argument
             raise OpError("spawn_failed", f"{type(exc).__name__}: {exc}") from None
         self.child = child
+        capture = spec["http2_capture"]
+        if capture is not None and child.mode == "pipe":
+            self.http2_capture = Http2Capture(capture["path"], capture["max_bytes"], self.log)
         self.child_status = {"state": "running", "pid": child.pid, "mode": child.mode}
         if child.mode == "pipe":
             self.child_status["input_closed"] = False
@@ -1377,6 +1550,14 @@ class Holder:
             "next_seq": self.ring.next_seq,
         }
 
+    def _op_capture_note(self, att: Attachment, req: dict) -> dict:
+        text = req.get("text")
+        if not isinstance(text, str) or not text:
+            raise OpError("bad_request", "capture_note needs a text string")
+        data = text.encode("utf-8", "replace").replace(b"\r", b" ").replace(b"\n", b" ")[:HTTP2_NOTE_MAX]
+        capture = self.http2_capture
+        return {"captured": capture is not None and capture.write(data)}
+
     def _op_replay(self, att: Attachment, req: dict) -> dict:
         from_seq = req.get("from", 0)
         if not isinstance(from_seq, int) or isinstance(from_seq, bool):
@@ -1392,6 +1573,7 @@ class Holder:
         "stop": _op_stop,
         "status": _op_status,
         "replay": _op_replay,
+        "capture_note": _op_capture_note,
     }
 
     # -- the child's threads --
@@ -1399,6 +1581,9 @@ class Holder:
     def _read_output(self, child, stream: str, source) -> None:
         splitter = LineSplitter(self.max_record) if child.mode == "pipe" else None
         skip = self.ring_skip if splitter is not None and stream == "stdout" else None
+        router = None
+        if splitter is not None and stream == "stderr" and self.http2_capture is not None:
+            router = Http2Router(self.http2_capture)
         at_start = True
         while True:
             chunk = child.read(source)
@@ -1408,6 +1593,8 @@ class Holder:
                 pieces = [(chunk[i : i + self.max_record], False) for i in range(0, len(chunk), self.max_record)]
             else:
                 pieces = list(splitter.feed(chunk))
+            if router is not None:
+                pieces = router.route(pieces)
             if skip is not None:
                 marked, at_start = split_skipped(skip, pieces, at_start)
                 self._append_marked(stream, marked)
@@ -1415,6 +1602,8 @@ class Holder:
                 self._append_output(stream, pieces)
         if splitter is not None:
             pieces = list(splitter.flush())
+            if router is not None:
+                pieces = router.route(pieces)
             if skip is not None:
                 marked, at_start = split_skipped(skip, pieces, at_start)
                 self._append_marked(stream, marked)
@@ -1553,6 +1742,8 @@ class Holder:
         deadline = time.monotonic() + 2.0
         for t in readers:
             t.join(timeout=max(0.0, deadline - time.monotonic()))
+        if self.http2_capture is not None:
+            self.http2_capture.close()
         with self.cond:
             self.child_status = {"state": "exited", "pid": child.pid, "mode": child.mode, **fields}
             # The totals let a replay whose output records all left the

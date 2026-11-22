@@ -8,6 +8,7 @@ mod accelerator;
 mod close;
 mod daemon;
 mod daemon_package;
+mod downloads;
 mod endpoint;
 #[cfg(all(test, unix))]
 mod full_stop_e2e;
@@ -84,6 +85,7 @@ fn build_webview(
                 }
             }
         })
+        .on_download(downloads::handler(connection.clone()))
         .on_new_window(move |url, _features| {
             let pin = state.pinned_url();
             match popup(&url, pin.as_ref()) {

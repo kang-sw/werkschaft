@@ -28,10 +28,10 @@ test('new session saves only successful starts and restores available per-harnes
   };
   vm.createContext(c);
   const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
-  vm.runInContext(source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
   const p = c.rpLeadMake(), btn = new Element('button');
   const find = (el, pred) => pred(el) ? el : el.children.map(x => find(x, pred)).find(Boolean);
-  const all = (el, tag) => [ ...(el.tag === tag ? [el] : []), ...el.children.flatMap(x => all(x, tag)) ];
+  const all = (el, tag) => [ ...(el.tag === tag && !el.attrs['data-tier-picker'] ? [el] : []), ...el.children.flatMap(x => all(x, tag)) ];
   const click = el => el.events.click({ target: el });
   p.open('root', 'name', btn);
   assert.equal(writes, 0);
@@ -90,9 +90,9 @@ test('new session popover rereads the harness choices on every open and keeps th
   };
   vm.createContext(c);
   const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
-  vm.runInContext(source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
   const p = c.rpLeadMake(), btn = new Element('button');
-  const all = (el, tag) => [ ...(el.tag === tag ? [el] : []), ...el.children.flatMap(x => all(x, tag)) ];
+  const all = (el, tag) => [ ...(el.tag === tag && !el.attrs['data-tier-picker'] ? [el] : []), ...el.children.flatMap(x => all(x, tag)) ];
   const options = el => el.children.map(o => o.value);
   p.open('root', 'name', btn);
   // The held list answers at once; the read is still sent.
@@ -109,3 +109,597 @@ test('new session popover rereads the harness choices on every open and keeps th
   pending.shift()(500, {});
   assert.deepEqual(options(model), ['', 'gpt-old', 'gpt-new']);
 });
+
+test('a named tier fills harness, model and effort; a hand edit returns to manual; permission and payload stay concrete', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+  }
+  const pending = [], posts = [];
+  const hs = [
+    { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto', 'plan'], permission_levels: ['read-only', 'workdir-write'] },
+    { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] }
+  ];
+  const tiers = [
+    { name: 'broken', error: 'tier "broken": harness gone' },
+    { name: 'deep', trace: 'deep', harness: 'codex', model: 'gpt-5', effort: 'high' },
+    { name: 'far', trace: 'far', harness: 'agy', model: 'm' }
+  ];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs });
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  assert.ok(picker, 'the picker row exists');
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const holder = find(p.el, e => e.children.some(x => x.children && x.children.includes(picker)));
+  assert.equal(holder.hidden, true, 'no named tiers: the picker row is hidden and the form reads as before');
+
+  // Bundles arrive with the choices; an unresolvable tier and one whose
+  // harness this popover cannot start are listed but cannot be picked.
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+  assert.equal(holder.hidden, false);
+  assert.deepEqual(picker.children.map(o => [o.value, !!o.disabled]), [['', false], ['broken', true], ['deep', false], ['far', true]]);
+  assert.equal(p.harness, 'claude');
+  // A level the tier's harness does not offer stays the user's pick (the
+  // form shows it as dropped and does not send it); the tier never clears it.
+  p.level = 'workdir-write';
+  picker.value = 'deep'; picker.events.change();
+  assert.equal(p.harness, 'codex');
+  assert.equal(p.level, 'workdir-write', 'the tier does not rewrite the permission pick');
+  p.level = 'read-only';
+
+  // Picking fills the editable fields; the permission level is untouched.
+  picker.value = 'deep'; picker.events.change();
+  assert.equal(p.harness, 'codex');
+  assert.equal(model.value, 'gpt-5');
+  assert.equal(effort.value, 'high');
+  assert.equal(p.level, 'read-only', 'the permission level is independent of the tier');
+  assert.equal(picker.value, 'deep');
+
+  // A hand edit of the model returns the picker to manual and keeps the edit.
+  model.value = 'gpt-5-mini'; model.events.change(model);
+  assert.equal(picker.value, '', 'a manual model edit returns to manual');
+  assert.equal(model.value, 'gpt-5-mini');
+  picker.value = 'deep'; picker.events.change();
+  effort.value = 'low'; effort.events.change(effort);
+  assert.equal(picker.value, '', 'a manual effort edit returns to manual');
+  picker.value = 'deep'; picker.events.change();
+  const seg = find(p.el, e => e.attrs['aria-label'] === 'js.sup.harness');
+  const claude = find(seg, e => e.attrs['data-harness'] === 'claude'), codex = find(seg, e => e.attrs['data-harness'] === 'codex');
+  seg.events.click({ target: { closest: () => claude } });
+  assert.equal(picker.value, '', 'a harness change returns to manual');
+  seg.events.click({ target: { closest: () => codex } });
+
+  // The launch sends the concrete fields and the user's own level; no tier.
+  picker.value = 'deep'; picker.events.change();
+  p.level = 'read-only';
+  const start = p.el.children.at(-1).children.at(-1);
+  start.events.click({ target: start });
+  pending.shift()(200, { harnesses: hs, tiers });
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].path, '/agents/leads/permission');
+  const body = posts[0].body;
+  assert.equal(body.harness, 'codex');
+  assert.equal(body.model, 'gpt-5');
+  assert.equal(body.effort, 'high');
+  assert.equal(body.level, 'read-only');
+  assert.equal('tier' in body, false, 'the launch carries no tier name');
+});
+
+test('a picked named tier keeps its off-catalog model and effort across a choices refresh, and goes manual when it vanishes', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+  }
+  const pending = [], posts = [];
+  const hs = [
+    { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto', 'plan'], permission_levels: ['read-only'] },
+    { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] }
+  ];
+  // The bundle's model and effort are not in codex's catalog lists.
+  const offCatalog = { name: 'preview', trace: 'preview', harness: 'codex', model: 'gpt-x-preview', effort: 'xhigh' };
+  const tiers = [offCatalog];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const start = p.el.children.at(-1).children.at(-1);
+  // launch clicks Start; the permission pre-flight re-reads the choices.
+  const launch = () => {
+    start.events.click({ target: start });
+    if (pending.length) pending.shift()(200, { harnesses: hs, tiers });
+    const sent = posts.shift();
+    return sent && sent.body;
+  };
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+
+  // Reopened over a held list: the tier is picked before the fresh list
+  // arrives, whose redraw would drop the off-catalog values.
+  p.open('root', 'name', btn);
+  picker.value = 'preview'; picker.events.change();
+  assert.equal(model.value, 'gpt-x-preview');
+  assert.equal(effort.value, 'xhigh');
+  pending.shift()(200, { harnesses: hs, tiers });
+  assert.equal(picker.value, 'preview', 'the tier stays picked');
+  assert.equal(model.value, 'gpt-x-preview', 'the refresh re-applies the bundle model');
+  assert.equal(effort.value, 'xhigh', 'the refresh re-applies the bundle effort');
+  p.level = 'read-only';
+  let body = launch();
+  assert.equal(body.harness, 'codex');
+  assert.equal(body.model, 'gpt-x-preview', 'the launch carries the bundle model, not a blank');
+  assert.equal(body.effort, 'xhigh');
+
+  // Backstop: fields that disagree with the shown tier are never sent; the
+  // tier is put back first.
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+  picker.value = 'preview'; picker.events.change();
+  model.value = ''; effort.value = '';
+  p.level = 'read-only';
+  body = launch();
+  assert.equal(body.model, 'gpt-x-preview');
+  assert.equal(body.effort, 'xhigh');
+
+  // The bundle vanished from the refreshed list: back to manual, the fields
+  // keep what they show (a re-read never changes them), and what the form
+  // shows is what it sends.
+  p.open('root', 'name', btn);
+  picker.value = 'preview'; picker.events.change();
+  pending.shift()(200, { harnesses: hs, tiers: [] });
+  assert.equal(picker.value, '', 'a vanished tier returns the form to manual');
+  assert.equal(model.value, 'gpt-x-preview');
+  assert.equal(effort.value, 'xhigh');
+  p.level = 'read-only';
+  body = launch();
+  assert.equal(body.model, model.value);
+  assert.equal(body.effort, effort.value);
+});
+
+test('the full-permission grant launches the request the warning named, even after a refresh re-applies the tier elsewhere', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+    showModal() { this.open = true; }
+    close() { this.open = false; }
+  }
+  const pending = [], posts = [], dialogs = [];
+  const levels = ['read-only', 'workdir-write', 'full'];
+  const hs = [
+    { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }, { id: 'sonnet' }], efforts: ['high', 'max'], permission_modes: ['auto', 'plan'], permission_levels: levels },
+    { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: levels }
+  ];
+  const onCodex = [{ name: 'name', trace: 'name', harness: 'codex', model: 'gpt-5', effort: 'low' }];
+  const onClaude = [{ name: 'name', trace: 'name', harness: 'claude', model: 'sonnet', effort: 'max' }];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    doc: { body: { appendChild(e) { e.parentNode = this; dialogs.push(e); return e; } } },
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const texts = (el) => [el.text || '', ...el.children.flatMap(texts)].join(' ');
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const start = p.el.children.at(-1).children.at(-1);
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers: onCodex });
+
+  // Reopened over the held list: /support/choices is still out while the
+  // tier is picked on codex and Start opens the full warning.
+  p.open('root', 'name', btn);
+  picker.value = 'name'; picker.events.change();
+  assert.equal(p.harness, 'codex');
+  p.level = 'full';
+  start.events.click({ target: start });
+  const dlg = dialogs[0];
+  assert.ok(dlg && dlg.open, 'the full warning is open');
+  assert.match(texts(dlg), /name · codex/, 'the warning names codex');
+  assert.equal(posts.length, 0);
+
+  // The held read lands: the same bundle now maps to claude, and the
+  // refresh re-applies it while the warning stays open.
+  pending.shift()(200, { harnesses: hs, tiers: onClaude });
+  assert.equal(p.harness, 'claude', 'the refresh re-applied the tier on claude');
+  assert.equal(model.value, 'sonnet');
+
+  // Tick and grant: the launch is the one the warning named.
+  const box = dlg.children[3].children[0], grant = dlg.children[4].children[1];
+  box.checked = true; box.events.change();
+  grant.events.click();
+  assert.equal(pending.length, 1, 'the grant runs the permission pre-flight');
+  pending.shift()(200, { harnesses: hs, tiers: onClaude });
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].path, '/agents/leads/permission');
+  const body = posts[0].body;
+  assert.equal(body.harness, 'codex', 'the grant launches the harness the warning named');
+  assert.equal(body.model, 'gpt-5');
+  assert.equal(body.effort, 'low');
+  assert.equal(body.level, 'full');
+  assert.equal(body.ack, true);
+  assert.equal(effort.value, 'max', 'the form itself still shows the refreshed tier');
+});
+
+test('a refused full grant for a harness the form no longer shows leaves the form permission untouched', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+    showModal() { this.open = true; }
+    close() { this.open = false; }
+  }
+  const pending = [], posts = [], dialogs = [];
+  const levels = ['read-only', 'workdir-write', 'full'];
+  const claude = { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }, { id: 'sonnet' }], efforts: ['high', 'max'], permission_modes: ['auto', 'plan'], permission_levels: levels };
+  const codex = { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: levels };
+  const hs = [claude, codex];
+  const codexGone = [claude, { ...codex, available: false, error: 'not installed' }];
+  const onCodex = [{ name: 'name', trace: 'name', harness: 'codex', model: 'gpt-5', effort: 'low' }];
+  const onClaude = [{ name: 'name', trace: 'name', harness: 'claude', model: 'sonnet', effort: 'max' }];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    doc: { body: { appendChild(e) { e.parentNode = this; dialogs.push(e); return e; } } },
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const texts = (el) => [el.text || '', ...el.children.flatMap(texts)].join(' ');
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const start = p.el.children.at(-1).children.at(-1);
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers: onCodex });
+
+  // The full warning opens for codex while /support/choices is still out.
+  p.open('root', 'name', btn);
+  picker.value = 'name'; picker.events.change();
+  p.level = 'full';
+  start.events.click({ target: start });
+  const dlg = dialogs[0];
+  assert.ok(dlg && dlg.open, 'the full warning is open');
+  assert.match(texts(dlg), /name · codex/);
+
+  // The held read rebinds the bundle to claude and marks codex unavailable.
+  pending.shift()(200, { harnesses: codexGone, tiers: onClaude });
+  assert.equal(p.harness, 'claude');
+
+  // Grant: the snapshot's codex pre-flight fails and sends nothing.
+  const grant = () => {
+    const box = dlg.children[3].children[0];
+    box.checked = true; box.events.change();
+    dlg.children[4].children[1].events.click();
+  };
+  grant();
+  assert.equal(pending.length, 1, 'the grant runs the permission pre-flight');
+  pending.shift()(200, { harnesses: codexGone, tiers: onClaude });
+  assert.equal(posts.length, 0, 'a refused snapshot sends nothing');
+  assert.ok(!dlg.open, 'the warning closed');
+  assert.match(texts(p.el), /js\.perm\.unsent/, 'the refusal shows');
+  assert.equal(p.dropped, '', 'the refusal does not drop the level of the form now on claude');
+  assert.equal(p.level, 'full');
+
+  // The next Start is a full start for claude, through the warning again.
+  start.events.click({ target: start });
+  assert.equal(posts.length, 0, 'Start asks again before a full start');
+  assert.ok(dlg.open, 'the full warning opened again');
+  assert.match(texts(dlg), /name · claude/i);
+  grant();
+  pending.shift()(200, { harnesses: codexGone, tiers: onClaude });
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].path, '/agents/leads/permission');
+  assert.equal(posts[0].body.harness, 'claude');
+  assert.equal(posts[0].body.level, 'full');
+  assert.equal(posts[0].body.ack, true);
+});
+
+test('a choices read after a stream reconnect re-applies the picked tier, so its note and the fields agree', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+  }
+  const pending = [];
+  const hs = [
+    { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto'], permission_levels: ['read-only'] },
+    { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] }
+  ];
+  const before = [{ name: 'deep', trace: 'deep', harness: 'codex', model: 'gpt-5', effort: 'high' }];
+  const after = [{ name: 'deep', trace: 'deep', harness: 'codex', model: 'gpt-5-mini', effort: 'low' }];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost() {}
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const note = () => find(p.el, e => /^js\.lead\.tier\.(picked|hint)/.test(e.text || '')).text;
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers: before });
+  picker.value = 'deep'; picker.events.change();
+  assert.equal(model.value, 'gpt-5');
+
+  // The stream came back; the re-read lists the bundle with new values.
+  p.permSync(true);
+  assert.equal(pending.length, 1, 'the reconnect re-reads the choices');
+  pending.shift()(200, { harnesses: hs, tiers: after });
+  assert.equal(picker.value, 'deep', 'the tier stays picked');
+  assert.match(note(), /gpt-5-mini/, 'the note shows the refreshed bundle');
+  assert.equal(model.value, 'gpt-5-mini', 'the model field follows the note');
+  assert.equal(effort.value, 'low', 'the effort field follows the note');
+
+  // A tier the re-read no longer lists returns the form to manual.
+  p.permSync(true);
+  pending.shift()(200, { harnesses: hs, tiers: [] });
+  assert.equal(picker.value, '');
+  assert.match(note(), /^js\.lead\.tier\.hint/);
+});
+
+test('a choices re-read never changes the fields on its own: manual off-catalog values and the harness stay', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+  }
+  const pending = [], posts = [];
+  const claude = { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto'], permission_levels: ['read-only'] };
+  const codex = { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] };
+  const hs = [claude, codex];
+  // The bundle's effort is not in codex's catalog list.
+  const tiers = [{ name: 'preview', trace: 'preview', harness: 'codex', model: 'gpt-5', effort: 'xhigh' }];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const start = p.el.children.at(-1).children.at(-1);
+  const launch = (list) => {
+    start.events.click({ target: start });
+    if (pending.length) pending.shift()(200, list);
+    const sent = posts.shift();
+    return sent && sent.body;
+  };
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+
+  // The repro: a bundle with an off-catalog effort, then a manual model
+  // edit; the picker goes manual and the effort stays. A reconnect re-reads
+  // identical choices.
+  picker.value = 'preview'; picker.events.change();
+  assert.equal(effort.value, 'xhigh');
+  model.value = 'gpt-5-mini'; model.events.change(model);
+  assert.equal(picker.value, '', 'the hand edit returns to manual');
+  p.permSync(true);
+  pending.shift()(200, { harnesses: hs, tiers });
+  assert.equal(model.value, 'gpt-5-mini');
+  assert.equal(effort.value, 'xhigh', 'the re-read keeps the off-catalog effort');
+  p.level = 'read-only';
+  let body = launch({ harnesses: hs, tiers });
+  assert.equal(body.harness, 'codex');
+  assert.equal(body.model, 'gpt-5-mini');
+  assert.equal(body.effort, 'xhigh', 'the launch still carries the effort the form shows');
+
+  // A manual model the refreshed catalog dropped stays picked and is sent.
+  const seg = find(p.el, e => e.attrs['aria-label'] === 'js.sup.harness');
+  const toCodex = () => seg.events.click({ target: { closest: () => find(seg, e => e.attrs['data-harness'] === 'codex') } });
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+  toCodex();
+  model.value = 'gpt-5-mini'; model.events.change(model);
+  effort.value = 'low'; effort.events.change(effort);
+  const dropped = [claude, { ...codex, models: [{ id: 'gpt-5' }] }];
+  p.permSync(true);
+  pending.shift()(200, { harnesses: dropped, tiers });
+  assert.equal(p.harness, 'codex');
+  assert.equal(model.value, 'gpt-5-mini', 'a model the catalog dropped stays');
+  assert.ok(model.children.some(o => o.value === 'gpt-5-mini'), 'it is kept as an option');
+  p.level = 'read-only';
+  body = launch({ harnesses: dropped, tiers });
+  assert.equal(body.model, 'gpt-5-mini');
+  assert.equal(body.effort, 'low');
+
+  // A harness that turned unavailable is not swapped for another: it stays
+  // shown and Start refuses it.
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+  toCodex();
+  assert.equal(p.harness, 'codex');
+  p.permSync(true);
+  pending.shift()(200, { harnesses: [claude, { ...codex, available: false }], tiers });
+  assert.equal(p.harness, 'codex', 'the re-read keeps the shown harness');
+  assert.equal(start.disabled, true, 'Start refuses the unavailable harness');
+  start.events.click({ target: start });
+  assert.equal(posts.length, 0, 'nothing is launched on another harness');
+});
+
+// A refreshed catalog with an empty model or effort list while the harness
+// stays available (an absent or unreadable model cache after its TTL): the
+// value the form holds stays an enabled option and is sent; with no value
+// held the row keeps today's default.
+for (const field of ['model', 'effort']) {
+  test(`an empty ${field} list on an available harness keeps the shown ${field} enabled and sends it`, () => {
+    class Element {
+      constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+      appendChild(c) { this.children.push(c); return c; }
+      insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+      set textContent(v) { this.children = []; this.text = v; }
+      get textContent() { return this.text || ''; }
+      set value(v) { this._value = v; }
+      get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+      setAttribute(k, v) { this.attrs[k] = v; }
+      getAttribute(k) { return this.attrs[k] || ''; }
+      addEventListener(k, f) { this.events[k] = f; }
+      focus() {}
+    }
+    const pending = [], posts = [];
+    const claude = { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto'], permission_levels: ['read-only'] };
+    const codex = { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] };
+    const hs = [claude, codex];
+    const empty = [claude, { ...codex, [field === 'model' ? 'models' : 'efforts']: [] }];
+    const tiers = [];
+    const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+      localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+      supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+      tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+      gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+      WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+    };
+    vm.createContext(c);
+    const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+    vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+    const p = c.rpLeadMake(), btn = new Element('button');
+    const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+    const find = (el, pred) => all(el, pred)[0];
+    const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+    const sel = field === 'model' ? model : effort;
+    const start = p.el.children.at(-1).children.at(-1);
+    const seg = find(p.el, e => e.attrs['aria-label'] === 'js.sup.harness');
+    const toCodex = () => seg.events.click({ target: { closest: () => find(seg, e => e.attrs['data-harness'] === 'codex') } });
+    const launch = (list) => {
+      start.events.click({ target: start });
+      if (pending.length) pending.shift()(200, list);
+      const sent = posts.shift();
+      return sent && sent.body;
+    };
+
+    // The repro: a picked model and effort, then a re-read whose list for
+    // this field is empty.
+    p.open('root', 'name', btn);
+    pending.shift()(200, { harnesses: hs, tiers });
+    toCodex();
+    model.value = 'gpt-5-mini'; model.events.change(model);
+    effort.value = 'low'; effort.events.change(effort);
+    p.permSync(true);
+    pending.shift()(200, { harnesses: empty, tiers });
+    assert.equal(p.harness, 'codex');
+    const shown = field === 'model' ? 'gpt-5-mini' : 'low';
+    assert.equal(sel.value, shown, `the ${field} stays shown`);
+    assert.ok(sel.children.some(o => o.value === shown), `it is an option`);
+    assert.equal(sel.disabled, false, `the ${field} select stays enabled`);
+    assert.equal(start.disabled, false);
+    p.level = 'read-only';
+    let body = launch({ harnesses: empty, tiers });
+    assert.ok(body, 'Start launched');
+    assert.equal(body.model, 'gpt-5-mini', 'the launch carries the shown model');
+    assert.equal(body.effort, 'low', 'the launch carries the shown effort');
+
+    // With no value held, an empty list keeps the default: the row stays
+    // off and nothing is sent for it.
+    p.open('root', 'name', btn);
+    pending.shift()(200, { harnesses: hs, tiers });
+    toCodex();
+    assert.equal(sel.value, '');
+    p.permSync(true);
+    pending.shift()(200, { harnesses: empty, tiers });
+    assert.equal(sel.disabled, true, `an empty ${field} list with no pick stays disabled`);
+    p.level = 'read-only';
+    body = launch({ harnesses: empty, tiers });
+    assert.ok(body, 'Start launched');
+    assert.equal(body[field], '');
+  });
+}

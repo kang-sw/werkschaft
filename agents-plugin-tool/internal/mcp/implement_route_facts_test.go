@@ -148,6 +148,9 @@ func TestEnterImplementMissingRouteFactsIsNamedNotDefaulted(t *testing.T) {
 			if !strings.HasPrefix(result.NextInstruction, "Stop and report missing route facts:") {
 				t.Fatalf("next instruction did not lead with the missing-facts stop: %q", result.NextInstruction)
 			}
+			if !strings.Contains(result.NextInstruction, "proposed_resolution: run ticket-fact-populator on ai-docs/tickets/ready/260627-feat-enter-implement-deterministic-verdict-engine.md") {
+				t.Fatalf("missing-facts stop does not name its remedy: %q", result.NextInstruction)
+			}
 			if !containsString(result.Conditions, "route-facts="+tc.wantStatus) {
 				t.Fatalf("conditions missing the named outcome: %v", result.Conditions)
 			}
@@ -366,5 +369,175 @@ func TestEnterImplementReviewPhaseResolvesThroughParentSession(t *testing.T) {
 		if got := containsString(keysOf(record.Todos), "review"); got != wantNeed {
 			t.Fatalf("%s: installed review todo = %v, want %v: %v", tc.name, got, wantNeed, keysOf(record.Todos))
 		}
+	}
+}
+
+// TestDaemonWorkerKeyInheritsReviewPolicyFromItsSpawner pins the daemon-worker
+// path of review_phase: the spawn key is a parentless delegate key (never a
+// top-level lead, and Ensure accepts only parentless records), yet a lead that
+// set review_phase=off must still resolve to no review for the worker's
+// route.resolve_implement, while a spawn key minted without the lead stays at
+// the builtin lite. Route state, todo and agenda stay on the spawn key.
+func TestDaemonWorkerKeyInheritsReviewPolicyFromItsSpawner(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	initGit(t, root)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	server := NewServer(root, "test")
+	leadKey, _ := parseLoginResponse(t, callLogin(t, server, 1, root, nil))
+	if tune := callToolWithKey(t, server, 2, leadKey, "config.tune", map[string]any{"key": "review_phase", "value": "off", "scope": "session"}); !strings.Contains(tune, "review_phase: off [scope:session]") {
+		t.Fatalf("session tune response = %s", tune)
+	}
+	keys := NewAgentKeyStore()
+	inherited, err := keys.MintChild(root, leadKey)
+	if err != nil {
+		t.Fatalf("MintChild: %v", err)
+	}
+	independent, err := keys.Mint(root)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	// The inheriting key is still a parentless delegate key at its root, so
+	// the daemon's rejoin Ensure accepts it.
+	if entry, ok := server.sessions.lookup(inherited); !ok || entry.scope != roleDelegate || entry.parent != "" || entry.root != root {
+		t.Fatalf("inheriting key = %+v %v, want a parentless delegate key", entry, ok)
+	}
+	if err := keys.Ensure(root, inherited); err != nil {
+		t.Fatalf("Ensure of an inheriting key: %v", err)
+	}
+	for _, tc := range []struct {
+		name      string
+		key       string
+		wantAlloc string
+	}{
+		{name: "worker key minted under the tuned lead", key: inherited, wantAlloc: "none"},
+		{name: "worker key minted without it", key: independent, wantAlloc: "lite"},
+	} {
+		var result implementResult
+		if err := json.Unmarshal([]byte(callToolWithKey(t, server, 5, tc.key, "route.resolve_implement", implementSkipDocsArgs("json"))), &result); err != nil {
+			t.Fatalf("%s: json verdict did not parse: %v", tc.name, err)
+		}
+		if result.Verdict.ReviewAlloc != tc.wantAlloc {
+			t.Fatalf("%s: review = %q, want %q", tc.name, result.Verdict.ReviewAlloc, tc.wantAlloc)
+		}
+		record, ok := server.sessions.readState(tc.key, partAll)
+		if !ok || record.Agenda["implement"] == nil {
+			t.Fatalf("%s: the route state was not stored on the key it was called with", tc.name)
+		}
+	}
+	// Nothing was written to the lead's own key by the workers' routes.
+	if record, ok := server.sessions.readState(leadKey, partAll); !ok || record.Agenda["implement"] != nil {
+		t.Fatalf("a worker's route wrote the lead key's agenda: %+v", record.Agenda)
+	}
+}
+
+// TestPolicyParentSurvivesAnOlderWritersKeyRewrite pins the mixed-version
+// guarantee of the policy-parent link: an older daemon (whose sessionKeyRecord
+// has no policy field) re-marshals key.json on an ordinary mutation (the
+// first mailbox.send on a key, an override write) and atomically replaces the
+// file. The link lives in its own file in the key directory, outside
+// recordParts, so that rewrite cannot drop it. A cold reader (a restarted
+// process: no memoized read) still resolves the lead's session policy.
+func TestPolicyParentSurvivesAnOlderWritersKeyRewrite(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	initGit(t, root)
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	server := NewServer(root, "test")
+	leadKey, _ := parseLoginResponse(t, callLogin(t, server, 1, root, nil))
+	if tune := callToolWithKey(t, server, 2, leadKey, "config.tune", map[string]any{"key": "review_phase", "value": "off", "scope": "session"}); !strings.Contains(tune, "review_phase: off [scope:session]") {
+		t.Fatalf("session tune response = %s", tune)
+	}
+	inherited, err := NewAgentKeyStore().MintChild(root, leadKey)
+	if err != nil {
+		t.Fatalf("MintChild: %v", err)
+	}
+	d, err := server.sessions.dirs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyFile := d.partPath(inherited, partKey)
+	before, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(before), leadKey) {
+		t.Fatalf("key.json names the policy parent, so an older writer's rewrite would drop it: %s", before)
+	}
+	// The older writer: decode key.json into the record shape it knows and
+	// marshal it back over the file, the whole-file replace of its mutation
+	// path (the current sessionKeyRecord carries no policy field).
+	var old sessionKeyRecord
+	if err := json.Unmarshal(before, &old); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, rewritten, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A real record mutation on top of it, as the first mailbox.send does.
+	if err := server.sessions.setReviewTrackNudgeShown(inherited); err != nil {
+		t.Fatalf("mutation: %v", err)
+	}
+	// A restarted reader has no memoized marker read.
+	cold := NewServer(root, "test")
+	var result implementResult
+	if err := json.Unmarshal([]byte(callToolWithKey(t, cold, 5, inherited, "route.resolve_implement", implementSkipDocsArgs("json"))), &result); err != nil {
+		t.Fatalf("json verdict did not parse: %v", err)
+	}
+	if result.Verdict.ReviewAlloc != "none" {
+		t.Fatalf("review after an older writer's key rewrite = %q, want the lead's none", result.Verdict.ReviewAlloc)
+	}
+}
+
+// TestTicketsQueryTextFlagsReadyTicketWithoutRouteFacts pins the listing
+// signal: a ready implementation ticket with no ## Route Facts section carries
+// `route_facts: missing`, while one with the section, a non-ready ticket and a
+// board-artifact category carry none.
+func TestTicketsQueryTextFlagsReadyTicketWithoutRouteFacts(t *testing.T) {
+	useLeadProfile(t)
+	root := t.TempDir()
+	mustWrite(t, root, "ai-docs/_index.md", "# Index\n")
+	const facts = "## Route Facts\n\n| fact | value |\n|---|---|\n| scope.span | single-file |\n\n"
+	mustWrite(t, root, "ai-docs/tickets/ready/260201-feat-nofacts.md",
+		"---\ntitle: Gadget without facts\n---\n# Gadget\n\n## Phases\n\n### Phase 1: X\n")
+	mustWrite(t, root, "ai-docs/tickets/ready/260202-feat-withfacts.md",
+		"---\ntitle: Gadget with facts\n---\n# Gadget\n\n"+facts+"## Phases\n\n### Phase 1: Y\n")
+	mustWrite(t, root, "ai-docs/tickets/todo/260203-feat-todo.md",
+		"---\ntitle: Gadget todo\n---\n# Gadget\n\n## Phases\n\n### Phase 1: Z\n")
+	mustWrite(t, root, "ai-docs/tickets/ready/260204-research-board.md",
+		"---\ntitle: Gadget research\n---\n# Gadget\n")
+	initGit(t, root)
+
+	out := callScopedTool(t, root, 1, "tickets.query", map[string]any{"query": "gadget"})
+	entries := map[string]string{}
+	var current string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "[") {
+			current = line
+			entries[current] = ""
+			continue
+		}
+		if current != "" {
+			entries[current] += line + "\n"
+		}
+	}
+	missing := 0
+	for header, body := range entries {
+		flagged := strings.Contains(body, "route_facts: missing")
+		if flagged {
+			missing++
+		}
+		if flagged != strings.Contains(header, "260201-feat-nofacts") {
+			t.Fatalf("route_facts flag on %q = %v:\n%s", header, flagged, out)
+		}
+	}
+	if missing != 1 || len(entries) != 4 {
+		t.Fatalf("want 4 listed tickets with exactly one route_facts: missing, got %d/%d:\n%s", missing, len(entries), out)
 	}
 }

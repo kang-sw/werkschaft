@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
@@ -111,6 +112,22 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 	if info, err := wsstate.Stat(root); err != nil || !info.IsDir() {
 		return State{}, badRequest("root %s is not a directory", root)
 	}
+	// Every path that opens a conversation (agent.spawn, pi.spawn, a lead)
+	// holds the worktree's shared release reservation until the conversation
+	// is registered, so worktree.release cannot check for bound children in
+	// between and then reset and clean under it. It lets go once the
+	// conversation is registered, where release counts it: a spawn's first
+	// send must not use up release's wait for the lock.
+	boundCwd := ""
+	if spawn != nil {
+		boundCwd = spawn.Cwd
+	}
+	unlockBound, err := reserveBoundWorktrees(root, boundCwd)
+	if err != nil {
+		return State{}, boundReservationRefusal(err)
+	}
+	unlockBound = sync.OnceFunc(unlockBound)
+	defer unlockBound()
 	rp, err := r.resolve(profile, root)
 	if err != nil {
 		return State{}, err
@@ -120,6 +137,19 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 			return State{}, &requestError{status: http.StatusForbidden, msg: fmt.Sprintf("agent profile %q is a lead profile: a lead session is spawned from the dashboard on this machine", rp.Name)}
 		}
 		return State{}, badRequest("agent profile %q is not a lead profile (lead: true)", rp.Name)
+	}
+	spawnerBackend := ""
+	if spawn != nil {
+		spawnerBackend = spawn.spawnerBackend
+	}
+	if lead == nil {
+		// Every worker creation, profile-based or spawned, passes the
+		// cross-harness check before anything is minted or written: a
+		// spawn for its caller's verified backend, a dashboard or REST
+		// creation for none.
+		if err := r.admitWorker(rp.Definition.Backend, spawnerBackend); err != nil {
+			return State{}, &requestError{status: http.StatusForbidden, msg: err.Error()}
+		}
 	}
 	if spawn != nil {
 		releaseAdmission := r.holdParentAdmission(spawn.Parent)
@@ -175,7 +205,12 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		if spawn != nil && rp.Definition.Backend == BackendPi && spawn.Cwd != "" {
 			keyRoot = spawn.Cwd
 		}
-		if key, err = r.opts.Keys.Mint(keyRoot); err != nil {
+		if child, ok := r.opts.Keys.(ChildKeyStore); ok && spawn != nil && spawn.policyKey != "" {
+			key, err = child.MintChild(keyRoot, spawn.policyKey)
+		} else {
+			key, err = r.opts.Keys.Mint(keyRoot)
+		}
+		if err != nil {
 			return State{}, fmt.Errorf("mint ws session key: %w", err)
 		}
 	}
@@ -190,6 +225,12 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		WSKey:     key,
 		Listed:    rp.Definition.ListInIndex,
 		CreatedAt: now.UTC().Format(time.RFC3339),
+		// The same instant at nanosecond precision, for the release
+		// boundary.
+		CreatedUnixNano: now.UnixNano(),
+	}
+	if lead == nil {
+		rec.SpawnerBackend = spawnerBackend
 	}
 	if lead != nil {
 		rec.Lead = true
@@ -260,6 +301,7 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		claimWidth = spawn.claimWidth
 	}
 	c := r.startConvWith(rec, seed, claimWidth != nil, claimWidth, false)
+	unlockBound()
 	if spawn != nil {
 		return r.spawned(c, spawn.Prompt)
 	}

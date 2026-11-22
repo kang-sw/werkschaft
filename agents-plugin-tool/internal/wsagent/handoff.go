@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
@@ -104,6 +106,14 @@ func (r *Runner) TakeOver(id string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
+	// The adopted session binds to its worktree like a created one: hold
+	// the release reservation until it is registered (Runner.create). It is
+	// taken before the first write, the key's, so a refusal writes nothing.
+	unlockBound, err := reserveBoundWorktrees(ls.Root, ls.Cwd)
+	if err != nil {
+		return State{}, boundReservationRefusal(err)
+	}
+	defer unlockBound()
 	if err := r.opts.LeadKeys.EnsureLead(ls.Root, ls.Key); err != nil {
 		return State{}, fmt.Errorf("ws session key: %w", err)
 	}
@@ -262,6 +272,13 @@ func (r *Runner) Reopen(id string) (State, error) {
 	if _, err := r.resolve(rec.Profile, rec.Root); err != nil {
 		return State{}, err
 	}
+	// A reopened session binds to its worktree again: hold the release
+	// reservation until it is registered (Runner.create).
+	unlockBound, err := reserveBoundWorktrees(rec.Root, rec.Cwd)
+	if err != nil {
+		return State{}, boundReservationRefusal(err)
+	}
+	defer unlockBound()
 	unlock, err := wsdashboard.LockRegistration(r.opts.Dir, id)
 	if err != nil {
 		return State{}, err
@@ -282,6 +299,9 @@ func (r *Runner) Reopen(id string) (State, error) {
 	rec.ClosedAt = ""
 	err = writeRecord(wsdashboard.SessionDir(r.opts.Dir, id), rec)
 	unlock()
+	if err == nil {
+		r.unfenceExec(id)
+	}
 	if err != nil {
 		r.mu.Lock()
 		rec.ClosedAt = r.opts.Now().UTC().Format(time.RFC3339)
@@ -302,18 +322,17 @@ func resumeCommand(rec Record, sessionDir string) string {
 	if !rec.Lead {
 		return ""
 	}
-	cd := "cd " + shellQuote(rec.workDir()) + " && "
 	switch rec.Backend {
 	case BackendClaude:
 		if rec.SessionID == "" {
 			return ""
 		}
-		return cd + "claude --resume " + shellQuote(rec.SessionID)
+		return resumeLine(rec.workDir(), "claude", "--resume", rec.SessionID)
 	case BackendAgy:
 		if rec.SessionID == "" {
 			return ""
 		}
-		return cd + "agy --conversation " + shellQuote(rec.SessionID)
+		return resumeLine(rec.workDir(), "agy", "--conversation", rec.SessionID)
 	case BackendPi:
 		file := rec.SessionFile
 		if file == "" {
@@ -322,9 +341,75 @@ func resumeCommand(rec Record, sessionDir string) string {
 				return ""
 			}
 		}
-		return cd + "pi --session " + shellQuote(file)
+		return resumeLine(rec.workDir(), "pi", "--session", file)
 	}
 	return ""
+}
+
+// resumeLine renders "change to dir, then run harness name with flag arg"
+// for the host's terminal shell. On Windows that is PowerShell, which the
+// daemon's own pickShell prefers and Windows Terminal opens by default;
+// Windows PowerShell 5.1 rejects "&&", so the line uses Set-Location and
+// ";" and a failed Set-Location stops it. cmd.exe cannot run this line.
+// An arg PowerShell cannot hand the harness intact (psNativeArgSafe) gets
+// the steps as comments instead of a line that would run it mangled.
+func resumeLine(dir, name, flag, arg string) string {
+	if !hostWindows {
+		return "cd " + shellQuote(dir) + " && " + name + " " + flag + " " + shellQuote(arg)
+	}
+	if psNativeArgSafe(arg) {
+		return "Set-Location -LiteralPath " + psQuote(dir) + " -ErrorAction Stop; " + name + " " + flag + " " + psQuote(arg)
+	}
+	return "# PowerShell cannot pass this session's " + flag + " value to " + name + " intact; resume it by hand:\n" +
+		"# 1. Change to the directory: " + resumeShown(dir) + "\n" +
+		"# 2. Run " + name + " " + flag + " with exactly this value: " + resumeShown(arg)
+}
+
+// psNativeArgSafe reports whether PowerShell hands arg to a native harness
+// unchanged, whichever way the harness resolves. Windows PowerShell 5.1
+// quotes an argument holding whitespace without escaping a double quote
+// in it or a trailing backslash before its closing quote, so the program's
+// argv splits it differently. A harness that resolves to an npm .cmd/.bat
+// shim runs through cmd.exe, which re-reads & | < > ^ outside quotes and
+// %...% anywhere. Session ids and file paths almost never hold these.
+func psNativeArgSafe(arg string) bool {
+	if arg == "" || strings.HasSuffix(arg, `\`) || strings.ContainsAny(arg, "\"&|<>^%") {
+		return false
+	}
+	for _, r := range arg {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// resumeShown is s as a step shows it: as is, or Go-quoted when it holds a
+// control character (a line break would end the comment).
+func resumeShown(s string) string {
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return strconv.Quote(s)
+		}
+	}
+	return s
+}
+
+// psQuote single-quotes s as a PowerShell verbatim string, where only a
+// single quote needs escaping, by doubling it. PowerShell also reads the
+// typographic single quotes U+2018-U+201B as quote marks, so those double
+// too.
+func psQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range s {
+		b.WriteRune(r)
+		if r == '\'' || r >= '\u2018' && r <= '\u201b' {
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
 
 // shellQuote quotes s for a POSIX shell when it holds anything but plain

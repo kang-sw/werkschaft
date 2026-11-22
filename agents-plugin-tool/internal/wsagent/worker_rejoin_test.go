@@ -1,10 +1,13 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,7 +92,7 @@ func TestDowngradeRetirementPersistsSleepingWorker(t *testing.T) {
 }
 
 func TestDowngradeRetirementRetriesStop(t *testing.T) {
-	for _, outcome := range []string{"retry", "already gone", "queued mail"} {
+	for _, outcome := range []string{"retry", "already gone", "queued mail", "user stop", "queued then user stop", "close", "parent close"} {
 		t.Run(outcome, func(t *testing.T) { testDowngradeRetirement(t, outcome) })
 	}
 }
@@ -138,6 +141,123 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 				}
 			})
 		}
+		if stopError == "user stop" {
+			// A user's Stop while the retirement retries goes through the
+			// holder's own stop, never the detached stream's Close.
+			st, err := h.runner.Stop(worker.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 2 || !strings.Contains(st.Error, "fixture stop failure") {
+				t.Fatalf("the user's Stop did not retry the holder's stop: %v, error %q", h.holders.opList(), st.Error)
+			}
+			if rec := h.record(worker.ID); rec.HolderID != holder || !rec.TurnOpen || len(reports.list()) != 0 {
+				t.Fatal("a failed user Stop forgot the holder or published the child")
+			}
+			c.do(func() {
+				if !c.workerRetiring || !c.replaying || c.proc == nil {
+					t.Error("a failed user Stop disarmed the retirement retry")
+				}
+			})
+			c.do(c.heartbeat)
+			if h.holders.opCount("stop "+holder) != 3 {
+				t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+			}
+			h.holders.set(func() { h.holders.stopErr = nil })
+			if _, err := h.runner.Stop(worker.ID); err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 4 || h.record(worker.ID).HolderID != "" {
+				t.Fatalf("the succeeding user Stop did not retire the child: %v", h.holders.opList())
+			}
+		}
+		if stopError == "queued then user stop" {
+			// Input queued while the retirement retries stays held when a
+			// deliberate Stop ends the holder: only the next send wakes it.
+			h.send(worker.ID, "held until the next send")
+			c.do(func() {
+				if !c.replaying || c.rec.HolderID != holder {
+					t.Error("queued input disturbed the failing retirement")
+				}
+			})
+			h.holders.set(func() { h.holders.stopErr = nil })
+			if _, err := h.runner.Stop(worker.ID); err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 2 || h.record(worker.ID).HolderID != "" {
+				t.Fatalf("the user's Stop did not retire the child: %v", h.holders.opList())
+			}
+			launches := h.holders.opCount("launch")
+			for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				c.do(func() {})
+				if rec := h.record(worker.ID); rec.HolderID != "" || rec.TurnOpen || h.holders.opCount("launch") != launches {
+					t.Fatalf("a deliberate Stop relaunched the child for input queued during the retry: %+v, ops %v", rec, h.holders.opList())
+				}
+			}
+			h.send(worker.ID, "the next send")
+			eventually(t, "the next send wakes the held input", func() bool {
+				rec := h.record(worker.ID)
+				return rec.HolderID != "" && rec.HolderID != holder && rec.TurnOpen && rec.TurnMark > child.TurnMark
+			})
+			if len(reports.list()) != 0 || h.holders.opCount("stop "+holder) != 2 {
+				t.Fatal("the deliberate Stop duplicated the old report or stop")
+			}
+			return
+		}
+		if stopError == "close" || stopError == "parent close" {
+			// A close (and a parent's cascade) while the retirement retries
+			// stops the holder first; a failure refuses the close and keeps
+			// the conversation, its holder, and the heartbeat retry.
+			target := worker.ID
+			if stopError == "parent close" {
+				target = "zzparent"
+			}
+			_, err := h.runner.CloseConversation(target)
+			if !errors.Is(err, errHolderNotEnded) || !strings.Contains(err.Error(), "fixture stop failure") {
+				t.Fatalf("close error = %v", err)
+			}
+			if h.holders.opCount("stop "+holder) != 2 {
+				t.Fatalf("the close did not retry the holder's stop: %v", h.holders.opList())
+			}
+			if h.runner.conv(worker.ID) == nil || h.runner.conv("zzparent") == nil {
+				t.Fatal("a refused close dropped a conversation from the runner")
+			}
+			if rec := h.record(worker.ID); rec.HolderID != holder || !rec.TurnOpen || rec.ClosedAt != "" || len(reports.list()) != 0 {
+				t.Fatalf("a refused close forgot the holder, closed, or published: %+v", rec)
+			}
+			if h.record("zzparent").ClosedAt != "" {
+				t.Fatal("the cascade closed the parent over a child it could not close")
+			}
+			c.do(func() {
+				if !c.workerRetiring || !c.replaying || c.proc == nil || c.closed {
+					t.Error("a refused close disarmed the retirement retry")
+				}
+			})
+			c.do(c.heartbeat)
+			if h.holders.opCount("stop "+holder) != 3 {
+				t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+			}
+			h.holders.set(func() { h.holders.stopErr = nil })
+			if _, err := h.runner.CloseConversation(target); err != nil {
+				t.Fatal(err)
+			}
+			if h.holders.opCount("stop "+holder) != 4 || h.runner.conv(worker.ID) != nil {
+				t.Fatalf("the close did not retire and close the child: %v", h.holders.opList())
+			}
+			if rec := h.record(worker.ID); rec.HolderID != "" || rec.TurnOpen || rec.ClosedAt == "" {
+				t.Fatalf("closed child = %+v", rec)
+			}
+			if stopError == "parent close" && (h.runner.conv("zzparent") != nil || h.record("zzparent").ClosedAt == "") {
+				t.Fatal("the cascade did not close the parent once the child closed")
+			}
+			if _, err := h.runner.CloseConversation(target); err == nil {
+				t.Fatal("a closed conversation closed again")
+			}
+			if h.holders.opCount("stop "+holder) != 4 || len(reports.list()) != 0 {
+				t.Fatalf("closed twice or published: %v, reports %+v", h.holders.opList(), reports.list())
+			}
+			return
+		}
 		h.holders.set(func() { h.holders.stopErr = nil })
 		if stopError == "already gone" {
 			if err := h.holders.Stop(holder); err != nil {
@@ -168,7 +288,18 @@ func testDowngradeRetirement(t *testing.T, stopError string) {
 	}
 	assertSleeping()
 	wantStops := 1
-	if stopError != "" {
+	switch stopError {
+	case "":
+	case "user stop":
+		// Retired once: a later Stop or heartbeat stops nothing more.
+		if _, err := h.runner.Stop(worker.ID); err != nil {
+			t.Fatal(err)
+		}
+		c := h.runner.conv(worker.ID)
+		c.do(c.heartbeat)
+		assertSleeping()
+		wantStops = 4
+	default:
 		wantStops = 2
 	}
 	if h.holders.opCount("stop "+holder) != wantStops {
@@ -333,4 +464,127 @@ func TestWorkerAttachRegistersNoMCPBeforeOwnership(t *testing.T) {
 			}
 		})
 	}
+}
+
+// startFailBackend fails Start while fail is set, as a harness whose command
+// lookup fails for a moment (a Windows npm shim replaced during an update).
+type startFailBackend struct {
+	Backend
+	fail *atomic.Bool
+}
+
+func (b startFailBackend) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	if b.fail.Load() {
+		return nil, errors.New("agy backend: exec: \"agy\": executable file not found in %PATH%")
+	}
+	return b.Backend.Start(ctx, spec)
+}
+
+// A held worker whose rejoin cannot start its backend does not stay in replay
+// with no process: its open turn fails once the scan completes, and later
+// input restarts the worker after the harness has returned.
+func TestHeldWorkerRejoinStartFailureAllowsRestart(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	fail := &atomic.Bool{}
+	reg := h.opts.Backends[BackendAgy]
+	reg.Backend = startFailBackend{Backend: reg.Backend, fail: fail}
+	h.opts.Backends[BackendAgy] = reg
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+
+	fail.Store(true)
+	h.runner.Close()
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the failed rejoin settled the open turn", func() bool { return len(got.list()) == 1 })
+	if result := got.list()[0].Result; result.Status != TurnFailed || !strings.Contains(result.Error+result.Message, "executable file not found") {
+		t.Fatalf("failed rejoin result: %+v", result)
+	}
+	c := h.runner.conv(id)
+	var replaying, turn bool
+	c.do(func() { replaying, turn = c.replaying, c.turn })
+	if replaying || turn {
+		t.Fatalf("after a failed rejoin: replaying=%v turn=%v", replaying, turn)
+	}
+
+	fail.Store(false)
+	h.send(id, "again")
+	eventually(t, "a new holder for the restarted worker", func() bool {
+		rec := h.record(id)
+		return rec.HolderID != "" && rec.HolderID != holder
+	})
+	next := h.holder(id)
+	eventually(t, "the restarted worker's prompt", func() bool { return len(agyPromptIDs(h, next)) == 1 })
+}
+
+// A held agy worker restored mid internal compaction prompt with a steered
+// report not yet taken, whose rejoin cannot start its backend, still gets the
+// end-of-process cleanup: the steered report goes to the next turn and that
+// turn's result settles instead of being discarded as internal.
+func TestHeldWorkerRejoinFailureClearsRestoredTurnState(t *testing.T) {
+	for _, steered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("steered=%v", steered), func(t *testing.T) { heldWorkerRejoinFailureClears(t, steered) })
+	}
+}
+
+func heldWorkerRejoinFailureClears(t *testing.T, steered bool) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	fail := &atomic.Bool{}
+	reg := h.opts.Backends[BackendAgy]
+	reg.Backend = startFailBackend{Backend: reg.Backend, fail: fail}
+	h.opts.Backends[BackendAgy] = reg
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	completeRecoveryWorker(t, h, BackendAgy, holder)
+	eventually(t, "the first turn settled", func() bool { return len(got.list()) == 1 && !h.record(id).TurnOpen })
+
+	fail.Store(true)
+	h.runner.Close()
+	rec := h.record(id)
+	if rec.HolderID == "" {
+		t.Fatal("the idle held worker kept no holder")
+	}
+	rec.TurnStartedAt = time.Now().UnixMilli() // an internal compaction prompt in flight
+	if steered {
+		rec.Steered = []steeredReport{{Text: "steered report", Seq: 1}}
+		rec.SteerSeq = 1
+	}
+	if !rec.agyInternalPrompt() {
+		t.Fatal("the edited record is not an internal agy prompt")
+	}
+	if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {
+		t.Fatal(err)
+	}
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	c := h.runner.conv(id)
+	eventually(t, "the failed rejoin ended the recovery", func() bool {
+		var failed bool
+		// The requeued steered report may already have tried a start that
+		// failed the same way, so lastErr is either failure.
+		c.do(func() { failed = !c.replaying && !c.turn && c.proc == nil && c.lastErr != "" && len(c.steered) == 0 })
+		return failed
+	})
+
+	fail.Store(false)
+	h.send(id, "again")
+	eventually(t, "a new holder for the restarted worker", func() bool {
+		r := h.record(id)
+		return r.HolderID != "" && r.HolderID != holder
+	})
+	next := h.holder(id)
+	completed := 0
+	eventually(t, "the steered report and the new message settled", func() bool {
+		prompts := agyPromptIDs(h, next)
+		for ; completed < len(prompts); completed++ {
+			h.holders.out(next,
+				`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"after rejoin"}}}}`,
+				jsonLine(map[string]any{"jsonrpc": "2.0", "id": prompts[completed], "result": map[string]any{"stopReason": "end_turn"}}))
+		}
+		inputs := strings.Join(h.holders.inputs(next, ""), "\n")
+		if steered && !strings.Contains(inputs, "steered report") || !strings.Contains(inputs, "again") {
+			return false
+		}
+		last := got.list()
+		return len(last) >= 2 && last[len(last)-1].Result.Status == TurnDone &&
+			strings.Contains(last[len(last)-1].Result.Message, "after rejoin") && !h.record(id).TurnOpen
+	})
 }

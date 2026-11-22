@@ -22,6 +22,14 @@ type BackendRegistration struct {
 	// the internal profile it launches; both must be set to expose tiers.
 	WorkerCapable bool
 	WorkerProfile string
+	// crossHarnessRefusal, when set, admits a worker on this backend only
+	// for a caller verified to run on this same backend (a hosted lead's
+	// record, or the token holder spawning a nested child), on every worker
+	// entry, not agent.spawn alone: a profile create, a wake, and a rejoin
+	// are refused too for any other caller or none (admitWorker), and it is
+	// the refusal's text. Existing worker records stay listable. Empty
+	// admits every caller.
+	crossHarnessRefusal string
 	// WorkerHTTPMCP attaches a worker's ws tools through the daemon's
 	// HTTP route rather than a stdio launcher. Workers never persist it.
 	WorkerHTTPMCP bool
@@ -61,12 +69,32 @@ type BackendRegistration struct {
 	// its sessions names that server and those commands instead of the
 	// package's tool and skill namespace.
 	PlaybookCommands bool
+	// PreferNativeSubagent marks a backend whose hosted lead keeps its own
+	// native subagent tool for exploration that needs no ws tools and starts
+	// every other delegate through agent.spawn, preferring an external
+	// harness when one fits (a prompt rule, not a gate). Its
+	// lead's prompt line (Runner.subagentSteer) and the playbook text it
+	// executes itself (workflow_manual, playbook.read) say so; text rendered
+	// for another process (playbook.render) is unchanged.
+	PreferNativeSubagent bool
 	// Profiles are this backend's runtime-owned builtin profile definitions.
 	// They feed the config floor but are not fields of the persisted Profile
 	// shape. Support marks the profiles offered by tracker support, in order.
 	Profiles []BuiltinProfileRegistration
 	// PlaybookTerminology supplies static harness wording for playbook renders.
 	PlaybookTerminology PlaybookTerminology
+	// ExecCutover is the backend's verified native process tool removal
+	// (exec_cutover.go); nil keeps every session's native tools.
+	ExecCutover *ExecCutoverSupport
+	// OneShot is the backend's isolated single-prompt mode (oneshot.go);
+	// nil means the harness has none and a one-shot call is refused.
+	OneShot *OneShotSupport
+	// ProviderCredentials admits this backend's hosted sessions to the
+	// daemon's provider token route (Runner.ResolveCredentialToken): a
+	// session may obtain a provider credential with its per-session token.
+	// Only a harness that makes model requests itself, for the signed-in
+	// user, sets it; a harness that brings its own login never does.
+	ProviderCredentials bool
 }
 
 // PlaybookTerminology holds static native-tool idioms. Model, effort, and
@@ -181,6 +209,10 @@ func cloneBackendRegistration(reg BackendRegistration) BackendRegistration {
 	reg.PermissionLevels = slices.Clone(reg.PermissionLevels)
 	reg.DirectTools = slices.Clone(reg.DirectTools)
 	reg.Profiles = cloneBuiltinProfiles(reg.Profiles)
+	if reg.OneShot != nil {
+		oneShot := *reg.OneShot
+		reg.OneShot = &oneShot
+	}
 	return reg
 }
 

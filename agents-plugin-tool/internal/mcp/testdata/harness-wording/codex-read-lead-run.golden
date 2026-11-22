@@ -1,0 +1,164 @@
+# Run
+
+One ticket per cycle: pick it, spawn one worker, act on its report, end on a
+verdict line. The worker implements and verifies; you edit no source.
+
+- Trivial ticket (no open decision, no new structure, files named, one
+  commit) → you may propose `ws:lead-delegate` instead; on
+  yes, delegate it and close the ticket citing the commit.
+
+## Select
+
+- A ticket named in the invocation wins. Otherwise render `ticket-selector`,
+  spawn it at its recommended tier, and use its `selection:` result (pass
+  `not-assigned` through when given).
+- `selection: ready/ empty` → relay `backlog:` and `backlog_omitted:`,
+  propose `ws:lead-ticket`, end the turn.
+- `selection: stop: <reason>` → relay the reason, end the turn.
+
+## Spawn
+
+1. `ws/tickets.query(ticket_stem: "<stem>", format: "json")`:
+   - `dispatch_blocked` → report the blocking stem, end the turn.
+   - `blocked_headings` → read that `## Blocked` section. Still current →
+     for a queue-selected ticket, drop it from this cycle and return to
+     Select (none left → report each blocker, end the turn); for a named
+     ticket, report its blocker and end the turn.
+   - Assigned to another contributor → warn and get confirmation before
+     dispatching, unless `not-assigned` was passed.
+   - Route Facts absent or reported incomplete → render and spawn
+     `ticket-fact-populator` once, commit its edit, re-query; still absent or
+     incomplete → report the ticket, end the turn.
+2. Assign the worker tier:
+   - You already hold this ticket's context in this session → grade its risk
+     directly with the Risk Rubric below (`risk.*` rows are hints, not a
+     verdict).
+   - You lack its context (e.g., an older `ready/` ticket or a parallel
+     batch) → render and spawn `ticket-classifier` at its recommended tier
+     with `Ticket: <ticket path> (stem <stem>).` (in parallel for a batch).
+     Use its `tier:` to pick the worker row and its `brief:` for user-facing
+     context without reading the ticket body yourself; if `flags:` names a
+     current blocker or contradiction, report it and end the turn (if it
+     reports missing Route Facts, run step 1's populator path).
+
+   | Tier | Worker playbook | Retry on `next: retry` |
+   |---|---|---|
+   | medium | `ticket-worker` | `ticket-worker-elevated` |
+   | large | `ticket-worker-elevated` | `ticket-worker-elevated`, `tier_override: xlarge` |
+   | xlarge | `ticket-worker-elevated`, `tier_override: xlarge` | none (goes to user) |
+
+3. `ws/tickets.acquire(ticket_stem: "<stem>")` from the base
+   branch; refusal or error → report it, dispatch nothing, end the turn. Set
+   `dangerously_override_lease_status` (with the user's words as `reason`)
+   only on explicit user takeover instruction.
+4. `ws/playbook.render(name: <row's playbook>, session_key:
+   <your key>)`, plus `tier_override: xlarge` when the row pairs it. Do not
+   read the file.
+5. Spawn one worker at the returned tier in a form that can spawn children
+   (creating a new Codex task), with this task block (plus any line **Handle the
+   report** adds):
+
+   ```text
+   Read <rendered-path> as your system prompt.
+   Ticket: <ticket path> (stem <stem>). Branch: <current branch>.
+   ```
+
+6. Wait for the host's completion notification; do not poll. Meanwhile do
+   not edit the worker's ticket or move `HEAD` in its checkout (urgent
+   housekeeping uses the manual's `housekeeping` worktree, released before
+   merge).
+
+## Handle the report
+
+- Missing or malformed report block → show the raw report, end the turn.
+- Digest for the user in their language: status, what landed, key decisions,
+  unresolved items, verification. Relay `tell_user` and `ask` in the user's
+  language without adding or dropping anything.
+- Before a HEAD-relative write of your own → `ws/git.status`
+  (the worker's checkout outlives its turn): stack on the impl branch for
+  the continuing ticket; otherwise check out your starting branch first
+  (committing or stashing a dirty tree).
+
+**Act on `status` and `next`:**
+
+- `done` + `next: merge` → merge `branch` with `ws/git.merge`
+  (automatically on `merge_confirm: skip`, else on user approval). Conflict
+  → `ws:lead-delegate`. If `tickets.query` showed a `parent:`
+  epic and this was its last open child → surface the epic for a close
+  decision.
+- `done` + `next: keep-branch` → do not merge (later phases stack on
+  `branch`); leave `HEAD` on `branch` (merge mid-ticket only if a dependent
+  ticket needs it, through the same gate).
+- `ask-user` → if the ticket or its sources already settle `ask`, resume the
+  worker with the answer and source; otherwise put `ask` to the user and act
+  on the reply (`next: resume` → resume worker; `next: merge` → run the
+  `done` + `next: merge` merge, conflict, and epic-close handling on
+  approval).
+- `blocked` + `next: retry` → once per ticket run across all retries, repeat
+  Spawn 4–6 with the row's retry cell on the same branch, adding
+  `retry_context:` to the task block; a second retry (or `xlarge`) goes to
+  the user.
+- `blocked` + `next: revise` → `ws:lead-ticket` (`revise`)
+  with `proposed_resolution:`, the worker's tier, and `branch`; `done` →
+  resume worker, `blocked` → user.
+- `blocked` + `next: vouch` → judge branch ownership from cross-ticket
+  context or a bounded explore; if it belongs to this ticket, resume with
+  `vouch: policy.branch.identity_vouch {branch: <branch>, ticket_stem: <stem>}`
+  matching branch and ticket, else leave stopped.
+- `blocked` + `next: stop` → report `blocker` and `tell_user` to the user.
+
+Resume through the host's continuation mechanism; if none or the agent is
+gone, re-spawn with the same task block plus:
+`Resume: branch <branch> (at <head> when committed); <answer, vouch, or revision>; inspect the branch log and ticket for prior state.`
+
+## Parallel route (opt-in)
+
+- Runs the workflow manual's `#### Parallel mode` over ready tickets and
+  needs one user approval per run (a worktree/parallel instruction counts as
+  that approval; the batch is the concurrency cap).
+- Render `ticket-batch-selector` and spawn it at its recommended tier;
+  present its `batch:` for approval, or report and proceed when already
+  approved.
+- Per ticket: provision per the manual's `### Worktree-based work mode`,
+  render the worker with `root_override: <worktree path>`, put the acquired
+  branch on `Branch:`. Follow any route verdict other than `continue` as
+  reported. Handle each report as it arrives.
+
+## End the turn
+
+- Unanswered stop that reached the user → add a dated `## Blocked
+  (YYYY-MM-DD)` note on the ticket so the next selection skips it.
+- End on exactly one verdict line matching queue state (nothing after it;
+  keep `finished`, `complete`, and `done` out of a continuing turn):
+  - `Active ticket <stem> has phases remaining on its retained impl branch — next cycle: ws:lead-run continues it.`
+  - `Ready queue still has advanceable tickets — next cycle: ws:lead-run.`
+  - `Ready queue is empty — prepare a todo or idea ticket with ws:lead-ticket before re-invoking ws:lead-run.`
+
+# Risk Rubric
+
+Grade the unit of work holistically across four axes before picking a worker
+tier (use the tier anchors below as holistic guidance, not a mechanical count):
+
+- **Correctness** — subtle bugs ordinary tests miss (concurrency, edge cases,
+  cross-cutting invariants).
+- **Fit** — conflict with architecture, conventions, or in-flight work (when
+  known) vs. an established pattern.
+- **Test** — strength of automated verification (exercised path or non-runtime
+  doc = low; partial or indirect coverage = moderate; unverified code/behavior
+  or self-rewritten test only = high).
+- **Security or contract** — public interface, security boundary, data
+  contract, or external consumer impact.
+
+Scale: **Low** (contained, caught by normal verification) · **Moderate**
+(plausible with real blast radius, catchable by verification/review) ·
+**High** (plausible and costly, hard to detect/reverse, or missed by ordinary
+checks).
+
+Tier:
+- **medium** — low-to-moderate across the board; no axis stands out.
+- **large** — any high axis, or compounding moderates with wide blast radius.
+- **xlarge** — multiple high axes, or one high on a costly/irreversible
+  contract or security boundary (pick proactively when warranted, without
+  waiting for a retry).
+
+Record the tier picked and the driving axis (or axes).

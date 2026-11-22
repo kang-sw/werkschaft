@@ -13,16 +13,31 @@ import (
 // generatedPathWrites records cache-artifact capabilities minted by
 // path.generate. Repository-local plan paths and clone-shared documents are
 // deliberately excluded: path.write exists only for sandbox-independent
-// review/prompt handoffs.
+// review/report/prompt handoffs. Allocation (path.generate) and write
+// authority (path.write) stay separate: a report grant is usable only by a
+// caller whose profile already carries path.write.
 type generatedPathWrites struct {
 	mu    sync.RWMutex
 	paths map[string]map[string]*generatedPathGrant
 }
 
 type generatedPathGrant struct {
-	mu      sync.Mutex
-	file    *os.File
-	created time.Time
+	mu sync.Mutex
+	// file is the held path.write descriptor where holdGeneratedPathGrant is
+	// set; nil on Windows, where path.write reopens the path instead.
+	file *os.File
+	// identity is the granted file as opened at grant time; path.write
+	// refuses any file that is not this one.
+	identity os.FileInfo
+	created  time.Time
+}
+
+// close releases the held descriptor, if any. The caller holds g.mu or owns
+// the grant exclusively.
+func (g *generatedPathGrant) close() {
+	if g.file != nil {
+		_ = g.file.Close()
+	}
 }
 
 const maxGeneratedPathGrants = 64
@@ -41,7 +56,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 	}
 	eligible := make([]wsstate.GeneratedPath, 0, len(generated))
 	for _, item := range generated {
-		if item.Kind != "review" && item.Kind != "prompt" {
+		if item.Kind != "review" && item.Kind != "report" && item.Kind != "prompt" {
 			continue
 		}
 		eligible = append(eligible, item)
@@ -90,7 +105,13 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: writable cache artifact %q changed while it was granted", item.Path)
 		}
-		opened[item.Path] = &generatedPathGrant{file: file, created: time.Now()}
+		grant := &generatedPathGrant{identity: after, created: time.Now()}
+		if holdGeneratedPathGrant {
+			grant.file = file
+		} else {
+			_ = file.Close()
+		}
+		opened[item.Path] = grant
 	}
 	for g.grantCountLocked()+len(opened) > maxGeneratedPathGrants {
 		g.evictOldestLocked()
@@ -101,7 +122,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 		}
 		if prior := g.paths[sessionKey][path]; prior != nil {
 			prior.mu.Lock()
-			_ = prior.file.Close()
+			prior.close()
 			prior.mu.Unlock()
 		}
 		g.paths[sessionKey][path] = grant
@@ -111,7 +132,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 
 func closeGeneratedPathGrants(grants map[string]*generatedPathGrant) {
 	for _, grant := range grants {
-		_ = grant.file.Close()
+		grant.close()
 	}
 }
 
@@ -141,7 +162,7 @@ func (g *generatedPathWrites) evictOldestLocked() {
 		delete(g.paths, oldestKey)
 	}
 	oldest.mu.Lock()
-	_ = oldest.file.Close()
+	oldest.close()
 	oldest.mu.Unlock()
 }
 
@@ -151,7 +172,7 @@ func (g *generatedPathWrites) write(sessionKey, path, content string) error {
 	grant := g.paths[sessionKey][path]
 	if grant == nil {
 		g.mu.Unlock()
-		return fmt.Errorf("path.write refused: path was not generated for this session key as a writable cache artifact")
+		return fmt.Errorf("path.write refused: path was not generated for this session key as a writable cache artifact; call path.generate with your own key and return that path to your caller")
 	}
 	delete(g.paths[sessionKey], path)
 	if len(g.paths[sessionKey]) == 0 {
@@ -160,7 +181,7 @@ func (g *generatedPathWrites) write(sessionKey, path, content string) error {
 	g.mu.Unlock()
 	grant.mu.Lock()
 	defer func() {
-		_ = grant.file.Close()
+		grant.close()
 		grant.mu.Unlock()
 	}()
 
@@ -168,20 +189,30 @@ func (g *generatedPathWrites) write(sessionKey, path, content string) error {
 	if err != nil {
 		return fmt.Errorf("path.write inspect target: %w", err)
 	}
-	fileInfo, err := grant.file.Stat()
+	file := grant.file
+	if file == nil {
+		// Windows: no descriptor was held, so a replace-save stays possible;
+		// reopen and let the identity check below refuse a replaced file.
+		file, err = openGeneratedPathGrant(path)
+		if err != nil {
+			return fmt.Errorf("path.write open artifact: %w", err)
+		}
+		defer file.Close()
+	}
+	fileInfo, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("path.write inspect granted artifact: %w", err)
 	}
-	if !pathInfo.Mode().IsRegular() || !fileInfo.Mode().IsRegular() || !os.SameFile(pathInfo, fileInfo) {
+	if !pathInfo.Mode().IsRegular() || !fileInfo.Mode().IsRegular() || !os.SameFile(grant.identity, fileInfo) || !os.SameFile(pathInfo, fileInfo) {
 		return fmt.Errorf("path.write refused: generated target is not a regular file")
 	}
-	if err := grant.file.Truncate(0); err != nil {
+	if err := file.Truncate(0); err != nil {
 		return fmt.Errorf("path.write truncate artifact: %w", err)
 	}
-	if _, err := grant.file.Seek(0, 0); err != nil {
+	if _, err := file.Seek(0, 0); err != nil {
 		return fmt.Errorf("path.write seek artifact: %w", err)
 	}
-	if _, err := grant.file.WriteString(content); err != nil {
+	if _, err := file.WriteString(content); err != nil {
 		return fmt.Errorf("path.write content: %w", err)
 	}
 	return nil

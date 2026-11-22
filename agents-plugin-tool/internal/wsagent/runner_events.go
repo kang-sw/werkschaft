@@ -16,6 +16,7 @@ import (
 
 func (c *conv) handle(ev Event) {
 	quiet := ev.Replay
+	c.eventSeq = ev.Seq
 	if ev.Seq > 0 && !ev.Replay {
 		c.lineOpen = ev.Seq
 		if ev.LineEnd {
@@ -55,7 +56,7 @@ func (c *conv) handle(ev Event) {
 			// a command the list holds.
 			live := *ev.Live
 			c.commands = slices.Clone(live.Commands)
-			live.Commands = c.r.withPlaybookCommands(c.rec, allowedCommands(live.Commands, c.caps))
+			live.Commands = c.r.withPlaybookCommands(c.record(), allowedCommands(live.Commands, c.caps))
 			ev.Live = &live
 		}
 		if !quiet && ev.Live.Kind == wslive.KindCompact && ev.Live.Phase == wslive.CompactStart {
@@ -81,8 +82,9 @@ func (c *conv) handle(ev Event) {
 			if !ev.FinalUsage && !ev.LiveCoalescesTurnEnd {
 				c.steerCompaction(false)
 			}
-			// Pi can report usage after settlement.
-			if c.canKick() && !c.compactIdle() && c.compactionNudgeReady() {
+			// Pi can report usage after settlement. A released binding gets
+			// no compaction turn or nudge.
+			if c.canKick() && c.released() == "" && !c.compactIdle() && c.compactionNudgeReady() {
 				c.kickInput()
 			}
 		}
@@ -158,7 +160,7 @@ func (c *conv) handle(ev Event) {
 		c.live.summarySource, c.summaryReason, c.summaryGap = "", "", false
 	case ev.ModelActivity != nil:
 		if !quiet {
-			c.onModelActivity(*ev.ModelActivity)
+			c.onModelActivity(*ev.ModelActivity, ev.ModelContent)
 		}
 	case ev.ModelFailureUpdate != nil:
 		if !quiet {
@@ -192,6 +194,23 @@ func (c *conv) handle(ev Event) {
 		// permission choice. Keep that report in activeMode for projection, but
 		// do not turn an observation into a persisted next-launch override.
 		legacyCodexOmission := rec.Backend == BackendCodex && rec.PermissionMode == ""
+		if !rec.Lead && c.cutoverSupport() != nil {
+			if !quiet && !c.replaying {
+				c.holdWorkerCutoverMode(ev.PermissionMode)
+			}
+			break
+		}
+		if mode := c.cutoverLaunchMode(); mode != "" {
+			// Under the cutover the process runs in its launch mode only:
+			// a reported move is undone, and the saved preference stays.
+			if !quiet && ev.PermissionMode != mode && !c.dirtyMode {
+				c.dirtyMode, c.reconcileMode = true, true
+				if !c.turn {
+					c.applySettings()
+				}
+			}
+			break
+		}
 		if rec.Lead && !quiet && !c.dirtyMode && !rec.agyBypass() && !legacyCodexOmission && ev.PermissionMode != rec.PermissionMode && slices.Contains(permissionModes(rec.Backend, []map[string]BackendRegistration{c.r.opts.Backends}), ev.PermissionMode) {
 			c.update(func(rec *Record) { rec.PermissionMode, rec.AgyBypass = ev.PermissionMode, false })
 			c.changed(quiet)
@@ -240,6 +259,8 @@ func (c *conv) handle(ev Event) {
 		if !quiet {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: %s\n", c.rec.ReplyID, ev.Notice)
 		}
+	case ev.UnrequestedCommand != "":
+		c.unrequestedCommand(ev.UnrequestedCommand, quiet)
 	case ev.BackgroundTasks != nil:
 		if n := *ev.BackgroundTasks; n != c.bgTasks || !sameCount(c.background, ev.Background) || !sameCount(c.monitors, ev.Monitors) {
 			prev := c.bgTasks
@@ -340,6 +361,9 @@ func (c *conv) beginTurn(quiet bool) {
 // endTurn closes the running turn, applies settings changed during it, and
 // submits the messages held meanwhile.
 func (c *conv) endTurn(turnErr string, quiet bool) {
+	// The cutover's instruction goes once the turn is over: a steer into the
+	// running turn would replace it.
+	defer c.sendCutoverInstruction()
 	compactCommand, wasCompacting := c.compactCommand, c.compacting
 	if !quiet {
 		c.compactCommand = false
@@ -354,6 +378,15 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed, Text: turnErr})
 		}
+	}
+	if !quiet {
+		// The runner accepted the logical turn's end (a watchdog continue
+		// returned before reaching here), so agy native rows stop being
+		// observed; settling them before the turn end's forced snapshot
+		// puts them on disk in that write. A replayed (quiet) end never
+		// settles them, and a live end during a replay only notes them:
+		// replayDone settles them, once.
+		c.endAgyNativeObservation(c.r.opts.Now().UnixMilli())
 	}
 	if c.wrapHold && !c.rec.Lead && c.rec.Parent != nil && !quiet {
 		// A gap while streaming is reconciled at agent_settled, not left
@@ -433,10 +466,28 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 		}
 	}
 	if slices.Contains(c.rec.Answered, a.ID) {
-		// A replay of a prompt an earlier daemon already answered.
+		// A replay of a prompt an earlier daemon already answered. A refused
+		// cutover request still owes its turn the instruction, which
+		// admission keeps from being sent twice.
+		if c.cutoverRejects(a.Tool) {
+			c.oweCutoverInstruction(a.ID)
+			if c.replaying {
+				// The answer is recorded before it is written, so a crash
+				// between the two leaves the process waiting on it. A second
+				// reject_once is harmless (the process drops an answer to a
+				// request it no longer waits on): the rejoin's end sends it
+				// again (rejectCutoverPending).
+				c.setStatus(func() { c.approvals = append(c.approvals, a) })
+			}
+		}
 		return
 	}
-	if !quiet && c.rec.agyBypass() && !c.replaying {
+	if !quiet && !c.replaying && c.rejectCutoverRequest(a) {
+		// Refused before it is published, ahead of bypass and worker
+		// auto-approval: nobody decides it.
+		return
+	}
+	if !quiet && c.record().agyBypass() && !c.replaying && !c.cutoverRejects(a.Tool) {
 		// Bypass answers before the prompt is published: the page must not
 		// see a modal, a pending row or a wake for a request nobody decides.
 		// Without an answerer, or with no answer the process could build
@@ -463,7 +514,7 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 	}
 	c.checkAction(quiet)
 	c.showApprovals(quiet)
-	if !quiet && !c.rec.Lead && c.r.opts.Backends[c.rec.Backend].WorkerAutoApprove {
+	if !quiet && !c.rec.Lead && c.r.opts.Backends[c.rec.Backend].WorkerAutoApprove && !c.cutoverRejects(a.Tool) {
 		// Use the same answer path as a user, including at-most-once
 		// tracking and a fatal write failure. The request remains traced.
 		if err := c.answerApproval(a.ID, true, ""); err != nil {
@@ -607,6 +658,11 @@ func (c *conv) answerApproval(id string, allow bool, message string) error {
 		return conflict("that permission prompt is not waiting: it was answered, withdrawn, or its process ended")
 	}
 	c.dropApproval(id, false)
+	if c.cutoverRejects(req.Tool) {
+		// A request the cutover refuses stays refused whoever answers it.
+		allow = false
+		c.oweCutoverInstruction(req.ID)
+	}
 	err := c.sendApproval(answerer, *req, allow, message)
 	if errors.Is(err, errNoApprovalAnswer) {
 		// The prompt is gone from the page and the process still waits on
@@ -625,8 +681,12 @@ func (c *conv) answerApproval(id string, allow bool, message string) error {
 // replay skips to (persistSeq, also on shutdown). Otherwise an answer is
 // one write per user decision and is durable at once.
 func (c *conv) sendApproval(answerer approvalAnswerer, req ApprovalRequest, allow bool, message string) error {
-	track := func(rec *Record) { rec.Answered = append(rec.Answered, req.ID) }
-	if c.rec.agyBypass() {
+	track := func(rec *Record) {
+		if !slices.Contains(rec.Answered, req.ID) {
+			rec.Answered = append(rec.Answered, req.ID)
+		}
+	}
+	if c.record().agyBypass() {
 		c.setStatus(func() { track(&c.rec) })
 	} else {
 		c.update(track)
@@ -805,8 +865,20 @@ func (c *conv) processEnded() {
 	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
 	c.retry, c.alerted = nil, false
 	c.syncHost(true)
-	c.live.endAgents()
-	c.live.writeSnapshot()
+	// A replay the process's end cut short still resolves what it staged of
+	// agy native rows and what the restored recovery file held (dropping
+	// the rows retention had evicted, settling the rows a live turn end
+	// accepted during it), before endAgents fails the rest; a path that
+	// cleared replaying first still holds the file (diskHold). The fold's
+	// single write carries this end's other changes too.
+	if len(c.agyNativeReplay.staged) > 0 || c.replaying || c.live.diskHold {
+		if !c.finishAgyNativeReplay(true) {
+			c.live.writeSnapshot()
+		}
+	} else {
+		c.live.endAgents()
+		c.live.writeSnapshot()
+	}
 	if !c.closed && !c.quitting && !hadTurn && !hadBackgroundTasks && !hadBgGrace {
 		c.watched()
 	}
@@ -814,7 +886,7 @@ func (c *conv) processEnded() {
 }
 
 func (c *conv) clearAgyInternalPrompt() bool {
-	if !c.rec.agyInternalPrompt() {
+	if !c.record().agyInternalPrompt() {
 		return false
 	}
 	c.update(func(rec *Record) { rec.TurnStartedAt = 0 })
@@ -865,6 +937,17 @@ func (c *conv) stopProcess(reason string) {
 	c.compactUsageFresh = false
 	c.stopCompactWatchdog()
 	c.stopIdle()
+	if c.retiringHolder() {
+		// The retained process is a stream a retirement already detached:
+		// closing it would end nothing, and releaseHolder would then forget
+		// a holder that still runs. Only the holder's own stop ends it; a
+		// failure keeps the holder, the error, and the heartbeat retry.
+		// Retained input stays held for the next send.
+		if hp, ok := c.proc.(holderProcess); ok {
+			c.retryRetirement(hp, false)
+		}
+		return
+	}
 	if c.proc == nil {
 		if !c.closed && !c.quitting {
 			c.releaseHeld()
@@ -942,7 +1025,7 @@ func (c *conv) finishLine() {
 // idleNow reports whether the idle timer may stop the process. Read child
 // state here too: a spawn notification may still be queued when the timer fires.
 func (c *conv) idleNow() bool {
-	if c.turn || c.replaying || c.bgTasks > 0 || c.bgGraceTimer != nil || c.compacting || c.compactCommand {
+	if c.turn || c.replaying || c.bgTasks > 0 || c.bgGraceTimer != nil || c.compacting || c.compactCommand || c.ownsLiveExec() {
 		return false
 	}
 	kind := ParentConversation
@@ -963,9 +1046,9 @@ func (c *conv) idleNow() bool {
 		// Send coverage protects initial queuing, but not input retained
 		// for retry after a settled launch failure. A held result still
 		// waits for the child's own descendants.
-		// A child whose start admission refused sleeps (wakeRefused).
-		active := child.rec.Parent != nil && *child.rec.Parent == parent && !child.closed &&
-			(child.turn || child.bgTasks != 0 || child.holding || !child.wakeRefused && child.sends > max(child.settled.mark, child.voided))
+		// The one sleep predicate (keepsAwakeLocked): an awake child keeps
+		// its parent awake, a sleeping one (a refused wake included) does not.
+		active := child.rec.Parent != nil && *child.rec.Parent == parent && child.keepsAwakeLocked()
 		child.mu.Unlock()
 		if active {
 			return false
@@ -981,19 +1064,28 @@ func (c *conv) checkInterrupt() {
 	if err != nil || len(recs) == 0 {
 		return
 	}
-	if c.modelWaitBackoffC != nil {
-		c.cancelModelWaitBackoff()
-		return
-	}
-	if !c.turn || c.proc == nil {
-		return
-	}
-	c.interruptAsked = true
-	c.disarmModelWait()
-	if err := c.proc.Interrupt(); err != nil {
+	if _, err := c.cancelTurn(); err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: interrupt: %v\n", c.rec.ReplyID, err)
 		c.stopProcess("")
 	}
+}
+
+// cancelTurn is the turn-cancellation step: it ends a model-wait backoff, or
+// asks the backend to interrupt the running turn. It reports whether a turn
+// or backoff was there to cancel, and the backend's interrupt error. What a
+// failure leads to is the caller's: the page's interrupt stops the process,
+// a forced worktree release only reports it. It runs in the loop.
+func (c *conv) cancelTurn() (bool, error) {
+	if c.modelWaitBackoffC != nil {
+		c.cancelModelWaitBackoff()
+		return true, nil
+	}
+	if !c.turn || c.proc == nil {
+		return false, nil
+	}
+	c.interruptAsked = true
+	c.disarmModelWait()
+	return true, c.proc.Interrupt()
 }
 
 // leverHoldCap bounds how long queued input waits, after a turn that
@@ -1065,7 +1157,12 @@ func (c *conv) applySettings() {
 		// The accepted native target is already in Record. Common selection
 		// writes its mapping there; a permitted native control keeps its literal
 		// mode. Only an actual new launch remaps explicit common intent.
-		if err := controls.setPermissionMode(rec.launchPermissionMode()); err != nil {
+		target := rec.launchPermissionMode()
+		if mode := c.cutoverLaunchMode(); mode != "" {
+			// A live settings change keeps the saved preference only.
+			target = mode
+		}
+		if err := controls.setPermissionMode(target); err != nil {
 			if reconcile {
 				fmt.Fprintf(c.r.opts.Log, "agent %s: permission reconciliation: %v\n", rec.ReplyID, err)
 				c.permissionNudge(level, false, c.activeMode)
@@ -1095,8 +1192,16 @@ func (c *conv) stopIdle() {
 
 // close ends the conversation's current lifetime. It marks it closed
 // first, under mu, so a Send either wrote before (and its message is
-// dropped below with the other held ones) or is refused.
-func (c *conv) close() { c.closeIf(nil) }
+// dropped below with the other held ones) or is refused. A retiring holder
+// whose stop fails again refuses it first (closeRetired): nothing is marked
+// closed, and the conversation keeps its heartbeat retry.
+func (c *conv) close() error {
+	if err := c.closeRetired(); err != nil {
+		return err
+	}
+	c.closeIf(nil)
+	return nil
+}
 
 // closeIf is close when done (nil for always) holds in the same mu hold
 // that marks the conversation closed, and reports whether it closed. It
@@ -1131,6 +1236,7 @@ func (c *conv) finishClose() {
 	if len(c.rec.Mail) > 0 || len(c.rec.Reports) > 0 {
 		c.update(func(rec *Record) { rec.Mail, rec.Reports = nil, nil })
 	}
+	c.heldSenders = nil
 	c.r.revokeToken(c.rec.ReplyID)
 	c.hold(nil)
 	c.dropHeld()
@@ -1151,6 +1257,7 @@ func (c *conv) finishClose() {
 // and offers the command list again under the result. A backend with no
 // profile stays handle-only: no grades, no demotion, no warning.
 func (c *conv) harnessReported(report HarnessReport, quiet bool) {
+	c.r.noteHarnessVersion(c.rec.Backend, report.Version, c.launchBinary)
 	profile := c.r.opts.Backends[c.rec.Backend].Catalog
 	if profile == nil {
 		return
@@ -1168,10 +1275,12 @@ func (c *conv) harnessReported(report HarnessReport, quiet bool) {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: harness version %q (verified %s..%s) runs on %s's capabilities; demoted by its init: %v\n",
 			c.rec.ReplyID, report.Version, caps.Oldest, caps.Newest, caps.ProfileVersion, caps.Demoted)
 	}
-	before := c.r.withPlaybookCommands(c.rec, allowedCommands(c.commands, c.caps))
+	// A whole-record copy takes mu (record): Send stamps rec under it.
+	rec := c.record()
+	before := c.r.withPlaybookCommands(rec, allowedCommands(c.commands, c.caps))
 	c.setStatus(func() { c.caps = &caps })
 	if c.commands != nil {
-		if after := c.r.withPlaybookCommands(c.rec, allowedCommands(c.commands, c.caps)); !slices.Equal(after, before) {
+		if after := c.r.withPlaybookCommands(rec, allowedCommands(c.commands, c.caps)); !slices.Equal(after, before) {
 			c.apply(wslive.Event{Kind: wslive.KindCommands, Commands: after}, quiet)
 		}
 	}

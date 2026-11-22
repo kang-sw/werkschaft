@@ -593,6 +593,32 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		if src.key.kind == regionRail && !sendCompanion() {
 			return
 		}
+		// A shell's rail stream hands it the token its companion focus
+		// reports carry (companion_director.go); the report ends with it.
+		if src.key.kind == regionRail {
+			token := d.director.openStream()
+			defer d.director.closeStream(token)
+			payload, _ := json.Marshal(companionFocusEventPayload{Token: token})
+			if token != "" && (sink.event(companionFocusEvent, payload) != nil || sink.flush() != nil) {
+				return
+			}
+		}
+		// Only a shell's rail stream carries director commands, and only
+		// those published after it connected.
+		var commandWake <-chan struct{}
+		var commandSeq uint64
+		if src.key.kind == regionRail {
+			commandSeq, _, commandWake = d.companionCommands.current()
+		}
+		sendCommand := func() bool {
+			seq, payload, wake := d.companionCommands.current()
+			commandWake = wake
+			if seq == commandSeq || payload == nil {
+				return true
+			}
+			commandSeq = seq
+			return sink.event(companionCommandEvent, payload) == nil && sink.flush() == nil
+		}
 		send := func(pr pageRender, at uint64) bool {
 			d.broker.follow(sub, pr.deps, at)
 			if pr.err != nil {
@@ -661,6 +687,11 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 				return
 			case <-companionWake:
 				if !sendCompanion() {
+					return
+				}
+				continue
+			case <-commandWake:
+				if !sendCommand() {
 					return
 				}
 				continue

@@ -93,7 +93,8 @@ func TestLaunchExitCopySurvivesCleanup(t *testing.T) {
 const readToEOF = `
 import sys
 data = sys.stdin.buffer.read()
-sys.stdout.write("len=%d first=%s\n" % (len(data), data.split(b"\n", 1)[0].decode()))
+# Binary write: text-mode stdout turns "\n" into "\r\n" on Windows.
+sys.stdout.buffer.write(("len=%d first=%s\n" % (len(data), data.split(b"\n", 1)[0].decode())).encode())
 sys.stdout.flush()
 `
 

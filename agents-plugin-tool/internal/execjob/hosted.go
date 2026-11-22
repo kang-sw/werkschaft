@@ -34,9 +34,23 @@ type Hosted struct {
 	// cap, so a failing store bounds them. deleteGen numbers the claims.
 	deleting  map[string]*tombstone
 	deleteGen uint64
-	started   bool
-	closed    bool
-	retry     *time.Timer
+	// retiring counts, per exec id, a predecessor's holders Start is
+	// stopping whose id no live job records (one no job owns, or one of an
+	// ended job): the holder may still write the exit copy at that id's
+	// path, so the id is not drawn, its ended job not pruned, and both count
+	// toward the job cap until the stop is confirmed (retireOld).
+	retiring map[string]int
+	started  bool
+	closed   bool
+	retry    *time.Timer
+	// quit closes with Close: it ends the retried holder stops
+	// (retryRetire).
+	quit chan struct{}
+	// ownerFences are the conversations whose new jobs are refused (a close
+	// in progress); rootFences the worktrees being released, removed or
+	// acquired, each with its live fences. Both under mu.
+	ownerFences map[string]bool
+	rootFences  map[string]*rootFence
 }
 
 // tombstone is a dropped job whose row delete has not succeeded.
@@ -75,6 +89,11 @@ type hostedJob struct {
 	row  HostedJobRow
 	out  *JobOutput
 	done chan struct{}
+	// real holds the resolved root and working directory of a running row
+	// an older daemon stored without them (restoredPlaces at restore, a
+	// fallback the row does not persist). Read under h.mu by the worktree
+	// fence, never rewritten.
+	real []string
 	// lastSeq is the last holder record taken: a replay after a daemon
 	// restart starts from the ring's first record again.
 	lastSeq uint64
@@ -89,6 +108,19 @@ type hostedJob struct {
 	// then HostedStopped and sends no notice.
 	stopping   bool
 	delivering bool
+	// starting: Launch admitted the job and has not handed its process to
+	// the holder yet; a stop then ends the job at once, and Launch, seeing
+	// the end, never spawns. spawned is open while that hand-over runs; a
+	// stop waits for it, so the process it starts is the one it ends.
+	starting bool
+	spawned  chan struct{}
+	// holderPinned: a holder launched for j may run without j recording
+	// it: set from j's admission until j records the holder, and kept
+	// when j ended meanwhile (a stop during the launch). That holder writes
+	// the exit copy at j's id's path as it goes, so j is not pruned, and
+	// its id not reused, until the holder is confirmed gone
+	// (retireHolder). Under h.mu.
+	holderPinned bool
 	// rev numbers j's row snapshots for the store (snapLocked, under h.mu);
 	// saveMu orders their writes and saved is the last one written, so a
 	// snapshot taken before the job's end never lands after it. A dropped
@@ -124,7 +156,7 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 	if opts.TotalBytes <= 0 {
 		opts.TotalBytes = hostedTotalBytes
 	}
-	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*tombstone{}}
+	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*tombstone{}, retiring: map[string]int{}, quit: make(chan struct{})}
 	rows, err := opts.Store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load hosted exec jobs: %w", err)
@@ -139,6 +171,12 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 			// write): the row does not record an eof exec.write sent.
 			h.byHolder[row.HolderID] = j
 			j.stdinUnknown = !row.Legacy
+		}
+		if !row.Terminal() && row.RealRoot == "" && row.RealCwd == "" {
+			// No launch-time resolution stored: an admitted launch always
+			// stores its resolved root, so only an older daemon's row lacks
+			// it. Resolve now, as that daemon matched the job.
+			j.real = restoredPlaces(row.Root, row.Cwd)
 		}
 		h.jobs[row.ID] = j
 	}
@@ -212,17 +250,21 @@ func (h *Hosted) Start() {
 		if owned && !ended {
 			stdinFromHolderLocked(j, info)
 		}
+		if !owned || ended {
+			// Reserved before the jobs are published (this start returns).
+			h.retiring[execID]++
+		}
 		h.mu.Unlock()
 		switch {
 		case !owned:
 			// Launched and never recorded (a crash between the holder's
 			// start and the first row), or of a job this daemon pruned.
 			h.logf("stopping exec holder %s: no job owns it", info.ID)
-			go h.stopHolder(info.ID)
+			go h.retireOld(execID, info.ID)
 		case ended:
 			// Its job's end was stored, and the daemon went before the
 			// holder's stop.
-			go h.stopHolder(info.ID)
+			go h.retireOld(execID, info.ID)
 		}
 	}
 	h.mu.Lock()
@@ -442,6 +484,84 @@ func (h *Hosted) HolderEvent(id string, ev wsholder.Event) {
 func (h *Hosted) stopHolder(id string) {
 	if err := h.opts.Holders.Stop(id); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
 		h.logf("stop holder %s: %v", id, err)
+	}
+}
+
+// retireHolder stops holder, launched for job j after j ended, and once
+// it is confirmed gone removes the exit copy it left at j's id's path and
+// lets j be pruned. A holder that did not go keeps j pinned, so its id is
+// never reused under a copy the holder may still write, and its stop is
+// retried in the background (retryRetire); the error says the first
+// attempt failed.
+func (h *Hosted) retireHolder(j *hostedJob, holder string) error {
+	retired := func() {
+		h.removeExitCopy(j.row.ID)
+		h.mu.Lock()
+		j.holderPinned = false
+		h.mu.Unlock()
+	}
+	if err := h.stopGone(holder); err != nil {
+		h.logf("stop holder %s of ended job %s: %v; the job's id stays reserved while the stop is retried", holder, j.row.ID, err)
+		go h.retryRetire(holder, retired)
+		return fmt.Errorf("stop exec job %s's holder: %w", j.row.ID, err)
+	}
+	retired()
+	return nil
+}
+
+// retireOld stops holder, a predecessor's holder under exec id execID
+// that no live job records, and releases execID's reservation (retiring)
+// once the holder is confirmed gone; a failed stop is retried
+// (retryRetire).
+func (h *Hosted) retireOld(execID, holder string) {
+	release := func() {
+		h.mu.Lock()
+		if h.retiring[execID]--; h.retiring[execID] <= 0 {
+			delete(h.retiring, execID)
+		}
+		h.mu.Unlock()
+	}
+	if err := h.stopGone(holder); err != nil {
+		h.logf("stop exec holder %s: %v; exec id %s stays reserved while the stop is retried", holder, err, execID)
+		h.retryRetire(holder, release)
+		return
+	}
+	release()
+}
+
+// stopGone stops holder; one already gone counts as stopped.
+func (h *Hosted) stopGone(holder string) error {
+	if err := h.opts.Holders.Stop(holder); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+		return err
+	}
+	return nil
+}
+
+// retireRetryMin and retireRetryMax bound the delay between retried holder
+// stops (a test seam).
+var retireRetryMin, retireRetryMax = time.Second, time.Minute
+
+// retryRetire retries stopping holder, doubling the delay from
+// retireRetryMin up to retireRetryMax, until it is confirmed gone, and
+// then runs retired. Close ends the retries: the next daemon's start stops
+// the holder.
+func (h *Hosted) retryRetire(holder string, retired func()) {
+	delay := retireRetryMin
+	for {
+		t := time.NewTimer(delay)
+		select {
+		case <-h.quit:
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		err := h.stopGone(holder)
+		if err == nil {
+			retired()
+			return
+		}
+		h.logf("stop holder %s: %v; retrying", holder, err)
+		delay = min(delay*2, retireRetryMax)
 	}
 }
 
@@ -666,6 +786,9 @@ var ErrExecNotFound = errors.New("exec job not found")
 // under their holders for the next daemon.
 func (h *Hosted) Close() error {
 	h.mu.Lock()
+	if !h.closed {
+		close(h.quit)
+	}
 	h.closed = true
 	if h.retry != nil {
 		h.retry.Stop()

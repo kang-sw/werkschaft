@@ -15,7 +15,9 @@ func TestDocFrameHandsOverviewKey(t *testing.T) {
 	if !found {
 		t.Fatal("missing Overview key listener")
 	}
-	js, _, _ = strings.Cut(js, "\n})();")
+	// Stop at the next listener: later ones (find, hover) are not under test,
+	// would overwrite the fake handler, and reference browser globals.
+	js, _, _ = strings.Cut(js, "  // Ctrl/Cmd+F inside a framed card")
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed; Overview key cases not executed")

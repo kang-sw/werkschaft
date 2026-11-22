@@ -64,11 +64,36 @@ type conv struct {
 	acceptedEvents map[string]struct{}
 	// mcpCalls counts the ws MCP tool calls in flight on the conversation's
 	// session token (Runner.MCPCallBegin).
-	mcpCalls   atomic.Int64
-	activeMode string
-	bgTasks    int
-	background *int
-	monitors   *int
+	mcpCalls atomic.Int64
+	// execCutover reports whether the current process started under the
+	// exec cutover (exec_cutover.go): its native process tools removed in
+	// favour of the ws exec tools. Set at each start and rejoin.
+	execCutover bool
+	// launchBinary fingerprints the binary the current process launched
+	// from (harnessBinaryOf), "" for one this daemon did not launch or a
+	// backend without a cutover mechanism. Set with execCutover.
+	launchBinary string
+	// cutoverNudge is the current turn's first refused or unrequested
+	// native command under the cutover, whose instruction prompt the
+	// turn's end sends (sendCutoverInstruction); loop-owned.
+	cutoverNudge string
+	// cutoverInstructing reports that a turn's instruction prompt is on
+	// its way to the inbox, or in it and not yet taken by a turn: a
+	// worker's done report waits for the turn it starts (holdsReport);
+	// loop-owned.
+	cutoverInstructing bool
+	// cutoverQueued: the instruction was admitted to the inbox while
+	// cutoverInstructing holds, so its absence from the held entries means
+	// it left (cutoverInstructionGone); loop-owned.
+	cutoverQueued bool
+	// cutoverInstructed counts the instruction prompts the current process
+	// was sent (cutoverInstructionCap); loop-owned, reset at each start
+	// and rejoin.
+	cutoverInstructed int
+	activeMode        string
+	bgTasks           int
+	background        *int
+	monitors          *int
 	// actionNeeded is State.ActionNeeded.
 	actionNeeded string
 	// Worker permission projection is transient. Explicit selection lives in
@@ -133,6 +158,19 @@ type conv struct {
 	modelWaitBackoffC           <-chan time.Time
 	modelWaitBackoffStop        func()
 	modelWaitBackoffFailure     string
+	// A hosted agy lead's log-confirmed stall cutoff (agy_watchdog.go):
+	// modelWaitLogCheck is agy.stall_log_check, modelWaitBoundary the wall
+	// time ws last started a fresh model request, modelWaitContent whether
+	// model content arrived since, agyLog the process's worker log, and
+	// agyLogNoted whether this session logged its one unknown-log notice.
+	// agyFrameTrace is the frame capture file when agy.http2_frame_trace
+	// is on.
+	modelWaitLogCheck bool
+	modelWaitBoundary time.Time
+	modelWaitContent  bool
+	agyLog            *agyStallLog
+	agyLogNoted       bool
+	agyFrameTrace     string
 	// modelWaitBackoffFence is the only model-wait field shared with Send:
 	// pending -> cancelled lets a successful inbox write win before it
 	// returns; pending -> firing commits the automatic continue instead.
@@ -177,10 +215,25 @@ type conv struct {
 	// owner already holds its flock, without touching the lock file.
 	foreignRow atomic.Bool
 	rowHeld    atomic.Int32
+	// rowReads counts lockRowRead passes (the registration lock and file
+	// read); ownerProof is the hosted row identity the last one proved
+	// (lockSummaryWriter), which a RAM-only publish relies on
+	// (lockSummaryWriterRAM).
+	rowReads   atomic.Int64
+	ownerProof atomic.Pointer[hostedOwnerProof]
 	// replaying is set from a rejoin of the holder's process (reattach)
 	// until its replay ends: no turn is submitted meanwhile, since the
 	// replay is what tells whether one runs.
-	replaying       bool
+	replaying bool
+	// agyNativeReplay is what the running replay staged of agy native rows
+	// (stageAgyNativeReplay, resolveAgyNativeReplay).
+	agyNativeReplay agyNativeReplayRows
+	// eventSeq is the holder record sequence of the event being handled (0
+	// for the daemon's own child or a synthetic event).
+	eventSeq uint64
+	// rejoinErr is a worker rejoin's start failure: checkReattach ends that
+	// recovery after the scan instead of waiting on a replay with no process.
+	rejoinErr       string
 	replayAsked     bool
 	replayTurnError string
 	// replayGap is set when records left the holder's ring during the
@@ -232,9 +285,16 @@ type conv struct {
 	// Backend-filtered hello environment captured at attach, before token restore.
 	workerMCPEnv   []string
 	workerRetiring bool // validated downgrade retirement retries before replay
-	mcpChecking    bool
-	mcpAgain       bool
-	mcpAgainNames  []string
+	// crossHarnessRejoin is a held worker admitWorkerRecord refuses (a
+	// cross-harness worker) that reattach attached for the ownership match only. checkReattach ends a matching
+	// holder (retireCrossHarnessWorker) and never stops a mismatched one.
+	crossHarnessRejoin bool
+	// crossHarnessRetiring is a matched cross-harness holder whose stop failed; each
+	// heartbeat's checkReattach retries it until it ends.
+	crossHarnessRetiring bool
+	mcpChecking          bool
+	mcpAgain             bool
+	mcpAgainNames        []string
 	// retry is the API request retry under way; alerted that the running
 	// turn brought a typed failure, so its end clears none.
 	retry   *wslive.Retry
@@ -257,10 +317,47 @@ type conv struct {
 	// permission admission (childAdmission): the input stays, and the
 	// child counts as asleep. Under mu.
 	wakeRefused bool
+	// releasedCheckout is the checkout whose completed release ended this
+	// spawned conversation's binding, once the runner knows it (from the
+	// runner's in-memory releases, a release's notice, or a refused start);
+	// it then takes no input there, even while its process lives. It is
+	// never cleared. Under mu.
+	releasedCheckout string
+	// inputMu fences input against a release notice: the loop holds it
+	// from its last release check until a turn or steer has been handed to
+	// the backend (admitInput), and the notice holds it while it marks the
+	// conversation released (noteReleased). The conversation's own lock;
+	// only c.mu is ever taken under it.
+	inputMu sync.Mutex
+	// canonRoot and canonCwd are the record's Root and effective working
+	// directory (Record.workDir) with symlinks resolved
+	// (canonicalWorktreePath), once, in startConv; both are fixed for a
+	// conversation's life. Immutable after startConv.
+	canonRoot, canonCwd string
+	// checkouts are the checkouts this spawned conversation is bound to
+	// (resolveCheckouts), resolved once when it is loaded or spawned; nil for
+	// a conversation no release can end. Immutable after startConv.
+	checkouts []string
+	// starting is set from the moment a process start passed the release
+	// check until that start finished or failed: occupancy counts the
+	// conversation live meanwhile, so no acquisition reuses its checkout
+	// under a backend that is still starting. Under mu, which the release
+	// check and the occupancy read share.
+	starting bool
+	// heldSenders are the senders of mail claimed into the record and not yet
+	// delivered or told of a refused start, in claim order: a refusal found
+	// after the claim (a start deferred past the holder scan, a later kick)
+	// still reaches each of them, once. Memory only. Loop-owned.
+	heldSenders []string
 	// spawnPending is true from registration in r.convs until spawned()'s
 	// first Send (or close), so awakeLocked counts a newly registered spawn
 	// with no gap after pendingSpawns handoff. Under mu.
 	spawnPending bool
+	// Keep-awake membership (keep_awake.go), loop-owned: awakeMember is what
+	// this instance last published, awakeSending is set while a standalone
+	// prompt's send is in flight.
+	awakeMember  bool
+	awakeSending bool
 
 	// Turn settles (spawn.go). sends counts Runner.Send's messages and
 	// settled is the last settled turn, settleC closed and replaced at each
@@ -303,11 +400,15 @@ type conv struct {
 	steerAnswers  int
 }
 
-// do runs fn in the loop and waits for it; false when the loop has ended.
+// do runs fn in the loop and waits for it; false when the loop has ended. The
+// wrapper closes ran in a defer, so a fn that exits its goroutine (a test's
+// t.Fatal runs runtime.Goexit) still releases the caller instead of leaving it
+// parked until the package timeout; the loop goroutine itself is then gone.
+// Tests copy values out inside fn and assert on their own goroutine.
 func (c *conv) do(fn func()) bool {
 	ran := make(chan struct{})
 	select {
-	case c.reqs <- func() { fn(); close(ran) }:
+	case c.reqs <- func() { defer close(ran); fn() }:
 		<-ran
 		return true
 	case <-c.done:
@@ -367,12 +468,18 @@ func (c *conv) mailChanged() {
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: mailbox: %v\n", rec.ReplyID, err)
 	}
+	// A conversation whose checkout was released steers nothing into a
+	// turn that outlived the release. Its release state was settled when it
+	// was loaded, so a claim made before the first holder scan knows it too.
+	released := c.released()
 	var held []string
 	for _, m := range mail {
 		// Once a steer fails, the rest waits too, so the batch keeps its
-		// order. A held text keeps Drain's text, without a legend.
-		if len(held) > 0 || !c.steerMail(m) {
+		// order. A held text keeps Drain's text, without a legend; its
+		// sender is kept beside it, in memory, for a refusal found later.
+		if released != "" || len(held) > 0 || !c.steerMail(m) {
 			held = append(held, m.Text)
+			c.holdSender(m.Sender)
 		}
 	}
 	if len(held) > 0 {
@@ -396,28 +503,51 @@ func (c *conv) mailChanged() {
 	if len(c.rec.Mail) > 0 {
 		c.kick()
 	}
-	if len(held) > 0 {
-		c.tellRefusedWake(mail)
+	if released == "" {
+		// A release that landed after the snapshot refused a steer above
+		// (admitInput); its senders are told too.
+		released = c.released()
+	}
+	if released != "" {
+		// Told whether or not the kick reached a start: a running turn, or
+		// a start deferred past the first holder scan, defers the kick, and
+		// the refusal does not wait for it.
+		c.tellHeldSenders(released, checkoutReleasedRefusal(released).Error())
+	} else if len(held) > 0 {
+		c.tellRefusedWake()
 	}
 }
 
-// tellRefusedWake tells each sender of mail, claimed for a sleeping child
-// whose wake admission kick just refused, that its mail waits
+// tellRefusedWake tells each sender of held mail, claimed for a sleeping
+// child whose wake admission refused, that its mail waits
 // (Options.WakeRefused), once per sender. It runs in the loop.
-func (c *conv) tellRefusedWake(mail []ClaimedMail) {
+func (c *conv) tellRefusedWake() {
 	c.mu.Lock()
-	refused, reason := c.wakeRefused, c.lastErr
+	refused, reason, checkout := c.wakeRefused, c.lastErr, c.releasedCheckout
 	c.mu.Unlock()
-	if !refused || c.r.opts.WakeRefused == nil {
+	if !refused {
 		return
 	}
-	told := map[string]bool{}
-	for _, m := range mail {
-		if m.Sender == "" || told[m.Sender] {
-			continue
-		}
-		told[m.Sender] = true
-		c.r.opts.WakeRefused(m.Sender, c.rec.ReplyID, reason)
+	c.tellHeldSenders(checkout, reason)
+}
+
+// holdSender keeps sender, once, among the senders of mail held in the
+// record (heldSenders). It runs in the loop.
+func (c *conv) holdSender(sender string) {
+	if sender == "" || slices.Contains(c.heldSenders, sender) {
+		return
+	}
+	c.heldSenders = append(c.heldSenders, sender)
+}
+
+// tellHeldSenders tells each sender of held mail not yet told, once, that
+// conversation c refused its start (checkout set: by that checkout's
+// release). It runs in the loop.
+func (c *conv) tellHeldSenders(checkout, reason string) {
+	senders := c.heldSenders
+	c.heldSenders = nil
+	for _, sender := range senders {
+		c.r.tellRefused(sender, c.rec.ReplyID, checkout, reason)
 	}
 }
 
@@ -459,6 +589,7 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: steer a mail: %v\n", c.rec.ReplyID, err)
 			return false
 		}
+		c.modelWaitSteered()
 		c.apply(*wakeEvent("mail", "mailbox", "", text).Live)
 		return true
 	}
@@ -474,7 +605,13 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 	}
 	c.steered = append(c.steered, steered)
 	c.saveSteered()
-	if err := ctl.reports.Steer(text); err != nil {
+	var err error
+	if refusedBy := c.admitInput(func() { err = ctl.reports.Steer(text) }); refusedBy != "" {
+		// A release landed after mailChanged's snapshot: the mail is held
+		// and its sender told (mailChanged).
+		err = checkoutReleasedRefusal(refusedBy)
+	}
+	if err != nil {
 		c.steered = slices.DeleteFunc(c.steered, func(s steeredReport) bool { return s.Seq == seq })
 		c.saveSteered()
 		fmt.Fprintf(c.r.opts.Log, "agent %s: steer a mail: %v\n", c.rec.ReplyID, err)
@@ -504,6 +641,7 @@ func (c *conv) mailLegend(texts, senders []string) []string {
 // messages, starting the process when needed (kick). It runs in the loop.
 func (c *conv) inboxChanged() {
 	c.refreshHeld()
+	c.cutoverInstructionGone()
 	if c.modelWaitBackoffC != nil && c.held > 0 {
 		c.cancelModelWaitBackoff()
 	}
@@ -534,6 +672,11 @@ func (c *conv) steer() {
 	if !c.turn || c.proc == nil || c.replaying || c.wrapHold || c.closed || c.hidden || c.compacting || c.compactCommand || c.compactInternalTurn {
 		return
 	}
+	if c.released() != "" {
+		// A turn that outlived its checkout's release takes no steer; the
+		// sender heard the refusal from Deliver or the mail claim.
+		return
+	}
 	if !c.rec.Lead {
 		c.steerWorker()
 		return
@@ -555,6 +698,7 @@ func (c *conv) steer() {
 	c.held = max(0, c.held-len(recs))
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
+	c.cutoverInstructionLeft(recs)
 	var parts []string
 	for _, rec := range recs {
 		if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
@@ -569,13 +713,18 @@ func (c *conv) steer() {
 	if err := st.Steer(text); err != nil {
 		c.setStatus(func() { c.lastErr = "send the steered message: " + err.Error() })
 		c.stopProcess("")
+		return
 	}
+	c.modelWaitSteered()
 }
 
 func (c *conv) loop() {
 	defer c.r.wg.Done()
 	defer close(c.done)
 	defer c.live.closeSlot()
+	// Whatever way the loop ends (close, hand-off, shutdown), this
+	// instance's membership goes with it.
+	defer c.publishAwake(false)
 	defer func() {
 		c.stopCompactWatchdog()
 		c.stopModelWaitTimer()
@@ -609,6 +758,9 @@ func (c *conv) loop() {
 	if c.settle() {
 		return
 	}
+	// A rejoined child whose record shows its turn open runs it under a
+	// trusted holder: publish that before the replay settles it.
+	c.publishAwake(c.wantAwake())
 	for {
 		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, spawnC, bgGraceC <-chan time.Time
 		leverC = c.leverC
@@ -707,6 +859,7 @@ func (c *conv) loop() {
 			}
 			return
 		}
+		c.syncAwake()
 		if c.settle() {
 			return
 		}
@@ -1026,6 +1179,7 @@ func (c *conv) lockRowRead() (unlock func(), row *wsdashboard.Registration, ok b
 		return nil, nil, false
 	}
 	c.rowHeld.Add(1)
+	c.rowReads.Add(1)
 	unlock = func() {
 		c.rowHeld.Add(-1)
 		flockUnlock()
@@ -1106,11 +1260,14 @@ func (c *conv) dropHeld() {
 	}
 	removed := 0
 	if held, err := wsinbox.Held(c.inbox); err == nil {
+		var dropped []wsinbox.Record
 		for _, rec := range held {
 			if _, err := wsinbox.Cancel(c.inbox, rec.Name); err == nil {
 				removed++
+				dropped = append(dropped, rec)
 			}
 		}
+		c.cutoverInstructionLeft(dropped)
 	}
 	c.inboxMutated(removed)
 	_, _ = wsinbox.DrainInterrupt(c.inbox)
@@ -1131,6 +1288,9 @@ func (c *conv) applyCoalesced(ev wslive.Event, quiet bool) {
 }
 
 func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
+	if c.stageAgyNativeReplay(ev, quiet) {
+		return
+	}
 	if !quiet {
 		c.observeCompaction(ev)
 	}
@@ -1167,8 +1327,16 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 			}
 		})
 	}
+	// A native subagent row (agy, Codex) publishes RAM-only through the live
+	// slot, under the in-memory ownership fence, and never calls the
+	// recovery writer itself: it reaches disk with the next heartbeat or
+	// turn-end write, so a chatty child costs no file touches on the event
+	// path.
+	nativeRow := ev.Kind == wslive.KindAgent && wslive.NativeAgentID(ev.AgentID)
 	if quiet {
 		c.live.applyQuiet(ev)
+	} else if nativeRow {
+		c.live.applyRAM(ev)
 	} else if coalesceTurnEnd {
 		c.live.applyCoalesced(ev)
 	} else {
@@ -1204,6 +1372,261 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 	}
 }
 
+// agyNativeSettle is an agy native row whose observation ended at a time.
+type agyNativeSettle struct {
+	id string
+	at int64
+}
+
+// endAgyNativeObservation is a live, accepted logical turn end's effect on
+// agy native rows: agy reports no child end, so observation of every row
+// still running ends at at (EndUnknown). While a replay runs, the end is
+// staged in order with the rows' events instead (stageAgyNativeReplay) and
+// settles when the replay ends: a replayed record that only follows the
+// holder's sequence mark, such as a buffered prompt response, is not quiet,
+// yet the replay is not over.
+func (c *conv) endAgyNativeObservation(at int64) {
+	if c.replaying {
+		c.agyNativeReplay.staged = append(c.agyNativeReplay.staged, agyNativeStaged{endAt: at})
+		return
+	}
+	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
+		c.settleAgyNative([]agyNativeSettle{{id, at}})
+	}
+}
+
+// agyNativeReplayRows is what a replay staged of agy native rows: their
+// events and the live turn ends between them, in order (staged), the holder
+// the replay read them from (holderID), the record of it each row was first
+// seen at (start), and the time of the last record past the holder's
+// sequence mark that touched it (live). holderID is taken with the first
+// staged event: a process end releases the holder from the record
+// (releaseHolder, processGone, a retirement) before its fold runs, and the
+// fold still judges the staged starts against that holder's coverage.
+type agyNativeReplayRows struct {
+	staged   []agyNativeStaged
+	holderID string
+	start    map[string]uint64
+	live     map[string]int64
+}
+
+// agyNativeStaged is one staged step: a row event (quiet when replayed from
+// a record the previous daemon applied), or, with endAt set, a live turn
+// end that ended observation of the rows then running.
+type agyNativeStaged struct {
+	ev    wslive.Event
+	quiet bool
+	endAt int64
+}
+
+// stageAgyNativeReplay holds an agy native row event of a running replay out
+// of the state, and so out of retention, until the replay ends
+// (resolveAgyNativeReplay); it reports whether it held ev. The event keeps
+// the time it arrived at.
+func (c *conv) stageAgyNativeReplay(ev wslive.Event, quiet bool) bool {
+	if !c.replaying || ev.Kind != wslive.KindAgent || !strings.HasPrefix(ev.AgentID, wslive.NativeAgyPrefix) {
+		return false
+	}
+	o := &c.agyNativeReplay
+	if o.holderID == "" {
+		o.holderID = c.rec.HolderID
+	}
+	if ev.At <= 0 {
+		ev.At = c.r.opts.Now().UnixMilli()
+	}
+	if _, seen := o.start[ev.AgentID]; !seen {
+		if o.start == nil {
+			o.start = map[string]uint64{}
+		}
+		o.start[ev.AgentID] = c.eventSeq
+	}
+	if !quiet {
+		if o.live == nil {
+			o.live = map[string]int64{}
+		}
+		o.live[ev.AgentID] = ev.At
+	}
+	o.staged = append(o.staged, agyNativeStaged{ev: ev, quiet: quiet})
+	return true
+}
+
+// finishAgyNativeReplay ends a rejoin's observation of agy native rows: it
+// resolves what the replay staged (resolveAgyNativeReplay), then, since
+// observation is not continuous across a daemon replacement and a replayed
+// cancellation cannot be told from a watchdog continuation awaiting its
+// first output, closes every row still running end-unknown at the time
+// agyNativeReplayEnd gives it; with processGone, the process ended instead,
+// and endAgents fails every subagent still running, as at any process end.
+//
+// Retention waits for the whole fold (wslive.State.HoldRetention): applied
+// one by one, the staged starts of a long replay could reach the running
+// cap and evict a row a later failure would have left the oldest open
+// observation, so caps apply once, to the final lifecycles. Publications
+// wait for it too (liveWriter.beginBatch): no reader sees an intermediate,
+// uncapped roster, and the retained one goes out in a single snapshot
+// write. Last, the restored recovery file's evidence is in the state, so
+// the file may be replaced (liveWriter.diskHold): a fold that lifts the
+// hold writes even when it changed nothing. It reports whether it wrote, so
+// a caller with its own changes to write writes only when it did not.
+func (c *conv) finishAgyNativeReplay(processGone bool) bool {
+	c.live.beginBatch()
+	release := c.live.st.HoldRetention()
+	rows, restored := c.resolveAgyNativeReplay()
+	if processGone {
+		c.live.endAgents()
+	} else {
+		var rest []agyNativeSettle
+		for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
+			rest = append(rest, agyNativeSettle{id, c.agyNativeReplayEnd(id, rows, restored)})
+		}
+		c.settleAgyNative(rest)
+	}
+	release()
+	held := c.live.diskHold
+	c.live.diskHold = false
+	return c.live.endBatch(held)
+}
+
+// resolveAgyNativeReplay applies what a replay staged of agy native rows,
+// once, and returns it with what the restored snapshot said. Retention
+// already decided which finished rows the restored snapshot kept, so first
+// the rows the snapshot shows evicted are dropped: rows the state does not
+// hold, touched by no record past the holder's sequence mark, whose start
+// the snapshot covers and which it does not list (restoredAgyNative.evicted).
+// Their staged events never reach the state, so they cannot displace a
+// restored row. The surviving events then apply in order (a row started
+// after the snapshot's coverage keeps the terminal record that followed),
+// noting at each staged live turn end the rows it found running; those rows
+// settle at that end's time after every event, so a launch failure buffered
+// later in the same replay still wins. The caller holds retention across
+// the fold (finishAgyNativeReplay), so no cap sees an intermediate roster.
+// Last, a row the
+// snapshot listed running whose start left the holder ring is seeded from
+// the snapshot and closes end-unknown at the snapshot's write time.
+func (c *conv) resolveAgyNativeReplay() (agyNativeReplayRows, restoredAgyNative) {
+	restored := c.live.takeRestored()
+	rows := c.agyNativeReplay
+	c.agyNativeReplay = agyNativeReplayRows{}
+	holderID := rows.holderID
+	dropped := map[string]bool{}
+	for id, seq := range rows.start {
+		if _, live := rows.live[id]; !live && !c.live.st.HasAgent(id) && restored.evicted(id, holderID, seq) {
+			dropped[id] = true
+		}
+	}
+	var deferred []agyNativeSettle
+	for _, step := range rows.staged {
+		if step.endAt > 0 {
+			for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
+				if !slices.ContainsFunc(deferred, func(d agyNativeSettle) bool { return d.id == id }) {
+					deferred = append(deferred, agyNativeSettle{id, step.endAt})
+				}
+			}
+			continue
+		}
+		if !dropped[step.ev.AgentID] {
+			c.applyAgyNativeRow(step.ev, step.quiet)
+		}
+	}
+	c.settleAgyNative(deferred)
+	var wrapped []string
+	for id := range restored.running {
+		if !c.live.st.HasAgent(id) && !dropped[id] {
+			wrapped = append(wrapped, id)
+		}
+	}
+	slices.Sort(wrapped)
+	var seeded []agyNativeSettle
+	for _, id := range wrapped {
+		a := restored.running[id]
+		at := restored.updatedAt
+		if at <= 0 {
+			at = c.r.opts.Now().UnixMilli()
+		}
+		start := a.StartedAt
+		if start <= 0 || start > at {
+			start = at
+		}
+		c.applyAgyNativeRow(wslive.Event{Kind: wslive.KindAgent, AgentID: id, ParentID: a.ParentID, Label: a.Label, Status: wslive.StatusRunning, At: start}, false)
+		seeded = append(seeded, agyNativeSettle{id, at})
+	}
+	c.settleAgyNative(seeded)
+	if len(dropped) > 0 {
+		ids := make([]string, 0, len(dropped))
+		for id := range dropped {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		if f, ok := c.proc.(nativeLaunchForgetter); ok {
+			f.forgetNativeLaunches(ids)
+		}
+	}
+	return rows, restored
+}
+
+// agyNativeReplayEnd is when a rejoin's observation of the agy native row id,
+// still running at the replay's end, ended: the time of the last record past
+// the holder's sequence mark that touched it; else, for a row the restored
+// snapshot listed running, that snapshot's write time; else (no readable
+// snapshot, a row started after the snapshot's coverage, or a later replay)
+// the replay's end.
+func (c *conv) agyNativeReplayEnd(id string, rows agyNativeReplayRows, restored restoredAgyNative) int64 {
+	if at, ok := rows.live[id]; ok {
+		return at
+	}
+	if _, listed := restored.running[id]; listed && restored.updatedAt > 0 {
+		return restored.updatedAt
+	}
+	return c.r.opts.Now().UnixMilli()
+}
+
+// snapshotCoverage is the holder records the live state applied, for the
+// recovery file (liveWriter.coverage): every whole line of the current
+// holder through c.seq. A rejoin's replay writes no file until it folded
+// what it staged (liveWriter.diskHold), so c.seq, already at the holder's
+// mark while it runs, is never written ahead of the state. Loop-owned
+// fields, read on the loop like every snapshot write.
+func (c *conv) snapshotCoverage() (string, uint64) {
+	return c.rec.HolderID, c.seq
+}
+
+// applyAgyNativeRow applies an agy native row event straight to the live
+// writer, past replay staging: replayed (quiet) as a replay applies it,
+// else RAM-only like every native row.
+func (c *conv) applyAgyNativeRow(ev wslive.Event, quiet bool) {
+	if quiet {
+		c.live.applyQuiet(ev)
+	} else {
+		c.live.applyRAM(ev)
+	}
+}
+
+// settleAgyNative ends each of rows that still runs done as observation
+// ended, outcome unknown (EndUnknown), at its time. The reducer keeps a
+// settled native row from changing again, so a later replayed or live event
+// leaves it as it is. The process forgets the rows' launch correlations: no
+// launch failure can change them any more.
+func (c *conv) settleAgyNative(rows []agyNativeSettle) {
+	var settled []string
+	for _, row := range rows {
+		if !slices.Contains(c.live.st.RunningAgents(wslive.NativeAgyPrefix), row.id) {
+			continue
+		}
+		c.applyAgyNativeRow(wslive.Event{Kind: wslive.KindAgent, AgentID: row.id, Status: wslive.StatusDone, EndUnknown: true, At: row.at}, false)
+		settled = append(settled, row.id)
+	}
+	if f, ok := c.proc.(nativeLaunchForgetter); ok && len(settled) > 0 {
+		f.forgetNativeLaunches(settled)
+	}
+}
+
+// nativeLaunchForgetter is a process whose mapper correlates native subagent
+// launches with their rows (agy): forgetNativeLaunches drops the rows'
+// pending launch correlations once the rows settled.
+type nativeLaunchForgetter interface {
+	forgetNativeLaunches(rowIDs []string)
+}
+
 // kick submits the next turn when no turn runs, starting the process first
 // when there is none. A failed start leaves everything held.
 //
@@ -1223,7 +1646,9 @@ func (c *conv) kick() {
 	if !c.canKick() {
 		return
 	}
-	if c.compactIdle() {
+	// A released binding gets no compaction command, continuation or restore
+	// turn: kickInput refuses whatever input waits instead.
+	if c.released() == "" && c.compactIdle() {
 		return
 	}
 	c.kickInput()
@@ -1235,8 +1660,32 @@ func (c *conv) kickCompactionNudge() {
 	}
 }
 
+// refuseStart records a refused start (an admission refusal, or a release
+// of the conversation's checkout): the input stays for a later admitted
+// start, and the conversation counts as asleep. It runs in the loop.
+func (c *conv) refuseStart(refused *admissionRefusal) {
+	c.setStatus(func() {
+		c.lastErr, c.wakeRefused = refused.Error(), true
+		if refused.checkout != "" {
+			c.releasedCheckout = refused.checkout
+		}
+	})
+	fmt.Fprintf(c.r.opts.Log, "agent %s: start: %v\n", c.rec.ReplyID, refused)
+	c.live.writeSnapshot()
+	c.r.notify(c.rec.ReplyID, c.rec.Root)
+	// Persist the input's coverage so crash recovery cannot expire it as
+	// quiet.
+	c.flushRecord()
+	// The senders of mail held since its claim hear the refusal now, also
+	// when the claim's own kick was deferred (the first holder scan).
+	c.tellHeldSenders(refused.checkout, refused.Error())
+}
+
 func (c *conv) kickInput() {
-	if c.sendCompactionNudge() {
+	// Checked before anything is sent: a released binding gets no
+	// compaction nudge, and no new turn or start below.
+	released := c.released()
+	if released == "" && c.sendCompactionNudge() {
 		return
 	}
 	c.mu.Lock()
@@ -1253,6 +1702,13 @@ func (c *conv) kickInput() {
 		c.voidCancelled()
 		return
 	}
+	if released != "" {
+		// Its checkout's release ended the binding: a live process that
+		// outlived it takes no new turn there, and none starts. The input
+		// stays, as a refused start keeps it.
+		c.refuseStart(checkoutReleasedRefusal(released))
+		return
+	}
 	if c.proc == nil {
 		if c.rec.Lead && c.rec.HolderID != "" && !c.r.scanDone() {
 			// The holder the record names may still run unseen: the start
@@ -1262,17 +1718,14 @@ func (c *conv) kickInput() {
 		}
 		if err := c.startProcess(); err != nil {
 			var refused *admissionRefusal
-			isRefusal := errors.As(err, &refused)
-			c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), isRefusal })
+			if errors.As(err, &refused) {
+				c.refuseStart(refused)
+				return
+			}
+			c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), false })
 			fmt.Fprintf(c.r.opts.Log, "agent %s: start: %v\n", c.rec.ReplyID, err)
 			c.live.writeSnapshot()
 			c.r.notify(c.rec.ReplyID, c.rec.Root)
-			if isRefusal {
-				// The input stays for the next admitted start; persist its
-				// coverage so crash recovery cannot expire it as quiet.
-				c.flushRecord()
-				return
-			}
 			c.settleTurn(TurnFailed, err.Error(), c.sendCount())
 			return
 		}
@@ -1289,6 +1742,7 @@ func (c *conv) kickInput() {
 	from := c.drained
 	c.drained = covered
 	queue := slices.Clone(c.rec.Queued)
+	c.cutoverInstructionLeft(recs)
 	for _, rec := range recs {
 		if cmd := rec.Entry.Command; cmd != nil {
 			cmd := *cmd
@@ -1325,46 +1779,86 @@ func (c *conv) kickInput() {
 		mark = rest[0].After
 	}
 	c.stopIdle()
-	startedAt := c.r.opts.Now().UnixMilli()
-	before := c.record()
-	heldAgy := before.heldAgyWorker()
-	var startErr error
-	if len(recs) > 0 || heldAgy {
-		// Keep drained input recoverable until the send succeeds. An agy
-		// holder can outlive the daemon as soon as it accepts the prompt.
-		err := c.update(func(rec *Record) {
-			rec.Queued = queue
-			if heldAgy {
-				c.setPromptBoundary(rec, startedAt, true)
-			}
-		})
-		if heldAgy {
-			startErr = err
-		}
+	// Read before the send: a request boundary is never later than the
+	// prompt's delivery.
+	sentAt := c.r.opts.Now()
+	startedAt := sentAt.UnixMilli()
+	heldAgy := c.record().heldAgyWorker()
+	if len(recs) > 0 {
+		// Keep drained input recoverable until the send succeeds.
+		c.update(func(rec *Record) { rec.Queued = queue })
 	}
-	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	// The turn reaches the page only once its send went through: a failed
 	// send leaves no user entry or turn line of its own (its error shows),
 	// so its retry shows the message once. The process's events for the
 	// turn are handled by this loop after kick returns, so they still
 	// follow the turn's start.
 	ordinary := cmd == nil
-	if startErr != nil {
-		err = fmt.Errorf("persist turn start: %w", startErr)
-	} else if cmd == nil {
-		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
-	} else if text, ok := c.playbookTurn(*cmd); ok {
-		// The runner expands a playbook command itself: the harness has
-		// no such command, and the turn carries the playbook's body.
-		ordinary = true
-		err = c.proc.Send(c.turnInput(text))
-	} else {
-		err = c.runCommand(*cmd)
+	// The release check above is a snapshot: a release notice can land
+	// between it and the send, so the send is admitted against it once more
+	// (admitInput).
+	refusedBy := c.admitInput(func() {
+		c.setStatus(func() { c.turn, c.lastErr = true, "" })
+		// The admitted turn is a keep-awake member before its send is
+		// tried; a failed send clears turn below, and the loop step's sync
+		// drops it. A refused input never sets turn, so it never joins.
+		c.syncAwake()
+		if cmd == nil {
+			err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
+		} else if text, ok := c.playbookTurn(*cmd); ok {
+			// The runner expands a playbook command itself: the harness
+			// has no such command, and the turn carries the playbook's
+			// body.
+			ordinary = true
+			err = c.proc.Send(c.turnInput(text))
+		} else {
+			err = c.runCommand(*cmd)
+		}
+	})
+	if refusedBy != "" {
+		// Nothing was sent: the input stays queued (persisted above), as a
+		// refused start keeps it, and the idle process may sleep again.
+		c.refuseStart(checkoutReleasedRefusal(refusedBy))
+		c.armIdle()
+		return
 	}
-	if err != nil && heldAgy {
-		c.restorePromptBoundary(before)
+	if err == nil && heldAgy {
+		// The holder accepted the prompt and outlives the daemon from here.
+		// Record the prompt's boundary and take its input off the queue in
+		// one write at once: a successor then waits for this prompt's
+		// response and never submits its input again. Nothing is recorded
+		// before the holder accepts, so a send the holder never took leaves
+		// the input queued and no prompt for a successor to wait on.
+		accepted := func(rec *Record) {
+			rec.Queued = rest
+			rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
+			if len(mail) > 0 {
+				rec.Mail = nil
+			}
+			if len(reports) > 0 {
+				rec.Reports = nil
+			}
+			c.setPromptBoundary(rec, startedAt, true)
+			// The open successor supersedes or publishes (below) a held
+			// turn; the record never keeps both.
+			rec.HeldTurn = nil
+		}
+		if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 && !c.ownsLiveExec() {
+			// A worker that still owns a live exec job keeps holding (below).
+			// The reports open the held turn's successor, so the held turn
+			// is published in that same write (as below for other workers):
+			// a restart between two writes would restore the predecessor's
+			// HeldTurn beside the successor's open turn, mark and consumed
+			// reports.
+			res := *c.heldRes
+			c.turnMark, c.reply = mark, ""
+			c.hold(nil)
+			c.publishWith(res, true, accepted)
+		} else {
+			c.update(accepted)
+		}
 	}
-	if err != nil && startErr == nil && cmd != nil && cmd.Name == "compact" {
+	if err != nil && cmd != nil && cmd.Name == "compact" {
 		c.setStatus(func() { c.turn, c.lastErr = false, "compaction: "+err.Error() })
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
@@ -1396,7 +1890,7 @@ func (c *conv) kickInput() {
 		}
 		c.compactResume = false
 		c.compactResumeInternal = false
-		c.startModelWait()
+		c.startModelWait(sentAt)
 	}
 	c.sendRetried = false
 	c.stopBgGrace()
@@ -1405,28 +1899,38 @@ func (c *conv) kickInput() {
 	// that waited for it. Publish that turn before opening the report's
 	// successor. Legacy pi-worker turns, and report-free successors such as
 	// background follow-ups, retain their interim-supersession behavior.
-	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 {
+	// A worker that still owns a live exec job keeps holding: its report
+	// waits for the job, and this successor's own turn reports later.
+	if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 && !c.ownsLiveExec() {
 		res := *c.heldRes
 		c.hold(nil)
 		c.publish(res, heldAgy)
 	} else {
 		c.hold(nil)
 	}
-	c.update(func(rec *Record) {
-		rec.Queued = rest
-		rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
-		rec.TurnStartedAt = startedAt
-		rec.TurnStartSeq = max(c.seq, c.lineOpen)
-		if len(mail) > 0 {
-			rec.Mail = nil
-		}
-		if len(reports) > 0 {
-			rec.Reports = nil
-		}
-		if rec.Parent != nil {
-			rec.TurnOpen, rec.HeldTurn = true, nil
-		}
-	})
+	if !heldAgy {
+		// A held agy worker wrote all of this when its holder accepted
+		// the prompt (above); a second identical write would only cost.
+		c.update(func(rec *Record) {
+			rec.Queued = rest
+			rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
+			rec.TurnStartedAt = startedAt
+			rec.TurnStartSeq = max(c.seq, c.lineOpen)
+			if len(mail) > 0 {
+				rec.Mail = nil
+			}
+			if len(reports) > 0 {
+				rec.Reports = nil
+			}
+			if rec.Parent != nil {
+				rec.TurnOpen, rec.HeldTurn = true, nil
+			}
+		})
+	}
+	if len(mail) > 0 {
+		// The held mail reached a turn: no refusal is owed its senders.
+		c.heldSenders = nil
+	}
 	// Mail shows on the page through the session's mail history, so only
 	// the dashboard's own text is a user entry; a turn of mail alone is
 	// marked as mail's.

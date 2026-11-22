@@ -1,5 +1,7 @@
 ---
 kind: print
+variables:
+  - SpawnIdiom
 ---
 
 # Ticket
@@ -162,7 +164,8 @@ When:
   promoting a child that depends on the changed design.
 - `revise`: a `{{.SkillNamespace}}:lead-run` worker stopped on a broken
   ticket contract (`blocked`, `next: revise`); the handler applies its
-  `proposed_resolution:` under a design review.
+  `proposed_resolution:` under a design review. A worker stopped on missing
+  Route Facts arrives here too: the handler runs the fact populator first.
 - Not: ordinary `todo/` creation and edits, epic or actionable. Epics and
   research never enter `ready/`.
 
@@ -171,8 +174,14 @@ Handler loop:
    `## Open Decision Queue` section.
 2. `{{.McpNamespace}}/playbook.render(name: "ticket-handler", session_key:
    <your key>)`; for `revise`, pass `root_override: <worktree>` for the
-   stopped worker's worktree. Pass the path on without reading it. Spawn at
-   the tier the render returns: `Read <rendered-path> as your system prompt.` plus the task block:
+   stopped worker's worktree and `tier_override` one tier above the worker's
+   (xlarge stays xlarge), the tier the handler gives its design reviewer. Pass
+   the path on without reading it. Spawn at the tier the render returns
+   ({{.SpawnIdiom}}). When the spawn goes through `{{.McpNamespace}}/agent.spawn`
+   and the handler was rendered with `root_override`, pass `worktree:` the same
+   path, so the handler's spawn key and its rendered key share one checkout; a
+   native subagent dispatch keeps the render-root binding alone:
+   `Read <rendered-path> as your system prompt.` plus the task block:
    operation (`promote`, `epic-review`, or `revise`), the stems, and the
    branch to commit on (`revise`: the worker's impl branch); `revise` adds the
    worker's `proposed_resolution:` verbatim and the worker's tier.
@@ -218,8 +227,9 @@ Handler loop:
 - Root occupied by a worker (`HEAD` on `impl/*`): no ticket write there.
   Author and commit in the sparse worktree the workflow manual's `### Git`
   describes, and render the handler with `root_override: <worktree>` for that
-  worktree. Exception: `revise` writes the stopped worker's ticket on its impl
-  branch, which the worker resumes from.
+  worktree, and when spawning it through `{{.McpNamespace}}/agent.spawn` pass
+  `worktree:` the same path. Exception: `revise` writes the stopped worker's
+  ticket on its impl branch, which the worker resumes from.
 - Suggest the next action: a child ticket for an epic;
   `{{.SkillNamespace}}:lead-run` for a ticket now in `ready/`.
 - End with `Ticket: ai-docs/tickets/<status>/<stem>.md` per ticket written,

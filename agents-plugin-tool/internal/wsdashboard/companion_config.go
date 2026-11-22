@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -14,30 +15,101 @@ import (
 )
 
 const (
-	CompanionModeKey     = "dashboard.companion_mode"
-	CompanionDirectorKey = "dashboard.companion_director"
-	CompanionPackKey     = "dashboard.companion_pack"
-	CompanionPresetKey   = "dashboard.companion_preset"
+	CompanionEnabledKey        = "dashboard.companion_enabled"
+	CompanionDirectorKey       = "dashboard.companion_director"
+	CompanionPackKey           = "dashboard.companion_pack"
+	CompanionPresetKey         = "dashboard.companion_preset"
+	CompanionAgentCooldownKey  = "dashboard.companion_agent_cooldown_seconds"
+	CompanionAgentHourlyCapKey = "dashboard.companion_agent_hourly_cap"
 
 	companionChangedPath  = "/config/companion-changed"
 	companionConfigHeader = "X-WS-Global-Config"
+
+	// companionModalSurface is the settings-catalog surface the companion
+	// modal renders instead of the settings panel.
+	companionModalSurface = "companion-modal"
 )
+
+// shellSettingsStrings are the js.settings.* string prefixes the shell page
+// keeps although it drops the settings page's strings: the companion modal
+// labels its catalog rows with them.
+var shellSettingsStrings = []string{"js.settings.key.dashboard.companion_", "js.settings.unit."}
+
+// companionModalRow is one settings-catalog row the companion modal renders.
+type companionModalRow struct {
+	Key         string `json:"key"`
+	Control     string `json:"control"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Unit        string `json:"unit,omitempty"`
+}
+
+// companionModalRows returns the catalog rows whose surface is the companion
+// modal, in catalog order, as the JSON array the shell page embeds (the
+// shell loads no settings catalog of its own).
+func companionModalRows(catalog []byte) (string, error) {
+	var rows []struct {
+		companionModalRow
+		Surface string `json:"surface"`
+	}
+	if err := json.Unmarshal(catalog, &rows); err != nil {
+		return "", fmt.Errorf("settings catalog: %w", err)
+	}
+	modal := []companionModalRow{}
+	for _, row := range rows {
+		if row.Surface == companionModalSurface {
+			modal = append(modal, row.companionModalRow)
+		}
+	}
+	raw, err := json.Marshal(modal)
+	return string(raw), err
+}
 
 func IsCompanionConfigKey(key string) bool {
 	switch key {
-	case CompanionModeKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey:
+	case CompanionEnabledKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
+		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey:
 		return true
 	}
 	return false
 }
 
+// IsDaemonGlobalConfigKey reports whether the daemon keeps key's global value
+// in memory, so a writer must invalidate it (NotifyCompanionConfigChange or
+// SendCompanionConfigChange) after committing a change: the companion keys
+// and the runner's agent.keep_awake_during_turns. The wire route keeps its
+// companion name; a daemon that predates the runner key refreshes only its
+// companion snapshot on it, which changes nothing.
+func IsDaemonGlobalConfigKey(key string) bool {
+	return IsCompanionConfigKey(key) || key == wsconfig.ItemAgentKeepAwakeDuringTurns
+}
+
+// AgentGlobalConfigHost is an agent host that keeps global configuration in
+// memory (the runner's keep-awake setting). The daemon calls
+// ReloadGlobalConfig once its endpoint is published, and after each matching
+// invalidation; the host rereads its own global layer, serialized, so a read
+// that finishes later never publishes an older value.
+type AgentGlobalConfigHost interface {
+	ReloadGlobalConfig()
+}
+
+// reloadAgentGlobalConfig asks the agent host, when it keeps any, to reread
+// its global configuration.
+func (d *Daemon) reloadAgentGlobalConfig() {
+	if h, ok := d.agents.(AgentGlobalConfigHost); ok {
+		h.ReloadGlobalConfig()
+	}
+}
+
 // CompanionConfig is the global configuration shared by every dashboard shell.
 // The pack field carries the selector so each shell can resolve auto itself.
 type CompanionConfig struct {
-	Mode     string `json:"mode"`
-	Director string `json:"director"`
-	Pack     string `json:"pack"`
-	Preset   string `json:"preset"`
+	Enabled              bool   `json:"enabled"`
+	Director             string `json:"director"`
+	Pack                 string `json:"pack"`
+	Preset               string `json:"preset"`
+	AgentCooldownSeconds int    `json:"agentCooldownSeconds"`
+	AgentHourlyCap       int    `json:"agentHourlyCap"`
 }
 
 type companionConfigSnapshot struct {
@@ -54,7 +126,7 @@ func (s *companionState) current() companionConfigSnapshot {
 	if snapshot := s.snapshot.Load(); snapshot != nil {
 		return *snapshot
 	}
-	return companionConfigSnapshot{config: CompanionConfig{Mode: "off", Director: "rules", Pack: "default", Preset: "werkschaft-d1"}}
+	return companionConfigSnapshot{config: CompanionConfig{Director: "rules", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 30, AgentHourlyCap: 20}}
 }
 
 // refreshCompanion reads the persisted global layer after a write or at daemon
@@ -123,10 +195,12 @@ func (d *Daemon) refreshMatchingCompanion(configID string) error {
 	if err != nil {
 		return err
 	}
-	if configID == companionConfigID(path) {
-		return d.refreshCompanion()
+	if configID != companionConfigID(path) {
+		return nil
 	}
-	return nil
+	// The notification names no key: every in-memory global value rereads.
+	d.reloadAgentGlobalConfig()
+	return d.refreshCompanion()
 }
 
 func (d *Daemon) handleCompanionConfigChange(w http.ResponseWriter, r *http.Request) {

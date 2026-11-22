@@ -77,6 +77,10 @@ type connectionDescriptor struct {
 	callFallback     bool
 	directTools      []string
 	playbookCommands bool
+	// preferNativeSubagent marks a hosted lead whose backend registration
+	// sets PreferNativeSubagent: text it executes itself names its native
+	// subagent for exploration (nativeFirstTerminology).
+	preferNativeSubagent bool
 	// leadRender marks the throwaway server of a daemon-side render for a
 	// hosted lead (hostedRenderServer): it serves no connection, but renders
 	// as the lead's own daemon-hosted connection would.
@@ -130,6 +134,7 @@ func (s *Server) connectionDescriptor() connectionDescriptor {
 	// Only the lead runs without ws's skills; a worker's text is rendered
 	// as before, whatever its profile keeps.
 	s.descriptor.playbookCommands = reg.PlaybookCommands && rec.Lead
+	s.descriptor.preferNativeSubagent = reg.PreferNativeSubagent && !worker && rec.Lead
 	names := make([]string, 0, len(tools()))
 	for _, tool := range tools() {
 		if name, _ := tool["name"].(string); name != "" {

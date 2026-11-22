@@ -13,7 +13,15 @@ const companionShare = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | wind
 
 func openCompanionPackEntry(parent companionPackFile, name string, directory bool) (companionPackFile, error) {
 	if parent == nil {
-		path, err := windows.UTF16PtrFromString(name)
+		// Only the root open takes a full path; children stay relative to
+		// their pinned parent handles below.
+		open := name
+		if abs, err := filepath.Abs(name); err == nil {
+			if ext := companionExtendedPath(abs); ext != abs {
+				open = ext
+			}
+		}
+		path, err := windows.UTF16PtrFromString(open)
 		if err != nil {
 			return nil, err
 		}

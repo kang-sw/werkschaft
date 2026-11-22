@@ -100,6 +100,14 @@ type SpawnSpec struct {
 	// delegatedAuthority is set only by agent.spawn, whose authority is an
 	// already-bounded delegation rather than a generic worker raise.
 	delegatedAuthority bool
+	// spawnerBackend is the spawning caller's verified backend
+	// (AgentCaller.VerifiedBackend): the create gate admits the worker for
+	// it (admitWorker), and the record keeps it (Record.SpawnerBackend).
+	// Empty is none.
+	spawnerBackend string
+	// policyKey is the spawning caller's ws key (AgentCaller.PolicyKey): the
+	// child's key inherits that session's config. Empty is none.
+	policyKey string
 	// SystemPrompt is appended to the harness's system prompt at every
 	// process start; empty is none.
 	SystemPrompt string
@@ -320,6 +328,12 @@ func (c *conv) hold(res *TurnResult) {
 // record update, so a parent never reads its child between them. keepOpen
 // preserves a successor's boundary when reporting a result held earlier.
 func (c *conv) publish(res TurnResult, keepOpen bool) {
+	c.publishWith(res, keepOpen, nil)
+}
+
+// publishWith is publish with also applied to the record in the same write,
+// before the settle: a successor's boundary that must not land without it.
+func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)) {
 	parent := c.rec.Parent
 	toConv := parent != nil && parent.Kind == ParentConversation
 	waited := false
@@ -328,12 +342,15 @@ func (c *conv) publish(res TurnResult, keepOpen bool) {
 		c.settled = res
 		c.settledReport = ""
 	}
-	if parent == nil && !c.rec.TurnOpen {
+	if parent == nil && !c.rec.TurnOpen && also == nil {
 		c.mu.Lock()
 		settle()
 		c.mu.Unlock()
 	} else {
 		c.update(func(rec *Record) {
+			if also != nil {
+				also(rec)
+			}
 			settle()
 			if !keepOpen {
 				finishActiveTurn(rec, c.r.opts.Now().UnixMilli())
@@ -386,14 +403,19 @@ func (c *conv) interrupted() {
 	if c.closed || !c.rec.TurnOpen {
 		return
 	}
-	const reason = "the dashboard daemon exited while the turn ran"
+	status, reason := TurnInterrupted, "the dashboard daemon exited while the turn ran"
+	if refusal := c.r.admitWorkerRecord(c.record()); refusal != nil {
+		// A cross-harness worker whose holder a daemon ended just before it
+		// died: the turn fails as the retirement would have settled it.
+		status, reason = TurnFailed, refusal.Error()
+	}
 	// Reconcile the lost turn before any queued input can open its successor.
 	// Settlement alone wakes waiters but leaves list/send's running flags stale.
 	c.setStatus(func() { c.turn, c.proc, c.lastErr = false, nil, reason })
 	c.events = nil
 	c.replaying, c.replayAsked, c.replayGap, c.replayBoundary, c.wrapHold = false, false, false, false, false
 	c.apply(wslive.Event{Kind: wslive.KindTurnEnd})
-	c.settleTurn(TurnInterrupted, reason, c.turnMark)
+	c.settleTurn(status, reason, c.turnMark)
 }
 
 // signalSettled wakes every Wait.

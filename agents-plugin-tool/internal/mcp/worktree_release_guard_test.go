@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsgit"
 )
@@ -526,4 +527,156 @@ func TestWorktreeReleaseRacesAgentSpawnOnSameWorktree(t *testing.T) {
 			t.Fatalf("raced release changed branch to %q", b)
 		}
 	})
+}
+
+// TestWorktreeReleaseRefusesRunningHostedExecJobInTree verifies that a
+// non-forced release refuses, changing nothing, while a running hosted exec job
+// has its cwd at or under the target worktree, that a job elsewhere does not
+// block it, that a finished job does not either, and that force: true does
+// not override a running job (the exec fence, worktreeExecFence).
+func TestWorktreeReleaseRefusesRunningHostedExecJobInTree(t *testing.T) {
+	s, base, leadA, _ := releaseGuardServer(t)
+	fx := newHostedExecFixture(t, 5*time.Second)
+	s.exec, s.conversation = func() *execjob.Hosted { return fx.hosted }, "lead"
+
+	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/exec-job")
+	draft := writeDraft(t, acq.Path)
+	nested := filepath.Join(acq.Path, "nested", "dir")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launch := func(cwd string) string {
+		t.Helper()
+		v, err := fx.hosted.Launch(context.Background(), make(chan struct{}), execjob.HostedLaunch{
+			Owner: "lead", Tool: "exec.run", Root: cwd, Cwd: cwd, Argv: []string{"sleep", "30"},
+			Display: "sleep 30", Environ: os.Environ(), Async: true,
+		})
+		if err != nil {
+			t.Fatalf("launch in %s: %v", cwd, err)
+		}
+		return v.ID
+	}
+	assertUntouched := func(when string) {
+		t.Helper()
+		if _, err := os.Stat(draft); err != nil {
+			t.Fatalf("%s: refused release wiped the draft: %v", when, err)
+		}
+		if b := wtBranch(t, acq.Path); b != "impl/test/exec-job" {
+			t.Fatalf("%s: refused release changed branch to %q", when, b)
+		}
+		lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path)
+		if err != nil || lease == nil || lease.WorkerKey != acq.WorkerKey {
+			t.Fatalf("%s: refused release dropped the lease: %+v err=%v", when, lease, err)
+		}
+	}
+
+	// A job elsewhere does not bind this worktree; this one is released later.
+	elsewhere := launch(fx.root)
+	inTree := launch(nested)
+	rel := callToolOnce(t, s, 10, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path})
+	if !toolIsError(t, rel) {
+		t.Fatalf("release with a running job in the tree must be refused: %s", rel)
+	}
+	text := toolText(t, rel)
+	for _, w := range []string{inTree, "exec.run", "Nothing was changed", "exec.stop", "force: true"} {
+		if !strings.Contains(text, w) {
+			t.Fatalf("refusal missing %q: %s", w, text)
+		}
+	}
+	if strings.Contains(text, elsewhere) {
+		t.Fatalf("refusal names the job outside the tree %s: %s", elsewhere, text)
+	}
+	assertUntouched("running job")
+
+	// Once the job is finished, release goes through.
+	if _, err := fx.hosted.Stop("lead", inTree); err != nil {
+		t.Fatal(err)
+	}
+	pollUntil(t, "job in the tree to end", func() bool {
+		v, err := fx.hosted.Get("lead", inTree)
+		return err == nil && v.Terminal()
+	})
+	if rel := callToolOnce(t, s, 11, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path}); toolIsError(t, rel) {
+		t.Fatalf("release after the job finished failed: %s", rel)
+	}
+	if _, err := os.Stat(draft); !os.IsNotExist(err) {
+		t.Fatalf("release did not clean the draft: %v", err)
+	}
+
+	// force: true does not release over a running job either; once the job
+	// ends, a forced release goes through.
+	acq = acquireForTest(t, s, 12, leadA, base, "impl/test/exec-job-force")
+	draft = writeDraft(t, acq.Path)
+	forced := launch(acq.Path)
+	if rel := callToolOnce(t, s, 13, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path}); !toolIsError(t, rel) || !strings.Contains(toolText(t, rel), forced) {
+		t.Fatalf("release with a job at the tree root must be refused naming %s: %s", forced, rel)
+	}
+	if rel := callToolOnce(t, s, 14, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path, "force": true}); !toolIsError(t, rel) || !strings.Contains(toolText(t, rel), "exec job(s) still run") {
+		t.Fatalf("forced release with a running job must be refused: %s", rel)
+	}
+	if _, err := os.Stat(draft); err != nil {
+		t.Fatalf("a refused forced release wiped the draft: %v", err)
+	}
+	if _, err := fx.hosted.Stop("lead", forced); err != nil {
+		t.Fatal(err)
+	}
+	pollUntil(t, "job at the tree root to end", func() bool {
+		v, err := fx.hosted.Get("lead", forced)
+		return err == nil && v.Terminal()
+	})
+	if rel := callToolOnce(t, s, 15, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path, "force": true}); toolIsError(t, rel) {
+		t.Fatalf("forced release after the job ended failed: %s", rel)
+	}
+	if _, err := os.Stat(draft); !os.IsNotExist(err) {
+		t.Fatalf("forced release did not clean the draft: %v", err)
+	}
+	_, _ = fx.hosted.Stop("lead", elsewhere)
+}
+
+// TestWorktreeAcquireSkipsCheckoutWithRunningHostedExecJob verifies that
+// acquisition does not reuse a released pooled checkout while a running
+// hosted exec job has its cwd in it, and reuses it once the job has ended.
+func TestWorktreeAcquireSkipsCheckoutWithRunningHostedExecJob(t *testing.T) {
+	s, base, leadA, _ := releaseGuardServer(t)
+	fx := newHostedExecFixture(t, 5*time.Second)
+	s.exec, s.conversation = func() *execjob.Hosted { return fx.hosted }, "lead"
+
+	first := acquireForTest(t, s, 1, leadA, base, "impl/test/exec-acq-a")
+	if rel := callToolOnce(t, s, 2, "worktree.release", map[string]any{"session_key": leadA, "path": first.Path}); toolIsError(t, rel) {
+		t.Fatalf("release failed: %s", rel)
+	}
+	v, err := fx.hosted.Launch(context.Background(), make(chan struct{}), execjob.HostedLaunch{
+		Owner: "lead", Tool: "exec.run", Root: first.Path, Cwd: first.Path, Argv: []string{"sleep", "30"},
+		Display: "sleep 30", Environ: os.Environ(), Async: true,
+	})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	second := acquireForTest(t, s, 3, leadA, base, "impl/test/exec-acq-b")
+	if second.Path == first.Path {
+		t.Fatalf("acquire reused %s while a running exec job has its cwd there", first.Path)
+	}
+
+	if _, err := fx.hosted.Stop("lead", v.ID); err != nil {
+		t.Fatal(err)
+	}
+	pollUntil(t, "exec job to end", func() bool {
+		got, err := fx.hosted.Get("lead", v.ID)
+		return err == nil && got.Terminal()
+	})
+	third := acquireForTest(t, s, 4, leadA, base, "impl/test/exec-acq-c")
+	if third.Path != first.Path {
+		t.Fatalf("acquire did not reuse %s after its exec job ended; got %s", first.Path, third.Path)
+	}
+}
+
+func pollUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

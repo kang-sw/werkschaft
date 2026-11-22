@@ -195,18 +195,36 @@ func (l *railLister) reread(repo string) {
 	if l == nil {
 		return
 	}
-	key := filepath.Clean(repo)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.viewers == 0 {
-		delete(l.repos, key)
-		delete(l.gates, key)
+		for _, key := range railRepoKeys(l.repos, repo) {
+			delete(l.repos, key)
+			delete(l.gates, key)
+		}
 		return
 	}
-	if _, ok := l.wanted[key]; ok {
-		l.pending[key] = true
+	if keys := railRepoKeys(l.wanted, repo); len(keys) > 0 {
+		for _, key := range keys {
+			l.pending[key] = true
+		}
 		signal(l.wake)
 	}
+}
+
+// railRepoKeys returns the keys of m naming repo: its cleaned spelling, and on
+// Windows every case-folded spelling. A render lists a repository under the
+// spelling a session names (rail.go folds a stored alias into it), while a
+// rail add or delete names the stored spelling; both must reach that list.
+func railRepoKeys[V any](m map[string]V, repo string) []string {
+	want := admissionPathKey(repo)
+	var keys []string
+	for key := range m {
+		if admissionPathKey(key) == want {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 // dropWorktree removes one deleted worktree from repo's cached list in memory
@@ -215,23 +233,24 @@ func (l *railLister) dropWorktree(repo, path, realPath string) {
 	if l == nil {
 		return
 	}
-	key := filepath.Clean(repo)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	r, ok := l.repos[key]
-	if !ok || len(r.Entries) == 0 {
-		return
-	}
-	kept := make([]railWorktreeEntry, 0, len(r.Entries))
-	for _, e := range r.Entries {
-		if samePath(e.Path, path) || (realPath != "" && samePath(e.Path, realPath)) {
+	for _, key := range railRepoKeys(l.repos, repo) {
+		r := l.repos[key]
+		if len(r.Entries) == 0 {
 			continue
 		}
-		kept = append(kept, e)
-	}
-	if len(kept) != len(r.Entries) {
-		r.Entries = kept
-		l.repos[key] = r
+		kept := make([]railWorktreeEntry, 0, len(r.Entries))
+		for _, e := range r.Entries {
+			if samePath(e.Path, path) || (realPath != "" && samePath(e.Path, realPath)) {
+				continue
+			}
+			kept = append(kept, e)
+		}
+		if len(kept) != len(r.Entries) {
+			r.Entries = kept
+			l.repos[key] = r
+		}
 	}
 }
 

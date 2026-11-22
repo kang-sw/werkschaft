@@ -192,9 +192,10 @@ func TestRestartRestorePrecedesQueuedInputAndExcludesScanSpawn(t *testing.T) {
 	wait(t, "restart holder scan", entered)
 
 	spawned := h.lead(BackendClaude, LeadOptions{})
-	h.runner.conv(spawned.ID).do(func() {
+	h.runner.conv(spawned.ID).doT(t, func(failf func(string, ...any)) {
 		if note := h.runner.conv(spawned.ID).compactNote; note != "" {
-			t.Fatalf("session spawned during scan inherited restart restore: %q", note)
+			failf("session spawned during scan inherited restart restore: %q", note)
+			return
 		}
 	})
 	if got := len(h.userInputs(holder)); got != 1 {
@@ -323,9 +324,10 @@ func TestRestoreBundleT0UsesNoPersistedShapeAcrossNewOldNewStart(t *testing.T) {
 	probe := &restoreProbe{state: "new daemon"}
 	h.config.RestoreBundle = probe.render
 	h.start()
-	h.runner.conv(w.ID).do(func() {
+	h.runner.conv(w.ID).doT(t, func(failf func(string, ...any)) {
 		if note := h.runner.conv(w.ID).compactNote; !strings.HasPrefix(note, restartRestoreMarker) {
-			t.Fatalf("new daemon did not hold an in-memory restart marker: %q", note)
+			failf("new daemon did not hold an in-memory restart marker: %q", note)
+			return
 		}
 	})
 	afterNew, err := os.ReadFile(recordPath(dir))
@@ -342,9 +344,10 @@ func TestRestoreBundleT0UsesNoPersistedShapeAcrossNewOldNewStart(t *testing.T) {
 	h.runner.Close()
 	h.config.RestoreBundle = nil // an old daemon has no runtime provider
 	h.start()
-	h.runner.conv(w.ID).do(func() {
+	h.runner.conv(w.ID).doT(t, func(failf func(string, ...any)) {
 		if note := h.runner.conv(w.ID).compactNote; note != "" {
-			t.Fatalf("old daemon behavior observed a new-only marker: %q", note)
+			failf("old daemon behavior observed a new-only marker: %q", note)
+			return
 		}
 	})
 	afterOld, err := os.ReadFile(recordPath(dir))

@@ -4,12 +4,14 @@ package wsagent
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -85,6 +87,8 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		if _, err := os.Lstat(filepath.Join(wt, ".git")); err != nil {
 			return AgentSpawnResult{}, badRequest("%s: worktree %s is not a git worktree root (no .git entry)", tool, wt)
 		}
+		// An early check for the refusal that names re-acquiring; the create
+		// below holds the reservation itself until the child is registered.
 		unlockWorktree, err := wsgit.ReserveWorktreeSpawn(wt)
 		if err != nil {
 			if errors.Is(err, wsgit.ErrWorktreeReleasing) {
@@ -92,7 +96,7 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 			}
 			return AgentSpawnResult{}, badRequest("%s: reserve worktree %s: %v", tool, wt, err)
 		}
-		defer unlockWorktree()
+		unlockWorktree()
 		root, cwd = wt, wt
 	} else if cwd == "" {
 		cwd = caller.base()
@@ -123,6 +127,8 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		delegatedAuthority: true,
 		SystemPrompt:       system,
 		claimWidth:         claimWidth,
+		spawnerBackend:     caller.VerifiedBackend,
+		policyKey:          caller.PolicyKey,
 	})
 	if err != nil {
 		return AgentSpawnResult{}, err
@@ -136,6 +142,107 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		}
 	}
 	return AgentSpawnResult{Address: AgentAddress(st.ID), Status: AgentStatus(st)}, nil
+}
+
+// reserveBoundWorktrees takes the spawn reservation of every worktree root at
+// or above each of paths, once per root, until the returned unlock runs.
+// worktree.release counts a conversation as bound when its canonical root or
+// effective cwd lies anywhere within the worktree
+// (ActiveChildrenInWorktree), so every conversation create reserves each
+// worktree that could count it: the walk starts from the canonical path, so
+// a symlink from outside still reserves the worktree it resolves into, and it
+// does not stop at a nested repo or submodule, whose enclosing worktree counts
+// the conversation too. A path outside any worktree reserves nothing. A
+// reservation that cannot be taken refuses like a release in progress
+// (ErrWorktreeReleasing) does: an unreserved create could slip in beside a
+// release that already holds the lock (boundReservationRefusal).
+func reserveBoundWorktrees(paths ...string) (func(), error) {
+	var unlocks []func()
+	unlockAll := func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}
+	seen := map[string]bool{}
+	for _, path := range paths {
+		dirs, err := enclosingWorktreeRoots(path)
+		if err != nil {
+			unlockAll()
+			return nil, err
+		}
+		for _, dir := range dirs {
+			if seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			unlock, err := wsgit.ReserveWorktreeSpawn(dir)
+			if err != nil {
+				unlockAll()
+				if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+					return nil, err
+				}
+				return nil, fmt.Errorf("could not take the release reservation of worktree %s: %w", dir, err)
+			}
+			unlocks = append(unlocks, unlock)
+		}
+	}
+	return unlockAll, nil
+}
+
+// boundReservationRefusal is the conflict a create answers when
+// reserveBoundWorktrees refuses it.
+func boundReservationRefusal(err error) error {
+	if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+		return conflict("%v; wait for the release to finish before opening a conversation there", err)
+	}
+	return conflict("%v; no conversation opens there unreserved, since a concurrent worktree.release could miss it; try again", err)
+}
+
+// enclosingWorktreeRoots returns every directory at or above path's
+// canonical form (the EvalSymlinks form release compares) that holds a .git
+// entry, innermost first. Only definite absence (not found, or a path
+// component that is no directory) means no worktree there: a path that does
+// not exist (yet, or any more) is walked as written, as canonicalWorktreePath
+// does. Any other error, resolving the path or looking for an entry, could
+// hide a worktree, so it is returned and the create refuses.
+func enclosingWorktreeRoots(path string) ([]string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	path = filepath.Clean(path)
+	if resolved, err := resolveWorktreeAlias(path); err == nil {
+		path = filepath.Clean(resolved)
+	} else if !pathAbsent(err) {
+		return nil, fmt.Errorf("could not resolve %s to look for its worktree: %w", path, err)
+	}
+	var roots []string
+	for dir := path; ; {
+		dotGit := filepath.Join(dir, ".git")
+		_, err := os.Lstat(dotGit)
+		switch {
+		case err == nil:
+			roots = append(roots, dir)
+		case pathAbsent(err):
+		default:
+			return nil, fmt.Errorf("could not check %s for a worktree: %w", dotGit, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return roots, nil
+		}
+		dir = parent
+	}
+}
+
+// resolveWorktreeAlias is filepath.EvalSymlinks; a test replaces it to stand
+// in for a resolution error the kernel would not also raise at the first
+// .git lookup (a Windows reparse point or ACL, say).
+var resolveWorktreeAlias = filepath.EvalSymlinks
+
+// pathAbsent reports whether err says definitely that no such path exists.
+func pathAbsent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 func readBounded(path string, limit int64) ([]byte, error) {
@@ -184,49 +291,62 @@ func (r *Runner) AgentInterrupt(caller AgentCaller, address string) (AgentInterr
 	return AgentInterruptResult{Address: AgentAddress(id), Status: AgentStatus(st), Returned: returned}, nil
 }
 
-// BoundWorktreeChild identifies a non-closed conversation bound to a worktree.
+// BoundWorktreeChild identifies a conversation bound to a worktree: a
+// non-closed one, or a closed one whose process is still live.
+// BoundBeforeRelease marks a spawned conversation bound before the worktree's
+// most recent completed release: that release ended its binding, so it never
+// launches, wakes or resumes there, and release ignores it. Live marks one
+// the runner holds a live process for (a running turn, background work, an
+// awake idle process, or a holder whose process may still run); acquisition
+// keeps a worktree busy while a pre-release conversation is live. Both
+// fields are additive: an older reader ignores them and counts every child.
 type BoundWorktreeChild struct {
-	Address string `json:"address"`
-	State   string `json:"state"`
-	Cwd     string `json:"cwd,omitempty"`
+	Address            string `json:"address"`
+	State              string `json:"state"`
+	Cwd                string `json:"cwd,omitempty"`
+	BoundBeforeRelease bool   `json:"bound_before_release,omitempty"`
+	Live               bool   `json:"live,omitempty"`
 }
 
-// ActiveChildrenInWorktree returns every non-closed conversation in the runner
-// whose canonical root equals worktree or whose canonical working directory is
-// worktree or within it, oldest first then by address. Reads live state from
-// memory without touching disk records.
+// ActiveChildrenInWorktree returns every conversation in the runner whose
+// canonical root equals worktree or whose canonical working directory is
+// worktree or within it, oldest first then by address: each non-closed one,
+// and a closed one whose process the runner still holds (a close marks the
+// conversation closed before it stops the process). It reads memory only,
+// apart from worktree's release marker.
 func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild {
 	target := canonicalWorktreePath(worktree)
 	if target == "" {
 		return nil
 	}
-	r.mu.Lock()
-	convs := make([]*conv, 0, len(r.convs))
-	for _, c := range r.convs {
-		convs = append(convs, c)
-	}
-	r.mu.Unlock()
+	release := r.readCheckoutRelease(target)
 	type match struct {
 		createdAt string
 		child     BoundWorktreeChild
 	}
 	var matches []match
-	for _, c := range convs {
+	for _, c := range r.boundConvs(target) {
 		st := c.memoryState()
-		if st.Status == StatusClosed || st.Status == StatusHandedOff {
+		c.mu.Lock()
+		rec := c.rec
+		// Live while the runner holds a process, whatever the status says,
+		// and while a start that passed the release check is still under way.
+		live := c.proc != nil || c.starting || c.turn || c.bgTasks != 0 || rec.HolderID != ""
+		known := c.releasedLocked()
+		c.mu.Unlock()
+		if (st.Status == StatusClosed || st.Status == StatusHandedOff) && !live {
 			continue
 		}
-		convRoot := canonicalWorktreePath(st.Root)
-		convCwd := canonicalWorktreePath(st.Cwd)
-		if !sameWorktreePath(convRoot, target) && !worktreePathContains(target, convCwd) {
-			continue
-		}
+		before := releaseBound(rec) && (release.ok && wsgit.BoundBeforeRelease(rec.CreatedAt, rec.CreatedUnixNano, release.at) ||
+			sameWorktreePath(known, target))
 		matches = append(matches, match{
 			createdAt: st.CreatedAt,
 			child: BoundWorktreeChild{
-				Address: AgentAddress(st.ID),
-				State:   AgentStatus(st),
-				Cwd:     st.Cwd,
+				Address:            AgentAddress(st.ID),
+				State:              AgentStatus(st),
+				Cwd:                st.Cwd,
+				BoundBeforeRelease: before,
+				Live:               live,
 			},
 		})
 	}
@@ -255,15 +375,14 @@ func canonicalWorktreePath(p string) string {
 	return p
 }
 
-func sameWorktreePath(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
-}
+// CanonicalWorktreePath and WorktreePathContains expose the path comparison
+// ActiveChildrenInWorktree uses, so worktree.release judges a hosted exec job's
+// cwd against its target the same way it judges a bound conversation.
+func CanonicalWorktreePath(p string) string { return canonicalWorktreePath(p) }
+
+// WorktreePathContains reports whether path is root or lies under it; both
+// are expected canonical (CanonicalWorktreePath).
+func WorktreePathContains(root, path string) bool { return worktreePathContains(root, path) }
 
 func worktreePathContains(root, path string) bool {
 	if root == "" || path == "" {

@@ -155,6 +155,18 @@ type SpawnSpec struct {
 	// finishes without a later Input call. With no Input it is an
 	// immediate EOF.
 	InputEOF bool `json:"input_eof,omitempty"`
+	// HTTP2Capture, when set, routes every stderr line of a pipe child
+	// that is a Go HTTP/2 debug log line (GODEBUG=http2debug) to a filter
+	// instead of the ring: only framer summary lines, cut after their
+	// allowlisted fields, are appended to Path, up to MaxBytes. A holder
+	// that predates the field ignores it.
+	HTTP2Capture *HTTP2Capture `json:"http2_capture,omitempty"`
+}
+
+// HTTP2Capture is SpawnSpec.HTTP2Capture.
+type HTTP2Capture struct {
+	Path     string `json:"path"`
+	MaxBytes int64  `json:"max_bytes,omitempty"`
 }
 
 // AttachInfo is what a holder reports when an attach succeeds.
@@ -189,6 +201,7 @@ type reply struct {
 	FirstSeq uint64      `json:"first_seq"`
 	NextSeq  uint64      `json:"next_seq"`
 	Audit    int         `json:"audit"`
+	Captured bool        `json:"captured"`
 }
 
 // Client is one attach connection to a holder. A holder serves one at a
@@ -431,6 +444,9 @@ func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 	if spec.InputEOF && len(rest) == 0 {
 		fields["input_eof"] = true
 	}
+	if spec.HTTP2Capture != nil {
+		fields["http2_capture"] = spec.HTTP2Capture
+	}
 	answer, err := c.call("spawn", fields)
 	if err != nil || len(rest) == 0 {
 		return answer.Child, err
@@ -539,6 +555,15 @@ func (c *Client) Stop() error {
 func (c *Client) Status() (AttachInfo, error) {
 	answer, err := c.call("status", nil)
 	return AttachInfo{Child: answer.Child, FirstSeq: answer.FirstSeq, NextSeq: answer.NextSeq}, err
+}
+
+// CaptureNote adds one line of text to the frame capture the child was
+// spawned with (SpawnSpec.HTTP2Capture), under the capture's own cap;
+// captured is false when the child has no capture or the capture has
+// stopped. A holder that predates the operation answers unknown_op.
+func (c *Client) CaptureNote(text string) (captured bool, err error) {
+	answer, err := c.call("capture_note", map[string]any{"text": text})
+	return answer.Captured, err
 }
 
 // Replay starts the record stream at sequence from; 0 asks for the whole

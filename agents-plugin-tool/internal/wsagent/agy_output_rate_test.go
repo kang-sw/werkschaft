@@ -139,7 +139,8 @@ func agyDownstreamEvents(events []Event) []Event {
 	var visible []Event
 	for _, event := range events {
 		activity := event.ModelActivity
-		event.ModelActivity = nil
+		// The activity signal's own fields.
+		event.ModelActivity, event.ModelContent = nil, false
 		if activity != nil && reflect.DeepEqual(event, Event{}) {
 			continue
 		}
@@ -618,6 +619,8 @@ func TestAgyOutputRateRowHoverRetentionAndReopen(t *testing.T) {
 		turn: true,
 		live: newLiveWriter(sessionDir, rec.WSKey, rec.Backend, r.opts.Now, io.Discard),
 	}
+	// Windows cannot remove the temp dir while the output-rate sidecar is open.
+	t.Cleanup(c.live.closeSlot)
 
 	// Turn 1: eligible completion while turn is running.
 	clock := now.UnixMilli()
@@ -682,6 +685,7 @@ func TestAgyOutputRateRowHoverRetentionAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopenedLive := newLiveWriter(sessionDir, rec.WSKey, rec.Backend, r.opts.Now, io.Discard)
+	t.Cleanup(reopenedLive.closeSlot)
 	reopenedSnap := reopenedLive.st.Snapshot(clock + 400)
 	if reopenedSnap.Lead.Observed != nil || reopenedSnap.Lead.OutputRate == nil {
 		t.Fatalf("reopened snapshot lost OutputRate: %+v", reopenedSnap.Lead)

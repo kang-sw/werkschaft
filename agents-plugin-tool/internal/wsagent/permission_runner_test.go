@@ -68,7 +68,7 @@ func TestPermissionLaunchMatrix(t *testing.T) {
 					}
 				}
 				rec := h.record(st.ID)
-				raw, err := os.ReadFile(recordPath(wsdashboard.SessionDir(h.dir, st.ID)))
+				raw, err := readFile(recordPath(wsdashboard.SessionDir(h.dir, st.ID)))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -365,6 +365,35 @@ func TestPermissionWorkerInputStateAndControl(t *testing.T) {
 	h.backend.waitProcStart(t, 2)
 	if got := log.String(); !strings.Contains(got, "Permission workdir-write is advisory on pi: root worker has no authority parent") {
 		t.Fatalf("root worker nudge: %s", got)
+	}
+}
+
+// The compact tool the runner adds at launch leaves a read-only loadout
+// read-only, so a read-only parent still admits it with authority omitted.
+func TestPermissionLaunchCompactKeepsReadOnlyLegacyLevel(t *testing.T) {
+	h := permissionHarness(t).start()
+	h.globalProfile("ro-custom", `{"backend":"pi","tools":["read"],"ws_tools":["git.status"]}`)
+	for _, name := range []string{"ro-custom", ExploreProfile} {
+		rp, err := h.runner.resolve(name, h.root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(rp.Definition.WSTools, "compact") {
+			t.Fatalf("%s launch ws tools lack compact: %v", name, rp.Definition.WSTools)
+		}
+		if got := legacyWorkerPermission(rp.Definition); got != PermissionReadOnly {
+			t.Fatalf("%s legacy level = %q, want read-only", name, got)
+		}
+	}
+	parent := h.lead(BackendClaude, LeadOptions{PermissionLevel: PermissionReadOnly})
+	parentRef := ParentRef{Kind: ParentLead, ReplyID: parent.ID}
+	child, err := h.runner.Spawn(SpawnSpec{Profile: "ro-custom", Root: h.root, Prompt: "look", Parent: &parentRef})
+	if err != nil {
+		t.Fatalf("read-only parent refused a read-only legacy child: %v", err)
+	}
+	h.holder(child.ID)
+	if got := h.state(child.ID); got.PermissionLevel != PermissionReadOnly || got.PermissionSource != "legacy-derived" {
+		t.Fatalf("read-only legacy child: %+v", got)
 	}
 }
 

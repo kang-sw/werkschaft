@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"errors"
 	"github.com/gofrs/flock"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"io"
 	"net"
 	"net/http"
@@ -117,6 +118,14 @@ type DaemonOptions struct {
 	// AgyCommand resolves the agy CLI program and leading arguments for
 	// user-triggered /usage probes without spawning. Nil skips agy probes.
 	AgyCommand func() (string, []string, error)
+	// CompanionOneShot runs the companion agent director's isolated
+	// single-prompt call (companion_director.go); nil leaves the agent
+	// director inert, and rules mode is unaffected.
+	CompanionOneShot CompanionOneShotFunc
+	// CompanionHasOneShot reports, from memory, whether a harness has a
+	// one-shot mode; a trigger on a harness without one drops before the
+	// limiter charges it. Nil treats every harness as having one.
+	CompanionHasOneShot func(harness string) bool
 	// CardBound reports whether replyID is bound to a subordinate whiteboard
 	// agent card whose Record.Parent stays unset; nil defaults to false.
 	CardBound func(replyID string) bool
@@ -132,6 +141,12 @@ type DaemonOptions struct {
 	// memory only, once per render, nil counts none, and ExecJobsChanged
 	// re-renders the rail after the counts change.
 	HostedExecJobs func() map[string]int
+	// Credentials is the provider credential store the daemon owns
+	// (credential_routes.go): while the daemon runs it is the credential
+	// file's only writer. Nil serves no credential and takes no change.
+	// Close closes it to changes before it releases the lock, so a store
+	// serves one daemon.
+	Credentials *wscred.Store
 
 	// bindHost overrides the address the daemon binds, so a test runs LAN
 	// mode on loopback; empty derives it from LAN.
@@ -169,6 +184,9 @@ type DaemonOptions struct {
 	hireNow func() time.Time
 	// authNow is a fixture clock for login codes and failed exchanges.
 	authNow func() time.Time
+	// credentialSource replaces Credentials, so a test sees the requests
+	// the token route makes; nil uses Credentials.
+	credentialSource credentialStore
 	// clipboard replaces the native login-link clipboard writer in tests.
 	// Nil selects the platform writer; it never disables authentication.
 	clipboard clipboardWriter
@@ -203,19 +221,26 @@ type Daemon struct {
 	// routes (a test's fixture store).
 	auditRead auditViewer
 
-	dir        string
-	lock       *flock.Flock
-	server     *http.Server
-	listener   net.Listener
-	endpoint   Endpoint
-	log        io.Writer
-	index      *Index
-	source     SessionSource
-	config     *ConfigBackend
-	audit      *auditState
-	companion  companionState
-	agents     AgentHost
-	leadNudges interface {
+	dir       string
+	lock      *flock.Flock
+	server    *http.Server
+	listener  net.Listener
+	endpoint  Endpoint
+	log       io.Writer
+	index     *Index
+	source    SessionSource
+	config    *ConfigBackend
+	audit     *auditState
+	companion companionState
+	// companionCommands broadcasts agent-director commands to rail streams.
+	companionCommands companionCommandHub
+	// director is the companion agent director (companion_director.go).
+	director companionDirector
+	agents   AgentHost
+	// credentials is DaemonOptions.Credentials (or a test's
+	// credentialSource), nil without one.
+	credentials credentialStore
+	leadNudges  interface {
 		Start()
 		Close()
 	}
@@ -267,8 +292,11 @@ type Daemon struct {
 	// auth holds bounded, ephemeral login codes and the exchange rate window.
 	auth      localhostAuth
 	clipboard clipboardWriter
-	memoMu    sync.Mutex      // serializes daemon-local memo read/modify/write
-	planUsage *planUsageStore // daemon-private account usage, never credentials
+	memoMu    sync.Mutex // serializes daemon-local memo read/modify/write
+	// beforeConfigWrite runs between a config save's layer read and its
+	// write (a test seam; nil in production).
+	beforeConfigWrite func(key string)
+	planUsage         *planUsageStore // daemon-private account usage, never credentials
 	// pprof serves the pprof routes (pprofHandler).
 	pprof bool
 	// buildTime is the build time /health reports; zero is unknown.

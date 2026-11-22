@@ -153,7 +153,12 @@ timing only; no stored shape or protocol change).
      a Codex child's `path.generate` / `mailbox.send` succeed; the remaining
      gap is covered by a tool-list test for the chosen option.
 
-7. **Item 13 — Rendered delegate playbook carries a different child session key than the spawn harness appended *(Diagnosis needed)*:**
+7. **Item 13 — Rendered delegate playbook carries a different child session key than the spawn harness appended *(dropped: implemented elsewhere)*:**
+   - **Status (2026-11-22):** dropped from this ticket. Implemented by Phase 3 of
+     `261122-fix-ws-dogfood-surprises-batch` (merged on develop): a daemon-agent
+     caller's worker render names the spawn key as the session key and words
+     the spliced render key as lead-only-tool use. That ticket recorded the
+     hand-off in its `related:` frontmatter. No work remains here.
    - **Observed symptom (2026-11-19):** a rendered delegate playbook embedded
      one child session key while the spawn harness appended another to the
      child's prompt; the worker had to guess and used the appended one.
