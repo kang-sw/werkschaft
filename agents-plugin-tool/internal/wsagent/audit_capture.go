@@ -42,8 +42,11 @@ import (
 type auditAdapter interface {
 	// mapLine maps one complete output line read at at. recognized is false
 	// for a line outside the harness's protocol, which capture keeps raw as
-	// KindOther.
-	mapLine(line []byte, at time.Time) (recognized bool, evs []wsaudit.Envelope)
+	// KindOther. evs are the line's own events, the same for the line live
+	// and replayed, so their ordinals are a durable identity; carried are
+	// the assemblies of earlier (tee'd) lines the line ended, which a replay
+	// does not rebuild, kept apart so they never shift those ordinals.
+	mapLine(line []byte, at time.Time) (recognized bool, carried, evs []wsaudit.Envelope)
 	// markLoss records n lost source lines (n 0: an unknown count) on the
 	// assembled event still open, reporting false when none spans the loss.
 	markLoss(n uint64, reason string) bool
@@ -505,7 +508,8 @@ func (c *auditCapture) closeTee(reason string) {
 }
 
 func (c *auditCapture) mapKept(it auditItem) {
-	recognized, evs := c.adapter.mapLine(it.data, it.at)
+	recognized, carried, evs := c.adapter.mapLine(it.data, it.at)
+	c.emitCarried(carried, it.at, "asm."+strconv.FormatUint(it.seq, 10))
 	c.emit(evs, recognized, it.data, it.at, wsaudit.SourceID{Source: c.source, Seq: it.seq})
 	if it.seq > c.boundary {
 		c.boundary = it.seq
@@ -514,8 +518,18 @@ func (c *auditCapture) mapKept(it auditItem) {
 
 func (c *auditCapture) mapTee(t wsholder.Event) {
 	at := time.Unix(0, t.At)
-	recognized, evs := c.adapter.mapLine(bytes.TrimRight(t.Data, "\r\n"), at)
+	recognized, carried, evs := c.adapter.mapLine(bytes.TrimRight(t.Data, "\r\n"), at)
+	c.emitCarried(carried, at, fmt.Sprintf("asm.t%d.%d", t.Anchor, t.Index))
 	c.emit(evs, recognized, t.Data, at, wsaudit.SourceID{Source: c.source, Tee: true, Anchor: t.Anchor, Index: t.Index})
+}
+
+// emitCarried appends the assemblies a source record ended under their own
+// key, apart from the record's identity: they come from tee'd lines, and the
+// record's own events keep ordinals that do not depend on them.
+func (c *auditCapture) emitCarried(evs []wsaudit.Envelope, at time.Time, key string) {
+	if len(evs) > 0 {
+		c.emit(evs, true, nil, at, wsaudit.SourceID{Source: c.source, Key: key})
+	}
 }
 
 // emit filters one source record's envelopes through the capture policy and

@@ -52,8 +52,8 @@ func usage(input, read, create int64) string {
 func mapAll(a *claudeAudit, lines ...string) []wsaudit.Envelope {
 	var out []wsaudit.Envelope
 	for _, l := range lines {
-		_, evs := a.mapLine([]byte(l), time.Now())
-		out = append(out, evs...)
+		_, carried, evs := a.mapLine([]byte(l), time.Now())
+		out = append(append(out, carried...), evs...)
 	}
 	return append(out, a.flush(time.Now())...)
 }

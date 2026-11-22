@@ -64,7 +64,12 @@ func (a *codexAudit) env(kind wsaudit.Kind, at time.Time) wsaudit.Envelope {
 	return ev
 }
 
-func (a *codexAudit) mapLine(line []byte, at time.Time) (bool, []wsaudit.Envelope) {
+func (a *codexAudit) mapLine(line []byte, at time.Time) (bool, []wsaudit.Envelope, []wsaudit.Envelope) {
+	recognized, evs := a.mapOwn(line, at)
+	return recognized, nil, evs
+}
+
+func (a *codexAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelope) {
 	var msg codexWire
 	if json.Unmarshal(line, &msg) != nil {
 		return false, nil

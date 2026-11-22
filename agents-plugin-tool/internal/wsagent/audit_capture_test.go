@@ -59,6 +59,7 @@ type boundarySink struct {
 	boundary map[string]uint64
 	lost     []wsaudit.SourceID
 	failID   func(wsaudit.SourceID) bool
+	failEnv  func(wsaudit.Envelope) bool
 }
 
 func newBoundarySink() *boundarySink {
@@ -80,7 +81,7 @@ func (s *boundarySink) Retained(_ string, id wsaudit.SourceID) bool {
 func (s *boundarySink) AppendSourced(_ context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.failID != nil && s.failID(id) {
+	if s.failID != nil && s.failID(id) || s.failEnv != nil && s.failEnv(ev) {
 		return errors.New("injected append failure")
 	}
 	if s.retained[id] {
@@ -734,6 +735,67 @@ func TestAuditReplayRecordsAFailedAppendAsLoss(t *testing.T) {
 	}
 	if len(sink.lost) != 1 || sink.lost[0].Seq != 10 {
 		t.Fatalf("losses = %+v, want record 10", sink.lost)
+	}
+}
+
+// TestAuditReplayOrdinalsIgnoreCarriedAssemblies pins the durable ordinal
+// of a record that emits several envelopes: live, the result line ends a
+// thinking block assembled from tee'd deltas and emits [thinking, result];
+// replayed after a restart, no deltas come back, and it emits [result]. The
+// assembly is keyed apart from the record, so the replayed result keeps the
+// identity it had live: a result whose append failed is recorded as loss,
+// never mistaken for the retained thinking, and nothing is appended twice.
+func TestAuditReplayOrdinalsIgnoreCarriedAssemblies(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail=%v", fail), func(t *testing.T) {
+			sink := newBoundarySink()
+			r := newAuditRig(t, sink, "h1")
+			r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+			kept := []string{thinkStart, thinkBlock}
+			for _, l := range kept {
+				r.keptRun(l, 0, 0)
+			}
+			r.tee(thinkDelta("carried "))
+			r.tee(thinkDelta("thought"))
+			r.keptRun(thinkStop, 2, 0)
+			resultSeq := r.seq + 1
+			isResult := func(ev wsaudit.Envelope) bool { return ev.Subkind == "result:success" }
+			if fail {
+				sink.failEnv = isResult
+			}
+			r.keptRun(auditResultLine, 0, 0)
+			kept = append(kept, thinkStop, auditResultLine)
+			r.end()
+			live := sink.events()
+			if th := find(live, ofKind(wsaudit.KindThinking)); len(th) != 1 || th[0].Out != "carried thought" {
+				t.Fatalf("live thinking = %+v", th)
+			}
+			sink.failEnv = nil
+
+			r2 := newAuditRig(t, sink, "h1")
+			for i, l := range kept {
+				r2.replayed(uint64(i+1), l)
+			}
+			r2.end()
+			evs := sink.events()
+			if n := len(find(evs, ofKind(wsaudit.KindThinking))); n != 1 {
+				t.Fatalf("thinking events after replay = %d, want 1", n)
+			}
+			results := find(evs, isResult)
+			var lost []wsaudit.SourceID
+			for _, id := range sink.lost {
+				if id.Seq == resultSeq && id.Key == "" {
+					lost = append(lost, id)
+				}
+			}
+			if fail {
+				if len(results) != 0 || len(lost) != 1 {
+					t.Fatalf("failed result: %d appended, losses %+v; want it recorded as loss, not appended late", len(results), sink.lost)
+				}
+			} else if len(results) != 1 || len(sink.lost) != 0 || len(evs) != len(live) {
+				t.Fatalf("clean replay: %d results, losses %+v, %d events (live %d); want nothing new", len(results), sink.lost, len(evs), len(live))
+			}
+		})
 	}
 }
 

@@ -33,6 +33,10 @@ type claudeAudit struct {
 	// is the lead's own, any other key a native subagent's
 	// parent_tool_use_id.
 	chains map[string]*wsaudit.RequestChain
+	// carried are the assemblies of streamed blocks no assistant line
+	// consumed, ended by the line being mapped: tee'd lines' events, not the
+	// line's own, so they never shift its ordinals (mapLine).
+	carried []wsaudit.Envelope
 }
 
 type claudeAuditBlock struct {
@@ -177,7 +181,16 @@ func compactJSON(raw []byte) string {
 	return string(raw)
 }
 
-func (a *claudeAudit) mapLine(line []byte, at time.Time) (bool, []wsaudit.Envelope) {
+func (a *claudeAudit) mapLine(line []byte, at time.Time) (bool, []wsaudit.Envelope, []wsaudit.Envelope) {
+	recognized, evs := a.mapOwn(line, at)
+	carried := a.carried
+	a.carried = nil
+	return recognized, carried, evs
+}
+
+// mapOwn maps one line to its own events; the assemblies the line ends are
+// collected in carried.
+func (a *claudeAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelope) {
 	var l claudeAuditLine
 	if json.Unmarshal(line, &l) != nil || l.Type == "" {
 		return false, nil
@@ -207,11 +220,11 @@ func (a *claudeAudit) mapLine(line []byte, at time.Time) (bool, []wsaudit.Envelo
 		ev.Out = compactJSON(line)
 		return true, []wsaudit.Envelope{ev}
 	case "result":
-		out := a.flushBlocks(at, false)
+		a.carry(at)
 		ev := a.env(wsaudit.KindSystem, at)
 		ev.Subkind = joinSubkind(l.Type, l.Subtype)
 		ev.Out = compactJSON(line)
-		return true, append(out, ev)
+		return true, []wsaudit.Envelope{ev}
 	case "control_response", "control_cancel_request", "rate_limit_event", "keep_alive", "command_lifecycle":
 		ev := a.env(wsaudit.KindSystem, at)
 		ev.Subkind = joinSubkind(l.Type, l.Subtype)
@@ -237,10 +250,9 @@ func (a *claudeAudit) streamEvent(l claudeAuditLine, at time.Time) []wsaudit.Env
 	}
 	switch e.Type {
 	case "message_start":
-		out := a.flushBlocks(at, false)
+		a.carry(at)
 		a.msgID, a.blocks = e.Message.ID, nil
 		a.request(l.ParentToolUseID, e.Message.ID, e.Message.Usage)
-		return out
 	case "content_block_start":
 		b := &claudeAuditBlock{index: e.Index, typ: e.ContentBlock.Type, id: e.ContentBlock.ID, name: e.ContentBlock.Name, parent: l.ParentToolUseID, at: at, request: a.chains[l.ParentToolUseID].Meta()}
 		b.body.WriteString(e.ContentBlock.Thinking)
@@ -312,17 +324,16 @@ func (a *claudeAudit) assistant(l claudeAuditLine, at time.Time) []wsaudit.Envel
 	if json.Unmarshal(l.Message, &msg) != nil {
 		return nil
 	}
-	var out []wsaudit.Envelope
 	if a.msgID != "" && msg.ID != "" && msg.ID != a.msgID {
-		out = a.flushBlocks(at, false)
+		a.carry(at)
 		a.msgID, a.blocks = "", nil
 	}
 	req := a.request(l.ParentToolUseID, msg.ID, msg.Usage)
 	var blocks []json.RawMessage
 	if json.Unmarshal(msg.Content, &blocks) != nil {
-		return out
+		return nil
 	}
-	mark := len(out)
+	var out []wsaudit.Envelope
 	for _, raw := range blocks {
 		var b claudeAuditBlockIn
 		if json.Unmarshal(raw, &b) != nil {
@@ -370,7 +381,7 @@ func (a *claudeAudit) assistant(l claudeAuditLine, at time.Time) []wsaudit.Envel
 			out = append(out, wsaudit.NewOtherEnvelope(a.session, BackendClaude, at, compactJSON(raw)))
 		}
 	}
-	for i := mark; i < len(out); i++ {
+	for i := range out {
 		withRequest(&out[i], req)
 	}
 	return out
@@ -527,6 +538,11 @@ func (a *claudeAudit) system(l claudeAuditLine, line []byte, at time.Time) []wsa
 	}
 	ev.Out = compactJSON(line)
 	return []wsaudit.Envelope{ev}
+}
+
+// carry collects the open assemblies a line ends.
+func (a *claudeAudit) carry(at time.Time) {
+	a.carried = append(a.carried, a.flushBlocks(at, false)...)
 }
 
 // flushBlocks emits the streamed blocks no assistant line consumed: a
