@@ -9,7 +9,9 @@
 // envelopes over without waiting on disk, and a full queue or a failed write
 // drops the event with a log line rather than stalling capture. Reads are
 // served from the in-memory index, which is recovered from a ring's
-// segments once, on its first use.
+// segments once, on its first use. Capture's recovery questions
+// (wsaudit.SourcedSink Recover and Retained) are answered from a per-ring
+// identity ledger under its own lock, never behind a disk write.
 package wsauditstore
 
 import (
@@ -62,9 +64,9 @@ type jobKind int
 const (
 	jobAppend jobKind = iota
 	jobFinalize
+	jobLoss
 	jobTouch
 	jobDelete
-	jobRecover
 	jobLoad
 	jobSweep
 	jobBarrier
@@ -74,6 +76,8 @@ type job struct {
 	kind    jobKind
 	session string
 	ev      wsaudit.Envelope
+	id      *wsaudit.SourceID
+	reason  string
 	source  string
 	seq     uint64
 	at      time.Time
@@ -81,7 +85,6 @@ type job struct {
 }
 
 type jobResult struct {
-	rec wsaudit.Recovery
 	err error
 }
 
@@ -96,10 +99,14 @@ type sessionInfo struct {
 
 	mu   sync.Mutex
 	ring *ring
+
+	// led is ring's identity ledger once the ring is loaded; loading is set
+	// while a load is queued, so readers queue it at most once.
+	led     atomic.Pointer[ledger]
+	loading atomic.Bool
 }
 
-// Store is the audit segment ring store. It implements
-// wsaudit.RecoverableSink.
+// Store is the audit segment ring store. It implements wsaudit.SourcedSink.
 type Store struct {
 	opts   Options
 	limits Limits
@@ -115,12 +122,13 @@ type Store struct {
 	deferred []job
 	closed   bool
 
-	idx *indexLog // writer goroutine only
+	idx   *indexLog                 // writer goroutine only
+	dirty map[*sessionInfo]struct{} // rings with pending control lines; writer only
 
 	dropped atomic.Uint64
 }
 
-var _ wsaudit.RecoverableSink = (*Store)(nil)
+var _ wsaudit.SourcedSink = (*Store)(nil)
 
 // Open opens the store at opts.Root: one listing of the root and of each ring
 // directory for sizes, the newest index file for recorded last-seen times,
@@ -160,7 +168,7 @@ func Open(opts Options) (*Store, error) {
 		opts: opts, limits: limits,
 		jobs: make(chan job, opts.QueueDepth), wake: make(chan struct{}, 1),
 		stop: make(chan struct{}), done: make(chan struct{}),
-		sessions: map[string]*sessionInfo{}, idx: idx,
+		sessions: map[string]*sessionInfo{}, idx: idx, dirty: map[*sessionInfo]struct{}{},
 	}
 	entries, err := readDir(opts.Root)
 	if err != nil {
@@ -216,26 +224,98 @@ func (s *Store) logf(format string, args ...any) {
 // ErrQueueFull when the writer is behind; the event is then dropped and the
 // caller logs and moves on.
 func (s *Store) Append(_ context.Context, ev wsaudit.Envelope) error {
+	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev})
+}
+
+// AppendSourced hands ev to the writer under source identity id, like Append.
+// An identity the store already knows it retains returns
+// wsaudit.ErrDuplicateSource; the writer also skips a duplicate it only
+// learns of later, and records as loss an identity at or below its source's
+// finalized boundary (never appending it late).
+func (s *Store) AppendSourced(_ context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
+	id = normalizeSourceID(id)
+	if l := s.ledgerOf(ev.Session); l != nil && l.isRetained(id) {
+		return wsaudit.ErrDuplicateSource
+	}
+	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev, id: &id})
+}
+
+func (s *Store) enqueue(j job) error {
 	select {
 	case <-s.stop:
 		return ErrClosed
 	default:
 	}
 	select {
-	case s.jobs <- job{kind: jobAppend, session: ev.Session, ev: ev}:
+	case s.jobs <- j:
 		return nil
 	default:
 		s.dropped.Add(1)
-		s.logf("drop %s event of session %s: write queue full", ev.Kind, ev.Session)
+		s.logf("drop %s event of session %s: write queue full", j.ev.Kind, j.ev.Session)
 		return ErrQueueFull
 	}
 }
 
-// Finalize advances a source's finalized boundary. It is ordered after every
-// Append made before it and is never dropped: when the queue is full it runs
-// once the queue drains, which only ever applies a boundary later.
-func (s *Store) Finalize(_ context.Context, session, source string, seq uint64) error {
-	return s.control(job{kind: jobFinalize, session: session, source: source, seq: seq})
+// Recover reports what is retained for session and source, from memory. For
+// a ring not yet loaded it queues the load and answers zero: the writer
+// applies the same retained and boundary rule to every AppendSourced, so an
+// early answer costs at most a renumbered seq, never a duplicate or a late
+// append.
+func (s *Store) Recover(session, source string) wsaudit.Recovery {
+	l := s.ledgerOf(session)
+	if l == nil {
+		return wsaudit.Recovery{}
+	}
+	return l.recovery(wsaudit.NormalizeID(source))
+}
+
+// Retained reports whether the identity id is retained for session, from
+// memory (false for a ring not yet loaded, whose load it queues).
+func (s *Store) Retained(session string, id wsaudit.SourceID) bool {
+	l := s.ledgerOf(session)
+	return l != nil && l.isRetained(normalizeSourceID(id))
+}
+
+// Preload queues loading a session's ring, when one exists and is not loaded,
+// so capture's recovery questions find it in memory. It never blocks.
+func (s *Store) Preload(session string) {
+	_ = s.ledgerOf(session)
+}
+
+// ledgerOf returns a known session's identity ledger, queuing its ring's
+// load when it is not in memory yet (nil then, and for an unknown session).
+func (s *Store) ledgerOf(session string) *ledger {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	s.mu.Lock()
+	info := s.sessions[dir]
+	s.mu.Unlock()
+	if info == nil {
+		return nil
+	}
+	if l := info.led.Load(); l != nil {
+		return l
+	}
+	if info.loading.CompareAndSwap(false, true) {
+		if err := s.control(job{kind: jobLoad, session: session}); err != nil {
+			info.loading.Store(false)
+		}
+	}
+	return nil
+}
+
+// Finalize advances a source's finalized boundary (wsaudit.Recovery.Boundary).
+// It is ordered after every Append made before it and is never dropped: when
+// the queue is full it runs once the queue drains, which only ever applies a
+// boundary later. The boundary is persisted ahead of the ring's next record,
+// or when the writer next idles.
+func (s *Store) Finalize(_ context.Context, session, source string, boundary uint64) error {
+	return s.control(job{kind: jobFinalize, session: session, source: source, seq: boundary})
+}
+
+// RecordLoss records that the source record id was finalized without being
+// retained. Like Finalize it is never dropped.
+func (s *Store) RecordLoss(_ context.Context, session string, id wsaudit.SourceID, reason string) error {
+	return s.control(job{kind: jobLoss, session: session, id: &id, reason: reason})
 }
 
 // Touch records a lifecycle last-seen time for a session's ring (session
@@ -254,13 +334,6 @@ func (s *Store) Touch(session string, at time.Time) {
 func (s *Store) DeleteSession(ctx context.Context, session string) error {
 	_, err := s.call(ctx, job{kind: jobDelete, session: session})
 	return err
-}
-
-// Recover returns the session's recovered state, recovering its ring on
-// first use.
-func (s *Store) Recover(ctx context.Context, session string) (wsaudit.Recovery, error) {
-	res, err := s.call(ctx, job{kind: jobRecover, session: session})
-	return res.rec, err
 }
 
 // Flush waits until every job queued before it has run.
@@ -351,7 +424,26 @@ func (s *Store) run() {
 		}
 		if len(s.jobs) == 0 {
 			s.runDeferred()
+			s.flushPending()
 		}
+	}
+}
+
+// flushPending writes the queued control lines (losses, boundaries) of every
+// ring that has them, once the writer idles, so a boundary or loss does not
+// wait for a record that may never come.
+func (s *Store) flushPending() {
+	for info := range s.dirty {
+		delete(s.dirty, info)
+		info.mu.Lock()
+		if r := info.ring; r != nil && r.readOnly == nil {
+			if payload := r.pendingLines(); len(payload) > 0 {
+				if s.writeLocked(info, payload) == nil {
+					r.clearPending()
+				}
+			}
+		}
+		info.mu.Unlock()
 	}
 }
 
@@ -394,13 +486,9 @@ func (s *Store) shutdown() {
 	for _, info := range infos {
 		info.mu.Lock()
 		if r := info.ring; r != nil {
-			if len(r.pending) > 0 && r.readOnly == nil {
-				var payload []byte
-				for _, p := range r.pending {
-					payload = append(payload, p...)
-				}
+			if payload := r.pendingLines(); len(payload) > 0 && r.readOnly == nil {
 				if _, err := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes()); err == nil {
-					r.pending = nil
+					r.clearPending()
 				}
 				s.account(info)
 			}
@@ -415,23 +503,21 @@ func (s *Store) handle(j job) {
 	var res jobResult
 	switch j.kind {
 	case jobAppend:
-		s.appendEvent(j.ev)
+		s.appendEvent(j.ev, j.id)
 	case jobFinalize:
 		s.finalize(j.session, j.source, j.seq)
+	case jobLoss:
+		s.recordLoss(j.session, *j.id, j.reason)
 	case jobTouch:
 		s.touch(j.session, j.at)
 	case jobDelete:
 		res.err = s.deleteSession(j.session)
-	case jobRecover:
-		info, err := s.info(wsaudit.NormalizeID(j.session), false)
-		if err == nil && info != nil {
-			info.mu.Lock()
-			res.rec = info.ring.recovery()
-			info.mu.Unlock()
-		}
-		res.err = err
 	case jobLoad:
-		_, res.err = s.info(wsaudit.NormalizeID(j.session), false)
+		var info *sessionInfo
+		info, res.err = s.info(wsaudit.NormalizeID(j.session), false)
+		if info != nil {
+			info.loading.Store(false)
+		}
 	case jobSweep:
 		s.sweep()
 	case jobBarrier:
@@ -471,6 +557,7 @@ func (s *Store) info(session string, create bool) (*sessionInfo, error) {
 	info.ring = r
 	info.session = session
 	info.mu.Unlock()
+	info.led.Store(r.led)
 	s.account(info)
 	return info, nil
 }
@@ -486,20 +573,18 @@ func (s *Store) account(info *sessionInfo) {
 	s.mu.Unlock()
 }
 
-func (s *Store) appendEvent(raw wsaudit.Envelope) {
+func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID) {
 	ev, err := prepare(raw, s.limits)
 	if err != nil {
 		s.dropped.Add(1)
 		s.logf("drop %s event of session %s: %v", raw.Kind, raw.Session, err)
-		if raw.Session == "" || raw.Source == nil {
+		if raw.Session == "" || id == nil {
 			return
 		}
 		// A dropped record with an identity is finalized as lost.
-		ev = wsaudit.Envelope{Session: wsaudit.NormalizeID(raw.Session), Source: raw.Source}
-		wsaudit.NormalizeIDs(&ev)
-		if info, err := s.info(ev.Session, true); err == nil {
+		if info, err := s.info(wsaudit.NormalizeID(raw.Session), true); err == nil {
 			info.mu.Lock()
-			s.loseLocked(info.ring, *ev.Source)
+			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
 			info.mu.Unlock()
 		}
 		return
@@ -517,51 +602,55 @@ func (s *Store) appendEvent(raw wsaudit.Envelope) {
 		s.dropped.Add(1)
 		return
 	}
-	switch r.admit(ev.Source) {
+	switch r.admit(id) {
 	case admitDuplicate:
 		return
 	case admitLoss:
-		s.loseLocked(r, *ev.Source)
+		s.loseLocked(info, *id, wsaudit.LossAppendFailed)
 		return
 	}
-	if ev.Seq <= r.maxSeq {
-		ev.Seq = r.maxSeq + 1
+	if ev.Seq <= r.led.maxSeq {
+		ev.Seq = r.led.maxSeq + 1
 	}
-	evLine, err := encodeLine(line{T: lineEvent, Event: &ev})
+	evLine, err := encodeLine(line{T: lineEvent, Event: &ev, ID: id})
 	if err == nil && int64(len(evLine)) > s.limits.MaxRecordBytes() {
 		err = fmt.Errorf("record of %d bytes exceeds the %d-byte record bound", len(evLine), s.limits.MaxRecordBytes())
 	}
 	if err != nil {
 		s.dropped.Add(1)
 		s.logf("drop %s event of session %s: %v", ev.Kind, ev.Session, err)
-		if ev.Source != nil {
-			s.loseLocked(r, *ev.Source)
+		if id != nil {
+			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
 		}
 		return
 	}
-	var payload []byte
-	for _, p := range r.pending {
-		payload = append(payload, p...)
+	payload := append(r.pendingLines(), evLine...)
+	if werr := s.writeLocked(info, payload); werr != nil {
+		s.dropped.Add(1)
+		s.logf("drop %s event of session %s: write: %v", ev.Kind, ev.Session, werr)
+		if id != nil {
+			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
+		}
+		return
 	}
-	payload = append(payload, evLine...)
+	r.clearPending()
+	delete(s.dirty, info)
+	r.segs[len(r.segs)-1].events++
+	r.index(ev, id)
+	info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
+}
+
+// writeLocked writes payload to info's ring, first making room under the
+// store total, and syncs the byte accounting. info.mu is held.
+func (s *Store) writeLocked(info *sessionInfo, payload []byte) error {
+	r := info.ring
 	s.makeRoom(info, int64(len(payload))+s.headerAllowance(r, int64(len(payload))))
-	_, werr := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes())
+	_, err := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes())
 	s.mu.Lock()
 	s.total += r.bytes - info.bytes
 	info.bytes = r.bytes
 	s.mu.Unlock()
-	if werr != nil {
-		s.dropped.Add(1)
-		s.logf("drop %s event of session %s: write: %v", ev.Kind, ev.Session, werr)
-		if ev.Source != nil {
-			s.loseLocked(r, *ev.Source)
-		}
-		return
-	}
-	r.pending = nil
-	r.segs[len(r.segs)-1].events++
-	r.index(ev)
-	info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
+	return err
 }
 
 // headerAllowance is the header line a write of n bytes would add by
@@ -579,18 +668,34 @@ func (s *Store) headerAllowance(r *ring, n int64) int64 {
 }
 
 // loseLocked records a source record finalized without being retained; the
-// loss line is written ahead of the ring's next record.
-func (s *Store) loseLocked(r *ring, id wsaudit.SourceID) {
-	if _, ok := r.lost[id]; ok {
+// loss line is written ahead of the ring's next record, or when the writer
+// idles. info.mu is held.
+func (s *Store) loseLocked(info *sessionInfo, id wsaudit.SourceID, reason string) {
+	r := info.ring
+	if !r.markLost(id) {
 		return
 	}
-	r.markLost(id)
-	if ln, err := encodeLine(line{T: lineLoss, Lost: &id}); err == nil {
-		r.pending = append(r.pending, ln)
+	if ln, err := encodeLine(line{T: lineLoss, ID: &id, Reason: reason}); err == nil {
+		r.pendingLoss = append(r.pendingLoss, ln)
+		s.dirty[info] = struct{}{}
 	}
 }
 
-func (s *Store) finalize(session, source string, seq uint64) {
+func (s *Store) recordLoss(session string, id wsaudit.SourceID, reason string) {
+	session = wsaudit.NormalizeID(session)
+	info, err := s.info(session, true)
+	if err != nil {
+		s.logf("record loss in session %s: %v", session, err)
+		return
+	}
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if info.ring.readOnly == nil {
+		s.loseLocked(info, normalizeSourceID(id), reason)
+	}
+}
+
+func (s *Store) finalize(session, source string, boundary uint64) {
 	session = wsaudit.NormalizeID(session)
 	source = wsaudit.NormalizeID(source)
 	info, err := s.info(session, true)
@@ -601,19 +706,11 @@ func (s *Store) finalize(session, source string, seq uint64) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	r := info.ring
-	st := r.source(source)
-	if seq <= st.boundary {
+	if r.readOnly != nil || !r.finalize(source, boundary) {
 		return
 	}
-	st.boundary = seq
-	if st.hasLast && seq <= st.last.Seq {
-		return
-	}
-	// The boundary covers records that were never retained; persist it with
-	// the next record so a replay cannot append them late.
-	if ln, err := encodeLine(line{T: lineFin, Source: source, Seq: seq}); err == nil {
-		r.pending = append(r.pending, ln)
-	}
+	r.pendingFin[source] = boundary
+	s.dirty[info] = struct{}{}
 }
 
 // makeRoom evicts whole least-recently-used rings other than the active one
@@ -668,11 +765,15 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) {
 	_ = removeAll(filepath.Join(s.opts.Root, info.dir))
 	keep := r != nil && !forget
 	if keep {
-		r.segs, r.events, r.bytes = nil, nil, 0
-		r.retained = map[wsaudit.SourceID]struct{}{}
+		r.segs, r.events, r.ids, r.bytes = nil, nil, nil, 0
+		r.led.mu.Lock()
+		clear(r.led.retained)
+		r.led.mu.Unlock()
 		r.forceRotate = false
 	} else {
 		info.ring = nil
+		info.led.Store(nil)
+		delete(s.dirty, info)
 	}
 	info.mu.Unlock()
 	s.mu.Lock()

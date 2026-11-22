@@ -120,10 +120,10 @@ func TestPrepareNULHeavyBodyFitsEncodedShares(t *testing.T) {
 	}
 	tr := got.StoredTrunc.Out
 	head, tail := got.Out[:tr.HeadBytes], got.Out[tr.HeadBytes:]
-	if h := wsaudit.EncodedLen(head); h > int(lim.BodyBytes/2) {
+	if h := encodedLen(head); h > int(lim.BodyBytes/2) {
 		t.Fatalf("head encodes to %d bytes", h)
 	}
-	if n := wsaudit.EncodedLen(tail); n > int(lim.BodyBytes/2) || len(tail) != tr.TailBytes {
+	if n := encodedLen(tail); n > int(lim.BodyBytes/2) || len(tail) != tr.TailBytes {
 		t.Fatalf("tail encodes to %d bytes", n)
 	}
 	raw, _ := json.Marshal(got.Out)

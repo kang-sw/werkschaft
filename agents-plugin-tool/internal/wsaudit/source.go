@@ -1,74 +1,119 @@
 package wsaudit
 
 import (
-	"cmp"
 	"context"
+	"errors"
+	"strconv"
 )
 
-// SourceID is the durable identity of the source record an envelope came
-// from, so a store can recognize a replayed record after a restart.
+// Meta keys capture adapters write on assembled and loss events.
+const (
+	// MetaIncomplete marks an assembled event some of whose source lines were
+	// lost (dropped tee lines, an unfenced interval, a stream that ended
+	// mid-block).
+	MetaIncomplete = "incomplete"
+	// MetaLost counts the source lines known lost on an incomplete event or a
+	// loss marker; absent when the count is unknown.
+	MetaLost = "lost"
+	// MetaLossReason names why a loss marker or incomplete event lost lines.
+	MetaLossReason = "loss_reason"
+	// MetaAssembled marks an event built from streamed partial lines (tee'd
+	// deltas) rather than from one complete harness line.
+	MetaAssembled = "assembled"
+)
+
+// SubkindLoss is the Subkind of a standalone KindSystem loss marker: lost
+// source lines that no assembled event spans.
+const SubkindLoss = "audit_loss"
+
+// Loss reasons.
+const (
+	LossDropped      = "dropped"       // the holder dropped tee lines (no daemon, full buffer)
+	LossDisconnect   = "disconnect"    // the holder connection ended before the interval's fence
+	LossFenceTimeout = "fence_timeout" // no fence within the bound; the source's tee stream closed
+	LossLate         = "late"          // a tee line arrived after its interval was finalized
+	LossQueueFull    = "queue_full"    // the daemon's capture queue was full
+	LossStreamEnd    = "stream_end"    // the stream ended inside an assembled block
+	LossAppendFailed = "append_failed" // finalized at or below the boundary without a retained identity
+)
+
+// SourceID is the durable identity of the harness record an envelope came
+// from (ticket 261119-feat-ws-audit-capture-harness-adapters Decision 5):
 //
-// Capture adapters fill it as: Source "holder:<generation>" with Seq the ring
-// sequence for a sequenced line; the same Source with Seq the anchor and
-// Index the 1-based interval index for a tee line; or a deterministic Source
-// key for a daemon-synthesized event. Ordinal numbers the envelopes one
-// source record yields. Within one Source, identities order by (Seq, Index,
-// Ordinal).
+//   - a sequenced line: Source (the holder generation) and Seq (its holder
+//     ring sequence);
+//   - a tee line: Source, Tee, Anchor (the ring sequence of the last line the
+//     holder kept before it) and Index (its 1-based place in that interval,
+//     dropped lines counted);
+//   - a daemon-synthesized event: Source and a deterministic Key.
+//
+// Ordinal tells apart the envelopes one source record yields.
 type SourceID struct {
-	Source  string `json:"src"`
+	Source  string `json:"source"`
 	Seq     uint64 `json:"seq,omitempty"`
-	Index   uint64 `json:"idx,omitempty"`
-	Ordinal uint64 `json:"ord,omitempty"`
+	Tee     bool   `json:"tee,omitempty"`
+	Anchor  uint64 `json:"anchor,omitempty"`
+	Index   uint64 `json:"index,omitempty"`
+	Key     string `json:"key,omitempty"`
+	Ordinal int    `json:"ordinal,omitempty"`
 }
 
-// Compare orders two identities of the same Source by (Seq, Index, Ordinal).
-func (a SourceID) Compare(b SourceID) int {
-	if c := cmp.Compare(a.Seq, b.Seq); c != 0 {
-		return c
+// String is a stable text form of id, usable as an envelope ID.
+func (id SourceID) String() string {
+	s := id.Source + "/"
+	switch {
+	case id.Key != "":
+		s += "k" + id.Key
+	case id.Tee:
+		s += "t" + strconv.FormatUint(id.Anchor, 10) + "." + strconv.FormatUint(id.Index, 10)
+	default:
+		s += "s" + strconv.FormatUint(id.Seq, 10)
 	}
-	if c := cmp.Compare(a.Index, b.Index); c != 0 {
-		return c
+	return s + "#" + strconv.Itoa(id.Ordinal)
+}
+
+// Position is the source sequence id occupies for the finalized-boundary
+// rule: a sequenced line's Seq, a tee line's Anchor (it sits after that
+// line), 0 for a synthesized event.
+func (id SourceID) Position() uint64 {
+	if id.Tee {
+		return id.Anchor
 	}
-	return cmp.Compare(a.Ordinal, b.Ordinal)
+	return id.Seq
 }
 
-// SourceState is what a store recovered for one source.
-type SourceState struct {
-	// Last is the highest retained (or retention-evicted) source identity.
-	Last SourceID `json:"last"`
-	// Boundary is the finalized boundary: the highest source sequence the
-	// writer finalized, whether kept or dropped. A replayed record at or below
-	// it that is not retained counts as loss and is never appended late.
-	Boundary uint64 `json:"boundary"`
-}
-
-// Recovery is the state a store recovered for one session, which capture
-// resumes from after a restart.
+// Recovery is what a store retained for one session and source when capture
+// (re)opens it.
 type Recovery struct {
-	// MaxSeq is the highest envelope Seq the session's store has written.
-	// Capture assigns new envelope sequences above it.
-	MaxSeq uint64 `json:"max_seq"`
-	// Sources holds the last retained identity and the finalized boundary of
-	// each source, keyed by SourceID.Source.
-	Sources map[string]SourceState `json:"sources,omitempty"`
-	// Loss counts source records finalized without being retained (dropped on
-	// write error, or replayed at or below the boundary).
-	Loss uint64 `json:"loss"`
+	// MaxSeq is the highest envelope seq retained for the session; capture
+	// assigns seq above it.
+	MaxSeq uint64
+	// Boundary is the highest source sequence of this source that capture
+	// finalized, kept or dropped. A replayed record at or below it whose
+	// identity is not retained is recorded as loss, never appended late.
+	Boundary uint64
 }
 
-// RecoverableSink is a Sink that also carries the recovery contract capture
-// needs across daemon restarts and holder replay.
-//
-// Envelopes reaching Append carry raw identifier fields; the store applies
-// NormalizeID once at ingestion. An envelope whose Source identity is
-// already retained, or at or below its source's finalized boundary, is
-// skipped rather than appended late.
-type RecoverableSink interface {
+// ErrDuplicateSource is returned by SourcedSink.AppendSourced for an
+// identity already retained; capture treats it as success.
+var ErrDuplicateSource = errors.New("wsaudit: source identity already retained")
+
+// SourcedSink is a Sink that also keeps source identities, so capture can
+// resume across a daemon restart and a holder replay without duplicating or
+// reordering events. It extends the recovery contract of Sink.Append; like
+// Append, every method returns promptly and never waits on disk I/O.
+type SourcedSink interface {
 	Sink
-	// Recover returns the session's recovered state, opening its ring on
-	// first use.
-	Recover(ctx context.Context, session string) (Recovery, error)
-	// Finalize advances a source's finalized boundary to seq (never lowers
-	// it). Capture calls it when a source interval closes, kept or dropped.
-	Finalize(ctx context.Context, session, source string, seq uint64) error
+	// Recover reports what is retained for session and source.
+	Recover(session, source string) Recovery
+	// Retained reports whether an envelope with identity id is retained for
+	// session.
+	Retained(session string, id SourceID) bool
+	// AppendSourced appends ev under identity id.
+	AppendSourced(ctx context.Context, id SourceID, ev Envelope) error
+	// Finalize records the source's finalized boundary (Recovery.Boundary).
+	Finalize(ctx context.Context, session, source string, boundary uint64) error
+	// RecordLoss records that the envelope id was finalized without being
+	// retained.
+	RecordLoss(ctx context.Context, session string, id SourceID, reason string) error
 }

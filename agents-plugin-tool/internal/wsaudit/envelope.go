@@ -216,9 +216,6 @@ type Envelope struct {
 	Redactions  []Redaction    `json:"redactions,omitempty"`
 	Seen        *SeenBounds    `json:"seen,omitempty"`
 	StoredTrunc *StoredTrunc   `json:"stored_trunc,omitempty"`
-	// Source is the durable source identity the store deduplicates replayed
-	// records by; nil for an envelope with no replayable source.
-	Source *SourceID `json:"source,omitempty"`
 }
 
 // NewEnvelope builds a versioned Envelope for a known kind with a UTC
@@ -362,9 +359,6 @@ type wireEnvelope struct {
 	Redactions  []Redaction    `json:"redactions,omitempty"`
 	Seen        *SeenBounds    `json:"seen,omitempty"`
 	StoredTrunc *StoredTrunc   `json:"stored_trunc,omitempty"`
-	// Source is the durable source identity the store deduplicates replayed
-	// records by; nil for an envelope with no replayable source.
-	Source *SourceID `json:"source,omitempty"`
 }
 
 // MarshalJSON encodes e with schema version v (defaulting 0 to SchemaVersion),
@@ -411,7 +405,6 @@ func (e Envelope) MarshalJSON() ([]byte, error) {
 		Redactions:  e.Redactions,
 		Seen:        seen,
 		StoredTrunc: trunc,
-		Source:      e.Source,
 	})
 }
 
@@ -451,7 +444,6 @@ func (e *Envelope) UnmarshalJSON(data []byte) error {
 		Redactions:  w.Redactions,
 		Seen:        w.Seen,
 		StoredTrunc: w.StoredTrunc,
-		Source:      w.Source,
 	}
 	return nil
 }

@@ -67,8 +67,7 @@ func TestSessionCapDropsOldestWholeSegments(t *testing.T) {
 	if segs[0] == segmentName(1) || len(segs) < 2 {
 		t.Fatalf("oldest segment kept or too few left: %v", segs)
 	}
-	evs := events(t, s, "sess")
-	seqs := sourceSeqs(evs)
+	seqs := sourceSeqs(t, s, "sess")
 	if seqs[len(seqs)-1] != 150 || seqs[0] == 1 {
 		t.Fatalf("retained %d..%d", seqs[0], seqs[len(seqs)-1])
 	}
@@ -77,15 +76,19 @@ func TestSessionCapDropsOldestWholeSegments(t *testing.T) {
 			t.Fatal("eviction left a hole inside the retained range")
 		}
 	}
+	// Capture finalizes what it mapped.
+	if err := s.Finalize(context.Background(), "sess", "holder:1", 150); err != nil {
+		t.Fatal(err)
+	}
 	_ = s.Close()
 	s2, _ := openTest(t, root, func(o *Options) { o.Limits = smallLimits(64 * mib) })
-	if got := sourceSeqs(events(t, s2, "sess")); len(got) != len(seqs) || got[0] != seqs[0] {
+	if got := sourceSeqs(t, s2, "sess"); len(got) != len(seqs) || got[0] != seqs[0] {
 		t.Fatalf("restart recovered %d events from %d", len(got), got[0])
 	}
 	// Replaying an evicted record does not resurrect it.
 	mustAppend(t, s2, sourced("sess", 1, wsaudit.KindToolCall))
 	flush(t, s2)
-	if got := sourceSeqs(events(t, s2, "sess")); got[0] == 1 {
+	if got := sourceSeqs(t, s2, "sess"); got[0] == 1 {
 		t.Fatal("an evicted record was appended again")
 	}
 }
@@ -136,7 +139,7 @@ func TestTotalCapEvictsActiveRingLastKeepingNewest(t *testing.T) {
 	if got := diskBytes(t, root); got > 4*mib {
 		t.Fatalf("store holds %d bytes", got)
 	}
-	evs := sourceSeqs(events(t, s, "active"))
+	evs := sourceSeqs(t, s, "active")
 	if len(evs) == 0 || evs[len(evs)-1] != 120 {
 		t.Fatalf("active ring lost its newest records: %v", evs)
 	}

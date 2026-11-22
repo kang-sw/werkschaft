@@ -73,20 +73,71 @@ func flush(t *testing.T, s *Store) {
 	}
 }
 
-func sourced(session string, seq uint64, kind wsaudit.Kind) wsaudit.Envelope {
+// item is an envelope and the source identity capture appends it under.
+type item struct {
+	id wsaudit.SourceID
+	wsaudit.Envelope
+}
+
+func sourced(session string, seq uint64, kind wsaudit.Kind) item {
 	ev, _ := wsaudit.NewEnvelope(session, "claude", time.Now(), kind)
 	ev.ID = fmt.Sprintf("ev-%d", seq)
 	ev.Seq = seq
-	ev.Source = &wsaudit.SourceID{Source: "holder:1", Seq: seq}
 	ev.Out = fmt.Sprintf("output %d", seq)
-	return ev
+	return item{id: wsaudit.SourceID{Source: "holder:1", Seq: seq}, Envelope: ev}
 }
 
-func mustAppend(t *testing.T, s *Store, ev wsaudit.Envelope) {
+func tee(session string, anchor, index uint64) item {
+	ev, _ := wsaudit.NewEnvelope(session, "claude", time.Now(), wsaudit.KindAssistantText)
+	ev.ID = fmt.Sprintf("tee-%d.%d", anchor, index)
+	ev.Out = ev.ID
+	return item{id: wsaudit.SourceID{Source: "holder:1", Tee: true, Anchor: anchor, Index: index}, Envelope: ev}
+}
+
+func mustAppend(t *testing.T, s *Store, it item) {
 	t.Helper()
-	if err := s.Append(context.Background(), ev); err != nil {
+	// Capture treats a known duplicate as success.
+	if err := s.AppendSourced(context.Background(), it.id, it.Envelope); err != nil && !errors.Is(err, wsaudit.ErrDuplicateSource) {
 		t.Fatal(err)
 	}
+}
+
+// loaded recovers a session's ring after a restart, so the in-memory
+// recovery answers are complete.
+func loaded(t *testing.T, s *Store, session string) {
+	t.Helper()
+	s.Preload(session)
+	flush(t, s)
+}
+
+// retainedIDs lists the source identities of a session's retained events in
+// order, in SourceID.String form.
+func retainedIDs(t *testing.T, s *Store, session string) []string {
+	t.Helper()
+	info, err := s.loaded(context.Background(), session)
+	if err != nil || info == nil {
+		t.Fatalf("session %s not loaded: %v", session, err)
+	}
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	var out []string
+	for _, id := range info.ring.ids {
+		if id != nil {
+			out = append(out, id.String())
+		}
+	}
+	return out
+}
+
+func lossCount(t *testing.T, s *Store, session string) uint64 {
+	t.Helper()
+	l := s.ledgerOf(session)
+	if l == nil {
+		t.Fatalf("session %s not loaded", session)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loss
 }
 
 func events(t *testing.T, s *Store, session string) []wsaudit.Envelope {
@@ -98,11 +149,13 @@ func events(t *testing.T, s *Store, session string) []wsaudit.Envelope {
 	return evs
 }
 
-func sourceSeqs(evs []wsaudit.Envelope) []uint64 {
+func sourceSeqs(t *testing.T, s *Store, session string) []uint64 {
+	t.Helper()
 	var out []uint64
-	for _, ev := range evs {
-		if ev.Source != nil {
-			out = append(out, ev.Source.Seq)
+	for _, id := range retainedIDs(t, s, session) {
+		var seq uint64
+		if _, err := fmt.Sscanf(id, "holder:1/s%d#0", &seq); err == nil {
+			out = append(out, seq)
 		}
 	}
 	return out
@@ -121,12 +174,17 @@ func TestStoreRestartReplayDedupsAndContinuesSequence(t *testing.T) {
 	_ = s.Close()
 
 	s2, _ := openTest(t, root, nil)
-	rec, err := s2.Recover(context.Background(), "sess")
-	if err != nil {
-		t.Fatal(err)
+	if rec := s2.Recover("sess", "holder:1"); rec != (wsaudit.Recovery{}) {
+		t.Fatalf("recovery of an unloaded ring = %+v, want zero", rec)
 	}
-	if rec.MaxSeq != 5 || rec.Sources["holder:1"].Last.Seq != 5 || rec.Sources["holder:1"].Boundary != 5 {
+	flush(t, s2) // the first question queued the load
+	// Appends alone never finalize: capture reports the boundary.
+	rec := s2.Recover("sess", "holder:1")
+	if rec != (wsaudit.Recovery{MaxSeq: 5}) || !s2.Retained("sess", wsaudit.SourceID{Source: "holder:1", Seq: 5}) {
 		t.Fatalf("recovery = %+v", rec)
+	}
+	if err := s2.AppendSourced(context.Background(), wsaudit.SourceID{Source: "holder:1", Seq: 3}, sourced("sess", 3, wsaudit.KindToolCall).Envelope); !errors.Is(err, wsaudit.ErrDuplicateSource) {
+		t.Fatalf("append of a retained identity = %v", err)
 	}
 	for seq := uint64(1); seq <= 5; seq++ { // holder reattachment replays
 		mustAppend(t, s2, sourced("sess", seq, wsaudit.KindToolCall))
@@ -136,7 +194,7 @@ func TestStoreRestartReplayDedupsAndContinuesSequence(t *testing.T) {
 	}
 	flush(t, s2)
 	evs := events(t, s2, "sess")
-	if got := fmt.Sprint(sourceSeqs(evs)); got != "[1 2 3 4 5 6 7]" {
+	if got := fmt.Sprint(sourceSeqs(t, s2, "sess")); got != "[1 2 3 4 5 6 7]" {
 		t.Fatalf("source identities = %s", got)
 	}
 	for i, ev := range evs {
@@ -179,12 +237,11 @@ func TestStoreFailedWriteIsLossNeverLateAppend(t *testing.T) {
 	}
 	flush(t, s2)
 	evs := events(t, s2, "sess")
-	if got := fmt.Sprint(sourceSeqs(evs)); got != "[9 11]" {
+	if got := fmt.Sprint(sourceSeqs(t, s2, "sess")); got != "[9 11]" {
 		t.Fatalf("source identities = %s", got)
 	}
-	rec, _ := s2.Recover(context.Background(), "sess")
-	if rec.Loss != 1 {
-		t.Fatalf("loss = %d", rec.Loss)
+	if n := lossCount(t, s2, "sess"); n != 1 {
+		t.Fatalf("loss = %d", n)
 	}
 	if after := wsaudit.FindModelSeenCut(evs); after != before || !after.Estimated {
 		t.Fatalf("cut moved: %+v -> %+v", before, after)
@@ -193,8 +250,8 @@ func TestStoreFailedWriteIsLossNeverLateAppend(t *testing.T) {
 	s3, _ := openTest(t, root, nil)
 	mustAppend(t, s3, sourced("sess", 10, wsaudit.KindToolCall))
 	flush(t, s3)
-	if rec, _ := s3.Recover(context.Background(), "sess"); rec.Loss != 1 {
-		t.Fatalf("a second replay counted the loss again: %d", rec.Loss)
+	if n := lossCount(t, s3, "sess"); n != 1 {
+		t.Fatalf("a second replay counted the loss again: %d", n)
 	}
 }
 
@@ -216,12 +273,134 @@ func TestStoreFinalizedBoundaryRefusesLateRecords(t *testing.T) {
 	s2, _ := openTest(t, root, nil)
 	mustAppend(t, s2, sourced("sess", 3, wsaudit.KindToolCall))
 	flush(t, s2)
-	if got := fmt.Sprint(sourceSeqs(events(t, s2, "sess"))); got != "[1 4]" {
+	if got := fmt.Sprint(sourceSeqs(t, s2, "sess")); got != "[1 4]" {
 		t.Fatalf("source identities = %s", got)
 	}
-	rec, _ := s2.Recover(ctx, "sess")
-	if rec.Loss != 1 || rec.Sources["holder:1"].Boundary != 4 {
-		t.Fatalf("recovery = %+v", rec)
+	if rec, n := s2.Recover("sess", "holder:1"), lossCount(t, s2, "sess"); n != 2 || rec.Boundary != 3 || rec.MaxSeq != 4 {
+		t.Fatalf("recovery = %+v, loss %d", rec, n)
+	}
+}
+
+// TestStoreTeeAfterItsAnchorIsAdmitted pins the tee rule of the finalized
+// boundary: retaining or losing a record never moves the boundary, so a tee
+// record anchored on the last kept line is appended; once capture finalizes
+// past an anchor, a tee anchored below the boundary is loss, and one anchored
+// on it is still admitted.
+func TestStoreTeeAfterItsAnchorIsAdmitted(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	mustAppend(t, s, sourced("sess", 2, wsaudit.KindToolCall))
+	mustAppend(t, s, tee("sess", 2, 1)) // after kept line 2, before any finalize
+	flush(t, s)
+	if err := s.Finalize(ctx, "sess", "holder:1", 2); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, s, tee("sess", 2, 2)) // anchored on the boundary: admitted
+	mustAppend(t, s, tee("sess", 1, 1)) // anchored below it: loss
+	mustAppend(t, s, sourced("sess", 3, wsaudit.KindToolCall))
+	key := sourced("sess", 0, wsaudit.KindSystem)
+	key.id = wsaudit.SourceID{Source: "holder:1", Key: "end.3"}
+	mustAppend(t, s, key) // a synthesized record is never covered
+	flush(t, s)
+	want := "[holder:1/s1#0 holder:1/s2#0 holder:1/t2.1#0 holder:1/t2.2#0 holder:1/s3#0 holder:1/kend.3#0]"
+	if got := fmt.Sprint(retainedIDs(t, s, "sess")); got != want {
+		t.Fatalf("retained = %s", got)
+	}
+	if n := lossCount(t, s, "sess"); n != 1 {
+		t.Fatalf("loss = %d", n)
+	}
+	_ = s.Close()
+	s2, _ := openTest(t, root, nil)
+	loaded(t, s2, "sess")
+	if rec := s2.Recover("sess", "holder:1"); rec != (wsaudit.Recovery{MaxSeq: 6, Boundary: 2}) {
+		t.Fatalf("recovered %+v", rec)
+	}
+	if got := fmt.Sprint(retainedIDs(t, s2, "sess")); got != want || lossCount(t, s2, "sess") != 1 {
+		t.Fatalf("recovered retained = %s", got)
+	}
+}
+
+// TestStoreRecordLossAndBoundaryPersistWithoutALaterRecord pins that capture's
+// RecordLoss and Finalize reach disk once the writer idles, with no further
+// record to carry them, and survive a restart.
+func TestStoreRecordLossAndBoundaryPersistWithoutALaterRecord(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	ctx := context.Background()
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	lost := wsaudit.SourceID{Source: "holder:1", Seq: 2}
+	if err := s.RecordLoss(ctx, "sess", lost, wsaudit.LossDropped); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finalize(ctx, "sess", "holder:1", 2); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	flush(t, s) // the writer idled in between
+	raw, err := os.ReadFile(filepath.Join(root, "sess", segmentName(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"t":"loss"`)) || !bytes.Contains(raw, []byte(`"reason":"dropped"`)) || !bytes.Contains(raw, []byte(`"t":"fin"`)) {
+		t.Fatalf("control lines not on disk:\n%s", raw)
+	}
+	_ = s.Close()
+	s3, _ := openTest(t, root, nil)
+	loaded(t, s3, "sess")
+	if rec := s3.Recover("sess", "holder:1"); rec.Boundary != 2 || lossCount(t, s3, "sess") != 1 {
+		t.Fatalf("recovered %+v", rec)
+	}
+	mustAppend(t, s3, sourced("sess", 2, wsaudit.KindToolCall)) // replayed: already lost
+	flush(t, s3)
+	if got := fmt.Sprint(sourceSeqs(t, s3, "sess")); got != "[1]" {
+		t.Fatalf("source identities = %s", got)
+	}
+}
+
+// TestStoreRecoveryAnswersNeverWaitOnAWrite pins the SourcedSink contract:
+// Recover, Retained and AppendSourced return while the writer is stuck in a
+// disk write of the same ring.
+func TestStoreRecoveryAnswersNeverWaitOnAWrite(t *testing.T) {
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	s, _ := openTest(t, t.TempDir(), nil)
+	mustAppend(t, s, sourced("sess", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	s.Close()
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return orig(f, b)
+	}
+	root := s.opts.Root
+	s2, _ := openTest(t, root, nil)
+	defer close(release)
+	loaded(t, s2, "sess")
+	mustAppend(t, s2, sourced("sess", 2, wsaudit.KindToolCall))
+	<-entered
+	done := make(chan wsaudit.Recovery, 1)
+	go func() {
+		_ = s2.AppendSourced(context.Background(), wsaudit.SourceID{Source: "holder:1", Seq: 3}, sourced("sess", 3, wsaudit.KindToolCall).Envelope)
+		if !s2.Retained("sess", wsaudit.SourceID{Source: "holder:1", Seq: 1}) {
+			t.Error("retained identity not reported")
+		}
+		done <- s2.Recover("sess", "holder:1")
+	}()
+	select {
+	case rec := <-done:
+		if rec.MaxSeq != 1 {
+			t.Fatalf("recovery during a write = %+v", rec)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery questions waited on the writer's disk write")
 	}
 }
 
@@ -282,7 +461,7 @@ func TestStoreRecoversIndependentRingsModesAndHeldHandle(t *testing.T) {
 	if got := len(events(t, s2, "alpha")); got != 1+n {
 		t.Fatalf("alpha recovered %d events", got)
 	}
-	if got := fmt.Sprint(sourceSeqs(events(t, s2, "beta"))); got != "[1]" {
+	if got := fmt.Sprint(sourceSeqs(t, s2, "beta")); got != "[1]" {
 		t.Fatalf("beta = %s", got)
 	}
 	if runtime.GOOS == "windows" {
@@ -315,7 +494,7 @@ func TestStoreTornTailIsTrimmed(t *testing.T) {
 	flush(t, s2)
 	_ = s2.Close()
 	s3, _ := openTest(t, root, nil)
-	if got := fmt.Sprint(sourceSeqs(events(t, s3, "sess"))); got != "[1 2]" {
+	if got := fmt.Sprint(sourceSeqs(t, s3, "sess")); got != "[1 2]" {
 		t.Fatalf("recovered %s", got)
 	}
 }
@@ -335,7 +514,7 @@ func TestStoreSlowOrFailingWriterNeverDelaysProducer(t *testing.T) {
 	start := time.Now()
 	var full int
 	for seq := uint64(1); seq <= 200; seq++ {
-		if err := s.Append(context.Background(), sourced("sess", seq, wsaudit.KindToolCall)); errors.Is(err, ErrQueueFull) {
+		if err := s.Append(context.Background(), sourced("sess", seq, wsaudit.KindToolCall).Envelope); errors.Is(err, ErrQueueFull) {
 			full++
 		}
 	}
@@ -353,7 +532,7 @@ func TestStoreSlowOrFailingWriterNeverDelaysProducer(t *testing.T) {
 	s2, log2 := openTest(t, t.TempDir(), nil)
 	start = time.Now()
 	for seq := uint64(1); seq <= 20; seq++ {
-		if err := s2.Append(context.Background(), sourced("sess", seq, wsaudit.KindToolCall)); err != nil {
+		if err := s2.Append(context.Background(), sourced("sess", seq, wsaudit.KindToolCall).Envelope); err != nil {
 			t.Fatalf("append returned %v", err)
 		}
 	}

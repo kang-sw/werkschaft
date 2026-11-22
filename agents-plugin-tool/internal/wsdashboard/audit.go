@@ -59,7 +59,7 @@ func (d *Daemon) openAudit(logw io.Writer) {
 
 // AuditSink is the daemon's audit store for capture, or nil when it is
 // unavailable.
-func (d *Daemon) AuditSink() wsaudit.RecoverableSink {
+func (d *Daemon) AuditSink() wsaudit.SourcedSink {
 	if d.audit == nil {
 		return nil
 	}
@@ -87,7 +87,8 @@ func (d *Daemon) auditRegistryLastSeen(session string) (time.Time, bool) {
 }
 
 // auditSessionSeen records a session's registry last-seen time the first
-// time this daemon run sees it.
+// time this daemon run sees it, and queues loading its ring (if it has one) so
+// a capture that reattaches finds its recovery state in memory.
 func (d *Daemon) auditSessionSeen(reg Registration) {
 	if d.audit == nil || reg.ReplyID == "" {
 		return
@@ -98,6 +99,7 @@ func (d *Daemon) auditSessionSeen(reg Registration) {
 	d.audit.mu.Unlock()
 	if first {
 		d.audit.store.Touch(reg.ReplyID, reg.LastSeen())
+		d.audit.store.Preload(reg.ReplyID)
 	}
 }
 

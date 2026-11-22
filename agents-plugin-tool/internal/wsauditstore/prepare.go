@@ -28,7 +28,7 @@ func prepare(ev wsaudit.Envelope, lim Limits) (wsaudit.Envelope, error) {
 	if ev.V == 0 {
 		ev.V = wsaudit.SchemaVersion
 	}
-	wsaudit.NormalizeIDs(&ev)
+	normalizeIDs(&ev)
 	ev.Redactions = nil
 	ev.StoredTrunc = nil
 	var seen wsaudit.SeenBounds
@@ -96,7 +96,7 @@ func prepareBody(field, body string, seen *int, capBytes int64, reds []wsaudit.R
 // its longest head and tail whose encoded lengths fit each half of the cap,
 // cut on rune boundaries.
 func capBody(body string, capBytes int64) (string, *wsaudit.BodyTrunc) {
-	if int64(wsaudit.EncodedLen(body)) <= capBytes {
+	if int64(encodedLen(body)) <= capBytes {
 		return body, nil
 	}
 	headShare := int(capBytes / 2)
@@ -104,7 +104,7 @@ func capBody(body string, capBytes int64) (string, *wsaudit.BodyTrunc) {
 	head := 0
 	used := 0
 	for head < len(body) {
-		w, size := wsaudit.EncodedRuneLen(body[head:])
+		w, size := encodedRuneLen(body[head:])
 		if used+w > headShare {
 			break
 		}
@@ -115,14 +115,14 @@ func capBody(body string, capBytes int64) (string, *wsaudit.BodyTrunc) {
 	used = 0
 	for tail > head {
 		_, size := utf8.DecodeLastRuneInString(body[:tail])
-		w, _ := wsaudit.EncodedRuneLen(body[tail-size:])
+		w, _ := encodedRuneLen(body[tail-size:])
 		if used+w > tailShare {
 			break
 		}
 		used += w
 		tail -= size
 	}
-	for tail < len(body) && wsaudit.EncodedLen(body[tail:]) > tailShare {
+	for tail < len(body) && encodedLen(body[tail:]) > tailShare {
 		_, size := utf8.DecodeRuneInString(body[tail:])
 		tail += size
 	}

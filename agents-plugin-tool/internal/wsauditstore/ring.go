@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
@@ -50,18 +51,20 @@ type line struct {
 	// Header ("h"): the format version, the session, and the recovery state
 	// as of the segment's creation, so the oldest retained segment alone
 	// seeds recovery after older ones were dropped.
-	V       int               `json:"v,omitempty"`
-	Session string            `json:"session,omitempty"`
-	State   *headerState      `json:"state,omitempty"`
-	Event   *wsaudit.Envelope `json:"e,omitempty"`
-	// Loss ("loss"): a source record finalized without being retained.
-	Lost *wsaudit.SourceID `json:"lost,omitempty"`
-	// Boundary ("fin"): a source's finalized boundary advanced past its last
-	// retained record.
+	V       int          `json:"v,omitempty"`
+	Session string       `json:"session,omitempty"`
+	State   *headerState `json:"state,omitempty"`
+	// Event ("e"): a retained envelope and, when it has one, its source
+	// identity.
+	Event *wsaudit.Envelope `json:"e,omitempty"`
+	ID    *wsaudit.SourceID `json:"id,omitempty"`
+	// Loss ("loss"): the source record ID finalized without being retained,
+	// and why.
+	Reason string `json:"reason,omitempty"`
+	// Boundary ("fin"): a source's finalized boundary (Recovery.Boundary).
 	Source string `json:"src,omitempty"`
 	Seq    uint64 `json:"seq,omitempty"`
-	// Seen ("seen"): a lifecycle last-seen time.
-	At string `json:"at,omitempty"`
+	At     string `json:"at,omitempty"`
 }
 
 const (
@@ -72,7 +75,10 @@ const (
 )
 
 type headerState struct {
-	wsaudit.Recovery
+	MaxSeq     uint64            `json:"max_seq,omitempty"`
+	Boundaries map[string]uint64 `json:"boundaries,omitempty"`
+	Loss       uint64            `json:"loss,omitempty"`
+	// Lost lists the lost identities the boundaries do not already cover.
 	Lost     []wsaudit.SourceID `json:"lost,omitempty"`
 	LastSeen string             `json:"last_seen,omitempty"`
 }
@@ -83,14 +89,57 @@ type segment struct {
 	events int // retained events that live in this segment
 }
 
-type sourceState struct {
-	last     wsaudit.SourceID
-	hasLast  bool
-	boundary uint64
+// ledger is a ring's source-identity state: what capture's recovery
+// questions (wsaudit.SourcedSink Recover and Retained) are answered from. The
+// writer goroutine is its only mutator and takes mu for each in-memory
+// change; readers take mu alone, so they never wait on the writer's disk I/O.
+type ledger struct {
+	mu       sync.Mutex
+	maxSeq   uint64
+	bounds   map[string]uint64 // per-source finalized boundary
+	retained map[wsaudit.SourceID]struct{}
+	lost     map[wsaudit.SourceID]struct{}
+	loss     uint64
+}
+
+func newLedger() *ledger {
+	return &ledger{
+		bounds:   map[string]uint64{},
+		retained: map[wsaudit.SourceID]struct{}{},
+		lost:     map[wsaudit.SourceID]struct{}{},
+	}
+}
+
+// covered reports whether id is at or below its source's finalized boundary
+// b: a sequenced record at or below b, or a tee record anchored below b (a
+// tee line sits after its anchor). A daemon-synthesized (Key) record is never
+// covered.
+func covered(id wsaudit.SourceID, b uint64) bool {
+	if b == 0 || id.Key != "" {
+		return false
+	}
+	if id.Tee {
+		return id.Anchor < b
+	}
+	return id.Seq <= b
+}
+
+func (l *ledger) recovery(source string) wsaudit.Recovery {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return wsaudit.Recovery{MaxSeq: l.maxSeq, Boundary: l.bounds[source]}
+}
+
+func (l *ledger) isRetained(id wsaudit.SourceID) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.retained[id]
+	return ok
 }
 
 // ring is one session's audit segment ring with its in-memory index. The
-// store's writer goroutine is its only mutator; reads take mu.
+// store's writer goroutine is its only mutator; reads take the session's mu
+// (events) or the ledger's mu (identities).
 type ring struct {
 	session string
 	dir     string
@@ -100,25 +149,19 @@ type ring struct {
 	forceRotate bool
 	readOnly    error
 
-	events   []wsaudit.Envelope
-	maxSeq   uint64
-	sources  map[string]*sourceState
-	retained map[wsaudit.SourceID]struct{}
-	lost     map[wsaudit.SourceID]struct{}
-	loss     uint64
-	pending  [][]byte // control lines written ahead of the next record
-	lastSeen time.Time
-	bytes    int64
+	events []wsaudit.Envelope
+	ids    []*wsaudit.SourceID // parallel to events; nil for an unsourced event
+	led    *ledger
+	// Control lines written ahead of the next record, or when the writer
+	// idles: loss lines in order, and the latest boundary per source.
+	pendingLoss [][]byte
+	pendingFin  map[string]uint64
+	lastSeen    time.Time
+	bytes       int64
 }
 
 func newRing(session, dir string) *ring {
-	return &ring{
-		session:  session,
-		dir:      dir,
-		sources:  map[string]*sourceState{},
-		retained: map[wsaudit.SourceID]struct{}{},
-		lost:     map[wsaudit.SourceID]struct{}{},
-	}
+	return &ring{session: session, dir: dir, led: newLedger(), pendingFin: map[string]uint64{}}
 }
 
 // listSegments returns the ring's segment sequence numbers and sizes in
@@ -245,14 +288,17 @@ func (r *ring) replaySegment(seg *segment, raw []byte, oldest bool) (good int, n
 
 // seed starts recovery from the oldest retained segment's header state.
 func (r *ring) seed(st *headerState) {
-	r.maxSeq = max(r.maxSeq, st.MaxSeq)
-	r.loss = max(r.loss, st.Loss)
-	for src, s := range st.Sources {
-		r.sources[src] = &sourceState{last: s.Last, hasLast: s.Last != (wsaudit.SourceID{}), boundary: s.Boundary}
+	l := r.led
+	l.mu.Lock()
+	l.maxSeq = max(l.maxSeq, st.MaxSeq)
+	l.loss = max(l.loss, st.Loss)
+	for src, b := range st.Boundaries {
+		l.bounds[src] = max(l.bounds[src], b)
 	}
 	for _, id := range st.Lost {
-		r.lost[id] = struct{}{}
+		l.lost[id] = struct{}{}
 	}
+	l.mu.Unlock()
 	if t, err := time.Parse(time.RFC3339Nano, st.LastSeen); err == nil && t.After(r.lastSeen) {
 		r.lastSeen = t
 	}
@@ -264,58 +310,70 @@ func (r *ring) apply(ln line, seg *segment) {
 		if ln.Event == nil {
 			return
 		}
-		r.index(*ln.Event)
+		r.index(*ln.Event, ln.ID)
 		if seg != nil {
 			seg.events++
 		}
 	case lineLoss:
-		if ln.Lost != nil {
-			r.markLost(*ln.Lost)
+		if ln.ID != nil {
+			r.markLost(*ln.ID)
 		}
 	case lineFin:
-		r.source(ln.Source).boundary = max(r.source(ln.Source).boundary, ln.Seq)
+		r.finalize(ln.Source, ln.Seq)
 	}
 	if t, err := time.Parse(time.RFC3339Nano, ln.At); err == nil && t.After(r.lastSeen) {
 		r.lastSeen = t
 	}
 }
 
-func (r *ring) source(name string) *sourceState {
-	s := r.sources[name]
-	if s == nil {
-		s = &sourceState{}
-		r.sources[name] = s
-	}
-	return s
-}
-
-// index adds a retained event to the in-memory index.
-func (r *ring) index(ev wsaudit.Envelope) {
+// index adds a retained event, under its source identity when it has one,
+// to the in-memory index.
+func (r *ring) index(ev wsaudit.Envelope, id *wsaudit.SourceID) {
 	r.events = append(r.events, ev)
-	r.maxSeq = max(r.maxSeq, ev.Seq)
+	r.ids = append(r.ids, id)
 	if ev.At.After(r.lastSeen) {
 		r.lastSeen = ev.At
 	}
-	if ev.Source != nil {
-		id := *ev.Source
-		s := r.source(id.Source)
-		if !s.hasLast || id.Compare(s.last) > 0 {
-			s.last, s.hasLast = id, true
-		}
-		s.boundary = max(s.boundary, id.Seq)
-		r.retained[id] = struct{}{}
-		delete(r.lost, id)
+	l := r.led
+	l.mu.Lock()
+	l.maxSeq = max(l.maxSeq, ev.Seq)
+	if id != nil {
+		l.retained[*id] = struct{}{}
+		delete(l.lost, *id)
 	}
+	l.mu.Unlock()
 }
 
-func (r *ring) markLost(id wsaudit.SourceID) {
-	if _, ok := r.lost[id]; ok {
-		return
+// markLost records a source identity finalized without being retained. It
+// reports whether the identity was new.
+func (r *ring) markLost(id wsaudit.SourceID) bool {
+	l := r.led
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, ok := l.lost[id]; ok {
+		return false
 	}
-	r.lost[id] = struct{}{}
-	r.loss++
-	s := r.source(id.Source)
-	s.boundary = max(s.boundary, id.Seq)
+	if _, ok := l.retained[id]; ok {
+		return false
+	}
+	l.lost[id] = struct{}{}
+	l.loss++
+	return true
+}
+
+// finalize advances a source's finalized boundary, reporting whether it
+// moved. Only capture's Finalize (and its persisted fin line) moves it: a
+// retained or lost record does not, so a tee record anchored on the last
+// kept line stays admissible until capture finalizes past it.
+func (r *ring) finalize(source string, b uint64) bool {
+	l := r.led
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b <= l.bounds[source] {
+		return false
+	}
+	l.bounds[source] = b
+	return true
 }
 
 // Verdicts of admit.
@@ -326,56 +384,71 @@ const (
 )
 
 // admit decides an incoming envelope's fate by its source identity: an
-// identity at or below the source's last retained one is a duplicate (or a
-// known loss); one at or below the finalized boundary without a retained
-// identity is a loss, never appended late.
+// identity already retained or already recorded lost is a duplicate; one
+// covered by its source's finalized boundary is a loss, never appended late
+// (the same rule capture applies to its recovered boundary, so an early,
+// incomplete recovery answer cannot cause a duplicate or a late append).
 func (r *ring) admit(id *wsaudit.SourceID) int {
 	if id == nil {
 		return admitAppend
 	}
-	if _, ok := r.retained[*id]; ok {
+	l := r.led
+	if _, ok := l.retained[*id]; ok {
 		return admitDuplicate
 	}
-	if _, ok := r.lost[*id]; ok {
+	if _, ok := l.lost[*id]; ok {
 		return admitDuplicate
 	}
-	s := r.sources[id.Source]
-	if s == nil {
-		return admitAppend
-	}
-	if s.hasLast && id.Compare(s.last) <= 0 {
-		return admitDuplicate
-	}
-	if id.Seq <= s.boundary {
+	if covered(*id, l.bounds[id.Source]) {
 		return admitLoss
 	}
 	return admitAppend
 }
 
-func (r *ring) recovery() wsaudit.Recovery {
-	rec := wsaudit.Recovery{MaxSeq: r.maxSeq, Loss: r.loss}
-	if len(r.sources) > 0 {
-		rec.Sources = make(map[string]wsaudit.SourceState, len(r.sources))
-		for name, s := range r.sources {
-			rec.Sources[name] = wsaudit.SourceState{Last: s.last, Boundary: s.boundary}
+// pendingLines is the ring's queued control lines: losses in order, then each
+// source's latest boundary.
+func (r *ring) pendingLines() []byte {
+	var out []byte
+	for _, ln := range r.pendingLoss {
+		out = append(out, ln...)
+	}
+	if len(r.pendingFin) > 0 {
+		srcs := make([]string, 0, len(r.pendingFin))
+		for src := range r.pendingFin {
+			srcs = append(srcs, src)
+		}
+		sort.Strings(srcs)
+		for _, src := range srcs {
+			if ln, err := encodeLine(line{T: lineFin, Source: src, Seq: r.pendingFin[src]}); err == nil {
+				out = append(out, ln...)
+			}
 		}
 	}
-	return rec
+	return out
+}
+
+func (r *ring) clearPending() {
+	r.pendingLoss = nil
+	clear(r.pendingFin)
 }
 
 func (r *ring) headerLine() ([]byte, error) {
-	st := headerState{Recovery: r.recovery()}
-	for id := range r.lost {
-		if s := r.sources[id.Source]; s == nil || !s.hasLast || id.Compare(s.last) > 0 {
+	l := r.led
+	l.mu.Lock()
+	st := headerState{MaxSeq: l.maxSeq, Loss: l.loss}
+	if len(l.bounds) > 0 {
+		st.Boundaries = make(map[string]uint64, len(l.bounds))
+		for src, b := range l.bounds {
+			st.Boundaries[src] = b
+		}
+	}
+	for id := range l.lost {
+		if !covered(id, l.bounds[id.Source]) {
 			st.Lost = append(st.Lost, id)
 		}
 	}
-	sort.Slice(st.Lost, func(i, j int) bool {
-		if st.Lost[i].Source != st.Lost[j].Source {
-			return st.Lost[i].Source < st.Lost[j].Source
-		}
-		return st.Lost[i].Compare(st.Lost[j]) < 0
-	})
+	l.mu.Unlock()
+	sort.Slice(st.Lost, func(i, j int) bool { return st.Lost[i].String() < st.Lost[j].String() })
 	if !r.lastSeen.IsZero() {
 		st.LastSeen = r.lastSeen.UTC().Format(time.RFC3339Nano)
 	}
@@ -450,12 +523,15 @@ func (r *ring) dropOldest() int64 {
 	_ = removeFile(filepath.Join(r.dir, segmentName(seg.seq)))
 	r.segs = r.segs[1:]
 	r.bytes -= seg.size
-	for _, ev := range r.events[:seg.events] {
-		if ev.Source != nil {
-			delete(r.retained, *ev.Source)
+	r.led.mu.Lock()
+	for _, id := range r.ids[:seg.events] {
+		if id != nil {
+			delete(r.led.retained, *id)
 		}
 	}
+	r.led.mu.Unlock()
 	r.events = append([]wsaudit.Envelope(nil), r.events[seg.events:]...)
+	r.ids = append([]*wsaudit.SourceID(nil), r.ids[seg.events:]...)
 	return seg.size
 }
 
