@@ -1,0 +1,471 @@
+package execjob
+
+import (
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	goruntime "runtime"
+
+	"github.com/kang-sw/devenv/internal/wsgit"
+)
+
+// readonly_policy.go is the command policy of a read-only worker's exec
+// launches (261123-bug-ws-exec-cutover-worker-authority). The worker may
+// launch only a command made of allowlisted read programs. The gate parses
+// the line into words without running it, resolves each program against the
+// launch's PATH, and launches a line re-serialized from the checked words
+// (every word single-quoted) under an allowlisted environment, so what is
+// checked is exactly what runs. Anything not provably read-only is refused.
+
+// ErrReadOnlyLaunch is the refusal of a read-only worker's launch.
+type ErrReadOnlyLaunch struct{ Reason string }
+
+func (e *ErrReadOnlyLaunch) Error() string {
+	return "permission denied: a read-only worker's exec launches are limited to read commands (" + e.Reason + "). Do the read-only part of the task and put the change you would make in your report."
+}
+
+func refuse(format string, a ...any) error {
+	return &ErrReadOnlyLaunch{Reason: fmt.Sprintf(format, a...)}
+}
+
+// readOnlyPrograms are the bare program names a read-only launch may run.
+var readOnlyPrograms = map[string]bool{
+	"git": true, "ls": true, "cat": true, "head": true, "tail": true, "wc": true, "grep": true, "rg": true,
+	"cut": true, "tr": true, "nl": true, "diff": true, "cmp": true, "comm": true, "stat": true, "file": true,
+	"pwd": true, "echo": true, "basename": true, "dirname": true, "realpath": true, "du": true, "tree": true,
+	"which": true, "jq": true, "find": true, "sort": true, "uniq": true, "sed": true,
+}
+
+var readOnlyGitSubcommands = map[string]bool{
+	"status": true, "log": true, "show": true, "diff": true, "blame": true, "grep": true, "ls-files": true,
+	"ls-tree": true, "rev-parse": true, "rev-list": true, "merge-base": true, "cat-file": true, "describe": true,
+	"shortlog": true, "for-each-ref": true, "name-rev": true,
+}
+
+// gitRefusedOptions are long options that write a file or run a helper;
+// git accepts any unambiguous prefix of a long option, so a prefix of one
+// of these names (or an extension of one) is refused as well.
+var gitRefusedOptions = []string{"output", "ext-diff", "open-files-in-pager", "textconv", "filters"}
+
+var readOnlySedScript = regexp.MustCompile(`^(\d+|\$)(,(\d+|\$))?p$`)
+
+// checkReadOnlyArgv refuses argv (argv[0] a bare program name) unless it is
+// an allowlisted read command with no option that writes or runs a program.
+func checkReadOnlyArgv(argv []string) error {
+	if len(argv) == 0 || argv[0] == "" {
+		return refuse("no program")
+	}
+	name, args := argv[0], argv[1:]
+	if strings.ContainsAny(name, `/\`) {
+		return refuse("program %q: the program must be a bare name, not a path", name)
+	}
+	if !readOnlyPrograms[name] {
+		return refuse("program %q is not an allowed read command", name)
+	}
+	switch name {
+	case "git":
+		return checkGit(args)
+	case "find":
+		for _, a := range args {
+			switch {
+			case a == "-exec" || a == "-execdir" || a == "-ok" || a == "-okdir" || a == "-delete", strings.HasPrefix(a, "-fprint"), a == "-fls":
+				return refuse("find %s writes files or runs programs", a)
+			}
+		}
+	case "sort":
+		for _, a := range args {
+			if shortHas(a, "oT") || longMatches(a, "output", "compress-program", "temporary-directory") {
+				return refuse("sort %s writes files or runs programs", a)
+			}
+		}
+	case "uniq":
+		operands := 0
+		dashdash := false
+		for _, a := range args {
+			if !dashdash && a == "--" {
+				dashdash = true
+			} else if dashdash || a == "-" || !strings.HasPrefix(a, "-") {
+				operands++
+			}
+		}
+		if operands > 1 {
+			return refuse("uniq takes at most one operand (the second names an output file)")
+		}
+	case "sed":
+		if len(args) < 2 || args[0] != "-n" || !readOnlySedScript.MatchString(args[1]) {
+			return refuse("sed is limited to -n with a line-address print script such as '10,40p'")
+		}
+		for _, a := range args[2:] {
+			if strings.HasPrefix(a, "-") && a != "-" {
+				return refuse("sed option %s", a)
+			}
+		}
+	case "tree":
+		for _, a := range args {
+			if shortHas(a, "o") || longMatches(a, "output") {
+				return refuse("tree %s writes a file", a)
+			}
+		}
+	case "file":
+		for _, a := range args {
+			if shortHas(a, "C") || longMatches(a, "compile") {
+				return refuse("file %s writes a file", a)
+			}
+		}
+	case "rg":
+		for _, a := range args {
+			if shortHas(a, "z") || longExact(a, "pre", "pre-glob", "search-zip") {
+				return refuse("rg %s runs a program", a)
+			}
+		}
+	}
+	return nil
+}
+
+// shortHas reports whether a is a short-option cluster (-abc) naming any of
+// the letters.
+func shortHas(a, letters string) bool {
+	return len(a) > 1 && a[0] == '-' && a[1] != '-' && strings.ContainsAny(a[1:], letters)
+}
+
+// longName is the option name of a long option argument ("--out=x" ->
+// "out"), "" when a is not one.
+func longName(a string) string {
+	if len(a) < 3 || !strings.HasPrefix(a, "--") {
+		return ""
+	}
+	name, _, _ := strings.Cut(a[2:], "=")
+	return name
+}
+
+// longExact reports whether a is exactly one of the long options.
+func longExact(a string, names ...string) bool {
+	n := longName(a)
+	for _, want := range names {
+		if n == want {
+			return true
+		}
+	}
+	return false
+}
+
+// longMatches reports whether a is, or abbreviates, or extends one of the
+// long options.
+func longMatches(a string, names ...string) bool {
+	n := longName(a)
+	if n == "" {
+		return false
+	}
+	for _, want := range names {
+		if strings.HasPrefix(want, n) || strings.HasPrefix(n, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkGit(args []string) error {
+	i := 0
+	for i < len(args) && (args[i] == "--no-pager" || args[i] == "--no-optional-locks") {
+		i++
+	}
+	if i >= len(args) {
+		return refuse("git needs a read subcommand")
+	}
+	sub := args[i]
+	if !readOnlyGitSubcommands[sub] {
+		return refuse("git %q is not an allowed read subcommand (global options such as -c are refused)", sub)
+	}
+	for _, a := range args[i+1:] {
+		if strings.HasPrefix(a, "-O") || longMatches(a, gitRefusedOptions...) {
+			return refuse("git %s %s writes a file or runs a program", sub, a)
+		}
+	}
+	return nil
+}
+
+// word is one parsed shell word: its literal text.
+type word struct {
+	text string
+}
+
+// parseReadOnlyLine parses line into pipeline segments of words and
+// redirects, refusing everything outside the allowed shell subset. Nothing
+// runs and nothing is read.
+func parseReadOnlyLine(line string) ([]segment, error) {
+	var segs []segment
+	var cur segment
+	var buf strings.Builder
+	var inWord, hasUnquotedMeta bool
+	start := true // at the start of a word position, for ~ and #
+	flush := func() error {
+		if !inWord {
+			return nil
+		}
+		text := buf.String()
+		inWord = false
+		meta := hasUnquotedMeta
+		buf.Reset()
+		hasUnquotedMeta = false
+		if meta {
+			switch text {
+			case "2>&1", ">/dev/null", "2>/dev/null":
+				if len(cur.words) == 0 {
+					return refuse("a redirect cannot start a command")
+				}
+				cur.redirects = append(cur.redirects, text)
+				return nil
+			}
+			return refuse("redirection or control operator in %q (only 2>&1, >/dev/null and 2>/dev/null are allowed)", text)
+		}
+		cur.words = append(cur.words, word{text: text})
+		return nil
+	}
+	begin := func() { inWord = true }
+	rs := []rune(line)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch r {
+		case ' ', '\t':
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			start = true
+			continue
+		case '\n', '\r':
+			return nil, refuse("newline or command list")
+		case ';':
+			return nil, refuse("command list operator ;")
+		case '(', ')':
+			return nil, refuse("subshell or substitution %c", r)
+		case '`':
+			return nil, refuse("command substitution `")
+		case '<':
+			return nil, refuse("input redirection, here-doc or process substitution <")
+		case '|':
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			if i+1 < len(rs) && (rs[i+1] == '|' || rs[i+1] == '&') {
+				return nil, refuse("control operator %c%c", r, rs[i+1])
+			}
+			if len(cur.words) == 0 {
+				return nil, refuse("empty pipeline segment")
+			}
+			segs = append(segs, cur)
+			cur = segment{}
+			start = true
+			continue
+		case '{', '}':
+			return nil, refuse("brace expansion or group %c (quote it to pass it literally)", r)
+		case '*', '?', '[':
+			return nil, refuse("unquoted glob character %c (quote the pattern, e.g. find . -name '*.go')", r)
+		case '$':
+			return nil, refuse("unquoted $ (variable, arithmetic or command substitution)")
+		case '~':
+			if start {
+				return nil, refuse("unquoted word starting with ~")
+			}
+		case '#':
+			if start {
+				return nil, refuse("unquoted # (a comment)")
+			}
+		case '&', '>':
+			begin()
+			hasUnquotedMeta = true
+			buf.WriteRune(r)
+			start = false
+			continue
+		case '\'':
+			begin()
+			i++
+			for i < len(rs) && rs[i] != '\'' {
+				buf.WriteRune(rs[i])
+				i++
+			}
+			if i >= len(rs) {
+				return nil, refuse("unterminated single quote")
+			}
+			start = false
+			continue
+		case '"':
+			begin()
+			i++
+			closed := false
+			for ; i < len(rs); i++ {
+				c := rs[i]
+				if c == '"' {
+					closed = true
+					break
+				}
+				if c == '$' || c == '`' {
+					return nil, refuse("$ or backtick inside double quotes (use single quotes)")
+				}
+				if c == '\\' && i+1 < len(rs) {
+					if n := rs[i+1]; n == '"' || n == '\\' {
+						buf.WriteRune(n)
+						i++
+						continue
+					} else if n == '\n' {
+						return nil, refuse("newline")
+					}
+				}
+				buf.WriteRune(c)
+			}
+			if !closed {
+				return nil, refuse("unterminated double quote")
+			}
+			start = false
+			continue
+		case '\\':
+			if i+1 >= len(rs) {
+				return nil, refuse("trailing backslash")
+			}
+			i++
+			if rs[i] == '\n' || rs[i] == '\r' {
+				return nil, refuse("newline")
+			}
+			begin()
+			buf.WriteRune(rs[i])
+			start = false
+			continue
+		}
+		begin()
+		buf.WriteRune(r)
+		start = false
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	if len(cur.words) == 0 {
+		return nil, refuse("empty pipeline segment")
+	}
+	segs = append(segs, cur)
+	return segs, nil
+}
+
+type segment struct {
+	words     []word
+	redirects []string
+}
+
+var assignmentWord = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+// readOnlyEnvironment is environ cut to the allowlisted names plus the
+// settings that keep a read from writing or paging.
+func readOnlyEnvironment(environ []string) []string {
+	win := goruntime.GOOS == "windows"
+	allowed := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "LANG": true, "TERM": true, "TMPDIR": true, "TZ": true}
+	if win {
+		for _, n := range []string{"SystemRoot", "SystemDrive", "windir", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "ComSpec", "PATHEXT", "HOMEDRIVE", "HOMEPATH"} {
+			allowed[n] = true
+		}
+	}
+	var out []string
+	for _, kv := range environ {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok || name == "" {
+			continue
+		}
+		key := name
+		if win {
+			for n := range allowed {
+				if strings.EqualFold(n, name) {
+					key = n
+				}
+			}
+		}
+		if allowed[key] || strings.HasPrefix(name, "LC_") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "PAGER=cat")
+}
+
+// resolveReadOnly resolves bare name on environ's PATH to the absolute path
+// the launch runs.
+func resolveReadOnly(name string, environ []string) (string, error) {
+	bin, err := wsgit.LookPathEnv(name, environ)
+	if err != nil {
+		return "", refuse("%s is not on the job's PATH", name)
+	}
+	return bin, nil
+}
+
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// ReadOnlyShellLaunch is ShellLaunch for a read-only worker: the line is
+// parsed and checked, and the launched line is re-serialized from the
+// checked words. An environment override is refused.
+func ReadOnlyShellLaunch(owner, tool, root, cwdArg, line string, environ []string, overlay map[string]string) (HostedLaunch, error) {
+	if len(overlay) > 0 {
+		return HostedLaunch{}, refuse("an environment override (env) can run programs")
+	}
+	cwd, err := ResolveWorkingDir(root, cwdArg)
+	if err != nil {
+		return HostedLaunch{}, err
+	}
+	if strings.TrimSpace(line) == "" {
+		return HostedLaunch{}, fmt.Errorf("%s: cmd is required", tool)
+	}
+	segs, err := parseReadOnlyLine(line)
+	if err != nil {
+		return HostedLaunch{}, err
+	}
+	env := readOnlyEnvironment(environ)
+	parts := make([]string, 0, len(segs))
+	for _, seg := range segs {
+		argv := make([]string, len(seg.words))
+		for i, w := range seg.words {
+			argv[i] = w.text
+		}
+		if assignmentWord.MatchString(argv[0]) {
+			return HostedLaunch{}, refuse("variable assignment before the command: %q", argv[0])
+		}
+		if err := checkReadOnlyArgv(argv); err != nil {
+			return HostedLaunch{}, err
+		}
+		bin, err := resolveReadOnly(argv[0], env)
+		if err != nil {
+			return HostedLaunch{}, err
+		}
+		if goruntime.GOOS == "windows" {
+			bin = filepath.ToSlash(bin)
+		}
+		quoted := make([]string, len(argv))
+		quoted[0] = shQuote(bin)
+		for i := 1; i < len(argv); i++ {
+			quoted[i] = shQuote(argv[i])
+		}
+		parts = append(parts, strings.Join(append(quoted, seg.redirects...), " "))
+	}
+	shellArgv, err := ShellArgv(strings.Join(parts, " | "), env)
+	if err != nil {
+		return HostedLaunch{}, err
+	}
+	if base := strings.ToLower(filepath.Base(shellArgv[0])); strings.HasPrefix(base, "bash") {
+		shellArgv = append([]string{shellArgv[0], "--noprofile", "--norc"}, shellArgv[1:]...)
+	}
+	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, Environ: env, Argv: shellArgv, Display: line, Command: line, Shell: shellArgv[0]}, nil
+}
+
+// ReadOnlyArgvLaunch is the exec.run launch of a read-only worker: argv's
+// program is checked and resolved, and the process starts under the
+// allowlisted environment.
+func ReadOnlyArgvLaunch(owner, tool, root, cwd string, argv []string, environ []string, overlay map[string]string) (HostedLaunch, error) {
+	if len(overlay) > 0 {
+		return HostedLaunch{}, refuse("an environment override (env) can run programs")
+	}
+	if err := checkReadOnlyArgv(argv); err != nil {
+		return HostedLaunch{}, err
+	}
+	env := readOnlyEnvironment(environ)
+	bin, err := resolveReadOnly(argv[0], env)
+	if err != nil {
+		return HostedLaunch{}, err
+	}
+	run := append([]string{bin}, argv[1:]...)
+	return HostedLaunch{Owner: owner, Tool: tool, Root: root, Cwd: cwd, Environ: env, Argv: run}, nil
+}
