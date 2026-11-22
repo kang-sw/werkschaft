@@ -67,6 +67,22 @@ async function openChip(view, id) {
 }
 async function closePeek(page, view) { await page.keyboard.press('Escape'); await view.waitForSelector('.xpeek', { state: 'hidden' }); }
 
+// netLog records the page's own network traffic in the order the browser issued it: one entry per request
+// (method, url, issue index), finished with its status and body, or marked failed. The ordering the page applies
+// (xhStale) is browser issue order, so evidence of which request an answer came from has to come from here.
+function netLog(page, pattern) {
+  const log = [];
+  const find = r => log.find(e => e.req === r);
+  const onReq = r => { if (pattern.test(r.url())) log.push({ i: log.length, req: r, method: r.method(), url: r.url(), done: false, failed: false, status: 0, body: null }); };
+  const onFin = r => { const e = find(r); if (!e) return; e.fin = r.response().then(x => { e.status = x ? x.status() : 0; return x ? x.text() : ''; }).then(t => { e.body = t; e.done = true; }, () => { e.done = true; e.failed = true; }); };
+  const onFail = r => { const e = find(r); if (e) { e.done = true; e.failed = true; } };
+  page.on('request', onReq); page.on('requestfinished', onFin); page.on('requestfailed', onFail);
+  const bodyHas = (e, fn) => { try { return !!e.body && fn(JSON.parse(e.body)); } catch (x) { return false; } };
+  return { log, bodyHas, stop() { page.off('request', onReq); page.off('requestfinished', onFin); page.off('requestfailed', onFail); },
+    async settled(ms) { const gets = () => log.filter(e => e.method === 'GET'); for (let t = 0; t < ms; t += 25) { if (gets().every(e => e.done)) { await Promise.all(gets().map(e => e.fin)); return; } await sleep(25); } assert.fail('list reads still in flight: ' + JSON.stringify(gets().filter(e => !e.done).map(e => e.url))); } };
+}
+const jobsOf = b => (b && Array.isArray(b.jobs)) ? b.jobs : [];
+
 async function run(browser, { lang, scheme }) {
   const T = TEXT[lang], tag = lang + '-' + scheme;
   let st, fi;
@@ -523,18 +539,31 @@ async function run(browser, { lang, scheme }) {
       window.__ns = [];
       new MutationObserver(() => { const c = document.querySelector('.xpeek .xnotice'), v = c ? c.getAttribute('data-ns') : '-'; if (window.__ns[window.__ns.length - 1] !== v) window.__ns.push(v); }).observe(document.querySelector('.xpeek'), { subtree: true, childList: true, attributes: true });
     });
-    // the list taken before the retry (failed) is held at the daemon, with a sibling job only that list carries;
+    // the list taken before the retry (failed) is held at the daemon, with a sibling job only that list carries
+    // (the sibling leaves the live fixture as soon as that list's snapshot is taken, so no later read can show it);
     // the retry's own answer (closed: the agent's session is gone, not an optimistic state) is shown; then the old
     // list is released, and the sibling's chip appearing is the barrier that the old answer has been taken
+    const net = netLog(page, /\/exec\/(jobs$|exec_o1\/stop)/);
     await post('/set', { notice: 'closed', listHold: true });
     await post('/jobs', [stopped('exec_o1', 'deploy --prod', 'failed'), J('exec_o9', 'late sibling', { started_at: Date.now() - 9000 })]);
     await post('/bump');
     await waitStat(s => (s.held.list || 0) >= 1, 3000, 'the list taken before the retry, held');
+    await post('/jobs', [stopped('exec_o1', 'deploy --prod', 'failed')]);
     assert.equal(await view.locator('.xchip[data-xid="exec_o9"]').count(), 0, 'ORDER: the held list is not on the page yet');
     await view.click('.xnotice [data-xact="retry"]');
     await view.waitForSelector('.xpeek .xnotice[data-ns="closed"]', { timeout: 4000 });
     await post('/set', { notice: 'closed' });
     await view.waitForSelector('.xchip[data-xid="exec_o9"]', { state: 'attached', timeout: 6000 });
+    await net.settled(4000);
+    net.stop();
+    // browser-side evidence: the sibling came from one read, the one issued before the retry's request, and that
+    // read finished (it did not time out and get replaced by a fresh one)
+    const carriers = net.log.filter(e => e.method === 'GET' && net.bodyHas(e, b => jobsOf(b).some(j => j.id === 'exec_o9')));
+    const retryReq = net.log.find(e => e.method === 'POST');
+    assert.ok(retryReq, 'ORDER: the retry request was observed: ' + JSON.stringify(net.log.map(e => e.method + ' ' + e.url)));
+    assert.equal(carriers.length, 1, 'ORDER: exactly one read carried the sibling: ' + JSON.stringify(net.log.map(e => [e.i, e.method, e.failed, e.status])));
+    assert.ok(!carriers[0].failed && carriers[0].status === 200, 'ORDER: the held read finished successfully: ' + JSON.stringify([carriers[0].failed, carriers[0].status]));
+    assert.ok(carriers[0].i < retryReq.i, 'ORDER: the held read was issued before the retry request: ' + JSON.stringify([carriers[0].i, retryReq.i]));
     const ns = await view.evaluate(() => window.__ns);
     const firstClosed = ns.indexOf('closed');
     assert.ok(firstClosed >= 0, 'ORDER: the retry shows its answer: ' + JSON.stringify(ns));
@@ -586,6 +615,11 @@ async function run(browser, { lang, scheme }) {
       window.__tn = 0;
       new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.classList && n.classList.contains('xtt-text')) window.__tn++; }))).observe(document.querySelector('.xtoast'), { childList: true });
     });
+    // no list read is in flight when the stop is issued, so every read after it is issued after the stop request
+    const net = netLog(page, /\/exec\/(jobs$|exec_s1\/stop)/);
+    await sleep(400);
+    await net.settled(4000);
+    const before = net.log.length;
     // the stop waits at the daemon, before it takes effect, until the lists are held
     await post('/set', { notice: 'pending', stopBlock: true });
     await view.click('.xpeek [data-xact="stop"]');
@@ -597,6 +631,14 @@ async function run(browser, { lang, scheme }) {
     await setJobs(run3.concat([J('exec_s3', 'worker three', { started_at: Date.now() - 40000 })]));
     await view.waitForSelector('.xchip[data-xid="exec_s3"]', { state: 'attached', timeout: 3000 });
     assert.equal(await view.locator('.xchip[data-xid="exec_s1"] .xnode[data-st="running"], .xchip[data-xid="exec_s1"] .xnode[data-st="stopping"]').count(), 1, 'STOP-TERMINAL: the page holds the running list');
+    // browser-side evidence: that running list (the one carrying s3, s1 still running) was read by a GET issued after
+    // the stop request, and it finished
+    await net.settled(4000);
+    const stopReq = net.log.find(e => e.method === 'POST');
+    assert.ok(stopReq && stopReq.i >= before, 'STOP-TERMINAL: the stop request was observed after the setup reads: ' + JSON.stringify(net.log.map(e => [e.i, e.method])));
+    const runList = net.log.filter(e => e.method === 'GET' && net.bodyHas(e, b => jobsOf(b).some(j => j.id === 'exec_s3') && jobsOf(b).some(j => j.id === 'exec_s1' && j.state === 'running')));
+    assert.ok(runList.length >= 1, 'STOP-TERMINAL: a finished read carried the running list: ' + JSON.stringify(net.log.map(e => [e.i, e.method, e.failed, e.status])));
+    assert.ok(runList.every(e => !e.failed && e.status === 200 && e.i > stopReq.i), 'STOP-TERMINAL: the running list was read after the stop request was issued: ' + JSON.stringify([stopReq.i, runList.map(e => e.i)]));
     // every list is held at the daemon (its snapshot taken, its answer not sent) before the stop is let through
     await post('/set', { notice: 'pending', stopBlock: true, listHold: true });
     await post('/set', { notice: 'pending', listHold: true });
@@ -611,6 +653,7 @@ async function run(browser, { lang, scheme }) {
     await post('/set', { notice: 'sent' });
     await view.waitForFunction(re => new RegExp(re).test(document.querySelector('.xtoast .xtt-text').textContent), T.notified.source, { timeout: 6000 });
     assert.equal(await view.evaluate(() => window.__tn), 1, 'STOP-TERMINAL: the toast appears exactly once');
+    net.stop();
     await closeAny();
   });
 
@@ -632,14 +675,19 @@ async function run(browser, { lang, scheme }) {
       await route.fulfill({ response: r });
       completed++;
     });
+    const net = netLog(page, /\/exec\/jobs$/);
     await setJobs([J('exec_seed', 'seed job')]);
     await view.waitForSelector('.xchip[data-xid="exec_seed"]', { state: 'attached', timeout: 4000 });
-    for (let t = 0; t < 4000 && completed < requested; t += 25) await sleep(25);
-    const c0 = completed;
     await setJobs([]);
     await view.waitForSelector('.xchip[data-xid="exec_seed"]', { state: 'detached', timeout: 4000 });
-    for (let t = 0; t < 4000 && completed < c0 + 1; t += 25) await sleep(25);
-    assert.ok(completed >= c0 + 1, 'LIST-RETRY: the setup revision was read');
+    // the setup revision's own read (the one that emptied the strip) finished; then no read is pending and none
+    // is issued for a while, so no wake of the setup is left to use up a simulated failure
+    let calm = 0;
+    for (let t = 0; t < 6000 && calm < 500; t += 50) { const n = net.log.length; await sleep(50); calm = (net.log.length === n && net.log.every(e => e.done)) ? calm + 50 : 0; }
+    assert.ok(calm >= 500, 'LIST-RETRY: the setup reads are drained: ' + JSON.stringify(net.log.map(e => [e.i, e.done])));
+    assert.ok(net.log.some(e => !e.failed && net.bodyHas(e, b => jobsOf(b).length === 0)), 'LIST-RETRY: the setup revision\'s own read (empty list) finished');
+    assert.equal(completed, requested, 'LIST-RETRY: every setup read completed');
+    net.stop();
     armed = true;
     await post('/jobs', [J('exec_lr', 'late list', { started_at: Date.now() - 5000 })]);
     await post('/bump');
