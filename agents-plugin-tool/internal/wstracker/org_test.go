@@ -271,8 +271,14 @@ func TestSameIDOrgCollisionKeepsWinnerOrg(t *testing.T) {
 		tm.comeOnline("bo.pc")
 		for _, who := range []string{"ada.pc", "bo.pc"} {
 			v := tm.view(who)
-			for name, id := range map[string]string{"edit": edit, "cc": cc, "assign": assign, "remove": rm} {
+			for name, id := range map[string]string{"edit": edit, "cc": cc, "remove": rm} {
 				wantEq(t, who+" losing writer's "+name, event(t, v, id).Status, "flagged")
+			}
+			// An assign drops only its lost org target and stays applied.
+			ae := event(t, v, assign)
+			wantEq(t, who+" losing writer's assign", ae.Status, "applied")
+			if ae.Reason == nil || !strings.Contains(*ae.Reason, "org target dropped") {
+				t.Fatalf("%s: assign reason %v does not note the dropped target", who, ae.Reason)
 			}
 			S := tm.clone(who).r.S
 			o := S.orgs["o-x"]

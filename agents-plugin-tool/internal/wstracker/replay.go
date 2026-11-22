@@ -29,9 +29,10 @@ type node struct {
 	status, reason       string // applied | flagged | waiting
 	causalStatus         string // verdict before final-fold concurrency flags
 	ignored              bool
-	clash                bool // flagged only by a fold-order list clash; still in later causal-past checks
-	lostCreate           bool // a roles.org_set creation the fold-order list flagged (id, name, or head clash)
-	orgCreate            bool // the roles.org_set the fold-order list took as its id's creation
+	clash                bool         // flagged only by a fold-order list clash; still in later causal-past checks
+	lostCreate           bool         // a roles.org_set creation the fold-order list flagged (id, name, or head clash)
+	orgCreate            bool         // the roles.org_set the fold-order list took as its id's creation
+	lostTargets          []lostTarget // item.assign org targets dropped: lostOrgRefs
 	markers              []marker
 	superseded           []supersession
 	thread, parentThread string
@@ -314,6 +315,7 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 	}
 	for _, n := range r.order[start:] {
 		n.status, n.reason, n.ignored, n.clash, n.lostCreate, n.orgCreate = "", "", false, false, false, false
+		n.lostTargets = nil
 		if r.rolesOnly && !isRoles(n.typ) {
 			n.status, n.causalStatus = "skipped", "skipped"
 			continue
@@ -332,8 +334,21 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 				creates = n.typ == TypeOrgSet && before.orgs[n.p.str("org")] == nil
 			}
 			if n.status == "applied" {
-				if rej := r.lostOrgRef(n, orgLosers, orgWinner); rej != "" {
-					n.status, n.reason = "flagged", string(rej)
+				lost := r.lostOrgRefs(n, orgLosers, orgWinner)
+				if n.typ == TypeItemAssign {
+					// Only the lost org targets drop; the other targets apply,
+					// as an older binary applies them. The reason notes the
+					// dropped ones on the applied event.
+					n.lostTargets = lost
+					for i, x := range lost {
+						if i == 0 {
+							n.reason = "org target dropped: " + x.why
+						} else {
+							n.reason += "; " + x.why
+						}
+					}
+				} else if len(lost) > 0 {
+					n.status, n.reason = "flagged", lost[0].why
 				}
 			}
 			if n.status == "applied" && isFoldOrderList(n.typ) {
@@ -541,12 +556,21 @@ func (r *replayed) orgCreatesSeen(n *node, cands []int) map[string]bool {
 	return seen
 }
 
-// lostOrgRef is the rejection of an event acting on an org id whose create
-// its writer saw only in a losing form: a lost create of the id is in n's
-// causal past but the id's winning create, if any, is not, so n meant an org
-// the fold never created, and must not land on an org some other create
-// made with that id.
-func (r *replayed) lostOrgRef(n *node, losers map[string][]*node, winners map[string]*node) rejection {
+// lostTarget is an org id n acts on that its writer knew only from a lost
+// create (by), with the reason.
+type lostTarget struct {
+	org string
+	by  *node
+	why string
+}
+
+// lostOrgRefs lists the org ids n acts on whose create its writer saw only in
+// a losing form: a lost create of the id is in n's causal past but the id's
+// winning create, if any, is not, so n meant an org the fold never created,
+// and must not land on an org some other create made with that id. Any other
+// event is flagged for the first; an item.assign drops those org targets.
+func (r *replayed) lostOrgRefs(n *node, losers map[string][]*node, winners map[string]*node) []lostTarget {
+	var out []lostTarget
 	for _, id := range orgRefs(n) {
 		w := winners[id]
 		if w != nil && r.hb(w, n) {
@@ -556,13 +580,25 @@ func (r *replayed) lostOrgRef(n *node, losers map[string][]*node, winners map[st
 			if !r.hb(l, n) {
 				continue
 			}
+			why := "org " + id + " is the org " + alias(l.id) + " created, which a concurrent write overtook (" + l.reason + ")"
 			if w != nil {
-				return rejection("org " + id + " is the org " + alias(l.id) + " created, which lost its id to a concurrent create (" + alias(w.id) + "); the first in fold order keeps the id")
+				why = "org " + id + " is the org " + alias(l.id) + " created, which lost its id to a concurrent create (" + alias(w.id) + "); the first in fold order keeps the id"
 			}
-			return rejection("org " + id + " is the org " + alias(l.id) + " created, which a concurrent write overtook (" + l.reason + ")")
+			out = append(out, lostTarget{org: id, by: l, why: why})
+			break
 		}
 	}
-	return ""
+	return out
+}
+
+// droppedOrg reports whether org targets are dropped from item.assign n.
+func (n *node) droppedOrg(org string) bool {
+	for _, x := range n.lostTargets {
+		if x.org == org {
+			return true
+		}
+	}
+	return false
 }
 
 // orgIDClash is the rejection of a roles.org_set its writer made as a

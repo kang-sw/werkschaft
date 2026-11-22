@@ -242,3 +242,49 @@ func TestIncrementalFoldNameClashedOrgCreateLosesItsID(t *testing.T) {
 		}
 	}
 }
+
+// TestIncrementalFoldAssignDropsOnlyLostOrgTarget folds an item.assign whose
+// writer saw only the losing create of its org target, beside a personal
+// target: the org target drops, the personal assignment exists as an older
+// binary folds it, and the assignee's follow-up status applies. Every arrival
+// order matches a fresh full replay.
+func TestIncrementalFoldAssignDropsOnlyLostOrgTarget(t *testing.T) {
+	g := json.RawMessage(`{"admins":["a","b"],"members":[{"id":"a","keys":["a"]},{"id":"b","keys":["b"]},{"id":"h","keys":["h"],"leads":["b"]},{"id":"k","keys":["k"]}]}`)
+	item := incrementalEvent("b", 1, TypeItemCreate, `{"kind":"task","title":"mixed assign"}`, 1, nil)
+	winner := incrementalEvent("a", 1, TypeOrgSet, `{"org":"o-x","name":"Active","head":"k"}`, 2, nil)
+	loser := incrementalEvent("b", 2, TypeOrgSet, `{"org":"o-x","name":"Beta","head":"k"}`, 3, nil)
+	assign := incrementalEvent("b", 3, TypeItemAssign, `{"item":"b.pc#1","targets":[{"root":"k","org":"o-x","include_root":true},"h"]}`, 4, nil)
+	status := incrementalEvent("h", 1, TypeItemStatus, `{"item":"b.pc#1","status":"doing"}`, 5, map[string]int{"b.pc": 3})
+	for name, arrivals := range map[string][]wsledger.Event{
+		"winner first":         {winner, loser, assign, status},
+		"winner before status": {loser, assign, winner, status},
+		"winner last":          {loser, assign, status, winner},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := newMemSource(g, "b.pc", []wsledger.Event{item})
+			tr := New(src, src.stream)
+			for _, ev := range arrivals {
+				src.add(ev)
+				assertIncrementalFold(t, tr, src)
+			}
+			for id, want := range map[wsledger.EventID]string{winner.ID: "applied", loser.ID: "flagged", assign.ID: "applied", status.ID: "applied"} {
+				if n := tr.r.byID[id.String()]; n.status != want {
+					t.Fatalf("%s = %s (%s), want %s", id, n.status, n.reason, want)
+				}
+			}
+			if n := tr.r.byID[assign.ID.String()]; !strings.Contains(n.reason, "org target dropped") {
+				t.Fatalf("assign reason %q does not note the dropped target", n.reason)
+			}
+			S := tr.r.S
+			if r := S.liveRec("b.pc#1", "h"); r == nil || r.status != "doing" {
+				t.Fatalf("personal assignment = %+v", r)
+			}
+			if len(S.liveRules("b.pc#1")) != 0 || len(S.openRules("b.pc#1")) != 0 {
+				t.Fatal("dropped org target made a rule")
+			}
+			if o := S.orgs["o-x"]; o == nil || o.name != "Active" || o.head != "k" {
+				t.Fatalf("winner org = %+v", o)
+			}
+		})
+	}
+}
