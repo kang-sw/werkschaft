@@ -89,7 +89,9 @@ const (
 //     rename and deletion the migration makes is itself durable (a
 //     directory sync on POSIX, a write-through rename on Windows). Only a
 //     re-applied removal, whose rename an interrupted attempt made, rests
-//     on a directory barrier alone (sync_*.go).
+//     on a directory barrier alone (sync_*.go). On Windows that barrier
+//     holds only on NTFS and ReFS, so the cutover refuses any other file
+//     system before it changes anything (ErrCutoverUnsupported).
 //  6. Commit proceeds only when every path with fence_required has a landed
 //     record that the commit's own pass proves. When proof fails, the outcome
 //     is a re-stage plus a re-fence. The staged original is never written
@@ -252,6 +254,9 @@ func (s *Store) Stage(ctx context.Context) (StageResult, error) {
 		}
 		if state == importComplete {
 			return ErrImportComplete
+		}
+		if err := s.checkCutoverDirs(); err != nil {
+			return err
 		}
 		attempt++
 		if res, err = s.stagePass(ctx, tx, attempt); err != nil {
@@ -428,6 +433,11 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 			return fmt.Errorf("%w: %s moves to %s", ErrFenceConflict, rel, m.fenceWitness)
 		}
 		abs := filepath.Join(s.dir, filepath.FromSlash(rel))
+		// Before the record: a fence that could not be made durable is never
+		// recorded or published (ErrCutoverUnsupported).
+		if err := s.checkBarrierDir(filepath.Dir(abs), true); err != nil {
+			return err
+		}
 		got := readLegacy(abs, s.opts.ReadFile)
 		if got.confirmable && m.state == CaptureUnreadable {
 			// A denial a pass confirmed is the original's state while it
@@ -650,7 +660,15 @@ func syncFileData(p string) error {
 	return f.Close()
 }
 
-func (s *Store) syncDir(dir string) error { return syncDirectory(dir) }
+// syncDir is the barrier before a publication is marked landed. It refuses
+// a directory whose file system does not support it (barrier.go), so landed
+// never rests on an unverified barrier.
+func (s *Store) syncDir(dir string) error {
+	if err := s.checkBarrierDir(dir, false); err != nil {
+		return err
+	}
+	return syncDirectory(dir)
+}
 
 // markFenceLanded marks the exact record this application published (the
 // cutover lock keeps it current); any other record is a conflict.
