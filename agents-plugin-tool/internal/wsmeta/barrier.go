@@ -14,8 +14,9 @@ import (
 
 // ErrCutoverUnsupported reports a cutover call refused because a directory
 // it would change is on a file system whose directory durability barrier is
-// not established (sync_*.go), or whose file system could not be
-// determined, while no fence has ever been recorded: no legacy file was
+// not established (sync_*.go), whose entry identities cannot tell a moved
+// file from a later one at its inode (cutoverRefusal), or whose file system
+// or identity could not be determined, while no fence has ever been recorded: no legacy file was
 // changed, in this process or an earlier one. The legacy files stay the
 // authority, and the caller keeps running on them (lead decision E(a)).
 // Opening the store and its pre-import reads are never refused.
@@ -53,6 +54,28 @@ func barrierRefusal(dir string, missingOK bool) error {
 	}
 	if name != "" && !supportedFileSystem(name) {
 		return fmt.Errorf("%s is on %s, not %s", dir, name, strings.Join(barrierFileSystems, " or "))
+	}
+	return nil
+}
+
+// cutoverRefusal returns why the cutover cannot change entries in dir, or
+// nil: its file system cannot carry the barrier (barrierRefusal), or its
+// entry identities carry no incarnation evidence, so a removal's witness
+// could not be told from a later file at the same inode (sameIncarnation;
+// re-review fd1cff5e). A missing dir passes when missingOK.
+func cutoverRefusal(dir string, missingOK bool) error {
+	if reason := barrierRefusal(dir, missingOK); reason != nil {
+		return reason
+	}
+	id, err := fileIdentity(dir)
+	if missingOK && errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("the identity of %s is unknown: %w", dir, err)
+	}
+	if !hasIncarnation(id) {
+		return fmt.Errorf("%s: %w", dir, errNoIncarnation)
 	}
 	return nil
 }
@@ -112,13 +135,13 @@ func supportedFileSystem(name string) bool {
 	return false
 }
 
-// checkCutoverDirs checks every directory a fence can change before a
-// cutover pass: the dashboard directory, each session directory and each
+// checkCutoverDirs checks (cutoverRefusal) every directory a fence can
+// change before a cutover pass: the dashboard directory, each session directory and each
 // keyed-file directory. Stage and Commit run it first, so an unsupported
 // volume refuses the whole cutover before its journal or any legacy file
 // changes.
 func (s *Store) checkCutoverDirs(ctx context.Context, q querier) error {
-	if reason := barrierRefusal(s.dir, false); reason != nil {
+	if reason := cutoverRefusal(s.dir, false); reason != nil {
 		return s.refuseCutover(ctx, q, reason)
 	}
 	sessions := filepath.Join(s.dir, sessionsDirName)
@@ -137,7 +160,7 @@ func (s *Store) checkCutoverDirs(ctx context.Context, q querier) error {
 	}
 	for _, d := range dirs {
 		// A pruned or never-created directory holds nothing to fence.
-		if reason := barrierRefusal(d, true); reason != nil {
+		if reason := cutoverRefusal(d, true); reason != nil {
 			return s.refuseCutover(ctx, q, reason)
 		}
 	}

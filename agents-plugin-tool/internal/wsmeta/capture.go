@@ -91,7 +91,9 @@ const (
 //     directory sync on POSIX, a write-through rename on Windows). Only a
 //     re-applied removal, whose rename an interrupted attempt made, rests
 //     on a directory barrier alone (sync_*.go). On Windows that barrier
-//     holds only on NTFS, so the cutover refuses any other file system:
+//     holds only on NTFS, so the cutover refuses any other file system, and
+//     any volume whose identities carry no incarnation evidence (invariant
+//     2's witness identity, sameIncarnation):
 //     ErrCutoverUnsupported while no fence was ever recorded (legacy
 //     service may continue), ErrCutoverInterrupted once one was.
 //  6. Commit proceeds only when every path with fence_required has a landed
@@ -437,7 +439,7 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 		abs := filepath.Join(s.dir, filepath.FromSlash(rel))
 		// Before the record: a fence that could not be made durable is never
 		// recorded or published.
-		if reason := barrierRefusal(filepath.Dir(abs), true); reason != nil {
+		if reason := cutoverRefusal(filepath.Dir(abs), true); reason != nil {
 			return s.refuseCutover(ctx, tx, reason)
 		}
 		got := readLegacy(abs, s.opts.ReadFile)
@@ -465,17 +467,23 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 		if got.state != m.state || got.digest != m.digest {
 			return fmt.Errorf("%w: %s", ErrFenceStale, rel)
 		}
-		if err := markCutoverStarted(ctx, tx); err != nil {
-			return err
-		}
 		if kind == fenceReplace {
 			plan.mtime = distinctFenceSentinel(abs).Unix()
+			if err := markCutoverStarted(ctx, tx); err != nil {
+				return err
+			}
 			_, err = tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'intent', fence_kind = ?, fence_digest = ?, fence_mtime = ?, fence_witness = '', fence_required = 1 WHERE path = ?`,
 				kind, digest, plan.mtime, rel)
 			return err
 		}
 		wid, wcontent, err := s.prepareWitness(m, abs, filepath.Join(s.dir, filepath.FromSlash(witness)), got)
+		if errors.Is(err, errNoIncarnation) {
+			return s.refuseCutover(ctx, tx, err)
+		}
 		if err != nil {
+			return err
+		}
+		if err := markCutoverStarted(ctx, tx); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'intent', fence_kind = ?, fence_digest = ?, fence_mtime = 0, fence_witness = ?, fence_required = 1, witness_id = ?, witness_content = ? WHERE path = ?`,
@@ -514,7 +522,7 @@ func (s *Store) prepareWitness(m captureMeta, abs, wabs string, got legacyRead) 
 		if err != nil {
 			return "", "", fmt.Errorf("%w: witness %s: %v", ErrLegacyUnread, filepath.Base(wabs), err)
 		}
-		if m.witnessID == "" || !sameGeneration(wid, m.witnessID) || witnessContent(w) != m.witnessContent {
+		if !sameIncarnation(wid, m.witnessID) || witnessContent(w) != m.witnessContent {
 			return "", "", fmt.Errorf("%w: %s", ErrWitnessOccupied, filepath.Base(wabs))
 		}
 		if err := s.removeDurably(wabs); err != nil {
@@ -527,8 +535,16 @@ func (s *Store) prepareWitness(m captureMeta, abs, wabs string, got legacyRead) 
 	if id, err = fileIdentity(abs); err != nil {
 		return "", "", fmt.Errorf("%w: %s: %v", ErrLegacyUnread, filepath.Base(abs), err)
 	}
+	if !hasIncarnation(id) {
+		// The witness could never be told from a later file at its inode.
+		return "", "", fmt.Errorf("%w: %s", errNoIncarnation, filepath.Base(abs))
+	}
 	return id, witnessContent(got), nil
 }
+
+// errNoIncarnation reports an entry identity without incarnation evidence
+// (sameIncarnation): a removal from it could never be proven.
+var errNoIncarnation = errors.New("its identity carries no birth time or file index to tell it from a later file at the same inode")
 
 // witnessContent is the comparable content of a read: state and digest.
 func witnessContent(r legacyRead) string { return r.state + " " + r.digest }
@@ -961,7 +977,7 @@ func (s *Store) fenceProven(prev captureMeta, got legacyRead) (proven, unread bo
 		if err != nil {
 			return false, true
 		}
-		return sameGeneration(id, prev.witnessID), false
+		return sameIncarnation(id, prev.witnessID), false
 	}
 	return got.state == CapturePresent && got.digest == prev.fenceDigest &&
 		got.mtime.Unix() == prev.fenceMtime && got.mtime.Nanosecond() == 0, false

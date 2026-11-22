@@ -1064,6 +1064,94 @@ func TestCopiedWitnessNeverProvesARemoval(t *testing.T) {
 	})
 }
 
+// withoutBirthTime makes entry identities read as device and inode alone,
+// as on a file system or kernel without birth times: for every entry, or,
+// with filesOnly, for every entry but directories.
+func withoutBirthTime(t *testing.T, filesOnly bool) {
+	t.Helper()
+	prev := fileIdentity
+	t.Cleanup(func() { fileIdentity = prev })
+	fileIdentity = func(p string) (string, error) {
+		id, err := prev(p)
+		if info, serr := os.Lstat(p); filesOnly && serr == nil && info.IsDir() {
+			return id, err
+		}
+		weak, _, _ := strings.Cut(id, btimeTag)
+		return weak, err
+	}
+}
+
+// Device and inode alone never prove a removal: once the moved file is
+// deleted, a new file can take its inode. The cutover is refused where
+// identities carry no incarnation evidence (a birth time, or the Windows
+// file index), and a witness whose identity lost it proves nothing.
+func TestReusableIdentityNeverProvesARemoval(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("refused before staging", func(t *testing.T) {
+		dir := legacyFixture(t)
+		withoutBirthTime(t, false)
+		s := openTest(t, dir, testOpts())
+		before := treeState(t, dir)
+		if _, err := s.Stage(ctx); !errors.Is(err, ErrCutoverUnsupported) {
+			t.Fatalf("Stage = %v, want ErrCutoverUnsupported", err)
+		}
+		checkRefusedCutover(t, s, dir, before)
+	})
+
+	t.Run("refused before the removal's record", func(t *testing.T) {
+		dir := legacyFixture(t)
+		s := openTest(t, dir, testOpts())
+		mustStage(t, s)
+		before := treeState(t, dir)
+		withoutBirthTime(t, true)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrCutoverUnsupported) {
+			t.Fatalf("ApplyRemovalFence = %v, want ErrCutoverUnsupported", err)
+		}
+		checkRefusedCutover(t, s, dir, before)
+	})
+
+	t.Run("a new file at the reused inode", func(t *testing.T) {
+		dir := legacyFixture(t)
+		armed := false
+		s := openTest(t, dir, crashAt("fence-prepared", &armed))
+		mustStage(t, s)
+		abs := filepath.Join(dir, fenceHooks)
+		moved, err := entryIdentity(abs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		armed = true
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
+			t.Fatalf("interrupted removal = %v", err)
+		}
+		if err := os.Remove(abs); err != nil {
+			t.Fatal(err)
+		}
+		replaceWith(t, dir, hooksWitness, hooksBytes)
+		// The copy took the deleted original's inode; only a birth time
+		// would tell them apart, and this lookup has none.
+		prev := fileIdentity
+		t.Cleanup(func() { fileIdentity = prev })
+		fileIdentity = func(p string) (string, error) {
+			if filepath.Base(p) == hooksWitness {
+				weak, _, _ := strings.Cut(moved, btimeTag)
+				return weak, nil
+			}
+			return prev(p)
+		}
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrFenceStale) {
+			t.Fatalf("retry over the new file = %v, want ErrFenceStale", err)
+		}
+		if c := captureMap(t, s)[fenceHooks]; c.FenceState == FenceLanded {
+			t.Fatalf("removal landed on a new file: %+v", c)
+		}
+		if _, err := s.Commit(ctx, testCommit()); err == nil {
+			t.Fatal("commit accepted a removal the migration never published")
+		}
+	})
+}
+
 // A re-fence never clears an owned witness that the new legacy path
 // resolves through, at any depth of its link chain: deleting it would
 // change what the path names, and the move would close a cycle.
