@@ -14,6 +14,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 // claudeFixtureInits reads the trimmed system/init lines of a fixture,
@@ -546,6 +547,28 @@ func TestHarnessVersionsLogOrderMatchesMemory(t *testing.T) {
 	}
 	if strings.Count(string(before), "\n") != 64 {
 		t.Fatalf("log lines = %d", strings.Count(string(before), "\n"))
+	}
+}
+
+// The rollout switch costs one config resolution per start, not one per
+// key it falls back through.
+func TestExecRolloutReadsTheConfigOnce(t *testing.T) {
+	h := cutoverHarness(t)
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	c := h.runner.conv(st.ID)
+	rec := c.record()
+	resolver := c.rolloutResolver(rec)
+	ops := func(f func()) int64 {
+		before := wsstate.FileIOCounters()["file_io_total"]
+		f()
+		return wsstate.FileIOCounters()["file_io_total"] - before
+	}
+	one := ops(func() { _, _ = resolver.ListScalars(rec.WSKey, wsconfig.ItemExecNativeToolRemoval) })
+	if got := ops(func() { c.execRolloutOn(rec) }); got > one {
+		t.Fatalf("the rollout check took %d file operations; one resolution takes %d", got, one)
+	}
+	if !c.execRolloutOn(rec) {
+		t.Fatal("the rollout is off by default")
 	}
 }
 

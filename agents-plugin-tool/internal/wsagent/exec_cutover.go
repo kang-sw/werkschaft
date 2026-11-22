@@ -124,28 +124,25 @@ func cutoverReplacement(backend string) []string {
 }
 
 // execRolloutOn reads the harness's rollout switch: its bucket, then all,
-// then the bare key; on unless one says off.
+// then the bare key; on unless one says off. One resolution reads every
+// scope's file once for the three keys.
 func (c *conv) execRolloutOn(rec Record) bool {
-	cfg := c.r.opts.Config
-	cfg.RepoRoot = rec.Root
-	if roots, ok := c.r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
-		if root, found := roots.Root(rec.WSKey); found {
-			cfg.RepoRoot = root
-		}
+	resolver := c.rolloutResolver(rec)
+	values, err := resolver.ListScalars(rec.WSKey, wsconfig.ItemExecNativeToolRemoval)
+	if err != nil {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: %s: %v\n", rec.ReplyID, wsconfig.ItemExecNativeToolRemoval, err)
+		return true
 	}
-	reader, _ := c.r.opts.Keys.(wsconfig.SessionReader)
-	resolver := wsconfig.NewResolver(cfg, nil, reader, nil)
+	byKey := make(map[string]string, len(values))
+	for _, v := range values {
+		byKey[v.Key] = v.Value
+	}
 	for _, key := range []string{
 		wsconfig.ItemExecNativeToolRemoval + "." + rec.Backend,
 		wsconfig.ItemExecNativeToolRemoval + ".all",
 		wsconfig.ItemExecNativeToolRemoval,
 	} {
-		rv, err := resolver.Get(rec.WSKey, key)
-		if err != nil {
-			fmt.Fprintf(c.r.opts.Log, "agent %s: %s: %v\n", rec.ReplyID, key, err)
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(rv.Value)) {
+		switch strings.ToLower(strings.TrimSpace(byKey[key])) {
 		case "":
 			continue
 		case "off", "false", "0", "no":
@@ -154,6 +151,20 @@ func (c *conv) execRolloutOn(rec Record) bool {
 		return true
 	}
 	return true
+}
+
+// rolloutResolver is the config resolver rec's start reads its rollout
+// switch with.
+func (c *conv) rolloutResolver(rec Record) wsconfig.Resolver {
+	cfg := c.r.opts.Config
+	cfg.RepoRoot = rec.Root
+	if roots, ok := c.r.opts.Keys.(interface{ Root(string) (string, bool) }); ok {
+		if root, found := roots.Root(rec.WSKey); found {
+			cfg.RepoRoot = root
+		}
+	}
+	reader, _ := c.r.opts.Keys.(wsconfig.SessionReader)
+	return wsconfig.NewResolver(cfg, nil, reader, nil)
 }
 
 // decideExecCutover settles a new process start's cutover into spec and

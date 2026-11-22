@@ -321,6 +321,16 @@ func TestFSScanCapsStopTheWork(t *testing.T) {
 			t.Fatalf("fs.grep byte cap = %q", text)
 		}
 	})
+	t.Run("bytes read", func(t *testing.T) {
+		// The budget counts bytes read: a file larger than what is left is
+		// searched up to it, and its cut last line is not.
+		mustWrite(t, fx.root, "big/m.txt", "hit a\nhit b\nhit c\n")
+		setCap(t, &fsGrepScanBytes, 10)
+		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "big/m.txt"})
+		if text != "big/m.txt:1:hit a\n[truncated: stopped after reading 10 bytes]\n" {
+			t.Fatalf("fs.grep bytes read = %q", text)
+		}
+	})
 	t.Run("file size", func(t *testing.T) {
 		setCap(t, &fsGrepFileBytes, 4)
 		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "g"})
@@ -330,9 +340,9 @@ func TestFSScanCapsStopTheWork(t *testing.T) {
 	})
 	t.Run("entries", func(t *testing.T) {
 		// A glob nothing passes still spends a visit on every entry.
-		setCap(t, &fsGrepScanEntries, 3)
+		setCap(t, &fsGrepScanEntries, 2)
 		text, _ := fx.call("fs.grep", map[string]any{"pattern": "hit", "path": "g", "glob": "*.none"})
-		if text != "[truncated: stopped after visiting 3 directory entries; narrow the path or glob]\n" {
+		if text != "[truncated: stopped after visiting 2 directory entries; narrow the path or glob]\n" {
 			t.Fatalf("fs.grep entry cap = %q", text)
 		}
 	})

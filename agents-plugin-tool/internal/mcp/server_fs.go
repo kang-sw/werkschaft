@@ -244,9 +244,9 @@ func fsDisplayPath(root, path string) string {
 
 // fsGrep searches file or directory path for lines matching the regular
 // expression pattern, in files whose name passes glob, and returns them as
-// path:line:text with one-based line numbers. A directory walk skips .git
-// directories, symlinked directories and binary files, and stops at the
-// scan caps: entries visited, files opened, bytes read.
+// path:line:text with one-based line numbers. A directory walk (fsWalk)
+// skips .git directories, symlinked directories and binary files, and
+// stops at the scan caps: entries visited, files opened, bytes read.
 func fsGrep(root, path, pattern, glob string) (string, error) {
 	if pattern == "" {
 		return "", errors.New("pattern is required")
@@ -272,7 +272,7 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 			stop = fmt.Sprintf("stopped after %d files", fsGrepMaxFiles)
 			return fs.SkipAll
 		}
-		if scanned+size > fsGrepScanBytes {
+		if scanned >= fsGrepScanBytes {
 			stop = fmt.Sprintf("stopped after reading %s", fsSize(fsGrepScanBytes))
 			return fs.SkipAll
 		}
@@ -282,17 +282,27 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 		}
 		defer f.Close()
 		files++
-		reader := bufio.NewReaderSize(f, 64<<10)
+		// The bytes actually read count, not the size stat saw: a file
+		// that grows while it is read stops at what is left.
+		limited := &io.LimitedReader{R: f, N: fsGrepScanBytes - scanned}
+		reader := bufio.NewReaderSize(limited, 64<<10)
 		head, _ := reader.Peek(fsBinarySniff)
 		if fsIsBinary(head) {
 			skippedBinary++
+			scanned += int64(len(head))
 			return nil
 		}
-		scanned += size
 		name := fsDisplayPath(root, file)
 		lineNo := 0
 		for {
 			line, err := reader.ReadString('\n')
+			scanned += int64(len(line))
+			if err != nil && limited.N == 0 && fsMoreToRead(f) {
+				// Cut at the scan budget: a partial last line is not
+				// searched.
+				stop = fmt.Sprintf("stopped after reading %s", fsSize(fsGrepScanBytes))
+				return fs.SkipAll
+			}
 			if line == "" && err != nil {
 				return nil
 			}
@@ -325,24 +335,7 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 			return "", fmt.Errorf("%s is a binary file; fs.grep searches text files only", path)
 		}
 	} else {
-		visited := 0
-		walkErr := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
-			if visited++; visited > fsGrepScanEntries {
-				stop = fmt.Sprintf("stopped after visiting %d directory entries; narrow the path or glob", fsGrepScanEntries)
-				return fs.SkipAll
-			}
-			if err != nil {
-				if p == path {
-					return err
-				}
-				return nil
-			}
-			if d.IsDir() {
-				if p != path && d.Name() == ".git" {
-					return fs.SkipDir
-				}
-				return nil
-			}
+		walkErr := fsWalk(path, func(p string, d fs.DirEntry) error {
 			if !d.Type().IsRegular() || !fsGlobMatch(glob, d.Name()) {
 				return nil
 			}
@@ -351,6 +344,8 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 				return nil
 			}
 			return searchFile(p, fi.Size())
+		}, func() {
+			stop = fmt.Sprintf("stopped after visiting %d directory entries; narrow the path or glob", fsGrepScanEntries)
 		})
 		if walkErr != nil && !errors.Is(walkErr, fs.SkipAll) {
 			return "", walkErr
@@ -373,6 +368,66 @@ func fsGrep(root, path, pattern, glob string) (string, error) {
 		fmt.Fprintf(&out.b, "[%s]\n", strings.Join(notes, "; "))
 	}
 	return out.b.String(), nil
+}
+
+// fsMoreToRead reports whether f has a byte past its current offset.
+func fsMoreToRead(f *os.File) bool {
+	var b [1]byte
+	n, _ := f.Read(b[:])
+	return n > 0
+}
+
+// fsWalkBatch is how many directory entries fsWalk reads at a time; it
+// visits each batch in name order.
+const fsWalkBatch = 1024
+
+// fsWalk visits the entries beneath directory root breadth first, reading
+// each directory fsWalkBatch entries at a time with one directory open at
+// once, so the entry cap (fsGrepScanEntries) stops the reading itself: past
+// it, capped runs and the walk ends with fs.SkipAll. It descends into real
+// directories only (not symlinked ones, nor .git), skips unreadable ones
+// below root, and stops early when visit returns fs.SkipAll.
+func fsWalk(root string, visit func(path string, d fs.DirEntry) error, capped func()) error {
+	queue := []string{root}
+	visited := 0
+	for len(queue) > 0 {
+		dir := queue[0]
+		queue = queue[1:]
+		f, err := os.Open(dir)
+		if err != nil {
+			if dir == root {
+				return err
+			}
+			continue
+		}
+		for {
+			entries, err := f.ReadDir(min(fsWalkBatch, fsGrepScanEntries-visited+1))
+			sort.Slice(entries, func(a, b int) bool { return entries[a].Name() < entries[b].Name() })
+			for _, e := range entries {
+				if visited++; visited > fsGrepScanEntries {
+					f.Close()
+					capped()
+					return fs.SkipAll
+				}
+				p := filepath.Join(dir, e.Name())
+				if e.IsDir() {
+					if e.Name() != ".git" {
+						queue = append(queue, p)
+					}
+					continue
+				}
+				if err := visit(p, e); err != nil {
+					f.Close()
+					return err
+				}
+			}
+			if err != nil || len(entries) == 0 {
+				break
+			}
+		}
+		f.Close()
+	}
+	return nil
 }
 
 // fsList lists directory path's entries whose name passes glob, sorted,
