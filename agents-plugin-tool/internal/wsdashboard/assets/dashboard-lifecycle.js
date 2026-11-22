@@ -317,8 +317,11 @@
     });
     var hasDraft = !WsRail.emptyDraft(Object.assign({}, d, { open: {}, tab: "" }));
     var rich = !!(images.length || deliveries.length || mirrorNow && !textSaved && hasDraft);
+    // mine lists the images this draft saved: only they answer its
+    // markers on restore; another window's images come back loose.
     var record = rich ? {
-      base: previous, projection: projection, draft: d, images: images
+      base: previous, projection: projection, draft: d, images: images,
+      mine: images.map(function (p) { return p.id; })
     } : null;
     var states = new Map(deliveries.map(function (m) { return [m.id, m.state]; }));
     var key = draftRecoveryKey(record, states);
@@ -379,7 +382,7 @@
         foreign.push(Object.assign({}, p, { id: "legacy:" + key }));
       });
       if (foreign.length || record && !record.images.every(kept)) {
-        active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [] });
+        active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [], mine: [] });
         active.images = active.images.filter(kept).concat(foreign);
       }
       // Two windows' images may merge past what one message carries
@@ -506,7 +509,7 @@
         draftRetained = prepared && boardDraft(JSON.parse(JSON.stringify(prepared)));
         draftRetainedImages = active ? active.images : [];
       }
-      restoreDraft(prepared, useActive ? active.images : []);
+      restoreDraft(prepared, useActive ? active.images : [], useActive && Array.isArray(active.mine) ? new Set(active.mine) : null);
       if (active && !useActive && ctext) {
         // An older page used the legacy draft in the meantime. Keep its
         // current text and put the retained blobs back under new markers.
@@ -543,13 +546,17 @@
     }
     return d;
   }
-  function restoreDraft(saved, recoveredImages) {
+  // restoreDraft restores saved with recoveredImages. With mine (the IDs
+  // the draft saved; an older page's record has none) only those images
+  // answer the draft's markers by number, the rest come back loose.
+  function restoreDraft(saved, recoveredImages, mine) {
     var d = boardDraft(saved);
     recoveredImages = recoveredImages || [];
     if (!d) return;
     restoring = true;
+    var bound = function (p) { return !mine || mine.has(p.id); };
     try {
-      var available = new Set(recoveredImages.map(function (p) { return p.n; }));
+      var available = new Set(recoveredImages.filter(bound).map(function (p) { return p.n; }));
       var lost = (Array.isArray(d.lost) ? d.lost : []).filter(function (n) { return !available.has(n); });
       var named = "";
       // Keep bundles in existing text storage. Extract before stripping lost
@@ -634,8 +641,8 @@
           imgSeq = Math.max(imgSeq, p.n);
         });
         var loose = [];
-        recoveredImages.forEach(function (p) {
-          var image = loadDraftImage(p), occupied = imgs.some(function (other) { return other.n === p.n; });
+        recoveredImages.filter(bound).concat(recoveredImages.filter(function (p) { return !bound(p); })).forEach(function (p) {
+          var image = loadDraftImage(p), occupied = !bound(p) || imgs.some(function (other) { return other.n === p.n; });
           if (occupied) image.n = nextNum();
           // A paste may still belong to an open selection editor. Reattach
           // unreferenced blobs to the composer when restoring the session.

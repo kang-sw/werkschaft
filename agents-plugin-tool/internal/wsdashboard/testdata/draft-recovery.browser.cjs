@@ -387,6 +387,67 @@ async function mergedImageCap(browser) {
   } finally { await context.close(); }
 }
 
+// The reviewer's case: A saves left.png as #1; B, opened before that save,
+// pastes eight newer files #1-8 and saves; A edits keeping [Image #1] and
+// saves. A's reopened draft must bind its #1 to left.png, never to B's #1.
+async function capKeepsMarkerImage(browser) {
+  const context = await browser.newContext();
+  try {
+    const left = await context.newPage(), right = await context.newPage();
+    await right.goto(base + session);
+    const b = await frameFor(right);
+    await left.goto(base + session);
+    const a = await frameFor(left);
+    await type(a, 'Left draft');
+    await paste(a, 'left.png');
+    await a.locator('#cimgs img[alt="left.png"]').waitFor();
+    assert.equal(await a.evaluate(() => window.wsSaveSessionDraft()), true);
+    await type(b, 'Right draft');
+    for (let i = 1; i <= 8; i++) await paste(b, `right-${i}.png`);
+    await b.locator('#cimgs img[alt="right-8.png"]').waitFor();
+    assert.equal(await b.evaluate(() => window.wsSaveSessionDraft()), false, 'the over-cap save is refused');
+    await type(a, await a.locator('#ctext').inputValue() + ' edited');
+    assert.match(await a.locator('#ctext').inputValue(), /\[Image #1\]/);
+    assert.equal(await a.evaluate(() => window.wsSaveSessionDraft()), true);
+    await right.close();
+    await left.reload();
+    const again = await frameFor(left);
+    await again.locator('#cimgs img').first().waitFor();
+    assert.deepEqual(await again.locator('#cimgs img').evaluateAll(list => list.map(img => img.alt)), ['left.png']);
+    assert.match(await again.locator('#ctext').inputValue(), /Left draft.*\[Image #1\].*edited/s);
+  } finally { await context.close(); }
+}
+
+// A draft's markers answer only the images that draft saved: another
+// window's image under the same number comes back loose, renumbered, and
+// the draft's own missing image is reported lost.
+async function foreignImageStaysLoose(browser) {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await page.goto(base + session);
+    const frame = await frameFor(page);
+    await type(frame, 'Own marker draft');
+    await paste(frame, 'own-a.png');
+    await paste(frame, 'own-b.png');
+    await frame.locator('#cimgs img[alt="own-b.png"]').waitFor();
+    assert.match(await frame.locator('#ctext').inputValue(), /\[Image #1\].*\[Image #2\]/s);
+    assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    // Another window removed own-a.png (#1) and put its own #1 in the row.
+    await recoveryRow(frame, `const a = row.active.images.find(p => p.name === 'own-a.png');
+row.active.images = row.active.images.filter(p => p !== a).concat([{ id: 'other-window', n: 1, name: 'other.png', ref: '', blob: blob('other') }]);
+row.removed = (row.removed || []).concat([a.id]);
+return row;`);
+    await page.reload();
+    const again = await frameFor(page);
+    await again.locator('#cimgs img[alt="other.png"]').waitFor();
+    const text = await again.locator('#ctext').inputValue();
+    assert.equal(await again.locator('#cimgs img').count(), 2);
+    assert.doesNotMatch(text, /\[Image #1\]/, 'no other window\'s image answers the draft\'s #1: ' + text);
+    assert.match(text, /\[Image #2\].*\[Image #3\]/s, 'own-b keeps #2 and the other window\'s image comes back as #3: ' + text);
+  } finally { await context.close(); }
+}
+
 async function failedStorage(browser) {
   const context = await browser.newContext();
   try {
@@ -525,6 +586,8 @@ async function queueAcrossTabs(browser) {
       await legacyImageAcrossWindows(browser);
       await removalAcrossWindows(browser);
       await mergedImageCap(browser);
+      await capKeepsMarkerImage(browser);
+      await foreignImageStaysLoose(browser);
       await failedStorage(browser);
       await ackWithUnavailableLegacyStorage(browser);
       await queueAcrossTabs(browser);
