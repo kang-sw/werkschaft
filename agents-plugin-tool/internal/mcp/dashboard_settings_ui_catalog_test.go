@@ -127,7 +127,9 @@ func TestDashboardSettingsUICatalogSurface(t *testing.T) {
 	}
 	want := []string{
 		"dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
-		"dashboard.companion_pack", "dashboard.companion_preset",
+		"dashboard.companion_attachments", "dashboard.companion_eyes", "dashboard.companion_hair",
+		"dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
+		"dashboard.companion_preset",
 	}
 	slices.Sort(modal)
 	if !slices.Equal(modal, want) {

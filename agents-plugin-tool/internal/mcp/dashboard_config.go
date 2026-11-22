@@ -66,6 +66,8 @@ var manifestGlobalOnlyKeys = map[string]struct{}{
 	DashboardLANKey: {}, DashboardMailboxUndeliveredKey: {},
 	wsdashboard.CompanionEnabledKey: {}, wsdashboard.CompanionModeKey: {}, wsdashboard.CompanionDirectorKey: {},
 	wsdashboard.CompanionPackKey: {}, wsdashboard.CompanionPresetKey: {},
+	wsdashboard.CompanionOutfitKey: {}, wsdashboard.CompanionHairKey: {}, wsdashboard.CompanionEyesKey: {},
+	wsdashboard.CompanionAttachmentsKey: {}, wsdashboard.CompanionPaletteKey: {},
 	wsauditstore.KeySessionCapMiB: {}, wsauditstore.KeyTotalCapMiB: {},
 	wsauditstore.KeyBodyCapKiB: {}, wsauditstore.KeyRetentionDays: {},
 	wsdashboard.CompanionAgentCooldownKey: {}, wsdashboard.CompanionAgentHourlyCapKey: {},

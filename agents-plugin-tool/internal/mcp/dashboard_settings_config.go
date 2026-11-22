@@ -255,6 +255,8 @@ func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Op
 	return wsdashboard.CompanionConfig{
 		Enabled: flag(wsdashboard.CompanionEnabledKey), Director: text(wsdashboard.CompanionDirectorKey),
 		Pack: text(wsdashboard.CompanionPackKey), Preset: text(wsdashboard.CompanionPresetKey),
+		Outfit: text(wsdashboard.CompanionOutfitKey), Hair: text(wsdashboard.CompanionHairKey), Eyes: text(wsdashboard.CompanionEyesKey),
+		Attachments: text(wsdashboard.CompanionAttachmentsKey), Palette: text(wsdashboard.CompanionPaletteKey),
 		AgentCooldownSeconds: number(wsdashboard.CompanionAgentCooldownKey),
 		AgentHourlyCap:       number(wsdashboard.CompanionAgentHourlyCapKey),
 	}, nil
