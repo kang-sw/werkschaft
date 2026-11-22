@@ -83,9 +83,11 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	h.mu.Lock()
 	if j.row.Terminal() {
 		// Stopped (its owner closing) while the holder launched: the
-		// process never starts.
+		// process never starts, and the job stays until its holder is
+		// gone.
+		j.holderPinned = true
 		h.mu.Unlock()
-		go h.stopHolder(holder)
+		go h.retireHolder(j, holder)
 		return h.view(j, OutcomeDone), errClosedBeforeStart
 	}
 	j.row.HolderID = holder
@@ -217,6 +219,8 @@ func (h *Hosted) admit(j *hostedJob) error {
 			running++
 		case have.row.Notice == NoticePending || have.delivering:
 			// Its notice is still owed; it stays until delivered.
+		case have.holderPinned:
+			// A holder of it may still write its exit copy.
 		default:
 			finished = append(finished, have)
 		}

@@ -31,14 +31,15 @@ func (h *Hosted) stop(j *hostedJob) error {
 		if j.row.StartedAt == 0 {
 			j.row.StartedAt = h.opts.Now().UnixMilli()
 		}
+		j.holderPinned = holder != ""
 		h.endLocked(j)
 		row, rev := h.snapLocked(j)
 		h.mu.Unlock()
-		if holder != "" {
-			h.stopHolder(holder)
-		}
 		h.runningChanged()
 		h.save(j, row, rev)
+		if holder != "" {
+			return h.retireHolder(j, holder)
+		}
 		return nil
 	}
 	if wait := j.spawned; wait != nil {

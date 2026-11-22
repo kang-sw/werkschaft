@@ -100,6 +100,11 @@ type hostedJob struct {
 	// stop waits for it, so the process it starts is the one it ends.
 	starting bool
 	spawned  chan struct{}
+	// holderPinned: j ended while a holder launched for it may still run
+	// (a stop during the launch). That holder writes the exit copy at j's
+	// id's path as it goes, so j is not pruned, and its id not reused,
+	// until the holder is confirmed gone (retireHolder). Under h.mu.
+	holderPinned bool
 	// rev numbers j's row snapshots for the store (snapLocked, under h.mu);
 	// saveMu orders their writes and saved is the last one written, so a
 	// snapshot taken before the job's end never lands after it. A dropped
@@ -454,6 +459,23 @@ func (h *Hosted) stopHolder(id string) {
 	if err := h.opts.Holders.Stop(id); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
 		h.logf("stop holder %s: %v", id, err)
 	}
+}
+
+// retireHolder stops holder, launched for job j after j ended, and once
+// it is confirmed gone removes the exit copy it left at j's id's path and
+// lets j be pruned. A holder that did not go keeps j pinned, so its id is
+// never reused under a copy the holder may still write; the next start
+// stops it as a holder no job owns.
+func (h *Hosted) retireHolder(j *hostedJob, holder string) error {
+	if err := h.opts.Holders.Stop(holder); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+		h.logf("stop holder %s of ended job %s: %v; the job's id stays reserved", holder, j.row.ID, err)
+		return fmt.Errorf("stop exec job %s's holder: %w", j.row.ID, err)
+	}
+	h.removeExitCopy(j.row.ID)
+	h.mu.Lock()
+	j.holderPinned = false
+	h.mu.Unlock()
+	return nil
 }
 
 // endLocked marks j ended now and opens its waiters; a job that owes a

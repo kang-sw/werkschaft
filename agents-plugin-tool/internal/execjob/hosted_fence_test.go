@@ -3,6 +3,7 @@ package execjob
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -328,5 +329,70 @@ func TestLegacyLaunchCountsInItsWorkingDirectorysWorktree(t *testing.T) {
 	defer active.Delete("test-nested")
 	if _, err := FenceLegacyRoot(nested); err == nil || !strings.Contains(err.Error(), "1 exec job(s) still run") {
 		t.Fatalf("releasing the worktree a running job works in: %v", err)
+	}
+}
+
+// A job stopped while its holder launched is not pruned, and its id not
+// freed, until that holder is confirmed gone: the holder writes the exit
+// copy at the job id's path as it goes, which a later job under the same
+// id would read as its own.
+func TestHostedJobStoppedDuringItsHolderLaunchStaysUntilTheHolderGoes(t *testing.T) {
+	for _, holderGoes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("holder goes %v", holderGoes), func(t *testing.T) {
+			fx := newHostedFixture(t, time.Second)
+			entered, release := make(chan struct{}, 1), make(chan struct{})
+			fx.holders.mu.Lock()
+			fx.holders.beforeLaunch = func() {
+				entered <- struct{}{}
+				<-release
+			}
+			fx.holders.mu.Unlock()
+			launched := make(chan HostedView, 1)
+			go func() {
+				v, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+				launched <- v
+			}()
+			<-entered
+			if err := fx.h.StopOwner("lead"); err != nil {
+				t.Fatal(err)
+			}
+			fx.holders.mu.Lock()
+			fx.holders.beforeLaunch = nil
+			if !holderGoes {
+				fx.holders.stopErr = errors.New("holder busy")
+			}
+			fx.holders.mu.Unlock()
+			close(release)
+			v := <-launched
+			if v.ID == "" {
+				t.Fatal("no view of the stopped job")
+			}
+			eventuallyExec(t, "the late holder's stop attempt", func() bool {
+				fx.holders.mu.Lock()
+				defer fx.holders.mu.Unlock()
+				return fx.holders.stopCalls > 0
+			})
+			if holderGoes {
+				eventuallyExec(t, "the pin to lift", func() bool {
+					fx.h.mu.Lock()
+					defer fx.h.mu.Unlock()
+					return !fx.h.jobs[v.ID].holderPinned
+				})
+			}
+			fx.holders.mu.Lock()
+			fx.holders.stopErr = nil
+			fx.holders.mu.Unlock()
+			for i := 0; i < HostedMaxJobs; i++ {
+				if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fx.store.mu.Lock()
+			dropped := slices.Contains(fx.store.deleted, v.ID)
+			fx.store.mu.Unlock()
+			if dropped == !holderGoes {
+				t.Fatalf("dropped %v with the holder gone %v", dropped, holderGoes)
+			}
+		})
 	}
 }

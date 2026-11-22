@@ -123,8 +123,10 @@ type fakeExecHolders struct {
 	// LaunchWith, outside the lock (a test holds the hand-over there).
 	beforeSpawn  func(id string)
 	beforeLaunch func()
-	// stopErr fails Stop: the holder stays, its child runs on.
-	stopErr error
+	// stopErr fails Stop: the holder stays, its child runs on. stopCalls
+	// counts Stop calls, failed ones included.
+	stopErr   error
+	stopCalls int
 	// onLaunch runs inside LaunchWith, outside the lock, before the new
 	// holder's id reaches the job.
 	onLaunch func(id string)
@@ -204,9 +206,10 @@ func (f *fakeExecHolders) Input(id string, data []byte, eof bool) error {
 // its exit record, as the real holder sends before it goes.
 func (f *fakeExecHolders) Stop(id string) error {
 	f.mu.Lock()
-	if f.stopErr != nil {
+	f.stopCalls++
+	if err := f.stopErr; err != nil {
 		f.mu.Unlock()
-		return f.stopErr
+		return err
 	}
 	if _, ok := f.live[id]; !ok {
 		f.mu.Unlock()
