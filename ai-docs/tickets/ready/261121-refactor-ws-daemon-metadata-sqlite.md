@@ -1021,6 +1021,61 @@ Verification (macOS arm64):
   already unformatted on 2976c3d53.
 
 
+#### Edition (d5ccd98db) - 2026-11-22
+
+This resolves the NEEDS-DECISION left on the Windows barrier in Edition
+(a87930b1a). The lead chose option (a): verify the file system and refuse
+the cutover on any other.
+
+- **What changed:** every cutover call checks the file system of each
+  directory it can change. On Windows only NTFS and ReFS are accepted.
+  - On any other file system, or one that cannot be determined, the call
+    refuses with `ErrCutoverUnsupported` before it changes anything.
+  - On POSIX the barrier is a directory fsync and needs no check.
+  - The Windows query is `GetVolumeInformationByHandle` on the directory
+    itself, so a mounted folder reports the volume it mounts.
+- **Where it is checked:**
+  - `Stage` and `Commit`: the dashboard directory, every session directory
+    and every keyed-file directory.
+  - `planFence`: the fence's own directory, before its record is written.
+  - `syncDir`: so `landed` never rests on an unverified barrier.
+
+  Each check runs after the import-state check, so a completed import
+  still answers `AlreadyComplete` or `ErrImportComplete`.
+- **What a refusal leaves:** no capture or fence record in the journal, the
+  legacy tree unchanged and the import incomplete. The legacy files stay
+  the authority. Each refusal is logged through `Options.Logf` with its
+  reason (the directory and its file system).
+- **Startup is not blocked:** `Open` and pre-import reads never run the
+  check, and wsmeta is still unwired in Phase 1. Phase 2's caller must
+  treat `errors.Is(err, ErrCutoverUnsupported)` as staying on the legacy
+  store.
+- **Tests:**
+  - `TestUnsupportedFileSystemRefusesTheCutover` covers:
+    - a refusal before staging (the store still opens, the reason is
+      logged)
+    - a single session directory on another volume
+    - an unknown file system
+    - fences refused before their record
+    - landed never set on a refused barrier
+  - `TestSupportedFileSystemsCompleteTheCutover` runs the cutover through
+    for POSIX, `NTFS`, `ntfs` and `ReFS`.
+  - Removing any one of the four checks (Stage, planFence, Commit,
+    syncDir) fails a subtest.
+  - `TestPlatformFileSystemNamesTheVolume` is Windows only: compiled, not
+    run.
+- **API change:** new error `ErrCutoverUnsupported`.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (13.4 s).
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok, and
+  `GOOS=windows go test -c` builds.
+- `go build ./...`: ok.
+- `gofmt`: clean.
+
+
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
 - Depends on Phase 1. Route affected direct Go readers through the daemon
