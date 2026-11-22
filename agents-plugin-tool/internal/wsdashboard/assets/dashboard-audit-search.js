@@ -102,11 +102,17 @@
         return Promise.resolve({ loadedPages: pages, reached: countTextLines(curText) >= targetLine });
       }
       var reqOffset = rng.offset || 0;
+      if (opts.loadPage) return opts.loadPage(reqOffset, pageLen).then(function (ok) {
+        if (!ok) return { loadedPages: pages, reached: false };
+        pages++;
+        return step();
+      });
       return Promise.resolve(fetchRangeFn(reqOffset, pageLen)).then(function (chunk) {
         if (isCancelled()) return { loadedPages: pages, cancelled: true, reached: false };
         if (!chunk || typeof chunk.data !== "string") {
           return { loadedPages: pages, reached: countTextLines(ev[part] || "") >= targetLine };
         }
+        if (!ev.range || !ev.range[part] || ev.range[part].offset !== reqOffset) return step();
         ev[part] = (ev[part] || "") + chunk.data;
         pages++;
         if (chunk.end && ev.range) {
@@ -478,7 +484,9 @@
     opts = opts || {};
     var curRid = activeRid();
     if (!curRid) return Promise.resolve();
-    var q = String(state.q || "").trim();
+    var query = opts.query || (opts.append ? state.committed : {q: String(state.q || "").trim(), regex: !!state.regex, caseSensitive: !!state.caseSensitive, kinds: state.kind ? [state.kind] : []});
+    if (!query) return Promise.resolve();
+    var q = query.q;
     if (!q) {
       clearSearch();
       return Promise.resolve();
@@ -490,9 +498,9 @@
     state.rid = curRid;
     state.submitted = true;
     state.submittedQ = q;
-    state.submittedRegex = !!state.regex;
-    state.submittedCase = !!state.caseSensitive;
-    state.submittedKind = state.kind;
+    state.submittedRegex = query.regex;
+    state.submittedCase = query.caseSensitive;
+    state.submittedKind = query.kinds[0] || "";
     state.errorKind = "";
     state.errorMsg = "";
     if (!opts.append) {
@@ -518,7 +526,7 @@
     }, opts.cursor || "");
 
     var fetchOpts = {};
-    if (!opts.append && typeof AbortController === "function") {
+    if (typeof AbortController === "function") {
       activeFetchController = new AbortController();
       fetchOpts.signal = activeFetchController.signal;
     } else {
@@ -533,9 +541,9 @@
         try { data = raw ? JSON.parse(raw) : null; } catch (e) {}
         if (resp.status === 410 && opts.append && !opts.retriedStale) {
           state.loadingMore = false;
-          return executeSearch({ append: false, fromStale: true, retriedStale: true });
+          return executeSearch({ append: false, fromStale: true, retriedStale: true, query: query });
         }
-        if (resp.status === 400) {
+        if (resp.status === 400 && !opts.append) {
           state.loading = false;
           state.loadingMore = false;
           state.errorKind = "invalid";
@@ -555,6 +563,7 @@
         }
         state.loading = false;
         state.loadingMore = false;
+        state.committed = query;
         state.hits = opts.append ? state.hits.concat(data.hits) : data.hits.slice();
         state.next = data.next || null;
         renderBadgesInConvo();
@@ -572,13 +581,30 @@
     });
   }
 
+  function invalidateDraft() {
+    ++state.reqSeq;
+    if (activeFetchController) activeFetchController.abort();
+    state.loading = state.loadingMore = false;
+    renderHitList();
+  }
+
   function clearSearch() {
+    if (typeof window !== "undefined" && window.WsAudit) window.WsAudit.windows().forEach(function (win) {
+      if (win._auPagingToken) {
+        win._auPagingToken.cancelled = true;
+        if (win._auPagingToken.cancel) win._auPagingToken.cancel();
+      }
+      win._auPagingToken = null;
+      win.search = ""; win.regex = false; win.caseSensitive = false; win.targetLine = 0;
+      window.WsAudit.renderWindow(win);
+    });
     if (activeFetchController && typeof activeFetchController.abort === "function") {
       try { activeFetchController.abort(); } catch (e) {}
       activeFetchController = null;
     }
     ++state.reqSeq;
     state.q = "";
+    state.committed = null;
     state.submitted = false;
     state.submittedQ = "";
     state.loading = false;
@@ -650,16 +676,17 @@
   }
 
   function handleWindowRender(win) {
-    if (!win || win.loading || !win.activeEnvelope || !(win.targetLine > 0)) return;
+    if (!win || win.loading || !(win.targetLine > 0)) return;
     var part = win.tab === "out" ? "out" : (win.tab === "in" ? "in" : "");
-    var ev = win.activeEnvelope;
-    if (!part || !ev.truncated || !ev.range || !ev.range[part]) return;
+    var ev = window.WsAudit.displayedEnvelope(win);
+    if (!part || !ev || !ev.truncated || !ev.range || !ev.range[part]) return;
     if (isLineComplete(ev[part] || "", win.targetLine)) return;
-    if (win._auPagingToken === win.reqToken) return;
+    if (win._auPagingToken) return;
     var curRid = activeRid();
     if (!curRid) return;
-    win._auPagingToken = win.reqToken;
     var token = win.reqToken;
+    var pagingToken = {};
+    win._auPagingToken = pagingToken;
     var eventId = ev.id || win.inspectEventId || win.eventId;
     ensureLineLoaded(ev, part, win.targetLine, function (offset, len) {
       return fetch(buildRangeUrl(curRid, eventId, part, offset, len)).then(function (r) {
@@ -667,19 +694,20 @@
         return r.json();
       });
     }, {
-      isCancelled: function () { return win.reqToken !== token || !win.el || !win.el.isConnected || win.activeEnvelope !== ev; },
+      loadPage: function (offset, len) { return window.WsAudit.loadMorePart(win, part, offset, pagingToken); },
+      isCancelled: function () { return win.reqToken !== token || !win.el || !win.el.isConnected || window.WsAudit.displayedEnvelope(win) !== ev || win._auPagingToken !== pagingToken; },
       onChunk: function () {
         if (window.WsAudit && typeof window.WsAudit.renderWindow === "function") {
           window.WsAudit.renderWindow(win);
         }
       }
     }).then(function (res) {
-      if (win.reqToken === token && win._auPagingToken === token) win._auPagingToken = 0;
+      if (win.reqToken === token && win._auPagingToken === pagingToken) win._auPagingToken = 0;
       if (res && !res.cancelled && res.loadedPages > 0 && window.WsAudit && typeof window.WsAudit.renderWindow === "function") {
         window.WsAudit.renderWindow(win);
       }
     }).catch(function () {
-      if (win.reqToken === token && win._auPagingToken === token) win._auPagingToken = 0;
+      if (win.reqToken === token && win._auPagingToken === pagingToken) win._auPagingToken = 0;
     });
   }
 
@@ -715,6 +743,7 @@
       executeSearch({ append: false });
     });
     inp.addEventListener("input", function () {
+      invalidateDraft();
       state.q = inp.value || "";
       clr.hidden = !(state.q || state.submitted);
       if (!state.q && state.submitted) clearSearch();
@@ -724,14 +753,17 @@
       inp.focus();
     });
     rxBtn.addEventListener("click", function () {
+      invalidateDraft();
       state.regex = !state.regex;
       rxBtn.setAttribute("aria-pressed", state.regex ? "true" : "false");
     });
     csBtn.addEventListener("click", function () {
+      invalidateDraft();
       state.caseSensitive = !state.caseSensitive;
       csBtn.setAttribute("aria-pressed", state.caseSensitive ? "true" : "false");
     });
     kindSel.addEventListener("change", function () {
+      invalidateDraft();
       state.kind = kindSel.value || "";
       if (state.submitted && state.q.trim()) executeSearch({ append: false });
     });
@@ -857,6 +889,8 @@
     ensureUI: ensureSearchUI,
     executeSearch: executeSearch,
     clearSearch: clearSearch,
+    invalidateDraft: invalidateDraft,
+    handleWindowRender: handleWindowRender,
     openHit: openSearchHit,
     renderBadges: renderBadgesInConvo,
     state: function () { return state; }

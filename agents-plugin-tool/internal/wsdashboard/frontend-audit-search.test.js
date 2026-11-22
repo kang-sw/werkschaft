@@ -29,7 +29,7 @@ function loadAuditWindowHelpers() {
     Error
   };
   vm.runInNewContext(
-    snippet + "\nglobalThis.__exports = { auRenderBodyContent, auRenderLineText, auBuildSearchMatcher };",
+    snippet + "\nglobalThis.__exports = { auRenderBodyContent, auRenderLineText, auBuildSearchMatcher, auSplitLinesWithBytes };",
     sandbox
   );
   return sandbox.__exports;
@@ -130,8 +130,9 @@ function makeMockFetchEnv(handlers) {
     window: { addEventListener: noop, WsAudit: { hooks: {} } },
     fetch: handlers.fetch
   };
-  vm.runInNewContext(winSrc, sandbox);
-  return { api: sandbox.window.WsAuditSearch, elements: { statEl, listBox, retryBtn, footEl, hitsEl } };
+  vm.runInNewContext(winSrc.replace("buildSearchUrl: buildSearchUrl,", "bindUI: bindSearchUI, buildSearchUrl: buildSearchUrl,"), sandbox);
+  sandbox.window.WsAuditSearch.bindUI(wrap);
+  return { api: sandbox.window.WsAuditSearch, sandbox, elements: { subBtn, statEl, listBox, retryBtn, footEl, hitsEl, inp, rxBtn: rx, csBtn: cs, kindSel } };
 }
 
 test("buildSearchUrl encodes q, regex, case, optional kinds and cursor", () => {
@@ -261,7 +262,10 @@ test("executeSearch handles 410 cursor restart, 400 invalid regex, 503 retryable
   env1.api.state().q = "hit";
   await env1.api.executeSearch({ append: false });
   assert.equal(env1.api.state().hits.length, 1);
+  env1.api.state().q = "draft";
   await env1.api.executeSearch({ append: true, cursor: "c1" });
+  assert.match(urls[2], /q=hit/);
+  assert.doesNotMatch(urls[2], /cursor=/);
   assert.equal(env1.api.state().staleNotice, true);
   assert.equal(env1.api.state().hits[0].event_id, "e2");
 
@@ -299,4 +303,108 @@ test("executeSearch handles 410 cursor restart, 400 invalid regex, 503 retryable
   await slowPromise;
   assert.equal(env2.api.state().hits.length, 0);
   assert.ok(env2.elements.statEl.textContent.includes("js.audit.csearch.empty"));
+});
+
+const response = (hits = [], next = null, status = 200) => ({ status, ok: status === 200, text: async () => JSON.stringify({ hits, next }) });
+const hit = {event_id: "e", kind: "other", field: "in", line_no: 1, line: "hit"};
+test("draft input and options abort and invalidate pending responses", async () => {
+  for (const [el, event] of [["inp", "input"], ["rxBtn", "click"], ["csBtn", "click"]]) {
+    let resolve, signal;
+    const env = makeMockFetchEnv({fetch: (_, opts) => { signal = opts.signal; return new Promise(r => resolve = r); }});
+    env.api.state().q = "old";
+    const pending = env.api.executeSearch();
+    assert.equal(env.elements.subBtn.disabled, true);
+    env.elements.inp.value = "new";
+    env.elements[el].listeners[event][0]();
+    assert.equal(signal.aborted, true);
+    assert.equal(env.elements.subBtn.disabled, false);
+    resolve(response([hit])); await pending;
+    assert.equal(env.api.state().hits.length, 0);
+  }
+});
+test("append uses successful committed query and preserves hits for 400/503/network errors", async () => {
+  const urls = []; let status = 200;
+  const env = makeMockFetchEnv({fetch: async url => { urls.push(url); if (status === -1) throw Error("offline"); return response([hit], "cursor", status); }});
+  Object.assign(env.api.state(), {q: "exact", regex: true, caseSensitive: true, kind: "hook"});
+  await env.api.executeSearch();
+  Object.assign(env.api.state(), {q: "draft", regex: false, caseSensitive: false, kind: ""});
+  for (status of [400,503,-1]) {
+    await env.api.executeSearch({append:true, cursor:"cursor"});
+    assert.match(urls.at(-1), /q=exact&regex=1&case=1&kinds=hook&cursor=cursor/);
+    assert.equal(env.api.state().hits.length, 1);
+    assert.equal(env.api.state().errorKind, "unavail");
+    assert.match(env.elements.statEl.textContent, /unavail/);
+  }
+});
+test("stored truncation numbers concatenated text in four seam variants and matches seam regex", () => {
+  for (const [head,tail,target] of [["head","TAIL\nhit",2],["head\n","TAIL\nhit",3],["","TAIL\nhit",2],["hit","",1]]) {
+    const ev = {in:head+tail,model_seen:true,stored_trunc:{in:{head_bytes:Buffer.byteLength(head),tail_bytes:Buffer.byteLength(tail),original_bytes:100}}};
+    const res = winHelpers.auRenderBodyContent(ev,"in",{search:"hit",targetLine:target});
+    assert.match(res.html,new RegExp('au-ln-target" data-line="'+target+'"'));
+    assert.equal((res.html.match(/au-trunc-row/g)||[]).length,1);
+    if (!head) assert.ok(res.html.indexOf("au-trunc-row") < res.html.indexOf("au-line"));
+  }
+  const res = winHelpers.auRenderBodyContent({in:"headTAIL",stored_trunc:{in:{head_bytes:4,tail_bytes:4,original_bytes:99}}},"in",{search:"headTAIL$",regex:true});
+  assert.equal(res.matchCount,1);
+});
+test("CRLF regex matching trims CR while byte offsets retain CR and UTF8", () => {
+  const lines = winHelpers.auSplitLinesWithBytes("é\r\nfoo\r\n***",0);
+  assert.equal(lines[1].startByte,4); assert.equal(lines[1].endByte,8); assert.equal(lines[2].startByte,9);
+  assert.equal(lines[1].text,"foo");
+  const res = winHelpers.auRenderBodyContent({in:"é\r\nfoo\r\n***",redactions:[{field:"in",offset:9,rule:"secret",length:3}]},"in",{search:"foo$",regex:true});
+  assert.equal(res.matchCount,1); assert.match(res.html,/🔒 secret/); assert.doesNotMatch(res.html,/data-line="4"/);
+});
+
+function installPaging(env, wins, fetcher) {
+  const src = fs.readFileSync(path.join(__dirname,"assets/dashboard-audit.js"),"utf8");
+  const sandbox = {fetch:fetcher, AbortController, WeakMap, Promise, encodeURIComponent, AU_RANGE_CHUNK:100,
+    auSessionRid:()=>"sess-1", auRenderWindowBody:()=>{}, toast:()=>{}, wsT:k=>k};
+  vm.runInNewContext(src.slice(src.indexOf("  function auDisplayedEnvelope("),src.indexOf("  function auCopyPlain("))+"\nglobalThis.api={displayedEnvelope:auDisplayedEnvelope,loadMorePart:auLoadMorePart};",sandbox);
+  Object.assign(env.sandbox.window.WsAudit,sandbox.api,{windows:()=>wins,renderWindow:()=>{}});
+  return sandbox.api;
+}
+const pageWin = () => ({reqToken:1,tab:"out",targetLine:3, search:"hit",regex:true,caseSensitive:true,
+  el:{isConnected:true,querySelector:()=>null},activeEnvelope:{id:"call",in:"call"},
+  resultEnvelope:{id:"result",out:"a\n",truncated:true,range:{out:{offset:2,total:100}}}});
+const flush = async () => {for(let i=0;i<12;i++) await Promise.resolve();};
+test("manual and automatic same-offset paging share one promise and append once on result envelope", async () => {
+  const env=makeMockFetchEnv({fetch:async()=>response()}); const win=pageWin();
+  let resolve,calls=0,url;
+  const paging=installPaging(env,[win],u=>{calls++;url=u;return new Promise(r=>resolve=r);});
+  const manual=paging.loadMorePart(win,"out",2);
+  env.api.handleWindowRender(win);
+  assert.equal(calls,1); assert.match(url,/event\/result/);
+  assert.equal(paging.loadMorePart(win,"out",2),manual);
+  resolve({ok:true,json:async()=>({data:"b\nhit\n",end:true})});
+  assert.equal(await manual,true); await flush();
+  assert.equal(win.resultEnvelope.out,"a\nb\nhit\n");
+  assert.equal(win.activeEnvelope.in,"call");
+  assert.equal(await paging.loadMorePart(win,"out",2),false);
+});
+test("clear cancels owned pending auto work and resets window immediately, but leaves manual owner alive", async () => {
+  for(const manualFirst of [false,true]) {
+    const env=makeMockFetchEnv({fetch:async()=>response()});const win=pageWin();
+    let resolve,signal,renders=0;
+    const paging=installPaging(env,[win],(_,opts)=>{signal=opts.signal;return new Promise(r=>resolve=r);});
+    env.sandbox.window.WsAudit.renderWindow=()=>renders++;
+    const pending=manualFirst ? paging.loadMorePart(win,"out",2) : null;
+    env.api.handleWindowRender(win); env.api.clearSearch();
+    assert.equal(signal.aborted,!manualFirst);
+    assert.equal(win.search,"");assert.equal(win.regex,false);assert.equal(win.caseSensitive,false);assert.equal(win.targetLine,0);assert.equal(renders,1);
+    resolve({ok:true,json:async()=>({data:"b\nhit\n",end:true})});
+    if(pending) await pending; await flush();
+    assert.equal(win.resultEnvelope.out,manualFirst?"a\nb\nhit\n":"a\n");
+    assert.equal(win._auPagingToken,null);
+  }
+});
+
+test("pending page discards changed offset, replacement envelope, and changed displayed result",async()=>{
+  for(const change of [w=>w.resultEnvelope.range.out.offset=4,w=>w.resultEnvelope={id:"new"},w=>w.tab="in"]) {
+    const env=makeMockFetchEnv({fetch:async()=>response()});const win=pageWin();const ev=win.resultEnvelope;
+    let resolve;
+    const paging=installPaging(env,[win],()=>new Promise(r=>resolve=r));
+    const owner={};const pending=paging.loadMorePart(win,"out",2,owner);change(win);
+    resolve({ok:true,json:async()=>({data:"duplicate",end:true})});
+    assert.equal(await pending,false); assert.equal(ev.out,"a\n");
+  }
 });

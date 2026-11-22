@@ -263,7 +263,7 @@
       return;
     }
 
-    var ev = (win.tab === "out" && !win.inspectEventId && win.resultEnvelope) ? win.resultEnvelope : win.activeEnvelope;
+    var ev = auDisplayedEnvelope(win);
     if (!ev) {
       panel.innerHTML = '<div class="au-state">' + auEsc(wsT("js.audit.part.empty")) + "</div>";
       win.currentPlain = "";
@@ -489,32 +489,37 @@
     });
   }
 
-  function auLoadMorePart(win, part, offset) {
+  function auDisplayedEnvelope(win) {
+    return (win.tab === "out" && !win.inspectEventId && win.resultEnvelope) ? win.resultEnvelope : win.activeEnvelope;
+  }
+
+  function auLoadMorePart(win, part, offset, owner) {
     var ev = (part === "out" && !win.inspectEventId && win.resultEnvelope) ? win.resultEnvelope : win.activeEnvelope;
-    if (!ev || !ev.id) return;
-    win.moreBusy = win.moreBusy || {};
-    var busyKey = ev.id + "\u0000" + part;
-    if (win.moreBusy[busyKey]) return;
-    win.moreBusy[busyKey] = true;
+    if (!ev || !ev.id) return Promise.resolve(false);
+    win._morePending = win._morePending || new WeakMap();
+    if (!win._morePending.has(ev)) win._morePending.set(ev, {});
+    var paging = win._morePending.get(ev);
+    if (paging[part]) {
+      if (!owner) paging[part].manual = true;
+      return paging[part];
+    }
+    if (!ev.range || !ev.range[part] || ev.range[part].offset !== offset) return Promise.resolve(false);
+    var token = win.reqToken;
+    var controller = new AbortController();
     var btn = win.el.querySelector('[data-au-more="' + part + '"]');
     if (btn) btn.disabled = true;
     var panel = win.el.querySelector(".au-panel");
     var scrollTop = panel ? panel.scrollTop : 0;
     var url = "/s/" + encodeURIComponent(auSessionRid()) + "/audit/event/" + encodeURIComponent(ev.id) +
       "?part=" + encodeURIComponent(part) + "&offset=" + encodeURIComponent(String(offset)) + "&len=" + AU_RANGE_CHUNK;
-    fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+    var pending = fetch(url, { credentials: "same-origin", cache: "no-store", signal: controller.signal }).then(function (r) {
       if (!r.ok) return r.text().then(function (msg) { throw { status: r.status, message: msg }; });
       return r.json();
     }).then(function (chunk) {
-      win.moreBusy[busyKey] = false;
       var stillActive = (ev === win.activeEnvelope) || (!win.inspectEventId && ev === win.resultEnvelope);
-      if (!win.el.isConnected || !stillActive) return;
-      // Apply only to the envelope and offset this request asked for.
-      var cur = ev.range && ev.range[part];
-      if (!cur || Number(cur.offset) !== Number(offset)) return;
-      if (chunk && typeof chunk.data === "string") {
-        ev[part] = (ev[part] || "") + chunk.data;
-      }
+      if (win.reqToken !== token || (owner && (owner.cancelled || auDisplayedEnvelope(win) !== ev) && !pending.manual) || !win.el.isConnected || !stillActive || !ev.range || !ev.range[part] || ev.range[part].offset !== offset) return false;
+      if (!chunk || typeof chunk.data !== "string") return false;
+      ev[part] = (ev[part] || "") + chunk.data;
       if (chunk && chunk.end && ev.range) {
         delete ev.range[part];
         if (!Object.keys(ev.range).length) ev.truncated = false;
@@ -524,11 +529,16 @@
       auRenderWindowBody(win);
       var newPanel = win.el.querySelector(".au-panel");
       if (newPanel) newPanel.scrollTop = scrollTop;
+      return true;
     }).catch(function () {
-      win.moreBusy[busyKey] = false;
       if (btn) btn.disabled = false;
-      toast(wsT("js.audit.loadmore.failed"));
-    });
+      if (!(owner && owner.cancelled)) toast(wsT("js.audit.loadmore.failed"));
+      return false;
+    }).finally(function () { delete paging[part]; });
+    pending.manual = !owner;
+    if (owner) owner.cancel = function () { owner.cancelled = true; if (!pending.manual) controller.abort(); };
+    paging[part] = pending;
+    return pending;
   }
 
   function auCopyPlain(win) {
@@ -1118,5 +1128,7 @@
     hooks: auHooks,
     renderWindow: auRenderWindowBody,
     fetchEnvelope: auFetchEnvelope,
+    displayedEnvelope: auDisplayedEnvelope,
+    loadMorePart: auLoadMorePart,
     windows: function () { return auWindows.slice(); }
   };
