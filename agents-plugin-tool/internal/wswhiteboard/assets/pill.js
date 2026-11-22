@@ -19,12 +19,7 @@
   // Keyed in localStorage by board identity + item ID, storing a fingerprint
   // of the item's rendered content at hold time. A changed fingerprint clears
   // the hold; answering or withdrawing the item drops it.
-  // The holds map keeps the text-only (legacy) fingerprint every release
-  // reads, so a tab still running an older build never sees a mismatch for a
-  // hold a newer tab made. The fingerprint with rationale link targets lives
-  // beside it in its own map; a hold without one (made by an older tab)
-  // is checked on text alone.
-  var HOLD_PREFIX = "ws.wb.holds.", LINKS_PREFIX = "ws.wb.holdlinks.";
+  var HOLD_PREFIX = "ws.wb.holds.";
   function getStorage() {
     try { return window.localStorage || null; } catch (e) { return null; }
   }
@@ -39,35 +34,21 @@
     return (window.location && window.location.pathname) || "default";
   }
   function holdStorageKey() { return HOLD_PREFIX + boardKey(); }
-  function linksStorageKey() { return LINKS_PREFIX + boardKey(); }
   function itemKey(el) {
     if (!el || !el.getAttribute) return "";
     return el.getAttribute("data-id") || el.getAttribute("id") || "";
   }
   function normText(s) { return String(s || "").replace(/\s+/g, " ").trim(); }
-  // Authored link destinations in a rationale (a policy's .ctx markdown, an
-  // ack's .why lines): a patch may change only a link's target and keep its
-  // label. Script-built controls are skipped.
-  function linkTargets(el) {
-    var out = [];
-    Array.prototype.forEach.call((el.querySelectorAll && el.querySelectorAll("a[href]")) || [], function (a) {
-      if (a.closest && a.closest("button")) return;
-      out.push(a.getAttribute("href") || "");
-    });
-    return out.length ? "\nh:" + out.join("\n") : "";
-  }
-  // legacy omits link targets: the form stored in the shared holds map (see
-  // above). With no rationale links both forms are equal.
-  function itemFingerprint(el, legacy) {
+  function itemFingerprint(el) {
     if (!el) return "";
     var parts = [];
     var title = el.querySelector && el.querySelector(".title");
     if (title) parts.push("t:" + normText(title.textContent));
     var ctx = el.querySelector && el.querySelector(".ctx");
-    if (ctx) parts.push("c:" + normText(ctx.textContent) + (legacy ? "" : linkTargets(ctx)));
+    if (ctx) parts.push("c:" + normText(ctx.textContent));
     if (el.querySelectorAll) {
       Array.prototype.forEach.call(el.querySelectorAll(".why") || [], function (w) {
-        parts.push("w:" + normText(w.textContent) + (legacy ? "" : linkTargets(w)));
+        parts.push("w:" + normText(w.textContent));
       });
       Array.prototype.forEach.call(el.querySelectorAll(".opt") || [], function (o) {
         if (!o || !o.hasAttribute || !o.hasAttribute("data-opt")) return;
@@ -97,11 +78,11 @@
     }
     return (h >>> 0).toString(36) + ":" + raw.length;
   }
-  function loadHolds(key) {
+  function loadHolds() {
     var ls = getStorage();
     if (!ls) return {};
     try {
-      var raw = ls.getItem(key || holdStorageKey());
+      var raw = ls.getItem(holdStorageKey());
       if (!raw) return {};
       var parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -112,20 +93,14 @@
       return out;
     } catch (e) { return {}; }
   }
-  function saveMap(key, map) {
+  function saveHolds(map) {
     var ls = getStorage();
     if (!ls) return;
     try {
-      if (!Object.keys(map).length) ls.removeItem(key);
-      else ls.setItem(key, JSON.stringify(map));
+      var keys = Object.keys(map);
+      if (!keys.length) ls.removeItem(holdStorageKey());
+      else ls.setItem(holdStorageKey(), JSON.stringify(map));
     } catch (e) {}
-  }
-  // Link fingerprints exist only beside a hold; an older tab that dropped
-  // the hold leaves one behind, which goes with the next write.
-  function saveHolds(map) {
-    Object.keys(links).forEach(function (k) { if (!(k in map)) delete links[k]; });
-    saveMap(holdStorageKey(), map);
-    saveMap(linksStorageKey(), links);
   }
 
   // An item's draft state, read from the same form controls form.js builds
@@ -148,12 +123,7 @@
     return responded(el) || el.classList.contains("sent-sent") || el.classList.contains("sent-held");
   }
 
-  var holds = loadHolds(), links = loadHolds(linksStorageKey());
-  // matches: the hold was made on this content (see the hold store above).
-  function matches(el, k) {
-    if (holds[k] !== itemFingerprint(el, true)) return false;
-    return !(k in links) || links[k] === itemFingerprint(el);
-  }
+  var holds = loadHolds();
   function holdButton(el) {
     var b = el && el.querySelector ? el.querySelector(".wb-hold-toggle") : null;
     return b && b.hasAttribute && b.hasAttribute("data-wb-hold") ? b : null;
@@ -168,97 +138,62 @@
     if (b.title !== tip) b.title = tip;
     if (b.getAttribute("aria-label") !== tip) b.setAttribute("aria-label", tip);
   }
-  // Writes are per key: re-read both maps, change only the given IDs, and
-  // write them back, so a hold another tab set since this tab last loaded
-  // them is never overwritten by this tab's copy.
-  function writeHolds(mutate) {
-    var h = loadHolds(), l = loadHolds(linksStorageKey());
-    mutate(h, l);
-    holds = h;
-    links = l;
-    saveHolds(holds);
-  }
-  function holdId(k, h, l) { return k + "\n" + h[k] + "\n" + (k in l ? l[k] : ""); }
-  // What this tab has rendered, kept across the dashboard's reruns of this
-  // script: each hold it showed on its own content, each open item ID, and
-  // whether it has judged a board yet. A tab's board only moves forward.
-  var board = boardKey(), mem = st.holdMem && st.holdMem.board === board ? st.holdMem
-    : (st.holdMem = { board: board, seen: {}, rendered: {}, trusted: false });
   // Reconcile stored holds against current items:
   // - drop any hold whose item is now answered
   // - clear any hold whose content fingerprint changed (patched or re-asked)
   // - when pruneAbsent is true, drop any stored ID no longer among open items
   //   (answered on server or withdrawn)
-  // A drop is written to the localStorage all tabs share, and this DOM may be
-  // an old snapshot (a buffered update, or a stream behind another tab's), so
-  // a changed or absent item proves a hold stale only against content this
-  // tab rendered itself: it showed the hold on matching content, or showed
-  // the item, before. The first board a tab judges was fetched whole and
-  // counts as current. While the dashboard buffers an update nothing is
-  // judged; the prune waits for it.
-  var pruneDue = false;
   function reconcileHolds(pruneAbsent) {
-    if (st.pending > 0) {
-      if (pruneAbsent) pruneDue = true;
-      return;
-    }
-    pruneAbsent = pruneAbsent || pruneDue;
-    pruneDue = false;
-    var shown = items.length > 0 || d.querySelector(".topic") || d.querySelector(".reply");
-    var trusted = shown && !mem.trusted;
-    if (shown) mem.trusted = true;
-    var openIds = {}, drop = {};
+    var openIds = {}, changed = false;
     items.forEach(function (el) {
       var k = itemKey(el);
       if (!k) return;
       openIds[k] = true;
       if (!(k in holds)) return;
-      var id = holdId(k, holds, links);
-      if (answered(el)) drop[k] = id;
-      else if (matches(el, k)) mem.seen[id] = true;
-      else if (trusted || mem.seen[id]) drop[k] = id;
+      if (answered(el) || holds[k] !== itemFingerprint(el)) {
+        delete holds[k];
+        changed = true;
+      }
     });
-    if (pruneAbsent && shown) {
+    if (pruneAbsent && (items.length > 0 || d.querySelector(".topic") || d.querySelector(".reply"))) {
       Object.keys(holds).forEach(function (k) {
-        if (!openIds[k] && (trusted || mem.rendered[k])) drop[k] = holdId(k, holds, links);
+        if (!openIds[k]) {
+          delete holds[k];
+          changed = true;
+        }
       });
     }
-    Object.keys(openIds).forEach(function (k) { mem.rendered[k] = true; });
-    if (!Object.keys(drop).length) return;
-    // Only the hold that was judged goes: another tab may have replaced it.
-    writeHolds(function (h, l) {
-      Object.keys(drop).forEach(function (k) {
-        if (k in h && holdId(k, h, l) === drop[k]) { delete h[k]; delete l[k]; }
-      });
-    });
+    if (changed) saveHolds(holds);
   }
   function applyHoldDOM() {
-    items.forEach(function (el) { syncHoldDOM(el, held(el)); });
+    items.forEach(function (el) {
+      var k = itemKey(el);
+      syncHoldDOM(el, !!(k && (k in holds) && !answered(el)));
+    });
   }
-  // A hold shows only on the content it was made on; one kept for content
-  // this tab has not rendered yet waits for it.
   function held(el) {
     var k = itemKey(el);
-    return !!(k && (k in holds) && !answered(el) && matches(el, k));
+    return !!(k && (k in holds) && !answered(el));
   }
   function isHeldExternal(el) {
     var k = itemKey(el);
-    return !!(k && (k in holds) && matches(el, k));
+    if (!k || !(k in holds)) return false;
+    return holds[k] === itemFingerprint(el);
   }
   function toggleHold(el) {
     var k = itemKey(el);
     if (!k) return false;
-    if (k in holds && matches(el, k)) {
-      writeHolds(function (h, l) { delete h[k]; delete l[k]; });
+    if (k in holds) {
+      delete holds[k];
+      saveHolds(holds);
       syncHoldDOM(el, false);
       retitle();
       redrawSoon();
       return false;
     }
     if (answered(el)) return false;
-    var legacy = itemFingerprint(el, true), full = itemFingerprint(el);
-    writeHolds(function (h, l) { h[k] = legacy; l[k] = full; });
-    mem.seen[holdId(k, holds, links)] = true;
+    holds[k] = itemFingerprint(el);
+    saveHolds(holds);
     syncHoldDOM(el, true);
     retitle();
     redrawSoon();
@@ -527,13 +462,10 @@
     }
     redraw();
   }
-  // Another tab changed the holds: adopt them for display only. This tab's
-  // board may be older than the writer's, so it never writes back a prune
-  // or a fingerprint drop decided from it.
   function onStorage(e) {
-    if (!e || (e.key !== null && e.key !== holdStorageKey() && e.key !== linksStorageKey())) return;
+    if (!e || (e.key !== null && e.key !== holdStorageKey())) return;
     holds = loadHolds();
-    links = loadHolds(linksStorageKey());
+    reconcileHolds(true);
     applyHoldDOM();
     retitle();
     redrawSoon();

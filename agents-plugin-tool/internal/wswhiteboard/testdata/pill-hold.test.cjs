@@ -51,7 +51,6 @@ function makePillHarness(itemSpecs, opts = {}) {
     }
     querySelectorAll(sel) {
       if (sel in this.q) return this.q[sel];
-      if (sel === 'a[href]') return this.all([]).filter(e => e.tag === 'a' && 'href' in e.attrs);
       if (sel[0] === '.') {
         const cls = sel.slice(1).split('.');
         return this.all([]).filter(e => cls.every(c => e.cls[c]));
@@ -86,48 +85,48 @@ function makePillHarness(itemSpecs, opts = {}) {
     scrollIntoView() { jumped.push(this.attrs['data-id'] || this.attrs.id); }
   }
 
-  // Item markup follows page.tmpl: a policy card (cbar head title, ask jump,
-  // hold button; cbody with the rationale as .ctx.md, links, options) or an
-  // ack row (label.ack > .atext with the rationale as .why lines).
-  function child(parent, tag, cls, text) {
-    const e = new El(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return parent.appendChild(e);
-  }
-  function rationale(parent, cls, r) {
-    if (typeof r === 'string') { child(parent, cls === 'why' ? 'span' : 'div', cls, r); return; }
-    const box = child(parent, cls === 'why' ? 'span' : 'div', cls, r.text + ' ' + r.label);
-    child(box, 'a', '', r.label).attrs.href = r.href;
-  }
   function makeItem(spec) {
     const el = new El('div');
-    const ack = spec.kind === 'ack';
-    el.className = spec.cls || (ack ? 'arow' : 'card policy');
+    el.className = spec.cls || 'card policy';
     el.attrs.id = 'item-' + spec.id;
     el.attrs['data-id'] = String(spec.id);
     el.top = spec.top;
-    const bar = ack ? child(child(el, 'label', 'ack'), 'span', 'atext') : child(el, 'div', 'cbar');
-    const head = child(bar, 'span', 'head');
-    child(head, 'span', 'id', String(spec.id));
-    child(head, 'span', 'title', spec.title || ('Question ' + spec.id));
-    const body = ack ? bar : child(el, 'div', 'cbody');
-    const why = spec.rationale || spec.ctx;
-    if (why) rationale(body, ack ? 'why' : 'ctx md', why);
+    const title = new El('span');
+    title.className = 'title';
+    title.textContent = spec.title || ('Question ' + spec.id);
+    el.appendChild(title);
+    if (spec.ctx) {
+      const ctx = new El('div');
+      ctx.className = 'ctx';
+      ctx.textContent = spec.ctx;
+      el.appendChild(ctx);
+    }
     if (spec.options) {
-      const opts = child(body, 'div', 'opts');
       spec.options.forEach((opt, i) => {
-        child(opts, 'button', 'opt', opt).attrs['data-opt'] = String.fromCharCode(97 + i);
+        const o = new El('button');
+        o.className = 'opt';
+        o.attrs['data-opt'] = String.fromCharCode(97 + i);
+        o.textContent = opt;
+        el.appendChild(o);
       });
     }
     if (spec.askEntry) {
-      const jump = child(bar, 'a', 'wb-askjump');
+      const jump = new El('a');
+      jump.className = 'wb-askjump';
       jump.attrs.href = '#' + spec.askEntry;
-      if (spec.reasked) child(jump, 'span', 'wb-askre', 'Asked again ' + spec.reasked);
+      if (spec.reasked) {
+        const re = new El('span');
+        re.className = 'wb-askre';
+        re.textContent = 'Asked again ' + spec.reasked;
+        jump.appendChild(re);
+      }
+      el.appendChild(jump);
     }
-    const holdBtn = child(ack ? el : bar, 'button', 'btn mini wb-hold-toggle');
+    const holdBtn = new El('button');
+    holdBtn.className = 'btn mini wb-hold-toggle';
     holdBtn.attrs['data-wb-hold'] = '';
     holdBtn.attrs['aria-pressed'] = 'false';
+    el.appendChild(holdBtn);
     el.holdBtn = holdBtn;
     if (spec.picked) el.q['.opt[data-opt][aria-pressed="true"]'] = [new El('button')];
     if (spec.note) {
@@ -145,7 +144,7 @@ function makePillHarness(itemSpecs, opts = {}) {
   const html = new El('html');
   html.attrs['data-rid'] = opts.rid || 'sess-1';
   if (opts.incarnation) html.attrs['data-board-incarnation'] = opts.incarnation;
-  const frames = [], jumped = [], titleCounts = [], winListeners = {};
+  const frames = [], jumped = [], titleCounts = [];
   const doc = {
     body: new El('body'),
     documentElement: html,
@@ -159,11 +158,10 @@ function makePillHarness(itemSpecs, opts = {}) {
     IntersectionObserver: function () { this.observe = () => {}; this.disconnect = () => {}; },
     innerHeight: 800,
     scrollY: 20,
-    addEventListener: (type, fn) => { (winListeners[type] ||= []).push(fn); },
-    removeEventListener: (type, fn) => { winListeners[type] = (winListeners[type] || []).filter(f => f !== fn); },
+    addEventListener: () => {},
+    removeEventListener: () => {},
     wbTitleCount: n => titleCounts.push(n)
   };
-  if (opts.pending) win.wbPill = { pending: opts.pending };
   const ctx = vm.createContext({
     console,
     document: doc,
@@ -200,13 +198,8 @@ function makePillHarness(itemSpecs, opts = {}) {
     flush();
   }
 
-  function fireStorage(key) {
-    (winListeners.storage || []).forEach(fn => fn({ key }));
-    flush();
-  }
-
   run();
-  return { items, host, storage, win, jumped, titleCounts, flush, pill, shown, pressSeg, clickHold, run, fireStorage };
+  return { items, host, storage, win, jumped, titleCounts, flush, pill, shown, pressSeg, clickHold, run };
 }
 
 test('held ask leaves open count and tab title, surfaces in held pill segment, and jumps in one step', () => {
@@ -279,118 +272,6 @@ test('hold auto-clears when item content or re-ask marker changes (fingerprint c
   assert.equal(h3.items[1].classList.contains('wb-held'), false, 're-asked item hold auto-cleared');
   assert.equal(h3.titleCounts.at(-1), 2);
   assert.deepEqual(storage.dump(), {}, 'cleared holds remove empty localStorage entry');
-});
-
-for (const kind of ['policy', 'ack']) test(kind + ': a rationale link target change clears the hold; the shared map keeps the form older tabs read', () => {
-  const ask = href => [{ id: 30, kind, top: -200, title: 'Pick a cache', rationale: { text: 'See the', label: 'design notes', href } }];
-  const holdsKey = 'ws.wb.holds.board-l', linksKey = 'ws.wb.holdlinks.board-l';
-  const storage = makeStorage();
-  const h1 = makePillHarness(ask('docs/a.md'), { storage, rid: 'board-l' });
-  h1.clickHold(h1.items[0]);
-  assert.equal(h1.items[0].classList.contains('wb-held'), true);
-  // An older tab compares the shared map's value with its text-only
-  // fingerprint: the new tab must keep writing exactly that form there.
-  const legacy = h1.win.wbPill.fingerprint(h1.items[0], true);
-  assert.notEqual(legacy, h1.win.wbPill.fingerprint(h1.items[0]));
-  assert.deepEqual(JSON.parse(storage.dump()[holdsKey]), { 30: legacy });
-  assert.deepEqual(JSON.parse(storage.dump()[linksKey]), { 30: h1.win.wbPill.fingerprint(h1.items[0]) });
-  h1.run();
-  assert.deepEqual(JSON.parse(storage.dump()[holdsKey]), { 30: legacy }, 'a rerun never replaces it');
-
-  const h2 = makePillHarness(ask('docs/b.md'), { storage, rid: 'board-l' });
-  assert.equal(h2.items[0].classList.contains('wb-held'), false, 'retargeted link clears the hold');
-  assert.equal(h2.titleCounts.at(-1), 1);
-  assert.deepEqual(storage.dump(), {}, 'both maps drop it');
-
-  // A hold an older tab stored (text-only map, no link fingerprint) is kept
-  // as is: nothing is rewritten in the shared map, nothing added beside it.
-  const seeded = makeStorage({ [holdsKey]: JSON.stringify({ 30: legacy }) });
-  const h3 = makePillHarness(ask('docs/b.md'), { storage: seeded, rid: 'board-l' });
-  assert.equal(h3.items[0].classList.contains('wb-held'), true, 'an older tab\'s hold is honoured');
-  assert.equal(h3.win.wbPill.isHeld(h3.items[0]), true);
-  assert.deepEqual(seeded.dump(), { [holdsKey]: JSON.stringify({ 30: legacy }) });
-  // Its text still decides: an edited title clears it.
-  const h4 = makePillHarness([{ ...ask('docs/b.md')[0], title: 'Pick a store' }], { storage: seeded, rid: 'board-l' });
-  assert.equal(h4.items[0].classList.contains('wb-held'), false);
-
-  // A link fingerprint an older tab left behind (it dropped the hold) goes
-  // with the next write and never judges a later hold.
-  const orphan = makeStorage({ [linksKey]: JSON.stringify({ 30: 'stale:1' }) });
-  const h5 = makePillHarness(ask('docs/b.md'), { storage: orphan, rid: 'board-l' });
-  h5.clickHold(h5.items[0]);
-  assert.deepEqual(JSON.parse(orphan.dump()[linksKey]), { 30: h5.win.wbPill.fingerprint(h5.items[0]) });
-});
-
-test('a storage event from another tab never writes back a prune from this tab\'s board', () => {
-  const storage = makeStorage();
-  const key = 'ws.wb.holds.board-s';
-  // Background tab: its board update (adding ask 51) is still buffered.
-  const stale = makePillHarness([{ id: 50, top: -200 }], { storage, rid: 'board-s', pending: 1 });
-  // Visible tab already shows ask 51 and holds it.
-  const fresh = makePillHarness([{ id: 50, top: -200 }, { id: 51, top: -100 }], { storage, rid: 'board-s' });
-  fresh.clickHold(fresh.items[1]);
-  const held = storage.dump()[key];
-  assert.ok(JSON.parse(held)[51]);
-  stale.fireStorage(key);
-  stale.win.wbPill.update();
-  stale.flush();
-  assert.equal(storage.dump()[key], held, 'buffered tab keeps the other tab\'s new hold');
-  // Even without a buffered update, the storage handler itself only adopts.
-  const lagging = makePillHarness([{ id: 50, top: -200 }], { storage, rid: 'board-s' });
-  fresh.clickHold(fresh.items[0]);
-  const both = storage.dump()[key];
-  lagging.fireStorage(key);
-  assert.equal(storage.dump()[key], both);
-  assert.equal(lagging.items[0].classList.contains('wb-held'), true, 'adopted hold is shown');
-});
-
-test('a rerun before the pending signal keeps holds another tab made on a newer board', () => {
-  const storage = makeStorage();
-  const key = 'ws.wb.holds.board-r';
-  const b = makePillHarness([{ id: 50, top: -200, title: 'Old wording' }], { storage, rid: 'board-r' });
-  const a = makePillHarness([{ id: 50, top: -200, title: 'New wording' }, { id: 51, top: -100 }], { storage, rid: 'board-r' });
-  a.clickHold(a.items[0]);
-  a.clickHold(a.items[1]);
-  const held = storage.dump();
-  assert.deepEqual(Object.keys(JSON.parse(held[key])).sort(), ['50', '51']);
-  // B's partial swap renders the old topic and reruns pill.js before the
-  // dashboard's badge marks the update pending (st.pending is still 0).
-  b.run();
-  assert.deepEqual(storage.dump(), held, 'the old snapshot proves neither hold stale');
-});
-
-test('a storage redraw on a lagging board keeps a newer hold on an item it shows with older content', () => {
-  const storage = makeStorage();
-  const key = 'ws.wb.holds.board-g';
-  const b = makePillHarness([{ id: 60, top: -200, title: 'Old wording' }], { storage, rid: 'board-g' });
-  const a = makePillHarness([{ id: 60, top: -200, title: 'New wording' }], { storage, rid: 'board-g' });
-  a.clickHold(a.items[0]);
-  const held = storage.dump();
-  b.fireStorage(key);
-  b.win.wbPill.update();
-  b.flush();
-  assert.deepEqual(storage.dump(), held, 'B has not rendered the held content, so it cannot judge it');
-  assert.equal(b.items[0].classList.contains('wb-held'), false, 'shown as held only on the content it was made on');
-  // A rendered the held content; when its own board then changes that item,
-  // the hold is provably stale and goes.
-  a.items[0].querySelector('.title').textContent = 'Newest wording';
-  a.win.wbPill.update();
-  a.flush();
-  assert.deepEqual(storage.dump(), {}, 'the tab that saw the held content change drops it');
-});
-
-test('holds set in two tabs before either sees the other\'s storage event are both kept', () => {
-  const storage = makeStorage();
-  const key = 'ws.wb.holds.board-k';
-  const specs = [{ id: 70, top: -200 }, { id: 71, top: -100 }, { id: 72, top: -50 }];
-  const a = makePillHarness(specs, { storage, rid: 'board-k' });
-  const b = makePillHarness(specs, { storage, rid: 'board-k' });
-  a.clickHold(a.items[0]);
-  b.clickHold(b.items[1]);
-  assert.deepEqual(Object.keys(JSON.parse(storage.dump()[key])).sort(), ['70', '71']);
-  a.clickHold(a.items[2]);
-  b.clickHold(b.items[1]); // unhold touches only its own key
-  assert.deepEqual(Object.keys(JSON.parse(storage.dump()[key])).sort(), ['70', '72']);
 });
 
 test('hold is dropped when item is answered (drafted or sent) or withdrawn from open asks', () => {
