@@ -75,7 +75,7 @@ func (s *Server) filteredTools() []map[string]any {
 	filtered := make([]map[string]any, 0, len(base))
 	for _, tool := range base {
 		name, _ := tool["name"].(string)
-		if permanentlyHiddenTool(name) {
+		if permanentlyHiddenTool(name) && !s.cutoverListed(name) {
 			continue
 		}
 		if isPiTool(name) {
@@ -292,12 +292,11 @@ func namespaceValue(value any, namespace string) any {
 	}
 }
 
-// permanentlyHiddenTool returns true for tools that must never appear on the
-// public MCP surface regardless of mode. exec.* tools are under active
-// development (epic 260524) and not yet documented in lead-workflow-manual;
-// they are hidden until the surface stabilizes.
+// permanentlyHiddenTool reports a tool no ordinary inventory lists: the exec
+// tools and the fs.* read tools, which only a cutover session's connection
+// lists (cutoverListed).
 func permanentlyHiddenTool(name string) bool {
-	return strings.HasPrefix(name, "exec.")
+	return strings.HasPrefix(name, "exec.") || isCodexReadTool(name)
 }
 
 func noAgentHiddenTool(name string) bool {

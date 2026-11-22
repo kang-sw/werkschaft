@@ -288,6 +288,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	case "exec.spawn", "exec.shell", "exec.status", "exec.result", "exec.abort", "exec.raw.tail", "exec.raw.read", "exec.raw.grep",
 		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write":
 		return s.callExec(ctx, req.ID, params.Name, params.Arguments, params.Meta)
+	case "fs.read", "fs.grep", "fs.list":
+		if !s.codexReadTools() {
+			return toolTextResponse(req.ID, "", fmt.Errorf("%s: %w", params.Name, errNoCodexReadTools))
+		}
+		return s.callFS(req.ID, params.Name, params.Arguments, params.Meta)
 	case "config.list":
 		// Read-only combined config surface (260814 Phase 2): subsumes config.show
 		// (resolved-scope View) AND config.tuning (per-key tuning knob catalog),
