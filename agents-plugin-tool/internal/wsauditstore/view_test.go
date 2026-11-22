@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,6 +336,193 @@ func TestColdViewNeverSpansAnEviction(t *testing.T) {
 	}
 	if rec := s2.Recover("old", "holder:1"); rec.Boundary != 24 {
 		t.Fatalf("evicted ring lost its boundary: %+v", rec)
+	}
+}
+
+// holdColdGap holds the first View to reach viewColdGap there until the
+// returned release runs (also at cleanup, registered before the store's).
+func holdColdGap(t *testing.T) (entered <-chan struct{}, release func()) {
+	t.Helper()
+	in, out := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	var freed sync.Once
+	release = func() { freed.Do(func() { close(out) }) }
+	orig := viewColdGap
+	t.Cleanup(func() { release(); viewColdGap = orig })
+	viewColdGap = func() {
+		if held.CompareAndSwap(false, true) {
+			close(in)
+			<-out
+		}
+	}
+	return in, release
+}
+
+// TestColdViewNeverSpansAWarmTransition pins that a cold read decided on an
+// unloaded ring never accepts files the ring wrote once loaded: held between
+// finding the ring unloaded and reading it, then again after reading its
+// oldest segment while the now-loaded ring appends past its cap (dropping
+// that segment and growing its newest), the read answers the loaded ring's
+// view — not the evicted prefix glued to the later records as uncut.
+func TestColdViewNeverSpansAWarmTransition(t *testing.T) {
+	root := t.TempDir()
+	lim := smallLimits(64 * mib)
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	fill(t, s, "sess", 1, 60) // most of the 4 MiB cap, in four segments
+	_ = s.Close()
+	ringDir := filepath.Join(root, sessionDirName("sess"))
+	segs, _, err := listSegments(ringDir)
+	if err != nil || len(segs) < 3 || segs[0].seq != 1 {
+		t.Fatalf("fixture: %+v %v", segs, err)
+	}
+
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	gapEntered, gapRelease := holdColdGap(t)
+	orig := readFile
+	t.Cleanup(func() { readFile = orig })
+	readEntered, readRelease := make(chan struct{}), make(chan struct{})
+	var armed, held atomic.Bool
+	var freed sync.Once
+	t.Cleanup(func() { freed.Do(func() { close(readRelease) }) })
+	second := filepath.Join(ringDir, segmentName(segs[1].seq))
+	readFile = func(path string) ([]byte, error) {
+		if armed.Load() && path == second && held.CompareAndSwap(false, true) {
+			close(readEntered)
+			<-readRelease
+		}
+		return orig(path)
+	}
+	type answer struct {
+		v   View
+		err error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		v, err := s2.View(context.Background(), "sess")
+		got <- answer{v, err}
+	}()
+	<-gapEntered // found unloaded, not yet read
+	loaded(t, s2, "sess")
+	armed.Store(true)
+	gapRelease()
+	// Each answer must be a view the loaded ring held: the one at the time
+	// when the reader answers without reading the old files, else the one
+	// after the appends it was held across.
+	var a answer
+	var want View
+	select {
+	case <-readEntered: // a read of the old files is under way
+		fill(t, s2, "sess", 61, 10) // past the cap: the oldest segment goes
+		if _, err := os.Stat(filepath.Join(ringDir, segmentName(segs[0].seq))); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("fixture: the oldest segment survived the appends: %v", err)
+		}
+		if _, err := os.Stat(second); err != nil {
+			t.Fatalf("fixture: the held segment went too: %v", err)
+		}
+		freed.Do(func() { close(readRelease) })
+		a = <-got
+		want = view(t, s2, "sess")
+	case a = <-got:
+		want = view(t, s2, "sess")
+	case <-time.After(2 * time.Minute):
+		t.Fatal("the view neither answered nor read")
+	}
+	if a.err != nil {
+		t.Fatal(a.err)
+	}
+	if fmt.Sprint(ids(a.v.Events)) != fmt.Sprint(ids(want.Events)) || a.v.Cut != want.Cut {
+		first := uint64(0)
+		if len(a.v.Events) > 0 {
+			first = a.v.Events[0].Seq
+		}
+		t.Fatalf("view across the warm transition = %d events from seq %d (cut %v); the loaded ring holds %d (cut %v)",
+			len(a.v.Events), first, a.v.Cut, len(want.Events), want.Cut)
+	}
+}
+
+// TestColdViewOldGenerationNeverDisplacesANewerRead pins the coalescing of
+// cold reads across generations: a reader held with the generation sampled
+// before a writer change that leaves the ring unloaded, released while a
+// reader of the new generation is replaying, joins that replay instead of
+// replacing it — the ring is listed once and each segment read once.
+func TestColdViewOldGenerationNeverDisplacesANewerRead(t *testing.T) {
+	root := t.TempDir()
+	lim := smallLimits(64 * mib)
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	fill(t, s, "cold", 1, 24) // two segments
+	_ = s.Close()
+	ringDir := filepath.Join(root, sessionDirName("cold"))
+	segs, _, err := listSegments(ringDir)
+	if err != nil || len(segs) < 2 {
+		t.Fatalf("fixture: %+v %v", segs, err)
+	}
+
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	gapEntered, gapRelease := holdColdGap(t)
+	type answer struct {
+		v   View
+		err error
+	}
+	got := make(chan answer, 2)
+	read := func() {
+		v, err := s2.View(context.Background(), "cold")
+		got <- answer{v, err}
+	}
+	go read() // the old-generation reader
+	<-gapEntered
+	var info *sessionInfo
+	if _, err := s2.call(context.Background(), job{kind: jobBarrier, fn: func() {
+		s2.mu.Lock()
+		info = s2.sessions[sessionDirName("cold")]
+		s2.mu.Unlock()
+		info.mu.Lock()
+		s2.trimRingLocked(info, math.MaxInt64) // a change that trims nothing
+		info.mu.Unlock()
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if info.view.Load() != nil || info.gen.Load() == 0 {
+		t.Fatalf("fixture: the ring is loaded or its generation did not advance")
+	}
+
+	listings, infos := countListings(t, ringDir)
+	orig := readFile
+	t.Cleanup(func() { readFile = orig })
+	entered, release := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	var freed sync.Once
+	t.Cleanup(func() { freed.Do(func() { close(release) }) })
+	var mu sync.Mutex
+	reads := map[string]int{}
+	readFile = func(path string) ([]byte, error) {
+		if filepath.Dir(path) == ringDir {
+			mu.Lock()
+			reads[path]++
+			mu.Unlock()
+			if held.CompareAndSwap(false, true) {
+				close(entered)
+				<-release
+			}
+		}
+		return orig(path)
+	}
+	go read() // the new-generation reader
+	<-entered
+	gapRelease()
+	time.Sleep(200 * time.Millisecond) // the old-generation reader catches up
+	freed.Do(func() { close(release) })
+	for i := 0; i < 2; i++ {
+		if a := <-got; a.err != nil || len(a.v.Events) != 24 {
+			t.Fatalf("view %d: %d events, err %v", i, len(a.v.Events), a.err)
+		}
+	}
+	if listings.Load() != 1 || infos.Load() != int64(len(segs)) {
+		t.Errorf("two readers across a generation listed the ring %d times and statted %d entries (want 1 and %d)", listings.Load(), infos.Load(), len(segs))
+	}
+	for path, n := range reads {
+		if n != 1 {
+			t.Errorf("%s read %d times by two readers across a generation", path, n)
+		}
 	}
 }
 

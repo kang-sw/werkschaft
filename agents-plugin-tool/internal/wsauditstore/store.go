@@ -1354,13 +1354,18 @@ func (s *Store) View(ctx context.Context, session string) (View, error) {
 		if info == nil {
 			return View{}, nil
 		}
+		// The generation is sampled before the ring is found unloaded: a load
+		// published after this point has advanced it, so the cold read below
+		// never accepts files a loaded ring was writing meanwhile.
+		gen := info.gen.Load()
 		if r := info.view.Load(); r != nil {
 			r.view.RLock()
 			v := View{Events: r.events[:len(r.events):len(r.events)], Cut: r.cut}
 			r.view.RUnlock()
 			return v, nil
 		}
-		v, ok, err := s.coldRead(ctx, info, session)
+		viewColdGap()
+		v, ok, err := s.coldRead(ctx, info, session, gen)
 		if ok || err != nil {
 			return v, err
 		}
@@ -1380,17 +1385,30 @@ func (s *Store) View(ctx context.Context, session string) (View, error) {
 // changing (about ten seconds of waits).
 const coldTries = 160
 
-// coldRead answers an unloaded ring's View at its current generation: from
-// the cache without touching the disk, else by joining the read of that
-// generation another reader has under way, else by reading it (replayCold)
-// and caching it. ok is false, without error, when the writer changed the
-// ring's files during the read: what was read is dropped, never cached.
-func (s *Store) coldRead(ctx context.Context, info *sessionInfo, session string) (View, bool, error) {
-	gen := info.gen.Load()
-	if info.busy.Load() != 0 {
+// viewColdGap runs between View finding a ring unloaded and reading it cold;
+// tests hold a reader there.
+var viewColdGap = func() {}
+
+// coldCurrent reports that info is still unloaded at generation gen with no
+// change under way: what was read at gen is what the ring holds.
+func coldCurrent(info *sessionInfo, gen uint64) bool {
+	return info.busy.Load() == 0 && info.gen.Load() == gen && info.view.Load() == nil
+}
+
+// coldRead answers an unloaded ring's View at generation gen, sampled
+// before the ring was found unloaded: from the cache without touching the
+// disk, else by joining the read of gen another reader has under way, else
+// by reading it (replayCold) and caching it. ok is false, without error,
+// when the ring is no longer unloaded at gen — before the read or by its end:
+// what was read is dropped, never cached. The generation is checked and the
+// flight or cached view published under coldMu, so a reader delayed with an
+// older generation never displaces a newer one.
+func (s *Store) coldRead(ctx context.Context, info *sessionInfo, session string, gen uint64) (View, bool, error) {
+	s.coldMu.Lock()
+	if !coldCurrent(info, gen) {
+		s.coldMu.Unlock()
 		return View{}, false, nil
 	}
-	s.coldMu.Lock()
 	if c, ok := s.cold[info.dir]; ok && c.info == info && c.gen == gen {
 		s.coldMu.Unlock()
 		return c.view, true, nil
@@ -1421,6 +1439,7 @@ func (s *Store) coldRead(ctx context.Context, info *sessionInfo, session string)
 	if s.flights[info.dir] == f {
 		delete(s.flights, info.dir)
 	}
+	f.ok = f.ok && coldCurrent(info, gen)
 	if f.ok {
 		if s.cold == nil {
 			s.cold = map[string]coldView{}
@@ -1440,12 +1459,12 @@ func (s *Store) coldRead(ctx context.Context, info *sessionInfo, session string)
 
 // replayCold reads an unloaded ring's segments into a View without loading
 // the ring: nothing is truncated, opened for writing, or published, and a
-// torn last line is left out as recovery would. ok reports that the writer
-// left the ring's files alone (generation gen, no change under way) from
-// before the listing until after the last read; otherwise the result is
-// dropped, and so is a read error the change may have caused.
+// torn last line is left out as recovery would. ok reports that the ring
+// stayed unloaded at generation gen until after the last read (coldRead
+// checks again under coldMu); otherwise the result is dropped, and so is a
+// read error the change may have caused.
 func (s *Store) replayCold(ctx context.Context, info *sessionInfo, session string, gen uint64) (View, bool, error) {
-	stable := func() bool { return info.busy.Load() == 0 && info.gen.Load() == gen }
+	stable := func() bool { return coldCurrent(info, gen) }
 	dir := filepath.Join(s.opts.Root, info.dir)
 	segs, _, err := listSegments(dir)
 	if errors.Is(err, fs.ErrNotExist) {
