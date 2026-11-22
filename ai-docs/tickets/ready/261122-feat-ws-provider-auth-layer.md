@@ -5,6 +5,10 @@ related:
   261122-feat-ws-builtin-agent-harness: "first consumer; the harness gets provider credentials only through this layer"
   261122-feat-ws-web-tools: "consumer; web fetch/search configuration uses this layer's providers"
   261112-research-ws-ade-desktop-shell-and-rename: "zero-install built-in agent; (495)=a (bundled Pi) is superseded by the builtin harness, see the epic"
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-design-reviewed: 78ec6832f92dea6f
+sage-review-completeness-reviewed: 78ec6832f92dea6f
 ---
 
 # Provider authentication layer
@@ -83,7 +87,14 @@ Verified external facts (read-only research, 2026-11-22, official sources):
    file ACL is restricted to the current user. Rejected for now: OS secure
    stores (Keychain, DPAPI, libsecret) - more platform code and permission
    prompts for no gain the Terms require; a later ticket may add them behind
-   the same interface.
+   the same interface. Storage type 5 (plain file) of
+   `ai-docs/manuals/performance.md` `## Storage Types`, not the type-2 SQLite
+   store: the CLI subcommand of Phase 1 writes the file while no daemon may be
+   running, and keeping secrets out of the shared SQLite state databases keeps
+   them out of anything that copies those databases (diagnostics, board or
+   state exports) and lets one file carry the restrictive mode/ACL. Writes are
+   rare (set, remove, refresh rotation). Rejected: a row in an existing SQLite
+   store.
 6. **The daemon owns refresh; the harness fetches over its authenticated
    channel ((5015), technical).** Daemon-owned refresh over per-process
    refresh - OAuth refresh tokens can rotate on use, so two processes
@@ -92,15 +103,31 @@ Verified external facts (read-only research, 2026-11-22, official sources):
    channel through an internal route that is not an MCP tool. While the daemon
    is down (a swap), the harness keeps its last token and retries after
    reconnect.
-7. **Compatibility tier T0 ((5012)).** New file, new internal route, new
+7. **One live writer: the daemon (technical, from sage design review).** While
+   a daemon runs, it is the only process that writes the credential file; the
+   CLI subcommand sends set/remove to the running daemon over the local
+   channel its other subcommands use, so the daemon's memory and the file
+   never diverge. With no daemon running, the CLI writes the file directly
+   while holding the daemon's single-instance lock, so no daemon starts
+   mid-write; the next daemon reads it at its first credential use. Rejected: a CLI that writes
+   the file beside a running daemon (the daemon would keep a removed key or
+   overwrite a new one on its next refresh rewrite).
+8. **No environment-variable credential source (technical, from sage design
+   review).** The daemon's environment is inherited by every hosted session
+   and by hosted exec subprocesses, so an `OPENROUTER_API_KEY` read from it
+   would reach model-run tools. Keys enter only through the CLI subcommand or
+   the dashboard (Phase 3). Rejected: an env fallback scrubbed from child
+   environments - one more leak path to keep closed for a convenience the
+   CLI already gives.
+9. **Compatibility tier T0 ((5012)).** New file, new internal route, new
    config keys; old binaries never read them.
 
 ## Constraints
 
 - `ai-docs/manuals/performance.md`: the credential file is read once into
   daemon memory at first use and rewritten only when a credential changes
-  (set, remove, refresh rotation); no file read on any interactive path. Name
-  its storage type from that manual's `## Storage Types`.
+  (set, remove, refresh rotation); no file read on any interactive path.
+  Storage type 5 per Decision 5.
 - `ai-docs/manuals/release-compatibility.md`, `ai-docs/manuals/ws-mcp.md`,
   `ai-docs/manuals/shipped-surface-boundary.md`,
   `ai-docs/manuals/config-settings-ui.md` (Phase 3 settings rows).
@@ -109,6 +136,32 @@ Verified external facts (read-only research, 2026-11-22, official sources):
 - The app name presented to OpenAI is the product's real name.
 - Out of scope: OS secure stores, Anthropic/Google OAuth, account pooling, a
   paid or remotely hosted SIWC deployment.
+
+## Prior Decisions
+
+- 261122-feat-ws-builtin-agent-harness (2026-11-22, Decisions): "Credentials only from the provider auth layer. The harness fetches tokens per `261122-feat-ws-provider-auth-layer` Decision 6 and never reads the credential file itself." — bearing: supports
+- 261122-feat-ws-web-tools (2026-11-22, Decisions): "Search is the provider's server tool; fetch is a ws MCP tool ((5017), technical). `ws/web.search` is realized by attaching the provider's server-side search tool to the builtin harness's model requests" — bearing: supports
+- be7e3a76 (2026-11-22, commit): "External research (official docs, 2026-11-22): OpenRouter and OpenAI Sign in with ChatGPT both accept stateless Responses, so one wire adapter serves both; SIWC Terms forbid exposing the token as a general API" — bearing: supports
+- 261117-feat-ws-harness-capability-catalog (2026-11-17, commit 4e8add8d): "An older daemon rejoining an HTTP lead answers its ws calls 401 until the process restarts: no data loss, functional degradation" — bearing: constrains
+- 261118-feat-ws-agy-tool-names-and-worker-role (2026-11-18, commit b3e2e5e6): "Worker tokens never enter the record and are revoked on stop/shutdown; lead holder behavior stays unchanged." — bearing: constrains
+- 261113-feat-ws-dashboard-rail-usage-gutter (2026-11-13, Decisions): "Codex/GPT data is a live query ((133)=b, (137)=c): primary source is a short-lived `codex app-server` process ... fallback is a `wham/usage` HTTP query with Pi's stored `openai-codex`" — bearing: constrains
+- 261119-feat-ws-audit-policy-event-envelope (2026-11-22, Resolution): "Phase 1 landed in agents-plugin-tool/internal/wsaudit: v1 harness-neutral Envelope, 11-kind set, pure model-seen compaction cut, daemon-hosted capture policy gate, and Sink interface" — bearing: constrains
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | the ticket names no code path; its phases need a new credential package, a ws-mcp CLI subcommand (agents-plugin-tool/cmd/ws-mcp/main.go dispatches serve, dashboard, daemon-start, mailbox), an internal daemon route, and dashboard settings rows |
+| scope.surface | cross-module | new provider registry interface, CLI subcommand, internal token route, config keys and dashboard rows (Phase 1-3) |
+| scope.new_public_symbol | yes | provider registry Go interface and typed not-configured / consent-required errors (Phase 1); new CLI subcommand |
+| scope.new_type_contract | yes | credential-for-provider interface with typed errors, the credential file shape, and the token route request/response (Phase 1); searched agents-plugin-tool and agents-plugin-pi/src at HEAD: no openrouter or provider-registry code exists |
+| scope.test_surface | new-files | the ticket lists new unit, fixture and fake-authorization-server tests; no existing provider-auth tests (git grep openrouter at HEAD finds only Pi code and an unrelated wsagent/support_test.go mention) |
+| complexity.reuse_points | unconfirmed | per-session bearer channel exists (agents-plugin-tool/internal/wsagent/mcp_session.go, EnvMCPSessionToken) and wsstate.CacheRoot gives a per-user root (internal/wsstate/paths.go#L91), but the route's builtin-harness session check depends on the unlanded 261122-feat-ws-builtin-agent-harness |
+| complexity.side_effect_risk | high | new secret store and daemon route; refresh rotation is daemon-global and a leak reaches logs, audit ring, transcripts, dashboard feed |
+| risk.correctness | high | OAuth refresh-token rotation, atomic replace, revoked refresh, consent state, and a Windows ACL path |
+| risk.fit | moderate | credential file is storage type 5 per Decision 5, a deliberate exception to the type-2 SQLite default in ai-docs/manuals/performance.md |
+| risk.test | moderate | Phase 2 needs a fake authorization server and an owner-run live sign-in; Phase 3 needs a mockup capture comparison; Windows ACL cannot be tested on this host |
+| risk.security_or_contract | high | holds user credentials under SIWC Terms constraints (local storage, no token exposure, express background consent) and adds a route that must refuse non-harness bearers |
 
 ## Phases
 
@@ -119,13 +172,15 @@ Verified external facts (read-only research, 2026-11-22, official sources):
   "not configured" / "consent required" error.
 - Credential file per Decision 5; atomic replace on write.
 - OpenRouter key entry without UI: a CLI subcommand of the ws binary to set,
-  show (masked), and remove a key; an `OPENROUTER_API_KEY` environment
-  fallback read at daemon start.
+  show (masked), and remove a key, per Decision 7's single-writer rule.
 - The internal token route of Decision 6, authenticated by the per-session
   bearer, refusing callers that are not builtin-harness sessions.
 - Verification: unit tests for registry, file mode/ACL, atomic write,
   redaction, and the route's refusal of non-harness bearers; a fake-provider
-  test that the harness-side client obtains the key through the route.
+  test that the harness-side client obtains the key through the route; a
+  test that a CLI set/remove against a running daemon is served by the
+  daemon and visible to the next token request; a test that the offline CLI
+  write takes the daemon lock.
 
 ### Phase 2: OpenAI Sign in with ChatGPT
 
