@@ -266,6 +266,10 @@ type RailRow struct {
 	// Approval is the tool approval a live hosted session waits on, which
 	// the dashboard answers; nil when it waits on none.
 	Approval *ApprovalWait
+	// settingsWorktree is the settings ID of the worktree or plain folder
+	// the rail placed the session under (buildRailView), which the settings
+	// routes index (settingsTargets); SettingsWorktree reads it.
+	settingsWorktree string
 	// Failure is the typed failure (a login needed, a model unavailable, a
 	// usage limit) that keeps a hosted session from working until a turn
 	// succeeds, as its runner reports it (wslive.Host); nil when none.
@@ -555,6 +559,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			regs := map[string]Registration{}
 			for _, m := range members {
 				regs[m.row.ReplyID] = m.in.Session.Registration
+				m.row.settingsWorktree = settingsID("worktree", key)
 				if m.row.InSessionList() {
 					ws.Sessions = append(ws.Sessions, m.row)
 				} else {
@@ -616,6 +621,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			} else {
 				a = addWT(railWorktreeEntry{Path: project})
 			}
+			m.row.settingsWorktree = a.wt.SettingsID()
 			if m.row.InSessionList() {
 				a.wt.Sessions = append(a.wt.Sessions, m.row)
 			} else {
