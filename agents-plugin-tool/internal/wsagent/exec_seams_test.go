@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -411,5 +412,31 @@ func TestAgyNoticeWaitsOutTheInFlightMCPCall(t *testing.T) {
 		t.Fatal("an unknown token has no end")
 	} else {
 		end()
+	}
+}
+
+// TestClaudeLeadAllowsTheWholeWSServerInEveryMode pins Decision 5's finding
+// for the hosted Claude lead: its launch pre-allows the whole ws server
+// (one rule naming the server, so every ws tool, the exec tools included),
+// in every permission mode, so Claude never raises can_use_tool for a ws
+// exec call and the daemon's exec approval is the only prompt.
+func TestClaudeLeadAllowsTheWholeWSServerInEveryMode(t *testing.T) {
+	for _, mode := range []string{"plan", "default", "acceptEdits", "bypassPermissions"} {
+		spec := leadSpec()
+		spec.Root = t.TempDir()
+		spec.Env = []string{"CLAUDE_CONFIG_DIR=" + t.TempDir()}
+		spec.Lead.PermissionMode = mode
+		spec.WSMCP = &MCPCommand{Command: "/bin/ws-mcp"}
+		args, err := claudeArgs(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := slices.Index(args, "--allowedTools")
+		if i < 0 || !slices.Equal(args[i+1:], []string{"mcp__" + claudeNamePart(ReservedMCPServer)}) {
+			t.Fatalf("%s: the allow rule must name the whole ws server and come last: %v", mode, args)
+		}
+		if strings.Contains(strings.Join(args, " "), "mcp__ws__exec") {
+			t.Fatalf("%s: a per-tool exec rule would mean the server rule does not cover it: %v", mode, args)
+		}
 	}
 }

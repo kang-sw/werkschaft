@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/kang-sw/devenv/internal/execjob"
 	"io"
 	"net/http"
 	"os"
@@ -65,6 +66,9 @@ type proxyHost struct {
 	// tools spawn its Pi subagents (mcp.ServerOptions.Agents); nil leaves
 	// them refusing.
 	agents mcp.PiAgents
+	// exec is the daemon's hosted exec jobs, bound after StartDaemon; nil
+	// keeps every connection on the legacy exec path.
+	exec   atomic.Pointer[execjob.Hosted]
 	boards *mcp.WhiteboardStores
 	notes  *wsnote.Cache
 }
@@ -113,6 +117,10 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 				opts.Agents = h.agents
 			}
 		}
+		// Only a token-resolved hello names its conversation: the binding
+		// that owns hosted exec jobs.
+		opts.Exec = h.exec.Load
+		opts.Conversation = hello.Conversation
 		server := mcp.NewServerWithOptions(opts)
 		h.applyLANChange(server)
 		return &proxyMCPSession{server: server}, nil

@@ -151,13 +151,25 @@ func (h *Hosted) Start() {
 	}
 	h.mu.Lock()
 	var gone []*hostedJob
+	var replay []string
 	for _, j := range h.jobs {
-		if !j.row.Terminal() && !live[j.row.HolderID] {
+		switch {
+		case j.row.Terminal():
+		case live[j.row.HolderID]:
+			replay = append(replay, j.row.HolderID)
+		default:
 			gone = append(gone, j)
 		}
 	}
 	h.started = true
 	h.mu.Unlock()
+	// A holder the manager attached before this sink took events replays
+	// its ring now; records already taken are skipped by sequence.
+	for _, id := range replay {
+		if err := h.opts.Holders.Replay(id); err != nil {
+			h.logf("replay holder %s: %v", id, err)
+		}
+	}
 	for _, j := range gone {
 		h.endFromExitCopy(j)
 	}

@@ -147,6 +147,9 @@ type HostedHolders interface {
 	Stop(id string) error
 	Scan()
 	List() wsholder.Listing
+	// Replay asks attached holder id to send its whole ring again, to
+	// every sink: a sink added after the holder attached gets its records.
+	Replay(id string) error
 }
 
 // HolderManager adapts a *wsholder.Manager to HostedHolders.
@@ -158,6 +161,15 @@ func (m HolderManager) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.Child
 		return wsholder.ChildStatus{}, wsholder.ErrDetached
 	}
 	return c.Spawn(spec)
+}
+
+func (m HolderManager) Replay(id string) error {
+	c := m.Client(id)
+	if c == nil {
+		return wsholder.ErrDetached
+	}
+	_, _, err := c.Replay(0)
+	return err
 }
 
 func (m HolderManager) Input(id string, data []byte, eof bool) error {

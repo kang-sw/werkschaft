@@ -82,10 +82,12 @@ type ServerOptions struct {
 	WorktreeChildren WorktreeChildrenReader
 	// Notes is the daemon's shared presentation cache; nil on standalone servers.
 	Notes *wsnote.Cache
-	// Exec is the daemon's hosted exec jobs; nil on the direct path and on a
-	// daemon that could not open their store. Legacy exec launches then
-	// keep the file-backed path and the hosted exec tools refuse.
-	Exec *execjob.Hosted
+	// Exec returns the daemon's hosted exec jobs, read at each call: the
+	// daemon binds them just after it starts serving. nil (or a nil result)
+	// on the direct path and on a daemon that could not open their store:
+	// legacy exec launches then keep the file-backed path and the hosted
+	// exec tools refuse.
+	Exec func() *execjob.Hosted
 	// Conversation is the hosted conversation a per-session token bound
 	// this connection to (wsdashboard.ProxyHello.Conversation); empty for a
 	// launcher connection. Only it attributes hosted exec jobs: a supplied

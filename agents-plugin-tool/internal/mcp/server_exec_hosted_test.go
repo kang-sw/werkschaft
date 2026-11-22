@@ -97,7 +97,7 @@ func newHostedExecFixture(t *testing.T, window time.Duration) *hostedExecFixture
 	})
 	s := NewServer(root, "test")
 	key, _ := parseLoginResponse(t, callLogin(t, s, 900001, root, nil))
-	s.exec, s.conversation = hosted, "lead"
+	s.exec, s.conversation = func() *execjob.Hosted { return hosted }, "lead"
 	return &hostedExecFixture{t: t, s: s, root: root, key: key, hosted: hosted, manager: m, sessions: sessions}
 }
 
@@ -179,7 +179,7 @@ func TestHostedExecNeedsTheTrustedBinding(t *testing.T) {
 	fx := newHostedExecFixture(t, 5*time.Second)
 	launcher := NewServer(fx.root, "test")
 	key, _ := parseLoginResponse(t, callLogin(t, launcher, 900002, fx.root, nil))
-	launcher.exec = fx.hosted // the daemon's jobs, but no binding
+	launcher.exec = func() *execjob.Hosted { return fx.hosted } // the daemon's jobs, but no binding
 	for _, call := range []struct {
 		name string
 		args map[string]any
@@ -291,7 +291,7 @@ func TestHostedExecAsyncWriteTailListStopAndNotice(t *testing.T) {
 	// Another conversation sees none of it.
 	other := NewServer(fx.root, "test")
 	key, _ := parseLoginResponse(t, callLogin(t, other, 900003, fx.root, nil))
-	other.exec, other.conversation = fx.hosted, "other"
+	other.exec, other.conversation = func() *execjob.Hosted { return fx.hosted }, "other"
 	if text, _ := callExecTool(t, other, key, "exec.list", nil); !strings.Contains(text, "no exec jobs") {
 		t.Fatalf("another conversation's listing = %s", text)
 	}

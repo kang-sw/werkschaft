@@ -27,7 +27,15 @@ var errNoHostedExec = errors.New("this exec tool runs only in a session the dash
 // trusted binding names the owning conversation. A supplied session_key
 // never stands in for that binding; it only grants the root.
 func (s *Server) hostedExec() bool {
-	return s.exec != nil && s.conversation != ""
+	return s.execJobs() != nil && s.conversation != ""
+}
+
+// execJobs is the daemon's hosted exec jobs, nil when there are none.
+func (s *Server) execJobs() *execjob.Hosted {
+	if s.exec == nil {
+		return nil
+	}
+	return s.exec()
 }
 
 // callExec dispatches every exec tool. The new tools and the new exec.shell
@@ -51,22 +59,22 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 	if !s.hostedExec() {
 		return toolTextResponse(id, "", fmt.Errorf("%s: %w", name, errNoHostedExec))
 	}
-	owner := s.conversation
+	owner, jobs := s.conversation, s.execJobs()
 	switch name {
 	case "exec.list":
-		views, more := s.exec.List(owner)
+		views, more := jobs.List(owner)
 		return toolTextResponse(id, formatHostedList(views, more), nil)
 	case "exec.stop":
 		execID, _ := args["exec_id"].(string)
-		v, err := s.exec.Stop(owner, execID)
+		v, err := jobs.Stop(owner, execID)
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
-		_, tail, _ := s.exec.Tail(owner, execID, 0)
+		_, tail, _ := jobs.Tail(owner, execID, 0)
 		return toolTextResponse(id, formatHostedView(v, tail, ""), nil)
 	case "exec.tail":
 		execID, _ := args["exec_id"].(string)
-		v, tail, err := s.exec.Tail(owner, execID, intFromArgument(args["bytes"], 0))
+		v, tail, err := jobs.Tail(owner, execID, intFromArgument(args["bytes"], 0))
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
@@ -74,7 +82,7 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 	case "exec.write":
 		execID, _ := args["exec_id"].(string)
 		data, _ := args["data"].(string)
-		v, err := s.exec.Write(owner, execID, []byte(data), boolArgument(args["eof"]))
+		v, err := jobs.Write(owner, execID, []byte(data), boolArgument(args["eof"]))
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
@@ -118,11 +126,11 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 		}
 		req.Argv, req.Display, req.Command, req.Shell = argv, line, line, argv[0]
 	}
-	v, err := s.exec.Launch(ctx, s.drainContext().Done(), req)
+	v, err := jobs.Launch(ctx, s.drainContext().Done(), req)
 	if err != nil {
 		return toolTextResponse(id, "", fmt.Errorf("%s: %w", name, err))
 	}
-	_, tail, _ := s.exec.Tail(owner, v.ID, 0)
+	_, tail, _ := jobs.Tail(owner, v.ID, 0)
 	return toolTextResponse(id, formatHostedView(v, tail, launchHeader(v)), nil)
 }
 
@@ -144,6 +152,7 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 	if err != nil {
 		return toolTextResponse(id, "", err)
 	}
+	jobs := s.execJobs()
 	key, _ := args["exec_key"].(string)
 	stream, _ := args["stream"].(string)
 	switch name {
@@ -165,8 +174,8 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 		result, err := s.execStore().Launch(opts)
 		return execResponse(id, result, err, true)
 	case "exec.status":
-		if s.exec != nil {
-			if r, ok := s.exec.LegacyStatus(root, key); ok {
+		if jobs != nil {
+			if r, ok := jobs.LegacyStatus(root, key); ok {
 				return execResponse(id, r, nil, false)
 			}
 		}
@@ -174,9 +183,9 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 		return execResponse(id, result, err, false)
 	case "exec.result":
 		timeout := durationFromSeconds(args["timeout_seconds"])
-		if s.exec != nil {
+		if jobs != nil {
 			wait, cancel := mergeDone(ctx, s.drainContext())
-			r, ok := s.exec.LegacyResult(wait, root, key, timeout)
+			r, ok := jobs.LegacyResult(wait, root, key, timeout)
 			cancel()
 			if ok {
 				return execResponse(id, r, nil, true)
@@ -185,16 +194,16 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 		result, err := s.execStore().ResultWithContext(s.drainContext(), root, key, timeout)
 		return execResponse(id, result, err, true)
 	case "exec.abort":
-		if s.exec != nil {
-			if r, ok := s.exec.LegacyAbort(root, key); ok {
+		if jobs != nil {
+			if r, ok := jobs.LegacyAbort(root, key); ok {
 				return execResponse(id, r, nil, false)
 			}
 		}
 		result, err := s.execStore().Abort(root, key)
 		return execResponse(id, result, err, false)
 	case "exec.raw.tail":
-		if s.exec != nil {
-			if r, ok, err := s.exec.LegacyTail(root, key, stream, intFromArgument(args["lines"], 0)); ok {
+		if jobs != nil {
+			if r, ok, err := jobs.LegacyTail(root, key, stream, intFromArgument(args["lines"], 0)); ok {
 				return execRawTailResponse(id, r, err)
 			}
 		}
@@ -202,8 +211,8 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 		return execRawTailResponse(id, result, err)
 	case "exec.raw.read":
 		offset, limit := int64FromArgument(args["offset"], 0), int64FromArgument(args["limit"], 0)
-		if s.exec != nil {
-			if r, ok, err := s.exec.LegacyRead(root, key, stream, offset, limit); ok {
+		if jobs != nil {
+			if r, ok, err := jobs.LegacyRead(root, key, stream, offset, limit); ok {
 				return execRawReadResponse(id, r, err)
 			}
 		}
@@ -213,8 +222,8 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 		pattern, _ := args["pattern"].(string)
 		before, after, maxMatches := intFromArgument(args["before"], 0), intFromArgument(args["after"], 0), intFromArgument(args["max_matches"], 0)
 		regex := boolArgument(args["regex"])
-		if s.exec != nil {
-			if r, ok, err := s.exec.LegacyGrep(root, key, stream, pattern, before, after, maxMatches, regex); ok {
+		if jobs != nil {
+			if r, ok, err := jobs.LegacyGrep(root, key, stream, pattern, before, after, maxMatches, regex); ok {
 				return execRawGrepResponse(id, r, err)
 			}
 		}
@@ -228,6 +237,7 @@ func (s *Server) callLegacyExec(ctx context.Context, id json.RawMessage, name st
 // hosted job: the daemon's approval and execution window, the legacy key
 // and reply, and a finite stdin (closed after the given text, or at once).
 func (s *Server) hostedLegacyLaunch(ctx context.Context, id json.RawMessage, name, root string, args map[string]any) response {
+	jobs := s.execJobs()
 	workingDir, _ := args["working_dir"].(string)
 	cwd, err := execjob.ResolveWorkingDir(root, workingDir)
 	if err != nil {
@@ -253,7 +263,7 @@ func (s *Server) hostedLegacyLaunch(ctx context.Context, id json.RawMessage, nam
 		req.Argv = execjob.LegacyShellArgv(shell, command)
 		req.Display, req.Command, req.Shell = command, command, req.Argv[0]
 	}
-	v, err := s.exec.Launch(ctx, s.drainContext().Done(), req)
+	v, err := jobs.Launch(ctx, s.drainContext().Done(), req)
 	if err != nil && v.ID == "" {
 		return execResponse(id, execjob.Response{}, err, true)
 	}
@@ -261,7 +271,7 @@ func (s *Server) hostedLegacyLaunch(ctx context.Context, id json.RawMessage, nam
 		return execResponse(id, execjob.Response{}, err, true)
 	}
 	// A start failure answers as the legacy launch did: a failed record.
-	return execResponse(id, s.exec.LegacyResponse(v, v.Outcome == execjob.OutcomeDone), nil, true)
+	return execResponse(id, jobs.LegacyResponse(v, v.Outcome == execjob.OutcomeDone), nil, true)
 }
 
 // mergeDone returns a context that ends when either a or b does.

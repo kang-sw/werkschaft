@@ -55,10 +55,10 @@ type Server struct {
 	tracker trackerLink
 	// pi is the pi.* tools' daemon runner and live feed (pi_tools.go).
 	pi piHost
-	// exec is the daemon's hosted exec jobs and conversation the hosted
-	// conversation this connection's trusted binding names
+	// exec returns the daemon's hosted exec jobs and conversation is the
+	// hosted conversation this connection's trusted binding names
 	// (server_exec_hosted.go); nil and empty where there is none.
-	exec         *execjob.Hosted
+	exec         func() *execjob.Hosted
 	conversation string
 	// agentBackendSource exposes the daemon's registered backend descriptors
 	// independently of pi.agents, so token-forwarding workers resolve their

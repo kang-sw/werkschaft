@@ -77,6 +77,7 @@ type fakeExecHolders struct {
 	exited   map[string]bool
 	seq      map[string]uint64
 	spawnErr error
+	replays  []string
 	// onSpawn runs after a spawn, outside the lock (the child's own
 	// behaviour: output, exit).
 	onSpawn func(id string)
@@ -144,6 +145,13 @@ func (f *fakeExecHolders) Stop(id string) error {
 }
 
 func (f *fakeExecHolders) Scan() {}
+
+func (f *fakeExecHolders) Replay(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.replays = append(f.replays, id)
+	return nil
+}
 
 func (f *fakeExecHolders) List() wsholder.Listing {
 	f.mu.Lock()
@@ -621,6 +629,12 @@ func TestHostedRestartSettlesGoneHolders(t *testing.T) {
 	}
 	if c, _ := fx.h.Get("lead", alive.ID); c.State != HostedRunning {
 		t.Fatalf("job whose holder lives = %+v", c)
+	}
+	fx.holders.mu.Lock()
+	replays := slices.Clone(fx.holders.replays)
+	fx.holders.mu.Unlock()
+	if !slices.Equal(replays, []string{alive.HolderID}) {
+		t.Fatalf("replayed holders = %q, want only the live job's", replays)
 	}
 	eventuallyExec(t, "the orphan and ended holders' stop", func() bool {
 		s := fx.holders.stops()
