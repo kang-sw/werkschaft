@@ -4984,6 +4984,7 @@ dependencies = [
  "arboard",
  "base64 0.23.1",
  "block2",
+ "clipboard-win",
  "objc2",
  "objc2-foundation",
  "objc2-web-kit",

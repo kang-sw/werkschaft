@@ -5,9 +5,10 @@ use webview2_com::{
     take_pwstr, AcceleratorKeyPressedEventHandler, Microsoft::Web::WebView2::Win32::*,
     NavigationCompletedEventHandler, NavigationStartingEventHandler,
     PermissionRequestedEventHandler, ProcessFailedEventHandler, WebMessageReceivedEventHandler,
+    WebResourceRequestedEventHandler,
 };
 use windows::{
-    core::{Interface, BOOL, HSTRING, PWSTR},
+    core::{w, Interface, BOOL, HSTRING, PWSTR},
     Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, VIRTUAL_KEY, VK_0, VK_ADD, VK_CONTROL, VK_F12, VK_I, VK_LWIN, VK_MENU,
         VK_OEM_MINUS, VK_OEM_PLUS, VK_R, VK_RWIN, VK_SHIFT, VK_SUBTRACT,
@@ -17,6 +18,30 @@ use windows::{
 use crate::{
     accelerator, close, menu_action, navigation, shell::Connection, updates, webview_setup_failed,
 };
+
+pub fn copy_text(window: &WebviewWindow, text: &str) -> bool {
+    let Ok(hwnd) = window.hwnd() else {
+        eprintln!("Werkschaft: Could not get the clipboard owner's window handle");
+        return false;
+    };
+    // EmptyClipboard assigns ownership to this HWND before SetClipboardData.
+    let _clipboard = match clipboard_win::Clipboard::new_attempts_for(hwnd.0, 5) {
+        Ok(clipboard) => clipboard,
+        Err(error) => {
+            eprintln!("Werkschaft: OpenClipboard failed (Win32 {})", error.raw_code());
+            return false;
+        }
+    };
+    let write = clipboard_win::raw::empty()
+        .and_then(|()| clipboard_win::raw::set_string_with(text, clipboard_win::options::NoClear));
+    match write {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("Werkschaft: Clipboard write failed (Win32 {})", error.raw_code());
+            false
+        }
+    }
+}
 
 pub fn install(
     window: &WebviewWindow,
@@ -54,6 +79,7 @@ unsafe fn install_hooks(
     connection: &Arc<Connection>,
 ) -> windows::core::Result<()> {
     let webview = controller.CoreWebView2()?;
+    install_document_guard(&webview, connection.clone())?;
     let mut token = 0;
     let frames = connection.clone();
     webview.add_FrameNavigationStarting(
@@ -208,6 +234,54 @@ unsafe fn install_hooks(
     )?;
 
     Ok(())
+}
+
+unsafe fn install_document_guard(
+    webview: &ICoreWebView2,
+    connection: Arc<Connection>,
+) -> windows::core::Result<()> {
+    let filter = webview.cast::<ICoreWebView2_22>()?;
+    let environment = webview.cast::<ICoreWebView2_2>()?.Environment()?;
+    let forbidden = environment.CreateWebResourceResponse(
+        None,
+        403,
+        w!("Forbidden"),
+        w!("Cache-Control: no-store"),
+    )?;
+    // Navigation cancellation may arrive after the request has been dispatched.
+    // The source-kind overload also intercepts cross-origin iframe requests.
+    filter.AddWebResourceRequestedFilterWithRequestSourceKinds(
+        w!("*"),
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+        COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT,
+    )?;
+    let mut token = 0;
+    webview.add_WebResourceRequested(
+        &WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut context = COREWEBVIEW2_WEB_RESOURCE_CONTEXT::default();
+            args.ResourceContext(&mut context)?;
+            // Wry's bundle filter also raises this event for assets.
+            if context != COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT {
+                return Ok(());
+            }
+            let allowed = (|| {
+                let mut raw = PWSTR::null();
+                args.Request().ok()?.Uri(&mut raw).ok()?;
+                let url = url::Url::parse(&take_pwstr(raw)).ok()?;
+                let pin = connection.pinned_url();
+                Some(matches!(
+                    navigation::destination(&url, pin.as_ref()),
+                    navigation::Destination::Dashboard | navigation::Destination::Local
+                ))
+            })();
+            if allowed != Some(true) {
+                args.SetResponse(&forbidden)?;
+            }
+            Ok(())
+        })),
+        &mut token,
+    )
 }
 
 unsafe fn install_accelerators(

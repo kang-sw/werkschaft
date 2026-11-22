@@ -389,6 +389,9 @@ impl Connection {
                         && ui_state.daemon().as_ref() == Some(&daemon)
                     {
                         let copied = link.is_some_and(|link| {
+                            #[cfg(windows)]
+                            return crate::windows::copy_text(&target, link.as_str());
+                            #[cfg(target_os = "macos")]
                             arboard::Clipboard::new()
                                 .and_then(|mut clipboard| clipboard.set_text(link.as_str()))
                                 .is_ok()

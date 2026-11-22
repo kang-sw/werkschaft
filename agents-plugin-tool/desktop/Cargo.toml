@@ -10,7 +10,6 @@ publish = false
 tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
-arboard = { version = "=3.7.0", default-features = false }
 open = "=5.4.5"
 reqwest = { version = "=0.13.5", default-features = false, features = ["native-tls", "system-proxy", "stream"] }
 rusqlite = { version = "=0.34.0", features = ["bundled"] }
@@ -28,12 +27,14 @@ ureq = { version = "=3.5.2", default-features = false, features = ["json"] }
 url = "=2.5.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+arboard = { version = "=3.7.0", default-features = false }
 block2 = "=0.6.2"
 objc2 = "=0.6.5"
 objc2-foundation = "=0.3.2"
 objc2-web-kit = "=0.3.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+clipboard-win = "=5.4.3"
 webview2-com = "=0.39.1"
 windows = { version = "=0.62.2", features = ["Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse"] }
 
