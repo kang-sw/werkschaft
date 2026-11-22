@@ -16,6 +16,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 586f54919156b43a
 sage-review-completeness-reviewed: 586f54919156b43a
+completed: 2026-11-22
 ---
 
 # Fix a batch of ws tool surprises found while dogfooding
@@ -580,6 +581,20 @@ Verification:
   move, an Edition on a `.done/` ticket (`edited in .done`), and an added
   ticket (`added in ...`).
 
+### Result (4e92f3b) - 2026-11-22
+
+Landed Decisions 1-4, 18 and 19.
+- Sage freshness strips `### Result` and `#### Edition` sections (fenced headings kept) and still accepts the pre-change full-body digest.
+- A dangling `related:` is a CHECK with the new wording; the FIX recipe says "a follow-up git.commit" and no advisory mentions `--amend`.
+- `commitMergeGrantError` names every staged path that needs a grant, capped at 20 with `(+N more)`; other merge refusals are unchanged and single-error.
+- `ticket_changes:` lines say `edited in`, `added in` or `deleted from` by kind.
+- The `## TODO(` reminder is omitted when no item is pending or wip.
+- `subagent-rules.md` carries the lead-directed `git -c merge.directoryRenames=false merge --no-ff --no-commit <source>` route finished with the workflow `git.commit` tool. Regenerated manifests, the wsflow and Pi rsrc mirrors, Pi bundles and native first-party payload.
+
+Verification: `go test` for `internal/wsdoc`, `internal/wsgit`, `internal/wsrsrc`, `internal/wsconfig`, `internal/wsi18n`, plus narrow `internal/mcp` filters (Ticket, Verify, GitCommit, Sage, RouteFacts), all passing. Python wsflow tests OK.
+
+Decision: Decision 4 lives only in the shipped prose, using native git and the workflow `git.commit` tool, with no repository-specific names.
+
 ### Phase 2: tickets, sage and review surfaces
 
 Implement Decisions 5-10: items (2), (3) refusal and handler prose, (5), (7),
@@ -609,6 +624,19 @@ Verification:
 - Regenerated harness-wording goldens (`*-read-lead-run.golden` and any other
   pinned playbook) match.
 
+### Result (893c2eb) - 2026-11-22
+
+Landed Decisions 5-10.
+- `ticket-handler` and `review-handler` are tier large; both report `blocked` naming the tier instead of downgrading; `ticket-handler` inlines the item classes and the two-key rule; `lead-ticket` passes `tier_override` for `revise`; `lead-run` and `worker-stop-protocol` spell out `policy.branch.identity_vouch {branch, ticket_stem}` (checked by reading the regenerated rsrc).
+- `sageRestampAfterFixes` is conditional on autonomous issues not yet in the ticket; the block branch is unchanged.
+- A delegate-scoped key refused by a lead-only tool gets the scoped refusal text.
+- The missing-route-facts stop names `ticket-fact-populator`; `tickets.query` shows `route_facts: missing`; verify warns for a `ready/` ticket without the section.
+- The review-watermark nudge reaches only top-level leads and keyless callers.
+
+Verification: `TestShippedHandlersDeclareAtLeastTheirReviewersTier`, the sage, route-facts, watermark and verify tests, and the regenerated harness-wording goldens pass.
+
+Decisions: the tier-role inventory test and the `validReadyTicketBody` fixture (now with a Route Facts section) were updated for the new tiers and warning.
+
 ### Phase 3: playbook render keys, context errors and path refusal
 
 Implement Decisions 11-13: items (8a), (3) key conflict, (11), (14), (12).
@@ -625,6 +653,16 @@ Verification:
 - `internal/mcp/generated_path_write_test.go`: the refusal names
   `path.generate` with the caller's own key.
 
+### Result (d495058) - 2026-11-22
+
+Landed Decisions 11-13.
+- A daemon-agent worker-role render keeps the lead-scoped key but words it as lead-only-tool use, naming the spawn key as the session key; native-subagent, sublead and delegate-scoped renders keep the "all ws tool calls" wording.
+- The undeclared-variable error lists the declared variables and says per-run data belongs in the spawn prompt (`ErrUndeclaredVar.Hint`).
+- The generated-path refusal names `path.generate` with the caller's own key.
+- Prose in `ticket-worker`, `ticket-worker-elevated` and `worker-stop-protocol` follows, and wrappers render with no context.
+
+Verification: `TestRenderKeyBlockWordingFollowsCallerAndRole`, `TestPathWriteRefusalNamesTheRemedy` and the playbook render tests pass; goldens regenerated.
+
 ### Phase 4: wsagent residual record copies and the `conv.do` test hang
 
 Implement Decisions 14-15: the (6) residual outside `runner_process.go`, and
@@ -639,6 +677,18 @@ Verification:
   out; the source-scan test passes on the converted call sites and fails on a
   planted violation.
 
+### Result (8012241) - 2026-11-22
+
+Landed Decisions 14-15 in `internal/wsagent`, not touching `runner_process.go`.
+- `endedError` inside `do` callbacks now takes `c.record()` (the record copied under `mu`) at the two closed-path sites.
+- `conv.do` releases its caller when the callback exits its goroutine (`defer close(ran)`), proven by a test that hangs for the 10s guard without the defer.
+- 28 `t.Fatal*` sites in `do` callbacks (the ticket said 29) were converted to `doT` with `failf`; three `h.record()` reads were hoisted out of callbacks.
+- A follow-up commit made `doT` fail when the loop already ended and extended the scan to `doT` callbacks (review minors).
+
+Verification: `go test ./internal/wsagent` in full passes; `-race -count=3` on `TestAgyLeadOverACP`, `TestLeadRejoinOfAWrappedRingTrustsATurnBoundary`, `TestPermissionLiveModeEventsDuringRecordUpdates`, `TestConvDo*` and `TestDoCallbacks*` passes. The source scans pass on the converted sites and fail on planted violations.
+
+Deviation (decision): the requested `-race` test of the closed-path `endedError` copy proved infeasible. The loop exits after the step in which `closed` is set, so only one more request is served; a test write of `closed` races the loop's own unlocked read; `endedError` inlines and reads only `ClosedAt`/`HandedOffAt`, so a writer touching `Sends` is not detected. It is replaced by the deterministic AST scan `TestDoCallbacksCopyTheRecordUnderMu`, which proves the sites use `c.record()` but not that the lock removes the race, and misses aliased copies.
+
 ### Phase 5: generated bundle drift and locale text
 
 Implement Decisions 16-17: items (19), (20).
@@ -649,3 +699,17 @@ Verification:
 - `internal/mcp/dashboard_settings_ui_catalog_test.go` with the new
   description-digest fixture passes; all 11 locale entries for
   `agy.model_wait_timeout_seconds` mention the log check.
+
+### Result (d9c3ecb) - 2026-11-22
+
+Landed Decisions 16-17.
+- `TestPiGeneratedBundlesMatchTheirSources` runs `prepare-workflow-bundles.py --check` and `ws-pi-payload.py --plugin <product> --check-source .` per product (skips without python3 or on Windows). Manual check: touching a config manifest without regenerating makes it fail; restored afterwards.
+- `wsflow-mirroring.md` step 6 now lists the config manifests and the Pi rsrc rsync.
+- All 11 locale entries for `agy.model_wait_timeout_seconds` name `agy.stall_log_check`; `TestAgyModelWaitTimeoutLocaleTextNamesTheLogCheck` pins that.
+- `TestSettingsDescriptionsMatchTheLocaleReviewFixture` with `testdata/settings-description-digests.json` fails on a changed manifest description (checked manually, restored); regenerate with `WS_REGEN_SETTINGS_DESCRIPTION_DIGESTS=1`.
+
+Verification: the drift test and the catalog and digest tests pass; `prepare-workflow-bundles.py --check` and `ws-pi-payload.py --check-source` OK.
+
+Surprises: the wsflow-mirroring manual omitted the Pi rsrc rsync; `--check-source` needs a path argument.
+
+Review: one lite review pass, no Critical or Important. Accepted minors: the scan covers only direct `.rec` arguments; `formatTicketChangeStatus` renders a rename from a non-ticket path as "edited in"; no test rows for a trailing `### Result` section or an unclosed fence inside one.
