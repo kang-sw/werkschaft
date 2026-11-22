@@ -123,7 +123,9 @@ func TestHostedAgyListingCommandAndEnvironment(t *testing.T) {
 	calls := 0
 	runListing = func(ctx context.Context, command string, args, env []string) ([]byte, error) {
 		calls++
-		if command != "fixture-agy" || !slices.Equal(args, []string{"models"}) {
+		// Windows resolves the command through lookPath first (stubbed to a
+		// directory-qualified path); elsewhere it passes through unchanged.
+		if filepath.Base(command) != "fixture-agy" || !slices.Equal(args, []string{"models"}) {
 			t.Fatalf("command: %s %v", command, args)
 		}
 		if !slices.Equal(env, agyEnv(StartSpec{Env: environ()})) || !slices.Contains(env, "AGY_HOME=fixture-home") {
@@ -229,6 +231,7 @@ func TestHostedChoicesCacheAndSessionPrecedence(t *testing.T) {
 
 func TestHostedAgySessionReportDuringListingWins(t *testing.T) {
 	emptyHostedChoices(t)
+	stubLookPath(t) // Windows resolves the command through lookPath.
 	listing := stubListing(t, syntheticAgyModels, errors.New("synthetic failure"))
 	listing.during = func() {
 		m := newAgyMapper("")
