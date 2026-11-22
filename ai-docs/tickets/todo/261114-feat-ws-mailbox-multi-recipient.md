@@ -29,6 +29,22 @@ Existing routing, ordinary envelope queues and per-session history remain the su
 - Keep errors and successful routing observable without turning fan-out into a new persistent message protocol. This capture does not select a new batch-result schema, numerical fan-out limit, automatic retry, reply-all operation or alias-to-session identity scheme from the investigation's proposals.
 - Existing host adapters must display public To/CC through the body they already receive. A host-specific structured-header rollout is not a prerequisite to this T0 feature.
 
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | Phase 1 changes send handling, advertised arguments, tests and rollback guidance; current paths include agents-plugin-tool/internal/mcp/mailbox_tools.go, agents-plugin-tool/internal/mcp/server_schemas.go and ai-docs/manuals/ws-mcp.md. |
+| scope.surface | public-interface | mailbox.send is an advertised MCP tool; agents-plugin-tool/internal/mcp/server_schemas.go#L831-L842 declares its current arguments. |
+| scope.new_public_symbol | no | The existing mailbox.send tool gains arguments; Phase 1 names no new tool or exported symbol. |
+| scope.new_type_contract | yes | The public to argument changes from string to string or array and optional cc and bcc arrays are added. |
+| scope.test_surface | existing | Existing coverage includes agents-plugin-tool/internal/mcp/mailbox_tools_test.go and agents-plugin-tool/internal/mcp/mailbox_history_test.go; Phase 1 requires additional cases. |
+| complexity.reuse_points | confirmed | agents-plugin-tool/internal/mcp/mailbox_tools.go#L37-L118 resolves addresses, stamps identities, enqueues and records history; agents-plugin-tool/internal/wsmailbox/store.go#L86-L97 defines the existing envelope. |
+| complexity.side_effect_risk | high | Fan-out mutates independent queues and histories and may partially succeed; BCC must stay out of recipient-visible content. |
+| risk.correctness | high | Multiple destinations, route-specific stamps and independent drains must preserve existing semantics; peer-lead first-line stamping also affects header placement. |
+| risk.fit | moderate | The body header must coexist with existing host and dashboard presentation, including peer-lead first-line recognition. |
+| risk.test | high | Coverage must exercise scalar and array addressing, mixed routes, hidden recipients, independent drains and unchanged serialization. |
+| risk.security_or_contract | high | The public MCP argument contract changes and recipient-visible history and dashboard content must not reveal BCC. |
+
 ## Phases
 
 ### Phase 1: Add explicit fan-out without changing mailbox storage
