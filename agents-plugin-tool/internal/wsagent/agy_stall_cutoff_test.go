@@ -152,7 +152,8 @@ func (r *stallRig) writeLog(lines ...string) {
 }
 
 // baseLog is a verified tail with no main header since the boundary:
-// covered from a minute before it, naming the session, holding one monitor
+// covered from a minute before it, holding the current request's
+// session/prompt line and the user-message line naming the session, one monitor
 // header, and one main header of an earlier request of this process (the
 // first-request safeguard is past). extra lines join it in time order, as
 // agy writes them, by the instants they parse to (so a fixture that
@@ -162,6 +163,7 @@ func (r *stallRig) baseLog(extra ...string) {
 	lines := []string{
 		agyGlogStart(b.Add(-time.Minute), 1),
 		agyGlogHeader(b.Add(-50*time.Second), 5),
+		agyGlogRequest(b, 2, "session/prompt"),
 		agyGlogUserMessage(b, 2, "agy-s1"),
 		agyGlogMonitor(b.Add(time.Second), 7),
 		agyGlogHeader(b.Add(time.Second), 7),
@@ -181,6 +183,7 @@ func (r *stallRig) monitorOnlyLog() {
 	b := r.boundary
 	r.writeLog(
 		agyGlogStart(b.Add(-time.Minute), 1),
+		agyGlogRequest(b, 2, "session/prompt"),
 		agyGlogUserMessage(b, 2, "agy-s1"),
 		agyGlogMonitor(b.Add(time.Second), 7),
 		agyGlogHeader(b.Add(time.Second), 7),
@@ -492,8 +495,9 @@ func TestAgyStallCutoffContinueStartsAFreshWindow(t *testing.T) {
 	if b := r.boundaryNow(); !b.Equal(continued) {
 		t.Fatalf("boundary = %v, want the automatic continue %v", b, continued)
 	}
-	// agy logs the continue's prompt and no header after it.
-	r.baseLog(agyGlogHeader(r.boundary.Add(5*time.Second), 9), agyGlogUserMessage(continued, 2, "agy-s1"))
+	// agy logs the continue's session/prompt request line (its user-message
+	// line is not guaranteed) and no header after it.
+	r.baseLog(agyGlogHeader(r.boundary.Add(5*time.Second), 9), agyGlogRequest(continued, 2, "session/prompt"))
 	r.fireSilence(stallTimeout)
 	if got, spent := r.cancels(), r.retries(); got != 2 || spent != 1 {
 		t.Fatalf("after continue: cancels=%d retries=%d, want a second cut on the shared budget", got, spent)

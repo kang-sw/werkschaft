@@ -25,6 +25,18 @@ func agyGlogStart(at time.Time, goroutine int) string {
 	return agyGlog(at, goroutine, "server.go:100", "agent ready")
 }
 
+// agyGlogRequest is agy's per-request ACP server line for method.
+func agyGlogRequest(at time.Time, goroutine int, method string) string {
+	return agyGlog(at, goroutine, "server.go:213", "ACP Request received: "+method)
+}
+
+// agyGlogPrompt is what agy logs on receiving a session/prompt: the request
+// line, then (for some prompts only) the user-message line naming the
+// session.
+func agyGlogPrompt(at time.Time, goroutine int, session string) string {
+	return agyGlogRequest(at, goroutine, "session/prompt") + agyGlogUserMessage(at, goroutine, session)
+}
+
 func agyGlogUserMessage(at time.Time, goroutine int, session string) string {
 	return agyGlog(at, goroutine, "server.go:1883", "Sending user message to conversation "+session+" (items=1, media=0)")
 }
@@ -40,6 +52,8 @@ func agyGlogMonitor(at time.Time, goroutine int) string {
 func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
 	before := b.Add(-30 * time.Second)
+	prompt := agyGlogRequest(b, 2, "session/prompt")
+	const noRequest = "no session/prompt request line"
 	cases := []struct {
 		name   string
 		tail   string
@@ -58,17 +72,27 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 		},
 		{
 			name: "only an earlier request's header",
-			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogUserMessage(b, 2, "s1"),
+			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogPrompt(b, 2, "s1"),
 			want: agyStallHeaderless,
 		},
 		{
 			name: "only a monitor header after the boundary",
-			tail: agyGlogStart(before, 1) + agyGlogMonitor(b.Add(time.Second), 11) + agyGlogHeader(b.Add(3*time.Second), 11),
+			tail: agyGlogStart(before, 1) + prompt + agyGlogMonitor(b.Add(time.Second), 11) + agyGlogHeader(b.Add(3*time.Second), 11),
 			want: agyStallHeaderless,
 		},
 		{
 			name: "monitor marker later in the tail still marks its goroutine",
-			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(3*time.Second), 11) + agyGlogMonitor(b.Add(4*time.Second), 11),
+			tail: agyGlogStart(before, 1) + prompt + agyGlogHeader(b.Add(3*time.Second), 11) + agyGlogMonitor(b.Add(4*time.Second), 11),
+			want: agyStallHeaderless,
+		},
+		{
+			name: "request line alone, without the user-message line",
+			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + prompt,
+			want: agyStallHeaderless,
+		},
+		{
+			name: "request line inside the skew margin",
+			tail: agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogRequest(b.Add(-time.Second), 2, "session/prompt"),
 			want: agyStallHeaderless,
 		},
 		{
@@ -78,14 +102,44 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 		},
 		{
 			name: "continuation lines are ignored",
-			tail: agyGlogStart(before, 1) + "  a wrapped continuation streamGenerateContent\n" + agyGlogHeader(b.Add(-20*time.Second), 9) + "not glog\n" + agyGlogUserMessage(b, 2, "s1"),
+			tail: agyGlogStart(before, 1) + "  a wrapped continuation streamGenerateContent\n" + agyGlogHeader(b.Add(-20*time.Second), 9) + "not glog\n" + agyGlogPrompt(b, 2, "s1"),
 			want: agyStallHeaderless,
 		},
 		{
 			name:   "verified tail that ends before the window",
 			tail:   agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9),
 			want:   agyStallUnknown,
-			reason: "ends before",
+			reason: noRequest,
+		},
+		{
+			name:   "ordinary lines in the window but no request line",
+			tail:   agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlog(b.Add(-time.Second), 3, "run.go:10", "working") + agyGlogUserMessage(b, 2, "s1"),
+			want:   agyStallUnknown,
+			reason: noRequest,
+		},
+		{
+			name:   "request line before the window",
+			tail:   agyGlogStart(before, 1) + agyGlogRequest(b.Add(-10*time.Second), 2, "session/prompt") + agyGlogHeader(b.Add(-9*time.Second), 9) + agyGlog(b.Add(time.Second), 3, "run.go:10", "working"),
+			want:   agyStallUnknown,
+			reason: noRequest,
+		},
+		{
+			name:   "request line of another method",
+			tail:   agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogRequest(b, 2, "session/cancel"),
+			want:   agyStallUnknown,
+			reason: noRequest,
+		},
+		{
+			name:   "method token is a whole field",
+			tail:   agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlogRequest(b, 2, "session/prompt_status"),
+			want:   agyStallUnknown,
+			reason: noRequest,
+		},
+		{
+			name:   "method token from another source line",
+			tail:   agyGlogStart(before, 1) + agyGlogHeader(b.Add(-10*time.Second), 9) + agyGlog(b, 2, "server.go:214", "ACP Request received: session/prompt"),
+			want:   agyStallUnknown,
+			reason: noRequest,
 		},
 		{
 			name:   "tail starting after the boundary minus the skew margin",
@@ -95,7 +149,7 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 		},
 		{
 			name:   "covered glog tail with no recognized header",
-			tail:   agyGlogStart(before, 1) + agyGlogUserMessage(b, 2, "s1") + agyGlog(b.Add(time.Second), 3, "run.go:10", "working"),
+			tail:   agyGlogStart(before, 1) + agyGlogPrompt(b, 2, "s1") + agyGlog(b.Add(time.Second), 3, "run.go:10", "working"),
 			want:   agyStallUnknown,
 			reason: "no recognized",
 		},
@@ -133,7 +187,7 @@ func TestParseAgyStallTailMainAndMonitorHeaders(t *testing.T) {
 func TestParseAgyStallTailClippedFirstLine(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
 	partial := agyGlogHeader(b.Add(time.Second), 9)[5:]
-	tail := partial + agyGlogStart(b.Add(-time.Minute), 1) + agyGlogHeader(b.Add(-30*time.Second), 9) + agyGlogUserMessage(b, 2, "s1")
+	tail := partial + agyGlogStart(b.Add(-time.Minute), 1) + agyGlogHeader(b.Add(-30*time.Second), 9) + agyGlogPrompt(b, 2, "s1")
 	if got, _, reason := parseAgyStallTail([]byte(tail), true, b, agyStallSkew); got != agyStallHeaderless {
 		t.Fatalf("clipped tail verdict = %v (%q), want headerless", got, reason)
 	}
@@ -146,7 +200,7 @@ func TestParseAgyStallTailClippedFirstLine(t *testing.T) {
 // is unknown even though the earlier read was verified.
 func TestParseAgyStallTailFormatDriftAfterValidTail(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
-	first := agyGlogStart(b.Add(-time.Minute), 1) + agyGlogMonitor(b.Add(-50*time.Second), 7) + agyGlogHeader(b.Add(-50*time.Second), 7) + agyGlogUserMessage(b, 2, "s1")
+	first := agyGlogStart(b.Add(-time.Minute), 1) + agyGlogMonitor(b.Add(-50*time.Second), 7) + agyGlogHeader(b.Add(-50*time.Second), 7) + agyGlogPrompt(b, 2, "s1")
 	if got, _, reason := parseAgyStallTail([]byte(first), false, b, agyStallSkew); got != agyStallHeaderless {
 		t.Fatalf("first tail = %v (%q), want headerless", got, reason)
 	}
@@ -162,7 +216,7 @@ func TestParseAgyStallTailFormatDriftAfterValidTail(t *testing.T) {
 func TestParseAgyStallTailReportsAnyMainHeader(t *testing.T) {
 	b := time.Date(2026, 11, 22, 12, 0, 0, 0, time.Local)
 	before := b.Add(-30 * time.Second)
-	current := agyGlogUserMessage(b, 2, "s1")
+	current := agyGlogPrompt(b, 2, "s1")
 	monitorOnly := agyGlogStart(before, 1) + agyGlogMonitor(before, 7) + agyGlogHeader(before, 7)
 	if got, anyMain, _ := parseAgyStallTail([]byte(monitorOnly+current), false, b, agyStallSkew); got != agyStallHeaderless || anyMain {
 		t.Fatalf("monitor only = %v anyMain=%v, want headerless with no main", got, anyMain)
@@ -198,6 +252,12 @@ func TestParseAgyStallTailRepeatedLocalHour(t *testing.T) {
 	tail := line(0, 50, 0, 1, "server.go:100", "agent ready") + monitor(0, 55, 0, 7) + header(0, 55, 0, 7) + header(1, 10, 1, 9)
 	if got, _, reason := parseAgyStallTail([]byte(tail), false, second, agyStallSkew); got != agyStallHeader {
 		t.Fatalf("repeated-hour header = %v (%q), want header", got, reason)
+	}
+	// A request line at 01:10:01 could be the first 01:10:01, an hour
+	// before the boundary: it never attributes the tail.
+	tail = line(0, 50, 0, 1, "server.go:100", "agent ready") + header(0, 55, 0, 9) + line(1, 10, 1, 2, "server.go:213", "ACP Request received: session/prompt")
+	if got, _, reason := parseAgyStallTail([]byte(tail), false, second, agyStallSkew); got != agyStallUnknown || !strings.Contains(reason, "no session/prompt request line") {
+		t.Fatalf("repeated-hour request line = %v (%q), want unknown", got, reason)
 	}
 	// 01:10:00 EDT, the first 01:10: a first line at 01:05 could be the
 	// second 01:05, after the boundary, so the tail does not cover it.
@@ -304,7 +364,7 @@ func TestAgyStallLogVerdictUnknownCases(t *testing.T) {
 	t.Run("unreadable", func(t *testing.T) {
 		dir := t.TempDir()
 		l := newAgyStallLog(dir, started)
-		path := writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(-30*time.Second), 3)+agyGlogUserMessage(b, 1, "s1"), time.Now())
+		path := writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(-30*time.Second), 3)+agyGlogPrompt(b, 1, "s1"), time.Now())
 		if got, _ := l.verdict("s1", b); got != agyStallHeaderless {
 			t.Fatalf("readable log = %v, want headerless", got)
 		}
@@ -327,19 +387,19 @@ func TestAgyStallLogVerdictUnknownCases(t *testing.T) {
 	t.Run("no main header from this process yet", func(t *testing.T) {
 		dir := t.TempDir()
 		l := newAgyStallLog(dir, started)
-		path := writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogUserMessage(b, 1, "s1")+agyGlogMonitor(b.Add(time.Second), 7)+agyGlogHeader(b.Add(time.Second), 7), time.Now())
+		path := writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogPrompt(b, 1, "s1")+agyGlogMonitor(b.Add(time.Second), 7)+agyGlogHeader(b.Add(time.Second), 7), time.Now())
 		if got, reason := l.verdict("s1", b); got != agyStallUnknown || !strings.Contains(reason, "no main request header") {
 			t.Fatalf("monitor headers only = %v (%q), want unknown", got, reason)
 		}
 		// A main header in a later tail enables cuts from then on, even
 		// once it has scrolled out of the window or the tail.
 		b2 := b.Add(time.Minute)
-		writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(10*time.Second), 9)+agyGlogMonitor(b2.Add(time.Second), 7)+agyGlogHeader(b2.Add(time.Second), 7), time.Now())
+		writeAgyLog(t, dir, "acp-worker-x.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogHeader(b.Add(10*time.Second), 9)+agyGlogRequest(b2, 1, "session/prompt")+agyGlogMonitor(b2.Add(time.Second), 7)+agyGlogHeader(b2.Add(time.Second), 7), time.Now())
 		if got, reason := l.verdict("s1", b2); got != agyStallHeaderless {
 			t.Fatalf("after a main header = %v (%q), want headerless", got, reason)
 		}
 		b3 := b.Add(2 * time.Minute)
-		if err := os.WriteFile(path, []byte(agyGlogStart(b2, 1)+agyGlogMonitor(b3.Add(time.Second), 7)+agyGlogHeader(b3.Add(time.Second), 7)), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(agyGlogStart(b2, 1)+agyGlogRequest(b3, 1, "session/prompt")+agyGlogMonitor(b3.Add(time.Second), 7)+agyGlogHeader(b3.Add(time.Second), 7)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if got, reason := l.verdict("s1", b3); got != agyStallHeaderless {
@@ -350,16 +410,43 @@ func TestAgyStallLogVerdictUnknownCases(t *testing.T) {
 		// Worker A serves the first request; its log is located and cached.
 		dir := t.TempDir()
 		l := newAgyStallLog(dir, started)
-		writeAgyLog(t, dir, "acp-worker-20261122_115900-100.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogUserMessage(b, 1, "s1")+agyGlogHeader(b.Add(time.Second), 3), time.Now())
+		writeAgyLog(t, dir, "acp-worker-20261122_115900-100.log", agyGlogStart(b.Add(-time.Minute), 1)+agyGlogPrompt(b, 1, "s1")+agyGlogHeader(b.Add(time.Second), 3), time.Now())
 		if got, reason := l.verdict("s1", b); got != agyStallHeader {
 			t.Fatalf("worker A's request = %v (%q), want header", got, reason)
 		}
 		// A stops; worker B, under the same front process, takes a fresh
 		// prompt and logs its main header in its own file.
 		b2 := b.Add(5 * time.Minute)
-		writeAgyLog(t, dir, "acp-worker-20261122_120400-200.log", agyGlogStart(b2.Add(-time.Minute), 1)+agyGlogUserMessage(b2, 1, "s1")+agyGlogHeader(b2.Add(time.Second), 4), time.Now())
-		if got, reason := l.verdict("s1", b2); got != agyStallUnknown || !strings.Contains(reason, "ends before the request boundary") {
+		writeAgyLog(t, dir, "acp-worker-20261122_120400-200.log", agyGlogStart(b2.Add(-time.Minute), 1)+agyGlogPrompt(b2, 1, "s1")+agyGlogHeader(b2.Add(time.Second), 4), time.Now())
+		if got, reason := l.verdict("s1", b2); got != agyStallUnknown || !strings.Contains(reason, "no session/prompt request line") {
 			t.Fatalf("cached predecessor log for B's request = %v (%q), want unknown", got, reason)
+		}
+	})
+	t.Run("worker replaced just before the request", func(t *testing.T) {
+		// Worker A serves the first request; its log is located and cached.
+		dir := t.TempDir()
+		l := newAgyStallLog(dir, started)
+		aName := "acp-worker-20261122_115900-100.log"
+		aFirst := agyGlogStart(b.Add(-time.Minute), 1) + agyGlogPrompt(b, 1, "s1") + agyGlogHeader(b.Add(time.Second), 3)
+		writeAgyLog(t, dir, aName, aFirst, time.Now())
+		if got, reason := l.verdict("s1", b); got != agyStallHeader {
+			t.Fatalf("worker A's request = %v (%q), want header", got, reason)
+		}
+		// A's last main header is 20s before B's boundary and A still logs
+		// an ordinary line 1s before it, inside the skew window; B takes
+		// the prompt and logs its main header in its own file.
+		b2 := b.Add(5 * time.Minute)
+		aLater := aFirst + agyGlogHeader(b2.Add(-20*time.Second), 3) + agyGlog(b2.Add(-time.Second), 4, "run.go:10", "shutting down")
+		writeAgyLog(t, dir, aName, aLater, time.Now())
+		writeAgyLog(t, dir, "acp-worker-20261122_120400-200.log", agyGlogStart(b2.Add(-time.Minute), 1)+agyGlogPrompt(b2, 1, "s1")+agyGlogHeader(b2.Add(time.Second), 4), time.Now())
+		if got, reason := l.verdict("s1", b2); got != agyStallUnknown || !strings.Contains(reason, "no session/prompt request line") {
+			t.Fatalf("predecessor log current to the window = %v (%q), want unknown", got, reason)
+		}
+		// Had A itself received the prompt, its request line attributes
+		// the tail to the current request: no header since is headerless.
+		writeAgyLog(t, dir, aName, aLater+agyGlogRequest(b2, 2, "session/prompt"), time.Now())
+		if got, reason := l.verdict("s1", b2); got != agyStallHeaderless {
+			t.Fatalf("A's own request with no header = %v (%q), want headerless", got, reason)
 		}
 	})
 	t.Run("locates once", func(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -44,9 +45,10 @@ const (
 	// agyStallHeader: a main-request response header is in the window, so
 	// the model is generating.
 	agyStallHeader
-	// agyStallHeaderless: a verified tail shows no main-request header at
-	// or after the boundary minus the skew margin, and this process's log
-	// has shown a main-request header before.
+	// agyStallHeaderless: a verified tail shows agy received the current
+	// session/prompt request but no main-request header at or after the
+	// boundary minus the skew margin, and this process's log has shown a
+	// main-request header before.
 	agyStallHeaderless
 )
 
@@ -228,11 +230,13 @@ type agyLogLine struct {
 // parseAgyStallTail judges a tail against the request boundary, in the
 // boundary's location:
 //   - coverage: the first complete glog line is before boundary-skew;
-//   - currency (headerless only): the last glog line is at or after
-//     boundary-skew. A tail that ends before the window may be a cached log
-//     its worker stopped writing (agy replaced the worker under the same
-//     front process and the current request logs elsewhere), so it proves
-//     nothing about the current request;
+//   - attribution (headerless only): agy's per-request line for a
+//     session/prompt is at or after boundary-skew, so this log's worker
+//     received the current request. Without it the tail may be a cached log
+//     whose worker agy replaced under the same front process (the current
+//     request then logs elsewhere, and the old worker may still write
+//     unrelated lines into the window), so it proves nothing about the
+//     current request;
 //   - format: at least one streamGenerateContent header line (main or
 //     monitor) is in this tail;
 //   - a header line counts as main unless its goroutine logged an
@@ -245,8 +249,8 @@ type agyLogLine struct {
 //
 // An ambiguous local time counts on the side that never cuts: a header in
 // the window under either reading is in the window, the first line covers
-// the boundary only if both readings precede the window, and the last line
-// is current only if both readings are in the window.
+// the boundary only if both readings precede the window, and the request
+// line counts only if both readings are in the window.
 func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.Duration) (verdict agyStallVerdict, anyMain bool, reason string) {
 	if boundary.IsZero() {
 		return agyStallUnknown, false, "no request boundary"
@@ -274,8 +278,11 @@ func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.
 	if len(lines) == 0 {
 		return agyStallUnknown, false, "the agy log tail holds no glog line"
 	}
-	recognized, main := false, false
+	recognized, main, requested := false, false, false
 	for _, line := range lines {
+		if agyPromptRequestLine(line) && !line.at.Before(window) {
+			requested = true
+		}
 		if !agyHeaderLine(line) {
 			continue
 		}
@@ -295,10 +302,21 @@ func parseAgyStallTail(tail []byte, clipped bool, boundary time.Time, skew time.
 		return agyStallUnknown, anyMain, "the agy log tail holds no recognized streamGenerateContent header line"
 	case main:
 		return agyStallHeader, anyMain, ""
-	case lines[len(lines)-1].at.Before(window):
-		return agyStallUnknown, anyMain, "the agy log tail ends before the request boundary"
+	case !requested:
+		return agyStallUnknown, anyMain, "the agy log tail holds no session/prompt request line since the request boundary"
 	}
 	return agyStallHeaderless, anyMain, ""
+}
+
+// agyPromptRequestSource is the source tag of the line agy's ACP server
+// logs once per request it receives, naming the request's method.
+const agyPromptRequestSource = "server.go:213"
+
+// agyPromptRequestLine reports agy's per-request line for a session/prompt:
+// the source tag and the method token, no other message content. A version
+// that moves the line matches nothing, which never cuts.
+func agyPromptRequestLine(line agyLogLine) bool {
+	return line.file == agyPromptRequestSource && slices.Contains(strings.Fields(line.msg), "session/prompt")
 }
 
 // agyHeaderLine reports an http_helpers.go line agy logs once a
