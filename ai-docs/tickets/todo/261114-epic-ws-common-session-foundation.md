@@ -37,17 +37,20 @@ Delivery is four stages:
    - Move plugin/extension features into the daemon: MCP plus injection,
      playbooks instead of skills, `prompts/list` slash commands.
    - The Claude CLI plugin is frozen; the Pi extension is retired after hosted
-     parity, each removal separately approved.
+     parity, each removal separately approved. Pi as a whole (extension and
+     hosted backend) is frozen and retires through the builtin harness's
+     parity and A/B gate (owner (5002)=a, 2026-11-22).
 3. **Tier-1 harnesses.** Codex, then Antigravity (02). Each fills the catalog
-   values per `harness@version` range and implements its backend. Then Pi as a
-   port of the Codex adapter (25).
+   values per `harness@version` range and implements its backend. Then our own
+   builtin Go harness on a shared provider-auth layer, replacing Pi (owner
+   (5002)=a, 2026-11-22; supersedes the Pi port (25) and the Pi rebuild).
 4. **Extensions.** Audit store/view, authority/permission UI, voice, live
    reasoning, and `ws/agent.*` session lightweighting (the long-term cost answer
    from (06)).
 
 Working order (owner 2026-11-17 22:10, (70)=b, (69), superseded for the holder
 dependency by owner (1872)=a on 2026-11-20): catalog -> Codex -> Antigravity ->
-exec, with Pi last. Exec starts with per-job holders; the single session holder
+exec, with the builtin harness (formerly Pi) last. Exec starts with per-job holders; the single session holder
 is no longer on the prerequisite path.
 
 Independent, not stage-bound: the mailbox in-memory-first store. It gates the
@@ -61,7 +64,10 @@ or root-key issuance restrictions. Existing MCP root issuance removal/blocking i
 unchosen and may be T2; the owner must settle it separately. Existing session
 keys and historical state are preserved. Removing the Pi extension or any CLI-tier
 feature is not authorized by this map; each concrete removal needs the owner's
-explicit approval (04).
+explicit approval (04). Exception: the owner approved retiring Pi (extension and
+backend) behind the builtin harness's Phase 3 gate ((5002)=a, 2026-11-22). The
+builtin harness is one backend under the common interface, not a replacement
+universal runtime.
 
 ## Child Tickets
 
@@ -128,12 +134,17 @@ Stage 3 (tier-1 harnesses; each prerequisite: the catalog ticket):
 - `261117-feat-ws-hosted-antigravity-adapter` - Antigravity after Codex; revives
   the dropped `261114-feat-ws-hosted-antigravity-acp-adapter` as a new stem;
   account access confirmed (owner 2026-11-17 22:10).
-- `261120-feat-ws-pi-common-interface-rebuild` - late-stage Pi child, after
-  Claude, Codex, and agy complete the common hosted interface: rebuild Pi from
-  scratch as its backend adapter, fit beneath the unchanged daemon application
-  layer, MCP tools, and prompt assembly, and retire the existing Pi extension
-  through a separately settled transition/compatibility gate (owner directive,
-  2026-11-20). This supersedes the prior planned Codex-adapter port (25).
+- `261122-feat-ws-provider-auth-layer` - shared provider credentials:
+  OpenRouter API key, then OpenAI Sign in with ChatGPT; later consumers
+  (decision, image, video) use it too (owner (5002)=a, 2026-11-22).
+- `261122-feat-ws-builtin-agent-harness` - our own Go harness, a backend that
+  fills the catalog completely, beneath the unchanged daemon application layer,
+  MCP tools, and prompt assembly; worker, then lead; its Phase 3 parity and A/B
+  gate retires Pi. Blocked by `261118-refactor-ws-harness-name-branches`.
+  Supersedes the dropped `261120-feat-ws-pi-common-interface-rebuild` and
+  `261118-research-ws-pi-hosted-connector`.
+- `261122-feat-ws-web-tools` - `ws/web.*` for the builtin harness only
+  (provider server-side search, daemon `ws/web.fetch`).
 
 Stage 4 (extensions):
 
@@ -176,7 +187,7 @@ Foundation prerequisite for every extension below is already met
 | Follow-on | Consumer | Additional prerequisite |
 |---|---|---|
 | Authority UI | Not yet authored | No additional prerequisite settled |
-| Additional harnesses | Codex, then Antigravity, then Pi (stage 3) | `261117-feat-ws-harness-capability-catalog`; Codex's first implementation also needs its settled range-based contract and separate execution approval |
+| Additional harnesses | Codex, then Antigravity, then the builtin harness (stage 3) | `261117-feat-ws-harness-capability-catalog`; Codex's first implementation also needs its settled range-based contract and separate execution approval |
 | Voice | Not yet authored | No additional prerequisite settled |
 | Live reasoning | Not yet authored | No additional prerequisite settled |
 | Audit (capture, store, API) | `261119-epic-ws-conversation-audit` children 1-4 | The query API depends on `261119-feat-ws-audit-ring-store#phase1`. The sub-epic records the child order. |
@@ -193,10 +204,14 @@ Board IDs `(NN)` refer to the 2026-11-17 lead-discuss session; earlier IDs
   sessions.
 - **Non-hosted tiers (04)=a.** The Claude CLI plugin is frozen: keep current
   features, add none. The Pi extension is retired after hosted parity, per-item
-  approval; Pi remains only as a hosted lead/worker harness.
+  approval; Pi remains only as a hosted lead/worker harness. Superseded for Pi
+  by (5002)=a, 2026-11-22: Pi is frozen and retires entirely behind the builtin
+  harness gate.
 - **Harness order (25).** Implementation and verification order is Claude, Codex,
   Antigravity, Pi. Pi is driven only with GPT models, so the Pi hosted backend is
   a port of the Codex adapter and catalog profile, not a separate Pi-first design.
+  The Pi part is superseded by (5002)=a, 2026-11-22: the fourth harness is our
+  own builtin Go harness.
   Recorded as assumed-ok by the lead; the owner may veto. The working order
   across stages is catalog -> Codex -> Antigravity -> exec, with Pi last
   ((70)=b, (69), 2026-11-17 22:10; holder dependency superseded by owner
@@ -272,7 +287,7 @@ Board IDs `(NN)` refer to the 2026-11-17 lead-discuss session; earlier IDs
 ## Completion Criteria
 
 - Done: the stage-2 children are done; the tier-1 harnesses of stage 3 (Codex,
-  Antigravity, Pi) are done or explicitly deferred/dropped; every captured child
+  Antigravity, builtin harness) are done or explicitly deferred/dropped; every captured child
   is done or explicitly deferred/dropped; and the owner closes this epic.
 - Dropped: the owner drops the direction.
 - Deferred: stage-4 extensions and unscheduled planned children remain proposals,
