@@ -333,6 +333,17 @@ class RingTest(unittest.TestCase):
         self.assertEqual(ring.first_seq(), 1)
         self.assertEqual(ring.size, 2 * cost)
 
+    def test_output_offsets_count_each_stream_and_all_output(self):
+        ring = holder_mod.Ring(1 << 20)
+        a = ring.append("output", "stdout", b"abc")
+        b = ring.append("output", "stderr", b"de")
+        c = ring.append("output", "stdout", b"f")
+        exit_rec = ring.append("exit", fields={"exit_code": 0, "signal": None})
+        self.assertEqual([(r.offset, r.combined_offset) for r in (a, b, c)], [(0, 0), (0, 3), (3, 5)])
+        self.assertEqual(c.message()["offset"], 3)
+        self.assertEqual(c.message()["combined_offset"], 5)
+        self.assertNotIn("offset", exit_rec.message())
+
     def test_newest_stays_even_when_it_exceeds_the_budget(self):
         ring = holder_mod.Ring(64, 128)
         ring.append("output", "stdout", b"x")
@@ -427,6 +438,16 @@ class RingReplayTest(HolderTestCase):
         for from_seq in (0, -5):
             _, events = self._replay(holder, from_seq)
             self.assertEqual([m["seq"] for m in events], list(range(first, 202)))
+
+    def test_replayed_records_carry_their_absolute_byte_offsets(self):
+        holder, first = self._filled_holder()
+        _, events = self._replay(holder, 0)
+        # Each line is 10 bytes on stdout, the only stream.
+        for msg in events[:-1]:
+            self.assertEqual(msg["offset"], (msg["seq"] - 1) * 10)
+            self.assertEqual(msg["combined_offset"], msg["offset"])
+        self.assertGreater(events[0]["offset"], 0)
+        self.assertNotIn("offset", events[-1])
 
     def test_replay_from_a_held_sequence_starts_there(self):
         holder, first = self._filled_holder()

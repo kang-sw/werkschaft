@@ -773,6 +773,32 @@ func TestHostedStdinSurvivesARestart(t *testing.T) {
 	}
 }
 
+// TestHostedRejoinKeepsAbsoluteOffsets: a running job rejoined after a
+// daemon replacement places the holder's replayed records at their
+// absolute offsets, so a saved exec.raw.read cursor reads the same bytes
+// and a read below the replay reports the prefix the holder evicted.
+func TestHostedRejoinKeepsAbsoluteOffsets(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Legacy: true, Tool: "exec.spawn", Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.open(10 * time.Millisecond)
+	// The holder's ring kept only the output from byte 4096 on.
+	at := func(off int64) *int64 { return &off }
+	fx.holders.emit(v.HolderID, wsholder.Event{Event: "output", Stream: "stdout", Data: []byte("kept-1\n"), Offset: at(4096), CombinedOffset: at(4096)})
+	fx.holders.emit(v.HolderID, wsholder.Event{Event: "output", Stream: "stdout", Data: []byte("kept-2\n"), Offset: at(4103), CombinedOffset: at(4103)})
+	read, ok, err := fx.h.LegacyRead(fx.exitDir, v.ID, "stdout", 4103, 100)
+	if !ok || err != nil || read.Offset != 4103 || read.Text != "kept-2\n" || read.Size != 4110 || read.EvictedBefore != 0 {
+		t.Fatalf("read from a saved cursor = %+v %v %v", read, ok, err)
+	}
+	read, ok, err = fx.h.LegacyRead(fx.exitDir, v.ID, "stdout", 0, 100)
+	if !ok || err != nil || read.EvictedBefore != 4096 || read.Offset != 4096 || read.Text != "kept-1\nkept-2\n" {
+		t.Fatalf("read below the replay = %+v %v %v", read, ok, err)
+	}
+}
+
 // TestHostedOwnershipAndListing: only the owner sees, stops or tails a
 // job, and a listing shows running jobs first.
 func TestHostedOwnershipAndListing(t *testing.T) {

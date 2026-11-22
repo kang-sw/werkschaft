@@ -328,7 +328,14 @@ func (h *Hosted) HolderEvent(id string, ev wsholder.Event) {
 		if ev.Stream == "stderr" {
 			stream = StreamStderr
 		}
-		h.rings.Append(j.out, stream, ev.Data)
+		if ev.Offset != nil && ev.CombinedOffset != nil {
+			// A rejoin replays the holder's ring from its oldest record:
+			// its offsets keep a reader's saved byte cursor on the same
+			// bytes and mark the prefix the holder no longer has.
+			h.rings.AppendAt(j.out, stream, ev.Data, *ev.Offset, *ev.CombinedOffset)
+		} else {
+			h.rings.Append(j.out, stream, ev.Data)
+		}
 		return
 	}
 	if j.row.Terminal() {

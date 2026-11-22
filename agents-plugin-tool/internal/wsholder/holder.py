@@ -77,8 +77,14 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
   Records (sequenced from 1, streamed after replay):
 
     {"event": "output", "seq": n, "stream": "stdout" | "stderr" | "pty",
-     "data": "<base64>"}   plus "partial": true when a pipe line was cut at
+     "data": "<base64>", "offset": n, "combined_offset": n}
+                           plus "partial": true when a pipe line was cut at
                            the record limit and continues in the next record.
+                           offset is the absolute byte offset of data in its
+                           stream and combined_offset in all output, in
+                           arrival order, so a replay that starts after
+                           evicted records still places its bytes. A holder
+                           that predates them sends neither.
     {"event": "exit", "seq": n, "exit_code": <int|null>, "signal": <int|null>}
 
   The output ring retains 4 MiB by default. A holder started with
@@ -175,7 +181,7 @@ class OpError(Exception):
 
 
 class Record:
-    __slots__ = ("seq", "kind", "stream", "data", "partial", "fields")
+    __slots__ = ("seq", "kind", "stream", "data", "partial", "fields", "offset", "combined_offset")
 
     def __init__(self, seq, kind, stream=None, data=b"", partial=False, fields=None):
         self.seq = seq
@@ -184,6 +190,8 @@ class Record:
         self.data = data
         self.partial = partial
         self.fields = fields
+        self.offset = None
+        self.combined_offset = None
 
     def cost(self) -> int:
         return len(self.data) + 64
@@ -201,6 +209,9 @@ class Record:
         }
         if self.partial:
             msg["partial"] = True
+        if self.offset is not None:
+            msg["offset"] = self.offset
+            msg["combined_offset"] = self.combined_offset
         return msg
 
 
@@ -215,6 +226,10 @@ class Ring:
         self.head = 0
         self.size = 0
         self.next_seq = 1
+        # Output bytes appended so far, per stream and in all: an output
+        # record's offsets, which eviction never renumbers.
+        self.stream_bytes: dict = {}
+        self.output_bytes = 0
 
     def first_seq(self) -> int:
         if self.head < len(self.items):
@@ -223,6 +238,11 @@ class Ring:
 
     def append(self, kind, stream=None, data=b"", partial=False, fields=None) -> Record:
         rec = Record(self.next_seq, kind, stream, data, partial, fields)
+        if kind == "output":
+            rec.offset = self.stream_bytes.get(stream, 0)
+            rec.combined_offset = self.output_bytes
+            self.stream_bytes[stream] = rec.offset + len(data)
+            self.output_bytes += len(data)
         self.next_seq += 1
         self.items.append(rec)
         self.size += rec.cost()

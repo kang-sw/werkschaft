@@ -75,6 +75,11 @@ type Event struct {
 	Stream  string `json:"stream,omitempty"`
 	Data    []byte `json:"data,omitempty"`
 	Partial bool   `json:"partial,omitempty"`
+	// Offset and CombinedOffset are an output record's absolute byte
+	// offsets: of Data in its own stream, and in all of the child's output
+	// in arrival order. A holder that predates them sends neither.
+	Offset         *int64 `json:"offset,omitempty"`
+	CombinedOffset *int64 `json:"combined_offset,omitempty"`
 	// ExitCode and Signal are an exit record's status.
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Signal   *int   `json:"signal,omitempty"`
