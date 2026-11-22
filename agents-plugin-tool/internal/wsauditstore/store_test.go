@@ -578,3 +578,40 @@ func TestStoreFileOpsPerAppendedEvent(t *testing.T) {
 		t.Fatal("appends reread files")
 	}
 }
+
+// TestStoreSiblingsOfOneSourceRecordAreAllRetained pins the review's
+// regression: the envelopes one source record yields (Ordinal) and the tee
+// lines of one interval (Index) share a source position, and every one is
+// retained on a clean run; once capture finalizes past that position, a
+// replayed sibling is a duplicate and one never appended is loss.
+func TestStoreSiblingsOfOneSourceRecordAreAllRetained(t *testing.T) {
+	s, _ := openTest(t, t.TempDir(), nil)
+	ctx := context.Background()
+	for ord := 0; ord < 3; ord++ {
+		it := sourced("sess", 5, wsaudit.KindToolCall)
+		it.id.Ordinal = ord
+		it.ID = fmt.Sprintf("ev-5-%d", ord)
+		mustAppend(t, s, it)
+	}
+	for idx := uint64(1); idx <= 2; idx++ {
+		mustAppend(t, s, tee("sess", 7, idx))
+	}
+	flush(t, s)
+	want := "[holder:1/s5#0 holder:1/s5#1 holder:1/s5#2 holder:1/t7.1#0 holder:1/t7.2#0]"
+	if got := fmt.Sprint(retainedIDs(t, s, "sess")); got != want || lossCount(t, s, "sess") != 0 {
+		t.Fatalf("retained %s, loss %d", got, lossCount(t, s, "sess"))
+	}
+	if err := s.Finalize(ctx, "sess", "holder:1", 8); err != nil {
+		t.Fatal(err)
+	}
+	replay := sourced("sess", 5, wsaudit.KindToolCall)
+	replay.id.Ordinal = 1
+	mustAppend(t, s, replay)
+	missing := sourced("sess", 5, wsaudit.KindToolCall)
+	missing.id.Ordinal = 3
+	mustAppend(t, s, missing)
+	flush(t, s)
+	if got := fmt.Sprint(retainedIDs(t, s, "sess")); got != want || lossCount(t, s, "sess") != 1 {
+		t.Fatalf("after finalize: retained %s, loss %d", got, lossCount(t, s, "sess"))
+	}
+}

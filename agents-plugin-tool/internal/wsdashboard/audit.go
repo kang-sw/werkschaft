@@ -49,12 +49,23 @@ func (d *Daemon) openAudit(logw io.Writer) {
 		Limits:   limits,
 		Log:      logw,
 		LastSeen: d.auditRegistryLastSeen,
+		// The index is empty until its first refresh (poll); sweeping before
+		// it would ignore the heartbeats of quiet live sessions.
+		DeferFirstSweep: d.index != nil,
 	})
 	if err != nil {
 		fmt.Fprintf(logw, "dashboard: audit store unavailable: %v\n", err)
 		return
 	}
 	d.audit = &auditState{store: store, seen: map[string]bool{}}
+}
+
+// auditFirstSweep runs the retention sweep deferred at open, once the index
+// holds the registry. It never blocks.
+func (d *Daemon) auditFirstSweep() {
+	if d.audit != nil {
+		d.audit.store.RequestSweep()
+	}
 }
 
 // AuditSink is the daemon's audit store for capture, or nil when it is

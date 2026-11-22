@@ -2,6 +2,7 @@ package wsauditstore
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 )
@@ -20,6 +21,9 @@ const (
 	MinBodyBytes = 4 * kib
 	// MinRetention is the shortest retention period.
 	MinRetention = 24 * time.Hour
+	// MaxRetentionDays is the longest retention a stored day count can
+	// express; larger values saturate to it.
+	MaxRetentionDays = int64(math.MaxInt64 / int64(24*time.Hour))
 
 	// recordFraming is slack for one record's framing outside the body text
 	// and the metadata bound: the line wrapper, body keys and quotes, and the
@@ -153,9 +157,9 @@ func LimitsFromValues(values map[string]string) (Limits, []string) {
 	read(KeyBodyCapKiB, kib, &l.BodyBytes)
 	days := int64(l.Retention / (24 * time.Hour))
 	read(KeyRetentionDays, 1, &days)
-	if days > 1<<20 {
-		days = 1 << 20
-	}
+	// A day count past the time.Duration range saturates: a huge value means
+	// "keep (almost) forever", never a wrapped negative period.
+	days = min(days, MaxRetentionDays)
 	l.Retention = time.Duration(days) * 24 * time.Hour
 	return l, warnings
 }

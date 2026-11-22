@@ -94,6 +94,7 @@ func (d *Daemon) poll(interval time.Duration) {
 		interval = DefaultPollInterval
 	}
 	d.index.Refresh()
+	d.auditFirstSweep()
 	d.pokeHires()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

@@ -63,3 +63,38 @@ func readAuditIndex(t *testing.T, dir string) string {
 	}
 	return out.String()
 }
+
+// TestAuditStartupSweepConsultsTheRegistry pins the wired retention path of
+// Decision 6 across a daemon restart: the first sweep waits for the index's
+// first refresh, so a quiet session whose ring is older than the retention by
+// its own time but which still heartbeats keeps its ring, while a ring with
+// no live registration is removed.
+func TestAuditStartupSweepConsultsTheRegistry(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	for _, id := range []string{"quiet", "orphan"} {
+		ring := filepath.Join(dir, auditDirName, id)
+		if err := os.MkdirAll(ring, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		seg := filepath.Join(ring, "seg-0000000000000001.jsonl")
+		if err := os.WriteFile(seg, []byte(`{"t":"h","v":1,"session":"`+id+`"}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(seg, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	register(t, dir, "quiet", t.TempDir(), time.Now()) // heartbeating, no events
+	d := startIndexedDaemon(t, dir, newPageFake(), time.Hour)
+	waitFor(t, "the orphan ring's removal", func() bool {
+		_, err := os.Stat(filepath.Join(dir, auditDirName, "orphan"))
+		return os.IsNotExist(err)
+	})
+	if err := d.AuditStore().Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, auditDirName, "quiet", "seg-0000000000000001.jsonl")); err != nil {
+		t.Fatalf("the heartbeating session's ring was removed at startup: %v", err)
+	}
+}

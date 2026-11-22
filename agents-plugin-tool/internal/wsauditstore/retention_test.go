@@ -294,6 +294,20 @@ func TestLimitsValidateAndClamp(t *testing.T) {
 	if err := ValidateValues(map[string]string{KeyTotalCapMiB: "8", KeyBodyCapKiB: "512", KeyRetentionDays: "30"}); err != nil {
 		t.Fatalf("valid set refused: %v", err)
 	}
+	// A day count past the time.Duration range saturates instead of wrapping
+	// into a negative period that clamping would turn into one day.
+	for _, days := range []string{"106751", "106752", "1048576", "4000000000000000000"} {
+		if err := ValidateValues(map[string]string{KeyRetentionDays: days}); err != nil {
+			t.Fatalf("retention %s days refused: %v", days, err)
+		}
+		l, warnings := LimitsFromValues(map[string]string{KeyRetentionDays: days})
+		if l.Retention != time.Duration(MaxRetentionDays)*24*time.Hour || len(warnings) != 0 {
+			t.Fatalf("retention %s days = %v %v", days, l.Retention, warnings)
+		}
+		if c, w := l.Clamp(); c.Retention != l.Retention || len(w) != 0 {
+			t.Fatalf("retention %s days clamped to %v", days, c.Retention)
+		}
+	}
 	bad, _ := LimitsFromValues(map[string]string{KeySessionCapMiB: "1", KeyBodyCapKiB: "4096", KeyRetentionDays: "0"})
 	got, warnings := bad.Clamp()
 	if err := got.Validate(); err != nil {

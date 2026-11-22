@@ -346,6 +346,36 @@ func TestPrepareMetaOverflowKeepsRequiredAndMarks(t *testing.T) {
 	}
 }
 
+// TestPrepareMetaOverflowKeepsRedactionsThatFit pins the bounding order:
+// redaction entries come before optional meta, so a few redactions next to
+// oversized optional meta stay per-span entries while the meta is truncated.
+func TestPrepareMetaOverflowKeepsRedactionsThatFit(t *testing.T) {
+	ev := testEnvelope(t, wsaudit.KindToolResult)
+	ev.Out = "a token=one b token=two c token=three"
+	ev.Meta = map[string]any{wsaudit.MetaEstimated: true}
+	for i := 0; i < 2000; i++ {
+		ev.Meta[fmt.Sprintf("k%04d", i)] = strings.Repeat("v", 60)
+	}
+	got, err := prepare(ev, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Redactions) != 3 {
+		t.Fatalf("redactions = %+v", got.Redactions)
+	}
+	for _, r := range got.Redactions {
+		if r.Count != 0 {
+			t.Fatalf("a redaction that fits was collapsed: %+v", got.Redactions)
+		}
+	}
+	if _, ok := got.Meta[MetaTruncated]; !ok || got.Meta[wsaudit.MetaEstimated] != true {
+		t.Fatalf("meta not bounded as expected: %d keys", len(got.Meta))
+	}
+	if size, _ := metadataSize(got); size > int(MetadataBound) {
+		t.Fatalf("metadata is %d bytes", size)
+	}
+}
+
 // TestPrepareSmallestConfigMaxRecordFitsSegment pins (2129)=a (3): at the
 // 4 MiB effective cap, one record with three capped bodies, the full metadata
 // bound and framing fits a segment.

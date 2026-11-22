@@ -52,11 +52,17 @@ type Options struct {
 	QueueDepth int
 	// LastSeen reports a session's registry last-seen time. The retention
 	// sweep asks it before removing a ring and records a newer answer, so a
-	// quiet session that still heartbeats keeps its ring. Nil skips it.
+	// quiet session that still heartbeats keeps its ring. It receives the
+	// normalized session ID, which is the raw ID for every ID NormalizeID
+	// keeps verbatim (registry reply IDs are). Nil skips it.
 	LastSeen func(session string) (time.Time, bool)
-	// SweepInterval is how often retention runs after the sweep at Open
+	// SweepInterval is how often retention runs after the first sweep
 	// (default one hour; negative disables the periodic sweep).
 	SweepInterval time.Duration
+	// DeferFirstSweep skips the retention sweep at Open, for an owner whose
+	// LastSeen cannot answer yet (a registry not loaded); it calls
+	// RequestSweep once it can.
+	DeferFirstSweep bool
 }
 
 type jobKind int
@@ -132,7 +138,8 @@ var _ wsaudit.SourcedSink = (*Store)(nil)
 
 // Open opens the store at opts.Root: one listing of the root and of each ring
 // directory for sizes, the newest index file for recorded last-seen times,
-// then a retention sweep. No segment is read until its ring is used.
+// then a retention sweep (unless deferred). No segment is read until its ring
+// is used.
 func Open(opts Options) (*Store, error) {
 	if opts.Root == "" {
 		return nil, errors.New("wsauditstore: root is required")
@@ -204,7 +211,9 @@ func Open(opts Options) (*Store, error) {
 		s.sessions[info.dir] = info
 		s.total += info.bytes
 	}
-	s.sweep()
+	if !opts.DeferFirstSweep {
+		s.sweep()
+	}
 	go s.run()
 	return s, nil
 }
@@ -340,6 +349,11 @@ func (s *Store) DeleteSession(ctx context.Context, session string) error {
 func (s *Store) Flush(ctx context.Context) error {
 	_, err := s.call(ctx, job{kind: jobBarrier})
 	return err
+}
+
+// RequestSweep queues a retention sweep without waiting for it.
+func (s *Store) RequestSweep() {
+	_ = s.control(job{kind: jobSweep})
 }
 
 // Sweep runs retention now and waits for it.
@@ -692,6 +706,7 @@ func (s *Store) recordLoss(session string, id wsaudit.SourceID, reason string) {
 	defer info.mu.Unlock()
 	if info.ring.readOnly == nil {
 		s.loseLocked(info, normalizeSourceID(id), reason)
+		info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
 	}
 }
 
@@ -711,6 +726,8 @@ func (s *Store) finalize(session, source string, boundary uint64) {
 	}
 	r.pendingFin[source] = boundary
 	s.dirty[info] = struct{}{}
+	// A ring holding only control lines is still in use.
+	info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
 }
 
 // makeRoom evicts whole least-recently-used rings other than the active one
@@ -798,7 +815,11 @@ func (s *Store) deleteSession(session string) error {
 }
 
 func (s *Store) touch(session string, at time.Time) {
-	session = wsaudit.NormalizeID(session)
+	s.touchNormalized(wsaudit.NormalizeID(session), at)
+}
+
+// touchNormalized is touch for an already normalized session ID.
+func (s *Store) touchNormalized(session string, at time.Time) {
 	dir := sessionDirName(session)
 	s.mu.Lock()
 	info := s.sessions[dir]
@@ -846,7 +867,7 @@ func (s *Store) sweep() {
 	for _, info := range expired {
 		if s.opts.LastSeen != nil && info.session != "" {
 			if t, ok := s.opts.LastSeen(info.session); ok && t.After(info.lastSeen) {
-				s.touch(info.session, t)
+				s.touchNormalized(info.session, t)
 				if now.Sub(info.lastSeen) <= s.limits.Retention {
 					continue
 				}

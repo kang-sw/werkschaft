@@ -3,6 +3,7 @@ package wsauditstore
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"unicode/utf8"
 
@@ -150,8 +151,13 @@ func boundMetadata(ev wsaudit.Envelope) (wsaudit.Envelope, error) {
 	}
 	if len(ev.Redactions) > 0 {
 		all := ev.Redactions
+		// Redactions come before optional meta: size them against the
+		// required meta keys and the widest truncation marker only, so
+		// oversized optional meta does not collapse entries that fit.
+		floor := ev
+		floor.Meta = metaFloor(ev.Meta)
 		try := func(k int) (wsaudit.Envelope, int, error) {
-			cand := ev
+			cand := floor
 			cand.Redactions = append(append([]wsaudit.Redaction(nil), all[:k]...), summarize(all[k:])...)
 			n, err := metadataSize(cand)
 			return cand, n, err
@@ -174,13 +180,13 @@ func boundMetadata(ev wsaudit.Envelope) (wsaudit.Envelope, error) {
 			if err != nil {
 				return ev, err
 			}
-			ev, size = cand, n
+			ev.Redactions = cand.Redactions
 			if n <= int(MetadataBound) {
 				break
 			}
 		}
-		if size <= int(MetadataBound) {
-			return ev, nil
+		if size, err = metadataSize(ev); err != nil || size <= int(MetadataBound) {
+			return ev, err
 		}
 	}
 	if len(ev.Meta) > 0 {
@@ -294,6 +300,35 @@ func boundMeta(ev wsaudit.Envelope) (wsaudit.Envelope, error) {
 		}
 		keep--
 	}
+}
+
+// metaFloor is the least meta bounding can leave: the required keys and, when
+// optional keys exist, a truncation marker counting all of them.
+func metaFloor(meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return meta
+	}
+	out := map[string]any{}
+	optional, optionalBytes := 0, 0
+	for key, v := range meta {
+		if slices.Contains(requiredMetaKeys, key) {
+			if b, ok := v.(bool); ok {
+				out[key] = b
+				continue
+			}
+		}
+		if key == MetaTruncated {
+			continue
+		}
+		optional++
+		if raw, err := json.Marshal(v); err == nil {
+			optionalBytes += len(key) + len(raw) + 4
+		}
+	}
+	if optional > 0 {
+		out[MetaTruncated] = map[string]any{"dropped_keys": optional, "dropped_bytes": optionalBytes + len(meta)*8}
+	}
+	return out
 }
 
 func cloneMeta(m map[string]any) map[string]any {
