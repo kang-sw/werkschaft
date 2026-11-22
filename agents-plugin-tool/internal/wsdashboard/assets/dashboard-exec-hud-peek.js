@@ -7,7 +7,7 @@
 // never markup. Strip and list: dashboard-exec-hud.js.
   var xhPk = { open: false, id: "", origin: "", confirm: "", pinned: false, follow: true, pending: 0, wrap: true, cmdOpen: false, sig: "" };
   var xhPeekEl = null, xhToastEl = null, xhOutEl = null, xhNewBtn = null, xhFoot = null, xhOut = null, xhPollT = 0, xhPollGen = 0, xhConfT = 0, xhConfLeft = 0, xhToastT = 0, xhNoticeBusy = Object.create(null), xhCopiedT = 0;
-  var XH_TAIL_BYTES = 16384, XH_MAX_LINES = 1500, XH_CONFIRM_S = 8, XH_POLL_MIN = 350, XH_POLL_MAX = 3000;
+  var XH_TAIL_BYTES = 16384, XH_MAX_LINES = 1500, XH_MAX_BYTES = 196608, XH_CONFIRM_S = 8, XH_POLL_MIN = 350, XH_POLL_MAX = 3000;
   function xhPeekOpen() { return xhPk.open; }
   function xhPeekId() { return xhPk.id; }
   function xhFmtBytes(n) { return n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " KiB"; }
@@ -46,17 +46,6 @@
       var id = xhToastEl.getAttribute("data-xid");
       if (e.target.getAttribute("data-xact") === "toast-view" && id) { xhToastEl.hidden = true; xhOpenPeek(id, id); }
     });
-    // Capture phase, and the key is consumed: the rail, the drawer and the shell
-    // also close on Escape, and one press cancels the confirm or closes the panel only.
-    doc.addEventListener("keydown", function (e) {
-      if (e.key !== "Escape" || e.defaultPrevented || !xhPk.open) return;
-      var a = doc.activeElement;
-      if (!a || !(xhPeekEl.contains(a) || (xhGroup && xhGroup.contains(a)))) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (xhPk.confirm) xhCancelStop(true);
-      else xhClosePeek(true);
-    }, true);
     doc.addEventListener("pointerdown", function (e) {
       if (!xhPk.open || xhPk.pinned) return;
       if (!e.target.isConnected) return;
@@ -66,6 +55,19 @@
     doc.addEventListener("visibilitychange", function () { if (!doc.hidden && xhPk.open) xhPollNow(); });
     return xhPeekEl;
   }
+  // Escape: one press cancels the confirm or closes the panel, and no more. The
+  // rail, the drawer and the shell also close on Escape, and the drawer's own
+  // handler is on the document in the capture phase from startup: this one is
+  // on the window (capture runs window first) from load, and consumes the key.
+  window.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || e.defaultPrevented || !xhPk.open || !xhPeekEl) return;
+    var a = doc.activeElement;
+    if (!a || !(xhPeekEl.contains(a) || (xhGroup && xhGroup.contains(a)))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (xhPk.confirm) xhCancelStop(true);
+    else xhClosePeek(true);
+  }, true);
   function xhPeekJobs() {
     return xhJobs.filter(function (j) { return !xhDismissed[j.id] || j.id === xhPk.id; }).sort(function (a, b) { return xhByStartAsc(a, b) || (a.id < b.id ? -1 : 1); });
   }
@@ -94,10 +96,16 @@
     xhOutEl = null;
     if (xhPeekEl) xhPeekEl.hidden = true;
     xhRender(true);
-    if (restoreFocus) {
-      var b = (origin && xhGroup && xhGroup.querySelector('.xchip[data-xid="' + origin + '"]')) || xhButtons()[0];
-      if (b) b.focus();
-    }
+    if (restoreFocus) xhFocusStrip(origin);
+  }
+  // focusStrip puts the keyboard on the strip: the origin chip when it is still
+  // drawn, else what stands for it (+N, the aggregate, the first chip), else the
+  // composer; never an element the fold or a fade took away.
+  function xhFocusStrip(origin) {
+    var b = origin && xhGroup && xhGroup.querySelector('.xchip[data-xid="' + origin + '"]');
+    if (!b || b.closest("[hidden]") || !b.getClientRects().length) b = xhFoldTarget();
+    if (!b) { var ed = typeof ctext !== "undefined" && ctext ? (ctext.wsc && ctext.wsc.editor) || ctext : null; if (ed && ed.focus) ed.focus(); return; }
+    b.focus();
   }
   function xhPeekDestroy() {
     xhPk.open = false;
@@ -114,11 +122,17 @@
     if (xhOut && xhEnded(j) && !xhOut.drained) xhPollNow();
   }
   function xhPeekSync() {
+    xhToastRefresh();
     if (!xhPk.open) return;
     xhPeekRender(false);
   }
   function xhSwitchTab(id, focusTab) {
     if (!xhById[id]) return;
+    if (xhPk.open && xhPk.id === id) {
+      // The selected tab again changes nothing: its output and its poll stay.
+      if (focusTab) { var cur = xhPeekEl.querySelector('[aria-selected="true"]'); if (cur) cur.focus(); }
+      return;
+    }
     xhPk.id = id;
     xhPk.confirm = "";
     xhPk.follow = true;
@@ -139,16 +153,26 @@
     if (!xhPk.open || !j) return;
     var t0 = window.performance && performance.now ? performance.now() : 0;
     var tabs = xhPeekJobs(), st = xhSt(j);
+    // A job that ended under an open confirmation: there is nothing left to stop.
+    if (xhPk.confirm && xhEnded(j)) { xhPk.confirm = ""; clearInterval(xhConfT); }
     var sig = [xhPk.id, st, j.stop_notice || "", xhPk.confirm, xhPk.pinned, xhPk.cmdOpen, !!xhNoticeBusy[j.id], xhCardFor(j) ? 1 : 0, tabs.map(function (x) { return x.id + ":" + xhSt(x); }).join(",")].join("|");
     xhPeekEl.hidden = false;
     xhPeekEl.setAttribute("aria-label", wsT("js.xhud.pk.label") + " — " + xhCmdHead(j.command));
     if (sig !== xhPk.sig || forceOut || !xhOutEl) {
       xhPk.sig = sig;
-      var keep = doc.activeElement && xhPeekEl.contains(doc.activeElement) ? (doc.activeElement.getAttribute("data-xact") || "") : "";
+      var inPeek = !!doc.activeElement && xhPeekEl.contains(doc.activeElement);
+      var keep = inPeek ? (doc.activeElement.getAttribute("data-xact") || "") : "";
       var keepTab = doc.activeElement && doc.activeElement.getAttribute ? doc.activeElement.getAttribute("data-xtab") : "";
       xhPeekHead(j, tabs);
       if (keep) { var again = xhPeekEl.querySelector('[data-xact="' + keep + '"]'); if (again) again.focus(); }
       else if (keepTab) { var again2 = xhPeekEl.querySelector('[data-xtab="' + keepTab + '"]'); if (again2) again2.focus(); }
+      // The control that held the keyboard is gone (a confirmation that timed out
+      // or whose job ended, a Stop that became Stopping): Stop if there is one,
+      // else the selected tab, so Escape and Tab keep working from the panel.
+      if (inPeek && !xhPeekEl.contains(doc.activeElement)) {
+        var fb = xhPeekEl.querySelector('[data-xact="stop"]:not(:disabled)') || xhPeekEl.querySelector('[aria-selected="true"]');
+        if (fb) fb.focus();
+      }
     }
     xhFootText(j);
     if (t0 && performance.measure) { try { performance.measure("ws.xhud.peek-render", { start: t0, end: performance.now(), detail: { tabs: tabs.length } }); } catch (e) {} }
@@ -202,6 +226,11 @@
       meta.appendChild(jb);
     }
     meta.appendChild(xhBtn("xbtn", "copy", wsT("js.xhud.pk.copy")));
+    if (ended) {
+      var db = xhBtn("xbtn", "dismiss", wsT("js.xhud.dismiss"));
+      db.setAttribute("aria-label", wsT("js.xhud.chip.dismiss.aria", xhCmdHead(j.command)));
+      meta.appendChild(db);
+    }
     if (!ended) {
       var sbtn = xhBtn("xbtn stop", "stop");
       if (st === "stopping") {
@@ -258,7 +287,7 @@
       ow.appendChild(xhNewBtn);
       xhPeekEl.appendChild(ow);
       xhOutEl.addEventListener("scroll", xhOnScroll);
-      xhOut = { id: j.id, next: -1, start: 0, delay: XH_POLL_MIN, skip: false, drained: false, open: false, openEl: null, openStream: "", gen: 0, written: j.written || 0, ended: false, empty: true };
+      xhOut = { id: j.id, next: -1, start: 0, delay: XH_POLL_MIN, skip: false, drained: false, open: false, openEl: null, openStream: "", gen: 0, written: j.written || 0, ended: false, empty: true, busy: false, again: false, bytes: 0, first: true };
       xhOutEl.appendChild(xhEl("span", "xempty", wsT("js.xhud.out.empty")));
       out = ow;
     } else {
@@ -287,7 +316,7 @@
     var ended = xhEnded(j), live = xhFoot.querySelector(".xlive"), tail = xhFoot.querySelector(".ftail");
     live.className = "xlive" + (ended ? " off" : xhPk.follow ? "" : " off");
     live.textContent = ended ? wsT("js.xhud.out.ended") : xhPk.follow ? wsT("js.xhud.out.live") : wsT("js.xhud.out.paused");
-    if (xhOut) tail.textContent = wsT("js.xhud.out.tail", xhFmtBytes(Math.max(0, (xhOut.next < 0 ? 0 : xhOut.next) - xhOut.start)), xhFmtBytes(Math.max(xhOut.written, j.written || 0))) + " · stdout+stderr";
+    if (xhOut) tail.textContent = wsT("js.xhud.out.tail", xhFmtBytes(Math.max(0, (xhOut.next < 0 ? 0 : xhOut.next) - xhOut.start)), xhFmtBytes(Math.max(xhOut.written, j.written || 0)));
   }
   function xhUpdateNewBtn() {
     if (!xhNewBtn) return;
@@ -314,43 +343,73 @@
     xhOut.open = false;
   }
   // xhAppendText adds one stream's text: it continues the open (not yet
-  // newline-terminated) line of the same stream, else starts a line.
-  function xhAppendText(stream, text, frag) {
-    var o = xhOut, made = 0;
-    if (o.skip) {
-      var cut = text.indexOf("\n");
-      if (cut < 0) return 0;
-      text = text.slice(cut + 1);
-      o.skip = false;
-    }
+  // newline-terminated) line of the same stream, else starts a line. cut marks
+  // the first line it starts as the tail of a longer one (the window began
+  // inside it).
+  function xhAppendText(stream, text, frag, cut) {
+    var o = xhOut, made = 0, first = true;
     text = text.replace(/\r/g, "");
     var parts = text.split("\n");
     for (var i = 0; i < parts.length; i++) {
       var part = parts[i], last = i === parts.length - 1, ln = o.open && o.openStream === stream ? o.openEl : null;
+      // A window that begins mid-character starts with replacement characters.
+      if (cut && first) part = part.replace(/^\uFFFD{1,3}/, "");
       if (part !== "" || (!last && !ln)) {
-        if (!ln) { ln = xhLineEl(stream); frag.appendChild(ln); made++; }
-        if (part !== "") ln.appendChild(doc.createTextNode(part));
+        if (!ln) { ln = xhLineEl(stream); if (cut && first) ln.className += " cut"; frag.appendChild(ln); made++; }
+        if (part !== "") { ln.appendChild(doc.createTextNode(part)); ln._n = (ln._n || 0) + part.length; o.bytes += part.length; }
       }
+      first = false;
       if (!last) o.open = false;
       else if (part !== "") { o.open = true; o.openEl = ln; o.openStream = stream; }
     }
     return made;
   }
+  // trim keeps what the panel retains bounded by bytes as well as lines: old
+  // lines go first, and a single endless line loses its oldest text.
+  function xhTrim() {
+    var o = xhOut, el = xhOutEl;
+    while (el.childNodes.length > XH_MAX_LINES || o.bytes > XH_MAX_BYTES) {
+      var f = el.firstChild;
+      if (!f) break;
+      if (el.childNodes.length === 1) {
+        if (f.childNodes.length < 2) break;
+        o.bytes -= f.firstChild.data.length;
+        f._n = Math.max(0, (f._n || 0) - f.firstChild.data.length);
+        f.removeChild(f.firstChild);
+        f.classList.add("cut");
+        continue;
+      }
+      o.bytes -= f._n || 0;
+      if (f === o.openEl) { o.open = false; o.openEl = null; }
+      el.removeChild(f);
+    }
+  }
   function xhAddOutput(res) {
     var o = xhOut;
     if (!o || !xhOutEl) return;
-    var frag = doc.createDocumentFragment(), made = 0;
+    var frag = doc.createDocumentFragment(), made = 0, segs = res.segments || [], cut = false;
+    // The tail window begins at an arbitrary byte: its first partial line is
+    // dropped when a newline follows in the window; a window with no newline
+    // at all is one long line, kept as a bounded suffix marked as cut.
+    if (o.skip && segs.length) {
+      o.skip = false;
+      var k = -1;
+      for (var i = 0; i < segs.length; i++) if (segs[i].text.indexOf("\n") >= 0) { k = i; break; }
+      if (k >= 0) { segs = segs.slice(k); segs[0] = { stream: segs[0].stream, text: segs[0].text.slice(segs[0].text.indexOf("\n") + 1) }; }
+      else cut = true;
+    }
     if (res.gap) { frag.appendChild(xhEl("span", "l sys", wsT("js.xhud.out.gap"))); o.open = false; made++; }
-    (res.segments || []).forEach(function (s) { made += xhAppendText(s.stream, s.text, frag); });
+    segs.forEach(function (s) { made += xhAppendText(s.stream, s.text, frag, cut); cut = false; });
     if (frag.childNodes.length || made) {
       var emp = xhOutEl.querySelector(".xempty");
       if (emp) emp.parentNode.removeChild(emp);
       // The open line may sit in the live DOM already: appending to it needs no node.
       xhOutEl.appendChild(frag);
-      while (xhOutEl.childNodes.length > XH_MAX_LINES) xhOutEl.removeChild(xhOutEl.firstChild);
       if (xhPk.follow) xhOutEl.scrollTop = xhOutEl.scrollHeight;
       else { xhPk.pending += made; xhUpdateNewBtn(); }
     } else if (xhPk.follow && xhOutEl.scrollHeight - xhOutEl.scrollTop - xhOutEl.clientHeight > 10) xhOutEl.scrollTop = xhOutEl.scrollHeight;
+    // Text that only continued the open line made no node, and still counts.
+    if (segs.length) xhTrim();
   }
   function xhEndLine(j) {
     if (!xhOut || xhOut.ended) return;
@@ -378,32 +437,48 @@
     xhOut.next = xhOut.start;
     xhOut.skip = xhOut.start > 0;
     xhOut.gen = xhPollGen;
+    xhOut.first = true;
     xhPollSchedule(0);
   }
-  function xhPollNow() { if (xhPk.open && xhOut && !xhOut.drained) { clearTimeout(xhPollT); xhPollSchedule(0); } }
+  function xhPollNow() {
+    if (!xhPk.open || !xhOut || xhOut.drained) return;
+    // A read in flight is never doubled: one more follows it.
+    if (xhOut.busy) { xhOut.again = true; return; }
+    clearTimeout(xhPollT);
+    xhPollSchedule(0);
+  }
   function xhPollSchedule(ms) {
     clearTimeout(xhPollT);
     var gen = xhPollGen;
     xhPollT = setTimeout(function () { xhPollOnce(gen); }, ms);
   }
+  // pollOnce is one read of this tab's output: at most one is ever in flight
+  // (a wake-up during it is coalesced into one more read after it), so two
+  // answers never carry the same offsets, and an older answer never lands after
+  // a newer one.
   function xhPollOnce(gen) {
     if (gen !== xhPollGen || !xhPk.open || !xhOut || xhOut.drained) return;
     if (doc.hidden) return;
     var o = xhOut, id = o.id;
+    if (o.busy) { o.again = true; return; }
+    o.busy = true;
+    o.again = false;
     fetch("/s/" + rid + "/exec/" + encodeURIComponent(id) + "/output?from=" + o.next, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
       if (r.status === 404) return { gone: true };
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (res) {
+      o.busy = false;
       if (gen !== xhPollGen || !xhPk.open || xhOut !== o) return;
       if (res.gone) { xhFetch(); return; }
       var t0 = window.performance && performance.now ? performance.now() : 0;
       xhPollApply(res, o, id);
       if (t0 && performance.measure) { try { performance.measure("ws.xhud.poll", { start: t0, end: performance.now(), detail: { bytes: res.next - res.from } }); } catch (e) {} }
     }, function () {
+      o.busy = false;
       if (gen !== xhPollGen || xhOut !== o) return;
       o.delay = Math.min(5000, o.delay * 2);
-      xhPollSchedule(o.delay);
+      xhPollSchedule(o.again ? 0 : o.delay);
     });
   }
   // pollApply takes one read: the job's fresher record, the new runs, the next
@@ -413,21 +488,45 @@
     var before = o.next;
     xhMergeJob(res.job);
     o.written = res.written;
+    // The list's size is as old as its last event (output does not raise one):
+    // when the first read finds far more waiting than the tail window, it is
+    // dropped and the real tail is read, so opening never pages through the log.
+    if (o.first) {
+      o.first = false;
+      if (res.written - res.from > XH_TAIL_BYTES + 1) {
+        o.start = Math.max(0, res.written - XH_TAIL_BYTES);
+        o.next = o.start;
+        o.skip = o.start > 0;
+        xhPollSchedule(0);
+        return;
+      }
+    }
     xhAddOutput(res);
     o.next = res.next;
     var j = xhById[id];
-    if (j && xhEnded(j) && o.next >= res.written) { o.drained = true; xhEndLine(j); xhRender(false); xhFootText(j); return; }
+    // Drained: the read's own record was terminal (not an older, running snapshot
+    // answered after the job ended) and the cursor reached its end.
+    var term = !!res.job && res.job.state !== "running";
+    if (j && term && xhEnded(j) && o.next >= res.written) { o.drained = true; xhEndLine(j); xhRender(false); xhFootText(j); return; }
     if (res.next > before) o.delay = o.next < res.written ? 20 : XH_POLL_MIN;
     else o.delay = Math.min(XH_POLL_MAX, Math.round(o.delay * 1.5));
     if (j) xhFootText(j);
-    xhPollSchedule(o.delay);
+    xhPollSchedule(o.again ? 0 : o.delay);
   }
   // mergeJob takes a fresher job record (an output read or a stop answer) into
   // the list and redraws when its state moved.
+  var XH_NOTICE_RANK = { "": 0, pending: 1, failed: 2, sent: 3, closed: 3 };
+  // stale: a record older than the one held. An ended job never runs again, and a
+  // stop's notice only moves forward (none, pending, failed, sent or closed); a
+  // read or list answered after a newer answer must not take either back.
+  function xhStale(old, job) {
+    if (old.state !== "running" && job.state === "running") return true;
+    return old.state === job.state && (XH_NOTICE_RANK[job.stop_notice || ""] || 0) < (XH_NOTICE_RANK[old.stop_notice || ""] || 0);
+  }
   function xhMergeJob(job) {
     if (!job || !job.id) return;
     var old = xhById[job.id];
-    if (!old) return;
+    if (!old || xhStale(old, job)) return;
     var prev = xhSt(old) + "|" + (old.stop_notice || "") + "|" + old.written;
     job.seenEnded = old.seenEnded || (job.state !== "running" && !job.ended_at ? Date.now() : 0);
     if (job.state !== "running") delete xhStopping[job.id];
@@ -513,7 +612,7 @@
     xhRender(true);
     xhPeekRender(false);
     if (xhOut && xhOut.id === job.id) xhPollNow();
-    if (!(xhPk.open && xhPk.id === job.id)) xhToast(job);
+    if (job.state !== "running" && !(xhPk.open && xhPk.id === job.id)) xhToast(job);
   }
   function xhRetryNotice(id) {
     var j = xhById[id];
@@ -527,7 +626,7 @@
       xhRender(true);
       xhPk.sig = "";
       xhPeekRender(false);
-      if (xhToastEl && !xhToastEl.hidden && xhToastEl.getAttribute("data-xid") === id && xhById[id]) xhToast(xhById[id]);
+      xhToastRefresh();
     });
   }
   // The notice card: how the owning agent learned of the user's stop.
@@ -554,30 +653,57 @@
     c.appendChild(h);
     return c;
   }
+  // toastText: what the stop did. A job that exited before the stop was
+  // accepted was not stopped by it (the daemon marks only the job a stop ended),
+  // and an agent's job says how its notice stands now.
+  function xhToastText(j) {
+    var head = xhCmdHead(j.command);
+    if (j.state === "running") return "";
+    if (j.state !== "stopped" || !j.stopped_by_user) return wsT("js.xhud.toast.ended", head);
+    var ns = xhNoticeState(j);
+    if (j.origin === "user" || ns === "") return wsT("js.xhud.toast.user", head);
+    if (ns === "sent") return wsT("js.xhud.toast.agent", head);
+    if (ns === "sending") return wsT("js.xhud.toast.agent.pending", head);
+    return wsT("js.xhud.toast.agent.fail", head);
+  }
   function xhToast(j) {
     xhPeekNode();
-    var head = xhCmdHead(j.command), ns = xhNoticeState(j), txt;
-    if (j.origin === "user") txt = wsT("js.xhud.toast.user", head);
-    else if (ns === "sent") txt = wsT("js.xhud.toast.agent", head);
-    else if (ns === "sending") txt = wsT("js.xhud.toast.agent.pending", head);
-    else if (ns === "") txt = wsT("js.xhud.toast.user", head);
-    else txt = wsT("js.xhud.toast.agent.fail", head);
     xhToastEl.setAttribute("data-xid", j.id);
     xhToastEl.hidden = false;
     xhToastEl.textContent = "";
     // Above the panel when it is open (the stylesheet puts it above the strip).
     xhToastEl.style.bottom = xhPk.open && !xhPeekEl.hidden ? "calc(100% + " + (xhPeekEl.offsetHeight + 34) + "px)" : "";
     xhToastEl.appendChild(xhEl("span", "tm"));
-    xhToastEl.appendChild(xhEl("span", null, txt));
+    var tx = xhEl("span", "xtt-text", xhToastText(j));
+    xhToastEl.appendChild(tx);
     xhToastEl.appendChild(xhBtn("", "toast-view", wsT("js.xhud.toast.view")));
     clearTimeout(xhToastT);
     xhToastT = setTimeout(function () { xhToastEl.hidden = true; }, 6500);
+  }
+  // A toast that is still up follows the job's notice (notifying, then sent or
+  // failed), as the notice card does; its timer and its View button stay.
+  function xhToastRefresh() {
+    if (!xhToastEl || xhToastEl.hidden) return;
+    var j = xhById[xhToastEl.getAttribute("data-xid")], tx = xhToastEl.querySelector(".xtt-text");
+    if (!j || !tx) return;
+    var t = xhToastText(j);
+    if (tx.textContent !== t) tx.textContent = t;
   }
   // --- jump to the `!` command's card, copy, clicks ---------------------------------
   function xhCardFor(j) {
     if (j.origin !== "user" || typeof cexecCards === "undefined") return null;
     for (var i = 0; i < cexecCards.length; i++) if (cexecCards[i].card && cexecCards[i].card.exec_id === j.id && cexecCards[i].el && cexecCards[i].el.isConnected) return cexecCards[i];
     return null;
+  }
+  // dismissFromPeek: the keyboard's way to clear an ended job when the strip is
+  // folded to its aggregate. The panel moves to the neighbouring tab, or closes
+  // when it was the last one.
+  function xhDismissFromPeek(id) {
+    var tabs = xhPeekJobs(), at = tabs.findIndex(function (x) { return x.id === id; }), rest = tabs.filter(function (x) { return x.id !== id; });
+    xhDismiss(id);
+    if (!rest.length) { xhClosePeek(true); return; }
+    xhPk.id = "";
+    xhSwitchTab(rest[Math.min(Math.max(at, 0), rest.length - 1)].id, true);
   }
   function xhPeekClick(e) {
     var tab = e.target.closest && e.target.closest("[data-xtab]");
@@ -596,13 +722,19 @@
     else if (act === "wrap") { xhPk.wrap = !xhPk.wrap; a.setAttribute("aria-pressed", xhPk.wrap ? "true" : "false"); xhOutEl.classList.toggle("nowrap", !xhPk.wrap); }
     else if (act === "follow") { xhPk.follow = true; xhPk.pending = 0; xhUpdateNewBtn(); xhOutEl.scrollTop = xhOutEl.scrollHeight; xhFootText(j); }
     else if (act === "copy") {
-      copyText(j.command, true);
+      // The label follows the outcome: copyText resolves to whether it copied.
       var old = a.getAttribute("data-xlabel") || a.textContent;
       a.setAttribute("data-xlabel", old);
-      a.textContent = "✓ " + wsT("js.xhud.pk.copied");
-      clearTimeout(xhCopiedT);
-      xhCopiedT = setTimeout(function () { a.textContent = old; }, 1100);
-    } else if (act === "jump") {
+      Promise.resolve(copyText(j.command, true)).then(function (ok) { return ok === true; }, function () { return false; }).then(function (ok) {
+        if (!a.isConnected) return;
+        // The copy fallback selects a scratch field and drops it: the keyboard returns to the button.
+        if (!doc.activeElement || doc.activeElement === doc.body) a.focus();
+        a.textContent = ok ? "✓ " + wsT("js.xhud.pk.copied") : "⚠ " + wsT("js.xhud.pk.copyfail");
+        clearTimeout(xhCopiedT);
+        xhCopiedT = setTimeout(function () { a.textContent = old; }, 1400);
+      });
+    } else if (act === "dismiss") xhDismissFromPeek(j.id);
+    else if (act === "jump") {
       var c = xhCardFor(j);
       if (!xhPk.pinned) xhClosePeek(false);
       if (c && c.el) {

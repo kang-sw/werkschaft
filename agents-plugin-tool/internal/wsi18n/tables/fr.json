@@ -3299,6 +3299,7 @@
   "js.xhud.pk.jump.none": "La carte ne figure plus sur cette page",
   "js.xhud.pk.copy": "Copier la commande",
   "js.xhud.pk.copied": "Copié",
+  "js.xhud.pk.copyfail": "Copie impossible",
   "js.xhud.pk.expand": "Cliquer pour développer la commande",
   "js.xhud.pk.foot": "Esc ferme · ← → change de job",
   "js.xhud.out.label": "stdout/stderr combinés, plus récent en bas",
@@ -3308,7 +3309,7 @@
   "js.xhud.out.live": "en direct",
   "js.xhud.out.paused": "en pause — défilé vers le haut",
   "js.xhud.out.ended": "terminé",
-  "js.xhud.out.tail": "fin · {0} sur {1} écrites",
+  "js.xhud.out.tail": "fin · {0} sur {1} écrites · stdout+stderr",
   "js.xhud.out.gap": "— la sortie précédente a été supprimée —",
   "js.xhud.out.stopped.user": "— arrêté par vous —",
   "js.xhud.out.stopped": "— arrêté —",
@@ -3325,6 +3326,7 @@
   "js.xhud.toast.agent.pending": "{0} arrêté · notification de l'agent…",
   "js.xhud.toast.agent.fail": "{0} arrêté · agent NON notifié",
   "js.xhud.toast.user": "{0} arrêté",
+  "js.xhud.toast.ended": "{0} était déjà terminé",
   "js.xhud.toast.stop.fail": "Impossible d'arrêter {0} : {1}",
   "js.xhud.toast.view": "Voir"
 }

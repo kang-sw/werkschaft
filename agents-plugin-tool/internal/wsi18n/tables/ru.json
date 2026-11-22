@@ -3299,6 +3299,7 @@
   "js.xhud.pk.jump.none": "Карточки больше нет на этой странице",
   "js.xhud.pk.copy": "Копировать команду",
   "js.xhud.pk.copied": "Скопировано",
+  "js.xhud.pk.copyfail": "Не удалось скопировать",
   "js.xhud.pk.expand": "Нажмите, чтобы развернуть команду",
   "js.xhud.pk.foot": "Esc закрывает · ← → переключает задачи",
   "js.xhud.out.label": "stdout/stderr вместе, новое внизу",
@@ -3308,7 +3309,7 @@
   "js.xhud.out.live": "в реальном времени",
   "js.xhud.out.paused": "пауза — прокручено вверх",
   "js.xhud.out.ended": "завершено",
-  "js.xhud.out.tail": "хвост · {0} из {1} записано",
+  "js.xhud.out.tail": "хвост · {0} из {1} записано · stdout+stderr",
   "js.xhud.out.gap": "— более ранний вывод был отброшен —",
   "js.xhud.out.stopped.user": "— остановлено вами —",
   "js.xhud.out.stopped": "— остановлено —",
@@ -3325,6 +3326,7 @@
   "js.xhud.toast.agent.pending": "{0} остановлено · уведомляем агента…",
   "js.xhud.toast.agent.fail": "{0} остановлено · агент НЕ уведомлён",
   "js.xhud.toast.user": "{0} остановлено",
+  "js.xhud.toast.ended": "{0} уже завершилось",
   "js.xhud.toast.stop.fail": "Не удалось остановить {0}: {1}",
   "js.xhud.toast.view": "Открыть"
 }

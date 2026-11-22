@@ -3299,6 +3299,7 @@
   "js.xhud.pk.jump.none": "该卡片已不在此页面",
   "js.xhud.pk.copy": "复制命令",
   "js.xhud.pk.copied": "已复制",
+  "js.xhud.pk.copyfail": "复制失败",
   "js.xhud.pk.expand": "点击展开命令",
   "js.xhud.pk.foot": "Esc 关闭 · ← → 切换任务",
   "js.xhud.out.label": "stdout/stderr 合并输出，最新在最后",
@@ -3308,7 +3309,7 @@
   "js.xhud.out.live": "实时",
   "js.xhud.out.paused": "已暂停 — 已向上滚动",
   "js.xhud.out.ended": "已结束",
-  "js.xhud.out.tail": "末尾 · 共写入 {1} 中的 {0}",
+  "js.xhud.out.tail": "末尾 · 共写入 {1} 中的 {0} · stdout+stderr",
   "js.xhud.out.gap": "— 较早的输出已被丢弃 —",
   "js.xhud.out.stopped.user": "— 已由你停止 —",
   "js.xhud.out.stopped": "— 已停止 —",
@@ -3325,6 +3326,7 @@
   "js.xhud.toast.agent.pending": "已停止 {0} · 正在通知智能体…",
   "js.xhud.toast.agent.fail": "已停止 {0} · 未能通知智能体",
   "js.xhud.toast.user": "已停止 {0}",
+  "js.xhud.toast.ended": "{0} 已经结束",
   "js.xhud.toast.stop.fail": "无法停止 {0}：{1}",
   "js.xhud.toast.view": "查看"
 }

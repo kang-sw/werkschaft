@@ -247,12 +247,28 @@
   // chip, then the aggregate's node alone, then nothing.
   function xhLayout() {
     if (!xhGroup || !xhMore) return;
+    // A fold or fade can hide the chip that holds the keyboard: focus moves to
+    // what stands for it instead of falling to the page.
+    var held = xhGroup.contains(doc.activeElement) ? doc.activeElement : null;
+    xhLayoutNow();
+    if (held && (held.closest("[hidden]") || !held.getClientRects().length)) xhFocusStrip("");
+  }
+  // foldTarget: the visible stand-in for chips that folded away.
+  function xhFoldTarget() {
+    if (!xhGroup || xhGroup.hidden) return null;
+    if (xhMore && !xhMore.hidden) return xhMore;
+    if (xhAgg && !xhAgg.hidden) return xhAgg;
+    return xhButtons()[0] || null;
+  }
+  function xhLayoutNow() {
     var list = xhVis;
     xhSlots.forEach(function (s) { s.el.hidden = false; });
-    xhMore.hidden = true;
-    xhAgg.hidden = true;
     xhAgg.classList.remove("compact");
+    // +N and the aggregate are never hidden and shown again within one pass: an
+    // element that holds the keyboard loses it the moment it is display:none and
+    // a measurement flushes style. Each is set once, at the decision.
     if (!list.length) {
+      xhMore.hidden = true;
       if (xhHidden) {
         xhAgg.hidden = false;
         xhAgg.className = "xchip xagg quiet";
@@ -269,6 +285,7 @@
       } else {
         xhShown = [];
         xhFolded = [];
+        xhAgg.hidden = true;
         xhGroup.hidden = true;
       }
       xhGroup.classList.remove("fresh");
@@ -280,10 +297,11 @@
     [$("bgbadge"), $("monbadge"), $("sbadge")].forEach(function (x) { if (x && !x.hidden) { sib += Math.max(x.offsetWidth, x.scrollWidth); cnt++; } });
     var avail = cbw - ibw - sib - cnt * XH_GAP;
     var w = xhSlots.map(function (s) { return s.el.offsetWidth; });
+    // +N is measured as it will be drawn: the widest count it can show (all
+    // jobs, three digits included) with the corner badge a failure adds.
     xhMore.hidden = false;
-    xhMore.textContent = "+99";
+    xhMore.textContent = "+" + list.length;
     var mw = xhMore.offsetWidth;
-    xhMore.hidden = true;
     var n = xhSlots.length;
     function total(k) { var sum = 0; for (var i = 0; i < k; i++) sum += w[i] + (i ? XH_GAP : 0); if (k < list.length) sum += (k ? XH_GAP : 0) + mw; return sum; }
     while (n > 1 && total(n) > avail) n--;
@@ -299,9 +317,10 @@
     xhAgg.appendChild(xhEl("span", "xn", String(list.length)));
     if (attn) xhAgg.appendChild(xhEl("span", "xst " + attn[0], attn[1]));
     xhAgg.setAttribute("aria-label", wsT("js.xhud.agg.aria", String(list.length)));
-    if (n === 0) { xhAgg.hidden = false; xhFit(avail, list, false); }
+    xhMore.hidden = n === 0 || !xhFolded.length;
+    xhAgg.hidden = n !== 0;
+    if (n === 0) xhFit(avail, list, false);
     else if (xhFolded.length) {
-      xhMore.hidden = false;
       xhMore.textContent = "+" + xhFolded.length;
       xhMore.setAttribute("aria-label", wsT("js.xhud.more.aria", String(xhFolded.length)));
       var at2 = xhWorst(xhFolded);
@@ -459,9 +478,11 @@
   // --- the list ----------------------------------------------------------------
   function xhApplyJobs(jobs) {
     var now = Date.now(), seen = Object.create(null);
-    jobs.forEach(function (j) {
+    jobs.forEach(function (j, i) {
       seen[j.id] = true;
       var old = xhById[j.id];
+      // A list answered after a newer stop answer does not take it back.
+      if (old && xhStale(old, j)) { j = jobs[i] = old; }
       j.seenEnded = old && old.seenEnded ? old.seenEnded : (j.state !== "running" && !j.ended_at ? now : 0);
       if (j.state !== "running") delete xhStopping[j.id];
     });

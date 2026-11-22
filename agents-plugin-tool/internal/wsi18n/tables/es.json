@@ -3299,6 +3299,7 @@
   "js.xhud.pk.jump.none": "La tarjeta ya no está en esta página",
   "js.xhud.pk.copy": "Copiar comando",
   "js.xhud.pk.copied": "Copiado",
+  "js.xhud.pk.copyfail": "No se pudo copiar",
   "js.xhud.pk.expand": "Haz clic para expandir el comando",
   "js.xhud.pk.foot": "Esc cierra · ← → cambia de trabajo",
   "js.xhud.out.label": "stdout/stderr combinados, lo más reciente al final",
@@ -3308,7 +3309,7 @@
   "js.xhud.out.live": "en vivo",
   "js.xhud.out.paused": "pausado — desplazado hacia arriba",
   "js.xhud.out.ended": "terminado",
-  "js.xhud.out.tail": "final · {0} de {1} escritas",
+  "js.xhud.out.tail": "final · {0} de {1} escritas · stdout+stderr",
   "js.xhud.out.gap": "— se descartó la salida anterior —",
   "js.xhud.out.stopped.user": "— detenido por ti —",
   "js.xhud.out.stopped": "— detenido —",
@@ -3325,6 +3326,7 @@
   "js.xhud.toast.agent.pending": "{0} detenido · notificando al agente…",
   "js.xhud.toast.agent.fail": "{0} detenido · agente NO notificado",
   "js.xhud.toast.user": "{0} detenido",
+  "js.xhud.toast.ended": "{0} ya había terminado",
   "js.xhud.toast.stop.fail": "No se pudo detener {0}: {1}",
   "js.xhud.toast.view": "Ver"
 }

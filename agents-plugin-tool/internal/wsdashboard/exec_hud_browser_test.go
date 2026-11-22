@@ -50,6 +50,13 @@ type hudBrowserSvc struct {
 	counts    map[string]int
 	d         *Daemon
 	lastFrom  map[string]int64
+	// fromLog lists every offset an output read asked for, per job; outDelayMs
+	// holds an answer back after its snapshot is taken (a slow response), and
+	// inflight/maxInflight count the reads under way per job.
+	fromLog     map[string][]int64
+	outDelayMs  int
+	inflight    map[string]int
+	maxInflight map[string]int
 }
 
 func (s *hudBrowserSvc) Open(string) (uint64, error) { return 4, nil }
@@ -81,7 +88,24 @@ func (s *hudBrowserSvc) find(id string) *hudBrowserJob {
 
 func (s *hudBrowserSvc) ReadOutput(owner, id string, from int64, limit int) (execjob.HostedOutput, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.inflight[id]++
+	if s.inflight[id] > s.maxInflight[id] {
+		s.maxInflight[id] = s.inflight[id]
+	}
+	out, err := s.readLocked(id, from, limit)
+	delay := s.outDelayMs
+	s.mu.Unlock()
+	// The snapshot is taken: a slow answer reaches the page after the job moved on.
+	if delay > 0 {
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+	}
+	s.mu.Lock()
+	s.inflight[id]--
+	s.mu.Unlock()
+	return out, err
+}
+
+func (s *hudBrowserSvc) readLocked(id string, from int64, limit int) (execjob.HostedOutput, error) {
 	s.counts["output"]++
 	s.counts["output:"+id]++
 	j := s.find(id)
@@ -92,6 +116,7 @@ func (s *hudBrowserSvc) ReadOutput(owner, id string, from int64, limit int) (exe
 		s.lastFrom = map[string]int64{}
 	}
 	s.lastFrom[id] = from
+	s.fromLog[id] = append(s.fromLog[id], from)
 	out := execjob.HostedOutput{Job: s.summary(j), Written: j.written, Evicted: j.Evicted}
 	if from < j.Evicted {
 		out.Gap = true
@@ -139,7 +164,8 @@ func (s *hudBrowserSvc) StopByUser(owner, id string) (execjob.HostedSummary, err
 	if j.State == execjob.HostedRunning {
 		j.State, j.StoppedByUser, j.EndedAt = execjob.HostedStopped, true, time.Now().UnixMilli()
 	}
-	if j.Origin != execjob.OriginUser {
+	// Only a job this stop ended is marked and owes its owner a notice.
+	if j.Origin != execjob.OriginUser && j.StoppedByUser {
 		switch s.notice {
 		case "failed-once":
 			if !s.failedOne[id] {
@@ -169,6 +195,18 @@ func (s *hudBrowserSvc) StopByUser(owner, id string) (execjob.HostedSummary, err
 // absence of a HUD against a daemon without the route, keyboard, reduced
 // motion, and the performance measurements, in ko and en, light and dark.
 func TestExecHUDBrowser(t *testing.T) {
+	runExecHUDBrowser(t, "testdata/exec-hud.browser.cjs", "WS_EXEC_HUD_SCRIPT")
+}
+
+// TestExecHUDReviewBrowser drives the review-fix scenarios against the same
+// fixture: the keyboard, the drawer's Escape, serialized and stale-guarded
+// output reads, long lines, the folded strip's bounds and dismissal, the toast
+// and the copy label.
+func TestExecHUDReviewBrowser(t *testing.T) {
+	runExecHUDBrowser(t, "testdata/exec-hud-review.browser.cjs", "WS_EXEC_HUD_REVIEW_SCRIPT")
+}
+
+func runExecHUDBrowser(t *testing.T, script, scriptEnv string) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
 		t.Skip("set WS_PLAYWRIGHT_MODULE to run Chromium acceptance")
 	}
@@ -193,7 +231,7 @@ func TestExecHUDBrowser(t *testing.T) {
 		return ComposerJob{ExecID: "exec_hi", Gen: 4, State: "exited", ExitCode: &zero, Command: req.Line, Written: 3, Output: []byte("hi\n")}, nil
 	}
 	f.svc.mu.Unlock()
-	svc := &hudBrowserSvc{counts: map[string]int{}, failedOne: map[string]bool{}, notice: "sent", d: f.d}
+	svc := &hudBrowserSvc{counts: map[string]int{}, failedOne: map[string]bool{}, notice: "sent", d: f.d, fromLog: map[string][]int64{}, inflight: map[string]int{}, maxInflight: map[string]int{}}
 	f.d.SetExecJobs(svc)
 	ctl := http.NewServeMux()
 	reply := func(w http.ResponseWriter, v any) {
@@ -233,10 +271,11 @@ func TestExecHUDBrowser(t *testing.T) {
 	})
 	ctl.HandleFunc("/set", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Notice string `json:"notice"`
-			StopMs int    `json:"stopMs"`
-			Unbind bool   `json:"unbind"`
-			Bind   bool   `json:"bind"`
+			Notice     string `json:"notice"`
+			StopMs     int    `json:"stopMs"`
+			OutDelayMs int    `json:"outDelayMs"`
+			Unbind     bool   `json:"unbind"`
+			Bind       bool   `json:"bind"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		svc.mu.Lock()
@@ -244,6 +283,7 @@ func TestExecHUDBrowser(t *testing.T) {
 			svc.notice = in.Notice
 		}
 		svc.stopMs = in.StopMs
+		svc.outDelayMs = in.OutDelayMs
 		svc.mu.Unlock()
 		if in.Unbind {
 			f.d.SetExecJobs(nil)
@@ -253,15 +293,51 @@ func TestExecHUDBrowser(t *testing.T) {
 		}
 		reply(w, "ok")
 	})
+	// /patch changes one job in place (its output stays) and bumps the revision.
+	ctl.HandleFunc("/patch", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			ID         string `json:"id"`
+			State      string `json:"state"`
+			StopNotice string `json:"stop_notice"`
+			ExitCode   *int   `json:"exit_code"`
+			EndedAt    int64  `json:"ended_at"`
+			Stopped    bool   `json:"stopped_by_user"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		svc.mu.Lock()
+		j := svc.find(in.ID)
+		if j != nil {
+			if in.State != "" {
+				j.State = in.State
+			}
+			if in.State != "" && in.State != execjob.HostedRunning && in.EndedAt == 0 {
+				j.EndedAt = time.Now().UnixMilli()
+			}
+			if in.EndedAt != 0 {
+				j.EndedAt = in.EndedAt
+			}
+			j.StopNotice = in.StopNotice
+			j.ExitCode = in.ExitCode
+			j.StoppedByUser = in.Stopped
+		}
+		svc.mu.Unlock()
+		f.d.ExecJobsChanged()
+		reply(w, "ok")
+	})
 	ctl.HandleFunc("/bump", func(w http.ResponseWriter, r *http.Request) { f.d.ExecJobsChanged(); reply(w, "ok") })
 	ctl.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()
-		reply(w, map[string]any{"counts": svc.counts, "from": svc.lastFrom})
+		reply(w, map[string]any{"counts": svc.counts, "from": svc.lastFrom, "fromLog": svc.fromLog, "maxInflight": svc.maxInflight})
 	})
 	ctl.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
 		svc.mu.Lock()
 		svc.counts = map[string]int{}
+		svc.fromLog = map[string][]int64{}
+		svc.maxInflight = map[string]int{}
 		svc.mu.Unlock()
 		reply(w, "ok")
 	})
@@ -295,8 +371,7 @@ func TestExecHUDBrowser(t *testing.T) {
 			}
 		}
 	}()
-	script := "testdata/exec-hud.browser.cjs"
-	if d := os.Getenv("WS_EXEC_HUD_SCRIPT"); d != "" {
+	if d := os.Getenv(scriptEnv); d != "" {
 		script = d
 	}
 	out, err := exec.CommandContext(ctx, "node", script, f.base, ctlSrv.URL, shots, mockup).CombinedOutput()

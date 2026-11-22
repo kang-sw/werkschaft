@@ -3299,6 +3299,7 @@
   "js.xhud.pk.jump.none": "このページにはカードがもうありません",
   "js.xhud.pk.copy": "コマンドをコピー",
   "js.xhud.pk.copied": "コピーしました",
+  "js.xhud.pk.copyfail": "コピーできません",
   "js.xhud.pk.expand": "クリックしてコマンドを展開",
   "js.xhud.pk.foot": "Esc で閉じる · ← → でジョブを切替",
   "js.xhud.out.label": "stdout/stderr 結合、新しいものが下",
@@ -3308,7 +3309,7 @@
   "js.xhud.out.live": "ライブ",
   "js.xhud.out.paused": "一時停止 — 上にスクロール中",
   "js.xhud.out.ended": "終了",
-  "js.xhud.out.tail": "末尾 · {1} 行中 {0} 行を記録",
+  "js.xhud.out.tail": "末尾 · 累計 {1} 中 {0} · stdout+stderr",
   "js.xhud.out.gap": "— それ以前の出力は破棄されました —",
   "js.xhud.out.stopped.user": "— あなたが停止 —",
   "js.xhud.out.stopped": "— 停止 —",
@@ -3325,6 +3326,7 @@
   "js.xhud.toast.agent.pending": "{0} を停止 · エージェントに通知中…",
   "js.xhud.toast.agent.fail": "{0} を停止 · エージェントへの通知に失敗",
   "js.xhud.toast.user": "{0} を停止しました",
+  "js.xhud.toast.ended": "{0} はすでに終了していました",
   "js.xhud.toast.stop.fail": "{0} を停止できませんでした: {1}",
   "js.xhud.toast.view": "表示"
 }

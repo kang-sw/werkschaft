@@ -3299,6 +3299,7 @@
   "js.xhud.pk.jump.none": "The card is no longer on this page",
   "js.xhud.pk.copy": "Copy command",
   "js.xhud.pk.copied": "Copied",
+  "js.xhud.pk.copyfail": "Copy failed",
   "js.xhud.pk.expand": "Click to expand the command",
   "js.xhud.pk.foot": "Esc closes · ← → switch jobs",
   "js.xhud.out.label": "Combined stdout/stderr, newest last",
@@ -3308,7 +3309,7 @@
   "js.xhud.out.live": "live",
   "js.xhud.out.paused": "paused — scrolled up",
   "js.xhud.out.ended": "ended",
-  "js.xhud.out.tail": "tail · {0} of {1} written",
+  "js.xhud.out.tail": "tail · {0} of {1} written · stdout+stderr",
   "js.xhud.out.gap": "— earlier output was dropped —",
   "js.xhud.out.stopped.user": "— stopped by you —",
   "js.xhud.out.stopped": "— stopped —",
@@ -3325,6 +3326,7 @@
   "js.xhud.toast.agent.pending": "Stopped {0} · notifying the agent…",
   "js.xhud.toast.agent.fail": "Stopped {0} · agent NOT notified",
   "js.xhud.toast.user": "Stopped {0}",
+  "js.xhud.toast.ended": "{0} had already ended",
   "js.xhud.toast.stop.fail": "Could not stop {0}: {1}",
   "js.xhud.toast.view": "View"
 }

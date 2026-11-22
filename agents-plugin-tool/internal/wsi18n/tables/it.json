@@ -3299,6 +3299,7 @@
   "js.xhud.pk.jump.none": "La scheda non è più in questa pagina",
   "js.xhud.pk.copy": "Copia comando",
   "js.xhud.pk.copied": "Copiato",
+  "js.xhud.pk.copyfail": "Copia non riuscita",
   "js.xhud.pk.expand": "Clicca per espandere il comando",
   "js.xhud.pk.foot": "Esc chiude · ← → cambia job",
   "js.xhud.out.label": "stdout/stderr combinati, più recente in fondo",
@@ -3308,7 +3309,7 @@
   "js.xhud.out.live": "live",
   "js.xhud.out.paused": "in pausa — scorrimento verso l'alto",
   "js.xhud.out.ended": "terminato",
-  "js.xhud.out.tail": "coda · {0} di {1} scritte",
+  "js.xhud.out.tail": "coda · {0} di {1} scritte · stdout+stderr",
   "js.xhud.out.gap": "— l'output precedente è stato eliminato —",
   "js.xhud.out.stopped.user": "— arrestato da te —",
   "js.xhud.out.stopped": "— arrestato —",
@@ -3325,6 +3326,7 @@
   "js.xhud.toast.agent.pending": "{0} arrestato · notifica all'agente…",
   "js.xhud.toast.agent.fail": "{0} arrestato · agente NON notificato",
   "js.xhud.toast.user": "{0} arrestato",
+  "js.xhud.toast.ended": "{0} era già terminato",
   "js.xhud.toast.stop.fail": "Impossibile arrestare {0}: {1}",
   "js.xhud.toast.view": "Vedi"
 }

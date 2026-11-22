@@ -18,7 +18,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const report = [];
 const note = (k, v) => { report.push(k + ' = ' + v); console.log('MEASURE ' + k + ' = ' + v); };
 
-async function openPage(browser, { lang, scheme, width = 1280, reduced = false, filterExecEvent = false }) {
+async function openPage(browser, { lang, scheme, width = 1280, reduced = false, filterExecEvent = false, list404 = false }) {
   const ctx = await browser.newContext({ viewport: { width, height: 900 }, locale: lang === 'ko' ? 'ko-KR' : 'en-US', colorScheme: scheme, reducedMotion: reduced ? 'reduce' : 'no-preference', permissions: ['clipboard-read', 'clipboard-write'] });
   await ctx.addCookies([{ name: 'ws_dashboard_lang', value: lang, url: base }]);
   const page = await ctx.newPage();
@@ -34,6 +34,8 @@ async function openPage(browser, { lang, scheme, width = 1280, reduced = false, 
       ws.onMessage(m => server.send(m));
     });
   }
+  // The list read answers 404, as it does to a LAN viewer (the route is localhost-only).
+  if (list404) await page.route(/\/exec\/jobs$/, r => r.fulfill({ status: 404, contentType: 'text/plain', body: 'not found' }));
   await page.goto(base + '/s/livesession');
   let view = null;
   for (let i = 0; i < 100 && !view; i++) {
@@ -470,18 +472,34 @@ async function run(browser, { lang, scheme, full }) {
       assert.deepEqual(errors.filter(e => e.includes('/exec/') || e.startsWith('pageerror')), [], 'old daemon: no console error');
       await ctx.close();
     }
-    // a daemon whose route answers 404 (a LAN viewer, a closed lead): the HUD never mounts.
+    // the list read answers 404 (what a LAN viewer gets from the localhost-only route): the page asked
+    // exactly once, mounted no HUD, and never asks again this load.
     {
-      await post('/set', { unbind: true });
-      const { ctx, view, errors, requests } = await openPage(browser, { lang: 'en', scheme: 'light' });
+      await post('/jobs', [J('exec_lan', 'sleep 100')]);
+      const { ctx, view, errors, requests } = await openPage(browser, { lang: 'en', scheme: 'light', list404: true });
       await sleep(1500);
-      assert.equal(await hudShown(view), false, '404: no HUD');
-      assert.ok(requests.length <= 1, '404: asked once, then never again: ' + requests);
+      assert.equal(await hudShown(view), false, '404 on the list: no HUD');
+      assert.deepEqual(requests, ['GET /s/livesession/exec/jobs'], '404 on the list: asked once: ' + requests);
       assert.deepEqual(errors.filter(e => e.startsWith('pageerror')), []);
       await post('/bump');
       await post('/bump');
       await sleep(600);
-      assert.ok(requests.length <= 1, '404: later events are not read: ' + requests);
+      assert.equal(requests.length, 1, '404 on the list: later events are not read: ' + requests);
+      await ctx.close();
+    }
+    // the service is unbound (a lead that closed): the daemon still announces its revision on connect, the
+    // route answers 404 for the missing service, and the page asks exactly once, mounts nothing, asks no more.
+    {
+      await post('/set', { unbind: true });
+      const { ctx, view, errors, requests } = await openPage(browser, { lang: 'en', scheme: 'light' });
+      await sleep(1500);
+      assert.equal(await hudShown(view), false, 'unbound service: no HUD');
+      assert.deepEqual(requests, ['GET /s/livesession/exec/jobs'], 'unbound service: asked once: ' + requests);
+      assert.deepEqual(errors.filter(e => e.startsWith('pageerror')), []);
+      await post('/bump');
+      await post('/bump');
+      await sleep(600);
+      assert.equal(requests.length, 1, 'unbound service: later events are not read: ' + requests);
       await ctx.close();
       await post('/set', { bind: true });
     }

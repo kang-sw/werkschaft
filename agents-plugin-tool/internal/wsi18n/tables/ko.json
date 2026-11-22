@@ -3299,6 +3299,7 @@
   "js.xhud.pk.jump.none": "이 페이지에 카드가 더 이상 없습니다",
   "js.xhud.pk.copy": "명령 복사",
   "js.xhud.pk.copied": "복사됨",
+  "js.xhud.pk.copyfail": "복사 실패",
   "js.xhud.pk.expand": "클릭하여 명령 펼치기",
   "js.xhud.pk.foot": "Esc 닫기 · ← → 작업 전환",
   "js.xhud.out.label": "stdout/stderr 합본, 최신이 아래",
@@ -3308,7 +3309,7 @@
   "js.xhud.out.live": "실시간",
   "js.xhud.out.paused": "일시정지 — 위로 스크롤됨",
   "js.xhud.out.ended": "종료됨",
-  "js.xhud.out.tail": "끝부분 · 누적 {1} 중 {0}",
+  "js.xhud.out.tail": "끝부분 · 누적 {1} 중 {0} · stdout+stderr",
   "js.xhud.out.gap": "— 이전 출력은 버려졌습니다 —",
   "js.xhud.out.stopped.user": "— 사용자가 중지함 —",
   "js.xhud.out.stopped": "— 중지됨 —",
@@ -3325,6 +3326,7 @@
   "js.xhud.toast.agent.pending": "{0} 중지됨 · 에이전트에 알리는 중…",
   "js.xhud.toast.agent.fail": "{0} 중지됨 · 에이전트 알림 실패",
   "js.xhud.toast.user": "{0} 중지됨",
+  "js.xhud.toast.ended": "{0} 이미 종료됨",
   "js.xhud.toast.stop.fail": "{0}을(를) 중지하지 못함: {1}",
   "js.xhud.toast.view": "보기"
 }
