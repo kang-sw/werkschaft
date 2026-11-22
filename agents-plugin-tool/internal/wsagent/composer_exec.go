@@ -21,6 +21,30 @@ type ComposerTarget struct {
 // run for: not an open hosted lead.
 var ErrNotComposerTarget = errors.New("only an open hosted lead takes a dashboard command")
 
+// ComposerOpen is the live authority check of the dashboard's private
+// command routes: it returns the open generation of id when id is an open,
+// not handed-off hosted lead, and refuses otherwise. It reads memory only.
+func (r *Runner) ComposerOpen(id string) (uint64, error) {
+	owner, err := r.ExecOwner(id)
+	if err != nil {
+		return 0, err
+	}
+	if !owner.Lead {
+		return 0, ErrNotComposerTarget
+	}
+	c, err := r.open(id)
+	if err != nil {
+		return 0, err
+	}
+	c.mu.Lock()
+	handedOff := c.rec.handedOff()
+	c.mu.Unlock()
+	if handedOff {
+		return 0, ErrNotComposerTarget
+	}
+	return owner.Gen, nil
+}
+
 // ComposerTarget returns the open hosted lead id's target. A closed,
 // handed-off, unknown or non-lead conversation is refused.
 func (r *Runner) ComposerTarget(id string) (ComposerTarget, error) {
@@ -86,13 +110,14 @@ func (r *Runner) PassiveHand(id string, gen uint64, execID, text string) error {
 	if err != nil {
 		return err
 	}
+	// The check and the put share one hold, so a close or revival cannot fall
+	// between them (passive.mu nests under c.mu and calls nothing).
 	c.mu.Lock()
-	closed, current := c.closed, c.rec.OpenGen
-	c.mu.Unlock()
-	if closed {
-		return endedError(c.record())
+	defer c.mu.Unlock()
+	if c.closed {
+		return endedError(c.rec)
 	}
-	if current != gen {
+	if c.rec.OpenGen != gen {
 		return fmt.Errorf("the conversation reopened since this command was submitted")
 	}
 	c.passive.put(gen, execID, text)

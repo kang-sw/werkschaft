@@ -29,17 +29,16 @@ func TestPassiveInputBounds(t *testing.T) {
 		t.Fatalf("the block is not framed as untrusted data:\n%s", block)
 	}
 
-	// 16 KiB: big receipts collapse oldest first until the text fits.
+	// 16 KiB: big receipts collapse oldest first until the rendered block fits.
 	var q passiveInput
 	big := strings.Repeat("x", 6<<10)
 	for i := 1; i <= 4; i++ {
 		q.put(1, fmt.Sprintf("exec_%d", i), big+fmt.Sprint(i))
 	}
-	_, took = q.render(1)
+	rendered, took := q.render(1)
 	q.mu.Lock()
-	total, full := 0, 0
+	total, full := len(rendered), 0
 	for _, it := range q.items {
-		total += len(it.text)
 		if !it.collapsed {
 			full++
 		}
@@ -54,14 +53,8 @@ func TestPassiveInputBounds(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		f.put(1, fmt.Sprintf("exec_flood_%d", i), "r")
 	}
-	f.mu.Lock()
-	n := 0
-	for _, it := range f.items {
-		n += len(it.text)
-	}
-	f.mu.Unlock()
-	if n > passiveMaxBytes {
-		t.Fatalf("flood kept %d bytes", n)
+	if block, _ := f.render(1); len(block) > passiveMaxBytes {
+		t.Fatalf("flood rendered %d bytes", len(block))
 	}
 }
 
@@ -135,6 +128,15 @@ func TestComposerTargetNeedsAnOpenHostedLead(t *testing.T) {
 	}
 	if _, err := h.runner.ComposerTarget("missing"); err == nil {
 		t.Fatal("an unknown conversation gave a target")
+	}
+	// The live authority of the private routes: the open generation of an open
+	// hosted lead, refused for an unknown conversation.
+	gen, err := h.runner.ComposerOpen(id)
+	if err != nil || gen != target.Owner.Gen {
+		t.Fatalf("ComposerOpen = %d, %v; want generation %d", gen, err, target.Owner.Gen)
+	}
+	if _, err := h.runner.ComposerOpen("missing"); err == nil {
+		t.Fatal("an unknown conversation was open for a command")
 	}
 }
 
@@ -255,5 +257,84 @@ func TestPassiveRenderKeepsOutputInsideTheFrame(t *testing.T) {
 	text, _ := p.render(1)
 	if n := strings.Count(text, "</ws-user-exec>"); n != 1 || !strings.HasSuffix(text, "</ws-user-exec>") {
 		t.Fatalf("frame closed %d times: %q", n, text)
+	}
+}
+
+// TestPassiveRenderedHandoffIsBounded: the bound is on the block that is
+// rendered (frame, escaped text and separators), however the receipts and the
+// collapsed id lines are spread.
+func TestPassiveRenderedHandoffIsBounded(t *testing.T) {
+	check := func(name string, p *passiveInput) {
+		t.Helper()
+		block, _ := p.render(1)
+		if len(block) > passiveMaxBytes {
+			t.Fatalf("%s: rendered %d bytes, bound %d", name, len(block), passiveMaxBytes)
+		}
+		if n := strings.Count(block, "</ws-user-exec>"); n != 1 {
+			t.Fatalf("%s: the frame closed %d times", name, n)
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		full := 0
+		for _, it := range p.items {
+			if !it.collapsed {
+				full++
+			}
+		}
+		if full > passiveMaxReceipts || len(p.items) > passiveMaxEntries {
+			t.Fatalf("%s: %d whole receipts, %d entries", name, full, len(p.items))
+		}
+	}
+	// Escaping grows the text: closing tags in every receipt.
+	var esc passiveInput
+	for i := 0; i < 8; i++ {
+		esc.put(1, fmt.Sprintf("exec_e%d", i), strings.Repeat("</ws-user-exec>", 250))
+	}
+	check("escaped", &esc)
+	// One receipt far beyond the bound is cut to fit.
+	var big passiveInput
+	big.put(1, "exec_big", strings.Repeat("é", 1<<20))
+	check("oversized", &big)
+	// A flood of ids: whole receipts collapse, the entry cap drops the oldest lines.
+	var flood passiveInput
+	for i := 0; i < 5000; i++ {
+		flood.put(1, fmt.Sprintf("exec_flood_%04d", i), "r")
+	}
+	check("flood", &flood)
+	flood.mu.Lock()
+	n, last := len(flood.items), flood.items[len(flood.items)-1].execID
+	flood.mu.Unlock()
+	if n != passiveMaxEntries || last != "exec_flood_4999" {
+		t.Fatalf("flood kept %d entries ending at %s", n, last)
+	}
+}
+
+// TestComposerOpenEndsWithTheConversation: a closed lead is no longer open
+// for a dashboard command, and a revived one answers its new generation.
+func TestComposerOpenEndsWithTheConversation(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id := h.lead(BackendClaude, LeadOptions{}).ID
+	first, err := h.runner.ComposerOpen(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.runner.CloseConversation(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.runner.ComposerOpen(id); err == nil {
+		t.Fatal("a closed lead was open for a command")
+	}
+	if err := h.runner.PassiveHand(id, first, "exec_a", "x"); err == nil {
+		t.Fatal("a closed lead took a receipt")
+	}
+	if _, err := h.runner.Reopen(id); err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.runner.ComposerOpen(id)
+	if err != nil || second == first {
+		t.Fatalf("revived generation = %d, %v; want one beyond %d", second, err, first)
+	}
+	if err := h.runner.PassiveHand(id, first, "exec_a", "x"); err == nil {
+		t.Fatal("the old generation's receipt was accepted after the revival")
 	}
 }
