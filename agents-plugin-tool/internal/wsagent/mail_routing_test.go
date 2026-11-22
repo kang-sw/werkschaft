@@ -312,8 +312,8 @@ func TestMailLegendRefreshesOnARequeuedSteer(t *testing.T) {
 	ap.events <- Event{SteerAnswer: &SteerAnswer{}}
 	ap.reply("done without it")
 	next := ap.nextSent(t)
-	if want := "[senders: senderone = One renamed]\n\n" + drained; !strings.Contains(next, want) || strings.Contains(next, "= One]") {
-		t.Fatalf("the requeued mail's turn = %q, want it to hold %q", next, want)
+	if want := "[senders: senderone = One renamed]\n\n" + drained; !strings.Contains(next, want) || strings.Count(next, "[senders: ") != 1 {
+		t.Fatalf("the requeued mail's turn = %q, want exactly one legend, %q", next, want)
 	}
 	if _, cleared := ap.steered(); cleared != 1 {
 		t.Fatalf("the untaken steer was dropped from the harness's queue %d times, want 1", cleared)

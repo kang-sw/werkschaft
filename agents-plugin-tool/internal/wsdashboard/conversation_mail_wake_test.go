@@ -9,6 +9,25 @@ import (
 	"github.com/kang-sw/devenv/internal/wsmailbox"
 )
 
+// The dashboard's trimMailLegend mirrors mcp's (same table as mcp's
+// trimMailLegendCases): only the generated one-line legend paragraph ahead
+// of a "mail from" head is skipped.
+func TestConversationMailWakeTrimsOnlyTheGeneratedLegend(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"[senders: a = A]\n\nmail from a (2026-11-22T01:00:00Z):\nbody", "mail from a (2026-11-22T01:00:00Z):\nbody"},
+		{"[senders: a = A]\nmail from a:\nbody", "[senders: a = A]\nmail from a:\nbody"},
+		{"[senders: a = A]\n\nnot a head:\nbody", "[senders: a = A]\n\nnot a head:\nbody"},
+		{"[senders: a = A\nmore]\n\nmail from a:\nbody", "[senders: a = A\nmore]\n\nmail from a:\nbody"},
+		{"[senders: a = A\n\nmail from a:\nbody", "[senders: a = A\n\nmail from a:\nbody"},
+		{"[subagent id:x] done\n\nmail from a:\nbody", "[subagent id:x] done\n\nmail from a:\nbody"},
+		{"mail from a:\n[senders: x = y]\n\nmail from b:\nbody", "mail from a:\n[senders: x = y]\n\nmail from b:\nbody"},
+	} {
+		if got := trimMailLegend(tc.in); got != tc.want {
+			t.Fatalf("trimMailLegend(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestConversationMailWakeAssociationFallbacks(t *testing.T) {
 	const self = "sweatradartakingoverwrite"
 	const peer = "id:suspectcaboosetalonunretired"

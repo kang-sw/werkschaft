@@ -31,6 +31,28 @@ func TestCleanMailLabel(t *testing.T) {
 	}
 }
 
+// trimMailLegendCases are the shapes trimMailLegend takes and leaves: only a
+// one-line "[senders: ...]" paragraph, closed by "]" and a blank line, ahead
+// of a "mail from" head is the generated legend. wsdashboard's copy is pinned
+// on the same table.
+var trimMailLegendCases = []struct{ in, want string }{
+	{"[senders: a = A]\n\nmail from a (2026-11-22T01:00:00Z):\nbody", "mail from a (2026-11-22T01:00:00Z):\nbody"},
+	{"[senders: a = A]\nmail from a:\nbody", "[senders: a = A]\nmail from a:\nbody"},
+	{"[senders: a = A]\n\nnot a head:\nbody", "[senders: a = A]\n\nnot a head:\nbody"},
+	{"[senders: a = A\nmore]\n\nmail from a:\nbody", "[senders: a = A\nmore]\n\nmail from a:\nbody"},
+	{"[senders: a = A\n\nmail from a:\nbody", "[senders: a = A\n\nmail from a:\nbody"},
+	{"[subagent id:x] done\n\nmail from a:\nbody", "[subagent id:x] done\n\nmail from a:\nbody"},
+	{"mail from a:\n[senders: x = y]\n\nmail from b:\nbody", "mail from a:\n[senders: x = y]\n\nmail from b:\nbody"},
+}
+
+func TestTrimMailLegendTakesOnlyTheGeneratedLine(t *testing.T) {
+	for _, tc := range trimMailLegendCases {
+		if got := trimMailLegend(tc.in); got != tc.want {
+			t.Fatalf("trimMailLegend(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestMailLegendLine pins the legend line: one entry per distinct handle
 // with a label, in first-appearance order; none without a labeled sender.
 func TestMailLegendLine(t *testing.T) {
