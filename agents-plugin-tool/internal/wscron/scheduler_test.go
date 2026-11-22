@@ -121,6 +121,8 @@ type fakeSessions struct {
 	shut  map[string]bool // owner -> Deliver suppresses
 	drain map[string]bool // owner -> Deliver drains before returning (idle lead)
 	fail  error
+	// afterHeld runs once the held read returned (a lead draining mid-start).
+	afterHeld func(owner string)
 }
 
 func newSessions(t *testing.T, owners ...string) *fakeSessions {
@@ -176,6 +178,9 @@ func (s *fakeSessions) HeldSchedules(id string) []string {
 		if r.Entry.Cron != nil {
 			out = append(out, r.Entry.Cron.ID)
 		}
+	}
+	if s.afterHeld != nil {
+		s.afterHeld(id)
 	}
 	return out
 }
@@ -515,6 +520,28 @@ func TestPendingRebuiltFromHeldEntries(t *testing.T) {
 	e.restart()
 	if i := e.info("lead", "tick"); i.Pending {
 		t.Fatalf("pending with no held entry: %+v", i)
+	}
+}
+
+// An entry drained between the held read and the end of New must not leave
+// the schedule pending: no later removal event would arrive.
+func TestPendingNotStaleWhenEntryLeavesDuringStart(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	e.add("lead", "tick", "* * * * *", "")
+	e.clock.Advance(30 * time.Second) // delivered, held undrained
+	e.sess.afterHeld = func(owner string) {
+		e.sess.afterHeld = nil
+		if _, err := wsinbox.Drain(e.sess.inbox(owner)); err != nil {
+			t.Error(err)
+		}
+	}
+	e.restart()
+	if i := e.info("lead", "tick"); i.Pending {
+		t.Fatalf("stale pending after a drain during start: %+v", i)
+	}
+	e.clock.Advance(time.Minute)
+	if i := e.info("lead", "tick"); i.Dropped != 0 || len(e.sess.held("lead")) != 1 {
+		t.Fatalf("the next fire was dropped: %+v", i)
 	}
 }
 

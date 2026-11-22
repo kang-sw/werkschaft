@@ -126,6 +126,9 @@ type Scheduler struct {
 	closed  bool
 	dirty   map[string]int64 // last-fire deltas waiting for the writer
 	stopObs func()
+	// loadRemoved holds the cron entries seen leaving an inbox while New
+	// loads; nil afterwards.
+	loadRemoved map[string]bool
 
 	writeKick chan struct{}
 	writeDone chan struct{}
@@ -158,6 +161,11 @@ func New(opts Options) (*Scheduler, error) {
 	now := s.clock.Now()
 	var gone []string
 	held := map[string]map[string]bool{}
+	// The removal observer is registered before the held entries are read, so
+	// an entry that leaves its inbox while the schedules load is never counted
+	// as still held: removals of ids not inserted yet are remembered.
+	s.loadRemoved = map[string]bool{}
+	s.stopObs = wsinbox.ObserveCronRemoval(s.entryLeft)
 	for _, r := range rows {
 		if !s.sessions.Exists(r.Owner) {
 			gone = append(gone, r.ID)
@@ -174,16 +182,18 @@ func New(opts Options) (*Scheduler, error) {
 				held[r.Owner][id] = true
 			}
 		}
-		sch.pending = held[r.Owner][sch.id]
+		s.mu.Lock()
+		sch.pending = held[r.Owner][sch.id] && !s.loadRemoved[sch.id]
 		s.insertLocked(sch)
+		s.mu.Unlock()
 	}
 	if len(gone) > 0 {
 		if err := s.store.Delete(gone...); err != nil {
 			fmt.Fprintf(s.log, "cron: reap schedules of ended sessions: %v\n", err)
 		}
 	}
-	s.stopObs = wsinbox.ObserveCronRemoval(s.entryLeft)
 	s.mu.Lock()
+	s.loadRemoved = nil
 	s.armLocked()
 	s.mu.Unlock()
 	go s.writer()
@@ -231,6 +241,9 @@ func (s *Scheduler) entryLeft(c wsinbox.Cron) {
 	s.mu.Lock()
 	if sch := s.byID[c.ID]; sch != nil {
 		sch.pending = false
+	}
+	if s.loadRemoved != nil {
+		s.loadRemoved[c.ID] = true
 	}
 	s.mu.Unlock()
 }
@@ -313,6 +326,14 @@ func (s *Scheduler) fire(gen uint64) {
 
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].id < jobs[j].id })
 	for _, job := range jobs {
+		// A schedule deleted, or a scheduler closed, since the jobs were built
+		// does not deliver.
+		s.mu.Lock()
+		if s.closed || s.byID[job.id] != job.sch {
+			s.mu.Unlock()
+			continue
+		}
+		s.mu.Unlock()
 		out, err := s.sessions.Deliver(job.owner, job.mark, job.prompt)
 		s.mu.Lock()
 		switch {
@@ -571,7 +592,8 @@ func (s *Scheduler) ConversationGone(owner string) {
 }
 
 // Close stops the timer, writes the waiting last-fire deltas and closes the
-// store. It is idempotent; a fire in flight finishes its hand-off first.
+// store. It is idempotent; a fire past its lock checks for Close before its
+// hand-off, but one already inside Deliver may still complete.
 func (s *Scheduler) Close() error {
 	s.opMu.Lock()
 	s.mu.Lock()
