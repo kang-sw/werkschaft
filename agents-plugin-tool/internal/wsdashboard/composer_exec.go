@@ -616,13 +616,14 @@ func (d *Daemon) composerAdmit(replyID, id, line string, gen uint64, retry bool,
 
 // composerAdmitSlot is composerAdmit for a click on a user command: slot names
 // the command revision whose line is being run (nil for a typed line). resolve,
-// when set, is the one ordering point for a click: it runs under the admission
-// lock after the known-card, fence and token checks and immediately before the
-// claim, and returns the line (and the worktree it was read for) of the
-// displayed revision, or false to refuse; so a withdrawal or replacement is
-// either before the claim (refused, nothing claimed) or after it (the claim
-// stands), and a second request with the same id waits on the lock and gets the
-// first one's card.
+// when set, reads the registry for the displayed revision and returns the line
+// (and the worktree it was read for), or false to refuse. That registry read is
+// the ordering point against a withdrawal or replacement: one committed before
+// the read refuses the click and claims nothing; one committed after it follows
+// the click, which runs the line the user saw. Admission holds its lock across
+// the read and the claim, which does not exclude registry writers; it makes a
+// second request with the same id wait for the first and get the first one's
+// card instead of its own refusal.
 func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry bool, token string, slot *composerSlot, resolve func() (line, root string, ok bool)) (*composerSub, composerAdmission) {
 	key := replyID + "\x00" + id
 	c := &d.composer

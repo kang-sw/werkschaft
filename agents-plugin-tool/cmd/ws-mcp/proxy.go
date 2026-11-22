@@ -99,6 +99,47 @@ type proxyHost struct {
 // the daemon's user commands to settle at its start.
 const userCommandsReadyWait = 5 * time.Second
 
+// userCommandsFor returns the user command lookup of one connection. A hosted
+// lead that connects while the daemon is still starting waits (bounded, and only
+// inside its own lookup: the first tool list of that one session) until the
+// daemon settled its user commands, so that list already names the tools. The
+// wait is never in Accept: the HTTP route builds a session under a daemon-wide
+// lock, and a session of one token must not delay another's. A worker, or a
+// conversation the runner does not report as an open lead, never waits.
+func (h *proxyHost) userCommandsFor(conversation string) func() mcp.UserCommandHost {
+	deadline := time.Now().Add(userCommandsReadyWait)
+	load := func() mcp.UserCommandHost {
+		if u := h.userCmds.Load(); u != nil {
+			return u
+		}
+		return nil
+	}
+	return func() mcp.UserCommandHost {
+		if u := load(); u != nil || conversation == "" || h.userCmdsReady == nil {
+			return u
+		}
+		select {
+		case <-h.userCmdsReady:
+		default:
+			open, ok := h.agents.(interface {
+				ComposerOpen(string) (uint64, error)
+			})
+			left := time.Until(deadline)
+			if !ok || left <= 0 {
+				return nil
+			}
+			if _, err := open.ComposerOpen(conversation); err != nil {
+				return nil
+			}
+			select {
+			case <-h.userCmdsReady:
+			case <-time.After(left):
+			}
+		}
+		return load()
+	}
+}
+
 // wait blocks until the replacement goroutine, if any, has ended.
 func (h *proxyHost) wait() { h.background.Wait() }
 
@@ -114,14 +155,6 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		}
 		if root == "" || root == "." {
 			root = hello.Cwd
-		}
-		if hello.Conversation != "" && h.userCmdsReady != nil {
-			// The tools are listed from the binding as it is when the session
-			// lists them; one that connects during the daemon's start waits for it.
-			select {
-			case <-h.userCmdsReady:
-			case <-time.After(userCommandsReadyWait):
-			}
 		}
 		opts := mcp.ServerOptions{
 			BoardOwner:   true,
@@ -161,12 +194,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		// that owns hosted exec jobs.
 		opts.Exec = h.exec.Load
 		opts.Cron = h.cron.Load
-		opts.UserCommands = func() mcp.UserCommandHost {
-			if u := h.userCmds.Load(); u != nil {
-				return u
-			}
-			return nil
-		}
+		opts.UserCommands = h.userCommandsFor(hello.Conversation)
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
 		server := mcp.NewServerWithOptions(opts)

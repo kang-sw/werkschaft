@@ -1,6 +1,7 @@
 package wsusercmd
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -381,5 +382,36 @@ func TestNewerSchemaRefused(t *testing.T) {
 	_ = st.Close()
 	if _, err := Open(path, nil); !errors.Is(err, ErrStoreNewer) {
 		t.Fatalf("newer schema: %v", err)
+	}
+}
+
+// TestStoreMigrationBackfillsTheRevisionHighWater: a version-1 database (rows,
+// no high-water) opens at the highest surviving revision, so the counter never
+// starts below a revision a page may still hold.
+func TestStoreMigrationBackfillsTheRevisionHighWater(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StoreName)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE user_commands (reply TEXT NOT NULL, root TEXT NOT NULL, id TEXT NOT NULL, label TEXT NOT NULL, description TEXT NOT NULL, line TEXT NOT NULL, revision INTEGER NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY (reply, root, id))`,
+		`INSERT INTO user_commands VALUES ('lead', '/w', 'a', 'A', '', 'echo a', 7, 1), ('lead', '/w', 'b', 'B', '', 'echo b', 9, 2)`,
+		`PRAGMA user_version=1`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got, err := s.highWater(); err != nil || got != 9 {
+		t.Fatalf("high-water after the upgrade = %d, %v; want 9", got, err)
 	}
 }

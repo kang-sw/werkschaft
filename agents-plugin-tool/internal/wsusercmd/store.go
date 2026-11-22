@@ -122,6 +122,12 @@ func storeMigrate(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx, storeSchema); err != nil {
 		return fmt.Errorf("create user command store schema: %w", err)
 	}
+	// A version-1 database has rows but no high-water: it starts at the highest
+	// surviving revision (a fresh one at 0).
+	if _, err := tx.ExecContext(ctx, `INSERT INTO meta (k, v) SELECT ?, COALESCE(MAX(revision), 0) FROM user_commands WHERE true
+		ON CONFLICT(k) DO UPDATE SET v = MAX(v, excluded.v)`, metaRevision); err != nil {
+		return fmt.Errorf("backfill user command revision: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, storeSchemaVersion)); err != nil {
 		return fmt.Errorf("stamp user command store version: %w", err)
 	}

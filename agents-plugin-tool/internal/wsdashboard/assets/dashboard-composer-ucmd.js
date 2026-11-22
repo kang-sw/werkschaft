@@ -94,12 +94,28 @@
     });
     box.hidden = false;
   }
+  // ucmdOlder reports whether rev is an older state of the list the page already
+  // shows. The revision is "epoch.N.rootTag": N only grows within one daemon run
+  // (epoch) and one worktree (rootTag), so a different epoch or root tag is a
+  // different line of history and always wins; an unparseable one is never
+  // dropped.
+  function ucmdOlder(rev) {
+    if (typeof rev !== "string" || !ucmdRev) return false;
+    var a = rev.split("."), b = ucmdRev.split(".");
+    if (a.length < 2 || b.length < 2 || a[0] !== b[0] || a.slice(2).join(".") !== b.slice(2).join(".")) return false;
+    var x = parseInt(a[1], 10), y = parseInt(b[1], 10);
+    return x < y;
+  }
   // ucmdApply takes a list answer (a read, a removal, or a refused write's
-  // refresh) and its admission token when the page holds none yet.
+  // refresh) and its admission token when the page holds none yet. Answers
+  // arrive out of order (a slow write's reply can land after a newer read the
+  // stream triggered): one older than the list on screen is dropped, so the
+  // newest list stays.
   function ucmdApply(list) {
+    if (typeof list.token === "string" && list.token && !cexecToken) cexecToken = list.token;
+    if (ucmdOlder(list.rev)) return;
     ucmdList = list.commands || [];
     ucmdRev = typeof list.rev === "string" ? list.rev : ucmdRev;
-    if (typeof list.token === "string" && list.token && !cexecToken) cexecToken = list.token;
     ucmdRender();
   }
   function ucmdFetch() {
@@ -113,7 +129,7 @@
       return r.json();
     }).catch(function () { return null; }).then(function (list) {
       ucmdFetching = false;
-      if (list && list.denied) { ucmdList = []; ucmdRender(); }
+      if (list && list.denied) { ucmdList = []; ucmdRev = ""; ucmdRender(); }
       else if (list && Array.isArray(list.commands)) ucmdApply(list);
       // A wake that arrived while this read ran is answered with one more read
       // (never a loop: only a wake sets the flag).
@@ -123,7 +139,7 @@
   // The stream's opaque revision event: refetch when it is not the revision the
   // page already holds.
   function ucmdWake(rev) {
-    if (!ucmdEnabled || typeof rev !== "string" || rev === ucmdRev) return;
+    if (!ucmdEnabled || typeof rev !== "string" || rev === ucmdRev || ucmdOlder(rev)) return;
     if (ucmdFetching) ucmdDirty = true;
     else ucmdFetch();
   }

@@ -124,13 +124,35 @@ async function agent(step, tag) {
       await dbl.dblclick();
       await page.waitForTimeout(900);
       assert.equal(runsOf('dbl'), 1, 'a double click made ' + runsOf('dbl') + ' requests');
-      // two rapid separate clicks (the second one beyond a fast acknowledgement,
-      // with no click count to tell them apart) are still one run
+      // two rapid separate clicks, the second one after the first one's
+      // acknowledgement arrived (no click count tells them apart), are one run
       await page.waitForTimeout(300);
-      await dbl.evaluate(el => { el.click(); setTimeout(() => el.click(), 150); });
+      const acked = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/user-commands/dbl/run'));
+      await dbl.evaluate(el => el.click());
+      await acked;
+      await dbl.evaluate(el => el.click());
       await page.waitForTimeout(900);
       assert.equal(runsOf('dbl'), 2, 'two rapid clicks made ' + (runsOf('dbl') - 1) + ' requests');
       await shot('double-click');
+
+      // answers arrive out of order: the user's removal of "dbl" is processed by
+      // the daemon, but its answer is held back while the agent registers another
+      // command and the stream's refetch shows the newer list; the older answer
+      // then lands and must not replace it
+      let held = null;
+      await page.route('**/user-commands/dbl/remove', async route => { held = { route, response: await route.fetch() }; });
+      await view.locator('.ucmd[data-ucmd="dbl"] .ucmd-x').click();
+      for (let i = 0; i < 100 && !held; i++) await page.waitForTimeout(25);
+      assert.ok(held, 'the removal reached the daemon');
+      await agent('register-late', lang);
+      await view.waitForSelector('.ucmd[data-ucmd="late"]', { timeout: 10000 });
+      assert.equal(await view.locator('.ucmd[data-ucmd="dbl"]').count(), 0, 'the newer list no longer has the removed command');
+      await held.route.fulfill({ response: held.response });
+      await page.waitForTimeout(700);
+      assert.equal(await view.locator('.ucmd[data-ucmd="late"]').count(), 1, 'an older removal answer did not replace the newer list');
+      assert.equal(await view.locator('.d-ucmd .ucmd').count(), 2);
+      await page.unroute('**/user-commands/dbl/remove');
+      await shot('out-of-order');
 
       // never in the shared transcript: the session page any other viewer gets
       // carries no command text

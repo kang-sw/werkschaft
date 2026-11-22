@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -39,7 +40,7 @@ func (u *usercmdFake) List(replyID string) ([]wsusercmd.Command, string, error) 
 		return nil, "", err
 	}
 	cmds, rev := u.reg.Snapshot(replyID, root)
-	return cmds, rev, nil
+	return cmds, rev + ".t" + strconv.Itoa(len(root)), nil
 }
 
 func (u *usercmdFake) Get(replyID, id string) (wsusercmd.Command, string, bool, error) {
@@ -59,7 +60,10 @@ func (u *usercmdFake) RemoveIf(replyID, id string, rev int64) error {
 	return u.reg.RemoveIf(replyID, root, id, rev)
 }
 
-func (u *usercmdFake) Revision(replyID string) string { return u.reg.Revision(replyID) }
+func (u *usercmdFake) Revision(replyID string) string {
+	root, _ := u.scope()
+	return u.reg.Revision(replyID) + ".t" + strconv.Itoa(len(root))
+}
 
 type usercmdFixture struct {
 	*composerFixture

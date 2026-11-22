@@ -352,7 +352,9 @@ func (r *Registry) Snapshot(reply, root string) ([]Command, string) {
 	return r.listLocked(k), fmt.Sprintf("%s.%d", r.epoch, r.rev[reply])
 }
 
-// Get returns one command. It reads memory only.
+// Get returns one command. It reads memory only. A click's read of it is the
+// ordering point against a withdrawal: a removal committed before the read
+// refuses the click, one after it follows the click.
 func (r *Registry) Get(reply, root, id string) (Command, bool) {
 	k := scopeKey{reply, normRoot(root)}
 	r.mu.RLock()
