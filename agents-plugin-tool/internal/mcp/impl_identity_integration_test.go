@@ -513,10 +513,13 @@ func TestImplIdentityMergedLeftoverUnderDifferentProvisionedBranch(t *testing.T)
 		leftoverWork bool
 		vouch        bool
 		want         string
+		// reason is the plan reason the case must give, so a stop for
+		// another cause (or a recreate for another target) fails.
+		reason string
 	}{
-		{name: "merged leftover without vouch stops", want: "stop"},
-		{name: "merged leftover with vouch recreates", vouch: true, want: "recreate"},
-		{name: "unmerged leftover with vouch stops", leftoverWork: true, vouch: true, want: "stop"},
+		{name: "merged leftover without vouch stops", want: "stop", reason: "target implementation branch already exists"},
+		{name: "merged leftover with vouch recreates", vouch: true, want: "recreate", reason: "leftover fully-landed implementation branch"},
+		{name: "unmerged leftover with vouch stops", leftoverWork: true, vouch: true, want: "stop", reason: "target implementation branch already exists"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -563,6 +566,12 @@ func TestImplIdentityMergedLeftoverUnderDifferentProvisionedBranch(t *testing.T)
 			plan := got.Verdict.BranchPlan
 			if plan.Action != tc.want || plan.TargetBranch != canonical || plan.CurrentBranch != provisioned {
 				t.Fatalf("branch plan = %+v, want action %s target %s current %s", plan, tc.want, canonical, provisioned)
+			}
+			if !strings.Contains(plan.Reason, tc.reason) {
+				t.Fatalf("branch plan reason = %q, want it to contain %q", plan.Reason, tc.reason)
+			}
+			if plan.Action == "recreate" && !strings.Contains(plan.Reason, canonical) {
+				t.Fatalf("recreate reason %q must name the leftover %s", plan.Reason, canonical)
 			}
 			// Route resolution is read-only: the leftover keeps its tip.
 			if tip := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", canonical))); tip != leftoverTip {
