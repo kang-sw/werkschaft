@@ -1988,3 +1988,34 @@ func TestHostedEarlyHolderEndReadsTheJobUnderTheLock(t *testing.T) {
 	}
 	<-done
 }
+
+// TestHostedBulkPruneFitsTheTombstoneRoom: a prune that drops many jobs at
+// once (their notices were owed until now) drops no more than the room the
+// pending deletes leave under the job cap, so a failed bulk delete parks at
+// most the cap.
+func TestHostedBulkPruneFitsTheTombstoneRoom(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	fx.store.mu.Lock()
+	fx.store.failDelete = true
+	fx.store.mu.Unlock()
+	fx.h.mu.Lock()
+	for i := 0; i < HostedMaxJobs*3/4; i++ {
+		fx.h.deleting[fmt.Sprintf("exec_parked-%d", i)] = &tombstone{holder: "gone"}
+	}
+	for i := 0; i < HostedMaxJobs*3/2; i++ {
+		id := fmt.Sprintf("exec_finished-%d", i)
+		j := &hostedJob{out: fx.h.rings.NewJob(), done: make(chan struct{})}
+		j.row = HostedJobRow{ID: id, Owner: "lead", State: HostedExited, EndedAt: int64(i + 1)}
+		close(j.done)
+		fx.h.jobs[id] = j
+	}
+	fx.h.mu.Unlock()
+	fx.launchFinished()
+	fx.h.mu.Lock()
+	pending := len(fx.h.deleting)
+	fx.h.mu.Unlock()
+	if pending > HostedMaxJobs {
+		t.Fatalf("%d deletes pending after a failed bulk prune, want at most %d", pending, HostedMaxJobs)
+	}
+}

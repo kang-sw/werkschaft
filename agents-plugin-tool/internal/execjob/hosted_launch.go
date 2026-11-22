@@ -184,7 +184,11 @@ func (h *Hosted) admit(j *hostedJob) error {
 	drop := h.claimLocked()
 	if over := len(h.jobs) - HostedMaxJobs; over > 0 {
 		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
-		for _, old := range finished[:min(over, len(finished))] {
+		// The batch fits the tombstones' room under the job cap, so even a
+		// failed bulk delete parks no more than the cap; jobs left over
+		// go at a later launch.
+		room := max(HostedMaxJobs-len(h.deleting), 0)
+		for _, old := range finished[:min(over, len(finished), room)] {
 			delete(h.jobs, old.row.ID)
 			if h.byHolder[old.row.HolderID] == old {
 				delete(h.byHolder, old.row.HolderID)
