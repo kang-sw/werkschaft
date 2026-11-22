@@ -99,17 +99,14 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 		return toolTextResponse(id, "", err)
 	}
 	cwdArg, _ := args["cwd"].(string)
-	cwd, err := execjob.ResolveWorkingDir(root, cwdArg)
-	if err != nil {
-		return toolTextResponse(id, "", err)
-	}
 	overlay := stringMapArgument(args["env"])
-	environ := execjob.OverlayEnv(s.environ(), overlay)
-	req := execjob.HostedLaunch{Owner: owner, Tool: name, Root: root, Cwd: cwd, Environ: environ, Env: overlay, Async: boolArgument(args["async"])}
-	if stdin, ok := args["stdin"].(string); ok {
-		req.Stdin, req.StdinSet = []byte(stdin), true
-	}
+	var req execjob.HostedLaunch
 	if name == "exec.run" {
+		cwd, err := execjob.ResolveWorkingDir(root, cwdArg)
+		if err != nil {
+			return toolTextResponse(id, "", err)
+		}
+		req = execjob.HostedLaunch{Owner: owner, Tool: name, Root: root, Cwd: cwd, Environ: execjob.OverlayEnv(s.environ(), overlay), Env: overlay}
 		exe, _ := args["exe"].(string)
 		if strings.TrimSpace(exe) == "" {
 			return toolTextResponse(id, "", errors.New("exec.run: exe is required"))
@@ -117,15 +114,16 @@ func (s *Server) callHostedExec(ctx context.Context, id json.RawMessage, name st
 		req.Argv = append([]string{exe}, stringList(args["args"])...)
 		req.Display = displayArgv(req.Argv)
 	} else {
+		// The dashboard composer prepares its launch the same way.
 		line, _ := args["cmd"].(string)
-		if strings.TrimSpace(line) == "" {
-			return toolTextResponse(id, "", errors.New("exec.shell: cmd is required"))
-		}
-		argv, err := execjob.ShellArgv(line, environ)
+		req, err = execjob.ShellLaunch(owner, name, root, cwdArg, line, s.environ(), overlay)
 		if err != nil {
 			return toolTextResponse(id, "", err)
 		}
-		req.Argv, req.Display, req.Command, req.Shell = argv, line, line, argv[0]
+	}
+	req.Async = boolArgument(args["async"])
+	if stdin, ok := args["stdin"].(string); ok {
+		req.Stdin, req.StdinSet = []byte(stdin), true
 	}
 	v, err := jobs.Launch(ctx, s.drainContext().Done(), req)
 	if err != nil {

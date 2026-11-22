@@ -325,6 +325,17 @@ func TestCompanionStdioHandoff(t *testing.T) {
 	expectCompanion(t, stream, want)
 	expectCompanion(t, reconnected, want)
 
+	// A 0.51.0 stdio client's deprecated companion_mode write reaches the
+	// daemon's shells the same way and resets the same way.
+	tune(opts.ConfigHome, `{"key":"dashboard.companion_mode","value":"full"}`)
+	want.Enabled = true
+	expectCompanion(t, stream, want)
+	expectCompanion(t, reconnected, want)
+	tune(opts.ConfigHome, `{"key":"dashboard.companion_mode","reset":true}`)
+	want.Enabled = false
+	expectCompanion(t, stream, want)
+	expectCompanion(t, reconnected, want)
+
 	for _, path := range []string{"/", "/api/config/snapshot"} {
 		req := httptest.NewRequest(http.MethodGet, base+path, nil)
 		req.RemoteAddr = "127.0.0.1:12345"

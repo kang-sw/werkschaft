@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const tick = () => new Promise(setImmediate);
 const { readAssetSource } = require('./asset-source.cjs');
 
-function fixture(cacheLimit = 0) {
+function fixture(cacheLimit = 0, deepHash = '') {
   const go = fs.readFileSync(path.join(__dirname, '../shell_frame_test.go'), 'utf8');
   const harness = go.match(/const shellGlueHarness = `([\s\S]*?)\n`/)[1];
   const js = readAssetSource('wsdashboard', 'dashboard.js');
@@ -52,6 +52,11 @@ function fixture(cacheLimit = 0) {
     cacheSafety(first);
   ` + '\n(function () {\n' + glue + init + `
     first.contentDocument.readyState = 'complete';
+    ${deepHash ? `
+    // The shell page's own address carries a hash, which lands as a
+    // fragment-only src change: the loaded document stays, no load follows.
+    location.hash = ${JSON.stringify(deepHash)};
+    Object.defineProperty(first, 'src', { get: function () { return this._src; }, set: function (v) { this._src = v; } });` : ''}
     shShellInit();
     shOn.head = {html: '', qs: '', pad: 0, top: 40};
     window.testShell = {
@@ -96,13 +101,26 @@ async function answer(c, accepted) {
   decide(accepted);
   await tick();
 }
+// A deep link's hash reaches the already-loaded initial frame as a
+// fragment-only navigation, which fires no load: the frame still hears that it
+// is the shown one, once.
+async function testDeepLinkedInitialFrame() {
+  const c = fixture(0, '#files'), first = c.first;
+  assert.deepEqual(plain(first.got), ['sync', 'settings', 'shown:true']);
+  assert.equal(first.src, '/s/a?frame=1#files');
+  assert.equal(c.window.testShell.current(), first);
+  first.load();
+  assert.equal(first.got.filter(m => m === 'shown:true').length >= 1, true, 'a load that does follow repeats the notice harmlessly');
+}
 async function runBase() {
   const c = fixture(), s = c.window.testShell, first = c.first;
   const pure = fs.readFileSync(path.join(__dirname, '../shell_test.go'), 'utf8').match(/const shellJSCases = `([\s\S]*?)\n`/)[1];
   vm.runInContext(pure, c);
   assert.deepEqual(plain(c.bad), []);
   assert.equal(s.current(), first);
-  assert.deepEqual(plain(first.got), ['sync', 'settings']);
+  // The frame the shell page loaded with already finished loading, so no load
+  // event will tell it that it is the shown one: the shell does.
+  assert.deepEqual(plain(first.got), ['sync', 'settings', 'shown:true']);
   const beforeHead = c.renameChecks;
   c.from(first.contentWindow, { wsShell: 'head', html: '<b>a</b>', qs: '', pad: 0, top: 40 });
   assert.deepEqual(plain(c.log), ['swap:head:<b>a</b>']);
@@ -417,6 +435,7 @@ const cases = {
   'repick of the pending destination keeps its iframe': testPendingRepick,
   'header handoff waits for load and head in either order': testHeaderReadiness,
   'headerless destinations have a bounded and cancellable fallback': testHeaderFallback,
+  'a deep-linked, already loaded initial frame hears that it is shown': testDeepLinkedInitialFrame,
   'fresh frames, same-session routes and stale events': runBase,
   'Stay restores Back/Forward history and stale decisions cannot navigate': testHistoryCancellation,
   'rapid picks wait for the save and confirm only their current destination': testRapidPickAndDelayedSave,

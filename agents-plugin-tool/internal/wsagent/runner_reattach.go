@@ -29,7 +29,7 @@ func (c *conv) reattach() {
 	// skips its config reads too).
 	def := Profile{Backend: rec.Backend, Lead: rec.Lead}
 	if !c.crossHarnessRejoin {
-		if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
+		if c.r.lifecycle(rec.Backend).NativeChildren && rec.ResolvedDefinition != nil {
 			def = *rec.ResolvedDefinition
 		} else if rp, err := c.r.resolve(rec.Profile, rec.Root); err == nil && rp.Definition.Backend == rec.Backend {
 			// Best-effort mapping for a legacy held process is not evidence of
@@ -244,7 +244,7 @@ func (c *conv) replayDone(lost bool) {
 	// before it takes input; any other restart waits for its usual idle
 	// point, as before a rejoin. A failed restart leaves no process: what
 	// is held then starts one, as with no process at all.
-	if c.mcpStale && c.restartIfDue() {
+	if (c.mcpStale || c.cutoverStoreGone()) && c.restartIfDue() {
 		return
 	}
 	if !c.turn {

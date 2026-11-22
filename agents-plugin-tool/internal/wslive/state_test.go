@@ -1085,3 +1085,57 @@ func TestSubagentContextScaleClearsThresholdsWithANewWindow(t *testing.T) {
 		t.Fatalf("a cleared scale still names its thresholds: %s", raw)
 	}
 }
+
+// A Pi agent event is authoritative for the compaction state, as for Holding:
+// the flag clears, the count is bounded, an unknown origin is dropped, a
+// finished row keeps its count and origin across a seed but not the flag, and
+// the lead takes none of them.
+func TestAgentCompactionStateRoundTrip(t *testing.T) {
+	st := NewState(ownerKey)
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", AgentKind: AgentKindPi, Status: StatusRunning,
+		Compacting: true, Compactions: 2, CompactOrigin: CompactOriginAuto}, 1_000)
+	a := st.Snapshot(1_100).Agents[0]
+	if !a.Compacting || a.Compactions != 2 || a.CompactOrigin != CompactOriginAuto {
+		t.Fatalf("running row = %+v", a)
+	}
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", AgentKind: AgentKindPi, Status: StatusRunning,
+		Compactions: 3, CompactOrigin: "bogus"}, 1_200)
+	if a := st.Snapshot(1_300).Agents[0]; a.Compacting || a.Compactions != 3 || a.CompactOrigin != "" {
+		t.Fatalf("authoritative update = %+v", a)
+	}
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", AgentKind: AgentKindPi, Status: StatusRunning,
+		Compactions: MaxCompactions * 2, CompactOrigin: CompactOriginNative}, 1_400)
+	if a := st.Snapshot(1_500).Agents[0]; a.Compactions != MaxCompactions || a.CompactOrigin != CompactOriginNative {
+		t.Fatalf("clamped = %+v", a)
+	}
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", AgentKind: AgentKindPi, Status: StatusDone,
+		Compacting: true, Compactions: 4, CompactOrigin: CompactOriginManual}, 1_600)
+	snap := st.Snapshot(1_700)
+	if a := snap.Agents[0]; a.Compactions != 4 || a.CompactOrigin != CompactOriginManual {
+		t.Fatalf("finished row = %+v", a)
+	}
+
+	raw, _ := json.Marshal(snap)
+	var back Snapshot
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	seeded := NewState(ownerKey)
+	back.Agents[0].Compacting = true
+	seeded.SeedFinished(back)
+	if got := seeded.Snapshot(1_800).Agents[0]; got.Compacting || got.Compactions != 4 || got.CompactOrigin != CompactOriginManual {
+		t.Fatalf("seeded finished row = %+v", got)
+	}
+
+	if _, err := st.Apply(Event{Kind: KindAgent, Compacting: true}, 1_900); err == nil {
+		t.Fatal("the lead took a compacting flag")
+	}
+
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a2", AgentKind: AgentKindPi, Status: StatusRunning}, 2_000)
+	raw, _ = json.Marshal(st.Snapshot(2_100).Agents[1])
+	for _, field := range []string{"compacting", "compactions", "compactOrigin"} {
+		if strings.Contains(string(raw), field) {
+			t.Fatalf("a row with no compaction carries %s: %s", field, raw)
+		}
+	}
+}

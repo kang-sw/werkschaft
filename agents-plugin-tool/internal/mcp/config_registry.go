@@ -799,6 +799,9 @@ func normalizeTuneScalar(entry configKeyEntry, value string, hasValue bool) (str
 		if !hasValue {
 			return "", fmt.Errorf("config.tune: %s value is required unless reset is true", key)
 		}
+		if canonical, legacy := deprecatedTuneValue(key, value); legacy {
+			value = canonical
+		}
 		normalized, err := entry.Declared.normalize(value)
 		if err != nil {
 			return "", fmt.Errorf("config.tune: %s value %w", key, err)

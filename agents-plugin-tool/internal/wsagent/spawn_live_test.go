@@ -20,7 +20,7 @@ func TestAgentSpawnHostedWorkerRows(t *testing.T) {
 	host := &summarySnapshotHost{}
 	h.opts.LiveHost = host
 	backend := &fakeBackend{}
-	h.opts.Backends[BackendCodex] = BackendRegistration{Backend: backend, LeadProfile: LeadProfileCodex, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendCodex)}
+	h.opts.Backends[BackendCodex] = BackendRegistration{Backend: backend, Permission: builtinPermission(BackendCodex), Lifecycle: builtinLifecycle(BackendCodex), LeadProfile: LeadProfileCodex, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendCodex)}
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "codex-small", BackendCodex, "high"); err != nil {
 		t.Fatal(err)

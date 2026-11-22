@@ -95,6 +95,12 @@ type BackendRegistration struct {
 	// Only a harness that makes model requests itself, for the signed-in
 	// user, sets it; a harness that brings its own login never does.
 	ProviderCredentials bool
+	// Permission relates the backend's native permission modes to the common
+	// levels; Lifecycle declares how its hosted sessions start, run, and end
+	// (backend_policy.go). Both are runtime-only, and their zero values ask
+	// for no special behavior.
+	Permission PermissionPolicy
+	Lifecycle  LifecyclePolicy
 }
 
 // PlaybookTerminology holds static native-tool idioms. Model, effort, and
@@ -208,6 +214,7 @@ func cloneBackendRegistration(reg BackendRegistration) BackendRegistration {
 	reg.PermissionModes = slices.Clone(reg.PermissionModes)
 	reg.PermissionLevels = slices.Clone(reg.PermissionLevels)
 	reg.DirectTools = slices.Clone(reg.DirectTools)
+	reg.Permission = clonePermissionPolicy(reg.Permission)
 	reg.Profiles = cloneBuiltinProfiles(reg.Profiles)
 	if reg.OneShot != nil {
 		oneShot := *reg.OneShot

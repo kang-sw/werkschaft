@@ -72,7 +72,7 @@ func companionModalRows(catalog []byte) (string, error) {
 
 func IsCompanionConfigKey(key string) bool {
 	switch key {
-	case CompanionEnabledKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
+	case CompanionEnabledKey, CompanionModeKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
 		CompanionOutfitKey, CompanionHairKey, CompanionEyesKey, CompanionAttachmentsKey, CompanionPaletteKey,
 		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey:
 		return true

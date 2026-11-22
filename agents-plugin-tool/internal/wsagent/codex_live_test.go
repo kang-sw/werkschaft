@@ -43,7 +43,7 @@ func TestCodexInstalledAcceptance(t *testing.T) {
 	manager.AddSink(capture)
 	h.opts.Holders = capture
 	h.opts.Backends[BackendCodex] = BackendRegistration{
-		Backend: CodexBackend{Command: command}, LeadProfile: LeadProfileCodex,
+		Backend: CodexBackend{Command: command}, Permission: builtinPermission(BackendCodex), Lifecycle: builtinLifecycle(BackendCodex), LeadProfile: LeadProfileCodex,
 		PermissionModes: CodexPermissionModes, Catalog: CodexCatalog(),
 	}
 	h.opts.WSMCP = func(root string) (MCPCommand, error) {

@@ -133,7 +133,7 @@ func newClaudeMapper(spec StartSpec) *claudeMapper {
 	m := &claudeMapper{spec: spec, now: time.Now, batches: newBatchTracker("c"), tasks: map[string]bool{}, approvals: map[string]string{},
 		rejected: map[string]int64{}, spawns: map[string]claudeSpawn{}, subs: map[string]*claudeSub{}, wakeTasks: map[string]claudeWakeTask{}, levers: map[string]bool{}}
 	m.batches.callIDs = true
-	if u := spec.restoredClaudeUsage; u != nil && u.LimitsAsOf > 0 {
+	if u := spec.restoredUsage; u != nil && u.LimitsAsOf > 0 {
 		m.limits, m.limitsAsOf = u.Limits, u.LimitsAsOf
 	}
 	return m

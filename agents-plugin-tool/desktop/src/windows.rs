@@ -11,14 +11,14 @@ use webview2_com::{
 use windows::{
     core::{w, Interface, BOOL, HRESULT, HSTRING, PWSTR},
     Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyState, VIRTUAL_KEY, VK_0, VK_ADD, VK_CONTROL, VK_F12, VK_I, VK_LWIN, VK_MENU,
-        VK_OEM_MINUS, VK_OEM_PLUS, VK_R, VK_RWIN, VK_SHIFT, VK_SUBTRACT,
+        GetKeyState, VIRTUAL_KEY, VK_0, VK_ADD, VK_CONTROL, VK_F10, VK_F12, VK_I, VK_LWIN, VK_M,
+        VK_MENU, VK_OEM_MINUS, VK_OEM_PLUS, VK_R, VK_RWIN, VK_SHIFT, VK_SUBTRACT,
     },
 };
 
 use crate::{
-    accelerator, close, menu_action, navigation, notify, shell::Connection, updates,
-    webview_setup_failed,
+    accelerator, close, menu_action, navigation, notify, shell::Connection, strip, strip_msg,
+    updates, webview_setup_failed,
 };
 
 pub fn copy_text(window: &WebviewWindow, text: &str) -> bool {
@@ -89,7 +89,7 @@ fn runtime_outdated(window: &WebviewWindow) {
 
 // Tauri runs main-thread dispatch inline on the UI thread. Dispatch from a
 // worker so a WebView2 event has returned before shell code can rebuild it.
-fn queue(window: &WebviewWindow, action: impl FnOnce(WebviewWindow) + Send + 'static) {
+pub(crate) fn queue(window: &WebviewWindow, action: impl FnOnce(WebviewWindow) + Send + 'static) {
     let window = window.clone();
     std::thread::spawn(move || {
         let target = window.clone();
@@ -185,8 +185,11 @@ unsafe fn install_hooks(
     let epoch = failed.window_epoch();
     let update_bridge = window.try_state::<Arc<updates::Controller>>().is_some();
     let notify_bridge = window.try_state::<Arc<notify::Notifier>>().is_some();
-    if update_bridge || notify_bridge {
+    // The theme message needs the strip, which exists only on the main window.
+    let theme_bridge = window.app_handle().try_state::<strip::Strips>().is_some();
+    if update_bridge || notify_bridge || theme_bridge {
         let target = window.clone();
+        let themes = connection.clone();
         // The core event receives the top-level document only. Frame messages
         // have a separate WebView2 event, which the shell does not register.
         webview.add_WebMessageReceived(
@@ -196,20 +199,32 @@ unsafe fn install_hooks(
                     if args.TryGetWebMessageAsString(&mut raw).is_err() {
                         return Ok(());
                     }
+                    // No bridge accepts more than notify's cap, so a longer
+                    // payload is dropped before it is copied into a String.
+                    // (UTF-16 units never outnumber the UTF-8 bytes.)
+                    if raw.as_wide().len() > notify::MAX_MESSAGE {
+                        windows::Win32::System::Com::CoTaskMemFree(Some(raw.0 as *const _));
+                        return Ok(());
+                    }
                     let message = take_pwstr(raw);
+                    let theme = theme_bridge
+                        && message.starts_with(strip_msg::THEME_PREFIX)
+                        && message.len() <= strip_msg::THEME_MESSAGE_MAX;
                     let update = update_bridge
                         && message.starts_with("werkschaft:update:")
                         && message.len() <= 32;
                     let notice = notify_bridge
                         && message.starts_with(notify::PREFIX)
                         && message.len() <= notify::MAX_MESSAGE;
-                    if !update && !notice {
+                    if !update && !notice && !theme {
                         return Ok(());
                     }
                     let mut raw = PWSTR::null();
                     args.Source(&mut raw)?;
                     if let Ok(source) = url::Url::parse(&take_pwstr(raw)) {
-                        if update {
+                        if theme {
+                            strip::receive_theme(&target, &themes, epoch, &source, &message);
+                        } else if update {
                             updates::receive(target.clone(), epoch, true, source, &message);
                         } else {
                             notify::receive(target.clone(), epoch, source, &message);
@@ -322,26 +337,80 @@ unsafe fn install_document_guard(
     )
 }
 
-unsafe fn install_accelerators(
+pub(crate) unsafe fn install_accelerators(
     controller: &ICoreWebView2Controller,
     window: WebviewWindow,
     connection: Arc<Connection>,
 ) -> windows::core::Result<()> {
     let epoch = connection.window_epoch();
     let mut token = 0;
+    let mut alt = accelerator::AltTap::default();
     controller.add_AcceleratorKeyPressed(
         &AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
             let Some(args) = args else { return Ok(()) };
             let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
             args.KeyEventKind(&mut kind)?;
-            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN {
+            let down = kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
+                || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN;
+            let up = kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP
+                || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_UP;
+            if !down && !up {
                 return Ok(());
             }
             let mut raw = 0;
             args.VirtualKey(&mut raw)?;
-            let key = match VIRTUAL_KEY(raw as u16) {
+            let vk = VIRTUAL_KEY(raw as u16);
+            let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
+            args.PhysicalKeyStatus(&mut status)?;
+            let repeat = status.WasKeyDown.as_bool();
+            let (ctrl, shift) = (key_down(VK_CONTROL), key_down(VK_SHIFT));
+
+            // The main window has no menu bar to answer F10 and Alt: the strip
+            // opens the menu instead.
+            if strip::active(window.app_handle(), &window) {
+                let opened = if vk == VK_MENU {
+                    if down {
+                        alt.alt_down(repeat);
+                        false
+                    } else {
+                        alt.alt_up()
+                    }
+                } else {
+                    if down {
+                        alt.other_key();
+                    }
+                    false
+                };
+                let menu = if opened {
+                    Some(accelerator::MENUS[0])
+                } else if down && vk == VK_F10 && !ctrl && !shift && !key_down(VK_MENU) {
+                    Some(accelerator::MENUS[0])
+                } else if down && key_down(VK_MENU) && !ctrl && !shift && !repeat {
+                    // VK_A..VK_Z are the letters' ASCII codes.
+                    (0x41..=0x5A)
+                        .contains(&vk.0)
+                        .then(|| char::from(vk.0 as u8))
+                        .and_then(accelerator::mnemonic_menu)
+                } else {
+                    None
+                };
+                if let Some(menu) = menu {
+                    args.SetHandled(true)?;
+                    strip::open_menu(window.app_handle(), menu);
+                    return Ok(());
+                }
+                if vk == VK_MENU {
+                    return Ok(());
+                }
+            }
+            if !down {
+                return Ok(());
+            }
+
+            let key = match vk {
                 VK_R => accelerator::Key::R,
                 VK_I => accelerator::Key::I,
+                VK_M => accelerator::Key::M,
                 VK_F12 => accelerator::Key::F12,
                 VK_0 => accelerator::Key::Zero,
                 VK_OEM_PLUS | VK_ADD => accelerator::Key::Plus,
@@ -351,16 +420,16 @@ unsafe fn install_accelerators(
             if [VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(key_down) {
                 return Ok(());
             }
-            if let Some(id) = accelerator::menu_id(key, key_down(VK_CONTROL), key_down(VK_SHIFT)) {
+            if let Some(id) = accelerator::menu_id(key, ctrl, shift) {
                 args.SetHandled(true)?;
-                let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
-                args.PhysicalKeyStatus(&mut status)?;
-                if !status.WasKeyDown.as_bool() {
+                if !repeat {
                     // WebView2 blocks the browser process during this callback.
                     // Dispatch after returning so Retry can safely navigate.
                     let connection = connection.clone();
                     queue(&window, move |target| {
-                        if !close::checks_draft(target.label()) || connection.window_epoch() == epoch {
+                        if !close::checks_draft(target.label())
+                            || connection.window_epoch() == epoch
+                        {
                             menu_action(target, &connection, id);
                         }
                     });

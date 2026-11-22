@@ -34,7 +34,9 @@ func SpawnAgentEvent(st State, key string) wslive.Event {
 		ContextCompaction: cloneUsageCompaction(st.ContextCompaction),
 		ActiveMs:          st.ActiveMs,
 		Holding:           st.Status != StatusClosed && st.Holding,
-		Alive:             st.Status != StatusClosed && st.Process}
+		Alive:             st.Status != StatusClosed && st.Process,
+		Compacting:        st.Status != StatusClosed && st.Compacting,
+		Compactions:       st.Compactions, CompactOrigin: st.CompactOrigin}
 	if st.Status == StatusRunning {
 		ev.TurnStartedAt = st.TurnStartedAt
 	}
@@ -162,8 +164,10 @@ func (c *conv) seedSpawnRows() {
 		kind = ParentLead
 	}
 	known := map[string]bool{}
+	rows := map[string]wslive.Agent{}
 	for _, a := range c.live.st.Snapshot(c.r.opts.Now().UnixMilli()).Agents {
 		known[a.ID] = true
+		rows[a.ID] = a
 	}
 	// Walk only the indexed descendants; child events never list all
 	// conversations or read every conversation's inbox.
@@ -176,6 +180,19 @@ func (c *conv) seedSpawnRows() {
 		}
 		rec, ok := c.r.recordOf(st.ID)
 		if ok {
+			// A restarted runner counts compactions from zero: the row this
+			// snapshot restored still holds the count, so take it back. A
+			// child with no conversation in this run (closed before the
+			// restart) has no count of its own to publish, and the zero would
+			// overwrite the row's: it republishes the row's.
+			if row, held := rows["pi:"+st.ID]; held && row.Compactions > st.Compactions {
+				if child := c.r.conv(st.ID); child != nil {
+					child.seedCompactions(row.Compactions, row.CompactOrigin)
+					st.Compactions, st.CompactOrigin = child.compactionCount()
+				} else {
+					st.Compactions, st.CompactOrigin = row.Compactions, row.CompactOrigin
+				}
+			}
 			for _, ev := range SpawnAgentEvents(st, rec.WSKey) {
 				c.live.applyQuiet(ev)
 			}

@@ -73,6 +73,10 @@ func pageFuncs(lang string, icons map[string]bool) template.FuncMap {
 		"batchNums":        func(b wslive.ToolBatch) []batchNum { return batchNums(lang, b) },
 		"batchArgs":        batchArgs,
 		"argsList":         batchArgsList,
+		"toolsHasCallIDs":  toolsHasCallIDs,
+		"auditCallRows":    func(s *wslive.ToolSummary) auditCallGroup { return buildAuditCallRows(lang, s) },
+		"auditTools":       makeAuditToolsCtx,
+		"atRFC":            formatAtRFC,
 		"phaseWord":        func(phase string) string { return phaseWord(lang, phase) },
 		"ctxBoundaryTitle": func(kind, arg string) string { return ctxBoundaryTitle(lang, kind, arg) },
 		// Retained for the SHA256-pinned historical template fixture (testdata/pre_effects/dashboard.tmpl).
@@ -340,4 +344,148 @@ func batchArgsList(b wslive.ToolBatch) string {
 		lines[i] = strings.TrimSpace(toolName(c.Name) + " " + c.ArgsPreview)
 	}
 	return strings.Join(lines, "\n")
+}
+
+type auditCallRow struct {
+	ID            string
+	Name          string
+	ShortName     string
+	ArgsPreview   string
+	Failed        bool
+	DurationMs    int64
+	Duration      string
+	DurationTitle string
+	IsSummary     bool
+}
+
+type auditCallGroup struct {
+	Visible     []auditCallRow
+	Hidden      []auditCallRow
+	HiddenCount int
+}
+
+type auditToolsCtx struct {
+	Entry string
+	AtUTC string
+	Tools *wslive.ToolSummary
+	Live  bool
+}
+
+func formatAtRFC(ms int64, rfc string) string {
+	if rfc != "" {
+		return rfc
+	}
+	if ms <= 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).UTC().Format(time.RFC3339Nano)
+}
+
+func makeAuditToolsCtx(entry string, at int64, atRFC string, tools *wslive.ToolSummary, live bool) auditToolsCtx {
+	return auditToolsCtx{Entry: entry, AtUTC: formatAtRFC(at, atRFC), Tools: tools, Live: live}
+}
+
+// toolsHasCallIDs reports whether any carried call carries an audit call ID.
+// When false, the template preserves the legacy collapsed <details class="toolsline"> pill.
+func toolsHasCallIDs(s *wslive.ToolSummary) bool {
+	if s == nil {
+		return false
+	}
+	for _, b := range s.Batches {
+		for _, c := range b.CallArgs {
+			if c.ID != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+const auditVisibleCallCap = 3
+
+func buildAuditCallRows(lang string, s *wslive.ToolSummary) auditCallGroup {
+	var group auditCallGroup
+	if s == nil {
+		return group
+	}
+	for _, b := range s.Batches {
+		if len(b.CallArgs) > 0 {
+			allFailed := b.Failed > 0 && b.Failed >= b.Calls
+			singleDur := int64(0)
+			if b.Calls == 1 && b.DurationMs > 0 {
+				singleDur = b.DurationMs
+			}
+			for _, c := range b.CallArgs {
+				row := auditCallRow{
+					ID:          c.ID,
+					Name:        c.Name,
+					ShortName:   toolName(c.Name),
+					ArgsPreview: c.ArgsPreview,
+					Failed:      allFailed,
+				}
+				if singleDur > 0 {
+					row.DurationMs = singleDur
+					row.Duration = batchSpanText(singleDur)
+					row.DurationTitle = wsi18n.T(lang, "batch.duration", commafy(singleDur))
+				}
+				if c.ID != "" && len(group.Visible) < auditVisibleCallCap {
+					group.Visible = append(group.Visible, row)
+				} else {
+					if c.ID == "" {
+						row.IsSummary = true
+					}
+					group.Hidden = append(group.Hidden, row)
+					group.HiddenCount++
+				}
+			}
+			if rest := b.Calls - len(b.CallArgs); rest > 0 {
+				label := wsi18n.Plural(lang, "batch.calls", rest)
+				group.Hidden = append(group.Hidden, auditCallRow{
+					Name:      label,
+					ShortName: label,
+					IsSummary: true,
+				})
+				group.HiddenCount += rest
+			}
+			continue
+		}
+		if b.Calls > 0 {
+			names := b.Names
+			if len(b.Tools) > 0 {
+				names = make([]string, len(b.Tools))
+				for i, t := range b.Tools {
+					names[i] = toolName(t.Name)
+				}
+			} else {
+				cp := make([]string, len(b.Names))
+				for i, n := range b.Names {
+					cp[i] = toolName(n)
+				}
+				names = cp
+			}
+			short := strings.Join(names, ", ")
+			if short == "" {
+				short = wsi18n.Plural(lang, "batch.calls", b.Calls)
+			} else {
+				short = short + " · " + wsi18n.Plural(lang, "batch.calls", b.Calls)
+			}
+			group.Hidden = append(group.Hidden, auditCallRow{
+				Name:      short,
+				ShortName: short,
+				Failed:    b.Failed > 0 && b.Failed >= b.Calls,
+				IsSummary: true,
+			})
+			group.HiddenCount += b.Calls
+		}
+	}
+	if s.BatchesOmitted > 0 {
+		label := wsi18n.T(lang, "tools.more", s.BatchesOmitted)
+		group.Hidden = append(group.Hidden, auditCallRow{
+			Name:      label,
+			ShortName: label,
+			IsSummary: true,
+		})
+		group.HiddenCount += s.BatchesOmitted
+	}
+	return group
 }

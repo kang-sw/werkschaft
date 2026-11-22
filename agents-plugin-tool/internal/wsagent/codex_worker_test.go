@@ -141,7 +141,7 @@ func TestCodexWorkerLaunchAuthorityAndApproval(t *testing.T) {
 			t.Cleanup(func() { environ = restore })
 			h, got := agentHarness(t, nil)
 			h.runner.Close()
-			h.config.Backends[BackendCodex] = BackendRegistration{Backend: CodexBackend{Command: exe}, LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes, Catalog: CodexCatalog(), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendCodex), WorkerHTTPMCP: true, WorkerAutoApprove: true}
+			h.config.Backends[BackendCodex] = BackendRegistration{Backend: CodexBackend{Command: exe}, Permission: builtinPermission(BackendCodex), Lifecycle: builtinLifecycle(BackendCodex), LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes, Catalog: CodexCatalog(), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendCodex), WorkerHTTPMCP: true, WorkerAutoApprove: true}
 			var mu sync.Mutex
 			var hellos []wsdashboard.ProxyHello
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

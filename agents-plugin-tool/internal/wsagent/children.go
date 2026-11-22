@@ -69,6 +69,9 @@ const MaxSpawnDepth = 4
 
 // PiTierHarness is the agents.tier harness bucket a Pi spawn's tier
 // resolves in, alone.
+//
+// Retained name: "pi" is the persisted config bucket key of that tier, which
+// existing config files hold; registration data does not rename it.
 const PiTierHarness = "pi"
 
 // tokenRoute is the id segment of the token route. It holds a dash, which
@@ -368,7 +371,7 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	r.mu.Lock()
 	rec, closed := r.closed[id]
 	r.mu.Unlock()
-	if !closed || rec.ClosedAt == "" || rec.Lead || rec.Parent == nil || rec.Backend != BackendPi {
+	if !closed || rec.ClosedAt == "" || rec.Lead || rec.Parent == nil || !r.lifecycle(rec.Backend).NativeChildren {
 		return nil, err
 	}
 	// A send authorized before its caller closed may have waited behind
@@ -997,7 +1000,7 @@ func (r *Runner) descendants(id string) []string {
 		c.mu.Lock()
 		p, backend, profile := c.rec.Parent, c.rec.Backend, c.rec.Profile
 		c.mu.Unlock()
-		if p != nil && (p.Kind == ParentConversation || p.Kind == ParentLead && (backend == BackendPi || isAgentWorkerProfile(profile))) {
+		if p != nil && (p.Kind == ParentConversation || p.Kind == ParentLead && (r.lifecycle(backend).NativeChildren || isAgentWorkerProfile(profile))) {
 			byParent[p.ReplyID] = append(byParent[p.ReplyID], cid)
 		}
 	}

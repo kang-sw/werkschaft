@@ -82,7 +82,7 @@ func (r *Runner) Send(id, text string) (State, error) {
 	if err != errClosed {
 		return st, err
 	}
-	if rec, ok := r.recordOf(id); ok && !rec.Lead && rec.Parent != nil && rec.Backend == BackendPi {
+	if rec, ok := r.recordOf(id); ok && !rec.Lead && rec.Parent != nil && r.lifecycle(rec.Backend).NativeChildren {
 		// A close may land between the open check and the inbox write.
 		// Once that close is done (resumeMu), a second try reopens it as
 		// any closed Pi child.
@@ -117,7 +117,7 @@ func (r *Runner) send(id, text string) (State, error) {
 		c.mu.Unlock()
 		return State{}, err
 	}
-	steer := c.rec.Parent != nil && c.rec.Backend == BackendPi && !c.rec.Lead
+	steer := c.rec.Parent != nil && r.lifecycle(c.rec.Backend).NativeChildren && !c.rec.Lead
 	_, _, err = wsinbox.Send(c.inbox, wsinbox.Entry{Parts: []string{text}, Steer: steer}, r.opts.Now())
 	if err == nil {
 		// After the write, under the lock kick drains with: a turn whose

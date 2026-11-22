@@ -38,6 +38,9 @@
   }
   function sendMessage() {
     if (restoring || draftStore && !draftLoaded) return;
+    // A first-character `!` is a command for the daemon's composer-exec
+    // route, taken before any trimming or message assembly.
+    if (cexecSend()) return;
     var inline = !cmdSel && window.WsCapsules && window.WsCapsules.command(ctext);
     // A command waits until the queued messages before it are held, so the
     // inbox keeps the order typed.

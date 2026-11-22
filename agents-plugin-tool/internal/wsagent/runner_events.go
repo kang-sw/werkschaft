@@ -193,7 +193,7 @@ func (c *conv) handle(ev Event) {
 		// Codex reports its effective defaults even when the launch omitted a
 		// permission choice. Keep that report in activeMode for projection, but
 		// do not turn an observation into a persisted next-launch override.
-		legacyCodexOmission := rec.Backend == BackendCodex && rec.PermissionMode == ""
+		omittedMode := c.r.permissionPolicy(rec.Backend).LiveModeProjection && rec.PermissionMode == ""
 		if !rec.Lead && c.cutoverSupport() != nil {
 			if !quiet && !c.replaying {
 				c.holdWorkerCutoverMode(ev.PermissionMode)
@@ -211,7 +211,7 @@ func (c *conv) handle(ev Event) {
 			}
 			break
 		}
-		if rec.Lead && !quiet && !c.dirtyMode && !rec.agyBypass() && !legacyCodexOmission && ev.PermissionMode != rec.PermissionMode && slices.Contains(permissionModes(rec.Backend, []map[string]BackendRegistration{c.r.opts.Backends}), ev.PermissionMode) {
+		if rec.Lead && !quiet && !c.dirtyMode && !rec.agyBypass() && !omittedMode && ev.PermissionMode != rec.PermissionMode && slices.Contains(permissionModes(rec.Backend, []map[string]BackendRegistration{c.r.opts.Backends}), ev.PermissionMode) {
 			c.update(func(rec *Record) { rec.PermissionMode, rec.AgyBypass = ev.PermissionMode, false })
 			c.changed(quiet)
 		}
@@ -236,6 +236,9 @@ func (c *conv) handle(ev Event) {
 			c.compactCommand = false
 			c.stopCompactWatchdog()
 			settledCompact = true
+		}
+		if settledCompact {
+			c.publishCompaction(false)
 		}
 		if !quiet && c.compacting {
 			c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
@@ -364,6 +367,7 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 	// The cutover's instruction goes once the turn is over: a steer into the
 	// running turn would replace it.
 	defer c.sendCutoverInstruction()
+	defer c.publishCompaction(false)
 	compactCommand, wasCompacting := c.compactCommand, c.compacting
 	if !quiet {
 		c.compactCommand = false
@@ -436,7 +440,7 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 			status = TurnFailed
 		}
 		c.settleTurn(status, turnErr, c.turnMark)
-		if c.rec.Backend == BackendAgy && c.r.opts.AgyActivity != nil {
+		if c.r.lifecycle(c.rec.Backend).TurnActivity && c.r.opts.AgyActivity != nil {
 			c.r.opts.AgyActivity()
 		}
 	}
@@ -721,6 +725,8 @@ func (c *conv) processExited() {
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
+	c.compactOrigin = ""
+	c.publishCompaction(false)
 	c.compactResumeInternal = false
 	c.compactUsageFresh = false
 	c.stopCompactWatchdog()
@@ -933,6 +939,8 @@ func (c *conv) stopProcess(reason string) {
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 	}
 	c.compactPending, c.compactCommand, c.compactResume = nil, false, false
+	c.compactOrigin = ""
+	c.publishCompaction(false)
 	c.compactResumeInternal = false
 	c.compactUsageFresh = false
 	c.stopCompactWatchdog()

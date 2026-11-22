@@ -412,6 +412,13 @@ type Agent struct {
 	// Each is absent while unknown or unresolved.
 	ContextWindow     int64            `json:"contextWindow,omitempty"`
 	ContextCompaction *UsageCompaction `json:"contextCompaction,omitempty"`
+	// Compacting is set while the subagent's compaction is queued or running;
+	// Compactions counts the ones it completed in its runner's life, and
+	// CompactOrigin names the latest's origin (CompactOriginAuto, Manual or
+	// Native). Each is absent while zero or unknown.
+	Compacting    bool   `json:"compacting,omitempty"`
+	Compactions   int    `json:"compactions,omitempty"`
+	CompactOrigin string `json:"compactOrigin,omitempty"`
 	// BackgroundTasks counts background commands the subagent's harness is
 	// still running after its turn ended; absent when zero.
 	BackgroundTasks int `json:"backgroundTasks,omitempty"`

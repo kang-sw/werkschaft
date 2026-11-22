@@ -195,6 +195,17 @@ func (h *Hosted) Tail(owner, id string, max int) (HostedView, Slice, error) {
 	return h.view(j, 0), j.out.Tail(StreamCombined, max), nil
 }
 
+// Retained returns the whole retained combined output of owner's job id,
+// not the preview's last bytes: Start is where the ring's retention begins
+// (nonzero once earlier output was evicted).
+func (h *Hosted) Retained(owner, id string) (HostedView, Slice, error) {
+	j, err := h.owned(owner, id)
+	if err != nil {
+		return HostedView{}, Slice{}, err
+	}
+	return h.view(j, 0), j.out.Retained(StreamCombined), nil
+}
+
 // List returns owner's jobs: the running ones, newest first, then the
 // finished ones, last ended first, HostedListMax at most, and how many
 // more there were.

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Werkschaft</title>
+<link rel="stylesheet" href="strip.css">
+<div class="strip" id="strip">
+  <div class="app"><img src="strip-icon.png" alt=""><span class="title" id="title">Werkschaft</span></div>
+  <div class="menus">
+    <button class="menu" tabindex="-1" data-menu="File">File</button><button class="menu" tabindex="-1" data-menu="Edit">Edit</button><button class="menu" tabindex="-1" data-menu="Window">Window</button><button class="menu" tabindex="-1" data-menu="Help">Help</button><button class="menu" tabindex="-1" data-menu="Connection">Connection</button><button class="menu" tabindex="-1" data-menu="View">View</button>
+  </div>
+  <div class="drag"></div>
+  <div class="caps">
+    <button class="cap min" tabindex="-1" data-cap="strip_minimize" aria-label="Minimize"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+    <button class="cap max" tabindex="-1" data-cap="strip_toggle_maximize" aria-label="Maximize"><svg class="maximize" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9"/></svg><svg class="restore" viewBox="0 0 10 10"><path d="M2.5 2.5V.5h7v7h-2"/><rect x=".5" y="2.5" width="7" height="7"/></svg></button>
+    <button class="cap close" tabindex="-1" data-cap="strip_close" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" shape-rendering="geometricPrecision"/></svg></button>
+  </div>
+</div>
+<script src="strip.js"></script>
+</html>

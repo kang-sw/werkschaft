@@ -16,7 +16,9 @@ import (
 )
 
 // The credential file (storage type 5, a plain file): one JSON document in
-// the per-user cache root, never in a project tree, owner-only (POSIX mode
+// the dashboard daemon's state directory under the per-user cache root (the
+// directory the v0.51.0 file preview already refuses, so a rolled-back
+// daemon cannot show it), never in a project tree, owner-only (POSIX mode
 // 0600; on Windows a protected DACL granting the current user alone). It is
 // a file, not a row in the daemon's SQLite stores, because the offline CLI
 // writes it with no daemon running, and so that nothing which copies those
@@ -35,10 +37,16 @@ import (
 // whose schema_version is newer than this binary's is read for the entries
 // it understands and never rewritten.
 const (
-	// FileName is the credential file's name, in the cache root's auth
-	// directory (DefaultPath).
-	FileName      = "credentials.json"
-	dirName       = "auth"
+	// FileName is the credential file's name, in the auth directory of the
+	// dashboard state directory (DefaultPath).
+	FileName = "credentials.json"
+	dirName  = "auth"
+	// daemonDirName is the dashboard daemon's state directory under the
+	// cache root (wsdashboard's dirName, which a test pins equal). The
+	// credential directory lives under it because v0.51.0's file preview
+	// denies that whole directory (its deny set holds the daemon directory),
+	// while a path beside it is readable by that release after a rollback.
+	daemonDirName = "dashboard"
 	schemaVersion = 1
 	// maxKeyBytes bounds an API key; real keys are well under it.
 	maxKeyBytes = 4096
@@ -51,7 +59,62 @@ func DefaultPath(cacheHome string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, dirName, FileName), nil
+	return filepath.Join(root, daemonDirName, dirName, FileName), nil
+}
+
+// legacyPath is where a pre-release build kept the file, beside the daemon
+// directory, for the default path at path ("" for any other path). v0.51.0's
+// preview does not refuse that location, so MigrateLegacy moves it.
+func legacyPath(path string) string {
+	authDir := filepath.Dir(path)
+	daemonDir := filepath.Dir(authDir)
+	if filepath.Base(path) != FileName || filepath.Base(authDir) != dirName || filepath.Base(daemonDir) != daemonDirName {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(daemonDir), dirName, FileName)
+}
+
+// MigrateLegacy moves a credential file a pre-release build wrote beside the
+// daemon directory into the store's path, once: a rename, so no copy of the
+// secret remains in the unprotected place. A file already at the store's path
+// wins, and the stale legacy file is removed. The caller holds the daemon's
+// single-instance lock (the file's writer lock), and calls it before the
+// store's first use. It reads nothing and is a single stat when no legacy
+// file exists.
+func (s *Store) MigrateLegacy() error {
+	legacy := legacyPath(s.path)
+	if legacy == "" {
+		return nil
+	}
+	if _, err := os.Lstat(legacy); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("check the legacy credential file: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := os.Lstat(s.path); err == nil {
+		if err := os.Remove(legacy); err != nil {
+			return fmt.Errorf("remove the legacy credential file: %w", err)
+		}
+	} else if errors.Is(err, fs.ErrNotExist) {
+		dir := filepath.Dir(s.path)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("move the legacy credential file: %w", err)
+		}
+		if err := restrictDir(dir); err != nil {
+			return fmt.Errorf("move the legacy credential file: %w", err)
+		}
+		if err := os.Rename(legacy, s.path); err != nil {
+			return fmt.Errorf("move the legacy credential file: %w", err)
+		}
+	} else {
+		return fmt.Errorf("check the credential file: %w", err)
+	}
+	// The emptied legacy directory goes too; a non-empty one stays.
+	_ = os.Remove(filepath.Dir(legacy))
+	return nil
 }
 
 // Store is the credential file's in-memory owner. It reads the file once, at

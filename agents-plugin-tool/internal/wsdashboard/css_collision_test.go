@@ -329,3 +329,19 @@ func TestCSSClassesDoNotCollideAcrossModules(t *testing.T) {
 		t.Errorf("class defined in two module stylesheets: %s. They share one page, so the rules merge; rename the newer class with its module's prefix (dashboard d-, memo memo-, tracker tk-, whiteboard wb), or allowlist it with a reason", b)
 	}
 }
+
+func TestAuditCSSUsesAuPrefix(t *testing.T) {
+	b, err := readDashboardSource(embeddedDashboardAsset, "dashboard-audit.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(b)
+	if !strings.Contains(css, "class prefix: au") {
+		t.Errorf("dashboard-audit.css declares no \"class prefix: au\" header comment")
+	}
+	for c := range cssClasses(css, "") {
+		if !strings.HasPrefix(c, "au-") {
+			t.Errorf("dashboard-audit.css defines non-au class .%s", c)
+		}
+	}
+}

@@ -2,6 +2,12 @@ package wsagent
 
 import "testing"
 
+// builtinPermission is the production permission policy a built-in backend
+// registers, so these tests pin what the registration declares.
+func builtinPermission(backend string) PermissionPolicy {
+	return builtinRegistration(backend).Permission
+}
+
 func TestPermissionLeadMapping(t *testing.T) {
 	for _, tc := range []struct {
 		mode  string
@@ -11,14 +17,14 @@ func TestPermissionLeadMapping(t *testing.T) {
 		{"", PermissionWorkdirWrite}, {"auto", PermissionWorkdirWrite},
 		{"default", PermissionWorkdirWrite}, {"acceptEdits", PermissionWorkdirWrite}, {"dontAsk", PermissionWorkdirWrite},
 	} {
-		if got := legacyLeadPermission(Record{Lead: true, Backend: BackendClaude, PermissionMode: tc.mode}); got != tc.level {
+		if got := builtinPermission(BackendClaude).legacyLevel(tc.mode); got != tc.level {
 			t.Fatalf("%s = %s, want %s", tc.mode, got, tc.level)
 		}
 	}
 	for mode, level := range map[string]PermissionLevel{
 		"read-only": PermissionReadOnly, "workspace-write": PermissionWorkdirWrite, "danger-full-access": PermissionFull,
 	} {
-		if got := legacyLeadPermission(Record{Lead: true, Backend: BackendCodex, PermissionMode: mode}); got != level {
+		if got := builtinPermission(BackendCodex).legacyLevel(mode); got != level {
 			t.Fatalf("codex %s = %s, want %s", mode, got, level)
 		}
 	}
@@ -27,13 +33,13 @@ func TestPermissionLeadMapping(t *testing.T) {
 	literalModes := map[PermissionLevel]string{PermissionReadOnly: "plan", PermissionWorkdirWrite: "acceptEdits", PermissionFull: "bypassPermissions"}
 	codexModes := map[PermissionLevel]string{PermissionReadOnly: "read-only", PermissionWorkdirWrite: "workspace-write", PermissionFull: "danger-full-access"}
 	for _, level := range LeadPermissionLevels() {
-		if got := nativePermissionMode(BackendClaude, level); got != literalModes[level] {
+		if got := builtinPermission(BackendClaude).nativeMode(level); got != literalModes[level] {
 			t.Fatalf("mapping %s = %s, want literal %s", level, got, literalModes[level])
 		}
-		if got := nativePermissionMode(BackendPi, level); got != "" {
+		if got := builtinPermission(BackendPi).nativeMode(level); got != "" {
 			t.Fatalf("invented Pi mode %s", got)
 		}
-		if got := nativePermissionMode(BackendCodex, level); got != codexModes[level] {
+		if got := builtinPermission(BackendCodex).nativeMode(level); got != codexModes[level] {
 			t.Fatalf("Codex mapping %s = %s, want literal %s", level, got, codexModes[level])
 		}
 		for _, active := range []string{"", "auto", "plan", "bypassPermissions"} {
@@ -41,10 +47,10 @@ func TestPermissionLeadMapping(t *testing.T) {
 			if level == PermissionReadOnly && active == "plan" {
 				want = "partial"
 			}
-			if got := permissionQuality(BackendClaude, level, active); got != want {
+			if got := builtinPermission(BackendClaude).quality(level, active); got != want {
 				t.Fatalf("quality %s/%s = %s", level, active, got)
 			}
-			if got := permissionQuality(BackendPi, level, active); got != "advisory" {
+			if got := builtinPermission(BackendPi).quality(level, active); got != "advisory" {
 				t.Fatalf("Pi quality %s", got)
 			}
 		}
@@ -53,18 +59,18 @@ func TestPermissionLeadMapping(t *testing.T) {
 			if level == PermissionReadOnly && active == "read-only" {
 				want = "partial"
 			}
-			if got := permissionQuality(BackendCodex, level, active); got != want {
+			if got := builtinPermission(BackendCodex).quality(level, active); got != want {
 				t.Fatalf("Codex quality %s/%s = %s", level, active, got)
 			}
 		}
 	}
-	if got := legacyLeadPermission(Record{Lead: true, Backend: BackendPi}); got != PermissionWorkdirWrite {
+	if got := builtinPermission(BackendPi).legacyLevel(""); got != PermissionWorkdirWrite {
 		t.Fatal(got)
 	}
-	if got := legacyLeadPermission(Record{Lead: true, Backend: BackendClaude, PermissionMode: "unknown"}); got != "" {
+	if got := builtinPermission(BackendClaude).legacyLevel("unknown"); got != "" {
 		t.Fatalf("unknown mode fabricated %s", got)
 	}
-	if got := legacyLeadPermission(Record{Lead: true, Backend: BackendCodex}); got != "" {
+	if got := builtinPermission(BackendCodex).legacyLevel(""); got != "" {
 		t.Fatalf("omitted Codex mode fabricated %s", got)
 	}
 }

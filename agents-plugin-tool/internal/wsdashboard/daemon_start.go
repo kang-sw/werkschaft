@@ -80,6 +80,9 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	if credentials == nil && opts.Credentials != nil {
 		credentials = opts.Credentials
 	}
+	// Under the lock, before the store's first use: a credential file a
+	// pre-release build left beside this directory moves into it.
+	migrateCredentials(credentials, logw)
 	stats := &streamStats{}
 	d := &Daemon{
 		dir:             opts.Dir,

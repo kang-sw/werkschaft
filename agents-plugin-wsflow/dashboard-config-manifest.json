@@ -77,6 +77,18 @@
       "description": "When true, the dashboard shows the companion character beside the conversation. Only the global value applies."
     },
     {
+      "key": "dashboard.companion_mode",
+      "type": "enum",
+      "enum": [
+        "off",
+        "visual",
+        "full"
+      ],
+      "default": "off",
+      "default_scope": "global",
+      "description": "Deprecated alias of dashboard.companion_enabled, kept so 0.51.0 clients and scripts keep working: off hides the companion; visual and full both show it and behave the same. A write to either key updates the other, and a value stored here by an older version decides whether the companion shows. Use dashboard.companion_enabled instead. Only the global value applies."
+    },
+    {
       "key": "dashboard.companion_director",
       "type": "enum",
       "enum": [
@@ -85,7 +97,7 @@
       ],
       "default": "rules",
       "default_scope": "global",
-      "description": "Selects what drives the companion: rules (built-in reactions to session events) or agent (a separate lightweight agent writes the reactions). Only the global value applies."
+      "description": "Selects what drives the companion: rules (built-in reactions to session events) or agent (a separate lightweight agent writes the reactions). The 0.51.0 values sidecar and lead-tool are deprecated; config.tune still accepts them and stores rules. Only the global value applies."
     },
     {
       "key": "dashboard.companion_pack",

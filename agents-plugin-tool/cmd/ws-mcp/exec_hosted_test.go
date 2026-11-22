@@ -251,6 +251,13 @@ func (s *recordingSessions) Notify(id string, gen uint64, eventID, text string) 
 
 func openHostedExecDaemon(t *testing.T, state string, window time.Duration) *hostedExecDaemon {
 	t.Helper()
+	sessions := &recordingSessions{notices: make(chan string, 8)}
+	return openHostedExecDaemonWith(t, state, window, sessions)
+}
+
+// openHostedExecDaemonWith is openHostedExecDaemon over the given sessions.
+func openHostedExecDaemonWith(t *testing.T, state string, window time.Duration, owner execjob.HostedSessions) *hostedExecDaemon {
+	t.Helper()
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Fatalf("python3: %v", err)
@@ -265,8 +272,8 @@ func openHostedExecDaemon(t *testing.T, state string, window time.Duration) *hos
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions := &recordingSessions{notices: make(chan string, 8)}
-	h, err := execjob.NewHosted(execjob.HostedOptions{Holders: execjob.HolderManager{Manager: m}, Store: store, Sessions: sessions, ExitDir: filepath.Join(state, hostedExecExitsName), Window: window})
+	sessions, _ := owner.(*recordingSessions)
+	h, err := execjob.NewHosted(execjob.HostedOptions{Holders: execjob.HolderManager{Manager: m}, Store: store, Sessions: owner, ExitDir: filepath.Join(state, hostedExecExitsName), Window: window})
 	if err != nil {
 		t.Fatal(err)
 	}
