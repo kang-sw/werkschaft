@@ -165,9 +165,18 @@
   var draftDB = null, draftReady = null, draftLoaded = false;
   var draftLegacy = null, draftCommitted = null, draftWrite = null, draftWriteKey = "";
   var draftDeliveryState = new Map(), draftRetained = null, draftRetainedImages = [];
-  // Image IDs this renderer has loaded or written. Another window's newer
-  // image in the shared active record is carried over, never dropped.
+  // Image IDs and content signatures this renderer has loaded or written.
+  // Another window's newer image in the shared active record is carried
+  // over, never dropped. An older page writes images without an ID (and
+  // strips the IDs it restored), so an ID-less entry is matched by content.
   var draftKnownImages = new Set();
+  function draftImageSig(p) {
+    return "sig:" + [p.n, p.name, p.blob ? p.blob.size : 0, p.blob ? p.blob.type : ""].join("\u0000");
+  }
+  // A legacy ID-less image gets the same ID in every renderer that restores it.
+  function draftImageID(p) { return p.id || "legacy:" + draftImageSig(p).slice(4); }
+  function draftKnow(p) { draftKnownImages.add(draftImageID(p)); draftKnownImages.add(draftImageSig(p)); }
+  function draftImageKnown(p) { return draftKnownImages.has(p.id || draftImageSig(p)); }
 
   function draftDatabase() {
     return new Promise(function (resolve) {
@@ -202,8 +211,9 @@
     return { id: p.id, n: p.n, name: p.name, ref: p.ref, blob: p.blob };
   }
   function loadDraftImage(p) {
-    return p.ref ? { id: p.id, n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
-      { id: p.id, n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
+    var id = draftImageID(p);
+    return p.ref ? { id: id, n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
+      { id: id, n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
   }
   function imageData(blob) {
     return new Promise(function (resolve, reject) {
@@ -260,7 +270,7 @@
     draftTimer = null;
     var d = readDraft(), projection = draftProjection(d), previous = draftLegacy;
     var images = ctext ? imgs.filter(function (p) { return !p.ref && p.blob; }).map(savedImage) : draftRetainedImages;
-    images.forEach(function (p) { if (p.id) draftKnownImages.add(p.id); });
+    images.forEach(draftKnow);
     var deliveries = outbox.filter(function (m) { return !m.acked; }).map(function (m) {
       var body = Object.assign({}, m.body);
       delete body.images;
@@ -320,8 +330,10 @@
       // Another window may have committed images this one never loaded.
       // Keep their bytes; a restore reattaches them as loose markers.
       var current = existing && existing.active, active = record;
+      // An ID-less entry from an older page counts as foreign unless its
+      // content matches an image this renderer loaded or wrote.
       var foreign = current && Array.isArray(current.images) ? current.images.filter(function (p) {
-        return p && p.id && !draftKnownImages.has(p.id);
+        return p && !draftImageKnown(p);
       }) : [];
       if (foreign.length) {
         active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [] });
@@ -377,7 +389,7 @@
         draftRetained = prepared && boardDraft(JSON.parse(JSON.stringify(prepared)));
         draftRetainedImages = active ? active.images : [];
       }
-      (active ? active.images : []).forEach(function (p) { if (p.id) draftKnownImages.add(p.id); });
+      (active ? active.images : []).forEach(draftKnow);
       restoreDraft(prepared, useActive ? active.images : []);
       if (active && !useActive && ctext) {
         // An older page used the legacy draft in the meantime. Keep its

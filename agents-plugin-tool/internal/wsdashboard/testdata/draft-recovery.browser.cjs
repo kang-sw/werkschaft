@@ -251,6 +251,89 @@ async function imagesAcrossWindows(browser) {
   } finally { await context.close(); }
 }
 
+// recoveryRow reads (and with edit, rewrites) this session's shared
+// recovery row, as an older dashboard page would leave it.
+async function recoveryRow(frame, edit) {
+  return frame.evaluate(([edit, png64]) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('ws.dashboard.recovery', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result, tx = db.transaction('drafts', edit ? 'readwrite' : 'readonly'), store = tx.objectStore('drafts');
+      const get = store.get('livesession');
+      let row = null;
+      get.onsuccess = () => {
+        row = get.result || null;
+        if (!edit) return;
+        const blob = name => new Blob([Uint8Array.from(atob(png64), c => c.charCodeAt(0)), name], { type: 'image/png' });
+        row = new Function('row', 'blob', edit)(row, blob);
+        store.put(row, 'livesession');
+      };
+      tx.oncomplete = () => {
+        db.close();
+        resolve(row && { images: (row.active && row.active.images || []).map(p => ({ id: p.id || null, n: p.n, name: p.name })), removed: row.removed || [] });
+      };
+      tx.onabort = () => reject(tx.error);
+    };
+  }), [edit || '', png64]);
+}
+// An older page restores without IDs and appends its own ID-less paste.
+const olderPageWrite = `row.active.images = row.active.images.map(({ id, ...p }) => p)
+  .concat([{ n: 9, name: 'older.png', ref: '', blob: blob('older') }]);
+return row;`;
+
+async function rollingUpgradeImages(browser) {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await page.goto(base + session);
+    const frame = await frameFor(page);
+    await type(frame, 'Rolling upgrade draft');
+    await paste(frame, 'mine.png');
+    await frame.locator('#cimgs img[alt="mine.png"]').waitFor();
+    assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    await recoveryRow(frame, olderPageWrite);
+    // The newer page never loaded the older page's paste; its save keeps
+    // it and adopts its own ID-stripped image instead of storing it twice.
+    await type(frame, await frame.locator('#ctext').inputValue() + ' edited after the older page');
+    assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    assert.deepEqual((await recoveryRow(frame)).images.map(p => p.name).sort(), ['mine.png', 'older.png']);
+    await page.reload();
+    const again = await frameFor(page);
+    await again.locator('#cimgs img[alt="older.png"]').waitFor();
+    assert.equal(await again.locator('#cimgs img').count(), 2);
+  } finally { await context.close(); }
+}
+
+async function legacyImageAcrossWindows(browser) {
+  const context = await browser.newContext();
+  try {
+    const seed = await context.newPage();
+    await seed.goto(base + session);
+    const s = await frameFor(seed);
+    await type(s, 'Legacy image draft');
+    await paste(s, 'legacy.png');
+    await s.locator('#cimgs img[alt="legacy.png"]').waitFor();
+    assert.equal(await s.evaluate(() => window.wsSaveSessionDraft()), true);
+    await recoveryRow(s, 'row.active.images = row.active.images.map(({ id, ...p }) => p); return row;');
+    await seed.close();
+    // Two newer windows restore the same ID-less image and both edit.
+    const pages = [await context.newPage(), await context.newPage()], frames = [];
+    for (const page of pages) {
+      await page.goto(base + session);
+      const frame = await frameFor(page);
+      await frame.locator('#cimgs img[alt="legacy.png"]').waitFor();
+      frames.push(frame);
+    }
+    for (const [i, frame] of frames.entries()) {
+      await type(frame, await frame.locator('#ctext').inputValue() + ' window ' + i);
+      assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    }
+    const row = await recoveryRow(frames[1]);
+    assert.equal(row.images.length, 1, 'one stored copy of the restored legacy image: ' + JSON.stringify(row.images));
+    assert.ok(row.images[0].id, 'the restored image is persisted with its ID');
+  } finally { await context.close(); }
+}
+
 async function failedStorage(browser) {
   const context = await browser.newContext();
   try {
@@ -385,6 +468,8 @@ async function queueAcrossTabs(browser) {
       for (const accepted of [false, true]) await delivery(browser, { theme: 'dark', accepted, command: true });
       await recoverImage(browser);
       await imagesAcrossWindows(browser);
+      await rollingUpgradeImages(browser);
+      await legacyImageAcrossWindows(browser);
       await failedStorage(browser);
       await ackWithUnavailableLegacyStorage(browser);
       await queueAcrossTabs(browser);
