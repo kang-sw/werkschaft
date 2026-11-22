@@ -726,7 +726,12 @@
         if (!ok) {
           P.busy = false;
           status.textContent = "";
-          P.dropped = level;
+          // The refusal is about the snapshot: the live form lost the level
+          // only while it still shows the snapshot's harness. A form a
+          // refresh moved elsewhere keeps its own level; the refusal shows
+          // as an error instead.
+          if (P.harness === chosenHarness) P.dropped = level;
+          else setErr(wsT("js.perm.unsent"));
           permDraw();
           sync();
           railPopPlace();

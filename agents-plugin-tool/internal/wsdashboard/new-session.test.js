@@ -378,6 +378,92 @@ test('the full-permission grant launches the request the warning named, even aft
   assert.equal(effort.value, 'max', 'the form itself still shows the refreshed tier');
 });
 
+test('a refused full grant for a harness the form no longer shows leaves the form permission untouched', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+    showModal() { this.open = true; }
+    close() { this.open = false; }
+  }
+  const pending = [], posts = [], dialogs = [];
+  const levels = ['read-only', 'workdir-write', 'full'];
+  const claude = { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }, { id: 'sonnet' }], efforts: ['high', 'max'], permission_modes: ['auto', 'plan'], permission_levels: levels };
+  const codex = { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: levels };
+  const hs = [claude, codex];
+  const codexGone = [claude, { ...codex, available: false, error: 'not installed' }];
+  const onCodex = [{ name: 'name', trace: 'name', harness: 'codex', model: 'gpt-5', effort: 'low' }];
+  const onClaude = [{ name: 'name', trace: 'name', harness: 'claude', model: 'sonnet', effort: 'max' }];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    doc: { body: { appendChild(e) { e.parentNode = this; dialogs.push(e); return e; } } },
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const texts = (el) => [el.text || '', ...el.children.flatMap(texts)].join(' ');
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const start = p.el.children.at(-1).children.at(-1);
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers: onCodex });
+
+  // The full warning opens for codex while /support/choices is still out.
+  p.open('root', 'name', btn);
+  picker.value = 'name'; picker.events.change();
+  p.level = 'full';
+  start.events.click({ target: start });
+  const dlg = dialogs[0];
+  assert.ok(dlg && dlg.open, 'the full warning is open');
+  assert.match(texts(dlg), /name · codex/);
+
+  // The held read rebinds the bundle to claude and marks codex unavailable.
+  pending.shift()(200, { harnesses: codexGone, tiers: onClaude });
+  assert.equal(p.harness, 'claude');
+
+  // Grant: the snapshot's codex pre-flight fails and sends nothing.
+  const grant = () => {
+    const box = dlg.children[3].children[0];
+    box.checked = true; box.events.change();
+    dlg.children[4].children[1].events.click();
+  };
+  grant();
+  assert.equal(pending.length, 1, 'the grant runs the permission pre-flight');
+  pending.shift()(200, { harnesses: codexGone, tiers: onClaude });
+  assert.equal(posts.length, 0, 'a refused snapshot sends nothing');
+  assert.ok(!dlg.open, 'the warning closed');
+  assert.match(texts(p.el), /js\.perm\.unsent/, 'the refusal shows');
+  assert.equal(p.dropped, '', 'the refusal does not drop the level of the form now on claude');
+  assert.equal(p.level, 'full');
+
+  // The next Start is a full start for claude, through the warning again.
+  start.events.click({ target: start });
+  assert.equal(posts.length, 0, 'Start asks again before a full start');
+  assert.ok(dlg.open, 'the full warning opened again');
+  assert.match(texts(dlg), /name · claude/i);
+  grant();
+  pending.shift()(200, { harnesses: codexGone, tiers: onClaude });
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].path, '/agents/leads/permission');
+  assert.equal(posts[0].body.harness, 'claude');
+  assert.equal(posts[0].body.level, 'full');
+  assert.equal(posts[0].body.ack, true);
+});
+
 test('a choices read after a stream reconnect re-applies the picked tier, so its note and the fields agree', () => {
   class Element {
     constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
