@@ -30,7 +30,7 @@ func TestWhiteboardEffectsPanelRecapOnlyAndStable(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(set[regionEntries].HTML)
-	for _, want := range []string{`<article class="wbeffects wbupdate" data-entry="` + ring[0].Name + `">`, "Committed whiteboard update", "Saved panel summary", "Some changes or values were omitted", `data-wb-jump="p1"`, `data-wb-topic="topic-706c616e"`} {
+	for _, want := range []string{`<article class="wbeffects wbupdate" data-entry="` + ring[0].Name + `" data-at="` + ring[0].At.UTC().Format("2006-01-02T15:04:05.999999999Z") + `">`, "Committed whiteboard update", "Saved panel summary", "Some changes or values were omitted", `data-wb-jump="p1"`, `data-wb-topic="topic-706c616e"`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q: %s", want, html)
 		}

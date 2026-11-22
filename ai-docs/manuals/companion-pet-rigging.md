@@ -292,8 +292,66 @@ Every official shipped pack must satisfy all six gates before replacing dev fixt
   - Settings panel: `dashboard.companion_enabled` `false` (default) | `true`; `dashboard.companion_director` `rules` (default) | `agent`.
   - Directed commands: the shell acts only on the visible session's `companion-command`, validates every ID against the active pack (its `fallback` chains, the shared default pack's props and fx, the built-in fx badges, and the scenario registry) and drops unknown fields; the directed beat (`runner.direct`) holds over the rules engine until its TTL (1-15 s; only a drag interrupts it), and its quip is plain text of at most 140 characters in a bubble that never takes the pointer.
   - Gear-opened floating modal (gear under the resize grip on hover): `dashboard.companion_pack` `default` (default) | `auto` | `<pack-id>`; `dashboard.companion_preset` `werkschaft-d1` (default) | `<preset-id>`; `dashboard.companion_agent_cooldown_seconds` (default 30); `dashboard.companion_agent_hourly_cap` (default 20); read-only persona; reset size; wardrobe picks `dashboard.companion_outfit`, `dashboard.companion_hair`, `dashboard.companion_eyes` (pack IDs; empty follows the preset), `dashboard.companion_attachments` (up to 16 `<slot>=<id>` pairs; `none` clears a slot) and `dashboard.companion_palette` (up to 16 `<channel>=#rrggbb` pairs), all global-only scalar strings defaulting to empty. The modal shows them as pickers: outfit, hair and eye selects with "follow preset", one select per attachment slot, a color input per channel, and "Reset colors".
-- **Local BYO Pack Storage (`performance.md` Compliant):** User packs live at `<config-home>/companions/<pack-id>/pack.json` (honoring `WS_CONFIG_HOME`; `"default"` and `"auto"` reserved). Lazily indexed in memory on first companion pack request, refreshed only on `POST /api/companion/packs/reload`, with `ETag`/`304`, `409 Conflict` on stale `?rev=`, and strict raster-only/symlink guards.
+- **Local BYO Pack Storage (`performance.md` Compliant):** User packs live at `<config-home>/companions/<pack-id>/pack.json` (honoring `WS_CONFIG_HOME`; `"default"` and `"auto"` reserved). Lazily indexed in memory on first companion pack request, refreshed only on `POST /api/companion/packs/reload`, with `ETag`/`304`, `409 Conflict` on stale `?rev=`, and strict raster-only/symlink guards. Packs reach that directory by hand or by source install (see **BYO Packs: Source Install and the Downstream Authoring Kit** below).
 - **Public Repository IP Boundary:** The public repository ships **only** the companion engine, `pack.json` schema, IP-clean original default assets, and the reproducible pack recipe. Third-party or community character packs live strictly outside git under `<config-home>/companions/`. Local reproductions of third-party characters stay in local-only BYO packs. The authoring scaffold derived from the local reference is tracked as the official authoring scaffold (`ai-docs/assets/companion-pet/scaffold-upright.png`, owner 2026-11-22 (130)) and never ships in any pack; its derivation source and intermediates stay local. Shipped outfit-baked assets may carry body regions that trace back to it only with every identifying feature removed.
+
+## BYO Packs: Source Install and the Downstream Authoring Kit
+
+A user gets third-party packs the way plugin marketplaces work: add a **source**, look through the packs it lists, install one with a click. Werkschaft hosts and curates no third-party packs and runs no central registry; the public repository ships only IP-clean packs (see the IP boundary above).
+
+### Sources
+
+- **User sources:** the global-only config key `dashboard.companion_sources` holds a whitespace-separated list of `https:` source URLs (at most 16, each at most 2,048 characters). An invalid entry is shown as an error in the companion modal and skipped. The modal edits the list through `POST /api/config/set {scope:"global"}`.
+- **Built-in official source:** an embedded marketplace manifest, not a config entry, so a user cannot delete it and it updates with the binary. It carries `official: true` (no user source can) and lists only Werkschaft's own IP-clean packs; at first only the embedded `default` pack, which has no install record and cannot be uninstalled.
+- **Source kinds** feed one in-memory zip pipeline: (a) a **git** repository URL `https://<host>/<path>[#<ref>]` (default ref `HEAD`; the ref resolves to a commit through the smart-HTTP ref advertisement, then a zip of that commit is fetched from `<repo>/archive/<sha>.zip` or `<repo>/-/archive/<sha>/<name>-<sha>.zip`; the daemon never runs `git clone`); (b) an **https zip** URL ending in `.zip`; (c) a **local** zip imported from disk (the browser sends the bytes; needed because share links often return an HTML page). A `local` install has no source to re-fetch, so check and update are not offered; importing a newer zip replaces it.
+- **Marketplace manifest** `marketplace.json` (`ws-companion-marketplace/v1`) sits at the zip root or in its single top-level folder and lists packs with `id`, `name`, `version`, optional `author`, `license`, `description`, and exactly one of `path` (a pack directory in the same zip) or `url` + `sha256` (an external pack zip, hash checked before it opens). Entries outside the listed pack directories are ignored.
+- **Fetch and install run only on a user click.** The daemon does the fetching (HTTPS GET, 60 s total, redirects only to `https:`, at most 5; the dial-time address guard refuses loopback, link-local, unspecified, and multicast targets); every install route requires `TrustedWrite`; nothing is fetched at startup or while the companion is disabled.
+
+### Install, Validation, and Updates
+
+- **Data only:** an installable pack directory holds `pack.json` plus the PNG/WebP rasters it references and nothing else. Any other file fails that pack and nothing of it is stored. The referenced-file list `validateCompanionManifest` returns is the install allow-list, so schema growth carries over as long as new files stay rasters.
+- **Safe extraction:** archive-level and pack-level rules (entry caps, name safety, no symlinks or nested directories, no case collisions, no Windows reserved device names, compression ratio 100:1, 64 MiB unpacked per operation, raster header and dimension checks) run on the in-memory zip; `loadCompanionPack` then applies the same validator and caps as the local scan, so a pack that installs is a pack that loads.
+- **Validate preview:** `POST /api/companion/packs/validate` runs the same pipeline with no write and returns per-pack errors; the modal's import preview is its UI. An external `url` pack is downloaded and checked only when installed, not in the preview.
+- **Install record:** each installed pack directory gets `.ws-install.json` (`source`, `kind` `git|zip|local`, `ref`, `commit`, `archiveSha256`, `packSha256`, `version`, `installedAt`, `official`), a plain file beside the pack so deleting the pack deletes its provenance. The store reads it only during a scan and exposes it as the catalog entry's `origin`; a malformed record is ignored and the pack still loads.
+- **Update detection by content hash:** a pack shows an update only when its re-read content hash differs from the recorded `packSha256` (an external `url` pack: when the entry's `sha256` differs from the recorded `archiveSha256`). The `version` string is display-only, so an unrelated commit in a multi-pack repository raises no badge.
+- **Hand-made packs are never touched:** an install or update refuses an ID whose directory has no install record, and uninstall removes only directories that carry one.
+
+### Downstream Authoring Kit
+
+The daemon embeds a standalone guide and two JSON Schemas (draft 2020-12) for pack authors who work outside this repository, served on read routes of the companion route family: `/api/companion/authoring/guide.md`, `/api/companion/authoring/pack.schema.json` (`ws-companion/v1`), and `/api/companion/authoring/marketplace.schema.json` (`ws-companion-marketplace/v1`). The kit is shipped text under `shipped-surface-boundary.md`: it names no ticket, repository path, source file, commit, or real character, product, or company, and uses example names and `example.invalid` URLs.
+
+This manual stays the canonical rigging contract; the kit is its downstream-facing subset. Drift tests keep them consistent: the guide's examples pass the real pipeline, the schemas' required fields match the validators in both directions, every cap the guide states matches its Go constant, and every property name in `pack.schema.json` must appear in this manual as a code span or quoted key. Change a field here and in the kit together; a new `pack.json` field (for example from the paper-doll work) is added to the schema as an open property, never with `additionalProperties: false`, because readers ignore unknown fields.
+
+### `pack.json` Field Reference (Names Used by the Schema)
+
+Fields the validator reads strictly (a wrong type fails the pack) are marked *strict*; everything else passes through.
+
+| Field | Meaning |
+|---|---|
+| `schema`, `id`, `name`, `canvas` | *Strict.* Format marker `ws-companion/v1`; the pack ID (equals the directory name); display name; logical canvas `[width, height]`, each 64 to 2048. |
+| `poses` | *Strict.* Open map; `stand` with at least one layer is required. |
+| `gestures` | *Strict.* Open map of gesture groups. |
+| `layers` | *Strict.* List of drawn layers inside a pose, gesture, prop, or fx entry (see the layer keys under the field list in section 4). |
+| `replaces` | Gesture group: layer IDs of the pose the gesture swaps out. |
+| `headAnchor` | Pose group: `[x, y]` head position (see the Uniform Head Scale Gate). |
+| `autoMatch` | *Strict.* Optional hint object: `harnesses` and `models`, each at most 32 printable-ASCII tags of 1 to 128 characters. |
+| `harnesses`, `models` | The two `autoMatch` tag lists. |
+| `head` | *Strict.* Shared head: `egg` (the egg-head channels), `eyes` (`sclera`, `irisFill`, `irisLine`, `frameLower`, `lidCoverL`, `lidCoverR`, `lidLashL`, `lidLashR`, `browL`, `browR`), and `mouths` (a map of mouth name to raster). |
+| `egg`, `eyes`, `mouths` | The three `head` parts above. |
+| `sclera`, `irisFill`, `irisLine`, `frameLower`, `lidCoverL`, `lidCoverR`, `lidLashL`, `lidLashR`, `browL`, `browR` | Raster file names of the live-eye layers (Track 1 expressions). |
+| `hairs` | *Strict.* Hair styles by ID, each with `back`, `front`, and `acc` channel objects. |
+| `back`, `front`, `acc` | The hair layers at `z10`, `z50`, and `z55`. |
+| `hairFill` | Fill channel of a hair layer, next to the layer channels `file`, `line`, `jacketFill`, `accentFill`, `skinFill`, `detail`. |
+| `scenarios` | *Strict.* Scenario overrides by ID. Keys: `on`, `when`, `steps` (each with `ms` and a beat), `priority`, `cooldownMs`, `durationMs`, `disabled`. |
+| `ms`, `priority`, `cooldownMs`, `durationMs` | Scenario step time in milliseconds; scenario priority; cooldown and total duration in milliseconds (nonnegative). |
+| `expression`, `gesture`, `gaze`, `stage`, `quip` | Beat fields of a scenario or step (`pose` is the sixth): the expression, gesture, gaze target, stage effect, and quip text to play. |
+| `fills` | *Strict.* Tint channel to raster on any layer, frame, egg, or hair part (section 3a). A `fills`-only layer or frame is valid only in `outfits` columns and `attachments`. |
+| `outfits` | *Strict.* Outfits by ID: `poses` and `gestures` maps of columns (`layers`, `headAnchor`, `handAnchor`, `feetPivot`, `replaces`) plus a `palette`. Only `layers` is checked; the rest pass through (section 3a). |
+| `attachments` | *Strict.* Attachments by ID: `slot`, `bind`, `z`, `layers`, and `columns` (per-column `layers` for a body item). Only the layer lists are checked; `slot` and `bind` are lint and runtime fields. |
+| `eyesets` | *Strict.* Eye sets by ID, each with the `head.eyes` keys. |
+| `palette`, `defaultOutfit`, `registration` | Pack palette (`<channel>` to `#rrggbb`), default outfit ID, and the lint registration (`headAnchor`, `feetPivot`, `tolerance`). Pass through. |
+
+For the fields a pack may add on top (`persona`, `props`, `fx`, `motions`, `presets`, `easings`, `stageEffects`, `propMotions`, `physics`, `passive`, `mode`, `fps`, `frames`, `motion`, `z`, `pivot`, `pose`, `fallback`, `headScale`, `handAnchor`, `decal`, `disabled`, `when`, `steps`), see sections 1 to 4 above.
 
 ## Generative Edit Toolkit (Erase-and-Infill)
 

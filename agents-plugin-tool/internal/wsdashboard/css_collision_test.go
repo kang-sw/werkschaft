@@ -331,17 +331,19 @@ func TestCSSClassesDoNotCollideAcrossModules(t *testing.T) {
 }
 
 func TestAuditCSSUsesAuPrefix(t *testing.T) {
-	b, err := readDashboardSource(embeddedDashboardAsset, "dashboard-audit.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	css := string(b)
-	if !strings.Contains(css, "class prefix: au") {
-		t.Errorf("dashboard-audit.css declares no \"class prefix: au\" header comment")
-	}
-	for c := range cssClasses(css, "") {
-		if !strings.HasPrefix(c, "au-") {
-			t.Errorf("dashboard-audit.css defines non-au class .%s", c)
+	for _, name := range []string{"dashboard-audit.css", "dashboard-audit-rows.css"} {
+		b, err := readDashboardSource(embeddedDashboardAsset, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		css := string(b)
+		if !strings.Contains(css, "class prefix: au") {
+			t.Errorf("%s declares no \"class prefix: au\" header comment", name)
+		}
+		for c := range cssClasses(css, "") {
+			if !strings.HasPrefix(c, "au-") {
+				t.Errorf("%s defines non-au class .%s", name, c)
+			}
 		}
 	}
 }

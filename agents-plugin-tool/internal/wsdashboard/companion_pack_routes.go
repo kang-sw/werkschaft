@@ -17,6 +17,8 @@ func (d *Daemon) registerCompanionPackRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(companionPacksRoute+"/{id}/pack.json", d.handleCompanionManifest)
 	mux.HandleFunc(companionPacksRoute+"/{id}/assets/{file}", d.handleCompanionAsset)
 	mux.HandleFunc(companionPacksRoute+"/reload", d.handleCompanionReload)
+	d.registerCompanionInstallRoutes(mux)
+	d.registerCompanionAuthoringRoutes(mux)
 	mux.HandleFunc(companionFocusRoute, d.handleCompanionFocus)
 }
 

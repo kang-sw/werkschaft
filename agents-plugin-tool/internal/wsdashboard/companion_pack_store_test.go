@@ -290,7 +290,8 @@ func TestCompanionPackIOCounts(t *testing.T) {
 	if w := companionTestRequest(d, cookie, http.MethodGet, companionPacksRoute, ""); w.Code != http.StatusOK {
 		t.Fatalf("cold catalog: %d %s", w.Code, w.Body)
 	}
-	if opens != 4 || stats != 4 || dirs != 1 {
+	// The fifth open is the install-sidecar lookup, absent for a hand-made pack.
+	if opens != 5 || stats != 4 || dirs != 1 {
 		t.Fatalf("cold opens=%d stats=%d readdir=%d", opens, stats, dirs)
 	}
 	afterStats, afterReads := companionAuthIOCounts()
@@ -310,7 +311,7 @@ func TestCompanionPackIOCounts(t *testing.T) {
 	if warmStats-afterStats != 3 || warmReads-afterReads != 0 {
 		t.Fatalf("warm auth stats=%d reads=%d", warmStats-afterStats, warmReads-afterReads)
 	}
-	t.Log("pack store cold: 4 opens, 4 stats, 1 ReadDir. Warm: zero on catalog, manifest and asset.")
+	t.Log("pack store cold: 5 opens (one a missing sidecar), 4 stats, 1 ReadDir. Warm: zero on catalog, manifest and asset.")
 	t.Log("auth credential cold: 1 stat and 1 file read. Warm: 1 stat per request and zero file reads.")
 }
 

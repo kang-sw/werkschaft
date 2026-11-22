@@ -3,6 +3,7 @@ package wsdashboard
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wslive"
 )
@@ -22,7 +23,7 @@ func TestChildReportFoldedMailboxRow(t *testing.T) {
 				Caption: tc.caption, Text: tc.text, Truncated: tc.truncated,
 			})}
 			html := presentationHTML(t, ring, PageContent{}, newEntryCache())
-			start := `<details class="mailline recv child-report" data-entry="` + ring[0].Name + `" data-key="wake-` + ring[0].Name + `"><summary class="conv-row"`
+			start := `<details class="mailline recv child-report" data-entry="` + ring[0].Name + `" data-key="wake-` + ring[0].Name + `" data-at="` + ring[0].At.UTC().Format(time.RFC3339Nano) + `"><summary class="conv-row"`
 			_, row, ok := strings.Cut(html, start)
 			if !ok {
 				t.Fatalf("missing closed, stably keyed mailbox disclosure: %s", html)

@@ -69,6 +69,9 @@ func (h ManagerHost) Status(id string) (wsholder.AttachInfo, error) {
 // holderKindLead is the kind a lead conversation's holder records in its
 // descriptor.
 const holderKindLead = "lead"
+
+// Retained name check: the holder kind an older daemon wrote into a still-running
+// holder's descriptor (TestWorkerHolderOwnership).
 const holderKindPiWorker = "pi-worker"
 const holderKindAgentWorker = "agent-worker"
 

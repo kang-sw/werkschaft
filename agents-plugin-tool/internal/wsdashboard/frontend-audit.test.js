@@ -425,3 +425,72 @@ test('Decision (605): Escape and ArrowLeft/ArrowRight trigger only when focus ta
   assert.equal(stopped, true);
   assert.equal(h.ctx.WsAudit.windows().length, 0, 'Escape inside .au-win closes the audit window');
 });
+
+test('openEvent auto-selects out for non-tool_call out-only envelopes unless opts.tab is set', async () => {
+  const envs = {
+    'ev-rem': { id: 'ev-rem', kind: 'system_reminder', subkind: 'policy', out: 'Check captures.' },
+    'ev-sub': { id: 'ev-sub', kind: 'subagent', subkind: 'spawn', in: '{"role":"verifier"}' },
+    'ev-other': { id: 'ev-other', kind: 'other', subkind: 'custom', raw: '{}' },
+    'ev-call': { id: 'ev-call', kind: 'tool_call', subkind: 'Read', call_id: 'c1', out: 'unused' },
+    'ev-trunc-out': { id: 'ev-trunc-out', kind: 'thinking', stored_trunc: { out: { original_bytes: 20, head_bytes: 10, tail_bytes: 10 } } }
+  };
+  const h = loadAuditControllerHarness(async (url) => {
+    const id = decodeURIComponent(url.split('/').pop());
+    const ev = envs[id];
+    if (!ev) return { ok: false, status: 404, async text() { return 'missing'; } };
+    return { ok: true, status: 200, async json() { return ev; } };
+  });
+
+  h.ctx.WsAudit.openEvent('ev-rem');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'out');
+
+  h.ctx.WsAudit.openEvent('ev-sub');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'in');
+
+  h.ctx.WsAudit.openEvent('ev-other');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'raw');
+
+  h.ctx.WsAudit.openEvent('ev-call');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'in');
+
+  h.ctx.WsAudit.openEvent('ev-trunc-out');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'out');
+
+  h.ctx.WsAudit.openEvent('ev-rem', { tab: 'in' });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(h.ctx.WsAudit.windows()[0].tab, 'in');
+});
+
+
+test('cached hidden event invalidates pending tool lookup and envelope responses', async () => {
+  const pending = [];
+  const h = loadAuditControllerHarness((url) => new Promise((resolve) => pending.push({ url, resolve })));
+  h.ctx.WsAudit.openEvent('hidden');
+  pending.shift().resolve({ ok: true, async json() { return { id: 'hidden', kind: 'thinking', out: 'cached' }; } });
+  await new Promise((r) => setTimeout(r, 0));
+  const win = h.ctx.WsAudit.windows()[0];
+  const row = makeCallRow(h.makeEl, 'late');
+  h.convo.appendChild(row);
+  h.ctx.WsAudit.openCall('late', row);
+  const token = win.reqToken;
+  h.ctx.WsAudit.openEvent('hidden');
+  assert.ok(win.reqToken > token);
+  for (const req of pending.splice(0)) req.resolve({ ok: true, async json() {
+    return { call: { id: 'tool', kind: 'tool_call', call_id: 'late' }, events: [] };
+  } });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(win.activeEnvelope.id, 'hidden');
+  h.ctx.WsAudit.openEvent('uncached');
+  assert.equal(win.activeEnvelope, null);
+  assert.equal(win.resultLoading, false);
+  assert.equal(win.resultEnvelope, null);
+  h.ctx.WsAudit.openEvent('hidden');
+  for (const req of pending.splice(0)) req.resolve({ ok: true, async json() { return { id: 'uncached', kind: 'other' }; } });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(win.activeEnvelope.id, 'hidden');
+});

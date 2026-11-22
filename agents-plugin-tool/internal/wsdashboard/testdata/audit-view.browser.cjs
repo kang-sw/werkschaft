@@ -221,6 +221,8 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
 
     // Next call via button + ArrowRight / ArrowLeft, plus c3 tool_result failed pill & output, plus kind="other" Raw tab
     await win.locator('.au-next').click();
+    await frame.waitForSelector('.au-hid.au-inner[data-event-id="e-hook-1"].au-sel');
+    await win.locator('.au-next').click();
     await frame.waitForFunction(() => document.querySelector('.au-win .au-wname')?.textContent.includes('Grep'));
     await win.locator('.au-whd').click();
     await page.keyboard.press('ArrowRight');
@@ -238,7 +240,9 @@ const sameRGB = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 2);
     await win.locator('[data-au-tab="raw"]').click();
     assert.ok((await win.locator('.au-banner').textContent()).includes('Original harness event'));
 
-    // Empty state on c_empty
+    // Empty state on c_empty (stepping past c4's attached e-call-4 hidden row first)
+    await win.locator('.au-next').click();
+    await frame.waitForSelector('.au-hid.au-inner[data-event-id="e-call-4"].au-sel');
     await win.locator('.au-next').click();
     await frame.waitForFunction(() => {
       const st = document.querySelector('.au-win .au-state');

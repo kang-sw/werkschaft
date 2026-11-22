@@ -26,6 +26,7 @@ const (
 	CompanionPaletteKey        = "dashboard.companion_palette"
 	CompanionAgentCooldownKey  = "dashboard.companion_agent_cooldown_seconds"
 	CompanionAgentHourlyCapKey = "dashboard.companion_agent_hourly_cap"
+	CompanionSourcesKey        = "dashboard.companion_sources"
 
 	companionChangedPath  = "/config/companion-changed"
 	companionConfigHeader = "X-WS-Global-Config"
@@ -74,7 +75,7 @@ func IsCompanionConfigKey(key string) bool {
 	switch key {
 	case CompanionEnabledKey, CompanionModeKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
 		CompanionOutfitKey, CompanionHairKey, CompanionEyesKey, CompanionAttachmentsKey, CompanionPaletteKey,
-		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey:
+		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey, CompanionSourcesKey:
 		return true
 	}
 	return false
@@ -121,6 +122,21 @@ type CompanionConfig struct {
 	Palette              string `json:"palette"`
 	AgentCooldownSeconds int    `json:"agentCooldownSeconds"`
 	AgentHourlyCap       int    `json:"agentHourlyCap"`
+	// Sources is the raw dashboard.companion_sources value. The JSON form adds
+	// sourceEntries, the verdict of parseCompanionSources on it (MarshalJSON).
+	Sources string `json:"sources"`
+}
+
+// MarshalJSON adds sourceEntries: each entry of Sources as the source routes
+// judge it. The modal shows these verdicts rather than its own, so an entry
+// the routes would refuse never looks usable. It is computed here, not
+// stored, so CompanionConfig stays comparable.
+func (c CompanionConfig) MarshalJSON() ([]byte, error) {
+	type plain CompanionConfig
+	return json.Marshal(struct {
+		plain
+		SourceEntries []companionSourceEntry `json:"sourceEntries"`
+	}{plain(c), parseCompanionSources(c.Sources)})
 }
 
 type companionConfigSnapshot struct {

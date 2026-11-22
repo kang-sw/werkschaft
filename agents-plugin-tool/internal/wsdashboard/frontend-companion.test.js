@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "settings", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -731,7 +731,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "settings", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -908,11 +908,23 @@ function modalDom() {
     createElement: element, addEventListener(type, fn) { on(doc, type, fn); },
     documentElement: { hasAttribute: name => sysopen.has(name) }
   });
-  return { doc, element, fire, Option, sysopen };
+  // frames records the resize observers and queued animation frames the modal uses.
+  const frames = { observers: [], queued: new Map(), next: 0 };
+  frames.globals = {
+    ResizeObserver: class {
+      constructor(callback) { this.callback = callback; this.targets = []; frames.observers.push(this); }
+      observe(target) { this.targets.push(target); }
+      disconnect() { this.targets = []; }
+    },
+    requestAnimationFrame: fn => { frames.queued.set(++frames.next, fn); return frames.next; },
+    cancelAnimationFrame: id => { frames.queued.delete(id); }
+  };
+  frames.run = () => { const due = [...frames.queued.values()]; frames.queued.clear(); for (const fn of due) fn(); return due.length; };
+  return { doc, element, fire, Option, sysopen, frames };
 }
 
 test("companion settings modal opens, writes typed global values, reverts refused input and closes", async () => {
-  const { doc, element, fire, Option, sysopen } = modalDom();
+  const { doc, element, fire, Option, sysopen, frames } = modalDom();
   const writes = [], notices = [];
   let fail = false, resets = 0;
   const fetch = async (url, init) => {
@@ -920,17 +932,18 @@ test("companion settings modal opens, writes typed global values, reverts refuse
     writes.push(JSON.parse(init.body));
     return { ok: !fail };
   };
-  const C = companion({ document: doc, Option, fetch, wsT: key => key,
+  const C = companion({ document: doc, Option, fetch, wsT: key => key, ...frames.globals,
     window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
   const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
-  const rows = catalog.filter(row => row.surface === "companion-modal");
+  // The Sources section renders dashboard.companion_sources; the row loop skips it.
+  const rows = catalog.filter(row => row.surface === "companion-modal" && row.key !== "dashboard.companion_sources");
   const config = { pack: "default", preset: "werkschaft-d1", agentCooldownSeconds: 30, agentHourlyCap: 20 };
   const node = element("div"), gear = element("button");
   const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, {
     rows: () => rows, config: () => config, persona: () => ({ name: "Fixture Fox", voice: "Short lines." }),
     presets: () => ({ available: ["werkschaft-d1", "werkschaft-d2"] }),
     anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
-    resetSize: () => { resets++; }, applyPreset() {}, notice: key => notices.push(key)
+    resetSize: () => { resets++; }, applyPreset() {}, notice: key => notices.push(key), packsChanged() {}
   });
   const dialog = node.children[0];
   const find = (cls) => dialog.all().filter(c => c.className === cls);
@@ -991,17 +1004,61 @@ test("companion settings modal opens, writes typed global values, reverts refuse
   assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
 });
 
+test("companion settings modal re-places itself whenever it resizes, once per frame, only while open", () => {
+  const { doc, element, fire, Option, frames } = modalDom();
+  const fetch = async () => ({ ok: true, json: async () => ({ packs: [{ id: "default" }] }) });
+  const C = companion({ document: doc, Option, fetch, wsT: key => key, ...frames.globals,
+    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
+  const node = element("div"), gear = element("button"), cancel = new AbortController();
+  C.settingsModal(node, gear, { signal: cancel.signal }, {
+    rows: () => [], config: () => ({}), persona: () => null, presets: () => ({ available: [] }),
+    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
+    resetSize() {}, applyPreset() {}, notice() {}, packsChanged() {}
+  });
+  const dialog = node.children[0];
+  const [observer] = frames.observers;
+  assert.equal(frames.observers.length, 1, "one observer for the dialog");
+  assert.deepEqual(observer.targets, [], "nothing is observed while closed");
+
+  fire(gear, "click");
+  assert.equal(dialog.style.top, "280px", "opening places the dialog at once");
+  assert.deepEqual(observer.targets, [dialog], "the open dialog is observed");
+  // Content that grows the dialog (a Sources preview) re-places it on the next frame.
+  dialog.offsetHeight = 520;
+  observer.callback([]);
+  observer.callback([]);
+  observer.callback([]);
+  assert.equal(dialog.style.top, "280px", "no placement before the frame");
+  assert.equal(frames.run(), 1, "resizes within a frame coalesce into one placement");
+  assert.equal(dialog.style.top, "6px", "the grown dialog moves up inside the viewport");
+  assert.equal(frames.run(), 0, "the placement queues nothing further");
+
+  // Closing disconnects and drops a pending placement; reopening observes again.
+  observer.callback([]);
+  fire(doc, "keydown", { key: "Escape" });
+  assert.deepEqual(observer.targets, [], "closing disconnects");
+  assert.equal(frames.queued.size, 0, "closing cancels the pending placement");
+  fire(gear, "click");
+  assert.deepEqual(observer.targets, [dialog]);
+
+  // Teardown disconnects too.
+  observer.callback([]);
+  cancel.abort();
+  assert.deepEqual(observer.targets, [], "teardown disconnects");
+  assert.equal(frames.queued.size, 0, "teardown cancels the pending placement");
+});
+
 // wardrobeModal opens the companion modal over a mutable config and a
 // hooks.wardrobe() fixture, and records every config write.
 function wardrobeModal({ config = {}, wardrobe, picks = null, rows, hook = true } = {}) {
-  const { doc, element, fire, Option, sysopen } = modalDom();
+  const { doc, element, fire, Option, sysopen, frames } = modalDom();
   const writes = [], notices = [];
   const fetch = async (url, init) => {
     if (url === "/api/companion/packs") return { ok: true, json: async () => ({ packs: [{ id: "default" }] }) };
     writes.push(JSON.parse(init.body));
     return { ok: true };
   };
-  const C = companion({ document: doc, Option, fetch, wsT: key => key,
+  const C = companion({ document: doc, Option, fetch, wsT: key => key, ...frames.globals,
     window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
   const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
   const all = rows || catalog.filter(row => row.surface === "companion-modal");
@@ -1243,7 +1300,7 @@ test("companion live config broadcast re-dresses the mounted stage and refreshes
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "settings", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "deform", "compositor", "scenarios", "menu", "sources", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = win.WsCompanion;

@@ -8,6 +8,8 @@ import (
 )
 
 func codexWorkspaceRoots(meta map[string]any) []string {
+	// Retained name check: x-codex-turn-metadata is Codex's own request metadata key
+	// (TestDetectHarnessFromRawKeepsExternalMarkers).
 	turn, ok := meta["x-codex-turn-metadata"].(map[string]any)
 	if !ok {
 		return nil
@@ -92,6 +94,12 @@ func (s *Server) currentHarness() string {
 // connection with no daemon registry (a terminal harness's stdio server)
 // reads. A name neither knows declares nothing.
 func (s *Server) connectionOf(name string) wsagent.ConnectionPolicy {
+	if lookup := s.policyLookup(); lookup != nil {
+		if policy, ok := lookup.BackendConnection(name); ok {
+			return policy
+		}
+		return wsagent.BuiltinConnection(name)
+	}
 	for _, registrations := range s.agentBackends() {
 		if reg, ok := registrations[name]; ok {
 			return reg.Connection
@@ -102,6 +110,12 @@ func (s *Server) connectionOf(name string) wsagent.ConnectionPolicy {
 
 // lifecycleOf is connectionOf for a backend's lifecycle declaration.
 func (s *Server) lifecycleOf(name string) wsagent.LifecyclePolicy {
+	if lookup := s.policyLookup(); lookup != nil {
+		if policy, ok := lookup.BackendLifecycle(name); ok {
+			return policy
+		}
+		return wsagent.BuiltinLifecycle(name)
+	}
 	for _, registrations := range s.agentBackends() {
 		if reg, ok := registrations[name]; ok {
 			return reg.Lifecycle

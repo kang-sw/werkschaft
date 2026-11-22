@@ -56,7 +56,7 @@ func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
 	c.awakeSending = true
 	c.syncAwake()
 	defer func() { c.awakeSending = false }()
-	heldAgy := c.record().heldAgyWorker()
+	heldAgy := c.r.heldInternalWorker(c.record())
 	startedAt := c.r.opts.Now().UnixMilli()
 	var err error
 	if checkout := c.admitInput(func() { err = send() }); checkout != "" {
@@ -218,14 +218,14 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 		PermissionLevel: level,
 		// A Claude worker reports its session state and background tasks,
 		// so a task it still runs keeps it from idling (idleNow).
-		SessionState: rec.Backend == BackendClaude && isAgentWorkerProfile(rec.Profile),
+		SessionState: c.r.lifecycle(rec.Backend).WorkerSessionState && isAgentWorkerProfile(rec.Profile),
 		// An agent.spawn child delegates through agent.spawn only.
 		RemoveSubagents: RemovesSubagents(rec),
 	}
 	if attach {
 		// Harness-initiated wakeups also set TurnOpen. Only a runner send
 		// saves the start time alongside it.
-		if rec.TurnStartedAt != 0 && (rec.TurnOpen || rec.agyInternalPrompt()) {
+		if rec.TurnStartedAt != 0 && (rec.TurnOpen || c.r.internalPrompt(rec)) {
 			startSeq := rec.TurnStartSeq
 			spec.reattachedPromptAfter = &startSeq
 		}

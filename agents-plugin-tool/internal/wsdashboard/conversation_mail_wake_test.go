@@ -159,8 +159,8 @@ func TestConversationMailWakeReplyIDHeader(t *testing.T) {
 				t.Fatalf("matched wake must have one mail icon immediately after its inbound arrow: %s", html)
 			}
 			matchedHash := set[regionEntries].Hash
-			marker := `<span hidden data-entry="` + ring[0].Name + `" data-mail-wake="suppressed"></span>`
-			if !strings.Contains(html, marker) || !strings.Contains(html, `<article class="mail-block" data-entry="`+ring[1].Name+`" data-mail-wake="matched">`) || strings.Count(html, "data-entry=") != 2 {
+			marker := `<span hidden data-entry="` + ring[0].Name + `" data-mail-wake="suppressed" data-at="` + ring[0].At.UTC().Format("2006-01-02T15:04:05.999999999Z") + `"></span>`
+			if !strings.Contains(html, marker) || !strings.Contains(html, `<article class="mail-block" data-entry="`+ring[1].Name+`" data-mail-wake="matched" data-at="`+ring[0].At.UTC().Format("2006-01-02T15:04:05.999999999Z")+`">`) || strings.Count(html, "data-entry=") != 2 {
 				t.Fatalf("lost keyed cursor marker or delivery position: %s", html)
 			}
 			// Losing retained history must undo the association on the next

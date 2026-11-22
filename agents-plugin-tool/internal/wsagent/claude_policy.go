@@ -72,6 +72,12 @@ func claudeSpawnIdiom(namespace string) string {
 		` (subagent_type "general-purpose" when the resolved effort is not exactly ` + levelList + `)`
 }
 
+var _ auditSource = (*claudeMapper)(nil)
+
+func (*claudeMapper) newAudit(sessionID string) (string, auditAdapter) {
+	return BackendClaude, newClaudeAudit(sessionID)
+}
+
 var _ terminalSession = ClaudeBackend{}
 
 func (ClaudeBackend) terminalResume(rec Record, _ string) string {

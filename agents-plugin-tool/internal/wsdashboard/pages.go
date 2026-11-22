@@ -73,6 +73,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-companion-relay.js",
 	"dashboard-audit-window.js",
 	"dashboard-audit.js",
+	"dashboard-audit-rows.js",
 	"dashboard-lifecycle.js",
 }
 
@@ -84,6 +85,7 @@ var companionScriptFiles = []string{
 	"dashboard-companion-compositor.js",
 	"dashboard-companion-scenarios.js",
 	"dashboard-companion-menu.js",
+	"dashboard-companion-sources.js",
 	"dashboard-companion-settings.js",
 	"dashboard-companion-stage.js",
 }
@@ -99,6 +101,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-rail.css",
 	"dashboard-shell.css",
 	"dashboard-audit.css",
+	"dashboard-audit-rows.css",
 	"dashboard-exec-hud.css",
 }
 

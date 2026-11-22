@@ -71,6 +71,7 @@ var manifestGlobalOnlyKeys = map[string]struct{}{
 	wsauditstore.KeySessionCapMiB: {}, wsauditstore.KeyTotalCapMiB: {},
 	wsauditstore.KeyBodyCapKiB: {}, wsauditstore.KeyRetentionDays: {},
 	wsdashboard.CompanionAgentCooldownKey: {}, wsdashboard.CompanionAgentHourlyCapKey: {},
+	wsdashboard.CompanionSourcesKey: {},
 }
 
 func init() {

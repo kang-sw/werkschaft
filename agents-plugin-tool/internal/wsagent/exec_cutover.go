@@ -103,7 +103,7 @@ func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bo
 		return false, "the daemon's hosted exec jobs are not open"
 	}
 	if !rec.Lead {
-		for _, name := range cutoverReplacement(rec.Backend) {
+		for _, name := range cutoverReplacement(reg.Lifecycle) {
 			if !slices.Contains(def.WSTools, name) {
 				return false, "the profile's ws tools have no " + name + " to replace the native tools with"
 			}
@@ -120,25 +120,27 @@ func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bo
 
 // cutoverReplacement are the ws tools a worker profile's allowlist must
 // name for its native tools to be removed: exec.shell, and for Codex,
-// whose shell is also its read surface, the fs.* read tools.
-func cutoverReplacement(backend string) []string {
-	if backend == BackendCodex {
+// whose shell is also its read surface (LifecyclePolicy.ExecReadTools), the
+// fs.* read tools.
+func cutoverReplacement(life LifecyclePolicy) []string {
+	if life.ExecReadTools {
 		return append([]string{"exec.shell"}, CodexReadWSTools...)
 	}
 	return []string{"exec.shell"}
 }
 
 // execRolloutOn reads the harness's rollout switch: its bucket, then all,
-// then the bare key; on unless one says off. A Claude start also needs its
-// opt-in, claude.exec_cutover_enabled: off unless it says on, and off when
-// the config cannot be read, so the default Claude path keeps its native
-// tools and never depends on the ws-mcp session route for commands. One
+// then the bare key; on unless one says off. A backend with an ExecOptIn
+// (Claude's claude.exec_cutover_enabled) also needs it: off unless it says on,
+// and off when the config cannot be read, so the default Claude path keeps its
+// native tools and never depends on the ws-mcp session route for commands. One
 // resolution reads every scope's file once for all the keys. When off, the
 // second result says why.
 func (c *conv) execRolloutOn(rec Record) (bool, string) {
-	claude := rec.Backend == BackendClaude
+	optIn := c.r.opts.Backends[rec.Backend].Lifecycle.ExecOptIn
+	gated := optIn.Key != ""
 	prefix := wsconfig.ItemExecNativeToolRemoval
-	if claude {
+	if gated {
 		// The common prefix of both families is empty: every scope's file
 		// is still read once, and the keys are picked below.
 		prefix = ""
@@ -147,14 +149,14 @@ func (c *conv) execRolloutOn(rec Record) (bool, string) {
 	values, err := resolver.ListScalars(rec.WSKey, prefix)
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: %s: %v\n", rec.ReplyID, wsconfig.ItemExecNativeToolRemoval, err)
-		if claude {
-			return false, wsconfig.ItemClaudeExecCutoverEnabled + " could not be read: " + err.Error()
+		if gated {
+			return false, optIn.Key + " could not be read: " + err.Error()
 		}
 		return true, ""
 	}
 	byKey := make(map[string]string, 4)
 	for _, v := range values {
-		if v.Key == wsconfig.ItemClaudeExecCutoverEnabled || strings.HasPrefix(v.Key, wsconfig.ItemExecNativeToolRemoval) {
+		if v.Key == optIn.Key || strings.HasPrefix(v.Key, wsconfig.ItemExecNativeToolRemoval) {
 			byKey[v.Key] = v.Value
 		}
 	}
@@ -172,11 +174,11 @@ func (c *conv) execRolloutOn(rec Record) (bool, string) {
 		}
 		break
 	}
-	if claude {
-		switch strings.ToLower(strings.TrimSpace(byKey[wsconfig.ItemClaudeExecCutoverEnabled])) {
+	if gated {
+		switch strings.ToLower(strings.TrimSpace(byKey[optIn.Key])) {
 		case "true", "on", "1", "yes":
 		default:
-			return false, wsconfig.ItemClaudeExecCutoverEnabled + " is off (the Claude cutover is opt-in)"
+			return false, optIn.Key + " is off (the " + optIn.Label + " cutover is opt-in)"
 		}
 	}
 	return true, ""

@@ -258,6 +258,7 @@ func cutoverHarness(t *testing.T) *leadHarness {
 	h.opts.Backends[BackendClaude] = claude
 	codex := h.opts.Backends[BackendCodex]
 	codex.ExecCutover = &ExecCutoverSupport{Since: "0.160.0"}
+	codex.Lifecycle = builtinLifecycle(BackendCodex)
 	h.opts.Backends[BackendCodex] = codex
 	seedHarnessVersions(t, h, map[string]string{BackendClaude: "2.1.330", BackendCodex: "0.160.0"})
 	h.execJobs = newFakeExecJobs()

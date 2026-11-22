@@ -38,7 +38,7 @@ func TestToolsEntryRendersACollapsedSummaryRow(t *testing.T) {
 	html := string(set[regionEntries].HTML)
 	name := ring[1].Name
 	for _, want := range []string{
-		`<details class="toolsline" data-entry="` + name + `" data-key="tools-` + name + `">`,
+		`<details class="toolsline" data-entry="` + name + `" data-key="tools-` + name + `" data-at="2026-11-06T12:00:02Z">`,
 		`Bash</span> 5`,
 		`whiteboard.update</span> 2`,
 		` · +4 other`,

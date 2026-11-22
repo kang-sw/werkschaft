@@ -110,6 +110,8 @@ func (s *Server) filteredTools() []map[string]any {
 						meta[key] = value
 					}
 				}
+				// Retained name check: the _meta key is Antigravity's own, read by its client
+				// (TestHostedAgyToolsAlwaysLoad).
 				meta["antigravity/alwaysLoad"] = true
 				definition["_meta"] = meta
 			}

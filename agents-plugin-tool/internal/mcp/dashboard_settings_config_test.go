@@ -16,7 +16,7 @@ import (
 
 func TestDashboardSettingsCatalog(t *testing.T) {
 	t.Setenv(wspackage.EnvDevCheckout, "")
-	var namespaces = map[string]int{"claude": 13, "agy": 4, "dashboard": 21, "pi": 15}
+	var namespaces = map[string]int{"claude": 13, "agy": 4, "dashboard": 22, "pi": 15}
 	for _, pkg := range []string{"ws", "wsflow"} {
 		t.Run(pkg, func(t *testing.T) {
 			catalog, err := DashboardConfigCatalog(pkg)
@@ -121,6 +121,40 @@ func TestDashboardSettingsKeepsParentSessionResolutionSeparateFromItsOwnOverride
 		}
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// TestDashboardAdapterReadLimitsKeepHarnessKeyScopes pins the scope each
+// harness-bucketed config key reads under: the named keys the adapters read
+// without a worktree or a session, the Pi and Agy startup-only keys, and the
+// prefix fallback for a harness key the table does not name.
+func TestDashboardAdapterReadLimitsKeepHarnessKeyScopes(t *testing.T) {
+	for _, tc := range []struct {
+		key            string
+		noRepo, noSess bool
+	}{
+		{"claude.status_band_enabled", false, false},
+		{"pi.runaway_threshold", false, false},
+		{"pi.settle_delay_ms", false, false},
+		{"pi.compaction_advisory_percent", false, false},
+		{"pi.compaction_hard_percent", false, false},
+		{"pi.context_window_override", false, false},
+		{"pi.compaction_dialog_budget_bytes", false, false},
+		{"pi.compaction_reread_budget_bytes", false, false},
+		{"agy.model_wait_timeout_seconds", false, true},
+		{"agy.model_wait_retries", false, true},
+		{"agy.stall_log_check", false, true},
+		{"agy.http2_frame_trace", false, true},
+		{DashboardPortKey, true, true},
+		{"dashboard.pi_spawn_enabled", true, true},
+		{"claude.some_unlisted_key", true, true},
+		{"pi.some_unlisted_key", true, true},
+		{"unrelated.key", false, false},
+	} {
+		noRepo, noSession := dashboardAdapterReadLimits(tc.key)
+		if noRepo != tc.noRepo || noSession != tc.noSess {
+			t.Errorf("%s: limits = (%v, %v), want (%v, %v)", tc.key, noRepo, noSession, tc.noRepo, tc.noSess)
 		}
 	}
 }

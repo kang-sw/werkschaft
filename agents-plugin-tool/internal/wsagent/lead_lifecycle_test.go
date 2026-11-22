@@ -399,7 +399,7 @@ func TestPiLeadTurnsAndCompact(t *testing.T) {
 	h.send(id, "hello")
 	holder := h.holder(id)
 	spec := h.holders.spawned(holder)
-	if mode, _ := flagValue(spec.Argv, "--mode"); spec.Argv[0] != "/opt/harness/pi" || mode != "rpc" {
+	if mode, _ := flagValue(spec.Argv, "--mode"); spec.Argv[0] != fakeHarness("pi") || mode != "rpc" {
 		t.Fatalf("spawn argv = %v", spec.Argv)
 	}
 	for _, banned := range []string{"--no-extensions", "--no-skills", "--no-tools", "--tools", "--no-context-files", "--system-prompt", "--append-system-prompt"} {

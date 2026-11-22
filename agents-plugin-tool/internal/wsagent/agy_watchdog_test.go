@@ -237,9 +237,13 @@ func TestAgyTerminalFailureSettlesWithoutContinue(t *testing.T) {
 				t.Fatalf("terminal failure report = %+v (%q)", report.Result, ReportText(report))
 			}
 			dir := wsdashboard.SessionDir(h.dir, id)
-			rec, err := readRecord(dir)
-			if err != nil || rec.TurnOpen || rec.LastTurn == nil || rec.LastTurn.Result.Status != TurnFailed || rec.LastTurn.Result.Error != wantError {
-				t.Fatalf("failed turn was not stored: %+v (error %v)", rec, err)
+			// The report callback runs between two record writes (the
+			// settled turn, then LastReportedTurn), so this read can meet
+			// the second replace in flight; on Windows a reader of a file
+			// being replaced fails transiently. h.record retries that.
+			rec := h.record(id)
+			if rec.TurnOpen || rec.LastTurn == nil || rec.LastTurn.Result.Status != TurnFailed || rec.LastTurn.Result.Error != wantError {
+				t.Fatalf("failed turn was not stored: %+v", rec)
 			}
 			if len(p.sent) != 0 || procInterrupts(p) != 0 {
 				t.Fatal("terminal failure triggered an interrupt or continue")

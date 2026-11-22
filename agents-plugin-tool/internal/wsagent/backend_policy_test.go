@@ -3,6 +3,7 @@ package wsagent
 import (
 	"net/http"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -52,16 +53,17 @@ func TestBuiltinBackendPolicyTable(t *testing.T) {
 		fallback  PermissionLevel
 	}{
 		{backend: BackendClaude, terminal: true,
-			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, LeadStdioFallback: true, RestoreUsage: true},
-			modes:     map[PermissionLevel]string{PermissionReadOnly: "plan", PermissionWorkdirWrite: "acceptEdits", PermissionFull: "bypassPermissions"},
+			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, LeadStdioFallback: true, RestoreUsage: true,
+				NoWorkerCompactionSteer: true, WorkerSessionState: true, ExecOptIn: ExecOptIn{Key: "claude.exec_cutover_enabled", Label: "Claude"}},
+			modes: map[PermissionLevel]string{PermissionReadOnly: "plan", PermissionWorkdirWrite: "acceptEdits", PermissionFull: "bypassPermissions"},
 			legacy: map[string]PermissionLevel{"plan": PermissionReadOnly, "bypassPermissions": PermissionFull, "": PermissionWorkdirWrite,
 				"auto": PermissionWorkdirWrite, "default": PermissionWorkdirWrite, "acceptEdits": PermissionWorkdirWrite, "dontAsk": PermissionWorkdirWrite}},
 		{backend: BackendCodex, live: true,
-			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true},
+			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, ExecReadTools: true},
 			modes:     map[PermissionLevel]string{PermissionReadOnly: "read-only", PermissionWorkdirWrite: "workspace-write", PermissionFull: "danger-full-access"},
 			legacy:    map[string]PermissionLevel{"read-only": PermissionReadOnly, "workspace-write": PermissionWorkdirWrite, "danger-full-access": PermissionFull}},
 		{backend: BackendAgy, terminal: true, admitter: true,
-			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, TurnActivity: true}},
+			lifecycle: LifecyclePolicy{ComposedLeadInstructions: true, LeadHTTPMCP: true, TurnActivity: true, InternalTurns: true, WorkerLog: true}},
 		{backend: BackendPi, terminal: true,
 			lifecycle: LifecyclePolicy{NativeChildren: true, TerminalSummaries: true},
 			fallback:  PermissionWorkdirWrite},
@@ -350,5 +352,106 @@ func TestDelegatesThroughDaemon(t *testing.T) {
 	}
 	if pi(Record{Backend: BackendPi}, func() *Profile { return nil }) {
 		t.Error("an unresolvable launched profile does not delegate")
+	}
+}
+
+// TestResidualPolicyDrivesCommonCode: the compaction, session-state, exec
+// cutover, internal-turn, and worker-log differences common code used to read
+// from the harness name come from the registration, so a fixture backend under
+// any name gets them and a built-in name registered without them gets none.
+func TestResidualPolicyDrivesCommonCode(t *testing.T) {
+	runner := policyRunner(map[string]BackendRegistration{
+		"fixture": {Backend: &policyBackend{}, Lifecycle: LifecyclePolicy{
+			NoWorkerCompactionSteer: true, WorkerSessionState: true, ExecReadTools: true,
+			InternalTurns: true, WorkerLog: true,
+		}},
+		BackendAgy: {Backend: &fakeBackend{}},
+	})
+	if !runner.lifecycle("fixture").WorkerLog || !runner.lifecycle("fixture").NoWorkerCompactionSteer || !runner.lifecycle("fixture").WorkerSessionState {
+		t.Fatalf("lifecycle = %+v", runner.lifecycle("fixture"))
+	}
+	held := Record{Backend: "fixture", Parent: &ParentRef{}, HolderID: "h", HandedOffAt: "t"}
+	if !runner.heldInternalWorker(held) {
+		t.Error("a held worker of an InternalTurns backend is not held-internal")
+	}
+	held.Backend = BackendAgy
+	if runner.heldInternalWorker(held) || runner.internalPrompt(Record{Backend: BackendAgy, Parent: &ParentRef{}, TurnStartedAt: 1}) {
+		t.Error("an agy registration that declares no InternalTurns got agy behavior")
+	}
+	stamped := Record{Backend: "fixture", Parent: &ParentRef{}, TurnStartedAt: 1}
+	if !runner.internalPrompt(stamped) {
+		t.Error("a stamped idle worker turn is not an internal prompt")
+	}
+	stamped.TurnOpen = true
+	if runner.internalPrompt(stamped) {
+		t.Error("an open turn is an internal prompt")
+	}
+	if got := cutoverReplacement(runner.lifecycle("fixture")); !slices.Equal(got, append([]string{"exec.shell"}, CodexReadWSTools...)) {
+		t.Errorf("replacement = %v", got)
+	}
+	if got := cutoverReplacement(LifecyclePolicy{}); !slices.Equal(got, []string{"exec.shell"}) {
+		t.Errorf("replacement without read tools = %v", got)
+	}
+}
+
+// TestBuiltinResidualPolicyInterfaces pins which built-in declares the
+// extension-bridge compaction and the audit adapter, with literal expectations.
+func TestBuiltinResidualPolicyInterfaces(t *testing.T) {
+	regs := BuiltinBackendRegistrations()
+	for name, want := range map[string]bool{BackendClaude: false, BackendCodex: false, BackendAgy: false, BackendPi: true} {
+		_, got := regs[name].Backend.(leadCompactionBridge)
+		if got != want {
+			t.Errorf("%s leadCompactionBridge = %v, want %v", name, got, want)
+		}
+	}
+	runner := policyRunner(regs)
+	lead := Record{Backend: BackendPi, Lead: true}
+	if !runner.bridgedLeadCompaction(lead) {
+		t.Error("a Pi lead with the extension compacts through the bridge")
+	}
+	lead.PluginWarning = piExtensionFallbackMarker
+	if runner.bridgedLeadCompaction(lead) || runner.bridgedLeadCompaction(Record{Backend: BackendPi}) ||
+		runner.bridgedLeadCompaction(Record{Backend: BackendClaude, Lead: true}) {
+		t.Error("an MCP-only Pi lead, a Pi worker, or another backend compacts through the bridge")
+	}
+	if h, a := (&claudeMapper{}).newAudit("s"); h != BackendClaude || a == nil {
+		t.Errorf("claude audit = %q %v", h, a)
+	}
+	if h, a := (&codexMapper{}).newAudit("s"); h != BackendCodex || a == nil {
+		t.Errorf("codex audit = %q %v", h, a)
+	}
+}
+
+// TestTierHarnessesLeadWithClaude pins the order the dashboard tier-routing
+// view relies on for its default harness (its first entry, which was a Claude
+// preference before the view stopped naming a harness).
+func TestTierHarnessesLeadWithClaude(t *testing.T) {
+	if got := TierHarnesses(); len(got) == 0 || got[0] != BackendClaude {
+		t.Fatalf("TierHarnesses = %v, want %s first", got, BackendClaude)
+	}
+	if got := TierHarnesses(map[string]BackendRegistration{"extension": {}}); got[0] != BackendClaude {
+		t.Fatalf("an extension registration displaced the default: %v", got)
+	}
+}
+
+// TestRunnerPolicyAccessorsMatchTheRegistryCopy pins the per-name accessors to
+// the full registry copy they stand in for on hot paths.
+func TestRunnerPolicyAccessorsMatchTheRegistryCopy(t *testing.T) {
+	r := &Runner{opts: Options{Backends: BuiltinBackendRegistrations()}}
+	for name, reg := range r.BackendRegistrations() {
+		life, ok := r.BackendLifecycle(name)
+		if !ok || life != reg.Lifecycle {
+			t.Errorf("%s: BackendLifecycle = %+v, %v; want %+v", name, life, ok, reg.Lifecycle)
+		}
+		conn, ok := r.BackendConnection(name)
+		if !ok || conn.BridgeClientName != reg.Connection.BridgeClientName || conn.NamedClient != reg.Connection.NamedClient {
+			t.Errorf("%s: BackendConnection = %+v, %v; want %+v", name, conn, ok, reg.Connection)
+		}
+	}
+	if _, ok := r.BackendLifecycle("unregistered"); ok {
+		t.Error("an unregistered name reported a lifecycle")
+	}
+	if _, ok := r.BackendConnection("unregistered"); ok {
+		t.Error("an unregistered name reported a connection")
 	}
 }

@@ -8,6 +8,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 3302b5eedd080007
 sage-review-completeness-reviewed: 3302b5eedd080007
+completed: 2026-11-23
 ---
 
 # Move harness-name branches out of the common layer into per-harness registration data
@@ -636,3 +637,180 @@ the implemented phases, citing source lines for each affected old/new writer,
 reader/refusal, and reopen path. Split newly discovered T1+ behavior into its
 own ticket; a prerequisite's already settled higher tier remains that ticket's
 decision.
+
+### Result (d0aef569f) - 2026-11-23
+
+- **VERIFIED - residual inventory and per-site decisions.** Base `0e6693a21`
+  (Phases 1-3 landed). Commits `13d5a4db3` (moves) and `d0aef569f` (scan
+  gate). Every site found was either moved behind the (1880) seam with
+  built-in behavior unchanged, or allowlisted under (1881) with a site comment
+  ("Retained name check: ...") and a fixture.
+  - *Moved.* `compaction.go` Claude worker steer to
+    `LifecyclePolicy.NoWorkerCompactionSteer` (`compaction.go:513`); the Pi
+    lead bridge to the `leadCompactionBridge` Backend interface implemented by
+    `PiBackend`, read through `Runner.bridgedLeadCompaction`
+    (`backend_policy.go:203`; a func field on `LifecyclePolicy` was rejected
+    because the policy tests compare the struct with `!=`);
+    `exec_cutover.go` Codex read tools to `ExecReadTools` and the Claude
+    opt-in to `ExecOptIn{Key, Label}` (refusal text unchanged);
+    `internal/mcp/server_exec_cutover.go` `codexReadTools` to
+    `lifecycleOf(execCutover).ExecReadTools` (line 41); `runner_process.go:221`
+    `SessionState`, a Claude site earlier phases missed, to
+    `WorkerSessionState`; `record.go` `heldAgyWorker`/`agyInternalPrompt` to
+    `InternalTurns` through `Runner.heldInternalWorker`/`internalPrompt`;
+    `runner_lead_start.go` `newAgyLog` to `WorkerLog`; `stream.go`
+    `prepareAudit` to the `auditSource` interface on `claudeMapper`/
+    `codexMapper`; `internal/mcp/dashboard_tier_routing.go:129` to
+    `harnesses[0]` (the floor order puts Claude first,
+    `registration_test.go:54`, pinned again by `TestTierHarnessesLeadWithClaude`;
+    the nine inventory-environment tests that cover this view cannot run here).
+    Relocated with no logic change (line sets verified identical): the Codex
+    and Agy model-choice listings (`hosted_choices.go` to `codex_choices.go`/
+    `agy_choices.go`), the Pi compaction wire constants (to `pi_policy.go`), and
+    the `agyHistory` response member (`plan_usage_agy.go`).
+    Fixtures: `TestBuiltinBackendPolicyTable`, `TestResidualPolicyDrivesCommonCode`,
+    `TestBuiltinResidualPolicyInterfaces`.
+  - *Allowlisted (survivors).* `backend.go` shim remedy `"claude"` (the
+    `claude.exe` program name, `TestHarnessCommandRefusalNamesARemedy`);
+    `registration.go:362` legacy Pi permission modes
+    (`TestPermissionModesLegacyFallback`). Persisted bytes: the `pi-worker`
+    holder kind (`TestWorkerHolderOwnership`), the `agy_bypass` tag, the `pi:`
+    live-row prefix, harness-bucketed and legacy config keys, plan-usage
+    labels, validators and history file name. External identifiers: `pi.*`
+    tool names and `WS_MCP_PI_*` env vars, Codex raw initialize markers,
+    `antigravity/alwaysLoad`, the `codex-stop-hook` subcommand, provider
+    credential paths and usage headers, the `.claude-plugin` manifest and
+    `${CLAUDE_PLUGIN_ROOT}`. Declarative rows: the `Backend*` constants in
+    `profile.go` and the built-in profile/row names in `builtin.go`.
+    The Phase 3 deferred provider-owned labels in `plan_usage.go` and
+    `plan_usage_probe.go` are persisted/external survivors.
+- **VERIFIED - durable gate and residual search.** The allowlist lives in
+  `internal/wsagent/harness_name_scan_test.go` (`harnessNameAllowlist`): 114
+  entries, 20 declarative, 47 persisted, 47 external, each with file, token,
+  exact count, class, boundary and fixture. `TestCommonCodeHasNoHarnessNameBranch`
+  parses the non-test Go files of `wsagent`, `mcp`, `wsdashboard` and
+  `cmd/ws-mcp` and fails on any `Backend{Claude,Codex,Agy,Pi}` identifier, any
+  short or token-shaped harness-name literal (no whitespace, or at most 24
+  bytes), or any name alternation outside the adapter-owned files and the
+  allowlist. It also fails on a stale entry, a changed count, a missing fixture
+  function, or a non-declarative file with no site comment.
+  `TestHarnessNameScanDetectsAnOffender` confirms an injected offender fails.
+  Scope limit: about 300 long prose literals (descriptions, diagnostics) that
+  mention a harness are not gated; they pin wording, not behavior.
+  Command (from `agents-plugin-tool/`) and output:
+
+  ```sh
+  go test ./internal/wsagent -count=1 -v -run 'TestCommonCodeHasNoHarnessNameBranch|TestHarnessNameScanDetectsAnOffender'
+  # --- PASS: TestCommonCodeHasNoHarnessNameBranch
+  # --- PASS: TestHarnessNameScanDetectsAnOffender
+  ```
+
+  `Backend*` identifiers left outside adapter files (comments and tests
+  excluded): `profile.go:40,41,43,45` (constants), `registration.go:362`,
+  `worker_rejoin.go:19` (x2); the last two are allowlisted.
+- **VERIFIED - local checks.** From `agents-plugin-tool/`: `go build ./...`,
+  `go vet` and `GOOS=windows go vet` over `wsagent`, `mcp`, `wsdashboard`,
+  `cmd/...` pass. `wslive` and `wsi18n` pass. `internal/mcp` fails exactly the
+  nine known inventory tests. `cmd/ws-mcp` fails only
+  `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`. `wsagent`
+  fails three tests outside the known set, all reading only `agents-plugin-pi`
+  (untouched here): `TestPiBundleCommittedIsFresh`,
+  `TestPiGeneratedBundlesMatchTheirSources`,
+  `TestPiMaterializerSourceDriftDoesNotDisplacePreparedBundle`. The committed
+  Pi bundle is stale against `agents-plugin-pi/src/delegation-policy.ts`; the
+  lead verified they fail identically on develop `f894770b1`, so they are
+  pre-existing and were not fixed (regeneration needs Node).
+  `internal/wsdashboard` (Playwright set) fails the four known browser tests
+  plus `TestWhiteboardEffectsBrowser` (load-sensitive; passes alone) and
+  `TestRailNavigationBrowser` (also fails with `wsdashboard` reverted to base,
+  and is on the Phase 3 base-failure list).
+- **VERIFIED - parity, race, file operations.** Four-harness lead parity,
+  `agent.spawn` worker parity, agy same-harness admission and cross-harness
+  refusal ((1546); `agy_same_harness_test.go` in `wsagent` and `mcp`), and
+  restart/rejoin/handoff fixtures run as existing and new Go fixtures in the
+  passing suites; no real harness was launched. `go test -race` passes on the
+  `wsagent` lifecycle subset (compaction, cutover, policy, rejoin, handoff,
+  agy, codex, pi, lead, spawn, permission, scan), on the `mcp`
+  harness/cutover/detect/compaction subset (only the known inventory test
+  fails), and on the `wsdashboard` PlanUsage/Trait/Usage/HUD subset except
+  `TestPlanUsageAgyActivityDoesNotWaitForStoreLock`, which reports a race at
+  `daemon_runtime.go:85` against test teardown in code this phase does not
+  touch; it fails identically on develop `f894770b1` (lead-verified), so it is
+  pre-existing and was not fixed. No syscall harness exists. By source
+  inspection this phase adds zero file operations on the migrated paths (the
+  only removed `os.` use is the Codex cache read, which moved to
+  `codex_choices.go`); the new lookups are map reads and type assertions.
+  Across Phases 1-4 the only moved pair is Phase 2's Pi `os.Stat`, two removed
+  and two added. Gap: no syscall trace was collected.
+
+**VERIFIED - T0, directional, Phases 1-4.** The policy types and interfaces
+(`LifecyclePolicy`, `ExecOptIn`, `leadCompactionBridge`, `auditSource`,
+`ConnectionPolicy`, `Dashboard` traits) are in-memory only, carry no JSON tags,
+and reach no `Profile`, `Record`, holder, config, history file, or MCP schema.
+- Record: `writeRecord` (`record.go:373`) and `readRecord` (`record.go:342`) are
+  unchanged and `AgyBypass` keeps its tag (`record.go:77`); the only removed
+  symbols are unexported (`heldAgyWorker`, `agyInternalPrompt`,
+  `piLeadCompaction`). An older daemon reopening a record reads the same bytes.
+- Holder: `holderKindPiWorker` (`holder.go:75`) and `workerHolderMatches`
+  (`worker_rejoin.go:17`) keep accepting an older daemon's descriptor
+  (`TestWorkerHolderOwnership`).
+- Reopen/downgrade reads: Pi `permissionModes` (`registration.go:361-362`) still
+  accept the legacy Pi values (`TestPermissionModesLegacyFallback`);
+  `PiTierHarness` is retained (`children.go:78`).
+- Config: `claude.exec_cutover_enabled` and the harness-bucketed compaction keys
+  are read and written as before; the opt-in key is now policy data
+  (`claude.go:52`).
+- MCP: no tool name, argument, or default changed. The `fs.*` read-tool gate
+  (`server_exec_cutover.go:40-41`) answers the same for every built-in. Detection
+  and `clientInfo` paths are as settled in Phase 3 (old client against new server
+  and the reverse).
+- Dashboard and history files: validators, file names, and labels are untouched;
+  only a method call moved (`plan_usage_agy.go`).
+- Extension-only effect (settled, not a built-in change): a registered extension
+  harness behaves per its own declaration at the moved sites, and a built-in name
+  registered without a declaration gets none of the behavior (for example, handoff
+  for an extension with no `terminalSession` returns 400 instead of 409).
+- Newly found T1+ behavior: none.
+
+All four phases are complete on `impl/develop/harness-name-branches-p4`.
+
+**Edition (Phase 4, guard review fixes, ab504d202).** A codex review of
+`0e6693a21..d0aef569f` saw no built-in runtime regression and asked for five
+fixes to the guard and one hot path, none changing built-in behavior.
+(1) The scan caught only the four `Backend*` identifiers, so
+`case wsagent.PiTierHarness:` or a use of `wslive.AgentKindPi` passed. It now
+discovers every constant whose value is a harness name from the constants' own
+declarations (and constants declared as one of those) and gates each use; six
+existing uses surfaced and are persisted-marker survivors with a fixture each
+(`PiTierHarness` in `children.go`, `AgentKindPi` in `record.go`,
+`spawn_live.go`, `pageview.go`, `pageview_session.go`, `pageview_hud.go`), with
+the new `TestLiveWriterEndAgentsLeavesPiChildRows`. Negative test:
+`TestHarnessNameScanFindsConstantAliases`. (2) A harness-naming literal is
+gated however long when it is a decision operand (switch case, `==`/`!=`, a
+`strings` comparison argument, a map key or index); no existing site was one.
+Negative test: `TestHarnessNameScanGatesLongProductNameOperands`. (3) The site
+comment is now required on the top-level declaration holding each persisted or
+external occurrence, not on the file
+(`TestHarnessNameScanMarksSitesIndividually`); comments were added where a
+declaration lacked one. The fifteen dashboard read-limit entries now cite the new
+`TestDashboardAdapterReadLimitsKeepHarnessKeyScopes`, which exercises
+`dashboardAdapterReadLimits`. The allowlist is now 120 entries (20 declarative,
+53 persisted, 47 external). (4) Test files are indexed once instead of re-read per
+entry. (5) `server_exec_cutover.go:41` and the connection/lifecycle reads cloned
+the whole registry per call (and three times per `tools/list`); the runner now
+answers `BackendLifecycle`/`BackendConnection` by name, the server reads them
+through an optional interface (full-copy fallback and source precedence
+unchanged), and `TestPolicyReadsDoNotCloneTheRegistry` asserts zero copies.
+Resolving once at connection build was rejected because the registry can gain a
+registration after a connection exists. From `agents-plugin-tool/`: `go build
+./...` and `go vet` (darwin, `GOOS=windows`) pass; the scan tests, `wslive`, and
+targeted `wsdashboard` (`PlanUsage|Trait|Usage|HUD|PiSpawn|AgentRow|Prune|
+Conversation`) pass; full `wsagent` fails only the three pre-existing Pi bundle
+tests; targeted `internal/mcp` fails only the known inventory-environment test.
+The T0 verdict above is unchanged: the runtime-only accessors add no persisted
+shape.
+
+
+## Resolution (2026-11-23)
+
+All four phases merged into develop: Phase 1, Phase 2 (3a1f316aa), Phase 3 (0e6693a21) and Phase 4 (eb048c776). Common code reads harness policy through the registration seam. The durable scan test (harness_name_scan_test.go) gates new name branches against an exact allowlist. The compatibility tier is T0 across all phases.

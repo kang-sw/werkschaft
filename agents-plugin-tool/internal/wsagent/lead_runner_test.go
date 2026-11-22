@@ -69,7 +69,7 @@ func TestLeadSpawnRunsUnderAHolder(t *testing.T) {
 	}
 	spec := h.holders.spawned(holder)
 	rec := h.record(st.ID)
-	if spec.Argv[0] != "/opt/harness/claude" || spec.Cwd != h.root || spec.Mode != "pipe" {
+	if spec.Argv[0] != fakeHarness("claude") || spec.Cwd != h.root || spec.Mode != "pipe" {
 		t.Fatalf("spawn = %+v", spec)
 	}
 	for flag, want := range map[string]string{"--permission-prompt-tool": "stdio", "--permission-mode": "plan", "--model": "opus", "--effort": "high", "--disallowedTools": "Agent,Task"} {

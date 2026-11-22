@@ -44,6 +44,7 @@ func (b CodexBackend) registration() (string, BackendRegistration) {
 		Lifecycle: LifecyclePolicy{
 			ComposedLeadInstructions: true,
 			LeadHTTPMCP:              true,
+			ExecReadTools:            true,
 		},
 		// No OneShot, probed 2026-11-22 with codex-cli 0.170.0: `codex exec
 		// --ignore-user-config --ephemeral -s read-only -c

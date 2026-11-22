@@ -74,6 +74,8 @@ func deniedBasePaths(homes []string) []string {
 	for _, c := range []struct{ key, name string }{
 		{"XDG_CONFIG_HOME", "gh"}, {"XDG_CONFIG_HOME", "gcloud"},
 		{"APPDATA", "GitHub CLI"}, {"APPDATA", "gcloud"},
+		// Retained name check: the providers' own credential locations, denied by name
+		// (TestFSLocalDeniedProviderCredentials).
 		{"CODEX_HOME", "auth.json"}, {"CLAUDE_CONFIG_DIR", ".credentials.json"},
 	} {
 		if dir := os.Getenv(c.key); dir != "" {

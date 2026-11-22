@@ -27,6 +27,8 @@ func SpawnAgentEvent(st State, key string) wslive.Event {
 	if label == "" {
 		label = "subagent " + st.ID
 	}
+	// Retained name check: the live agent id prefix of a Pi child row is persisted in
+	// snapshots written by older daemons (TestAgentSpawnHostedWorkerRows).
 	ev := wslive.Event{Kind: wslive.KindAgent, AgentID: "pi:" + st.ID,
 		AgentKind: wslive.AgentKindPi, Harness: st.Backend, Label: label, Status: status,
 		Model: st.Model, Effort: st.Effort, Observed: st.Observed, SessionKey: key,
@@ -174,6 +176,8 @@ func (c *conv) seedSpawnRows() {
 	if c.r.opts.spawnListed != nil {
 		c.r.opts.spawnListed(c.rec.ReplyID)
 	}
+	// Retained name check: a Pi child row's live agent id carries the pi: prefix in
+	// snapshots older daemons wrote (TestAgentSpawnHostedWorkerRows).
 	for _, st := range SpawnTree(ParentRef{Kind: kind, ReplyID: c.rec.ReplyID}, c.r.Children) {
 		if st.Status == StatusClosed && !known["pi:"+st.ID] {
 			continue

@@ -104,6 +104,36 @@ type LifecyclePolicy struct {
 	// TurnActivity marks a backend whose settled hosted turn signals
 	// Options.AgyActivity (a usage refresh), outside replay and compaction.
 	TurnActivity bool
+	// NoWorkerCompactionSteer marks a backend whose workers get no daemon
+	// compaction guidance: it has no recoverable worker steer path, so only its
+	// lead is steered.
+	NoWorkerCompactionSteer bool
+	// WorkerSessionState marks a backend whose agent worker reports its session
+	// state and background tasks (StartSpec.SessionState), so a task it still
+	// runs keeps it from idling.
+	WorkerSessionState bool
+	// ExecReadTools marks a backend whose shell is also its read surface: a
+	// worker's exec cutover needs the ws fs.* read tools beside exec.shell
+	// (CodexReadWSTools), and its cutover session lists them.
+	ExecReadTools bool
+	// ExecOptIn is the config key and label of an opt-in a backend's exec
+	// cutover needs beyond the rollout switch: off unless the key says on, and
+	// off when config cannot be read. Zero: the rollout switch alone decides.
+	ExecOptIn ExecOptIn
+	// InternalTurns marks a backend whose held worker may start a turn of its
+	// own with no runner send (the harness's internal prompt), so the runner
+	// stamps its request boundary and a replay adopts that turn.
+	InternalTurns bool
+	// WorkerLog marks a backend whose each hosted process writes its own worker
+	// log the daemon locates afresh at every lead start.
+	WorkerLog bool
+}
+
+// ExecOptIn names an exec-cutover opt-in: the config Key that must say on and
+// the Label the refusal reason calls it.
+type ExecOptIn struct {
+	Key   string
+	Label string
 }
 
 // ConnectionPolicy is how a backend's client reaches ws-mcp and how the
@@ -151,6 +181,13 @@ type terminalSession interface {
 	adoptTerminalSession(rec *Record, session string)
 }
 
+// leadCompactionBridge is implemented by a backend whose hosted lead's
+// compaction runs through its own extension bridge rather than the daemon's
+// native command, for the conversations rec describes.
+type leadCompactionBridge interface {
+	bridgesLeadCompaction(rec Record) bool
+}
+
 // nativeModeAdmitter is implemented by a backend that reserves a native
 // permission mode to the user (admitNativeMode); an error refuses the request.
 type nativeModeAdmitter interface {
@@ -159,6 +196,25 @@ type nativeModeAdmitter interface {
 
 func (r *Runner) permissionPolicy(backend string) PermissionPolicy {
 	return r.opts.Backends[backend].Permission
+}
+
+// bridgedLeadCompaction reports whether rec is a lead whose backend compacts
+// through its extension bridge (leadCompactionBridge).
+func (r *Runner) bridgedLeadCompaction(rec Record) bool {
+	b, _ := r.opts.Backends[rec.Backend].Backend.(leadCompactionBridge)
+	return rec.Lead && b != nil && b.bridgesLeadCompaction(rec)
+}
+
+// heldInternalWorker reports whether rec is a held worker of a backend whose
+// held workers start internal turns (LifecyclePolicy.InternalTurns).
+func (r *Runner) heldInternalWorker(rec Record) bool {
+	return r.lifecycle(rec.Backend).InternalTurns && rec.Parent != nil && rec.heldWorker()
+}
+
+// internalPrompt reports whether rec is a worker of such a backend whose
+// harness started a turn of its own that the runner stamped but has not opened.
+func (r *Runner) internalPrompt(rec Record) bool {
+	return r.lifecycle(rec.Backend).InternalTurns && rec.Parent != nil && !rec.TurnOpen && rec.TurnStartedAt != 0
 }
 
 func (r *Runner) lifecycle(backend string) LifecyclePolicy {

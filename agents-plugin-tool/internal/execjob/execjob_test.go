@@ -39,6 +39,19 @@ func gitRoot(t *testing.T) string {
 	return root
 }
 
+// firstLine is s up to its first line break.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return strings.TrimSuffix(line, "\r")
+}
+
+// sameDirectory reports whether a and b name one existing directory.
+func sameDirectory(a, b string) bool {
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ia, ib)
+}
+
 func TestLaunchResultRawReadersAndWorkingDir(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
 	root := gitRoot(t)
@@ -49,7 +62,11 @@ func TestLaunchResultRawReadersAndWorkingDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != stateSucceeded || !strings.Contains(res.Stdout, filepath.Join(root, "sub")) || !strings.Contains(res.Stderr, "errline") {
+	// The job runs in the resolver's spelling of the directory, which can
+	// differ from the one the test built (a Windows temp path comes back from
+	// the resolver in its long form, not 8.3 short; macOS through /private),
+	// so compare the directories, not their spellings.
+	if res.Status != stateSucceeded || !sameDirectory(firstLine(res.Stdout), filepath.Join(root, "sub")) || !strings.Contains(res.Stderr, "errline") {
 		t.Fatalf("launch response = %#v", res)
 	}
 	if !regexp.MustCompile(`^exec-[0-9a-f]{8}$`).MatchString(res.ExecKey) {

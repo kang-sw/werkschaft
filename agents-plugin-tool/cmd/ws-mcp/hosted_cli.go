@@ -151,6 +151,9 @@ func (c *hostedCLI) run() int {
 				return c.getenv(key)
 			}
 			return runMailboxWait(c.ctx, args[2:], c.stdout, c.stderr, c.hello.Cwd, c.hello.OwnerPID, c.env, getenv, wswake.Mailbox, c.streamout)
+		// Retained name check: the subcommand name is the command Codex's hook
+		// configuration, written by earlier versions, invokes; no registration renames
+		// it (TestMailboxCodexStopHookBlocksWhenNamedInboxHasUnreadMail).
 		case "codex-stop-hook":
 			getenv := func(key string) string {
 				if key == "WS_MCP_PROJECT_ROOT" {

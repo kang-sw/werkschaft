@@ -549,7 +549,7 @@ func heldWorkerRejoinFailureClears(t *testing.T, steered bool) {
 		rec.Steered = []steeredReport{{Text: "steered report", Seq: 1}}
 		rec.SteerSeq = 1
 	}
-	if !rec.agyInternalPrompt() {
+	if !h.runner.internalPrompt(rec) {
 		t.Fatal("the edited record is not an internal agy prompt")
 	}
 	if err := writeRecord(wsdashboard.SessionDir(h.dir, id), rec); err != nil {

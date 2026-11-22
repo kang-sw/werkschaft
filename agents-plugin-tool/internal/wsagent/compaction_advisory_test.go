@@ -275,7 +275,7 @@ func TestCompactionHardSteerWorkerRoles(t *testing.T) {
 		t.Run(backend, func(t *testing.T) {
 			p := fakeSteerProc{&fakeProc{}}
 			c := &conv{
-				r: NewRunner(Options{}), rec: Record{Backend: backend}, proc: p, turn: true,
+				r: NewRunner(Options{Backends: map[string]BackendRegistration{backend: {Lifecycle: builtinLifecycle(backend)}}}), rec: Record{Backend: backend}, proc: p, turn: true,
 				workerPermissionLevel: PermissionReadOnly, compactHard: wsconfig.Threshold{Percent: 80},
 			}
 			c.observeCompaction(*compactionUsage(90_000).Live)
@@ -295,7 +295,7 @@ func TestCompactionHardSteerWorkerRoles(t *testing.T) {
 }
 
 func TestCompactionPiAdvisoryUsesCurrentThresholdsAndLever(t *testing.T) {
-	r := NewRunner(Options{Backends: map[string]BackendRegistration{BackendPi: {NativeCompaction: PiCompaction()}}})
+	r := NewRunner(Options{Backends: map[string]BackendRegistration{BackendPi: {Backend: PiBackend{}, NativeCompaction: PiCompaction()}}})
 	c := &conv{r: r, rec: Record{Backend: BackendPi, Lead: true}, compactLoaded: true, compactAdvisoryEnabled: true}
 	c.compactAdvisory = wsconfig.Threshold{Percent: 50, Tokens: 200_000}
 	c.compactHard = wsconfig.Threshold{Percent: 80, Tokens: 350_000}

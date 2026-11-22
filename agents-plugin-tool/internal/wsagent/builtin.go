@@ -88,6 +88,8 @@ var PiWorkerTools = []string{"read", "bash", "edit", "write", "grep", "find", "l
 // pi.* calls go to the daemon on its capability token (children.go), which
 // caps the spawn tree's depth and tier. Ticket lifecycle operations remain
 // on pi-mini-lead; worktree leasing has its own authorization boundary.
+// Retained name check: the Pi extension's own MCP tool names, the Pi worker's
+// allowlist (TestBuiltinPiMiniLeadProfileResolves).
 var PiWorkerWSTools = append([]string{"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.resolve_impl_branch", "tickets.create_empty", "tickets.verify", "pi.spawn", "pi.send", "pi.list", "pi.stop", "pi.transcript", "pi.wait", "compact", "agenda.set"}, ExecWSTools...)
 
 // PiMiniLeadWSTools adds ticket workflow reads and lifecycle operations, but
@@ -168,6 +170,8 @@ var AgentWSTools = agentWSTools()
 func agentWSTools() []string {
 	out := []string{}
 	for _, name := range PiMiniLeadWSTools {
+		// Retained name check: the Pi extension's own pi.* tool-name prefix
+		// (TestAgentWSToolsListSageGateAndStamp).
 		if !strings.HasPrefix(name, "pi.") {
 			out = append(out, name)
 		}

@@ -1025,7 +1025,9 @@ for line in sys.stdin:
 // TestSpawnHTTP2CaptureFiltersStderr: a spawn's HTTP2Capture reaches a real
 // holder, which keeps framer summaries in the capture file and every Go
 // HTTP/2 debug line out of the records the daemon receives; ordinary stderr
-// still arrives. The trace text is synthetic.
+// still arrives. The trace text is synthetic. The child's stderr is
+// reconfigured to LF: Python's text-mode stderr writes "\r\n" for "\n" on
+// Windows, and the holder relays the child's bytes as written.
 func TestSpawnHTTP2CaptureFiltersStderr(t *testing.T) {
 	dir := testHoldersDir(t)
 	sink := newCollector()
@@ -1037,6 +1039,7 @@ func TestSpawnHTTP2CaptureFiltersStderr(t *testing.T) {
 	capture := filepath.Join(t.TempDir(), "frames.log")
 	child := `
 import sys
+sys.stderr.reconfigure(newline="\n")
 sys.stderr.write("plain before\n")
 sys.stderr.write("2026/11/22 12:00:00 http2: Transport encoding header \"authorization\" = \"Bearer SECRET\"\n")
 sys.stderr.write("2026/11/22 12:00:00 http2: Framer 0xc0001: wrote HEADERS flags=END_HEADERS stream=1 len=300\n")

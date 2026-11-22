@@ -569,6 +569,14 @@ func entriesWithoutAgy(entries []planUsageEntry) []planUsageEntry {
 	return filtered
 }
 
+// addAgyHistory sets the ?history=1 response's agy member when an agy entry
+// exists.
+func (s *planUsageStore) addAgyHistory(body map[string]any, entries []planUsageEntry, now int64) {
+	if agy, ok := s.agyHistoryMember(entries, now); ok {
+		body["agyHistory"] = agy
+	}
+}
+
 // agyHistoryMember is the ?history=1 member for agy entries and reports
 // whether one exists; a response without an agy entry carries no member.
 func (s *planUsageStore) agyHistoryMember(entries []planUsageEntry, now int64) (json.RawMessage, bool) {

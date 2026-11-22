@@ -23,7 +23,7 @@ var companionKeys = []string{
 	wsdashboard.CompanionEnabledKey, wsdashboard.CompanionDirectorKey, wsdashboard.CompanionPackKey,
 	wsdashboard.CompanionPresetKey, wsdashboard.CompanionOutfitKey, wsdashboard.CompanionHairKey,
 	wsdashboard.CompanionEyesKey, wsdashboard.CompanionAttachmentsKey, wsdashboard.CompanionPaletteKey,
-	wsdashboard.CompanionAgentCooldownKey, wsdashboard.CompanionAgentHourlyCapKey,
+	wsdashboard.CompanionAgentCooldownKey, wsdashboard.CompanionAgentHourlyCapKey, wsdashboard.CompanionSourcesKey,
 }
 
 func TestCompanionConfigTypedValues(t *testing.T) {
@@ -43,8 +43,10 @@ func TestCompanionConfigTypedValues(t *testing.T) {
 	}{
 		{"unset", `{}`, defaults},
 		{"valid", `{"overrides":{"dashboard.companion_enabled":"true","dashboard.companion_director":"agent",` +
-			`"dashboard.companion_agent_cooldown_seconds":"45","dashboard.companion_agent_hourly_cap":"120"}}`,
-			wsdashboard.CompanionConfig{Enabled: true, Director: "agent", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 45, AgentHourlyCap: 120}},
+			`"dashboard.companion_agent_cooldown_seconds":"45","dashboard.companion_agent_hourly_cap":"120",` +
+			`"dashboard.companion_sources":"https://example.invalid/a.git https://example.invalid/b.zip"}}`,
+			wsdashboard.CompanionConfig{Enabled: true, Director: "agent", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 45, AgentHourlyCap: 120,
+				Sources: "https://example.invalid/a.git https://example.invalid/b.zip"}},
 		{"bounds", `{"overrides":{"dashboard.companion_agent_cooldown_seconds":"10","dashboard.companion_agent_hourly_cap":"1"}}`,
 			wsdashboard.CompanionConfig{Director: "rules", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 10, AgentHourlyCap: 1}},
 		{"invalid stored values fall back to defaults", `{"overrides":{"dashboard.companion_enabled":"maybe",` +
@@ -164,8 +166,8 @@ func TestCompanionGlobalOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	tune := wsconfig.NewResolver(opts, nil, nil, nil)
-	if len(companionKeys) != 11 {
-		t.Fatalf("companion keys = %v, want the eleven companion keys", companionKeys)
+	if len(companionKeys) != 12 {
+		t.Fatalf("companion keys = %v, want the eleven companion keys and the source list", companionKeys)
 	}
 	for _, scope := range []wsconfig.Scope{wsconfig.ScopeProject, wsconfig.ScopeRepo, wsconfig.ScopeSession} {
 		for _, item := range companionKeys {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -929,7 +930,7 @@ func newLeadHarness(t *testing.T) *leadHarness {
 		DaemonVersion: hostedPluginTestVersion,
 		Now:           func() time.Time { return now },
 		Dir:           h.dir,
-		Backends:      map[string]BackendRegistration{BackendClaude: {Backend: ClaudeBackend{Command: "/opt/harness/claude"}, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendClaude), WorkerHTTPMCP: true}, BackendPi: {Backend: PiBackend{Command: "/opt/harness/pi"}, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendPi)}},
+		Backends:      map[string]BackendRegistration{BackendClaude: {Backend: ClaudeBackend{Command: fakeHarness("claude")}, Permission: builtinPermission(BackendClaude), Lifecycle: builtinLifecycle(BackendClaude), LeadProfile: LeadProfileClaude, PermissionModes: LeadPermissionModes, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendClaude), WorkerHTTPMCP: true}, BackendPi: {Backend: PiBackend{Command: fakeHarness("pi")}, Permission: builtinPermission(BackendPi), Lifecycle: builtinLifecycle(BackendPi), LeadProfile: LeadProfilePi, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendPi)}},
 		Keys:          &fakeKeys{},
 		Config:        testConfig(t),
 		Log:           h.log,
@@ -952,6 +953,19 @@ func newLeadHarness(t *testing.T) *leadHarness {
 // (agentMCPCommand in cmd/ws-mcp): the selected package staged from build inputs
 // at each process start, its launcher and its selection warning.
 // The command names no real file; the holders are fakes.
+// fakeHarness is the command the lead harnesses register for harness name:
+// a path no file answers to, because the fake holder never runs it. The
+// path must be absolute on the host: harnessBinaryOf fingerprints a program
+// only when filepath.IsAbs holds, and "/opt/harness/x" has no drive letter,
+// so on Windows it is rooted but not absolute, fingerprints as unresolved
+// and the exec cutover's version gate (execCutoverFor) refuses every start.
+func fakeHarness(name string) string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(`C:\opt\harness`, name)
+	}
+	return "/opt/harness/" + name
+}
+
 func hostedLeadLauncher(version string) func(string) (MCPCommand, error) {
 	return func(root string) (MCPCommand, error) {
 		name, warning, err := ResolveHostedPackage()

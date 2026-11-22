@@ -18,6 +18,8 @@ var errPlanUsage = errors.New("usage unavailable")
 
 // Legacy CLI-owned credential provenance, not transport: acquisition is REST
 // with no subprocess. Keep this wire/history identifier readable by old writers.
+// Retained name check: the persisted history source label
+// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 const codexUsageSource = "via Codex CLI"
 
 // Coalesce simultaneous popover opens as well as ordinary page polls.
@@ -99,6 +101,8 @@ func (s *planUsageStore) query(ctx context.Context, force bool) {
 			s.gpt.Status = "Pi token expired - open Pi to refresh"
 		}
 		// Keep the last value's source, not the failed attempt's source.
+		// Retained name check: "via Pi" is the persisted history source label
+		// (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 		if s.gpt.Source == "" {
 			if codex {
 				s.gpt.Source = codexUsageSource
@@ -197,6 +201,8 @@ func (s *planUsageStore) queryCodex(ctx context.Context) (planUsageEntry, error)
 		req.Header.Set("ChatGPT-Account-Id", auth.Tokens.Account)
 	}
 	req.Header.Set("User-Agent", "ws-dashboard")
+	// Retained name check: the provider's usage endpoint headers
+	// (TestPlanUsageCodexRESTWindows).
 	req.Header.Set("originator", "codex_cli_rs")
 	body, err := s.readUsageResponse(req)
 	if err != nil {
@@ -250,6 +256,9 @@ func expiredUsageAccess(access string) bool {
 var errPiExpired = errors.New("Pi token expired - open Pi to refresh")
 
 func (s *planUsageStore) queryPi(ctx context.Context) (planUsageEntry, error) {
+	// Retained name check: the Pi credential file, its provider member, the usage
+	// endpoint headers, and the persisted source label are external and persisted
+	// identifiers (TestPlanUsageCodexCredentials, TestPlanUsageCodexRESTWindows).
 	// Credential values stay request-local; no upstream diagnostics escape.
 	var auth struct {
 		Codex struct {

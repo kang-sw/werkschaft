@@ -126,9 +126,9 @@ func dashboardTierRoutingView(rsrc fs.FS, opts wsconfig.Options, draft json.RawM
 	harnesses := wsagent.TierHarnesses()
 	if !slices.Contains(harnesses, harness) {
 		harness = ""
-		if slices.Contains(harnesses, wsagent.BackendClaude) {
-			harness = wsagent.BackendClaude
-		} else if len(harnesses) > 0 {
+		// The first harness is the first built-in registration, which the
+		// registration floor keeps first (TestBuiltinBackendRegistrationDefaults).
+		if len(harnesses) > 0 {
 			harness = harnesses[0]
 		}
 	}
