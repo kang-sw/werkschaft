@@ -191,14 +191,22 @@ func TestShellStreamsTheRailAndItsFramesTheirRegions(t *testing.T) {
 	rail := openStream(t, f.base+railEventsRoute)
 	framed := openStream(t, f.base+"/s/livesession/events?frame=1")
 	alone := openStream(t, f.base+"/s/livesession/events")
+	// The rail stream also carries the companion configuration (sse.go
+	// sends it on connect and on each companion change); every other event
+	// is the rail region, and a first one arrives.
 	first := quiet(t, rail)
-	if len(first) == 0 {
-		t.Fatal("the rail stream sent no first rail")
-	}
+	railRegions := 0
 	for _, ev := range first {
-		if ev.Name != regionRail {
+		switch ev.Name {
+		case regionRail:
+			railRegions++
+		case "event:companion": // nextRegion's name for a non-region event
+		default:
 			t.Errorf("the rail stream sent %s", ev.Name)
 		}
+	}
+	if railRegions == 0 {
+		t.Fatalf("the rail stream sent no first rail: %+v", first)
 	}
 	for _, ev := range quiet(t, framed) {
 		if ev.Name == regionRail {
@@ -220,7 +228,7 @@ func TestShellStreamsTheRailAndItsFramesTheirRegions(t *testing.T) {
 		}
 	}
 	for _, ev := range quiet(t, rail) {
-		if ev.Name != regionRail {
+		if ev.Name != regionRail && ev.Name != "event:companion" {
 			t.Errorf("the rail stream sent %s", ev.Name)
 		}
 	}
