@@ -16,6 +16,8 @@
     "session.children": ">=0.51.0-dev <0.52.0",
     "session.request_hire": ">=0.51.0-dev <0.52.0",
     "session.roster": ">=0.51.0-dev <0.52.0",
+    "session.register_user_command": ">=0.51.0-dev <0.52.0",
+    "session.unregister_user_command": ">=0.51.0-dev <0.52.0",
     "mailbox.send": ">=0.51.0-dev <0.52.0",
     "mailbox.recv": ">=0.51.0-dev <0.52.0",
     "mailbox.lookup_peers": ">=0.51.0-dev <0.52.0",

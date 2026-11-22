@@ -36,6 +36,15 @@ func (b ClaudeBackend) registration() (string, BackendRegistration) {
 		WorkerCapable:    true,
 		WorkerProfile:    AgentWorkerProfile(BackendClaude),
 		WorkerHTTPMCP:    true,
+		Permission:       claudePermissionPolicy(),
+		Lifecycle: LifecyclePolicy{
+			ComposedLeadInstructions: true,
+			LeadHTTPMCP:              true,
+			// Without a route a Claude lead runs the same server over stdio
+			// (its --mcp-config entry).
+			LeadStdioFallback: true,
+			RestoreUsage:      true,
+		},
 		// --disallowedTools claudeNativeProcessTools, verified on 2.1.330
 		// (testdata/claude-2.1.330-native-process-tools.jsonl).
 		ExecCutover: &ExecCutoverSupport{Since: "2.1.330"},

@@ -33,6 +33,10 @@ func (b PiBackend) registration() (string, BackendRegistration) {
 		NativeCompaction: PiCompaction(),
 		WorkerCapable:    true,
 		WorkerProfile:    AgentWorkerProfile(BackendPi),
+		// A Pi lead's extension supplies its ws tools, key, and manual; its
+		// native mode is not Claude's, so every session derives workdir-write.
+		Permission: PermissionPolicy{LegacyDefault: PermissionWorkdirWrite},
+		Lifecycle:  LifecyclePolicy{NativeChildren: true, TerminalSummaries: true},
 		// One-shot probe, 2026-11-22, pi 1.5.2: `pi -p --no-session
 		// --no-tools --no-extensions --no-mcp --no-skills
 		// --no-prompt-templates --no-context-files --no-themes

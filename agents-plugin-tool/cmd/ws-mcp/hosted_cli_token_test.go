@@ -55,7 +55,7 @@ func TestHostedCLIWorkerTokenRouting(t *testing.T) {
 	}
 	backend := &cliTokenBackend{starts: make(chan wsagent.StartSpec, 8)}
 	runner := wsagent.NewRunner(wsagent.Options{Dir: t.TempDir(), Config: config, Keys: keys,
-		Backends: map[string]wsagent.BackendRegistration{wsagent.BackendPi: {Backend: backend}},
+		Backends: map[string]wsagent.BackendRegistration{wsagent.BackendPi: {Backend: backend, Permission: wsagent.BuiltinBackendRegistrations()[wsagent.BackendPi].Permission, Lifecycle: wsagent.BuiltinBackendRegistrations()[wsagent.BackendPi].Lifecycle}},
 		WSMCP:    func(string) (wsagent.MCPCommand, error) { return wsagent.MCPCommand{Command: "unused"}, nil },
 	})
 	daemon := httptest.NewServer(runner.Handler())

@@ -48,33 +48,43 @@ func (r *Runner) ComposerOpen(id string) (uint64, error) {
 // ComposerTarget returns the open hosted lead id's target. A closed,
 // handed-off, unknown or non-lead conversation is refused.
 func (r *Runner) ComposerTarget(id string) (ComposerTarget, error) {
-	owner, err := r.ExecOwner(id)
+	owner, root, err := r.ComposerRoot(id)
 	if err != nil {
 		return ComposerTarget{}, err
 	}
+	return ComposerTarget{Owner: owner, Root: root, Environ: r.composerEnviron(id)}, nil
+}
+
+// ComposerRoot returns the open hosted lead id's owner (with its open
+// generation) and the worktree root it is bound to: what a user command is
+// scoped to and what a command launch runs in. It reads the runner's memory
+// only (no key record, no file), builds no environment, and refuses what
+// ComposerTarget refuses.
+func (r *Runner) ComposerRoot(id string) (ExecOwner, string, error) {
+	owner, err := r.ExecOwner(id)
+	if err != nil {
+		return ExecOwner{}, "", err
+	}
 	if !owner.Lead {
-		return ComposerTarget{}, ErrNotComposerTarget
+		return ExecOwner{}, "", ErrNotComposerTarget
 	}
 	c, err := r.open(id)
 	if err != nil {
-		return ComposerTarget{}, err
+		return ExecOwner{}, "", err
 	}
 	c.mu.Lock()
-	root, key, handedOff := c.rec.Root, c.rec.WSKey, c.rec.handedOff()
+	root, handedOff := c.rec.Root, c.rec.handedOff()
 	c.mu.Unlock()
 	if handedOff {
-		return ComposerTarget{}, ErrNotComposerTarget
+		return ExecOwner{}, "", ErrNotComposerTarget
 	}
-	// The key's own root is the bound worktree, as the lead's ws tools see it.
-	if roots, ok := r.opts.Keys.(interface{ Root(string) (string, bool) }); ok && key != "" {
-		if bound, found := roots.Root(key); found && bound != "" {
-			root = bound
-		}
-	}
+	// The runner record's own root, read from memory: it is the worktree the
+	// lead was created in and the key was minted for (a lead's binding is never
+	// changed in place), so no file is read to answer.
 	if root == "" {
-		return ComposerTarget{}, errors.New("the lead has no bound worktree")
+		return ExecOwner{}, "", errors.New("the lead has no bound worktree")
 	}
-	return ComposerTarget{Owner: owner, Root: root, Environ: r.composerEnviron(id)}, nil
+	return owner, root, nil
 }
 
 // composerEnviron is the environment the lead's ws-mcp connection carries

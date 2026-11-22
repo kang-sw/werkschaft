@@ -435,6 +435,27 @@ func TestComposerJobUserStopHandsAStoppedReceiptAndWakesNothing(t *testing.T) {
 	}
 }
 
+// TestComposerExecRefusesAUserCommandReadForAnotherWorktree: a user command's
+// line is run only in the worktree it was read for; a launch that finds the
+// lead bound elsewhere is refused and starts nothing, while a line with no
+// expected worktree (a typed one) runs in the lead's.
+func TestComposerExecRefusesAUserCommandReadForAnotherWorktree(t *testing.T) {
+	c, runner, _, _, root, _ := openComposerFixture(t, 3)
+	jobs, _ := c.hosted.List("lead")
+	before := len(jobs)
+	other := filepath.Join(root, "elsewhere")
+	if _, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 3, Root: other, Line: "echo never", Window: time.Second}); err == nil || !strings.Contains(err.Error(), "worktree changed") {
+		t.Fatalf("launch for another worktree = %v", err)
+	}
+	if jobs, _ := c.hosted.List("lead"); len(jobs) != before {
+		t.Fatalf("a job exists for the refused launch: %d -> %d", before, len(jobs))
+	}
+	job, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 3, Root: runner.target.Root, Line: "echo ok", Window: 5 * time.Second})
+	if err != nil || job.ExecID == "" {
+		t.Fatalf("launch in the read worktree: %+v %v", job, err)
+	}
+}
+
 // firstN is the first n bytes of b, for a failure message.
 func firstN(b []byte, n int) []byte {
 	if len(b) > n {

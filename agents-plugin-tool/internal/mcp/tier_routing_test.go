@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -63,8 +64,10 @@ func setRouting(t *testing.T, s *Server, raw string) {
 
 func metadata(lines []string) string { return strings.Join(lines[1:], "\n") }
 
-// A daemon-agent caller is recommended the role tier and the binding the
-// graph resolves; a native caller keeps the bare size and its own
+// A daemon-agent caller is recommended the binding the graph resolves, in
+// the tier form a v0.51.0 spawn also accepts (the bare size on a fallthrough,
+// <harness>.<size> for a mapped slot; the role form only for a bundle or an
+// unresolvable graph); a native caller keeps the bare size and its own
 // harness's binding, mapping or not.
 func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 	f := roleRenderFixture(t)
@@ -74,7 +77,7 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 	// chain's binding, and the unmapped role tier, which falls through to
 	// that bare size, carries the same binding byte for byte (agent.spawn
 	// refuses both forms alike: TestAgentSpawnRefusesAnUnsetCallerSlotForBareAndRoleTiers).
-	if daemon, want := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)), strings.Replace(nativeFallback, "recommended-tier: medium", "recommended-tier: ticket-worker:medium", 1); daemon != want || !strings.Contains(want, "recommended-model: ") {
+	if daemon, want := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)), nativeFallback; daemon != want || !strings.Contains(want, "recommended-model: ") {
 		t.Fatalf("slotless daemon metadata = %q, want the bare fallback %q", daemon, want)
 	}
 	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeFallback {
@@ -93,7 +96,7 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 
 	// Default chain: the daemon caller's binding is the bare size's.
 	daemon := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil))
-	if want := strings.Replace(nativeBaseline, "recommended-tier: medium", "recommended-tier: ticket-worker:medium", 1); daemon != want {
+	if want := nativeBaseline; daemon != want {
 		t.Fatalf("default-chain daemon metadata = %q, want %q", daemon, want)
 	}
 	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeBaseline {
@@ -103,7 +106,7 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 	// A cross-harness mapping moves only the daemon caller's binding.
 	setRouting(t, f.s, `{"nodes":{"implement":{"*":"claude.*"}}}`)
 	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil))
-	if want := "recommended-tier: ticket-worker:medium\nrecommended-model: sonnet\nrecommended-reasoning-effort: high"; daemon != want {
+	if want := "recommended-tier: claude.medium\nrecommended-model: sonnet\nrecommended-reasoning-effort: high"; daemon != want {
 		t.Fatalf("mapped daemon metadata = %q, want %q", daemon, want)
 	}
 	if native := metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitNative, nil)); native != nativeBaseline {
@@ -112,7 +115,7 @@ func TestRenderRoleRecommendationDaemonVersusNative(t *testing.T) {
 
 	// tier_override keeps its bare validation and replaces the role's size.
 	daemon = metadata(renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, map[string]any{"tier_override": "opus"}))
-	if want := "recommended-tier: ticket-worker:large\nrecommended-model: opus\nrecommended-reasoning-effort: high"; daemon != want {
+	if want := "recommended-tier: claude.large\nrecommended-model: opus\nrecommended-reasoning-effort: high"; daemon != want {
 		t.Fatalf("override daemon metadata = %q, want %q", daemon, want)
 	}
 	resp = callToolOnce(t, f.s, 3, "playbook.render", map[string]any{"name": "role-pb", "session_key": f.leadKey, "tier_override": "ticket-worker:large"})
@@ -188,7 +191,7 @@ func TestUnmappedRoleTierResolvesAsTheBareSize(t *testing.T) {
 		f.s.rootMu.Lock()
 		f.s.sessionHarness = harness
 		f.s.rootMu.Unlock()
-		wantRender := strings.Replace(withRecommendedRenderBinding("path", harness, "medium", opts), "recommended-tier: medium", "recommended-tier: ticket-worker:medium", 1)
+		wantRender := withRecommendedRenderBinding("path", harness, "medium", opts)
 		got := f.s.withRecommendedRenderBindingFor("path", harness, "ticket-worker:medium", opts)
 		f.s.rootMu.Lock()
 		f.s.sessionHarness = ""
@@ -305,9 +308,11 @@ func TestFormatAgentTiersRoutingSection(t *testing.T) {
 }
 
 // The shipped playbooks' own frontmatter drives the recommendation: a
-// daemon-agent caller is told <role>:<size> (the explore playbook's role is
-// playbook-explore), the binding follows the group mapping, and a native
-// caller keeps the bare size and caller-harness binding with or without it.
+// daemon-agent caller is walked through <role>:<size> (the explore playbook's
+// role is playbook-explore) and told the v0.51.0-readable form of where it
+// lands (the bare size on the default chain, <harness>.<size> once mapped),
+// the binding follows the group mapping, and a native caller keeps the bare
+// size and caller-harness binding with or without it.
 func TestShippedPlaybookFrontmatterRecommendations(t *testing.T) {
 	useResourceFixture(t, "../../../agents-plugin/rsrc")
 	f := newPiRecordFixture(t)
@@ -320,15 +325,14 @@ func TestShippedPlaybookFrontmatterRecommendations(t *testing.T) {
 		first, _, _ := strings.Cut(metadata(renderResponse(t, f.s, f.leadKey, name, initialize, nil)), "\n")
 		return first
 	}
-	for name, want := range map[string]string{
-		"ticket-reviewer-design": "ticket-reviewer-design:large",
-		"ticket-worker-elevated": "ticket-worker-elevated:large",
-		"explore":                "playbook-explore:small",
+	for name, bare := range map[string]string{
+		"ticket-reviewer-design": "large",
+		"ticket-worker-elevated": "large",
+		"explore":                "small",
 	} {
-		if got := tier(piInitDaemon, name); got != "recommended-tier: "+want {
-			t.Fatalf("daemon %s = %q, want %q", name, got, want)
+		if got := tier(piInitDaemon, name); got != "recommended-tier: "+bare {
+			t.Fatalf("daemon %s = %q, want %q", name, got, bare)
 		}
-		bare := want[strings.LastIndex(want, ":")+1:]
 		if got := tier(piInitNative, name); got != "recommended-tier: "+bare {
 			t.Fatalf("native %s = %q, want bare %q", name, got, bare)
 		}
@@ -336,14 +340,137 @@ func TestShippedPlaybookFrontmatterRecommendations(t *testing.T) {
 
 	nativeBefore := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitNative, nil))
 	daemon := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil))
-	if want := "recommended-tier: ticket-reviewer-design:large\nrecommended-model: pi-large\nrecommended-reasoning-effort: high"; daemon != want {
+	if want := "recommended-tier: large\nrecommended-model: pi-large\nrecommended-reasoning-effort: high"; daemon != want {
 		t.Fatalf("default-chain daemon metadata = %q, want %q", daemon, want)
 	}
 	setRouting(t, f.s, `{"nodes":{"review":{"*":"claude.*"}}}`)
-	if daemon = metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil)); !strings.HasPrefix(daemon, "recommended-tier: ticket-reviewer-design:large\nrecommended-model: opus") {
+	if daemon = metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil)); !strings.HasPrefix(daemon, "recommended-tier: claude.large\nrecommended-model: opus") {
 		t.Fatalf("mapped daemon metadata = %q", daemon)
 	}
 	if native := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitNative, nil)); native != nativeBefore {
 		t.Fatalf("mapped native metadata = %q, want %q", native, nativeBefore)
+	}
+}
+
+// legacyV0510ResolveTier is v0.51.0's agent.spawn tier resolution for a
+// caller on callerHarness (f800ba30d:internal/wsagent/agent_tools.go
+// resolveTier + harnessSlot path, agent_spawn.go:45-50): a bare size on the
+// caller's harness, <harness>.<size>, or an exact agent.tier_aliases entry,
+// then that harness's own agents.tier slot. Anything else, a role tier
+// included, is refused before a child exists.
+func legacyV0510ResolveTier(cfg wsconfig.Options, callerHarness, tier string) (harness string, mapping wsconfig.AgentTier, err error) {
+	raw := strings.ToLower(strings.TrimSpace(tier))
+	var bare string
+	switch h, t, dotted := strings.Cut(raw, "."); {
+	case dotted:
+		harness, bare = h, wsconfig.NormalizedTier(t)
+	case wsconfig.NormalizedTier(raw) != "":
+		harness, bare = callerHarness, wsconfig.NormalizedTier(raw)
+	default:
+		resolver := wsconfig.NewResolver(cfg, map[string]string{wsconfig.ItemAgentTierAliases: ""}, nil, nil)
+		rv, gerr := resolver.Get("", wsconfig.ItemAgentTierAliases)
+		if gerr != nil {
+			return "", mapping, gerr
+		}
+		aliases, perr := wsconfig.ParseTierAliases(rv.Value)
+		if perr != nil {
+			return "", mapping, perr
+		}
+		target, ok := aliases[raw]
+		if !ok {
+			return "", mapping, fmt.Errorf("tier %q is neither a tier, <harness>.<tier>, nor an alias in %s", tier, wsconfig.ItemAgentTierAliases)
+		}
+		h, t, _ := strings.Cut(target, ".")
+		harness, bare = h, t
+	}
+	if bare == "" {
+		return "", mapping, fmt.Errorf("tier %q names no tier", tier)
+	}
+	tiers, err := wsconfig.HarnessTiers(cfg, harness)
+	if err != nil {
+		return "", mapping, err
+	}
+	mapping, ok := tiers[bare]
+	if !ok {
+		return "", mapping, fmt.Errorf("tier %q: %s.%s has no model in agents.tier", tier, harness, bare)
+	}
+	return harness, mapping, nil
+}
+
+// A rendered tier is passed to agent.spawn as returned. If the daemon is
+// replaced by v0.51.0 between the render and the spawn, a slot-terminal role
+// walk was rendered in a form v0.51.0 resolves to the same harness, model,
+// and effort the candidate's role walk does; the one residual is a bundle
+// terminal, which v0.51.0 cannot express, so its role form stays (and
+// v0.51.0 refuses it before creating a child, per the named-tiers decision).
+func TestRenderedTierSurvivesDaemonRollbackBeforeSpawn(t *testing.T) {
+	f := roleRenderFixture(t)
+	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
+		"value": map[string]any{"tier": "medium", "model": "pi-mid", "effort": "high"}})
+	if toolIsError(t, resp) {
+		t.Fatalf("set pi.medium: %s", resp)
+	}
+	const callerHarness = wsagent.BackendPi
+	cases := []struct {
+		name, routing string
+		wantTier      string // recommended-tier the render returns
+		bundle        bool   // the residual: v0.51.0 cannot express the target
+	}{
+		{name: "default chain falls through to the caller's slot", routing: `{}`, wantTier: "medium"},
+		{name: "cross-harness slot", routing: `{"nodes":{"implement":{"*":"claude.*"}}}`, wantTier: "claude.medium"},
+		{name: "caller-harness slot reached through a pointer", routing: `{"nodes":{"implement":{"*":"pi.*"}}}`, wantTier: "pi.medium"},
+		{name: "bundle terminal", routing: `{"nodes":{"implement":{"*":"deep-impl"}},"bundles":{"deep-impl":{"harness":"claude","model":"custom-model","effort":"high"}}}`, wantTier: "ticket-worker:medium", bundle: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setRouting(t, f.s, tc.routing)
+			// 1. Render on the candidate daemon.
+			lines := renderResponse(t, f.s, f.leadKey, "role-pb", piInitDaemon, nil)
+			var tier, model, effort string
+			for _, line := range lines[1:] {
+				if v, ok := strings.CutPrefix(line, "recommended-tier: "); ok {
+					tier = v
+				}
+				if v, ok := strings.CutPrefix(line, "recommended-model: "); ok {
+					model = v
+				}
+				if v, ok := strings.CutPrefix(line, "recommended-reasoning-effort: "); ok {
+					effort = v
+				}
+			}
+			if tier != tc.wantTier {
+				t.Fatalf("recommended-tier = %q, want %q (%v)", tier, tc.wantTier, lines)
+			}
+			// What the candidate's own role walk launches.
+			res, want, err := f.s.routedBinding("ticket-worker:medium", callerHarness, f.s.configOptions())
+			if err != nil {
+				t.Fatalf("candidate walk: %v", err)
+			}
+			if model != want.Model || formatEffortForText(want.Effort) != effort {
+				t.Fatalf("render binding %q/%q, candidate walk %+v", model, effort, want)
+			}
+			// 2. Downgrade, 3. spawn on v0.51.0's resolution.
+			harness, mapping, err := legacyV0510ResolveTier(f.s.configOptions(), callerHarness, tier)
+			if tc.bundle {
+				if err == nil {
+					t.Fatalf("v0.51.0 resolved the bundle-terminal role tier %q to %s %+v; the residual boundary is gone", tier, harness, mapping)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("v0.51.0 refuses the rendered tier %q: %v", tier, err)
+			}
+			if harness != res.Harness || mapping.Model != want.Model || mapping.Effort != want.Effort {
+				t.Fatalf("v0.51.0 spawn of %q = %s %+v, candidate walk = %s %+v", tier, harness, mapping, res.Harness, want)
+			}
+			// Back on the candidate, the same returned tier resolves alike.
+			if h, m, err := legacyV0510ResolveTier(f.s.configOptions(), callerHarness, tier); err != nil || h != harness || m != mapping {
+				t.Fatalf("repeat resolution drifted: %s %+v, %v", h, m, err)
+			}
+		})
+	}
+	// The pre-fix behavior this replaces: v0.51.0 refuses the raw role tier.
+	if _, _, err := legacyV0510ResolveTier(f.s.configOptions(), callerHarness, "ticket-worker:medium"); err == nil {
+		t.Fatal("v0.51.0 fixture accepted a role tier; it no longer models the old refusal")
 	}
 }

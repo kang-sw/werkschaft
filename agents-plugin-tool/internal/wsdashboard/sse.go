@@ -30,7 +30,10 @@ import (
 // "event: tracker" with data {"rev": N} on both pages' streams whenever the
 // tracker revision (TrackerChanged) differs from what that stream last
 // sent, including once right after connect; the page then re-reads the
-// tracker routes. A daemon without one never sends it. Every stream first
+// tracker routes. A daemon without one never sends it. A session stream
+// to a viewer on this machine also sends "event: usercmd" with data {"rev":
+// "<opaque>"} when the lead's user commands' revision differs from what that
+// stream last sent (and once on connect): the page refetches its command list. Every stream first
 // sends "event: assets" with data {"id"}: the identity of the page assets
 // the daemon serves now (assetID), which a page compares with the one it was
 // rendered with, so a tab opened before a daemon replacement learns on
@@ -579,6 +582,10 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		// which a session page's stream sends whether or not a tracker is
 		// bound (sentinel -1: on connect too).
 		sentExecRev := int64(-1)
+		// sentUserRev is the user commands' revision this stream last sent (see
+		// userCommandRev); only a page on this machine is sent one.
+		sentUserRev := ""
+		localStream := localViewer(r)
 		// The assets identity goes first, before any region of a new
 		// daemon's markup reaches a page that may run an old script.
 		if a, err := loadDashboardAssets(); err == nil {
@@ -659,6 +666,15 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 						return false
 					}
 					sentExecRev = rev
+					sent = true
+				}
+			}
+			if localStream && src.key.replyID != "" {
+				if rev := d.userCommandRev(src.key.replyID); rev != "" && rev != sentUserRev {
+					if sink.event("usercmd", fmt.Appendf(nil, `{"rev":%q}`, rev)) != nil {
+						return false
+					}
+					sentUserRev = rev
 					sent = true
 				}
 			}

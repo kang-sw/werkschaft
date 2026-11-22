@@ -14,7 +14,13 @@
   function filesOf(pack) {
     const files = new Set();
     function add(file) { if (raster(file)) files.add(file); }
-    function fields(obj, keys) { if (obj) keys.forEach(key => add(own(obj, key))); }
+    // A layer's raster keys plus its generalized tint channels (fills).
+    function fields(obj, keys) {
+      if (!obj) return;
+      keys.forEach(key => add(own(obj, key)));
+      const fills = own(obj, "fills");
+      if (keys === layerFields && fills && typeof fills === "object" && !Array.isArray(fills)) values(fills).forEach(add);
+    }
     function layer(obj) {
       fields(obj, layerFields);
       if (Array.isArray(obj?.frames)) obj.frames.forEach(frame => {
@@ -22,7 +28,7 @@
         else fields(frame, layerFields);
       });
     }
-    function layers(obj) { if (Array.isArray(obj.layers)) obj.layers.forEach(layer); }
+    function layers(obj) { if (Array.isArray(obj?.layers)) obj.layers.forEach(layer); }
 
     fields(pack.head?.egg, layerFields);
     fields(pack.head?.eyes, eyeFields);
@@ -31,6 +37,10 @@
     values(pack.expressions).forEach(expression => add(expression.decal));
     [...values(pack.poses), ...values(pack.gestures)].forEach(layers);
     [...values(pack.props), ...values(pack.fx)].forEach(effect => { layer(effect); layers(effect); });
+    // Paper-doll sections; the server enumerates the same fields.
+    values(pack.outfits).forEach(outfit => [...values(outfit?.poses), ...values(outfit?.gestures)].forEach(layers));
+    values(pack.attachments).forEach(attachment => { layers(attachment); values(attachment?.columns).forEach(layers); });
+    values(pack.eyesets).forEach(eyes => fields(eyes, eyeFields));
     return files;
   }
 

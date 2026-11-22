@@ -44,6 +44,40 @@ type companionManifest struct {
 	Presets     map[string]companionObject
 	Scenarios   map[string]companionObject
 	Persona     *CompanionPersona
+	// The paper-doll sections. An older daemon ignores them and renders the
+	// legacy poses projection, so their rasters are enumerated here only.
+	Outfits     map[string]companionOutfit
+	Attachments map[string]companionObject
+	Eyesets     map[string]companionObject
+}
+
+// companionOutfit is one outfit: a map from column (pose or gesture ID) to
+// the outfit-baked layers drawn for it. Only the layers carry files; anchors,
+// palette and any other field pass through for the browser and the kit lint.
+type companionOutfit struct {
+	Poses    map[string]companionColumn
+	Gestures map[string]companionColumn
+}
+
+func (o *companionOutfit) UnmarshalJSON(data []byte) error {
+	obj, err := parseCompanionObject(data)
+	if err != nil {
+		return err
+	}
+	return obj.fields(map[string]any{"poses": &o.Poses, "gestures": &o.Gestures})
+}
+
+// companionColumn is an outfit column or an attachment's per-column entry.
+type companionColumn struct {
+	Layers []companionLayer
+}
+
+func (c *companionColumn) UnmarshalJSON(data []byte) error {
+	obj, err := parseCompanionObject(data)
+	if err != nil {
+		return err
+	}
+	return obj.field("layers", &c.Layers)
 }
 
 // CompanionPersona is a pack's optional character voice. The agent director
@@ -179,6 +213,7 @@ func validateCompanionManifest(raw []byte, id string) (companionManifest, []stri
 		"autoMatch": &auto, "head": &m.Head, "hairs": &m.Hairs, "poses": &m.Poses,
 		"gestures": &m.Gestures, "expressions": &m.Expressions, "props": &m.Props,
 		"fx": &m.FX, "motions": &m.Motions, "presets": &m.Presets, "scenarios": &m.Scenarios,
+		"outfits": &m.Outfits, "attachments": &m.Attachments, "eyesets": &m.Eyesets,
 	}); err != nil {
 		return m, nil, err
 	}
@@ -261,15 +296,101 @@ func (c companionManifestCheck) manifest(m companionManifest) error {
 		{"gestures", m.Gestures},
 	} {
 		for _, id := range sortedCompanionKeys(entry.groups) {
-			if err := c.layers(entry.groups[id].Layers); err != nil {
+			if err := c.layers(entry.groups[id].Layers, false); err != nil {
 				return fmt.Errorf("%s.%s: %w", entry.name, id, err)
 			}
+		}
+	}
+	return c.kit(m)
+}
+
+// kit checks the paper-doll sections. Their layers are new-section layers: a
+// layer or frame there is valid with fills alone, which an older daemon never
+// reads because it ignores these sections.
+func (c companionManifestCheck) kit(m companionManifest) error {
+	for _, id := range sortedCompanionKeys(m.Outfits) {
+		outfit := m.Outfits[id]
+		for _, part := range []struct {
+			name    string
+			columns map[string]companionColumn
+		}{{"poses", outfit.Poses}, {"gestures", outfit.Gestures}} {
+			for _, column := range sortedCompanionKeys(part.columns) {
+				if err := c.layers(part.columns[column].Layers, true); err != nil {
+					return fmt.Errorf("outfits.%s.%s.%s: %w", id, part.name, column, err)
+				}
+			}
+		}
+	}
+	for _, id := range sortedCompanionKeys(m.Attachments) {
+		if err := c.attachment(m.Attachments[id]); err != nil {
+			return fmt.Errorf("attachments.%s: %w", id, err)
+		}
+	}
+	for _, id := range sortedCompanionKeys(m.Eyesets) {
+		eyes := m.Eyesets[id]
+		if eyes == nil {
+			return fmt.Errorf("eyesets.%s must be an object", id)
+		}
+		if err := c.assets(eyes, companionEyeAssets...); err != nil {
+			return fmt.Errorf("eyesets.%s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func (c companionManifestCheck) attachment(obj companionObject) error {
+	if obj == nil {
+		return fmt.Errorf("must be an object")
+	}
+	var layers []companionLayer
+	var columns map[string]companionColumn
+	if err := obj.fields(map[string]any{"layers": &layers, "columns": &columns}); err != nil {
+		return err
+	}
+	if err := c.layers(layers, true); err != nil {
+		return err
+	}
+	for _, column := range sortedCompanionKeys(columns) {
+		if err := c.layers(columns[column].Layers, true); err != nil {
+			return fmt.Errorf("columns.%s: %w", column, err)
 		}
 	}
 	return nil
 }
 
 var companionLayerAssets = []string{"file", "line", "jacketFill", "accentFill", "skinFill", "detail", "hairFill"}
+
+var companionEyeAssets = []string{"sclera", "irisFill", "irisLine", "frameLower", "lidCoverL", "lidCoverR",
+	"lidLashL", "lidLashR", "browL", "browR"}
+
+// fills enumerates a layer's generalized tint channels ({"<channel>":
+// "<file>"}) and returns how many it names. Every layer kind may carry them;
+// only a new-section layer may carry nothing else.
+func (c companionManifestCheck) fills(obj companionObject) (int, error) {
+	if _, present := obj["fills"]; !present {
+		return 0, nil
+	}
+	var fills map[string]string
+	if err := obj.field("fills", &fills); err != nil {
+		return 0, err
+	}
+	for _, channel := range sortedCompanionKeys(fills) {
+		if err := c.addAsset(fills[channel]); err != nil {
+			return 0, fmt.Errorf("fills: %w", err)
+		}
+	}
+	return len(fills), nil
+}
+
+// layerAssets enumerates the fixed raster keys and the fills of a layer that
+// is not checked as renderable (head egg, hair parts).
+func (c companionManifestCheck) layerAssets(obj companionObject) error {
+	if err := c.assets(obj, companionLayerAssets...); err != nil {
+		return err
+	}
+	_, err := c.fills(obj)
+	return err
+}
 
 func (c companionManifestCheck) addAsset(name string) error {
 	if !validCompanionRaster(name) {
@@ -301,11 +422,10 @@ func (c companionManifestCheck) head(obj companionObject) error {
 	if err := obj.fields(map[string]any{"egg": &egg, "eyes": &eyes, "mouths": &mouths}); err != nil {
 		return err
 	}
-	if err := c.assets(egg, companionLayerAssets...); err != nil {
+	if err := c.layerAssets(egg); err != nil {
 		return err
 	}
-	if err := c.assets(eyes, "sclera", "irisFill", "irisLine", "frameLower", "lidCoverL", "lidCoverR",
-		"lidLashL", "lidLashR", "browL", "browR"); err != nil {
+	if err := c.assets(eyes, companionEyeAssets...); err != nil {
 		return err
 	}
 	for _, name := range mouths {
@@ -322,7 +442,7 @@ func (c companionManifestCheck) hair(obj companionObject) error {
 		if err := obj.field(key, &layer); err != nil {
 			return err
 		}
-		if err := c.assets(layer, companionLayerAssets...); err != nil {
+		if err := c.layerAssets(layer); err != nil {
 			return err
 		}
 	}
@@ -334,22 +454,25 @@ func (c companionManifestCheck) effect(obj companionObject) error {
 	if err := obj.field("layers", &layers); err != nil {
 		return err
 	}
-	if err := c.renderable(obj, false); err != nil {
+	if err := c.renderable(obj, false, false); err != nil {
 		return err
 	}
-	return c.layers(layers)
+	return c.layers(layers, false)
 }
 
-func (c companionManifestCheck) layers(layers []companionLayer) error {
+// layers checks a layer list. kit marks a new-section list (outfit columns,
+// attachments), where fills alone make a layer or frame renderable; legacy
+// lists keep the v1 rule an older daemon applies.
+func (c companionManifestCheck) layers(layers []companionLayer, kit bool) error {
 	for i, layer := range layers {
-		if err := c.renderable(companionObject(layer), true); err != nil {
+		if err := c.renderable(companionObject(layer), true, kit); err != nil {
 			return fmt.Errorf("layer %d: %w", i, err)
 		}
 	}
 	return nil
 }
 
-func (c companionManifestCheck) renderable(layer companionObject, required bool) error {
+func (c companionManifestCheck) renderable(layer companionObject, required, kit bool) error {
 	var mode string
 	if err := layer.field("mode", &mode); err != nil {
 		return err
@@ -357,15 +480,20 @@ func (c companionManifestCheck) renderable(layer companionObject, required bool)
 	if err := c.assets(layer, companionLayerAssets...); err != nil {
 		return err
 	}
+	fills, err := c.fills(layer)
+	if err != nil {
+		return err
+	}
 	if raw, ok := layer["motion"]; ok {
 		if err := c.layerMotion(raw); err != nil {
 			return err
 		}
 	}
+	split := companionHasAny(layer, companionLayerAssets[1:]...) || kit && fills > 0
 	switch {
 	case mode == "" && layer["frames"] != nil:
 		mode = "semantic-split-frames"
-	case mode == "" && companionHasAny(layer, companionLayerAssets[1:]...):
+	case mode == "" && split:
 		mode = "semantic-split"
 	case mode == "" && layer["file"] != nil:
 		mode = "static"
@@ -376,7 +504,7 @@ func (c companionManifestCheck) renderable(layer companionObject, required bool)
 			return fmt.Errorf("static layer requires file and no frames")
 		}
 	case "semantic-split":
-		if !companionHasAny(layer, companionLayerAssets[1:]...) || layer["frames"] != nil {
+		if !split || layer["frames"] != nil {
 			return fmt.Errorf("semantic-split layer requires raster channels and no frames")
 		}
 	case "head-egg":
@@ -384,7 +512,7 @@ func (c companionManifestCheck) renderable(layer companionObject, required bool)
 			return fmt.Errorf("head-egg layer requires head and no frames")
 		}
 	case "semantic-split-frames", "static-frames":
-		return c.frames(layer)
+		return c.frames(layer, kit)
 	case "":
 		if required {
 			return fmt.Errorf("layer requires a raster or frame loop")
@@ -395,7 +523,7 @@ func (c companionManifestCheck) renderable(layer companionObject, required bool)
 	return nil
 }
 
-func (c companionManifestCheck) frames(layer companionObject) error {
+func (c companionManifestCheck) frames(layer companionObject, kit bool) error {
 	var fps float64
 	var frames []json.RawMessage
 	if err := layer.fields(map[string]any{"fps": &fps, "frames": &frames}); err != nil {
@@ -416,7 +544,14 @@ func (c companionManifestCheck) frames(layer companionObject) error {
 			continue
 		}
 		frame, err := parseCompanionObject(raw)
-		if err != nil || !companionHasAny(frame, companionLayerAssets...) {
+		if err != nil {
+			return fmt.Errorf("frame requires a raster filename or raster channels")
+		}
+		fills, err := c.fills(frame)
+		if err != nil {
+			return err
+		}
+		if !companionHasAny(frame, companionLayerAssets...) && !(kit && fills > 0) {
 			return fmt.Errorf("frame requires a raster filename or raster channels")
 		}
 		if err := c.assets(frame, companionLayerAssets...); err != nil {

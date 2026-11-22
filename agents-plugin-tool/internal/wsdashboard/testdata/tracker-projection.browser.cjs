@@ -91,7 +91,7 @@ async function setup(browser, { legacy = false, details = true, missing = '', mu
   await page.goto('http://tracker.test/');
   await page.addStyleTag({ content: css });
   await page.addScriptTag({ content: translations + renderer });
-  await page.addScriptTag({ content: adapter + `
+  await page.addScriptTag({ content: 'function shStage(fn) { fn(); }\nfunction shHolding() { return false; }\n' + adapter + `
 function tkMount(){ if(!tkApi) tkApi=WsTracker.mount(tkAdapter,{header:document.getElementById('head'),qsSlot:document.getElementById('slot'),pageParent:document.getElementById('main')}); }
 tkReload();` });
   await page.waitForFunction(() => tkViews.s?.items?.i0 && window.__tracker);

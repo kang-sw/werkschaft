@@ -127,7 +127,8 @@ func dashboardCommand(args []string) {
 	} else {
 		credentials = wscred.NewStore(credPath)
 	}
-	host := &proxyHost{credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
+	userCmdsReady := make(chan struct{})
+	host := &proxyHost{userCmdsReady: userCmdsReady, credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -196,6 +197,12 @@ func dashboardCommand(args []string) {
 			exportMailbox.call()
 			// Under the lock, so the successor never fires the same schedules.
 			cron.close(logw)
+			// And so the successor's user commands are the only ones that commit.
+			if u := host.userCmds.Load(); u != nil {
+				if err := u.Close(); err != nil {
+					fmt.Fprintf(logw, "dashboard: user commands close: %v\n", err)
+				}
+			}
 		},
 	})
 	if errors.Is(err, wsdashboard.ErrLocked) {
@@ -251,6 +258,17 @@ func dashboardCommand(args []string) {
 		// And the job HUD's reads and stop: the same binding.
 		daemon.SetExecJobs(composerExec{hosted: hostedExec, runner: agents})
 	}
+	// The user commands (command slots) open under the lock too, once the
+	// runner knows its conversations: the commands of a conversation it lost
+	// are dropped, and each change wakes the open pages.
+	if u, err := openUserCommands(dir, agents, daemon.UserCommandsChanged, logw); err != nil {
+		fmt.Fprintf(logw, "dashboard: user commands unavailable: %v\n", err)
+	} else {
+		host.userCmds.Store(u)
+		daemon.SetUserCommands(u)
+	}
+	// Settled either way: a lead that connected during the start lists its tools now.
+	close(userCmdsReady)
 	// The jobs a predecessor left are settled: the runner's report holds,
 	// sleep and close cascade read them from now on.
 	if hostedExec != nil {

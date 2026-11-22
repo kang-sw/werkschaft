@@ -108,7 +108,7 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 		gone[id] = true
 	}
 	open = slices.DeleteFunc(open, func(rec Record) bool { return gone[rec.ReplyID] })
-	orphans := orphansAtStart(open)
+	orphans := r.orphansAtStart(open)
 	startup := make([]*conv, 0, len(open))
 	for _, rec := range open {
 		if orphans[rec.ReplyID] && r.closeAtStart(rec) {
@@ -220,7 +220,7 @@ func (r *Runner) closeAtStart(rec Record) bool {
 // instead of serving (closeAtStart): one whose conversation parent is
 // closed or gone, so no report of it reaches one, or that descends from
 // one. A finished child is not closed: it sleeps (agent_tools.go).
-func orphansAtStart(open []Record) map[string]bool {
+func (r *Runner) orphansAtStart(open []Record) map[string]bool {
 	isOpen := map[string]bool{}
 	for _, rec := range open {
 		isOpen[rec.ReplyID] = true
@@ -234,7 +234,7 @@ func orphansAtStart(open []Record) map[string]bool {
 			// Legacy direct non-Pi children keep their existing next-launch
 			// admission refusal when a parent disappears. Held workers of
 			// every backend use the former Pi orphan cleanup.
-			if done[id] || rec.Lead || rec.Parent == nil || (rec.Backend != BackendPi && rec.HolderID == "") {
+			if done[id] || rec.Lead || rec.Parent == nil || (!r.lifecycle(rec.Backend).NativeChildren && rec.HolderID == "") {
 				continue
 			}
 			if rec.Parent.Kind == ParentConversation && !stays(rec.Parent.ReplyID) {

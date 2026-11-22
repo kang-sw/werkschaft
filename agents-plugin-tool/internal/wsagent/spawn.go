@@ -194,7 +194,7 @@ func (r *Runner) Spawn(spec SpawnSpec) (State, error) {
 // checkChildProfile enforces the parent's launched capability ceiling at
 // creation and every Pi process start. Lead parents are unrestricted.
 func (r *Runner) checkChildProfile(parent *ParentRef, name string, def Profile) error {
-	if def.Backend != BackendPi || parent == nil || parent.Kind != ParentConversation || isAgentWorkerProfile(name) {
+	if !r.lifecycle(def.Backend).NativeChildren || parent == nil || parent.Kind != ParentConversation || isAgentWorkerProfile(name) {
 		// An agent.spawn child's ceiling is its authority (agent_tools.go),
 		// not its parent's tool list.
 		return nil
@@ -241,7 +241,7 @@ func (r *Runner) spawned(c *conv, prompt string) (State, error) {
 		return State{}, err
 	}
 	rec := c.record()
-	if p := rec.Parent; rec.Backend == BackendPi && p != nil && p.Kind == ParentLead {
+	if p := rec.Parent; r.lifecycle(rec.Backend).NativeChildren && p != nil && p.Kind == ParentLead {
 		// A hosted lead's close may have snapshotted descendants before
 		// this spawn registered. Re-check under its cascade fence: either
 		// that close sees this child, or we see the completed parent close.

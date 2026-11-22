@@ -1047,9 +1047,17 @@
       var n = bgTasks();
       confirmAction("stop", stop.b, n > 0 ? wsTn("js.lead.stop.confirm", n) : "", n);
     });
-    archive.b.addEventListener("click", function () {
-      var st = state();
+    archive.b.addEventListener("click", async function () {
+      var st = state(), opener = railPopBtn() || archive.b;
       railPopClose(false);
+      if (!(st && st.hidden)) {
+        // Archive asks first; unarchive stays one click. The menu has closed,
+        // so focus returns to its opener on cancel.
+        var target = P.rid, gen = P.gen, page = rid;
+        if (!(await window.wsConfirm(wsT("js.lead.archive.confirm"), { opener: opener, accept: wsT("js.lead.archive.accept") }))) return;
+        st = state();
+        if (P.gen !== gen || P.rid !== target || rid !== page || !opener.isConnected || leadGone(st) || (st && st.hidden)) return;
+      }
       act(st && st.hidden ? "unhide" : "hide", {});
     });
     restart.b.addEventListener("click", function () {

@@ -215,6 +215,9 @@ const report = {cases: [], screenshots: [], errors: []};
       await update('T04');
       const heldBefore = await page.locator('[data-board-held]').count();
       const manualBefore = await page.evaluate(() => window.__holdMorphs || 0);
+      // Setup precondition: the down-origin update must still be staged away
+      // from home, so a stale setup is distinguishable from a hand-home release.
+      assert.equal(await page.evaluate(() => window.wbPill.pending), 1, 'setup: the down-origin T04 update is staged before the hand scroll');
       await page.evaluate(() => {window.__holdScroller().scrollTop = 0;});
       await frames(18);
       assert.equal(await page.evaluate(() => window.wbPill.pending), 1, 'hand scroll to top keeps the unapplied down-origin update count');
@@ -248,6 +251,11 @@ const report = {cases: [], screenshots: [], errors: []};
       // Fresh canonical stream: top-origin rises/new topics must stay click-
       // only even after scrolling away, unlike ordinary down-origin panels.
       await page.request.post(origin + '/reset');
+      // A same-tab reload restores the saved session view: its pagehide save
+      // records the T04 panel anchor from the rise phase, and after /reset
+      // that anchor sits 784px down. This phase starts from a fresh stream at
+      // home, so drop the view after the app's own (earlier-registered) save.
+      await page.evaluate(() => window.addEventListener('pagehide', () => sessionStorage.removeItem('ws.dashboard.session-views')));
       await page.goto(origin + '/s/holdpill' + (documentMode ? '?document=1' : ''), {waitUntil: 'domcontentloaded'});
       await page.waitForFunction(() => window.wbPill?.update && window.wbHistory && document.querySelectorAll('section.topic').length === 25);
       if (!(await page.locator('#bcol').isVisible())) await page.locator('[data-tab="board"]').first().click();

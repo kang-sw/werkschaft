@@ -236,6 +236,8 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		return toolTextResponse(req.ID, "", fmt.Errorf("session default roots were removed; if you are the lead, obtain a session_key per ws:workflow-manual and pass it"))
 	case "session.children":
 		return s.handleSessionChildren(req.ID, params.Arguments)
+	case registerUserCommandTool, unregisterUserCommandTool:
+		return s.handleUserCommandTool(req.ID, params.Name, params.Arguments)
 	case "session.request_hire", "session.roster":
 		return s.handleSessionHire(req.ID, params.Name, params.Arguments)
 	case "agenda.set":
@@ -526,6 +528,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			// scalar resolver-backed knob (subagent / bootstrap_alarm).
 			// Resolver.Set enforces global-only + session-key.
 			value, hasValue := params.Arguments["value"].(string)
+			sentValue := value
 			value, err := normalizeTuneScalar(entry, value, hasValue)
 			if err != nil {
 				return toolTextResponse(req.ID, "", err)
@@ -549,6 +552,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			} else if effective.Scope != resolvedScope || answeredKey != storeKey {
 				text += fmt.Sprintf("shadowed: effective %s: %s [scope:%s]\n", answeredKey, effective.Value, effective.Scope)
 			}
+			text += deprecatedTuneNote(entry.Key, sentValue, value)
 			if entry.Key == wsconfig.ItemWorkflowProfile && value == "orchestrate" {
 				text += orchestrateWhitelistWarning(harness)
 			}

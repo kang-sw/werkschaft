@@ -16,6 +16,16 @@
     ["skinFill", "skin"], ["hairFill", "hair"]
   ];
   const colors = { hair: "#ec8468", eye: "#dfa040", skin: "#f4cdb4", outfitPrimary: "#f2e5d4", outfitAccent: "#e6aa34" };
+  // Wardrobe identifiers, matching the dashboard.companion_* config patterns.
+  const wardrobeId = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+  const slotId = /^[a-z][a-z0-9_-]{0,31}$/;
+  const channelId = /^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/;
+  const hexColor = /^#[0-9a-fA-F]{6}$/;
+  const wardrobePairMax = 16;
+  // Attachment default z by slot: tail behind the body, the rest around the
+  // front hair. An extended slot defaults by its binding.
+  const slotZ = { tail: 11, ears: 45, headdress: 56, accessory: 57 };
+  const bindZ = { head: 57, body: 21 };
   const easings = {
     linear: [0, 0, 1, 1], easeIn: [0.42, 0, 1, 1], easeOut: [0, 0, 0.58, 1],
     easeInOut: [0.42, 0, 0.58, 1], anticipate: [0.36, -0.45, 0.65, 1],
@@ -76,11 +86,76 @@
     while (id && !visited.has(id)) {
       visited.add(id);
       const item = own(registry, id);
-      if (usable(item)) return { id, item };
+      if (usable(item, id)) return { id, item };
       id = item?.fallback || fallback;
     }
     const item = own(registry, fallback);
-    return usable(item) ? { id: fallback, item } : null;
+    return usable(item, fallback) ? { id: fallback, item } : null;
+  }
+
+  // wardrobePairs parses a flat "<key>=<value> ..." config string into an
+  // object, skipping malformed pairs and keeping at most 16.
+  function wardrobePairs(text, keyPattern, valuePattern) {
+    const out = {};
+    if (typeof text !== "string") return out;
+    let count = 0;
+    for (const pair of text.trim().split(/\s+/)) {
+      const at = pair.indexOf("=");
+      const key = pair.slice(0, at), value = pair.slice(at + 1);
+      if (at <= 0 || !keyPattern.test(key) || !valuePattern.test(value) || Object.hasOwn(out, key)) continue;
+      out[key] = value;
+      if (++count >= wardrobePairMax) break;
+    }
+    return out;
+  }
+  function attachmentPairs(text) { return wardrobePairs(text, slotId, wardrobeId); }
+  function palettePairs(text) { return wardrobePairs(text, channelId, hexColor); }
+
+  function ids(registry) {
+    return record(registry) ? Object.keys(registry).filter(id => record(registry[id])).sort() : [];
+  }
+
+  // wardrobeOptions lists what a pack offers each wardrobe picker: outfits,
+  // hairs, eye sets, attachment IDs per slot, and tint channels (built-in,
+  // palette keys and every fills channel the pack draws). It omits every ID,
+  // slot and channel the config patterns cannot select, so a pick never
+  // produces a write the server refuses.
+  function wardrobeOptions(manifest) {
+    const m = record(manifest) ? manifest : {};
+    const selectable = registry => ids(registry).filter(id => wardrobeId.test(id));
+    // slotId never matches __proto__, so a plain object keyed by slot is safe.
+    const slots = {};
+    for (const id of selectable(m.attachments)) {
+      const slot = m.attachments[id].slot;
+      if (id === "none" || typeof slot !== "string" || !slotId.test(slot)) continue;
+      (Object.hasOwn(slots, slot) ? slots[slot] : (slots[slot] = [])).push(id);
+    }
+    const channels = new Set(Object.keys(colors));
+    const keys = obj => { if (record(obj)) for (const key of Object.keys(obj)) channels.add(key); };
+    const layer = item => {
+      if (!record(item)) return;
+      keys(item.fills);
+      if (Array.isArray(item.frames)) item.frames.forEach(frame => record(frame) && keys(frame.fills));
+    };
+    const layers = list => { if (Array.isArray(list)) list.forEach(layer); };
+    keys(m.palette);
+    for (const preset of Object.values(record(m.presets) ? m.presets : {})) keys(preset?.palette);
+    for (const id of ids(m.outfits)) {
+      const outfit = m.outfits[id];
+      keys(outfit.palette);
+      for (const section of ["poses", "gestures"]) for (const column of Object.values(record(outfit[section]) ? outfit[section] : {})) layers(column?.layers);
+    }
+    for (const id of ids(m.attachments)) {
+      layers(m.attachments[id].layers);
+      for (const column of Object.values(record(m.attachments[id].columns) ? m.attachments[id].columns : {})) layers(column?.layers);
+    }
+    for (const section of ["poses", "gestures"]) for (const entry of Object.values(record(m[section]) ? m[section] : {})) layers(entry?.layers);
+    for (const id of ids(m.hairs)) for (const part of ["back", "front", "acc"]) layer(m.hairs[id][part]);
+    layer(m.head?.egg);
+    return {
+      outfits: selectable(m.outfits), hairs: selectable(m.hairs), eyesets: selectable(m.eyesets), slots,
+      channels: [...channels].filter(id => channelId.test(id)).sort()
+    };
   }
 
   // The upper bound is the first key strictly after time. At a duplicated
@@ -183,29 +258,70 @@
     return physics ? weight * physics.swing - lag * physics.swingVel : 0;
   }
 
-  function makeRig(pack, shared, presetId) {
+  // makeRig composes one pack. wardrobe carries the dashboard.companion_*
+  // picks ({outfit, hair, eyes, attachments, palette}, empty = follow the
+  // preset); each component resolves config key > preset > pack default, and
+  // an ID the pack does not define falls through to the next source.
+  function makeRig(pack, shared, presetId, wardrobe) {
     const { manifest, bitmaps } = pack;
     const [width, height] = manifest.canvas;
     const declared = record(manifest.easings) ? manifest.easings : null;
     const [sharedWidth, sharedHeight] = shared?.manifest.canvas || manifest.canvas;
     const tinted = new Map();
     const rigViews = new Map();
-    const iris = manifest.head?.eyes?.sclera ? buffer(width, height) : null;
     const composite = buffer(width, height);
     const boundsBuffer = buffer(128, 128, { willReadFrequently: true });
     const decals = new Map();
-    let palette, hair;
+    const outfits = record(manifest.outfits) ? manifest.outfits : null;
+    let palette, hair, eyes, iris = null, outfit = null, outfitId = null, attachments = [], picks = {};
+    let presetKey = presetId, config = record(wardrobe) ? wardrobe : {};
 
-    function setPreset(id) {
-      const preset = own(manifest.presets, id);
-      palette = { ...colors, ...manifest.palette, ...preset?.palette };
-      hair = resolve(manifest.hairs, preset?.hair || Object.keys(manifest.hairs || {})[0])?.item;
+    function defined(registry, id) { return typeof id === "string" && id !== "" && record(own(registry, id)); }
+
+    function select() {
+      const preset = own(manifest.presets, presetKey);
+      const choose = (registry, ...candidates) => candidates.find(id => defined(registry, id)) ?? null;
+      outfitId = outfits ? choose(outfits, config.outfit, preset?.outfit, manifest.defaultOutfit, ids(outfits)[0]) : null;
+      outfit = outfitId ? outfits[outfitId] : null;
+      palette = { ...colors, ...(record(manifest.palette) ? manifest.palette : {}),
+        ...(record(outfit?.palette) ? outfit.palette : {}), ...(record(preset?.palette) ? preset.palette : {}),
+        ...palettePairs(config.palette) };
+      // The pack-default hair is the pre-wardrobe behavior, unchanged.
+      const hairId = typeof config.hair === "string" && config.hair && resolve(manifest.hairs, config.hair) ?
+        config.hair : preset?.hair || Object.keys(manifest.hairs || {})[0];
+      hair = resolve(manifest.hairs, hairId)?.item;
       if (preset?.acc === false || preset?.accessory === false) hair = hair && { ...hair, acc: null };
+      const eyesId = choose(manifest.eyesets, config.eyes, preset?.eyes);
+      eyes = eyesId ? manifest.eyesets[eyesId] : manifest.head?.eyes;
+      // The iris buffer exists only while the eye block has a sclera to clip to.
+      iris = eyes?.sclera ? iris || buffer(width, height) : null;
+      // Attachments merge per slot: preset, then config. "none" clears a slot;
+      // an ID the pack lacks, or one made for another slot, is ignored.
+      const slots = {};
+      for (const source of [record(preset?.attachments) ? preset.attachments : {}, attachmentPairs(config.attachments)]) {
+        for (const [slot, id] of Object.entries(source)) {
+          if (typeof slot !== "string" || !slotId.test(slot) || typeof id !== "string") continue;
+          if (id === "none") slots[slot] = null;
+          else if (defined(manifest.attachments, id) && manifest.attachments[id].slot === slot) slots[slot] = id;
+        }
+      }
+      attachments = Object.keys(slots).sort().filter(slot => slots[slot]).map(slot => ({ slot, id: slots[slot], data: manifest.attachments[slots[slot]] }));
+      picks = { outfit: outfitId, hair: hairId || null, eyes: eyesId,
+        attachments: Object.fromEntries(attachments.map(item => [item.slot, item.id])), palette: { ...palette } };
       tinted.clear();
       rigViews.clear();
       decals.clear();
     }
-    setPreset(presetId);
+
+    function setPreset(id) {
+      presetKey = id;
+      select();
+    }
+    function setWardrobe(next) {
+      config = record(next) ? next : {};
+      select();
+    }
+    select();
 
     function texture(file, color, sharedAsset) {
       const source = (sharedAsset ? shared?.bitmaps : bitmaps)?.get(file);
@@ -224,12 +340,22 @@
       return tinted.get(key);
     }
 
+    // channelFills draws a layer's generalized tint channels in manifest
+    // order, each tinted by its palette channel; a channel with no color (or
+    // an ID outside the channel pattern) draws untinted.
+    function channelFills(layer, sharedAsset) {
+      if (!record(layer.fills)) return [];
+      return Object.entries(layer.fills).map(([channel, file]) =>
+        texture(file, channelId.test(channel) ? own(palette, channel) : null, sharedAsset));
+    }
+
     function rasterList(layer, sharedAsset) {
       if (typeof layer === "string") return [texture(layer, null, sharedAsset)].filter(Boolean);
       if (layer.mode === "static") return [texture(layer.file, null, sharedAsset)].filter(Boolean);
       return [
         texture(layer.file, null, sharedAsset), texture(layer.detail, null, sharedAsset),
         ...fills.map(([field, color]) => texture(layer[field], palette[color], sharedAsset)),
+        ...channelFills(layer, sharedAsset),
         texture(layer.line, null, sharedAsset)
       ].filter(Boolean);
     }
@@ -267,7 +393,6 @@
     function expressionPaint(expression, egg) {
       const head = manifest.head;
       const decal = texture(expression?.decal);
-      const eyes = head?.eyes;
       const ex = expression || {};
       if (decal) {
         let image = decals.get(decal);
@@ -348,20 +473,63 @@
       return list.sort((a, b) => a.z - b.z);
     }
 
+    // column returns the active outfit's binding for a column: its entry when
+    // it carries layers, merged over the same-named top-level entry (the
+    // column registry). The top-level entry supplies pose and fallback and
+    // any field the outfit entry omits, except layers, which would borrow the
+    // default outfit's legacy projection.
+    function column(section, id) {
+      const entry = record(outfit?.[section]) ? own(outfit[section], id) : undefined;
+      if (!record(entry) || !Array.isArray(entry.layers) || !entry.layers.length) return null;
+      const base = own(manifest[section], id);
+      const registry = record(base) ? base : {};
+      return { ...registry, ...entry, pose: registry.pose, fallback: registry.fallback, layers: entry.layers };
+    }
+
+    // bound walks a column's fallback chain (with the resolver's implicit
+    // step) inside the active outfit and returns the first bound column.
+    function bound(section, id, implicit) {
+      const visited = new Set();
+      while (id && !visited.has(id)) {
+        visited.add(id);
+        const item = column(section, id);
+        if (item) return { id, item };
+        id = own(manifest[section], id)?.fallback || implicit;
+      }
+      const item = implicit ? column(section, implicit) : null;
+      return item ? { id: implicit, item } : null;
+    }
+
     function view(pose, gesture, expression, props) {
       const key = JSON.stringify([pose, gesture, expression, props]);
       if (rigViews.has(key)) return rigViews.get(key);
       function hand(value) {
         return Array.isArray(value) && value.length === 2 && inRange(value[0], 0, width) && inRange(value[1], 0, height) ? value : null;
       }
-      const act = resolve(manifest.gestures, gesture, null, item =>
-        !!(item?.pose || item?.replaces?.length || item?.layers?.length || hand(item?.handAnchor)))?.item;
-      const resolved = resolve(manifest.poses, act?.pose || pose, "stand", x => !!x?.layers?.length);
+      const usableGesture = item => !!(item?.pose || item?.replaces?.length || item?.layers?.length || hand(item?.handAnchor));
+      let gestureHit = outfit ? bound("gestures", gesture, null) : null;
+      if (!gestureHit) {
+        gestureHit = resolve(manifest.gestures, gesture, null, usableGesture);
+        // Inside an outfit, an unbound gesture keeps its pose and anchors but
+        // never draws the legacy art, and drops replaces unless it is a pure
+        // removal, so no limb is removed without its replacement.
+        if (gestureHit && outfit) {
+          const legacy = gestureHit.item;
+          gestureHit = { id: gestureHit.id, item: { ...legacy, layers: [], replaces: legacy.layers?.length ? [] : legacy.replaces } };
+        }
+      }
+      const act = gestureHit?.item;
+      const requested = act?.pose || pose;
+      // A column the outfit cannot resolve draws the legacy projection stack,
+      // so the body is never empty.
+      const resolved = (outfit && bound("poses", requested, "stand")) ||
+        resolve(manifest.poses, requested, "stand", x => !!x?.layers?.length);
       const body = resolved.item;
       const layers = [];
       const head = manifest.head;
       const pivot = point(head?.pivot, [width / 2, height * 0.28]);
-      const anchor = point(body.headAnchor, pivot);
+      // A gesture column may carry its own head anchor inside an outfit.
+      const anchor = point(outfit ? act?.headAnchor : null, null) || point(body.headAnchor, pivot);
       const scale = clamp(finite(body.headScale, 1), 0.1, 4);
       const headLayer = body.layers.find(layer => layer.mode === "head-egg");
       const egg = head ? rasterList(head.egg || headLayer || {}) : [];
@@ -390,14 +558,31 @@
         layers.push(onHead(part.z, part.paint));
       }
 
-      const replacements = new Set(act?.replaces || []);
-      const bodyLayers = [...body.layers.filter(layer => !replacements.has(layer.id)), ...(act?.layers || [])];
+      const replacements = new Set(Array.isArray(act?.replaces) ? act.replaces : []);
+      // An outfit gesture also replaces by slot; legacy packs keep id-only
+      // matching so their stacks stay identical.
+      const replaced = layer => replacements.has(layer.id) || !!outfit && layer.slot !== undefined && replacements.has(layer.slot);
+      const bodyLayers = [...body.layers.filter(layer => !replaced(layer)), ...(act?.layers || [])];
       for (const layer of bodyLayers) {
         if (layer.mode !== "head-egg") layers.push(layerPaint(layer, 20));
       }
       if (resolved.id === "typing" && !body.layers.some(layer =>
         layer.id === "prop-typing-desk" || layer.file?.startsWith("prop-typing-desk"))) {
         layers.push(...propLayers("prop-typing-desk"));
+      }
+      // Body attachments follow the drawn column (gesture, then pose), with
+      // their own layers as the default.
+      for (const { slot, data } of attachments) {
+        const z = finite(data.z, own(slotZ, slot) ?? (data.bind === "body" ? bindZ.body : bindZ.head));
+        if (data.bind === "body") {
+          const columns = record(data.columns) ? data.columns : {};
+          const entry = [gestureHit?.id, resolved.id].map(id => own(columns, id)).find(item => record(item) && Array.isArray(item.layers));
+          for (const layer of entry ? entry.layers : Array.isArray(data.layers) ? data.layers : []) {
+            if (record(layer)) layers.push(layerPaint(layer, z));
+          }
+        } else if (head && Array.isArray(data.layers)) {
+          for (const layer of data.layers) if (record(layer)) addHead(layer, z);
+        }
       }
       if (head) {
         layers.push(onHead(finite(headLayer?.z, 30), ctx => { for (const image of egg) draw(ctx, image); }));
@@ -454,8 +639,14 @@
       };
     }
 
-    return { view, prop, setPreset, width, height };
+    return {
+      view, prop, setPreset, setWardrobe, width, height,
+      // wardrobe reports the effective picks: the outfit, hair and eye-set
+      // IDs, the attachment ID per slot, and the merged palette.
+      wardrobe: () => picks
+    };
   }
 
-  Object.assign(C, { makeRig, motion, finite, clamp, mix, inRange, bounded, record, timingId, solveBezier, compileCurves, RAD, resolveEntry: resolve });
+  Object.assign(C, { makeRig, motion, finite, clamp, mix, inRange, bounded, record, timingId, solveBezier, compileCurves, RAD, resolveEntry: resolve,
+    wardrobeOptions, attachmentPairs, palettePairs });
 })(window.WsCompanion);

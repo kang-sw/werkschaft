@@ -65,7 +65,7 @@ test("companion labels are present in every supported locale", () => {
   assert.equal(readLocale("ko")[modeKeys[1]], "에이전트");
 });
 
-test("settings panel skips companion-modal rows and keeps enabled and director", () => {
+test("settings panel skips companion-modal and deprecated rows and keeps enabled and director", () => {
   const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
   const specs = new Map(catalog.map(spec => [spec.key, spec]));
   const method = read("dashboard-settings.js").match(/\n  function sectionEntries\(name\) \{[\s\S]*?\n  \}/)[0];
@@ -80,9 +80,14 @@ test("settings panel skips companion-modal rows and keeps enabled and director",
   const hidden = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
   assert.deepEqual(hidden, [
     "dashboard.companion_agent_cooldown_seconds", "dashboard.companion_agent_hourly_cap",
-    "dashboard.companion_pack", "dashboard.companion_preset"
+    "dashboard.companion_attachments", "dashboard.companion_eyes", "dashboard.companion_hair",
+    "dashboard.companion_outfit", "dashboard.companion_pack", "dashboard.companion_palette",
+    "dashboard.companion_preset"
   ]);
-  assert.equal(keys.length, shown.length + hidden.length);
+  // The 0.51.0 companion_mode alias stays declared but no UI renders it.
+  const deprecated = catalog.filter(spec => spec.surface === "deprecated").map(spec => spec.key);
+  assert.deepEqual(deprecated, ["dashboard.companion_mode"]);
+  assert.equal(keys.length, shown.length + hidden.length + deprecated.length);
 });
 
 test("settings links and frames keep the exact inspection identifiers", () => {
@@ -178,7 +183,7 @@ test("the companion modal maps every companion-modal catalog row to a live confi
   const fields = context.window.WsCompanion.companionConfigFields;
   const modal = catalog.filter(spec => spec.surface === "companion-modal").map(spec => spec.key).sort();
   assert.deepEqual(Object.keys(fields).sort(), modal);
-  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "pack", "preset"]);
+  assert.deepEqual(Object.values(fields).sort(), ["agentCooldownSeconds", "agentHourlyCap", "attachments", "eyes", "hair", "outfit", "pack", "palette", "preset"]);
 });
 
 function createFakeDOM() {
