@@ -7,7 +7,9 @@ function installWerkschaftNotifyBridge(origin) {
   if (!transport) return;
   const post = transport.postMessage.bind(transport);
   const pending = new Map();
-  let next = 0;
+  // Ids start past any an earlier page in this window used, so a late
+  // answer meant for that page never settles one of this page's requests.
+  let next = Date.now() * 1000;
   const settle = (id, shown) => {
     const resolve = pending.get(id);
     if (!resolve) return;
@@ -15,10 +17,16 @@ function installWerkschaftNotifyBridge(origin) {
     resolve(shown === true);
   };
   Object.defineProperty(window, '__werkschaftNotifyResult', { value: settle });
-  const text = (value, limit) => String(value ?? '').slice(0, limit);
+  // Fields are cut by code point, as the shell clips them, never inside a
+  // surrogate pair, whose half the shell's JSON parser would refuse.
+  const text = (value, limit) => {
+    const s = String(value ?? '');
+    return Array.from(s.toWellFormed ? s.toWellFormed() : s).slice(0, limit).join('');
+  };
   // notify resolves true once the shell showed the notification natively
-  // (or already had for this tag), and false when it could not: the page
-  // then uses its browser notification instead, so nothing shows twice.
+  // (or is showing the same tag right now), and false when it could not:
+  // the page then uses its browser notification instead, so nothing shows
+  // twice.
   const notify = (title, body, tag) => new Promise((resolve) => {
     const id = ++next;
     pending.set(id, resolve);

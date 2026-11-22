@@ -7,10 +7,9 @@
 // window, hidden in the tray or not, is the one notifier.
 
 use std::{
-    collections::VecDeque,
+    collections::HashSet,
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
 };
 
 use serde::Deserialize;
@@ -32,21 +31,18 @@ pub const MAX_MESSAGE: usize = 8192;
 const TITLE_MAX: usize = 200;
 const BODY_MAX: usize = 1000;
 const TAG_MAX: usize = 300;
-// A tag shown within this window is not shown again.
-const TAG_MEMORY: Duration = Duration::from_secs(10 * 60);
-const RECENT_MAX: usize = 256;
 
 pub struct Notifier {
     connection: Arc<Connection>,
     identifier: String,
-    recent: Mutex<Recent>,
+    showing: Mutex<Showing>,
 }
 
 pub fn manage(app: &AppHandle, connection: Arc<Connection>) {
     app.manage(Arc::new(Notifier {
         connection,
         identifier: app.config().identifier.clone(),
-        recent: Mutex::new(Recent::default()),
+        showing: Mutex::new(Showing::default()),
     }));
 }
 
@@ -88,24 +84,24 @@ pub fn parse(message: &str) -> Option<Notice> {
     (!notice.title.is_empty() && !notice.tag.is_empty()).then_some(notice)
 }
 
-/// The tags shown lately, so one event reaching the shell twice shows once.
+/// The tags being shown now, so one event posted twice at once shows once.
+/// A tag leaves when its show returns, shown or not: the page selects each
+/// event once, and a later event may repeat a tag (the same approval asked
+/// again), so nothing is remembered past the show, and a failed show never
+/// keeps a later one from showing or falling back.
 #[derive(Default)]
-pub struct Recent {
-    shown: VecDeque<(String, Instant)>,
+pub struct Showing {
+    tags: HashSet<String>,
 }
 
-impl Recent {
-    pub fn admit(&mut self, tag: &str, now: Instant) -> bool {
-        self.shown
-            .retain(|(_, at)| now.saturating_duration_since(*at) < TAG_MEMORY);
-        if self.shown.iter().any(|(seen, _)| seen == tag) {
-            return false;
-        }
-        if self.shown.len() >= RECENT_MAX {
-            self.shown.pop_front();
-        }
-        self.shown.push_back((tag.to_owned(), now));
-        true
+impl Showing {
+    /// Takes tag for one show; false while another show holds it.
+    pub fn begin(&mut self, tag: &str) -> bool {
+        self.tags.insert(tag.to_owned())
+    }
+
+    pub fn end(&mut self, tag: &str) {
+        self.tags.remove(tag);
     }
 }
 
@@ -128,18 +124,16 @@ pub fn receive(window: WebviewWindow, epoch: usize, source: Url, message: &str) 
         return;
     };
     let origin = pin.origin().ascii_serialization();
-    if !notifier
-        .recent
-        .lock()
-        .unwrap()
-        .admit(&notice.tag, Instant::now())
-    {
-        // Already handled: the page must not fall back for it either.
+    if !notifier.showing.lock().unwrap().begin(&notice.tag) {
+        // The same event is being shown: the page must not fall back for this
+        // copy; the show in progress answers its own copy, and falls back for
+        // it if it fails.
         let _ = window.eval(answer_script(&origin, notice.id, true));
         return;
     }
     thread::spawn(move || {
         let shown = show(&notifier.identifier, &notice.title, &notice.body);
+        notifier.showing.lock().unwrap().end(&notice.tag);
         if !shown {
             eprintln!("Werkschaft: Could not show a native notification; the page falls back");
         }
@@ -258,18 +252,19 @@ mod tests {
     }
 
     #[test]
-    fn a_tag_shows_once_within_its_memory() {
-        let mut recent = Recent::default();
-        let start = Instant::now();
-        assert!(recent.admit("ws-ask:a:1", start));
-        assert!(!recent.admit("ws-ask:a:1", start + Duration::from_secs(60)));
-        assert!(recent.admit("ws-ask:a:2", start + Duration::from_secs(60)));
-        assert!(recent.admit("ws-ask:a:1", start + TAG_MEMORY + Duration::from_secs(1)));
-        let mut full = Recent::default();
-        for n in 0..RECENT_MAX + 5 {
-            assert!(full.admit(&format!("tag-{n}"), start));
-        }
-        assert_eq!(full.shown.len(), RECENT_MAX);
+    fn a_tag_is_held_only_while_it_is_shown() {
+        let mut showing = Showing::default();
+        assert!(showing.begin("ws-approval:a\nBash\ngo test"));
+        // A copy posted while the first is still showing is that show.
+        assert!(!showing.begin("ws-approval:a\nBash\ngo test"));
+        assert!(showing.begin("ws-ask:a:1"));
+        // Once the show returns (shown or failed), the same tag is a new
+        // event again: an approval asked again, or one whose show failed.
+        showing.end("ws-approval:a\nBash\ngo test");
+        assert!(showing.begin("ws-approval:a\nBash\ngo test"));
+        showing.end("ws-approval:a\nBash\ngo test");
+        showing.end("ws-ask:a:1");
+        assert!(showing.tags.is_empty());
     }
 
     #[test]
