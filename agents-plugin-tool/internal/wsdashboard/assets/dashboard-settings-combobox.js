@@ -1,6 +1,7 @@
 var WsSettingsCombobox = (function () {
   "use strict";
   var FALLBACK_HARNESSES = ["claude", "codex", "pi", "agy", "werk"];
+  var PENDING_RETRY_MS = 1500;
   var choicesPromise = null;
   var choicesData = null;
   var seq = 0;
@@ -28,6 +29,11 @@ var WsSettingsCombobox = (function () {
         // pickers are harnesses that list models for this picker but open no
         // support conversation or lead (a worker-only backend): beside the rest here.
         choicesData = { harnesses: json.harnesses.concat(Array.isArray(json.pickers) ? json.pickers : []), failed: false };
+        // A picker's model list is fetched in the background and is missing from
+        // this answer: ask again shortly rather than keep the answer for the page.
+        if (json.pickers_pending && typeof setTimeout === "function") {
+          setTimeout(function () { choicesData = null; choicesPromise = null; }, PENDING_RETRY_MS);
+        }
         return choicesData;
       })
       .catch(function () {

@@ -519,3 +519,31 @@ test("settings combobox offers the pickers' models beside the harnesses, with th
   assert.equal(JSON.stringify(cb.modelOptions("werk")), JSON.stringify([{ id: "vendor/m", thinking: true }]));
   assert.equal(JSON.stringify(cb.effortOptions("werk").map(e => e.id)), JSON.stringify(["low", "high"]));
 });
+
+test("settings combobox asks again when a picker's model list is still being fetched", async () => {
+  const { doc, win, FakeEvent } = createFakeDOM();
+  const answers = [
+    { harnesses: [{ harness: "claude", available: true, models: [], efforts: [] }], pickers_pending: true },
+    { harnesses: [{ harness: "claude", available: true, models: [], efforts: [] }], pickers: [{ harness: "werk", available: true, models: [{ id: "vendor/m" }], efforts: ["low"] }] }
+  ];
+  let fetches = 0;
+  const timers = [];
+  const ctx = {
+    window: win,
+    document: doc,
+    Event: FakeEvent,
+    setTimeout: fn => { timers.push(fn); },
+    fetch: async () => ({ ok: true, json: async () => answers[Math.min(fetches++, answers.length - 1)] })
+  };
+  win.window = win;
+  vm.runInNewContext(read("dashboard-settings-combobox.js"), ctx);
+  const cb = win.WsSettingsCombobox;
+  await cb.loadChoices();
+  assert.equal(cb.modelOptions("werk").length, 0, "the first answer has no picker yet");
+  await cb.loadChoices();
+  assert.equal(fetches, 1, "the pending answer is reused until its retry timer fires");
+  timers.forEach(fn => fn());
+  await cb.loadChoices();
+  assert.equal(fetches, 2);
+  assert.equal(JSON.stringify(cb.modelOptions("werk")), JSON.stringify([{ id: "vendor/m", thinking: false }]));
+});

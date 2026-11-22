@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // The model list for the dashboard picker: OpenRouter's public list, minus the
@@ -76,7 +78,7 @@ func TestWerkIsListedForThePickerOnly(t *testing.T) {
 	_, reg := WerkBackend{Command: fakeHarness("ws-mcp"), modelsURL: srv.URL, httpClient: srv.Client(), credentialStatus: func(string) (bool, error) { return configured, nil }}.registration()
 	sh.runner.opts.Backends[BackendWerk] = reg
 
-	answer := sh.support.Choices(context.Background())
+	answer := choicesWithPickers(t, sh.support)
 	for _, h := range answer.Harnesses {
 		if h.Harness == BackendWerk {
 			t.Fatalf("werk is a support/lead choice: %+v", h)
@@ -94,8 +96,79 @@ func TestWerkIsListedForThePickerOnly(t *testing.T) {
 	}
 
 	configured = true
-	answer = sh.support.Choices(context.Background())
+	answer = choicesWithPickers(t, sh.support)
 	if p := answer.Pickers[0]; !p.Available || p.Error != "" || len(p.Models) != 1 {
 		t.Errorf("with a key: %+v", p)
+	}
+}
+
+// choicesWithPickers asks again until the background listing of the picker
+// harnesses has landed.
+func choicesWithPickers(t *testing.T, s *Support) ChoicesAnswer {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		answer := s.Choices(context.Background())
+		if !answer.PickersPending {
+			return answer
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the picker listing never landed: %+v", answer)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A slow model endpoint holds no choices request: the answer comes at once
+// without the picker (reported pending), the other harnesses are listed, and
+// once the listing lands the picker is served from the cache.
+func TestSlowModelListDoesNotHoldChoices(t *testing.T) {
+	release := make(chan struct{})
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		io.WriteString(w, `{"data":[{"id":"vendor/m","supported_parameters":["tools"]}]}`)
+	}))
+	defer srv.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	sh := newSupportHarness(t)
+	_, reg := WerkBackend{Command: fakeHarness("ws-mcp"), modelsURL: srv.URL, httpClient: srv.Client(), credentialStatus: func(string) (bool, error) { return true, nil }}.registration()
+	sh.runner.opts.Backends[BackendWerk] = reg
+
+	start := time.Now()
+	answer := sh.support.Choices(context.Background())
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("choices waited %v on the model list", took)
+	}
+	if !answer.PickersPending || len(answer.Pickers) != 0 {
+		t.Errorf("pickers = %+v pending = %v, want none and pending", answer.Pickers, answer.PickersPending)
+	}
+	if len(answer.Harnesses) == 0 {
+		t.Error("the other harnesses were not listed")
+	}
+	// A second request while the listing runs starts no second fetch.
+	sh.support.Choices(context.Background())
+	if n := hits.Load(); n != 1 {
+		t.Errorf("model list requests = %d, want 1", n)
+	}
+
+	close(release)
+	answer = choicesWithPickers(t, sh.support)
+	if len(answer.Pickers) != 1 || len(answer.Pickers[0].Models) != 1 || answer.Pickers[0].Models[0].ID != "vendor/m" {
+		t.Fatalf("pickers after the listing = %+v", answer.Pickers)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("model list requests = %d after landing, want 1 (served from the cache)", n)
 	}
 }
