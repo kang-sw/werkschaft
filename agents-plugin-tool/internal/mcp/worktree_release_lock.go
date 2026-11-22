@@ -62,8 +62,10 @@ func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool
 	}
 	// Running hosted exec jobs live outside the conversations CheckChildren
 	// sees; one whose cwd is in the tree is wiped by hygiene just the same.
-	// Launches racing this check are a known gap (no admission fence).
-	if err == nil && caller != nil && !caller.Force && caller.CheckExecJobs != nil {
+	// Forced or not: only exec.stop or a human close stops a job, so force
+	// never cleans a tree under one. Launches racing this check are a known
+	// gap (no admission fence).
+	if err == nil && caller != nil && caller.CheckExecJobs != nil {
 		err = caller.CheckExecJobs(target)
 	}
 	// Forced or not, a release refuses here, with nothing changed, when its

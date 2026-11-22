@@ -535,7 +535,7 @@ func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []str
 	// held, whoever holds it; only a release (or the user) clears a lease. The
 	// daemon-side check (busy) then skips a worktree still bound to a child
 	// since its last completed release, or bound before it with a live
-	// process; checkoutHasLiveExecActivity skips one with a live exec job.
+	// process, or with a running exec job whose cwd is in it.
 	var claim string
 	var claimMarker *worktreeMarker
 	for _, e := range entries {
@@ -749,9 +749,6 @@ func reusableCandidate(ctx context.Context, runner wsgit.Runner, env []string, p
 	if err != nil || lease != nil {
 		return false // an extant (or unreadable) lease holds the worktree
 	}
-	if checkoutHasLiveExecActivity(path) {
-		return false
-	}
 	if busy != nil {
 		if busy(ctx, path) {
 			return false
@@ -759,15 +756,6 @@ func reusableCandidate(ctx context.Context, runner wsgit.Runner, env []string, p
 	}
 	*marker = m
 	return true
-}
-
-// checkoutHasLiveExecActivity reports whether a live exec job runs in the
-// checkout at path, which keeps it out of reuse. It is a stub answering false:
-// the exec-job worktree fence comes with 261117 Phase 2, and a follow-up wires
-// this predicate to that fence once it lands.
-func checkoutHasLiveExecActivity(path string) bool {
-	_ = path
-	return false
 }
 
 // legacyWorktreeProfile is the builtin an unmarked (pre-profile) pooled
@@ -970,7 +958,8 @@ func releaseWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtP
 // key (a lead's, or the worker key an acquire minted, which is a lead key
 // too), the worker key it named (empty when it named a path), force, an
 // optional daemon-wide bound-child check run under the per-worktree lock
-// (non-forced releases only), an optional check that the daemon will take the
+// (non-forced releases only), an optional running-exec-job check run under
+// that lock for every release, an optional check that the daemon will take the
 // release notice, run under that lock for every release, whose finding about
 // the bound agents (bindings) the notice receives, and an optional notice of
 // the completed release, whose lines join the result's warnings.
@@ -980,7 +969,7 @@ type worktreeReleaseCaller struct {
 	Force         bool
 	CheckChildren func(ctx context.Context, target string) error
 	// CheckExecJobs is the running-hosted-exec-job check, run next to
-	// CheckChildren under the same lock.
+	// CheckChildren under the same lock; force does not skip it.
 	CheckExecJobs func(target string) error
 	CheckNotice   func(ctx context.Context, target string) (releaseBindings, error)
 	Released      func(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool, bindings releaseBindings) worktreeReleaseNotice
@@ -1119,8 +1108,13 @@ func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) 
 // while a conversation bound since its last completed release (or, with none
 // recorded, any bound conversation) is listed (open, or closed with its
 // process still held), or while a conversation bound before that release
-// still has a live process. A daemon that cannot answer makes it busy.
+// still has a live process, or while a running hosted exec job has its cwd in
+// it (the release guard's predicate, checkWorktreeLiveExecJobs). A daemon
+// that cannot answer makes it busy.
 func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
+	if s.checkWorktreeLiveExecJobs(target) != nil {
+		return true
+	}
 	occ, err := s.worktreeOccupancy(ctx, target)
 	if err != nil {
 		return true
@@ -1302,7 +1296,7 @@ func releaseNoticeOutcomeText(outcome releaseNoticeOutcome) string {
 	}
 }
 
-// checkWorktreeLiveExecJobs refuses a non-forced worktree.release while any
+// checkWorktreeLiveExecJobs refuses a worktree.release, forced or not, while any
 // running hosted exec job's recorded cwd is target or lies under it, naming
 // each job. Hygiene would otherwise reset and clean the tree under a running
 // process and the next acquire would reuse it. Paths compare the way
@@ -1328,7 +1322,7 @@ func (s *Server) checkWorktreeLiveExecJobs(target string) error {
 	if len(parts) == 0 {
 		return nil
 	}
-	return fmt.Errorf("worktree.release refuses %s: running exec job(s) have their cwd in this worktree (%s). Nothing was changed. Wait for them to end or stop them with exec.stop, then release again; pass force: true only if you intend to clean the worktree under them", target, strings.Join(parts, ", "))
+	return fmt.Errorf("worktree.release refuses %s: running exec job(s) have their cwd in this worktree (%s). Nothing was changed. Wait for them to end or stop them with exec.stop, then release again; force: true does not override this", target, strings.Join(parts, ", "))
 }
 
 // releaseWorktreeAs is releaseWorktree on behalf of caller (nil: no lease
