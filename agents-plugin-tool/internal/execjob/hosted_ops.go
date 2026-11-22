@@ -201,6 +201,28 @@ func (h *Hosted) LiveCount(owner string) int {
 	return n
 }
 
+// RunningRows returns a copy of every running job's row, whoever owns it
+// (the worktree.release check reads their Cwd). It reads memory only and
+// leaves the output tails out; a nil h returns none.
+func (h *Hosted) RunningRows() []HostedJobRow {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var rows []HostedJobRow
+	for _, j := range h.jobs {
+		if j.row.Terminal() {
+			continue
+		}
+		row := j.row
+		row.Tails = [3][]byte{}
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(a, b int) bool { return rows[a].ID < rows[b].ID })
+	return rows
+}
+
 // Output returns job id's output for a reader of its own (legacy readers).
 func (h *Hosted) output(id string) *JobOutput {
 	h.mu.Lock()
