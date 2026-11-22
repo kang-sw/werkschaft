@@ -223,4 +223,6 @@ Generative image editing is the core production tool for companion art. Rules an
 
   Add owner visual sign-off on top. The edit output becomes the new master; nothing is composited back onto the old one.
 - **One edit of the whole column beats assembling independently generated parts.** Separate parts drift in outfit detail.
+- **Spend generation passes, not audit turns.** Generation and edit passes are cheap; multi-turn rule-based visual audits and hand repairs by an agent cost more (owner 2026-11-22 22:14). Generate several candidates or rerun the edit, then close the unit with one scripted check and one contact sheet. A failed gate gets another generation pass, not a pixel-repair loop.
+- **Split layers by edit, not by mask rules.** To split one generated asset into stacked layers (front and back hair, for example), run one erase edit per layer on the same source and keep what remains. The editor decides what is in front.
 - **Choose by the live preview, not by rule.** A small runtime transform within its safe range, an erase-and-infill edit, or a full redraw from the dressed master are all valid cards. Use whichever looks better.
