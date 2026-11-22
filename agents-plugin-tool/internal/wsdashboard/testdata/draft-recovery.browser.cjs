@@ -72,7 +72,7 @@ async function delivery(browser, { theme, accepted, command, capturePair }) {
       assert.equal(response.ok(), true, await response.text());
     }
     if (seen.length > 1) {
-      await route.fulfill({ json: { id: 'explicit-browser-retry' } });
+      await route.fulfill({ json: { id: '20261122T000000.000000000Z-0a0c0e02' } });
       replayed();
       return;
     }
@@ -270,7 +270,7 @@ async function ackWithUnavailableLegacyStorage(browser) {
     await page.route('**/s/livesession/message', async route => {
       received();
       await reply;
-      await route.fulfill({ json: { id: 'legacy-quota-ack' } });
+      await route.fulfill({ json: { id: '20261122T000000.000000000Z-0a0c0e01' } });
     });
     await page.goto(base + session);
     let frame = await frameFor(page);
@@ -280,7 +280,7 @@ async function ackWithUnavailableLegacyStorage(browser) {
     await type(frame, 'Keep this later input after the acknowledgement');
     await frame.evaluate(() => window.wsSaveSessionDraft());
     delivered();
-    await frame.locator('#r-convlive [data-entry="legacy-quota-ack"]').waitFor();
+    await frame.locator('#r-convlive [data-entry="20261122T000000.000000000Z-0a0c0e01"]').waitFor();
     assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
     const next = await context.newPage();
     await next.goto(base + session);
