@@ -4,9 +4,10 @@
   // held update); a row's first read only sets its baseline. It notifies
   // of three things. A row carries data-ap while its hosted session waits
   // on a tool approval: a wait the read before did not have is one. A
-  // top-level session that finished, once nothing of it runs any more (no
-  // child, background task, or exec job; the server's data-busy), is one,
-  // and a child finishing under a busy parent is none. A board question a
+  // top-level session that finished work of its own (data-active), once
+  // nothing of it runs any more (no child, background task, or exec job;
+  // the server's data-busy), is one, and a child finishing under a busy
+  // parent is none. A board question a
   // row's data-asks opened since the read before is one. The viewed
   // session's own, in a tab the user is looking at, is in front of them
   // and is none. One tag per event keeps several open tabs, and the

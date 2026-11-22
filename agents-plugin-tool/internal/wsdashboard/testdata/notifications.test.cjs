@@ -13,13 +13,16 @@ const railWindow = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../assets/rail.js'), 'utf8'), { window: railWindow });
 const WsRail = railWindow.WsRail;
 
-// row is a fake rail row: rid, then busy, asks, child (its parent's group
-// marks it data-g), ended, stopped, ms (last-tool time), msg (last
-// message), who (the message's author label), ap (an approval's tool).
+// row is a fake rail row: rid, then busy (busy by its own work: data-busy
+// and data-active), job (busy only through a worktree exec job: data-busy
+// alone), asks, child (its parent's group marks it data-g), ended,
+// stopped, ms (last-tool time), msg (last message), who (the message's
+// author label), ap (an approval's tool).
 function row(rid, o = {}) {
   const attrs = { 'data-rid': rid };
   if (o.asks !== undefined) attrs['data-asks'] = o.asks;
-  if (o.busy) attrs['data-busy'] = '1';
+  if (o.busy || o.job) attrs['data-busy'] = '1';
+  if (o.busy) attrs['data-active'] = '1';
   if (o.child) attrs['data-g'] = '/repo';
   if (o.ap) { attrs['data-ap'] = '1'; attrs['data-ap-tool'] = o.ap; attrs['data-ap-args'] = o.args || ''; }
   const classes = new Set(['rs']);
@@ -46,7 +49,12 @@ function row(rid, o = {}) {
 }
 // Arrays from the VM's realm fail deepEqual against this realm's [].
 const none = (events, message) => assert.equal(events.length, 0, message);
-const busy = (r, on) => on ? r.setAttribute('data-busy', '1') : r.removeAttribute('data-busy');
+// busy sets r busy by its own work, busy only through an exec job (job),
+// or not busy.
+const busy = (r, on, job) => {
+  if (on) r.setAttribute('data-busy', '1'); else r.removeAttribute('data-busy');
+  if (on && !job) r.setAttribute('data-active', '1'); else r.removeAttribute('data-active');
+};
 
 // --- WsRail.notices: the selection alone ------------------------------------
 {
@@ -88,6 +96,32 @@ const busy = (r, on) => on ? r.setAttribute('data-busy', '1') : r.removeAttribut
   const codex = row('cx', { busy: true, asks: '' });
   read([codex]); busy(codex, false);
   assert.equal(read([codex])[0].tag, 'ws-idle:cx:0', 'no last-tool time tags 0');
+
+  // Exec jobs keep every session of their worktree busy (data-busy without
+  // data-active): only a busy span with the row's own work is a finish.
+  const idleA = row('A', { asks: '', ms: 3 });
+  read([idleA]);
+  busy(idleA, true, true); none(read([idleA]), 'another session\'s job starting is no notice');
+  busy(idleA, false); none(read([idleA]), 'a job-only busy span ending is no notice');
+  const B = row('B', { asks: '', ms: 4 });
+  read([B]);
+  busy(B, true); read([B]);
+  busy(B, true, true); none(read([B]), 'turn ended while its job runs: still busy, no notice');
+  busy(B, false); ev = read([B]);
+  assert.equal(ev.length, 1, 'active, then job only, then idle: one notice');
+  assert.equal(ev[0].tag, 'ws-idle:B:4');
+  none(read([B]), 'once');
+  busy(B, true, true); read([B]); busy(B, false);
+  none(read([B]), 'a later job-only span after a finish is no notice: the span resets at idle');
+  const C = row('C', { busy: true, asks: '' });
+  read([C]); busy(C, true, true); read([C]); busy(C, false);
+  assert.equal(read([C]).length, 1, 'a first read busy and active counts for the span');
+  const D = row('D', { job: true, asks: '' });
+  read([D]); busy(D, false);
+  none(read([D]), 'a first read busy only through a job is no span');
+  const E = row('E', { job: true, asks: '' });
+  read([E]); busy(E, true); read([E], true); busy(E, false);
+  assert.equal(read([E]).length, 1, 'a reconnect baseline keeps the span\'s activity');
 
   const a = row('a', { asks: '12', child: true });
   read([a]);

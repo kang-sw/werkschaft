@@ -565,16 +565,23 @@
   // that owns the rail notifies of; tab memory only, one pass per read.
   // "idle": a top-level live row (no data-g, neither ended nor stopped)
   // whose data-busy went away, which the server keeps while the session,
-  // any child row under it, or any background work it knows of still
-  // runs, so a child finishing under a busy parent is no notice and the
-  // parent's own finish is one. Its tag holds the row's last-tool time,
-  // with a count added when a finish repeats that time (a turn without a
-  // tool), so each finish has its own. "ask": a row of any depth whose
-  // data-asks gained IDs the read before did not have, as attention reads
-  // them: a closed ID that reopens is new; ids are those IDs, sorted. A
-  // row's first read, and every row of a read passed baseline (a
-  // reconnect's first full rail), only records; a row gone or ended is
-  // forgotten or recorded idle without a notice.
+  // any child row under it, any background work it knows of, or any exec
+  // job under its worktree still runs, so a child finishing under a busy
+  // parent is no notice and the parent's own finish is one. A worktree's
+  // exec jobs keep every session in it busy, so a finish counts only when
+  // its busy span (the reads in a row with data-busy, a first read
+  // included) had one with data-active, the row's own work (its turn, a
+  // wait, a subagent, a background task, or an active child): a session
+  // that sat idle while another's job ran is no notice, and one whose turn
+  // ended while a job ran is one when the job ends. Its tag holds the
+  // row's last-tool time, with a count added when a finish repeats that
+  // time (a turn without a tool), so a browser notification of a later
+  // finish never replaces an earlier one under the same tag. "ask": a row
+  // of any depth whose data-asks gained IDs the read before did not have,
+  // as attention reads them: a closed ID that reopens is new; ids are
+  // those IDs, sorted. A row's first read, and every row of a read passed
+  // baseline (a reconnect's first full rail), only records; a row gone or
+  // ended is forgotten or recorded idle without a notice.
   function notices() {
     var seen = Object.create(null);
     function read(rows, baseline) {
@@ -585,10 +592,11 @@
         var prev = seen[id], ids = rowAsks(row), top = row.getAttribute("data-g") === null;
         var live = !row.classList.contains("ended") && !row.classList.contains("stopped");
         var busy = live && row.getAttribute("data-busy") === "1";
+        var active = busy && (row.getAttribute("data-active") === "1" || !!(prev && prev.busy && prev.active));
         var when = row.querySelector("time.when.t"), ms = (when && when.getAttribute("data-ms")) || "0";
-        var cur = kept[id] = { busy: busy, top: top, asks: ids, ms: prev ? prev.ms : "", n: prev ? prev.n : 0 };
+        var cur = kept[id] = { busy: busy, active: active, top: top, asks: ids, ms: prev ? prev.ms : "", n: prev ? prev.n : 0 };
         if (!prev || baseline) return;
-        if (top && prev.top && live && prev.busy && !busy) {
+        if (top && prev.top && live && prev.busy && prev.active && !busy) {
           cur.n = cur.ms === ms ? cur.n + 1 : 0;
           cur.ms = ms;
           out.push({ kind: "idle", rid: id, row: row, tag: "ws-idle:" + id + ":" + ms + (cur.n ? "." + cur.n : "") });
