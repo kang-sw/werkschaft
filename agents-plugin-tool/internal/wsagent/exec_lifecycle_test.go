@@ -20,6 +20,9 @@ type fakeExecJobs struct {
 	fenced map[string]bool
 	// stopErr, by owner, fails that owner's stops: its jobs keep running.
 	stopErr map[string]error
+	// onOwners, when set, runs at the start of RunningOwners, outside the
+	// lock (a test holds the read there).
+	onOwners func()
 }
 
 func newFakeExecJobs() *fakeExecJobs {
@@ -27,6 +30,12 @@ func newFakeExecJobs() *fakeExecJobs {
 }
 
 func (f *fakeExecJobs) RunningOwners() map[string]int {
+	f.mu.Lock()
+	hold := f.onOwners
+	f.mu.Unlock()
+	if hold != nil {
+		hold()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := maps.Clone(f.counts)
@@ -142,6 +151,34 @@ func TestExecJobsDeferredUntilBound(t *testing.T) {
 	r.BindExecJobs(nil)
 	if r.execLive("x") != 0 {
 		t.Fatal("a daemon without hosted jobs counts none once bound")
+	}
+}
+
+// Binding reads the counts before they replace the unbound hold: while
+// the read runs, every conversation still counts a live job.
+func TestExecBindKeepsTheHoldWhileItReads(t *testing.T) {
+	r := &Runner{convs: map[string]*conv{}}
+	r.ExpectExecJobs()
+	jobs := newFakeExecJobs()
+	jobs.set("x", 1)
+	entered, release := make(chan struct{}), make(chan struct{})
+	jobs.onOwners = func() {
+		close(entered)
+		<-release
+	}
+	bound := make(chan struct{})
+	go func() {
+		r.BindExecJobs(jobs)
+		close(bound)
+	}()
+	<-entered
+	if n := r.execLive("y"); n != 1 {
+		t.Fatalf("a conversation read %d live jobs while the bind read the counts", n)
+	}
+	close(release)
+	<-bound
+	if r.execLive("y") != 0 || r.execLive("x") != 1 {
+		t.Fatalf("after the bind: y=%d x=%d", r.execLive("y"), r.execLive("x"))
 	}
 }
 

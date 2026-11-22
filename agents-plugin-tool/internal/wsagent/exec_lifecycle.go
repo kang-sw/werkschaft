@@ -49,20 +49,27 @@ func (r *Runner) ExpectExecJobs() { r.exec.deferred.Store(true) }
 
 // BindExecJobs binds the daemon's hosted exec jobs (nil when it has none)
 // and reads their counts. Run it once the jobs settled what a predecessor
-// left (execjob.Hosted.Start).
-//
-// Change signals the source raised while it settled (before binding) do not
-// count: binding drops the counts they read, so the read here is the first
-// one and has every conversation reconsider what the unbound hold kept.
+// left (execjob.Hosted.Start). The counts are read before they replace the
+// unbound hold, so no conversation reads zero in between; then every
+// conversation reconsiders what the hold kept, whatever change signals the
+// source raised while it settled.
 func (r *Runner) BindExecJobs(src ExecJobs) {
 	r.exec.mu.Lock()
+	next := map[string]int{}
 	if src != nil {
 		r.exec.src.Store(&src)
+		next = src.RunningOwners()
 	}
-	r.exec.live.Store(nil)
+	r.exec.live.Store(&next)
 	r.exec.bound.Store(true)
 	r.exec.mu.Unlock()
-	r.ExecJobsChanged()
+	r.mu.Lock()
+	all := make(map[string]bool, len(r.convs))
+	for id := range r.convs {
+		all[id] = true
+	}
+	r.mu.Unlock()
+	r.execReconsider(all)
 }
 
 func (r *Runner) execJobs() ExecJobs {
@@ -97,16 +104,13 @@ func (r *Runner) ExecJobsChanged() {
 			changed[id] = true
 		}
 	}
-	if prev == nil {
-		// The first read after binding (or ever): every held report and
-		// idle timer waited on it.
-		r.mu.Lock()
-		for id := range r.convs {
-			changed[id] = true
-		}
-		r.mu.Unlock()
-	}
-	for id := range changed {
+	r.execReconsider(changed)
+}
+
+// execReconsider has each conversation of ids reconsider its held report
+// and its sleep, and wakes its spawn parents.
+func (r *Runner) execReconsider(ids map[string]bool) {
+	for id := range ids {
 		c := r.conv(id)
 		if c == nil {
 			continue
