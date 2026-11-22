@@ -308,3 +308,63 @@ func TestCoreCloseWithoutWorkerClosesNoBackend(t *testing.T) {
 		t.Fatalf("backend closes = %d, want 0", n)
 	}
 }
+
+// lostFake is a fakeBackend whose held assertion can end on its own (Lost).
+// A successful Acquire clears the loss unless sticky, which models a helper
+// that dies again at once.
+type lostFake struct {
+	*fakeBackend
+	lost   atomic.Bool
+	sticky atomic.Bool
+}
+
+func (f *lostFake) Acquire() error {
+	err := f.fakeBackend.Acquire()
+	if err == nil && !f.sticky.Load() {
+		f.lost.Store(false)
+	}
+	return err
+}
+
+func (f *lostFake) Lost() bool { return f.lost.Load() }
+
+// A held assertion that ended on its own is released and taken again at the
+// next change while still wanted, once per change.
+func TestCoreRetakesALostAssertion(t *testing.T) {
+	f := &lostFake{fakeBackend: newFake()}
+	c := New(f, nil)
+	defer c.Close()
+	a, b := new(int), new(int)
+	c.SetEnabled(true)
+	c.SetMember(a, true)
+	waitHeld(t, f.fakeBackend, true)
+	f.lost.Store(true)
+	settle()
+	if _, acq, rel := f.state(); acq != 1 || rel != 0 {
+		t.Fatalf("retaken without a change: acquires=%d releases=%d", acq, rel)
+	}
+	c.SetMember(b, true)
+	waitAcquires(t, f.fakeBackend, 2)
+	waitHeld(t, f.fakeBackend, true)
+	c.SetMember(b, false) // the assertion stands again: nothing to do
+	settle()
+	if _, acq, rel := f.state(); acq != 2 || rel != 1 || f.Lost() {
+		t.Fatalf("after the retake: acquires=%d releases=%d lost=%v", acq, rel, f.Lost())
+	}
+	// A helper that dies again at once is retaken once per change, not in
+	// a loop.
+	f.sticky.Store(true)
+	f.lost.Store(true)
+	c.SetMember(b, true)
+	waitAcquires(t, f.fakeBackend, 3)
+	settle()
+	if _, acq, _ := f.state(); acq != 3 {
+		t.Fatalf("a lost assertion was retaken %d times in one change", acq-2)
+	}
+	// Not wanted any more: dropped, never retaken.
+	c.SetEnabled(false)
+	waitHeld(t, f.fakeBackend, false)
+	if _, acq, _ := f.state(); acq != 3 {
+		t.Fatalf("retaken while not wanted: acquires=%d", acq)
+	}
+}

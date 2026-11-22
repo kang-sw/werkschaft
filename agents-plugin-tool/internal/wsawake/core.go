@@ -24,6 +24,13 @@ type Backend interface {
 	Release() error
 }
 
+// lostBackend is a Backend whose assertion can end on its own (the macOS
+// helper exiting). Core asks it after a wake while the assertion is held and
+// still wanted; a lost assertion is released and taken again, once per wake.
+type lostBackend interface {
+	Lost() bool
+}
+
 // closingBackend is a Backend holding a resource of its own (the Windows
 // dedicated thread). Core closes it when its worker exits, after the final
 // Release.
@@ -182,11 +189,24 @@ func (c *Core) Close() {
 func (c *Core) run() {
 	defer close(c.done)
 	held := false
+	// recheck is set by a wake: the first pass after one asks a lostBackend
+	// whether its held assertion still stands, so a lost one is retaken at
+	// the next membership or setting change, and at most once per wake.
+	recheck := false
 	for {
 		c.mu.Lock()
 		want, closed, epoch := c.wantLocked(), c.closed, c.epoch
 		c.mu.Unlock()
+		check := recheck
+		recheck = false
 		switch {
+		case want && held && check && c.lost():
+			fmt.Fprintf(c.log, "keep-awake: the idle-sleep assertion ended on its own; taking it again\n")
+			if err := c.backend.Release(); err != nil {
+				fmt.Fprintf(c.log, "keep-awake: drop the idle-sleep assertion: %v\n", err)
+			}
+			held = false
+			continue
 		case want && !held:
 			if err := c.backend.Acquire(); err != nil {
 				fmt.Fprintf(c.log, "keep-awake: take the idle-sleep assertion: %v\n", err)
@@ -217,5 +237,12 @@ func (c *Core) run() {
 			return
 		}
 		<-c.wake
+		recheck = true
 	}
+}
+
+// lost reports whether a lostBackend's held assertion ended on its own.
+func (c *Core) lost() bool {
+	b, ok := c.backend.(lostBackend)
+	return ok && b.Lost()
 }
