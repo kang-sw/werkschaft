@@ -939,6 +939,25 @@ func TestHostedLegacyShapeAndReaders(t *testing.T) {
 	if _, ok, _ := fx.h.LegacyRead(root, "exec-00000000", "stdout", 0, 10); ok {
 		t.Fatal("an unknown key is hosted")
 	}
+	// A new-tool job of the same root is its owner's alone: no legacy reader
+	// or abort finds it by root.
+	fx.holders.onSpawn = nil
+	nv, err := fx.launch(context.Background(), nil, HostedLaunch{Root: root, Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fx.h.LegacyStatus(root, nv.ID); ok {
+		t.Fatal("legacy status finds a new-tool job by root")
+	}
+	if _, ok, _ := fx.h.LegacyRead(root, nv.ID, "stdout", 0, 10); ok {
+		t.Fatal("legacy read finds a new-tool job by root")
+	}
+	if _, ok := fx.h.LegacyAbort(root, nv.ID); ok {
+		t.Fatal("legacy abort finds a new-tool job by root")
+	}
+	if got, _ := fx.h.Get("lead", nv.ID); got.State != HostedRunning {
+		t.Fatalf("the new-tool job after a refused legacy abort = %+v", got)
+	}
 
 	// A running legacy job: the timed reply carries the guidance, and abort
 	// cancels it.
