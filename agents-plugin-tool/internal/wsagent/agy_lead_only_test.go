@@ -284,6 +284,77 @@ func TestAgyWorkerRejoinRetriesAFailedStopFromTheHeartbeat(t *testing.T) {
 	}
 }
 
+// A user's Stop while a failed retirement retries goes through the holder's
+// own stop, not the detached stream's Close. A failed stop keeps the holder,
+// shows the error, and leaves the heartbeat retry armed; a successful one
+// clears everything and reports the turn once.
+func TestAgyWorkerUserStopDuringAFailedRetirementStopsTheHolder(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	leadOnlyAgyNextDaemon(t, h)
+	h.opts.heartbeat = time.Hour // the test drives each retry
+	h.holders.set(func() { h.holders.stopErr = errors.New("holder busy") })
+	h.startAt("http://127.0.0.1:1")
+	wait(t, "holder scan", h.runner.rejoined)
+	eventually(t, "the failed retirement stop", func() bool { return h.holders.opCount("stop "+holder) == 1 })
+	c := h.runner.conv(id)
+	armed := func() bool {
+		ok := false
+		c.do(func() { ok = c.leadOnlyRetiring && c.replaying && c.proc != nil })
+		return ok
+	}
+	stops := func() int { return h.holders.opCount("stop " + holder) }
+
+	st, err := h.runner.Stop(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stops() != 2 {
+		t.Fatalf("the user's Stop did not stop the holder: %v", h.holders.opList())
+	}
+	if rec := h.record(id); rec.HolderID != holder || !rec.TurnOpen {
+		t.Fatalf("a failed user Stop forgot the holder: %+v", rec)
+	}
+	if !strings.HasPrefix(st.Error, agyLeadOnlyReason+"; ") || !strings.HasSuffix(st.Error, "holder busy") {
+		t.Fatalf("state error = %q", st.Error)
+	}
+	if !armed() || len(got.list()) != 0 {
+		t.Fatalf("a failed user Stop disarmed the retry or published: armed %v, reports %+v", armed(), got.list())
+	}
+	c.do(c.heartbeat)
+	if stops() != 3 {
+		t.Fatalf("the heartbeat no longer retries: %v", h.holders.opList())
+	}
+
+	h.holders.set(func() { h.holders.stopErr = nil })
+	if _, err := h.runner.Stop(id); err != nil {
+		t.Fatal(err)
+	}
+	if stops() != 4 {
+		t.Fatalf("the user's Stop did not stop the holder: %v", h.holders.opList())
+	}
+	if rec := h.record(id); rec.HolderID != "" || rec.TurnOpen || rec.MCPToken != "" || rec.Capability != "" {
+		t.Fatalf("the stopped worker kept its holder or turn: %+v", rec)
+	}
+	eventually(t, "the failed report", func() bool { return len(got.list()) == 1 })
+	if rep := got.list()[0]; rep.Result.ID != id || rep.Result.Status != TurnFailed || rep.Result.Error != agyLeadOnlyReason {
+		t.Fatalf("report = %+v", rep.Result)
+	}
+	if armed() {
+		t.Fatal("the retry is still armed after the holder ended")
+	}
+	c.do(c.heartbeat)
+	if _, err := h.runner.Stop(id); err != nil {
+		t.Fatal(err)
+	}
+	if stops() != 4 || len(got.list()) != 1 || h.holders.opCount("launch") != 1 {
+		t.Fatalf("retired twice or relaunched: stops %d, reports %+v, ops %v", stops(), got.list(), h.holders.opList())
+	}
+	if st := h.state(id); st.Error != agyLeadOnlyReason || st.Process || st.Status == StatusClosed {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
 // A daemon that died after the retirement cleared the holder but before the
 // open turn settled leaves an open turn and no holder. The next load settles
 // it failed with the agy reason, not the generic interrupted one.

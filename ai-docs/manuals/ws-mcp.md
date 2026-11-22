@@ -1084,7 +1084,8 @@ from a support conversation:
   bearer kept closed and no profile or config read. A matching holder is
   then stopped (`retireLeadOnlyWorker`): an open turn settles failed with
   the reason. A failed stop keeps the holder in the record and is retried
-  on every heartbeat until it succeeds. A daemon that dies between clearing
+  on every heartbeat until it succeeds; a user's Stop meanwhile retries the
+  holder's own stop and keeps the holder if that fails too. A daemon that dies between clearing
   the holder and settling the turn leaves the next load to settle it failed
   with the same reason, not as interrupted. A mismatched or already
   rejected holder is never stopped; the record only drops the association.

@@ -48,7 +48,8 @@ func (c *conv) restoreWorkerMCP() {
 //     association, publishes nothing, and says so. The conversation stays
 //     replaying (it submits nothing), and each heartbeat's checkReattach
 //     tries the stop again (leadOnlyRetiring), as a downgrade retirement
-//     does.
+//     does. Any stopProcess (a user's Stop) retries it here too, never
+//     through the detached stream's Close.
 func (c *conv) retireLeadOnlyWorker(hp holderProcess) {
 	refusal := c.r.admitWorkerRecord(c.rec)
 	if refusal == nil {
