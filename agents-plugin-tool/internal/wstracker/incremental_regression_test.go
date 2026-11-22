@@ -193,11 +193,12 @@ func TestIncrementalFoldSameIDOrgCollisionMatchesFullReplay(t *testing.T) {
 // a creates o-y "Sales"; b, offline, creates o-x "Sales"; c, offline,
 // creates o-x under another name. When b's create folds before c's it loses
 // on the name, not the id, and c's create holds o-x. Either way b's pre-sync
-// CC, edit, and removal of its own o-x are flagged, never landing on c's org,
+// CC (its org headed, so the CC passes its causal check), edit, and removal
+// of its own o-x are flagged as acting on a lost org, never landing on c's org,
 // while b after the sync, and a later writer, act on c's org. Both fold
 // orders, each in two arrival orders, match a fresh full replay throughout.
 func TestIncrementalFoldNameClashedOrgCreateLosesItsID(t *testing.T) {
-	g := json.RawMessage(`{"admins":["a","b","c"],"members":[{"id":"a","keys":["a"]},{"id":"b","keys":["b"]},{"id":"c","keys":["c"]},{"id":"h","keys":["h"]},{"id":"k","keys":["k"]}]}`)
+	g := json.RawMessage(`{"admins":["a","b","c"],"members":[{"id":"a","keys":["a"]},{"id":"b","keys":["b"]},{"id":"c","keys":["c"]},{"id":"h","keys":["h"]},{"id":"k","keys":["k"]},{"id":"m","keys":["m"]}]}`)
 	seenItem := map[string]int{"h.pc": 1}
 	item := incrementalEvent("h", 1, TypeItemCreate, `{"kind":"task","title":"three creates"}`, 1, nil)
 	sales := incrementalEvent("a", 1, TypeOrgSet, `{"org":"o-y","name":"Sales","head":""}`, 2, seenItem)
@@ -205,10 +206,10 @@ func TestIncrementalFoldNameClashedOrgCreateLosesItsID(t *testing.T) {
 		"name clash, loser first in fold order": {3, 4},
 		"id clash, winner first in fold order":  {4, 3},
 	} {
-		lost := incrementalEvent("b", 1, TypeOrgSet, `{"org":"o-x","name":"Sales","head":""}`, ts.lost, seenItem)
+		lost := incrementalEvent("b", 1, TypeOrgSet, `{"org":"o-x","name":"Sales","head":"m"}`, ts.lost, seenItem)
 		won := incrementalEvent("c", 1, TypeOrgSet, `{"org":"o-x","name":"Other","head":"k"}`, ts.won, seenItem)
 		lostCC := incrementalEvent("b", 2, TypeItemCCOrg, `{"item":"h.pc#1","org":"o-x"}`, 5, seenItem)
-		lostEdit := incrementalEvent("b", 3, TypeOrgSet, `{"org":"o-x","name":"Sales Two","head":""}`, 6, seenItem)
+		lostEdit := incrementalEvent("b", 3, TypeOrgSet, `{"org":"o-x","name":"Sales Two","head":"m"}`, 6, seenItem)
 		lostRemove := incrementalEvent("b", 4, TypeOrgRemove, `{"org":"o-x"}`, 7, seenItem)
 		synced := incrementalEvent("b", 5, TypeOrgSet, `{"org":"o-x","name":"Other Renamed","head":"k"}`, 8, map[string]int{"h.pc": 1, "a.pc": 1, "c.pc": 1})
 		laterCC := incrementalEvent("h", 2, TypeItemCCOrg, `{"item":"h.pc#1","org":"o-x"}`, 9, map[string]int{"a.pc": 1, "b.pc": 5, "c.pc": 1})
@@ -227,6 +228,11 @@ func TestIncrementalFoldNameClashedOrgCreateLosesItsID(t *testing.T) {
 					lostCC.ID: "flagged", lostEdit.ID: "flagged", lostRemove.ID: "flagged", synced.ID: "applied", laterCC.ID: "applied"} {
 					if n := tr.r.byID[id.String()]; n.status != want {
 						t.Fatalf("%s = %s (%s), want %s", id, n.status, n.reason, want)
+					}
+				}
+				for _, id := range []wsledger.EventID{lostCC.ID, lostEdit.ID, lostRemove.ID} {
+					if n := tr.r.byID[id.String()]; !strings.Contains(n.reason, "is the org b.pc-1 created") {
+						t.Fatalf("%s flagged for %q, not as acting on the lost org", id, n.reason)
 					}
 				}
 				S := tr.r.S
@@ -284,6 +290,56 @@ func TestIncrementalFoldAssignDropsOnlyLostOrgTarget(t *testing.T) {
 			}
 			if o := S.orgs["o-x"]; o == nil || o.name != "Active" || o.head != "k" {
 				t.Fatalf("winner org = %+v", o)
+			}
+		})
+	}
+}
+
+// TestIncrementalFoldLostCreateLeavesViewsThatSawItsBeater covers a create
+// lost to a concurrent head clash under a different id: a creates o-a Alpha
+// headed by h; b, offline, creates o-b Beta headed by h and loses. A writer
+// who saw both, c, takes the free name Beta for o-c and freshly creates the
+// never-created id o-b, and both apply; b's pre-sync CC on its own headed o-b
+// is flagged as acting on a lost org. Both arrival orders match a fresh full
+// replay throughout.
+func TestIncrementalFoldLostCreateLeavesViewsThatSawItsBeater(t *testing.T) {
+	g := json.RawMessage(`{"admins":["a","b","c"],"members":[{"id":"a","keys":["a"]},{"id":"b","keys":["b"]},{"id":"c","keys":["c"]},{"id":"h","keys":["h"]},{"id":"k","keys":["k"]},{"id":"m","keys":["m"]}]}`)
+	seenItem := map[string]int{"h.pc": 1}
+	item := incrementalEvent("h", 1, TypeItemCreate, `{"kind":"task","title":"ghost"}`, 1, nil)
+	alpha := incrementalEvent("a", 1, TypeOrgSet, `{"org":"o-a","name":"Alpha","head":"h"}`, 2, seenItem)
+	beta := incrementalEvent("b", 1, TypeOrgSet, `{"org":"o-b","name":"Beta","head":"h"}`, 3, seenItem)
+	lostCC := incrementalEvent("b", 2, TypeItemCCOrg, `{"item":"h.pc#1","org":"o-b"}`, 4, seenItem)
+	synced := map[string]int{"h.pc": 1, "a.pc": 1, "b.pc": 2}
+	takeName := incrementalEvent("c", 1, TypeOrgSet, `{"org":"o-c","name":"Beta","head":"k"}`, 5, synced)
+	freshID := incrementalEvent("c", 2, TypeOrgSet, `{"org":"o-b","name":"Gamma","head":"m"}`, 6, synced)
+	for order, arrivals := range map[string][]wsledger.Event{
+		"beater first": {alpha, beta, lostCC, takeName, freshID},
+		"beater last":  {beta, lostCC, alpha, takeName, freshID},
+	} {
+		t.Run(order, func(t *testing.T) {
+			src := newMemSource(g, "h.pc", []wsledger.Event{item})
+			tr := New(src, src.stream)
+			for _, ev := range arrivals {
+				src.add(ev)
+				assertIncrementalFold(t, tr, src)
+			}
+			for id, want := range map[wsledger.EventID]string{alpha.ID: "applied", beta.ID: "flagged", lostCC.ID: "flagged",
+				takeName.ID: "applied", freshID.ID: "applied"} {
+				if n := tr.r.byID[id.String()]; n.status != want {
+					t.Fatalf("%s = %s (%s), want %s", id, n.status, n.reason, want)
+				}
+			}
+			if n := tr.r.byID[lostCC.ID.String()]; !strings.Contains(n.reason, "is the org b.pc-1 created") {
+				t.Fatalf("lost CC flagged for %q, not as acting on the lost org", n.reason)
+			}
+			S := tr.r.S
+			for id, want := range map[string][2]string{"o-a": {"Alpha", "h"}, "o-b": {"Gamma", "m"}, "o-c": {"Beta", "k"}} {
+				if o := S.orgs[id]; o == nil || o.name != want[0] || o.head != want[1] || o.removed != nil {
+					t.Fatalf("%s = %+v, want %v", id, o, want)
+				}
+			}
+			if reg := S.ccOrgs[ccOrgKey("h.pc#1", "o-b")]; reg != nil {
+				t.Fatalf("lost CC registered on the fresh o-b: %+v", reg)
 			}
 		})
 	}

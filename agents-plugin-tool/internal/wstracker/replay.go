@@ -31,6 +31,7 @@ type node struct {
 	ignored              bool
 	clash                bool         // flagged only by a fold-order list clash; still in later causal-past checks
 	lostCreate           bool         // a roles.org_set creation the fold-order list flagged (id, name, or head clash)
+	beatenBy             *node        // for a lost create: the list event it clashed with (beaterOf)
 	orgCreate            bool         // the roles.org_set the fold-order list took as its id's creation
 	lostTargets          []lostTarget // item.assign org targets dropped: lostOrgRefs
 	markers              []marker
@@ -297,11 +298,16 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 	// orgWinner is the create that holds each org id in lf (a removed org keeps
 	// its id, so there is one per id); orgLosers are the lost creates, per id,
 	// in fold order.
-	orgWinner, orgLosers := map[string]*node{}, map[string][]*node{}
+	// lastSet is the roles.org_set lf last applied per org id: it carries the
+	// org's current name and head.
+	orgWinner, orgLosers, lastSet := map[string]*node{}, map[string][]*node{}, map[string]*node{}
 	applyList := func(n *node) {
-		if id := n.p.str("org"); n.typ == TypeOrgSet && lf.orgs[id] == nil {
-			orgWinner[id] = n
-			n.orgCreate = true
+		if id := n.p.str("org"); n.typ == TypeOrgSet {
+			if lf.orgs[id] == nil {
+				orgWinner[id] = n
+				n.orgCreate = true
+			}
+			lastSet[id] = n
 		}
 		lf.apply(n)
 	}
@@ -315,7 +321,7 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 	}
 	for _, n := range r.order[start:] {
 		n.status, n.reason, n.ignored, n.clash, n.lostCreate, n.orgCreate = "", "", false, false, false, false
-		n.lostTargets = nil
+		n.lostTargets, n.beatenBy = nil, nil
 		if r.rolesOnly && !isRoles(n.typ) {
 			n.status, n.causalStatus = "skipped", "skipped"
 			continue
@@ -333,7 +339,9 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 				// its id creates one, whatever the fold-order list holds.
 				creates = n.typ == TypeOrgSet && before.orgs[n.p.str("org")] == nil
 			}
-			if n.status == "applied" {
+			if n.status == "applied" && !creates {
+				// A create is never lost-ref flagged: its writer held no org
+				// with the id, so a fresh create of a lost id is legal.
 				lost := r.lostOrgRefs(n, orgLosers, orgWinner)
 				if n.typ == TypeItemAssign {
 					// Only the lost org targets drop; the other targets apply,
@@ -365,7 +373,7 @@ func (r *replayed) verdictsFrom(all []*node, start int) {
 					n.status, n.reason, n.clash = "flagged", string(rej), true
 					if creates {
 						id := n.p.str("org")
-						n.lostCreate = true
+						n.lostCreate, n.beatenBy = true, beaterOf(lf, n, orgWinner, lastSet)
 						orgLosers[id] = append(orgLosers[id], n)
 					}
 				} else {
@@ -471,6 +479,10 @@ func (r *replayed) stateBeforeMode(n *node, causal bool) *state {
 			continue
 		}
 		if x.lostCreate {
+			if x.beatenBy != nil && r.hb(x.beatenBy, n) {
+				// n's writer saw the write x clashed with: it sees x lose.
+				continue
+			}
 			if created == nil {
 				created = r.orgCreatesSeen(n, cands)
 			}
@@ -577,8 +589,8 @@ func (r *replayed) lostOrgRefs(n *node, losers map[string][]*node, winners map[s
 			continue
 		}
 		for _, l := range losers[id] {
-			if !r.hb(l, n) {
-				continue
+			if !r.hb(l, n) || (l.beatenBy != nil && r.hb(l.beatenBy, n)) {
+				continue // unseen, or seen losing: n's view holds no such org
 			}
 			why := "org " + id + " is the org " + alias(l.id) + " created, which a concurrent write overtook (" + l.reason + ")"
 			if w != nil {
@@ -589,6 +601,29 @@ func (r *replayed) lostOrgRefs(n *node, losers map[string][]*node, winners map[s
 		}
 	}
 	return out
+}
+
+// beaterOf is the list event the create n clashed with in lf, judged in
+// checkOrgSet's order: the create holding its id, the org_set that gave its
+// name or head to another live org, or the removal of its head. A writer
+// who saw it sees n lose and leaves n out of its view (stateBeforeMode).
+func beaterOf(lf *state, n *node, winners, lastSet map[string]*node) *node {
+	id := n.p.str("org")
+	if w := winners[id]; w != nil {
+		return w
+	}
+	if o := lf.orgNamed(n.p.str("name"), id); o != nil {
+		return lastSet[o.id]
+	}
+	if head := n.p.str("head"); head != "" {
+		if m := lf.members[head]; m != nil && m.removed != nil {
+			return m.removed
+		}
+		if o := lf.orgHeadedBy(head, id); o != nil {
+			return lastSet[o.id]
+		}
+	}
+	return nil
 }
 
 // droppedOrg reports whether org targets are dropped from item.assign n.
