@@ -390,3 +390,31 @@ Compatibility evidence (T1, release-compatibility):
   it outlives older completions. The old writer drops the flag on rewrite;
   after re-upgrade the row is retained and shows done (display-only).
   `TestEndUnknownRowSurvivesAnOlderWriter` pins this path.
+
+#### Edition (032bc13f0) - 2026-11-22
+
+Rows a rejoin's replay rebuilds (supersedes the "placed by the restored
+history, 0232210cb" clause above; the lead chose option B). Holder records
+carry no time, so a replayed record cannot give its own end. Retention
+already decided which finished rows the restored snapshot kept, so the
+replay must not resurrect the rest:
+- A row the replay created only from records the previous daemon had
+  applied (seq <= HolderSeq) and which a readable restored snapshot does
+  not list is dropped at replay end (also when the process ends during the
+  replay), and its launch correlation is forgotten.
+- A rebuilt row the restored snapshot listed running closes end-unknown at
+  the snapshot's `UpdatedAt`. Its start moves back to that time if the
+  replay clock put it later.
+- A row a record past HolderSeq touched closes end-unknown at that record's
+  time.
+- With no readable restored snapshot (missing, unreadable, or another
+  session's), quiet-only rows close end-unknown at the replay boundary,
+  since no restored row is there to displace.
+- A live turn end accepted during the replay still settles its open rows at
+  its own time first. A dropped row is skipped.
+
+Evidence: `TestAgyNativeReplayKeepsHistoricalRetention` (six launches, five
+restored, the oldest not resurrected even after a buffered live turn end),
+`TestAgyNativeReplayClosesRebuiltRowsWithoutSnapshot`,
+`TestAgyNativeReplayClosesRebuiltRowsByEvidence`,
+`TestLiveWriterRestoresAgyNativeRows`.
