@@ -271,13 +271,22 @@ func ticketMapFor(root string) (*ticketMapRoot, error) {
 	ticketMapState.mu.Lock()
 	defer ticketMapState.mu.Unlock()
 
+	ticketMapState.tick++
+	state := ticketMapState.roots[root]
 	load, err := loadTicketMap(root)
 	if err != nil {
+		// A failed build may already have cached documents for the statuses
+		// it listed, so the root stays tracked under the root cap. A missing
+		// board (ErrNotExist) listed nothing and is tracked only if it was.
+		if state != nil {
+			state.used = ticketMapState.tick
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			ticketMapState.roots[root] = &ticketMapRoot{used: ticketMapState.tick}
+			evictTicketMapRoots()
+		}
 		return nil, err
 	}
 	fp := ticketMapFingerprint(load)
-	ticketMapState.tick++
-	state := ticketMapState.roots[root]
 	if state != nil && state.result != nil && state.fingerprint == fp {
 		state.used = ticketMapState.tick
 		return state, nil
@@ -290,11 +299,11 @@ func ticketMapFor(root string) (*ticketMapRoot, error) {
 	built := &ticketMapRoot{used: ticketMapState.tick, fingerprint: fp, result: result, json: encoded}
 	if load.stable {
 		ticketMapState.roots[root] = built
-	} else if state != nil {
-		// A racy build is served but never memoized; the root stays tracked
-		// so its documents remain under the root cap.
-		state.used, state.fingerprint, state.result, state.json = ticketMapState.tick, "", nil, nil
 	} else {
+		// A racy build is served but never memoized; the root stays tracked
+		// so its documents remain under the root cap. A published entry is
+		// read by callers after mu is released, so it is replaced, never
+		// cleared in place.
 		ticketMapState.roots[root] = &ticketMapRoot{used: ticketMapState.tick}
 	}
 	evictTicketMapRoots()
@@ -351,7 +360,8 @@ func loadTicketMap(root string) (ticketMapLoad, error) {
 	openIndex := map[string]bool{}
 	missingDirs := 0
 	for _, status := range ticketMapOpenStatuses {
-		scans, err := scanStatusDirWith(root, filepath.Join(ticketsRoot, status), status, true)
+		scans, vanished, err := scanStatusDirWith(root, filepath.Join(ticketsRoot, status), status, true)
+		load.stable = load.stable && !vanished
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				missingDirs++
@@ -394,13 +404,13 @@ func loadTicketMap(root string) (ticketMapLoad, error) {
 		if err != nil {
 			return ticketMapLoad{}, err
 		}
+		load.stable = load.stable && stable
 		if !found {
 			dangling[stem] = true
 			continue
 		}
 		load.nodes = append(load.nodes, node)
 		load.files = append(load.files, file)
-		load.stable = load.stable && stable
 	}
 	load.dangling = slices.Sorted(maps.Keys(dangling))
 	for _, node := range load.nodes {
@@ -447,8 +457,11 @@ func ticketMapRefStems(info TicketInfo) []string {
 
 // loadTicketMapRef resolves one closed referenced stem by lstat and reads it
 // through ticketRefCache. found is false when neither closed directory holds a
-// regular file (or symlink) for it: the stem is dangling.
+// regular file (or symlink) for it: the stem is dangling. A file that vanishes
+// between its lstat and its read is treated as absent and makes the result
+// unstable, so a racy move is never memoized as dangling.
 func loadTicketMapRef(root, ticketsRoot, stem string) (mapNode, ticketMapFile, bool, bool, error) {
+	vanished := false
 	for _, dir := range ticketMapClosedDirs {
 		path := filepath.Join(ticketsRoot, dir, stem+ticketFileSuffix)
 		stat, err := lstatTicketFile(path)
@@ -467,9 +480,13 @@ func loadTicketMapRef(root, ticketsRoot, stem string) (mapNode, ticketMapFile, b
 		ticketRefCache.Unlock()
 		if ok && !symlink && hit.size == stat.Size() && hit.modTime.Equal(stat.ModTime()) {
 			file := ticketMapFile{rel: hit.info.Path, size: hit.size, modTime: hit.modTime}
-			return mapNode{info: cloneTicketInfo(hit.info), doc: hit.doc}, file, true, true, nil
+			return mapNode{info: cloneTicketInfo(hit.info), doc: hit.doc}, file, !vanished, true, nil
 		}
 		raw, err := readTicketFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			vanished = true
+			continue
+		}
 		if err != nil {
 			return mapNode{}, ticketMapFile{}, false, false, err
 		}
@@ -490,9 +507,9 @@ func loadTicketMapRef(root, ticketsRoot, stem string) (mapNode, ticketMapFile, b
 				ticketRefCache.Unlock()
 			}
 		}
-		return mapNode{info: info, doc: doc}, file, stable, true, nil
+		return mapNode{info: info, doc: doc}, file, stable && !vanished, true, nil
 	}
-	return mapNode{}, ticketMapFile{}, false, false, nil
+	return mapNode{}, ticketMapFile{}, !vanished, false, nil
 }
 
 // ticketMapFingerprint hashes the sorted (relPath, size, mtime) of every
