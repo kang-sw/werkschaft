@@ -60,15 +60,25 @@ type boundarySink struct {
 	lost     []wsaudit.SourceID
 	failID   func(wsaudit.SourceID) bool
 	failEnv  func(wsaudit.Envelope) bool
+	// cold makes Recover answer zero, like a store whose ring for the
+	// session is not loaded yet; admission still uses the real ledger.
+	cold bool
+	// recOf is the source record AppendSourced was last handed with each
+	// identity; admitLost the identities its own admission recorded as loss.
+	recOf     map[wsaudit.SourceID]wsaudit.SourceID
+	admitLost []wsaudit.SourceID
 }
 
 func newBoundarySink() *boundarySink {
-	return &boundarySink{retained: map[wsaudit.SourceID]bool{}, boundary: map[string]uint64{}}
+	return &boundarySink{retained: map[wsaudit.SourceID]bool{}, boundary: map[string]uint64{}, recOf: map[wsaudit.SourceID]wsaudit.SourceID{}}
 }
 
 func (s *boundarySink) Recover(_, source string) wsaudit.Recovery {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.cold {
+		return wsaudit.Recovery{}
+	}
 	return wsaudit.Recovery{MaxSeq: s.maxSeq, Boundary: s.boundary[source]}
 }
 
@@ -78,7 +88,10 @@ func (s *boundarySink) Retained(_ string, id wsaudit.SourceID) bool {
 	return s.retained[id]
 }
 
-func (s *boundarySink) AppendSourced(_ context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
+// AppendSourced applies the writer's admission rule like the store does:
+// against its own ledger (the live boundary, including what this capture
+// finalized), judging the event by its source record rec, not by id.
+func (s *boundarySink) AppendSourced(_ context.Context, id, rec wsaudit.SourceID, ev wsaudit.Envelope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failID != nil && s.failID(id) || s.failEnv != nil && s.failEnv(ev) {
@@ -87,8 +100,17 @@ func (s *boundarySink) AppendSourced(_ context.Context, id wsaudit.SourceID, ev 
 	if s.retained[id] {
 		return wsaudit.ErrDuplicateSource
 	}
+	s.recOf[id] = rec
+	if rec.Covered(s.boundary[rec.Source]) {
+		s.lost = append(s.lost, id)
+		s.admitLost = append(s.admitLost, id)
+		return nil
+	}
+	if ev.Seq <= s.maxSeq { // a cold Recover's seq, renumbered as the store does
+		ev.Seq = s.maxSeq + 1
+	}
 	s.retained[id] = true
-	s.maxSeq = max(s.maxSeq, ev.Seq)
+	s.maxSeq = ev.Seq
 	s.evs = append(s.evs, ev)
 	return nil
 }
@@ -810,6 +832,12 @@ func TestAuditReplayOrdinalsIgnoreCarriedAssemblies(t *testing.T) {
 // and its record is at the finalized boundary, so it is recorded as loss,
 // never appended late (Decision 5). Nothing is duplicated.
 func TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone(t *testing.T) {
+	for _, cold := range []bool{false, true} {
+		t.Run(recoveryName(cold), func(t *testing.T) { replayCarriedSlots(t, cold) })
+	}
+}
+
+func replayCarriedSlots(t *testing.T, cold bool) {
 	const (
 		toolStart = `{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}}}`
 		toolInput = `{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}}}`
@@ -837,6 +865,7 @@ func TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone(t *testing.T) {
 		t.Fatalf("live tool calls = %d, want the failed append missing", n)
 	}
 	sink.failEnv = nil
+	sink.cold = cold
 
 	r2 := newAuditRig(t, sink, "h1")
 	for i, l := range kept {
@@ -856,6 +885,7 @@ func TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone(t *testing.T) {
 	if !slices.Equal(sink.lost, []wsaudit.SourceID{want}) {
 		t.Fatalf("losses = %+v, want only the tool call %+v", sink.lost, want)
 	}
+	checkLossJudge(t, sink, cold, want, wsaudit.SourceID{Source: "h1", Seq: resultSeq})
 	if n := len(find(evs, func(ev wsaudit.Envelope) bool { return ev.Subkind == "result:success" })); n != 1 {
 		t.Fatalf("results after replay = %d, want 1", n)
 	}
@@ -931,8 +961,12 @@ func TestAuditCodexFailedCallIsNeverAppendedAfterTheCut(t *testing.T) {
 		`{"method":"item/completed","params":{"threadId":"th1","turnId":"tu1","item":{"type":"contextCompaction","id":"cc-1"}}}`,
 		`{"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"tu1","status":"completed","items":[]}}}`,
 	}
-	for _, from := range []int{1, 3} { // replay the whole ring, or from the completion on
-		t.Run(fmt.Sprintf("replay from %d", from), func(t *testing.T) {
+	for _, c := range []struct {
+		from int
+		cold bool
+	}{{1, false}, {3, false}, {1, true}, {3, true}} { // replay the whole ring, or from the completion on
+		from, cold := c.from, c.cold
+		t.Run(fmt.Sprintf("replay from %d, %s", from, recoveryName(cold)), func(t *testing.T) {
 			sink := newBoundarySink()
 			isCall := func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindToolCall }
 			sink.failEnv = isCall
@@ -946,6 +980,7 @@ func TestAuditCodexFailedCallIsNeverAppendedAfterTheCut(t *testing.T) {
 				t.Fatalf("live = %+v, want the result and the cut without the call", live)
 			}
 			sink.failEnv = nil
+			sink.cold = cold
 
 			r2 := newAuditRigWith(t, sink, "h1", newCodexMapper("th1"), codexProtocol{})
 			for i := from; i <= len(lines); i++ {
@@ -963,7 +998,67 @@ func TestAuditCodexFailedCallIsNeverAppendedAfterTheCut(t *testing.T) {
 			if !slices.Equal(sink.lost, []wsaudit.SourceID{want}) {
 				t.Fatalf("losses = %+v, want only the call %+v", sink.lost, want)
 			}
+			// The call comes from item/started (record 2) when the replay has
+			// it, else from item/completed (record 3).
+			checkLossJudge(t, sink, cold, want, wsaudit.SourceID{Source: "h1", Seq: uint64(max(from, 2))})
 		})
+	}
+}
+
+// TestAuditStreamEndFlushIsNotCoveredByItsOwnBoundary pins the place of the
+// stream-end flush: the assembly still open when the stream ends sits after
+// the last kept line, which capture has already finalized once idle. Judged
+// by the sink against that live boundary, a flush placed at the line itself
+// would be recorded as loss; placed after it, the incomplete thinking is
+// stored.
+func TestAuditStreamEndFlushIsNotCoveredByItsOwnBoundary(t *testing.T) {
+	sink := newBoundarySink()
+	r := newAuditRig(t, sink, "h1")
+	r.kept(thinkStart)
+	r.kept(thinkBlock)
+	last := r.kept(thinkDelta("cut short"))
+	deadline := time.Now().Add(10 * time.Second)
+	for sink.Recover("s1", "h1").Boundary < last {
+		if time.Now().After(deadline) {
+			t.Fatal("capture never finalized the last kept line")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	r.end()
+	th := find(sink.events(), ofKind(wsaudit.KindThinking))
+	if len(th) != 1 || th[0].Out != "cut short" || th[0].Meta[wsaudit.MetaIncomplete] != true {
+		t.Fatalf("thinking = %+v, want the incomplete block stored", th)
+	}
+	if len(sink.admitLost) != 0 {
+		t.Fatalf("sink admission recorded %+v as late", sink.admitLost)
+	}
+}
+
+func recoveryName(cold bool) string {
+	if cold {
+		return "cold recovery"
+	}
+	return "warm recovery"
+}
+
+// checkLossJudge checks who recorded the late keyed event lost as loss:
+// with a warm Recover, capture (the sink is never handed it); with a cold
+// one (zero boundary, a store still loading the session), the sink's own
+// admission, judging the source record rec capture handed it alongside the
+// identity, since the identity alone has no position.
+func checkLossJudge(t *testing.T, sink *boundarySink, cold bool, id, rec wsaudit.SourceID) {
+	t.Helper()
+	if !cold {
+		if len(sink.admitLost) != 0 {
+			t.Fatalf("warm: sink admission recorded %+v, want capture to judge", sink.admitLost)
+		}
+		return
+	}
+	if !slices.Equal(sink.admitLost, []wsaudit.SourceID{id}) {
+		t.Fatalf("cold: sink admission recorded %+v, want %+v", sink.admitLost, id)
+	}
+	if got := sink.recOf[id]; got != rec {
+		t.Fatalf("cold: %+v handed with record %+v, want %+v", id, got, rec)
 	}
 }
 

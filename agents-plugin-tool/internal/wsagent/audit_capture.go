@@ -422,8 +422,12 @@ func (c *auditCapture) run() {
 			c.noteLate()
 			c.closeTee(wsaudit.LossStreamEnd)
 			at := time.Now()
-			// The assemblies still open sit at the last kept line mapped.
-			c.emit(c.adapter.flush(at), true, nil, at, wsaudit.SourceID{Source: c.source, Seq: c.boundary}, "end."+strconv.FormatUint(c.boundary, 10))
+			// The assemblies still open sit after the last kept line mapped,
+			// which may be finalized already: positioned like a tee line
+			// anchored on it, the flush is not covered by its own boundary,
+			// only by a later one (a replay past it).
+			end := wsaudit.SourceID{Source: c.source, Tee: true, Anchor: c.boundary}
+			c.emit(c.adapter.flush(at), true, nil, at, end, "end."+strconv.FormatUint(c.boundary, 10))
 			c.finalize()
 			return
 		}
@@ -780,7 +784,10 @@ func (c *auditCapture) append(id, rec wsaudit.SourceID, ev wsaudit.Envelope) {
 		if c.sourced.Retained(c.session.ID, id) {
 			return
 		}
-		if b := c.recovery.Boundary; b > 0 && (rec.Tee && rec.Anchor < b || !rec.Tee && rec.Key == "" && rec.Seq <= b) {
+		// The sink applies this rule again to rec against its own ledger
+		// (wsaudit.SourcedSink.AppendSourced): the Recover snapshot may be
+		// incomplete.
+		if rec.Covered(c.recovery.Boundary) {
 			if err := c.sourced.RecordLoss(ctx, c.session.ID, id, wsaudit.LossAppendFailed); err != nil {
 				c.logf("record loss of %s: %v", id, err)
 			}
@@ -790,7 +797,7 @@ func (c *auditCapture) append(id, rec wsaudit.SourceID, ev wsaudit.Envelope) {
 	ev.Seq = c.nextSeq
 	var err error
 	if c.sourced != nil {
-		err = c.sourced.AppendSourced(ctx, id, ev)
+		err = c.sourced.AppendSourced(ctx, id, rec, ev)
 	} else {
 		err = c.sink.Append(ctx, ev)
 	}

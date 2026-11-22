@@ -82,6 +82,21 @@ func (id SourceID) Position() uint64 {
 	return id.Seq
 }
 
+// Covered reports whether a record at position id sits at or below a
+// source's finalized boundary b (Recovery.Boundary): a sequenced record at or
+// below b, or a tee record anchored below b (a tee line sits after its
+// anchor, so one anchored at b is not yet finalized). A daemon-synthesized
+// (Key) record has no source position and is never covered.
+func (id SourceID) Covered(b uint64) bool {
+	if b == 0 || id.Key != "" {
+		return false
+	}
+	if id.Tee {
+		return id.Anchor < b
+	}
+	return id.Seq <= b
+}
+
 // Recovery is what a store retained for one session and source when capture
 // (re)opens it.
 type Recovery struct {
@@ -89,8 +104,8 @@ type Recovery struct {
 	// assigns seq above it.
 	MaxSeq uint64
 	// Boundary is the highest source sequence of this source that capture
-	// finalized, kept or dropped. A replayed record at or below it whose
-	// identity is not retained is recorded as loss, never appended late.
+	// finalized, kept or dropped. An event not retained whose source record
+	// it Covers is recorded as loss, never appended late.
 	Boundary uint64
 }
 
@@ -109,8 +124,18 @@ type SourcedSink interface {
 	// Retained reports whether an envelope with identity id is retained for
 	// session.
 	Retained(session string, id SourceID) bool
-	// AppendSourced appends ev under identity id.
-	AppendSourced(ctx context.Context, id SourceID, ev Envelope) error
+	// AppendSourced appends ev under identity id. rec is the position of the
+	// source record that yielded ev: id itself for an event keyed by its own
+	// record, and the yielding record for a keyed event (a carried assembly,
+	// a Codex call keyed by its item), whose id carries no position. The
+	// sink applies the recovery rule itself, against its own retained
+	// identities and finalized boundary: an id already retained is a
+	// duplicate, and one not retained whose rec is Covered by its source's
+	// boundary is recorded as loss, never appended late. Capture applies the
+	// same rule to its Recover answer, but that answer may be incomplete (a
+	// store still loading the session answers zero), so the sink must not
+	// rely on capture having judged rec.
+	AppendSourced(ctx context.Context, id, rec SourceID, ev Envelope) error
 	// Finalize records the source's finalized boundary (Recovery.Boundary).
 	Finalize(ctx context.Context, session, source string, boundary uint64) error
 	// RecordLoss records that the envelope id was finalized without being
