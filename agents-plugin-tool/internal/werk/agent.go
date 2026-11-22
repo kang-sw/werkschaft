@@ -289,8 +289,10 @@ func userItem(text string) json.RawMessage {
 func (a *Agent) append(item json.RawMessage) {
 	a.mu.Lock()
 	a.transcript = append(a.transcript, item)
-	a.mu.Unlock()
+	// Queued under the same lock as the memory append, so parallel tool
+	// results land in the log in the order the transcript holds them.
 	a.log.Add(item)
+	a.mu.Unlock()
 }
 
 // Close writes what is queued and releases the conversation file.
@@ -813,6 +815,14 @@ func clip(s string, max int) string {
 // transcript, end line.
 func (a *Agent) runCall(ctx context.Context, turn int, response string, tools map[string]toolEntry, c functionCall) {
 	a.out.line(Line{T: LineToolStart, Turn: turn, Response: response, Call: c.CallID, Name: c.Name, Args: clip(c.Arguments, ToolArgsLineBytes), Truncated: len(c.Arguments) > ToolArgsLineBytes})
+	if e, ok := tools[c.Name]; !ok || !e.readOnly {
+		// Durable call intent: a call that may change something runs only
+		// once the log holds its function_call line (and everything before
+		// it). A worker killed mid-call then resumes with the call on record
+		// and answers it as interrupted, never running it again. Read-only
+		// calls and model requests do not wait.
+		a.log.Flush()
+	}
 	output, failed := a.invoke(ctx, tools, c)
 	shown, cut := TruncateOutput(output, ToolOutputBytes)
 	a.append(functionOutputItem(c.CallID, shown))

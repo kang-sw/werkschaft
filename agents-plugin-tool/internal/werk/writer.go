@@ -9,15 +9,16 @@ import (
 // The loop hands it an item and goes on: a model request or a continuation
 // never waits on a disk write.
 //
-// Why a delayed or lost write is safe: the in-memory transcript is the
-// source of the next request, and the log is read only by a process that
-// resumes the session. Items reach the log in the order they were added, so
-// a crash loses a tail, never the middle. A tail that ends in a tool call
-// has no persisted result, and resume answers such a call as interrupted and
-// never runs it again; a tail that loses the call too leaves a transcript
-// that is one consistent step behind. The writer is flushed where the log
-// must be whole: the end of a turn (also after an interrupt), shutdown, and
-// Close.
+// Why a delayed write is safe: the in-memory transcript is the source of the
+// next request, and the log is read only by a process that resumes the
+// session. Items reach the log in the order they were added, so a crash
+// loses a tail, never the middle. A call that may change something does not
+// run until the log holds its function_call line (Agent.runCall flushes
+// first), so a tail that ends in such a call has the call on record and resume
+// answers it as interrupted and never runs it again. A read-only call may
+// lose its line with the tail; repeating it is harmless. The writer is also
+// flushed where the log must be whole: the end of a turn (also after an
+// interrupt), shutdown, and Close.
 type writer struct {
 	store *Store
 	// before runs ahead of each append (a seam for a test to delay the write).

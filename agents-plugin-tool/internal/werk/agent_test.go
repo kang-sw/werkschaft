@@ -810,6 +810,85 @@ func TestSlowLogWriterDoesNotBlockTheLoopAndKeepsOrder(t *testing.T) {
 	}
 }
 
+// A call that may change something waits for the log to hold its
+// function_call line; a read does not. With the writer held, the read runs
+// and the write does not, until the writer is released.
+func TestMutatingCallWaitsForDurableCallIntent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	open := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(open)
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(callOf("c1", "read", `{"path":"a.txt"}`)),
+		reply(callOf("c2", "write", `{"path":"b.txt","content":"x"}`)),
+		reply(msgItem("done")),
+	}}
+	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(json.RawMessage) { <-release }})
+	r.user("go")
+	// The read finishes while the writer is held: two requests were made.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(model.requests()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(model.requests()) < 2 {
+		t.Fatalf("a read call waited for the log: %d requests", len(model.requests()))
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(root, "b.txt")); err == nil {
+		t.Fatal("the write ran before its function_call line was durable")
+	}
+	open()
+	if end := r.waitTurnEnd(1); end.Reason != ReasonDone {
+		t.Fatalf("turn end %+v", end)
+	}
+	if _, err := os.Stat(filepath.Join(root, "b.txt")); err != nil {
+		t.Fatalf("the write did not run after the log caught up: %v", err)
+	}
+}
+
+// Parallel read results reach the log in the order the transcript holds them.
+func TestParallelResultsKeepLogOrder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	for i := 0; i < 24; i++ {
+		calls = append(calls, callOf(fmt.Sprintf("c%02d", i), "read", `{"path":"a.txt"}`))
+	}
+	var mu sync.Mutex
+	var written []string
+	model := &scripted{steps: []func(context.Context, Request, StreamHandler) (*Response, error){
+		reply(calls...), reply(msgItem("done")),
+	}}
+	r := newRig(t, Config{Root: root, Endpoint: model, BeforeAppend: func(item json.RawMessage) {
+		mu.Lock()
+		written = append(written, string(item))
+		mu.Unlock()
+	}})
+	r.user("go")
+	r.waitTurnEnd(1)
+	r.stop()
+	if err := r.agent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	transcript := r.agent.Transcript()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(written) != len(transcript) {
+		t.Fatalf("written %d, transcript %d", len(written), len(transcript))
+	}
+	for i := range transcript {
+		if written[i] != string(transcript[i]) {
+			t.Fatalf("item %d: log %s, memory %s", i, written[i], transcript[i])
+		}
+	}
+}
+
 // An interrupt flushes: the log is whole once the turn has ended.
 func TestInterruptedTurnFlushesTheLog(t *testing.T) {
 	started := make(chan struct{})
