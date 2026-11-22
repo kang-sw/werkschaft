@@ -417,8 +417,8 @@ func TestWorktreeReleaseBoundaryMixedVersions(t *testing.T) {
 	if err := json.Unmarshal([]byte(toolText(t, resp)), &res); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(res.Warnings, "\n"), "predates release notices") {
-		t.Fatalf("an old daemon's missing notice route must be a warning: %v", res.Warnings)
+	if w := strings.Join(res.Warnings, "\n"); !strings.Contains(w, "predates release notices") || !strings.Contains(w, "restarting the same older daemon binary does not help") {
+		t.Fatalf("an old daemon's missing notice route must be a warning naming the daemon swap: %v", res.Warnings)
 	}
 	if _, ok, err := wsgit.WorktreeReleasedAt(again.Path); err != nil || !ok {
 		t.Fatalf("the boundary is recorded regardless of the daemon: ok=%v err=%v", ok, err)
@@ -531,7 +531,7 @@ func TestWorktreeReleaseAgainstAnOldDaemon(t *testing.T) {
 	if !toolIsError(t, resp) {
 		t.Fatalf("a forced release with a live child against an old daemon must be refused: %s", resp)
 	}
-	for _, want := range []string{"predates release notices", "Nothing was changed", "Swap the daemon"} {
+	for _, want := range []string{"predates release notices", "Nothing was changed", "Swap the daemon for a release-aware build", "restarting the same older daemon binary does not help"} {
 		if !strings.Contains(toolText(t, resp), want) {
 			t.Fatalf("refusal lacks %q: %s", want, toolText(t, resp))
 		}
@@ -562,7 +562,7 @@ func TestWorktreeReleaseAgainstAnOldDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	warnings := strings.Join(res.Warnings, "\n")
-	for _, want := range []string{"predates release notices", "no live agent was bound here", "running turns were not cancelled"} {
+	for _, want := range []string{"predates release notices", "no live agent was bound here", "Swap the daemon for a release-aware build", "restarting the same older daemon binary does not help", "running turns were not cancelled"} {
 		if !strings.Contains(warnings, want) {
 			t.Fatalf("old-daemon warning lacks %q: %v", want, res.Warnings)
 		}

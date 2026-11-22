@@ -1103,10 +1103,15 @@ func (s *Server) checkWorktreeReleaseNotice(ctx context.Context, target string) 
 	}
 	err = s.piCall(ctx, "worktree.released", map[string]any{"worktree": target, "probe": true}, piForwardTimeout, &answer)
 	if err != nil && unknownAgentRoute(err) {
-		return fmt.Errorf("worktree.release refuses %s: the running ws daemon predates release notices, so it would keep the child agents bound here running in this worktree after the release. Nothing was changed. Swap the daemon for the one matching this ws-mcp, then release again", target)
+		return fmt.Errorf("worktree.release refuses %s: the running ws daemon predates release notices, so it would keep the child agents bound here running in this worktree after the release. Nothing was changed. %s, then release again", target, worktreeReleaseDaemonSwap)
 	}
 	return nil
 }
+
+// worktreeReleaseDaemonSwap is the recovery an older daemon needs: only a
+// daemon build that has the release-notice route takes notices, so starting
+// the same older binary again changes nothing.
+const worktreeReleaseDaemonSwap = "Swap the daemon for a release-aware build (the one matching this ws-mcp); restarting the same older daemon binary does not help"
 
 // liveBoundChildren reports whether any listed child could still run in the
 // worktree: a current binding that is not closed, or any child whose process
@@ -1185,7 +1190,7 @@ const worktreeReleaseNoNotice = "no ws daemon was told about this release (this 
 func worktreeReleaseNoticeFailure(err error, cancelTurns bool) string {
 	var line string
 	if unknownAgentRoute(err) {
-		line = "the running ws daemon predates release notices; no live agent was bound here, so none keeps running in this worktree, but swap the daemon for the one matching this ws-mcp before releasing a worktree with live agents (such a release is refused)"
+		line = "the running ws daemon predates release notices; no live agent was bound here, so none keeps running in this worktree. " + worktreeReleaseDaemonSwap + " before releasing a worktree with live agents (such a release is refused)"
 	} else {
 		line = fmt.Sprintf("could not tell the daemon about this release (%v), so it did not end the bindings of running agents bound here before it: such an agent can still take input in this worktree until its process ends; any later start or wake reads the release and is refused", err)
 	}
