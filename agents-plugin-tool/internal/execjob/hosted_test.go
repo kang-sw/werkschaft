@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsholder"
-	"github.com/kang-sw/devenv/internal/wskey"
 )
 
 // memHostedStore is an in-memory HostedStore.
@@ -1846,13 +1845,38 @@ func TestHostedCompetingRetriesNeverDeleteAReusedID(t *testing.T) {
 		t.Fatal("no job is pending delete")
 	}
 
-	// The first retry's delete waits inside the store until a second
-	// launch's retry also reached the store for the same id (or a while
-	// passed: a claimed id is not retried twice); the second retry's
-	// delete then waits until the id has been reused.
+	// The first retry's delete waits inside the store until the second
+	// launch either reached the store for the same id (a retry of an id
+	// another delete owns) or finished without doing so; the second
+	// retry's delete then waits until the id has been reused.
 	secondIn, reusedNow, competed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var calls int
 	var callsMu sync.Mutex
+	// The key seam is set once, before the competing launch starts, and
+	// restored only after it finished: the draws read reuseKey under its
+	// lock instead.
+	var keyMu sync.Mutex
+	var reuseKey string
+	var competing atomic.Bool
+	old := newExecKey
+	newExecKey = func() (string, error) {
+		keyMu.Lock()
+		k := reuseKey
+		keyMu.Unlock()
+		if k != "" {
+			return k, nil
+		}
+		return old()
+	}
+	t.Cleanup(func() {
+		if competing.Load() {
+			select {
+			case <-competed:
+			case <-time.After(5 * time.Second):
+			}
+		}
+		newExecKey = old
+	})
 	fx.store.mu.Lock()
 	fx.store.failDelete = false
 	fx.store.duringDelete = func(ids []string) {
@@ -1865,6 +1889,7 @@ func TestHostedCompetingRetriesNeverDeleteAReusedID(t *testing.T) {
 		callsMu.Unlock()
 		switch n {
 		case 1:
+			competing.Store(true)
 			go func() {
 				defer close(competed)
 				v, err := fx.launch(context.Background(), nil, HostedLaunch{})
@@ -1874,7 +1899,7 @@ func TestHostedCompetingRetriesNeverDeleteAReusedID(t *testing.T) {
 			}()
 			select {
 			case <-secondIn:
-			case <-time.After(300 * time.Millisecond):
+			case <-competed:
 			}
 		case 2:
 			close(secondIn)
@@ -1884,10 +1909,13 @@ func TestHostedCompetingRetriesNeverDeleteAReusedID(t *testing.T) {
 	fx.store.mu.Unlock()
 	fx.launchFinished() // the first retry clears reused
 
-	defer func(old func() (string, error)) { newExecKey = old }(newExecKey)
-	newExecKey = func() (string, error) { return strings.TrimPrefix(reused, "exec_"), nil }
+	keyMu.Lock()
+	reuseKey = strings.TrimPrefix(reused, "exec_")
+	keyMu.Unlock()
 	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
-	newExecKey = func() (string, error) { return wskey.Generate() }
+	keyMu.Lock()
+	reuseKey = ""
+	keyMu.Unlock()
 	if err != nil || v.ID != reused {
 		t.Fatalf("the reusing launch = %+v, %v; want id %s", v, err, reused)
 	}
