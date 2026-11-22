@@ -694,7 +694,17 @@
       }
     },
     "261122-feat-ws-harness-native-subagent-preference": {
-      "registered_at": "2026-11-22T08:46:10Z"
+      "registered_at": "2026-11-22T08:46:10Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T08:55:42Z",
+        "impl": {
+          "branch": "impl/develop/oven-apply-going"
+        }
+      }
     },
     "261122-feat-ws-keep-awake-during-turns": {
       "registered_at": "2026-11-22T06:13:05Z",
