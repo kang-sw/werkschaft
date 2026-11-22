@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -66,7 +69,7 @@ func (c *hostedCLI) credentialCommand(args []string) int {
 	case "remove":
 		return c.credentialApply(name, *format, wscred.Change{Op: wscred.OpRemove, Provider: id})
 	}
-	key, err := readCredentialLine(c.input())
+	key, err := c.readKey()
 	if err != nil {
 		return c.failed(name, err)
 	}
@@ -79,6 +82,53 @@ func knownProviderIDs() string {
 		ids = append(ids, string(p.ID))
 	}
 	return strings.Join(ids, ", ")
+}
+
+// readKey reads the key from the first stdin line. When this process's own
+// stdin is a terminal (a directly run binary), it prompts on stderr and keeps
+// echo off while the key is typed, restoring it even on an interrupt; the
+// launcher prompts the same way with getpass before it forwards the line.
+func (c *hostedCLI) readKey() (string, error) {
+	if f, ok := c.stdin.(*os.File); ok {
+		restore, terminal, err := disableEcho(f)
+		if err != nil {
+			return "", err
+		}
+		if terminal {
+			fmt.Fprint(c.stderr, "API key: ")
+			stop := restoreOnInterrupt(func() {
+				restore()
+				fmt.Fprintln(c.stderr)
+			})
+			defer func() {
+				stop()
+				restore()
+				fmt.Fprintln(c.stderr)
+			}()
+		}
+	}
+	return readCredentialLine(c.input())
+}
+
+// restoreOnInterrupt runs restore and exits when the process is interrupted
+// before stop is called: an interrupt at the prompt would otherwise leave the
+// terminal without echo.
+func restoreOnInterrupt(restore func()) (stop func()) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-signals:
+			restore()
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(signals)
+		close(done)
+	}
 }
 
 // readCredentialLine returns the first line of r, trimmed. It stops at the
