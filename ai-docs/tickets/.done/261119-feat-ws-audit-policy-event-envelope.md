@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 2fdb23602abd9add
 sage-review-design-reviewed: 2fdb23602abd9add
+completed: 2026-11-22
 ---
 
 # Audit policy and common event envelope
@@ -202,3 +203,20 @@ earlier events false and falls back to the conversation start; a mapped kind
 never carries `raw`; the policy gate admits every Decision 6 kind for a lead and a
 `ws/agent.*` child, refuses `user` and `assistant_text` for both, and
 refuses a non-hosted (CLI-tier) session for every kind.
+
+### Result (c72766e12) - 2026-11-22
+
+- Added dependency-free package `agents-plugin-tool/internal/wsaudit`:
+  - `envelope.go`: schema version `SchemaVersion = 1`, fixed UTC nanosecond `TimestampLayout`, all 11 `Kind` values, `Envelope`, `Redaction`, `SeenBounds` (`*int` fields), `StoredTrunc` / `BodyTrunc{original_bytes, head_bytes, tail_bytes}`, `NewEnvelope`, `NewOtherEnvelope`, `Validate()`, and `MarshalJSON`/`UnmarshalJSON` enforcing that mapped kinds never carry `raw` (body, `stored_trunc.raw`, or `raw` redactions).
+  - `cut.go`: pure `FindModelSeenCut` and `ApplyModelSeenCut` marking events before the latest `compaction` boundary false, the cut and later events true, falling back to index 0 when no compaction exists, and exposing `Cut.Estimated` from `meta.estimated`.
+  - `policy.go`: `SessionClass` (`hosted_lead`, `hosted_child`, `cli`), `Session`, `ShouldCapture`, `FilterEvents`, and `CaptureLine` (admitting Decision 6 kinds for daemon-hosted leads and `ws/agent.*` children, refusing `user`/`assistant_text` and all non-hosted CLI sessions, and returning `nil` rather than `other` when a recognized line's events are all out of scope).
+  - `sink.go`: producer-to-store `Sink` interface (`Append(ctx context.Context, ev Envelope) error`), `SinkFunc`, and `DiscardSink`.
+  - Unit tests in `envelope_test.go`, `cut_test.go`, `policy_test.go`, `sink_test.go`.
+- Verification: `cd agents-plugin-tool && go vet ./internal/wsaudit/... && go test -race -cover -v ./internal/wsaudit/...` — PASS (96.1% statement coverage, zero warnings).
+- Review: `code-review-lite` clean with 2 minor findings, both resolved in `c72766e12` (`BodyTrunc.Validate()` overflow guard and `Meta` round-trip assertions).
+- Decisions: placed types in `agents-plugin-tool/internal/wsaudit` with stdlib-only dependencies so capture adapters (child 2) and the segment ring store (child 3) can implement against `Sink` in parallel; fixed `StoredTrunc` per-body shape to `{original_bytes, head_bytes, tail_bytes}`.
+
+
+## Resolution (2026-11-22)
+
+Phase 1 landed in agents-plugin-tool/internal/wsaudit (commits 69cb12676 and c72766e12): v1 harness-neutral Envelope, 11-kind set, pure model-seen compaction cut, daemon-hosted capture policy gate, and Sink interface with unit tests and lite review complete.
