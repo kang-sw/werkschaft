@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 822722363533d39a
 sage-review-design-reviewed: 822722363533d39a
+completed: 2026-11-22
 ---
 
 # Companion Agent Director: Lead-Unaware Sidecar, Character Persona, Two-Tier Settings
