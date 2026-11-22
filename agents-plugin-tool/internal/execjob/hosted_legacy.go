@@ -106,12 +106,15 @@ func msTimestamp(ms int64) string {
 	return time.UnixMilli(ms).UTC().Format(time.RFC3339Nano)
 }
 
-// legacyJob returns the hosted job key of root, nil for none.
+// legacyJob returns the hosted legacy-launch job key of root, nil for none.
+// Only a legacy launch is found by root alone: a job of the new tools
+// belongs to its owning conversation (owned), and another session of the
+// same root must not read or abort it through a legacy reader.
 func (h *Hosted) legacyJob(root, key string) *hostedJob {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	j := h.jobs[strings.TrimSpace(key)]
-	if j == nil || j.row.Root != filepath.Clean(root) {
+	if j == nil || !j.row.Legacy || j.row.Root != filepath.Clean(root) {
 		return nil
 	}
 	return j
