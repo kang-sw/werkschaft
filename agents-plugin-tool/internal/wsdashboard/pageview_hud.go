@@ -15,6 +15,7 @@ const hudMaxDepth = 4
 type HUDView struct {
 	Lead      string    `json:"lead,omitempty"`
 	Completed int       `json:"completed"`
+	Folded    int       `json:"folded,omitempty"`
 	Peers     int       `json:"peers"`
 	Roots     []HUDNode `json:"roots"`
 }
@@ -63,12 +64,12 @@ func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, p
 	expandHUDLinked(roots, seenIDs, visitedSessions, lookup, now)
 
 	visible := map[*hudRawNode]bool{}
-	var mark func(*hudRawNode) bool
-	mark = func(n *hudRawNode) bool {
+	var mark func(*hudRawNode, int) bool
+	mark = func(n *hudRawNode, depth int) bool {
 		st := hudNodeState(n.agent)
-		vis := st != "idle" || n.agent.Alive
+		vis := st != "idle" || (depth > 1 && n.agent.Alive)
 		for _, c := range n.children {
-			if mark(c) {
+			if mark(c, depth+1) {
 				vis = true
 			}
 		}
@@ -76,9 +77,9 @@ func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, p
 		return vis
 	}
 	for _, r := range roots {
-		mark(r)
+		mark(r, 1)
 	}
-	out.Roots = projectHUDNodes(roots, 1, normalizeHUDHarness(leadHarness), nil, visible, &out.Completed, now)
+	out.Roots = projectHUDNodes(roots, 1, normalizeHUDHarness(leadHarness), nil, visible, &out.Completed, &out.Folded, now)
 	return out
 }
 
@@ -146,11 +147,14 @@ func hudShouldExpandLinked(a wslive.Agent) bool {
 	return a.Status == wslive.StatusRunning || a.Holding || a.Alive
 }
 
-func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain []string, visible map[*hudRawNode]bool, completed *int, now time.Time) []HUDNode {
+func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain []string, visible map[*hudRawNode]bool, completed, folded *int, now time.Time) []HUDNode {
 	out := []HUDNode{}
 	for _, n := range nodes {
 		if !visible[n] {
 			*completed += countHUDRawSubtree(n)
+			if depth == 1 {
+				*folded++
+			}
 			continue
 		}
 		a := n.agent
@@ -178,7 +182,7 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 		}
 		if depth < hudMaxDepth {
 			nextChain := append(slices.Clone(chain), label)
-			kids := projectHUDNodes(n.children, depth+1, harness, nextChain, visible, completed, now)
+			kids := projectHUDNodes(n.children, depth+1, harness, nextChain, visible, completed, folded, now)
 			if len(kids) > 0 {
 				node.Children = kids
 			}

@@ -2572,6 +2572,8 @@
   "js.hud.hint.link": "Clic: apri /s/{0}",
   "js.hud.hint.details": "Clic: apri dettagli albero",
   "js.hud.lead": "lead",
+  "js.hud.folded.title": "{0} agenti diretti terminati",
+  "js.hud.folded.aria": "{0} agenti diretti terminati — apri elenco agenti",
   "rail.ws.admission.invalid": "Selezione di ammissione del workspace non valida.",
   "rail.ws.admission.stale": "L'elenco dei workspace è cambiato. Aggiorna e seleziona di nuovo.",
   "rail.ws.empty.title": "Nessuno spazio di lavoro aggiunto",

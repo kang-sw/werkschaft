@@ -2572,6 +2572,8 @@
   "js.hud.hint.link": "클릭: 세션 이동 /s/{0}",
   "js.hud.hint.details": "클릭: 트리 상세 열기",
   "js.hud.lead": "리드",
+  "js.hud.folded.title": "턴 완료 직계 에이전트 {0}개",
+  "js.hud.folded.aria": "턴 완료 직계 에이전트 {0}개 — 에이전트 목록 열기",
   "rail.ws.admission.invalid": "유효하지 않은 워크스페이스 승인 선택입니다.",
   "rail.ws.admission.stale": "워크스페이스 목록이 바뀌었습니다. 새로고침 후 다시 선택하세요.",
   "rail.ws.empty.title": "등록된 워크스페이스가 없습니다",
