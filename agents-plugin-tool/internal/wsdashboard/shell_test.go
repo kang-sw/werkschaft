@@ -195,10 +195,21 @@ func TestShellStreamsTheRailAndItsFramesTheirRegions(t *testing.T) {
 	if len(first) == 0 {
 		t.Fatal("the rail stream sent no first rail")
 	}
+	// The rail stream also carries the daemon's companion settings (event
+	// "companion", commit fa2b5d917), so the shells stay in step; any other
+	// non-rail event is a leak.
+	sawRail := false
 	for _, ev := range first {
-		if ev.Name != regionRail {
+		switch ev.Name {
+		case regionRail:
+			sawRail = true
+		case "event:companion":
+		default:
 			t.Errorf("the rail stream sent %s", ev.Name)
 		}
+	}
+	if !sawRail {
+		t.Error("the rail stream sent no rail region")
 	}
 	for _, ev := range quiet(t, framed) {
 		if ev.Name == regionRail {

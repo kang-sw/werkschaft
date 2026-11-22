@@ -151,3 +151,49 @@ func TestTicketMapNodeOrderIsByStemNotFileName(t *testing.T) {
 		t.Fatalf("node order = %v, want %v", got, want)
 	}
 }
+
+// TestTicketMapEvictionDuringPlainListingFreesDocs evicts a root while a plain
+// listing of it is between its cache snapshot and its publish: the listing
+// must not publish the evicted root's documents back, since no LRU entry is
+// left to free them.
+func TestTicketMapEvictionDuringPlainListingFreesDocs(t *testing.T) {
+	resetTicketMapState(t)
+	t.Cleanup(func() { resetTicketMapState(t) })
+	roots := make([]string, ticketMapRootCap+1)
+	for i := range roots {
+		roots[i] = t.TempDir()
+		writeEvictBoard(t, roots[i])
+	}
+	// A fresh (racy) ticket is reread on every scan, which gives the hook a
+	// point inside the plain listing of root 0's todo/ directory.
+	mustWrite(t, roots[0], TicketsDir+"/todo/260103-feat-trigger-sample.md", mapTicket("Trigger sample"))
+	trigger := filepath.Join(roots[0], filepath.FromSlash(TicketsDir), "todo", "260103-feat-trigger-sample.md")
+	for _, root := range roots[:ticketMapRootCap] {
+		buildTicketMap(t, root)
+	}
+	if docs, _ := rootDocsCached(roots[0]); docs != 2 {
+		t.Fatalf("root 0 docs=%d before the race, want 2", docs)
+	}
+	orig := readTicketFile
+	fired := false
+	readTicketFile = func(path string) ([]byte, error) {
+		if path == trigger && !fired {
+			fired = true
+			buildTicketMap(t, roots[ticketMapRootCap]) // evicts root 0
+		}
+		return orig(path)
+	}
+	t.Cleanup(func() { readTicketFile = orig })
+	if _, err := TicketsList(roots[0], TicketListOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !fired {
+		t.Fatal("the plain listing never read the trigger ticket")
+	}
+	ticketMapState.mu.Lock()
+	_, tracked := ticketMapState.roots[roots[0]]
+	ticketMapState.mu.Unlock()
+	if docs, _ := rootDocsCached(roots[0]); docs != 0 || tracked {
+		t.Fatalf("after eviction mid-listing root 0 docs=%d tracked=%v, want 0 and untracked", docs, tracked)
+	}
+}

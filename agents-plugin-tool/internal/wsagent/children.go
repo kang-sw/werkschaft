@@ -384,6 +384,13 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	if !PiSessionAvailable(dir) {
 		return nil, conflict("cannot resume Pi subagent %s: its session file is missing, inaccessible, or not a regular file: %s", id, file)
 	}
+	// A revived child binds to its worktree again: hold the release
+	// reservation until it is registered (Runner.create).
+	unlockBound, err := reserveBoundWorktrees(rec.Root, rec.Cwd)
+	if err != nil {
+		return nil, boundReservationRefusal(err)
+	}
+	defer unlockBound()
 	rec.ClosedAt = ""
 	// A done turn held for descendants was abandoned by the close, not
 	// left waiting for this new turn to publish it.

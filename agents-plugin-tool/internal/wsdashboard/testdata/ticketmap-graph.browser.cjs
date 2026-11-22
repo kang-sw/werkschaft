@@ -598,6 +598,41 @@ async function viewC(browser, theme, W, H) {
   assert.equal(await fr.evaluate(() => document.querySelector('#tmhero .d-tm-stem').textContent), G.nodes[sel15].stem, `${tag}: 1 opens B's focus on it`);
   assert.equal(await fr.evaluate(() => getComputedStyle(document.getElementById('tminsp')).display), 'none', `${tag}: with the inspector closed`);
 
+  // A ring kept in hidden C follows a selection made in B.
+  await key(s, '2');
+  await page.waitForTimeout(400);
+  await key(s, 'e');
+  await page.waitForTimeout(600);
+  assert.equal((await st(fr)).ego, sel15, `${tag}: E rings B's selection`);
+  const ring = new Set(await fr.evaluate(() => [...document.querySelectorAll('#tmworld .d-tm-cnd.d-tm-eg')].map(e => +e.dataset.i)));
+  await key(s, '1');
+  await fr.locator('#tmhero').waitFor();
+  await key(s, 'Escape');
+  await fr.locator('#tmvb .d-tm-mx').waitFor();
+  const shownStems = await fr.evaluate(() => [...document.querySelectorAll('#tmvb .d-tm-card')].filter(c => c.offsetParent !== null).map(c => c.title));
+  const outside = G.nodes.find(n => !ring.has(n.i) && shownStems.includes(n.stem));
+  assert.ok(outside, `${tag}: a B card outside the ring`);
+  await fr.locator(`#tmvb .d-tm-card[title="${outside.stem}"]`).click();
+  await fr.locator('#tmhero').waitFor();
+  await key(s, '2');
+  await page.waitForTimeout(600);
+  c = await st(fr);
+  assert.deepEqual([c.sel, c.ego], [outside.i, outside.i], `${tag}: the kept ring recenters on B's new selection`);
+  assert.equal(await fr.evaluate(() => document.querySelector('#tmegobar b').textContent), outside.title, `${tag}: the ring title follows`);
+  await key(s, 'Escape');
+  await page.waitForTimeout(560);
+  await key(s, 'Escape');
+  await raf2(fr);
+
+  // A status turned off in C is applied to the cached B matrix.
+  const off = G.nodes.find(n => shownStems.includes(n.stem) && n.status !== 'done' && n.status !== 'dropped').status;
+  await fr.locator(`.d-tm-pill[data-st="${off}"]`).click();
+  await key(s, '1');
+  await fr.locator('#tmvb .d-tm-mx').waitFor();
+  const leaked = await fr.evaluate(() => [...document.querySelectorAll('#tmvb .d-tm-card')].filter(c => c.offsetParent !== null).map(c => c.title));
+  assert.deepEqual(leaked.filter(stem => G.nodes.some(n => n.stem === stem && n.status === off)), [], `${tag}: B hides ${off} cards turned off in C`);
+  await fr.locator(`.d-tm-pill[data-st="${off}"]`).click();
+
   // The single fetch: nothing after it; 17. no errors.
   await page.waitForTimeout(200);
   assert.deepEqual(s.after, [], `${tag}: no request after the single fetch`);

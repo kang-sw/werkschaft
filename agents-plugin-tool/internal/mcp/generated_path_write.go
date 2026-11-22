@@ -48,8 +48,12 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 		}
 		eligible = append(eligible, item)
 	}
+	// The descriptor budget bounds path.write capabilities, not path.generate:
+	// a legacy batch larger than the budget still returns every path, and only
+	// its newest maxGeneratedPathGrants entries become writable, matching the
+	// oldest-first eviction a sequence of smaller batches would produce.
 	if len(eligible) > maxGeneratedPathGrants {
-		return fmt.Errorf("path.generate: requested %d writable cache artifacts; maximum is %d", len(eligible), maxGeneratedPathGrants)
+		eligible = eligible[len(eligible)-maxGeneratedPathGrants:]
 	}
 
 	g.mu.Lock()
@@ -57,13 +61,18 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 	if g.paths == nil {
 		g.paths = make(map[string]map[string]*generatedPathGrant)
 	}
-	for g.grantCountLocked()+len(eligible) > maxGeneratedPathGrants {
-		g.evictOldestLocked()
-	}
 
+	// Every new grant is validated and opened before any earlier grant is
+	// evicted, so a refused call leaves the existing grants intact.
 	opened := make(map[string]*generatedPathGrant, len(eligible))
 	for _, item := range eligible {
-		before, err := os.Lstat(item.Path)
+		// A reservation whose creation identity is unknown cannot be told
+		// from an entry another process put there: refuse, fail closed.
+		if item.Created == nil {
+			closeGeneratedPathGrants(opened)
+			return fmt.Errorf("path.generate: writable cache artifact %q has no creation identity", item.Path)
+		}
+		before, err := lstatGeneratedPath(item.Path)
 		if err != nil {
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: inspect writable cache artifact %q: %w", item.Path, err)
@@ -72,18 +81,21 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: writable cache artifact %q is not a regular file", item.Path)
 		}
-		file, err := os.OpenFile(item.Path, os.O_RDWR, 0)
+		file, err := openGeneratedPathGrant(item.Path)
 		if err != nil {
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: open writable cache artifact %q: %w", item.Path, err)
 		}
 		after, err := file.Stat()
-		if err != nil || !os.SameFile(before, after) {
+		if err != nil || !os.SameFile(before, after) || !os.SameFile(item.Created, after) {
 			_ = file.Close()
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: writable cache artifact %q changed while it was granted", item.Path)
 		}
 		opened[item.Path] = &generatedPathGrant{file: file, created: time.Now()}
+	}
+	for g.grantCountLocked()+len(opened) > maxGeneratedPathGrants {
+		g.evictOldestLocked()
 	}
 	for path, grant := range opened {
 		if g.paths[sessionKey] == nil {
@@ -154,7 +166,7 @@ func (g *generatedPathWrites) write(sessionKey, path, content string) error {
 		grant.mu.Unlock()
 	}()
 
-	pathInfo, err := os.Lstat(path)
+	pathInfo, err := lstatGeneratedPath(path)
 	if err != nil {
 		return fmt.Errorf("path.write inspect target: %w", err)
 	}

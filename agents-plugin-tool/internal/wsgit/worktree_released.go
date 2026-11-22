@@ -169,19 +169,3 @@ func ContainingCheckouts(path string) []string {
 		dir = parent
 	}
 }
-
-// IsLinkedWorktree reports whether checkout is a linked worktree (a gitfile
-// whose admin directory has a commondir), the only kind of checkout a pooled
-// worktree is; a primary checkout or a submodule is not.
-func IsLinkedWorktree(checkout string) bool {
-	info, err := os.Lstat(filepath.Join(checkout, ".git"))
-	if err != nil || info.IsDir() {
-		return false
-	}
-	dir := worktreeAdminDirNoSpawn(checkout)
-	if dir == "" {
-		return false
-	}
-	_, err = os.Stat(filepath.Join(dir, "commondir"))
-	return err == nil
-}

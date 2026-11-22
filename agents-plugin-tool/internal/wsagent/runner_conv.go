@@ -180,7 +180,10 @@ type conv struct {
 	// replaying is set from a rejoin of the holder's process (reattach)
 	// until its replay ends: no turn is submitted meanwhile, since the
 	// replay is what tells whether one runs.
-	replaying       bool
+	replaying bool
+	// rejoinErr is a worker rejoin's start failure: checkReattach ends that
+	// recovery after the scan instead of waiting on a replay with no process.
+	rejoinErr       string
 	replayAsked     bool
 	replayTurnError string
 	// replayGap is set when records left the holder's ring during the
@@ -263,10 +266,10 @@ type conv struct {
 	// it then takes no input there, even while its process lives. It is
 	// never cleared. Under mu.
 	releasedCheckout string
-	// canonRoot and canonCwd are the record's Root and Cwd with symlinks
-	// resolved (canonicalWorktreePath), once, in startConv; both fields of
-	// the record are fixed for a conversation's life. Immutable after
-	// startConv.
+	// canonRoot and canonCwd are the record's Root and effective working
+	// directory (Record.workDir) with symlinks resolved
+	// (canonicalWorktreePath), once, in startConv; both are fixed for a
+	// conversation's life. Immutable after startConv.
 	canonRoot, canonCwd string
 	// checkouts are the checkouts this spawned conversation is bound to
 	// (resolveCheckouts), resolved once when it is loaded or spawned; nil for
@@ -1411,21 +1414,10 @@ func (c *conv) kickInput() {
 	}
 	c.stopIdle()
 	startedAt := c.r.opts.Now().UnixMilli()
-	before := c.record()
-	heldAgy := before.heldAgyWorker()
-	var startErr error
-	if len(recs) > 0 || heldAgy {
-		// Keep drained input recoverable until the send succeeds. An agy
-		// holder can outlive the daemon as soon as it accepts the prompt.
-		err := c.update(func(rec *Record) {
-			rec.Queued = queue
-			if heldAgy {
-				c.setPromptBoundary(rec, startedAt, true)
-			}
-		})
-		if heldAgy {
-			startErr = err
-		}
+	heldAgy := c.record().heldAgyWorker()
+	if len(recs) > 0 {
+		// Keep drained input recoverable until the send succeeds.
+		c.update(func(rec *Record) { rec.Queued = queue })
 	}
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
 	// The turn reaches the page only once its send went through: a failed
@@ -1434,9 +1426,7 @@ func (c *conv) kickInput() {
 	// turn are handled by this loop after kick returns, so they still
 	// follow the turn's start.
 	ordinary := cmd == nil
-	if startErr != nil {
-		err = fmt.Errorf("persist turn start: %w", startErr)
-	} else if cmd == nil {
+	if cmd == nil {
 		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
 	} else if text, ok := c.playbookTurn(*cmd); ok {
 		// The runner expands a playbook command itself: the harness has
@@ -1446,10 +1436,42 @@ func (c *conv) kickInput() {
 	} else {
 		err = c.runCommand(*cmd)
 	}
-	if err != nil && heldAgy {
-		c.restorePromptBoundary(before)
+	if err == nil && heldAgy {
+		// The holder accepted the prompt and outlives the daemon from here.
+		// Record the prompt's boundary and take its input off the queue in
+		// one write at once: a successor then waits for this prompt's
+		// response and never submits its input again. Nothing is recorded
+		// before the holder accepts, so a send the holder never took leaves
+		// the input queued and no prompt for a successor to wait on.
+		accepted := func(rec *Record) {
+			rec.Queued = rest
+			rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
+			if len(mail) > 0 {
+				rec.Mail = nil
+			}
+			if len(reports) > 0 {
+				rec.Reports = nil
+			}
+			c.setPromptBoundary(rec, startedAt, true)
+			// The open successor supersedes or publishes (below) a held
+			// turn; the record never keeps both.
+			rec.HeldTurn = nil
+		}
+		if isAgentWorkerProfile(c.rec.Profile) && c.heldRes != nil && len(reports) > 0 {
+			// The reports open the held turn's successor, so the held turn
+			// is published in that same write (as below for other workers):
+			// a restart between two writes would restore the predecessor's
+			// HeldTurn beside the successor's open turn, mark and consumed
+			// reports.
+			res := *c.heldRes
+			c.turnMark, c.reply = mark, ""
+			c.hold(nil)
+			c.publishWith(res, true, accepted)
+		} else {
+			c.update(accepted)
+		}
 	}
-	if err != nil && startErr == nil && cmd != nil && cmd.Name == "compact" {
+	if err != nil && cmd != nil && cmd.Name == "compact" {
 		c.setStatus(func() { c.turn, c.lastErr = false, "compaction: "+err.Error() })
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
 		c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactFailed})
@@ -1497,21 +1519,25 @@ func (c *conv) kickInput() {
 	} else {
 		c.hold(nil)
 	}
-	c.update(func(rec *Record) {
-		rec.Queued = rest
-		rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
-		rec.TurnStartedAt = startedAt
-		rec.TurnStartSeq = max(c.seq, c.lineOpen)
-		if len(mail) > 0 {
-			rec.Mail = nil
-		}
-		if len(reports) > 0 {
-			rec.Reports = nil
-		}
-		if rec.Parent != nil {
-			rec.TurnOpen, rec.HeldTurn = true, nil
-		}
-	})
+	if !heldAgy {
+		// A held agy worker wrote all of this when its holder accepted
+		// the prompt (above); a second identical write would only cost.
+		c.update(func(rec *Record) {
+			rec.Queued = rest
+			rec.Drained, rec.TurnMark, rec.Voided = c.drained, mark, c.voided
+			rec.TurnStartedAt = startedAt
+			rec.TurnStartSeq = max(c.seq, c.lineOpen)
+			if len(mail) > 0 {
+				rec.Mail = nil
+			}
+			if len(reports) > 0 {
+				rec.Reports = nil
+			}
+			if rec.Parent != nil {
+				rec.TurnOpen, rec.HeldTurn = true, nil
+			}
+		})
+	}
 	if len(mail) > 0 {
 		// The held mail reached a turn: no refusal is owed its senders.
 		c.heldSenders = nil

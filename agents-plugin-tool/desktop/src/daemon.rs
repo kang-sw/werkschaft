@@ -10,7 +10,7 @@ use std::{
 use serde_json::Value;
 
 use crate::{
-    daemon_package::Candidate,
+    daemon_package::{Candidate, Staged},
     endpoint::{self, Daemon},
     python,
 };
@@ -123,12 +123,15 @@ pub fn connect(
 
 trait Lifecycle {
     type Package;
+    /// A stage owns its copy: dropping it unlaunched removes the copy, and
+    /// launch takes it for good before any process can reference it.
+    type Staged;
     fn discover(&self) -> Option<Daemon>;
     fn select(&self) -> Result<(Self::Package, [u64; 3]), &'static str>;
-    fn stage(&self, package: &Self::Package) -> Result<Self::Package, &'static str>;
+    fn stage(&self, package: &Self::Package) -> Result<Self::Staged, &'static str>;
     fn python_available(&self) -> bool;
     fn still_healthy(&self, daemon: &Daemon) -> bool;
-    fn launch(&self, package: &Self::Package, identity: &Value, replace: bool) -> bool;
+    fn launch(&self, staged: Self::Staged, identity: &Value, replace: bool) -> bool;
     fn settle(&self) -> Option<Daemon>;
 }
 
@@ -140,6 +143,7 @@ struct NativeLifecycle {
 
 impl Lifecycle for NativeLifecycle {
     type Package = Candidate;
+    type Staged = Staged;
 
     fn discover(&self) -> Option<Daemon> {
         endpoint::discover_at(&self.cache).ok()
@@ -155,7 +159,7 @@ impl Lifecycle for NativeLifecycle {
         Ok((candidate, core))
     }
 
-    fn stage(&self, candidate: &Candidate) -> Result<Candidate, &'static str> {
+    fn stage(&self, candidate: &Candidate) -> Result<Staged, &'static str> {
         let data = self.user_data.as_ref().map_err(|error| *error)?;
         let resources = self.resource_root.as_ref().map_err(|error| *error)?;
         candidate.stage(data, package_boundary(resources))
@@ -169,8 +173,8 @@ impl Lifecycle for NativeLifecycle {
         daemon.is_healthy()
     }
 
-    fn launch(&self, package: &Candidate, identity: &Value, replace: bool) -> bool {
-        launch(package, &self.cache, identity, replace)
+    fn launch(&self, staged: Staged, identity: &Value, replace: bool) -> bool {
+        launch(staged, &self.cache, identity, replace)
     }
 
     fn settle(&self) -> Option<Daemon> {
@@ -255,7 +259,7 @@ fn connect_with(
                 .ok_or(HEALTH_UNCERTAIN.into()),
         };
     }
-    let started = lifecycle.launch(&staged, &identity, intent == Intent::Replace);
+    let started = lifecycle.launch(staged, &identity, intent == Intent::Replace);
     match lifecycle.settle() {
         Some(daemon) if Some(&daemon) == running.as_ref() => Ok(refuse(daemon, REPLACEMENT_FAILED)),
         Some(daemon) => attach_winner(daemon, running.as_ref(), core),
@@ -300,7 +304,16 @@ fn attach_winner(
     Err("An older or unidentified daemon won the handoff. Retry to reconnect.".into())
 }
 
-fn launch(candidate: &Candidate, cache: &Path, identity: &Value, replace: bool) -> bool {
+// The stage is kept once a starter process exists, even if that start later
+// fails: the process may already run from it. A refused spawn drops it.
+fn launch(staged: Staged, cache: &Path, identity: &Value, replace: bool) -> bool {
+    let candidate = staged.candidate().clone();
+    let mut stage = Some(staged);
+    let mut spawned = || {
+        if let Some(staged) = stage.take() {
+            staged.keep();
+        }
+    };
     let mut command = Command::new(&candidate.binary);
     command.current_dir(&candidate.root);
     for key in [
@@ -348,11 +361,11 @@ fn launch(candidate: &Candidate, cache: &Path, identity: &Value, replace: bool) 
     #[cfg(not(windows))]
     command.stderr(Stdio::null());
     let input = identity.to_string();
-    let (success, stderr) = run_starter(&mut command, input.as_bytes());
+    let (success, stderr) = run_starter(&mut command, input.as_bytes(), &mut spawned);
     if cfg!(windows) && !success && breakaway_denied(&stderr) {
         eprintln!("Werkschaft: WS_DAEMON_BREAKAWAY_DENIED=5. Retrying within the containing job.");
         command.env("WS_MCP_DAEMON_JOB_LIFETIME", "1");
-        return run_starter(&mut command, input.as_bytes()).0;
+        return run_starter(&mut command, input.as_bytes(), &mut spawned).0;
     }
     success
 }
@@ -363,10 +376,11 @@ fn breakaway_denied(stderr: &[u8]) -> bool {
         .any(|line| line.strip_suffix(b"\r").unwrap_or(line) == b"WS_DAEMON_BREAKAWAY_DENIED=5")
 }
 
-fn run_starter(command: &mut Command, input: &[u8]) -> (bool, Vec<u8>) {
+fn run_starter(command: &mut Command, input: &[u8], spawned: &mut impl FnMut()) -> (bool, Vec<u8>) {
     let Ok(mut child) = command.spawn() else {
         return (false, Vec::new());
     };
+    spawned();
     let output = child.stderr.take().map(|stderr| {
         use std::io::Read;
         let (send, receive) = std::sync::mpsc::channel();
@@ -403,7 +417,22 @@ fn run_starter(command: &mut Command, input: &[u8]) -> (bool, Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, collections::VecDeque};
+    use std::{
+        cell::{Cell, RefCell},
+        collections::VecDeque,
+        rc::Rc,
+    };
+
+    // Counts a drop that no launch took.
+    struct Stage(Option<Rc<Cell<u32>>>);
+
+    impl Drop for Stage {
+        fn drop(&mut self) {
+            if let Some(discarded) = &self.0 {
+                discarded.set(discarded.get() + 1);
+            }
+        }
+    }
 
     struct Fixture {
         observations: RefCell<VecDeque<Option<Daemon>>>,
@@ -414,6 +443,7 @@ mod tests {
         start_succeeds: bool,
         actions: RefCell<Vec<&'static str>>,
         start: RefCell<Option<(Value, bool)>>,
+        discarded: Rc<Cell<u32>>,
     }
 
     impl Fixture {
@@ -431,12 +461,14 @@ mod tests {
                 start_succeeds: true,
                 actions: RefCell::default(),
                 start: RefCell::default(),
+                discarded: Rc::default(),
             }
         }
     }
 
     impl Lifecycle for Fixture {
         type Package = ();
+        type Staged = Stage;
 
         fn discover(&self) -> Option<Daemon> {
             self.observations
@@ -448,12 +480,12 @@ mod tests {
             self.actions.borrow_mut().push("select");
             Ok(((), [0, 50, 8]))
         }
-        fn stage(&self, _: &()) -> Result<(), &'static str> {
+        fn stage(&self, _: &()) -> Result<Stage, &'static str> {
             self.actions.borrow_mut().push("stage");
             if self.stage_fails {
                 Err("staging failed")
             } else {
-                Ok(())
+                Ok(Stage(Some(self.discarded.clone())))
             }
         }
         fn python_available(&self) -> bool {
@@ -464,7 +496,8 @@ mod tests {
             self.actions.borrow_mut().push("health");
             self.healthy
         }
-        fn launch(&self, _: &(), identity: &Value, replace: bool) -> bool {
+        fn launch(&self, mut staged: Stage, identity: &Value, replace: bool) -> bool {
+            staged.0 = None;
             self.actions.borrow_mut().push("launch");
             *self.start.borrow_mut() = Some((identity.clone(), replace));
             self.start_succeeds
@@ -491,6 +524,9 @@ mod tests {
         let answer = connect_with(&raced, Intent::Connect).unwrap();
         assert!(answer.daemon == winner && answer.refusal.is_none());
         assert!(raced.start.borrow().is_none());
+        // The stage the raced start never launched is removed.
+        assert_eq!(lifecycle.discarded.get(), 0);
+        assert_eq!(raced.discarded.get(), 1);
     }
 
     #[test]
@@ -556,6 +592,9 @@ mod tests {
             assert!(answer.daemon == prior);
             assert_eq!(answer.refusal, Some(reason));
             assert_eq!(fixture.start.borrow().is_some(), launched);
+            // A started process may use its stage even when the start failed.
+            let staged = reason != STAGING_FAILED;
+            assert_eq!(fixture.discarded.get(), u32::from(staged && !launched));
         }
     }
 
@@ -598,6 +637,24 @@ mod tests {
         ] {
             assert!(version_core(invalid).is_none(), "{invalid}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_spawned_starter_takes_its_stage() {
+        let mut taken = 0;
+        let refused = run_starter(&mut Command::new("/nonexistent/ws-mcp"), b"{}", &mut || {
+            taken += 1
+        });
+        assert!(!refused.0);
+        assert_eq!(taken, 0);
+        let mut command = Command::new("cat");
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        assert!(run_starter(&mut command, b"{}", &mut || taken += 1).0);
+        assert_eq!(taken, 1);
     }
 
     #[test]

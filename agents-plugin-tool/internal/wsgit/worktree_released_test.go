@@ -164,25 +164,3 @@ func TestContainingCheckoutsListsEveryEnclosingCheckout(t *testing.T) {
 		t.Fatalf("empty path = %q", got)
 	}
 }
-
-// TestIsLinkedWorktreeTellsPooledShapedCheckouts: only a gitfile whose admin
-// directory has a commondir is a linked worktree.
-func TestIsLinkedWorktreeTellsPooledShapedCheckouts(t *testing.T) {
-	checkout, admin := linkedCheckout(t)
-	if IsLinkedWorktree(checkout) {
-		t.Fatal("an admin directory without commondir is not a linked worktree")
-	}
-	if err := os.WriteFile(filepath.Join(admin, "commondir"), []byte("../..\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if !IsLinkedWorktree(checkout) {
-		t.Fatal("a gitfile with a commondir admin directory is a linked worktree")
-	}
-	primary := t.TempDir()
-	if err := os.Mkdir(filepath.Join(primary, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if IsLinkedWorktree(primary) || IsLinkedWorktree(t.TempDir()) {
-		t.Fatal("a primary checkout or a plain directory is not a linked worktree")
-	}
-}

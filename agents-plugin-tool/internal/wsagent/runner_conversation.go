@@ -105,9 +105,10 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		settleC:      make(chan struct{}),
 	}
 	c.refreshAmbient()
-	// Its root and working directory never change after this: resolved once
-	// here, they serve every occupancy scan (boundConvs) from memory.
-	c.canonRoot, c.canonCwd = canonicalWorktreePath(rec.Root), canonicalWorktreePath(rec.Cwd)
+	// Its root and effective working directory never change after this:
+	// resolved once here, they serve every occupancy scan (boundConvs) from
+	// memory.
+	c.canonRoot, c.canonCwd = canonicalBinding(rec)
 	if releaseBound(rec) {
 		// The checkouts it is bound to, and whether a release already ended
 		// that binding, are settled here, once, before any mail claim, rejoin

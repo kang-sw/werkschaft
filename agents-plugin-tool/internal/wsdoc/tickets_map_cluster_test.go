@@ -2,12 +2,14 @@ package wsdoc
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -450,5 +452,58 @@ func TestTicketMapSmallBoardSingleCluster(t *testing.T) {
 	}
 	if c := r.Nodes[mapNodeIndex(t, r, "260109-research-lone-comet")].Cluster; c != 1 {
 		t.Fatalf("lone ticket in cluster %d", c)
+	}
+}
+
+// TestTicketMapSimilarityMemoryIsLinear analyzes a board whose nodes all share
+// terms, so nearly every pair has a nonzero score: the similarity stage keeps
+// only neighbor pairs, so allocation stays far below a dense n×n matrix.
+func TestTicketMapSimilarityMemoryIsLinear(t *testing.T) {
+	const n = 4000
+	words := []string{"lantern", "harbor", "copper", "meadow", "violet", "anchor", "pebble", "thistle"}
+	nodes := make([]mapNode, n)
+	for i := range nodes {
+		stem := fmt.Sprintf("260101-feat-sample-%04d", i)
+		text := "---\ntitle: Sample " + words[i%len(words)] + " " + words[(i/len(words))%len(words)] + "\n---\n\n## Background\n\n" +
+			words[i%len(words)] + " " + words[(i+3)%len(words)] + " " + words[(i+5)%len(words)] + " widget.\n"
+		info := readTicketFromBytes(TicketsDir+"/.done/"+stem+".md", ".done", text)
+		nodes[i] = mapNode{info: info, doc: buildTicketDoc(stem, text, true)}
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	analyzeTicketMap(nodes, nil)
+	runtime.ReadMemStats(&after)
+	dense := uint64(n) * uint64(n) * 8
+	if got := after.TotalAlloc - before.TotalAlloc; got >= dense/2 {
+		t.Fatalf("analysis allocated %d bytes for n=%d; a dense matrix is %d", got, n, dense)
+	}
+}
+
+// TestTicketMapRefPlacementIgnoresOtherRefs pins that a closed ref scores only
+// against open members: a ref whose only tie is similarity to another ref
+// lands in Misc whether that ref's stem sorts before or after it.
+func TestTicketMapRefPlacementIgnoresOtherRefs(t *testing.T) {
+	for _, tc := range []struct{ near, lone string }{
+		{"260101-feat-alpha-archive", "260102-feat-beta-archive"},
+		{"260103-feat-alpha-archive", "260102-feat-beta-archive"},
+	} {
+		resetTicketMapState(t)
+		root := t.TempDir()
+		writeMapBoard(t, root, map[string]string{
+			"todo/260110-feat-orchard-pruning": mapTicket("Orchard pruning", "related:", "  "+tc.near+": source"),
+			"todo/260111-feat-orchard-ladder":  mapTicket("Orchard ladder", "parent: 260110-feat-orchard-pruning"),
+			"idea/260112-feat-nebula-drift":    mapTicket("Nebula drift", "related:", "  "+tc.lone+": aside"),
+		})
+		writeOldTicket(t, root, TicketsDir+"/.done/"+tc.near+".md", mapTicket("Quartz lattice resonator tuning"), time.Hour)
+		writeOldTicket(t, root, TicketsDir+"/.done/"+tc.lone+".md", mapTicket("Quartz lattice resonator tuning copy"), time.Hour)
+		r := buildTicketMap(t, root)
+		near, lone := r.Nodes[mapNodeIndex(t, r, tc.near)], r.Nodes[mapNodeIndex(t, r, tc.lone)]
+		if r.Clusters[near.Cluster].Misc {
+			t.Fatalf("%s: related ref landed in Misc", tc.near)
+		}
+		if !r.Clusters[lone.Cluster].Misc {
+			t.Fatalf("%s placed with %s in cluster %d via ref-to-ref similarity", tc.lone, tc.near, lone.Cluster)
+		}
 	}
 }

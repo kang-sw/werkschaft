@@ -498,15 +498,14 @@ func TestCheckoutReleaseSpawnByCwdTakesTheReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = h.runner.AgentSpawn(h.leadCaller(), AgentSpawnRequest{Prompt: "by cwd", Tier: "small", Authority: "workdir-write", Cwd: sub})
-	agentRefused(t, err, http.StatusConflict, "being released or re-acquired")
+	agentRefused(t, err, http.StatusConflict, "currently being released")
 	if got := h.runner.ActiveChildrenInWorktree(wt); len(got) != 0 {
 		t.Fatalf("a refused spawn left bound children: %+v", got)
 	}
 	if err := lock.Unlock(); err != nil {
 		t.Fatal(err)
 	}
-	// With the reservation free the same spawn binds normally; a spawn on the
-	// primary checkout takes no worktree reservation at all.
+	// With the reservation free the same spawn binds normally.
 	id, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "by cwd", Tier: "small", Authority: "workdir-write", Cwd: sub})
 	if c := boundByAddress(h.runner.ActiveChildrenInWorktree(wt))[AgentAddress(id)]; c.Address == "" {
 		t.Fatalf("the cwd child must be bound to the worktree")
@@ -675,9 +674,14 @@ func TestCheckoutReleaseReachesSubmoduleCwdAndServesFromMemory(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(module, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A submodule checkout's gitfile, pointing into the superproject's
-	// modules directory.
-	if err := os.WriteFile(filepath.Join(module, ".git"), []byte("gitdir: ../../.git/modules/mod\n"), 0o644); err != nil {
+	// A submodule checkout's gitfile, pointing at its admin directory (the
+	// superproject's modules directory, which the create reservation
+	// resolves).
+	moduleAdmin := filepath.Join(t.TempDir(), "modules", "mod")
+	if err := os.MkdirAll(moduleAdmin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(module, ".git"), []byte("gitdir: "+moduleAdmin+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	child, proc := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "in module", Tier: "medium", Authority: "workdir-write", Cwd: filepath.Join(module, "src")})

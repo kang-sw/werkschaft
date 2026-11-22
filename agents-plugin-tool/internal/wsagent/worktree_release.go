@@ -4,10 +4,7 @@
 package wsagent
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -27,8 +24,8 @@ func releaseBound(rec Record) bool {
 // conversation resolves it once, when it is loaded or spawned (startConv),
 // and keeps it in memory.
 //
-// root and cwd are rec's canonical Root and Cwd (conv.canonRoot,
-// conv.canonCwd).
+// root and cwd are rec's canonical Root and effective working directory
+// (conv.canonRoot, conv.canonCwd; canonicalBinding).
 func resolveCheckouts(rec Record, root, cwd string) []string {
 	if !releaseBound(rec) {
 		return nil
@@ -36,73 +33,41 @@ func resolveCheckouts(rec Record, root, cwd string) []string {
 	return bindingCheckouts(root, cwd)
 }
 
+// canonicalBinding is rec's canonical root and canonical effective working
+// directory (Record.workDir: its cwd, or its root when it has none), the two
+// paths live occupancy (boundConvs, ActiveChildrenInWorktree) and the create
+// reservation (reserveBoundWorktrees) bind a conversation by.
+func canonicalBinding(rec Record) (root, cwd string) {
+	return canonicalWorktreePath(rec.Root), canonicalWorktreePath(rec.workDir())
+}
+
 // bindingCheckouts lists the checkouts a conversation with canonical root and
-// working directory cwd is bound to, by exactly the rule live occupancy uses
-// (boundConvs): root when it is a checkout, and every checkout that contains
-// cwd, so a working directory inside a submodule of a pooled worktree
-// reaches that worktree. It costs one Lstat per ancestor of cwd.
+// effective working directory cwd is bound to, by exactly the rule live
+// occupancy uses (boundConvs): every checkout that contains root or cwd, so
+// a root or working directory inside a submodule or nested repository of a
+// pooled worktree reaches that worktree. It costs one Lstat per ancestor.
 func bindingCheckouts(root, cwd string) []string {
 	var out []string
-	add := func(p string) {
-		for _, have := range out {
-			if sameWorktreePath(have, p) {
-				return
+	for _, path := range []string{root, cwd} {
+		for _, checkout := range wsgit.ContainingCheckouts(path) {
+			if !slices.ContainsFunc(out, func(have string) bool { return sameWorktreePath(have, checkout) }) {
+				out = append(out, checkout)
 			}
 		}
-		out = append(out, p)
-	}
-	if root != "" {
-		if _, err := os.Lstat(filepath.Join(root, ".git")); err == nil {
-			add(root)
-		}
-	}
-	for _, checkout := range wsgit.ContainingCheckouts(cwd) {
-		add(checkout)
 	}
 	return out
 }
 
-// reserveSpawnCheckouts takes the shared per-worktree release reservation
-// (wsgit.ReserveWorktreeSpawn) of every pooled worktree a spawn binds its
-// child to: the explicit worktree when one was named, and each linked
-// worktree among the checkouts holding the child's root or working directory
-// (bindingCheckouts). It is held until the child is registered, so a release
-// or an acquisition's claim, which take the reservation exclusively, never
-// checks occupancy between this spawn's admission and its registration.
-func reserveSpawnCheckouts(tool, explicit, root, cwd string) (func(), error) {
-	targets := []string{}
-	if explicit != "" {
-		targets = append(targets, explicit)
+// sameWorktreePath reports whether two canonical paths name one checkout;
+// Windows paths compare without case.
+func sameWorktreePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
 	}
-	for _, checkout := range bindingCheckouts(canonicalWorktreePath(root), canonicalWorktreePath(cwd)) {
-		if wsgit.IsLinkedWorktree(checkout) {
-			targets = append(targets, checkout)
-		}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
 	}
-	var unlocks []func()
-	unlockAll := func() {
-		for i := len(unlocks) - 1; i >= 0; i-- {
-			unlocks[i]()
-		}
-	}
-	seen := []string{}
-	for _, target := range targets {
-		canon := canonicalWorktreePath(target)
-		if slices.ContainsFunc(seen, func(p string) bool { return sameWorktreePath(p, canon) }) {
-			continue
-		}
-		seen = append(seen, canon)
-		unlock, err := wsgit.ReserveWorktreeSpawn(target)
-		if err != nil {
-			unlockAll()
-			if errors.Is(err, wsgit.ErrWorktreeReleasing) {
-				return nil, conflict("%s: worktree %s is being released or re-acquired right now; wait for that to finish (re-acquire it if it was released) before spawning there", tool, target)
-			}
-			return nil, badRequest("%s: reserve worktree %s: %v", tool, target, err)
-		}
-		unlocks = append(unlocks, unlock)
-	}
-	return unlockAll, nil
+	return a == b
 }
 
 // checkoutRelease is one checkout's most recent completed release as the
@@ -194,7 +159,8 @@ func (r *Runner) releasedFrom(rec Record, checkouts []string) string {
 // reports the one whose release ended its binding: the load-time check of a
 // record with no conversation yet (a Pi child's resume).
 func (r *Runner) loadReleasedCheckout(rec Record) string {
-	checkouts := resolveCheckouts(rec, canonicalWorktreePath(rec.Root), canonicalWorktreePath(rec.Cwd))
+	root, cwd := canonicalBinding(rec)
+	checkouts := resolveCheckouts(rec, root, cwd)
 	r.primeCheckoutReleases(checkouts)
 	return r.releasedFrom(rec, checkouts)
 }
@@ -298,8 +264,9 @@ func (r *Runner) CheckoutReleased(worktree string, releasedAt time.Time, cancelT
 	return out
 }
 
-// boundConvs lists the open conversations whose canonical root is target or
-// whose working directory is target or below it. It reads memory only.
+// boundConvs lists the conversations whose canonical root or canonical
+// effective working directory is target or below it (the rule of
+// ActiveChildrenInWorktree and reserveBoundWorktrees). It reads memory only.
 func (r *Runner) boundConvs(target string) []*conv {
 	r.mu.Lock()
 	convs := make([]*conv, 0, len(r.convs))
@@ -311,7 +278,7 @@ func (r *Runner) boundConvs(target string) []*conv {
 	for _, c := range convs {
 		// canonRoot and canonCwd were resolved once in startConv: this
 		// per-candidate scan touches no file.
-		if sameWorktreePath(c.canonRoot, target) || worktreePathContains(target, c.canonCwd) {
+		if worktreePathContains(target, c.canonRoot) || worktreePathContains(target, c.canonCwd) {
 			out = append(out, c)
 		}
 	}

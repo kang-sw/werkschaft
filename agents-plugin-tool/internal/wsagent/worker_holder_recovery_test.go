@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -484,5 +485,152 @@ func TestHeldWorkerChildLoadsBeforeLowerCeilingParent(t *testing.T) {
 				t.Fatalf("advisory attach changed the holder: %v, log %s", h.holders.opList(), h.log.String())
 			}
 		})
+	}
+}
+
+// TestAgyHeldFinalAndSuccessorPersistTogether pins the crash order of a held
+// agy worker whose child's report opens the successor of its held turn: the
+// record write that opens the successor also publishes the held turn, so no
+// written record carries the predecessor's HeldTurn beside the successor's
+// open turn, and a restart from the record as it stood right after that
+// write reports both turns, the successor exactly once.
+func TestAgyHeldFinalAndSuccessorPersistTogether(t *testing.T) {
+	for _, viaReport := range []bool{true, false} {
+		t.Run(fmt.Sprintf("report=%v", viaReport), func(t *testing.T) { agyHeldFinalAndSuccessor(t, viaReport) })
+	}
+}
+
+// agyHeldFinalAndSuccessor opens the successor with the child's report, or
+// (viaReport false) with a message, which supersedes the held turn instead.
+func agyHeldFinalAndSuccessor(t *testing.T, viaReport bool) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	parent, parentHolder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	childCaller := AgentCaller{Parent: ParentRef{Kind: ParentConversation, ReplyID: parent}, Root: h.root, Harness: BackendAgy, Config: h.opts.Config}
+	childResult, err := h.runner.AgentSpawn(childCaller, AgentSpawnRequest{Prompt: "inner work", Tier: "agy.small", Authority: "workdir-write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childHolder := h.holder(agentID(childResult.Address))
+	eventually(t, "the child's agy prompt", func() bool { return len(agyPromptIDs(h, childHolder)) == 1 })
+
+	parentDir := wsdashboard.SessionDir(h.dir, parent)
+	var mu sync.Mutex
+	var mixed []Record
+	var opened *Record
+	observe := func(dir string, rec Record) {
+		if dir != parentDir {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if rec.HeldTurn != nil && rec.TurnOpen {
+			mixed = append(mixed, rec)
+		}
+		if opened == nil && rec.TurnOpen && (!viaReport || rec.LastTurn != nil && rec.LastTurn.Result.Message == "held result") {
+			opened = &rec
+		}
+	}
+	recordWritten.Store(&observe)
+	t.Cleanup(func() { recordWritten.Store(nil) })
+
+	completeRecoveryWorker(t, h, BackendAgy, parentHolder)
+	eventually(t, "the parent final held for its child", func() bool {
+		rec := h.record(parent)
+		return rec.HeldTurn != nil && rec.HeldTurn.Message == "held result"
+	})
+	if !viaReport {
+		h.send(parent, "follow-up")
+	} else {
+		completeRecoveryWorker(t, h, BackendAgy, childHolder)
+	}
+	eventually(t, "the parent's successor opened", func() bool { return len(agyPromptIDs(h, parentHolder)) == 2 })
+	eventually(t, "the successor's opening write", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return opened != nil || len(mixed) > 0
+	})
+	recordWritten.Store(nil)
+	mu.Lock()
+	if len(mixed) > 0 {
+		mu.Unlock()
+		t.Fatalf("a written record held the predecessor beside the open successor: HeldTurn=%+v TurnMark=%d", mixed[0].HeldTurn, mixed[0].TurnMark)
+	}
+	snapshot := *opened
+	mu.Unlock()
+	if !viaReport {
+		return
+	}
+
+	// The daemon dies right after that write.
+	h.runner.Close()
+	if err := writeRecord(parentDir, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	successor := agyPromptIDs(h, parentHolder)[1]
+	h.holders.out(parentHolder,
+		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"agy-s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"successor ack"}}}}`,
+		jsonLine(map[string]any{"jsonrpc": "2.0", "id": successor, "result": map[string]any{"stopReason": "end_turn"}}))
+	eventually(t, "the successor settled", func() bool {
+		rec := h.record(parent)
+		return !rec.TurnOpen && rec.HeldTurn == nil && rec.LastTurn != nil && rec.LastTurn.Result.Message == "successor ack"
+	})
+	var held, acks int
+	for _, rep := range got.lead() {
+		switch {
+		case rep.Result.Message == "held result" && acks == 0:
+			held++
+		case rep.Result.Message == "successor ack":
+			acks++
+		default:
+			t.Fatalf("unexpected parent report order: %+v", got.lead())
+		}
+	}
+	// A restart between the report callback and its mark may repeat the
+	// held report once (reportLast); it never loses or reorders it.
+	if held < 1 || held > 2 || acks != 1 {
+		t.Fatalf("parent reports: held=%d successor=%d (%+v)", held, acks, got.lead())
+	}
+}
+
+// TestAgyHeldTurnStartWritesTheRecordTwice pins the record writes of a held
+// agy worker's turn start from freshly drained input: the drain checkpoint
+// that keeps the input recoverable, then the one write once the holder
+// accepted the prompt. Nothing rewrites the same fields after it.
+func TestAgyHeldTurnStartWritesTheRecordTwice(t *testing.T) {
+	h, _ := workerRecoveryHarness(t, BackendAgy)
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+	completeRecoveryWorker(t, h, BackendAgy, holder)
+	eventually(t, "the first turn settled", func() bool { return !h.record(id).TurnOpen })
+	time.Sleep(200 * time.Millisecond) // let the settle's own writes land
+	dir := wsdashboard.SessionDir(h.dir, id)
+	var mu sync.Mutex
+	var writes []Record
+	observe := func(d string, rec Record) {
+		if d == dir {
+			mu.Lock()
+			writes = append(writes, rec)
+			mu.Unlock()
+		}
+	}
+	recordWritten.Store(&observe)
+	t.Cleanup(func() { recordWritten.Store(nil) })
+	h.send(id, "next")
+	eventually(t, "the second prompt", func() bool { return len(agyPromptIDs(h, holder)) == 2 })
+	eventually(t, "the accepted write", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(writes) >= 2
+	})
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(writes) != 2 {
+		t.Fatalf("turn start wrote the record %d times, want 2", len(writes))
+	}
+	if drain, accepted := writes[0], writes[1]; drain.TurnOpen || len(drain.Queued) != 1 || !accepted.TurnOpen || len(accepted.Queued) != 0 || accepted.TurnStartedAt == 0 {
+		t.Fatalf("turn start writes: drain open=%v queued=%d, accepted open=%v queued=%d started=%d",
+			drain.TurnOpen, len(drain.Queued), accepted.TurnOpen, len(accepted.Queued), accepted.TurnStartedAt)
 	}
 }
