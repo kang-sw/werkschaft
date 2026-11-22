@@ -413,6 +413,35 @@ Decisions:
   block wins, and the assembly fills an empty thinking body or stands in
   for a missing line.
 
+#### Edition (a35f2e48b) - 2026-11-22
+
+Pre-merge review fixes, one commit each:
+
+- ba7afccff: the holder fences a kept run only when a whole line ends. A
+  line cut across reads no longer anchors an interval on its head, which
+  stalled capture and produced a false `fence_timeout` loss. Regression:
+  `TestAuditRealHolderLineCutAcrossReads` (a real holder, a 1.5 MiB line
+  written in two writes).
+- 6d0e667a1: a record's durable ordinals count only its own events. The
+  assemblies a line ends are appended under their own key (`asm.<seq>`),
+  so a replayed line keeps the identities it had live
+  (`TestAuditReplayOrdinalsIgnoreCarriedAssemblies`).
+- 155706713 and 003316f03: attach and detach markers use reserved queue
+  room and are never refused (`TestAuditAttachIsNeverRefusedByAFullQueue`).
+- 25e4626d1: a thinking block that lost every delta carries the loss as an
+  incomplete event (`TestClaudeAuditTotalLossMarksTheThinking`).
+- 0179fb83b: tee lines held for unfenced intervals are bounded at
+  `auditPendingBytes` (32 MiB). Past the bound the tee stream closes as
+  incomplete until the next fence (`TestAuditPendingTeesAreBounded`).
+- 97d031a28: the old-holder test runs the shipped pre-audit holder
+  (`testdata/holder-pre-audit.py`).
+- a35f2e48b (ring-store Decision 3, as the lead decided): adapters write
+  raw harness IDs into envelope `call_id` and parent ID, and the store
+  normalizes once, at ingestion. The ring call ID above stays
+  `NormalizeID(raw)`, the display key history rows carry. The ring parity
+  tests now key events the way the store's ingestion does
+  (`TestClaudeAuditEnvelopeIDsStayRaw` covers long and digest-shaped IDs).
+
 ### Phase 2: Codex adapter
 
 Depends on Phase 1. Map the Codex app-server stream onto the envelope,
@@ -465,6 +494,13 @@ unverified. `TestCodexAuditCompactionBoundaryPerVersion` pins this
 exactly, per version: one compaction event, at line 81, for 0.160.0; none,
 and no cut, for 0.170.0. The pooled recordings test no longer asserts a
 cut.
+
+#### Edition (a35f2e48b) - 2026-11-22
+
+Correction to the tool-items bullet above: envelopes carry the raw
+`call_id = item.id` (and the raw parent ID on `subAgentActivity`). The
+audit store normalizes them once, at ingestion (ring-store Decision 3).
+The ring call ID stays `NormalizeID(item.id)`.
 
 ### Phase 3: agy adapter
 
