@@ -197,9 +197,10 @@ type Snapshot struct {
 	// state it shows applied every record of holder HolderID through
 	// HolderSeq. A rejoin's replay tells by them whether a row the file
 	// lacks was evicted (its start covered) or started after the write.
-	// With a holder, HolderSeq is always present, 0 when no record of it
-	// was applied yet; both are absent without a holder and from a writer
-	// that predates them. Readers that know no such member ignore them.
+	// A current writer always writes HolderSeq: with a holder, 0 when no
+	// record of it was applied yet; without one, 0 with HolderID absent
+	// (no record of any holder covered). Only a writer that predates them
+	// leaves both absent. Readers that know no such member ignore them.
 	HolderID  string  `json:"holderId,omitempty"`
 	HolderSeq *uint64 `json:"holderSeq,omitempty"`
 }

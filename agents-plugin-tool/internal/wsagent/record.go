@@ -463,7 +463,8 @@ type liveWriter struct {
 	// native rows, for the first replay to end (takeRestored).
 	restored restoredAgyNative
 	// coverage names the holder records the state applied, written into the
-	// recovery file (wslive.Snapshot.HolderID, HolderSeq); unset writes none.
+	// recovery file (wslive.Snapshot.HolderID, HolderSeq); unset writes none
+	// (tests that build a bare writer).
 	coverage func() (holderID string, seq uint64)
 	// diskHold keeps the recovery file as an earlier daemon left it while
 	// a rejoin's replay has not yet folded that file's evidence (its running
@@ -473,6 +474,34 @@ type liveWriter struct {
 	// Loop-owned; set before the conversation's first write and cleared
 	// once the replay's rows are resolved (conv.finishAgyNativeReplay).
 	diskHold bool
+	// batch holds every snapshot publication and write back while a
+	// rejoin's fold changes many rows (beginBatch, endBatch): readers see
+	// only the folded, retained roster, never an intermediate uncapped one.
+	// Ring and evidence appends still go out as they happen. batchChanged
+	// records that a held change needs the closing write, batchWake that a
+	// held ring append owes file-only readers a wake after it. Loop-owned.
+	batch, batchChanged, batchWake bool
+}
+
+// beginBatch starts holding the writer's publications (batch).
+func (w *liveWriter) beginBatch() {
+	w.batch, w.batchChanged, w.batchWake = true, false, false
+}
+
+// endBatch ends a batch with one snapshot write of the state it left, when
+// anything changed or force asks for it, then the ring wake a held append
+// owed (as write orders them: snapshot first). It reports whether it wrote.
+func (w *liveWriter) endBatch(force bool) bool {
+	changed, wake := w.batchChanged, w.batchWake
+	w.batch, w.batchChanged, w.batchWake = false, false, false
+	if !changed && !force {
+		return false
+	}
+	w.writeSnapshot()
+	if changed && w.wake != nil && (wake || w.currentSlot() == nil) {
+		w.wake()
+	}
+	return true
 }
 
 // restoredAgyNative is what a restored snapshot says of agy native rows: the
@@ -495,8 +524,9 @@ type restoredAgyNative struct {
 // was evicted by retention: the snapshot is readable and does not list it,
 // and its start is one the snapshot covers. Without the snapshot's coverage
 // (a writer that predates it) an unlisted row counts as evicted. Coverage
-// of another holder covers none of this one's records, and a known empty
-// coverage (seq 0) none of any.
+// of another holder covers none of this one's records, a known empty
+// coverage (seq 0) none of any, and a snapshot written with no holder
+// (seq 0, no holder ID) none either.
 func (r restoredAgyNative) evicted(id, holderID string, startSeq uint64) bool {
 	if !r.readable || r.listed[id] {
 		return false
@@ -504,7 +534,7 @@ func (r restoredAgyNative) evicted(id, holderID string, startSeq uint64) bool {
 	if !r.covered {
 		return true
 	}
-	return r.holderID == holderID && startSeq <= r.coveredSeq
+	return r.holderID != "" && r.holderID == holderID && startSeq <= r.coveredSeq
 }
 
 // restoredAgyNativeOf reads prev, a snapshot of session replyID.
@@ -513,7 +543,7 @@ func restoredAgyNativeOf(prev wslive.Snapshot, replyID string) restoredAgyNative
 		return restoredAgyNative{}
 	}
 	r := restoredAgyNative{readable: true, updatedAt: prev.UpdatedAt, listed: map[string]bool{}, running: map[string]wslive.Agent{}}
-	if prev.HolderID != "" && prev.HolderSeq != nil {
+	if prev.HolderSeq != nil {
 		r.covered, r.holderID, r.coveredSeq = true, prev.HolderID, *prev.HolderSeq
 	}
 	for _, a := range prev.Agents {
@@ -607,6 +637,10 @@ func (w *liveWriter) applyRAM(ev wslive.Event) bool {
 	}
 	if !res.Changed {
 		return false
+	}
+	if w.batch {
+		w.batchChanged = true
+		return true
 	}
 	slot := w.currentSlot()
 	if slot == nil {
@@ -719,6 +753,11 @@ func (w *liveWriter) write(res wslive.Result, err error, kind string, coalesceTu
 	if !res.Changed && len(res.Ring) == 0 {
 		return false
 	}
+	if w.batch {
+		w.batchChanged = true
+		w.batchWake = w.batchWake || ringAppended
+		return true
+	}
 	if coalesceTurnEnd {
 		w.publishSnapshot(w.st.Snapshot(w.now().UnixMilli()))
 		return true
@@ -776,6 +815,11 @@ func (w *liveWriter) heartbeatSnapshot() { w.flushSnapshot(true, false) }
 func (w *liveWriter) forceSnapshot() { w.flushSnapshot(false, true) }
 
 func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
+	if w.batch {
+		// The batch's closing write goes instead (endBatch).
+		w.batchChanged = true
+		return
+	}
 	if w.beforeSnapshot != nil {
 		w.beforeSnapshot()
 	}
@@ -819,12 +863,15 @@ func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
 		// content skips keeps an older, smaller coverage, which only keeps
 		// more rebuilt rows on a rejoin.
 		if w.coverage != nil {
-			// A known holder always names its coverage, 0 included (no
-			// record applied yet): only an absent one is a writer that
-			// predates coverage.
-			if id, seq := w.coverage(); id != "" {
-				disk.HolderID, disk.HolderSeq = id, &seq
+			// A current writer always names its coverage: a known holder
+			// with its seq, 0 included (no record applied yet), and no
+			// holder as seq 0 with no holder ID, which covers no record of
+			// any holder. Only absent coverage is a writer that predates it.
+			id, seq := w.coverage()
+			if id == "" {
+				seq = 0
 			}
+			disk.HolderID, disk.HolderSeq = id, &seq
 		}
 		raw, err = json.Marshal(disk)
 	}

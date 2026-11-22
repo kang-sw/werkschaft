@@ -703,8 +703,9 @@ func (c *conv) reattach() {
 			// No replay will fold the recovery file's evidence: fold it
 			// now (rows it showed running end unknown at its write time)
 			// and let the file be replaced.
-			c.finishAgyNativeReplay(false)
-			c.live.writeSnapshot()
+			if !c.finishAgyNativeReplay(false) {
+				c.live.writeSnapshot()
+			}
 			c.publishAwake(c.wantAwake())
 		}
 	}

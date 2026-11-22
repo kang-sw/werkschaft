@@ -1393,12 +1393,17 @@ func (c *conv) endAgyNativeObservation(at int64) {
 
 // agyNativeReplayRows is what a replay staged of agy native rows: their
 // events and the live turn ends between them, in order (staged), the holder
-// record each row was first seen at (start), and the time of the last record
-// past the holder's sequence mark that touched it (live).
+// the replay read them from (holderID), the record of it each row was first
+// seen at (start), and the time of the last record past the holder's
+// sequence mark that touched it (live). holderID is taken with the first
+// staged event: a process end releases the holder from the record
+// (releaseHolder, processGone, a retirement) before its fold runs, and the
+// fold still judges the staged starts against that holder's coverage.
 type agyNativeReplayRows struct {
-	staged []agyNativeStaged
-	start  map[string]uint64
-	live   map[string]int64
+	staged   []agyNativeStaged
+	holderID string
+	start    map[string]uint64
+	live     map[string]int64
 }
 
 // agyNativeStaged is one staged step: a row event (quiet when replayed from
@@ -1419,6 +1424,9 @@ func (c *conv) stageAgyNativeReplay(ev wslive.Event, quiet bool) bool {
 		return false
 	}
 	o := &c.agyNativeReplay
+	if o.holderID == "" {
+		o.holderID = c.rec.HolderID
+	}
 	if ev.At <= 0 {
 		ev.At = c.r.opts.Now().UnixMilli()
 	}
@@ -1449,10 +1457,15 @@ func (c *conv) stageAgyNativeReplay(ev wslive.Event, quiet bool) bool {
 // Retention waits for the whole fold (wslive.State.HoldRetention): applied
 // one by one, the staged starts of a long replay could reach the running
 // cap and evict a row a later failure would have left the oldest open
-// observation, so caps apply once, to the final lifecycles. Last, the
-// restored recovery file's evidence is in the state, so the file may be
-// replaced (liveWriter.diskHold).
-func (c *conv) finishAgyNativeReplay(processGone bool) {
+// observation, so caps apply once, to the final lifecycles. Publications
+// wait for it too (liveWriter.beginBatch): no reader sees an intermediate,
+// uncapped roster, and the retained one goes out in a single snapshot
+// write. Last, the restored recovery file's evidence is in the state, so
+// the file may be replaced (liveWriter.diskHold): a fold that lifts the
+// hold writes even when it changed nothing. It reports whether it wrote, so
+// a caller with its own changes to write writes only when it did not.
+func (c *conv) finishAgyNativeReplay(processGone bool) bool {
+	c.live.beginBatch()
 	release := c.live.st.HoldRetention()
 	rows, restored := c.resolveAgyNativeReplay()
 	if processGone {
@@ -1465,7 +1478,9 @@ func (c *conv) finishAgyNativeReplay(processGone bool) {
 		c.settleAgyNative(rest)
 	}
 	release()
+	held := c.live.diskHold
 	c.live.diskHold = false
+	return c.live.endBatch(held)
 }
 
 // resolveAgyNativeReplay applies what a replay staged of agy native rows,
@@ -1488,7 +1503,7 @@ func (c *conv) resolveAgyNativeReplay() (agyNativeReplayRows, restoredAgyNative)
 	restored := c.live.takeRestored()
 	rows := c.agyNativeReplay
 	c.agyNativeReplay = agyNativeReplayRows{}
-	holderID := c.rec.HolderID
+	holderID := rows.holderID
 	dropped := map[string]bool{}
 	for id, seq := range rows.start {
 		if _, live := rows.live[id]; !live && !c.live.st.HasAgent(id) && restored.evicted(id, holderID, seq) {

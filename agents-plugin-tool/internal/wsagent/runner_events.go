@@ -869,13 +869,16 @@ func (c *conv) processEnded() {
 	// agy native rows and what the restored recovery file held (dropping
 	// the rows retention had evicted, settling the rows a live turn end
 	// accepted during it), before endAgents fails the rest; a path that
-	// cleared replaying first still holds the file (diskHold).
+	// cleared replaying first still holds the file (diskHold). The fold's
+	// single write carries this end's other changes too.
 	if len(c.agyNativeReplay.staged) > 0 || c.replaying || c.live.diskHold {
-		c.finishAgyNativeReplay(true)
+		if !c.finishAgyNativeReplay(true) {
+			c.live.writeSnapshot()
+		}
 	} else {
 		c.live.endAgents()
+		c.live.writeSnapshot()
 	}
-	c.live.writeSnapshot()
 	if !c.closed && !c.quitting && !hadTurn && !hadBackgroundTasks && !hadBgGrace {
 		c.watched()
 	}
