@@ -1,11 +1,11 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use block2::Block;
 use objc2::{
     define_class, ffi, msg_send,
     rc::Weak,
-    runtime::{NSObject, ProtocolObject},
-    DefinedClass, MainThreadOnly,
+    runtime::{AnyClass, AnyObject, NSObject, ProtocolObject, Sel},
+    sel, DefinedClass, MainThreadOnly,
 };
 use objc2_foundation::{ns_string, MainThreadMarker, NSError, NSObjectProtocol, NSString};
 use objc2_web_kit::{
@@ -218,6 +218,76 @@ impl NavigationDelegate {
     }
 }
 
+// NSWindowStyleMaskFullScreen. The bit is set only while the window is in
+// native (green-button / Ctrl+Cmd+F) full screen.
+const STYLE_MASK_FULL_SCREEN: usize = 1 << 14;
+
+/// Whether an unhandled Esc (AppKit `cancelOperation:`) must stop at the web
+/// view instead of travelling on to NSWindow, which leaves full screen.
+fn swallows_cancel(style_mask: usize) -> bool {
+    style_mask & STYLE_MASK_FULL_SCREEN != 0
+}
+
+// Superclass of Wry's web view, where the override's `super` call starts.
+static WRY_SUPER: OnceLock<&'static AnyClass> = OnceLock::new();
+static ESCAPE_GUARD: OnceLock<()> = OnceLock::new();
+
+unsafe extern "C-unwind" fn cancel_operation(this: &AnyObject, _: Sel, sender: Option<&AnyObject>) {
+    let window: Option<objc2::rc::Retained<AnyObject>> = unsafe { msg_send![this, window] };
+    let mask: usize = window.map_or(0, |window| unsafe { msg_send![&*window, styleMask] });
+    if swallows_cancel(mask) {
+        return;
+    }
+    if let Some(superclass) = WRY_SUPER.get() {
+        let _: () = unsafe { msg_send![super(this, *superclass), cancelOperation: sender] };
+    }
+}
+
+/// Keep Esc from leaving native full screen.
+///
+/// Wry makes its `WryWebViewParent` the window's content view (replacing
+/// tao's view, whose own `cancelOperation:` would otherwise end the responder
+/// chain), so an Esc the page leaves unhandled reaches AppKit as
+/// `cancelOperation:` and the window exits full screen. Esc still reaches the
+/// page first; only the leftover command is dropped while in full screen.
+///
+/// The method is added to Wry's own class once, never by swapping an object's
+/// isa: an observed view (KVO) reports its original class while its real isa
+/// is a runtime subclass, and replacing that isa drops the observation.
+fn guard_escape(webview: &WKWebView) {
+    ESCAPE_GUARD.get_or_init(|| {
+        let object: &AnyObject = webview;
+        let mut class = Some(object.class());
+        while let Some(current) = class {
+            if current.name() == c"WryWebView" {
+                let Some(superclass) = current.superclass() else {
+                    return;
+                };
+                let _ = WRY_SUPER.set(superclass);
+                // Returns NO, adding nothing, if the class already defines
+                // cancelOperation: itself.
+                let added = unsafe {
+                    ffi::class_addMethod(
+                        (current as *const AnyClass).cast_mut(),
+                        sel!(cancelOperation:),
+                        std::mem::transmute::<
+                            unsafe extern "C-unwind" fn(&AnyObject, Sel, Option<&AnyObject>),
+                            objc2::runtime::Imp,
+                        >(cancel_operation),
+                        c"v@:@".as_ptr(),
+                    )
+                };
+                if !added.as_bool() {
+                    eprintln!("Werkschaft: Could not guard Esc in full screen");
+                }
+                return;
+            }
+            class = current.superclass();
+        }
+        eprintln!("Werkschaft: Web view class not recognized; Esc may leave full screen");
+    });
+}
+
 pub fn install(
     window: &WebviewWindow,
     connection: Arc<Connection>,
@@ -233,6 +303,7 @@ pub fn install(
             webview_setup_failed(&target, &connection);
             return;
         };
+        guard_escape(webview);
         let main = close::checks_draft(target.label());
         let epoch = connection.window_epoch();
         let delegate = marker
@@ -274,4 +345,24 @@ pub fn install(
         }
         ready(target);
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{swallows_cancel, STYLE_MASK_FULL_SCREEN};
+
+    #[test]
+    fn escape_is_swallowed_only_in_native_full_screen() {
+        // titled | closable | miniaturizable | resizable: an ordinary window.
+        let windowed = 1 | 2 | 4 | 8;
+        assert!(!swallows_cancel(windowed));
+        assert!(swallows_cancel(windowed | STYLE_MASK_FULL_SCREEN));
+        assert!(!swallows_cancel(0));
+    }
+
+    #[test]
+    fn full_screen_bit_matches_appkit() {
+        // NSWindowStyleMaskFullScreen == 1 << 14 (16384) in AppKit's NSWindow.h.
+        assert_eq!(STYLE_MASK_FULL_SCREEN, 16384);
+    }
 }
