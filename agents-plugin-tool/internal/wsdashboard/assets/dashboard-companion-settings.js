@@ -15,6 +15,10 @@
     "dashboard.companion_agent_hourly_cap": "agentHourlyCap"
   };
   const voicePreview = 240;
+  const pairMax = 16, hexColor = /^#[0-9a-f]{6}$/;
+  const keyAttachments = "dashboard.companion_attachments", keyPalette = "dashboard.companion_palette";
+  // The wardrobe rows that pick one pack ID, and the wardrobeOptions list each reads.
+  const idLists = { "dashboard.companion_outfit": "outfits", "dashboard.companion_hair": "hairs", "dashboard.companion_eyes": "eyesets" };
 
   function voiceSummary(voice) {
     const chars = Array.from(voice || "");
@@ -35,6 +39,9 @@
     gear.setAttribute("aria-controls", dialog.id);
     gear.setAttribute("aria-expanded", "false");
     node.append(dialog);
+    // controls maps a row key to the function that refreshes that row's
+    // inputs from the live config, sparing the one in use (a row may own
+    // several inputs, so refresh never touches the inputs directly).
     let controls = new Map(), packIds = null, packsRequest = null;
 
     function canWrite() { return doc.documentElement.hasAttribute("data-sysopen"); }
@@ -48,30 +55,52 @@
       return item;
     }
 
+    function offered() {
+      const options = hooks.wardrobe?.();
+      return C.record(options) ? options : {};
+    }
+
+    function listOf(items) { return Array.isArray(items) ? items.filter(id => typeof id === "string") : []; }
+
     function choices(key) {
       const value = current(key);
       const list = key === "dashboard.companion_pack" ? ["default", "auto", ...(packIds || [])] :
-        hooks.presets().available;
+        Object.hasOwn(idLists, key) ? ["", ...listOf(offered()[idLists[key]])] : hooks.presets().available;
       return [...new Set([...list, ...(typeof value === "string" && value ? [value] : [])])];
     }
 
+    function option(id, selected) { return new Option(id === "" ? wsT("js.companion.follow_preset") : id, id, false, selected); }
+
+    function fill(select, key) {
+      const value = current(key);
+      select.replaceChildren(...choices(key).map(id => option(id, id === value || (id === "" && typeof value !== "string"))));
+    }
+
+    function labelled(tag, row) {
+      const item = el(tag, "ws-companion-settings-row");
+      item.title = wsT(row.description);
+      item.append(el("span", "ws-companion-settings-label", wsT(row.label)));
+      return item;
+    }
+
     function field(row) {
-      const label = el("label", "ws-companion-settings-row");
-      label.title = wsT(row.description);
-      label.append(el("span", "ws-companion-settings-label", wsT(row.label)));
+      if (row.key === keyAttachments) return slotsRow(row);
+      if (row.key === keyPalette) return paletteRow(row);
+      const label = labelled("label", row);
       let input;
-      if (row.key === "dashboard.companion_pack" || row.key === "dashboard.companion_preset") {
+      if (row.key === "dashboard.companion_pack" || row.key === "dashboard.companion_preset" || Object.hasOwn(idLists, row.key)) {
         input = el("select");
         fill(input, row.key);
+        controls.set(row.key, spare => { if (input !== spare) fill(input, row.key); });
       } else {
         input = el("input");
         input.type = row.control === "number" ? "number" : "text";
         if (row.control === "number") input.step = "1";
         input.value = String(current(row.key) ?? "");
+        controls.set(row.key, spare => { if (input !== spare) input.value = String(current(row.key) ?? ""); });
       }
       input.disabled = !canWrite();
-      input.addEventListener("change", () => write(row, input), options);
-      controls.set(row.key, input);
+      input.addEventListener("change", () => write(row.key, value(row, input)), options);
       const box = el("span", "ws-companion-settings-control");
       box.append(input);
       if (row.unit) box.append(el("span", "ws-companion-settings-unit", wsT(row.unit)));
@@ -79,9 +108,97 @@
       return label;
     }
 
-    function fill(select, key) {
-      const value = current(key);
-      select.replaceChildren(...choices(key).map(id => new Option(id, id, false, id === value)));
+    // multiRow builds a row of one control per name (an attachment slot or a
+    // palette channel). names() lists them; make(name) returns [wrapper,
+    // input]; show(name, input) sets one input from the live config. A
+    // refresh that changes the names redraws the row unless the focus is in it.
+    function multiRow(row, names, make, show, extra) {
+      const item = labelled("div", row), list = el("span", "ws-companion-settings-multi");
+      let shown = null, inputs = new Map();
+      function draw() {
+        shown = names();
+        inputs = new Map();
+        list.replaceChildren(...shown.map(name => {
+          const [wrapper, input] = make(name);
+          input.disabled = !canWrite();
+          inputs.set(name, input);
+          return wrapper;
+        }));
+      }
+      function sync(spare) {
+        const next = names();
+        if (shown && (next.length !== shown.length || next.some((name, i) => name !== shown[i])) && !list.contains(spare)) draw();
+        for (const [name, input] of inputs) if (input !== spare) show(name, input);
+        item.hidden = !extra && shown.length === 0;
+      }
+      draw();
+      item.append(list, ...(extra ? [extra] : []));
+      controls.set(row.key, sync);
+      sync(null);
+      return item;
+    }
+
+    // subControl wraps an input with its slot or channel name; the name is
+    // pack data and only ever set as text.
+    function subControl(name, input) {
+      const wrapper = el("label", "ws-companion-settings-sub");
+      wrapper.append(el("span", "ws-companion-settings-name-tag", name), input);
+      return [wrapper, input];
+    }
+
+    // pairNames lists the pack's names first, then the config-only ones, so a
+    // stored pair the pack lacks stays visible and can be cleared.
+    function pairNames(packNames, stored) {
+      const own = [...new Set(listOf(packNames))];
+      return [...own, ...Object.keys(stored).filter(name => !own.includes(name)).sort()];
+    }
+
+    function slotsRow(row) {
+      const slots = () => (C.record(offered().slots) ? offered().slots : {});
+      const names = () => pairNames(Object.keys(slots()).sort(), C.attachmentPairs(current(row.key)));
+      return multiRow(row, names, slot => {
+        const select = el("select");
+        select.addEventListener("change", () => write(row.key, composePairs(C.attachmentPairs(current(row.key)), slot, select.value)), options);
+        return subControl(slot, select);
+      }, (slot, select) => {
+        const stored = C.attachmentPairs(current(row.key))[slot] || "";
+        const ids = Object.hasOwn(slots(), slot) ? listOf(slots()[slot]) : [];
+        select.replaceChildren(...[...new Set(["", "none", ...ids, ...(stored ? [stored] : [])])].map(id =>
+          new Option(id === "" ? wsT("js.companion.follow_preset") : id === "none" ? wsT("js.companion.attachment_none") : id, id, false, id === stored)));
+      });
+    }
+
+    function paletteRow(row) {
+      const reset = el("button", "ws-companion-settings-reset", wsT("js.companion.reset_colors"));
+      reset.type = "button";
+      reset.disabled = !canWrite();
+      reset.addEventListener("click", () => write(row.key, ""), options);
+      const names = () => pairNames(offered().channels, C.palettePairs(current(row.key)));
+      return multiRow(row, names, channel => {
+        const input = el("input");
+        input.type = "color";
+        input.addEventListener("change", () => {
+          const color = String(input.value).toLowerCase();
+          write(row.key, hexColor.test(color) ? composePairs(C.palettePairs(current(row.key)), channel, color) : undefined);
+        }, options);
+        return subControl(channel, input);
+      }, (channel, input) => {
+        const effective = hooks.picks?.()?.palette?.[channel], stored = C.palettePairs(current(row.key))[channel];
+        input.value = [effective, stored].map(color => String(color).toLowerCase()).find(color => hexColor.test(color)) || "#000000";
+      }, reset);
+    }
+
+    // composePairs returns the flat config string for pairs with key set to
+    // next, or removed when next is "". Pairs are sorted by key. Past the
+    // 16 pairs the config value allows, it drops the last keys in sorted
+    // order, never the changed one. Values are lowercased (hex colors; IDs
+    // already are). No pairs left is "" (follow the preset).
+    function composePairs(pairs, key, next) {
+      const map = { ...pairs };
+      if (next === "") delete map[key]; else map[key] = next;
+      const keys = Object.keys(map).sort();
+      for (let i = keys.length - 1; i >= 0 && keys.length > pairMax; i--) if (keys[i] !== key) keys.splice(i, 1);
+      return keys.map(name => name + "=" + map[name].toLowerCase()).join(" ");
     }
 
     function personaBlock() {
@@ -127,21 +244,20 @@
       return input.value !== "" && Number.isSafeInteger(n) ? n : undefined;
     }
 
-    async function write(row, input) {
-      const next = value(row, input);
+    async function write(key, next) {
       if (next === undefined || !canWrite()) { refresh(null); return; }
-      if (row.key === "dashboard.companion_preset") hooks.applyPreset(next);
+      if (key === "dashboard.companion_preset") hooks.applyPreset(next);
       try {
         const response = await fetch("/api/config/set", {
           method: "POST", credentials: "same-origin", signal,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scope: "global", key: row.key, value: next })
+          body: JSON.stringify({ scope: "global", key, value: next })
         });
         if (!response.ok) throw new Error("Companion setting write failed");
       } catch (error) {
         if (signal.aborted) return;
         hooks.notice("settings_failed");
-        if (row.key === "dashboard.companion_preset") hooks.applyPreset(current(row.key));
+        if (key === "dashboard.companion_preset") hooks.applyPreset(current(key));
         refresh(null);
       }
     }
@@ -150,11 +266,7 @@
     // a revert after a refused or failed write passes null to reset it too.
     function refresh(spare = doc.activeElement) {
       if (!dialog.open) return;
-      for (const [key, input] of controls) {
-        if (input === spare) continue;
-        if (input.tagName === "SELECT") fill(input, key);
-        else input.value = String(current(key) ?? "");
-      }
+      for (const sync of controls.values()) sync(spare);
     }
 
     function loadPacks() {
@@ -164,8 +276,7 @@
         .then(catalog => {
           if (!Array.isArray(catalog?.packs)) return;
           packIds = catalog.packs.map(pack => pack?.id).filter(C.timingId);
-          const select = controls.get("dashboard.companion_pack");
-          if (select && dialog.open) fill(select, "dashboard.companion_pack");
+          if (dialog.open) controls.get("dashboard.companion_pack")?.(null);
         })
         .catch(() => {})
         .finally(() => { packsRequest = null; });

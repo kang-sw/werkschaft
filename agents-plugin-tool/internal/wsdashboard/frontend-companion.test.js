@@ -945,6 +945,300 @@ test("companion settings modal opens, writes typed global values, reverts refuse
   assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
 });
 
+// wardrobeModal opens the companion modal over a mutable config and a
+// hooks.wardrobe() fixture, and records every config write.
+function wardrobeModal({ config = {}, wardrobe, picks = null, rows, hook = true } = {}) {
+  const { doc, element, fire, Option, sysopen } = modalDom();
+  const writes = [], notices = [];
+  const fetch = async (url, init) => {
+    if (url === "/api/companion/packs") return { ok: true, json: async () => ({ packs: [{ id: "default" }] }) };
+    writes.push(JSON.parse(init.body));
+    return { ok: true };
+  };
+  const C = companion({ document: doc, Option, fetch, wsT: key => key,
+    window: { innerWidth: 1200, innerHeight: 800, addEventListener() {} } });
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const all = rows || catalog.filter(row => row.surface === "companion-modal");
+  const node = element("div"), gear = element("button");
+  const state = { config, wardrobe, picks };
+  const hooks = {
+    rows: () => all, config: () => state.config, persona: () => null,
+    presets: () => ({ available: [] }),
+    anchor: () => ({ left: 100, right: 160, top: 400, bottom: 480 }),
+    resetSize() {}, applyPreset() {}, notice: key => notices.push(key)
+  };
+  if (hook) hooks.wardrobe = () => state.wardrobe;
+  hooks.picks = () => state.picks;
+  const modal = C.settingsModal(node, gear, { signal: new AbortController().signal }, hooks);
+  const dialog = node.children[0];
+  fire(gear, "click");
+  const row = key => dialog.all().filter(c => c.className === "ws-companion-settings-row")[all.findIndex(r => r.key === key)];
+  const subs = key => row(key).all().filter(c => c.className === "ws-companion-settings-sub")
+    .map(sub => ({ name: sub.children[0].textContent, input: sub.children[1] }));
+  const select = key => row(key).all().find(c => c.tagName === "SELECT");
+  const values = input => input.children.map(o => o.value);
+  const pick = async (input, value) => {
+    input.value = value;
+    fire(input, "change");
+    await new Promise(resolve => setImmediate(resolve));
+    return writes.at(-1);
+  };
+  return { C, modal, dialog, state, writes, notices, row, subs, select, values, pick, fire, sysopen, Option };
+}
+
+const wardrobeFixture = () => ({
+  outfits: ["gown", "street"], hairs: ["bob", "bun"], eyesets: ["round"],
+  slots: { headdress: ["cap"], tail: ["tail", "tail2"] }, channels: ["hair", "skin", "trim"]
+});
+
+test("companion wardrobe pickers list the active pack and each pick posts its global payload", async () => {
+  const m = wardrobeModal({
+    config: { pack: "default", preset: "", outfit: "", hair: "gone", eyes: "", attachments: "ears=ears tail=tail", palette: "skin=#AABBCC" },
+    wardrobe: wardrobeFixture(), picks: { palette: { skin: "#ddeeff", hair: "#112233" } }
+  });
+  const label = "js.companion.follow_preset";
+  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "gown", "street"]);
+  assert.equal(m.select("dashboard.companion_outfit").children[0].textContent, label, "follow preset comes first");
+  assert.equal(m.select("dashboard.companion_outfit").children[0].selected, true);
+  assert.deepEqual(m.values(m.select("dashboard.companion_hair")), ["", "bob", "bun", "gone"], "a stored ID the pack lacks stays visible");
+  assert.equal(m.select("dashboard.companion_hair").children[3].selected, true);
+  assert.deepEqual(m.values(m.select("dashboard.companion_eyes")), ["", "round"]);
+
+  const slots = m.subs("dashboard.companion_attachments");
+  assert.deepEqual(slots.map(s => s.name), ["headdress", "tail", "ears"], "pack slots, then the slots only the config names");
+  const [headdress, tail, ears] = slots.map(s => s.input);
+  assert.deepEqual(m.values(headdress), ["", "none", "cap"]);
+  assert.deepEqual(m.values(tail), ["", "none", "tail", "tail2"]);
+  assert.deepEqual(m.values(ears), ["", "none", "ears"]);
+  assert.deepEqual(tail.children.slice(0, 2).map(o => o.textContent), [label, "js.companion.attachment_none"]);
+  assert.deepEqual([headdress, tail, ears].map(s => s.children.find(o => o.selected).value), ["", "tail", "ears"]);
+
+  const channels = m.subs("dashboard.companion_palette");
+  assert.deepEqual(channels.map(c => c.name), ["hair", "skin", "trim"]);
+  assert.deepEqual(channels.map(c => [c.input.type, c.input.value]),
+    [["color", "#112233"], ["color", "#ddeeff"], ["color", "#000000"]], "effective pick, else the config pair, else black");
+
+  const key = name => "dashboard.companion_" + name;
+  assert.deepEqual(await m.pick(m.select(key("outfit")), "gown"), { scope: "global", key: key("outfit"), value: "gown" });
+  assert.deepEqual(await m.pick(m.select(key("outfit")), ""), { scope: "global", key: key("outfit"), value: "" }, "follow preset writes empty");
+  assert.deepEqual(await m.pick(m.select(key("eyes")), "round"), { scope: "global", key: key("eyes"), value: "round" });
+  assert.deepEqual(await m.pick(headdress, "cap"), { scope: "global", key: key("attachments"), value: "ears=ears headdress=cap tail=tail" },
+    "a slot pick composes the whole string in sorted order");
+  assert.deepEqual(await m.pick(tail, "none"), { scope: "global", key: key("attachments"), value: "ears=ears tail=none" });
+  assert.deepEqual(await m.pick(tail, ""), { scope: "global", key: key("attachments"), value: "ears=ears" }, "follow preset drops the slot");
+  assert.deepEqual(await m.pick(ears, ""), { scope: "global", key: key("attachments"), value: "tail=tail" });
+  assert.deepEqual(await m.pick(channels[0].input, "#AABB11"), { scope: "global", key: key("palette"), value: "hair=#aabb11 skin=#aabbcc" },
+    "colors write lowercase");
+  const before = m.writes.length;
+  await m.pick(channels[2].input, "red");
+  assert.equal(m.writes.length, before, "a non-#rrggbb value is never written");
+
+  const reset = m.row(key("palette")).all().find(c => c.tagName === "BUTTON");
+  assert.equal(reset.textContent, "js.companion.reset_colors");
+  m.fire(reset, "click");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(m.writes.at(-1), { scope: "global", key: key("palette"), value: "" });
+
+  // With the last slot cleared the config is empty, which writes "".
+  m.state.config = { ...m.state.config, attachments: "ears=ears" };
+  assert.deepEqual(await m.pick(m.subs(key("attachments")).find(s => s.name === "ears").input, ""),
+    { scope: "global", key: key("attachments"), value: "" });
+});
+
+test("companion wardrobe pickers write at most 16 pairs, keep the changed one and match the server patterns", async () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "../../../agents-plugin/dashboard-config-manifest.json"), "utf8"));
+  const pattern = key => new RegExp(manifest.keys.find(k => k.key === key).pattern);
+  const names = prefix => Array.from({ length: 20 }, (_, i) => prefix + String(i).padStart(2, "0"));
+  const first16 = list => list.slice(0, 16);
+  const m = wardrobeModal({
+    config: {
+      attachments: first16(names("s")).map(n => n + "=a").join(" "),
+      palette: first16(names("c")).map(n => n + "=#000000").join(" ")
+    },
+    wardrobe: { outfits: [], hairs: [], eyesets: [], slots: Object.fromEntries(names("s").map(n => [n, ["a", "b"]])), channels: names("c") }
+  });
+  const slots = m.subs("dashboard.companion_attachments"), channels = m.subs("dashboard.companion_palette");
+  assert.equal(slots.length, 20, "every slot is listed");
+  assert.equal(channels.length, 20, "every channel is listed");
+
+  const wrote = await m.pick(slots[19].input, "b");
+  assert.equal(wrote.key, "dashboard.companion_attachments");
+  assert.match(wrote.value, pattern("dashboard.companion_attachments"));
+  const pairs = wrote.value.split(" ");
+  assert.equal(pairs.length, 16);
+  assert.deepEqual(pairs, [...first16(names("s")).slice(0, 15).map(n => n + "=a"), "s19=b"], "the changed slot stays, the last sorted other drops");
+
+  const palette = await m.pick(channels[19].input, "#FFAA00");
+  assert.match(palette.value, pattern("dashboard.companion_palette"));
+  assert.equal(palette.value.split(" ").length, 16);
+  assert.ok(palette.value.endsWith(" c19=#ffaa00"));
+  assert.ok(!palette.value.includes("c15="));
+
+  // Changing a slot the config already has never grows the string.
+  const same = await m.pick(slots[0].input, "b");
+  assert.equal(same.value.split(" ").length, 16);
+  assert.ok(same.value.startsWith("s00=b s01=a"));
+});
+
+test("companion wardrobe pickers render pack strings as text and read-only pages disable them", async () => {
+  const hostile = "<img src=x onerror=alert(1)>";
+  const m = wardrobeModal({
+    config: {}, wardrobe: { outfits: [hostile, "a-b_c"], hairs: [], eyesets: [], slots: { [hostile]: [hostile, "x-1"] }, channels: [hostile] }
+  });
+  const everything = m.dialog.all();
+  assert.ok(everything.every(c => c.innerHTML === undefined), "no element takes innerHTML");
+  assert.deepEqual(m.select("dashboard.companion_outfit").children.map(o => o.textContent), ["js.companion.follow_preset", hostile, "a-b_c"]);
+  assert.equal(m.subs("dashboard.companion_attachments")[0].name, hostile);
+  assert.equal(m.subs("dashboard.companion_palette")[0].name, hostile);
+  assert.deepEqual(m.subs("dashboard.companion_attachments")[0].input.children.map(o => o.textContent),
+    ["js.companion.follow_preset", "js.companion.attachment_none", hostile, "x-1"]);
+
+  m.modal.hide();
+  m.sysopen.clear();
+  m.modal.show();
+  const wardrobeRows = ["outfit", "hair", "eyes", "attachments", "palette"].map(name => m.row("dashboard.companion_" + name));
+  const controls = wardrobeRows.flatMap(r => r.all().filter(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName)));
+  assert.ok(controls.length >= 6);
+  assert.ok(controls.every(c => c.disabled), "read-only pages disable every wardrobe control");
+  const writesBefore = m.writes.length;
+  await m.pick(m.select("dashboard.companion_outfit"), "a-b_c");
+  assert.equal(m.writes.length, writesBefore, "and a forced change event writes nothing");
+});
+
+test("companion wardrobe rows stay usable without pack options and follow config and pack changes", async () => {
+  const m = wardrobeModal({ config: { outfit: "kept", attachments: "tail=tail", palette: "skin=#010203" } });
+  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "kept"]);
+  assert.deepEqual(m.values(m.select("dashboard.companion_hair")), [""]);
+  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["tail"]);
+  assert.deepEqual(m.subs("dashboard.companion_palette").map(s => [s.name, s.input.value]), [["skin", "#010203"]]);
+
+  const empty = wardrobeModal({ config: {}, hook: false });
+  assert.deepEqual(empty.subs("dashboard.companion_palette"), [], "no channels shows only the reset");
+  assert.ok(empty.row("dashboard.companion_palette").all().some(c => c.tagName === "BUTTON"));
+  assert.deepEqual(empty.subs("dashboard.companion_attachments"), []);
+
+  // A live config push refreshes the pickers; a pack change redraws them.
+  m.state.config = { outfit: "gown", attachments: "ears=ears", palette: "skin=#0a0b0c hair=#ffffff" };
+  m.modal.refresh(null);
+  assert.equal(m.select("dashboard.companion_outfit").children.find(o => o.selected).value, "gown");
+  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["ears"]);
+  assert.deepEqual(m.subs("dashboard.companion_palette").map(s => [s.name, s.input.value]), [["hair", "#ffffff"], ["skin", "#0a0b0c"]]);
+  m.state.wardrobe = wardrobeFixture();
+  m.modal.rebuild();
+  assert.deepEqual(m.values(m.select("dashboard.companion_outfit")), ["", "gown", "street"]);
+  assert.deepEqual(m.subs("dashboard.companion_attachments").map(s => s.name), ["headdress", "tail", "ears"]);
+});
+
+test("companion live config broadcast re-dresses the mounted stage and refreshes the open modal without a reload", async () => {
+  let raf = null, now = 0;
+  const packFetches = [], listeners = new Map();
+  const makeElement = tag => {
+    const el = {
+      tagName: tag.toUpperCase(), className: "", id: "", children: [], dataset: {}, attrs: {}, listeners: {}, value: "", disabled: false,
+      style: { setProperty() {}, removeProperty() {} }, hidden: false, textContent: "", open: false, offsetWidth: 240, offsetHeight: 200,
+      setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; }, removeAttribute() {},
+      addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }, setPointerCapture() {}, remove() {}, focus() {},
+      getBoundingClientRect: () => ({ left: 0, right: 60, top: 0, bottom: 80, width: 60, height: 80 }),
+      append(...items) { this.children.push(...items.filter(item => item && typeof item === "object")); },
+      insertBefore(item) { this.append(item); },
+      replaceChildren(...items) { this.children = []; this.append(...items); },
+      all() { return this.children.flatMap(child => [child, ...(child.all ? child.all() : [])]); },
+      contains(other) { return other === this || this.all().includes(other); },
+      querySelector() { return this.all().find(c => ["SELECT", "INPUT", "BUTTON"].includes(c.tagName) && !c.disabled) || null; },
+      show() { this.open = true; }, close() { this.open = false; }
+    };
+    if (tag === "canvas") {
+      el.width = 0; el.height = 0; el.drawn = [];
+      const ctx = { canvas: el, save() {}, restore() {}, clearRect() {}, setTransform() {}, translate() {}, rotate() {}, scale() {},
+        fillRect() {}, getImageData: () => ({ data: [] }), drawImage(image) { el.drawn.push(image); } };
+      el.getContext = () => ctx;
+    }
+    return el;
+  };
+  class Canvas {
+    constructor(width, height) { this.width = width; this.height = height; this.drawn = []; }
+    getContext() {
+      return { canvas: this, save() {}, restore() {}, translate() {}, rotate() {}, scale() {}, fillRect() {}, getImageData: () => ({ data: [] }),
+        clearRect: () => { this.drawn.length = 0; }, drawImage: image => { this.drawn.push(image); } };
+    }
+  }
+  class Option { constructor(text, value, _default, selected) { this.tagName = "OPTION"; this.textContent = text; this.value = value; this.selected = selected; } }
+  const body = makeElement("body"), activeRid = "";
+  const doc = {
+    documentElement: { dataset: { rid: activeRid }, classList: { contains: () => false }, hasAttribute: name => name === "data-sysopen" },
+    body, hidden: false, activeElement: null, getElementById: () => null,
+    createElement: makeElement, createElementNS: (ns, tag) => makeElement(tag), addEventListener() {}
+  };
+  const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "assets", "dashboard-settings-catalog.json"), "utf8"));
+  const win = {
+    WsCompanion: {}, wsCompanionModalRows: catalog.filter(row => row.surface === "companion-modal"),
+    WsShell: { companionContext: routeKind => ({ routeKind: routeKind || "session", activity: "idle", landmarks: {}, events: [] }) },
+    addEventListener() {}, innerWidth: 1200, innerHeight: 800, devicePixelRatio: 1
+  };
+  const manifestData = {
+    id: "default", schema: "ws-companion/v1", canvas: [128, 128],
+    poses: { stand: { layers: [{ file: "legacy.png" }] } },
+    defaultOutfit: "street",
+    outfits: {
+      street: { poses: { stand: { layers: [{ file: "street-stand.png" }] } } },
+      gown: { poses: { stand: { layers: [{ file: "gown-stand.png" }] } } }
+    }
+  };
+  const packs = { resolvedAuto: { packId: "default" }, packs: [{ id: "default", rev: "r1" }] };
+  const context = vm.createContext({
+    window: win, document: doc, URLSearchParams, AbortController, OffscreenCanvas: Canvas, Option,
+    ResizeObserver: class { observe() {} disconnect() {} }, MutationObserver: class { observe() {} disconnect() {} },
+    performance: { now: () => now }, wsT: key => key,
+    requestAnimationFrame: fn => { raf = fn; return 1; }, cancelAnimationFrame: () => { raf = null; },
+    fetch: async url => {
+      if (url.includes("/pack.json?")) { packFetches.push(url); return { ok: true, json: async () => manifestData }; }
+      if (url === "/api/companion/packs" || url.startsWith("/api/companion/packs?")) return { ok: true, json: async () => packs };
+      return { ok: true, blob: async () => url };
+    },
+    createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
+  });
+  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
+  }
+  const C = win.WsCompanion;
+  C.quickMenu = () => ({ rebuild() {}, measure() {}, place() {}, close() {} });
+  const config = { pack: "default", preset: "", outfit: "", hair: "", eyes: "", attachments: "", palette: "" };
+
+  const stage = C.mount(config, () => {});
+  await new Promise(resolve => setImmediate(resolve));
+  const node = body.children[0], hit = node.children[0];
+  const step = () => { const fn = raf; raf = null; assert.ok(fn, "expected scheduled animation frame"); now += 16; fn(now); };
+  // files lists the layer files the character canvas received on its latest draw.
+  const files = item => item.id ? [item.id] : (item.drawn || []).flatMap(files);
+  const characterCanvas = () => node.all().find(c => c.tagName === "CANVAS");
+  const drawn = () => { const canvas = characterCanvas(); canvas.drawn.length = 0; step(); return canvas.drawn.flatMap(files); };
+
+  assert.equal(packFetches.length, 1);
+  assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["street-stand.png"], "the pack default outfit renders first");
+
+  const gear = hit.children.find(c => c.className === "ws-companion-gear");
+  for (const fn of gear.listeners.click) fn({});
+  const dialog = node.children.find(c => c.tagName === "DIALOG");
+  assert.equal(dialog.open, true);
+  const outfitSelect = () => dialog.all().filter(c => c.className === "ws-companion-settings-row")
+    [win.wsCompanionModalRows.findIndex(r => r.key === "dashboard.companion_outfit")].all().find(c => c.tagName === "SELECT");
+  assert.deepEqual(outfitSelect().children.map(o => o.value), ["", "gown", "street"], "the modal lists the loaded pack's outfits");
+  assert.equal(outfitSelect().children.find(o => o.selected).value, "");
+
+  stage.apply({ ...config, outfit: "gown" });
+  assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["gown-stand.png"], "the next frame draws the new outfit with no stale stack");
+  assert.equal(packFetches.length, 1, "no pack is fetched again");
+  assert.equal(outfitSelect().children.find(o => o.selected).value, "gown", "the open modal shows the broadcast value");
+
+  stage.apply({ ...config, outfit: "gown", palette: "skin=#112233" });
+  assert.equal(packFetches.length, 1, "a palette broadcast does not reload the pack either");
+  assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["gown-stand.png"]);
+  stage.apply(config);
+  assert.deepEqual(drawn().filter(f => /-stand\.png$/.test(f)), ["street-stand.png"], "clearing the pick returns to the pack default");
+  assert.equal(packFetches.length, 1);
+  stage.dispose();
+});
+
 // pixelCanvas is a small software 2D canvas: nearest-neighbour drawImage under
 // an affine transform, source-over and destination-in drawing, and the
 // multiply fillRect the compositor's tint cache uses.

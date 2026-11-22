@@ -371,6 +371,8 @@
       config: () => currentConfig,
       persona: () => model?.persona || null,
       presets: () => ({ available: Object.keys(model?.manifest.presets || {}), preset }),
+      wardrobe: () => C.wardrobeOptions(model?.manifest),
+      picks: () => rig?.wardrobe() || null,
       anchor: () => hit.getBoundingClientRect(),
       resetSize() { sizing.reset(); },
       applyPreset, notice
