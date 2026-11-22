@@ -2857,6 +2857,8 @@
   "js.settings.key.agent.tier_aliases.description": "Durch Leerzeichen getrennte name=<harness>.<tier>-Aliasse für Agentenstarts.",
   "js.settings.key.agent.child_waiting_days.label": "Aufbewahrung wartender Kind-Agenten",
   "js.settings.key.agent.child_waiting_days.description": "Tage bis der Daemon wartende Kind-Agenten und ihre Nachfolger aufräumt.",
+  "js.settings.key.agent.keep_awake_during_turns.label": "Während Turns wach halten",
+  "js.settings.key.agent.keep_awake_during_turns.description": "Verhindert den Ruhezustand bei Inaktivität, solange ein Agenten-Turn läuft (macOS und Windows). Bildschirm-Ruhezustand und Zuklappen gelten weiter.",
   "js.settings.key.agent.git_search_roots.label": "Zusätzliche Git-Suchpfade",
   "js.settings.key.agent.git_search_roots.description": "Absolute Verzeichnisse, die gehostete Agenten bei der Git-Suche lesen dürfen.",
   "js.settings.key.compaction.lead_advisory.label": "Schwelle für Lead-Kompaktierungshinweis",

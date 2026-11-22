@@ -2857,6 +2857,8 @@
   "js.settings.key.agent.tier_aliases.description": "エージェントを起動するための name=<harness>.<tier> の空白区切りリストです。",
   "js.settings.key.agent.child_waiting_days.label": "待機中の子の保持期間",
   "js.settings.key.agent.child_waiting_days.description": "待機中の子エージェントとその配下を整理するまでの日数です。",
+  "js.settings.key.agent.keep_awake_during_turns.label": "ターン中はスリープしない",
+  "js.settings.key.agent.keep_awake_during_turns.description": "エージェントのターン実行中はアイドル時のシステムスリープを防ぎます（macOS と Windows）。画面のスリープと蓋を閉じた場合は従来どおりです。",
   "js.settings.key.agent.git_search_roots.label": "Git の追加検索先",
   "js.settings.key.agent.git_search_roots.description": "ホスト型エージェントが Git 検索で読める絶対パスを指定します。",
   "js.settings.key.compaction.lead_advisory.label": "リード圧縮の勧告しきい値",

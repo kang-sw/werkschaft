@@ -2857,6 +2857,8 @@
   "js.settings.key.agent.tier_aliases.description": "Alias name=<harness>.<tier> separados por espacios para iniciar agentes.",
   "js.settings.key.agent.child_waiting_days.label": "Retención de agentes hijo en espera",
   "js.settings.key.agent.child_waiting_days.description": "Días antes de limpiar los agentes hijo en espera y sus descendientes.",
+  "js.settings.key.agent.keep_awake_during_turns.label": "Mantener activo durante los turnos",
+  "js.settings.key.agent.keep_awake_during_turns.description": "Evita la suspensión por inactividad mientras se ejecuta un turno de agente (macOS y Windows). El apagado de pantalla y cerrar la tapa siguen aplicándose.",
   "js.settings.key.agent.git_search_roots.label": "Rutas adicionales de búsqueda Git",
   "js.settings.key.agent.git_search_roots.description": "Directorios absolutos que los agentes alojados pueden leer mediante búsquedas Git.",
   "js.settings.key.compaction.lead_advisory.label": "Umbral de aviso de compactación del responsable",

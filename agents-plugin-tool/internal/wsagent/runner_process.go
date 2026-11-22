@@ -50,6 +50,13 @@ func (c *conv) restorePromptBoundary(before Record) {
 // sendStandalonePrompt persists the boundary for prompts sent outside the
 // inbox drain. Internal prompts wait for ACP without opening a parent result.
 func (c *conv) sendStandalonePrompt(reportable bool, send func() error) error {
+	// The prompt is a keep-awake member while its send is in flight. A
+	// successful send's caller opens the turn (beginTurn, or compactCommand
+	// for a native compaction) before the loop step ends, so membership
+	// carries over; a failed one is dropped by that step's sync.
+	c.awakeSending = true
+	c.syncAwake()
+	defer func() { c.awakeSending = false }()
 	before := c.record()
 	if !before.heldAgyWorker() {
 		return send()

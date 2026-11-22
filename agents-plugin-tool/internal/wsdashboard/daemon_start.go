@@ -243,6 +243,10 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		_ = lock.Unlock()
 		return nil, fmt.Errorf("write endpoint file: %w", err)
 	}
+	// Read the agents' global settings only now that the endpoint is
+	// published: a writer that committed while no endpoint was discoverable
+	// could not notify, and this serialized read still observes its value.
+	d.reloadAgentGlobalConfig()
 	if d.leadNudges != nil {
 		d.leadNudges.Start()
 	}

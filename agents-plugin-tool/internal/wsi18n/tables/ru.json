@@ -2857,6 +2857,8 @@
   "js.settings.key.agent.tier_aliases.description": "Псевдонимы name=<harness>.<tier> для запуска агентов через пробел.",
   "js.settings.key.agent.child_waiting_days.label": "Хранение ожидающих дочерних агентов",
   "js.settings.key.agent.child_waiting_days.description": "Число дней до очистки ожидающих дочерних агентов и их потомков.",
+  "js.settings.key.agent.keep_awake_during_turns.label": "Не засыпать во время ходов",
+  "js.settings.key.agent.keep_awake_during_turns.description": "Запрещает переход в сон при простое, пока идёт ход агента (macOS и Windows). Отключение экрана и закрытие крышки работают как обычно.",
   "js.settings.key.agent.git_search_roots.label": "Дополнительные пути поиска Git",
   "js.settings.key.agent.git_search_roots.description": "Абсолютные каталоги, которые размещённые агенты могут читать через поиск Git.",
   "js.settings.key.compaction.lead_advisory.label": "Порог рекомендации сжатия ведущему",

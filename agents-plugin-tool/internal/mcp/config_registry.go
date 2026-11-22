@@ -245,6 +245,19 @@ func resolveHarnessBucketed(resolver *wsconfig.Resolver, sessionKey, key, harnes
 // configRegistry holds the static per-key entries. The dynamic prompt.*
 // family is not represented here — it is generated per discovered override
 // point by promptKnobEntry at catalog-build time (see buildTuningCatalog).
+// keepAwakeDuringTurnsKey types agent.keep_awake_during_turns as a boolean.
+var keepAwakeDuringTurnsKey = declaredConfigKey{
+	Key:          wsconfig.ItemAgentKeepAwakeDuringTurns,
+	Type:         declaredTypeBoolean,
+	Description:  keepAwakeDuringTurnsHelp,
+	DefaultScope: wsconfig.ScopeGlobal,
+	Default:      "false",
+	DefaultValue: false,
+}
+
+// keepAwakeDuringTurnsHelp is the knob's help text in config.list.
+const keepAwakeDuringTurnsHelp = "Keep this computer from idle system sleep while any hosted lead or spawned agent turn runs (builtin false). The dashboard daemon holds one idle-sleep assertion from the first live turn to the last, on macOS (the system caffeinate helper) and Windows; elsewhere it has no effect. Display sleep and sleep you ask for, including closing a laptop lid, stay under the operating system's control. Idle sessions, queued messages and background jobs outside a turn do not count. Applies at once to turns already running. Global-only."
+
 var configRegistry = []configKeyEntry{
 	compactionKeyEntry("compaction.lead_advisory"),
 	compactionKeyEntry("compaction.lead_hard"),
@@ -425,6 +438,23 @@ var configRegistry = []configKeyEntry{
 			}
 			return strconv.Itoa(n), nil
 		},
+	},
+	{
+		// A typed boolean stored as "true"/"false" in the global overrides
+		// map; Declared gives it the boolean domain config.tune and the
+		// settings toggle share. Global-only, which also makes it lead-only.
+		Key:        wsconfig.ItemAgentKeepAwakeDuringTurns,
+		WriterTool: "config.tune",
+		ResetTool:  "config.tune",
+		ValueFields: []tuningField{{
+			Name:        "value",
+			Description: "true or false. Omit when reset is true.",
+			Enum:        []string{"true", "false"},
+		}},
+		NoAgentVisible:        true,
+		RequiresLeadAuthority: wsconfig.GlobalOnly(wsconfig.ItemAgentKeepAwakeDuringTurns),
+		ResolverBacked:        true,
+		Declared:              &keepAwakeDuringTurnsKey,
 	},
 	{
 		Key:        wsconfig.ItemSageReview,

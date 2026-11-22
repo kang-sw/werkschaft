@@ -261,6 +261,11 @@ type conv struct {
 	// first Send (or close), so awakeLocked counts a newly registered spawn
 	// with no gap after pendingSpawns handoff. Under mu.
 	spawnPending bool
+	// Keep-awake membership (keep_awake.go), loop-owned: awakeMember is what
+	// this instance last published, awakeSending is set while a standalone
+	// prompt's send is in flight.
+	awakeMember  bool
+	awakeSending bool
 
 	// Turn settles (spawn.go). sends counts Runner.Send's messages and
 	// settled is the last settled turn, settleC closed and replaced at each
@@ -576,6 +581,9 @@ func (c *conv) loop() {
 	defer c.r.wg.Done()
 	defer close(c.done)
 	defer c.live.closeSlot()
+	// Whatever way the loop ends (close, hand-off, shutdown), this
+	// instance's membership goes with it.
+	defer c.publishAwake(false)
 	defer func() {
 		c.stopCompactWatchdog()
 		c.stopModelWaitTimer()
@@ -609,6 +617,9 @@ func (c *conv) loop() {
 	if c.settle() {
 		return
 	}
+	// A rejoined child whose record shows its turn open runs it under a
+	// trusted holder: publish that before the replay settles it.
+	c.publishAwake(c.wantAwake())
 	for {
 		var idleC, actionC, leverC, compactC, modelWaitC, modelWaitDrainC, modelWaitCancelC, modelWaitBackoffC, spawnC, bgGraceC <-chan time.Time
 		leverC = c.leverC
@@ -707,6 +718,7 @@ func (c *conv) loop() {
 			}
 			return
 		}
+		c.syncAwake()
 		if c.settle() {
 			return
 		}
@@ -1343,6 +1355,9 @@ func (c *conv) kickInput() {
 		}
 	}
 	c.setStatus(func() { c.turn, c.lastErr = true, "" })
+	// The admitted turn is a keep-awake member before its send is tried; a
+	// failed send clears turn below, and the loop step's sync drops it.
+	c.syncAwake()
 	// The turn reaches the page only once its send went through: a failed
 	// send leaves no user entry or turn line of its own (its error shows),
 	// so its retry shows the message once. The process's events for the
