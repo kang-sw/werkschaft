@@ -295,6 +295,15 @@ type composerSub struct {
 	handed bool
 	// gen is the open generation the submission was admitted under.
 	gen uint64
+	// slot is the user command a click ran (nil for a typed line): the line is
+	// the definition of that revision exactly as it was displayed.
+	slot *composerSlot
+}
+
+// composerSlot names the user command revision a submission ran.
+type composerSlot struct {
+	id, label string
+	revision  int64
 }
 
 var composerSubmissionID = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
@@ -303,6 +312,9 @@ var composerSubmissionID = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 type composerCard struct {
 	ID      string `json:"id"`
 	Command string `json:"command"`
+	// SlotID and Label name the user command a click ran.
+	SlotID string `json:"slot_id,omitempty"`
+	Label  string `json:"label,omitempty"`
 	// Phase is running, async (converted; still running or ended since),
 	// done or refused.
 	Phase       string `json:"phase"`
@@ -336,6 +348,9 @@ type composerCard struct {
 
 func (s *composerSub) cardLocked() composerCard {
 	c := composerCard{ID: s.id, Command: s.line, Phase: s.phase, Error: s.err, Async: s.job.Async, OutputBytes: s.job.Written}
+	if s.slot != nil {
+		c.SlotID, c.Label = s.slot.id, s.slot.label
+	}
 	c.ExecID, c.State, c.ExitCode, c.Signal = s.job.ExecID, s.job.State, s.job.ExitCode, s.job.Signal
 	c.StartedAt, c.EndedAt = s.job.StartedAt, s.job.EndedAt
 	if s.job.Error != "" && c.Error == "" {
@@ -357,44 +372,11 @@ func (s *composerSub) cardLocked() composerCard {
 // non-cross-site fetch for reads. An unknown daemon route would fail closed
 // in the client; this one never falls back to the message route.
 func (d *Daemon) handleComposerExec(w http.ResponseWriter, r *http.Request, replyID, rest string) {
-	local, own := TrustedWrite(r)
-	if !local {
-		http.NotFound(w, r)
+	svc, gen, write, ok := d.composerGate(w, r, replyID)
+	if !ok {
 		return
 	}
 	rest = strings.TrimPrefix(rest, "/")
-	write := r.Method == http.MethodPost
-	if write && !own {
-		http.Error(w, "cross-origin request refused", http.StatusForbidden)
-		return
-	}
-	if !write && (r.Method != http.MethodGet && r.Method != http.MethodHead || crossSiteFetch(r) || (r.Header.Get("Origin") != "" && !own)) {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if d.index == nil || !ValidReplyID(replyID) {
-		http.Error(w, "unknown session", http.StatusNotFound)
-		return
-	}
-	s, ok := d.index.Session(replyID)
-	if !ok || !s.Hosted {
-		http.Error(w, "unknown session", http.StatusNotFound)
-		return
-	}
-	svcp := d.composer.svc.Load()
-	if svcp == nil {
-		http.Error(w, "dashboard commands are unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	svc := *svcp
-	// The live authority, for reads as for writes: a closed lead keeps its
-	// registration (and its index flag), but its commands, results and files
-	// are no longer served.
-	gen, err := svc.Open(replyID)
-	if err != nil {
-		http.Error(w, "unknown session", http.StatusNotFound)
-		return
-	}
 	switch {
 	case rest == "" && write:
 		d.composerSubmit(w, r, svc, replyID, gen)
@@ -413,6 +395,51 @@ func (d *Daemon) handleComposerExec(w http.ResponseWriter, r *http.Request, repl
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// composerGate is the gate every private command route passes (composer-exec
+// and the user commands): localhost-only, the daemon's own Origin for writes,
+// a non-cross-site fetch for reads, a hosted session, a bound service, and the
+// live open-lead authority. It answers the refusal itself and returns ok false.
+func (d *Daemon) composerGate(w http.ResponseWriter, r *http.Request, replyID string) (svc ComposerExecService, gen uint64, write, ok bool) {
+	local, own := TrustedWrite(r)
+	if !local {
+		http.NotFound(w, r)
+		return nil, 0, false, false
+	}
+	write = r.Method == http.MethodPost
+	if write && !own {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return nil, 0, false, false
+	}
+	if !write && (r.Method != http.MethodGet && r.Method != http.MethodHead || crossSiteFetch(r) || (r.Header.Get("Origin") != "" && !own)) {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return nil, 0, false, false
+	}
+	if d.index == nil || !ValidReplyID(replyID) {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return nil, 0, false, false
+	}
+	s, found := d.index.Session(replyID)
+	if !found || !s.Hosted {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return nil, 0, false, false
+	}
+	svcp := d.composer.svc.Load()
+	if svcp == nil {
+		http.Error(w, "dashboard commands are unavailable", http.StatusServiceUnavailable)
+		return nil, 0, false, false
+	}
+	svc = *svcp
+	// The live authority, for reads as for writes: a closed lead keeps its
+	// registration (and its index flag), but its commands, results and files
+	// are no longer served.
+	gen, err := svc.Open(replyID)
+	if err != nil {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return nil, 0, false, false
+	}
+	return svc, gen, write, true
 }
 
 // composerRequest is the composer-exec body: the raw first-character
@@ -485,14 +512,21 @@ func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc Comp
 		return
 	}
 	sub, admission := d.composerAdmit(replyID, req.SubmissionID, line, gen, req.Retry, req.Token)
+	d.composerAnswer(w, svc, sub, admission, req.SubmissionID, line, nil)
+}
+
+// composerAnswer writes the answer to an admitted (or refused) submission, for
+// a typed line and a user command's click alike: slot is nil for a typed line,
+// else the command revision the click named.
+func (d *Daemon) composerAnswer(w http.ResponseWriter, svc ComposerExecService, sub *composerSub, admission composerAdmission, submissionID, line string, slot *composerSlot) {
 	w.Header().Set("Cache-Control", "no-store")
 	token := d.composer.token()
 	switch admission {
 	case composerFresh:
 		// The run happens after the acknowledgement, under the daemon's own
 		// lifetime (composerAdmit counted it): closing the tab does not cancel a
-		// submitted command. It carries the generation read above, not whatever
-		// is open later.
+		// submitted command. It carries the generation read at the route, not
+		// whatever is open later.
 		go func() {
 			defer d.composer.wg.Done()
 			d.composerRun(svc, sub)
@@ -511,6 +545,13 @@ func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc Comp
 		// to its one job.
 		sub.mu.Lock()
 		same := sub.line == line
+		if slot != nil {
+			// A click maps to its card by the command revision it named, not by
+			// the command's current text (the command may have changed since).
+			same = sub.slot != nil && sub.slot.id == slot.id && sub.slot.revision == slot.revision
+		} else if sub.slot != nil {
+			same = false
+		}
 		card := sub.cardLocked()
 		sub.mu.Unlock()
 		if !same {
@@ -526,7 +567,11 @@ func (d *Daemon) composerSubmit(w http.ResponseWriter, r *http.Request, svc Comp
 		// that forgot the id, a page whose token predates either): nothing is
 		// run; the card says so, carries the current token, and the user sends
 		// again deliberately.
-		writeJSON(w, http.StatusOK, composerCard{ID: req.SubmissionID, Command: line, Phase: "done", Unknown: true, Token: token})
+		card := composerCard{ID: submissionID, Command: line, Phase: "done", Unknown: true, Token: token}
+		if slot != nil {
+			card.SlotID, card.Label = slot.id, slot.label
+		}
+		writeJSON(w, http.StatusOK, card)
 	}
 }
 
@@ -557,6 +602,12 @@ const (
 // id). An admitted submission is counted in the wait group under the same lock
 // that closes admission, so shutdown never waits past a request it accepted.
 func (d *Daemon) composerAdmit(replyID, id, line string, gen uint64, retry bool, token string) (*composerSub, composerAdmission) {
+	return d.composerAdmitSlot(replyID, id, line, gen, retry, token, nil)
+}
+
+// composerAdmitSlot is composerAdmit for a click on a user command: slot names
+// the command revision whose line is being run (nil for a typed line).
+func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry bool, token string, slot *composerSlot) (*composerSub, composerAdmission) {
 	key := replyID + "\x00" + id
 	c := &d.composer
 	c.ensure()
@@ -580,7 +631,7 @@ func (d *Daemon) composerAdmit(replyID, id, line string, gen uint64, retry bool,
 		c.fenceQ = c.fenceQ[1:]
 	}
 	c.wg.Add(1)
-	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running", gen: gen}
+	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running", gen: gen, slot: slot}
 	c.subs[key] = sub
 	c.order[replyID] = append(c.order[replyID], key)
 	// Keep the newest cards; the fence outlives the card.
@@ -629,6 +680,21 @@ func (d *Daemon) composerTrim() {
 	for replyID := range c.order {
 		c.trimLocked(replyID)
 	}
+}
+
+// composerPeek reports the card of submission id, and whether the replay fence
+// holds an id that has no card (an admitted submission whose card was evicted).
+func (d *Daemon) composerPeek(replyID, id string) (sub *composerSub, fenced bool) {
+	c := &d.composer
+	c.ensure()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := replyID + "\x00" + id
+	if sub = c.subs[key]; sub != nil {
+		return sub, false
+	}
+	_, fenced = c.fence[key]
+	return nil, fenced
 }
 
 func (d *Daemon) composerFind(replyID, id string) *composerSub {

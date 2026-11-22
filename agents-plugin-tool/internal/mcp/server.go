@@ -68,6 +68,9 @@ type Server struct {
 	// cron returns the daemon's scheduler (ServerOptions.Cron); nil where
 	// there is none.
 	cron func() *wscron.Scheduler
+	// userCommands returns the daemon's user commands (ServerOptions
+	// .UserCommands); nil where there are none.
+	userCommands func() UserCommandHost
 	// execCutover is the harness of the bound conversation when its
 	// process launched with native shell tools removed (wsagent's exec
 	// cutover): the exec tools are listed, and Codex's fs.* read tools

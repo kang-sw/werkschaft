@@ -74,9 +74,12 @@ type proxyHost struct {
 	exec atomic.Pointer[execjob.Hosted]
 	// cron is the daemon's scheduler, bound after StartDaemon; nil leaves
 	// the cron tool refusing as unavailable.
-	cron   atomic.Pointer[wscron.Scheduler]
-	boards *mcp.WhiteboardStores
-	notes  *wsnote.Cache
+	cron atomic.Pointer[wscron.Scheduler]
+	// userCmds is the daemon's user commands, bound after the runner starts;
+	// nil leaves the tools unlisted and the dashboard's routes unavailable.
+	userCmds atomic.Pointer[userCommands]
+	boards   *mcp.WhiteboardStores
+	notes    *wsnote.Cache
 	// mailLabels resolves mail sender labels for every hosted server
 	// (mcp.ServerOptions.MailLabels). The servers share the process's group
 	// store, so a recipient on one connection expands a group mail another
@@ -141,6 +144,12 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		// that owns hosted exec jobs.
 		opts.Exec = h.exec.Load
 		opts.Cron = h.cron.Load
+		opts.UserCommands = func() mcp.UserCommandHost {
+			if u := h.userCmds.Load(); u != nil {
+				return u
+			}
+			return nil
+		}
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
 		server := mcp.NewServerWithOptions(opts)

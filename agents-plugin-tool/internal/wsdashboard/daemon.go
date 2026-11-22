@@ -245,6 +245,8 @@ type Daemon struct {
 	agents   AgentHost
 	// composer is the chat composer's `!` command state (composer_exec.go).
 	composer composerExec
+	// userCmds is the user commands' service (composer_usercmd.go), nil until bound.
+	userCmds atomic.Pointer[UserCommandService]
 	// credentials is DaemonOptions.Credentials (or a test's
 	// credentialSource), nil without one.
 	credentials credentialStore

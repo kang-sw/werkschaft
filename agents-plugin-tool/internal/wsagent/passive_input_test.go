@@ -140,6 +140,25 @@ func TestComposerTargetNeedsAnOpenHostedLead(t *testing.T) {
 	}
 }
 
+// TestComposerRootIsTheTargetsWorktree: the user commands' scope is the same
+// owner, generation and worktree a command launch targets, with the same
+// refusals, and it builds no environment.
+func TestComposerRootIsTheTargetsWorktree(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id := h.lead(BackendClaude, LeadOptions{}).ID
+	target, err := h.runner.ComposerTarget(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, root, err := h.runner.ComposerRoot(id)
+	if err != nil || owner != target.Owner || root != target.Root {
+		t.Fatalf("ComposerRoot = %+v %q, %v; want %+v %q", owner, root, err, target.Owner, target.Root)
+	}
+	if _, _, err := h.runner.ComposerRoot("missing"); err == nil {
+		t.Fatal("an unknown conversation had a worktree")
+	}
+}
+
 // TestPassiveHandStartsNoTurnAndRidesTheNextSend: for every backend's prompt
 // shape, a result handed while the lead is idle starts no model request and
 // leaves the send and held counters alone; the next ordinary send carries it

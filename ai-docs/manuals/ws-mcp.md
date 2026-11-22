@@ -215,6 +215,25 @@ under `<cache root>/dashboard/`:
   daemon binds this port before an OS-assigned one, so a restart keeps its
   origin (page localStorage, LAN bookmark); a free `dashboard.port` always
   wins.
+- `user-commands.db` - the user commands ("command slots") a hosted lead
+  registered with `session.register_user_command` and withdrew with
+  `session.unregister_user_command`: a database of its own (storage type 2:
+  held connection, WAL, one commit per changed command, none for an unchanged
+  registration, read once at start into the memory model every list and page
+  read serves). A command is a stable id, label, optional description, raw
+  bash line and a revision, scoped to the lead's reply-id and the worktree it
+  is bound to (32 per scope; label 64 and description 256 characters, line
+  4 KiB). The tools are listed only to an authenticated open hosted lead
+  (the connection's token-resolved conversation, never a supplied session key
+  or reply-id). The lead's chat shows the commands to a browser on this machine
+  only (`GET /s/<reply-id>/user-commands`, with Run and remove under it behind
+  the composer's localhost gate); a click names the command and the revision it
+  displayed and runs the stored line through the composer's `!` path, so a stale
+  revision or a withdrawn command runs nothing. A change reaches an open page as
+  the opaque `usercmd` stream event, which makes it refetch the list. The
+  database is unknown to an older daemon, which neither reads nor overwrites it;
+  the daemon that reopens restores the commands, and drops those of a
+  conversation the runner no longer knows.
 - `sessions/<reply-id>/registration.json` - one entry per top-level lead
   session whose `dashboard.enabled` resolves on (session scope included),
   written by the serving ws-mcp at its first keyed call and heartbeated every
