@@ -26,6 +26,8 @@ type memHostedStore struct {
 	deleted []string
 	// beforePut runs at the start of each Put, before the row is stored.
 	beforePut func(HostedJobRow)
+	// failPut refuses the rows it matches, as a busy database does.
+	failPut func(HostedJobRow) bool
 }
 
 func newMemHostedStore() *memHostedStore { return &memHostedStore{rows: map[string]HostedJobRow{}} }
@@ -46,6 +48,9 @@ func (s *memHostedStore) Put(row HostedJobRow) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failPut != nil && s.failPut(row) {
+		return errors.New("database is locked")
+	}
 	s.rows[row.ID] = row
 	s.puts++
 	return nil
@@ -833,6 +838,59 @@ func TestHostedRestartSettlesGoneHolders(t *testing.T) {
 	// The live job still ends normally under the new daemon.
 	fx.holders.exit(alive.HolderID, 0)
 	eventuallyExec(t, "the live job's notice", func() bool { return len(fx.sessions.noticeList()) == 4 })
+}
+
+// TestHostedExitCopyStaysUntilTheEndIsStored: when the store refuses the
+// job's terminal row, the holder's cleanup keeps the exit copy, so the next
+// daemon, still reading the running row, ends the job with its real status
+// and owed notice instead of as lost; it removes the copy once the end is
+// stored.
+func TestHostedExitCopyStaysUntilTheEndIsStored(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(fx.exitDir, v.ID+".json")
+	code := 3
+	raw, _ := json.Marshal(wsholder.Exit{ExitCode: &code, Reason: "child_exited"})
+	if err := os.WriteFile(copyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.store.mu.Lock()
+	fx.store.failPut = func(r HostedJobRow) bool { return r.Terminal() }
+	fx.store.mu.Unlock()
+	fx.holders.exit(v.HolderID, code)
+	eventuallyExec(t, "the ended job's holder stop", func() bool { return slices.Contains(fx.holders.stops(), v.HolderID) })
+	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
+	fx.h.HolderGone(wsholder.Descriptor{ID: v.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
+	if _, err := os.Stat(copyPath); err != nil {
+		t.Fatalf("the exit copy went before the end was stored: %v", err)
+	}
+	if row, _ := fx.store.row(v.ID); row.Terminal() {
+		t.Fatalf("stored row = %+v, want the running row the refused end left", row)
+	}
+	_ = fx.h.Close()
+
+	fx.store.mu.Lock()
+	fx.store.failPut = nil
+	fx.store.mu.Unlock()
+	fx.sessions.mu.Lock()
+	fx.sessions.seen = map[string]bool{}
+	fx.sessions.notices = nil
+	fx.sessions.mu.Unlock()
+	fx.open(10 * time.Millisecond)
+	got, _ := fx.h.Get("lead", v.ID)
+	if got.State != HostedExited || got.ExitCode == nil || *got.ExitCode != code {
+		t.Fatalf("job after restart = %+v, want exited %d", got, code)
+	}
+	if row, _ := fx.store.row(v.ID); !row.Terminal() {
+		t.Fatalf("stored row after restart = %+v", row)
+	}
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("the exit copy stays after the end was stored: %v", err)
+	}
+	eventuallyExec(t, "the owed notice", func() bool { return len(fx.sessions.noticeList()) == 1 })
 }
 
 // TestHostedDeferredAndDroppedNotices: a deferred notice stays pending for

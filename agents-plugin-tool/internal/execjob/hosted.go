@@ -73,6 +73,11 @@ type hostedJob struct {
 	rev    uint64
 	saveMu sync.Mutex
 	saved  uint64
+	// endStored: a terminal row of j is in the store (under saveMu). Until
+	// then j's exit copy stays, and exitCopyOwed records that its removal
+	// waits for that store write.
+	endStored    bool
+	exitCopyOwed bool
 }
 
 // NewHosted loads the stored jobs: finished ones with their output preview,
@@ -102,7 +107,7 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 		return nil, fmt.Errorf("load hosted exec jobs: %w", err)
 	}
 	for _, row := range rows {
-		j := &hostedJob{row: row, out: h.rings.NewJob(), done: make(chan struct{})}
+		j := &hostedJob{row: row, out: h.rings.NewJob(), done: make(chan struct{}), endStored: row.Terminal()}
 		if row.Terminal() {
 			h.rings.Restore(j.out, row.Written, row.Tails[StreamStdout], row.Tails[StreamStderr], row.Tails[StreamCombined])
 			close(j.done)
@@ -235,7 +240,7 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 	h.mu.Unlock()
 	h.runningChanged()
 	h.save(j, row, rev)
-	_ = os.Remove(path)
+	h.dropExitCopy(j)
 	h.deliver(j)
 }
 
@@ -259,7 +264,11 @@ func (h *Hosted) HolderGone(desc wsholder.Descriptor, exit wsholder.Exit) {
 		h.endFromExit(j, exit)
 		return
 	}
-	_ = os.Remove(h.exitCopyPath(execID))
+	if j == nil {
+		_ = os.Remove(h.exitCopyPath(execID))
+		return
+	}
+	h.dropExitCopy(j)
 }
 
 // endFromExit ends running job j with the status its holder's exit.json
@@ -283,7 +292,7 @@ func (h *Hosted) endFromExit(j *hostedJob, exit wsholder.Exit) {
 	h.mu.Unlock()
 	h.runningChanged()
 	h.save(j, row, rev)
-	_ = os.Remove(h.exitCopyPath(row.ID))
+	h.dropExitCopy(j)
 	h.deliver(j)
 }
 
@@ -390,7 +399,30 @@ func (h *Hosted) save(j *hostedJob, row HostedJobRow, rev uint64) {
 	j.saved = rev
 	if err := h.opts.Store.Put(row); err != nil {
 		h.logf("store job %s: %v", row.ID, err)
+		return
 	}
+	if row.Terminal() && !j.endStored {
+		j.endStored = true
+		if j.exitCopyOwed {
+			j.exitCopyOwed = false
+			_ = os.Remove(h.exitCopyPath(row.ID))
+		}
+	}
+}
+
+// dropExitCopy removes j's exit copy once a terminal row of j is stored.
+// Until then the copy stays: a successor daemon that still reads the
+// running row ends the job from the copy's status instead of as lost, and
+// the next stored terminal row (save) removes it. A forgotten job's row is
+// gone, so nothing needs its copy.
+func (h *Hosted) dropExitCopy(j *hostedJob) {
+	j.saveMu.Lock()
+	defer j.saveMu.Unlock()
+	if j.endStored || j.saved == ^uint64(0) {
+		_ = os.Remove(h.exitCopyPath(j.row.ID))
+		return
+	}
+	j.exitCopyOwed = true
 }
 
 // forget marks dropped jobs never to be written again, then deletes their
