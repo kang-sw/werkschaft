@@ -63,20 +63,37 @@ func (s *Server) tierGraph(configOpts wsconfig.Options) (*wsconfig.TierGraph, er
 // (routedBinding). ok is false when the tier does not resolve or, past the
 // fallthrough, the spawn could not launch it.
 func (s *Server) renderTierBinding(walkHarness, bareHarness, tier string, configOpts wsconfig.Options) (model, effort string, ok bool) {
+	model, effort, _, ok = s.renderTierBindingCompat(walkHarness, bareHarness, tier, configOpts)
+	return model, effort, ok
+}
+
+// renderTierBindingCompat is renderTierBinding plus the recommendation a
+// v0.51.0 daemon's agent.spawn also accepts for the same target. v0.51.0
+// reads only a bare size (the caller's harness), <harness>.<size>, or an
+// exact legacy alias, and launches that harness's own agents.tier slot, the
+// slot RoutedTierBinding reads; it refuses a role tier. So a walk whose
+// terminal is a slot has an equivalent old-readable form: the bare size when
+// the walk fell through to the caller's harness, else <harness>.<size>. A
+// bundle terminal (its own model and effort) has none, and compat is "" for
+// it, for a token that is not routed, and when the binding does not resolve.
+func (s *Server) renderTierBindingCompat(walkHarness, bareHarness, tier string, configOpts wsconfig.Options) (model, effort, compat string, ok bool) {
 	tier = strings.TrimSpace(tier)
 	if !wsconfig.IsRoutedTierToken(tier) {
 		_, model, effort, err := wsconfig.ResolveAgentForHarnessConfig(configOpts, tier, "", "", bareHarness)
-		return model, effort, err == nil
+		return model, effort, "", err == nil
 	}
 	res, binding, err := s.routedBinding(tier, walkHarness, configOpts)
 	if res.CallerFallthrough && !errors.Is(err, errCallerRefused) {
 		_, model, effort, err := wsconfig.ResolveAgentForHarnessConfig(configOpts, res.Size, "", "", bareHarness)
-		return model, effort, err == nil
+		return model, effort, res.Size, err == nil
 	}
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	return binding.Model, binding.Effort, true
+	if res.Bundle != "" {
+		return binding.Model, binding.Effort, "", true
+	}
+	return binding.Model, binding.Effort, res.Harness + "." + res.Size, true
 }
 
 // harnessAvailability is the runner's per-harness spawn check
@@ -157,16 +174,25 @@ func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options
 // walked for the caller harness agent.spawn uses (playbookHarness), so a
 // mapped recommendation names the binding the spawn launches; a walk that
 // falls through to the bare size resolves it as a bare recommendation for
-// harness would.
+// harness would. A slot terminal is recommended as the bare size or
+// <harness>.<size> that a v0.51.0 spawn also accepts.
 func (s *Server) withRecommendedRenderBindingFor(payload, harness, tier string, configOpts wsconfig.Options) string {
 	if !wsconfig.IsRoutedTierToken(tier) {
 		return withRecommendedRenderBinding(payload, harness, tier, configOpts)
 	}
-	payload = withRecommendedTier(payload, tier)
-	model, effort, ok := s.renderTierBinding(s.playbookHarness(), harness, tier, configOpts)
+	model, effort, compat, ok := s.renderTierBindingCompat(s.playbookHarness(), harness, tier, configOpts)
 	if !ok {
-		return payload
+		return withRecommendedTier(payload, tier)
 	}
+	// The render's caller is told to pass the tier as returned, and a daemon
+	// replaced by v0.51.0 before that spawn refuses a role tier (it reads
+	// only a bare size, <harness>.<size>, or an alias). A slot terminal is
+	// recommended in the form both daemons resolve to the same slot; only a
+	// bundle terminal keeps the role form (see renderTierBindingCompat).
+	if compat != "" {
+		tier = compat
+	}
+	payload = withRecommendedTier(payload, tier)
 	if model = strings.TrimSpace(model); model != "" {
 		payload += "\nrecommended-model: " + model
 	}
