@@ -38,6 +38,7 @@ async function run(browser, lang) {
   assert.equal(await tooltip.locator('.tt-native').count(), 1);
   assert.equal(await tooltip.locator('.tt-life time').count(), 1, 'a running native row shows its start only');
   assert.equal(await tooltip.locator('.tt-unknown').count(), 0);
+  assert(!(await tooltip.locator('.tt-meta').innerText()).trim().startsWith('\u00b7'), 'no orphan leading separator in the tooltip meta');
   await frame.waitForTimeout(150);
   if (shots) {
     const island = await frame.locator('#agisland').boundingBox();
@@ -55,6 +56,7 @@ async function run(browser, lang) {
   await tab.mouse.move(5, 5);
   await frame.locator('#agcompact').click({ position: { x: 4, y: 4 } });
   await frame.locator('#agisland[data-mode="full"]').waitFor();
+  assert.equal(await frame.locator('#agpop .agent.running.native .bguide').count(), 0, 'running native row has no placeholder line');
   const ended = frame.locator('#agpop .tgroup.ended');
   await ended.waitFor();
   const unknownRow = ended.locator('.agent[data-end-unknown="1"]');
@@ -62,6 +64,19 @@ async function run(browser, lang) {
   assert.equal(await unknownRow.locator('.amk').first().innerText(), '?');
   assert.equal(await unknownRow.locator('.nbadge').count(), 1);
   assert.equal(await unknownRow.locator('.alife time').count(), 1, 'end-unknown row shows its start only');
+  {
+    const chip = await unknownRow.locator('.astatus').boundingBox(), row = await unknownRow.locator('.ahead').boundingBox();
+    assert(chip.width < row.width / 2, `status chip is bounded: ${JSON.stringify({ chip, row })}`);
+    const st = unknownRow.locator('.astatus');
+    assert.equal(await st.innerText(), lang === 'ko' ? '관찰 종료' : 'observation ended', 'status chip carries the short phrase');
+    assert.equal(await st.getAttribute('title'), lang === 'ko' ? '관찰 종료, 완료 여부 모름' : 'observation ended, completion unknown', 'full sentence stays in the tooltip');
+    assert.equal(await st.evaluate(el => { const c = getComputedStyle(el); return [c.display, c.overflow, c.whiteSpace, c.textOverflow].join(); }), 'block,hidden,nowrap,ellipsis', 'ellipsis safety net is renderable');
+    for (const t of await unknownRow.locator('.alife').all()) {
+      const full = await t.evaluate(el => el.scrollWidth <= el.clientWidth);
+      assert(full, 'lifecycle columns are not clipped');
+    }
+  }
+  assert.equal(await ended.locator('.agent.native .bguide').count(), 0, 'no placeholder slots on native rows');
   const codexRow = ended.locator('.agent.native:not([data-end-unknown])');
   assert.equal(await codexRow.count(), 1, 'one completed native row');
   assert.equal(await codexRow.locator('.alife time').count(), 2, 'completed native row shows start and end');

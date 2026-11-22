@@ -82,6 +82,7 @@
   "agent.native.started": "开始",
   "agent.native.ended": "结束",
   "agent.unknown": "观察已结束，完成情况未知",
+  "agent.unknown.short": "观察已结束",
   "band.cache": "CH {0}",
   "band.cache.title": "上一次响应的提示缓存命中率",
   "band.cost": "会话费用",

@@ -82,6 +82,7 @@
   "agent.native.started": "начало",
   "agent.native.ended": "конец",
   "agent.unknown": "наблюдение завершено, завершение неизвестно",
+  "agent.unknown.short": "наблюдение завершено",
   "band.cache": "CH {0}",
   "band.cache.title": "доля попаданий в кэш промптов в последнем ответе",
   "band.cost": "стоимость сессии",

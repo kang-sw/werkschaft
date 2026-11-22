@@ -82,6 +82,7 @@
   "agent.native.started": "inizio",
   "agent.native.ended": "fine",
   "agent.unknown": "osservazione terminata, completamento sconosciuto",
+  "agent.unknown.short": "osservazione terminata",
   "band.cache": "CH {0}",
   "band.cache.title": "percentuale di hit della cache del prompt dell'ultima risposta",
   "band.cost": "costo della sessione",

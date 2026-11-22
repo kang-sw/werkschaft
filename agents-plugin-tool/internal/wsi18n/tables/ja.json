@@ -82,6 +82,7 @@
   "agent.native.started": "開始",
   "agent.native.ended": "終了",
   "agent.unknown": "観測終了、完了は不明",
+  "agent.unknown.short": "観測終了",
   "band.cache": "CH {0}",
   "band.cache.title": "直前の応答のプロンプトキャッシュヒット率",
   "band.cost": "セッションのコスト",
