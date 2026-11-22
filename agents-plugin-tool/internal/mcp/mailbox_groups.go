@@ -198,6 +198,15 @@ func cleanMailLabel(label string) string {
 	return label
 }
 
+// addressLabel is the display label of the session behind a mailbox address
+// (addressReplyID); a server with no label view skips the lookup.
+func (s *Server) addressLabel(addr wsmailbox.Address, root string) string {
+	if s.mailLabels == nil {
+		return ""
+	}
+	return s.mailLabel(s.addressReplyID(addr, root))
+}
+
 // addressReplyID is the reply-id behind a mailbox address, "" for none: an
 // id: handle's own, or the reply-id of the session that owns a named
 // address now (resolved against root, as a send resolves it). It reads the
@@ -255,9 +264,9 @@ func (s *Server) recordMailGroup(sessionKey string, entry sessionEntry, sender m
 		route := s.mailGroupRouteFor(r.addr, entry.root, ring)
 		switch r.role {
 		case mailboxRoleTo:
-			g.to = append(g.to, mailGroupMember{address: r.address, label: s.mailLabel(s.addressReplyID(r.addr, entry.root)), route: route})
+			g.to = append(g.to, mailGroupMember{address: r.address, label: s.addressLabel(r.addr, entry.root), route: route})
 		case mailboxRoleCc:
-			g.cc = append(g.cc, mailGroupMember{address: r.address, label: s.mailLabel(s.addressReplyID(r.addr, entry.root)), route: route})
+			g.cc = append(g.cc, mailGroupMember{address: r.address, label: s.addressLabel(r.addr, entry.root), route: route})
 		default:
 			g.bcc = append(g.bcc, route)
 		}

@@ -201,6 +201,14 @@ func TestLeadMailboxLegendPlacement(t *testing.T) {
 	if unlabeled := mail.Legend(f.root, texts[3:], nil); unlabeled[0] != texts[3] {
 		t.Fatalf("a senderless text got a legend: %q", unlabeled[0])
 	}
+	// A turn whose reports lead its mail (a child's report, then a steered
+	// mail no run took): the legend goes on the first mail text, and the
+	// report stays as it is.
+	report := "[subagent id:child \"a child\"] turn done\n\nnotes:\nall done"
+	turn := mail.Legend(f.root, []string{report, texts[1]}, nil)
+	if want := "[senders: id:sendertwo = Two]\n\n" + texts[1]; turn[0] != report || turn[1] != want {
+		t.Fatalf("legend in a turn led by a report:\n got %q\nwant %q after the report", turn, want)
+	}
 
 	// A held text submitted later shows the label current then.
 	mu.Lock()

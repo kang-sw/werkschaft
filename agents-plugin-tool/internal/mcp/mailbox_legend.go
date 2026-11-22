@@ -78,24 +78,30 @@ func (s *Server) labelEnvelopes(envelopes []wsmailbox.Envelope, root string) []w
 }
 
 // Legend places the sender legend on one submission of claimed mail, a
-// steer or a turn (wsagent.Options.MailLegend). texts are exactly the mail
-// texts submitted together, in order, as Drain returned them; senders are
-// the reply-ids Drain gave them, where known: a held text (Record.Mail)
-// comes without one, and its sender is read from its head as
+// steer or a turn (wsagent.Options.MailLegend). texts are the texts
+// submitted together, in order: mail texts as Drain returned them, and in a
+// turn the reports it carries, among them a steered mail no run took;
+// senders are the reply-ids Drain gave them, where known: a held text
+// (Record.Mail) comes without one, and its sender is read from its head as
 // mailSenderReplyID maps an envelope. The legend names only the senders of
-// texts. When the first text opens with the batch head formatMailBatch
-// writes, the legend is that head's second line; otherwise it is a first
-// line followed by a blank line. texts comes back unchanged when no sender
-// has a label.
+// the mail texts, and goes on the first of them; a text of another shape
+// (a child's report) is left as it is. When that text opens with the batch
+// head formatMailBatch writes, the legend is that head's second line;
+// otherwise it is a first line followed by a blank line. texts comes back
+// unchanged when no sender has a label.
 func (m *LeadMailbox) Legend(root string, texts, senders []string) []string {
 	if len(texts) == 0 {
 		return texts
 	}
 	list := make([]mailLegendSender, 0, len(texts))
+	first := -1
 	for i, text := range texts {
 		handle, _, _, ok := splitMailText(text)
 		if !ok {
 			continue
+		}
+		if first < 0 {
+			first = i
 		}
 		replyID := ""
 		if i < len(senders) {
@@ -111,7 +117,7 @@ func (m *LeadMailbox) Legend(root string, texts, senders []string) []string {
 		return texts
 	}
 	out := slices.Clone(texts)
-	out[0] = placeMailLegend(out[0], legend)
+	out[first] = placeMailLegend(out[first], legend)
 	return out
 }
 

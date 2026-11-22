@@ -241,7 +241,7 @@ func TestChildMailEnvelopeKeepsParentRelation(t *testing.T) {
 // fakeLegend stands in for the daemon's legend (Options.MailLegend): it names
 // each labeled sender of the texts it is given, taking a text's sender from
 // senders or, for a held text, from its "mail from <sender>:" head, and puts
-// the line ahead of the first text.
+// the line ahead of the first mail text.
 type fakeLegend struct {
 	mu     sync.Mutex
 	labels map[string]string
@@ -277,8 +277,60 @@ func (l *fakeLegend) place(_ string, texts, senders []string) []string {
 		return texts
 	}
 	out := slices.Clone(texts)
-	out[0] = "[senders: " + strings.Join(names, "; ") + "]\n\n" + out[0]
+	for i, text := range out {
+		if fakeLegendHead.MatchString(text) {
+			out[i] = "[senders: " + strings.Join(names, "; ") + "]\n\n" + text
+			break
+		}
+	}
 	return out
+}
+
+// A child's steered mail that no run took goes to the next turn with a
+// legend resolved then, not the one its steer carried: the record keeps the
+// labeled steer only to match the harness's taken messages, and the text it
+// requeues is Drain's.
+func TestMailLegendRefreshesOnARequeuedSteer(t *testing.T) {
+	legend := &fakeLegend{labels: map[string]string{"senderone": "One"}}
+	h, mail := mailHarness(t, func(o *Options) { o.MailLegend = legend.place })
+	a, ap := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "workdir-write"})
+	aKey := h.keyOf(a)
+	eventually(t, "the mailbox watched", func() bool { return mail.watched(aKey) })
+
+	mail.deliverBatch(aKey, ClaimedMail{Text: "mail from senderone:\nfirst", Sender: "senderone"})
+	var steered []string
+	eventually(t, "the mail steered", func() bool {
+		steered, _ = ap.steered()
+		return len(steered) == 1
+	})
+	const drained = "(peer) mail from senderone:\nfirst"
+	if want := "[senders: senderone = One]\n\n" + drained; steered[0] != want {
+		t.Fatalf("the steer = %q, want %q", steered[0], want)
+	}
+
+	legend.set("senderone", "One renamed")
+	ap.events <- Event{SteerAnswer: &SteerAnswer{}}
+	ap.reply("done without it")
+	next := ap.nextSent(t)
+	if want := "[senders: senderone = One renamed]\n\n" + drained; !strings.Contains(next, want) || strings.Contains(next, "= One]") {
+		t.Fatalf("the requeued mail's turn = %q, want it to hold %q", next, want)
+	}
+	if _, cleared := ap.steered(); cleared != 1 {
+		t.Fatalf("the untaken steer was dropped from the harness's queue %d times, want 1", cleared)
+	}
+	eventually(t, "the requeued report submitted", func() bool {
+		rec := h.record(a)
+		return len(rec.Reports) == 0 && len(rec.Steered) == 0
+	})
+	legend.mu.Lock()
+	defer legend.mu.Unlock()
+	for _, call := range legend.calls {
+		for _, text := range call {
+			if strings.Contains(text, "[senders:") {
+				t.Fatalf("a legend was handed back in as stored text: %q", text)
+			}
+		}
+	}
 }
 
 // Each submission of claimed mail carries the legend of its own texts'

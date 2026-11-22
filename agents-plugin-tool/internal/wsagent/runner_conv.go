@@ -454,9 +454,15 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 	}
 	// Persist before the holder write. The child can accept the steer and
 	// outlive this daemon before its acknowledgement reaches the runner.
+	// Text is the labeled steer the child's taken messages match; Mail
+	// keeps Drain's text for a requeue (steeredReport.requeued).
 	c.steerSeq++
 	seq := c.steerSeq
-	c.steered = append(c.steered, steeredReport{Text: text, Seq: seq})
+	steered := steeredReport{Text: text, Seq: seq}
+	if text != m.Text {
+		steered.Mail = m.Text
+	}
+	c.steered = append(c.steered, steered)
 	c.saveSteered()
 	if err := ctl.reports.Steer(text); err != nil {
 		c.steered = slices.DeleteFunc(c.steered, func(s steeredReport) bool { return s.Seq == seq })
@@ -471,8 +477,9 @@ func (c *conv) steerMail(m ClaimedMail) bool {
 
 // mailLegend is texts as one submission of claimed mail carries them, with
 // the sender legend Options.MailLegend places; texts itself without one.
-// senders are Drain's sender reply-ids, nil for held texts. The result is
-// only submitted (and shown as the submission's wake), never stored.
+// senders are Drain's sender reply-ids, nil for a turn's held texts and
+// reports. The result is only submitted (and shown as the submission's
+// wake or user entry), never stored.
 func (c *conv) mailLegend(texts, senders []string) []string {
 	if len(texts) == 0 || c.r.opts.MailLegend == nil {
 		return texts
@@ -1286,8 +1293,11 @@ func (c *conv) kickInput() {
 		mail, reports = nil, nil
 	}
 	// The held mail goes with its legend, resolved now; the record keeps
-	// the texts without it.
-	submitted := c.mailLegend(mail, nil)
+	// the texts without it. A steered mail no run took is among the
+	// reports (requeueSteered), so one legend covers both, and lands on
+	// the first mail text of the turn.
+	legended := c.mailLegend(append(slices.Clone(reports), mail...), nil)
+	sentReports, submitted := legended[:len(reports)], legended[len(reports):]
 	// The turn covers the sends its messages hold: all the drain took
 	// when nothing waits behind it, else only those before the drain that
 	// took the first input left waiting (a leading slash command's turn
@@ -1324,7 +1334,7 @@ func (c *conv) kickInput() {
 	if startErr != nil {
 		err = fmt.Errorf("persist turn start: %w", startErr)
 	} else if cmd == nil {
-		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), reports...), submitted...), "\n\n")))
+		err = c.proc.Send(c.turnInput(strings.Join(append(append(slices.Clone(parts), sentReports...), submitted...), "\n\n")))
 	} else if text, ok := c.playbookTurn(*cmd); ok {
 		// The runner expands a playbook command itself: the harness has
 		// no such command, and the turn carries the playbook's body.
@@ -1403,7 +1413,7 @@ func (c *conv) kickInput() {
 	// the dashboard's own text is a user entry; a turn of mail alone is
 	// marked as mail's.
 	origin := wslive.OriginMail
-	text := strings.Join(append(slices.Clone(parts), reports...), "\n\n")
+	text := strings.Join(append(slices.Clone(parts), sentReports...), "\n\n")
 	if cmd != nil {
 		text = cmd.Line()
 	}
