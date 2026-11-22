@@ -474,3 +474,43 @@ test("refresh redraws only when the source list or write permission changes", ()
   t.section.refresh();
   assert.ok(tagged(t.root, "BUTTON").every(b => b.disabled));
 });
+
+test("duplicate-ID rows in the initial preview: one id is sent and the selected valid row's own result is reported", async () => {
+  const bad = { error: { id: "a", path: "pack.json", message: "duplicate row is invalid" } };
+  const wrote = { error: { id: "a", path: "pack.json", message: "valid row cannot be moved into place" } };
+  for (const failure of [false, true]) {
+    const initial = () => listing({ kind: "local", packs: [pack("a", "available", { ...bad }), pack("a", "available")] });
+    const result = () => listing({ kind: "local", packs: [pack("a", "available", { ...bad }),
+      failure ? pack("a", "available", { ...wrote }) : pack("a", "installed", { installed: true })] });
+    const t = setup({
+      raw: "https://example.invalid/packs.git",
+      handler: (url) => {
+        if (url.endsWith("/sources/fetch")) return { status: 200, body: { listing: initial() } };
+        if (url.endsWith("/sources/install")) return { status: 200, body: { listing: result() } };
+        if (url.startsWith("/api/companion/packs/validate")) return { status: 200, body: { listing: initial() } };
+        return { status: 200, body: { listing: result() } };
+      }
+    });
+    const label = failure ? "failure" : "success";
+    const shown = () => t.root.text();
+    const alertText = () => t.root.all().find(c => c.attrs.role === "alert")?.text();
+    fire(buttonOf(cls(t.root, "ws-companion-sources-source")[1], "js.companion.sources.show"), "click");
+    await tick(); await tick();
+    fire(buttonOf(t.root, "js.companion.sources.install"), "click");
+    await tick(); await tick();
+    if (failure) {
+      assert.equal(alertText(), "valid row cannot be moved into place", "install " + label + ": the alert is the valid row's error");
+    } else assert.match(shown(), /done_install/, "install " + label);
+
+    const input = tagged(t.root, "INPUT").find(c => c.type === "file");
+    input.files = [{ name: "Fan.zip", size: 3 }];
+    fire(input, "change");
+    await tick(); await tick();
+    fire(buttonOf(t.root, "js.companion.sources.import"), "click");
+    await tick(); await tick();
+    assert.equal(t.calls.at(-1).url, "/api/companion/packs/import?name=Fan.zip&id=a", "import sends the ID once");
+    if (failure) assert.equal(alertText(), "valid row cannot be moved into place", "import " + label);
+    else assert.match(shown(), /done_import:1/, "import " + label + " counts one");
+    assert.ok(!/done_import:2/.test(shown()));
+  }
+});
