@@ -242,6 +242,20 @@ func TestPathGenerateGrantAllowsReplaceSaveAndRefusesReplacedTarget(t *testing.T
 	if err := os.Remove(removed); err != nil {
 		t.Fatalf("delete of a granted artifact: %v", err)
 	}
+	// On Windows a delete under a held FILE_SHARE_DELETE handle can leave
+	// the name delete-pending; a save that recreates the same name must
+	// still succeed.
+	if err := os.WriteFile(removed, []byte("recreated"), 0o644); err != nil {
+		t.Fatalf("recreate after deleting a granted artifact: %v", err)
+	}
+	if resp := callToolOnce(t, s, 4, "path.write", map[string]any{
+		"session_key": key, "path": removed, "content": "must not land",
+	}); !toolIsError(t, resp) {
+		t.Fatalf("path.write wrote a recreated artifact: %s", resp)
+	}
+	if got, err := os.ReadFile(removed); err != nil || string(got) != "recreated" {
+		t.Fatalf("recreated artifact = %q, %v", got, err)
+	}
 
 	resp := callToolOnce(t, s, 3, "path.write", map[string]any{
 		"session_key": key, "path": renamed, "content": "must not land",
