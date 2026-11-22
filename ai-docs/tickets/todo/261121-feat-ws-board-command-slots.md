@@ -88,8 +88,13 @@ Technical decisions below were settled by the lead and auto-confirmed on
   sending the text as a prompt when the route is unknown (an old daemon must
   fail closed, since a command line leaking to the model as a prompt is the
   worse failure). Existing `message` semantics for old clients do not change.
-- **Passive hand-off, not delivery.** A bounded, runner-owned, one-shot
-  pending-input source keyed by reply ID + generation + exec ID. `turnInput`
+- **Passive hand-off, not delivery.** A bounded, runner-owned, one-shot,
+  in-memory-only pending-input source keyed by reply ID + generation + exec
+  ID, owned by the runner conversation, scoped to the open generation and
+  dropped when it closes. Bounds: 16 receipts and 16 KiB per hand-off; on
+  overflow the oldest receipts collapse to `job <id>: see exec.list`. There
+  is no persistence: after a daemon restart the lead can still query the job
+  through `exec.list` / tail, and the card shows the job state. `turnInput`
   (`internal/wsagent/runner_conv.go`) consumes it on the next eligible send,
   the same seam as `<ws-ambient>`; it is acknowledged only on an accepted send,
   so a failed send leaves it pending and a new arrival is never lost. It never
@@ -101,7 +106,8 @@ Technical decisions below were settled by the lead and auto-confirmed on
   ahead of the ID; the existing deferred retry covers a temporary admission
   failure. Rejected: a `wsinbox` entry (active delivery would wake or steer
   the lead, and old `wslive.State.Apply` rejects unknown kinds); `Runner.Send`
-  (starts a turn); system-prompt mutation.
+  (starts a turn); system-prompt mutation; a Type 2 pending store (adds file
+  writes on the send path for a rare restart window).
 - **Output classification and file.** Classify by raw combined byte count
   (stdout+stderr as the exec result already combines them), never by the
   returned tail length or decoded character count; <= 4096 bytes inline
@@ -110,15 +116,18 @@ Technical decisions below were settled by the lead and auto-confirmed on
   retained, not rebuilt from the 4 KiB `Tail` reader. A fast oversized result
   becomes a private Type 5 file under daemon state, written off the page and
   send read paths, atomically, and served through a local-only, owner-checked
-  artifact-ID route; the browser never supplies a filesystem path. A path is
-  shown only once the file exists; truncation and capture failure are shown
+  route `GET /s/<reply-id>/composer-exec/<submission-id>/output` (a
+  TrustedWrite-equivalent read gate, owner-checked); the ID is the
+  server-minted submission ID and the browser never supplies a filesystem
+  path. A path is shown only once the file exists; truncation and capture
+  failure are shown
   explicitly. Retention: 1 MiB per run (combined stdout+stderr), 7 days and
   100 MiB total, deleting whole oldest files away from interactive reads.
   There is no holder-side capture across daemon replacement: the snapshot is
   ring-bounded only. Rejected: an opt-in holder capture flag and holder-side
   stdout file (a new attach/downgrade surface for a short window);
   stdout-only logs (the exec reply is combined output); per-chunk storage in
-  SQLite.
+  SQLite; a browser-supplied path or a separate artifact-ID namespace.
 - **Shell and stdin.** Empty stdin for composer runs, so a reader gets EOF
   rather than waiting on an input control the composer lacks. Shell selection
   is identical to `exec.shell` (`execjob.ShellArgv`: bash on POSIX with the
@@ -127,13 +136,15 @@ Technical decisions below were settled by the lead and auto-confirmed on
   `exec.shell` does with no cwd argument; no browser-supplied env, cwd or
   credential.
 - **Submission-ID idempotency.** Every typed or slot submission carries a
-  submission ID. It is claimed before launch and mapped to exactly one job; a
-  retry after a lost response returns that mapping, only a deliberate rerun
-  uses a fresh ID, and an unknown receipt (a crash between spawn and durable
-  correlation) is reconciled against the existing job row and never
-  auto-relaunched. Exactly-once delivery across the backend acceptance/daemon
-  crash boundary is not promised; the design is stable IDs plus
-  acknowledgement/recovery.
+  submission ID. It is claimed before launch in an in-memory claim map keyed
+  by submission ID and mapped to exactly one job, with the hosted job row as
+  the durable truth; a retry after a lost response returns that mapping, and
+  only a deliberate rerun uses a fresh ID. After a daemon restart a
+  submission the map no longer knows shows "outcome unknown — check
+  exec.list" on the card and is never re-run automatically; the user
+  re-sends deliberately. Exactly-once delivery across the backend
+  acceptance/daemon crash boundary is not promised; the design is stable IDs
+  plus acknowledgement/recovery. Rejected: a durable receipt store.
 - **Slot store.** A dedicated daemon-local SQLite store (Type 2, held handle,
   in-memory read model, one WAL commit per changed row; nothing committed for
   an unchanged state), separate from the agent-authored whiteboard DB and its
@@ -154,7 +165,10 @@ Technical decisions below were settled by the lead and auto-confirmed on
   label may stay "command slots". `session.register_user_command` upserts by
   slot ID (stable ID, label, optional description, raw shell line) and
   returns the stored revision; `session.unregister_user_command` withdraws by
-  slot ID. They live in the `session.*` namespace beside `session.roster`
+  slot ID. Limits: 32 user commands per lead conversation; label <= 64
+  chars, description <= 256 chars, shell line <= 4 KiB; a register beyond
+  the cap (or an over-long field) is refused with a clear error. Rejected:
+  unbounded registration. They live in the `session.*` namespace beside `session.roster`
   (`internal/mcp/session_hire.go:18,128`, `internal/mcp/server_dispatch.go:239`);
   the owner's "daemon.(same namespace as roster)" referred to this
   namespace, and no `daemon.*` namespace exists. Advertisement rule: only to
@@ -162,6 +176,12 @@ Technical decisions below were settled by the lead and auto-confirmed on
   `exec.slot.set` / `exec.slot.withdraw` (couples registration to the `exec`
   namespace and to native exec cutover); a `daemon.*` name (no such
   namespace).
+- **User-commands refresh and removal.** An open localhost page refreshes its
+  private user-command list by reusing the existing page SSE stream with an
+  opaque user-commands revision event that makes the page refetch the list.
+  Rejected: polling. Each slot also has a localhost-only remove control
+  that calls the same service as `session.unregister_user_command`.
+  Rejected: agent-only removal (the user would be stuck with stale buttons).
 - **UI.** A private command card in chat reusing the existing command-card
   treatment (literal command, state, exit, inline result or output link,
   existing `copyText` action for the path) with escaped text rendering. It is
@@ -178,8 +198,10 @@ Technical decisions below were settled by the lead and auto-confirmed on
   and its worktree, results enter the lead's context passively, an explicit
   user send or click is a one-use approval, and the 1 MiB / 7 days / 100 MiB
   retention carries over for the output file. The directory picker and the
-  cwd field are dropped (a slot has no cwd; it runs in the worktree root). The
-  old Phase 2 (browser cwd picking) is removed.
+  cwd field are dropped, confirmed as a consequence of the owner's contract
+  (a slot has no cwd; cwd is always the lead's bound worktree root, as
+  `exec.shell` does with no cwd argument). The old Phase 2 (browser cwd
+  picking) is removed.
 - **Compatibility: T0 for every surface** (no `exec_jobs` schema or
   `user_version` change - an increased `user_version` would make an old
   reader refuse the DB and disable hosted tools, a T3 boundary). Evidence:
@@ -195,8 +217,8 @@ Technical decisions below were settled by the lead and auto-confirmed on
     (`internal/mcp/server_dispatch.go:76–105,1634–1640`,
     `internal/mcp/tool_arguments.go:127–151`,
     `internal/mcp/server_inventory.go:186–199`).
-  - *Slot store, output directory and submission receipts.* Independent
-    stores. An old daemon keeps writing only its explicit `exec_jobs` columns
+  - *Slot store and output directory.* Independent
+    stores (submission receipts are in memory only). An old daemon keeps writing only its explicit `exec_jobs` columns
     and board/session stores and cannot overwrite the new paths; the new
     daemon reopens both and reuses old job rows under their existing
     200-job-cap retention, so a pruned job reports as no longer queryable
@@ -205,8 +227,9 @@ Technical decisions below were settled by the lead and auto-confirmed on
   - *Pending context and events.* The hand-off adds no inbox entry kind,
     tracker event, hello change or holder attach/event shape; the later
     completion reuses the existing `exec:<id>:exit` event ID. During a
-    downgrade the passive hand-off is new-only behavior; an old runner drains
-    only its ordinary inbox and leaves any passive record untouched
+    downgrade the passive hand-off is new-only behavior. Pending input is
+    in memory only, so there is no stored state and nothing for an old
+    binary to read or overwrite: T0 trivially
     (`internal/wsagent/exec_seams.go:370–413`,
     `internal/wsagent/runner_conv.go:1730–1748`,
     `internal/wslive/state.go:71–74,474–488`).
@@ -328,15 +351,21 @@ Verification boundary:
   `exec.shell` job.
 - Idempotency: a retry after a lost response with the same submission ID
   returns the same job; two concurrent identical submissions map to one job; a
-  fresh submission ID is a new run; an unknown receipt is surfaced, not
-  relaunched.
-- Authority: the route and artifact route refuse a LAN or non-`TrustedWrite`
+  fresh submission ID is a new run; after a daemon restart an unknown
+  submission shows "outcome unknown — check exec.list" and is never re-run
+  automatically, while the job row still shows the real state.
+- Pending-input bounds: 17+ receipts and over-16 KiB hand-offs collapse the
+  oldest to `job <id>: see exec.list`; the source is dropped when the
+  generation closes and is empty after a daemon restart.
+- Authority: the route and the `GET .../composer-exec/<submission-id>/output`
+  route refuse a LAN or non-`TrustedWrite`
   request, a cross-origin request and a non-open or non-lead session; the
   approval is one-use and does not alter the agent's ordinary exec policy.
 - Compatibility: old client against the new daemon (`message` semantics
   unchanged); new client against an old daemon (route unknown, fails closed,
   nothing sent as a prompt, draft retained); a new → old → new cycle covering
-  `exec_jobs` rows, the output directory and the pending record.
+  `exec_jobs` rows and the output directory (pending input and receipts are
+  in memory only).
 - Platform: `GOOS=windows go vet` on the touched packages and a Windows
   Git Bash fallback check (shell selection identical to `exec.shell`).
 - UI: a Playwright capture of the private command card in both `ko` and `en`
@@ -359,10 +388,14 @@ Scope: the Type 2 slot store with its in-memory read model; the MCP
 `session.register_user_command` and `session.unregister_user_command` tools
 advertised only to an authenticated hosted lead (direct exposure and profile
 allowlists wired like the other `session.*` tools, not tied to native exec
-cutover); the localhost-only slot list and Run
-route; slot buttons showing label, description and the exact command in
-dashboard chrome with i18n; the revision gate with stale rejection and
-refresh; a click carrying its own submission ID into the Phase 1 idempotent
+cutover); the registration limits (32 per lead, label 64 chars, description
+256 chars, line 4 KiB); the localhost-only slot list and Run route; slot
+buttons showing label, description and the exact command in dashboard chrome
+with i18n, each with a localhost-only remove control calling the same
+service as `session.unregister_user_command`; the opaque user-commands
+revision event on the existing page SSE stream that makes an open page
+refetch its list; the revision gate with stale rejection and refresh; a
+click carrying its own submission ID into the Phase 1 idempotent
 path.
 
 Deferred: slot registration over tokenless Pi / Claude fallback transports;
@@ -373,7 +406,13 @@ Verification boundary:
 - Store: register, replace (revision advances), withdraw, unchanged `set`
   commits nothing; the in-memory read model serves list and page with no file
   I/O; restart and daemon replacement reload definitions scoped to the lead
-  reply ID and worktree; another lead or worktree never sees them.
+  reply ID and worktree; another lead or worktree never sees them. The 33rd
+  command and an over-long label, description or line are refused with a
+  clear error, while replacing an existing command at the cap succeeds.
+- Refresh and removal: register, replace and unregister (by agent or by the
+  remove control, including a removal that races a click) push the opaque
+  revision event and an open localhost page refetches without polling; the
+  remove control is refused for a non-local request.
 - Authority and discovery: the `session.*_user_command` tools are listed only for an authenticated
   hosted lead using its own binding and refused for tokenless transports, a
   non-lead, or an arbitrary caller-supplied reply ID; an old daemon refuses
