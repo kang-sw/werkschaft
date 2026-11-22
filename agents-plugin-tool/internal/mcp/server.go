@@ -71,6 +71,9 @@ type Server struct {
 	// userCommands returns the daemon's user commands (ServerOptions
 	// .UserCommands); nil where there are none.
 	userCommands func() UserCommandHost
+	// userCommandsDiscovery is the lookup the tool list uses (ServerOptions
+	// .UserCommandsDiscovery); nil uses userCommands.
+	userCommandsDiscovery func() UserCommandHost
 	// execCutover is the harness of the bound conversation when its
 	// process launched with native shell tools removed (wsagent's exec
 	// cutover): the exec tools are listed, and Codex's fs.* read tools

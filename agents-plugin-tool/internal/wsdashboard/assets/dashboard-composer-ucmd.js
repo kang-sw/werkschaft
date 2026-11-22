@@ -94,29 +94,42 @@
     });
     box.hidden = false;
   }
-  // ucmdOlder reports whether rev is an older state of the list the page already
-  // shows. The revision is "epoch.N.rootTag": N only grows within one daemon run
-  // (epoch) and one worktree (rootTag), so a different epoch or root tag is a
-  // different line of history and always wins; an unparseable one is never
-  // dropped.
-  function ucmdOlder(rev) {
-    if (typeof rev !== "string" || !ucmdRev) return false;
+  // The list revision is "epoch.N.rootTag": N only grows within one daemon run
+  // (epoch) and one worktree (rootTag). ucmdCompare orders rev against the one on
+  // screen: -1 older, 0 equal, 1 newer, and null when they are not comparable (a
+  // different epoch or root tag, an unparseable revision, or none shown yet).
+  function ucmdCompare(rev) {
+    if (typeof rev !== "string" || !ucmdRev) return null;
     var a = rev.split("."), b = ucmdRev.split(".");
-    if (a.length < 2 || b.length < 2 || a[0] !== b[0] || a.slice(2).join(".") !== b.slice(2).join(".")) return false;
+    if (a.length < 2 || b.length < 2 || a[0] !== b[0] || a.slice(2).join(".") !== b.slice(2).join(".")) return null;
     var x = parseInt(a[1], 10), y = parseInt(b[1], 10);
-    return x < y;
+    if (x !== x || y !== y) return null;
+    return x < y ? -1 : x > y ? 1 : 0;
   }
-  // ucmdApply takes a list answer (a read, a removal, or a refused write's
-  // refresh) and its admission token when the page holds none yet. Answers
-  // arrive out of order (a slow write's reply can land after a newer read the
-  // stream triggered): one older than the list on screen is dropped, so the
-  // newest list stays.
-  function ucmdApply(list) {
+  function ucmdOlder(rev) { return ucmdCompare(rev) === -1; }
+  // ucmdApply takes a list answer: a read (post false) or a write's answer (a
+  // removal, a refused run's refresh). Answers arrive out of order. A read that
+  // is older than the list on screen is dropped; one from another epoch or
+  // worktree wins (the read is the page's own current view). A write's answer is
+  // only a snapshot taken at the write: it applies only when it is the same
+  // epoch and worktree and not older than what is shown, and otherwise is
+  // dropped and one read fetches the current list instead (a delayed answer from
+  // a previous daemon never overwrites a newer one's list).
+  function ucmdApply(list, post) {
     if (typeof list.token === "string" && list.token && !cexecToken) cexecToken = list.token;
-    if (ucmdOlder(list.rev)) return;
+    var order = ucmdCompare(list.rev);
+    if (post ? (order === null && ucmdRev) || order === -1 : order === -1) {
+      if (post) ucmdRefresh();
+      return;
+    }
     ucmdList = list.commands || [];
     ucmdRev = typeof list.rev === "string" ? list.rev : ucmdRev;
     ucmdRender();
+  }
+  // ucmdRefresh asks for one read: now, or once the one in flight is done.
+  function ucmdRefresh() {
+    if (ucmdFetching) ucmdDirty = true;
+    else ucmdFetch();
   }
   function ucmdFetch() {
     if (!ucmdEnabled) return;
@@ -124,24 +137,27 @@
     ucmdFetching = true;
     ucmdDirty = false;
     fetch("/s/" + rid + "/user-commands", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-      // A denied read (a LAN page, a closed lead, an old daemon) shows nothing.
-      if (!r.ok) return { denied: true };
+      // A read that is refused for good (a LAN page, a closed or unknown lead,
+      // an old daemon) shows nothing. A failure that may pass (the daemon is
+      // still starting, a server error, a lost connection) leaves what is shown.
+      if (r.status === 401 || r.status === 403 || r.status === 404 || r.status === 405) return { denied: true };
+      if (!r.ok) return null;
       return r.json();
     }).catch(function () { return null; }).then(function (list) {
       ucmdFetching = false;
       if (list && list.denied) { ucmdList = []; ucmdRev = ""; ucmdRender(); }
-      else if (list && Array.isArray(list.commands)) ucmdApply(list);
+      else if (list && Array.isArray(list.commands)) ucmdApply(list, false);
       // A wake that arrived while this read ran is answered with one more read
-      // (never a loop: only a wake sets the flag).
-      if (ucmdDirty && list && !list.denied) ucmdFetch();
+      // whether this one succeeded or not (never a loop: only a wake sets the
+      // flag, and the flag is cleared when the read starts).
+      if (ucmdDirty) ucmdFetch();
     });
   }
   // The stream's opaque revision event: refetch when it is not the revision the
   // page already holds.
   function ucmdWake(rev) {
     if (!ucmdEnabled || typeof rev !== "string" || rev === ucmdRev || ucmdOlder(rev)) return;
-    if (ucmdFetching) ucmdDirty = true;
-    else ucmdFetch();
+    ucmdRefresh();
   }
   function ucmdRun(c) {
     if (ucmdBusy[c.id]) return;
@@ -187,7 +203,7 @@
           // The command changed or was withdrawn since it was displayed:
           // nothing ran, and the list is refreshed from the answer.
           settled();
-          ucmdApply(body);
+          ucmdApply(body, true);
           noteWarn(wsT(body.error === "withdrawn" ? "js.ucmd.withdrawn" : "js.ucmd.stale"));
           return;
         }
@@ -224,7 +240,7 @@
       var body = null;
       try { body = JSON.parse(x.s); } catch (e) { body = null; }
       if (body && Array.isArray(body.commands)) {
-        ucmdApply(body);
+        ucmdApply(body, true);
         return;
       }
       noteWarn(wsT("js.send.fail", x.s.trim() || "HTTP " + x.r.status));

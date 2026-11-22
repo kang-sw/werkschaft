@@ -41,7 +41,7 @@ type UserCommandHost interface {
 // written.
 var (
 	errUserCommandNotHosted   = errors.New("user commands belong to a session the dashboard hosts, and this connection is not one (its own session token names the session a command is registered for; a supplied session_key never does)")
-	errUserCommandUnavailable = errors.New("user commands are unavailable: the daemon could not open their store")
+	errUserCommandUnavailable = errors.New("user commands are unavailable: the daemon has not opened their store (it is still starting, or it could not open it)")
 	errUserCommandLeadOnly    = errors.New("user commands are available to an open hosted lead session only")
 )
 
@@ -60,7 +60,16 @@ func (s *Server) userCommandsListed() bool {
 	if s.conversation == "" {
 		return false
 	}
-	host := s.userCommandHost()
+	// Discovery is the one lookup that may wait for a starting daemon; a
+	// registration or withdrawal never waits and refuses until the store is open.
+	lookup := s.userCommandsDiscovery
+	if lookup == nil {
+		lookup = s.userCommands
+	}
+	if lookup == nil {
+		return false
+	}
+	host := lookup()
 	return host != nil && host.Lead(s.conversation) == nil
 }
 

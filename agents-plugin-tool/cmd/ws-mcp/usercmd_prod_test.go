@@ -99,7 +99,8 @@ func (a *tokenAgents) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-c
 
 // TestHostedLeadsFirstToolListWaitsForTheUserCommandsAlone: while the daemon's
 // user commands are not settled, a hosted lead's first tool list waits (bounded)
-// and then names the user command tools; no other session waits for it: not a
+// and then names the user command tools (only discovery waits; a registration
+// refuses at once while the store is not open); no other session waits for it: not a
 // worker's establishment or tool list, not a second lead's establishment, not a
 // request on a session that is already open, and not the first lead's own
 // establishment (the HTTP route builds a session under a daemon-wide lock).
@@ -123,8 +124,11 @@ func TestHostedLeadsFirstToolListWaitsForTheUserCommandsAlone(t *testing.T) {
 	url := "http://127.0.0.1:" + strconv.Itoa(d.Endpoint().Port) + wsdashboard.ProxyHTTPPath
 	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	var seq atomic.Int64
-	call := func(token, method string) (map[string]any, error) {
-		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":%q,"params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.326"}}}`, seq.Add(1), method)
+	var callParams func(token, method, params string) (map[string]any, error)
+	const initParams = `{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.326"}}`
+	call := func(token, method string) (map[string]any, error) { return callParams(token, method, initParams) }
+	callParams = func(token, method, params string) (map[string]any, error) {
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":%q,"params":%s}`, seq.Add(1), method, params)
 		req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
@@ -184,6 +188,20 @@ func TestHostedLeadsFirstToolListWaitsForTheUserCommandsAlone(t *testing.T) {
 	// list, and a second lead's establishment all go through at once.
 	within("a request on the worker's open session", 3*time.Second, func() error { _, err := call("tok-worker", "tools/list"); return err })
 	within("the second lead's establishment", 3*time.Second, func() error { _, err := call("tok-lead2", "initialize"); return err })
+	// A registration never waits for the store: before it is open it refuses at
+	// once, while the first lead's tool list is still waiting.
+	within("a registration before the store is open", 3*time.Second, func() error {
+		r, err := callParams("tok-lead2", "tools/call", `{"name":"session.register_user_command","arguments":{"id":"x","label":"X","command":"echo x"}}`)
+		if err != nil {
+			return err
+		}
+		res, _ := r["result"].(map[string]any)
+		text, _ := json.Marshal(res)
+		if res["isError"] != true || !strings.Contains(string(text), "has not opened their store") {
+			return fmt.Errorf("the registration was not refused as not ready: %s", text)
+		}
+		return nil
+	})
 	select {
 	case l := <-first:
 		t.Fatalf("the first lead listed before the user commands settled: %+v", l)

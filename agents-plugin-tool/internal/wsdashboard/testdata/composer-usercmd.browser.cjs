@@ -125,11 +125,16 @@ async function agent(step, tag) {
       await page.waitForTimeout(900);
       assert.equal(runsOf('dbl'), 1, 'a double click made ' + runsOf('dbl') + ' requests');
       // two rapid separate clicks, the second one after the first one's
-      // acknowledgement arrived (no click count tells them apart), are one run
+      // acknowledgement was answered and its card rendered (no click count tells
+      // them apart), are one run
       await page.waitForTimeout(300);
+      const dblCards = () => view.locator('.cexec:has(code:text-is("echo dbl"))').count();
+      const cardsBefore = await dblCards();
       const acked = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/user-commands/dbl/run'));
       await dbl.evaluate(el => el.click());
       await acked;
+      for (let i = 0; i < 200 && (await dblCards()) <= cardsBefore; i++) await page.waitForTimeout(25);
+      assert.equal(await dblCards(), cardsBefore + 1, 'the acknowledgement was rendered as a card before the second click');
       await dbl.evaluate(el => el.click());
       await page.waitForTimeout(900);
       assert.equal(runsOf('dbl'), 2, 'two rapid clicks made ' + (runsOf('dbl') - 1) + ' requests');
@@ -153,6 +158,62 @@ async function agent(step, tag) {
       assert.equal(await view.locator('.d-ucmd .ucmd').count(), 2);
       await page.unroute('**/user-commands/dbl/remove');
       await shot('out-of-order');
+
+      // a delayed answer from another daemon epoch (the daemon restarted, the page
+      // kept its stream): it lands after the strip already shows the current
+      // list, and neither replaces it nor is trusted: one read fetches the truth
+      let heldB = null;
+      await page.route('**/user-commands/late/remove', async route => { heldB = { route, response: await route.fetch() }; });
+      await view.locator('.ucmd[data-ucmd="late"] .ucmd-x').click();
+      for (let i = 0; i < 100 && !heldB; i++) await page.waitForTimeout(25);
+      assert.ok(heldB, 'the second removal reached the daemon');
+      await view.waitForSelector('.ucmd[data-ucmd="late"]', { state: 'detached', timeout: 10000 });
+      await page.waitForTimeout(500);
+      const getsBeforeOld = gets.length;
+      const stale = await heldB.response.json();
+      const parts = stale.rev.split('.');
+      stale.rev = 'deadbeefdeadbeef.' + (parseInt(parts[1], 10) + 1000) + '.' + parts.slice(2).join('.');
+      stale.commands = [];
+      await heldB.route.fulfill({ response: heldB.response, json: stale });
+      await page.waitForTimeout(700);
+      assert.equal(await view.locator('.ucmd[data-ucmd="constructor"]').count(), 1, 'an answer from another epoch did not replace the current list');
+      assert.ok(gets.length > getsBeforeOld, 'the dropped answer asked for one read of the current list');
+      await page.unroute('**/user-commands/late/remove');
+
+      // a read that fails while a newer wake is pending: the wake is still
+      // answered by one more read (no polling, no loop)
+      const heldGets = [];
+      await page.route('**/user-commands', async route => {
+        if (route.request().method() !== 'GET') return route.continue();
+        if (heldGets.length === 0) { heldGets.push(route); return; }
+        return route.continue();
+      });
+      const getsBeforeWake = gets.length;
+      await agent('put-x', lang);
+      for (let i = 0; i < 100 && heldGets.length === 0; i++) await page.waitForTimeout(25);
+      assert.equal(heldGets.length, 1, 'the first wake started a read');
+      await page.waitForTimeout(400);
+      await agent('put-y', lang);
+      await page.waitForTimeout(700);
+      assert.equal(gets.length - getsBeforeWake, 1, 'the second wake waits for the read in flight');
+      await heldGets[0].fulfill({ status: 503, body: 'not ready' });
+      await view.waitForSelector('.ucmd[data-ucmd="y"]', { timeout: 10000 });
+      await page.waitForTimeout(600);
+      assert.equal(gets.length - getsBeforeWake, 2, 'one more read answered the pending wake: ' + (gets.length - getsBeforeWake));
+      assert.equal(await view.locator('.ucmd[data-ucmd="x"]').count(), 1);
+      await page.unroute('**/user-commands');
+
+      // a failed read leaves the strip that already showed a list (a 503 while the
+      // daemon starts, a server error); the next change refreshes it
+      await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.fulfill({ status: 503, body: 'not ready' }) : route.continue());
+      await agent('put-z', lang);
+      await page.waitForTimeout(900);
+      assert.equal(await view.locator('.d-ucmd:not([hidden]) .ucmd[data-ucmd="x"]').count(), 1, 'a failed read did not clear the strip');
+      assert.equal(await view.locator('.ucmd[data-ucmd="z"]').count(), 0, 'and showed nothing new');
+      await page.unroute('**/user-commands');
+      await agent('put-w', lang);
+      await view.waitForSelector('.ucmd[data-ucmd="w"]', { timeout: 10000 });
+      assert.equal(await view.locator('.ucmd[data-ucmd="z"]').count(), 1, 'the next read caught up');
 
       // never in the shared transcript: the session page any other viewer gets
       // carries no command text

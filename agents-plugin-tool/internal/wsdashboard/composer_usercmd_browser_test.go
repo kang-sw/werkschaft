@@ -16,8 +16,11 @@ import (
 // real session page and routes (only the launch service is a fake): the slot
 // buttons and a slot-run card in ko and en, the strip's refresh by the opaque
 // revision event with no polling, a stale click that runs nothing, the remove
-// control, a command named "constructor", a double click that runs once, an older
-// removal answer that lands after a newer list and must not replace it, and the strip's absence from the shared transcript. The script asks
+// control, a command named "constructor", a double click that runs once, an
+// older removal answer that lands after a newer list (or one from another
+// daemon epoch) and must not replace it, a failed read that leaves the strip and
+// still answers a pending wake, and the strip's absence from the shared
+// transcript. The script asks
 // this test to change the registry as the agent would (a signal file per step).
 func TestUserCommandBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
@@ -49,6 +52,10 @@ func TestUserCommandBrowser(t *testing.T) {
 			set("constructor", "Constructor", "named like an Object property", "echo ctor")
 			set("dbl", "Double", "clicked twice", "echo dbl")
 		},
+		"put-x":         func() { set("x", "X", "", "echo x") },
+		"put-y":         func() { set("y", "Y", "", "echo y") },
+		"put-z":         func() { set("z", "Z", "", "echo z") },
+		"put-w":         func() { set("w", "W", "", "echo w") },
 		"register-late": func() { set("late", "Late", "registered after a removal", "echo late") },
 		"reset": func() {
 			for _, c := range f.users.reg.List("livesession", f.users.root) {

@@ -108,14 +108,8 @@ const userCommandsReadyWait = 5 * time.Second
 // conversation the runner does not report as an open lead, never waits.
 func (h *proxyHost) userCommandsFor(conversation string) func() mcp.UserCommandHost {
 	deadline := time.Now().Add(userCommandsReadyWait)
-	load := func() mcp.UserCommandHost {
-		if u := h.userCmds.Load(); u != nil {
-			return u
-		}
-		return nil
-	}
 	return func() mcp.UserCommandHost {
-		if u := load(); u != nil || conversation == "" || h.userCmdsReady == nil {
+		if u := h.userCommandsNow(); u != nil || conversation == "" || h.userCmdsReady == nil {
 			return u
 		}
 		select {
@@ -124,20 +118,37 @@ func (h *proxyHost) userCommandsFor(conversation string) func() mcp.UserCommandH
 			open, ok := h.agents.(interface {
 				ComposerOpen(string) (uint64, error)
 			})
-			left := time.Until(deadline)
-			if !ok || left <= 0 {
+			if !ok {
 				return nil
 			}
 			if _, err := open.ComposerOpen(conversation); err != nil {
 				return nil
 			}
+			// The budget left is read after the runner lookup, which may itself
+			// have taken the runner's lock.
+			left := time.Until(deadline)
+			if left <= 0 {
+				return nil
+			}
+			wait := time.NewTimer(left)
+			defer wait.Stop()
 			select {
 			case <-h.userCmdsReady:
-			case <-time.After(left):
+			case <-wait.C:
 			}
 		}
-		return load()
+		return h.userCommandsNow()
 	}
+}
+
+// userCommandsNow is the daemon's user commands as they are bound this instant,
+// nil before they are (or when they are unavailable). A registration or
+// withdrawal reads this and never waits.
+func (h *proxyHost) userCommandsNow() mcp.UserCommandHost {
+	if u := h.userCmds.Load(); u != nil {
+		return u
+	}
+	return nil
 }
 
 // wait blocks until the replacement goroutine, if any, has ended.
@@ -194,7 +205,8 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		// that owns hosted exec jobs.
 		opts.Exec = h.exec.Load
 		opts.Cron = h.cron.Load
-		opts.UserCommands = h.userCommandsFor(hello.Conversation)
+		opts.UserCommands = h.userCommandsNow
+		opts.UserCommandsDiscovery = h.userCommandsFor(hello.Conversation)
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
 		server := mcp.NewServerWithOptions(opts)

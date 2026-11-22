@@ -103,6 +103,12 @@ type ServerOptions struct {
 	// store could not open, where the user command tools are neither listed
 	// nor served.
 	UserCommands func() UserCommandHost
+	// UserCommandsDiscovery is UserCommands for the tool list and the schema and
+	// manual discovery only: it may wait (bounded) for a daemon that is still
+	// starting to settle its user commands, which a registration or withdrawal
+	// never does (those read UserCommands and refuse while it is nil). nil uses
+	// UserCommands.
+	UserCommandsDiscovery func() UserCommandHost
 	// Conversation is the hosted conversation a per-session token bound
 	// this connection to (wsdashboard.ProxyHello.Conversation); empty for a
 	// launcher connection. Only it attributes hosted exec jobs: a supplied
@@ -214,7 +220,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	s.pi.agents = opts.Agents
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	s.cron = opts.Cron
-	s.userCommands = opts.UserCommands
+	s.userCommands, s.userCommandsDiscovery = opts.UserCommands, opts.UserCommandsDiscovery
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
 	}
