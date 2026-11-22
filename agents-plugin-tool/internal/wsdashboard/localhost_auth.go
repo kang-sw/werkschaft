@@ -101,7 +101,7 @@ func accessExempt(r *http.Request) bool {
 		return r.Method == http.MethodGet && loopbackExemptCaller(r)
 	case ProxyHTTPPath:
 		return loopbackExemptCaller(r) // any method: the route answers 405 itself
-	case "/shutdown", "/nudge":
+	case "/shutdown", "/nudge", companionChangedPath:
 		return r.Method == http.MethodPost && loopbackExemptCaller(r)
 	}
 	if (r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/agents/by-token/") &&

@@ -52,6 +52,7 @@ func (d *Daemon) Handler() http.Handler {
 		}
 	}
 	mux.HandleFunc("/nudge", d.handleNudge)
+	mux.HandleFunc(companionChangedPath, d.handleCompanionConfigChange)
 	mux.HandleFunc("/events", d.handleIndexEvents)
 	mux.HandleFunc(pwaPrefix, handlePWA)
 	mux.HandleFunc("/s/", d.handleSessionRoutes)

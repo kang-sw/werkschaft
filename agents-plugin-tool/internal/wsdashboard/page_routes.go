@@ -266,7 +266,11 @@ func (d *Daemon) serveShell(w http.ResponseWriter, r *http.Request, view *Sessio
 
 func (d *Daemon) serveShellStatus(w http.ResponseWriter, r *http.Request, view *SessionView, src string, status int) {
 	lang, pref := requestLang(r)
-	page := shellPageData{Lang: lang, LangPref: pref, Theme: requestTheme(r), SysOpen: localViewer(r), Src: src, Title: "Werkschaft (alpha)", Version: d.endpoint.Version, LAN: d.lanAccessFor(r)}
+	page := shellPageData{
+		Lang: lang, LangPref: pref, Theme: requestTheme(r), SysOpen: localViewer(r), Src: src,
+		Title: "Werkschaft (alpha)", Version: d.endpoint.Version, LAN: d.lanAccessFor(r),
+		Companion: d.companion.current().config,
+	}
 	if view != nil {
 		page.RID = view.ReplyID
 		page.Title = view.Label

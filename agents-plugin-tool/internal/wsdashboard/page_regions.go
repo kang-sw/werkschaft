@@ -87,6 +87,7 @@ type shellPageData struct {
 	RID, Src, Title       string
 	Version               string
 	LAN                   *LANAccess
+	Companion             CompanionConfig
 	regions               regionSet
 }
 
