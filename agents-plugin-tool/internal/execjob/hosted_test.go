@@ -441,6 +441,9 @@ type hostedFixture struct {
 	exitDir  string
 	// onRunning is the next open's HostedOptions.OnRunning.
 	onRunning func()
+	// fastRetire makes the next open retry holder stops within
+	// milliseconds (HostedOptions.RetireRetryMin and RetireRetryMax).
+	fastRetire bool
 }
 
 func newHostedFixture(t *testing.T, window time.Duration) *hostedFixture {
@@ -450,10 +453,23 @@ func newHostedFixture(t *testing.T, window time.Duration) *hostedFixture {
 	return fx
 }
 
+// newFastRetireFixture is newHostedFixture whose Hosted retries holder stops
+// within milliseconds.
+func newFastRetireFixture(t *testing.T, window time.Duration) *hostedFixture {
+	t.Helper()
+	fx := &hostedFixture{t: t, holders: newFakeExecHolders(), sessions: newFakeExecSessions(), store: newMemHostedStore(), exitDir: t.TempDir(), fastRetire: true}
+	fx.open(window)
+	return fx
+}
+
 // open builds a Hosted over the fixture's store, as a daemon start does.
 func (fx *hostedFixture) open(window time.Duration) {
 	fx.t.Helper()
-	h, err := NewHosted(HostedOptions{Holders: fx.holders, Store: fx.store, Sessions: fx.sessions, ExitDir: fx.exitDir, Window: window, OnRunning: fx.onRunning})
+	opts := HostedOptions{Holders: fx.holders, Store: fx.store, Sessions: fx.sessions, ExitDir: fx.exitDir, Window: window, OnRunning: fx.onRunning}
+	if fx.fastRetire {
+		opts.RetireRetryMin, opts.RetireRetryMax = time.Millisecond, 4*time.Millisecond
+	}
+	h, err := NewHosted(opts)
 	if err != nil {
 		fx.t.Fatal(err)
 	}
@@ -2264,11 +2280,8 @@ func TestHostedPanicsReleaseTheDeleteClaim(t *testing.T) {
 // then ends it from its exit copy or, with none, as lost; a holder that
 // the later scan lists is replayed and its job lives on.
 func TestHostedIncompleteCensusKeepsLivingJobFenced(t *testing.T) {
-	prevMin, prevMax := retireRetryMin, retireRetryMax
-	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
-	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
 
-	fx := newHostedFixture(t, 10*time.Millisecond)
+	fx := newFastRetireFixture(t, 10*time.Millisecond)
 	unreadable, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "unreadable"})
 	copied, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "copied"})
 	vanished, _ := fx.launch(context.Background(), nil, HostedLaunch{Display: "vanished"})

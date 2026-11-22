@@ -964,7 +964,6 @@ func TestPruneKeepsAJobWhoseStopNoticeIsStillPending(t *testing.T) {
 	if s, _ := fx.h.StopByUser("lead", first.ID); s.StopNotice != StopNoticePending {
 		t.Fatalf("stop = %+v", s)
 	}
-	time.Sleep(5 * time.Millisecond) // the first job ended strictly before every other
 	// The session takes the other jobs' completion notices, so only the
 	// first job's stop notice stays owed.
 	fx.sessions.mu.Lock()

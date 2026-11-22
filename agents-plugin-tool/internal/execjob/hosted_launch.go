@@ -375,7 +375,12 @@ func (h *Hosted) admit(j *hostedJob) error {
 	drop := h.claimLocked()
 	// The bare reserved ids take room under the cap as job rows do.
 	if over := len(h.jobs) + orphans - HostedMaxJobs; over > 0 {
-		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
+		sort.Slice(finished, func(a, b int) bool {
+			if x, y := finished[a], finished[b]; x.row.EndedAt != y.row.EndedAt {
+				return x.row.EndedAt < y.row.EndedAt
+			}
+			return finished[a].endSeq < finished[b].endSeq
+		})
 		// The batch fits the tombstones' room under the job cap, so even a
 		// failed bulk delete parks no more than the cap; jobs left over
 		// go at a later launch.
