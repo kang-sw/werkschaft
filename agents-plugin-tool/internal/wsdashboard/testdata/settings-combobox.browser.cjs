@@ -249,6 +249,105 @@ const CHOICES = {
     await roRow.locator('.scb-btn').nth(1).click({ force: true });
     assert.equal(await frame().locator('.scb-pop').count(), 0);
 
+    // 4. Ultrawide and responsive .stage max-width cap, centering, and combobox popup alignment
+    await context.addCookies([{ name: 'ws_dashboard_theme', value: 'dark', url: base }]);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(base + '/settings');
+    await frame().locator('[data-config-key="workflow.lang"]').waitFor();
+    await assertStageGeometry(frame().locator('body'), 1440, 900, 'shell 1440x900 workflow');
+    if (shots) await page.screenshot({ path: shot('settings-1440-dark.png') });
+
+    await page.setViewportSize({ width: 2560, height: 1080 });
+    await assertStageGeometry(frame().locator('body'), 2560, 1080, 'shell 2560x1080 workflow dark');
+    if (shots) await page.screenshot({ path: shot('settings-2560-general-dark.png') });
+
+    await context.addCookies([{ name: 'ws_dashboard_theme', value: 'light', url: base }]);
+    await page.goto(base + '/settings');
+    await frame().locator('[data-config-key="workflow.lang"]').waitFor();
+    await assertStageGeometry(frame().locator('body'), 2560, 1080, 'shell 2560x1080 workflow light');
+    if (shots) await page.screenshot({ path: shot('settings-2560-general-light.png') });
+
+    await context.addCookies([{ name: 'ws_dashboard_theme', value: 'dark', url: base }]);
+    await page.goto(base + '/settings');
+    await frame().locator('[data-settings-section=agents]').click();
+    await frame().locator('tbody.tier-entry[data-settings-tier=medium]').waitFor();
+
+    async function assertStageGeometry(rootLocator, vw, vh, label) {
+      const m = await rootLocator.evaluate(({ vw }) => {
+        const stage = document.querySelector('[data-settings-view]');
+        const rect = stage.getBoundingClientRect();
+        const cs = getComputedStyle(stage);
+        const scontent = document.querySelector('.scontent');
+        const tierScroll = document.querySelector('.tier-scroll');
+        return {
+          width: rect.width,
+          height: rect.height,
+          left: rect.left,
+          right: rect.right,
+          maxWidth: cs.maxWidth,
+          docOverflowX: document.documentElement.scrollWidth > window.innerWidth,
+          contentOverflowX: !!scontent && scontent.scrollWidth > scontent.clientWidth + 1,
+          tierOverflowX: !!tierScroll && tierScroll.scrollWidth > tierScroll.clientWidth + 1
+        };
+      }, { vw });
+      assert.equal(m.maxWidth, '1280px', `${label}: computed max-width`);
+      assert.equal(m.docOverflowX, false, `${label}: document horizontal overflow`);
+      assert.equal(m.contentOverflowX, false, `${label}: .scontent horizontal overflow`);
+      assert.equal(m.tierOverflowX, false, `${label}: .tier-scroll horizontal overflow`);
+      if (vw >= 1600) {
+        const col2Width = vw - 388;
+        const expectedWidth = Math.min(1280, col2Width);
+        const col2Center = (vw + 356) / 2;
+        assert(Math.abs(m.width - expectedWidth) <= 2, `${label}: expected width ~${expectedWidth}, got ${m.width}`);
+        assert(m.width <= 1280.5, `${label}: width ${m.width} exceeds 1280px`);
+        assert(Math.abs((m.left + m.width / 2) - col2Center) <= 2, `${label}: expected centered in column 2 (${col2Center}), got ${m.left + m.width / 2}`);
+        assert(m.height >= vh - 30, `${label}: expected full height (>=${vh - 30}), got ${m.height}`);
+      } else {
+        const expectedWidth = Math.min(1280, vw - 32);
+        assert(Math.abs(m.width - expectedWidth) <= 2, `${label}: expected width ~${expectedWidth}, got ${m.width}`);
+        assert(Math.abs((m.left + m.width / 2) - vw / 2) <= 2, `${label}: expected centered (${vw / 2}), got ${m.left + m.width / 2}`);
+        assert(m.height >= vh - 80, `${label}: expected full height (>=${vh - 80}), got ${m.height}`);
+      }
+      return m;
+    }
+
+    for (const [vw, vh] of [[1280, 800], [1440, 900], [1600, 900], [2560, 1080], [3440, 1200]]) {
+      await page.setViewportSize({ width: vw, height: vh });
+      await assertStageGeometry(frame().locator('body'), vw, vh, `shell ${vw}x${vh}`);
+      const shellOverflowX = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+      assert.equal(shellOverflowX, false, `shell outer horizontal overflow at ${vw}x${vh}`);
+    }
+
+    // Verify combobox popup alignment inside the 1280px capped stage at 2560x1080.
+    await page.setViewportSize({ width: 2560, height: 1080 });
+    const uwMedium = frame().locator('tbody.tier-entry[data-settings-tier=medium]');
+    await uwMedium.locator('.scb-btn').nth(1).click();
+    await frame().locator('.scb-pop').waitFor({ state: 'visible' });
+    const uwPopAlign = await frame().locator('body').evaluate(() => {
+      const stage = document.querySelector('[data-settings-view]').getBoundingClientRect();
+      const inp = document.querySelectorAll('tbody.tier-entry[data-settings-tier=medium] .scb')[1].getBoundingClientRect();
+      const pop = document.querySelector('.scb-pop').getBoundingClientRect();
+      return {
+        leftDelta: Math.abs(pop.left - inp.left),
+        withinViewport: pop.right <= window.innerWidth && pop.left >= 0,
+        withinStageX: pop.left >= stage.left && pop.right <= stage.right,
+        belowOrAbove: pop.top >= inp.bottom || pop.bottom <= inp.top
+      };
+    });
+    assert(uwPopAlign.leftDelta <= 2, 'expected combobox popup aligned at 2560x1080, delta=' + uwPopAlign.leftDelta);
+    assert.equal(uwPopAlign.withinViewport, true);
+    assert.equal(uwPopAlign.withinStageX, true);
+    assert.equal(uwPopAlign.belowOrAbove, true);
+    if (shots) await page.screenshot({ path: shot('settings-2560-tiers-dark.png') });
+    await uwMedium.locator('input.scb-inp').nth(1).press('Escape');
+
+    // Verify navigating to /settings?scope=global&frame=1 redirects to shell and keeps .stage centered/capped at 2560x1080.
+    await page.goto(base + '/settings?scope=global&frame=1');
+    await frame().locator('[data-settings-section=agents]').waitFor();
+    await frame().locator('[data-settings-section=agents]').click();
+    await frame().locator('tbody.tier-entry[data-settings-tier=medium]').waitFor();
+    await assertStageGeometry(frame().locator('body'), 2560, 1080, 'frame-redirected 2560x1080');
+
     assert.deepEqual(errors, [], 'unexpected console/page errors: ' + errors.join('; '));
     console.log('settings combobox acceptance passed (choicesRequests=' + choicesRequests + ')');
   } finally {

@@ -474,3 +474,19 @@ test("settings combobox degrades gracefully when /support/choices fails", async 
   input.dispatchEvent(new FakeEvent("input", { bubbles: true }));
   assert.equal(input.value, "sonnet");
 });
+
+test("settings stage caps width at 1280px and centers cleanly at wide and ultrawide viewports", () => {
+  const css = read("dashboard-settings.css");
+  const stageBlock = css.match(/\.stage\s*\{([^}]*)\}/);
+  assert.ok(stageBlock, "expected .stage rule in dashboard-settings.css");
+  assert.match(stageBlock[1], /width:\s*100%/);
+  assert.match(stageBlock[1], /max-width:\s*1280px/);
+  assert.match(stageBlock[1], /box-sizing:\s*border-box/);
+  assert.match(stageBlock[1], /margin-inline:\s*auto/);
+
+  const wideStage = css.match(/@media\s*\(min-width:\s*1600px\)\s*\{[\s\S]*?:root\[data-mode="settings"\]\s+\.stage\s*\{([^}]*)\}/);
+  assert.ok(wideStage, 'expected >=1600px :root[data-mode="settings"] .stage rule');
+  assert.match(wideStage[1], /grid-column:\s*2/);
+  assert.match(wideStage[1], /justify-self:\s*center/);
+  assert.match(wideStage[1], /align-self:\s*stretch/);
+});
