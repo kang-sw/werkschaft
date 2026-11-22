@@ -1779,3 +1779,31 @@ func TestHostedRepeatedHolderEndsKeepTheCopyUntilADeleteSucceeds(t *testing.T) {
 	}
 	goneRacing(4)
 }
+
+// TestHostedStartSweepsExitCopiesWithoutARow: an exit copy whose job has
+// no row (its removal failed, or a predecessor never reached it) goes at
+// the next start; a copy whose job still has a row, and anything that is
+// not an exit copy, stays.
+func TestHostedStartSweepsExitCopiesWithoutARow(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	kept := fx.launchFinished()
+	write := func(name string) string {
+		p := filepath.Join(fx.exitDir, name)
+		if err := os.WriteFile(p, []byte(`{"reason":"child_exited"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	keptCopy, orphan, other := write(kept.ID+".json"), write("exec_gone-job-copy.json"), write("notes.txt")
+	_ = fx.h.Close()
+	fx.open(5 * time.Second)
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("the exit copy with no row stays after a start: %v", err)
+	}
+	for _, p := range []string{keptCopy, other} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s went at the start: %v", filepath.Base(p), err)
+		}
+	}
+}

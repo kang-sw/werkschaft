@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -237,7 +238,34 @@ func (h *Hosted) Start() {
 	for _, j := range gone {
 		h.endFromExitCopy(j)
 	}
+	h.sweepExitCopies()
 	h.deliverPending()
+}
+
+// sweepExitCopies removes the exit copies no job row needs: a removal that
+// failed, or one a predecessor never reached. A copy whose job still has a
+// row, or whose row delete has not succeeded, stays.
+func (h *Hosted) sweepExitCopies() {
+	entries, err := os.ReadDir(h.opts.ExitDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			h.logf("sweep exit copies: %v", err)
+		}
+		return
+	}
+	for _, e := range entries {
+		id, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || e.IsDir() {
+			continue
+		}
+		h.mu.Lock()
+		_, live := h.jobs[id]
+		_, pending := h.deleting[id]
+		h.mu.Unlock()
+		if !live && !pending {
+			h.removeExitCopy(id)
+		}
+	}
 }
 
 // endFromExitCopy ends job j, whose holder is gone, with the status its
@@ -479,7 +507,8 @@ func (h *Hosted) dropExitCopy(j *hostedJob) {
 	j.exitCopyOwed = true
 }
 
-// removeExitCopy removes job id's exit copy, logging a failure.
+// removeExitCopy removes job id's exit copy; a failure stays for the next
+// start's sweep (sweepExitCopies).
 func (h *Hosted) removeExitCopy(id string) {
 	if err := os.Remove(h.exitCopyPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		h.logf("remove job %s's exit copy: %v", id, err)
