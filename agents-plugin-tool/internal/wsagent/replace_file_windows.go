@@ -68,32 +68,5 @@ func readFile(path string) ([]byte, error) {
 // exists, and on a short budget so a record that is truly gone reads
 // not-found promptly.
 func readRecordFile(sessionDir string) ([]byte, error) {
-	path := recordPath(sessionDir)
-	deadline := time.Now().Add(2 * time.Second)
-	missDeadline := time.Now().Add(recordMissBudget)
-	backoff := 5 * time.Millisecond
-	for {
-		raw, err := wsstate.ReadFileOnce(path)
-		if err == nil {
-			return raw, nil
-		}
-		now := time.Now()
-		retry := false
-		switch {
-		case isTransientReplaceError(err):
-			retry = !now.After(deadline)
-		case isRecordMiss(err, now.Before(missDeadline), func() bool {
-			_, serr := os.Stat(sessionDir)
-			return serr == nil
-		}):
-			retry = true
-		}
-		if !retry {
-			return raw, err
-		}
-		time.Sleep(backoff)
-		if backoff < 200*time.Millisecond {
-			backoff *= 2
-		}
-	}
+	return readRecordRetrying(sessionDir, wsstate.ReadFileOnce, isTransientReplaceError, nil)
 }
