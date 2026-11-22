@@ -462,10 +462,11 @@ type liveWriter struct {
 	// restored is what the snapshot an earlier daemon left says of agy
 	// native rows, for the first replay to end (takeRestored).
 	restored restoredAgyNative
-	// extraDisk is the content of the session's extra file
-	// (wslive.SnapshotExtra) as last read or written; nil when the file is
-	// missing. It is rewritten ahead of a recovery snapshot write only when
-	// the content to write differs.
+	// extra and extraDisk are the session's extra file (wslive.SnapshotExtra)
+	// as last read or written, and its bytes; nil when the file is missing.
+	// It is rewritten ahead of a recovery snapshot write only when the
+	// content to write differs.
+	extra     wslive.SnapshotExtra
 	extraDisk []byte
 	// coverage names the holder records the state applied, written into the
 	// recovery file (wslive.Snapshot.HolderID, HolderSeq); unset writes none
@@ -604,6 +605,8 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 	if prev, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir)); err == nil {
 		restored = restoredAgyNativeOf(prev, st.ReplyID())
 		restored.erased = restored.readable && !restored.covered && extra.Coverage
+		// Rows an older writer seeded without their scale take it back.
+		prev.OverlayAgentScales(extra.Agents)
 		st.SeedFinished(prev)
 		st.SeedLastTurn(prev)
 		if prev.Lead.OutputRate != nil {
@@ -626,6 +629,7 @@ func newLiveWriter(dir, key, adapter string, now func() time.Time, log io.Writer
 		observedSeeded:    folded,
 		outputRates:       wslive.NewOutputRateLog(dir),
 		restored:          restored,
+		extra:             extra,
 		extraDisk:         extraDisk,
 	}
 }
@@ -899,7 +903,7 @@ func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
 		err = w.withOwner(func() error {
 			// The extra file goes first: a snapshot that names coverage never
 			// exists without it.
-			if err := w.writeExtra(); err != nil {
+			if err := w.writeExtra(snap); err != nil {
 				return err
 			}
 			if err := w.writeSnapshotFile(wslive.SnapshotPath(w.dir), raw, 0o644); err != nil {
@@ -921,20 +925,23 @@ func (w *liveWriter) flushSnapshot(heartbeat, force bool) {
 }
 
 // writeExtra writes the session's extra file (wslive.SnapshotExtra) when its
-// content differs from what the file holds: with a coverage writer's first
-// recovery write, then never again while the content stays the same.
-func (w *liveWriter) writeExtra() error {
-	if w.coverage == nil {
+// content differs from what the file holds: the coverage mark with a
+// coverage writer's first recovery write, and the scale of the rows snap
+// shows finished when that set or a scale in it changed. Running rows change
+// nothing in it, so a heartbeat or a turn never rewrites the file.
+func (w *liveWriter) writeExtra(snap wslive.Snapshot) error {
+	extra := wslive.SnapshotExtra{Coverage: w.coverage != nil || w.extra.Coverage, Agents: wslive.AgentScales(snap.Agents)}
+	if !extra.Coverage && len(extra.Agents) == 0 && w.extraDisk == nil {
 		return nil
 	}
-	raw, err := json.Marshal(wslive.SnapshotExtra{Coverage: true})
+	raw, err := json.Marshal(extra)
 	if err != nil || bytes.Equal(raw, w.extraDisk) {
 		return err
 	}
 	if err := w.writeSnapshotFile(wslive.SnapshotExtraPath(w.dir), raw, 0o644); err != nil {
 		return err
 	}
-	w.extraDisk = raw
+	w.extra, w.extraDisk = extra, raw
 	return nil
 }
 

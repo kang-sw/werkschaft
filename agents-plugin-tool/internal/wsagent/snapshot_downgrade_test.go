@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -205,4 +206,93 @@ func TestSnapshotExtraMarksCoverageOnce(t *testing.T) {
 	if r.erased || !r.evicted(wslive.NativeAgyPrefix+"x", holder, 1) {
 		t.Fatalf("a legacy file with no extra file restored = %+v, want the legacy eviction", r)
 	}
+}
+
+// TestFinishedRowScaleSurvivesAnOldSnapshotRewrite: an unlinked finished
+// hosted child (no session of its own to read the scale from, and no later
+// report: it finished) keeps its context window, compaction thresholds and
+// compaction history through a v0.51.0 rewrite of the recovery file, which
+// seeds the row without them. The current reopen takes them back from the
+// extra file; a row that is still running is republished by its runner and
+// is not kept there.
+func TestFinishedRowScaleSurvivesAnOldSnapshotRewrite(t *testing.T) {
+	for _, oldWriter := range []bool{false, true} {
+		name := "current writer only"
+		if oldWriter {
+			name = "after a v0.51.0 rewrite"
+		}
+		t.Run(name, func(t *testing.T) {
+			c, _ := agyReplayConv(t)
+			path := wslive.SnapshotPath(c.live.dir)
+			scale := &wslive.UsageCompaction{Soft: 150_000, Hard: 180_000, Milestones: []int64{120_000}, AdvisoryEnabled: true}
+			window, tokens := float64(200_000), float64(90_000)
+			failed, done, live := "pi:failed-child", "pi:done-child", "pi:live-child"
+			c.do(func() {
+				for _, id := range []string{failed, done, live} {
+					c.live.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: id, AgentKind: wslive.AgentKindPi, Label: id, Status: wslive.StatusRunning,
+						Model: "m", ContextTokens: &tokens, ContextWindow: &window, ContextCompaction: scale, Compactions: 2, CompactOrigin: wslive.CompactOriginAuto})
+				}
+				c.live.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: failed, AgentKind: wslive.AgentKindPi, Status: wslive.StatusFailed, Compactions: 2, CompactOrigin: wslive.CompactOriginAuto})
+				c.live.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: done, AgentKind: wslive.AgentKindPi, Status: wslive.StatusDone, Compactions: 2, CompactOrigin: wslive.CompactOriginAuto})
+				c.live.forceSnapshot()
+				if oldWriter {
+					rewriteAsV0510(t, path)
+				}
+				fresh := newLiveWriter(c.live.dir, c.rec.WSKey, c.rec.Backend, c.r.opts.Now, io.Discard)
+				snap := fresh.st.Snapshot(c.r.opts.Now().UnixMilli())
+				for _, id := range []string{failed, done} {
+					a, ok := snapAgent(snap, id)
+					if !ok {
+						t.Errorf("finished row %s was not restored", id)
+						continue
+					}
+					if a.ContextTokens != 90_000 || a.ContextWindow != 200_000 || !reflect.DeepEqual(a.ContextCompaction, scale) || a.Compactions != 2 || a.CompactOrigin != wslive.CompactOriginAuto {
+						t.Errorf("finished row %s = tokens %d window %d compaction %+v compactions %d/%q, want its scale kept", id, a.ContextTokens, a.ContextWindow, a.ContextCompaction, a.Compactions, a.CompactOrigin)
+					}
+				}
+				if _, ok := snapAgent(snap, live); ok {
+					t.Error("a running row was seeded; no end would come for it")
+				}
+				if extra, _ := wslive.ReadSnapshotExtra(c.live.dir); len(extra.Agents) != 2 || extra.Agents[live].ContextWindow != 0 {
+					t.Errorf("extra file scales = %+v, want the two finished rows only", extra.Agents)
+				}
+			})
+		})
+	}
+}
+
+// TestSnapshotExtraScaleWritesOnlyOnFinishedChange: a running row's reports
+// never rewrite the extra file; its finish does once, and an unchanged
+// roster after that writes nothing more.
+func TestSnapshotExtraScaleWritesOnlyOnFinishedChange(t *testing.T) {
+	c, _ := agyReplayConv(t)
+	window, tokens, more := float64(200_000), float64(1_000), float64(2_000)
+	id := "pi:cadence"
+	c.do(func() {
+		c.live.forceSnapshot() // settle the coverage mark
+		extraWrites := 0
+		inner := c.live.writeSnapshotFile
+		c.live.writeSnapshotFile = func(path string, raw []byte, mode os.FileMode) error {
+			if filepath.Base(path) == wslive.SnapshotExtraName {
+				extraWrites++
+			}
+			return inner(path, raw, mode)
+		}
+		agent := func(status string, tok *float64) {
+			c.live.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: id, AgentKind: wslive.AgentKindPi, Label: "c", Status: status,
+				ContextTokens: tok, ContextWindow: &window, ContextCompaction: &wslive.UsageCompaction{Soft: 1, Hard: 2}})
+			c.live.forceSnapshot()
+		}
+		agent(wslive.StatusRunning, &tokens)
+		agent(wslive.StatusRunning, &more)
+		if extraWrites != 0 {
+			t.Errorf("a running row wrote the extra file %d times", extraWrites)
+		}
+		agent(wslive.StatusDone, &more)
+		agent(wslive.StatusDone, &more)
+		c.live.forceSnapshot()
+		if extraWrites != 1 {
+			t.Errorf("extra file writes after the finish = %d, want 1", extraWrites)
+		}
+	})
 }

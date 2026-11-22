@@ -26,6 +26,58 @@ type SnapshotExtra struct {
 	// which drops agy native rows it does not seed (running ones) and the
 	// coverage: no absence in that file shows a row evicted by retention.
 	Coverage bool `json:"coverage,omitempty"`
+	// Agents holds the context scale and compaction history of every
+	// subagent row that is not running (AgentScales), by row ID. A v0.51.0
+	// writer seeds such a row without those members (they are unknown to its
+	// fixed Agent struct) and replaces the snapshot, and a finished row
+	// without a linked session gets no later report to bring them back.
+	Agents map[string]AgentScale `json:"agents,omitempty"`
+}
+
+// AgentScale is what a subagent row carries beyond v0.51.0's fixed Agent:
+// the context scale its runner held for the bar (ContextWindow,
+// ContextCompaction) and its compaction history (Compactions,
+// CompactOrigin). Compacting is live state and is not kept.
+type AgentScale struct {
+	ContextWindow     int64            `json:"contextWindow,omitempty"`
+	ContextCompaction *UsageCompaction `json:"contextCompaction,omitempty"`
+	Compactions       int              `json:"compactions,omitempty"`
+	CompactOrigin     string           `json:"compactOrigin,omitempty"`
+}
+
+func (a AgentScale) zero() bool {
+	return a.ContextWindow == 0 && a.ContextCompaction == nil && a.Compactions == 0 && a.CompactOrigin == ""
+}
+
+// AgentScales is the scale of each row of agents that is not running and
+// carries any. A running row is republished from its runner's memory.
+func AgentScales(agents []Agent) map[string]AgentScale {
+	var out map[string]AgentScale
+	for _, a := range agents {
+		scale := AgentScale{ContextWindow: a.ContextWindow, ContextCompaction: a.ContextCompaction, Compactions: a.Compactions, CompactOrigin: a.CompactOrigin}
+		if a.Status == StatusRunning || scale.zero() {
+			continue
+		}
+		if out == nil {
+			out = map[string]AgentScale{}
+		}
+		out[a.ID] = scale
+	}
+	return out
+}
+
+// OverlayAgentScales gives each non-running row of s that carries no scale
+// of its own the scale scales kept for its ID: the rows a v0.51.0 writer
+// left without it. A row that carries any member keeps its own.
+func (s *Snapshot) OverlayAgentScales(scales map[string]AgentScale) {
+	for i := range s.Agents {
+		a := &s.Agents[i]
+		scale, ok := scales[a.ID]
+		if !ok || a.Status == StatusRunning || !(AgentScale{ContextWindow: a.ContextWindow, ContextCompaction: a.ContextCompaction, Compactions: a.Compactions, CompactOrigin: a.CompactOrigin}).zero() {
+			continue
+		}
+		a.ContextWindow, a.ContextCompaction, a.Compactions, a.CompactOrigin = scale.ContextWindow, scale.ContextCompaction, scale.Compactions, scale.CompactOrigin
+	}
 }
 
 // ReadSnapshotExtra reads the session's extra file; found is false for a
