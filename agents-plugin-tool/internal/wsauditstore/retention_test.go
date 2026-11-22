@@ -1035,6 +1035,72 @@ func TestColdEvictionThatLeavesASegmentKeepsItsEvents(t *testing.T) {
 	}
 }
 
+// TestColdEvictionFailsClosedOnAnUnreadableTailSegment pins cold eviction
+// when the newest segment's head reads fine but the whole file does not: that
+// segment alone may carry the latest boundary, so no replacement is written
+// from older state and nothing is deleted. Snapshotting without it and
+// deleting it would let a restart admit the records it finalized.
+func TestColdEvictionFailsClosedOnAnUnreadableTailSegment(t *testing.T) {
+	root := t.TempDir()
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 4 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 4; seq++ {
+		mustAppend(t, s, bigRecord("old", seq, lim))
+	}
+	if err := s.Finalize(context.Background(), "old", "holder:1", 4); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	dir := filepath.Join(root, "old")
+	before, _, err := listSegments(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(5); ; seq++ { // rotate once more, then finalize there
+		mustAppend(t, s, bigRecord("old", seq, lim))
+		flush(t, s)
+		if segs, _, _ := listSegments(dir); len(segs) > len(before) {
+			if err := s.Finalize(context.Background(), "old", "holder:1", seq); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	_ = s.Close()
+	segs, _, err := listSegments(dir)
+	if err != nil || len(segs) < 2 {
+		t.Fatalf("segments %+v %v", segs, err)
+	}
+	newest := filepath.Join(dir, segmentName(segs[len(segs)-1].seq))
+	s0, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	loaded(t, s0, "old")
+	want := s0.Recover("old", "holder:1")
+	_ = s0.Close()
+	if want.Boundary <= 4 {
+		t.Fatalf("fixture: the newest segment carries no later boundary: %+v", want)
+	}
+
+	orig := readFile
+	t.Cleanup(func() { readFile = orig })
+	readFile = func(path string) ([]byte, error) {
+		if path == newest {
+			return nil, errors.New("read error")
+		}
+		return orig(path)
+	}
+	evictOld(t, root, lim, clock)
+	readFile = orig
+	if _, err := os.Stat(newest); err != nil {
+		t.Fatalf("the unreadable newest segment was deleted: %v", err)
+	}
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	loaded(t, s2, "old")
+	if rec := s2.Recover("old", "holder:1"); rec.Boundary != want.Boundary {
+		t.Fatalf("recovered boundary %d, want %d", rec.Boundary, want.Boundary)
+	}
+}
+
 // TestControlOnlyRingsAreEvictableAndTombstonesGoLast pins store-wide
 // eviction of a loaded ring that holds only control lines (losses,
 // boundaries) and no events: it is evicted like any other ring, leaving a

@@ -944,7 +944,7 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 		r = recoverTail(info.session, dir)
 		if r == nil {
 			info.mu.Unlock()
-			return fmt.Errorf("evict audit ring of session %s: its segments cannot be listed", info.dir)
+			return fmt.Errorf("evict audit ring of session %s: its segments cannot be listed or read; nothing deleted", info.dir)
 		}
 	}
 	if r.hasState() {

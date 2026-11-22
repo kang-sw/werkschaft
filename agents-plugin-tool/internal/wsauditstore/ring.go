@@ -569,7 +569,9 @@ func (r *ring) recover() error {
 // whose snapshot holds everything before it (a torn header from a crash
 // right after rotation does not count) — for an unloaded ring about to be
 // evicted. Every listed segment is accounted in segs and bytes. It returns
-// nil when the ring cannot be listed or has no segment.
+// nil when the ring cannot be listed or has no segment, and fails closed
+// (nil) when a segment of that tail cannot be read: it may alone carry a
+// boundary, and a snapshot taken without it would let a deletion lose it.
 func recoverTail(session, dir string) *ring {
 	segs, _, err := listSegments(dir)
 	if err != nil || len(segs) == 0 {
@@ -579,8 +581,11 @@ func recoverTail(session, dir string) *ring {
 	start := len(segs) - 1
 	for ; start >= 0; start-- {
 		raw, err := readFile(filepath.Join(dir, segmentName(segs[start].seq)))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // deleted since the listing
+		}
 		if err != nil {
-			continue
+			return nil
 		}
 		raws[start] = raw
 		if completeHeader(raw) {
