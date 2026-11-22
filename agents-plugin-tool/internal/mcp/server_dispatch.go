@@ -547,6 +547,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if entry.Key == wsconfig.ItemWorkflowProfile && value == "orchestrate" {
 				text += orchestrateWhitelistWarning(harness)
 			}
+			if entry.Key == wsconfig.ItemAgentTierAliases {
+				// Informational: an alias that overlaps the routing graph keeps
+				// exact-name precedence, so the write stands and says where.
+				text += s.tierCollisionLines()
+			}
 			return toolTextResponse(req.ID, text, nil)
 		}
 
@@ -592,15 +597,18 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if harness == "" {
 			harness = s.currentHarness()
 		}
-		backend, model, effort, resolvedFrom, err := wsconfig.ResolveAgentTierForHarness(s.configOptions(), tier, harness)
+		result, err := s.resolveAgentTier(tier, harness)
 		if err != nil {
 			return toolTextResponse(req.ID, "", fmt.Errorf("config.resolve_agent: %w", err))
 		}
-		result := resolveAgentTierResult{Backend: backend, Model: model, Effort: effort, ResolvedFrom: resolvedFrom}
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, result, nil)
 		}
-		return toolTextResponse(req.ID, fmt.Sprintf("backend: %s\nmodel: %s\neffort: %s\nresolved_from: %s\n", backend, model, formatEffortForText(effort), resolvedFrom), nil)
+		text := fmt.Sprintf("backend: %s\nmodel: %s\neffort: %s\nresolved_from: %s\n", result.Backend, result.Model, formatEffortForText(result.Effort), result.ResolvedFrom)
+		if result.Trace != "" {
+			text += "trace: " + result.Trace + "\n"
+		}
+		return toolTextResponse(req.ID, text, nil)
 
 	case "git.status":
 		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
@@ -1589,7 +1597,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return toolTextResponse(req.ID, "", err)
 		}
 		path, planPath, recommendedTier, err := renderPlaybookWithPlan(s, strings.TrimSpace(renderSessionKey), renderProfile, rsrcRoot, worktreeRoot, name, callerContext, s.configOptions(), mintRoot, parentKey, renderWorkflowLangRV.Value, renderOverrideLookup, tierOverride, planStem)
-		text := withRecommendedRenderBinding(path, s.currentHarness(), recommendedTier, s.configOptions())
+		text := s.withRecommendedRenderBindingFor(path, s.currentHarness(), recommendedTier, s.configOptions())
 		if planPath != "" {
 			text += "\n" + planPathLinePrefix + planPath
 		}

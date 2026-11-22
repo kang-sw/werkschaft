@@ -19,7 +19,7 @@ func TestSettingsInteractionBrowser(t *testing.T) {
 		t.Skip("set WS_PLAYWRIGHT_MODULE to run the settings Chromium acceptance")
 	}
 	t.Setenv("WS_RSRC_DEV_CHECKOUT", "")
-	backend, err := mcp.DashboardConfigBackend("ws", wsconfig.Options{}, mcp.NewDashboardSessionSource(), nil)
+	backend, err := mcp.DashboardConfigBackend("ws", wsconfig.Options{}, mcp.NewDashboardSessionSource(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestSettingsProductionBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := mcp.NewDashboardSessionSource()
-	backend, err := mcp.DashboardConfigBackend("ws", wsconfig.Options{CacheHome: cache, ConfigHome: home}, source, nil)
+	backend, err := mcp.DashboardConfigBackend("ws", wsconfig.Options{CacheHome: cache, ConfigHome: home}, source, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -216,6 +216,15 @@ type Options struct {
 	// route (children.go): an error refuses the call with its text (no
 	// usable Pi, say).
 	ChildCheck func() error
+	// ChildCheckKnown, when not nil, is ChildCheck's answer without running
+	// a probe: known is false while the answer would need one (a Pi
+	// version not yet probed). HarnessAvailability asks it, never
+	// ChildCheck.
+	ChildCheckKnown func() (known bool, err error)
+	// TierRoles, when not nil, lists the packaged playbook role nodes of
+	// the agent.tier_routing graph agent.spawn and agent.tiers resolve
+	// through. Nil leaves only the built-in groups and user nodes.
+	TierRoles func() ([]wsconfig.TierRole, error)
 	// heartbeat overrides wslive.HeartbeatInterval for tests.
 	heartbeat time.Duration
 	// WakeRefused, when not nil, tells the sender of a message Deliver

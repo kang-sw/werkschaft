@@ -3,6 +3,8 @@ kind: render
 delegates: true
 role: auditor
 tier: large
+tier-role: fresh-reader-audit
+tier-parent: review:*
 variables:
   - TargetFiles
   - AuditScope

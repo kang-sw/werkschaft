@@ -3,6 +3,8 @@ kind: render
 delegates: true
 role: worker
 tier: medium
+tier-role: ticket-handler
+tier-parent: implement:*
 variables:
   - SpawnIdiom
   - WorkflowLang

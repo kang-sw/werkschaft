@@ -3,6 +3,8 @@ kind: render
 delegates: true
 role: worker
 tier: large
+tier-role: ticket-worker-elevated
+tier-parent: implement:*
 includes:
   - worker-stop-protocol
 variables:
