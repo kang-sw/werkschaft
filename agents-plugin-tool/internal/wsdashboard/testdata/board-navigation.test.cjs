@@ -261,3 +261,12 @@ test('pill segment rematerializes an applied history target rather than scrollin
   context.click('top')({ target: { closest(selector) { return selector === '.oq-seg' ? { getAttribute: () => 'open' } : null; } } });
   assert.deepEqual(events, ['apply', 'materialize:item-44', 'scroll:item-44']);
 });
+
+test('boardJump accepts any positive decimal item/check id', () => {
+  for (const id of ['item-1234567', 'check-98765432101']) {
+    const { context, nodes, events } = environment(false);
+    nodes[id] = nodes['item-44']; nodes[id].id = id; delete nodes['item-44'];
+    assert.ok(context.boardJump(id), id + ' is navigable');
+    assert.ok(events.includes('scroll:' + id));
+  }
+});

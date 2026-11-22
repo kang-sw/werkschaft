@@ -282,7 +282,7 @@
   // Only existing board items, stream entries, stable panels and topic anchors
   // may be navigated. Topic chips never materialize unloaded closed topics.
   function boardJump(id) {
-    if (typeof id !== "string" || !/^(?:(?:item|check)-[0-9]{1,6}|[pe][1-9][0-9]*|topic-(?:[0-9a-f]{2})+)$/.test(id)) return;
+    if (typeof id !== "string" || !/^(?:(?:item|check)-[0-9]+|[pe][1-9][0-9]*|topic-(?:[0-9a-f]{2})+)$/.test(id)) return;
     if (window.wbPill && window.wbPill.apply && !window.wbPill.apply(function () { boardJump(id); })) return true;
     if (doc.body.classList.contains("tk-paged") && tkApi) tkApi.leavePage();
     if (grid && !tabShown("board")) setTab("board");
