@@ -4,12 +4,14 @@ package wsagent
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -142,8 +144,8 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 
 // reserveBoundWorktrees takes the spawn reservation of every worktree root at
 // or above each of paths, once per root, until the returned unlock runs.
-// worktree.release counts a conversation as bound when its canonical root
-// equals the worktree or its canonical cwd lies anywhere within it
+// worktree.release counts a conversation as bound when its canonical root or
+// effective cwd lies anywhere within the worktree
 // (ActiveChildrenInWorktree), so every conversation create reserves each
 // worktree that could count it: the walk starts from the canonical path, so
 // a symlink from outside still reserves the worktree it resolves into, and it
@@ -161,7 +163,12 @@ func reserveBoundWorktrees(paths ...string) (func(), error) {
 	}
 	seen := map[string]bool{}
 	for _, path := range paths {
-		for _, dir := range enclosingWorktreeRoots(path) {
+		dirs, err := enclosingWorktreeRoots(path)
+		if err != nil {
+			unlockAll()
+			return nil, err
+		}
+		for _, dir := range dirs {
 			if seen[dir] {
 				continue
 			}
@@ -191,20 +198,28 @@ func boundReservationRefusal(err error) error {
 
 // enclosingWorktreeRoots returns every directory at or above path's
 // canonical form (canonicalWorktreePath, the form release compares) that
-// holds a .git entry, innermost first.
-func enclosingWorktreeRoots(path string) []string {
+// holds a .git entry, innermost first. Only an absent entry (not found, or a
+// path component that is no directory) means no worktree there; any other
+// error could hide one, so it is returned and the create refuses.
+func enclosingWorktreeRoots(path string) ([]string, error) {
 	path = canonicalWorktreePath(path)
 	if path == "" {
-		return nil
+		return nil, nil
 	}
 	var roots []string
 	for dir := path; ; {
-		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+		dotGit := filepath.Join(dir, ".git")
+		_, err := os.Lstat(dotGit)
+		switch {
+		case err == nil:
 			roots = append(roots, dir)
+		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+		default:
+			return nil, fmt.Errorf("could not check %s for a worktree: %w", dotGit, err)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return roots
+			return roots, nil
 		}
 		dir = parent
 	}

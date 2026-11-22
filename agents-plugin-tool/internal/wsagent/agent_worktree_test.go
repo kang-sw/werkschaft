@@ -5,12 +5,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -269,6 +272,34 @@ func TestWorktreeSpawnReservationSpansRegistrationOnly(t *testing.T) {
 	if creates < 2 || sends < 2 {
 		t.Fatalf("observed %d pre-registration writes and %d first sends, want 2 each", creates, sends)
 	}
+}
+
+// TestWorktreeDiscoveryErrorRefusesTheCreate verifies that a .git lookup that
+// fails with anything but absence refuses the create: the unreadable entry
+// could be a worktree a release holds.
+func TestWorktreeDiscoveryErrorRefusesTheCreate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory search permission is a POSIX mode bit")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	h, _ := agentHarness(t, nil)
+	locked := filepath.Join(t.TempDir(), "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if _, err := os.Lstat(filepath.Join(locked, ".git")); err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Skipf("lookup in a mode-0 directory = %v; want a permission error to test", err)
+	}
+	_, err := h.runner.AgentSpawn(h.leadCaller(), AgentSpawnRequest{
+		Prompt: "undiscoverable spawn", Tier: "small", Authority: "read-only", Cwd: locked,
+	})
+	agentRefused(t, err, http.StatusConflict, "could not check", "try again")
 }
 
 // TestWorktreeActiveChildrenAndSpawnReleaseReservation verifies daemon-wide
