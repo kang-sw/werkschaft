@@ -23,7 +23,11 @@ The holder rewrites the descriptor when it goes missing (checked every 60 s).
 On a graceful exit it leaves exit.json for the manager to consume and remove
 with the state directory: {"exit_code": <int|null>, "signal": <int|null>,
 "reason": "child_exited" | "stop" | "idle" | "fatal",
-"stopped_at": <RFC3339 UTC timestamp>}.
+"stopped_at": <RFC3339 UTC timestamp>}. A holder started with
+--exit-copy PATH also writes that same object to PATH (creating its parent
+directories, mode 0700), a place the generic cleanup of the state directory
+does not reach; a failure to write the copy is logged and does not stop the
+exit.
 
 Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
 
@@ -46,8 +50,15 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
   {"reply": <id>, "ok": false, "error": "<code>", "message": "..."}):
 
     spawn   {"argv": [...], "cwd": "...", "env": {...}, "mode": "pipe" |
-             "pty", "rows": 24, "cols": 80} -> {"child": <status>}
+             "pty", "rows": 24, "cols": 80, "input": "<base64>",
+             "input_eof": false} -> {"child": <status>}
             One child per holder. env, when given, is the whole environment.
+            input and input_eof, both optional, are queued as one input
+            operation's data and eof before the child's input writer runs,
+            so they reach a child that exits at once and leave no window in
+            which its stdin stays open; without them stdin stays open for
+            later input operations. A bad input refuses the spawn before the
+            child starts. A holder that predates these fields ignores them.
     input   {"data": "<base64>", "eof": false}   eof closes a pipe child's
             stdin after the data.
     resize  {"rows": n, "cols": n}               PTY children only.
@@ -708,7 +719,27 @@ def parse_spawn_spec(req: dict) -> dict:
     if mode not in ("pipe", "pty"):
         raise OpError("bad_request", 'spawn mode must be "pipe" or "pty"')
     rows, cols = parse_size(req, default=(24, 80))
-    return {"argv": argv, "cwd": cwd, "env": env, "mode": mode, "rows": rows, "cols": cols}
+    data = parse_input_data(req.get("input"))
+    if len(data) > MAX_PENDING_INPUT:
+        raise OpError("input_overflow", "the spawn input exceeds the unread input limit")
+    return {
+        "argv": argv,
+        "cwd": cwd,
+        "env": env,
+        "mode": mode,
+        "rows": rows,
+        "cols": cols,
+        "input": data,
+        "input_eof": req.get("input_eof") is True,
+    }
+
+
+def parse_input_data(value) -> bytes:
+    """Decode an input operation's (or a spawn's) base64 data."""
+    try:
+        return base64.b64decode(value or "", validate=True)
+    except (ValueError, TypeError):
+        raise OpError("bad_request", "input data must be base64") from None
 
 
 def parse_size(req: dict, default=None) -> tuple[int, int]:
@@ -849,6 +880,7 @@ class Holder:
         stop_grace: float = STOP_GRACE_SECONDS,
         restart_safe: bool = True,
         script_path: str | None = None,
+        exit_copy: str | None = None,
     ) -> None:
         self.dir = os.path.abspath(directory)
         self.id = holder_id or os.path.basename(self.dir)
@@ -857,6 +889,7 @@ class Holder:
         self.descriptor_check = descriptor_check
         self.stop_grace = stop_grace
         self.restart_safe = restart_safe
+        self.exit_copy = os.path.abspath(exit_copy) if exit_copy else None
         self.token = secrets.token_hex(32)
         self.script_hash = _file_sha256(script_path or __file__)
         self.max_record = max(1, min(MAX_RECORD_BYTES, ring_bytes))
@@ -933,14 +966,14 @@ class Holder:
         child = self.child
         if child is not None and self.child_status["state"] == "exited":
             child.close()
-        try:
-            self.write_exit_record()
-        except OSError as exc:
-            self.log(f"exit record write failed: {exc}")
+        self.write_exit_record()
         with self.log_lock:
             self.log_closed = True
 
     def write_exit_record(self) -> None:
+        """Write exit.json and, with --exit-copy, its copy; each failure is
+        logged on its own, so neither keeps the other or the exit from
+        happening."""
         with self.cond:
             code = self.child_status.get("exit_code")
             child_signal = self.child_status.get("signal")
@@ -950,13 +983,16 @@ class Holder:
             "reason": self.exit_reason,
             "stopped_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
         }
-        path = os.path.join(self.dir, EXIT_NAME)
-        tmp = f"{path}.{os.getpid()}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(record, f)
-            f.write("\n")
-        os.replace(tmp, path)
+        try:
+            _write_json_file(os.path.join(self.dir, EXIT_NAME), record)
+        except OSError as exc:
+            self.log(f"exit record write failed: {exc}")
+        if self.exit_copy:
+            try:
+                os.makedirs(os.path.dirname(self.exit_copy) or ".", mode=0o700, exist_ok=True)
+                _write_json_file(self.exit_copy, record)
+            except OSError as exc:
+                self.log(f"exit record copy failed: {exc}")
 
     # -- descriptor --
 
@@ -1157,6 +1193,9 @@ class Holder:
             raise OpError("spawn_failed", f"{type(exc).__name__}: {exc}") from None
         self.child = child
         self.child_status = {"state": "running", "pid": child.pid, "mode": child.mode}
+        # Queued under the lock before the writer starts: the data and EOF
+        # reach the child in order even when it exits at once.
+        self._queue_input(spec["input"], spec["input_eof"])
         self.log(f"spawned child pid {child.pid} ({child.mode}): {spec['argv'][0]}")
         readers = []
         for stream, source in child.outputs():
@@ -1174,16 +1213,16 @@ class Holder:
 
     def _op_input(self, att: Attachment, req: dict) -> None:
         self._running_child()
-        try:
-            data = base64.b64decode(req.get("data") or "", validate=True)
-        except (ValueError, TypeError):
-            raise OpError("bad_request", "input data must be base64") from None
+        data = parse_input_data(req.get("data"))
         if self.input_pending + len(data) > MAX_PENDING_INPUT:
             raise OpError("input_overflow", "the child is not reading its input")
+        self._queue_input(data, req.get("eof") is True)
+
+    def _queue_input(self, data: bytes, eof: bool) -> None:
         if data:
             self.input_queue.append(data)
             self.input_pending += len(data)
-        if req.get("eof") is True:
+        if eof:
             self.input_queue.append(None)
         self.cond.notify_all()
 
@@ -1339,6 +1378,16 @@ class Holder:
         self.exit_event.set()
 
 
+def _write_json_file(path: str, record: dict) -> None:
+    """Replace path with record through a temporary file beside it."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(record, f)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
 def _file_sha256(path: str) -> str:
     try:
         with open(path, "rb") as f:
@@ -1377,6 +1426,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ring-skip", default=None, help="a regular expression; the pipe child's stdout lines it matches stay out of the ring")
     parser.add_argument("--ring-pulse", default=None, help="a content-free line emitted at a bounded rate while ring-skip drops lines")
     parser.add_argument("--stop-grace-seconds", type=float, default=STOP_GRACE_SECONDS)
+    parser.add_argument("--exit-copy", default=None, help="a file that also receives the exit record, outside the state directory")
     parser.add_argument("--restart-unsafe", action="store_true", help="record that this holder may end with its starter")
     args = parser.parse_args(argv)
     lift_qos_default()
@@ -1398,6 +1448,7 @@ def main(argv: list[str] | None = None) -> int:
         ring_pulse=args.ring_pulse,
         stop_grace=args.stop_grace_seconds,
         restart_safe=not args.restart_unsafe,
+        exit_copy=args.exit_copy,
     )
     for name in ("SIGTERM", "SIGINT", "SIGHUP"):
         sig = getattr(signal, name, None)

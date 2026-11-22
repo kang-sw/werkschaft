@@ -455,6 +455,189 @@ Verification:
   holder files. Verify that new hosted jobs create no per-job output files
   and that interactive paths stay off file I/O.
 
+### Result (88b0a3a24) - 2026-11-22
+
+- **Landed** (`8e47d3b8e..88b0a3a24`):
+  - Schemas for `exec.run`, `exec.stop`, `exec.tail`, `exec.list` and
+    `exec.write`, and the new `exec.shell {cmd}` form beside the legacy
+    `{command, shell}` form. A precheck refuses mixed argument families.
+    `exec.raw.read` gains an additive `evicted_before`.
+  - Hosted jobs (`internal/execjob/hosted*.go`):
+    - Each job runs under its own holder, with holder session kind `exec`.
+    - Output stays in memory rings: 1 MiB per job, 32 MiB total, a 1 MiB
+      holder ring, and 4 KiB previews.
+    - Metadata goes to `exec-jobs.db` (SQLite). It is written at start, at
+      conversion and at end, never per output.
+    - The holder copies terminal status to `exec-exits/<id>.json`, outside
+      its own directory.
+    - Bounds: 200 jobs kept, 50 per `exec.list`, and a 30 s window that
+      starts at spawn.
+  - Holder: `--exit-copy`, plus finite stdin delivered atomically with the
+    spawn (`input`, `input_eof`). The protocol stays at version 1.
+  - Runner seams (`wsagent/exec_seams.go`):
+    - `ExecOwner` is the trusted binding. `ProxyHello.Conversation` is
+      tagged `json:"-"` and only `ResolveMCPToken` sets it.
+    - `ApproveExec` and `ExecImmediate` implement the daemon-owned approval
+      of Decision 4.
+    - `AdmitCompletion` writes Steer inbox entries carrying the stable event
+      ID `exec:<id>:exit`. Deduplication uses `Record.AcceptedEvents`
+      (capped at 64) plus an inbox scan. `Record.OpenGen` is the fence and
+      close bumps it. A Pi child is never revived; a handed-off session
+      answers Deferred.
+    - `MCPCallBegin` counts in-flight ws MCP calls on the token HTTP route;
+      agy's turn-replacing steer waits for that count to reach zero.
+  - MCP routing:
+    - Only trusted-binding connections get hosted jobs. A `session_key`
+      grants a root and cwd, never ownership.
+    - Legacy launches on those connections become hosted jobs, keeping the
+      legacy key (`exec-<ms>-<16hex>`) and reply.
+    - Legacy readers look in the hosted jobs first (by root and key), then
+      fall back to the file-backed records.
+  - Daemon wiring (`cmd/ws-mcp/exec_hosted.go`):
+    - A late-bound holder sink and an exec exit hook.
+    - The store opens under the daemon lock after `StartDaemon`.
+    - `Start` replays live job holders and ends gone ones from their exit
+      copy. It also stops unowned exec holders and delivers pending
+      notices.
+  - For `261122-feat-ws-agent-turn-semaphore`:
+    - The conversation-attribution seam (`HostedLaunch.Owner`, `ExecOwner`)
+      and completion-delivery seam (`AdmitCompletion`, `CompletionOutcome`)
+      are in place.
+    - The semaphore itself is not implemented.
+- **Decisions made within the ticket's Decisions:**
+  - Phase 1 keeps the tools out of `tools/list`. Advertising them is part
+    of the Phase 2 cutover, so Codex is not prompted twice before its
+    approval config exists.
+  - Converted legacy launches notify, like converted new launches
+    (Decision 3).
+  - Inside the window, an interrupt (the request context ending) stops the
+    job, while a drain (daemon replacement) converts it. A stop suppresses
+    the notice.
+  - Shell resolution is Bash on the job's PATH (Git for Windows' bash on
+    Windows), else `/bin/sh`. There is no config key for it.
+  - A role or mode allow is rechecked against the live mode after the holder
+    starts and before the spawn, and a mode change settles pending exec
+    prompts. Preflight and approval run before the window starts.
+  - The approval shows what decides the run: command, cwd, the program
+    resolved on the job's PATH before the prompt, the env overlay, and a
+    1 KiB stdin preview with the full length.
+- **Compatibility, holder protocol** (directional, T0):
+  - The protocol stays at version 1 (`wsholder/holder.go:58`,
+    `holder.py:121`).
+  - A newer daemon never sends the new surfaces to an older holder.
+    `--exit-copy` (`holder.py:27`, `:883-993`; `manager.go:580-586`,
+    `:656-657`) and the spawn fields `input`/`input_eof` (`holder.py:733`,
+    `:1198`; `client.go:100-105`, `:312-344`) only reach the holder script
+    the launching daemon staged itself (`StageScript`, `holder.go:134`). An
+    older holder ignores unknown spawn fields, and an older daemon sends
+    neither.
+  - When an older daemon meets a newer holder, it attaches the holder and
+    ignores the unknown session kind. Its stop and cleanup remove the
+    holder directory and record nothing. The exit copy survives outside
+    that directory, and the new daemon reads the terminal status from it on
+    reopen (`TestHostedExecSurvivesAnOldDaemonAndReopens`,
+    `TestHostedExecChildEndsUnderAnOldDaemon`).
+- **Compatibility, restore data** (directional):
+  - `exec-jobs.db`: T0. Only new daemons write and read it
+    (`hosted_store.go:22`). The schema is `user_version` 1 and a newer
+    version is refused (`:129-132`). Old daemons never open it.
+  - The agent `Record` gains `open_gen` and `accepted_events`: T0. Older
+    writers of the same minor version keep unknown members
+    (`record.go:192-234`, since v0.50.0 `184452a15`; current 0.50.8).
+  - The inbox `eventId`: T1. An older daemon's `Steer` rewrite
+    (`wsinbox/inbox_store.go:245`) drops it. This causes no duplicate,
+    because `AcceptedEvents` survives in the record and the job's store row
+    marks the notice delivered.
+  - MCP:
+    - The new tools and the new `exec.shell` form are additive and hidden.
+      Older servers refuse the new arguments at precheck, so Phase 2 has to
+      gate them on capability.
+    - The eight legacy calls, both legacy argument families, old
+      file-backed records and raw byte offsets are unchanged
+      (`TestHostedExecOldFileBackedRecordsStayReadable`).
+    - The hosted legacy timed reply has the same fields as the file-backed
+      5 s reply. An older client's follow-up status, result and abort work
+      on both (`TestHostedExecLegacyTimedReplyMatchesTheFileBackedShape`).
+- **Lite review:** no critical findings. Both important findings were fixed
+  in `88b0a3a24`:
+  - A stale running row could overwrite a terminal row. Row writes are now
+    ordered by a per-job revision.
+    `TestHostedLateRunningRowNeverOverwritesTheEnd` fails on every run
+    without that ordering.
+  - The approval hid env, stdin and the resolved program. It now shows all
+    three, and the program resolves before the prompt.
+  - Of 5 minor findings, one is fixed: pruning keeps jobs whose notice is
+    still pending. The others are listed under Known limits.
+  - Coverage notes: a test now shows an answer from another conversation is
+    refused, and the link test's doc comment was corrected.
+- **Known limits** (minor, unfixed):
+  - Approval waits watch the request context, not the drain. An unanswered
+    prompt holds a daemon replacement until the drain deadline.
+  - When the harness itself reports a mode change in-stream
+    (`runner_events.go`), pending exec prompts are not settled. The live
+    recheck before spawn still applies.
+  - After a daemon restart, output offsets drift in two cases:
+    - A running job with more than 1 MiB of output resumes offsets at the
+      oldest record left in the holder ring.
+    - A finished job keeps only its 4 KiB previews, and grep line numbers
+      restart at those kept bytes.
+  - Legacy hosted stdin beyond the holder's 8 MiB unread-input limit, given
+    to a child that does not read it, records a process that did start as
+    failed.
+- **Verification:**
+  - Run from `agents-plugin-tool/`; each Go command was prefixed with
+    `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`. Every command passed
+    except the one pre-existing failure noted below.
+  - execjob, textreader and holder:
+    - `go test ./internal/execjob/ -count=1` (24.4s).
+    - `go test ./internal/execjob/ -run TestHosted -race -count=1`.
+    - `go test ./internal/execjob/ -run 'TestHostedLateRunningRowNeverOverwritesTheEnd|TestHostedSyncEndInsideTheWindow' -count=20`.
+    - `go test ./internal/textreader/ -count=1`.
+    - `go test ./internal/wsholder/ -run 'TestLaunchExitCopySurvivesCleanup|TestSpawnDeliversFiniteInput|Restart|ExitCleanup|OlderProtocol|Stag'`.
+    - `python3 -m unittest tests/test_holder.py`, run in `internal/wsholder`
+      (40 tests OK).
+  - wsagent:
+    - `go test ./internal/wsagent/ -run 'TestExecApproval|TestExecImmediatePosture|TestAdmitCompletion|TestAgyNoticeWaitsOutTheInFlightMCPCall|TestClaudeLeadAllowsTheWholeWSServerInEveryMode|TestClaudeLeadArgs'`.
+    - `go test ./internal/wsagent/ -run 'Approval|Steer|Close|Bypass|Permission|MCP|PiSend|Reopen|Revive|Inbox|Held'` (22.4s).
+    - `go test ./internal/wsagent/ -run 'Approval|Exec|AdmitCompletion|Bypass|Permission|TestAgyNoticeWaitsOutTheInFlightMCPCall'`.
+  - wsinbox and wsdashboard:
+    - `go test ./internal/wsinbox/ -count=1`.
+    - `go test ./internal/wsdashboard/ -run 'TestProxyHTTP|TestProxyHello' -count=1`.
+  - mcp:
+    - `go test ./internal/mcp/ -run 'TestHostedExec|TestPrecheckExecShellArgumentFamilies|TestExecToolsListNoAgentAndMCPFlow|TestExecMCPRunningLargeAndAbort|TestExecMCPResultReadableJSONStdoutAndTimeout|TestDrainEndsAnExecResultWaitAtOnce|TestHostedServerEnvAgentMode|TestHostedToolsRunGitOnTheConnectionPATH|TestHostedServersReadOnlyTheirOwnEnvironment|TestCallAgentlessGate'` (36.0s).
+  - cmd/ws-mcp:
+    - `go test ./cmd/ws-mcp/ -run 'TestHostedExec|TestHarnessKillSurvivalFixture'`.
+    - `go test ./cmd/ws-mcp/ -run 'Holder|TestHostedWorkerOverHTTP|Proxy|RuntimeCapabilit|TestToolsCommand' -skip TestProxyWhiteboardLinkHasNoLoginCode`.
+  - Pre-existing failure, not caused by this phase:
+    `TestProxyWhiteboardLinkHasNoLoginCode` in `cmd/ws-mcp` fails the same
+    way on base `8e47d3b8e`, checked on a read-only export of the base.
+  - `go build ./...` passed. `go vet` was clean on execjob, wsholder,
+    wsagent, wsdashboard, wsinbox, mcp, textreader and cmd/ws-mcp. gofmt was
+    clean on every changed file.
+- **Not verified here:**
+  - Windows: process-tree stop, Git Bash resolution, and raw Windows bytes.
+    Per Constraints these run on the owner's Windows host.
+  - syscalls/s on the owner's PC. By construction:
+    - New jobs create no per-job output files
+      (`TestHostedExecRunAndShellForms` checks this).
+    - The file touches are the holder's cold-start and exit files, plus
+      three store writes per job.
+  - Live completion steer on Codex and Pi. Both use the same Steer entry
+    path that the existing steer tests cover. Running, idle and next-turn
+    delivery are covered on the fake backend and agy's gate
+    (`TestAdmitCompletion*`, `TestAgyNoticeWaitsOutTheInFlightMCPCall`).
+  - Two parts belong to `261122-feat-ws-agent-turn-semaphore`:
+    - The slot-grant half of the agy gate fixture: cancel before a pending
+      grant, and no second slot count from a late result.
+    - Showing that slot re-acquisition does not consume the window.
+  - The Claude `can_use_tool` finding is pinned through the launch
+    arguments only, with no live CLI run. `--allowedTools mcp__ws` is
+    passed in every mode, so the daemon's prompt is the only approval
+    path.
+  - The binding is tested in two halves: `ResolveMCPToken` sets it, and the
+    token route carries it to the jobs. No single test runs both halves end
+    to end.
+
 ### Phase 2: Harness cutover, report hold, and session and worktree lifecycle
 
 After Phase 1, add the exec tools to worker allowlists and then enable verified

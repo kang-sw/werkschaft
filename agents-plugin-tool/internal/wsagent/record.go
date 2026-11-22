@@ -147,8 +147,16 @@ type Record struct {
 	LastReportedTurn string `json:"last_reported_turn,omitempty"`
 	Capability       string `json:"capability_secret,omitempty"`
 	Sends            uint64 `json:"sends,omitempty"`
-	Drained          uint64 `json:"drained,omitempty"`
-	TurnMark         uint64 `json:"turn_mark,omitempty"`
+	// OpenGen counts the explicit closes of this conversation (closeIf): a
+	// revival keeps the count, so an exec job admitted before a close can
+	// tell its owner was closed since and drop its completion notice.
+	OpenGen uint64 `json:"open_gen,omitempty"`
+	// AcceptedEvents are the newest system notice event ids the runner
+	// admitted (AdmitCompletion), at most acceptedEventsCap: they keep a
+	// replayed notice out once its inbox entry has been drained and trimmed.
+	AcceptedEvents []string `json:"accepted_events,omitempty"`
+	Drained        uint64   `json:"drained,omitempty"`
+	TurnMark       uint64   `json:"turn_mark,omitempty"`
 	// An agy worker can also have a prompt outstanding with TurnOpen false:
 	// an internal compaction prompt has no result to report to its parent.
 	TurnStartedAt int64 `json:"turn_started_at,omitempty"`

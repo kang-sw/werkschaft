@@ -41,13 +41,10 @@ type GrepResult struct {
 	Truncated bool        `json:"truncated"`
 }
 
+// fileMaxLine bounds one scanned line for the file-backed readers.
+const fileMaxLine = 1024 * 1024
+
 func Tail(path string, lines int) (string, error) {
-	if lines <= 0 {
-		lines = DefaultTailLines
-	}
-	if lines > MaxTailLines {
-		lines = MaxTailLines
-	}
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return "", nil
@@ -56,8 +53,27 @@ func Tail(path string, lines int) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	return TailReader(f, lines, fileMaxLine)
+}
+
+// TailText is Tail over in-memory bytes. A line is never too long here: the
+// line bound covers the whole input.
+func TailText(data []byte, lines int) string {
+	out, _ := TailReader(bytes.NewReader(data), lines, len(data)+1)
+	return out
+}
+
+// TailReader returns the last lines of r with Tail's line semantics
+// (bufio.ScanLines; default 40, max 1000; joined with a trailing "\n").
+// maxLine bounds one line; a non-positive value uses the file readers' 1 MiB.
+func TailReader(r io.Reader, lines, maxLine int) (string, error) {
+	if lines <= 0 {
+		lines = DefaultTailLines
+	}
+	if lines > MaxTailLines {
+		lines = MaxTailLines
+	}
+	scanner := newLineScanner(r, maxLine)
 	ring := make([]string, lines)
 	count := 0
 	for scanner.Scan() {
@@ -80,6 +96,19 @@ func Tail(path string, lines int) (string, error) {
 		out = append(out, ring[(start+i)%lines])
 	}
 	return strings.Join(out, "\n") + "\n", nil
+}
+
+func newLineScanner(r io.Reader, maxLine int) *bufio.Scanner {
+	if maxLine <= 0 {
+		maxLine = fileMaxLine
+	}
+	initial := 64 * 1024
+	if maxLine < initial {
+		initial = maxLine
+	}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, initial), maxLine)
+	return scanner
 }
 
 func Read(path string, offset, limit int64) (ReadResult, error) {
@@ -120,8 +149,51 @@ func Read(path string, offset, limit int64) (ReadResult, error) {
 }
 
 func Grep(paths []string, pattern string, before, after, maxMatches int, regex bool) (GrepResult, error) {
+	g, err := newGrepper(pattern, before, after, maxMatches, regex)
+	if err != nil {
+		return GrepResult{}, err
+	}
+	for _, path := range paths {
+		lines, err := readLines(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return g.out, err
+		}
+		if g.scan(path, lines, 1) {
+			return g.out, nil
+		}
+	}
+	return g.out, nil
+}
+
+// GrepLines is Grep over lines already split with ReadLines semantics.
+// firstLine is the line number of lines[0] (non-positive means 1), so a
+// caller holding only a suffix of a stream keeps absolute line numbers.
+func GrepLines(path string, lines []string, firstLine int, pattern string, before, after, maxMatches int, regex bool) (GrepResult, error) {
+	g, err := newGrepper(pattern, before, after, maxMatches, regex)
+	if err != nil {
+		return GrepResult{}, err
+	}
+	if firstLine <= 0 {
+		firstLine = 1
+	}
+	g.scan(path, lines, firstLine)
+	return g.out, nil
+}
+
+type grepper struct {
+	pattern       string
+	re            *regexp.Regexp
+	before, after int
+	maxMatches    int
+	out           GrepResult
+}
+
+func newGrepper(pattern string, before, after, maxMatches int, regex bool) (*grepper, error) {
 	if pattern == "" {
-		return GrepResult{}, fmt.Errorf("pattern is required")
+		return nil, fmt.Errorf("pattern is required")
 	}
 	if before < 0 {
 		before = 0
@@ -135,54 +207,51 @@ func Grep(paths []string, pattern string, before, after, maxMatches int, regex b
 	if maxMatches > MaxMatchesLimit {
 		maxMatches = MaxMatchesLimit
 	}
-	var re *regexp.Regexp
-	var err error
+	g := &grepper{pattern: pattern, before: before, after: after, maxMatches: maxMatches}
 	if regex {
-		re, err = regexp.Compile(pattern)
+		re, err := regexp.Compile(pattern)
 		if err != nil {
-			return GrepResult{}, err
+			return nil, err
 		}
+		g.re = re
 	}
-	out := GrepResult{}
-	for _, path := range paths {
-		lines, err := readLines(path)
-		if os.IsNotExist(err) {
+	return g, nil
+}
+
+// scan appends matches from lines and reports whether maxMatches was reached.
+func (g *grepper) scan(path string, lines []string, firstLine int) bool {
+	for i, line := range lines {
+		var matched bool
+		if g.re != nil {
+			matched = g.re.MatchString(line)
+		} else {
+			matched = strings.Contains(line, g.pattern)
+		}
+		if !matched {
 			continue
 		}
-		if err != nil {
-			return out, err
+		start := i - g.before
+		if start < 0 {
+			start = 0
 		}
-		for i, line := range lines {
-			matched := strings.Contains(line, pattern)
-			if regex {
-				matched = re.MatchString(line)
-			}
-			if !matched {
-				continue
-			}
-			start := i - before
-			if start < 0 {
-				start = 0
-			}
-			end := i + 1 + after
-			if end > len(lines) {
-				end = len(lines)
-			}
-			m := GrepMatch{Path: path, Line: i + 1, Text: line}
-			if start < i {
-				m.Before = append([]string(nil), lines[start:i]...)
-			}
-			if i+1 < end {
-				m.After = append([]string(nil), lines[i+1:end]...)
-			}
-			out.Matches = append(out.Matches, m)
-			if len(out.Matches) >= maxMatches {
-				out.Truncated = true
-				return out, nil
-			}
+		end := i + 1 + g.after
+		if end > len(lines) {
+			end = len(lines)
+		}
+		m := GrepMatch{Path: path, Line: firstLine + i, Text: line}
+		if start < i {
+			m.Before = append([]string(nil), lines[start:i]...)
+		}
+		if i+1 < end {
+			m.After = append([]string(nil), lines[i+1:end]...)
+		}
+		g.out.Matches = append(g.out.Matches, m)
+		if len(g.out.Matches) >= g.maxMatches {
+			g.out.Truncated = true
+			return true
 		}
 	}
-	return out, nil
+	return false
 }
 
 func readLines(path string) ([]string, error) {
@@ -191,8 +260,14 @@ func readLines(path string) ([]string, error) {
 		return nil, err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	return ReadLines(f, fileMaxLine)
+}
+
+// ReadLines splits r into lines with the semantics Tail and Grep use
+// (bufio.ScanLines: a final unterminated line counts, a trailing "\r" is
+// dropped). maxLine bounds one line; a non-positive value uses 1 MiB.
+func ReadLines(r io.Reader, maxLine int) ([]string, error) {
+	scanner := newLineScanner(r, maxLine)
 	var lines []string
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())

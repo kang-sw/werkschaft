@@ -54,7 +54,17 @@ type conv struct {
 	rejoinKeyPending bool
 	// approvals are a lead's waiting tool permission prompts, oldest first;
 	// activeMode and bgTasks are what its harness last reported.
-	approvals  []ApprovalRequest
+	approvals []ApprovalRequest
+	// execAnswers are the daemon-owned exec approvals among approvals
+	// (ApproveExec) by request id, each with the channel its waiting call
+	// reads; loop-owned.
+	execAnswers map[string]chan execAnswer
+	// acceptedEvents is the set AdmitCompletion dedupes on, loaded at its
+	// first use from Record.AcceptedEvents and the inbox (nil before).
+	acceptedEvents map[string]struct{}
+	// mcpCalls counts the ws MCP tool calls in flight on the conversation's
+	// session token (Runner.MCPCallBegin).
+	mcpCalls   atomic.Int64
 	activeMode string
 	bgTasks    int
 	background *int
@@ -528,12 +538,20 @@ func (c *conv) steer() {
 		c.steerWorker()
 		return
 	}
-	st := controlsFor(c.proc).steer
+	ctl := controlsFor(c.proc)
+	st := ctl.steer
 	if st == nil {
 		return
 	}
+	// A system notice waits out the ws MCP calls in flight on a harness
+	// whose steer replaces the running turn (holdsNotices); the user's own
+	// steered messages still go.
+	var take func(wsinbox.Entry) bool
+	if c.holdsNotices(ctl) {
+		take = func(e wsinbox.Entry) bool { return e.EventID == "" }
+	}
 	c.mu.Lock()
-	recs, _ := wsinbox.DrainSteer(c.inbox)
+	recs, _ := wsinbox.DrainSteerWhere(c.inbox, take)
 	c.held = max(0, c.held-len(recs))
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))

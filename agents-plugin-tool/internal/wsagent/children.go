@@ -638,7 +638,14 @@ func (c *conv) steerWorker() {
 	if c.rec.Parent == nil {
 		return
 	}
-	if controlsFor(c.proc).reports == nil {
+	ctl := controlsFor(c.proc)
+	if ctl.reports == nil {
+		return
+	}
+	// A worker's drain covers every send so far (Drained), so it cannot
+	// leave a held notice behind: while notices wait (holdsNotices) the
+	// worker's steered messages all wait for the call or the turn to end.
+	if c.holdsNotices(ctl) {
 		return
 	}
 	// Every Runner.Send to this worker is marked for steering. Serialize

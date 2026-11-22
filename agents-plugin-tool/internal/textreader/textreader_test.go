@@ -85,3 +85,56 @@ func TestTailReadDefaultsCapsAndEmptyFiles(t *testing.T) {
 		t.Fatalf("capped Read = %#v", cappedRead)
 	}
 }
+
+func TestInMemoryHelpersMatchFileReaders(t *testing.T) {
+	inputs := []string{"", "a", "a\nb", "a\r\nb\r\n", "\n\n", "one\ntwo\nthree\ntwo regex-42\n"}
+	for i, in := range inputs {
+		path := filepath.Join(t.TempDir(), "in.txt")
+		if err := os.WriteFile(path, []byte(in), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range []int{0, 1, 2} {
+			want, err := Tail(path, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := TailText([]byte(in), n); got != want {
+				t.Fatalf("input %d: TailText(%d) = %q, file Tail = %q", i, n, got, want)
+			}
+		}
+		lines, err := ReadLines(strings.NewReader(in), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := GrepLines(path, lines, 1, "two", 1, 1, 10, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := Grep([]string{path}, "two", 1, 1, 10, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Matches) != len(want.Matches) || got.Truncated != want.Truncated {
+			t.Fatalf("input %d: GrepLines = %#v, file Grep = %#v", i, got, want)
+		}
+		for k := range got.Matches {
+			g, w := got.Matches[k], want.Matches[k]
+			if g.Line != w.Line || g.Text != w.Text || strings.Join(g.Before, "|") != strings.Join(w.Before, "|") || strings.Join(g.After, "|") != strings.Join(w.After, "|") {
+				t.Fatalf("input %d: match %d = %#v, want %#v", i, k, g, w)
+			}
+		}
+	}
+}
+
+func TestGrepLinesFirstLineOffset(t *testing.T) {
+	res, err := GrepLines("", []string{"partial", "hit", "tail"}, 41, "hit", 1, 0, 0, false)
+	if err != nil || len(res.Matches) != 1 || res.Matches[0].Line != 42 || res.Matches[0].Before[0] != "partial" {
+		t.Fatalf("GrepLines = %#v, %v", res, err)
+	}
+	if _, err := GrepLines("", nil, 1, "", 0, 0, 0, false); err == nil {
+		t.Fatal("empty pattern returned nil error")
+	}
+	if _, err := GrepLines("", nil, 1, "(", 0, 0, 0, true); err == nil {
+		t.Fatal("invalid regex returned nil error")
+	}
+}

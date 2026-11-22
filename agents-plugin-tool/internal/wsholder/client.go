@@ -93,6 +93,16 @@ type SpawnSpec struct {
 	Mode string            `json:"mode"`
 	Rows int               `json:"rows,omitempty"`
 	Cols int               `json:"cols,omitempty"`
+	// Input is written to the child's input first. Up to inputChunk bytes
+	// travel in the spawn request itself, which the holder queues before
+	// its input writer runs, so they reach even a child that exits at
+	// once; the rest follows in input operations (see Client.Spawn).
+	Input []byte `json:"input,omitempty"`
+	// InputEOF closes the child's input after Input (a pipe child's stdin;
+	// an end-of-file key on a PTY), so a program that reads to EOF
+	// finishes without a later Input call. With no Input it is an
+	// immediate EOF.
+	InputEOF bool `json:"input_eof,omitempty"`
 }
 
 // AttachInfo is what a holder reports when an attach succeeds.
@@ -298,6 +308,14 @@ func (c *Client) call(op string, fields map[string]any) (reply, error) {
 }
 
 // Spawn starts the holder's child. A holder has one child in its lifetime.
+//
+// spec.Input and spec.InputEOF ride in the spawn request, atomic with the
+// start, when Input fits in one inputChunk. Longer input sends its first
+// chunk with the spawn and the rest through input operations, the EOF on
+// the last; only that remainder can race the child's exit or a daemon
+// crash. A child that has already exited when the remainder arrives
+// (no_child) left its input unread, as a direct child's broken stdin pipe
+// would, so Spawn still reports the start; the exit record follows.
 func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 	fields := map[string]any{"argv": spec.Argv, "mode": spec.Mode}
 	if spec.Cwd != "" {
@@ -309,8 +327,28 @@ func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 	if spec.Rows > 0 || spec.Cols > 0 {
 		fields["rows"], fields["cols"] = spec.Rows, spec.Cols
 	}
+	first, rest := spec.Input, []byte(nil)
+	if len(first) > inputChunk {
+		first, rest = first[:inputChunk], first[inputChunk:]
+	}
+	if len(first) > 0 {
+		fields["input"] = first
+	}
+	if spec.InputEOF && len(rest) == 0 {
+		fields["input_eof"] = true
+	}
 	answer, err := c.call("spawn", fields)
-	return answer.Child, err
+	if err != nil || len(rest) == 0 {
+		return answer.Child, err
+	}
+	if err := c.Input(rest, spec.InputEOF); err != nil {
+		var opErr *OpError
+		if errors.As(err, &opErr) && opErr.Code == "no_child" {
+			return answer.Child, nil
+		}
+		return answer.Child, fmt.Errorf("holder: the child started, but its input was not delivered: %w", err)
+	}
+	return answer.Child, nil
 }
 
 // inputChunk bounds one input operation's bytes, well under the holder's

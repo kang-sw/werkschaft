@@ -95,6 +95,10 @@ type RawReadResponse struct {
 	ExecKey string `json:"exec_key"`
 	Stream  string `json:"stream"`
 	textreader.ReadResult
+	// EvictedBefore is set for a hosted job read below its output ring's
+	// retained window: the bytes before this offset are gone, and the read
+	// began at it.
+	EvictedBefore int64 `json:"evicted_before,omitempty"`
 }
 type RawTailResponse struct {
 	ExecKey string `json:"exec_key"`
@@ -569,6 +573,21 @@ func guidance() string {
 	return "Large or running output is available to future exec.ask first; use exec.raw.* fallback readers for raw stdout/stderr text."
 }
 func terminal(s string) bool { return s == stateSucceeded || s == stateFailed || s == stateCancelled }
+
+// ResolveWorkingDir resolves wd inside root (root itself when empty) and
+// refuses one outside it, as every exec launch does.
+func ResolveWorkingDir(root, wd string) (string, error) { return resolveWorkingDir(root, wd) }
+
+// OverlayEnv is base with env laid over it, the environment a launch runs
+// under.
+func OverlayEnv(base []string, env map[string]string) []string { return overlayEnv(base, env) }
+
+// LegacyShellArgv is the legacy exec.shell argv for command under shell
+// (the platform shell when empty).
+func LegacyShellArgv(shell, command string) []string {
+	bin, args := shellCommand(shell, command)
+	return append([]string{bin}, args...)
+}
 
 func resolveWorkingDir(root, wd string) (string, error) {
 	root = filepath.Clean(root)

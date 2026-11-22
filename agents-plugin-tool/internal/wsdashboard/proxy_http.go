@@ -182,6 +182,13 @@ func (d *Daemon) handleProxyHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	// A tool call counts as in flight for its conversation from here until
+	// this request returns: answered, abandoned by its client, or ended
+	// with the session. A late answer after an abandon is dropped by the
+	// session and counts nothing.
+	if calls, ok := d.agents.(AgentMCPCallHost); ok && *msg.Method == "tools/call" {
+		defer calls.MCPCallBegin(token)()
+	}
 	key := compactID(id)
 	ch, ended := s.await(key)
 	if ended {

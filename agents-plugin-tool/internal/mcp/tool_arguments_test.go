@@ -197,3 +197,54 @@ func TestPrecheckDefersHandlerGuidedRequired(t *testing.T) {
 		t.Fatal("worktree.acquire without base was not refused")
 	}
 }
+
+// exec.shell keeps two argument families under one schema: the precheck
+// picks the family a call names, requires that family's own input, and
+// refuses a call mixing them before any handler runs.
+func TestPrecheckExecShellArgumentFamilies(t *testing.T) {
+	server, key := newPrecheckServer(t)
+
+	mixed := callToolLineWithKey(t, server, 2, key, "exec.shell", map[string]any{"cmd": "true", "working_dir": "sub"})
+	if !toolIsError(t, mixed) {
+		t.Fatalf("mixed exec.shell forms were not refused: %s", mixed)
+	}
+	text := toolText(t, mixed)
+	for _, want := range []string{"exec.shell: invalid arguments; the tool did not run.\n", "mixed argument forms", "cmd", "working_dir"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("mixed refusal missing %q:\n%s", want, text)
+		}
+	}
+	schema := precheckSchemaFromText(t, text)
+	props, _ := schema["properties"].(map[string]any)
+	for _, name := range append(append([]string{}, execShellLegacyOnly...), execShellNewOnly...) {
+		if _, ok := props[name]; !ok {
+			t.Fatalf("exec.shell schema does not declare %s: %v", name, schema)
+		}
+	}
+	if _, ok := schema["oneOf"]; ok {
+		t.Fatalf("exec.shell schema carries a top-level oneOf: %v", schema)
+	}
+
+	// The legacy form requires command; a new-form property alone names cmd.
+	legacy := toolText(t, callToolLineWithKey(t, server, 3, key, "exec.shell", map[string]any{"working_dir": "sub"}))
+	if !strings.Contains(legacy, "missing required: command\n") {
+		t.Fatalf("legacy form without command:\n%s", legacy)
+	}
+	current := toolText(t, callToolLineWithKey(t, server, 4, key, "exec.shell", map[string]any{"cwd": "sub", "async": true}))
+	if !strings.Contains(current, "missing required: cmd\n") {
+		t.Fatalf("new form without cmd:\n%s", current)
+	}
+	bare := toolText(t, callToolLineWithKey(t, server, 5, key, "exec.shell", map[string]any{}))
+	if !strings.Contains(bare, "missing required: cmd\n") {
+		t.Fatalf("bare exec.shell:\n%s", bare)
+	}
+	// Shared inputs (env, stdin) belong to both forms.
+	for _, args := range []map[string]any{
+		{"command": "true", "env": map[string]any{"A": "1"}, "stdin": "x", "shell": "/bin/sh"},
+		{"cmd": "true", "env": map[string]any{"A": "1"}, "stdin": "x", "async": false},
+	} {
+		if refusal, ok := server.precheckToolArguments("exec.shell", args); !ok {
+			t.Fatalf("precheck refused a one-form call %v:\n%s", args, refusal)
+		}
+	}
+}
