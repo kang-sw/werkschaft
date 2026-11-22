@@ -336,7 +336,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 				rec.HandedOffAt = c.r.opts.Now().UTC().Format(time.RFC3339)
 				rec.forgetMCP()
 				if s := spec.MCPSession; s != nil {
-					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, spec.ExecCutover), spec.WSMCP.Env, id
+					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, spec.WSMCP.Env, id
 				}
 			})
 		}
