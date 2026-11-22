@@ -283,6 +283,7 @@ var wsSettingsChoiceLabels = {
     if (name === "*" || name === "all") return tr("js.settings.bucket.common");
     if (adapters.includes(name)) return sectionName(name);
     if (name === "codex") return "Codex";
+    if (name === "werk") return tr("js.settings.section.werk");
     if (name === "default") return tr("js.settings.bucket.default");
     return name;
   }
