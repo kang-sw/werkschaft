@@ -73,10 +73,13 @@ func TestHostedLaunchRefusesAStaleGeneration(t *testing.T) {
 	}
 }
 
-// TestHostedOnConvertRunsBeforeTheNotice: the converted job's id reaches the
-// caller before the job can owe a notice, even when it ends the instant it
-// converts; a job that ends inside the window never calls it.
-func TestHostedOnConvertRunsBeforeTheNotice(t *testing.T) {
+// TestHostedConvertCommitsOneOutcome: the conversion outcome is decided once.
+// A job still running when the window passes is converted for good even when
+// it ends while its id is being published: the id reaches the caller first
+// (no notice yet), then exactly one notice follows, and the view says
+// converted. A job that ended before the decision is done: no id is
+// published and no notice is owed.
+func TestHostedConvertCommitsOneOutcome(t *testing.T) {
 	fx := newHostedFixture(t, 5*time.Second)
 	var mu sync.Mutex
 	var seen []string
@@ -86,38 +89,118 @@ func TestHostedOnConvertRunsBeforeTheNotice(t *testing.T) {
 		defer mu.Unlock()
 		noticesAtConvert = len(fx.sessions.noticeList())
 		seen = append(seen, v.ID)
-		// The job ends the moment its id is out.
+		// The job ends the moment its id is out, and its notice cannot
+		// be admitted before this call returns.
 		fx.holders.exit(v.HolderID, 0)
+		time.Sleep(30 * time.Millisecond)
+		if n := len(fx.sessions.noticeList()); n != 0 {
+			noticesAtConvert = n
+		}
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if v.Outcome != OutcomeConverted || v.Terminal() {
+		t.Fatalf("the committed outcome = %v terminal=%v, want converted and the commit-time running view", v.Outcome, v.Terminal())
+	}
 	mu.Lock()
 	if len(seen) != 1 || noticesAtConvert != 0 {
-		t.Fatalf("OnConvert ids %v, notices at the call %d", seen, noticesAtConvert)
+		t.Fatalf("OnConvert ids %v, notices admitted before the id was out %d", seen, noticesAtConvert)
 	}
 	mu.Unlock()
-	// The end won the race: exactly one outcome, never a notice beside an
-	// inline result.
-	if v.Outcome == OutcomeDone {
-		time.Sleep(50 * time.Millisecond)
-		if n := fx.sessions.noticeList(); len(n) != 0 {
-			t.Fatalf("a done outcome also sent notices: %+v", n)
-		}
-		return
-	}
 	eventuallyExec(t, "the one notice", func() bool { return len(fx.sessions.noticeList()) == 1 })
 	time.Sleep(50 * time.Millisecond)
-	if n := fx.sessions.noticeList(); len(n) != 1 {
+	if n := fx.sessions.noticeList(); len(n) != 1 || n[0].event != "exec:"+v.ID+":exit" {
 		t.Fatalf("notices = %+v", n)
 	}
 
-	// An end inside the window converts nothing.
+	// The end wins before the decision: done, and nothing is published or owed.
 	fx2 := newHostedFixture(t, 5*time.Second)
 	fx2.holders.onSpawn = func(id string) { go fx2.holders.exit(id, 0) }
 	called := false
 	if v, err := fx2.launch(context.Background(), nil, HostedLaunch{Display: "quick", OnConvert: func(HostedView) { called = true }}); err != nil || v.Outcome != OutcomeDone || called {
 		t.Fatalf("quick launch = %+v, %v, converted=%v", v, err, called)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := fx2.sessions.noticeList(); len(n) != 0 {
+		t.Fatalf("a done outcome sent notices: %+v", n)
+	}
+}
+
+// TestHostedConvertEndAfterTheViewKeepsOneNotice: an end that follows a
+// converted outcome (after the view was taken) sends the one notice, after
+// the id was published.
+func TestHostedConvertEndAfterTheViewKeepsOneNotice(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	var order []string
+	var mu sync.Mutex
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "slow", Window: 20 * time.Millisecond, OnConvert: func(v HostedView) {
+		mu.Lock()
+		order = append(order, "id:"+v.ID)
+		mu.Unlock()
+	}})
+	if err != nil || v.Outcome != OutcomeConverted {
+		t.Fatalf("launch = %+v, %v", v, err)
+	}
+	fx.holders.exit(v.HolderID, 0)
+	eventuallyExec(t, "the notice", func() bool { return len(fx.sessions.noticeList()) == 1 })
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 1 || order[0] != "id:"+v.ID {
+		t.Fatalf("published %v", order)
+	}
+	if n := fx.sessions.noticeList(); len(n) != 1 {
+		t.Fatalf("notices = %+v", n)
+	}
+}
+
+// TestHostedGenerationIsEnforcedAtRegistration: the generation a request was
+// made under is checked again after the job is registered, so a close and
+// revival that completes between the owner read and the admission (the
+// fence lifted again) leaves nothing running on the new generation. Both
+// interleavings start at generation 0.
+func TestHostedGenerationIsEnforcedAtRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hook int // the Owner call after which the conversation is revived
+	}{
+		{"before the first read", 1},
+		{"between the early check and the registration", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHostedFixture(t, 5*time.Second)
+			fx.sessions.mu.Lock()
+			fx.sessions.owners["lead"] = HostedOwner{ID: "lead", Gen: 0, Lead: true}
+			fx.sessions.mu.Unlock()
+			fx.sessions.ownerHook = func(call int) {
+				if call == tc.hook {
+					fx.sessions.mu.Lock()
+					fx.sessions.owners["lead"] = HostedOwner{ID: "lead", Gen: 1, Lead: true}
+					fx.sessions.mu.Unlock()
+				}
+			}
+			fx.holders.onSpawn = func(id string) { go fx.holders.exit(id, 0) }
+			_, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "x", CheckGen: true, ExpectGen: 0, UserApproved: true})
+			if err == nil || !strings.Contains(err.Error(), "reopened") {
+				t.Fatalf("a request made under generation 0 ran on generation 1: %v", err)
+			}
+			fx.holders.mu.Lock()
+			spawned := len(fx.holders.spawned)
+			fx.holders.mu.Unlock()
+			if spawned != 0 {
+				t.Fatalf("%d processes started on the revived generation", spawned)
+			}
+		})
+	}
+	// A request that names no generation keeps the one it read: a launch
+	// that raced a revival is refused too, and a quiet one runs.
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.sessions.mu.Lock()
+	fx.sessions.owners["lead"] = HostedOwner{ID: "lead", Gen: 0, Lead: true}
+	fx.sessions.mu.Unlock()
+	fx.holders.onSpawn = func(id string) { go fx.holders.exit(id, 0) }
+	if v, err := fx.launch(context.Background(), nil, HostedLaunch{Display: "x", UserApproved: true}); err != nil || v.Gen != 0 {
+		t.Fatalf("quiet generation 0 launch = %+v, %v", v, err)
 	}
 }
 

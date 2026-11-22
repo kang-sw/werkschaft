@@ -91,6 +91,28 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 			return HostedView{}, err
 		}
 	}
+	// Registered: a close from here on stops this job (StopOwner). A close
+	// and revival that completed between the owner read and the admission
+	// (the fence lifted again) left the job on a generation nobody asked for:
+	// read the live generation once more now, against the one the request was
+	// made under (the owner read's, unless the request names its own).
+	want := owner.Gen
+	if req.CheckGen {
+		want = req.ExpectGen
+	}
+	var recheck error
+	if now, err := h.opts.Sessions.Owner(req.Owner); err != nil {
+		recheck = fmt.Errorf("exec: the owning session cannot take a job: %w", err)
+	} else if now.Gen != want {
+		recheck = errors.New("exec: the owning session reopened since this request was made")
+	}
+	if recheck != nil {
+		// No holder launched yet: nothing is left to retire.
+		h.mu.Lock()
+		j.holderPinned = false
+		h.mu.Unlock()
+		return h.failStart(j, "", recheck)
+	}
 	if lookErr != nil {
 		return h.failStart(j, "", lookErr)
 	}
@@ -203,31 +225,38 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 }
 
 // convert makes j async when it still runs; an end that won the race is an
-// OutcomeDone.
+// OutcomeDone. The outcome is committed once, under h.mu: a job found running
+// there is converted for good (it owes its notice from that moment), whatever
+// happens after, and one found ended is done and owes none. The caller's
+// onConvert then publishes the job's id with the completion notice held back
+// (publishing), so an end that follows can only order its notice after the id,
+// and the converted view is the one taken at the commit.
 func (h *Hosted) convert(j *hostedJob, onConvert func(HostedView)) HostedView {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
 		return h.view(j, OutcomeDone)
 	}
-	h.mu.Unlock()
-	if onConvert != nil {
-		// Before the job owes a notice: an end that follows can only order
-		// its notice after this call, so the id is visible first. An end
-		// that wins the race below leaves the id's early mention to the
-		// caller's final answer, which supersedes it.
-		onConvert(h.view(j, OutcomeConverted))
-	}
-	h.mu.Lock()
-	if j.row.Terminal() {
-		h.mu.Unlock()
-		return h.view(j, OutcomeDone)
-	}
 	j.row.Notify = true
+	j.publishing = onConvert != nil
+	v := HostedView{HostedJobRow: h.rowLocked(j), Outcome: OutcomeConverted}
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
 	h.save(j, row, rev)
-	return h.view(j, OutcomeConverted)
+	if onConvert != nil {
+		func() {
+			defer func() {
+				h.mu.Lock()
+				j.publishing = false
+				h.mu.Unlock()
+				// An end that came while the id was being published left its
+				// notice pending; it goes now.
+				h.deliver(j)
+			}()
+			onConvert(v)
+		}()
+	}
+	return v
 }
 
 // admit registers j, refusing a new job once the running ones and the

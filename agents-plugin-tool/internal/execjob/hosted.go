@@ -108,6 +108,9 @@ type hostedJob struct {
 	// then HostedStopped and sends no notice.
 	stopping   bool
 	delivering bool
+	// publishing: a converted job's id is being handed to its caller; its
+	// completion notice waits for that (deliver), so the id is out first.
+	publishing bool
 	// starting: Launch admitted the job and has not handed its process to
 	// the holder yet; a stop then ends the job at once, and Launch, seeing
 	// the end, never spawns. spawned is open while that hand-over runs; a

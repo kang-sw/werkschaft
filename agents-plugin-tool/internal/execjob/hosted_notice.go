@@ -10,7 +10,7 @@ import (
 // deliver admits j's pending completion notice, once.
 func (h *Hosted) deliver(j *hostedJob) {
 	h.mu.Lock()
-	if !h.started || h.closed || j.row.Notice != NoticePending || j.delivering {
+	if !h.started || h.closed || j.row.Notice != NoticePending || j.delivering || j.publishing {
 		h.mu.Unlock()
 		return
 	}
