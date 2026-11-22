@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-completeness-reviewed: 97501b82157ebe6c
 sage-review-design-reviewed: 97501b82157ebe6c
+completed: 2026-11-23
 ---
 
 # ws/exec job HUD: composer-gap badges, output peek, user stop
@@ -1152,3 +1153,8 @@ Review round 7 (test/fixture only; no production asset or non-test Go change). T
 Scratch reverts (edit, run, restore, `cmp` identical; nothing committed): removing the running→ended exception in `xhStale` fails STOP-TERMINAL (waiting for the stopped chip); replacing the issue-number check with `return false` fails ORDER-LATE-LIST (history `sending, closed, failed, closed`); removing the list retry (`else xhRetryLater()` → `else {}`) fails LIST-RETRY (the late chip never appears). No-flake check: the three scenarios on en-light 5 times each (a script looped `WS_EXEC_HUD_SECTS=<name> WS_EXEC_HUD_COMBOS=en-light go test -run TestExecHUDReviewBrowser`), 15/15 passes (a narrowed run exits 3 by design).
 
 Verification: `go test -race -count=1 -run 'TestExecHUDReviewBrowser$|TestExecHUDBrowser$' ./internal/wsdashboard` ok (386.1 s); `GOOS=windows go vet ./internal/wsdashboard` clean; `git diff --check` clean.
+
+
+## Resolution (2026-11-23)
+
+Phase 1 (backend routes, fba4c6e3f) and Phase 2 (dashboard HUD UI, merged ba9eac574) are complete. Phase 2 went through eight codex review rounds and ended LGTM, plus a merge-resolution LGTM. Lead tests passed on macOS (-race) and on the Windows smoke host. Accepted residuals are listed in the Phase 2 Result and Editions: early fold near digit boundaries, a one-frame overlay, unmeasured layout cost, the terminal marker can land on line 1501, POSTs have no timeout, controlled-wake evidence is a post-increment snapshot, one unexplained combined -race review-browser failure out of four runs, and the non-en/ko HUD translations have not been reviewed by a human. Follow-up candidate: the localhost cookie guard costs 4 file ops per authenticated request.
