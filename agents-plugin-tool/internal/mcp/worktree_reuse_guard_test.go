@@ -509,13 +509,18 @@ func TestWorktreeReleaseAgainstAnOldDaemon(t *testing.T) {
 	draft := writeDraft(t, acq.Path)
 	var mu sync.Mutex
 	children := []any{map[string]any{"address": "id:bound01", "state": wsagent.AgentRunning}}
+	occupancyFails := false
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case wsagent.RoutePrefix + "/by-token/worktree.children":
 			// An old daemon's answer: no release flags.
 			mu.Lock()
-			list := children
+			list, fails := children, occupancyFails
 			mu.Unlock()
+			if fails {
+				http.Error(w, "occupancy unavailable", http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"children": list})
 		default:
@@ -573,6 +578,30 @@ func TestWorktreeReleaseAgainstAnOldDaemon(t *testing.T) {
 	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease != nil {
 		t.Fatalf("the release completed and removed the lease: %+v err=%v", lease, err)
 	}
+
+	// The occupancy read fails: the binding state is unknown, and the
+	// warning claims no more than that.
+	unknown := acquireForTest(t, sLead, 4, leadKey, base, "impl/test/old-daemon-unknown")
+	mu.Lock()
+	occupancyFails = true
+	mu.Unlock()
+	resp = callToolOnce(t, worker, 5, "worktree.release", map[string]any{"session_key": leadKey, "path": unknown.Path, "force": true, "format": "json"})
+	if toolIsError(t, resp) {
+		t.Fatalf("a forced release whose occupancy read failed completes: %s", resp)
+	}
+	res = worktreeReleaseResult{}
+	if err := json.Unmarshal([]byte(toolText(t, resp)), &res); err != nil {
+		t.Fatal(err)
+	}
+	warnings = strings.Join(res.Warnings, "\n")
+	for _, want := range []string{"predates release notices", "whether a live agent is bound here is unknown", "Swap the daemon for a release-aware build"} {
+		if !strings.Contains(warnings, want) {
+			t.Fatalf("unknown-binding warning lacks %q: %v", want, res.Warnings)
+		}
+	}
+	if strings.Contains(warnings, "no live agent was bound") {
+		t.Fatalf("an unread occupancy must not be reported as no live agent: %v", res.Warnings)
+	}
 }
 
 // TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays: a release
@@ -591,10 +620,13 @@ func TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays(t *testing.T) {
 	if !toolIsError(t, rel) {
 		t.Fatalf("a release that kept its lease must not report success: %s", rel)
 	}
-	for _, want := range []string{"partly released", "release boundary is recorded", "agents bound here before it are ended", "lease store read-only", "release it again"} {
+	for _, want := range []string{"partly released", "release boundary is recorded", "the running daemon applied the release notice", "lease store read-only", "release it again"} {
 		if !strings.Contains(toolText(t, rel), want) {
 			t.Fatalf("partial release report lacks %q: %s", want, toolText(t, rel))
 		}
+	}
+	if strings.Contains(toolText(t, rel), "are ended") {
+		t.Fatalf("the boundary alone ends no running binding: %s", toolText(t, rel))
 	}
 	if _, ok, err := wsgit.WorktreeReleasedAt(acq.Path); err != nil || !ok {
 		t.Fatalf("the boundary stays recorded: ok=%v err=%v", ok, err)
@@ -611,6 +643,21 @@ func TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays(t *testing.T) {
 	}
 	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease != nil {
 		t.Fatalf("the second release removed the lease: %+v err=%v", lease, err)
+	}
+
+	// A daemon-side reader that takes no notice: the partial report says the
+	// notice was not applied, so running bindings may still take input.
+	s.pi.worktreeChildren = &fakeWorktreeChildren{}
+	unheard := acquireForTest(t, s, 4, leadA, base, "impl/test/lease-stays-unheard")
+	removeReleasedWorktreeLease = func(context.Context, wsgit.Runner, string) error { return errors.New("lease store read-only") }
+	rel = callToolOnce(t, s, 5, "worktree.release", map[string]any{"session_key": leadA, "path": unheard.Path})
+	if !toolIsError(t, rel) {
+		t.Fatalf("a release that kept its lease must not report success: %s", rel)
+	}
+	for _, want := range []string{"partly released", "release boundary is recorded", "the running daemon did not apply the release notice", "can take input in this worktree", "no ws daemon was told about this release"} {
+		if !strings.Contains(toolText(t, rel), want) {
+			t.Fatalf("unapplied partial release report lacks %q: %s", want, toolText(t, rel))
+		}
 	}
 }
 

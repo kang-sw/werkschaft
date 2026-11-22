@@ -63,7 +63,7 @@ func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool
 	// Forced or not, a release refuses here, with nothing changed, when its
 	// notice could not reach a daemon that keeps live bound agents running.
 	if err == nil && caller != nil && caller.CheckNotice != nil {
-		err = caller.CheckNotice(ctx, target)
+		caller.bindings, err = caller.CheckNotice(ctx, target)
 	}
 	if err != nil {
 		unlock()

@@ -971,15 +971,37 @@ func releaseWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtP
 // too), the worker key it named (empty when it named a path), force, an
 // optional daemon-wide bound-child check run under the per-worktree lock
 // (non-forced releases only), an optional check that the daemon will take the
-// release notice, run under that lock for every release, and an optional
-// notice of the completed release, whose lines join the result's warnings.
+// release notice, run under that lock for every release, whose finding about
+// the bound agents (bindings) the notice receives, and an optional notice of
+// the completed release, whose lines join the result's warnings.
 type worktreeReleaseCaller struct {
 	LeadKey       string
 	WorkerKey     string
 	Force         bool
 	CheckChildren func(ctx context.Context, target string) error
-	CheckNotice   func(ctx context.Context, target string) error
-	Released      func(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool) []string
+	CheckNotice   func(ctx context.Context, target string) (releaseBindings, error)
+	Released      func(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool, bindings releaseBindings) worktreeReleaseNotice
+	// bindings is CheckNotice's finding, kept for Released.
+	bindings releaseBindings
+}
+
+// releaseBindings is what the notice check learned about the agents bound to
+// a release's target: unknown when it did not look or its occupancy read
+// failed, so no warning may claim either way.
+type releaseBindings int
+
+const (
+	releaseBindingsUnknown releaseBindings = iota
+	releaseBindingsNoneLive
+	releaseBindingsLive
+)
+
+// worktreeReleaseNotice is the outcome of a completed release's notice:
+// whether a running daemon applied it (it ended the earlier bindings in
+// memory, so they take no further input), and the warning lines it adds.
+type worktreeReleaseNotice struct {
+	Applied bool
+	Lines   []string
 }
 
 // recordWorktreeRelease writes a release's boundary marker; a variable so a
@@ -1089,23 +1111,29 @@ func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
 // live bound agent there is nothing it could keep running, and the release
 // proceeds (its notice then fails with a warning). A daemon-hosted server
 // answers in memory and always takes the notice; any other occupancy or probe
-// failure is left to the bound-child check and the notice's own warning.
-func (s *Server) checkWorktreeReleaseNotice(ctx context.Context, target string) error {
+// failure is left to the bound-child check and the notice's own warning. It
+// returns what it learned of the bound agents: none live only when the
+// occupancy read succeeded and listed none, unknown when it did not look or
+// that read failed.
+func (s *Server) checkWorktreeReleaseNotice(ctx context.Context, target string) (releaseBindings, error) {
 	if s.pi.worktreeChildren != nil || !s.piForwards() {
-		return nil
+		return releaseBindingsUnknown, nil
 	}
 	occ, err := s.worktreeOccupancy(ctx, target)
-	if err != nil || !liveBoundChildren(occ.Children) {
-		return nil
+	if err != nil {
+		return releaseBindingsUnknown, nil
+	}
+	if !liveBoundChildren(occ.Children) {
+		return releaseBindingsNoneLive, nil
 	}
 	var answer struct {
 		Probe bool `json:"probe"`
 	}
 	err = s.piCall(ctx, "worktree.released", map[string]any{"worktree": target, "probe": true}, piForwardTimeout, &answer)
 	if err != nil && unknownAgentRoute(err) {
-		return fmt.Errorf("worktree.release refuses %s: the running ws daemon predates release notices, so it would keep the child agents bound here running in this worktree after the release. Nothing was changed. %s, then release again", target, worktreeReleaseDaemonSwap)
+		return releaseBindingsLive, fmt.Errorf("worktree.release refuses %s: the running ws daemon predates release notices, so it would keep the child agents bound here running in this worktree after the release. Nothing was changed. %s, then release again", target, worktreeReleaseDaemonSwap)
 	}
-	return nil
+	return releaseBindingsLive, nil
 }
 
 // worktreeReleaseDaemonSwap is the recovery an older daemon needs: only a
@@ -1138,15 +1166,16 @@ func unknownAgentRoute(err error) bool {
 // interrupted. Each returned line reports a cancelled turn, a failed
 // interrupt (whose process keeps running; the worktree stays out of reuse
 // while it lives), a daemon that cancels no turn for this caller, or a
-// daemon that could not be told.
-func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool) []string {
+// daemon that could not be told; bindings is the notice check's finding,
+// which a failed notice's warning states no more than.
+func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool, bindings releaseBindings) worktreeReleaseNotice {
 	var convs []wsagent.ReleasedConversation
 	var lines []string
 	switch {
 	case s.pi.worktreeChildren != nil:
 		notifier, ok := s.pi.worktreeChildren.(worktreeReleaseNotifier)
 		if !ok {
-			return []string{worktreeReleaseNoNotice}
+			return worktreeReleaseNotice{Lines: []string{worktreeReleaseNoNotice}}
 		}
 		convs = notifier.CheckoutReleased(target, releasedAt, cancelTurns)
 	case s.piForwards():
@@ -1156,14 +1185,14 @@ func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, rele
 		}
 		body := map[string]any{"worktree": target, "released_at": releasedAt.UTC().Format(time.RFC3339Nano), "cancel_turns": cancelTurns}
 		if err := s.piCall(ctx, "worktree.released", body, piForwardTimeout, &answer); err != nil {
-			return []string{worktreeReleaseNoticeFailure(err, cancelTurns)}
+			return worktreeReleaseNotice{Lines: []string{worktreeReleaseNoticeFailure(err, cancelTurns, bindings)}}
 		}
 		convs = answer.Conversations
 		if answer.CancelRefused {
 			lines = append(lines, "the daemon cancels running turns only for a root lead's forced release, so the running turns of agents bound here before this release were not cancelled; their bindings are still ended")
 		}
 	default:
-		return []string{worktreeReleaseNoNotice}
+		return worktreeReleaseNotice{Lines: []string{worktreeReleaseNoNotice}}
 	}
 	for _, conv := range convs {
 		switch {
@@ -1173,7 +1202,7 @@ func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, rele
 			lines = append(lines, fmt.Sprintf("cancelled the running turn of %s, bound before this release", conv.Address))
 		}
 	}
-	return lines
+	return worktreeReleaseNotice{Applied: true, Lines: lines}
 }
 
 // worktreeReleaseNoNotice is the warning of a release this server had no
@@ -1182,15 +1211,24 @@ const worktreeReleaseNoNotice = "no ws daemon was told about this release (this 
 
 // worktreeReleaseNoticeFailure is the warning of a completed release whose
 // notice the daemon did not take. An older daemon has no worktree.released
-// route and answers its unknown-route refusal; the release reaches here only
-// when no live agent was bound (checkWorktreeReleaseNotice). Any other error
-// is a daemon that could not be reached or failed. Either way the boundary is
-// on disk and the release stands; a current daemon reads it at every start
-// or wake, but a process already running took no notice.
-func worktreeReleaseNoticeFailure(err error, cancelTurns bool) string {
+// route and answers its unknown-route refusal; the release reaches here when
+// the notice check proved no live agent bound, or could not tell
+// (checkWorktreeReleaseNotice), and the warning claims only what that check
+// proved. Any other error is a daemon that could not be reached or failed.
+// Either way the boundary is on disk and the release stands; a current daemon
+// reads it at every start or wake, but a process already running took no
+// notice.
+func worktreeReleaseNoticeFailure(err error, cancelTurns bool, bindings releaseBindings) string {
 	var line string
 	if unknownAgentRoute(err) {
-		line = "the running ws daemon predates release notices; no live agent was bound here, so none keeps running in this worktree. " + worktreeReleaseDaemonSwap + " before releasing a worktree with live agents (such a release is refused)"
+		switch bindings {
+		case releaseBindingsNoneLive:
+			line = "the running ws daemon predates release notices; no live agent was bound here, so none keeps running in this worktree. " + worktreeReleaseDaemonSwap + " before releasing a worktree with live agents (such a release is refused)"
+		case releaseBindingsLive:
+			line = "the running ws daemon predates release notices, so it did not end the bindings of the live agents bound here before this release: they can still take input in this worktree until their processes end. " + worktreeReleaseDaemonSwap
+		default:
+			line = "the running ws daemon predates release notices, and whether a live agent is bound here is unknown (the binding check could not read the daemon's occupancy): such an agent can still take input in this worktree until its process ends. " + worktreeReleaseDaemonSwap
+		}
 	} else {
 		line = fmt.Sprintf("could not tell the daemon about this release (%v), so it did not end the bindings of running agents bound here before it: such an agent can still take input in this worktree until its process ends; any later start or wake reads the release and is refused", err)
 	}
@@ -1288,15 +1326,26 @@ func releaseWorktreeAs(ctx context.Context, runner wsgit.Runner, env []string, w
 	// Publish the notice before the lock is let go, so the daemon learns of
 	// the boundary before any spawn or claim can pass and conversations bound
 	// before it take no further input from here on.
+	var notice worktreeReleaseNotice
 	if caller != nil && caller.Released != nil {
-		res.Warnings = append(res.Warnings, caller.Released(ctx, target, releasedAt, caller.Force)...)
+		notice = caller.Released(ctx, target, releasedAt, caller.Force, caller.bindings)
+		res.Warnings = append(res.Warnings, notice.Lines...)
 	}
 	// Drop the lease only once the worktree is actually back in the pool, so a
 	// failed reset/clean/detach leaves the holder still identifiable.
 	if err := removeReleasedWorktreeLease(ctx, runner, target); err != nil {
 		// Everything but the lease is done, and the release boundary
-		// stands: say so rather than report the release as not made.
-		msg := fmt.Sprintf("worktree.release: %q is partly released: it is cleaned and detached, and its release boundary is recorded, so agents bound here before it are ended, but its worktree lease could not be removed (%v). It stays leased, so acquisition does not hand it out; release it again to remove the lease", target, err)
+		// stands: say so rather than report the release as not made. Whether
+		// running agents bound before it were stopped taking input is the
+		// notice's outcome, not the boundary's.
+		applied := "the running daemon did not apply the release notice (see the warnings), so an agent bound here before it whose process still runs can take input in this worktree until that process ends; any later start or wake reads the boundary and is refused"
+		switch {
+		case notice.Applied:
+			applied = "the running daemon applied the release notice, so agents bound here before it take no further input in this worktree"
+		case caller == nil || caller.Released == nil:
+			applied = "no daemon was told of the release, so an agent bound here before it whose process still runs can take input in this worktree until that process ends; any later start or wake reads the boundary and is refused"
+		}
+		msg := fmt.Sprintf("worktree.release: %q is partly released: it is cleaned and detached, and its release boundary is recorded; %s. But its worktree lease could not be removed (%v). It stays leased, so acquisition does not hand it out; release it again to remove the lease", target, applied, err)
 		if len(res.Warnings) > 0 {
 			msg += ". Warnings so far: " + strings.Join(res.Warnings, "; ")
 		}
