@@ -558,23 +558,34 @@ func TestStoreFileOpsPerAppendedEvent(t *testing.T) {
 	flush(t, s)
 	before := wsstate.FileIOCounters()
 	const n = 200 // ~12 MiB through a 4 MiB ring of 1 MiB segments
+	finals := int64(0)
 	for seq := uint64(2); seq < 2+n; seq++ {
 		ev := sourced("sess", seq, wsaudit.KindToolResult)
 		ev.Out = body
 		mustAppend(t, s, ev)
 		if seq%16 == 0 {
+			// Capture finalizes when idle; the fin line rides the next record
+			// or one idle write, never more.
+			if err := s.Finalize(context.Background(), "sess", "holder:1", seq); err != nil {
+				t.Fatal(err)
+			}
+			finals++
 			flush(t, s)
 		}
 	}
 	flush(t, s)
+	flush(t, s)
 	after := wsstate.FileIOCounters()
 	delta := func(k string) int64 { return after[k] - before[k] }
 	rotations := delta("file_io_open_file")
-	t.Logf("%d appends: total %d file ops (write %d, open %d, close %d, remove %d) = %.2f per event; %d rotations",
-		n, delta("file_io_total"), delta("file_io_write"), rotations, delta("file_io_close"), delta("file_io_remove"),
+	t.Logf("%d appends, %d finalizes: total %d file ops (write %d, open %d, close %d, remove %d) = %.2f per event; %d rotations",
+		n, finals, delta("file_io_total"), delta("file_io_write"), rotations, delta("file_io_close"), delta("file_io_remove"),
 		float64(delta("file_io_total"))/n, rotations)
-	if delta("file_io_write") != n || delta("file_io_total") > n+4*rotations {
-		t.Fatalf("file ops exceed one write per event plus rotation: %+v", delta("file_io_total"))
+	if w := delta("file_io_write"); w < n || w > n+finals || delta("file_io_total") > n+finals+4*rotations {
+		t.Fatalf("file ops exceed one write per event and per finalize plus rotation: writes %d, total %d", w, delta("file_io_total"))
+	}
+	if rec := s.Recover("sess", "holder:1"); rec.Boundary != 2+n-1-(2+n-1)%16 {
+		t.Fatalf("boundary %d", rec.Boundary)
 	}
 	if delta("file_io_read_file") != 0 || delta("file_io_read_dir") != 0 {
 		t.Fatal("appends reread files")
