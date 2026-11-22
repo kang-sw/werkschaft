@@ -367,3 +367,41 @@ func TestExecCloseWaitsForTheJobsToBind(t *testing.T) {
 		t.Fatalf("the restored job was not stopped: %v", got)
 	}
 }
+
+// A daemon whose hosted exec jobs did not open (BindExecJobs(nil) after
+// ExpectExecJobs) still ends the exec job holders a closing conversation
+// owns, and refuses the close while one does not stop, instead of
+// reporting the conversation closed over a job that may still run.
+func TestExecCloseWithoutOpenJobsStopsTheConversationsHolders(t *testing.T) {
+	h := newLeadHarness(t)
+	h.start()
+	h.runner.ExpectExecJobs()
+	h.runner.BindExecJobs(nil)
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	mine := h.holders.add(map[string]string{"kind": "exec", "exec_id": "exec_left-running", "owner": st.ID})
+	theirs := h.holders.add(map[string]string{"kind": "exec", "exec_id": "exec_another", "owner": "someone-else"})
+	h.holders.Scan()
+
+	h.holders.mu.Lock()
+	h.holders.stopErr = errors.New("holder busy")
+	h.holders.mu.Unlock()
+	if _, err := h.runner.CloseConversation(st.ID); err == nil || !strings.Contains(err.Error(), "did not stop") {
+		t.Fatalf("a close over an exec holder that did not stop: %v", err)
+	}
+	if h.state(st.ID).Status == StatusClosed {
+		t.Fatal("closed over an exec job that may still run")
+	}
+
+	h.holders.mu.Lock()
+	h.holders.stopErr = nil
+	h.holders.mu.Unlock()
+	if _, err := h.runner.CloseConversation(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.holders.mu.Lock()
+	ops := slices.Clone(h.holders.ops)
+	h.holders.mu.Unlock()
+	if !slices.Contains(ops, "stop "+mine) || slices.Contains(ops, "stop "+theirs) {
+		t.Fatalf("holder ops = %q: want %s stopped and %s kept", ops, mine, theirs)
+	}
+}

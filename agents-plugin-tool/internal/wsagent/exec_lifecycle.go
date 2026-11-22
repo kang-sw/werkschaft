@@ -5,11 +5,15 @@
 package wsagent
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
 // ExecJobs is the hosted exec jobs as the runner reads them.
@@ -220,8 +224,41 @@ func (r *Runner) unfenceExec(id string) {
 // group; an error means one may still run.
 func (r *Runner) stopExec(id string) error {
 	src := r.execJobs()
-	if src == nil {
+	if src != nil {
+		return src.StopOwner(id)
+	}
+	if !r.exec.deferred.Load() {
+		// A runner with no hosted exec jobs.
 		return nil
 	}
-	return src.StopOwner(id)
+	return r.stopExecHolders(id)
+}
+
+// execHolderSession is the part of a hosted exec job holder's session
+// (execjob's hostedHolderSession) that names its owning conversation.
+type execHolderSession struct {
+	Kind  string `json:"kind"`
+	Owner string `json:"owner"`
+}
+
+// stopExecHolders stops the exec job holders conversation id owns, for a
+// daemon whose hosted exec jobs did not open (BindExecJobs(nil) after
+// ExpectExecJobs): a job id started before the restart may still run under
+// its holder, and nothing else would end it. A holder that does not stop
+// is an error, so the close is refused rather than reported done over it.
+func (r *Runner) stopExecHolders(id string) error {
+	if r.opts.Holders == nil {
+		return nil
+	}
+	var errs []error
+	for _, info := range r.opts.Holders.List().Holders {
+		var s execHolderSession
+		if json.Unmarshal(info.Session, &s) != nil || s.Kind != "exec" || s.Owner != id {
+			continue
+		}
+		if err := r.opts.Holders.Stop(info.ID); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+			errs = append(errs, fmt.Errorf("the hosted exec jobs did not open, and exec holder %s of %s did not stop: %w", info.ID, id, err))
+		}
+	}
+	return errors.Join(errs...)
 }
