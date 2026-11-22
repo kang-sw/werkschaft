@@ -275,7 +275,7 @@ test("install, update and uninstall call the daemon, take the returned catalog a
     raw: "https://example.invalid/packs.git",
     handler: (url, init, body) => {
       if (url.endsWith("/sources/fetch")) return { status: 200, body: { listing: listing({ packs: [pack("a", "available")] }) } };
-      if (url.endsWith("/sources/install")) return { status: 200, body: { listing: listing({ packs: [pack("a", "installed")] }), catalog: fresh } };
+      if (url.endsWith("/sources/install")) return { status: 200, body: { listing: listing({ packs: [pack("a", "installed", { installed: true })] }), catalog: fresh } };
       if (url.endsWith("/uninstall")) return { status: 200, body: { packs: [{ id: "default" }] } };
       return { status: 500, body: {} };
     }
@@ -328,7 +328,7 @@ test("the import preview validates the file, lists passed packs as checkboxes, a
         return { status: 200, body: { listing: listing({ source: "Fan Pack.zip", kind: "local", name: "Fan", packs: [
           pack("a", "available"), pack("b", "available"), pack("c", "installed"), pack("bad", "available", { error: { id: "bad", path: "pack.json", message: "no poses.stand" } }), pack("hand", "manual")] }) } };
       }
-      return { status: 200, body: { listing: listing({ kind: "local", name: "Fan", packs: [pack("a", "installed"), pack("b", "installed")] }), catalog: { packs: [{ id: "default" }, { id: "a" }, { id: "b" }] } } };
+      return { status: 200, body: { listing: listing({ kind: "local", name: "Fan", packs: [pack("a", "installed", { installed: true }), pack("b", "installed", { installed: true }), pack("c", "installed", { installed: true })] }), catalog: { packs: [{ id: "default" }, { id: "a" }, { id: "b" }] } } };
     }
   });
   const input = tagged(t.root, "INPUT").find(c => c.type === "file");
@@ -361,6 +361,73 @@ test("the import preview validates the file, lists passed packs as checkboxes, a
   assert.deepEqual(t.changed[0], { packs: [{ id: "default" }, { id: "a" }, { id: "b" }] });
   assert.match(t.root.text(), /done_import:2/);
   assert.deepEqual(tagged(cls(t.root, "ws-companion-sources-panel")[0], "BUTTON").map(b => b.textContent), ["js.companion.sources.close_listing"], "the result has no install buttons for a local file");
+});
+
+test("a 200 install or import reports each pack's own result, not the request's", async () => {
+  const bad = { error: { id: "a", path: "pack.json", message: "cannot move the staged pack into place" } };
+  let installBody;
+  const t = setup({
+    raw: "https://example.invalid/packs.git",
+    handler: (url) => {
+      if (url.endsWith("/sources/fetch")) return { status: 200, body: { listing: listing({ packs: [pack("a", "available")] }) } };
+      if (url.endsWith("/sources/install")) return { status: 200, body: installBody };
+      if (url.startsWith("/api/companion/packs/validate")) return { status: 200, body: { listing: listing({ kind: "local", packs: [pack("a", "available"), pack("b", "available")] }) } };
+      return { status: 200, body: { listing: listing({ kind: "local", packs: [pack("a", "available", { ...bad }), pack("b", "installed", { installed: true })] }) } };
+    }
+  });
+  fire(buttonOf(cls(t.root, "ws-companion-sources-source")[1], "js.companion.sources.show"), "click");
+  await tick(); await tick();
+
+  installBody = { listing: listing({ packs: [pack("a", "available", { installed: false })] }) };
+  fire(buttonOf(t.root, "js.companion.sources.install"), "click");
+  await tick(); await tick();
+  assert.ok(!t.root.text().includes("done_install"), "installed:false is not announced as success");
+
+  installBody = { listing: listing({ packs: [pack("a", "available", { ...bad })] }) };
+  fire(buttonOf(t.root, "js.companion.sources.install"), "click");
+  await tick(); await tick();
+  assert.ok(!t.root.text().includes("done_install"), "a per-pack error is not announced as success");
+  assert.match(t.root.text(), /cannot move the staged pack into place/);
+
+  const input = tagged(t.root, "INPUT").find(c => c.type === "file");
+  input.files = [{ name: "Fan.zip", size: 3 }];
+  fire(input, "change");
+  await tick(); await tick();
+  fire(buttonOf(t.root, "js.companion.sources.import"), "click");
+  await tick(); await tick();
+  const text = t.root.text();
+  assert.match(text, /done_import:1/, "one of the two requested packs was written");
+  assert.ok(!/done_import:2/.test(text), "the requested count is not reported");
+  assert.match(text, /a: cannot move the staged pack into place/);
+});
+
+test("a duplicate-ID invalid row does not mask the pack that installed", async () => {
+  const bad = { error: { id: "a", path: "pack.json", message: "duplicate row is invalid" } };
+  const both = () => listing({ packs: [pack("a", "available", { ...bad }), pack("a", "installed", { installed: true })] });
+  const t = setup({
+    raw: "https://example.invalid/packs.git",
+    handler: (url) => {
+      if (url.endsWith("/sources/fetch")) return { status: 200, body: { listing: listing({ packs: [pack("a", "available")] }) } };
+      if (url.endsWith("/sources/install")) return { status: 200, body: { listing: both() } };
+      if (url.startsWith("/api/companion/packs/validate")) return { status: 200, body: { listing: listing({ kind: "local", packs: [pack("a", "available")] }) } };
+      return { status: 200, body: { listing: listing({ kind: "local", packs: [pack("a", "available", { ...bad }), pack("a", "installed", { installed: true })] }) } };
+    }
+  });
+  fire(buttonOf(cls(t.root, "ws-companion-sources-source")[1], "js.companion.sources.show"), "click");
+  await tick(); await tick();
+  fire(buttonOf(t.root, "js.companion.sources.install"), "click");
+  await tick(); await tick();
+  assert.match(t.root.text(), /done_install/, "the valid duplicate's install is announced");
+  assert.ok(!t.root.text().includes("duplicate row is invalid") || !/js\.companion\.sources\.install_failed/.test(t.root.text()), "no failure notice for the invalid duplicate");
+
+  const input = tagged(t.root, "INPUT").find(c => c.type === "file");
+  input.files = [{ name: "Fan.zip", size: 3 }];
+  fire(input, "change");
+  await tick(); await tick();
+  fire(buttonOf(t.root, "js.companion.sources.import"), "click");
+  await tick(); await tick();
+  assert.match(t.root.text(), /done_import:1/);
+  assert.ok(!/a: duplicate row is invalid/.test(t.root.text()), "the import summary counts no false failure");
 });
 
 test("a rejected import file shows the daemon's reason and offers no import", async () => {
@@ -406,4 +473,44 @@ test("refresh redraws only when the source list or write permission changes", ()
   t.state.write = false;
   t.section.refresh();
   assert.ok(tagged(t.root, "BUTTON").every(b => b.disabled));
+});
+
+test("duplicate-ID rows in the initial preview: one id is sent and the selected valid row's own result is reported", async () => {
+  const bad = { error: { id: "a", path: "pack.json", message: "duplicate row is invalid" } };
+  const wrote = { error: { id: "a", path: "pack.json", message: "valid row cannot be moved into place" } };
+  for (const failure of [false, true]) {
+    const initial = () => listing({ kind: "local", packs: [pack("a", "available", { ...bad }), pack("a", "available")] });
+    const result = () => listing({ kind: "local", packs: [pack("a", "available", { ...bad }),
+      failure ? pack("a", "available", { ...wrote }) : pack("a", "installed", { installed: true })] });
+    const t = setup({
+      raw: "https://example.invalid/packs.git",
+      handler: (url) => {
+        if (url.endsWith("/sources/fetch")) return { status: 200, body: { listing: initial() } };
+        if (url.endsWith("/sources/install")) return { status: 200, body: { listing: result() } };
+        if (url.startsWith("/api/companion/packs/validate")) return { status: 200, body: { listing: initial() } };
+        return { status: 200, body: { listing: result() } };
+      }
+    });
+    const label = failure ? "failure" : "success";
+    const shown = () => t.root.text();
+    const alertText = () => t.root.all().find(c => c.attrs.role === "alert")?.text();
+    fire(buttonOf(cls(t.root, "ws-companion-sources-source")[1], "js.companion.sources.show"), "click");
+    await tick(); await tick();
+    fire(buttonOf(t.root, "js.companion.sources.install"), "click");
+    await tick(); await tick();
+    if (failure) {
+      assert.equal(alertText(), "valid row cannot be moved into place", "install " + label + ": the alert is the valid row's error");
+    } else assert.match(shown(), /done_install/, "install " + label);
+
+    const input = tagged(t.root, "INPUT").find(c => c.type === "file");
+    input.files = [{ name: "Fan.zip", size: 3 }];
+    fire(input, "change");
+    await tick(); await tick();
+    fire(buttonOf(t.root, "js.companion.sources.import"), "click");
+    await tick(); await tick();
+    assert.equal(t.calls.at(-1).url, "/api/companion/packs/import?name=Fan.zip&id=a", "import sends the ID once");
+    if (failure) assert.equal(alertText(), "valid row cannot be moved into place", "import " + label);
+    else assert.match(shown(), /done_import:1/, "import " + label + " counts one");
+    assert.ok(!/done_import:2/.test(shown()));
+  }
 });

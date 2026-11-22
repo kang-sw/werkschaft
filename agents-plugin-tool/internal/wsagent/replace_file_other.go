@@ -14,3 +14,9 @@ func replaceFile(tmp, path string) error {
 func readFile(path string) ([]byte, error) {
 	return wsstate.ReadFileOnce(path)
 }
+
+// readRecordFile reads sessionDir's agent.json; POSIX readers never see a
+// transient miss during a rename-over.
+func readRecordFile(sessionDir string) ([]byte, error) {
+	return wsstate.ReadFileOnce(recordPath(sessionDir))
+}

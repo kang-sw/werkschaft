@@ -48,7 +48,7 @@ func TestCredentialFileIsOwnerOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !owner.Equals(user.User.Sid) || ace.Mask&fileAllAccess != fileAllAccess {
+	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || !owner.Equals(user.User.Sid) || ace.Mask != fileAllAccess {
 		t.Fatalf("credential file DACL = %s, want one allow entry with full access for %s", sd.String(), user.User.Sid)
 	}
 }

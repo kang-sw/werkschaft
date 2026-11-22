@@ -59,3 +59,14 @@ func readFile(path string) ([]byte, error) {
 		}
 	}
 }
+
+// readRecordFile reads sessionDir's agent.json. Besides the transient
+// errors readFile retries, an open racing a rename-over can report
+// ERROR_FILE_NOT_FOUND, which a cross-process reader must not take for "no
+// such session". The not-found retry runs only on that error path (the happy
+// path touches nothing extra), only while the session directory still
+// exists, and on a short budget so a record that is truly gone reads
+// not-found promptly.
+func readRecordFile(sessionDir string) ([]byte, error) {
+	return readRecordRetrying(sessionDir, wsstate.ReadFileOnce, isTransientReplaceError, nil)
+}

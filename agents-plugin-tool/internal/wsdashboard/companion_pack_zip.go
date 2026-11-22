@@ -241,6 +241,9 @@ func (a *companionArchive) root(marker string) (string, bool) {
 // at most limit, at most companionZipRatioMax times its compressed size, and
 // at most what is left of the operation's total.
 func (a *companionArchive) read(f *zip.File, limit int) ([]byte, error) {
+	if a.inflate.left <= 0 {
+		return nil, errors.New("install operation byte limit exceeded") // nothing is read or opened
+	}
 	ratioCap := uint64(companionZipRatioMax) * f.CompressedSize64
 	allowed := min(uint64(limit), uint64(a.inflate.left), ratioCap)
 	rc, err := f.Open()
@@ -249,6 +252,16 @@ func (a *companionArchive) read(f *zip.File, limit int) ([]byte, error) {
 	}
 	defer rc.Close()
 	data, err := io.ReadAll(io.LimitReader(rc, int64(allowed)+1))
+	// Charge what was produced even when the entry then fails, so a run of
+	// corrupt or capped entries cannot exceed the operation total. archive/zip's
+	// checksum reader discards the bytes of a read that overruns the declared
+	// size or ends short, so after an error the produced count is a lower bound:
+	// charge the most the read could have produced.
+	charged := len(data)
+	if err != nil {
+		charged = max(charged, int(min(allowed+1, uint64(a.inflate.left))))
+	}
+	a.inflate.left -= min(charged, a.inflate.left)
 	if uint64(len(data)) > allowed {
 		switch {
 		case allowed == uint64(limit):
@@ -262,7 +275,6 @@ func (a *companionArchive) read(f *zip.File, limit int) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("corrupt archive entry")
 	}
-	a.inflate.left -= len(data)
 	return data, nil
 }
 

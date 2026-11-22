@@ -102,6 +102,7 @@ Run the packaging checks with `node --test scripts/test-package.cjs`.
 Run the notice browser test with `WS_PLAYWRIGHT_MODULE` pointing to
 Playwright and `node --test scripts/test-daemon-notice.cjs`.
 Run the theme bridge test with `node --test scripts/test-theme-bridge.cjs`.
+Run the title strip test with `node --test scripts/test-strip.cjs`.
 
 `scripts/build-slot.py` remains the bounded debug build runner from the
 attach-only research. Its process-group regressions can run without Cargo:
