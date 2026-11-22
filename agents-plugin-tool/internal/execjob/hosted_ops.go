@@ -88,20 +88,35 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 	}
 	if err := h.opts.Holders.Input(holder, data, eof); err != nil {
 		var opErr *wsholder.OpError
-		if errors.As(err, &opErr) && opErr.Code == "input_closed" {
+		var inErr *wsholder.InputError
+		refused := errors.As(err, &opErr)
+		accepted := 0
+		if errors.As(err, &inErr) {
+			accepted = inErr.Accepted
+		}
+		switch {
+		case refused && (opErr.Code == "input_closed" || opErr.Code == "no_child"):
+			// The child's stdin is gone (an eof closed it, or the child
+			// ended before its exit reached this daemon): no resend helps.
 			h.mu.Lock()
 			j.stdinOpen = false
 			h.mu.Unlock()
-			return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: an earlier eof closed it", id)
-		}
-		// The eof did not reach the child: stdin stays open. A retry
-		// resends only what the holder did not take.
-		var inErr *wsholder.InputError
-		if errors.As(err, &inErr) {
-			if inErr.Refused {
-				return h.view(j, 0), fmt.Errorf("write to exec job %s: %w; stdin stays open: resend from byte %d of %d", id, err, inErr.Accepted, len(data))
+			cause := "an earlier eof closed it"
+			if opErr.Code == "no_child" {
+				cause = "the job's process has ended"
 			}
-			return h.view(j, 0), fmt.Errorf("write to exec job %s: %w; check the job before resending from byte %d of %d", id, err, inErr.Accepted, len(data))
+			return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: %s (the holder took %d of %d bytes)", id, cause, accepted, len(data))
+		case refused && opErr.Code == "input_overflow":
+			// The child is not reading yet: the eof did not reach it and
+			// stdin stays open; a retry resends only what the holder did
+			// not take.
+			return h.view(j, 0), fmt.Errorf("write to exec job %s: %w; stdin stays open: resend from byte %d of %d", id, err, accepted, len(data))
+		case refused:
+			return h.view(j, 0), fmt.Errorf("write to exec job %s: %w", id, err)
+		case inErr != nil:
+			// The connection failed mid-write: the holder may have taken
+			// the chunk it was sent.
+			return h.view(j, 0), fmt.Errorf("write to exec job %s: %w; check the job before resending from byte %d of %d", id, err, accepted, len(data))
 		}
 		return h.view(j, 0), fmt.Errorf("write to exec job %s: %w", id, err)
 	}

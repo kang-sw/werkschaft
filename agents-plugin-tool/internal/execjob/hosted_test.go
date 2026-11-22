@@ -869,6 +869,46 @@ func TestHostedPartialWriteSaysWhatToResend(t *testing.T) {
 	}
 }
 
+// TestHostedWriteToAGoneStdinGivesNoResendAdvice: a refusal that no
+// resend can cure (the child already ended, its stdin closed, or a bad
+// request) says so instead of "stdin stays open: resend"; a gone stdin
+// refuses the next write without reaching the holder.
+func TestHostedWriteToAGoneStdinGivesNoResendAdvice(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+		gone bool
+	}{
+		{"no_child first chunk", &wsholder.InputError{Refused: true, Err: &wsholder.OpError{Code: "no_child", Message: "no child is running"}}, "no open stdin: the job's process has ended (the holder took 0 of 614400 bytes)", true},
+		{"no_child later chunk", &wsholder.InputError{Accepted: 256 << 10, Refused: true, Err: &wsholder.OpError{Code: "no_child", Message: "no child is running"}}, "no open stdin: the job's process has ended (the holder took 262144 of 614400 bytes)", true},
+		{"input_closed later chunk", &wsholder.InputError{Accepted: 256 << 10, Refused: true, Err: &wsholder.OpError{Code: "input_closed", Message: "closed"}}, "no open stdin: an earlier eof closed it (the holder took 262144 of 614400 bytes)", true},
+		{"bad_request", &wsholder.InputError{Refused: true, Err: &wsholder.OpError{Code: "bad_request", Message: "input data must be base64"}}, "holder: bad_request: input data must be base64", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHostedFixture(t, 10*time.Millisecond)
+			v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fx.holders.mu.Lock()
+			fx.holders.inputErr = tc.err
+			fx.holders.mu.Unlock()
+			_, err = fx.h.Write("lead", v.ID, make([]byte, 600<<10), true)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "resend") {
+				t.Fatalf("write = %v, want it to say %q and give no resend advice", err, tc.want)
+			}
+			fx.holders.mu.Lock()
+			fx.holders.inputErr = nil
+			fx.holders.mu.Unlock()
+			_, err = fx.h.Write("lead", v.ID, []byte("x"), false)
+			if gone := err != nil && strings.Contains(err.Error(), "no open stdin"); gone != tc.gone {
+				t.Fatalf("the next write = %v, want stdin gone %v", err, tc.gone)
+			}
+		})
+	}
+}
+
 // TestHostedStdinSettlesOnALaterAttach: a rejoined job whose holder did
 // not attach by Start has an unknown stdin; a write refuses without
 // reaching the holder until the holder attaches, then delivers.
