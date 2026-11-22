@@ -1200,6 +1200,46 @@ func TestRemovalNeverClearsAWitnessTheSourceResolvesThrough(t *testing.T) {
 	}
 }
 
+// A name that is another spelling of the witness entry (an NTFS 8.3 short
+// name) depends on it like the long name does, while an independent hard
+// link would not. entryName simulates the alias here; the Windows test of
+// platformEntryName checks a real short name.
+func TestRemovalNeverClearsAWitnessThroughAnAlternateName(t *testing.T) {
+	ctx := context.Background()
+	const alias = "TRACKE~1.JSO"
+	dir := legacyFixture(t)
+	s := openTest(t, dir, testOpts())
+	mustStage(t, s)
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatal(err)
+	}
+	// The alias resolves to the witness entry; a hard link stands in for
+	// it on a file system without short names.
+	if err := os.Link(filepath.Join(dir, hooksWitness), filepath.Join(dir, alias)); err != nil {
+		t.Fatal(err)
+	}
+	prev := entryName
+	t.Cleanup(func() { entryName = prev })
+	entryName = func(d, name string) (string, error) {
+		if name == alias {
+			return hooksWitness, nil
+		}
+		return prev(d, name)
+	}
+	abs := filepath.Join(dir, fenceHooks)
+	mustSymlink(t, alias, abs)
+	mustStage(t, s)
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrWitnessOccupied) {
+		t.Fatalf("re-fence through the witness's alternate name = %v, want ErrWitnessOccupied", err)
+	}
+	if got := readRel(t, dir, hooksWitness); got != hooksBytes {
+		t.Fatalf("witness = %q, want the moved config kept", got)
+	}
+	if target, err := os.Readlink(abs); err != nil || target != alias {
+		t.Fatalf("legacy link = %q, %v; want it unmoved", target, err)
+	}
+}
+
 func mustSymlink(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {

@@ -560,15 +560,21 @@ func witnessContent(r legacyRead) string { return r.state + " " + r.digest }
 // seam).
 var fileIdentity = entryIdentity
 
+// entryName is the canonical name of the entry name spells in dir: name
+// itself on POSIX, the long name of an NTFS short name on Windows
+// (entryname_*.go; a test seam).
+var entryName = platformEntryName
+
 // routesThrough reports whether resolving abs passes through the directory
 // entry wabs at any depth: abs itself, a link in its chain, or a directory
 // alias on the way. Clearing that entry would change what abs names, and
 // moving abs there would close a cycle. The walk resolves one component at
-// a time, as the kernel does. An entry matches wabs by its name, compared
-// without case so a case-insensitive volume cannot hide it, in the same
-// directory, compared by identity so an alias of the directory cannot hide
-// it. Other names for the same file, hard links included, do not depend on
-// the entry and move intact. A chain longer than maxLinkHops cannot be
+// a time, as the kernel does. An entry matches wabs by its canonical name
+// (entryName, so an NTFS short name cannot hide it), compared without case
+// so a case-insensitive volume cannot hide it, in the same directory,
+// compared by identity so an alias of the directory cannot hide it. Other
+// names for the same file, hard links included, do not depend on the entry
+// and move intact. A chain longer than maxLinkHops cannot be
 // excluded and is an error.
 func routesThrough(abs, wabs string) (bool, error) {
 	wdir, err := os.Stat(filepath.Dir(wabs))
@@ -590,10 +596,14 @@ func routesThrough(abs, wabs string) (bool, error) {
 			cur = filepath.Dir(cur)
 			continue
 		}
-		if strings.EqualFold(part, wname) {
-			if d, err := os.Stat(cur); err != nil {
+		if d, err := os.Stat(cur); err != nil {
+			return false, err
+		} else if os.SameFile(d, wdir) {
+			name, err := entryName(cur, part)
+			if err != nil {
 				return false, err
-			} else if os.SameFile(d, wdir) {
+			}
+			if strings.EqualFold(name, wname) {
 				return true, nil
 			}
 		}
