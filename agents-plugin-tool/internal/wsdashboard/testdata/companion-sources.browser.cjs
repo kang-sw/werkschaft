@@ -219,6 +219,15 @@ async function shotDialog(page, name) {
     assert.equal(importCalls.at(-1).path, '/api/companion/packs/alpha/uninstall');
     assert.deepEqual(await page.evaluate(() => fetch('/api/companion/packs').then(r => r.json()).then(c => c.packs.map(p => p.id).sort())), ['default']);
 
+    // The authoring links point at exactly the daemon's three guide routes, and each one serves.
+    const links = await section.locator('.ws-companion-sources-links a').evaluateAll(list => list.map(a => ({ href: a.getAttribute('href'), rel: a.rel, target: a.target })));
+    assert.deepEqual(links.map(l => l.href), ['/api/companion/authoring/guide.md', '/api/companion/authoring/pack.schema.json', '/api/companion/authoring/marketplace.schema.json']);
+    assert.ok(links.every(l => l.rel === 'noopener noreferrer' && l.target === '_blank'));
+    for (const { href } of links) {
+      const served = await page.evaluate(async url => { const r = await fetch(url); return { status: r.status, type: r.headers.get('content-type') }; }, href);
+      assert.equal(served.status, 200, href + ' is served');
+    }
+
     assert.deepEqual(sourceCalls, [{ source: 'official' }], 'the configured user source was never fetched');
     assert.deepEqual(blocked, [], 'no request left the daemon');
     assert.deepEqual(errors, [], 'no page errors');
