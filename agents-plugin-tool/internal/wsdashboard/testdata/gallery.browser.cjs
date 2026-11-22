@@ -32,12 +32,32 @@ async function center(loc) {
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 }
 // grip is a point on a topic's title bar or a card's header that is not a
-// control (a press there starts a drag).
+// control (a press there starts a drag). The header's layout can still be
+// settling (a page flip, an icon or state chip arriving), so the point is
+// hit-tested in the frame after two frames and accepted only once the same
+// header box and point repeat: the press then lands on the header itself,
+// not on a control or on a sibling the layout moved under it.
 async function grip(loc) {
   await loc.scrollIntoViewIfNeeded();
-  const b = await loc.boundingBox();
-  assert(b, 'no header box');
-  return { x: b.x + Math.min(24, b.width / 4), y: b.y + b.height / 2 };
+  let last = '';
+  return until(async () => {
+    const found = await loc.evaluate(el => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => {
+      const r = el.getBoundingClientRect(), y = r.top + r.height / 2, good = [];
+      for (let x = r.left + 4; x < r.right - 4; x += 4) {
+        const hit = document.elementFromPoint(x, y);
+        if (hit && el.contains(hit) && !hit.closest('button, a, input, textarea, select, summary, label, .topic-state')) good.push(x);
+      }
+      const want = r.left + Math.min(24, r.width / 4);
+      good.sort((a, b) => Math.abs(a - want) - Math.abs(b - want));
+      done(good.length ? { dx: good[0] - r.left, dy: r.height / 2 } : null);
+    }))));
+    const b = await loc.boundingBox();
+    if (!found || !b) { last = ''; return false; }
+    const pt = { x: b.x + found.dx, y: b.y + found.dy };
+    const key = JSON.stringify([pt.x, pt.y, b.width, b.height]);
+    if (key !== last) { last = key; return false; }
+    return pt;
+  }, 'a stable non-control header grip');
 }
 // drag presses at from, moves past the slop (during runs there), then
 // releases over what to() returns.
@@ -919,8 +939,21 @@ async function routeTerminal(context) {
         const o = await off(), r = await page.evaluate(() => { const b = document.querySelector('#bgal .gal-pane[data-ref="t:alpha"]').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height * 0.92 }; });
         return { x: o.x + r.x, y: o.y + r.y };
       }, async () => {
-        const d = await center(dot(page, 0));
+        // The drag started (data-bdrag), the rail's dots stopped moving (the
+        // scrollable icon capsules re-lay out when the drag shows the rail),
+        // then the hover arms the 300 ms spring on the target dot, which shows
+        // the page. A spring that arms without a switch is a product bug.
+        await until(() => page.evaluate(() => document.documentElement.hasAttribute('data-bdrag')), 'the board drag started (data-bdrag)');
+        let seenAt = '';
+        const d = await until(async () => {
+          const c = await center(dot(page, 0));
+          const key = JSON.stringify([c.x, c.y]);
+          const same = key === seenAt;
+          seenAt = key;
+          return same ? c : false;
+        }, 'the page 1 dot holds still');
         await tab.mouse.move(d.x, d.y, { steps: 4 });
+        await until(() => page.evaluate(() => !!document.querySelector('#bgal .gal-dot[data-pos="0"].spring') || +document.getElementById('bgal').getAttribute('data-pos') === 0), 'the hover arms the page 1 dot\'s spring');
         await until(async () => await pos(page) === 0, 'the spring shows page 1 over the board mid-drag', 2000);
       });
       await until(async () => JSON.stringify(await pages(page)) === '[["alpha","beta"]]', 'beta drops at alpha\'s bottom on the sprung page');
@@ -1023,6 +1056,18 @@ async function routeTerminal(context) {
       // Below the middle of the open topic after beta: beta moves after
       // it, so the drop line shows. The board stands with beta near its
       // top, that topic's lower half in view.
+      // Topic heights settle after load (content-visibility placeholders, then
+      // measured bodies), and the scroll anchor moves the board with them: wait
+      // until the open topics keep one height before standing beta near the top.
+      {
+        let last = '', same = 0;
+        await until(async () => {
+          const now = await page.evaluate(() => JSON.stringify([document.getElementById('bcol').scrollHeight, ...[...document.querySelectorAll('section.topic:not(.closed)')].map(n => Math.round(n.getBoundingClientRect().height))]));
+          same = now === last ? same + 1 : 0;
+          last = now;
+          return same >= 12;
+        }, 'the board\'s topic heights settle (' + how + ')');
+      }
       await page.evaluate(() => { const b = document.getElementById('bcol'); b.scrollTop += document.querySelector('section.topic[data-topic="beta"]').getBoundingClientRect().top - b.getBoundingClientRect().top - 40; });
       await page.evaluate(() => window.__gal.frames());
       let target = null;

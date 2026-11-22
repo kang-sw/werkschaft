@@ -52,6 +52,13 @@ type State struct {
 	// them; they scale its context bar in a view of its parent.
 	ContextWindow     int64                   `json:"contextWindow,omitempty"`
 	ContextCompaction *wslive.UsageCompaction `json:"contextCompaction,omitempty"`
+	// Compacting is set while a compaction is queued or running, Compactions
+	// counts those completed since the runner loaded the conversation, and
+	// CompactOrigin names the latest's origin (wslive.CompactOriginAuto,
+	// Manual or Native).
+	Compacting    bool   `json:"compacting,omitempty"`
+	Compactions   int    `json:"compactions,omitempty"`
+	CompactOrigin string `json:"compactOrigin,omitempty"`
 	// Held counts the messages waiting for the next turn.
 	Held int `json:"held"`
 	// Page is the conversation's dashboard page path.

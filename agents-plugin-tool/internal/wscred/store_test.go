@@ -398,3 +398,93 @@ func TestCloseWaitsForTheChangeInFlightAndRefusesLaterOnes(t *testing.T) {
 		t.Fatalf("a closed store stopped answering reads: %+v, %v", cred, err)
 	}
 }
+
+func writeLegacy(t *testing.T, root, body string) string {
+	t.Helper()
+	legacy := filepath.Join(root, dirName, FileName)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return legacy
+}
+
+// TestDefaultPathLivesUnderTheDaemonDirectory: v0.51.0's file preview denies
+// the daemon directory only, so the credential file must live under it.
+func TestDefaultPathLivesUnderTheDaemonDirectory(t *testing.T) {
+	root := t.TempDir()
+	path, err := DefaultPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := string(filepath.Separator) + filepath.Join("dashboard", dirName, FileName)
+	if !strings.HasSuffix(path, want) || filepath.Base(root) != filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))) {
+		t.Fatalf("DefaultPath = %q, not %s under the cache root %q", path, want, root)
+	}
+}
+
+// TestMigrateLegacyMovesTheCandidateFileOnce: a file a pre-release build
+// wrote beside the daemon directory is moved, not copied, into the store's
+// path with its content; the unprotected directory goes; a second call and a
+// call with no legacy file change nothing.
+func TestMigrateLegacyMovesTheCandidateFileOnce(t *testing.T) {
+	root := t.TempDir()
+	path, _ := DefaultPath(root)
+	body := `{"schema_version":1,"providers":{"openrouter":{"kind":"api_key","api_key":"` + fixtureKey + `","future":1}},"newer":true}`
+	legacy := writeLegacy(t, root, body)
+	s := NewStore(path)
+	if err := s.MigrateLegacy(); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustRead(t, path); got != body {
+		t.Fatalf("moved file = %q", got)
+	}
+	if _, err := os.Stat(filepath.Dir(legacy)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the legacy location remains: %v", err)
+	}
+	if cred, err := openrouter(s); err != nil || cred.Secret.Reveal() != fixtureKey {
+		t.Fatalf("after the move = %+v, %v", cred, err)
+	}
+	if err := NewStore(path).MigrateLegacy(); err != nil || mustRead(t, path) != body {
+		t.Fatalf("second migrate changed the file: %v", err)
+	}
+	fresh, _ := DefaultPath(t.TempDir())
+	if err := NewStore(fresh).MigrateLegacy(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(fresh)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("migrating with no legacy file created a directory: %v", err)
+	}
+}
+
+func TestMigrateLegacyKeepsTheFileAlreadyAtThePath(t *testing.T) {
+	root := t.TempDir()
+	path, _ := DefaultPath(root)
+	s := NewStore(path)
+	setKey(t, s, fixtureKey)
+	legacy := writeLegacy(t, root, `{"schema_version":1,"providers":{"openrouter":{"kind":"api_key","api_key":"`+fixtureKey2+`"}}}`)
+	if err := NewStore(path).MigrateLegacy(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the stale legacy file remains: %v", err)
+	}
+	if got := mustRead(t, path); !strings.Contains(got, fixtureKey) || strings.Contains(got, fixtureKey2) {
+		t.Fatalf("the file at the path was replaced: %q", got)
+	}
+}
+
+// TestMigrateLegacyOnlyTouchesTheDefaultPath: a store at any other path has
+// no legacy location, so a file beside it is never moved.
+func TestMigrateLegacyOnlyTouchesTheDefaultPath(t *testing.T) {
+	root := t.TempDir()
+	legacy := writeLegacy(t, root, "{}")
+	if err := NewStore(filepath.Join(root, "elsewhere", dirName, FileName)).MigrateLegacy(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatalf("an unrelated file moved: %v", err)
+	}
+}

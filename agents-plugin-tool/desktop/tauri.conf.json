@@ -16,8 +16,20 @@
         "local": false,
         "windows": ["main"],
         "permissions": []
+      }, {
+        "identifier": "title-strip",
+        "description": "The Windows title strip page: window controls and native menu popups",
+        "local": true,
+        "webviews": ["main-strip"],
+        "permissions": [
+          "allow-strip-popup",
+          "allow-strip-minimize",
+          "allow-strip-toggle-maximize",
+          "allow-strip-close",
+          "allow-strip-drag"
+        ]
       }],
-      "csp": "default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      "csp": "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

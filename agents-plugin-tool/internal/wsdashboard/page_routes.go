@@ -42,7 +42,7 @@ func (d *Daemon) handleIndex(w http.ResponseWriter, r *http.Request) {
 // stream, its image, file view, files, history, audit query (audit_routes.go),
 // entry text, closed-topic, topic-history, worktree pool,
 // git status, log, and commit, attachment, and file browser routes, its
-// message, cancel, steer, interrupt, system-open, file browser host,
+// message, composer-exec, cancel, steer, interrupt, system-open, file browser host,
 // outside-link mint, git
 // refresh, git push, pull, and fetch, worktree cleanup, and display label
 // routes, and the shared assets a page loads by relative path.
@@ -57,6 +57,9 @@ func (d *Daemon) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if replyID, sub, _ := strings.Cut(rest, "/"); sub == "message" || sub == "cancel" || sub == "steer" || sub == "interrupt" {
 		d.handleInboxWrite(w, r, replyID, sub)
+		return
+	} else if sub == "composer-exec" || strings.HasPrefix(sub, "composer-exec/") {
+		d.handleComposerExec(w, r, replyID, strings.TrimPrefix(sub, "composer-exec"))
 		return
 	} else if sub == "notes" {
 		d.handleNotes(w, r, replyID)

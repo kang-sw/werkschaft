@@ -116,7 +116,8 @@ const fits = (s, what) => {
       assert(!sticky.scrolls || Math.abs(sticky.d) <= 1, 'header stays while the list scrolls: ' + JSON.stringify(sticky));
       // Row expansion: newest four batches, then the full output.
       const liveLine = () => frame.evaluate(() => [...document.querySelectorAll('#agpop .agent > details[data-key="agent-a1"] ~ .brows.live > li')].filter(li => li.offsetParent).length);
-      assert.equal(await liveLine(), 1, 'a collapsed row shows its last call');
+      // a1 is a native (harness-owned) row: 62abe4d51 stopped rendering the live slot line for native rows.
+      assert.equal(await liveLine(), 0, 'a native collapsed row renders no live slot line');
       await frame.click('#agpop details[data-key="agent-a1"] > summary');
       assert.equal(await liveLine(), 0, 'an open row does not repeat its box\'s last call below it');
       const shown = () => frame.evaluate(() => [...document.querySelectorAll('#agpop details[data-key="agent-a1"] > .brows > li')].filter(li => li.offsetParent).length);

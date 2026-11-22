@@ -64,6 +64,14 @@ type HUDNode struct {
 	ContextSoft   int64  `json:"contextSoft,omitempty"`
 	ContextLevel  string `json:"contextLevel,omitempty"`
 	ContextText   string `json:"contextText,omitempty"`
+	// Compacting is set while the agent's compaction is queued or running;
+	// Compactions counts those it completed and CompactOrigin names the
+	// latest's origin (wslive.CompactOriginAuto, Manual or Native, absent
+	// while unknown), for the hover card's compaction line. They come from the
+	// row its runner publishes, with no read on the render path.
+	Compacting    bool   `json:"compacting,omitempty"`
+	Compactions   int    `json:"compactions,omitempty"`
+	CompactOrigin string `json:"compactOrigin,omitempty"`
 	// OwnRow marks nodes rendered in #r-tree's .agent list so hudJSON can omit
 	// their Task from .ag-source (keeping tree-rows shell invariant on caption edits).
 	OwnRow bool `json:"-"`
@@ -237,6 +245,7 @@ func projectHUDNodes(set HarnessTraitSet, nodes []*hudRawNode, depth int, parent
 			OwnRow:      n.ownRow,
 		}
 		node.setContext(a, n.usage)
+		node.Compacting, node.Compactions, node.CompactOrigin = a.Compacting, max(a.Compactions, 0), a.CompactOrigin
 		if n.native {
 			node.Native, node.StartedAt = true, max(a.StartedAt, 0)
 			if hudEndUnknown(a, true) {

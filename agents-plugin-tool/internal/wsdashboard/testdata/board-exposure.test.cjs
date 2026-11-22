@@ -99,7 +99,8 @@ function scrollContract(boardSource = readAssetSource('wsdashboard', 'dashboard.
     assert.equal(checks,0,'raw scroll ticks must not recompute exposure');
     assert.equal(flushes,0,'raw scroll ticks must not re-swap the board');
   `, c);
-  vm.runInContext(funcs(boardSource, ['boardViewedExposure', 'watchBoard']) + `
+  vm.runInContext(funcs(boardSource, ['boardViewedExposure', 'boardHomeHold', 'watchBoard']) + `
+    function boardBoxes(){return [board];}
     board.nodeType=1;
     function q(sel,n){return n.querySelectorAll(sel);}
     watchBoard(board);
@@ -148,7 +149,8 @@ function trailingStickyContract() {
       advance(16); // Finish watch()'s owner-install frame before timing the scroll gesture.
       assert.equal(k.keep(blocker,{capture:false}).visible(blocker),true);
       boardPending={A:[blocker]};
-    ` + funcs(source, ['boardExposed', 'boardWithSnap', 'boardReleaseDue', 'boardViewedScroll', 'boardViewedTrailing', 'boardViewedExposure']) + `
+    ` + funcs(source, ['boardExposed', 'boardWithSnap', 'boardReleaseDue', 'boardViewedScroll', 'boardViewedTrailing', 'boardHomeHold', 'boardViewedExposure']) + `
+      function boardBoxes(){return [board];}
       var exactReleaseDue=boardReleaseDue;
       boardReleaseDue=function(){checks++;return exactReleaseDue();};
       bcol.scrollTop=100;

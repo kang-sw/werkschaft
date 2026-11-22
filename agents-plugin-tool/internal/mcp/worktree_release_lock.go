@@ -80,10 +80,11 @@ func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool
 			err = fmt.Errorf("worktree.release refuses %s: %w. Nothing was changed", target, err)
 		}
 	}
-	// Forced or not, a release refuses here, with nothing changed, when its
-	// notice could not reach a daemon that keeps live bound agents running.
+	// Learn what is bound before the release, so a notice a daemon cannot take
+	// (one that predates release notices) warns naming the agents it leaves
+	// running.
 	if err == nil && caller != nil && caller.CheckNotice != nil {
-		caller.bindings, err = caller.CheckNotice(ctx, target)
+		caller.bindings = caller.CheckNotice(ctx, target)
 	}
 	if err != nil {
 		unlock()

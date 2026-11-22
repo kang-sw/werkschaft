@@ -20,6 +20,9 @@ func (c *conv) runCommand(cmd wsinbox.Command) error {
 	p := c.r.opts.Backends[c.rec.Backend].CompactionProtocol()
 	isCompact := cmd.Name == "compact" && p.DetectsLifecycle()
 	if isCompact && !c.compacting {
+		if c.compactOrigin == "" {
+			c.compactOrigin = wslive.CompactOriginManual
+		}
 		c.compactEvent(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart})
 		if p.CommandEndConfirms {
 			c.apply(wslive.Event{Kind: wslive.KindCompact, Phase: wslive.CompactStart, Trigger: wslive.TriggerManual})
@@ -334,7 +337,7 @@ func (c *conv) startWorker(rec Record, def Profile, attach bool) error {
 				rec.HandedOffAt = c.r.opts.Now().UTC().Format(time.RFC3339)
 				rec.forgetMCP()
 				if s := spec.MCPSession; s != nil {
-					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, spec.ExecCutover), spec.WSMCP.Env, id
+					rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, spec.WSMCP.Env, id
 				}
 			})
 		}

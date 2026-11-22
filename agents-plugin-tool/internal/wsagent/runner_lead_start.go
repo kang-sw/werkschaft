@@ -271,7 +271,7 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 		rec.ExecCutoverHolder = cutoverHolder(cutover, id)
 		rec.forgetMCP()
 		if s := spec.MCPSession; s != nil {
-			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, recordedMCPURL(s.URL, cutover), mcpEnv, id
+			rec.MCPToken, rec.MCPURL, rec.MCPEnv, rec.MCPHolder = s.Token, s.URL, mcpEnv, id
 		}
 	})
 	c.writeRegistration()

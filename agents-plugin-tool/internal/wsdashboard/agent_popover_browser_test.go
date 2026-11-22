@@ -257,6 +257,14 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 			heavy.Agents[i].ContextTokens = 156_000
 			heavy.Agents[i].ContextWindow = 1_000_000
 			heavy.Agents[i].ContextCompaction = &wslive.UsageCompaction{Soft: 140_000, Hard: 200_000}
+			// Compaction line D: compacting now, two behind it, the latest ws auto.
+			heavy.Agents[i].Compacting = true
+			heavy.Agents[i].Compactions = 2
+			heavy.Agents[i].CompactOrigin = wslive.CompactOriginAuto
+		case "h2":
+			// Compaction line E: not compacting, three behind it, the latest harness native.
+			heavy.Agents[i].Compactions = 3
+			heavy.Agents[i].CompactOrigin = wslive.CompactOriginNative
 		case "h10":
 			heavy.Agents[i].ContextTokens = 41_000
 		}
@@ -298,6 +306,18 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 			f.d.snapshots.SetLive(f.dir, "boardsession", *boardUsage(156_000, true))
 		} else {
 			f.d.snapshots.SetLive(f.dir, "boardsession", *boardUsage(104_000, false))
+		}
+		if r.URL.Query().Get("cmp") == "done" {
+			// The compaction on h5 ended: D turns into a count-only line.
+			agents := append([]wslive.Agent(nil), next.Agents...)
+			for i := range agents {
+				if agents[i].ID == "h5" {
+					agents[i].Compacting = false
+					agents[i].Compactions = 3
+					agents[i].CompactOrigin = wslive.CompactOriginManual
+				}
+			}
+			next.Agents = agents
 		}
 		f.d.snapshots.SetLive(f.dir, "livesession", next)
 		f.d.broker.wake(liveDep("livesession"))

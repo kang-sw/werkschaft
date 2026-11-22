@@ -79,8 +79,9 @@ type ConvEntry struct {
 	// Key is the ring entry's file name, the element key the page keeps an
 	// expanded mail line open by.
 	Key string
-	// At is the entry's time (epoch ms).
-	At int64
+	// At is the entry's time (epoch ms), and AtRFC its UTC RFC3339Nano form.
+	At    int64
+	AtRFC string
 	// UserBlocks keeps per-envelope bubbles under one stable ring/stream key.
 	// EnvelopeAt is the original offset-bearing timestamp of one such bubble.
 	UserBlocks []ConvEntry

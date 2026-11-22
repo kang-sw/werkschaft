@@ -10,7 +10,7 @@ function harness() {
   const requests = [], timers = [];
   const c = { tkApi: {}, tkOrder: [], tkHidden: [], tkInfo: {}, tkViews: {}, tkErrs: {}, tkSeen: {}, tkSubs: [],
     tkBusy: false, tkQueued: false, tkNext: [], tkHostErr: null, tkLastRev: null, tkNudgedRev: null,
-    tkSupport: false, wsT: x => x, tkMount() {},
+    tkSupport: false, wsT: x => x, tkMount() {}, shStage: fn => fn(), shHolding: () => false,
     tkUrl: (id, op) => '/tracker/stores/' + id + '/' + op,
     tkFetch(path, body, done, keep, signal, tag) { requests.push({ path, body, done, tag }); },
     setTimeout(fn) { const t = { fn }; timers.push(t); return t; },

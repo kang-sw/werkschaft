@@ -206,9 +206,13 @@ func (c *hostedCLI) credentialShow(name, format string, id wscred.ProviderID) in
 		}
 		statuses, err = c.host.credentials.Status()
 	} else {
-		var credPath string
-		if credPath, err = c.credentialPath(); err == nil {
-			statuses, err = wscred.NewStore(credPath).Status()
+		var dir, credPath string
+		if dir, err = wsdashboard.Dir(c.getenv(wsstate.EnvCacheHome)); err == nil {
+			if credPath, err = c.credentialPath(); err == nil {
+				if err = wsdashboard.MigrateCredentialFile(dir, credPath); err == nil {
+					statuses, err = wscred.NewStore(credPath).Status()
+				}
+			}
 		}
 	}
 	if err == nil && id != "" {

@@ -38,10 +38,12 @@ const { chromium } = require(process.env.WS_PLAYWRIGHT_MODULE);
       window.wsT = key => key;
       const kinds = {}, cards = [];
       window.WsCards = {
-        register: (name, kind) => kinds[name] = kind,
+        register: (name, kind) => kinds[name] = kind, relayout() {}, icon: () => '',
         list: () => cards,
         open: (kind, data) => {
-          const card = { data, body: document.querySelector('#preview'), el: document.querySelector('#card'),
+          // 1ec3ee141: the preview kind places its state label after the card's name node.
+          const name = document.createElement('span'); document.querySelector('#card').appendChild(name);
+          const card = { data, name, body: document.querySelector('#preview'), el: document.querySelector('#card'),
             title() {}, actions() {}, paint() {}, bump() {}, fold() {}, show() {}, save() {} };
           cards.push(card); kinds[kind].open(card); return card;
         }

@@ -1,0 +1,60 @@
+<style>
+.hcm2 { display: flex; gap: 18px; flex-wrap: wrap; font-family: system-ui, sans-serif; padding: 12px; background: #1b1d22; }
+.hcm2 .tt { width: 300px; padding: 10px 12px; border-radius: 12px; background: #24262c; color: #e8e8ea; box-shadow: 0 6px 22px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 6px; }
+.hcm2 .cap { color: #9a9ca3; font-size: 11px; margin-bottom: 4px; }
+.hcm2 .tt-head { display: flex; align-items: center; gap: 6px; }
+.hcm2 .hb { font: 800 10px/16px monospace; background: #f2f2f2; color: #111; border-radius: 4px; padding: 0 4px; }
+.hcm2 .tt-title { font-weight: 800; font-size: 12px; flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hcm2 .tt-pill { height: 18px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 800; line-height: 18px; background: #3a3355; color: #b9a6ff; }
+.hcm2 .tt-meta { display: flex; gap: 6px; font-size: 11px; color: #9a9ca3; align-items: center; }
+.hcm2 .tt-meta code { font-size: 10.5px; background: #33353b; padding: 0 4px; border-radius: 4px; color: #e8e8ea; }
+.hcm2 .tt-ctx { --c: #7aa2ff; display: flex; align-items: center; gap: 7px; font-variant-numeric: tabular-nums; }
+.hcm2 .tt-ctx.warn { --c: #e5b44a; }
+.hcm2 .tt-ctx .pct { flex: none; min-width: 34px; font: 800 12px/1 system-ui; color: var(--c); }
+.hcm2 .tt-ctx .bar { position: relative; flex: 1 1 auto; height: 7px; border-radius: 999px; background: #33353b; overflow: hidden; }
+.hcm2 .tt-ctx .bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 999px; }
+.hcm2 .tt-ctx .bar .m-soft { position: absolute; top: 0; bottom: 0; width: 2px; background: #24262c; transform: translateX(-50%); }
+.hcm2 .tt-ctx .tok { flex: none; font: 600 10.5px/1 monospace; color: #9a9ca3; }
+/* NEW: compaction line, directly under the context row */
+.hcm2 .tt-cmp { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #9a9ca3; }
+.hcm2 .tt-cmp .now { height: 16px; padding: 0 6px; border-radius: 999px; line-height: 16px; font-weight: 800; background: #2c3550; color: #7aa2ff; }
+.hcm2 .tt-cmp .now::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 4px; border-radius: 50%; background: currentColor; vertical-align: 1px; animation: hcm2p 1.2s ease-in-out infinite; }
+@keyframes hcm2p { 50% { opacity: .3; } }
+.hcm2 .tt-cmp .cnt { font-variant-numeric: tabular-nums; }
+.hcm2 .tt-chain { font-size: 10.5px; color: #9a9ca3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hcm2 .tt-hint { font-size: 10.5px; color: #7aa2ff; font-weight: 700; padding-top: 3px; border-top: 1px solid #36383e; font-family: monospace; }
+</style>
+<div class="hcm2">
+  <div>
+    <div class="cap">D. compacting now (count so far shown beside it)</div>
+    <div class="tt">
+      <div class="tt-head"><span class="hb">Cl</span><span class="tt-title">impl: provider-auth-layer Phase 1</span><span class="tt-pill">사고 중</span></div>
+      <div class="tt-meta"><code>claude-opus-5-5</code><span>xhigh</span><span>· 1h 12m</span></div>
+      <div class="tt-ctx warn"><span class="pct">82%</span><span class="bar"><span class="fill" style="width:82%"></span><span class="m-soft" style="left:62%"></span></span><span class="tok">205k / 250k</span></div>
+      <div class="tt-cmp"><span class="now">압축 중</span><span class="cnt">압축 2회 · 마지막 ws 자동</span></div>
+      <div class="tt-chain">sub 2 › impl: provider-auth-layer Phase 1</div>
+      <div class="tt-hint">클릭: 세션 이동<br>/s/example-session</div>
+    </div>
+  </div>
+  <div>
+    <div class="cap">E. idle after compactions (count only)</div>
+    <div class="tt">
+      <div class="tt-head"><span class="hb">Co</span><span class="tt-title">companion starter mannequin</span><span class="tt-pill">사고 중</span></div>
+      <div class="tt-meta"><code>gpt-6.2-sol</code><span>high</span><span>· 46m 47s</span></div>
+      <div class="tt-ctx"><span class="pct">21%</span><span class="bar"><span class="fill" style="width:21%"></span><span class="m-soft" style="left:70%"></span></span><span class="tok">46k / 218k</span></div>
+      <div class="tt-cmp"><span class="cnt">압축 3회 · 마지막 ws 자동</span></div>
+      <div class="tt-chain">아트 › companion starter mannequin</div>
+      <div class="tt-hint">클릭: 세션 이동<br>/s/example-session</div>
+    </div>
+  </div>
+  <div>
+    <div class="cap">F. never compacted - no line (unchanged from v1)</div>
+    <div class="tt">
+      <div class="tt-head"><span class="hb">Cl</span><span class="tt-title">native explore agent</span><span class="tt-pill">사고 중</span></div>
+      <div class="tt-meta"><code>claude-sonnet-5-5</code><span>· 3m 05s</span></div>
+      <div class="tt-ctx"><span class="pct">38%</span><span class="bar"><span class="fill" style="width:38%"></span><span class="m-soft" style="left:70%"></span></span><span class="tok">68k / 180k</span></div>
+      <div class="tt-chain">sub 2 › native explore agent</div>
+      <div class="tt-hint">클릭: 상세</div>
+    </div>
+  </div>
+</div>

@@ -55,5 +55,6 @@ func loadGlobalConfig(opts Options) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return loadConfigFile(path, "global")
+	cfg, err := loadConfigFile(path, "global")
+	return reconcileGlobal(cfg), err
 }

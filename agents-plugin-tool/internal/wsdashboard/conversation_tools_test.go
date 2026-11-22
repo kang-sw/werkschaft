@@ -234,3 +234,66 @@ func TestToolsSummarySplitsCountsFromNumbers(t *testing.T) {
 		t.Errorf("a summary without numbers drew a numbers row:\n%s", none)
 	}
 }
+
+func TestAuditCallRowsAndLegacyFallback(t *testing.T) {
+	// With no call IDs, RingTools keeps the legacy toolsline markup unchanged.
+	legacy := []wslive.RingRecord{ringRecord(1, wslive.RingEntry{Kind: wslive.RingTools, Tools: toolsSummary()})}
+	legacySet, err := renderSessionRegions(historyView(legacy, "", PageContent{}, sessionLookup{}), newEntryCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyHTML := string(legacySet[regionEntries].HTML)
+	if !strings.Contains(legacyHTML, `<details class="toolsline"`) || strings.Contains(legacyHTML, `au-tools`) {
+		t.Errorf("legacy tools without call IDs did not use fallback:\n%s", legacyHTML)
+	}
+
+	// With call IDs, first 3 ID'd rows stay visible and overflow + trailing
+	// non-ID'd calls past cap fold behind .au-more.
+	summary := &wslive.ToolSummary{
+		Calls:      5,
+		DurationMs: 1_250,
+		Batches: []wslive.ToolBatch{
+			{
+				Names: []string{"Read", "Grep", "Bash", "Edit"},
+				Calls: 4,
+				CallArgs: []wslive.ToolCallArgs{
+					{Name: "Read", ArgsPreview: "file_path: a.go", ID: "c1"},
+					{Name: "Grep", ArgsPreview: "pattern: foo", ID: "c2"},
+					{Name: "Bash", ArgsPreview: "cmd: go test", ID: "c3"},
+					{Name: "Edit", ArgsPreview: "file_path: b.go", ID: "c4"},
+				},
+			},
+			{
+				Names: []string{"Write"},
+				Calls: 1,
+				CallArgs: []wslive.ToolCallArgs{
+					{Name: "Write", ArgsPreview: "file_path: c.go"}, // uncapped / no ID
+				},
+			},
+		},
+	}
+	rec := ringRecord(2, wslive.RingEntry{Kind: wslive.RingTools, Tools: summary})
+	set, err := renderSessionRegions(historyView([]wslive.RingRecord{rec}, "", PageContent{}, sessionLookup{}), newEntryCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := stdhtml.UnescapeString(string(set[regionEntries].HTML))
+	for _, want := range []string{
+		`<div class="au-tools"`,
+		`data-at="` + rec.At.UTC().Format("2006-01-02T15:04:05")[:10],
+		`data-call="c1"`,
+		`data-call="c2"`,
+		`data-call="c3"`,
+		`data-call="c4"`,
+		`<ol class="au-calls au-fold" hidden>`,
+		`<li class="au-row au-done au-static">`,
+		`+2 more`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("audit call rows lack %q:\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, `<details class="toolsline"`) {
+		t.Errorf("audit call rows unexpectedly rendered legacy details.toolsline:\n%s", html)
+	}
+}

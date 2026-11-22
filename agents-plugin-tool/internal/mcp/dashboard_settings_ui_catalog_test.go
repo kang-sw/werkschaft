@@ -94,13 +94,13 @@ func TestDashboardSettingsUICatalog(t *testing.T) {
 
 // catalogSurfaces lists the values a catalog row's optional surface field may
 // take. An absent surface means the settings panel.
-var catalogSurfaces = []string{"companion-modal"}
+var catalogSurfaces = []string{"companion-modal", "deprecated"}
 
 func validCatalogSurface(surface string) bool { return slices.Contains(catalogSurfaces, surface) }
 
 func TestDashboardSettingsUICatalogSurface(t *testing.T) {
-	if !validCatalogSurface("companion-modal") || validCatalogSurface("") || validCatalogSurface("panel") || validCatalogSurface("Companion-Modal") {
-		t.Fatal("surface validation must accept only companion-modal")
+	if !validCatalogSurface("companion-modal") || !validCatalogSurface("deprecated") || validCatalogSurface("") || validCatalogSurface("panel") || validCatalogSurface("Companion-Modal") {
+		t.Fatal("surface validation must accept only companion-modal and deprecated")
 	}
 	raw, err := os.ReadFile("../wsdashboard/assets/dashboard-settings-catalog.json")
 	if err != nil {
@@ -116,6 +116,10 @@ func TestDashboardSettingsUICatalogSurface(t *testing.T) {
 			modal = append(modal, row.Key)
 			if row.Section != "companion" {
 				t.Errorf("%s: companion-modal row left the companion section: %s", row.Key, row.Section)
+			}
+		} else if row.Key == "dashboard.companion_mode" {
+			if row.Surface != "deprecated" {
+				t.Errorf("%s is the 0.51.0 alias and must be hidden from the panel, surface %q", row.Key, row.Surface)
 			}
 		} else if strings.HasPrefix(row.Key, "dashboard.companion_") && row.Surface != "" {
 			t.Errorf("%s: unexpected surface %q", row.Key, row.Surface)
