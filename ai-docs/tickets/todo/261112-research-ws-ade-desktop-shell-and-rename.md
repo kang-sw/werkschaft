@@ -290,6 +290,10 @@ name text changes. The only name-as-text keys are the first two rows.
   binary loading our extension in isolated mode, with no Node; conditional
   on verifying Pi standalone's distribution, size, license, redistribution
   terms, and supported login flows.
+- (5002)=a, owner 2026-11-22, supersedes (495)=a: the built-in agent is our
+  own Go harness (`261122-feat-ws-builtin-agent-harness`) inside the single
+  binary, with provider logins from `261122-feat-ws-provider-auth-layer`; Pi
+  is no longer bundled.
 - (496) announced, owner ok 2026-11-13: the product name is Werkschaft,
   superseding `ws-ade`.
 

@@ -3,6 +3,8 @@ kind: render
 delegates: true
 role: worker
 tier: medium
+tier-role: review-handler
+tier-parent: review:*
 variables:
   - SpawnIdiom
 ---

@@ -301,12 +301,21 @@ func buildPlaybookVars(declared []string, callerContext map[string]string, harne
 // rendered body of delegates:true playbooks. The text is product-neutral: both
 // product modes delegate to host-native subagents, so the fragment differs only
 // by the caller's continuation idiom (terminology, see playbookTerminology).
-func delegationTip(terminology map[string]string) string {
+// spawnedWith, when non-empty, names the tool whose subagents return a
+// continuable id, for a caller that also runs one-shot native subagents
+// (nativeFirstTerminology); "" keeps the generic wording.
+func delegationTip(terminology map[string]string, spawnedWith string) string {
 	continueIdiom := terminology["ContinueIdiom"]
 	var sb strings.Builder
 	sb.WriteString("\n\n---\n")
 	sb.WriteString("**Continuity tip:** This playbook delegates to a subagent. ")
-	sb.WriteString("When the subagent returns an agent id, use `")
+	if spawnedWith != "" {
+		sb.WriteString("When a subagent started with `")
+		sb.WriteString(spawnedWith)
+		sb.WriteString("` returns an agent id, use `")
+	} else {
+		sb.WriteString("When the subagent returns an agent id, use `")
+	}
 	sb.WriteString(continueIdiom)
 	sb.WriteString("` to send follow-up messages to the same agent rather than spawning a new one. ")
 	sb.WriteString("The playbook surface keeps no agent registry; ")

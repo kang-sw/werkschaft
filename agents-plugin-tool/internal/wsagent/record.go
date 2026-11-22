@@ -156,8 +156,13 @@ type Record struct {
 	// admitted (AdmitCompletion), at most acceptedEventsCap: they keep a
 	// replayed notice out once its inbox entry has been drained and trimmed.
 	AcceptedEvents []string `json:"accepted_events,omitempty"`
-	Drained        uint64   `json:"drained,omitempty"`
-	TurnMark       uint64   `json:"turn_mark,omitempty"`
+	// ExecCutoverHolder is the holder of a process started under the exec
+	// cutover (exec_cutover.go). A rejoin restores the cutover only when the
+	// holder it attaches is this one, so a process an older daemon started
+	// since keeps its native tools.
+	ExecCutoverHolder string `json:"exec_cutover_holder_id,omitempty"`
+	Drained           uint64 `json:"drained,omitempty"`
+	TurnMark          uint64 `json:"turn_mark,omitempty"`
 	// An agy worker can also have a prompt outstanding with TurnOpen false:
 	// an internal compaction prompt has no result to report to its parent.
 	TurnStartedAt int64 `json:"turn_started_at,omitempty"`
@@ -322,14 +327,30 @@ func readRecord(sessionDir string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+	return decodeRecord(recordPath(sessionDir), filepath.Base(sessionDir), raw)
+}
+
+// decodeRecord is readRecord's decode of the agent.json at path in the
+// session directory of replyID.
+func decodeRecord(path, replyID string, raw []byte) (Record, error) {
 	var rec Record
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return Record{}, fmt.Errorf("parse %s: %w", recordPath(sessionDir), err)
+		return Record{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if rec.ReplyID != filepath.Base(sessionDir) || rec.WSKey == "" || rec.Root == "" {
-		return Record{}, fmt.Errorf("%s is not a complete agent record", recordPath(sessionDir))
+	if rec.ReplyID != replyID || rec.WSKey == "" || rec.Root == "" {
+		return Record{}, fmt.Errorf("%s is not a complete agent record", path)
 	}
 	return rec, nil
+}
+
+// ValidateLegacyRecord reports whether readRecord would accept raw as the
+// agent.json of replyID's session directory. The daemon metadata import uses
+// it as its agent_record validator (wsmeta.LegacyValidator: rel, the
+// capture's dashboard-relative path, is not needed), so a record the legacy
+// reader rejects stays out of the live store.
+func ValidateLegacyRecord(_, replyID string, raw []byte) error {
+	_, err := decodeRecord(recordFileName, replyID, raw)
+	return err
 }
 
 func writeRecord(sessionDir string, rec Record) error {

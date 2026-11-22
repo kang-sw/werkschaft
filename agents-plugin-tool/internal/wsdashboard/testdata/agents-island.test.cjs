@@ -155,9 +155,9 @@ assert.equal(island.hidden, false, 'badge explicitly opens unseen island');
 doc.listeners.keydown[0]({ key: 'Escape', defaultPrevented: false });
 assert.equal(island.hidden, true, 'collapsing unseen island hides it again');
 
-// Alive-idle + holding + permission + failed + linked + overflow HUD forest
+// Alive-idle + holding + permission + failed + linked + overflow + folded HUD forest
 hudPayload = {
-  lead: 'coord', completed: 2, peers: 5,
+  lead: 'coord', completed: 5, folded: 3, peers: 5,
   roots: [
     { id: 'a1', label: 'alpha', harness: 'codex', state: 'holding', model: 'gpt-5.4', effort: 'high', elapsedMs: 12000,
       children: [{ id: 'a2', label: 'beta', harness: 'claude', state: 'permission', replyId: 'r2', linked: true, task: 'bash ls' }] },
@@ -181,7 +181,14 @@ assert.equal(island.attrs['data-sizing'], undefined, 'data-sizing attribute is n
 assert.equal(island.style.height, '56px');
 assert.equal(island.style['--ag-cw'], '140px', 'agSize uses measured natural width, not fixed 320px');
 
-// Unchanged compact tick is a zero-DOM-churn no-op on width, height, and transition
+const foldedBtn = hudRoots.children.find(c => c.classList && c.classList.contains('hud-folded'));
+assert(foldedBtn, 'compact HUD renders .hud-folded badge when folded > 0');
+assert.equal(hudRoots.lastElementChild, foldedBtn, '.hud-folded sits at right end of .hud-roots');
+assert.equal(foldedBtn.classList.contains('hud-node'), false, '.hud-folded does not take .hud-node');
+assert.equal(foldedBtn.textContent, '+3');
+assert.equal(foldedBtn.getAttribute('aria-label'), 'js.hud.folded.aria:3');
+
+// Unchanged compact tick is a zero-DOM-churn no-op on width, height, transition, and .hud-folded identity
 let styleWrites = 0;
 const origW = island.style.width, origH = island.style.height, origT = island.style.transition;
 island.style = {
@@ -193,6 +200,7 @@ island.style = {
 };
 ctx.agSwapped();
 assert.equal(styleWrites, 0, 'unchanged compact agSwapped does not mutate island styles');
+assert.equal(hudRoots.lastElementChild, foldedBtn, 'unchanged compact tick preserves .hud-folded identity');
 assert.equal(island.attrs['data-sizing'], undefined);
 island.style = { setProperty(k, v) { this[k] = v; }, width: origW, height: origH, transition: origT, '--ag-cw': origW, '--ag-ch': origH };
 const buttons = [];
@@ -207,6 +215,37 @@ hudRoots.listeners.mouseover[0]({ target: buttons[0] });
 assert.equal(tooltip.hidden, false);
 assert.equal(tooltip.querySelector('.tt-task').textContent, 'Read foo.go');
 assert.equal(tooltip.querySelector('.tt-hint').textContent, 'js.hud.hint.details');
+
+// .hud-folded hover shows tooltip, updates in place when count changes, and click opens #agpop
+hudRoots.listeners.mouseover[0]({ target: foldedBtn });
+assert.equal(tooltip.hidden, false);
+assert.equal(tooltip.querySelector('.tt-title').textContent, 'js.hud.folded.title:3');
+assert.equal(tooltip.querySelector('.tt-pill').textContent, '+3');
+assert.equal(tooltip.querySelector('.tt-hint').textContent, 'js.hud.hint.details');
+hudPayload.folded = 5;
+ctx.agSwapped();
+assert.equal(hudRoots.lastElementChild, foldedBtn, 'count update reuses .hud-folded button');
+assert.equal(foldedBtn.textContent, '+5');
+assert.equal(tooltip.hidden, false);
+assert.equal(tooltip.querySelector('.tt-title').textContent, 'js.hud.folded.title:5');
+assert.equal(tooltip.querySelector('.tt-pill').textContent, '+5');
+hudRoots.listeners.mouseout[0]({ target: foldedBtn, relatedTarget: null });
+assert.equal(tooltip.hidden, true);
+hudRoots.listeners.mouseover[0]({ target: foldedBtn });
+assert.equal(tooltip.hidden, false);
+hudRoots.listeners.click[0]({ target: foldedBtn });
+assert.equal(island.attrs['data-mode'], 'full');
+assert.equal(tooltip.hidden, true, 'clicking .hud-folded hides tooltip and opens #agpop');
+doc.listeners.keydown[0]({ key: 'Escape', defaultPrevented: false });
+assert.equal(island.attrs['data-mode'], 'compact');
+
+// Clearing folded removes .hud-folded
+hudPayload.folded = 0;
+ctx.agSwapped();
+assert.equal(hudRoots.children.some(c => c.classList && c.classList.contains('hud-folded')), false);
+hudPayload.folded = 2;
+ctx.agSwapped();
+assert.equal(hudRoots.lastElementChild.classList.contains('hud-folded'), true);
 
 // Background click opens the full popover.
 compact.listeners.click[0]({ target: compact });
@@ -304,12 +343,13 @@ assert.equal(idle.querySelector('.hud-obs').textContent, 'js.hud.obsended:2');
 assert.equal(idle.children.filter(c => c.className === 'hud-obs').length, 1, 'the count is updated in place');
 assert.equal(hudCanvas.querySelector('.hud-obs').textContent, 'js.hud.obsended:2');
 
-// Empty visible HUD forest falls back to idle pill using HUD.Completed
-hudPayload = { lead: 'coord', completed: 4, peers: 2, roots: [] };
+// Empty visible HUD forest falls back to idle pill even when folded > 0
+hudPayload = { lead: 'coord', completed: 4, folded: 4, peers: 2, roots: [] };
 ctx.agSwapped();
 assert.equal(island.attrs['data-mode'], 'idle');
 assert.equal(idle.querySelector('.agidle-label'), null);
 assert.equal(idle.querySelector('.hud-obs'), null, 'no observation-ended count without such rows');
+assert.equal(hudRoots.children.some(c => c.classList && c.classList.contains('hud-folded')), false);
 
 // Preserve drawerWait and tlPerms exclusions of .ag-source
 const drawerSrc = readAssetSource('wsdashboard', 'dashboard-drawer.js');

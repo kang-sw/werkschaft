@@ -73,6 +73,9 @@ type mcpToken struct {
 	ready     chan struct{}
 	void      chan struct{}
 	connected chan struct{}
+	// cutover is the backend of a process started under the exec cutover
+	// (markMCPCutover), "" otherwise.
+	cutover string
 }
 
 // newMCPToken draws a token, or "" when no random source answers.
@@ -188,6 +191,7 @@ func (r *Runner) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan s
 	hello := t.hello
 	// The token is the binding: only this resolution names the conversation.
 	hello.Conversation = t.id
+	hello.ExecCutover = t.cutover
 	return hello, t.void, true
 }
 

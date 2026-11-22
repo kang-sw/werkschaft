@@ -217,6 +217,51 @@ func TestAgentTiersListsNativeExtAndAliases(t *testing.T) {
 	agentRefused(t, err, http.StatusBadRequest, "no tier is spawnable now")
 }
 
+// HarnessAvailability is SpawnableHarness for the dashboard view: the same
+// refusals, but the Pi child check answers only from ChildCheckKnown and is
+// unknown (never run) while that needs a probe.
+func TestHarnessAvailabilityNeverRunsTheChildCheck(t *testing.T) {
+	h, _ := agentHarness(t, nil)
+	ran := 0
+	h.config.ChildCheck = func() error { ran++; return errors.New("pi helper missing") }
+	h.runner.Close()
+	h.start()
+	if why, known := h.runner.HarnessAvailability(BackendPi); why != "" || known {
+		t.Fatalf("pi without ChildCheckKnown = %q, %v; want unknown", why, known)
+	}
+	if why, known := h.runner.HarnessAvailability("claude"); why != "" || !known {
+		t.Fatalf("claude = %q, %v", why, known)
+	}
+	if why, known := h.runner.HarnessAvailability("nosuch"); !strings.Contains(why, "not registered") || !known {
+		t.Fatalf("an unregistered harness = %q, %v", why, known)
+	}
+	answer := struct {
+		known bool
+		err   error
+	}{}
+	h.config.ChildCheckKnown = func() (bool, error) { return answer.known, answer.err }
+	h.runner.Close()
+	h.start()
+	if why, known := h.runner.HarnessAvailability(BackendPi); why != "" || known {
+		t.Fatalf("pi before a probe = %q, %v; want unknown", why, known)
+	}
+	answer.known, answer.err = true, errors.New("pi 0.1 is installed")
+	if why, known := h.runner.HarnessAvailability(BackendPi); why != "pi 0.1 is installed" || !known {
+		t.Fatalf("pi with a known refusal = %q, %v", why, known)
+	}
+	answer.err = nil
+	if why, known := h.runner.HarnessAvailability(BackendPi); why != "" || !known {
+		t.Fatalf("pi known usable = %q, %v", why, known)
+	}
+	if ran != 0 {
+		t.Fatalf("HarnessAvailability ran ChildCheck %d times", ran)
+	}
+	// Spawn's own check still runs it.
+	if why := h.runner.SpawnableHarness(BackendPi); why != "pi helper missing" || ran != 1 {
+		t.Fatalf("SpawnableHarness(pi) = %q after %d checks", why, ran)
+	}
+}
+
 func TestAgentSystemPromptReachesEveryStart(t *testing.T) {
 	h, _ := agentHarness(t, nil)
 	lead := h.leadCaller()

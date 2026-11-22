@@ -4,6 +4,7 @@ parent: 261114-epic-ws-common-session-foundation
 related:
   261117-feat-ws-hosted-prompt-assembly: "Decision 27 leaves the existing Pi prompt hooks in place until this late-stage rebuild"
   261118-research-ws-pi-hosted-connector: "Pi hosted connector evidence for the replacement adapter"
+dropped: 2026-11-22
 ---
 
 # Rebuild Pi on the common hosted interface
@@ -98,3 +99,8 @@ Build the Pi adapter against the settled common interface. Verify hosted lead
 and worker behavior through the shared MCP, daemon application, and prompt
 assembly contracts without changing their upper layers. Retire the native
 extension through the Phase 1 gate and record the migration result.
+
+
+## Resolution (2026-11-22)
+
+Superseded by owner (5002)=a (2026-11-22): instead of rebuilding Pi beneath the common hosted interface, build our own Go harness (`261122-feat-ws-builtin-agent-harness`) on a shared provider-auth layer (`261122-feat-ws-provider-auth-layer`). Pi is frozen and retires behind the builtin harness's Phase 3 gate. Open items: (1920) folded into that gate; (1921) auto-confirmed as prefer T0-T2, carried as the builtin harness's Decision 9; (1922) the Pi hook exceptions retire with the extension; (1923) goal-loop dropped without a ticket (owner (5001) note), model-prompts retire with the extension. Phase 1 read-only inventory (develop b2e3b900e) is summarized in the builtin harness ticket's Background.

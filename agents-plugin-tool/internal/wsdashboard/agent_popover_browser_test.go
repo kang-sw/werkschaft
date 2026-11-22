@@ -217,6 +217,34 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 			mk("s1", "", "worker-one", "claude", wslive.StatusRunning, wslive.PhaseTool, "sonnet-4.6", "medium", "rg -n hud", 24000, false, true),
 		}}
 
+	// Active direct children + 8 alive-idle Co direct children -> single +8 fold badge
+	foldedAgents := []wslive.Agent{
+		mk("fa1", "", "hud-lead", "codex", wslive.StatusRunning, wslive.PhaseThinking, "gpt-5.4", "high", "Reviewing patch", 42000, false, true),
+		mk("fa2", "", "css-check", "claude", wslive.StatusRunning, wslive.PhaseTool, "sonnet-4.6", "medium", "go test ./internal/wsdashboard", 28000, false, true),
+	}
+	for i := 1; i <= 8; i++ {
+		fi := mk(
+			"fi"+string(rune('0'+i)),
+			"",
+			"codex-worker-"+string(rune('0'+i)),
+			"codex",
+			wslive.StatusDone,
+			"",
+			"gpt-5.4",
+			"medium",
+			"Standby for follow-up",
+			int64(10000+i*1000),
+			false,
+			true,
+		)
+		fi.ReplyID = "folded-r" + string(rune('0'+i))
+		foldedAgents = append(foldedAgents, fi)
+	}
+	folded := wslive.Snapshot{SchemaVersion: 1, Adapter: "claude", UpdatedAt: now, HeartbeatMs: 30000,
+		Lead:   wslive.Lead{Activity: wslive.Activity{Phase: wslive.PhaseThinking}},
+		Agents: foldedAgents,
+	}
+
 	f.d.snapshots.SetLive(f.dir, "livesession", heavy)
 	f.d.broker.wake(liveDep("livesession"))
 	switcher := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +256,8 @@ func TestHUDOrgChartBrowser(t *testing.T) {
 			next = fanout
 		case "idle":
 			next = idleOnly
+		case "folded":
+			next = folded
 		case "single":
 			next = single
 			if cap := r.URL.Query().Get("cap"); cap != "" {

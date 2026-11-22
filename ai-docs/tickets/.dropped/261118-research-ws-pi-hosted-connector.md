@@ -4,6 +4,7 @@ parent: 261114-epic-ws-common-session-foundation
 related:
   261112-research-ws-ade-desktop-shell-and-rename: "(494)=a zero-install and (495)=a built-in agent = bundled Pi standalone binary with our extension in isolated mode; this ticket carries that decision's remaining checks (login flows) into stage 3"
   261118-research-ws-agy-custom-agent-prompt: "native agy lead quality work continues in parallel as first-class support"
+dropped: 2026-11-22
 ---
 
 # Pi as the canonical daemon-hosted connector, with provider and login layers on top
@@ -67,3 +68,8 @@ Stage 2 starts after stage 1's verification; no single ticket blocks it.
 - Stage 3 provider list, ToS posture, and tier mapping.
 
 ### Rejected Alternatives
+
+
+## Resolution (2026-11-22)
+
+Superseded by owner (5002)=a (2026-11-22): Pi is no longer the canonical connector. Stage 2 (Pi as the full common-interface connector) becomes `261122-feat-ws-builtin-agent-harness`; stage 3 (OAuth/login, provider tier mapping) becomes `261122-feat-ws-provider-auth-layer` (OpenRouter API key, OpenAI Sign in with ChatGPT; Anthropic and Google subscription OAuth are vendor-prohibited).

@@ -58,7 +58,37 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 		if rule.Compaction {
 			rule.LegacyKey = func(harness string) string { return wsagent.BuiltinCompaction(harness).LegacyKey(entry.Key) }
 		}
-		if entry.Structured {
+		if entry.Key == wsconfig.ItemAgentTierRouting {
+			// The one exact-key structured setting: no name part, validated as
+			// a whole graph against the package's roles and the built-in
+			// harnesses, the daemon runner's registered backends
+			// (cmd/ws-mcp newAgentRunner), so a dashboard write cannot store a
+			// graph config.tune and agent.spawn would refuse. A known harness
+			// that is not installed still validates.
+			rule.Type = "object"
+			rule.Editable = true
+			rule.NormalizeObject = func(value any, scope wsconfig.Scope) (json.RawMessage, error) {
+				if _, ok := value.(map[string]any); !ok || scope != wsconfig.ScopeGlobal {
+					return nil, wsconfigservice.ErrInvalid
+				}
+				raw, err := json.Marshal(value)
+				if err != nil {
+					return nil, err
+				}
+				routing, err := wsconfig.ParseTierRouting(raw)
+				if err != nil {
+					return nil, err
+				}
+				roles, err := packagedTierRoles(rsrc)
+				if err != nil {
+					return nil, err
+				}
+				if err := wsconfig.NewTierGraph(roles, routing, nil, wsagent.TierHarnesses()).Err(); err != nil {
+					return nil, err
+				}
+				return json.Marshal(routing)
+			}
+		} else if entry.Structured {
 			rule.Type = "object"
 			family := worktreeProfileFamily
 			if strings.HasPrefix(entry.Key, wsagent.ProfilePrefix) {
@@ -125,8 +155,20 @@ func dashboardConfigCatalog(pkg, rsrc fs.FS) (*wsconfigservice.Catalog, error) {
 	return wsconfigservice.NewCatalog(rules)
 }
 
-func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func()) (*wsdashboard.ConfigBackend, error) {
+// DashboardConfigBackend is the daemon's settings backend for packageName.
+// available is agent.spawn's harness availability check without probes
+// (wsagent Runner.HarnessAvailability) the tier routing view reports at each
+// terminal; nil reports none.
+func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *DashboardSessionSource, ambient func(), available func(harness string) (why string, known bool)) (*wsdashboard.ConfigBackend, error) {
 	catalog, err := DashboardConfigCatalog(packageName)
+	if err != nil {
+		return nil, err
+	}
+	pkg, err := wspackage.Open(packageName)
+	if err != nil {
+		return nil, err
+	}
+	rsrc, err := fs.Sub(pkg, "rsrc")
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +176,7 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 	for key, value := range wsagent.BuiltinProfiles() {
 		structured[key] = value
 	}
-	return &wsdashboard.ConfigBackend{
+	backend := &wsdashboard.ConfigBackend{
 		Catalog: catalog, Options: opts, Structured: structured,
 		LoadCompanion: func() (wsdashboard.CompanionConfig, error) {
 			return dashboardCompanionConfig(catalog, opts)
@@ -148,7 +190,13 @@ func DashboardConfigBackend(packageName string, opts wsconfig.Options, src *Dash
 				ambient()
 			}
 		},
-	}, nil
+	}
+	// The graph view reads the backend's options at call time, the same
+	// config the snapshot and writes use.
+	backend.TierRouting = func(draft json.RawMessage, harness string) (any, error) {
+		return dashboardTierRoutingView(rsrc, backend.Options, draft, harness, available)
+	}
+	return backend, nil
 }
 
 func dashboardCompanionConfig(catalog *wsconfigservice.Catalog, opts wsconfig.Options) (wsdashboard.CompanionConfig, error) {

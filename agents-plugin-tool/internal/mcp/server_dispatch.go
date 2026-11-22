@@ -288,6 +288,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 	case "exec.spawn", "exec.shell", "exec.status", "exec.result", "exec.abort", "exec.raw.tail", "exec.raw.read", "exec.raw.grep",
 		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write":
 		return s.callExec(ctx, req.ID, params.Name, params.Arguments, params.Meta)
+	case "fs.read", "fs.grep", "fs.list":
+		if !s.codexReadTools() {
+			return toolTextResponse(req.ID, "", fmt.Errorf("%s: %w", params.Name, errNoCodexReadTools))
+		}
+		return s.callFS(req.ID, params.Name, params.Arguments, params.Meta)
 	case "config.list":
 		// Read-only combined config surface (260814 Phase 2): subsumes config.show
 		// (resolved-scope View) AND config.tuning (per-key tuning knob catalog),
@@ -547,6 +552,11 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			if entry.Key == wsconfig.ItemWorkflowProfile && value == "orchestrate" {
 				text += orchestrateWhitelistWarning(harness)
 			}
+			if entry.Key == wsconfig.ItemAgentTierAliases {
+				// Informational: an alias that overlaps the routing graph keeps
+				// exact-name precedence, so the write stands and says where.
+				text += s.tierCollisionLines()
+			}
 			return toolTextResponse(req.ID, text, nil)
 		}
 
@@ -592,15 +602,18 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if harness == "" {
 			harness = s.currentHarness()
 		}
-		backend, model, effort, resolvedFrom, err := wsconfig.ResolveAgentTierForHarness(s.configOptions(), tier, harness)
+		result, err := s.resolveAgentTier(tier, harness)
 		if err != nil {
 			return toolTextResponse(req.ID, "", fmt.Errorf("config.resolve_agent: %w", err))
 		}
-		result := resolveAgentTierResult{Backend: backend, Model: model, Effort: effort, ResolvedFrom: resolvedFrom}
 		if wantsJSON(params.Arguments) {
 			return toolJSONResponse(req.ID, result, nil)
 		}
-		return toolTextResponse(req.ID, fmt.Sprintf("backend: %s\nmodel: %s\neffort: %s\nresolved_from: %s\n", backend, model, formatEffortForText(effort), resolvedFrom), nil)
+		text := fmt.Sprintf("backend: %s\nmodel: %s\neffort: %s\nresolved_from: %s\n", result.Backend, result.Model, formatEffortForText(result.Effort), result.ResolvedFrom)
+		if result.Trace != "" {
+			text += "trace: " + result.Trace + "\n"
+		}
+		return toolTextResponse(req.ID, text, nil)
 
 	case "git.status":
 		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
@@ -824,7 +837,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		force, _ := params.Arguments["force"].(bool)
-		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, CheckExecJobs: s.checkWorktreeLiveExecJobs}
+		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, CheckExecJobs: s.checkWorktreeLiveExecJobs, FenceExec: s.worktreeExecFence}
 		result, err := releaseWorktreeAs(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, lookup, caller)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
@@ -862,7 +875,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		staleAfter, _ := worktreeNudgeThresholds(&resolver, key)
-		result, err := removeWorktree(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup)
+		result, err := removeWorktreeFenced(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, staleAfter, time.Now(), lookup, s.worktreeExecFence)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}
@@ -1589,7 +1602,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return toolTextResponse(req.ID, "", err)
 		}
 		path, planPath, recommendedTier, err := renderPlaybookWithPlan(s, strings.TrimSpace(renderSessionKey), renderProfile, rsrcRoot, worktreeRoot, name, callerContext, s.configOptions(), mintRoot, parentKey, renderWorkflowLangRV.Value, renderOverrideLookup, tierOverride, planStem)
-		text := withRecommendedRenderBinding(path, s.currentHarness(), recommendedTier, s.configOptions())
+		text := s.withRecommendedRenderBindingFor(path, s.currentHarness(), recommendedTier, s.configOptions())
 		if planPath != "" {
 			text += "\n" + planPathLinePrefix + planPath
 		}

@@ -61,12 +61,22 @@ type BackendRegistration struct {
 	// its sessions names that server and those commands instead of the
 	// package's tool and skill namespace.
 	PlaybookCommands bool
+	// PreferNativeSubagent marks a backend whose hosted lead keeps its own
+	// native subagent tool for exploration that needs no ws tools and starts
+	// every other delegate through agent.spawn on an external harness. Its
+	// lead's prompt line (Runner.subagentSteer) and the playbook text it
+	// executes itself (workflow_manual, playbook.read) say so; text rendered
+	// for another process (playbook.render) is unchanged.
+	PreferNativeSubagent bool
 	// Profiles are this backend's runtime-owned builtin profile definitions.
 	// They feed the config floor but are not fields of the persisted Profile
 	// shape. Support marks the profiles offered by tracker support, in order.
 	Profiles []BuiltinProfileRegistration
 	// PlaybookTerminology supplies static harness wording for playbook renders.
 	PlaybookTerminology PlaybookTerminology
+	// ExecCutover is the backend's verified native process tool removal
+	// (exec_cutover.go); nil keeps every session's native tools.
+	ExecCutover *ExecCutoverSupport
 }
 
 // PlaybookTerminology holds static native-tool idioms. Model, effort, and

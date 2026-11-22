@@ -155,6 +155,50 @@ func piMCPOnlyTerminology(namespace string) map[string]string {
 	}
 }
 
+// nativeFirstTerminology is the terminology of text a PreferNativeSubagent
+// hosted lead executes itself (wsagent.BackendRegistration.PreferNativeSubagent):
+// exploration goes to its own native subagent, which has no ws tools and
+// runs at the harness's default model, and a spawn is piMCPOnlyTerminology's
+// agent.spawn on an external harness, a bare size or own-harness role tier
+// qualified with a harness first. ContinueIdiom is unchanged.
+func nativeFirstTerminology(namespace string) map[string]string {
+	terms := piMCPOnlyTerminology(namespace)
+	terms["ExploreAgent"] = "your native subagent (no ws tools, your harness's default model; when the question needs a specific tier, a read-only `" + namespace + "/agent.spawn` subagent at an external-harness tier)"
+	terms["SpawnIdiom"] = "`" + namespace + "/agent.spawn` on an external harness (tier: the resolved capability tier, not a model name, as a `claude.<size>`, `codex.<size>`, or configured route target; put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness; authority: at most your own)"
+	return terms
+}
+
+// nativeFirstManualRewrites are the workflow manual sentences a
+// nativeFirstTerminology caller reads differently, as (today's rendered
+// text, its replacement) pairs, applied by nativeFirstManual. Its native
+// subagent cannot run at "the tier the question needs", and a bare size its
+// render recommends would resolve to its own harness, so the exploration
+// bullet loses that suffix and the rendered-delegate bullet and tier line
+// spawn through agent.spawn with the prompt path and the tier qualified with
+// an external harness. agent.spawn takes no model or effort, so the native
+// wording names no render bindings.
+func nativeFirstManualRewrites(namespace string) []string {
+	explore := nativeFirstTerminology(namespace)["ExploreAgent"]
+	spawn := "`" + namespace + "/agent.spawn`"
+	return []string{
+		explore + " at the tier the question needs (`### Choosing a tier`).",
+		explore + "; pick that tier by `### Choosing a tier`.",
+		"give the subagent the returned path and spawn it with the\n  tier and bindings the render returns.",
+		"spawn the subagent through\n  " + spawn + " on an external harness with the returned path and the render's tier, qualified as `### Choosing a tier` states.",
+		"- A rendered playbook → the tier its render recommends, passed as returned;\n  a role tier such as `ticket-worker:large` is valid there.\n",
+		"- A rendered playbook → the tier its render recommends; as a " + spawn + " target, put `claude.` or `codex.` before a bare size, or before a role tier's size (`claude.small` for `playbook-explore:small`), that resolves to your own harness.\n",
+	}
+}
+
+// nativeFirstManual rewrites a rendered workflow manual body for a
+// nativeFirstTerminology caller (nativeFirstManualRewrites). The rewrite is
+// renderer-internal text replacement, not a declared variable, so the
+// manual's frontmatter and caller-context validation stay those of every
+// other caller.
+func nativeFirstManual(body, namespace string) string {
+	return strings.NewReplacer(nativeFirstManualRewrites(namespace)...).Replace(body)
+}
+
 // claudeSpawnIdiom is the Claude SpawnIdiom value. Claude's Agent tool takes a
 // per-call model but no reasoning-effort parameter; effort comes only from the
 // subagent definition, so the plugin ships one effort-carrier agent per Claude

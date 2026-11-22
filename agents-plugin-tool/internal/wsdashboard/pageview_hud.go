@@ -15,6 +15,7 @@ const hudMaxDepth = 4
 type HUDView struct {
 	Lead      string `json:"lead,omitempty"`
 	Completed int    `json:"completed"`
+	Folded    int    `json:"folded,omitempty"`
 	// ObservationEnded counts the folded native rows whose observation ended
 	// with their outcome unknown (hudEndUnknown): they are never counted as
 	// completed, so the page and the companion relay never read them as a
@@ -62,9 +63,9 @@ type hudRawNode struct {
 	children []*hudRawNode
 }
 
-// hudFold is the tally of folded rows: completed ones, and native rows whose
-// observation ended with the outcome unknown.
-type hudFold struct{ completed, observationEnded int }
+// hudFold is the tally of folded rows: completed ones, native rows whose
+// observation ended with the outcome unknown, and the folded top-level rows.
+type hudFold struct{ completed, observationEnded, roots int }
 
 func (f *hudFold) add(n *hudRawNode) {
 	if hudEndUnknown(n.agent, n.native) {
@@ -89,12 +90,12 @@ func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, p
 	expandHUDLinked(roots, seenIDs, visitedSessions, lookup, now)
 
 	visible := map[*hudRawNode]bool{}
-	var mark func(*hudRawNode) bool
-	mark = func(n *hudRawNode) bool {
+	var mark func(*hudRawNode, int) bool
+	mark = func(n *hudRawNode, depth int) bool {
 		st := hudNodeState(n.agent)
-		vis := st != "idle" || n.agent.Alive
+		vis := st != "idle" || (depth > 1 && n.agent.Alive)
 		for _, c := range n.children {
-			if mark(c) {
+			if mark(c, depth+1) {
 				vis = true
 			}
 		}
@@ -102,11 +103,11 @@ func hudProjection(self, leadLabel, leadHarness string, agents []wslive.Agent, p
 		return vis
 	}
 	for _, r := range roots {
-		mark(r)
+		mark(r, 1)
 	}
 	var fold hudFold
 	out.Roots = projectHUDNodes(roots, 1, normalizeHUDHarness(leadHarness), nil, visible, &fold, now)
-	out.Completed, out.ObservationEnded = fold.completed, fold.observationEnded
+	out.Completed, out.Folded, out.ObservationEnded = fold.completed, fold.roots, fold.observationEnded
 	return out
 }
 
@@ -182,6 +183,11 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 	for _, n := range nodes {
 		if !visible[n] {
 			foldHUDRawSubtree(n, fold)
+			// The folded chip reads as finished agents: an end-unknown
+			// native row is never one.
+			if depth == 1 && !hudEndUnknown(n.agent, n.native) {
+				fold.roots++
+			}
 			continue
 		}
 		a := n.agent

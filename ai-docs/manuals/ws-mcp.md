@@ -970,6 +970,21 @@ Pi calls share this route; the Pi-specific legacy behavior follows:
   themselves. A process stop (the stop route, an idle stop, a settings change)
   does not cascade, and a child's report resumes the stopped parent. A report
   to a closed parent stays in the child's record.
+- **Keep-awake.** With the global-only `agent.keep_awake_during_turns` on
+  (default false), the runner holds one idle-system-sleep assertion while any
+  conversation instance has a live turn (`wsagent/keep_awake.go`,
+  `internal/wsawake`). A turn counts from admission, before its send, through
+  tool calls, approvals and retries, to its end, transport loss, close,
+  hand-off or shutdown; a standalone prompt counts during its send and a
+  native `/compact` until its command settles. A rejoin keeps the membership
+  it had while replaying and then publishes what the replay rebuilt. Queued
+  input, idle processes, terminal sessions and exec jobs never count. The
+  daemon reads the value after publishing its endpoint and rereads it on the
+  companion-changed invalidation (`config.tune` set or reset) and on a
+  settings write. One worker goroutine makes every OS call: `caffeinate -i -w
+  <daemon pid>` on macOS, `SetThreadExecutionState` on one locked thread on
+  Windows, nothing elsewhere. A failed assertion is logged once and retried
+  only at the next activation.
 
 The runner also hosts lead sessions: a headless Claude Code, Pi, agy, or Codex
 process that loads the user's own harness setup (no profile allowlist or
@@ -1017,7 +1032,14 @@ from a support conversation:
   policy (a lead or an `agent.spawn` worker) whose backend catalog names a
   native subagent tool for its role also gets a line never to use that
   tool and to delegate through `agent.spawn`/`mailbox.send`
-  (`Runner.subagentSteer`); a worker gets it after its key sentence.
+  (`Runner.subagentSteer`); a worker gets it after its key sentence. A lead
+  of a backend with `PreferNativeSubagent` (agy) gets a native-first line
+  instead, whether or not its catalog names the tool: its native subagent
+  explores without ws tools at the harness's default model, while rendered
+  playbooks, ws-tool work, and tier-specific questions go to `agent.spawn`
+  at a `claude.<size>`, `codex.<size>`, or configured route target (a bare
+  size or own-harness role tier a render recommends gets `claude.` or
+  `codex.` first), and a native subagent is one-shot.
 - **Playbook commands.** A backend with `PlaybookCommands` (Claude, agy)
   hosts leads with no ws skills: the lead's connection (not a worker's)
   renders under the `ws` server's names whatever package the daemon
@@ -1039,7 +1061,21 @@ from a support conversation:
   backend's `BackendRegistration`, read through the conversation record's
   `Backend`; common code names no backend. `ManualHarness` is the harness the
   lead's manual renders under (claude, agy, codex; Pi declares none);
-  `PlaybookCommands` is described above.
+  `PlaybookCommands` is described above. `PreferNativeSubagent` (agy only)
+  selects the native-first prompt line above and, for text the hosted lead
+  executes itself (`workflow_manual`, `playbook.read`, the playbook-command
+  render), native-first terminology: `ExploreAgent` names its native
+  subagent, `SpawnIdiom` names `agent.spawn` on an external harness with the
+  size-prefix rule, and the continuity tip names `agent.spawn`'s subagents.
+  For that lead's workflow manual, the renderer also rewrites three rendered
+  sentences (`nativeFirstManual`; plain text, not declared variables, so the
+  resource and caller-context validation are unchanged). The exploration
+  bullet loses the "tier the question needs" suffix. A rendered delegate is
+  spawned through `agent.spawn` on an external harness with the returned path
+  and the rendered tier qualified with a harness prefix (no model/effort
+  bindings, which `agent.spawn` does not take).
+  `playbook.render` output is unchanged for every caller: a rendered
+  delegate runs on another process.
   `CallFallback` opts hosted lead connections into the compact `call` tool
   and a generated callable-tool index appended to their workflow manual.
   Only agy sets it today; ordinary plugin/stdio connections, other hosted

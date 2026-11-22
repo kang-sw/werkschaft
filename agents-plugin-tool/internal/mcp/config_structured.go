@@ -31,7 +31,15 @@ func repoWriteNote(resolver *wsconfig.Resolver, scope wsconfig.Scope) string {
 type structuredFamily struct {
 	prefix string
 	// label names the family in resolution warnings ("worktree profiles").
-	label        string
+	label string
+	// noun names the value in a type error ("profile object" by default).
+	noun string
+	// defaultScope is the scope an unscoped write or reset uses (project by
+	// default).
+	defaultScope wsconfig.Scope
+	// note, when set, adds family-specific lines to the echo after a write or
+	// reset (the tier routing family reports alias collisions).
+	note         func(reset bool) string
 	validateName func(string) error
 	// parse strictly decodes and validates one value bound for scope; the
 	// decoded result is what gets stored, so the committed file has one
@@ -91,6 +99,8 @@ func registeredAgentProfileFamily(registries ...map[string]wsagent.BackendRegist
 // prefix, binding agent profiles to this server's backend registry.
 func (s *Server) structuredFamilyForKey(key string) (structuredFamily, bool) {
 	switch {
+	case key == wsconfig.ItemAgentTierRouting:
+		return s.tierRoutingFamily(), true
 	case strings.HasPrefix(key, worktreeProfilePrefix):
 		return worktreeProfileFamily, true
 	case strings.HasPrefix(key, wsagent.ProfilePrefix):
@@ -115,6 +125,9 @@ func (s *Server) tuneStructured(entry configKeyEntry, rawValue any, sessionKey s
 	}
 	scope := explicitScope
 	if scope == "" {
+		scope = family.defaultScope
+	}
+	if scope == "" {
 		scope = wsconfig.ScopeProject
 	}
 	scopes := fieldEnum(entry.SelectorFields, "scope")
@@ -137,12 +150,16 @@ func (s *Server) tuneStructured(entry configKeyEntry, rawValue any, sessionKey s
 		}
 		text = fmt.Sprintf("%s: reset [scope:%s] in %s\n", entry.Key, scope, path)
 	} else {
+		noun := family.noun
+		if noun == "" {
+			noun = "profile object"
+		}
 		object, ok := rawValue.(map[string]any)
 		if !ok {
 			if rawValue == nil {
 				return "", fmt.Errorf("config.tune: %s value is required unless reset is true", entry.Key)
 			}
-			return "", fmt.Errorf("config.tune: %s value must be a profile object (see value_schema in config.list), got %s", entry.Key, jsonValueTypeName(rawValue))
+			return "", fmt.Errorf("config.tune: %s value must be a %s (see value_schema in config.list), got %s", entry.Key, noun, jsonValueTypeName(rawValue))
 		}
 		encoded, err := json.Marshal(object)
 		if err != nil {
@@ -150,6 +167,9 @@ func (s *Server) tuneStructured(entry configKeyEntry, rawValue any, sessionKey s
 		}
 		profile, err := family.parse(encoded, scope)
 		if err != nil {
+			if strings.HasPrefix(err.Error(), entry.Key) {
+				return "", fmt.Errorf("config.tune: %w", err)
+			}
 			return "", fmt.Errorf("config.tune: %s %w", entry.Key, err)
 		}
 		// Store the decoded profile, not the caller's bytes: one canonical field
@@ -164,6 +184,12 @@ func (s *Server) tuneStructured(entry configKeyEntry, rawValue any, sessionKey s
 		text = fmt.Sprintf("%s: %s [scope:%s] in %s\n", entry.Key, stored, scope, path)
 	}
 	text += repoWriteNote(&resolver, scope)
+	if family.note != nil {
+		text += family.note(reset)
+	}
+	if family.effective == nil {
+		return text, nil
+	}
 
 	// Report the profile that now applies. The write already happened, so a
 	// resolution failure (another invalid profile) is reported beside it.

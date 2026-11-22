@@ -22,6 +22,7 @@ const gone = source.match(/\n  function leadGone\(st\) \{.*\}\n/);
 const connected = source.match(/\n  function connected\(on\) \{[\s\S]*?\n  \}\n/);
 assert(gone && connected, 'leadGone and the stream connected hook exist');
 const supHarness = source.match(/\n  function supHarness\(name\) \{[\s\S]*?\n  \}\n/)[0];
+const tierPicker = source.match(/\n  function leadTierPicker\([\s\S]*?\n  \}\n/)[0];
 const rail = readAssetSource('wsdashboard', 'rail.js');
 
 class Node {
@@ -112,7 +113,7 @@ function world() {
   vm.createContext(ctx);
   vm.runInContext(rail, ctx);
   ctx.WsRail = ctx.window.WsRail;
-  vm.runInContext(supHarness + region[0] + sessMaker[0] + gone[0] + connected[0], ctx);
+  vm.runInContext(supHarness + tierPicker + region[0] + sessMaker[0] + gone[0] + connected[0], ctx);
   return { ctx, fetches, posts, events, body,
     choices(c) { const f = fetches.shift(); assert.equal(f.route, '/support/choices'); f.done(200, plain(c)); },
     fail() { const f = fetches.shift(); assert.equal(f.route, '/support/choices'); f.done(0, {}); } };
