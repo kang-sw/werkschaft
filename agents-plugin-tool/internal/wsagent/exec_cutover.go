@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kang-sw/devenv/internal/wsinbox"
+
 	"github.com/kang-sw/devenv/internal/wsconfig"
 )
 
@@ -441,4 +443,23 @@ func (c *conv) sendCutoverInstruction() {
 			c.releaseHeld()
 		})
 	}()
+}
+
+// cutoverInstructionLeft clears the instruction hold (cutoverInstructing)
+// when recs, entries that just left c's inbox, hold the instruction,
+// whichever way they left: a turn's drain, a steer into the running turn,
+// an interrupt's take-back, or a drop. Its held report is reconsidered;
+// one still held by a running turn settles with that turn. It runs in the
+// loop.
+func (c *conv) cutoverInstructionLeft(recs []wsinbox.Record) {
+	if !c.cutoverInstructing {
+		return
+	}
+	for _, rec := range recs {
+		if strings.HasPrefix(rec.Entry.EventID, cutoverEventPrefix) {
+			c.cutoverInstructing = false
+			c.r.releaseLater(c.rec.ReplyID)
+			return
+		}
+	}
 }

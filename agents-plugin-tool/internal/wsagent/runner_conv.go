@@ -576,6 +576,7 @@ func (c *conv) steer() {
 	c.held = max(0, c.held-len(recs))
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
+	c.cutoverInstructionLeft(recs)
 	var parts []string
 	for _, rec := range recs {
 		if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
@@ -1127,11 +1128,14 @@ func (c *conv) dropHeld() {
 	}
 	removed := 0
 	if held, err := wsinbox.Held(c.inbox); err == nil {
+		var dropped []wsinbox.Record
 		for _, rec := range held {
 			if _, err := wsinbox.Cancel(c.inbox, rec.Name); err == nil {
 				removed++
+				dropped = append(dropped, rec)
 			}
 		}
+		c.cutoverInstructionLeft(dropped)
 	}
 	c.inboxMutated(removed)
 	_, _ = wsinbox.DrainInterrupt(c.inbox)
@@ -1310,10 +1314,8 @@ func (c *conv) kickInput() {
 	from := c.drained
 	c.drained = covered
 	queue := slices.Clone(c.rec.Queued)
+	c.cutoverInstructionLeft(recs)
 	for _, rec := range recs {
-		if strings.HasPrefix(rec.Entry.EventID, cutoverEventPrefix) {
-			c.cutoverInstructing = false
-		}
 		if cmd := rec.Entry.Command; cmd != nil {
 			cmd := *cmd
 			queue = append(queue, QueuedInput{Command: &cmd, After: from})

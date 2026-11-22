@@ -433,3 +433,28 @@ func TestAgyDenialNeverPicksRejectAlways(t *testing.T) {
 		t.Fatalf("allow answered with %q (err %v)", option, err)
 	}
 }
+
+// The instruction hold ends whichever way the instruction leaves the
+// inbox: an interrupt that takes it back (or a steer that takes it into a
+// running turn) clears it as a turn's drain does, so the worker's report
+// is not held for a turn that never comes.
+func TestAgyCutoverInstructionHoldEndsWhenItIsTakenBack(t *testing.T) {
+	h, _, id, _ := startAgyCutoverWorker(t, nil)
+	c := h.runner.conv(id)
+	var rec Record
+	c.do(func() {
+		c.cutoverInstructing = true
+		rec = c.rec
+	})
+	if _, err := h.runner.AdmitCompletion(id, rec.OpenGen, cutoverEventPrefix+rec.HolderID+":k9", "use exec_shell"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.runner.Interrupt(id); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the hold to end", func() bool {
+		var instructing bool
+		c.do(func() { instructing = c.cutoverInstructing })
+		return !instructing
+	})
+}

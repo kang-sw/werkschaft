@@ -160,6 +160,7 @@ func (r *Runner) Interrupt(id string) (State, []string, error) {
 			return err
 		}
 		c.inboxMutated(len(held))
+		c.cutoverInstructionLeft(held)
 		for _, rec := range held {
 			returned = append(returned, rec.Entry.Text())
 		}
