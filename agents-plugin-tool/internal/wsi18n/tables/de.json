@@ -2018,6 +2018,7 @@
   "rail.approval": "wartet auf Freigabe",
   "rail.approvals": "Sitzungen, die auf Freigabe warten",
   "convo.approval": "wartet auf Freigabe",
+  "js.lead.agy.terms": "Die Nutzung von agy über eine Drittanbieter-App wie ws kann zur Sperrung Ihres Antigravity-Kontos führen: Die Bedingungen von Google unterstützen Antigravity in anderer Software nicht.",
   "js.lead.title": "Neue Sitzung",
   "js.lead.tier": "Benannter Tier",
   "js.lead.tier.manual": "Manuell (jedes Feld einzeln wählen)",

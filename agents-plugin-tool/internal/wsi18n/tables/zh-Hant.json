@@ -2018,6 +2018,7 @@
   "rail.approval": "等待核准",
   "rail.approvals": "等待核准的工作階段",
   "convo.approval": "等待核准",
+  "js.lead.agy.terms": "透過 ws 等第三方應用程式使用 agy 可能導致你的 Antigravity 帳戶遭停權：Google 的條款不支援在其他軟體中使用 Antigravity。",
   "js.lead.title": "新工作階段",
   "js.lead.tier": "命名層級",
   "js.lead.tier.manual": "手動（逐項選擇）",

@@ -108,7 +108,22 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		settleC:      make(chan struct{}),
 	}
 	c.refreshAmbient()
-	if !rec.Lead {
+	// Its root and effective working directory never change after this:
+	// resolved once here, they serve every occupancy scan (boundConvs) from
+	// memory.
+	c.canonRoot, c.canonCwd = canonicalBinding(rec)
+	if releaseBound(rec) {
+		// The checkouts it is bound to are settled here, once, and whether
+		// a release already ended that binding is read from their markers
+		// before any mail claim or rejoin can ask, so those can answer from
+		// memory; a process start reads the markers again.
+		c.checkouts = resolveCheckouts(rec, c.canonRoot, c.canonCwd)
+		c.releasedCheckout = r.releasedOnDisk(rec, c.checkouts)
+	}
+	// Derived from the record's immutable backend on every load, with no
+	// stored field, and before any profile or config read.
+	refusal := r.admitWorkerRecord(rec)
+	if !rec.Lead && refusal == nil {
 		if level, source, err := r.currentWorkerPermission(rec); err == nil {
 			c.workerPermissionLevel = level
 			c.workerPermissionSource = source
@@ -190,6 +205,12 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		if !rec.TurnOpen && (last.Result.Status == TurnFailed || last.Result.Status == TurnInterrupted) {
 			c.lastErr = last.Result.Error
 		}
+	}
+	if refusal != nil {
+		// A cross-harness worker shows why it does not run,
+		// whatever its last turn says (interrupted settles a turn left
+		// open with this reason too).
+		c.lastErr = refusal.Error()
 	}
 	c.writeRegistration()
 	// A row a terminal login took while no daemon ran: the loop lets the

@@ -47,6 +47,10 @@ func TestEnsureCreatesStableProjectAndWorktreeLayout(t *testing.T) {
 			t.Fatalf("expected directory %s, stat=%v err=%v", dir, info, err)
 		}
 	}
+	// report-paths is created lazily, by the first report allocation.
+	if _, err := os.Stat(layout.ReportDir); !os.IsNotExist(err) {
+		t.Fatalf("Ensure created %s (err=%v); only a report allocation creates it", layout.ReportDir, err)
+	}
 	if layout.ProjectDir != filepath.Join(cache, "proj", wantProjectKey) {
 		t.Fatalf("project dir = %q, want flat project dir", layout.ProjectDir)
 	}

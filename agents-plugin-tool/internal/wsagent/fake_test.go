@@ -194,6 +194,15 @@ type fakeProc struct {
 	steers    []string
 	cleared   int
 	steerFail func(text string) bool
+	// interruptErr, when set, is every Interrupt's answer (failInterrupts).
+	interruptErr error
+}
+
+// failInterrupts makes every later Interrupt fail with err.
+func (p *fakeProc) failInterrupts(err error) {
+	p.mu.Lock()
+	p.interruptErr = err
+	p.mu.Unlock()
 }
 
 // fakeSteerProc is a fakeProc that takes a child's report mid-turn
@@ -267,8 +276,9 @@ func (p *fakeProc) Send(text string) error {
 func (p *fakeProc) Interrupt() error {
 	p.mu.Lock()
 	p.interrupts++
+	err := p.interruptErr
 	p.mu.Unlock()
-	return nil
+	return err
 }
 
 func (p *fakeProc) SetModel(model string) error {

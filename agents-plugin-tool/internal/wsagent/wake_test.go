@@ -95,9 +95,9 @@ func TestClaudeTaskWakeLifecycle(t *testing.T) {
 func TestClaudeBackgroundCountSplits(t *testing.T) {
 	m := newClaudeMapper(leadSpec())
 	for _, tc := range []struct {
-		tasks string
+		tasks      string
 		n, bg, mon int
-		known bool
+		known      bool
 	}{
 		{`[{"task_id":"b","task_type":"local_bash"},{"task_id":"a","task_type":"local_agent"},{"task_id":"m","task_type":"monitor"}]`, 3, 1, 1, true},
 		{`[{"task_type":"local_agent"}]`, 1, 0, 0, true},

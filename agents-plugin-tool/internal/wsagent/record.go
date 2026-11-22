@@ -51,7 +51,12 @@ type Record struct {
 	// profile's list_in_index when the conversation last started).
 	Listed    bool   `json:"listed,omitempty"`
 	CreatedAt string `json:"created_at"`
-	ClosedAt  string `json:"closed_at,omitempty"`
+	// CreatedUnixNano is the creation instant at nanosecond precision, which
+	// orders a binding against a worktree release in the same second
+	// (wsgit.BoundBeforeRelease). Additive: a record from before it has 0,
+	// and an older writer keeps it as an unknown member.
+	CreatedUnixNano int64  `json:"created_unix_nano,omitempty"`
+	ClosedAt        string `json:"closed_at,omitempty"`
 
 	// HandedOffAt is when a lead session was handed to a terminal harness
 	// (conv.release): the daemon serves it no more, as it serves no closed
@@ -111,6 +116,16 @@ type Record struct {
 	// one-line name its spawner gave it.
 	Parent *ParentRef `json:"parent,omitempty"`
 	Label  string     `json:"label,omitempty"`
+	// SpawnerBackend is the verified backend of the session that spawned
+	// the conversation (AgentCaller.VerifiedBackend), stamped once at
+	// spawn: empty when the spawner had no verified binding, or for a
+	// record made before the stamp, whose startup load derives it from its
+	// parent's record (resolveSpawnerBackends). A backend registered with a
+	// cross-harness refusal admits the record from it (admitWorkerRecord).
+	// It stays out of Parent, whose whole value keys the child index and
+	// parent ownership, and top-level so an older writer keeps it as
+	// unknown data.
+	SpawnerBackend string `json:"spawner_backend,omitempty"`
 	// TurnOpen is set on a conversation with a Parent while one of its
 	// turns runs: a successor rejoins a held process, or reports interruption
 	// when that process is gone.

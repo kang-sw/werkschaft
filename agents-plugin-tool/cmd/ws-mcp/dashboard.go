@@ -17,6 +17,7 @@ import (
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -117,7 +118,15 @@ func dashboardCommand(args []string) {
 	agents.ExpectExecJobs()
 	labels.agents.Store(agents)
 	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
-	host := &proxyHost{notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
+	// The one provider credential store: the daemon's token route and its
+	// change route serve it, and hosted `credential` commands apply to it.
+	var credentials *wscred.Store
+	if credPath, err := wscred.DefaultPath(""); err != nil {
+		fmt.Fprintf(logw, "dashboard: credential store unavailable: %v\n", err)
+	} else {
+		credentials = wscred.NewStore(credPath)
+	}
+	host := &proxyHost{credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -160,6 +169,7 @@ func dashboardCommand(args []string) {
 		MailWake:       wswake.Mailbox,
 		AgyCommand:     wsagent.AgyBackend{}.ResolveCommand,
 		Agents:         agents,
+		Credentials:    credentials,
 		LeadNudges:     nudges,
 		Tracker:        &dashboardTracker{h: tracker, err: trackerErr, unregistered: func() { support.CloseUnregistered() }},
 		Holders:        holders,
@@ -171,6 +181,10 @@ func dashboardCommand(args []string) {
 		// A hosted session's jobs run under the hosted exec jobs, which
 		// know their owning conversation; nil until they bind.
 		HostedExecJobs: func() map[string]int { return host.exec.Load().RunningOwners() },
+		// The companion director's isolated one-shot call, dispatched
+		// through the harness's backend registration.
+		CompanionOneShot:    wsagent.RunOneShot,
+		CompanionHasOneShot: wsagent.HasOneShot,
 		BeforeUnlock: func() {
 			if err := boards.Close(); err != nil {
 				fmt.Fprintf(logw, "dashboard: whiteboard close: %v\n", err)
@@ -448,6 +462,9 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// A message that cannot wake its sleeping agent stays queued; its
 		// sender hears why once.
 		WakeRefused: mcp.AgentWakeRefused(logw),
+		// A message for an agent whose worktree was released after it was
+		// bound there never reaches it; its sender hears why.
+		CheckoutReleased: mcp.AgentCheckoutReleased(logw),
 	})
 }
 

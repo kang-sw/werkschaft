@@ -77,6 +77,11 @@ type ServerOptions struct {
 	// every daemon-hosted connection, including token-forwarding workers, so
 	// each connection resolves its backend descriptor and profiles.
 	AgentBackends AgentBackendRegistry
+	// CallerBinding is the daemon runner's read-only, memory-only check of
+	// the caller this connection is authenticated as (CallerBindingReader).
+	// Set for every daemon-hosted connection, token-forwarding workers
+	// included; nil falls back to Agents when it implements the check.
+	CallerBinding CallerBindingReader
 	// WorktreeChildren exposes the daemon's read-only bound-child query for
 	// worktree.release without granting the lead runner handle (Agents).
 	WorktreeChildren WorktreeChildrenReader
@@ -200,6 +205,12 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	s.exec, s.conversation = opts.Exec, opts.Conversation
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
+	}
+	s.callerBinding = opts.CallerBinding
+	if s.callerBinding == nil && opts.Agents != nil {
+		if binding, ok := opts.Agents.(CallerBindingReader); ok {
+			s.callerBinding = binding
+		}
 	}
 	s.pi.worktreeChildren = opts.WorktreeChildren
 	if s.pi.worktreeChildren == nil && opts.Agents != nil {

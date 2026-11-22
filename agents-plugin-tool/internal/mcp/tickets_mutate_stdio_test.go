@@ -595,3 +595,74 @@ func TestServeStdioTicketsMoveExplicitOverrideWinsOverBuiltinDefault(t *testing.
 		t.Fatalf("moved ticket missing recommended posture (explicit project-scope override should win over builtin default):\n%s", body)
 	}
 }
+
+// A ticket created and moved before its first commit leaves only the
+// destination in the index. git.commit must accept either the old or the new
+// path and produce one commit holding just the destination, which
+// tickets.verify then passes.
+func TestServeStdioFirstCommitAfterCreateAndMoveAcceptsOldOrNewPath(t *testing.T) {
+	for _, variant := range []string{"old", "new"} {
+		t.Run(variant, func(t *testing.T) {
+			useLeadProfile(t)
+			t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+			t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+			t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+			root := t.TempDir()
+			initGit(t, root)
+			mustWrite(t, root, "baseline.txt", "baseline\n")
+			runGit(t, root, "add", "-A")
+			runGit(t, root, "-c", "commit.gpgsign=false", "commit", "-m", "seed")
+
+			server := NewServer(root, "test")
+			key, _ := parseLoginResponse(t, callLogin(t, server, 902710, root, nil))
+
+			createResp := callToolWithKey(t, server, 1, key, "tickets.create_empty", map[string]any{
+				"stem":          "feat-first-commit-move",
+				"initial_state": "idea",
+			})
+			if !strings.Contains(createResp, "Created ai-docs/tickets/idea/") {
+				t.Fatalf("tickets.create_empty response missing created path: %s", createResp)
+			}
+			matches, err := filepath.Glob(filepath.Join(root, "ai-docs", "tickets", "idea", "*-feat-first-commit-move.md"))
+			if err != nil || len(matches) != 1 {
+				t.Fatalf("created ticket matches = %v err=%v", matches, err)
+			}
+			stem := strings.TrimSuffix(filepath.Base(matches[0]), ".md")
+			oldPath := "ai-docs/tickets/idea/" + stem + ".md"
+			newPath := "ai-docs/tickets/todo/" + stem + ".md"
+
+			moveResp := callToolWithKey(t, server, 2, key, "tickets.move", map[string]any{"stem": stem, "to": "todo"})
+			if !strings.Contains(moveResp, oldPath+" -> "+newPath) {
+				t.Fatalf("tickets.move response missing transition: %s", moveResp)
+			}
+
+			named := newPath
+			if variant == "old" {
+				named = oldPath
+			}
+			branch := strings.TrimSpace(string(runGitOutput(t, root, "symbolic-ref", "--short", "HEAD")))
+			commitResp := callToolWithKey(t, server, 3, key, "git.commit", map[string]any{
+				"paths":           []any{named},
+				"title":           "docs(ticket): add first-commit ticket",
+				"ai_context":      []any{"User intent: commit a ticket created and moved before its first commit."},
+				"expected_branch": branch,
+			})
+			if !strings.Contains(commitResp, "commit: ") || !strings.Contains(commitResp, newPath) {
+				t.Fatalf("git.commit did not commit the destination path: %s", commitResp)
+			}
+			if strings.Contains(commitResp, "pathspec") || strings.Contains(commitResp, "failed") {
+				t.Fatalf("git.commit reported a failure: %s", commitResp)
+			}
+			if got := strings.TrimSpace(string(runGitOutput(t, root, "show", "--name-only", "--format=", "HEAD"))); got != newPath {
+				t.Fatalf("commit contains %q, want only %q", got, newPath)
+			}
+			if got := strings.TrimSpace(string(runGitOutput(t, root, "status", "--porcelain"))); got != "" {
+				t.Fatalf("worktree not clean after commit: %q", got)
+			}
+			verifyResp := callToolWithKey(t, server, 4, key, "tickets.verify", map[string]any{"paths": []any{newPath}})
+			if !strings.Contains(verifyResp, "verify: PASS") {
+				t.Fatalf("tickets.verify on destination did not pass: %s", verifyResp)
+			}
+		})
+	}
+}

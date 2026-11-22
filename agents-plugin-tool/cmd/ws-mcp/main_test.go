@@ -267,7 +267,7 @@ func TestTopLevelUsageListsTheWholeSubcommandSet(t *testing.T) {
 		t.Fatalf("go build failed: %v\n%s", err, string(out))
 	}
 
-	const wantUsage = "usage: ws-mcp <version|doctor|runtime|serve|smoke|config|path|git|tickets|mailbox|dashboard|daemon-start>"
+	const wantUsage = "usage: ws-mcp <version|doctor|runtime|serve|smoke|config|path|git|tickets|mailbox|credential|dashboard|daemon-start>"
 	for _, tc := range []struct {
 		name string
 		env  []string

@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function companion(globals = {}) {
   const context = vm.createContext({ window: {}, URLSearchParams, AbortController, ...globals });
-  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "compositor", "scenarios", "menu", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   return context.window.WsCompanion;
@@ -731,7 +731,7 @@ test("companion stage creates an FX canvas for semantic-split FX and falls back 
     },
     createImageBitmap: async url => ({ id: path.basename(url.split("?")[0]), width: 128, height: 128, close() {} })
   });
-  for (const name of ["packs", "compositor", "scenarios", "menu", "settings", "stage"]) {
+  for (const name of ["builtins", "packs", "focus", "compositor", "scenarios", "menu", "settings", "stage"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "assets", `dashboard-companion-${name}.js`), "utf8"), context);
   }
   const C = context.window.WsCompanion;
@@ -989,4 +989,113 @@ test("companion settings modal opens, writes typed global values, reverts refuse
   fire(gear, "click");
   assert.ok(dialog.all().filter(c => c.tagName === "SELECT" || c.tagName === "INPUT").every(c => c.disabled), "read-only pages disable every control");
   assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
+});
+
+function focusHarness(visibility = "visible") {
+  const listeners = {}, calls = [];
+  const doc = { visibilityState: visibility, addEventListener: (name, fn) => { listeners[name] = fn; } };
+  const env = { document: doc, fetch: (url, init) => {
+    const call = { url, ...init, body: JSON.parse(init.body) };
+    calls.push(call);
+    return env.respond(call);
+  }, respond: () => Promise.resolve({ ok: true, status: 204 }) };
+  const reporter = companion().focusReporter(env);
+  const bodies = () => calls.map(c => c.body);
+  const hide = state => { doc.visibilityState = state; listeners.visibilitychange(); };
+  return { reporter, calls, bodies, env, hide };
+}
+
+const agentConfig = { enabled: true, director: "agent", pack: "auto" };
+
+test("companion focus reports the shown session and resolved pack on switches and dedups", () => {
+  const { reporter, calls, bodies } = focusHarness();
+  reporter.config(agentConfig);
+  reporter.show("rid1", "default");
+  assert.equal(calls.length, 0, "no token yet");
+  reporter.token("t1");
+  assert.deepEqual(bodies(), [{ token: "t1", sessionId: "rid1", pack: "default" }]);
+  assert.equal(calls[0].url, "/api/companion/focus");
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].credentials, "same-origin");
+  assert.equal(calls[0].headers["Content-Type"], "application/json");
+  reporter.show("rid1", "default");
+  reporter.config({ ...agentConfig, preset: "other" });
+  assert.equal(calls.length, 1, "same token, session and pack are not re-sent");
+  reporter.show("rid2", "default");
+  reporter.show("rid2", "mint");
+  assert.deepEqual(bodies().slice(1), [{ token: "t1", sessionId: "rid2", pack: "default" }, { token: "t1", sessionId: "rid2", pack: "mint" }]);
+  reporter.show("rid2", "");
+  assert.deepEqual(bodies().at(-1), { token: "t1", sessionId: "", pack: "" }, "an unresolved pack clears");
+  reporter.show("", "");
+  assert.equal(calls.length, 4, "a second clear is not re-sent");
+});
+
+test("companion focus clears when hidden and reports again when visible", () => {
+  const { reporter, bodies, hide } = focusHarness();
+  reporter.config(agentConfig);
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  hide("hidden");
+  assert.deepEqual(bodies().slice(1), [{ token: "t1", sessionId: "", pack: "" }]);
+  hide("hidden");
+  reporter.show("rid2", "default");
+  assert.equal(bodies().length, 2, "nothing is sent while hidden");
+  hide("visible");
+  assert.deepEqual(bodies().at(-1), { token: "t1", sessionId: "rid2", pack: "default" });
+  assert.equal(bodies().length, 3);
+});
+
+test("companion focus sends nothing in rules mode or when disabled", () => {
+  const { reporter, calls, hide } = focusHarness();
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  for (const config of [{ enabled: true, director: "rules" }, { enabled: false, director: "agent" }, { director: "agent" }, null]) {
+    reporter.config(config);
+    reporter.show("rid2", "default");
+    hide("hidden");
+    hide("visible");
+    reporter.token("t2");
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("companion focus clears on leaving agent mode and reports on token change", () => {
+  const { reporter, bodies } = focusHarness();
+  reporter.token("t1");
+  reporter.show("rid1", "default");
+  reporter.config(agentConfig);
+  assert.deepEqual(bodies(), [{ token: "t1", sessionId: "rid1", pack: "default" }]);
+  reporter.token("t2");
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "rid1", pack: "default" }, "a reconnect reports again");
+  reporter.config({ ...agentConfig, director: "rules" });
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "", pack: "" });
+  assert.equal(bodies().length, 3);
+  reporter.config({ ...agentConfig, enabled: false });
+  assert.equal(bodies().length, 3, "no repeat clear");
+  reporter.config(agentConfig);
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "rid1", pack: "default" });
+  reporter.config({ ...agentConfig, enabled: false });
+  assert.deepEqual(bodies().at(-1), { token: "t2", sessionId: "", pack: "" });
+  reporter.token("t3");
+  assert.equal(bodies().length, 5, "a new token after a clear sends nothing");
+});
+
+test("companion focus ignores refusals, a gone stream, an older daemon and network errors", async () => {
+  for (const respond of [
+    () => Promise.resolve({ ok: false, status: 404 }),
+    () => Promise.resolve({ ok: false, status: 410 }),
+    () => Promise.resolve({ ok: false, status: 403 }),
+    () => Promise.reject(new Error("offline")),
+    () => { throw new Error("sync failure"); }
+  ]) {
+    const { reporter, calls, env } = focusHarness();
+    env.respond = respond;
+    reporter.config(agentConfig);
+    reporter.token("t1");
+    reporter.show("rid1", "default");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.length, 1, "no retry after a failure");
+    reporter.show("rid2", "default");
+    assert.equal(calls.length, 2, "later state changes still report");
+  }
 });

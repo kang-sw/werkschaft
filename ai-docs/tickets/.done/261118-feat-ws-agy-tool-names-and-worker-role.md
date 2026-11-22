@@ -10,6 +10,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: a4e111c868975597
 sage-review-completeness-reviewed: a4e111c868975597
+completed: 2026-11-22
 ---
 
 # agy completion: dotted tool-name aliases, harness detection, and the agy worker role
@@ -442,3 +443,15 @@ and must not follow the daemon-owned restart or token shape.
   research Q3.
 - Verification: unit tests for the knob and the agent file render, then the
   research's quality A/B (probe 4) on the same task with each knob value.
+
+### Result (superseded) - 2026-11-22
+
+Retired without implementation by owner decision (1545): agy is a lead-only
+harness (`261122-feat-ws-agy-lead-only-harness`), so no ws worker runs on agy
+and the agy worker custom agent and its A/B launches have no target. The plan
+above is kept for history.
+
+
+## Resolution (2026-11-22)
+
+Phases 1-2 landed; Phase 3 retired without implementation by owner decision (1545), which makes agy a lead-only harness (261122-feat-ws-agy-lead-only-harness).

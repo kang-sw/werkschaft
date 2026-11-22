@@ -2018,6 +2018,7 @@
   "rail.approval": "in attesa di approvazione",
   "rail.approvals": "sessioni in attesa di approvazione",
   "convo.approval": "in attesa di approvazione",
+  "js.lead.agy.terms": "Usare agy tramite un'app di terze parti come ws può portare alla sospensione del tuo account Antigravity: i termini di Google non supportano Antigravity all'interno di altri software.",
   "js.lead.title": "Nuova sessione",
   "js.lead.tier": "Livello con nome",
   "js.lead.tier.manual": "Manuale (scegli ogni campo)",

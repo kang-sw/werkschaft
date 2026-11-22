@@ -2018,6 +2018,7 @@
   "rail.approval": "等待批准",
   "rail.approvals": "等待批准的会话",
   "convo.approval": "等待批准",
+  "js.lead.agy.terms": "通过 ws 等第三方应用使用 agy 可能导致你的 Antigravity 账户被暂停：Google 的条款不支持在其他软件中使用 Antigravity。",
   "js.lead.title": "新会话",
   "js.lead.tier": "命名层级",
   "js.lead.tier.manual": "手动（逐项选择）",

@@ -155,11 +155,12 @@ name-free.
   migration-relevant prerequisite, because it adds Codex permission mapping to
   `support.go`/launch sites in this inventory. Keep this ticket in `todo/`
   until that phase has landed on `develop`. Not prerequisites: that ticket's
-  Phase 4 (agy, owner-account gated) and Phase 5, and
-  `261118-feat-ws-agy-tool-names-and-worker-role` Phase 3 (knob-gated probes),
-  because they wait on external gates and would hold this umbrella
-  indefinitely; any site they add must use the (1880) seam, and Phase 4's
-  residual audit catches what they move. `261117-feat-ws-exec-tools` and the
+  Phase 4 (agy, owner-account gated) and Phase 5, because they wait on
+  external gates and would hold this umbrella indefinitely; any site they add
+  must use the (1880) seam, and Phase 4's residual audit catches what they
+  move. `261118-feat-ws-agy-tool-names-and-worker-role` Phase 3 is not a
+  prerequisite either: it was retired by owner decision (1545) and adds no
+  sites. `261117-feat-ws-exec-tools` and the
   child-session tickets add new code under the same seam rule and are not
   prerequisites. Neither are `261114-feat-ws-live-reasoning-summary` and
   `261115-feat-ws-claude-reasoning-summary-producer`, although they touch
@@ -353,7 +354,10 @@ interpreted through registration data ((1881)).
 Verification: `internal/wsagent` package tests plus focused fixtures for
 permissions, worker admission, cwd/key ownership, holder restart/rejoin,
 handoff/takeover, native steer and child revival, Pi summaries, and the Agy
-settled-activity callback. Run four-harness lead and worker parity checks and
+settled-activity callback. Run four-harness lead parity and Claude/Codex/Pi
+worker parity checks, asserting agy worker same-harness admission and
+cross-harness refusal (owner (1546), revising (1545):
+`261122-feat-ws-agy-same-harness-workers`), and
 measure file operations on start, turn settlement, restart, rejoin, and
 handoff; the migration must not add interactive-path file I/O.
 
@@ -409,7 +413,9 @@ reasoning-summary tickets) then has to route harness differences through the
 (1880) seam or extend the allowlist under (1881)'s rule in its own diff.
 
 Verification: the Phase 1-3 package suites together; four-harness hosted lead
-and `agent.spawn` worker parity; restart/rejoin/handoff and downgrade fixtures;
+parity and Claude/Codex/Pi `agent.spawn` worker parity with agy worker
+same-harness admission and cross-harness refusal asserted ((1546));
+restart/rejoin/handoff and downgrade fixtures;
 MCP legacy-call and detector fixtures; race coverage for touched lifecycle
 paths; and syscall/file-operation measurements against the pre-change
 baseline. For each retained common-code name check, verify its regression
