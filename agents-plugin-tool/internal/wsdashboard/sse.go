@@ -575,6 +575,10 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 		// sentRev is the tracker revision this stream last sent; the
 		// sentinel -1 sends revision 0 on connect too.
 		sentRev := int64(-1)
+		// sentExecRev is the same for the hosted exec job set's revision,
+		// which a session page's stream sends whether or not a tracker is
+		// bound (sentinel -1: on connect too).
+		sentExecRev := int64(-1)
 		// The assets identity goes first, before any region of a new
 		// daemon's markup reaches a page that may run an old script.
 		if a, err := loadDashboardAssets(); err == nil {
@@ -644,6 +648,17 @@ func (d *Daemon) stream(w http.ResponseWriter, r *http.Request, src pageSource, 
 						return false
 					}
 					sentRev = rev
+					sent = true
+				}
+			}
+			if src.key.replyID != "" {
+				if rev := d.execRev.Load(); rev != sentExecRev {
+					// A revision only: the list is read from the
+					// localhost-only exec route, never carried here.
+					if sink.event("execjobs", fmt.Appendf(nil, `{"rev":%d}`, rev)) != nil {
+						return false
+					}
+					sentExecRev = rev
 					sent = true
 				}
 			}

@@ -318,6 +318,10 @@ type fakeExecSessions struct {
 	notices   []execNotice
 	seen      map[string]bool
 	outcome   NoticeOutcome
+	// notifyErr fails every Notify; handErr every Hand; hands are the
+	// passive receipts handed.
+	notifyErr, handErr error
+	hands              []execNotice
 	// ownerCalls counts Owner calls; ownerHook runs at the start of call n
 	// (1-based), outside the lock: a test's interleaving point.
 	ownerCalls int
@@ -367,9 +371,30 @@ func (s *fakeExecSessions) Immediate(id string) (bool, error) {
 	return true, nil
 }
 
+func (s *fakeExecSessions) StopNote(id string) string { return "NOTE: deliberate stop" }
+
+func (s *fakeExecSessions) Hand(id string, gen uint64, execID, text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.handErr != nil {
+		return s.handErr
+	}
+	s.hands = append(s.hands, execNotice{owner: id, gen: gen, event: execID, text: text})
+	return nil
+}
+
+func (s *fakeExecSessions) handList() []execNotice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.hands)
+}
+
 func (s *fakeExecSessions) Notify(id string, gen uint64, eventID, text string) (NoticeOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.notifyErr != nil {
+		return 0, s.notifyErr
+	}
 	if s.outcome == NoticeDeferred || s.outcome == NoticeDropped {
 		return s.outcome, nil
 	}

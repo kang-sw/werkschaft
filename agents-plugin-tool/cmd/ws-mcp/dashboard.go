@@ -248,6 +248,8 @@ func dashboardCommand(args []string) {
 	if hostedExec != nil {
 		// The dashboard's `!` commands run on the same jobs and runner.
 		daemon.SetComposerExec(composerExec{hosted: hostedExec, runner: agents})
+		// And the job HUD's reads and stop: the same binding.
+		daemon.SetExecJobs(composerExec{hosted: hostedExec, runner: agents})
 	}
 	// The jobs a predecessor left are settled: the runner's report holds,
 	// sleep and close cascade read them from now on.

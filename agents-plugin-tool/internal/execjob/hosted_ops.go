@@ -14,12 +14,18 @@ import (
 // stop ends j's process group through its holder and waits for the end. A
 // job whose process was not handed to its holder yet ends at once (Launch
 // then never spawns it); one whose hand-over runs is waited for first. An
-// error means the holder did not go and the job may still run.
-func (h *Hosted) stop(j *hostedJob) error {
+// error means the holder did not go and the job may still run. byUser marks
+// the stop as the user's own (the HUD's): the first stop to set stopping
+// decides it, and the job is marked stopped-by-user only where this stop's
+// intent ends it as stopped (endLocked).
+func (h *Hosted) stop(j *hostedJob, byUser bool) error {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
 		return nil
+	}
+	if !j.stopping {
+		j.stopIntent = byUser
 	}
 	j.stopping = true
 	if j.starting {
@@ -68,7 +74,7 @@ func (h *Hosted) stop(j *hostedJob) error {
 	}
 	if err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
 		// The holder did not go: the job may still run.
-		j.stopping = false
+		j.stopping, j.stopIntent = false, false
 		h.mu.Unlock()
 		return fmt.Errorf("stop exec job %s: %w", j.row.ID, err)
 	}
@@ -88,7 +94,7 @@ func (h *Hosted) Stop(owner, id string) (HostedView, error) {
 	if err != nil {
 		return HostedView{}, err
 	}
-	if err := h.stop(j); err != nil {
+	if err := h.stop(j, false); err != nil {
 		return h.view(j, 0), err
 	}
 	return h.view(j, 0), nil
@@ -319,7 +325,7 @@ func (h *Hosted) StopOwner(owner string) error {
 	h.mu.Unlock()
 	var errs []error
 	for _, j := range jobs {
-		if err := h.stop(j); err != nil {
+		if err := h.stop(j, false); err != nil {
 			errs = append(errs, err)
 		}
 	}

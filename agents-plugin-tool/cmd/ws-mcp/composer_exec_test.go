@@ -52,11 +52,13 @@ func (r *composerRunnerFake) PassiveHand(id string, gen uint64, execID, text str
 // launch must be its own approval and never ask the agent's policy.
 type denySessions struct {
 	recordingSessions
-	mu       sync.Mutex
-	asked    int
-	gen      uint64
-	events   *[]string
-	notified chan struct{}
+	mu    sync.Mutex
+	asked int
+	gen   uint64
+	// stopHands are the receipts of user-stopped composer jobs (Hand).
+	stopHands []string
+	events    *[]string
+	notified  chan struct{}
 	// ownerCalls counts Owner calls; afterOwner runs after call n has read
 	// its generation (a test's interleaving point).
 	ownerCalls int
@@ -84,6 +86,13 @@ func (s *denySessions) Immediate(string) (bool, error) {
 	s.asked++
 	s.mu.Unlock()
 	return false, nil
+}
+func (s *denySessions) StopNote(string) string { return "" }
+func (s *denySessions) Hand(id string, gen uint64, execID, text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopHands = append(s.stopHands, execID+"|"+text)
+	return nil
 }
 func (s *denySessions) Notify(id string, gen uint64, eventID, text string) (execjob.NoticeOutcome, error) {
 	s.mu.Lock()
@@ -363,5 +372,43 @@ func TestComposerExecRefusedHandOffLeavesTheOrdinaryNotice(t *testing.T) {
 	}
 	if len(runner.hands) != 0 {
 		t.Fatalf("a refused hand-off recorded %v", runner.hands)
+	}
+}
+
+// TestComposerJobUserStopHandsAStoppedReceiptAndWakesNothing: the user's own
+// converted `!` job, stopped from the HUD, reads as the user's origin, ends
+// stopped and marked, hands a stopped receipt to the lead's pending input
+// (the same runner seam the id receipt used), and sends no steered notice.
+func TestComposerJobUserStopHandsAStoppedReceiptAndWakesNothing(t *testing.T) {
+	c, _, sessions, _, _, _ := openComposerFixture(t, 2)
+	job, err := c.Launch(context.Background(), make(chan struct{}), wsdashboard.ComposerLaunch{ReplyID: "lead", Gen: 2, Line: "echo started; sleep 30", Window: 100 * time.Millisecond})
+	if err != nil || !job.Async || job.Terminal() {
+		t.Fatalf("converted job = %+v, %v", job, err)
+	}
+	jobs := c.Jobs("lead")
+	if len(jobs) != 1 || jobs[0].Origin != execjob.OriginUser || jobs[0].State != execjob.HostedRunning || !strings.Contains(jobs[0].Command, "sleep 30") {
+		t.Fatalf("jobs = %+v", jobs)
+	}
+	sum, err := c.StopByUser("lead", job.ExecID)
+	if err != nil || sum.State != execjob.HostedStopped || !sum.StoppedByUser || sum.StopNotice != execjob.StopNoticeSent {
+		t.Fatalf("stop = %+v, %v", sum, err)
+	}
+	sessions.mu.Lock()
+	hands := append([]string(nil), sessions.stopHands...)
+	sessions.mu.Unlock()
+	if len(hands) != 1 || !strings.HasPrefix(hands[0], job.ExecID+"|[user ran from the dashboard]") || !strings.Contains(hands[0], "was stopped by the user") || !strings.Contains(hands[0], "started") {
+		t.Fatalf("receipt = %v", hands)
+	}
+	select {
+	case n := <-sessions.recordingSessions.notices:
+		t.Fatalf("a `!` job's stop woke the agent: %q", n)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if _, err := c.StopByUser("other", job.ExecID); !errors.Is(err, execjob.ErrExecNotFound) {
+		t.Fatalf("another owner's stop = %v", err)
+	}
+	read, err := c.ReadOutput("lead", job.ExecID, 0, 0)
+	if err != nil || !read.Job.Terminal() || len(read.Segments) == 0 || !strings.Contains(string(read.Segments[0].Data), "started") || read.Segments[0].Stream != execjob.StreamStdout {
+		t.Fatalf("output = %+v, %v", read, err)
 	}
 }

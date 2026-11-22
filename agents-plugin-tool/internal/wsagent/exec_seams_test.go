@@ -327,6 +327,66 @@ func TestAdmitCompletionOnceAcrossRestartDrainAndCrash(t *testing.T) {
 	})
 }
 
+// TestUserStopNoticeSteersARunningTurnWakesAnIdleOneAndDeduplicates: the
+// user-stop notice is an ordinary steered inbox entry under its own stable
+// event id: it steers a running turn, starts a turn on an idle session,
+// deduplicates a Retry, and a closed or reopened conversation drops it.
+func TestUserStopNoticeSteersARunningTurnWakesAnIdleOneAndDeduplicates(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id, holder := h.runLead("one")
+	h.holders.out(holder, stateLine(HarnessRunning), initLine("sess-1", "auto"), toolUseLine("u1", "toolu_1"))
+	h.sync(id, holder)
+	owner, err := h.runner.ExecOwner(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const event = "exec:exec_a:stopped-by-user"
+	admit := func(event, text string, gen uint64) CompletionOutcome {
+		t.Helper()
+		out, err := h.runner.AdmitCompletion(id, gen, event, text)
+		if err != nil {
+			t.Fatalf("AdmitCompletion(%s): %v", event, err)
+		}
+		return out
+	}
+	if out := admit(event, "[ws exec] exec_a was stopped after 3s.", owner.Gen); out != CompletionAccepted {
+		t.Fatalf("running turn = %v", out)
+	}
+	eventually(t, "the notice steered into the running turn", func() bool {
+		inputs := h.userInputs(holder)
+		return len(inputs) == 2 && strings.Contains(inputs[1], "exec_a was stopped")
+	})
+	if out := admit(event, "[ws exec] exec_a was stopped after 3s.", owner.Gen); out != CompletionDuplicate {
+		t.Fatalf("a Retry of the same stop = %v", out)
+	}
+	h.holders.out(holder, turnLines("sess-1", "u2", "done")...)
+	h.idle(id)
+	before := len(h.userInputs(holder))
+	if out := admit("exec:exec_b:stopped-by-user", "[ws exec] exec_b was stopped after 1s.", owner.Gen); out != CompletionAccepted {
+		t.Fatalf("idle session = %v", out)
+	}
+	eventually(t, "the idle session's notice turn", func() bool {
+		for _, in := range h.userInputs(holder)[before:] {
+			if strings.Contains(in, "exec_b was stopped") {
+				return true
+			}
+		}
+		return false
+	})
+	if _, err := h.runner.CloseConversation(id); err != nil {
+		t.Fatal(err)
+	}
+	if out := admit("exec:exec_c:stopped-by-user", "late", owner.Gen); out != CompletionSuppressed {
+		t.Fatalf("closed = %v", out)
+	}
+	if _, err := h.runner.Reopen(id); err != nil {
+		t.Fatal(err)
+	}
+	if out := admit("exec:exec_c:stopped-by-user", "stale generation", owner.Gen); out != CompletionSuppressed {
+		t.Fatalf("reopened generation = %v", out)
+	}
+}
+
 // TestAdmitCompletionFencedByClose: a close suppresses the notice, and a
 // revival does not bring back a notice admitted before it.
 func TestAdmitCompletionFencedByClose(t *testing.T) {

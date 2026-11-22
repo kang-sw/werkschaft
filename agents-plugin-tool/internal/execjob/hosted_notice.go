@@ -77,11 +77,19 @@ func noticeText(row HostedJobRow, out *JobOutput) string {
 	if cmd := displayCommand(row); cmd != "" {
 		fmt.Fprintf(&b, "command: %s\n", cmd)
 	}
+	writeOutputTail(&b, out)
+	fmt.Fprintf(&b, "Read more with exec.tail (exec_id %s).", row.ID)
+	return b.String()
+}
+
+// writeOutputTail writes out's last HostedPreviewBytes of combined output,
+// or says there is none.
+func writeOutputTail(b *strings.Builder, out *JobOutput) {
 	tail := out.Tail(StreamCombined, HostedPreviewBytes)
 	if len(tail.Data) > 0 {
 		text, _ := DecodeText(tail.Data)
 		if tail.Start > 0 {
-			fmt.Fprintf(&b, "output (last %d of %d bytes):\n", len(tail.Data), tail.Written)
+			fmt.Fprintf(b, "output (last %d of %d bytes):\n", len(tail.Data), tail.Written)
 		} else {
 			b.WriteString("output:\n")
 		}
@@ -92,8 +100,6 @@ func noticeText(row HostedJobRow, out *JobOutput) string {
 	} else {
 		b.WriteString("no output.\n")
 	}
-	fmt.Fprintf(&b, "Read more with exec.tail (exec_id %s).", row.ID)
-	return b.String()
 }
 
 // endText says how a finished job ended.

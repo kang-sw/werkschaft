@@ -332,6 +332,10 @@ type conv struct {
 	// at conversation creation/restoration and refreshed by config.tune,
 	// never by the send path.
 	ambient string
+	// ambientLang is the workflow.lang value ambient was rendered from,
+	// published with it for readers off the loop; nil before the first
+	// resolution.
+	ambientLang atomic.Pointer[string]
 	// expiring is set while a child-agent-waiting expiry is dispatched
 	// (expireIfDue) and not yet decided; loop-owned.
 	expiring bool

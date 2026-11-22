@@ -80,8 +80,10 @@ type HostedOptions struct {
 	// JobBytes and TotalBytes replace the ring bounds (a test seam).
 	JobBytes, TotalBytes int64
 	// OnRunning is called, with no lock held, after a job enters or leaves
-	// the running set RunningOwners counts; nil observes nothing. It runs
-	// on the launching or ending goroutine, so it must return promptly.
+	// the running set RunningOwners counts, and after a user stop's notice
+	// outcome is recorded (what the job list shows); nil observes nothing.
+	// It runs on the launching or ending goroutine, so it must return
+	// promptly.
 	OnRunning func()
 }
 
@@ -105,9 +107,27 @@ type hostedJob struct {
 	stdinUnknown bool
 	writeMu      sync.Mutex
 	// stopping: exec.stop or an interrupt asked for the end; the end is
-	// then HostedStopped and sends no notice.
-	stopping   bool
-	delivering bool
+	// then HostedStopped and sends no completion notice.
+	stopping bool
+	// origin is who launched the job (OriginUser, or "" for an agent's); in
+	// memory only, set at admission.
+	origin string
+	// stopIntent: the stop that set stopping was the user's (stop byUser).
+	// The first stop to set stopping decides it; it clears with stopping
+	// when the holder did not go. userStopped commits it where the job
+	// ends HostedStopped while it is set (endLocked): a stop that did not
+	// end the job, or a job that ended another way first, is never marked.
+	// stopOwed: the marked end owes the owner a notice (a job already
+	// converted to async, past its launch); stopNotice is that notice's
+	// outcome (StopNotice*), written under noticeMu (which orders its
+	// admission) and h.mu, read under h.mu. None of these is stored: a
+	// restart loses them.
+	stopIntent  bool
+	userStopped bool
+	stopOwed    bool
+	stopNotice  string
+	noticeMu    sync.Mutex
+	delivering  bool
 	// publishing: a converted job's id is being handed to its caller; its
 	// completion notice waits for that (deliver), so the id is out first.
 	publishing bool
@@ -358,6 +378,7 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 	h.save(j, row, rev)
 	h.dropExitCopy(j)
 	h.deliver(j)
+	h.noticeStopped(j)
 }
 
 // HolderGone is the daemon's holder OnExit for an exec job's holder: the
@@ -421,6 +442,7 @@ func (h *Hosted) endFromExit(j *hostedJob, exit wsholder.Exit) {
 	h.save(j, row, rev)
 	h.dropExitCopy(j)
 	h.deliver(j)
+	h.noticeStopped(j)
 }
 
 // HolderEvent takes a job holder's records (wsholder.Sink): output into the
@@ -479,6 +501,7 @@ func (h *Hosted) HolderEvent(id string, ev wsholder.Event) {
 	h.runningChanged()
 	h.save(j, row, rev)
 	h.deliver(j)
+	h.noticeStopped(j)
 	// The process ended; its holder stays until stopped, and its stop takes
 	// the rest of the job's process group with it.
 	go h.stopHolder(id)
@@ -573,6 +596,11 @@ func (h *Hosted) retryRetire(holder string, retired func()) {
 func (h *Hosted) endLocked(j *hostedJob) {
 	j.row.EndedAt = h.opts.Now().UnixMilli()
 	j.stdinOpen = false
+	if j.row.State == HostedStopped && j.stopIntent {
+		// The user's stop is the one that ended it as stopped.
+		j.userStopped = true
+		j.stopOwed = j.row.Notify && !j.starting
+	}
 	if j.row.Notify && !j.stopping && j.row.Notice == NoticeNone {
 		j.row.Notice = NoticePending
 	}
@@ -789,6 +817,10 @@ type HostedLaunch struct {
 	// the callback must be all-or-nothing: it returns an error only when nothing
 	// reached the owner or the client, never after a partial publication.
 	OnConvert func(HostedView) error
+	// Origin is who launched it: OriginUser for the composer's own `!`
+	// command, else (empty) the agent's tool. Kept in memory for the job
+	// list and the stop notice's route.
+	Origin string
 }
 
 // HostedOutcome is how a launch call ended.
