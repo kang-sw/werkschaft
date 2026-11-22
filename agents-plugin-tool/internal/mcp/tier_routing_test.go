@@ -230,3 +230,47 @@ func TestFormatAgentTiersRoutingSection(t *testing.T) {
 		t.Fatalf("invalid graph text:\n%s", text)
 	}
 }
+
+// The shipped playbooks' own frontmatter drives the recommendation: a
+// daemon-agent caller is told <role>:<size> (the explore playbook's role is
+// playbook-explore), the binding follows the group mapping, and a native
+// caller keeps the bare size and caller-harness binding with or without it.
+func TestShippedPlaybookFrontmatterRecommendations(t *testing.T) {
+	useResourceFixture(t, "../../../agents-plugin/rsrc")
+	f := newPiRecordFixture(t)
+	resp := callToolOnce(t, f.s, 9, "config.tune", map[string]any{"key": "agents.tier", "scope": "global", "harness": "pi",
+		"value": map[string]any{"tier": "large", "model": "pi-large", "effort": "high"}})
+	if toolIsError(t, resp) {
+		t.Fatalf("set pi.large: %s", resp)
+	}
+	tier := func(initialize, name string) string {
+		first, _, _ := strings.Cut(metadata(renderResponse(t, f.s, f.leadKey, name, initialize, nil)), "\n")
+		return first
+	}
+	for name, want := range map[string]string{
+		"ticket-reviewer-design": "ticket-reviewer-design:large",
+		"ticket-worker-elevated": "ticket-worker-elevated:large",
+		"explore":                "playbook-explore:small",
+	} {
+		if got := tier(piInitDaemon, name); got != "recommended-tier: "+want {
+			t.Fatalf("daemon %s = %q, want %q", name, got, want)
+		}
+		bare := want[strings.LastIndex(want, ":")+1:]
+		if got := tier(piInitNative, name); got != "recommended-tier: "+bare {
+			t.Fatalf("native %s = %q, want bare %q", name, got, bare)
+		}
+	}
+
+	nativeBefore := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitNative, nil))
+	daemon := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil))
+	if want := "recommended-tier: ticket-reviewer-design:large\nrecommended-model: pi-large\nrecommended-reasoning-effort: high"; daemon != want {
+		t.Fatalf("default-chain daemon metadata = %q, want %q", daemon, want)
+	}
+	setRouting(t, f.s, `{"nodes":{"review":{"*":"claude.*"}}}`)
+	if daemon = metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitDaemon, nil)); !strings.HasPrefix(daemon, "recommended-tier: ticket-reviewer-design:large\nrecommended-model: opus") {
+		t.Fatalf("mapped daemon metadata = %q", daemon)
+	}
+	if native := metadata(renderResponse(t, f.s, f.leadKey, "ticket-reviewer-design", piInitNative, nil)); native != nativeBefore {
+		t.Fatalf("mapped native metadata = %q, want %q", native, nativeBefore)
+	}
+}

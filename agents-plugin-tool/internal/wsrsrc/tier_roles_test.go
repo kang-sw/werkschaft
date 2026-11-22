@@ -79,3 +79,78 @@ func TestShippedPackagesTierRolesScan(t *testing.T) {
 		}
 	}
 }
+
+// shippedTierRoleInventory is the owner's assignment (1515, 1534) by primary
+// work: role -> parent and the playbook's unchanged size. A playbook that
+// declares tier: must be listed here, and both trees must carry it.
+var shippedTierRoleInventory = map[string][2]string{
+	"playbook-explore":             {"explore:*", "small"},
+	"reference-discovery":          {"explore:*", "small"},
+	"ticket-selector":              {"explore:*", "small"},
+	"ticket-batch-selector":        {"explore:*", "medium"},
+	"ticket-classifier":            {"explore:*", "medium"},
+	"implementer":                  {"implement:*", "medium"},
+	"ticket-worker":                {"implement:*", "medium"},
+	"ticket-worker-elevated":       {"implement:*", "large"},
+	"ticket-handler":               {"implement:*", "medium"},
+	"ship-handler":                 {"implement:*", "small"},
+	"reviewer":                     {"review:*", "large"},
+	"code-review-correctness":      {"review:*", "large"},
+	"code-review-fit":              {"review:*", "medium"},
+	"code-review-lite":             {"review:*", "medium"},
+	"code-review-test":             {"review:*", "medium"},
+	"ticket-reviewer-completeness": {"review:*", "medium"},
+	"ticket-reviewer-design":       {"review:*", "large"},
+	"review-handler":               {"review:*", "medium"},
+	"ticket-fact-populator":        {"review:*", "medium"},
+	"fresh-read-doc-auditor":       {"review:*", "large"},
+	"fresh-reader-audit":           {"review:*", "large"},
+}
+
+// Every tier-declaring playbook carries its role and default parent, with
+// the size it declared before the migration, in both shipped trees.
+func TestShippedPlaybooksDeclareTierRoles(t *testing.T) {
+	for _, dir := range []string{"agents-plugin", "agents-plugin-wsflow"} {
+		root := os.DirFS(filepath.Join("..", "..", "..", dir, "rsrc"))
+		roles, err := TierRoles(root)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		got := map[string][2]string{}
+		for _, r := range roles {
+			got[r.Role] = [2]string{r.Parent, r.Size}
+			if r.Role != r.Playbook && r.Role != "playbook-"+r.Playbook {
+				t.Errorf("%s: playbook %s declares role %q", dir, r.Playbook, r.Role)
+			}
+		}
+		if len(got) != len(shippedTierRoleInventory) {
+			t.Errorf("%s: roles = %v, want %v", dir, got, shippedTierRoleInventory)
+			continue
+		}
+		for role, want := range shippedTierRoleInventory {
+			if got[role] != want {
+				t.Errorf("%s: role %s = %v, want %v", dir, role, got[role], want)
+			}
+		}
+		// No playbook may declare a size without a role.
+		manifest, err := ReadManifestFS(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rel := range manifest.Files {
+			base := strings.TrimSuffix(filepath.Base(rel), ".md")
+			if filepath.Dir(rel) != base || !strings.HasSuffix(rel, ".md") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join("..", "..", "..", dir, "rsrc", rel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fm, _ := parseFrontmatter(string(data))
+			meta := metaFromFrontmatter(fm)
+			if meta.Tier != "" && meta.TierRole == "" {
+				t.Errorf("%s: %s declares tier %q without tier-role", dir, rel, meta.Tier)
+			}
+		}
+	}
+}

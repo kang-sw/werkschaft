@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wsrsrc"
 )
 
 var testPackagedRoles = []wsconfig.TierRole{
@@ -288,5 +291,68 @@ func TestRoleTierAgainstThePreFeatureResolver(t *testing.T) {
 	old := spawnBinding{Backend: oldHarness, Model: tiers[oldBare].Model, Effort: tiers[oldBare].Effort, Tier: oldBare}
 	if got := h.spawnBinding(lead, role); got != old {
 		t.Fatalf("exact alias: new daemon %+v, pre-feature %+v", got, old)
+	}
+}
+
+// shippedRoutingHarness is routingHarness over the role nodes the shipped
+// ws package declares in its playbook frontmatter.
+func shippedRoutingHarness(t *testing.T) (*harness, []wsrsrc.PlaybookTierRole) {
+	t.Helper()
+	declared, err := wsrsrc.TierRoles(os.DirFS(filepath.Join("..", "..", "..", "agents-plugin", "rsrc")))
+	if err != nil || len(declared) == 0 {
+		t.Fatalf("shipped tier roles = %v, %v", declared, err)
+	}
+	roles := make([]wsconfig.TierRole, 0, len(declared))
+	for _, d := range declared {
+		roles = append(roles, wsconfig.TierRole{Name: d.Role, Parent: d.Parent, Size: wsconfig.NormalizedTier(d.Size)})
+	}
+	h, _ := agentHarness(t, func(o *Options) {
+		o.TierRoles = func() ([]wsconfig.TierRole, error) { return roles, nil }
+	})
+	return h, declared
+}
+
+// The recommendation a daemon-agent render returns for a shipped playbook is
+// <role>:<size>; agent.spawn takes it as is. Without a mapping it launches
+// the bare size on the caller's harness; a group mapping moves only that
+// group's playbooks and a role mapping only its own.
+func TestShippedPlaybookRecommendationsSpawnWithAndWithoutAMapping(t *testing.T) {
+	h, declared := shippedRoutingHarness(t)
+	lead := h.leadCaller()
+	for _, d := range declared {
+		rec := d.Role + ":" + d.Size
+		if got, bare := h.spawnBinding(lead, rec), h.spawnBinding(lead, d.Size); got != bare {
+			t.Fatalf("%s = %+v, bare %s = %+v", rec, got, d.Size, bare)
+		}
+	}
+
+	setTierRouting(t, h.config.Config, `{"nodes":{
+		"review":{"*":"pi.*"},
+		"explore":{"*":"claude.*"},
+		"ticket-worker-elevated":{"*":"claude.small"}
+	}}`)
+	pi := func(size string) spawnBinding { return h.spawnBinding(lead, "pi."+size) }
+	claude := func(size string) spawnBinding { return h.spawnBinding(lead, "claude."+size) }
+	for _, d := range declared {
+		got := h.spawnBinding(lead, d.Role+":"+d.Size)
+		var want spawnBinding
+		switch {
+		case d.Role == "ticket-worker-elevated":
+			want = spawnBinding{claude("small").Backend, claude("small").Model, claude("small").Effort, "small"}
+		case strings.HasPrefix(d.Parent, "review:"):
+			want = pi(d.Size)
+		case strings.HasPrefix(d.Parent, "explore:"):
+			want = claude(d.Size)
+		default:
+			want = h.spawnBinding(lead, d.Size)
+		}
+		if got != want {
+			t.Fatalf("mapped %s:%s = %+v, want %+v", d.Role, d.Size, got, want)
+		}
+	}
+	// The explore playbook is its own node under the explore group: the
+	// group's mapping reaches it, and the group's own name is not a role.
+	if got, want := h.spawnBinding(lead, "playbook-explore:small"), claude("small"); got != want {
+		t.Fatalf("playbook-explore:small = %+v, want %+v", got, want)
 	}
 }
