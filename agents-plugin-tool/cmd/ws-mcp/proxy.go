@@ -97,7 +97,7 @@ type proxyHost struct {
 
 // userCommandsReadyWait bounds how long a hosted lead's connection waits for
 // the daemon's user commands to settle at its start.
-const userCommandsReadyWait = 5 * time.Second
+var userCommandsReadyWait = 5 * time.Second
 
 // userCommandsFor returns the user command lookup of one connection. A hosted
 // lead that connects while the daemon is still starting waits (bounded, and only
@@ -128,7 +128,8 @@ func (h *proxyHost) userCommandsFor(conversation string) func() mcp.UserCommandH
 			// have taken the runner's lock.
 			left := time.Until(deadline)
 			if left <= 0 {
-				return nil
+				// Spent: report whatever was bound meanwhile.
+				return h.userCommandsNow()
 			}
 			wait := time.NewTimer(left)
 			defer wait.Stop()

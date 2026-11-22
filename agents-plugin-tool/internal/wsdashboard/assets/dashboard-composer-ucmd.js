@@ -112,13 +112,14 @@
   // is older than the list on screen is dropped; one from another epoch or
   // worktree wins (the read is the page's own current view). A write's answer is
   // only a snapshot taken at the write: it applies only when it is the same
-  // epoch and worktree and not older than what is shown, and otherwise is
-  // dropped and one read fetches the current list instead (a delayed answer from
-  // a previous daemon never overwrites a newer one's list).
+  // epoch and worktree and not older than what is shown (so never when nothing is
+  // shown: a refused read cleared the strip), and otherwise is dropped and one
+  // read fetches the current list instead (a delayed answer from a previous
+  // daemon never overwrites a newer one's list).
   function ucmdApply(list, post) {
     if (typeof list.token === "string" && list.token && !cexecToken) cexecToken = list.token;
     var order = ucmdCompare(list.rev);
-    if (post ? (order === null && ucmdRev) || order === -1 : order === -1) {
+    if (post ? order !== 0 && order !== 1 : order === -1) {
       if (post) ucmdRefresh();
       return;
     }

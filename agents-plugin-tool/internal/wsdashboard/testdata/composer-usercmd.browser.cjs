@@ -215,6 +215,25 @@ async function agent(step, tag) {
       await view.waitForSelector('.ucmd[data-ucmd="w"]', { timeout: 10000 });
       assert.equal(await view.locator('.ucmd[data-ucmd="z"]').count(), 1, 'the next read caught up');
 
+      // a write answer held back while a read is refused for good (the strip is
+      // cleared and shows no revision): the answer is only a snapshot and must not
+      // bring the strip back; one read asks again instead
+      let heldC = null;
+      await page.route('**/user-commands/w/remove', async route => { heldC = { route, response: await route.fetch() }; });
+      await view.locator('.d-ucmd:not([hidden]) .ucmd[data-ucmd="w"] .ucmd-x').click();
+      for (let i = 0; i < 100 && !heldC; i++) await page.waitForTimeout(25);
+      assert.ok(heldC, 'the third removal reached the daemon');
+      await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.fulfill({ status: 404, body: 'unknown session' }) : route.continue());
+      await view.waitForSelector('.d-ucmd', { state: 'hidden', timeout: 10000 });
+      await page.waitForTimeout(400);
+      const getsBeforeDenied = gets.length;
+      await heldC.route.fulfill({ response: heldC.response });
+      await page.waitForTimeout(700);
+      assert.equal(await view.locator('.d-ucmd:not([hidden])').count(), 0, 'a write answer did not bring a cleared strip back');
+      assert.ok(gets.length > getsBeforeDenied, 'the dropped answer asked for one read');
+      await page.unroute('**/user-commands');
+      await page.unroute('**/user-commands/w/remove');
+
       // never in the shared transcript: the session page any other viewer gets
       // carries no command text
       const shared = await (await page.request.get(base + '/s/livesession?frame=1', { headers: { 'Sec-Fetch-Dest': 'iframe' } })).text();

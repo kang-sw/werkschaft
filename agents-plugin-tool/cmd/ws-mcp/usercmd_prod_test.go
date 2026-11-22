@@ -262,3 +262,38 @@ func TestHostedConnectionsNeverWaitInAccept(t *testing.T) {
 		}
 	}
 }
+
+// bindingAgents is the fixture's runner whose lead check binds the user commands
+// as a side effect, as the daemon's start does at any instant.
+type bindingAgents struct {
+	*wsagent.Runner
+	bind func()
+}
+
+func (a bindingAgents) ComposerOpen(id string) (uint64, error) {
+	gen, err := a.Runner.ComposerOpen(id)
+	a.bind()
+	return gen, err
+}
+
+// TestUserCommandsLookupReportsACommandsBoundWhileTheBudgetExpires: a lead's
+// discovery whose wait budget is already spent still reports the user commands
+// the daemon bound while it checked the lead, instead of an unavailable answer.
+func TestUserCommandsLookupReportsACommandsBoundWhileTheBudgetExpires(t *testing.T) {
+	f := newCallerBindingFixture(t)
+	u, err := openUserCommands(t.TempDir(), f.runner, nil, os.Stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = u.Close() })
+	f.host.userCmdsReady = make(chan struct{})
+	f.host.agents = bindingAgents{Runner: f.runner, bind: func() { f.host.userCmds.Store(u) }}
+	old := userCommandsReadyWait
+	userCommandsReadyWait = time.Nanosecond
+	t.Cleanup(func() { userCommandsReadyWait = old })
+	lookup := f.host.userCommandsFor(f.lead)
+	time.Sleep(5 * time.Millisecond)
+	if host := lookup(); host == nil {
+		t.Fatal("a store bound during the lead check was not reported once the budget was spent")
+	}
+}
