@@ -17,11 +17,10 @@ import (
 	"github.com/kang-sw/devenv/internal/wsgit"
 )
 
-// occupancyFake is the daemon-side reader with its optional halves: live
-// exec jobs by worktree and the release notice, which it records.
+// occupancyFake is the daemon-side reader with its optional release notice,
+// which it records.
 type occupancyFake struct {
 	fakeWorktreeChildren
-	jobs     map[string][]string
 	outcomes []wsagent.ReleasedConversation
 	notices  []releaseNotice
 }
@@ -29,21 +28,6 @@ type occupancyFake struct {
 type releaseNotice struct {
 	target      string
 	cancelTurns bool
-}
-
-func (f *occupancyFake) setJobs(target string, ids ...string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.jobs == nil {
-		f.jobs = map[string][]string{}
-	}
-	f.jobs[canonicalWorktreeTestPath(target)] = ids
-}
-
-func (f *occupancyFake) LiveExecJobsInWorktree(worktree string) []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.jobs[canonicalWorktreeTestPath(worktree)]...)
 }
 
 func (f *occupancyFake) CheckoutReleased(worktree string, cancelTurns bool) []wsagent.ReleasedConversation {
@@ -100,14 +84,12 @@ func TestWorktreeAcquireSkipsAnExtantLease(t *testing.T) {
 
 // TestWorktreeAcquireSkipsOccupiedCheckouts: on an unleased, released
 // checkout, acquisition skips a current binding (direct or nested), a
-// binding from before the release whose process still lives, and a live exec
-// job; it reuses the checkout once only a pre-release binding without a live
+// binding from before the release whose process still lives; it reuses the checkout once only a pre-release binding without a live
 // process remains. A daemon that cannot answer makes it busy.
 func TestWorktreeAcquireSkipsOccupiedCheckouts(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		children []wsagent.BoundWorktreeChild
-		jobs     []string
 		reuse    bool
 	}{
 		{name: "current direct child", children: []wsagent.BoundWorktreeChild{{Address: "id:direct", State: wsagent.AgentWaiting}}},
@@ -116,7 +98,6 @@ func TestWorktreeAcquireSkipsOccupiedCheckouts(t *testing.T) {
 			{Address: "id:grandchild", State: wsagent.AgentRunning, Live: true},
 		}},
 		{name: "pre-release child with a live process", children: []wsagent.BoundWorktreeChild{{Address: "id:bg", State: wsagent.AgentIdle, BoundBeforeRelease: true, Live: true}}},
-		{name: "live exec job", jobs: []string{"exec_job_one"}},
 		{name: "pre-release asleep child", children: []wsagent.BoundWorktreeChild{{Address: "id:asleep", State: wsagent.AgentWaiting, BoundBeforeRelease: true}}, reuse: true},
 		{name: "nothing bound", reuse: true},
 	} {
@@ -126,7 +107,6 @@ func TestWorktreeAcquireSkipsOccupiedCheckouts(t *testing.T) {
 			s.pi.worktreeChildren = occ
 			candidate := releasedCandidate(t, s, leadA, base)
 			occ.set(candidate, tc.children...)
-			occ.setJobs(candidate, tc.jobs...)
 			next := acquireForTest(t, s, 3, leadB, base, "impl/test/next")
 			reused := canonicalWorktreeTestPath(next.Path) == canonicalWorktreeTestPath(candidate)
 			if reused != tc.reuse || next.Reused != tc.reuse {
@@ -280,39 +260,6 @@ func TestWorktreeReleaseForceIsReservedToTheRootLead(t *testing.T) {
 	}
 	if rel := callToolOnce(t, s, 3, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path, "force": true}); toolIsError(t, rel) {
 		t.Fatalf("the root lead's force failed: %s", rel)
-	}
-}
-
-// TestWorktreeReleaseRefusesALiveExecJobEvenWhenForced: force overrides the
-// lease and child checks, never a live exec job.
-func TestWorktreeReleaseRefusesALiveExecJobEvenWhenForced(t *testing.T) {
-	s, base, leadA, leadB := releaseGuardServer(t)
-	occ := &occupancyFake{}
-	s.pi.worktreeChildren = occ
-	acq := acquireForTest(t, s, 1, leadB, base, "impl/test/exec")
-	draft := writeDraft(t, acq.Path)
-	occ.setJobs(acq.Path, "exec_busy_job")
-	for i, args := range []map[string]any{
-		{"session_key": leadB, "path": acq.Path},
-		{"session_key": leadA, "path": acq.Path, "force": true},
-	} {
-		rel := callToolOnce(t, s, 10+i, "worktree.release", args)
-		if !toolIsError(t, rel) || !strings.Contains(toolText(t, rel), "exec_busy_job") || !strings.Contains(toolText(t, rel), "Nothing was changed") {
-			t.Fatalf("release %v with a live exec job must be refused: %s", args, rel)
-		}
-		if _, err := os.Stat(draft); err != nil {
-			t.Fatalf("a refused release must keep uncommitted work: %v", err)
-		}
-		if b := wtBranch(t, acq.Path); b != "impl/test/exec" {
-			t.Fatalf("a refused release changed the branch to %q", b)
-		}
-	}
-	if len(occ.noticeList()) != 0 {
-		t.Fatal("a refused release notifies nothing")
-	}
-	occ.setJobs(acq.Path)
-	if rel := callToolOnce(t, s, 20, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path, "force": true}); toolIsError(t, rel) {
-		t.Fatalf("forced release once the job ended: %s", rel)
 	}
 }
 

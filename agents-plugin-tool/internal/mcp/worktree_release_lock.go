@@ -52,14 +52,13 @@ func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool
 		err = releaseHolderCheck(ctx, runner, target, *caller)
 	}
 	unlockPool()
-	// Check daemon-wide bound children and live exec jobs while still holding
-	// the exclusive per-worktree lock (and after releasing the pool lock so a
-	// forwarded query never stalls unrelated pool operations). Because
-	// agent.spawn takes a shared lock on this same file while registering its
-	// child, no spawn can slip in between this check and release hygiene.
-	// force skips the child check, never the exec-job check.
-	if err == nil && caller != nil && caller.CheckOccupancy != nil {
-		err = caller.CheckOccupancy(ctx, target, caller.Force)
+	// Check daemon-wide bound children while still holding the exclusive
+	// per-worktree lock (and after releasing the pool lock so a forwarded
+	// query never stalls unrelated pool operations). Because agent.spawn takes
+	// a shared lock on this same file while registering its child, no spawn
+	// can slip in between this check and release hygiene.
+	if err == nil && caller != nil && !caller.Force && caller.CheckChildren != nil {
+		err = caller.CheckChildren(ctx, target)
 	}
 	if err != nil {
 		unlock()

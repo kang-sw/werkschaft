@@ -143,15 +143,6 @@ func (r *Runner) boundConvs(target string) []*conv {
 	return out
 }
 
-// LiveExecJobsInWorktree lists the daemon's running exec jobs in worktree
-// (Options.LiveExecJobs); none without that option.
-func (r *Runner) LiveExecJobsInWorktree(worktree string) []string {
-	if r.opts.LiveExecJobs == nil {
-		return nil
-	}
-	return r.opts.LiveExecJobs(worktree)
-}
-
 // tellRefused tells from that conversation id's start was refused: by
 // checkout's release when checkout is set (Options.CheckoutReleased, falling
 // back to WakeRefused), else by admission (WakeRefused).

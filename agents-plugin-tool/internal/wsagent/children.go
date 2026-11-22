@@ -455,12 +455,7 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 		if children == nil {
 			children = []BoundWorktreeChild{}
 		}
-		jobs := r.LiveExecJobsInWorktree(body.Worktree)
-		if jobs == nil {
-			jobs = []string{}
-		}
-		// exec_jobs is additive: an older caller reads children only.
-		writeAnswer(w, http.StatusOK, map[string]any{"children": children, "exec_jobs": jobs}, nil)
+		writeAnswer(w, http.StatusOK, map[string]any{"children": children}, nil)
 		return
 	}
 	if op == "worktree.released" {

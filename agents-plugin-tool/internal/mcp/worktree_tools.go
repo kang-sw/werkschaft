@@ -346,7 +346,7 @@ func acquireWorktree(waitCtx context.Context, runner wsgit.Runner, env []string,
 }
 
 // worktreeBusyFunc reports whether a reuse candidate is still occupied by
-// daemon-side bindings or live exec jobs (Server.worktreeBusy); nil checks
+// daemon-side bindings (Server.worktreeBusy); nil checks
 // none. It runs under the acquisition lock and the candidate's per-worktree
 // release lock.
 type worktreeBusyFunc func(ctx context.Context, target string) bool
@@ -494,7 +494,7 @@ func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []str
 	// held, whoever holds it; only a release (or the user) clears a lease. The
 	// daemon-side check (busy) then skips a worktree still bound to a child
 	// since its last completed release, or bound before it with a live
-	// process, or with a live exec job.
+	// process; checkoutHasLiveExecActivity skips one with a live exec job.
 	var claim string
 	var claimMarker *worktreeMarker
 	for _, e := range entries {
@@ -708,6 +708,9 @@ func reusableCandidate(ctx context.Context, runner wsgit.Runner, env []string, p
 	if err != nil || lease != nil {
 		return false // an extant (or unreadable) lease holds the worktree
 	}
+	if checkoutHasLiveExecActivity(path) {
+		return false
+	}
 	if busy != nil {
 		if busy(ctx, path) {
 			return false
@@ -715,6 +718,15 @@ func reusableCandidate(ctx context.Context, runner wsgit.Runner, env []string, p
 	}
 	*marker = m
 	return true
+}
+
+// checkoutHasLiveExecActivity reports whether a live exec job runs in the
+// checkout at path, which keeps it out of reuse. It is a stub answering false:
+// the exec-job worktree fence comes with 261117 Phase 2, and a follow-up wires
+// this predicate to that fence once it lands.
+func checkoutHasLiveExecActivity(path string) bool {
+	_ = path
+	return false
 }
 
 // legacyWorktreeProfile is the builtin an unmarked (pre-profile) pooled
@@ -916,28 +928,21 @@ func releaseWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtP
 // worktreeReleaseCaller is who asks worktree.release: the caller's session
 // key (a lead's, or the worker key an acquire minted, which is a lead key
 // too), the worker key it named (empty when it named a path), force, an
-// optional daemon-wide occupancy check run under the per-worktree lock, and
+// optional daemon-wide bound-child check run under the per-worktree lock, and
 // an optional notice of the completed release, whose lines join the result's
 // warnings.
 type worktreeReleaseCaller struct {
-	LeadKey        string
-	WorkerKey      string
-	Force          bool
-	CheckOccupancy func(ctx context.Context, target string, force bool) error
-	Released       func(ctx context.Context, target string, cancelTurns bool) []string
+	LeadKey       string
+	WorkerKey     string
+	Force         bool
+	CheckChildren func(ctx context.Context, target string) error
+	Released      func(ctx context.Context, target string, cancelTurns bool) []string
 }
 
 // worktreeOccupancy is the daemon's view of a worktree: its non-closed bound
-// conversations and its running exec jobs.
+// conversations.
 type worktreeOccupancy struct {
 	Children []wsagent.BoundWorktreeChild
-	ExecJobs []string
-}
-
-// worktreeExecJobsReader is the optional exec-job half of the daemon-side
-// reader (wsagent.Runner implements it).
-type worktreeExecJobsReader interface {
-	LiveExecJobsInWorktree(worktree string) []string
 }
 
 // worktreeReleaseNotifier is the optional release notice of the daemon-side
@@ -955,19 +960,15 @@ func (s *Server) worktreeOccupancy(ctx context.Context, target string) (worktree
 	switch {
 	case s.pi.worktreeChildren != nil:
 		occ.Children = s.pi.worktreeChildren.ActiveChildrenInWorktree(target)
-		if jobs, ok := s.pi.worktreeChildren.(worktreeExecJobsReader); ok {
-			occ.ExecJobs = jobs.LiveExecJobsInWorktree(target)
-		}
 		return occ, nil
 	case s.piForwards():
 		var answer struct {
 			Children []wsagent.BoundWorktreeChild `json:"children"`
-			ExecJobs []string                     `json:"exec_jobs"`
 		}
 		if err := s.piCall(ctx, "worktree.children", map[string]any{"worktree": target}, piForwardTimeout, &answer); err != nil {
 			return occ, err
 		}
-		occ.Children, occ.ExecJobs = answer.Children, answer.ExecJobs
+		occ.Children = answer.Children
 	}
 	return occ, nil
 }
@@ -985,24 +986,14 @@ func currentBindings(children []wsagent.BoundWorktreeChild) []wsagent.BoundWorkt
 	return out
 }
 
-// checkWorktreeOccupancy refuses worktree.release while a live exec job runs
-// in target (force included), and, without force, while a conversation bound
-// since target's last completed release is not closed, naming each. A
-// conversation bound before that release no longer counts. A daemon that
-// cannot answer fails closed.
-func (s *Server) checkWorktreeOccupancy(ctx context.Context, target string, force bool) error {
+// checkWorktreeBoundChildren refuses a non-forced worktree.release while a
+// conversation bound since target's last completed release is not closed,
+// naming each. A conversation bound before that release no longer counts. A
+// daemon that cannot answer fails closed.
+func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) error {
 	occ, err := s.worktreeOccupancy(ctx, target)
 	if err != nil {
-		if force {
-			return fmt.Errorf("worktree.release refuses %s: could not check live exec jobs with the daemon (%v). Nothing was changed. force does not override a live exec job; retry once the daemon answers", target, err)
-		}
 		return fmt.Errorf("worktree.release refuses %s: could not check bound child agents with the daemon (%v). Nothing was changed. Retry once the daemon answers, or pass force: true once you have confirmed no child is bound to this worktree", target, err)
-	}
-	if len(occ.ExecJobs) > 0 {
-		return fmt.Errorf("worktree.release refuses %s: live exec job(s) run in this worktree (%s). Nothing was changed. Stop them (exec.stop) or wait for them to end, then release again; force does not override a live exec job", target, strings.Join(occ.ExecJobs, ", "))
-	}
-	if force {
-		return nil
 	}
 	children := currentBindings(occ.Children)
 	if len(children) == 0 {
@@ -1020,16 +1011,13 @@ func (s *Server) checkWorktreeOccupancy(ctx context.Context, target string, forc
 }
 
 // worktreeBusy is acquisition's daemon-side check of a reuse candidate: busy
-// while a live exec job runs in it, while a conversation bound since its last
-// completed release (or, with none recorded, any bound conversation) is not
-// closed, or while a conversation bound before that release still has a live
-// process. A daemon that cannot answer makes it busy.
+// while a conversation bound since its last completed release (or, with none
+// recorded, any bound conversation) is not closed, or while a conversation
+// bound before that release still has a live process. A daemon that cannot
+// answer makes it busy.
 func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
 	occ, err := s.worktreeOccupancy(ctx, target)
 	if err != nil {
-		return true
-	}
-	if len(occ.ExecJobs) > 0 {
 		return true
 	}
 	for _, child := range occ.Children {

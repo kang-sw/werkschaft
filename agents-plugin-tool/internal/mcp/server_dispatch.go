@@ -831,7 +831,7 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 				return toolTextResponse(req.ID, "", fmt.Errorf("worktree.release refuses force: only a root lead session (a lead key with no parent) may force a release; this key is a worker's or a child's. Nothing was changed. Release by identity, or ask the root lead"))
 			}
 		}
-		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckOccupancy: s.checkWorktreeOccupancy, Released: s.notifyWorktreeReleased}
+		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren, Released: s.notifyWorktreeReleased}
 		result, err := releaseWorktreeAs(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, lookup, caller)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)

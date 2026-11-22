@@ -537,7 +537,7 @@ func tools() []map[string]any {
 		},
 		{
 			"name":        "worktree.release",
-			"description": "Lead-only. Return a worktree to the pool by path or worker key: run pre_release hooks, reset --hard and clean -ffdx (discarding uncommitted and unpreserved ignored files), detach HEAD, record preserved size and remove its lease. Hook failure leaves it leased. Does not delete the worktree or retire the key. Refuses another holder's lease, a dirty unleased worktree, or child agents bound since its last release unless forced, and a live exec job even if forced. Agents bound before a release no longer launch, wake or resume there. Text by default; format=json for structured output.",
+			"description": "Lead-only. Return a worktree to the pool by path or worker key: run pre_release hooks, reset --hard and clean -ffdx (discarding uncommitted and unpreserved ignored files), detach HEAD, record preserved size and remove its lease. Hook failure leaves it leased. Does not delete the worktree or retire the key. Refuses another holder's lease, a dirty unleased worktree, or child agents bound since its last release unless forced. Agents bound before a release no longer launch, wake or resume there. Text by default; format=json for structured output.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
