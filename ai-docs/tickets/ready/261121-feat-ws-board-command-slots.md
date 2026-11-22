@@ -606,6 +606,90 @@ private card; the slot Run reuses the same admission (a fresh submission id per
 click, `retry` only for an unresolved attempt), the live authority check and
 the generation captured at the route.
 
+#### Edition (15ade9428) - 2026-11-22
+
+Round-2 review of the fixes above (FIX-FIRST: 3 Critical, 5 Important, 1
+Minor) plus three failures from the Windows host. Commits 4e84b388d, 2389cfcf2,
+2dd837ec0, 15ade9428. The frozen text and the Edition above are not edited;
+where they differ from what follows, this Edition governs.
+
+Replay (supersedes the admission bullet of the Edition above): a fresh
+submission is admitted only when the daemon can prove it was made after
+everything the daemon forgot. The page holds an admission token, the daemon
+instance's random epoch and the admission count the page last saw, and sends it
+with every fresh submission. A token of another epoch (a restart), a missing
+token, or one older than the fence's eviction horizon (the count at the newest
+id the fence evicted) is refused as "outcome unknown": nothing runs, the
+response carries the current token, the draft stays, and a deliberate rerun is
+a new submission id with that token. So the unchanged original request replayed
+after a restart, or after the 4096-id fence forgot its id, never launches; the
+restart test that expected it to launch again was replaced. The token reaches
+the page on its private list read at load (and from every submit response)
+instead of being rendered into the template, because a rendered page can be
+served from a cache while the count part must be current; a fresh submission
+that finds no token reads the list first. A retry still never launches.
+
+Conversion (C2): neither the live nor the stored job owes a notice until the id
+is published. While `OnConvert` runs the stored snapshot carries no Notify and
+no pending notice (a daemon lost in that interval restores a job that owes
+none); after it returns the conversion and the notice are stored once.
+`OnConvert` now returns an error: a refused passive hand-off is logged and the
+ordinary notice, which carries the id, is the single delivery. Tested at the
+stored rows, with the job ending inside the publication, for success and
+refusal.
+
+Shutdown (C3): composer state (channels, periods, epoch, maps) is built before
+the service is stored; admission counts its worker in the wait group under the
+lock that sets `closing`, so Close never waits past a request it accepted and
+no Add follows the Wait; an arriving request is refused with 503. A launch that
+meets a closed drain starts no holder. Tested with an admitted request held
+across Close and with a burst racing Close under the race detector.
+
+Client and body (I1, I2): the server decodes the body strictly and refuses any
+field other than the submission id, text, retry flag and token, naming
+attachments. The browser test now covers refusal followed by a regular send:
+the same draft, made an ordinary message, carries its pick once and a second
+click sends nothing. An acknowledgement clears the draft only while it is still
+the acknowledged revision (only plain appends at the very end of the draft keep
+it so), so a replacement that begins with the submitted text and the same text
+typed again are left whole, and an append made meanwhile is kept.
+
+Settlement (I3): a wake arms the settle timer only when it is not armed, so a
+stream of conversions never postpones a due tick, and each settlement trims
+finished cards over the 64-card bound. Tested with a continuous wake stream and
+with a burst that goes idle above the bound.
+
+Artifact reading (I4): the receipt of a file result says how to read it: the ws
+fs read tool by lines (offset and limit count lines; a line over 512 bytes is
+cut), or by byte range through exec (`head -c`, `tail -c`, `tail -c +START`)
+for long or single-line output. The real `fsRead` test stays. Reading the path
+in a live hosted session through its real harness and permission context is
+lead acceptance after the merge; it was not exercised here.
+
+Downgrade cycle (I5), correcting the Edition above: the artifact's new -> old
+-> new cycle was not run with an old binary. The wording "verified new -> old
+-> new" for the output directory rests on source evidence only, agreed with the
+lead: at 02147864c `cmd/ws-mcp/exec_hosted.go` (lines 18-19 and 58-71) opens
+only `exec-jobs.db` and `exec-exits`, and the head writes the independent
+`composer-exec` directory, so an older daemon has no reference to it. The
+runtime evidence is `TestComposerArtifactSurvivesDaemonReplacement` (a new
+daemon after a new daemon on the same state directory) and the job rows'
+existing `TestHostedExecSurvivesAnOldDaemonAndReopens`.
+
+Minor: the card's replacement note names both substitutions (invalid UTF-8 as
+U+FFFD, NUL as U+2400) in all ten languages, as the receipt does.
+
+Windows host findings against efef5eef2, fixed: retention sweeps are serialized
+by a mutex and a failed remove whose file is gone or delete-pending (access
+denied on Windows) counts as removed, so a lost remove race no longer deletes a
+newer file (`TestComposerPruneSweepsRaceWithoutOverDeleting` kept as is); the
+0o600 mode assertion is gated to non-Windows (Windows reports 0666); and the
+composer shell test has a sibling, `TestComposerExecSelectsItsShellThroughShellArgv`,
+that runs portable lines through the shell `execjob.ShellArgv` picks (Git Bash
+on Windows) and skips only where exec.shell has no shell. Its Windows run is
+lead-owned and pending; here it ran against bash and `GOOS=windows go vet` of
+the touched packages is clean.
+
 ### Phase 2: Command slots
 
 Depends on Phase 1 (the route, launch binding, passive hand-off, output file
