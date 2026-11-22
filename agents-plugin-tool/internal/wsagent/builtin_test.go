@@ -160,6 +160,11 @@ func TestBuiltinPiMiniLeadProfileResolves(t *testing.T) {
 	if !slices.Equal(p.WSTools, want) {
 		t.Fatalf("mini-lead ws_tools = %v, want %v", p.WSTools, want)
 	}
+	// path.generate(kind: "report") is allocation only; the mini-lead keeps no
+	// path.write and gains no write authority from the new kind.
+	if !slices.Contains(p.WSTools, "path.generate") || slices.Contains(p.WSTools, "path.write") {
+		t.Fatalf("mini-lead must allocate but not write generated paths: %v", p.WSTools)
+	}
 }
 
 // TestBuiltinLeadProfilesResolve: each harness has a builtin lead profile

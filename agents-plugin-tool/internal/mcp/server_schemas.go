@@ -1168,7 +1168,7 @@ func tools() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"kind":  enumStringProperty(`Generated path kind. "review" and "prompt" allocate cache artifacts; "plan" allocates a repo-local implementation plan under ai-docs/.plans/; "clone" allocates a worktree-agnostic shared doc under the clone's SharedDir (readable "<stem>-<suffix>.md" filename), for the note.write clone-layer oversize nudge.`, []string{"review", "prompt", "plan", "clone"}),
+					"kind":  enumStringProperty(`Generated path kind. "review", "report" and "prompt" allocate cache artifacts ("report" is for standalone reports and analyses, in its own directory; an older server refuses it, so check this enum first); "plan" allocates a repo-local implementation plan under ai-docs/.plans/; "clone" allocates a worktree-agnostic shared doc under the clone's SharedDir (readable "<stem>-<suffix>.md" filename), for the note.write clone-layer oversize nudge.`, []string{"review", "report", "prompt", "plan", "clone"}),
 					"stems": stringArrayProperty("Logical file stems to allocate in stable order."),
 				},
 				"required": []string{"kind", "stems"},

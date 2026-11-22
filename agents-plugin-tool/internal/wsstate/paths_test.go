@@ -39,6 +39,7 @@ func TestEnsureCreatesStableProjectAndWorktreeLayout(t *testing.T) {
 		layout.LocksDir,
 		layout.AgentsDir,
 		layout.ReviewDir,
+		layout.ReportDir,
 		layout.SessionsDir,
 		layout.WorktreeLocksDir,
 		layout.TmpDir,

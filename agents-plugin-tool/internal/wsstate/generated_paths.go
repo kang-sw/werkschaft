@@ -128,6 +128,8 @@ func generatedPathTarget(layout Layout, kind string) (dir string, ext string, er
 	switch kind {
 	case "review":
 		return layout.ReviewDir, ".md", nil
+	case "report":
+		return layout.ReportDir, ".md", nil
 	case "prompt":
 		return layout.PromptDir, ".md", nil
 	case "clone":

@@ -13,7 +13,9 @@ import (
 // generatedPathWrites records cache-artifact capabilities minted by
 // path.generate. Repository-local plan paths and clone-shared documents are
 // deliberately excluded: path.write exists only for sandbox-independent
-// review/prompt handoffs.
+// review/report/prompt handoffs. Allocation (path.generate) and write
+// authority (path.write) stay separate: a report grant is usable only by a
+// caller whose profile already carries path.write.
 type generatedPathWrites struct {
 	mu    sync.RWMutex
 	paths map[string]map[string]*generatedPathGrant
@@ -41,7 +43,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 	}
 	eligible := make([]wsstate.GeneratedPath, 0, len(generated))
 	for _, item := range generated {
-		if item.Kind != "review" && item.Kind != "prompt" {
+		if item.Kind != "review" && item.Kind != "report" && item.Kind != "prompt" {
 			continue
 		}
 		eligible = append(eligible, item)
