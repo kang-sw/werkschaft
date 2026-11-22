@@ -498,6 +498,26 @@ audit fields):
   line's own events keep their positions, because they are always rebuilt
   from the line (`TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone`).
 
+#### Edition (630ee328f) - 2026-11-22
+
+Third pre-merge review fixes, one commit each:
+
+- 0fbb2ee39 (Decision 5): the recovery rule is judged by the source record
+  that yields an event (its seq, or a tee line's anchor), not by the
+  event's identity. A keyed event, such as a carried assembly or a Codex
+  call, whose record is at or below the finalized boundary and is not
+  retained is recorded as loss. It is never appended late, which would put
+  it after its result or a cut with a fresh seq. The end flush is
+  positioned at the last kept line mapped. `TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone`
+  now expects the failed carried tool call recorded as loss at
+  `asm.<seq>#1`.
+- 4f3707582: an id-less Codex item's result takes slot 1, apart from its
+  unkeyed call (`TestAuditCodexItemWithoutAnIDKeepsCallAndResultApart`).
+- 630ee328f: a detach that overflows alone, while its connection's attach
+  still sits in the queue, is applied once the queue drains. It never runs
+  before that attach, so the ended connection is not left live
+  (`TestAuditOverflowedDetachFollowsItsQueuedAttach`).
+
 ### Phase 2: Codex adapter
 
 Depends on Phase 1. Map the Codex app-server stream onto the envelope,
@@ -571,6 +591,17 @@ result stays the completion's ordinal 0. Before, the result shifted to
 as two losses. A live call whose append failed is appended on replay,
 because keyed identities fall outside the boundary rule, as carried
 assemblies do (`TestAuditCodexReplayAfterTheStartedItemWrapped`).
+
+#### Edition (0fbb2ee39) - 2026-11-22
+
+Correction to the Edition above: a live call whose append failed is not
+appended on replay. The recovery rule now holds keyed identities to the
+place of the record that yields them, so at or below the finalized
+boundary the call is recorded as loss
+(`TestAuditCodexFailedCallIsNeverAppendedAfterTheCut`: a failed call, its
+retained result, and a compaction cut, replayed with and without
+`item/started`). An item without an id keeps the call at its record's
+slot 0, and its result takes slot 1 (4f3707582).
 
 ### Phase 3: agy adapter
 
