@@ -92,17 +92,23 @@ const [base, emptyBase] = process.argv.slice(2);
     await openSettings();
     await page.locator('#glang').selectOption('ko');
     assert.equal((await context.cookies()).find(c => c.name === 'ws_dashboard_lang').value, 'ko');
-    // No hidden live frame holds the reload: its draft was saved before
-    // teardown and returns in a fresh session document.
-    await page.locator('html[data-lang="ko"]').waitFor();
-    assert.equal(await page.locator('iframe.sframe').count(), 1);
+    // A cached hidden session frame (cd1c99614) still holds the stored draft,
+    // so the language reload waits (0bc7fcf24): the shell toasts instead of
+    // reloading, keeps the page language and the draft, and applies ko on the
+    // user's own reload.
+    await page.locator('#wstoasts .wstoast', { hasText: 'The language changed. Reload to apply it.' }).waitFor();
+    assert.equal(await page.locator('html').getAttribute('data-lang'), 'en', 'the held reload leaves the page language unchanged');
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
     await page.locator('.rl[href="/s/livesession"]').click();
     await current().locator(editor).waitFor();
-    assert.equal(await current().locator('#ctext').inputValue(), 'Preserve this stored draft');
-    await current().locator(editor).fill('');
+    assert.equal(await current().locator('#ctext').inputValue(), 'Preserve this stored draft', 'the draft survives the held language change');
     await page.reload();
     await current().locator('#grid[data-layout="tabs"]').waitFor();
     assert.equal(await page.locator('html').getAttribute('data-lang'), 'ko');
+    await current().locator(editor).waitFor();
+    await page.waitForFunction(() => document.querySelector('.sframe.on')?.contentDocument?.getElementById('ctext')?.value === 'Preserve this stored draft');
+    await current().locator(editor).fill('');
     await openSettings();
     assert.equal(await gear.getAttribute('aria-label'), '설정');
     assert.equal(await page.locator('#glang').inputValue(), 'ko');
@@ -178,6 +184,9 @@ const [base, emptyBase] = process.argv.slice(2);
       await tab.locator('#gear').click();
       await tab.locator('#gmenu [data-layout="tabs"]').click();
       await tab.locator('#gmenu [data-input="mod"]').click();
+      // The frame is torn down after the switch's own transition, not within
+      // the click that starts it.
+      for (let i = 0; i < 100 && !previous.isDetached(); i++) await tab.waitForTimeout(50);
       assert.equal(previous.isDetached(), true, 'session switch destroys the previous iframe');
       assert.equal(await tab.locator('iframe.sframe').count(), 1);
       await tab.keyboard.press('Escape');
@@ -207,6 +216,9 @@ const [base, emptyBase] = process.argv.slice(2);
       await tab.locator('#gmenu [data-input="enter"]').click();
       await fresh.locator('#grid[data-layout="split"]').waitFor();
       await tab.keyboard.press('Escape');
+      // The frame learns the mode change asynchronously; Enter before its
+      // placeholder flips still means "add a line" and never sends.
+      await fresh.waitForFunction(() => document.getElementById('ctext').placeholder === window.wsT('js.hint.enter'));
       await box.fill('Enter sends again');
       const sentAgain = tab.waitForResponse(r => new URL(r.url()).pathname === '/s/livesession/message');
       await box.press('Enter'); await sentAgain;
