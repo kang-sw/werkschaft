@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -416,7 +417,7 @@ func TestWorktreeReleaseBoundaryMixedVersions(t *testing.T) {
 	if err := json.Unmarshal([]byte(toolText(t, resp)), &res); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(res.Warnings, "\n"), "older than this ws-mcp") {
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "predates release notices") {
 		t.Fatalf("an old daemon's missing notice route must be a warning: %v", res.Warnings)
 	}
 	if _, ok, err := wsgit.WorktreeReleasedAt(again.Path); err != nil || !ok {
@@ -496,20 +497,27 @@ func TestWorktreeReleaseNotifiesAfterTheMarkerUnderTheLock(t *testing.T) {
 	}
 }
 
-// TestWorktreeForcedReleaseAgainstAnOldDaemonWithABoundChild: an older daemon
-// has no worktree.released route. A root lead's forced release with a child
-// still bound completes and records its boundary, and the warning says
-// plainly that the daemon is older, the earlier bindings were not ended (nor
-// their turns cancelled), and a daemon restart applies the boundary.
-func TestWorktreeForcedReleaseAgainstAnOldDaemonWithABoundChild(t *testing.T) {
+// TestWorktreeReleaseAgainstAnOldDaemon: an older daemon has no
+// worktree.released route, so it would keep running the bindings a release
+// ends. With a live child bound, even a root lead's forced release is refused
+// before it changes anything (lease, uncommitted work, branch and marker all
+// stay), naming the daemon swap. With nothing live bound the release
+// completes, records its boundary, and warns.
+func TestWorktreeReleaseAgainstAnOldDaemon(t *testing.T) {
 	sLead, root, base, leadKey := worktreeListServer(t)
 	acq := acquireForTest(t, sLead, 1, leadKey, base, "impl/test/old-daemon")
+	draft := writeDraft(t, acq.Path)
+	var mu sync.Mutex
+	children := []any{map[string]any{"address": "id:bound01", "state": wsagent.AgentRunning}}
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case wsagent.RoutePrefix + "/by-token/worktree.children":
-			// An old daemon's answer: no release flags, one running child.
+			// An old daemon's answer: no release flags.
+			mu.Lock()
+			list := children
+			mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"children": []any{map[string]any{"address": "id:bound01", "state": wsagent.AgentRunning}}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"children": list})
 		default:
 			// Its token route answers an unknown op like this.
 			http.Error(w, "unknown agent route", http.StatusNotFound)
@@ -519,24 +527,111 @@ func TestWorktreeForcedReleaseAgainstAnOldDaemonWithABoundChild(t *testing.T) {
 	worker := NewServerWithOptions(ServerOptions{Root: root, Version: "test", Env: append(sLead.environ(), wsagent.EnvPiToken+"=tok", wsagent.EnvPiEndpoint+"="+daemon.URL)})
 	defer worker.Close()
 
-	resp := callToolOnce(t, worker, 2, "worktree.release", map[string]any{"session_key": leadKey, "path": acq.Path, "force": true, "format": "json"})
+	resp := callToolOnce(t, worker, 2, "worktree.release", map[string]any{"session_key": leadKey, "path": acq.Path, "force": true})
+	if !toolIsError(t, resp) {
+		t.Fatalf("a forced release with a live child against an old daemon must be refused: %s", resp)
+	}
+	for _, want := range []string{"predates release notices", "Nothing was changed", "Swap the daemon"} {
+		if !strings.Contains(toolText(t, resp), want) {
+			t.Fatalf("refusal lacks %q: %s", want, toolText(t, resp))
+		}
+	}
+	if _, err := os.Stat(draft); err != nil {
+		t.Fatalf("a refused release keeps uncommitted work: %v", err)
+	}
+	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease == nil {
+		t.Fatalf("a refused release keeps the lease: %+v err=%v", lease, err)
+	}
+	if b := wtBranch(t, acq.Path); b == "HEAD" {
+		t.Fatal("a refused release must not detach the worktree")
+	}
+	if _, ok, err := wsgit.WorktreeReleasedAt(acq.Path); err != nil || ok {
+		t.Fatalf("a refused release records no boundary: ok=%v err=%v", ok, err)
+	}
+
+	// Nothing live bound: the release proceeds, with the warning.
+	mu.Lock()
+	children = []any{}
+	mu.Unlock()
+	resp = callToolOnce(t, worker, 3, "worktree.release", map[string]any{"session_key": leadKey, "path": acq.Path, "force": true, "format": "json"})
 	if toolIsError(t, resp) {
-		t.Fatalf("a forced release against an old daemon must complete: %s", resp)
+		t.Fatalf("a release with nothing live bound must complete against an old daemon: %s", resp)
 	}
 	var res worktreeReleaseResult
 	if err := json.Unmarshal([]byte(toolText(t, resp)), &res); err != nil {
 		t.Fatal(err)
 	}
 	warnings := strings.Join(res.Warnings, "\n")
-	for _, want := range []string{"older than this ws-mcp", "did not end the bindings", "Restarting the daemon applies the release boundary", "running turns were not cancelled"} {
+	for _, want := range []string{"predates release notices", "no live agent was bound here", "running turns were not cancelled"} {
 		if !strings.Contains(warnings, want) {
 			t.Fatalf("old-daemon warning lacks %q: %v", want, res.Warnings)
 		}
 	}
 	if _, ok, err := wsgit.WorktreeReleasedAt(acq.Path); err != nil || !ok {
-		t.Fatalf("the boundary is recorded regardless of the daemon: ok=%v err=%v", ok, err)
+		t.Fatalf("the boundary is recorded: ok=%v err=%v", ok, err)
 	}
 	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease != nil {
 		t.Fatalf("the release completed and removed the lease: %+v err=%v", lease, err)
+	}
+}
+
+// TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays: a release
+// whose lease removal fails after its boundary was recorded and the daemon
+// told says what did complete, keeps the lease (so acquisition does not hand
+// the worktree out), and a second release finishes it.
+func TestWorktreeReleaseReportsAPartialReleaseWhenTheLeaseStays(t *testing.T) {
+	s, base, leadA, _ := releaseGuardServer(t)
+	occ := &occupancyFake{}
+	s.pi.worktreeChildren = occ
+	acq := acquireForTest(t, s, 1, leadA, base, "impl/test/lease-stays")
+	restore := removeReleasedWorktreeLease
+	removeReleasedWorktreeLease = func(context.Context, wsgit.Runner, string) error { return errors.New("lease store read-only") }
+	defer func() { removeReleasedWorktreeLease = restore }()
+	rel := callToolOnce(t, s, 2, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path})
+	if !toolIsError(t, rel) {
+		t.Fatalf("a release that kept its lease must not report success: %s", rel)
+	}
+	for _, want := range []string{"partly released", "release boundary is recorded", "agents bound here before it are ended", "lease store read-only", "release it again"} {
+		if !strings.Contains(toolText(t, rel), want) {
+			t.Fatalf("partial release report lacks %q: %s", want, toolText(t, rel))
+		}
+	}
+	if _, ok, err := wsgit.WorktreeReleasedAt(acq.Path); err != nil || !ok {
+		t.Fatalf("the boundary stays recorded: ok=%v err=%v", ok, err)
+	}
+	if got := occ.noticeList(); len(got) != 1 {
+		t.Fatalf("the daemon was told before the lease step: %+v", got)
+	}
+	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease == nil {
+		t.Fatalf("the lease stays: %+v err=%v", lease, err)
+	}
+	removeReleasedWorktreeLease = restore
+	if rel := callToolOnce(t, s, 3, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path}); toolIsError(t, rel) {
+		t.Fatalf("releasing again removes the lease: %s", rel)
+	}
+	if lease, err := readWorktreeLease(context.Background(), wsgit.ExecRunner{}, acq.Path); err != nil || lease != nil {
+		t.Fatalf("the second release removed the lease: %+v err=%v", lease, err)
+	}
+}
+
+// TestWorktreeReleaseWarnsWhenNoDaemonHearsOfIt: a server whose daemon-side
+// reader takes no release notice, or that has no daemon at all, completes the
+// release and warns that no daemon was told.
+func TestWorktreeReleaseWarnsWhenNoDaemonHearsOfIt(t *testing.T) {
+	s, base, leadA, _ := releaseGuardServer(t)
+	for i, reader := range []WorktreeChildrenReader{&fakeWorktreeChildren{}, nil} {
+		s.pi.worktreeChildren = reader
+		acq := acquireForTest(t, s, 10+2*i, leadA, base, fmt.Sprintf("impl/test/unheard-%d", i))
+		resp := callToolOnce(t, s, 11+2*i, "worktree.release", map[string]any{"session_key": leadA, "path": acq.Path, "format": "json"})
+		if toolIsError(t, resp) {
+			t.Fatalf("release failed: %s", resp)
+		}
+		var res worktreeReleaseResult
+		if err := json.Unmarshal([]byte(toolText(t, resp)), &res); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(res.Warnings, "\n"), "no ws daemon was told about this release") {
+			t.Fatalf("reader %d: a release no daemon heard of must warn: %v", i, res.Warnings)
+		}
 	}
 }
