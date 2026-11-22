@@ -96,6 +96,26 @@ var parallelMCP = map[string]bool{
 	"todo.list": true, "todo.read": true, "mailbox.recipients": true,
 }
 
+// execLaunchTools are the ws tools that start or feed a process. A read-only
+// worker is not offered them and a call to one is refused: the daemon
+// approves a hosted worker's exec calls whatever its authority, so the
+// authority is held here (the generic gap is the exec-tools ticket's).
+var execLaunchTools = []string{"exec.shell", "exec.run", "exec.spawn", "exec.write"}
+
+// execLaunchRefusal answers a read-only worker's call to an exec launch tool.
+const execLaunchRefusal = "Error: this session is read-only: it may not run commands. Read files with the file tools instead."
+
+// launchesProcess reports whether a model-side tool name is an exec launch
+// tool.
+func launchesProcess(modelName string) bool {
+	for _, n := range execLaunchTools {
+		if ModelToolName(n) == modelName {
+			return true
+		}
+	}
+	return false
+}
+
 type toolEntry struct {
 	local *Tool
 	// ws is the daemon-side name of a ws tool.
@@ -643,7 +663,11 @@ func (a *Agent) instructions() string {
 	case AuthorityFull:
 		b.WriteString("Your authority is full. ")
 	}
-	b.WriteString("Run shell commands with the ws exec tools (exec_shell, exec_run); read and change files with the file tools.")
+	if a.cfg.Authority == AuthorityReadOnly {
+		b.WriteString("You have no shell: read and search files with the file tools.")
+	} else {
+		b.WriteString("Run shell commands with the ws exec tools (exec_shell, exec_run); read and change files with the file tools.")
+	}
 	if t := strings.TrimSpace(a.cfg.Instructions); t != "" {
 		b.WriteString("\n\n")
 		b.WriteString(t)
@@ -677,6 +701,9 @@ func (a *Agent) loadTools(ctx context.Context) error {
 		for _, mt := range listed {
 			name := ModelToolName(mt.Name)
 			if _, dup := tools[name]; dup || name == "" {
+				continue
+			}
+			if a.cfg.Authority == AuthorityReadOnly && launchesProcess(name) {
 				continue
 			}
 			tools[name] = toolEntry{ws: mt.Name, readOnly: parallelMCP[mt.Name]}
@@ -775,6 +802,9 @@ func (a *Agent) runCall(ctx context.Context, turn int, response string, tools ma
 
 // invoke runs the tool a call names and returns the text the model sees.
 func (a *Agent) invoke(ctx context.Context, tools map[string]toolEntry, c functionCall) (string, bool) {
+	if a.cfg.Authority == AuthorityReadOnly && launchesProcess(c.Name) {
+		return execLaunchRefusal, true
+	}
 	e, ok := tools[c.Name]
 	if !ok {
 		return "Error: unknown tool " + c.Name, true
