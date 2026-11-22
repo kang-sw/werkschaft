@@ -69,6 +69,7 @@ function decodePNG(buf) {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: c.colorScheme });
       if (c.cookie) await context.addCookies([{ name: 'ws_dashboard_theme', value: c.cookie, url: base }]);
       const tab = await context.newPage();
+      const cdp = await context.newCDPSession(tab);
       const errors = [];
       tab.on('pageerror', e => errors.push(e.message));
       let releaseCSS, sawCSS;
@@ -88,7 +89,8 @@ function decodePNG(buf) {
         const top = document.querySelector('.dwrap > .top')?.getBoundingClientRect();
         const frame = document.querySelector('iframe.sframe.on')?.getBoundingClientRect();
         const left = Math.ceil((rail && rail.width > 0 ? rail.right : 0) + 12);
-        const minY = Math.ceil((top ? top.bottom : 0) + 12);
+        // .top floating pills cast a drop shadow several pixels below .top.bottom.
+        const minY = Math.ceil((top ? top.bottom : 0) + 28);
         return {
           left: Math.max(left, Math.ceil(frame?.left || 0)),
           top: Math.max(minY, Math.ceil(frame?.top || 0)),
@@ -96,8 +98,12 @@ function decodePNG(buf) {
           bottom: Math.floor((frame?.bottom || window.innerHeight) - 8)
         };
       });
-      const pngBuf = await tab.screenshot(shots ? { path: path.join(shots, `first-paint-${c.name}.png`) } : undefined);
+      const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
+      const pngBuf = Buffer.from(data, 'base64');
+      if (shots) fs.writeFileSync(path.join(shots, `first-paint-${c.name}.png`), pngBuf);
       const img = decodePNG(pngBuf);
+      assert.equal(img.width, 1280, `${c.name}: expected 1280px capture width`);
+      assert.equal(img.height, 800, `${c.name}: expected 800px capture height`);
       let whiteCount = 0, total = 0, mismatchCount = 0;
       for (let y = box.top; y < box.bottom; y += 4) {
         for (let x = box.left; x < box.right; x += 4) {
