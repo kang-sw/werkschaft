@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
 )
@@ -694,13 +695,8 @@ func (s *Store) loseLocked(info *sessionInfo, id wsaudit.SourceID, reason string
 	if !r.markLost(id) {
 		return
 	}
-	r.led.mu.Lock()
-	forgot := r.led.forgot
-	r.led.forgot = 0
-	r.led.mu.Unlock()
-	if forgot > 0 {
-		s.logf("session %s: lost-identity list over %d bytes; %d lost identities forgotten (a replay of one after its loss line is gone may count again)", info.dir, lostBudget, forgot)
-	}
+	s.noteLedgerTrims(info)
+	reason = truncateUTF8(reason, maxReasonBytes)
 	r.led.mu.Lock()
 	n := r.led.loss
 	r.led.mu.Unlock()
@@ -708,6 +704,33 @@ func (s *Store) loseLocked(info *sessionInfo, id wsaudit.SourceID, reason string
 		r.pendingLoss = append(r.pendingLoss, ln)
 		s.dirty[info] = struct{}{}
 	}
+}
+
+// noteLedgerTrims logs what bounding the ring's header state dropped since
+// the store last looked. info.mu is held.
+func (s *Store) noteLedgerTrims(info *sessionInfo) {
+	l := info.ring.led
+	l.mu.Lock()
+	forgot, dropped := l.forgot, l.dropped
+	l.forgot, l.dropped = 0, 0
+	l.mu.Unlock()
+	if forgot > 0 {
+		s.logf("session %s: lost-identity list over %d bytes; %d lost identities forgotten (a replay of one after its loss line is gone may count again)", info.dir, lostBudget, forgot)
+	}
+	if dropped > 0 {
+		s.logf("session %s: source state over %d bytes; the %d least recently finalized sources dropped (their replays are no longer refused as finalized)", info.dir, sourceBudget, dropped)
+	}
+}
+
+// truncateUTF8 cuts s to at most n bytes on a rune boundary.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 func (s *Store) recordLoss(session string, id wsaudit.SourceID, reason string) {
@@ -739,6 +762,7 @@ func (s *Store) finalize(session, source string, boundary uint64) {
 	if r.readOnly != nil || !r.finalize(source, boundary) {
 		return
 	}
+	s.noteLedgerTrims(info)
 	r.pendingFin[source] = boundary
 	s.dirty[info] = struct{}{}
 	// A ring holding only control lines is still in use.

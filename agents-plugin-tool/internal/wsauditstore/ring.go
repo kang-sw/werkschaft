@@ -97,6 +97,16 @@ type headerState struct {
 // fit is forgotten (see ledger.fold).
 const lostBudget = 32 << 10
 
+// sourceBudget bounds the encoded size of a header's per-source maps
+// (Boundaries and LostFloor); past it the least recently finalized sources
+// are dropped (see ledger.boundSources). With lostBudget and room for the
+// session ID and scalars it keeps every header within HeaderBound.
+const sourceBudget = int(HeaderBound) - lostBudget - 4<<10
+
+// maxReasonBytes bounds a loss line's reason; a longer one is cut on a rune
+// boundary, so a loss line always fits a segment beside its header.
+const maxReasonBytes = 256
+
 type segment struct {
 	seq    uint64
 	size   int64
@@ -126,6 +136,12 @@ type ledger struct {
 	// forgot counts lost identities dropped from lost because folding could
 	// not bound it, for the writer's log.
 	forgot int
+	// recency orders sources by their latest finalize (higher is more
+	// recent; header-seeded sources start at 0), so bounding the source maps
+	// drops the stalest first. dropped counts sources dropped, for the log.
+	recency map[string]uint64
+	tick    uint64
+	dropped int
 }
 
 func newLedger() *ledger {
@@ -134,6 +150,59 @@ func newLedger() *ledger {
 		retained: map[wsaudit.SourceID]struct{}{},
 		lost:     map[wsaudit.SourceID]int{},
 		floor:    map[string]uint64{},
+		recency:  map[string]uint64{},
+	}
+}
+
+// sourceCost is the encoded bytes src takes in a header's two source maps,
+// with room for the largest values.
+func sourceCost(src string) int {
+	return 2 * (encodedLen(src) + len(`"":18446744073709551615,`))
+}
+
+// boundSources keeps the header's per-source maps within sourceBudget,
+// dropping the least recently finalized sources (their boundary, floor and
+// lost identities) down to three quarters of it. A dropped source's replay
+// is no longer refused as finalized: the store may then append a record it
+// already finalized, never drop one. l.mu is held.
+func (l *ledger) boundSources() {
+	srcs := make([]string, 0, len(l.bounds)+len(l.floor))
+	seen := map[string]bool{}
+	total := 0
+	for _, m := range []map[string]uint64{l.bounds, l.floor} {
+		for src := range m {
+			if !seen[src] {
+				seen[src] = true
+				srcs = append(srcs, src)
+				total += sourceCost(src)
+			}
+		}
+	}
+	if total <= sourceBudget {
+		return
+	}
+	sort.Slice(srcs, func(i, j int) bool {
+		if l.recency[srcs[i]] != l.recency[srcs[j]] {
+			return l.recency[srcs[i]] < l.recency[srcs[j]]
+		}
+		return srcs[i] < srcs[j]
+	})
+	drop := map[string]bool{}
+	for _, src := range srcs {
+		if total <= sourceBudget*3/4 {
+			break
+		}
+		drop[src] = true
+		total -= sourceCost(src)
+		delete(l.bounds, src)
+		delete(l.floor, src)
+		delete(l.recency, src)
+		l.dropped++
+	}
+	for id := range l.lost {
+		if drop[id.Source] {
+			l.dropLost(id)
+		}
 	}
 }
 
@@ -616,6 +685,7 @@ func (r *ring) seed(st *headerState) {
 	for _, id := range st.Lost {
 		l.addLost(id)
 	}
+	l.boundSources()
 	l.mu.Unlock()
 	if t, err := time.Parse(time.RFC3339Nano, st.LastSeen); err == nil && t.After(r.lastSeen) {
 		r.lastSeen = t
@@ -720,7 +790,13 @@ func (r *ring) finalize(source string, b uint64) bool {
 	if b <= l.bounds[source] {
 		return false
 	}
+	_, known := l.bounds[source]
 	l.bounds[source] = b
+	l.tick++
+	l.recency[source] = l.tick
+	if !known {
+		l.boundSources()
+	}
 	return true
 }
 
@@ -821,7 +897,8 @@ func encodeLine(ln line) ([]byte, error) {
 // writeBounded writes payload (whole lines) in chunks small enough that no
 // single write — a rotation's header line included — exceeds segBytes, so a
 // burst of queued control lines never makes a segment or the ring outgrow
-// its bound. A record line alone always fits (Limits.Validate).
+// its bound. Every line fits (a record by Limits.Validate, a header by its
+// budgets, a loss line by maxReasonBytes); one that does not is refused.
 func (r *ring) writeBounded(payload []byte, segBytes, capBytes int64, room func(n int64)) error {
 	header, err := r.headerLine()
 	if err != nil {
@@ -830,6 +907,9 @@ func (r *ring) writeBounded(payload []byte, segBytes, capBytes int64, room func(
 	limit := segBytes - int64(len(header))
 	for len(payload) > 0 {
 		n := chunkEnd(payload, limit)
+		if int64(n) > limit {
+			return fmt.Errorf("a %d-byte line does not fit a %d-byte segment beside its header", n, segBytes)
+		}
 		if _, err := r.write(payload[:n], segBytes, capBytes, room); err != nil {
 			return err
 		}
@@ -838,8 +918,8 @@ func (r *ring) writeBounded(payload []byte, segBytes, capBytes int64, room func(
 	return nil
 }
 
-// chunkEnd is the length of the longest whole-line prefix of p within limit
-// (at least one line).
+// chunkEnd is the length of the longest whole-line prefix of p within limit,
+// or of its first line when even that exceeds limit.
 func chunkEnd(p []byte, limit int64) int {
 	if int64(len(p)) <= limit {
 		return len(p)

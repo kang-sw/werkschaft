@@ -773,3 +773,88 @@ func TestColdNewerFormatGuardFailsClosed(t *testing.T) {
 		t.Fatalf("readable expired ring kept: %v", err)
 	}
 }
+
+// TestLimitsClampAndValidateAgreeAboveSixteenMiBSegments pins that every
+// knob set Clamp returns passes Validate, including sets whose maximal record
+// outgrows the 16 MiB preferred segment (256 MiB per session, 6 MiB bodies).
+func TestLimitsClampAndValidateAgreeAboveSixteenMiBSegments(t *testing.T) {
+	big := Limits{SessionBytes: 256 * mib, TotalBytes: 4096 * mib, BodyBytes: 6 * 1024 * kib, Retention: 7 * 24 * time.Hour}
+	if c, w := big.Clamp(); c != big || len(w) != 0 {
+		t.Fatalf("clamped %+v to %+v %v", big, c, w)
+	}
+	if err := big.Validate(); err != nil {
+		t.Fatalf("a set Clamp keeps is refused: %v", err)
+	}
+	for _, session := range []int64{4, 5, 64, 256, 1024, 65536} {
+		for _, body := range []int64{4, 64, 1024, 6 * 1024, 16 * 1024, 1 << 20} {
+			l, _ := Limits{SessionBytes: session * mib, TotalBytes: 1 << 40, BodyBytes: body * kib, Retention: MinRetention}.Clamp()
+			if err := l.Validate(); err != nil {
+				t.Fatalf("Clamp returned %+v, which Validate refuses: %v", l, err)
+			}
+			if l.MaxRecordBytes()+HeaderBound > l.SegmentBytes() {
+				t.Fatalf("%+v: segment %d leaves no room for a header beside a record", l, l.SegmentBytes())
+			}
+		}
+	}
+}
+
+// TestHeaderAndControlLinesStayWithinTheirBounds pins the segment bound
+// against control traffic: a multi-megabyte loss reason is cut, thousands of
+// keyed lost identities and long source names stay within the header's
+// budgets (the stalest sources dropped, the latest kept), and no segment or
+// header outgrows its bound.
+func TestHeaderAndControlLinesStayWithinTheirBounds(t *testing.T) {
+	root := t.TempDir()
+	lim := smallLimits(64 * mib)
+	s, log := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	pad := strings.Repeat("s", 200)
+	if err := s.RecordLoss(ctx, "sess", wsaudit.SourceID{Source: "holder:1", Seq: 1}, strings.Repeat("r", 5*int(mib))); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2000; i++ {
+		id := wsaudit.SourceID{Source: "daemon", Key: fmt.Sprintf("%s-%d", pad, i)}
+		if err := s.RecordLoss(ctx, "sess", id, wsaudit.LossDropped); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 1000; i++ {
+		if err := s.Finalize(ctx, "sess", fmt.Sprintf("%s-%d", pad, i), 5); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flush(t, s)
+	fill(t, s, "sess", 2, 40) // rotate a few times
+	dir := filepath.Join(root, "sess")
+	segs, _, err := listSegments(dir)
+	if err != nil || len(segs) < 2 {
+		t.Fatalf("segments %+v %v", segs, err)
+	}
+	for _, seg := range segs {
+		if seg.size > lim.SegmentBytes() {
+			t.Fatalf("segment %d holds %d bytes, bound %d", seg.seq, seg.size, lim.SegmentBytes())
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, segmentName(seg.seq)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := raw
+		if nl := bytes.IndexByte(raw, '\n'); nl >= 0 {
+			first = raw[:nl]
+		}
+		if bytes.HasPrefix(first, []byte(`{"t":"h"`)) && len(first) > int(HeaderBound) {
+			t.Fatalf("segment %d header is %d bytes", seg.seq, len(first))
+		}
+		if bytes.Contains(raw, []byte(strings.Repeat("r", maxReasonBytes+1))) {
+			t.Fatal("a loss reason was stored past its bound")
+		}
+	}
+	if rec := s.Recover("sess", fmt.Sprintf("%s-%d", pad, 999)); rec.Boundary != 5 {
+		t.Fatalf("the latest finalized source was dropped: %+v", rec)
+	}
+	for _, want := range []string{"sources dropped", "lost identities forgotten"} {
+		if !strings.Contains(log.String(), want) {
+			t.Fatalf("log lacks %q: %s", want, log.String())
+		}
+	}
+}

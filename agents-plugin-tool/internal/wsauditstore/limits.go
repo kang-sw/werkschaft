@@ -83,9 +83,10 @@ func (l Limits) MaxRecordBytes() int64 {
 }
 
 // SegmentBytes is the segment rotation size: at most a quarter of the
-// effective per-session cap and never smaller than one maximal record.
+// effective per-session cap and never smaller than one maximal record beside
+// a maximal header, so every set Clamp returns also passes Validate.
 func (l Limits) SegmentBytes() int64 {
-	return max(min(preferredSegmentBytes, l.EffectiveSessionBytes()/4), l.MaxRecordBytes())
+	return max(min(preferredSegmentBytes, l.EffectiveSessionBytes()/4), l.MaxRecordBytes()+HeaderBound)
 }
 
 // Validate reports why the knobs do not hold as a set: the effective
