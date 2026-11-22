@@ -72,6 +72,7 @@ var dashboardScriptFiles = []string{
 	"dashboard-audit-window.js",
 	"dashboard-audit.js",
 	"dashboard-audit-rows.js",
+	"dashboard-audit-search.js",
 	"dashboard-lifecycle.js",
 }
 
@@ -100,6 +101,7 @@ var dashboardStyleFiles = []string{
 	"dashboard-shell.css",
 	"dashboard-audit.css",
 	"dashboard-audit-rows.css",
+	"dashboard-audit-search.css",
 }
 
 var trackerScriptFiles = []string{

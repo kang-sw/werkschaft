@@ -15,6 +15,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 56c6a4610694d9ce
 sage-review-completeness-reviewed: 56c6a4610694d9ce
+completed: 2026-11-23
 ---
 
 # Dashboard conversation audit view
@@ -435,3 +436,54 @@ truncated body (it pages to the line), a regex hit, a hit on a subagent event
 (it routes through `parent_id`), a hit with no history row opened from the
 hit list, the "more" row across a cursor, the empty state, and LOOK side by side with
 both mockups.
+
+### Result (1d94bb902) - 2026-11-23
+
+- Added `dashboard-audit-search.js` (913 lines) and
+  `dashboard-audit-search.css` (355 lines, `au-` prefix), wired into
+  `pages.go`, `asset_source_test.go`, and `css_collision_test.go`.
+- Added the `#convo` search bar (`.au-swrap`) with text, `.*` regex,
+  `Aa` case, kind `<select>`, and clear controls. It calls
+  `GET /s/<rid>/audit/search` with stale-response cancellation and a
+  committed-query snapshot for `.au-smore` pagination and `410` re-runs.
+  Handles `400`, `410`, `503`, and empty results; append failures preserve
+  loaded hits.
+- Added the collapsible `.au-slist` hit list, opening any hit by `event_id`,
+  including unrendered, older, and subagent hits. `.au-sbadge` field/count
+  badges resolve through `call_id`, subagent `parent_id`, or hidden-event
+  `event_id`. `clearSearch` resets window highlights and owned auto-paging.
+- Coordinated truncated-body `ensureLineLoaded` with `auLoadMorePart` using
+  shared per-envelope/field pending-lock entries: live `reqToken` matching,
+  immediate replacement of cancelled or obsolete locks, identity-guarded
+  cleanup, and preserved manual ownership. Shared `displayedEnvelope`
+  selects `resultEnvelope` for a call's Output tab.
+- Updated `dashboard-audit-window.js` (466 lines) for regex/case-sensitive
+  highlighting, CRLF trailing-`\r` trimming with original byte accounting,
+  concatenated stored-truncation logical line numbering matching
+  `audit_query.go`'s `eachLine`, `data-line`, and `.au-ln-target` jumps.
+- Added 24 `js.audit.kind.*` / `js.audit.csearch.*` keys identically across
+  all 11 `wsi18n/tables/*.json` tables: 3,326 keys total, zero duplicates,
+  and zero base drift.
+- Compatibility: **T0**. Dashboard JS/CSS/i18n consumes existing
+  `/s/<rid>/audit/search` and `/range` routes; protocol and stored-data
+  shapes remain unchanged.
+
+Verification:
+
+- Node audit suites (`frontend-audit.test.js`, `frontend-audit-rows.test.js`,
+  `frontend-audit-search.test.js`): **36/36 PASS**.
+- Isolated Playwright Chromium (`TestAuditViewBrowser`,
+  `TestAuditViewPhase2Browser`, `TestAuditViewPhase3Browser`): **PASS**
+  (12.132s).
+- Targeted Go `wsdashboard` (10.921s) and `wsi18n` (2.474s): **PASS**.
+- Four LOOK captures visually inspected by lead:
+  `/tmp/audit-view-phase3-captures/audit-p3-{wide,narrow}-{dark,light}.png`
+  (untracked).
+- Read-only `codex.medium` review (`id:footbathsubplotongoingsternum`):
+  **PASS** at `1d94bb902`, after resolving six initial findings and two
+  follow-up paging-lock findings with focused regression coverage.
+
+
+## Resolution (2026-11-23)
+
+Completed all three phases under T0 compatibility across develop and impl/develop/audit-view-phase3: Phase 1 (1ed77b481 / fbb0ffa5b), Phase 2 (0dc7dfdc / 545b0d5ed), and Phase 3 (1d94bb902). Verified with Node audit tests, isolated Playwright Chromium, targeted Go tests, 11-locale i18n parity, LOOK captures, and independent read-only codex.medium PASS reviews.
