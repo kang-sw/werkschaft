@@ -80,7 +80,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 			return fmt.Errorf("path.generate: open writable cache artifact %q: %w", item.Path, err)
 		}
 		after, err := file.Stat()
-		if err != nil || !os.SameFile(before, after) {
+		if err != nil || !os.SameFile(before, after) || (item.Created != nil && !os.SameFile(item.Created, after)) {
 			_ = file.Close()
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: writable cache artifact %q changed while it was granted", item.Path)
@@ -103,11 +103,17 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 
 // discardGeneratedCacheArtifacts removes the review/prompt reservations a
 // refused path.generate call allocated, so a refusal withholds its paths
-// without leaving their empty files behind. os.Remove unlinks a swapped-in
-// symlink itself, never its target.
+// without leaving their empty files behind. It removes only an entry that
+// is still the exact empty regular file this call created (GeneratedPath.
+// Created): content another process saved into the reservation, or an
+// entry that replaced it, is left in place.
 func discardGeneratedCacheArtifacts(generated []wsstate.GeneratedPath) {
 	for _, item := range generated {
-		if item.Kind != "review" && item.Kind != "prompt" {
+		if item.Kind != "review" && item.Kind != "prompt" || item.Created == nil {
+			continue
+		}
+		current, err := os.Lstat(item.Path)
+		if err != nil || !current.Mode().IsRegular() || current.Size() != 0 || !os.SameFile(item.Created, current) {
 			continue
 		}
 		_ = os.Remove(item.Path)

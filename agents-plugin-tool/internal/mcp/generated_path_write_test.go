@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/kang-sw/devenv/internal/mcpframe"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 func TestPathWriteRequiresSameSessionGeneratedCachePath(t *testing.T) {
@@ -250,6 +251,42 @@ func TestPathGenerateGrantAllowsReplaceSaveAndRefusesReplacedTarget(t *testing.T
 	}
 	if got, err := os.ReadFile(renamed); err != nil || string(got) != "editor save" {
 		t.Fatalf("replaced artifact = %q, %v", got, err)
+	}
+}
+
+// A refused path.generate removes only the reservations it created that
+// are still its own empty files: content another process saved into one,
+// or an entry that replaced one, stays.
+func TestPathGenerateRefusalDiscardsOnlyItsOwnEmptyReservations(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	generated, err := wsstate.NewManager(wsstate.Options{}).GeneratePaths(root, "review", []string{"untouched", "saved", "replaced"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	untouched, saved, replaced := generated[0].Path, generated[1].Path, generated[2].Path
+	if err := os.WriteFile(saved, []byte("saved by another process"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(replaced); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(replaced, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	discardGeneratedCacheArtifacts(generated)
+
+	if _, err := os.Lstat(untouched); !os.IsNotExist(err) {
+		t.Fatalf("own empty reservation was kept: %v", err)
+	}
+	if got, err := os.ReadFile(saved); err != nil || string(got) != "saved by another process" {
+		t.Fatalf("saved reservation = %q, %v", got, err)
+	}
+	if _, err := os.Lstat(replaced); err != nil {
+		t.Fatalf("replacing entry was removed: %v", err)
 	}
 }
 

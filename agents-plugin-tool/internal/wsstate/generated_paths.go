@@ -16,6 +16,11 @@ type GeneratedPath struct {
 	Kind string `json:"kind"`
 	Stem string `json:"stem"`
 	Path string `json:"path"`
+	// Created is the identity of the file this call created at Path (review
+	// and prompt kinds), read from the exclusive-create handle before it
+	// closed. A consumer compares it with os.SameFile to tell the
+	// reservation it made from an entry another process put there since.
+	Created os.FileInfo `json:"-"`
 }
 
 func (m Manager) GeneratePaths(repoPath, kind string, stems []string) ([]GeneratedPath, error) {
@@ -57,13 +62,18 @@ func (m Manager) GeneratePaths(repoPath, kind string, stems []string) ([]Generat
 		if err != nil {
 			return nil, fmt.Errorf("reserve generated path %s: %w", path, err)
 		}
+		created, statErr := file.Stat()
 		if err := file.Close(); err != nil {
 			return nil, fmt.Errorf("close generated path %s: %w", path, err)
 		}
+		if statErr != nil {
+			created = nil
+		}
 		paths = append(paths, GeneratedPath{
-			Kind: kind,
-			Stem: safeStem,
-			Path: path,
+			Kind:    kind,
+			Stem:    safeStem,
+			Path:    path,
+			Created: created,
 		})
 	}
 	return paths, nil
