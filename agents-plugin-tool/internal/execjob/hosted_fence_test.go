@@ -568,6 +568,57 @@ func TestHostedJobStoppedBeforeItsHolderLaunchIsNotPrunedMeanwhile(t *testing.T)
 	})
 }
 
+// A holder that registered but could not be attached fails the launch and
+// is stopped, its job pinned (not pruned, its id not drawn) until that stop
+// is confirmed.
+func TestHostedHolderLaunchThatFailsToAttachStopsTheHolder(t *testing.T) {
+	prevMin, prevMax := retireRetryMin, retireRetryMax
+	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
+	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
+	fx := newHostedFixture(t, time.Second)
+	t.Cleanup(func() { fx.h.Close() })
+	fx.holders.mu.Lock()
+	fx.holders.attachErr = errors.New("attach refused")
+	fx.holders.stopErr = errors.New("holder busy")
+	fx.holders.mu.Unlock()
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err == nil || !strings.Contains(err.Error(), "attach refused") {
+		t.Fatalf("a launch whose holder did not attach: %+v, %v", v, err)
+	}
+	fx.holders.mu.Lock()
+	fx.holders.attachErr = nil
+	var holder string
+	for id := range fx.holders.live {
+		holder = id
+	}
+	fx.holders.mu.Unlock()
+	eventuallyExec(t, "a stop attempt on the unattached holder", func() bool {
+		fx.holders.mu.Lock()
+		defer fx.holders.mu.Unlock()
+		return fx.holders.stopCalls > 0
+	})
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.store.mu.Lock()
+	dropped := slices.Contains(fx.store.deleted, v.ID)
+	fx.store.mu.Unlock()
+	if dropped {
+		t.Fatal("the failed job was pruned while its holder still runs")
+	}
+	fx.holders.mu.Lock()
+	fx.holders.stopErr = nil
+	fx.holders.mu.Unlock()
+	eventuallyExec(t, "the unattached holder's stop", func() bool { return slices.Contains(fx.holders.stops(), holder) })
+	eventuallyExec(t, "the pin to lift", func() bool {
+		fx.h.mu.Lock()
+		defer fx.h.mu.Unlock()
+		j := fx.h.jobs[v.ID]
+		return j != nil && !j.holderPinned
+	})
+}
+
 // A predecessor's holders that a new daemon's start stops keep their exec
 // ids reserved until the stop is confirmed: one no job owns keeps its id
 // from being drawn, one of an ended job keeps that job from being pruned.

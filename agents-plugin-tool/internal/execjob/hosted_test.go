@@ -130,6 +130,9 @@ type fakeExecHolders struct {
 	// onLaunch runs inside LaunchWith, outside the lock, before the new
 	// holder's id reaches the job.
 	onLaunch func(id string)
+	// attachErr fails LaunchWith after the holder registered, as a failed
+	// attach does: the holder runs and its id comes back with the error.
+	attachErr error
 }
 
 func newFakeExecHolders() *fakeExecHolders {
@@ -154,6 +157,9 @@ func (f *fakeExecHolders) LaunchWith(spec wsholder.LaunchSpec) (string, error) {
 		f.mu.Unlock()
 		hook(id)
 		f.mu.Lock()
+	}
+	if f.attachErr != nil {
+		return id, f.attachErr
 	}
 	return id, nil
 }

@@ -609,7 +609,9 @@ func (m *Manager) Launch(session json.RawMessage) (string, error) {
 	return m.LaunchWith(LaunchSpec{Session: session})
 }
 
-// LaunchWith is Launch for a holder the spec tunes.
+// LaunchWith is Launch for a holder the spec tunes. A failure that comes
+// with an id is a holder that registered but could not be attached: it runs
+// (listed unattached), and stopping it is the caller's.
 func (m *Manager) LaunchWith(spec LaunchSpec) (string, error) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
@@ -622,7 +624,7 @@ func (m *Manager) LaunchWith(spec LaunchSpec) (string, error) {
 			m.failures = m.failures[len(m.failures)-maxFailures:]
 		}
 		m.mu.Unlock()
-		return "", err
+		return id, err
 	}
 	return id, nil
 }
@@ -711,7 +713,9 @@ func (m *Manager) launch(spec LaunchSpec) (string, error) {
 		}
 	}
 	if err := m.attach(desc); err != nil {
-		return "", fmt.Errorf("attach to the new session holder %s: %w", id, err)
+		// The holder registered and runs: its id goes back with the error,
+		// so the caller can stop it.
+		return id, fmt.Errorf("attach to the new session holder %s: %w", id, err)
 	}
 	return id, nil
 }

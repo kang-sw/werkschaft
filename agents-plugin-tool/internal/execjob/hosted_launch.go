@@ -82,6 +82,14 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
 	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})
 	if err != nil {
+		if holder != "" {
+			// The holder registered but could not be attached: it runs, and
+			// may write the exit copy at this job's id's path, so the job
+			// stays pinned until that holder is confirmed gone.
+			view, failed := h.failStart(j, "", fmt.Errorf("start the job's holder: %w", err))
+			go h.retireHolder(j, holder)
+			return view, failed
+		}
 		h.mu.Lock()
 		j.holderPinned = false
 		h.mu.Unlock()

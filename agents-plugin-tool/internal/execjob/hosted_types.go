@@ -152,6 +152,8 @@ type HostedSessions interface {
 
 // HostedHolders is the holder manager as the hosted jobs use it.
 type HostedHolders interface {
+	// LaunchWith's failure with an id is a holder that registered and runs
+	// unattached; the caller stops it.
 	LaunchWith(spec wsholder.LaunchSpec) (string, error)
 	Spawn(id string, spec wsholder.SpawnSpec) (wsholder.ChildStatus, error)
 	Input(id string, data []byte, eof bool) error
