@@ -179,6 +179,11 @@ const [base, emptyBase] = process.argv.slice(2);
       await tab.locator('.rl[href="/s/livesession"]').click();
       await tab.frameLocator('.sframe.on').locator(editor).waitFor();
       const previous = tab.frame({ url: base + '/s/livesession?frame=1' });
+      // Whether the shell retains the left session frame (cd1c99614) follows
+      // the frame's own cache-safety check, which turns true only once its
+      // draft store has loaded. Settle that before leaving so the assertions
+      // below follow one contract rather than a race.
+      const retained = await previous.waitForFunction(() => window.wsCanCacheSession && window.wsCanCacheSession(), null, { timeout: 2000 }).then(() => true, () => false);
       await tab.goBack();
       await tab.frameLocator('.sframe.on[src="/?frame=1"]').locator('#grid').waitFor();
       await tab.locator('#gear').click();
@@ -186,9 +191,15 @@ const [base, emptyBase] = process.argv.slice(2);
       await tab.locator('#gmenu [data-input="mod"]').click();
       // The frame is torn down after the switch's own transition, not within
       // the click that starts it.
-      for (let i = 0; i < 100 && !previous.isDetached(); i++) await tab.waitForTimeout(50);
-      assert.equal(previous.isDetached(), true, 'session switch destroys the previous iframe');
-      assert.equal(await tab.locator('iframe.sframe').count(), 1);
+      if (retained) {
+        await tab.waitForTimeout(500);
+        assert.equal(previous.isDetached(), false, 'a cache-safe previous session frame is retained hidden');
+        assert.equal(await tab.locator('iframe.sframe').count(), 2);
+      } else {
+        for (let i = 0; i < 100 && !previous.isDetached(); i++) await tab.waitForTimeout(50);
+        assert.equal(previous.isDetached(), true, 'session switch destroys the previous iframe');
+        assert.equal(await tab.locator('iframe.sframe').count(), 1);
+      }
       await tab.keyboard.press('Escape');
       await tab.locator('#gear').click();
       assert.equal(await tab.locator('#gmenu [data-layout="tabs"]').getAttribute('aria-pressed'), 'true');
@@ -197,7 +208,8 @@ const [base, emptyBase] = process.argv.slice(2);
       await tab.goForward();
       await tab.frameLocator('.sframe.on').locator('#grid[data-layout="tabs"]').waitFor();
       const fresh = tab.frame({ url: base + '/s/livesession?frame=1' });
-      assert.notEqual(fresh, previous);
+      if (retained) assert.equal(fresh, previous, 'the retained frame is shown again');
+      else assert.notEqual(fresh, previous);
       await fresh.waitForFunction(() => document.getElementById('ctext').placeholder === window.wsT('js.hint.mod'));
       // Keys go to the visible rich editor; the hidden #ctext backing field
       // keeps the canonical value (44d01be77).
