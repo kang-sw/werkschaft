@@ -460,6 +460,35 @@ func TestProvisionWorktreeClassifiesNameRootedCanonicalTarget(t *testing.T) {
 	}
 }
 
+// `git branch -d` checks a configured upstream instead of HEAD. A stale
+// canonical target whose upstream lacks its tip must still be recreated when
+// the encoded merge root holds every target commit.
+func TestProvisionWorktreeRecreatesStaleTargetWithUpstreamBehindTip(t *testing.T) {
+	root, base := worktreeFixture(t)
+	mergeRoot := strings.TrimSpace(string(runGitOutput(t, root, "branch", "--show-current")))
+	target := "impl/" + mergeRoot + "/upstream-behind"
+	runGit(t, root, "branch", target, base)
+	unrelated := strings.TrimSpace(string(runGitOutput(t, root, "commit-tree", base+"^{tree}", "-m", "unrelated upstream")))
+	runGit(t, root, "branch", "stale-upstream", unrelated)
+	runGit(t, root, "branch", "--set-upstream-to=stale-upstream", target)
+	runGit(t, root, "commit", "--allow-empty", "-m", "merge root advanced")
+	rootHead := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", "HEAD")))
+
+	res, err := provisionWorktree(context.Background(), wsgit.ExecRunner{}, nil, root, mergeRoot, target, builtinProfile(t, worktreeProfileFull), acquireTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wtBranch(t, res.Path); got != target {
+		t.Fatalf("checked out branch = %q, want %q", got, target)
+	}
+	if got := strings.TrimSpace(string(runGitOutput(t, res.Path, "rev-parse", "HEAD"))); got != rootHead {
+		t.Fatalf("target head = %s, want recreated at merge root %s", got, rootHead)
+	}
+	if got := strings.TrimSpace(string(runGitOutput(t, root, "rev-parse", "stale-upstream"))); got != unrelated {
+		t.Fatalf("stale upstream branch moved to %s", got)
+	}
+}
+
 func TestProvisionWorktreeStaleTargetHeldElsewhereFailsWithoutMutation(t *testing.T) {
 	root, base := worktreeFixture(t)
 	mergeRoot := strings.TrimSpace(string(runGitOutput(t, root, "branch", "--show-current")))

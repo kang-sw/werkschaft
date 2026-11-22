@@ -125,6 +125,33 @@ func wtRun(ctx context.Context, runner wsgit.Runner, root string, args ...string
 	return strings.TrimSpace(string(out)), err
 }
 
+// deleteStaleTargetBranch deletes a stale canonical target without force,
+// from wtPath already detached at the target's encoded merge root.
+// `git branch -d` checks a configured upstream instead of HEAD, so a target
+// whose upstream is behind its tip is refused even when the merge root holds
+// every target commit. Only in that case, after re-verifying that the target
+// is an ancestor of the detached merge root, the stale upstream setting is
+// dropped and the same non-force delete retried against HEAD.
+func deleteStaleTargetBranch(ctx context.Context, runner wsgit.Runner, wtPath, targetBranch string) error {
+	_, err := wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch)
+	if err == nil {
+		return nil
+	}
+	ref := "refs/heads/" + targetBranch
+	upstream, upErr := wtRun(ctx, runner, wtPath, "for-each-ref", "--format=%(upstream)", ref)
+	if upErr != nil || upstream == "" {
+		return err
+	}
+	if _, ancErr := wtRun(ctx, runner, wtPath, "merge-base", "--is-ancestor", ref, "HEAD"); ancErr != nil {
+		return err
+	}
+	if _, unsetErr := wtRun(ctx, runner, wtPath, "branch", "--unset-upstream", targetBranch); unsetErr != nil {
+		return err
+	}
+	_, err = wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch)
+	return err
+}
+
 // worktreeEntry is one parsed record from `git worktree list --porcelain`.
 type worktreeEntry struct {
 	Path     string
@@ -565,7 +592,7 @@ func provisionWorktree(ctx context.Context, runner wsgit.Runner, env []string, r
 						if _, err := wtRun(ctx, runner, wtPath, noSubmoduleRecurse("switch", "--detach", mergeRootRef)...); err != nil {
 							return res, fmt.Errorf("worktree.acquire: detach stale target %q at encoded merge root %q: %w", targetBranch, mergeRoot, err)
 						}
-						if _, err := wtRun(ctx, runner, wtPath, "branch", "-d", "--", targetBranch); err != nil {
+						if err := deleteStaleTargetBranch(ctx, runner, wtPath, targetBranch); err != nil {
 							return res, fmt.Errorf("worktree.acquire: delete stale target branch %q without force: %v; release any checkout holding it and re-acquire", targetBranch, err)
 						}
 						if _, err := wtRun(ctx, runner, wtPath, noSubmoduleRecurse("switch", "-c", targetBranch, mergeRootRef)...); err != nil {
