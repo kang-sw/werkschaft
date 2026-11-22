@@ -87,6 +87,16 @@ async function run(name, type) {
       await frame.evaluate(() => { window.__lateRaf = false; });
       await page.waitForFunction(() => !document.documentElement.hasAttribute('data-fdim'), null, { timeout: 5000 });
       assert.deepEqual(errors, [], `${tag}: page errors`);
+
+      // The overview picker dims the shell's rail through its own scrim.
+      await frame.evaluate(() => { window.WsOverview.toggle(); });
+      await page.waitForFunction(() => document.querySelector('.sframe.on').contentDocument.documentElement.hasAttribute('data-overview') && document.documentElement.hasAttribute('data-fdim'), null, { timeout: 5000 });
+      await page.waitForTimeout(400);
+      const ov = await pixel(page, px, py);
+      const lum = c => c[0] + c[1] + c[2];
+      check(lum(ov) < lum(calm.rail) * 0.6, `${tag}: rail is darker in the overview (${ov} vs ${calm.rail} at rest)`);
+      check(!same(ov, await pixel(page, gx, py)) || lum(calm.rail) < 30, `${tag}: rail stays distinct from the gutter in the overview`);
+      await shot(page, `${name}-${theme}-overview`);
       await context.close();
       console.log(`shell vanish ${tag}: PASS`);
     }

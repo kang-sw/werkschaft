@@ -140,6 +140,11 @@ section.topic[data-max] > .tophead > .tbar > .d-min, details.entry-panel[data-ma
    Only the view folds: no card record or disclosure is changed. Keeping
    off-screen items renderable avoids remembered unfolded intrinsic sizes. */
 :root[data-overview] body { background: color-mix(in srgb, var(--wb-bg) 28%, #000); }
+/* A framed page's canvas is transparent (dashboard-shell.css), so the body
+   color above is not seen; this viewport scrim, under the page's content,
+   darkens what lies behind the frame (the shell's rail and header) by the
+   same amount the page reports as its dim (lifecycle dim()). */
+:root[data-frame][data-overview] body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: rgba(0, 0, 0, .72); pointer-events: none; }
 :root[data-overview] :is(.dwrap > .top, #rail, .composer, .convo, .fpane, .chead, .tabbar, .dr-handle) { filter: brightness(.28) saturate(.4); }
 :root[data-overview] .r-board :is(section.topic, .bcard) { content-visibility: visible !important; cursor: pointer; }
 :root[data-overview] .r-board :is(section.topic > :not(.tophead), .bcard .bc-body) { content-visibility: visible !important; }
