@@ -164,9 +164,11 @@ func (r *OutputRings) Append(j *JobOutput, s Stream, data []byte) {
 // stream that never arrived before its offset (a replay that starts after
 // the holder evicted records, or records a lagging reader missed) count as
 // written and evicted, so offsets stay absolute and a read below them
-// reports the gap. A stream's window stays contiguous: its bytes retained
-// before a gap go with it. Offsets at or below what was written append as
-// Append does.
+// reports the gap. The combined stream holds both streams' bytes, so
+// combined-own is where the other stream stands: a stream whose bytes all
+// left before the replay reached it gets its offset from there. A stream's
+// window stays contiguous: its bytes retained before a gap go with it.
+// Offsets at or below what was written append as Append does.
 func (r *OutputRings) AppendAt(j *JobOutput, s Stream, data []byte, own, combined int64) {
 	if len(data) == 0 || (s != StreamStdout && s != StreamStderr) {
 		return
@@ -176,7 +178,12 @@ func (r *OutputRings) AppendAt(j *JobOutput, s Stream, data []byte, own, combine
 	if j.released {
 		return
 	}
+	other := StreamStderr
+	if s == StreamStderr {
+		other = StreamStdout
+	}
 	r.skipTo(j, s, own)
+	r.skipTo(j, other, combined-own)
 	r.skipTo(j, StreamCombined, combined)
 	r.appendLocked(j, s, data)
 }
