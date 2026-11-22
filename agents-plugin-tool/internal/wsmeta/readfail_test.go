@@ -445,6 +445,46 @@ func TestConfirmedDenialMovesWithTheWitness(t *testing.T) {
 		}
 	})
 
+	// The owner writes a new, readable config before the commit: the
+	// re-fence retires the denied witness it moved there, and nothing else.
+	t.Run("a re-fence retires the denied witness", func(t *testing.T) {
+		dir, s := setup(t)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+			t.Fatal(err)
+		}
+		const newHooks = `{"hooks":["new"]}`
+		put(t, dir, fenceHooks, newHooks)
+		mustStage(t, s)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+			t.Fatalf("re-fence over the denied witness = %v", err)
+		}
+		if got := readRel(t, dir, hooksWitness); got != newHooks {
+			t.Fatalf("witness = %q, want the new config", got)
+		}
+		if _, err := s.Commit(ctx, testCommit()); err != nil {
+			t.Fatal(err)
+		}
+		if c := captureMap(t, s)[fenceHooks]; c.State != CapturePresent || string(c.Bytes) != newHooks {
+			t.Fatalf("hooks capture = %+v, want the new config", c)
+		}
+	})
+
+	t.Run("a re-fence never retires a denied copy", func(t *testing.T) {
+		dir, s := setup(t)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+			t.Fatal(err)
+		}
+		replaceWith(t, dir, hooksWitness, hooksBytes)
+		put(t, dir, fenceHooks, `{"hooks":["new"]}`)
+		mustStage(t, s)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrWitnessOccupied) {
+			t.Fatalf("re-fence over a denied copy = %v, want ErrWitnessOccupied", err)
+		}
+		if raw, err := os.ReadFile(filepath.Join(dir, hooksWitness)); err != nil || string(raw) != hooksBytes {
+			t.Fatalf("the owner's copy changed: %q, %v", raw, err)
+		}
+	})
+
 	t.Run("a copy at the witness proves nothing", func(t *testing.T) {
 		dir, s := setup(t)
 		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {

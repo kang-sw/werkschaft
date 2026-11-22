@@ -514,6 +514,12 @@ func (s *Store) prepareWitness(m captureMeta, abs, wabs string, got legacyRead) 
 		}
 	}
 	w := readLegacy(wabs, s.opts.ReadFile)
+	if denied := (legacyRead{state: CaptureUnreadable}); w.confirmable && m.witnessContent == witnessContent(denied) {
+		// The last removal moved a confirmed denial there, and the denial
+		// moved with it (fenceProven): the identity below decides whether
+		// this is still that file (re-review fd1cff5e).
+		w = denied
+	}
 	if w.transient {
 		return "", "", fmt.Errorf("%w: witness %s: %s", ErrLegacyUnread, filepath.Base(wabs), w.err)
 	}
