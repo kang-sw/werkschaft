@@ -29,6 +29,10 @@ type claudeAudit struct {
 	// tasks are subagent task ids by the Agent call that started them, so a
 	// subagent's lines carry its agent id.
 	tasks map[string]string
+	// chains are the model conversations' request chains (Decision 7): ""
+	// is the lead's own, any other key a native subagent's
+	// parent_tool_use_id.
+	chains map[string]*wsaudit.RequestChain
 }
 
 type claudeAuditBlock struct {
@@ -44,10 +48,11 @@ type claudeAuditBlock struct {
 	lost      uint64
 	lossKnown bool
 	reason    string
+	request   map[string]any
 }
 
 func newClaudeAudit(session string) *claudeAudit {
-	return &claudeAudit{session: session, tasks: map[string]string{}}
+	return &claudeAudit{session: session, tasks: map[string]string{}, chains: map[string]*wsaudit.RequestChain{}}
 }
 
 // claudeAuditLine is the part of a stream-json line the adapter reads.
@@ -80,7 +85,8 @@ type claudeAuditEvent struct {
 	Type    string `json:"type"`
 	Index   int    `json:"index"`
 	Message struct {
-		ID string `json:"id"`
+		ID    string            `json:"id"`
+		Usage *claudeAuditUsage `json:"usage"`
 	} `json:"message"`
 	ContentBlock struct {
 		Type     string `json:"type"`
@@ -110,8 +116,45 @@ type claudeAuditBlockIn struct {
 }
 
 type claudeAuditMessage struct {
-	ID      string          `json:"id"`
-	Content json.RawMessage `json:"content"`
+	ID      string            `json:"id"`
+	Content json.RawMessage   `json:"content"`
+	Usage   *claudeAuditUsage `json:"usage"`
+}
+
+// claudeAuditUsage is the part of a message's usage that makes its context
+// size: ctx = input + cache read + cache creation tokens.
+type claudeAuditUsage struct {
+	Input         int64 `json:"input_tokens"`
+	CacheRead     int64 `json:"cache_read_input_tokens"`
+	CacheCreation int64 `json:"cache_creation_input_tokens"`
+}
+
+// request advances parent's request chain with message id and its usage,
+// and returns the chain's current request meta (nil without an id). Every
+// assistant message passes through, text-only ones included, so the next
+// request's prev_id names it.
+func (a *claudeAudit) request(parent, id string, u *claudeAuditUsage) map[string]any {
+	if id == "" {
+		return nil
+	}
+	c := a.chains[parent]
+	if c == nil {
+		c = &wsaudit.RequestChain{}
+		a.chains[parent] = c
+	}
+	var ctx int64
+	if u != nil {
+		ctx = u.Input + u.CacheRead + u.CacheCreation
+	}
+	c.See(id, ctx, u != nil)
+	return c.Meta()
+}
+
+// withRequest sets an event's request meta when it has one.
+func withRequest(ev *wsaudit.Envelope, req map[string]any) {
+	if req != nil {
+		setMeta(ev, wsaudit.MetaRequest, req)
+	}
 }
 
 func (a *claudeAudit) env(kind wsaudit.Kind, at time.Time) wsaudit.Envelope {
@@ -196,9 +239,10 @@ func (a *claudeAudit) streamEvent(l claudeAuditLine, at time.Time) []wsaudit.Env
 	case "message_start":
 		out := a.flushBlocks(at, false)
 		a.msgID, a.blocks = e.Message.ID, nil
+		a.request(l.ParentToolUseID, e.Message.ID, e.Message.Usage)
 		return out
 	case "content_block_start":
-		b := &claudeAuditBlock{index: e.Index, typ: e.ContentBlock.Type, id: e.ContentBlock.ID, name: e.ContentBlock.Name, parent: l.ParentToolUseID, at: at}
+		b := &claudeAuditBlock{index: e.Index, typ: e.ContentBlock.Type, id: e.ContentBlock.ID, name: e.ContentBlock.Name, parent: l.ParentToolUseID, at: at, request: a.chains[l.ParentToolUseID].Meta()}
 		b.body.WriteString(e.ContentBlock.Thinking)
 		// A block start opens its index afresh.
 		a.blocks = slices.DeleteFunc(a.blocks, func(o *claudeAuditBlock) bool { return o.index == e.Index && !o.used })
@@ -210,7 +254,7 @@ func (a *claudeAudit) streamEvent(l claudeAuditLine, at time.Time) []wsaudit.Env
 			if e.Delta.Type == "input_json_delta" {
 				typ = "tool_use"
 			}
-			b = &claudeAuditBlock{index: e.Index, typ: typ, parent: l.ParentToolUseID, at: at}
+			b = &claudeAuditBlock{index: e.Index, typ: typ, parent: l.ParentToolUseID, at: at, request: a.chains[l.ParentToolUseID].Meta()}
 			a.blocks = append(a.blocks, b)
 		}
 		switch e.Delta.Type {
@@ -273,10 +317,12 @@ func (a *claudeAudit) assistant(l claudeAuditLine, at time.Time) []wsaudit.Envel
 		out = a.flushBlocks(at, false)
 		a.msgID, a.blocks = "", nil
 	}
+	req := a.request(l.ParentToolUseID, msg.ID, msg.Usage)
 	var blocks []json.RawMessage
 	if json.Unmarshal(msg.Content, &blocks) != nil {
 		return out
 	}
+	mark := len(out)
 	for _, raw := range blocks {
 		var b claudeAuditBlockIn
 		if json.Unmarshal(raw, &b) != nil {
@@ -323,6 +369,9 @@ func (a *claudeAudit) assistant(l claudeAuditLine, at time.Time) []wsaudit.Envel
 			}
 			out = append(out, wsaudit.NewOtherEnvelope(a.session, BackendClaude, at, compactJSON(raw)))
 		}
+	}
+	for i := mark; i < len(out); i++ {
+		withRequest(&out[i], req)
 	}
 	return out
 }
@@ -517,6 +566,7 @@ func (a *claudeAudit) flushBlocks(at time.Time, ending bool) []wsaudit.Envelope 
 		}
 		setMeta(&ev, wsaudit.MetaAssembled, true)
 		carryLoss(&ev, b)
+		withRequest(&ev, b.request)
 		out = append(out, ev)
 	}
 	if ending {

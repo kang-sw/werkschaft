@@ -53,6 +53,12 @@ func TestCodexAuditCapturesEveryKindFromRecordings(t *testing.T) {
 		if ev.Harness != BackendCodex {
 			t.Fatalf("harness = %q", ev.Harness)
 		}
+		// Decision 7: the app-server stream reports per-request usage
+		// (thread/tokenUsage/updated) but no model request ID, so no event
+		// carries meta.request.
+		if _, ok := ev.Meta[wsaudit.MetaRequest]; ok {
+			t.Fatalf("codex event carries a request without a request ID: %+v", ev)
+		}
 		if ev.Kind == wsaudit.KindToolCall {
 			if ev.CallID == "" || ev.Subkind == "" {
 				t.Fatalf("tool call without id or name: %+v", ev)

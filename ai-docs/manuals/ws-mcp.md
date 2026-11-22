@@ -1298,7 +1298,13 @@ from a support conversation:
   before the kept lines a fence releases and never blocks the holder reader
   or the stream mapper. Capture runs only when the runner has an
   `AuditSink`; the shipped daemon sets neither yet (the audit store,
-  ticket `261119-feat-ws-audit-ring-store`, wires both).
+  ticket `261119-feat-ws-audit-ring-store`, wires both). The Claude adapter
+  writes `meta.request = {id, prev_id, ctx}` on every event from a model
+  request (`wsaudit.RequestChain`): one chain for the lead and one per
+  native subagent (`parent_tool_use_id`), advancing once per assistant
+  message ID, text-only messages included; `ctx` is input + cache read +
+  cache creation tokens and is absent without usage. Codex streams carry
+  usage but no request ID, so their events omit it.
 - **Access.** Spawn, settings, stop, restart, close, and an approval answer take the
   trusted gate (`wsdashboard.TrustedWrite`): 404 to any viewer that is not a
   browser on this machine, 403 without the daemon's own `Origin`. A LAN
