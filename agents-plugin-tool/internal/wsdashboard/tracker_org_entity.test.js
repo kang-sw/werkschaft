@@ -429,6 +429,15 @@ test('Lead review regressions: pmRuleCovered uses assignRoot & keeps dead/vacant
   assert.equal(ctx.orgNameFoldKey('Ομάδασ'), ctx.orgNameFoldKey('Ομάδας'));
   assert.equal(ctx.orgNameFoldKey('Ομάδασ'), ctx.orgNameFoldKey('ΟΜΆΔΑΣ'));
   assert.equal(ctx.orgNameFoldKey('ß'), ctx.orgNameFoldKey('ẞ'));
+  assert.equal(ctx.orgNameFoldKey('ſtraße'), ctx.orgNameFoldKey('STRAẞE'));
+  assert.equal(ctx.orgNameFoldKey('Kelvin'), ctx.orgNameFoldKey('kelvin'));
+  // Go's EqualFold uses simple folding only: ß ≠ ss, ı ≠ i, İ ≠ i.
+  assert.notEqual(ctx.orgNameFoldKey('Straße'), ctx.orgNameFoldKey('Strasse'));
+  assert.notEqual(ctx.orgNameFoldKey('ı'), ctx.orgNameFoldKey('i'));
+  assert.notEqual(ctx.orgNameFoldKey('İ'), ctx.orgNameFoldKey('i'));
+  const strasse = ctx.orgEdInit(members, 'kim-hn', orgs.concat([{ id: 'o-de', name: 'Straße', head: '', removed: null }]));
+  assert.equal(ctx.orgEdCreateOrg(strasse, 'Strasse', '').ok, true);
+  assert.equal(ctx.orgEdCreateOrg(strasse, 'STRAẞE', '').reason, 'dup_name');
   assert.equal(ctx.orgEdCreateOrg(ed, 'Ομάδας', '').reason, 'dup_name');
   assert.equal(ctx.orgEdRenameOrg(ed, 'o-sw1', 'Ομάδας').reason, 'dup_name');
 
