@@ -197,7 +197,8 @@ async function recoverImage(browser) {
     await page.goto(base + '/');
     await page.evaluate(() => {
       const key = 'ws.dashboard.draft.livesession';
-      const previous = JSON.parse(localStorage.getItem(key));
+      // An older page writes its own readDraft fields, never the stamp.
+      const { stamp, ...previous } = JSON.parse(localStorage.getItem(key));
       localStorage.setItem(key, JSON.stringify({ ...previous, text: 'New input from an older page', lost: [] }));
     });
     await page.goto(base + session);

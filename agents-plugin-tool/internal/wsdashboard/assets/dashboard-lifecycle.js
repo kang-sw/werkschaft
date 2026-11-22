@@ -286,15 +286,19 @@
     }
     return d;
   }
+  // The key leaves out record.projection, which carries a fresh stamp each write.
   function draftRecoveryKey(record, states) {
     var images = record ? record.images : [];
-    return JSON.stringify([record && record.projection, images.map(function (p) { return [p.n, p.name]; }), [...states]]);
+    return JSON.stringify([record && draftProjection(record.draft),images.map(function (p) { return [p.n, p.name]; }), [...states]]);
   }
   function saveDraft() {
     if (!draftStore || !draftLoaded || restoring || draftDetached) return Promise.resolve(!draftUnsaved);
     clearTimeout(draftTimer);
     draftTimer = null;
-    var d = readDraft(), projection = draftProjection(d), previous = draftLegacy;
+    var d = readDraft(), previous = draftLegacy;
+    delete d.stamp;
+    var projection = draftProjection(d);
+    var stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     var images = ctext ? imgs.filter(function (p) { return !p.ref && p.blob; }).map(savedImage) : draftRetainedImages;
     images.forEach(function (p) {
       draftKnow(p.id);
@@ -314,6 +318,13 @@
     // refused merge must leave the committed record's projection in place.
     var mirrorNow = !deliveries.length && !images.length;
     var textSaved = mirrorNow && saveLegacyDraft(d, projection);
+    // A mirror written after its commit carries that write's stamp: its
+    // completion can reach this renderer after another window committed and
+    // mirrored, and a restore then trusts the row over the stamped mirror.
+    // record.projection is the exact mirror string, so pages that compare it
+    // with the legacy draft still match.
+    var mirror = Object.assign({}, d, { stamp: stamp }), written = mirrorNow ? projection : draftProjection(mirror);
+    function mirrorLegacy() { return mirrorNow ? saveLegacyDraft(d, projection) : saveLegacyDraft(mirror, written); }
     var missingBlob = (d.lost || []).some(function (number) {
       return !images.some(function (image) { return image.n === number; });
     });
@@ -322,7 +333,7 @@
     // mine lists the images this draft saved: only they answer its
     // markers on restore; another window's images come back loose.
     var record = rich ? {
-      base: previous, projection: projection, draft: d, images: images,
+      base: previous, projection: written, draft: d, images: images,
       mine: images.map(function (p) { return p.id; })
     } : null;
     var states = new Map(deliveries.map(function (m) { return [m.id, m.state]; }));
@@ -347,7 +358,6 @@
       return Promise.resolve(false);
     }
     var before = draftDeliveryState, conflicts = [], pass = null;
-    var stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     draftDeliveryState = states;
     // mergeImages merges this renderer's images into the row's active
     // record. Another window may have committed images this one never
@@ -389,7 +399,7 @@
         foreign.push(Object.assign({}, p, { id: "legacy:" + key }));
       });
       if (foreign.length || record && !record.images.every(kept)) {
-        active = Object.assign({}, record || { base: previous, projection: projection, draft: d, images: [], mine: [] });
+        active = Object.assign({}, record || { base: previous, projection: written, draft: d, images: [], mine: [] });
         active.images = active.images.filter(kept).concat(foreign);
       }
       // Two windows' images may merge past what one message carries
@@ -460,9 +470,8 @@
       });
       if (merge.full) { draftUnsaved = true; return false; }
       draftCommitted = draftRecoveryKey(record, states);
-      // Without a second pass the mirror follows the commit within the same
-      // task's microtasks, before any other write can land.
-      draftUnsaved = missingBlob || !superseded && !saveLegacyDraft(d, projection) && !rich && hasDraft;
+      // A superseded save's mirror would only be outranked by the row.
+      draftUnsaved = missingBlob || !superseded && !mirrorLegacy() && !rich && hasDraft;
       return !draftUnsaved;
     }, function () {
       if (draftWrite === write) {
@@ -518,7 +527,12 @@
         });
         active = Object.assign({}, active, { images: images });
       }
-      var useActive = active && (draftLegacy === active.base || draftLegacy === active.projection);
+      // A stamped legacy draft is a new page's mirror, which may have landed
+      // after a newer window's: between new pages the row decides. An older
+      // page writes it without a stamp, and an edit it made shows as a
+      // projection matching neither the row's base nor its projection.
+      var stampedLegacy = !!(legacy && typeof legacy.stamp === "string");
+      var useActive = active && (stampedLegacy || draftLegacy === active.base || draftLegacy === active.projection);
       var prepared = useActive ? active.draft : legacy;
       if (!ctext) {
         draftRetained = prepared && boardDraft(JSON.parse(JSON.stringify(prepared)));

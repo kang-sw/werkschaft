@@ -32,8 +32,11 @@ function clone(v) {
 
 // fakeDB is one shared "drafts" store holding the session's row. failNext
 // aborts that many writing transactions (a quota error) before they commit.
+// holds lists, per committing write in order, a Promise that the write's
+// completion event waits on (null: none), as Chromium may deliver one after
+// another renderer's later transaction committed.
 function fakeDB() {
-  const db = { row: undefined, failNext: 0 };
+  const db = { row: undefined, failNext: 0, holds: [] };
   db.transaction = () => {
     let aborted = false, pending = null;
     const tx = { error: null, abort() { aborted = true; } };
@@ -50,8 +53,10 @@ function fakeDB() {
               tx.error = new Error('QuotaExceededError');
             }
             if (aborted) { if (tx.onabort) tx.onabort(); return; }
+            const hold = pending && db.holds.length ? db.holds.shift() : null;
             if (pending) db.row = pending.del ? undefined : clone(pending.value);
-            if (tx.oncomplete) tx.oncomplete();
+            if (hold) hold.then(() => { if (tx.oncomplete) tx.oncomplete(); });
+            else if (tx.oncomplete) tx.oncomplete();
           });
         });
         return req;
@@ -249,6 +254,53 @@ const bytesOf = db => Promise.all(stored(db).map(p => p.blob.text()));
     assert.match(d.ctext.value, /^Latest text of the second window \[Image #1\]/, 'B\'s newer draft is restored: ' + d.ctext.value);
     assert.deepEqual(d.imgs.find(p => p.n === 1).name, 'b.png');
     assert.deepEqual(d.imgs.map(p => p.name).sort(), ['a.png', 'b.png', 'old.png']);
+  }
+
+  // 7. A's write commits but its completion reaches A only after B, opened
+  // before A's edit, committed a newer row and mirrored its text; A then
+  // mirrors its own text over B's. The row decides: the reopened draft is
+  // B's. Once with a single pass, once with the completion of A's second
+  // pass (an older page's ID-less image in the row) held.
+  for (const secondPass of [false, true]) {
+    const db = fakeDB(), legacy = new Map(), a = await open(db, legacy), b = await open(db, legacy);
+    if (secondPass) db.row = { active: { base: null, projection: null, draft: { text: '' }, images: [image(1, 'old.png', 'older page')] } };
+    let release;
+    db.holds = secondPass ? [null, new Promise(r => { release = r; })] : [new Promise(r => { release = r; })];
+    a.ctext.value = 'Text of the first window';
+    a.paste('a.png', 'first window');
+    const saving = a.save();
+    const committed = () => db.row && db.row.stamp && (!secondPass || stored(db).some(p => /^legacy:/.test(p.id || '')));
+    while (!committed()) await new Promise(setImmediate);
+    b.ctext.value = 'Latest text of the second window';
+    b.paste('b.png', 'second window');
+    assert.equal(await b.save(), true);
+    release();
+    assert.equal(await saving, true);
+    const label = secondPass ? 'second pass' : 'single pass';
+    const d = await open(db, legacy);
+    assert.match(d.ctext.value, /^Latest text of the second window \[Image #1\]/, label + ': B\'s newer draft is restored: ' + d.ctext.value);
+    assert.equal(d.imgs.find(p => p.n === 1).name, 'b.png', label);
+    assert.deepEqual(d.imgs.map(p => p.name).sort(), (secondPass ? ['a.png', 'b.png', 'old.png'] : ['a.png', 'b.png']), label);
+  }
+
+  // 8. A committed mirror is the row's projection string exactly (a page
+  // comparing the two, as the pre-stamp recovery code does, still matches)
+  // and carries the row's stamp. An older page's edit, written without a
+  // stamp, still wins over the row: its text, the row's image loose.
+  {
+    const db = fakeDB(), legacy = new Map(), a = await open(db, legacy);
+    a.ctext.value = 'Committed text';
+    a.paste('a.png', 'image');
+    assert.equal(await a.save(), true);
+    const mirrored = legacy.get('ws.dashboard.draft.session');
+    assert.equal(mirrored, db.row.active.projection, 'the mirror is the row\'s projection');
+    assert.equal(JSON.parse(mirrored).stamp, db.row.stamp, 'the mirror carries the row\'s stamp');
+    const d = await open(db, legacy);
+    assert.equal(d.ctext.value, 'Committed text [Image #1]');
+    legacy.set('ws.dashboard.draft.session', JSON.stringify({ text: 'Older page edit [Image #1]', lost: [1] }));
+    const e = await open(db, legacy);
+    assert.match(e.ctext.value, /^Older page edit/, 'the older page\'s edit is kept: ' + e.ctext.value);
+    assert.deepEqual(e.imgs.map(p => p.name), ['a.png']);
   }
   console.log('draft-merge: ok');
 })().catch(e => { console.error(e); process.exit(1); });
