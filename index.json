@@ -625,6 +625,9 @@
         }
       }
     },
+    "261122-feat-ws-agy-same-harness-workers": {
+      "registered_at": "2026-11-22T09:53:47Z"
+    },
     "261122-feat-ws-agy-stream-stall-cutoff": {
       "registered_at": "2026-11-22T08:42:05Z",
       "lease": {
