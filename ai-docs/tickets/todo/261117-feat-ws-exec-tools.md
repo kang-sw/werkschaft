@@ -11,85 +11,210 @@ related:
   261117-feat-ws-harness-capability-catalog: "default tool removal range and native subagent removability items"
   261117-feat-ws-agent-tools-mailbox-routing: "shares the sleep-not-close and cascading-close rules for child agents"
   261117-research-ws-daemon-file-touch-map: "release-gate file-touch constraint; not edited from here"
+  261122-feat-ws-agent-turn-semaphore: "counts in-flight exec calls and gates completion notices that open a worker turn"
 ---
 
 # ws/exec tools
 
 ## Background
 
-Origin: the owner's exec concept of 2026-11-13, recorded in
-`261112-feat-pi-subagent-long-shell-auto-background`. Hosted leads run commands
-through ws instead of the harness's own shell tools, so the daemon owns approval,
-background conversion, completion push and cleanup. Pi prototype for reference:
-`agents-plugin-pi/src/execute-gateway.ts` (search `do-i-really-have-to-run-this-myself`:
-30 s window, 4 KB, kills on timeout; `background:true` makes a task with a steer
-push) and `agents-plugin-pi/src/background-tasks.ts` (tasks die at
-`session_shutdown`). The daemon already has `internal/execjob` and 8 `exec.*` MCP
-tools; this ticket generalizes them. It starts with one thin holder per exec job,
-reusing the holder-per-process model landed for `agent.spawn` workers by
-`261120-refactor-ws-agent-workers-under-holders` (merge `92c12990a`). The
-single-session-holder ticket is optional future consolidation, not a prerequisite.
+The owner's 2026-11-13 exec concept, recorded in
+`261112-feat-pi-subagent-long-shell-auto-background`, moves hosted shell
+execution to ws so the daemon owns approval, async conversion, completion
+delivery, and cleanup. The Pi prototype in
+`agents-plugin-pi/src/execute-gateway.ts` (search
+`do-i-really-have-to-run-this-myself`) had a 30 s window, a 4 KB limit, and
+timeout kill. Its `background:true` tasks delivered a steer and died at
+`session_shutdown` in `agents-plugin-pi/src/background-tasks.ts`. The daemon
+already has `internal/execjob` and eight `exec.*` MCP tools. This ticket extends
+that surface and uses the holder-per-process pattern landed for `agent.spawn`
+workers in `261120-refactor-ws-agent-workers-under-holders` (merge `92c12990a`).
 
 ## Decisions
 
-1. **Surface (16), (18).**
-   - `exec.run(exe, args[], cwd?, env?, stdin?, async?)`: direct execution
-     without a shell (old `exec.spawn` aliases to it). `exec.shell(cmd, cwd?,
-     env?, stdin?, async?)`: one shell line (old `exec.shell` stays, its `shell`
-     arg accepted only on the alias). Origin: the owner concept in
-     `261112-feat-pi-subagent-long-shell-auto-background`; (40) name `exec.run`
-     kept; (42) ok with the owner note splitting run and shell (single `cmd`
-     argument because AI writes Bash best).
-   - With `async` either returns immediately with `exec_<three words>`; otherwise
-     it waits synchronously up to 30 s (a config key, the same for leads and
-     children), then converts to async and returns "converted to async, exec id"
-     without starting a new turn. Job completion pushes a system mail that starts
-     a new turn. No `wait`.
-   - `exec.stop` (process-tree kill; Windows `taskkill /T`), `exec.tail` (last
-     output slice), `exec.list` (the session's running and recent jobs), and new
-     `exec.write(exec_id, data)` for pipe stdin to a running job ((51)=a).
-   - (50) `exec.shell` has no shell argument; the shell comes from a config
-     default (bash; Git Bash on Windows); another shell runs via
-     `exec.run(exe: "pwsh", ...)`. Rejected: per-call shell selection.
-   - (51)=a: mux (PTY screen sessions) is out of scope here, owned by
-     `261117-feat-ws-exec-mux-terminal`.
-2. **Runs under one holder per exec job**, following the landed `agent.spawn`
-   holder-per-process model and surviving daemon replacement. A future shared
-   holder may consolidate jobs but is not a prerequisite.
-3. **Built on `internal/execjob`:** the foreground window changes from 5 s to the
-   30 s config key, polling becomes completion push, per-job files become the
-   holder memory ring (deltas only for restore). The existing 8 `exec.*` MCP tools
-   stay as aliases (T0).
-4. **Approval is daemon-owned (18).** ws command rules decide; otherwise the
-   existing dashboard approval UI asks. Permission-profile caps are enforced
-   here. Owner: approval responsibility moving to ws is easier to handle.
-5. **Claude permission pipeline.** Allowlist `ws/exec.*` so approval is not
-   prompted twice. Whether Claude raises `can_use_tool` for MCP tools is
-   unverified; verifying it is a Phase 1 item.
-6. **Native tool removal (18).** Remove only tools that run processes or spawn
-   agents: Bash, PowerShell, Agent/Task, and the harness's background shell/monitor
-   tools. Keep Read/Write/Edit/Grep/Glob and web tools. Hosted leads block those
-   with `--disallowedTools` only, keeping the rest of the user's settings (today
-   the Claude lead profile loads user settings unchanged, so Bash cannot be
-   removed).
-7. **Never auto-terminate (18).** Child auto-close no longer exists ((57) in
-   `261117-feat-ws-agent-tools-mailbox-routing`). A session with a running turn,
-   a live exec job (monitors included) or an awake child never sleeps; a
-   sleeping child does not keep its parent awake. Feed daemon-tracked jobs into
-   `idleNow` (`wsagent/runner_events.go`, search `idleNow`), which today counts
-   turn, `bgTasks` and children but not daemon exec jobs.
-8. **Explicit close cascades (18).** A human closing a session in the dashboard
-   ends its jobs and children deepest-first; agents have no stop tool ((60)=a in
-   the agent-tools ticket). `exec.stop` for jobs stays.
-9. **Tool I/O.** The daemon sees exec I/O directly (a future source for the audit
-   store); storage follows the release-gate rules (memory ring, restore-only
-   deltas).
+The following amendments are owner-confirmed on 2026-11-22.
+
+1. **Surface (16), (18), (40), (42), (50), (51)=a.**
+   - `exec.run(exe, args[], cwd?, env?, stdin?, async?)` runs argv directly.
+     `exec.shell(cmd, cwd?, env?, stdin?, async?)` runs one shell line. The
+     new shell shape uses the configured default, Bash or Git Bash on
+     Windows. Use `exec.run(exe: "pwsh", ...)` to select another executable.
+     The owner kept the `exec.run` name and the single `cmd` string for shell
+     input in (40) and (42).
+   - `exec.shell` keeps one name with two argument families. Legacy calls
+     require `command` and accept `working_dir` and `shell`. New calls
+     require `cmd` and accept `cwd` and `async`. Both accept `env` and
+     `stdin`. Declare both shapes explicitly in the schema and dispatch
+     on the family in the static top-level precheck
+     (`mcp/tool_arguments.go:79-133`). Reject mixed shapes there. Preserve
+     `exec.spawn` as the legacy direct-execution entry point and
+     `exec.abort` as the legacy stop entry point, including their old
+     inputs and response shapes.
+   - With `async`, either launch returns immediately with
+     `exec_<three words>`. Otherwise it waits through the configured 30 s
+     execution window, shared by leads and children, then returns
+     "converted to async, exec id". The conversion reply stays in the
+     current turn. There is no `wait` tool.
+   - `exec.stop` stops the process tree, `exec.tail` reads the last output
+     slice, `exec.list` shows the session's running and recent jobs, and
+     `exec.write(exec_id, data)` writes to a running job's stdin pipe.
+     PTY screen sessions belong to `261117-feat-ws-exec-mux-terminal` ((51)=a).
+   - Rejected: renaming legacy tools, breaking legacy argument shapes, and
+     per-call shell selection on the new shape.
+2. **One holder per job.** Reuse the landed holder-per-process lifecycle so
+   jobs survive daemon replacement. Per-holder descriptor, exit, and
+   `holder.log` files are accepted at cold start or exit. Keep terminal
+   status outside generic `wsholder` cleanup for T0.
+   `wsholder/manager.go:297-301` removes holder state and
+   `cmd/ws-mcp/holder_exit.go:14-23` persists nothing for non-lead kinds.
+   A shared holder remains optional future consolidation.
+3. **Reuse `internal/execjob` and preserve the legacy surface (T0).** Use
+   the configured 30 s foreground window in place of the current 5 s
+   window and deliver completion as in Decision 10. The legacy
+   launch and stop entry points coexist with distinct semantics for
+   `exec.status`, `exec.result`, `exec.raw.tail`, `exec.raw.read`, and
+   `exec.raw.grep`. Keep the existing `exec.result` wait option and
+   preserve access to old records and raw byte offsets. See
+   `260524-epic-async-exec-job-surface` (54-77) and
+   `260524-feat-wsstore-runtime-metadata-migration-gate` (247-272).
+4. **Daemon-owned advisory approval (18), (1505)=a.** Apply ws command
+   rules first, including denies under `full`, then ask through the
+   existing dashboard approval UI when the rules require a decision.
+   Bind approval to the normalized command and its owning session. The
+   current `answerApproval` requires a native answerer
+   (`wsagent/runner_events.go:583-605`), so exec approvals need a daemon
+   owner. The permission gate names exec and reads the live profile at
+   approval and at start (`mcp/permission_gate.go:10-37`). Enforcement
+   provides no OS confinement. The owner accepts the loss of the native
+   Codex OS sandbox for read-only Codex sessions. Future LLM intent
+   judgment belongs to `261118-feat-ws-exec-intent-filter`.
+   Rejected: retain native sandboxed shells for read-only sessions ((1505)=b)
+   or implement OS confinement in ws/exec ((1505)=c).
+5. **Claude permission pipeline.** Allowlist `ws/exec.*` to avoid a second
+   prompt. Verify in Phase 1 whether Claude raises `can_use_tool` for MCP
+   tools.
+6. **Native process tool removal (18), (1506)=a.** Preserve native
+   Read/Write/Edit/Grep/Glob and web tools. Retain the existing native
+   subagent policy from `261117-feat-ws-agent-tools-mailbox-routing`:
+   Claude's Agent/Task removal where it applies and the advisory steer
+   for agy native subagents (Decision 11).
+   - Claude hosted launches add Bash, PowerShell, and native background
+     shell and monitor tools to `--disallowedTools` through
+     `claudeRemovedTools` in `wsagent/claude.go`. Pin the exact tool
+     spellings in a hosted init-stream test.
+   - Codex hosted launches set
+     `thread/start.config.features.shell_tool=false`, verified on 0.160.0
+     in `261115-feat-ws-hosted-codex-adapter-contract` (193, 218) and
+     `wsagent/codex_fixture_test.go:365-370`.
+   - Pi hosted launches omit bash from `--tools`. Worker argument
+     construction is in `wsagent/pi_launch.go:62-89`, and hosted leads
+     use the separate `piLeadArgs` path.
+   - agy uses the daemon rejection in Decision 11.
+   - Default the rollout on per harness with a verified mechanism and
+     provide a per-harness config key to revert. Exclude the frozen Claude
+     CLI tier, sessions without a permitted ws/exec replacement such as
+     wsflow agentless, sessions already running or reattached before
+     cutover, and unverified harness versions. Add the exec tools to worker
+     allowlists before removing native tools (`wsagent/builtin.go:83-94`
+     and `261115-feat-ws-worker-profile-session-spawn`).
+7. **Job lifetime and sleep (18), (1507)=b.** Interrupt stops only a job
+   still inside its synchronous window. Async and converted jobs survive
+   interrupt, harness restart, handoff, compaction, and daemon replacement.
+   Only `exec.stop` and explicit human close stop those jobs. Finishing a
+   child turn leaves the session available to sleep ((57) in
+   `261117-feat-ws-agent-tools-mailbox-routing`). Use one sleep predicate for
+   `idleNow` (`wsagent/runner_events.go`) and `awakeLocked`
+   (`wsagent/agent_admission.go:144-150`), which disagree today. A running
+   turn, a live job (including a monitor), or an awake child keeps a session
+   awake. Count live exec jobs owned by that session. A sleeping child does
+   not keep its parent awake.
+8. **Explicit close cascades (18), (60)=a.** Human dashboard close ends
+   the session's jobs and children deepest-first. Agents have no session
+   stop tool. Fence new job admissions before close and suppress completion
+   after close (`wsagent/runner_operations.go:369-382`, `finishClose` at
+   1107-1123). Keep `exec.stop` for individual jobs.
+9. **Output and retention.** The daemon sees exec I/O directly for future
+   consumption by the audit store. Keep new hosted output in bounded
+   per-job and aggregate memory rings with restore-only deltas, without
+   per-job output files. Provide a 4 KiB inline preview, explicit evicted
+   offsets, and a finite list and metadata cap. Retain raw Windows bytes
+   and validate UTF-8 when decoding them.
+10. **Completion steer (owner, 2026-11-22).** Route completion through the
+    existing `Runner.Deliver` path. A notice steers a running turn immediately,
+    opens a new turn in an idle session, or enters the next-turn queue
+    when the harness lacks steer support. Deliver once, only for async
+    or converted jobs, durably across daemon replacement. Suppress
+    completion after the session closes. Rejected: next-turn-only delivery.
+11. **agy command blocking (1503), after the agy 1.5.14 live probe on
+    2026-11-22.** The settled launch policy is native `default` mode.
+    Native `auto` and `--dangerously-skip-permissions` are never used.
+    ws bypass and worker auto-approval stay daemon-side
+    (`wsagent/agy_bypass.go:15-36`), except that the daemon answers
+    `run_command` permission requests with `reject_once`.
+    - In `default`, each tested `run_command` (`ls`, `git status`, `echo`,
+      and an `IsDaemon:true` background sleep) raised
+      `session/request_permission`. Both native `auto` and
+      `--dangerously-skip-permissions` ran commands without a request.
+    - Rejection immediately ended the turn with empty failed output and
+      no retry. ACP provides no model-visible custom rejection text, and
+      an immediate post-rejection steer failed with `-32603`. Append the
+      instruction to use the ws exec tools to the system prompt at
+      session creation. Once the rejected turn ends, the daemon sends
+      that instruction as a new prompt.
+    - A `run_command` that starts without a permission request is detected,
+      logged as a warning, and answered with the same instruction prompt.
+      A user-home always-allow rule is a possible, untested path.
+    - `read_file`, `manage_task`, and `invoke_subagent` raised no permission
+      request. Retain the existing advisory steer for native subagents.
+    - Rejected: custom main agent, which replaces the default prompt and
+      puts MCP tools behind `call_mcp_tool`
+      (`261118-research-ws-agy-custom-agent-prompt`), and the originally
+      selected per-process deny ((1503)=b), since top-level `agy --settings`
+      parses but does not apply permission or mode rules to ACP sessions.
+12. **Report hold.** Hold a worker's done report to its parent while the
+    worker's session owns a live exec job. Cover both `holdsReport`
+    (`wsagent/children.go:778-831`) and the successor that publishes a
+    held result when a child report arrives (`wsagent/runner_conv.go:1340-1367`).
+    Preserve interim supersession for report-free follow-ups. Recover jobs
+    on replay before releasing any held report
+    (`wsagent/runner_process.go:667-719`). Legacy agy ACP background tracking
+    and its 6 s wake grace remain only for sessions outside the cutover.
+13. **Ownership.** The authenticated originating conversation owns the
+    exec job and the semaphore turn. Validate a supplied `session_key`
+    only as a cwd/worktree grant. A descendant key cannot choose the owner
+    (`mcp/server_sessions.go:286-298`, `mcp/hosted_key.go:17-48`). Apply
+    the new approval policy to every hosted legacy launch shape.
+14. **Process tree.** Put each job in a dedicated process group. On Windows
+    use a job object or `taskkill /T`. Stop and close kill the whole group.
+    Detached processes are outside the guarantee. Current holder stop
+    signals only the direct child (`wsholder/holder.py:315-372`,
+    `wsholder/manager.go:728-756`).
+15. **Worktree guard.** Refuse `worktree.release` and `worktree.remove` while
+    a job of that worktree is live. Serialize admission with release
+    (`mcp/worktree_tools.go:864-907`, `mcp/worktree_remove.go:86-97`).
+16. **Compaction.** Phase 1 exposes the session-scoped `exec.list` read
+    seam from `261117-feat-ws-hosted-compaction-lifecycle` ((1893)=b).
+    The restore bundle consumes it in a later phase or edition of that
+    ticket. Share the harness-kill survival test with
+    `261120-feat-ws-agy-timeout-process-respawn`.
+17. **Semaphore coordination.** Measure the configured 30 s
+    execution-to-conversion window independently of total RPC duration,
+    which includes preflight, approval, the execution wait, and slot
+    re-acquisition. An in-flight exec call counts as an in-flight ws MCP
+    tool call under `261122-feat-ws-agent-turn-semaphore`.
+18. **agy background prompt cleanup.** After agy cutover in Phase 2, remove
+    `agyLeadBgShellRule` and its use (`wsagent/agy.go:117`, near 340) and
+    the corresponding line in `wsagent/instructions/agent-worker-agy.md:5`.
+    Update `TestAgyLeadPromptCarriesTheWorkflowManual` and
+    `TestAgyWorkerProfile` in `wsagent/agy_lead_test.go`.
 
 ## Constraints
 
-- Go tests run on remote w5090 only, never local `go test`.
-- Read before editing `agents-plugin-tool/`: `ai-docs/manuals/shipped-surface-boundary.md`
-  and `ai-docs/manuals/release-compatibility.md`; for `agents-plugin-tool/internal/mcp/`
+- Run Go tests locally on macOS and run Windows checks on the Windows host
+  (owner (68), recorded in `261115-feat-ws-hosted-codex-adapter-contract`).
+- Read before editing `agents-plugin-tool/`:
+  `ai-docs/manuals/shipped-surface-boundary.md` and
+  `ai-docs/manuals/release-compatibility.md`; for `agents-plugin-tool/internal/mcp/`
   also `ai-docs/manuals/ws-mcp.md`. If playbooks, skills, `agents-plugin/rsrc/` or
   `agents-plugin-wsflow/` text is touched, also read
   `ai-docs/manuals/skill-authoring.md` and `ai-docs/manuals/wsflow-mirroring.md`.
@@ -103,42 +228,91 @@ single-session-holder ticket is optional future consolidation, not a prerequisit
 
 ## Compatibility
 
-New `exec.*` tool shapes are additive (T0); the 8 old `exec.*` tools stay as
-aliases (T0). Any exec-specific holder protocol change states its compatibility
-tier here. The concrete verdict cites source lines for which version writes and
-reads what, per `ai-docs/manuals/release-compatibility.md`, recorded in Phase 1's
-Result.
+The new exec shapes are additive (T0). Keep all eight legacy calls supported,
+including both argument families on `exec.shell`, distinct status/result and
+raw readers, and old records and byte offsets. Retain holder exit status
+through a downgrade and reopen. State the tier of any exec-specific holder
+protocol change here. Record the concrete verdict in Phase 1's Result with
+source lines showing which version writes and reads each surface, per
+`ai-docs/manuals/release-compatibility.md`.
 
 ## Phases
 
-### Phase 1: exec.run/stop/tail/list over per-job holders, push completion, approval
+### Phase 1: Exec surface, per-job holders, approval, and completion steer
 
-Implement `exec.run`, `exec.shell`, `exec.stop`, `exec.tail`, `exec.list` and
-`exec.write` (pipe stdin) on top of `internal/execjob` and one thin holder per
-exec job, reusing the landed `agent.spawn` holder-per-process lifecycle, with the
-30 s config-key window, async conversion, completion system mail, process-tree
-kill, holder-memory output, and the old 8 tools as aliases; daemon-owned approval
-via ws command rules then the dashboard UI, with permission-profile caps; verify
-whether Claude raises `can_use_tool` for MCP tools and allowlist `ws/exec.*`
-accordingly. Carried from 261112's open questions: Windows shell resolution (Git
-Bash default for `exec.shell`) and output encoding on Windows.
+Implement the six exec tools and the T0 legacy contracts from Decisions 1-3
+over `internal/execjob` and the landed holder-per-process lifecycle. Bind jobs
+and daemon-owned approval to the authenticated conversation and enforce the
+same approval policy for hosted legacy launches. Implement the process-group
+lifecycle, output retention, and session-scoped `exec.list` read seam.
+Deliver durable async completion with the existing steer, idle-turn, and
+next-turn routes. Implement the independent 30 s execution window and check
+Claude's MCP approval path. Phase 2 uses this surface before removing native
+tools. Restore-bundle integration follows separately.
 
-Verification: Go tests on remote w5090 for sync, async, convert-to-async without a
-new turn, `exec.write` to a running job, the `exec.spawn`/`exec.shell` alias
-parity (including the alias-only `shell` arg), Windows shell resolution and
-output encoding, completion push starting a turn, stop killing the process tree
-(including Windows `taskkill /T`), tail, list, alias parity, approval paths and
-cap enforcement; a recorded answer on `can_use_tool` for MCP tools; syscalls/s
-showing no per-job files.
+Verification:
 
-### Phase 2: Native process-tool removal and never-auto-terminate
+- Exercise direct argv, both `exec.shell` shapes, rejection of mixed arguments
+  by the precheck, original launch and stop shapes, all five distinct legacy
+  readers, and preserved old records and raw byte offsets.
+- Exercise sync, async, conversion in the current turn, and pipe stdin via
+  `exec.write`. Prove preflight, approval, and slot re-acquisition do not
+  consume the 30 s conversion window. Verify running, idle, and next-turn
+  completion delivery, once across daemon replacement, including suppression
+  after close and absence of notices for synchronous completions.
+- Verify T0 with an old daemon running the new holder, then holder exit, then
+  new-daemon reopen and terminal-status retrieval. Share the harness-kill
+  survival case with `261120-feat-ws-agy-timeout-process-respawn`.
+- Verify process-tree kill for stop, including Windows, and the detached
+  process boundary. Check Bash resolution, raw Windows bytes and validated
+  UTF-8 decoding, 4 KiB previews, per-job and total-ring eviction offsets,
+  finite metadata and list bounds, and session-scoped listings.
+- Verify command-rule allow and deny, deny under `full`, dashboard approvals
+  bound to command and owner, live profile changes before approval or start,
+  legacy shape enforcement, and rejection of owner selection by a descendant
+  key. Pin the Claude `can_use_tool` finding and verify one approval path.
+- Measure syscalls/s on the owner's PC and account for cold-start and exit
+  holder files. Verify that new hosted jobs create no per-job output files
+  and that interactive paths stay off file I/O.
 
-Block Bash, PowerShell, Agent/Task and harness background shell/monitor tools in
-hosted leads with `--disallowedTools` only; feed daemon exec jobs into `idleNow`
-so a live job or an awake child prevents sleep (a sleeping child does not keep
-its parent awake); cascade a human's dashboard close deepest-first.
+### Phase 2: Harness cutover, report hold, and session and worktree lifecycle
 
-Verification: Go tests on remote w5090 for the flag set and the preserved tools,
-sleep behavior with a live job, with an awake child and with a sleeping child,
-and cascading close order; a
-recorded hosted-lead init stream showing the tool set.
+After Phase 1, add the exec tools to worker allowlists and then enable verified
+per-harness native process tool removal with its rollout switch and exclusions.
+On agy, use the native default launch mode and daemon `reject_once` for
+`run_command`; preserve daemon-side bypass for other requests and handle
+commands that start without a request. Append the creation-time instruction,
+send its new-prompt follow-up after rejected turns, and remove the old agy
+background prompt rules after cutover.
+
+Hold worker done reports while owned exec jobs remain live, including the child
+report successor and recovery replay paths. Keep legacy agy background tracking
+and the wake grace only outside cutover. Drive sleep and admission from the
+shared predicate. Serialize job admission with worktree release and protect
+release and removal against live jobs. Apply interrupt semantics and fence
+admission before a human close, kill the process trees deepest-first, and
+suppress post-close completion.
+
+Verification:
+
+- Verify Claude's hosted init stream and exact removals, the verified Codex
+  config fixture, Pi's lead and worker tool flags, preserved tools, worker allowlist
+  ordering, default-on behavior, and per-harness revert. Cover the frozen
+  Claude CLI tier, missing replacement tools, existing and reattached sessions,
+  and unverified versions.
+- Verify agy default launch, the `reject_once` exception under bypass and worker
+  auto-approval, command-request detection for foreground and daemon jobs,
+  prompt append, new prompt after turn end, and the warning and instruction
+  path when a command starts without a request. Cover the advisory-only
+  native subagent path and update both prompt regression tests in Decision 18.
+- Verify interrupt during the sync window and survival of async or converted
+  jobs across interrupt, harness restart, handoff, compaction, and daemon
+  replacement. Check the common sleep predicate with a running turn, live
+  job, awake child, or sleeping child.
+- Verify report hold and later publication, including child report arrival,
+  replay before release, and interim supersession for report-free follow-ups.
+  Check that only pre-cutover agy sessions retain background tracking and
+  the 6 s wake grace.
+- Race job admission with worktree release, and verify release and removal
+  refusal while a job is live. Verify close fences new admissions, cascades
+  deepest-first, kills whole job groups, and suppresses post-close notices.
