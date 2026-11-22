@@ -1,6 +1,7 @@
 package wsdoc
 
 import (
+	"errors"
 	"io/fs"
 	"maps"
 	"os"
@@ -85,10 +86,16 @@ func listStatusDirEntries(statusDir string) ([]os.DirEntry, error) {
 // ticket created, moved, closed or edited by any process or by plain git is
 // seen on the next scan. A directory's map is replaced on every scan, so a
 // vanished file leaves the cache with it.
+//
+// stripped counts, per directory, the map-root evictions that dropped its
+// documents. A scan that snapshotted the map before such an eviction drops
+// the documents it carried instead of publishing them back for a root no
+// longer under the root cap.
 var ticketCache = struct {
 	sync.Mutex
-	dirs map[string]map[string]ticketCacheEntry
-}{dirs: map[string]map[string]ticketCacheEntry{}}
+	dirs     map[string]map[string]ticketCacheEntry
+	stripped map[string]uint64
+}{dirs: map[string]map[string]ticketCacheEntry{}, stripped: map[string]uint64{}}
 
 // scanStatusDir parses every ticket file in one status directory, rereading
 // only files whose listed size or mtime changed since the last scan.
@@ -98,7 +105,7 @@ var ticketCache = struct {
 // an open and read per ticket. A symlinked ticket is always reread, because
 // the listing describes the link, not its target.
 func scanStatusDir(root, statusDir, status string) ([]TicketInfo, error) {
-	scans, err := scanStatusEntries(root, statusDir, status, sortedEntries(statusDir), false)
+	scans, _, err := scanStatusEntries(root, statusDir, status, sortedEntries(statusDir), false)
 	if err != nil {
 		return nil, err
 	}
@@ -113,22 +120,29 @@ func scanStatusDir(root, statusDir, status string) ([]TicketInfo, error) {
 // through the error-returning listStatusDirEntries, and wantDoc fills each
 // entry's ticketDoc from the same single read that parses it. A revalidated
 // hit that already carries a doc costs no open; a hit cached by a plain
-// listing (doc nil) is read once and its doc carried from then on.
-func scanStatusDirWith(root, statusDir, status string, wantDoc bool) ([]ticketScan, error) {
+// listing (doc nil) is read once and its doc carried from then on. vanished
+// reports a listed ticket that was gone by its read (moved or removed in
+// between); it is left out, and the listing cannot be memoized.
+func scanStatusDirWith(root, statusDir, status string, wantDoc bool) (scans []ticketScan, vanished bool, err error) {
 	entries, err := listStatusDirEntries(statusDir)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	return scanStatusEntries(root, statusDir, status, entries, wantDoc)
 }
 
-func scanStatusEntries(root, statusDir, status string, entries []os.DirEntry, wantDoc bool) ([]ticketScan, error) {
+// scanStatusEntries skips a listed file whose read reports it missing: it was
+// moved or removed after the listing, which a caller must not mistake for a
+// missing status directory.
+func scanStatusEntries(root, statusDir, status string, entries []os.DirEntry, wantDoc bool) ([]ticketScan, bool, error) {
 	ticketCache.Lock()
 	prev := ticketCache.dirs[statusDir]
+	epoch := ticketCache.stripped[statusDir]
 	ticketCache.Unlock()
 
 	next := map[string]ticketCacheEntry{}
 	out := []ticketScan{}
+	vanished := false
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ticketFileSuffix {
 			continue
@@ -142,8 +156,12 @@ func scanStatusEntries(root, statusDir, status string, entries []os.DirEntry, wa
 			if hit, ok := prev[entry.Name()]; ok && hit.size == stat.Size() && hit.modTime.Equal(stat.ModTime()) {
 				if wantDoc && hit.doc == nil {
 					raw, err := readTicketFile(path)
+					if errors.Is(err, fs.ErrNotExist) {
+						vanished = true
+						continue
+					}
 					if err != nil {
-						return nil, err
+						return nil, false, err
 					}
 					hit.doc = buildTicketDoc(hit.info.Stem, string(raw), false)
 				}
@@ -153,12 +171,16 @@ func scanStatusEntries(root, statusDir, status string, entries []os.DirEntry, wa
 			}
 		}
 		raw, err := readTicketFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			vanished = true
+			continue
+		}
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		info := readTicketFromBytes(filepath.ToSlash(rel), status, string(raw))
 		var doc *ticketDoc
@@ -177,9 +199,15 @@ func scanStatusEntries(root, statusDir, status string, entries []os.DirEntry, wa
 	}
 
 	ticketCache.Lock()
+	if ticketCache.stripped[statusDir] != epoch {
+		for name, entry := range next {
+			entry.doc = nil
+			next[name] = entry
+		}
+	}
 	ticketCache.dirs[statusDir] = next
 	ticketCache.Unlock()
-	return out, nil
+	return out, vanished, nil
 }
 
 // cloneTicketInfo deep-copies the slices and maps of a parsed ticket, so a

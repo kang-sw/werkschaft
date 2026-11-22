@@ -70,6 +70,9 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		ToolsAlwaysLoad:  true,
 		ManualHarness:    BackendAgy,
 		PlaybookCommands: true,
+		// An agy lead explores with its own subagents and reaches the other
+		// harnesses through agent.spawn.
+		PreferNativeSubagent: true,
 		// Lead-only: no worker of any caller runs on agy. The worker
 		// profile stays registered so existing worker records resolve and
 		// stay listable; admitWorkerBackend refuses every worker entry.

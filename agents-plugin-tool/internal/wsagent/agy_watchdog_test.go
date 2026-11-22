@@ -3,6 +3,7 @@ package wsagent
 import (
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -938,6 +939,74 @@ func TestAgyModelWaitWatchdogCancelsOnceAfterNativeRetrySilence(t *testing.T) {
 	if interrupts := procInterrupts(p); interrupts != 1 || len(p.sent) != 0 {
 		t.Fatalf("native retry fallback caused %d interrupts and %d extra prompts", interrupts, len(p.sent))
 	}
+}
+
+func agyFailureChunk(text string) string {
+	return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":` + strconv.Quote("\n"+text+"\n") + `}}}}`
+}
+
+// EOF and stream-interrupted failures are followed by agy's native retry, so
+// the 15s drain must not cancel it; the long drain still interrupts and
+// continues when no ACP activity arrives.
+func TestAgyModelWaitWatchdogGivesNativeRetryClassesLongDrain(t *testing.T) {
+	for _, tc := range []struct{ name, text string }{
+		{"unexpected EOF", "⚠ API error (attempt 1): unexpected EOF"},
+		{"stream interrupted", agyStreamInterrupted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, timers, got := agyWatchdogHarnessWithSilence(t, "45", "3", false)
+			_, p := startAgyWatchdogTurn(t, h, true)
+			m := newAgyMapper("s")
+			m.promptSent("ws-p-watchdog-1")
+			feedAgyWatchdogLines(m, p, agyFailureChunk(tc.text))
+			eventually(t, "failure drain timer", func() bool {
+				started, _ := timers.counts()
+				return started == 1
+			})
+			timers.mu.Lock()
+			drainDuration := timers.durs[0]
+			timers.mu.Unlock()
+			if drainDuration != 11*time.Minute {
+				t.Fatalf("%s drain = %v, want 11m", tc.name, drainDuration)
+			}
+			if interrupts := procInterrupts(p); interrupts != 0 {
+				t.Fatalf("native retry interrupted before the long drain: %d", interrupts)
+			}
+			timers.fire(t, 0)
+			eventually(t, "long drain interrupt", func() bool { return procInterrupts(p) == 1 })
+			feedAgyWatchdogLines(m, p, `{"jsonrpc":"2.0","result":{"stopReason":"cancelled"},"id":"ws-p-watchdog-1"}`)
+			if sent := p.nextSent(t); sent != "continue" {
+				t.Fatalf("post-drain retry prompt = %q", sent)
+			}
+			p.reply("retry complete")
+			eventually(t, "retried turn settled", func() bool { return len(got.lead()) == 1 })
+			if result := got.lead()[0].Result; result.Status != TurnDone || result.Message != "retry complete" {
+				t.Fatalf("retried turn result = %+v", result)
+			}
+		})
+	}
+}
+
+// A class with no native-retry evidence keeps the short drain, so a terminal
+// failure is not left hanging for the native-retry window.
+func TestAgyModelWaitWatchdogTerminalClassKeepsShortDrain(t *testing.T) {
+	h, timers, _ := agyWatchdogHarnessWithSilence(t, "45", "3", false)
+	_, p := startAgyWatchdogTurn(t, h, true)
+	m := newAgyMapper("s")
+	m.promptSent("ws-p-watchdog-1")
+	feedAgyWatchdogLines(m, p, agyFailureChunk("⚠ API error (attempt 3): 503 UNAVAILABLE: No capacity"))
+	eventually(t, "failure drain timer", func() bool {
+		started, _ := timers.counts()
+		return started == 1
+	})
+	timers.mu.Lock()
+	drainDuration := timers.durs[0]
+	timers.mu.Unlock()
+	if drainDuration != 15*time.Second {
+		t.Fatalf("terminal-class drain = %v, want 15s", drainDuration)
+	}
+	timers.fire(t, 0)
+	eventually(t, "short drain interrupt", func() bool { return procInterrupts(p) == 1 })
 }
 
 func TestAgyModelWaitWatchdogLetsNativeRetryRecoverWithACPOutput(t *testing.T) {

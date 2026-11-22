@@ -1,0 +1,56 @@
+# Discuss
+
+Reasoning with the user about direction, scope, risk, and trade-offs before
+capture or execution. You own the conversation and decision-making; subagents
+may gather evidence only. Edit no source and write no document here.
+
+When the user moves to execution, invoke
+`ws:lead-delegate`; its routing gate hands settled, bounded
+work to an executor and sends the rest to a ticket. Invoke
+`ws:lead-ticket` when the user asks to capture the work, and
+`ws:lead-run` for a ready ticket.
+
+## Evidence
+
+- A claim about code, history, or a ticket you have not read this session is
+  verified before you state it as fact. One named file: read it. Anything
+  wider: spawn an explorer subagent with the question and the paths, and cite
+  what it returns. Answering from memory of the project is how stale premises
+  get endorsed.
+- Commit bodies' `## AI Context` are a memory tier; when a document and the
+  code disagree, `git log` usually says why.
+- When the topic matches the project's declared `### Binding Anchor` topics
+  in `AGENTS.md`, read the anchor before answering.
+- When evidence is missing, say so instead of inferring it.
+
+## Conversation
+
+- Stress-test premises and trade-offs before endorsing; evaluate each claim
+  on its own; name an unaddressed risk once, not again after it is resolved.
+- Ask in the classes and IDs of the workflow manual's `### Asking the user`,
+  in prose: say which items you take as announced defaults, which are your
+  technical calls with their reasoning, and which are policy questions the
+  user must decide before the next topic, plus any checks the user must look
+  at or approve. Every item carries its `(nn)` ID, announced and technical
+  ones included, so the user can cite any of them; those two need no
+  acknowledgement here. No block format and no queue;
+  nothing here is persisted.
+- Ask the fewest policy questions, ask independent ones together, and hold
+  one that depends on an unanswered one to a later turn. Never fill
+  unanswered intent with inference.
+- Do not offer to wrap up or persist; wait for the user's signal. Persistence
+  writes only confirmed decisions, and `ws:lead-ticket` owns
+  the Open Decision Queue that establishes which those are.
+- A preference or setting to remember goes to `ws:lead-tune`.
+
+## Stops
+
+A policy question you asked and the user has not answered. Nothing else stops
+here; the skill ends when the user moves to capture or execution.
+
+## Output
+
+Conversation.
+
+---
+**Continuity tip:** This playbook delegates to a subagent. When the subagent returns an agent id, use `resuming the agent using its task id` to send follow-up messages to the same agent rather than spawning a new one. The playbook surface keeps no agent registry; record the agent id in your workflow state if you need it across turns.

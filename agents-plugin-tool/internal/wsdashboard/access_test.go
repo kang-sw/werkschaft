@@ -103,6 +103,7 @@ func guardedRoutes() []struct{ method, path, body string } {
 	return []struct{ method, path, body string }{
 		{http.MethodGet, "/health", ""},
 		{http.MethodPost, "/shutdown", ""},
+		{http.MethodPost, FullStopPath, ""},
 		{http.MethodPost, "/nudge", `{"reply_id":"livesession"}`},
 		{http.MethodGet, "/session-hire/roster?requester=livesession", ""},
 		{http.MethodGet, "/pwa/manifest.webmanifest", ""},

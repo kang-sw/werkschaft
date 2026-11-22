@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -531,6 +532,34 @@ func TestDiffFenceLineKinds(t *testing.T) {
 		}
 		wantNone(t, out, "<script>")
 	}
+	// "++"/"--" source lines inside a hunk are additions/removals; headers
+	// are recognised by position (counted hunk end, or a pair before "@@").
+	for _, tc := range []struct{ lines, kinds []string }{
+		{
+			[]string{"--- a/a.c", "+++ b/a.c", "@@ -1,2 +1,2 @@", "---i;", "+++i;", " x", "--- a/b.c", "+++ b/b.c", "@@ -1 +1 @@", "-a", "+b"},
+			[]string{"file", "file", "hunk", "remove", "add", "context", "file", "file", "hunk", "remove", "add"},
+		},
+		{
+			[]string{"@@", "--- old", "+++ new", "@@", "++i;", "-- note"},
+			[]string{"hunk", "file", "file", "hunk", "add", "remove"},
+		},
+		{
+			// A counted hunk whose last deletion/addition look like a header
+			// pair just before the next "@@" is still content.
+			[]string{"@@ -1 +1 @@", "--- old", "+++ new", "@@ -4 +4 @@", "-x", "+y"},
+			[]string{"hunk", "remove", "add", "hunk", "remove", "add"},
+		},
+	} {
+		got := diffLineKinds(func() (out [][]byte) {
+			for _, l := range tc.lines {
+				out = append(out, []byte(l+"\n"))
+			}
+			return
+		}())
+		if strings.Join(got, ",") != strings.Join(tc.kinds, ",") {
+			t.Errorf("kinds for %q = %v, want %v", tc.lines, got, tc.kinds)
+		}
+	}
 	plain := string(RenderText("```go\n+new\n-old\n```", TextTargets{}))
 	if plain != "<pre><code class=\"language-go\">+new\n-old\n</code></pre>" {
 		t.Errorf("non-diff fence changed: %s", plain)
@@ -608,6 +637,13 @@ func TestMarkdownBareURLs(t *testing.T) {
 // code block, a home path, and a path with any other colon stay text; a code
 // span that is one whole path links (TestMarkdownCodeSpanPaths).
 func TestMarkdownBarePaths(t *testing.T) {
+	// The href is the path in slash form with an "./" anchor against a scheme
+	// reading: fileHref applies filepath.ToSlash, which turns a drive path's
+	// backslashes into slashes on Windows and leaves them as "%5C" elsewhere.
+	driveHref := "./C:%5CUsers%5Ca.txt"
+	if runtime.GOOS == "windows" {
+		driveHref = "./C:/Users/a.txt"
+	}
 	for name, layout := range layouts() {
 		t.Run(name, func(t *testing.T) {
 			out := mdBoard(t, layout,
@@ -620,7 +656,7 @@ func TestMarkdownBarePaths(t *testing.T) {
 				`and/or a/b x1.5/2.5`, `~/home/a.md`,
 				`<a href="ai-docs/c.md"><code>ai-docs/c.md</code></a>`, `a/b.go:note`,
 				`(<a href="ai-docs/x.md">ai-docs/x.md</a>)`, `<a href="docs/q.md">docs/q.md:3:4</a>:`,
-				`<a href="./C:%5CUsers%5Ca.txt">C:\Users\a.txt</a>`,
+				`<a href="`+driveHref+`">C:\Users\a.txt</a>`,
 			)
 		})
 	}

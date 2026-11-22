@@ -156,6 +156,76 @@ func (r *OutputRings) Append(j *JobOutput, s Stream, data []byte) {
 	if j.released {
 		return
 	}
+	r.appendLocked(j, s, data)
+}
+
+// AppendAt is Append for data that starts at absolute offset own in s and
+// combined in the combined stream, as a holder's record says. Bytes of a
+// stream that never arrived before its offset (a replay that starts after
+// the holder evicted records, or records a lagging reader missed) count as
+// written and evicted, so offsets stay absolute and a read below them
+// reports the gap. The combined stream holds both streams' bytes, so
+// combined-own is where the other stream stands: a stream whose bytes all
+// left before the replay reached it gets its offset from there. A stream's
+// window stays contiguous: its bytes retained before a gap go with it.
+// Offsets at or below what was written append as Append does.
+func (r *OutputRings) AppendAt(j *JobOutput, s Stream, data []byte, own, combined int64) {
+	if len(data) == 0 || (s != StreamStdout && s != StreamStderr) {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if j.released {
+		return
+	}
+	other := StreamStderr
+	if s == StreamStderr {
+		other = StreamStdout
+	}
+	r.skipTo(j, s, own)
+	r.skipTo(j, other, combined-own)
+	r.skipTo(j, StreamCombined, combined)
+	r.appendLocked(j, s, data)
+}
+
+// AdvanceTo moves stdout, stderr and combined up to the totals a holder
+// reported, as AppendAt does for the bytes before a record: what never
+// arrived counts as written and evicted. Totals at or below what was
+// written change nothing.
+func (r *OutputRings) AdvanceTo(j *JobOutput, stdout, stderr, combined int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if j.released {
+		return
+	}
+	r.skipTo(j, StreamStdout, stdout)
+	r.skipTo(j, StreamStderr, stderr)
+	r.skipTo(j, StreamCombined, combined)
+}
+
+// skipTo moves s's written and evicted marks up to at when bytes before it
+// never arrived, first dropping the oldest records through the last one
+// holding s's bytes. The gap's newlines are unknown, so absolute grep line
+// numbers past it count from what arrived. r.mu is held.
+func (r *OutputRings) skipTo(j *JobOutput, s Stream, at int64) {
+	if at <= j.written[s] {
+		return
+	}
+	last := -1
+	for i := len(j.recs) - 1; i >= j.head; i-- {
+		if j.recs[i].in(s) {
+			last = i
+			break
+		}
+	}
+	for n := last - j.head + 1; n > 0; n-- {
+		r.evictFront(j, math.MaxInt64)
+	}
+	j.written[s], j.evicted[s] = at, at
+}
+
+// appendLocked is Append under r.mu for a live job.
+func (r *OutputRings) appendLocked(j *JobOutput, s Stream, data []byte) {
 	if limit := r.limit(); limit > 0 && int64(len(data)) > limit {
 		// The new bytes alone fill the bound: everything older goes, and the
 		// prefix that would be evicted at once is never copied.

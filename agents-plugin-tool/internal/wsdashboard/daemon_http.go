@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/kang-sw/devenv/internal/wsholder"
 )
 
 // Handler is the daemon's HTTP surface. Every route first passes the access
@@ -40,6 +42,7 @@ func (d *Daemon) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.handleHealth)
 	mux.HandleFunc("/shutdown", d.handleShutdown)
+	mux.HandleFunc(FullStopPath, d.handleShutdownAll)
 	mux.HandleFunc("/auth/status", d.handleAuthStatus)
 	mux.HandleFunc("/auth/exchange", d.handleAuthExchange)
 	mux.HandleFunc("/auth/link", d.handleAuthLink)
@@ -156,19 +159,83 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleShutdown stops the daemon when the request carries the endpoint
 // file's token as a bearer credential. Only a process that can read the
-// endpoint file (the same OS user) holds that token.
+// endpoint file (the same OS user) holds that token. The holders outlive
+// it (holders.go); handleShutdownAll ends them too.
 func (d *Daemon) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	got, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !bearer || got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(d.endpoint.Token)) != 1 {
+	if !d.endpointBearer(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"shutting_down": true})
 	fmt.Fprintf(d.log, "dashboard: shutdown requested\n")
+	go d.Close()
+}
+
+// endpointBearer reports whether r carries the endpoint file's token as its
+// bearer credential.
+func (d *Daemon) endpointBearer(r *http.Request) bool {
+	got, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return bearer && got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(d.endpoint.Token)) == 1
+}
+
+// FullStopPath is the full stop route (handleShutdownAll).
+const FullStopPath = "/shutdown/all"
+
+// FullStopResult is the full stop route's answer. ShuttingDown is true only
+// when no holder remains and the daemon stops; Remaining lists every holder
+// whose process still runs, with why.
+type FullStopResult struct {
+	ShuttingDown bool `json:"shutting_down"`
+	wsholder.StopAllResult
+}
+
+// handleShutdownAll is the full stop: with /shutdown's bearer credential
+// (and its access exemption, access.go), it ends every session holder
+// (HolderHost.StopAll: every hosted session, worker, and terminal, with
+// new launches refused meanwhile) and only then the daemon. It answers 202
+// with shutting_down once no holder remains, and 409 with the remaining
+// holders otherwise, when the daemon keeps running and launches are
+// allowed again; 503 when the daemon is already stopping, so its holders
+// are left as they are. A Close that starts while the holders stop (another
+// /shutdown, a signal) may end the process before the answer: the caller
+// treats a lost answer as an incomplete stop. A daemon without a holder
+// host has none to stop and simply stops.
+func (d *Daemon) handleShutdownAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !d.endpointBearer(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	select {
+	case <-d.stop:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "shutting_down"})
+		return
+	default:
+	}
+	fmt.Fprintf(d.log, "dashboard: full stop requested\n")
+	result := FullStopResult{StopAllResult: wsholder.StopAllResult{Stopped: []string{}, Remaining: []wsholder.StopFailure{}}}
+	if d.holders != nil {
+		result.StopAllResult = d.holders.StopAll()
+		if d.terminals != nil {
+			// The stopped terminals' viewers learn of it now.
+			d.terminals.sync()
+		}
+	}
+	if len(result.Remaining) > 0 {
+		fmt.Fprintf(d.log, "dashboard: full stop incomplete: %d holder(s) stopped, %d remain; the daemon keeps running\n", len(result.Stopped), len(result.Remaining))
+		writeJSON(w, http.StatusConflict, result)
+		return
+	}
+	result.ShuttingDown = true
+	fmt.Fprintf(d.log, "dashboard: full stop: %d holder(s) stopped; shutting down\n", len(result.Stopped))
+	writeJSON(w, http.StatusAccepted, result)
 	go d.Close()
 }
 

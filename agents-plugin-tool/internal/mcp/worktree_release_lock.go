@@ -73,6 +73,12 @@ func reserveWorktreeRelease(ctx context.Context, runner wsgit.Runner, path, pool
 	if err == nil && caller != nil && !caller.Force && caller.CheckChildren != nil {
 		err = caller.CheckChildren(ctx, target)
 	}
+	// Running hosted exec jobs live outside the conversations CheckChildren
+	// sees; one whose cwd is in the tree is wiped by hygiene just the same.
+	// Launches racing this check are a known gap (no admission fence).
+	if err == nil && caller != nil && !caller.Force && caller.CheckExecJobs != nil {
+		err = caller.CheckExecJobs(target)
+	}
 	if err != nil {
 		unlock()
 		return "", worktreeEntry{}, nil, err

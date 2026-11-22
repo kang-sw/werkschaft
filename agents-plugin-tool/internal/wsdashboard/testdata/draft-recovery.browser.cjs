@@ -21,15 +21,15 @@ async function type(frame, value) {
     field.dispatchEvent(new Event('input', { bubbles: true }));
   }, value);
 }
-async function paste(frame) {
-  await frame.evaluate(png64 => {
+async function paste(frame, name = 'draft.png') {
+  await frame.evaluate(([png64, name]) => {
     const bytes = Uint8Array.from(atob(png64), char => char.charCodeAt(0));
     const transfer = new DataTransfer();
-    transfer.items.add(new File([bytes], 'draft.png', { type: 'image/png' }));
+    transfer.items.add(new File([bytes], name, { type: 'image/png' }));
     document.querySelector('#ctext').dispatchEvent(new ClipboardEvent('paste', {
       clipboardData: transfer, bubbles: true, cancelable: true
     }));
-  }, png64);
+  }, [png64, name]);
 }
 async function send(frame, command) {
   if (command) await frame.evaluate(() => {
@@ -72,7 +72,7 @@ async function delivery(browser, { theme, accepted, command, capturePair }) {
       assert.equal(response.ok(), true, await response.text());
     }
     if (seen.length > 1) {
-      await route.fulfill({ json: { id: 'explicit-browser-retry' } });
+      await route.fulfill({ json: { id: '20261122T000000.000000000Z-0a0c0e02' } });
       replayed();
       return;
     }
@@ -197,7 +197,8 @@ async function recoverImage(browser) {
     await page.goto(base + '/');
     await page.evaluate(() => {
       const key = 'ws.dashboard.draft.livesession';
-      const previous = JSON.parse(localStorage.getItem(key));
+      // An older page writes its own readDraft fields, never the stamp.
+      const { stamp, ...previous } = JSON.parse(localStorage.getItem(key));
       localStorage.setItem(key, JSON.stringify({ ...previous, text: 'New input from an older page', lost: [] }));
     });
     await page.goto(base + session);
@@ -210,6 +211,242 @@ async function recoverImage(browser) {
     frame = await frameFor(page);
     assert.equal(await frame.locator('#cimgs img[alt="draft.png"]').count(), 0);
     assert.match(await frame.locator('#ctext').inputValue(), /New input from an older page/);
+  } finally { await context.close(); }
+}
+
+async function imagesAcrossWindows(browser) {
+  const context = await browser.newContext();
+  try {
+    const first = await context.newPage();
+    await first.goto(base + session);
+    const one = await frameFor(first);
+    await type(one, 'Shared image draft');
+    await paste(one, 'first.png');
+    await one.locator('#cimgs img[alt="first.png"]').waitFor();
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    const second = await context.newPage();
+    await second.goto(base + session);
+    const two = await frameFor(second);
+    await two.locator('#cimgs img[alt="first.png"]').waitFor();
+
+    // The first window adds an image the second window never loaded.
+    await paste(one, 'newer.png');
+    await one.locator('#cimgs img[alt="newer.png"]').waitFor();
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    // A later save from the stale second window keeps the newer bytes.
+    await type(two, await two.locator('#ctext').inputValue() + ' edited in the second window');
+    assert.equal(await two.evaluate(() => window.wsSaveSessionDraft()), true);
+    await first.close();
+    await second.close();
+
+    const reopened = await context.newPage();
+    await reopened.goto(base + session);
+    const frame = await frameFor(reopened);
+    await frame.locator('#cimgs img[alt="newer.png"]').waitFor();
+    assert.equal(await frame.locator('#cimgs img').count(), 2);
+    assert.match(await frame.locator('#ctext').inputValue(), /Shared image draft.*edited in the second window/s);
+    assert.deepEqual(await frame.locator('#cimgs img[alt="newer.png"]').evaluate(async image => {
+      const blob = await (await fetch(image.src)).blob();
+      return Array.from(new Uint8Array(await blob.arrayBuffer()));
+    }), [...Buffer.from(png64, 'base64')]);
+  } finally { await context.close(); }
+}
+
+// recoveryRow reads (and with edit, rewrites) this session's shared
+// recovery row, as an older dashboard page would leave it.
+async function recoveryRow(frame, edit) {
+  return frame.evaluate(([edit, png64]) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('ws.dashboard.recovery', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result, tx = db.transaction('drafts', edit ? 'readwrite' : 'readonly'), store = tx.objectStore('drafts');
+      const get = store.get('livesession');
+      let row = null;
+      get.onsuccess = () => {
+        row = get.result || null;
+        if (!edit) return;
+        const blob = name => new Blob([Uint8Array.from(atob(png64), c => c.charCodeAt(0)), name], { type: 'image/png' });
+        row = new Function('row', 'blob', edit)(row, blob);
+        store.put(row, 'livesession');
+      };
+      tx.oncomplete = () => {
+        db.close();
+        resolve(row && { images: (row.active && row.active.images || []).map(p => ({ id: p.id || null, n: p.n, name: p.name })), removed: row.removed || [] });
+      };
+      tx.onabort = () => reject(tx.error);
+    };
+  }), [edit || '', png64]);
+}
+// An older page restores without IDs and appends its own ID-less paste.
+const olderPageWrite = `row.active.images = row.active.images.map(({ id, ...p }) => p)
+  .concat([{ n: 9, name: 'older.png', ref: '', blob: blob('older') }]);
+delete row.active.mine;
+return row;`;
+
+async function rollingUpgradeImages(browser) {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await page.goto(base + session);
+    const frame = await frameFor(page);
+    await type(frame, 'Rolling upgrade draft');
+    await paste(frame, 'mine.png');
+    await frame.locator('#cimgs img[alt="mine.png"]').waitFor();
+    assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    await recoveryRow(frame, olderPageWrite);
+    // The newer page never loaded the older page's paste; its save keeps
+    // it and adopts its own ID-stripped image instead of storing it twice.
+    await type(frame, await frame.locator('#ctext').inputValue() + ' edited after the older page');
+    assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    assert.deepEqual((await recoveryRow(frame)).images.map(p => p.name).sort(), ['mine.png', 'older.png']);
+    await page.reload();
+    const again = await frameFor(page);
+    await again.locator('#cimgs img[alt="older.png"]').waitFor();
+    assert.equal(await again.locator('#cimgs img').count(), 2);
+  } finally { await context.close(); }
+}
+
+async function legacyImageAcrossWindows(browser) {
+  const context = await browser.newContext();
+  try {
+    const seed = await context.newPage();
+    await seed.goto(base + session);
+    const s = await frameFor(seed);
+    await type(s, 'Legacy image draft');
+    await paste(s, 'legacy.png');
+    await s.locator('#cimgs img[alt="legacy.png"]').waitFor();
+    assert.equal(await s.evaluate(() => window.wsSaveSessionDraft()), true);
+    await recoveryRow(s, 'row.active.images = row.active.images.map(({ id, ...p }) => p); delete row.active.mine; return row;');
+    await seed.close();
+    // Two newer windows restore the same ID-less image and both edit.
+    const pages = [await context.newPage(), await context.newPage()], frames = [];
+    for (const page of pages) {
+      await page.goto(base + session);
+      const frame = await frameFor(page);
+      await frame.locator('#cimgs img[alt="legacy.png"]').waitFor();
+      frames.push(frame);
+    }
+    for (const [i, frame] of frames.entries()) {
+      await type(frame, await frame.locator('#ctext').inputValue() + ' window ' + i);
+      assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    }
+    const row = await recoveryRow(frames[1]);
+    assert.equal(row.images.length, 1, 'one stored copy of the restored legacy image: ' + JSON.stringify(row.images));
+    assert.ok(row.images[0].id, 'the restored image is persisted with its ID');
+  } finally { await context.close(); }
+}
+
+async function removalAcrossWindows(browser) {
+  const context = await browser.newContext();
+  try {
+    const first = await context.newPage();
+    await first.goto(base + session);
+    const one = await frameFor(first);
+    await type(one, 'Removal draft');
+    await paste(one, 'gone.png');
+    await one.locator('#cimgs img[alt="gone.png"]').waitFor();
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    const second = await context.newPage();
+    await second.goto(base + session);
+    const two = await frameFor(second);
+    await two.locator('#cimgs img[alt="gone.png"]').waitFor();
+
+    // The first window removes the image; the stale second window still
+    // holds it and saves an edit; the first window's next save is clean.
+    await type(one, 'Removal draft');
+    await one.locator('#cimgs img[alt="gone.png"]').waitFor({ state: 'detached' });
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    await type(two, await two.locator('#ctext').inputValue() + ' stale edit');
+    assert.equal(await two.evaluate(() => window.wsSaveSessionDraft()), true);
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    assert.deepEqual((await recoveryRow(one)).images, [], 'removal wins over the stale window');
+
+    // The removing window's own undo brings it back.
+    await type(one, 'Removal draft [Image #1]');
+    await one.locator('#cimgs img[alt="gone.png"]').waitFor();
+    assert.equal(await one.evaluate(() => window.wsSaveSessionDraft()), true);
+    assert.deepEqual((await recoveryRow(one)).images.map(p => p.name), ['gone.png'], 'an undo in the removing window restores it');
+  } finally { await context.close(); }
+}
+
+async function mergedImageCap(browser) {
+  const context = await browser.newContext();
+  try {
+    const pages = [await context.newPage(), await context.newPage()], frames = [];
+    for (const page of pages) { await page.goto(base + session); frames.push(await frameFor(page)); }
+    // Each window holds a full message's worth (IMG_MAX = 8) the other never
+    // loaded. The second save would merge 16: it is refused, nothing saved
+    // is dropped, and that window's draft stays unsaved.
+    for (const [w, frame] of frames.entries()) {
+      await type(frame, 'Cap draft ' + w);
+      for (let i = 0; i < 8; i++) await paste(frame, `w${w}-${i}.png`);
+      await frame.locator(`#cimgs img[alt="w${w}-7.png"]`).waitFor();
+      assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), w === 0);
+    }
+    const row = await recoveryRow(frames[1]);
+    assert.deepEqual(row.images.map(p => p.name), [0, 1, 2, 3, 4, 5, 6, 7].map(i => `w0-${i}.png`), 'the over-cap merge keeps the saved images');
+    assert.equal(await pages[1].evaluate(() => window.wsNativeCloseReady()), false, 'the refused window holds native close');
+  } finally { await context.close(); }
+}
+
+// The reviewer's case: A saves left.png as #1; B, opened before that save,
+// pastes eight newer files #1-8 and saves; A edits keeping [Image #1] and
+// saves. A's reopened draft must bind its #1 to left.png, never to B's #1.
+async function capKeepsMarkerImage(browser) {
+  const context = await browser.newContext();
+  try {
+    const left = await context.newPage(), right = await context.newPage();
+    await right.goto(base + session);
+    const b = await frameFor(right);
+    await left.goto(base + session);
+    const a = await frameFor(left);
+    await type(a, 'Left draft');
+    await paste(a, 'left.png');
+    await a.locator('#cimgs img[alt="left.png"]').waitFor();
+    assert.equal(await a.evaluate(() => window.wsSaveSessionDraft()), true);
+    await type(b, 'Right draft');
+    for (let i = 1; i <= 8; i++) await paste(b, `right-${i}.png`);
+    await b.locator('#cimgs img[alt="right-8.png"]').waitFor();
+    assert.equal(await b.evaluate(() => window.wsSaveSessionDraft()), false, 'the over-cap save is refused');
+    await type(a, await a.locator('#ctext').inputValue() + ' edited');
+    assert.match(await a.locator('#ctext').inputValue(), /\[Image #1\]/);
+    assert.equal(await a.evaluate(() => window.wsSaveSessionDraft()), true);
+    await right.close();
+    await left.reload();
+    const again = await frameFor(left);
+    await again.locator('#cimgs img').first().waitFor();
+    assert.deepEqual(await again.locator('#cimgs img').evaluateAll(list => list.map(img => img.alt)), ['left.png']);
+    assert.match(await again.locator('#ctext').inputValue(), /Left draft.*\[Image #1\].*edited/s);
+  } finally { await context.close(); }
+}
+
+// A draft's markers answer only the images that draft saved: another
+// window's image under the same number comes back loose, renumbered, and
+// the draft's own missing image is reported lost.
+async function foreignImageStaysLoose(browser) {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await page.goto(base + session);
+    const frame = await frameFor(page);
+    await type(frame, 'Own marker draft');
+    await paste(frame, 'own-a.png');
+    await paste(frame, 'own-b.png');
+    await frame.locator('#cimgs img[alt="own-b.png"]').waitFor();
+    assert.match(await frame.locator('#ctext').inputValue(), /\[Image #1\].*\[Image #2\]/s);
+    assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
+    // Another window removed own-a.png (#1) and put its own #1 in the row.
+    await recoveryRow(frame, `const a = row.active.images.find(p => p.name === 'own-a.png');
+row.active.images = row.active.images.filter(p => p !== a).concat([{ id: 'other-window', n: 1, name: 'other.png', ref: '', blob: blob('other') }]);
+row.removed = (row.removed || []).concat([a.id]);
+return row;`);
+    await page.reload();
+    const again = await frameFor(page);
+    await again.locator('#cimgs img[alt="other.png"]').waitFor();
+    const text = await again.locator('#ctext').inputValue();
+    assert.equal(await again.locator('#cimgs img').count(), 2);
+    assert.doesNotMatch(text, /\[Image #1\]/, 'no other window\'s image answers the draft\'s #1: ' + text);
+    assert.match(text, /\[Image #2\].*\[Image #3\]/s, 'own-b keeps #2 and the other window\'s image comes back as #3: ' + text);
   } finally { await context.close(); }
 }
 
@@ -270,7 +507,7 @@ async function ackWithUnavailableLegacyStorage(browser) {
     await page.route('**/s/livesession/message', async route => {
       received();
       await reply;
-      await route.fulfill({ json: { id: 'legacy-quota-ack' } });
+      await route.fulfill({ json: { id: '20261122T000000.000000000Z-0a0c0e01' } });
     });
     await page.goto(base + session);
     let frame = await frameFor(page);
@@ -280,7 +517,7 @@ async function ackWithUnavailableLegacyStorage(browser) {
     await type(frame, 'Keep this later input after the acknowledgement');
     await frame.evaluate(() => window.wsSaveSessionDraft());
     delivered();
-    await frame.locator('#r-convlive [data-entry="legacy-quota-ack"]').waitFor();
+    await frame.locator('#r-convlive [data-entry="20261122T000000.000000000Z-0a0c0e01"]').waitFor();
     assert.equal(await frame.evaluate(() => window.wsSaveSessionDraft()), true);
     const next = await context.newPage();
     await next.goto(base + session);
@@ -346,6 +583,13 @@ async function queueAcrossTabs(browser) {
     if (!before) {
       for (const accepted of [false, true]) await delivery(browser, { theme: 'dark', accepted, command: true });
       await recoverImage(browser);
+      await imagesAcrossWindows(browser);
+      await rollingUpgradeImages(browser);
+      await legacyImageAcrossWindows(browser);
+      await removalAcrossWindows(browser);
+      await mergedImageCap(browser);
+      await capKeepsMarkerImage(browser);
+      await foreignImageStaysLoose(browser);
       await failedStorage(browser);
       await ackWithUnavailableLegacyStorage(browser);
       await queueAcrossTabs(browser);

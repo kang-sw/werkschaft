@@ -76,6 +76,13 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 	now := r.clock()
 	var inputs []railInput
 	wanted := map[string][]Registration{}
+	var jobs, owned map[string]int
+	if d.execJobs != nil {
+		jobs = d.execJobs() // once per render, from memory
+	}
+	if d.hostedExecJobs != nil {
+		owned = d.hostedExecJobs() // once per render, from memory
+	}
 	d.railInputs.mu.Lock()
 	defer d.railInputs.mu.Unlock()
 	if d.railInputs.sessions == nil {
@@ -122,6 +129,8 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 			in.Snapshot = &snap
 		}
 		in.Session, in.CanRevive = s, d.agents != nil
+		in.ExecJobs = railExecJobs(jobs, reg.Project)
+		in.OwnExecJobs = owned[reg.ReplyID]
 		if in.Repo != "" {
 			wanted[in.Repo] = append(wanted[in.Repo], reg)
 		}
@@ -134,10 +143,17 @@ func (d *Daemon) railBaseView(r pageReader) RailView {
 	}
 	// A stored repository's worktrees are listed whether or not a session
 	// runs in it.
+	// A spelling of a root a session already names (case-folded on
+	// Windows) is that list, read with the session's registrations.
 	stored := d.workspaces.workspaces()
+	named := make(map[string]bool, len(wanted))
+	for p := range wanted {
+		named[admissionPathKey(p)] = true
+	}
 	for _, w := range stored {
-		if _, ok := wanted[w.Path]; w.Repo && !ok {
+		if w.Repo && !named[admissionPathKey(w.Path)] {
 			wanted[w.Path] = nil
+			named[admissionPathKey(w.Path)] = true
 		}
 	}
 	view := buildRailView(inputs, d.rail.lists(wanted), stored, now)

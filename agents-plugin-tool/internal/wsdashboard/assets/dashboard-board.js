@@ -50,7 +50,7 @@
       if (railMerged !== null) {
         railHoverUpdates = null;
         el.setAttribute("data-h", hash);
-        if (railMerged) { syncSpinnerPhases(el); fmtTimes(el); railMarks(); railScrollTo(rowTop); railRefocus(rowFocus); apScan(el); }
+        if (railMerged) { syncSpinnerPhases(el); fmtTimes(el); railMarks(); railScrollTo(rowTop); railRefocus(rowFocus); apScan(el, "rail"); }
         return;
       }
       html = WsRail.rowInputHTML(html);
@@ -196,7 +196,7 @@
     if (name === "head") labelSwapped();
     if (name === "rail") { railMarks(); railScrollTo(railTop); railRefocus(railFoc); }
     if (name === "head" || name === "convlive") leadSwapped(name);
-    if (name === "rail" || name === "sessions") apScan(el);
+    if (name === "rail" || name === "sessions") apScan(el, name);
   }
 
   // --- board morph: unchanged topics keep their nodes -------------------------

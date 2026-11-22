@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tauri::{Manager, WebviewWindow};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use webview2_com::{
     take_pwstr, AcceleratorKeyPressedEventHandler, Microsoft::Web::WebView2::Win32::*,
     NavigationCompletedEventHandler, NavigationStartingEventHandler,
@@ -8,7 +9,7 @@ use webview2_com::{
     WebResourceRequestedEventHandler,
 };
 use windows::{
-    core::{w, Interface, BOOL, HSTRING, PWSTR},
+    core::{w, Interface, BOOL, HRESULT, HSTRING, PWSTR},
     Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, VIRTUAL_KEY, VK_0, VK_ADD, VK_CONTROL, VK_F12, VK_I, VK_LWIN, VK_MENU,
         VK_OEM_MINUS, VK_OEM_PLUS, VK_R, VK_RWIN, VK_SHIFT, VK_SUBTRACT,
@@ -16,7 +17,8 @@ use windows::{
 };
 
 use crate::{
-    accelerator, close, menu_action, navigation, shell::Connection, updates, webview_setup_failed,
+    accelerator, close, menu_action, navigation, notify, shell::Connection, updates,
+    webview_setup_failed,
 };
 
 pub fn copy_text(window: &WebviewWindow, text: &str) -> bool {
@@ -53,12 +55,36 @@ pub fn install(
         let result = unsafe { install_hooks(&platform.controller(), &window, &connection) };
         match result {
             Ok(()) => queue(&window, ready),
-            Err(_) => {
+            Err(error) => {
                 eprintln!("Could not install WebView2 hooks");
-                queue(&window, move |target| webview_setup_failed(&target, &connection));
+                let outdated = error.code() == E_NOINTERFACE;
+                queue(&window, move |target| {
+                    if outdated {
+                        runtime_outdated(&target);
+                    }
+                    webview_setup_failed(&target, &connection)
+                });
             }
         }
     })
+}
+
+const E_NOINTERFACE: HRESULT = HRESULT(0x8000_4002_u32 as i32);
+
+const RUNTIME_OUTDATED: &str = "The Microsoft Edge WebView2 Runtime on this computer is too old for Werkschaft's page protection, so the dashboard cannot open. Update the WebView2 Runtime to version 122 or later (or ask your administrator to), then restart Werkschaft.";
+
+// Every interface the hooks need comes from the installed runtime: a missing
+// one means an older runtime, and Retry would fail the same way. The page
+// boundary stays required; the user is told how to meet it.
+fn runtime_outdated(window: &WebviewWindow) {
+    eprintln!("Werkschaft: The installed WebView2 Runtime lacks a required interface");
+    window
+        .dialog()
+        .message(RUNTIME_OUTDATED)
+        .title("Update the WebView2 Runtime")
+        .kind(MessageDialogKind::Warning)
+        .parent(window)
+        .show(|_| ());
 }
 
 // Tauri runs main-thread dispatch inline on the UI thread. Dispatch from a
@@ -157,7 +183,9 @@ unsafe fn install_hooks(
 
     let failed = connection.clone();
     let epoch = failed.window_epoch();
-    if window.try_state::<Arc<updates::Controller>>().is_some() {
+    let update_bridge = window.try_state::<Arc<updates::Controller>>().is_some();
+    let notify_bridge = window.try_state::<Arc<notify::Notifier>>().is_some();
+    if update_bridge || notify_bridge {
         let target = window.clone();
         // The core event receives the top-level document only. Frame messages
         // have a separate WebView2 event, which the shell does not register.
@@ -169,13 +197,23 @@ unsafe fn install_hooks(
                         return Ok(());
                     }
                     let message = take_pwstr(raw);
-                    if !message.starts_with("werkschaft:update:") || message.len() > 32 {
+                    let update = update_bridge
+                        && message.starts_with("werkschaft:update:")
+                        && message.len() <= 32;
+                    let notice = notify_bridge
+                        && message.starts_with(notify::PREFIX)
+                        && message.len() <= notify::MAX_MESSAGE;
+                    if !update && !notice {
                         return Ok(());
                     }
                     let mut raw = PWSTR::null();
                     args.Source(&mut raw)?;
                     if let Ok(source) = url::Url::parse(&take_pwstr(raw)) {
-                        updates::receive(target.clone(), epoch, true, source, &message);
+                        if update {
+                            updates::receive(target.clone(), epoch, true, source, &message);
+                        } else {
+                            notify::receive(target.clone(), epoch, source, &message);
+                        }
                     }
                 }
                 Ok(())

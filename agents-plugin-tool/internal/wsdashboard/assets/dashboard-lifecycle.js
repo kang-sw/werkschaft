@@ -1,18 +1,67 @@
-  // --- awaiting-approval notifications -----------------------------------------
-  // A row of the rail (the index's list on /) carries data-ap while its
-  // hosted session waits on a tool approval. Each read of those rows, from
-  // the live region or a hidden tab's held update, notifies of a wait the
-  // read before did not have; the first read only sets the baseline. The
-  // notification is the browser's when the user granted it (asked on a
-  // click that starts a session, answers an approval, or sends a message
-  // on a hosted page, never on load), else a toast once the tab shows. One
-  // tag per wait keeps several open tabs to one notification. A page not
-  // on the daemon's machine cannot answer, and its notification says so.
-  var apSeen = null, apHeld = [];
+  // --- notifications -------------------------------------------------------------
+  // Only the page that owns the rail notifies (a framed page's shell does),
+  // from each read of the rail's rows (the live region, or a hidden tab's
+  // held update); a row's first read only sets its baseline. It notifies
+  // of three things. A row carries data-ap while its hosted session waits
+  // on a tool approval: a wait the read before did not have is one. A
+  // top-level session that finished work of its own (data-active), once
+  // nothing of it runs any more (no child, background task, or exec job;
+  // the server's data-busy), is one, and a child finishing under a busy
+  // parent is none. A board question a
+  // row's data-asks opened since the read before is one. The viewed
+  // session's own, in a tab the user is looking at, is in front of them
+  // and is none. One tag per event keeps several open tabs, and the
+  // Werkschaft shell, to one notification. A page not on the daemon's
+  // machine cannot answer a wait, and its notification says so.
+  var apSeen = null, apHeld = [], railNotices = WsRail ? WsRail.notices() : null;
   function notifAsk() {
     try {
       if (window.Notification && window.Notification.permission === "default") window.Notification.requestPermission();
     } catch (e) { /* no notifications in this browser */ }
+  }
+  // notifDeliver shows the notification n (title, lines, tag, go: what a
+  // click opens, keep: whether a held one still applies at a later read)
+  // once, never twice. A secondary Werkschaft window shows none, as its
+  // main window does. The main window's shell shows it natively
+  // (werkschaftNotify, injected after load, so read here); only when that
+  // is missing, refused, or fails does the browser's show it, when the
+  // user granted it (asked on a click that starts a session, answers an
+  // approval, or sends a message on a hosted page, never on load), else a
+  // toast, once the tab shows.
+  function notifDeliver(n) {
+    if (window.werkschaftSecondary === true) return;
+    var shell = window.werkschaftNotify, shown;
+    if (!shell || typeof shell.notify !== "function") { notifFallback(n); return; }
+    try { shown = shell.notify(n.title, n.lines.join("\n"), n.tag); }
+    catch (e) { notifFallback(n); return; }
+    Promise.resolve(shown).then(function (ok) { if (ok !== true) notifFallback(n); }, function () { notifFallback(n); });
+  }
+  function notifFallback(n) {
+    try {
+      if (window.Notification && window.Notification.permission === "granted") {
+        var b = new window.Notification(n.title, { body: n.lines.join("\n"), tag: n.tag });
+        b.onclick = function () { window.focus(); b.close(); n.go(); };
+        return;
+      }
+    } catch (e) { /* a browser that notifies only through a service worker */ }
+    if (doc.hidden) apHeld.push(n);
+    else notifToast(n);
+  }
+  function notifToast(n) {
+    if (!window.WsToast) return;
+    window.WsToast.show([n.title].concat(n.lines).join(" · "), { kind: "notice", onClick: n.go });
+  }
+  function notifViewed(id) { return id === rid && !doc.hidden && (!doc.hasFocus || doc.hasFocus()); }
+  function notifGo(id) {
+    if (id === rid) return;
+    saveDraft();
+    go("/s/" + encodeURIComponent(id));
+  }
+  // notifWho is the session as a notification's title names it: its
+  // workspace or project, then its reply ID.
+  function notifWho(row) {
+    var g = row.closest(".rws, .project"), nm = g && g.querySelector(".nm, .pname");
+    return (nm ? nm.textContent + "/" : "") + (row.getAttribute("data-rid") || "");
   }
   function apKey(r) { return r.rid + "\n" + r.tool + "\n" + r.args; }
   function apRows(el) {
@@ -21,18 +70,31 @@
       return { rid: row.getAttribute("data-rid") || "", tool: row.getAttribute("data-ap-tool") || "", args: row.getAttribute("data-ap-args") || "", project: nm ? nm.textContent : "" };
     });
   }
-  function apScan(el) {
+  // apScan reads the rows of el, the region name ("rail", or the index's
+  // "sessions", whose rows carry approvals only). baseline (a reconnect's
+  // first full rail) records the rail's finishes and questions without
+  // notifying, as attention does: a restarted daemon re-derives every
+  // row's state, and what happened while the stream was down is not news.
+  // Waits keep their baseline across reconnects.
+  function apScan(el, name, baseline) {
     // A framed page's shell notifies, from its rail.
     if (!el || framed) return;
-    var now = {}, fresh = [];
+    var now = {}, fresh = [], rows = null, events = [];
     apRows(el).forEach(function (r) {
       var k = apKey(r);
       if (apSeen && !apSeen[k] && !now[k]) fresh.push(r);
       now[k] = true;
     });
     apSeen = now;
-    apHeld = apHeld.filter(function (r) { return now[apKey(r)]; });
+    if (name === "rail" && railNotices) {
+      var list = q(".rs[data-rid]", el);
+      rows = {};
+      list.forEach(function (row) { rows[row.getAttribute("data-rid")] = row; });
+      events = railNotices.read(list, !!baseline);
+    }
+    apHeld = apHeld.filter(function (n) { return n.keep(now, rows); });
     fresh.forEach(apNotify);
+    events.forEach(railNotify);
   }
   // apText is a wait's notification: the session in the title; the tool,
   // its arguments, and (away from the daemon's machine) where to answer in
@@ -42,36 +104,44 @@
     if (!root.hasAttribute("data-sysopen")) lines.push(wsT("js.notif.lan"));
     return { title: wsT("js.notif.title", (r.project ? r.project + "/" : "") + r.rid), lines: lines.filter(Boolean) };
   }
-  function apGo(r) {
-    if (r.rid === rid) return;
-    saveDraft();
-    go("/s/" + encodeURIComponent(r.rid));
-  }
   function apNotify(r) {
-    // the viewed session's own wait, in a tab the user is looking at, is
-    // the card in front of them
-    if (r.rid === rid && !doc.hidden && (!doc.hasFocus || doc.hasFocus())) return;
-    var t = apText(r);
-    try {
-      if (window.Notification && window.Notification.permission === "granted") {
-        var n = new window.Notification(t.title, { body: t.lines.join("\n"), tag: "ws-approval:" + apKey(r) });
-        n.onclick = function () { window.focus(); n.close(); apGo(r); };
-        return;
-      }
-    } catch (e) { /* a browser that notifies only through a service worker */ }
-    if (doc.hidden) apHeld.push(r);
-    else apToast(r);
+    if (notifViewed(r.rid)) return;
+    var t = apText(r), k = apKey(r);
+    notifDeliver({ title: t.title, lines: t.lines, tag: "ws-approval:" + k, go: function () { notifGo(r.rid); }, keep: function (now) { return !!now[k]; } });
   }
-  function apToast(r) {
-    if (!window.WsToast) return;
-    var t = apText(r);
-    window.WsToast.show([t.title].concat(t.lines).join(" · "), { kind: "notice", onClick: function () { apGo(r); } });
+  // railNotify is a rail event's notification (WsRail.notices): a finish
+  // names the row's last message, a question how many opened. A held one
+  // is dropped once its row is gone, a finished session works again, or
+  // every question it names has closed.
+  function railNotify(e) {
+    if (notifViewed(e.rid)) return;
+    var who = notifWho(e.row), title, lines = [], keep;
+    if (e.kind === "idle") {
+      var msg = e.row.querySelector(".drmsg .s2"), text = msg ? msg.textContent : "", by = msg && msg.querySelector(".who");
+      if (by && text.indexOf(by.textContent) === 0) text = by.textContent + " · " + text.slice(by.textContent.length);
+      // bounded to 200 code points, so an emoji is never cut in half
+      var chars = Array.from(text.replace(/\s+/g, " ").trim());
+      if (chars.length) lines.push(chars.length > 200 ? chars.slice(0, 199).join("") + "…" : chars.join(""));
+      title = wsT("js.notif.idle.title", who);
+      keep = function (now, rows) {
+        var r = rows ? rows[e.rid] : e.row;
+        return !!r && r.getAttribute("data-busy") !== "1" && !r.classList.contains("ended");
+      };
+    } else {
+      lines.push(wsTn("js.notif.ask.body", e.ids.length));
+      title = wsT("js.notif.ask.title", who);
+      keep = function (now, rows) {
+        var r = rows ? rows[e.rid] : e.row, open = r && WsRail.rowAsks(r);
+        return !!open && e.ids.some(function (id) { return open.has(id); });
+      };
+    }
+    notifDeliver({ title: title, lines: lines, tag: e.tag, go: function () { notifGo(e.rid); }, keep: keep });
   }
   doc.addEventListener("visibilitychange", function () {
     if (doc.hidden) return;
     var held = apHeld;
     apHeld = [];
-    held.forEach(apToast);
+    held.forEach(notifToast);
   });
   if (hostedPage) {
     doc.addEventListener("click", function (e) {
@@ -95,6 +165,41 @@
   var draftDB = null, draftReady = null, draftLoaded = false;
   var draftLegacy = null, draftCommitted = null, draftWrite = null, draftWriteKey = "";
   var draftDeliveryState = new Map(), draftRetained = null, draftRetainedImages = [];
+  // Image IDs this renderer has loaded or written, each with its content
+  // key ("" until its bytes are read). Another window's image in the shared
+  // active record is carried over, never dropped. An older page writes
+  // images without an ID (and strips the IDs it restored); such an entry is
+  // only ever matched by its bytes (draftContentKey), never by metadata.
+  var draftKnownImages = new Map(), draftDigests = new WeakMap();
+  function draftDigest(blob) {
+    var subtle = window.crypto && window.crypto.subtle;
+    if (!blob || typeof blob.arrayBuffer !== "function" || !subtle) return Promise.resolve("");
+    var known = draftDigests.get(blob);
+    if (known) return known;
+    known = blob.arrayBuffer().then(function (bytes) { return subtle.digest("SHA-256", bytes); }).then(function (hash) {
+      return Array.from(new Uint8Array(hash), function (b) { return (b + 256).toString(16).slice(1); }).join("");
+    }).catch(function () { return ""; });
+    draftDigests.set(blob, known);
+    return known;
+  }
+  // The slot, name, type and SHA-256 of an image's bytes; "" when they cannot
+  // be read. A legacy ID-less image gets "legacy:" + its key as its ID, the
+  // same in every renderer that restores it.
+  function draftContentKey(p) {
+    if (!p || !p.blob) return Promise.resolve("");
+    return draftDigest(p.blob).then(function (digest) {
+      return digest ? "c:" + [p.n, p.name, p.blob.type, p.blob.size, digest].join("\u0000") : "";
+    });
+  }
+  function draftKnow(id, key) {
+    if (id) draftKnownImages.set(id, key || draftKnownImages.get(id) || "");
+  }
+  // Removal wins: an image ID this renderer knew and no longer holds goes in
+  // the row's removed set (with its content key, which matches the same
+  // bytes written back without an ID), so a stale window cannot bring it
+  // back. Only the renderer that removed it lifts it again (an undo, a
+  // returned send). The set changes only once a write commits.
+  var draftTombstoned = new Set(), DRAFT_TOMBSTONES = 64;
 
   function draftDatabase() {
     return new Promise(function (resolve) {
@@ -114,7 +219,10 @@
         result = request.result || null;
         if (!write) return;
         try {
-          result = update(result);
+          // undefined leaves the row as it is.
+          var next = update(result);
+          if (next === undefined) return;
+          result = next;
           if (result) store.put(result, rid);
           else store.delete(rid);
         } catch (e) { tx.abort(); }
@@ -124,10 +232,14 @@
     });
   }
   function draftProjection(d) { return WsRail.emptyDraft(d) ? null : JSON.stringify(d); }
-  function savedImage(p) { return { n: p.n, name: p.name, ref: p.ref, blob: p.blob }; }
+  function savedImage(p) {
+    if (!p.id) p.id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    return { id: p.id, n: p.n, name: p.name, ref: p.ref, blob: p.blob };
+  }
   function loadDraftImage(p) {
-    return p.ref ? { n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
-      { n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
+    var id = p.id || "";
+    return p.ref ? { id: id, n: p.n, name: p.name, ref: p.ref, url: attachSrc(p.ref), data: null } :
+      { id: id, n: p.n, name: p.name, ref: "", blob: p.blob, url: URL.createObjectURL(p.blob), data: null };
   }
   function imageData(blob) {
     return new Promise(function (resolve, reject) {
@@ -174,16 +286,24 @@
     }
     return d;
   }
+  // The key leaves out record.projection, which carries a fresh stamp each write.
   function draftRecoveryKey(record, states) {
     var images = record ? record.images : [];
-    return JSON.stringify([record && record.projection, images.map(function (p) { return [p.n, p.name]; }), [...states]]);
+    return JSON.stringify([record && draftProjection(record.draft),images.map(function (p) { return [p.n, p.name]; }), [...states]]);
   }
   function saveDraft() {
     if (!draftStore || !draftLoaded || restoring || draftDetached) return Promise.resolve(!draftUnsaved);
     clearTimeout(draftTimer);
     draftTimer = null;
-    var d = readDraft(), projection = draftProjection(d), previous = draftLegacy;
+    var d = readDraft(), previous = draftLegacy;
+    delete d.stamp;
+    var projection = draftProjection(d);
+    var stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     var images = ctext ? imgs.filter(function (p) { return !p.ref && p.blob; }).map(savedImage) : draftRetainedImages;
+    images.forEach(function (p) {
+      draftKnow(p.id);
+      draftContentKey(p).then(function (key) { draftKnow(p.id, key); });
+    });
     var deliveries = outbox.filter(function (m) { return !m.acked; }).map(function (m) {
       var body = Object.assign({}, m.body);
       delete body.images;
@@ -194,15 +314,27 @@
     // A POST starts only after this transaction (including its mirror).
     // A completed send may be the last IndexedDB record for this session.
     // Confirm the new legacy projection before dropping that recovery copy.
-    var mirrorNow = !deliveries.length;
+    // A draft with images mirrors only once its record is accepted: a
+    // refused merge must leave the committed record's projection in place.
+    var mirrorNow = !deliveries.length && !images.length;
     var textSaved = mirrorNow && saveLegacyDraft(d, projection);
+    // A mirror written after its commit carries that write's stamp: its
+    // completion can reach this renderer after another window committed and
+    // mirrored, and a restore then trusts the row over the stamped mirror.
+    // record.projection is the exact mirror string, so pages that compare it
+    // with the legacy draft still match.
+    var mirror = Object.assign({}, d, { stamp: stamp }), written = mirrorNow ? projection : draftProjection(mirror);
+    function mirrorLegacy() { return mirrorNow ? saveLegacyDraft(d, projection) : saveLegacyDraft(mirror, written); }
     var missingBlob = (d.lost || []).some(function (number) {
       return !images.some(function (image) { return image.n === number; });
     });
     var hasDraft = !WsRail.emptyDraft(Object.assign({}, d, { open: {}, tab: "" }));
     var rich = !!(images.length || deliveries.length || mirrorNow && !textSaved && hasDraft);
+    // mine lists the images this draft saved: only they answer its
+    // markers on restore; another window's images come back loose.
     var record = rich ? {
-      base: previous, projection: projection, draft: d, images: images
+      base: previous, projection: written, draft: d, images: images,
+      mine: images.map(function (p) { return p.id; })
     } : null;
     var states = new Map(deliveries.map(function (m) { return [m.id, m.state]; }));
     var key = draftRecoveryKey(record, states);
@@ -220,10 +352,69 @@
       return Promise.resolve(!draftUnsaved);
     }
     draftUnsaved = true;
-    if (!draftDB) return Promise.resolve(false);
-    var before = draftDeliveryState, conflicts = [];
+    if (!draftDB) {
+      // No recovery record can hold the images: keep the text at least.
+      if (!deliveries.length) saveLegacyDraft(d, projection);
+      return Promise.resolve(false);
+    }
+    var before = draftDeliveryState, conflicts = [], pass = null;
     draftDeliveryState = states;
-    var write = draftTransaction(true, function (existing) {
+    // mergeImages merges this renderer's images into the row's active
+    // record. Another window may have committed images this one never
+    // loaded: their bytes are kept, and a restore reattaches them as loose
+    // markers. looseKeys are the content keys of the row's ID-less entries in
+    // order, and ownKeys those of images; without them (null) every ID-less
+    // entry is carried over as it is.
+    function mergeImages(existing, looseKeys, ownKeys) {
+      var current = existing && existing.active, active = record;
+      var removed = new Set(existing && Array.isArray(existing.removed) ? existing.removed : []);
+      var own = new Set(), lift = [], bury = [], loose = [], foreign = [], held = new Set(), at = 0;
+      images.forEach(function (p) {
+        own.add(p.id);
+        if (!draftTombstoned.has(p.id)) return;
+        lift.push(p.id);
+        removed.delete(p.id);
+        removed.delete(draftKnownImages.get(p.id));
+      });
+      draftKnownImages.forEach(function (key, id) {
+        if (own.has(id)) return;
+        if (!draftTombstoned.has(id)) { bury.push(id); removed.add(id); }
+        if (key && removed.has(id)) removed.add(key);
+      });
+      var kept = function (p) { return !removed.has(p.id); };
+      images.forEach(function (p, i) { if (ownKeys && ownKeys[i] && kept(p)) held.add(ownKeys[i]); });
+      (current && Array.isArray(current.images) ? current.images : []).forEach(function (p) {
+        if (!p) return;
+        if (p.id) {
+          if (!draftKnownImages.has(p.id) && kept(p)) foreign.push(p);
+          return;
+        }
+        loose.push(p);
+        var key = looseKeys && looseKeys[at++] || "";
+        if (!key) { foreign.push(p); return; }
+        // The same bytes this renderer's record holds (a restored copy keeps
+        // the legacy ID of its first slot after a renumber), or removed bytes.
+        if (held.has(key) || own.has("legacy:" + key) || removed.has(key)) return;
+        held.add(key);
+        foreign.push(Object.assign({}, p, { id: "legacy:" + key }));
+      });
+      if (foreign.length || record && !record.images.every(kept)) {
+        active = Object.assign({}, record || { base: previous, projection: written, draft: d, images: [], mine: [] });
+        active.images = active.images.filter(kept).concat(foreign);
+      }
+      // Two windows' images may merge past what one message carries
+      // (IMG_MAX, wsinbox.MaxImages). Nothing saved is dropped to fit: the
+      // row keeps its images and this save reports failure, so this window
+      // holds its draft as unsaved until images are removed.
+      var full = !!(foreign.length && active.images.length > IMG_MAX);
+      if (full) active = Object.assign({}, current, { images: current.images.filter(function (p) { return !p || !p.id || kept(p); }) });
+      return { active: active, removed: Array.from(removed).slice(-DRAFT_TOMBSTONES), full: full, lift: lift, bury: bury, loose: loose };
+    }
+    function settleTombstones(merge) {
+      merge.lift.forEach(function (id) { draftTombstoned.delete(id); });
+      merge.bury.forEach(function (id) { draftTombstoned.add(id); });
+    }
+    var first = draftTransaction(true, function (existing) {
       var merged = Object.assign({}, existing && existing.deliveries);
       before.forEach(function (state, id) {
         if (!states.has(id) && merged[id] && merged[id].state === state) delete merged[id];
@@ -240,16 +431,47 @@
         }
         merged[m.id] = m;
       });
-      return record || Object.keys(merged).length ? { active: record, deliveries: merged } : null;
-    }).then(function () {
+      pass = mergeImages(existing, null, null);
+      if (!pass.active && !Object.keys(merged).length && !pass.removed.length) return null;
+      // stamp marks this write: a second pass applies only to the row as
+      // this one left it (an older page's write drops the field).
+      return { active: pass.active, deliveries: merged, removed: pass.removed, stamp: stamp };
+    });
+    // The first write starts at once (it may run on pagehide) and carries
+    // every ID-less entry over. Then their bytes are read and, while no
+    // other write came between, a second pass drops the copies of this
+    // renderer's own or removed bytes and gives the rest their legacy ID.
+    // superseded is set when another write replaced the row while this one
+    // read bytes: that writer has mirrored its own newer projection, which
+    // this renderer's late mirror must not overwrite.
+    var superseded = false;
+    var write = first.then(function () {
+      settleTombstones(pass);
+      if (!pass.loose.length) return pass;
+      return Promise.all([Promise.all(pass.loose.map(draftContentKey)), Promise.all(images.map(draftContentKey))]).then(function (keys) {
+        var second = null;
+        return draftTransaction(true, function (existing) {
+          if (!existing || existing.stamp !== stamp) { superseded = true; return undefined; }
+          if (!keys[0].some(Boolean)) return undefined;
+          second = mergeImages(existing, keys[0], keys[1]);
+          return { active: second.active, deliveries: existing.deliveries, removed: second.removed, stamp: stamp };
+        }).then(function () {
+          if (!second) return pass;
+          settleTombstones(second);
+          return second;
+        }, function () { return pass; });
+      });
+    }).then(function (merge) {
       if (draftWrite !== write) return true;
       draftWrite = null;
       conflicts.forEach(function (id) {
         var delivery = outbox.find(function (m) { return m.recoveryID === id; });
         if (delivery) delivery.recoveryConflict = true;
       });
+      if (merge.full) { draftUnsaved = true; return false; }
       draftCommitted = draftRecoveryKey(record, states);
-      draftUnsaved = missingBlob || !saveLegacyDraft(d, projection) && !rich && hasDraft;
+      // A superseded save's mirror would only be outranked by the row.
+      draftUnsaved = missingBlob || !superseded && !mirrorLegacy() && !rich && hasDraft;
       return !draftUnsaved;
     }, function () {
       if (draftWrite === write) {
@@ -283,14 +505,40 @@
       draftDB = db;
       return db ? draftTransaction(false).catch(function () { draftDB = null; return null; }) : null;
     }).then(function (record) {
-      var active = record && record.active;
-      var useActive = active && (draftLegacy === active.base || draftLegacy === active.projection);
+      var stored = record && record.active && Array.isArray(record.active.images) ? record.active.images : [];
+      return Promise.all(stored.map(draftContentKey)).then(function (keys) { return { record: record, keys: keys }; });
+    }).then(function (loaded) {
+      var record = loaded.record, active = record && record.active, removed = new Set(record && Array.isArray(record.removed) ? record.removed : []);
+      if (active && Array.isArray(active.images)) {
+        // An ID-less entry takes its legacy ID from its bytes; one that
+        // repeats a kept image's bytes, or matches removed bytes, is a copy.
+        var seen = new Set(), images = [];
+        active.images.forEach(function (p, i) {
+          if (p && p.id && !removed.has(p.id)) { seen.add(p.id); if (loaded.keys[i]) seen.add(loaded.keys[i]); }
+        });
+        active.images.forEach(function (p, i) {
+          var key = loaded.keys[i];
+          if (!p || (p.id ? removed.has(p.id) : key && (removed.has(key) || seen.has(key) || seen.has("legacy:" + key)))) return;
+          if (!p.id && key) seen.add(key);
+          var image = Object.assign({}, p, { id: p.id || (key ? "legacy:" + key : "") });
+          if (!image.id && !ctext) savedImage(image);
+          draftKnow(image.id, key);
+          images.push(image);
+        });
+        active = Object.assign({}, active, { images: images });
+      }
+      // A stamped legacy draft is a new page's mirror, which may have landed
+      // after a newer window's: between new pages the row decides. An older
+      // page writes it without a stamp, and an edit it made shows as a
+      // projection matching neither the row's base nor its projection.
+      var stampedLegacy = !!(legacy && typeof legacy.stamp === "string");
+      var useActive = active && (stampedLegacy || draftLegacy === active.base || draftLegacy === active.projection);
       var prepared = useActive ? active.draft : legacy;
       if (!ctext) {
         draftRetained = prepared && boardDraft(JSON.parse(JSON.stringify(prepared)));
         draftRetainedImages = active ? active.images : [];
       }
-      restoreDraft(prepared, useActive ? active.images : []);
+      restoreDraft(prepared, useActive ? active.images : [], useActive && Array.isArray(active.mine) ? new Set(active.mine) : null);
       if (active && !useActive && ctext) {
         // An older page used the legacy draft in the meantime. Keep its
         // current text and put the retained blobs back under new markers.
@@ -327,13 +575,18 @@
     }
     return d;
   }
-  function restoreDraft(saved, recoveredImages) {
+  // restoreDraft restores saved with recoveredImages. With mine (the IDs
+  // the draft saved; an older page's record has none) only those images
+  // answer the draft's markers by number, the rest come back loose.
+  function restoreDraft(saved, recoveredImages, mine) {
     var d = boardDraft(saved);
     recoveredImages = recoveredImages || [];
     if (!d) return;
+    var savedText = typeof d.text === "string" ? d.text : "";
     restoring = true;
+    var bound = function (p) { return !mine || mine.has(p.id); };
     try {
-      var available = new Set(recoveredImages.map(function (p) { return p.n; }));
+      var available = new Set(recoveredImages.filter(bound).map(function (p) { return p.n; }));
       var lost = (Array.isArray(d.lost) ? d.lost : []).filter(function (n) { return !available.has(n); });
       var named = "";
       // Keep bundles in existing text storage. Extract before stripping lost
@@ -418,8 +671,11 @@
           imgSeq = Math.max(imgSeq, p.n);
         });
         var loose = [];
-        recoveredImages.forEach(function (p) {
-          var image = loadDraftImage(p), occupied = imgs.some(function (other) { return other.n === p.n; });
+        // Another window's image never takes a number the draft names, even
+        // one whose own image is gone: it comes back past all of them.
+        if (mine) Object.keys(markerNums(savedText + named)).concat(Array.isArray(d.lost) ? d.lost : []).forEach(function (n) { imgSeq = Math.max(imgSeq, +n || 0); });
+        recoveredImages.filter(bound).concat(recoveredImages.filter(function (p) { return !bound(p); })).forEach(function (p) {
+          var image = loadDraftImage(p), occupied = !bound(p) || imgs.some(function (other) { return other.n === p.n; });
           if (occupied) image.n = nextNum();
           // A paste may still belong to an open selection editor. Reattach
           // unreferenced blobs to the composer when restoring the session.
@@ -487,11 +743,11 @@
   var shIndex = 0, shRestoring = null, shRestoreNav = null, shRestoreTimer = null;
   var shTop = doc.querySelector(".dwrap > .top"), shBody = doc.querySelector(".dwrap > .dbody");
   var shCompanion = null, shCompanionFrame = null, shCompanionMuted = false, shCompanionMode = "off";
-  function shCompanionTarget(ent, refreshed) {
+  function shCompanionTarget(ent, refreshed, switched) {
     if (!shCompanion || shCompanionFrame === ent && !refreshed) return;
     if (shCompanionFrame && shCompanionFrame !== ent) shSend(shCompanionFrame, "companion-gate", { active: false });
     shCompanionFrame = ent;
-    shCompanion.reset();
+    shCompanion.reset(ent?.f.rid, switched);
     shCompanion.trackFrame(ent?.el || null);
     if (ent) shSend(ent, "companion-gate", { active: true });
   }
@@ -795,7 +1051,7 @@
     }
     shPrune();
     shSend(ent, "shown", { shown: true });
-    shCompanionTarget(ent);
+    shCompanionTarget(ent, false, !!was && !!ent.f.rid && was.f.rid !== ent.f.rid);
     shRid(ent.f.rid);
     shHead(ent);
     shLayout(ent);
@@ -1143,7 +1399,7 @@
   applySent();
   startDraftRecovery();
   tlCount();
-  apScan(region(mode === "index" ? "sessions" : "rail"));
+  apScan(region(mode === "index" ? "sessions" : "rail"), mode === "index" ? "sessions" : "rail");
   if (hostedPage) { lead.key = leadKey(); leadFetch(); }
   else if (handedPage) leadFetch();
   syncBadge();
@@ -1168,6 +1424,10 @@
         return page && typeof page.wsPersistDraftForWindowClose === "function" &&
           page.wsPersistDraftForWindowClose();
       }));
+      // Settings repo proposals live in this window's memory
+      // (dashboard-settings-extras.js) and outlive a dropped Settings frame.
+      var settingsDrafts = window.wsSettingsRepoDrafts;
+      if (settingsDrafts && Array.from(settingsDrafts.values()).some(function (draft) { return draft && draft.size > 0; })) return false;
       return shFrames.length === frames.length && frames.every(function (entry, i) {
         return entry === shFrames[i] && results[i] === true;
       });

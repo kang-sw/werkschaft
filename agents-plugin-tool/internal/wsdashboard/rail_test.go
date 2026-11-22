@@ -825,6 +825,47 @@ func TestRailListerSweepsOnFullReadsAndRereadsOneRepository(t *testing.T) {
 	none.reread("/a")
 }
 
+// TestRailListerRereadAndDropReachAFoldedAlias pins the invalidation of a
+// stored repository the rail lists under a session's case-folded spelling
+// (Windows): a rail add or delete names the stored spelling, and its reread
+// and dropped row must reach the list the rail renders, with no interval.
+func TestRailListerRereadAndDropReachAFoldedAlias(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	fake := &railFakeRead{reads: map[string]int{}}
+	stop := make(chan struct{})
+	defer close(stop)
+	l := newRailLister(fake.read, nil, stop)
+	l.after = func(time.Duration) <-chan time.Time { return make(chan time.Time) }
+	listed := filepath.FromSlash("/base/work/repo")
+	stored := filepath.FromSlash("/base/Work/Repo")
+	// rail.go lists the stored alias under the session's spelling only.
+	wanted := map[string][]Registration{listed: {{ReplyID: "s"}}}
+
+	l.lists(wanted)
+	release := l.watch()
+	waitFor(t, "the first read", func() bool { return len(l.lists(wanted)[listed].Entries) == 2 })
+
+	l.dropWorktree(stored, listed+"-wt", "")
+	if got := l.lists(wanted)[listed].Entries; len(got) != 1 || got[0].Path != listed {
+		t.Fatalf("entries after a delete through the stored spelling = %+v, want the root only", got)
+	}
+	l.reread(stored)
+	waitFor(t, "the reread through the stored spelling", func() bool { return fake.count(listed) == 2 })
+	waitFor(t, "the added worktree to show", func() bool { return len(l.lists(wanted)[listed].Entries) == 2 })
+
+	release()
+	waitFor(t, "the goroutine to end", func() bool { l.mu.Lock(); defer l.mu.Unlock(); return !l.running })
+	l.reread(stored)
+	l.mu.Lock()
+	_, kept := l.repos[listed]
+	l.mu.Unlock()
+	if kept {
+		t.Errorf("a reread through the stored spelling with no viewer kept the list")
+	}
+}
+
 // railFakeSource is a WorktreeSource that also lists repositories.
 type railFakeSource struct {
 	railFakeRead
@@ -1456,5 +1497,166 @@ func TestRailViewWithoutWorkspaceStoreKeepsSessionRoots(t *testing.T) {
 	view := f.d.railView(f.d.pages())
 	if len(view.Workspaces) != 1 || view.Workspaces[0].Path != f.project || len(view.PendingWorkspaces) != 0 {
 		t.Fatalf("storage-disabled rail hid session root: %+v", view)
+	}
+}
+
+// TestRailUnregisteredWorkspaceSessionsKeepNotificationRows: a live session
+// under a pending or rejected workspace still renders the .rs row
+// attributes (data-rid, data-asks, data-busy, data-active, data-ap) the
+// page's notification scan reads, hidden, and the rail still splits into
+// keyed rows.
+func TestRailUnregisteredWorkspaceSessionsKeepNotificationRows(t *testing.T) {
+	now := time.Now()
+	storedDir := mkDir(t, filepath.Join(t.TempDir(), "explicit-ws"))
+	pendDir := mkDir(t, filepath.Join(t.TempDir(), "pend"))
+	rejDir := mkDir(t, filepath.Join(t.TempDir(), "rej"))
+	view := buildRailView([]railInput{
+		{Session: railSession("s-explicit", storedDir, now.Add(-3*time.Minute), time.Time{})},
+		{Session: railSession("s-pend", pendDir, now.Add(-2*time.Minute), time.Time{})},
+		{Session: railSession("s-rej", rejDir, now.Add(-time.Minute), time.Time{})},
+	}, nil, []storedWorkspace{{Path: storedDir}}, now)
+	partitionRailWorkspaces(&view, []string{rejDir})
+	if len(view.PendingWorkspaces) != 1 || len(view.RejectedWorkspaces) != 1 {
+		t.Fatalf("partition = pending %d rejected %d, want 1 and 1", len(view.PendingWorkspaces), len(view.RejectedWorkspaces))
+	}
+	pend := &view.PendingWorkspaces[0].Sessions[0]
+	pend.Approval = &ApprovalWait{Tool: "Bash", Args: "make"}
+	pend.Busy, pend.Active = true, true
+	rej := &view.RejectedWorkspaces[0].Sessions[0]
+	rej.OpenAskIDs = "q1 q2"
+	view.CanAdd = true
+
+	reg, err := renderRailRegion(view, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(reg.HTML)
+	_, box, ok := strings.Cut(html, `<div class="unreg-notif" hidden>`)
+	if !ok {
+		t.Fatalf("no hidden notification box:\n%s", html)
+	}
+	for _, want := range []string{
+		`<div class="rs" data-rid="s-pend" data-asks="" data-busy="1" data-active="1" data-ap="1" data-ap-tool="Bash" data-ap-args="make">`,
+		`<div class="rs" data-rid="s-rej" data-asks="q1 q2">`,
+	} {
+		if !strings.Contains(box, want) {
+			t.Errorf("notification box lacks %s:\n%s", want, box)
+		}
+	}
+	rows := splitRailRows(html)
+	if rows == nil {
+		t.Fatal("rail with notification rows no longer splits into keyed rows")
+	}
+	for _, id := range []string{"s-explicit", "s-pend", "s-rej"} {
+		if _, ok := rows.rows[id]; !ok {
+			t.Errorf("keyed rows lack %s: %v", id, rows.order)
+		}
+	}
+}
+
+// TestRailGroupsWorkspacesByFoldedIdentity: where workspace identity folds
+// case (Windows), a session spelled differently from a stored workspace
+// joins it, and two spellings of one unstored root make one pending
+// workspace, matching the keys the admission route validates by.
+func TestRailGroupsWorkspacesByFoldedIdentity(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	now := time.Now()
+	base := t.TempDir()
+	stored := filepath.Join(base, "Work", "Repo")
+	view := buildRailView([]railInput{
+		{Session: railSession("s-same", filepath.Join(base, "work", "repo"), now.Add(-3*time.Minute), time.Time{})},
+		{Session: railSession("s-sub", filepath.Join(base, "WORK", "repo", "sub"), now.Add(-2*time.Minute), time.Time{})},
+		{Session: railSession("s-pend-a", filepath.Join(base, "Pend"), now.Add(-time.Minute), time.Time{})},
+		{Session: railSession("s-pend-b", filepath.Join(base, "pend"), now, time.Time{})},
+	}, nil, []storedWorkspace{{Path: stored}}, now)
+	partitionRailWorkspaces(&view, nil)
+	if len(view.Workspaces) != 1 || view.Workspaces[0].Path != stored || !view.Workspaces[0].Stored {
+		t.Fatalf("Workspaces = %+v, want the stored %s only", view.Workspaces, stored)
+	}
+	if got := railIDs(view.Workspaces[0].Sessions); strings.Join(got, ",") != "s-same,s-sub" {
+		t.Fatalf("stored workspace sessions = %v, want s-same,s-sub", got)
+	}
+	if len(view.PendingWorkspaces) != 1 || view.PendingWorkspaces[0].SessionCount() != 2 {
+		t.Fatalf("PendingWorkspaces = %+v, want one workspace holding both spellings", view.PendingWorkspaces)
+	}
+}
+
+// TestRailMatchesRepositoryWorktreesByFoldedIdentity: on Windows git's
+// spelling of a repository and its worktrees, the stored spelling and a
+// session's need not agree in case. The root worktree is still the root
+// (admitted, not pending), and each session sits in its listed worktree
+// with no second row for the same folder.
+func TestRailMatchesRepositoryWorktreesByFoldedIdentity(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	now := time.Now()
+	base := t.TempDir()
+	stored := filepath.Join(base, "Work", "Repo")
+	gitRoot := filepath.Join(base, "work", "repo")
+	gitFeat := filepath.Join(base, "work", "repo-feat")
+	repos := map[string]railRepo{gitRoot: {Read: true, Entries: []railWorktreeEntry{
+		{Path: gitRoot, Branch: "main"}, {Path: gitFeat, Branch: "feat"},
+	}}}
+	view := buildRailView([]railInput{
+		{Session: railSession("s-root", filepath.Join(base, "WORK", "repo", "sub"), now.Add(-time.Minute), time.Time{}), Repo: gitRoot},
+		{Session: railSession("s-feat", filepath.Join(base, "Work", "Repo-Feat"), now, time.Time{}), Repo: gitRoot, Linked: true},
+	}, repos, []storedWorkspace{{Path: stored, Repo: true}}, now)
+	classifyRailAdmissions(&view, &railLayoutDoc{})
+	partitionRailWorkspaces(&view, nil)
+	if len(view.Workspaces) != 1 || view.Workspaces[0].Path != stored || len(view.PendingWorkspaces) != 0 {
+		t.Fatalf("Workspaces = %+v, pending %+v; want the stored %s only", view.Workspaces, view.PendingWorkspaces, stored)
+	}
+	wts := view.Workspaces[0].Worktrees
+	if len(wts) != 2 {
+		t.Fatalf("worktrees = %+v, want the root and feat rows only", wts)
+	}
+	root, feat := wts[0], wts[1]
+	if !root.Root || root.Admission != "admitted" || root.Branch != "main" || strings.Join(railIDs(root.Sessions), ",") != "s-root" {
+		t.Errorf("root row = %+v", root)
+	}
+	if feat.Root || feat.Path != gitFeat || feat.Branch != "feat" || !feat.Deletable || strings.Join(railIDs(feat.Sessions), ",") != "s-feat" {
+		t.Errorf("feat row = %+v", feat)
+	}
+}
+
+// TestRailFoldedAliasUsesTheListWithTheCustomPool: on Windows the stored
+// spelling of a repository and git's need not agree in case. The list read
+// with the sessions' registrations carries the configured worktree pool;
+// the stored alias's list (read with none) only knows the default pools. The
+// rail picks the former, so an idle tree in the custom pool stays hidden
+// instead of showing as a pending detection.
+func TestRailFoldedAliasUsesTheListWithTheCustomPool(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	now := time.Now()
+	base := t.TempDir()
+	stored := filepath.Join(base, "Work", "Repo")
+	gitRoot := filepath.Join(base, "work", "repo")
+	pool := filepath.Join(base, "pool")
+	pooled := filepath.Join(pool, "idle")
+	entries := []railWorktreeEntry{{Path: gitRoot, Branch: "main"}, {Path: pooled, Branch: "idle"}}
+	repos := map[string]railRepo{
+		gitRoot: {Read: true, Pools: []string{pool}, Entries: entries},
+		stored:  {Read: true, Entries: entries},
+	}
+	view := buildRailView([]railInput{
+		{Session: railSession("s-root", filepath.Join(base, "WORK", "repo"), now, time.Time{}), Repo: gitRoot},
+	}, repos, []storedWorkspace{{Path: stored, Repo: true}}, now)
+	classifyRailAdmissions(&view, &railLayoutDoc{})
+	partitionRailWorkspaces(&view, nil)
+	if len(view.Workspaces) != 1 || len(view.PendingWorkspaces) != 0 {
+		t.Fatalf("Workspaces = %+v, pending %+v", view.Workspaces, view.PendingWorkspaces)
+	}
+	for _, wt := range view.Workspaces[0].Worktrees {
+		if wt.Path == pooled {
+			t.Fatalf("the idle custom-pool tree shows (admission %q): %+v", wt.Admission, view.Workspaces[0].Worktrees)
+		}
+	}
+	if wts := view.Workspaces[0].Worktrees; len(wts) != 1 || !wts[0].Root {
+		t.Fatalf("worktrees = %+v, want the root only", wts)
 	}
 }

@@ -320,6 +320,12 @@ func (c *conv) hold(res *TurnResult) {
 // record update, so a parent never reads its child between them. keepOpen
 // preserves a successor's boundary when reporting a result held earlier.
 func (c *conv) publish(res TurnResult, keepOpen bool) {
+	c.publishWith(res, keepOpen, nil)
+}
+
+// publishWith is publish with also applied to the record in the same write,
+// before the settle: a successor's boundary that must not land without it.
+func (c *conv) publishWith(res TurnResult, keepOpen bool, also func(rec *Record)) {
 	parent := c.rec.Parent
 	toConv := parent != nil && parent.Kind == ParentConversation
 	waited := false
@@ -328,12 +334,15 @@ func (c *conv) publish(res TurnResult, keepOpen bool) {
 		c.settled = res
 		c.settledReport = ""
 	}
-	if parent == nil && !c.rec.TurnOpen {
+	if parent == nil && !c.rec.TurnOpen && also == nil {
 		c.mu.Lock()
 		settle()
 		c.mu.Unlock()
 	} else {
 		c.update(func(rec *Record) {
+			if also != nil {
+				also(rec)
+			}
 			settle()
 			if !keepOpen {
 				finishActiveTurn(rec, c.r.opts.Now().UnixMilli())

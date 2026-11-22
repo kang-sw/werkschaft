@@ -133,6 +133,25 @@ func (w RailWorkspace) AllSessions() []RailRow {
 	return out
 }
 
+// LiveSessions returns the workspace's live rows, children included, in
+// the workspace and in its worktrees: the rows a pending or rejected
+// workspace renders for the notification scan.
+func (w RailWorkspace) LiveSessions() []RailRow {
+	var out []RailRow
+	var add func([]RailRow)
+	add = func(rows []RailRow) {
+		for _, r := range rows {
+			out = append(out, r)
+			add(r.Children)
+		}
+	}
+	add(w.Sessions)
+	for _, wt := range w.Worktrees {
+		add(wt.Sessions)
+	}
+	return out
+}
+
 // SessionCount returns the number of listed sessions in the workspace across
 // live, ended, and archived folds.
 func (w RailWorkspace) SessionCount() int {
@@ -199,6 +218,41 @@ type RailRow struct {
 	// Subagents counts the running agents the lead itself spawned (level 1),
 	// zero without a live adapter.
 	Subagents int
+	// runningAgents counts every running agent in the lead's snapshot, at
+	// any depth (a grandchild a settled direct child started included),
+	// zero without a live adapter: the full-idle gate (railSetBusy) reads
+	// it, while Subagents keeps the level-1 badge count.
+	runningAgents int
+	// ExecJobs counts the live exec jobs this daemon runs whose worktree
+	// root is the row's Project or holds it (railExecJobs). A job counts on
+	// every row of its worktree, not only the session that launched it.
+	ExecJobs int
+	// OwnExecJobs counts the hosted exec jobs this session owns that still
+	// run. Unlike ExecJobs they are known by their owning conversation, so
+	// they count on this row alone.
+	OwnExecJobs int
+	// Busy reports a live session not yet fully idle, rendered as
+	// data-busy="1": the lead works or waits on a permission (an approval
+	// or a terminal's prompt), or a ws-known activity remains: a running
+	// subagent, a background task, an exec job (ExecJobs, OwnExecJobs), or
+	// a busy live child row at any depth. The rail layout sets it once the
+	// children are nested (orderTree, railSetBusy). A harness that reports
+	// no background task count (taskBadgeCounts clamps its unknown count to
+	// zero) is fully idle once its turn ended and none of the rest remains,
+	// so such a session may read idle while unseen background work still
+	// runs.
+	Busy bool
+	// Active is Busy by the session's own activity, rendered as
+	// data-active="1": everything Busy counts except ExecJobs, which are
+	// known only by worktree and so also keep other sessions there busy;
+	// the session's own hosted jobs (OwnExecJobs) count. A page notifies a
+	// finish only for a busy span that was active at some point, so a
+	// session busy only through another one's job never reads as finished.
+	Active bool
+	// permission is the lead's permission wait, from a present adapter,
+	// for any session: a hosted one also has Approval, a terminal one waits
+	// on its own prompt. Busy reads it.
+	permission bool
 	// CountPolicy is the board's open policy and check items.
 	CountPolicy int
 	// OpenAskIDs is the index's already-read set, exposed as data-asks.
@@ -217,6 +271,10 @@ type RailRow struct {
 	// Approval is the tool approval a live hosted session waits on, which
 	// the dashboard answers; nil when it waits on none.
 	Approval *ApprovalWait
+	// settingsWorktree is the settings ID of the worktree or plain folder
+	// the rail placed the session under (buildRailView), which the settings
+	// routes index (settingsTargets); SettingsWorktree reads it.
+	settingsWorktree string
 	// Failure is the typed failure (a login needed, a model unavailable, a
 	// usage limit) that keeps a hosted session from working until a turn
 	// succeeds, as its runner reports it (wslive.Host); nil when none.
@@ -354,6 +412,28 @@ type railInput struct {
 	// CanRevive reports a daemon that hosts lead sessions: an ended row
 	// then carries how it comes back (railRevive).
 	CanRevive bool
+	// ExecJobs is the live exec job count under the session's project
+	// (railExecJobs), as RailRow.ExecJobs; OwnExecJobs is the session's own
+	// running hosted exec jobs (DaemonOptions.HostedExecJobs), as
+	// RailRow.OwnExecJobs.
+	ExecJobs    int
+	OwnExecJobs int
+}
+
+// railExecJobs sums the live exec jobs (DaemonOptions.ExecJobs, by root)
+// whose root is project or holds it.
+func railExecJobs(jobs map[string]int, project string) int {
+	if len(jobs) == 0 || project == "" {
+		return 0
+	}
+	project = filepath.Clean(project)
+	n := 0
+	for root, c := range jobs {
+		if railPathUnder(filepath.Clean(root), project) {
+			n += c
+		}
+	}
+	return n
 }
 
 // railMessage is a session's last conversation message as the rail shows it.
@@ -398,8 +478,22 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 	var view RailView
 	storedAt := map[string]bool{}
 	var folders []string
+	// One workspace per identity (admissionPathKey, case-folded on Windows),
+	// which the admission display and route also use: a stored spelling
+	// wins, else the first one seen, so C:\Work\Repo stored and a session
+	// at C:\work\repo make one workspace, not an empty stored one and a
+	// pending twin the route refuses as stale.
+	canon := map[string]string{}
+	canonical := func(p string) string {
+		k := admissionPathKey(p)
+		if c, ok := canon[k]; ok {
+			return c
+		}
+		canon[k] = p
+		return p
+	}
 	for _, w := range stored {
-		p := filepath.Clean(w.Path)
+		p := canonical(filepath.Clean(w.Path))
 		storedAt[p] = true
 		if !w.Repo {
 			folders = append(folders, p)
@@ -411,17 +505,25 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 	}
 	byWS := map[string][]member{}
 	repoOf := map[string]bool{}
+	// listOf is the repos key a workspace's sessions name (git's spelling of
+	// the root): that list was read with their registrations, so it carries
+	// the configured worktree pool a stored alias's list lacks.
+	listOf := map[string]string{}
 	for _, in := range sessions {
 		reg := in.Session.Registration
 		row := railRow(in, reg.Live(now), now)
 		key := filepath.Clean(reg.Project)
 		if in.Repo != "" {
-			key = filepath.Clean(in.Repo)
+			own := filepath.Clean(in.Repo)
+			key = canonical(own)
 			repoOf[key] = true
+			if _, ok := repos[own]; ok && listOf[key] == "" {
+				listOf[key] = own
+			}
 			if _, ok := byWS[key]; !ok {
 				byWS[key] = nil
 			}
-			if railPooled(repos[key], key, in.Session.Project) {
+			if railPooled(repos[own], own, in.Session.Project) {
 				// Hidden, live or ended, and left out of every count; its
 				// repository still shows as it would without it.
 				continue
@@ -429,12 +531,14 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		} else {
 			best := ""
 			for _, f := range folders {
-				if railPathUnder(f, key) && len(f) > len(best) {
+				if railPathUnder(admissionPathKey(f), admissionPathKey(key)) && len(f) > len(best) {
 					best = f
 				}
 			}
 			if best != "" {
 				key = best
+			} else {
+				key = canonical(key)
 			}
 		}
 		byWS[key] = append(byWS[key], member{in: in, row: row})
@@ -450,7 +554,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		}
 	}
 	for _, w := range stored {
-		p := filepath.Clean(w.Path)
+		p := canonical(filepath.Clean(w.Path))
 		if _, ok := byWS[p]; !ok {
 			byWS[p] = nil
 			if w.Repo {
@@ -484,6 +588,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			regs := map[string]Registration{}
 			for _, m := range members {
 				regs[m.row.ReplyID] = m.in.Session.Registration
+				m.row.settingsWorktree = settingsID("worktree", key)
 				if m.row.InSessionList() {
 					ws.Sessions = append(ws.Sessions, m.row)
 				} else {
@@ -497,7 +602,21 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			view.Workspaces = append(view.Workspaces, ws)
 			continue
 		}
-		repo := repos[key]
+		// The list is picked by workspace identity: the one the sessions'
+		// registrations were read with, else the exact spelling, else one
+		// read under a spelling the stored one folds to.
+		repo, ok := repos[listOf[key]]
+		if !ok {
+			repo, ok = repos[key]
+		}
+		if !ok {
+			for p, r := range repos {
+				if admissionPathKey(p) == admissionPathKey(key) {
+					repo = r
+					break
+				}
+			}
+		}
 		entries := repo.Entries
 		if !repo.Read {
 			entries = nil
@@ -505,7 +624,9 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		// Each session sits under the listed worktree with the longest path
 		// prefix of its root. A root no listed worktree holds (no list read
 		// yet, or a worktree added since) sits under the root worktree when
-		// it is a folder inside it, else is a worktree of its own.
+		// it is a folder inside it, else is a worktree of its own. Paths
+		// match by workspace identity (admissionPathKey), so on Windows a
+		// spelling git and a session disagree on is still one worktree.
 		type wtAcc struct {
 			wt   RailWorktree
 			snap *wslive.Snapshot
@@ -515,12 +636,13 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		var order []string
 		addWT := func(e railWorktreeEntry) *wtAcc {
 			p := filepath.Clean(e.Path)
-			if a, ok := accs[p]; ok {
+			k := admissionPathKey(p)
+			if a, ok := accs[k]; ok {
 				return a
 			}
-			a := &wtAcc{wt: RailWorktree{Path: p, Root: p == key, Folder: lastElem(p), Branch: e.Branch, Detached: e.Detached, AdmissionRepository: e.AdmissionRepository, AdmissionPath: e.AdmissionPath, Revision: e.Revision}, regs: map[string]Registration{}}
-			accs[p] = a
-			order = append(order, p)
+			a := &wtAcc{wt: RailWorktree{Path: p, Root: k == admissionPathKey(key), Folder: lastElem(p), Branch: e.Branch, Detached: e.Detached, AdmissionRepository: e.AdmissionRepository, AdmissionPath: e.AdmissionPath, Revision: e.Revision}, regs: map[string]Registration{}}
+			accs[k] = a
+			order = append(order, k)
 			return a
 		}
 		for _, m := range members {
@@ -528,7 +650,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			best := ""
 			for _, e := range entries {
 				p := filepath.Clean(e.Path)
-				if railPathUnder(p, project) && len(p) > len(best) {
+				if railPathUnder(admissionPathKey(p), admissionPathKey(project)) && len(p) > len(best) {
 					best = p
 				}
 			}
@@ -540,11 +662,12 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 						break
 					}
 				}
-			} else if railPathUnder(key, project) && !m.in.Linked {
+			} else if railPathUnder(admissionPathKey(key), admissionPathKey(project)) && !m.in.Linked {
 				a = addWT(railWorktreeEntry{Path: key})
 			} else {
 				a = addWT(railWorktreeEntry{Path: project})
 			}
+			m.row.settingsWorktree = a.wt.SettingsID()
 			if m.row.InSessionList() {
 				a.wt.Sessions = append(a.wt.Sessions, m.row)
 			} else {
@@ -560,7 +683,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		// (its folder is gone).
 		for i, e := range entries {
 			p := filepath.Clean(e.Path)
-			if _, ok := accs[p]; ok || e.Prunable {
+			if _, ok := accs[admissionPathKey(p)]; ok || e.Prunable {
 				continue
 			}
 			if i > 0 && railPooled(repo, key, p) {
@@ -576,13 +699,13 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			pools = worktreePoolRoots(repo.Pools, filepath.Clean(entries[0].Path))
 			for _, e := range entries[1:] {
 				if !e.Prunable {
-					linked[filepath.Clean(e.Path)] = true
+					linked[admissionPathKey(e.Path)] = true
 				}
 			}
 		}
-		for _, p := range order {
-			a := accs[p]
-			a.wt.Deletable = linked[p] && !a.wt.Root && !worktreePooled(pools, p)
+		for _, k := range order {
+			a := accs[k]
+			a.wt.Deletable = linked[k] && !a.wt.Root && !worktreePooled(pools, a.wt.Path)
 			if a.snap != nil {
 				r := a.snap.Repo
 				a.wt.Changes, a.wt.HasChanges = r.Modified+r.Staged+r.Untracked, true
@@ -721,6 +844,8 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 		Hosted:      reg.Hosted,
 		Exit:        hostExit(reg),
 		Hover:       sessionHover(reg, in.Snapshot, live, now),
+		ExecJobs:    in.ExecJobs,
+		OwnExecJobs: in.OwnExecJobs,
 	}
 	if !live {
 		row.Revive, row.ReviveBlocked = railRevive(in)
@@ -737,7 +862,13 @@ func railRow(in railInput, live bool, now time.Time) RailRow {
 	row.LastTool = lastToolAt(snap.Lead)
 	if row.Exit == nil && lifecycle != SessionStopped && adapterPresent(snap, now) {
 		row.Working = leadWorking(snap.Lead.Phase)
+		row.permission = snap.Lead.Phase == wslive.PhasePermission
 		row.Subagents = levelOneRunning(snap.Agents)
+		for _, a := range snap.Agents {
+			if a.Status == wslive.StatusRunning {
+				row.runningAgents++
+			}
+		}
 		bg, mon := taskBadgeCounts(snap)
 		row.BackgroundTasks = bg + mon
 		if live {

@@ -101,6 +101,16 @@ async function until(fn, what, ms = 10000) {
     assert.equal(wsOpens.length, 1, 'switching back must reuse the existing WebSocket');
     assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('#cterm-panes .d-tpane[data-active] textarea.xterm-helper-textarea')), true, 're-activating terminal tab focuses xterm');
 
+    // A resize re-syncs the visible terminal pane without taking focus from the composer.
+    await page.locator('#composer .cfield').click();
+    assert.equal(await page.evaluate(() => !!document.activeElement.closest('#composer')), true, 'composer took focus');
+    await tab.setViewportSize({ width: 1400, height: 880 });
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    await tab.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    assert.equal(await page.locator('#grid').getAttribute('data-ctab'), 'term');
+    assert.equal(await page.evaluate(() => !!document.activeElement.closest('#composer')), true, 'resize keeps composer focus');
+
     await fetch(controlURL, { method: 'POST' });
     await until(() => page.evaluate(() => !!document.querySelector('#ctabs [data-ctab="convo"] .tdot.on')), 'convo tdot lights up while terminal tab active');
 

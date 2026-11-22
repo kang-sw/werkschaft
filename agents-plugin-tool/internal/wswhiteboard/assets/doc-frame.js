@@ -111,28 +111,43 @@
     };
     r.readAsDataURL(b);
   }
+  // findMarks holds each match's first mark; a match crossing inline tags
+  // carries all of its marks as wbFindGroup (card-find.js keeps the same rules).
   var findMarks = [];
+  var FIND_INLINE = { A: 1, ABBR: 1, B: 1, BDI: 1, BDO: 1, CITE: 1, CODE: 1, DATA: 1, DEL: 1, DFN: 1, EM: 1, FONT: 1, I: 1, INS: 1, KBD: 1, LABEL: 1, MARK: 1, Q: 1, S: 1, SAMP: 1, SMALL: 1, SPAN: 1, STRONG: 1, SUB: 1, SUP: 1, TIME: 1, U: 1, VAR: 1 };
+  function findGroup(m) { return m.wbFindGroup || [m]; }
   function clearFind() {
     var parents = new Set();
-    findMarks.forEach(function (m) {
-      var p = m.parentNode;
-      if (!p) return;
-      parents.add(p);
-      while (m.firstChild) p.insertBefore(m.firstChild, m);
-      p.removeChild(m);
+    findMarks.forEach(function (first) {
+      findGroup(first).forEach(function (m) {
+        var p = m.parentNode;
+        if (!p) return;
+        parents.add(p);
+        while (m.firstChild) p.insertBefore(m.firstChild, m);
+        p.removeChild(m);
+      });
     });
     parents.forEach(function (p) { if (p.normalize) p.normalize(); });
     findMarks = [];
+  }
+  function findBlock(node) {
+    var p = node.parentElement;
+    while (p && p !== body && FIND_INLINE[p.tagName]) p = p.parentElement;
+    return p;
   }
   function runFind(query) {
     clearFind();
     if (!query) return 0;
     var needle = String(query).toLowerCase(), len = needle.length;
     if (!len || !d.createTreeWalker) return 0;
-    var nodes = [], walker = d.createTreeWalker(body, 4, {
+    // Elements are walked too: a non-inline one (even empty, hidden or
+    // skipped) becomes a null boundary so text on either side never joins.
+    var nodes = [], walker = d.createTreeWalker(body, 5, {
       acceptNode: function (node) {
+        if (node.nodeType === 1) return FIND_INLINE[node.tagName] ? 3 : 1;
         var p = node.parentElement;
-        if (!p || !node.nodeValue || !node.nodeValue.trim()) return 2;
+        // Whitespace-only nodes stay: they join words across inline tags.
+        if (!p || !node.nodeValue) return 2;
         if (p.closest && p.closest("script, style, template, textarea, input, select, svg, [hidden]")) return 2;
         for (var a = p; a && a !== body; a = a.parentElement) {
           if (a.parentElement && a.parentElement.tagName === "DETAILS" && !a.parentElement.open && a.tagName !== "SUMMARY") return 2;
@@ -141,31 +156,63 @@
       }
     });
     var n;
-    while ((n = walker.nextNode())) nodes.push(n);
-    nodes.forEach(function (node) {
-      var val = node.nodeValue, lower = val.toLowerCase(), idx = lower.indexOf(needle);
-      if (idx < 0) return;
-      var frag = d.createDocumentFragment(), pos = 0;
-      while (idx >= 0) {
-        if (idx > pos) frag.appendChild(d.createTextNode(val.slice(pos, idx)));
-        var mark = d.createElement("mark");
-        mark.className = "wb-find-hit";
-        mark.textContent = val.slice(idx, idx + len);
-        frag.appendChild(mark);
-        findMarks.push(mark);
-        pos = idx + len;
-        idx = lower.indexOf(needle, pos);
+    while ((n = walker.nextNode())) {
+      if (n.nodeType !== 1) nodes.push(n);
+      else if (nodes.length && nodes[nodes.length - 1]) nodes.push(null);
+    }
+    // A block's consecutive text nodes are searched as one string, then each
+    // match is cut back into per-node marks.
+    var i = 0, k;
+    while (i < nodes.length) {
+      if (!nodes[i]) { i++; continue; } // block boundary
+      var block = findBlock(nodes[i]), run = [], starts = [], ends = [], text = "";
+      while (i < nodes.length && nodes[i] && findBlock(nodes[i]) === block) {
+        var val = nodes[i].nodeValue, low = val.toLowerCase();
+        if (low.length !== val.length) low = val; // keep offsets aligned
+        run.push(nodes[i]);
+        starts.push(text.length);
+        text += low;
+        ends.push(text.length);
+        i++;
       }
-      if (pos < val.length) frag.appendChild(d.createTextNode(val.slice(pos)));
-      if (node.parentNode) node.parentNode.replaceChild(frag, node);
-    });
+      // Matches arrive in order and never overlap: one forward walk.
+      var cuts = run.map(function () { return []; }), groups = [], k0 = 0;
+      for (var idx = text.indexOf(needle); idx >= 0; idx = text.indexOf(needle, idx + len)) {
+        var end = idx + len, g = [];
+        while (k0 < run.length && ends[k0] <= idx) k0++;
+        for (k = k0; k < run.length && starts[k] < end; k++) {
+          cuts[k].push([Math.max(idx, starts[k]) - starts[k], Math.min(end, ends[k]) - starts[k], g]);
+        }
+        groups.push(g);
+      }
+      for (k = 0; k < run.length; k++) {
+        if (!cuts[k].length) continue;
+        var node = run[k], v = node.nodeValue, frag = d.createDocumentFragment(), pos = 0;
+        cuts[k].forEach(function (c) {
+          if (c[0] > pos) frag.appendChild(d.createTextNode(v.slice(pos, c[0])));
+          var mark = d.createElement("mark");
+          mark.className = "wb-find-hit";
+          mark.textContent = v.slice(c[0], c[1]);
+          frag.appendChild(mark);
+          c[2].push(mark);
+          pos = c[1];
+        });
+        if (pos < v.length) frag.appendChild(d.createTextNode(v.slice(pos)));
+        if (node.parentNode) node.parentNode.replaceChild(frag, node);
+      }
+      groups.forEach(function (g) {
+        if (!g.length) return;
+        g[0].wbFindGroup = g;
+        findMarks.push(g[0]);
+      });
+    }
     return findMarks.length;
   }
   function focusFind(index, seq, scroll) {
-    findMarks.forEach(function (m) { m.classList.remove("wb-find-cur"); });
+    findMarks.forEach(function (m) { findGroup(m).forEach(function (h) { h.classList.remove("wb-find-cur"); }); });
     var cur = index >= 0 && index < findMarks.length ? findMarks[index] : null;
     if (!cur) return;
-    cur.classList.add("wb-find-cur");
+    findGroup(cur).forEach(function (h) { h.classList.add("wb-find-cur"); });
     if (scroll) {
       var r = cur.getBoundingClientRect();
       post({ wbDoc: "find-scroll", seq: seq, top: r.top, height: r.height });
@@ -253,7 +300,7 @@
       // frame and has nowhere to go.
       e.preventDefault();
       var id = href.slice(1);
-      if (!/^(?:item-[0-9]{1,6}|p[1-9][0-9]*)$/.test(id)) return;
+      if (!/^(?:(?:item|check)-[0-9]+|p[1-9][0-9]*)$/.test(id)) return;
       post({ wbDoc: "jump", id: id });
       return;
     }

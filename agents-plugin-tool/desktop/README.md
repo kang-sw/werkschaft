@@ -10,9 +10,35 @@ Update and restart plugins on the previous minor after a cross-minor swap.
 
 macOS requires Python 3 for daemon start and replacement. Windows prefers an
 independent daemon process and retries inside the containing Windows job if
-the OS reports access denied for breakaway. Closing the shell leaves the
-daemon running. A job-lifetime daemon ends when its containing job is torn
-down.
+the OS reports access denied for breakaway. A job-lifetime daemon ends when
+its containing job is torn down.
+
+Werkschaft has two lifetimes: the app, and the background (the daemon and
+every session it runs). The window's close button hides the app to the tray
+without asking about drafts. In the tray menu, **Close Werkschaft** (also the
+app menu's or the system's quit) exits the app and keeps the background
+running. **Quit Werkschaft and Stop the Background…** stops every session and
+exec job, then the daemon. It asks first when any are running, with their
+count.
+Both exits ask first when a draft may not be saved. A full quit that cannot
+stop everything says what remains and keeps the app open. So does one against
+an older daemon without the full stop, which stops nothing. When another
+client starts a new background right after, the app reports it. Left-clicking
+the tray icon shows the window on Windows and opens the menu on macOS.
+
+The main window notifies through the OS, also while hidden in the tray: when a
+session waits on an approval, when a board question opens, and when a
+top-level session is fully idle (its turn ended and none of its children,
+background tasks, or exec jobs still run). A child finishing under a busy
+parent does not notify. A hosted session's own exec jobs keep it busy until
+they end. Jobs a terminal session runs through ws are counted per worktree,
+not per session: a session that worked notifies only once every such job in
+its worktree has ended, and a session that sat idle while another session's
+job ran does not notify. A session whose harness does not report its
+background tasks (Codex) may notify as soon as its turn ends. Other windows
+stay silent. When the OS refuses or fails a notification, the dashboard shows
+its own (the browser notification, or a toast) instead, never both. Clicking
+an OS notification does not open the session yet.
 
 For development, set `WERKSCHAFT_DAEMON_ROOT` to an absolute path to a prepared
 candidate directory before launching Tauri. It has the same layout as the
@@ -23,7 +49,9 @@ to the Tauri launch environment.
 ## Build and run
 
 Use Rust 1.95 and the native toolchain (Xcode Command Line Tools on macOS,
-MSVC on Windows). Windows runs on Microsoft Edge WebView2 Evergreen.
+MSVC on Windows). Windows runs on Microsoft Edge WebView2 Evergreen, version
+122 or later (`ICoreWebView2_22`, which the page boundary requires); with an
+older runtime the app says to update it and does not open the dashboard.
 
 ```sh
 cargo test --locked --features custom-protocol
@@ -93,6 +121,12 @@ python3 -m unittest discover -s scripts -p test_build_slot.py -v
   documents. External HTTP(S) links open in the system browser from top-level
   links and popups. Other schemes are blocked. Popup requests never create a
   second webview.
+- Downloads are accepted only from the pinned dashboard origin and saved to the
+  user's Downloads folder under the server's file name, cleaned to one path
+  component and numbered `name (1).ext` rather than overwriting; a native
+  notification reports the end. macOS needs the navigation delegate to hand
+  WebKit's download to Wry; on Windows the same handler replaces WebView2's
+  default download UI (Wry already suppresses it).
 - The renderer uses the dashboard's existing draft storage. The native close
   asks the pinned top-level renderer whether it recovered the draft and shows
   the native **Stay / Close** prompt if recovery fails or the renderer is too

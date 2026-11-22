@@ -83,6 +83,9 @@
       event.returnValue = "";
     });
   }
+  // The shell's native close check asks every frame. Repo proposals live
+  // only in the shell's memory, so a clean Settings frame is ready to close.
+  window.wsPersistDraftForWindowClose = async () => ![...drafts.values()].some(draft => draft.size > 0);
   let refresh = null;
   let doRerender = null;
   let activePrompt = "prompt.UserPreferenceSection";

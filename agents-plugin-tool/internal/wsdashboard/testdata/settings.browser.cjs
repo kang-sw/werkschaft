@@ -226,6 +226,7 @@ const snapshot = '/api/config/snapshot';
     await show('global');
     assert.match(await scopeButton('session').textContent(), /미평가/);
     assert(await scopeButton('synced').isDisabled());
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'clean Settings frame is ready for native close');
 
     const auth = await page.request.post(base + '/api/config/set', { headers: { Origin: 'http://elsewhere.test' },
       data: { scope:'global', key:'workflow.lang', value:'blocked' } });
@@ -312,6 +313,7 @@ const snapshot = '/api/config/snapshot';
     await pickSection('workflow');
     await setLanguage('First draft', null, false);
     await setLanguage('Second draft', null, false);
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), false, 'pending repo proposal holds native close');
     await proposal('toggle').click();
     assert.match(await frame().locator('.proposal-patch').textContent(), /Second draft/);
     assert.doesNotMatch(await frame().locator('.proposal-patch').textContent(), /First draft/);
@@ -343,6 +345,20 @@ const snapshot = '/api/config/snapshot';
     assert.doesNotMatch(await manual.inputValue(), secrets);
     await proposal('clear').click();
     await proposal('copy').waitFor({ state:'hidden' });
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'cleared repo proposal releases native close');
+
+    // The shell keeps a staged proposal after the Settings frame is gone; a
+    // ready session frame must not let the native close skip its prompt.
+    await setLanguage('Staged before leaving', null, false);
+    await ensureRailOpen();
+    await page.locator('.rs[data-rid=' + JSON.stringify(session) + '] .rl').click();
+    await page.locator('.ws-confirm button', { hasText: '나가기' }).click();
+    await page.waitForFunction(() => document.querySelector('iframe.sframe.on') && !document.querySelector('iframe.sframe[src^="/settings"]'));
+    await page.frameLocator('iframe.sframe.on').locator('#grid:not([inert])').waitFor();
+    assert.equal(await page.evaluate(() => [...window.wsSettingsRepoDrafts.values()].some(d => d.size > 0)), true, 'the shell still holds the staged proposal');
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), false, 'a staged proposal holds native close after leaving Settings');
+    await page.evaluate(() => window.wsSettingsRepoDrafts.clear());
+    assert.equal(await page.evaluate(() => window.wsNativeCloseReady()), true, 'the ready session frame alone lets native close go');
 
     assert.deepEqual(errors, []);
     console.log('Verified settings scopes, navigation, authorization, mutations, profiles, prompt diff, proposals and 8 visual captures.');

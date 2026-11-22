@@ -1017,7 +1017,14 @@ from a support conversation:
   policy (a lead or an `agent.spawn` worker) whose backend catalog names a
   native subagent tool for its role also gets a line never to use that
   tool and to delegate through `agent.spawn`/`mailbox.send`
-  (`Runner.subagentSteer`); a worker gets it after its key sentence.
+  (`Runner.subagentSteer`); a worker gets it after its key sentence. A lead
+  of a backend with `PreferNativeSubagent` (agy) gets a native-first line
+  instead, whether or not its catalog names the tool: its native subagent
+  explores without ws tools at the harness's default model, while rendered
+  playbooks, ws-tool work, and tier-specific questions go to `agent.spawn`
+  at a `claude.<size>`, `codex.<size>`, or configured route target (a bare
+  size or own-harness role tier a render recommends gets `claude.` or
+  `codex.` first), and a native subagent is one-shot.
 - **Playbook commands.** A backend with `PlaybookCommands` (Claude, agy)
   hosts leads with no ws skills: the lead's connection (not a worker's)
   renders under the `ws` server's names whatever package the daemon
@@ -1039,7 +1046,21 @@ from a support conversation:
   backend's `BackendRegistration`, read through the conversation record's
   `Backend`; common code names no backend. `ManualHarness` is the harness the
   lead's manual renders under (claude, agy, codex; Pi declares none);
-  `PlaybookCommands` is described above.
+  `PlaybookCommands` is described above. `PreferNativeSubagent` (agy only)
+  selects the native-first prompt line above and, for text the hosted lead
+  executes itself (`workflow_manual`, `playbook.read`, the playbook-command
+  render), native-first terminology: `ExploreAgent` names its native
+  subagent, `SpawnIdiom` names `agent.spawn` on an external harness with the
+  size-prefix rule, and the continuity tip names `agent.spawn`'s subagents.
+  For that lead's workflow manual, the renderer also rewrites three rendered
+  sentences (`nativeFirstManual`; plain text, not declared variables, so the
+  resource and caller-context validation are unchanged). The exploration
+  bullet loses the "tier the question needs" suffix. A rendered delegate is
+  spawned through `agent.spawn` on an external harness with the returned path
+  and the rendered tier qualified with a harness prefix (no model/effort
+  bindings, which `agent.spawn` does not take).
+  `playbook.render` output is unchanged for every caller: a rendered
+  delegate runs on another process.
   `CallFallback` opts hosted lead connections into the compact `call` tool
   and a generated callable-tool index appended to their workflow manual.
   Only agy sets it today; ordinary plugin/stdio connections, other hosted
@@ -1476,7 +1497,8 @@ access through the other branch, and a LAN token never grants trusted writes.
 The LAN token arrives as `?token=` on the Settings addresses shown only to a
 local viewer and becomes its existing HttpOnly cookie. Machine routes retain
 their own checks without requiring the browser cookie: `/health`, `/mcp`,
-`/shutdown`, `/nudge`, `/session-hire/roster`, and `/agents/by-token/<op>`.
+`/shutdown`, `/shutdown/all`, `/nudge`, `/session-hire/roster`, and
+`/agents/by-token/<op>`.
 Nudge and roster clients now send the endpoint bearer, but enforcement is deferred
 to preserve older clients. GET/HEAD public frame assets, path-capability routes
 and `/pwa/*` also remain cookieless. Every other route is gated by default.
@@ -1498,6 +1520,22 @@ new sessions, lets the MCP calls in flight finish for up to the lock wait
 minus 1.8 s (`proxyDrainBudget`), cancels long waits (a `mailbox wait`) at
 once, then closes its session streams; a git commit or merge in flight is
 not cut midway, and the sessions' launchers reconnect to the successor.
+The session holders outlive that stop and attach to the next daemon.
+
+`POST /shutdown/all` is the full stop (the desktop app's full quit). It takes
+the same endpoint bearer as `/shutdown` and first stops every session holder:
+from the call on no holder launches, a launch already running finishes and is
+stopped too, and every holder, found by a rescan of the holders directory,
+gets the protocol stop or the start-time-guarded kill in parallel. The daemon
+answers `202 {"shutting_down": true, "stopped": [...], "remaining": []}` and
+drains as above only when no holder process remains. Otherwise it answers
+`409` with each remaining holder and why, keeps running, and allows launches
+again. A daemon already stopping answers `503 {"error": "shutting_down"}` and
+stops nothing. An older daemon answers the full stop with its access guard's
+`401 {"error": "login_required"}`, because its exemption names only
+`/shutdown`; a caller treats that and a `404` as unsupported, distinct from
+the route's own `401 unauthorized`. An MCP client still running afterwards may
+start a fresh, empty daemon through its launcher's normal recovery.
 
 Dev assets: with `WS_MCP_DASHBOARD_DEV_SOURCE=<repo>/agents-plugin-tool` in the
 environment of `ws-mcp dashboard`, the daemon serves the dashboard and

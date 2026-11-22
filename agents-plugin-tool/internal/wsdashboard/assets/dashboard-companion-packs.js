@@ -135,7 +135,7 @@
             if (!info?.rev) throw Object.assign(new Error("Companion pack missing"), { status: 404 });
             candidate = matching(id, info.rev) || await decode(info, signal);
             const needsDefaults = id !== "default" && defaultInfo?.rev &&
-              ["drone", "mail", "grab", "prop-typing-desk"].some(prop => !own(candidate.manifest.props, prop));
+              ["drone", "mail", "prop-typing-desk"].some(prop => !own(candidate.manifest.props, prop));
             if (needsDefaults) defaults = matching("default", defaultInfo.rev) || await decode(defaultInfo, signal);
             if (gen !== loadGen) return;
             if (candidate === current && (defaults || null) === (shared || null)) return;
