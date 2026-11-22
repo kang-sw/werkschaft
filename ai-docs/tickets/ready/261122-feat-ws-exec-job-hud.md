@@ -768,3 +768,85 @@ Verification boundary:
   console error.
 - Performance: an open peek polls only while open; measure per-poll cost and
   chip render cost with 200 jobs (Constraints).
+
+### Result (1e43393cc) - 2026-11-23
+
+Landed in 444c57b29 (the HUD) and 1e43393cc (the lite review's fixes). UI only;
+no backend change was needed.
+
+- Files: `dashboard-exec-hud.js` (list, strip, folding, tooltip),
+  `dashboard-exec-hud-peek.js` (peek, output polling, stop flow, notice card,
+  toast), `dashboard-exec-hud.css`, the `execjobs` handler in
+  `dashboard-stream.js`, the assembly lists in `pages.go` and
+  `asset_source_test.go`, 86 `js.xhud.*` keys in all 11 tables.
+- Feed: event-driven only. The page makes no initial read; the `execjobs` event
+  (sent once on connect) triggers a coalesced list read (one in flight, one
+  queued). A daemon without the HUD never sends it, so an old daemon is asked
+  for nothing and logs nothing; a 404/403 on the list (LAN viewer, closed lead)
+  marks the page absent for that load. Ticking and fade timers run only while a
+  chip needs them.
+- Contract 2: `.sbwrap > .sbadge` is `flex: none; max-width: none`, the other
+  badges were already `flex: none`, and the interrupt slot is reserved even
+  while hidden. The group takes the measured remainder (a `ResizeObserver` on
+  the strip and the badges): all chips, chips and `+N` (failure dot on the fold),
+  one aggregate chip, its node alone, nothing. The only fixed width is the
+  aggregate at a composer of 320 px or less.
+- Decisions: stopped jobs fade after 12 s like ok jobs unless their stop notice
+  failed or closed (then they stay, with Retry); dismissals live in
+  sessionStorage per conversation and survive a reload; the quiet "ended N"
+  chip counts faded, not dismissed, jobs; only 12 chips are ever built (the
+  rest fold by count); the peek starts at the last 16 KiB of the output and
+  drops a leading partial line; the peek shows stopped state as "Stopped" (the
+  daemon cannot tell an agent stop from the close cascade); the mockup's
+  "sample notice text" disclosure is not drawn (the text is server-side and the
+  ticket calls the mockup's sample illustrative).
+- Deviations from the mockup: the confirm reads "Stop this job?" and names TERM
+  then KILL after a grace period (Windows: tree kill), per the ticket, not
+  "Force-stop … SIGKILL, no cleanup"; the toast over an open panel sits above
+  the panel (the mockup's offset overlapped the tab row); chips rise only when
+  new (the mockup replayed it on every rebuild); `.xpeek` max-height follows
+  the viewport instead of the mockup pane; no HUD-specific wide/narrow pane
+  classes (a narrow composer is measured).
+- Collisions found and avoided: the product's global copy handler
+  (`data-act="copy"`) and a `data-tab` ancestor swallowed the mockup's
+  attribute names; the HUD uses `data-x*` and `x*`/`xp-*` classes. `.sbadge` in
+  the tracker's support chat gets the same no-shrink rule.
+- Verification (macOS, `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+  `TestExecHUDBrowser` (Chromium, real page, routes and stream event; ko/en x
+  light/dark; 56 captures) ok; `TestComposerExecBrowser`,
+  `TestComposerControlsAndMeterBrowser`, `TestAgentBadgePopoverBrowser`,
+  `TestAgentsIslandBehavior`, `TestTreeRowsBrowser`, the support-chat badge
+  tests and the stream/SSE/WS filter ok; `./internal/wsi18n` ok;
+  `GOOS=windows go vet` and `go vet` clean on wsdashboard and wsi18n. No other
+  package was run. The browser test asserts: badge widths, heights, positions,
+  no clip and no ellipsis with and without jobs at 8 widths and two badge sets
+  (including a `12(+34)` label and a background badge); chips never grow as the
+  strip narrows; aggregate at 320; pin order, 12 s fade, reload past the
+  windows, dismiss across a reload, "ended N"; tooltip 7-line clamp; escaping
+  of command, cwd and output; stderr tint; polling only while open and from the
+  last offset; "N new" without a jump; copy; confirm focus, Esc, 8 s revert,
+  TERM/KILL wording; stop of agent and `!` jobs (notice shown vs "no agent
+  notice"), Retry; toast; toolbar keyboard (one tab stop, arrows, Home/End,
+  Enter, Esc consumed, focus returns); jump to card; reduced motion; no HUD and
+  no request without the event (old daemon) or on a 404.
+- Performance, 200 jobs (macOS, Chromium headless): chip render p50 1.6-3.6 ms,
+  max 4-6 ms with 12 chips and 117 nodes in the strip (23 ms p50, 185 chips
+  before the 12-chip cap); list read 0.8 ms p50, 1.7 ms max (about 40 KB); a
+  peek on a 1 MiB job reads the last 16 KiB first (body 16.7 KB with JSON),
+  apply 2.4 ms, fetch 1-10 ms, 4 polls in 2.5 s while idle (backoff 350 ms to
+  3 s), none after close; opening a peek with 200 tabs renders in 12 ms. No file
+  operation is made by any of it (fetches to memory-only routes). The Windows
+  and antivirus budget is unverified.
+- Review (lite, one pass): no Critical. Three Important, fixed in 1e43393cc:
+  keyboard open lost focus on the chip rebuild; Esc reached the rail, drawer
+  and shell as well; reopening the open job duplicated its output.
+- Not fixed, minor: the confirm's interval runs to 0 if the job ends under it;
+  the group can overlay the subagent badge for one frame before the observer
+  folds it; reopening the same job through `+N` has no browser test; the LAN
+  view's one logged 404 on the list read (by design).
+- Captures (untracked, not committed):
+  `ai-docs/assets/captures/261123/exec-job-hud-ui/`, `<lang>-<light|dark>-NN-*`
+  for idle, running, many (`+N`), aggregate at 320, ended states, quiet
+  "ended", tooltip, peek, peek with "N new", confirm, notice card, toast and a
+  failed notice with Retry, plus `mockup-gallery-*` renders of the approved
+  mockup for the same languages and themes.
