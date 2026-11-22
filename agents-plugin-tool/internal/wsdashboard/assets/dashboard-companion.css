@@ -66,5 +66,5 @@
   font: 12px/1.4 var(--wb-sans, system-ui, sans-serif);
   overflow-wrap: anywhere;
 }
-.rail[data-companion-dock="unregistered"] .rws-unreg { margin-top: var(--companion-slot); }
+.rail[data-companion-dock="unregistered"] .rlist > :has(+ .rws-unreg) { margin-bottom: var(--companion-slot); }
 .rail[data-companion-dock="footer"] .rfoot { margin-top: var(--companion-slot); }

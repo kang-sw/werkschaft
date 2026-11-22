@@ -105,19 +105,23 @@
       nextIdle = now + 45000;
       lastBusy = now;
       requestPack();
-      schedule();
+      invalidated();
     }
 
     function context(payload, frameRect) {
       const previous = state.activity;
+      const previousComposer = marks["composer-top"];
       state = payload;
       frameBox = frameRect;
       marks = Object.create(null);
       for (const id of landmarks) {
         const m = payload.landmarks[id];
         if (!m || ![m.x, m.y, m.width, m.height].every(Number.isFinite) || m.width <= 0 || m.height <= 0) continue;
-        marks[id] = { x: frameRect.left + m.x + m.width / 2, y: frameRect.top + m.y };
+        const left = frameRect.left + m.x;
+        marks[id] = { left, x: left + m.width / 2, y: frameRect.top + m.y };
       }
+      const composer = marks["composer-top"];
+      if (composer?.left !== previousComposer?.left || composer?.y !== previousComposer?.y) dirty = true;
       requestPack();
       if (previous !== state.activity) { lastBusy = now; nextIdle = now + 45000; }
       for (const event of payload.events) if (event && typeof event.kind === "string") fire(event.kind);
@@ -148,26 +152,33 @@
       if (!docked) {
         rail?.removeAttribute("data-companion-dock");
         size = clamp(Math.min(vw - 24, vh - 24), 48, 96);
-        home = { x: 12 + size / 2, y: vh - 12, corner: true };
+        const composer = marks["composer-top"];
+        home = composer ? {
+          x: clamp(composer.left + size / 2, 12 + size / 2, vw - size / 2),
+          y: clamp(composer.y - 2, size, vh - 12)
+        } : { x: 12 + size / 2, y: vh - 12, corner: true };
         return;
       }
 
       size = clamp(Math.min(rect.width * 0.36, rect.height * 0.36), 72, 136);
       const list = rail.querySelector(".rlist");
-      const unreg = rail.querySelector(".rws-unreg > summary, .rws-unreg:not(details)");
+      const unreg = list?.querySelector(":scope > .rws-unreg");
       const footer = rail.querySelector(".rfoot, .r-config-global");
       const reserve = !custom && !drag;
       const current = rail.dataset.companionDock;
       const box = unreg?.getBoundingClientRect(), scroller = list?.getBoundingClientRect();
       const slot = Math.ceil(size) + 4;
-      const unregTop = box?.top + (reserve && current !== "unregistered" ? slot : 0);
+      const previous = unreg?.previousElementSibling?.getBoundingClientRect();
+      // The sibling's margin fills any clearance the flex auto margin has not already supplied.
+      const gap = previous ? box.top - previous.bottom : slot;
+      const unregTop = box?.top + (reserve ? Math.max(0, slot - gap) : 0);
       const listBottom = scroller?.bottom + (current === "footer" ? slot : 0);
       const visible = box?.height > 0 && unregTop - size >= scroller?.top && unregTop < listBottom;
       rail.style.setProperty("--companion-slot", slot + "px");
       if (reserve) rail.dataset.companionDock = visible ? "unregistered" : "footer";
       else rail.removeAttribute("data-companion-dock");
       const divider = (visible ? unreg : footer)?.getBoundingClientRect().top ?? rect.bottom;
-      home = { x: rect.left + rect.width / 2, y: divider - 2, corner: false };
+      home = { x: rect.left + rect.width / 2, y: divider - 2, rail: true };
     }
 
     function invalidated() { dirty = true; schedule(); }
@@ -197,7 +208,7 @@
     function placeCharacter(seconds) {
       const v = view, b = v.bounds;
       const width = (b[2] - b[0]) * size, height = (b[3] - b[1]) * size;
-      const perching = v.pose === "perched" && (!home.corner || custom?.mark);
+      const perching = v.pose === "perched" && (home.rail || custom?.mark);
       const bottom = perching ? v.seat ?? b[3] : b[3];
       const x = position.x - width / 2;
       const y = position.y + physical.lift + (b[1] - bottom) * size;
