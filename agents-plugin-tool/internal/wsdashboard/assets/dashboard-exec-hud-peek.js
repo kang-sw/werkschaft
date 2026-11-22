@@ -247,7 +247,7 @@
     }
     add(meta);
 
-    var pc = xhEl("div", "xp-cmd"), code = xhEl("code", "cl" + (xhPk.cmdOpen ? " open" : ""), j.command);
+    var pc = xhEl("div", "xp-cmd"), code = xhEl("code", "xp-cl" + (xhPk.cmdOpen ? " open" : ""), j.command);
     code.title = wsT("js.xhud.pk.expand");
     code.setAttribute("data-xact", "cmd");
     code.tabIndex = 0;
@@ -301,7 +301,7 @@
     var live = xhEl("span", "xlive");
     xhFoot.appendChild(live);
     xhFoot.appendChild(xhEl("span", "ftail"));
-    var wr = xhBtn("xibtn sp", "wrap", wsT("js.xhud.out.wrap"));
+    var wr = xhBtn("xibtn xp-sp", "wrap", wsT("js.xhud.out.wrap"));
     wr.style.width = "auto";
     wr.style.padding = "0 7px";
     wr.style.fontSize = "11px";
@@ -339,7 +339,7 @@
     return d;
   }
   function xhSystemLine(text) {
-    var d = xhEl("span", "l sys", text);
+    var d = xhEl("span", "l xp-sys", text);
     xhOutEl.appendChild(d);
     xhOut.open = false;
   }
@@ -400,7 +400,7 @@
       if (k >= 0) { segs = segs.slice(k); segs[0] = { stream: segs[0].stream, text: segs[0].text.slice(segs[0].text.indexOf("\n") + 1) }; }
       else cut = true;
     }
-    if (res.gap || o.gap) { o.gap = false; frag.appendChild(xhEl("span", "l sys", wsT("js.xhud.out.gap"))); o.open = false; made++; }
+    if (res.gap || o.gap) { o.gap = false; frag.appendChild(xhEl("span", "l xp-sys", wsT("js.xhud.out.gap"))); o.open = false; made++; }
     segs.forEach(function (s) { made += xhAppendText(s.stream, s.text, frag, cut); cut = false; });
     if (frag.childNodes.length || made) {
       var emp = xhOutEl.querySelector(".xempty");
