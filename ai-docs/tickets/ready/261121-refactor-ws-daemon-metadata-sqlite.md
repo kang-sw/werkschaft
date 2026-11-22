@@ -925,6 +925,102 @@ Verification (macOS arm64):
 - `go build ./...`: ok.
 - `gofmt`: clean.
 
+#### Edition (a87930b1a) - 2026-11-22
+
+The third re-review of 2976c3d53..8f6f007e8 found 4 Critical and 3
+Important issues. Five are fixed. One is partly fixed and its remainder
+waits on a product decision (NEEDS-DECISION). None is rebutted. Each
+fix's test was run against the code before the fix and failed.
+
+Lifecycle changes (`capture.go`, at the fence constants):
+
+- The cutover calls (`Stage`, `ApplyFence`, `ApplyRemovalFence`,
+  `Commit`) hold one cutover lock end to end. A fence's journal record
+  and its file-system change therefore form one transition.
+- A new invariant: the migration deletes or overwrites only files it put
+  in place itself.
+- No earlier state can prove a new record. A new sentinel differs from
+  the live mtime, and the witness path is durably empty before a removal
+  record is written.
+- A re-applied replacement is published again with the same bytes and
+  sentinel.
+
+Critical fixes:
+
+- **Concurrent fences (`capture.go:260`), 33495fc96:** two fence calls
+  could plan over the same original and publish in reverse order, or a
+  publication could follow `Commit`. The cutover lock serializes them,
+  and the landed mark updates only the exact record it published
+  (`ErrFenceConflict` otherwise). Test:
+  `TestConcurrentCutoverCallsWaitForAPublication`.
+- **Stale witness proving a new removal (`capture.go:683`),
+  6cb11f6cd:** before a removal record is written, the witness path is
+  now durably emptied: a rename to a dot name, a directory sync, then
+  the unlink. Test: `TestStaleWitnessNeverProvesANewRemoval`.
+- **Witness name overwrote or deleted other files (`capture.go:315`),
+  6cb11f6cd:**
+  - Each removal record stores the identity (a token that survives a
+    rename) and the content of the file it moves (`witness_id`,
+    `witness_content`).
+  - Only a file matching both is cleared. Any other file there refuses
+    the removal with `ErrWitnessOccupied`, and so does a legacy symbolic
+    link that resolves to the witness.
+  - A hard link moves intact.
+  - Removal fences are limited to fixed bundled paths, whose rows survive
+    absence.
+
+  Test: `TestRemovalNeverTouchesAFileItDidNotPlace`.
+- **Windows file creation (`private_windows.go:35`), a87930b1a:** a
+  missing database, WAL or journal file is created with `CreateFile`
+  (`CREATE_NEW`, no sharing), using the owner-only security descriptor as
+  its security attributes. No other principal can open it at any point.
+  Test: `TestDatabaseFilesAreOwnerOnlyFromCreation` (Windows only;
+  compiled and vetted, not run).
+
+Important fixes:
+
+- **Confirmed denial blocked its fence (`capture.go:388`), ca51e2576:**
+  `planFence` now plans over a denial a pass confirmed. A shared rule
+  (`denialConfirmable`) keeps an unreadable original confirmed under a
+  fence record. Test: `TestConfirmedDenialTakesItsFence`.
+- **Linux identity without statx (`gen_linux.go:36`), 5b0955758:** the
+  fallback emits the same device (major:minor) and inode components.
+  `sameGeneration` compares birth times only when both tokens carry one.
+  Test: `TestIdentityWithoutBirthTimeIsTheSameSession`.
+- **Windows durability barrier (`sync_windows.go:29`), partly fixed in
+  3667ab036:**
+  - Every rename and deletion the migration makes is now itself
+    write-through on Windows, including a re-applied replacement, which
+    is published again. Test: `TestReappliedReplacementIsPublishedAgain`.
+  - Still on the barrier alone: a re-applied removal whose rename an
+    interrupted attempt made, and an original that was already absent.
+    Redoing that removal would mean moving the original back, which the
+    lifecycle forbids.
+  - NEEDS-DECISION: verify that the volume is NTFS or ReFS and refuse
+    the barrier elsewhere, or accept the NTFS ordering assumption as
+    documented.
+
+API changes:
+
+- New error: `ErrWitnessOccupied`.
+- `ApplyRemovalFence` refuses paths without a fixed bundled name.
+- New schema columns: `legacy_captures.witness_id` and
+  `legacy_captures.witness_content`.
+
+Verification (macOS arm64):
+
+- `go test -race -count=1 ./internal/wsmeta/`: ok (11.6 s).
+- `go test -count=1 -timeout 25m ./internal/wsagent/`: ok (149.8 s).
+- The wsdashboard validator tests and the wsagent record validator
+  tests: ok.
+- `go vet` on wsmeta, wsagent and wsdashboard: ok.
+- `GOOS=windows` and `GOOS=linux` `go vet ./internal/wsmeta`: ok, and the
+  Windows test binary compiles.
+- `go build ./...`: ok.
+- `gofmt`: clean on this round's files. `plan_usage_history.go:278` was
+  already unformatted on 2976c3d53.
+
+
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
 - Depends on Phase 1. Route affected direct Go readers through the daemon
