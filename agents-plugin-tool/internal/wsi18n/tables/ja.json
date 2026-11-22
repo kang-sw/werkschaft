@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "プロセスは動いていません。次のメッセージまたはメールで開始します。",
   "js.lead.archive": "アーカイブ",
   "js.lead.archive.note": "レールから隠します。メールでは起動せず、メールはアーカイブ解除後に配信します。",
+  "js.lead.archive.confirm": "このセッションをアーカイブしますか？アーカイブ済みの一覧から元に戻せます。",
+  "js.lead.archive.accept": "アーカイブ",
   "js.lead.unarchive": "アーカイブ解除",
   "js.lead.unarchive.note": "レールのスリープ状態に戻ります。溜まったメールはそのとき配信します。",
   "js.rail.deletes": "{0}後に削除",

@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "没有进程在运行。下一条消息或邮件会启动一个。",
   "js.lead.archive": "归档",
   "js.lead.archive.note": "从侧栏隐藏。邮件不会唤醒它；取消归档后投递邮件。",
+  "js.lead.archive.confirm": "归档此会话？可以在已归档列表中恢复。",
+  "js.lead.archive.accept": "归档",
   "js.lead.unarchive": "取消归档",
   "js.lead.unarchive.note": "回到侧栏的休眠状态。届时投递排队的邮件。",
   "js.rail.deletes": "{0}后删除",

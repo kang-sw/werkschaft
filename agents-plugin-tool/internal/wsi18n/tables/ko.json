@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "실행 중인 프로세스가 없습니다. 다음 메시지나 메일이 오면 시작합니다.",
   "js.lead.archive": "보관",
   "js.lead.archive.note": "레일에서 숨깁니다. 메일로 깨어나지 않고, 메일은 보관 해제 후 전달합니다.",
+  "js.lead.archive.confirm": "이 세션을 보관할까요? 보관한 세션 목록에서 다시 꺼낼 수 있습니다.",
+  "js.lead.archive.accept": "보관",
   "js.lead.unarchive": "보관 해제",
   "js.lead.unarchive.note": "레일의 잠듦 상태로 돌아갑니다. 쌓인 메일은 그때 전달합니다.",
   "js.rail.deletes": "{0} 후 삭제",

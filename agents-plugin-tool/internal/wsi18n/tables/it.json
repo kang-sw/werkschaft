@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "Nessun processo in esecuzione. Il prossimo messaggio o la prossima mail ne avvia uno.",
   "js.lead.archive": "Archivia",
   "js.lead.archive.note": "La nasconde dal pannello. La posta non la risveglia; viene consegnata dopo il ripristino.",
+  "js.lead.archive.confirm": "Archiviare questa sessione? Puoi ripristinarla dall'elenco delle archiviate.",
+  "js.lead.archive.accept": "Archivia",
   "js.lead.unarchive": "Ripristina",
   "js.lead.unarchive.note": "Torna in sospensione nel pannello. La posta in coda viene allora consegnata.",
   "js.rail.deletes": "eliminata tra {0}",

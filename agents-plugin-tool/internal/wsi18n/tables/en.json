@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "No process runs. The next message or mail starts one.",
   "js.lead.archive": "Archive",
   "js.lead.archive.note": "Hides it from the rail. Mail does not wake it; it is delivered after unarchive.",
+  "js.lead.archive.confirm": "Archive this session? You can restore it from the archived list.",
+  "js.lead.archive.accept": "Archive",
   "js.lead.unarchive": "Unarchive",
   "js.lead.unarchive.note": "Back to asleep in the rail. Queued mail is then delivered.",
   "js.rail.deletes": "deletes in {0}",

@@ -2116,6 +2116,8 @@
   "js.lead.stopped": "No hay ningún proceso en ejecución. El siguiente mensaje o correo inicia uno.",
   "js.lead.archive": "Archivar",
   "js.lead.archive.note": "La oculta del panel. El correo no la despierta; se entrega al desarchivar.",
+  "js.lead.archive.confirm": "¿Archivar esta sesión? Puedes restaurarla desde la lista de archivadas.",
+  "js.lead.archive.accept": "Archivar",
   "js.lead.unarchive": "Desarchivar",
   "js.lead.unarchive.note": "Vuelve a dormida en el panel. Entonces se entrega el correo en cola.",
   "js.rail.deletes": "se elimina en {0}",
