@@ -319,3 +319,32 @@ func TestWorkspaceStoreAddBatchUndoKeepsConcurrentChanges(t *testing.T) {
 		t.Fatalf("addBatch with an unwritable undo = %v, want the restore failure reported", err)
 	}
 }
+
+// TestWorkspaceStoreFoldsSpellings: on Windows a differently cased spelling
+// of a stored workspace is that workspace: an add of it changes nothing and
+// a forget of either removes every stored spelling.
+func TestWorkspaceStoreFoldsSpellings(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	base := t.TempDir()
+	file := filepath.Join(base, "workspaces.json")
+	upper, lower := filepath.Join(base, "Work"), filepath.Join(base, "work")
+	raw, _ := json.Marshal(workspacesDoc{Version: workspacesSchemaVersion, Workspaces: []workspaceRecord{{Path: upper}, {Path: lower}}})
+	if err := os.WriteFile(file, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := openWorkspaceStore(file)
+	if got := s.workspaces(); len(got) != 1 || got[0].Path != upper {
+		t.Fatalf("store lists %+v, want the first spelling once", got)
+	}
+	if a, err := s.add(filepath.Join(base, "WORK"), false); err != nil || a.Result != workspaceKnown {
+		t.Fatalf("add of another spelling = %+v, %v; want noop", a, err)
+	}
+	if ok, err := s.forget(lower); !ok || err != nil {
+		t.Fatalf("forget = %v, %v", ok, err)
+	}
+	if got := openWorkspaceStore(file).workspaces(); len(got) != 0 {
+		t.Fatalf("after forget = %+v, want no spelling left", got)
+	}
+}

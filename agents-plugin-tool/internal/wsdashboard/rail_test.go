@@ -1541,3 +1541,42 @@ func TestRailGroupsWorkspacesByFoldedIdentity(t *testing.T) {
 		t.Fatalf("PendingWorkspaces = %+v, want one workspace holding both spellings", view.PendingWorkspaces)
 	}
 }
+
+// TestRailMatchesRepositoryWorktreesByFoldedIdentity: on Windows git's
+// spelling of a repository and its worktrees, the stored spelling and a
+// session's need not agree in case. The root worktree is still the root
+// (admitted, not pending), and each session sits in its listed worktree
+// with no second row for the same folder.
+func TestRailMatchesRepositoryWorktreesByFoldedIdentity(t *testing.T) {
+	prev := foldWorkspacePaths
+	foldWorkspacePaths = true
+	t.Cleanup(func() { foldWorkspacePaths = prev })
+	now := time.Now()
+	base := t.TempDir()
+	stored := filepath.Join(base, "Work", "Repo")
+	gitRoot := filepath.Join(base, "work", "repo")
+	gitFeat := filepath.Join(base, "work", "repo-feat")
+	repos := map[string]railRepo{gitRoot: {Read: true, Entries: []railWorktreeEntry{
+		{Path: gitRoot, Branch: "main"}, {Path: gitFeat, Branch: "feat"},
+	}}}
+	view := buildRailView([]railInput{
+		{Session: railSession("s-root", filepath.Join(base, "WORK", "repo", "sub"), now.Add(-time.Minute), time.Time{}), Repo: gitRoot},
+		{Session: railSession("s-feat", filepath.Join(base, "Work", "Repo-Feat"), now, time.Time{}), Repo: gitRoot, Linked: true},
+	}, repos, []storedWorkspace{{Path: stored, Repo: true}}, now)
+	classifyRailAdmissions(&view, &railLayoutDoc{})
+	partitionRailWorkspaces(&view, nil)
+	if len(view.Workspaces) != 1 || view.Workspaces[0].Path != stored || len(view.PendingWorkspaces) != 0 {
+		t.Fatalf("Workspaces = %+v, pending %+v; want the stored %s only", view.Workspaces, view.PendingWorkspaces, stored)
+	}
+	wts := view.Workspaces[0].Worktrees
+	if len(wts) != 2 {
+		t.Fatalf("worktrees = %+v, want the root and feat rows only", wts)
+	}
+	root, feat := wts[0], wts[1]
+	if !root.Root || root.Admission != "admitted" || root.Branch != "main" || strings.Join(railIDs(root.Sessions), ",") != "s-root" {
+		t.Errorf("root row = %+v", root)
+	}
+	if feat.Root || feat.Path != gitFeat || feat.Branch != "feat" || !feat.Deletable || strings.Join(railIDs(feat.Sessions), ",") != "s-feat" {
+		t.Errorf("feat row = %+v", feat)
+	}
+}

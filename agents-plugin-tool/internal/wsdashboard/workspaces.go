@@ -94,10 +94,10 @@ func (s *workspaceStore) reload() error {
 			continue
 		}
 		p := filepath.Clean(rec.Path)
-		if seen[p] {
+		if seen[admissionPathKey(p)] {
 			continue
 		}
-		seen[p] = true
+		seen[admissionPathKey(p)] = true
 		list = append(list, storedWorkspace{Path: p, Repo: holdsGitDir(p)})
 	}
 	s.list = list
@@ -139,9 +139,12 @@ func (s *workspaceStore) preflight() error {
 	return s.reload()
 }
 
+// index finds path by workspace identity (admissionPathKey): on Windows a
+// differently cased spelling is the same entry.
 func (s *workspaceStore) index(path string) int {
+	k := admissionPathKey(path)
 	for i, w := range s.list {
-		if w.Path == path {
+		if admissionPathKey(w.Path) == k {
 			return i
 		}
 	}
@@ -277,11 +280,13 @@ func (s *workspaceStore) forget(path string) (bool, error) {
 	if err := s.reload(); err != nil {
 		return false, err
 	}
-	i := s.index(path)
-	if i < 0 {
+	if s.index(path) < 0 {
 		return false, nil
 	}
-	s.list = append(s.list[:i], s.list[i+1:]...)
+	// Every spelling of the path goes, so none shows again after it.
+	for i := s.index(path); i >= 0; i = s.index(path) {
+		s.list = append(s.list[:i], s.list[i+1:]...)
+	}
 	if err := s.save(); err != nil {
 		_ = s.reload()
 		return false, err

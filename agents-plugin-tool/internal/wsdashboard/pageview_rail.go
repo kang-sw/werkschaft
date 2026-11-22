@@ -595,7 +595,17 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			view.Workspaces = append(view.Workspaces, ws)
 			continue
 		}
-		repo := repos[key]
+		repo, ok := repos[key]
+		if !ok {
+			// The list is read under git's spelling of the root, which a
+			// stored spelling may fold to.
+			for p, r := range repos {
+				if admissionPathKey(p) == admissionPathKey(key) {
+					repo = r
+					break
+				}
+			}
+		}
 		entries := repo.Entries
 		if !repo.Read {
 			entries = nil
@@ -603,7 +613,9 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		// Each session sits under the listed worktree with the longest path
 		// prefix of its root. A root no listed worktree holds (no list read
 		// yet, or a worktree added since) sits under the root worktree when
-		// it is a folder inside it, else is a worktree of its own.
+		// it is a folder inside it, else is a worktree of its own. Paths
+		// match by workspace identity (admissionPathKey), so on Windows a
+		// spelling git and a session disagree on is still one worktree.
 		type wtAcc struct {
 			wt   RailWorktree
 			snap *wslive.Snapshot
@@ -613,12 +625,13 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		var order []string
 		addWT := func(e railWorktreeEntry) *wtAcc {
 			p := filepath.Clean(e.Path)
-			if a, ok := accs[p]; ok {
+			k := admissionPathKey(p)
+			if a, ok := accs[k]; ok {
 				return a
 			}
-			a := &wtAcc{wt: RailWorktree{Path: p, Root: p == key, Folder: lastElem(p), Branch: e.Branch, Detached: e.Detached, AdmissionRepository: e.AdmissionRepository, AdmissionPath: e.AdmissionPath, Revision: e.Revision}, regs: map[string]Registration{}}
-			accs[p] = a
-			order = append(order, p)
+			a := &wtAcc{wt: RailWorktree{Path: p, Root: k == admissionPathKey(key), Folder: lastElem(p), Branch: e.Branch, Detached: e.Detached, AdmissionRepository: e.AdmissionRepository, AdmissionPath: e.AdmissionPath, Revision: e.Revision}, regs: map[string]Registration{}}
+			accs[k] = a
+			order = append(order, k)
 			return a
 		}
 		for _, m := range members {
@@ -626,7 +639,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			best := ""
 			for _, e := range entries {
 				p := filepath.Clean(e.Path)
-				if railPathUnder(p, project) && len(p) > len(best) {
+				if railPathUnder(admissionPathKey(p), admissionPathKey(project)) && len(p) > len(best) {
 					best = p
 				}
 			}
@@ -659,7 +672,7 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 		// (its folder is gone).
 		for i, e := range entries {
 			p := filepath.Clean(e.Path)
-			if _, ok := accs[p]; ok || e.Prunable {
+			if _, ok := accs[admissionPathKey(p)]; ok || e.Prunable {
 				continue
 			}
 			if i > 0 && railPooled(repo, key, p) {
@@ -675,13 +688,13 @@ func buildRailView(sessions []railInput, repos map[string]railRepo, stored []sto
 			pools = worktreePoolRoots(repo.Pools, filepath.Clean(entries[0].Path))
 			for _, e := range entries[1:] {
 				if !e.Prunable {
-					linked[filepath.Clean(e.Path)] = true
+					linked[admissionPathKey(e.Path)] = true
 				}
 			}
 		}
-		for _, p := range order {
-			a := accs[p]
-			a.wt.Deletable = linked[p] && !a.wt.Root && !worktreePooled(pools, p)
+		for _, k := range order {
+			a := accs[k]
+			a.wt.Deletable = linked[k] && !a.wt.Root && !worktreePooled(pools, a.wt.Path)
 			if a.snap != nil {
 				r := a.snap.Repo
 				a.wt.Changes, a.wt.HasChanges = r.Modified+r.Staged+r.Untracked, true
