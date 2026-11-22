@@ -217,3 +217,28 @@ func (l *lockedBuffer) String() string {
 	defer l.mu.Unlock()
 	return l.b.String()
 }
+
+// A provider error body can echo a key or a bearer credential; the audit
+// record of the retry and the turn end carries it masked.
+func TestWerkAuditMasksCredentialsInSystemLines(t *testing.T) {
+	a := newWerkAudit("s1")
+	at := time.Unix(1_700_000_000, 0)
+	key := "sk-or-v1-0123456789abcdef0123456789abcdef"
+	for _, l := range []werk.Line{
+		{T: werk.LineRetry, Turn: 1, Attempt: 1, Error: "the model endpoint answered 502: bad key " + key},
+		{T: werk.LineTurnEnd, Turn: 1, Reason: werk.ReasonError, Error: "failed with Bearer abcdef123456"},
+		{T: werk.LineNotice, Text: "echoed " + key},
+	} {
+		_, _, evs := a.mapLine([]byte(werkLineJSON(l)), at)
+		if len(evs) != 1 {
+			t.Fatalf("%s: events %d", l.T, len(evs))
+		}
+		out := evs[0].ev.Out
+		if strings.Contains(out, "0123456789abcdef") || strings.Contains(out, "abcdef123456") {
+			t.Errorf("%s keeps a credential: %s", l.T, out)
+		}
+		if !strings.Contains(out, `"t":"`+l.T+`"`) {
+			t.Errorf("%s lost its shape: %s", l.T, out)
+		}
+	}
+}

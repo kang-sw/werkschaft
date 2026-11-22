@@ -52,11 +52,15 @@ type Provider struct {
 	// KeyPrefix is the non-secret prefix the provider's keys start with,
 	// which a masked display keeps; "" when its keys have none.
 	KeyPrefix string
+	// EnvKeys are the environment variables the provider's own tooling reads
+	// its key from. A child process that is not given the key through the
+	// token route must not inherit one from the daemon's environment.
+	EnvKeys []string
 }
 
 // providers is the registry, in display order.
 var providers = []Provider{
-	{ID: ProviderOpenRouter, Name: "OpenRouter", Kind: KindAPIKey, BaseURL: "https://openrouter.ai/api/v1", KeyPrefix: "sk-or-"},
+	{ID: ProviderOpenRouter, Name: "OpenRouter", Kind: KindAPIKey, BaseURL: "https://openrouter.ai/api/v1", KeyPrefix: "sk-or-", EnvKeys: []string{"OPENROUTER_API_KEY"}},
 }
 
 // Providers returns the registry in display order.

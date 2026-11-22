@@ -234,3 +234,39 @@ func TestParseRetryAfter(t *testing.T) {
 		t.Errorf("junk = %v", d)
 	}
 }
+
+// Provider error text is masked before it enters an error: a key echoed in an
+// error body, a bearer credential, and the very token the request carried.
+func TestProviderErrorTextIsScrubbed(t *testing.T) {
+	key := "sk-or-v1-0123456789abcdef0123456789abcdef"
+	for name, handler := range map[string]http.HandlerFunc{
+		"json body": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"invalid key `+key+` and Bearer abcdef123456 sent as sk-test-secret","code":401}}`)
+		},
+		"plain body": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+			io.WriteString(w, strings.Repeat("x", 280)+" Authorization: Bearer "+key)
+		},
+		"response.failed": func(w http.ResponseWriter, r *http.Request) {
+			streamOK(w, sse(ev("response.failed", `{"type":"response.failed","response":{"error":{"code":"server_error","message":"upstream saw `+key+` / sk-test-secret"}}}`)))
+		},
+		"error event": func(w http.ResponseWriter, r *http.Request) {
+			streamOK(w, sse(ev("error", `{"type":"error","code":"x","message":"bad Bearer abcdef123456"}`)))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := serve(t, handler)
+			_, err := client.Respond(context.Background(), Request{Model: "m"}, StreamHandler{})
+			if err == nil {
+				t.Fatal("no error")
+			}
+			text := err.Error()
+			for _, leak := range []string{key, "0123456789abcdef", "abcdef123456", "sk-test-secret"} {
+				if strings.Contains(text, leak) {
+					t.Errorf("error text keeps %q: %s", leak, text)
+				}
+			}
+		})
+	}
+}

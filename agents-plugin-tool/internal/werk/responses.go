@@ -267,6 +267,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
+	secret := token
 	token = ""
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
@@ -275,15 +276,19 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 		}
 		// Redacted by construction: a transport error names the URL, never
 		// the request headers.
-		return nil, fmt.Errorf("%w: %v", ErrStreamCut, err)
+		return nil, fmt.Errorf("%w: %v", ErrStreamCut, Scrub(err.Error(), secret))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, httpFailure(resp)
+		return nil, httpFailure(resp, secret)
 	}
 	timer := time.AfterFunc(stall, cancel)
 	defer timer.Stop()
 	out, err := readStream(resp.Body, h, func() { timer.Reset(stall) })
+	var failed *FailedError
+	if errors.As(err, &failed) {
+		failed.Message = Scrub(failed.Message, secret)
+	}
 	if err != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -291,7 +296,7 @@ func (c *Client) Respond(ctx context.Context, req Request, h StreamHandler) (*Re
 }
 
 // httpFailure reads a refused request into an HTTPError.
-func httpFailure(resp *http.Response) error {
+func httpFailure(resp *http.Response, secret string) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	e := &HTTPError{Status: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	var wrap struct {
@@ -309,11 +314,13 @@ func httpFailure(resp *http.Response) error {
 		e.Code = strings.Trim(string(wrap.Error.Code), `"`)
 	}
 	if e.Message == "" {
-		e.Message = strings.TrimSpace(string(raw))
+		// Masked before it is cut, so a cut cannot leave a key's head.
+		e.Message = Scrub(strings.TrimSpace(string(raw)), secret)
 		if len(e.Message) > 300 {
 			e.Message = e.Message[:300]
 		}
 	}
+	e.Message = Scrub(e.Message, secret)
 	return e
 }
 

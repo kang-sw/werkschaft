@@ -13,6 +13,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/werk"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsharnessenv"
 )
 
@@ -184,7 +185,33 @@ func werkEnv(spec StartSpec) []string {
 		set[werk.EnvSessionToken] = spec.MCPSession.Token
 	}
 	drop := []string{"CLAUDE", "CODEX_", "PI_", "ORCA_", "WS_PI_"}
-	return harnessEnv(wsharnessenv.Drop(spec.Env), drop, nil, set)
+	env := harnessEnv(wsharnessenv.Drop(spec.Env), drop, nil, set)
+	return withoutProviderKeys(env)
+}
+
+// withoutProviderKeys removes the provider key variables the daemon's own
+// environment may hold (OPENROUTER_API_KEY and the auth layer's names for the
+// provider): the worker takes its credential from the token route per
+// request, and a shell it starts must not find one in its environment.
+// Names match case-insensitively (Windows), and any OPENROUTER_ variable goes.
+func withoutProviderKeys(env []string) []string {
+	var names []string
+	if p, ok := wscred.Lookup(werk.Provider); ok {
+		for _, n := range p.EnvKeys {
+			names = append(names, strings.ToUpper(n))
+		}
+	}
+	prefix := strings.ToUpper(string(werk.Provider)) + "_"
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		up := strings.ToUpper(name)
+		if strings.HasPrefix(up, prefix) || slices.Contains(names, up) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // werkToolList is the file tools a launch offers: a read-only worker is

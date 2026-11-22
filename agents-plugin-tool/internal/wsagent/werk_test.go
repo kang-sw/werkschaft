@@ -796,3 +796,29 @@ func TestWerkWakeResumesTheConversationFromItsLog(t *testing.T) {
 		t.Errorf("the second request lost the first turn: %s", second)
 	}
 }
+
+// The daemon's own environment may hold a provider key; the child gets none
+// of it (it asks the token route per request, and a shell it starts must not
+// find a key to read).
+func TestWerkEnvDropsProviderKeys(t *testing.T) {
+	env := werkEnv(StartSpec{Env: []string{
+		"PATH=/usr/bin", "HOME=/h",
+		"OPENROUTER_API_KEY=sk-or-v1-secret", "openrouter_api_key=sk-or-v1-lower", "OPENROUTER_BASE_URL=http://x",
+	}})
+	var names []string
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		names = append(names, name)
+		if strings.Contains(kv, "sk-or-") {
+			t.Errorf("a provider key reached the child: %s", name)
+		}
+	}
+	for _, want := range []string{"PATH", "HOME"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("%s was dropped: %v", want, names)
+		}
+	}
+	if len(names) != 2 {
+		t.Errorf("environment = %v", names)
+	}
+}

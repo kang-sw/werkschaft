@@ -1,6 +1,7 @@
 package wsagent
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/werk"
@@ -104,7 +105,7 @@ func (a *werkAudit) mapLine(raw []byte, at time.Time) (bool, []auditEvent, []aud
 		werk.LineUserTaken, werk.LineNotice, werk.LineStatus, werk.LineUsage:
 		ev := a.env(wsaudit.KindSystem, at)
 		ev.Subkind = l.T
-		ev.Out = compactJSON(raw)
+		ev.Out = compactJSON(scrubbedLine(l, raw))
 		withRequest(&ev, request)
 		return true, nil, slotted([]wsaudit.Envelope{ev})
 	}
@@ -128,3 +129,18 @@ func (a *werkAudit) request(l werk.Line) map[string]any {
 func (a *werkAudit) markLoss(uint64, string) bool { return false }
 
 func (a *werkAudit) flush(time.Time) []auditEvent { return nil }
+
+// scrubbedLine is a system line as recorded: the free text a provider error
+// or a notice can carry (an error body echoing a key or a bearer credential)
+// is masked; a line with nothing to mask is recorded as it arrived.
+func scrubbedLine(l werk.Line, raw []byte) []byte {
+	errText, text := werk.Scrub(l.Error), werk.Scrub(l.Text)
+	if errText == l.Error && text == l.Text {
+		return raw
+	}
+	l.Error, l.Text = errText, text
+	if masked, err := json.Marshal(l); err == nil {
+		return masked
+	}
+	return raw
+}
