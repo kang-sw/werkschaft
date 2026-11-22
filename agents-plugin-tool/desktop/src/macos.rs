@@ -1,9 +1,12 @@
-use std::sync::{Arc, OnceLock};
+use std::{
+    ffi::CStr,
+    sync::{Arc, OnceLock},
+};
 
 use block2::Block;
 use objc2::{
     define_class, ffi, msg_send,
-    rc::Weak,
+    rc::{Retained, Weak},
     runtime::{AnyClass, AnyObject, NSObject, ProtocolObject, Sel},
     sel, DefinedClass, MainThreadOnly,
 };
@@ -222,69 +225,115 @@ impl NavigationDelegate {
 // native (green-button / Ctrl+Cmd+F) full screen.
 const STYLE_MASK_FULL_SCREEN: usize = 1 << 14;
 
-/// Whether an unhandled Esc (AppKit `cancelOperation:`) must stop at the web
-/// view instead of travelling on to NSWindow, which leaves full screen.
+// Runtime name of tao's NSWindow subclass (`#[name = "TaoWindow"]` in tao's
+// macOS window.rs), which every Tauri window here is an instance of.
+const WINDOW_CLASS: &CStr = c"TaoWindow";
+
+/// Whether a `cancelOperation:` reaching the window must be dropped instead
+/// of running NSWindow's own implementation, which leaves full screen.
 fn swallows_cancel(style_mask: usize) -> bool {
     style_mask & STYLE_MASK_FULL_SCREEN != 0
 }
 
-// Superclass of Wry's web view, where the override's `super` call starts.
-static WRY_SUPER: OnceLock<&'static AnyClass> = OnceLock::new();
+extern "C" {
+    // Foundation; variadic, so objc2-foundation does not bind it.
+    fn NSLog(format: &NSString, ...);
+}
+
+/// One line in the unified log; stderr is lost for a Finder-launched app.
+fn log(message: &str) {
+    let message = NSString::from_str(message);
+    unsafe { NSLog(ns_string!("%@"), &*message) };
+}
+
+// Superclass of the guarded window class, where an allowed cancel continues.
+static WINDOW_SUPER: OnceLock<&'static AnyClass> = OnceLock::new();
 static ESCAPE_GUARD: OnceLock<()> = OnceLock::new();
 
 unsafe extern "C-unwind" fn cancel_operation(this: &AnyObject, _: Sel, sender: Option<&AnyObject>) {
-    let window: Option<objc2::rc::Retained<AnyObject>> = unsafe { msg_send![this, window] };
-    let mask: usize = window.map_or(0, |window| unsafe { msg_send![&*window, styleMask] });
+    let mask: usize = unsafe { msg_send![this, styleMask] };
     if swallows_cancel(mask) {
+        log("Werkschaft: Esc cancelOperation: dropped to keep full screen");
         return;
     }
-    if let Some(superclass) = WRY_SUPER.get() {
+    if let Some(superclass) = WINDOW_SUPER.get() {
         let _: () = unsafe { msg_send![super(this, *superclass), cancelOperation: sender] };
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Guard {
+    Installed,
+    /// The matched class defines `cancelOperation:` itself.
+    AlreadyDefined,
+    /// A guard is already installed on some class.
+    AlreadyInstalled,
+    /// No class in the object's hierarchy has the expected name.
+    NotFound,
+}
+
+/// Add the full-screen `cancelOperation:` guard to the class named `name` in
+/// `object`'s hierarchy. The method is added to the class once, never by
+/// swapping an object's isa: an observed object (KVO) has a runtime subclass
+/// as its real isa, and replacing that isa drops the observation. Walking up
+/// from the real isa finds the named class beneath any such subclass.
+fn add_cancel_guard(object: &AnyObject, name: &CStr) -> Guard {
+    if WINDOW_SUPER.get().is_some() {
+        return Guard::AlreadyInstalled;
+    }
+    let mut class = Some(object.class());
+    while let Some(current) = class {
+        if current.name() == name {
+            let Some(superclass) = current.superclass() else {
+                return Guard::NotFound;
+            };
+            // Returns NO, adding nothing, if the class already defines
+            // cancelOperation: itself; inherited definitions are overridden.
+            let added = unsafe {
+                ffi::class_addMethod(
+                    (current as *const AnyClass).cast_mut(),
+                    sel!(cancelOperation:),
+                    std::mem::transmute::<
+                        unsafe extern "C-unwind" fn(&AnyObject, Sel, Option<&AnyObject>),
+                        objc2::runtime::Imp,
+                    >(cancel_operation),
+                    c"v@:@".as_ptr(),
+                )
+            };
+            if !added.as_bool() {
+                return Guard::AlreadyDefined;
+            }
+            // Main thread only, so nothing calls the guard before this is set.
+            let _ = WINDOW_SUPER.set(superclass);
+            return Guard::Installed;
+        }
+        class = current.superclass();
+    }
+    Guard::NotFound
+}
+
 /// Keep Esc from leaving native full screen.
 ///
-/// Wry makes its `WryWebViewParent` the window's content view (replacing
-/// tao's view, whose own `cancelOperation:` would otherwise end the responder
-/// chain), so an Esc the page leaves unhandled reaches AppKit as
-/// `cancelOperation:` and the window exits full screen. Esc still reaches the
-/// page first; only the leftover command is dropped while in full screen.
-///
-/// The method is added to Wry's own class once, never by swapping an object's
-/// isa: an observed view (KVO) reports its original class while its real isa
-/// is a runtime subclass, and replacing that isa drops the observation.
+/// NSWindow implements `cancelOperation:` and leaves full screen with it.
+/// WKWebView hands an Esc the page leaves unhandled back to AppKit, and the
+/// resulting `cancelOperation:` reaches the window: nothing between the web
+/// view and the window (Wry's views, NSView, NSResponder) implements it.
+/// Guarding the window class catches the command however it arrives, whether
+/// walked up the responder chain or sent to the window directly. The page has
+/// already seen the key by then; only the leftover command is dropped.
 fn guard_escape(webview: &WKWebView) {
     ESCAPE_GUARD.get_or_init(|| {
-        let object: &AnyObject = webview;
-        let mut class = Some(object.class());
-        while let Some(current) = class {
-            if current.name() == c"WryWebView" {
-                let Some(superclass) = current.superclass() else {
-                    return;
-                };
-                let _ = WRY_SUPER.set(superclass);
-                // Returns NO, adding nothing, if the class already defines
-                // cancelOperation: itself.
-                let added = unsafe {
-                    ffi::class_addMethod(
-                        (current as *const AnyClass).cast_mut(),
-                        sel!(cancelOperation:),
-                        std::mem::transmute::<
-                            unsafe extern "C-unwind" fn(&AnyObject, Sel, Option<&AnyObject>),
-                            objc2::runtime::Imp,
-                        >(cancel_operation),
-                        c"v@:@".as_ptr(),
-                    )
-                };
-                if !added.as_bool() {
-                    eprintln!("Werkschaft: Could not guard Esc in full screen");
-                }
-                return;
-            }
-            class = current.superclass();
+        let window: Option<Retained<AnyObject>> = unsafe { msg_send![webview, window] };
+        let Some(window) = window else {
+            log("Werkschaft: Esc full-screen guard not installed: web view has no window");
+            return;
+        };
+        match add_cancel_guard(&window, WINDOW_CLASS) {
+            Guard::Installed => log("Werkschaft: Esc full-screen guard installed on TaoWindow"),
+            outcome => log(&format!(
+                "Werkschaft: Esc full-screen guard not installed ({outcome:?}); Esc may leave full screen"
+            )),
         }
-        eprintln!("Werkschaft: Web view class not recognized; Esc may leave full screen");
     });
 }
 
@@ -349,7 +398,16 @@ pub fn install(
 
 #[cfg(test)]
 mod tests {
-    use super::{swallows_cancel, STYLE_MASK_FULL_SCREEN};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use objc2::{
+        define_class, msg_send,
+        rc::Retained,
+        runtime::{AnyClass, AnyObject, NSObject},
+        sel, ClassType,
+    };
+
+    use super::{add_cancel_guard, swallows_cancel, Guard, STYLE_MASK_FULL_SCREEN};
 
     #[test]
     fn escape_is_swallowed_only_in_native_full_screen() {
@@ -364,5 +422,87 @@ mod tests {
     fn full_screen_bit_matches_appkit() {
         // NSWindowStyleMaskFullScreen == 1 << 14 (16384) in AppKit's NSWindow.h.
         assert_eq!(STYLE_MASK_FULL_SCREEN, 16384);
+    }
+
+    fn defines(class: &AnyClass, name: &str) -> bool {
+        class
+            .instance_methods()
+            .iter()
+            .any(|method| method.name().name().to_str() == Ok(name))
+    }
+
+    #[test]
+    fn appkit_cancels_only_at_the_window() {
+        // The guard rests on these: NSWindow owns cancelOperation:, and no
+        // view class between the web view and the window responds to it.
+        let window = AnyClass::get(c"NSWindow").expect("AppKit is linked");
+        assert!(defines(window, "cancelOperation:"));
+        for name in [c"NSView", c"NSResponder", c"WKWebView"] {
+            let class = AnyClass::get(name).expect("framework is linked");
+            assert!(class.instance_method(sel!(cancelOperation:)).is_none());
+        }
+    }
+
+    static MASK: AtomicUsize = AtomicUsize::new(0);
+    static CANCELS: AtomicUsize = AtomicUsize::new(0);
+
+    define_class!(
+        // Stands in for NSWindow: owns cancelOperation: and reports a mask.
+        #[unsafe(super(NSObject))]
+        #[name = "WerkschaftTestWindowBase"]
+        struct WindowBase;
+
+        impl WindowBase {
+            #[unsafe(method(styleMask))]
+            fn style_mask(&self) -> usize {
+                MASK.load(Ordering::SeqCst)
+            }
+
+            #[unsafe(method(cancelOperation:))]
+            fn cancel(&self, _: Option<&AnyObject>) {
+                CANCELS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    );
+
+    define_class!(
+        // Stands in for TaoWindow: inherits cancelOperation:.
+        #[unsafe(super(WindowBase, NSObject))]
+        #[name = "WerkschaftTestWindow"]
+        struct Window;
+    );
+
+    #[test]
+    fn guard_drops_cancel_only_in_full_screen() {
+        // Runs as one test: the guard's superclass is process-wide.
+        let window: Retained<Window> = unsafe { msg_send![Window::class(), new] };
+        let object: &AnyObject = &window;
+        let cancel = || {
+            let _: () = unsafe { msg_send![object, cancelOperation: None::<&AnyObject>] };
+            CANCELS.load(Ordering::SeqCst)
+        };
+
+        assert_eq!(add_cancel_guard(object, c"NoSuchWindow"), Guard::NotFound);
+        assert_eq!(
+            add_cancel_guard(object, c"WerkschaftTestWindowBase"),
+            Guard::AlreadyDefined
+        );
+        assert_eq!(cancel(), 1, "nothing installed yet");
+
+        assert_eq!(
+            add_cancel_guard(object, c"WerkschaftTestWindow"),
+            Guard::Installed
+        );
+        MASK.store(1 | 2 | 4 | 8, Ordering::SeqCst);
+        assert_eq!(cancel(), 2, "windowed: the cancel reaches the superclass");
+        MASK.store(1 | 2 | 4 | 8 | STYLE_MASK_FULL_SCREEN, Ordering::SeqCst);
+        assert_eq!(cancel(), 2, "full screen: the cancel is dropped");
+        MASK.store(1, Ordering::SeqCst);
+        assert_eq!(cancel(), 3, "back to windowed");
+
+        assert_eq!(
+            add_cancel_guard(object, c"WerkschaftTestWindow"),
+            Guard::AlreadyInstalled
+        );
     }
 }
