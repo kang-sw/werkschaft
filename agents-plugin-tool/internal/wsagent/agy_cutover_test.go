@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -239,21 +240,7 @@ func TestAgyCutoverMapperSkipsBackgroundTracking(t *testing.T) {
 // turn's empty reply is not its report: the parent hears from the worker
 // once the turn the instruction starts ends.
 func TestAgyCutoverWorkerRefusesRunCommandAndHoldsItsReport(t *testing.T) {
-	h, _ := newAgyCutoverHarness(t)
-	got := &reports{}
-	h.opts.Report = got.add
-	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
-	reg := h.opts.Backends[BackendAgy]
-	reg.WorkerCapable, reg.WorkerProfile, reg.WorkerHTTPMCP, reg.WorkerAutoApprove = true, AgentWorkerProfile(BackendAgy), true, true
-	h.opts.Backends[BackendAgy] = reg
-	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "gemini-3.8-flash", BackendAgy, "medium"); err != nil {
-		t.Fatal(err)
-	}
-	h.startAt("http://127.0.0.1:1")
-	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
-	if rec := h.record(id); rec.ExecCutoverHolder == "" {
-		t.Fatalf("the agy worker did not start under the cutover: %+v", rec)
-	}
+	h, got, _, holder := startAgyCutoverWorker(t, nil)
 
 	// Worker auto-approval answers an ordinary request...
 	h.holders.out(holder, `{"jsonrpc":"2.0","method":"session/request_permission","params":{"sessionId":"agy-s1","toolCall":{"toolCallId":"w1","name":"write_to_file","title":"write"},"options":[{"optionId":"allow","kind":"allow_once"},{"optionId":"deny","kind":"reject_once"}]},"id":"8"}`)
@@ -279,24 +266,62 @@ func TestAgyCutoverWorkerRefusesRunCommandAndHoldsItsReport(t *testing.T) {
 	}
 }
 
-// A cutover agy worker runs in native default as a lead does: a session
-// that opens in another mode (a resumed one's last) is returned to it at
-// launch, and an in-stream move away from it is undone.
-func TestAgyCutoverWorkerRunsInNativeDefault(t *testing.T) {
+// startAgyCutoverWorker starts a held cutover agy worker of a lead (setup,
+// when set, adjusts the harness first) and returns its reports, id and
+// holder, with its first turn open.
+func startAgyCutoverWorker(t *testing.T, setup func(*leadHarness, *agyFake)) (*leadHarness, *reports, string, string) {
+	t.Helper()
 	h, f := newAgyCutoverHarness(t)
-	f.openMode = "auto"
+	got := &reports{}
+	h.opts.Report = got.add
+	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	reg := h.opts.Backends[BackendAgy]
 	reg.WorkerCapable, reg.WorkerProfile, reg.WorkerHTTPMCP, reg.WorkerAutoApprove = true, AgentWorkerProfile(BackendAgy), true, true
 	h.opts.Backends[BackendAgy] = reg
-	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	if _, err := wsconfig.SetGlobalAgentsTierForHarness(h.opts.Config, "small", "", "gemini-3.8-flash", BackendAgy, "medium"); err != nil {
 		t.Fatal(err)
+	}
+	if setup != nil {
+		setup(h, f)
 	}
 	h.startAt("http://127.0.0.1:1")
 	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
 	if rec := h.record(id); rec.ExecCutoverHolder == "" {
-		t.Fatal("the agy worker did not start under the cutover")
+		t.Fatalf("the agy worker did not start under the cutover: %+v", rec)
 	}
+	return h, got, id, holder
+}
+
+// A model that keeps calling run_command after its instructions is not
+// prompted again past the cap: the turn past it reports to the parent.
+func TestAgyCutoverInstructionsAreCapped(t *testing.T) {
+	h, got, _, holder := startAgyCutoverWorker(t, nil)
+	for turn := 0; turn <= cutoverInstructionCap; turn++ {
+		rpc, call := fmt.Sprintf("r%d", turn), fmt.Sprintf("k%d", turn)
+		h.holders.out(holder, agyRunCommandRequest(rpc, call)...)
+		eventually(t, "the refusal", func() bool { return agyAnswered(h, holder, rpc, "deny") })
+		h.holders.out(holder, agyRefusedUpdate(call), agyEndTurn(h, holder, turn))
+		if turn < cutoverInstructionCap {
+			eventually(t, "the next instruction", func() bool { return countInstruction(agyCutoverPrompts(t, h, holder)) == turn+1 })
+			if n := len(got.list()); n != 0 {
+				t.Fatalf("turn %d reported while its instruction was owed: %+v", turn, got.list())
+			}
+		}
+	}
+	eventually(t, "the report past the cap", func() bool { return len(got.list()) == 1 })
+	if n := countInstruction(agyCutoverPrompts(t, h, holder)); n != cutoverInstructionCap {
+		t.Fatalf("instruction prompts = %d, want %d", n, cutoverInstructionCap)
+	}
+	if !strings.Contains(h.log.String(), "exec cutover instruction not sent again") {
+		t.Fatalf("log: %s", h.log.String())
+	}
+}
+
+// A cutover agy worker runs in native default as a lead does: a session
+// that opens in another mode (a resumed one's last) is returned to it at
+// launch, and an in-stream move away from it is undone.
+func TestAgyCutoverWorkerRunsInNativeDefault(t *testing.T) {
+	h, _, _, holder := startAgyCutoverWorker(t, func(_ *leadHarness, f *agyFake) { f.openMode = "auto" })
 	// The launch sets default; the session's own open report of auto may
 	// set it once more.
 	eventually(t, "the launch's set_mode", func() bool { return len(agyModes(t, h, holder)) > 0 })

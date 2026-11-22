@@ -167,6 +167,7 @@ func (c *conv) decideExecCutover(rec Record, def Profile, spec *StartSpec, mcpEn
 	on, why := c.execCutoverFor(rec, def, in)
 	spec.ExecCutover = on
 	c.setStatus(func() { c.execCutover, c.launchBinary = on, in.binary })
+	c.cutoverInstructed = 0
 	if on {
 		c.r.markMCPCutover(rec.ReplyID, rec.Backend)
 	} else if c.r.opts.Backends[rec.Backend].ExecCutover != nil {
@@ -181,6 +182,7 @@ func (c *conv) rejoinExecCutover(rec Record) bool {
 	// The binary a process this daemon did not launch ran from is unknown:
 	// its version report is not kept.
 	c.setStatus(func() { c.execCutover, c.launchBinary = on, "" })
+	c.cutoverInstructed = 0
 	if on {
 		c.r.markMCPCutover(rec.ReplyID, rec.Backend)
 	}
@@ -351,6 +353,11 @@ func (c *conv) unrequestedCommand(toolCallID string, quiet bool) {
 	c.oweCutoverInstruction(toolCallID)
 }
 
+// cutoverInstructionCap bounds the instruction prompts one process is
+// sent: a model that keeps calling the refused tool after them is not
+// prompted again, and its turns report as they end.
+const cutoverInstructionCap = 3
+
 // cutoverEventPrefix starts the completion event id of a cutover
 // instruction prompt.
 const cutoverEventPrefix = "exec-cutover:"
@@ -366,12 +373,17 @@ func (c *conv) sendCutoverInstruction() {
 	trigger := c.cutoverNudge
 	c.cutoverNudge = ""
 	s := c.cutoverSupport()
+	if trigger != "" && s != nil && s.Instruction != "" && c.cutoverInstructed >= cutoverInstructionCap {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: exec cutover instruction not sent again: this process had %d already\n", c.rec.ReplyID, c.cutoverInstructed)
+		s = nil
+	}
 	if trigger == "" || s == nil || s.Instruction == "" {
 		if trigger != "" {
 			c.r.releaseLater(c.rec.ReplyID)
 		}
 		return
 	}
+	c.cutoverInstructed++
 	rec := c.rec
 	event := cutoverEventPrefix + rec.HolderID + ":" + trigger
 	c.cutoverInstructing = true

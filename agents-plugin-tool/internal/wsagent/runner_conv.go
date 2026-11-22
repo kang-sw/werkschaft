@@ -82,10 +82,14 @@ type conv struct {
 	// worker's done report waits for the turn it starts (holdsReport);
 	// loop-owned.
 	cutoverInstructing bool
-	activeMode         string
-	bgTasks            int
-	background         *int
-	monitors           *int
+	// cutoverInstructed counts the instruction prompts the current process
+	// was sent (cutoverInstructionCap); loop-owned, reset at each start
+	// and rejoin.
+	cutoverInstructed int
+	activeMode        string
+	bgTasks           int
+	background        *int
+	monitors          *int
 	// actionNeeded is State.ActionNeeded.
 	actionNeeded string
 	// Worker permission projection is transient. Explicit selection lives in
