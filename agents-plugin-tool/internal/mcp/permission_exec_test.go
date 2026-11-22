@@ -155,7 +155,7 @@ func TestReadOnlyWorkerChildArgvAndEnvironment(t *testing.T) {
 			t.Fatalf("%s: %v %s", name, isErr, text)
 		}
 		for _, want := range []string{"ARG:*.md\n", "ARG:$HOME\n", "ARG:a  b\n", "ARG:it's\n", "ENV:GIT_PAGER=cat\n", "ENV:PAGER=cat\n", "ENV:GIT_OPTIONAL_LOCKS=0\n", "ENV:GIT_NO_LAZY_FETCH=1\n",
-			"ENV:GIT_CONFIG_COUNT=1\n", "ENV:GIT_CONFIG_KEY_0=diff.autoRefreshIndex\n", "ENV:GIT_CONFIG_VALUE_0=false\n", "ENV:PATH="} {
+			"ENV:GIT_CONFIG_COUNT=2\n", "ENV:GIT_CONFIG_KEY_0=diff.autoRefreshIndex\n", "ENV:GIT_CONFIG_VALUE_0=false\n", "ENV:GIT_CONFIG_KEY_1=log.diffMerges\n", "ENV:GIT_CONFIG_VALUE_1=separate\n", "ENV:PATH="} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s: child output lacks %q:\n%s", name, want, text)
 			}
@@ -237,5 +237,58 @@ func assertUnrestricted(t *testing.T, root string, call func(string, map[string]
 	}
 	if text, isErr = call("exec.spawn", map[string]any{"cmd": "touch", "args": []string{"four.txt"}}); isErr {
 		t.Fatalf("exec.spawn = %s", text)
+	}
+}
+
+// A repository that configures log.diffMerges=remerge cannot make -m or
+// --diff-merges=on write the reconstructed merge into .git/objects.
+func TestReadOnlyWorkerMergeDiffWritesNoObjects(t *testing.T) {
+	w := newWorkerFixture(t, "codex", wsagent.PermissionReadOnly)
+	gitIn(t, w.root, "checkout", "-q", "-b", "main")
+	gitIn(t, w.root, "add", ".")
+	gitIn(t, w.root, "commit", "-q", "-m", "base")
+	writeReadme := func(text string) {
+		if err := os.WriteFile(filepath.Join(w.root, "README.md"), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitIn(t, w.root, "checkout", "-q", "-b", "side")
+	writeReadme("side\n")
+	gitIn(t, w.root, "commit", "-q", "-am", "side")
+	gitIn(t, w.root, "checkout", "-q", "main")
+	writeReadme("main\n")
+	gitIn(t, w.root, "commit", "-q", "-am", "main")
+	// A conflicting merge, resolved by hand: its remerge diff is not empty.
+	cmd := exec.Command("git", "-c", "user.email=t@t", "-c", "user.name=t", "merge", "--no-ff", "-m", "merge", "side")
+	cmd.Dir = w.root
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("the merge did not conflict:\n%s", out)
+	}
+	writeReadme("resolved\n")
+	gitIn(t, w.root, "commit", "-q", "-am", "merge")
+	gitIn(t, w.root, "config", "log.diffMerges", "remerge")
+
+	snapshot := func() []string {
+		var names []string
+		_ = filepath.WalkDir(filepath.Join(w.root, ".git", "objects"), func(path string, d os.DirEntry, err error) error {
+			if err == nil {
+				names = append(names, path)
+			}
+			return nil
+		})
+		return names
+	}
+	before := snapshot()
+	for _, args := range [][]string{{"log", "-m", "-p", "-n", "1"}, {"show", "--diff-merges=on", "HEAD"}, {"show", "--diff-merges=m", "HEAD"}, {"log", "-m", "--stat", "-n", "1"}} {
+		if text, isErr := w.call("exec.run", map[string]any{"exe": "git", "args": args}); isErr || !strings.Contains(text, "status: exited 0") || !strings.Contains(text, "merge") {
+			t.Fatalf("git %v = %v %s", args, isErr, text)
+		} else if strings.Contains(text, "remerge") {
+			// The final object directory can look unchanged because git
+			// removes its temporary one, so the format itself is asserted.
+			t.Fatalf("git %v used the repository's remerge format:\n%s", args, text)
+		}
+	}
+	if after := snapshot(); strings.Join(before, "\n") != strings.Join(after, "\n") {
+		t.Fatalf("a read-only merge diff changed .git/objects:\nbefore %v\nafter  %v", before, after)
 	}
 }

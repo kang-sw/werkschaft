@@ -400,7 +400,11 @@ func readOnlyEnvironment(environ []string) []string {
 		// later; older Git ignores it), which would write a packfile.
 		"GIT_NO_LAZY_FETCH=1",
 		// git diff refreshes a stale index by default, which rewrites it.
-		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=diff.autoRefreshIndex", "GIT_CONFIG_VALUE_0=false")
+		// Env-supplied config outranks the repository's. log.diffMerges
+		// pins what -m and --diff-merges=on select: a repository setting of
+		// remerge would write objects into the repository.
+		"GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=diff.autoRefreshIndex", "GIT_CONFIG_VALUE_0=false",
+		"GIT_CONFIG_KEY_1=log.diffMerges", "GIT_CONFIG_VALUE_1=separate")
 	if win {
 		// Git Bash must pass the checked words to a native process as they are.
 		out = append(out, "MSYS_NO_PATHCONV=1", "MSYS2_ARG_CONV_EXCL=*")

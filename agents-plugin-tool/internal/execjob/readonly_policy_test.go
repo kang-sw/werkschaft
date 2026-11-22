@@ -122,7 +122,7 @@ func TestReadOnlyEnvironmentIsAllowlisted(t *testing.T) {
 			t.Errorf("environment keeps %s:\n%s", bad, got)
 		}
 	}
-	for _, want := range []string{"GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=diff.autoRefreshIndex", "GIT_CONFIG_VALUE_0=false", "PATH=/bin", "HOME=/h", "LC_ALL=C", "LANG=C", "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "PAGER=cat"} {
+	for _, want := range []string{"GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=diff.autoRefreshIndex", "GIT_CONFIG_VALUE_0=false", "GIT_CONFIG_KEY_1=log.diffMerges", "GIT_CONFIG_VALUE_1=separate", "PATH=/bin", "HOME=/h", "LC_ALL=C", "LANG=C", "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "PAGER=cat"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("environment lacks %s:\n%s", want, got)
 		}
@@ -175,24 +175,43 @@ func TestReadOnlyExecutableMustBeAbsoluteNative(t *testing.T) {
 	} else if _, err := checkReadOnlyExecutable("git", abs); err != nil {
 		t.Error(err)
 	}
-	// A relative PATH entry resolves to a relative program: refused.
-	dir := t.TempDir()
-	name := "relprog"
+	// A relative PATH entry resolves an allowlisted program to a relative
+	// path, which the launch refuses for its absolute-path requirement.
+	parent := t.TempDir()
+	if err := os.Mkdir(filepath.Join(parent, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "cat"
 	if goruntime.GOOS == "windows" {
 		name += ".exe"
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o755); err != nil {
-		t.Skip(err)
+	if err := os.WriteFile(filepath.Join(parent, "bin", name), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Skip(err)
 	}
-	if err := os.Chdir(dir); err != nil {
+	if err := os.Chdir(parent); err != nil {
 		t.Skip(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(wd) })
-	if _, err := ReadOnlyArgvLaunch("w", "exec.run", dir, dir, []string{"relprog"}, []string{"PATH=."}, nil); err == nil {
-		t.Error("a program found through a relative PATH entry passed")
+	relEnv := []string{"PATH=bin"}
+	if found, err := wsgit.LookPathEnv("cat", relEnv); err != nil || filepath.IsAbs(found) {
+		t.Fatalf("the fixture lookup = %q, %v; want a relative path", found, err)
+	}
+	for _, launch := range []func() error{
+		func() error {
+			_, err := ReadOnlyArgvLaunch("w", "exec.run", parent, parent, []string{"cat", "x"}, relEnv, nil)
+			return err
+		},
+		func() error {
+			_, err := ReadOnlyShellLaunch("w", "exec.shell", parent, "", "cat x", relEnv, nil)
+			return err
+		},
+	} {
+		if err := launch(); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
+			t.Errorf("a program found through a relative PATH entry: %v, want the absolute-path refusal", err)
+		}
 	}
 }
