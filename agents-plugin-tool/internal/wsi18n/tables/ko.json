@@ -2905,6 +2905,8 @@
   "js.settings.key.claude.mcp_watchdog_enabled.description": "세션이 유휴 상태일 때 MCP 도구 목록 소실을 주기적으로 확인하고 /mcp reconnect로 자동 복구합니다.",
   "js.settings.key.claude.mcp_watchdog_interval_minutes.label": "MCP 감시 확인 간격",
   "js.settings.key.claude.mcp_watchdog_interval_minutes.description": "MCP 감시가 도구 목록을 점검하는 주기(분).",
+  "js.settings.key.claude.exec_cutover_enabled.label": "셸 대신 exec 도구 사용(옵트인)",
+  "js.settings.key.claude.exec_cutover_enabled.description": "대시보드 호스팅 Claude Code 세션을 네이티브 셸·백그라운드 프로세스 도구 없이 시작하고, 명령은 ws-mcp 세션 경로를 통해 ws exec 도구로 실행합니다. 기본값은 꺼짐입니다. 켜면 0.51 이전 세션은 이 경로를 쓸 수 없습니다. 0.51보다 오래된 ws 데몬은 이 경로를 거부하므로, 그런 세션은 재시작될 때까지 셸 없이 남습니다. 새 프로세스가 시작될 때마다 적용됩니다.",
   "js.settings.key.pi.agent_wait_animation.label": "대기 위젯 애니메이션",
   "js.settings.key.pi.agent_wait_animation.description": "자식 에이전트가 리드를 기다리는 동안 라이브 에이전트 위젯을 애니메이션으로 표시합니다.",
   "js.settings.key.pi.agent_widget_rows.label": "에이전트 위젯 표시 행 수",

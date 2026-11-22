@@ -74,7 +74,8 @@ type execCutoverInputs struct {
 //   - its ws tools include the replacement (cutoverReplacement): a lead
 //     lists every ws tool, a worker only its profile's allowlist, and
 //     agentless ws-mcp lists no exec tool;
-//   - the harness's rollout switch is on.
+//   - the harness's rollout switch is on, and for Claude its opt-in
+//     (claude.exec_cutover_enabled, off by default) is on.
 func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bool, string) {
 	reg := c.r.opts.Backends[rec.Backend]
 	if reg.ExecCutover == nil {
@@ -111,8 +112,8 @@ func (c *conv) execCutoverFor(rec Record, def Profile, in execCutoverInputs) (bo
 	if envFlagOn(in.mcpEnv[envNoAgent]) || (in.mcpEnv[envNoAgent] == "" && envFlagOn(envValue(environ(), envNoAgent))) {
 		return false, "agentless ws-mcp has no exec tools"
 	}
-	if !c.execRolloutOn(rec) {
-		return false, wsconfig.ItemExecNativeToolRemoval + " is off for " + rec.Backend
+	if on, why := c.execRolloutOn(rec); !on {
+		return false, why
 	}
 	return true, ""
 }
@@ -128,33 +129,66 @@ func cutoverReplacement(backend string) []string {
 }
 
 // execRolloutOn reads the harness's rollout switch: its bucket, then all,
-// then the bare key; on unless one says off. One resolution reads every
-// scope's file once for the three keys.
-func (c *conv) execRolloutOn(rec Record) bool {
+// then the bare key; on unless one says off. A Claude start also needs its
+// opt-in, claude.exec_cutover_enabled: off unless it says on, and off when
+// the config cannot be read, so the default Claude path keeps its native
+// tools and never depends on the ws-mcp session route for commands. One
+// resolution reads every scope's file once for all the keys. When off, the
+// second result says why.
+func (c *conv) execRolloutOn(rec Record) (bool, string) {
+	claude := rec.Backend == BackendClaude
+	prefix := wsconfig.ItemExecNativeToolRemoval
+	if claude {
+		// The common prefix of both families is empty: every scope's file
+		// is still read once, and the keys are picked below.
+		prefix = ""
+	}
 	resolver := c.rolloutResolver(rec)
-	values, err := resolver.ListScalars(rec.WSKey, wsconfig.ItemExecNativeToolRemoval)
+	values, err := resolver.ListScalars(rec.WSKey, prefix)
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: %s: %v\n", rec.ReplyID, wsconfig.ItemExecNativeToolRemoval, err)
-		return true
+		if claude {
+			return false, wsconfig.ItemClaudeExecCutoverEnabled + " could not be read: " + err.Error()
+		}
+		return true, ""
 	}
-	byKey := make(map[string]string, len(values))
+	byKey := make(map[string]string, 4)
 	for _, v := range values {
-		byKey[v.Key] = v.Value
+		if v.Key == wsconfig.ItemClaudeExecCutoverEnabled || strings.HasPrefix(v.Key, wsconfig.ItemExecNativeToolRemoval) {
+			byKey[v.Key] = v.Value
+		}
 	}
 	for _, key := range []string{
 		wsconfig.ItemExecNativeToolRemoval + "." + rec.Backend,
 		wsconfig.ItemExecNativeToolRemoval + ".all",
 		wsconfig.ItemExecNativeToolRemoval,
 	} {
-		switch strings.ToLower(strings.TrimSpace(byKey[key])) {
-		case "":
+		value := strings.ToLower(strings.TrimSpace(byKey[key]))
+		if value == "" {
 			continue
-		case "off", "false", "0", "no":
-			return false
 		}
+		if switchOff(value) {
+			return false, wsconfig.ItemExecNativeToolRemoval + " is off for " + rec.Backend
+		}
+		break
+	}
+	if claude {
+		switch strings.ToLower(strings.TrimSpace(byKey[wsconfig.ItemClaudeExecCutoverEnabled])) {
+		case "true", "on", "1", "yes":
+		default:
+			return false, wsconfig.ItemClaudeExecCutoverEnabled + " is off (the Claude cutover is opt-in)"
+		}
+	}
+	return true, ""
+}
+
+// switchOff reports whether a lowered, trimmed switch value says off.
+func switchOff(value string) bool {
+	switch value {
+	case "off", "false", "0", "no":
 		return true
 	}
-	return true
+	return false
 }
 
 // rolloutResolver is the config resolver rec's start reads its rollout

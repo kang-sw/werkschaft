@@ -2905,6 +2905,8 @@
   "js.settings.key.claude.mcp_watchdog_enabled.description": "Controlla la connessione MCP locale e richiede il ripristino se necessario.",
   "js.settings.key.claude.mcp_watchdog_interval_minutes.label": "Intervallo di monitoraggio",
   "js.settings.key.claude.mcp_watchdog_interval_minutes.description": "Tempo tra i controlli della connessione MCP di Claude Code.",
+  "js.settings.key.claude.exec_cutover_enabled.label": "Strumenti exec al posto della shell (opt-in)",
+  "js.settings.key.claude.exec_cutover_enabled.description": "Avvia le sessioni Claude Code ospitate dalla dashboard senza gli strumenti nativi di shell e di processi in background; i comandi passano dagli strumenti ws exec sul percorso di sessione ws-mcp. Disattivato per impostazione predefinita. Attivarlo blocca le sessioni precedenti alla 0.51 su quel percorso: un daemon ws più vecchio della 0.51 rifiuta quel percorso, quindi una tale sessione resta senza shell finché non viene riavviata. Si applica a ogni nuovo avvio del processo.",
   "js.settings.key.pi.agent_wait_animation.label": "Animazione degli agenti in attesa",
   "js.settings.key.pi.agent_wait_animation.description": "Anima il widget durante il lavoro degli agenti.",
   "js.settings.key.pi.agent_widget_rows.label": "Righe del widget degli agenti",

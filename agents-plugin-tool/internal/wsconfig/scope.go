@@ -213,6 +213,14 @@ const (
 	// ItemExecNativeToolRemoval+"."+<claude|codex|pi|agy|all>; a process
 	// reads it at its start.
 	ItemExecNativeToolRemoval = "exec.native_tool_removal"
+
+	// ItemClaudeExecCutoverEnabled is the Claude opt-in to the exec cutover
+	// (owner tier decision 2161=b): a hosted Claude process starts under the
+	// cutover only when it is true, on top of every other condition. Both
+	// Claude package manifests (ws and wsflow) default it to false, so the
+	// default Claude path never depends on the ws-mcp session route for
+	// commands, which a daemon older than 0.51 refuses.
+	ItemClaudeExecCutoverEnabled = "claude.exec_cutover_enabled"
 )
 
 func init() {

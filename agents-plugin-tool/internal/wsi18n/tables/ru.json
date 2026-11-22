@@ -2905,6 +2905,8 @@
   "js.settings.key.claude.mcp_watchdog_enabled.description": "Проверяет локальное подключение MCP и при необходимости запрашивает восстановление.",
   "js.settings.key.claude.mcp_watchdog_interval_minutes.label": "Интервал наблюдения",
   "js.settings.key.claude.mcp_watchdog_interval_minutes.description": "Время между проверками подключения MCP в Claude Code.",
+  "js.settings.key.claude.exec_cutover_enabled.label": "Инструменты exec вместо оболочки (по выбору)",
+  "js.settings.key.claude.exec_cutover_enabled.description": "Запускает сессии Claude Code, размещённые в панели, без встроенных инструментов оболочки и фоновых процессов; команды выполняются инструментами ws exec через сессионный маршрут ws-mcp. По умолчанию выключено. Включение закрывает этот путь для сессий до 0.51: демон ws старше 0.51 отклоняет этот маршрут, и такая сессия остаётся без оболочки до перезапуска. Действует при каждом новом запуске процесса.",
   "js.settings.key.pi.agent_wait_animation.label": "Анимация ожидания агентов",
   "js.settings.key.pi.agent_wait_animation.description": "Анимирует виджет агентов во время работы.",
   "js.settings.key.pi.agent_widget_rows.label": "Строки виджета агентов",
