@@ -244,7 +244,17 @@
       "registered_at": "2026-11-14T11:47:01Z"
     },
     "261114-feat-ws-mailbox-multi-recipient": {
-      "registered_at": "2026-11-14T14:30:48Z"
+      "registered_at": "2026-11-14T14:30:48Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T01:46:30Z",
+        "impl": {
+          "branch": "impl/develop/cod-zap-gains"
+        }
+      }
     },
     "261114-feat-ws-prompt-refusal-conversation-notice": {
       "registered_at": "2026-11-14T12:34:19Z"
