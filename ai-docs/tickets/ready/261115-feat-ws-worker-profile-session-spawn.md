@@ -11,7 +11,7 @@ related:
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 226cfeee40d3983c
-sage-review-completeness-reviewed: 6936cf7330d939f6
+sage-review-completeness-reviewed: 226cfeee40d3983c
 ---
 
 # Worker-profile sessions

@@ -11,7 +11,7 @@ related:
 sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: bb757b64dffa20c1
-sage-review-completeness-reviewed: c34a82c839d45331
+sage-review-completeness-reviewed: bb757b64dffa20c1
 ---
 
 # Common permission intent and truthful enforcement
