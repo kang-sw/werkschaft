@@ -337,6 +337,12 @@ func evictTicketMapRoots() {
 				stripped[name] = entry
 			}
 			ticketCache.dirs[dir] = stripped
+			// A scan of dir already past its snapshot must not publish the
+			// documents back (scanStatusEntries compares this count).
+			if ticketCache.stripped == nil {
+				ticketCache.stripped = map[string]uint64{}
+			}
+			ticketCache.stripped[dir]++
 		}
 		ticketCache.Unlock()
 		ticketRefCache.Lock()

@@ -86,10 +86,16 @@ func listStatusDirEntries(statusDir string) ([]os.DirEntry, error) {
 // ticket created, moved, closed or edited by any process or by plain git is
 // seen on the next scan. A directory's map is replaced on every scan, so a
 // vanished file leaves the cache with it.
+//
+// stripped counts, per directory, the map-root evictions that dropped its
+// documents. A scan that snapshotted the map before such an eviction drops
+// the documents it carried instead of publishing them back for a root no
+// longer under the root cap.
 var ticketCache = struct {
 	sync.Mutex
-	dirs map[string]map[string]ticketCacheEntry
-}{dirs: map[string]map[string]ticketCacheEntry{}}
+	dirs     map[string]map[string]ticketCacheEntry
+	stripped map[string]uint64
+}{dirs: map[string]map[string]ticketCacheEntry{}, stripped: map[string]uint64{}}
 
 // scanStatusDir parses every ticket file in one status directory, rereading
 // only files whose listed size or mtime changed since the last scan.
@@ -131,6 +137,7 @@ func scanStatusDirWith(root, statusDir, status string, wantDoc bool) (scans []ti
 func scanStatusEntries(root, statusDir, status string, entries []os.DirEntry, wantDoc bool) ([]ticketScan, bool, error) {
 	ticketCache.Lock()
 	prev := ticketCache.dirs[statusDir]
+	epoch := ticketCache.stripped[statusDir]
 	ticketCache.Unlock()
 
 	next := map[string]ticketCacheEntry{}
@@ -192,6 +199,12 @@ func scanStatusEntries(root, statusDir, status string, entries []os.DirEntry, wa
 	}
 
 	ticketCache.Lock()
+	if ticketCache.stripped[statusDir] != epoch {
+		for name, entry := range next {
+			entry.doc = nil
+			next[name] = entry
+		}
+	}
 	ticketCache.dirs[statusDir] = next
 	ticketCache.Unlock()
 	return out, vanished, nil
