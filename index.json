@@ -70,16 +70,6 @@
     "261002-bug-lead-run-effort-agent-type-missing-fallback": {
       "registered_at": "2026-10-02T13:27:17Z"
     },
-    "261003-feat-pi-execute-readonly-auto-approval": {
-      "registered_at": "2026-10-03T04:05:29Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T08:49:45Z"
-      }
-    },
     "261007-bug-pi-fork-lineage-keeps-bootstrap-key-after-adoption": {
       "registered_at": "2026-10-07T08:41:34Z"
     },
@@ -477,16 +467,6 @@
     "261118-research-ws-agy-custom-agent-prompt": {
       "registered_at": "2026-11-18T07:09:55Z"
     },
-    "261118-research-ws-pi-hosted-connector": {
-      "registered_at": "2026-11-18T07:10:00Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T08:49:39Z"
-      }
-    },
     "261119-bug-ws-agent-v2-dogfood-surprises": {
       "registered_at": "2026-11-19T13:16:47Z"
     },
@@ -571,16 +551,6 @@
     },
     "261120-feat-ws-dashboard-numbers-screen": {
       "registered_at": "2026-11-20T11:31:45Z"
-    },
-    "261120-feat-ws-pi-common-interface-rebuild": {
-      "registered_at": "2026-11-20T14:10:37Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T08:49:33Z"
-      }
     },
     "261120-research-ws-daemon-supervision-http-attach": {
       "registered_at": "2026-11-20T12:40:36Z"
