@@ -188,3 +188,57 @@ func TestIncrementalFoldSameIDOrgCollisionMatchesFullReplay(t *testing.T) {
 		})
 	}
 }
+
+// TestIncrementalFoldNameClashedOrgCreateLosesItsID covers three creates:
+// a creates o-y "Sales"; b, offline, creates o-x "Sales"; c, offline,
+// creates o-x under another name. When b's create folds before c's it loses
+// on the name, not the id, and c's create holds o-x. Either way b's pre-sync
+// CC, edit, and removal of its own o-x are flagged, never landing on c's org,
+// while b after the sync, and a later writer, act on c's org. Both fold
+// orders, each in two arrival orders, match a fresh full replay throughout.
+func TestIncrementalFoldNameClashedOrgCreateLosesItsID(t *testing.T) {
+	g := json.RawMessage(`{"admins":["a","b","c"],"members":[{"id":"a","keys":["a"]},{"id":"b","keys":["b"]},{"id":"c","keys":["c"]},{"id":"h","keys":["h"]},{"id":"k","keys":["k"]}]}`)
+	seenItem := map[string]int{"h.pc": 1}
+	item := incrementalEvent("h", 1, TypeItemCreate, `{"kind":"task","title":"three creates"}`, 1, nil)
+	sales := incrementalEvent("a", 1, TypeOrgSet, `{"org":"o-y","name":"Sales","head":""}`, 2, seenItem)
+	for name, ts := range map[string]struct{ lost, won int64 }{
+		"name clash, loser first in fold order": {3, 4},
+		"id clash, winner first in fold order":  {4, 3},
+	} {
+		lost := incrementalEvent("b", 1, TypeOrgSet, `{"org":"o-x","name":"Sales","head":""}`, ts.lost, seenItem)
+		won := incrementalEvent("c", 1, TypeOrgSet, `{"org":"o-x","name":"Other","head":"k"}`, ts.won, seenItem)
+		lostCC := incrementalEvent("b", 2, TypeItemCCOrg, `{"item":"h.pc#1","org":"o-x"}`, 5, seenItem)
+		lostEdit := incrementalEvent("b", 3, TypeOrgSet, `{"org":"o-x","name":"Sales Two","head":""}`, 6, seenItem)
+		lostRemove := incrementalEvent("b", 4, TypeOrgRemove, `{"org":"o-x"}`, 7, seenItem)
+		synced := incrementalEvent("b", 5, TypeOrgSet, `{"org":"o-x","name":"Other Renamed","head":"k"}`, 8, map[string]int{"h.pc": 1, "a.pc": 1, "c.pc": 1})
+		laterCC := incrementalEvent("h", 2, TypeItemCCOrg, `{"item":"h.pc#1","org":"o-x"}`, 9, map[string]int{"a.pc": 1, "b.pc": 5, "c.pc": 1})
+		for order, arrivals := range map[string][]wsledger.Event{
+			"in order":    {sales, lost, won, lostCC, lostEdit, lostRemove, synced, laterCC},
+			"winner last": {sales, lost, lostCC, lostEdit, lostRemove, won, synced, laterCC},
+		} {
+			t.Run(name+"/"+order, func(t *testing.T) {
+				src := newMemSource(g, "h.pc", []wsledger.Event{item})
+				tr := New(src, src.stream)
+				for _, ev := range arrivals {
+					src.add(ev)
+					assertIncrementalFold(t, tr, src)
+				}
+				for id, want := range map[wsledger.EventID]string{sales.ID: "applied", lost.ID: "flagged", won.ID: "applied",
+					lostCC.ID: "flagged", lostEdit.ID: "flagged", lostRemove.ID: "flagged", synced.ID: "applied", laterCC.ID: "applied"} {
+					if n := tr.r.byID[id.String()]; n.status != want {
+						t.Fatalf("%s = %s (%s), want %s", id, n.status, n.reason, want)
+					}
+				}
+				S := tr.r.S
+				o := S.orgs["o-x"]
+				if o == nil || o.name != "Other Renamed" || o.head != "k" || o.removed != nil {
+					t.Fatalf("winner org = %+v", o)
+				}
+				if y := S.orgs["o-y"]; y == nil || y.name != "Sales" {
+					t.Fatalf("first org = %+v", y)
+				}
+				wantIn(t, "later CC reaches the winner's head", ccMembers(S.items["h.pc#1"]), "k")
+			})
+		}
+	}
+}

@@ -200,8 +200,9 @@ func TestConcurrentOrgListConflictsUseFoldOrder(t *testing.T) {
 }
 
 // TestOrgCCOnClashedOrgIsDropped CCs an org whose creation loses a
-// concurrent name clash, from the losing clone before it syncs: the final fold
-// keeps no registration for an org it never created.
+// concurrent name clash, from the losing clone before it syncs: the CC is
+// flagged (its writer acted on an org the fold never created), and the final
+// fold keeps no registration for it.
 func TestOrgCCOnClashedOrgIsDropped(t *testing.T) {
 	tm := newTeam(t)
 	it := tm.do("maya.pc", TypeItemCreate, map[string]any{"kind": "task", "title": "Clashed CC"})
@@ -215,7 +216,7 @@ func TestOrgCCOnClashedOrgIsDropped(t *testing.T) {
 	for _, who := range []string{"ada.pc", "bo.pc"} {
 		v := tm.view(who)
 		wantEq(t, who+" losing org creation", event(t, v, lost).Status, "flagged")
-		wantEq(t, who+" dependent cc_org passes its causal check", event(t, v, cc).Status, "applied")
+		wantEq(t, who+" dependent cc_org on the lost org", event(t, v, cc).Status, "flagged")
 		S := tm.clone(who).r.S
 		if S.orgs["o-b"] != nil {
 			t.Fatalf("%s: clashed org folded", who)
