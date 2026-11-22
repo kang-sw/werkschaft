@@ -542,6 +542,12 @@ func TestDiffFenceLineKinds(t *testing.T) {
 			[]string{"@@", "--- old", "+++ new", "@@", "++i;", "-- note"},
 			[]string{"hunk", "file", "file", "hunk", "add", "remove"},
 		},
+		{
+			// A counted hunk whose last deletion/addition look like a header
+			// pair just before the next "@@" is still content.
+			[]string{"@@ -1 +1 @@", "--- old", "+++ new", "@@ -4 +4 @@", "-x", "+y"},
+			[]string{"hunk", "remove", "add", "hunk", "remove", "add"},
+		},
 	} {
 		got := diffLineKinds(func() (out [][]byte) {
 			for _, l := range tc.lines {

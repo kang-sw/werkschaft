@@ -1057,7 +1057,10 @@ func diffLineKinds(lines [][]byte) []string {
 				kinds[i] = "file"
 				continue
 			}
-			if has(i, "--- ") && has(i+1, "+++ ") && has(i+2, "@@") {
+			// A counted hunk ends only when both counts run out (above), so
+			// the header-pair guess is for hunks without counts.
+			counted := oldLeft >= 0 && newLeft >= 0
+			if !counted && has(i, "--- ") && has(i+1, "+++ ") && has(i+2, "@@") {
 				kinds[i], kinds[i+1], inHunk = "file", "file", false
 				i++
 				continue
