@@ -47,6 +47,11 @@ type State struct {
 	ContextTokens *float64           `json:"contextTokens,omitempty"`
 	OutputTps     *float64           `json:"outputTps,omitempty"`
 	Batches       []wslive.BatchView `json:"batches,omitempty"`
+	// ContextWindow is the model's native context window and ContextCompaction
+	// the resolved ws compaction thresholds, as the child's last status carried
+	// them; they scale its context bar in a view of its parent.
+	ContextWindow     int64                   `json:"contextWindow,omitempty"`
+	ContextCompaction *wslive.UsageCompaction `json:"contextCompaction,omitempty"`
 	// Held counts the messages waiting for the next turn.
 	Held int `json:"held"`
 	// Page is the conversation's dashboard page path.
@@ -166,6 +171,10 @@ func (r *Runner) closedState(rec Record) State {
 		if snap.Usage != nil && snap.Usage.Context != nil && snap.Usage.Context.Tokens != nil {
 			tokens := float64(*snap.Usage.Context.Tokens)
 			st.ContextTokens = &tokens
+		}
+		if snap.Usage != nil && snap.Usage.Context != nil && snap.Usage.Context.Window > 0 {
+			st.ContextWindow = snap.Usage.Context.Window
+			st.ContextCompaction = cloneUsageCompaction(snap.Usage.Context.Compaction)
 		}
 	}
 	if st.Status == StatusHandedOff {

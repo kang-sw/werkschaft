@@ -259,32 +259,35 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 	return out
 }
 
-// setContext fills the Context* fields. A linked row whose session's usage
-// was read takes that figure, the one its status band shows, and the band's
-// colour rule through contextBar; any other row has only the adapter's token
-// count, with no window source in the dashboard, so it carries tokens alone.
+// setContext fills the Context* fields through the status band's own rule
+// (contextBar), so the card and the band of the same session agree. A linked
+// row whose session's usage was read takes that figure. Any other row builds
+// it from its own row: the tokens, and the scale its runner carried onto the
+// row (Agent.ContextWindow, Agent.ContextCompaction: the ws compaction
+// thresholds, else the native window). A row with tokens and no scale, such as
+// a harness's own native subagent, carries the tokens alone.
 func (n *HUDNode) setContext(a wslive.Agent, usage *wslive.UsageContext) {
-	if usage != nil {
-		if usage.Tokens == nil || *usage.Tokens <= 0 {
+	if usage == nil {
+		if a.ContextTokens <= 0 {
 			return
 		}
-		n.ContextTokens = *usage.Tokens
-		bar := contextBar(*usage)
-		if !bar.Known || bar.Denom <= 0 {
-			n.ContextText = compactTokens(n.ContextTokens)
-			return
-		}
-		n.ContextWindow, n.ContextLevel = bar.Denom, bar.Level
-		if bar.SoftPct != "" {
-			n.ContextSoft = usage.Compaction.Soft
-		}
-		n.ContextText = compactTokens(n.ContextTokens) + " / " + compactTokens(bar.Denom)
+		tokens := a.ContextTokens
+		usage = &wslive.UsageContext{Tokens: &tokens, Window: a.ContextWindow, Compaction: a.ContextCompaction}
+	}
+	if usage.Tokens == nil || *usage.Tokens <= 0 {
 		return
 	}
-	if a.ContextTokens > 0 {
-		n.ContextTokens = a.ContextTokens
-		n.ContextText = compactTokens(a.ContextTokens)
+	n.ContextTokens = *usage.Tokens
+	n.ContextText = compactTokens(n.ContextTokens)
+	bar := contextBar(*usage)
+	if !bar.Known || bar.Denom <= 0 {
+		return
 	}
+	n.ContextWindow, n.ContextLevel = bar.Denom, bar.Level
+	if bar.SoftPct != "" {
+		n.ContextSoft = usage.Compaction.Soft
+	}
+	n.ContextText += " / " + compactTokens(bar.Denom)
 }
 
 func foldHUDRawSubtree(n *hudRawNode, fold *hudFold) {

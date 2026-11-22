@@ -1011,3 +1011,50 @@ func TestRetainProtectsHoldingAliveAndAncestorsUnderCap(t *testing.T) {
 		t.Fatalf("protected count %d exceeds RunningAgentCap %d", protectedCount, RunningAgentCap)
 	}
 }
+
+// TestSubagentContextScaleRoundTripsAndKeepsAbsentFields: an agent event's
+// context window and ws compaction thresholds reach the snapshot and read
+// back, a later event without them or with out-of-range ones keeps the held
+// scale, a finished row seeds from the snapshot with it, and a row never
+// given one names neither.
+func TestSubagentContextScaleRoundTripsAndKeepsAbsentFields(t *testing.T) {
+	st := NewState(ownerKey)
+	comp := &UsageCompaction{Soft: 140_000, Hard: 200_000, Milestones: []int64{160_000, 180_000, -1}, AdvisoryEnabled: true}
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", Label: "worker", Status: StatusRunning,
+		ContextTokens: f64p(156_000), ContextWindow: f64p(1_000_000), ContextCompaction: comp}, 1_000)
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", ContextWindow: f64p(-5)}, 1_100)
+
+	raw, err := json.Marshal(st.Snapshot(1_200))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), SnapshotName)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := ReadSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := snap.Agents[0]
+	if a.ContextWindow != 1_000_000 || a.ContextCompaction == nil || a.ContextCompaction.Soft != 140_000 || a.ContextCompaction.Hard != 200_000 ||
+		len(a.ContextCompaction.Milestones) != 2 {
+		t.Fatalf("read back %+v / %+v", a, a.ContextCompaction)
+	}
+
+	seeded := NewState(ownerKey)
+	snap.Agents[0].Status = StatusDone
+	snap.Agents[0].EndedAt = 1_300
+	seeded.SeedFinished(snap)
+	if got := seeded.Snapshot(1_400).Agents[0]; got.ContextWindow != 1_000_000 || got.ContextCompaction == nil || got.ContextCompaction.Hard != 200_000 {
+		t.Fatalf("seeded finished row = %+v", got)
+	}
+
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a2", Status: StatusRunning}, 2_100)
+	raw, _ = json.Marshal(st.Snapshot(2_100).Agents[1])
+	for _, field := range []string{"contextWindow", "contextCompaction"} {
+		if strings.Contains(string(raw), field) {
+			t.Fatalf("a row with no scale names %s: %s", field, raw)
+		}
+	}
+}

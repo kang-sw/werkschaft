@@ -405,6 +405,13 @@ type Agent struct {
 	Effort        string  `json:"effort,omitempty"`
 	ContextTokens int64   `json:"contextTokens,omitempty"`
 	OutputTps     float64 `json:"outputTps,omitempty"`
+	// ContextWindow is the native context window of the subagent's model, and
+	// ContextCompaction the resolved ws compaction thresholds its runner holds
+	// for it: the figures behind the subagent's own context bar, carried on
+	// its row so a view of the parent needs no read of the subagent's session.
+	// Each is absent while unknown or unresolved.
+	ContextWindow     int64            `json:"contextWindow,omitempty"`
+	ContextCompaction *UsageCompaction `json:"contextCompaction,omitempty"`
 	// BackgroundTasks counts background commands the subagent's harness is
 	// still running after its turn ended; absent when zero.
 	BackgroundTasks int `json:"backgroundTasks,omitempty"`

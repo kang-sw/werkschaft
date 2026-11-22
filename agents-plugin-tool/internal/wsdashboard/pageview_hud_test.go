@@ -364,7 +364,8 @@ func TestHUDProjectionNativeRows(t *testing.T) {
 
 // TestHUDNodeContextFigures pins the hover card's context figures: a linked
 // node carries its own session's usage (the band's scale and colour rule), an
-// unlinked node only the adapter's token count, and an unknown stays absent.
+// unlinked node its row's tokens on the scale its runner carried (ws
+// thresholds, else the native window, else none), and an unknown stays absent.
 func TestHUDNodeContextFigures(t *testing.T) {
 	now := testNow
 	tok := func(n int64) *int64 { return &n }
@@ -417,6 +418,31 @@ func TestHUDNodeContextFigures(t *testing.T) {
 	n = run(plain, nil)
 	if n.ContextTokens != 41_000 || n.ContextWindow != 0 || n.ContextText != "41.0k" {
 		t.Fatalf("unlinked = %+v", n)
+	}
+	// Unlinked with the scale its runner carried on the row: the ws thresholds
+	// scale the bar as the band's do, past soft reads warn.
+	withScale := plain
+	withScale.ContextTokens = 156_000
+	withScale.ContextWindow = 1_000_000
+	withScale.ContextCompaction = &wslive.UsageCompaction{Soft: 140_000, Hard: 200_000}
+	n = run(withScale, nil)
+	if n.ContextWindow != 200_000 || n.ContextSoft != 140_000 || n.ContextLevel != "warn" || n.ContextText != "156k / 200k" {
+		t.Fatalf("unlinked with ws thresholds = %+v", n)
+	}
+	// Thresholds unresolved: the native window scales the bar, no soft tick.
+	withScale.ContextCompaction = nil
+	withScale.ContextTokens = 104_000
+	withScale.ContextWindow = 272_000
+	n = run(withScale, nil)
+	if n.ContextWindow != 272_000 || n.ContextSoft != 0 || n.ContextLevel != "" || n.ContextText != "104k / 272k" {
+		t.Fatalf("unlinked with a native window = %+v", n)
+	}
+	// Thresholds alone (window unknown) still scale it.
+	withScale.ContextWindow = 0
+	withScale.ContextCompaction = &wslive.UsageCompaction{Hard: 200_000}
+	n = run(withScale, nil)
+	if n.ContextWindow != 200_000 || n.ContextText != "104k / 200k" {
+		t.Fatalf("unlinked with a hard point only = %+v", n)
 	}
 	// Unknown stays out of the JSON.
 	plain.ContextTokens = 0
