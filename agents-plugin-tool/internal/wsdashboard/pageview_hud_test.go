@@ -225,7 +225,7 @@ func TestHUDProjectionNativeRows(t *testing.T) {
 	now := testNow
 	ms := now.UnixMilli()
 	agyRun := wslive.Agent{ID: wslive.NativeAgyPrefix + "call_run", Label: "Kiwi Responder", Status: wslive.StatusRunning, StartedAt: ms - 9_000, TurnStartedAt: ms - 9_000, Activity: wslive.Activity{Phase: wslive.PhaseThinking}}
-	agyUnknown := wslive.Agent{ID: wslive.NativeAgyPrefix + "call_old", Label: "research", Status: wslive.StatusDone, StartedAt: ms - 60_000, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: ms - 30_000}}
+	agyUnknown := wslive.Agent{ID: wslive.NativeAgyPrefix + "call_old", Label: "research", Status: wslive.StatusDone, StartedAt: ms - 60_000, EndedAt: ms - 30_000, EndUnknown: true, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: ms - 30_000}}
 	codexDone := wslive.Agent{ID: wslive.NativeCodexPrefix + "call_c", Label: "ok_reply", Status: wslive.StatusDone, StartedAt: ms - 50_000, EndedAt: ms - 40_000, ActiveMs: 10_000}
 	spawned := wslive.Agent{ID: "pi:w1", Label: "worker", Status: wslive.StatusRunning, AgentKind: wslive.AgentKindPi, Harness: "codex", ReplyID: "w1", StartedAt: ms - 5_000}
 	piExt := wslive.Agent{ID: "pi:ext", Label: "pi ext", Status: wslive.StatusRunning, AgentKind: wslive.AgentKindPi, StartedAt: ms - 4_000}
@@ -282,6 +282,10 @@ func TestHUDProjectionNativeRows(t *testing.T) {
 	unknownRow := group[strings.Index(group, `data-end-unknown="1"`):]
 	if unknownRow = unknownRow[:strings.Index(unknownRow, "</summary>")]; !strings.Contains(unknownRow, `<span class="amk">?</span>`) || !strings.Contains(unknownRow, `class="nbadge"`) {
 		t.Fatalf("end-unknown row shows a completion mark: %s", unknownRow)
+	}
+	// Its EndedAt is when observation ended, never shown as an end.
+	if strings.Contains(unknownRow, `data-ms="`+strconv.FormatInt(agyUnknown.EndedAt, 10)+`"`) {
+		t.Fatalf("end-unknown row shows its observation end as an end: %s", unknownRow)
 	}
 	codexRow := group[strings.Index(group, `data-key="agent-`+codexDone.ID+`"`):]
 	codexRow = codexRow[:strings.Index(codexRow, "</summary>")]

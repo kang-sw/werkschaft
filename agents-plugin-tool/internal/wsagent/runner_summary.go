@@ -28,11 +28,43 @@ func (c *conv) lockSummaryWriter() (func(), bool) {
 		return nil, false
 	}
 	if row == nil || !row.Hosted || row.HostPID != rec.HostPID || row.Harness != rec.Backend {
+		c.ownerProof.Store(nil)
 		release()
 		unlock()
 		return nil, false
 	}
+	c.ownerProof.Store(&hostedOwnerProof{hostPID: rec.HostPID, backend: rec.Backend})
 	return func() { release(); unlock() }, true
+}
+
+// hostedOwnerProof is the hosted row identity lockSummaryWriter last proved
+// under the registration lock.
+type hostedOwnerProof struct {
+	hostPID int
+	backend string
+}
+
+// lockSummaryWriterRAM is lockSummaryWriter for a publish that only reaches
+// the daemon's live slot (a native subagent row): it pins this conversation
+// generation as the session's summary owner without the registration file,
+// on the row identity the last file-fenced write proved. Every file write
+// still takes lockSummaryWriter, which re-validates the row and drops a
+// proof that no longer holds; a terminal login is also seen by checkRow and
+// the heartbeat (isForeign). With no proof yet, or one that no longer names
+// this record's process, it falls back to lockSummaryWriter once.
+func (c *conv) lockSummaryWriterRAM() (func(), bool) {
+	rec := c.record()
+	if !rec.Lead || c.isForeign() {
+		return nil, false
+	}
+	if proof := c.ownerProof.Load(); proof == nil || proof.hostPID != rec.HostPID || proof.backend != rec.Backend {
+		return c.lockSummaryWriter()
+	}
+	release, owned := c.r.lockSummaryOwner(rec.ReplyID, c)
+	if !owned {
+		return nil, false
+	}
+	return release, true
 }
 
 // lockSummaryOwner pins replyID's summary owner to want: it takes the

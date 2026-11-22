@@ -355,6 +355,12 @@ type Agent struct {
 	Status    string `json:"status"`
 	StartedAt int64  `json:"startedAt,omitempty"`
 	EndedAt   int64  `json:"endedAt,omitempty"`
+	// EndUnknown marks a finished row whose observation ended with the
+	// outcome unknown: EndedAt is when observation ended, not a known
+	// completion. An older reader ignores it and shows the row done; an
+	// older writer drops it, and the row keeps its EndedAt rank and shows
+	// done after an upgrade (display-only; the row is retained).
+	EndUnknown bool `json:"endUnknown,omitempty"`
 	// ActiveMs is accumulated closed-turn work; TurnStartedAt is the
 	// current working turn's start, absent between turns.
 	ActiveMs      int64 `json:"activeMs,omitempty"`

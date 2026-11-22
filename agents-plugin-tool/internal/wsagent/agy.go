@@ -1624,6 +1624,19 @@ func (m *agyMapper) toolStatus(u agyUpdate, replaying bool, now int64) []Event {
 	return out
 }
 
+// forgetNativeLaunches drops the launch correlation of native rows the
+// runner settled (cancellation, a replay's end, an accepted turn end): no
+// launch failure can change a settled row, so a launch that never reports
+// a final status leaves nothing behind. A watchdog continuation settles
+// nothing, so a launch failure reported after it still ends its row.
+func (p *agyProcess) forgetNativeLaunches(rowIDs []string) {
+	p.m.mu.Lock()
+	defer p.m.mu.Unlock()
+	for _, id := range rowIDs {
+		delete(p.m.nativeLaunch, strings.TrimPrefix(id, wslive.NativeAgyPrefix))
+	}
+}
+
 // agyInvokeSubagentTool is agy's native subagent launch tool. It stays an
 // adapter-local name: the catalog's native-subagent removal entry is left
 // unset on purpose, since filling it adds a "never use" line to the hosted

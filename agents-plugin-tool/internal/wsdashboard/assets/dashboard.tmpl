@@ -241,14 +241,14 @@ The session index row keeps phase. */}}
 its end; the row's mark (✓, ✗) is its state. A terminal native row without
 an end shows only its start, a ? mark, and a status chip that reads
 observation ended, completion unknown. */}}
-{{define "alife"}}<span class="alife">{{with .StartedAt}}<span>{{t "agent.native.started"}} {{template "clock" .}}</span>{{end}}{{if not .IsRunning}}{{with .EndedAt}}<span>{{t "agent.native.ended"}} {{template "clock" .}}</span>{{end}}{{end}}</span>{{end}}
+{{define "alife"}}<span class="alife">{{with .StartedAt}}<span>{{t "agent.native.started"}} {{template "clock" .}}</span>{{end}}{{if not (or .IsRunning .EndUnknown)}}{{with .EndedAt}}<span>{{t "agent.native.ended"}} {{template "clock" .}}</span>{{end}}{{end}}</span>{{end}}
 
 {{/* astat is a subagent row's telemetry: model, effort, context size, and
 (while it runs) output rate, each its own stat and left out while unknown;
 effort stays out of the model's ellipsis so a long model ID cannot cut it. On a narrow
 agents popover a container query moves it to a second line under the row
 name; aline wraps the leading items so that line can sit below them. */}}
-{{define "astat"}}{{if .HasStats}}<span class="astat">{{with .DisplayModel}}<span class="amodel" title="{{if $.Observed}}{{t "hover.observed"}}{{else}}{{t "agent.model" .}}{{end}}">{{.}}</span>{{end}}{{with .Effort}}<span class="aeff" title="{{t "agent.effort" .}}">{{.}}</span>{{end}}{{with .ContextText}}<span class="actx" title="{{t "agent.context" $.ContextTokens}}">{{.}}</span>{{end}}{{with .Rate}}<span class="atps" title="{{t "agent.rate" .}}">{{.}} t/s</span>{{end}}{{if not .IsRunning}}{{with .EndedAt}}<span>{{template "ago" .}}</span>{{end}}{{end}}</span>{{end}}{{end}}
+{{define "astat"}}{{if .HasStats}}<span class="astat">{{with .DisplayModel}}<span class="amodel" title="{{if $.Observed}}{{t "hover.observed"}}{{else}}{{t "agent.model" .}}{{end}}">{{.}}</span>{{end}}{{with .Effort}}<span class="aeff" title="{{t "agent.effort" .}}">{{.}}</span>{{end}}{{with .ContextText}}<span class="actx" title="{{t "agent.context" $.ContextTokens}}">{{.}}</span>{{end}}{{with .Rate}}<span class="atps" title="{{t "agent.rate" .}}">{{.}} t/s</span>{{end}}{{if not (or .IsRunning .EndUnknown)}}{{with .EndedAt}}<span>{{template "ago" .}}</span>{{end}}{{end}}</span>{{end}}{{end}}
 
 {{define "peers"}}<div class="pgroup"><div class="pghead">{{icon "mail"}}{{t "peers.title"}}<span class="chip">{{len .Live}}</span>{{with .Ended}}<span class="chip">{{t "peers.ended" (len .)}}</span>{{end}}</div>{{range .Rows}}{{template "peer" .}}{{end}}{{with .HiddenEnded}}<div class="thidden">{{t "peers.hidden" .}}</div>{{end}}</div>{{end}}
 

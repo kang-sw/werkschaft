@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wslive"
 )
 
@@ -238,8 +239,8 @@ func nativeRowEvent(id, label, status string) Event {
 
 // TestAgyNativeFixtureThroughHostedLead drives the recorded invoke_subagent
 // turn through a hosted conversation: the row runs after the tool call and
-// ends done with no end time and no added work once the runner accepts the
-// turn's end.
+// ends done as observation ended (flagged, ended at the accepted turn end)
+// with no added work once the runner accepts the turn's end.
 func TestAgyNativeFixtureThroughHostedLead(t *testing.T) {
 	previous := suiteBackend
 	suiteBackend = BackendAgy
@@ -282,8 +283,8 @@ func TestAgyNativeFixtureThroughHostedLead(t *testing.T) {
 	}
 	eventually(t, "settled turn", func() bool { return h.state(id).Status == StatusIdle })
 	a, ok := liveAgent(t, c, agyFixtureNativeRow)
-	if !ok || a.Label != "Kiwi Responder" || a.Status != wslive.StatusDone || a.EndedAt != 0 || a.ActiveMs != running.ActiveMs {
-		t.Fatalf("row after end_turn = %+v (running was %+v), want done, no end, unchanged ActiveMs", a, running)
+	if !ok || a.Label != "Kiwi Responder" || a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt < running.StartedAt || a.ActiveMs != running.ActiveMs {
+		t.Fatalf("row after end_turn = %+v (running was %+v), want done end-unknown at the turn end, unchanged ActiveMs", a, running)
 	}
 	var agents int
 	c.do(func() {
@@ -306,7 +307,7 @@ func TestAgyNativeFixtureThroughHostedLead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d, ok := snapAgent(disk, agyFixtureNativeRow); !ok || d.Status != wslive.StatusDone || d.EndedAt != 0 {
+	if d, ok := snapAgent(disk, agyFixtureNativeRow); !ok || d.Status != wslive.StatusDone || !d.EndUnknown || d.EndedAt != a.EndedAt {
 		t.Fatalf("disk row = %+v (present %v)", d, ok)
 	}
 }
@@ -329,7 +330,7 @@ func TestAgyNativeRowsSettleOnCancelledTurn(t *testing.T) {
 	p.events <- nativeRowEvent(codexRow, "probe", wslive.StatusRunning)
 	p.events <- Event{TurnEnd: true, TurnReason: wslive.TurnAborted}
 	eventually(t, "cancelled turn settled", func() bool { return h.state(id).Status == StatusIdle })
-	if a, _ := liveAgent(t, c, row); a.Status != wslive.StatusDone || a.EndedAt != 0 || a.ActiveMs != 0 {
+	if a, _ := liveAgent(t, c, row); a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt <= 0 || a.ActiveMs != 0 {
 		t.Fatalf("agy row after cancellation = %+v, want end-unknown", a)
 	}
 	// Only agy rows end with the parent turn; a Codex row waits for its
@@ -359,7 +360,7 @@ func TestAgyNativeRowsWaitForWatchdogContinue(t *testing.T) {
 	}
 	p.reply("done")
 	eventually(t, "continued turn settled", func() bool { return h.state(id).Status == StatusIdle })
-	if a, _ := liveAgent(t, c, row); a.Status != wslive.StatusDone || a.EndedAt != 0 {
+	if a, _ := liveAgent(t, c, row); a.Status != wslive.StatusDone || !a.EndUnknown {
 		t.Fatalf("row after the logical turn end = %+v, want end-unknown", a)
 	}
 }
@@ -395,29 +396,83 @@ func TestAgyNativeRowsSettleOnceReplayCompletes(t *testing.T) {
 		}
 		c.handle(Event{ReplayDone: true})
 		a, _ := snapAgent(c.live.st.Snapshot(time.Now().UnixMilli()), row)
-		if a.Status != wslive.StatusDone || a.EndedAt != 0 {
+		if a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt <= 0 {
 			t.Errorf("row after replay completion = %+v, want end-unknown", a)
 		}
-		settledAt = a.PhaseStartedAt
+		settledAt = a.EndedAt
 	})
 	p.events <- Event{Live: &wslive.Event{Kind: wslive.KindReply, Text: "continued", Final: true}}
 	p.events <- nativeRowEvent(row, "", wslive.StatusRunning)
 	p.events <- Event{TurnEnd: true}
 	eventually(t, "continuation settled", func() bool { return h.state(id).Status == StatusIdle })
-	if a, _ := liveAgent(t, c, row); a.Status != wslive.StatusDone || a.EndedAt != 0 || a.PhaseStartedAt != settledAt {
+	if a, _ := liveAgent(t, c, row); a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt != settledAt {
 		t.Fatalf("row after the live continuation end = %+v, want unchanged end-unknown", a)
 	}
 }
 
-// TestNativeRowEventsPublishRAMOnly: a native row event after the disk
-// interval writes no file and carries no wake, turn, or batch authority;
-// the row reaches disk with the next turn-end write.
+// TestAgyNativeRowsWaitForReplayInCatchUp: in a catch-up replay only the
+// records through the holder's sequence mark are quiet; a buffered unseen
+// prompt response arrives live while the replay still runs. Its turn end
+// settles no row before the replay ends; the rows it ended observation of
+// settle at the replay boundary at that turn end's time, unless a launch
+// failure buffered later in the same replay ended the row first.
+func TestAgyNativeRowsWaitForReplayInCatchUp(t *testing.T) {
+	previous := suiteBackend
+	suiteBackend = BackendAgy
+	t.Cleanup(func() { suiteBackend = previous })
+	h := newHarness(t, map[string]string{"chat": chatProfile})
+	id := h.create("chat").ID
+	if _, err := h.runner.Send(id, "work"); err != nil {
+		t.Fatal(err)
+	}
+	p := h.backend.waitProc(t, 0)
+	p.nextSent(t)
+	c := h.runner.conv(id)
+	failing, open := wslive.NativeAgyPrefix+"fails-later", wslive.NativeAgyPrefix+"open"
+	c.do(func() {
+		c.replaying = true
+		quiet := func(ev Event) { ev.Replay = true; c.handle(ev) }
+		quiet(nativeRowEvent(failing, "research", wslive.StatusRunning))
+		quiet(nativeRowEvent(open, "probe", wslive.StatusRunning))
+		// Past the sequence mark: live records while the replay runs.
+		before := c.r.opts.Now().UnixMilli()
+		c.handle(Event{TurnEnd: true})
+		after := c.r.opts.Now().UnixMilli()
+		snap := c.live.st.Snapshot(after)
+		for _, row := range []string{failing, open} {
+			if a, _ := snapAgent(snap, row); a.Status != wslive.StatusRunning {
+				t.Errorf("a live turn end during the replay settled %s: %+v", row, a)
+			}
+		}
+		c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: failing, Status: wslive.StatusFailed, At: after + 5}})
+		c.handle(Event{ReplayDone: true})
+		snap = c.live.st.Snapshot(c.r.opts.Now().UnixMilli())
+		if a, _ := snapAgent(snap, failing); a.Status != wslive.StatusFailed || a.EndUnknown || a.EndedAt != after+5 {
+			t.Errorf("row whose launch failed later in the replay = %+v, want failed at %d", a, after+5)
+		}
+		if a, _ := snapAgent(snap, open); a.Status != wslive.StatusDone || !a.EndUnknown || a.EndedAt < before || a.EndedAt > after {
+			t.Errorf("row the live turn end accepted = %+v, want end-unknown at that end (%d..%d)", a, before, after)
+		}
+	})
+}
+
+// TestNativeRowEventsPublishRAMOnly: a hosted lead's native row event after
+// the disk interval touches no file: no snapshot write, no registration lock
+// or read (the real owner fence runs on the proof the last file write made),
+// and it carries no wake, turn, or batch authority; the row reaches disk with
+// the next turn-end write, which re-validates the row.
 func TestNativeRowEventsPublishRAMOnly(t *testing.T) {
 	now := time.Unix(1000, 0)
+	base := t.TempDir()
 	dir := filepath.Join(t.TempDir(), "native")
-	r := NewRunner(Options{Dir: dir, Now: func() time.Time { return now }, Log: io.Discard})
-	c := &conv{r: r, dir: dir, rec: Record{ReplyID: "native", WSKey: "key", Root: dir}, turn: true}
+	r := NewRunner(Options{Dir: base, Now: func() time.Time { return now }, Log: io.Discard})
+	c := &conv{r: r, dir: dir, rec: Record{ReplyID: "native", WSKey: "key", Root: dir, Backend: BackendAgy, Lead: true, HostPID: 4242}, turn: true}
+	if err := wsdashboard.WriteRegistration(base, wsdashboard.Registration{ReplyID: "native", Project: dir, Harness: BackendAgy, Hosted: true, HostPID: 4242}); err != nil {
+		t.Fatal(err)
+	}
+	r.setSummaryOwner("native", c)
 	c.live = newLiveWriter(dir, "key", "agy", r.opts.Now, io.Discard)
+	c.live.owner, c.live.ownerRAM = c.lockSummaryWriter, c.lockSummaryWriterRAM
 	slot := &idleSnapshotSlot{}
 	c.live.slot = slot
 	c.live.wake = slot.RingAppended
@@ -431,12 +486,16 @@ func TestNativeRowEventsPublishRAMOnly(t *testing.T) {
 		t.Fatalf("initial writes = %d", writes)
 	}
 	now = now.Add(2 * wslive.HeartbeatInterval)
+	rowLocks, rowFileReads := c.rowReads.Load(), registrationReads()
 	row := wslive.NativeCodexPrefix + "ram"
 	turn, batches := c.turn, c.batches
 	c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: row, Label: "probe", Status: wslive.StatusRunning}})
 	c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeAgyPrefix + "ram", Label: "research", Status: wslive.StatusRunning}})
 	if writes != 1 {
 		t.Fatalf("native row events wrote %d snapshots, want none", writes-1)
+	}
+	if locks, reads := c.rowReads.Load()-rowLocks, registrationReads()-rowFileReads; locks != 0 || reads != 0 {
+		t.Fatalf("native row events took %d registration locks and %d registration reads, want none", locks, reads)
 	}
 	if a, ok := snapAgent(slot.snapshot, row); !ok || a.Status != wslive.StatusRunning {
 		t.Fatalf("native row not published to RAM: %+v", slot.snapshot.Agents)
@@ -451,6 +510,9 @@ func TestNativeRowEventsPublishRAMOnly(t *testing.T) {
 	if writes != 2 {
 		t.Fatalf("turn end writes = %d, want 2", writes)
 	}
+	if c.rowReads.Load() == rowLocks {
+		t.Fatal("the turn-end write did not re-validate the row")
+	}
 	disk, err := wslive.ReadSnapshot(wslive.SnapshotPath(dir))
 	if err != nil {
 		t.Fatal(err)
@@ -463,5 +525,72 @@ func TestNativeRowEventsPublishRAMOnly(t *testing.T) {
 	c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: "plain", Status: wslive.StatusRunning}})
 	if writes != 3 {
 		t.Fatalf("ordinary row writes = %d, want 3", writes)
+	}
+	// A row the terminal took keeps the fence shut without a file read.
+	c.markForeign()
+	before := slot.snapshot
+	c.handle(Event{Live: &wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeCodexPrefix + "late", Label: "late", Status: wslive.StatusRunning}})
+	if _, ok := snapAgent(slot.snapshot, wslive.NativeCodexPrefix+"late"); ok || !reflect.DeepEqual(before, slot.snapshot) {
+		t.Fatal("a native row published after the session's row left the daemon")
+	}
+}
+
+// forgetProc records the launch correlations a conversation drops.
+type forgetProc struct {
+	Process
+	forgot []string
+}
+
+func (p *forgetProc) forgetNativeLaunches(ids []string) { p.forgot = append(p.forgot, ids...) }
+
+// TestAgyNativeLaunchCorrelationEndsWithTheRow: a launch that never reports
+// a final status leaves no correlation once its row settles (a cancelled
+// turn's accepted end, a replay's end); before that, a failure still ends
+// its row.
+func TestAgyNativeLaunchCorrelationEndsWithTheRow(t *testing.T) {
+	m := newAgyMapper("s")
+	m.lead = true
+	m.now = func() int64 { return 5_000 }
+	t.Cleanup(m.stopWakeTimer)
+	launch := func(id string) {
+		m.mapLine([]byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"tool_call","toolCallId":"`+id+`","name":"invoke_subagent","status":"in_progress"}}}`), nopReplies{})
+	}
+	failure := func(id string) []wslive.Event {
+		return nativeEvents(m.mapLine([]byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"tool_call_update","toolCallId":"`+id+`","status":"failed"}}}`), nopReplies{}))
+	}
+	launch("kept")
+	launch("settled")
+	p := &agyProcess{m: m}
+	p.forgetNativeLaunches([]string{wslive.NativeAgyPrefix + "settled"})
+	if len(m.nativeLaunch) != 1 || !m.nativeLaunch["kept"] {
+		t.Fatalf("correlations after a settlement = %v, want only the open launch", m.nativeLaunch)
+	}
+	if got := failure("kept"); len(got) != 1 || got[0].Status != wslive.StatusFailed {
+		t.Fatalf("failure of an unsettled launch = %+v, want its row failed", got)
+	}
+	if len(m.nativeLaunch) != 0 {
+		t.Fatalf("correlations after the failure = %v, want none", m.nativeLaunch)
+	}
+
+	// The conversation hands the rows it settles to the process.
+	now := time.Unix(1000, 0)
+	dir := filepath.Join(t.TempDir(), "forget")
+	r := NewRunner(Options{Dir: dir, Now: func() time.Time { return now }, Log: io.Discard})
+	proc := &forgetProc{}
+	c := &conv{r: r, dir: dir, rec: Record{ReplyID: "forget", WSKey: "key", Root: dir}, proc: proc}
+	c.live = newLiveWriter(dir, "key", "agy", r.opts.Now, io.Discard)
+	row := wslive.NativeAgyPrefix + "cancelled"
+	c.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: row, Status: wslive.StatusRunning})
+	c.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: wslive.NativeCodexPrefix + "other", Status: wslive.StatusRunning})
+	c.endAgyNativeObservation(now.UnixMilli())
+	if !reflect.DeepEqual(proc.forgot, []string{row}) {
+		t.Fatalf("forgotten correlations = %v, want %v", proc.forgot, []string{row})
+	}
+	replayed := wslive.NativeAgyPrefix + "replayed"
+	c.replaying = true
+	c.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: replayed, Status: wslive.StatusRunning}, true)
+	c.finishAgyNativeReplay()
+	if !reflect.DeepEqual(proc.forgot, []string{row, replayed}) {
+		t.Fatalf("forgotten correlations after the replay = %v", proc.forgot)
 	}
 }

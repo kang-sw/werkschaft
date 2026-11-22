@@ -304,8 +304,8 @@ func (a AgentNode) EndedStatus() string {
 	return "done"
 }
 
-// EndUnknown reports a native row whose observation ended without an end
-// time: its outcome is unknown, so the row never shows as completed.
+// EndUnknown reports a native row whose observation ended with the outcome
+// unknown: the row never shows as completed, nor its EndedAt as an end.
 func (a AgentNode) EndUnknown() bool { return hudEndUnknown(a.Agent, a.Native) }
 
 // ModelText is the agent's model and reasoning effort joined by a space
@@ -351,7 +351,7 @@ func (a AgentNode) ActiveSince() int64 {
 
 // HasStats reports whether the row shows telemetry or a finished timestamp.
 func (a AgentNode) HasStats() bool {
-	return a.ModelText() != "" || a.ContextText() != "" || a.Rate() > 0 || (!a.IsRunning() && a.EndedAt > 0)
+	return a.ModelText() != "" || a.ContextText() != "" || a.Rate() > 0 || (!a.IsRunning() && a.EndedAt > 0 && !a.EndUnknown())
 }
 
 // PeerGroup is the lead's peer leads: every live peer and the most recent

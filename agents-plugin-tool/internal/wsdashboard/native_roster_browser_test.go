@@ -39,7 +39,7 @@ func TestNativeSubagentRosterBrowser(t *testing.T) {
 	running := wslive.Agent{ID: wslive.NativeAgyPrefix + "call_17051178851859014051", Label: "Kiwi Responder", Status: wslive.StatusRunning,
 		StartedAt: now - 42_000, TurnStartedAt: now - 42_000, Activity: wslive.Activity{Phase: wslive.PhaseThinking, PhaseStartedAt: now - 42_000}}
 	unknown := wslive.Agent{ID: wslive.NativeAgyPrefix + "call_10998817474857222024", Label: "research", Status: wslive.StatusDone,
-		StartedAt: now - 15*60_000, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: now - 10*60_000}}
+		StartedAt: now - 15*60_000, EndedAt: now - 10*60_000, EndUnknown: true, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: now - 10*60_000}}
 	codex := wslive.Agent{ID: wslive.NativeCodexPrefix + "call_991318ad7bb04b65ace1b4b9e9f15336", Label: "ok_reply", Status: wslive.StatusDone,
 		StartedAt: now - 20*60_000, EndedAt: now - 18*60_000, ActiveMs: 120_000, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: now - 18*60_000}}
 	snap := wslive.Snapshot{SchemaVersion: 1, Adapter: "agy", UpdatedAt: now, HeartbeatMs: 30000,

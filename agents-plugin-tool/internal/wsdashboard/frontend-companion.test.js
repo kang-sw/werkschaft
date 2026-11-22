@@ -399,7 +399,7 @@ test("superseded companion loads discard decoded bitmaps after leaving a session
 });
 
 function relayFixture() {
-  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [], treeAgents = [];
+  let now = 10000, timer = 0, hidden = false, phase = "idle", children = [], rows = [], subdeep = 0, asks = [], permissions = [], treeAgents = [], completed = 0;
   const timers = new Map(), listeners = {}, posts = [], held = [];
   const doc = {
     body: {classList: {contains: () => false}},
@@ -415,7 +415,7 @@ function relayFixture() {
     performance: {now: () => now}, Date: class extends Date { static now() { return now; } },
     setTimeout(fn) { timers.set(++timer, fn); return timer; }, clearTimeout(id) { timers.delete(id); },
     rid: "lead", lead: {}, boardLatest: null, TL_ASK: "ask", companionStreamReady: true,
-    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : selector.startsWith("#r-tree .agent") ? treeAgents : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed: 0}),
+    q: selector => selector.startsWith("#r-convlive .permwait") ? permissions : selector.startsWith("#r-tree .agent") ? treeAgents : [], boardQ: () => asks, region: () => ({}), hudReadData: () => ({roots: children, completed}),
     entriesBox: () => ({children: rows}), $: () => null, pageHidden: () => hidden,
     showRegions: () => { while (held.length) held.shift()(); }, shPost: (_, payload) => posts.push(payload),
     innerHeight: 1000, innerWidth: 1000
@@ -425,7 +425,7 @@ function relayFixture() {
   function update() { now += 300; listeners.change.forEach(fn => fn()); flush(); }
   function events() { return posts.splice(0).flatMap(p => p.events); }
   flush(); events();
-  return {set children(value) { children = value; }, set treeAgents(value) { treeAgents = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
+  return {set children(value) { children = value; }, set treeAgents(value) { treeAgents = value; }, set completed(value) { completed = value; }, get rows() { return rows; }, set rows(value) { rows = value; }, set phase(value) { phase = value; }, set subdeep(value) { subdeep = value; }, set asks(value) { asks = value; }, set permissions(value) { permissions = value; },
     update, events, posts, now: () => now,
     input() { listeners.input.forEach(fn => fn({target: {matches: () => true}})); flush(); },
     visibility(value, swap) { hidden = value; if (swap) held.push(swap); listeners.visibilitychange.forEach(fn => fn()); flush(); },
@@ -452,14 +452,15 @@ function relayRow(key, classes, {childId, ms, cause, child, label} = {}) {
     }};
 }
 
-// relayAgent is an ended-group row of the expanded tree; unknown marks a
-// native row whose observation ended with the outcome unknown.
-function relayAgent(id, {unknown = false} = {}) {
+// relayAgent is an ended-group row of the expanded tree; native marks the
+// harness's own subagent, unknown a native row whose observation ended with
+// the outcome unknown.
+function relayAgent(id, {unknown = false, native = false} = {}) {
   const details = {dataset: {key: "agent-" + id}, querySelector: () => null};
   return {
     closest: selector => selector === ".tgroup.ended" ? {} : null,
     querySelector: selector => selector === ":scope > details[data-key]" ? details : null,
-    classList: {contains: name => name === "done"},
+    classList: {contains: name => name === "done" || (native && name === "native")},
     matches: () => true,
     hasAttribute: name => unknown && name === "data-end-unknown"
   };
@@ -467,13 +468,33 @@ function relayAgent(id, {unknown = false} = {}) {
 
 test("relay emits no subagent.done for a native row whose observation ended", () => {
   const f = relayFixture(), done = () => f.events().filter(e => e.kind === "subagent.done");
-  f.children = [{id: "agy-native:call_1", state: "thinking"}]; f.update(); f.events();
-  f.children = []; f.treeAgents = [relayAgent("agy-native:call_1", {unknown: true})]; f.update();
+  f.children = [{id: "agy-native:call_1", state: "thinking", native: true}]; f.update(); f.events();
+  f.children = []; f.treeAgents = [relayAgent("agy-native:call_1", {unknown: true, native: true})]; f.update();
   assert.equal(done().length, 0);
-  // The same disappearance of a row that did finish is read as done.
-  f.children = [{id: "codex-native:call_2", state: "thinking"}]; f.treeAgents = []; f.update(); f.events();
-  f.children = []; f.treeAgents = [relayAgent("codex-native:call_2")]; f.update();
+  // A native row that ended with a known end is read as done.
+  f.children = [{id: "codex-native:call_2", state: "thinking", native: true}]; f.treeAgents = []; f.update(); f.events();
+  f.children = []; f.treeAgents = [relayAgent("codex-native:call_2", {native: true})]; f.update();
   assert.equal(done().length, 1);
+  f.dispose();
+});
+
+test("relay reads no finish from evicted native rows or a skipped transition", () => {
+  const f = relayFixture(), done = () => f.events().filter(e => e.kind === "subagent.done").map(e => e.token);
+  const agy = i => "agy-native:call_" + i;
+  f.children = [0, 1, 2, 3, 4, 5].map(i => ({id: agy(i), state: "thinking", native: true})).concat([{id: "w", state: "thinking"}]);
+  f.update(); f.events();
+  // Six observations end with the outcome unknown; the finished-row cap
+  // evicts call_0 before the page sees it. One ordinary child really
+  // finishes and its fold raises the completed count by one.
+  f.children = []; f.completed = 1;
+  f.treeAgents = [1, 2, 3, 4, 5].map(i => relayAgent(agy(i), {unknown: true, native: true})).concat([relayAgent("w")]);
+  f.update();
+  assert.deepEqual(done(), ["subagent.done:lead:w:1"]);
+  // A native row whose done transition the DOM skipped (running, then gone)
+  // spends no later rise either.
+  f.children = [{id: "codex-native:call_9", state: "thinking", native: true}, {id: "v", state: "thinking"}]; f.treeAgents = []; f.update(); f.events();
+  f.children = [{id: "v", state: "thinking"}]; f.completed = 2; f.update();
+  assert.deepEqual(done(), []);
   f.dispose();
 });
 

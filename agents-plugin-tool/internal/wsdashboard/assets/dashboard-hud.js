@@ -107,7 +107,7 @@
         elapsedMs: Number(node.elapsedMs) || 0, activeSince: Number(node.activeSince) || 0,
         chain: Array.isArray(node.chain) ? node.chain : [],
         task: node.task || ownTasks[node.id] || "", overflow: Number(node.overflow) || 0,
-        native: !!node.native, startedAt: Number(node.startedAt) || 0, endedAt: Number(node.endedAt) || 0
+        native: !!node.native, startedAt: Number(node.startedAt) || 0, endedAt: Number(node.endedAt) || 0, endUnknown: !!node.endUnknown
     });
     entry.el = btn;
     hudRegistry[node.id] = entry;
@@ -312,9 +312,9 @@
     tt.hidden = false;
     hudPositionTooltip(tt, entry.el);
   }
-  // hudLifecycle is a native row's start and end; a terminal native row
-  // without an end reads as observation ended, completion unknown, never as
-  // a completion.
+  // hudLifecycle is a native row's start and end; a row whose observation
+  // ended with the outcome unknown (endUnknown) reads as such, never as a
+  // completion.
   function hudLifecycle(d) {
     var life = doc.createElement("div"); life.className = "tt-life";
     function stamp(key, ms) {
@@ -327,10 +327,10 @@
     }
     if (d.startedAt > 0) life.appendChild(stamp("js.hud.started", d.startedAt));
     var terminal = d.state === "idle" || d.state === "failed";
-    if (terminal && d.endedAt > 0) {
+    if (terminal && !d.endUnknown && d.endedAt > 0) {
       if (life.childNodes.length) life.appendChild(doc.createTextNode(" \u00b7 "));
       life.appendChild(stamp("js.hud.ended", d.endedAt));
-    } else if (terminal) {
+    } else if (terminal && d.endUnknown) {
       var unk = doc.createElement("span"); unk.className = "tt-unknown"; unk.textContent = wsT("js.hud.unknownend");
       if (life.childNodes.length) life.appendChild(doc.createTextNode(" \u00b7 "));
       life.appendChild(unk);

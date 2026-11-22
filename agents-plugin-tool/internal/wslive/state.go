@@ -93,11 +93,13 @@ type Event struct {
 	// "pi", "codex", "agy"); absent for native subagents or legacy producers.
 	Harness string `json:"harness,omitempty"`
 	Status  string `json:"status,omitempty"`
-	// EndUnknown, on a subagent's terminal status, ends a running row
-	// without stamping its end time or adding the turn to ActiveMs: the
-	// adapter stopped observing it and does not know when, or whether, it
-	// finished (an agy native subagent at its parent's turn end). It is a
-	// daemon-internal runtime flag, never accepted from or sent on the wire.
+	// EndUnknown, on a subagent's terminal status, ends a running row as
+	// observation ended with the outcome unknown: the adapter stopped
+	// observing it and does not know when, or whether, it finished (an agy
+	// native subagent at its parent's turn end). The row's end time is the
+	// observation's end (the event time), the unobserved span adds no work
+	// to ActiveMs, and the row carries Agent.EndUnknown. The event flag is a
+	// daemon-internal runtime input, never accepted from the wire.
 	EndUnknown bool `json:"-"`
 	// ActiveMs is closed-turn work; TurnStartedAt is the current turn's
 	// epoch-millisecond start, or zero when no turn is working. Pi agent
@@ -208,6 +210,9 @@ type agentState struct {
 	outputTps                            float64
 	bgTasks                              int
 	holding, alive                       bool
+	// endUnknown marks a row whose observation ended with the outcome
+	// unknown (Event.EndUnknown); endedAt is then the observation's end.
+	endUnknown bool
 }
 
 // State is one session's live state: the reducer from adapter events to a
@@ -700,14 +705,15 @@ func (st *State) applyAgent(ev Event, at int64) error {
 		if a.status != StatusRunning && a.kind != AgentKindPi {
 			a.turnStartedAt = at
 		}
-		a.status, a.endedAt = StatusRunning, 0
+		a.status, a.endedAt, a.endUnknown = StatusRunning, 0, false
 	case StatusDone, StatusFailed:
 		if a.status == StatusRunning && ev.EndUnknown && a.kind != AgentKindPi {
-			// Observation ended, not the subagent: no end time, and the
-			// unobserved span adds no work.
-			a.endedAt, a.turnStartedAt = 0, 0
+			// Observation ended, not necessarily the subagent: the end time
+			// is the observation's end, flagged unknown, and the unobserved
+			// span adds no work.
+			a.endedAt, a.turnStartedAt, a.endUnknown = max(at, a.startedAt), 0, true
 		} else if a.status == StatusRunning {
-			a.endedAt = at
+			a.endedAt, a.endUnknown = at, false
 			if a.kind != AgentKindPi {
 				if a.turnStartedAt > 0 && at > a.turnStartedAt {
 					a.activeMs += at - a.turnStartedAt
@@ -1047,8 +1053,8 @@ func (st *State) retain() {
 		return a.id < b.id
 	})
 	drop(finished, FinishedAgentCap, func(a, b *agentState) bool {
-		if ea, eb := a.finishedAt(), b.finishedAt(); ea != eb {
-			return ea > eb
+		if a.endedAt != b.endedAt {
+			return a.endedAt > b.endedAt
 		}
 		return a.id < b.id
 	})
@@ -1063,18 +1069,6 @@ func (st *State) retain() {
 			}
 		}
 	}
-}
-
-// finishedAt ranks a finished subagent for retention: its end time, or, for
-// a row that ended without one (EndUnknown), the start of the idle phase it
-// entered when it settled, which the snapshot persists (PhaseStartedAt), so
-// a just-settled end-unknown row ranks as the newest finished row both at
-// settlement and after a restore.
-func (a *agentState) finishedAt() int64 {
-	if a.endedAt > 0 {
-		return a.endedAt
-	}
-	return a.phaseStartedAt
 }
 
 // SeedFinished takes the finished subagents (done or failed) of prev, a
@@ -1102,6 +1096,7 @@ func (st *State) SeedFinished(prev Snapshot) {
 			status:        p.Status,
 			startedAt:     p.StartedAt,
 			endedAt:       p.EndedAt,
+			endUnknown:    p.EndUnknown,
 			activeMs:      p.ActiveMs,
 			touched:       p.EndedAt,
 			// Holding and Alive are intentionally not seeded from disk (T0):
@@ -1167,6 +1162,7 @@ func (st *State) Snapshot(now int64) Snapshot {
 			Status:        a.status,
 			StartedAt:     a.startedAt,
 			EndedAt:       a.endedAt,
+			EndUnknown:    a.endUnknown,
 			ActiveMs:      a.activeMs,
 			TurnStartedAt: a.turnStartedAt,
 			AgentKind:     a.kind,

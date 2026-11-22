@@ -418,9 +418,12 @@ type liveWriter struct {
 	// beforeSnapshot refreshes daemon-owned rows in this writer's loop.
 	beforeSnapshot func()
 	owner          func() (func(), bool)
-	wake           func()
-	slotMu         sync.Mutex
-	slot           wsdashboard.HostedSlot
+	// ownerRAM is owner's in-memory fence for a publish that only reaches
+	// the live slot (applyRAM); owner is used when it is unset.
+	ownerRAM func() (func(), bool)
+	wake     func()
+	slotMu   sync.Mutex
+	slot     wsdashboard.HostedSlot
 	// The last successfully written disk projection, without its timestamp.
 	lastSnapshot []byte
 	lastDiskAt   time.Time
@@ -493,6 +496,41 @@ func (w *liveWriter) apply(ev wslive.Event) bool {
 // immediately following TurnEnd snapshot.
 func (w *liveWriter) applyCoalesced(ev wslive.Event) bool {
 	return w.applyMode(ev, true)
+}
+
+// applyRAM applies ev and publishes it to the live slot alone, under the
+// in-memory ownership fence (ownerRAM): no file is read or written. What it
+// changed reaches disk with the next snapshot write.
+func (w *liveWriter) applyRAM(ev wslive.Event) bool {
+	res, err := w.st.Apply(ev, w.now().UnixMilli())
+	if err != nil {
+		fmt.Fprintf(w.log, "agent %s: drop %s event: %v\n", w.st.ReplyID(), ev.Kind, err)
+		return false
+	}
+	if len(res.Ring) > 0 || len(res.Observed) > 0 || res.OutputRate != nil {
+		// Not a RAM-only change after all: take the file-fenced path.
+		return w.write(res, nil, ev.Kind, true)
+	}
+	if !res.Changed {
+		return false
+	}
+	slot := w.currentSlot()
+	if slot == nil {
+		return true
+	}
+	fence := w.ownerRAM
+	if fence == nil {
+		fence = w.owner
+	}
+	if fence != nil {
+		release, ok := fence()
+		if !ok {
+			return true
+		}
+		defer release()
+	}
+	slot.Publish(w.st.Snapshot(w.now().UnixMilli()))
+	return true
 }
 
 func (w *liveWriter) applyMode(ev wslive.Event, coalesceTurnEnd bool) bool {

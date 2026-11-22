@@ -69,7 +69,7 @@ func TestRailBusy(t *testing.T) {
 		}), nil), true, true},
 		{"agy native subagent after the parent turn", row("an", true, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Adapter = "agy"
-			s.Agents = []wslive.Agent{{ID: wslive.NativeAgyPrefix + "call_2", Label: "research", Status: wslive.StatusDone, StartedAt: 1}}
+			s.Agents = []wslive.Agent{{ID: wslive.NativeAgyPrefix + "call_2", Label: "research", Status: wslive.StatusDone, StartedAt: 1, EndedAt: 2, EndUnknown: true}}
 		}), nil), false, false},
 		{"background tasks", row("b", false, true, snap(wslive.PhaseIdle, func(s *wslive.Snapshot) {
 			s.Usage = &wslive.Usage{Background: n(2)}

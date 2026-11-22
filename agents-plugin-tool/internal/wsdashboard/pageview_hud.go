@@ -43,13 +43,16 @@ type HUDNode struct {
 	Overflow    int       `json:"overflow,omitempty"`
 	Children    []HUDNode `json:"children,omitempty"`
 	// Native marks a harness's own subagent (hudNative): it shows a native
-	// badge and its lifecycle, and never links to a transcript. StartedAt and
-	// EndedAt (epoch ms) are a native row's alone, so every other row's JSON
-	// stays as before; a terminal native row without EndedAt reads as
-	// observation ended, completion unknown.
-	Native    bool  `json:"native,omitempty"`
-	StartedAt int64 `json:"startedAt,omitempty"`
-	EndedAt   int64 `json:"endedAt,omitempty"`
+	// badge and its lifecycle, and never links to a transcript. StartedAt,
+	// EndedAt (epoch ms), and EndUnknown are a native row's alone, so every
+	// other row's JSON stays as before. EndUnknown marks a row whose
+	// observation ended with the outcome unknown (hudEndUnknown): it reads as
+	// such, never as a completion, and carries no EndedAt, since its end is
+	// not a known one.
+	Native     bool  `json:"native,omitempty"`
+	StartedAt  int64 `json:"startedAt,omitempty"`
+	EndedAt    int64 `json:"endedAt,omitempty"`
+	EndUnknown bool  `json:"endUnknown,omitempty"`
 	// OwnRow marks nodes rendered in #r-tree's .agent list so hudJSON can omit
 	// their Task from .ag-source (keeping tree-rows shell invariant on caption edits).
 	OwnRow bool `json:"-"`
@@ -214,7 +217,12 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 			OwnRow:      n.ownRow,
 		}
 		if n.native {
-			node.Native, node.StartedAt, node.EndedAt = true, max(a.StartedAt, 0), max(a.EndedAt, 0)
+			node.Native, node.StartedAt = true, max(a.StartedAt, 0)
+			if hudEndUnknown(a, true) {
+				node.EndUnknown = true
+			} else {
+				node.EndedAt = max(a.EndedAt, 0)
+			}
 		}
 		if depth < hudMaxDepth {
 			nextChain := append(slices.Clone(chain), label)
@@ -262,11 +270,12 @@ func hudNative(a wslive.Agent, ownerHarness string) bool {
 	return normalizeHUDHarness(ownerHarness) == "claude" && a.Harness == "" && a.ReplyID == "" && a.AgentKind == ""
 }
 
-// hudEndUnknown reports a native row that ended without an end time: its
-// observation ended (an agy native subagent at its parent's turn end) and
-// its outcome is unknown, so it never reads as a completion.
+// hudEndUnknown reports a native row whose observation ended with the
+// outcome unknown (wslive.Agent.EndUnknown; an agy native subagent at its
+// parent's turn end): it never reads as a completion. Its EndedAt is when
+// observation ended, which only ranks it for retention.
 func hudEndUnknown(a wslive.Agent, native bool) bool {
-	return native && (a.Status == wslive.StatusDone || a.Status == wslive.StatusFailed) && a.EndedAt <= 0
+	return native && a.EndUnknown && (a.Status == wslive.StatusDone || a.Status == wslive.StatusFailed)
 }
 
 func hudNodeState(a wslive.Agent) string {

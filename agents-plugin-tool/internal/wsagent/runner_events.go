@@ -382,8 +382,9 @@ func (c *conv) endTurn(turnErr string, quiet bool) {
 		// returned before reaching here), so agy native rows stop being
 		// observed; settling them before the turn end's forced snapshot
 		// puts them on disk in that write. A replayed (quiet) end never
-		// settles them: replayDone does, once.
-		c.settleAgyNative()
+		// settles them, and a live end during a replay only notes them:
+		// replayDone settles them, once.
+		c.endAgyNativeObservation(c.r.opts.Now().UnixMilli())
 	}
 	if c.wrapHold && !c.rec.Lead && c.rec.Parent != nil && !quiet {
 		// A gap while streaming is reconciled at agent_settled, not left
@@ -862,6 +863,12 @@ func (c *conv) processEnded() {
 	c.mcpSeen, c.mcpChecking, c.mcpAgain, c.mcpAgainNames = nil, false, false, nil
 	c.retry, c.alerted = nil, false
 	c.syncHost(true)
+	// A replay the process's end cut short still settles the agy native
+	// rows a live turn end accepted during it, before endAgents fails the
+	// rest.
+	deferred := c.agyNativeDeferred
+	c.agyNativeDeferred = nil
+	c.settleAgyNative(deferred)
 	c.live.endAgents()
 	c.live.writeSnapshot()
 	if !c.closed && !c.quitting && !hadTurn && !hadBackgroundTasks && !hadBgGrace {

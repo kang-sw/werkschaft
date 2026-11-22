@@ -314,7 +314,7 @@ assert.equal(oldRing.style.animationDelay, stableDelay, 'unmoved sibling is not 
 // unknown; the observation-ended count shows apart from completed.
 hudPayload = { lead: 'coord', completed: 1, observationEnded: 1, peers: 0, roots: [
   { id: 'agy-native:call_1', label: 'Kiwi Responder', harness: 'agy', state: 'thinking', native: true, startedAt: 1000 },
-  { id: 'agy-native:call_2', label: 'research', harness: 'agy', state: 'failed', native: true, startedAt: 900 },
+  { id: 'agy-native:call_2', label: 'research', harness: 'agy', state: 'failed', native: true, startedAt: 900, endUnknown: true },
   { id: 'codex-native:call_3', label: 'ok_reply', harness: 'codex', state: 'failed', native: true, startedAt: 800, endedAt: 1800 }
 ] };
 ctx.agSwapped();

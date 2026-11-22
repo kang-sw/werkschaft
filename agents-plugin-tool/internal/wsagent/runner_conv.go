@@ -202,10 +202,22 @@ type conv struct {
 	// owner already holds its flock, without touching the lock file.
 	foreignRow atomic.Bool
 	rowHeld    atomic.Int32
+	// rowReads counts lockRowRead passes (the registration lock and file
+	// read); ownerProof is the hosted row identity the last one proved
+	// (lockSummaryWriter), which a RAM-only publish relies on
+	// (lockSummaryWriterRAM).
+	rowReads   atomic.Int64
+	ownerProof atomic.Pointer[hostedOwnerProof]
 	// replaying is set from a rejoin of the holder's process (reattach)
 	// until its replay ends: no turn is submitted meanwhile, since the
 	// replay is what tells whether one runs.
 	replaying bool
+	// agyNativeDeferred holds the agy native rows that a live turn end,
+	// accepted while a replay still ran, ended observation of, with that
+	// end's time. They settle once the replay ends (finishAgyNativeReplay),
+	// in this order, so a launch failure buffered later in the same replay
+	// still ends its row failed.
+	agyNativeDeferred []agyNativeSettle
 	// rejoinErr is a worker rejoin's start failure: checkReattach ends that
 	// recovery after the scan instead of waiting on a replay with no process.
 	rejoinErr       string
@@ -1068,6 +1080,7 @@ func (c *conv) lockRowRead() (unlock func(), row *wsdashboard.Registration, ok b
 		return nil, nil, false
 	}
 	c.rowHeld.Add(1)
+	c.rowReads.Add(1)
 	unlock = func() {
 		c.rowHeld.Add(-1)
 		flockUnlock()
@@ -1213,13 +1226,16 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 		})
 	}
 	// A native subagent row (agy, Codex) publishes RAM-only through the live
-	// slot and never calls the recovery writer itself: it reaches disk with
-	// the next heartbeat or turn-end write, so a chatty child costs no file
-	// touches on the event path.
+	// slot, under the in-memory ownership fence, and never calls the
+	// recovery writer itself: it reaches disk with the next heartbeat or
+	// turn-end write, so a chatty child costs no file touches on the event
+	// path.
 	nativeRow := ev.Kind == wslive.KindAgent && wslive.NativeAgentID(ev.AgentID)
 	if quiet {
 		c.live.applyQuiet(ev)
-	} else if coalesceTurnEnd || nativeRow {
+	} else if nativeRow {
+		c.live.applyRAM(ev)
+	} else if coalesceTurnEnd {
 		c.live.applyCoalesced(ev)
 	} else {
 		c.live.apply(ev)
@@ -1254,16 +1270,78 @@ func (c *conv) applyMode(ev wslive.Event, quiet, coalesceTurnEnd bool) {
 	}
 }
 
-// settleAgyNative ends every still-running agy native subagent row of this
-// conversation done with no end time (EndUnknown): agy reports no child end,
-// so observation ends with the parent's accepted logical turn end, or with a
-// rejoin's replay, after which observation is not continuous. The reducer
-// keeps a settled native row from changing again, so a later replayed or live
-// turn end leaves it as it is.
-func (c *conv) settleAgyNative() {
+// agyNativeSettle is an agy native row whose observation ended at a time.
+type agyNativeSettle struct {
+	id string
+	at int64
+}
+
+// endAgyNativeObservation is a live, accepted logical turn end's effect on
+// agy native rows: agy reports no child end, so observation of every row
+// still running ends at at (EndUnknown). While a replay runs, the rows are
+// noted instead and settle when it ends (finishAgyNativeReplay): a replayed
+// record that only follows the holder's sequence mark, such as a buffered
+// prompt response, is not quiet, yet the replay is not over.
+func (c *conv) endAgyNativeObservation(at int64) {
 	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
-		c.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: id, Status: wslive.StatusDone, EndUnknown: true})
+		if c.replaying {
+			if !slices.ContainsFunc(c.agyNativeDeferred, func(d agyNativeSettle) bool { return d.id == id }) {
+				c.agyNativeDeferred = append(c.agyNativeDeferred, agyNativeSettle{id, at})
+			}
+			continue
+		}
+		c.settleAgyNative([]agyNativeSettle{{id, at}})
 	}
+}
+
+// finishAgyNativeReplay ends a rejoin's observation of agy native rows:
+// first the rows a live turn end accepted during the replay, at that end's
+// time and in order, unless a later record of the replay ended them; then,
+// since observation is not continuous across a daemon replacement and a
+// replayed cancellation cannot be told from a watchdog continuation awaiting
+// its first output, every row still running, at the time agyNativeReplayEnd
+// gives it.
+func (c *conv) finishAgyNativeReplay() {
+	deferred := c.agyNativeDeferred
+	c.agyNativeDeferred = nil
+	c.settleAgyNative(deferred)
+	var rest []agyNativeSettle
+	for _, id := range c.live.st.RunningAgents(wslive.NativeAgyPrefix) {
+		rest = append(rest, agyNativeSettle{id, c.agyNativeReplayEnd(id)})
+	}
+	c.settleAgyNative(rest)
+}
+
+// agyNativeReplayEnd is when a rejoin's observation of the agy native row id
+// ended.
+func (c *conv) agyNativeReplayEnd(string) int64 {
+	return c.r.opts.Now().UnixMilli()
+}
+
+// settleAgyNative ends each of rows that still runs done as observation
+// ended, outcome unknown (EndUnknown), at its time. The reducer keeps a
+// settled native row from changing again, so a later replayed or live event
+// leaves it as it is. The process forgets the rows' launch correlations: no
+// launch failure can change them any more.
+func (c *conv) settleAgyNative(rows []agyNativeSettle) {
+	var settled []string
+	for _, row := range rows {
+		if !slices.Contains(c.live.st.RunningAgents(wslive.NativeAgyPrefix), row.id) {
+			continue
+		}
+		c.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: row.id, Status: wslive.StatusDone, EndUnknown: true, At: row.at})
+		settled = append(settled, row.id)
+	}
+	if f, ok := c.proc.(nativeLaunchForgetter); ok && len(settled) > 0 {
+		f.forgetNativeLaunches(settled)
+	}
+}
+
+// nativeLaunchForgetter is a process whose mapper correlates native subagent
+// launches with their rows (agy): forgetNativeLaunches drops the rows'
+// pending launch correlations once the rows settled.
+type nativeLaunchForgetter interface {
+	forgetNativeLaunches(rowIDs []string)
 }
 
 // kick submits the next turn when no turn runs, starting the process first

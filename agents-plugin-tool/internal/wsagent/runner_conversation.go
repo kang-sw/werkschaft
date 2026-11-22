@@ -127,6 +127,7 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		_, _, _ = refreshPermissionSelection(dir)
 		r.setSummaryOwner(rec.ReplyID, c)
 		c.live.owner = c.lockSummaryWriter
+		c.live.ownerRAM = c.lockSummaryWriterRAM
 	}
 	if rec.Lead {
 		hidden, err := wsdashboard.ReadSessionHidden(r.opts.Dir, rec.ReplyID)

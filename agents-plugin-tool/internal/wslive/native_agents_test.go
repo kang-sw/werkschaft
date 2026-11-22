@@ -2,6 +2,7 @@ package wslive
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -15,10 +16,11 @@ func nativeRow(t *testing.T, snap Snapshot, id string) (Agent, bool) {
 	return Agent{}, false
 }
 
-// TestNativeEndUnknownSettlesWithoutEndTime: an end-unknown terminal event
-// ends a running native row without an end time and without adding the
-// unobserved span to ActiveMs; the wire never carries the flag.
-func TestNativeEndUnknownSettlesWithoutEndTime(t *testing.T) {
+// TestNativeEndUnknownSettlesAtObservationEnd: an end-unknown terminal event
+// ends a running native row at the observation's end, flagged endUnknown on
+// the snapshot row, without adding the unobserved span to ActiveMs; the
+// event flag itself never crosses the wire.
+func TestNativeEndUnknownSettlesAtObservationEnd(t *testing.T) {
 	st := NewState(ownerKey)
 	id := NativeAgyPrefix + "call_1"
 	mustApply(t, st, Event{Kind: KindAgent, AgentID: id, Label: "Kiwi Responder", Status: StatusRunning}, 1_000)
@@ -27,8 +29,11 @@ func TestNativeEndUnknownSettlesWithoutEndTime(t *testing.T) {
 	if !ok {
 		t.Fatal("native row missing")
 	}
-	if a.Status != StatusDone || a.EndedAt != 0 || a.ActiveMs != 0 || a.TurnStartedAt != 0 || a.StartedAt != 1_000 {
-		t.Fatalf("end-unknown row = %+v, want done, no end, no active time, started 1000", a)
+	if a.Status != StatusDone || !a.EndUnknown || a.EndedAt != 9_000 || a.ActiveMs != 0 || a.TurnStartedAt != 0 || a.StartedAt != 1_000 {
+		t.Fatalf("end-unknown row = %+v, want done, flagged, ended at the observation end 9000, no active time, started 1000", a)
+	}
+	if row, err := json.Marshal(a); err != nil || !strings.Contains(string(row), `"endedAt":9000,"endUnknown":true`) {
+		t.Fatalf("snapshot row JSON = %s, %v", row, err)
 	}
 	if a.Phase != PhaseIdle || a.PhaseStartedAt != 9_000 {
 		t.Fatalf("end-unknown row phase = %q since %d, want idle since the settlement 9000", a.Phase, a.PhaseStartedAt)
@@ -79,7 +84,7 @@ func TestNativeRowsAreMonotonic(t *testing.T) {
 
 // TestNativeRowsSurviveSeedAndReplay: a finished native row restored from a
 // recovery snapshot, then the replayed events that created and ended it,
-// keeps its status, end time (or its absence), and ActiveMs.
+// keeps its status, end time, end-unknown flag, and ActiveMs.
 func TestNativeRowsSurviveSeedAndReplay(t *testing.T) {
 	codex, agy := NativeCodexPrefix+"call_a", NativeAgyPrefix+"call_b"
 	replay := func(st *State, now int64) {
@@ -111,18 +116,19 @@ func TestNativeRowsSurviveSeedAndReplay(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s lost across seed and replay", id)
 		}
-		if got.Status != want.Status || got.EndedAt != want.EndedAt || got.ActiveMs != want.ActiveMs || got.StartedAt != want.StartedAt {
+		if got.Status != want.Status || got.EndedAt != want.EndedAt || got.EndUnknown != want.EndUnknown || got.ActiveMs != want.ActiveMs || got.StartedAt != want.StartedAt {
 			t.Fatalf("%s after replay = %+v, want %+v", id, got, want)
 		}
 	}
-	if a, _ := nativeRow(t, second.Snapshot(51_000), agy); a.EndedAt != 0 {
-		t.Fatalf("end-unknown row gained an end time %d", a.EndedAt)
+	if a, _ := nativeRow(t, second.Snapshot(51_000), agy); a.EndedAt != 6_000 || !a.EndUnknown {
+		t.Fatalf("end-unknown row after replay = %+v, want ended 6000 and flagged", a)
 	}
 }
 
 // TestEndUnknownRowSurvivesFullFinishedCap: with the finished cap full of
 // rows that ended after the agy row started, the newly settled end-unknown
-// row ranks newest, at settlement and after a restore.
+// row ranks by its observation end, newest, at settlement and after a
+// restore.
 func TestEndUnknownRowSurvivesFullFinishedCap(t *testing.T) {
 	st := NewState(ownerKey)
 	agy := NativeAgyPrefix + "call_z"
@@ -174,5 +180,59 @@ func TestRunningAgentsByPrefix(t *testing.T) {
 	got := st.RunningAgents(NativeAgyPrefix)
 	if len(got) != 1 || got[0] != NativeAgyPrefix+"a" {
 		t.Fatalf("RunningAgents = %v", got)
+	}
+}
+
+// TestEndUnknownRowSurvivesAnOlderWriter pins the T1 downgrade path: an
+// older writer knows no endUnknown and ranks finished rows by EndedAt alone
+// (7482aa91e state.go:1013), then replaces the cache (record.go:685). The
+// end-unknown row's real EndedAt keeps it ahead of older completions, so a
+// new finish under that writer pushes out the oldest completion, never the
+// newer end-unknown row; with the flag dropped, the row reads done after an
+// upgrade (display-only) and is retained.
+func TestEndUnknownRowSurvivesAnOlderWriter(t *testing.T) {
+	st := NewState(ownerKey)
+	agy := NativeAgyPrefix + "call_t1"
+	for i := 0; i < FinishedAgentCap-1; i++ {
+		id := "known-" + string(rune('a'+i))
+		mustApply(t, st, Event{Kind: KindAgent, AgentID: id, Status: StatusRunning}, int64(1_000+i))
+		mustApply(t, st, Event{Kind: KindAgent, AgentID: id, Status: StatusDone}, int64(2_000+i*100))
+	}
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: agy, Status: StatusRunning}, 3_000)
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: agy, Status: StatusDone, EndUnknown: true}, 5_000)
+	raw, err := json.Marshal(st.Snapshot(5_500).ForDisk())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The older writer's struct has no endUnknown member: it decodes the
+	// file without the flag and writes it back without it.
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range generic["agents"].([]any) {
+		delete(a.(map[string]any), "endUnknown")
+	}
+	if raw, err = json.Marshal(generic); err != nil {
+		t.Fatal(err)
+	}
+	var old Snapshot
+	if err := json.Unmarshal(raw, &old); err != nil {
+		t.Fatal(err)
+	}
+	older := NewState(ownerKey)
+	older.SeedFinished(old)
+	mustApply(t, older, Event{Kind: KindAgent, AgentID: "late", Status: StatusRunning}, 6_000)
+	mustApply(t, older, Event{Kind: KindAgent, AgentID: "late", Status: StatusDone}, 7_000)
+	after := older.Snapshot(7_500)
+	a, ok := nativeRow(t, after, agy)
+	if !ok {
+		t.Fatal("the older writer dropped the newer end-unknown row")
+	}
+	if a.EndedAt != 5_000 || a.Status != StatusDone || a.EndUnknown {
+		t.Fatalf("row after the older writer = %+v, want done at 5000 without the flag", a)
+	}
+	if _, ok := nativeRow(t, after, "known-a"); ok {
+		t.Fatal("the oldest completion survived instead of yielding")
 	}
 }
