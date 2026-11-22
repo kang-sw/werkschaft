@@ -31,6 +31,8 @@ import (
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
+
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 const (
@@ -67,6 +69,9 @@ type Options struct {
 	Fault func(stage string) error
 	// Observe, when set, receives every named stage reached.
 	Observe func(stage string)
+	// ReadFile, when set, replaces the legacy file read (tests only: it
+	// injects a transient read failure such as a Windows sharing violation).
+	ReadFile func(path string) ([]byte, error)
 	// CheckpointIdle overrides CheckpointIdle; a negative value disables the
 	// background checkpoint (Close still checkpoints).
 	CheckpointIdle time.Duration
@@ -96,6 +101,11 @@ func Open(dir string, opts Options) (*Store, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.ReadFile == nil {
+		// Retries a Windows sharing violation (antivirus, indexer) before
+		// failing; POSIX reads once.
+		opts.ReadFile = wsstate.ReadFile
 	}
 	if opts.CheckpointIdle == 0 {
 		opts.CheckpointIdle = CheckpointIdle

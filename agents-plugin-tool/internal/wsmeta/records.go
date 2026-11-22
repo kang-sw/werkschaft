@@ -17,6 +17,11 @@ const RecordDeltaBound = 32
 // record for.
 var ErrNoRecord = errors.New("wsmeta: no such agent record")
 
+// ErrStaleHolder reports a holder cursor write from a holder that no longer
+// holds the conversation (a late final ring line or heartbeat after a
+// replacement attached). The write is refused and changes nothing.
+var ErrStaleHolder = errors.New("wsmeta: holder no longer holds the conversation")
+
 // requireImported refuses live writes until the import marker committed: a
 // write before it would be discarded by the import's table replacement.
 // s.mu is held.
@@ -119,11 +124,13 @@ func (s *Store) compactRecord(ctx context.Context, tx *sql.Tx, replyID string, e
 }
 
 // SetHolderCursor records that the runner applied holderID's ring through
-// seq for reply-id (1992). The cursor only advances, and the cursors of any
-// other holder of that conversation are dropped: a sequence never carries
-// over to another holder's ring. This is the sequence-only write that
-// replaces the whole-record rewrite on a final ring line and a dirty
-// heartbeat.
+// seq for reply-id (1992). Only the record's current holder (its assembled
+// holder_id) may write: a superseded holder's late write fails with
+// ErrStaleHolder and leaves the current holder's cursor alone. The cursor
+// only advances, and the cursors of earlier holders of that conversation are
+// dropped: a sequence never carries over to another holder's ring. This is
+// the sequence-only write that replaces the whole-record rewrite on a final
+// ring line and a dirty heartbeat.
 func (s *Store) SetHolderCursor(ctx context.Context, replyID, holderID string, seq uint64) error {
 	if err := validReplyID(replyID); err != nil {
 		return err
@@ -135,20 +142,54 @@ func (s *Store) SetHolderCursor(ctx context.Context, replyID, holderID string, s
 		if err := s.requireImported(ctx, tx); err != nil {
 			return err
 		}
-		var one int
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM agent_records WHERE reply_id = ?`, replyID).Scan(&one); errors.Is(err, sql.ErrNoRows) {
+		snapshot, deltas, err := loadRecordParts(ctx, tx, replyID)
+		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNoRecord
 		} else if err != nil {
 			return err
 		}
+		current, err := recordHolder(snapshot, deltas)
+		if err != nil {
+			return err
+		}
+		if current != holderID {
+			return fmt.Errorf("%w: %s holds %s, not %s", ErrStaleHolder, current, replyID, holderID)
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM agent_holder_cursors WHERE reply_id = ? AND holder_id != ?`, replyID, holderID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO agent_holder_cursors(reply_id, holder_id, holder_seq) VALUES(?, ?, ?)
+		_, err = tx.ExecContext(ctx, `INSERT INTO agent_holder_cursors(reply_id, holder_id, holder_seq) VALUES(?, ?, ?)
 			ON CONFLICT(reply_id, holder_id) DO UPDATE SET holder_seq = excluded.holder_seq
 			WHERE excluded.holder_seq > agent_holder_cursors.holder_seq`, replyID, holderID, int64(seq))
 		return err
 	})
+}
+
+// recordHolder returns the holder_id of the record snapshot and deltas
+// assemble, scanning the deltas newest first.
+func recordHolder(snapshot []byte, deltas [][]byte) (string, error) {
+	for i := len(deltas) - 1; i >= 0; i-- {
+		patch, err := object(deltas[i])
+		if err != nil {
+			return "", err
+		}
+		if v, ok := patch["holder_id"]; ok {
+			if isNull(v) {
+				return "", nil
+			}
+			// A non-string holder_id names no holder, as mergeRecord reads it.
+			var h string
+			_ = json.Unmarshal(v, &h)
+			return h, nil
+		}
+	}
+	m, err := object(snapshot)
+	if err != nil {
+		return "", err
+	}
+	var h string
+	_, _ = member(m, "holder_id", &h)
+	return h, nil
 }
 
 // DeleteRecord removes reply-id's record, deltas and cursors.

@@ -49,7 +49,9 @@ type ImportResult struct {
 // completion marker. After it returns nil, SQLite owns the bundled stores and
 // a later Stage, fence or Commit leaves them alone. A commit whose pass finds
 // a fenced file unfenced again fails with ErrFenceInvalidated and changes
-// nothing; the caller stages and fences again.
+// nothing; the caller stages and fences again. A pass that cannot read a
+// bundled file for a transient reason fails with ErrLegacyUnread and changes
+// nothing; the caller retries.
 func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, error) {
 	res := ImportResult{Status: map[string]int{}}
 	err := s.write(ctx, durable, func(tx *sql.Tx) error {
@@ -68,6 +70,11 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 		}
 		if len(res.Stage.Unfenced) > 0 {
 			return fmt.Errorf("%w: %s", ErrFenceInvalidated, strings.Join(res.Stage.Unfenced, ", "))
+		}
+		if len(res.Stage.Unread) > 0 {
+			// Importing it as invalid would lose the record or setting for
+			// good once the marker freezes legacy files.
+			return fmt.Errorf("%w: %s", ErrLegacyUnread, strings.Join(res.Stage.Unread, ", "))
 		}
 		if err := s.hit("commit-staged"); err != nil {
 			return err

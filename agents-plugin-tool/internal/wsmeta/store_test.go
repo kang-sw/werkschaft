@@ -150,6 +150,15 @@ func TestHolderCursorIsKeyedByConversationAndHolder(t *testing.T) {
 	if m["holder_seq"].(float64) != 2 || !reflect.DeepEqual(rec.HolderCursors, map[string]uint64{"h3": 2}) {
 		t.Fatalf("new holder cursor: %v %v", m["holder_seq"], rec.HolderCursors)
 	}
+	// A late write from the superseded holder is refused and leaves the
+	// current holder's cursor in place.
+	if err := s.SetHolderCursor(ctx, "hostedlead", "h1", 50); !errors.Is(err, ErrStaleHolder) {
+		t.Fatalf("late old-holder cursor = %v", err)
+	}
+	m, rec = recordMembers(t, s, "hostedlead")
+	if m["holder_seq"].(float64) != 2 || !reflect.DeepEqual(rec.HolderCursors, map[string]uint64{"h3": 2}) {
+		t.Fatalf("after a late old-holder write: %v %v", m["holder_seq"], rec.HolderCursors)
+	}
 	// Another conversation's cursor is untouched.
 	if _, w := recordMembers(t, s, "worker"); !reflect.DeepEqual(w.HolderCursors, map[string]uint64{"h2": 3}) {
 		t.Fatalf("worker cursors = %v", w.HolderCursors)

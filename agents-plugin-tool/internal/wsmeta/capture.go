@@ -129,6 +129,10 @@ type StageResult struct {
 	// file is not that fence's result (the fence never landed, or a legacy
 	// writer replaced it since). They are live legacy authority again.
 	Unfenced []string
+	// Unread lists capture paths whose live file could not be read for a
+	// transient reason. Their earlier row, if any, is kept unchanged; a
+	// commit refuses with ErrLegacyUnread until a pass reads them.
+	Unread []string
 }
 
 var (
@@ -140,6 +144,9 @@ var (
 	// ErrFenceInvalidated reports a commit attempted while a fenced file was
 	// found unfenced again; re-stage and re-fence before committing.
 	ErrFenceInvalidated = errors.New("wsmeta: a fenced legacy file is no longer fenced")
+	// ErrLegacyUnread reports a commit attempted while a bundled legacy file
+	// could not be read for a transient reason; retry the commit.
+	ErrLegacyUnread = errors.New("wsmeta: a legacy file could not be read")
 )
 
 // Stage runs one durable capture pass: it discovers every bundled legacy
@@ -248,28 +255,42 @@ type legacyRead struct {
 	bytes  []byte
 	digest string
 	err    string
+	// transient marks a read that failed for a reason a retry may clear;
+	// state is then unset and the previous capture row, if any, stands.
+	transient bool
 }
 
 // readLegacy reads one bundled file. A dangling symbolic link, a directory
-// in its place or any read error is an existing, unreadable input, kept
-// apart from absence (permission selection fails closed on it).
-func readLegacy(abs string) legacyRead {
+// in its place or a stable read error is an existing, unreadable input, kept
+// apart from absence (permission selection fails closed on it). Any other
+// read error (a sharing violation outliving the retry, an I/O error) is
+// transient: the pass neither captures nor imports it.
+func readLegacy(abs string, readFile func(string) ([]byte, error)) legacyRead {
 	info, err := wsstate.Lstat(abs)
 	if errors.Is(err, fs.ErrNotExist) {
 		return legacyRead{state: CaptureAbsent, digest: absentDigest}
 	}
 	if err != nil {
-		return legacyRead{state: CaptureUnreadable, err: err.Error()}
+		if stableReadError(err) {
+			return legacyRead{state: CaptureUnreadable, err: err.Error()}
+		}
+		return legacyRead{transient: true, err: err.Error()}
 	}
 	if info.Mode()&fs.ModeSymlink == 0 && !info.Mode().IsRegular() {
 		return legacyRead{state: CaptureUnreadable, err: "not a regular file"}
 	}
-	data, err := wsstate.ReadFileOnce(abs)
+	data, err := readFile(abs)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist) && info.Mode()&fs.ModeSymlink != 0:
 			return legacyRead{state: CaptureUnreadable, err: "dangling symbolic link"}
+		case errors.Is(err, fs.ErrNotExist):
+			// Removed between the Lstat and the read.
+			return legacyRead{state: CaptureAbsent, digest: absentDigest}
+		case stableReadError(err):
+			return legacyRead{state: CaptureUnreadable, err: err.Error()}
 		}
-		return legacyRead{state: CaptureUnreadable, err: err.Error()}
+		return legacyRead{transient: true, err: err.Error()}
 	}
 	if data == nil {
 		data = []byte{}
@@ -329,8 +350,19 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 	capture := func(rel, store, replyID, gen string) error {
 		seen[rel] = true
 		res.Files++
-		got := readLegacy(filepath.Join(s.dir, filepath.FromSlash(rel)))
+		got := readLegacy(filepath.Join(s.dir, filepath.FromSlash(rel)), s.opts.ReadFile)
 		prev, had := existing[rel]
+		if got.transient {
+			// Keep the row as staged: a fenced original in particular must
+			// survive, since its live file is the fence's result. Commit
+			// refuses while any input is unread.
+			res.Unread = append(res.Unread, rel)
+			if had {
+				_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ? WHERE path = ?`, attempt, gen, rel)
+				return err
+			}
+			return nil
+		}
 		fenced := had && prev.fenceState != FenceNone
 		if fenced && got.state != CaptureUnreadable && got.digest == prev.fenceDigest {
 			// The migration's own fence is the live file: keep the original.
@@ -453,6 +485,7 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		}
 	}
 	sort.Strings(res.Unfenced)
+	sort.Strings(res.Unread)
 	return res, nil
 }
 
