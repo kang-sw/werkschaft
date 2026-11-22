@@ -153,9 +153,7 @@ func (c *conv) execImmediate() bool {
 	if err != nil {
 		return false
 	}
-	if level == "" && rec.Backend == BackendCodex && source == "legacy-derived" && process {
-		level = legacyLeadPermission(Record{Lead: true, Backend: BackendCodex, PermissionMode: active})
-	}
+	level = c.r.projectLiveMode(level, rec, source, active, process)
 	return level == PermissionFull
 }
 

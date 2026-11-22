@@ -37,74 +37,6 @@ func (level PermissionLevel) rank() int {
 	return 0
 }
 
-func nativePermissionMode(backend string, level PermissionLevel) string {
-	switch backend {
-	case BackendClaude:
-		switch level {
-		case PermissionReadOnly:
-			return "plan"
-		case PermissionWorkdirWrite:
-			return "acceptEdits"
-		case PermissionFull:
-			return "bypassPermissions"
-		}
-	case BackendCodex:
-		switch level {
-		case PermissionReadOnly:
-			return "read-only"
-		case PermissionWorkdirWrite:
-			return "workspace-write"
-		case PermissionFull:
-			return "danger-full-access"
-		}
-	}
-	return ""
-}
-
-func legacyLeadPermission(rec Record) PermissionLevel {
-	switch rec.Backend {
-	case BackendPi:
-		return PermissionWorkdirWrite
-	case BackendClaude:
-		switch rec.PermissionMode {
-		case "plan":
-			return PermissionReadOnly
-		case "bypassPermissions":
-			return PermissionFull
-		case "", "auto", "default", "acceptEdits", "dontAsk":
-			return PermissionWorkdirWrite
-		}
-	case BackendCodex:
-		switch rec.PermissionMode {
-		case "read-only":
-			return PermissionReadOnly
-		case "workspace-write":
-			return PermissionWorkdirWrite
-		case "danger-full-access":
-			return PermissionFull
-		}
-	default:
-		return ""
-	}
-	return ""
-}
-
-func permissionQuality(backend string, level PermissionLevel, active string) string {
-	if level == PermissionReadOnly {
-		switch backend {
-		case BackendClaude:
-			if active == "plan" {
-				return "partial"
-			}
-		case BackendCodex:
-			if active == "read-only" {
-				return "partial"
-			}
-		}
-	}
-	return "advisory"
-}
-
 // user is supplied by the trusted control owner, never decoded from JSON. The
 // acknowledgement is necessary for explicit full selection, not user authority.
 func authorizePermission(current, next PermissionLevel, user, ack bool) error {
@@ -118,6 +50,12 @@ func authorizePermission(current, next PermissionLevel, user, ack bool) error {
 		return &requestError{status: http.StatusForbidden, msg: "full permission selection requires the user and permission_full_ack after a warning"}
 	}
 	return nil
+}
+
+// legacyLeadPermission is the common level rec's recorded native mode derives
+// under its backend's registered policy.
+func (r *Runner) legacyLeadPermission(rec Record) PermissionLevel {
+	return r.permissionPolicy(rec.Backend).legacyLevel(rec.PermissionMode)
 }
 
 func (r *Runner) supportsLeadPermission(backend string, level PermissionLevel) bool {
@@ -140,7 +78,7 @@ func (r *Runner) resolveLeadPermission(rec Record, level PermissionLevel, explic
 		}
 		return level, "explicit", nil
 	}
-	return legacyLeadPermission(rec), "legacy-derived", nil
+	return r.legacyLeadPermission(rec), "legacy-derived", nil
 }
 
 func resolveWorkerPermission(def Profile, level PermissionLevel, explicit bool, err error) (PermissionLevel, string, error) {
@@ -201,12 +139,10 @@ func (r *Runner) permissionState(st State, rec Record, dir string) State {
 		st.Error = appendDiagnostic(st.Error, err.Error())
 		return st
 	}
-	// A Codex launch with no selection keeps the user's native defaults. Its
-	// reported mode can derive the common display while the process is live,
-	// but remains observation rather than a next-launch setting.
-	if level == "" && rec.Lead && rec.Backend == BackendCodex && source == "legacy-derived" && st.Process {
-		level = legacyLeadPermission(Record{Lead: true, Backend: BackendCodex, PermissionMode: st.ActiveMode})
-	}
+	// A launch with no selection may keep the user's native defaults (Codex).
+	// Its reported mode can derive the common display while the process is
+	// live, but remains observation rather than a next-launch setting.
+	level = r.projectLiveMode(level, rec, source, st.ActiveMode, st.Process)
 	if level == "" {
 		return st
 	}
@@ -215,7 +151,7 @@ func (r *Runner) permissionState(st State, rec Record, dir string) State {
 	if rec.Lead && st.Process {
 		active = st.ActiveMode
 	}
-	st.PermissionEnforcement = permissionQuality(rec.Backend, level, active)
+	st.PermissionEnforcement = r.permissionPolicy(rec.Backend).quality(level, active)
 	return st
 }
 
@@ -266,9 +202,10 @@ func legacyWorkerPermission(def Profile) PermissionLevel {
 
 func (c *conv) permissionNudge(level PermissionLevel, worker bool, active string) {
 	rec := c.record()
-	quality := permissionQuality(rec.Backend, level, active)
+	policy := c.r.permissionPolicy(rec.Backend)
+	quality := policy.quality(level, active)
 	limit := "filesystem, network and other tool effects are not proven confined"
-	if active == "" && (rec.Backend == BackendClaude || rec.Backend == BackendCodex) {
+	if active == "" && policy.observesNativeMode() {
 		limit = "native mode observation is pending; confinement is unproved"
 	}
 	if worker {
@@ -346,7 +283,7 @@ func (c *conv) setPermissionLevel(level PermissionLevel, user, ack bool) error {
 		return err
 	}
 	if rec.Lead {
-		if mode := nativePermissionMode(rec.Backend, level); mode != "" {
+		if mode := c.r.permissionPolicy(rec.Backend).nativeMode(level); mode != "" {
 			c.update(func(rec *Record) { rec.PermissionMode = mode })
 			c.dirtyMode, c.reconcileMode = true, false
 		}
@@ -373,8 +310,10 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 	selection := permissionSlot(c.dir)
 	selection.admission.Lock()
 	defer selection.admission.Unlock()
-	if rec.Backend == BackendAgy && mode == "bypass" && !rec.agyBypass() && !user {
-		return &requestError{status: http.StatusForbidden, msg: "only the user may enable agy bypass through permission_mode"}
+	if admitter, ok := c.r.opts.Backends[rec.Backend].Backend.(nativeModeAdmitter); ok {
+		if err := admitter.admitNativeMode(rec, mode, user); err != nil {
+			return err
+		}
 	}
 	// Extension/native-only registrations retain their historical mode contract.
 	if c.r.supportsLeadPermission(rec.Backend, PermissionReadOnly) {
@@ -382,7 +321,7 @@ func (c *conv) setNativePermissionMode(mode string, user bool) error {
 		if err != nil {
 			return err
 		}
-		next := legacyLeadPermission(Record{Lead: true, Backend: rec.Backend, PermissionMode: mode})
+		next := c.r.permissionPolicy(rec.Backend).legacyLevel(mode)
 		if next == "" {
 			return badRequest("native permission mode has no common intent mapping")
 		}
@@ -428,7 +367,8 @@ func (c *conv) reconcileLeadPermission() {
 		}
 		return
 	}
-	if !rec.Lead || nativePermissionMode(rec.Backend, PermissionReadOnly) == "" || c.dirtyMode {
+	policy := c.r.permissionPolicy(rec.Backend)
+	if !rec.Lead || policy.nativeMode(PermissionReadOnly) == "" || c.dirtyMode {
 		return
 	}
 	level, source, err := c.r.leadPermission(rec, c.dir)
@@ -441,8 +381,8 @@ func (c *conv) reconcileLeadPermission() {
 		return
 	}
 	target := rec.PermissionMode
-	if legacyLeadPermission(rec) != level {
-		target = nativePermissionMode(rec.Backend, level)
+	if policy.legacyLevel(rec.PermissionMode) != level {
+		target = policy.nativeMode(level)
 	}
 	if target == c.activeMode {
 		return

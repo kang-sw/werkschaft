@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -243,6 +244,82 @@ func TestTakeoverOfAPiSessionRunsOnItsOwnSessionFile(t *testing.T) {
 	}
 }
 
+// TestTakeoverAdoptsUnderTheResolvedTargetBackend: the source harness decides
+// whether its terminal session can be taken over, but the record is adopted
+// under the backend the lead profile resolves to, which a profile override can
+// make a different one. The record shape is the resolved target's, as before
+// adoption moved into registration data.
+func TestTakeoverAdoptsUnderTheResolvedTargetBackend(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, profile, override string
+		want                            Record
+		// launch is the flag the first start resumes the session with, and
+		// mode the permission mode it runs under ("" for none).
+		launch, mode string
+		handOff      bool
+	}{
+		{"pi terminal under a claude profile", BackendPi, LeadProfilePi, `{"backend":"claude","lead":true,"permission_mode":"acceptEdits"}`,
+			Record{Backend: BackendClaude, PermissionMode: "acceptEdits", SessionID: "SESSION"}, "--resume", "acceptEdits", true},
+		{"claude terminal under a pi profile", BackendClaude, LeadProfileClaude, `{"backend":"pi","lead":true}`,
+			Record{Backend: BackendPi, SessionFile: "SESSION"}, "--session", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newLeadHarness(t).start()
+			session := "sess-term"
+			if tc.source == BackendPi {
+				session = filepath.Join(t.TempDir(), "pi-sessions", "s.jsonl")
+				if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(session, []byte("{}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.globalProfile(tc.profile, tc.override)
+			const id = "overridden"
+			h.terminalSession(id, LeadSession{Key: "override-key", Harness: tc.source, Session: session, Cwd: h.root}, nil)
+			if _, err := h.runner.TakeOver(id); err != nil {
+				t.Fatal(err)
+			}
+			rec := h.record(id)
+			got := Record{Backend: rec.Backend, PermissionMode: rec.PermissionMode, SessionID: rec.SessionID, SessionFile: rec.SessionFile}
+			want := tc.want
+			if want.SessionID != "" {
+				want.SessionID = session
+			}
+			if want.SessionFile != "" {
+				want.SessionFile = session
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("record = %+v, want %+v", got, want)
+			}
+			// End to end: the launch reads the adopted record, and a hand-off
+			// resumes it under the target backend's terminal command.
+			h.send(id, "hello")
+			holder := h.holder(id)
+			spec := h.holders.spawned(holder)
+			if resumed, _ := flagValue(spec.Argv, tc.launch); resumed != session {
+				t.Fatalf("spawn %v: %s = %q, want %q", spec.Argv, tc.launch, resumed, session)
+			}
+			if mode, _ := flagValue(spec.Argv, "--permission-mode"); mode != tc.mode {
+				t.Fatalf("spawn %v: permission mode %q, want %q", spec.Argv, mode, tc.mode)
+			}
+			if !tc.handOff {
+				return
+			}
+			h.holders.out(holder, turnLines(session, "u1", "done")...)
+			h.idle(id)
+			st, err := h.runner.HandOff(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := resumeLine(h.root, "claude", "--resume", session); st.ResumeCommand != want {
+				t.Fatalf("hand-off resume command %q, want %q", st.ResumeCommand, want)
+			}
+		})
+	}
+}
+
 // TestTakeoverRefusals: what is no terminal lead session the daemon can
 // host is refused, and a session with no recorded harness conversation
 // says why.
@@ -259,6 +336,9 @@ func TestTakeoverRefusals(t *testing.T) {
 	if _, err := h.runner.TakeOver("nosess"); !isConflict(err) || !strings.Contains(err.Error(), TakeoverNoSession) {
 		t.Fatalf("TakeOver with no recorded conversation = %v", err)
 	}
+	// Codex is registered with a lead profile and no terminal session: its
+	// takeover is refused by what the registration lacks, not by its name.
+	h.runner.opts.Backends[BackendCodex] = BuiltinBackendRegistrations()[BackendCodex]
 	h.terminalSession("codexsess", LeadSession{Key: "k2", Harness: "codex", Session: "s", Cwd: h.root}, nil)
 	if _, err := h.runner.TakeOver("codexsess"); err == nil || isConflict(err) || !strings.Contains(err.Error(), "codex terminal takeover is not supported") {
 		t.Fatalf("TakeOver of a codex session = %v", err)
@@ -497,7 +577,7 @@ func TestResumeCommand(t *testing.T) {
 			if windows {
 				want = c.window
 			}
-			if got := resumeCommand(c.rec, dir); got != want {
+			if got := builtinResumeCommand(c.rec, dir); got != want {
 				t.Errorf("windows=%v resumeCommand(%+v) = %q, want %q", windows, c.rec, got, want)
 			}
 		}
@@ -511,11 +591,11 @@ func TestResumeCommand(t *testing.T) {
 	// The temp directory is plain on Linux but holds backslashes (and an
 	// 8.3 "~") on Windows, which a POSIX shell must see quoted.
 	setHostWindows(t, false)
-	if got, want := resumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "cd /w/repo && pi --session "+shellQuote(own); got != want {
+	if got, want := builtinResumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "cd /w/repo && pi --session "+shellQuote(own); got != want {
 		t.Errorf("a daemon-started pi session = %q, want %q", got, want)
 	}
 	setHostWindows(t, true)
-	if got, want := resumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "Set-Location -LiteralPath '/w/repo' -ErrorAction Stop; pi --session "+psQuote(own); got != want {
+	if got, want := builtinResumeCommand(Record{Lead: true, Backend: BackendPi, Root: "/w/repo"}, dir), "Set-Location -LiteralPath '/w/repo' -ErrorAction Stop; pi --session "+psQuote(own); got != want {
 		t.Errorf("a daemon-started pi session on Windows = %q, want %q", got, want)
 	}
 }
@@ -540,4 +620,9 @@ func TestHandOffNeedsTheProcessEnded(t *testing.T) {
 	if err != nil || st.Status != StatusHandedOff || h.row(id).Hosted {
 		t.Fatalf("HandOff once the holder ends = %+v, %v", st, err)
 	}
+}
+
+// builtinResumeCommand is the resume command the built-in registrations give.
+func builtinResumeCommand(rec Record, dir string) string {
+	return (&Runner{opts: Options{Backends: BuiltinBackendRegistrations()}}).resumeCommand(rec, dir)
 }

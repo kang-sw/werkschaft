@@ -676,7 +676,7 @@ func TestPiForwardDrivesTheRealTokenRoute(t *testing.T) {
 	dir := t.TempDir()
 	runner := wsagent.NewRunner(wsagent.Options{
 		Dir:      dir,
-		Backends: map[string]wsagent.BackendRegistration{wsagent.BackendPi: {Backend: backend}},
+		Backends: map[string]wsagent.BackendRegistration{wsagent.BackendPi: {Backend: backend, Permission: wsagent.BuiltinBackendRegistrations()[wsagent.BackendPi].Permission, Lifecycle: wsagent.BuiltinBackendRegistrations()[wsagent.BackendPi].Lifecycle}},
 		Keys:     &routeKeys{},
 		Config:   cfg,
 		WSMCP: func(root string) (wsagent.MCPCommand, error) {

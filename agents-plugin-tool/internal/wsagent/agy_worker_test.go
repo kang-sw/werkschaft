@@ -150,7 +150,7 @@ func TestAgyWorkerLaunchApprovalAndResume(t *testing.T) {
 	t.Cleanup(func() { environ = restore })
 	h, got := agentHarness(t, nil)
 	h.runner.Close()
-	h.config.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: exe}, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy), WorkerHTTPMCP: true, WorkerAutoApprove: true, Catalog: AgyCatalog()}
+	h.config.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: exe}, Permission: builtinPermission(BackendAgy), Lifecycle: builtinLifecycle(BackendAgy), WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendAgy), WorkerHTTPMCP: true, WorkerAutoApprove: true, Catalog: AgyCatalog()}
 	var mu sync.Mutex
 	var tokens []string
 	var hellos []wsdashboard.ProxyHello
