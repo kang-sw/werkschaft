@@ -338,10 +338,11 @@ func decodeRecord(path, replyID string, raw []byte) (Record, error) {
 }
 
 // ValidateLegacyRecord reports whether readRecord would accept raw as the
-// agent.json of replyID's session directory. The daemon metadata import
-// (wsmeta) uses it to keep a record the legacy reader rejects out of the
-// live store.
-func ValidateLegacyRecord(replyID string, raw []byte) error {
+// agent.json of replyID's session directory. The daemon metadata import uses
+// it as its agent_record validator (wsmeta.LegacyValidator: rel, the
+// capture's dashboard-relative path, is not needed), so a record the legacy
+// reader rejects stays out of the live store.
+func ValidateLegacyRecord(_, replyID string, raw []byte) error {
 	_, err := decodeRecord(recordFileName, replyID, raw)
 	return err
 }

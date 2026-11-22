@@ -98,6 +98,12 @@ func Open(dir string, opts Options) (*Store, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("wsmeta: empty dashboard directory")
 	}
+	// One absolute root for the owner-only hardening, the database URI (a
+	// file: URI path is absolute) and legacy capture.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}

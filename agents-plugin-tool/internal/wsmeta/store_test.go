@@ -265,3 +265,45 @@ func TestOpenUnderRootWithURIMetacharacters(t *testing.T) {
 		t.Fatalf("reopen sees complete=%v err=%v", done, err)
 	}
 }
+
+// A relative root resolves once against the working directory: the
+// database, its hardening and legacy capture all use the same directory.
+func TestOpenResolvesARelativeRoot(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(base); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	put(t, filepath.Join(base, "dash"), "sessions/a/label.json", `{"label":"A"}`)
+	s := openTest(t, "dash", testOpts())
+	if !filepath.IsAbs(s.Path()) {
+		t.Fatalf("database path %q is relative", s.Path())
+	}
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(base, "dash", DBName)); err != nil || info.Size() == 0 {
+		t.Fatalf("database under the relative root: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(filepath.Join(base, "dash", DBName)); info.Mode().Perm() != 0o600 {
+			t.Fatalf("database mode %v", info.Mode().Perm())
+		}
+	}
+	s2 := openTest(t, filepath.Join(base, "dash"), testOpts())
+	snap, err := s2.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.Labels["a"]; !ok {
+		t.Fatalf("label under the relative root not imported: %+v", snap.Labels)
+	}
+}

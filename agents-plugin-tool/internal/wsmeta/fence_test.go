@@ -3,9 +3,12 @@ package wsmeta
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,20 +32,42 @@ const (
 	fencePerm       = "sessions/hostedlead/permission.json"
 	fenceAbsentPerm = "sessions/clionly/permission.json"
 	fenceHiring     = "sessions/hostedlead/hiring.json"
+	fenceHooks      = "tracker-hooks.json"
 	hooksWitness    = "tracker-hooks-config.json"
+	hooksBytes      = `{"hooks":[{"command":["notify"]}]}`
+	permOriginal    = `{"permission_level":"workdir-write","delegated_authority":false,"future_perm":"keep"}`
 )
 
 var fencedSelector = []byte(`{"permission_level":"!cutover-fenced"}`)
 
+func mustStage(t *testing.T, s *Store) StageResult {
+	t.Helper()
+	res, err := s.Stage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func readRel(t *testing.T, dir, rel string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("%s: %v", rel, err)
+	}
+	return string(raw)
+}
+
+// A publication interrupted before its mark is proven by the next pass, but
+// stays pending until the fence is re-applied (a pass cannot tell whether it
+// is durable); the re-application only marks it, and the import keeps the
+// originals.
 func TestFenceLandedBeforeJournalMarkKeepsOriginal(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
 	armed := false
 	s := openTest(t, dir, crashAt("fence-replaced", &armed))
-	if _, err := s.Stage(ctx); err != nil {
-		t.Fatal(err)
-	}
-	// Each replacement lands; the process dies before marking it.
+	mustStage(t, s)
 	for _, rel := range []string{fencePerm, fenceAbsentPerm} {
 		armed = true
 		if err := s.ApplyFence(ctx, rel, fencedSelector); !errors.Is(err, errCrash) {
@@ -50,22 +75,30 @@ func TestFenceLandedBeforeJournalMarkKeepsOriginal(t *testing.T) {
 		}
 	}
 	armed = true
-	if err := s.ApplyRemovalFence(ctx, "tracker-hooks.json", hooksWitness); !errors.Is(err, errCrash) {
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
 		t.Fatalf("removal fence = %v", err)
 	}
-	res, err := s.Stage(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Reused != 3 || len(res.Unfenced) != 0 || len(res.Pending) != 0 {
+	res := mustStage(t, s)
+	if want := []string{fencePerm, fenceAbsentPerm, fenceHooks}; res.Reused != 3 || len(res.Unfenced) != 0 || !sameSet(res.Pending, want) {
 		t.Fatalf("retry stage = %+v", res)
 	}
 	caps := captureMap(t, s)
-	if c := caps[fencePerm]; c.State != CapturePresent || string(c.Bytes) != `{"permission_level":"workdir-write","delegated_authority":false,"future_perm":"keep"}` || c.FenceState != FenceIntent || !c.FenceRequired {
+	if c := caps[fencePerm]; c.State != CapturePresent || string(c.Bytes) != permOriginal || c.FenceState != FenceIntent || !c.FenceRequired {
 		t.Fatalf("fenced capture = %+v", c)
 	}
 	if c := caps[fenceAbsentPerm]; c.State != CaptureAbsent {
 		t.Fatalf("absent-before-fence capture = %+v", c)
+	}
+	if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrFencePending) {
+		t.Fatalf("commit over unlanded fences = %v", err)
+	}
+	for _, rel := range []string{fencePerm, fenceAbsentPerm} {
+		if err := s.ApplyFence(ctx, rel, fencedSelector); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := s.Commit(ctx, testCommit()); err != nil {
 		t.Fatal(err)
@@ -80,14 +113,167 @@ func TestFenceLandedBeforeJournalMarkKeepsOriginal(t *testing.T) {
 	if _, ok := snap.Permissions["clionly"]; ok {
 		t.Fatal("a fence on an absent selection imported a row")
 	}
-	if c := captureMap(t, s)["tracker-hooks.json"]; c.State != CapturePresent || c.ImportStatus != ImportRetained {
+	if c := captureMap(t, s)[fenceHooks]; c.State != CapturePresent || c.ImportStatus != ImportRetained {
 		t.Fatalf("retained hooks config = %+v", c)
 	}
-	if raw, err := os.ReadFile(filepath.Join(dir, hooksWitness)); err != nil || string(raw) != `{"hooks":[{"command":["notify"]}]}` {
-		t.Fatalf("witness = %q, %v", raw, err)
+	if got := readRel(t, dir, hooksWitness); got != hooksBytes {
+		t.Fatalf("witness = %q", got)
 	}
 	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, ErrImportComplete) {
 		t.Fatalf("fence after import = %v", err)
+	}
+}
+
+func sameSet(a, b []string) bool {
+	m := map[string]int{}
+	for _, x := range a {
+		m[x]++
+	}
+	for _, x := range b {
+		m[x]--
+	}
+	for _, n := range m {
+		if n != 0 {
+			return false
+		}
+	}
+	return len(a) == len(b)
+}
+
+// A retry interrupted after recording but before publishing never replaces
+// the proof of a publication an earlier attempt left in place: the record
+// stands while its publication is live, so the migration's own bytes are
+// never staged as the original.
+func TestInterruptedRetryKeepsTheFirstPublicationProvable(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	stage := ""
+	opts := testOpts()
+	opts.Fault = func(got string) error {
+		if got == stage {
+			stage = ""
+			return errCrash
+		}
+		return nil
+	}
+	s := openTest(t, dir, opts)
+	mustStage(t, s)
+	stage = "fence-replaced"
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, errCrash) {
+		t.Fatalf("first attempt = %v", err)
+	}
+	first := captureMap(t, s)[fencePerm].FenceModTime
+	for _, between := range []bool{false, true} {
+		if between {
+			mustStage(t, s)
+		}
+		stage = "fence-prepared"
+		if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, errCrash) {
+			t.Fatalf("retry = %v", err)
+		}
+		if got := captureMap(t, s)[fencePerm].FenceModTime; got != first {
+			t.Fatalf("the retry replaced the live publication's sentinel %d with %d", first, got)
+		}
+	}
+	res := mustStage(t, s)
+	if res.Reused == 0 || len(res.Unfenced) != 0 || !reflect.DeepEqual(res.Pending, []string{fencePerm}) {
+		t.Fatalf("stage = %+v, want the first publication proven and pending its mark", res)
+	}
+	if c := captureMap(t, s)[fencePerm]; string(c.Bytes) != permOriginal {
+		t.Fatalf("original = %q, want the legacy selection", c.Bytes)
+	}
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := snap.Permissions["hostedlead"]; p.State != "valid" || p.Level != "workdir-write" {
+		t.Fatalf("imported permission = %+v, want the legacy selection", p)
+	}
+}
+
+// A publication renamed into place but interrupted before its directory
+// sync is not trusted by the import: it stays pending until a re-application
+// makes it durable.
+func TestUnsyncedPublicationNeedsReapplyBeforeCommit(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	armed := false
+	s := openTest(t, dir, crashAt("fence-renamed", &armed))
+	mustStage(t, s)
+	armed = true
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, errCrash) {
+		t.Fatalf("fence = %v", err)
+	}
+	armed = true
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
+		t.Fatalf("removal fence = %v", err)
+	}
+	if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrFencePending) {
+		t.Fatalf("commit over unsynced publications = %v", err)
+	}
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The publication is durable before it is marked landed: the temporary
+// file's data and sentinel time are synced before the rename, and the
+// directory after it.
+func TestFencePublicationIsDurableBeforeItLands(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	var events []string
+	prevFile, prevDir := syncFile, syncDirectory
+	t.Cleanup(func() { syncFile, syncDirectory = prevFile, prevDir })
+	syncFile = func(p string) error {
+		info, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+		sentinel := info.ModTime().Year() < 2010 && info.ModTime().Nanosecond() == 0
+		events = append(events, fmt.Sprintf("sync-file:%s:sentinel=%v", filepath.Base(filepath.Dir(p)), sentinel))
+		return prevFile(p)
+	}
+	syncDirectory = func(d string) error {
+		rel, _ := filepath.Rel(dir, d)
+		events = append(events, "sync-dir:"+filepath.ToSlash(rel))
+		return prevDir(d)
+	}
+	opts := testOpts()
+	opts.Fault = func(stage string) error {
+		events = append(events, stage)
+		return nil
+	}
+	s := openTest(t, dir, opts)
+	mustStage(t, s)
+	events = nil
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	// before-commit is a journal transaction: the record before the
+	// publication, the landed mark after it.
+	want := []string{"before-commit", "fence-prepared", "sync-file:hostedlead:sentinel=true", "fence-renamed", "sync-dir:sessions/hostedlead", "fence-replaced", "before-commit"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("replacement events = %v, want %v", events, want)
+	}
+	events = nil
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"before-commit", "fence-prepared", "fence-renamed", "sync-dir:.", "fence-replaced", "before-commit"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("removal events = %v, want %v", events, want)
 	}
 }
 
@@ -98,9 +284,7 @@ func TestByteIdenticalLegacyWriteIsNotTheFence(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
 	s := openTest(t, dir, testOpts())
-	if _, err := s.Stage(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustStage(t, s)
 	disabled := `{"enabled":false,"hired":true,"request_id":"req-1"}`
 	if err := s.ApplyFence(ctx, fenceHiring, []byte(disabled)); err != nil {
 		t.Fatal(err)
@@ -109,10 +293,7 @@ func TestByteIdenticalLegacyWriteIsNotTheFence(t *testing.T) {
 	// ending at the fence's bytes with a current time.
 	put(t, dir, fenceHiring, `{"enabled":true,"hired":true,"request_id":"req-1"}`)
 	put(t, dir, fenceHiring, disabled)
-	res, err := s.Stage(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := mustStage(t, s)
 	if !reflect.DeepEqual(res.Unfenced, []string{fenceHiring}) || res.Reused != 0 {
 		t.Fatalf("stage = %+v, want the hiring fence invalidated", res)
 	}
@@ -121,52 +302,83 @@ func TestByteIdenticalLegacyWriteIsNotTheFence(t *testing.T) {
 	}
 }
 
-// A re-fence never keeps the live file's mtime: a stat-keyed legacy cache
-// whose identity survives the replace (NTFS tunneling keeps the creation
-// time) would otherwise serve its stale bytes for a same-size fence.
-func TestRefenceNeverReusesTheLiveMtime(t *testing.T) {
+// A fresh record's sentinel never repeats the live file's mtime: a
+// stat-keyed legacy cache whose identity survives the replace (NTFS
+// tunneling keeps the creation time) would otherwise serve its stale bytes
+// for a same-size fence. Re-applying a landed fence draws nothing and
+// writes nothing.
+func TestFenceSentinelDiffersFromTheLiveMtime(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
 	s := openTest(t, dir, testOpts())
-	if _, err := s.Stage(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustStage(t, s)
 	prev := fenceSentinel
 	t.Cleanup(func() { fenceSentinel = prev })
-	first := randomFenceSentinel()
+	collide := randomFenceSentinel()
+	abs := filepath.Join(dir, filepath.FromSlash(fencePerm))
+	if err := os.Chtimes(abs, collide, collide); err != nil {
+		t.Fatal(err)
+	}
+	mustStage(t, s)
 	draws := 0
 	fenceSentinel = func() time.Time {
 		draws++
-		if draws <= 3 {
-			return first
+		if draws <= 2 {
+			return collide
 		}
-		return first.Add(2 * time.Second)
+		return collide.Add(2 * time.Second)
 	}
 	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
 		t.Fatal(err)
 	}
-	abs := filepath.Join(dir, filepath.FromSlash(fencePerm))
-	before, err := os.Stat(abs)
-	if err != nil || before.ModTime().Unix() != first.Unix() {
-		t.Fatalf("first fence mtime = %v, %v; want %v", before, err, first)
+	info, err := os.Stat(abs)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The same bytes again, drawing the live sentinel twice first.
+	if info.ModTime().Unix() == collide.Unix() {
+		t.Fatalf("fence kept the live mtime %v", collide)
+	}
+	n := draws
 	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
 		t.Fatal(err)
 	}
-	after, err := os.Stat(abs)
+	again, err := os.Stat(abs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.ModTime().Unix() == before.ModTime().Unix() || after.Size() != before.Size() {
-		t.Fatalf("re-fence mtime %v size %d kept the live mtime %v", after.ModTime(), after.Size(), before.ModTime())
+	if draws != n || !again.ModTime().Equal(info.ModTime()) || !os.SameFile(info, again) {
+		t.Fatalf("re-applying a landed fence republished it (draws %d -> %d)", n, draws)
 	}
-	res, err := s.Stage(ctx)
-	if err != nil {
+	if res := mustStage(t, s); len(res.Pending) != 0 || res.Reused == 0 {
+		t.Fatalf("stage = %+v", res)
+	}
+}
+
+// A fence refuses a live file that is neither the staged original nor its
+// own publication: the legacy write is staged first, never lost.
+func TestFenceRefusesAnUnstagedLegacyWrite(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	s := openTest(t, dir, testOpts())
+	mustStage(t, s)
+	lowered := `{"permission_level":"read-only"}`
+	put(t, dir, fencePerm, lowered)
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, ErrFenceStale) {
+		t.Fatalf("fence over an unstaged write = %v", err)
+	}
+	put(t, dir, fenceHooks, `{"hooks":[]}`)
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrFenceStale) {
+		t.Fatalf("removal over an unstaged write = %v", err)
+	}
+	if got := readRel(t, dir, fencePerm); got != lowered {
+		t.Fatalf("legacy write replaced: %q", got)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, hooksWitness)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused removal moved the file: %v", err)
+	}
+	mustStage(t, s)
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
 		t.Fatal(err)
-	}
-	if res.Reused == 0 || len(res.Unfenced) != 0 || len(res.Pending) != 0 {
-		t.Fatalf("re-fence not proven: %+v", res)
 	}
 }
 
@@ -176,9 +388,7 @@ func TestForeignWriteOverFenceReturnsToLiveAuthority(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
 	s := openTest(t, dir, testOpts())
-	if _, err := s.Stage(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustStage(t, s)
 	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
 		t.Fatal(err)
 	}
@@ -192,10 +402,7 @@ func TestForeignWriteOverFenceReturnsToLiveAuthority(t *testing.T) {
 	if c := captureMap(t, s)[fencePerm]; c.FenceState != FenceLanded {
 		t.Fatalf("refused commit changed the journal: %+v", c)
 	}
-	res, err := s.Stage(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := mustStage(t, s)
 	if !reflect.DeepEqual(res.Unfenced, []string{fencePerm}) || !reflect.DeepEqual(res.Pending, []string{fencePerm}) {
 		t.Fatalf("stage = %+v", res)
 	}
@@ -236,39 +443,117 @@ func TestForeignWriteOverFenceReturnsToLiveAuthority(t *testing.T) {
 }
 
 // An owner deleting the hooks config while its removal fence is pending
-// (the move never happened) is not undone: the retry sees no witness and
-// stages the absence.
+// (the move never happened) is not undone: the re-applied removal of an
+// absent original leaves no witness either.
 func TestOwnerDeletionDuringPendingRemovalIsNotRestored(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
 	armed := false
 	s := openTest(t, dir, crashAt("fence-prepared", &armed))
-	if _, err := s.Stage(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustStage(t, s)
 	armed = true
-	if err := s.ApplyRemovalFence(ctx, "tracker-hooks.json", hooksWitness); !errors.Is(err, errCrash) {
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
 		t.Fatalf("removal fence = %v", err)
 	}
-	if err := os.Remove(filepath.Join(dir, "tracker-hooks.json")); err != nil {
+	if err := os.Remove(filepath.Join(dir, fenceHooks)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrFenceInvalidated) {
 		t.Fatalf("commit = %v", err)
 	}
-	if _, err := s.Stage(ctx); err != nil {
+	mustStage(t, s)
+	if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrFencePending) {
+		t.Fatalf("commit before the removal is re-applied = %v", err)
+	}
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Commit(ctx, testCommit()); err != nil {
 		t.Fatal(err)
 	}
-	if c := captureMap(t, s)["tracker-hooks.json"]; c.State != CaptureAbsent || c.Bytes != nil {
+	if c := captureMap(t, s)[fenceHooks]; c.State != CaptureAbsent || c.Bytes != nil {
 		t.Fatalf("hooks capture = %+v, want the owner's deletion", c)
 	}
-	for _, p := range []string{"tracker-hooks.json", hooksWitness} {
+	for _, p := range []string{fenceHooks, hooksWitness} {
 		if _, err := os.Lstat(filepath.Join(dir, p)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s recreated: %v", p, err)
 		}
+	}
+}
+
+// After a removal landed and the old daemon's owner recreated the config,
+// re-fencing moves the new config over the stale witness at the same input
+// path; the witness name is fixed per path.
+func TestRemovalRefenceReplacesAStaleWitness(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	s := openTest(t, dir, testOpts())
+	mustStage(t, s)
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatal(err)
+	}
+	recreated := `{"hooks":[{"command":["page"]}]}`
+	put(t, dir, fenceHooks, recreated)
+	res := mustStage(t, s)
+	if !reflect.DeepEqual(res.Unfenced, []string{fenceHooks}) || !reflect.DeepEqual(res.Pending, []string{fenceHooks}) {
+		t.Fatalf("stage = %+v", res)
+	}
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, "other-config.json"); !errors.Is(err, ErrFenceConflict) {
+		t.Fatalf("removal to another witness = %v", err)
+	}
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+	if c := captureMap(t, s)[fenceHooks]; string(c.Bytes) != recreated || c.ImportStatus != ImportRetained {
+		t.Fatalf("retained config = %+v", c)
+	}
+	if got := readRel(t, dir, hooksWitness); got != recreated {
+		t.Fatalf("witness = %q, want the recreated config", got)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, fenceHooks)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy config left in place: %v", err)
+	}
+}
+
+// The witness is a plain sibling name on every platform, so the move stays
+// in the path's directory, and a relative link still resolves to the same
+// file there.
+func TestRemovalWitnessStaysBesideItsPath(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	s := openTest(t, dir, testOpts())
+	mustStage(t, s)
+	for _, w := range []string{"", "../outside.json", `..\outside.json`, `sub\w.json`, "sub/w.json", "c:w.json", ".hidden.json", "..", "plan-usage.json", "memos", fenceHooks} {
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, w); err == nil {
+			t.Fatalf("witness %q accepted", w)
+		}
+	}
+	if got := readRel(t, dir, fenceHooks); got != hooksBytes {
+		t.Fatalf("a refused witness moved the config: %q", got)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	put(t, dir, "hooks-src/conf.json", hooksBytes)
+	abs := filepath.Join(dir, fenceHooks)
+	if err := os.Remove(abs); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("hooks-src", "conf.json"), abs); err != nil {
+		t.Fatal(err)
+	}
+	mustStage(t, s)
+	if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+		t.Fatal(err)
+	}
+	if res := mustStage(t, s); len(res.Pending) != 0 || len(res.Unfenced) != 0 {
+		t.Fatalf("moved link not proven: %+v", res)
+	}
+	if got := readRel(t, dir, hooksWitness); got != hooksBytes {
+		t.Fatalf("witness resolves to %q", got)
 	}
 }
 
@@ -276,17 +561,9 @@ func TestFenceRefusesUnstagedPathsAndPrunedSessions(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
 	s := openTest(t, dir, testOpts())
-	if _, err := s.Stage(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustStage(t, s)
 	if err := s.ApplyFence(ctx, "sessions/nosuch/permission.json", fencedSelector); err == nil {
 		t.Fatal("fence on an unstaged path succeeded")
-	}
-	if err := s.ApplyRemovalFence(ctx, fenceAbsentPerm, "elsewhere.json"); err == nil {
-		t.Fatal("removal fence on an absent capture succeeded")
-	}
-	if err := s.ApplyRemovalFence(ctx, "tracker-hooks.json", "../outside.json"); err == nil {
-		t.Fatal("removal witness outside the dashboard accepted")
 	}
 	// A session pruned after staging is never recreated by its fence.
 	if err := os.RemoveAll(filepath.Join(dir, "sessions", "worker")); err != nil {
@@ -308,12 +585,10 @@ func TestMissedRecreationNeverReusesTheDeletedSessionsOriginal(t *testing.T) {
 	ctx := context.Background()
 	dir := legacyFixture(t)
 	prev := generationOf
-	generationOf = func(path string, _ os.FileInfo) string { return "same:" + filepath.Base(path) }
+	generationOf = func(path string, _ os.FileInfo) (string, error) { return "same:" + filepath.Base(path), nil }
 	t.Cleanup(func() { generationOf = prev })
 	s := openTest(t, dir, testOpts())
-	if _, err := s.Stage(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustStage(t, s)
 	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
 		t.Fatal(err)
 	}
@@ -321,10 +596,7 @@ func TestMissedRecreationNeverReusesTheDeletedSessionsOriginal(t *testing.T) {
 		t.Fatal(err)
 	}
 	put(t, dir, fencePerm, string(fencedSelector))
-	res, err := s.Stage(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := mustStage(t, s)
 	if res.Discarded != 0 {
 		t.Fatalf("the simulated reuse was detected: %+v", res)
 	}
@@ -337,5 +609,47 @@ func TestMissedRecreationNeverReusesTheDeletedSessionsOriginal(t *testing.T) {
 	}
 	if c := caps["sessions/hostedlead/agent.json"]; c.State != CaptureAbsent {
 		t.Fatalf("deleted session's record still staged: %+v", c)
+	}
+}
+
+// A session identity lookup that fails (a handle held, statx failing) is
+// inconclusive: the pass fails and changes nothing, so the session's journal
+// rows, its fenced original included, survive until a pass can tell.
+func TestInconclusiveSessionIdentityKeepsItsJournal(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	s := openTest(t, dir, testOpts())
+	mustStage(t, s)
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	before := captureMap(t, s)
+	prev := generationOf
+	t.Cleanup(func() { generationOf = prev })
+	generationOf = func(path string, info os.FileInfo) (string, error) {
+		if filepath.Base(path) == "hostedlead" {
+			return "", errors.New("sharing violation")
+		}
+		return prev(path, info)
+	}
+	if _, err := s.Stage(ctx); err == nil || !strings.Contains(err.Error(), "hostedlead") {
+		t.Fatalf("stage with an inconclusive identity = %v", err)
+	}
+	if _, err := s.Commit(ctx, testCommit()); err == nil {
+		t.Fatal("commit with an inconclusive identity succeeded")
+	}
+	if after := captureMap(t, s); !reflect.DeepEqual(after[fencePerm], before[fencePerm]) || len(after) != len(before) {
+		t.Fatalf("journal changed: %+v", after[fencePerm])
+	}
+	generationOf = prev
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := snap.Permissions["hostedlead"]; p.Level != "workdir-write" {
+		t.Fatalf("permission = %+v, want the staged original", p)
 	}
 }

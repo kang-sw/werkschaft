@@ -43,8 +43,15 @@ type CommitOptions struct {
 	// store in RequiredValidators has none: agent records (wsagent's
 	// readRecord decode, every known member typed) and the usage histories
 	// (wsdashboard's per-harness sample validity).
-	Validate map[string]func(replyID string, raw []byte) error
+	Validate map[string]LegacyValidator
 }
+
+// LegacyValidator is a legacy owner's whole-document check of one capture.
+// rel is its slash path relative to the dashboard directory (a dashboard
+// file's rel is its file name); replyID is its session, empty for a
+// dashboard-wide file. wsagent.ValidateLegacyRecord and
+// wsdashboard.ValidateLegacyUsageHistory have this signature.
+type LegacyValidator func(rel, replyID string, raw []byte) error
 
 // RequiredValidators are the stores whose legacy reader rejects documents
 // this package's member-level decode would accept.
@@ -166,7 +173,7 @@ type errIgnored struct{ detail string }
 
 func (e errIgnored) Error() string { return e.detail }
 
-func checkValidators(captures []Capture, validate map[string]func(string, []byte) error) error {
+func checkValidators(captures []Capture, validate map[string]LegacyValidator) error {
 	required := map[string]bool{}
 	for _, store := range RequiredValidators {
 		required[store] = true
@@ -179,7 +186,7 @@ func checkValidators(captures []Capture, validate map[string]func(string, []byte
 	return nil
 }
 
-func importCapture(ctx context.Context, tx *sql.Tx, c Capture, validate func(string, []byte) error) (status, detail string, err error) {
+func importCapture(ctx context.Context, tx *sql.Tx, c Capture, validate LegacyValidator) (status, detail string, err error) {
 	switch c.State {
 	case CaptureAbsent:
 		return ImportAbsent, "", nil
@@ -203,7 +210,7 @@ func importCapture(ctx context.Context, tx *sql.Tx, c Capture, validate func(str
 	decodeErr := decodeCapture(ctx, tx, c)
 	if decodeErr == nil && validate != nil {
 		// After the decode, so a newer document still reads as future.
-		if err := validate(c.ReplyID, c.Bytes); err != nil {
+		if err := validate(c.Path, c.ReplyID, c.Bytes); err != nil {
 			decodeErr = invalidf("%v", err)
 		}
 	}

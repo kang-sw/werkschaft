@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -550,13 +551,18 @@ func usageSamples(entry planUsageEntry) []planUsageSample {
 }
 
 // ValidateLegacyUsageHistory reports whether the usage history reader would
-// accept raw as the cache file name (plan-usage-history.json,
-// plan-usage-codex-history.json or plan-usage-agy-history.json): schema 1,
-// a samples array, and every sample valid for that history with its
-// required members. The daemon metadata import (wsmeta) uses it so a
-// history this reader protects from append and rewrite stays out of the
-// live store.
-func ValidateLegacyUsageHistory(name string, raw []byte) error {
+// accept raw as the cache file at rel (plan-usage-history.json,
+// plan-usage-codex-history.json or plan-usage-agy-history.json, relative to
+// the dashboard directory): schema 1, a samples array, and every sample
+// valid for that history with its required members. The daemon metadata
+// import uses it as its usage history validator (wsmeta.LegacyValidator; a
+// dashboard file has no reply-id), so a history this reader protects from
+// append and rewrite stays out of the live store.
+func ValidateLegacyUsageHistory(rel, _ string, raw []byte) error {
+	name := path.Base(rel)
+	if path.Dir(rel) != "." {
+		return fmt.Errorf("unknown usage history %q", rel)
+	}
 	for _, spec := range []planUsageHistorySpec{defaultHistorySpec, codexFiveHourHistorySpec, agyHistorySpec} {
 		if spec.cacheName == name {
 			_, err := parsePlanUsageHistoryWith(raw, spec)

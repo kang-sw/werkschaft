@@ -50,15 +50,51 @@ const (
 	CaptureUnreadable = "unreadable"
 )
 
-// Fence states of a capture row.
+// Fence lifecycle (2125, 2135). A capture row holds one legacy path's
+// original (state, bytes, digest) and at most one fence record: fence_state
+// with fence_kind, fence_digest and fence_mtime. fence_required and
+// fence_witness are sticky: once set, they survive re-staging and restarts.
+//
+//	none   --apply over the staged original-->  intent  (record durable first)
+//	intent --publication durable----------->    landed
+//	intent --re-apply, publication proven-->    landed  (only a durability barrier)
+//	intent, landed --a pass that cannot prove the publication--> none
+//	                  (the live state is re-staged as the original)
+//
+// Invariants:
+//  1. The original is legacy-authored. A pass replaces it with the live
+//     state only when the live state is not the record's publication, so
+//     bytes the migration wrote are never staged as an original.
+//  2. The record names exactly one publication for the current original. A
+//     replacement is the record's digest under its sentinel mtime. A removal
+//     is the path absent, with its witness (a sibling name, fixed per path)
+//     in the original's state. The record changes only while the live state
+//     is not that publication, so a publication left by any earlier,
+//     interrupted attempt stays provable.
+//  3. A fence is applied only over the staged original or over its own
+//     proven publication; any other live state is refused (ErrFenceStale).
+//     A legacy write is therefore staged before it is fenced, never lost.
+//  4. The record is durable before its publication. landed is set only once
+//     the publication's file data, sentinel mtime and directory entry are
+//     durable. A pass cannot tell whether an unlanded publication is
+//     durable, so it stays pending until the fence is re-applied.
+//  5. Commit proceeds only when every path with fence_required has a landed
+//     record that the commit's own pass proves. When proof fails, the outcome
+//     is a re-stage plus a re-fence. The staged original is never written
+//     back to the legacy path.
 const (
 	FenceNone   = "none"
 	FenceIntent = "intent"
 	FenceLanded = "landed"
 )
 
-// absentDigest is the digest of a missing file, so a removal fence (the
-// legacy tracker-hooks.json) is recognised exactly as a replacement is.
+// Fence kinds.
+const (
+	fenceReplace = "replace"
+	fenceRemove  = "remove"
+)
+
+// absentDigest is the digest of a missing file.
 const absentDigest = "absent"
 
 const sessionsDirName = "sessions"
@@ -116,11 +152,11 @@ type Capture struct {
 	FenceDigest string
 	// FenceRequired is set once a fence was applied to this path and stays
 	// set across re-staging: the import commits only after a fence on this
-	// path is proven in place again.
+	// path is landed and proven in place again.
 	FenceRequired bool
 	// FenceModTime is the sentinel modification time (Unix seconds) a
-	// replacement fence carries; FenceWitness is where a removal fence moved
-	// the file.
+	// replacement fence carries. FenceWitness is the sibling path a removal
+	// fence moves the file to; it is fixed for the path once chosen.
 	FenceModTime int64
 	FenceWitness string
 	// ImportStatus is set by the import commit: imported, absent, invalid,
@@ -135,7 +171,7 @@ type StageResult struct {
 	Sessions  int
 	Files     int
 	Restaged  int // rows whose bytes were (re)captured from the live file
-	Reused    int // rows whose staged original was kept because its fence landed
+	Reused    int // rows whose staged original was kept because its fence publication is live
 	Discarded int // sessions dropped because their directory vanished or was recreated
 	// Unfenced lists capture paths that had a fence intent but whose live
 	// file is not that fence's result (the fence never landed, or a legacy
@@ -145,9 +181,10 @@ type StageResult struct {
 	// transient reason. Their earlier row, if any, is kept unchanged; a
 	// commit refuses with ErrLegacyUnread until a pass reads them.
 	Unread []string
-	// Pending lists capture paths with a required fence that is not proven
-	// in place in this pass (Unfenced paths included). Commit refuses with
-	// ErrFencePending while any remain; apply the fence again.
+	// Pending lists capture paths with a required fence that this pass did
+	// not find both landed and proven in place (Unfenced paths included).
+	// Commit refuses with ErrFencePending while any remain; apply the fence
+	// again.
 	Pending []string
 }
 
@@ -166,6 +203,13 @@ var (
 	// ErrFencePending reports a commit attempted while a path that needs a
 	// fence has none proven in place; apply the fence again.
 	ErrFencePending = errors.New("wsmeta: a required fence is not in place")
+	// ErrFenceStale reports a fence refused because the live legacy file is
+	// neither its staged original nor the fence's own publication; stage
+	// again, then fence.
+	ErrFenceStale = errors.New("wsmeta: the legacy file changed since it was staged")
+	// ErrFenceConflict reports a fence that differs from the one already
+	// published on the path (other content, kind or witness).
+	ErrFenceConflict = errors.New("wsmeta: a different fence is already in place")
 )
 
 // Stage runs one durable capture pass: it discovers every bundled legacy
@@ -196,26 +240,36 @@ func (s *Store) Stage(ctx context.Context) (StageResult, error) {
 }
 
 // ApplyFence replaces the legacy file at rel, a staged capture, with fenced:
-// one of the cutover's one-time fences (2125). It durably records the intent
-// first, with the fenced digest and a sentinel modification time, then
-// writes fenced to a temporary file in the same directory stamped with that
-// time, atomically replaces rel with it and marks the fence landed. The
-// sentinel is a random even second in 2000-2009, which survives coarse
-// file-system timestamps and which no legacy writer produces (each writes a
-// current time). A later pass keeps the staged original only while the live
-// file has both the fenced digest and the sentinel time, so byte-identical
-// content a legacy writer wrote is never taken for the fence (2135). The
-// directory must exist: a fence never recreates a pruned session.
+// one of the cutover's one-time fences (2125). It follows the fence
+// lifecycle above. The record (the fenced digest and a sentinel modification
+// time) is durable first. Then fenced goes to a temporary file stamped with
+// the sentinel, its data and time are synced, it atomically replaces rel,
+// and the directory is synced before the fence is marked landed. The
+// sentinel is a random even second in 2000-2009. Coarse file-system
+// timestamps keep it, and no legacy writer produces it, because each writes
+// the current time. So content a legacy writer wrote is never taken for the
+// fence, even when it is byte-identical (2135).
+//
+// Re-applying after an interruption is safe. If the publication is already
+// in place, ApplyFence only makes it durable and marks it landed; otherwise
+// it publishes again over the staged original. A live file that is neither
+// returns ErrFenceStale. The directory must exist: a fence never recreates a
+// pruned session.
 func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error {
 	abs := filepath.Join(s.dir, filepath.FromSlash(rel))
-	sentinel := distinctFenceSentinel(abs)
-	if err := s.prepareFence(ctx, rel, contentDigest(fenced), sentinel.Unix(), ""); err != nil {
+	plan, err := s.planFence(ctx, rel, fenceReplace, contentDigest(fenced), "")
+	if err != nil || plan.landed {
 		return err
 	}
 	if err := s.hit("fence-prepared"); err != nil {
 		return err
 	}
-	if err := writeFenceFile(abs, fenced, sentinel); err != nil {
+	if plan.proven {
+		err = s.syncDir(filepath.Dir(abs))
+	} else {
+		err = s.publishFile(abs, fenced, time.Unix(plan.mtime, 0))
+	}
+	if err != nil {
 		return err
 	}
 	if err := s.hit("fence-replaced"); err != nil {
@@ -224,33 +278,141 @@ func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error
 	return s.markFenceLanded(ctx, rel)
 }
 
-// ApplyRemovalFence removes the legacy file at rel, a staged present
-// capture, by moving it to witness (a slash path relative to the dashboard
-// directory that must not exist yet: the new-daemon-only input path). A
-// later pass keeps the staged original only while rel is absent and witness
-// holds the original's bytes, so an owner's deletion of rel is never taken
-// for the fence and never undone by the import (2135).
+// ApplyRemovalFence removes the legacy file at rel, a staged capture, by
+// moving it to witness. witness is a file name in rel's directory: the
+// new-daemon-only input path. The migration owns that name until the import
+// completes, and it is fixed for rel once chosen. The move replaces whatever
+// an earlier, invalidated removal left there. When rel was staged absent,
+// the fence instead removes any earlier witness, so an owner's deletion is
+// never resurrected through it.
+//
+// A pass proves the removal only while rel is absent and witness is in the
+// staged original's state. So an owner's own deletion of rel is never taken
+// for the fence, and the import never undoes it (2135). A moved symbolic
+// link still resolves the same way, because witness is in the same
+// directory. Re-applying and durability follow ApplyFence.
 func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) error {
-	if witness == "" || path.IsAbs(witness) || path.Clean(witness) != witness || strings.HasPrefix(witness, "../") || witness == ".." || witness == rel {
-		return fmt.Errorf("wsmeta: invalid removal witness %q", witness)
+	if err := checkWitnessName(rel, witness); err != nil {
+		return err
 	}
-	wabs := filepath.Join(s.dir, filepath.FromSlash(witness))
-	if _, err := wsstate.Lstat(wabs); !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("wsmeta: removal witness %q already exists", witness)
-	}
-	if err := s.prepareFence(ctx, rel, absentDigest, 0, witness); err != nil {
+	witnessRel := path.Join(path.Dir(rel), witness)
+	abs := filepath.Join(s.dir, filepath.FromSlash(rel))
+	wabs := filepath.Join(s.dir, filepath.FromSlash(witnessRel))
+	plan, err := s.planFence(ctx, rel, fenceRemove, absentDigest, witnessRel)
+	if err != nil || plan.landed {
 		return err
 	}
 	if err := s.hit("fence-prepared"); err != nil {
 		return err
 	}
-	if err := os.Rename(filepath.Join(s.dir, filepath.FromSlash(rel)), wabs); err != nil {
+	switch {
+	case plan.proven:
+	case plan.state == CaptureAbsent:
+		if err := wsstate.RemoveFile(wabs); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	default:
+		if err := wsstate.AtomicReplaceFile(abs, wabs); err != nil {
+			return err
+		}
+	}
+	if !plan.proven {
+		if err := s.hit("fence-renamed"); err != nil {
+			return err
+		}
+	}
+	if err := s.syncDir(filepath.Dir(abs)); err != nil {
 		return err
 	}
 	if err := s.hit("fence-replaced"); err != nil {
 		return err
 	}
 	return s.markFenceLanded(ctx, rel)
+}
+
+// checkWitnessName accepts a plain file name, local on every platform. It
+// must not be a dot name (the temp and barrier namespace), a bundled file
+// name, or rel's own name.
+func checkWitnessName(rel, witness string) error {
+	bad := witness == "" || strings.ContainsAny(witness, `/\:`) || strings.HasPrefix(witness, ".") ||
+		!filepath.IsLocal(witness) || witness == path.Base(rel)
+	for _, f := range sessionFiles {
+		bad = bad || witness == f.name
+	}
+	for _, f := range dashboardFiles {
+		bad = bad || witness == f.name
+	}
+	for _, d := range dashboardDirs {
+		bad = bad || witness == d.name
+	}
+	if bad {
+		return fmt.Errorf("wsmeta: invalid removal witness %q", witness)
+	}
+	return nil
+}
+
+// fencePlan is what a fence application does after its record is settled.
+type fencePlan struct {
+	state  string // the staged original's state
+	mtime  int64  // the replacement's sentinel
+	proven bool   // the publication is already live
+	landed bool   // ...and marked landed: nothing left to do
+}
+
+// planFence settles the record of a fence on rel inside one durable
+// transaction (invariants 2 and 3). A proven publication keeps its record;
+// a live file equal to the staged original gets a fresh record; anything
+// else is refused.
+func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string) (fencePlan, error) {
+	var plan fencePlan
+	err := s.write(ctx, durable, func(tx *sql.Tx) error {
+		state, _, err := importState(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if state == importComplete {
+			return ErrImportComplete
+		}
+		m, ok, err := loadCaptureMeta(ctx, tx, rel)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("wsmeta: no staged capture %q to fence", rel)
+		}
+		if kind == fenceRemove && m.fenceWitness != "" && m.fenceWitness != witness {
+			return fmt.Errorf("%w: %s moves to %s", ErrFenceConflict, rel, m.fenceWitness)
+		}
+		abs := filepath.Join(s.dir, filepath.FromSlash(rel))
+		got := readLegacy(abs, s.opts.ReadFile)
+		if got.transient {
+			return fmt.Errorf("%w: %s: %s", ErrLegacyUnread, rel, got.err)
+		}
+		proven, unread := s.fenceProven(m, got)
+		if unread {
+			return fmt.Errorf("%w: witness of %s", ErrLegacyUnread, rel)
+		}
+		plan = fencePlan{state: m.state, mtime: m.fenceMtime, proven: proven}
+		if proven {
+			if m.fenceKind != kind || kind == fenceReplace && m.fenceDigest != digest {
+				return fmt.Errorf("%w: %s", ErrFenceConflict, rel)
+			}
+			plan.landed = m.fenceState == FenceLanded
+			return nil
+		}
+		if got.state != m.state || got.digest != m.digest {
+			return fmt.Errorf("%w: %s", ErrFenceStale, rel)
+		}
+		if kind == fenceReplace {
+			plan.mtime = distinctFenceSentinel(abs).Unix()
+		} else {
+			plan.mtime = 0
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'intent', fence_kind = ?, fence_digest = ?, fence_mtime = ?, fence_witness = ?, fence_required = 1 WHERE path = ?`,
+			kind, digest, plan.mtime, witness, rel)
+		return err
+	})
+	return plan, err
 }
 
 // distinctFenceSentinel picks a sentinel whose second differs from the live
@@ -259,9 +421,8 @@ func (s *Store) ApplyRemovalFence(ctx context.Context, rel, witness string) erro
 // wsstate.SameFileMetadata). The replacement changes the inode on POSIX, but
 // the Windows identity is the creation time, which NTFS tunneling can carry
 // over to the replacement. So a fence of the same size must never keep the
-// previous mtime, as a re-fence over an earlier sentinel otherwise could.
-// The mtime only needs to differ; no legacy reader of a fenced path orders
-// mtimes.
+// previous mtime. The mtime only needs to differ; no legacy reader of a
+// fenced path orders mtimes.
 func distinctFenceSentinel(abs string) time.Time {
 	sentinel := fenceSentinel()
 	if info, err := wsstate.Stat(abs); err == nil {
@@ -284,9 +445,10 @@ func randomFenceSentinel() time.Time {
 	return time.Unix(lo+2*n, 0)
 }
 
-// writeFenceFile writes data beside abs, stamps it with mtime and atomically
-// replaces abs with it.
-func writeFenceFile(abs string, data []byte, mtime time.Time) error {
+// publishFile durably replaces abs with data stamped mtime. The temporary
+// file's data and mtime are synced before the rename, and the directory
+// after it (invariant 4).
+func (s *Store) publishFile(abs string, data []byte, mtime time.Time) error {
 	f, err := wsstate.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".cutover-*.tmp")
 	if err != nil {
 		return err
@@ -302,50 +464,45 @@ func writeFenceFile(abs string, data []byte, mtime time.Time) error {
 		_ = f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
 	if err := f.Close(); err != nil {
 		return err
 	}
 	if err := os.Chtimes(tmp, mtime, mtime); err != nil {
 		return err
 	}
+	if err := syncFile(tmp); err != nil {
+		return err
+	}
 	if err := wsstate.AtomicReplaceFile(tmp, abs); err != nil {
 		return err
 	}
 	ok = true
-	return nil
+	if err := s.hit("fence-renamed"); err != nil {
+		return err
+	}
+	return s.syncDir(filepath.Dir(abs))
 }
 
-func (s *Store) prepareFence(ctx context.Context, rel, digest string, mtime int64, witness string) error {
-	return s.write(ctx, durable, func(tx *sql.Tx) error {
-		state, _, err := importState(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if state == importComplete {
-			return ErrImportComplete
-		}
-		cond := ``
-		if witness != "" {
-			cond = ` AND state = 'present'`
-		}
-		kind := "replace"
-		if witness != "" {
-			kind = "remove"
-		}
-		res, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET fence_state = 'intent', fence_digest = ?, fence_mtime = ?, fence_witness = ?, fence_required = 1, fence_kind = ? WHERE path = ?`+cond, digest, mtime, witness, kind, rel)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n != 1 {
-			return fmt.Errorf("wsmeta: no staged capture %q to fence", rel)
-		}
-		return nil
-	})
+// Durability seams: syncFile flushes a file's data and metadata, and
+// syncDirectory makes the entries of a directory durable (sync_*.go).
+var (
+	syncFile      = syncFileData
+	syncDirectory = platformSyncDir
+)
+
+func syncFileData(p string) error {
+	f, err := os.OpenFile(p, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
+
+func (s *Store) syncDir(dir string) error { return syncDirectory(dir) }
 
 func (s *Store) markFenceLanded(ctx context.Context, rel string) error {
 	return s.write(ctx, durable, func(tx *sql.Tx) error {
@@ -495,15 +652,27 @@ type captureMeta struct {
 	fenceMtime                                                      int64
 }
 
-// fenceProven reports whether the migration's own fence on a capture is the
-// live file: a replacement fence's digest and sentinel time, or a removal
-// fence's absent path with the original bytes at its witness. unread is set
-// when the witness could not be read for a transient reason.
+// loadCaptureMeta reads one capture row's state and fence columns.
+func loadCaptureMeta(ctx context.Context, q querier, rel string) (captureMeta, bool, error) {
+	var m captureMeta
+	err := q.QueryRowContext(ctx, `SELECT state, digest, fence_state, fence_digest, fence_witness, fence_kind, fence_required, fence_mtime FROM legacy_captures WHERE path = ?`, rel).
+		Scan(&m.state, &m.digest, &m.fenceState, &m.fenceDigest, &m.fenceWitness, &m.fenceKind, &m.fenceRequired, &m.fenceMtime)
+	if errors.Is(err, sql.ErrNoRows) {
+		return m, false, nil
+	}
+	return m, err == nil, err
+}
+
+// fenceProven reports whether the live state is the publication of the
+// row's fence record (invariant 2). For a replacement that is the record's
+// digest under its exact sentinel time. For a removal it is rel absent, with
+// the witness in the staged original's state. unread is set when the witness
+// could not be read for a transient reason.
 func (s *Store) fenceProven(prev captureMeta, got legacyRead) (proven, unread bool) {
 	if prev.fenceState == FenceNone {
 		return false, false
 	}
-	if prev.fenceWitness != "" {
+	if prev.fenceKind == fenceRemove {
 		if got.state != CaptureAbsent {
 			return false, false
 		}
@@ -511,7 +680,7 @@ func (s *Store) fenceProven(prev captureMeta, got legacyRead) (proven, unread bo
 		if w.transient {
 			return false, true
 		}
-		return w.state == CapturePresent && w.digest == prev.digest, false
+		return w.state == prev.state && w.digest == prev.digest, false
 	}
 	return got.state == CapturePresent && got.digest == prev.fenceDigest &&
 		got.mtime.Unix() == prev.fenceMtime && got.mtime.Nanosecond() == 0, false
@@ -579,9 +748,11 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		res.Files++
 		got := readLegacy(filepath.Join(s.dir, filepath.FromSlash(rel)), s.opts.ReadFile)
 		prev, had := existing[rel]
-		// A fenced original is never given up to a confirmed failure: the
-		// live file is the fence's result.
-		if got.confirmable && !(had && prev.fenceState != FenceNone) {
+		// A confirmed failure never replaces an original read before (a
+		// Windows pending delete can outlast the confirmation window) or a
+		// fenced one (the live file is the fence's result). Only an input
+		// that was never readable is confirmed unreadable.
+		if got.confirmable && !(had && (prev.state == CapturePresent || prev.fenceState != FenceNone)) {
 			// Once confirmed, the capture stays unreadable while the same
 			// denial persists; only a successful read changes it.
 			confirmed := had && prev.state == CaptureUnreadable
@@ -624,25 +795,28 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 				return err
 			}
 			if proven {
-				// The migration's own fence is the live file: keep the original.
+				// The record's publication is the live state: keep the
+				// original. Until the publication is known durable it stays
+				// pending (invariant 4).
 				res.Reused++
+				if prev.fenceRequired && prev.fenceState != FenceLanded {
+					res.Pending = append(res.Pending, rel)
+				}
 				_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ? WHERE path = ?`, attempt, gen, rel)
 				return err
 			}
+			// Nothing the migration published is live: the live state is the
+			// original and the record goes (invariant 1). The obligation
+			// outlives this and a restart (invariant 5).
 			if prev.fenceState != FenceNone {
 				res.Unfenced = append(res.Unfenced, rel)
 			}
-			// The obligation outlives the re-stage below and a restart. A
-			// removal is satisfied by a path that is absent and was staged
-			// absent: nothing is left to retain or fence.
-			removed := prev.fenceKind == "remove" && prev.fenceState == FenceNone && prev.state == CaptureAbsent && got.state == CaptureAbsent
-			if prev.fenceRequired && !removed {
+			if prev.fenceRequired {
 				res.Pending = append(res.Pending, rel)
 			}
 		}
 		if had && got.state != CaptureUnreadable && prev.state == got.state && prev.digest == got.digest {
-			// Unchanged original (its fence, if any, never landed).
-			_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ?, fence_state = 'none', fence_digest = '', fence_mtime = 0, fence_witness = '' WHERE path = ?`, attempt, gen, rel)
+			_, err := tx.ExecContext(ctx, `UPDATE legacy_captures SET attempt = ?, session_gen = ?, fence_state = 'none', fence_digest = '', fence_mtime = 0 WHERE path = ?`, attempt, gen, rel)
 			return err
 		}
 		res.Restaged++
@@ -651,7 +825,7 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 			ON CONFLICT(path) DO UPDATE SET store = excluded.store, reply_id = excluded.reply_id, session_gen = excluded.session_gen,
 				state = excluded.state, bytes = excluded.bytes, digest = excluded.digest, read_error = excluded.read_error,
 				attempt = excluded.attempt, captured_at = excluded.captured_at, fence_state = 'none', fence_digest = '',
-				fence_mtime = 0, fence_witness = '', import_status = '', import_detail = ''`,
+				fence_mtime = 0, import_status = '', import_detail = ''`,
 			rel, store, replyID, gen, got.state, got.bytes, got.digest, got.err, attempt, now)
 		return err
 	}
@@ -789,8 +963,17 @@ func (s *Store) confirmUnread(ctx context.Context, tx *sql.Tx, rel, readErr stri
 }
 
 // generationOf is the platform's directory generation (gen_*.go; a test
-// seam that simulates a missed recreation).
+// seam that simulates a missed recreation or a failed lookup). A lookup
+// that fails is inconclusive: it never falls back to a weaker token. A
+// weaker token would read as another incarnation and discard the session's
+// journal rows, fenced originals included. A non-absence error fails the
+// pass, which changes nothing, and the caller retries.
 var generationOf = dirGeneration
+
+// sessionGenError wraps an inconclusive generation lookup.
+func sessionGenError(id string, err error) error {
+	return fmt.Errorf("wsmeta: session %s identity unavailable (retry the pass): %w", id, err)
+}
 
 // sessionGenerations lists the session directories and their generations.
 func (s *Store) sessionGenerations() (map[string]string, error) {
@@ -813,7 +996,14 @@ func (s *Store) sessionGenerations() (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[e.Name()] = generationOf(filepath.Join(s.dir, sessionsDirName, e.Name()), info)
+		gen, err := generationOf(filepath.Join(s.dir, sessionsDirName, e.Name()), info)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, sessionGenError(e.Name(), err)
+		}
+		out[e.Name()] = gen
 	}
 	return out, nil
 }
@@ -831,7 +1021,14 @@ func (s *Store) sessionGeneration(id string) (string, bool, error) {
 	if !info.IsDir() {
 		return "", false, nil
 	}
-	return generationOf(filepath.Join(s.dir, sessionsDirName, id), info), true, nil
+	gen, err := generationOf(filepath.Join(s.dir, sessionsDirName, id), info)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, sessionGenError(id, err)
+	}
+	return gen, true, nil
 }
 
 const (

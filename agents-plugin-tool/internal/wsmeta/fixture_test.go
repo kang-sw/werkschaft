@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -21,12 +22,15 @@ func testOpts() Options {
 	return Options{Now: func() time.Time { return testNow }, CheckpointIdle: -1}
 }
 
-// testValidate stands in for the owners' legacy decoders that Phase 2 binds
-// (wsagent.ValidateLegacyRecord, wsdashboard.ValidateLegacyUsageHistory):
-// known record members keep their types, and every history sample needs a
-// positive asOf.
-func testValidate() map[string]func(string, []byte) error {
-	record := func(replyID string, raw []byte) error {
+// testValidate stands in for the owners' legacy decoders (the real ones are
+// wired in validators_wiring_test.go): known record members keep their
+// types, and every history sample needs a positive asOf. Each checks the
+// identity it is handed.
+func testValidate() map[string]LegacyValidator {
+	record := func(rel, replyID string, raw []byte) error {
+		if rel != "sessions/"+replyID+"/agent.json" {
+			return fmt.Errorf("record validator handed %q for %q", rel, replyID)
+		}
 		var r struct {
 			ReplyID   string `json:"reply_id"`
 			WSKey     string `json:"ws_session_key"`
@@ -42,7 +46,10 @@ func testValidate() map[string]func(string, []byte) error {
 		}
 		return nil
 	}
-	history := func(_ string, raw []byte) error {
+	history := func(rel, replyID string, raw []byte) error {
+		if replyID != "" || strings.Contains(rel, "/") || !strings.HasSuffix(rel, "history.json") {
+			return fmt.Errorf("history validator handed %q, %q", rel, replyID)
+		}
 		var h struct {
 			Samples []struct {
 				AsOf int64 `json:"asOf"`
@@ -58,7 +65,7 @@ func testValidate() map[string]func(string, []byte) error {
 		}
 		return nil
 	}
-	return map[string]func(string, []byte) error{
+	return map[string]LegacyValidator{
 		StoreAgentRecord:       record,
 		StoreUsageHistory:      history,
 		StoreUsageHistoryCodex: history,

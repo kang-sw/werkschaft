@@ -28,7 +28,7 @@ func TestValidateLegacyRecordMatchesReadRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, readErr := readRecord(dir)
-		err := ValidateLegacyRecord("abc", []byte(c.raw))
+		err := ValidateLegacyRecord("sessions/abc/agent.json", "abc", []byte(c.raw))
 		if (err == nil) != c.ok || (readErr == nil) != c.ok {
 			t.Errorf("%s: validator err %v, readRecord err %v, want ok=%v", name, err, readErr, c.ok)
 		}

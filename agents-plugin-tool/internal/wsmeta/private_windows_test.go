@@ -2,6 +2,7 @@ package wsmeta
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"unsafe"
@@ -9,7 +10,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// The database and its WAL carry a protected DACL with a single ACE for the
+// The database, its WAL and any journal carry a protected DACL with a single ACE for the
 // current user, on first open and on reopen.
 func TestDatabaseFilesHaveOwnerOnlyACL(t *testing.T) {
 	ctx := context.Background()
@@ -24,7 +25,11 @@ func TestDatabaseFilesHaveOwnerOnlyACL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, p := range []string{s.Path(), s.Path() + "-wal"} {
+		paths := []string{s.Path(), s.Path() + "-wal"}
+		if _, err := os.Lstat(s.Path() + "-journal"); err == nil {
+			paths = append(paths, s.Path()+"-journal")
+		}
+		for _, p := range paths {
 			sd, err := windows.GetNamedSecurityInfo(p, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 			if err != nil {
 				t.Fatalf("%s: %v", p, err)

@@ -284,3 +284,47 @@ func TestClearedDenialResetsItsCount(t *testing.T) {
 		t.Fatalf("selector = %+v, want the earlier readable capture", c)
 	}
 }
+
+// A confirmable denial of a file that an earlier pass read is never
+// confirmed: a Windows pending delete can outlast the confirmation window,
+// so the staged original stands and the import waits.
+func TestDenialAfterAReadablePassKeepsTheOriginal(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	prev := classifyReadError
+	classifyReadError = func(error) readClass { return classConfirmable }
+	t.Cleanup(func() { classifyReadError = prev })
+	const record = "sessions/worker/agent.json"
+	now := testNow
+	denied := false
+	opts := testOpts()
+	opts.Now = func() time.Time { return now }
+	opts.ReadFile = func(p string) ([]byte, error) {
+		if denied && p == filepath.Join(dir, filepath.FromSlash(record)) {
+			return nil, &fs.PathError{Op: "open", Path: p, Err: errACLDenied}
+		}
+		return os.ReadFile(p)
+	}
+	s := openTest(t, dir, opts)
+	if _, err := s.Stage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	staged := captureMap(t, s)[record]
+	denied = true
+	for i := 0; i < UnreadConfirmPasses+2; i++ {
+		now = now.Add(UnreadConfirmAfter)
+		res, err := s.Stage(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(res.Unread, []string{record}) {
+			t.Fatalf("pass %d unread = %v", i, res.Unread)
+		}
+	}
+	if c := captureMap(t, s)[record]; c.State != CapturePresent || !reflect.DeepEqual(c.Bytes, staged.Bytes) {
+		t.Fatalf("record = %+v, want the staged original", c)
+	}
+	if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrLegacyUnread) {
+		t.Fatalf("commit = %v", err)
+	}
+}
