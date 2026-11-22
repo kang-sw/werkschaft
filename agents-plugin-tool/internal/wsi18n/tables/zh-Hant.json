@@ -28,6 +28,8 @@
   "js.usage.legend": "用量圖表圖例",
   "js.usage.fivehour": "5小時",
   "js.usage.weekly": "每週",
+  "js.usage.key5h": "5h",
+  "js.usage.keyweekly": "週",
   "js.usage.age": "{0}分鐘前的值",
   "js.usage.unavailable": "用量無法取得",
   "js.usage.signinrequired": "需要登入",

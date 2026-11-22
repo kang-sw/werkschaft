@@ -28,6 +28,8 @@
   "js.usage.legend": "Legende zum Nutzungsdiagramm",
   "js.usage.fivehour": "5 Stunden",
   "js.usage.weekly": "Wöchentlich",
+  "js.usage.key5h": "5h",
+  "js.usage.keyweekly": "Wo",
   "js.usage.age": "Wert von vor {0} Min.",
   "js.usage.unavailable": "Nutzung nicht verfügbar",
   "js.usage.signinrequired": "Anmeldung erforderlich",

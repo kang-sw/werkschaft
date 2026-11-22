@@ -28,6 +28,8 @@
   "js.usage.legend": "사용량 차트 범례",
   "js.usage.fivehour": "5시간",
   "js.usage.weekly": "주간",
+  "js.usage.key5h": "5h",
+  "js.usage.keyweekly": "주",
   "js.usage.age": "{0}분 전 값",
   "js.usage.unavailable": "사용량을 확인할 수 없음",
   "js.usage.signinrequired": "로그인 필요",

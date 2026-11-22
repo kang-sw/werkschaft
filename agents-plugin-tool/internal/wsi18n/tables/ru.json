@@ -28,6 +28,8 @@
   "js.usage.legend": "Легенда графика использования",
   "js.usage.fivehour": "5 часов",
   "js.usage.weekly": "За неделю",
+  "js.usage.key5h": "5ч",
+  "js.usage.keyweekly": "нед",
   "js.usage.age": "значение {0} мин назад",
   "js.usage.unavailable": "использование недоступно",
   "js.usage.signinrequired": "требуется вход",

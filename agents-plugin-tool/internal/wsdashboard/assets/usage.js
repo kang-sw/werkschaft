@@ -148,7 +148,8 @@
       historyUnavailable: "js.usage.historyunavailable", historyEmpty: "js.usage.historyempty",
       historyRecorded: "js.usage.historyrecorded", historyEarlier: "js.usage.historyearlier",
       currentOnly: "js.usage.currentonly", noObservation: "js.usage.noobservation", notLoggedIn: "js.usage.notloggedin",
-      observed: "js.usage.observed", ideal: "js.usage.ideal", latest: "js.usage.latest", estimated: "js.usage.estimated"
+      observed: "js.usage.observed", ideal: "js.usage.ideal", latest: "js.usage.latest", estimated: "js.usage.estimated",
+      key5h: "js.usage.key5h", keyWeekly: "js.usage.keyweekly"
     };
     function t(key) { return window.wsT.apply(null, [keys[key]].concat(Array.prototype.slice.call(arguments, 1))); }
     function locale() { return window.wsI18n.lang; }
@@ -245,7 +246,7 @@
             number = el("span", "usage-number", Math.round(w.percent));
             number.appendChild(el("span", "usage-percent", "%"));
           }
-          current.appendChild(el("span", "usage-key", kind === "five_hour" ? "5h" : "주")); current.appendChild(number);
+          current.appendChild(el("span", "usage-key", kind === "five_hour" ? t("key5h") : t("keyWeekly"))); current.appendChild(number);
           column.appendChild(current);
           if (noRecent) {
             var last = lastReading(w, at, now);

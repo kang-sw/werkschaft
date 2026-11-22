@@ -319,7 +319,8 @@ test('footer matches normal, over-pace and weekly-only reference columns', async
   env.window.WsUsage.mount(env.doc, env.top); await flush();
   const columns = groups(env.button).map(g => g.querySelector('.usage-columns').children);
   assert.deepEqual(columns.map(c => c.length), [2, 1]);
-  assert.deepEqual(columns.flatMap(c => c.map(v => v.querySelector('.usage-key').textContent)), ['5h', '주', '주']);
+  assert.deepEqual(columns.flatMap(c => c.map(v => v.querySelector('.usage-key').textContent)), ['5h', 'wk', 'wk']);
+  assert.deepEqual([env.window.wsT('js.usage.key5h'), env.window.wsT('js.usage.keyweekly')], ['5h', 'wk']); // en locale: English short keys
   assert.deepEqual(columns.flatMap(c => c.map(v => v.querySelector('.usage-number').textContent)), ['20%', '53%', '38%']);
   assert.deepEqual(columns.flatMap(c => c.map(v => v.querySelector('.usage-pace').textContent)), ['−13%', '−13%', '−7%']);
   assert.ok(columns[0][0].querySelector('.under'));
@@ -809,7 +810,7 @@ test('stale 5h 0% with fresh weekly shows em-dash/no-report and weekly heading a
   env.ticks[0].fn(); await flush();
   const cols2 = groups(env.button)[0].querySelector('.usage-columns').children;
   assert.equal(cols2.length, 1);
-  assert.equal(cols2[0].querySelector('.usage-key').textContent, '주');
+  assert.equal(cols2[0].querySelector('.usage-key').textContent, 'wk');
   assert.equal(cols2[0].querySelector('.usage-number').textContent, '2%');
   assert.equal(env.button.querySelector('.usage-clock'), null);
   const empty5 = pop.el.querySelector('.usage-window-empty');
