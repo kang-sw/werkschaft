@@ -3,7 +3,6 @@ package wsauditstore
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"sort"
 	"unicode/utf8"
 
@@ -233,40 +232,61 @@ func summarize(rest []wsaudit.Redaction) []wsaudit.Redaction {
 	return out
 }
 
-// boundMeta reserves required meta keys, keeps optional entries in key order
-// while the metadata fits, and records the dropped ones in one marker.
-func boundMeta(ev wsaudit.Envelope) (wsaudit.Envelope, error) {
+// requiredMeta is meta's required keys with their bool values: what
+// bounding always keeps.
+func requiredMeta(meta map[string]any) map[string]any {
 	kept := map[string]any{}
 	for _, key := range requiredMetaKeys {
-		if v, ok := ev.Meta[key].(bool); ok {
+		if v, ok := meta[key].(bool); ok {
 			kept[key] = v
 		}
 	}
-	var optional []string
-	for key := range ev.Meta {
+	return kept
+}
+
+// optionalMeta returns meta's optional keys (neither kept nor the marker)
+// in key order, each entry's exact encoded size as it sits in the meta
+// object (key, colon, value, comma), and their total.
+func optionalMeta(meta, kept map[string]any) (keys []string, sizes []int, total int, err error) {
+	for key := range meta {
 		if _, req := kept[key]; !req && key != MetaTruncated {
-			optional = append(optional, key)
+			keys = append(keys, key)
 		}
 	}
-	sort.Strings(optional)
-	sizes := make([]int, len(optional))
-	totalBytes := 0
-	for i, key := range optional {
+	sort.Strings(keys)
+	sizes = make([]int, len(keys))
+	for i, key := range keys {
 		k, err := json.Marshal(key)
 		if err != nil {
-			return ev, err
+			return nil, nil, 0, err
 		}
-		v, err := json.Marshal(ev.Meta[key])
+		v, err := json.Marshal(meta[key])
 		if err != nil {
-			return ev, err
+			return nil, nil, 0, err
 		}
 		sizes[i] = len(k) + 1 + len(v) + 1
-		totalBytes += sizes[i]
+		total += sizes[i]
 	}
-	// Size the base with a marker as wide as it can get.
+	return keys, sizes, total, nil
+}
+
+// truncationMarker is the marker counting dropped optional entries.
+func truncationMarker(dropped, droppedBytes int) map[string]any {
+	return map[string]any{"dropped_keys": dropped, "dropped_bytes": droppedBytes}
+}
+
+// boundMeta reserves required meta keys, keeps optional entries in key order
+// while the metadata fits, and records the dropped ones in one marker.
+func boundMeta(ev wsaudit.Envelope) (wsaudit.Envelope, error) {
+	kept := requiredMeta(ev.Meta)
+	optional, sizes, totalBytes, err := optionalMeta(ev.Meta, kept)
+	if err != nil {
+		return ev, err
+	}
+	// Size the base with a marker as wide as it can get: metaFloor.
 	base := ev
 	base.Meta = cloneMeta(kept)
-	base.Meta[MetaTruncated] = map[string]any{"dropped_keys": len(optional), "dropped_bytes": totalBytes}
+	base.Meta[MetaTruncated] = truncationMarker(len(optional), totalBytes)
 	used, err := metadataSize(base)
 	if err != nil {
 		return ev, err
@@ -289,7 +309,7 @@ func boundMeta(ev wsaudit.Envelope) (wsaudit.Envelope, error) {
 			}
 		}
 		if dropped > 0 {
-			out.Meta[MetaTruncated] = map[string]any{"dropped_keys": dropped, "dropped_bytes": droppedBytes}
+			out.Meta[MetaTruncated] = truncationMarker(dropped, droppedBytes)
 		}
 		n, err := metadataSize(out)
 		if err != nil {
@@ -302,31 +322,23 @@ func boundMeta(ev wsaudit.Envelope) (wsaudit.Envelope, error) {
 	}
 }
 
-// metaFloor is the least meta bounding can leave: the required keys and, when
-// optional keys exist, a truncation marker counting all of them.
+// metaFloor is the least meta bounding can leave — exactly what boundMeta
+// returns when it drops every optional key: the required keys and, when
+// optional keys exist, the marker counting all of them with their exact
+// encoded bytes. The redaction stage sizes against it, so the two stages
+// agree to the byte.
 func metaFloor(meta map[string]any) map[string]any {
 	if len(meta) == 0 {
 		return meta
 	}
-	out := map[string]any{}
-	optional, optionalBytes := 0, 0
-	for key, v := range meta {
-		if slices.Contains(requiredMetaKeys, key) {
-			if b, ok := v.(bool); ok {
-				out[key] = b
-				continue
-			}
-		}
-		if key == MetaTruncated {
-			continue
-		}
-		optional++
-		if raw, err := json.Marshal(v); err == nil {
-			optionalBytes += len(key) + len(raw) + 4
-		}
+	kept := requiredMeta(meta)
+	optional, _, total, err := optionalMeta(meta, kept)
+	out := cloneMeta(kept)
+	if err != nil {
+		return meta // unencodable meta fails the record later anyway
 	}
-	if optional > 0 {
-		out[MetaTruncated] = map[string]any{"dropped_keys": optional, "dropped_bytes": optionalBytes + len(meta)*8}
+	if len(optional) > 0 {
+		out[MetaTruncated] = truncationMarker(len(optional), total)
 	}
 	return out
 }

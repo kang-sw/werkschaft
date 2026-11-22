@@ -405,3 +405,36 @@ func TestPrepareSmallestConfigMaxRecordFitsSegment(t *testing.T) {
 		t.Fatalf("record %d, bound %d, segment %d", len(ln), lim.MaxRecordBytes(), lim.SegmentBytes())
 	}
 }
+
+// TestPrepareRedactionStageSizesTheExactMetaMarker pins the two bounding
+// stages to one marker size: the redaction stage reserves exactly the meta
+// floor the meta stage produces when it drops every optional key, so a record
+// with escape-heavy optional keys and thousands of redactions never ends a
+// byte over the bound.
+func TestPrepareRedactionStageSizesTheExactMetaMarker(t *testing.T) {
+	meta := map[string]any{wsaudit.MetaEstimated: true}
+	for i := 0; i < 40; i++ {
+		meta[strings.Repeat("\x01\"", 20)+fmt.Sprint(i)] = strings.Repeat("v", 4000)
+	}
+	for tokens := 2400; tokens < 2600; tokens += 7 {
+		var b strings.Builder
+		for i := 0; i < tokens; i++ {
+			fmt.Fprintf(&b, "token=v%05d ", i)
+		}
+		ev := testEnvelope(t, wsaudit.KindToolResult)
+		ev.Out = b.String()
+		ev.Meta = meta
+		got, err := prepare(ev, DefaultLimits())
+		if err != nil {
+			t.Fatalf("%d tokens: %v", tokens, err)
+		}
+		if size, _ := metadataSize(got); size > int(MetadataBound) {
+			t.Fatalf("%d tokens: metadata is %d bytes", tokens, size)
+		}
+		want, _ := json.Marshal(metaFloor(meta))
+		have, _ := json.Marshal(got.Meta)
+		if string(want) != string(have) {
+			t.Fatalf("meta floor %s, meta stage left %s", want, have)
+		}
+	}
+}
