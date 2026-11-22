@@ -14,10 +14,12 @@ import (
 )
 
 const (
-	CompanionModeKey     = "dashboard.companion_mode"
-	CompanionDirectorKey = "dashboard.companion_director"
-	CompanionPackKey     = "dashboard.companion_pack"
-	CompanionPresetKey   = "dashboard.companion_preset"
+	CompanionEnabledKey        = "dashboard.companion_enabled"
+	CompanionDirectorKey       = "dashboard.companion_director"
+	CompanionPackKey           = "dashboard.companion_pack"
+	CompanionPresetKey         = "dashboard.companion_preset"
+	CompanionAgentCooldownKey  = "dashboard.companion_agent_cooldown_seconds"
+	CompanionAgentHourlyCapKey = "dashboard.companion_agent_hourly_cap"
 
 	companionChangedPath  = "/config/companion-changed"
 	companionConfigHeader = "X-WS-Global-Config"
@@ -25,7 +27,8 @@ const (
 
 func IsCompanionConfigKey(key string) bool {
 	switch key {
-	case CompanionModeKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey:
+	case CompanionEnabledKey, CompanionDirectorKey, CompanionPackKey, CompanionPresetKey,
+		CompanionAgentCooldownKey, CompanionAgentHourlyCapKey:
 		return true
 	}
 	return false
@@ -34,10 +37,12 @@ func IsCompanionConfigKey(key string) bool {
 // CompanionConfig is the global configuration shared by every dashboard shell.
 // The pack field carries the selector so each shell can resolve auto itself.
 type CompanionConfig struct {
-	Mode     string `json:"mode"`
-	Director string `json:"director"`
-	Pack     string `json:"pack"`
-	Preset   string `json:"preset"`
+	Enabled              bool   `json:"enabled"`
+	Director             string `json:"director"`
+	Pack                 string `json:"pack"`
+	Preset               string `json:"preset"`
+	AgentCooldownSeconds int    `json:"agentCooldownSeconds"`
+	AgentHourlyCap       int    `json:"agentHourlyCap"`
 }
 
 type companionConfigSnapshot struct {
@@ -54,7 +59,7 @@ func (s *companionState) current() companionConfigSnapshot {
 	if snapshot := s.snapshot.Load(); snapshot != nil {
 		return *snapshot
 	}
-	return companionConfigSnapshot{config: CompanionConfig{Mode: "off", Director: "rules", Pack: "default", Preset: "werkschaft-d1"}}
+	return companionConfigSnapshot{config: CompanionConfig{Director: "rules", Pack: "default", Preset: "werkschaft-d1", AgentCooldownSeconds: 30, AgentHourlyCap: 20}}
 }
 
 // refreshCompanion reads the persisted global layer after a write or at daemon

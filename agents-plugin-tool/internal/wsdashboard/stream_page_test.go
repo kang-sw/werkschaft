@@ -148,14 +148,14 @@ check("the index stream", sockets[2].url, "ws://localhost:1234/events?h=" + enco
 shell = true;
 connect();
 check("the shell opts into rail rows", sockets[3].url, "ws://localhost:1234/rail/events?h=" + encodeURIComponent("board.3,head.4") + "&railrows=1&display=1");
-var companionUpdates = [], companion = {mode: "visual", director: "rules", pack: "auto", preset: "werkschaft-d1"};
+var companionUpdates = [], companion = {enabled: true, director: "rules", pack: "auto", preset: "werkschaft-d1", agentCooldownSeconds: 30, agentHourlyCap: 20};
 doc.addEventListener("ws-companion-config", function (e) { companionUpdates.push(e.detail); });
 sockets[3].msg("companion", companion);
 check("the shell publishes the live companion settings", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
 shell = false; framed = true; mode = "session";
 connect();
 check("the frame requests tree but not absent rail rows", sockets[4].url, "ws://localhost:1234/s/rid1/events?h=" + encodeURIComponent("board.3,head.4") + "&frame=1&topics=1&treerows=1&entryrows=1&panelrows=1&display=1");
-sockets[4].msg("companion", {mode: "off"});
+sockets[4].msg("companion", {enabled: false});
 check("a frame leaves the shell companion settings alone", [window.wsCompanionConfig, companionUpdates], [companion, [companion]]);
 var companionReads = [];
 // The empty panel region establishes the last keyed baseline on reconnect.

@@ -14,7 +14,7 @@ func TestCompanionConfigNotificationRequiresMachineCredential(t *testing.T) {
 	loads := 0
 	d.config = &ConfigBackend{Options: opts, LoadCompanion: func() (CompanionConfig, error) {
 		loads++
-		return CompanionConfig{Mode: "visual"}, nil
+		return CompanionConfig{Enabled: true}, nil
 	}}
 	path, err := wsconfig.GlobalPath(opts)
 	if err != nil {
@@ -48,7 +48,7 @@ func TestCompanionConfigNotificationRequiresMachineCredential(t *testing.T) {
 			}
 		})
 	}
-	if loads != 1 || d.companion.current().config.Mode != "visual" {
+	if loads != 1 || !d.companion.current().config.Enabled {
 		t.Fatalf("companion settings reloaded %d times: %+v", loads, d.companion.current().config)
 	}
 	current := d.companion.current()

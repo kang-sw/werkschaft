@@ -742,7 +742,7 @@
   var shFrames = [], shOn = null, shWant = null, shLeaving = null, shHeadHtml = null, shSeq = 0, shTrackerRev = null;
   var shIndex = 0, shRestoring = null, shRestoreNav = null, shRestoreTimer = null;
   var shTop = doc.querySelector(".dwrap > .top"), shBody = doc.querySelector(".dwrap > .dbody");
-  var shCompanion = null, shCompanionFrame = null, shCompanionMuted = false, shCompanionMode = "off";
+  var shCompanion = null, shCompanionFrame = null, shCompanionMuted = false, shCompanionEnabled = false;
   function shCompanionTarget(ent, refreshed, switched) {
     if (!shCompanion || shCompanionFrame === ent && !refreshed) return;
     if (shCompanionFrame && shCompanionFrame !== ent) shSend(shCompanionFrame, "companion-gate", { active: false });
@@ -760,9 +760,10 @@
   }
   function shCompanionConfigure(config) {
     if (!config || !window.WsCompanion) return;
-    if (config.mode !== shCompanionMode) shCompanionMuted = false;
-    shCompanionMode = config.mode;
-    if (shCompanionMuted || config.mode !== "visual" && config.mode !== "full") {
+    var enabled = config.enabled === true;
+    if (enabled !== shCompanionEnabled) shCompanionMuted = false;
+    shCompanionEnabled = enabled;
+    if (shCompanionMuted || !enabled) {
       shCompanionStop();
       return;
     }
