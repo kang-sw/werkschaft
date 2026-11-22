@@ -196,6 +196,14 @@ func (h *Hosted) noticeStopped(j *hostedJob) {
 	h.admitStopNoticeLocked(j, StopNoticeNone)
 }
 
+// stopNoticeOwedLocked reports whether j's user-stop notice is still owed: the
+// stop marked the job and owes a notice, and the outcome is not recorded yet
+// (none: its first admission is under way) or is pending (deferred, retried by
+// the timer). Pruning keeps such a row. h.mu is held.
+func stopNoticeOwedLocked(j *hostedJob) bool {
+	return j.userStopped && j.stopOwed && (j.stopNotice == StopNoticeNone || j.stopNotice == StopNoticePending)
+}
+
 // retryStopNotice admits a failed or deferred user-stop notice again.
 func (h *Hosted) retryStopNotice(j *hostedJob) {
 	j.noticeMu.Lock()

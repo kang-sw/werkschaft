@@ -184,8 +184,12 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 		return h.failStart(j, holder, errClosedBeforeStart)
 	}
 	// From here a stop waits for the hand-over and then ends the process.
+	// release opens that wait once, on every path out (a recovered panic in
+	// Spawn or in the start's cleanup included), so it is armed before them.
 	j.starting = false
 	spawned := make(chan struct{})
+	release := sync.OnceFunc(func() { close(spawned) })
+	defer release()
 	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
@@ -194,10 +198,6 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	// MAX_PATH fails at process start, as it did before admission resolved
 	// it (the path reached the same CreateProcess).
 	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: realCwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
-	// release opens the hand-over wait once, on every path out (a panic in
-	// the start's cleanup included).
-	release := sync.OnceFunc(func() { close(spawned) })
-	defer release()
 	if err != nil {
 		if st.PID != 0 {
 			// The child started and only its remaining input failed.
@@ -333,10 +333,10 @@ func (h *Hosted) admit(j *hostedJob) error {
 			// A holder of it may still write its exit copy: it stays, and
 			// counts toward the cap, until that holder is gone.
 			held++
-		case have.row.Notice == NoticePending || have.delivering || (have.userStopped && have.stopNotice == StopNoticePending):
-			// Its notice (the completion notice, or a user-stop notice a
-			// handed-off session deferred) is still owed; it stays until
-			// delivered.
+		case have.row.Notice == NoticePending || have.delivering || stopNoticeOwedLocked(have):
+			// Its notice (the completion notice, or a user-stop notice not
+			// recorded yet or deferred by a handed-off session) is still
+			// owed; it stays until delivered.
 		default:
 			finished = append(finished, have)
 		}
@@ -450,6 +450,9 @@ func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView
 	// An exit record the stop brought ended the job as stopped; the start's
 	// failure is still its story.
 	wasEnded := j.row.Terminal()
+	// An end a stop's exit record brought is already visible (stopped, maybe
+	// marked stopped-by-user); making it failed changes what a list shows.
+	visible := !wasEnded || j.row.State != HostedFailed || j.userStopped
 	j.row.State, j.row.Error = HostedFailed, cause.Error()
 	// Failed, whatever the stop that ended it first: not a user's stop.
 	j.userStopped, j.stopOwed = false, false
@@ -461,7 +464,7 @@ func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView
 	}
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	if !wasEnded {
+	if visible {
 		h.runningChanged()
 	}
 	h.save(j, row, rev)

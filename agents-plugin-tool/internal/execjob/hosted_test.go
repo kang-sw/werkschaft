@@ -130,10 +130,17 @@ type fakeExecHolders struct {
 	// beforeStop, when set, runs at the start of Stop, outside the lock
 	// (a test holds one stop in flight there).
 	beforeStop func(id string)
+	// afterUnknownStop, when set, runs once Stop has found its id unknown
+	// and read the census flag, before it answers (a scan that completes
+	// the census in that gap).
+	afterUnknownStop func()
 	// stopErr fails Stop: the holder stays, its child runs on. stopCalls
 	// counts Stop calls, failed ones included.
 	stopErr   error
 	stopCalls int
+	// stopEmitsExit makes Stop send the exit record of a holder whose
+	// process never started too, as a real holder's does for its job.
+	stopEmitsExit bool
 	// onLaunch runs inside LaunchWith, outside the lock, before the new
 	// holder's id reaches the job.
 	onLaunch func(id string)
@@ -231,11 +238,19 @@ func (f *fakeExecHolders) Stop(id string) error {
 		return err
 	}
 	if _, ok := f.live[id]; !ok {
+		incomplete, after := f.incomplete, f.afterUnknownStop
 		f.mu.Unlock()
+		if after != nil {
+			after()
+		}
+		if incomplete {
+			// Decided with the lookup, as the manager does.
+			return wsholder.ErrUnknownHolderIncomplete
+		}
 		return wsholder.ErrUnknownHolder
 	}
 	f.stopped = append(f.stopped, id)
-	running := !f.exited[id] && f.spawned[id].Argv != nil
+	running := !f.exited[id] && (f.spawned[id].Argv != nil || f.stopEmitsExit)
 	f.mu.Unlock()
 	if running {
 		sig := 15
@@ -346,6 +361,9 @@ type fakeExecSessions struct {
 	// (1-based), outside the lock: a test's interleaving point.
 	ownerCalls int
 	ownerHook  func(call int)
+	// beforeNotify, when set, runs at the start of Notify with the event id,
+	// outside the lock (a test holds an admission in flight there).
+	beforeNotify func(eventID string)
 }
 
 func newFakeExecSessions() *fakeExecSessions {
@@ -411,6 +429,12 @@ func (s *fakeExecSessions) handList() []execNotice {
 
 func (s *fakeExecSessions) Notify(id string, gen uint64, eventID, text string) (NoticeOutcome, error) {
 	s.mu.Lock()
+	hook := s.beforeNotify
+	s.mu.Unlock()
+	if hook != nil {
+		hook(eventID)
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.notifyErr != nil {
 		return 0, s.notifyErr
@@ -444,6 +468,8 @@ type hostedFixture struct {
 	// fastRetire makes the next open retry holder stops within
 	// milliseconds (HostedOptions.RetireRetryMin and RetireRetryMax).
 	fastRetire bool
+	// now is the next open's HostedOptions.Now (nil: the wall clock).
+	now func() time.Time
 }
 
 func newHostedFixture(t *testing.T, window time.Duration) *hostedFixture {
@@ -465,7 +491,7 @@ func newFastRetireFixture(t *testing.T, window time.Duration) *hostedFixture {
 // open builds a Hosted over the fixture's store, as a daemon start does.
 func (fx *hostedFixture) open(window time.Duration) {
 	fx.t.Helper()
-	opts := HostedOptions{Holders: fx.holders, Store: fx.store, Sessions: fx.sessions, ExitDir: fx.exitDir, Window: window, OnRunning: fx.onRunning}
+	opts := HostedOptions{Holders: fx.holders, Store: fx.store, Sessions: fx.sessions, ExitDir: fx.exitDir, Window: window, OnRunning: fx.onRunning, Now: fx.now}
 	if fx.fastRetire {
 		opts.RetireRetryMin, opts.RetireRetryMax = time.Millisecond, 4*time.Millisecond
 	}

@@ -895,10 +895,17 @@ func TestSpawnFailureSettlesBeforeAWaitingUserStopReturns(t *testing.T) {
 	}
 	stopped := make(chan error, 1)
 	go func() { _, err := fx.h.StopByUser("lead", id); stopped <- err }()
+	// Once the stop owns the attempt it can only be waiting for the
+	// hand-over: the spawn has not returned, so it cannot have finished.
+	eventuallyExec(t, "the stop to own its attempt", func() bool {
+		fx.h.mu.Lock()
+		defer fx.h.mu.Unlock()
+		return fx.h.jobs[id].stopAttempt != nil
+	})
 	select {
 	case err := <-stopped:
 		t.Fatalf("the stop returned before the hand-over settled: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 	close(release)
 	if err := <-launched; err == nil {
@@ -956,7 +963,11 @@ func TestDeferredStopNoticeRetriesWithoutMovingTheRevision(t *testing.T) {
 // a user-stopped job whose notice a handed-off session deferred, as it keeps a
 // row with a pending completion notice, so the retry on takeover still finds it.
 func TestPruneKeepsAJobWhoseStopNoticeIsStillPending(t *testing.T) {
-	fx := newHostedFixture(t, time.Second)
+	// One frozen clock: every job ends in the same millisecond, so only the
+	// order they ended in (endSeq) ranks them for pruning.
+	frozen := time.UnixMilli(1_700_000_000_000)
+	fx := &hostedFixture{t: t, holders: newFakeExecHolders(), sessions: newFakeExecSessions(), store: newMemHostedStore(), exitDir: t.TempDir(), now: func() time.Time { return frozen }}
+	fx.open(time.Second)
 	fx.sessions.mu.Lock()
 	fx.sessions.outcome = NoticeDeferred
 	fx.sessions.mu.Unlock()
@@ -978,5 +989,143 @@ func TestPruneKeepsAJobWhoseStopNoticeIsStillPending(t *testing.T) {
 	}
 	if n := len(fx.h.Jobs("lead")); n > HostedMaxJobs+1 {
 		t.Fatalf("jobs = %d: nothing else was pruned either", n)
+	}
+}
+
+// TestUserStopOfAHolderTheCensusCompletesAfterItsLookupStillFails: the
+// manager's answer is taken with its index lookup. A scan that indexes the
+// holder and completes the census right after must not turn that answer into
+// a success: the job stays running and unmarked, with no notice.
+func TestUserStopOfAHolderTheCensusCompletesAfterItsLookupStillFails(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	v := fx.asyncJob(HostedLaunch{})
+	fx.holders.mu.Lock()
+	session := fx.holders.live[v.HolderID]
+	delete(fx.holders.live, v.HolderID)
+	fx.holders.incomplete = true
+	fx.holders.afterUnknownStop = func() {
+		// The rediscovering scan: the holder is indexed, the census complete.
+		fx.holders.mu.Lock()
+		fx.holders.live[v.HolderID] = session
+		fx.holders.incomplete = false
+		fx.holders.mu.Unlock()
+	}
+	fx.holders.mu.Unlock()
+	if _, err := fx.h.StopByUser("lead", v.ID); err == nil {
+		t.Fatal("a stop answered unknown under an incomplete census must fail, whatever a later scan finds")
+	}
+	fx.h.mu.Lock()
+	j := fx.h.jobs[v.ID]
+	state, intent, stopping := j.row.State, j.stopIntent, j.stopping
+	fx.h.mu.Unlock()
+	if state != HostedRunning || intent || stopping || len(fx.sessions.noticeList()) != 0 {
+		t.Fatalf("state %s intent %v stopping %v notices %+v", state, intent, stopping, fx.sessions.noticeList())
+	}
+	fx.holders.mu.Lock()
+	fx.holders.afterUnknownStop = nil
+	fx.holders.mu.Unlock()
+	if sum, err := fx.h.StopByUser("lead", v.ID); err != nil || sum.State != HostedStopped || !sum.StoppedByUser {
+		t.Fatalf("the retry against the indexed holder = %+v, %v", sum, err)
+	}
+}
+
+// TestPruneKeepsAUserStoppedJobThroughItsFirstNoticeAdmission: from the end
+// of a marked stop until its first notice outcome is recorded, the row is owed
+// that notice and pruning must keep it, or a deferred first outcome schedules
+// a retry for a job the timer cannot find.
+func TestPruneKeepsAUserStoppedJobThroughItsFirstNoticeAdmission(t *testing.T) {
+	frozen := time.UnixMilli(1_700_000_000_000)
+	fx := &hostedFixture{t: t, holders: newFakeExecHolders(), sessions: newFakeExecSessions(), store: newMemHostedStore(), exitDir: t.TempDir(), now: func() time.Time { return frozen }}
+	fx.open(time.Second)
+	first := fx.asyncJob(HostedLaunch{})
+	for i := 1; i < HostedMaxJobs; i++ {
+		fx.asyncJob(HostedLaunch{})
+	}
+	inFlight, release := make(chan struct{}), make(chan struct{})
+	fx.sessions.mu.Lock()
+	fx.sessions.outcome = NoticeDeferred
+	fx.sessions.beforeNotify = func(string) {
+		close(inFlight)
+		<-release
+	}
+	fx.sessions.mu.Unlock()
+	stopped := make(chan HostedSummary, 1)
+	go func() { s, _ := fx.h.StopByUser("lead", first.ID); stopped <- s }()
+	<-inFlight // the first admission is in flight: no outcome is recorded yet
+	fx.sessions.mu.Lock()
+	fx.sessions.beforeNotify = nil
+	fx.sessions.mu.Unlock()
+	fx.asyncJob(HostedLaunch{}) // the 201st job: admission prunes a finished one
+	if _, err := fx.h.Get("lead", first.ID); err != nil {
+		t.Fatalf("the stopped job was pruned while its notice was being admitted: %v", err)
+	}
+	close(release)
+	if s := <-stopped; s.StopNotice != StopNoticePending {
+		t.Fatalf("the deferred first outcome = %+v", s)
+	}
+	fx.sessions.mu.Lock()
+	fx.sessions.outcome = 0
+	fx.sessions.mu.Unlock()
+	fx.h.deliverPending()
+	if n := stopNotices(fx); len(n) != 1 || n[0].event != "exec:"+first.ID+":stopped-by-user" {
+		t.Fatalf("the retry did not find the job: %+v", n)
+	}
+}
+
+// TestFailStartThatFindsAStopsExitRecordMovesTheRevision: a holder whose stop
+// sends its exit record ends the job as stopped-by-user for a moment; the
+// start's cleanup then makes it failed, which changes what the list shows, so
+// the revision moves once more and the job ends failed and unmarked.
+func TestFailStartThatFindsAStopsExitRecordMovesTheRevision(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	fx := &hostedFixture{t: t, holders: newFakeExecHolders(), sessions: newFakeExecSessions(), store: newMemHostedStore(), exitDir: t.TempDir()}
+	fx.onRunning = func() {
+		state := "none"
+		if jobs := fx.h.Jobs("lead"); len(jobs) == 1 {
+			state = jobs[0].State
+			if jobs[0].StoppedByUser {
+				state += "/user"
+			}
+		}
+		mu.Lock()
+		seen = append(seen, state)
+		mu.Unlock()
+	}
+	fx.open(time.Second)
+	entered, release := make(chan string, 1), make(chan struct{})
+	fx.holders.mu.Lock()
+	fx.holders.stopEmitsExit = true
+	fx.holders.spawnErr = errors.New("spawn refused")
+	fx.holders.beforeSpawn = func(id string) {
+		entered <- id
+		<-release
+	}
+	fx.holders.mu.Unlock()
+	launched := make(chan error, 1)
+	go func() {
+		_, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true, Display: "x", Command: "x"})
+		launched <- err
+	}()
+	<-entered
+	id := fx.h.Jobs("lead")[0].ID
+	stopped := make(chan error, 1)
+	go func() { _, err := fx.h.StopByUser("lead", id); stopped <- err }()
+	eventuallyExec(t, "the stop to own its attempt", func() bool {
+		fx.h.mu.Lock()
+		defer fx.h.mu.Unlock()
+		return fx.h.jobs[id].stopAttempt != nil
+	})
+	close(release)
+	<-launched
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	sum := fx.h.Jobs("lead")[0]
+	mu.Lock()
+	last := seen[len(seen)-1]
+	mu.Unlock()
+	if sum.State != HostedFailed || sum.StoppedByUser || last != HostedFailed {
+		t.Fatalf("job %+v; the states the revisions saw = %v", sum, seen)
 	}
 }

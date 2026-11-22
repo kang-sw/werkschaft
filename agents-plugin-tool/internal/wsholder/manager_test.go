@@ -1235,3 +1235,36 @@ func TestScanKeepsAnAgedDirectoryWhoseDescriptorDoesNotRead(t *testing.T) {
 		t.Error("a scan with only cleared orphans still listed as incomplete")
 	}
 }
+
+// TestStopOfAnUnknownHolderSaysWhetherTheCensusWasComplete: an id the index
+// lacks is absent for certain only when the last scan read every
+// registration; otherwise the answer, taken with the lookup, says the holder
+// may still run, and it stays that answer after a later scan completes.
+func TestStopOfAnUnknownHolderSaysWhetherTheCensusWasComplete(t *testing.T) {
+	dir := testHoldersDir(t)
+	m := testManager(t, dir, nil)
+	m.Scan()
+	err := m.Stop("nobody")
+	if !errors.Is(err, ErrUnknownHolder) || errors.Is(err, ErrUnknownHolderIncomplete) {
+		t.Fatalf("a stop under a complete census = %v", err)
+	}
+	holderDir := filepath.Join(dir, "unreadable")
+	if err := os.MkdirAll(holderDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(holderDir, descriptorName), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	err = m.Stop("nobody")
+	if !errors.Is(err, ErrUnknownHolder) || !errors.Is(err, ErrUnknownHolderIncomplete) {
+		t.Fatalf("a stop under an incomplete census = %v", err)
+	}
+	if err := os.RemoveAll(holderDir); err != nil {
+		t.Fatal(err)
+	}
+	m.Scan()
+	if err := m.Stop("nobody"); errors.Is(err, ErrUnknownHolderIncomplete) {
+		t.Fatalf("a stop after a complete scan = %v", err)
+	}
+}

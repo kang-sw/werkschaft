@@ -112,14 +112,17 @@ func (h *Hosted) stopHolderOf(j *hostedJob) error {
 		h.mu.Unlock()
 		return fmt.Errorf("stop exec job %s: %w", j.row.ID, err)
 	}
-	if err != nil && h.opts.Holders.List().Incomplete {
+	if errors.Is(err, wsholder.ErrUnknownHolderIncomplete) {
 		// Unknown to the manager is proof of absence only from a census that
 		// read every holder: an incomplete one may omit a live holder (an
 		// unreadable descriptor), and ending the job here would hide it from
 		// the reconciliation that settles it once a scan reads them all. The
-		// job stays running and the stop can be retried.
+		// manager took this answer with its index lookup, so a scan that
+		// indexes the holder afterwards cannot turn it into a success. The job
+		// stays running; the stop keeps failing until the holder is indexed or
+		// a scan completes the census, and can then be retried.
 		h.mu.Unlock()
-		return fmt.Errorf("stop exec job %s: its holder is not known and the holder census is incomplete, so it may still run; retry once a scan reads every holder", j.row.ID)
+		return fmt.Errorf("stop exec job %s: %w; retry once a scan reads every holder", j.row.ID, err)
 	}
 	// The holder is gone and its exit record did not arrive first.
 	j.row.State = HostedStopped
