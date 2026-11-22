@@ -964,6 +964,53 @@ func TestHostedExitCopyStaysUntilTheEndIsStored(t *testing.T) {
 	eventuallyExec(t, "the owed notice", func() bool { return len(fx.sessions.noticeList()) == 1 })
 }
 
+// TestHostedDroppedJobTakesItsOwedExitCopy: a finished job whose terminal
+// row was never stored keeps its exit copy until the job cap drops it;
+// dropping the job deletes its row and removes the copy with it.
+func TestHostedDroppedJobTakesItsOwedExitCopy(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(fx.exitDir, v.ID+".json")
+	code := 0
+	raw, _ := json.Marshal(wsholder.Exit{ExitCode: &code, Reason: "child_exited"})
+	if err := os.WriteFile(copyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.store.mu.Lock()
+	fx.store.failPut = func(r HostedJobRow) bool { return r.Terminal() }
+	fx.store.mu.Unlock()
+	fx.holders.exit(v.HolderID, code)
+	eventuallyExec(t, "the delivered notice", func() bool {
+		got, _ := fx.h.Get("lead", v.ID)
+		return got.Notice == NoticeDelivered
+	})
+	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
+	fx.h.HolderGone(wsholder.Descriptor{ID: v.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
+	if _, err := os.Stat(copyPath); err != nil {
+		t.Fatalf("the exit copy went before the end was stored: %v", err)
+	}
+	fx.store.mu.Lock()
+	fx.store.failPut = nil
+	fx.store.mu.Unlock()
+	for i := 0; i < HostedMaxJobs; i++ {
+		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fx.store.mu.Lock()
+	dropped := slices.Contains(fx.store.deleted, v.ID)
+	fx.store.mu.Unlock()
+	if !dropped {
+		t.Fatalf("the finished job %s was not dropped", v.ID)
+	}
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("the dropped job's exit copy stays: %v", err)
+	}
+}
+
 // TestHostedDeferredAndDroppedNotices: a deferred notice stays pending for
 // a later pass; a dropped one is never retried.
 func TestHostedDeferredAndDroppedNotices(t *testing.T) {

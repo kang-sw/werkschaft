@@ -439,15 +439,26 @@ func (h *Hosted) dropExitCopy(j *hostedJob) {
 }
 
 // forget marks dropped jobs never to be written again, then deletes their
-// rows: a write already under way finishes before the delete.
+// rows: a write already under way finishes before the delete. An exit copy
+// still owed (its terminal row never stored) goes with the deleted row;
+// if the delete fails, the row and its copy stay together for a successor.
 func (h *Hosted) forget(dropped []*hostedJob, ids []string) {
+	var owed []string
 	for _, j := range dropped {
 		j.saveMu.Lock()
 		j.saved = ^uint64(0)
+		if j.exitCopyOwed {
+			j.exitCopyOwed = false
+			owed = append(owed, j.row.ID)
+		}
 		j.saveMu.Unlock()
 	}
 	if err := h.opts.Store.Delete(ids...); err != nil {
 		h.logf("drop finished jobs: %v", err)
+		return
+	}
+	for _, id := range owed {
+		_ = os.Remove(h.exitCopyPath(id))
 	}
 }
 
