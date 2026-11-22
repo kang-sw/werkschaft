@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: bbbb91eecd66f6db
 sage-review-completeness-reviewed: bbbb91eecd66f6db
+completed: 2026-11-22
 ---
 
 # Audit segment ring, redaction and retention
@@ -375,6 +376,68 @@ per-session cap), verify one maximal encoded record with three capped bodies,
 breaks the knob set is refused and a loaded file that breaks it is clamped
 with a logged warning (Decision 3, (2129)=a).
 
+### Result (12ce5478f) - 2026-11-22
+
+Landed (commits 2b7bee20c, 72c888765, d05aba26b, fdb01530e, 12ce5478f on
+`impl/develop/silk-dairy-cane`):
+
+- `wsredact.Redact` returns per-match entries (rule, offset, original length)
+  and `MapOffset`; the legacy text-only entry point is unchanged.
+- New `internal/wsauditstore`: a per-session append-only segment ring with a
+  schema-versioned header snapshot line per segment, held append handle,
+  torn-tail trim, refusal of newer ring formats, 0700/0600 modes, and an
+  in-memory index. `prepare` normalizes identifiers, redacts every body in
+  full, maps model-seen bounds through masking and the per-body head/tail cap
+  (`stored_trunc` marker), and bounds metadata to 64 KiB (redactions in offset
+  order, then one summary per (field, rule); then required meta keys, optional
+  keys in key order, and one `meta_truncated` marker).
+- The store implements `wsaudit.SourcedSink`. `wsaudit/ident.go`,
+  `ident_test.go` and `source.go` are byte-identical to the capture-adapters
+  branch (94a00415b), so the second merge is a trivial conflict.
+- The daemon owns the store (`wsdashboard/audit.go`, `AuditSink()`), and the
+  config keys `dashboard.audit_{session_cap_mib,total_cap_mib,body_cap_kib,retention_days}`
+  are registered with defaults 256/4096/1024/7. A set that breaks the knob set
+  is refused, and a loaded file that breaks it is clamped with a warning.
+
+Decisions:
+
+- **Identity contract.** Replay identity uses the sibling's `SourcedSink`
+  contract verbatim. `Envelope.Source` was dropped, and the ring's event line
+  carries the `SourceID`.
+- **Recovery answers.** `Recover` and `Retained` answer from a per-ring
+  in-memory ledger and never wait on disk. An unloaded ring answers zero and
+  queues a load. The daemon calls `Preload` when it first sees a session.
+- **Writer rule.** The writer enforces the same rule as the capture side: a
+  retained or lost identity is a duplicate, and a covered identity is a loss.
+  The boundary moves only through `Finalize` (persisted as fin lines). Loss and
+  fin lines are written with the next record or when the writer goes idle.
+- **Bounds and sequence.** Seen bounds are stored in stored-body coordinates; a
+  cut inside a masked span rounds up past the mask. The store renumbers any seq
+  at or below `maxSeq`.
+
+Verification:
+
+- `go test ./internal/wsauditstore/ ./internal/wsaudit/ ./internal/wsredact/ ./internal/wsconfig/`: ok.
+- `go test -race -count=1 ./internal/wsauditstore/ ./internal/wsaudit/`: ok
+  (250.7s and 1.6s).
+- Covering tests: `TestPrepare*` (rule and length kept, straddling secret,
+  thousands of matches, call_id normalization, meta overflow, NUL-heavy body,
+  smallest-config max record), `TestStoreRestartReplayDedupsAndContinuesSequence`,
+  `TestStoreFailedWriteIsLossNeverLateAppend`,
+  `TestStoreFinalizedBoundaryRefusesLateRecords`,
+  `TestStoreRefusesNewerRingFormat`,
+  `TestStoreRecoversIndependentRingsModesAndHeldHandle`,
+  `TestStoreSlowOrFailingWriterNeverDelaysProducer`,
+  `TestStoreSiblingsOfOneSourceRecordAreAllRetained`, and
+  `TestLimitsValidateAndClamp`.
+- File ops (`TestStoreFileOpsPerAppendedEvent`, wsstate.FileIOCounters):
+  - 50 steady appends: 50 writes and 0 opens.
+  - 200 × 60 KiB through a 4 MiB ring with rotation: 230 ops (1.15 per event)
+    and 0 reads.
+  - The baseline was no audit persistence.
+- Compatibility tier: T0 (new on-disk ring under the daemon state directory,
+  new optional config keys; no existing format changed).
+
 ### Phase 2: Retention and byte caps
 
 Depends on Phase 1. Implement the retention knob (default 7 days after the
@@ -399,3 +462,65 @@ Verify a quiet hosted session with heartbeats but no captured events keeps its
 ring across restart until the retention knob expires.
 When the store total is reached, verify the active ring is evicted last and
 keeps its newest segment (Decision 3, (2129)=a).
+
+### Result (12ce5478f) - 2026-11-22
+
+Landed (commits d05aba26b and 12ce5478f on `impl/develop/silk-dairy-cane`):
+
+- **Per-session cap.** The cap drops the oldest whole segment first.
+- **Total cap.** The per-store total cap evicts whole rings in
+  least-recently-used order. The active ring goes last and keeps its newest
+  segment.
+- **Retention.** Retention removes rings whose session was last seen more than
+  `dashboard.audit_retention_days` ago. The value saturates at
+  `MaxRetentionDays` (106751).
+- **Session deletion.** Deleting a session removes its whole ring
+  (worktree-delete purge path). There is no purge action.
+
+Decisions:
+
+- **Last-seen timestamps.** They come from existing daemon index write points
+  only: first sighting, `OnRemove`, and the sweep's registry lookup. They are
+  persisted in the ring header snapshot, and nothing writes on heartbeats.
+  Registry pruning runs in ws-mcp processes, not in the daemon.
+- **Startup sweep.** The first sweep is deferred until the daemon index's first
+  `Refresh` (`DeferFirstSweep` plus `RequestSweep`), so it can consult the
+  registry.
+- **Knob scope.** The knobs are global (not per worktree).
+- **User docs.** CHANGELOG plus manifest descriptions in all three plugins,
+  and i18n strings.
+
+Verification:
+
+- `go test ./internal/wsauditstore/`: ok.
+- `go test -race -count=1 ./internal/wsdashboard/ -run 'TestAudit|TestWorktreeDeletePurgesEndedSessions'`: ok.
+- Covering tests: `TestSessionCapDropsOldestWholeSegments`,
+  `TestTotalCapEvictsWholeRingsLeastRecentlyUsed`, and
+  `TestTotalCapEvictsActiveRingLastKeepingNewest` (on-disk bytes measured,
+  reads see only retained events), plus:
+  - `TestRetentionExpiresIdleRingsAndLongerKnobKeepsThem`
+  - `TestDeleteSessionRemovesWholeRing`
+  - `TestLifecycleLastSeenSurvivesRegistryPruneAndRestart`
+  - `TestQuietHeartbeatingSessionKeepsRingAcrossRestart`
+  - `TestAuditLifecycleRecordsLastSeenAtWritePointsOnly`
+  - `TestAuditStartupSweepConsultsTheRegistry`
+  - manifest and config tests in `internal/mcp` (`dashboard_audit_config_test.go`)
+- Full suite `go test -count=1 -timeout 30m ./...`: the only failures are
+  pre-existing.
+  - Known develop reds.
+  - `internal/mcp`: `TestPlaybookPrintGoldenExplore*`,
+    `TestWaitingOnNudgeProductionTicketTreeRestartAndReblock` and
+    `TestWhiteboardCommandAcceptanceFirstTextRetryAndSequence`. These also fail
+    on b77c9fd69.
+  - `internal/wswhiteboard`: `TestDocFrameHandsOverviewKey`, which also fails
+    on b77c9fd69.
+  - `internal/wsagent`: `TestDaemonStartDeletesAnExpiredSubtreeWithoutALoop`
+    and `TestLeadCloseFencesConcurrentPiSpawn`. These are load flakes that pass
+    25 of 25 runs in isolation on both HEAD and base, and the runner harness
+    does not start the audit store.
+
+Unresolved (minor):
+
+- An unloaded ring evicted by the total cap loses its finalized boundaries.
+- LastSeen receives the normalized ID, so reply IDs longer than 256 bytes would
+  miss the registry lookup.
