@@ -8,6 +8,10 @@ related:
   261122-chore-ws-companion-official-art-pack: consumer; produces the official base library, outfit kit and head set on this schema
   261122-feat-ws-companion-director: owns the gear-opened modal and the global-only companion key pattern the wardrobe keys join (Phase 3 hard prerequisite)
   261119-feat-ws-config-git-sync: Appendix A carries SYNC rows for the wardrobe keys added here
+sage-review-design: completed
+sage-review-completeness: completed
+sage-review-completeness-reviewed: 3d9fea9645be271e
+sage-review-design-reviewed: 3d9fea9645be271e
 ---
 
 # Companion Paper Doll: Head Set, Mannequin Base Library, Outfit Motion-Kit Schema and Compositor
@@ -85,7 +89,12 @@ Numbers in parentheses are the queue IDs these decisions settled. Items
 (71)-(75) were confirmed by the owner on 2026-11-22. The remaining items
 were confirmed by the lead in settlement round 1 on 2026-11-22 (owner
 directive: the lead settles every non-policy item), except (98), which the
-owner answered on 2026-11-22 19:15. The queue closed at (107).
+owner answered on 2026-11-22 19:15. The queue closed at (107), and the last ID used is (120). Items
+(113)-(120) came from the promotion review and were auto-confirmed as
+technical on 2026-11-22. Decisions 28-31, 35 and 36 record art-pack
+requirements; no phase here implements them. The probe artifacts cited
+below (`ai-docs/assets/mockups/261122/companion-*`) are local probe
+artifacts, untracked by repo rule (mockup images are gitignored).
 
 1. **Costume-level paper doll with a motion kit (71).** The head set (hair |
    eyes | attachments | colors) can be combined freely. The body set is an
@@ -154,10 +163,12 @@ owner answered on 2026-11-22 19:15. The queue closed at (107).
     and the outfit stacks.
     - Rejected: outfit-agnostic gesture overlays. Sleeves differ per outfit
       (typing notes B).
-11. **Rendered-only variant switching (81).** Presets and user selection may
-    switch a column only among variants the active outfit renders (its
-    `variant` plus `alternates`). An override that names an unrendered
-    variant is ignored.
+11. **Rendered-only variant switching (81, 117).** Presets may switch a column
+    only among variants the active outfit renders (its `variant` plus
+    `alternates`). An override that names an unrendered variant is ignored.
+    Variant switching is preset-only: no config key or modal picker selects a
+    variant. A pack that declares `variants` but no `outfits` renders its
+    legacy `poses.<id>.layers` and never draws a bare base.
     - Rejected: allowing any base-library variant, which would show the bare
       mannequin.
 12. **Tinted dressing input (82).** Dressing edits receive a tinted copy of
@@ -217,6 +228,11 @@ owner answered on 2026-11-22 19:15. The queue closed at (107).
     variant's primary grip and rotates so its secondary point aligns with the
     secondary grip. Hands split into back coverage (z27, under the prop) and
     front grips (z28-29, over it).
+    - Hand back coverage and the held prop share z27: the held prop is
+      appended after the layer stack and the sort is stable, so back coverage
+      draws first (119).
+    - A scenario prop that attaches to the hand anchor or orbits replaces the
+      variant's `held` prop for that scenario (119).
     - Rejected: baking the prop into the base layers, which forced the typing
       probe to rebuild the phone under each grip frame (typing notes A).
 17. **`-back` layers (87).** Garment parts behind the body are layers whose
@@ -261,9 +277,21 @@ owner answered on 2026-11-22 19:15. The queue closed at (107).
     - unknown bound variants;
     - projection layers whose only rasters are new keys;
     - z values outside their band;
-    - registration drift;
+    - registration drift against the pack `registration` field (Decision 38);
     - outfit, hair or eye-set ids the config-key pattern cannot select.
 
+    The z check applies only to layers in the new sections (variants,
+    outfits, attachments), never to the legacy `poses.*.layers`. Band
+    assignment by signal (Decision 38): `-back` id suffix, attachment slot, and
+    the 10-60 envelope. A kit layer with no `z` defaults to 20 like the
+    compositor.
+
+    - A layer in the new sections (variants, outfits, attachments, eye sets)
+      is valid with `fills` or `shade` alone, so the Go check and the JS
+      mode inference accept it. Legacy `poses.*.layers` keep the v1 rule
+      (113).
+    - The lint is a separate function over the parsed manifest and never
+      changes a validation result (114).
     - Rejected: strict kit validation, which breaks T0 passthrough
       (`companion-pet-rigging.md:94,120`).
 22. **Anchors (92).** Each base variant declares its own `headAnchor`.
@@ -285,8 +313,9 @@ owner answered on 2026-11-22 19:15. The queue closed at (107).
       `overrides` map, declared with existing manifest fields (epic
       Cross-Child Decisions, "T0 compatibility boundary").
 
-    No MCP, protocol or store-schema change
-    (`release-compatibility.md:61`).
+    No MCP, protocol or store-schema change, so the verdict is the T0 row
+    (`release-compatibility.md:61`) with the optional-field mapping
+    (`release-compatibility.md:75-78`).
 25. **Behavioral tests (95).** Tests assert behavior: enumerated files,
     resolved layer stacks, fallback results, lint findings and config
     parsing. They never assert manual or ticket prose (the owner's standing
@@ -298,15 +327,16 @@ owner answered on 2026-11-22 19:15. The queue closed at (107).
     stored in the global layer, and localStorage holds only size.
     - New keys, all type `string`, default `""` (empty means follow the
       preset), `default_scope: global`, and global-only through
-      `manifestGlobalOnlyKeys` (`mcp/dashboard_config.go:61-71`):
+      `manifestGlobalOnlyKeys`
+      (`agents-plugin-tool/internal/mcp/dashboard_config.go#L62-L66`):
 
       | Key | Value pattern |
       |---|---|
       | `dashboard.companion_outfit` | `^([a-z0-9][a-z0-9_-]{0,63})?$` |
       | `dashboard.companion_hair` | same as outfit |
       | `dashboard.companion_eyes` | same as outfit |
-      | `dashboard.companion_attachments` | up to 16 space-separated `<slot>=<id>` pairs; `<id>` `none` clears a slot |
-      | `dashboard.companion_palette` | up to 16 space-separated `<channel>=#rrggbb` pairs |
+      | `dashboard.companion_attachments` | up to 16 space-separated `<slot>=<id>` pairs (slot and id per Decision 38); `<id>` `none` clears a slot |
+      | `dashboard.companion_palette` | up to 16 space-separated `<channel>=#rrggbb` pairs (channel per Decision 19) |
 
     - The keys follow the `dashboard.companion_pack` string-with-pattern
       precedent (`agents-plugin/dashboard-config-manifest.json:65-70`). They
@@ -332,7 +362,10 @@ owner answered on 2026-11-22 19:15. The queue closed at (107).
       is still changing.
 28. **Pack byte budget (99).** Measure after the first finished column, then
     set the cap, with a 3 MiB hard ceiling. This is recorded for the art pack.
-    - Rejected: keeping the 1.2 MiB cap. Probe data already shows 1.2 MiB
+    - Rejected: keeping the former 1.2 MiB embedded-pack budget cited by the
+      art-pack ticket (it is not a code cap; the code caps are 512 KiB
+      manifest, 2 MiB asset and 16 MiB pack,
+      `companion_pack_store.go#L26-L28`). Probe data already shows 1.2 MiB
       cannot hold a kit: at probe encoding the outfit W stand column alone is
       about 270 KB.
 29. **Official Style D art omits the shade layer (100).**
@@ -375,6 +408,47 @@ owner answered on 2026-11-22 19:15. The queue closed at (107).
       shipped art.
     - Rejected: several `stand` variants (demure | slouch | upright) in v1.
 
+38. **Field shapes and lint references (113-116, 118, 120).**
+    - **Registration (113):** an optional pack-level `registration: {
+      headAnchor: [x, y], feetPivot: [x, y], tolerance?: px }`, default
+      tolerance 4, declares the standing reference. The h28 values are
+      `[255, 184]` and `[256, 503]`; a BYO pack declares its own. The lint
+      compares each variant's `headAnchor` and `feetPivot` against it. A
+      variant that declares `seatY` (seated) is compared on x only, since it
+      anchors lower by design (Decision 22). No `registration` field means
+      nothing to compare, and no drift finding.
+      - Rejected: comparing variants with each other, which flags seated
+        variants.
+      - Rejected: hardcoding the h28 values, which breaks BYO canvases.
+    - **Z band signal (114):** a layer's band comes from its id suffix
+      (`-back` is 11-12), its attachment slot (`tail` 11-12, `ears` 45,
+      `headdress` 56, `accessory` 57, 58 reserved for extension slots) or
+      the 10-60 envelope. An attachment layer may set an explicit `z` inside
+      its slot's band.
+    - **Joints, grips, bind (115):** coordinates are `[x, y]` in the 512 × 512
+      canvas pixels. `joints` is `{ "<name>": [x, y] }`. A layer `pivot` is
+      either `[x, y]` or a joint name from the same variant. `grips` is
+      `{ primary: [x, y], secondary?: [x, y] }`. A prop's `grip` has the same
+      shape in the prop raster's own pixels. A garment layer's `bind` is the
+      `id` of a base layer in the variant bound by the same column.
+    - **Id patterns (116):** outfit, hair, eye-set, attachment and variant ids
+      match `^[a-z0-9][a-z0-9_-]{0,63}$`. Attachment slot ids match
+      `^[a-z][a-z0-9_-]{0,31}$`. The attachment id `none` is reserved
+      as the clear sentinel, and the lint flags a pack that defines it.
+    - **Preset fields (117):** `outfit`, `eyes` are ids. `attachments` is
+      `{ "<slot>": "<id>" | "none" }`. `kit` is `{ "<column>": "<variantId>" }`.
+      `palette` is `{ "<channel>": "#rrggbb" }`. The config strings
+      `companion_attachments` and `companion_palette` are the flat
+      space-separated form of the same maps, and both patterns compile under
+      Go RE2 (checked).
+    - **Live changes (118):** an outfit, hair, eye set, attachment or palette
+      change clears the compositor's view, tinted and decal caches, the same
+      way `setPreset` does, so no stale stack renders.
+    - **Config plumbing (120):** Phase 3 widens `CompanionConfig`,
+      `IsCompanionConfigKey`, the `companion` stream payload and
+      `LoadCompanion` to carry the five keys, building on the shape director
+      Phase 1 lands.
+
 ## Constraints
 
 Required manuals (from `AGENTS.md` `### Implementation Conventions`, for the
@@ -403,6 +477,12 @@ paths this ticket edits):
 - `ai-docs/manuals/wsflow-mirroring.md` (declared for `agents-plugin/rsrc/`,
   `agents-plugin/skills/`, `agents-plugin/hooks/`, `agents-plugin-wsflow/`).
   This applies to the mirrored `agents-plugin-wsflow/` dashboard manifest.
+- Convention: ai-docs/manuals/shipped-surface-boundary.md (declared for `agents-plugin/`, `agents-plugin-wsflow/`, `agents-plugin-tool/`)
+- Convention: ai-docs/manuals/wsflow-mirroring.md (declared for `agents-plugin/rsrc/`, `agents-plugin/skills/`, `agents-plugin/hooks/`, `agents-plugin-wsflow/`)
+- Convention: ai-docs/manuals/ws-mcp.md (declared for `agents-plugin-tool/internal/mcp/`)
+- Convention: ai-docs/manuals/release-compatibility.md (declared for `agents-plugin-tool/internal/`)
+- Convention: ai-docs/manuals/performance.md (declared for `agents-plugin-tool/`)
+- Convention: ai-docs/manuals/config-settings-ui.md (declared for `agents-plugin-tool/internal/mcp/config_registry.go`, `agents-plugin/config-manifest.json`, `agents-plugin/agy-config-manifest.json`, `agents-plugin/dashboard-config-manifest.json`, `agents-plugin-pi/config-manifest.json`, `agents-plugin-tool/internal/wsdashboard/config_routes.go`, `agents-plugin-tool/internal/wsdashboard/config_proposals.go`, `agents-plugin-tool/internal/wsdashboard/assets/dashboard-settings*`)
 
 Also binding: `ai-docs/manuals/companion-pet-rigging.md` is the epic's
 rigging contract. It requires uniform `headScale === 1.0`, keeps `stand`
@@ -422,6 +502,32 @@ Compatibility facts the design relies on (VERIFIED against
 - Only enumerated files are loaded and served
   (`companion_pack_store.go:276-292`, `companion_pack_routes.go:94`).
 
+## Prior Decisions
+
+- 261122-epic-werkschaft-lead-companion (2026-11-22, Cross-Child Decisions): "All companion settings are scalar string entries in `wsconfig`'s `overrides` map declared with existing `dashboard-config-manifest.json` fields (`v0.50.8` verified T0)." — bearing: constrains
+- 261122-epic-werkschaft-lead-companion (2026-11-22, Cross-Child Decisions): "Engine children use an IP-clean v3.1 technical fixture so engine verification never blocks on art polish; final shipped art lands exclusively through `261122-chore-ws-companion-official-art-pack`" — bearing: supports
+- 261122-chore-ws-companion-official-art-pack (2026-11-22, Decisions): "v1 wardrobe size (owner 2026-11-22 19:15; paper-doll (98)): one D1 outfit, with one variant per column it uses. The base library holds only those variants." — bearing: supports
+- 261122-feat-ws-companion-shell-engine (2026-11-22, commit 9865e081): "Keep each manifest and every raster on one immutable revision. Abort superseded generations and release partial decoded assets before retrying the catalog" — bearing: constrains
+- ed832861 (2026-11-07, commit): "RegisterGlobalOnly makes the key a registered wsconfig item, and the manifest namespace check treats a registered key as ws-mcp's own ... exempted from builtinConfigKeySet (manifestGlobalOnlyKeys)" — bearing: constrains
+- fa2b5d91 (2026-11-22, commit): "Publish each effective change from memory on a separate stream wake so config changes avoid rail rerenders and reconnects receive the full state." — bearing: supports
+- 143f6595 (2026-11-21, commit): "Owner directive (2026-11-21 19:21): remove reference artist name from tracked public repository files in ai-docs/manuals/companion-pet-rigging.md" — bearing: constrains
+
+## Route Facts
+
+| fact | value | evidence |
+|---|---|---|
+| scope.span | multi-file | companion_pack_schema.go, dashboard-companion-compositor.js, mcp/dashboard_config.go, three dashboard-config-manifest.json, dashboard-settings*, companion-pet-rigging.md |
+| scope.surface | cross-module | ws-companion/v1 pack schema additions, five new dashboard.companion_* config keys, gear-modal pickers across wsdashboard, mcp and plugin manifests |
+| scope.new_public_symbol | yes | five new config keys (dashboard.companion_outfit, _hair, _eyes, _attachments, _palette) and their wsdashboard key constants; lintCompanionKit is unexported |
+| scope.new_type_contract | yes | schema sections outfits, eyesets, attachments, variants, joints, grips, layer keys shade and fills; preset fields outfit, eyes, attachments, kit |
+| scope.test_surface | existing | agents-plugin-tool/internal/wsdashboard/frontend-companion.test.js, companion_pack_schema_test.go, mcp/dashboard_config_test.go, mcp/dashboard_companion_test.go all exist in git; new cases only |
+| complexity.reuse_points | confirmed | texture() (asset, color) cache and layerPaint in dashboard-companion-compositor.js, existing layer check and companionLayerAssets, dashboard.companion_pack key precedent, lintCompanionTiming |
+| complexity.side_effect_risk | high | compositor stacking and z-bands change must leave legacy pack layer stacks identical, and Go enumeration change must keep every existing fixture file list identical |
+| risk.correctness | high | variant and outfit resolution, fallback, joint binding and grip placement are new compositor logic with many interacting rules |
+| risk.fit | moderate | extends existing layer pipeline and key precedent, but Phase 3 depends on director gear modal and surface field that have not landed (pending 261122-feat-ws-companion-director) |
+| risk.test | moderate | node test and Go schema fixtures exist, but pixel-level skin-tint and drag-physics cases need a new procedural fixture and a visual harness capture |
+| risk.security_or_contract | high | new raster filenames served from user packs need the path-safety rule, T0 old-daemon compatibility, and global-only config key patterns |
+
 ## Phases
 
 ### Phase 1: Kit schema enumeration, kit lint and manual contract
@@ -431,14 +537,19 @@ daemon still loads its legacy projection, per Decisions 6-8, 13, 18-21.
 
 - Extend `validateCompanionManifest` enumeration to the new sections and to
   the layer keys `shade` and `fills`, using the existing layer check and
-  filename rule. Unknown keys keep passing through.
+  filename rule. Unknown keys keep passing through. A layer in the new
+  sections is valid with `fills` or `shade` alone (Decision 21); the JS mode
+  inference accepts it too.
+- Add the optional pack-level `registration` field read by the lint
+  (Decision 38); validation ignores it.
 - Add `lintCompanionKit` (non-rejecting). It reports:
   - a bound variant missing from the base library;
   - a legacy-projection layer whose only rasters are new keys (`shade`,
     `fills`), which an old daemon rejects;
-  - z outside the Decision 14 bands;
-  - variant `headAnchor` or `feetPivot` drift from the pack's declared
-    registration;
+  - z outside the Decision 14 bands, on new-section layers only (Decision
+    38);
+  - variant `headAnchor` or `feetPivot` drift from the pack's `registration`
+    (Decision 38);
   - outfit, hair or eye-set ids the config-key pattern cannot select.
 - Apply `ai-docs/.plans/261122-companion-paper-doll-manual-delta.md` to
   `ai-docs/manuals/companion-pet-rigging.md`, including the pipeline recipe
@@ -455,7 +566,11 @@ Verification:
   - every existing fixture enumerates the same file list as before;
   - the kit fixture with its new sections stripped still validates (the
     old-reader view);
-  - the lint flags each seeded defect and never fails validation.
+  - a fills-only garment layer in an outfit validates, while the same layer
+    in a legacy `poses.*.layers` is still rejected;
+  - the lint, called directly on the parsed manifest, flags each seeded
+    defect (including the projection defect) and its call changes no
+    validation result; a seated variant is not flagged for y drift.
 
 ### Phase 2: Compositor kit engine
 
@@ -488,9 +603,16 @@ Verification:
   - a custom `fills` channel takes its palette color, and an uncolored
     channel draws untinted;
   - legacy-pack layer stacks are unchanged.
+  - a held prop and a scenario prop on the hand anchor: the scenario prop
+    replaces `held`; a `variants`-only pack with no `outfits` renders its
+    legacy layers.
 - A visual harness capture of the fixture in stand, typing and one gesture,
-  shown next to the probe captures
-  (`ai-docs/assets/mockups/261122/companion-mannequin-h28/shots/`).
+  stored under `ai-docs/assets/mockups/261122/companion-paper-doll-engine/shots/`
+  and shown next to the probe captures
+  (`ai-docs/assets/mockups/261122/companion-mannequin-h28/shots/`). It
+  passes when no bare base shows in any column, the seated variant's head
+  sits lower with `headScale` 1.0, and the garment covers the base
+  silhouette.
 
 ### Phase 3: Head set, presets and wardrobe selection
 
@@ -510,7 +632,9 @@ Goal: hair, eyes, attachments and colors combine freely per Decisions 11,
 - Gear-modal pickers listing the active pack's outfits, hairs, eye sets,
   attachments per slot, and color per channel; each pick is written through
   `POST /api/config/set {scope:"global"}`.
-- The shell applies a live config broadcast without a reload.
+- The shell applies a live config broadcast without a reload, clearing the
+  caches per Decision 38.
+- Widen the config plumbing per Decision 38.
 
 Verification:
 
@@ -521,9 +645,17 @@ Verification:
   - the selection order holds (config key > preset > pack default);
   - an id absent from the active pack falls back to the preset;
   - the attachments and palette strings parse, and malformed pairs are
-    skipped.
+    skipped;
+  - an outfit, hair or attachment swap after the first render re-renders
+    the new stack, with no stale cache;
+  - a picker lists the active pack's outfits, hairs, eye sets, slots and
+    channels, and a pick posts the expected
+    `POST /api/config/set {scope:"global"}` payload;
+  - a live config broadcast re-renders without a reload.
 - Go config tests:
   - the five keys are global-only, so a project-scope write is refused;
   - the patterns accept the empty default and reject malformed values;
   - the three manifests stay identical;
-  - catalog and i18n drift tests pass.
+  - catalog and i18n drift tests pass;
+  - the manifest loader compiles the attachments and palette patterns;
+  - `LoadCompanion` and the `companion` stream payload carry the five keys.
