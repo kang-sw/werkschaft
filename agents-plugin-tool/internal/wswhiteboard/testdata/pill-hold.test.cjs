@@ -154,7 +154,7 @@ function makePillHarness(itemSpecs, opts = {}) {
   const html = new El('html');
   html.attrs['data-rid'] = opts.rid || 'sess-1';
   if (opts.incarnation) html.attrs['data-board-incarnation'] = opts.incarnation;
-  const frames = [], jumped = [], titleCounts = [];
+  const frames = [], jumped = [], titleCounts = [], winListeners = {};
   const doc = {
     body: new El('body'),
     documentElement: html,
@@ -168,10 +168,11 @@ function makePillHarness(itemSpecs, opts = {}) {
     IntersectionObserver: function () { this.observe = () => {}; this.disconnect = () => {}; },
     innerHeight: 800,
     scrollY: 20,
-    addEventListener: () => {},
-    removeEventListener: () => {},
+    addEventListener: (type, fn) => { (winListeners[type] ||= []).push(fn); },
+    removeEventListener: (type, fn) => { winListeners[type] = (winListeners[type] || []).filter(f => f !== fn); },
     wbTitleCount: n => titleCounts.push(n)
   };
+  if (opts.pending) win.wbPill = { pending: opts.pending };
   const ctx = vm.createContext({
     console,
     document: doc,
@@ -208,8 +209,13 @@ function makePillHarness(itemSpecs, opts = {}) {
     flush();
   }
 
+  function fireStorage(key) {
+    (winListeners.storage || []).forEach(fn => fn({ key }));
+    flush();
+  }
+
   run();
-  return { items, host, storage, win, jumped, titleCounts, flush, pill, shown, pressSeg, clickHold, run };
+  return { items, host, storage, win, jumped, titleCounts, flush, pill, shown, pressSeg, clickHold, run, fireStorage };
 }
 
 test('held ask leaves open count and tab title, surfaces in held pill segment, and jumps in one step', () => {
@@ -304,6 +310,29 @@ test('a rationale link target change clears the hold; a pre-upgrade hold migrate
   assert.deepEqual(JSON.parse(seeded.dump()['ws.wb.holds.board-l']), { 30: h3.win.wbPill.fingerprint(h3.items[0]) });
   const h4 = makePillHarness(ask('docs/c.md'), { storage: seeded, rid: 'board-l' });
   assert.equal(h4.items[0].classList.contains('wb-held'), false, 'a later retarget still clears it');
+});
+
+test('a storage event from another tab never writes back a prune from this tab\'s board', () => {
+  const storage = makeStorage();
+  const key = 'ws.wb.holds.board-s';
+  // Background tab: its board update (adding ask 51) is still buffered.
+  const stale = makePillHarness([{ id: 50, top: -200 }], { storage, rid: 'board-s', pending: 1 });
+  // Visible tab already shows ask 51 and holds it.
+  const fresh = makePillHarness([{ id: 50, top: -200 }, { id: 51, top: -100 }], { storage, rid: 'board-s' });
+  fresh.clickHold(fresh.items[1]);
+  const held = storage.dump()[key];
+  assert.ok(JSON.parse(held)[51]);
+  stale.fireStorage(key);
+  stale.win.wbPill.update();
+  stale.flush();
+  assert.equal(storage.dump()[key], held, 'buffered tab keeps the other tab\'s new hold');
+  // Even without a buffered update, the storage handler itself only adopts.
+  const lagging = makePillHarness([{ id: 50, top: -200 }], { storage, rid: 'board-s' });
+  fresh.clickHold(fresh.items[0]);
+  const both = storage.dump()[key];
+  lagging.fireStorage(key);
+  assert.equal(storage.dump()[key], both);
+  assert.equal(lagging.items[0].classList.contains('wb-held'), true, 'adopted hold is shown');
 });
 
 test('hold is dropped when item is answered (drafted or sent) or withdrawn from open asks', () => {

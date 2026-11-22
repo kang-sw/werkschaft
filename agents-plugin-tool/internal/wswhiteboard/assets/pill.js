@@ -156,7 +156,18 @@
   // - clear any hold whose content fingerprint changed (patched or re-asked)
   // - when pruneAbsent is true, drop any stored ID no longer among open items
   //   (answered on server or withdrawn)
+  // Every drop is written to the localStorage all tabs share, so it runs only
+  // against a current board: while the dashboard buffers a board update this
+  // DOM is an old snapshot that may lack (or show older content for) an item
+  // another tab just held. The prune then waits for the update.
+  var pruneDue = false;
   function reconcileHolds(pruneAbsent) {
+    if (st.pending > 0) {
+      if (pruneAbsent) pruneDue = true;
+      return;
+    }
+    pruneAbsent = pruneAbsent || pruneDue;
+    pruneDue = false;
     var openIds = {}, changed = false;
     items.forEach(function (el) {
       var k = itemKey(el);
@@ -480,10 +491,12 @@
     }
     redraw();
   }
+  // Another tab changed the holds: adopt them for display only. This tab's
+  // board may be older than the writer's, so it never writes back a prune
+  // or a fingerprint drop decided from it.
   function onStorage(e) {
     if (!e || (e.key !== null && e.key !== holdStorageKey())) return;
     holds = loadHolds();
-    reconcileHolds(true);
     applyHoldDOM();
     retitle();
     redrawSoon();
