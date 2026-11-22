@@ -24,7 +24,7 @@ const StoreName = "user-commands.db"
 
 // storeSchemaVersion is the PRAGMA user_version this code writes and reads. A
 // database stamped with a newer version is refused, never rewritten.
-const storeSchemaVersion = 1
+const storeSchemaVersion = 2
 
 // ErrStoreNewer marks a database written by a newer schema than this code knows.
 var ErrStoreNewer = errors.New("user command store has a newer schema")
@@ -42,7 +42,17 @@ const storeSchema = `CREATE TABLE IF NOT EXISTS user_commands (
 	revision    INTEGER NOT NULL,
 	seq         INTEGER NOT NULL,
 	PRIMARY KEY (reply, root, id)
+);
+CREATE TABLE IF NOT EXISTS meta (
+	k TEXT PRIMARY KEY,
+	v INTEGER NOT NULL
 )`
+
+// metaRevision is the meta row holding the highest revision ever issued: it
+// is raised in the same transaction as every set and removal and never lowered,
+// so a revision of a withdrawn command is never issued again, whatever the
+// clock does across a restart.
+const metaRevision = "revision"
 
 // row is one stored user command with its scope.
 type row struct {
@@ -118,6 +128,29 @@ func storeMigrate(ctx context.Context, db *sql.DB) error {
 	return tx.Commit()
 }
 
+// highWater is the highest revision ever issued (0 for a new store).
+func (s *Store) highWater() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, ErrStoreClosed
+	}
+	ctx := context.Background()
+	s.ops.Add(1)
+	var v int64
+	err := sqliteRetry(ctx, func() error {
+		err := s.db.QueryRowContext(ctx, `SELECT v FROM meta WHERE k = ?`, metaRevision).Scan(&v)
+		if errors.Is(err, sql.ErrNoRows) {
+			v, err = 0, nil
+		}
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("load user command revision: %w", err)
+	}
+	return v, nil
+}
+
 // load returns every stored row, oldest registration first.
 func (s *Store) load() ([]row, error) {
 	s.mu.Lock()
@@ -150,33 +183,35 @@ func (s *Store) load() ([]row, error) {
 	return out, nil
 }
 
-// put writes r in one statement (one WAL commit).
-func (s *Store) put(r row) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return ErrStoreClosed
-	}
-	ctx := context.Background()
-	s.ops.Add(1)
-	err := sqliteRetry(ctx, func() error {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO user_commands (reply, root, id, label, description, line, revision, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(reply, root, id) DO UPDATE SET label = excluded.label, description = excluded.description,
-			line = excluded.line, revision = excluded.revision`,
-			r.Reply, r.Root, r.ID, r.Label, r.Description, r.Line, r.Revision, r.Seq)
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("put user command %s: %w", r.ID, err)
-	}
-	return nil
+// raise lifts the stored revision high-water to rev inside tx.
+func raise(ctx context.Context, tx *sql.Tx, rev int64) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO meta (k, v) VALUES (?, ?)
+		ON CONFLICT(k) DO UPDATE SET v = MAX(v, excluded.v)`, metaRevision, rev)
+	return err
 }
 
-// del removes one command in one statement (one WAL commit).
-func (s *Store) del(reply, root, id string) error {
+// put writes r and raises the revision high-water to r.Revision in one
+// transaction (one WAL commit).
+func (s *Store) put(r row) error {
+	return s.write("put user command "+r.ID, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO user_commands (reply, root, id, label, description, line, revision, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(reply, root, id) DO UPDATE SET label = excluded.label, description = excluded.description,
+			line = excluded.line, revision = excluded.revision`,
+			r.Reply, r.Root, r.ID, r.Label, r.Description, r.Line, r.Revision, r.Seq); err != nil {
+			return err
+		}
+		return raise(ctx, tx, r.Revision)
+	})
+}
+
+// del removes one command and raises the revision high-water to rev in one
+// transaction (one WAL commit): a withdrawal never lowers it.
+func (s *Store) del(reply, root, id string, rev int64) error {
 	return s.write("delete user command", func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `DELETE FROM user_commands WHERE reply = ? AND root = ? AND id = ?`, reply, root, id)
-		return err
+		if _, err := tx.ExecContext(ctx, `DELETE FROM user_commands WHERE reply = ? AND root = ? AND id = ?`, reply, root, id); err != nil {
+			return err
+		}
+		return raise(ctx, tx, rev)
 	})
 }
 

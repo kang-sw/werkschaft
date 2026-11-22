@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
@@ -80,7 +79,7 @@ func TestUserCommandsAreScopedToTheLeadAndItsWorktree(t *testing.T) {
 	if _, _, err := u.Register("lead", wsusercmd.Input{ID: "build", Label: "Build", Line: "make"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := u.List("other", true); len(got) != 0 {
+	if got, _, _ := u.List("other"); len(got) != 0 {
 		t.Fatalf("another lead sees %+v", got)
 	}
 	// The lead moves to another worktree: its commands there are its own, the
@@ -88,16 +87,16 @@ func TestUserCommandsAreScopedToTheLeadAndItsWorktree(t *testing.T) {
 	runner.mu.Lock()
 	runner.roots["lead"] = wt2
 	runner.mu.Unlock()
-	if got, _, _ := u.List("lead", true); len(got) != 0 {
+	if got, _, _ := u.List("lead"); len(got) != 0 {
 		t.Fatalf("another worktree sees %+v", got)
 	}
-	if _, ok, _ := u.Get("lead", "build"); ok {
+	if _, _, ok, _ := u.Get("lead", "build"); ok {
 		t.Fatal("a click in another worktree resolves the first worktree's command")
 	}
 	runner.mu.Lock()
 	runner.roots["lead"] = wt1
 	runner.mu.Unlock()
-	if got, _, _ := u.List("lead", true); len(got) != 1 || got[0].Line != "make" {
+	if got, _, _ := u.List("lead"); len(got) != 1 || got[0].Line != "make" {
 		t.Fatalf("back in the first worktree: %+v", got)
 	}
 	// A conversation that is not an open lead has nothing to list or register.
@@ -109,49 +108,36 @@ func TestUserCommandsAreScopedToTheLeadAndItsWorktree(t *testing.T) {
 	}
 }
 
-// TestUserCommandsPageReadsReuseTheBoundWorktree: the list's worktree read goes
-// to the lead's key record, so page loads and refetches reuse it for the TTL
-// (and for the same open generation); a click, a removal and the tools read
-// afresh.
-func TestUserCommandsPageReadsReuseTheBoundWorktree(t *testing.T) {
+// TestUserCommandsFollowTheRunnersWorktree: every read takes the lead's bound
+// worktree from the runner (memory) as it is at that moment, never from an
+// earlier read; the revision a page is told carries the worktree, so a changed
+// one moves it; and the list and its revision come from one snapshot.
+func TestUserCommandsFollowTheRunnersWorktree(t *testing.T) {
 	dir := t.TempDir()
-	runner := &userCommandRunnerFake{gens: map[string]uint64{"lead": 1}, roots: map[string]string{"lead": filepath.Join(dir, "wt")}, known: map[string]bool{"lead": true}}
+	wt1, wt2 := filepath.Join(dir, "wt1"), filepath.Join(dir, "wt2")
+	runner := &userCommandRunnerFake{gens: map[string]uint64{"lead": 1}, roots: map[string]string{"lead": wt1}, known: map[string]bool{"lead": true}}
 	u := openUserCommandsFixture(t, dir, runner, nil)
-	now := time.Now()
-	u.now = func() time.Time { return now }
 	if _, _, err := u.Register("lead", wsusercmd.Input{ID: "build", Label: "Build", Line: "make"}); err != nil {
 		t.Fatal(err)
 	}
-	base := runner.reads()
-	for range 50 {
-		if _, _, err := u.List("lead", false); err != nil {
-			t.Fatal(err)
-		}
-		u.Revision("lead")
+	cmds, rev1, err := u.List("lead")
+	if err != nil || len(cmds) != 1 || u.Revision("lead") != rev1 {
+		t.Fatalf("list %+v %q: %v", cmds, rev1, err)
 	}
-	if got := runner.reads() - base; got != 0 {
-		t.Fatalf("50 page reads made %d worktree reads, want none (the registration cached it)", got)
-	}
-	// The TTL ends: one read, then cached again.
-	now = now.Add(userCommandRootTTL + time.Second)
-	_, _, _ = u.List("lead", false)
-	_, _, _ = u.List("lead", false)
-	if got := runner.reads() - base; got != 1 {
-		t.Fatalf("after the TTL: %d reads, want 1", got)
-	}
-	// A reopened lead (a new generation) never reuses the old read.
 	runner.mu.Lock()
-	runner.gens["lead"] = 2
+	runner.roots["lead"] = wt2
 	runner.mu.Unlock()
-	_, _, _ = u.List("lead", false)
-	if got := runner.reads() - base; got != 2 {
-		t.Fatalf("after a reopen: %d reads, want 2", got)
+	cmds, rev2, _ := u.List("lead")
+	if len(cmds) != 0 || rev2 == rev1 || u.Revision("lead") != rev2 {
+		t.Fatalf("after the worktree changed: %+v rev %q (was %q)", cmds, rev2, rev1)
 	}
-	before := runner.reads()
-	_, _, _ = u.Get("lead", "build")
-	_, _ = u.Remove("lead", "nothing")
-	if got := runner.reads() - before; got != 2 {
-		t.Fatalf("a click and a removal made %d fresh reads, want 2", got)
+	got, root, found, _ := u.Get("lead", "build")
+	if found || got.ID != "" || !sameRoot(root, wt2) {
+		t.Fatalf("get in the other worktree: %+v %q %v", got, root, found)
+	}
+	// The two worktree spellings of one directory are one scope.
+	if !sameRoot(wt1, wt1+string(filepath.Separator)) || sameRoot(wt1, wt2) {
+		t.Fatal("sameRoot")
 	}
 }
 
@@ -206,11 +192,11 @@ func TestUserCommandsReloadAfterARestartAndAnOldDaemon(t *testing.T) {
 	runner.known["gone"] = false
 	runner.mu.Unlock()
 	second := openUserCommandsFixture(t, dir, runner, nil)
-	got, rev, err := second.List("lead", true)
+	got, rev, err := second.List("lead")
 	if err != nil || len(got) != 1 || got[0] != stored || rev == "" {
 		t.Fatalf("restored %+v rev %q: %v", got, rev, err)
 	}
-	if got, _, err := second.List("gone", true); err != nil || len(got) != 0 {
+	if got, _, err := second.List("gone"); err != nil || len(got) != 0 {
 		t.Fatalf("a forgotten conversation kept %+v (%v)", got, err)
 	}
 	// The registry's own change signal reaches the dashboard.
@@ -219,7 +205,7 @@ func TestUserCommandsReloadAfterARestartAndAnOldDaemon(t *testing.T) {
 	if _, _, err := third.Register("lead", wsusercmd.Input{ID: "a", Label: "a", Line: "true"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := third.Remove("lead", "a"); err != nil {
+	if err := third.Unregister("lead", "a"); err != nil {
 		t.Fatal(err)
 	}
 	if len(changed) != 2 || changed[0] != "lead" {

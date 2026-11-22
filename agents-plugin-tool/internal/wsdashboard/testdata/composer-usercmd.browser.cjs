@@ -107,6 +107,31 @@ async function agent(step, tag) {
       await view.waitForSelector('.d-ucmd', { state: 'hidden', timeout: 10000 });
       assert.ok(posts.some(p => p.path.endsWith('/user-commands/build/remove')), 'the remove control posted to its route');
 
+      // two more commands: one named like an Object property (its button must
+      // not be disabled by the busy table), and one clicked twice in a row
+      await agent('register-extra', lang);
+      await view.waitForSelector('.ucmd[data-ucmd="dbl"]', { timeout: 10000 });
+      const ctor = view.locator('.ucmd[data-ucmd="constructor"] .ucmd-run');
+      assert.equal(await ctor.isDisabled(), false, 'a command named "constructor" is runnable');
+      const runsOf = id => posts.filter(p => p.path.endsWith('/user-commands/' + id + '/run')).length;
+      await ctor.click();
+      await view.waitForSelector('.cexec:has(code:text-is("echo ctor"))', { timeout: 10000 });
+      assert.equal(runsOf('constructor'), 1);
+      await page.waitForTimeout(900);
+      assert.equal(await ctor.isDisabled(), false, 'it is runnable again once the guard passes');
+      // a real double click is one run
+      const dbl = view.locator('.ucmd[data-ucmd="dbl"] .ucmd-run');
+      await dbl.dblclick();
+      await page.waitForTimeout(900);
+      assert.equal(runsOf('dbl'), 1, 'a double click made ' + runsOf('dbl') + ' requests');
+      // two rapid separate clicks (the second one beyond a fast acknowledgement,
+      // with no click count to tell them apart) are still one run
+      await page.waitForTimeout(300);
+      await dbl.evaluate(el => { el.click(); setTimeout(() => el.click(), 150); });
+      await page.waitForTimeout(900);
+      assert.equal(runsOf('dbl'), 2, 'two rapid clicks made ' + (runsOf('dbl') - 1) + ' requests');
+      await shot('double-click');
+
       // never in the shared transcript: the session page any other viewer gets
       // carries no command text
       const shared = await (await page.request.get(base + '/s/livesession?frame=1', { headers: { 'Sec-Fetch-Dest': 'iframe' } })).text();

@@ -78,8 +78,13 @@ type proxyHost struct {
 	// userCmds is the daemon's user commands, bound after the runner starts;
 	// nil leaves the tools unlisted and the dashboard's routes unavailable.
 	userCmds atomic.Pointer[userCommands]
-	boards   *mcp.WhiteboardStores
-	notes    *wsnote.Cache
+	// userCmdsReady, when set, is closed once the daemon has settled its user
+	// commands (bound, or unavailable): a hosted lead that connects while the
+	// daemon is still starting waits for it (bounded), so its first tool list
+	// already names the user command tools. nil never waits.
+	userCmdsReady <-chan struct{}
+	boards        *mcp.WhiteboardStores
+	notes         *wsnote.Cache
 	// mailLabels resolves mail sender labels for every hosted server
 	// (mcp.ServerOptions.MailLabels). The servers share the process's group
 	// store, so a recipient on one connection expands a group mail another
@@ -89,6 +94,10 @@ type proxyHost struct {
 	// `credential` command applies through; nil refuses the command.
 	credentials *wscred.Store
 }
+
+// userCommandsReadyWait bounds how long a hosted lead's connection waits for
+// the daemon's user commands to settle at its start.
+const userCommandsReadyWait = 5 * time.Second
 
 // wait blocks until the replacement goroutine, if any, has ended.
 func (h *proxyHost) wait() { h.background.Wait() }
@@ -105,6 +114,14 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		}
 		if root == "" || root == "." {
 			root = hello.Cwd
+		}
+		if hello.Conversation != "" && h.userCmdsReady != nil {
+			// The tools are listed from the binding as it is when the session
+			// lists them; one that connects during the daemon's start waits for it.
+			select {
+			case <-h.userCmdsReady:
+			case <-time.After(userCommandsReadyWait):
+			}
 		}
 		opts := mcp.ServerOptions{
 			BoardOwner:   true,

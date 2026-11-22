@@ -229,9 +229,14 @@ under `<cache root>/dashboard/`:
   only (`GET /s/<reply-id>/user-commands`, with Run and remove under it behind
   the composer's localhost gate); a click names the command and the revision it
   displayed and runs the stored line through the composer's `!` path, so a stale
-  revision or a withdrawn command runs nothing. A change reaches an open page as
-  the opaque `usercmd` stream event, which makes it refetch the list. The
-  database is unknown to an older daemon, which neither reads nor overwrites it;
+  revision or a withdrawn command runs nothing (the revision check and the
+  claim of the click are one step). The user's remove control also names the
+  displayed revision and removes only that one; the agent's unregister tool
+  removes by id. A revision is never issued twice: the store keeps the highest
+  one ever issued, raised in the same commit as every change and withdrawal.
+  The lead's worktree is read from the runner's memory, never from the key
+  record file. A change reaches an open page as the opaque `usercmd` stream
+  event, which makes it refetch the list. The database is unknown to an older daemon, which neither reads nor overwrites it;
   the daemon that reopens restores the commands, and drops those of a
   conversation the runner no longer knows.
 - `sessions/<reply-id>/registration.json` - one entry per top-level lead

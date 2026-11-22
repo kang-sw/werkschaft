@@ -38,6 +38,10 @@ func (c composerExec) Launch(ctx context.Context, drain <-chan struct{}, req wsd
 	if err != nil {
 		return wsdashboard.ComposerJob{}, err
 	}
+	// A user command's line was read for one worktree: it never runs in another.
+	if req.Root != "" && !sameRoot(req.Root, target.Root) {
+		return wsdashboard.ComposerJob{}, errors.New("the lead's worktree changed since this command was read")
+	}
 	launch, err := execjob.ShellLaunch(target.Owner.ID, "exec.shell", target.Root, "", req.Line, target.Environ, nil)
 	if err != nil {
 		return wsdashboard.ComposerJob{}, err

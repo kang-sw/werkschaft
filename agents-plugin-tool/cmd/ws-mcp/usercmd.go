@@ -1,12 +1,13 @@
 package main
 
 import (
-	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"path/filepath"
-	"sync"
-	"time"
+	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsusercmd"
@@ -20,30 +21,15 @@ type userCommandRunner interface {
 	CronKnown(id string) bool
 }
 
-// userCommandRootTTL is how long a lead's bound worktree, read once from the
-// runner, serves the list and page reads: the read goes to the lead's key
-// record, so the interactive paths (page load, the list refetch) reuse it
-// instead of touching that file each time. A click, a removal and every tool
-// call read it afresh.
-const userCommandRootTTL = 10 * time.Second
-
 // userCommands binds the user commands' registry to the open hosted leads. It
 // is both the dashboard's service (wsdashboard.UserCommandService) and the MCP
 // tools' (mcp.UserCommandHost): the agent's register and unregister tools, the
-// page's list, Run and remove control all go through the one registry.
+// page's list, Run and remove control all go through the one registry. The
+// lead's bound worktree is read from the runner's memory on every call (no key
+// record, no file), so no read is cached.
 type userCommands struct {
 	reg    *wsusercmd.Registry
 	runner userCommandRunner
-	now    func() time.Time
-
-	mu    sync.Mutex
-	roots map[string]userCommandRoot
-}
-
-type userCommandRoot struct {
-	root string
-	gen  uint64
-	at   time.Time
 }
 
 // openUserCommands opens the registry in the daemon's state directory, drops
@@ -54,7 +40,7 @@ func openUserCommands(dir string, runner userCommandRunner, onChange func(string
 	if err != nil {
 		return nil, err
 	}
-	u := &userCommands{reg: reg, runner: runner, now: time.Now, roots: map[string]userCommandRoot{}}
+	u := &userCommands{reg: reg, runner: runner}
 	if err := reg.Reconcile(runner.CronKnown); err != nil {
 		fmt.Fprintf(logw, "dashboard: user commands: drop commands of unknown conversations: %v\n", err)
 	}
@@ -64,71 +50,74 @@ func openUserCommands(dir string, runner userCommandRunner, onChange func(string
 // Close releases the registry's store.
 func (u *userCommands) Close() error { return u.reg.Close() }
 
-// root is the worktree the open lead is bound to. fresh reads it from the
-// runner; otherwise a read under the TTL, for the same open generation, is
-// reused.
-func (u *userCommands) root(replyID string, fresh bool) (string, error) {
-	gen, err := u.runner.ComposerOpen(replyID)
-	if err != nil {
-		return "", err
-	}
-	now := u.now()
-	u.mu.Lock()
-	cached, ok := u.roots[replyID]
-	u.mu.Unlock()
-	if !fresh && ok && cached.gen == gen && now.Sub(cached.at) < userCommandRootTTL {
-		return cached.root, nil
-	}
-	owner, root, err := u.runner.ComposerRoot(replyID)
-	if err != nil {
-		return "", err
-	}
-	u.mu.Lock()
-	u.roots[replyID] = userCommandRoot{root: root, gen: owner.Gen, at: now}
-	u.mu.Unlock()
-	return root, nil
+// root is the worktree the open lead is bound to (a refusal when it is not an
+// open hosted lead).
+func (u *userCommands) root(replyID string) (string, error) {
+	_, root, err := u.runner.ComposerRoot(replyID)
+	return root, err
 }
 
-// List is the lead's commands in its bound worktree and their revision (the
-// page's list and its refetch: memory only while the root is cached).
-func (u *userCommands) List(replyID string, fresh bool) ([]wsusercmd.Command, string, error) {
-	root, err := u.root(replyID, fresh)
+// rootTag is a short stable tag of a worktree, appended to the revision so the
+// strip refetches when the lead's worktree changes (the registry's own revision
+// is per conversation).
+func rootTag(root string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(filepath.Clean(root)))
+	return strconv.FormatUint(uint64(h.Sum32()), 36)
+}
+
+// sameRoot reports whether two worktree paths name the same scope.
+func sameRoot(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// List is the lead's commands in its bound worktree and the revision they carry
+// (the page's list and its refetch): one registry snapshot, so the revision
+// always belongs to the list.
+func (u *userCommands) List(replyID string) ([]wsusercmd.Command, string, error) {
+	root, err := u.root(replyID)
 	if err != nil {
 		return nil, "", err
 	}
-	return u.reg.List(replyID, root), u.reg.Revision(replyID), nil
+	cmds, rev := u.reg.Snapshot(replyID, root)
+	return cmds, rev + "." + rootTag(root), nil
 }
 
-// Get returns one command of the lead's bound worktree, read afresh (a click
-// runs the stored line only when this read still holds the displayed revision).
-func (u *userCommands) Get(replyID, id string) (wsusercmd.Command, bool, error) {
-	root, err := u.root(replyID, true)
+// Get returns one command of the lead's bound worktree and that worktree (a
+// click runs the stored line only when this read still holds the displayed
+// revision, and only in the worktree it was read for).
+func (u *userCommands) Get(replyID, id string) (wsusercmd.Command, string, bool, error) {
+	root, err := u.root(replyID)
 	if err != nil {
-		return wsusercmd.Command{}, false, err
+		return wsusercmd.Command{}, "", false, err
 	}
 	c, ok := u.reg.Get(replyID, root, id)
-	return c, ok, nil
+	return c, root, ok, nil
 }
 
-// Remove withdraws a command, as the user's remove control and the agent's
-// unregister tool both do.
-func (u *userCommands) Remove(replyID, id string) (bool, error) {
-	root, err := u.root(replyID, true)
+// RemoveIf withdraws a command only while it has the revision the user was
+// shown (the user's remove control): wsusercmd.ErrStale when it changed,
+// wsusercmd.ErrUnknown when it is gone.
+func (u *userCommands) RemoveIf(replyID, id string, rev int64) error {
+	root, err := u.root(replyID)
 	if err != nil {
-		return false, err
+		return err
 	}
-	switch err := u.reg.Remove(replyID, root, id); {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, wsusercmd.ErrUnknown):
-		return false, nil
-	default:
-		return false, err
-	}
+	return u.reg.RemoveIf(replyID, root, id, rev)
 }
 
-// Revision is the opaque revision of the lead's commands.
-func (u *userCommands) Revision(replyID string) string { return u.reg.Revision(replyID) }
+// Revision is the opaque revision of the lead's commands and worktree.
+func (u *userCommands) Revision(replyID string) string {
+	rev := u.reg.Revision(replyID)
+	if root, err := u.root(replyID); err == nil {
+		rev += "." + rootTag(root)
+	}
+	return rev
+}
 
 // Lead refuses a conversation that is not an open hosted lead (the MCP tools'
 // authority check, read from the runner's memory).
@@ -139,28 +128,26 @@ func (u *userCommands) Lead(conversation string) error {
 
 // Register adds or replaces a command in the lead's bound worktree.
 func (u *userCommands) Register(conversation string, in wsusercmd.Input) (wsusercmd.Command, wsusercmd.Outcome, error) {
-	root, err := u.root(conversation, true)
+	root, err := u.root(conversation)
 	if err != nil {
 		return wsusercmd.Command{}, 0, err
 	}
 	return u.reg.Set(conversation, root, in)
 }
 
-// Unregister withdraws a command of the lead's bound worktree.
+// Unregister withdraws a command of the lead's bound worktree, by ID: the
+// agent's own tool keeps its by-ID semantics.
 func (u *userCommands) Unregister(conversation, id string) error {
-	ok, err := u.Remove(conversation, id)
+	root, err := u.root(conversation)
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return wsusercmd.ErrUnknown
-	}
-	return nil
+	return u.reg.Remove(conversation, root, id)
 }
 
 // Commands lists the lead's commands for the agent (the tool's no-argument
 // read).
 func (u *userCommands) Commands(conversation string) ([]wsusercmd.Command, error) {
-	cmds, _, err := u.List(conversation, true)
+	cmds, _, err := u.List(conversation)
 	return cmds, err
 }

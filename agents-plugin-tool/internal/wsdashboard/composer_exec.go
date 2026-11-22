@@ -74,7 +74,10 @@ type ComposerLaunch struct {
 	// Gen is the open generation the route read (Open) before it
 	// acknowledged the submission: the launch is refused when the lead is on
 	// another one by the time it is admitted.
-	Gen  uint64
+	Gen uint64
+	// Root, when set, is the worktree a user command's line was read for: the
+	// launch is refused when the lead's bound worktree is another by then.
+	Root string
 	Line string
 	// Window is the wait before conversion.
 	Window time.Duration
@@ -298,6 +301,9 @@ type composerSub struct {
 	// slot is the user command a click ran (nil for a typed line): the line is
 	// the definition of that revision exactly as it was displayed.
 	slot *composerSlot
+	// root is the worktree the slot's line was read for (empty for a typed
+	// line): the launch refuses to run it in another.
+	root string
 }
 
 // composerSlot names the user command revision a submission ran.
@@ -589,6 +595,9 @@ const (
 	composerUnknown
 	// composerClosing: the daemon is stopping; nothing is admitted.
 	composerClosing
+	// composerRefused: the slot's resolve declined at the admission point (the
+	// command changed or was withdrawn); nothing was claimed.
+	composerRefused
 )
 
 // composerAdmit admits submission id of session replyID for line under open
@@ -602,12 +611,19 @@ const (
 // id). An admitted submission is counted in the wait group under the same lock
 // that closes admission, so shutdown never waits past a request it accepted.
 func (d *Daemon) composerAdmit(replyID, id, line string, gen uint64, retry bool, token string) (*composerSub, composerAdmission) {
-	return d.composerAdmitSlot(replyID, id, line, gen, retry, token, nil)
+	return d.composerAdmitSlot(replyID, id, line, gen, retry, token, nil, nil)
 }
 
 // composerAdmitSlot is composerAdmit for a click on a user command: slot names
-// the command revision whose line is being run (nil for a typed line).
-func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry bool, token string, slot *composerSlot) (*composerSub, composerAdmission) {
+// the command revision whose line is being run (nil for a typed line). resolve,
+// when set, is the one ordering point for a click: it runs under the admission
+// lock after the known-card, fence and token checks and immediately before the
+// claim, and returns the line (and the worktree it was read for) of the
+// displayed revision, or false to refuse; so a withdrawal or replacement is
+// either before the claim (refused, nothing claimed) or after it (the claim
+// stands), and a second request with the same id waits on the lock and gets the
+// first one's card.
+func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry bool, token string, slot *composerSlot, resolve func() (line, root string, ok bool)) (*composerSub, composerAdmission) {
 	key := replyID + "\x00" + id
 	c := &d.composer
 	c.ensure()
@@ -622,6 +638,13 @@ func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry b
 	if _, ok := c.fence[key]; ok || retry || !c.currentLocked(token) {
 		return nil, composerUnknown
 	}
+	var root string
+	if resolve != nil {
+		var ok bool
+		if line, root, ok = resolve(); !ok {
+			return nil, composerRefused
+		}
+	}
 	c.seq++
 	c.fence[key] = struct{}{}
 	c.fenceQ = append(c.fenceQ, composerFenceEntry{key, c.seq})
@@ -631,7 +654,7 @@ func (d *Daemon) composerAdmitSlot(replyID, id, line string, gen uint64, retry b
 		c.fenceQ = c.fenceQ[1:]
 	}
 	c.wg.Add(1)
-	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running", gen: gen, slot: slot}
+	sub := &composerSub{reply: replyID, id: id, line: line, created: time.Now(), phase: "running", gen: gen, slot: slot, root: root}
 	c.subs[key] = sub
 	c.order[replyID] = append(c.order[replyID], key)
 	// Keep the newest cards; the fence outlives the card.
@@ -710,7 +733,7 @@ func (d *Daemon) composerFind(replyID, id string) *composerSub {
 // in the background and the dashboard hands nothing more, whatever state the
 // job reached since.
 func (d *Daemon) composerRun(svc ComposerExecService, sub *composerSub) {
-	job, err := svc.Launch(context.Background(), d.stop, ComposerLaunch{ReplyID: sub.reply, Gen: sub.gen, Line: sub.line, Window: ComposerWindow})
+	job, err := svc.Launch(context.Background(), d.stop, ComposerLaunch{ReplyID: sub.reply, Gen: sub.gen, Root: sub.root, Line: sub.line, Window: ComposerWindow})
 	sub.mu.Lock()
 	if job.ExecID == "" {
 		sub.phase, sub.err = "refused", composerErrorText(err)

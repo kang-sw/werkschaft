@@ -83,6 +83,9 @@ func (o Outcome) String() string {
 var (
 	ErrFull    = fmt.Errorf("a lead keeps at most %d user commands: unregister one first", MaxPerScope)
 	ErrUnknown = errors.New("no such user command")
+	// ErrStale: a conditional removal named a revision that is no longer the
+	// command's.
+	ErrStale = errors.New("the user command changed since it was displayed")
 )
 
 type scopeKey struct{ reply, root string }
@@ -110,6 +113,7 @@ type Registry struct {
 	nextSeq  int64
 	onChange func(reply string)
 	closed   bool
+	clock    func() int64
 }
 
 // Open opens the store at path and loads every command into memory. onChange,
@@ -117,6 +121,11 @@ type Registry struct {
 // touched (the dashboard's refresh signal); it must not call back into the
 // registry's writers.
 func Open(path string, onChange func(reply string)) (*Registry, error) {
+	return openClock(path, onChange, func() int64 { return time.Now().UnixMilli() })
+}
+
+// openClock is Open with the clock that seeds the revisions (a test seam).
+func openClock(path string, onChange func(reply string), clock func() int64) (*Registry, error) {
 	st, err := OpenStore(path)
 	if err != nil {
 		return nil, err
@@ -126,16 +135,22 @@ func Open(path string, onChange func(reply string)) (*Registry, error) {
 		_ = st.Close()
 		return nil, err
 	}
-	r := &Registry{store: st, scopes: map[scopeKey]map[string]*entry{}, rev: map[string]uint64{}, onChange: onChange}
+	high, err := st.highWater()
+	if err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	r := &Registry{store: st, scopes: map[scopeKey]map[string]*entry{}, rev: map[string]uint64{}, onChange: onChange, clock: clock}
 	var b [6]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		b = [6]byte{byte(time.Now().UnixNano())}
 	}
 	r.epoch = hex.EncodeToString(b[:])
-	// A revision is seeded from the clock as well as from the stored ones, so
-	// that one issued after a withdrawal and a restart is still above any
-	// revision a page may hold for the withdrawn definition.
-	r.nextRev = time.Now().UnixMilli()
+	// A revision is seeded from the stored high-water (the highest ever issued,
+	// kept across withdrawals) and the surviving rows, and from the clock as
+	// well so that a store that was deleted still starts above what an old page
+	// held. The clock only raises the seed: a clock set back never reuses one.
+	r.nextRev = max(r.clock(), high)
 	for _, row := range rows {
 		k := scopeKey{row.Reply, row.Root}
 		if r.scopes[k] == nil {
@@ -253,6 +268,21 @@ func (r *Registry) Set(reply, root string, in Input) (Command, Outcome, error) {
 
 // Remove withdraws command id; ErrUnknown when there is none.
 func (r *Registry) Remove(reply, root, id string) error {
+	return r.remove(reply, root, id, 0)
+}
+
+// RemoveIf withdraws command id only while its revision is rev, decided under
+// the writers' lock together with the removal: ErrUnknown when there is none,
+// ErrStale when it has another revision (an agent's replacement since the
+// user was shown the command).
+func (r *Registry) RemoveIf(reply, root, id string, rev int64) error {
+	if rev <= 0 {
+		return ErrStale
+	}
+	return r.remove(reply, root, id, rev)
+}
+
+func (r *Registry) remove(reply, root, id string, rev int64) error {
 	root = normRoot(root)
 	r.wmu.Lock()
 	defer r.wmu.Unlock()
@@ -261,14 +291,24 @@ func (r *Registry) Remove(reply, root, id string) error {
 	}
 	k := scopeKey{reply, root}
 	r.mu.RLock()
-	_, ok := r.scopes[k][id]
+	e, ok := r.scopes[k][id]
+	var cur int64
+	if ok {
+		cur = e.Revision
+	}
 	r.mu.RUnlock()
 	if !ok {
 		return ErrUnknown
 	}
-	if err := r.store.del(reply, root, id); err != nil {
+	if rev != 0 && cur != rev {
+		return ErrStale
+	}
+	// The withdrawal consumes a revision too: the high-water never falls.
+	issued := r.nextRev + 1
+	if err := r.store.del(reply, root, id, issued); err != nil {
 		return err
 	}
+	r.nextRev = issued
 	r.mu.Lock()
 	delete(r.scopes[k], id)
 	if len(r.scopes[k]) == 0 {
@@ -286,6 +326,10 @@ func (r *Registry) List(reply, root string) []Command {
 	k := scopeKey{reply, normRoot(root)}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.listLocked(k)
+}
+
+func (r *Registry) listLocked(k scopeKey) []Command {
 	es := make([]*entry, 0, len(r.scopes[k]))
 	for _, e := range r.scopes[k] {
 		es = append(es, e)
@@ -296,6 +340,16 @@ func (r *Registry) List(reply, root string) []Command {
 		out[i] = e.Command
 	}
 	return out
+}
+
+// Snapshot returns the commands of conversation reply in worktree root and the
+// conversation's revision from one read, so the list and the revision a page is
+// told always belong together. It reads memory only.
+func (r *Registry) Snapshot(reply, root string) ([]Command, string) {
+	k := scopeKey{reply, normRoot(root)}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.listLocked(k), fmt.Sprintf("%s.%d", r.epoch, r.rev[reply])
 }
 
 // Get returns one command. It reads memory only.
@@ -358,6 +412,9 @@ func (r *Registry) Reconcile(known func(reply string) bool) error {
 		r.bumpLocked(reply)
 	}
 	r.mu.Unlock()
+	for _, reply := range gone {
+		r.notify(reply)
+	}
 	return nil
 }
 

@@ -6,7 +6,7 @@
 // stored line, and only while its revision is still the displayed one. Every
 // read and write is localhost-only; a denied or failed list read shows nothing.
   var ucmdEnabled = cexecEnabled;
-  var ucmdList = [], ucmdRev = "", ucmdDirty = false, ucmdBox = null, ucmdSum = null, ucmdBody = null, ucmdBusy = {}, ucmdFetching = false, ucmdAttemptKey = "ws.ucmd.attempt." + rid, ucmdOpenKey = "ws.ucmd.open." + rid;
+  var ucmdList = [], ucmdRev = "", ucmdDirty = false, ucmdBox = null, ucmdSum = null, ucmdBody = null, ucmdBusy = Object.create(null), ucmdFetching = false, ucmdAttemptKey = "ws.ucmd.attempt." + rid, ucmdOpenKey = "ws.ucmd.open." + rid, ucmdGuardMs = 600;
   // The attempt in flight per command (its submission id and the revision it
   // ran) is recorded before the request goes out and cleared once the daemon's
   // answer settles it: the next click on the same revision after a lost
@@ -14,8 +14,9 @@
   function ucmdAttempts() {
     try {
       var a = JSON.parse(window.sessionStorage.getItem(ucmdAttemptKey) || "{}");
-      return a && typeof a === "object" ? a : {};
-    } catch (e) { return {}; }
+      // A null-prototype table: an id such as "constructor" is only ever its own entry.
+      return Object.assign(Object.create(null), a && typeof a === "object" ? a : {});
+    } catch (e) { return Object.create(null); }
   }
   function ucmdSaveAttempts(a) {
     try { window.sessionStorage.setItem(ucmdAttemptKey, JSON.stringify(a)); } catch (e) {}
@@ -63,7 +64,12 @@
       run.textContent = "▶ " + c.label;
       run.title = wsT("js.ucmd.run.title", c.label);
       run.disabled = !!ucmdBusy[c.id];
-      run.addEventListener("click", function () { ucmdRun(c); });
+      run.addEventListener("click", function (ev) {
+        // The second click of a double click (and a held key's repeats) is not a
+        // second approval: a click count above one is ignored.
+        if (ev.detail > 1) return;
+        ucmdRun(c);
+      });
       head.appendChild(run);
       if (c.description) {
         var desc = doc.createElement("span");
@@ -130,7 +136,12 @@
     ucmdSaveAttempts(attempts);
     ucmdBusy[c.id] = true;
     ucmdRender();
-    function finish() { delete ucmdBusy[c.id]; ucmdRender(); }
+    // The slot stays guarded for a moment after its answer is rendered, so a
+    // double click that straddles a fast acknowledgement never allocates a
+    // second submission id: only a click after the guard is a new run.
+    function finish() {
+      window.setTimeout(function () { delete ucmdBusy[c.id]; ucmdRender(); }, ucmdGuardMs);
+    }
     function settled() {
       var a = ucmdAttempts();
       if (a[c.id] && a[c.id].id === id) { delete a[c.id]; ucmdSaveAttempts(a); }

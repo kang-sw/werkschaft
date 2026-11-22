@@ -16,7 +16,7 @@ import (
 // real session page and routes (only the launch service is a fake): the slot
 // buttons and a slot-run card in ko and en, the strip's refresh by the opaque
 // revision event with no polling, a stale click that runs nothing, the remove
-// control, and the strip's absence from the shared transcript. The script asks
+// control, a command named "constructor", a double click that runs once, and the strip's absence from the shared transcript. The script asks
 // this test to change the registry as the agent would (a signal file per step).
 func TestUserCommandBrowser(t *testing.T) {
 	if os.Getenv("WS_PLAYWRIGHT_MODULE") == "" {
@@ -43,6 +43,10 @@ func TestUserCommandBrowser(t *testing.T) {
 			if err := f.users.reg.Remove("livesession", f.users.root, "test"); err != nil {
 				t.Error(err)
 			}
+		},
+		"register-extra": func() {
+			set("constructor", "Constructor", "named like an Object property", "echo ctor")
+			set("dbl", "Double", "clicked twice", "echo dbl")
 		},
 		"reset": func() {
 			for _, c := range f.users.reg.List("livesession", f.users.root) {
@@ -95,7 +99,10 @@ func TestUserCommandBrowser(t *testing.T) {
 	for _, l := range f.svc.launches {
 		runs[l.Line]++
 	}
-	if runs["make all"] != 2 || len(f.svc.launches) != 2 {
-		t.Fatalf("launches %v, want exactly one \"make all\" per language and nothing else", runs)
+	// Per language: one "make all", one "echo ctor", and "echo dbl" twice (a real
+	// double click is one run, two rapid clicks another); the stale click ran
+	// nothing.
+	if runs["make all"] != 2 || runs["echo ctor"] != 2 || runs["echo dbl"] != 4 || len(f.svc.launches) != 8 {
+		t.Fatalf("launches %v, want one \"make all\", one \"echo ctor\" and two \"echo dbl\" per language and nothing else", runs)
 	}
 }

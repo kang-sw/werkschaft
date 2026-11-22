@@ -15,60 +15,48 @@ import (
 )
 
 // usercmdFake is the user commands' service over the real registry, with the
-// lead's bound worktree steered by the test. It counts the fresh and cached
-// worktree reads the routes ask for.
+// lead's bound worktree steered by the test.
 type usercmdFake struct {
 	reg *wsusercmd.Registry
 
-	mu            sync.Mutex
-	root          string
-	freshReads    int
-	cachedReads   int
-	openErr       error
-	removeCommits int
+	mu      sync.Mutex
+	root    string
+	openErr error
 }
 
-func (u *usercmdFake) scope(fresh bool) (string, error) {
+func (u *usercmdFake) scope() (string, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.openErr != nil {
 		return "", u.openErr
 	}
-	if fresh {
-		u.freshReads++
-	} else {
-		u.cachedReads++
-	}
 	return u.root, nil
 }
 
-func (u *usercmdFake) List(replyID string, fresh bool) ([]wsusercmd.Command, string, error) {
-	root, err := u.scope(fresh)
+func (u *usercmdFake) List(replyID string) ([]wsusercmd.Command, string, error) {
+	root, err := u.scope()
 	if err != nil {
 		return nil, "", err
 	}
-	return u.reg.List(replyID, root), u.reg.Revision(replyID), nil
+	cmds, rev := u.reg.Snapshot(replyID, root)
+	return cmds, rev, nil
 }
 
-func (u *usercmdFake) Get(replyID, id string) (wsusercmd.Command, bool, error) {
-	root, err := u.scope(true)
+func (u *usercmdFake) Get(replyID, id string) (wsusercmd.Command, string, bool, error) {
+	root, err := u.scope()
 	if err != nil {
-		return wsusercmd.Command{}, false, err
+		return wsusercmd.Command{}, "", false, err
 	}
 	c, ok := u.reg.Get(replyID, root, id)
-	return c, ok, nil
+	return c, root, ok, nil
 }
 
-func (u *usercmdFake) Remove(replyID, id string) (bool, error) {
-	root, err := u.scope(true)
+func (u *usercmdFake) RemoveIf(replyID, id string, rev int64) error {
+	root, err := u.scope()
 	if err != nil {
-		return false, err
+		return err
 	}
-	err = u.reg.Remove(replyID, root, id)
-	if errors.Is(err, wsusercmd.ErrUnknown) {
-		return false, nil
-	}
-	return err == nil, err
+	return u.reg.RemoveIf(replyID, root, id, rev)
 }
 
 func (u *usercmdFake) Revision(replyID string) string { return u.reg.Revision(replyID) }
@@ -159,7 +147,7 @@ func TestUserCommandListAndRunUseTheStoredLine(t *testing.T) {
 		t.Fatalf("%d launches", n)
 	}
 	got := f.svc.launches[0]
-	if got.Line != "make all\necho done" || got.Window != ComposerWindow || got.Gen != 4 || got.ReplyID != "livesession" {
+	if got.Line != "make all\necho done" || got.Root != f.users.root || got.Window != ComposerWindow || got.Gen != 4 || got.ReplyID != "livesession" {
 		t.Fatalf("launch %+v", got)
 	}
 }
@@ -246,7 +234,7 @@ func TestUserCommandClickIdempotency(t *testing.T) {
 		t.Fatalf("unknown retry: %d %+v launches %d", res.Code, card, f.svc.launchCount())
 	}
 	// A fresh id is a new run.
-	cur, _, _ := f.users.Get("livesession", "build")
+	cur, _, _, _ := f.users.Get("livesession", "build")
 	if res := f.run("build", cur.Revision, "click-conc-00002", false); res.Code != 202 {
 		t.Fatalf("fresh id: %d", res.Code)
 	}
@@ -353,33 +341,24 @@ func TestUserCommandRemoveRacesAClick(t *testing.T) {
 	if n := f.svc.launchCount(); n != 1 {
 		t.Fatalf("%d launches", n)
 	}
-	// Removing what is gone answers the list, not an error.
-	if res := ucPost(f.d, "/s/livesession/user-commands/build/remove", map[string]any{}); res.Code != 200 {
-		t.Fatalf("remove of a missing command: %d", res.Code)
+	// Removing what is gone answers the current list as withdrawn, and a removal
+	// that names no revision is refused outright (zero, missing or negative).
+	res = ucPost(f.d, "/s/livesession/user-commands/build/remove", map[string]any{"revision": cur.Revision})
+	l = userCommandList{}
+	if res.Code != 409 || json.Unmarshal(res.Body.Bytes(), &l) != nil || l.Error != "withdrawn" {
+		t.Fatalf("remove of a gone command: %d %s", res.Code, res.Body)
 	}
-}
-
-// TestUserCommandInteractiveReadsUseTheCachedScope: a plain list read asks for
-// the cached worktree scope; a click, a removal and a refused write's refresh
-// ask for it afresh.
-func TestUserCommandInteractiveReadsUseTheCachedScope(t *testing.T) {
-	f := startUserCommandFixture(t)
-	c := f.register(t, "build", "make")
-	for range 5 {
-		f.list(t)
+	for _, body := range []map[string]any{{}, {"revision": 0}, {"revision": -3}} {
+		if res := ucPost(f.d, "/s/livesession/user-commands/build/remove", body); res.Code != 400 {
+			t.Fatalf("removal without a revision %v: %d", body, res.Code)
+		}
 	}
-	f.users.mu.Lock()
-	cached, fresh := f.users.cachedReads, f.users.freshReads
-	f.users.mu.Unlock()
-	if cached != 5 || fresh != 0 {
-		t.Fatalf("list reads: %d cached, %d fresh", cached, fresh)
+	keep := f.register(t, "keep", "true")
+	if res := ucPost(f.d, "/s/livesession/user-commands/keep/remove", map[string]any{}); res.Code != 400 {
+		t.Fatalf("revisionless removal: %d", res.Code)
 	}
-	f.run("build", c.Revision+99, "click-scope-0001", false) // stale: a fresh Get and a fresh list
-	f.users.mu.Lock()
-	fresh = f.users.freshReads
-	f.users.mu.Unlock()
-	if fresh != 2 {
-		t.Fatalf("a rejected click made %d fresh reads, want 2", fresh)
+	if got, ok := f.users.reg.Get("livesession", f.users.root, "keep"); !ok || got != keep {
+		t.Fatal("a revisionless removal removed the command")
 	}
 }
 
@@ -457,4 +436,77 @@ func TestUserCommandRevisionNeedsAServiceAndASession(t *testing.T) {
 func jsonNumber(n int64) string {
 	raw, _ := json.Marshal(n)
 	return strings.TrimSpace(string(raw))
+}
+
+// TestUserCommandWithdrawalRacesTheClaim: the revision check and the claim of a
+// click are one step. With concurrent clicks sharing one submission id and a
+// withdrawal landing at an arbitrary moment, every request gets the same
+// outcome as the first: one launch of the displayed line with every other
+// request mapped to its card, or no launch and every request refused.
+func TestUserCommandWithdrawalRacesTheClaim(t *testing.T) {
+	f := startUserCommandFixture(t)
+	for round := range 40 {
+		id := "race" + jsonNumber(int64(round))
+		c := f.register(t, id, "echo "+id)
+		sub := "click-" + id + "-000001"
+		before := f.svc.launchCount()
+		var wg sync.WaitGroup
+		type answer struct {
+			code int
+			card composerCard
+		}
+		answers := make(chan answer, 6)
+		start := make(chan struct{})
+		for range 5 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				res := f.run(id, c.Revision, sub, false)
+				var a answer
+				a.code = res.Code
+				_ = json.Unmarshal(res.Body.Bytes(), &a.card)
+				answers <- a
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = f.users.reg.RemoveIf("livesession", f.users.root, id, c.Revision)
+		}()
+		close(start)
+		wg.Wait()
+		close(answers)
+		fresh, known, refused := 0, 0, 0
+		for a := range answers {
+			switch a.code {
+			case 202:
+				fresh++
+			case 200:
+				known++
+				if a.card.ID != sub || a.card.Command != "echo "+id {
+					t.Fatalf("round %d: a duplicate got card %+v", round, a.card)
+				}
+			case 409:
+				refused++
+			default:
+				t.Fatalf("round %d: answer %d", round, a.code)
+			}
+		}
+		switch {
+		case fresh == 1 && refused == 0 && known == 4:
+			waitFor(t, "the launch", func() bool { return f.svc.launchCount() == before+1 })
+			if line := f.svc.launches[before].Line; line != "echo "+id {
+				t.Fatalf("round %d: ran %q", round, line)
+			}
+		case fresh == 0 && known == 0 && refused == 5:
+			time.Sleep(time.Millisecond)
+			if f.svc.launchCount() != before {
+				t.Fatalf("round %d: a refused click launched", round)
+			}
+		default:
+			t.Fatalf("round %d: mixed outcome: %d fresh, %d known, %d refused", round, fresh, known, refused)
+		}
+	}
 }

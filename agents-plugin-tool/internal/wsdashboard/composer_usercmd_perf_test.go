@@ -112,7 +112,7 @@ func TestUserCommandPerfProbe(t *testing.T) {
 		replaces = append(replaces, time.Since(start))
 		lists = append(lists, get("/s/livesession/user-commands"))
 	}
-	cur, _, _ := f.users.Get("livesession", "cmd0")
+	cur, _, _, _ := f.users.Get("livesession", "cmd0")
 	for i := range 40 {
 		id := fmt.Sprintf("perf-click-%04d", i)
 		start := time.Now()

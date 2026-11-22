@@ -130,21 +130,139 @@ func TestReloadScopedToLeadAndWorktree(t *testing.T) {
 	}
 }
 
+// TestRevisionNeverReusedAfterWithdrawAndRestart: a withdrawn command's
+// revision is never issued again, whatever the clock does across the restart
+// (frozen at the same instant, or set back): the store keeps the highest
+// revision ever issued.
 func TestRevisionNeverReusedAfterWithdrawAndRestart(t *testing.T) {
-	r, path := openTest(t, nil)
-	c, _, _ := r.Set("lead", "/w", in("a"))
+	for name, restartClock := range map[string]int64{"same instant": 1_000_000, "set back": 5, "forward": 9_000_000} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), StoreName)
+			r, err := openClock(path, nil, func() int64 { return 1_000_000 })
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, _, _ := r.Set("lead", "/w", in("a"))
+			// Several issued and withdrawn: the last withdrawal is the highest.
+			c2, _, _ := r.Set("lead", "/w", in("b"))
+			if err := r.Remove("lead", "/w", "a"); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Remove("lead", "/w", "b"); err != nil {
+				t.Fatal(err)
+			}
+			_ = r.Close()
+			r2, err := openClock(path, nil, func() int64 { return restartClock })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r2.Close()
+			again, _, err := r2.Set("lead", "/w", Input{ID: "a", Label: "other", Line: "rm -rf x"})
+			if err != nil || again.Revision <= c.Revision || again.Revision <= c2.Revision {
+				t.Fatalf("a page holding revision %d/%d would match the new definition %d (%v)", c.Revision, c2.Revision, again.Revision, err)
+			}
+		})
+	}
+}
+
+// TestSnapshotPairsTheListWithItsRevision: a list and the revision it is
+// stamped with come from one read, so a concurrent change never leaves an old
+// list carrying the new revision.
+func TestSnapshotPairsTheListWithItsRevision(t *testing.T) {
+	r, _ := openTest(t, nil)
+	if _, _, err := r.Set("lead", "/w", in("seed")); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			id := fmt.Sprint("c", i%5)
+			in := in(id)
+			in.Line = fmt.Sprint("echo ", i)
+			if i%3 == 2 {
+				_ = r.Remove("lead", "/w", id)
+			} else {
+				_, _, _ = r.Set("lead", "/w", in)
+			}
+		}
+	}()
+	// Each snapshot's revision names the change count that produced its list: the
+	// same revision must always carry the same list.
+	seen := map[string]string{}
+	for range 4000 {
+		cmds, rev := r.Snapshot("lead", "/w")
+		var b strings.Builder
+		for _, c := range cmds {
+			fmt.Fprintf(&b, "%s@%d;", c.ID, c.Revision)
+		}
+		if prior, ok := seen[rev]; ok && prior != b.String() {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("revision %s carried two lists: %q and %q", rev, prior, b.String())
+		}
+		seen[rev] = b.String()
+	}
+	close(stop)
+	wg.Wait()
+}
+
+// TestRemoveIfComparesTheRevisionUnderTheWriterLock: a conditional removal
+// removes only the revision the user saw; a replacement that landed since is
+// kept, a missing revision is refused, and the by-ID removal is unchanged.
+func TestRemoveIfComparesTheRevisionUnderTheWriterLock(t *testing.T) {
+	r, _ := openTest(t, nil)
+	first, _, _ := r.Set("lead", "/w", in("a"))
+	if err := r.RemoveIf("lead", "/w", "a", 0); !errors.Is(err, ErrStale) {
+		t.Fatalf("zero revision: %v", err)
+	}
+	repl := in("a")
+	repl.Line = "echo replaced"
+	second, _, _ := r.Set("lead", "/w", repl)
+	if err := r.RemoveIf("lead", "/w", "a", first.Revision); !errors.Is(err, ErrStale) {
+		t.Fatalf("predecessor's revision: %v", err)
+	}
+	if got, ok := r.Get("lead", "/w", "a"); !ok || got != second {
+		t.Fatalf("the replacement was removed: %+v %v", got, ok)
+	}
+	if err := r.RemoveIf("lead", "/w", "nope", 1); !errors.Is(err, ErrUnknown) {
+		t.Fatalf("unknown: %v", err)
+	}
+	// Racing a replacement against removals that name the replaced revision:
+	// whichever order they run in, the surviving command is never one the
+	// removal's revision did not name.
+	for i := range 200 {
+		cur, _ := r.Get("lead", "/w", "a")
+		next := in("a")
+		next.Line = fmt.Sprint("echo ", i)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		var rmErr error
+		go func() { defer wg.Done(); _, _, _ = r.Set("lead", "/w", next) }()
+		go func() { defer wg.Done(); rmErr = r.RemoveIf("lead", "/w", "a", cur.Revision) }()
+		wg.Wait()
+		got, ok := r.Get("lead", "/w", "a")
+		switch {
+		case rmErr == nil && ok && got.Revision == cur.Revision:
+			t.Fatalf("round %d: removed yet still there", i)
+		case rmErr == nil && ok && got.Line != next.Line:
+			t.Fatalf("round %d: the survivor is not the replacement", i)
+		case errors.Is(rmErr, ErrStale) && (!ok || got.Line != next.Line):
+			t.Fatalf("round %d: stale removal lost the replacement", i)
+		}
+		if !ok {
+			_, _, _ = r.Set("lead", "/w", in("a"))
+		}
+	}
 	if err := r.Remove("lead", "/w", "a"); err != nil {
-		t.Fatal(err)
-	}
-	_ = r.Close()
-	r2, err := Open(path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r2.Close()
-	again, _, err := r2.Set("lead", "/w", Input{ID: "a", Label: "other", Line: "rm -rf x"})
-	if err != nil || again.Revision <= c.Revision {
-		t.Fatalf("a page holding revision %d would match the new definition %d", c.Revision, again.Revision)
+		t.Fatalf("by-ID removal: %v", err)
 	}
 }
 

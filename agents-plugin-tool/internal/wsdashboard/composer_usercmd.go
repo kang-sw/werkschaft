@@ -9,6 +9,7 @@ package wsdashboard
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -20,17 +21,19 @@ import (
 // of an open hosted lead, bound by the command layer. The worktree scope comes
 // from the runner's state, never from the browser. Reads are memory only.
 type UserCommandService interface {
-	// List is the lead's commands in its bound worktree and their opaque
-	// revision. fresh reads the worktree afresh; otherwise a recent read of it
-	// may serve (the page load and the list refetch touch no file).
-	List(replyID string, fresh bool) (commands []wsusercmd.Command, rev string, err error)
-	// Get returns one command of that scope.
-	Get(replyID, id string) (wsusercmd.Command, bool, error)
-	// Remove withdraws a command, the service the agent's unregister tool
-	// calls; false when there was none.
-	Remove(replyID, id string) (bool, error)
-	// Revision is the opaque revision of the lead's commands (any worktree):
-	// it differs after every change.
+	// List is the lead's commands in its bound worktree and the opaque revision
+	// they carry, from one read (the revision always belongs to the list). It
+	// reads memory only.
+	List(replyID string) (commands []wsusercmd.Command, rev string, err error)
+	// Get returns one command of that scope and the worktree it was read for.
+	Get(replyID, id string) (cmd wsusercmd.Command, root string, found bool, err error)
+	// RemoveIf withdraws a command only while it has the revision the user was
+	// shown, decided together with the removal: wsusercmd.ErrStale when it
+	// changed, wsusercmd.ErrUnknown when it is gone. (The agent's unregister
+	// tool withdraws by ID and does not come through here.)
+	RemoveIf(replyID, id string, rev int64) error
+	// Revision is the opaque revision of the lead's commands and worktree: it
+	// differs after every change.
 	Revision(replyID string) string
 }
 
@@ -118,8 +121,7 @@ func (d *Daemon) handleUserCommands(w http.ResponseWriter, r *http.Request, repl
 // userCommandList answers the lead's list; errText and status attach a refused
 // write's reason to it.
 func (d *Daemon) userCommandList(w http.ResponseWriter, users UserCommandService, replyID, errText string, status int) {
-	// A list that answers a refused write is read afresh; a plain read is not.
-	cmds, rev, err := users.List(replyID, errText != "" || status != http.StatusOK)
+	cmds, rev, err := users.List(replyID)
 	if err != nil {
 		http.Error(w, "unknown session", http.StatusNotFound)
 		return
@@ -174,37 +176,55 @@ func (d *Daemon) userCommandRun(w http.ResponseWriter, r *http.Request, users Us
 		return
 	}
 	svc := *svcp
-	// An admission already made, or one an unknown outcome stands for, answers
-	// before the command is looked up: a retry of a click whose response was
-	// lost must map to its one job (or report the outcome unknown) even when the
-	// command has changed or been withdrawn since, and never launch.
+	// One ordering point: the known-card, fence and token answers, the check
+	// that the command still has the displayed revision, and the claim happen
+	// under the composer's admission lock (composerAdmitSlot). A retry, a fenced
+	// id or a known card answers without ever looking the command up, so a click
+	// whose response was lost maps to its one job (or reports the outcome
+	// unknown) even when the command changed or was withdrawn since, and never
+	// launches.
 	slot := &composerSlot{id: id, revision: req.Revision}
-	if sub, fenced := d.composerPeek(replyID, req.SubmissionID); sub != nil || fenced || req.Retry {
-		sub, admission := d.composerAdmitSlot(replyID, req.SubmissionID, "", gen, true, req.Token, slot)
-		d.composerAnswer(w, svc, sub, admission, req.SubmissionID, "", slot)
+	var refusal string
+	var lookupErr error
+	resolve := func() (string, string, bool) {
+		cmd, root, found, err := users.Get(replyID, id)
+		switch {
+		case err != nil:
+			lookupErr = err
+			return "", "", false
+		case !found:
+			refusal = "withdrawn"
+			return "", "", false
+		case cmd.Revision != req.Revision:
+			refusal = "stale"
+			return "", "", false
+		}
+		slot.label = cmd.Label
+		return cmd.Line, root, true
+	}
+	sub, admission := d.composerAdmitSlot(replyID, req.SubmissionID, "", gen, req.Retry, req.Token, slot, resolve)
+	if admission == composerRefused {
+		if lookupErr != nil {
+			http.Error(w, "unknown session", http.StatusNotFound)
+			return
+		}
+		d.userCommandList(w, users, replyID, refusal, http.StatusConflict)
 		return
 	}
-	cmd, found, err := users.Get(replyID, id)
-	if err != nil {
-		http.Error(w, "unknown session", http.StatusNotFound)
-		return
+	line := ""
+	if sub != nil {
+		sub.mu.Lock()
+		line = sub.line
+		sub.mu.Unlock()
 	}
-	switch {
-	case !found:
-		d.userCommandList(w, users, replyID, "withdrawn", http.StatusConflict)
-		return
-	case cmd.Revision != req.Revision:
-		d.userCommandList(w, users, replyID, "stale", http.StatusConflict)
-		return
-	}
-	slot.label = cmd.Label
-	sub, admission := d.composerAdmitSlot(replyID, req.SubmissionID, cmd.Line, gen, false, req.Token, slot)
-	d.composerAnswer(w, svc, sub, admission, req.SubmissionID, cmd.Line, slot)
+	d.composerAnswer(w, svc, sub, admission, req.SubmissionID, line, slot)
 }
 
-// userCommandRemove is the user's own withdrawal of command id: the service the
-// agent's unregister tool calls. A revision the page displayed that is no longer
-// current is stale (the user is shown the new definition first).
+// userCommandRemove is the user's own withdrawal of command id. The displayed
+// revision is required: the removal is made only while the command still has it
+// (decided under the registry's writer lock together with the removal), and
+// otherwise the user is shown the current list first. The agent's unregister
+// tool withdraws by ID and does not come through here.
 func (d *Daemon) userCommandRemove(w http.ResponseWriter, r *http.Request, users UserCommandService, replyID, id string) {
 	if !wsusercmd.ValidID(id) {
 		http.NotFound(w, r)
@@ -214,20 +234,18 @@ func (d *Daemon) userCommandRemove(w http.ResponseWriter, r *http.Request, users
 	if !userCommandBody(w, r, &req) {
 		return
 	}
-	if req.Revision != 0 {
-		cmd, found, err := users.Get(replyID, id)
-		if err != nil {
-			http.Error(w, "unknown session", http.StatusNotFound)
-			return
-		}
-		if found && cmd.Revision != req.Revision {
-			d.userCommandList(w, users, replyID, "stale", http.StatusConflict)
-			return
-		}
-	}
-	if _, err := users.Remove(replyID, id); err != nil {
-		http.Error(w, "could not remove the command: "+err.Error(), http.StatusInternalServerError)
+	if req.Revision <= 0 {
+		http.Error(w, "the displayed revision is required", http.StatusBadRequest)
 		return
 	}
-	d.userCommandList(w, users, replyID, "", http.StatusOK)
+	switch err := users.RemoveIf(replyID, id, req.Revision); {
+	case err == nil:
+		d.userCommandList(w, users, replyID, "", http.StatusOK)
+	case errors.Is(err, wsusercmd.ErrStale):
+		d.userCommandList(w, users, replyID, "stale", http.StatusConflict)
+	case errors.Is(err, wsusercmd.ErrUnknown):
+		d.userCommandList(w, users, replyID, "withdrawn", http.StatusConflict)
+	default:
+		http.Error(w, "could not remove the command: "+err.Error(), http.StatusInternalServerError)
+	}
 }
