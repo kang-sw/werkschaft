@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	goruntime "runtime"
 	"slices"
 	"strings"
@@ -550,16 +551,45 @@ func TestHostedRunningOwnersFollowEachJob(t *testing.T) {
 			}
 		}
 	}
-	// A job still running when the daemon restarts counts at once.
+	// A job still running when the daemon restarts counts at once. Its end
+	// is observed when its holder leaves before the exit record arrives,
+	// and when the next start finds a running job's holder gone.
 	fx.holders.spawnErr = nil
 	kept, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fx.onRunning = nil
+	mu.Lock()
+	seen = nil
+	mu.Unlock()
 	fx.open(time.Hour)
 	if got := fx.h.RunningOwners(); got["lead"] != 1 || len(got) != 1 {
 		t.Fatalf("after a reopen with %s running: RunningOwners = %v", kept.ID, got)
+	}
+	left, err := fx.launch(context.Background(), nil, HostedLaunch{Owner: "other", Async: true})
+	if err != nil || left.State != HostedRunning {
+		t.Fatalf("other launch after the reopen = %+v, %v", left, err)
+	}
+	fx.holders.mu.Lock()
+	session := fx.holders.live[kept.HolderID]
+	delete(fx.holders.live, left.HolderID)
+	fx.holders.mu.Unlock()
+	code := 0
+	fx.h.HolderGone(wsholder.Descriptor{ID: kept.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "exit"})
+	fx.open(time.Hour)
+	if got := fx.h.RunningOwners(); len(got) != 0 {
+		t.Fatalf("after a reopen with %s's holder gone: RunningOwners = %v", left.ID, got)
+	}
+	mu.Lock()
+	got = slices.Clone(seen)
+	mu.Unlock()
+	want = []map[string]int{
+		{"lead": 1, "other": 1}, // other admitted beside the kept job
+		{"other": 1},            // the kept job's holder left (HolderGone)
+		{},                      // the next start found other's holder gone
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("OnRunning calls across reopens = %v, want %v", got, want)
 	}
 	if got := (*Hosted)(nil).RunningOwners(); len(got) != 0 {
 		t.Fatalf("a nil Hosted counts %v", got)

@@ -220,6 +220,9 @@ func dashboardCommand(args []string) {
 	// Under the lock and with the runner started: a completion notice for
 	// a conversation the runner does not know yet would be dropped.
 	host.exec.Store(openHostedExec(dir, holders, agents, execLink, logw, execJobsChanged))
+	// Start ran before this Store, so its wakes read no jobs: a job a
+	// predecessor left running reaches the rail with this one.
+	execJobsChanged()
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.
 	nudgeHooks, stopHooks := startTrackerHooks(tracker, trackerErr, dir, daemon.Endpoint().Port, logw)
