@@ -127,7 +127,7 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	default:
 	}
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: id, Owner: owner.ID})
-	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, ExitCopy: h.exitCopyPath(id)})
+	holder, err := h.opts.Holders.LaunchWith(wsholder.LaunchSpec{Session: session, RingBytes: hostedHolderRing, RingCeilingBytes: hostedHolderRingCeiling, ExitCopy: h.exitCopyPath(id)})
 	if err != nil {
 		if holder != "" {
 			// The holder registered but could not be attached: it runs, and

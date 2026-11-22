@@ -259,6 +259,10 @@ func (h *Hosted) logf(format string, args ...any) {
 func (h *Hosted) Start() {
 	h.opts.Holders.Scan()
 	listing := h.opts.Holders.List()
+	// An incomplete listing may omit a holder that still runs: a job whose
+	// holder it omits is only ended by an exit copy, never lost on the
+	// listing's word, and is reconciled once a scan reads every holder.
+	settleLost := !listing.Incomplete
 	live := map[string]bool{}
 	for _, info := range listing.Holders {
 		live[info.ID] = true
@@ -311,11 +315,61 @@ func (h *Hosted) Start() {
 			h.logf("replay holder %s: %v", id, err)
 		}
 	}
+	var unsettled []*hostedJob
 	for _, j := range gone {
-		h.endFromExitCopy(j)
+		if !h.endFromExitCopy(j, settleLost) {
+			h.logf("job %s: its holder is not listed and the holder census is incomplete; it stays running until a complete scan", j.row.ID)
+			unsettled = append(unsettled, j)
+		}
+	}
+	if len(unsettled) > 0 {
+		go h.reconcileUnlisted(unsettled)
 	}
 	h.sweepExitCopies()
 	h.deliverPending()
+}
+
+// reconcileUnlisted settles the running jobs Start found no holder for
+// under an incomplete scan, once a scan reads every holder: a job whose
+// holder is listed then replays it, and one whose holder is gone ends with
+// its exit copy's status (lost without one). The jobs stay running, and
+// fenced, until then. Close ends the retries.
+func (h *Hosted) reconcileUnlisted(jobs []*hostedJob) {
+	delay := retireRetryMin
+	for {
+		t := time.NewTimer(delay)
+		select {
+		case <-h.quit:
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		h.opts.Holders.Scan()
+		listing := h.opts.Holders.List()
+		if listing.Incomplete {
+			delay = min(delay*2, retireRetryMax)
+			continue
+		}
+		live := map[string]bool{}
+		for _, info := range listing.Holders {
+			live[info.ID] = true
+		}
+		for _, j := range jobs {
+			h.mu.Lock()
+			ended, holder := j.row.Terminal(), j.row.HolderID
+			h.mu.Unlock()
+			switch {
+			case ended:
+			case live[holder]:
+				if err := h.opts.Holders.Replay(holder); err != nil {
+					h.logf("replay holder %s: %v", holder, err)
+				}
+			default:
+				h.endFromExitCopy(j, true)
+			}
+		}
+		return
+	}
 }
 
 // sweepExitCopies removes the exit copies no job row needs: a removal that
@@ -345,8 +399,9 @@ func (h *Hosted) sweepExitCopies() {
 }
 
 // endFromExitCopy ends job j, whose holder is gone, with the status its
-// exit copy kept.
-func (h *Hosted) endFromExitCopy(j *hostedJob) {
+// exit copy kept. Without a readable copy the job is lost only when
+// allowLost; otherwise it stays running and endFromExitCopy reports false.
+func (h *Hosted) endFromExitCopy(j *hostedJob, allowLost bool) bool {
 	path := h.exitCopyPath(j.row.ID)
 	var exit wsholder.Exit
 	raw, err := os.ReadFile(path)
@@ -356,7 +411,11 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
-		return
+		return true
+	}
+	if err != nil && !allowLost {
+		h.mu.Unlock()
+		return false
 	}
 	if err == nil {
 		j.row.State = HostedExited
@@ -379,6 +438,7 @@ func (h *Hosted) endFromExitCopy(j *hostedJob) {
 	h.dropExitCopy(j)
 	h.deliver(j)
 	h.noticeStopped(j)
+	return true
 }
 
 // HolderGone is the daemon's holder OnExit for an exec job's holder: the

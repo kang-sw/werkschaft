@@ -43,11 +43,15 @@ func deniedBasePaths(homes []string) []string {
 			add(filepath.Join(dir, name))
 		}
 	}
-	// The provider credential file, and its directory.
+	// The provider credential file, its directory, and the pre-release
+	// directory beside the daemon's, until the daemon moves the file out
+	// of it (wscred.Store.MigrateLegacy). The release baseline already
+	// denies the daemon directory the file lives under.
 	addCredentials := func(cacheHome string) {
 		if path, err := wscred.DefaultPath(cacheHome); err == nil {
 			add(filepath.Dir(path))
 			add(path)
+			add(filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(path))), "auth"))
 		}
 	}
 	for _, home := range homes {

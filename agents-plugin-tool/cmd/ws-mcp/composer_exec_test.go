@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -167,6 +168,27 @@ func TestComposerExecRunsTheLinesAsTheLeadsOwnExecShell(t *testing.T) {
 	job, err = run("head -c 10000 /dev/zero | tr '\\0' x", 20*time.Second)
 	if err != nil || job.Written != 10000 || len(job.Output) != 10000 || job.Start != 0 {
 		t.Fatalf("big job = written %d output %d start %d, %v", job.Written, len(job.Output), job.Start, err)
+	}
+	// Many short lines finish faster than the holder's relay sends them: the
+	// whole last MiB of the raw bytes is still kept, however many records the
+	// 1-byte-and-more rows make (seq's rows are 2-7 bytes each).
+	const lastLine = 300000
+	var seq strings.Builder
+	for i := 1; i <= lastLine; i++ {
+		seq.WriteString(strconv.Itoa(i))
+		seq.WriteByte('\n')
+	}
+	wantAll := seq.String()
+	if len(wantAll) != 1988895 {
+		t.Fatalf("fixture is %d bytes", len(wantAll))
+	}
+	job, err = run("seq 1 "+strconv.Itoa(lastLine), 20*time.Second)
+	if err != nil || !job.Terminal() || job.State != "exited" {
+		t.Fatalf("seq job = %+v, %v", job, err)
+	}
+	if job.Written != 1988895 || job.Start != 1988895-(1<<20) || string(job.Output) != wantAll[len(wantAll)-(1<<20):] {
+		t.Fatalf("seq job = written %d start %d kept %d bytes (first %q), want the last 1 MiB of %d",
+			job.Written, job.Start, len(job.Output), firstN(job.Output, 24), len(wantAll))
 	}
 	// A lead the runner will not name refuses; nothing runs.
 	runner.err = errors.New("not an open hosted lead")
@@ -411,4 +433,12 @@ func TestComposerJobUserStopHandsAStoppedReceiptAndWakesNothing(t *testing.T) {
 	if err != nil || !read.Job.Terminal() || len(read.Segments) == 0 || !strings.Contains(string(read.Segments[0].Data), "started") || read.Segments[0].Stream != execjob.StreamStdout {
 		t.Fatalf("output = %+v, %v", read, err)
 	}
+}
+
+// firstN is the first n bytes of b, for a failure message.
+func firstN(b []byte, n int) []byte {
+	if len(b) > n {
+		return b[:n]
+	}
+	return b
 }
