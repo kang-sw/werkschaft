@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
+    time::{Duration, Instant},
 };
 
 use tauri::{webview::DownloadEvent, Manager, Runtime, Webview};
@@ -22,6 +23,8 @@ use crate::{
 const FALLBACK_NAME: &str = "download";
 /// The longest file name kept, in bytes; filesystems allow 255.
 const NAME_MAX: usize = 200;
+/// How long a reservation is held without its completion arriving.
+const HOLD: Duration = Duration::from_secs(600);
 /// The most " (n)" suffixes tried before the download is refused; each try
 /// is a file probe under the ledger lock.
 const SUFFIX_MAX: u32 = 100;
@@ -43,16 +46,18 @@ pub fn handler<R: Runtime>(
                 return false;
             };
             let name = pick_name(destination.file_name().and_then(|name| name.to_str()), &url);
-            let begun = ACTIVE
-                .lock()
-                .unwrap()
-                .begin(url, &folder, &name, |path| path.exists());
+            let begun = ACTIVE.lock().unwrap().begin(
+                url,
+                &folder,
+                &name,
+                |path| path.exists(),
+                Instant::now(),
+            );
             match begun {
                 Begin::Reserved(path) => {
                     *destination = path;
                     true
                 }
-                Begin::Duplicate => false,
                 Begin::NoName => {
                     announce(&webview, false, &name);
                     false
@@ -60,12 +65,14 @@ pub fn handler<R: Runtime>(
             }
         }
         DownloadEvent::Finished { url, success, .. } => {
-            let ended = ACTIVE.lock().unwrap().finish(&url, success);
-            if let Some(path) = ended {
-                let name = path
-                    .file_name()
-                    .map_or_else(|| FALLBACK_NAME.into(), |name| name.to_string_lossy());
-                announce(&webview, success, &name);
+            let ended = ACTIVE.lock().unwrap().finish(&url, Instant::now());
+            if let Some(ended) = ended {
+                let name = ended.and_then(|path| {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                });
+                let detail = name.as_deref().unwrap_or("");
+                announce(&webview, success, detail);
             }
             true
         }
@@ -77,67 +84,75 @@ pub fn handler<R: Runtime>(
 #[derive(Debug, PartialEq, Eq)]
 pub enum Begin {
     Reserved(PathBuf),
-    /// The same URL is already downloading.
-    Duplicate,
     /// Every candidate name is taken.
     NoName,
 }
 
-/// Downloads accepted and not yet finished, at most one per URL: a completion
-/// names only its URL (WKWebView gives no path), so a second download of one
-/// URL could not be told apart from the first.
+/// Downloads accepted and not yet finished. A completion names only its URL
+/// (WKWebView gives no path, and WebView2 may report a refused download too),
+/// so a URL's downloads are matched oldest first and a file is named only
+/// when the match is certain. Nothing is held past `HOLD`.
 pub struct Active {
-    reserved: Vec<(Url, PathBuf)>,
-    /// Same-URL requests refused while one was reserved. WebView2 may still
-    /// report each as an interrupted completion; that must release nothing.
-    refused: Vec<Url>,
+    reserved: Vec<Reservation>,
+}
+
+struct Reservation {
+    url: Url,
+    path: PathBuf,
+    at: Instant,
 }
 
 impl Active {
     pub const fn new() -> Self {
         Self {
             reserved: Vec::new(),
-            refused: Vec::new(),
         }
     }
 
-    /// Reserves a path for `url`; `exists` tells whether a file is there.
+    fn expire(&mut self, now: Instant) {
+        self.reserved
+            .retain(|held| now.saturating_duration_since(held.at) < HOLD);
+    }
+
+    /// Reserves a path for `url`, unique among files and reservations;
+    /// `exists` tells whether a file is there.
     pub fn begin(
         &mut self,
         url: Url,
         folder: &Path,
         name: &str,
         exists: impl Fn(&Path) -> bool,
+        now: Instant,
     ) -> Begin {
-        if self.reserved.iter().any(|(held, _)| *held == url) {
-            self.refused.push(url);
-            return Begin::Duplicate;
-        }
-        // A refusal's completion that never came must not outlive its URL.
-        self.refused.retain(|refused| *refused != url);
+        self.expire(now);
         let reserved = &self.reserved;
         let Some(path) = unique_path(folder, name, |candidate| {
-            exists(candidate) || reserved.iter().any(|(_, taken)| taken == candidate)
+            exists(candidate) || reserved.iter().any(|held| held.path == candidate)
         }) else {
             return Begin::NoName;
         };
-        self.reserved.push((url, path.clone()));
+        self.reserved.push(Reservation {
+            url,
+            path: path.clone(),
+            at: now,
+        });
         Begin::Reserved(path)
     }
 
-    /// Ends the download of `url`, returning its reserved path. None for a
-    /// URL never reserved, and for the interrupted completion of a refused
-    /// duplicate, which release nothing.
-    pub fn finish(&mut self, url: &Url, success: bool) -> Option<PathBuf> {
-        if !success {
-            if let Some(at) = self.refused.iter().position(|refused| refused == url) {
-                self.refused.remove(at);
-                return None;
-            }
-        }
-        let at = self.reserved.iter().position(|(held, _)| held == url)?;
-        self.refused.retain(|refused| refused != url);
-        Some(self.reserved.remove(at).1)
+    /// Ends the oldest download of `url`. None when it has no reservation.
+    /// Some(Some(path)) when it had exactly one, so the file is certain;
+    /// Some(None) when several were in flight and the file is not.
+    pub fn finish(&mut self, url: &Url, now: Instant) -> Option<Option<PathBuf>> {
+        self.expire(now);
+        let mut matching = self
+            .reserved
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.url == *url);
+        let (oldest, _) = matching.next()?;
+        let certain = matching.next().is_none();
+        let path = self.reserved.remove(oldest).path;
+        Some(certain.then_some(path))
     }
 }
 
@@ -439,63 +454,83 @@ mod tests {
     }
 
     #[test]
-    fn one_url_downloads_once_and_a_refused_copys_end_releases_nothing() {
+    fn each_request_for_one_url_reserves_its_own_name() {
         let folder = Path::new("/dl");
         let board = url("http://127.0.0.1:1/s/a/board.zip");
-        let other = url("http://127.0.0.1:1/s/b/board.zip");
+        let now = Instant::now();
         let mut active = Active::new();
-        let first = active.begin(board.clone(), folder, "board.zip", |_| false);
-        assert_eq!(first, Begin::Reserved(folder.join("board.zip")));
-        // The same URL again while in flight is refused.
         assert_eq!(
-            active.begin(board.clone(), folder, "board.zip", |_| false),
-            Begin::Duplicate
-        );
-        // Its interrupted completion releases nothing and announces nothing.
-        assert_eq!(active.finish(&board, false), None);
-        // The first download still owns its name: another URL numbers past it.
-        assert_eq!(
-            active.begin(other.clone(), folder, "board.zip", |_| false),
-            Begin::Reserved(folder.join("board (1).zip"))
-        );
-        // The real end names the first download's file.
-        assert_eq!(active.finish(&board, true), Some(folder.join("board.zip")));
-        assert_eq!(
-            active.finish(&other, false),
-            Some(folder.join("board (1).zip"))
-        );
-        // Never reserved, or already ended: nothing.
-        assert_eq!(active.finish(&board, true), None);
-        assert_eq!(active.finish(&url("https://x.test/z"), false), None);
-        // The URL may download again once ended.
-        assert_eq!(
-            active.begin(board, folder, "board.zip", |_| false),
+            active.begin(board.clone(), folder, "board.zip", |_| false, now),
             Begin::Reserved(folder.join("board.zip"))
         );
+        assert_eq!(
+            active.begin(board.clone(), folder, "board.zip", |_| false, now),
+            Begin::Reserved(folder.join("board (1).zip"))
+        );
+        // Two in flight: the oldest is released, but no file is named.
+        assert_eq!(active.finish(&board, now), Some(None));
+        // One left: its file is certain, and it is the newer one.
+        assert_eq!(
+            active.finish(&board, now),
+            Some(Some(folder.join("board (1).zip")))
+        );
+        assert_eq!(active.finish(&board, now), None);
     }
 
     #[test]
-    fn a_stale_refusal_does_not_swallow_a_later_real_failure() {
+    fn a_completion_without_a_reservation_does_nothing() {
         let folder = Path::new("/dl");
         let board = url("http://127.0.0.1:1/board.zip");
+        let now = Instant::now();
         let mut active = Active::new();
-        active.begin(board.clone(), folder, "board.zip", |_| false);
-        active.begin(board.clone(), folder, "board.zip", |_| false);
-        // The refused copy never reported; the first succeeds and ends.
-        assert!(active.finish(&board, true).is_some());
-        // A later download of the URL that fails is reported.
-        active.begin(board.clone(), folder, "board.zip", |_| false);
-        assert!(active.finish(&board, false).is_some());
+        assert_eq!(active.finish(&board, now), None);
+        active.begin(board.clone(), folder, "board.zip", |_| false, now);
+        // Another URL's completion releases nothing here.
+        assert_eq!(active.finish(&url("https://x.test/z"), now), None);
+        assert_eq!(
+            active.finish(&board, now),
+            Some(Some(folder.join("board.zip")))
+        );
+        // A late extra completion finds nothing and takes no new reservation.
+        active.begin(board.clone(), folder, "board.zip", |_| false, now);
+        assert!(active.finish(&board, now).is_some());
+        assert_eq!(active.finish(&board, now), None);
+    }
+
+    #[test]
+    fn a_reservation_expires_after_ten_minutes() {
+        let folder = Path::new("/dl");
+        let board = url("http://127.0.0.1:1/board.zip");
+        let start = Instant::now();
+        let mut active = Active::new();
+        active.begin(board.clone(), folder, "board.zip", |_| false, start);
+        let late = start + HOLD;
+        // The held name is free again, and the dead completion finds nothing.
+        assert_eq!(
+            active.begin(board.clone(), folder, "board.zip", |_| false, late),
+            Begin::Reserved(folder.join("board.zip"))
+        );
+        assert_eq!(
+            active.finish(&board, late),
+            Some(Some(folder.join("board.zip")))
+        );
+        let before = start + HOLD - Duration::from_secs(1);
+        active.begin(board.clone(), folder, "board.zip", |_| false, start);
+        assert_eq!(
+            active.finish(&board, before),
+            Some(Some(folder.join("board.zip")))
+        );
     }
 
     #[test]
     fn a_full_name_space_refuses_without_reserving() {
         let mut active = Active::new();
         let board = url("http://127.0.0.1:1/board.zip");
+        let now = Instant::now();
         assert_eq!(
-            active.begin(board.clone(), Path::new("/dl"), "a.zip", |_| true),
+            active.begin(board.clone(), Path::new("/dl"), "a.zip", |_| true, now),
             Begin::NoName
         );
-        assert_eq!(active.finish(&board, false), None);
+        assert_eq!(active.finish(&board, now), None);
     }
 }
