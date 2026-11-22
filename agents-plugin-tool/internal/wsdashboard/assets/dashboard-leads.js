@@ -512,7 +512,10 @@
     seg.setAttribute("role", "radiogroup");
     seg.setAttribute("aria-label", wsT("js.sup.harness"));
     var hbtn = Object.create(null), harnessSig = "";
-    function harnessButtons() {
+    // harnessButtons draws the harness segment from the latest list; unless
+    // keep, a harness the list no longer offers moves to the first one that
+    // can start (keep leaves it, and Start stays refused).
+    function harnessButtons(keep) {
       var hs = leadHarnesses(), sig = hs.map(function (h) { return h.harness; }).join("\n");
       if (harnessSig !== sig) {
         harnessSig = sig;
@@ -525,7 +528,7 @@
           seg.appendChild(b);
         });
       }
-      if (!hbtn[P.harness] || off(P.harness)) {
+      if (!keep && (!hbtn[P.harness] || off(P.harness))) {
         P.harness = hs.filter(function (h) { return !off(h.harness); }).map(function (h) { return h.harness; })[0] || hs[0].harness;
       }
     }
@@ -834,12 +837,18 @@
       });
     };
     // choicesArrived shows a newer choices list over a form the user may
-    // have edited: it keeps the picks, shows them against the new lists, and
-    // re-applies a picked named tier, so the tier note and the fields agree.
+    // have edited. A re-read never changes the form on its own: the harness,
+    // model, and effort stay as shown (a value the new list lacks is kept as
+    // an extra option, as applyTier adds one), and a harness no longer
+    // offered stays for Start to refuse. Only a still-picked named tier
+    // re-applies its values (or, gone, returns the form to manual), so the
+    // tier note and the fields agree.
     function choicesArrived() {
+      var shown = { model: rows.model.value, effort: rows.effort.value, mode: rows.free() };
       picks[P.harness] = currentPick();
-      harnessButtons();
-      showPick(P.harness);
+      harnessButtons(true);
+      rows.set(P.harness, shown);
+      permDraw();
       reapplyTier();
       sync();
       railPopPlace();
@@ -852,7 +861,7 @@
       if (live()) { permDraw(); sync(); railPopPlace(); }
       if (read) leadChoices(arrived, arrived);
     };
-    P.focus = function () { (hbtn[P.harness].disabled ? cancel : hbtn[P.harness]).focus(); };
+    P.focus = function () { (hbtn[P.harness] && !hbtn[P.harness].disabled ? hbtn[P.harness] : cancel).focus(); };
     P.close = function () { permFullDrop(); };
     return P;
   }

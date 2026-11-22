@@ -283,14 +283,15 @@ test('a picked named tier keeps its off-catalog model and effort across a choice
   assert.equal(body.model, 'gpt-x-preview');
   assert.equal(body.effort, 'xhigh');
 
-  // The bundle vanished from the refreshed list: back to manual, and what
-  // the form shows is what it sends.
+  // The bundle vanished from the refreshed list: back to manual, the fields
+  // keep what they show (a re-read never changes them), and what the form
+  // shows is what it sends.
   p.open('root', 'name', btn);
   picker.value = 'preview'; picker.events.change();
   pending.shift()(200, { harnesses: hs, tiers: [] });
   assert.equal(picker.value, '', 'a vanished tier returns the form to manual');
-  assert.equal(model.value, '');
-  assert.equal(effort.value, '');
+  assert.equal(model.value, 'gpt-x-preview');
+  assert.equal(effort.value, 'xhigh');
   p.level = 'read-only';
   body = launch();
   assert.equal(body.model, model.value);
@@ -433,4 +434,99 @@ test('a choices read after a stream reconnect re-applies the picked tier, so its
   pending.shift()(200, { harnesses: hs, tiers: [] });
   assert.equal(picker.value, '');
   assert.match(note(), /^js\.lead\.tier\.hint/);
+});
+
+test('a choices re-read never changes the fields on its own: manual off-catalog values and the harness stay', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.events = {}; this.classList = { toggle() {} }; this._value = ''; }
+    appendChild(c) { this.children.push(c); return c; }
+    insertBefore(c) { if (!this.children.includes(c)) this.children.push(c); return c; }
+    set textContent(v) { this.children = []; this.text = v; }
+    get textContent() { return this.text || ''; }
+    set value(v) { this._value = v; }
+    get value() { return this._value || (this.tag === 'select' && this.children[0] ? this.children[0].value : ''); }
+    setAttribute(k, v) { this.attrs[k] = v; }
+    getAttribute(k) { return this.attrs[k] || ''; }
+    addEventListener(k, f) { this.events[k] = f; }
+    focus() {}
+  }
+  const pending = [], posts = [];
+  const claude = { harness: 'claude', lead: true, available: true, models: [{ id: 'opus' }], efforts: ['high'], permission_modes: ['auto'], permission_levels: ['read-only'] };
+  const codex = { harness: 'codex', lead: true, available: true, models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }], efforts: ['low', 'high'], permission_modes: ['read-only'], permission_levels: ['read-only'] };
+  const hs = [claude, codex];
+  // The bundle's effort is not in codex's catalog list.
+  const tiers = [{ name: 'preview', trace: 'preview', harness: 'codex', model: 'gpt-5', effort: 'xhigh' }];
+  const c = { mode: 'index', root: { hasAttribute: () => false }, supChoices: null,
+    localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { setItem() {} }, RENAME_NEW: 'rename',
+    supHarness(k) { return c.supChoices && c.supChoices.harnesses.find(h => h.harness === k); },
+    tkFetch(path, opt, cb) { pending.push(cb); }, wsT: (k, ...a) => [k, ...a].join('|'), mk: (tag) => new Element(tag), rpPop: () => new Element('div'), rpBtn: () => new Element('button'), rpId: () => 'id',
+    gIcon: () => new Element('icon'), rpLive: () => true, railPopPlace() {}, railPopClose() {}, railOpen() {}, saveDraft() {}, notifAsk() {}, go() {}, toast() {},
+    WsRail: { leadBody: (root, v) => v }, railPost(path, body, cb) { posts.push({ path, body, cb }); }
+  };
+  vm.createContext(c);
+  const source = fs.readFileSync(__dirname + '/assets/dashboard-leads.js', 'utf8');
+  vm.runInContext(fs.readFileSync(__dirname + '/assets/dashboard-tier-picker.js', 'utf8') + source.slice(0, source.indexOf('  // The session menu of the viewed hosted session')), c);
+  const p = c.rpLeadMake(), btn = new Element('button');
+  const all = (el, pred) => [ ...(pred(el) ? [el] : []), ...el.children.flatMap(x => all(x, pred)) ];
+  const find = (el, pred) => all(el, pred)[0];
+  const picker = find(p.el, e => e.attrs['data-tier-picker']);
+  const [model, , effort] = all(p.el, e => e.tag === 'select' && !e.attrs['data-tier-picker']);
+  const start = p.el.children.at(-1).children.at(-1);
+  const launch = (list) => {
+    start.events.click({ target: start });
+    if (pending.length) pending.shift()(200, list);
+    const sent = posts.shift();
+    return sent && sent.body;
+  };
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+
+  // The repro: a bundle with an off-catalog effort, then a manual model
+  // edit; the picker goes manual and the effort stays. A reconnect re-reads
+  // identical choices.
+  picker.value = 'preview'; picker.events.change();
+  assert.equal(effort.value, 'xhigh');
+  model.value = 'gpt-5-mini'; model.events.change(model);
+  assert.equal(picker.value, '', 'the hand edit returns to manual');
+  p.permSync(true);
+  pending.shift()(200, { harnesses: hs, tiers });
+  assert.equal(model.value, 'gpt-5-mini');
+  assert.equal(effort.value, 'xhigh', 'the re-read keeps the off-catalog effort');
+  p.level = 'read-only';
+  let body = launch({ harnesses: hs, tiers });
+  assert.equal(body.harness, 'codex');
+  assert.equal(body.model, 'gpt-5-mini');
+  assert.equal(body.effort, 'xhigh', 'the launch still carries the effort the form shows');
+
+  // A manual model the refreshed catalog dropped stays picked and is sent.
+  const seg = find(p.el, e => e.attrs['aria-label'] === 'js.sup.harness');
+  const toCodex = () => seg.events.click({ target: { closest: () => find(seg, e => e.attrs['data-harness'] === 'codex') } });
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+  toCodex();
+  model.value = 'gpt-5-mini'; model.events.change(model);
+  effort.value = 'low'; effort.events.change(effort);
+  const dropped = [claude, { ...codex, models: [{ id: 'gpt-5' }] }];
+  p.permSync(true);
+  pending.shift()(200, { harnesses: dropped, tiers });
+  assert.equal(p.harness, 'codex');
+  assert.equal(model.value, 'gpt-5-mini', 'a model the catalog dropped stays');
+  assert.ok(model.children.some(o => o.value === 'gpt-5-mini'), 'it is kept as an option');
+  p.level = 'read-only';
+  body = launch({ harnesses: dropped, tiers });
+  assert.equal(body.model, 'gpt-5-mini');
+  assert.equal(body.effort, 'low');
+
+  // A harness that turned unavailable is not swapped for another: it stays
+  // shown and Start refuses it.
+  p.open('root', 'name', btn);
+  pending.shift()(200, { harnesses: hs, tiers });
+  toCodex();
+  assert.equal(p.harness, 'codex');
+  p.permSync(true);
+  pending.shift()(200, { harnesses: [claude, { ...codex, available: false }], tiers });
+  assert.equal(p.harness, 'codex', 'the re-read keeps the shown harness');
+  assert.equal(start.disabled, true, 'Start refuses the unavailable harness');
+  start.events.click({ target: start });
+  assert.equal(posts.length, 0, 'nothing is launched on another harness');
 });
