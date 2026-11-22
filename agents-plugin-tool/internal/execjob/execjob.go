@@ -116,7 +116,10 @@ type activeJob struct {
 	// wd is the job's working directory, which may lie in another
 	// worktree than root (FenceLegacyRoot counts the job in both).
 	root, wd, key string
-	cmd           *exec.Cmd
+	// real: root and wd with symlinks resolved where that differs
+	// (realPlaces), taken once at launch.
+	real []string
+	cmd  *exec.Cmd
 }
 
 // activeObserver is SetActiveObserver's function; nil observes nothing.
@@ -195,7 +198,8 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	}
 	// Admitted against a worktree release before anything starts; the
 	// reservation counts the job until it is active (legacy_fence.go).
-	release, err := reserveLegacy(opts.Root, wd)
+	real := realPlaces(opts.Root, wd)
+	release, err := reserveLegacy(opts.Root, wd, real)
 	if err != nil {
 		return Response{}, err
 	}
@@ -304,7 +308,7 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	if beforeLegacyActive != nil {
 		beforeLegacyActive()
 	}
-	active.Store(activeKey(opts.Root, key), &activeJob{root: opts.Root, wd: wd, key: key, cmd: cmd})
+	active.Store(activeKey(opts.Root, key), &activeJob{root: opts.Root, wd: wd, real: real, key: key, cmd: cmd})
 	release()
 	notifyActive()
 	done := make(chan struct{})

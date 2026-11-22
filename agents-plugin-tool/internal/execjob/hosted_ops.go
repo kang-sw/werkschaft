@@ -360,22 +360,63 @@ func rootForms(root string) []string {
 	return forms
 }
 
-// inRoot reports whether row's job runs in one of a worktree's forms.
-func inRoot(forms []string, row HostedJobRow) bool {
-	for _, root := range forms {
-		if within(root, row.Root) || within(root, row.Cwd) {
-			return true
+// realPlaces are a job's root and working directory with their symlinks
+// resolved, each only where it differs from the spelling given. A working
+// directory reached through a symlink passed only a lexical containment
+// check, so the process may run inside another worktree than either
+// recorded path names. Resolved once per job, at its admission or restore,
+// so a fence matches the job in either spelling with no file lookup of its
+// own.
+func realPlaces(root, cwd string) []string {
+	var out []string
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		p = filepath.Clean(p)
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil || real == p {
+			return
+		}
+		for _, have := range out {
+			if have == real {
+				return
+			}
+		}
+		out = append(out, real)
+	}
+	add(root)
+	if cwd != "" && filepath.Clean(cwd) != filepath.Clean(root) {
+		add(cwd)
+	}
+	return out
+}
+
+// placesIn reports whether one of a job's places lies in one of a
+// worktree's forms.
+func placesIn(forms, places []string) bool {
+	for _, form := range forms {
+		for _, p := range places {
+			if within(form, p) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// fencedRootLocked is the fenced worktree row's job would run in, "" when
-// none, and the reason its fence gives. Under mu.
-func (h *Hosted) fencedRootLocked(row HostedJobRow) (root, reason string) {
+// jobIn reports whether j runs in one of a worktree's forms, by its
+// recorded root and working directory or their resolved spellings.
+func jobIn(forms []string, j *hostedJob) bool {
+	return placesIn(forms, []string{j.row.Root, j.row.Cwd}) || placesIn(forms, j.real)
+}
+
+// fencedRootLocked is the fenced worktree j would run in, "" when none,
+// and the reason its fence gives. Under mu.
+func (h *Hosted) fencedRootLocked(j *hostedJob) (root, reason string) {
 	for root, fence := range h.rootFences {
-		if inRoot(fence.forms, row) {
-			return root, fence.reason
+		if jobIn(fence.forms, j) {
+			return root, fence.holds.reason()
 		}
 	}
 	return "", ""
@@ -396,7 +437,7 @@ func (h *Hosted) LiveIn(root string) int {
 func (h *Hosted) liveInLocked(forms []string) int {
 	n := 0
 	for _, j := range h.jobs {
-		if !j.row.Terminal() && inRoot(forms, j.row) {
+		if !j.row.Terminal() && jobIn(forms, j) {
 			n++
 		}
 	}
@@ -413,7 +454,7 @@ func (h *Hosted) FenceRoot(root string) (unfence func(), err error) {
 
 // FenceRootAs is FenceRoot whose refusal of a new job names reason
 // (FenceReleasing, FenceAcquiring); while fences with different reasons
-// overlap, the first one's reason stands.
+// overlap, the refusal names the latest one still held.
 func (h *Hosted) FenceRootAs(root, reason string) (unfence func(), err error) {
 	if h == nil {
 		return func() {}, nil
@@ -429,16 +470,17 @@ func (h *Hosted) FenceRootAs(root, reason string) (unfence func(), err error) {
 		h.rootFences = map[string]*rootFence{}
 	}
 	if h.rootFences[root] == nil {
-		h.rootFences[root] = &rootFence{forms: forms, reason: reason}
+		h.rootFences[root] = &rootFence{forms: forms}
 	}
-	h.rootFences[root].holders++
+	hold := &fenceHold{reason: reason}
+	h.rootFences[root].holds = append(h.rootFences[root].holds, hold)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			if f := h.rootFences[root]; f != nil {
-				if f.holders--; f.holders <= 0 {
+				if f.holds = f.holds.drop(hold); len(f.holds) == 0 {
 					delete(h.rootFences, root)
 				}
 			}
@@ -446,10 +488,35 @@ func (h *Hosted) FenceRootAs(root, reason string) (unfence func(), err error) {
 	}, nil
 }
 
-// rootFence is one reserved worktree: its spellings, how many
-// reservations hold it, and why (the refusal's wording).
+// rootFence is one reserved worktree: its spellings and the reservations
+// holding it, oldest first.
 type rootFence struct {
-	forms   []string
-	holders int
-	reason  string
+	forms []string
+	holds fenceHolds
+}
+
+// fenceHold is one fence on a worktree and why it was taken (the wording
+// of the refusal it causes).
+type fenceHold struct{ reason string }
+
+// fenceHolds are the fences live on one worktree, oldest first.
+type fenceHolds []*fenceHold
+
+// reason is the latest live fence's reason, so a refusal never names a
+// fence already lifted.
+func (hs fenceHolds) reason() string {
+	if len(hs) == 0 {
+		return ""
+	}
+	return hs[len(hs)-1].reason
+}
+
+// drop removes hold, keeping the others in order.
+func (hs fenceHolds) drop(hold *fenceHold) fenceHolds {
+	for i, have := range hs {
+		if have == hold {
+			return append(hs[:i:i], hs[i+1:]...)
+		}
+	}
+	return hs
 }

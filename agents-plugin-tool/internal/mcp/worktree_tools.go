@@ -568,7 +568,12 @@ func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []str
 		if locked, err := lock.TryLock(); err != nil || !locked {
 			continue // a release reserves even an unleased, detached candidate
 		}
-		if !reusableCandidate(ctx, runner, env, e.Path, profile.Name, busy, &claimMarker) {
+		// The candidate's marker is published to claimMarker only once the
+		// claim stands: a candidate the fence refuses must not leave its
+		// marker behind, or a fresh fallback checkout would inherit its
+		// provision hash and skip sparse setup and post_provision.
+		var marker *worktreeMarker
+		if !reusableCandidate(ctx, runner, env, e.Path, profile.Name, busy, &marker) {
 			_ = lock.Unlock()
 			continue
 		}
@@ -584,7 +589,7 @@ func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []str
 			}
 			unfence = u
 		}
-		claim = e.Path
+		claim, claimMarker = e.Path, marker
 		*unclaim = func() {
 			unfence()
 			_ = lock.Unlock()

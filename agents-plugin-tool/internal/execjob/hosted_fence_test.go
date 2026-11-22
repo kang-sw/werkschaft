@@ -57,8 +57,8 @@ func TestHostedFenceRootRefusesLiveJobsAndNewOnes(t *testing.T) {
 
 // A fence names its holder's reason in the refusal of a new hosted or
 // legacy job: an acquisition's fence says the worktree is being acquired,
-// a release's keeps its wording, and the first live fence's reason stands
-// while another overlaps it.
+// a release's keeps its wording, and while fences overlap the refusal
+// names the latest one still held.
 func TestFenceRefusalNamesItsReason(t *testing.T) {
 	fx := newHostedFixture(t, time.Second)
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
@@ -77,41 +77,36 @@ func TestFenceRefusalNamesItsReason(t *testing.T) {
 		}
 	}
 
-	unHosted, err := fx.h.FenceRootAs(wt, FenceAcquiring)
-	if err != nil {
-		t.Fatal(err)
+	fence := func(reason string) func() {
+		t.Helper()
+		unHosted, err := fx.h.FenceRootAs(wt, reason)
+		if err != nil {
+			t.Fatal(err)
+		}
+		unLegacy, err := FenceLegacyRootAs(wt, reason)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return func() { unHosted(); unLegacy() }
 	}
-	unLegacy, err := FenceLegacyRootAs(wt, FenceAcquiring)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertReason("acquisition fence", "being acquired")
-	// An overlapping release fence does not change the standing reason.
-	relHosted, err := fx.h.FenceRoot(wt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	relLegacy, err := FenceLegacyRoot(wt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertReason("acquisition fence with a release fence over it", "being acquired")
-	unHosted()
-	unLegacy()
-	relHosted()
-	relLegacy()
 
-	unHosted, err = fx.h.FenceRoot(wt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unLegacy, err = FenceLegacyRoot(wt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	acq := fence(FenceAcquiring)
+	assertReason("acquisition fence", "being acquired")
+	// Overlapping fences: a refusal names the latest one still held, so
+	// lifting either leaves the other's reason, never a lifted one's.
+	rel := fence(FenceReleasing)
+	assertReason("release fence over an acquisition fence", "being released or removed")
+	rel()
+	assertReason("acquisition fence after the release fence lifted", "being acquired")
+	acq()
+
+	rel = fence(FenceReleasing)
 	assertReason("release fence", "being released or removed")
-	unHosted()
-	unLegacy()
+	acq = fence(FenceAcquiring)
+	assertReason("acquisition fence over a release fence", "being acquired")
+	acq()
+	assertReason("release fence after the acquisition fence lifted", "being released or removed")
+	rel()
 	if err := legacy(); err != nil {
 		t.Fatalf("a legacy launch after the fences lifted: %v", err)
 	}

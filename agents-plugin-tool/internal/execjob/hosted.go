@@ -47,8 +47,8 @@ type Hosted struct {
 	// (retryRetire).
 	quit chan struct{}
 	// ownerFences are the conversations whose new jobs are refused (a close
-	// in progress); rootFences the worktrees being released or removed, each
-	// with its holder count. Both under mu.
+	// in progress); rootFences the worktrees being released, removed or
+	// acquired, each with its live fences. Both under mu.
 	ownerFences map[string]bool
 	rootFences  map[string]*rootFence
 }
@@ -89,6 +89,10 @@ type hostedJob struct {
 	row  HostedJobRow
 	out  *JobOutput
 	done chan struct{}
+	// real holds the row's root and working directory with symlinks
+	// resolved where that differs (realPlaces): taken at admission or
+	// restore, read under h.mu by the worktree fence, never rewritten.
+	real []string
 	// lastSeq is the last holder record taken: a replay after a daemon
 	// restart starts from the ring's first record again.
 	lastSeq uint64
@@ -166,6 +170,9 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 			// write): the row does not record an eof exec.write sent.
 			h.byHolder[row.HolderID] = j
 			j.stdinUnknown = !row.Legacy
+		}
+		if !row.Terminal() {
+			j.real = realPlaces(row.Root, row.Cwd)
 		}
 		h.jobs[row.ID] = j
 	}
