@@ -199,6 +199,13 @@ unsafe fn install_hooks(
                     if args.TryGetWebMessageAsString(&mut raw).is_err() {
                         return Ok(());
                     }
+                    // No bridge accepts more than notify's cap, so a longer
+                    // payload is dropped before it is copied into a String.
+                    // (UTF-16 units never outnumber the UTF-8 bytes.)
+                    if raw.as_wide().len() > notify::MAX_MESSAGE {
+                        windows::Win32::System::Com::CoTaskMemFree(Some(raw.0 as *const _));
+                        return Ok(());
+                    }
                     let message = take_pwstr(raw);
                     let theme = theme_bridge
                         && message.starts_with(strip_msg::THEME_PREFIX)
