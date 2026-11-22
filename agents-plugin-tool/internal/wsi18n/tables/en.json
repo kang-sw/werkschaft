@@ -2758,6 +2758,8 @@
   "js.settings.section_note.companion": "Companion appearance and behavior",
   "js.settings.key.dashboard.companion_enabled.label": "Companion",
   "js.settings.key.dashboard.companion_enabled.description": "Show the companion character in the dashboard. Only the global value applies.",
+  "js.settings.key.dashboard.companion_mode.label": "Mode (deprecated)",
+  "js.settings.key.dashboard.companion_mode.description": "Deprecated alias of the companion on/off setting, kept for older clients: off hides it; visual and full show it. Only the global value applies.",
   "js.settings.key.dashboard.companion_director.label": "Director",
   "js.settings.key.dashboard.companion_director.description": "Choose what drives the companion: built-in rules, or a separate lightweight agent. Only the global value applies.",
   "js.settings.key.dashboard.companion_director.rules": "Rules",

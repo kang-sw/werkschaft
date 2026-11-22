@@ -2758,6 +2758,8 @@
   "js.settings.section_note.companion": "컴패니언 모양과 동작",
   "js.settings.key.dashboard.companion_enabled.label": "컴패니언",
   "js.settings.key.dashboard.companion_enabled.description": "대시보드에 컴패니언 캐릭터를 표시합니다. 전역 값만 적용됩니다.",
+  "js.settings.key.dashboard.companion_mode.label": "모드(사용 중단)",
+  "js.settings.key.dashboard.companion_mode.description": "이전 클라이언트를 위해 유지되는 컴패니언 사용 설정의 사용 중단된 별칭입니다. off는 숨기고 visual과 full은 표시합니다. 전역 값만 적용됩니다.",
   "js.settings.key.dashboard.companion_director.label": "디렉터",
   "js.settings.key.dashboard.companion_director.description": "컴패니언을 움직이는 방식을 선택합니다. 내장 규칙 또는 별도의 경량 에이전트입니다. 전역 값만 적용됩니다.",
   "js.settings.key.dashboard.companion_director.rules": "규칙",

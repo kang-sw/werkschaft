@@ -2758,6 +2758,8 @@
   "js.settings.section_note.companion": "Aussehen und Verhalten des Begleiters",
   "js.settings.key.dashboard.companion_enabled.label": "Begleiter",
   "js.settings.key.dashboard.companion_enabled.description": "Zeigt die Begleiterfigur im Dashboard an. Es gilt nur der globale Wert.",
+  "js.settings.key.dashboard.companion_mode.label": "Modus (veraltet)",
+  "js.settings.key.dashboard.companion_mode.description": "Veralteter Alias der Begleiter-Ein/Aus-Einstellung für ältere Clients: off blendet ihn aus; visual und full zeigen ihn an. Es gilt nur der globale Wert.",
   "js.settings.key.dashboard.companion_director.label": "Steuerung",
   "js.settings.key.dashboard.companion_director.description": "Legt fest, was den Begleiter steuert: integrierte Regeln oder ein separater, leichtgewichtiger Agent. Es gilt nur der globale Wert.",
   "js.settings.key.dashboard.companion_director.rules": "Regeln",

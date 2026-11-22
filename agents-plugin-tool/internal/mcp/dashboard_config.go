@@ -64,7 +64,7 @@ const (
 // registered key as ws-mcp's own, so it skips these.
 var manifestGlobalOnlyKeys = map[string]struct{}{
 	DashboardLANKey: {}, DashboardMailboxUndeliveredKey: {},
-	wsdashboard.CompanionEnabledKey: {}, wsdashboard.CompanionDirectorKey: {},
+	wsdashboard.CompanionEnabledKey: {}, wsdashboard.CompanionModeKey: {}, wsdashboard.CompanionDirectorKey: {},
 	wsdashboard.CompanionPackKey: {}, wsdashboard.CompanionPresetKey: {},
 	wsauditstore.KeySessionCapMiB: {}, wsauditstore.KeyTotalCapMiB: {},
 	wsauditstore.KeyBodyCapKiB: {}, wsauditstore.KeyRetentionDays: {},

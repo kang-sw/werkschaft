@@ -1,6 +1,6 @@
 {
   "ws": {
-    "archive_sha256": "6d95d3bfe8208100f2a3d1fd53955940088bc64ac12abc04dc81316a01c10cd7",
+    "archive_sha256": "c91a332621886d5e215f2bf6395ddc68cbfe001869f3ca912302bfd55aae50fb",
     "files": {
       ".claude-plugin/plugin.json": "190cbd1eb3b54762bf5c09b9b5279e5c993a9c9aa97a6384900c5f0a1369b885",
       ".codex-plugin/hooks.json": "e3f3ea60f82fb0795c63bf54b9208647f39cb3779f050d1c755fabdc8a434490",
@@ -17,7 +17,7 @@
       "claude-agents/effort-medium.md": "f795e9dda59cb032cf1637ffd96d122765fbb221524bb8d9804b3060a944afc2",
       "claude-agents/effort-xhigh.md": "c00ceaba0634c1ccbf3155dc62ea6fe6d821ecf644a1b62eb3a7eec26b8424c4",
       "config-manifest.json": "973e2d264bad322113b13cd64de7c3296c07715de4a1e8625ffea6d2f96099ad",
-      "dashboard-config-manifest.json": "386aa2b6204e9c5e1afb2ac885cc1c179882cc86a741f59110b43f4d79ad779d",
+      "dashboard-config-manifest.json": "c98126e9622df73efa5fff7112198f25e7405a83236d005c23738e2761ff01c8",
       "hooks/claude-mod/band.tsx": "73b448da33fac9939e98edd923e57c69b4ebe8f37097202365d5b591bb5e598b",
       "hooks/claude-mod/captions.tsx": "cb9c350bb9e63cf502140dd61633be2df40256db152b467fb667d7f751925feb",
       "hooks/claude-mod/compaction.ts": "e1526f655cede90f4f75b3967562a7dd07566cc9fd56eecc827b7041e360f5b9",
@@ -115,7 +115,7 @@
     }
   },
   "wsflow": {
-    "archive_sha256": "d6d9b910425d92a19f651abb41f1aee3fdf3f9b309cc9bdab5b9aa17feff63d4",
+    "archive_sha256": "65eac9394a4326e9da576e4eb90828c167b38a208be3bd2db486e479d98b9a25",
     "files": {
       ".claude-plugin/plugin.json": "2c9eb845f365e8b3a13ca67da43c60627aeff88291e1b5fb8071807beefcd671",
       ".codex-plugin/plugin.json": "78d60b306408cae37535e3087cd13d8f530e3c2a0a79b863d41e180336b9631b",
@@ -131,7 +131,7 @@
       "claude-agents/effort-medium.md": "f795e9dda59cb032cf1637ffd96d122765fbb221524bb8d9804b3060a944afc2",
       "claude-agents/effort-xhigh.md": "c00ceaba0634c1ccbf3155dc62ea6fe6d821ecf644a1b62eb3a7eec26b8424c4",
       "config-manifest.json": "71471746ed1a455c9126695f3aa2469aadc516050a9a25ae587c08050e0b220a",
-      "dashboard-config-manifest.json": "53592a0deb59d5716841d46e1940f198148a67fb7ea9ca10672f53b480389221",
+      "dashboard-config-manifest.json": "6d9c0804357488ef72dedb6462f4facf47178f1ff707e976a7a684e7ab09d4e9",
       "hooks/claude-mod/band.tsx": "73b448da33fac9939e98edd923e57c69b4ebe8f37097202365d5b591bb5e598b",
       "hooks/claude-mod/captions.tsx": "cb9c350bb9e63cf502140dd61633be2df40256db152b467fb667d7f751925feb",
       "hooks/claude-mod/compaction.ts": "e1526f655cede90f4f75b3967562a7dd07566cc9fd56eecc827b7041e360f5b9",
