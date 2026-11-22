@@ -192,6 +192,17 @@ func (c *conv) handle(ev Event) {
 		// permission choice. Keep that report in activeMode for projection, but
 		// do not turn an observation into a persisted next-launch override.
 		legacyCodexOmission := rec.Backend == BackendCodex && rec.PermissionMode == ""
+		if mode := c.cutoverLaunchMode(); mode != "" {
+			// Under the cutover the process runs in its launch mode only:
+			// a reported move is undone, and the saved preference stays.
+			if !quiet && ev.PermissionMode != mode && !c.dirtyMode {
+				c.dirtyMode, c.reconcileMode = true, true
+				if !c.turn {
+					c.applySettings()
+				}
+			}
+			break
+		}
 		if rec.Lead && !quiet && !c.dirtyMode && !rec.agyBypass() && !legacyCodexOmission && ev.PermissionMode != rec.PermissionMode && slices.Contains(permissionModes(rec.Backend, []map[string]BackendRegistration{c.r.opts.Backends}), ev.PermissionMode) {
 			c.update(func(rec *Record) { rec.PermissionMode, rec.AgyBypass = ev.PermissionMode, false })
 			c.changed(quiet)
@@ -240,6 +251,8 @@ func (c *conv) handle(ev Event) {
 		if !quiet {
 			fmt.Fprintf(c.r.opts.Log, "agent %s: %s\n", c.rec.ReplyID, ev.Notice)
 		}
+	case ev.UnrequestedCommand != "":
+		c.unrequestedCommand(ev.UnrequestedCommand, quiet)
 	case ev.BackgroundTasks != nil:
 		if n := *ev.BackgroundTasks; n != c.bgTasks || !sameCount(c.background, ev.Background) || !sameCount(c.monitors, ev.Monitors) {
 			prev := c.bgTasks
@@ -340,6 +353,9 @@ func (c *conv) beginTurn(quiet bool) {
 // endTurn closes the running turn, applies settings changed during it, and
 // submits the messages held meanwhile.
 func (c *conv) endTurn(turnErr string, quiet bool) {
+	// The cutover's instruction goes once the turn is over: a steer into the
+	// running turn would replace it.
+	defer c.sendCutoverInstruction()
 	compactCommand, wasCompacting := c.compactCommand, c.compacting
 	if !quiet {
 		c.compactCommand = false
@@ -433,10 +449,20 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 		}
 	}
 	if slices.Contains(c.rec.Answered, a.ID) {
-		// A replay of a prompt an earlier daemon already answered.
+		// A replay of a prompt an earlier daemon already answered. A refused
+		// cutover request still owes its turn the instruction, which
+		// admission keeps from being sent twice.
+		if c.cutoverRejects(a.Tool) {
+			c.oweCutoverInstruction(a.ID)
+		}
 		return
 	}
-	if !quiet && c.rec.agyBypass() && !c.replaying {
+	if !quiet && !c.replaying && c.rejectCutoverRequest(a) {
+		// Refused before it is published, ahead of bypass and worker
+		// auto-approval: nobody decides it.
+		return
+	}
+	if !quiet && c.rec.agyBypass() && !c.replaying && !c.cutoverRejects(a.Tool) {
 		// Bypass answers before the prompt is published: the page must not
 		// see a modal, a pending row or a wake for a request nobody decides.
 		// Without an answerer, or with no answer the process could build
@@ -463,7 +489,7 @@ func (c *conv) addApproval(a ApprovalRequest, quiet bool) {
 	}
 	c.checkAction(quiet)
 	c.showApprovals(quiet)
-	if !quiet && !c.rec.Lead && c.r.opts.Backends[c.rec.Backend].WorkerAutoApprove {
+	if !quiet && !c.rec.Lead && c.r.opts.Backends[c.rec.Backend].WorkerAutoApprove && !c.cutoverRejects(a.Tool) {
 		// Use the same answer path as a user, including at-most-once
 		// tracking and a fatal write failure. The request remains traced.
 		if err := c.answerApproval(a.ID, true, ""); err != nil {
@@ -607,6 +633,11 @@ func (c *conv) answerApproval(id string, allow bool, message string) error {
 		return conflict("that permission prompt is not waiting: it was answered, withdrawn, or its process ended")
 	}
 	c.dropApproval(id, false)
+	if c.cutoverRejects(req.Tool) {
+		// A request the cutover refuses stays refused whoever answers it.
+		allow = false
+		c.oweCutoverInstruction(req.ID)
+	}
 	err := c.sendApproval(answerer, *req, allow, message)
 	if errors.Is(err, errNoApprovalAnswer) {
 		// The prompt is gone from the page and the process still waits on
@@ -1065,7 +1096,12 @@ func (c *conv) applySettings() {
 		// The accepted native target is already in Record. Common selection
 		// writes its mapping there; a permitted native control keeps its literal
 		// mode. Only an actual new launch remaps explicit common intent.
-		if err := controls.setPermissionMode(rec.launchPermissionMode()); err != nil {
+		target := rec.launchPermissionMode()
+		if mode := c.cutoverLaunchMode(); mode != "" {
+			// A live settings change keeps the saved preference only.
+			target = mode
+		}
+		if err := controls.setPermissionMode(target); err != nil {
 			if reconcile {
 				fmt.Fprintf(c.r.opts.Log, "agent %s: permission reconciliation: %v\n", rec.ReplyID, err)
 				c.permissionNudge(level, false, c.activeMode)

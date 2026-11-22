@@ -36,6 +36,10 @@ func (c *conv) allowAgyBypassPending() {
 			// The process never asked: recheckExecApprovals settles it.
 			continue
 		}
+		if c.cutoverRejects(approval.Tool) {
+			// rejectCutoverPending refuses it; bypass never allows it.
+			continue
+		}
 		err := c.sendApproval(answerer, approval, true, "")
 		if err == nil {
 			c.dropApproval(approval.ID, false)

@@ -2,6 +2,7 @@ package wsagent
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -74,6 +75,11 @@ func (b AgyBackend) registration() (string, BackendRegistration) {
 		WorkerProfile:     AgentWorkerProfile(BackendAgy),
 		WorkerHTTPMCP:     true,
 		WorkerAutoApprove: true,
+		// Native default mode asks before each run_command, and the daemon
+		// refuses it (agy 1.5.14 live probe: native auto and
+		// --dangerously-skip-permissions run commands without asking, and
+		// top-level --settings rules do not reach ACP sessions).
+		ExecCutover: &ExecCutoverSupport{Since: "1.5.14", LaunchMode: "default", RejectTools: []string{agyCommandTool}, Instruction: agyExecCutoverInstruction},
 		Profiles: []BuiltinProfileRegistration{
 			agentWorkerBuiltinProfile(BackendAgy, nil),
 			leadBuiltinProfile(LeadProfileAgy, BackendAgy, ""),
@@ -114,10 +120,11 @@ var (
 // without. wsharnessenv.Drop removes ws's own session identity.
 var agyDropEnv = []string{"CLAUDE", "CODEX_", "PI_", "ORCA_"}
 
-// agyLeadBgShellRule is appended to a hosted agy lead's system prompt so it
-// overrides Antigravity's reactive-wakeup guidance for background commands;
-// workers carry the matching rule in instructions/agent-worker-agy.md.
-const agyLeadBgShellRule = `Never end your turn while a non-daemon ` + "`run_command`" + ` task you started is still running (ignore this for ` + "`IsDaemon: true`" + ` processes). Override Antigravity's "end the turn and wait" / reactive-wakeup guidance for background commands: stay in the same turn — do other work or check status with ` + "`manage_task`" + ` — until it finishes.`
+// agyExecCutoverInstruction is appended to a cutover agy session's system
+// prompt at session creation, and sent once as a prompt at the end of a
+// turn whose run_command call the daemon refused (or that ran one without
+// a permission request): agy shows the model no refusal text of its own.
+const agyExecCutoverInstruction = "Shell commands do not run through `run_command` in this session: every `run_command` call is refused. Run commands with the ws exec tools instead: `exec_shell` (cmd: one shell line) or `exec_run` (exe and args, no shell). Each waits up to its execution window, then answers with an exec id it keeps running under (async answers with the id at once); follow a running job with `exec_tail`, `exec_write`, `exec_stop` and `exec_list`. A job that outlives its call reports its completion to you as a message, so you need not wait in the turn for it."
 
 // agyRingSkip matches agy's thought chunks, which the mapper drops: a
 // lead's holder keeps them out of its ring. A line whose shape this no
@@ -197,6 +204,7 @@ func (b AgyBackend) Start(ctx context.Context, spec StartSpec) (Process, error) 
 		spec.Holder.ringPulse = agyRingPulse
 	}
 	m := newAgyMapper(spec.SessionID)
+	m.cutover = spec.ExecCutover
 	m.recoveredSteers = slices.Clone(spec.RecoveredSteers)
 	m.reattachedPromptAfter = spec.reattachedPromptAfter
 	sp, err := startChild(spec, cmd, m, agyProtocol{})
@@ -338,11 +346,11 @@ func (p *agyProcess) open(spec StartSpec) error {
 		}
 		appendText = string(text)
 	}
-	if spec.Lead != nil {
+	if spec.ExecCutover {
 		if trimmed := strings.TrimRight(appendText, "\n"); trimmed != "" {
-			appendText = trimmed + "\n\n" + agyLeadBgShellRule + "\n"
+			appendText = trimmed + "\n\n" + agyExecCutoverInstruction + "\n"
 		} else {
-			appendText = agyLeadBgShellRule + "\n"
+			appendText = agyExecCutoverInstruction + "\n"
 		}
 	}
 	if appendText != "" {
@@ -652,6 +660,14 @@ type agyMapper struct {
 	pendingTools    map[string]bool
 	openBg          map[string]bool
 	bgCalls         map[string]bool
+	// cutover marks a process started under the exec cutover: its
+	// run_command calls are refused, so no background command is tracked
+	// (openBg, bgCalls), and requested and ranUnrequested correlate the
+	// permission requests and execution evidence of its commands by tool
+	// call id (Event.UnrequestedCommand).
+	cutover        bool
+	requested      map[string]bool
+	ranUnrequested map[string]bool
 	modelFailure    string
 	turnSeq         int
 	group           int
@@ -689,7 +705,31 @@ func newAgyMapper(sessionID string) *agyMapper {
 		batches:      newBatchTracker("agy"),
 		approvals:    map[string]*agyApproval{},
 		approvalOf:   map[string]string{},
+		requested:    map[string]bool{},
+		ranUnrequested: map[string]bool{},
 	}
+}
+
+// agyCommandTool is agy's native process tool.
+const agyCommandTool = "run_command"
+
+// agyCorrelationCap bounds the tool call ids a mapper correlates; past it
+// both sets restart (ids are unique per call, so only a long process's
+// oldest calls are forgotten).
+const agyCorrelationCap = 4096
+
+// agyCommandRan reports execution evidence in a run_command update's raw
+// output: an exit code, or any output at all. A refused call ends failed
+// with an empty output and no exit code.
+func agyCommandRan(raw json.RawMessage) bool {
+	var out struct {
+		Output   string          `json:"output"`
+		ExitCode json.RawMessage `json:"exit_code"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &out) != nil {
+		return false
+	}
+	return len(out.ExitCode) > 0 && string(out.ExitCode) != "null" || strings.TrimSpace(out.Output) != ""
 }
 
 func (m *agyMapper) setWakeClose(fn func(uint64)) {
@@ -964,6 +1004,11 @@ func (m *agyMapper) request(msg agyMessage, replies lineReplies, now int64) []Ev
 	m.approvals[id] = &agyApproval{raw: raw, toolCallID: p.ToolCall.ToolCallID, options: p.Options}
 	if p.ToolCall.ToolCallID != "" {
 		m.approvalOf[p.ToolCall.ToolCallID] = id
+		if len(m.requested) >= agyCorrelationCap {
+			clear(m.requested)
+			clear(m.ranUnrequested)
+		}
+		m.requested[p.ToolCall.ToolCallID] = true
 	}
 	input := p.ToolCall.Args
 	if len(input) == 0 {
@@ -1344,6 +1389,7 @@ type agyUpdate struct {
 	Title             string            `json:"title"`
 	Status            string            `json:"status"`
 	Args              json.RawMessage   `json:"args"`
+	RawOutput         json.RawMessage   `json:"rawOutput"`
 	Used              *int64            `json:"used"`
 	Size              int64             `json:"size"`
 	CurrentModeID     string            `json:"currentModeId"`
@@ -1430,13 +1476,13 @@ func (m *agyMapper) update(params json.RawMessage, replies lineReplies, now int6
 		if u.ToolCallID != "" && u.Status != "completed" && u.Status != "failed" {
 			m.pendingTools[u.ToolCallID] = true
 			isDaemon := false
-			if name == "run_command" {
+			if name == agyCommandTool {
 				var args struct {
 					IsDaemon bool `json:"IsDaemon"`
 				}
 				_ = json.Unmarshal(u.Args, &args)
 				isDaemon = args.IsDaemon
-				if !isDaemon {
+				if !isDaemon && !m.cutover {
 					m.openBg[u.ToolCallID] = true
 				}
 			}
@@ -1499,10 +1545,17 @@ func (m *agyMapper) toolStatus(u agyUpdate, replaying bool, now int64) []Event {
 		return nil
 	}
 	failed := u.Status == "failed"
+	var out []Event
+	if name := cmp.Or(u.Name, u.Title); name == agyCommandTool && u.ToolCallID != "" && !m.requested[u.ToolCallID] && !m.ranUnrequested[u.ToolCallID] && agyCommandRan(u.RawOutput) {
+		// An in_progress announcement may precede the request; only output
+		// or an exit code shows the command actually ran without one.
+		m.ranUnrequested[u.ToolCallID] = true
+		out = append(out, Event{UnrequestedCommand: u.ToolCallID})
+	}
 	delete(m.pendingTools, u.ToolCallID)
 	delete(m.openCalls, u.ToolCallID)
 	delete(m.openBg, u.ToolCallID)
-	out := m.batches.endCall(u.ToolCallID, failed, now)
+	out = append(out, m.batches.endCall(u.ToolCallID, failed, now)...)
 	if id, ok := m.approvalOf[u.ToolCallID]; ok {
 		delete(m.approvalOf, u.ToolCallID)
 		delete(m.approvals, id)

@@ -69,7 +69,11 @@ type conv struct {
 	// exec cutover (exec_cutover.go): its native process tools removed in
 	// favour of the ws exec tools. Set at each start and rejoin.
 	execCutover bool
-	activeMode  string
+	// cutoverNudge is the current turn's first refused or unrequested
+	// native command under the cutover, whose instruction prompt the
+	// turn's end sends (sendCutoverInstruction); loop-owned.
+	cutoverNudge string
+	activeMode   string
 	bgTasks     int
 	background  *int
 	monitors    *int

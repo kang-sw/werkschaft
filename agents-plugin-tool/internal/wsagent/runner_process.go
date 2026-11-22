@@ -507,6 +507,11 @@ func (c *conv) startLead(rec Record, def Profile, attach bool) error {
 			spec.Lead.PermissionMode = mode
 		}
 	}
+	if mode := c.cutoverLaunchMode(); mode != "" {
+		// The cutover's native mode wins over the saved one, which stays on
+		// record for a start outside the cutover.
+		spec.Lead.PermissionMode = mode
+	}
 	if !attach {
 		c.permissionNudge(level, false, "")
 	}
@@ -756,6 +761,7 @@ func (c *conv) replayDone(lost bool) {
 		c.armModelWait()
 	}
 	c.reconcileLeadPermission()
+	c.rejectCutoverPending()
 	c.allowAgyBypassPending()
 	c.checkAction(false)
 	c.live.writeSnapshot()

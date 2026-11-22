@@ -444,14 +444,27 @@ func TestAgyLeadRejoinOfMovedRouteRestartsWithSessionResume(t *testing.T) {
 // request appends its key sentence and the manual the daemon rendered for
 // agy, its directory, and its key to agy's system prompt
 // (_meta.antigravity.systemPrompt.append); with no manual it appends the
-// key sentence and the call to fetch it.
+// key sentence and the call to fetch it. The old background-command rule
+// is gone; a lead under the exec cutover appends the exec instruction.
 func TestAgyLeadPromptCarriesTheWorkflowManual(t *testing.T) {
-	for name, manual := range map[string]*leadManualRender{
-		"manual":    {text: "# Workflow Manual\n\n## Session Key\nrendered"},
-		"no manual": nil,
+	for name, tc := range map[string]struct {
+		manual  *leadManualRender
+		cutover bool
+	}{
+		"manual":             {manual: &leadManualRender{text: "# Workflow Manual\n\n## Session Key\nrendered"}},
+		"no manual":          {},
+		"manual, cutover":    {manual: &leadManualRender{text: "# Workflow Manual\n\n## Session Key\nrendered"}, cutover: true},
+		"no manual, cutover": {cutover: true},
 	} {
+		manual := tc.manual
 		t.Run(name, func(t *testing.T) {
 			h, f := newAgyLeadHarness(t)
+			if tc.cutover {
+				agy := h.opts.Backends[BackendAgy]
+				_, real := AgyBackend{}.registration()
+				agy.ExecCutover = real.ExecCutover
+				h.opts.Backends[BackendAgy] = agy
+			}
 			if manual != nil {
 				h.opts.LeadManual = manual.render
 			}
@@ -467,16 +480,26 @@ func TestAgyLeadPromptCarriesTheWorkflowManual(t *testing.T) {
 				t.Fatalf("one session request: %d", len(news))
 			}
 			text, _ := acpField(t, news[0], "_meta", "antigravity", "systemPrompt", "append").(string)
-			want := strings.TrimRight(leadKeySentence(key)+leadManualOnly, "\n") + "\n\n" + agyLeadBgShellRule + "\n"
+			base := leadKeySentence(key) + leadManualOnly
 			if manual != nil {
-				want = leadKeySentence(key) + "The workflow manual below is binding and stays in this prompt across compaction. " +
+				base = leadKeySentence(key) + "The workflow manual below is binding and stays in this prompt across compaction. " +
 					"Use the session state delivered with your first turn or in a restore bundle. For fresh session state, call the workflow_state tool with this key.\n\n" +
-					manual.text + "\n\n" + agyLeadBgShellRule + "\n"
+					manual.text
 				if calls := manual.list(); len(calls) != 1 || calls[0][0] != BackendAgy || !sameDir(calls[0][1], h.root) || calls[0][2] != key {
 					t.Fatalf("the manual renders once, for agy, the lead's directory, and its key: %v", calls)
 				}
 			}
-			if text != want {
+			if strings.Contains(text, "Never end your turn") {
+				t.Fatalf("session/new still carries the background-command rule: %q", text)
+			}
+			got, want := strings.TrimRight(text, "\n"), strings.TrimRight(base, "\n")
+			if tc.cutover {
+				want += "\n\n" + agyExecCutoverInstruction
+				if !strings.HasSuffix(text, "\n") {
+					t.Fatalf("the cutover instruction ends the prompt with a newline: %q", text)
+				}
+			}
+			if got != want {
 				t.Fatalf("session/new appends %q, want %q", text, want)
 			}
 		})
@@ -541,9 +564,16 @@ func TestAgyWorkerProfile(t *testing.T) {
 		t.Fatalf("worker profile: %+v, %v", p, err)
 	}
 	text, ok := p.BuiltinInstructions()
-	for _, want := range []string{"agent.spawn", "mailbox.send", "Do not use", "invoke_subagent", "define_subagent", "manage_subagents", "Never end your turn", "run_command", "manage_task"} {
+	for _, want := range []string{"agent.spawn", "mailbox.send", "Do not use", "invoke_subagent", "define_subagent", "manage_subagents"} {
 		if !ok || !strings.Contains(text, want) {
 			t.Errorf("worker instructions lack %q: %q", want, text)
+		}
+	}
+	// The background-command rule went with the exec cutover: a cutover
+	// worker gets the exec instruction in its session request instead.
+	for _, gone := range []string{"Never end your turn", "run_command", "manage_task"} {
+		if strings.Contains(text, gone) {
+			t.Errorf("worker instructions still carry %q: %q", gone, text)
 		}
 	}
 	if _, err := (AgyBackend{}).Start(context.Background(), StartSpec{}); err == nil || !strings.Contains(err.Error(), "HTTP MCP route") {

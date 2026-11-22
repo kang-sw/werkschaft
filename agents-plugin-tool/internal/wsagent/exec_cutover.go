@@ -33,6 +33,20 @@ const envNoAgent = "WS_MCP_NO_AGENT"
 // on. A last reported version older than Since keeps native tools.
 type ExecCutoverSupport struct {
 	Since string
+	// LaunchMode, when set, is the native permission mode a cutover lead
+	// runs in whatever mode the user saved: launch, live settings changes,
+	// in-stream reports and reconciliation all return to it, and the saved
+	// mode stays on record for a start outside the cutover.
+	LaunchMode string
+	// RejectTools are native tools whose permission requests the daemon
+	// refuses for a cutover session, live or replayed, ahead of bypass and
+	// worker auto-approval: the harness cannot drop them at launch.
+	RejectTools []string
+	// Instruction is appended to a cutover session's system prompt at
+	// session creation, and sent once as a prompt at the end of a turn in
+	// which a RejectTools request was refused, or such a tool ran without
+	// a request (Event.UnrequestedCommand). Empty sends nothing.
+	Instruction string
 }
 
 // execCutoverInputs is what a start's cutover decision reads besides the
@@ -206,4 +220,109 @@ func envFlagOn(v string) bool {
 		return true
 	}
 	return false
+}
+
+// cutoverSupport is c's backend's cutover support while its current
+// process runs under the cutover, nil otherwise.
+func (c *conv) cutoverSupport() *ExecCutoverSupport {
+	if !c.execCutover {
+		return nil
+	}
+	return c.r.opts.Backends[c.rec.Backend].ExecCutover
+}
+
+// cutoverLaunchMode is the native mode a cutover lead must run in, "" when
+// none is imposed.
+func (c *conv) cutoverLaunchMode() string {
+	if s := c.cutoverSupport(); s != nil && c.rec.Lead {
+		return s.LaunchMode
+	}
+	return ""
+}
+
+// cutoverRejects reports whether the daemon refuses a permission request
+// for tool in c's current process.
+func (c *conv) cutoverRejects(tool string) bool {
+	s := c.cutoverSupport()
+	return s != nil && slices.Contains(s.RejectTools, tool)
+}
+
+// rejectCutoverRequest refuses a's permission request (reject_once) and
+// owes the turn its instruction prompt. It reports whether a was such a
+// request; one the process cannot be told about stays pending for the
+// caller's ordinary path to refuse later.
+func (c *conv) rejectCutoverRequest(a ApprovalRequest) bool {
+	if !c.cutoverRejects(a.Tool) {
+		return false
+	}
+	answerer := controlsFor(c.proc).approval
+	if answerer == nil {
+		return false
+	}
+	if err := c.sendApproval(answerer, a, false, ""); err != nil {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: refuse %s: %v\n", c.rec.ReplyID, a.Tool, err)
+		return false
+	}
+	fmt.Fprintf(c.r.opts.Log, "agent %s: refused %s %s under the exec cutover\n", c.rec.ReplyID, a.Tool, a.ID)
+	c.oweCutoverInstruction(a.ID)
+	return true
+}
+
+// rejectCutoverPending refuses every waiting request the cutover refuses:
+// a replayed one at a rejoin's end, or one that was waiting when the mode
+// changed. It runs before bypass or worker auto-approval may answer them.
+func (c *conv) rejectCutoverPending() {
+	if c.replaying || c.cutoverSupport() == nil {
+		return
+	}
+	for _, a := range slices.Clone(c.approvals) {
+		if _, daemon := c.execAnswers[a.ID]; daemon {
+			continue
+		}
+		if c.rejectCutoverRequest(a) {
+			c.dropApproval(a.ID, false)
+		}
+	}
+}
+
+// oweCutoverInstruction notes that this turn owes its instruction prompt,
+// keyed by the turn's first trigger (a refused request's or an unrequested
+// run's tool call id), so a replay of the same turn owes the same one.
+func (c *conv) oweCutoverInstruction(trigger string) {
+	if c.cutoverNudge == "" {
+		c.cutoverNudge = trigger
+	}
+}
+
+// unrequestedCommand handles a native process tool that ran with no
+// permission request (a rule the user's own harness settings allow, say):
+// a warning, and the same single instruction at the turn's end.
+func (c *conv) unrequestedCommand(toolCallID string, quiet bool) {
+	if c.cutoverSupport() == nil {
+		return
+	}
+	if !quiet {
+		fmt.Fprintf(c.r.opts.Log, "agent %s: warning: a native command ran without a permission request (%s) under the exec cutover\n", c.rec.ReplyID, toolCallID)
+	}
+	c.oweCutoverInstruction(toolCallID)
+}
+
+// sendCutoverInstruction delivers the turn's owed instruction once it has
+// ended, through once-only completion admission: its event id names the
+// process holder and the trigger, so a replay of the turn, or a daemon
+// restart in between, finds it admitted.
+func (c *conv) sendCutoverInstruction() {
+	trigger := c.cutoverNudge
+	c.cutoverNudge = ""
+	s := c.cutoverSupport()
+	if trigger == "" || s == nil || s.Instruction == "" {
+		return
+	}
+	rec := c.rec
+	event := "exec-cutover:" + rec.HolderID + ":" + trigger
+	go func() {
+		if _, err := c.r.AdmitCompletion(rec.ReplyID, rec.OpenGen, event, s.Instruction); err != nil {
+			fmt.Fprintf(c.r.opts.Log, "agent %s: exec cutover instruction: %v\n", rec.ReplyID, err)
+		}
+	}()
 }
