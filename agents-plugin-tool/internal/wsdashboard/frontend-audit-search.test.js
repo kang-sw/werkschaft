@@ -394,7 +394,7 @@ test("clear cancels owned pending auto work and resets window immediately, but l
     resolve({ok:true,json:async()=>({data:"b\nhit\n",end:true})});
     if(pending) await pending; await flush();
     assert.equal(win.resultEnvelope.out,manualFirst?"a\nb\nhit\n":"a\n");
-    assert.equal(win._auPagingToken,null);
+    assert.equal(win._auPagingOwner,null);
   }
 });
 
@@ -407,4 +407,29 @@ test("pending page discards changed offset, replacement envelope, and changed di
     resolve({ok:true,json:async()=>({data:"duplicate",end:true})});
     assert.equal(await pending,false); assert.equal(ev.out,"a\n");
   }
+});
+
+test("reused window starts hit B immediately and stale hit A cannot clear its owner", async () => {
+  const env = makeMockFetchEnv({fetch:async()=>response()});
+  const win = pageWin(), first = win.resultEnvelope, requests = [];
+  installPaging(env, [win], url => new Promise(resolve => requests.push({url, resolve})));
+  env.api.handleWindowRender(win);
+  const ownerA = win._auPagingOwner;
+  env.api.handleWindowRender(win);
+  assert.equal(requests.length, 1, "same run is shared");
+  win.reqToken++;
+  win.resultEnvelope = {id:"result-B", out:"B\n", truncated:true, range:{out:{offset:2,total:100}}};
+  env.api.handleWindowRender(win);
+  const ownerB = win._auPagingOwner;
+  assert.equal(requests.length, 2, "B starts before A resolves");
+  assert.notEqual(ownerB, ownerA);
+  assert.match(requests[1].url, /event\/result-B/);
+  requests[0].resolve({ok:true,json:async()=>({data:"stale\n",end:true})});
+  await flush();
+  assert.equal(first.out, "a\n");
+  assert.equal(win._auPagingOwner, ownerB, "late A completion preserves B ownership");
+  requests[1].resolve({ok:true,json:async()=>({data:"second\nhit\n",end:true})});
+  await flush();
+  assert.equal(win.resultEnvelope.out, "B\nsecond\nhit\n");
+  assert.equal(win._auPagingOwner, null);
 });

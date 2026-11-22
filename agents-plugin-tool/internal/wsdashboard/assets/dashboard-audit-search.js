@@ -590,11 +590,11 @@
 
   function clearSearch() {
     if (typeof window !== "undefined" && window.WsAudit) window.WsAudit.windows().forEach(function (win) {
-      if (win._auPagingToken) {
-        win._auPagingToken.cancelled = true;
-        if (win._auPagingToken.cancel) win._auPagingToken.cancel();
+      if (win._auPagingOwner) {
+        win._auPagingOwner.cancelled = true;
+        if (win._auPagingOwner.cancel) win._auPagingOwner.cancel();
       }
-      win._auPagingToken = null;
+      win._auPagingOwner = null;
       win.search = ""; win.regex = false; win.caseSensitive = false; win.targetLine = 0;
       window.WsAudit.renderWindow(win);
     });
@@ -681,12 +681,13 @@
     var ev = window.WsAudit.displayedEnvelope(win);
     if (!part || !ev || !ev.truncated || !ev.range || !ev.range[part]) return;
     if (isLineComplete(ev[part] || "", win.targetLine)) return;
-    if (win._auPagingToken) return;
+    var previous = win._auPagingOwner;
+    if (previous && previous.reqToken === win.reqToken && previous.envelope === ev && previous.field === part) return;
+    if (previous && previous.cancel) previous.cancel();
     var curRid = activeRid();
     if (!curRid) return;
-    var token = win.reqToken;
-    var pagingToken = {};
-    win._auPagingToken = pagingToken;
+    var run = { reqToken: win.reqToken, envelope: ev, field: part };
+    win._auPagingOwner = run;
     var eventId = ev.id || win.inspectEventId || win.eventId;
     ensureLineLoaded(ev, part, win.targetLine, function (offset, len) {
       return fetch(buildRangeUrl(curRid, eventId, part, offset, len)).then(function (r) {
@@ -694,20 +695,20 @@
         return r.json();
       });
     }, {
-      loadPage: function (offset, len) { return window.WsAudit.loadMorePart(win, part, offset, pagingToken); },
-      isCancelled: function () { return win.reqToken !== token || !win.el || !win.el.isConnected || window.WsAudit.displayedEnvelope(win) !== ev || win._auPagingToken !== pagingToken; },
+      loadPage: function (offset, len) { return window.WsAudit.loadMorePart(win, part, offset, run); },
+      isCancelled: function () { return win.reqToken !== run.reqToken || !win.el || !win.el.isConnected || window.WsAudit.displayedEnvelope(win) !== ev || win._auPagingOwner !== run; },
       onChunk: function () {
         if (window.WsAudit && typeof window.WsAudit.renderWindow === "function") {
           window.WsAudit.renderWindow(win);
         }
       }
     }).then(function (res) {
-      if (win.reqToken === token && win._auPagingToken === pagingToken) win._auPagingToken = 0;
+      if (win._auPagingOwner === run) win._auPagingOwner = null;
       if (res && !res.cancelled && res.loadedPages > 0 && window.WsAudit && typeof window.WsAudit.renderWindow === "function") {
         window.WsAudit.renderWindow(win);
       }
     }).catch(function () {
-      if (win.reqToken === token && win._auPagingToken === pagingToken) win._auPagingToken = 0;
+      if (win._auPagingOwner === run) win._auPagingOwner = null;
     });
   }
 
