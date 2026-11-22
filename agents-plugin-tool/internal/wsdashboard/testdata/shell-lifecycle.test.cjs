@@ -367,7 +367,31 @@ async function testHeaderFallback() {
   assert.equal(target.removed, true);
   assert.equal(ds.current(), old, 'Stay cancels a headerless destination too');
 }
+function testPendingRepick() {
+  const c = fixture(5), s = c.window.testShell, a = c.first;
+  c.click('/s/b');
+  const b = s.pending(), count = s.count();
+  assert.ok(b);
+  c.click('/s/b');
+  assert.equal(s.pending(), b, 'repick keeps the pending iframe');
+  assert.equal(b.removed, false);
+  assert.equal(s.count(), count, 'no new iframe is started');
+  assert.equal(c.framesBox.kids.filter(f => f.src.indexOf('/s/b?') === 0).length, 1);
+  s.open('/s/b#files', true);
+  assert.equal(s.pending(), b);
+  assert.equal(b.removed, false);
+  b.load();
+  assert.equal(b.contentWindow.location.hash, '#files', 'a differing hash lands once ready');
+  assert.equal(s.current(), b);
+  const d = fixture(5), ds = d.window.testShell;
+  d.click('/s/b');
+  const pb = ds.pending();
+  d.click('/s/c');
+  assert.equal(pb.removed, true, 'a different path still drops the pending iframe');
+  assert.notEqual(ds.pending(), pb);
+}
 const cases = {
+  'repick of the pending destination keeps its iframe': testPendingRepick,
   'header handoff waits for load and head in either order': testHeaderReadiness,
   'headerless destinations have a bounded and cancellable fallback': testHeaderFallback,
   'fresh frames, same-session routes and stale events': runBase,
