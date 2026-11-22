@@ -3,24 +3,26 @@ package wsmeta
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
 
 // Replacement paths for the legacy baseline in
-// wsagent/metadata_baseline_bench_test.go, on the same machine:
+// wsagent/metadata_baseline_bench_test.go, on the same machine and the same
+// record (testdata/baseline-record.json); only the advance is timed:
 // go test ./wsmeta -run '^$' -bench . -benchtime 2000x
 
 func benchStore(b *testing.B) *Store {
 	b.Helper()
-	dir := filepath.Join(b.TempDir(), "dashboard")
-	put := func(rel, content string) {
-		p := filepath.Join(dir, filepath.FromSlash(rel))
-		if err := mkdirWrite(p, content); err != nil {
-			b.Fatal(err)
-		}
+	record, err := os.ReadFile(filepath.Join("testdata", "baseline-record.json"))
+	if err != nil {
+		b.Fatal(err)
 	}
-	put("sessions/baselinelead/agent.json", `{"schema_version":1,"reply_id":"baselinelead","root":"/repo","ws_session_key":"k","holder_id":"holder-1","holder_seq":1}`)
+	dir := filepath.Join(b.TempDir(), "dashboard")
+	if err := mkdirWrite(filepath.Join(dir, "sessions", "baselinelead", "agent.json"), string(record)); err != nil {
+		b.Fatal(err)
+	}
 	s, err := Open(dir, Options{CheckpointIdle: -1})
 	if err != nil {
 		b.Fatal(err)
@@ -28,6 +30,9 @@ func benchStore(b *testing.B) *Store {
 	b.Cleanup(func() { _ = s.Close() })
 	if _, err := s.Commit(context.Background(), testCommit()); err != nil {
 		b.Fatal(err)
+	}
+	if _, ok, err := s.Record(context.Background(), "baselinelead"); err != nil || !ok {
+		b.Fatalf("baseline record not imported: %v", err)
 	}
 	return s
 }
