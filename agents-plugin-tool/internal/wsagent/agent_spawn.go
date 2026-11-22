@@ -4,12 +4,14 @@ package wsagent
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -85,6 +87,8 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		if _, err := os.Lstat(filepath.Join(wt, ".git")); err != nil {
 			return AgentSpawnResult{}, badRequest("%s: worktree %s is not a git worktree root (no .git entry)", tool, wt)
 		}
+		// An early check for the refusal that names re-acquiring; the create
+		// below holds the reservation itself until the child is registered.
 		unlockWorktree, err := wsgit.ReserveWorktreeSpawn(wt)
 		if err != nil {
 			if errors.Is(err, wsgit.ErrWorktreeReleasing) {
@@ -92,7 +96,7 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 			}
 			return AgentSpawnResult{}, badRequest("%s: reserve worktree %s: %v", tool, wt, err)
 		}
-		defer unlockWorktree()
+		unlockWorktree()
 		root, cwd = wt, wt
 	} else if cwd == "" {
 		cwd = caller.base()
@@ -136,6 +140,107 @@ func (r *Runner) AgentSpawn(caller AgentCaller, req AgentSpawnRequest) (AgentSpa
 		}
 	}
 	return AgentSpawnResult{Address: AgentAddress(st.ID), Status: AgentStatus(st)}, nil
+}
+
+// reserveBoundWorktrees takes the spawn reservation of every worktree root at
+// or above each of paths, once per root, until the returned unlock runs.
+// worktree.release counts a conversation as bound when its canonical root or
+// effective cwd lies anywhere within the worktree
+// (ActiveChildrenInWorktree), so every conversation create reserves each
+// worktree that could count it: the walk starts from the canonical path, so
+// a symlink from outside still reserves the worktree it resolves into, and it
+// does not stop at a nested repo or submodule, whose enclosing worktree counts
+// the conversation too. A path outside any worktree reserves nothing. A
+// reservation that cannot be taken refuses like a release in progress
+// (ErrWorktreeReleasing) does: an unreserved create could slip in beside a
+// release that already holds the lock (boundReservationRefusal).
+func reserveBoundWorktrees(paths ...string) (func(), error) {
+	var unlocks []func()
+	unlockAll := func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}
+	seen := map[string]bool{}
+	for _, path := range paths {
+		dirs, err := enclosingWorktreeRoots(path)
+		if err != nil {
+			unlockAll()
+			return nil, err
+		}
+		for _, dir := range dirs {
+			if seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			unlock, err := wsgit.ReserveWorktreeSpawn(dir)
+			if err != nil {
+				unlockAll()
+				if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+					return nil, err
+				}
+				return nil, fmt.Errorf("could not take the release reservation of worktree %s: %w", dir, err)
+			}
+			unlocks = append(unlocks, unlock)
+		}
+	}
+	return unlockAll, nil
+}
+
+// boundReservationRefusal is the conflict a create answers when
+// reserveBoundWorktrees refuses it.
+func boundReservationRefusal(err error) error {
+	if errors.Is(err, wsgit.ErrWorktreeReleasing) {
+		return conflict("%v; wait for the release to finish before opening a conversation there", err)
+	}
+	return conflict("%v; no conversation opens there unreserved, since a concurrent worktree.release could miss it; try again", err)
+}
+
+// enclosingWorktreeRoots returns every directory at or above path's
+// canonical form (the EvalSymlinks form release compares) that holds a .git
+// entry, innermost first. Only definite absence (not found, or a path
+// component that is no directory) means no worktree there: a path that does
+// not exist (yet, or any more) is walked as written, as canonicalWorktreePath
+// does. Any other error, resolving the path or looking for an entry, could
+// hide a worktree, so it is returned and the create refuses.
+func enclosingWorktreeRoots(path string) ([]string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	path = filepath.Clean(path)
+	if resolved, err := resolveWorktreeAlias(path); err == nil {
+		path = filepath.Clean(resolved)
+	} else if !pathAbsent(err) {
+		return nil, fmt.Errorf("could not resolve %s to look for its worktree: %w", path, err)
+	}
+	var roots []string
+	for dir := path; ; {
+		dotGit := filepath.Join(dir, ".git")
+		_, err := os.Lstat(dotGit)
+		switch {
+		case err == nil:
+			roots = append(roots, dir)
+		case pathAbsent(err):
+		default:
+			return nil, fmt.Errorf("could not check %s for a worktree: %w", dotGit, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return roots, nil
+		}
+		dir = parent
+	}
+}
+
+// resolveWorktreeAlias is filepath.EvalSymlinks; a test replaces it to stand
+// in for a resolution error the kernel would not also raise at the first
+// .git lookup (a Windows reparse point or ACL, say).
+var resolveWorktreeAlias = filepath.EvalSymlinks
+
+// pathAbsent reports whether err says definitely that no such path exists.
+func pathAbsent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }
 
 func readBounded(path string, limit int64) ([]byte, error) {
@@ -192,8 +297,9 @@ type BoundWorktreeChild struct {
 }
 
 // ActiveChildrenInWorktree returns every non-closed conversation in the runner
-// whose canonical root equals worktree or whose canonical working directory is
-// worktree or within it, oldest first then by address. Reads live state from
+// whose canonical root or canonical effective working directory (workDir) is
+// worktree or within it, oldest first then by address: a conversation rooted
+// in a nested repo of worktree is bound to worktree too. Reads live state from
 // memory without touching disk records.
 func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild {
 	target := canonicalWorktreePath(worktree)
@@ -216,9 +322,12 @@ func (r *Runner) ActiveChildrenInWorktree(worktree string) []BoundWorktreeChild 
 		if st.Status == StatusClosed || st.Status == StatusHandedOff {
 			continue
 		}
-		convRoot := canonicalWorktreePath(st.Root)
-		convCwd := canonicalWorktreePath(st.Cwd)
-		if !sameWorktreePath(convRoot, target) && !worktreePathContains(target, convCwd) {
+		// The record, not State: State drops a lead's cwd and a cwd equal to
+		// the root, while the process runs in the effective workDir.
+		rec := c.record()
+		convRoot := canonicalWorktreePath(rec.Root)
+		convDir := canonicalWorktreePath(rec.workDir())
+		if !worktreePathContains(target, convRoot) && !worktreePathContains(target, convDir) {
 			continue
 		}
 		matches = append(matches, match{
@@ -253,16 +362,6 @@ func canonicalWorktreePath(p string) string {
 		return filepath.Clean(resolved)
 	}
 	return p
-}
-
-func sameWorktreePath(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
 }
 
 func worktreePathContains(root, path string) bool {
