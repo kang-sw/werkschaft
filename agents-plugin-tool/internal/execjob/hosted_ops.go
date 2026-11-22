@@ -372,8 +372,11 @@ func rootForms(root string) []string {
 // either spelling with no file lookup of its own, and the process starts
 // in the place admission checked. A path that cannot be resolved is an
 // error, and the launch is refused: its spelling is unchecked, and could
-// appear as a link into a worktree fenced before the process starts. One
-// lookup when the two are the same path, two otherwise.
+// appear as a link into a worktree fenced before the process starts. So is
+// a working directory whose resolved place has no ordinary spelling to
+// start the process in (checkOrdinarySpelling); the root, never spawned
+// in, needs none. One lookup when the two are the same path, two
+// otherwise.
 func admittedPlaces(root, cwd string) (realRoot, realCwd string, err error) {
 	root = filepath.Clean(root)
 	if realRoot, err = resolvePath(root); err != nil {
@@ -381,12 +384,16 @@ func admittedPlaces(root, cwd string) (realRoot, realCwd string, err error) {
 	}
 	switch {
 	case cwd == "":
+		return realRoot, "", nil
 	case filepath.Clean(cwd) == root:
 		realCwd = realRoot
 	default:
 		if realCwd, err = resolvePath(filepath.Clean(cwd)); err != nil {
 			return "", "", fmt.Errorf("exec: the working directory %q cannot be resolved, so the launch is refused: %w", cwd, err)
 		}
+	}
+	if err = checkOrdinarySpelling(realCwd); err != nil {
+		return "", "", fmt.Errorf("exec: the working directory %q cannot be resolved, so the launch is refused: %w", cwd, err)
 	}
 	return realRoot, realCwd, nil
 }

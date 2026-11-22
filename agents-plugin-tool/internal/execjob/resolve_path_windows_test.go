@@ -206,27 +206,72 @@ func TestResolvePathOfATrailingDotNamesTheUndottedDirectory(t *testing.T) {
 	}
 
 	// The literal `dual.`, which only extended syntax reaches, has no
-	// ordinary spelling: CreateProcess given `dual.` starts in `dual`. A
-	// canonical prefixed request for it, and a junction whose target it
-	// is, are refused rather than admitted under the spelling spawn uses.
+	// ordinary spelling: CreateProcess given `dual.` starts in `dual`. The
+	// resolver names it as it is, for the fence; admission refuses it as a
+	// working directory, whether requested in the canonical prefixed form
+	// or through a junction whose target it is.
 	literal := `\\?\` + dual + "."
-	if got, err := resolvePath(literal); !errors.Is(err, errNoOrdinarySpelling) {
-		t.Fatalf("resolvePath(%q) = %q, %v, want %v", literal, got, err, errNoOrdinarySpelling)
+	if got, err := resolvePath(literal); err != nil || got != dual+"." {
+		t.Fatalf("resolvePath(%q) = %q, %v, want the physical %q", literal, got, err, dual+".")
 	}
 	if _, _, err := admittedPlaces(base, literal); !errors.Is(err, errNoOrdinarySpelling) || !strings.Contains(err.Error(), "cannot be resolved, so the launch is refused") {
 		t.Fatalf("admittedPlaces(prefixed literal dotted cwd) = %v, want a refusal naming %v", err, errNoOrdinarySpelling)
 	}
 	link := filepath.Join(base, "j")
 	makeJunction(t, link, dual+".")
-	if got, err := resolvePath(link); !errors.Is(err, errNoOrdinarySpelling) {
-		t.Fatalf("resolvePath(junction to the literal %q) = %q, %v, want %v", dual+".", got, err, errNoOrdinarySpelling)
+	if got, err := resolvePath(link); err != nil || got != dual+"." {
+		t.Fatalf("resolvePath(junction to the literal %q) = %q, %v, want it", dual+".", got, err)
 	}
 	if _, _, err := admittedPlaces(base, link); !errors.Is(err, errNoOrdinarySpelling) {
 		t.Fatalf("admittedPlaces(junction to the literal dotted directory) = %v, want %v", err, errNoOrdinarySpelling)
 	}
-	// The candidate side does not spawn; it keeps the recorded spelling.
-	if forms := rootForms(link); len(forms) != 1 || forms[0] != link {
-		t.Fatalf("rootForms(junction to the literal dotted directory) = %q, want only %q", forms, link)
+	// The candidate side does not spawn; it keeps the physical form.
+	if forms := rootForms(link); len(forms) != 2 || forms[0] != link || forms[1] != dual+"." {
+		t.Fatalf("rootForms(junction to the literal dotted directory) = %q, want %q and %q", forms, link, dual+".")
+	}
+}
+
+// A worktree whose physical directory ends in a space, `repo `, has no
+// ordinary spelling of its own, yet `repo \sub` has one: Windows trims a
+// trailing space only from the last component. A job admitted there
+// through another junction is live in the worktree, so the candidate's
+// forms must keep the physical `repo ` for the fence to match it.
+func TestFenceMatchesAJobBelowATrailingSpaceWorktree(t *testing.T) {
+	base, err := resolvePath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(base, "storage", "repo ")
+	sub := repo + `\sub`
+	if err := os.MkdirAll(`\\?\`+sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(`\\?\` + sub)
+		_ = os.Remove(`\\?\` + repo)
+	})
+	other := filepath.Join(base, "other")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkout := filepath.Join(base, "checkout")
+	makeJunction(t, checkout, repo)
+	into := filepath.Join(other, "into")
+	makeJunction(t, into, sub)
+
+	if forms := rootForms(checkout); len(forms) != 2 || forms[1] != repo {
+		t.Fatalf("rootForms(junction to %q) = %q, want the physical form kept", repo, forms)
+	}
+	realRoot, realCwd, err := admittedPlaces(other, into)
+	if err != nil || realCwd != sub {
+		t.Fatalf("admittedPlaces(other, junction to %q) = %q, %q, %v, want it admitted", sub, realRoot, realCwd, err)
+	}
+	if !placesIn(rootForms(checkout), []string{realRoot, realCwd}) {
+		t.Fatalf("a job at %q is outside the forms %q of the worktree it runs in", realCwd, rootForms(checkout))
+	}
+	// The worktree itself, as a working directory, is still refused.
+	if _, _, err := admittedPlaces(checkout, checkout); !errors.Is(err, errNoOrdinarySpelling) {
+		t.Fatalf("admittedPlaces(cwd at %q) = %v, want %v", repo, err, errNoOrdinarySpelling)
 	}
 }
 

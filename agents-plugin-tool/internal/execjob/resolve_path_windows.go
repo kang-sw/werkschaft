@@ -19,10 +19,13 @@ import (
 // path it records lies outside. One open and close; p must exist. The
 // open takes p as win32Path gives it: a deep worktree or working directory
 // in the extended-length form, so it resolves on a host whose Win32 calls
-// stay MAX_PATH-limited, and any other as given. The result comes back in
-// the ordinary spelling, or is an error where that spelling would name
-// another directory (ordinarySpelling); rootForms then keeps only the
-// candidate's recorded spelling, and admission refuses the job.
+// stay MAX_PATH-limited, and any other as given. The result is the
+// physical final path without its extended-length prefix, whether or not
+// that spelling would open the same directory through an ordinary Win32
+// call: the fence compares places, and a worktree reached as `repo ` holds
+// its jobs' `repo \sub` all the same. Only the working directory spawn
+// hands CreateProcess must round-trip (checkOrdinarySpelling, at
+// admission).
 func resolvePath(p string) (string, error) {
 	name, err := windows.UTF16PtrFromString(win32Path(p))
 	if err != nil {
@@ -38,28 +41,28 @@ func resolvePath(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return ordinarySpelling(final)
+	return filepath.Clean(stripExtendedPrefix(final)), nil
 }
 
-// ordinarySpelling is the final path final without its extended-length
-// prefix, provided that spelling names the same directory: the ordinary
-// spelling is what spawn hands CreateProcess, which applies the Win32
-// rules (a trailing dot or space dropped, . and .. resolved) the prefixed
-// form skips. A directory only extended syntax reaches, such as a literal
-// `dual.` beside `dual` opened through \\?\ or a junction, has no such
-// spelling: the process would start in `dual` while the fence tracks
-// `dual.`, so it is errNoOrdinarySpelling and admission refuses the job.
-// GetFullPathName is a string operation, so the check opens nothing.
-func ordinarySpelling(final string) (string, error) {
-	stripped := filepath.Clean(stripExtendedPrefix(final))
-	full, err := fullPathName(stripped)
+// checkOrdinarySpelling reports, for a resolved place p, whether p opens
+// the same directory as an ordinary Win32 spelling: spawn hands it to
+// CreateProcess, which applies the Win32 rules (a trailing dot or space
+// dropped, . and .. resolved) the extended form skips. A directory only
+// extended syntax reaches, such as a literal `dual.` beside `dual` opened
+// through \\?\ or a junction, fails with errNoOrdinarySpelling: the
+// process would start in `dual` while the fence tracks `dual.`. A
+// descendant such as `repo \sub` passes, since Windows trims only the
+// last component. GetFullPathName is a string operation, so the check
+// opens nothing.
+func checkOrdinarySpelling(p string) error {
+	full, err := fullPathName(p)
 	if err != nil {
-		return "", fmt.Errorf("%w: %q: %w", errNoOrdinarySpelling, final, err)
+		return fmt.Errorf("%w: %q: %w", errNoOrdinarySpelling, p, err)
 	}
-	if filepath.Clean(full) != stripped {
-		return "", fmt.Errorf("%w: %q reads as %q", errNoOrdinarySpelling, final, full)
+	if filepath.Clean(full) != filepath.Clean(p) {
+		return fmt.Errorf("%w: %q reads as %q", errNoOrdinarySpelling, p, full)
 	}
-	return stripped, nil
+	return nil
 }
 
 // errNoOrdinarySpelling marks a resolved directory whose ordinary Win32
