@@ -12,8 +12,9 @@ import (
 // (Decision 1's second adapter): tool items (a call when the item starts, a
 // result when it completes, both keyed by the item id as call_id),
 // reasoning items as thinking, hooks, sub-agent activity, the
-// contextCompaction item as the compaction boundary (the model-seen cut;
-// recorded in codex-0.170.0-compaction-probe-*.jsonl), server requests and
+// contextCompaction item's completion as the compaction boundary (the
+// model-seen cut; recorded for 0.160.0 in codex-0.160.0-hosted-lead.jsonl,
+// unverified for 0.170.0, whose probes never start a thread), server requests and
 // responses, and every other notification as a system event. Streaming
 // deltas (agent message text, command output) are recognized and dropped:
 // the completed item carries the whole body.

@@ -2,9 +2,11 @@ package wsagent
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wslive"
@@ -82,10 +84,91 @@ func TestCodexAuditCapturesEveryKindFromRecordings(t *testing.T) {
 	if hooks := find(evs, ofKind(wsaudit.KindHook)); hooks[0].Subkind != "sessionStart" {
 		t.Fatalf("hook = %+v", hooks[0])
 	}
-	_, cut := wsaudit.ApplyModelSeenCut(evs)
-	if !cut.HasCompaction || cut.Estimated {
-		t.Fatalf("cut = %+v, want the contextCompaction item as an explicit cut", cut)
+}
+
+// TestCodexAuditCompactionBoundaryPerVersion pins the compaction boundary
+// exactly, per recorded version, line by line through the adapter.
+//
+//   - 0.160.0: the only recording that compacts is the hosted lead's manual
+//     compaction (thread/compact/start at line 74). The contextCompaction
+//     item starts at line 78 and completes at line 81. The completion, and
+//     nothing else, is the one explicit cut. No thread/compacted
+//     notification appears.
+//   - 0.170.0: both compaction probes stop at a thread/start error (line 6)
+//     before any turn, so the 0.170.0 boundary stays unverified. They yield
+//     no compaction event, and the error is captured as a system event.
+func TestCodexAuditCompactionBoundaryPerVersion(t *testing.T) {
+	type at struct {
+		name string
+		line int
 	}
+	// compactions maps each recording through a fresh adapter and returns
+	// the lines that yield a compaction event, with every event mapped.
+	compactions := func(t *testing.T, names ...string) ([]at, []wsaudit.Envelope) {
+		t.Helper()
+		var got []at
+		var all []wsaudit.Envelope
+		for _, name := range names {
+			a := newCodexAudit("s1")
+			raw, err := os.ReadFile("testdata/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, line := range strings.Split(string(raw), "\n") {
+				if line == "" || strings.HasPrefix(line, ">> ") {
+					continue
+				}
+				_, carried, evs := a.mapLine([]byte(line), time.Now())
+				evs = append(carried, evs...)
+				all = append(all, evs...)
+				for _, ev := range evs {
+					if ev.Kind == wsaudit.KindCompaction {
+						got = append(got, at{name, i + 1})
+					}
+				}
+			}
+		}
+		return got, all
+	}
+
+	t.Run("0.160.0", func(t *testing.T) {
+		names := []string{
+			"codex-0.160.0-handshake.jsonl", "codex-0.160.0-hosted-lead.jsonl", "codex-0.160.0-lead-session.jsonl",
+			"codex-0.160.0-multi-agent-feature-off.jsonl", "codex-0.160.0-plugin-mcp-block.jsonl", "codex-0.160.0-resume.jsonl",
+			"codex-0.160.0-stale-approval.jsonl", "codex-0.160.0-subagent-baseline.jsonl", "codex-0.160.0-subagent-removed.jsonl",
+			"codex-0.160.0-ws-mcp-shadow.jsonl",
+		}
+		got, all := compactions(t, names...)
+		if want := []at{{"codex-0.160.0-hosted-lead.jsonl", 81}}; !slices.Equal(got, want) {
+			t.Fatalf("compaction events at %v, want only %v (the contextCompaction completion)", got, want)
+		}
+		for _, ev := range all {
+			if strings.Contains(ev.Out, "thread/compacted") {
+				t.Fatalf("a thread/compacted notification was recorded: %.200s", ev.Out)
+			}
+		}
+		marked, cut := wsaudit.ApplyModelSeenCut(all)
+		if !cut.HasCompaction || cut.Estimated || marked[cut.Index].Kind != wsaudit.KindCompaction {
+			t.Fatalf("cut = %+v, want the contextCompaction completion as the explicit cut", cut)
+		}
+	})
+
+	t.Run("0.170.0", func(t *testing.T) {
+		names := []string{"codex-0.170.0-compaction-probe-1.jsonl", "codex-0.170.0-compaction-probe-2.jsonl"}
+		got, all := compactions(t, names...)
+		if len(got) != 0 {
+			t.Fatalf("compaction events at %v; the 0.170.0 probes never start a thread", got)
+		}
+		errs := find(all, func(ev wsaudit.Envelope) bool {
+			return ev.Kind == wsaudit.KindSystem && strings.Contains(ev.Out, "failed to load configuration")
+		})
+		if len(errs) != len(names) {
+			t.Fatalf("thread/start errors captured = %d, want one per probe", len(errs))
+		}
+		if _, cut := wsaudit.ApplyModelSeenCut(all); cut.HasCompaction {
+			t.Fatalf("cut = %+v, want none", cut)
+		}
+	})
 }
 
 // TestCodexRingCallIDMatchesTheAuditCallID pins (601) for Codex: the tools
