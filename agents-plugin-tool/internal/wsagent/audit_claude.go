@@ -352,9 +352,12 @@ func (a *claudeAudit) assistant(l claudeAuditLine, at time.Time) []wsaudit.Envel
 				ev.Subkind = "redacted"
 				asm = nil
 			}
-			if ev.Out == "" && asm != nil && asm.body.Len() > 0 {
-				ev.Out = asm.body.String()
-				setMeta(&ev, wsaudit.MetaAssembled, true)
+			if ev.Out == "" && asm != nil {
+				if asm.body.Len() > 0 {
+					ev.Out = asm.body.String()
+					setMeta(&ev, wsaudit.MetaAssembled, true)
+				}
+				// A loss that took every delta still marks the event.
 				carryLoss(&ev, asm)
 			}
 			if ev.Out == "" && (b.Signature != "" || b.Type == "redacted_thinking") {
@@ -556,18 +559,21 @@ func (a *claudeAudit) flushBlocks(at time.Time, ending bool) []wsaudit.Envelope 
 			continue
 		}
 		b.used = true
+		lost := b.reason != ""
 		if !b.stopped && b.reason == "" {
 			b.reason = wsaudit.LossStreamEnd
 		}
 		var ev wsaudit.Envelope
 		switch b.typ {
 		case "thinking":
-			if b.body.Len() == 0 && b.signature == "" {
+			// An empty block is no event unless it lost lines: then it is
+			// the incomplete event that carries the loss markLoss gave it.
+			if b.body.Len() == 0 && b.signature == "" && !lost {
 				continue
 			}
 			ev = a.env(wsaudit.KindThinking, b.at)
 			ev.Out = b.body.String()
-			if ev.Out == "" {
+			if ev.Out == "" && b.signature != "" {
 				setMeta(&ev, wsaudit.MetaSignatureOnly, true)
 			}
 		case "tool_use", "server_tool_use", "mcp_tool_use":

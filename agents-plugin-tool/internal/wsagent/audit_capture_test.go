@@ -841,6 +841,43 @@ func TestAuditAttachIsNeverRefusedByAFullQueue(t *testing.T) {
 	}
 }
 
+// TestClaudeAuditTotalLossMarksTheThinking pins that a thinking block whose
+// every delta was dropped still records the loss: the open block takes it
+// (markLoss), and the event that ends the block, the assistant line's empty
+// signed thinking or, without one, the flushed assembly, carries it as
+// incomplete with the count.
+func TestClaudeAuditTotalLossMarksTheThinking(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tail []string
+	}{
+		{"assistant line", []string{thinkLine, auditResultLine}},
+		{"no assistant line", []string{auditResultLine}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &memSink{}
+			r := newAuditRig(t, sink, "h1")
+			r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+			r.keptRun(thinkStart, 0, 0)
+			r.keptRun(thinkBlock, 0, 0)
+			r.keptRun(thinkStop, 0, 3) // the holder dropped all three deltas
+			for _, l := range tc.tail {
+				r.keptRun(l, 0, 0)
+			}
+			r.end()
+			evs := sink.events()
+			th := find(evs, ofKind(wsaudit.KindThinking))
+			if len(th) != 1 || th[0].Meta[wsaudit.MetaIncomplete] != true || th[0].Meta[wsaudit.MetaLost] != uint64(3) ||
+				th[0].Meta[wsaudit.MetaLossReason] != wsaudit.LossDropped {
+				t.Fatalf("thinking = %+v, want one incomplete event carrying 3 dropped lines", th)
+			}
+			if n := find(evs, isLoss); len(n) != 0 {
+				t.Fatalf("loss also recorded apart: %+v", n)
+			}
+		})
+	}
+}
+
 // TestAuditSlowOrFailingSinkNeverDelaysLineDelivery pins the non-blocking
 // tap: a sink that blocks, or one that fails every append, never delays the
 // display stream; the queue's overflow is recorded as loss once it drains.
