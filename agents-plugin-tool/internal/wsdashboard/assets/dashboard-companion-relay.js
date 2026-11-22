@@ -110,7 +110,12 @@
         if (!terminal.has(node.state)) legacyCount++;
         if (childActive) {
           running++;
-          if (!wasActive && !baseline) { info.reportedCurrentTurn = false; info.turnStartedMs = Date.now(); }
+          if (!wasActive && !baseline) {
+            info.reportedCurrentTurn = false;
+            info.awaitingPriorTurn = info.awaitingReport;
+            // HUD time is shifted by accumulated work for the displayed timer.
+            info.turnStartedMs = node.activeSince > 0 ? node.activeSince + (node.elapsedMs || 0) : Date.now();
+          }
           if (!info.spawned) { event("subagent.spawn", canonical); info.spawned = true; }
         } else if (wasAlive && !alive) {
           if ((wasActive && !info.reportedCurrentTurn) || info.awaitingReport) done(info);
@@ -131,11 +136,23 @@
       return { running, legacyCount };
     }
 
-    function done(info, rowMs) {
+    function done(info, rowMs, priorTurn) {
       event("subagent.done", info.canonical + ":" + ++info.doneSeq);
-      info.reportedCurrentTurn = true;
-      info.awaitingReport = false;
       info.lastDoneMs = rowMs || Date.now();
+      info.awaitingPriorTurn = false;
+      if (!priorTurn) info.reportedCurrentTurn = true;
+      if (!priorTurn || info.active || info.reportedCurrentTurn) info.awaitingReport = false;
+    }
+
+    function reportDone(info, rowMs) {
+      if (rowMs && rowMs < info.lastDoneMs) return;
+      if (rowMs && rowMs < info.turnStartedMs) {
+        if (info.awaitingPriorTurn && rowMs > info.lastDoneMs) done(info, rowMs, true);
+        return;
+      }
+      // Without a time, a report during a resumed turn could belong to either turn.
+      if (!rowMs && info.awaitingPriorTurn) return;
+      if (info.active ? !info.reportedCurrentTurn : info.awaitingReport) done(info, rowMs);
     }
 
     function reportIdentity(row) {
@@ -184,8 +201,7 @@
               info = { canonical: id, alive: false, active: false, spawned: true, reportedCurrentTurn: false, awaitingReport: false, lastDoneMs: 0, turnStartedMs: 0, doneSeq: 0 };
               agents.set(id, info);
               done(info, rowMs);
-            } else if (info && (!rowMs || (rowMs >= info.lastDoneMs && !(rowMs < info.turnStartedMs && rowMs <= info.lastDoneMs))) &&
-                (info.active && !info.reportedCurrentTurn || !info.active && info.awaitingReport)) done(info, rowMs);
+            } else if (info) reportDone(info, rowMs);
           }
         } else if (row.matches(".mailline.recv:not(.agent-note):not(.child-report):not(.agent-card), .mail-notification:not([data-board-nudge]):not([data-mail-wake])") || row.matches("article.mail-block") && row.querySelector(":scope > details.mailline.recv")) {
           event("mail.recv", key);

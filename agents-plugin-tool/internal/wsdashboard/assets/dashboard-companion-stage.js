@@ -34,12 +34,13 @@
         const id = row.dataset.rid;
         if (!id || next.has(id) || row.matches(".ended, .stopped")) continue;
         const previous = rows.get(id), busy = row.dataset.busy === "1", top = !row.hasAttribute("data-g");
-        const active = row.dataset.active === "1";
-        const ownedWork = busy && (active || !!(previous?.busy && previous.ownedWork));
+        const working = row.dataset.active === "1";
+        // Match rail notices: keep the session's own work marked until its busy span ends.
+        const active = busy && (working || !!(previous?.busy && previous.active));
         const approval = row.hasAttribute("data-ap") || top && !childApprovals.has(id) && !!row.querySelector(".kap");
         const failure = !!row.querySelector(".hb.err");
         const asks = row.dataset.asks === undefined ? null : new Set(row.dataset.asks.trim().split(/\s+/).filter(Boolean));
-        next.set(id, { busy, ownedWork, active, top, approval, failure, asks });
+        next.set(id, { busy, active, working, top, approval, failure, asks });
         if (baseline) continue;
         if (failure && !previous?.failure) offer(id, "session.error", 70, 0);
         if (approval && !previous?.approval) offer(id, "ask.open", 65, 1, "perm:" + id);
@@ -48,7 +49,7 @@
             if (!previous.asks.has(ask)) offer(id, "ask.open", 65, 0, "ask:" + id + ":" + ask);
           }
         }
-        if (id !== activeRid && top && previous?.top && previous.busy && previous.ownedWork && !busy && !approval && !failure) {
+        if (id !== activeRid && top && previous?.top && previous.busy && previous.active && !busy && !approval && !failure) {
           offer(id, "global.session_done", 52, 0);
         }
       }
@@ -61,7 +62,7 @@
       for (const [id, row] of rows) {
         if (row.approval && (!permission || id === activeRid)) permission = id;
         if (row.failure && (!failure || id === activeRid)) failure = id;
-        if (id !== activeRid && row.active && !row.approval && !row.failure) working++;
+        if (id !== activeRid && row.working && !row.approval && !row.failure) working++;
       }
       if (activity === "permission") return { activity, rid: activeRid };
       if (permission) return { activity: "permission", rid: permission };

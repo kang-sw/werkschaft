@@ -47,6 +47,8 @@ test("companion rail snapshots baseline silently and arbitrate error, child appr
   const done = observer.read(snapshot(["active"], ["background"]), "active", false);
   assert.equal(done.rid, "background");
   assert.equal(done.kind, "global.session_done");
+  assert.equal(observer.read(snapshot(["active"], ["background", {busy: true}]), "active", false), null);
+  assert.equal(observer.read(snapshot(["active"], ["background"]), "active", false), null);
   assert.equal(observer.read(snapshot(["active"], ["background", {failure: true, asks: "11"}]), "active", true), null);
   assert.equal(observer.posture("active", "typing_user").activity, "error");
   assert.equal(observer.read(snapshot(["active"], ["background", {failure: true, asks: "11"}]), "active", false), null);
@@ -467,6 +469,28 @@ test("relay reconciles both report orders, holding, resume, terminal and stale r
   f.children = child("closed"); f.update(); assert.equal(f.events().filter(e => e.kind === "subagent.done").length, 0);
   f.children = child("thinking"); f.update(); f.events(); f.children = child("closed"); f.update();
   assert.equal(f.events().filter(e => e.kind === "subagent.done").length, 1);
+  f.dispose();
+});
+
+test("relay attributes delayed reports to the prior turn without consuming the resumed turn", () => {
+  const f = relayFixture(), child = (state, start = 0) => [{id: "c", state, activeSince: start, elapsedMs: 100}];
+  const done = () => f.events().filter(e => e.kind === "subagent.done").map(e => e.token);
+  f.children = child("thinking"); f.update(); done();
+  f.children = child("holding"); f.update(); assert.deepEqual(done(), []);
+  const priorStamp = f.now();
+  const resumedStamp = priorStamp + 80;
+  f.children = child("thinking", resumedStamp - 100); f.update(); done();
+  f.rows = [relayRow("01", "mailline recv child-report", {childId: "c"})]; f.update();
+  assert.deepEqual(done(), []);
+  f.rows.push(relayRow("02", "mailline recv child-report", {childId: "c", ms: priorStamp})); f.update();
+  assert.deepEqual(done(), ["subagent.done:lead:c:1"]);
+  f.rows.push(relayRow("03", "mailline recv child-report", {childId: "c", ms: priorStamp + 1})); f.update();
+  assert.deepEqual(done(), []);
+  f.rows.push(relayRow("04", "mailline recv child-report", {childId: "c", ms: resumedStamp + 20})); f.update();
+  assert.deepEqual(done(), ["subagent.done:lead:c:2"]);
+  f.children = child("holding"); f.update();
+  f.children = child("closed"); f.update();
+  assert.deepEqual(done(), []);
   f.dispose();
 });
 
