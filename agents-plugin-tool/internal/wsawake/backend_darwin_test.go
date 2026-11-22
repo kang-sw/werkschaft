@@ -208,17 +208,10 @@ func TestCaffeinateRestartedAfterUnexpectedExit(t *testing.T) {
 	c := New(&caffeinate{path: path, pid: os.Getpid(), log: log}, log)
 	c.SetEnabled(true)
 	c.SetMember(new(int), true)
+	// The exit is logged only once the helper was reaped, so the next
+	// change finds it dead.
 	waitLogged(t, log, "exit status 2")
-	// The exit is logged just before the helper counts as reaped, so keep
-	// changing membership until a change finds it dead.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		c.SetMember(new(int), true)
-		if _, err := os.Stat(pidFile); err == nil || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	c.SetMember(new(int), true)
 	pid, _ := strconv.Atoi(readWhenWritten(t, pidFile))
 	if !alive(pid) {
 		t.Fatalf("restarted helper %d is not running", pid)

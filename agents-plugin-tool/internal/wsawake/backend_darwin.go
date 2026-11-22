@@ -60,7 +60,11 @@ func (b *caffeinate) Acquire() error {
 	exited, released := make(chan struct{}), &atomic.Bool{}
 	go func() {
 		err := cmd.Wait()
-		if !released.Load() && b.log != nil {
+		unexpected := !released.Load()
+		// Reaped: close first, so Lost already holds by the time the exit
+		// line can be seen in the log.
+		close(exited)
+		if unexpected && b.log != nil {
 			status := "exit status 0"
 			if err != nil {
 				status = err.Error()
@@ -72,7 +76,6 @@ func (b *caffeinate) Acquire() error {
 			// One write, so the line does not interleave with other logging.
 			_, _ = io.WriteString(b.log, msg+"\n")
 		}
-		close(exited)
 	}()
 	b.cmd, b.exited, b.released = cmd, exited, released
 	return nil
@@ -86,7 +89,7 @@ func (b *caffeinate) Release() error {
 	b.cmd, b.exited, b.released = nil, nil, nil
 	select {
 	case <-exited:
-		// The helper already ended on its own (and its exit was logged):
+		// The helper already ended on its own (the reaper logs that exit):
 		// the assertion went with it.
 		return nil
 	default:
