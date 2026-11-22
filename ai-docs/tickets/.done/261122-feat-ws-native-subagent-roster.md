@@ -487,3 +487,81 @@ Compatibility tier T1 (release-compatibility), for the new members:
 
 No state is lost beyond option B's behaviour, which this ticket already
 accepted.
+
+#### Edition (a8fc5d858) - 2026-11-22
+
+Re-review fixes (codex a5aaa5fe, cec25601b..afd797633). These supersede the
+(9b86bc211) Edition where they differ.
+
+- The recovery file is held until its evidence is folded. From conversation
+  start until a rejoin's replay folds the restored file, no snapshot.json
+  is written; snapshots still reach the live slot (`liveWriter.diskHold`,
+  set at `wsagent/runner_conversation.go:215` when a holder is named,
+  checked at `record.go:770`). Folding clears the hold and writes. Every
+  path that ends a replay folds: ReplayDone, a process end during the
+  replay (`processEnded`), a failed lead rejoin, and a retired downgraded
+  worker. A path that never folds keeps the earlier checkpoint. The
+  in-replay coverage rule of the previous Edition is gone: with no write
+  during a replay, the file names `c.seq` only after the fold. Evidence:
+  `TestRejoinKeepsTheRecoveryFileUntilItsReplayFolds`. A second
+  interruption before ReplayDone leaves the file byte-identical, including
+  a wrapped running row stored only there. The next daemon's replay
+  recovers that row end-unknown at the file's `UpdatedAt` and writes its
+  own coverage.
+- Retention runs once, over the folded roster. `finishAgyNativeReplay`
+  resolves every staged row's lifecycle under
+  `wslive.State.HoldRetention` (`wslive/state.go:276`, `:541`). That
+  covers drops, applies, deferred settles, the wrapped seed, and the
+  replay-end or process-end closure. No cap applies until the release,
+  which runs one retention pass. This replaces the "equals one retention
+  over the final set" argument, which did not hold for the running cap.
+  Evidence: `TestAgyNativeReplayFoldsLifecyclesBeforeRetention` (65
+  ascending starts, failures for the last 64, no snapshot) keeps the first
+  row end-unknown among the five newest finished, and
+  `TestHoldRetentionAppliesCapsOnceToTheFoldedRoster`.
+- Known-empty coverage is distinct from absent coverage. With a known
+  holder the writer always serializes `holderSeq`, including 0
+  (`wslive.Snapshot.HolderSeq` is now `*uint64`, `wslive/snapshot.go:204`;
+  `wsagent/record.go:811`). `restoredAgyNative.covered` is set only when
+  both members are present (`record.go:496`). `evicted` falls back to
+  option B only when coverage is absent (`record.go:485-493`). Known
+  coverage 0 covers no record. Evidence:
+  `TestRestoredAgyNativeCoverageBoundary` and
+  `TestSnapshotRecordsHolderCoverage`.
+- Downgrade decision for holder coverage (no extra mechanism). The
+  7482aa91e writer is a develop dev build, not a release; v0.50.8 has no
+  native roster.
+  - The old reader decodes into a `Snapshot` without the members (7482aa91e
+    `wslive/snapshot.go:130-160`, `:451-460`). The old writer re-marshals
+    and replaces the file without them (7482aa91e `wsagent/record.go:650-688`).
+    Its first rewrite also drops snapshot-running rows: it seeds only
+    terminal rows (7482aa91e `wsagent/record.go:461-463`,
+    `wslive/state.go:1037-1043`).
+  - After a rewrite by such a pre-coverage writer, the re-upgraded reader
+    has no coverage and applies option B (`record.go:489`). Agy native
+    rows whose start falls in the window that snapshot did not cover may
+    disappear from the roster. Rows that writer listed running are also
+    gone.
+  - This is display-only roster history. No workflow data, turn state,
+    ring entry or delivery is affected. Accepted.
+- The RAM publish re-probes after its locks. `lockSummaryWriterRAM` probes
+  the record's hosted PID (`Options.Alive`) before taking any lock, and
+  again once its locks are held, right before the caller publishes
+  (`wsagent/runner_summary.go:69-93`, `hostGone` `:97`). The summary lock
+  can wait behind a heartbeat sweep's registration I/O. The nil-proof
+  fallback refuses too while the registration still names a dead process,
+  without taking the registration lock. The window between the last probe
+  and the publish under the same lock is accepted, and the code comment
+  says so. Evidence: `TestNativeRowRAMReprobesAfterTheSummaryLock`. The
+  probe passes, the process dies while the publish is blocked on the
+  summary lock, and nothing is published; the nil-proof case publishes
+  nothing and takes no registration lock.
+- `TestAgyLeadOverACP` passes on this branch with `-race -count=5`. The
+  earlier report of a race there was wrong.
+
+Verification: each new regression fails under its mutation (no diskHold,
+no retention hold, no post-lock probe, no pre-lock probe, zero coverage
+omitted, known-empty read as absent). The full wsagent package passes, as
+do the focused wsagent and wslive `-race` sets, the narrow wsdashboard set,
+`GOOS=windows go vet`, the agents-island contract, and the companion Node
+suite (27/27).
