@@ -340,7 +340,13 @@ type ring struct {
 	view   sync.RWMutex
 	events []wsaudit.Envelope
 	ids    []*wsaudit.SourceID // parallel to events; nil for an unsourced event
-	led    *ledger
+	// cut is set (under view) once this ring is known to have dropped older
+	// segments to capacity eviction: its oldest segment on disk at recovery
+	// was not the first, or it dropped one since. Time retention and session
+	// deletion remove the whole directory, so a ring started afterwards
+	// begins uncut.
+	cut bool
+	led *ledger
 	// Control lines written ahead of the next record, or when the writer
 	// idles: loss lines in order, and the latest boundary per source.
 	pendingLoss [][]byte
@@ -512,6 +518,11 @@ func (r *ring) recover() error {
 	}
 	if err != nil {
 		return err
+	}
+	if len(segs) > 0 && segs[0].seq > 1 {
+		r.view.Lock()
+		r.cut = true
+		r.view.Unlock()
 	}
 	for i := range segs {
 		newest := i == len(segs)-1
@@ -1032,6 +1043,7 @@ func (r *ring) dropOldest() (int64, error) {
 	r.view.Lock()
 	r.events = append([]wsaudit.Envelope(nil), r.events[seg.events:]...)
 	r.ids = append([]*wsaudit.SourceID(nil), r.ids[seg.events:]...)
+	r.cut = true
 	r.view.Unlock()
 	return seg.size, nil
 }

@@ -199,6 +199,10 @@ type NudgeBody struct {
 type Daemon struct {
 	companionPacks CompanionPackStore
 
+	// auditRead, when set, replaces the audit store for the audit query
+	// routes (a test's fixture store).
+	auditRead auditViewer
+
 	dir        string
 	lock       *flock.Flock
 	server     *http.Server

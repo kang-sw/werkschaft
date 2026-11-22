@@ -1252,6 +1252,41 @@ func maxTime(a, b time.Time) time.Time {
 	return a
 }
 
+// View is a read-only snapshot of one session's retained events, for the
+// query API.
+type View struct {
+	// Events are the retained events, oldest first, in strictly increasing
+	// Seq. The slice is shared with the store: callers must not modify it or
+	// its elements (Meta maps included).
+	Events []wsaudit.Envelope
+	// Cut reports that the session's current ring dropped older segments to
+	// capacity eviction, so events older than Events[0] existed and are gone.
+	// Whole-ring removal (time retention, session deletion) leaves no
+	// evidence: a ring started afterwards reports false until it drops a
+	// segment itself.
+	Cut bool
+}
+
+// View returns a snapshot of the session's retained events and eviction
+// state, from memory. The read lock is held only to copy the slice header:
+// a caller scanning the snapshot for as long as it likes never holds up the
+// writer, which only appends past the snapshot's length or replaces the
+// slice. An unknown session yields an empty View.
+func (s *Store) View(ctx context.Context, session string) (View, error) {
+	info, err := s.loaded(ctx, session)
+	if err != nil || info == nil {
+		return View{}, err
+	}
+	r := info.view.Load()
+	if r == nil {
+		return View{}, nil
+	}
+	r.view.RLock()
+	v := View{Events: r.events[:len(r.events):len(r.events)], Cut: r.cut}
+	r.view.RUnlock()
+	return v, nil
+}
+
 // Events returns the session's retained events, oldest first, from memory.
 // It never waits on the writer's disk I/O.
 func (s *Store) Events(ctx context.Context, session string) ([]wsaudit.Envelope, error) {
