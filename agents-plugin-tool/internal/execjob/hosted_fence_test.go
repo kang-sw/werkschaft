@@ -290,3 +290,43 @@ func TestHostedFailedSpawnRunsUntilItsHolderStops(t *testing.T) {
 		}
 	}
 }
+
+// A legacy call rooted at the primary checkout whose working directory is
+// a worktree nested beneath it counts in that worktree too, from its
+// admission through its run: releasing the nested worktree is refused.
+func TestLegacyLaunchCountsInItsWorkingDirectorysWorktree(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	root := gitRoot(t)
+	nested := filepath.Join(root, ".ws-pool", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	beforeLegacyActive = func() {
+		close(entered)
+		<-release
+	}
+	t.Cleanup(func() { beforeLegacyActive = nil })
+	done := make(chan error, 1)
+	go func() {
+		_, err := Launch(LaunchOptions{Root: root, WorkingDir: nested, Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}})
+		done <- err
+	}()
+	<-entered
+	if _, err := FenceLegacyRoot(nested); err == nil || !strings.Contains(err.Error(), "1 exec job(s) still run") {
+		t.Fatalf("releasing the worktree a launch runs in: %v", err)
+	}
+	// Counted once although it is in the primary too.
+	if _, err := FenceLegacyRoot(root); err == nil || !strings.Contains(err.Error(), "1 exec job(s) still run") {
+		t.Fatalf("releasing the primary: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	active.Store("test-nested", &activeJob{root: root, wd: nested})
+	defer active.Delete("test-nested")
+	if _, err := FenceLegacyRoot(nested); err == nil || !strings.Contains(err.Error(), "1 exec job(s) still run") {
+		t.Fatalf("releasing the worktree a running job works in: %v", err)
+	}
+}

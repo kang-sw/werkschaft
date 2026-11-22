@@ -11,15 +11,21 @@ import (
 // before its process starts and holds the reservation until the job is in
 // the set ActiveRoots counts, and FenceLegacyRoot counts both under the
 // same lock as it fences, so a release never sees zero while a launch is
-// between its admission and its active entry.
+// between its admission and its active entry. A launch or job counts in a
+// worktree that holds its root or its working directory (a call rooted at
+// the primary checkout may run in a nested pooled worktree), once.
 var legacyAdmission struct {
 	mu sync.Mutex
-	// reserved counts the launches past admission and not yet active, by
-	// cleaned root.
-	reserved map[string]int
+	// reserved holds the launches past admission and not yet active, each
+	// as its cleaned root and working directory.
+	reserved map[*legacyLaunch]struct{}
 	// fences counts the fences on each form of a fenced target.
 	fences map[string]int
 }
+
+// legacyLaunch is a reserved launch's places: its root and working
+// directory.
+type legacyLaunch struct{ root, wd string }
 
 // beforeLegacyActive, when set (tests only), runs after a legacy job's
 // process started and before it enters the active set.
@@ -38,24 +44,24 @@ func reserveLegacy(root, wd string) (func(), error) {
 		}
 	}
 	if legacyAdmission.reserved == nil {
-		legacyAdmission.reserved = map[string]int{}
+		legacyAdmission.reserved = map[*legacyLaunch]struct{}{}
 	}
-	legacyAdmission.reserved[root]++
+	launch := &legacyLaunch{root: root, wd: filepath.Clean(wd)}
+	legacyAdmission.reserved[launch] = struct{}{}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			legacyAdmission.mu.Lock()
 			defer legacyAdmission.mu.Unlock()
-			if legacyAdmission.reserved[root]--; legacyAdmission.reserved[root] <= 0 {
-				delete(legacyAdmission.reserved, root)
-			}
+			delete(legacyAdmission.reserved, launch)
 		})
 	}, nil
 }
 
 // FenceLegacyRoot reserves worktree target for a release or removal
 // against this process's legacy jobs: refused while one runs, or is being
-// launched, in it (its root at or beneath target, in either symlink form);
+// launched, in it (its root or working directory at or beneath target, in
+// either symlink form);
 // otherwise new legacy launches there are refused until the returned
 // unfence (idempotent) runs.
 func FenceLegacyRoot(target string) (func(), error) {
@@ -72,14 +78,14 @@ func FenceLegacyRoot(target string) (func(), error) {
 		return false
 	}
 	active.Range(func(_, v any) bool {
-		if inTarget(filepath.Clean(v.(*activeJob).root)) {
+		if job := v.(*activeJob); inTarget(filepath.Clean(job.root)) || (job.wd != "" && inTarget(filepath.Clean(job.wd))) {
 			n++
 		}
 		return true
 	})
-	for root, c := range legacyAdmission.reserved {
-		if inTarget(root) {
-			n += c
+	for launch := range legacyAdmission.reserved {
+		if inTarget(launch.root) || inTarget(launch.wd) {
+			n++
 		}
 	}
 	if n > 0 {

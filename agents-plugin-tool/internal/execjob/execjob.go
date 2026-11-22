@@ -113,8 +113,10 @@ type RawGrepResponse struct {
 }
 
 type activeJob struct {
-	root, key string
-	cmd       *exec.Cmd
+	// wd is the job's working directory, which may lie in another
+	// worktree than root (FenceLegacyRoot counts the job in both).
+	root, wd, key string
+	cmd           *exec.Cmd
 }
 
 // activeObserver is SetActiveObserver's function; nil observes nothing.
@@ -302,7 +304,7 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	if beforeLegacyActive != nil {
 		beforeLegacyActive()
 	}
-	active.Store(activeKey(opts.Root, key), &activeJob{root: opts.Root, key: key, cmd: cmd})
+	active.Store(activeKey(opts.Root, key), &activeJob{root: opts.Root, wd: wd, key: key, cmd: cmd})
 	release()
 	notifyActive()
 	done := make(chan struct{})
