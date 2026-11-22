@@ -158,3 +158,19 @@ Expose the `report` kind consistently in schema and allocator with the same allo
 ### Phase 4: Resolve a fresh implementation branch when the derived one is already merged
 
 Reproduce the reported flow against current source, including resolve followed by pooled acquisition, and locate any remaining stale-checkout gap. Preserve the canonical name and the prior guarded recreation decision: a name-rooted target zero ahead and behind its encoded merge root is recreated under the acquisition lock; equal, ahead, and divergent branches preserve existing behavior. Preserve both resolver-owned `recreate` actions and protect unmerged work. If the current integration fixture already covers the reported flow and passes, record that result without a duplicate fix; otherwise repair the remaining gap and add the missing regression. Re-grade provisional T0 against the implemented read/write paths.
+
+### Result (4b9ca27d0) - 2026-11-22
+
+The reported flow was reproduced against current source and showed no remaining stale-checkout gap, so no source change was made. Only a regression test was added.
+
+- Existing coverage: `TestImplIdentityMergedLeftoverResolveAcquireRoute` (resolve, then pooled `worktree.acquire`, then route) already covers the merged leftover and passes. `git.resolve_impl_branch` stays a pure name derivation. `worktree.acquire` recreates a name-rooted target that is zero ahead and behind its merge root, and preserves an unmerged one.
+- Reported flow, not covered before: a checkout provisioned by the lead under its own name (here `impl/develop/permission-p3-codex`) while the stem-derived canonical branch is a fully merged earlier run. New test `TestImplIdentityMergedLeftoverUnderDifferentProvisionedBranch` pins it:
+  - Without the lead's `identity_vouch` the route stops ("target implementation branch already exists") and returns the canonical name as `target_branch`. This is the observed "stale branch returned" outcome: it is the guarded behavior pinned by the `clean current without vouch` row in `impl_identity_test.go`, not a defect.
+  - With the vouch the action is `recreate`.
+  - A leftover with unique commits stops even with the vouch.
+  - The route never moves the leftover ref.
+- Both resolver-owned `recreate` actions and the unmerged-work protection are preserved.
+- Compatibility: T0. No read/write path, tool argument, result shape or stored form changed.
+- Verification (`GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`): `go vet ./internal/mcp` clean; `go test ./internal/mcp -run 'TestImplIdentity|TestDeriveImplementBranchPlan|Recreate|ResolveImplBranch|PoolReuse|TestObserveImplementBranch'` passed. Lite review: clean, two Minors left open (the stop cases assert only the action, not the reason; no row for an unmerged leftover without a vouch).
+- Dogfood surprise, not fixed: the stop for an unvouched clean provisioned branch carries no suspected owner, so its next instruction ("report the branch safety blocker") does not tell the worker that a lead `identity_vouch` resolves it. The text could name the vouch route.
+- Not done: the exec-job follow-up (Phase 2) and ticket closure, left to the lead.
