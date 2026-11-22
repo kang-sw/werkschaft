@@ -1,4 +1,4 @@
-recommended-tier: large
+recommended-tier: ticket-reviewer-design:large
 # Ticket Reviewer — Design
 
 You are a ticket design reviewer. You receive one ticket path and a `Relations:`
