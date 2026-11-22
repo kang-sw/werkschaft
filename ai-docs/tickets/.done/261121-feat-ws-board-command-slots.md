@@ -972,3 +972,61 @@ plus the new connection tests; `wsagent` with `-race`
 `ComposerRoot|Exec|Passive|Inbox|Held|Handoff|Takeover|Relogin`: pass.
 `GOOS=windows go vet` on the five touched packages: clean. The Windows host run
 is the lead's.
+
+#### Edition (0e918e11f) - 2026-11-23
+
+Round 3 of the pre-merge review (two Important, four Minor, one accepted), fixed
+in one commit on top of the round-2 Edition. The text above is left as written;
+where it says a withdrawal is "committed", read "published in the registry":
+the store transaction can finish before the writer takes the memory lock, and
+the registry read in a click is the ordering point against the moment the
+change is published there.
+
+- A delayed write answer can no longer rewind the strip. The answer of a
+  removal or a refused run is only a snapshot taken at the write: it applies
+  only when its epoch and worktree tag equal the shown ones and its revision is
+  not older than the shown one; any other (an older revision, a different epoch
+  after a daemon restart the page survived, a different worktree) is dropped and
+  one read fetches the current list. A read's own answer keeps the earlier rule
+  (an older revision is dropped, a different epoch or worktree wins, since it is
+  the page's own current view). A browser test holds a removal's answer until the
+  strip shows the current list, rewrites it to another epoch with an empty list
+  and releases it: the current list stays and a read fires; it fails when write
+  answers use the read rule.
+- A failed read no longer drops a pending wake. A read that completes, failed
+  or not, after a newer stream wake arrived during it issues exactly one more
+  read (the flag is set only by a wake and cleared when a read starts, so there
+  is no loop and no polling). A read that fails for a reason that may pass (a 503
+  while the daemon starts, any other server error, a lost connection, a bad body)
+  leaves the strip as it was; one that is refused for good (401, 403, 404, 405:
+  a LAN page, a closed or unknown lead, an old daemon) still clears it. Browser
+  tests: a wake pending during a read that fails with 503 is answered by exactly
+  one more read, and a failed read leaves a strip that already showed a list and
+  the next change catches it up; each fails with its rule disabled.
+- Readiness wait scope: only discovery waits. `ServerOptions.UserCommandsDiscovery`
+  is the lookup the tool list (and the schema and manual discovery that filter
+  by it) reads; a registration or withdrawal keeps `UserCommands`, which never
+  waits. An answer for "not ready" already existed in shape (the nil host makes a
+  mutation refuse before it writes anything), but its text said the daemon could
+  not open the store; it now says the store is not open yet (still starting, or
+  it could not open it). So the second option (cancellation through the wait) was
+  not needed. The remaining 5 s budget is read after the runner lookup, so the
+  runner's lock time no longer extends it. A Go test through the HTTP route shows
+  a second lead's registration refused at once, with the not-ready text, while
+  the first lead's tool list is still waiting; it fails if the registration used
+  the waiting lookup.
+- The rapid-click browser test now waits for the first click's acknowledgement
+  and for its card to render before the second click, so the second click lands
+  inside the 600 ms guard that began with the rendered answer.
+- Windows `\\?\` database path: accepted as the shared edge with the exec and
+  cron stores; unchanged.
+
+Verification: `wsusercmd` (full, `-race`); `wsdashboard`
+`TestComposer|UserCommand|Usercmd|TestI18N|TestAssetSource|TestCloseRequestComposerLifecycle|Steer|Inbox`
+with `-race` (Playwright included); `mcp`
+`UserCommand|TestHostedExec|Inventory|Shipped|Schema|Session`; `cmd/ws-mcp`
+`UserCommand|Usercmd|Composer|Exec|Dashboard|RuntimeCapabilities|HostedLead|HostedConnections|HostedWorkerOverHTTP`;
+`wsagent` with `-race`
+`ComposerRoot|Exec|Passive|Inbox|Held|Handoff|Takeover|Relogin`: pass.
+`GOOS=windows go vet` on the five touched packages: clean. The Windows host run
+is the lead's.
