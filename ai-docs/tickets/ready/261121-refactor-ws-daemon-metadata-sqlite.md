@@ -544,6 +544,154 @@ Sequence under (2008).
   interruption. Capture a comparable legacy baseline and record the
   directional compatibility evidence for cutover.
 
+### Result (09cf15e92) - 2026-11-22
+
+Landed in 73434818e (store and import) and 09cf15e92 (lite review fixes).
+The new package `agents-plugin-tool/internal/wsmeta` has no callers yet:
+every live store still uses its legacy file.
+
+- **Store** (`store.go`): one `<dash>/metadata.sqlite` per dashboard directory
+  (1988). It runs WAL with `locking_mode=EXCLUSIVE`, so there is no `-shm` and
+  a second daemon cannot open the database while the first holds it (bounded
+  2 s open retry). Other settings: `busy_timeout=100` with a bounded busy
+  retry, one connection, foreign keys on. The database and its WAL are
+  pre-created owner-only (0600). Schema version 1; a newer schema is refused
+  (`ErrNewerSchema`). Live record and cursor writes commit at
+  `synchronous=NORMAL`; stage, fence and import commits run at `FULL` (2006).
+  Auto-checkpoint is off, a 30 s idle `TRUNCATE` checkpoint runs, and `Close`
+  checkpoints too.
+- **Capture journal** (`capture.go`, 2125/2135):
+  - `Stage` discovers every bundled file, CLI-only session directories
+    included. Session files: `agent.json`, `permission.json`, `label.json`,
+    `ack-check.json`, `hiring.json`. Dashboard files: `support.json`,
+    `rail-layout.json`, `plan-usage*.json` and its histories,
+    `tracker-hooks.json`. Directories: `pi-probes-v1/`, `memos/`,
+    `tracker-hooks/`.
+  - Each file's original bytes and digest are stored per path with the
+    session generation (unix `dev:ino`, Windows creation time).
+  - `PrepareFence` durably records the fenced result's digest (`absent` for a
+    removal) before the replacement, and `MarkFenceLanded` marks it in place.
+    A retry reuses a staged original only when the live digest equals the
+    fence digest. Otherwise it re-stages the live bytes and reports the path
+    in `Unfenced`.
+  - A vanished or recreated session directory loses its journal rows and is
+    never recreated.
+  - A transient read failure (a sharing violation that outlives
+    `wsstate.ReadFile`'s retry) keeps the earlier row unchanged and reports
+    the path in `Unread`.
+- **Import commit** (`import.go`):
+  - `Commit` runs in one `FULL` transaction: it re-runs the stage pass,
+    refuses on any `Unfenced` (`ErrFenceInvalidated`) or `Unread`
+    (`ErrLegacyUnread`) path, replaces the keyed tables, decodes each capture
+    under a savepoint, runs `BeforeMarker`, and writes
+    `import_state=complete`.
+  - Each capture's status is recorded in the journal: imported, absent,
+    invalid, future, ignored or retained. An invalid or unreadable
+    (including dangling-link) permission selection becomes a fail-closed
+    `invalid` row (1993).
+  - After the marker, `Stage` and the fence calls return `ErrImportComplete`
+    and `Commit` returns `AlreadyComplete`. Before it, live writes and `Load`
+    return `ErrNotImported`.
+- **Records and cursors** (`records.go`, `snapshot.go`):
+  - `PatchRecord` appends top-level member deltas (null removes a member) and
+    folds them into the snapshot after `RecordDeltaBound`=32 (1991).
+  - `SetHolderCursor` is keyed by (reply_id, holder_id) and only advances. It
+    accepts writes from the record's current holder only (`ErrStaleHolder`
+    otherwise) and drops earlier holders' cursors (1992).
+  - `Load` returns the whole startup snapshot. Unknown members stay as raw
+    JSON.
+
+Verification (macOS arm64):
+
+- `go test ./internal/wsmeta/`: ok.
+- `go test -race -count=3 ./internal/wsmeta/`: ok (11.9 s).
+- `go build ./...`: ok.
+- `go vet ./internal/wsmeta ./internal/wsagent`: ok.
+- `GOOS=windows go vet ./internal/wsmeta`: ok.
+- `gofmt -l`: clean.
+- Tests cover:
+  - Old-data import: CLI-only label and hiring, original bytes, absent,
+    invalid and future inputs, unknown members, registration and holder files
+    left untouched, and a tree-state check showing the import writes no
+    legacy file.
+  - Interrupted stage, and an interrupted commit retried from live unfenced
+    files (a pruned session is not imported or recreated; a latecomer is
+    imported).
+  - A recreated session directory losing its journal rows.
+  - A fence landed before its journal mark, and a foreign write over a fence.
+  - A transient read leaving a fenced original intact and blocking `Commit`;
+    a stable read error failing closed.
+  - `BeforeMarker` rollback, and a restart that ignores legacy edits.
+  - Exclusive, `-shm`-free, owner-only files, and newer-schema refusal.
+  - Holder cursor keying, including a late write from the old holder, and
+    bounded deltas surviving a restart.
+
+Baseline, macOS M3, no antivirus, `-benchtime 2000x` (supporting evidence
+only; the Windows measurement is Phase 3):
+
+| Write | Legacy path | wsmeta |
+|---|---|---|
+| Holder cursor (one holder_seq update) | ~190 µs (whole-record rewrite, 2 counted file ops, 5 by source count) | `BenchmarkHolderCursor` ~41 µs |
+| Record member patch | ~190 µs (whole-record rewrite) | `BenchmarkRecordPatch` ~41–65 µs |
+| Permission change | `BenchmarkMetadataBaselinePermissionChange` ~200 µs (3 counted file ops) | n/a |
+
+The legacy benchmarks are in
+`wsagent/metadata_baseline_bench_test.go`
+(`BenchmarkMetadataBaselineHolderSeqRecordRewrite`,
+`BenchmarkMetadataBaselinePermissionChange`). Syscall counts were not captured
+because macOS tracing needs root.
+
+Compatibility evidence:
+
+- Phase 1 is T0. The only new files are `<dash>/metadata.sqlite` and its
+  `-wal`. No old code enumerates the `<dash>` root: wsdashboard's `ReadDir`
+  calls cover session subdirectories and fs routes only, and `registry.go:297`
+  reads `<dash>/sessions`.
+- Cutover fences, read from current source as a proxy for the pinned old
+  binary:
+  - An invalid permission file fails closed:
+    `wsagent/permission_store.go:120-138`, dangling link at `:124`.
+  - Hiring is refused when `Enabled` is false:
+    `wsdashboard/session_hire.go:131`.
+  - Tracker support refuses a set `ClosedAt` (`mcp/tracker_support.go:58`)
+    and resolves the profile at `:61`.
+  - The profile grammar is `^[a-z][a-z0-9-]*$`
+    (`wsagent/profile.go:57,361`), and `ResolveProfile` validates it first
+    (`:398-400`).
+  - Hooks go idle when `tracker-hooks.json` is absent:
+    `wstrackerhook/runner.go:226-229`.
+- Tests that run the old binary belong to Phase 2.
+
+Decisions:
+
+- Pi probe results are imported, not re-probed.
+- Memo documents keep their sha256 key.
+- `tracker-hooks.json` is captured for its retained bytes only and is not
+  decoded into a table.
+- Histories keep the all-or-nothing `schema_version=1` rule.
+- Read errors: dangling links, non-regular files and POSIX permission errors
+  are stable `unreadable` inputs. On Windows every other read error is
+  transient, because `ACCESS_DENIED` also comes from pending deletes and
+  scanner opens.
+
+Deferred to Phase 2/3:
+
+- Applying the fences and old-binary execution tests (Phase 2).
+- Confirming the idle-checkpoint interval and the NORMAL/FULL split with the
+  Windows measurement (Phase 3).
+- Per-harness history validity predicates beyond the schema rule (left to
+  the history owners when they switch).
+- Lite review Minor items, not fixed:
+  - `delegated_authority: null` is imported as invalid, while the old reader
+    accepts it (fails closed).
+  - Labels are imported without the old `cleanLabel` validation; the Phase 2
+    owner must re-validate on load.
+  - Inode reuse can hide a recreated session directory on ext4/tmpfs, and NTFS
+    tunneling can hide one on Windows.
+  - Untested fence branches: an intent whose replacement never landed, fence
+    calls on an unknown path, and pairing a lowered permission selector with
+    its record (2135).
+
 ### Phase 2: Switch authority and remove the holder sequence rewrites
 
 - Depends on Phase 1. Route affected direct Go readers through the daemon
