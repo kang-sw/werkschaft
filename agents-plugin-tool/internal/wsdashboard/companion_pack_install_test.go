@@ -636,6 +636,11 @@ func TestCompanionPackRasterHeaders(t *testing.T) {
 	if w, h, err := companionWebPSize(vp8x); err != nil || w != 16 || h != 32 {
 		t.Fatalf("VP8X: %d %d %v", w, h, err)
 	}
+	// Width-1 and height-1 span three bytes each; the second byte must count.
+	vp8x = append([]byte("RIFF\x00\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x00\x00\x00\x00"), 0xff, 0x01, 0x00, 0xff, 0x0f, 0x00)
+	if w, h, err := companionWebPSize(vp8x); err != nil || w != 512 || h != 4096 {
+		t.Fatalf("VP8X wide: %d %d %v", w, h, err)
+	}
 }
 
 func TestCompanionPackInstallFileOperations(t *testing.T) {

@@ -311,7 +311,7 @@ func (a *companionArchive) pack(id, prefix string) (companionPackFiles, error) {
 			return nil, companionFail(id, rel, "only pack.json and .png or .webp files are allowed")
 		}
 		if companionReservedName(rel) {
-			return nil, companionFail(id, rel, "file name is a reserved device name on Windows")
+			return nil, companionFail(id, rel, "file name is a reserved device name")
 		}
 		files[rel] = f
 	}
@@ -336,7 +336,7 @@ func companionReservedName(name string) bool {
 // the header of its extension within the dimension cap.
 func (a *companionArchive) prepare(id string, files companionPackFiles, budget int) (*companionPack, error) {
 	if companionReservedName(id) {
-		return nil, companionFail(id, "", "pack ID is a reserved device name on Windows")
+		return nil, companionFail(id, "", "pack ID is a reserved device name")
 	}
 	pack, where, err := loadCompanionPack(id, "local", budget, func(name string, limit int) ([]byte, error) {
 		f, ok := files[name]
@@ -406,8 +406,8 @@ func companionWebPSize(data []byte) (int, int, error) {
 		if len(data) < 30 {
 			return 0, 0, invalid
 		}
-		width := 1 + int(data[24]) | int(data[25])<<8 | int(data[26])<<16
-		height := 1 + int(data[27]) | int(data[28])<<8 | int(data[29])<<16
+		width := 1 + (int(data[24]) | int(data[25])<<8 | int(data[26])<<16)
+		height := 1 + (int(data[27]) | int(data[28])<<8 | int(data[29])<<16)
 		return width, height, nil
 	}
 	return 0, 0, invalid
@@ -544,7 +544,7 @@ func parseCompanionMarketplaceEntry(raw json.RawMessage) companionMarketplaceEnt
 	case e.ID == companionDefaultID || e.ID == "auto":
 		e.Err = errors.New("pack ID is reserved")
 	case companionReservedName(e.ID):
-		e.Err = errors.New("pack ID is a reserved device name on Windows")
+		e.Err = errors.New("pack ID is a reserved device name")
 	}
 	if e.Err != nil {
 		return e

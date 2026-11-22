@@ -267,9 +267,10 @@ Source files, drafts and licenses belong outside the pack directories.
 
 - Names that differ only in letter case, such as `Stand.png` and `stand.png`,
   are refused, because some file systems treat them as one file.
-- Windows reserved device names are refused for a pack ID and for a file name,
-  with or without an extension, in any case: `con`, `prn`, `aux`, `nul`,
-  `com1` to `com9`, `lpt1` to `lpt9`.
+- Reserved device names are refused for a pack ID and for a file name, with
+  or without an extension, in any case, because some file systems cannot
+  create them: `con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to
+  `lpt9`.
 - Archive entry names must be UTF-8 relative paths with no backslash, `..`
   segment, drive letter or duplicate. Only stored or deflated, unencrypted
   entries are accepted.
