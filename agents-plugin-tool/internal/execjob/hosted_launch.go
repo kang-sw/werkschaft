@@ -139,9 +139,20 @@ func (h *Hosted) convert(j *hostedJob) HostedView {
 	return h.view(j, OutcomeConverted)
 }
 
-// admit registers j, refusing a new job once the running ones fill the job
-// cap, and drops the oldest finished jobs over it.
+// admit registers j, refusing a new job once the running ones and the
+// dropped ones whose row delete keeps failing fill the job cap, and drops
+// the oldest finished jobs over it. It retries the failed deletes first.
 func (h *Hosted) admit(j *hostedJob) error {
+	h.mu.Lock()
+	var retry []string
+	for id := range h.deleting {
+		retry = append(retry, id)
+	}
+	closed := h.closed
+	h.mu.Unlock()
+	if !closed {
+		h.forget(nil, retry)
+	}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -163,6 +174,10 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return fmt.Errorf("exec: %d jobs already run; stop one first", running)
 	}
+	if pending := len(h.deleting); running+pending >= HostedMaxJobs {
+		h.mu.Unlock()
+		return fmt.Errorf("exec: %d jobs run and %d finished jobs' records could not be deleted from the job store; retry later, or stop a job", running, pending)
+	}
 	h.jobs[j.row.ID] = j
 	var dropped []*hostedJob
 	var ids []string
@@ -170,7 +185,10 @@ func (h *Hosted) admit(j *hostedJob) error {
 		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
 		for _, old := range finished[:min(over, len(finished))] {
 			delete(h.jobs, old.row.ID)
-			h.deleting[old.row.ID] = old
+			if h.byHolder[old.row.HolderID] == old {
+				delete(h.byHolder, old.row.HolderID)
+			}
+			h.deleting[old.row.ID] = old.row.HolderID
 			h.rings.Release(old.out)
 			dropped = append(dropped, old)
 			ids = append(ids, old.row.ID)

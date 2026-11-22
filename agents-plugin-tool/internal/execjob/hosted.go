@@ -26,10 +26,12 @@ type Hosted struct {
 	mu       sync.Mutex
 	jobs     map[string]*hostedJob
 	byHolder map[string]*hostedJob
-	// deleting holds the jobs the job cap dropped whose row delete has
-	// not succeeded (still running, or failed): a holder's end for one of
-	// them leaves its exit copy to forget instead of unlinking it.
-	deleting map[string]*hostedJob
+	// deleting holds the ids of the jobs the job cap dropped whose row
+	// delete has not succeeded (still under way, or failed), each with its
+	// holder id: a holder's end for one of them leaves the exit copy to the
+	// delete, the id draw skips them, and admit retries their delete and
+	// counts them toward the job cap, so a failing store bounds them.
+	deleting map[string]string
 	started  bool
 	closed   bool
 	retry    *time.Timer
@@ -84,12 +86,9 @@ type hostedJob struct {
 	saved  uint64
 	// endStored: a terminal row of j is in the store (under saveMu). Until
 	// then j's exit copy stays, and exitCopyOwed records that its removal
-	// waits for that store write.
+	// waits for that store write (or the row's delete, which removes it).
 	endStored    bool
 	exitCopyOwed bool
-	// rowDeleted: the job cap dropped j and its row delete succeeded
-	// (under saveMu), so nothing needs its exit copy.
-	rowDeleted bool
 }
 
 // NewHosted loads the stored jobs: finished ones with their output preview,
@@ -113,7 +112,7 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 	if opts.TotalBytes <= 0 {
 		opts.TotalBytes = hostedTotalBytes
 	}
-	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*hostedJob{}}
+	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]string{}}
 	rows, err := opts.Store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load hosted exec jobs: %w", err)
@@ -287,26 +286,24 @@ func (h *Hosted) HolderGone(desc wsholder.Descriptor, exit wsholder.Exit) {
 	}
 	h.mu.Lock()
 	j := h.jobs[execID]
-	if j != nil && j.row.HolderID == desc.ID {
+	if b := h.byHolder[desc.ID]; b != nil && b.row.ID == execID {
 		delete(h.byHolder, desc.ID)
 	}
-	if j == nil {
-		// A dropped job whose row delete has not succeeded: its copy
-		// goes only once the delete does (forget).
-		j = h.deleting[execID]
-	}
+	_, pending := h.deleting[execID]
 	ended := j == nil || j.row.Terminal()
 	h.mu.Unlock()
-	if !ended {
+	switch {
+	case !ended:
 		// The holder went before its exit record reached this daemon.
 		h.endFromExit(j, exit)
-		return
+	case j != nil:
+		h.dropExitCopy(j)
+	case !pending:
+		// The job's row delete succeeded (or no job row ever named it).
+		h.removeExitCopy(execID)
 	}
-	if j == nil {
-		_ = os.Remove(h.exitCopyPath(execID))
-		return
-	}
-	h.dropExitCopy(j)
+	// A dropped job whose row delete has not succeeded keeps its copy:
+	// the delete removes it once it succeeds (forget).
 }
 
 // endFromExit ends running job j with the status its holder's exit.json
@@ -455,50 +452,53 @@ func (h *Hosted) save(j *hostedJob, row HostedJobRow, rev uint64) {
 		j.endStored = true
 		if j.exitCopyOwed {
 			j.exitCopyOwed = false
-			_ = os.Remove(h.exitCopyPath(row.ID))
+			h.removeExitCopy(row.ID)
 		}
 	}
 }
 
-// dropExitCopy removes j's exit copy once a terminal row of j is stored
-// or its row is deleted. Until then the copy stays: a successor daemon
-// that still reads the running row ends the job from the copy's status
-// instead of as lost, and the next stored terminal row (save) or the
-// row's delete (forget) removes it.
+// dropExitCopy removes j's exit copy once a terminal row of j is stored.
+// Until then the copy stays: a successor daemon that still reads the
+// running row ends the job from the copy's status instead of as lost, and
+// the next stored terminal row (save) or the row's delete (forget) removes
+// it.
 func (h *Hosted) dropExitCopy(j *hostedJob) {
 	j.saveMu.Lock()
 	defer j.saveMu.Unlock()
-	if j.endStored || j.rowDeleted {
-		_ = os.Remove(h.exitCopyPath(j.row.ID))
+	if j.endStored {
+		h.removeExitCopy(j.row.ID)
 		return
 	}
 	j.exitCopyOwed = true
 }
 
-// forget marks dropped jobs never to be written again, then deletes their
-// rows: a write already under way finishes before the delete. admit has
-// put them in h.deleting. An exit copy still owed (its terminal row never
-// stored) goes only once the delete succeeds, whichever path owes it; if
-// the delete fails, the row and its copy stay together for a successor,
-// and the jobs stay in h.deleting so a later holder end keeps the copy.
+// removeExitCopy removes job id's exit copy, logging a failure.
+func (h *Hosted) removeExitCopy(id string) {
+	if err := os.Remove(h.exitCopyPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		h.logf("remove job %s's exit copy: %v", id, err)
+	}
+}
+
+// forget marks dropped jobs never to be written again, then deletes the
+// rows of ids (admit has put them in h.deleting): a write already under
+// way finishes before the delete. Only a delete that succeeded removes
+// their exit copies and their h.deleting entries; after a failure the rows
+// and copies stay together for a successor, and the next admit retries.
 func (h *Hosted) forget(dropped []*hostedJob, ids []string) {
 	for _, j := range dropped {
 		j.saveMu.Lock()
 		j.saved = ^uint64(0)
 		j.saveMu.Unlock()
 	}
+	if len(ids) == 0 {
+		return
+	}
 	if err := h.opts.Store.Delete(ids...); err != nil {
 		h.logf("drop finished jobs: %v", err)
 		return
 	}
-	for _, j := range dropped {
-		j.saveMu.Lock()
-		j.rowDeleted = true
-		if j.exitCopyOwed {
-			j.exitCopyOwed = false
-			_ = os.Remove(h.exitCopyPath(j.row.ID))
-		}
-		j.saveMu.Unlock()
+	for _, id := range ids {
+		h.removeExitCopy(id)
 	}
 	h.mu.Lock()
 	for _, id := range ids {

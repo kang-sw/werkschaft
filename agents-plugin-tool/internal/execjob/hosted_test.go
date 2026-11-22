@@ -1556,3 +1556,158 @@ func TestHostedLaunchRefusals(t *testing.T) {
 	}
 	eventuallyExec(t, "the failed job's holder stop", func() bool { return slices.Contains(fx.holders.stops(), v.HolderID) })
 }
+
+// quickJobs makes every later launch's process exit at once, so a
+// synchronous launch comes back finished with no notice owed.
+func (fx *hostedFixture) quickJobs() {
+	fx.holders.mu.Lock()
+	fx.holders.onSpawn = func(id string) { go fx.holders.exit(id, 0) }
+	fx.holders.mu.Unlock()
+}
+
+func (fx *hostedFixture) launchFinished() HostedView {
+	fx.t.Helper()
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{})
+	if err != nil || v.Outcome != OutcomeDone {
+		fx.t.Fatalf("a quick job = %+v, %v", v, err)
+	}
+	return v
+}
+
+// TestHostedFailingDeletesStayBounded: while the store refuses every
+// delete, the job cap's dropped jobs pile up only to the cap: launches are
+// refused once they and the running jobs fill it, and a dropped job keeps
+// no holder entry. Once the store recovers, the next launch retries the
+// failed deletes and clears them.
+func TestHostedFailingDeletesStayBounded(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.store.mu.Lock()
+	fx.store.failDelete = true
+	fx.store.mu.Unlock()
+	var refusal error
+	for i := 0; i < 3*HostedMaxJobs && refusal == nil; i++ {
+		_, refusal = fx.launch(context.Background(), nil, HostedLaunch{})
+	}
+	fx.h.mu.Lock()
+	pending, holders := len(fx.h.deleting), len(fx.h.byHolder)
+	fx.h.mu.Unlock()
+	if refusal == nil || !strings.Contains(refusal.Error(), "could not be deleted") {
+		t.Fatalf("launch while deletes fail = %v, want a refusal once the cap fills", refusal)
+	}
+	if pending > HostedMaxJobs || holders > HostedMaxJobs {
+		t.Fatalf("%d dropped jobs pending, %d holder entries; want at most %d each", pending, holders, HostedMaxJobs)
+	}
+	fx.store.mu.Lock()
+	fx.store.failDelete = false
+	fx.store.mu.Unlock()
+	fx.launchFinished()
+	fx.h.mu.Lock()
+	pending = len(fx.h.deleting)
+	fx.h.mu.Unlock()
+	fx.store.mu.Lock()
+	rows := len(fx.store.rows)
+	fx.store.mu.Unlock()
+	if pending != 0 || rows > HostedMaxJobs {
+		t.Fatalf("after the store recovered: %d pending, %d rows", pending, rows)
+	}
+}
+
+// TestHostedRepeatedHolderEndsKeepTheCopyUntilADeleteSucceeds: the
+// manager calls a holder's end again when its directory removal failed,
+// and the callbacks race the job cap's delete. Whatever their order, the
+// exit copy of a job whose running row is still stored stays, and only a
+// delete that succeeded removes it.
+func TestHostedRepeatedHolderEndsKeepTheCopyUntilADeleteSucceeds(t *testing.T) {
+	fx := newHostedFixture(t, 5*time.Second)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(fx.exitDir, v.ID+".json")
+	code := 0
+	raw, _ := json.Marshal(wsholder.Exit{ExitCode: &code, Reason: "child_exited"})
+	if err := os.WriteFile(copyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.store.mu.Lock()
+	fx.store.failPut = func(r HostedJobRow) bool { return r.Terminal() }
+	fx.store.mu.Unlock()
+	fx.holders.exit(v.HolderID, code)
+	eventuallyExec(t, "the delivered notice", func() bool {
+		got, _ := fx.h.Get("lead", v.ID)
+		return got.Notice == NoticeDelivered
+	})
+	time.Sleep(3 * time.Millisecond) // the oldest end: the cap drops it first
+	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
+	gone := func() {
+		fx.h.HolderGone(wsholder.Descriptor{ID: v.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
+	}
+	goneRacing := func(n int) {
+		var wg sync.WaitGroup
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func() { defer wg.Done(); gone() }()
+		}
+		wg.Wait()
+	}
+	rowKeepsCopy := func(when string) {
+		t.Helper()
+		if _, ok := fx.store.row(v.ID); !ok {
+			return
+		}
+		if _, err := os.Stat(copyPath); err != nil {
+			t.Fatalf("%s: the exit copy went while the running row stays: %v", when, err)
+		}
+	}
+	goneRacing(4)
+	rowKeepsCopy("repeated ends before the prune")
+
+	fx.store.mu.Lock()
+	fx.store.failPut = nil
+	fx.store.failDelete = true
+	fx.store.duringDelete = func(ids []string) {
+		if slices.Contains(ids, v.ID) {
+			goneRacing(4)
+			rowKeepsCopy("ends racing the failing delete")
+		}
+	}
+	fx.store.mu.Unlock()
+	fx.quickJobs()
+	for i := 0; i < HostedMaxJobs; i++ {
+		fx.launchFinished()
+	}
+	fx.h.mu.Lock()
+	_, pending := fx.h.deleting[v.ID]
+	fx.h.mu.Unlock()
+	if !pending {
+		t.Fatalf("job %s is not pending delete", v.ID)
+	}
+	goneRacing(4)
+	rowKeepsCopy("repeated ends after the failed delete")
+
+	var during error = errors.New("the retry never ran")
+	fx.store.mu.Lock()
+	fx.store.failDelete = false
+	fx.store.duringDelete = func(ids []string) {
+		if slices.Contains(ids, v.ID) {
+			goneRacing(4)
+			_, during = os.Stat(copyPath)
+		}
+	}
+	fx.store.mu.Unlock()
+	fx.launchFinished()
+	if during != nil {
+		t.Fatalf("the exit copy went before the retried delete answered: %v", during)
+	}
+	if _, ok := fx.store.row(v.ID); ok {
+		t.Fatalf("the row stays after the retried delete")
+	}
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("the exit copy stays after its row's delete: %v", err)
+	}
+	goneRacing(4)
+}
