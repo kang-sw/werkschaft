@@ -313,6 +313,27 @@ func AgentWakeRefused(log io.Writer) func(from, id, reason string) {
 	}
 }
 
+// AgentCheckoutReleased is the daemon runner's Options.CheckoutReleased: it
+// tells the sender of a message for an agent whose worktree was released
+// after the agent was bound there, with one system mail naming that
+// worktree, and wakes the mailbox waits. A failed post is logged to log.
+func AgentCheckoutReleased(log io.Writer) func(from, id, checkout, reason string) {
+	return func(from, id, checkout, reason string) {
+		address := wsagent.AgentAddress(id)
+		if strings.TrimSpace(reason) == "" {
+			reason = fmt.Sprintf("its worktree %s was released after it was bound there", checkout)
+		}
+		content := fmt.Sprintf("Your message did not reach agent %s and will not: %s.\nReleased worktree: %s", address, strings.TrimSuffix(strings.TrimSpace(reason), "."), checkout)
+		if err := (wsmailbox.Paths{}).Store().PostSystem(from, "agent:"+id, content, time.Now()); err != nil {
+			if log != nil {
+				fmt.Fprintf(log, "agent %s: checkout release refusal to %s: %v\n", id, from, err)
+			}
+			return
+		}
+		wswake.Mailbox.Wake()
+	}
+}
+
 // agentToolDefinitions are the agent.* tools' definitions as a lead reads
 // them; agentWorkerTool rewrites them for a spawned agent.
 func agentToolDefinitions() []map[string]any {

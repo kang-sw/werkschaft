@@ -111,7 +111,10 @@ func dashboardCommand(args []string) {
 	holders.AddSink(execLink)
 	// Mail sender labels read the runner and the daemon once each exists.
 	labels := &mailLabels{}
-	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label)
+	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label, func(worktree string) []string {
+		// Bound once the hosted exec jobs open after StartDaemon; none before.
+		return execLink.hosted.Load().LiveInWorktree(worktree)
+	})
 	labels.agents.Store(agents)
 	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
 	host := &proxyHost{notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
@@ -378,7 +381,7 @@ func (l *mailLabels) label(replyID string) string {
 // trackerChanged runs after a conversation's successful tracker write;
 // agyActivity runs after a hosted agy turn settles. labels resolves the
 // sender legend of the mail the runner delivers; nil shows none.
-func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc) *wsagent.Runner {
+func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func(), holders *wsholder.Manager, boards *mcp.WhiteboardStores, labels mcp.MailLabelFunc, liveExecJobs func(worktree string) []string) *wsagent.Runner {
 	modelWaitSeconds := wsagent.DefaultAgyModelWaitTimeoutSeconds
 	modelWaitRetries := wsagent.DefaultAgyModelWaitRetries
 	if name, _, err := wsagent.ResolveHostedPackage(); err == nil && name == "wsflow" {
@@ -430,6 +433,12 @@ func newAgentRunner(dir string, logw io.Writer, trackerChanged, agyActivity func
 		// A message that cannot wake its sleeping agent stays queued; its
 		// sender hears why once.
 		WakeRefused: mcp.AgentWakeRefused(logw),
+		// A message for an agent whose worktree was released after it was
+		// bound there never reaches it; its sender hears why.
+		CheckoutReleased: mcp.AgentCheckoutReleased(logw),
+		// worktree.release refuses, and acquisition skips, a worktree with a
+		// running hosted exec job.
+		LiveExecJobs: liveExecJobs,
 	})
 }
 

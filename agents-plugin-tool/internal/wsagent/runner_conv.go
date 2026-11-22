@@ -257,6 +257,11 @@ type conv struct {
 	// permission admission (childAdmission): the input stays, and the
 	// child counts as asleep. Under mu.
 	wakeRefused bool
+	// releasedCheckout is the checkout whose completed release ended this
+	// spawned conversation's binding, once the runner knows it (a release's
+	// notice, a refused start, or a rejoin); it then takes no input there,
+	// even while its process lives. It is never cleared. Under mu.
+	releasedCheckout string
 	// spawnPending is true from registration in r.convs until spawned()'s
 	// first Send (or close), so awakeLocked counts a newly registered spawn
 	// with no gap after pendingSpawns handoff. Under mu.
@@ -367,11 +372,14 @@ func (c *conv) mailChanged() {
 	if err != nil {
 		fmt.Fprintf(c.r.opts.Log, "agent %s: mailbox: %v\n", rec.ReplyID, err)
 	}
+	// A conversation whose checkout was released steers nothing into a
+	// turn that outlived the release.
+	released := c.released()
 	var held []string
 	for _, m := range mail {
 		// Once a steer fails, the rest waits too, so the batch keeps its
 		// order. A held text keeps Drain's text, without a legend.
-		if len(held) > 0 || !c.steerMail(m) {
+		if released != "" || len(held) > 0 || !c.steerMail(m) {
 			held = append(held, m.Text)
 		}
 	}
@@ -396,7 +404,11 @@ func (c *conv) mailChanged() {
 	if len(c.rec.Mail) > 0 {
 		c.kick()
 	}
-	if len(held) > 0 {
+	if len(held) > 0 && released != "" {
+		// Told whether or not the kick reached a start: a running turn
+		// defers the kick, and the refusal does not wait for it.
+		c.tellSenders(mail, released, checkoutReleasedRefusal(released).Error())
+	} else if len(held) > 0 {
 		c.tellRefusedWake(mail)
 	}
 }
@@ -406,18 +418,24 @@ func (c *conv) mailChanged() {
 // (Options.WakeRefused), once per sender. It runs in the loop.
 func (c *conv) tellRefusedWake(mail []ClaimedMail) {
 	c.mu.Lock()
-	refused, reason := c.wakeRefused, c.lastErr
+	refused, reason, checkout := c.wakeRefused, c.lastErr, c.releasedCheckout
 	c.mu.Unlock()
-	if !refused || c.r.opts.WakeRefused == nil {
+	if !refused {
 		return
 	}
+	c.tellSenders(mail, checkout, reason)
+}
+
+// tellSenders tells each sender of mail, once, that conversation c refused
+// its start (checkout set: by that checkout's release). It runs in the loop.
+func (c *conv) tellSenders(mail []ClaimedMail, checkout, reason string) {
 	told := map[string]bool{}
 	for _, m := range mail {
 		if m.Sender == "" || told[m.Sender] {
 			continue
 		}
 		told[m.Sender] = true
-		c.r.opts.WakeRefused(m.Sender, c.rec.ReplyID, reason)
+		c.r.tellRefused(m.Sender, c.rec.ReplyID, checkout, reason)
 	}
 }
 
@@ -532,6 +550,11 @@ func (c *conv) inboxMutated(n int) {
 // whether the turn runs (wrapHold), keeps it held.
 func (c *conv) steer() {
 	if !c.turn || c.proc == nil || c.replaying || c.wrapHold || c.closed || c.hidden || c.compacting || c.compactCommand || c.compactInternalTurn {
+		return
+	}
+	if c.released() != "" {
+		// A turn that outlived its checkout's release takes no steer; the
+		// sender heard the refusal from Deliver or the mail claim.
 		return
 	}
 	if !c.rec.Lead {
@@ -1235,6 +1258,24 @@ func (c *conv) kickCompactionNudge() {
 	}
 }
 
+// refuseStart records a refused start (an admission refusal, or a release
+// of the conversation's checkout): the input stays for a later admitted
+// start, and the conversation counts as asleep. It runs in the loop.
+func (c *conv) refuseStart(refused *admissionRefusal) {
+	c.setStatus(func() {
+		c.lastErr, c.wakeRefused = refused.Error(), true
+		if refused.checkout != "" {
+			c.releasedCheckout = refused.checkout
+		}
+	})
+	fmt.Fprintf(c.r.opts.Log, "agent %s: start: %v\n", c.rec.ReplyID, refused)
+	c.live.writeSnapshot()
+	c.r.notify(c.rec.ReplyID, c.rec.Root)
+	// Persist the input's coverage so crash recovery cannot expire it as
+	// quiet.
+	c.flushRecord()
+}
+
 func (c *conv) kickInput() {
 	if c.sendCompactionNudge() {
 		return
@@ -1253,6 +1294,12 @@ func (c *conv) kickInput() {
 		c.voidCancelled()
 		return
 	}
+	if checkout := c.released(); checkout != "" && c.proc != nil {
+		// A live process outlived its checkout's release: it takes no new
+		// turn there. The input stays, as a refused start keeps it.
+		c.refuseStart(checkoutReleasedRefusal(checkout))
+		return
+	}
 	if c.proc == nil {
 		if c.rec.Lead && c.rec.HolderID != "" && !c.r.scanDone() {
 			// The holder the record names may still run unseen: the start
@@ -1262,17 +1309,14 @@ func (c *conv) kickInput() {
 		}
 		if err := c.startProcess(); err != nil {
 			var refused *admissionRefusal
-			isRefusal := errors.As(err, &refused)
-			c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), isRefusal })
+			if errors.As(err, &refused) {
+				c.refuseStart(refused)
+				return
+			}
+			c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), false })
 			fmt.Fprintf(c.r.opts.Log, "agent %s: start: %v\n", c.rec.ReplyID, err)
 			c.live.writeSnapshot()
 			c.r.notify(c.rec.ReplyID, c.rec.Root)
-			if isRefusal {
-				// The input stays for the next admitted start; persist its
-				// coverage so crash recovery cannot expire it as quiet.
-				c.flushRecord()
-				return
-			}
 			c.settleTurn(TurnFailed, err.Error(), c.sendCount())
 			return
 		}

@@ -222,6 +222,16 @@ type Options struct {
 	// queued for a sleeping conversation whose start admission refused
 	// now (from: the sender's reply-id, id: the conversation, reason).
 	WakeRefused func(from, id, reason string)
+	// CheckoutReleased, when not nil, tells the sender of a message for a
+	// spawned conversation whose checkout was released after it was bound
+	// (from: the sender's reply-id, id: the conversation, checkout: the
+	// released checkout, reason). Such a conversation never launches, wakes
+	// or resumes there again. Nil falls back to WakeRefused.
+	CheckoutReleased func(from, id, checkout, reason string)
+	// LiveExecJobs, when not nil, lists the ids of the daemon's running exec
+	// jobs whose root or working directory is in worktree; the worktree
+	// occupancy queries report them (worktree.release refuses them).
+	LiveExecJobs func(worktree string) []string
 	// ChildWaitingDays overrides agent.child_waiting_days; 0 reads it.
 	ChildWaitingDays int
 	// spawnListed observes global spawn-projection listings in tests.

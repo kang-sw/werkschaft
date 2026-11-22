@@ -8,7 +8,13 @@ import (
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 )
 
-type admissionRefusal struct{ reason string }
+// admissionRefusal refuses a process start while keeping its input. checkout
+// is set when the refusal is a release of the conversation's checkout
+// (checkoutReleasedRefusal), which no later admission lifts.
+type admissionRefusal struct {
+	reason   string
+	checkout string
+}
 
 func (e *admissionRefusal) Error() string { return e.reason }
 

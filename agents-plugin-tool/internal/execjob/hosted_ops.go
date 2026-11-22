@@ -3,6 +3,8 @@ package execjob
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -144,6 +146,64 @@ func (h *Hosted) LiveCount(owner string) int {
 		}
 	}
 	return n
+}
+
+// LiveInWorktree lists the ids of the running jobs whose root is worktree or
+// whose working directory is worktree or below it, sorted. worktree.release
+// refuses, and acquisition skips, a checkout with one. It reads memory only;
+// a nil h has none.
+func (h *Hosted) LiveInWorktree(worktree string) []string {
+	if h == nil {
+		return nil
+	}
+	target := canonicalJobPath(worktree)
+	if target == "" {
+		return nil
+	}
+	h.mu.Lock()
+	var rows []HostedJobRow
+	for _, j := range h.jobs {
+		if !j.row.Terminal() {
+			rows = append(rows, j.row)
+		}
+	}
+	h.mu.Unlock()
+	var ids []string
+	for _, row := range rows {
+		if pathWithin(target, canonicalJobPath(row.Root)) || pathWithin(target, canonicalJobPath(row.Cwd)) {
+			ids = append(ids, row.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// canonicalJobPath cleans p and resolves its symlinks when it exists.
+func canonicalJobPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	p = filepath.Clean(p)
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return p
+}
+
+// pathWithin reports whether path is root or below it.
+func pathWithin(root, path string) bool {
+	if root == "" || path == "" {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		root, path = strings.ToLower(root), strings.ToLower(path)
+	}
+	if root == path {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // Output returns job id's output for a reader of its own (legacy readers).

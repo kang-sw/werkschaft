@@ -74,6 +74,14 @@ func (c *conv) startProcess() error {
 		return conflict("the session is archived; unhide it before starting")
 	}
 	rec := c.record()
+	// A launch, wake or resume of a spawned conversation in a checkout
+	// released after it was bound is refused: the release ended that binding.
+	if checkout := c.released(); checkout != "" {
+		return checkoutReleasedRefusal(checkout)
+	}
+	if checkout := releasedCheckoutOf(rec); checkout != "" {
+		return checkoutReleasedRefusal(checkout)
+	}
 	rp, err := c.r.resolve(rec.Profile, rec.Root)
 	if err != nil {
 		return err
@@ -602,6 +610,9 @@ func (c *conv) reattach() {
 		// The holder stays in the record: the next start ends it first.
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
 	}
+	// A process that outlived its checkout's release keeps running, but this
+	// daemon gives it no new input there either. Read once per rejoin.
+	c.noteReleased(releasedCheckoutOf(rec))
 }
 
 // checkReattach tells a rejoined process where the holder's replay ends,

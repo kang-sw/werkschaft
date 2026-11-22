@@ -342,6 +342,18 @@ func lockWorktreePool(ctx context.Context, runner wsgit.Runner, root, tool strin
 // mint binds a worker key to the canonical worktree root; injecting it keeps the
 // Git lifecycle independent of Server and makes failed-mint cleanup testable.
 func acquireWorktree(waitCtx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue, parentKey string, mint func(string) (string, error)) (worktreeAcquireResult, error) {
+	return acquireWorktreeWith(waitCtx, runner, env, root, base, targetBranch, profile, poolConfigValue, parentKey, mint, nil)
+}
+
+// worktreeBusyFunc reports whether a reuse candidate is still occupied by
+// daemon-side bindings or live exec jobs (Server.worktreeBusy); nil checks
+// none. It runs under the acquisition lock and the candidate's per-worktree
+// release lock.
+type worktreeBusyFunc func(ctx context.Context, target string) bool
+
+// acquireWorktreeWith is acquireWorktree with a daemon-side occupancy check
+// applied to every reuse candidate.
+func acquireWorktreeWith(waitCtx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue, parentKey string, mint func(string) (string, error), busy worktreeBusyFunc) (worktreeAcquireResult, error) {
 	unlock, err := lockWorktreeAcquire(waitCtx, runner, root)
 	if err != nil {
 		return worktreeAcquireResult{}, err
@@ -352,7 +364,10 @@ func acquireWorktree(waitCtx context.Context, runner wsgit.Runner, env []string,
 	// matching the handler's existing behavior. A waiter's deadline never
 	// cancels the holder's hooks or releases its protection early.
 	ctx := context.Background()
-	result, err := provisionWorktree(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue)
+	result, unclaim, err := provisionWorktreeClaim(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, busy)
+	// The reused checkout stays reserved against spawns and releases until
+	// its new lease is published (or the acquire rolled back).
+	defer unclaim()
 	if err != nil {
 		return result, err
 	}
@@ -393,6 +408,23 @@ func acquireWorktree(waitCtx context.Context, runner wsgit.Runner, env []string,
 // linked worktree. The pool always resolves against the primary root, so a call
 // from a linked worktree never nests a per-worktree pool.
 func provisionWorktree(ctx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue string) (worktreeAcquireResult, error) {
+	res, unclaim, err := provisionWorktreeClaim(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, nil)
+	unclaim()
+	return res, err
+}
+
+// provisionWorktreeClaim is provisionWorktree that also returns the release
+// of its claim on a reused checkout: the checkout's per-worktree release lock,
+// held exclusively from the eligibility check on, so no spawn binds a child
+// and no release starts between that check and the caller's lease
+// publication. The release func is never nil.
+func provisionWorktreeClaim(ctx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue string, busy worktreeBusyFunc) (worktreeAcquireResult, func(), error) {
+	unclaim := func() {}
+	res, err := provisionWorktreeLocked(ctx, runner, env, root, base, targetBranch, profile, poolConfigValue, busy, &unclaim)
+	return res, unclaim, err
+}
+
+func provisionWorktreeLocked(ctx context.Context, runner wsgit.Runner, env []string, root, base, targetBranch string, profile resolvedWorktreeProfile, poolConfigValue string, busy worktreeBusyFunc, unclaim *func()) (worktreeAcquireResult, error) {
 	var res worktreeAcquireResult
 	base = strings.TrimSpace(base)
 	targetBranch = strings.TrimSpace(targetBranch)
@@ -458,35 +490,33 @@ func provisionWorktree(ctx context.Context, runner wsgit.Runner, env []string, r
 	// never serves another. An unmarked worktree predates profiles: it is
 	// adopted only into the builtin its sparse state matches (sparse-active =>
 	// housekeeping, otherwise full); a custom profile never adopts one. A
-	// quarantined worktree is never reused.
+	// quarantined worktree is never reused. A worktree with any lease is
+	// held, whoever holds it; only a release (or the user) clears a lease. The
+	// daemon-side check (busy) then skips a worktree still bound to a child
+	// since its last completed release, or bound before it with a live
+	// process, or with a live exec job.
 	var claim string
 	var claimMarker *worktreeMarker
 	for _, e := range entries {
 		if e.Path == mainRoot || !pathUnder(poolRoot, e.Path) || !e.Detached {
 			continue
 		}
-		if releasing, err := worktreeReleasing(ctx, runner, e.Path); err != nil || releasing {
+		// Reserve the candidate exclusively while it is checked. A release
+		// holding it, or a spawn registering a child in it, makes it busy.
+		lock, err := worktreeReleaseLock(ctx, runner, e.Path)
+		if err != nil {
+			continue
+		}
+		if locked, err := lock.TryLock(); err != nil || !locked {
 			continue // a release reserves even an unleased, detached candidate
 		}
-		marker, err := readWorktreeMarker(ctx, runner, e.Path)
-		if err != nil {
-			continue // an unreadable candidate is skipped, never adopted
-		}
-		if marker != nil {
-			if marker.Profile != profile.Name || marker.Quarantine != nil {
-				continue
-			}
-		} else if legacyWorktreeProfile(env, e.Path) != profile.Name {
+		if !reusableCandidate(ctx, runner, env, e.Path, profile.Name, busy, &claimMarker) {
+			_ = lock.Unlock()
 			continue
 		}
-		status, err := wtRun(ctx, runner, e.Path, "status", "--porcelain")
-		if err != nil {
-			continue
-		}
-		if status == "" {
-			claim, claimMarker = e.Path, marker
-			break
-		}
+		claim = e.Path
+		*unclaim = func() { _ = lock.Unlock() }
+		break
 	}
 
 	wtPath := claim
@@ -652,6 +682,39 @@ func provisionWorktree(ctx context.Context, runner wsgit.Runner, env []string, r
 
 	res.Path = wtPath
 	return res, nil
+}
+
+// reusableCandidate applies the reuse rule to one detached pooled worktree
+// whose release lock the caller holds: profile partition, not quarantined,
+// clean, unleased, and not busy by the daemon-side check. It stores the
+// candidate's profile marker in *marker when it is reusable.
+func reusableCandidate(ctx context.Context, runner wsgit.Runner, env []string, path, profileName string, busy worktreeBusyFunc, marker **worktreeMarker) bool {
+	m, err := readWorktreeMarker(ctx, runner, path)
+	if err != nil {
+		return false // an unreadable candidate is skipped, never adopted
+	}
+	if m != nil {
+		if m.Profile != profileName || m.Quarantine != nil {
+			return false
+		}
+	} else if legacyWorktreeProfile(env, path) != profileName {
+		return false
+	}
+	status, err := wtRun(ctx, runner, path, "status", "--porcelain")
+	if err != nil || status != "" {
+		return false
+	}
+	lease, err := readWorktreeLease(ctx, runner, path)
+	if err != nil || lease != nil {
+		return false // an extant (or unreadable) lease holds the worktree
+	}
+	if busy != nil {
+		if busy(ctx, path) {
+			return false
+		}
+	}
+	*marker = m
+	return true
 }
 
 // legacyWorktreeProfile is the builtin an unmarked (pre-profile) pooled
@@ -852,36 +915,96 @@ func releaseWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtP
 
 // worktreeReleaseCaller is who asks worktree.release: the caller's session
 // key (a lead's, or the worker key an acquire minted, which is a lead key
-// too), the worker key it named (empty when it named a path), force, and an
-// optional daemon-wide bound-child check run under the per-worktree lock.
+// too), the worker key it named (empty when it named a path), force, an
+// optional daemon-wide occupancy check run under the per-worktree lock, and
+// an optional notice of the completed release, whose lines join the result's
+// warnings.
 type worktreeReleaseCaller struct {
-	LeadKey       string
-	WorkerKey     string
-	Force         bool
-	CheckChildren func(ctx context.Context, target string) error
+	LeadKey        string
+	WorkerKey      string
+	Force          bool
+	CheckOccupancy func(ctx context.Context, target string, force bool) error
+	Released       func(ctx context.Context, target string, cancelTurns bool) []string
 }
 
-// checkWorktreeBoundChildren refuses a non-forced worktree.release while any
-// non-closed conversation in the daemon is bound to target, naming its
-// address(es). Daemon-hosted servers query the runner directly in memory; a
-// token-bearing connection without a local runner forwards to the daemon's
-// token route and fails closed if the daemon cannot be reached.
-func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) error {
-	var children []wsagent.BoundWorktreeChild
+// worktreeOccupancy is the daemon's view of a worktree: its non-closed bound
+// conversations and its running exec jobs.
+type worktreeOccupancy struct {
+	Children []wsagent.BoundWorktreeChild
+	ExecJobs []string
+}
+
+// worktreeExecJobsReader is the optional exec-job half of the daemon-side
+// reader (wsagent.Runner implements it).
+type worktreeExecJobsReader interface {
+	LiveExecJobsInWorktree(worktree string) []string
+}
+
+// worktreeReleaseNotifier is the optional release notice of the daemon-side
+// reader (wsagent.Runner implements it).
+type worktreeReleaseNotifier interface {
+	CheckoutReleased(worktree string, cancelTurns bool) []wsagent.ReleasedConversation
+}
+
+// worktreeOccupancy reads target's occupancy. Daemon-hosted servers query the
+// runner directly in memory; a token-bearing connection without a local
+// runner forwards to the daemon's token route. A server with no daemon to ask
+// has nothing bound; an error means the daemon could not answer.
+func (s *Server) worktreeOccupancy(ctx context.Context, target string) (worktreeOccupancy, error) {
+	var occ worktreeOccupancy
 	switch {
 	case s.pi.worktreeChildren != nil:
-		children = s.pi.worktreeChildren.ActiveChildrenInWorktree(target)
+		occ.Children = s.pi.worktreeChildren.ActiveChildrenInWorktree(target)
+		if jobs, ok := s.pi.worktreeChildren.(worktreeExecJobsReader); ok {
+			occ.ExecJobs = jobs.LiveExecJobsInWorktree(target)
+		}
+		return occ, nil
 	case s.piForwards():
 		var answer struct {
 			Children []wsagent.BoundWorktreeChild `json:"children"`
+			ExecJobs []string                     `json:"exec_jobs"`
 		}
 		if err := s.piCall(ctx, "worktree.children", map[string]any{"worktree": target}, piForwardTimeout, &answer); err != nil {
-			return fmt.Errorf("worktree.release refuses %s: could not check bound child agents with the daemon (%v). Nothing was changed. Retry once the daemon answers, or pass force: true once you have confirmed no child is bound to this worktree", target, err)
+			return occ, err
 		}
-		children = answer.Children
-	default:
+		occ.Children, occ.ExecJobs = answer.Children, answer.ExecJobs
+	}
+	return occ, nil
+}
+
+// currentBindings are the children a release counts: every one but those
+// bound before the worktree's last completed release, which that release
+// already ended. With no recorded release every child counts.
+func currentBindings(children []wsagent.BoundWorktreeChild) []wsagent.BoundWorktreeChild {
+	var out []wsagent.BoundWorktreeChild
+	for _, child := range children {
+		if !child.BoundBeforeRelease {
+			out = append(out, child)
+		}
+	}
+	return out
+}
+
+// checkWorktreeOccupancy refuses worktree.release while a live exec job runs
+// in target (force included), and, without force, while a conversation bound
+// since target's last completed release is not closed, naming each. A
+// conversation bound before that release no longer counts. A daemon that
+// cannot answer fails closed.
+func (s *Server) checkWorktreeOccupancy(ctx context.Context, target string, force bool) error {
+	occ, err := s.worktreeOccupancy(ctx, target)
+	if err != nil {
+		if force {
+			return fmt.Errorf("worktree.release refuses %s: could not check live exec jobs with the daemon (%v). Nothing was changed. force does not override a live exec job; retry once the daemon answers", target, err)
+		}
+		return fmt.Errorf("worktree.release refuses %s: could not check bound child agents with the daemon (%v). Nothing was changed. Retry once the daemon answers, or pass force: true once you have confirmed no child is bound to this worktree", target, err)
+	}
+	if len(occ.ExecJobs) > 0 {
+		return fmt.Errorf("worktree.release refuses %s: live exec job(s) run in this worktree (%s). Nothing was changed. Stop them (exec.stop) or wait for them to end, then release again; force does not override a live exec job", target, strings.Join(occ.ExecJobs, ", "))
+	}
+	if force {
 		return nil
 	}
+	children := currentBindings(occ.Children)
 	if len(children) == 0 {
 		return nil
 	}
@@ -896,6 +1019,69 @@ func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) 
 	return fmt.Errorf("worktree.release refuses %s: non-closed child agent(s) are still bound to this worktree (%s). Nothing was changed. Wait for them to finish or close them before releasing; pass force: true only if you intend to clean the worktree while they remain open", target, strings.Join(parts, ", "))
 }
 
+// worktreeBusy is acquisition's daemon-side check of a reuse candidate: busy
+// while a live exec job runs in it, while a conversation bound since its last
+// completed release (or, with none recorded, any bound conversation) is not
+// closed, or while a conversation bound before that release still has a live
+// process. A daemon that cannot answer makes it busy.
+func (s *Server) worktreeBusy(ctx context.Context, target string) bool {
+	occ, err := s.worktreeOccupancy(ctx, target)
+	if err != nil {
+		return true
+	}
+	if len(occ.ExecJobs) > 0 {
+		return true
+	}
+	for _, child := range occ.Children {
+		if !child.BoundBeforeRelease || child.Live {
+			return true
+		}
+	}
+	return false
+}
+
+// notifyWorktreeReleased tells the daemon that target's release completed:
+// conversations bound before it take no further input there, and with
+// cancelTurns (a forced release) their running turns are interrupted. Each
+// returned line reports a cancelled turn, a failed interrupt (whose process
+// keeps running; the worktree stays out of reuse while it lives), or a
+// daemon that could not be told.
+func (s *Server) notifyWorktreeReleased(ctx context.Context, target string, cancelTurns bool) []string {
+	var convs []wsagent.ReleasedConversation
+	switch {
+	case s.pi.worktreeChildren != nil:
+		notifier, ok := s.pi.worktreeChildren.(worktreeReleaseNotifier)
+		if !ok {
+			return nil
+		}
+		convs = notifier.CheckoutReleased(target, cancelTurns)
+	case s.piForwards():
+		var answer struct {
+			Conversations []wsagent.ReleasedConversation `json:"conversations"`
+		}
+		if err := s.piCall(ctx, "worktree.released", map[string]any{"worktree": target, "cancel_turns": cancelTurns}, piForwardTimeout, &answer); err != nil {
+			line := fmt.Sprintf("could not tell the daemon about this release (%v): agents bound here before it still cannot start in this worktree", err)
+			if cancelTurns {
+				line += ", but their running turns were not cancelled"
+			}
+			return []string{line}
+		}
+		convs = answer.Conversations
+	default:
+		return nil
+	}
+	var lines []string
+	for _, conv := range convs {
+		switch {
+		case conv.Error != "":
+			lines = append(lines, fmt.Sprintf("could not cancel the running turn of %s (interrupt failed: %s); its process keeps running, and this worktree stays out of reuse while it lives", conv.Address, conv.Error))
+		case conv.Cancelled:
+			lines = append(lines, fmt.Sprintf("cancelled the running turn of %s, bound before this release", conv.Address))
+		}
+	}
+	return lines
+}
+
 // releaseWorktreeAs is releaseWorktree on behalf of caller (nil: no lease
 // check). Without force it refuses, changing nothing, a worktree leased to
 // anyone but the caller (its session key is the lease's parent_key or
@@ -907,9 +1093,16 @@ func (s *Server) checkWorktreeBoundChildren(ctx context.Context, target string) 
 // check against an acquire already in progress. Other worktrees stay usable.
 func releaseWorktreeAs(ctx context.Context, runner wsgit.Runner, env []string, wtPath, poolConfigValue string, lookup worktreeProfileLookup, caller *worktreeReleaseCaller) (worktreeReleaseResult, error) {
 	var res worktreeReleaseResult
-	target, entry, unlock, err := reserveWorktreeRelease(ctx, runner, wtPath, poolConfigValue, caller)
+	target, entry, unlockTarget, err := reserveWorktreeRelease(ctx, runner, wtPath, poolConfigValue, caller)
 	if err != nil {
 		return res, err
+	}
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			unlocked = true
+			unlockTarget()
+		}
 	}
 	defer unlock()
 	var branch string
@@ -968,6 +1161,17 @@ func releaseWorktreeAs(ctx context.Context, runner wsgit.Runner, env []string, w
 	// failed reset/clean/detach leaves the holder still identifiable.
 	if err := removeWorktreeLease(ctx, runner, target); err != nil {
 		return res, fmt.Errorf("worktree.release: %q is detached, but its worktree lease could not be removed: %w", target, err)
+	}
+	// The release is complete: record its boundary while the per-worktree
+	// lock still holds off spawns, so every child bound before it predates
+	// the marker. Without the marker, earlier bindings keep counting (the
+	// worktree stays busy rather than reused under them).
+	if err := wsgit.RecordWorktreeRelease(target, time.Now()); err != nil {
+		res.Warnings = append(res.Warnings, "could not record the release boundary, so agents bound here before this release still count as bound: "+err.Error())
+	}
+	unlock()
+	if caller != nil && caller.Released != nil {
+		res.Warnings = append(res.Warnings, caller.Released(ctx, target, caller.Force)...)
 	}
 	return res, nil
 }

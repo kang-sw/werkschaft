@@ -374,6 +374,11 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 			return nil, conflict("cannot resume Pi subagent %s: its parent conversation is closed", id)
 		}
 	}
+	// A release of its checkout after it was bound ended that binding: it is
+	// not reopened there.
+	if checkout := releasedCheckoutOf(rec); checkout != "" {
+		return nil, conflict("cannot resume Pi subagent %s: %s", id, checkoutReleasedRefusal(checkout).Error())
+	}
 	dir := wsdashboard.SessionDir(r.opts.Dir, id)
 	file := piSessionFile(dir)
 	if !PiSessionAvailable(dir) {
@@ -450,7 +455,34 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 		if children == nil {
 			children = []BoundWorktreeChild{}
 		}
-		writeAnswer(w, http.StatusOK, map[string]any{"children": children}, nil)
+		jobs := r.LiveExecJobsInWorktree(body.Worktree)
+		if jobs == nil {
+			jobs = []string{}
+		}
+		// exec_jobs is additive: an older caller reads children only.
+		writeAnswer(w, http.StatusOK, map[string]any{"children": children, "exec_jobs": jobs}, nil)
+		return
+	}
+	if op == "worktree.released" {
+		// worktree.release's notice after it recorded the worktree's release
+		// marker. It touches only conversations that release already ended
+		// (bound before the marker), so a caller cannot reach any other.
+		var body struct {
+			Worktree    string `json:"worktree"`
+			CancelTurns bool   `json:"cancel_turns"`
+		}
+		if !decode(w, req, &body) {
+			return
+		}
+		if strings.TrimSpace(body.Worktree) == "" {
+			writeAnswer(w, 0, nil, badRequest("worktree.released: worktree is required"))
+			return
+		}
+		convs := r.CheckoutReleased(body.Worktree, body.CancelTurns)
+		if convs == nil {
+			convs = []ReleasedConversation{}
+		}
+		writeAnswer(w, http.StatusOK, map[string]any{"conversations": convs}, nil)
 		return
 	}
 	if strings.HasPrefix(op, "agent.") {

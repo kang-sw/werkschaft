@@ -778,10 +778,10 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		if err != nil {
 			return toolTextResponse(req.ID, "", fmt.Errorf("worktree.acquire: %w", err))
 		}
-		result, err := acquireWorktree(ctx, s.gitRunner(), s.environ(), entry.root, base, targetBranch, profile, poolRV.Value, key, func(mintPath string) (string, error) {
+		result, err := acquireWorktreeWith(ctx, s.gitRunner(), s.environ(), entry.root, base, targetBranch, profile, poolRV.Value, key, func(mintPath string) (string, error) {
 			resolved, err := s.resolveSession(sessionAccess{mode: sessionAccessMintIdentity, root: mintPath, scope: roleLead, parent: key})
 			return resolved.key, err
-		})
+		}, s.worktreeBusy)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
 		}
@@ -824,7 +824,14 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 			return staticProfileLookup(profiles, err)(name)
 		}
 		force, _ := params.Arguments["force"].(bool)
-		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckChildren: s.checkWorktreeBoundChildren}
+		if force {
+			// force cleans another holder's worktree and cancels the turns of
+			// agents bound before it, so only a root lead session may use it.
+			if lead, ok := s.lookupSession(key); !ok || !lead.isTopLevelLead() {
+				return toolTextResponse(req.ID, "", fmt.Errorf("worktree.release refuses force: only a root lead session (a lead key with no parent) may force a release; this key is a worker's or a child's. Nothing was changed. Release by identity, or ask the root lead"))
+			}
+		}
+		caller := &worktreeReleaseCaller{LeadKey: key, WorkerKey: workerKey, Force: force, CheckOccupancy: s.checkWorktreeOccupancy, Released: s.notifyWorktreeReleased}
 		result, err := releaseWorktreeAs(context.Background(), s.gitRunner(), s.environ(), path, poolRV.Value, lookup, caller)
 		if err != nil {
 			return toolTextResponse(req.ID, "", err)
