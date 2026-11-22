@@ -240,7 +240,8 @@ check('jumps do not add permanent input hooks',(winOn.keydown||[]).length,nHooks
 // below 50px scroll padding) brings the head to 95px, within the old scan's
 // adoption line (50 + 46 + 1), whose larger top moved the destination back
 // to 399.5, where the head no longer qualified: 405 and 399.5 alternated
-// every frame until the 2 s cap.
+// every frame until the 2 s cap. The top pill hiding at home closed the same
+// loop through the caller's clearance.
 func TestViewKitCenterClearanceUnderNode(t *testing.T) {
 	runViewKit(t, `
 win.matchMedia=function(){return {matches:false};};
@@ -254,19 +255,34 @@ var k=viewKit(win), ends=[];
 function go(clearance){lands=[];ends=[];k.jump(target,{centerVisible:true,clearance:clearance,onEnd:function(r){ends.push(r);}});advance(2100);}
 go(function(){return 124;});
 check('approaching sticky head does not move the destination',[lands,nav.scrollTop,ends],[[405],405,['settled']]);
-// Rail capsules and the pill's top follow the scroll position, so the
-// caller's clearance can alternate with it too: it may drop from the
-// origin's state, but once it has grown it holds its maximum.
+// Rail capsules set the head's sticky top and the pill's top from the topics
+// above, which the jump changes: the caller's clearance is latched when the
+// jump starts and read once more when the landing settles (146 centers at
+// 394, back under 400, where it is not read again).
+var reads=0;
 nav.scrollTop=0;
-go(function(){return nav.scrollTop>=400?146:124;});
-check('scroll-dependent clearance holds its maximum',[lands,nav.scrollTop,ends],[[405,394],394,['settled']]);
+go(function(){reads++;return nav.scrollTop>=400?146:124;});
+check('scroll-dependent clearance corrects once',[lands,nav.scrollTop,ends,reads],[[405,394],394,['settled'],2]);
 nav.scrollTop=1500;
 go(function(){return nav.scrollTop>1000?168:124;});
-check('origin clearance drops before any growth',[lands,nav.scrollTop,ends],[[383,405],405,['settled']]);
-// The floating pill settling after the landing still re-centers.
-nav.scrollTop=0;var pill=0;setTimeout(function(){pill=22;},40);
-go(function(){return 124+pill;});
-check('growing clearance is followed',[lands,nav.scrollTop,ends],[[405,394],394,['settled']]);
+check('the destination clearance replaces the origin one',[lands,nav.scrollTop,ends],[[383,405],405,['settled']]);
+// Late layout still moves the target and is followed.
+nav.scrollTop=0;setTimeout(function(){target.y+=80;},67);
+go(function(){return 124;});
+check('late layout is followed',[lands,nav.scrollTop,ends],[[405,485],485,['settled']]);
+target.y=797;
+// The top pill (top 56, 28px) hides at the scroller's home with nothing
+// above: clearance 84 clamps a target at 365 to 0, where the pill hides and
+// clearance 0 centers it at 10, where the pill shows again. 0 and 10
+// alternated every frame until the cap. Navigation reserves the pill's slot
+// while hidden (stream-navigation.js), and the kit bounds a clearance that
+// still follows it to one correction.
+head.connected=false;target.y=365;
+function pill(){return nav.scrollTop>4?84:0;}
+nav.scrollTop=600;go(pill);
+check('pill shown at the start: one correction',[lands,nav.scrollTop,ends],[[0,10],10,['settled']]);
+nav.scrollTop=0;go(function(){return 84;});
+check('reserved pill slot: home stays put',[lands,nav.scrollTop,ends],[[0],0,['settled']]);
 `)
 }
 

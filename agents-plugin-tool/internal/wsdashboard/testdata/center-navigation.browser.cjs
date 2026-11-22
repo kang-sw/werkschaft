@@ -18,6 +18,33 @@ const [base, shots] = process.argv.slice(2);
     const ids = { stream: 'item-15', 'first-pin': 'item-44', 'second-pin': 'item-73' };
     const target = name => page.locator('#' + ids[name]);
     const settle = () => page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    // Samples the target's scroller every frame while an explicit navigation
+    // settles.
+    const sampleNavigation = (id, origin) => page.evaluate(({ id, origin }) => new Promise(done => {
+      const el = document.getElementById(id);
+      let s = el.parentElement;
+      while (s && !(s.scrollHeight > s.clientHeight + 2 && /(auto|scroll)/.test(getComputedStyle(s).overflowY))) s = s.parentElement;
+      s = s || document.scrollingElement;
+      if (origin !== undefined) s.scrollTop = origin === 'end' ? s.scrollHeight : origin;
+      const frame = () => new Promise(r => requestAnimationFrame(() => r()));
+      frame().then(frame).then(() => new Promise(r => setTimeout(r, 300))).then(() => {
+        const tops = [s.scrollTop], t0 = performance.now();
+        window.wbHistory.navigate(id);
+        (function tick() {
+          tops.push(s.scrollTop);
+          if (performance.now() - t0 < 1500) { requestAnimationFrame(tick); return; }
+          let writes = 0, reversals = 0, dir = 0;
+          for (let i = 1; i < tops.length; i++) {
+            const d = Math.sign(tops[i] - tops[i - 1]);
+            if (!d) continue;
+            writes++;
+            if (dir && d !== dir) reversals++;
+            dir = d;
+          }
+          done({ writes, reversals, settled: !window.wbHistory.keeping(s), from: tops[0], to: tops[tops.length - 1], distinct: [...new Set(tops)].slice(0, 6) });
+        })();
+      });
+    }), { id, origin });
     async function check(name, label) {
       const node = target(name);
       await node.waitFor({ state: 'visible' });
@@ -66,6 +93,28 @@ const [base, shots] = process.argv.slice(2);
       await settle();
       await page.waitForTimeout(500);
       await check('stream', `stream-ref-after-${theme}`);
+      // From the board's home the top pill is hidden and the rail holds no
+      // capsule; both appear once the landing leaves home. 03e79c65a
+      // re-centered on them and on sticky heads crossing their line every
+      // frame, so the landing hopped back and forth (4 writes, 2 reversals
+      // here). The clearance now holds and is read once more at settle.
+      for (const origin of [0, 'end']) {
+        const run = await sampleNavigation(ids.stream, origin);
+        console.log('settle-frames', theme, origin, JSON.stringify(run));
+        if (!(run.writes <= 2 && run.reversals <= 1 && run.settled)) failures.push(`stream-settle-${theme}-from-${origin}: navigation must settle with at most one correction: ${JSON.stringify(run)}`);
+      }
+      // Owner input still ends the follow at once.
+      const cancelled = await target('stream').evaluate(el => {
+        let s = el.parentElement;
+        while (s && !(s.scrollHeight > s.clientHeight + 2 && /(auto|scroll)/.test(getComputedStyle(s).overflowY))) s = s.parentElement;
+        s = s || document.scrollingElement;
+        s.scrollTop = 0;
+        window.wbHistory.navigate(el.id);
+        const following = !!window.wbHistory.keeping(s);
+        el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 10 }));
+        return { following, after: !!window.wbHistory.keeping(s) };
+      });
+      assert.deepEqual(cancelled, { following: true, after: false }, 'wheel input ends the navigation follow');
       // Bare (N) is not parsed by whiteboard markdown. Supply the equivalent
       // anchor explicitly to exercise the separately rendered link click.
       await page.evaluate(() => {
