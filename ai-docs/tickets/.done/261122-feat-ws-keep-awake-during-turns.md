@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: fcef8c4a26a6dd8f
 sage-review-completeness-reviewed: fcef8c4a26a6dd8f
+completed: 2026-11-22
 ---
 
 # Keep the host awake while hosted turns run (opt-in, default off)
@@ -191,3 +192,104 @@ Verification
   macOS backend with an isolated fixture and read-only
   `pmset -g assertions` while it holds and after it releases the idle
   assertion. Record platform evidence in the Phase 1 Result.
+
+### Result (d53c384c) - 2026-11-22
+
+Landed in `641d0cc6` (feature) and `d53c384c` (review follow-up test).
+
+- New package `internal/wsawake`. `Core` is the daemon-wide desired-state
+  reconciler. Membership is keyed by conversation instance plus the enabled
+  flag. One lazily started worker goroutine makes every backend call, with
+  one attempt per activation (an epoch fence re-arms on each new transition
+  into eligibility). `Close` drains the backend and fences late
+  acquisitions.
+- Backends:
+  - macOS: `/usr/bin/caffeinate -i -w <daemon pid>`, killed and reaped on
+    release.
+  - Windows: `SetThreadExecutionState` set and clear on one goroutine
+    pinned with `runtime.LockOSThread`.
+  - Elsewhere: a no-op that logs once.
+- Runner (`wsagent/keep_awake.go`): a conversation is a member while it is
+  not closed and any of these holds:
+  - `turn` is set;
+  - a native compaction command is in flight (`compactCommand`);
+  - a standalone prompt's send is in flight.
+
+  `kickInput` publishes before the send, and `sendStandalonePrompt` holds
+  membership during its send. Each loop step end publishes the change,
+  which rolls back failed sends and failed `/compact`. The loop's exit
+  removes the member. A rejoined child whose record shows its turn open is
+  published before the loop, from the trusted holder. While a replay runs,
+  membership stays frozen; `replayDone` publishes the reconstructed state at
+  the next step, including wrapHold's conservative running turn.
+  `Runner.Close` drains the core after the loops exit.
+- Setting: global-only `agent.keep_awake_during_turns`, builtin false, a
+  declared boolean.
+  - It appears in the registry, the tuning knob list, the dashboard
+    settings catalog (an Agents toggle), and all 11 locale tables.
+  - `config.tune` set and reset, and dashboard set and reset, notify the
+    daemon through the existing companion-changed route
+    (`IsDaemonGlobalConfigKey`).
+  - The daemon calls `Runner.ReloadGlobalConfig`, which serializes the read
+    and publish. It runs once after `writeEndpoint` and on every
+    invalidation.
+  - Manual: a keep-awake bullet in `ai-docs/manuals/ws-mcp.md`.
+
+Verification (all pass; module `agents-plugin-tool/`, `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+
+- `go test -race -count=5 ./internal/wsawake/`
+- `go test -race -count=3 -run TestKeepAwake ./internal/wsagent/` covers:
+  - worker and lead turns, spawned and nested children, approval and retry,
+    interrupt, EOF;
+  - failed send and failed standalone send, standalone prompts, compaction
+    commands;
+  - close and shutdown;
+  - live enable, disable and reset with overlapping reloads, and retry
+    after a failure;
+  - startup reading the committed value, with sibling-key retention;
+  - lead rejoin;
+  - worker holder rejoin for a live turn, a turn finished during downtime,
+    and a lost-records wrapHold turn.
+
+  Removing the pre-loop rejoin publish fails the worker rejoin cases.
+- wsagent `-run 'Compact|Rejoin|Send|Restart|Standalone|Shutdown|Close'`
+- mcp `-run 'Config|Knob|Registry|Tune|Catalog|RepoScope|PromptOverride|Bootstrap|Dashboard'`
+  plus `TestConfigTuneKeepAwakeDuringTurns` and
+  `TestKeepAwakeConfigNotifiesTheDaemon`. The second test commits a disable
+  before the endpoint exists, checks the startup read after endpoint
+  publication, then MCP set and reset over HTTP and dashboard
+  `/api/config/set` and `/api/config/reset`.
+- wsdashboard `-run 'Companion|GlobalConfig|ConfigRoute|ConfigMutation|StartDaemon'`
+- `./internal/mcp ./internal/wsi18n ./internal/wspackage -run 'Settings|Manifest'`
+  and `scripts/generate-package-assets.py --check`.
+- `GOOS=windows CGO_ENABLED=0 go vet` over wsagent/..., wsawake, wsconfig,
+  mcp, wsdashboard and cmd/ws-mcp. Linux and darwin vet are also clean.
+  `backend_windows_test.go` asserts that set and clear run on the same
+  thread (`GetCurrentThreadId`). It runs only on Windows, so it was
+  compiled and vetted here but not executed.
+- macOS backend: checked with an isolated shell-script fixture standing in
+  for caffeinate. The read-only `pmset -g assertions` check was skipped
+  because it needs the live daemon; the lead runs it after the merge and
+  daemon swap.
+
+Decisions:
+
+- The key uses the existing `Declared` boolean entry kind, so `config.tune`
+  validates true/false and the catalog renders a toggle.
+- Notification reuses the companion-changed route instead of adding a new
+  route (compatibility T0). An older daemon only refreshes companion
+  settings.
+- During a replay, membership is frozen. A trusted pre-loop publish covers
+  a rejoined worker with an open turn. That briefly takes the assertion for
+  a turn that ended during downtime, until the replay settles it (bounded
+  by the replay).
+- A config read error at reload falls back to the builtin false.
+- The sibling-retention test uses the current config writer. The claim that
+  the previous release also preserves the key rests on the writer reading
+  of `wsconfig/config.go`.
+- Branch: kept the lead-named `impl/develop/keep-awake-turns`. The route's
+  identity check was vouched from the lead's explicit branch and ticket
+  instruction, and its suggested rename was not applied.
+
+Captures (not committed): `ai-docs/assets/captures/261122/keep-awake/keep-awake-{agents,row}-{en-dark,ko-light}.png`.
+They show the Agents settings toggle on with a global override.
