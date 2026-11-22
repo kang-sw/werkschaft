@@ -670,26 +670,13 @@
     "261122-feat-ws-companion-paper-doll": {
       "registered_at": "2026-11-22T09:59:01Z"
     },
-    "261122-feat-ws-keep-awake-during-turns": {
-      "registered_at": "2026-11-22T06:13:05Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T06:26:04Z",
-        "impl": {
-          "branch": "impl/develop/keep-awake-turns"
-        }
-      }
-    },
     "261122-feat-ws-native-subagent-roster": {
       "registered_at": "2026-11-22T09:16:51Z",
       "lease": {
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-22T09:33:24Z",
         "impl": {
           "branch": "impl/develop/heat-showy-lego"
