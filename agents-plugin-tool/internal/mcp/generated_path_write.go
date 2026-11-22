@@ -59,10 +59,9 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 	if g.paths == nil {
 		g.paths = make(map[string]map[string]*generatedPathGrant)
 	}
-	for g.grantCountLocked()+len(eligible) > maxGeneratedPathGrants {
-		g.evictOldestLocked()
-	}
 
+	// Every new grant is validated and opened before any earlier grant is
+	// evicted, so a refused call leaves the existing grants intact.
 	opened := make(map[string]*generatedPathGrant, len(eligible))
 	for _, item := range eligible {
 		before, err := os.Lstat(item.Path)
@@ -86,6 +85,9 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 			return fmt.Errorf("path.generate: writable cache artifact %q changed while it was granted", item.Path)
 		}
 		opened[item.Path] = &generatedPathGrant{file: file, created: time.Now()}
+	}
+	for g.grantCountLocked()+len(opened) > maxGeneratedPathGrants {
+		g.evictOldestLocked()
 	}
 	for path, grant := range opened {
 		if g.paths[sessionKey] == nil {

@@ -178,7 +178,7 @@ func TestPathGenerateOversizedBatchReturnsAllPathsAndBoundsGrants(t *testing.T) 
 	if toolIsError(t, resp) {
 		t.Fatalf("oversized legacy path.generate batch refused: %s", resp)
 	}
-	paths := strings.Fields(toolText(t, resp))
+	paths := strings.Split(strings.TrimRight(toolText(t, resp), "\n"), "\n")
 	if len(paths) != len(stems) {
 		t.Fatalf("path.generate returned %d paths, want %d", len(paths), len(stems))
 	}
@@ -287,6 +287,50 @@ func TestPathGenerateRefusalDiscardsOnlyItsOwnEmptyReservations(t *testing.T) {
 	}
 	if _, err := os.Lstat(replaced); err != nil {
 		t.Fatalf("replacing entry was removed: %v", err)
+	}
+}
+
+// At capacity, a refused new grant must not evict the existing grants: the
+// new grants are validated before any eviction.
+func TestPathGenerateRefusedGrantDoesNotEvictExistingGrants(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	key, err := s.sessions.mint(root, roleDelegate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stems := make([]any, 0, maxGeneratedPathGrants)
+	for i := 0; i < maxGeneratedPathGrants; i++ {
+		stems = append(stems, fmt.Sprintf("full-%02d", i))
+	}
+	resp := callToolOnce(t, s, 1, "path.generate", map[string]any{
+		"session_key": key, "kind": "review", "stems": stems,
+	})
+	if toolIsError(t, resp) {
+		t.Fatalf("path.generate: %s", resp)
+	}
+	paths := strings.Split(strings.TrimRight(toolText(t, resp), "\n"), "\n")
+
+	notRegular := filepath.Join(t.TempDir(), "dir-artifact")
+	if err := os.Mkdir(notRegular, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := processGeneratedWrites.grant(key, []wsstate.GeneratedPath{{Kind: "review", Path: notRegular}}); err == nil {
+		t.Fatal("grant of a non-regular artifact was accepted")
+	}
+	processGeneratedWrites.mu.RLock()
+	count := processGeneratedWrites.grantCountLocked()
+	processGeneratedWrites.mu.RUnlock()
+	if count != maxGeneratedPathGrants {
+		t.Fatalf("grants after a refused grant = %d, want %d (none evicted)", count, maxGeneratedPathGrants)
+	}
+	if resp := callToolOnce(t, s, 2, "path.write", map[string]any{
+		"session_key": key, "path": paths[0], "content": "still granted",
+	}); toolIsError(t, resp) {
+		t.Fatalf("a refused grant evicted the oldest existing grant: %s", resp)
 	}
 }
 
