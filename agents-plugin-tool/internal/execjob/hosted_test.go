@@ -30,6 +30,9 @@ type memHostedStore struct {
 	failPut func(HostedJobRow) bool
 	// failDelete refuses every Delete.
 	failDelete bool
+	// duringDelete runs inside Delete, before it answers: what another
+	// goroutine does while the delete is under way.
+	duringDelete func(ids []string)
 }
 
 func newMemHostedStore() *memHostedStore { return &memHostedStore{rows: map[string]HostedJobRow{}} }
@@ -59,6 +62,12 @@ func (s *memHostedStore) Put(row HostedJobRow) error {
 }
 
 func (s *memHostedStore) Delete(ids ...string) error {
+	s.mu.Lock()
+	during := s.duringDelete
+	s.mu.Unlock()
+	if during != nil {
+		during(ids)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failDelete {
@@ -1096,13 +1105,27 @@ func TestHostedExitCopyStaysUntilTheEndIsStored(t *testing.T) {
 // TestHostedDroppedJobTakesItsOwedExitCopy: a finished job whose terminal
 // row was never stored keeps its exit copy until the job cap drops it;
 // dropping the job deletes its row and removes the copy with it. A failed
-// delete keeps both, so a successor still ends the job from the copy.
+// delete keeps both, so a successor still ends the job from the copy. The
+// holder's end may come before the prune, or while the delete is under
+// way: through HolderGone (the job already left h.jobs) or through a
+// callback that captured the job before the prune; the copy goes only
+// after the delete succeeded either way.
 func TestHostedDroppedJobTakesItsOwedExitCopy(t *testing.T) {
-	t.Run("deleted", func(t *testing.T) { testDroppedJobExitCopy(t, false) })
-	t.Run("delete fails", func(t *testing.T) { testDroppedJobExitCopy(t, true) })
+	for _, during := range []string{"", "holder gone", "captured job"} {
+		for _, fails := range []bool{false, true} {
+			name := during
+			if name == "" {
+				name = "before the prune"
+			}
+			if fails {
+				name += ", delete fails"
+			}
+			t.Run(name, func(t *testing.T) { testDroppedJobExitCopy(t, fails, during) })
+		}
+	}
 }
 
-func testDroppedJobExitCopy(t *testing.T, deleteFails bool) {
+func testDroppedJobExitCopy(t *testing.T, deleteFails bool, during string) {
 	fx := newHostedFixture(t, 10*time.Millisecond)
 	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
 	if err != nil {
@@ -1123,20 +1146,46 @@ func testDroppedJobExitCopy(t *testing.T, deleteFails bool) {
 		return got.Notice == NoticeDelivered
 	})
 	session, _ := json.Marshal(hostedHolderSession{Kind: HolderKindExec, ExecID: v.ID})
-	fx.h.HolderGone(wsholder.Descriptor{ID: v.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
-	if _, err := os.Stat(copyPath); err != nil {
-		t.Fatalf("the exit copy went before the end was stored: %v", err)
+	gone := func() {
+		fx.h.HolderGone(wsholder.Descriptor{ID: v.HolderID, Session: session}, wsholder.Exit{ExitCode: &code, Reason: "stop"})
 	}
+	fx.h.mu.Lock()
+	captured := fx.h.jobs[v.ID]
+	fx.h.mu.Unlock()
+	var copyDuring error = errors.New("the delete never ran")
 	fx.store.mu.Lock()
 	fx.store.failPut = nil
 	fx.store.failDelete = deleteFails
+	fx.store.duringDelete = func(ids []string) {
+		if !slices.Contains(ids, v.ID) {
+			return
+		}
+		switch during {
+		case "holder gone":
+			gone()
+		case "captured job":
+			fx.h.dropExitCopy(captured)
+		}
+		_, copyDuring = os.Stat(copyPath)
+	}
 	fx.store.mu.Unlock()
+	if during == "" {
+		gone()
+		if _, err := os.Stat(copyPath); err != nil {
+			t.Fatalf("the exit copy went before the end was stored: %v", err)
+		}
+	}
 	for i := 0; i < HostedMaxJobs; i++ {
 		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if copyDuring != nil {
+		t.Fatalf("the exit copy went before the delete answered: %v", copyDuring)
+	}
 	if deleteFails {
+		// A holder end after the failed delete still keeps the copy.
+		gone()
 		if _, ok := fx.store.row(v.ID); !ok {
 			t.Fatalf("the row went though its delete failed")
 		}

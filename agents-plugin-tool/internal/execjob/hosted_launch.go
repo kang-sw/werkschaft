@@ -170,6 +170,7 @@ func (h *Hosted) admit(j *hostedJob) error {
 		sort.Slice(finished, func(a, b int) bool { return finished[a].row.EndedAt < finished[b].row.EndedAt })
 		for _, old := range finished[:min(over, len(finished))] {
 			delete(h.jobs, old.row.ID)
+			h.deleting[old.row.ID] = old
 			h.rings.Release(old.out)
 			dropped = append(dropped, old)
 			ids = append(ids, old.row.ID)
