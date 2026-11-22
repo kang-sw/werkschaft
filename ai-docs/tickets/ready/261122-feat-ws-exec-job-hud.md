@@ -609,6 +609,65 @@ this shell job, as `exec.stop` has.
   internal/mcp. `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`
   still fails only where `internal/wspackage/generated` is the placeholder.
 
+#### Edition (d0b0f4716) - 2026-11-23
+
+Round 2 of the pre-merge review (FIX-FIRST) on 4315796cd. The fix is
+d0b0f4716. The notice-exposure Critical stays closed by lead decision (round 1).
+
+- **Important 1, an incomplete census made a user stop a false success: fixed.**
+  `stopHolderOf` took the manager's `ErrUnknownHolder` as "gone". Under an
+  incomplete census (an unreadable descriptor) a live holder can be missing
+  from the manager's index, and ending the job hid it from the reconciliation
+  that settles it later. Now an unknown holder is proof of absence only when
+  `Holders.List().Incomplete` is false; otherwise the stop is an error, the job
+  stays running and unmarked, no notice is admitted, and a retry works once a
+  scan reads every holder. This also closes the same gap in the `exec.stop`
+  tool, which shares `Hosted.stop`. Test: a fake holder unknown to the manager
+  under an incomplete listing refuses both stops, then a complete one stops
+  and marks.
+- **Important 2, spawn-failure cleanup raced a waiting stop: fixed.** The
+  launch now opens the hand-over wait only after `failStart` has stopped the
+  holder and settled the row, so a stop waiting for the hand-over finds the job
+  ended (failed, not a user's stop, no notice) and returns; the holder is
+  stopped once. Test: failure after holder allocation with a user stop already
+  waiting. Accepted, unchanged: a stop that cancels a launch before its spawn
+  ends the job before holder retirement returns, so a caller may see success
+  before the holder is gone; the job stays pinned until it is.
+- **Important 3, deferred retries: fixed.** A deferred notice tried again and
+  deferred again no longer moves the revision (the recorded outcome is
+  compared with the one retried), a retry that does not run leaves its outcome
+  and its retry as they were, and terminal-row pruning keeps a job whose stop
+  notice is still pending, as it keeps one with a pending completion notice.
+  Both tested; the pruning test fails without the fix. The first Decision's
+  "Deferred counts as sent" is superseded by Edition 5e5b5885f.
+- **Important 4, measurement scope: docs only.** The table above is a
+  service-side measurement: it calls the service directly, with no HTTP guard
+  and no production `OnRunning` binding; its output is short, so the 16 KiB
+  figure is the response's cap, not a measured large read; stop timing ends at
+  the service's return. The guard's four-operation row is a separate baseline
+  from another fixture, to be added to the service rows for a route's cost.
+  All figures are macOS; the Windows and antivirus budget is unverified.
+- **Minor, restart wording:** the Phase 1 text says only the label is lost
+  after notice admission; the user's passive receipt is in memory too
+  (`wsagent/passive_input.go`), so a restart loses it with the label. Same
+  window (a).
+- **Minor, stop wording:** the first Decision's opening "Stop is already
+  SIGKILL" is shorthand: a POSIX pipe job gets TERM and a grace period before
+  KILL, and Windows kills the process tree (see Edition 5e5b5885f).
+- **Accepted as is:** the extra post-spawn SSE wake and owner-count scan per
+  launch.
+
+Verification: `go test -race -count=1 ./internal/execjob` (full) ok;
+`./internal/wsagent -run 'StopNote|UserStop|TestExecHUDStopAndReads'`,
+`./cmd/ws-mcp -run TestComposer` and `./internal/wsdashboard -run
+'TestExecHUD|TestExecJobsEvent'` ok; `GOOS=windows go vet` clean on execjob,
+wsagent, wsdashboard, cmd/ws-mcp and internal/mcp. Ten concurrent race runs of
+the execjob test binary showed two flakes that this change did not cause: a
+data race between a test cleanup writing the package-level `retireRetryMin`
+and `retireRetryMax` and an earlier test's retire goroutine reading them, and
+`TestHostedJobStoppedDuringItsHolderLaunchStaysUntilTheHolderGoes` depending
+on millisecond ordering of `EndedAt` when pruning.
+
 ### Phase 2: HUD UI
 
 Depends on Phase 1.
