@@ -14,7 +14,7 @@ use objc2::{
 };
 use objc2_foundation::{ns_string, MainThreadMarker, NSError, NSObjectProtocol, NSString};
 use objc2_web_kit::{
-    WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
+    WKDownload, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
     WKNavigationResponse, WKNavigationResponsePolicy, WKScriptMessage, WKScriptMessageHandler,
     WKUserContentController, WKWebView,
 };
@@ -144,6 +144,38 @@ define_class!(
                 }
             }
             reply.call((WKNavigationResponsePolicy::Cancel,));
+        }
+
+        // Wry's delegate attaches its download delegate here. Without these
+        // forwards WebKit starts the download with no delegate and drops it.
+        // Only navigations `action`/`response` allowed can reach a download.
+        #[unsafe(method(webView:navigationAction:didBecomeDownload:))]
+        fn action_download(
+            &self,
+            webview: &WKWebView,
+            action: &WKNavigationAction,
+            download: &WKDownload,
+        ) {
+            if let Some(original) = self.ivars().original.load() {
+                unsafe {
+                    original.webView_navigationAction_didBecomeDownload(webview, action, download);
+                }
+            }
+        }
+
+        #[unsafe(method(webView:navigationResponse:didBecomeDownload:))]
+        fn response_download(
+            &self,
+            webview: &WKWebView,
+            response: &WKNavigationResponse,
+            download: &WKDownload,
+        ) {
+            if let Some(original) = self.ivars().original.load() {
+                unsafe {
+                    original
+                        .webView_navigationResponse_didBecomeDownload(webview, response, download);
+                }
+            }
         }
 
         #[unsafe(method(webView:didCommitNavigation:))]
