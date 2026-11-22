@@ -28,6 +28,8 @@ type memHostedStore struct {
 	beforePut func(HostedJobRow)
 	// failPut refuses the rows it matches, as a busy database does.
 	failPut func(HostedJobRow) bool
+	// failDelete refuses every Delete.
+	failDelete bool
 }
 
 func newMemHostedStore() *memHostedStore { return &memHostedStore{rows: map[string]HostedJobRow{}} }
@@ -59,6 +61,9 @@ func (s *memHostedStore) Put(row HostedJobRow) error {
 func (s *memHostedStore) Delete(ids ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failDelete {
+		return errors.New("database is locked")
+	}
 	for _, id := range ids {
 		delete(s.rows, id)
 	}
@@ -993,8 +998,14 @@ func TestHostedExitCopyStaysUntilTheEndIsStored(t *testing.T) {
 
 // TestHostedDroppedJobTakesItsOwedExitCopy: a finished job whose terminal
 // row was never stored keeps its exit copy until the job cap drops it;
-// dropping the job deletes its row and removes the copy with it.
+// dropping the job deletes its row and removes the copy with it. A failed
+// delete keeps both, so a successor still ends the job from the copy.
 func TestHostedDroppedJobTakesItsOwedExitCopy(t *testing.T) {
+	t.Run("deleted", func(t *testing.T) { testDroppedJobExitCopy(t, false) })
+	t.Run("delete fails", func(t *testing.T) { testDroppedJobExitCopy(t, true) })
+}
+
+func testDroppedJobExitCopy(t *testing.T, deleteFails bool) {
 	fx := newHostedFixture(t, 10*time.Millisecond)
 	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
 	if err != nil {
@@ -1021,11 +1032,21 @@ func TestHostedDroppedJobTakesItsOwedExitCopy(t *testing.T) {
 	}
 	fx.store.mu.Lock()
 	fx.store.failPut = nil
+	fx.store.failDelete = deleteFails
 	fx.store.mu.Unlock()
 	for i := 0; i < HostedMaxJobs; i++ {
 		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if deleteFails {
+		if _, ok := fx.store.row(v.ID); !ok {
+			t.Fatalf("the row went though its delete failed")
+		}
+		if _, err := os.Stat(copyPath); err != nil {
+			t.Fatalf("the exit copy went though the row stays: %v", err)
+		}
+		return
 	}
 	fx.store.mu.Lock()
 	dropped := slices.Contains(fx.store.deleted, v.ID)
