@@ -413,3 +413,26 @@ Verification:
   - The last-line guard does not depend on the user-message line: any glog line of the active worker in the window satisfies it.
 - **Minor (782dff1aa).** The stall test rig orders fixture lines by their parsed instants, not by yearless text.
 - **Open.** The round 4 Critical is still open: worker A's last line falls inside the skew window while worker B logs the live header in its own file. Its settled fix needs per-prompt evidence and named the user-message line, which these counts rule out; the lead decides how to revise it.
+
+#### Edition (7b58889ad) - 2026-11-22
+
+The lead settled the open rollover Critical from the 782dff1aa Edition, and 7b58889ad fixes it. This supersedes the f2d4940d6 stale-tail rule (the last-line guard).
+
+- **Attribution evidence.** A headerless verdict now also needs agy's per-request line for a `session/prompt` at or after the boundary minus the skew. Without it, the verdict is unknown.
+  - The match uses the source tag `server.go:213` and the method token `session/prompt` as a whole whitespace-separated field, and no other message content.
+  - An agy build that moves the line matches nothing and so never cuts.
+  - Check order is unchanged up to the main-header case: coverage, format, main header in the window → header, then this gate, then the sticky `sawMain` gate.
+  - In a repeated fall-back hour, the line counts only if both readings are in the window.
+  - Tag counts across the local worker logs (no content copied): the tag plus the token matches 2152 lines for 2152 `session/prompt` requests. No other source line carries `session/prompt`.
+  - Fresh prompts and automatic continues both arrive as `session/prompt`, so each logs the line.
+- **Fixtures.**
+  - Near-rollover: worker A's log is cached. A's last main header is 20 s before B's boundary and A logs an ordinary line 1 s before it, inside the skew window. B logs its prompt and header in its own file → unknown.
+  - Positive: A itself logs the request line at the boundary, with no header after → headerless.
+  - Negatives: no request line, a request line before the window, another method, a partial token, another source tag, and an ambiguous repeated-hour request line.
+  - The test rig's base log and the continue test log the request line, each as a separate entry so the parsed-instant sort orders them.
+
+Verification:
+- `go test -timeout 120s ./internal/wsagent` ok in each of five groups: `Agy`, `Lead`, `Steer|ModelWait`, `Holder|Wake`, `Background`.
+- The stall, log, locator, tail-read and frame-trace tests pass with `-race -count=3`.
+- `go vet ./internal/wsagent` is clean on the host and with `GOOS=windows`. `git diff --check` is clean.
+- Mutation checks, each made a test fail: dropping the gate, using the later reading, accepting any `server.go:` tag, substring token matching, and restoring the last-line guard instead (fails the near-rollover subtest). Removing the continue's request line from the rig fails the continue test.
