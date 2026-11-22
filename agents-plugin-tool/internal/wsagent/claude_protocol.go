@@ -142,6 +142,11 @@ func newClaudeMapper(spec StartSpec) *claudeMapper {
 // lead reports a lead conversation's mapper.
 func (m *claudeMapper) lead() bool { return m.spec.Lead != nil }
 
+// sessionState reports a mapper that follows the harness's session-state and
+// background-task lines: a lead's, and an agent.spawn worker's
+// (StartSpec.SessionState).
+func (m *claudeMapper) sessionState() bool { return m.lead() || m.spec.SessionState }
+
 type claudeLine struct {
 	LocalCommandSource json.RawMessage `json:"local_command_source"`
 	IsSynthetic        bool            `json:"isSynthetic"`

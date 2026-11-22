@@ -46,6 +46,17 @@ const (
 // start that never reports (a failed launch) reaches it.
 var mcpStartWait = 10 * time.Second
 
+// mcpRejoinWait bounds how long an unknown token waits for the daemon's
+// startup rejoin: a graceful replace serves the route before the first
+// holder scan has restored the surviving workers' bearers, and a hard 401
+// in that window makes the harness drop its ws server for the rest of the
+// process. Past the bound the token is refused as any unknown one.
+var mcpRejoinWait = 8 * time.Second
+
+// mcpAfterMiss is a test hook: it runs between an unknown token's first
+// lookup and its wait for the rejoin.
+var mcpAfterMiss func()
+
 // MCPSession attaches a harness's ws-mcp over the daemon's HTTP route
 // instead of the stdio launcher.
 type MCPSession struct {
@@ -156,7 +167,8 @@ func (r *Runner) voidMCPLocked(id string) {
 // ResolveMCPToken resolves a live session token to its process's hello and
 // a channel closed once the token is void (wsdashboard.AgentMCPTokenHost).
 // A token whose process has not reported its start yet waits for it, up
-// to mcpStartWait.
+// to mcpStartWait; an unknown token waits for the startup rejoin, up to
+// mcpRejoinWait, since that scan restores a replaced daemon's workers.
 func (r *Runner) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan struct{}, bool) {
 	return r.resolveMCPToken(token, true)
 }
@@ -197,6 +209,31 @@ func (r *Runner) resolveMCPToken(token string, connect bool) (wsdashboard.ProxyH
 	r.mu.Lock()
 	t := r.mcpTokens[token]
 	r.mu.Unlock()
+	if t == nil && r.started.Load() {
+		// Unknown until the startup rejoin finished: the token may be a
+		// surviving worker's, restored by that scan. Afterwards it is
+		// unknown for good.
+		if mcpAfterMiss != nil {
+			mcpAfterMiss()
+		}
+		select {
+		case <-r.rejoined:
+		default:
+			wait := time.NewTimer(mcpRejoinWait)
+			select {
+			case <-r.rejoined:
+			case <-r.quit:
+			case <-wait.C:
+			}
+			wait.Stop()
+		}
+		// Read again whichever way the wait ended: the rejoin may have
+		// restored the token between the first lookup and the wait, so a
+		// rejoin that was already done is no reason to refuse it.
+		r.mu.Lock()
+		t = r.mcpTokens[token]
+		r.mu.Unlock()
+	}
 	if t == nil {
 		return wsdashboard.ProxyHello{}, nil, false
 	}

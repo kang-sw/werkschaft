@@ -1756,6 +1756,14 @@ parent report. A lead parent instead restores its held turn, adopts the child,
 and receives one late report. An old-pruned child leaves an unowned holder for
 the successor's orphan sweep.
 
+A Claude `agent.spawn` worker is launched with session-state lines on and
+reads its harness's background-task list (`StartSpec.SessionState`), as a lead
+does: a worker whose native background task (for example a Bash
+`run_in_background`) still runs is not idle, so neither the idle timer nor the
+stale-route restart (`restartIfDue`) stops it, and its done turn is held until
+the task ends and any wake-up turn it brings settles. A worker started before
+this change has no such lines and keeps the old behaviour until its next launch.
+
 Interrupt remains turn-scoped. Idle timeout, explicit stop, close, and expiry
 end the holder and revoke its tokens. A legacy direct worker's open turn
 settles `interrupted` once before queued input starts its next held process.
@@ -1763,6 +1771,10 @@ Output lost from the holder's ring uses existing backend recovery. A backend
 that cannot reconcile the lost turn reports failure honestly. Re-arming agy's
 model-wait watchdog across replacement remains outside this contract, matching
 held leads.
+A bearer the successor has not registered yet (its startup holder scan is
+still restoring the surviving workers') waits for that rejoin, up to 8 s
+(`mcpRejoinWait`), then resolves; past the rejoin an unknown bearer is a 401 at
+once, so a hard 401 never reaches a restored worker in that window.
 MCP calls during drain may receive 503. Windows survival requires a
 restart-safe holder; one still inside its starter's job object may end with it.
 
