@@ -369,7 +369,7 @@ func TestLocalhostAuthExemptionsAndLANIsolation(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
 	guard := d.accessGuard(next)
 	for _, tc := range []struct{ method, path string }{
-		{"GET", "/health"}, {"HEAD", "/health"}, {"GET", ProxyPath}, {"POST", "/shutdown"}, {"POST", "/nudge"},
+		{"GET", "/health"}, {"HEAD", "/health"}, {"GET", ProxyPath}, {"POST", "/shutdown"}, {"POST", FullStopPath}, {"POST", "/nudge"},
 		{"GET", "/session-hire/roster"}, {"POST", "/agents/by-token/send"}, {"GET", "/pwa/manifest.webmanifest"},
 		{"GET", "/s/rid/fs/cap/capability/file"}, {"GET", "/s/rid/fs/view/capability/file"},
 	} {

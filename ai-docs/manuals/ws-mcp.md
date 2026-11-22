@@ -1440,7 +1440,8 @@ access through the other branch, and a LAN token never grants trusted writes.
 The LAN token arrives as `?token=` on the Settings addresses shown only to a
 local viewer and becomes its existing HttpOnly cookie. Machine routes retain
 their own checks without requiring the browser cookie: `/health`, `/mcp`,
-`/shutdown`, `/nudge`, `/session-hire/roster`, and `/agents/by-token/<op>`.
+`/shutdown`, `/shutdown/all`, `/nudge`, `/session-hire/roster`, and
+`/agents/by-token/<op>`.
 Nudge and roster clients now send the endpoint bearer, but enforcement is deferred
 to preserve older clients. GET/HEAD public frame assets, path-capability routes
 and `/pwa/*` also remain cookieless. Every other route is gated by default.
@@ -1462,6 +1463,22 @@ new sessions, lets the MCP calls in flight finish for up to the lock wait
 minus 1.8 s (`proxyDrainBudget`), cancels long waits (a `mailbox wait`) at
 once, then closes its session streams; a git commit or merge in flight is
 not cut midway, and the sessions' launchers reconnect to the successor.
+The session holders outlive that stop and attach to the next daemon.
+
+`POST /shutdown/all` is the full stop (the desktop app's full quit). It takes
+the same endpoint bearer as `/shutdown` and first stops every session holder:
+from the call on no holder launches, a launch already running finishes and is
+stopped too, and every holder, found by a rescan of the holders directory,
+gets the protocol stop or the start-time-guarded kill in parallel. The daemon
+answers `202 {"shutting_down": true, "stopped": [...], "remaining": []}` and
+drains as above only when no holder process remains. Otherwise it answers
+`409` with each remaining holder and why, keeps running, and allows launches
+again. A daemon already stopping answers `503 {"error": "shutting_down"}` and
+stops nothing. An older daemon answers the full stop with its access guard's
+`401 {"error": "login_required"}`, because its exemption names only
+`/shutdown`; a caller treats that and a `404` as unsupported, distinct from
+the route's own `401 unauthorized`. An MCP client still running afterwards may
+start a fresh, empty daemon through its launcher's normal recovery.
 
 Dev assets: with `WS_MCP_DASHBOARD_DEV_SOURCE=<repo>/agents-plugin-tool` in the
 environment of `ws-mcp dashboard`, the daemon serves the dashboard and

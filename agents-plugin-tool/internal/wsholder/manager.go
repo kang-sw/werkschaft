@@ -84,6 +84,8 @@ var (
 	// ErrStartTimeMismatch refuses a guarded kill: the process under the
 	// holder's PID is not the one that wrote the descriptor.
 	ErrStartTimeMismatch = errors.New("the process under the holder's PID does not match its recorded start time; not killed")
+	// ErrStopping refuses a launch once StopAll has begun.
+	ErrStopping = errors.New("every session holder is being stopped; no new one starts")
 )
 
 // Info is one holder as the daemon sees it.
@@ -156,6 +158,9 @@ type Manager struct {
 	sinks    []Sink
 	failures []StartFailure
 	closed   bool
+	// stopping refuses launches from the start of a StopAll; it stays set
+	// after a complete one, whose caller closes the manager.
+	stopping bool
 	stop     chan struct{}
 	stopOnce sync.Once
 }
@@ -370,6 +375,12 @@ func (m *Manager) isClosed() bool {
 	return m.closed
 }
 
+func (m *Manager) isStopping() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopping
+}
+
 func (m *Manager) forget(id string) {
 	m.mu.Lock()
 	e := m.entries[id]
@@ -509,26 +520,7 @@ func (m *Manager) List() Listing {
 	defer m.mu.Unlock()
 	out := Listing{Holders: []Info{}, Failures: []StartFailure{}}
 	for _, e := range m.entries {
-		info := Info{
-			ID:          e.desc.ID,
-			PID:         e.desc.PID,
-			Attached:    e.client != nil,
-			Protocol:    e.desc.Protocol,
-			StartedAt:   int64(e.desc.StartedAt * 1000),
-			RestartSafe: e.desc.RestartSafe,
-			Session:     e.desc.Session,
-			Lost:        e.lost,
-		}
-		if info.Attached {
-			child := e.child
-			info.Child = &child
-		} else {
-			info.Cause = e.cause
-			if info.Cause == "" {
-				info.Cause = CauseNoAnswer
-			}
-		}
-		out.Holders = append(out.Holders, info)
+		out.Holders = append(out.Holders, e.info())
 	}
 	sort.Slice(out.Holders, func(i, j int) bool {
 		a, b := out.Holders[i], out.Holders[j]
@@ -544,6 +536,30 @@ func (m *Manager) List() Listing {
 		}
 	}
 	return out
+}
+
+// info is e as a listing reports it; the caller holds mu.
+func (e *entry) info() Info {
+	info := Info{
+		ID:          e.desc.ID,
+		PID:         e.desc.PID,
+		Attached:    e.client != nil,
+		Protocol:    e.desc.Protocol,
+		StartedAt:   int64(e.desc.StartedAt * 1000),
+		RestartSafe: e.desc.RestartSafe,
+		Session:     e.desc.Session,
+		Lost:        e.lost,
+	}
+	if info.Attached {
+		child := e.child
+		info.Child = &child
+	} else {
+		info.Cause = e.cause
+		if info.Cause == "" {
+			info.Cause = CauseNoAnswer
+		}
+	}
+	return info
 }
 
 // python resolves the interpreter a holder runs under.
@@ -607,6 +623,9 @@ func (m *Manager) LaunchWith(spec LaunchSpec) (string, error) {
 func (m *Manager) launch(spec LaunchSpec) (string, error) {
 	if m.isClosed() {
 		return "", errors.New("the holder manager is closed")
+	}
+	if m.isStopping() {
+		return "", ErrStopping
 	}
 	session := spec.Session
 	if len(session) == 0 {
@@ -714,6 +733,12 @@ func logTail(dir string) string {
 func (m *Manager) Stop(id string) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
+	return m.stopHolder(id)
+}
+
+// stopHolder is Stop under opMu. Stops of different holders may run at
+// once (StopAll): each touches only its own entry under mu.
+func (m *Manager) stopHolder(id string) error {
 	m.mu.Lock()
 	e := m.entries[id]
 	var desc Descriptor
@@ -758,6 +783,139 @@ func (m *Manager) Stop(id string) error {
 	}
 	m.logf("killed holder %s (pid %d) and its child", id, desc.PID)
 	return nil
+}
+
+// stopAllRounds bounds StopAll's rescans for holders that appeared while
+// it stopped the ones it knew.
+const stopAllRounds = 3
+
+// StopFailure is a holder StopAll left running, and why.
+type StopFailure struct {
+	Info
+	Error string `json:"error"`
+}
+
+// StopAllResult is StopAll's outcome: the holders it ended, and every
+// holder whose process still runs afterwards. An empty Remaining is a
+// complete stop.
+type StopAllResult struct {
+	Stopped   []string      `json:"stopped"`
+	Remaining []StopFailure `json:"remaining"`
+}
+
+// StopAll ends every holder and its child, for a full quit. From its call
+// no launch begins (ErrStopping), including one already queued behind
+// opMu; a launch already running finishes first, since both hold opMu, so
+// its holder is stopped too. Each round
+// scans the holders directory, so a holder this manager is not attached to
+// is found as well, and stops every holder not tried yet at once (Stop's
+// protocol stop, or its guarded kill); a later round takes only the
+// holders that appeared meanwhile. Remaining is then read from the
+// directory and the process table, not from memory: every holder whose
+// process still lives, with its stop's error when one was returned. After
+// a complete stop launches stay refused, since the caller closes the
+// manager next; with any holder remaining they are allowed again.
+func (m *Manager) StopAll() StopAllResult {
+	// Set before the wait, so a launch queued behind a running one is
+	// refused, and again after it: a concurrent StopAll that left holders
+	// may have allowed launches meanwhile.
+	m.setStopping(true)
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	m.setStopping(true)
+	tried := map[string]error{}
+	for round := 0; round < stopAllRounds; round++ {
+		m.scan()
+		var ids []string
+		m.mu.Lock()
+		for id := range m.entries {
+			if _, done := tried[id]; !done {
+				ids = append(ids, id)
+			}
+		}
+		m.mu.Unlock()
+		if len(ids) == 0 {
+			break
+		}
+		sort.Strings(ids)
+		errs := make([]error, len(ids))
+		var wg sync.WaitGroup
+		for i, id := range ids {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs[i] = m.stopHolder(id)
+			}()
+		}
+		wg.Wait()
+		for i, id := range ids {
+			tried[id] = errs[i]
+			if errs[i] != nil {
+				m.logf("full stop: holder %s: %v", id, errs[i])
+			}
+		}
+	}
+	result := StopAllResult{Stopped: []string{}, Remaining: []StopFailure{}}
+	left := map[string]bool{}
+	for _, info := range m.survivors() {
+		failure := StopFailure{Info: info, Error: "the holder still runs after the stop"}
+		if err := tried[info.ID]; err != nil {
+			failure.Error = err.Error()
+		}
+		left[info.ID] = true
+		result.Remaining = append(result.Remaining, failure)
+	}
+	for id, err := range tried {
+		if err == nil && !left[id] {
+			result.Stopped = append(result.Stopped, id)
+		}
+	}
+	sort.Strings(result.Stopped)
+	if len(result.Remaining) > 0 {
+		m.setStopping(false)
+		m.logf("full stop incomplete: %d holder(s) remain", len(result.Remaining))
+	}
+	return result
+}
+
+func (m *Manager) setStopping(on bool) {
+	m.mu.Lock()
+	m.stopping = on
+	m.mu.Unlock()
+}
+
+// survivors are the holders whose process lives, by id: every known entry
+// and every descriptor in the holders directory whose PID is alive. It
+// reads the directory itself, so a closed manager (whose scan does
+// nothing) still answers truthfully.
+func (m *Manager) survivors() []Info {
+	byID := map[string]Info{}
+	m.mu.Lock()
+	for id, e := range m.entries {
+		byID[id] = e.info()
+	}
+	m.mu.Unlock()
+	dirs, err := os.ReadDir(m.opts.Dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		m.logf("full stop: read %s: %v", m.opts.Dir, err)
+	}
+	for _, d := range dirs {
+		id := d.Name()
+		if _, known := byID[id]; known || !d.IsDir() || !ValidID(id) {
+			continue
+		}
+		if desc, err := ReadDescriptor(filepath.Join(m.opts.Dir, id)); err == nil {
+			byID[id] = (&entry{desc: desc}).info()
+		}
+	}
+	out := []Info{}
+	for _, info := range byID {
+		if m.opts.alive(info.PID) {
+			out = append(out, info)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // sameProcess returns nil when the process under desc.PID is the holder
