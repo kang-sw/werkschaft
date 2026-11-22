@@ -689,6 +689,10 @@ func (c *conv) replayDone(lost bool) {
 			c.probeWrapHold()
 		}
 	}
+	// A replay gap may have hidden an in-flight tool or approval.
+	if !lost && (c.rec.Parent == nil || c.rec.TurnOpen) {
+		c.armModelWait()
+	}
 	c.reconcileLeadPermission()
 	c.allowAgyBypassPending()
 	c.checkAction(false)

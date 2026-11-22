@@ -204,6 +204,7 @@ func TestAgyTerminalFailureSettlesWithoutContinue(t *testing.T) {
 		{"unarmed", "0", `"result":{"stopReason":"end_turn"}`, "⚠ API error (attempt 1): stream idle timeout", false},
 		{"replayed", "0", `"result":{"stopReason":"end_turn"}`, "⚠ API error (attempt 1): stream idle timeout", true},
 		{"cancelled", "45", `"result":{"stopReason":"cancelled"}`, "⚠ API error (attempt 1): stream idle timeout", false},
+		{"stopped", "45", `"result":{"stopReason":"refusal"}`, "agy stopped the turn: refusal", false},
 		{"rpc-error", "45", `"error":{"code":-32603,"message":"provider disconnected"}`, "agy: provider disconnected", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -863,11 +864,9 @@ func TestAgyModelWaitWatchdogDrainsAndStripsSuccessfulAPIErrorRetry(t *testing.T
 	}
 }
 
-// If the failed prompt does not end during the drain, cancellation lands
-// first and continue is sent only after its TurnEnd makes steering safe.
-func TestAgyModelWaitWatchdogCancelsOnlyAfterFailureDrain(t *testing.T) {
-	h, timers, _ := agyWatchdogHarnessWithSilence(t, "45", "3", false)
-	_, p := startAgyWatchdogTurn(t, h, false)
+func TestAgyModelWaitWatchdogCancelsOnceAfterNativeRetrySilence(t *testing.T) {
+	h, timers, got := agyWatchdogHarnessWithSilence(t, "45", "3", false)
+	_, p := startAgyWatchdogTurn(t, h, true)
 	m := newAgyMapper("s")
 	m.promptSent("ws-p-watchdog-1")
 	feedAgyWatchdogLines(m, p, agyIdleTimeoutChunk)
@@ -878,8 +877,8 @@ func TestAgyModelWaitWatchdogCancelsOnlyAfterFailureDrain(t *testing.T) {
 	timers.mu.Lock()
 	drainDuration := timers.durs[0]
 	timers.mu.Unlock()
-	if drainDuration != 15*time.Second {
-		t.Fatalf("failure drain = %v, want 15s", drainDuration)
+	if drainDuration != 11*time.Minute {
+		t.Fatalf("native retry fallback = %v, want 11m", drainDuration)
 	}
 	if interrupts := procInterrupts(p); interrupts != 0 {
 		t.Fatalf("failure was interrupted before its drain: %d", interrupts)
@@ -893,9 +892,18 @@ func TestAgyModelWaitWatchdogCancelsOnlyAfterFailureDrain(t *testing.T) {
 	if sent := p.nextSent(t); sent != "continue" {
 		t.Fatalf("post-cancel retry prompt = %q", sent)
 	}
+	timers.fire(t, 0) // a late delivery from the expired timer
+	p.reply("retry complete")
+	eventually(t, "retried turn settled", func() bool { return len(got.lead()) == 1 })
+	if result := got.lead()[0].Result; result.Status != TurnDone || result.Message != "retry complete" {
+		t.Fatalf("retried turn result = %+v", result)
+	}
+	if interrupts := procInterrupts(p); interrupts != 1 || len(p.sent) != 0 {
+		t.Fatalf("native retry fallback caused %d interrupts and %d extra prompts", interrupts, len(p.sent))
+	}
 }
 
-func TestAgyModelWaitWatchdogLaterReplyCancelsFailureDrain(t *testing.T) {
+func TestAgyModelWaitWatchdogLetsNativeRetryRecoverWithACPOutput(t *testing.T) {
 	h, timers, got := agyWatchdogHarnessWithSilence(t, "45", "3", false)
 	_, p := startAgyWatchdogTurn(t, h, true)
 	m := newAgyMapper("s")
@@ -905,20 +913,31 @@ func TestAgyModelWaitWatchdogLaterReplyCancelsFailureDrain(t *testing.T) {
 		started, _ := timers.counts()
 		return started == 1
 	})
+	feedAgyWatchdogLines(m, p, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"usage_update","used":100,"size":1000}}}`)
+	eventually(t, "raw ACP activity renewed the fallback", func() bool {
+		started, stopped := timers.counts()
+		return started == 2 && stopped == 1
+	})
+	timers.mu.Lock()
+	duration := timers.durs[1]
+	timers.mu.Unlock()
+	if duration != 11*time.Minute {
+		t.Fatalf("renewed native retry fallback = %v, want 11m", duration)
+	}
+	timers.fire(t, 0)
 	feedAgyWatchdogLines(m, p, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"OK."}}}}`)
 	eventually(t, "recovery stopped the failure drain", func() bool {
-		_, stopped := timers.counts()
-		return stopped == 1
+		started, stopped := timers.counts()
+		return started == stopped
 	})
-	timers.fire(t, 0) // a stopped drain may still deliver; it is no longer selected
-	time.Sleep(60 * time.Millisecond)
-	if interrupts := procInterrupts(p); interrupts != 0 {
-		t.Fatalf("recovered failure triggered %d interrupts", interrupts)
-	}
+	timers.fire(t, 1) // a stopped drain may still deliver; it is no longer selected
 	feedAgyWatchdogLines(m, p, `{"jsonrpc":"2.0","result":{"stopReason":"end_turn"},"id":"ws-p-watchdog-1"}`)
 	eventually(t, "recovered turn report", func() bool { return len(got.lead()) == 1 })
 	if result := got.lead()[0].Result; result.Status != TurnDone || result.Message != "OK." {
 		t.Fatalf("recovered turn result = %+v", result)
+	}
+	if interrupts := procInterrupts(p); interrupts != 0 || len(p.sent) != 0 {
+		t.Fatalf("recovered native retry caused %d interrupts and %d extra prompts", interrupts, len(p.sent))
 	}
 }
 

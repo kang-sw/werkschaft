@@ -727,21 +727,26 @@ func (m *agyMapper) armWakeIfReadyLocked(replaying bool) {
 	}
 }
 
-// replayState runs from streamProcess.deliver before a holder replay marker
-// reaches the runner. Arm the quiet timer for an open burst without a known
-// prompt so a replayed wakeup can finish.
+type agyReplayObservation struct {
+	promptOpen   bool
+	pendingTools int
+}
+
+// replayState publishes the reconstructed prompt and tool state before the
+// runner handles ReplayDone. An open burst without a known prompt can finish
+// on the wakeup timer.
 func (m *agyMapper) replayState(ev Event) []Event {
 	if !ev.ReplayDone {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.inTurn || len(m.outstanding) > 0 || m.reattachedPromptAfter != nil {
-		return nil
+	promptOpen := m.reattachedPromptAfter != nil
+	if m.inTurn && len(m.outstanding) == 0 && !promptOpen {
+		m.unsolicitedTurn = true
+		m.armWakeIfReadyLocked(false)
 	}
-	m.unsolicitedTurn = true
-	m.armWakeIfReadyLocked(false)
-	return nil
+	return []Event{{agyReplay: &agyReplayObservation{promptOpen: promptOpen, pendingTools: len(m.pendingTools)}}}
 }
 
 func (m *agyMapper) closeUnsolicited(now int64, generation uint64) []Event {
