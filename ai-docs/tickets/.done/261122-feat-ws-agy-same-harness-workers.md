@@ -9,6 +9,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: f545c40b7c442ac3
 sage-review-completeness-reviewed: f545c40b7c442ac3
+completed: 2026-11-22
 ---
 
 # Allow agy workers for agy callers only; refuse cross-harness callers through a registration option
@@ -219,3 +220,64 @@ Verification:
 - `go test ./internal/wsagent -race` with narrow filters (Agy|Admission|
   Rejoin|Spawn|Tiers), `go test ./internal/mcp` narrow filters (AgyLead|
   NativeFirst|HarnessWordingGolden|AgentTiers), dashboard tier-routing tests.
+
+### Result (71d4c638b) - 2026-11-22
+
+Landed on `impl/develop/arise-gory-poker` after merging `develop`
+(45f64e55d, carrying the native-first drift fix 00a158429):
+
+- Registration: `leadOnlyReason` became the unexported `crossHarnessRefusal`;
+  agy is `WorkerCapable` again with the Decision 8 text as its refusal.
+- Admission: one `Runner.admitWorker(backend, callerBackend)` decision
+  (record form `admitWorkerRecord`) backs tier resolution, `agent.tiers`,
+  profile create, spawn, wake, resume, delivery, and rejoin. The verified
+  caller is `AgentCaller.VerifiedBackend`: in MCP from the hosted session
+  key's lead record (`agentAdmissionBackend`), in wsagent from the token
+  holder's record (`holderCaller`, nested `spawnFor`). Connection hints
+  (hello, initialize clientInfo, `playbookHarness`) still select tiers only.
+- Provenance: `Record.SpawnerBackend` (`spawner_backend`) is stamped at
+  create for every non-lead; `ParentRef` and child-index identity are
+  unchanged. `Runner.resolveSpawnerBackends` runs at startup over every
+  record read, before closed loading and rejoin, deriving an unstamped
+  record's stamp from its parent record's backend (no parent record →
+  refused).
+- Retirement: the lead-only rejoin/retire helpers were renamed to
+  cross-harness ones and decide through the record admission.
+- Routing: `agent.tiers`, aliases, routes, and the dashboard tier-routing
+  view resolve against the caller; the MCP routed binding checks
+  `CallerRefusal` first and returns no binding after a refusal, including
+  at the caller fallthrough.
+- Prompt-only restraint (Decision 3): `nativeFirstTierRule` in the agy
+  SpawnIdiom and manual rewrite (spawn bullet, tier line); the hosted agy
+  lead steer was aligned with the same wording.
+- 261118-refactor-ws-harness-name-branches Phase 2 and Phase 4 verification
+  lines now assert (1546) same-harness admission and cross-harness refusal.
+
+Verification (from `agents-plugin-tool`, all prefixed
+`GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`):
+
+- `go test ./internal/wsagent -race -count=1 -run 'Agy|Admission|Rejoin|Spawn|Tiers|SpawnerBackend|HarnessAvailability|Hosted|Prompt|Recover|Holder|Catalog|Startup|Wake' -skip '^(TestAgyLeadOverACP|TestLeadRejoinOfAWrappedRingTrustsATurnBoundary)$'`
+  → ok. The two skipped tests race identically on the pre-merge base
+  (c28a0414f), unrelated to this change.
+- New wsagent tests at `-count=20` under `-race` → ok;
+  `TestAgyParentedWorkerRecordWakesStampedOrFromItsParent` at `-count=40` → ok.
+- `go test ./internal/mcp -count=1 -run 'AgyLead|NativeFirst|HarnessWordingGolden|AgentTiers|DashboardTierRouting|AgySameHarness|DeclaredAgy|RoutedBinding|HostedAgy'`
+  → ok (Claude/Codex/Pi goldens unchanged); `-run 'Tier|ResolveAgent|RenderBinding|Recommended|PlaybookRender'` → ok.
+- `go test ./internal/wsdashboard -count=1 -run '^TestTierRoutingUIBrowser$'`
+  (existing Playwright install) → PASS.
+- `go vet ./...` → clean.
+- Lite review: no Critical or Important findings.
+
+Decisions and notes:
+
+- `pi.spawn` (MCP `pi_tools.go`) launches Pi children only and sets no
+  spawner stamp; only the token-route nested spawn stamps there. It is
+  fail-closed (an agy profile through it would be refused), so it is left
+  as is.
+- The startup-order contract is pinned by
+  `TestResolveSpawnerBackendsIgnoresLoadOrder` (both orders); the
+  integration rejoin test does not force child-before-parent directory order.
+- Nested agy children make an existing `children.go` delivery path
+  reachable in which the parent's goroutine writes the child's record while
+  the child's loop reads it; the affected test was restructured to settle
+  the report before asserting, and the race is left for a follow-up.
