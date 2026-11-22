@@ -31,6 +31,7 @@ func (c *conv) restoreWorkerMCP() {
 	}
 	session := c.r.attachMCP(rec.ReplyID, rec.MCPToken, rec.MCPEnv, rec.workDir(), rec.HostPID, rec.Backend)
 	if session != nil {
+		c.rejoinExecCutover(rec)
 		session.Started(c.workerMCPEnv, rec.HostPID)
 		c.workerMCPEnv = nil
 	}

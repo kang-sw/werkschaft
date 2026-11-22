@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "启用在会话白板分享决策和进展的流程。",
   "js.settings.key.workflow.tracker_enabled.label": "跟踪器记录",
   "js.settings.key.workflow.tracker_enabled.description": "启用在跟踪器记录进展的流程。",
+  "js.settings.key.exec.native_tool_removal.label": "替换原生 Shell 工具",
+  "js.settings.key.exec.native_tool_removal.description": "以不含原生 Shell 和后台进程工具的方式启动此 harness 的仪表板托管会话，命令改由 ws exec 工具执行。每次启动新进程时生效；关闭则保留原生工具。",
   "js.settings.key.hosted.plugin_package.label": "托管插件包",
   "js.settings.key.hosted.plugin_package.description": "选择守护进程启动时使用的插件包。",
   "js.settings.key.bootstrap_alarm.label": "初始化版本提醒",

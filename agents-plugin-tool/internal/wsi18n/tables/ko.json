@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "사용자에게 묻는 결정 사항과 진행 설명을 세션 화이트보드로 올리는 매뉴얼 섹션을 활성화합니다.",
   "js.settings.key.workflow.tracker_enabled.label": "트래커 기록 섹션",
   "js.settings.key.workflow.tracker_enabled.description": "리드가 등록된 트래커 스토어에 작업 경과를 기록하도록 안내하는 매뉴얼 섹션을 켭니다.",
+  "js.settings.key.exec.native_tool_removal.label": "네이티브 셸 도구 대체",
+  "js.settings.key.exec.native_tool_removal.description": "이 하네스의 대시보드 호스팅 세션을 네이티브 셸·백그라운드 프로세스 도구 없이 시작하고, 명령은 ws exec 도구로 실행합니다. 새 프로세스가 시작될 때마다 적용되며, 끄면 네이티브 도구를 유지합니다.",
   "js.settings.key.hosted.plugin_package.label": "호스팅 플러그인 패키지",
   "js.settings.key.hosted.plugin_package.description": "데몬이 실행하는 프로세스가 사용할 플러그인 패키지를 선택합니다 (ws 또는 wsflow).",
   "js.settings.key.bootstrap_alarm.label": "부트스트랩 버전 경고",

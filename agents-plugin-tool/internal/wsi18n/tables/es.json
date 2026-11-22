@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "Activa el flujo para compartir decisiones y avances en la pizarra de sesión.",
   "js.settings.key.workflow.tracker_enabled.label": "Registro en el rastreador",
   "js.settings.key.workflow.tracker_enabled.description": "Activa el flujo para registrar avances en el rastreador.",
+  "js.settings.key.exec.native_tool_removal.label": "Reemplazar las herramientas de shell nativas",
+  "js.settings.key.exec.native_tool_removal.description": "Inicia las sesiones alojadas en el panel de este arnés sin sus herramientas nativas de shell y de procesos en segundo plano; los comandos se ejecutan con las herramientas ws exec. Se aplica en cada nuevo inicio de proceso; desactívalo para conservar las herramientas nativas.",
   "js.settings.key.hosted.plugin_package.label": "Paquete de complemento alojado",
   "js.settings.key.hosted.plugin_package.description": "Selecciona el paquete de los procesos iniciados por el daemon.",
   "js.settings.key.bootstrap_alarm.label": "Alerta de versión inicial",

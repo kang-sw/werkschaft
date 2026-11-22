@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "Enable the workflow section for sharing decisions and progress on the session board.",
   "js.settings.key.workflow.tracker_enabled.label": "Tracker reporting",
   "js.settings.key.workflow.tracker_enabled.description": "Enable the workflow section for recording progress in the tracker.",
+  "js.settings.key.exec.native_tool_removal.label": "Replace native shell tools",
+  "js.settings.key.exec.native_tool_removal.description": "Start dashboard-hosted sessions of this harness without their native shell and background process tools; they run commands through the ws exec tools instead. Applies at each new process start; turn off to keep the native tools.",
   "js.settings.key.hosted.plugin_package.label": "Hosted plugin package",
   "js.settings.key.hosted.plugin_package.description": "Select the plugin package used by daemon-hosted processes.",
   "js.settings.key.bootstrap_alarm.label": "Bootstrap version alert",

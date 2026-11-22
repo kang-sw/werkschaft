@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "Включает раздел о публикации решений и хода работы на доске сеанса.",
   "js.settings.key.workflow.tracker_enabled.label": "Запись в трекер",
   "js.settings.key.workflow.tracker_enabled.description": "Включает раздел о регистрации хода работы в трекере.",
+  "js.settings.key.exec.native_tool_removal.label": "Заменить встроенные инструменты оболочки",
+  "js.settings.key.exec.native_tool_removal.description": "Запускает сессии этого harness, размещённые в панели, без встроенных инструментов оболочки и фоновых процессов; команды выполняются через инструменты ws exec. Действует при каждом новом запуске процесса; выключите, чтобы сохранить встроенные инструменты.",
   "js.settings.key.hosted.plugin_package.label": "Пакет плагина для размещённых процессов",
   "js.settings.key.hosted.plugin_package.description": "Выбор пакета для процессов, запускаемых службой.",
   "js.settings.key.bootstrap_alarm.label": "Предупреждение о версии шаблона",

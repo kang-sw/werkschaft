@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "Aktiviert den Workflow-Abschnitt für Entscheidungen und Fortschritt im Sitzungsboard.",
   "js.settings.key.workflow.tracker_enabled.label": "Fortschritt im Tracker",
   "js.settings.key.workflow.tracker_enabled.description": "Aktiviert den Workflow-Abschnitt zur Dokumentation des Fortschritts im Tracker.",
+  "js.settings.key.exec.native_tool_removal.label": "Native Shell-Werkzeuge ersetzen",
+  "js.settings.key.exec.native_tool_removal.description": "Startet vom Dashboard gehostete Sitzungen dieses Harness ohne native Shell- und Hintergrundprozess-Werkzeuge; Befehle laufen stattdessen über die ws-exec-Werkzeuge. Gilt bei jedem neuen Prozessstart; ausschalten, um die nativen Werkzeuge zu behalten.",
   "js.settings.key.hosted.plugin_package.label": "Gehostetes Plugin-Paket",
   "js.settings.key.hosted.plugin_package.description": "Legt das Plugin-Paket für vom Daemon gestartete Prozesse fest.",
   "js.settings.key.bootstrap_alarm.label": "Bootstrap-Versionswarnung",

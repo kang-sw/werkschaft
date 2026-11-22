@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "Attiva il flusso per condividere decisioni e progressi sulla lavagna di sessione.",
   "js.settings.key.workflow.tracker_enabled.label": "Registrazione dei progressi",
   "js.settings.key.workflow.tracker_enabled.description": "Attiva il flusso per registrare i progressi nel tracker.",
+  "js.settings.key.exec.native_tool_removal.label": "Sostituisci gli strumenti shell nativi",
+  "js.settings.key.exec.native_tool_removal.description": "Avvia le sessioni ospitate dalla dashboard per questo harness senza gli strumenti nativi di shell e di processi in background; i comandi passano dagli strumenti ws exec. Si applica a ogni nuovo avvio del processo; disattiva per mantenere gli strumenti nativi.",
   "js.settings.key.hosted.plugin_package.label": "Pacchetto del plugin ospitato",
   "js.settings.key.hosted.plugin_package.description": "Seleziona il pacchetto per i processi avviati dal demone.",
   "js.settings.key.bootstrap_alarm.label": "Avviso sulla versione iniziale",

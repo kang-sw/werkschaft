@@ -205,6 +205,14 @@ const (
 	// Package manifests supply the defaults.
 	ItemAgyModelWaitTimeoutSeconds = "agy.model_wait_timeout_seconds"
 	ItemAgyModelWaitRetries        = "agy.model_wait_retries"
+
+	// ItemExecNativeToolRemoval is the per-harness rollout switch of the
+	// exec cutover: on (the default) launches a dashboard-hosted session
+	// with its native process tools removed in favour of the ws exec tools,
+	// off keeps them. Stored per harness bucket as
+	// ItemExecNativeToolRemoval+"."+<claude|codex|pi|agy|all>; a process
+	// reads it at its start.
+	ItemExecNativeToolRemoval = "exec.native_tool_removal"
 )
 
 func init() {
@@ -223,6 +231,12 @@ func init() {
 	RegisterDefaultScope(ItemWorkflowTrackerEnabled, ScopeGlobal)
 	for _, bucket := range []string{"claude", "codex", "pi", "agy", "all"} {
 		RegisterDefaultScope(ItemWorkflowTrackerEnabled+"."+bucket, ScopeGlobal)
+	}
+	// exec.native_tool_removal is a machine-wide rollout switch, global on
+	// the bare key and every bucket key.
+	RegisterDefaultScope(ItemExecNativeToolRemoval, ScopeGlobal)
+	for _, bucket := range []string{"claude", "codex", "pi", "agy", "all"} {
+		RegisterDefaultScope(ItemExecNativeToolRemoval+"."+bucket, ScopeGlobal)
 	}
 	// workflow.profile is the same cross-project habit, so it takes the same
 	// global default on the bare key and every bucket key.

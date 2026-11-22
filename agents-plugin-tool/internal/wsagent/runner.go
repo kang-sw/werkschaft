@@ -308,6 +308,9 @@ type Runner struct {
 	// token, and mcpTokenOf by conversation id.
 	mcpTokens  map[string]*mcpToken
 	mcpTokenOf map[string]string
+	// harnessVersions are the newest harness versions processes reported,
+	// by backend (noteHarnessVersion), under mu; memory only.
+	harnessVersions map[string]string
 }
 
 // NewRunner returns a runner; Start loads its conversations.

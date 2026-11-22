@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "啟用在工作階段白板分享決策和進度的流程。",
   "js.settings.key.workflow.tracker_enabled.label": "追蹤器記錄",
   "js.settings.key.workflow.tracker_enabled.description": "啟用在追蹤器記錄進度的流程。",
+  "js.settings.key.exec.native_tool_removal.label": "取代原生 Shell 工具",
+  "js.settings.key.exec.native_tool_removal.description": "以不含原生 Shell 與背景程序工具的方式啟動此 harness 的儀表板託管工作階段，指令改由 ws exec 工具執行。每次啟動新程序時生效；關閉則保留原生工具。",
   "js.settings.key.hosted.plugin_package.label": "託管外掛程式套件",
   "js.settings.key.hosted.plugin_package.description": "選擇常駐程式啟動程序時使用的外掛程式套件。",
   "js.settings.key.bootstrap_alarm.label": "初始設定版本提醒",

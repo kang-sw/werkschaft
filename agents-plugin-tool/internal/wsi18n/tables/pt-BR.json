@@ -2837,6 +2837,8 @@
   "js.settings.key.workflow.whiteboard_enabled.description": "Ativa o fluxo para compartilhar decisões e progresso no quadro da sessão.",
   "js.settings.key.workflow.tracker_enabled.label": "Registro no rastreador",
   "js.settings.key.workflow.tracker_enabled.description": "Ativa o fluxo para registrar o andamento no rastreador.",
+  "js.settings.key.exec.native_tool_removal.label": "Substituir as ferramentas de shell nativas",
+  "js.settings.key.exec.native_tool_removal.description": "Inicia as sessões hospedadas no painel deste harness sem as ferramentas nativas de shell e de processos em segundo plano; os comandos passam pelas ferramentas ws exec. Vale a cada novo início de processo; desative para manter as ferramentas nativas.",
   "js.settings.key.hosted.plugin_package.label": "Pacote de plug-in hospedado",
   "js.settings.key.hosted.plugin_package.description": "Seleciona o pacote usado pelos processos iniciados pelo daemon.",
   "js.settings.key.bootstrap_alarm.label": "Alerta de versão inicial",

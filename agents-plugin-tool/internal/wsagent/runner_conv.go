@@ -64,11 +64,15 @@ type conv struct {
 	acceptedEvents map[string]struct{}
 	// mcpCalls counts the ws MCP tool calls in flight on the conversation's
 	// session token (Runner.MCPCallBegin).
-	mcpCalls   atomic.Int64
-	activeMode string
-	bgTasks    int
-	background *int
-	monitors   *int
+	mcpCalls atomic.Int64
+	// execCutover reports whether the current process started under the
+	// exec cutover (exec_cutover.go): its native process tools removed in
+	// favour of the ws exec tools. Set at each start and rejoin.
+	execCutover bool
+	activeMode  string
+	bgTasks     int
+	background  *int
+	monitors    *int
 	// actionNeeded is State.ActionNeeded.
 	actionNeeded string
 	// Worker permission projection is transient. Explicit selection lives in
