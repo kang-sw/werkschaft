@@ -217,6 +217,19 @@ func TestCodexNativeSubagentMapping(t *testing.T) {
 			t.Fatalf("completion without an open row or foreign thread mapped: %+v %+v %+v", again, stray, foreign)
 		}
 	})
+	t.Run("second start for an open thread keeps the first row", func(t *testing.T) {
+		r := newCodexRun("parent")
+		r.feed(`{"method":"turn/started","params":{"threadId":"parent","turn":{"id":"t1"}}}`)
+		first := nativeEvents(r.feed(codexNativeLine("item/started", "spawn-1", "started", "child", "t1", 1_000)))
+		second := nativeEvents(r.feed(codexNativeLine("item/started", "spawn-2", "started", "child", "t1", 2_000)))
+		done := nativeEvents(r.feed(codexNativeLine("item/started", "end-1", "completed", "child", "t1", 3_000)))
+		if len(first) != 1 || len(second) != 0 {
+			t.Fatalf("starts = %+v then %+v, want only the first row opened", first, second)
+		}
+		if len(done) != 1 || done[0].AgentID != wslive.NativeCodexPrefix+"spawn-1" || done[0].Status != wslive.StatusDone {
+			t.Fatalf("completion = %+v, want the first row done", done)
+		}
+	})
 }
 
 func nativeRowEvent(id, label, status string) Event {

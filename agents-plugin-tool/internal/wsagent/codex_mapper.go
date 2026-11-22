@@ -465,9 +465,9 @@ func (m *codexMapper) item(turn string, item codexItem, done bool, now int64) []
 // native subagent row transition at the envelope's time (0 leaves it to
 // intake). An activity's item/started and item/completed envelopes are one
 // transition, mapped once by item id. kind started opens row
-// codex-native:<item id>, labelled by agentPath's last segment; kind
-// completed ends the open row of that child thread done, and is dropped when
-// none is open.
+// codex-native:<item id>, labelled by agentPath's last segment, unless that
+// child thread already has an open row; kind completed ends the open row of
+// that child thread done, and is dropped when none is open.
 func (m *codexMapper) subAgentActivity(item codexItem, at int64) []Event {
 	if item.ID == "" || m.nativeSeen[item.ID] {
 		return nil
@@ -484,6 +484,11 @@ func (m *codexMapper) subAgentActivity(item codexItem, at int64) []Event {
 	switch item.Kind {
 	case "started":
 		if item.AgentThreadID == "" {
+			return nil
+		}
+		if _, open := m.nativeOpen[item.AgentThreadID]; open {
+			// A second start for a child thread whose row is still open
+			// keeps that row: replacing it would orphan it running.
 			return nil
 		}
 		row := wslive.NativeCodexPrefix + item.ID
