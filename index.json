@@ -606,7 +606,17 @@
       "registered_at": "2026-11-22T10:16:59Z"
     },
     "261122-feat-ws-exec-job-hud": {
-      "registered_at": "2026-11-22T13:11:55Z"
+      "registered_at": "2026-11-22T13:11:55Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T15:18:56Z",
+        "impl": {
+          "branch": "impl/develop/down-blog-from"
+        }
+      }
     },
     "261122-feat-ws-provider-auth-layer": {
       "registered_at": "2026-11-22T08:45:21Z",
