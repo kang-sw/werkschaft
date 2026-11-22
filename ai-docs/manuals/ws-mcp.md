@@ -1061,8 +1061,9 @@ from a support conversation:
   bullet loses the "tier the question needs" suffix. A rendered delegate is
   spawned through `agent.spawn` with the returned path and the rendered tier
   (no model/effort bindings, which `agent.spawn` does not take), and the tier
-  line states the tier rule. agy-to-agy restraint is this prompt only: no
-  count or tier limit applies.
+  line states the tier rule. agy-to-agy restraint is this prompt only: agy
+  adds no harness-specific count or tier limit, while the generic depth,
+  nested-tier, and width limits of every `agent.spawn` still apply.
   `playbook.render` output is unchanged for every caller: a rendered
   delegate runs on another process.
   `CallFallback` opts hosted lead connections into the compact `call` tool

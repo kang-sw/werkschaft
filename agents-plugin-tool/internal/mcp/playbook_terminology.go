@@ -172,7 +172,9 @@ func nativeFirstTerminology(namespace string) map[string]string {
 
 // nativeFirstTierRule is the agy lead's tier rule for agent.spawn, shared by
 // its SpawnIdiom and its manual's tier line. Restraint of agy-to-agy spawns
-// is this prompt alone: no count or tier limit applies.
+// is this prompt alone: agy adds no harness-specific count or tier limit,
+// while the generic depth, nested-tier, and width limits every agent.spawn
+// passes still apply.
 const nativeFirstTierRule = "pass a rendered tier as returned: a role tier keeps its configured route, model and effort, and may end on agy, which is allowed; an agy route carries the Antigravity terms risk, so when another harness fits the work, choose an external fixed tier such as `claude.small` for `playbook-explore:small` instead; never put a harness prefix before a role tier (`claude.playbook-explore:small` is rejected)"
 
 // nativeFirstManualRewrites are the workflow manual sentences a

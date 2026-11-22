@@ -281,3 +281,43 @@ Decisions and notes:
   reachable in which the parent's goroutine writes the child's record while
   the child's loop reads it; the affected test was restructured to settle
   the report before asserting, and the race is left for a follow-up.
+
+#### Edition (f39622d0d) - 2026-11-22
+
+Decision 9's T0 claim, qualified per surface and version after the
+pre-merge review (gate comparison: the immediate develop predecessor,
+`45f64e55d^2`, which registers agy as a worker harness,
+`wsagent/agy.go:76-80`):
+
+- `spawner_backend` record field: T0. The new writer stamps it at create;
+  the develop predecessor (`45f64e55d^2:wsagent/record.go:203-255`) and the
+  released v0.50.8 (`v0.50.8:wsagent/record.go:159-211`, `:296-305`) keep
+  unknown top-level members on decode and write them back on marshal, so
+  the stamp survives an older daemon's read-modify-write and the new reader
+  sees it on reopen.
+- Admission against the develop predecessor: that daemon admits and rejoins
+  agy workers unconditionally, so a downgrade to it keeps a newly admitted
+  agy worker running and only re-allows cross-harness spawns. The lead-only
+  gate (3f49b51d4) is branch-only and never shipped.
+- Against v0.50.8: it has no agy worker support (it registers only Claude
+  and Pi, `v0.50.8:cmd/ws-mcp/dashboard.go:261-269`), reads a held worker's
+  `handed_off_at` row as ended (`v0.50.8:wsagent/runner.go:279-293`), and
+  recognizes only the legacy Pi worker holder
+  (`v0.50.8:wsagent/runner_process.go:410-424`). Held agy workers therefore
+  fall under the inherited, owner-accepted T2 held-worker downgrade
+  (`release-compatibility.md`, Release Rules 1, (1855)=a): on re-upgrade the
+  holder match and downgrade fence converge the worker into a wakeable
+  sleeping record, and history an older daemon pruned is not recoverable.
+  This ticket adds no new downgrade outcome.
+- The forward refusal of legacy cross-harness agy worker records (a
+  Claude/Codex/Pi-parented agy worker, or one with no resolvable parent) is
+  intentional (Decisions 5 and 6), not a compatibility loss.
+
+Pre-merge review fixes on this branch: the MCP caller backend now comes from
+the authenticated binding in runner memory (session token conversation or
+runner-issued capability token; unbound connections are cross-harness), and
+forwarding workers' routed bindings get the same refusal (df19044c3). Report
+delivery and the parent-side `pi.wait` take now take a child's pending
+reports inside the child's own loop step (f39622d0d). The native-first
+wording says agy adds no harness-specific limit, while generic spawn limits
+still apply.
