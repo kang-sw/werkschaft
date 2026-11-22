@@ -76,6 +76,11 @@ type ProxyHello struct {
 	// Version is the launcher's plugin version, when known; the daemon
 	// refuses a hello from another minor version.
 	Version string `json:"version,omitempty"`
+	// Conversation is the hosted conversation (its reply-id) a per-session
+	// token resolved to (AgentMCPTokenHost): the trusted binding of a
+	// session the daemon started. It is never decoded from a launcher's
+	// hello, so a client cannot name one.
+	Conversation string `json:"-"`
 }
 
 // ProxyAccept is the daemon's one-line answer to the hello: accepted, and

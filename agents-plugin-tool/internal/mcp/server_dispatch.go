@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdoc"
 	"github.com/kang-sw/devenv/internal/wsgit"
@@ -286,80 +285,9 @@ func (s *Server) callTool(ctx context.Context, req request) (resp response) {
 		}
 		return toolTextResponse(req.ID, formatStringLines(domains), err)
 
-	case "exec.spawn":
-		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
-		if err != nil {
-			return toolTextResponse(req.ID, "", err)
-		}
-		cmd, _ := params.Arguments["cmd"].(string)
-		workingDir, _ := params.Arguments["working_dir"].(string)
-		stdin, _ := params.Arguments["stdin"].(string)
-		result, err := s.execStore().Launch(execjob.LaunchOptions{Root: root, WorkingDir: workingDir, Cmd: cmd, Args: stringList(params.Arguments["args"]), Env: stringMapArgument(params.Arguments["env"]), Stdin: stdin, Environ: s.environ()})
-		return execResponse(req.ID, result, err, true)
-	case "exec.shell":
-		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
-		if err != nil {
-			return toolTextResponse(req.ID, "", err)
-		}
-		command, _ := params.Arguments["command"].(string)
-		workingDir, _ := params.Arguments["working_dir"].(string)
-		stdin, _ := params.Arguments["stdin"].(string)
-		shell, _ := params.Arguments["shell"].(string)
-		result, err := s.execStore().Launch(execjob.LaunchOptions{Root: root, WorkingDir: workingDir, Command: command, Shell: shell, Env: stringMapArgument(params.Arguments["env"]), Stdin: stdin, ShellMode: true, Environ: s.environ()})
-		return execResponse(req.ID, result, err, true)
-	case "exec.status":
-		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
-		if err != nil {
-			return toolTextResponse(req.ID, "", err)
-		}
-		key, _ := params.Arguments["exec_key"].(string)
-		result, err := s.execStore().Status(root, key)
-		return execResponse(req.ID, result, err, false)
-	case "exec.result":
-		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
-		if err != nil {
-			return toolTextResponse(req.ID, "", err)
-		}
-		key, _ := params.Arguments["exec_key"].(string)
-		timeout := durationFromSeconds(params.Arguments["timeout_seconds"])
-		result, err := s.execStore().ResultWithContext(s.drainContext(), root, key, timeout)
-		return execResponse(req.ID, result, err, true)
-	case "exec.abort":
-		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
-		if err != nil {
-			return toolTextResponse(req.ID, "", err)
-		}
-		key, _ := params.Arguments["exec_key"].(string)
-		result, err := s.execStore().Abort(root, key)
-		return execResponse(req.ID, result, err, false)
-	case "exec.raw.tail":
-		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
-		if err != nil {
-			return toolTextResponse(req.ID, "", err)
-		}
-		key, _ := params.Arguments["exec_key"].(string)
-		stream, _ := params.Arguments["stream"].(string)
-		result, err := s.execStore().Tail(root, key, stream, intFromArgument(params.Arguments["lines"], 0))
-		return execRawTailResponse(req.ID, result, err)
-	case "exec.raw.read":
-		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
-		if err != nil {
-			return toolTextResponse(req.ID, "", err)
-		}
-		key, _ := params.Arguments["exec_key"].(string)
-		stream, _ := params.Arguments["stream"].(string)
-		result, err := s.execStore().Read(root, key, stream, int64FromArgument(params.Arguments["offset"], 0), int64FromArgument(params.Arguments["limit"], 0))
-		return execRawReadResponse(req.ID, result, err)
-	case "exec.raw.grep":
-		root, err := s.resolveToolRoot(params.Arguments, params.Meta)
-		if err != nil {
-			return toolTextResponse(req.ID, "", err)
-		}
-		key, _ := params.Arguments["exec_key"].(string)
-		stream, _ := params.Arguments["stream"].(string)
-		pattern, _ := params.Arguments["pattern"].(string)
-		result, err := s.execStore().Grep(root, key, stream, pattern, intFromArgument(params.Arguments["before"], 0), intFromArgument(params.Arguments["after"], 0), intFromArgument(params.Arguments["max_matches"], 0), boolArgument(params.Arguments["regex"]))
-		return execRawGrepResponse(req.ID, result, err)
+	case "exec.spawn", "exec.shell", "exec.status", "exec.result", "exec.abort", "exec.raw.tail", "exec.raw.read", "exec.raw.grep",
+		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write":
+		return s.callExec(ctx, req.ID, params.Name, params.Arguments, params.Meta)
 	case "config.list":
 		// Read-only combined config surface (260814 Phase 2): subsumes config.show
 		// (resolved-scope View) AND config.tuning (per-key tuning knob catalog),

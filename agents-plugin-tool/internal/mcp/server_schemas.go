@@ -266,12 +266,37 @@ func tools() []map[string]any {
 		{
 			"name":        "exec.spawn",
 			"description": "Start a durable structured command job using argv, with bounded inline output when it completes quickly.",
-			"inputSchema": execLaunchSchema(false),
+			"inputSchema": execSpawnSchema(),
 		},
 		{
 			"name":        "exec.shell",
-			"description": "Start a durable explicit shell command job, with bounded inline output when it completes quickly.",
-			"inputSchema": execLaunchSchema(true),
+			"description": "Run one shell line with the configured shell (Bash; Git Bash on Windows): pass cmd, with optional cwd and async. It waits up to the execution window, then answers with an exec id it keeps running under; async returns that id at once. A job that outlives its call reports its completion to this conversation as a message. The legacy form takes command, with optional working_dir and shell, and keeps its original replies. The two forms cannot be mixed in one call.",
+			"inputSchema": execShellSchema(),
+		},
+		{
+			"name":        "exec.run",
+			"description": "Run one program with its arguments directly, without a shell. It waits up to the execution window, then answers with an exec id it keeps running under; async returns that id at once. A job that outlives its call reports its completion to this conversation as a message.",
+			"inputSchema": execRunSchema(),
+		},
+		{
+			"name":        "exec.stop",
+			"description": "Stop a running exec job and its whole process group, keeping its output.",
+			"inputSchema": execIDSchema(),
+		},
+		{
+			"name":        "exec.tail",
+			"description": "Read the last slice of an exec job's output, with its status and the byte offsets the slice covers.",
+			"inputSchema": execTailSchema(),
+		},
+		{
+			"name":        "exec.list",
+			"description": "List this conversation's running and recent exec jobs.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+		{
+			"name":        "exec.write",
+			"description": "Write text to a running exec job's stdin; eof closes stdin after the text.",
+			"inputSchema": execWriteSchema(),
 		},
 		{
 			"name":        "exec.status",
@@ -1246,6 +1271,7 @@ func toolSchemaRequiresSessionKey(name string) bool {
 	switch name {
 	case "api.list",
 		"exec.spawn", "exec.shell", "exec.status", "exec.result", "exec.abort", "exec.raw.tail", "exec.raw.read", "exec.raw.grep",
+		"exec.run", "exec.stop", "exec.tail", "exec.list", "exec.write",
 		"git.status", "git.diff", "git.log", "git.merge_base", "git.commit", "git.merge",
 		"rationale.query", "git.followups",
 		"project_tree",
@@ -1272,22 +1298,72 @@ func appendRequiredString(raw any, value string) []string {
 	return append(required, value)
 }
 
-func execLaunchSchema(shell bool) map[string]any {
-	props := map[string]any{
+// execSpawnSchema is the legacy direct-execution entry point's schema.
+func execSpawnSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
 		"working_dir": stringProperty("Command working directory. Defaults to the resolved ws worktree root; relative paths resolve beneath that root."),
-		"env":         map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "string"}, "description": "Environment variable overlay."},
+		"env":         execEnvProperty(),
 		"stdin":       stringProperty("Text stdin for the process."),
-	}
-	required := []string{"cmd"}
-	if shell {
-		props["command"] = stringProperty("Shell command string to execute.")
-		props["shell"] = stringProperty("Optional explicit shell executable. Defaults to the platform shell.")
-		required = []string{"command"}
-	} else {
-		props["cmd"] = stringProperty("Executable argv0 to run; not a shell command line.")
-		props["args"] = stringArrayProperty("Optional argv arguments.")
-	}
-	return map[string]any{"type": "object", "properties": props, "required": required}
+		"cmd":         stringProperty("Executable argv0 to run; not a shell command line."),
+		"args":        stringArrayProperty("Optional argv arguments."),
+	}, "required": []string{"cmd"}}
+}
+
+// execEnvProperty is the environment overlay every exec launch accepts.
+func execEnvProperty() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": map[string]string{"type": "string"}, "description": "Environment variable overlay."}
+}
+
+// The exec.shell argument families. The schema declares their union at the
+// top level, since a top-level oneOf is not accepted by every harness's tool
+// schema reader; the argument precheck (execShellFamily) enforces one family
+// per call.
+var (
+	execShellLegacyOnly = []string{"command", "working_dir", "shell"}
+	execShellNewOnly    = []string{"cmd", "cwd", "async"}
+)
+
+func execShellSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"cmd":         stringProperty("The shell line to run (new form; pairs with cwd and async)."),
+		"cwd":         stringProperty("New form: working directory. Defaults to the session's worktree root; a relative path resolves beneath it."),
+		"async":       boolProperty("New form: answer with the exec id at once instead of waiting up to the execution window."),
+		"command":     stringProperty("Legacy form: the shell command string (pairs with working_dir and shell)."),
+		"working_dir": stringProperty("Legacy form: command working directory. Defaults to the resolved ws worktree root; relative paths resolve beneath that root."),
+		"shell":       stringProperty("Legacy form: optional explicit shell executable. Defaults to the platform shell."),
+		"env":         execEnvProperty(),
+		"stdin":       stringProperty("Text written to stdin, which then closes. New form without it: stdin stays open for exec.write. Legacy form without it: stdin is closed at once."),
+	}}
+}
+
+func execRunSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"exe":   stringProperty("The program to run: a name looked up on PATH, or a path. Not a shell line; use exec.shell for one."),
+		"args":  stringArrayProperty("Arguments passed to the program as given, without shell parsing."),
+		"cwd":   stringProperty("Working directory. Defaults to the session's worktree root; a relative path resolves beneath it."),
+		"env":   execEnvProperty(),
+		"stdin": stringProperty("Text written to stdin, which then closes. Without it, stdin stays open for exec.write."),
+		"async": boolProperty("Answer with the exec id at once instead of waiting up to the execution window."),
+	}, "required": []string{"exe"}}
+}
+
+func execIDSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"exec_id": stringProperty("The exec id a launch answered with.")}, "required": []string{"exec_id"}}
+}
+
+func execTailSchema() map[string]any {
+	s := execIDSchema()
+	s["properties"].(map[string]any)["bytes"] = integerProperty("How many trailing output bytes to read. Defaults to 4096, the most one call returns.")
+	return s
+}
+
+func execWriteSchema() map[string]any {
+	s := execIDSchema()
+	props := s["properties"].(map[string]any)
+	props["data"] = stringProperty("Text written to the job's stdin.")
+	props["eof"] = boolProperty("Close the job's stdin after data.")
+	s["required"] = []string{"exec_id", "data"}
+	return s
 }
 
 func execKeySchema() map[string]any {

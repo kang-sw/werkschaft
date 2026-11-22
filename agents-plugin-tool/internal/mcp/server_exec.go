@@ -86,6 +86,9 @@ func execRawReadResponse(id json.RawMessage, r execjob.RawReadResponse, err erro
 	fmt.Fprintf(&b, "limit: %d\n", r.Limit)
 	fmt.Fprintf(&b, "size: %d\n", r.Size)
 	fmt.Fprintf(&b, "eof: %t\n", r.EOF)
+	if r.EvictedBefore > 0 {
+		fmt.Fprintf(&b, "evicted_before: %d\n", r.EvictedBefore)
+	}
 	b.WriteString("========== text ==========" + "\n")
 	b.WriteString(r.Text)
 	if r.Text != "" && !strings.HasSuffix(r.Text, "\n") {

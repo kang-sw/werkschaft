@@ -185,7 +185,10 @@ func (r *Runner) ResolveMCPToken(token string) (wsdashboard.ProxyHello, <-chan s
 	default:
 		close(t.connected)
 	}
-	return t.hello, t.void, true
+	hello := t.hello
+	// The token is the binding: only this resolution names the conversation.
+	hello.Conversation = t.id
+	return hello, t.void, true
 }
 
 // mcpHello is the hello the stdio launcher would have sent for a harness

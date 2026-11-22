@@ -593,6 +593,13 @@ type LaunchSpec struct {
 	// RingPulse is a content-free line emitted at a bounded rate while
 	// RingSkip drops matching lines. Empty emits nothing.
 	RingPulse string
+	// ExitCopy is a file that also receives the holder's exit record (the
+	// exit.json object) when the holder exits gracefully. It belongs
+	// outside the holder directory: the generic cleanup removes that
+	// directory and never touches this file, so a terminal status survives
+	// a daemon that consumes and discards exit.json. The caller owns and
+	// removes it. Empty writes no copy.
+	ExitCopy string
 }
 
 // Launch starts a new holder for session (a JSON object the holder records
@@ -664,6 +671,9 @@ func (m *Manager) launch(spec LaunchSpec) (string, error) {
 	}
 	if spec.RingPulse != "" {
 		args = append(args, "--ring-pulse", spec.RingPulse)
+	}
+	if spec.ExitCopy != "" {
+		args = append(args, "--exit-copy", spec.ExitCopy)
 	}
 	args = append(args, m.opts.holderArgs...)
 	// The holder runs in the holders directory, not its own, so it can

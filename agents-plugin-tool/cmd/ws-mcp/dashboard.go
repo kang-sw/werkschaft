@@ -99,12 +99,16 @@ func dashboardCommand(args []string) {
 	// directory; the interpreter for a new one is the launcher's own. The
 	// runner takes the manager first: it rejoins its lead sessions'
 	// processes before the manager's first scan replays their records.
+	// The hosted exec jobs bind after StartDaemon (their store opens under
+	// the lock); their holders' records and exits go through execLink.
+	execLink := &hostedExecLink{}
 	holders := wsholder.New(wsholder.Options{
 		Dir:    filepath.Join(dir, wsholder.DirName),
 		Python: os.Getenv(wsholder.PythonEnv),
 		Log:    logw,
-		OnExit: persistHolderExit(dir),
+		OnExit: execLink.onExit(persistHolderExit(dir)),
 	})
+	holders.AddSink(execLink)
 	// Mail sender labels read the runner and the daemon once each exists.
 	labels := &mailLabels{}
 	agents := newAgentRunner(dir, logw, trackerChanged.call, agyActivity.call, holders, boards, labels.label)
@@ -209,6 +213,9 @@ func dashboardCommand(args []string) {
 		}
 	})
 	defer execjob.SetActiveObserver(nil)
+	// Under the lock and with the runner started: a completion notice for
+	// a conversation the runner does not know yet would be dropped.
+	host.exec.Store(openHostedExec(dir, holders, agents, execLink, logw))
 	// The hooks read the stores on every change signal the page gets from
 	// the watch and the poll; the watch also sees the daemon's own writes.
 	nudgeHooks, stopHooks := startTrackerHooks(tracker, trackerErr, dir, daemon.Endpoint().Port, logw)
@@ -245,6 +252,12 @@ func dashboardCommand(args []string) {
 	}
 	cancel()
 	host.wait()
+	// The jobs keep running under their holders for the next daemon.
+	if hosted := host.exec.Load(); hosted != nil {
+		if err := hosted.Close(); err != nil {
+			fmt.Fprintf(logw, "dashboard: hosted exec close: %v\n", err)
+		}
+	}
 	stopWatch()
 	stopPoll()
 	stopHooks()

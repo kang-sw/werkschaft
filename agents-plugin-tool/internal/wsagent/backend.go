@@ -248,6 +248,16 @@ type processControls struct {
 	commands commandRunner
 	turns    turnProber
 	recovery workerRecoverer
+	// replacesTurn marks a steer that ends the running turn and starts
+	// another (agy's replacement prompt) rather than joining it: a tool
+	// call in flight loses its turn to it.
+	replacesTurn bool
+}
+
+// turnReplacingSteerer is the optional-interface form of
+// processControls.replacesTurn, for a Process with no control provider.
+type turnReplacingSteerer interface {
+	SteerReplacesTurn() bool
 }
 
 // processControlProvider narrows a method set when support depends on how
@@ -271,6 +281,9 @@ func controlsFor(proc Process) processControls {
 	c.commands, _ = proc.(commandRunner)
 	c.turns, _ = proc.(turnProber)
 	c.recovery, _ = proc.(workerRecoverer)
+	if r, ok := proc.(turnReplacingSteerer); ok {
+		c.replacesTurn = r.SteerReplacesTurn()
+	}
 	return c
 }
 

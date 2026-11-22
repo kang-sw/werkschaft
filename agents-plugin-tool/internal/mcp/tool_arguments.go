@@ -105,6 +105,18 @@ func (s *Server) precheckToolArguments(name string, arguments map[string]any) (s
 		}
 	}
 
+	// exec.shell declares two argument families in one schema; the family
+	// a call uses supplies its required property, and a call mixing them is
+	// refused here, before any handler runs.
+	if name == "exec.shell" {
+		family, refusal := execShellFamily(arguments)
+		if refusal != "" {
+			s.debugEvent("tools.call.precheck_refused", map[string]any{"tool": name, "mixed": refusal})
+			return toolArgumentsRefusalWithReason(name, schema, refusal, s.runtimeNamespace()), false
+		}
+		required = append(slices.Clone(required), family.required)
+	}
+
 	var missing []string
 	for _, property := range required {
 		if _, present := arguments[property]; !present {
@@ -186,6 +198,54 @@ func toolArgumentsRefusal(name string, schema map[string]any, missing, unknown [
 	if len(unknown) > 0 {
 		fmt.Fprintf(&b, "unknown arguments: %s\n", strings.Join(unknown, ", "))
 	}
+	b.WriteString("Retry with arguments matching this inputSchema:\n")
+	raw, err := json.Marshal(namespaceValue(schema, namespace))
+	if err != nil {
+		fmt.Fprintf(&b, "(inputSchema unavailable: %v)\n", err)
+		return b.String()
+	}
+	b.Write(raw)
+	b.WriteString("\n")
+	return b.String()
+}
+
+// execShellArgFamily is one exec.shell argument family: the property a call
+// of it must carry, and whether it is the legacy form.
+type execShellArgFamily struct {
+	legacy   bool
+	required string
+}
+
+// execShellFamily picks the exec.shell family a call's arguments name. A
+// call carrying a property only the legacy form declares and one only the
+// new form declares is refused. A call naming neither family's own property
+// is the new form, so its refusal names cmd as the missing input.
+func execShellFamily(arguments map[string]any) (execShellArgFamily, string) {
+	var legacy, current []string
+	for _, name := range execShellLegacyOnly {
+		if _, ok := arguments[name]; ok {
+			legacy = append(legacy, name)
+		}
+	}
+	for _, name := range execShellNewOnly {
+		if _, ok := arguments[name]; ok {
+			current = append(current, name)
+		}
+	}
+	if len(legacy) > 0 && len(current) > 0 {
+		return execShellArgFamily{}, fmt.Sprintf("mixed argument forms: %s belong to the new form (cmd, cwd, async) and %s to the legacy form (command, working_dir, shell); use one form", strings.Join(current, ", "), strings.Join(legacy, ", "))
+	}
+	if len(legacy) > 0 {
+		return execShellArgFamily{legacy: true, required: "command"}, ""
+	}
+	return execShellArgFamily{required: "cmd"}, ""
+}
+
+// toolArgumentsRefusalWithReason is toolArgumentsRefusal for a refusal the
+// missing/unknown lists cannot express.
+func toolArgumentsRefusalWithReason(name string, schema map[string]any, reason, namespace string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: invalid arguments; the tool did not run.\n%s\n", name, reason)
 	b.WriteString("Retry with arguments matching this inputSchema:\n")
 	raw, err := json.Marshal(namespaceValue(schema, namespace))
 	if err != nil {

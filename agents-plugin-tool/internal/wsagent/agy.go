@@ -273,7 +273,8 @@ type agyProcess struct {
 }
 
 func (p *agyProcess) processControls() processControls {
-	controls := processControls{Process: p, approval: p, mode: p, steer: p}
+	// A steer is a new session/prompt that ends the running one (Steer).
+	controls := processControls{Process: p, approval: p, mode: p, steer: p, replacesTurn: true}
 	if p.worker {
 		controls.reports = p
 	}

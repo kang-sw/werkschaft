@@ -192,6 +192,7 @@ func (r *Runner) loadClosed(rec Record) {
 func (r *Runner) closeAtStart(rec Record) bool {
 	now := r.opts.Now()
 	rec.ClosedAt = now.UTC().Format(time.RFC3339)
+	rec.OpenGen++ // the completion fence, as closeIf
 	// An orphan's cut-off turn ends here, as close ends a running one.
 	finishActiveTurn(&rec, now.UnixMilli())
 	rec.TurnOpen = false
