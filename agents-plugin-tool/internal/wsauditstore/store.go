@@ -1,0 +1,1591 @@
+// Package wsauditstore persists audit envelopes in one append-only segment
+// ring per session (a Type 1 store, ai-docs/manuals/performance.md): every
+// body redacted before it touches disk, each body capped to head and tail,
+// metadata bounded, replayed source records deduplicated, and the rings
+// bounded by a per-session byte cap, a store-wide least-recently-used byte
+// cap, and a retention period after each session was last seen.
+//
+// One writer goroutine owns every ring and file mutation; producers hand
+// envelopes over without waiting on disk, and a full queue or a failed write
+// drops the event with a log line rather than stalling capture. Reads are
+// served from the in-memory index, which is recovered from a ring's
+// segments once, on its first use; the query API's View of an unloaded ring
+// reads its segments on the caller's goroutine instead, so a query never
+// occupies the writer. Capture's recovery questions
+// (wsaudit.SourcedSink Recover and Retained) are answered from a per-ring
+// identity ledger under its own lock, never behind a disk write.
+package wsauditstore
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"math"
+	"path/filepath"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unicode/utf8"
+
+	"github.com/kang-sw/devenv/internal/wsaudit"
+)
+
+var (
+	// ErrQueueFull drops an envelope the writer has no room for.
+	ErrQueueFull = errors.New("wsauditstore: write queue full; audit event dropped")
+	// ErrClosed refuses calls after Close.
+	ErrClosed = errors.New("wsauditstore: store closed")
+)
+
+// Options configures Open.
+type Options struct {
+	// Root is the audit store directory; each session's ring is a
+	// subdirectory keyed by session ID.
+	Root string
+	// Limits are the byte caps and retention; the zero value uses
+	// DefaultLimits. Invalid limits are clamped with a logged warning.
+	Limits Limits
+	// Now is the clock; nil uses time.Now.
+	Now func() time.Time
+	// Log receives one line per dropped event, refused write, and eviction;
+	// nil discards.
+	Log io.Writer
+	// QueueDepth bounds the envelopes waiting for the writer (default 4096).
+	QueueDepth int
+	// LastSeen reports a session's registry last-seen time. Every sweep and
+	// Close ask it for each ring and record a newer answer, so a quiet
+	// session that still heartbeats keeps its ring, even after the registry
+	// pruned it while the daemon was not watching. It receives the
+	// normalized session ID, which is the raw ID for every ID NormalizeID
+	// keeps verbatim (registry reply IDs are). Nil skips it.
+	LastSeen func(session string) (time.Time, bool)
+	// SweepInterval is how often retention runs after the first sweep
+	// (default one hour; negative disables the periodic sweep).
+	SweepInterval time.Duration
+	// DeferFirstSweep skips the retention sweep at Open, for an owner whose
+	// LastSeen cannot answer yet (a registry not loaded); it calls
+	// RequestSweep once it can.
+	DeferFirstSweep bool
+}
+
+type jobKind int
+
+const (
+	jobAppend jobKind = iota
+	jobFinalize
+	jobLoss
+	jobTouch
+	jobDelete
+	jobLoad
+	jobSweep
+	jobBarrier
+)
+
+type job struct {
+	kind    jobKind
+	session string
+	ev      wsaudit.Envelope
+	id      *wsaudit.SourceID
+	// rec, on a sourced append, is the position of the source record that
+	// yielded the event; admission judges coverage by it.
+	rec    wsaudit.SourceID
+	reason string
+	source string
+	seq    uint64
+	at     time.Time
+	reply  chan jobResult
+	// fn, on a barrier, runs on the writer goroutine (tests reach writer
+	// state through it).
+	fn func()
+}
+
+type jobResult struct {
+	err error
+}
+
+// sessionInfo is one ring directory the store knows. ring is nil until the
+// ring is first used; mu guards ring reads against the writer.
+type sessionInfo struct {
+	dir      string
+	session  string
+	bytes    int64
+	lastSeen time.Time
+	recorded time.Time
+
+	mu   sync.Mutex
+	ring *ring
+	// view is ring for readers, who never take mu (the writer holds it across
+	// disk I/O); set and cleared with ring.
+	view atomic.Pointer[ring]
+
+	// led is ring's identity ledger once the ring is loaded; loading is set
+	// while a load is queued, so readers queue it at most once.
+	led     atomic.Pointer[ledger]
+	loading atomic.Bool
+	// newer is set once the ring is known to hold a newer format; age-out and
+	// capacity eviction leave it alone.
+	newer bool
+	// tombstone is set (under Store.mu) while the ring holds only the
+	// recovery state store-wide eviction left of it, and cleared by its next
+	// write: makeRoom never evicts it into another tombstone and removes it
+	// only as the last resort.
+	tombstone bool
+	// evictFailed is set (under Store.mu) once store-wide eviction of this
+	// ring failed (a segment it could not read or delete): makeRoom passes it
+	// over on later writes, which would otherwise retry the same failing
+	// reads and deletions on every append, and the next sweep clears it to
+	// retry once.
+	evictFailed bool
+
+	// gen and busy publish the writer's changes to the ring's files while a
+	// cold reader could be reading them — loading, eviction, trimming and
+	// removal: busy counts the changes under way, and gen advances as each
+	// starts and ends. A cold View keeps what it read only when busy was zero
+	// and gen unchanged across the read, so it never returns segments read
+	// across a change, and the writer never waits on it.
+	gen  atomic.Uint64
+	busy atomic.Int32
+}
+
+// changing marks a writer change to info's files until the returned func
+// runs. Changes may nest.
+func (info *sessionInfo) changing() func() {
+	info.busy.Add(1)
+	info.gen.Add(1)
+	return func() {
+		info.gen.Add(1)
+		info.busy.Add(-1)
+	}
+}
+
+// Store is the audit segment ring store. It implements wsaudit.SourcedSink.
+type Store struct {
+	opts   Options
+	limits Limits
+
+	// The writer's queue: one FIFO for every job, so a job never overtakes
+	// one queued before it. Appends count against QueueDepth and are dropped
+	// past it; control jobs (boundaries, losses, barriers) are never dropped.
+	// closed is set under qmu, so every job accepted before Close is drained.
+	qmu     sync.Mutex
+	queue   []job
+	appends int
+	closed  bool
+	wake    chan struct{}
+	done    chan struct{}
+
+	mu       sync.Mutex
+	sessions map[string]*sessionInfo // by ring directory name
+	total    int64
+
+	idx   *indexLog                 // writer goroutine only
+	dirty map[*sessionInfo]struct{} // rings with pending control lines; writer only
+
+	dropped    atomic.Uint64
+	queueDrops atomic.Uint64 // queue-full drops not yet logged
+
+	// cold caches the views View read from unloaded rings, and flights the
+	// reads under way, by ring directory name.
+	coldMu  sync.Mutex
+	cold    map[string]coldView
+	flights map[string]*coldFlight
+}
+
+// coldView is a cached View of an unloaded ring, valid while the ring's
+// entry and generation are the ones it was read at.
+type coldView struct {
+	info *sessionInfo
+	gen  uint64
+	view View
+}
+
+// coldFlight is one cold read of a ring generation, shared by every reader
+// that misses the cache meanwhile. view, ok and err are set before done
+// closes.
+type coldFlight struct {
+	info *sessionInfo
+	gen  uint64
+	done chan struct{}
+	view View
+	ok   bool
+	err  error
+}
+
+// coldViews bounds the cached cold views.
+const coldViews = 4
+
+var _ wsaudit.SourcedSink = (*Store)(nil)
+
+// Open opens the store at opts.Root: one listing of the root and of each ring
+// directory for sizes, the newest index file for recorded last-seen times,
+// then a retention sweep (unless deferred). No segment is read until its ring
+// is used.
+func Open(opts Options) (*Store, error) {
+	if opts.Root == "" {
+		return nil, errors.New("wsauditstore: root is required")
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	if opts.Log == nil {
+		opts.Log = io.Discard
+	}
+	if opts.QueueDepth <= 0 {
+		opts.QueueDepth = 4096
+	}
+	if opts.SweepInterval == 0 {
+		opts.SweepInterval = time.Hour
+	}
+	limits := opts.Limits
+	if limits == (Limits{}) {
+		limits = DefaultLimits()
+	}
+	limits, warnings := limits.Clamp()
+	for _, w := range warnings {
+		fmt.Fprintf(opts.Log, "audit: %s\n", w)
+	}
+	if err := mkdirPrivate(opts.Root); err != nil {
+		return nil, err
+	}
+	idx, recorded, err := openIndex(opts.Root)
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{
+		opts: opts, limits: limits,
+		wake: make(chan struct{}, 1), done: make(chan struct{}),
+		sessions: map[string]*sessionInfo{}, idx: idx, dirty: map[*sessionInfo]struct{}{},
+	}
+	entries, err := readDir(opts.Root)
+	if err != nil {
+		idx.close()
+		return nil, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		segs, newest, err := listSegments(filepath.Join(opts.Root, e.Name()))
+		if err != nil {
+			continue
+		}
+		info := &sessionInfo{dir: e.Name(), lastSeen: newest}
+		if literalDirPattern.MatchString(e.Name()) {
+			info.session = e.Name()
+		}
+		for _, seg := range segs {
+			info.bytes += seg.size
+		}
+		if rec, ok := recorded[e.Name()]; ok {
+			if rec.Session != "" {
+				info.session = rec.Session
+			}
+			if t, err := time.Parse(time.RFC3339Nano, rec.Seen); err == nil {
+				info.recorded = t
+				if t.After(info.lastSeen) {
+					info.lastSeen = t
+				}
+			}
+		}
+		s.sessions[info.dir] = info
+		s.total += info.bytes
+	}
+	if !opts.DeferFirstSweep {
+		s.sweep()
+	} else {
+		s.enforceCaps() // the caps need no registry
+	}
+	go s.run()
+	return s, nil
+}
+
+// Limits returns the effective (clamped) limits.
+func (s *Store) Limits() Limits { return s.limits }
+
+// Dropped counts envelopes dropped because the queue was full, a write
+// failed, or the envelope was invalid.
+func (s *Store) Dropped() uint64 { return s.dropped.Load() }
+
+func (s *Store) logf(format string, args ...any) {
+	fmt.Fprintf(s.opts.Log, "audit: "+format+"\n", args...)
+}
+
+// Append hands ev to the writer without waiting on disk. It returns
+// ErrQueueFull when the writer is behind; the event is then dropped and the
+// caller logs and moves on.
+func (s *Store) Append(_ context.Context, ev wsaudit.Envelope) error {
+	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev}, true)
+}
+
+// AppendSourced hands ev to the writer under source identity id, like Append.
+// rec is the position of the source record that yielded ev (id itself for an
+// event keyed by its own record). An identity the store already knows it
+// retains returns wsaudit.ErrDuplicateSource; the writer also skips a
+// duplicate it only learns of later, and records as loss an identity whose
+// rec its source's finalized boundary covers (never appending it late).
+func (s *Store) AppendSourced(_ context.Context, id, rec wsaudit.SourceID, ev wsaudit.Envelope) error {
+	id = normalizeSourceID(id)
+	rec = normalizeSourceID(rec)
+	if l := s.ledgerOf(ev.Session); l != nil && l.isRetained(id) {
+		return wsaudit.ErrDuplicateSource
+	}
+	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev, id: &id, rec: rec}, true)
+}
+
+// enqueue appends j to the writer's queue in call order. A droppable job
+// (an append) is refused with ErrQueueFull once QueueDepth appends wait.
+func (s *Store) enqueue(j job, droppable bool) error {
+	s.qmu.Lock()
+	if s.closed {
+		s.qmu.Unlock()
+		return ErrClosed
+	}
+	if droppable && s.appends >= s.opts.QueueDepth {
+		s.qmu.Unlock()
+		// No log line here: the log may be a file, and the producer must not
+		// wait on it. The writer reports the count once it catches up.
+		s.dropped.Add(1)
+		s.queueDrops.Add(1)
+		return ErrQueueFull
+	}
+	s.queue = append(s.queue, j)
+	if droppable {
+		s.appends++
+	}
+	s.qmu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// take removes every queued job, oldest first.
+func (s *Store) take() []job {
+	s.qmu.Lock()
+	defer s.qmu.Unlock()
+	batch := s.queue
+	s.queue = nil
+	s.appends = 0
+	return batch
+}
+
+func (s *Store) isClosed() bool {
+	s.qmu.Lock()
+	defer s.qmu.Unlock()
+	return s.closed && len(s.queue) == 0
+}
+
+// Recover reports what is retained for session and source, from memory. For
+// a ring not yet loaded it queues the load and answers zero: the writer
+// applies the same retained and boundary rule to every AppendSourced, so an
+// early answer costs at most a renumbered seq, never a duplicate or a late
+// append.
+func (s *Store) Recover(session, source string) wsaudit.Recovery {
+	l := s.ledgerOf(session)
+	if l == nil {
+		return wsaudit.Recovery{}
+	}
+	return l.recovery(wsaudit.NormalizeID(source))
+}
+
+// Retained reports whether the identity id is retained for session, from
+// memory (false for a ring not yet loaded, whose load it queues).
+func (s *Store) Retained(session string, id wsaudit.SourceID) bool {
+	l := s.ledgerOf(session)
+	return l != nil && l.isRetained(normalizeSourceID(id))
+}
+
+// Preload queues loading a session's ring, when one exists and is not loaded,
+// so capture's recovery questions find it in memory. It never blocks.
+func (s *Store) Preload(session string) {
+	_ = s.ledgerOf(session)
+}
+
+// ledgerOf returns a known session's identity ledger, queuing its ring's
+// load when it is not in memory yet (nil then, and for an unknown session).
+func (s *Store) ledgerOf(session string) *ledger {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	s.mu.Lock()
+	info := s.sessions[dir]
+	s.mu.Unlock()
+	if info == nil {
+		return nil
+	}
+	if l := info.led.Load(); l != nil {
+		return l
+	}
+	if info.loading.CompareAndSwap(false, true) {
+		if err := s.control(job{kind: jobLoad, session: session}); err != nil {
+			info.loading.Store(false)
+		}
+	}
+	return nil
+}
+
+// Finalize advances a source's finalized boundary (wsaudit.Recovery.Boundary).
+// It runs in call order with every other job and is never dropped. The
+// boundary is persisted ahead of the ring's next record,
+// or when the writer next idles.
+func (s *Store) Finalize(_ context.Context, session, source string, boundary uint64) error {
+	return s.control(job{kind: jobFinalize, session: session, source: source, seq: boundary})
+}
+
+// RecordLoss records that the source record id was finalized without being
+// retained. Like Finalize it is never dropped.
+func (s *Store) RecordLoss(_ context.Context, session string, id wsaudit.SourceID, reason string) error {
+	return s.control(job{kind: jobLoss, session: session, id: &id, reason: reason})
+}
+
+// Touch records a lifecycle last-seen time for a session's ring (session
+// registration, end, the registry's last copy before it drops a session, or
+// daemon start from surviving registrations). An unchanged or older time,
+// or a session without a ring, writes nothing.
+func (s *Store) Touch(session string, at time.Time) {
+	if at.IsZero() {
+		return
+	}
+	_ = s.control(job{kind: jobTouch, session: session, at: at})
+}
+
+// DeleteSession removes a session's whole audit ring, for an explicit session
+// deletion (Decision 8). It returns once the ring is gone.
+func (s *Store) DeleteSession(ctx context.Context, session string) error {
+	_, err := s.call(ctx, job{kind: jobDelete, session: session})
+	return err
+}
+
+// Flush waits until every job queued before it has run.
+func (s *Store) Flush(ctx context.Context) error {
+	_, err := s.call(ctx, job{kind: jobBarrier})
+	return err
+}
+
+// RequestSweep queues a retention sweep without waiting for it.
+func (s *Store) RequestSweep() {
+	_ = s.control(job{kind: jobSweep})
+}
+
+// Sweep runs retention now and waits for it.
+func (s *Store) Sweep(ctx context.Context) error {
+	_, err := s.call(ctx, job{kind: jobSweep})
+	return err
+}
+
+// control queues a job that must not be dropped.
+func (s *Store) control(j job) error {
+	return s.enqueue(j, false)
+}
+
+func (s *Store) call(ctx context.Context, j job) (jobResult, error) {
+	j.reply = make(chan jobResult, 1)
+	if err := s.control(j); err != nil {
+		return jobResult{}, err
+	}
+	select {
+	case res := <-j.reply:
+		return res, res.err
+	case <-ctx.Done():
+		return jobResult{}, ctx.Err()
+	case <-s.done:
+		return jobResult{}, ErrClosed
+	}
+}
+
+// Close drains the queue, writes any pending control lines, and closes every
+// held handle.
+func (s *Store) Close() error {
+	s.qmu.Lock()
+	s.closed = true
+	s.qmu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+	<-s.done
+	return nil
+}
+
+func (s *Store) run() {
+	defer close(s.done)
+	var tick <-chan time.Time
+	if s.opts.SweepInterval > 0 {
+		t := time.NewTicker(s.opts.SweepInterval)
+		defer t.Stop()
+		tick = t.C
+	}
+	for {
+		select {
+		case <-s.wake:
+		case <-tick:
+			s.sweep()
+		}
+		for {
+			batch := s.take()
+			if len(batch) == 0 {
+				break
+			}
+			for _, j := range batch {
+				s.handle(j)
+			}
+			// A steady stream of work must not starve retention: a sweep
+			// that came due runs between batches.
+			select {
+			case <-tick:
+				s.sweep()
+			default:
+			}
+		}
+		if n := s.queueDrops.Swap(0); n > 0 {
+			s.logf("dropped %d audit events: write queue full", n)
+		}
+		s.flushPending()
+		if s.isClosed() {
+			s.shutdown()
+			return
+		}
+	}
+}
+
+// flushPending writes the queued control lines (losses, boundaries) of every
+// ring that has them, once the writer idles, so a boundary or loss does not
+// wait for a record that may never come.
+func (s *Store) flushPending() {
+	for info := range s.dirty {
+		delete(s.dirty, info)
+		info.mu.Lock()
+		if r := info.ring; r != nil && r.readOnly == nil {
+			if payload := r.pendingLines(); len(payload) > 0 {
+				if s.writeLocked(info, payload) == nil {
+					r.clearPending()
+				}
+			}
+		}
+		info.mu.Unlock()
+	}
+}
+
+func (s *Store) shutdown() {
+	s.refreshLastSeen()
+	s.mu.Lock()
+	infos := make([]*sessionInfo, 0, len(s.sessions))
+	for _, info := range s.sessions {
+		infos = append(infos, info)
+	}
+	s.mu.Unlock()
+	for _, info := range infos {
+		info.mu.Lock()
+		if r := info.ring; r != nil {
+			if payload := r.pendingLines(); len(payload) > 0 && r.readOnly == nil {
+				if s.writeLocked(info, payload) == nil {
+					r.clearPending()
+				}
+			}
+			r.close()
+		}
+		info.mu.Unlock()
+	}
+	s.idx.close()
+}
+
+func (s *Store) handle(j job) {
+	var res jobResult
+	switch j.kind {
+	case jobAppend:
+		s.appendEvent(j.ev, j.id, j.rec)
+	case jobFinalize:
+		s.finalize(j.session, j.source, j.seq)
+	case jobLoss:
+		s.recordLoss(j.session, *j.id, j.reason)
+	case jobTouch:
+		s.touch(j.session, j.at)
+	case jobDelete:
+		res.err = s.deleteSession(j.session)
+	case jobLoad:
+		var info *sessionInfo
+		info, res.err = s.info(wsaudit.NormalizeID(j.session), false)
+		if info != nil {
+			info.loading.Store(false)
+		}
+	case jobSweep:
+		s.sweep()
+	case jobBarrier:
+		if j.fn != nil {
+			j.fn()
+		}
+	}
+	if j.reply != nil {
+		j.reply <- res
+	}
+}
+
+// info returns the session's entry with its ring recovered, creating the
+// entry when create is set. It returns nil without error for an unknown
+// session when create is unset.
+func (s *Store) info(session string, create bool) (*sessionInfo, error) {
+	dir := sessionDirName(session)
+	s.mu.Lock()
+	info := s.sessions[dir]
+	if info == nil {
+		if !create {
+			s.mu.Unlock()
+			return nil, nil
+		}
+		info = &sessionInfo{dir: dir, session: session}
+		s.sessions[dir] = info
+	}
+	s.mu.Unlock()
+	if info.ring != nil {
+		return info, nil
+	}
+	defer info.changing()() // recovery may truncate a torn tail
+	r := newRing(session, filepath.Join(s.opts.Root, dir))
+	if err := r.recover(); err != nil {
+		return nil, err
+	}
+	if r.readOnly != nil {
+		s.logf("session %s: %v; writes refused", session, r.readOnly)
+	}
+	info.mu.Lock()
+	info.ring = r
+	info.view.Store(r)
+	info.session = session
+	info.mu.Unlock()
+	info.led.Store(r.led)
+	s.account(info)
+	return info, nil
+}
+
+// account syncs the store total with the ring's byte count.
+func (s *Store) account(info *sessionInfo) {
+	if info.ring == nil {
+		return
+	}
+	s.mu.Lock()
+	s.total += info.ring.bytes - info.bytes
+	info.bytes = info.ring.bytes
+	s.mu.Unlock()
+}
+
+func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID, rec wsaudit.SourceID) {
+	ev, err := prepare(raw, s.limits)
+	if err != nil {
+		s.dropped.Add(1)
+		s.logf("drop %s event of session %s: %v", raw.Kind, raw.Session, err)
+		if raw.Session == "" || id == nil {
+			return
+		}
+		// A dropped record with an identity is finalized as lost.
+		if info, err := s.info(wsaudit.NormalizeID(raw.Session), true); err == nil {
+			info.mu.Lock()
+			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
+			info.mu.Unlock()
+		}
+		return
+	}
+	info, err := s.info(ev.Session, true)
+	if err != nil {
+		s.dropped.Add(1)
+		s.logf("drop %s event of session %s: recover ring: %v", ev.Kind, ev.Session, err)
+		return
+	}
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	r := info.ring
+	if r.readOnly != nil {
+		s.dropped.Add(1)
+		return
+	}
+	switch r.admit(id, rec) {
+	case admitDuplicate:
+		return
+	case admitLoss:
+		s.loseLocked(info, *id, wsaudit.LossAppendFailed)
+		return
+	}
+	if ev.Seq <= r.led.maxSeq {
+		ev.Seq = r.led.maxSeq + 1
+	}
+	evLine, err := encodeLine(line{T: lineEvent, Event: &ev, ID: id})
+	if err == nil && int64(len(evLine)) > s.limits.MaxRecordBytes() {
+		err = fmt.Errorf("record of %d bytes exceeds the %d-byte record bound", len(evLine), s.limits.MaxRecordBytes())
+	}
+	if err != nil {
+		s.dropped.Add(1)
+		s.logf("drop %s event of session %s: %v", ev.Kind, ev.Session, err)
+		if id != nil {
+			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
+		}
+		return
+	}
+	payload := append(r.pendingLines(), evLine...)
+	if werr := s.writeLocked(info, payload); werr != nil {
+		s.dropped.Add(1)
+		s.logf("drop %s event of session %s: write: %v", ev.Kind, ev.Session, werr)
+		if id != nil {
+			s.loseLocked(info, *id, wsaudit.LossAppendFailed)
+		}
+		return
+	}
+	r.clearPending()
+	delete(s.dirty, info)
+	r.segs[len(r.segs)-1].events++
+	r.index(ev, id)
+	info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
+}
+
+// writeLocked writes payload to info's ring, first making room under the
+// store total, and syncs the byte accounting. info.mu is held.
+func (s *Store) writeLocked(info *sessionInfo, payload []byte) error {
+	r := info.ring
+	err := r.writeBounded(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes(), func(n int64) {
+		s.account(info) // the ring's own trim first
+		s.makeRoom(info, n)
+	})
+	s.noteEvictErr(info)
+	s.mu.Lock()
+	s.total += r.bytes - info.bytes
+	info.bytes = r.bytes
+	info.tombstone = false
+	info.evictFailed = false // loaded now: a cold read failure no longer applies
+	s.mu.Unlock()
+	return err
+}
+
+// noteEvictErr logs a segment deletion the ring could not make; the segment
+// stays accounted, so the caps are retried on later writes. info.mu is held.
+func (s *Store) noteEvictErr(info *sessionInfo) {
+	if r := info.ring; r != nil && r.evictErr != nil {
+		s.logf("session %s: %v; the ring stays over its cap until a later write retries", info.dir, r.evictErr)
+		r.evictErr = nil
+	}
+}
+
+// loseLocked records a source record finalized without being retained; the
+// loss line is written ahead of the ring's next record, or when the writer
+// idles. info.mu is held.
+func (s *Store) loseLocked(info *sessionInfo, id wsaudit.SourceID, reason string) {
+	r := info.ring
+	if !r.markLost(id) {
+		return
+	}
+	s.noteLedgerTrims(info)
+	reason = truncateUTF8(reason, maxReasonBytes)
+	r.led.mu.Lock()
+	n := r.led.loss
+	r.led.mu.Unlock()
+	if ln, err := encodeLine(line{T: lineLoss, ID: &id, Reason: reason, N: n}); err == nil {
+		r.pendingLoss = append(r.pendingLoss, ln)
+		s.dirty[info] = struct{}{}
+	}
+}
+
+// noteLedgerTrims logs what bounding the ring's header state dropped since
+// the store last looked. info.mu is held.
+func (s *Store) noteLedgerTrims(info *sessionInfo) {
+	l := info.ring.led
+	l.mu.Lock()
+	forgot, dropped := l.forgot, l.dropped
+	l.forgot, l.dropped = 0, 0
+	l.mu.Unlock()
+	if forgot > 0 {
+		s.logf("session %s: lost-identity list over %d bytes; %d lost identities forgotten (a replay of one after its loss line is gone may count again)", info.dir, lostBudget, forgot)
+	}
+	if dropped > 0 {
+		s.logf("session %s: source state over %d bytes; the %d least recently finalized sources dropped (their replays are no longer refused as finalized)", info.dir, sourceBudget, dropped)
+	}
+}
+
+// truncateUTF8 cuts s to at most n bytes on a rune boundary.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+func (s *Store) recordLoss(session string, id wsaudit.SourceID, reason string) {
+	session = wsaudit.NormalizeID(session)
+	info, err := s.info(session, true)
+	if err != nil {
+		s.logf("record loss in session %s: %v", session, err)
+		return
+	}
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if info.ring.readOnly == nil {
+		s.loseLocked(info, normalizeSourceID(id), reason)
+		info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
+	}
+}
+
+func (s *Store) finalize(session, source string, boundary uint64) {
+	session = wsaudit.NormalizeID(session)
+	source = wsaudit.NormalizeID(source)
+	info, err := s.info(session, true)
+	if err != nil {
+		s.logf("finalize session %s: %v", session, err)
+		return
+	}
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	r := info.ring
+	if r.readOnly != nil || !r.finalize(source, boundary) {
+		return
+	}
+	s.noteLedgerTrims(info)
+	r.pendingFin[source] = boundary
+	s.dirty[info] = struct{}{}
+	// A ring holding only control lines is still in use.
+	info.lastSeen = maxTime(info.lastSeen, s.opts.Now())
+}
+
+// makeRoom makes need more bytes fit the store total, in this order: whole
+// least-recently-used rings other than the active one lose their data
+// (keeping their recovery state as a tombstone); then the active ring drops
+// its own oldest segments, keeping its newest; only then do tombstones go,
+// least recently used first, recovery state and all. A tombstone is never
+// evicted into another tombstone. A ring whose eviction fails is passed
+// over by later calls until the next sweep (sessionInfo.evictFailed).
+// active.mu is held.
+func (s *Store) makeRoom(active *sessionInfo, need int64) {
+	trimmed := false
+	for {
+		s.mu.Lock()
+		if s.total+need <= s.limits.TotalBytes {
+			s.mu.Unlock()
+			return
+		}
+		pick := func(tombstones bool) *sessionInfo {
+			var victim *sessionInfo
+			for _, info := range s.sessions {
+				if info == active || info.bytes == 0 || info.evictFailed || info.newer || info.tombstone != tombstones {
+					continue
+				}
+				if victim == nil || info.lastSeen.Before(victim.lastSeen) ||
+					(info.lastSeen.Equal(victim.lastSeen) && info.dir < victim.dir) {
+					victim = info
+				}
+			}
+			return victim
+		}
+		victim := pick(false)
+		forget := false
+		if victim == nil && trimmed {
+			victim, forget = pick(true), true
+		}
+		room := s.limits.TotalBytes - (s.total - active.bytes) - need
+		s.mu.Unlock()
+		if victim == nil {
+			if trimmed {
+				return
+			}
+			trimmed = true
+			if !s.foreignLocked(active) {
+				s.trimRingLocked(active, max(room, 0))
+			}
+			continue
+		}
+		if s.foreign(victim) {
+			s.logf("store total cap: keep audit ring of session %s: it holds a newer format", victim.dir)
+			s.mu.Lock()
+			victim.evictFailed = true
+			s.mu.Unlock()
+			continue
+		}
+		var err error
+		if forget {
+			s.logf("store total cap: forget the recovery state of session %s (%d bytes, last seen %s)", victim.dir, victim.bytes, formatTime(victim.lastSeen))
+			err = s.removeRing(victim, true)
+		} else {
+			s.logf("store total cap: evict audit ring of session %s (%d bytes, last seen %s)", victim.dir, victim.bytes, formatTime(victim.lastSeen))
+			err = s.removeRing(victim, false)
+		}
+		if err != nil {
+			s.logf("store total cap: %v; not retried before the next sweep", err)
+			s.mu.Lock()
+			victim.evictFailed = true
+			s.mu.Unlock()
+		}
+	}
+}
+
+// trimRingLocked drops a ring's oldest whole segments until it holds at most
+// capBytes, keeping its newest. What remains must still seed the recovery
+// state: it opens with a segment whose complete header snapshots everything
+// before it. An empty or torn newest segment (a crash right after rotation)
+// carries none, so the newest segment with a complete header is kept with
+// everything after it, even over the cap, and nothing is deleted when no
+// such segment can be read. A loaded ring whose newest segment lacks a header
+// writes one first. info.mu is held.
+func (s *Store) trimRingLocked(info *sessionInfo, capBytes int64) {
+	if r := info.ring; r != nil {
+		if r.forceRotate && r.readOnly == nil && r.bytes > capBytes && len(r.segs) > 1 && r.hasState() {
+			if _, err := r.write(nil, s.limits.SegmentBytes(), math.MaxInt64, nil); err != nil {
+				s.logf("session %s: persist its recovery state before trimming: %v; nothing trimmed", info.dir, err)
+				s.account(info)
+				return
+			}
+			r.clearPending()
+			delete(s.dirty, info)
+		}
+		r.trimTo(capBytes)
+		s.noteEvictErr(info)
+		s.account(info)
+		return
+	}
+	defer info.changing()()
+	dir := filepath.Join(s.opts.Root, info.dir)
+	segs, _, err := listSegments(dir)
+	if err != nil {
+		return
+	}
+	var size int64
+	for _, seg := range segs {
+		size += seg.size
+	}
+	// The first segment the cap allows to remain, then the nearest one at or
+	// after it — else before it — that opens with a complete header.
+	fit, left := 0, size
+	for fit < len(segs)-1 && left > capBytes {
+		left -= segs[fit].size
+		fit++
+	}
+	keep := -1
+	if fit > 0 {
+		valid := func(i int) bool {
+			head, err := readHead(filepath.Join(dir, segmentName(segs[i].seq)), int(HeaderBound)+1)
+			return err == nil && completeHeader(head)
+		}
+		for i := fit; i < len(segs) && keep < 0; i++ {
+			if valid(i) {
+				keep = i
+			}
+		}
+		for i := fit - 1; i >= 0 && keep < 0; i-- {
+			if valid(i) {
+				keep = i
+			}
+		}
+		switch {
+		case keep < 0:
+			s.logf("session %s: no segment opens with a readable complete header; nothing trimmed", info.dir)
+		case keep < fit:
+			s.logf("session %s: the newest segment with a complete header is %d; kept over the cap", info.dir, segs[keep].seq)
+		}
+	}
+	for i := 0; i < keep; i++ {
+		if err := removeFile(filepath.Join(dir, segmentName(segs[0].seq))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			s.logf("session %s: delete segment %d: %v; the ring stays over its cap until a later sweep retries", info.dir, segs[0].seq, err)
+			break
+		}
+		size -= segs[0].size
+		segs = segs[1:]
+	}
+	s.mu.Lock()
+	s.total += size - info.bytes
+	info.bytes = size
+	s.mu.Unlock()
+}
+
+// enforceCaps applies the byte caps to rings already on disk — for limits
+// lowered since they were written, or deletions that failed earlier: every
+// ring over the per-session cap drops its oldest whole segments, then whole
+// least-recently-used rings are evicted under the store total, the most
+// recently seen last (trimmed, keeping its newest segment). Rings of a newer
+// format are left alone. Writer goroutine, or Open before it starts.
+func (s *Store) enforceCaps() {
+	capBytes := s.limits.EffectiveSessionBytes()
+	s.mu.Lock()
+	var over []*sessionInfo
+	var newest *sessionInfo
+	for _, info := range s.sessions {
+		if info.bytes > capBytes {
+			over = append(over, info)
+		}
+		if newest == nil || info.lastSeen.After(newest.lastSeen) ||
+			(info.lastSeen.Equal(newest.lastSeen) && info.dir > newest.dir) {
+			newest = info
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(over, func(i, j int) bool { return over[i].dir < over[j].dir })
+	for _, info := range over {
+		if s.foreign(info) {
+			continue
+		}
+		s.logf("session cap: trim audit ring of session %s (%d bytes, cap %d)", info.dir, info.bytes, capBytes)
+		info.mu.Lock()
+		s.trimRingLocked(info, capBytes)
+		info.mu.Unlock()
+	}
+	if newest != nil {
+		newest.mu.Lock()
+		s.makeRoom(newest, 0)
+		newest.mu.Unlock()
+	}
+}
+
+// removeRing deletes a ring's data. A ring that loses its data to
+// store-wide eviction keeps its recovery state — read from its newest
+// segments first when it was not loaded — and persists it as a header-only
+// segment written after every existing one BEFORE any of them is deleted, so
+// a crash at any point leaves the boundary on disk and a later record cannot
+// replay what was already finalized. forget (retention, explicit deletion)
+// drops the whole directory and the entry. A deletion that fails is reported
+// and leaves what remains on disk accounted.
+func (s *Store) removeRing(info *sessionInfo, forget bool) error {
+	if forget {
+		return s.forgetRing(info)
+	}
+	info.mu.Lock()
+	defer info.changing()()
+	r := info.ring
+	cold := r == nil
+	dir := filepath.Join(s.opts.Root, info.dir)
+	if cold {
+		r = recoverTail(info.session, dir)
+		if r == nil {
+			info.mu.Unlock()
+			return fmt.Errorf("evict audit ring of session %s: its segments cannot be listed or read; nothing deleted", info.dir)
+		}
+	}
+	if r.hasState() {
+		// The header below carries the queued loss and boundary lines' state;
+		// they are dropped only once it is written, so a failed snapshot
+		// leaves them for the idle flush or Close to persist.
+		r.forceRotate = true
+		if _, err := r.write(nil, s.limits.SegmentBytes(), math.MaxInt64, nil); err != nil {
+			if cold {
+				r.close()
+				left, _ := ringBytes(dir) // a torn header segment may have landed
+				s.mu.Lock()
+				s.total += left - info.bytes
+				info.bytes = left
+				s.mu.Unlock()
+			} else {
+				s.account(info)
+			}
+			info.mu.Unlock()
+			return fmt.Errorf("evict audit ring of session %s: persist its recovery state first: %w; nothing deleted", info.dir, err)
+		}
+		r.clearPending()
+		delete(s.dirty, info)
+	}
+	var err error
+	if r.hasState() {
+		for len(r.segs) > 1 {
+			if _, derr := r.dropOldest(); derr != nil {
+				err = fmt.Errorf("evict audit ring of session %s: %w (%d bytes remain)", info.dir, r.evictErr, r.bytes)
+				r.evictErr = nil
+				break
+			}
+		}
+		if cold && err != nil {
+			// The cold ring indexes only the newest header and what follows;
+			// published while an older segment survives, that segment's
+			// events would vanish from reads and admission. Left unloaded,
+			// the next use replays every surviving segment.
+			r.close()
+			left, _ := ringBytes(dir)
+			s.mu.Lock()
+			s.total += left - info.bytes
+			info.bytes = left
+			s.mu.Unlock()
+			r = nil
+		}
+	} else {
+		// No state worth keeping: the data goes whole.
+		r.close()
+		if rerr := removeAll(dir); rerr != nil {
+			err = fmt.Errorf("evict audit ring of session %s: %w", info.dir, rerr)
+		}
+		left, _ := ringBytes(dir)
+		r = newRing(r.session, dir)
+		if left > 0 {
+			r = nil // reloaded from what remains on next use
+		}
+		s.mu.Lock()
+		s.total += left - info.bytes
+		info.bytes = left
+		s.mu.Unlock()
+	}
+	if r != nil {
+		info.ring = r
+		info.view.Store(r)
+		info.led.Store(r.led)
+		if info.session == "" {
+			info.session = r.session
+		}
+		s.account(info)
+		s.mu.Lock()
+		info.tombstone = err == nil && r.hasState()
+		s.mu.Unlock()
+	} else {
+		info.ring = nil
+		info.view.Store(nil)
+		info.led.Store(nil)
+	}
+	info.mu.Unlock()
+	return err
+}
+
+// forgetRing deletes a ring's whole directory and, once it is gone, the
+// entry. A failed deletion leaves what remains accounted, to be reloaded
+// from on next use.
+func (s *Store) forgetRing(info *sessionInfo) error {
+	info.mu.Lock()
+	defer info.changing()()
+	if r := info.ring; r != nil {
+		r.close()
+	}
+	dir := filepath.Join(s.opts.Root, info.dir)
+	err := removeAll(dir)
+	info.ring = nil
+	info.view.Store(nil)
+	info.led.Store(nil)
+	delete(s.dirty, info)
+	info.mu.Unlock()
+	var left int64
+	if err != nil {
+		// Relisted outside s.mu: every session's Recover, Retained and
+		// AppendSourced take it, and must not wait on this disk.
+		left, _ = ringBytes(dir)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.total += left - info.bytes
+		info.bytes = left
+		return fmt.Errorf("remove audit ring of session %s: %w (%d bytes remain)", info.dir, err, left)
+	}
+	s.total -= info.bytes
+	info.bytes = 0
+	if s.sessions[info.dir] == info {
+		delete(s.sessions, info.dir)
+	}
+	return nil
+}
+
+// ringBytes is the bytes of the ring's segments left on disk.
+func ringBytes(dir string) (int64, error) {
+	segs, _, err := listSegments(dir)
+	var n int64
+	for _, seg := range segs {
+		n += seg.size
+	}
+	return n, err
+}
+
+func (s *Store) deleteSession(session string) error {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	s.mu.Lock()
+	info := s.sessions[dir]
+	s.mu.Unlock()
+	if info == nil {
+		return removeAll(filepath.Join(s.opts.Root, dir))
+	}
+	return s.removeRing(info, true)
+}
+
+func (s *Store) touch(session string, at time.Time) {
+	s.touchNormalized(wsaudit.NormalizeID(session), at)
+}
+
+// touchNormalized is touch for an already normalized session ID.
+func (s *Store) touchNormalized(session string, at time.Time) {
+	dir := sessionDirName(session)
+	s.mu.Lock()
+	info := s.sessions[dir]
+	s.mu.Unlock()
+	if info == nil {
+		return
+	}
+	info.lastSeen = maxTime(info.lastSeen, at)
+	if !at.After(info.recorded) {
+		return
+	}
+	info.recorded = at
+	info.session = session
+	if err := s.idx.record(indexEntry{Dir: dir, Session: session, Seen: formatTime(at)}, s.snapshot); err != nil {
+		s.logf("record last seen of session %s: %v", session, err)
+	}
+}
+
+func (s *Store) snapshot() []indexEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]indexEntry, 0, len(s.sessions))
+	for _, info := range s.sessions {
+		if !info.recorded.IsZero() {
+			out = append(out, indexEntry{Dir: info.dir, Session: info.session, Seen: formatTime(info.recorded)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Dir < out[j].Dir })
+	return out
+}
+
+// sweep first carries every registered session's registry last-seen time
+// into the store index (refreshLastSeen), then removes every ring last seen
+// longer than the retention period ago, then enforces the byte caps.
+func (s *Store) sweep() {
+	s.refreshLastSeen()
+	now := s.opts.Now()
+	s.mu.Lock()
+	var expired []*sessionInfo
+	for _, info := range s.sessions {
+		info.evictFailed = false // eviction is retried once per sweep
+		if now.Sub(info.lastSeen) > s.limits.Retention {
+			expired = append(expired, info)
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(expired, func(i, j int) bool { return expired[i].dir < expired[j].dir })
+	for _, info := range expired {
+		if s.foreign(info) {
+			s.logf("retention: keep audit ring of session %s: it holds a newer format", info.dir)
+			continue
+		}
+		s.logf("retention: remove audit ring of session %s (last seen %s)", info.dir, formatTime(info.lastSeen))
+		if err := s.removeRing(info, true); err != nil {
+			s.logf("retention: %v", err)
+		}
+	}
+	s.enforceCaps()
+}
+
+// refreshLastSeen records each ring's registry last-seen time when it moved
+// past the recorded one. It runs at the periodic sweep and at Close — never
+// per heartbeat — so a quiet session's latest heartbeat survives a registry
+// prune the daemon did not witness, at most one sweep interval stale.
+func (s *Store) refreshLastSeen() {
+	if s.opts.LastSeen == nil {
+		return
+	}
+	s.mu.Lock()
+	infos := make([]*sessionInfo, 0, len(s.sessions))
+	for _, info := range s.sessions {
+		if info.session != "" {
+			infos = append(infos, info)
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(infos, func(i, j int) bool { return infos[i].dir < infos[j].dir })
+	for _, info := range infos {
+		if t, ok := s.opts.LastSeen(info.session); ok && t.After(info.recorded) {
+			s.touchNormalized(info.session, t)
+		}
+	}
+}
+
+// foreign reports whether info's ring holds a newer format: a loaded ring
+// refusing writes, or an unloaded one whose segment headers say so — or whose
+// headers cannot be read, so automatic retention fails closed. A newer format
+// is remembered; a read failure is asked again. Writer goroutine only.
+func (s *Store) foreign(info *sessionInfo) bool {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	return s.foreignLocked(info)
+}
+
+// foreignLocked is foreign with info.mu held.
+func (s *Store) foreignLocked(info *sessionInfo) bool {
+	if info.newer {
+		return true
+	}
+	if r := info.ring; r != nil {
+		info.newer = errors.Is(r.readOnly, ErrNewerFormat)
+		return info.newer
+	}
+	newer, err := newerRingOnDisk(filepath.Join(s.opts.Root, info.dir))
+	if err != nil {
+		// Fail closed, and ask again next time.
+		s.logf("session %s: cannot read its segment headers: %v; it is not removed automatically", info.dir, err)
+		return true
+	}
+	info.newer = newer
+	return newer
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+// View is a read-only snapshot of one session's retained events, for the
+// query API.
+type View struct {
+	// Events are the retained events, oldest first, in strictly increasing
+	// Seq. The slice is shared with the store: callers must not modify it or
+	// its elements (Meta maps included).
+	Events []wsaudit.Envelope
+	// Cut reports that the session's current ring dropped older segments to
+	// capacity eviction, so events older than Events[0] existed and are gone.
+	// Whole-ring removal (time retention, session deletion) leaves no
+	// evidence: a ring started afterwards reports false until it drops a
+	// segment itself.
+	Cut bool
+}
+
+// View returns a snapshot of the session's retained events and eviction
+// state. A loaded ring answers from memory, and the read lock is held only to
+// copy the slice header: a caller scanning the snapshot for as long as it
+// likes never holds up the writer, which only appends past the snapshot's
+// length or replaces the slice. An unloaded ring is read from disk on the
+// caller's goroutine (coldRead), never through the writer, so a query never
+// delays capture; while the writer is changing its files the read waits for
+// the change to end and answers what follows it. An unknown session yields an
+// empty View.
+func (s *Store) View(ctx context.Context, session string) (View, error) {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	wait := time.Millisecond
+	for try := 0; ; try++ {
+		// The generation is sampled with the entry, under s.mu, so before the
+		// entry can be retired (removal advances it before the entry leaves
+		// the map) and before the ring is found unloaded (a load published
+		// afterwards advances it): the cold read below never accepts files a
+		// loaded ring, or a replacement entry's ring, was writing meanwhile.
+		s.mu.Lock()
+		info := s.sessions[dir]
+		var gen uint64
+		if info != nil {
+			gen = info.gen.Load()
+		}
+		s.mu.Unlock()
+		if info == nil {
+			return View{}, nil
+		}
+		viewLookupGap()
+		if r := info.view.Load(); r != nil {
+			r.view.RLock()
+			v := View{Events: r.events[:len(r.events):len(r.events)], Cut: r.cut}
+			r.view.RUnlock()
+			return v, nil
+		}
+		viewColdGap()
+		v, ok, err := s.coldRead(ctx, info, session, gen)
+		if ok || err != nil {
+			return v, err
+		}
+		if try == coldTries {
+			return View{}, fmt.Errorf("audit ring of session %s: changed under %d reads; retry later", dir, coldTries)
+		}
+		select {
+		case <-ctx.Done():
+			return View{}, ctx.Err()
+		case <-time.After(wait):
+		}
+		wait = min(2*wait, 64*time.Millisecond)
+	}
+}
+
+// coldTries bounds the cold reads View makes of a ring the writer keeps
+// changing (about ten seconds of waits).
+const coldTries = 160
+
+// viewLookupGap runs between View finding a ring's entry and checking
+// whether it is loaded, and viewColdGap between finding it unloaded and
+// reading it cold; tests hold a reader there.
+var (
+	viewLookupGap = func() {}
+	viewColdGap   = func() {}
+)
+
+// coldCurrent reports that info is still unloaded at generation gen with no
+// change under way: what was read at gen is what the ring holds.
+func coldCurrent(info *sessionInfo, gen uint64) bool {
+	return info.busy.Load() == 0 && info.gen.Load() == gen && info.view.Load() == nil
+}
+
+// coldRead answers an unloaded ring's View at generation gen, sampled
+// before the ring was found unloaded: from the cache without touching the
+// disk, else by joining the read of gen another reader has under way, else
+// by reading it (replayCold) and caching it. ok is false, without error,
+// when the ring is no longer unloaded at gen — before the read or by its end:
+// what was read is dropped, never cached. The generation is checked and the
+// flight or cached view published under coldMu, so a reader delayed with an
+// older generation never displaces a newer one.
+func (s *Store) coldRead(ctx context.Context, info *sessionInfo, session string, gen uint64) (View, bool, error) {
+	s.coldMu.Lock()
+	if !coldCurrent(info, gen) {
+		s.coldMu.Unlock()
+		return View{}, false, nil
+	}
+	if c, ok := s.cold[info.dir]; ok && c.info == info && c.gen == gen {
+		s.coldMu.Unlock()
+		return c.view, true, nil
+	}
+	f := s.flights[info.dir]
+	if f != nil && f.info == info && f.gen == gen {
+		s.coldMu.Unlock()
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			return View{}, false, ctx.Err()
+		}
+		if errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded) {
+			return View{}, false, nil // its reader gave up; read again
+		}
+		return f.view, f.ok, f.err
+	}
+	f = &coldFlight{info: info, gen: gen, done: make(chan struct{})}
+	if s.flights == nil {
+		s.flights = map[string]*coldFlight{}
+	}
+	s.flights[info.dir] = f
+	s.coldMu.Unlock()
+
+	f.view, f.ok, f.err = s.replayCold(ctx, info, session, gen)
+
+	s.coldMu.Lock()
+	if s.flights[info.dir] == f {
+		delete(s.flights, info.dir)
+	}
+	f.ok = f.ok && coldCurrent(info, gen)
+	if f.ok {
+		if s.cold == nil {
+			s.cold = map[string]coldView{}
+		}
+		if _, ok := s.cold[info.dir]; !ok && len(s.cold) >= coldViews {
+			for k := range s.cold {
+				delete(s.cold, k) // any one: a miss only costs a reread
+				break
+			}
+		}
+		s.cold[info.dir] = coldView{info: info, gen: gen, view: f.view}
+	}
+	s.coldMu.Unlock()
+	close(f.done)
+	return f.view, f.ok, f.err
+}
+
+// replayCold reads an unloaded ring's segments into a View without loading
+// the ring: nothing is truncated, opened for writing, or published, and a
+// torn last line is left out as recovery would. ok reports that the ring
+// stayed unloaded at generation gen until after the last read (coldRead
+// checks again under coldMu); otherwise the result is dropped, and so is a
+// read error the change may have caused.
+func (s *Store) replayCold(ctx context.Context, info *sessionInfo, session string, gen uint64) (View, bool, error) {
+	stable := func() bool { return coldCurrent(info, gen) }
+	dir := filepath.Join(s.opts.Root, info.dir)
+	segs, _, err := listSegments(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return View{}, stable(), nil
+	}
+	if err != nil {
+		if !stable() {
+			return View{}, false, nil
+		}
+		return View{}, false, err
+	}
+	r := newRing(session, dir)
+	for i := range segs {
+		if err := ctx.Err(); err != nil {
+			return View{}, false, err
+		}
+		raw, err := readFile(filepath.Join(dir, segmentName(segs[i].seq)))
+		if err != nil {
+			if !stable() {
+				return View{}, false, nil
+			}
+			return View{}, false, err
+		}
+		if _, newer, _ := r.replaySegment(&segs[i], raw); newer {
+			break // later segments of a newer ring are not ours to parse
+		}
+	}
+	v := View{Events: r.events[:len(r.events):len(r.events)], Cut: len(segs) > 0 && segs[0].seq > 1}
+	return v, stable(), nil
+}
+
+// Events returns the session's retained events, oldest first, from memory.
+// It never waits on the writer's disk I/O.
+func (s *Store) Events(ctx context.Context, session string) ([]wsaudit.Envelope, error) {
+	var out []wsaudit.Envelope
+	err := s.scan(ctx, session, func(evs []wsaudit.Envelope) {
+		out = append([]wsaudit.Envelope(nil), evs...)
+	})
+	return out, err
+}
+
+// scan calls fn with the session's retained events under the ring's read
+// lock (fn must not keep the slice).
+func (s *Store) scan(ctx context.Context, session string, fn func([]wsaudit.Envelope)) error {
+	info, err := s.loaded(ctx, session)
+	if err != nil || info == nil {
+		return err
+	}
+	r := info.view.Load()
+	if r == nil {
+		return nil
+	}
+	r.view.RLock()
+	defer r.view.RUnlock()
+	fn(r.events)
+	return nil
+}
+
+// Event returns the retained event whose ID key is key. The store owns
+// identifier normalization (Decision 3): producers hand it raw IDs and it
+// normalizes each exactly once at ingestion, so a record's key is
+// wsaudit.NormalizeID(raw ID) — the display key a history row carries. key is
+// compared verbatim, never normalized again (a digest key normalized twice
+// would name a different record). session is the raw session ID, like every
+// other session argument.
+func (s *Store) Event(ctx context.Context, session, key string) (wsaudit.Envelope, bool, error) {
+	var out wsaudit.Envelope
+	var found bool
+	err := s.scan(ctx, session, func(evs []wsaudit.Envelope) {
+		for i := len(evs) - 1; i >= 0; i-- {
+			if evs[i].ID == key {
+				out, found = evs[i], true
+				return
+			}
+		}
+	})
+	return out, found, err
+}
+
+// EventsByCallID returns the retained events whose call key is key, oldest
+// first. As for Event, key is wsaudit.NormalizeID(raw call ID) — the display
+// key — and is compared verbatim.
+func (s *Store) EventsByCallID(ctx context.Context, session, key string) ([]wsaudit.Envelope, error) {
+	var out []wsaudit.Envelope
+	err := s.scan(ctx, session, func(evs []wsaudit.Envelope) {
+		for _, ev := range evs {
+			if ev.CallID == key {
+				out = append(out, ev)
+			}
+		}
+	})
+	return out, err
+}
+
+// loaded returns the session's entry with its ring in memory, recovering
+// it through the writer on first use.
+func (s *Store) loaded(ctx context.Context, session string) (*sessionInfo, error) {
+	dir := sessionDirName(wsaudit.NormalizeID(session))
+	s.mu.Lock()
+	info := s.sessions[dir]
+	s.mu.Unlock()
+	if info == nil {
+		return nil, nil
+	}
+	if info.view.Load() == nil {
+		if _, err := s.call(ctx, job{kind: jobLoad, session: session}); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		info = s.sessions[dir]
+		s.mu.Unlock()
+	}
+	return info, nil
+}

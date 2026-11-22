@@ -97,6 +97,10 @@ type StartSpec struct {
 	// reattachedPromptAfter is the holder sequence before the worker's
 	// outstanding daemon-sent prompt. Nil means there is no such prompt.
 	reattachedPromptAfter *uint64
+
+	// audit is the session's audit capture tap (Options.AuditSink); nil
+	// captures nothing.
+	audit *auditTap
 }
 
 // LeadSpec is what a lead conversation's process starts with.

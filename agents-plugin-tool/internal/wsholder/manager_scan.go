@@ -197,7 +197,11 @@ func (m *Manager) attach(desc Descriptor) error {
 	id := desc.ID
 	ctx, cancel := context.WithTimeout(context.Background(), attachDialTimeout+2*attachStepTimeout)
 	defer cancel()
-	client, info, err := Attach(ctx, desc, func(ev Event) { m.event(id, ev) })
+	audit := 0
+	if m.opts.AuditChannel {
+		audit = AuditVersion
+	}
+	client, info, err := AttachWith(ctx, desc, AttachOptions{Audit: audit}, func(ev Event) { m.event(id, ev) })
 	if err != nil {
 		cause := attachCause(err)
 		m.mu.Lock()
@@ -216,13 +220,17 @@ func (m *Manager) attach(desc Descriptor) error {
 		return ErrDetached
 	}
 	e.client, e.cause, e.child = client, "", info.Child
+	e.audit = Event{}
+	if info.Audit > 0 {
+		e.audit = Event{Event: EventAuditAttached, Next: info.NextSeq, Conn: info.Conn}
+	}
 	m.mu.Unlock()
 	m.logf("attached to holder %s (pid %d, protocol %d)", id, desc.PID, info.Protocol)
 	go func() {
 		<-client.Done()
 		m.mu.Lock()
 		if e.client == client {
-			e.client, e.cause = nil, CauseNoAnswer
+			e.client, e.cause, e.audit = nil, CauseNoAnswer, Event{}
 		}
 		m.mu.Unlock()
 	}()
@@ -273,4 +281,18 @@ func (m *Manager) event(id string, ev Event) {
 	for _, sink := range sinks {
 		sink.HolderEvent(id, ev)
 	}
+}
+
+// AuditAttach returns the EventAuditAttached of holder id's current
+// connection when it negotiated the audit channel. A consumer that starts
+// receiving a holder's events after the attach (the client delivered that
+// event before the consumer was listed) reads it here; the event may also
+// reach it, so its handling must be idempotent per Conn.
+func (m *Manager) AuditAttach(id string) (Event, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.entries[id]; e != nil && e.client != nil && e.audit.Event != "" {
+		return e.audit, true
+	}
+	return Event{}, false
 }

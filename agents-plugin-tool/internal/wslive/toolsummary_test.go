@@ -307,6 +307,53 @@ func TestCallArgsReachTheRingEntry(t *testing.T) {
 	}
 }
 
+// TestCallIDsReachTheRingEntry pins the ring call ID (ticket
+// 261119-feat-ws-audit-capture-harness-adapters, (601)): each call's
+// already normalized id travels unchanged to the summary batch and the ring
+// entry; a batch whose calls carry IDs but no preview still writes CallArgs;
+// an ID no normalization yields is dropped; and a ring entry written before
+// IDs existed still reads, its calls without one.
+func TestCallIDsReachTheRingEntry(t *testing.T) {
+	st := NewState(ownerKey)
+	withID := func(c map[string]any, id string) map[string]any {
+		c["id"] = id
+		return c
+	}
+	digest := "sha256:" + strings.Repeat("ab", 32)
+	b1 := withCalls(finishedAt(1, 100, 200, 3, 0, "Read", "Bash"),
+		withID(call("Read", 100, 150, false), "toolu_01"),
+		withID(call("Bash", 100, 200, false), digest),
+		withID(call("Read", 100, 160, false), strings.Repeat("z", CallIDMaxBytes+1)))
+	mustApply(t, st, Event{Kind: KindAgent, Batches: batchesJSON(t, b1)}, 500)
+	res := mustApply(t, st, Event{Kind: KindReply, Final: true, Text: "done"}, 600)
+	args := res.Ring[0].Tools.Batches[0].CallArgs
+	want := []ToolCallArgs{{Name: "Read", ID: "toolu_01"}, {Name: "Bash", ID: digest}, {Name: "Read"}}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("call args = %+v, want %+v", args, want)
+	}
+	dir := t.TempDir()
+	if err := AppendRing(dir, res.Ring[:1]); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := ReadRing(dir)
+	if err != nil || !reflect.DeepEqual(recs[0].Tools.Batches[0].CallArgs, want) {
+		t.Fatalf("read back %+v err %v", recs, err)
+	}
+
+	// An entry an older daemon wrote: CallArgs without ids.
+	var old RingEntry
+	raw := `{"kind":"tools","tools":{"calls":1,"batches":[{"names":["Read"],"calls":1,"callArgs":[{"name":"Read","argsPreview":"file_path: /a.go"}]}]}}`
+	if err := json.Unmarshal([]byte(raw), &old); err != nil {
+		t.Fatalf("an entry without call ids does not read: %v", err)
+	}
+	if got := old.Tools.Batches[0].CallArgs; len(got) != 1 || got[0] != (ToolCallArgs{Name: "Read", ArgsPreview: "file_path: /a.go"}) {
+		t.Fatalf("old entry call args = %+v", got)
+	}
+	if enc, _ := json.Marshal(old.Tools.Batches[0].CallArgs[0]); strings.Contains(string(enc), `"id"`) {
+		t.Fatalf("a call without an id writes one: %s", enc)
+	}
+}
+
 // TestBatchCallsAndUsageAreBounded pins normalization of the new fields: at
 // most BatchCallCap calls (never more than callCount), a malformed call or
 // usage is dropped without the batch, names are scrubbed of session keys and

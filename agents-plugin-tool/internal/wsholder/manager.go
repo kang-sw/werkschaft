@@ -40,6 +40,11 @@ type Options struct {
 	// OnExit persists a stopped holder's exit before its directory is removed.
 	// An error retains the directory for a later scan to retry.
 	OnExit func(Descriptor, Exit) error
+	// AuditChannel offers every attach the holder audit channel
+	// (AuditVersion): a holder that speaks it then tees its ring-skipped
+	// lines to the sinks as EventAudit and EventAuditFence events. A holder
+	// that predates the channel ignores the offer and attaches as before.
+	AuditChannel bool
 
 	// holderArgs are extra holder arguments, so a test shortens its
 	// periods. startTimeout bounds the wait for a started holder's
@@ -138,6 +143,9 @@ type entry struct {
 	lastSeq uint64
 	lost    uint64
 	child   ChildStatus
+	// audit is the attached connection's EventAuditAttached when it
+	// negotiated the audit channel (AuditAttach).
+	audit Event
 }
 
 // Manager finds, starts, attaches to, and stops session holders for one

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsaudit"
 	"github.com/kang-sw/devenv/internal/wsawake"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
@@ -186,6 +187,13 @@ type Options struct {
 	Holders  HolderHost
 	LeadKeys LeadKeyStore
 	Mail     LeadMail
+	// AuditSink receives the audit capture of every daemon-hosted lead and
+	// worker process whose backend has an audit adapter (audit_capture.go);
+	// nil captures nothing. A sink that also implements wsaudit.SourcedSink
+	// gets source identities, so capture resumes across a restart without
+	// duplicates. The holder manager should offer its audit channel
+	// (wsholder.Options.AuditChannel) when this is set.
+	AuditSink wsaudit.Sink
 	// MailLegend places the sender legend on one submission of claimed mail
 	// (a steer, or a turn's held mail): texts are exactly the mail texts
 	// submitted together, in order, and senders the reply-ids Drain gave

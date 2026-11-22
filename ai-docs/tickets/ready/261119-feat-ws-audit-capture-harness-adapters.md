@@ -287,6 +287,268 @@ a short literal ID spelled as that digest gets a different key and both
 calls open their own events in the same session (ring-store Decision 3,
 identifier normalization).
 
+### Result (798e456) - 2026-11-22
+
+Landed on `impl/develop/mural-kitty-yeast` in three commits:
+
+- 94a00415b: tap, adapter, ring call ID.
+- 56d98cb52: fence-before-anchor ordering fix.
+- 798e456fb: lite review fixes.
+
+- **Holder tee (Decision 5).** `holder.py` negotiates an optional audit
+  channel through an `audit` attach field and reply. The hello and the
+  protocol stay at 1. Only a holder started with `--ring-skip` takes the
+  channel; the others have nothing to tee. Each ring-skipped stdout line is sent as an
+  unsequenced `audit` event `{anchor, index, at (UTC ns), data}`, where
+  anchor is the last kept stdout sequence. Every kept run is fenced with
+  `audit_fence {anchor, next, through, tee_count_sent, dropped_count}`, and
+  stdout end sends `final`. A line skipped with no audit connection, or one
+  past the 4096-message / 4 MiB audit queue, is only counted. Drops in
+  intervals whose fence reached no daemon carry into the next delivered
+  fence as `lost_before`. The holder's own ring and replay are unchanged.
+- **Daemon capture.** `wsholder` adds:
+  - `AttachWith`/`AttachOptions.Audit` and `AttachInfo.Audit`;
+  - the Event audit fields, plus a per-connection `Event.Conn` that never
+    goes on the wire;
+  - client-side `audit_attached` and `audit_detached` markers;
+  - `Options.AuditChannel`;
+  - `Manager.AuditAttach`. A launch attaches before its process is listed
+    to receive events, so `holderChild.start` hands capture the latched
+    attach before and after listing.
+  `wsagent/audit_capture.go`: one goroutine per process behind a
+  4096-item non-blocking queue. Feed and the holder reader only enqueue a
+  copy. A kept line waits for the fence that releases it. A fenced interval
+  is mapped only after its anchor line, because the holder writes audit
+  messages ahead of ring records. Indices that never arrived are recorded as
+  loss where they fell: on the open assembled event as `incomplete`,
+  otherwise as a standalone `audit_loss`.
+  - A lost fence: the next fence closes the stranded interval first,
+    unfenced.
+  - Nothing drains for 2 s: the source's tee stream closes as
+    `fence_timeout`. Later tee lines become one coalesced `late` loss, never
+    reordered, and the next fence on the live connection reopens the
+    stream.
+  - A disconnect or stream end marks an unfenced interval incomplete.
+  - Envelope seq is assigned in source order.
+- **Recovery contract.** `wsaudit/source.go` adds `SourceID`, `Recovery`
+  and `SourcedSink` (`Recover`, `Retained`, `AppendSourced`, `Finalize`,
+  `RecordLoss`). Capture resumes above `MaxSeq`. It skips retained
+  identities and records a not-retained identity at or below the finalized
+  boundary as loss (for a tee line: anchor below the boundary).
+- **Claude adapter.** `wsagent/audit_claude.go` maps every kind the policy
+  admits: thinking (from the assistant line, filled from the tee'd deltas
+  when the line's body is empty, or assembled alone when the line never
+  came), tool_call and tool_result, hooks, `<system-reminder>` blocks, the
+  compact_boundary (the cut) and its synthetic summary (`compact_summary`),
+  subagent lines and task lines, and every other system, control,
+  rate-limit, result or `command_lifecycle` line as `system`. An unknown
+  line type is kept raw as `other`.
+- **Ring call ID (601).** `wsaudit.NormalizeID` implements the ring-store
+  Decision 3 identifier normalization (at most 256 JSON-encoded bytes and
+  no `sha256:` prefix: kept; anything else: `sha256:<hex>`). The Claude
+  batch tracker puts the normalized ID on each call. `wslive` carries it
+  unchanged through `BatchCall.ID` and `ToolCallArgs.ID` (`id`, omitempty),
+  dropping only over 256 bytes or invalid UTF-8. A batch with IDs writes
+  `CallArgs` without previews. `BatchCallCap` and `/history` are unchanged.
+- **Wiring.** `wsagent.Options.AuditSink` gives every daemon-hosted process
+  whose backend has an adapter a tap (lead: `hosted_lead`, other:
+  `hosted_child`). `cmd/ws-mcp` sets neither `AuditSink` nor
+  `AuditChannel` yet; the audit store wires both.
+
+Compatibility: T0 for every path, with no hello or protocol bump.
+
+- New daemon, old holder: the old `_authenticate` reads only
+  op/token/protocol/id and ignores `audit`. The reply has no `audit`, so
+  the client sends no markers and capture never waits on fences
+  (`TestAuditChannelOldHolderAttachesWithoutIt`,
+  `TestAuditOldHolderCapturesThePostFilterStream`).
+- Old daemon, new holder: `push_audit` refuses unless `att.audit` was
+  negotiated (`TestAuditChannelNewHolderSendsNothingToAnOldDaemon`,
+  `test_a_client_that_offers_no_audit_gets_none`).
+- Ring: `id` is omitempty. Old readers ignore it, old entries read with no
+  ID, and the ring stays append-only (`TestCallIDsReachTheRingEntry`).
+
+Performance: capture adds no file I/O. It is in memory, and no sink is wired.
+
+Verification (2026-11-22, macOS):
+
+- `python3 -m unittest discover -s agents-plugin-tool/internal/wsholder/tests`:
+  44 OK, including `AuditChannelTest`. Covered: no-offer client, anchors,
+  fence order, drops while detached, full audit queue.
+- `go test ./internal/wsholder/ -run TestAuditChannel`: ok. Real holders,
+  all three directions.
+- `go test ./internal/wsagent/ ./internal/wsholder/ ./internal/wsaudit/ ./internal/wslive/`:
+  all ok.
+- `go test -race ./internal/wsagent/ -run 'TestAudit|TestClaudeAudit|TestClaudeRingCallID'`:
+  ok.
+- Per-kind recorded fixtures: `claude-lead-partial-tool-input`,
+  `claude-tool-turn`, `claude-lead-compaction`, `claude-subagent-turn` and
+  `claude-lead-background-agent-states`, replayed with the ring-skipped
+  deltas as tee lines. The reminder block and the unknown line type are
+  inline lines, because no recording holds them.
+- `TestAuditRealHolderAttachReachesCapture` runs a real `holder.py` under a
+  manager that offers the channel, through the real manager-to-process
+  path.
+- Each case the phase names has its own test: late tee after the next kept
+  line, fence and tees ahead of the anchor line, backlog after attach,
+  dropped tee with final fence, zero-skip interval, exit without
+  disconnect, fence timeout without reordering, disconnect incomplete,
+  failed append 10 then 11 then restart and replay (10 recorded as loss,
+  not appended, seq resumes), blocking and failing sink, and an ID over
+  256 bytes plus a literal spelled as its digest (ring ID equals the
+  call_id of the call and its result; distinct keys).
+- Full `go test ./...` at 798e456 (agents-plugin-tool,
+  `-skip 'TestComposerCarriesWebPicks|TestDocFrameHandsOverviewKey'`;
+  those two run Node on JS assets this change does not touch, and on the
+  first full run one hung to the timeout and the other hit Node 25's
+  `window is not defined`). The changed packages all pass when run alone.
+  The remaining failures:
+  - This worktree lacks the gitignored generated packages
+    (`internal/wspackage/generated/` holds only `PLACEHOLDER`, dated
+    before this work). That causes `TestHostedLauncherSurvivesReplacement…`
+    in `cmd/ws-mcp`, `TestDashboardSettings{,UI}Catalog` and the four
+    `TestPlaybookPrintGoldenExplore*` goldens in `internal/mcp`.
+  - Known develop reds: `TestProxyWhiteboardLinkHasNoLoginCode` and
+    `TestWhiteboardConstructionBeforeDashboardBind`.
+  - Whiteboard tests in `internal/mcp` (board DB busy after 2 s, a missing
+    comment label).
+  - `internal/mcp` hit the default 10-minute timeout under machine load.
+    Alone with a 30-minute timeout it finishes in 1230 s with only the
+    failures above.
+  - `TestCodexLeadSyntheticRequiredMCPFailure` failed once under full
+    load. It passes 3 of 3 alone and in three full `wsagent` runs.
+
+Lite review (one pass, `code-review-lite`, findings
+`6919150e-01-findings-r2.md`):
+
+- Fixed in 798e456fb: the Critical (the attach was dropped before the
+  process was listed) and all six Important findings (lost-fence
+  stranding, late-loss flood, workers waiting on fences, a test that did
+  not discriminate, detached drops lost, missing holder wire-order test).
+  The fence-before-anchor Critical was already fixed in 56d98cb52.
+- Each new test was checked to fail without its fix.
+- One Minor remains: a raw ID of at most 256 bytes with invalid UTF-8 is
+  kept by `NormalizeID` but dropped by `wslive`. Claude and Codex IDs are
+  ASCII.
+
+Decisions:
+
+- After a fence timeout, the next fence reopens the tee stream. The
+  ticket only requires closing it as incomplete; staying closed for the
+  rest of the session would lose all later thinking for one hiccup.
+- The capability rides an attach field instead of a protocol 2. A
+  protocol bump would make an old holder refuse the new daemon's attach
+  (T3).
+- `NormalizeID` and the `SourcedSink` contract live in new files
+  `wsaudit/ident.go` and `wsaudit/source.go`. The ring-store sibling needs
+  the same symbols, so reconcile at merge.
+- Capture keeps tee'd deltas only as assembly inputs. A complete assistant
+  block wins, and the assembly fills an empty thinking body or stands in
+  for a missing line.
+
+#### Edition (a35f2e48b) - 2026-11-22
+
+Pre-merge review fixes, one commit each:
+
+- ba7afccff: the holder fences a kept run only when a whole line ends. A
+  line cut across reads no longer anchors an interval on its head, which
+  stalled capture and produced a false `fence_timeout` loss. Regression:
+  `TestAuditRealHolderLineCutAcrossReads` (a real holder, a 1.5 MiB line
+  written in two writes).
+- 6d0e667a1: a record's durable ordinals count only its own events. The
+  assemblies a line ends are appended under their own key (`asm.<seq>`),
+  so a replayed line keeps the identities it had live
+  (`TestAuditReplayOrdinalsIgnoreCarriedAssemblies`).
+- 155706713 and 003316f03: attach and detach markers use reserved queue
+  room and are never refused (`TestAuditAttachIsNeverRefusedByAFullQueue`).
+- 25e4626d1: a thinking block that lost every delta carries the loss as an
+  incomplete event (`TestClaudeAuditTotalLossMarksTheThinking`).
+- 0179fb83b: tee lines held for unfenced intervals are bounded at
+  `auditPendingBytes` (32 MiB). Past the bound the tee stream closes as
+  incomplete until the next fence (`TestAuditPendingTeesAreBounded`).
+- 97d031a28: the old-holder test runs the shipped pre-audit holder
+  (`testdata/holder-pre-audit.py`).
+- a35f2e48b (ring-store Decision 3, as the lead decided): adapters write
+  raw harness IDs into envelope `call_id` and parent ID, and the store
+  normalizes once, at ingestion. The ring call ID above stays
+  `NormalizeID(raw)`, the display key history rows carry. The ring parity
+  tests now key events the way the store's ingestion does
+  (`TestClaudeAuditEnvelopeIDsStayRaw` covers long and digest-shaped IDs).
+
+#### Edition (ba9896127) - 2026-11-22
+
+Second pre-merge review fixes, one commit each, after merging develop
+(8759820cf: `wsholder.Event` keeps both develop's exit byte totals and the
+audit fields):
+
+- 530c46074: when one read holds whole kept lines followed by the head of
+  a cut line (a record limit under the 64 KiB read), the holder fences the
+  whole lines at once. Only the trailing cut run waits for its line's end,
+  so capture no longer times out on those lines
+  (`test_a_read_ending_in_a_cut_line_head_fences_its_whole_lines`).
+- bfec67cbf: control markers never block the holder reader. Past the
+  reserve they coalesce to the newest connection's attach and detach. Capture
+  applies them ahead of the queue as a resync, recorded as one `queue_full`
+  loss, and ignores an attach older than the current connection
+  (`TestAuditControlReserveExhaustionNeverBlocks`).
+- ba9896127: event identities are fixed by role, not position, superseding
+  the positional ordinals of 6d0e667a1. A carried assembly's ordinal is its
+  content block's index (also in the end flush), so a replay that cannot
+  rebuild a tee-only block leaves the others' identities as they were. A
+  line's own events keep their positions, because they are always rebuilt
+  from the line (`TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone`).
+
+#### Edition (630ee328f) - 2026-11-22
+
+Third pre-merge review fixes, one commit each:
+
+- 0fbb2ee39 (Decision 5): the recovery rule is judged by the source record
+  that yields an event (its seq, or a tee line's anchor), not by the
+  event's identity. A keyed event, such as a carried assembly or a Codex
+  call, whose record is at or below the finalized boundary and is not
+  retained is recorded as loss. It is never appended late, which would put
+  it after its result or a cut with a fresh seq. The end flush is
+  positioned at the last kept line mapped. `TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone`
+  now expects the failed carried tool call recorded as loss at
+  `asm.<seq>#1`.
+- 4f3707582: an id-less Codex item's result takes slot 1, apart from its
+  unkeyed call (`TestAuditCodexItemWithoutAnIDKeepsCallAndResultApart`).
+- 630ee328f: a detach that overflows alone, while its connection's attach
+  still sits in the queue, is applied once the queue drains. It never runs
+  before that attach, so the ended connection is not left live
+  (`TestAuditOverflowedDetachFollowsItsQueuedAttach`).
+
+#### Edition (5b2f6fb8d) - 2026-11-22
+
+Fourth pre-merge review fix (Decision 5, cold recovery).
+
+**Problem.** Capture judged the recovery rule only against its `Recover`
+snapshot, then handed the sink the bare identity. A keyed identity carries
+no position. A store still loading the session answers `Recover` with zero.
+On such a cold replay, a call whose append had failed could get a fresh seq
+after its result and the cut.
+
+**Interface change.** `SourcedSink.AppendSourced(ctx, id, rec, ev)` now also
+takes `rec`, the source record that yielded the event.
+
+**Contract.** The sink applies the rule to `rec` against its own ledger.
+`SourceID.Covered` is the shared definition of the rule.
+
+**End flush.** It is now positioned after the last kept line, not at it,
+like a tee line anchored on that line. That line is usually finalized
+already, and the sink judges against its live boundary.
+
+**Tests.** The `boundarySink` fake admits as the store does, and its `cold`
+flag makes `Recover` answer zero. Tests:
+
+- the cold subtests of `TestAuditCodexFailedCallIsNeverAppendedAfterTheCut`
+  and `TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone`;
+- `TestAuditStreamEndFlushIsNotCoveredByItsOwnBoundary`;
+- `TestSourceIDCovered`.
+
+The store in `261119-feat-ws-audit-ring-store` must take `rec` (see the
+Phase 5 constraint).
+
 ### Phase 2: Codex adapter
 
 Depends on Phase 1. Map the Codex app-server stream onto the envelope,
@@ -297,6 +559,80 @@ carries usage.
 
 Verification: per-kind fixtures for the supported Codex version range; ring
 call ID parity as in Phase 1.
+
+### Result (69149e9) - 2026-11-22
+
+`wsagent/audit_codex.go`, wired through `prepareAudit`. Codex holders have
+no RingSkip, so Codex capture is post-filter and never waits on fences.
+
+- Tool items (`commandExecution`, `mcpToolCall`, `fileChange`, `webSearch`,
+  `imageView`, `collabAgentToolCall`, `dynamicToolCall`): a tool_call at
+  `item/started` (or at completion when the start was not seen) and a
+  tool_result at `item/completed`. Both carry
+  `call_id = NormalizeID(item.id)`, and the result carries output, status,
+  exit code and error.
+- `reasoning`: thinking. The recorded items are encrypted with an empty
+  summary and content, so they are captured as `signature_only`.
+- Also mapped: `hook/started` and `hook/completed` (hook),
+  `subAgentActivity` (subagent), server requests (system, `call_id` from
+  `itemId`), responses, and every other notification (system). Message
+  and output deltas are recognized and dropped, because the completed item
+  carries the whole body.
+- **Compaction boundary, confirmed from codex-0.170.0-compaction-probe-1:**
+  the `contextCompaction` item's `item/completed` is the explicit cut. No
+  `thread/compacted` notification appears in the 0.160.0 or 0.170.0
+  recordings.
+- Ring call ID: `codexMapper`'s batch tracker sets `callIDs`.
+
+Verification: `TestCodexAuditCapturesEveryKindFromRecordings` runs all 12
+`codex-0.160.0-*` and `codex-0.170.0-*` recordings. Every admitted kind is
+present, no user, assistant or other event is captured, each result joins
+a call, and the cut is explicit. `TestCodexRingCallIDMatchesTheAuditCallID`
+covers a digested long ID and a literal short ID. Both pass under `-race`,
+and the full `wsagent` package passes.
+
+#### Edition (2b3b0211f) - 2026-11-22
+
+Correction to the compaction bullet above: the 0.170.0 probes do not
+confirm the boundary. Both stop at a `thread/start` configuration error
+(line 6) before any turn. The boundary is confirmed for 0.160.0 only, from
+the hosted lead's manual compaction in `codex-0.160.0-hosted-lead.jsonl`:
+the `contextCompaction` item starts at line 78 and completes at line 81.
+Its completion is the explicit cut. For 0.170.0 the boundary is
+unverified. `TestCodexAuditCompactionBoundaryPerVersion` pins this
+exactly, per version: one compaction event, at line 81, for 0.160.0; none,
+and no cut, for 0.170.0. The pooled recordings test no longer asserts a
+cut.
+
+#### Edition (a35f2e48b) - 2026-11-22
+
+Correction to the tool-items bullet above: envelopes carry the raw
+`call_id = item.id` (and the raw parent ID on `subAgentActivity`). The
+audit store normalizes them once, at ingestion (ring-store Decision 3).
+The ring call ID stays `NormalizeID(item.id)`.
+
+#### Edition (ba9896127) - 2026-11-22
+
+A tool call's durable identity is its item: the keyed `SourceID`
+`call.<NormalizeID(item.id)>`, whichever record yields the call. When a
+replay finds that `item/started` has wrapped out of the ring, the completed
+item synthesizes the call. That call finds the live one retained, and the
+result stays the completion's ordinal 0. Before, the result shifted to
+`#1`: a clean replay recorded a false loss, and a failed result was recorded
+as two losses. A live call whose append failed is appended on replay,
+because keyed identities fall outside the boundary rule, as carried
+assemblies do (`TestAuditCodexReplayAfterTheStartedItemWrapped`).
+
+#### Edition (0fbb2ee39) - 2026-11-22
+
+Correction to the Edition above: a live call whose append failed is not
+appended on replay. The recovery rule now holds keyed identities to the
+place of the record that yields them, so at or below the finalized
+boundary the call is recorded as loss
+(`TestAuditCodexFailedCallIsNeverAppendedAfterTheCut`: a failed call, its
+retained result, and a compaction cut, replayed with and without
+`item/started`). An item without an id keeps the call at its record's
+slot 0, and its result takes slot 1 (4f3707582).
 
 ### Phase 3: agy adapter
 
@@ -329,3 +665,25 @@ daemon, replay the holder, and append again: retained source identities are
 not duplicated and envelope sequences resume above the recovered maximum.
 Fail append of source sequence 10, append 11, restart and replay: 10 is
 recorded as loss and is not appended after 11.
+
+Constraints:
+
+- **Writer admission uses the source record position.** The store's writer
+  admits each `AppendSourced` (Decision 5) by the source record position
+  `rec` it is handed, not by the identity `id`. It checks
+  `rec.Covered(boundary)` against the recovered ledger, including
+  boundaries finalized since.
+- **Reason.** A keyed identity (a Codex call `call.<id>`, a carried
+  assembly `asm.*`) has no position. Capture's own check uses its `Recover`
+  snapshot, which is zero for a ring still loading. Trusting that snapshot
+  lets a failed call get a fresh seq after its result and cut, marked
+  model-seen.
+- **Wiring.** Wiring the adapter to the store means `Store.AppendSourced`
+  takes `rec` (5b2f6fb8d changed the interface).
+
+Additional verification: a cold-replay test. A call whose append failed, its
+retained result, and a compaction cut are replayed while `Recover` still
+answers zero: against the real store with the session ring not yet loaded,
+or with an equivalent delayed load. The call is recorded as loss and never
+appended after the result and the cut. Run it for a keyed Codex call and a
+keyed Claude carried assembly.
