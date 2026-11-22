@@ -93,6 +93,12 @@ func TestCredentialCLIRefusals(t *testing.T) {
 		{"unknown provider on show", "", "known providers: openrouter", []string{"credential", "show", "nonesuch"}},
 		{"missing provider", "", "usage", []string{"credential", "remove"}},
 		{"unknown subcommand", "", "usage", []string{"credential", "list"}},
+		// A key typed where an argument belongs is never echoed back
+		// (runCredentialCLI fails on any output carrying it).
+		{"key in place of the provider", "", "known providers: openrouter", []string{"credential", "set", credentialCLIFixtureKey}},
+		{"key in place of the provider on show", "", "known providers: openrouter", []string{"credential", "show", credentialCLIFixtureKey}},
+		{"key in place of the provider on remove", "", "known providers: openrouter", []string{"credential", "remove", credentialCLIFixtureKey}},
+		{"key in place of the subcommand", "", "use set, remove, or show", []string{"credential", credentialCLIFixtureKey}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

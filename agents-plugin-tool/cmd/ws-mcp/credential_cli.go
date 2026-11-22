@@ -26,8 +26,10 @@ func (c *hostedCLI) credentialCommand(args []string) int {
 		return c.failed("credential", errors.New(usage))
 	}
 	sub := args[0]
+	// An unrecognized argument is never echoed: it may be a key typed in
+	// the wrong place, and an error lands in terminal scrollback and logs.
 	if sub != "set" && sub != "remove" && sub != "show" {
-		return c.failed("credential", fmt.Errorf("unknown subcommand %q\n%s", sub, usage))
+		return c.failed("credential", fmt.Errorf("unknown subcommand; use set, remove, or show\n%s", usage))
 	}
 	name := "credential " + sub
 	fs := c.flags(name)
@@ -55,7 +57,7 @@ func (c *hostedCLI) credentialCommand(args []string) int {
 	if len(positional) == 1 {
 		id = wscred.ProviderID(positional[0])
 		if _, ok := wscred.Lookup(id); !ok {
-			return c.failed(name, fmt.Errorf("unknown provider %q; known providers: %s", positional[0], knownProviderIDs()))
+			return c.failed(name, fmt.Errorf("unknown provider; known providers: %s", knownProviderIDs()))
 		}
 	}
 	switch sub {
