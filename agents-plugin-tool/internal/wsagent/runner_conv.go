@@ -180,7 +180,10 @@ type conv struct {
 	// replaying is set from a rejoin of the holder's process (reattach)
 	// until its replay ends: no turn is submitted meanwhile, since the
 	// replay is what tells whether one runs.
-	replaying       bool
+	replaying bool
+	// rejoinErr is a worker rejoin's start failure: checkReattach ends that
+	// recovery after the scan instead of waiting on a replay with no process.
+	rejoinErr       string
 	replayAsked     bool
 	replayTurnError string
 	// replayGap is set when records left the holder's ring during the

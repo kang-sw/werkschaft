@@ -1,10 +1,12 @@
 package wsagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -333,4 +335,54 @@ func TestWorkerAttachRegistersNoMCPBeforeOwnership(t *testing.T) {
 			}
 		})
 	}
+}
+
+// startFailBackend fails Start while fail is set, as a harness whose command
+// lookup fails for a moment (a Windows npm shim replaced during an update).
+type startFailBackend struct {
+	Backend
+	fail *atomic.Bool
+}
+
+func (b startFailBackend) Start(ctx context.Context, spec StartSpec) (Process, error) {
+	if b.fail.Load() {
+		return nil, errors.New("agy backend: exec: \"agy\": executable file not found in %PATH%")
+	}
+	return b.Backend.Start(ctx, spec)
+}
+
+// A held worker whose rejoin cannot start its backend does not stay in replay
+// with no process: its open turn fails once the scan completes, and later
+// input restarts the worker after the harness has returned.
+func TestHeldWorkerRejoinStartFailureAllowsRestart(t *testing.T) {
+	h, got := workerRecoveryHarness(t, BackendAgy)
+	fail := &atomic.Bool{}
+	reg := h.opts.Backends[BackendAgy]
+	reg.Backend = startFailBackend{Backend: reg.Backend, fail: fail}
+	h.opts.Backends[BackendAgy] = reg
+	id, holder := spawnHeldRecoveryWorker(t, h, BackendAgy, "workdir-write")
+
+	fail.Store(true)
+	h.runner.Close()
+	h.holders.restart()
+	h.startAt("http://127.0.0.1:1")
+	eventually(t, "the failed rejoin settled the open turn", func() bool { return len(got.list()) == 1 })
+	if result := got.list()[0].Result; result.Status != TurnFailed || !strings.Contains(result.Error+result.Message, "executable file not found") {
+		t.Fatalf("failed rejoin result: %+v", result)
+	}
+	c := h.runner.conv(id)
+	var replaying, turn bool
+	c.do(func() { replaying, turn = c.replaying, c.turn })
+	if replaying || turn {
+		t.Fatalf("after a failed rejoin: replaying=%v turn=%v", replaying, turn)
+	}
+
+	fail.Store(false)
+	h.send(id, "again")
+	eventually(t, "a new holder for the restarted worker", func() bool {
+		rec := h.record(id)
+		return rec.HolderID != "" && rec.HolderID != holder
+	})
+	next := h.holder(id)
+	eventually(t, "the restarted worker's prompt", func() bool { return len(agyPromptIDs(h, next)) == 1 })
 }

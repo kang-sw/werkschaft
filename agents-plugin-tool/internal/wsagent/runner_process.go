@@ -591,6 +591,9 @@ func (c *conv) reattach() {
 	if err != nil {
 		// The holder stays in the record: the next start ends it first.
 		fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s: %v\n", rec.ReplyID, rec.HolderID, err)
+		if !rec.Lead {
+			c.rejoinErr = err.Error()
+		}
 	}
 }
 
@@ -601,6 +604,15 @@ func (c *conv) reattach() {
 func (c *conv) checkReattach() {
 	// Before the first scan an unlisted holder may be one not attached yet;
 	// holdersScanned asks again after it.
+	if c.replaying && c.proc == nil && c.rejoinErr != "" && c.r.scanDone() {
+		// A worker rejoin that failed (reattach) has no process to replay
+		// into. End the recovery so the start put off until the scan runs;
+		// it ends the held process first (retireHolder).
+		reason := "rejoin: " + c.rejoinErr
+		c.rejoinErr = ""
+		c.recoveryFailed(reason)
+		return
+	}
 	if !c.replaying || c.replayAsked || c.proc == nil || !c.r.scanDone() {
 		return
 	}
