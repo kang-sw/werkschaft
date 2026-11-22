@@ -1,6 +1,7 @@
 package wsmeta
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,11 +14,19 @@ import (
 // ErrCutoverUnsupported reports a cutover call refused because a directory
 // it would change is on a file system whose directory durability barrier is
 // not established (sync_*.go), or whose file system could not be
-// determined. The refusal happens before the call changes anything: the
-// legacy files stay the authority, and the caller keeps running on them
-// (re-review e33c561c, lead decision E(a)). Opening the store and its
-// pre-import reads are never refused.
+// determined, while no fence has ever been recorded: no legacy file was
+// changed, in this process or an earlier one. The legacy files stay the
+// authority, and the caller keeps running on them (lead decision E(a)).
+// Opening the store and its pre-import reads are never refused.
 var ErrCutoverUnsupported = errors.New("wsmeta: the legacy cutover is not supported on this file system")
+
+// ErrCutoverInterrupted reports the same refusal once a fence may have
+// changed the legacy tree: a fence record exists (from this or an earlier
+// process), or a publication was already made in this call. Legacy service
+// cannot simply resume, since a fenced selector or a moved config may be
+// live; the cutover has to be completed on a supported file system or
+// resolved by its owner (re-review 80ffd114).
+var ErrCutoverInterrupted = errors.New("wsmeta: the legacy cutover was interrupted after a fence may have changed legacy files")
 
 // barrierFileSystem names the file system holding dir, or "" where the
 // platform's barrier needs none: a directory fsync on POSIX. On Windows the
@@ -31,23 +40,54 @@ var barrierFileSystem = platformFileSystem
 // the barrier relies on.
 var barrierFileSystems = []string{"NTFS"}
 
-// checkBarrierDir refuses dir unless its file system supports the barrier.
-// The refusal is logged with its reason. A missing dir passes when
-// missingOK: no fence can land in it.
-func (s *Store) checkBarrierDir(dir string, missingOK bool) error {
+// barrierRefusal returns why dir's file system cannot carry the barrier,
+// or nil. A missing dir passes when missingOK: no fence can land in it.
+func barrierRefusal(dir string, missingOK bool) error {
 	name, err := barrierFileSystem(dir)
 	if missingOK && errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		err = fmt.Errorf("%w: the file system of %s is unknown: %w", ErrCutoverUnsupported, dir, err)
-	} else if name != "" && !supportedFileSystem(name) {
-		err = fmt.Errorf("%w: %s is on %s, not %s", ErrCutoverUnsupported, dir, name, strings.Join(barrierFileSystems, " or "))
+		return fmt.Errorf("the file system of %s is unknown: %w", dir, err)
 	}
+	if name != "" && !supportedFileSystem(name) {
+		return fmt.Errorf("%s is on %s, not %s", dir, name, strings.Join(barrierFileSystems, " or "))
+	}
+	return nil
+}
+
+// refuseCutover turns a barrier refusal before any publication in this call
+// into the caller's result: ErrCutoverUnsupported while the journal holds no
+// fence record, ErrCutoverInterrupted once it does. Both are logged with
+// their reason.
+func (s *Store) refuseCutover(ctx context.Context, q querier, reason error) error {
+	started, err := cutoverStarted(ctx, q)
 	if err != nil {
-		s.logf("wsmeta: legacy cutover refused; the legacy store stays authoritative: %v", err)
+		return err
 	}
+	if started {
+		return s.interrupted(reason)
+	}
+	err = fmt.Errorf("%w: %w", ErrCutoverUnsupported, reason)
+	s.logf("wsmeta: legacy cutover refused; the legacy store stays authoritative: %v", err)
 	return err
+}
+
+// interrupted is the refusal once a fence may have changed the legacy tree.
+func (s *Store) interrupted(reason error) error {
+	err := fmt.Errorf("%w: %w", ErrCutoverInterrupted, reason)
+	s.logf("wsmeta: legacy cutover interrupted; fences may be live in the legacy store: %v", err)
+	return err
+}
+
+// cutoverStarted reports whether any fence was ever recorded. A record is
+// written before its publication and fence_required is sticky, so a
+// cutover that may have changed a legacy file always reports started.
+func cutoverStarted(ctx context.Context, q querier) (bool, error) {
+	var started bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM legacy_captures
+		WHERE fence_required = 1 OR fence_state != 'none' OR fence_witness != '' OR witness_id != '')`).Scan(&started)
+	return started, err
 }
 
 func supportedFileSystem(name string) bool {
@@ -64,9 +104,9 @@ func supportedFileSystem(name string) bool {
 // keyed-file directory. Stage and Commit run it first, so an unsupported
 // volume refuses the whole cutover before its journal or any legacy file
 // changes.
-func (s *Store) checkCutoverDirs() error {
-	if err := s.checkBarrierDir(s.dir, false); err != nil {
-		return err
+func (s *Store) checkCutoverDirs(ctx context.Context, q querier) error {
+	if reason := barrierRefusal(s.dir, false); reason != nil {
+		return s.refuseCutover(ctx, q, reason)
 	}
 	sessions := filepath.Join(s.dir, sessionsDirName)
 	entries, err := wsstate.ReadDir(sessions)
@@ -84,8 +124,8 @@ func (s *Store) checkCutoverDirs() error {
 	}
 	for _, d := range dirs {
 		// A pruned or never-created directory holds nothing to fence.
-		if err := s.checkBarrierDir(d, true); err != nil {
-			return err
+		if reason := barrierRefusal(d, true); reason != nil {
+			return s.refuseCutover(ctx, q, reason)
 		}
 	}
 	return nil

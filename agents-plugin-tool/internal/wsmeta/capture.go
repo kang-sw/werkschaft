@@ -91,8 +91,9 @@ const (
 //     directory sync on POSIX, a write-through rename on Windows). Only a
 //     re-applied removal, whose rename an interrupted attempt made, rests
 //     on a directory barrier alone (sync_*.go). On Windows that barrier
-//     holds only on NTFS, so the cutover refuses any other file
-//     system before it changes anything (ErrCutoverUnsupported).
+//     holds only on NTFS, so the cutover refuses any other file system:
+//     ErrCutoverUnsupported while no fence was ever recorded (legacy
+//     service may continue), ErrCutoverInterrupted once one was.
 //  6. Commit proceeds only when every path with fence_required has a landed
 //     record that the commit's own pass proves. When proof fails, the outcome
 //     is a re-stage plus a re-fence. The staged original is never written
@@ -256,7 +257,7 @@ func (s *Store) Stage(ctx context.Context) (StageResult, error) {
 		if state == importComplete {
 			return ErrImportComplete
 		}
-		if err := s.checkCutoverDirs(); err != nil {
+		if err := s.checkCutoverDirs(ctx, tx); err != nil {
 			return err
 		}
 		attempt++
@@ -435,9 +436,9 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 		}
 		abs := filepath.Join(s.dir, filepath.FromSlash(rel))
 		// Before the record: a fence that could not be made durable is never
-		// recorded or published (ErrCutoverUnsupported).
-		if err := s.checkBarrierDir(filepath.Dir(abs), true); err != nil {
-			return err
+		// recorded or published.
+		if reason := barrierRefusal(filepath.Dir(abs), true); reason != nil {
+			return s.refuseCutover(ctx, tx, reason)
 		}
 		got := readLegacy(abs, s.opts.ReadFile)
 		if got.confirmable && m.state == CaptureUnreadable {
@@ -723,10 +724,11 @@ func syncFileData(p string) error {
 
 // syncDir is the barrier before a publication is marked landed. It refuses
 // a directory whose file system does not support it (barrier.go), so landed
-// never rests on an unverified barrier.
+// never rests on an unverified barrier. It runs only after a rename, so its
+// refusal is ErrCutoverInterrupted, never the fallback result.
 func (s *Store) syncDir(dir string) error {
-	if err := s.checkBarrierDir(dir, false); err != nil {
-		return err
+	if reason := barrierRefusal(dir, false); reason != nil {
+		return s.interrupted(reason)
 	}
 	return syncDirectory(dir)
 }

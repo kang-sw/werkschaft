@@ -159,28 +159,96 @@ func TestUnsupportedFileSystemRefusesTheCutover(t *testing.T) {
 		checkRefusedCutover(t, s, dir, before)
 	})
 
-	t.Run("landed never rests on a refused barrier", func(t *testing.T) {
+}
+
+// wantInterrupted asserts the refusal reported once a fence may have changed
+// the legacy tree: never the legacy-fallback result.
+func wantInterrupted(t *testing.T, what string, err error) {
+	t.Helper()
+	if !errors.Is(err, ErrCutoverInterrupted) || errors.Is(err, ErrCutoverUnsupported) {
+		t.Fatalf("%s = %v, want ErrCutoverInterrupted and never ErrCutoverUnsupported", what, err)
+	}
+}
+
+// ErrCutoverUnsupported tells the caller to keep serving from the legacy
+// store, so it is returned only while no fence was ever recorded. Once one
+// may have changed the tree, in this process or an earlier one, a refusal is
+// ErrCutoverInterrupted.
+func TestRefusalAfterAFenceIsNeverTheFallback(t *testing.T) {
+	ctx := context.Background()
+	fat := func(string) (string, error) { return "FAT32", nil }
+
+	for _, tc := range []struct {
+		name  string
+		apply func(s *Store) error
+	}{
+		{"replacement", func(s *Store) error { return s.ApplyFence(ctx, fencePerm, fencedSelector) }},
+		{"removal", func(s *Store) error { return s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness) }},
+	} {
+		t.Run(tc.name+" refused at its barrier after the rename", func(t *testing.T) {
+			dir := legacyFixture(t)
+			fileSystems(t, dir, "NTFS", nil)
+			var log logSink
+			opts := testOpts()
+			opts.Logf = log.logf
+			opts.Fault = func(stage string) error {
+				if stage == "fence-renamed" {
+					// The volume answers differently once the rename is made.
+					barrierFileSystem = fat
+				}
+				return nil
+			}
+			s := openTest(t, dir, opts)
+			mustStage(t, s)
+			wantInterrupted(t, "fence", tc.apply(s))
+			for p, c := range captureMap(t, s) {
+				if c.FenceState == FenceLanded {
+					t.Fatalf("%s landed without its barrier: %+v", p, c)
+				}
+			}
+			if !log.has("interrupted", "FAT32") {
+				t.Fatalf("no logged reason: %q", log.lines)
+			}
+		})
+	}
+
+	t.Run("every later call, across a restart", func(t *testing.T) {
 		dir := legacyFixture(t)
 		fileSystems(t, dir, "NTFS", nil)
-		opts := testOpts()
-		opts.Fault = func(stage string) error {
-			if stage == "fence-prepared" {
-				// The volume answers differently after planning.
-				barrierFileSystem = func(string) (string, error) { return "FAT32", nil }
-			}
-			return nil
+		s, err := Open(dir, testOpts())
+		if err != nil {
+			t.Fatal(err)
 		}
-		s := openTest(t, dir, opts)
 		mustStage(t, s)
-		if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, ErrCutoverUnsupported) {
-			t.Fatalf("ApplyFence = %v, want ErrCutoverUnsupported", err)
+		if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+			t.Fatal(err)
 		}
-		if c := captureMap(t, s)[fencePerm]; c.FenceState == FenceLanded {
-			t.Fatalf("fence landed without its barrier: %+v", c)
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
 		}
-		if _, err := s.Commit(ctx, testCommit()); err == nil {
-			t.Fatal("Commit accepted an unlanded fence")
+		barrierFileSystem = fat
+		s = openTest(t, dir, testOpts())
+		_, err = s.Stage(ctx)
+		wantInterrupted(t, "Stage", err)
+		_, err = s.Commit(ctx, testCommit())
+		wantInterrupted(t, "Commit", err)
+		wantInterrupted(t, "ApplyFence", s.ApplyFence(ctx, fencePerm, fencedSelector))
+		wantInterrupted(t, "ApplyRemovalFence", s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness))
+	})
+
+	t.Run("a record without its publication", func(t *testing.T) {
+		dir := legacyFixture(t)
+		fileSystems(t, dir, "NTFS", nil)
+		armed := false
+		s := openTest(t, dir, crashAt("fence-prepared", &armed))
+		mustStage(t, s)
+		armed = true
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
+			t.Fatalf("interrupted removal = %v", err)
 		}
+		barrierFileSystem = fat
+		_, err := s.Stage(ctx)
+		wantInterrupted(t, "Stage", err)
 	})
 }
 
