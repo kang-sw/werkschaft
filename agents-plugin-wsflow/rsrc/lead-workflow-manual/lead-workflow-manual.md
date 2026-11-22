@@ -6,9 +6,6 @@ variables:
   - WorkflowLang
   - ExploreAgent
   - SpawnIdiom
-  - ExploreTierClause
-  - RenderedSpawnClause
-  - RenderedTierClause
 ---
 # Workflow Manual
 
@@ -85,13 +82,13 @@ IDs, unique within the conversation so the user can cite any item:
 ### Spawning helpers
 
 - Bounded evidence gathering that benefits from an independent read →
-  {{.ExploreAgent}}{{.ExploreTierClause}}.
+  {{.ExploreAgent}} at the tier the question needs (`### Choosing a tier`).
   English prompt with the scoped question; require cited evidence, gaps, and
   follow-ups. Run independent questions in parallel; synthesize once the
   decision has enough evidence.
 - Bundled delegate prompt → `{{.McpNamespace}}/playbook.render` with the lead
   `session_key`; give the subagent the returned path and spawn it with the
-  {{.RenderedSpawnClause}}. Delegate works in another worktree →
+  tier and bindings the render returns. Delegate works in another worktree →
   select that worktree at render time.
 
 ### Choosing a tier
@@ -99,7 +96,7 @@ IDs, unique within the conversation so the user can cite any item:
 Pass the tier to `{{.McpNamespace}}/config.resolve_agent(tier)` rather than
 naming a model.
 
-- A rendered playbook → {{.RenderedTierClause}}.
+- A rendered playbook → the tier its render recommends.
 - small: well-specified work with no design calls — mechanical edits,
   running and reading commands, lookups, straightforward investigation.
 - medium: ordinary engineering with a clear target and approach — a scoped

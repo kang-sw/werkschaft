@@ -1052,11 +1052,13 @@ from a support conversation:
   render), native-first terminology: `ExploreAgent` names its native
   subagent, `SpawnIdiom` names `agent.spawn` on an external harness with the
   size-prefix rule, and the continuity tip names `agent.spawn`'s subagents.
-  The workflow manual's `ExploreTierClause`, `RenderedSpawnClause`, and
-  `RenderedTierClause` (`withManualClauses`) default to the manual's own
-  wording; for that lead they drop the "tier the question needs" suffix
-  after the native subagent and qualify a rendered tier with an
-  external-harness prefix.
+  For that lead's workflow manual, the renderer also rewrites three rendered
+  sentences (`nativeFirstManual`; plain text, not declared variables, so the
+  resource and caller-context validation are unchanged). The exploration
+  bullet loses the "tier the question needs" suffix. A rendered delegate is
+  spawned through `agent.spawn` on an external harness with the returned path
+  and the rendered tier qualified with a harness prefix (no model/effort
+  bindings, which `agent.spawn` does not take).
   `playbook.render` output is unchanged for every caller: a rendered
   delegate runs on another process.
   `CallFallback` opts hosted lead connections into the compact `call` tool

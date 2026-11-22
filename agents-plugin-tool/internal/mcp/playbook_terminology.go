@@ -32,10 +32,6 @@ var reservedToolVarNames = func() map[string]bool {
 		"ContinueIdiom": true,
 		"RoleModel":     true,
 		"WorkflowLang":  true,
-		// The workflow manual's spawning clauses (withManualClauses).
-		"ExploreTierClause":   true,
-		"RenderedSpawnClause": true,
-		"RenderedTierClause":  true,
 	}
 	for _, name := range wsrsrc.ImplicitVariableNames {
 		set[name] = true
@@ -172,30 +168,35 @@ func nativeFirstTerminology(namespace string) map[string]string {
 	return terms
 }
 
-// withManualClauses is terminology plus the workflow manual's spawning
-// clauses: ExploreTierClause follows {{.ExploreAgent}} in the exploration
-// bullet, RenderedSpawnClause says how a rendered delegate is spawned, and
-// RenderedTierClause names a rendered playbook's tier. By default they are
-// the manual's own wording. For nativeFirst (nativeFirstTerminology's
-// caller), whose bare size would resolve to its own harness, the rendered
-// tier gets the external-harness prefix and the exploration bullet drops
-// the "tier the question needs" suffix, which its native subagent cannot
-// honor. The caller's terminology map is not modified.
-func withManualClauses(terminology map[string]string, nativeFirst bool, namespace string) map[string]string {
-	out := make(map[string]string, len(terminology)+3)
-	for k, v := range terminology {
-		out[k] = v
+// nativeFirstManualRewrites are the workflow manual sentences a
+// nativeFirstTerminology caller reads differently, as (today's rendered
+// text, its replacement) pairs, applied by nativeFirstManual. Its native
+// subagent cannot run at "the tier the question needs", and a bare size its
+// render recommends would resolve to its own harness, so the exploration
+// bullet loses that suffix and the rendered-delegate bullet and tier line
+// spawn through agent.spawn with the prompt path and the tier qualified with
+// an external harness. agent.spawn takes no model or effort, so the native
+// wording names no render bindings.
+func nativeFirstManualRewrites(namespace string) []string {
+	explore := nativeFirstTerminology(namespace)["ExploreAgent"]
+	spawn := "`" + namespace + "/agent.spawn`"
+	return []string{
+		explore + " at the tier the question needs (`### Choosing a tier`).",
+		explore + "; pick that tier by `### Choosing a tier`.",
+		"give the subagent the returned path and spawn it with the\n  tier and bindings the render returns.",
+		"spawn the subagent through\n  " + spawn + " on an external harness with the returned path and the render's tier, qualified as `### Choosing a tier` states.",
+		"- A rendered playbook → the tier its render recommends.\n",
+		"- A rendered playbook → the tier its render recommends; as a " + spawn + " target, put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness.\n",
 	}
-	if nativeFirst {
-		out["ExploreTierClause"] = "; pick that tier by `### Choosing a tier`"
-		out["RenderedSpawnClause"] = "bindings the render returns through `" + namespace + "/agent.spawn` on an external harness, at the render's tier qualified as `### Choosing a tier` states"
-		out["RenderedTierClause"] = "the tier its render recommends; as a `" + namespace + "/agent.spawn` target, put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness"
-		return out
-	}
-	out["ExploreTierClause"] = " at the tier the question needs (`### Choosing a tier`)"
-	out["RenderedSpawnClause"] = "tier and bindings the render returns"
-	out["RenderedTierClause"] = "the tier its render recommends"
-	return out
+}
+
+// nativeFirstManual rewrites a rendered workflow manual body for a
+// nativeFirstTerminology caller (nativeFirstManualRewrites). The rewrite is
+// renderer-internal text replacement, not a declared variable, so the
+// manual's frontmatter and caller-context validation stay those of every
+// other caller.
+func nativeFirstManual(body, namespace string) string {
+	return strings.NewReplacer(nativeFirstManualRewrites(namespace)...).Replace(body)
 }
 
 // claudeSpawnIdiom is the Claude SpawnIdiom value. Claude's Agent tool takes a

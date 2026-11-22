@@ -150,13 +150,16 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 		return "", "", err
 	}
 
-	vars, err := buildPlaybookVars(pb.Meta.Variables, callerContext, harness, withManualClauses(terminology, nativeFirst, s.runtimeNamespace()), recommendedTier, configOpts, workflowLang, s.runtimeNamespace())
+	vars, err := buildPlaybookVars(pb.Meta.Variables, callerContext, harness, terminology, recommendedTier, configOpts, workflowLang, s.runtimeNamespace())
 	if err != nil {
 		return "", "", err
 	}
 	body, err := substitutePlaybookVars(pb.Body, pb.Meta.Variables, vars)
 	if err != nil {
 		return "", "", err
+	}
+	if nativeFirst && name == workflowManualPlaybookName {
+		body = nativeFirstManual(body, s.runtimeNamespace())
 	}
 	if pb.Meta.Delegates {
 		spawnedWith := ""

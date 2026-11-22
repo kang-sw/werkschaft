@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"github.com/kang-sw/devenv/internal/wsrsrc"
 )
 
 // A hosted lead whose backend registration sets PreferNativeSubagent (agy)
@@ -38,8 +40,8 @@ const (
 		"  follow-ups. Run independent questions in parallel; synthesize once the\n" +
 		"  decision has enough evidence.\n"
 	nativeFirstSpawnBullet = "- Bundled delegate prompt → `ws/playbook.render` with the lead\n" +
-		"  `session_key`; give the subagent the returned path and spawn it with the\n" +
-		"  bindings the render returns through `ws/agent.spawn` on an external harness, at the render's tier qualified as `### Choosing a tier` states. Delegate works in another worktree →\n" +
+		"  `session_key`; spawn the subagent through\n" +
+		"  `ws/agent.spawn` on an external harness with the returned path and the render's tier, qualified as `### Choosing a tier` states. Delegate works in another worktree →\n" +
 		"  select that worktree at render time.\n"
 	nativeFirstTierLine = "- A rendered playbook → the tier its render recommends; as a `ws/agent.spawn` target, put `claude.` or `codex.` before a bare size or a role tier that resolves to your own harness.\n"
 	todayExploreBullet  = "- Bounded evidence gathering that benefits from an independent read →\n" +
@@ -144,7 +146,7 @@ func TestNativeFirstLeadExecutedText(t *testing.T) {
 
 	manual := connectionManual(t, on, f.hosted)
 	assertContains(t, "native-first manual", manual, nativeFirstExploreBullet, nativeFirstSpawnBullet, nativeFirstTierLine)
-	assertLacks(t, "native-first manual", manual, daemonAgentExplore, "at the tier the question needs", "tier and bindings the render returns", "{{")
+	assertLacks(t, "native-first manual", manual, daemonAgentExplore, "at the tier the question needs", "bindings", "{{")
 	offManual := connectionManual(t, off, f.hosted)
 	assertContains(t, "today's manual", offManual, todayExploreBullet, todaySpawnBullet, todayTierLine)
 	assertLacks(t, "today's manual", offManual, nativeFirstMarkers...)
@@ -171,13 +173,28 @@ func TestNativeFirstLeadExecutedText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertContains(t, "daemon manual", daemonManual, nativeFirstExplore)
+	assertContains(t, "daemon manual", daemonManual, nativeFirstExploreBullet, nativeFirstSpawnBullet, nativeFirstTierLine)
 	daemonDiscuss, err := RenderLeadPlaybook(os.Environ(), f.root, render, f.hosted, "lead-discuss")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if daemonDiscuss != strings.TrimSpace(discuss) {
 		t.Fatalf("the daemon render differs from the connection's read:\n--- render\n%s\n--- read\n%s", daemonDiscuss, discuss)
+	}
+}
+
+// TestNativeFirstManualKeepsCallerContextValidation: the native-first
+// manual rewrite is renderer-internal, so a caller-supplied context key
+// named like one of its parts is still undeclared on a manual read, with
+// the option on as with it off.
+func TestNativeFirstManualKeepsCallerContextValidation(t *testing.T) {
+	off, on, f := agyLeadConnections(t)
+	for label, s := range map[string]*Server{"on": on, "off": off} {
+		_, err := s.readPlaybook(workflowManualPlaybookName, f.hosted, map[string]string{"ExploreTierClause": "x"})
+		var undeclared wsrsrc.ErrUndeclaredVar
+		if !errors.As(err, &undeclared) || undeclared.Name != "ExploreTierClause" {
+			t.Fatalf("%s: manual read with context ExploreTierClause = %v, want ErrUndeclaredVar", label, err)
+		}
 	}
 }
 
