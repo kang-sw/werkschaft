@@ -87,11 +87,14 @@ type job struct {
 	session string
 	ev      wsaudit.Envelope
 	id      *wsaudit.SourceID
-	reason  string
-	source  string
-	seq     uint64
-	at      time.Time
-	reply   chan jobResult
+	// rec, on a sourced append, is the position of the source record that
+	// yielded the event; admission judges coverage by it.
+	rec    wsaudit.SourceID
+	reason string
+	source string
+	seq    uint64
+	at     time.Time
+	reply  chan jobResult
 	// fn, on a barrier, runs on the writer goroutine (tests reach writer
 	// state through it).
 	fn func()
@@ -261,16 +264,18 @@ func (s *Store) Append(_ context.Context, ev wsaudit.Envelope) error {
 }
 
 // AppendSourced hands ev to the writer under source identity id, like Append.
-// An identity the store already knows it retains returns
-// wsaudit.ErrDuplicateSource; the writer also skips a duplicate it only
-// learns of later, and records as loss an identity at or below its source's
-// finalized boundary (never appending it late).
-func (s *Store) AppendSourced(_ context.Context, id wsaudit.SourceID, ev wsaudit.Envelope) error {
+// rec is the position of the source record that yielded ev (id itself for an
+// event keyed by its own record). An identity the store already knows it
+// retains returns wsaudit.ErrDuplicateSource; the writer also skips a
+// duplicate it only learns of later, and records as loss an identity whose
+// rec its source's finalized boundary covers (never appending it late).
+func (s *Store) AppendSourced(_ context.Context, id, rec wsaudit.SourceID, ev wsaudit.Envelope) error {
 	id = normalizeSourceID(id)
+	rec = normalizeSourceID(rec)
 	if l := s.ledgerOf(ev.Session); l != nil && l.isRetained(id) {
 		return wsaudit.ErrDuplicateSource
 	}
-	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev, id: &id}, true)
+	return s.enqueue(job{kind: jobAppend, session: ev.Session, ev: ev, id: &id, rec: rec}, true)
 }
 
 // enqueue appends j to the writer's queue in call order. A droppable job
@@ -533,7 +538,7 @@ func (s *Store) handle(j job) {
 	var res jobResult
 	switch j.kind {
 	case jobAppend:
-		s.appendEvent(j.ev, j.id)
+		s.appendEvent(j.ev, j.id, j.rec)
 	case jobFinalize:
 		s.finalize(j.session, j.source, j.seq)
 	case jobLoss:
@@ -607,7 +612,7 @@ func (s *Store) account(info *sessionInfo) {
 	s.mu.Unlock()
 }
 
-func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID) {
+func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID, rec wsaudit.SourceID) {
 	ev, err := prepare(raw, s.limits)
 	if err != nil {
 		s.dropped.Add(1)
@@ -636,7 +641,7 @@ func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID) {
 		s.dropped.Add(1)
 		return
 	}
-	switch r.admit(id) {
+	switch r.admit(id, rec) {
 	case admitDuplicate:
 		return
 	case admitLoss:

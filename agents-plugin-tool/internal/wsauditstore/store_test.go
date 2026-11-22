@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -77,7 +78,18 @@ func flush(t *testing.T, s *Store) {
 // item is an envelope and the source identity capture appends it under.
 type item struct {
 	id wsaudit.SourceID
+	// from is the yielding source record of a keyed item; zero means the
+	// item is keyed by its own record (id).
+	from wsaudit.SourceID
 	wsaudit.Envelope
+}
+
+// rec is the source record position AppendSourced judges coverage by.
+func (it item) rec() wsaudit.SourceID {
+	if it.from == (wsaudit.SourceID{}) {
+		return it.id
+	}
+	return it.from
 }
 
 func sourced(session string, seq uint64, kind wsaudit.Kind) item {
@@ -98,7 +110,7 @@ func tee(session string, anchor, index uint64) item {
 func mustAppend(t *testing.T, s *Store, it item) {
 	t.Helper()
 	// Capture treats a known duplicate as success.
-	if err := s.AppendSourced(context.Background(), it.id, it.Envelope); err != nil && !errors.Is(err, wsaudit.ErrDuplicateSource) {
+	if err := s.AppendSourced(context.Background(), it.id, it.rec(), it.Envelope); err != nil && !errors.Is(err, wsaudit.ErrDuplicateSource) {
 		t.Fatal(err)
 	}
 }
@@ -163,6 +175,52 @@ func sourceSeqs(t *testing.T, s *Store, session string) []uint64 {
 	return out
 }
 
+// TestStoreAdmitsKeyedEventsByTheirSourceRecord pins the writer's admission
+// of a keyed identity (a Codex call, a carried assembly), which carries no
+// position of its own: on a restarted store whose ring is not loaded (Recover
+// answers zero, so capture cannot judge), the writer judges the source record
+// it is handed against the recovered boundary. Covered, the event is lost,
+// never appended late; past the boundary, or anchored on it, it is appended.
+func TestStoreAdmitsKeyedEventsByTheirSourceRecord(t *testing.T) {
+	root := t.TempDir()
+	s, _ := openTest(t, root, nil)
+	for seq := uint64(1); seq <= 4; seq++ {
+		mustAppend(t, s, sourced("sess", seq, wsaudit.KindToolCall))
+	}
+	if err := s.Finalize(context.Background(), "sess", "holder:1", 4); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	_ = s.Close()
+
+	s2, _ := openTest(t, root, nil)
+	if rec := s2.Recover("sess", "holder:1"); rec != (wsaudit.Recovery{}) {
+		t.Fatalf("recovery of an unloaded ring = %+v, want zero", rec)
+	}
+	keyed := func(key string, from wsaudit.SourceID) item {
+		it := sourced("sess", 0, wsaudit.KindToolCall)
+		it.ID = key
+		it.id = wsaudit.SourceID{Source: "holder:1", Key: key}
+		it.from = from
+		return it
+	}
+	mustAppend(t, s2, keyed("call.late", wsaudit.SourceID{Source: "holder:1", Seq: 2}))
+	mustAppend(t, s2, keyed("asm.t3.1", wsaudit.SourceID{Source: "holder:1", Tee: true, Anchor: 3, Index: 1}))
+	mustAppend(t, s2, keyed("asm.t4.1", wsaudit.SourceID{Source: "holder:1", Tee: true, Anchor: 4, Index: 1}))
+	mustAppend(t, s2, keyed("call.new", wsaudit.SourceID{Source: "holder:1", Seq: 5}))
+	flush(t, s2)
+	var got []string
+	for _, ev := range events(t, s2, "sess")[4:] {
+		got = append(got, ev.ID)
+	}
+	if want := []string{"asm.t4.1", "call.new"}; !slices.Equal(got, want) {
+		t.Fatalf("appended after restart = %v, want %v", got, want)
+	}
+	if n := lossCount(t, s2, "sess"); n != 2 {
+		t.Fatalf("loss = %d, want the two covered keyed events", n)
+	}
+}
+
 // TestStoreRestartReplayDedupsAndContinuesSequence pins Decision 5: append,
 // restart, replay the holder's records, and append again — sequences stay
 // continuous and no retained source identity repeats.
@@ -185,7 +243,7 @@ func TestStoreRestartReplayDedupsAndContinuesSequence(t *testing.T) {
 	if rec != (wsaudit.Recovery{MaxSeq: 5}) || !s2.Retained("sess", wsaudit.SourceID{Source: "holder:1", Seq: 5}) {
 		t.Fatalf("recovery = %+v", rec)
 	}
-	if err := s2.AppendSourced(context.Background(), wsaudit.SourceID{Source: "holder:1", Seq: 3}, sourced("sess", 3, wsaudit.KindToolCall).Envelope); !errors.Is(err, wsaudit.ErrDuplicateSource) {
+	if err := s2.AppendSourced(context.Background(), wsaudit.SourceID{Source: "holder:1", Seq: 3}, wsaudit.SourceID{Source: "holder:1", Seq: 3}, sourced("sess", 3, wsaudit.KindToolCall).Envelope); !errors.Is(err, wsaudit.ErrDuplicateSource) {
 		t.Fatalf("append of a retained identity = %v", err)
 	}
 	for seq := uint64(1); seq <= 5; seq++ { // holder reattachment replays
@@ -390,7 +448,7 @@ func TestStoreRecoveryAnswersNeverWaitOnAWrite(t *testing.T) {
 	<-entered
 	done := make(chan wsaudit.Recovery, 1)
 	go func() {
-		_ = s2.AppendSourced(context.Background(), wsaudit.SourceID{Source: "holder:1", Seq: 3}, sourced("sess", 3, wsaudit.KindToolCall).Envelope)
+		_ = s2.AppendSourced(context.Background(), wsaudit.SourceID{Source: "holder:1", Seq: 3}, wsaudit.SourceID{Source: "holder:1", Seq: 3}, sourced("sess", 3, wsaudit.KindToolCall).Envelope)
 		if !s2.Retained("sess", wsaudit.SourceID{Source: "holder:1", Seq: 1}) {
 			t.Error("retained identity not reported")
 		}
@@ -693,7 +751,7 @@ func TestStoreJobsRunInCallOrder(t *testing.T) {
 	mustAppend(t, s, sourced("sess", 2, wsaudit.KindToolCall))
 	mustAppend(t, s, sourced("sess", 3, wsaudit.KindToolCall))
 	four := sourced("sess", 4, wsaudit.KindToolCall)
-	if err := s.AppendSourced(ctx, four.id, four.Envelope); !errors.Is(err, ErrQueueFull) {
+	if err := s.AppendSourced(ctx, four.id, four.rec(), four.Envelope); !errors.Is(err, ErrQueueFull) {
 		t.Fatalf("append past the queue depth = %v", err)
 	}
 	if err := s.RecordLoss(ctx, "sess", four.id, wsaudit.LossQueueFull); err != nil {
@@ -705,7 +763,7 @@ func TestStoreJobsRunInCallOrder(t *testing.T) {
 	tokens <- struct{}{} // finish 1; the writer moves on to 2 and frees a slot
 	<-entered
 	late := tee("sess", 3, 1) // anchored below the boundary finalized before it
-	if err := s.AppendSourced(ctx, late.id, late.Envelope); err != nil {
+	if err := s.AppendSourced(ctx, late.id, late.rec(), late.Envelope); err != nil {
 		t.Fatalf("append into a freed slot = %v", err)
 	}
 	close(tokens)

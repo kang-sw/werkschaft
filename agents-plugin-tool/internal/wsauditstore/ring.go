@@ -291,7 +291,7 @@ func (l *ledger) fold() (forgot int) {
 		cands = append(cands, id)
 	}
 	sort.Slice(cands, func(i, j int) bool {
-		ci, cj := covered(cands[i], l.bounds[cands[i].Source]), covered(cands[j], l.bounds[cands[j].Source])
+		ci, cj := cands[i].Covered(l.bounds[cands[i].Source]), cands[j].Covered(l.bounds[cands[j].Source])
 		if ci != cj {
 			return ci
 		}
@@ -308,20 +308,6 @@ func (l *ledger) fold() (forgot int) {
 		forgot++
 	}
 	return forgot
-}
-
-// covered reports whether id is at or below its source's finalized boundary
-// b: a sequenced record at or below b, or a tee record anchored below b (a
-// tee line sits after its anchor). A daemon-synthesized (Key) record is never
-// covered.
-func covered(id wsaudit.SourceID, b uint64) bool {
-	if b == 0 || id.Key != "" {
-		return false
-	}
-	if id.Tee {
-		return id.Anchor < b
-	}
-	return id.Seq <= b
 }
 
 func (l *ledger) recovery(source string) wsaudit.Recovery {
@@ -822,12 +808,14 @@ const (
 	admitLoss
 )
 
-// admit decides an incoming envelope's fate by its source identity: an
+// admit decides an incoming envelope's fate by its source identity id and
+// the position rec of the source record that yielded it (id itself, or the
+// yielding record of a keyed event, whose id carries no position): an
 // identity already retained or already recorded lost is a duplicate; one
-// covered by its source's finalized boundary is a loss, never appended late
-// (the same rule capture applies to its recovered boundary, so an early,
+// whose rec its source's finalized boundary covers is a loss, never appended
+// late (the same rule capture applies to its recovered boundary, so an early,
 // incomplete recovery answer cannot cause a duplicate or a late append).
-func (r *ring) admit(id *wsaudit.SourceID) int {
+func (r *ring) admit(id *wsaudit.SourceID, rec wsaudit.SourceID) int {
 	if id == nil {
 		return admitAppend
 	}
@@ -841,7 +829,7 @@ func (r *ring) admit(id *wsaudit.SourceID) int {
 	if l.settled(*id) {
 		return admitDuplicate
 	}
-	if covered(*id, l.bounds[id.Source]) {
+	if rec.Covered(l.bounds[rec.Source]) {
 		return admitLoss
 	}
 	return admitAppend

@@ -685,7 +685,7 @@ func TestPeriodicSweepRunsUnderASteadyStreamOfAppends(t *testing.T) {
 			default:
 			}
 			it := sourced("busy", seq, wsaudit.KindToolCall)
-			_ = s.AppendSourced(context.Background(), it.id, it.Envelope)
+			_ = s.AppendSourced(context.Background(), it.id, it.rec(), it.Envelope)
 		}
 	}()
 	deadline := time.Now().Add(20 * time.Second)
