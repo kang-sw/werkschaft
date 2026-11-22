@@ -120,6 +120,8 @@ func TestNativeFirstSteerForPreferNativeSubagentLead(t *testing.T) {
 // resolves to the lead's own harness; with the native-first line's size
 // prefix, agent.spawn admits `claude.small` and starts a Claude child. No
 // external route is configured.
+// Role-tier coverage (a role tier resolving to agy, qualified to an
+// external harness) is omitted: the base carries no role routing graph.
 func TestAgyLeadHarnessQualifiedTierStartsClaudeChild(t *testing.T) {
 	h, _ := agentHarness(t, func(o *Options) {
 		claude := o.Backends[BackendClaude]

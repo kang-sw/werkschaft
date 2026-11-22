@@ -7,6 +7,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 0a21025f8b0baff8
 sage-review-completeness-reviewed: 0a21025f8b0baff8
+completed: 2026-11-22
 ---
 
 # Prefer native subagents per harness descriptor and branch the agy lead's delegation wording
@@ -172,3 +173,73 @@ Verification:
     equality).
   - No common-code harness-name branch added (the source-scan test, if it
     exists on the base, still passes).
+
+### Result (8ed47fb8b) - 2026-11-22
+
+Landed:
+- `wsagent.BackendRegistration.PreferNativeSubagent` is a new field; only the
+  agy registration sets it.
+- `Runner.subagentSteer` returns `nativeFirstSteer` for a lead whose
+  registration sets it. That line covers native exploration with no ws tools
+  at the harness's default model, a read-only external-harness `agent.spawn`
+  when a specific tier is needed, ws playbooks and ws-tool work on
+  `agent.spawn` at a `claude.<size>`, `codex.<size>`, or route target, the
+  size-prefix rule, and the one-shot note. Workers and other harnesses keep
+  today's line.
+- MCP side:
+  - The connection descriptor and `HostedRender` carry the option, and
+    `cmd/ws-mcp` passes it through.
+  - `renderPlaybookBodyForCaller` takes a `selfExecuted` flag. It is true for
+    `printPlaybookForCaller` (workflow_manual and playbook.read) and false for
+    `renderPlaybookWithPlan` (playbook.render).
+  - Native-first terminology (`nativeFirstTerminology`) and the continuity tip
+    variant ("a subagent started with `agent.spawn`") apply only when that flag
+    is true, the caller delegates through daemon agents, and the descriptor
+    prefers native.
+- The `ws-mcp` manual's Prompt and Backend descriptor bullets describe the
+  option. The agy subagent-removal capability note now names the native-first
+  line.
+
+Verification:
+- `go build ./...` ok; `go vet ./internal/mcp ./internal/wsagent ./cmd/ws-mcp` ok.
+- mcp `-run TestNativeFirst`: all three tests pass.
+  - `TestNativeFirstLeadExecutedText`: the agy lead's manual, lead-run and
+    lead-discuss carry native wording, and the daemon's
+    `RenderLeadManual`/`RenderLeadPlaybook` match the connection. With the
+    option off, they read today's wording.
+  - `TestNativeFirstLeavesPlaybookRenderUnchanged`: explore and
+    `ticket-reviewer-design` renders are identical with the option off and on.
+    Neither carries native wording, and explore recommends `small`.
+  - `TestNativeFirstOtherHarnessesUnchanged`: Claude, Codex and Pi do not set
+    the flag, and none of their outputs carries native wording.
+- wsagent:
+  - `-run 'TestNativeFirstSteer|TestSubagentSteer|TestAgyLeadHarnessQualified|Catalog|Capabilit'`
+    ok. The agy lead's steer text is exact, Claude and Codex keep the exact
+    Never-use line, Pi gets none, and an agy worker never gets the native line.
+    With no route configured, `claude.small` from an agy lead starts a Claude
+    child, while a bare `small` stays agy.
+  - The wider filter `Steer|Prompt|Lead|AgentSpawn|AgentChild|Registration|Agy`
+    is ok.
+- Pre-existing failures, not caused by this change:
+  - In the mcp golden filter, `TestPlaybookPrintGoldenExplore{Claude,Codex,Unknown,Junk}Harness`
+    fails: the goldens expect a continuity tip, but explore has no
+    `delegates: true`, and tip gating is unchanged.
+  - cmd/ws-mcp `TestHostedLauncherSurvivesReplacementAndRestartsRecordedBuild`
+    fails because the generated inventory is missing in this environment.
+- No common-code harness-name source-scan test exists on this base. The new
+  code branches only on the descriptor field.
+
+Decisions:
+- The native terminology and tip name the namespaced `<ns>/agent.spawn`,
+  matching the existing daemon-agent wording. This is a cosmetic deviation
+  from the bare `agent.spawn`.
+- Native terminology also requires the daemon-agent caller check, so a caller
+  that lacks the agent tools never reads it.
+- Render-to-spawn coverage is split between two packages:
+  - mcp pins the real explore recommendation (a bare `small`).
+  - wsagent's fake runner admits `claude.small` and starts a Claude child.
+- Omitted:
+  - Role-tier render-to-spawn coverage: the base has no `261119` routing graph.
+  - A pre-change golden for Claude, Codex and Pi. Their sameness rests on the
+    absence of native wording plus the existing exact-wording and golden
+    tests.
