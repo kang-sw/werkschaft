@@ -626,7 +626,17 @@
       }
     },
     "261122-feat-ws-agy-same-harness-workers": {
-      "registered_at": "2026-11-22T09:53:47Z"
+      "registered_at": "2026-11-22T09:53:47Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T10:02:56Z",
+        "impl": {
+          "branch": "impl/develop/arise-gory-poker"
+        }
+      }
     },
     "261122-feat-ws-agy-stream-stall-cutoff": {
       "registered_at": "2026-11-22T08:42:05Z",
