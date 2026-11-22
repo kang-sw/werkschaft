@@ -67,7 +67,7 @@ On 2026-11-22 the owner also replaced the flattened per-pose body with the paper
   7. Remaining gesture columns one by one (`coffee`, `wave`, `headrub`, `point`)
   8. Props one by one (`prop-drone` at crisp ~`340/512` padding, `prop-mail`)
   9. Track 2 expression decals (`happy`, `oo`, `cry`, `angry`), the `long` hairstyle, attachments, and color presets
-  - How steps 3–5 obtain separate limb segments from a whole dressed redraw is open at paper-doll (127); this ticket does not settle it.
+  - Steps 3–5 get their separate limb segments by cutting the whole dressed redraw at assembly (pipeline step 6). The hidden overlap regions are repaired by image edit, with per-column owner sign-off (paper-doll (128)=a). Rejected: redrawing limbs as separate parts (outfit drift between parts) and shipping rigid single layers (reverses Background rule 2).
 - **v1 wardrobe size (owner 2026-11-22 19:15; paper-doll (98)):** one D1 outfit in v1.
   - Rejected: a second outfit in v1.
 - **Compatibility Tier Verdict — T0 (transparent):** Embedded static WebP + `pack.json` content refresh under `ws-companion/v1`. Per paper-doll Decision 7, the pack keeps a legacy `poses` projection so older daemons still render it. No protocol, MCP tool or store schema change.

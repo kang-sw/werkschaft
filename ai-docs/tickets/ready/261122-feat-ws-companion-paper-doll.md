@@ -10,8 +10,8 @@ related:
   261119-feat-ws-config-git-sync: Appendix A carries SYNC rows for the wardrobe keys added here
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-completeness-reviewed: a1e954e144a2a69b
-sage-review-design-reviewed: a1e954e144a2a69b
+sage-review-completeness-reviewed: 95f7e12d31a3e8a6
+sage-review-design-reviewed: 95f7e12d31a3e8a6
 ---
 
 # Companion Paper Doll: Head Set, Outfit-Baked Column Schema and Compositor
@@ -91,43 +91,6 @@ Vocabulary used below:
   layer.
 - Side-view walking and bare-skin joint cuts (epic Non-Scope).
 
-## Open Decision Queue
-
-Last ID used: (127). Both items are policy items. Neither blocks the schema
-shape: the body below follows each recommendation, and a different answer
-changes only the item named.
-
-(126) [open] [policy] Fate of held-prop grips (the first design's
-`grips.primary`/`secondary` and `held` prop placement).
-- Context: grips existed to seat a held prop in the base library's hands and
-  to split hands into under-prop and over-prop layers. With hands baked into
-  the outfit art that split is gone. Scenario props already attach to the hand
-  anchor (engine-v2 `handAnchor`). This reverses the lead-confirmed first
-  design, so it is a policy item.
-- Alternatives: (a) drop grips and `held` (recommended); (b) keep `grips` and
-  `held` as optional fields of an outfit column entry, with plain z and no
-  hand split.
-- Recommendation: (a). It removes a placement feature whose only caller was
-  the retired layering; a pack that needs a held prop uses a scenario prop at
-  `handAnchor`. On (b) the Decision 8 column fields, Phase 2 and its
-  verification gain a grip case.
-
-(127) [open] [policy] How articulated columns get their segments.
-- Context: `perched` (knee-pivot lower legs), `dangle` (torso, arms, legs with
-  differential `swingWeight`/`swingLag`) and the 2-frame `typing` hands need
-  separate layers. The owner pipeline (125) produces a whole dressed redraw
-  per column. Cutting limbs from it cuts through cloth and exposed skin, and
-  the epic keeps bare-skin joint cuts out of scope. The schema accepts any
-  number of layers per outfit column, so it does not constrain the answer.
-- Alternatives: (a) segment at assembly (pipeline step 6): cut the redraw
-  along limb joints and repair the overlap by image edit, with per-column
-  owner sign-off (recommended); (b) redraw the limbs as separate parts per
-  column, which re-opens per-part dressing drift; (c) ship those columns as
-  rigid single layers moved by engine whole-body physics only.
-- Recommendation: (a), because it keeps the owner's one-dressed-asset
-  consistency and the existing articulated engine. The answer lands in the art
-  pack pipeline, not in this ticket's schema.
-
 ## Decisions
 
 Numbers in parentheses are the queue IDs the decision settled. Items
@@ -135,7 +98,8 @@ Numbers in parentheses are the queue IDs the decision settled. Items
 the owner at 19:15. Items (124)=a (19:48) and (125)=c (19:57) are the owner
 decisions of the outfit-baked revision. Everything else was confirmed by the
 lead or auto-confirmed as technical on 2026-11-22; the revision's own
-technical settlements carry no queue ID. Decisions 4, 21 and 25 record
+technical settlements carry no queue ID, except (127) and (128), which the
+lead confirmed on 2026-11-22. Decisions 4, 21 and 25 record
 art-pack requirements; no phase here implements them.
 
 1. **Costume-level paper doll with outfit-baked columns (71, 124=a).** The
@@ -184,7 +148,9 @@ art-pack requirements; no phase here implements them.
       because image generation refuses an upright bare-body scaffold. The bob
       and face only balance outfit design, and the shipped `skinFill` still
       comes from the skin split of each dressed asset (step 4).
-   2. Dress the starter outfit over the scaffold by image edit.
+   2. Dress the starter outfit over the scaffold by image edit. The edit keeps
+      exposed skin a flat skin tint that differs from every outfit fill, so
+      light outfit parts stay separable and step 4 can read the skin.
    3. Make pose and gesture variants by redrawing the dressed asset into each
       pose.
    4. Split skin: flat skin color to a `skinFill` mask.
@@ -237,13 +203,24 @@ art-pack requirements; no phase here implements them.
    optional `handAnchor` and `seatY`, optional registration `feetPivot`, and
    for gestures `replaces`. Fields an entry omits are inherited from the
    same-named top-level `poses.<column>` or `gestures.<column>` entry, which
-   also supplies `pose` and `fallback`.
+   also supplies `pose` and `fallback`. That top-level entry is the column
+   registry: scenario, director and allowed-ID validation read the top-level
+   dictionaries, so a column bound only under `outfits.*` must still have a
+   top-level entry (it may be layer-less, carrying only `pose`/`fallback`).
+   Anchors (`headAnchor`, `handAnchor`, `seatY`, `feetPivot`) are inheritable,
+   so an outfit that omits them takes the default outfit's values; the
+   registration lint reads the resolved value (declared or inherited).
+   `layers` is never inherited: the top-level `layers` is the default outfit's
+   legacy projection, and inheriting it would borrow another outfit's art
+   (Decision 9). A column is bound only when the outfit entry carries
+   `layers`.
    - Rejected: a flat top-level `bases` map, a separate `kits` binding map,
      and any base-library section. Each one either splits column identity or
      re-creates the retired layering.
 9. **Resolution (79).** A scenario requests a column, and the compositor
    draws the active outfit's layers for it. A column the outfit does not bind
-   follows the column's `fallback` chain within the same outfit. If the chain
+   follows the column's `fallback` chain within the same outfit, including the
+   resolver's implicit `stand` step, which also runs inside the outfit. If the chain
    ends with no binding, the compositor draws the legacy projection stack so
    the body is never empty.
    - Rejected: borrowing another outfit's column, which would mix costumes.
@@ -260,9 +237,10 @@ art-pack requirements; no phase here implements them.
     layers default by slot: `tail` 11, `ears` 45, `headdress` 56,
     `accessory` 57, and may set an explicit `z`.
     - Rejected: the first design's z band table and its lint. It existed to
-      interleave base, garment, limb and grip layers, which no longer exist.
+      interleave base, garment and grip layers, which no longer exist.
 12. **Anchors (92).** Each outfit column declares its own `headAnchor`.
-    Seated columns anchor lower, and `headScale` stays 1.0. `feetPivot` is an
+    Seated columns anchor lower, and `headScale` stays 1.0. An omitted anchor is
+    inherited per Decision 8. `feetPivot` is an
     authoring registration field checked only by the lint. The engine keeps
     its bounds-based alignment.
     - Rejected: engine ground alignment by feet pivot. Bounds alignment
@@ -271,7 +249,8 @@ art-pack requirements; no phase here implements them.
     map, separate from `hairs`. Each entry names a `slot` and a `bind`:
     - Slots: head `headdress` | `ears` | `accessory`; body `tail`;
       extendable.
-    - A `head` binding uses the on-head transform.
+    - A `head` binding uses the on-head transform and carries its rasters in
+      `layers`.
     - A `body` binding uses per-column `columns.<column>.layers`, with
       `layers` as the default.
 
@@ -297,16 +276,21 @@ art-pack requirements; no phase here implements them.
 16. **Safety-only Go validation and kit lint (91).** The validator enumerates
     rasters in:
     - `outfits.*.{poses,gestures}.*.layers`;
-    - `attachments.*` and `eyesets.*`;
+    - `attachments.*.layers` and `attachments.*.columns.*.layers`;
+    - `eyesets.*`;
     - the new layer key `fills`.
 
     These go through the existing layer check and filename rule, and unknown
     keys are never rejected. A layer in the new sections is valid with `fills`
-    alone, so the Go check and the JS mode inference accept it. Legacy
+    alone, and so is a `frames` entry there, so the Go check (which therefore
+    takes a new-section flag) and the JS mode inference and frame path accept
+    it. Legacy
     `poses.*.layers` keep the v1 rule (113). A non-rejecting `lintCompanionKit`
     reports:
     - a legacy-projection layer whose only rasters are new keys (`fills`);
     - an outfit that binds no `stand` column (Decision 9);
+    - an outfit column with no top-level `poses`/`gestures` entry
+      (Decision 8);
     - registration drift against the pack `registration` field (Decision 26);
     - outfit, hair or eye-set ids the config-key pattern cannot select, and
       the reserved attachment id `none`.
@@ -351,7 +335,8 @@ art-pack requirements; no phase here implements them.
     - New keys, all type `string`, default `""` (empty means follow the
       preset), `default_scope: global`, and global-only through
       `manifestGlobalOnlyKeys`
-      (`agents-plugin-tool/internal/mcp/dashboard_config.go#L62-L66`):
+      (`manifestGlobalOnlyKeys` in
+      `agents-plugin-tool/internal/mcp/dashboard_config.go`):
 
       | Key | Value pattern |
       |---|---|
@@ -366,6 +351,12 @@ art-pack requirements; no phase here implements them.
       are mirrored identically across the three dashboard manifests, each
       with one settings-catalog row (`"surface": "companion-modal"`, director
       Decision 4) and its `wsi18n` strings.
+    - Picker labels render pack strings with `textContent`/`Option` only
+      (pack-sources Decision 6). A picker disables or omits an id the config
+      pattern cannot select, so it never produces a write the server refuses.
+      When the pack defines more than 16 attachment slots or palette channels,
+      the picker lists them all but writes at most the 16 pairs the config
+      value allows.
     - Values are global, not per pack. An id the active pack does not define
       is ignored, and that component falls back to the preset.
     - Writes use the existing `POST /api/config/set {scope:"global"}` path
@@ -386,6 +377,10 @@ art-pack requirements; no phase here implements them.
       is still changing.
 21. **Pack byte budget (99).** Measure after the first finished column, then
     set the cap, with a 3 MiB hard ceiling. This is recorded for the art pack.
+    - Pack-sources Decision 4 caps an installed pack directory at 256
+      entries. An outfit pack with many columns and per-layer rasters can load
+      from the store yet be refused at install. The v1 pack ships one outfit;
+      flag the cap for the pack-sources owner when its limits are revisited.
     - Rejected: keeping the former 1.2 MiB embedded-pack budget cited by the
       art-pack ticket (it is not a code cap; the code caps are 512 KiB
       manifest, 2 MiB asset and 16 MiB pack,
@@ -404,7 +399,12 @@ art-pack requirements; no phase here implements them.
 24. **Selection order (104).** `dashboard.companion_outfit` > preset
     `outfit` > pack `defaultOutfit` > first outfit key in sorted order. Hair,
     eyes, attachments and palette resolve the same way: config key > preset >
-    pack default.
+    pack default. Pack defaults: hair is the existing default-hair behavior
+    unchanged (legacy packs must render unchanged), eyes is `head.eyes`,
+    attachments is none, and palette is the pack `palette`. Attachments merge
+    per slot and palette per channel across the three sources, since config
+    values are partial maps; a higher source wins only the slots or channels
+    it names.
     - Rejected: first key only, since map key order is not an authoring
       contract.
 25. **v1 wardrobe size (98; owner 2026-11-22 19:15).** The official v1 pack
@@ -419,12 +419,17 @@ art-pack requirements; no phase here implements them.
       headAnchor: [x, y], feetPivot: [x, y], tolerance?: px }`, default
       tolerance 4, declares the standing reference. The h28 values are
       `[255, 184]` and `[256, 503]`; a BYO pack declares its own. The lint
-      compares each outfit column's `headAnchor` and `feetPivot` against it. A
-      column that declares `seatY` (seated) is compared on x only, since it
-      anchors lower by design (Decision 12). No `registration` field means
+      compares each outfit column's `headAnchor` and `feetPivot` against it. Only
+      the `stand` column is compared on both axes. Every other column is
+      compared on x only, since `typing`, `perched` and `dangle` anchor lower
+      or hang by design (Decision 12). The exemption does not use `seatY`,
+      which is an engine stage-seat field and not a marker of a lower anchor. No `registration` field means
       nothing to compare, and no drift finding.
       - Rejected: comparing columns with each other, which flags seated
         columns.
+      - Rejected: exempting y drift by the presence of `seatY`, which would
+        force `typing` and `dangle` to declare a stage seat line only to
+        silence the lint.
       - Rejected: hardcoding the h28 values, which breaks BYO canvases.
     - **Id patterns (116):** outfit, hair, eye-set and attachment ids match
       `^[a-z0-9][a-z0-9_-]{0,63}$`. Attachment slot ids match
@@ -443,6 +448,27 @@ art-pack requirements; no phase here implements them.
       `IsCompanionConfigKey`, the `companion` stream payload and
       `LoadCompanion` to carry the five keys, building on the shape director
       Phase 1 lands.
+
+27. **No held-prop grips (127).** The first design's `grips.primary`/`secondary`
+    and `held` prop placement are dropped. They existed only to seat a prop in
+    base-library hands and to split hands around the prop. Under outfit-baked
+    columns, a held prop is either baked into the gesture column art or draws
+    above the hands at `handAnchor` (engine-v2).
+    - Rejected: keeping `grips` and `held` as optional column fields, because
+      no remaining pipeline step produces them.
+28. **Articulated columns are cut at assembly (128=a).** `perched` (knee-pivot
+    lower legs), `dangle` (torso, arms, legs with differential
+    `swingWeight`/`swingLag`) and the 2-frame `typing` hands get their
+    segments by cutting the whole dressed redraw at assembly (Decision 4,
+    step 6). The hidden overlap regions are repaired by image edit, with
+    per-column owner sign-off. The schema is unaffected: an outfit column
+    accepts any number of layers. The settlement lands in the art-pack
+    pipeline and the manual recipe (Decision 20), not in the schema.
+    - Rejected: redrawing limbs as separate parts, which reintroduces outfit
+      drift between independently generated parts.
+    - Rejected: shipping rigid single layers, which reverses the owner's
+      earlier requirements for continuous knee-pivot `perched` legs and
+      articulated `dangle` (art-pack Background rule 2).
 
 ## Constraints
 
@@ -486,8 +512,12 @@ required, and keeps validation safety-only with unknown-field passthrough.
 Compatibility facts the design relies on (VERIFIED against
 `agents-plugin-tool/internal/wsdashboard/` on develop in the 2026-11-22
 promotion review and carried unchanged: the outfit-baked revision touches none
-of the cited lines; this ai-docs-only checkout cannot re-check them, so
-re-confirm at the next review):
+of the cited lines; this ai-docs-only checkout cannot re-check them). The 2026-11-22 revision
+review found the symbol-level facts still true on develop, but the line
+numbers drifted after director Phase 1 grew `companion_pack_schema.go`; the
+line citations in this ticket are evidence only, so re-anchor by symbol
+(`validateCompanionManifest`, `companionManifestCheck.renderable`,
+`companionLayerAssets`, `manifestGlobalOnlyKeys`) when implementing:
 
 - The validator reads only known top-level keys
   (`companion_pack_schema.go:118-123`). Pose and gesture entries read only
@@ -535,7 +565,8 @@ Goal: an outfit pack loads and serves every raster on the new daemon, and an
 old daemon still loads its legacy projection, per Decisions 6-8, 13-16 and 26.
 
 - Extend `validateCompanionManifest` enumeration to
-  `outfits.*.{poses,gestures}.*.layers`, `attachments.*`, `eyesets.*` and the
+  `outfits.*.{poses,gestures}.*.layers`, `attachments.*.layers`,
+  `attachments.*.columns.*.layers`, `eyesets.*` and the
   layer key `fills`, using the existing layer check and filename rule.
   Unknown keys keep passing through. A layer in the new sections is valid with
   `fills` alone (Decision 16); the JS mode inference accepts it too.
@@ -545,6 +576,7 @@ old daemon still loads its legacy projection, per Decisions 6-8, 13-16 and 26.
   - a legacy-projection layer whose only rasters are new keys (`fills`),
     which an old daemon rejects;
   - an outfit that binds no `stand` column;
+  - an outfit column with no top-level `poses`/`gestures` entry;
   - column `headAnchor` or `feetPivot` drift from the pack's `registration`
     (Decision 26);
   - outfit, hair or eye-set ids the config-key pattern cannot select, and a
@@ -553,7 +585,7 @@ old daemon still loads its legacy projection, per Decisions 6-8, 13-16 and 26.
   this contract (its base-library, joint, grip, z-band and variant sections
   describe the retired model), then apply it to
   `ai-docs/manuals/companion-pet-rigging.md`, including the pipeline recipe
-  (Decisions 4 and 20).
+  (Decisions 4, 20 and 28).
 
 Verification:
 
@@ -570,8 +602,10 @@ Verification:
     a legacy `poses.*.layers` is still rejected;
   - the lint, called directly on the parsed manifest, flags each seeded
     defect (including the projection defect and an outfit without `stand`)
-    and its call changes no validation result; a seated column is not flagged
-    for y drift.
+    and its call changes no validation result; a non-`stand` column is not
+    flagged for y drift, and a `stand` column is;
+  - a frame carrying only `fills` validates in an outfit column and is still
+    rejected in a legacy `poses.*.layers`.
 
 ### Phase 2: Compositor outfit engine
 
@@ -617,7 +651,8 @@ Goal: hair, eyes, attachments and colors combine freely per Decisions 13, 15,
 19, 24 and 26. Depends on Phase 2 and on
 `261122-feat-ws-companion-director#phase1` (frontmatter `blocked-by`).
 
-- Eye sets.
+- Eye sets. A swap recomputes the iris buffer, which `makeRig` creates only
+  when the eye block has a `sclera` raster.
 - Head-bound and body-bound attachment slots, with the slot default z of
   Decision 11.
 - New preset fields `outfit`, `eyes` and `attachments` (Decision 26).
@@ -644,6 +679,7 @@ Verification:
     skipped;
   - an outfit, hair or attachment swap after the first render re-renders
     the new stack, with no stale cache;
+  - an eye-set swap recomputes the iris buffer;
   - a picker lists the active pack's outfits, hairs, eye sets, slots and
     channels, and a pick posts the expected
     `POST /api/config/set {scope:"global"}` payload;
