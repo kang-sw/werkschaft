@@ -6,6 +6,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: fbc8215b7fb98e1c
 sage-review-completeness-reviewed: fbc8215b7fb98e1c
+completed: 2026-11-22
 ---
 
 # Fan-out mail: collapse the recipient list behind mailbox.recipients, show sender labels
@@ -473,3 +474,70 @@ Verification:
   (install missing dependencies; compare any failure names against
   `develop`); the wsflow mirror test passes. Record exact commands in the
   Result.
+
+### Result (d10a5f980) - 2026-11-22
+
+Landed in d10a5f980.
+
+- Claude watcher: `agents-plugin/hooks/claude-mod/watcher.ts` adds
+  `mailLegend`. `formatBatch` puts its line second in the batch head, as the
+  daemon does for a hosted head. The wsflow copy is the rsync mirror.
+- Pi: `mailboxLegend` and `buildMailboxPushMessages` in
+  `agents-plugin-pi/src/mailbox-waiter.ts`, used by the `admit` mapping in
+  `index.ts`.
+  - Pi has no per-mail batch head. The envelopes enter the generic
+    `ws-push-batch` wrapper through `sendBatchToLead`, so the legend is a
+    first line and a blank line on the batch's first `ws-mailbox` message,
+    ahead of its `mail from` head. This is the daemon's own placement for a
+    submission with no batch head.
+  - The ticket named `spawner-push.ts` as the header site. It needed no edit.
+- Both adapters follow the Phase 1 contract:
+  - Entries are addressed senders (`from`, else `reply_to`) whose envelope
+    carries a `label`, one per distinct handle, in first-appearance order.
+  - A senderless envelope's `label` is its handle, so it never gets an entry.
+  - No labeled sender means no legend line, and the output is byte-identical
+    to before.
+  - Heads, bodies and Pi's `details` are unchanged.
+  - Each adapter re-cleans the label (newline to space, `;` and `]` dropped,
+    32 code points), in case a daemon of another version sent it raw.
+- Pi bundles and native payloads were regenerated (`npm run bundle`, then
+  `prepare-workflow-bundles.py` and `prepare-native-payload.py --first-party-only`).
+- agy: its direct tool list is a plain list, `DirectTools` in
+  `agents-plugin-tool/internal/wsagent/agy.go`. `mailbox.recipients` is added
+  beside `mailbox.send` and `mailbox.recv`, with
+  `TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt`. The Phase 1
+  minor finding about it is resolved. `mailbox.lookup_peers` was never on the
+  list and stays off it.
+
+Verification:
+
+- `claude plugin test` from `agents-plugin`: 850 pass, 0 fail across 20 files.
+  It includes `the sender legend names each labeled addressed sender once and
+  leaves heads and bodies alone` and `a labeled drain submits one prompt with
+  one legend ahead of the mail`. The wsflow copy is byte-identical, and
+  `TestWsflowHooksMirrorUpToDate` passes.
+- `npm ci --ignore-scripts && npm test` from `agents-plugin-pi`: 2696 tests,
+  2665 pass, 27 fail. Failing test names were compared against an export of
+  base commit 6fe652406 (`git archive`, same dependencies): it failed 52
+  tests, the 27 here are a subset of those 52, and none are new. The new
+  tests, `test/push-render.test.ts` and `test/mailbox-waiter.test.ts` (131
+  tests), pass. The Pi test `a labeled drain reaches the model as one steer
+  batch with one sender legend ahead of the mail` drives the real drain, then
+  `sendBatchToLead` and the FIFO batch materialization.
+  - The one bundle-freshness failure present before regeneration (`committed
+    Pi bundle matches the launcher's current input hash`) is gone after it.
+- `python3 -m unittest discover agents-plugin-wsflow/tests`: 22 tests, OK
+  (2 skipped).
+- From `agents-plugin-tool`, with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`:
+  - `go test ./internal/wsrsrc -count=1 -run 'TestPiMirrorUpToDate|TestWsflow'`: ok.
+  - `go test ./internal/wsagent -count=1 -run 'TestAgyDirectToolsListTheMailboxToolsAGroupMarkerPointsAt|TestChildSafe'`: ok.
+  - `go test ./internal/mcp -count=1 -run 'TestHostedDirectToolDiscovery|TestHostedAgyToolsAlwaysLoad'`: ok.
+  - `go vet ./internal/wsagent`: clean.
+
+Review: one lite pass, clean, no findings.
+
+Decisions:
+
+- The legend sits on the batch head's second line in the watcher and on the
+  first mail message in Pi, matching the daemon's two placements.
+- Adapter-side cleaning duplicates the daemon's, as a guard only.
