@@ -43,7 +43,7 @@ type codexFake struct {
 func newCodexLeadHarness(t *testing.T) (*leadHarness, *codexFake) {
 	t.Helper()
 	h := newLeadHarness(t)
-	h.opts.Backends[BackendCodex] = BackendRegistration{Backend: CodexBackend{Command: "/opt/harness/codex"}, LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes, PermissionLevels: LeadPermissionLevels(), Catalog: CodexCatalog()}
+	h.opts.Backends[BackendCodex] = BackendRegistration{Backend: CodexBackend{Command: fakeHarness("codex")}, LeadProfile: LeadProfileCodex, PermissionModes: CodexPermissionModes, PermissionLevels: LeadPermissionLevels(), Catalog: CodexCatalog()}
 	h.opts.WSMCP = func(root string) (MCPCommand, error) {
 		return MCPCommand{Command: "/opt/harness/python3", Env: map[string]string{"WS_MCP_PROJECT_ROOT": root}}, nil
 	}
@@ -411,7 +411,7 @@ func TestCodexLeadSyntheticCreateControlsAndResume(t *testing.T) {
 	eventually(t, "first Codex input", func() bool { return slices.Equal(codexUserInputs(h, holder), h.envelopes("hello")) })
 	codexApplied(t, h, id, holder)
 	spawn, rec := h.holders.spawned(holder), h.record(id)
-	if !slices.Equal(spawn.Argv, []string{"/opt/harness/codex", "app-server"}) || !sameDir(spawn.Cwd, h.root) || spawn.Mode != "pipe" {
+	if !slices.Equal(spawn.Argv, []string{fakeHarness("codex"), "app-server"}) || !sameDir(spawn.Cwd, h.root) || spawn.Mode != "pipe" {
 		t.Fatalf("sustained stdio process: %+v", spawn)
 	}
 	if spawn.Env["CODEX_HOME"] != "/synthetic/account" || spawn.Env["KEEP_ME"] != "yes" || spawn.Env[EnvMCPSessionToken] != rec.MCPToken || len(rec.MCPToken) != 64 {
