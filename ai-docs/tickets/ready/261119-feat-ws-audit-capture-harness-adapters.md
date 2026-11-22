@@ -453,6 +453,19 @@ a call, and the cut is explicit. `TestCodexRingCallIDMatchesTheAuditCallID`
 covers a digested long ID and a literal short ID. Both pass under `-race`,
 and the full `wsagent` package passes.
 
+#### Edition (2b3b0211f) - 2026-11-22
+
+Correction to the compaction bullet above: the 0.170.0 probes do not
+confirm the boundary. Both stop at a `thread/start` configuration error
+(line 6) before any turn. The boundary is confirmed for 0.160.0 only, from
+the hosted lead's manual compaction in `codex-0.160.0-hosted-lead.jsonl`:
+the `contextCompaction` item starts at line 78 and completes at line 81.
+Its completion is the explicit cut. For 0.170.0 the boundary is
+unverified. `TestCodexAuditCompactionBoundaryPerVersion` pins this
+exactly, per version: one compaction event, at line 81, for 0.160.0; none,
+and no cut, for 0.170.0. The pooled recordings test no longer asserts a
+cut.
+
 ### Phase 3: agy adapter
 
 Depends on Phase 2. Map the agy ACP stream onto the envelope, including
