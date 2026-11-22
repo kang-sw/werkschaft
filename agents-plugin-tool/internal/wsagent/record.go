@@ -340,7 +340,7 @@ func WriteRecordForTest(dir string, rec Record) error {
 }
 
 func readRecord(sessionDir string) (Record, error) {
-	raw, err := readFile(recordPath(sessionDir))
+	raw, err := readRecordFile(sessionDir)
 	if err != nil {
 		return Record{}, err
 	}
