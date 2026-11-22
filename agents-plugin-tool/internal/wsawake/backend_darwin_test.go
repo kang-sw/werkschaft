@@ -166,6 +166,11 @@ func TestCaffeinateLogsUnexpectedExit(t *testing.T) {
 	if !strings.Contains(got, "exit status 3") || !strings.Contains(got, "stderr: helper refused") {
 		t.Fatalf("exit log lacks the status or stderr: %q", got)
 	}
+	select {
+	case <-b.exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the exited helper was never reaped")
+	}
 	if !b.Lost() {
 		t.Fatal("an exited helper is not reported lost")
 	}

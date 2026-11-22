@@ -40,8 +40,9 @@ func setThreadExecutionState(flags uint32) error {
 //
 // The OS drops a thread's execution state when the thread exits, and a
 // goroutine that ends while locked takes its thread down with it. So a clear
-// that fails retires the thread (its state goes with it), and the next call
-// starts a fresh one; Close retires it the same way.
+// that fails retires the thread (its state goes with it, except on the main
+// thread; see startThread), and the next call starts a fresh one; Close
+// retires it the same way.
 type executionState struct {
 	set func(flags uint32) error
 
@@ -97,6 +98,13 @@ func (b *executionState) startThread() *executionThread {
 			err := b.set(req.flags)
 			req.done <- err
 			if err != nil && req.flags == esContinuous {
+				// m0 caveat: the runtime does not end the main thread (m0)
+				// when a goroutine locked to it returns; it parks it, and
+				// its execution state stays. After init m0 runs any
+				// goroutine, so this one may be on it. Try one more clear
+				// before returning; call waits for this goroutine to exit,
+				// and the error it already returned stands.
+				_ = b.set(esContinuous)
 				return
 			}
 		}

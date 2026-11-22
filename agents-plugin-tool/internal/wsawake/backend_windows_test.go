@@ -61,16 +61,21 @@ func TestExecutionStateSetAndClearShareOneThread(t *testing.T) {
 }
 
 // A clear that fails retires the dedicated thread, which ends locked and
-// takes its execution state with it; the next acquire starts a fresh thread,
-// and Close retires that one.
+// takes its execution state with it, after one more clear for the main
+// thread, which the runtime parks instead of ending; the next acquire starts
+// a fresh thread, and Close retires that one.
 func TestExecutionStateFailedClearRetiresThread(t *testing.T) {
 	var mu sync.Mutex
 	failClear := true
-	var threads []uint32
+	type call struct {
+		flags  uint32
+		thread uint32
+	}
+	var calls []call
 	b := newExecutionState(func(flags uint32) error {
 		mu.Lock()
 		defer mu.Unlock()
-		threads = append(threads, windows.GetCurrentThreadId())
+		calls = append(calls, call{flags, windows.GetCurrentThreadId()})
 		if flags == esContinuous && failClear {
 			failClear = false
 			return errors.New("refused")
@@ -106,8 +111,11 @@ func TestExecutionStateFailedClearRetiresThread(t *testing.T) {
 		t.Fatal("a successful clear retired the thread")
 	}
 	mu.Lock()
-	if len(threads) != 4 || threads[0] != threads[1] || threads[2] != threads[3] {
-		t.Fatalf("set and clear did not share their thread: %v", threads)
+	// Set, failed clear and its one retry on the first thread; set and
+	// clear on the second.
+	if len(calls) != 5 || calls[2].flags != esContinuous ||
+		calls[0].thread != calls[1].thread || calls[1].thread != calls[2].thread || calls[3].thread != calls[4].thread {
+		t.Fatalf("calls = %+v, want set, clear, retried clear on one thread, then set and clear on another", calls)
 	}
 	mu.Unlock()
 	if err := b.Close(); err != nil {
