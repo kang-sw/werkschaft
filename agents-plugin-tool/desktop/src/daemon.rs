@@ -174,7 +174,7 @@ impl Lifecycle for NativeLifecycle {
     }
 
     fn launch(&self, staged: Staged, identity: &Value, replace: bool) -> bool {
-        launch(&staged.keep(), &self.cache, identity, replace)
+        launch(staged, &self.cache, identity, replace)
     }
 
     fn settle(&self) -> Option<Daemon> {
@@ -304,7 +304,16 @@ fn attach_winner(
     Err("An older or unidentified daemon won the handoff. Retry to reconnect.".into())
 }
 
-fn launch(candidate: &Candidate, cache: &Path, identity: &Value, replace: bool) -> bool {
+// The stage is kept once a starter process exists, even if that start later
+// fails: the process may already run from it. A refused spawn drops it.
+fn launch(staged: Staged, cache: &Path, identity: &Value, replace: bool) -> bool {
+    let candidate = staged.candidate().clone();
+    let mut stage = Some(staged);
+    let mut spawned = || {
+        if let Some(staged) = stage.take() {
+            staged.keep();
+        }
+    };
     let mut command = Command::new(&candidate.binary);
     command.current_dir(&candidate.root);
     for key in [
@@ -352,11 +361,11 @@ fn launch(candidate: &Candidate, cache: &Path, identity: &Value, replace: bool) 
     #[cfg(not(windows))]
     command.stderr(Stdio::null());
     let input = identity.to_string();
-    let (success, stderr) = run_starter(&mut command, input.as_bytes());
+    let (success, stderr) = run_starter(&mut command, input.as_bytes(), &mut spawned);
     if cfg!(windows) && !success && breakaway_denied(&stderr) {
         eprintln!("Werkschaft: WS_DAEMON_BREAKAWAY_DENIED=5. Retrying within the containing job.");
         command.env("WS_MCP_DAEMON_JOB_LIFETIME", "1");
-        return run_starter(&mut command, input.as_bytes()).0;
+        return run_starter(&mut command, input.as_bytes(), &mut spawned).0;
     }
     success
 }
@@ -367,10 +376,11 @@ fn breakaway_denied(stderr: &[u8]) -> bool {
         .any(|line| line.strip_suffix(b"\r").unwrap_or(line) == b"WS_DAEMON_BREAKAWAY_DENIED=5")
 }
 
-fn run_starter(command: &mut Command, input: &[u8]) -> (bool, Vec<u8>) {
+fn run_starter(command: &mut Command, input: &[u8], spawned: &mut impl FnMut()) -> (bool, Vec<u8>) {
     let Ok(mut child) = command.spawn() else {
         return (false, Vec::new());
     };
+    spawned();
     let output = child.stderr.take().map(|stderr| {
         use std::io::Read;
         let (send, receive) = std::sync::mpsc::channel();
@@ -627,6 +637,24 @@ mod tests {
         ] {
             assert!(version_core(invalid).is_none(), "{invalid}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_spawned_starter_takes_its_stage() {
+        let mut taken = 0;
+        let refused = run_starter(&mut Command::new("/nonexistent/ws-mcp"), b"{}", &mut || {
+            taken += 1
+        });
+        assert!(!refused.0);
+        assert_eq!(taken, 0);
+        let mut command = Command::new("cat");
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        assert!(run_starter(&mut command, b"{}", &mut || taken += 1).0);
+        assert_eq!(taken, 1);
     }
 
     #[test]

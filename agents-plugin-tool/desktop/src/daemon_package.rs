@@ -27,8 +27,7 @@ pub struct Staged {
 }
 
 impl Staged {
-    #[cfg(test)]
-    fn candidate(&self) -> &Candidate {
+    pub fn candidate(&self) -> &Candidate {
         &self.candidate
     }
 
