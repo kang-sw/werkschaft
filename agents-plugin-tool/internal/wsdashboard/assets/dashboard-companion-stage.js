@@ -2,6 +2,8 @@
   "use strict";
   const { clamp, mix, finite } = C;
   const landmarks = ["composer-top", "whiteboard-ask", "hud-roster"];
+  // The companion config payload fields the rig's wardrobe reads.
+  const wardrobeFields = ["outfit", "hair", "eyes", "attachments", "palette"];
   const railRowSelector = ".rs[data-rid]";
   let mountedRailObserver;
 
@@ -216,7 +218,7 @@
 
     function notice(key) { window.WsToast?.show(wsT("js.companion." + key), { kind: "notice" }); }
     const loader = C.packLoader((pack, shared) => {
-      const next = C.makeRig(pack, shared, preset);
+      const next = C.makeRig(pack, shared, preset, currentConfig);
       // Prepare the neutral body and its tint cache before replacing the active rig.
       next.view("stand", null, "idle", []);
       model = pack;
@@ -244,10 +246,18 @@
       }
     });
 
+    // apply takes a live config broadcast. A wardrobe change re-dresses the
+    // loaded rig in place; the rig clears its view and tint caches.
     function apply(next) {
       const changed = currentConfig.preset !== next.preset;
+      const dressed = wardrobeFields.some(field => currentConfig[field] !== next[field]);
       currentConfig = next;
       if (changed) applyPreset(next.preset);
+      if (dressed && rig) {
+        rig.setWardrobe(next);
+        viewBeat = null;
+        schedule();
+      }
       requestPack();
       settings.refresh();
     }

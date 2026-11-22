@@ -944,3 +944,424 @@ test("companion settings modal opens, writes typed global values, reverts refuse
   assert.ok(dialog.all().filter(c => c.tagName === "SELECT" || c.tagName === "INPUT").every(c => c.disabled), "read-only pages disable every control");
   assert.equal(find("ws-companion-settings-muted").at(-1).textContent, "js.companion.settings_readonly");
 });
+
+// pixelCanvas is a small software 2D canvas: nearest-neighbour drawImage under
+// an affine transform, source-over and destination-in drawing, and the
+// multiply fillRect the compositor's tint cache uses.
+function pixelCanvas() {
+  function parse(color) {
+    const hex = color.slice(1);
+    const full = hex.length === 3 ? [...hex].map(c => c + c).join("") : hex;
+    return [0, 2, 4].map(i => parseInt(full.slice(i, i + 2), 16));
+  }
+  class Canvas {
+    constructor(width, height) { this.width = width; this.height = height; this.pixels = new Float64Array(width * height * 4); }
+    getContext() {
+      const canvas = this;
+      let m = [1, 0, 0, 1, 0, 0];
+      const stack = [];
+      const ctx = {
+        canvas, fillStyle: "#000", globalCompositeOperation: "source-over",
+        save() { stack.push([m, ctx.globalCompositeOperation]); },
+        restore() { const top = stack.pop(); if (top) [m, ctx.globalCompositeOperation] = top; },
+        translate(x, y) { m = [m[0], m[1], m[2], m[3], m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]; },
+        scale(x, y) { m = [m[0] * x, m[1] * x, m[2] * y, m[3] * y, m[4], m[5]]; },
+        rotate(theta) {
+          const c = Math.cos(theta), s = Math.sin(theta);
+          m = [m[0] * c + m[2] * s, m[1] * c + m[3] * s, m[2] * c - m[0] * s, m[3] * c - m[1] * s, m[4], m[5]];
+        },
+        clearRect() { canvas.pixels.fill(0); },
+        // each visits every target pixel whose centre maps into the user rect.
+        each(x, y, w, h, fn) {
+          const det = m[0] * m[3] - m[1] * m[2];
+          for (let py = 0; py < canvas.height; py++) {
+            for (let px = 0; px < canvas.width; px++) {
+              const dx = px + 0.5 - m[4], dy = py + 0.5 - m[5];
+              const u = (m[3] * dx - m[2] * dy) / det, v = (m[0] * dy - m[1] * dx) / det;
+              fn((py * canvas.width + px) * 4, u >= x && u < x + w && v >= y && v < y + h, (u - x) / w, (v - y) / h);
+            }
+          }
+        },
+        drawImage(image, x = 0, y = 0, w = image.width, h = image.height) {
+          const out = canvas.pixels, src = image.pixels;
+          ctx.each(x, y, w, h, (i, inside, fu, fv) => {
+            let r = 0, g = 0, b = 0, a = 0;
+            if (inside) {
+              const j = (Math.floor(fv * image.height) * image.width + Math.floor(fu * image.width)) * 4;
+              [r, g, b, a] = [src[j], src[j + 1], src[j + 2], src[j + 3]];
+            }
+            if (ctx.globalCompositeOperation === "destination-in") { out[i + 3] *= a; return; }
+            if (!inside || !a) return;
+            const outA = a + out[i + 3] * (1 - a);
+            for (const [k, value] of [[0, r], [1, g], [2, b]]) out[i + k] = (value * a + out[i + k] * out[i + 3] * (1 - a)) / outA;
+            out[i + 3] = outA;
+          });
+        },
+        fillRect(x, y, w, h) {
+          const [r, g, b] = parse(ctx.fillStyle).map(v => v / 255), out = canvas.pixels;
+          assert.equal(ctx.globalCompositeOperation, "multiply", "the compositor fills only to tint");
+          ctx.each(x, y, w, h, (i, inside) => {
+            if (!inside) return;
+            const back = out[i + 3];
+            for (const [k, value] of [[0, r], [1, g], [2, b]]) out[i + k] = (1 - back) * value + back * out[i + k] * value;
+            out[i + 3] = 1;
+          });
+        },
+        getImageData(x, y, w, h) {
+          const data = new Uint8ClampedArray(w * h * 4);
+          for (let row = 0; row < h; row++) for (let col = 0; col < w; col++) {
+            const i = ((y + row) * canvas.width + x + col) * 4, o = (row * w + col) * 4;
+            for (let k = 0; k < 3; k++) data[o + k] = Math.round(canvas.pixels[i + k] * 255);
+            data[o + 3] = Math.round(canvas.pixels[i + 3] * 255);
+          }
+          return { data };
+        }
+      };
+      return ctx;
+    }
+  }
+  // bitmap paints a white (or given) RGB at alpha 1 wherever cell(x, y) holds.
+  function bitmap(size, cell, rgb = [1, 1, 1]) {
+    const image = new Canvas(size, size);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      if (!cell(x, y)) continue;
+      image.pixels.set([...rgb, 1], (y * size + x) * 4);
+    }
+    return image;
+  }
+  function pixel(canvas, x, y) {
+    const i = (y * canvas.width + x) * 4;
+    return [0, 1, 2, 3].map(k => Math.round(canvas.pixels[i + k] * 255));
+  }
+  return { Canvas, bitmap, pixel, parse };
+}
+
+// paperDollPack is the IP-clean procedural outfit fixture on a 16 x 16 canvas:
+// one head set (egg skinFill + line), two outfits whose exposed skin (arms and
+// legs) is the same pure-white skinFill region, and differently cut fills.
+function paperDollPack(px) {
+  const size = 16;
+  const skin = (x, y) => (y >= 6 && y <= 9 && (x === 3 || x === 4 || x === 11 || x === 12)) ||
+    (y >= 12 && (x === 6 || x === 7 || x === 9 || x === 10));
+  const torso = (x, y) => y >= 5 && y <= 10 && x >= 5 && x <= 10;
+  const files = {
+    "egg-skin.png": (x, y) => y >= 1 && y <= 3 && x >= 6 && x <= 9,
+    "street-skin.png": skin, "street-jacket.png": torso,
+    "street-line.png": [(x, y) => y === 11 && x >= 5 && x <= 10, [30, 36, 51].map(v => v / 255)],
+    "street-typing-skin.png": skin,
+    "gown-skin.png": skin, "gown-fill.png": (x, y) => torso(x, y) || (y === 11 && x >= 4 && x <= 11),
+    "gown-trim.png": (x, y) => y === 5 && x >= 5 && x <= 10,
+    "gown-glow.png": (x, y) => y === 0 && x === 0,
+    "legacy-stand.png": (x, y) => y >= 5 && x >= 2 && x <= 13
+  };
+  const bitmaps = new Map(Object.entries(files).map(([name, spec]) =>
+    [name, Array.isArray(spec) ? px.bitmap(size, spec[0], spec[1]) : px.bitmap(size, spec)]));
+  const manifest = {
+    canvas: [size, size],
+    head: {pivot: [8, 4], egg: {skinFill: "egg-skin.png"}},
+    poses: {
+      stand: {headAnchor: [8, 4], layers: [{file: "legacy-stand.png"}]},
+      typing: {fallback: "stand", headAnchor: [8, 7]}
+    },
+    gestures: {},
+    defaultOutfit: "street",
+    outfits: {
+      street: {poses: {
+        stand: {layers: [{skinFill: "street-skin.png", jacketFill: "street-jacket.png", line: "street-line.png"}]},
+        typing: {layers: [{skinFill: "street-typing-skin.png", jacketFill: "street-jacket.png"}]}
+      }},
+      gown: {palette: {outfitPrimary: "#aa3355", trim: "#123456"}, poses: {
+        stand: {layers: [{fills: {skin: "gown-skin.png", outfitPrimary: "gown-fill.png", trim: "gown-trim.png", glow: "gown-glow.png"}}]}
+      }}
+    }
+  };
+  return {pack: {manifest, bitmaps}, skin, torso};
+}
+
+test("paper doll outfits share exposed-skin pixels tinted by skin at four tints with no outfit fill on skin", () => {
+  const px = pixelCanvas();
+  const { makeRig } = companion({OffscreenCanvas: px.Canvas});
+  const { pack, skin } = paperDollPack(px);
+  const rig = makeRig(pack, null, "");
+  const gaze = {x: 0, y: 0};
+  const torsoByOutfit = {};
+  for (const tint of ["#f4cdb4", "#8d5524", "#ffe0bd", "#3b2219"]) {
+    const rgb = px.parse(tint);
+    for (const outfit of ["street", "gown"]) {
+      rig.setWardrobe({outfit, palette: "skin=" + tint});
+      assert.equal(rig.wardrobe().outfit, outfit);
+      const art = rig.view("stand", null, "idle", []).render(0, gaze);
+      for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+        if (skin(x, y)) assert.deepEqual(px.pixel(art, x, y), [...rgb, 255], `${outfit} ${tint} skin at ${x},${y}`);
+      }
+      // The head egg shares the skin channel, so exposed skin and head match.
+      assert.deepEqual(px.pixel(art, 7, 2), [...rgb, 255], `${outfit} ${tint} head-egg skin`);
+      (torsoByOutfit[outfit] ||= new Set()).add(px.pixel(art, 7, 7).join());
+    }
+  }
+  // Each outfit's body stack is its own: the torso keeps its outfit color
+  // across skin tints and differs between outfits.
+  assert.equal(torsoByOutfit.street.size, 1);
+  assert.equal(torsoByOutfit.gown.size, 1);
+  assert.deepEqual([...torsoByOutfit.street], [[242, 229, 212, 255].join()], "street jacketFill takes the built-in outfitPrimary");
+  assert.deepEqual([...torsoByOutfit.gown], [[170, 51, 85, 255].join()], "gown fills.outfitPrimary takes the outfit palette");
+});
+
+test("paper doll fills channels take their palette color, uncolored channels draw untinted, and seated columns lower the head", () => {
+  const px = pixelCanvas();
+  const { makeRig } = companion({OffscreenCanvas: px.Canvas});
+  const { pack } = paperDollPack(px);
+  const gaze = {x: 0, y: 0};
+  const rig = makeRig(pack, null, "", {outfit: "gown"});
+  let art = rig.view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 5), [0x12, 0x34, 0x56, 255], "custom trim channel tinted by the outfit palette");
+  assert.deepEqual(px.pixel(art, 0, 0), [255, 255, 255, 255], "a channel with no color draws its raster untinted");
+  // Precedence: built-in < pack < outfit < preset < config.
+  pack.manifest.palette = {trim: "#000001"};
+  pack.manifest.presets = {p: {palette: {trim: "#000002"}}};
+  const layered = makeRig(pack, null, "p", {outfit: "gown"});
+  art = layered.view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 5), [0, 0, 2, 255], "the preset palette beats the outfit palette");
+  layered.setWardrobe({outfit: "gown", palette: "trim=#000003 skin=bogus glow=#0a0b0c"});
+  art = layered.view("stand", null, "idle", []).render(0, gaze);
+  assert.deepEqual(px.pixel(art, 7, 5), [0, 0, 3, 255], "the config palette beats the preset");
+  assert.deepEqual(px.pixel(art, 0, 0), [10, 11, 12, 255], "a config color adds a channel color");
+  assert.equal(layered.wardrobe().palette.skin, "#f4cdb4", "a malformed config pair is skipped");
+
+  // A seated column anchors the head lower at headScale 1.0: same egg size.
+  const street = makeRig(paperDollPack(px).pack, null, "");
+  const eggRows = view => {
+    const canvas = view.render(0, gaze), rows = [];
+    for (let y = 0; y < 16; y++) if (px.pixel(canvas, 7, y)[0] === 244 && px.pixel(canvas, 7, y)[2] === 180 && px.pixel(canvas, 8, y)[0] === 244) rows.push(y);
+    return rows;
+  };
+  const standView = street.view("stand", null, "idle", []), typingView = street.view("typing", null, "idle", []);
+  assert.equal(typingView.pose, "typing");
+  assert.deepEqual(eggRows(standView).filter(y => y < 5), [1, 2, 3]);
+  assert.deepEqual(eggRows(typingView).filter(y => y >= 4 && y < 8), [4, 5, 6], "the typing column's head sits three rows lower, unscaled");
+});
+
+// stackCanvas records what each canvas draws; stack() reads a view's drawn
+// layers back as file names (tinted rasters read "<file>@<color>").
+function stackCanvas() {
+  class Canvas {
+    constructor(width, height) { this.width = width; this.height = height; this.drawn = []; }
+    getContext() {
+      const canvas = this;
+      return {
+        canvas, fillStyle: "", globalCompositeOperation: "source-over",
+        save() {}, restore() {}, translate() {}, rotate() {}, scale() {},
+        clearRect() { canvas.drawn.length = 0; },
+        fillRect() { canvas.tint = this.fillStyle; },
+        drawImage(image) { canvas.drawn.push(image); },
+        getImageData: () => ({data: []})
+      };
+    }
+  }
+  // A tint buffer reads "<file>@<color>", another buffer (the iris) lists
+  // what it composited.
+  const label = image => image.file || (image.tint ? image.drawn[0]?.file + "@" + image.tint :
+    "[" + image.drawn.map(item => item.file).join("+") + "]");
+  return { Canvas, stack: view => Array.from(view.render(0, {x: 0, y: 0}).drawn, label) };
+}
+
+function wardrobePack() {
+  const names = ["legacy-stand", "legacy-typing", "legacy-wave", "street-stand", "street-arm", "street-typing", "street-wave",
+    "gown-stand", "gown-perched", "bare-perched", "egg", "eyes-default", "eyes-round", "iris-round", "hair-bob", "hair-bun",
+    "cap", "ears", "tail", "tail-seated", "tail-cheer"];
+  const bitmaps = new Map(names.map(name => [name + ".png", {file: name + ".png"}]));
+  const manifest = {
+    canvas: [512, 512],
+    head: {egg: {file: "egg.png"}, eyes: {frameLower: "eyes-default.png"}},
+    hairs: {bob: {front: {file: "hair-bob.png"}}, bun: {front: {file: "hair-bun.png"}}},
+    eyesets: {round: {sclera: "eyes-round.png", irisLine: "iris-round.png"}},
+    attachments: {
+      cap: {slot: "headdress", bind: "head", layers: [{file: "cap.png"}]},
+      ears: {slot: "ears", bind: "head", layers: [{file: "ears.png"}]},
+      tail: {slot: "tail", bind: "body", layers: [{file: "tail.png"}],
+        columns: {typing: {layers: [{file: "tail-seated.png"}]}, cheer: {layers: [{file: "tail-cheer.png"}]}}},
+      mislabeled: {slot: "ears", bind: "head", layers: [{file: "cap.png"}]}
+    },
+    poses: {
+      stand: {layers: [{file: "legacy-stand.png"}]},
+      typing: {fallback: "stand", layers: [{file: "legacy-typing.png"}]},
+      slouch: {fallback: "typing"},
+      perched: {}
+    },
+    gestures: {
+      wave: {pose: "stand", replaces: ["arm"], layers: [{file: "legacy-wave.png"}]},
+      tuck: {replaces: ["arm"]},
+      cheer: {pose: "stand", handAnchor: [100, 200]}
+    },
+    presets: {
+      evening: {outfit: "gown", hair: "bun", eyes: "round", attachments: {headdress: "cap", tail: "tail"}},
+      ghost: {outfit: "missing", hair: "missing", eyes: "missing"}
+    },
+    defaultOutfit: "street",
+    outfits: {
+      street: {
+        poses: {
+          stand: {layers: [{id: "body", file: "street-stand.png"}, {slot: "arm", file: "street-arm.png"}]},
+          typing: {layers: [{file: "street-typing.png"}]}
+        },
+        gestures: {wave: {layers: [{file: "street-wave.png"}]}}
+      },
+      gown: {poses: {stand: {layers: [{file: "gown-stand.png"}]}, perched: {headAnchor: [256, 300], layers: [{file: "gown-perched.png"}]}}},
+      bare: {poses: {perched: {layers: [{file: "bare-perched.png"}]}}}
+    }
+  };
+  return {manifest, bitmaps};
+}
+
+test("paper doll columns resolve inside the active outfit, never borrow, and end at the legacy projection", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const rig = makeRig(wardrobePack(), null, "");
+  const body = (pose, gesture = null) => {
+    const view = rig.view(pose, gesture, "idle", []);
+    return [view.pose, stack(view).filter(file => !["egg.png", "eyes-default.png", "hair-bob.png"].includes(file))];
+  };
+  assert.equal(rig.wardrobe().outfit, "street", "pack defaultOutfit");
+  assert.deepEqual(body("stand"), ["stand", ["street-stand.png", "street-arm.png"]]);
+  assert.deepEqual(body("slouch"), ["typing", ["street-typing.png"]], "a custom fallback chain runs inside the outfit");
+  assert.deepEqual(body("perched"), ["stand", ["street-stand.png", "street-arm.png"]], "the implicit stand step runs inside the outfit");
+  rig.setWardrobe({outfit: "gown"});
+  assert.deepEqual(body("typing"), ["stand", ["gown-stand.png"]], "an unbound column never borrows another outfit's column");
+  assert.deepEqual(body("perched"), ["perched", ["gown-perched.png"]]);
+  rig.setWardrobe({outfit: "bare"});
+  assert.deepEqual(body("stand"), ["stand", ["legacy-stand.png"]], "a chain ending unbound draws the legacy projection");
+  assert.deepEqual(body("typing"), ["typing", ["legacy-typing.png"]]);
+  assert.deepEqual(body("perched"), ["perched", ["bare-perched.png"]]);
+});
+
+test("paper doll gesture columns replace by id or slot in their own outfit and never draw another outfit's gesture", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const rig = makeRig(wardrobePack(), null, "");
+  const body = gesture => stack(rig.view("stand", gesture, "idle", [])).filter(file => !["egg.png", "eyes-default.png", "hair-bob.png"].includes(file));
+  assert.deepEqual(body("wave"), ["street-stand.png", "street-wave.png"], "the outfit's wave replaces the slot-matched arm");
+  assert.deepEqual(body("tuck"), ["street-stand.png"], "a pure-removal gesture still removes inside an outfit");
+  rig.setWardrobe({outfit: "gown"});
+  assert.deepEqual(body("wave"), ["gown-stand.png"], "an unbound gesture keeps the outfit's stack and draws no legacy art");
+  const cheer = rig.view("stand", "cheer", "idle", []);
+  assert.deepEqual([...cheer.handAnchor], [100, 200], "an unbound gesture keeps its anchors");
+});
+
+test("paper doll leaves legacy pack stacks unchanged", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const manifest = {
+    canvas: [512, 512],
+    poses: {stand: {headAnchor: [200, 100], layers: [{id: "body", file: "body.png"}, {id: "arm", file: "arm.png"}, {slot: "arm", file: "sleeve.png"}]}},
+    gestures: {wave: {replaces: ["arm"], headAnchor: [10, 10], layers: [{file: "wave.png"}]}}
+  };
+  const bitmaps = new Map(["body.png", "arm.png", "sleeve.png", "wave.png"].map(file => [file, {file}]));
+  for (const wardrobe of [undefined, {outfit: "street", hair: "bob", eyes: "round", attachments: "tail=tail"}]) {
+    const rig = makeRig({manifest, bitmaps}, null, "", wardrobe);
+    assert.deepEqual(stack(rig.view("stand", null, "idle", [])), ["body.png", "arm.png", "sleeve.png"]);
+    assert.deepEqual(stack(rig.view("stand", "wave", "idle", [])), ["body.png", "sleeve.png", "wave.png"], "legacy replaces match ids only");
+    assert.equal(rig.wardrobe().outfit, null);
+  }
+});
+
+test("paper doll head set swaps change only their own layers and selection runs config, preset, pack default", () => {
+  const { Canvas, stack } = stackCanvas();
+  const { makeRig } = companion({OffscreenCanvas: Canvas});
+  const rig = makeRig(wardrobePack(), null, "");
+  const draw = (pose = "stand", gesture = null) => stack(rig.view(pose, gesture, "idle", []));
+  const base = draw();
+  assert.deepEqual(base, ["street-stand.png", "street-arm.png", "egg.png", "eyes-default.png", "hair-bob.png"]);
+  const without = (list, ...files) => list.filter(file => !files.includes(file));
+
+  rig.setWardrobe({hair: "bun"});
+  assert.deepEqual(without(draw(), "hair-bun.png"), without(base, "hair-bob.png"), "a hair swap changes only the hair");
+  rig.setWardrobe({attachments: "headdress=cap tail=tail"});
+  const dressed = draw();
+  assert.deepEqual(without(dressed, "cap.png", "tail.png"), base, "attachments add only their own layers");
+  assert.ok(dressed.indexOf("tail.png") < dressed.indexOf("street-stand.png"), "tail defaults behind the body (z11)");
+  assert.ok(dressed.indexOf("cap.png") > dressed.indexOf("hair-bob.png"), "headdress defaults above the front hair (z56)");
+  assert.deepEqual(without(draw("typing"), "egg.png", "eyes-default.png", "hair-bob.png", "cap.png"), ["tail-seated.png", "street-typing.png"],
+    "a body attachment follows the column's layers");
+  assert.ok(draw("stand", "cheer").includes("tail-cheer.png"), "a gesture column entry wins over the pose column");
+  rig.setWardrobe({eyes: "round"});
+  assert.deepEqual(without(draw(), "eyes-round.png", "[iris-round.png+eyes-round.png]"), without(base, "eyes-default.png"),
+    "an eye-set swap changes only the eyes");
+  assert.ok(draw().includes("[iris-round.png+eyes-round.png]"), "the swapped eye set has a sclera, so the iris buffer is recomputed and drawn");
+  rig.setWardrobe({});
+  assert.deepEqual(draw(), base, "clearing the picks re-renders the pack defaults with no stale cache");
+
+  // Selection: config key > preset > pack default; an ID the pack lacks
+  // falls back to the next source; attachments merge per slot.
+  rig.setPreset("evening");
+  assert.deepEqual(JSON.parse(JSON.stringify(rig.wardrobe())), {outfit: "gown", hair: "bun", eyes: "round",
+    attachments: {headdress: "cap", tail: "tail"}, palette: JSON.parse(JSON.stringify(rig.wardrobe().palette))});
+  rig.setWardrobe({outfit: "street", hair: "bob", eyes: "missing", attachments: "headdress=none ears=ears tail=mislabeled Bad=x ears2"});
+  const picks = rig.wardrobe();
+  assert.equal(picks.outfit, "street");
+  assert.equal(picks.hair, "bob");
+  assert.equal(picks.eyes, "round", "an absent eye set falls back to the preset");
+  assert.deepEqual({...picks.attachments}, {ears: "ears", tail: "tail"}, "none clears, a wrong-slot ID and malformed pairs are skipped");
+  rig.setWardrobe({outfit: "missing", hair: "missing"});
+  assert.equal(rig.wardrobe().outfit, "gown", "an absent outfit falls back to the preset");
+  assert.equal(rig.wardrobe().hair, "bun");
+  rig.setPreset("ghost");
+  rig.setWardrobe({});
+  assert.equal(rig.wardrobe().outfit, "street", "an absent preset outfit falls back to the pack default");
+  assert.equal(rig.wardrobe().eyes, null, "the pack-default eyes are head.eyes");
+});
+
+test("paper doll wardrobe pairs parse flat config strings and skip malformed pairs", () => {
+  const { attachmentPairs, palettePairs } = companion();
+  assert.deepEqual({...attachmentPairs("headdress=cap  tail=none")}, {headdress: "cap", tail: "none"});
+  assert.deepEqual({...attachmentPairs(" Head=cap ears=Ears tail= =x ears ok=a=b tail=tail tail=other ")}, {tail: "tail"});
+  assert.deepEqual({...palettePairs("skin=#AABBCC outfit_2=#010203 eye=#abc hair=red 9x=#000000")}, {skin: "#AABBCC", outfit_2: "#010203"});
+  assert.deepEqual({...attachmentPairs(undefined)}, {});
+  const many = Array.from({length: 20}, (_, i) => "s" + i + "=a").join(" ");
+  assert.equal(Object.keys(attachmentPairs(many)).length, 16, "at most 16 pairs");
+});
+
+test("paper doll wardrobe options list selectable outfits, hairs, eye sets, slots and channels", () => {
+  const { wardrobeOptions } = companion();
+  const manifest = wardrobePack().manifest;
+  manifest.outfits.Fancy = {poses: {}};
+  manifest.attachments.none = {slot: "tail"};
+  manifest.attachments.odd = {slot: "Head"};
+  manifest.palette = {trim: "#000000", "bad id": "#000000"};
+  manifest.outfits.street.poses.stand.layers.push({fills: {glow: "x.png"}, frames: [{fills: {spark: "y.png"}}]});
+  const options = JSON.parse(JSON.stringify(wardrobeOptions(manifest)));
+  assert.deepEqual(options.outfits, ["bare", "gown", "street"]);
+  assert.deepEqual(options.hairs, ["bob", "bun"]);
+  assert.deepEqual(options.eyesets, ["round"]);
+  assert.deepEqual(options.slots, {headdress: ["cap"], ears: ["ears", "mislabeled"], tail: ["tail"]});
+  assert.deepEqual(options.channels, ["eye", "glow", "hair", "outfitAccent", "outfitPrimary", "skin", "spark", "trim"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(wardrobeOptions(null))).outfits, []);
+});
+
+test("companion loader fetches every paper-doll raster the server enumerates", async () => {
+  const requested = [];
+  const manifestData = {
+    id: "kit", schema: "ws-companion/v1", canvas: [512, 512],
+    head: {egg: {skinFill: "egg.png", fills: {blush: "blush.png"}}},
+    hairs: {bob: {front: {line: "hair.png", fills: {tip: "tip.png"}}}},
+    poses: {stand: {layers: [{line: "stand.png", fills: {trim: "trim.png"}}]}},
+    outfits: {o: {poses: {stand: {layers: [{fills: {skin: "o-skin.png"}}, {fps: 2, frames: [{fills: {skin: "o-frame.png"}}, "o-frame2.png"]}]}},
+      gestures: {wave: {layers: [{line: "o-wave.png"}]}}}},
+    attachments: {t: {layers: [{file: "t.png"}], columns: {stand: {layers: [{fills: {hair: "t-col.png"}}]}}}},
+    eyesets: {round: {sclera: "r-sclera.png", irisFill: "r-iris.png", note: "ignored.png"}},
+    future: {file: "never.png"}
+  };
+  const { packLoader } = companion({
+    fetch: async url => {
+      if (url.startsWith("/api/companion/packs?") || url === "/api/companion/packs") {
+        return {ok: true, json: async () => ({resolvedAuto: {packId: "kit"}, packs: [{id: "kit", rev: "r"}, {id: "default", rev: "d"}]})};
+      }
+      if (url.includes("/pack.json?")) return {ok: true, json: async () => ({...manifestData, props: {drone: {}, mail: {}, "prop-typing-desk": {}}})};
+      requested.push(decodeURIComponent(url.split("/assets/")[1].split("?")[0]));
+      return {ok: true, blob: async () => url};
+    },
+    createImageBitmap: async () => ({width: 512, height: 512, close() {}})
+  });
+  await new Promise((done, fail) => packLoader(done, () => fail(new Error("unexpected failure"))).load("kit", {}));
+  assert.deepEqual(requested.sort(), ["blush.png", "egg.png", "hair.png", "o-frame.png", "o-frame2.png", "o-skin.png", "o-wave.png",
+    "r-iris.png", "r-sclera.png", "stand.png", "t-col.png", "t.png", "tip.png", "trim.png"]);
+});
