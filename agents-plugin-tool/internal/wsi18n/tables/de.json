@@ -82,6 +82,7 @@
   "agent.native.started": "gestartet",
   "agent.native.ended": "beendet",
   "agent.unknown": "Beobachtung beendet, Abschluss unbekannt",
+  "agent.unknown.short": "Beobachtung beendet",
   "band.cache": "CH {0}",
   "band.cache.title": "Prompt-Cache-Trefferquote der letzten Antwort",
   "band.cost": "Sitzungskosten",

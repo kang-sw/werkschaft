@@ -67,7 +67,10 @@ async function run(browser, lang) {
   {
     const chip = await unknownRow.locator('.astatus').boundingBox(), row = await unknownRow.locator('.ahead').boundingBox();
     assert(chip.width < row.width / 2, `status chip is bounded: ${JSON.stringify({ chip, row })}`);
-    assert.equal(await unknownRow.locator('.astatus').getAttribute('title') !== null, true, 'long status stays in the tooltip');
+    const st = unknownRow.locator('.astatus');
+    assert.equal(await st.innerText(), lang === 'ko' ? '관찰 종료' : 'observation ended', 'status chip carries the short phrase');
+    assert.equal(await st.getAttribute('title'), lang === 'ko' ? '관찰 종료, 완료 여부 모름' : 'observation ended, completion unknown', 'full sentence stays in the tooltip');
+    assert.equal(await st.evaluate(el => { const c = getComputedStyle(el); return [c.display, c.overflow, c.whiteSpace, c.textOverflow].join(); }), 'block,hidden,nowrap,ellipsis', 'ellipsis safety net is renderable');
     for (const t of await unknownRow.locator('.alife').all()) {
       const full = await t.evaluate(el => el.scrollWidth <= el.clientWidth);
       assert(full, 'lifecycle columns are not clipped');

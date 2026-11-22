@@ -82,6 +82,7 @@
   "agent.native.started": "開始",
   "agent.native.ended": "結束",
   "agent.unknown": "觀察已結束，完成情況未知",
+  "agent.unknown.short": "觀察已結束",
   "band.cache": "CH {0}",
   "band.cache.title": "上一次回應的提示快取命中率",
   "band.cost": "工作階段費用",

@@ -82,6 +82,7 @@
   "agent.native.started": "inicio",
   "agent.native.ended": "fin",
   "agent.unknown": "observación terminada, finalización desconocida",
+  "agent.unknown.short": "observación terminada",
   "band.cache": "CH {0}",
   "band.cache.title": "tasa de aciertos de la caché de prompts en la última respuesta",
   "band.cost": "costo de la sesión",
