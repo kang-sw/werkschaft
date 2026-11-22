@@ -141,6 +141,12 @@ type DaemonOptions struct {
 	// memory only, once per render, nil counts none, and ExecJobsChanged
 	// re-renders the rail after the counts change.
 	HostedExecJobs func() map[string]int
+	// SessionForgotten is called with the reply id of each session that left
+	// the index, after the daemon dropped its caches. A drop from the index
+	// alone is not a session's end (an unmounted project or an identity
+	// mismatch also drops one), so a caller confirms before it acts. It runs
+	// on the index's change path and must not block. Nil is none.
+	SessionForgotten func(replyID string)
 	// Credentials is the provider credential store the daemon owns
 	// (credential_routes.go): while the daemon runs it is the credential
 	// file's only writer. Nil serves no credential and takes no change.
@@ -387,6 +393,8 @@ type Daemon struct {
 	// DaemonOptions.HostedExecJobs.
 	execJobs       func() map[string]int
 	hostedExecJobs func() map[string]int
+	// forgotten is DaemonOptions.SessionForgotten.
+	forgotten func(replyID string)
 
 	closeOnce sync.Once
 	stop      chan struct{}

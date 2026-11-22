@@ -21,6 +21,7 @@
     "mailbox.lookup_peers": ">=0.51.0-dev <0.52.0",
     "mailbox.history": ">=0.51.0-dev <0.52.0",
     "mailbox.recipients": ">=0.51.0-dev <0.52.0",
+    "cron": ">=0.51.0-dev <0.52.0",
     "dashboard.intake": ">=0.51.0-dev <0.52.0",
     "dashboard.inbox_drain": ">=0.51.0-dev <0.52.0",
     "agenda.set": ">=0.51.0-dev <0.52.0",

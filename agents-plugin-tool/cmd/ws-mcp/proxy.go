@@ -22,6 +22,7 @@ import (
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wscred"
+	"github.com/kang-sw/devenv/internal/wscron"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsnote"
 )
@@ -70,7 +71,10 @@ type proxyHost struct {
 	agents mcp.PiAgents
 	// exec is the daemon's hosted exec jobs, bound after StartDaemon; nil
 	// keeps every connection on the legacy exec path.
-	exec   atomic.Pointer[execjob.Hosted]
+	exec atomic.Pointer[execjob.Hosted]
+	// cron is the daemon's scheduler, bound after StartDaemon; nil leaves
+	// the cron tool refusing as unavailable.
+	cron   atomic.Pointer[wscron.Scheduler]
 	boards *mcp.WhiteboardStores
 	notes  *wsnote.Cache
 	// mailLabels resolves mail sender labels for every hosted server
@@ -136,6 +140,7 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 		// Only a token-resolved hello names its conversation: the binding
 		// that owns hosted exec jobs.
 		opts.Exec = h.exec.Load
+		opts.Cron = h.cron.Load
 		opts.Conversation = hello.Conversation
 		opts.ExecCutover = hello.ExecCutover
 		server := mcp.NewServerWithOptions(opts)

@@ -16,6 +16,7 @@ import (
 	"github.com/kang-sw/devenv/internal/execjob"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscron"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsdoc"
 	"github.com/kang-sw/devenv/internal/wsgit"
@@ -93,6 +94,10 @@ type ServerOptions struct {
 	// legacy exec launches then keep the file-backed path and the hosted
 	// exec tools refuse.
 	Exec func() *execjob.Hosted
+	// Cron returns the daemon's scheduler, read at each call like Exec; nil
+	// (or a nil result) on the direct path and on a daemon whose schedule
+	// store could not open, where the cron tool refuses.
+	Cron func() *wscron.Scheduler
 	// Conversation is the hosted conversation a per-session token bound
 	// this connection to (wsdashboard.ProxyHello.Conversation); empty for a
 	// launcher connection. Only it attributes hosted exec jobs: a supplied
@@ -203,6 +208,7 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	}
 	s.pi.agents = opts.Agents
 	s.exec, s.conversation = opts.Exec, opts.Conversation
+	s.cron = opts.Cron
 	if s.conversation != "" {
 		s.execCutover = opts.ExecCutover
 	}

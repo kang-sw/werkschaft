@@ -40,6 +40,9 @@ func (e Entry) Text() string {
 	if e.Command != nil {
 		return e.Command.Line()
 	}
+	if e.Cron != nil {
+		return e.cronText()
+	}
 	body := e.bodyText()
 	if body == "" {
 		return ""
@@ -67,6 +70,29 @@ func ParseUserMessages(text string) ([]UserMessage, bool) {
 	}
 	for text != "" {
 		start := strings.Index(text, "<ws:user")
+		cronStart := strings.Index(text, "<ws:cron")
+		if cronStart >= 0 && (start < 0 || cronStart < start) {
+			// A scheduled prompt is one plain block, kept verbatim: its
+			// body is escaped, so the first closing delimiter ends it and
+			// nothing inside is read as a user envelope.
+			if strings.Contains(text[:cronStart], "</ws:user") {
+				return nil, false
+			}
+			plain(text[:cronStart])
+			text = text[cronStart:]
+			open := cronOpen.FindString(text)
+			if open == "" {
+				return nil, false
+			}
+			end := strings.Index(text, "</ws:cron")
+			if end < 0 || !strings.HasPrefix(text[end:], "</ws:cron>") {
+				return nil, false
+			}
+			end += len("</ws:cron>")
+			blocks = append(blocks, UserMessage{Text: text[:end]})
+			text = text[end:]
+			continue
+		}
 		prefix := text
 		if start >= 0 {
 			prefix = text[:start]
