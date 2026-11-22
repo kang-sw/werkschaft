@@ -1101,6 +1101,95 @@ func TestColdEvictionFailsClosedOnAnUnreadableTailSegment(t *testing.T) {
 	}
 }
 
+// TestStartupTrimKeepsTheNewestSegmentWithAHeader pins the per-session trim
+// of an unloaded ring under a cap lowered since it was written, when a crash
+// right after rotation left an empty newest segment: the newest segment
+// holding a complete header is kept (over the cap) with its history and
+// boundary, not deleted in favour of the empty file.
+func TestStartupTrimKeepsTheNewestSegmentWithAHeader(t *testing.T) {
+	root := t.TempDir()
+	wide := Limits{SessionBytes: 64 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = wide; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 12; seq++ {
+		mustAppend(t, s, bigRecord("sess", seq, wide))
+	}
+	if err := s.Finalize(context.Background(), "sess", "holder:1", 12); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	_ = s.Close()
+	dir := filepath.Join(root, "sess")
+	segs, _, err := listSegments(dir)
+	if err != nil || len(segs) != 1 || segs[0].size <= 4*mib {
+		t.Fatalf("fixture: want one segment over the lowered cap, got %+v %v", segs, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, segmentName(segs[0].seq+1)), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	narrow := wide
+	narrow.SessionBytes = 4 * mib
+	s2, log := openTest(t, root, func(o *Options) { o.Limits = narrow; o.Now = clock.Now })
+	loaded(t, s2, "sess")
+	if rec := s2.Recover("sess", "holder:1"); rec.Boundary != 12 || rec.MaxSeq != 12 {
+		t.Fatalf("recovery after the startup trim = %+v\n%s", rec, log.String())
+	}
+	if n := len(events(t, s2, "sess")); n != 12 {
+		t.Fatalf("%d events after the startup trim, want the kept segment's 12\n%s", n, log.String())
+	}
+	if !strings.Contains(log.String(), "kept over the cap") {
+		t.Fatalf("keeping the segment over the cap was not logged: %s", log.String())
+	}
+}
+
+// TestLoadedTrimPersistsStateWhenTheNewestSegmentHasNoHeader pins the same
+// rule for a loaded ring: its state is in memory, but trimming down to an
+// empty newest segment would leave nothing on disk to seed it, so a header is
+// written first.
+func TestLoadedTrimPersistsStateWhenTheNewestSegmentHasNoHeader(t *testing.T) {
+	root := t.TempDir()
+	lim := Limits{SessionBytes: 64 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 12; seq++ {
+		mustAppend(t, s, bigRecord("sess", seq, lim))
+	}
+	if err := s.Finalize(context.Background(), "sess", "holder:1", 12); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	_ = s.Close()
+	dir := filepath.Join(root, "sess")
+	segs, _, err := listSegments(dir)
+	if err != nil || len(segs) != 1 {
+		t.Fatalf("fixture: %+v %v", segs, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, segmentName(segs[0].seq+1)), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	loaded(t, s2, "sess")
+	if _, err := s2.call(context.Background(), job{kind: jobBarrier, fn: func() {
+		s2.mu.Lock()
+		info := s2.sessions["sess"]
+		s2.mu.Unlock()
+		info.mu.Lock()
+		s2.trimRingLocked(info, 4*mib)
+		info.mu.Unlock()
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = s2.Close()
+
+	s3, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	loaded(t, s3, "sess")
+	if rec := s3.Recover("sess", "holder:1"); rec.Boundary != 12 || rec.MaxSeq != 12 {
+		t.Fatalf("recovery after a loaded trim and restart = %+v", rec)
+	}
+}
+
 // TestControlOnlyRingsAreEvictableAndTombstonesGoLast pins store-wide
 // eviction of a loaded ring that holds only control lines (losses,
 // boundaries) and no events: it is evicted like any other ring, leaving a

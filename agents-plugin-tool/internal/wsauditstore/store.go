@@ -853,11 +853,24 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 }
 
 // trimRingLocked drops a ring's oldest whole segments until it holds at most
-// capBytes, keeping its newest. An unloaded ring is trimmed on disk without
-// being read: every segment header carries the recovery state as of its
-// creation, so the segments that remain still seed it. info.mu is held.
+// capBytes, keeping its newest. What remains must still seed the recovery
+// state: it opens with a segment whose complete header snapshots everything
+// before it. An empty or torn newest segment (a crash right after rotation)
+// carries none, so the newest segment with a complete header is kept with
+// everything after it, even over the cap, and nothing is deleted when no
+// such segment can be read. A loaded ring whose newest segment lacks a header
+// writes one first. info.mu is held.
 func (s *Store) trimRingLocked(info *sessionInfo, capBytes int64) {
 	if r := info.ring; r != nil {
+		if r.forceRotate && r.readOnly == nil && r.bytes > capBytes && len(r.segs) > 1 && r.hasState() {
+			if _, err := r.write(nil, s.limits.SegmentBytes(), math.MaxInt64, nil); err != nil {
+				s.logf("session %s: persist its recovery state before trimming: %v; nothing trimmed", info.dir, err)
+				s.account(info)
+				return
+			}
+			r.clearPending()
+			delete(s.dirty, info)
+		}
 		r.trimTo(capBytes)
 		s.noteEvictErr(info)
 		s.account(info)
@@ -872,7 +885,37 @@ func (s *Store) trimRingLocked(info *sessionInfo, capBytes int64) {
 	for _, seg := range segs {
 		size += seg.size
 	}
-	for len(segs) > 1 && size > capBytes {
+	// The first segment the cap allows to remain, then the nearest one at or
+	// after it — else before it — that opens with a complete header.
+	fit, left := 0, size
+	for fit < len(segs)-1 && left > capBytes {
+		left -= segs[fit].size
+		fit++
+	}
+	keep := -1
+	if fit > 0 {
+		valid := func(i int) bool {
+			head, err := readHead(filepath.Join(dir, segmentName(segs[i].seq)), int(HeaderBound)+1)
+			return err == nil && completeHeader(head)
+		}
+		for i := fit; i < len(segs) && keep < 0; i++ {
+			if valid(i) {
+				keep = i
+			}
+		}
+		for i := fit - 1; i >= 0 && keep < 0; i-- {
+			if valid(i) {
+				keep = i
+			}
+		}
+		switch {
+		case keep < 0:
+			s.logf("session %s: no segment opens with a readable complete header; nothing trimmed", info.dir)
+		case keep < fit:
+			s.logf("session %s: the newest segment with a complete header is %d; kept over the cap", info.dir, segs[keep].seq)
+		}
+	}
+	for i := 0; i < keep; i++ {
 		if err := removeFile(filepath.Join(dir, segmentName(segs[0].seq))); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			s.logf("session %s: delete segment %d: %v; the ring stays over its cap until a later sweep retries", info.dir, segs[0].seq, err)
 			break
