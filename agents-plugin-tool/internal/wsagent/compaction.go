@@ -29,7 +29,6 @@ const (
 	compactionRestoreMarker = "\x00ws-restore:compaction\x00"
 	restartRestoreMarker    = "\x00ws-restore:restart\x00"
 	leadStartStateMarker    = "\x00ws-lead-start-state\x00"
-	piCompactPreparation    = "<!-- ws-pi-compaction-preparation -->"
 )
 
 func (r BackendRegistration) CompactionProtocol() CompactionProtocol {
@@ -395,7 +394,7 @@ func (c *conv) compactIdle() bool {
 		c.compactOrigin = trigger
 		cmd := wsinbox.Command{Name: "compact"}
 		if p, ok := c.proc.(*piProcess); req.auto && ok && p.mapper.compactPreparation.Load() {
-			cmd.Args = "<!-- ws-pi-daemon-auto-compact -->"
+			cmd.Args = piDaemonAutoCompact
 		}
 		// The compaction starts with its command, behind the last release
 		// check: a refused one leaves no started compaction to unwind.
@@ -502,14 +501,16 @@ func (c *conv) compactionStateInstruction() string {
 	return "Save the state needed to resume in your agenda."
 }
 
-func (c *conv) piLeadCompaction() bool {
-	return c.rec.Lead && c.rec.Backend == BackendPi && !PiMCPOnly(c.record(), nil)
+// bridgedLeadCompaction reports whether this lead's backend compacts through
+// its extension bridge (leadCompactionBridge) rather than the daemon's command.
+func (c *conv) bridgedLeadCompaction() bool {
+	return c.r.bridgedLeadCompaction(c.record())
 }
 
 func (c *conv) canSteerCompaction() bool {
 	return c.turn && c.proc != nil && !c.quitting && !c.replaying && !c.wrapHold && !c.closed && !c.hidden &&
 		!c.compacting && !c.compactCommand && c.compactPending == nil && !c.compactHardHandled && !c.compactHardIssued &&
-		(c.rec.Backend != BackendClaude || c.rec.Lead) && (c.caps == nil || c.caps.Allows(ItemSteer)) &&
+		(!c.r.lifecycle(c.rec.Backend).NoWorkerCompactionSteer || c.rec.Lead) && (c.caps == nil || c.caps.Allows(ItemSteer)) &&
 		// A turn that outlived its checkout's release gets no guidance.
 		c.released() == ""
 }
@@ -529,12 +530,12 @@ func (c *conv) steerCompaction(boundary bool) {
 	var text string
 	if c.compactHardSteered {
 		text = fmt.Sprintf("Hard %s, +%.0f%% (%s). End your turn for auto-compaction and continuation.", compactTokenCount(hard), (c.compactTokens/hard-1)*100, compactTokenCount(c.compactTokens))
-		if c.piLeadCompaction() {
+		if c.bridgedLeadCompaction() {
 			text += " " + piCompactPreparation
 		}
 	} else {
 		text = fmt.Sprintf("Context usage is %s and has reached the hard point of %s. %s Wrap up the current step and end your turn so compaction can run and work can continue.", compactTokenCount(c.compactTokens), compactTokenCount(hard), c.compactionStateInstruction())
-		if c.piLeadCompaction() {
+		if c.bridgedLeadCompaction() {
 			text += " You can call ws-compact with your carry-forward details at a safe boundary.\n" + piCompactPreparation
 		}
 	}
@@ -644,7 +645,7 @@ func (c *conv) stageCompactionNudge(hard float64) {
 	}
 	action := "Write durable state to your agenda before compacting. No summary prose is requested."
 	switch {
-	case c.piLeadCompaction():
+	case c.bridgedLeadCompaction():
 		if !c.compactAdvised && !math.IsInf(hard, 0) {
 			usage += fmt.Sprintf("The hard point is %.0f tokens (%.0f%%). ", hard, hard/c.compactWindow*100)
 		}

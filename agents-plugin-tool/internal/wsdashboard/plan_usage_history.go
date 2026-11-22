@@ -17,6 +17,8 @@ import (
 
 const (
 	planUsageHistoryCache      = "plan-usage-history.json"
+	// Retained name check: the persisted five-hour history file name
+	// (TestPlanUsageCodexFiveHourT0CompatibilityAndSeparateFile).
 	planUsageCodexHistoryCache = "plan-usage-codex-history.json"
 	planUsageHistoryAge        = 14 * 24 * time.Hour
 	planUsageHistoryCap        = 5000
@@ -78,6 +80,8 @@ func validCodexFiveHourSample(v planUsageSample) bool {
 }
 
 func validPlanUsageSample(v planUsageSample) bool {
+	// Retained name check: the harness and source labels of the legacy history file
+	// are persisted bytes earlier writers wrote (TestPlanUsageHistoryValidatorsKeepPersistedNames).
 	if v.Group != "" {
 		return false
 	}

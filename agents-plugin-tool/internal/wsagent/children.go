@@ -57,6 +57,8 @@ import (
 const (
 	// EnvPiToken is the conversation's capability token for the token
 	// route.
+	// Retained name check: the environment variables the bundled Pi extension
+	// reads (TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey).
 	EnvPiToken = "WS_MCP_PI_TOKEN"
 	// EnvPiEndpoint is the daemon's loopback base URL ("http://127.0.0.1:
 	// <port>"), where the token route is.
@@ -72,6 +74,7 @@ const MaxSpawnDepth = 4
 //
 // Retained name: "pi" is the persisted config bucket key of that tier, which
 // existing config files hold; registration data does not rename it.
+// Retained name check: PiTierHarness is the stored harness bucket (see above).
 const PiTierHarness = "pi"
 
 // tokenRoute is the id segment of the token route. It holds a dash, which
@@ -106,6 +109,8 @@ func mayHoldToken(rec Record, def Profile) bool {
 		return false
 	}
 	for _, name := range def.WSTools {
+		// Retained name check: a worker's allowlist holds the Pi extension's own pi.*
+		// tool names alongside agent.*.
 		if strings.HasPrefix(name, "agent.") || strings.HasPrefix(name, "pi.") {
 			return true
 		}
@@ -244,6 +249,8 @@ func tierRank(tier string) int {
 // PiTierRefusal names the config.tune key a spawn's unset tier needs and
 // the tiers that are set.
 func PiTierRefusal(tool, tier string, tiers map[string]wsconfig.AgentTier) error {
+	// Retained name check: PiTierHarness is the stored agents.tier bucket the
+	// refusal tells the user to tune (TestPiSpawnResolvesThePiTierAndCwd).
 	set := make([]string, 0, len(tiers))
 	for _, t := range []string{"small", "medium", "large", "xlarge"} {
 		if _, ok := tiers[t]; ok {
@@ -275,6 +282,7 @@ type ChildSpawn struct {
 // and tier caps; model and effort come from the tier's entry in the pi
 // bucket of agents.tier at the holder's root.
 func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
+	// Retained name check: the Pi extension's own spawn tool name.
 	const tool = "pi.spawn"
 	rec := caller.record()
 	if isAgentWorkerProfile(strings.TrimSpace(req.Profile)) {
@@ -302,6 +310,8 @@ func (r *Runner) spawnFor(caller *conv, req ChildSpawn) (State, error) {
 	}
 	cfg := r.opts.Config
 	cfg.RepoRoot = rec.Root
+	// Retained name check: the Pi tier mapping lives in the stored PiTierHarness
+	// bucket (TestPiSpawnResolvesThePiTierAndCwd).
 	tiers, err := wsconfig.HarnessTiers(cfg, PiTierHarness)
 	if err != nil {
 		return State{}, fmt.Errorf("%s: read agents.tier: %w", tool, err)
@@ -566,6 +576,7 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 	}
 	if check := r.opts.ChildCheck; check != nil {
 		if err := check(); err != nil {
+			// Retained name check: the pi.* tool names are the Pi extension's own.
 			writeAnswer(w, 0, nil, &requestError{status: http.StatusServiceUnavailable, msg: "pi." + op + ": " + err.Error()})
 			return
 		}
@@ -575,6 +586,8 @@ func (r *Runner) serveToken(w http.ResponseWriter, req *http.Request, op string)
 		return
 	}
 	parent := ParentRef{Kind: ParentConversation, ReplyID: caller.record().ReplyID}
+	// Retained name check: the pi.* tool names are the Pi extension's own
+	// (TestPiTokenSpawnMintsTheChildKeyUnderItsHoldersPolicyKey).
 	tool := "pi." + op
 	switch op {
 	case "spawn":

@@ -424,6 +424,8 @@ func agentTree(agents []wslive.Agent, lookup sessionLookup) []AgentNode {
 				node.Slots = liveSlots(node.Permission, node.Finished, node.Running, node.Generating)
 			}
 			if a.ReplyID != "" {
+				// Retained name check: a finished Pi child row is told apart by its
+				// persisted agent kind (TestPiSpawnDisplayRefreshesAfterSessionRemoval).
 				if a.AgentKind == wslive.AgentKindPi && a.Status == wslive.StatusDone && lookup.piDeleted != nil {
 					node.PiDeleted = lookup.piDeleted(a.ReplyID)
 				}

@@ -27,6 +27,12 @@ func piDashboardTraits() wsdashboard.HarnessTraits {
 	return wsdashboard.HarnessTraits{TerminalTakeover: true, ReplayClientName: "ws-pi-bridge"}
 }
 
+var _ leadCompactionBridge = PiBackend{}
+
+// bridgesLeadCompaction: a Pi lead with the native extension compacts through
+// its bridge; one running MCP-only (PiMCPOnly) has none.
+func (PiBackend) bridgesLeadCompaction(rec Record) bool { return !PiMCPOnly(rec, nil) }
+
 // piDelegatesThroughDaemon reports whether rec runs without the native ws Pi
 // extension (PiMCPOnly), so it connects through Pi's builtin MCP client,
 // whose clientInfo is not the extension's bridge name and is not detected as
@@ -80,3 +86,13 @@ func (PiBackend) adoptTerminalSession(rec *Record, session string) {
 	rec.PermissionMode = ""
 	rec.SessionFile = session
 }
+
+// The Pi extension's compaction wire markers: the capability its hello reports,
+// the preparation marker the daemon appends to compaction guidance, and the
+// argument that marks a daemon-started auto-compaction. They are bytes the
+// bundled extension matches, so they live with the Pi adapter.
+const (
+	piCompactCapability  = "pi_compaction_preparation_v1"
+	piCompactPreparation = "<!-- ws-pi-compaction-preparation -->"
+	piDaemonAutoCompact  = "<!-- ws-pi-daemon-auto-compact -->"
+)

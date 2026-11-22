@@ -133,17 +133,21 @@ func startChild(spec StartSpec, cmd *exec.Cmd, mapper lineMapper, proto lineProt
 	return p, nil
 }
 
+// auditSource is implemented by a line mapper whose backend has an audit
+// adapter: the harness name its capture is filed under and the adapter.
+type auditSource interface {
+	newAudit(sessionID string) (harness string, adapter auditAdapter)
+}
+
 // prepareAudit readies capture for spec's process when the runner gave it a
 // tap and the backend has an audit adapter (Claude, Codex).
 func (p *streamProcess) prepareAudit(spec StartSpec, mapper lineMapper) {
 	if spec.audit == nil {
 		return
 	}
-	switch mapper.(type) {
-	case *claudeMapper:
-		p.auditTap, p.auditHarness, p.auditAdapter = spec.audit, BackendClaude, newClaudeAudit(spec.audit.Session.ID)
-	case *codexMapper:
-		p.auditTap, p.auditHarness, p.auditAdapter = spec.audit, BackendCodex, newCodexAudit(spec.audit.Session.ID)
+	if src, ok := mapper.(auditSource); ok {
+		p.auditTap = spec.audit
+		p.auditHarness, p.auditAdapter = src.newAudit(spec.audit.Session.ID)
 	}
 }
 

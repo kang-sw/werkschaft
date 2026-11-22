@@ -303,6 +303,20 @@ func (r *Runner) BackendRegistrations() map[string]BackendRegistration {
 	return out
 }
 
+// BackendLifecycle is the registered backend name's lifecycle declaration, for
+// a caller on a hot path that must not clone the whole registry. ok is false
+// for a name the runner does not register. The policy is a plain value.
+func (r *Runner) BackendLifecycle(name string) (LifecyclePolicy, bool) {
+	reg, ok := r.opts.Backends[name]
+	return reg.Lifecycle, ok
+}
+
+// BackendConnection is BackendLifecycle for a backend's connection declaration.
+func (r *Runner) BackendConnection(name string) (ConnectionPolicy, bool) {
+	reg, ok := r.opts.Backends[name]
+	return reg.Connection, ok
+}
+
 // BuiltinDashboardHarnesses is the built-in backends' dashboard traits by
 // name, for a daemon embedded without a runner (a fixture) that still shows
 // built-in harnesses.
@@ -356,6 +370,8 @@ func profileBackends(registries []map[string]BackendRegistration) []string {
 
 // permissionModes preserves legacy Pi values accepted on reads and ignored at
 // launch. Registered extensions use their own modes, not the Pi fallback.
+// Retained name check: legacy Pi permission values are persisted bytes read
+// back by name (TestPermissionModesLegacyFallback).
 func permissionModes(backend string, registries []map[string]BackendRegistration) []string {
 	if backend == BackendPi {
 		return LeadPermissionModes

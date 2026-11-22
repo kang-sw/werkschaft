@@ -106,6 +106,8 @@ const (
 // user's home.
 var outsideDenied = []string{
 	".ssh", ".gnupg", ".aws", ".config/gh", ".netrc", ".docker",
+	// Retained name check: the providers' own credential files, denied by name
+	// (TestFSLocalDeniedProviderCredentials).
 	".kube", ".git-credentials", ".codex/auth.json", ".claude/.credentials.json",
 	".config/gcloud", ".azure", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml",
 	".vault-token", ".password-store", "Library/Keychains",

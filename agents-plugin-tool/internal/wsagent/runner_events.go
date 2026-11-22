@@ -892,7 +892,7 @@ func (c *conv) processEnded() {
 }
 
 func (c *conv) clearAgyInternalPrompt() bool {
-	if !c.record().agyInternalPrompt() {
+	if !c.r.internalPrompt(c.record()) {
 		return false
 	}
 	c.update(func(rec *Record) { rec.TurnStartedAt = 0 })

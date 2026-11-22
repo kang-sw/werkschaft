@@ -72,6 +72,8 @@ type Record struct {
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// AgyBypass is ws-side approval intent; PermissionMode stays native.
 	// Keep it top-level so older Record writers retain it as unknown data.
+	// Retained name check: the persisted Record member older daemons wrote
+	// (TestAgyBypassScopeAndLegacyRecordRewrite).
 	AgyBypass bool `json:"agy_bypass,omitempty"`
 	// PluginIsolation selects the lead's plugin loadout across restarts.
 	PluginIsolation string `json:"plugin_isolation,omitempty"`
@@ -801,6 +803,10 @@ func (w *liveWriter) write(res wslive.Result, err error, kind string, coalesceTu
 
 // endAgents marks every running subagent failed: the process that ran them
 // is gone, so no end will come for them.
+//
+// Retained name check: a row of agent kind pi belongs to the daemon's agent
+// runner, which outlives the process and ends it itself; the kind is the
+// persisted marker of that row in the snapshot (TestLiveWriterEndAgentsLeavesPiChildRows).
 func (w *liveWriter) endAgents() {
 	for _, a := range w.st.Snapshot(w.now().UnixMilli()).Agents {
 		if a.Status == wslive.StatusRunning && a.AgentKind != wslive.AgentKindPi {
@@ -1021,14 +1027,6 @@ func registration(rec Record, now time.Time) wsdashboard.Registration {
 
 func (rec Record) heldWorker() bool {
 	return wsdashboard.HeldAgentWorker(rec.Lead, rec.HolderID, rec.HandedOffAt)
-}
-
-func (rec Record) heldAgyWorker() bool {
-	return rec.Backend == BackendAgy && rec.Parent != nil && rec.heldWorker()
-}
-
-func (rec Record) agyInternalPrompt() bool {
-	return rec.Backend == BackendAgy && rec.Parent != nil && !rec.TurnOpen && rec.TurnStartedAt != 0
 }
 
 func (rec Record) handedOff() bool {

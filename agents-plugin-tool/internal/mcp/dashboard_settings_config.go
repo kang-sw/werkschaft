@@ -300,6 +300,9 @@ func (src *DashboardSessionSource) settingsSession(reg wsdashboard.Registration)
 // accepting its historical config.tune arguments.
 func dashboardAdapterReadLimits(key string) (noRepo, noSession bool) {
 	switch key {
+	// Retained name check: the settings page routes the harness-bucketed config
+	// keys a user's config may hold by group; the keys are persisted names
+	// (TestDashboardSettingsReadTunedValues).
 	case "claude.status_band_enabled":
 		return false, false
 	case "pi.runaway_threshold", "pi.settle_delay_ms", "pi.compaction_advisory_percent", "pi.compaction_hard_percent",

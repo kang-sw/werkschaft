@@ -292,6 +292,8 @@ func (a AgentNode) EndedStatus() string {
 	if a.Status == wslive.StatusDone && a.BackgroundTasks > 0 {
 		return "background"
 	}
+	// Retained name check: a finished Pi child row is told apart by its persisted
+	// agent kind (TestPiSpawnDisplayStatus).
 	if a.AgentKind == wslive.AgentKindPi && a.Status == wslive.StatusDone {
 		if a.PiDeleted {
 			return "deleted"

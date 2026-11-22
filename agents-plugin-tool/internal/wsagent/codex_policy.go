@@ -29,3 +29,9 @@ func codexPermissionPolicy() PermissionPolicy {
 		LiveModeProjection: true,
 	}
 }
+
+var _ auditSource = (*codexMapper)(nil)
+
+func (*codexMapper) newAudit(sessionID string) (string, auditAdapter) {
+	return BackendCodex, newCodexAudit(sessionID)
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/kang-sw/devenv/internal/claudeagents"
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsharnessenv"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,11 @@ func (b ClaudeBackend) registration() (string, BackendRegistration) {
 			// (its --mcp-config entry).
 			LeadStdioFallback: true,
 			RestoreUsage:      true,
+			// A Claude worker has no recoverable steer path for compaction
+			// guidance, reports session state, and its exec cutover is opt-in.
+			NoWorkerCompactionSteer: true,
+			WorkerSessionState:      true,
+			ExecOptIn:               ExecOptIn{Key: wsconfig.ItemClaudeExecCutoverEnabled, Label: "Claude"},
 		},
 		// --disallowedTools claudeNativeProcessTools, verified on 2.1.330
 		// (testdata/claude-2.1.330-native-process-tools.jsonl).

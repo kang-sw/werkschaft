@@ -695,3 +695,20 @@ func TestClaudeMapperReadsResultsUnderTheAttachedServer(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveWriterEndAgentsLeavesPiChildRows: a Pi child row belongs to the
+// daemon's agent runner, which outlives the process that wrote the snapshot, so
+// the process's end does not fail it.
+func TestLiveWriterEndAgentsLeavesPiChildRows(t *testing.T) {
+	w := newLiveWriter(t.TempDir(), "end-pi-key", "claude", time.Now, io.Discard)
+	w.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "native", Status: wslive.StatusRunning})
+	w.apply(wslive.Event{Kind: wslive.KindAgent, AgentID: "pi:child", AgentKind: wslive.AgentKindPi, Status: wslive.StatusRunning})
+	w.endAgents()
+	got := map[string]string{}
+	for _, a := range w.st.Snapshot(time.Now().UnixMilli()).Agents {
+		got[a.ID] = a.Status
+	}
+	if got["native"] != wslive.StatusFailed || got["pi:child"] != wslive.StatusRunning {
+		t.Fatalf("agents after endAgents: %v", got)
+	}
+}

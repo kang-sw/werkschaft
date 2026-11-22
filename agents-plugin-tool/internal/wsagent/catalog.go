@@ -391,6 +391,8 @@ func ClaudeCatalog() *HarnessProfile {
 	return &HarnessProfile{
 		Compaction: CompactionProtocol{
 			LeadCommand: true, WorkerCommand: true, Lifecycle: true, PromptPersists: true,
+			// Retained name check: the Claude compaction config keys a user's config may
+			// hold (TestCompactionConfigGetTuneAndLegacy).
 			LegacyAdvisory:  "claude.compaction_advisory_percent",
 			AdvisoryEnabled: "claude.compaction_advisory_enabled",
 		},
@@ -563,6 +565,8 @@ func AgyCatalog() *HarnessProfile {
 // PiCompaction describes RPC compact: it operates on the current session,
 // independently of lead privileges. The system prompt is rebuilt each turn.
 func PiCompaction() *CompactionProtocol {
+	// Retained name check: the Pi legacy compaction config keys a user's config may
+	// still hold (TestCompactionConfigGetTuneAndLegacy).
 	return &CompactionProtocol{LeadCommand: true, WorkerCommand: true, Lifecycle: true, PromptPersists: true, LegacyAdvisory: "pi.compaction_advisory_percent", LegacyHard: "pi.compaction_hard_percent"}
 }
 
