@@ -2581,6 +2581,7 @@
   "js.hud.state.permission": "Разрешение",
   "js.hud.state.failed": "Ошибка",
   "js.hud.deeper": "+{0} глубже",
+  "js.hud.context": "Контекст {0}",
   "js.hud.hint.link": "Клик: открыть /s/{0}",
   "js.hud.hint.details": "Клик: открыть детали дерева",
   "js.hud.lead": "лид",

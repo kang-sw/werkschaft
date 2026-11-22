@@ -53,16 +53,32 @@ type HUDNode struct {
 	StartedAt  int64 `json:"startedAt,omitempty"`
 	EndedAt    int64 `json:"endedAt,omitempty"`
 	EndUnknown bool  `json:"endUnknown,omitempty"`
+	// Context* is the agent's context occupancy for the hover card's bar.
+	// ContextTokens is the current size and ContextWindow the bar's scale (the
+	// ws hard point when resolved, else the native window), absent while
+	// unknown: a node with tokens but no window shows the figure without a
+	// bar. ContextSoft is the ws soft threshold, ContextLevel the status
+	// band's colour class, ContextText the compact "used / window" text.
+	ContextTokens int64  `json:"contextTokens,omitempty"`
+	ContextWindow int64  `json:"contextWindow,omitempty"`
+	ContextSoft   int64  `json:"contextSoft,omitempty"`
+	ContextLevel  string `json:"contextLevel,omitempty"`
+	ContextText   string `json:"contextText,omitempty"`
 	// OwnRow marks nodes rendered in #r-tree's .agent list so hudJSON can omit
 	// their Task from .ag-source (keeping tree-rows shell invariant on caption edits).
 	OwnRow bool `json:"-"`
 }
 
 type hudRawNode struct {
-	agent    wslive.Agent
-	linked   bool
-	ownRow   bool
-	native   bool
+	agent  wslive.Agent
+	linked bool
+	ownRow bool
+	native bool
+	// usage is the linked session's own context figure (its status band's).
+	// It comes only from the snapshot expandHUDLinked already read, never a
+	// read of its own: a linked row that is not expanded, or whose snapshot
+	// carries none, leaves it nil.
+	usage    *wslive.UsageContext
 	children []*hudRawNode
 }
 
@@ -169,7 +185,11 @@ func expandHUDLinked(nodes []*hudRawNode, seenIDs, visited map[string]bool, look
 		if _, ok := lookup.get(rid); !ok {
 			continue
 		}
-		if snap := lookup.snap(rid); adapterPresent(snap, now) {
+		snap := lookup.snap(rid)
+		if snap != nil && snap.Usage != nil {
+			n.usage = snap.Usage.Context
+		}
+		if adapterPresent(snap, now) {
 			attached := buildHUDRawForest(snap.Agents, false, n.agent.Harness, seenIDs, lookup)
 			expandHUDLinked(attached, seenIDs, visited, lookup, now)
 			n.children = append(n.children, attached...)
@@ -216,6 +236,7 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 			Task:        hudNodeTask(a),
 			OwnRow:      n.ownRow,
 		}
+		node.setContext(a, n.usage)
 		if n.native {
 			node.Native, node.StartedAt = true, max(a.StartedAt, 0)
 			if hudEndUnknown(a, true) {
@@ -236,6 +257,37 @@ func projectHUDNodes(nodes []*hudRawNode, depth int, parentHarness string, chain
 		out = append(out, node)
 	}
 	return out
+}
+
+// setContext fills the Context* fields through the status band's own rule
+// (contextBar), so the card and the band of the same session agree. A linked
+// row whose session's usage was read takes that figure. Any other row builds
+// it from its own row: the tokens, and the scale its runner carried onto the
+// row (Agent.ContextWindow, Agent.ContextCompaction: the ws compaction
+// thresholds, else the native window). A row with tokens and no scale, such as
+// a harness's own native subagent, carries the tokens alone.
+func (n *HUDNode) setContext(a wslive.Agent, usage *wslive.UsageContext) {
+	if usage == nil {
+		if a.ContextTokens <= 0 {
+			return
+		}
+		tokens := a.ContextTokens
+		usage = &wslive.UsageContext{Tokens: &tokens, Window: a.ContextWindow, Compaction: a.ContextCompaction}
+	}
+	if usage.Tokens == nil || *usage.Tokens <= 0 {
+		return
+	}
+	n.ContextTokens = *usage.Tokens
+	n.ContextText = compactTokens(n.ContextTokens)
+	bar := contextBar(*usage)
+	if !bar.Known || bar.Denom <= 0 {
+		return
+	}
+	n.ContextWindow, n.ContextLevel = bar.Denom, bar.Level
+	if bar.SoftPct != "" {
+		n.ContextSoft = usage.Compaction.Soft
+	}
+	n.ContextText += " / " + compactTokens(bar.Denom)
 }
 
 func foldHUDRawSubtree(n *hudRawNode, fold *hudFold) {

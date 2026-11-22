@@ -177,6 +177,10 @@ func (r *Runner) startConvWith(rec Record, seed []wslive.SlashCommand, spawnPend
 		tokens := float64(*usage.Context.Tokens)
 		c.contextTokens = &tokens
 	}
+	if usage := own.Usage; usage != nil && usage.Context != nil && usage.Context.Window > 0 {
+		c.contextWindow = usage.Context.Window
+		c.contextCompaction = cloneUsageCompaction(usage.Context.Compaction)
+	}
 	if seed == nil && rec.Lead {
 		// A rejoined lead's list is its snapshot's, which an earlier daemon
 		// may have written without this runner's playbook commands.

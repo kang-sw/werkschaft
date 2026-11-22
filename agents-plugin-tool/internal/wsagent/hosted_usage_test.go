@@ -154,7 +154,9 @@ func TestHostedPiRowUsesOwnUsageWhileRunningAndAfterRecovery(t *testing.T) {
 		eventually(t, "child usage in hosted row", func() bool {
 			for _, a := range h.snapshot(lead.ID).Agents {
 				if a.ID == "pi:"+child.ID {
-					return a.ContextTokens == 48211 && a.Status == status
+					// The row also carries the child's own scale: the window its
+					// status named and the thresholds its runner resolved.
+					return a.ContextTokens == 48211 && a.Status == status && a.ContextWindow == 100000 && a.ContextCompaction != nil && a.ContextCompaction.Hard > 0
 				}
 			}
 			return false

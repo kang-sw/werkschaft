@@ -2581,6 +2581,7 @@
   "js.hud.state.permission": "Permissão",
   "js.hud.state.failed": "Falhou",
   "js.hud.deeper": "+{0} abaixo",
+  "js.hud.context": "Contexto {0}",
   "js.hud.hint.link": "Clique: abrir /s/{0}",
   "js.hud.hint.details": "Clique: abrir detalhes da árvore",
   "js.hud.lead": "líder",

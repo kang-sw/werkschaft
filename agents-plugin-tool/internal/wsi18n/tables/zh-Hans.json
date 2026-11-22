@@ -2581,6 +2581,7 @@
   "js.hud.state.permission": "需要批准",
   "js.hud.state.failed": "失败",
   "js.hud.deeper": "+{0} 更深",
+  "js.hud.context": "上下文 {0}",
   "js.hud.hint.link": "点击：打开 /s/{0}",
   "js.hud.hint.details": "点击：打开树详情",
   "js.hud.lead": "主导",
