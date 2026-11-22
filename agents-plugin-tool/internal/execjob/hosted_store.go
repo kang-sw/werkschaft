@@ -56,13 +56,22 @@ const hostedStoreSchema = `CREATE TABLE IF NOT EXISTS exec_jobs (
 	tail_stderr      BLOB
 )`
 
+// hostedStoreAddedColumns are columns added to schema version 1 without a
+// version bump: each NOT NULL with a default, so an older daemon's SELECT
+// and INSERT name only its own columns and ignore them, and its upsert's
+// UPDATE SET leaves them as they are (release-compatibility T0).
+var hostedStoreAddedColumns = []struct{ name, sql string }{
+	{"real_root", `real_root TEXT NOT NULL DEFAULT ''`},
+	{"real_cwd", `real_cwd TEXT NOT NULL DEFAULT ''`},
+}
+
 const hostedStoreColumns = `id, legacy, owner, gen, tool, root, cwd, argv, command, shell,
 	holder_id, pid, state, exit_code, signal, error, started_at, ended_at,
 	notify, notice, stdin_bytes, written_combined, written_stdout,
-	written_stderr, tail_combined, tail_stdout, tail_stderr`
+	written_stderr, tail_combined, tail_stdout, tail_stderr, real_root, real_cwd`
 
 const hostedStorePut = `INSERT INTO exec_jobs (` + hostedStoreColumns + `)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	legacy = excluded.legacy, owner = excluded.owner, gen = excluded.gen,
 	tool = excluded.tool, root = excluded.root, cwd = excluded.cwd,
@@ -76,7 +85,8 @@ ON CONFLICT(id) DO UPDATE SET
 	written_stdout = excluded.written_stdout,
 	written_stderr = excluded.written_stderr,
 	tail_combined = excluded.tail_combined, tail_stdout = excluded.tail_stdout,
-	tail_stderr = excluded.tail_stderr`
+	tail_stderr = excluded.tail_stderr, real_root = excluded.real_root,
+	real_cwd = excluded.real_cwd`
 
 // SQLiteHostedStore is the HostedStore over one SQLite database the daemon
 // holds open for its life (performance.md storage type 2, Rule 4): each Put
@@ -132,16 +142,52 @@ func hostedStoreMigrate(ctx context.Context, db *sql.DB) error {
 	if version > hostedStoreSchemaVersion {
 		return fmt.Errorf("%w: version %d, this build knows %d", ErrHostedStoreNewer, version, hostedStoreSchemaVersion)
 	}
-	if version == hostedStoreSchemaVersion {
-		return nil
+	if version < hostedStoreSchemaVersion {
+		if _, err := tx.ExecContext(ctx, hostedStoreSchema); err != nil {
+			return fmt.Errorf("create hosted exec store schema: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, hostedStoreSchemaVersion)); err != nil {
+			return fmt.Errorf("stamp hosted exec store version: %w", err)
+		}
 	}
-	if _, err := tx.ExecContext(ctx, hostedStoreSchema); err != nil {
-		return fmt.Errorf("create hosted exec store schema: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, hostedStoreSchemaVersion)); err != nil {
-		return fmt.Errorf("stamp hosted exec store version: %w", err)
+	if err := hostedStoreAddColumns(ctx, tx); err != nil {
+		return err
 	}
 	return tx.Commit()
+}
+
+// hostedStoreAddColumns adds the hostedStoreAddedColumns a version-1 table
+// lacks (one an older daemon created).
+func hostedStoreAddColumns(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(exec_jobs)`)
+	if err != nil {
+		return fmt.Errorf("read hosted exec store columns: %w", err)
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var (
+			cid, notNull, pk int
+			name, typ        string
+			defaultValue     any
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("read hosted exec store columns: %w", err)
+		}
+		have[name] = true
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("read hosted exec store columns: %w", err)
+	}
+	for _, column := range hostedStoreAddedColumns {
+		if have[column.name] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE exec_jobs ADD COLUMN `+column.sql); err != nil {
+			return fmt.Errorf("add hosted exec store column %s: %w", column.name, err)
+		}
+	}
+	return nil
 }
 
 // Load returns every stored row, oldest start first.
@@ -188,7 +234,7 @@ func scanHostedRow(rows *sql.Rows) (HostedJobRow, error) {
 		&argv, &r.Command, &r.Shell, &r.HolderID, &r.PID, &r.State, &exitCode,
 		&signal, &r.Error, &r.StartedAt, &r.EndedAt, &notify, &r.Notice,
 		&r.StdinBytes, &r.Written[StreamCombined], &r.Written[StreamStdout],
-		&r.Written[StreamStderr], &tailC, &tailO, &tailE); err != nil {
+		&r.Written[StreamStderr], &tailC, &tailO, &tailE, &r.RealRoot, &r.RealCwd); err != nil {
 		return HostedJobRow{}, err
 	}
 	if err := json.Unmarshal([]byte(argv), &r.Argv); err != nil {
@@ -253,7 +299,8 @@ func (s *SQLiteHostedStore) Put(row HostedJobRow) error {
 			row.Error, row.StartedAt, row.EndedAt, row.Notify, row.Notice,
 			row.StdinBytes, row.Written[StreamCombined], row.Written[StreamStdout],
 			row.Written[StreamStderr], hostedBlob(row.Tails[StreamCombined]),
-			hostedBlob(row.Tails[StreamStdout]), hostedBlob(row.Tails[StreamStderr]))
+			hostedBlob(row.Tails[StreamStdout]), hostedBlob(row.Tails[StreamStderr]),
+			row.RealRoot, row.RealCwd)
 		return err
 	})
 	if err != nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -28,20 +27,7 @@ func WorktreeReleaseLock(ctx context.Context, runner Runner, target string) (*fl
 	if target == "" {
 		return nil, fmt.Errorf("worktree path is required")
 	}
-	dir := ""
-	dotGit := filepath.Join(target, ".git")
-	if info, err := os.Stat(dotGit); err == nil {
-		if info.IsDir() {
-			dir = dotGit
-		} else if data, readErr := os.ReadFile(dotGit); readErr == nil {
-			if pointer, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:"); ok {
-				dir = filepath.FromSlash(strings.TrimSpace(pointer))
-				if dir != "" && !filepath.IsAbs(dir) {
-					dir = filepath.Join(target, dir)
-				}
-			}
-		}
-	}
+	dir := worktreeAdminDirNoSpawn(target)
 	if dir == "" {
 		if runner == nil {
 			return nil, fmt.Errorf("resolve git admin dir for %q: .git is not a directory or gitdir file", target)

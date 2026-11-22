@@ -130,11 +130,11 @@ func TestCodexWorkerProfileAndAdmission(t *testing.T) {
 	r := &Runner{opts: Options{Backends: map[string]BackendRegistration{
 		BackendCodex: {Backend: CodexBackend{}, LeadProfile: LeadProfileCodex},
 	}}}
-	if slices.Contains(r.workerHarnesses(), BackendCodex) || !strings.Contains(r.spawnableHarness(BackendCodex), "hosted leads only") {
+	if slices.Contains(r.workerHarnesses(), BackendCodex) || !strings.Contains(r.spawnableHarness(BackendCodex, BackendCodex), "hosted leads only") {
 		t.Fatal("a Codex registration with no worker fields must remain lead-only")
 	}
 	r.opts.Backends[BackendCodex] = BackendRegistration{Backend: CodexBackend{}, LeadProfile: LeadProfileCodex, WorkerCapable: true, WorkerProfile: AgentWorkerProfile(BackendCodex)}
-	if !slices.Equal(r.workerHarnesses(), []string{BackendCodex}) || r.spawnableHarness(BackendCodex) != "" {
-		t.Fatalf("a worker-capable Codex registration must be spawnable: %q", r.spawnableHarness(BackendCodex))
+	if !slices.Equal(r.workerHarnesses(), []string{BackendCodex}) || r.spawnableHarness(BackendCodex, BackendCodex) != "" {
+		t.Fatalf("a worker-capable Codex registration must be spawnable: %q", r.spawnableHarness(BackendCodex, BackendCodex))
 	}
 }

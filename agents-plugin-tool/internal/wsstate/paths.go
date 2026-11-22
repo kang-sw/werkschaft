@@ -49,6 +49,7 @@ type Layout struct {
 	WorktreeMeta     string
 	AgentsDir        string
 	ReviewDir        string
+	ReportDir        string
 	PromptDir        string
 	SessionsDir      string
 	WorktreeLocksDir string
@@ -151,6 +152,8 @@ func (m Manager) Ensure(repoPath string) (Layout, ProjectMetadata, WorktreeMetad
 	if err != nil {
 		return Layout{}, ProjectMetadata{}, WorktreeMetadata{}, err
 	}
+	// ReportDir is not listed: path.generate creates it when it first
+	// allocates a report, so no other caller of Ensure touches it.
 	for _, dir := range []string{
 		layout.LocksDir,
 		layout.AgentsDir,
@@ -198,6 +201,7 @@ func layoutFor(cacheRoot, projectKey, worktreeKey string) Layout {
 		WorktreeMeta:     filepath.Join(worktreeDir, "worktree.json"),
 		AgentsDir:        filepath.Join(worktreeDir, "agents"),
 		ReviewDir:        filepath.Join(worktreeDir, "review-paths"),
+		ReportDir:        filepath.Join(worktreeDir, "report-paths"),
 		PromptDir:        filepath.Join(worktreeDir, "prompt-paths"),
 		SessionsDir:      filepath.Join(worktreeDir, "sessions"),
 		WorktreeLocksDir: filepath.Join(worktreeDir, "locks"),

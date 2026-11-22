@@ -488,3 +488,52 @@ func TestPathWriteRefusalNamesTheRemedy(t *testing.T) {
 		t.Fatalf("refusal = %s", refusal)
 	}
 }
+
+// TestPathGenerateReportKindFollowsPathWriteRoute: path.generate(kind: "report")
+// returns a cache path under the report directory. A caller whose session
+// minted it can write it through path.write (the existing route); another
+// session gains no authority over it.
+func TestPathGenerateReportKindFollowsPathWriteRoute(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	owner, err := s.sessions.mint(root, roleDelegate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.sessions.mint(root, roleDelegate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enum := toolPropertiesByName(t, callToolsList(t, s), "path.generate")["kind"].(map[string]any)["enum"].([]any)
+	var kinds []string
+	for _, raw := range enum {
+		kinds = append(kinds, raw.(string))
+	}
+	if strings.Join(kinds, ",") != "review,report,prompt,plan,clone" {
+		t.Fatalf("path.generate kind enum = %v", kinds)
+	}
+
+	resp := callToolOnce(t, s, 1, "path.generate", map[string]any{"session_key": owner, "kind": "report", "stems": []any{"survey"}})
+	if toolIsError(t, resp) {
+		t.Fatalf("path.generate(report): %s", resp)
+	}
+	path := strings.TrimSpace(toolText(t, resp))
+	if !strings.Contains(path, "report-paths") || !strings.HasSuffix(path, "-survey.md") {
+		t.Fatalf("report path = %q", path)
+	}
+
+	if resp := callToolOnce(t, s, 2, "path.write", map[string]any{"session_key": other, "path": path, "content": "stolen"}); !toolIsError(t, resp) || !strings.Contains(resp, "not generated for this session key") {
+		t.Fatalf("cross-session report write = %s", resp)
+	}
+	if resp := callToolOnce(t, s, 3, "path.write", map[string]any{"session_key": owner, "path": path, "content": "report body\n"}); toolIsError(t, resp) {
+		t.Fatalf("same-session report write: %s", resp)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "report body\n" {
+		t.Fatalf("report content = %q, %v", got, err)
+	}
+
+}

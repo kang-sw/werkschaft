@@ -117,8 +117,9 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	daemonAgents := daemonAgentClient && s.agentListed() && s.toolAllowed("agent.spawn") && s.toolAllowed("mailbox.send")
 	terminology := playbookTerminology(harness, daemonAgents, s.runtimeNamespace())
 	// A PreferNativeSubagent lead explores with its own native subagent and
-	// spawns on an external harness, but only in text it executes itself: a
-	// rendered delegate runs elsewhere and keeps the daemon-agent wording.
+	// spawns through agent.spawn under its tier rule, but only in text it
+	// executes itself: a rendered delegate runs elsewhere and keeps the
+	// daemon-agent wording.
 	nativeFirst := selfExecuted && daemonAgents && descriptor.preferNativeSubagent
 	if nativeFirst {
 		terminology = nativeFirstTerminology(s.runtimeNamespace())

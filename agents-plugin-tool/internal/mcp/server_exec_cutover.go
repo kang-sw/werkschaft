@@ -58,11 +58,23 @@ func (s *Server) cutoverListed(name string) bool {
 // and this process's file-backed legacy jobs (execjob.FenceLegacyRoot),
 // each under one lock with its own admission.
 func (s *Server) worktreeExecFence(target string) (func(), error) {
-	unfenceLegacy, err := execjob.FenceLegacyRoot(target)
+	return s.worktreeExecFenceAs(target, execjob.FenceReleasing)
+}
+
+// worktreeAcquireExecFence is worktreeExecFence for worktree.acquire's
+// claim: a launch it refuses is told the worktree is being acquired.
+func (s *Server) worktreeAcquireExecFence(target string) (func(), error) {
+	return s.worktreeExecFenceAs(target, execjob.FenceAcquiring)
+}
+
+// worktreeExecFenceAs is worktreeExecFence whose refusal of a new launch
+// names reason.
+func (s *Server) worktreeExecFenceAs(target, reason string) (func(), error) {
+	unfenceLegacy, err := execjob.FenceLegacyRootAs(target, reason)
 	if err != nil {
 		return nil, err
 	}
-	unfenceHosted, err := s.execJobs().FenceRoot(target)
+	unfenceHosted, err := s.execJobs().FenceRootAs(target, reason)
 	if err != nil {
 		unfenceLegacy()
 		return nil, err

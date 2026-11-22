@@ -67,7 +67,7 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 		r.notify = notify
 	}
 	entries, _ := wsstate.ReadDir(filepath.Join(r.opts.Dir, "sessions"))
-	var open []Record
+	var all, open []Record
 	for _, e := range entries {
 		if !e.IsDir() || !wsdashboard.ValidReplyID(e.Name()) {
 			continue
@@ -80,6 +80,12 @@ func (r *Runner) Start(notify func(replyID, project string)) {
 			}
 			continue
 		}
+		all = append(all, rec)
+	}
+	// From the full set, before any record is loaded or rejoined, so a
+	// child read before its parent is admitted from that parent.
+	r.resolveSpawnerBackends(all)
+	for _, rec := range all {
 		if rec.ClosedAt != "" || rec.handedOff() {
 			// A handed-off session is a terminal harness's: nothing here
 			// writes its row, watches its mail, or starts a process for it.
@@ -317,3 +323,25 @@ func (r *Runner) scanDone() bool {
 // conversations stay open on disk and resume lazily under the next daemon.
 // A lead conversation's process is let go, not ended: it runs on under its
 // session holder, and the next daemon rejoins it.
+
+// resolveSpawnerBackends derives the spawner stamp of each record made before
+// it (Record.SpawnerBackend) on a backend registered with a cross-harness
+// refusal: its parent's record backend, found by Parent.ReplyID among all
+// the records read at startup. A record whose parent has no record keeps no
+// stamp, so admitWorkerRecord refuses it as cross-harness. The one derived
+// value then drives every admission of the record: rejoin classification,
+// holder retirement, wake, and the stop retry. It is kept in memory and
+// rides the record's next write.
+func (r *Runner) resolveSpawnerBackends(all []Record) {
+	backends := make(map[string]string, len(all))
+	for _, rec := range all {
+		backends[rec.ReplyID] = rec.Backend
+	}
+	for i := range all {
+		rec := &all[i]
+		if rec.Lead || rec.Parent == nil || rec.SpawnerBackend != "" || r.opts.Backends[rec.Backend].crossHarnessRefusal == "" {
+			continue
+		}
+		rec.SpawnerBackend = backends[rec.Parent.ReplyID]
+	}
+}

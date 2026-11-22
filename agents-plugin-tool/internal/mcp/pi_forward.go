@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,8 +56,26 @@ func (s *Server) piForwards() bool {
 	return ok
 }
 
+// daemonRefusal is a non-2xx answer the daemon wrote to a forwarded call: a
+// definite refusal. Every other piCall error (no answer, a timeout, a lost
+// connection, an unreadable or undecodable answer) leaves unknown whether
+// the daemon acted on the call before its answer was lost.
+type daemonRefusal struct {
+	status int
+	msg    string
+}
+
+func (e *daemonRefusal) Error() string { return e.msg }
+
+// definiteDaemonRefusal reports whether err is a daemon's written refusal,
+// not a call whose outcome is unknown.
+func definiteDaemonRefusal(err error) bool {
+	var refusal *daemonRefusal
+	return errors.As(err, &refusal)
+}
+
 // piCall posts one forwarded call to the token route and decodes its
-// answer into out.
+// answer into out; a non-2xx answer is a *daemonRefusal.
 func (s *Server) piCall(ctx context.Context, tool string, body map[string]any, timeout time.Duration, out any) error {
 	op := strings.TrimPrefix(tool, "pi.")
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -98,7 +117,7 @@ func (s *Server) piCall(ctx context.Context, tool string, body map[string]any, t
 					err = fmt.Errorf("%s", strings.TrimSpace(string(answer)))
 				} else {
 					if resp.StatusCode/100 != 2 {
-						return fmt.Errorf("%s", strings.TrimSpace(string(answer)))
+						return &daemonRefusal{status: resp.StatusCode, msg: strings.TrimSpace(string(answer))}
 					}
 					if err := json.Unmarshal(answer, out); err != nil {
 						return fmt.Errorf("the dashboard daemon's answer is not JSON: %v", err)

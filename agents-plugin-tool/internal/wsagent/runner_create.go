@@ -137,6 +137,19 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		}
 		return State{}, badRequest("agent profile %q is not a lead profile (lead: true)", rp.Name)
 	}
+	spawnerBackend := ""
+	if spawn != nil {
+		spawnerBackend = spawn.spawnerBackend
+	}
+	if lead == nil {
+		// Every worker creation, profile-based or spawned, passes the
+		// cross-harness check before anything is minted or written: a
+		// spawn for its caller's verified backend, a dashboard or REST
+		// creation for none.
+		if err := r.admitWorker(rp.Definition.Backend, spawnerBackend); err != nil {
+			return State{}, &requestError{status: http.StatusForbidden, msg: err.Error()}
+		}
+	}
 	if spawn != nil {
 		releaseAdmission := r.holdParentAdmission(spawn.Parent)
 		defer releaseAdmission()
@@ -206,6 +219,12 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		WSKey:     key,
 		Listed:    rp.Definition.ListInIndex,
 		CreatedAt: now.UTC().Format(time.RFC3339),
+		// The same instant at nanosecond precision, for the release
+		// boundary.
+		CreatedUnixNano: now.UnixNano(),
+	}
+	if lead == nil {
+		rec.SpawnerBackend = spawnerBackend
 	}
 	if lead != nil {
 		rec.Lead = true

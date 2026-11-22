@@ -1415,6 +1415,10 @@
     doc.addEventListener("ws-companion-config", function (event) { shCompanionConfigure(event.detail); });
     doc.addEventListener("ws-companion-command", function (event) { if (shCompanion) shCompanion.command(event.detail); });
     shCompanionConfigure(window.wsCompanionConfig);
+    doc.addEventListener("ws-companion-focus", function (event) { window.WsCompanion?.focus?.token(event.detail); });
+    doc.addEventListener("ws-companion-config", function (event) { window.WsCompanion?.focus?.config(event.detail); });
+    window.WsCompanion?.focus?.config(window.wsCompanionConfig);
+    window.WsCompanion?.focus?.token(window.wsCompanionFocusToken);
     window.addEventListener("pagehide", function (event) { if (!event.persisted) shCompanionStop(); });
   }
   if (window === window.top) {

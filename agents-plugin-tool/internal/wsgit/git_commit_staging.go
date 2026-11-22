@@ -2,6 +2,7 @@
 package wsgit
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -128,6 +129,16 @@ func validateCommitStatus(status StatusResult, paths []string) error {
 	return nil
 }
 
+// expandCommitPathsForTicketMoves adds, for each ticket stem among paths, the
+// other status entries of that stem: naming one side of a ticket move
+// commits the whole move. An untracked (or ignored) entry of a stem whose
+// move destination is staged (an index addition or rename of that stem) is
+// not added: the staged destination is the move (tickets.move and
+// tickets.close stage it), so an untracked copy beside it is no part of it
+// and is staged only when the caller names it. Without a staged destination
+// an untracked entry is the destination of a move not (fully) staged, a
+// plain mv with at most its source's deletion staged, and is added as
+// before: a staged deletion alone is no evidence of where the ticket went.
 func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []string {
 	stems := map[string]bool{}
 	for _, path := range paths {
@@ -138,18 +149,28 @@ func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []stri
 	if len(stems) == 0 {
 		return paths
 	}
+	stagedDestination := map[string]bool{}
+	for _, file := range status.ChangedFiles {
+		if file.IndexStatus != "A" && file.IndexStatus != "R" {
+			continue
+		}
+		if _, stem, ok := ticketStatusStem(file.Path); ok {
+			stagedDestination[stem] = true
+		}
+	}
 	expanded := append([]string(nil), paths...)
 	seen := map[string]bool{}
 	for _, path := range paths {
 		seen[filepath.ToSlash(filepath.Clean(path))] = true
 	}
 	for _, file := range status.ChangedFiles {
+		untracked := file.Status == "?" || file.Status == "!"
 		for _, path := range []string{file.Path, file.OldPath} {
 			if path == "" {
 				continue
 			}
 			_, stem, ok := ticketStatusStem(path)
-			if !ok || !stems[stem] {
+			if !ok || !stems[stem] || (untracked && stagedDestination[stem]) {
 				continue
 			}
 			cleaned := filepath.ToSlash(filepath.Clean(path))
@@ -160,6 +181,101 @@ func expandCommitPathsForTicketMoves(status StatusResult, paths []string) []stri
 		}
 	}
 	return expanded
+}
+
+// dropVanishedTicketMoveSources removes a ticket path the caller named that
+// git knows nothing about because the ticket was created and moved before its
+// first commit: tickets.move staged the file straight to its destination, so
+// the source status directory has no index, HEAD or status entry left. Staging
+// such a path would fail with "pathspec did not match any files" and abort the
+// whole commit, although the destination alone is the complete change.
+//
+// A path is dropped only when it is ticket-shaped, absent from status and from
+// the index (indexed), and a different path of the same stem is a staged
+// addition (index status A). Absent from status and the index means absent
+// from HEAD too: a HEAD entry missing from the index is a staged deletion in
+// status. That keeps a mistyped path with no sibling an error, leaves tracked
+// moves untouched (their old path still carries a deletion or rename entry),
+// and never lets an untracked sibling stand in for the move: with no staged
+// addition nothing is dropped, so the missing path still fails the commit,
+// and beside a staged addition the expansion
+// (expandCommitPathsForTicketMoves) adds no untracked copy of the stem, which
+// is staged only when the caller names it.
+func dropVanishedTicketMoveSources(status StatusResult, paths []string, indexed map[string]bool) []string {
+	vanished := map[string]bool{}
+	for _, path := range vanishedTicketMoveSources(status, paths) {
+		if !indexed[path] {
+			vanished[path] = true
+		}
+	}
+	if len(vanished) == 0 {
+		return paths
+	}
+	kept := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if vanished[filepath.ToSlash(filepath.Clean(path))] {
+			continue
+		}
+		kept = append(kept, path)
+	}
+	return kept
+}
+
+// vanishedTicketMoveSources lists, cleaned, the ticket-shaped paths among
+// paths that are absent from status while a different path of the same stem
+// is a staged addition: the candidates dropVanishedTicketMoveSources drops
+// once the index confirms they are absent there too.
+func vanishedTicketMoveSources(status StatusResult, paths []string) []string {
+	inStatus := map[string]bool{}
+	stagedAdds := map[string]map[string]bool{}
+	for _, file := range status.ChangedFiles {
+		for _, path := range []string{file.Path, file.OldPath} {
+			if path != "" {
+				inStatus[filepath.ToSlash(filepath.Clean(path))] = true
+			}
+		}
+		if file.IndexStatus != "A" {
+			continue
+		}
+		cleaned := filepath.ToSlash(filepath.Clean(file.Path))
+		if _, stem, ok := ticketStatusStem(cleaned); ok {
+			if stagedAdds[stem] == nil {
+				stagedAdds[stem] = map[string]bool{}
+			}
+			stagedAdds[stem][cleaned] = true
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, path := range paths {
+		cleaned := filepath.ToSlash(filepath.Clean(path))
+		if seen[cleaned] {
+			continue
+		}
+		if _, stem, ok := ticketStatusStem(cleaned); ok && !inStatus[cleaned] && len(stagedAdds[stem]) > 0 {
+			seen[cleaned] = true
+			out = append(out, cleaned)
+		}
+	}
+	return out
+}
+
+// indexedPaths reports which of paths the index holds (git ls-files).
+func indexedPaths(ctx context.Context, runner Runner, root string, paths []string) (map[string]bool, error) {
+	indexed := map[string]bool{}
+	if len(paths) == 0 {
+		return indexed, nil
+	}
+	out, err := runner.RunGit(ctx, root, append([]string{"ls-files", "--cached", "-z", "--"}, paths...)...)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			indexed[filepath.ToSlash(filepath.Clean(path))] = true
+		}
+	}
+	return indexed, nil
 }
 
 // filterIndexDeleteSidePaths drops paths that are the delete side of a staged
