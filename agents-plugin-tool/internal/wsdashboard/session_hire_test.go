@@ -822,3 +822,37 @@ func TestHiringRosterOmitsDeletedChild(t *testing.T) {
 		t.Fatalf("roster after delete: %+v %v", rows, err)
 	}
 }
+
+// The roster lists exactly the rail's active session list: an asleep child
+// stays, an archived child is omitted.
+func TestHiringRosterOmitsArchivedKeepsAsleep(t *testing.T) {
+	f := startPageFixture(t)
+	now := time.Now()
+	for _, id := range []string{"asleepkid", "archivedkid"} {
+		reg := register(t, f.dir, id, f.project, now)
+		reg.Hosted, reg.HostStopped, reg.HostExitReason = true, true, "stop"
+		if err := WriteRegistration(f.dir, reg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteSessionHidden(f.dir, "archivedkid", true); err != nil {
+		t.Fatal(err)
+	}
+	f.d.index.Refresh()
+	for _, kid := range []string{"asleepkid", "archivedkid"} {
+		if res := hirePost(f.d, railLayoutRoute, `{"op":"attach","rid":"`+kid+`","parent":"livesession"}`); res.Code != 200 {
+			t.Fatal(res.Body)
+		}
+	}
+	rows, err := f.d.sessionRoster("livesession")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range rows {
+		got[r.Mailbox] = true
+	}
+	if !got["id:asleepkid"] || got["id:archivedkid"] || len(rows) != 1 {
+		t.Fatalf("roster = %+v", rows)
+	}
+}
