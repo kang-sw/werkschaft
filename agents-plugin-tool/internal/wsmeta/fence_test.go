@@ -969,3 +969,97 @@ func TestReappliedReplacementIsPublishedAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// replaceWith publishes content at rel as a new file (another identity),
+// as an owner's editor or copy would.
+func replaceWith(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	tmp := filepath.Join(dir, filepath.FromSlash(rel)+".owner-copy")
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A removal is proven only by the file the migration moved: the witness
+// must be in the original's state and carry the identity recorded with the
+// intent. A byte-identical copy the owner placed there proves nothing, and
+// an identity that cannot be looked up is unread, not a mismatch.
+func TestCopiedWitnessNeverProvesARemoval(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("retry after an interruption", func(t *testing.T) {
+		dir := legacyFixture(t)
+		armed := false
+		s := openTest(t, dir, crashAt("fence-prepared", &armed))
+		mustStage(t, s)
+		armed = true
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, errCrash) {
+			t.Fatalf("interrupted removal = %v", err)
+		}
+		if err := os.Remove(filepath.Join(dir, fenceHooks)); err != nil {
+			t.Fatal(err)
+		}
+		replaceWith(t, dir, hooksWitness, hooksBytes)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); !errors.Is(err, ErrFenceStale) {
+			t.Fatalf("retry over the owner's copy = %v, want ErrFenceStale", err)
+		}
+		if c := captureMap(t, s)[fenceHooks]; c.FenceState == FenceLanded {
+			t.Fatalf("removal landed on the owner's copy: %+v", c)
+		}
+		if _, err := s.Commit(ctx, testCommit()); err == nil {
+			t.Fatal("commit accepted a removal the migration never published")
+		}
+		if readRel(t, dir, hooksWitness) != hooksBytes {
+			t.Fatal("the owner's copy was changed")
+		}
+	})
+
+	t.Run("a landed removal whose witness was replaced", func(t *testing.T) {
+		dir := legacyFixture(t)
+		s := openTest(t, dir, testOpts())
+		mustStage(t, s)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+			t.Fatal(err)
+		}
+		replaceWith(t, dir, hooksWitness, hooksBytes)
+		if res := mustStage(t, s); !reflect.DeepEqual(res.Unfenced, []string{fenceHooks}) {
+			t.Fatalf("stage over a replaced witness = %+v, want the removal unfenced", res)
+		}
+		if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrFencePending) {
+			t.Fatalf("commit = %v, want ErrFencePending", err)
+		}
+	})
+
+	t.Run("an identity lookup failure is unread", func(t *testing.T) {
+		dir := legacyFixture(t)
+		s := openTest(t, dir, testOpts())
+		mustStage(t, s)
+		if err := s.ApplyRemovalFence(ctx, fenceHooks, hooksWitness); err != nil {
+			t.Fatal(err)
+		}
+		prev := fileIdentity
+		t.Cleanup(func() { fileIdentity = prev })
+		fileIdentity = func(p string) (string, error) {
+			if filepath.Base(p) == hooksWitness {
+				return "", errors.New("sharing violation")
+			}
+			return prev(p)
+		}
+		if res := mustStage(t, s); !reflect.DeepEqual(res.Unread, []string{fenceHooks}) || len(res.Unfenced) != 0 {
+			t.Fatalf("stage with an inconclusive witness identity = %+v, want it unread", res)
+		}
+		if _, err := s.Commit(ctx, testCommit()); !errors.Is(err, ErrLegacyUnread) {
+			t.Fatalf("commit = %v, want ErrLegacyUnread", err)
+		}
+		fileIdentity = prev
+		if _, err := s.Commit(ctx, testCommit()); err != nil {
+			t.Fatal(err)
+		}
+		if c := captureMap(t, s)[fenceHooks]; c.State != CapturePresent {
+			t.Fatalf("hooks capture = %+v, want the original kept", c)
+		}
+	})
+}

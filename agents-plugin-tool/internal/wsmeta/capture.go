@@ -70,9 +70,10 @@ const (
 //  2. The record names exactly one publication for the current original. A
 //     replacement is the record's digest under its sentinel mtime. A removal
 //     is the path absent, with its witness (a sibling name, fixed per path)
-//     in the original's state. The record changes only while the live state
-//     is not that publication, so a publication left by any earlier,
-//     interrupted attempt stays provable. No earlier state can prove a new
+//     in the original's state and carrying the identity (witness_id) the
+//     moved file had when the record was written. The record changes only
+//     while the live state is not that publication, so a publication left
+//     by any earlier, interrupted attempt stays provable. No earlier state can prove a new
 //     record: a new sentinel differs from the live mtime, and the witness
 //     path is durably empty before a removal record is written.
 //  3. The migration deletes or overwrites only files it put in place: the
@@ -832,7 +833,7 @@ type captureMeta struct {
 	state, digest, fenceState, fenceDigest, fenceWitness, fenceKind string
 	fenceRequired                                                   bool
 	fenceMtime                                                      int64
-	witnessID, witnessContent                                       string // loadCaptureMeta only
+	witnessID, witnessContent                                       string
 }
 
 // loadCaptureMeta reads one capture row's state and fence columns.
@@ -849,8 +850,11 @@ func loadCaptureMeta(ctx context.Context, q querier, rel string) (captureMeta, b
 // fenceProven reports whether the live state is the publication of the
 // row's fence record (invariant 2). For a replacement that is the record's
 // digest under its exact sentinel time. For a removal it is rel absent, with
-// the witness in the staged original's state. unread is set when the witness
-// could not be read for a transient reason.
+// the witness in the staged original's state and, unless the original was
+// absent (nothing moved, the witness path stays empty), carrying the
+// identity recorded with the intent: the file the migration moved, not a
+// copy placed there. unread is set when the witness could not be read, or
+// its identity looked up, for a transient reason.
 func (s *Store) fenceProven(prev captureMeta, got legacyRead) (proven, unread bool) {
 	if prev.fenceState == FenceNone {
 		return false, false
@@ -859,11 +863,29 @@ func (s *Store) fenceProven(prev captureMeta, got legacyRead) (proven, unread bo
 		if got.state != CaptureAbsent {
 			return false, false
 		}
-		w := readLegacy(filepath.Join(s.dir, filepath.FromSlash(prev.fenceWitness)), s.opts.ReadFile)
+		wabs := filepath.Join(s.dir, filepath.FromSlash(prev.fenceWitness))
+		w := readLegacy(wabs, s.opts.ReadFile)
 		if w.transient {
 			return false, true
 		}
-		return w.state == prev.state && w.digest == prev.digest, false
+		if w.state != prev.state || w.digest != prev.digest {
+			return false, false
+		}
+		if prev.state == CaptureAbsent {
+			return true, false
+		}
+		if prev.witnessID == "" {
+			// No recorded identity: the publication cannot be told from a copy.
+			return false, false
+		}
+		id, err := fileIdentity(wabs)
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, false
+		}
+		if err != nil {
+			return false, true
+		}
+		return sameGeneration(id, prev.witnessID), false
 	}
 	return got.state == CapturePresent && got.digest == prev.fenceDigest &&
 		got.mtime.Unix() == prev.fenceMtime && got.mtime.Nanosecond() == 0, false
@@ -875,14 +897,14 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 	res := StageResult{Attempt: attempt}
 	now := s.opts.Now().UTC().Format(time.RFC3339Nano)
 	existing := map[string]captureMeta{}
-	rows, err := tx.QueryContext(ctx, `SELECT path, state, digest, fence_state, fence_digest, fence_witness, fence_kind, fence_required, fence_mtime FROM legacy_captures`)
+	rows, err := tx.QueryContext(ctx, `SELECT path, state, digest, fence_state, fence_digest, fence_witness, fence_kind, fence_required, fence_mtime, witness_id, witness_content FROM legacy_captures`)
 	if err != nil {
 		return res, err
 	}
 	for rows.Next() {
 		var p string
 		var m captureMeta
-		if err := rows.Scan(&p, &m.state, &m.digest, &m.fenceState, &m.fenceDigest, &m.fenceWitness, &m.fenceKind, &m.fenceRequired, &m.fenceMtime); err != nil {
+		if err := rows.Scan(&p, &m.state, &m.digest, &m.fenceState, &m.fenceDigest, &m.fenceWitness, &m.fenceKind, &m.fenceRequired, &m.fenceMtime, &m.witnessID, &m.witnessContent); err != nil {
 			rows.Close()
 			return res, err
 		}
