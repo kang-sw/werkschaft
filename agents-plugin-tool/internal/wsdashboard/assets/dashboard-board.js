@@ -389,7 +389,7 @@
   function queueGallery() { if (galNarrow && !galFrame) galFrame = requestAnimationFrame(placeGallery); }
   if (cardBoard) {
     if (window.WsPreview) window.WsPreview.setup({ renderDiff: gwRender, post: worktree ? browsePost : post, toast: toast });
-    if (window.WsTerm) window.WsTerm.setup({ post: worktree ? browsePost : post, toast: toast, setCtab: live ? setCtab : null });
+    if (window.WsTerm) window.WsTerm.setup({ post: worktree ? browsePost : post, toast: toast, setCtab: live ? setCtab : null, stage: shStage });
     // The composer's chips come later in this script: the hooks are hoisted
     // functions, and cchips is not yet assigned here.
     if (window.WsWeb) window.WsWeb.setup($("cchips") ? { post: post, toast: toast, rid: rid, addPick: addWebPick, addConsole: addWebConsole } : { post: post, toast: toast, rid: rid });

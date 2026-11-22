@@ -218,6 +218,8 @@ func TestTrackerAdapterHiddenStores(t *testing.T) {
 var tkApi = {}, tkOrder = [], tkHidden = [], tkInfo = {}, tkViews = {}, tkErrs = {}, tkSeen = {}, tkHostErr = null, tkSupport = false, tkLastRev = null;
 var fetched = [], bad = [], tkSubs = [];
 function wsT(k) { return k; }
+function shStage(fn) { fn(); }
+function shHolding() { return false; }
 function tkUrl(id, op) { return "/tracker/stores/" + id + "/" + op; }
 function tkFetch(path, body, done) {
   fetched.push(path);
