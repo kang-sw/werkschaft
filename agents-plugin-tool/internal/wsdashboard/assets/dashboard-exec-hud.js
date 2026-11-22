@@ -197,6 +197,9 @@
     var changed = force || sig !== xhSig;
     if (changed) {
       xhSig = sig;
+      // The rebuild takes the focused chip with it: focus goes back to the same
+      // chip (or the toolbar's first stop), so the keyboard never falls to the page.
+      var held = g.contains(doc.activeElement) ? (doc.activeElement.getAttribute("data-xid") || doc.activeElement.getAttribute("data-xkind") || "") : null;
       g.textContent = "";
       xhVis = vis;
       // Only as many chips as can ever fit are built; the rest fold by count.
@@ -204,6 +207,11 @@
       g.appendChild(xhMore);
       g.appendChild(xhAgg);
       xhLayout();
+      if (held !== null) {
+        var back = (held && g.querySelector('.xchip[data-xid="' + held + '"], [data-xkind="' + held + '"]')) || null;
+        if (!back || back.hidden || !back.getClientRects().length) back = xhButtons()[0];
+        if (back) back.focus();
+      }
     } else {
       xhTickText();
       xhLayout();

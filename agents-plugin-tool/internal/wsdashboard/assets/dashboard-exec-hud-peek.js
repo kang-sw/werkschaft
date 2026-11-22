@@ -46,14 +46,17 @@
       var id = xhToastEl.getAttribute("data-xid");
       if (e.target.getAttribute("data-xact") === "toast-view" && id) { xhToastEl.hidden = true; xhOpenPeek(id, id); }
     });
+    // Capture phase, and the key is consumed: the rail, the drawer and the shell
+    // also close on Escape, and one press cancels the confirm or closes the panel only.
     doc.addEventListener("keydown", function (e) {
       if (e.key !== "Escape" || e.defaultPrevented || !xhPk.open) return;
       var a = doc.activeElement;
       if (!a || !(xhPeekEl.contains(a) || (xhGroup && xhGroup.contains(a)))) return;
       e.preventDefault();
+      e.stopPropagation();
       if (xhPk.confirm) xhCancelStop(true);
       else xhClosePeek(true);
-    });
+    }, true);
     doc.addEventListener("pointerdown", function (e) {
       if (!xhPk.open || xhPk.pinned) return;
       if (!e.target.isConnected) return;
@@ -78,7 +81,8 @@
     xhPk.sig = "";
     xhPeekRender(true);
     xhRender(true);
-    xhPollStart();
+    // The same job already open keeps its output and its poll.
+    if (!same || !xhOut) xhPollStart();
   }
   function xhClosePeek(restoreFocus) {
     var origin = xhPk.origin;

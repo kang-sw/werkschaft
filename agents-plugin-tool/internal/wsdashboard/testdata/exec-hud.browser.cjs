@@ -182,6 +182,7 @@ async function run(browser, { lang, scheme, full }) {
     J('exec_lost', 'tail -f daemon.log', { state: 'lost', started_at: t0 - 3200000, ended_at: t0 - 1800000 }),
     J('exec_nostart', 'git fetch', { state: 'failed', origin: 'user', started_at: t0 - 5000, ended_at: t0 - 5000 }),
     J('exec_run', 'pnpm vitest --watch', { started_at: t0 - 201000 }),
+    J('exec_just', 'cargo build', { state: 'exited', exit_code: 0, started_at: t0 - 20000, ended_at: t0 - 2000 }),
   ];
   await setJobs(view, ended);
   await view.waitForSelector('.xgroup:not([hidden]) .xchip');
@@ -193,6 +194,7 @@ async function run(browser, { lang, scheme, full }) {
   assert.ok(ids.indexOf('exec_exit') >= 0 && ids.indexOf('exec_lost') >= 0 && ids.indexOf('exec_nostart') >= 0, 'failures shown: ' + ids);
   assert.ok(!ids.includes('exec_stopped'), 'a stopped job past 12s is hidden: ' + ids);
   assert.ok(ids.indexOf('exec_run') > ids.indexOf('exec_exit'), 'pinned failures come before the running job: ' + ids);
+  assert.ok(ids.indexOf('exec_just') >= 0 && ids.indexOf('exec_just') < ids.indexOf('exec_run'), 'an ok job that just ended is pinned ahead of the running job: ' + ids);
   const okVisible = ids.includes('exec_ok');
   assert.ok(okVisible, 'an ok job inside its 12 s window is still shown at load: ' + ids);
   await sleep(1100);
@@ -209,14 +211,14 @@ async function run(browser, { lang, scheme, full }) {
   assert.equal(await view.locator('.xchip[data-xid="exec_exit"]').count(), 0, 'dismissed');
   // reload: a job that ended before the page loaded is past its windows.
   await post('/set', { notice: 'sent' });
-  await setJobs(view, [J('exec_ok', 'make -j8', { state: 'exited', exit_code: 0, ended_at: Date.now() - 100000 }), J('exec_bad', 'go vet ./...', { state: 'exited', exit_code: 1, ended_at: Date.now() - 100000 }), J('exec_stopped2', 'sleep 1000', { state: 'stopped', ended_at: Date.now() - 100000 })]);
+  await setJobs(view, [J('exec_ok', 'make -j8', { state: 'exited', exit_code: 0, ended_at: Date.now() - 100000 }), J('exec_bad', 'go vet ./...', { state: 'exited', exit_code: 1, ended_at: Date.now() - 100000 }), J('exec_stopped2', 'sleep 1000', { state: 'stopped', ended_at: Date.now() - 100000 }), J('exec_stopfail', 'node server.js', { state: 'stopped', stopped_by_user: true, stop_notice: 'failed', ended_at: Date.now() - 90000 })]);
   await page.reload();
   await view.waitForSelector('#composer[data-cexec="1"]', { state: 'attached' }).catch(() => {});
   const view2 = page.frames().find(x => x !== page.mainFrame() && x.url().includes('/s/livesession'));
   await view2.waitForSelector('.xchip[data-xid="exec_bad"]', { timeout: 15000 });
   ids = (await chips(view2)).filter(x => x.id).map(x => x.id);
-  assert.deepEqual(ids, ['exec_bad'], 'after reload only the failure shows: ' + ids);
-  await view2.evaluate(() => document.querySelector('.xslot[data-xid="exec_bad"] .xstop').click());
+  assert.deepEqual(ids, ['exec_stopfail', 'exec_bad'], 'after reload only the failure and the stop whose notice failed show: ' + ids);
+  await view2.evaluate(() => { document.querySelector('.xslot[data-xid="exec_bad"] .xstop').click(); document.querySelector('.xslot[data-xid="exec_stopfail"] .xstop').click(); });
   await sleep(200);
   assert.equal(await hudShown(view2), true, 'the quiet "ended" chip remains');
   assert.match(await view2.evaluate(() => document.querySelector('.xgroup .xagg.quiet').textContent), new RegExp('2'), 'ended N counts the faded jobs');
@@ -346,14 +348,13 @@ async function run(browser, { lang, scheme, full }) {
   await v.click('.xconf [data-xact="confirm"]');
   await v.click('.xp-tab[data-xtab="exec_s3"]');
   await v.waitForSelector('.xtoast:not([hidden])', { timeout: 6000 });
-  assert.ok((await v.locator('.xtoast').textContent()).includes(T.stopped) || true);
   assert.match(await v.locator('.xtoast').textContent(), lang === 'ko' ? /중지됨/ : /Stopped/);
   await snap(page, v, tag + '-12-toast');
   // the user's own `!` job: no agent notice.
   await v.click('.xp-tab[data-xtab="exec_u1"]');
   await v.click('.xpeek [data-xact="stop"]');
   await v.waitForSelector('.xconf');
-  assert.ok(!(await v.locator('.xconf').textContent()).includes('agent notice') || lang === 'ko');
+  assert.ok((await v.locator('.xconf').textContent()).includes(lang === 'ko' ? '깨우지 않습니다' : 'not woken'), 'the ! confirm says the agent is not notified');
   await v.click('.xconf [data-xact="confirm"]');
   await v.waitForSelector('.xnotice[data-ns="none"]', { timeout: 6000 });
   assert.ok((await v.locator('.xnotice').textContent()).includes(T.none));
@@ -388,6 +389,14 @@ async function run(browser, { lang, scheme, full }) {
   assert.equal(await v.evaluate(() => document.activeElement.getAttribute('data-xid')), 'exec_k3');
   await page.keyboard.press('Home');
   assert.equal(await v.evaluate(() => document.activeElement.getAttribute('data-xid')), first);
+  await v.evaluate(() => { window.__escSeen = 0; document.addEventListener('keydown', e => { if (e.key === 'Escape') window.__escSeen++; }); });
+  await page.keyboard.press('Enter');
+  await v.waitForSelector('.xpeek:not([hidden])');
+  assert.equal(await v.evaluate(() => document.activeElement.classList.contains('xchip')), true, 'focus stays on the chip when the panel opens by keyboard');
+  await page.keyboard.press('Escape');
+  await v.waitForSelector('.xpeek', { state: 'hidden' });
+  assert.equal(await v.evaluate(() => window.__escSeen), 0, 'the Escape that closes the panel is consumed (the rail, the drawer and the shell never see it)');
+  assert.equal(await v.evaluate(() => document.activeElement.classList.contains('xchip')), true, 'Esc from the chip returns focus to a chip');
   await page.keyboard.press('Enter');
   await v.waitForSelector('.xpeek:not([hidden])');
   await v.evaluate(() => document.querySelector('.xp-tab[aria-selected="true"]').focus());
