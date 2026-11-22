@@ -750,3 +750,49 @@ func mustArgs(t *testing.T, spec StartSpec) []string {
 	}
 	return args
 }
+
+// A worker whose process was stopped (an idle stop, or the user's) and is
+// woken by a message starts a new process on the recorded backend session: the
+// loop reads the conversation file and the next request carries the earlier
+// turn, so the worker keeps its context across the restart.
+func TestWerkWakeResumesTheConversationFromItsLog(t *testing.T) {
+	model := &werkModel{steps: []func(context.Context, werk.Request) (*werk.Response, error){
+		werkMessage("first answer"),
+		werkMessage("second answer"),
+	}}
+	h, fleet, got := werkHarness(t, model, true)
+	id, holder := spawnWerk(t, h, "workdir-write")
+	eventually(t, "the first report", func() bool { return len(got.list()) == 1 })
+	session := h.record(id).SessionID
+	if session == "" {
+		t.Fatal("the process reported no session id")
+	}
+	if _, err := h.runner.Stop(id); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the process to end", func() bool { return !h.state(id).Process })
+
+	h.send(id, "and now?")
+	eventually(t, "the second report", func() bool { return len(got.list()) == 2 })
+	if rep := got.list()[1]; rep.Result.Status != TurnDone || rep.Result.Message != "second answer" {
+		t.Fatalf("second report = %+v", rep.Result)
+	}
+	// The second process was started on the same session and read the log.
+	var woken string
+	fleet.mu.Lock()
+	for hid, argv := range fleet.argv {
+		if hid != holder {
+			woken = argValue(argv, "--session")
+		}
+	}
+	fleet.mu.Unlock()
+	if woken != session {
+		t.Errorf("the woken process was started with session %q, want %q", woken, session)
+	}
+	model.mu.Lock()
+	second := model.reqs[1].Input
+	model.mu.Unlock()
+	if len(second) != 3 || !strings.Contains(string(second[1]), "first answer") {
+		t.Errorf("the second request lost the first turn: %s", second)
+	}
+}
