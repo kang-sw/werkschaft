@@ -293,7 +293,9 @@ func (s *Store) Stage(ctx context.Context) (StageResult, error) {
 // again, durably, and marks it landed; otherwise it publishes over the
 // staged original. A live file that is neither
 // returns ErrFenceStale. The directory must exist: a fence never recreates a
-// pruned session.
+// pruned session. A session's directory must also be the one a pass staged:
+// one marked missing or replaced since returns ErrFenceStale until a pass
+// confirms it.
 func (s *Store) ApplyFence(ctx context.Context, rel string, fenced []byte) error {
 	s.cutover.Lock()
 	defer s.cutover.Unlock()
@@ -476,6 +478,9 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 		if !ok {
 			return fmt.Errorf("wsmeta: no staged capture %q to fence", rel)
 		}
+		if err := s.checkStagedSession(ctx, tx, rel); err != nil {
+			return err
+		}
 		if kind == fenceRemove && m.fenceWitness != "" && m.fenceWitness != witness {
 			return fmt.Errorf("%w: %s is published at %s", ErrFenceConflict, rel, m.fenceWitness)
 		}
@@ -558,6 +563,31 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 		return err
 	})
 	return plan, err
+}
+
+// checkStagedSession refuses a fence on a session row until a pass has
+// confirmed the live directory: the session not marked missing, and its
+// directory of the row's generation. A row kept for a missing session, or
+// one of a directory since replaced under the same reply id, is not the live
+// directory's original (ErrFenceStale: stage, then fence again).
+func (s *Store) checkStagedSession(ctx context.Context, tx *sql.Tx, rel string) error {
+	var id, gen string
+	var missing bool
+	if err := tx.QueryRowContext(ctx, `SELECT c.reply_id, c.session_gen, COALESCE(ls.missing, 1)
+		FROM legacy_captures c LEFT JOIN legacy_sessions ls ON ls.reply_id = c.reply_id WHERE c.path = ?`, rel).Scan(&id, &gen, &missing); err != nil {
+		return err
+	}
+	if id == "" {
+		return nil
+	}
+	cur, ok, err := s.sessionGeneration(id)
+	if err != nil {
+		return err
+	}
+	if missing || !ok || !sameGeneration(cur, gen) {
+		return fmt.Errorf("%w: session %s is not the directory a pass staged", ErrFenceStale, id)
+	}
+	return nil
 }
 
 // witnessOwned reports whether the witness path wabs holds the migration's

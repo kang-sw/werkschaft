@@ -1252,3 +1252,65 @@ func TestRemovalKeepsAnOwnerSaveMadeDuringIt(t *testing.T) {
 		})
 	}
 }
+
+// A fence on a session row waits until a pass confirmed the live directory:
+// a session marked missing, or a directory of another generation under the
+// same reply id, is refused, even where the live file matches the staged
+// original, and nothing is written into it.
+func TestFenceWaitsForAPassToConfirmTheSession(t *testing.T) {
+	ctx := context.Background()
+	const ackRel = "sessions/hostedlead/ack-check.json"
+	const fencedAck = `{"through":9}`
+	setup := func(t *testing.T) (string, *Store, string, string) {
+		dir := legacyFixture(t)
+		s := openTest(t, dir, testOpts())
+		mustStage(t, s)
+		if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+			t.Fatal(err)
+		}
+		session, aside := filepath.Join(dir, "sessions", "hostedlead"), filepath.Join(dir, "hostedlead-aside")
+		if err := os.Rename(session, aside); err != nil {
+			t.Fatal(err)
+		}
+		if res := mustStage(t, s); !reflect.DeepEqual(res.Missing, []string{"hostedlead"}) {
+			t.Fatalf("stage = %+v, want hostedlead missing", res)
+		}
+		return dir, s, session, aside
+	}
+
+	t.Run("restored, not yet staged", func(t *testing.T) {
+		dir, s, session, aside := setup(t)
+		if err := os.Rename(aside, session); err != nil {
+			t.Fatal(err)
+		}
+		before := readRel(t, dir, ackRel)
+		if err := s.ApplyFence(ctx, ackRel, []byte(fencedAck)); !errors.Is(err, ErrFenceStale) {
+			t.Fatalf("fence on a missing session = %v, want ErrFenceStale", err)
+		}
+		if got := readRel(t, dir, ackRel); got != before {
+			t.Fatalf("ack-check = %q, want it untouched", got)
+		}
+		mustStage(t, s)
+		if err := s.ApplyFence(ctx, ackRel, []byte(fencedAck)); err != nil {
+			t.Fatalf("fence after the pass = %v", err)
+		}
+	})
+
+	t.Run("another directory under the same id", func(t *testing.T) {
+		dir, s, session, _ := setup(t)
+		staged := captureMap(t, s)[ackRel]
+		if staged.State != CapturePresent {
+			t.Fatalf("staged ack-check = %+v", staged)
+		}
+		if err := os.Mkdir(session, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		put(t, dir, ackRel, string(staged.Bytes))
+		if err := s.ApplyFence(ctx, ackRel, []byte(fencedAck)); !errors.Is(err, ErrFenceStale) {
+			t.Fatalf("fence on another directory = %v, want ErrFenceStale", err)
+		}
+		if got := readRel(t, dir, ackRel); got != string(staged.Bytes) {
+			t.Fatalf("ack-check = %q, want it untouched", got)
+		}
+	})
+}
