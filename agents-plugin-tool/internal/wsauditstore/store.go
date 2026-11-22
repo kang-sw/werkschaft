@@ -978,6 +978,19 @@ func (s *Store) removeRing(info *sessionInfo, forget bool) error {
 				break
 			}
 		}
+		if cold && err != nil {
+			// The cold ring indexes only the newest header and what follows;
+			// published while an older segment survives, that segment's
+			// events would vanish from reads and admission. Left unloaded,
+			// the next use replays every surviving segment.
+			r.close()
+			left, _ := ringBytes(dir)
+			s.mu.Lock()
+			s.total += left - info.bytes
+			info.bytes = left
+			s.mu.Unlock()
+			r = nil
+		}
 	} else {
 		// No state worth keeping: the data goes whole.
 		r.close()

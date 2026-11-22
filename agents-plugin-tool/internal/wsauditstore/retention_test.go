@@ -962,6 +962,62 @@ func TestColdEvictionPersistsStateBeforeDeleting(t *testing.T) {
 	assertOldBoundaryHolds(t, root, lim, clock)
 }
 
+// TestColdEvictionThatLeavesASegmentKeepsItsEvents pins a cold eviction
+// whose deletion fails and leaves an older segment in place (a Windows
+// sharing violation): the ring must not be published from only its newest
+// header onward, or the surviving segment's events vanish from reads and
+// admission while the file remains, and a replay of them is appended twice
+// or counted as loss. Left unloaded, the next use replays every segment.
+func TestColdEvictionThatLeavesASegmentKeepsItsEvents(t *testing.T) {
+	root := t.TempDir()
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 4 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	finalizedOldRing(t, root, lim, clock)
+	origFile, origAll := removeFile, removeAll
+	t.Cleanup(func() { removeFile, removeAll = origFile, origAll })
+	sharing := errors.New("sharing violation")
+	removeFile = func(path string) error {
+		if filepath.Base(filepath.Dir(path)) == "old" {
+			return sharing // the file stays
+		}
+		return origFile(path)
+	}
+	removeAll = func(path string) error {
+		if filepath.Base(path) == "old" {
+			return sharing
+		}
+		return origAll(path)
+	}
+	clock.Advance(time.Hour)
+	s, log := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 8; seq++ {
+		mustAppend(t, s, bigRecord("new", seq, lim))
+	}
+	flush(t, s)
+	if !strings.Contains(log.String(), "evict audit ring of session old") {
+		t.Fatalf("old ring not evicted: %s", log.String())
+	}
+	loaded(t, s, "old")
+	if !s.Retained("old", wsaudit.SourceID{Source: "holder:1", Seq: 1}) {
+		t.Fatalf("record 1 survives on disk but is not retained\n%s", log.String())
+	}
+	before := lossCount(t, s, "old")
+	mustAppend(t, s, sourced("old", 1, wsaudit.KindToolCall)) // replayed
+	flush(t, s)
+	n := 0
+	for _, ev := range events(t, s, "old") {
+		if ev.ID == "ev-1" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("record 1 read %d times, want once", n)
+	}
+	if got := lossCount(t, s, "old"); got != before {
+		t.Fatalf("a replay of a surviving record counted as loss: %d -> %d", before, got)
+	}
+}
+
 // TestControlOnlyRingsAreEvictableAndTombstonesGoLast pins store-wide
 // eviction of a loaded ring that holds only control lines (losses,
 // boundaries) and no events: it is evicted like any other ring, leaving a
