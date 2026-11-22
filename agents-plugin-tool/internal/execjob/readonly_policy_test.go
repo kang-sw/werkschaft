@@ -88,11 +88,17 @@ func TestReadOnlyShellReserialization(t *testing.T) {
 		t.Skip("head not on PATH")
 	}
 	conv := func(p string) string { return shQuote(strings.ReplaceAll(p, `\`, "/")) }
-	launch, err := readOnlyLine(t, `git  log   "-n"  1 'it'\''s' 2>&1 | head -n 3 >/dev/null`)
+	// An apostrophe is refused on Windows; its quoting is checked elsewhere.
+	word, wantWord := `'it'\''s'`, `'it'\''s'`
+	if goruntime.GOOS == "windows" {
+		word, wantWord = `'a b'`, `'a b'`
+	}
+	line := `git  log   "-n"  1 ` + word + ` 2>&1 | head -n 3 >/dev/null`
+	launch, err := readOnlyLine(t, line)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := conv(git) + " 'log' '-n' '1' 'it'\\''s' 2>&1 | " + conv(head) + " '-n' '3' >/dev/null"
+	want := conv(git) + " 'log' '-n' '1' " + wantWord + " 2>&1 | " + conv(head) + " '-n' '3' >/dev/null"
 	if got := launch.Argv[len(launch.Argv)-1]; got != want {
 		t.Fatalf("launched line\n got %s\nwant %s", got, want)
 	}
@@ -102,7 +108,7 @@ func TestReadOnlyShellReserialization(t *testing.T) {
 	if strings.Contains(launch.Argv[0], "bash") && launch.Argv[1] != "--noprofile" {
 		t.Fatalf("bash without --noprofile --norc: %q", launch.Argv)
 	}
-	if launch.Command != `git  log   "-n"  1 'it'\''s' 2>&1 | head -n 3 >/dev/null` {
+	if launch.Command != line {
 		t.Fatalf("display line = %q", launch.Command)
 	}
 	// A quoted glob stays one literal word; an unquoted one is refused.
@@ -219,12 +225,12 @@ func TestReadOnlyExecutableMustBeAbsoluteNative(t *testing.T) {
 }
 
 func TestWindowsWordRefusal(t *testing.T) {
-	for _, w := range []string{`say "hi"`, `"`, `a"b`, `@file`, `@`, `e f\`, "e f\\\\", "a\tb\\"} {
+	for _, w := range []string{`say "hi"`, `"`, `a"b`, `@file`, `@`, "it's", "x'", "a\nb", "a\rb", "a\x00b", "a\x7fb", "a\x1bb", `e f\`, "e f\\\\", "a\tb\\"} {
 		if err := windowsWordRefusal([]string{"echo", w}); err == nil {
 			t.Errorf("%q passed", w)
 		}
 	}
-	for _, w := range []string{`a\ b`, `a\`, "a b", "x@y", "it's", `C:\x`} {
+	for _, w := range []string{`a\ b`, `a\`, "a b", "x@y", "a\tb", `C:\x`} {
 		if err := windowsWordRefusal([]string{"echo", w}); err != nil {
 			t.Errorf("%q refused: %v", w, err)
 		}
@@ -240,7 +246,7 @@ func TestWindowsWordRefusal(t *testing.T) {
 	if _, err := ReadOnlyArgvLaunch("w", "exec.run", root, root, []string{"echo", "@rsp"}, os.Environ(), nil); err == nil {
 		t.Error("exec.run: a word starting with @ passed")
 	}
-	for _, line := range []string{`echo 'a"b'`, `echo "a\"b"`, `echo '@rsp'`, `echo 'e f\'`} {
+	for _, line := range []string{`echo 'a"b'`, `echo "a\"b"`, `echo '@rsp'`, `echo 'e f\'`, `echo "it's"`, `echo 'it'\''s'`, "echo $'a\\nb'"} {
 		if _, err := readOnlyLine(t, line); err == nil {
 			t.Errorf("%s passed", line)
 		}

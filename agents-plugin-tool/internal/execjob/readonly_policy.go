@@ -132,6 +132,11 @@ func checkReadOnlyArgv(argv []string) error {
 // as a response file.
 func windowsWordRefusal(words []string) error {
 	for _, w := range words {
+		// A single quote is quoting syntax and a control character (CR, LF
+		// included) a separator to the MSYS runtime; a tab is handled below.
+		if i := strings.IndexFunc(w, func(r rune) bool { return r == '\'' || r == 0x7f || (r < 0x20 && r != '\t') }); i >= 0 {
+			return refuse("word %q: a single quote or control character (such as a line break) is refused on Windows, where the command line is parsed again by the MSYS runtime", w)
+		}
 		if strings.Contains(w, `"`) {
 			return refuse("word %q: a double quote is refused on Windows, where the command line is parsed again by the MSYS runtime", w)
 		}
