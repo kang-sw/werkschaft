@@ -73,6 +73,9 @@ type Server struct {
 	// independently of pi.agents, so token-forwarding workers resolve their
 	// harness descriptor without receiving a lead runner handle.
 	agentBackendSource AgentBackendRegistry
+	// callerBinding is the daemon runner's memory-only caller check
+	// (ServerOptions.CallerBinding); nil where no daemon hosts this server.
+	callerBinding CallerBindingReader
 	// env is the caller process's environment; nil reads this process's
 	// live (process_env.go). ownerPID is the caller's PID; zero means this
 	// process. debug is the caller's debug ring.

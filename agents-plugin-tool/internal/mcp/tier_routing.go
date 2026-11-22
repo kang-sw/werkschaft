@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -68,7 +69,7 @@ func (s *Server) renderTierBinding(walkHarness, bareHarness, tier string, config
 		return model, effort, err == nil
 	}
 	res, binding, err := s.routedBinding(tier, walkHarness, configOpts)
-	if res.CallerFallthrough {
+	if res.CallerFallthrough && !errors.Is(err, errCallerRefused) {
 		_, model, effort, err := wsconfig.ResolveAgentForHarnessConfig(configOpts, res.Size, "", "", bareHarness)
 		return model, effort, err == nil
 	}
@@ -79,18 +80,51 @@ func (s *Server) renderTierBinding(walkHarness, bareHarness, tier string, config
 }
 
 // harnessAvailability is the runner's per-harness spawn check
-// (*wsagent.Runner); a server without a runner of its own (a forwarding
-// spawned agent) skips it, and agent.tiers stays the availability source.
+// (*wsagent.Runner) for a caller verified on callerBackend; a server without
+// a runner of its own (a forwarding spawned agent) skips it, and agent.tiers
+// stays the availability source.
 type harnessAvailability interface {
-	SpawnableHarness(harness string) string
+	SpawnableHarness(callerBackend, harness string) string
 }
+
+// CallerBindingReader is the daemon runner's read-only, memory-only caller
+// check (*wsagent.Runner), given to every daemon-hosted connection, a
+// token-forwarding worker's too, without the lead runner handle:
+// CallerBackend resolves the conversation a connection is authenticated as
+// (agentAdmissionBackend), and CallerRefusal is a harness's cross-harness
+// refusal of that caller (routedBinding).
+type CallerBindingReader interface {
+	CallerBackend(conversation, capability string) string
+	CallerRefusal(callerBackend, harness string) string
+}
+
+var (
+	_ harnessAvailability = (*wsagent.Runner)(nil)
+	_ CallerBindingReader = (*wsagent.Runner)(nil)
+)
+
+// errCallerRefused marks a routedBinding whose terminal harness refuses this
+// server's caller (its verified backend, agentAdmissionBackend) across
+// harnesses (wsagent Runner.CallerRefusal). A caller fallthrough must not
+// turn it into its bare size's binding: the spawn refuses it too.
+var errCallerRefused = errors.New("the terminal harness refuses this caller")
+
+// callerRefusal is a refused terminal's error: why, matching errCallerRefused.
+type callerRefusal struct{ msg string }
+
+func (e callerRefusal) Error() string        { return e.msg }
+func (e callerRefusal) Is(target error) bool { return target == errCallerRefused }
 
 // routedBinding resolves a routed agent.spawn tier the way the spawn does:
 // the graph walk, the terminal harness's own agents.tier slot with no
-// cross-harness fallback (wsagent.RoutedTierBinding), and, where this server
-// hosts the runner, the harness availability check. The resolution is
-// returned whenever the walk succeeded, even when the binding fails, so a
-// caller can tell a caller-fallthrough terminal apart.
+// cross-harness fallback (wsagent.RoutedTierBinding), and the terminal's
+// refusal of this server's verified caller backend (agentAdmissionBackend;
+// harness, the walk's caller, only selects the fallthrough) on every
+// daemon-hosted connection, forwarding workers included, plus, where this
+// server hosts the runner, the full harness availability check. A
+// cross-harness refusal, checked first, matches errCallerRefused. The resolution is returned whenever the walk succeeded,
+// even when the binding fails, so a caller can tell a caller-fallthrough
+// terminal apart.
 func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options) (wsconfig.TierResolution, wsconfig.AgentTier, error) {
 	graph, err := s.tierGraph(configOpts)
 	if err != nil {
@@ -100,12 +134,18 @@ func (s *Server) routedBinding(tier, harness string, configOpts wsconfig.Options
 	if err != nil {
 		return wsconfig.TierResolution{}, wsconfig.AgentTier{}, err
 	}
+	caller := s.agentAdmissionBackend()
+	if s.callerBinding != nil {
+		if why := s.callerBinding.CallerRefusal(caller, res.Harness); why != "" {
+			return res, wsconfig.AgentTier{}, callerRefusal{fmt.Sprintf("tier %q (%s): %s", tier, res.Trace(), why)}
+		}
+	}
 	binding, err := wsagent.RoutedTierBinding(configOpts, res)
 	if err != nil {
 		return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %w", tier, res.Trace(), err)
 	}
-	if check, ok := s.pi.agents.(harnessAvailability); ok {
-		if why := check.SpawnableHarness(res.Harness); why != "" {
+	if check, hosted := s.pi.agents.(harnessAvailability); hosted {
+		if why := check.SpawnableHarness(caller, res.Harness); why != "" {
 			return res, wsconfig.AgentTier{}, fmt.Errorf("tier %q (%s): %s", tier, res.Trace(), why)
 		}
 	}
@@ -163,7 +203,7 @@ func (s *Server) resolveAgentTier(tier, harness string) (resolveAgentTierResult,
 		walk = "<caller>"
 	}
 	res, binding, err := s.routedBinding(tier, walk, opts)
-	if res.CallerFallthrough {
+	if res.CallerFallthrough && !errors.Is(err, errCallerRefused) {
 		backend, model, effort, from, err := wsconfig.ResolveAgentTierForHarness(opts, res.Size, harness)
 		if err != nil {
 			return resolveAgentTierResult{}, err

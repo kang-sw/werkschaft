@@ -21,6 +21,7 @@ import (
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsnote"
 )
@@ -77,6 +78,9 @@ type proxyHost struct {
 	// store, so a recipient on one connection expands a group mail another
 	// connection sent.
 	mailLabels mcp.MailLabelFunc
+	// credentials is the daemon's provider credential store, which a hosted
+	// `credential` command applies through; nil refuses the command.
+	credentials *wscred.Store
 }
 
 // wait blocks until the replacement goroutine, if any, has ended.
@@ -117,6 +121,11 @@ func (h *proxyHost) Accept(hello wsdashboard.ProxyHello) (wsdashboard.ProxySessi
 			}
 			if reader, ok := h.agents.(mcp.WorktreeChildrenReader); ok {
 				opts.WorktreeChildren = reader
+			}
+			// Every connection, a forwarding worker's too, checks its
+			// authenticated caller against the runner's memory.
+			if binding, ok := h.agents.(mcp.CallerBindingReader); ok {
+				opts.CallerBinding = binding
 			}
 			// A worker now connects through the launcher too. Its capability
 			// token, not a lead runner handle, scopes its nested pi.* calls.

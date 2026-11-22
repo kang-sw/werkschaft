@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wspackage"
 )
@@ -232,6 +233,54 @@ func TestDashboardTierRoutingViewNamesTheStoredRevision(t *testing.T) {
 	}
 }
 
+// With the daemon's own agy registration, an agy route depends on the
+// view's simulated caller: the same route that ends on agy has its binding
+// in an agy preview and shows the cross-harness refusal in a Claude one (on
+// an agy caller's fallthrough too, for a Claude caller it is not); the view
+// runs no probe and the other harnesses are unaffected.
+func TestDashboardTierRoutingViewAgyRouteDependsOnTheCaller(t *testing.T) {
+	rsrc, opts := dashboardTierFixture(t)
+	regs := wsagent.BuiltinBackendRegistrations()
+	agy := regs[wsagent.BackendAgy]
+	// A transport-only backend: no agy install is looked up or run.
+	agy.Backend = &lifecycleBackend{}
+	regs[wsagent.BackendAgy] = agy
+	runner := wsagent.NewRunner(wsagent.Options{Backends: regs})
+	const reason = `harness "agy" accepts workers only from an agy session: Antigravity's consumer terms do not support running agy under another agent`
+	if got := runner.SpawnableHarness(wsagent.BackendClaude, wsagent.BackendAgy); got != reason {
+		t.Fatalf("agy reason for a Claude caller = %q", got)
+	}
+	draft := json.RawMessage(`{"nodes":{"review":{"*":"agy.*"}}}`)
+	view, err := dashboardTierRoutingView(rsrc, opts, draft, "claude", runner.HarnessAvailability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Error != "" {
+		t.Fatalf("draft error: %s", view.Error)
+	}
+	r := tierViewRoute(t, tierViewNode(t, view, "review"), "large")
+	if r.Trace != "review:large -> agy.large" || r.Unavailable != reason || r.BindingError != reason || r.Model != "" {
+		t.Fatalf("review:large in a Claude preview = %+v", r)
+	}
+	if view.Unavailable["agy"] != reason {
+		t.Fatalf("unavailable = %v", view.Unavailable)
+	}
+	view, err = dashboardTierRoutingView(rsrc, opts, draft, "agy", runner.HarnessAvailability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = tierViewRoute(t, tierViewNode(t, view, "review"), "large")
+	if r.Trace != "review:large -> agy.large" || r.Unavailable != "" || r.BindingError != "" || r.Model == "" {
+		t.Fatalf("review:large in an agy preview = %+v", r)
+	}
+	if view.Unavailable["agy"] != "" {
+		t.Fatalf("an agy preview lists agy unavailable: %v", view.Unavailable)
+	}
+	if r := tierViewRoute(t, tierViewNode(t, view, "implement"), "large"); !r.CallerFallthrough || r.Unavailable != "" || r.Model == "" {
+		t.Fatalf("implement:large on an agy caller = %+v", r)
+	}
+}
+
 // The view applies agent.spawn's harness availability check at each
 // terminal: a route ending on a harness the runner cannot launch now (an
 // explicit pointer, a bundle, or the caller fallthrough) has no binding and
@@ -241,8 +290,10 @@ func TestDashboardTierRoutingViewNamesTheStoredRevision(t *testing.T) {
 func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
 	rsrc, opts := dashboardTierFixture(t)
 	calls := map[string]int{}
-	available := func(harness string) (string, bool) {
+	var callers []string
+	available := func(caller, harness string) (string, bool) {
 		calls[harness]++
+		callers = append(callers, caller)
 		switch harness {
 		case "codex", "agy":
 			return fmt.Sprintf("harness %q is not installed", harness), true
@@ -264,6 +315,11 @@ func TestDashboardTierRoutingViewReportsHarnessAvailability(t *testing.T) {
 	}
 	if want := map[string]int{"claude": 1, "codex": 1, "agy": 1}; !maps.Equal(calls, want) {
 		t.Fatalf("checks = %v, want each harness a route ends on once (%v)", calls, want)
+	}
+	for _, caller := range callers {
+		if caller != "claude" {
+			t.Fatalf("checks ran for callers %v, want the view's caller harness", callers)
+		}
 	}
 	r := tierViewRoute(t, tierViewNode(t, view, "review"), "large")
 	if r.Trace != "review:large -> codex.large" || r.Unavailable != `harness "codex" is not installed` || r.BindingError != r.Unavailable || r.Model != "" {

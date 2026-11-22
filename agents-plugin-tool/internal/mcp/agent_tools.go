@@ -68,6 +68,7 @@ func (s *Server) handleAgentTool(ctx context.Context, id json.RawMessage, tool s
 	// detection (and its config defaults). Use the same fallback as renders
 	// so agent.tiers and bare agent.spawn tiers agree.
 	caller := wsagent.LeadCaller(s.mailboxReplyID(key), entry.root, s.playbookHarness(), s.sessionConfigOptions(key))
+	caller.VerifiedBackend = s.agentAdmissionBackend()
 	runner := s.pi.agents
 	switch tool {
 	case "agent.spawn":
@@ -109,6 +110,25 @@ func (s *Server) handleAgentTool(ctx context.Context, id json.RawMessage, tool s
 		return toolTextResponse(id, formatAgentTiers(res), nil)
 	}
 	return toolTextResponse(id, "", fmt.Errorf("unknown tool: %s", tool))
+}
+
+// agentAdmissionBackend is the backend this connection's caller is verified
+// to run on, which worker admission decides from: the open conversation the
+// connection is authenticated as, looked up in the daemon runner's memory
+// (CallerBindingReader.CallerBackend). The authentication is a hosted
+// session token's binding (ServerOptions.Conversation, never decoded from a
+// launcher's hello) or, on a launcher connection, the worker capability
+// token the runner issued into its environment. Connection hints never
+// count (the launcher hello's harness and its hosted-session variables come
+// from the environment, and initialize trusts the client's declared name):
+// playbookHarness selects tiers only. "" is no verified binding (an unbound
+// launcher connection, such as a lead started outside the daemon), refused
+// by any harness that admits same-harness callers alone.
+func (s *Server) agentAdmissionBackend() string {
+	if s.callerBinding == nil {
+		return ""
+	}
+	return s.callerBinding.CallerBackend(s.conversation, strings.TrimSpace(s.getenv(wsagent.EnvPiToken)))
 }
 
 // handleAgentForward runs a spawned agent's agent.* call through the
