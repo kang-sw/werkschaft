@@ -36,6 +36,27 @@ func (c *conv) restoreWorkerMCP() {
 	}
 }
 
+// retireLeadOnlyWorker ends the holder of a worker record on a lead-only
+// backend that reattach left unattached, after the first scan, through the
+// ordinary holder stop (retireHolder). The record stays listable, stopped,
+// with the lead-only reason as its error; an open turn settles failed with
+// that reason, as a process gone at rejoin does (processGone). A failed stop
+// keeps the holder in the record and says so; the next daemon tries again.
+func (c *conv) retireLeadOnlyWorker() {
+	reason := c.r.opts.Backends[c.rec.Backend].leadOnlyReason
+	if err := c.retireHolder(); err != nil {
+		c.setStatus(func() { c.lastErr = reason + "; " + err.Error() })
+		fmt.Fprintf(c.r.opts.Log, "agent %s: end lead-only worker holder: %v\n", c.rec.ReplyID, err)
+		return
+	}
+	c.leadOnlyRejoin = false
+	c.replaying, c.replayAsked = false, false
+	c.setStatus(func() { c.lastErr, c.wakeRefused = reason, true })
+	c.processEnded()
+	c.setStatus(func() { c.lastErr = reason })
+	c.writeRegistration()
+}
+
 // A parent's activity stamp denotes settlement only without any later input.
 // Strict ordering deliberately adopts equal and same-second timestamps.
 func downgradeSettledChild(child, parent Record) bool {

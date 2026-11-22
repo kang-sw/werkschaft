@@ -232,6 +232,9 @@ type conv struct {
 	// Backend-filtered hello environment captured at attach, before token restore.
 	workerMCPEnv   []string
 	workerRetiring bool // validated downgrade retirement retries before replay
+	// leadOnlyRejoin is a held worker on a lead-only backend that reattach
+	// left unattached; holdersScanned ends its holder (retireLeadOnlyWorker).
+	leadOnlyRejoin bool
 	mcpChecking    bool
 	mcpAgain       bool
 	mcpAgainNames  []string

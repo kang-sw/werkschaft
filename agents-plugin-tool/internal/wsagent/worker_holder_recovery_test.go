@@ -31,6 +31,9 @@ func workerRecoveryHarness(t *testing.T, backend string, autoApprove ...bool) (*
 	h.opts.Report = got.add
 	h.opts.WSMCP = func(string) (MCPCommand, error) { return MCPCommand{Command: "/unused/ws-mcp"}, nil }
 	reg := h.opts.Backends[backend]
+	// An agy worker here is an adapter-level fixture of a worker-capable
+	// agy registration; the shipped one is lead-only (agy_lead_only_test.go).
+	reg.leadOnlyReason = ""
 	reg.WorkerCapable = true
 	reg.WorkerProfile = AgentWorkerProfile(backend)
 	reg.WorkerHTTPMCP = backend != BackendPi

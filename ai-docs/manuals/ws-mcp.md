@@ -1062,14 +1062,29 @@ from a support conversation:
   `WS_MCP_AGENT_SESSION_KEY` in the attached MCP environment; this selects
   spelling only, without the hosted lead's implicit-key rule or authority.
   `WorkerCapable` and `WorkerProfile` admit worker tiers; `WorkerHTTPMCP`
-  selects HTTP attachment. Claude and agy use HTTP, Pi keeps its bridge.
-  agy's `WorkerAutoApprove` answers requests through `AnswerApproval`,
-  preserving the permission trace. Its workers use the default agent with
-  an appended instruction to use `agent.spawn`, never native subagents;
-  see Daemon replacement and process ownership for worker lifetime.
-  agy tier models are base ids with separate effort: launch uses
-  `thought_level` when offered, otherwise a suffixed model id, and logs the
-  mechanism honored. An unhonored worker effort refuses the launch.
+  selects HTTP attachment. Claude uses HTTP, Pi keeps its bridge.
+  **agy is a hosted lead only** (owner decision (1545), 2026-11-22):
+  Antigravity's terms say its login used through third-party software can
+  get the account suspended and that wrapping its CLI in another coding
+  agent is unsupported on consumer plans. Its registration sets
+  `WorkerCapable: false` with a lead-only reason, and one check
+  (`admitWorkerBackend`, `internal/wsagent/agent_tools.go`) refuses every
+  worker entry with that reason: `agent.spawn` (an `agy.<tier>`, an agy
+  caller's bare tier, an alias, or a graph route or bundle ending on agy),
+  the profile-based `POST /agents` (403), and every launch or wake of an
+  existing agy worker record (`childAdmission`: a message, mail, or resume
+  stays queued and the record stays listed, with the reason as its error).
+  On daemon start a held agy worker is not reattached: after the first
+  holder scan its holder is stopped through `retireHolder`, an open turn
+  settles failed with the reason, and the record stays listed, stopped.
+  `agent.tiers` lists agy under `Unavailable`, and aliases, routes,
+  bundles, and the dashboard tier view carry the same reason. The agy
+  worker profile stays registered so old records resolve; the agy worker
+  adapter (`WorkerAutoApprove`, `thought_level` effort, the default agent
+  with the `agent.spawn` instruction) stays for adapter-level tests only.
+  agy leads keep peer mail and the watchdog's automatic `continue`, and may
+  spawn Claude, Codex, or Pi workers. The dashboard's hosted lead popover
+  still offers agy and shows a terms warning while agy is picked.
 - **No ws plugin (Claude).** A Claude lead loads no ws bundle: the installed
   `ws` and `wsflow` plugins are turned off for the launch (`--settings`
   `enabledPlugins`), its ws-mcp is the `--mcp-config` server `ws` (no
@@ -1085,7 +1100,7 @@ from a support conversation:
   hooks remain enabled. `agents.enabled=false` removes native subagents;
   delegation is through `agent.*`.
   An `agent.spawn` worker (`agent-worker-codex`, tiers `codex.<tier>`) uses
-  the same start with no holder and no lead spec, as agy workers do: the
+  the same start with no holder and no lead spec: the
   runner sets `StartSpec.PermissionLevel` from the child's authority.
   Workdir-write authority runs in the `workspace-write` sandbox with approval
   policy `on-request`, which `WorkerAutoApprove` answers and traces; full
@@ -1539,7 +1554,7 @@ continues (`internal/wsagent/runner_events.go` L804-818).
 | Child kind | Owner | Survives graceful replace? | What to do |
 |---|---|---|---|
 | Hosted Claude, Pi, agy, or Codex lead | Session holder (`internal/wsagent/runner_process.go` L229-258, L294-312) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
-| Claude, Codex, agy, or Pi `agent.spawn` worker | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
+| Claude, Codex, or Pi `agent.spawn` worker (agy is lead-only) | Session holder (`internal/wsagent/runner_process.go`, `startWorker`) | Yes, while holder and child survive | Replace; check rejoin if progress stalls. |
 | Legacy direct worker still running under an older daemon | Daemon subprocess | No; shutdown stops it | Send a new message after replace; its next launch uses a holder. |
 
 Healthy held leads and workers can continue through a normal daemon replacement.

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wspackage"
 )
@@ -229,6 +230,40 @@ func TestDashboardTierRoutingViewNamesTheStoredRevision(t *testing.T) {
 	}
 	if again := revision(); again != empty {
 		t.Fatalf("revision after removal = %q, want %q", again, empty)
+	}
+}
+
+// The daemon's own agy registration is lead-only: the view's availability
+// check (the runner's, as the daemon wires it) names the agy reason on a
+// route that ends on agy and on an agy caller's fallthrough, not a generic
+// text, and the other harnesses are unaffected by it.
+func TestDashboardTierRoutingViewNamesTheAgyLeadOnlyReason(t *testing.T) {
+	rsrc, opts := dashboardTierFixture(t)
+	runner := wsagent.NewRunner(wsagent.Options{Backends: wsagent.BuiltinBackendRegistrations()})
+	reason := runner.SpawnableHarness(wsagent.BackendAgy)
+	if !strings.Contains(reason, "hosted lead only") || !strings.Contains(reason, "Antigravity") {
+		t.Fatalf("agy reason = %q", reason)
+	}
+	view, err := dashboardTierRoutingView(rsrc, opts, json.RawMessage(`{"nodes":{"review":{"*":"agy.*"}}}`), "claude", runner.HarnessAvailability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Error != "" {
+		t.Fatalf("draft error: %s", view.Error)
+	}
+	r := tierViewRoute(t, tierViewNode(t, view, "review"), "large")
+	if r.Trace != "review:large -> agy.large" || r.Unavailable != reason || r.BindingError != reason || r.Model != "" {
+		t.Fatalf("review:large = %+v", r)
+	}
+	if view.Unavailable["agy"] != reason {
+		t.Fatalf("unavailable = %v", view.Unavailable)
+	}
+	view, err = dashboardTierRoutingView(rsrc, opts, nil, "agy", runner.HarnessAvailability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := tierViewRoute(t, tierViewNode(t, view, "implement"), "large"); !r.CallerFallthrough || r.Unavailable != reason || r.Model != "" {
+		t.Fatalf("implement:large on an agy caller = %+v", r)
 	}
 }
 

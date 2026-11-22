@@ -2013,6 +2013,7 @@
   "rail.approval": "承認待ち",
   "rail.approvals": "承認待ちのセッション",
   "convo.approval": "承認待ち",
+  "js.lead.agy.terms": "ws のようなサードパーティアプリから agy を使うと、Antigravity アカウントが停止される可能性があります。Google の規約は他のソフトウェア経由での Antigravity の利用をサポートしていません。",
   "js.lead.title": "新しいセッション",
   "js.lead.tier": "名前付きティア",
   "js.lead.tier.manual": "手動（項目を個別に選択）",

@@ -22,6 +22,11 @@ type BackendRegistration struct {
 	// the internal profile it launches; both must be set to expose tiers.
 	WorkerCapable bool
 	WorkerProfile string
+	// leadOnlyReason, set only with WorkerCapable false, makes the backend
+	// lead-only for every worker entry, not agent.spawn alone: a profile
+	// create, a wake, and a rejoin are refused too (admitWorkerBackend), and
+	// it is the refusal's text. Existing worker records stay listable.
+	leadOnlyReason string
 	// WorkerHTTPMCP attaches a worker's ws tools through the daemon's
 	// HTTP route rather than a stdio launcher. Workers never persist it.
 	WorkerHTTPMCP bool

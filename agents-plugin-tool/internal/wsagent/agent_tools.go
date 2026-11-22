@@ -305,6 +305,9 @@ func (r *Runner) registeredWorker(harness string) string {
 	if !ok || reg.Backend == nil {
 		return fmt.Sprintf("harness %q is not registered in this daemon", harness)
 	}
+	if reg.leadOnlyReason != "" {
+		return reg.leadOnlyReason
+	}
 	if !reg.WorkerCapable || reg.WorkerProfile == "" {
 		return fmt.Sprintf("harness %q is registered for hosted leads only, not for spawned workers", harness)
 	}
@@ -314,16 +317,40 @@ func (r *Runner) registeredWorker(harness string) string {
 	return ""
 }
 
-// workerHarnesses are the registered worker-role backends, sorted.
+// admitWorkerBackend is the one lead-only check every worker entry passes:
+// agent.spawn and a profile create (create), and every launch or wake of an
+// existing worker record (childAdmission). A rejoin does not attach such a
+// worker either (reattach, holdersScanned). It refuses only a backend
+// registered with a lead-only reason; the record itself is kept.
+func (r *Runner) admitWorkerBackend(backend string) error {
+	if reason := r.opts.Backends[backend].leadOnlyReason; reason != "" {
+		return &admissionRefusal{reason: reason}
+	}
+	return nil
+}
+
+// workerHarnesses are the registered worker-role backends, sorted, with the
+// lead-only backends whose registration says why (agent.tiers lists those
+// under Unavailable).
 func (r *Runner) workerHarnesses() []string {
 	var out []string
 	for name, reg := range r.opts.Backends {
-		if reg.WorkerCapable && reg.WorkerProfile != "" {
+		if reg.WorkerCapable && reg.WorkerProfile != "" || reg.leadOnlyReason != "" {
 			out = append(out, name)
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// unusableHarnessError is an alias or route entry's error for a harness with
+// no usable tiers: a lead-only registration's own reason, else the generic
+// text.
+func (r *Runner) unusableHarnessError(harness string) string {
+	if reason := r.opts.Backends[harness].leadOnlyReason; reason != "" {
+		return reason
+	}
+	return fmt.Sprintf("harness %q has no spawnable tier now", harness)
 }
 
 func tierEntries(prefix string, tiers map[string]wsconfig.AgentTier) []AgentTierEntry {
@@ -369,7 +396,7 @@ func (r *Runner) AgentTiers(caller AgentCaller) (AgentTiers, error) {
 		entry := AgentAliasEntry{Alias: name, Target: target}
 		h, t, _ := strings.Cut(target, ".")
 		if tiers, ok := usable[h]; !ok {
-			entry.Error = fmt.Sprintf("harness %q has no spawnable tier now", h)
+			entry.Error = r.unusableHarnessError(h)
 		} else if m, ok := tiers[t]; !ok {
 			entry.Error = fmt.Sprintf("tier %q is not set for %s", t, h)
 		} else {
@@ -408,7 +435,7 @@ func (r *Runner) agentRouting(caller AgentCaller, usable map[string]map[string]w
 		tiers, ok := usable[res.Harness]
 		switch {
 		case !ok:
-			e.Error = fmt.Sprintf("harness %q has no spawnable tier now", res.Harness)
+			e.Error = r.unusableHarnessError(res.Harness)
 		case res.Bundle != "":
 			e.Model, e.Effort = res.Model, res.Effort
 		default:

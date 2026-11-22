@@ -582,6 +582,16 @@ func (c *conv) retireHolder() error {
 // scan.
 func (c *conv) reattach() {
 	rec := c.record()
+	if !rec.Lead {
+		if err := c.r.admitWorkerBackend(rec.Backend); err != nil {
+			// Not rejoined: the holder is ended once the first scan lists
+			// it (holdersScanned), and the record stays, stopped.
+			c.leadOnlyRejoin = true
+			c.setStatus(func() { c.lastErr, c.wakeRefused = err.Error(), true })
+			fmt.Fprintf(c.r.opts.Log, "agent %s: rejoin holder %s refused: %v\n", rec.ReplyID, rec.HolderID, err)
+			return
+		}
+	}
 	def := Profile{Backend: rec.Backend, Lead: rec.Lead}
 	if rec.Backend == BackendPi && rec.ResolvedDefinition != nil {
 		def = *rec.ResolvedDefinition

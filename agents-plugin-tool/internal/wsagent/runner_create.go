@@ -120,6 +120,13 @@ func (r *Runner) create(profile, root string, lead *LeadOptions, spawn *SpawnSpe
 		}
 		return State{}, badRequest("agent profile %q is not a lead profile (lead: true)", rp.Name)
 	}
+	if lead == nil {
+		// Every worker creation, profile-based or spawned, passes the
+		// lead-only check before anything is minted or written.
+		if err := r.admitWorkerBackend(rp.Definition.Backend); err != nil {
+			return State{}, &requestError{status: http.StatusForbidden, msg: err.Error()}
+		}
+	}
 	if spawn != nil {
 		releaseAdmission := r.holdParentAdmission(spawn.Parent)
 		defer releaseAdmission()

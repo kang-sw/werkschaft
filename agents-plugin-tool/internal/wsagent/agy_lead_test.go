@@ -35,7 +35,8 @@ type agyFake struct {
 func newAgyLeadHarness(t *testing.T) (*leadHarness, *agyFake) {
 	t.Helper()
 	h := newLeadHarness(t)
-	h.opts.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: "/opt/harness/agy"}, LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes, Catalog: AgyCatalog()}
+	// The shipped lead-only posture: every agy lead test runs under it.
+	h.opts.Backends[BackendAgy] = BackendRegistration{Backend: AgyBackend{Command: "/opt/harness/agy"}, LeadProfile: LeadProfileAgy, PermissionModes: AgyPermissionModes, Catalog: AgyCatalog(), leadOnlyReason: agyLeadOnlyReason}
 	h.opts.WSMCP = func(root string) (MCPCommand, error) {
 		return MCPCommand{Command: "python3", Env: map[string]string{"WS_MCP_PROJECT_ROOT": root}}, nil
 	}

@@ -263,6 +263,9 @@ func (r *Runner) holdersScanned() {
 	for _, c := range convs {
 		c.do(func() {
 			c.checkReattach()
+			if c.leadOnlyRejoin {
+				c.retireLeadOnlyWorker()
+			}
 			if c.hidden {
 				c.stopProcess("")
 				if err := c.retireHolder(); err != nil {
