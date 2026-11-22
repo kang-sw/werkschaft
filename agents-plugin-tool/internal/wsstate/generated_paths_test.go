@@ -464,3 +464,25 @@ func TestGeneratePathsAllocatesReportPathsInOwnDirectory(t *testing.T) {
 		t.Fatal("unknown kind reports must stay refused")
 	}
 }
+
+// TestGeneratePathsRefusesUnknownKindBeforeLayout: an unknown kind touches no
+// cache directory, and a review allocation does not create report-paths.
+func TestGeneratePathsRefusesUnknownKindBeforeLayout(t *testing.T) {
+	repo := initRepo(t)
+	cache := filepath.Join(t.TempDir(), "cache")
+	manager := NewManager(Options{CacheHome: cache, Now: func() time.Time { return fixedNow }})
+	if _, err := manager.GeneratePaths(repo, "reports", []string{"x"}); err == nil || !strings.Contains(err.Error(), "unsupported path kind") {
+		t.Fatalf("unknown kind error = %v", err)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("an unknown kind prepared the cache layout at %s (err=%v)", cache, err)
+	}
+	review, err := manager.GeneratePaths(repo, "review", []string{"x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportDir := filepath.Join(filepath.Dir(filepath.Dir(review[0].Path)), "report-paths")
+	if _, err := os.Stat(reportDir); !os.IsNotExist(err) {
+		t.Fatalf("a review allocation created %s (err=%v)", reportDir, err)
+	}
+}

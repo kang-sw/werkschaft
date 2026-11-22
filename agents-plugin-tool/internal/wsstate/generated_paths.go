@@ -26,6 +26,12 @@ func (m Manager) GeneratePaths(repoPath, kind string, stems []string) ([]Generat
 	if len(stems) == 0 {
 		return nil, fmt.Errorf("at least one path stem is required")
 	}
+	// Refuse an unknown kind before Ensure prepares any layout directory.
+	if kind != "plan" {
+		if _, _, err := generatedPathTarget(Layout{}, kind); err != nil {
+			return nil, err
+		}
+	}
 	layout, _, worktree, err := m.Ensure(repoPath)
 	if err != nil {
 		return nil, err

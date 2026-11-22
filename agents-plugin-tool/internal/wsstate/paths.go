@@ -152,11 +152,12 @@ func (m Manager) Ensure(repoPath string) (Layout, ProjectMetadata, WorktreeMetad
 	if err != nil {
 		return Layout{}, ProjectMetadata{}, WorktreeMetadata{}, err
 	}
+	// ReportDir is not listed: path.generate creates it when it first
+	// allocates a report, so no other caller of Ensure touches it.
 	for _, dir := range []string{
 		layout.LocksDir,
 		layout.AgentsDir,
 		layout.ReviewDir,
-		layout.ReportDir,
 		layout.PromptDir,
 		layout.SessionsDir,
 		layout.WorktreeLocksDir,
