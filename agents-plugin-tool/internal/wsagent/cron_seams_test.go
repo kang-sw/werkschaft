@@ -9,6 +9,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsinbox"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 type cronGoneLog struct {
@@ -204,5 +205,70 @@ func TestAgyLeadReachesCronThroughTheCallFallback(t *testing.T) {
 	}
 	if !reg.CallFallback {
 		t.Fatal("agy has no call fallback, so its lead could not reach cron")
+	}
+}
+
+// cronFileOps runs fn and returns the wsstate-counted file operations it
+// caused, per operation kind and per source site.
+func cronFileOps(fn func()) (kinds, sites map[string]int64) {
+	before := wsstate.FileIOCounters()
+	fn()
+	after := wsstate.FileIOCounters()
+	kinds, sites = map[string]int64{}, map[string]int64{}
+	for k, v := range after {
+		if d := v - before[k]; d != 0 {
+			if strings.HasPrefix(k, "file_io_site:") {
+				sites[strings.TrimPrefix(k, "file_io_site:")] = d
+			} else {
+				kinds[k] = d
+			}
+		}
+	}
+	return kinds, sites
+}
+
+// TestDeliverCronFileOperationsAtTheProductionSeam measures one accepted and
+// one suppressed delivery through the runner's real seam: the inbox entry
+// write and the record publication an accepted one causes, and nothing for
+// a suppressed one. SQLite commits are not file operations in this count (the
+// store's own file I/O does not pass through wsstate) and are measured in
+// wscron. The logged figures are what the ticket records; the assertions
+// bound the kinds that must not appear on this path.
+func TestDeliverCronFileOperationsAtTheProductionSeam(t *testing.T) {
+	h := newLeadHarness(t).start()
+	id, holder := h.runLead("one")
+	h.holders.out(holder, stateLine(HarnessRunning), initLine("sess-1", "auto"), toolUseLine("u1", "toolu_1"))
+	h.sync(id, holder)
+	mark := wsinbox.Cron{ID: "cron-cc33", Name: "n", At: "2026-03-10T09:00:00Z"}
+	var ok bool
+	kinds, sites := cronFileOps(func() { ok, _ = h.runner.DeliverCron(id, mark, "tick") })
+	if !ok {
+		t.Fatal("not delivered")
+	}
+	t.Logf("accepted delivery: file operations by kind %v", kinds)
+	t.Logf("accepted delivery: file operations by site %v", sites)
+	// The counters are process-wide, so the runner's own follow-ups to an
+	// input (a second record rewrite, a registry read after the wake) can
+	// land in the sample; what is pinned is that the two writes the delivery
+	// itself makes are there and that each was one temp file plus one atomic
+	// replace.
+	for _, site := range []string{"wsinbox/inbox_store.go:65:create_temp", "wsagent/record.go:393:create_temp"} {
+		if sites[site] < 1 {
+			t.Errorf("no %s in %v", site, sites)
+		}
+	}
+	if kinds["file_io_create_temp"] < 2 || kinds["file_io_atomic_replace"] < 2 {
+		t.Errorf("the inbox write and the record write are each a temp file and an atomic replace: %v", kinds)
+	}
+	if _, err := h.runner.CloseConversation(id); err != nil {
+		t.Fatal(err)
+	}
+	kinds, sites = cronFileOps(func() { ok, _ = h.runner.DeliverCron(id, mark, "late") })
+	if ok {
+		t.Fatal("a closed conversation accepted a delivery")
+	}
+	t.Logf("suppressed delivery: file operations by kind %v by site %v", kinds, sites)
+	if kinds["file_io_total"] != 0 {
+		t.Errorf("a suppressed delivery ran file operations: %v %v", kinds, sites)
 	}
 }

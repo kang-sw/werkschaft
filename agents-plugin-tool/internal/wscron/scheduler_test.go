@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -129,6 +130,7 @@ type fakeSessions struct {
 	// the goroutines that reach them start.
 	afterLead, afterExists func(owner string)
 	gate                   func(owner string)
+	delivered              int64
 }
 
 func newSessions(t *testing.T, owners ...string) *fakeSessions {
@@ -187,6 +189,9 @@ func (s *fakeSessions) Deliver(id string, mark wsinbox.Cron, prompt string) (Del
 	if _, _, err := wsinbox.Send(s.inbox(id), wsinbox.Entry{Parts: []string{prompt}, Cron: &mark}, time.Now()); err != nil {
 		return 0, err
 	}
+	s.mu.Lock()
+	s.delivered++
+	s.mu.Unlock()
 	if drain {
 		if _, err := wsinbox.Drain(s.inbox(id)); err != nil {
 			return 0, err
@@ -369,6 +374,29 @@ func TestMissedFiresAreSkipped(t *testing.T) {
 	e.clock.Advance(30 * time.Second)
 	if n := len(e.sess.held("lead")); n != 1 {
 		t.Fatalf("the next match after the jump delivered %d, want 1", n)
+	}
+}
+
+// Decision 18's cutoff is strictly more than one minute late: exactly one
+// minute still delivers, the first instant beyond it does not.
+func TestStaleCutoffIsStrictlyMoreThanOneMinute(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		late time.Duration
+		want int
+	}{
+		{"one minute exactly", time.Minute, 1},
+		{"one nanosecond beyond", time.Minute + time.Nanosecond, 0},
+		{"one minute and a second", time.Minute + time.Second, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+			e.add("lead", "tick", "* * * * *", "") // first match 00:01:00
+			e.clock.Jump(time.Date(2026, 3, 10, 0, 1, 0, 0, time.UTC).Add(c.late))
+			if n := len(e.sess.held("lead")); n != c.want {
+				t.Fatalf("a fire %v late delivered %d entries, want %d", c.late, n, c.want)
+			}
+		})
 	}
 }
 
@@ -745,6 +773,15 @@ func TestEnvelopeSurvivesHostilePromptAndName(t *testing.T) {
 // TestFirePathDoesNoStoreWork records the performance contract: the fire
 // path runs no store operation (the last-fire delta is written afterwards,
 // coalesced), and add and delete are one commit each.
+// TestFirePathDoesNoStoreWork measures the scheduler's own part of a fire:
+// against a fake runner, whose inbox write is the production wsinbox one, the
+// fire reads no file and no directory and queues one last-fire delta that a
+// coalescing writer commits to SQLite afterwards (one commit however many
+// fires coalesce). It does not include the runner's record publication: that
+// is measured against the production seam in wsagent's
+// TestDeliverCronFileOperationsAtTheProductionSeam. SQLite commits are
+// counted by the store (Store.Ops) and are not file operations in the
+// wsstate counts, so the two are reported apart.
 func TestFirePathDoesNoStoreWork(t *testing.T) {
 	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
 	ops := e.s.store.Ops()
@@ -752,28 +789,31 @@ func TestFirePathDoesNoStoreWork(t *testing.T) {
 	if got := e.s.store.Ops() - ops; got != 1 {
 		t.Fatalf("add ran %d store operations, want 1", got)
 	}
-	// Stop the writer so no write races the measurement.
-	e.s.Close()
-	e.open()
+	e.s.Flush()
 	ops = e.s.store.Ops()
 	io := wsstate.FileIOCounters()
 	e.clock.Advance(30 * time.Second) // one fire
-	e.s.mu.Lock()
-	dirty := len(e.s.dirty)
-	e.s.mu.Unlock()
 	after := wsstate.FileIOCounters()
-	t.Logf("one fire: inbox file operations (wsstate-counted) total=%d create_temp=%d write=%d read_file=%d read_dir=%d stat=%d; store operations on the fire path=%d; last-fire delta queued=%d",
-		after["file_io_total"]-io["file_io_total"], after["file_io_create_temp"]-io["file_io_create_temp"], after["file_io_write"]-io["file_io_write"],
-		after["file_io_read_file"]-io["file_io_read_file"], after["file_io_read_dir"]-io["file_io_read_dir"], after["file_io_stat"]-io["file_io_stat"],
-		e.s.store.Ops()-ops, dirty)
+	t.Logf("one fire, scheduler side with a fake runner: wsstate-counted file operations total=%d create_temp=%d atomic_replace=%d write=%d read_file=%d read_dir=%d stat=%d",
+		after["file_io_total"]-io["file_io_total"], after["file_io_create_temp"]-io["file_io_create_temp"], after["file_io_atomic_replace"]-io["file_io_atomic_replace"],
+		after["file_io_write"]-io["file_io_write"], after["file_io_read_file"]-io["file_io_read_file"], after["file_io_read_dir"]-io["file_io_read_dir"], after["file_io_stat"]-io["file_io_stat"])
 	for _, op := range []string{"file_io_read_file", "file_io_read_dir"} {
 		if got := after[op] - io[op]; got != 0 {
 			t.Errorf("the fire path ran %d %s", got, op)
 		}
 	}
+	// The coalescing writer may commit the delta before or after this
+	// point; either way the fire and its delta cost one commit in all.
 	e.s.Flush()
-	if got := e.s.store.Ops() - ops; got > 1 {
-		t.Errorf("fire plus its coalesced write ran %d store operations, want at most 1", got)
+	eventually(t, func() bool {
+		e.s.mu.Lock()
+		defer e.s.mu.Unlock()
+		return len(e.s.dirty) == 0
+	})
+	commits := e.s.store.Ops() - ops
+	t.Logf("SQLite commits for that fire and its last-fire delta: %d", commits)
+	if commits > 1 {
+		t.Errorf("fire plus its coalesced write ran %d store operations, want at most 1", commits)
 	}
 	ops = e.s.store.Ops()
 	if err := e.s.Delete("lead", id); err != nil {
@@ -784,31 +824,90 @@ func TestFirePathDoesNoStoreWork(t *testing.T) {
 	}
 }
 
+// A suppressed delivery costs the scheduler no file operation and no store
+// commit: the closed branch only counts a drop (its one log line is written
+// after the lock, once per run of refusals).
+func TestSuppressedFireCostsNoFileOperation(t *testing.T) {
+	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
+	e.add("lead", "tick", "* * * * *", "")
+	e.sess.mu.Lock()
+	e.sess.shut["lead"] = true
+	e.sess.mu.Unlock()
+	e.s.Flush()
+	ops := e.s.store.Ops()
+	io := wsstate.FileIOCounters()
+	e.clock.Advance(30 * time.Second)
+	after := wsstate.FileIOCounters()
+	if got := after["file_io_total"] - io["file_io_total"]; got != 0 {
+		t.Errorf("a suppressed fire ran %d file operations", got)
+	}
+	if got := e.s.store.Ops() - ops; got != 0 {
+		t.Errorf("a suppressed fire ran %d store operations", got)
+	}
+	if i := e.info("lead", "tick"); i.Dropped != 1 || i.Pending {
+		t.Fatalf("info = %+v", i)
+	}
+}
+
+// TestSchedulerRace runs adds, lists, deletes, fires and drains at once. It
+// checks every operation's outcome and the end state: no schedule left in
+// memory or the store, and every delivery either drained or still held.
 func TestSchedulerRace(t *testing.T) {
 	e := newEnv(t, "2026-03-10T00:00:30Z", "lead")
 	var wg sync.WaitGroup
+	var drained int64
+	errs := make(chan error, 64)
+	report := func(err error) {
+		if err != nil {
+			select {
+			case errs <- err:
+			default:
+			}
+		}
+	}
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			name := "r" + string(rune('a'+i))
 			for j := 0; j < 5; j++ {
-				if _, _, err := e.s.Add("lead", name, "* * * * *", "p", ""); err == nil {
-					_ = e.s.List("lead")
-					_ = e.s.Delete("lead", name)
+				if _, _, err := e.s.Add("lead", name, "* * * * *", "p", ""); err != nil {
+					report(fmt.Errorf("add %s: %w", name, err))
+					continue
 				}
+				_ = e.s.List("lead")
+				report(e.s.Delete("lead", name))
 			}
 		}(i)
 	}
+	var mu sync.Mutex
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 5; i++ {
 			e.clock.Advance(time.Minute)
-			_, _ = wsinbox.Drain(e.sess.inbox("lead"))
+			recs, err := wsinbox.Drain(e.sess.inbox("lead"))
+			report(err)
+			mu.Lock()
+			drained += int64(len(recs))
+			mu.Unlock()
 		}
 	}()
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if n := len(e.s.List("lead")); n != 0 {
+		t.Fatalf("%d schedules left in memory", n)
+	}
+	e.storeRowsAre(0)
+	e.sess.mu.Lock()
+	delivered := e.sess.delivered
+	e.sess.mu.Unlock()
+	if got := drained + int64(len(e.sess.held("lead"))); got != delivered {
+		t.Fatalf("delivered %d, but %d were drained or still held", delivered, got)
+	}
 }
 
 // The runner forgets an owner after Add's lead check and before Add serializes
