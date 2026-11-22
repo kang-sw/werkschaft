@@ -155,7 +155,8 @@ type Event struct {
 	OutputTps     *float64          `json:"outputTps,omitempty"`
 	// ContextWindow and ContextCompaction are an agent event's context scale
 	// (Agent.ContextWindow, Agent.ContextCompaction): present values replace
-	// the held ones, as for ContextTokens.
+	// the held ones, as for ContextTokens. A positive window is authoritative
+	// for the pair: a nil compaction beside it clears the held thresholds.
 	ContextWindow     *float64         `json:"contextWindow,omitempty"`
 	ContextCompaction *UsageCompaction `json:"contextCompaction,omitempty"`
 	// Commands is a commands event's list. Command is a command event's
@@ -822,10 +823,15 @@ func (st *State) setTelemetry(a *agentState, ev Event) {
 	if n := ev.ContextTokens; n != nil && *n >= 0 && *n <= MaxContextTokens {
 		a.contextTokens = int64(math.Round(*n))
 	}
+	windowKnown := false
 	if n := ev.ContextWindow; n != nil && *n >= 0 && *n <= MaxContextTokens {
 		a.contextWindow = int64(math.Round(*n))
+		windowKnown = a.contextWindow > 0
 	}
-	if ev.ContextCompaction != nil {
+	// An event that names the window is the whole scale: the compaction
+	// thresholds are resolved against that window, so a nil value clears
+	// thresholds the new window dropped. Without a window the held scale stays.
+	if windowKnown || ev.ContextCompaction != nil {
 		a.contextCompaction = normalizeCompaction(ev.ContextCompaction)
 	}
 	if r := ev.OutputTps; r != nil && *r >= 0 && *r <= MaxOutputTps {

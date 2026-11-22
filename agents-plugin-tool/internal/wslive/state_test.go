@@ -1058,3 +1058,30 @@ func TestSubagentContextScaleRoundTripsAndKeepsAbsentFields(t *testing.T) {
 		}
 	}
 }
+
+// TestSubagentContextScaleClearsThresholdsWithANewWindow: a child that moves
+// to a smaller model has its absolute thresholds dropped beyond the window, so
+// its event names the new window with no compaction. That pair replaces the
+// held scale, while an event with no window (or an invalid one) keeps it.
+func TestSubagentContextScaleClearsThresholdsWithANewWindow(t *testing.T) {
+	st := NewState(ownerKey)
+	comp := &UsageCompaction{Soft: 150_000, Hard: 180_000}
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", Label: "worker", Status: StatusRunning,
+		ContextTokens: f64p(100_000), ContextWindow: f64p(272_000), ContextCompaction: comp}, 1_000)
+
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", ContextTokens: f64p(101_000)}, 1_100)
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", ContextWindow: f64p(-5)}, 1_150)
+	if a := st.Snapshot(1_200).Agents[0]; a.ContextWindow != 272_000 || a.ContextCompaction == nil || a.ContextCompaction.Hard != 180_000 {
+		t.Fatalf("an event without a valid window changed the scale: %+v / %+v", a, a.ContextCompaction)
+	}
+
+	mustApply(t, st, Event{Kind: KindAgent, AgentID: "a1", ContextWindow: f64p(128_000)}, 1_300)
+	a := st.Snapshot(1_400).Agents[0]
+	if a.ContextWindow != 128_000 || a.ContextCompaction != nil {
+		t.Fatalf("new window kept the old thresholds: %+v / %+v", a, a.ContextCompaction)
+	}
+	raw, _ := json.Marshal(a)
+	if strings.Contains(string(raw), "contextCompaction") {
+		t.Fatalf("a cleared scale still names its thresholds: %s", raw)
+	}
+}
