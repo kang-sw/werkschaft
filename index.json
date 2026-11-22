@@ -562,7 +562,14 @@
       "registered_at": "2026-11-22T00:23:36Z"
     },
     "261122-feat-werkschaft-tray-notifications-full-quit": {
-      "registered_at": "2026-11-21T15:44:25Z"
+      "registered_at": "2026-11-21T15:44:25Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T02:26:45Z"
+      }
     },
     "261122-feat-ws-agent-turn-semaphore": {
       "registered_at": "2026-11-22T01:06:41Z"
