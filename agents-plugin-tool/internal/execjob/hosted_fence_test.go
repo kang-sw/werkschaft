@@ -254,3 +254,39 @@ func TestLegacyLaunchCountsBeforeItsActiveEntry(t *testing.T) {
 		t.Fatalf("a legacy launch after the fence lifted: %v", err)
 	}
 }
+
+// A spawn that fails after its child may have started (its remaining
+// input failed) ends the job only once its holder's stop is confirmed:
+// while the holder stays, the job runs, its owner's close reports it, and
+// a later stop retries the holder.
+func TestHostedFailedSpawnRunsUntilItsHolderStops(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	fx.holders.mu.Lock()
+	fx.holders.spawnErr = errors.New("holder: the child started, but its input was not delivered: broken pipe")
+	fx.holders.stopErr = errors.New("holder busy")
+	fx.holders.mu.Unlock()
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err == nil || !strings.Contains(err.Error(), "did not stop") {
+		t.Fatalf("launch over a failed spawn whose holder stayed: %v", err)
+	}
+	if got := fx.h.RunningOwners()["lead"]; got != 1 {
+		t.Fatalf("running jobs of the owner = %d, want the job whose holder stayed", got)
+	}
+	if err := fx.h.StopOwner("lead"); err == nil || !strings.Contains(err.Error(), "holder busy") {
+		t.Fatalf("StopOwner over the job whose holder stayed: %v", err)
+	}
+	fx.holders.mu.Lock()
+	fx.holders.stopErr = nil
+	fx.holders.mu.Unlock()
+	if err := fx.h.StopOwner("lead"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.h.RunningOwners()["lead"]; got != 0 {
+		t.Fatalf("running jobs after the holder stopped = %d", got)
+	}
+	if v.ID != "" {
+		if got, _ := fx.h.Get("lead", v.ID); !got.Terminal() {
+			t.Fatalf("job state after the stop %s", got.State)
+		}
+	}
+}

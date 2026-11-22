@@ -126,6 +126,12 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: req.Cwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
 	close(spawned)
 	if err != nil {
+		if st.PID != 0 {
+			// The child started and only its remaining input failed.
+			h.mu.Lock()
+			j.row.PID = st.PID
+			h.mu.Unlock()
+		}
 		return h.failStart(j, holder, fmt.Errorf("start %s: %w", argv[0], err))
 	}
 	h.mu.Lock()
@@ -258,32 +264,60 @@ func (h *Hosted) admit(j *hostedJob) error {
 // was stopped) before its process started.
 var errClosedBeforeStart = errors.New("exec: the owning session closed before the job started")
 
-// failStart ends j before its process ran, stopping its holder. A job a
-// stop already ended keeps that end.
+// failStart ends j, whose process did not start as asked, and its holder.
+// The holder is stopped first, because a child may run under it (a spawn
+// that failed only on its remaining input): until that stop is confirmed
+// the job stays running, so its owner's close and the running counts still
+// see it, and a later stop retries the holder. A job a stop already ended
+// keeps that end.
 func (h *Hosted) failStart(j *hostedJob, holder string, cause error) (HostedView, error) {
-	if holder != "" {
-		go h.stopHolder(holder)
-	}
 	h.mu.Lock()
 	if j.row.Terminal() {
 		if holder != "" {
 			delete(h.byHolder, holder)
 		}
 		h.mu.Unlock()
+		if holder != "" {
+			go h.stopHolder(holder)
+		}
 		return h.view(j, OutcomeDone), cause
 	}
+	j.row.Notify = false
+	j.stopping = true
+	h.mu.Unlock()
+	if holder != "" {
+		if err := h.opts.Holders.Stop(holder); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+			h.mu.Lock()
+			if !j.row.Terminal() {
+				j.stopping = false
+				j.row.Error = cause.Error() + "; its holder did not stop, so the job may still run: " + err.Error()
+				row, rev := h.snapLocked(j)
+				h.mu.Unlock()
+				h.save(j, row, rev)
+				return h.view(j, 0), fmt.Errorf("%w; its holder did not stop, so the job may still run: %v", cause, err)
+			}
+			h.mu.Unlock()
+		}
+	}
+	h.mu.Lock()
 	if holder != "" {
 		delete(h.byHolder, holder)
 	}
+	// An exit record the stop brought ended the job as stopped; the start's
+	// failure is still its story.
+	wasEnded := j.row.Terminal()
 	j.row.State, j.row.Error = HostedFailed, cause.Error()
-	j.row.Notify = false
 	if j.row.StartedAt == 0 {
 		j.row.StartedAt = h.opts.Now().UnixMilli()
 	}
-	h.endLocked(j)
+	if !wasEnded {
+		h.endLocked(j)
+	}
 	row, rev := h.snapLocked(j)
 	h.mu.Unlock()
-	h.runningChanged()
+	if !wasEnded {
+		h.runningChanged()
+	}
 	h.save(j, row, rev)
 	return h.view(j, OutcomeDone), cause
 }
