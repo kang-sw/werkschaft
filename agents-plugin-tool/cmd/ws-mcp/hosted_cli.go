@@ -78,6 +78,7 @@ func (c *hostedCLI) server(root string) *mcp.Server {
 		opts.BoardOwner = true
 		opts.Boards = c.host.boards
 		opts.Notes = c.host.notes
+		opts.MailLabels = c.host.mailLabels
 		if c.host.agents != nil {
 			if source, ok := c.host.agents.(mcp.AgentBackendRegistry); ok {
 				opts.AgentBackends = source

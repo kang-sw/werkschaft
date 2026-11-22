@@ -20,6 +20,7 @@
     "mailbox.recv": ">=0.50.8-dev <0.51.0",
     "mailbox.lookup_peers": ">=0.50.8-dev <0.51.0",
     "mailbox.history": ">=0.50.8-dev <0.51.0",
+    "mailbox.recipients": ">=0.50.8-dev <0.51.0",
     "dashboard.intake": ">=0.50.8-dev <0.51.0",
     "dashboard.inbox_drain": ">=0.50.8-dev <0.51.0",
     "agenda.set": ">=0.50.8-dev <0.51.0",

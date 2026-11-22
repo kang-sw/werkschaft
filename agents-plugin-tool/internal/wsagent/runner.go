@@ -173,6 +173,14 @@ type Options struct {
 	Holders  HolderHost
 	LeadKeys LeadKeyStore
 	Mail     LeadMail
+	// MailLegend places the sender legend on one submission of claimed mail
+	// (a steer, or a turn's held mail): texts are exactly the mail texts
+	// submitted together, in order, and senders the reply-ids Drain gave
+	// them, nil for held texts (Record.Mail keeps no sender). It returns the
+	// texts to submit. The legend is never stored: Record.Mail keeps Drain's
+	// texts, so a held text gets a fresh legend when it is submitted. nil
+	// submits the texts as they are.
+	MailLegend func(root string, texts, senders []string) []string
 	// Alive reports whether a process of this machine runs: what refuses a
 	// takeover of a session whose terminal harness has not exited. nil is
 	// wsstate.ProcessAlive.

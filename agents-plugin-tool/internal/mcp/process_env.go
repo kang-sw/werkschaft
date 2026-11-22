@@ -82,6 +82,13 @@ type ServerOptions struct {
 	WorktreeChildren WorktreeChildrenReader
 	// Notes is the daemon's shared presentation cache; nil on standalone servers.
 	Notes *wsnote.Cache
+	// MailGroups keeps the audiences of fan-out sends for mailbox.recipients;
+	// nil is this process's shared store, which every connection a daemon
+	// hosts uses.
+	MailGroups *MailGroupStore
+	// MailLabels resolves a mail sender's display label from its reply-id
+	// (the daemon's agent and session views); nil shows addresses only.
+	MailLabels MailLabelFunc
 }
 
 // procEnv is a snapshot of one process's environment.
@@ -144,6 +151,11 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	s := &Server{root: filepath.Clean(opts.Root), version: opts.Version, sourceCommit: commit, ownerPID: opts.OwnerPID, diag: diag, dispatchBlock: wsdoc.DispatchBlockForEnv}
 	s.live.host = opts.Live
 	s.notes = opts.Notes
+	s.mailGroups = opts.MailGroups
+	if s.mailGroups == nil {
+		s.mailGroups = processMailGroups()
+	}
+	s.mailLabels = opts.MailLabels
 	if opts.Env != nil {
 		s.env = newProcEnv(opts.Env)
 		logPath := strings.TrimSpace(s.env.get(envDebugLog))

@@ -2,8 +2,10 @@ package wsagent
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -233,5 +235,116 @@ func TestChildMailEnvelopeKeepsParentRelation(t *testing.T) {
 		if got := h.runner.mailRelation(h.record(tc.target), tc.sender); got != tc.want {
 			t.Fatalf("relation of %q to %s = %q, want %q", tc.sender, tc.target, got, tc.want)
 		}
+	}
+}
+
+// fakeLegend stands in for the daemon's legend (Options.MailLegend): it names
+// each labeled sender of the texts it is given, taking a text's sender from
+// senders or, for a held text, from its "mail from <sender>:" head, and puts
+// the line ahead of the first text.
+type fakeLegend struct {
+	mu     sync.Mutex
+	labels map[string]string
+	calls  [][]string
+}
+
+var fakeLegendHead = regexp.MustCompile(`mail from (\S+):`)
+
+func (l *fakeLegend) set(sender, label string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.labels[sender] = label
+}
+
+func (l *fakeLegend) place(_ string, texts, senders []string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls = append(l.calls, slices.Clone(texts))
+	var names []string
+	for i, text := range texts {
+		sender := ""
+		if i < len(senders) {
+			sender = senders[i]
+		}
+		if m := fakeLegendHead.FindStringSubmatch(text); sender == "" && m != nil {
+			sender = m[1]
+		}
+		if label := l.labels[sender]; label != "" {
+			names = append(names, sender+" = "+label)
+		}
+	}
+	if len(names) == 0 {
+		return texts
+	}
+	out := slices.Clone(texts)
+	out[0] = "[senders: " + strings.Join(names, "; ") + "]\n\n" + out[0]
+	return out
+}
+
+// Each submission of claimed mail carries the legend of its own texts'
+// senders, resolved when it is submitted: of a two-mail claim whose first
+// steer goes and second is refused, the steer names only the first sender
+// and the held mail's later turn only the second, under the label current
+// then. The record never holds a legend, and the harness's acknowledgement
+// of the steered text still matches.
+func TestMailLegendRidesEachSubmission(t *testing.T) {
+	legend := &fakeLegend{labels: map[string]string{"senderone": "One", "sendertwo": "Two"}}
+	h, mail := mailHarness(t, func(o *Options) { o.MailLegend = legend.place })
+	a, ap := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "workdir-write"})
+	aKey := h.keyOf(a)
+	eventually(t, "the mailbox watched", func() bool { return mail.watched(aKey) })
+	ap.failSteers(func(text string) bool { return strings.Contains(text, "second") })
+
+	mail.deliverBatch(aKey,
+		ClaimedMail{Text: "mail from senderone:\nfirst", Sender: "senderone"},
+		ClaimedMail{Text: "mail from sendertwo:\nsecond", Sender: "sendertwo"})
+	var steered []string
+	eventually(t, "the first steered, the second held", func() bool {
+		steered, _ = ap.steered()
+		return len(steered) == 1 && len(h.record(a).Mail) == 1
+	})
+	if want := "[senders: senderone = One]\n\n(peer) mail from senderone:\nfirst"; steered[0] != want {
+		t.Fatalf("the steer = %q, want %q", steered[0], want)
+	}
+	if held := h.record(a).Mail; held[0] != "(peer) mail from sendertwo:\nsecond" {
+		t.Fatalf("the held mail carries a legend or changed: %q", held)
+	}
+
+	legend.set("sendertwo", "Two renamed")
+	ap.events <- Event{SteerAnswer: &SteerAnswer{}}
+	ap.events <- Event{UserTaken: steered[0]}
+	ap.reply("first done")
+	next := ap.nextSent(t)
+	if !strings.Contains(next, "[senders: sendertwo = Two renamed]\n\n(peer) mail from sendertwo:\nsecond") || strings.Contains(next, "senderone") {
+		t.Fatalf("the held mail's turn = %q", next)
+	}
+	eventually(t, "the delivered mail dropped", func() bool { return len(h.record(a).Mail) == 0 })
+	if _, cleared := ap.steered(); cleared != 0 {
+		t.Fatalf("the taken steer was dropped from the harness's queue %d times", cleared)
+	}
+	legend.mu.Lock()
+	defer legend.mu.Unlock()
+	for _, call := range legend.calls {
+		for _, text := range call {
+			if strings.Contains(text, "[senders:") {
+				t.Fatalf("a legend was handed back in as stored text: %q", text)
+			}
+		}
+	}
+}
+
+// SpawnLabel is the label source of a spawned sender: the label its spawner
+// gave it; nothing for a conversation the runner does not know.
+func TestSpawnLabelNamesASpawnedChild(t *testing.T) {
+	h, _ := mailHarness(t, nil)
+	a, _ := h.agentRunning(h.leadCaller(), AgentSpawnRequest{Prompt: "work", Tier: "medium", Authority: "workdir-write", Label: "Reviewer of the branch"})
+	if got := h.runner.SpawnLabel(a); got != "Reviewer of the branch" {
+		t.Fatalf("SpawnLabel(child) = %q", got)
+	}
+	if got := h.runner.SpawnLabel("nosuchconversation"); got != "" {
+		t.Fatalf("SpawnLabel(unknown) = %q", got)
+	}
+	if got := h.runner.SpawnLabel(leadParent.ReplyID); got != "" {
+		t.Fatalf("SpawnLabel(the lead) = %q", got)
 	}
 }

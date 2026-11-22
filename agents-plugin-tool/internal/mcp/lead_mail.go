@@ -78,6 +78,13 @@ func NewLeadMailbox(dir string) *LeadMailbox {
 	}
 }
 
+// WithLabels sets the sender-label resolver Legend reads, and returns m.
+// Call it before the runner uses m.
+func (m *LeadMailbox) WithLabels(labels MailLabelFunc) *LeadMailbox {
+	m.server.mailLabels = labels
+	return m
+}
+
 // Watch calls changed whenever the mailbox of key holds mail, until the
 // returned stop is called; stop returns once no further call will come.
 // While it runs the session has a listening marker owned by this process,
@@ -217,15 +224,7 @@ func (s *Server) mailSenderReplyID(env wsmailbox.Envelope, root string) string {
 	if env.From == "" || err != nil || addr.Kind != wsmailbox.AddressSlug {
 		return ""
 	}
-	path, err := s.mailboxPaths().ForScope(addr.Scope, root)
-	if err != nil {
-		return ""
-	}
-	presence, ok, _, err := s.mailboxPaths().Store().NamedQueue(path, addr.Name)
-	if err != nil || !ok || presence.Owner == "" {
-		return ""
-	}
-	return s.mailboxReplyID(presence.Owner)
+	return s.addressReplyID(addr, root)
 }
 
 // Return puts mail a Drain claimed for key, and the session never read,
@@ -261,32 +260,52 @@ func (m *LeadMailbox) Return(root, key string, texts []string) error {
 	return nil
 }
 
-// parseMailText reads one of formatMailBatch's texts back into the envelope
-// it was made from: the batch head, when the text opens with it, is
-// dropped, and the "mail from <handle> (<sent_at>):" line gives the sender
-// and the time. An address goes back as From; a display-only handle goes
-// back as Label so it never becomes a correspondent or reply target.
-// A text of another shape (a record written by other code) goes back
-// whole with no sender and the current time.
-func parseMailText(text string) wsmailbox.Envelope {
+// isMailBatchHead reports whether head, a text's first paragraph, is the
+// one-line batch head formatMailBatch writes for the daemon's delivery.
+func isMailBatchHead(head string) bool {
+	return strings.HasPrefix(head, "["+leadMailLabel+"] ") && !strings.Contains(head, "\n")
+}
+
+// splitMailText reads one of formatMailBatch's texts, as Drain returned it
+// or as a submission carried it with a sender legend: the head region (the
+// batch head, with the legend as its second line when present) or a legend
+// placed as its own first line is dropped, and the "mail from <handle>
+// (<sent_at>):" line gives the sender's handle and the stamp; content is
+// the body after it, without a relation line. ok is false for a text of
+// another shape.
+func splitMailText(text string) (handle, stamp, content string, ok bool) {
 	body := text
 	if strings.HasPrefix(body, "["+leadMailLabel+"] ") {
-		if _, rest, ok := strings.Cut(body, "\n\n"); ok {
+		if _, rest, found := strings.Cut(body, "\n\n"); found {
 			body = rest
 		}
+	} else {
+		body = trimMailLegend(body)
 	}
-	whole := wsmailbox.Envelope{Content: text, SentAt: mailboxNowString()}
-	head, content, ok := strings.Cut(body, ":\n")
-	if !ok || !strings.HasPrefix(head, "mail from ") {
-		return whole
+	head, content, found := strings.Cut(body, ":\n")
+	if !found || !strings.HasPrefix(head, "mail from ") {
+		return "", "", "", false
 	}
-	handle := strings.TrimPrefix(head, "mail from ")
-	content = trimRelationLine(content)
-	stamp := ""
+	handle = strings.TrimPrefix(head, "mail from ")
 	if open := strings.LastIndex(handle, " ("); open >= 0 && strings.HasSuffix(handle, ")") {
 		handle, stamp = handle[:open], handle[open+2:len(handle)-1]
 	}
 	if handle == "" || strings.ContainsAny(handle, "\n") {
+		return "", "", "", false
+	}
+	return handle, stamp, trimRelationLine(content), true
+}
+
+// parseMailText reads one of formatMailBatch's texts back into the envelope
+// it was made from (splitMailText): the "mail from <handle> (<sent_at>):"
+// line gives the sender and the time. An address goes back as From; a
+// display-only handle goes back as Label so it never becomes a
+// correspondent or reply target. A text of another shape (a record written
+// by other code) goes back whole with no sender and the current time.
+func parseMailText(text string) wsmailbox.Envelope {
+	whole := wsmailbox.Envelope{Content: text, SentAt: mailboxNowString()}
+	handle, stamp, content, ok := splitMailText(text)
+	if !ok {
 		return whole
 	}
 	if stamp == "" {

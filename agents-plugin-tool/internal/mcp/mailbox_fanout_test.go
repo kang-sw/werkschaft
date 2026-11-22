@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -58,12 +60,29 @@ func newFanOutFixture(t *testing.T) fanOutFixture {
 	return f
 }
 
-// fanOutHeader is the audience line a fan-out copy carries for this public
-// To and CC list. Routing tests build their expected bodies through it, so
-// the line's literal format is pinned only by TestMailboxAudienceHeader and
-// can be swapped without touching the routing tests.
-func fanOutHeader(to, cc []string) string {
-	return mailboxAudienceHeader("ws", to, cc)
+// fanOutMarkerLine matches the group marker a fan-out copy carries; its
+// literal format is pinned by TestMailboxGroupMarker alone.
+var fanOutMarkerLine = regexp.MustCompile(`^\[ws group mail (g-[0-9a-f]{16}-[1-9][0-9]*): ([0-9]+) public recipients; mailbox\.recipients lists them\]$`)
+
+// fanOutMarker returns the marker line of a copy's content (after a leading
+// peer-lead note when noted) and its group id, failing unless the line is a
+// well-formed marker counting public recipients. Routing tests build their
+// expected bodies from it, so they do not depend on the marker's format.
+func fanOutMarker(t *testing.T, content string, noted bool, public int) (line, gid string) {
+	t.Helper()
+	rest := content
+	if noted {
+		_, rest, _ = strings.Cut(content, "\n")
+	}
+	line, _, _ = strings.Cut(rest, "\n")
+	m := fanOutMarkerLine.FindStringSubmatch(line)
+	if m == nil {
+		t.Fatalf("copy has no group marker where expected: %q", content)
+	}
+	if n, _ := strconv.Atoi(m[2]); n != public {
+		t.Fatalf("marker counts %d public recipients, want %d: %q", n, public, line)
+	}
+	return line, m[1]
 }
 
 // recvEnvelopes drains key's mail as JSON.
@@ -80,9 +99,10 @@ func recvEnvelopes(t *testing.T, s *Server, id int, key string) []wsmailbox.Enve
 // TestMailboxFanOutDeliversIndependentPublicCopies pins the core contract: an
 // array To with CC and BCC reaches every explicit destination, named inbox
 // and reply-id alike, as its own ordinary envelope; every copy carries the
-// same generated To/CC header and the supplied body bytes, untrimmed; no copy,
-// recipient history, or dashboard rendering names the BCC recipient; and one
-// recipient's recv leaves the others' copies queued.
+// same generated group marker (counting the public recipients, naming no
+// address) and the supplied body bytes, untrimmed; no copy, recipient
+// history, or dashboard rendering names any recipient; and one recipient's
+// recv leaves the others' copies queued.
 func TestMailboxFanOutDeliversIndependentPublicCopies(t *testing.T) {
 	f := newFanOutFixture(t)
 	body := "  indented first line\n\ttrailing whitespace  \n"
@@ -90,8 +110,7 @@ func TestMailboxFanOutDeliversIndependentPublicCopies(t *testing.T) {
 		"to": []any{"alice@worktree", f.daveAddr}, "cc": []any{"bob@worktree"}, "bcc": []any{"carol@worktree"}, "content": body,
 	})
 
-	header := fanOutHeader([]string{"alice@worktree", f.daveAddr}, []string{"bob@worktree"})
-	want := header + "\n" + body
+	want := ""
 	senderReply := wsmailbox.ReplyIDPrefix + wsmailbox.ReplyID(f.workerKey)
 	for _, line := range []string{
 		"sent to 4 of 4 recipients\n",
@@ -121,14 +140,20 @@ func TestMailboxFanOutDeliversIndependentPublicCopies(t *testing.T) {
 			t.Fatalf("%s received %d envelopes, want its own one copy: %#v", r.name, len(envelopes), envelopes)
 		}
 		e := envelopes[0]
+		if want == "" {
+			marker, _ := fanOutMarker(t, e.Content, false, 3)
+			want = marker + "\n" + body
+		}
 		if e.Content != want {
-			t.Fatalf("%s copy content = %q, want %q", r.name, e.Content, want)
+			t.Fatalf("%s copy content = %q, want the same marker and body as every copy, %q", r.name, e.Content, want)
 		}
 		if e.From != "" || e.ReplyTo != senderReply {
 			t.Fatalf("%s copy stamps = from %q reply_to %q, want the sender's reply-id", r.name, e.From, e.ReplyTo)
 		}
-		if strings.Contains(e.Content, "carol") {
-			t.Fatalf("%s copy reveals the BCC recipient: %q", r.name, e.Content)
+		for _, other := range []string{"alice", "bob", "carol", f.daveAddr} {
+			if strings.Contains(e.Content, other) {
+				t.Fatalf("%s copy names recipient %s: %q", r.name, other, e.Content)
+			}
 		}
 
 		// The recipient's history and the dashboard's rendering of it show
@@ -195,10 +220,15 @@ func TestMailboxFanOutStampsEachRoute(t *testing.T) {
 		t.Fatalf("JSON receipt = %s", raw)
 	}
 
-	// erin is a top-level lead: the note comes first, then the header.
+	// erin is a top-level lead: the note comes first, then the marker.
 	note := "[ws note: from a peer lead session (not a worker), with the same authority as yours]\n"
-	want := note + fanOutHeader([]string{"alice@worktree"}, nil) + "\nroutes"
-	if got := recvEnvelopes(t, f.alice, 3, f.aliceKey); len(got) != 1 || got[0].From != "erin@worktree" || got[0].ReplyTo != "" || got[0].Content != want {
+	got := recvEnvelopes(t, f.alice, 3, f.aliceKey)
+	if len(got) != 1 {
+		t.Fatalf("alice copies = %#v, want one", got)
+	}
+	marker, _ := fanOutMarker(t, got[0].Content, true, 1)
+	want := note + marker + "\nroutes"
+	if got[0].From != "erin@worktree" || got[0].ReplyTo != "" || got[0].Content != want {
 		t.Fatalf("alice copy = %#v, want from: erin@worktree and %q", got, want)
 	}
 	if got := recvEnvelopes(t, f.dave, 4, f.daveKey); len(got) != 1 || got[0].From != "" || got[0].ReplyTo != erinReply || got[0].Content != want {
@@ -206,16 +236,16 @@ func TestMailboxFanOutStampsEachRoute(t *testing.T) {
 	}
 }
 
-// TestMailboxFanOutKeepsPeerLeadNoteFirst pins header placement against the
+// TestMailboxFanOutKeepsPeerLeadNoteFirst pins marker placement against the
 // peer-lead note: a top-level lead's stamped note, a forwarded note from
 // either product, and a worker forwarding a noted body each yield exactly one
-// note line, then the header, then the message, and the dashboard still
-// recognizes the note.
+// note line, then the marker, then the message; both copies of one send
+// carry one marker; and the dashboard still recognizes the note.
 func TestMailboxFanOutKeepsPeerLeadNoteFirst(t *testing.T) {
 	f := newFanOutFixture(t)
 	codexNote := "[ws note: from a peer lead session (codex, not a worker), with the same authority as yours]"
 	wsflowNote := "[wsflow note: from a peer lead session (claude, not a worker), with the same authority as yours]"
-	header := fanOutHeader([]string{"alice@worktree"}, []string{"bob@worktree"})
+	const header = "<marker>"
 	sends := []struct {
 		key, content, want string
 	}{
@@ -225,6 +255,7 @@ func TestMailboxFanOutKeepsPeerLeadNoteFirst(t *testing.T) {
 		{f.workerKey, codexNote + "\nworker forward", codexNote + "\n" + header + "\nworker forward"},
 		{f.workerKey, "worker plain", header + "\nworker plain"},
 	}
+	markers := make([]string, len(sends))
 	for i, tc := range sends {
 		callToolWithKey(t, f.sender, 10+i, tc.key, "mailbox.send", map[string]any{
 			"to": []any{"alice@worktree"}, "cc": []any{"bob@worktree"}, "content": tc.content,
@@ -240,10 +271,16 @@ func TestMailboxFanOutKeepsPeerLeadNoteFirst(t *testing.T) {
 		}
 		for i, tc := range sends {
 			got := envelopes[i].Content
-			if got != tc.want {
-				t.Fatalf("copy %d content = %q, want %q", i, got, tc.want)
-			}
 			noted := strings.HasPrefix(tc.want, "[ws note") || strings.HasPrefix(tc.want, "[wsflow note")
+			marker, _ := fanOutMarker(t, got, noted, 2)
+			if markers[i] == "" {
+				markers[i] = marker
+			} else if markers[i] != marker {
+				t.Fatalf("copy %d: the two copies of one send carry different markers: %q vs %q", i, markers[i], marker)
+			}
+			if want := strings.Replace(tc.want, header, marker, 1); got != want {
+				t.Fatalf("copy %d content = %q, want %q", i, got, want)
+			}
 			if n := strings.Count(got, " note: from a peer lead session"); n != map[bool]int{true: 1, false: 0}[noted] {
 				t.Fatalf("copy %d carries %d peer-lead notes: %q", i, n, got)
 			}
@@ -251,8 +288,8 @@ func TestMailboxFanOutKeepsPeerLeadNoteFirst(t *testing.T) {
 			if entry.PeerLead() != noted {
 				t.Fatalf("copy %d dashboard peer-lead badge = %v, want %v: %q", i, entry.PeerLead(), noted, got)
 			}
-			if noted && !strings.HasPrefix(entry.MailBody(), header+"\n") {
-				t.Fatalf("copy %d dashboard body does not open with the header: %q", i, entry.MailBody())
+			if noted && !strings.HasPrefix(entry.MailBody(), marker+"\n") {
+				t.Fatalf("copy %d dashboard body does not open with the marker: %q", i, entry.MailBody())
 			}
 		}
 	}
@@ -260,8 +297,8 @@ func TestMailboxFanOutKeepsPeerLeadNoteFirst(t *testing.T) {
 
 // TestMailboxScalarSendUnchangedByFanOut pins the legacy path: a scalar To
 // with no CC or BCC (including empty arrays) keeps today's trimmed body and
-// carries no header, while a scalar To with a BCC is a fan-out whose header
-// names only the To recipient.
+// carries no marker, while a scalar To with a BCC is a fan-out whose marker
+// counts only the To recipient, the same on the BCC copy.
 func TestMailboxScalarSendUnchangedByFanOut(t *testing.T) {
 	f := newFanOutFixture(t)
 	out := callToolWithKey(t, f.sender, 10, f.workerKey, "mailbox.send", map[string]any{"to": "alice@worktree", "content": "  scalar body  \n"})
@@ -272,7 +309,11 @@ func TestMailboxScalarSendUnchangedByFanOut(t *testing.T) {
 	callToolWithKey(t, f.sender, 12, f.workerKey, "mailbox.send", map[string]any{"to": "alice@worktree", "bcc": []any{"bob@worktree"}, "content": "with bcc"})
 
 	got := recvEnvelopes(t, f.alice, 20, f.aliceKey)
-	want := []string{"scalar body", "empty lists", fanOutHeader([]string{"alice@worktree"}, nil) + "\nwith bcc"}
+	if len(got) != 3 {
+		t.Fatalf("alice received %d envelopes, want 3: %#v", len(got), got)
+	}
+	marker, _ := fanOutMarker(t, got[2].Content, false, 1)
+	want := []string{"scalar body", "empty lists", marker + "\nwith bcc"}
 	if len(got) != len(want) {
 		t.Fatalf("alice received %d envelopes, want %d: %#v", len(got), len(want), got)
 	}
@@ -288,7 +329,7 @@ func TestMailboxScalarSendUnchangedByFanOut(t *testing.T) {
 
 // TestMailboxFanOutDeduplicatesRecipients pins one copy per destination: an
 // address repeated across To, CC, and BCC is delivered once under its most
-// public role, and the header lists it once.
+// public role, and the marker counts it once.
 func TestMailboxFanOutDeduplicatesRecipients(t *testing.T) {
 	f := newFanOutFixture(t)
 	receipt := callToolWithKey(t, f.sender, 10, f.workerKey, "mailbox.send", map[string]any{
@@ -297,12 +338,20 @@ func TestMailboxFanOutDeduplicatesRecipients(t *testing.T) {
 	if !strings.Contains(receipt, "sent to 2 of 2 recipients\n") || !strings.Contains(receipt, "delivered bob@worktree [cc]") {
 		t.Fatalf("receipt = %s", receipt)
 	}
-	want := fanOutHeader([]string{"alice@worktree"}, []string{"bob@worktree"}) + "\nonce"
+	want := ""
 	for _, r := range []struct {
 		srv *Server
 		key string
 	}{{f.alice, f.aliceKey}, {f.bob, f.bobKey}} {
-		if got := recvEnvelopes(t, r.srv, 20, r.key); len(got) != 1 || got[0].Content != want {
+		got := recvEnvelopes(t, r.srv, 20, r.key)
+		if len(got) != 1 {
+			t.Fatalf("copies = %#v, want one", got)
+		}
+		if want == "" {
+			marker, _ := fanOutMarker(t, got[0].Content, false, 2)
+			want = marker + "\nonce"
+		}
+		if got[0].Content != want {
 			t.Fatalf("copies = %#v, want one %q", got, want)
 		}
 	}
@@ -398,9 +447,15 @@ func TestMailboxFanOutMixedOutcomes(t *testing.T) {
 	}
 	requireHardWake(t, sub)
 
-	want := fanOutHeader([]string{f.daveAddr, "mona@machine"}, []string{"alice@worktree"}) + "\npartial"
-	if got := recvEnvelopes(t, f.dave, 20, f.daveKey); len(got) != 1 || got[0].Content != want {
-		t.Fatalf("dave copy = %#v, want %q", got, want)
+	// The marker counts every public recipient, the failed one included.
+	daveCopy := recvEnvelopes(t, f.dave, 20, f.daveKey)
+	if len(daveCopy) != 1 {
+		t.Fatalf("dave copies = %#v, want one", daveCopy)
+	}
+	marker, _ := fanOutMarker(t, daveCopy[0].Content, false, 3)
+	want := marker + "\npartial"
+	if daveCopy[0].Content != want {
+		t.Fatalf("dave copy = %#v, want %q", daveCopy, want)
 	}
 	machinePath, err := (wsmailbox.Paths{}).ForScope(wsmailbox.ScopeMachine, f.root)
 	if err != nil {
@@ -462,32 +517,31 @@ func TestMailboxFanOutMixedOutcomes(t *testing.T) {
 	}
 }
 
-// TestMailboxAudienceHeader pins the one generated audience line's literal
+// TestMailboxGroupMarker pins the one generated marker line's literal
 // format. It is the only test that spells the format out; the routing tests
-// go through fanOutHeader.
-func TestMailboxAudienceHeader(t *testing.T) {
+// go through fanOutMarker.
+func TestMailboxGroupMarker(t *testing.T) {
 	for _, tc := range []struct {
-		namespace string
-		to, cc    []string
-		want      string
+		namespace, gid string
+		public         int
+		want           string
 	}{
-		{"ws", []string{"alice@worktree"}, nil, "[ws mail to: alice@worktree]"},
-		{"ws", []string{"alice@worktree", "id:abc"}, []string{"bob@clone"}, "[ws mail to: alice@worktree, id:abc; cc: bob@clone]"},
-		{"wsflow", []string{"alice@machine"}, []string{"bob@worktree", "carol@worktree"}, "[wsflow mail to: alice@machine; cc: bob@worktree, carol@worktree]"},
+		{"ws", "g-0123456789abcdef-7", 3, "[ws group mail g-0123456789abcdef-7: 3 public recipients; mailbox.recipients lists them]"},
+		{"wsflow", "g-fedcba9876543210-1", 1, "[wsflow group mail g-fedcba9876543210-1: 1 public recipients; mailbox.recipients lists them]"},
 	} {
-		if got := mailboxAudienceHeader(tc.namespace, tc.to, tc.cc); got != tc.want {
-			t.Fatalf("mailboxAudienceHeader(%q, %v, %v) = %q, want %q", tc.namespace, tc.to, tc.cc, got, tc.want)
+		if got := mailboxGroupMarker(tc.namespace, tc.gid, tc.public); got != tc.want {
+			t.Fatalf("mailboxGroupMarker(%q, %q, %d) = %q, want %q", tc.namespace, tc.gid, tc.public, got, tc.want)
 		}
 	}
 }
 
 // TestComposeMailboxFanOutBody pins placement without routing: the body
 // starts with the peer-lead note when there is one (supplied by the caller,
-// from either product, or stamped for a top-level lead), then the header
-// line, then the supplied bytes untrimmed. The header is passed in opaquely,
+// from either product, or stamped for a top-level lead), then the marker
+// line, then the supplied bytes untrimmed. The marker is passed in opaquely,
 // so placement does not depend on its format.
 func TestComposeMailboxFanOutBody(t *testing.T) {
-	const header = "<audience>"
+	const header = "<marker>"
 	wsNote := "[ws note: from a peer lead session (codex, not a worker), with the same authority as yours]"
 	wsflowNote := "[wsflow note: from a peer lead session (claude, not a worker), with the same authority as yours]"
 	for i, tc := range []struct {

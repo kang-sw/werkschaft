@@ -174,9 +174,11 @@ type fakeProc struct {
 	// closeGate, when set, holds Close until released (gateClose).
 	closeGate *gate
 	// steers are the texts a fakeSteerProc was steered, and cleared counts
-	// its ClearSteered calls.
-	steers  []string
-	cleared int
+	// its ClearSteered calls. steerFail, when set, refuses each steer whose
+	// text it matches (failSteers).
+	steers    []string
+	cleared   int
+	steerFail func(text string) bool
 }
 
 // fakeSteerProc is a fakeProc that takes a child's report mid-turn
@@ -185,9 +187,20 @@ type fakeSteerProc struct{ *fakeProc }
 
 func (p fakeSteerProc) Steer(text string) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.steerFail != nil && p.steerFail(text) {
+		return errors.New("steer refused")
+	}
 	p.steers = append(p.steers, text)
-	p.mu.Unlock()
 	return nil
+}
+
+// failSteers makes the process refuse every later steer whose text match
+// reports.
+func (p *fakeProc) failSteers(match func(text string) bool) {
+	p.mu.Lock()
+	p.steerFail = match
+	p.mu.Unlock()
 }
 
 func (p fakeSteerProc) ClearSteered() error {

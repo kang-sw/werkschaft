@@ -10,8 +10,10 @@ import (
 	"github.com/kang-sw/devenv/internal/wswake"
 )
 
-// mailbox_tools.go implements the three host-neutral MCP tools
-// (mailbox.send/mailbox.recv/mailbox.lookup_peers, Decision 5) and the
+// mailbox_tools.go implements the host-neutral MCP tools
+// (mailbox.send/mailbox.recv/mailbox.lookup_peers, Decision 5; the fan-out
+// send and mailbox.recipients live in mailbox_fanout.go and
+// mailbox_groups.go) and the
 // central response-piggyback wrapper (Decision: piggyback badge). Identity,
 // registration, gating, and stamping policy live in mailbox_runtime.go;
 // this file is the thin MCP-argument/response layer over it.
@@ -216,12 +218,16 @@ func (s *Server) handleMailboxRecv(id json.RawMessage, args map[string]any) resp
 	s.recordLiveMail(sessionKey, history, keys)
 
 	if wantsJSON(args) {
-		return toolJSONResponse(id, drained, nil)
+		return toolJSONResponse(id, s.labelEnvelopes(drained, entry.root), nil)
 	}
 	if len(drained) == 0 {
 		return toolTextResponse(id, "no unread mail\n", nil)
 	}
 	var b strings.Builder
+	// The sender legend, when a sender has a label, is the first line.
+	if legend := s.mailLegendLine(s.envelopeLegendSenders(drained, entry.root)); legend != "" {
+		b.WriteString(legend + "\n")
+	}
 	for _, m := range drained {
 		fmt.Fprintf(&b, "[%s] %s: %s\n", m.SentAt, mailboxSender(m), m.Content)
 	}
