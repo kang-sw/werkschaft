@@ -529,19 +529,6 @@
     "261121-bug-ws-agy-reattach-watchdog-sent-input": {
       "registered_at": "2026-11-21T12:39:33Z"
     },
-    "261121-bug-ws-dogfood-tool-surprises": {
-      "registered_at": "2026-11-21T01:02:36Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T07:14:36Z",
-        "impl": {
-          "branch": "impl/develop/briar-blurb-prune"
-        }
-      }
-    },
     "261121-feat-ws-board-command-slots": {
       "registered_at": "2026-11-21T09:21:23Z"
     },
@@ -666,7 +653,7 @@
         "email": "ki6080@gmail.com",
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
-        "phase": "active",
+        "phase": "closed",
         "touched_at": "2026-11-22T11:15:20Z",
         "impl": {
           "branch": "impl/develop/press-diner-sift"
