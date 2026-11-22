@@ -385,6 +385,12 @@ func (s *Store) planFence(ctx context.Context, rel, kind, digest, witness string
 		}
 		abs := filepath.Join(s.dir, filepath.FromSlash(rel))
 		got := readLegacy(abs, s.opts.ReadFile)
+		if got.confirmable && m.state == CaptureUnreadable {
+			// A denial a pass confirmed is the original's state while it
+			// persists (stagePass), so the fence plans over it; a denial
+			// over an original read before still refuses below.
+			got = legacyRead{state: CaptureUnreadable, err: got.err}
+		}
 		if got.transient {
 			return fmt.Errorf("%w: %s: %s", ErrLegacyUnread, rel, got.err)
 		}
@@ -602,6 +608,17 @@ func readLegacy(abs string, readFile func(string) ([]byte, error)) legacyRead {
 	return legacyRead{state: CapturePresent, bytes: data, digest: contentDigest(data), mtime: info.ModTime()}
 }
 
+// denialConfirmable reports whether a confirmable denial may become, or stay,
+// a row's confirmed unreadable state. A confirmed failure never replaces an
+// original read before (a Windows pending delete can outlast the
+// confirmation window), nor an absent original under a fence record (the
+// live file may be the fence's result). An unreadable original stays
+// confirmed even under a fence record: the migration can always read its own
+// publication, so a denied live file is still that original.
+func denialConfirmable(had bool, prev captureMeta) bool {
+	return !had || prev.state == CaptureUnreadable || prev.state == CaptureAbsent && prev.fenceState == FenceNone
+}
+
 // readClass sorts a read error: transient errors may clear on a later pass;
 // a stable one is the file's state; a confirmable one is transient until it
 // persists across UnreadConfirmPasses passes spanning UnreadConfirmAfter,
@@ -748,11 +765,7 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		res.Files++
 		got := readLegacy(filepath.Join(s.dir, filepath.FromSlash(rel)), s.opts.ReadFile)
 		prev, had := existing[rel]
-		// A confirmed failure never replaces an original read before (a
-		// Windows pending delete can outlast the confirmation window) or a
-		// fenced one (the live file is the fence's result). Only an input
-		// that was never readable is confirmed unreadable.
-		if got.confirmable && !(had && (prev.state == CapturePresent || prev.fenceState != FenceNone)) {
+		if got.confirmable && denialConfirmable(had, prev) {
 			// Once confirmed, the capture stays unreadable while the same
 			// denial persists; only a successful read changes it.
 			confirmed := had && prev.state == CaptureUnreadable

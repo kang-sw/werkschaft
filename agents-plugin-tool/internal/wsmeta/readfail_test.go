@@ -328,3 +328,63 @@ func TestDenialAfterAReadablePassKeepsTheOriginal(t *testing.T) {
 		t.Fatalf("commit = %v", err)
 	}
 }
+
+// A selector its ACL denies, once a pass confirmed the denial, still takes
+// the permission fence every imported session needs, also after an
+// interrupted attempt. The fence replaces the denied file (its directory
+// permits that) and the import keeps the fail-closed unreadable original.
+func TestConfirmedDenialTakesItsFence(t *testing.T) {
+	ctx := context.Background()
+	dir := legacyFixture(t)
+	prev := classifyReadError
+	classifyReadError = func(err error) readClass {
+		if errors.Is(err, errACLDenied) {
+			return classConfirmable
+		}
+		return classTransient
+	}
+	t.Cleanup(func() { classifyReadError = prev })
+	now := testNow
+	armed := false
+	opts := crashAt("fence-prepared", &armed)
+	opts.Now = func() time.Time { return now }
+	// The denial covers the legacy file, not the migration's publication.
+	opts.ReadFile = func(p string) ([]byte, error) {
+		raw, err := os.ReadFile(p)
+		if err == nil && p == filepath.Join(dir, filepath.FromSlash(fencePerm)) && string(raw) == permOriginal {
+			return nil, &fs.PathError{Op: "open", Path: p, Err: errACLDenied}
+		}
+		return raw, err
+	}
+	s := openTest(t, dir, opts)
+	for i := 0; i < UnreadConfirmPasses; i++ {
+		mustStage(t, s)
+		now = now.Add(UnreadConfirmAfter)
+	}
+	if c := captureMap(t, s)[fencePerm]; c.State != CaptureUnreadable {
+		t.Fatalf("denied selector = %+v", c)
+	}
+	armed = true
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); !errors.Is(err, errCrash) {
+		t.Fatalf("interrupted fence = %v", err)
+	}
+	if res := mustStage(t, s); len(res.Unread) != 0 || !reflect.DeepEqual(res.Pending, []string{fencePerm}) {
+		t.Fatalf("stage after the interrupted fence = %+v", res)
+	}
+	if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRel(t, dir, fencePerm); got != string(fencedSelector) {
+		t.Fatalf("live selector = %q", got)
+	}
+	if _, err := s.Commit(ctx, testCommit()); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := snap.Permissions["hostedlead"]; p.State != "invalid" {
+		t.Fatalf("denied selector imported as %+v, want invalid", p)
+	}
+}
