@@ -399,19 +399,6 @@
     "261117-feat-ws-exec-mux-terminal": {
       "registered_at": "2026-11-17T10:17:08Z"
     },
-    "261117-feat-ws-exec-tools": {
-      "registered_at": "2026-11-17T08:21:27Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T04:40:49Z",
-        "impl": {
-          "branch": "impl/develop/ninja-press-visor"
-        }
-      }
-    },
     "261117-feat-ws-single-session-holder": {
       "registered_at": "2026-11-17T08:21:19Z"
     },
@@ -537,19 +524,6 @@
     "261119-feat-ws-dashboard-audit-view": {
       "registered_at": "2026-11-19T14:04:50Z"
     },
-    "261119-feat-ws-named-custom-tiers": {
-      "registered_at": "2026-11-19T08:32:19Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T05:40:05Z",
-        "impl": {
-          "branch": "impl/develop/video-tidal-march"
-        }
-      }
-    },
     "261119-feat-ws-whiteboard-frame-css-isolation": {
       "registered_at": "2026-11-19T06:59:13Z"
     },
@@ -674,22 +648,9 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T09:23:03Z",
+        "touched_at": "2026-11-22T09:50:19Z",
         "impl": {
           "branch": "impl/develop/kept-salon-derby"
-        }
-      }
-    },
-    "261122-feat-ws-harness-native-subagent-preference": {
-      "registered_at": "2026-11-22T08:46:10Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T08:55:42Z",
-        "impl": {
-          "branch": "impl/develop/oven-apply-going"
         }
       }
     },
