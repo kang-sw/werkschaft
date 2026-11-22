@@ -961,7 +961,11 @@ func chunkEnd(p []byte, limit int64) int {
 // when it would overflow segBytes, then dropping the ring's own oldest
 // segments while it would exceed capBytes, and only then calling room with
 // the bytes about to be written, so store-wide eviction sees the ring
-// already within its own cap. It returns the bytes removed by its own trim.
+// already within its own cap. A rotation writes the new segment's header on
+// its own before anything is dropped: until that header has landed, the
+// older segments are the only recovery point (their header snapshots and
+// boundaries), so a failed header write returns with nothing dropped and a
+// crash leaves them on disk. It returns the bytes removed by its own trim.
 func (r *ring) write(payload []byte, segBytes, capBytes int64, room func(n int64)) (evicted int64, err error) {
 	if r.readOnly != nil {
 		return 0, r.readOnly
@@ -973,8 +977,6 @@ func (r *ring) write(payload []byte, segBytes, capBytes int64, room func(n int64
 		if err != nil {
 			return 0, err
 		}
-		payload = append(header, payload...)
-		n = int64(len(payload))
 		var seq uint64 = 1
 		if cur >= 0 {
 			seq = r.segs[cur].seq + 1
@@ -992,8 +994,18 @@ func (r *ring) write(payload []byte, segBytes, capBytes int64, room func(n int64
 			_ = closeFile(r.file)
 		}
 		r.file = f
-		r.forceRotate = false
 		r.segs = append(r.segs, segment{seq: seq})
+		written, werr := writeFile(f, header)
+		r.segs[len(r.segs)-1].size += int64(written)
+		r.bytes += int64(written)
+		if werr != nil {
+			// The rotation is retried by the next write; the torn segment
+			// stays accounted and is dropped like any other once a later
+			// header lands.
+			r.forceRotate = true
+			return 0, werr
+		}
+		r.forceRotate = false
 	}
 	for r.bytes+n > capBytes && len(r.segs) > 1 {
 		dropped, err := r.dropOldest()
@@ -1004,6 +1016,9 @@ func (r *ring) write(payload []byte, segBytes, capBytes int64, room func(n int64
 	}
 	if room != nil {
 		room(n)
+	}
+	if n == 0 {
+		return evicted, nil // a header-only rotation
 	}
 	written, werr := writeFile(r.file, payload)
 	r.segs[len(r.segs)-1].size += int64(written)

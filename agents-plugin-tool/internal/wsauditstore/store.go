@@ -131,6 +131,12 @@ type sessionInfo struct {
 	// write: makeRoom never evicts it into another tombstone and removes it
 	// only as the last resort.
 	tombstone bool
+	// evictFailed is set (under Store.mu) once store-wide eviction of this
+	// ring failed (a segment it could not read or delete): makeRoom passes it
+	// over on later writes, which would otherwise retry the same failing
+	// reads and deletions on every append, and the next sweep clears it to
+	// retry once.
+	evictFailed bool
 }
 
 // Store is the audit segment ring store. It implements wsaudit.SourcedSink.
@@ -692,6 +698,7 @@ func (s *Store) writeLocked(info *sessionInfo, payload []byte) error {
 	s.total += r.bytes - info.bytes
 	info.bytes = r.bytes
 	info.tombstone = false
+	info.evictFailed = false // loaded now: a cold read failure no longer applies
 	s.mu.Unlock()
 	return err
 }
@@ -792,9 +799,10 @@ func (s *Store) finalize(session, source string, boundary uint64) {
 // (keeping their recovery state as a tombstone); then the active ring drops
 // its own oldest segments, keeping its newest; only then do tombstones go,
 // least recently used first, recovery state and all. A tombstone is never
-// evicted into another tombstone. active.mu is held.
+// evicted into another tombstone. A ring whose eviction fails is passed
+// over by later calls until the next sweep (sessionInfo.evictFailed).
+// active.mu is held.
 func (s *Store) makeRoom(active *sessionInfo, need int64) {
-	failed := map[*sessionInfo]bool{}
 	trimmed := false
 	for {
 		s.mu.Lock()
@@ -805,7 +813,7 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 		pick := func(tombstones bool) *sessionInfo {
 			var victim *sessionInfo
 			for _, info := range s.sessions {
-				if info == active || info.bytes == 0 || failed[info] || info.newer || info.tombstone != tombstones {
+				if info == active || info.bytes == 0 || info.evictFailed || info.newer || info.tombstone != tombstones {
 					continue
 				}
 				if victim == nil || info.lastSeen.Before(victim.lastSeen) ||
@@ -834,7 +842,9 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 		}
 		if s.foreign(victim) {
 			s.logf("store total cap: keep audit ring of session %s: it holds a newer format", victim.dir)
-			failed[victim] = true
+			s.mu.Lock()
+			victim.evictFailed = true
+			s.mu.Unlock()
 			continue
 		}
 		var err error
@@ -846,8 +856,10 @@ func (s *Store) makeRoom(active *sessionInfo, need int64) {
 			err = s.removeRing(victim, false)
 		}
 		if err != nil {
-			s.logf("store total cap: %v", err)
-			failed[victim] = true
+			s.logf("store total cap: %v; not retried before the next sweep", err)
+			s.mu.Lock()
+			victim.evictFailed = true
+			s.mu.Unlock()
 		}
 	}
 }
@@ -1173,6 +1185,7 @@ func (s *Store) sweep() {
 	s.mu.Lock()
 	var expired []*sessionInfo
 	for _, info := range s.sessions {
+		info.evictFailed = false // eviction is retried once per sweep
 		if now.Sub(info.lastSeen) > s.limits.Retention {
 			expired = append(expired, info)
 		}

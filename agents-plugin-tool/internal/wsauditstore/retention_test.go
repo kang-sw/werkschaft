@@ -1039,7 +1039,9 @@ func TestColdEvictionThatLeavesASegmentKeepsItsEvents(t *testing.T) {
 // when the newest segment's head reads fine but the whole file does not: that
 // segment alone may carry the latest boundary, so no replacement is written
 // from older state and nothing is deleted. Snapshotting without it and
-// deleting it would let a restart admit the records it finalized.
+// deleting it would let a restart admit the records it finalized. The failed
+// victim is not retried by later appends under the same cap pressure (each
+// retry rereads its segments on the writer) until the next sweep.
 func TestColdEvictionFailsClosedOnAnUnreadableTailSegment(t *testing.T) {
 	root := t.TempDir()
 	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 4 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
@@ -1081,16 +1083,57 @@ func TestColdEvictionFailsClosedOnAnUnreadableTailSegment(t *testing.T) {
 		t.Fatalf("fixture: the newest segment carries no later boundary: %+v", want)
 	}
 
-	orig := readFile
-	t.Cleanup(func() { readFile = orig })
+	orig, origHead := readFile, readHead
+	t.Cleanup(func() { readFile, readHead = orig, origHead })
+	var touches atomic.Int64 // reads of ring "old"'s segments
+	inOld := func(path string) bool { return strings.HasPrefix(path, dir+string(filepath.Separator)) }
 	readFile = func(path string) ([]byte, error) {
+		if inOld(path) {
+			touches.Add(1)
+		}
 		if path == newest {
 			return nil, errors.New("read error")
 		}
 		return orig(path)
 	}
-	evictOld(t, root, lim, clock)
-	readFile = orig
+	readHead = func(path string, n int) ([]byte, error) {
+		if inOld(path) {
+			touches.Add(1)
+		}
+		return origHead(path, n)
+	}
+	clock.Advance(time.Hour)
+	s1, log := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 8; seq++ {
+		mustAppend(t, s1, bigRecord("new", seq, lim))
+	}
+	flush(t, s1)
+	if !strings.Contains(log.String(), "evict audit ring of session old") {
+		t.Fatalf("old ring not evicted: %s", log.String())
+	}
+	// Later appends under the same cap pressure do not retry the failing
+	// eviction (each retry reopens the victim's segments) until a sweep
+	// clears the mark.
+	failedAt := touches.Load()
+	for seq := uint64(9); seq <= 16; seq++ {
+		mustAppend(t, s1, bigRecord("new", seq, lim))
+	}
+	flush(t, s1)
+	if n := touches.Load() - failedAt; n != 0 {
+		t.Fatalf("8 appends after the failed eviction read the victim's segments %d times", n)
+	}
+	if err := s1.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(17); seq <= 24; seq++ {
+		mustAppend(t, s1, bigRecord("new", seq, lim))
+	}
+	flush(t, s1)
+	if touches.Load() == failedAt {
+		t.Fatalf("appends after a sweep did not retry the failed eviction\n%s", log.String())
+	}
+	_ = s1.Close()
+	readFile, readHead = orig, origHead
 	if _, err := os.Stat(newest); err != nil {
 		t.Fatalf("the unreadable newest segment was deleted: %v", err)
 	}
@@ -1140,6 +1183,57 @@ func TestStartupTrimKeepsTheNewestSegmentWithAHeader(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "kept over the cap") {
 		t.Fatalf("keeping the segment over the cap was not logged: %s", log.String())
+	}
+}
+
+// TestCappedRotationKeepsTheOldHeaderUntilTheNewOneLands pins the first
+// append after the lowered-cap startup above: it rotates, and the over-cap
+// segment holding the only complete header must survive until the new
+// segment's header has landed. With every write failing from then on (the
+// append, the loss line, Close) — a failed write followed by a crash — a
+// reopened store still recovers the kept segment's events, max sequence and
+// boundary.
+func TestCappedRotationKeepsTheOldHeaderUntilTheNewOneLands(t *testing.T) {
+	root := t.TempDir()
+	wide := Limits{SessionBytes: 64 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: 30 * 24 * time.Hour}
+	clock := &fakeClock{now: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = wide; o.Now = clock.Now })
+	for seq := uint64(1); seq <= 12; seq++ {
+		mustAppend(t, s, bigRecord("sess", seq, wide))
+	}
+	if err := s.Finalize(context.Background(), "sess", "holder:1", 12); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, s)
+	_ = s.Close()
+	dir := filepath.Join(root, "sess")
+	segs, _, err := listSegments(dir)
+	if err != nil || len(segs) != 1 || segs[0].size <= 4*mib {
+		t.Fatalf("fixture: want one segment over the lowered cap, got %+v %v", segs, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, segmentName(segs[0].seq+1)), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	narrow := wide
+	narrow.SessionBytes = 4 * mib
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = narrow; o.Now = clock.Now })
+	loaded(t, s2, "sess")
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	writeFile = func(f *os.File, b []byte) (int, error) { return 0, errors.New("disk full") }
+	mustAppend(t, s2, bigRecord("sess", 13, narrow))
+	flush(t, s2)
+	_ = s2.Close()
+	writeFile = orig
+
+	s3, log := openTest(t, root, func(o *Options) { o.Limits = narrow; o.Now = clock.Now })
+	loaded(t, s3, "sess")
+	if rec := s3.Recover("sess", "holder:1"); rec.Boundary != 12 || rec.MaxSeq != 12 {
+		t.Fatalf("recovery after a failed capped rotation = %+v\n%s", rec, log.String())
+	}
+	if n := len(events(t, s3, "sess")); n != 12 {
+		t.Fatalf("%d events after a failed capped rotation, want the kept segment's 12\n%s", n, log.String())
 	}
 }
 

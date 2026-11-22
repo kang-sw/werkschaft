@@ -639,7 +639,9 @@ func TestStoreFileOpsPerAppendedEvent(t *testing.T) {
 	t.Logf("%d appends, %d finalizes: total %d file ops (write %d, open %d, close %d, remove %d) = %.2f per event; %d rotations",
 		n, finals, delta("file_io_total"), delta("file_io_write"), rotations, delta("file_io_close"), delta("file_io_remove"),
 		float64(delta("file_io_total"))/n, rotations)
-	if w := delta("file_io_write"); w < n || w > n+finals || delta("file_io_total") > n+finals+4*rotations {
+	// A rotation writes its header on its own, before the ring trims, so
+	// the old segments stay the recovery point until it lands.
+	if w := delta("file_io_write"); w < n || w > n+finals+rotations || delta("file_io_total") > n+finals+4*rotations {
 		t.Fatalf("file ops exceed one write per event and per finalize plus rotation: writes %d, total %d", w, delta("file_io_total"))
 	}
 	if rec := s.Recover("sess", "holder:1"); rec.Boundary != 2+n-1-(2+n-1)%16 {
@@ -740,6 +742,9 @@ func TestStoreJobsRunInCallOrder(t *testing.T) {
 	tokens := make(chan struct{})
 	entered := make(chan struct{}, 64)
 	writeFile = func(f *os.File, b []byte) (int, error) {
+		if bytes.HasPrefix(b, []byte(`{"t":"h"`)) {
+			return orig(f, b) // a rotation's own header write
+		}
 		entered <- struct{}{}
 		<-tokens
 		return orig(f, b)
