@@ -161,8 +161,13 @@ type Record struct {
 	// admitted (AdmitCompletion), at most acceptedEventsCap: they keep a
 	// replayed notice out once its inbox entry has been drained and trimmed.
 	AcceptedEvents []string `json:"accepted_events,omitempty"`
-	Drained        uint64   `json:"drained,omitempty"`
-	TurnMark       uint64   `json:"turn_mark,omitempty"`
+	// ExecCutoverHolder is the holder of a process started under the exec
+	// cutover (exec_cutover.go). A rejoin restores the cutover only when the
+	// holder it attaches is this one, so a process an older daemon started
+	// since keeps its native tools.
+	ExecCutoverHolder string `json:"exec_cutover_holder_id,omitempty"`
+	Drained           uint64 `json:"drained,omitempty"`
+	TurnMark          uint64 `json:"turn_mark,omitempty"`
 	// An agy worker can also have a prompt outstanding with TurnOpen false:
 	// an internal compaction prompt has no result to report to its parent.
 	TurnStartedAt int64 `json:"turn_started_at,omitempty"`

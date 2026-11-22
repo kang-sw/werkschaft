@@ -399,6 +399,7 @@ func (r *Runner) resumePiChild(id string) (*conv, error) {
 	if err := writeRecord(dir, rec); err != nil {
 		return nil, err
 	}
+	r.unfenceExec(id)
 	c = r.startConv(rec, nil)
 	c.watched()
 	return c, nil
@@ -754,6 +755,7 @@ func (c *conv) steerWorker() {
 	covered := c.sends
 	c.mu.Unlock()
 	c.inboxMutated(len(recs))
+	c.cutoverInstructionLeft(recs)
 	var parts []string
 	for _, rec := range recs {
 		if text := strings.TrimSpace(rec.Entry.Text()); text != "" {
@@ -902,11 +904,13 @@ func (c *conv) saveSteered() {
 
 // holdsReport reports whether a done turn of the conversation waits for
 // running background tasks or its children: background work still running on
-// a worker, a child's report it holds and no turn took yet (steered and not
-// taken, or kept for the next turn), or a child of its own that is open
-// (openChildOf). It runs in the loop.
+// a worker (a harness background task, or a hosted exec job it owns), an
+// exec cutover instruction a worker's turn owes and no turn took yet
+// (sendCutoverInstruction), a child's report it holds and no turn took yet
+// (steered and not taken, or kept for the next turn), or a child of its own
+// that is open (openChildOf). It runs in the loop.
 func (c *conv) holdsReport() bool {
-	if (!c.rec.Lead && (c.bgTasks > 0 || c.bgGraceTimer != nil)) || len(c.steered) > 0 || len(c.rec.Reports) > 0 || c.compactHoldsReport() {
+	if (!c.rec.Lead && (c.bgTasks > 0 || c.bgGraceTimer != nil || c.ownsLiveExec() || c.cutoverNudge != "" || c.cutoverInstructing)) || len(c.steered) > 0 || len(c.rec.Reports) > 0 || c.compactHoldsReport() {
 		return true
 	}
 	ref := ParentRef{Kind: ParentConversation, ReplyID: c.rec.ReplyID}

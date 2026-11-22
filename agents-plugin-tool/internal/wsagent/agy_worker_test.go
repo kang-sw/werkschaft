@@ -195,7 +195,9 @@ func TestAgyWorkerLaunchApprovalAndResume(t *testing.T) {
 		t.Fatalf("default agent in the user's home: %q", argv)
 	}
 	text, _ := os.ReadFile(path)
-	for _, want := range []string{"WORKER-SPINE", "invoke_subagent", "agent.spawn", rec.WSKey, `"optionId":"yes"`} {
+	// Outside the exec cutover the worker keeps run_command and the rule
+	// that keeps its turn open while a background one runs.
+	for _, want := range []string{"WORKER-SPINE", "invoke_subagent", "agent.spawn", rec.WSKey, `"optionId":"yes"`, "Never end your turn while a non-daemon"} {
 		if !strings.Contains(string(text), want) {
 			t.Errorf("ACP log lacks %q", want)
 		}

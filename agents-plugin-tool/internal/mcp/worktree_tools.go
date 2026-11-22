@@ -958,8 +958,9 @@ func releaseWorktree(ctx context.Context, runner wsgit.Runner, env []string, wtP
 // key (a lead's, or the worker key an acquire minted, which is a lead key
 // too), the worker key it named (empty when it named a path), force, an
 // optional daemon-wide bound-child check run under the per-worktree lock
-// (non-forced releases only), an optional running-exec-job check run under
-// that lock for every release, an optional check that the daemon will take the
+// (non-forced releases only), an optional running-exec-job check naming the
+// jobs to a non-forced release, an optional exec fence refusing any release
+// while a job runs in the target, an optional check that the daemon will take the
 // release notice, run under that lock for every release, whose finding about
 // the bound agents (bindings) the notice receives, and an optional notice of
 // the completed release, whose lines join the result's warnings.
@@ -969,10 +970,16 @@ type worktreeReleaseCaller struct {
 	Force         bool
 	CheckChildren func(ctx context.Context, target string) error
 	// CheckExecJobs is the running-hosted-exec-job check, run next to
-	// CheckChildren under the same lock; force does not skip it.
+	// CheckChildren under the same lock; it names the jobs to a non-forced
+	// release.
 	CheckExecJobs func(target string) error
-	CheckNotice   func(ctx context.Context, target string) (releaseBindings, error)
-	Released      func(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool, bindings releaseBindings) worktreeReleaseNotice
+	// FenceExec, when set, refuses the release while an exec job runs in
+	// the target and otherwise holds new jobs there off until the returned
+	// unfence (worktreeExecFence); run under the per-worktree lock, force or
+	// not.
+	FenceExec   func(target string) (func(), error)
+	CheckNotice func(ctx context.Context, target string) (releaseBindings, error)
+	Released    func(ctx context.Context, target string, releasedAt time.Time, cancelTurns bool, bindings releaseBindings) worktreeReleaseNotice
 	// bindings is CheckNotice's finding, kept for Released.
 	bindings releaseBindings
 }
@@ -1296,7 +1303,7 @@ func releaseNoticeOutcomeText(outcome releaseNoticeOutcome) string {
 	}
 }
 
-// checkWorktreeLiveExecJobs refuses a worktree.release, forced or not, while any
+// checkWorktreeLiveExecJobs refuses a non-forced worktree.release while any
 // running hosted exec job's recorded cwd is target or lies under it, naming
 // each job. Hygiene would otherwise reset and clean the tree under a running
 // process and the next acquire would reuse it. Paths compare the way
@@ -1322,7 +1329,7 @@ func (s *Server) checkWorktreeLiveExecJobs(target string) error {
 	if len(parts) == 0 {
 		return nil
 	}
-	return fmt.Errorf("worktree.release refuses %s: running exec job(s) have their cwd in this worktree (%s). Nothing was changed. Wait for them to end or stop them with exec.stop, then release again; force: true does not override this", target, strings.Join(parts, ", "))
+	return fmt.Errorf("worktree.release refuses %s: running exec job(s) have their cwd in this worktree (%s). Nothing was changed. Wait for them to end or stop them with exec.stop, then release again; force: true does not override a running exec job", target, strings.Join(parts, ", "))
 }
 
 // releaseWorktreeAs is releaseWorktree on behalf of caller (nil: no lease

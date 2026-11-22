@@ -93,6 +93,10 @@ type ServerOptions struct {
 	// launcher connection. Only it attributes hosted exec jobs: a supplied
 	// session_key grants a root, never ownership.
 	Conversation string
+	// ExecCutover is the bound conversation's harness when its process
+	// launched under the exec cutover (wsdashboard.ProxyHello.ExecCutover);
+	// empty otherwise and on every launcher connection.
+	ExecCutover string
 	// MailGroups keeps the audiences of fan-out sends for mailbox.recipients;
 	// nil is this process's shared store, which every connection a daemon
 	// hosts uses.
@@ -194,6 +198,9 @@ func NewServerWithOptions(opts ServerOptions) *Server {
 	}
 	s.pi.agents = opts.Agents
 	s.exec, s.conversation = opts.Exec, opts.Conversation
+	if s.conversation != "" {
+		s.execCutover = opts.ExecCutover
+	}
 	s.pi.worktreeChildren = opts.WorktreeChildren
 	if s.pi.worktreeChildren == nil && opts.Agents != nil {
 		if reader, ok := opts.Agents.(WorktreeChildrenReader); ok {
