@@ -598,7 +598,10 @@ plumbing. Targeted `internal/mcp` (`Harness|Initialize|Detect|Connection`) fails
 only the known inventory-environment tests; `internal/wsdashboard`
 (`Trait|PlanUsage|Usage`) and `internal/wsagent` pass; build and vet pass on
 darwin and windows. The T0 claim above is therefore "schema unchanged and
-built-in values unchanged", not universally byte-identical.
+built-in values unchanged", not universally byte-identical: a newly detected
+extension name can now be written into the existing `Registration.Harness`
+string (`mcp/dashboard_sessions.go`, `wsdashboard/registry.go`); old readers
+decode it and the old HUD hides unknown harnesses.
 
 ### Phase 4: Residual audit and parity, compatibility, and performance gate
 
