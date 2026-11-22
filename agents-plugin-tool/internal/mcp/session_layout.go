@@ -223,7 +223,10 @@ type recordFileReader func(path string, newValue func() any) (data []byte, value
 
 // readRecordFile is the recordFileReader that reads the file afresh.
 func readRecordFile(path string, newValue func() any) ([]byte, any, error) {
-	data, err := wsstate.ReadFileOnce(path)
+	// ReadFile, not ReadFileOnce: a record part is replaced atomically, and on
+	// Windows an open that meets the replace in flight fails with a sharing
+	// violation that ReadFile retries.
+	data, err := wsstate.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
 	}

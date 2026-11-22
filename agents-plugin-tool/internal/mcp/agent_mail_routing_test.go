@@ -29,6 +29,11 @@ func cacheFiles(t *testing.T, dir string) map[string]cachedFile {
 		if err != nil || d.IsDir() || !d.Type().IsRegular() {
 			return err
 		}
+		// The ring's lock file holds no mail, and the daemon's byte-range lock
+		// on it is mandatory on Windows, so reading it there fails.
+		if d.Name() == "lock" && filepath.Base(filepath.Dir(path)) == wsmailbox.RingDirName {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
