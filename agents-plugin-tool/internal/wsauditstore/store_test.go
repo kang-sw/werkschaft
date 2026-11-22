@@ -898,3 +898,56 @@ func TestStoreTornHeaderNeverLeavesAHeaderlessLiveSegment(t *testing.T) {
 		t.Fatalf("recovered %s", got)
 	}
 }
+
+// TestStoreBurstOfControlLinesNeverOverflowsASegment pins the write bound:
+// thousands of queued loss lines plus a rotation header are written in
+// chunks, so no write and no segment exceeds the segment size.
+func TestStoreBurstOfControlLinesNeverOverflowsASegment(t *testing.T) {
+	lim := Limits{SessionBytes: 4 * mib, TotalBytes: 64 * mib, BodyBytes: 256 * kib, Retention: MinRetention}
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	var mu sync.Mutex
+	var largest int
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	var once sync.Once
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		once.Do(func() { entered <- struct{}{}; <-hold })
+		mu.Lock()
+		largest = max(largest, len(b))
+		mu.Unlock()
+		return orig(f, b)
+	}
+	root := t.TempDir()
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim })
+	ctx := context.Background()
+	mustAppend(t, s, bigRecord("sess", 1, lim))
+	<-entered // everything below queues behind the first write
+	const n = 20000
+	if err := s.Finalize(ctx, "sess", "holder:1", n+2); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(2); seq < n+2; seq++ {
+		_ = s.RecordLoss(ctx, "sess", wsaudit.SourceID{Source: "holder:1", Seq: seq, Ordinal: 7}, wsaudit.LossDropped)
+	}
+	mustAppend(t, s, bigRecord("sess", n+3, lim))
+	close(hold)
+	flush(t, s)
+	if int64(largest) > lim.SegmentBytes() {
+		t.Fatalf("a single write of %d bytes exceeds the %d-byte segment", largest, lim.SegmentBytes())
+	}
+	segs, _, _ := listSegments(filepath.Join(root, "sess"))
+	var total int64
+	for _, seg := range segs {
+		total += seg.size
+		if seg.size > lim.SegmentBytes() {
+			t.Fatalf("segment %d holds %d bytes", seg.seq, seg.size)
+		}
+	}
+	if total > lim.EffectiveSessionBytes() {
+		t.Fatalf("ring holds %d bytes", total)
+	}
+	if got := lossCount(t, s, "sess"); got != n {
+		t.Fatalf("loss = %d", got)
+	}
+}

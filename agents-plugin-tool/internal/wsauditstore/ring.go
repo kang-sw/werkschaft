@@ -691,6 +691,46 @@ func encodeLine(ln line) ([]byte, error) {
 	return append(raw, '\n'), nil
 }
 
+// writeBounded writes payload (whole lines) in chunks small enough that no
+// single write — a rotation's header line included — exceeds segBytes, so a
+// burst of queued control lines never makes a segment or the ring outgrow
+// its bound. A record line alone always fits (Limits.Validate).
+func (r *ring) writeBounded(payload []byte, segBytes, capBytes int64, room func(n int64)) error {
+	header, err := r.headerLine()
+	if err != nil {
+		return err
+	}
+	limit := segBytes - int64(len(header))
+	for len(payload) > 0 {
+		n := chunkEnd(payload, limit)
+		if _, err := r.write(payload[:n], segBytes, capBytes, room); err != nil {
+			return err
+		}
+		payload = payload[n:]
+	}
+	return nil
+}
+
+// chunkEnd is the length of the longest whole-line prefix of p within limit
+// (at least one line).
+func chunkEnd(p []byte, limit int64) int {
+	if int64(len(p)) <= limit {
+		return len(p)
+	}
+	end := 0
+	for end < len(p) {
+		next := len(p)
+		if nl := bytes.IndexByte(p[end:], '\n'); nl >= 0 {
+			next = end + nl + 1
+		}
+		if int64(next) > limit && end > 0 {
+			break
+		}
+		end = next
+	}
+	return end
+}
+
 // write appends payload (whole lines) to the newest segment, rotating first
 // when it would overflow segBytes, then dropping the ring's own oldest
 // segments while it would exceed capBytes, and only then calling room with

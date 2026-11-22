@@ -29,6 +29,9 @@ const (
 	// and the metadata bound: the line wrapper, body keys and quotes, and the
 	// newline.
 	recordFraming = 4 * kib
+	// HeaderBound is the room a segment keeps for its header line beside one
+	// maximal record; the header's lost-identity list folds at lostBudget.
+	HeaderBound = 64 * kib
 	// preferredSegmentBytes is the segment size when the caps allow it.
 	preferredSegmentBytes = 16 * mib
 )
@@ -101,7 +104,7 @@ func (l Limits) Validate() error {
 	case l.Retention < MinRetention:
 		return fmt.Errorf("audit retention %s is below one day", l.Retention)
 	}
-	if l.MaxRecordBytes() > l.SegmentBytes() || l.SegmentBytes() > l.EffectiveSessionBytes()/4 {
+	if l.MaxRecordBytes()+HeaderBound > l.SegmentBytes() || l.SegmentBytes() > l.EffectiveSessionBytes()/4 {
 		return fmt.Errorf("audit caps leave no segment that fits one record")
 	}
 	return nil

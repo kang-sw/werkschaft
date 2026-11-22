@@ -401,7 +401,7 @@ func TestPrepareSmallestConfigMaxRecordFitsSegment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if int64(len(ln)) > lim.MaxRecordBytes() || lim.MaxRecordBytes() > lim.SegmentBytes() || lim.SegmentBytes() > lim.EffectiveSessionBytes()/4 {
+	if int64(len(ln)) > lim.MaxRecordBytes() || lim.MaxRecordBytes()+HeaderBound > lim.SegmentBytes() || lim.SegmentBytes() > lim.EffectiveSessionBytes()/4 {
 		t.Fatalf("record %d, bound %d, segment %d", len(ln), lim.MaxRecordBytes(), lim.SegmentBytes())
 	}
 }

@@ -646,7 +646,7 @@ func (s *Store) appendEvent(raw wsaudit.Envelope, id *wsaudit.SourceID) {
 // store total, and syncs the byte accounting. info.mu is held.
 func (s *Store) writeLocked(info *sessionInfo, payload []byte) error {
 	r := info.ring
-	_, err := r.write(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes(), func(n int64) {
+	err := r.writeBounded(payload, s.limits.SegmentBytes(), s.limits.EffectiveSessionBytes(), func(n int64) {
 		s.account(info) // the ring's own trim first
 		s.makeRoom(info, n)
 	})
