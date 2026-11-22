@@ -204,6 +204,55 @@ func TestPathGenerateOversizedBatchReturnsAllPathsAndBoundsGrants(t *testing.T) 
 	}
 }
 
+// A legacy caller may save a generated artifact by replace (write a sibling,
+// rename over the path, or delete and recreate) while the daemon holds the
+// path.write grant. On Windows this requires the held handle to share delete
+// access; the replaced file must then fail path.write's identity check.
+func TestPathGenerateGrantAllowsReplaceSaveAndRefusesReplacedTarget(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))
+	root := t.TempDir()
+	initGit(t, root)
+	s := NewServer(root, "test")
+	key, err := s.sessions.mint(root, roleDelegate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generate := func(id int, stem string) string {
+		t.Helper()
+		resp := callToolOnce(t, s, id, "path.generate", map[string]any{
+			"session_key": key, "kind": "review", "stems": []any{stem},
+		})
+		if toolIsError(t, resp) {
+			t.Fatalf("path.generate: %s", resp)
+		}
+		return strings.TrimSpace(toolText(t, resp))
+	}
+
+	renamed := generate(1, "rename-save")
+	sibling := renamed + ".tmp"
+	if err := os.WriteFile(sibling, []byte("editor save"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(sibling, renamed); err != nil {
+		t.Fatalf("rename-replace over a granted artifact: %v", err)
+	}
+	removed := generate(2, "delete-save")
+	if err := os.Remove(removed); err != nil {
+		t.Fatalf("delete of a granted artifact: %v", err)
+	}
+
+	resp := callToolOnce(t, s, 3, "path.write", map[string]any{
+		"session_key": key, "path": renamed, "content": "must not land",
+	})
+	if !toolIsError(t, resp) {
+		t.Fatalf("path.write wrote a replaced artifact: %s", resp)
+	}
+	if got, err := os.ReadFile(renamed); err != nil || string(got) != "editor save" {
+		t.Fatalf("replaced artifact = %q, %v", got, err)
+	}
+}
+
 func TestPathWriteRefusesSymlinkReplacementAndAcceptsOversizedContent(t *testing.T) {
 	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
 	t.Setenv("WS_CONFIG_HOME", filepath.Join(t.TempDir(), "config"))

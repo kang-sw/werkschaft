@@ -74,7 +74,7 @@ func (g *generatedPathWrites) grant(sessionKey string, generated []wsstate.Gener
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: writable cache artifact %q is not a regular file", item.Path)
 		}
-		file, err := os.OpenFile(item.Path, os.O_RDWR, 0)
+		file, err := openGeneratedPathGrant(item.Path)
 		if err != nil {
 			closeGeneratedPathGrants(opened)
 			return fmt.Errorf("path.generate: open writable cache artifact %q: %w", item.Path, err)
