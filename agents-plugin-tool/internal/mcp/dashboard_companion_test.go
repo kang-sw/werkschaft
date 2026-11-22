@@ -223,7 +223,7 @@ func TestCompanionStdioHandoff(t *testing.T) {
 			t.Fatalf("stdio config.tune: %v, %s", err, raw)
 		}
 	}
-	tune(opts.ConfigHome, `{"key":"dashboard.companion_enabled","value":true}`)
+	tune(opts.ConfigHome, `{"key":"dashboard.companion_enabled","value":"true"}`)
 	want.Enabled = true
 	expectCompanion(t, stream, want)
 	reconnected := open()
@@ -249,7 +249,7 @@ func TestCompanionStdioHandoff(t *testing.T) {
 	expectCompanion(t, stream, want)
 	expectCompanion(t, reconnected, want)
 
-	tune(t.TempDir(), `{"key":"dashboard.companion_enabled","value":true}`)
+	tune(t.TempDir(), `{"key":"dashboard.companion_enabled","value":"true"}`)
 	tune(opts.ConfigHome, `{"key":"dashboard.companion_enabled","reset":true}`)
 	want.Enabled = false
 	expectCompanion(t, stream, want)

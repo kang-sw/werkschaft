@@ -46,7 +46,13 @@ test("companion labels are present in every supported locale", () => {
     "js.companion.reload_failed",
     "js.companion.preset",
     "js.companion.preset_failed",
-    "js.companion.pack_failed"
+    "js.companion.pack_failed",
+    "js.companion.settings",
+    "js.companion.close",
+    "js.companion.persona",
+    "js.companion.persona_none",
+    "js.companion.settings_failed",
+    "js.companion.settings_readonly"
   ];
   for (const locale of locales) {
     const table = readLocale(locale);
