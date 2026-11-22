@@ -118,6 +118,13 @@ func claudeLeadEnv(spec StartSpec) []string {
 	return harnessEnv(wsharnessenv.Drop(spec.Env), []string{"CLAUDE"}, claudeKeptEnv, set)
 }
 
+// claudeWorkerEnv is an agent.spawn worker's environment: claudeEnv plus the
+// session-state lines, which tell a turn the harness began on its own (a
+// finished background task's wake-up) from an idle harness.
+func claudeWorkerEnv(env []string) []string {
+	return harnessEnv(wsharnessenv.Drop(env), []string{"CLAUDE"}, claudeKeptEnv, map[string]string{"CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1"})
+}
+
 // claudeLeadArgs is the command line of a lead conversation: print mode
 // with stream-json both ways, user/project settings, hooks, memory, and MCP
 // servers. No ws plugin loads (claudeLeadPluginArgs): the daemon's ws-mcp is
@@ -523,6 +530,9 @@ func (b ClaudeBackend) Start(ctx context.Context, spec StartSpec) (Process, erro
 	cmd := exec.Command(command, append(pre, args...)...)
 	cmd.Dir = spec.workDir()
 	cmd.Env = claudeEnv(spec.Env)
+	if spec.SessionState && spec.Lead == nil {
+		cmd.Env = claudeWorkerEnv(spec.Env)
+	}
 	if spec.Lead != nil {
 		cmd.Env = claudeLeadEnv(spec)
 		if spec.Holder != nil {

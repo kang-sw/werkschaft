@@ -72,6 +72,11 @@ type StartSpec struct {
 	// Lead is set for a lead conversation (Profile.Lead): user settings stay
 	// active, while the daemon supplies its ws-mcp and workflow manual.
 	Lead *LeadSpec
+	// SessionState is set for an agent.spawn worker whose harness reports its
+	// session state and native background tasks (Claude): the worker's turn
+	// follows the harness's running/idle states and its background-task list
+	// keeps it non-idle, as a lead's does. A backend without them ignores it.
+	SessionState bool
 	// Holder selects durable transport independently of lead privileges.
 	Holder *holderChild
 	// PermissionLevel is the explicit authority of this launch: a lead's
