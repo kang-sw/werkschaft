@@ -129,9 +129,11 @@ func DaemonBaseURL(sessionURL string) (string, error) {
 
 // RouteClient is a harness process's Source: it asks the daemon's token
 // route with the session's bearer. While the daemon cannot be reached (a
-// daemon replacement), it answers the last credential the route gave for
+// daemon replacement, including a successor that does not know the
+// session's bearer yet), it answers the last credential the route gave for
 // the provider, unless that one has expired, and asks again on the next
-// call; an authoritative refusal forgets it.
+// call; a refusal about the credential itself (not configured, consent,
+// not permitted, unknown provider) forgets it.
 type RouteClient struct {
 	url   string
 	token Secret
@@ -199,7 +201,16 @@ func (c *RouteClient) Credential(ctx context.Context, req Request) (Credential, 
 	var refused error
 	switch refusal.Error {
 	case RefusalUnauthorized:
-		refused = ErrUnauthorized
+		// A successor daemon that has not restored the session's bearer
+		// yet answers this mid-swap, so it is no verdict on the credential:
+		// keep the last one (Decision 6) and say unauthorized only when
+		// there is none.
+		if cred, ok := c.kept(req.Provider); ok {
+			return cred, nil
+		}
+		return Credential{}, ErrUnauthorized
+	case RefusalBadRequest:
+		return Credential{}, fmt.Errorf("the provider token route refused the request: %s", refusal.Message)
 	case RefusalNotPermitted:
 		refused = ErrNotPermitted
 	case RefusalUnknownProvider:
@@ -225,13 +236,22 @@ func (c *RouteClient) Credential(ctx context.Context, req Request) (Credential, 
 
 // fallback answers the last credential while the route is unavailable.
 func (c *RouteClient) fallback(provider ProviderID, cause error) (Credential, error) {
+	if cred, ok := c.kept(provider); ok {
+		return cred, nil
+	}
+	return Credential{}, fmt.Errorf("%w: %v", ErrDaemonUnavailable, cause)
+}
+
+// kept is the last credential the route gave for provider, unless it has
+// expired.
+func (c *RouteClient) kept(provider ProviderID) (Credential, bool) {
 	c.mu.Lock()
 	cred, ok := c.last[provider]
 	c.mu.Unlock()
 	if ok && (cred.ExpiresAt.IsZero() || c.now().Before(cred.ExpiresAt)) {
-		return cred, nil
+		return cred, true
 	}
-	return Credential{}, fmt.Errorf("%w: %v", ErrDaemonUnavailable, cause)
+	return Credential{}, false
 }
 
 // String and GoString keep a printed client from showing its session token

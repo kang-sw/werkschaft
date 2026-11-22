@@ -301,6 +301,24 @@ func TestOfflineCredentialChangeTakesTheDaemonLock(t *testing.T) {
 // TestCredentialChangeToADaemonWithoutTheRoute: a running daemon that
 // predates the change route is named, not waited out; one that holds the
 // lock and never answers fails at the deadline.
+// fakeLockHolder serves /health as the daemon the endpoint file names and
+// change for every other path, standing in for a daemon that holds the lock.
+func fakeLockHolder(t *testing.T, dir string, change http.HandlerFunc) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			writeJSON(w, http.StatusOK, HealthInfo{Service: healthService, PID: os.Getpid()})
+			return
+		}
+		change(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	port, _ := strconv.Atoi(srv.URL[strings.LastIndex(srv.URL, ":")+1:])
+	if err := writeEndpoint(dir, Endpoint{SchemaVersion: endpointSchemaVersion, Port: port, PID: os.Getpid(), Token: "fixture-endpoint-token"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCredentialChangeToADaemonWithoutTheRoute(t *testing.T) {
 	restore := credentialChangeWait
 	credentialChangeWait = 300 * time.Millisecond
@@ -313,25 +331,69 @@ func TestCredentialChangeToADaemonWithoutTheRoute(t *testing.T) {
 	t.Cleanup(func() { _ = holder.Unlock() })
 	beforeOfflineCredentialWrite = func() { t.Error("the CLI wrote the file while a daemon held the lock") }
 	t.Cleanup(func() { beforeOfflineCredentialWrite = nil })
-	change := wscred.Change{Op: wscred.OpRemove, Provider: wscred.ProviderOpenRouter}
+	change := wscred.Change{Op: wscred.OpSet, Provider: wscred.ProviderOpenRouter, APIKey: wscred.NewSecret(credFixtureKey)}
 	credPath := filepath.Join(t.TempDir(), wscred.FileName)
 
 	if _, _, err := ApplyCredentialChange(context.Background(), dir, credPath, change); err == nil || !strings.Contains(err.Error(), "did not answer") {
 		t.Fatalf("a silent lock holder = %v", err)
 	}
-	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		loginRequired(w)
+
+	// A stale endpoint file whose port another process took: the key and
+	// the endpoint token are never sent to it.
+	var strangerMu sync.Mutex
+	var strangerSaw []string
+	stranger := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		strangerMu.Lock()
+		strangerSaw = append(strangerSaw, r.URL.Path+" "+r.Header.Get("Authorization")+" "+string(body))
+		strangerMu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]string{"service": "something-else"})
 	}))
-	t.Cleanup(old.Close)
-	port, _ := strconv.Atoi(old.URL[strings.LastIndex(old.URL, ":")+1:])
-	if err := writeEndpoint(dir, Endpoint{SchemaVersion: endpointSchemaVersion, Port: port, Token: "fixture-endpoint-token"}); err != nil {
+	t.Cleanup(stranger.Close)
+	strangerPort, _ := strconv.Atoi(stranger.URL[strings.LastIndex(stranger.URL, ":")+1:])
+	if err := writeEndpoint(dir, Endpoint{SchemaVersion: endpointSchemaVersion, Port: strangerPort, PID: os.Getpid(), Token: "fixture-endpoint-token"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := ApplyCredentialChange(context.Background(), dir, credPath, change); err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("a stranger on the recorded port = %v", err)
+	}
+	strangerMu.Lock()
+	if len(strangerSaw) == 0 {
+		t.Error("the stranger was never asked who it is")
+	}
+	for _, seen := range strangerSaw {
+		if strings.Contains(seen, credFixtureKey) || strings.Contains(seen, "fixture-endpoint-token") || strings.Contains(seen, credentialChangePath) {
+			t.Errorf("the stranger received the change: %q", seen)
+		}
+	}
+	strangerMu.Unlock()
+
+	// An older daemon answers its access guard's login_required.
+	fakeLockHolder(t, dir, func(w http.ResponseWriter, r *http.Request) { loginRequired(w) })
 	started := time.Now()
 	if _, _, err := ApplyCredentialChange(context.Background(), dir, credPath, change); err == nil || !strings.Contains(err.Error(), "does not take credential changes") {
 		t.Fatalf("an older daemon = %v", err)
 	}
 	if time.Since(started) > 250*time.Millisecond {
 		t.Fatal("an older daemon was waited out instead of named")
+	}
+
+	// A daemon without a credential store says so at once; a draining one
+	// is waited out.
+	fakeLockHolder(t, dir, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusServiceUnavailable, credentialChangeRefusal{Error: "this daemon holds no provider credentials"})
+	})
+	started = time.Now()
+	if _, _, err := ApplyCredentialChange(context.Background(), dir, credPath, change); err == nil || !strings.Contains(err.Error(), "holds no provider credentials") {
+		t.Fatalf("a daemon without a store = %v", err)
+	}
+	if time.Since(started) > 250*time.Millisecond {
+		t.Fatal("a daemon without a store was waited out instead of named")
+	}
+	fakeLockHolder(t, dir, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "shutting_down"})
+	})
+	if _, _, err := ApplyCredentialChange(context.Background(), dir, credPath, change); err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("a draining daemon = %v", err)
 	}
 }

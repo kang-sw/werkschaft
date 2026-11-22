@@ -66,7 +66,9 @@ type Store struct {
 	mu      sync.Mutex
 	loaded  bool
 	loadErr error
-	doc     document
+	// failedAt identifies the file a failed load read (see loadLocked).
+	failedAt fileStamp
+	doc      document
 	// keys are the API-key entries of doc, decoded.
 	keys map[ProviderID]apiKeyEntry
 }
@@ -205,15 +207,36 @@ func (d document) apiKeys() map[ProviderID]apiKeyEntry {
 	return out
 }
 
-// loadLocked reads the file at the first use. A failed read is kept, so a
-// broken file costs no read per request; retry rereads it once more (a
-// change: the user may have fixed or removed the file since).
+// fileStamp is what a stat says about a file: enough to tell that a broken
+// file was edited, replaced, or removed since it was read.
+type fileStamp struct {
+	exists  bool
+	size    int64
+	modTime int64 // UnixNano: comparable with ==, unlike time.Time
+}
+
+func stampOf(path string) fileStamp {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}
+	}
+	return fileStamp{exists: true, size: info.Size(), modTime: info.ModTime().UnixNano()}
+}
+
+// loadLocked reads the file at the first use. A failed read is kept while the
+// file stays as it was, so a broken file costs a stat, not a read and a
+// parse, per request; once the user fixes, replaces, or removes it, the next
+// use reads it again. retry (a change) rereads it regardless.
 func (s *Store) loadLocked(retry bool) error {
-	if s.loaded && (s.loadErr == nil || !retry) {
+	if s.loaded && s.loadErr == nil {
+		return nil
+	}
+	if s.loaded && !retry && stampOf(s.path) == s.failedAt {
 		return s.loadErr
 	}
 	s.loaded, s.loadErr = true, nil
-	raw, err := os.ReadFile(s.path)
+	s.failedAt = stampOf(s.path)
+	raw, err := wsstate.ReadFile(s.path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		raw = nil

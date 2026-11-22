@@ -110,6 +110,14 @@ func TestRouteClientMapsRefusalsToTypedErrors(t *testing.T) {
 	if _, err := client.Credential(ctx, Request{Provider: "nope"}); !errors.Is(err, ErrUnknownProvider) {
 		t.Fatalf("unknown = %v", err)
 	}
+	malformed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		RefuseToken(w, http.StatusBadRequest, RefusalBadRequest, "", "the request names no provider")
+	}))
+	_, err := NewRouteClient(malformed.URL, NewSecret(fixtureSessionToken), malformed.Client()).Credential(ctx, Request{Provider: ProviderOpenRouter})
+	malformed.Close()
+	if err == nil || errors.Is(err, ErrDaemonUnavailable) || !strings.Contains(err.Error(), "names no provider") {
+		t.Fatalf("bad request = %v", err)
+	}
 	for code, want := range map[string]error{RefusalNotPermitted: ErrNotPermitted, RefusalConsentRequired: ErrConsentRequired} {
 		code := code
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,27 +137,43 @@ func TestRouteClientKeepsTheLastCredentialWhileTheDaemonIsDown(t *testing.T) {
 	s := testStore(t)
 	setKey(t, s, fixtureKey)
 	var mu sync.Mutex
-	down := false
+	mode := "up"
+	setMode := func(m string) { mu.Lock(); mode = m; mu.Unlock() }
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		isDown := down
+		m := mode
 		mu.Unlock()
-		if isDown {
+		switch m {
+		case "draining":
 			RefuseToken(w, http.StatusServiceUnavailable, RefusalUnavailable, "", "draining")
-			return
+		case "unrestored":
+			// A successor daemon that has not restored the session's
+			// bearer yet.
+			RefuseToken(w, http.StatusUnauthorized, RefusalUnauthorized, "", "unknown session token")
+		default:
+			ServeToken(w, r, s, Request{AgentSession: true})
 		}
-		ServeToken(w, r, s, Request{AgentSession: true})
 	}))
 	ctx := context.Background()
 	client := NewRouteClient(srv.URL, NewSecret(fixtureSessionToken), srv.Client())
 	if _, err := client.Credential(ctx, Request{Provider: ProviderOpenRouter}); err != nil {
 		t.Fatal(err)
 	}
-	mu.Lock()
-	down = true
-	mu.Unlock()
+	setMode("draining")
 	if cred, err := client.Credential(ctx, Request{Provider: ProviderOpenRouter}); err != nil || cred.Secret.Reveal() != fixtureKey {
 		t.Fatalf("draining daemon = %+v, %v", cred, err)
+	}
+	setMode("unrestored")
+	if cred, err := client.Credential(ctx, Request{Provider: ProviderOpenRouter}); err != nil || cred.Secret.Reveal() != fixtureKey {
+		t.Fatalf("successor without the bearer yet = %+v, %v", cred, err)
+	}
+	// With nothing kept, the same answer is unauthorized.
+	if _, err := NewRouteClient(srv.URL, NewSecret(fixtureSessionToken), srv.Client()).Credential(ctx, Request{Provider: ProviderOpenRouter}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("unrestored with nothing kept = %v", err)
+	}
+	setMode("up")
+	if cred, err := client.Credential(ctx, Request{Provider: ProviderOpenRouter}); err != nil || cred.Secret.Reveal() != fixtureKey {
+		t.Fatalf("after the swap = %+v, %v", cred, err)
 	}
 	srv.Close()
 	if cred, err := client.Credential(ctx, Request{Provider: ProviderOpenRouter}); err != nil || cred.Secret.Reveal() != fixtureKey {

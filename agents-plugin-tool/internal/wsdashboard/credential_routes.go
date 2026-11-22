@@ -217,6 +217,14 @@ func sendCredentialChange(ctx context.Context, client *http.Client, ep Endpoint,
 	if ep.Port <= 0 {
 		return wscred.ChangeResult{}, errRetryCredentialChange
 	}
+	// The key and the endpoint token go only to the daemon the endpoint
+	// file names: a stale file's port may belong to another process now.
+	if _, err := Health(ctx, client, ep); err != nil {
+		if ctx.Err() != nil {
+			return wscred.ChangeResult{}, ctx.Err()
+		}
+		return wscred.ChangeResult{}, fmt.Errorf("%w (%v)", errRetryCredentialChange, err)
+	}
 	raw, err := json.Marshal(credentialChangeBody{Op: change.Op, Provider: change.Provider, APIKey: change.APIKey.Reveal()})
 	if err != nil {
 		return wscred.ChangeResult{}, err
@@ -258,8 +266,15 @@ func sendCredentialChange(ctx context.Context, client *http.Client, ep Endpoint,
 		if json.Unmarshal(body, &refusal) == nil && refusal.Error != "" {
 			return wscred.ChangeResult{}, errors.New(refusal.Error)
 		}
+	case http.StatusServiceUnavailable:
+		// A drain ("shutting_down") passes; any other refusal (a daemon
+		// without a credential store) stays until that daemon is replaced.
+		var refusal credentialChangeRefusal
+		if json.Unmarshal(body, &refusal) == nil && refusal.Error != "" && refusal.Error != "shutting_down" {
+			return wscred.ChangeResult{}, errors.New(refusal.Error)
+		}
 	}
 	// 401 is a stale endpoint file (a successor not yet written), 503 a
-	// drain or a missing store: both pass or reach the deadline.
+	// drain: both pass or reach the deadline.
 	return wscred.ChangeResult{}, fmt.Errorf("%w (status %d)", errRetryCredentialChange, resp.StatusCode)
 }

@@ -271,6 +271,30 @@ func TestBrokenFileErrorsNeverQuoteContentAndAChangeRereads(t *testing.T) {
 	}
 }
 
+func TestBrokenFileFixedByHandIsReadAgainWithoutAChange(t *testing.T) {
+	s := testStore(t)
+	if err := os.MkdirAll(filepath.Dir(s.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.Path(), []byte(`{"providers":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openrouter(s); err == nil || errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("broken file = %v", err)
+	}
+	// Unchanged, the file stays broken: the kept failure answers.
+	if _, err := openrouter(s); err == nil || errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("unchanged broken file = %v", err)
+	}
+	fixed := `{"schema_version":1,"providers":{"openrouter":{"kind":"api_key","api_key":"` + fixtureKey + `"}}}`
+	if err := os.WriteFile(s.Path(), []byte(fixed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cred, err := openrouter(s); err != nil || cred.Secret.Reveal() != fixtureKey {
+		t.Fatalf("after the hand fix = %+v, %v", cred, err)
+	}
+}
+
 func TestKeyValidationNeverQuotesTheKey(t *testing.T) {
 	s := testStore(t)
 	for _, key := range []string{"", "   ", "sk-or-v1 fixture", "sk-or-v1-fixture\x00", "sk-or-v1-fixtüre", strings.Repeat("k", maxKeyBytes+1)} {
