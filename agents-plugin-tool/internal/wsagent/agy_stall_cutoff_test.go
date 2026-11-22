@@ -76,9 +76,30 @@ func (f *stallTimers) fire(t *testing.T, i int) {
 	c <- time.Now()
 }
 
+// fireTaken fires timer i and waits until the conversation loop has received
+// the tick. The channel is buffered, so fire alone returns before the loop
+// has selected it; a following sync barrier could then win the loop's select
+// and return with the timeout still unhandled. Only for a timer the loop is
+// selecting: a stopped one is never taken.
+func (f *stallTimers) fireTaken(t *testing.T, i int) {
+	t.Helper()
+	f.fire(t, i)
+	f.mu.Lock()
+	c := f.chans[i]
+	f.mu.Unlock()
+	awaitTaken(t, c)
+}
+
+func awaitTaken(t *testing.T, cs ...chan time.Time) {
+	t.Helper()
+	for _, c := range cs {
+		eventually(t, "the loop to take the fired timer", func() bool { return len(c) == 0 })
+	}
+}
+
 // advance moves the clock and fires the running timers it makes due; it
-// returns how many fired.
-func (f *stallTimers) advance(d time.Duration) int {
+// returns the channels it fired.
+func (f *stallTimers) advance(d time.Duration) []chan time.Time {
 	now := f.clock.advance(d)
 	f.mu.Lock()
 	var due []chan time.Time
@@ -92,7 +113,7 @@ func (f *stallTimers) advance(d time.Duration) int {
 	for _, c := range due {
 		c <- now
 	}
-	return len(due)
+	return due
 }
 
 type stallRig struct {
@@ -216,7 +237,7 @@ func (r *stallRig) fireSilence(after time.Duration) {
 	r.t.Helper()
 	r.sync()
 	r.clock.advance(after)
-	r.timers.fire(r.t, r.newestSilenceTimer())
+	r.timers.fireTaken(r.t, r.newestSilenceTimer())
 	r.sync()
 }
 
@@ -485,7 +506,7 @@ func TestAgyStallCutoffContinueStartsAFreshWindow(t *testing.T) {
 	if drain != modelNativeIdleRetryFallback {
 		t.Fatalf("in-band drain = %v, want %v", drain, modelNativeIdleRetryFallback)
 	}
-	r.timers.fire(t, len(r.timers.durs)-1)
+	r.timers.fireTaken(t, len(r.timers.durs)-1)
 	r.sync()
 	if got := r.cancels(); got != 1 {
 		t.Fatalf("in-band drain cancels = %d, want 1", got)
@@ -561,9 +582,11 @@ func TestAgyStallCutoffMailSteerRestartsTheTimer(t *testing.T) {
 func (r *stallRig) advanceSilence(d time.Duration, want int) {
 	r.t.Helper()
 	r.sync()
-	if got := r.timers.advance(d); got != want {
-		r.t.Fatalf("advancing %v fired %d timers, want %d", d, got, want)
+	fired := r.timers.advance(d)
+	if len(fired) != want {
+		r.t.Fatalf("advancing %v fired %d timers, want %d", d, len(fired), want)
 	}
+	awaitTaken(r.t, fired...)
 	r.sync()
 }
 
