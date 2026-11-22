@@ -405,3 +405,46 @@ func TestExecCloseWithoutOpenJobsStopsTheConversationsHolders(t *testing.T) {
 		t.Fatalf("holder ops = %q: want %s stopped and %s kept", ops, mine, theirs)
 	}
 }
+
+// A daemon whose hosted exec jobs did not open holds a close until its
+// first holder scan: before it the listing does not name the exec holders a
+// predecessor left, and a close that saw none would report the conversation
+// closed while its job runs on. One that sees no scan in time is refused.
+func TestExecCloseWithoutOpenJobsWaitsForTheFirstHolderScan(t *testing.T) {
+	h := newLeadHarness(t)
+	h.start()
+	st := h.lead(BackendClaude, LeadOptions{PermissionMode: "default"})
+	mine := h.holders.add(map[string]string{"kind": "exec", "exec_id": "exec_left-running", "owner": st.ID})
+	h.runner.Close()
+	h.holders.restart()
+	entered, release := h.gateScan()
+	defer release()
+	h.runner = NewRunner(h.opts)
+	h.runner.ExpectExecJobs()
+	h.runner.Start(func(string, string) {})
+	t.Cleanup(h.runner.Close)
+	h.runner.BindExecJobs(nil)
+	wait(t, "the first holder scan to start", entered)
+
+	old := execBindWait
+	execBindWait = 50 * time.Millisecond
+	t.Cleanup(func() { execBindWait = old })
+	if _, err := h.runner.CloseConversation(st.ID); err == nil || !strings.Contains(err.Error(), "has not found the exec job holders") {
+		t.Fatalf("a close before the first holder scan: %v", err)
+	}
+	if h.state(st.ID).Status == StatusClosed {
+		t.Fatal("closed before the exec holders it owns were found")
+	}
+
+	release()
+	wait(t, "the first holder scan", h.runner.rejoined)
+	if _, err := h.runner.CloseConversation(st.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.holders.mu.Lock()
+	ops := slices.Clone(h.holders.ops)
+	h.holders.mu.Unlock()
+	if !slices.Contains(ops, "stop "+mine) {
+		t.Fatalf("holder ops = %q: want %s stopped", ops, mine)
+	}
+}

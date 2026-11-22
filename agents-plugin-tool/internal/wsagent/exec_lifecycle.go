@@ -62,29 +62,48 @@ var execBindWait = 30 * time.Second
 // time: it cannot stop jobs it does not know yet.
 var errExecUnbound = errors.New("the daemon has not restored its exec jobs yet, so the session's jobs cannot be stopped; retry the close shortly")
 
+// errExecUnscanned refuses an explicit close on a daemon whose hosted exec
+// jobs did not open, before its first holder scan: the exec holders a
+// predecessor left are not listed yet, so the close could not stop them.
+var errExecUnscanned = errors.New("the daemon has not found the exec job holders it was left yet, so the session's jobs cannot be stopped; retry the close shortly")
+
 // awaitExecBound returns once the hosted exec jobs are bound, or when the
-// runner expects none; errExecUnbound after execBindWait.
+// runner expects none; errExecUnbound after execBindWait. When the jobs
+// bound without a store (BindExecJobs(nil)), it also waits for the first
+// holder scan, whose listing the close's holder stops read
+// (errExecUnscanned in time).
 func (r *Runner) awaitExecBound() error {
-	if !r.exec.deferred.Load() || r.exec.bound.Load() {
+	if !r.exec.deferred.Load() {
 		return nil
 	}
-	r.exec.boundMu.Lock()
-	if r.exec.bound.Load() {
-		r.exec.boundMu.Unlock()
-		return nil
-	}
-	if r.exec.boundC == nil {
-		r.exec.boundC = make(chan struct{})
-	}
-	wait := r.exec.boundC
-	r.exec.boundMu.Unlock()
 	timer := time.NewTimer(execBindWait)
 	defer timer.Stop()
+	if !r.exec.bound.Load() {
+		r.exec.boundMu.Lock()
+		var wait chan struct{}
+		if !r.exec.bound.Load() {
+			if r.exec.boundC == nil {
+				r.exec.boundC = make(chan struct{})
+			}
+			wait = r.exec.boundC
+		}
+		r.exec.boundMu.Unlock()
+		if wait != nil {
+			select {
+			case <-wait:
+			case <-timer.C:
+				return errExecUnbound
+			}
+		}
+	}
+	if r.execJobs() != nil || r.opts.Holders == nil {
+		return nil
+	}
 	select {
-	case <-wait:
+	case <-r.scanned:
 		return nil
 	case <-timer.C:
-		return errExecUnbound
+		return errExecUnscanned
 	}
 }
 
@@ -249,6 +268,12 @@ type execHolderSession struct {
 func (r *Runner) stopExecHolders(id string) error {
 	if r.opts.Holders == nil {
 		return nil
+	}
+	select {
+	case <-r.scanned:
+	default:
+		// The listing does not name a predecessor's holders yet.
+		return errExecUnscanned
 	}
 	var errs []error
 	for _, info := range r.opts.Holders.List().Holders {
