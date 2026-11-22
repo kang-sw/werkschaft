@@ -245,17 +245,13 @@ func TestRefusalAfterAFenceIsNeverTheFallback(t *testing.T) {
 		if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
 			t.Fatal(err)
 		}
-		// The fenced session leaves, a pass drops its rows, and it returns.
-		session := filepath.Join(dir, "sessions", "hostedlead")
-		aside := filepath.Join(dir, "hostedlead-aside")
-		if err := os.Rename(session, aside); err != nil {
+		// The fenced session is recreated, so a pass drops its rows.
+		if err := os.RemoveAll(filepath.Join(dir, "sessions", "hostedlead")); err != nil {
 			t.Fatal(err)
 		}
+		put(t, dir, fencePerm, permOriginal)
 		if res := mustStage(t, s); res.Discarded != 1 {
 			t.Fatalf("stage = %+v, want the session discarded", res)
-		}
-		if err := os.Rename(aside, session); err != nil {
-			t.Fatal(err)
 		}
 		barrierFileSystem = fat
 		_, err := s.Stage(ctx)

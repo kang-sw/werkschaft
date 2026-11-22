@@ -127,7 +127,7 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 				return err
 			}
 		}
-		captures, err := loadCaptures(ctx, tx)
+		captures, err := loadImportCaptures(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -169,6 +169,39 @@ func (s *Store) Commit(ctx context.Context, opts CommitOptions) (ImportResult, e
 		}
 	}
 	return res, nil
+}
+
+// loadImportCaptures lists the captures the commit imports: every row but
+// those of a missing session (StageResult.Missing), which stay in the
+// journal.
+func loadImportCaptures(ctx context.Context, q querier) ([]Capture, error) {
+	all, err := loadCaptures(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.QueryContext(ctx, `SELECT reply_id FROM legacy_sessions WHERE missing = 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	missing := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		missing[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for _, c := range all {
+		if c.ReplyID == "" || !missing[c.ReplyID] {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 // unreadableRemoval returns the path of an unreadable capture the cutover

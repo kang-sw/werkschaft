@@ -1097,3 +1097,105 @@ func TestRemovalInterruptedBeforeItsDeletionIsReapplied(t *testing.T) {
 		t.Fatalf("witness = %q", got)
 	}
 }
+
+// A fenced session whose directory leaves during the cutover (moved aside)
+// keeps its journal rows, staged originals included: the pass marks it
+// missing instead of dropping it. Restored with the same generation, it is
+// picked up again with its originals; a commit while it is away imports
+// everything else and keeps its rows.
+func TestMovedAsideSessionKeepsItsJournal(t *testing.T) {
+	ctx := context.Background()
+	const ackRel = "sessions/hostedlead/ack-check.json"
+	setup := func(t *testing.T, opts Options) (string, *Store, string, string) {
+		dir := legacyFixture(t)
+		s := openTest(t, dir, opts)
+		mustStage(t, s)
+		if err := s.ApplyFence(ctx, fencePerm, fencedSelector); err != nil {
+			t.Fatal(err)
+		}
+		return dir, s, filepath.Join(dir, "sessions", "hostedlead"), filepath.Join(dir, "hostedlead-aside")
+	}
+	kept := func(t *testing.T, s *Store, res StageResult) {
+		t.Helper()
+		if res.Discarded != 0 || !reflect.DeepEqual(res.Missing, []string{"hostedlead"}) {
+			t.Fatalf("stage = %+v, want hostedlead missing, not discarded", res)
+		}
+		caps := captureMap(t, s)
+		if c := caps[fencePerm]; string(c.Bytes) != permOriginal || !c.FenceRequired {
+			t.Fatalf("permission row = %+v, want the staged original and its obligation", c)
+		}
+		if c := caps[ackRel]; c.State != CapturePresent {
+			t.Fatalf("ack-check row = %+v, want its original kept", c)
+		}
+	}
+	restoredAndCommitted := func(t *testing.T, s *Store, session, aside string) {
+		t.Helper()
+		if err := os.Rename(aside, session); err != nil {
+			t.Fatal(err)
+		}
+		if res := mustStage(t, s); len(res.Missing) != 0 || len(res.Pending) != 0 || len(res.Unfenced) != 0 {
+			t.Fatalf("stage after the restore = %+v, want it picked up with its fence proven", res)
+		}
+		if _, err := s.Commit(ctx, testCommit()); err != nil {
+			t.Fatal(err)
+		}
+		snap, err := s.Load(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := snap.Permissions["hostedlead"]; p.State != "valid" || p.Level != "workdir-write" {
+			t.Fatalf("permission = %+v, want the staged original", p)
+		}
+	}
+
+	t.Run("restored before the commit", func(t *testing.T) {
+		_, s, session, aside := setup(t, testOpts())
+		if err := os.Rename(session, aside); err != nil {
+			t.Fatal(err)
+		}
+		kept(t, s, mustStage(t, s))
+		restoredAndCommitted(t, s, session, aside)
+	})
+
+	t.Run("committed while away", func(t *testing.T) {
+		_, s, session, aside := setup(t, testOpts())
+		if err := os.Rename(session, aside); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Commit(ctx, testCommit()); err != nil {
+			t.Fatal(err)
+		}
+		snap, err := s.Load(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := snap.Records["hostedlead"]; ok {
+			t.Fatal("a missing session was imported")
+		}
+		if _, ok := snap.Records["worker"]; !ok {
+			t.Fatal("the present session was not imported")
+		}
+		if c := captureMap(t, s)[fencePerm]; string(c.Bytes) != permOriginal {
+			t.Fatalf("permission row = %+v, want it kept in the journal", c)
+		}
+	})
+
+	t.Run("vanished in the middle of the pass", func(t *testing.T) {
+		var session, aside string
+		moved := false
+		opts := testOpts()
+		opts.ReadFile = func(p string) ([]byte, error) {
+			if !moved && session != "" && p == filepath.Join(session, "label.json") {
+				moved = true
+				if err := os.Rename(session, aside); err != nil {
+					return nil, err
+				}
+			}
+			return os.ReadFile(p)
+		}
+		var s *Store
+		_, s, session, aside = setup(t, opts)
+		kept(t, s, mustStage(t, s))
+		restoredAndCommitted(t, s, session, aside)
+	})
+}

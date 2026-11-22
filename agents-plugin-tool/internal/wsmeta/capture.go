@@ -196,6 +196,10 @@ type StageResult struct {
 	Restaged  int // rows whose bytes were (re)captured from the live file
 	Reused    int // rows whose staged original was kept because its fence publication is live
 	Discarded int // sessions dropped because their directory vanished or was recreated
+	// Missing lists sessions whose directory vanished while they carry a
+	// fence record: their journal rows, staged originals included, are kept
+	// and not imported until the directory returns under its generation.
+	Missing []string
 	// Unfenced lists capture paths that had a fence intent but whose live
 	// file is not that fence's result (the fence never landed, or a legacy
 	// writer replaced it since). They are live legacy authority again.
@@ -243,8 +247,10 @@ var (
 // file under the dashboard directory, including CLI-only session
 // directories, and stores its current bytes, unless the migration's own
 // fence demonstrably landed on that exact file, in which case the staged
-// original is kept. Sessions deleted or recreated since an earlier pass lose
-// their journal rows. Stage only reads legacy paths; it never creates,
+// original is kept. Sessions recreated since an earlier pass lose their
+// journal rows, and so do deleted ones unless a row carries a fence record:
+// those are kept as missing (StageResult.Missing) until the directory
+// returns. Stage only reads legacy paths; it never creates,
 // replaces or removes one. The caller holds dashboard.lock and has drained
 // the legacy writers (2125, 2135).
 func (s *Store) Stage(ctx context.Context) (StageResult, error) {
@@ -1041,6 +1047,25 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 	if err != nil {
 		return res, err
 	}
+	// A session whose directory vanished keeps its rows while any carries a
+	// fence record: the directory may return (moved aside and back) with a
+	// fenced file the journal must not take for its original. Its rows are
+	// neither re-read nor imported while it is missing.
+	missing := map[string]bool{}
+	fenced := func(id string) bool {
+		for p, m := range existing {
+			if strings.HasPrefix(p, sessionsDirName+"/"+id+"/") && (m.fenceRequired || m.fenceState != FenceNone) {
+				return true
+			}
+		}
+		return false
+	}
+	keepMissing := func(id string) error {
+		missing[id] = true
+		res.Missing = append(res.Missing, id)
+		_, err := tx.ExecContext(ctx, `UPDATE legacy_sessions SET missing = 1 WHERE reply_id = ?`, id)
+		return err
+	}
 	discard := func(id string) error {
 		res.Discarded++
 		delete(knownSessions, id)
@@ -1056,7 +1081,13 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		return err
 	}
 	for id, gen := range knownSessions {
-		if cur, ok := current[id]; !ok || !sameGeneration(cur, gen) {
+		cur, ok := current[id]
+		switch {
+		case !ok && fenced(id):
+			if err := keepMissing(id); err != nil {
+				return res, err
+			}
+		case !ok || !sameGeneration(cur, gen):
 			if err := discard(id); err != nil {
 				return res, err
 			}
@@ -1069,6 +1100,12 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 	sort.Strings(ids)
 	for _, id := range ids {
 		gen := current[id]
+		// What a session's reads change is undone, journal and counts
+		// alike, if its directory goes or is recreated while it is read.
+		before := res
+		if _, err := tx.ExecContext(ctx, `SAVEPOINT stage_session`); err != nil {
+			return res, err
+		}
 		for _, f := range sessionFiles {
 			if err := capture(path.Join(sessionsDirName, id, f.name), f.store, id, gen); err != nil {
 				return res, err
@@ -1076,20 +1113,36 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 		}
 		// The directory may have been pruned or recreated while it was
 		// read; such a session is not imported and is never recreated.
-		if again, ok, err := s.sessionGeneration(id); err != nil {
+		again, ok, err := s.sessionGeneration(id)
+		if err != nil {
 			return res, err
-		} else if !ok || !sameGeneration(again, gen) {
-			if err := discard(id); err != nil {
-				return res, err
+		}
+		if !ok || !sameGeneration(again, gen) {
+			res = before
+			for _, stmt := range []string{`ROLLBACK TO stage_session`, `RELEASE stage_session`} {
+				if _, err := tx.ExecContext(ctx, stmt); err != nil {
+					return res, err
+				}
 			}
 			for _, f := range sessionFiles {
 				delete(seen, path.Join(sessionsDirName, id, f.name))
 			}
+			if _, known := knownSessions[id]; !ok && known && fenced(id) {
+				err = keepMissing(id)
+			} else {
+				err = discard(id)
+			}
+			if err != nil {
+				return res, err
+			}
 			continue
+		}
+		if _, err := tx.ExecContext(ctx, `RELEASE stage_session`); err != nil {
+			return res, err
 		}
 		res.Sessions++
 		if _, err := tx.ExecContext(ctx, `INSERT INTO legacy_sessions(reply_id, session_gen, attempt) VALUES(?, ?, ?)
-			ON CONFLICT(reply_id) DO UPDATE SET session_gen = excluded.session_gen, attempt = excluded.attempt`, id, gen, attempt); err != nil {
+			ON CONFLICT(reply_id) DO UPDATE SET session_gen = excluded.session_gen, attempt = excluded.attempt, missing = 0`, id, gen, attempt); err != nil {
 			return res, err
 		}
 		if err := s.hit("stage-session"); err != nil {
@@ -1128,14 +1181,19 @@ func (s *Store) stagePass(ctx context.Context, tx *sql.Tx, attempt int) (StageRe
 			return res, err
 		}
 	}
-	// Files gone since an earlier pass are no longer inputs.
+	// Files gone since an earlier pass are no longer inputs; a missing
+	// session's rows stay.
 	for p := range existing {
+		if parts := strings.SplitN(p, "/", 3); len(parts) == 3 && parts[0] == sessionsDirName && missing[parts[1]] {
+			continue
+		}
 		if !seen[p] {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM legacy_captures WHERE path = ?`, p); err != nil {
 				return res, err
 			}
 		}
 	}
+	sort.Strings(res.Missing)
 	sort.Strings(res.Unfenced)
 	sort.Strings(res.Unread)
 	sort.Strings(res.Pending)

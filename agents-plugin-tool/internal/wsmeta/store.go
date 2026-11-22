@@ -284,11 +284,13 @@ var schema = []string{
 		error TEXT NOT NULL DEFAULT ''
 	)`,
 	// One row per discovered session directory and the generation it was
-	// captured under; a deleted or recreated directory drops its captures.
+	// captured under; a deleted or recreated directory drops its captures,
+	// except that a vanished one with a fence record is kept as missing.
 	`CREATE TABLE IF NOT EXISTS legacy_sessions (
 		reply_id TEXT PRIMARY KEY,
 		session_gen TEXT NOT NULL,
-		attempt INTEGER NOT NULL
+		attempt INTEGER NOT NULL,
+		missing INTEGER NOT NULL DEFAULT 0
 	)`,
 
 	// (1991) Conversation state: a reply-id keyed snapshot (the whole legacy
