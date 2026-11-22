@@ -568,7 +568,10 @@
         "clone_id": "6b8c3f740994ed3b",
         "track": "develop",
         "phase": "active",
-        "touched_at": "2026-11-22T02:26:45Z"
+        "touched_at": "2026-11-22T02:27:21Z",
+        "impl": {
+          "branch": "impl/develop/stark-fled-ninth"
+        }
       }
     },
     "261122-feat-ws-agent-turn-semaphore": {
