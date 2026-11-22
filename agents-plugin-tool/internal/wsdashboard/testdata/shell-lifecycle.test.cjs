@@ -390,7 +390,30 @@ function testPendingRepick() {
   assert.equal(pb.removed, true, 'a different path still drops the pending iframe');
   assert.notEqual(ds.pending(), pb);
 }
+async function testLoadedPendingRepick() {
+  const c = fixture(5), s = c.window.testShell, a = c.first;
+  s.open('/s/b#one', true);
+  const b = s.pending();
+  s.open('/s/b#two', true);
+  assert.equal(s.pending(), b);
+  a.draft = true; // the source acquires a draft while B loads
+  b.load();
+  await tick();
+  assert.equal(s.current(), a, 'B waits on the unsaved-edit guard');
+  assert.equal(c.decisions.length, 1);
+  c.history.go(-1); // Back to B#one while the guard is open
+  await tick();
+  await answer(c, true);
+  await tick();
+  assert.equal(s.pending() === b || s.current() === b, true, 'the loaded pending page is not abandoned');
+  if (s.current() !== b) {
+    await answer(c, true);
+    await tick();
+  }
+  assert.equal(s.current(), b, 'the loaded destination is shown, not left hidden');
+}
 const cases = {
+  'repick of an already loaded pending destination still shows it': testLoadedPendingRepick,
   'repick of the pending destination keeps its iframe': testPendingRepick,
   'header handoff waits for load and head in either order': testHeaderReadiness,
   'headerless destinations have a bounded and cancellable fallback': testHeaderFallback,

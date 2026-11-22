@@ -930,6 +930,9 @@
         } else ent.lateHash = f.hash;
       }
       ent.f = f;
+      // A pending destination whose load already fired never gets another
+      // load event to show it; go through the normal show path now.
+      if (ent === shWant && ent !== shOn && ent.loaded) shShow(ent);
       return;
     }
     if (!ent) { shStart(f, push); return; }
