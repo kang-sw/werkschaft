@@ -255,6 +255,73 @@ func TestCheckoutReleaseBackgroundWorkKeepsBindingLive(t *testing.T) {
 	}
 }
 
+// TestCheckoutReleaseRefusesMailboxMail: mail claimed from the mailbox of a
+// child bound before a release is held, never steered into a live turn nor
+// started as a new one, and each sender hears once, through the
+// checkout-release notice naming the worktree. That holds for a child marked
+// in memory while its process lives and for an asleep child after a daemon
+// restart, which learns the release only when its wake is refused.
+func TestCheckoutReleaseRefusesMailboxMail(t *testing.T) {
+	h, clk, wt, tells := releaseHarness(t)
+	mail := newFakeMail()
+	h.config.Mail = mail
+	h.runner.Close()
+	h.start()
+	lead := h.leadCaller()
+	spawn := func(prompt string) (string, *fakeProc) {
+		return h.agentRunning(lead, AgentSpawnRequest{Prompt: prompt, Tier: "medium", Authority: "workdir-write", Worktree: wt})
+	}
+	live, liveProc := spawn("still running")
+	sleeper, sleeperProc := spawn("finishes early")
+	sleeperProc.reply("done")
+	eventually(t, "sleeper settled", func() bool { return h.state(sleeper).Status == StatusIdle })
+	h.asleep(sleeper)
+	liveKey, sleeperKey := h.keyOf(live), h.keyOf(sleeper)
+	eventually(t, "mailboxes watched", func() bool { return mail.watched(liveKey) && mail.watched(sleeperKey) })
+
+	checkTold := func(n int, from string) {
+		t.Helper()
+		eventually(t, "sender told", func() bool { return len(tells.snapshot()) == n })
+		tell := tells.snapshot()[n-1]
+		if !tell.released || tell.from != from || canonicalWorktreePath(tell.checkout) != canonicalWorktreePath(wt) || !strings.Contains(tell.reason, "released") {
+			t.Fatalf("notice must reach the sender through CheckoutReleased naming the worktree: %+v", tell)
+		}
+	}
+
+	// (a) A live child marked released by the release notice.
+	releaseAfterBindings(t, clk, wt)
+	h.runner.CheckoutReleased(wt, false)
+	mail.deliverFrom(liveKey, "peerreplyid", "keep going")
+	checkTold(1, "peerreplyid")
+	if got, _ := liveProc.steered(); len(got) != 0 {
+		t.Fatalf("mail was steered into a released child's turn: %q", got)
+	}
+	liveProc.reply("turn over")
+	eventually(t, "live child settled", func() bool { return h.state(live).Status == StatusIdle })
+	noTurnSent(t, liveProc, "held mail after the released child's turn")
+	if liveProc.isClosed() {
+		t.Fatal("a release must never stop a process")
+	}
+
+	// (b) An asleep child after a restart: no in-memory notice; the refused
+	// wake supplies the checkout.
+	h.runner.Close()
+	h.start()
+	eventually(t, "mailbox watched after restart", func() bool { return mail.watched(sleeperKey) })
+	starts := h.backend.startCount()
+	mail.deliverFrom(sleeperKey, "otherreplyid", "wake up")
+	checkTold(2, "otherreplyid")
+	if n := h.backend.startCount(); n != starts {
+		t.Fatalf("mail to a released asleep child started %d processes", n-starts)
+	}
+	if st := h.state(sleeper); st.Process || !strings.Contains(st.Error, "released") {
+		t.Fatalf("the asleep child stays asleep with the refusal: %+v", st)
+	}
+	if got := tells.snapshot(); len(got) != 2 {
+		t.Fatalf("each sender is told once: %+v", got)
+	}
+}
+
 // TestCheckoutReleaseRefusesWakeByRootOrCwdAfterRestart: a daemon that
 // starts after the release has no in-memory notice; the wake of a child
 // bound by root (agent.spawn worktree) or by working directory (cwd inside
