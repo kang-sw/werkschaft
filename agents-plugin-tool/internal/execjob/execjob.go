@@ -281,7 +281,11 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 		rec.Argv = argv
 	}
 	// The process starts where admission checked (admittedPlaces); the
-	// record keeps the working directory as given.
+	// record keeps the working directory as given. realWd is in the
+	// ordinary spelling, never the extended-length form: CreateProcess
+	// refuses \\?\ as a current directory. A Windows working directory past
+	// MAX_PATH fails at process start, as it did before admission resolved
+	// it.
 	cmd.Dir = realWd
 	cmd.Env = env
 	rec.Env = opts.Env

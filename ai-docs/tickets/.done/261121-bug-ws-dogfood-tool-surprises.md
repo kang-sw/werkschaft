@@ -170,6 +170,14 @@ This pass hardens the exec-job follow-up after review of 1793cab62.
   - Two mutations made the tests fail: falling back to the raw spelling, and storing empty values for equal paths (which then fails both the stored-row check and `LiveIn`).
 - Not verified: Windows runtime (the junction test and the file-operation counts and latency `performance.md` asks for), the live daemon, and the end-to-end acquire across a daemon replacement. Regression (b) checks the fence that acquire uses rather than calling acquire itself.
 
+#### Edition (f20950322) - 2026-11-22
+
+- Long paths on Windows: `resolvePath` now opens its input in the extended-length form (`win32Path`: `\\?\` before an absolute drive path, `\\?\UNC\` for a UNC path, after making it absolute and cleaning it). A worktree or working directory deeper than MAX_PATH is therefore no longer refused at admission on a host whose Win32 calls stay MAX_PATH-limited. The result is still stripped to the ordinary spelling. `internal/mcp`'s `extendedLengthPath` does the same job, but execjob cannot import mcp (mcp imports execjob), so the helper is local.
+- Spawn: the process cwd stays in the ordinary spelling, because CreateProcess refuses `\\?\` as a current directory. A Windows cwd past MAX_PATH fails at process start, as it did with the old EvalSymlinks resolver, which led to the same CreateProcess.
+- Windows-only tests, compiled with `GOOS=windows go vet` only:
+  - `TestResolvePathTakesAPathLongerThanMaxPath` checks that a path longer than MAX_PATH resolves and that admission accepts it.
+  - `TestResolvePathFollowsAShortJunctionToALongTarget` builds a junction with `FSCTL_SET_REPARSE_POINT`, since `mklink` may not take a target that long. It checks that the junction resolves to the stripped long target and that `rootForms` agrees.
+
 ### Phase 3: Allocate reports through an explicit path kind
 
 Expose the `report` kind consistently in schema and allocator with the same allocation authority as `review`, while preserving the four existing kinds and all write-profile boundaries. Acceptance: `path.generate(kind: "report")` returns a valid artifact path under the report subdirectory; callers with an existing write route can write it, and callers without that authority gain none. Existing `review`, `prompt`, `plan`, and `clone` behavior remains intact; callers discover the enum before sending the new kind to an old server. Cover native and already-authorized `path.write` routes and Pi mini-lead authority.

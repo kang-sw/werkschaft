@@ -150,6 +150,10 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	j.spawned = spawned
 	j.row.StartedAt = h.opts.Now().UnixMilli()
 	h.mu.Unlock()
+	// realCwd is in the ordinary spelling, never the extended-length form:
+	// CreateProcess refuses \\?\ as a current directory. A Windows cwd past
+	// MAX_PATH fails at process start, as it did before admission resolved
+	// it (the path reached the same CreateProcess).
 	st, err := h.opts.Holders.Spawn(holder, wsholder.SpawnSpec{Argv: argv, Cwd: realCwd, Env: environMap(req.Environ), Mode: "pipe", Input: req.Stdin, InputEOF: req.Legacy || req.StdinSet})
 	close(spawned)
 	if err != nil {
