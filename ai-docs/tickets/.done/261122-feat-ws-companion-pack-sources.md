@@ -11,6 +11,7 @@ sage-review-design: completed
 sage-review-completeness: completed
 sage-review-design-reviewed: 125b2a064343bd72
 sage-review-completeness-reviewed: 125b2a064343bd72
+completed: 2026-11-22
 ---
 
 # Companion Pack User Sources (Marketplace Install): Git/Zip Sources, Safe Extraction, Authoring Guide
@@ -489,6 +490,67 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
   - File-operation counts per install, per uninstall, and per warm
     request are reported (the warm count stays zero).
 
+### Result (ba9c4981c) - 2026-11-22
+
+Landed in 0bd0a5c01 (zip pipeline, installer, sidecar, catalog `origin`),
+2577758a5 (validate, import and uninstall routes) and b6aa9ddb3 (a dry run
+lists external `url` entries without downloading them).
+
+- `companion_pack_zip.go` opens the zip in memory and applies the
+  archive-level name rules, the entry, byte and ratio caps, and the
+  pack-level rules. `prepare` validates each pack through
+  `loadCompanionPack`. The pack's referenced asset set is the allow-list,
+  and the name pre-filter calls the store's own `validCompanionRaster`, so
+  no file list is copied. If the paper-doll sibling adds a file kind that is
+  not a `.png`/`.webp` raster, it needs one line in `pack()` and in
+  `companionCheckRaster` at integration.
+- `companion_pack_install.go` stages each run under
+  `<config-home>/.companion-staging/run-*`, which is outside `companions/`.
+  It writes the pack and the `.ws-install.json` sidecar, then swaps the
+  directory with renames and reloads. `installMu` is taken before `scanMu`,
+  and `swapAndLoad` holds `scanMu` once for both renames and the load. The
+  next install deletes any leftover staging runs. The scan reads the sidecar
+  into the optional catalog `origin` member, and a malformed sidecar is
+  ignored.
+- Routes: `POST /api/companion/packs/validate`, `/import?name=&id=` (body at
+  most 64 MiB, never written to disk), and `/{id}/uninstall` (sidecar
+  directories only). All three are `TrustedWrite`.
+- Tests:
+  - `TestCompanionPackInstallRejectsHostileArchives` covers every hostile
+    case listed above. Each case is pinned to its own rejection message, in
+    both the dry run and the install. The cases are traversal, absolute,
+    backslash, drive letter, non-clean, duplicate, case collision, symlink,
+    nested directory, unknown file, unreferenced raster, SVG,
+    extension/format mismatch, oversized dimensions, entry-count, file,
+    pack and total caps, ratio bomb, encrypted, schema, ID mismatch,
+    reserved ID, duplicate ID, and device names.
+  - `TestCompanionPackInstallOperationAndCacheBudgets` covers the remaining
+    total cache budget.
+  - `Acceptance` covers the self-contained bundle, the single top-level
+    directory with directory entries, ignored repository files, update over
+    a sidecar directory, refusal over a hand-made directory, the local-pack
+    cap, and serialized concurrent installs of one ID.
+  - `CrashSafety`, `Uninstall`, `SidecarOrigin`, `RasterHeaders`,
+    `ExternalEntry`, and the route tests (`TestCompanionPackRoutesRefuseUntrusted`,
+    `ValidateRoute`, `ImportRoute`, `ImportRouteRejects`, `UninstallRoute`).
+- File operations, measured by `TestCompanionPackInstallFileOperations`:
+  - Install of one pack with one raster: create 3, write 3, mkdir 4,
+    lstat 2, readdir 1, rename 1, remove 1, plus 5 scan opens.
+  - Uninstall: lstat 3, mkdir 1, readdir 1, rename 1, remove 1, plus 1 scan
+    open.
+  - Warm request: 0.
+- Verification: the `CompanionPack` suite with `-race` and
+  `GOOS=windows go vet ./internal/wsdashboard` pass.
+- Deviation: a dry run (validate, or a source listing) never downloads a
+  `url` entry. It lists the entry as new or installed, or as update when the
+  entry's `sha256` differs from the sidecar's `archiveSha256`. Only the
+  install click downloads it. The guide documents this.
+- Review fix (ba9c4981c):
+  - The WebP VP8X canvas size now reads its three-byte fields with correct
+    precedence. A 512-pixel-wide canvas used to read as 256, though the
+    1..4096 verdict was unaffected.
+  - The reserved device-name errors no longer name an operating system.
+
 ### Phase 2: Git and HTTPS sources, official source, modal Sources UI
 
 - **Prerequisite:** director Phase 1 must have a Result: the gear modal
@@ -526,6 +588,120 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
   - Proof that no fetch happens at startup or while the companion is
     disabled.
 
+### Result (1537de040) - 2026-11-22
+
+Landed in:
+
+- 8012e1a56: the `dashboard.companion_sources` key.
+- a6a4a94aa: `internal/wsnetguard`.
+- 526540323: the fetcher.
+- e701246bc: the modal Sources section.
+- fe34eb478: the source routes and the official source.
+- f9fbc5903: the file-operation counts.
+- afc6a4455 and 47e1796f3: the Chromium capture.
+- 1537de040: the review fix, source verdicts from the daemon.
+
+Details:
+
+- **Dial guard.** `wsnetguard.Control(refuse)` is a `net.Dialer.Control` hook whose
+  refused-range policy is a parameter. `RefuseLocal` (loopback, link-local,
+  unspecified, multicast, IPv4-mapped forms included) is the companion
+  policy. `RefuseLocalAndPrivate` is ready for the web-tools fetch.
+- **Fetcher (`companion_pack_fetch.go`).**
+  - `parseCompanionSource` detects the kind. A path ending in `.zip` is a
+    zip source; a query is allowed and a fragment refused. Anything else is
+    git, where the fragment names the ref and a query is refused.
+  - A git source reads `info/refs?service=git-upload-pack` (protocol v0
+    pkt-lines, at most 1 MiB). It resolves HEAD, a branch, a tag (peeled
+    first) or a 40-hex ref, then tries two archive URL patterns for the
+    pinned commit.
+  - Caps: 64 MiB per source zip and 16 MiB per external pack. The
+    external pack's `sha256` is checked before the zip opens.
+  - Downloads are HTTPS GET only, with a 60 s total timeout per call, no
+    cookie jar, a generic User-Agent, and the Referer dropped.
+  - Redirects are followed at most 5 times, only to `https:` URLs without
+    credentials.
+  - `companionRoundTripper` sends each hop, redirect hops included, through
+    one of two transports: the environment proxy when one applies, or the
+    guarded direct transport. The transport is written out rather than
+    cloned from `http.DefaultTransport`, so a hook set there cannot bypass
+    the guard.
+- **Config key.** `dashboard.companion_sources` is in all three manifests,
+  is global-only, has a `companion-modal` catalog row, and has labels in
+  all 11 locale tables. `parseCompanionSources` judges each entry with the
+  fetcher's own rules. An invalid or duplicate entry carries an error and
+  is skipped. At most 16 valid entries are used.
+  - The companion config JSON carries these verdicts as `sourceEntries`.
+    `CompanionConfig.MarshalJSON` computes them at encode time, so the
+    struct stays comparable.
+  - The modal shows the daemon's verdicts rather than its own prefix
+    check. An entry the routes refuse (a git URL with a query, a zip URL
+    with a fragment, an overlong ref, an unparsable URL) never looks usable
+    and takes no slot.
+  - A source listed only as an invalid entry answers 400 with the rule it
+    breaks (review fix 1537de040).
+- **Official source.** `assets/companion/official/marketplace.json` is
+  embedded and currently lists no url packs. The source routes prepend the
+  built-in `default` card in code (status `builtin`, no uninstall), because
+  the marketplace parser reserves the `default` ID. Only this source
+  produces `official: true`. A user manifest naming itself official stays
+  non-official, as the test checks.
+- **Routes.**
+  - `POST /api/companion/sources/fetch` lists a source as a dry run and
+    keeps its zip in a one-entry cache (10 min TTL, released by a timer).
+    `/install` installs chosen IDs from the cached zip, or downloads again
+    on a miss.
+  - Checking for updates is a fetch: a listing marks a pack `update` per
+    Decision 5. Updating is an install over the sidecar directory, so no
+    separate update route exists.
+- **Sources UI.** `dashboard-companion-sources.js` renders:
+  - the official and user sources, with add and remove through
+    `POST /api/config/set {scope:"global"}`;
+  - pack cards with name, author, license, version, origin and a badge;
+  - install, update and uninstall buttons;
+  - a local zip import with a validate preview;
+  - the third-party warning in i18n text;
+  - the authoring links.
+
+  All pack text is set through `textContent`, and only `https:` links are
+  rendered as links.
+- **No fetch at startup or while the companion is disabled.**
+  - The only fetch call sites are the source route plan and the import
+    route's external hook. Both run inside a request handler.
+  - `TestCompanionPackSourceRoutesGate` asserts the TLS source server saw
+    zero requests. It covers fetch and install answering 409 while the
+    companion is disabled, an import of an external entry refused while
+    disabled, unlisted sources answering 400, and the catalog and reload.
+- **File operations (`f9fbc5903`).**
+  - Cold source listing: readdir 1 plus 1 scan open.
+  - Source install from the cached zip: the same as a local import.
+  - Warm request: 0.
+- **Tests.**
+  - Fetcher: `TestCompanionPackFetch*` covers source parsing, ref parsing,
+    git archive fallback, zip source, pack sha256 mismatch, the http
+    redirect and more-than-5 redirect refusals, the caps, the timeout, a
+    loopback dial refused, the proxy path, and the non-zip hint.
+  - `TestGuard*` covers the guard.
+  - Routes: `TestCompanionPackSourceRoutes{Gate,Zip,Official}`.
+  - Config drift: the mcp config, catalog and settings tests, plus
+    `wsi18n` and `wspackage`.
+  - `TestCompanionConfigSourceEntriesJSON` covers the verdicts in the
+    config JSON.
+  - Node: `frontend-companion-sources.test.js` plus the companion and
+    settings tests, 47 in total, including the verdict path and its
+    local fallback.
+  - The headless Chromium capture is `TestCompanionSourcesBrowser`. It
+    shows the official listing, a local import preview of a generated zip
+    whose names contain `<b>`/`<i>` rendered as text, import, uninstall,
+    and the three authoring links answering 200. It aborts every request
+    to any origin other than the daemon.
+- **Deviations from the plan.**
+  - Fetch and install act only on the official source or a valid entry of
+    the configured list. Any other source answers 400.
+  - The source routes answer 409 while the companion is disabled.
+  - The import route's external hook refuses while the companion is
+    disabled.
+
 ### Phase 3: Authoring guide, JSON Schemas, guide routes
 
 - **Goals:**
@@ -551,3 +727,44 @@ Required manuals (per `AGENTS.md` `### Implementation Conventions`):
       or repository-layout names (`shipped-surface-boundary.md`).
   - Route tests for the guide and the schemas, covering content type,
     `nosniff`, and auth.
+
+### Result (ba9c4981c) - 2026-11-22
+
+Landed in 2fc690180 (guide, schemas, routes and manual) and bf7047871 (the
+guide's download limits pinned to the fetcher constants).
+
+- **Shipped files.** These are embedded under `assets/companion/authoring/`:
+  - `guide.md` covers the pack layout, a minimal pack, the marketplace
+    manifest (self-contained and with external `url` + `sha256`), git and
+    zip hosting, the data-only rule, a limits table, and how to validate
+    (the import preview, the validate route, and the schemas). It also says
+    a listing never downloads `url` packs.
+  - `pack.schema.json` and `marketplace.schema.json`.
+- **Routes.** `GET`/`HEAD /api/companion/authoring/{guide.md,
+  pack.schema.json,marketplace.schema.json}` are read routes behind the
+  dashboard's normal access handling. They send `text/markdown` or
+  `application/schema+json`, `nosniff`, and `no-store`. The modal's Sources
+  section links all three.
+- **`companion-pet-rigging.md`.** The BYO section now describes source
+  install and local import. It also gained a `pack.json` field reference,
+  which the manual consistency test requires.
+- **Drift tests (`companion_pack_guide_test.go`).**
+  - `TestCompanionAuthoringExamplesPassPipeline`: the guide's
+    `json example:<name>` blocks pass the real zip pipeline.
+  - `ExamplesMatchSchemas`.
+  - `PackSchemaMatchesValidator` and `MarketplaceSchemaMatchesParser`:
+    required fields and refusals checked against the validator and parser.
+  - `SchemaConstantsMatchValidators`.
+  - `GuideCaps`: the limits table is checked against the Go constants,
+    including `companionSourceCap`, `companionPackZipCap`,
+    `companionFetchTimeout` and `companionRedirectMax`.
+  - `KitStandsAlone`: no ticket stem, `ai-docs/`, repository path, Go
+    identifier, commit hash, or vendor/character name. Every URL is
+    `example.invalid` or the schema vocabulary.
+  - `SchemaMatchesManual`.
+  - `TestCompanionAuthoringRoutes`: content type, `nosniff`, method, and
+    auth.
+- **No real names.** The guide and schemas name no third-party character,
+  model, product, or company. Review fix ba9c4981c removed an operating
+  system name from the reserved device-name rule. The rule now lists the
+  names and gives the reason.
