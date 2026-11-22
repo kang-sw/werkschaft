@@ -37,6 +37,9 @@ type Hosted struct {
 	started   bool
 	closed    bool
 	retry     *time.Timer
+	// quit closes with Close: it ends the retried holder stops
+	// (retryRetire).
+	quit chan struct{}
 	// ownerFences are the conversations whose new jobs are refused (a close
 	// in progress); rootFences the worktrees being released or removed, each
 	// with its holder count. Both under mu.
@@ -142,7 +145,7 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 	if opts.TotalBytes <= 0 {
 		opts.TotalBytes = hostedTotalBytes
 	}
-	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*tombstone{}}
+	h := &Hosted{opts: opts, rings: NewOutputRings(opts.JobBytes, opts.TotalBytes), jobs: map[string]*hostedJob{}, byHolder: map[string]*hostedJob{}, deleting: map[string]*tombstone{}, quit: make(chan struct{})}
 	rows, err := opts.Store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load hosted exec jobs: %w", err)
@@ -466,18 +469,59 @@ func (h *Hosted) stopHolder(id string) {
 // retireHolder stops holder, launched for job j after j ended, and once
 // it is confirmed gone removes the exit copy it left at j's id's path and
 // lets j be pruned. A holder that did not go keeps j pinned, so its id is
-// never reused under a copy the holder may still write; the next start
-// stops it as a holder no job owns.
+// never reused under a copy the holder may still write, and its stop is
+// retried in the background (retryRetire); the error says the first
+// attempt failed.
 func (h *Hosted) retireHolder(j *hostedJob, holder string) error {
-	if err := h.opts.Holders.Stop(holder); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
-		h.logf("stop holder %s of ended job %s: %v; the job's id stays reserved", holder, j.row.ID, err)
+	retired := func() {
+		h.removeExitCopy(j.row.ID)
+		h.mu.Lock()
+		j.holderPinned = false
+		h.mu.Unlock()
+	}
+	if err := h.stopGone(holder); err != nil {
+		h.logf("stop holder %s of ended job %s: %v; the job's id stays reserved while the stop is retried", holder, j.row.ID, err)
+		go h.retryRetire(holder, retired)
 		return fmt.Errorf("stop exec job %s's holder: %w", j.row.ID, err)
 	}
-	h.removeExitCopy(j.row.ID)
-	h.mu.Lock()
-	j.holderPinned = false
-	h.mu.Unlock()
+	retired()
 	return nil
+}
+
+// stopGone stops holder; one already gone counts as stopped.
+func (h *Hosted) stopGone(holder string) error {
+	if err := h.opts.Holders.Stop(holder); err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
+		return err
+	}
+	return nil
+}
+
+// retireRetryMin and retireRetryMax bound the delay between retried holder
+// stops (a test seam).
+var retireRetryMin, retireRetryMax = time.Second, time.Minute
+
+// retryRetire retries stopping holder, doubling the delay from
+// retireRetryMin up to retireRetryMax, until it is confirmed gone, and
+// then runs retired. Close ends the retries: the next daemon's start stops
+// the holder.
+func (h *Hosted) retryRetire(holder string, retired func()) {
+	delay := retireRetryMin
+	for {
+		t := time.NewTimer(delay)
+		select {
+		case <-h.quit:
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		err := h.stopGone(holder)
+		if err == nil {
+			retired()
+			return
+		}
+		h.logf("stop holder %s: %v; retrying", holder, err)
+		delay = min(delay*2, retireRetryMax)
+	}
 }
 
 // endLocked marks j ended now and opens its waiters; a job that owes a
@@ -701,6 +745,9 @@ var ErrExecNotFound = errors.New("exec job not found")
 // under their holders for the next daemon.
 func (h *Hosted) Close() error {
 	h.mu.Lock()
+	if !h.closed {
+		close(h.quit)
+	}
 	h.closed = true
 	if h.retry != nil {
 		h.retry.Stop()

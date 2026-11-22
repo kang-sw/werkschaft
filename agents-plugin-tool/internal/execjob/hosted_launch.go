@@ -222,16 +222,18 @@ func (h *Hosted) admit(j *hostedJob) error {
 		h.mu.Unlock()
 		return errIDTaken
 	}
-	running := 0
+	running, held := 0, 0
 	var finished []*hostedJob
 	for _, have := range h.jobs {
 		switch {
 		case !have.row.Terminal():
 			running++
+		case have.holderPinned:
+			// A holder of it may still write its exit copy: it stays, and
+			// counts toward the cap, until that holder is gone.
+			held++
 		case have.row.Notice == NoticePending || have.delivering:
 			// Its notice is still owed; it stays until delivered.
-		case have.holderPinned:
-			// A holder of it may still write its exit copy.
 		default:
 			finished = append(finished, have)
 		}
@@ -243,6 +245,10 @@ func (h *Hosted) admit(j *hostedJob) error {
 	if pending := len(h.deleting); running+pending >= HostedMaxJobs {
 		h.mu.Unlock()
 		return fmt.Errorf("exec: %d jobs run and %d finished jobs' records could not be deleted from the job store; retry later, or stop a job", running, pending)
+	}
+	if running+held >= HostedMaxJobs {
+		h.mu.Unlock()
+		return fmt.Errorf("exec: %d jobs run and %d ended jobs wait for their holders to stop; retry later, or stop a job", running, held)
 	}
 	h.jobs[j.row.ID] = j
 	var dropped []*hostedJob

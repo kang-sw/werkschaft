@@ -380,13 +380,11 @@ func TestHostedJobStoppedDuringItsHolderLaunchStaysUntilTheHolderGoes(t *testing
 					return !fx.h.jobs[v.ID].holderPinned
 				})
 			}
-			fx.holders.mu.Lock()
-			fx.holders.stopErr = nil
-			fx.holders.mu.Unlock()
+			// Finished jobs fill the cap; a holder that does not go keeps
+			// failing its retried stops meanwhile.
+			fx.quickJobs()
 			for i := 0; i < HostedMaxJobs; i++ {
-				if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
-					t.Fatal(err)
-				}
+				fx.launchFinished()
 			}
 			fx.store.mu.Lock()
 			dropped := slices.Contains(fx.store.deleted, v.ID)
@@ -395,6 +393,75 @@ func TestHostedJobStoppedDuringItsHolderLaunchStaysUntilTheHolderGoes(t *testing
 				t.Fatalf("dropped %v with the holder gone %v", dropped, holderGoes)
 			}
 		})
+	}
+}
+
+// A late holder whose stop failed is retried with backoff until it goes,
+// which lifts its job's pin with no further stop asked for.
+func TestHostedRetiredHolderStopIsRetriedUntilItGoes(t *testing.T) {
+	prevMin, prevMax := retireRetryMin, retireRetryMax
+	retireRetryMin, retireRetryMax = time.Millisecond, 4*time.Millisecond
+	t.Cleanup(func() { retireRetryMin, retireRetryMax = prevMin, prevMax })
+	fx := newHostedFixture(t, time.Second)
+	t.Cleanup(func() { fx.h.Close() })
+	entered, release := make(chan struct{}), make(chan struct{})
+	fx.holders.mu.Lock()
+	fx.holders.beforeLaunch = func() {
+		close(entered)
+		<-release
+	}
+	fx.holders.mu.Unlock()
+	launched := make(chan HostedView, 1)
+	go func() {
+		v, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+		launched <- v
+	}()
+	<-entered
+	if err := fx.h.StopOwner("lead"); err != nil {
+		t.Fatal(err)
+	}
+	fx.holders.mu.Lock()
+	fx.holders.beforeLaunch = nil
+	fx.holders.stopErr = errors.New("holder busy")
+	fx.holders.mu.Unlock()
+	close(release)
+	v := <-launched
+	eventuallyExec(t, "a retried stop", func() bool {
+		fx.holders.mu.Lock()
+		defer fx.holders.mu.Unlock()
+		return fx.holders.stopCalls >= 3
+	})
+	fx.holders.mu.Lock()
+	fx.holders.stopErr = nil
+	fx.holders.mu.Unlock()
+	eventuallyExec(t, "the pin to lift", func() bool {
+		fx.h.mu.Lock()
+		defer fx.h.mu.Unlock()
+		return !fx.h.jobs[v.ID].holderPinned
+	})
+}
+
+// Ended jobs waiting for their holders to stop count toward the job cap,
+// so pins cannot grow the jobs past it.
+func TestHostedPinnedJobsCountTowardTheCap(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	fx.h.mu.Lock()
+	for i := 0; i < HostedMaxJobs; i++ {
+		id := fmt.Sprintf("exec_pinned-%d", i)
+		j := &hostedJob{done: make(chan struct{}), out: fx.h.rings.NewJob(), holderPinned: true}
+		j.row = HostedJobRow{ID: id, Owner: "lead", State: HostedStopped, EndedAt: int64(i + 1)}
+		close(j.done)
+		fx.h.jobs[id] = j
+	}
+	fx.h.mu.Unlock()
+	if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err == nil || !strings.Contains(err.Error(), "wait for their holders to stop") {
+		t.Fatalf("a launch over %d pinned jobs: %v", HostedMaxJobs, err)
+	}
+	fx.h.mu.Lock()
+	n := len(fx.h.jobs)
+	fx.h.mu.Unlock()
+	if n != HostedMaxJobs {
+		t.Fatalf("jobs = %d, want %d", n, HostedMaxJobs)
 	}
 }
 
@@ -430,10 +497,9 @@ func TestHostedJobStoppedInsideItsHolderLaunchIsNotPrunedMeanwhile(t *testing.T)
 		id = have
 	}
 	fx.h.mu.Unlock()
+	fx.quickJobs()
 	for i := 0; i < HostedMaxJobs; i++ {
-		if _, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true}); err != nil {
-			t.Fatal(err)
-		}
+		fx.launchFinished()
 	}
 	fx.h.mu.Lock()
 	_, kept := fx.h.jobs[id]
