@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 // TestCleanMailLabel pins label safety on the generated lines: newlines
@@ -138,6 +140,37 @@ func TestMailboxRecvShowsTheSenderLegend(t *testing.T) {
 		if stored[i].Label != "" && stored[i].Label != "agent:child" {
 			t.Fatalf("a label reached the store: %+v", stored[i])
 		}
+	}
+}
+
+// TestMailSenderLabelLookupAddsNoLayoutIO pins that resolving a named
+// sender's reply-id for the delivery legend reuses the memoized store path:
+// after the first lookup, a later one does not run wsstate's layout Ensure,
+// observed as a removed layout directory staying absent.
+func TestMailSenderLabelLookupAddsNoLayoutIO(t *testing.T) {
+	f := newFanOutFixture(t)
+	addr, err := wsmailbox.ParseAddress("alice@worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := wsmailbox.ReplyID(f.aliceKey)
+	if got := f.alice.addressReplyID(addr, f.root); got != want {
+		t.Fatalf("first named sender reply-id = %q, want %q", got, want)
+	}
+	layout, _, _, err := wsstate.NewManager(f.alice.stateOptions()).Resolve(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(layout.TmpDir); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if got := f.alice.addressReplyID(addr, f.root); got != want {
+			t.Fatalf("repeat named sender reply-id = %q, want %q", got, want)
+		}
+	}
+	if _, err := os.Stat(layout.TmpDir); !os.IsNotExist(err) {
+		t.Fatalf("a repeat label lookup re-ran layout Ensure (tmp dir stat err = %v)", err)
 	}
 }
 

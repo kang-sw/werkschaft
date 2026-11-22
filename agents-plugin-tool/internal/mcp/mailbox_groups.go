@@ -9,8 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
+	"github.com/kang-sw/devenv/internal/wsconfig"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
+	"github.com/kang-sw/devenv/internal/wsstate"
 )
 
 // mailbox_groups.go keeps the public audience of each fan-out send in memory
@@ -198,13 +201,70 @@ func cleanMailLabel(label string) string {
 	return label
 }
 
-// addressLabel is the display label of the session behind a mailbox address
-// (addressReplyID); a server with no label view skips the lookup.
-func (s *Server) addressLabel(addr wsmailbox.Address, root string) string {
+// routeLabel is the display label of the session behind a fan-out
+// recipient whose route the send already resolved: it reuses route.path
+// instead of resolving the scope again; a server with no label view skips
+// the lookup.
+func (s *Server) routeLabel(addr wsmailbox.Address, route mailGroupRoute) string {
 	if s.mailLabels == nil {
 		return ""
 	}
-	return s.mailLabel(s.addressReplyID(addr, root))
+	if addr.Kind == wsmailbox.AddressReplyID {
+		return s.mailLabel(addr.ReplyID)
+	}
+	if route.path == "" {
+		return ""
+	}
+	return s.mailLabel(s.namedOwnerReplyID(route.path, addr.Name))
+}
+
+// mailboxScopePaths memoizes the named-store path of a (homes, GIT_* env,
+// scope, root) for the label and group-route lookups. Resolving it through
+// wsmailbox.Paths.ForScope runs wsstate.Manager.Ensure (directory creation
+// and metadata checks) on every call; delivery's sender legend and fan-out
+// labels must add no per-message file work (performance manual, rules 1 and
+// 5). A root's store path changes only when its Git identity does, which a
+// daemon restart picks up; these lookups are display and read-only
+// membership, never the send's own enqueue resolution.
+var mailboxScopePaths sync.Map
+
+// mailboxScopePathsMax bounds the memo; past it the memo is dropped whole
+// and refills from the next lookups.
+const mailboxScopePathsMax = 1024
+
+var mailboxScopePathsCount atomic.Int64
+
+// mailboxScopePath is s.mailboxPaths().ForScope(scope, root), memoized in
+// mailboxScopePaths after its first success.
+func (s *Server) mailboxScopePath(scope wsmailbox.Scope, root string) (string, error) {
+	var key strings.Builder
+	key.WriteString(s.getenv(wsconfig.EnvConfigHome))
+	key.WriteByte(0)
+	key.WriteString(s.getenv(wsstate.EnvCacheHome))
+	key.WriteByte(0)
+	key.WriteString(string(scope))
+	key.WriteByte(0)
+	key.WriteString(root)
+	for _, kv := range s.environ() {
+		if strings.HasPrefix(strings.ToUpper(kv), "GIT_") {
+			key.WriteByte(0)
+			key.WriteString(kv)
+		}
+	}
+	k := key.String()
+	if cached, ok := mailboxScopePaths.Load(k); ok {
+		return cached.(string), nil
+	}
+	path, err := s.mailboxPaths().ForScope(scope, root)
+	if err != nil {
+		return "", err
+	}
+	if mailboxScopePathsCount.Add(1) > mailboxScopePathsMax {
+		mailboxScopePaths.Clear()
+		mailboxScopePathsCount.Store(1)
+	}
+	mailboxScopePaths.Store(k, path)
+	return path, nil
 }
 
 // addressReplyID is the reply-id behind a mailbox address, "" for none: an
@@ -215,11 +275,18 @@ func (s *Server) addressReplyID(addr wsmailbox.Address, root string) string {
 	if addr.Kind == wsmailbox.AddressReplyID {
 		return addr.ReplyID
 	}
-	path, err := s.mailboxPaths().ForScope(addr.Scope, root)
+	path, err := s.mailboxScopePath(addr.Scope, root)
 	if err != nil {
 		return ""
 	}
-	presence, ok, _, err := s.mailboxPaths().Store().NamedQueue(path, addr.Name)
+	return s.namedOwnerReplyID(path, addr.Name)
+}
+
+// namedOwnerReplyID is the reply-id of the session that owns the named
+// queue name in the store at path now, "" for none. It reads the store's
+// memory only.
+func (s *Server) namedOwnerReplyID(path, name string) string {
+	presence, ok, _, err := s.mailboxPaths().Store().NamedQueue(path, name)
 	if err != nil || !ok || presence.Owner == "" {
 		return ""
 	}
@@ -243,7 +310,7 @@ func (s *Server) mailGroupRouteFor(addr wsmailbox.Address, root, ring string) ma
 		return mailGroupRoute{ring: ring, queue: addr.ReplyID}
 	}
 	route := mailGroupRoute{named: true, ring: ring, queue: addr.Name}
-	if path, err := s.mailboxPaths().ForScope(addr.Scope, root); err == nil {
+	if path, err := s.mailboxScopePath(addr.Scope, root); err == nil {
 		route.path = filepath.Clean(path)
 	}
 	return route
@@ -264,9 +331,9 @@ func (s *Server) recordMailGroup(sessionKey string, entry sessionEntry, sender m
 		route := s.mailGroupRouteFor(r.addr, entry.root, ring)
 		switch r.role {
 		case mailboxRoleTo:
-			g.to = append(g.to, mailGroupMember{address: r.address, label: s.addressLabel(r.addr, entry.root), route: route})
+			g.to = append(g.to, mailGroupMember{address: r.address, label: s.routeLabel(r.addr, route), route: route})
 		case mailboxRoleCc:
-			g.cc = append(g.cc, mailGroupMember{address: r.address, label: s.addressLabel(r.addr, entry.root), route: route})
+			g.cc = append(g.cc, mailGroupMember{address: r.address, label: s.routeLabel(r.addr, route), route: route})
 		default:
 			g.bcc = append(g.bcc, route)
 		}
@@ -286,7 +353,7 @@ func (s *Server) inMailGroup(g mailGroup, sessionKey string, entry sessionEntry)
 	reply := mailGroupRoute{ring: ring, queue: s.mailboxReplyID(sessionKey)}
 	var named mailGroupRoute
 	if isOwner, identity, err := s.mailboxOwnerCheck(sessionKey, entry.root); err == nil && isOwner {
-		if path, perr := s.mailboxPaths().ForScope(identity.Scope, entry.root); perr == nil {
+		if path, perr := s.mailboxScopePath(identity.Scope, entry.root); perr == nil {
 			named = mailGroupRoute{named: true, ring: ring, path: filepath.Clean(path), queue: identity.Name}
 		}
 	}
