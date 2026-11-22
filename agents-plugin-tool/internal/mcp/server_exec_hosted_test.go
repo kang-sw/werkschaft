@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -236,6 +237,17 @@ func TestHostedExecRunAndShellForms(t *testing.T) {
 	}
 	if text, isErr := fx.call("exec.run", map[string]any{"exe": "no-such-program-ws-exec-test"}); !isErr || !strings.Contains(text, "not on the job's PATH") {
 		t.Fatalf("missing program = %v %s", isErr, text)
+	}
+	// Hosted output lives in memory: no file anywhere under the cache home
+	// or the worktree is named for the job, and no file-backed job directory
+	// was made.
+	for _, dir := range []string{fx.s.getenv("WS_CACHE_HOME"), fx.root} {
+		_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && (strings.Contains(path, id) || d.IsDir() && d.Name() == "exec-jobs") {
+				t.Fatalf("a hosted job left a per-job output path: %s", path)
+			}
+			return nil
+		})
 	}
 }
 
