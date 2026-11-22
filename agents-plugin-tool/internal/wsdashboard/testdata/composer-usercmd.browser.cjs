@@ -219,11 +219,13 @@ async function agent(step, tag) {
       // cleared and shows no revision): the answer is only a snapshot and must not
       // bring the strip back; one read asks again instead
       let heldC = null;
+      // the refusal is in place before the removal, so the removal's own stream
+      // wake can only meet a refused read
+      await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.fulfill({ status: 404, body: 'unknown session' }) : route.continue());
       await page.route('**/user-commands/w/remove', async route => { heldC = { route, response: await route.fetch() }; });
       await view.locator('.d-ucmd:not([hidden]) .ucmd[data-ucmd="w"] .ucmd-x').click();
       for (let i = 0; i < 100 && !heldC; i++) await page.waitForTimeout(25);
       assert.ok(heldC, 'the third removal reached the daemon');
-      await page.route('**/user-commands', route => route.request().method() === 'GET' ? route.fulfill({ status: 404, body: 'unknown session' }) : route.continue());
       await view.waitForSelector('.d-ucmd', { state: 'hidden', timeout: 10000 });
       await page.waitForTimeout(400);
       const getsBeforeDenied = gets.length;
