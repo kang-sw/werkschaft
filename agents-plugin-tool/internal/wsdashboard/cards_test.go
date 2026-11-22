@@ -1116,7 +1116,7 @@ check("without the column (Band 3) the split handle leaves the board's width alo
 store = {};
 start(false);
 page.width = 2560; page.W.relayout();
-page.gridCols = "532px 744px";
+page.gridCols = "532px 744px"; colW = 880;
 be = page.col.querySelector(".bp-edge"); ce = page.split.querySelector(".dcv-edge");
 drag(be, 240);
 check("empty dock .bp-edge freezes convo, widens board, keeps empty Band 4",
