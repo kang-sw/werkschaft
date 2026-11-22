@@ -2,6 +2,8 @@ package wslive
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -185,11 +187,12 @@ func TestRunningAgentsByPrefix(t *testing.T) {
 
 // TestEndUnknownRowSurvivesAnOlderWriter pins the T1 downgrade path: an
 // older writer knows no endUnknown and ranks finished rows by EndedAt alone
-// (7482aa91e state.go:1013), then replaces the cache (record.go:685). The
-// end-unknown row's real EndedAt keeps it ahead of older completions, so a
-// new finish under that writer pushes out the oldest completion, never the
-// newer end-unknown row; with the flag dropped, the row reads done after an
-// upgrade (display-only) and is retained.
+// (7482aa91e state.go:1013), then replaces the cache (record.go:685) without
+// the flag. The end-unknown row's real EndedAt keeps it ahead of older
+// completions, so a new finish under that writer pushes out the oldest
+// completion, never the newer end-unknown row. After an upgrade the reader
+// recovers the classification from the invariant (a done agy native row
+// ended with its observation), both on seeding and on a file read.
 func TestEndUnknownRowSurvivesAnOlderWriter(t *testing.T) {
 	st := NewState(ownerKey)
 	agy := NativeAgyPrefix + "call_t1"
@@ -229,10 +232,50 @@ func TestEndUnknownRowSurvivesAnOlderWriter(t *testing.T) {
 	if !ok {
 		t.Fatal("the older writer dropped the newer end-unknown row")
 	}
-	if a.EndedAt != 5_000 || a.Status != StatusDone || a.EndUnknown {
-		t.Fatalf("row after the older writer = %+v, want done at 5000 without the flag", a)
+	if a.EndedAt != 5_000 || a.Status != StatusDone {
+		t.Fatalf("row after the older writer = %+v, want done at 5000", a)
 	}
 	if _, ok := nativeRow(t, after, "known-a"); ok {
 		t.Fatal("the oldest completion survived instead of yielding")
+	}
+	// The older writer's file: the flag is gone again.
+	if raw, err = json.Marshal(after.ForDisk()); err != nil {
+		t.Fatal(err)
+	}
+	generic = nil
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range generic["agents"].([]any) {
+		delete(a.(map[string]any), "endUnknown")
+	}
+	if raw, err = json.Marshal(generic); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "endUnknown") {
+		t.Fatal("the older writer's file still carries the flag")
+	}
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	read, err := ReadSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, ok := nativeRow(t, read, agy); !ok || !a.EndUnknown || a.EndedAt != 5_000 {
+		t.Fatalf("row read after the upgrade = %+v, want end-unknown at 5000", a)
+	}
+	if a, ok := nativeRow(t, read, "late"); !ok || a.EndUnknown {
+		t.Fatalf("an ordinary completion read as end-unknown: %+v", a)
+	}
+	var flagless Snapshot
+	if err := json.Unmarshal(raw, &flagless); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := NewState(ownerKey)
+	upgraded.SeedFinished(flagless)
+	if a, ok := nativeRow(t, upgraded.Snapshot(8_000), agy); !ok || !a.EndUnknown || a.EndedAt != 5_000 {
+		t.Fatalf("row seeded after the upgrade = %+v, want end-unknown at 5000", a)
 	}
 }

@@ -1126,7 +1126,7 @@ func (st *State) SeedFinished(prev Snapshot) {
 			status:        p.Status,
 			startedAt:     p.StartedAt,
 			endedAt:       p.EndedAt,
-			endUnknown:    p.EndUnknown,
+			endUnknown:    p.EndUnknown || AgyObservationEnded(p.ID, p.Status),
 			activeMs:      p.ActiveMs,
 			touched:       p.EndedAt,
 			// Holding and Alive are intentionally not seeded from disk (T0):

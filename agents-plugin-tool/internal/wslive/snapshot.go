@@ -120,6 +120,26 @@ const (
 	NativeCodexPrefix = "codex-native:"
 )
 
+// AgyObservationEnded reports the invariant behind an agy native row's
+// end: agy reports no child completion, so a done agy native row always
+// ended with its observation, the outcome unknown (an observed launch failure
+// is failed). It recovers Agent.EndUnknown where a writer that knew no flag
+// dropped it.
+func AgyObservationEnded(id, status string) bool {
+	return strings.HasPrefix(id, NativeAgyPrefix) && status == StatusDone
+}
+
+// RecoverEndUnknown sets EndUnknown on every row of s whose end the
+// invariant shows unknown (AgyObservationEnded). Snapshot file readers call
+// it after decoding.
+func (s *Snapshot) RecoverEndUnknown() {
+	for i := range s.Agents {
+		if AgyObservationEnded(s.Agents[i].ID, s.Agents[i].Status) {
+			s.Agents[i].EndUnknown = true
+		}
+	}
+}
+
 // NativeAgentID reports whether id names a prefixed native subagent row.
 func NativeAgentID(id string) bool {
 	return strings.HasPrefix(id, NativeAgyPrefix) || strings.HasPrefix(id, NativeCodexPrefix)
@@ -358,8 +378,9 @@ type Agent struct {
 	// EndUnknown marks a finished row whose observation ended with the
 	// outcome unknown: EndedAt is when observation ended, not a known
 	// completion. An older reader ignores it and shows the row done; an
-	// older writer drops it, and the row keeps its EndedAt rank and shows
-	// done after an upgrade (display-only; the row is retained).
+	// older writer drops it and keeps the row's EndedAt rank. Readers then
+	// recover it from the invariant (AgyObservationEnded), so writers keep
+	// writing it but no reader depends on it alone.
 	EndUnknown bool `json:"endUnknown,omitempty"`
 	// ActiveMs is accumulated closed-turn work; TurnStartedAt is the
 	// current working turn's start, absent between turns.
@@ -469,7 +490,8 @@ type GeneratingView struct {
 }
 
 // ReadSnapshot reads a snapshot file. Unknown fields are ignored and absent
-// ones read as empty.
+// ones read as empty; an end-unknown classification an older writer dropped
+// is recovered (RecoverEndUnknown).
 func ReadSnapshot(path string) (Snapshot, error) {
 	var snap Snapshot
 	// Writers replace snapshot.json atomically (wsagent writeFileAtomic,
@@ -479,6 +501,7 @@ func ReadSnapshot(path string) (Snapshot, error) {
 		return snap, err
 	}
 	err = json.Unmarshal(raw, &snap)
+	snap.RecoverEndUnknown()
 	return snap, err
 }
 

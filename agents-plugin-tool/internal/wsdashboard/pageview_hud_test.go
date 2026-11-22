@@ -214,6 +214,56 @@ func TestHUDProjectionDepthCapOverflowAndLinkedDedup(t *testing.T) {
 	}
 }
 
+// TestHUDEndUnknownSurvivesAnOlderWriter: an older writer (7482aa91e)
+// rewrites the snapshot without the endUnknown member. Read back as a file
+// and re-seeded into a new writer's state, the agy row whose observation
+// ended is still left out of the HUD completion count.
+func TestHUDEndUnknownSurvivesAnOlderWriter(t *testing.T) {
+	now := testNow
+	ms := now.UnixMilli()
+	agyUnknown := wslive.Agent{ID: wslive.NativeAgyPrefix + "call_old", Label: "research", Status: wslive.StatusDone, StartedAt: ms - 60_000, EndedAt: ms - 30_000, EndUnknown: true, Activity: wslive.Activity{Phase: wslive.PhaseIdle, PhaseStartedAt: ms - 30_000}}
+	codexDone := wslive.Agent{ID: wslive.NativeCodexPrefix + "call_c", Label: "ok_reply", Status: wslive.StatusDone, StartedAt: ms - 50_000, EndedAt: ms - 40_000, ActiveMs: 10_000}
+	raw, err := json.Marshal(liveSnap(now, wslive.Lead{}, agyUnknown, codexDone).ForDisk())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range generic["agents"].([]any) {
+		delete(a.(map[string]any), "endUnknown")
+	}
+	if raw, err = json.Marshal(generic); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "endUnknown") {
+		t.Fatal("the older writer's file still carries the flag")
+	}
+	lead := liveSession("self", "/p", now)
+	lead.Harness = "agy"
+	check := func(name string, snap *wslive.Snapshot) {
+		t.Helper()
+		hud := buildSessionView(pageInputs{Session: lead, Snapshot: snap, Now: now, Lookup: lookupOf(nil, nil)}).Tree.HUD
+		if hud.Completed != 1 || hud.ObservationEnded != 1 {
+			t.Fatalf("%s: HUD completed=%d observationEnded=%d, want 1 and 1 (the end-unknown row is no completion)", name, hud.Completed, hud.ObservationEnded)
+		}
+	}
+	parsed, err := parseSnapshot(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("file read", &parsed.snap)
+	var flagless wslive.Snapshot
+	if err := json.Unmarshal(raw, &flagless); err != nil {
+		t.Fatal(err)
+	}
+	st := wslive.NewState("hud-older-writer")
+	flagless.ReplyID = st.ReplyID()
+	st.SeedFinished(flagless)
+	check("re-seeded", liveSnap(now, wslive.Lead{}, st.Snapshot(ms).Agents...))
+}
+
 // TestHUDProjectionNativeRows pins native subagent rows in the HUD and the
 // expanded tree: a running agy row and a completed Codex row carry native,
 // startedAt, and endedAt when known and never link; the completed row folds

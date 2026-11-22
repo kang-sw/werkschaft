@@ -67,6 +67,7 @@ func parseSnapshot(raw []byte) (parsedSnapshot, error) {
 	if err := json.Unmarshal(raw, &p.snap); err != nil {
 		return parsedSnapshot{}, err
 	}
+	p.snap.RecoverEndUnknown()
 	var doc map[string]any
 	if json.Unmarshal(raw, &doc) == nil {
 		delete(doc, "updatedAt")
