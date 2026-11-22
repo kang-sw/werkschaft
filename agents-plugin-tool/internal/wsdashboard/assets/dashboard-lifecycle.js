@@ -119,8 +119,9 @@
     if (e.kind === "idle") {
       var msg = e.row.querySelector(".drmsg .s2"), text = msg ? msg.textContent : "", by = msg && msg.querySelector(".who");
       if (by && text.indexOf(by.textContent) === 0) text = by.textContent + " · " + text.slice(by.textContent.length);
-      text = text.replace(/\s+/g, " ").trim();
-      if (text) lines.push(text.length > 200 ? text.slice(0, 199) + "…" : text);
+      // bounded to 200 code points, so an emoji is never cut in half
+      var chars = Array.from(text.replace(/\s+/g, " ").trim());
+      if (chars.length) lines.push(chars.length > 200 ? chars.slice(0, 199).join("") + "…" : chars.join(""));
       title = wsT("js.notif.idle.title", who);
       keep = function (now, rows) {
         var r = rows ? rows[e.rid] : e.row;

@@ -247,6 +247,14 @@ async function finish(opts, rowOpts = {}) {
   assert.equal(p.shown[0].body, 'You · go on', 'the author label is set apart');
   p = await finish({ permission: 'granted' }, { msg: 'x'.repeat(500) });
   assert.equal(p.shown[0].body.length, 200, 'the body line is bounded');
+  p = await finish({ permission: 'granted' }, { msg: '😀'.repeat(300) });
+  let body = Array.from(p.shown[0].body);
+  assert.equal(body.length, 200, 'the bound counts code points');
+  assert.equal(body[199], '…');
+  assert.equal(body.slice(0, 199).join(''), '😀'.repeat(199), 'an emoji-heavy body keeps whole emoji');
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(p.shown[0].body), 'no lone surrogate');
+  p = await finish({ permission: 'granted' }, { msg: '😀'.repeat(200) });
+  assert.equal(p.shown[0].body, '😀'.repeat(200), '200 code points stay whole');
   p = await finish({ permission: 'granted' }, { msg: undefined });
   assert.equal(p.shown[0].body, '', 'no last message, no body line');
 
