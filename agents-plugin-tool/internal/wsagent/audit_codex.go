@@ -65,12 +65,12 @@ func (a *codexAudit) env(kind wsaudit.Kind, at time.Time) wsaudit.Envelope {
 	return ev
 }
 
-func (a *codexAudit) mapLine(line []byte, at time.Time) (bool, []wsaudit.Envelope, []wsaudit.Envelope) {
+func (a *codexAudit) mapLine(line []byte, at time.Time) (bool, []auditEvent, []auditEvent) {
 	recognized, evs := a.mapOwn(line, at)
 	return recognized, nil, evs
 }
 
-func (a *codexAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelope) {
+func (a *codexAudit) mapOwn(line []byte, at time.Time) (bool, []auditEvent) {
 	var msg codexWire
 	if json.Unmarshal(line, &msg) != nil {
 		return false, nil
@@ -87,7 +87,7 @@ func (a *codexAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelope
 			ev.CallID = p.ItemID
 		}
 		ev.Out = compactJSON(line)
-		return true, []wsaudit.Envelope{ev}
+		return true, slotted([]wsaudit.Envelope{ev})
 	case msg.Method == "" && hasID:
 		ev := a.env(wsaudit.KindSystem, at)
 		ev.Subkind = "response"
@@ -95,7 +95,7 @@ func (a *codexAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelope
 			ev.Subkind = "response:error"
 		}
 		ev.Out = compactJSON(line)
-		return true, []wsaudit.Envelope{ev}
+		return true, slotted([]wsaudit.Envelope{ev})
 	case msg.Method == "":
 		return false, nil
 	}
@@ -123,23 +123,23 @@ func (a *codexAudit) mapOwn(line []byte, at time.Time) (bool, []wsaudit.Envelope
 			setMeta(&ev, "status", p.Run.Status)
 		}
 		ev.Out = compactJSON(msg.Params)
-		return true, []wsaudit.Envelope{ev}
+		return true, slotted([]wsaudit.Envelope{ev})
 	}
 	ev := a.env(wsaudit.KindSystem, at)
 	ev.Subkind = msg.Method
 	ev.Out = compactJSON(line)
-	return true, []wsaudit.Envelope{ev}
+	return true, slotted([]wsaudit.Envelope{ev})
 }
 
-func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []wsaudit.Envelope {
+func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []auditEvent {
 	switch {
 	case codexToolItems[it.Type]:
-		var out []wsaudit.Envelope
+		var out []auditEvent
 		if !a.started[it.ID] {
 			a.started[it.ID] = true
 			call := a.env(wsaudit.KindToolCall, at)
 			call.Subkind, call.CallID, call.In = codexToolName(it), it.ID, codexToolInput(it)
-			out = append(out, call)
+			out = append(out, auditEvent{key: codexCallKey(it.ID), ev: call})
 		}
 		if done {
 			delete(a.started, it.ID)
@@ -154,7 +154,9 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []wsaudit.
 			if codexPresent(it.Error) {
 				setMeta(&res, "error", compactJSON(it.Error))
 			}
-			out = append(out, res)
+			// The record's only slotted event, whether or not it also
+			// yields the call.
+			out = append(out, auditEvent{ev: res})
 		}
 		return out
 	case it.Type == "reasoning":
@@ -167,12 +169,12 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []wsaudit.
 			// Codex sends an encrypted reasoning item with no readable text.
 			setMeta(&ev, wsaudit.MetaSignatureOnly, true)
 		}
-		return []wsaudit.Envelope{ev}
+		return slotted([]wsaudit.Envelope{ev})
 	case it.Type == "contextCompaction":
 		if !done {
 			return nil
 		}
-		return []wsaudit.Envelope{a.env(wsaudit.KindCompaction, at)}
+		return slotted([]wsaudit.Envelope{a.env(wsaudit.KindCompaction, at)})
 	case it.Type == "subAgentActivity":
 		ev := a.env(wsaudit.KindSubagent, at)
 		ev.Subkind, ev.AgentID, ev.ParentID = it.Kind, it.AgentThreadID, it.ID
@@ -180,7 +182,7 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []wsaudit.
 		if !done {
 			return nil
 		}
-		return []wsaudit.Envelope{ev}
+		return slotted([]wsaudit.Envelope{ev})
 	case it.Type == "userMessage":
 		if !done {
 			return nil
@@ -190,14 +192,14 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []wsaudit.
 		if isReminder(ev.Out) {
 			ev.Kind = wsaudit.KindSystemReminder
 		}
-		return []wsaudit.Envelope{ev}
+		return slotted([]wsaudit.Envelope{ev})
 	case it.Type == "agentMessage":
 		if !done {
 			return nil
 		}
 		ev := a.env(wsaudit.KindAssistantText, at)
 		ev.Out = it.Text
-		return []wsaudit.Envelope{ev}
+		return slotted([]wsaudit.Envelope{ev})
 	}
 	if !done {
 		return nil
@@ -206,7 +208,20 @@ func (a *codexAudit) item(it codexAuditItem, done bool, at time.Time) []wsaudit.
 	ev.Subkind = "item:" + it.Type
 	raw, _ := json.Marshal(it)
 	ev.Out = string(raw)
-	return []wsaudit.Envelope{ev}
+	return slotted([]wsaudit.Envelope{ev})
+}
+
+// codexCallKey is a tool call's identity: its item, not the record that
+// yields it. The started item yields the call; the completed one yields it
+// only when the started one never mapped (wrapped out of the ring before a
+// replay, or before this capture attached), and then finds the started
+// one's call retained instead of shifting the result or recording a loss.
+// An item without an id keeps its record's identity.
+func codexCallKey(id string) string {
+	if id == "" {
+		return ""
+	}
+	return "call." + wsaudit.NormalizeID(id)
 }
 
 func codexToolName(it codexAuditItem) string {
@@ -316,4 +331,4 @@ func codexContentText(raw json.RawMessage) string {
 
 func (a *codexAudit) markLoss(uint64, string) bool { return false }
 
-func (a *codexAudit) flush(time.Time) []wsaudit.Envelope { return nil }
+func (a *codexAudit) flush(time.Time) []auditEvent { return nil }

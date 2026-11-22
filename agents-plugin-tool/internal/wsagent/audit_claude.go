@@ -35,8 +35,9 @@ type claudeAudit struct {
 	chains map[string]*wsaudit.RequestChain
 	// carried are the assemblies of streamed blocks no assistant line
 	// consumed, ended by the line being mapped: tee'd lines' events, not the
-	// line's own, so they never shift its ordinals (mapLine).
-	carried []wsaudit.Envelope
+	// line's own, so they never shift its ordinals (mapLine). Each takes its
+	// content block's index as its slot.
+	carried []auditEvent
 }
 
 type claudeAuditBlock struct {
@@ -181,11 +182,14 @@ func compactJSON(raw []byte) string {
 	return string(raw)
 }
 
-func (a *claudeAudit) mapLine(line []byte, at time.Time) (bool, []wsaudit.Envelope, []wsaudit.Envelope) {
+// mapLine maps a line to its own events, slotted by position (a line's own
+// events are all rebuilt from the line itself, one per content block), and
+// the assemblies it ended, slotted by block index.
+func (a *claudeAudit) mapLine(line []byte, at time.Time) (bool, []auditEvent, []auditEvent) {
 	recognized, evs := a.mapOwn(line, at)
 	carried := a.carried
 	a.carried = nil
-	return recognized, carried, evs
+	return recognized, carried, slotted(evs)
 }
 
 // mapOwn maps one line to its own events; the assemblies the line ends are
@@ -551,9 +555,12 @@ func (a *claudeAudit) carry(at time.Time) {
 // flushBlocks emits the streamed blocks no assistant line consumed: a
 // thinking body or a tool call's (possibly partial) input, marked assembled,
 // and incomplete when the block never stopped or lost lines. With ending
-// set every open block is cut short (the stream ended).
-func (a *claudeAudit) flushBlocks(at time.Time, ending bool) []wsaudit.Envelope {
-	var out []wsaudit.Envelope
+// set every open block is cut short (the stream ended). Each event's slot is
+// its block's index (unique among unconsumed blocks: a block start replaces
+// an unconsumed block of its index), so a block a replay cannot rebuild (its
+// body was tee'd) leaves the others' identities as they were.
+func (a *claudeAudit) flushBlocks(at time.Time, ending bool) []auditEvent {
+	var out []auditEvent
 	for _, b := range a.blocks {
 		if b.used {
 			continue
@@ -589,7 +596,7 @@ func (a *claudeAudit) flushBlocks(at time.Time, ending bool) []wsaudit.Envelope 
 		setMeta(&ev, wsaudit.MetaAssembled, true)
 		carryLoss(&ev, b)
 		withRequest(&ev, b.request)
-		out = append(out, ev)
+		out = append(out, auditEvent{slot: b.index, ev: ev})
 	}
 	if ending {
 		a.blocks, a.msgID = nil, ""
@@ -616,6 +623,6 @@ func (a *claudeAudit) markLoss(n uint64, reason string) bool {
 	return false
 }
 
-func (a *claudeAudit) flush(at time.Time) []wsaudit.Envelope {
+func (a *claudeAudit) flush(at time.Time) []auditEvent {
 	return a.flushBlocks(at, true)
 }

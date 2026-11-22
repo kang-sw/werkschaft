@@ -53,9 +53,20 @@ func mapAll(a *claudeAudit, lines ...string) []wsaudit.Envelope {
 	var out []wsaudit.Envelope
 	for _, l := range lines {
 		_, carried, evs := a.mapLine([]byte(l), time.Now())
-		out = append(append(out, carried...), evs...)
+		out = append(out, envelopesOf(carried, evs)...)
 	}
-	return append(out, a.flush(time.Now())...)
+	return append(out, envelopesOf(a.flush(time.Now()))...)
+}
+
+// envelopesOf is the envelopes of mapped events, in order.
+func envelopesOf(sets ...[]auditEvent) []wsaudit.Envelope {
+	var out []wsaudit.Envelope
+	for _, set := range sets {
+		for _, m := range set {
+			out = append(out, m.ev)
+		}
+	}
+	return out
 }
 
 // TestClaudeAuditRequestChain pins Decision 7 for Claude: parallel calls of

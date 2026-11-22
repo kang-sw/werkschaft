@@ -118,8 +118,8 @@ func TestCodexAuditCompactionBoundaryPerVersion(t *testing.T) {
 				if line == "" || strings.HasPrefix(line, ">> ") {
 					continue
 				}
-				_, carried, evs := a.mapLine([]byte(line), time.Now())
-				evs = append(carried, evs...)
+				_, carried, mapped := a.mapLine([]byte(line), time.Now())
+				evs := envelopesOf(carried, mapped)
 				all = append(all, evs...)
 				for _, ev := range evs {
 					if ev.Kind == wsaudit.KindCompaction {

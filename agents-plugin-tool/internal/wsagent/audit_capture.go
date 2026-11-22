@@ -36,23 +36,49 @@ import (
 // assigned in that source order. No fence within auditFenceWait closes the
 // source's tee stream as incomplete (a loss marker), never reordering.
 
-// auditAdapter maps one harness's output lines to audit envelopes. It is
+// auditAdapter maps one harness's output lines to audit events. It is
 // stateful (it assembles streamed partial lines into events) and is only
 // called from its capture's goroutine.
 type auditAdapter interface {
 	// mapLine maps one complete output line read at at. recognized is false
 	// for a line outside the harness's protocol, which capture keeps raw as
-	// KindOther. evs are the line's own events, the same for the line live
-	// and replayed, so their ordinals are a durable identity; carried are
-	// the assemblies of earlier (tee'd) lines the line ended, which a replay
-	// does not rebuild, kept apart so they never shift those ordinals.
-	mapLine(line []byte, at time.Time) (recognized bool, carried, evs []wsaudit.Envelope)
+	// KindOther. evs are the line's own events; carried are the assemblies
+	// of earlier (tee'd) lines the line ended, which a replay does not
+	// rebuild, kept apart under their own key.
+	mapLine(line []byte, at time.Time) (recognized bool, carried, evs []auditEvent)
 	// markLoss records n lost source lines (n 0: an unknown count) on the
 	// assembled event still open, reporting false when none spans the loss.
 	markLoss(n uint64, reason string) bool
 	// flush ends every open assembly and returns the events built so far,
 	// marked incomplete.
-	flush(at time.Time) []wsaudit.Envelope
+	flush(at time.Time) []auditEvent
+}
+
+// auditEvent is one mapped event and its slot, the ordinal it takes under
+// its source record's identity. A slot is fixed by the event's role in the
+// record (a content block's index), never by which other events the record
+// yields: a replay that rebuilds fewer of them (a tee'd body gone, a
+// started item wrapped out of the ring) keeps every retained event's
+// identity, so none collides or shifts.
+//
+// key, when set, is the event's own identity in place of its record's (a
+// keyed SourceID): for an event whichever record the ring still holds may
+// yield, such as a Codex tool call from its started item or, that one gone,
+// from its completed one, so either finds the other retained.
+type auditEvent struct {
+	slot int
+	key  string
+	ev   wsaudit.Envelope
+}
+
+// slotted gives evs their positions as slots, for a record whose events are
+// all rebuilt whenever it is mapped.
+func slotted(evs []wsaudit.Envelope) []auditEvent {
+	out := make([]auditEvent, len(evs))
+	for i, ev := range evs {
+		out[i] = auditEvent{slot: i, ev: ev}
+	}
+	return out
 }
 
 // auditTap is what the runner gives a process to capture: the session's
@@ -651,20 +677,32 @@ func (c *auditCapture) mapTee(t wsholder.Event) {
 // emitCarried appends the assemblies a source record ended under their own
 // key, apart from the record's identity: they come from tee'd lines, and the
 // record's own events keep ordinals that do not depend on them.
-func (c *auditCapture) emitCarried(evs []wsaudit.Envelope, at time.Time, key string) {
+func (c *auditCapture) emitCarried(evs []auditEvent, at time.Time, key string) {
 	if len(evs) > 0 {
 		c.emit(evs, true, nil, at, wsaudit.SourceID{Source: c.source, Key: key})
 	}
 }
 
-// emit filters one source record's envelopes through the capture policy and
-// appends each under the record's identity and its ordinal.
-func (c *auditCapture) emit(mapped []wsaudit.Envelope, recognized bool, raw []byte, at time.Time, id wsaudit.SourceID) {
-	out := wsaudit.CaptureLine(c.session, c.harness, at, string(bytes.TrimRight(raw, "\r\n")), recognized, mapped)
-	for i, ev := range out {
-		eid := id
-		eid.Ordinal = i
-		c.append(eid, ev)
+// emit filters one source record's events through the capture policy and
+// appends each under the record's identity, its slot the ordinal.
+func (c *auditCapture) emit(mapped []auditEvent, recognized bool, raw []byte, at time.Time, id wsaudit.SourceID) {
+	if !recognized {
+		for i, ev := range wsaudit.CaptureLine(c.session, c.harness, at, string(bytes.TrimRight(raw, "\r\n")), false, nil) {
+			eid := id
+			eid.Ordinal = i
+			c.append(eid, ev)
+		}
+		return
+	}
+	for _, m := range mapped {
+		for _, ev := range wsaudit.FilterEvents(c.session, []wsaudit.Envelope{m.ev}) {
+			eid := id
+			eid.Ordinal = m.slot
+			if m.key != "" {
+				eid = wsaudit.SourceID{Source: c.source, Key: m.key}
+			}
+			c.append(eid, ev)
+		}
 	}
 }
 

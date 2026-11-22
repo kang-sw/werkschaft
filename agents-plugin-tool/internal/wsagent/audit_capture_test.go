@@ -801,6 +801,112 @@ func TestAuditReplayOrdinalsIgnoreCarriedAssemblies(t *testing.T) {
 	}
 }
 
+// TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone pins carried
+// identities that do not depend on what a replay rebuilds: live, the result
+// line ends a thinking block whose body was all tee'd and a tool block, and
+// carries [thinking, tool_call]; the tool_call's append fails. Replayed, the
+// thinking body is gone (no event) and only the tool_call is rebuilt. It
+// keeps its block's slot, so it is appended once rather than mistaken for
+// the retained thinking, and nothing is duplicated.
+func TestAuditReplayKeepsCarriedSlotsWhenATeeOnlyBlockIsGone(t *testing.T) {
+	const (
+		toolStart = `{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}}}`
+		toolInput = `{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}}}`
+		toolStop  = `{"type":"stream_event","event":{"type":"content_block_stop","index":1}}`
+	)
+	sink := newBoundarySink()
+	r := newAuditRig(t, sink, "h1")
+	r.audit(wsholder.Event{Event: wsholder.EventAuditAttached, Next: 1})
+	r.keptRun(thinkStart, 0, 0)
+	r.keptRun(thinkBlock, 0, 0)
+	r.tee(thinkDelta("tee only"))
+	r.keptRun(thinkStop, 1, 0)
+	r.keptRun(toolStart, 0, 0)
+	r.tee(toolInput)
+	r.keptRun(toolStop, 1, 0)
+	isCall := func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindToolCall }
+	sink.failEnv = isCall
+	r.keptRun(auditResultLine, 0, 0)
+	kept := []string{thinkStart, thinkBlock, thinkStop, toolStart, toolStop, auditResultLine}
+	r.end()
+	if th := find(sink.events(), ofKind(wsaudit.KindThinking)); len(th) != 1 || th[0].Out != "tee only" {
+		t.Fatalf("live thinking = %+v", th)
+	}
+	if n := len(find(sink.events(), isCall)); n != 0 {
+		t.Fatalf("live tool calls = %d, want the failed append missing", n)
+	}
+	sink.failEnv = nil
+
+	r2 := newAuditRig(t, sink, "h1")
+	for i, l := range kept {
+		r2.replayed(uint64(i+1), l)
+	}
+	r2.end()
+	evs := sink.events()
+	if n := len(find(evs, ofKind(wsaudit.KindThinking))); n != 1 {
+		t.Fatalf("thinking events after replay = %d, want 1", n)
+	}
+	if calls := find(evs, isCall); len(calls) != 1 || calls[0].CallID != "toolu_1" {
+		t.Fatalf("tool calls after replay = %+v, want the failed one appended once", calls)
+	}
+	if n := len(find(evs, func(ev wsaudit.Envelope) bool { return ev.Subkind == "result:success" })); n != 1 {
+		t.Fatalf("results after replay = %d, want 1", n)
+	}
+}
+
+// TestAuditCodexReplayAfterTheStartedItemWrapped pins the Codex analogue:
+// live, item/started yields the call and item/completed the result; replayed
+// after the ring dropped item/started, the completed item yields the call
+// too. The call's identity is its item, so it finds the live call retained,
+// and the result keeps its identity: a clean replay records no loss and
+// appends nothing, and a result whose append failed is recorded as loss.
+func TestAuditCodexReplayAfterTheStartedItemWrapped(t *testing.T) {
+	item := func(method, status string) string {
+		return fmt.Sprintf(`{"method":%q,"params":{"threadId":"th1","turnId":"tu1","item":{"type":"mcpToolCall","id":"call-1","server":"ws","tool":"echo","status":%q,"arguments":{"text":"x"},"result":{"content":[{"type":"text","text":"x"}]},"error":null}}}`, method, status)
+	}
+	lines := []string{
+		`{"method":"turn/started","params":{"threadId":"th1","turn":{"id":"tu1","status":"inProgress","items":[]}}}`,
+		item("item/started", "inProgress"),
+		item("item/completed", "completed"),
+		`{"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"tu1","status":"completed","items":[]}}}`,
+	}
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail=%v", fail), func(t *testing.T) {
+			sink := newBoundarySink()
+			isResult := func(ev wsaudit.Envelope) bool { return ev.Kind == wsaudit.KindToolResult }
+			if fail {
+				sink.failEnv = isResult
+			}
+			r := newAuditRigWith(t, sink, "h1", newCodexMapper("th1"), codexProtocol{})
+			for _, l := range lines {
+				r.kept(l)
+			}
+			r.end()
+			live := sink.events()
+			sink.failEnv = nil
+
+			r2 := newAuditRigWith(t, sink, "h1", newCodexMapper("th1"), codexProtocol{})
+			for i := 2; i < len(lines); i++ { // records 1-2 wrapped out of the ring
+				r2.replayed(uint64(i+1), lines[i])
+			}
+			r2.end()
+			evs := sink.events()
+			if n := len(find(evs, ofKind(wsaudit.KindToolCall))); n != 1 {
+				t.Fatalf("tool calls after replay = %d, want the live one only", n)
+			}
+			if fail {
+				if n := len(find(evs, isResult)); n != 0 || len(sink.lost) != 1 || sink.lost[0].Seq != 3 || sink.lost[0].Key != "" {
+					t.Fatalf("failed result: %d appended, losses %+v; want only it recorded as loss", n, sink.lost)
+				}
+				return
+			}
+			if len(sink.lost) != 0 || len(evs) != len(live) {
+				t.Fatalf("clean replay: losses %+v, %d events (live %d); want nothing new", sink.lost, len(evs), len(live))
+			}
+		})
+	}
+}
+
 // TestAuditAttachIsNeverRefusedByAFullQueue pins that the attach marker of
 // a new holder connection survives a full capture queue: the lines and tee
 // lines filling it are refused and recorded as loss, but the attach is
