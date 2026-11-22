@@ -94,15 +94,18 @@ func (s *Server) resolveRsrcRoot(rsrcRootOverride string) (fs.FS, error) {
 // declared in the playbook frontmatter, or tierOverride when supplied, surfaced
 // so the caller can pick the delegate's model from one render call.
 func renderPlaybookBody(s *Server, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, mintRoot string, parentKey string, workflowLang string, overrideLookup overrideLookupFn, tierOverride string) (string, string, error) {
-	return renderPlaybookBodyForCaller(s, "", "", rsrcRoot, name, callerContext, configOpts, mintRoot, parentKey, workflowLang, overrideLookup, tierOverride)
+	return renderPlaybookBodyForCaller(s, "", "", rsrcRoot, name, callerContext, configOpts, mintRoot, parentKey, workflowLang, overrideLookup, tierOverride, false)
 }
 
 // renderPlaybookBodyForCaller is renderPlaybookBody for the caller holding
 // callerKey (empty for a keyless render): the caller's own launch record, not
 // only the connection's detected harness, selects its terminology row (see
 // playbookTerminology). profile is the caller's playbook profile ("" for the
-// base files; see callerPlaybookProfile).
-func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, mintRoot string, parentKey string, workflowLang string, overrideLookup overrideLookupFn, tierOverride string) (string, string, error) {
+// base files; see callerPlaybookProfile). selfExecuted marks text the
+// caller runs itself (playbook.read, workflow_manual), as opposed to a
+// prompt rendered for another process (playbook.render): only that text
+// takes a PreferNativeSubagent lead's native-first wording.
+func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot fs.FS, name string, callerContext map[string]string, configOpts wsconfig.Options, mintRoot string, parentKey string, workflowLang string, overrideLookup overrideLookupFn, tierOverride string, selfExecuted bool) (string, string, error) {
 	harness := s.playbookHarness()
 	descriptor := s.connectionDescriptor()
 	// A hosted lead with no ws skills (playbookCommands) is under the
@@ -111,6 +114,13 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	daemonAgentClient := (harness == "pi" && s.clientPiDaemonAgents()) || descriptor.playbookCommands || s.callerDaemonAgents(callerKey)
 	daemonAgents := daemonAgentClient && s.agentListed() && s.toolAllowed("agent.spawn") && s.toolAllowed("mailbox.send")
 	terminology := playbookTerminology(harness, daemonAgents, s.runtimeNamespace())
+	// A PreferNativeSubagent lead explores with its own native subagent and
+	// spawns on an external harness, but only in text it executes itself: a
+	// rendered delegate runs elsewhere and keeps the daemon-agent wording.
+	nativeFirst := selfExecuted && daemonAgents && descriptor.preferNativeSubagent
+	if nativeFirst {
+		terminology = nativeFirstTerminology(s.runtimeNamespace())
+	}
 
 	// The workflow manual's harness overlay maps a render onto that
 	// harness's own spawn tool; a caller delegating through agent.spawn reads
@@ -148,8 +158,15 @@ func renderPlaybookBodyForCaller(s *Server, callerKey, profile string, rsrcRoot 
 	if err != nil {
 		return "", "", err
 	}
+	if nativeFirst && name == workflowManualPlaybookName {
+		body = nativeFirstManual(body, s.runtimeNamespace())
+	}
 	if pb.Meta.Delegates {
-		body += delegationTip(terminology)
+		spawnedWith := ""
+		if nativeFirst {
+			spawnedWith = s.runtimeNamespace() + "/agent.spawn"
+		}
+		body += delegationTip(terminology, spawnedWith)
 	}
 
 	// Unit 1: render-minted child key — only when caller is lead (mintRoot != "").
