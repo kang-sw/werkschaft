@@ -662,6 +662,154 @@ class ChildTest(HolderTestCase):
         self.assertEqual(exit_rec["exit_code"], 5)
 
 
+class SpawnInputTest(HolderTestCase):
+    """Spawn's input and input_eof fields: finite stdin queued with the start."""
+
+    ECHO_TO_EOF = py_child(
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "sys.stdout.buffer.write(b'got:' + data + b'|eof\\n'); sys.stdout.flush()\n"
+    )
+
+    def stdout_of(self, events) -> bytes:
+        return b"".join(decode(m) for m in events if m.get("stream") == "stdout")
+
+    def test_input_and_eof_reach_a_child_that_reads_to_eof(self):
+        holder = self.start_holder()
+        client = self.attached(holder)
+        data = base64.b64encode(b"hello\nworld").decode("ascii")
+        reply = self.spawn(client, self.ECHO_TO_EOF, input=data, input_eof=True)
+        self.assertEqual(reply["child"]["state"], "running")
+        events = client.events_until(lambda m: m.get("event") == "exit")
+        self.assertEqual(self.stdout_of(events), b"got:hello\nworld|eof\n")
+        self.assertEqual((events[-1]["exit_code"], events[-1]["signal"]), (0, None))
+
+    def test_eof_without_input_is_an_immediate_eof(self):
+        holder = self.start_holder()
+        client = self.attached(holder)
+        self.spawn(client, self.ECHO_TO_EOF, input_eof=True)
+        events = client.events_until(lambda m: m.get("event") == "exit")
+        self.assertEqual(self.stdout_of(events), b"got:|eof\n")
+        self.assertEqual(events[-1]["exit_code"], 0)
+
+    def test_input_without_eof_leaves_stdin_open_for_input_operations(self):
+        holder = self.start_holder()
+        client = self.attached(holder)
+        self.spawn(client, self.ECHO_TO_EOF, input=base64.b64encode(b"first,").decode("ascii"))
+        self.assertEqual(client.request("status")["child"]["state"], "running")
+        more = base64.b64encode(b"second").decode("ascii")
+        self.assertTrue(client.request("input", {"data": more, "eof": True})["ok"])
+        events = client.events_until(lambda m: m.get("event") == "exit")
+        self.assertEqual(self.stdout_of(events), b"got:first,second|eof\n")
+
+    def test_a_child_that_exits_at_once_does_not_fail_the_spawn(self):
+        holder = self.start_holder()
+        client = self.attached(holder)
+        data = base64.b64encode(b"x" * 200000).decode("ascii")
+        reply = self.spawn(client, py_child("import sys; sys.exit(2)"), input=data, input_eof=True)
+        self.assertEqual(reply["child"]["state"], "running")
+        exit_rec = self.wait_exit_record(client)
+        self.assertEqual(exit_rec["exit_code"], 2)
+        self.assertTrue(client.request("stop")["ok"])
+        holder.thread.join(timeout=TIMEOUT)
+        self.assertFalse(holder.thread.is_alive())
+        record = read_json(os.path.join(holder.dir, holder_mod.EXIT_NAME))
+        self.assertEqual((record["exit_code"], record["reason"]), (2, "child_exited"))
+
+    def test_bad_input_refuses_the_spawn_before_the_child_starts(self):
+        holder = self.start_holder()
+        client = self.attached(holder)
+        for bad in ("!!", 5, ["aGk="]):
+            reply = client.request("spawn", {"argv": self.ECHO_TO_EOF, "input": bad, "input_eof": True})
+            self.assertEqual(reply["error"], "bad_request", reply)
+        self.assertIsNone(holder.child)
+        self.assertEqual(client.request("status")["child"], {"state": "none"})
+        with mock.patch.object(holder_mod, "MAX_PENDING_INPUT", 4):
+            reply = client.request("spawn", {"argv": self.ECHO_TO_EOF, "input": base64.b64encode(b"12345").decode("ascii")})
+            self.assertEqual(reply["error"], "input_overflow", reply)
+        self.assertIsNone(holder.child)
+        # The holder can still start its one child.
+        self.spawn(client, self.ECHO_TO_EOF, input=base64.b64encode(b"ok").decode("ascii"), input_eof=True)
+        events = client.events_until(lambda m: m.get("event") == "exit")
+        self.assertEqual(self.stdout_of(events), b"got:ok|eof\n")
+
+    @unittest.skipIf(WINDOWS, "the POSIX PTY end-of-file key")
+    def test_pty_input_eof_sends_the_end_of_file_key(self):
+        holder = self.start_holder()
+        client = self.attached(holder)
+        code = "import sys\ndata = sys.stdin.read()\nprint('READ=%r' % data, flush=True)\n"
+        data = base64.b64encode(b"hi\n").decode("ascii")
+        self.spawn(client, py_child(code), mode="pty", input=data, input_eof=True)
+        seen = bytearray()
+
+        def pred(msg):
+            if msg.get("event") == "output":
+                seen.extend(decode(msg))
+            return msg.get("event") == "exit"
+
+        exit_rec = client.events_until(pred)[-1]
+        self.assertIn(b"READ='hi\\n'", seen)
+        self.assertEqual(exit_rec["exit_code"], 0)
+
+
+class ExitCopyTest(HolderTestCase):
+    def test_exit_copy_matches_exit_json_and_survives_the_state_directory(self):
+        copy_path = os.path.join(self.tmp, "elsewhere", "exits", "h1.json")
+        holder = self.start_holder(exit_copy=copy_path)
+        client = self.attached(holder)
+        self.spawn(client, py_child("import sys; sys.exit(9)"))
+        self.wait_exit_record(client)
+        self.assertFalse(os.path.exists(copy_path))
+        self.assertTrue(client.request("stop")["ok"])
+        holder.thread.join(timeout=TIMEOUT)
+        self.assertFalse(holder.thread.is_alive())
+        record = read_json(os.path.join(holder.dir, holder_mod.EXIT_NAME))
+        self.assertEqual((record["exit_code"], record["reason"]), (9, "child_exited"))
+        self.assertEqual(read_json(copy_path), record)
+        if not WINDOWS:
+            self.assertEqual(os.stat(copy_path).st_mode & 0o777, 0o600)
+            self.assertEqual(os.stat(os.path.dirname(copy_path)).st_mode & 0o777, 0o700)
+        retry_sharing(lambda: shutil.rmtree(holder.dir))
+        self.assertEqual(read_json(copy_path), record)
+        self.assertEqual(os.listdir(os.path.dirname(copy_path)), ["h1.json"])
+
+    def test_a_failed_copy_is_logged_and_keeps_exit_json_and_the_exit(self):
+        blocker = os.path.join(self.tmp, "not-a-directory")
+        with open(blocker, "w", encoding="utf-8") as f:
+            f.write("x")
+        holder = self.start_holder(exit_copy=os.path.join(blocker, "h1.json"))
+        client = self.attached(holder)
+        self.assertTrue(client.request("stop")["ok"])
+        holder.thread.join(timeout=TIMEOUT)
+        self.assertFalse(holder.thread.is_alive())
+        self.assertEqual(holder.result.get("code"), 0)
+        record = read_json(os.path.join(holder.dir, holder_mod.EXIT_NAME))
+        self.assertEqual(record["reason"], "stop")
+        with open(os.path.join(holder.dir, holder_mod.LOG_NAME), encoding="utf-8") as f:
+            self.assertIn("exit record copy failed", f.read())
+
+    def test_main_accepts_the_exit_copy_argument(self):
+        captured = {}
+
+        class FakeHolder:
+            def __init__(self, directory, **kwargs):
+                captured.update(kwargs)
+                self.stopping = False
+
+            def request_stop(self):
+                pass
+
+            def run(self):
+                return 0
+
+        with mock.patch.object(holder_mod, "Holder", FakeHolder), mock.patch.object(holder_mod.signal, "signal"):
+            code = holder_mod.main(["--dir", os.path.join(self.tmp, "hx"), "--exit-copy", os.path.join(self.tmp, "c.json")])
+            self.assertEqual(code, 0)
+            self.assertEqual(captured["exit_copy"], os.path.join(self.tmp, "c.json"))
+            holder_mod.main(["--dir", os.path.join(self.tmp, "hy")])
+            self.assertIsNone(captured["exit_copy"])
+
+
 class DescriptorTest(HolderTestCase):
     def test_deleted_descriptor_is_rewritten(self):
         holder = self.start_holder(descriptor_check=0.1)
