@@ -63,6 +63,9 @@ type ChildStatus struct {
 	Mode     string `json:"mode,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Signal   *int   `json:"signal,omitempty"`
+	// InputClosed reports, for a running pipe child, whether an eof closed
+	// its stdin. A holder that predates it sends none (nil): unknown.
+	InputClosed *bool `json:"input_closed,omitempty"`
 }
 
 // Event is one line the holder sends that answers no request: a record of

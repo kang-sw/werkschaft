@@ -72,7 +72,11 @@ Attach protocol, version 1. Newline-delimited JSON objects, UTF-8, both ways.
             {"event": "gap", "from": n, "to": <first held sequence>}.
 
   Child status: {"state": "none"} | {"state": "running", "pid", "mode"} |
-  {"state": "exited", "pid", "mode", "exit_code", "signal"}.
+  {"state": "exited", "pid", "mode", "exit_code", "signal"}. A running pipe
+  child's status also carries "input_closed": whether an eof (spawn's
+  input_eof or an input operation's) closed its stdin; an input operation
+  after that is refused with "input_closed". A holder that predates the
+  field sends none.
 
   Records (sequenced from 1, streamed after replay):
 
@@ -1219,6 +1223,8 @@ class Holder:
             raise OpError("spawn_failed", f"{type(exc).__name__}: {exc}") from None
         self.child = child
         self.child_status = {"state": "running", "pid": child.pid, "mode": child.mode}
+        if child.mode == "pipe":
+            self.child_status["input_closed"] = False
         # Queued under the lock before the writer starts: the data and EOF
         # reach the child in order even when it exits at once.
         self._queue_input(spec["input"], spec["input_eof"])
@@ -1240,6 +1246,8 @@ class Holder:
     def _op_input(self, att: Attachment, req: dict) -> None:
         self._running_child()
         data = parse_input_data(req.get("data"))
+        if self.child_status.get("input_closed"):
+            raise OpError("input_closed", "the child's stdin was closed by an earlier eof")
         if self.input_pending + len(data) > MAX_PENDING_INPUT:
             raise OpError("input_overflow", "the child is not reading its input")
         self._queue_input(data, req.get("eof") is True)
@@ -1250,6 +1258,8 @@ class Holder:
             self.input_pending += len(data)
         if eof:
             self.input_queue.append(None)
+            if "input_closed" in self.child_status:
+                self.child_status["input_closed"] = True
         self.cond.notify_all()
 
     def _op_resize(self, att: Attachment, req: dict) -> None:

@@ -96,13 +96,20 @@ type fakeExecHolders struct {
 	spawnErr error
 	inputErr error
 	replays  []string
+	// inputClosed is each holder's stdin-closed state, as a holder tracks
+	// it: an eof at spawn or in an input closes it, and a later input is
+	// refused. noInputState lists holders without input_closed, as one
+	// that predates the field does. inputCalls counts Input calls.
+	inputClosed  map[string]bool
+	noInputState bool
+	inputCalls   int
 	// onSpawn runs after a spawn, outside the lock (the child's own
 	// behaviour: output, exit).
 	onSpawn func(id string)
 }
 
 func newFakeExecHolders() *fakeExecHolders {
-	return &fakeExecHolders{launched: map[string]wsholder.LaunchSpec{}, spawned: map[string]wsholder.SpawnSpec{}, inputs: map[string][]string{}, live: map[string]json.RawMessage{}, exited: map[string]bool{}, seq: map[string]uint64{}}
+	return &fakeExecHolders{launched: map[string]wsholder.LaunchSpec{}, spawned: map[string]wsholder.SpawnSpec{}, inputs: map[string][]string{}, live: map[string]json.RawMessage{}, exited: map[string]bool{}, seq: map[string]uint64{}, inputClosed: map[string]bool{}}
 }
 
 func (f *fakeExecHolders) LaunchWith(spec wsholder.LaunchSpec) (string, error) {
@@ -122,6 +129,7 @@ func (f *fakeExecHolders) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.Ch
 		return wsholder.ChildStatus{}, f.spawnErr
 	}
 	f.spawned[id] = spec
+	f.inputClosed[id] = spec.InputEOF
 	hook := f.onSpawn
 	f.mu.Unlock()
 	if hook != nil {
@@ -133,12 +141,17 @@ func (f *fakeExecHolders) Spawn(id string, spec wsholder.SpawnSpec) (wsholder.Ch
 func (f *fakeExecHolders) Input(id string, data []byte, eof bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.inputCalls++
 	if f.inputErr != nil {
 		return f.inputErr
+	}
+	if f.inputClosed[id] && !f.noInputState {
+		return &wsholder.OpError{Code: "input_closed", Message: "the child's stdin was closed by an earlier eof"}
 	}
 	entry := string(data)
 	if eof {
 		entry += "<EOF>"
+		f.inputClosed[id] = true
 	}
 	f.inputs[id] = append(f.inputs[id], entry)
 	return nil
@@ -179,7 +192,14 @@ func (f *fakeExecHolders) List() wsholder.Listing {
 	defer f.mu.Unlock()
 	out := wsholder.Listing{}
 	for id, session := range f.live {
-		out.Holders = append(out.Holders, wsholder.Info{ID: id, Attached: true, Session: session})
+		child := &wsholder.ChildStatus{State: "running"}
+		if f.exited[id] {
+			child.State = "exited"
+		} else if !f.noInputState {
+			closed := f.inputClosed[id]
+			child.InputClosed = &closed
+		}
+		out.Holders = append(out.Holders, wsholder.Info{ID: id, Attached: true, Session: session, Child: child})
 	}
 	return out
 }
@@ -760,8 +780,29 @@ func TestHostedStdinSurvivesARestart(t *testing.T) {
 	}
 	given, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, Stdin: []byte("x"), StdinSet: true})
 	legacy, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, Legacy: true, Tool: "exec.spawn"})
+	// Launched with explicit empty stdin, and closed by an acked eof before
+	// the replacement: the row cannot tell either from an open stdin.
+	empty, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true, StdinSet: true})
+	acked, _ := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if _, err := fx.h.Write("lead", acked.ID, []byte("last\n"), true); err != nil {
+		t.Fatal(err)
+	}
 	_ = fx.h.Close()
 	fx.open(10 * time.Millisecond)
+	for _, v := range []HostedView{empty, acked} {
+		fx.holders.mu.Lock()
+		before := fx.holders.inputCalls
+		fx.holders.mu.Unlock()
+		if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil || !strings.Contains(err.Error(), "no open stdin") {
+			t.Fatalf("a write to %s's closed stdin after restart = %v", v.ID, err)
+		}
+		fx.holders.mu.Lock()
+		after := fx.holders.inputCalls
+		fx.holders.mu.Unlock()
+		if after != before {
+			t.Fatalf("a write to %s's closed stdin reached the holder after restart", v.ID)
+		}
+	}
 	if _, err := fx.h.Write("lead", open.ID, []byte("after\n"), false); err != nil {
 		t.Fatalf("write after restart = %v", err)
 	}
@@ -775,6 +816,28 @@ func TestHostedStdinSurvivesARestart(t *testing.T) {
 		if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil {
 			t.Fatalf("a write to %s's closed stdin was accepted after restart", v.ID)
 		}
+	}
+}
+
+// TestHostedStdinUnknownAfterRestartStaysClosed: a holder that does not
+// report its stdin state leaves a rejoined job's stdin closed, so a write
+// never claims a success the holder may have dropped.
+func TestHostedStdinUnknownAfterRestartStaysClosed(t *testing.T) {
+	fx := newHostedFixture(t, 10*time.Millisecond)
+	v, err := fx.launch(context.Background(), nil, HostedLaunch{Async: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fx.h.Close()
+	fx.holders.mu.Lock()
+	fx.holders.noInputState = true
+	fx.holders.mu.Unlock()
+	fx.open(10 * time.Millisecond)
+	if _, err := fx.h.Write("lead", v.ID, []byte("x"), false); err == nil {
+		t.Fatalf("a write to a stdin of unknown state was accepted")
+	}
+	if got := fx.holders.inputOf(v.HolderID); len(got) != 0 {
+		t.Fatalf("inputs = %q", got)
 	}
 }
 

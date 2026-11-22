@@ -721,6 +721,28 @@ class SpawnInputTest(HolderTestCase):
         self.assertEqual(self.stdout_of(events), b"got:|eof\n")
         self.assertEqual(events[-1]["exit_code"], 0)
 
+    def test_status_reports_stdin_closed_and_input_after_eof_is_refused(self):
+        sleeper = py_child("import time; time.sleep(30)")
+        holder = self.start_holder()
+        client = self.attached(holder, stream=False)
+        reply = self.spawn(client, sleeper)
+        self.assertIs(reply["child"]["input_closed"], False)
+        data = base64.b64encode(b"x").decode("ascii")
+        self.assertTrue(client.request("input", {"data": data, "eof": True})["ok"])
+        client.close()
+        # A rejoining client reads the closed stdin from the attach reply.
+        again = self.connect(holder)
+        attach = again.attach(holder.token)
+        self.assertIs(attach["child"]["input_closed"], True)
+        refused = again.request("input", {"data": data})
+        self.assertEqual((refused["ok"], refused.get("error")), (False, "input_closed"))
+
+    def test_spawn_with_input_eof_reports_stdin_closed(self):
+        holder = self.start_holder()
+        client = self.attached(holder, stream=False)
+        reply = self.spawn(client, py_child("import time; time.sleep(30)"), input_eof=True)
+        self.assertIs(reply["child"]["input_closed"], True)
+
     def test_input_without_eof_leaves_stdin_open_for_input_operations(self):
         holder = self.start_holder()
         client = self.attached(holder)

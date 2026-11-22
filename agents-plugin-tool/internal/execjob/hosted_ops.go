@@ -72,6 +72,13 @@ func (h *Hosted) Write(owner, id string, data []byte, eof bool) (HostedView, err
 		return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: it was given at launch, closed by eof, or the job is a legacy launch", id)
 	}
 	if err := h.opts.Holders.Input(holder, data, eof); err != nil {
+		var opErr *wsholder.OpError
+		if errors.As(err, &opErr) && opErr.Code == "input_closed" {
+			h.mu.Lock()
+			j.stdinOpen = false
+			h.mu.Unlock()
+			return h.view(j, 0), fmt.Errorf("exec job %s has no open stdin: an earlier eof closed it", id)
+		}
 		// The eof did not reach the child: stdin stays open for a retry.
 		return h.view(j, 0), fmt.Errorf("write to exec job %s: %w", id, err)
 	}

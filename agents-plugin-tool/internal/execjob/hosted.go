@@ -114,11 +114,9 @@ func NewHosted(opts HostedOptions) (*Hosted, error) {
 			h.rings.Restore(j.out, row.Written, row.Tails[StreamStdout], row.Tails[StreamStderr], row.Tails[StreamCombined])
 			close(j.done)
 		} else if row.HolderID != "" {
+			// stdin stays closed until Start reads the live holder's
+			// report: the row does not record an eof exec.write sent.
 			h.byHolder[row.HolderID] = j
-			// The holder keeps the pipe of a job launched without stdin
-			// open across a daemon replacement. An eof that exec.write sent
-			// before it is not stored; the holder then drops what follows.
-			j.stdinOpen = !row.Legacy && row.StdinBytes == 0
 		}
 		h.jobs[row.ID] = j
 	}
@@ -174,6 +172,12 @@ func (h *Hosted) Start() {
 		j := h.jobs[execID]
 		owned := j != nil && j.row.HolderID == info.ID
 		ended := owned && j.row.Terminal()
+		if owned && !ended && !j.row.Legacy {
+			// The holder keeps a pipe child's stdin across a daemon
+			// replacement and says whether an eof closed it; one that
+			// does not say leaves it closed, so no write claims success.
+			j.stdinOpen = info.Child != nil && info.Child.State == "running" && info.Child.InputClosed != nil && !*info.Child.InputClosed
+		}
 		h.mu.Unlock()
 		switch {
 		case !owned:
