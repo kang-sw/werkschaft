@@ -510,19 +510,6 @@
     "261121-bug-ws-agy-reattach-watchdog-sent-input": {
       "registered_at": "2026-11-21T12:39:33Z"
     },
-    "261121-feat-ws-board-command-slots": {
-      "registered_at": "2026-11-21T09:21:23Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T15:19:03Z",
-        "impl": {
-          "branch": "impl/develop/aptly-ended-charm"
-        }
-      }
-    },
     "261121-feat-ws-board-search-ranking": {
       "registered_at": "2026-11-21T09:35:55Z"
     },
@@ -573,19 +560,6 @@
     "261122-feat-ws-builtin-agent-harness": {
       "registered_at": "2026-11-22T08:45:27Z"
     },
-    "261122-feat-ws-companion-mesh-deform": {
-      "registered_at": "2026-11-22T12:40:24Z",
-      "lease": {
-        "email": "ki6080@gmail.com",
-        "clone_id": "6b8c3f740994ed3b",
-        "track": "develop",
-        "phase": "closed",
-        "touched_at": "2026-11-22T16:42:07Z",
-        "impl": {
-          "branch": "impl/develop/bling-dairy-image"
-        }
-      }
-    },
     "261122-feat-ws-companion-pack-sources": {
       "registered_at": "2026-11-22T10:27:17Z",
       "lease": {
@@ -630,6 +604,9 @@
     },
     "261122-feat-ws-web-tools": {
       "registered_at": "2026-11-22T08:45:33Z"
+    },
+    "261123-bug-ws-windows-test-env-failures": {
+      "registered_at": "2026-11-22T17:27:57Z"
     }
   }
 }
