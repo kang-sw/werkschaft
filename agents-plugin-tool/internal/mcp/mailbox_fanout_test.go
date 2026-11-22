@@ -58,6 +58,14 @@ func newFanOutFixture(t *testing.T) fanOutFixture {
 	return f
 }
 
+// fanOutHeader is the audience line a fan-out copy carries for this public
+// To and CC list. Routing tests build their expected bodies through it, so
+// the line's literal format is pinned only by TestMailboxAudienceHeader and
+// can be swapped without touching the routing tests.
+func fanOutHeader(to, cc []string) string {
+	return mailboxAudienceHeader("ws", to, cc)
+}
+
 // recvEnvelopes drains key's mail as JSON.
 func recvEnvelopes(t *testing.T, s *Server, id int, key string) []wsmailbox.Envelope {
 	t.Helper()
@@ -82,7 +90,7 @@ func TestMailboxFanOutDeliversIndependentPublicCopies(t *testing.T) {
 		"to": []any{"alice@worktree", f.daveAddr}, "cc": []any{"bob@worktree"}, "bcc": []any{"carol@worktree"}, "content": body,
 	})
 
-	header := "[ws mail to: alice@worktree, " + f.daveAddr + "; cc: bob@worktree]"
+	header := fanOutHeader([]string{"alice@worktree", f.daveAddr}, []string{"bob@worktree"})
 	want := header + "\n" + body
 	senderReply := wsmailbox.ReplyIDPrefix + wsmailbox.ReplyID(f.workerKey)
 	for _, line := range []string{
@@ -189,7 +197,7 @@ func TestMailboxFanOutStampsEachRoute(t *testing.T) {
 
 	// erin is a top-level lead: the note comes first, then the header.
 	note := "[ws note: from a peer lead session (not a worker), with the same authority as yours]\n"
-	want := note + "[ws mail to: alice@worktree]\nroutes"
+	want := note + fanOutHeader([]string{"alice@worktree"}, nil) + "\nroutes"
 	if got := recvEnvelopes(t, f.alice, 3, f.aliceKey); len(got) != 1 || got[0].From != "erin@worktree" || got[0].ReplyTo != "" || got[0].Content != want {
 		t.Fatalf("alice copy = %#v, want from: erin@worktree and %q", got, want)
 	}
@@ -207,7 +215,7 @@ func TestMailboxFanOutKeepsPeerLeadNoteFirst(t *testing.T) {
 	f := newFanOutFixture(t)
 	codexNote := "[ws note: from a peer lead session (codex, not a worker), with the same authority as yours]"
 	wsflowNote := "[wsflow note: from a peer lead session (claude, not a worker), with the same authority as yours]"
-	header := "[ws mail to: alice@worktree; cc: bob@worktree]"
+	header := fanOutHeader([]string{"alice@worktree"}, []string{"bob@worktree"})
 	sends := []struct {
 		key, content, want string
 	}{
@@ -264,7 +272,7 @@ func TestMailboxScalarSendUnchangedByFanOut(t *testing.T) {
 	callToolWithKey(t, f.sender, 12, f.workerKey, "mailbox.send", map[string]any{"to": "alice@worktree", "bcc": []any{"bob@worktree"}, "content": "with bcc"})
 
 	got := recvEnvelopes(t, f.alice, 20, f.aliceKey)
-	want := []string{"scalar body", "empty lists", "[ws mail to: alice@worktree]\nwith bcc"}
+	want := []string{"scalar body", "empty lists", fanOutHeader([]string{"alice@worktree"}, nil) + "\nwith bcc"}
 	if len(got) != len(want) {
 		t.Fatalf("alice received %d envelopes, want %d: %#v", len(got), len(want), got)
 	}
@@ -289,7 +297,7 @@ func TestMailboxFanOutDeduplicatesRecipients(t *testing.T) {
 	if !strings.Contains(receipt, "sent to 2 of 2 recipients\n") || !strings.Contains(receipt, "delivered bob@worktree [cc]") {
 		t.Fatalf("receipt = %s", receipt)
 	}
-	want := "[ws mail to: alice@worktree; cc: bob@worktree]\nonce"
+	want := fanOutHeader([]string{"alice@worktree"}, []string{"bob@worktree"}) + "\nonce"
 	for _, r := range []struct {
 		srv *Server
 		key string
@@ -390,7 +398,7 @@ func TestMailboxFanOutMixedOutcomes(t *testing.T) {
 	}
 	requireHardWake(t, sub)
 
-	want := "[ws mail to: " + f.daveAddr + ", mona@machine; cc: alice@worktree]\npartial"
+	want := fanOutHeader([]string{f.daveAddr, "mona@machine"}, []string{"alice@worktree"}) + "\npartial"
 	if got := recvEnvelopes(t, f.dave, 20, f.daveKey); len(got) != 1 || got[0].Content != want {
 		t.Fatalf("dave copy = %#v, want %q", got, want)
 	}
@@ -421,10 +429,81 @@ func TestMailboxFanOutMixedOutcomes(t *testing.T) {
 		!strings.Contains(text, "failed alice@worktree [to]: ") || !strings.Contains(text, "failed bob@clone [bcc]: ") {
 		t.Fatalf("all-failed fan-out = %s", allFailed)
 	}
+	// format: json does not change the all-failed shape: it stays the same
+	// text tool error, carrying the same failure list.
+	allFailedJSON := callToolOnce(t, f.sender, 31, "mailbox.send", map[string]any{
+		"session_key": f.workerKey, "to": []any{"alice@worktree"}, "content": "nobody", "format": "json",
+	})
+	if text := toolText(t, allFailedJSON); !toolIsError(t, allFailedJSON) ||
+		!strings.HasPrefix(text, "mailbox.send: delivered to none of 1 recipients\nfailed alice@worktree [to]: ") {
+		t.Fatalf("all-failed JSON fan-out = %s", allFailedJSON)
+	}
 	select {
 	case <-sub.Hard():
 		t.Fatal("a fan-out that delivered nothing woke the mailbox waits")
 	default:
+	}
+
+	// A partial JSON receipt lists the failed copy with its error.
+	raw := callToolWithKey(t, f.sender, 32, f.workerKey, "mailbox.send", map[string]any{
+		"to": []any{f.daveAddr}, "cc": []any{"alice@worktree"}, "content": "partial json", "format": "json",
+	})
+	var partial struct {
+		Delivered []mailboxFanOutResult `json:"delivered"`
+		Failed    []mailboxFanOutResult `json:"failed"`
+	}
+	if err := json.Unmarshal([]byte(raw), &partial); err != nil {
+		t.Fatalf("JSON receipt: %v: %s", err, raw)
+	}
+	if len(partial.Delivered) != 1 || partial.Delivered[0].Address != f.daveAddr || partial.Delivered[0].Role != "to" || partial.Delivered[0].Error != "" ||
+		len(partial.Failed) != 1 || partial.Failed[0].Address != "alice@worktree" || partial.Failed[0].Role != "cc" ||
+		partial.Failed[0].Error == "" || partial.Failed[0].Stamp != "" || partial.Failed[0].StampValue != "" {
+		t.Fatalf("partial JSON receipt = %s", raw)
+	}
+}
+
+// TestMailboxAudienceHeader pins the one generated audience line's literal
+// format. It is the only test that spells the format out; the routing tests
+// go through fanOutHeader.
+func TestMailboxAudienceHeader(t *testing.T) {
+	for _, tc := range []struct {
+		namespace string
+		to, cc    []string
+		want      string
+	}{
+		{"ws", []string{"alice@worktree"}, nil, "[ws mail to: alice@worktree]"},
+		{"ws", []string{"alice@worktree", "id:abc"}, []string{"bob@clone"}, "[ws mail to: alice@worktree, id:abc; cc: bob@clone]"},
+		{"wsflow", []string{"alice@machine"}, []string{"bob@worktree", "carol@worktree"}, "[wsflow mail to: alice@machine; cc: bob@worktree, carol@worktree]"},
+	} {
+		if got := mailboxAudienceHeader(tc.namespace, tc.to, tc.cc); got != tc.want {
+			t.Fatalf("mailboxAudienceHeader(%q, %v, %v) = %q, want %q", tc.namespace, tc.to, tc.cc, got, tc.want)
+		}
+	}
+}
+
+// TestComposeMailboxFanOutBody pins placement without routing: the body
+// starts with the peer-lead note when there is one (supplied by the caller,
+// from either product, or stamped for a top-level lead), then the header
+// line, then the supplied bytes untrimmed. The header is passed in opaquely,
+// so placement does not depend on its format.
+func TestComposeMailboxFanOutBody(t *testing.T) {
+	const header = "<audience>"
+	wsNote := "[ws note: from a peer lead session (codex, not a worker), with the same authority as yours]"
+	wsflowNote := "[wsflow note: from a peer lead session (claude, not a worker), with the same authority as yours]"
+	for i, tc := range []struct {
+		content string
+		lead    bool
+		want    string
+	}{
+		{"  body \n", false, header + "\n  body \n"},
+		{"body", true, wsNote + "\n" + header + "\nbody"},
+		{wsNote + "\nbody", true, wsNote + "\n" + header + "\nbody"},
+		{wsflowNote + "\nbody", false, wsflowNote + "\n" + header + "\nbody"},
+		{wsNote, false, wsNote + "\n" + header + "\n"},
+	} {
+		if got := composeMailboxFanOutBody(tc.content, header, tc.lead, "codex", "ws"); got != tc.want {
+			t.Fatalf("case %d: composeMailboxFanOutBody = %q, want %q", i, got, tc.want)
+		}
 	}
 }
 
