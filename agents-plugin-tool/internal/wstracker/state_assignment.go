@@ -8,7 +8,7 @@ func (s *state) applyAssign(n *node) {
 	if s.items[item] == nil {
 		return
 	}
-	if o := s.items[item].open; o != nil && o.ended == nil {
+	if o := s.items[item].open; o != nil && o.ended == nil && !n.allTargetsDropped() {
 		o.ended = n // the creator delegated it another way
 	}
 	completion := p.str("completion")
@@ -25,7 +25,7 @@ func (s *state) applyAssign(n *node) {
 			case string:
 				s.assignPerson(n, item, t, completion)
 			case map[string]any:
-				if _, ok := t["root"].(string); ok {
+				if _, ok := t["root"].(string); ok && !n.droppedOrg(obj(t).str("org")) {
 					s.addRule(n, item, obj(t), completion)
 				}
 			}

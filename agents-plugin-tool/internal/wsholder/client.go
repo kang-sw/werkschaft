@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // Cause is why the daemon is not attached to a holder.
@@ -64,6 +65,9 @@ type ChildStatus struct {
 	Mode     string `json:"mode,omitempty"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Signal   *int   `json:"signal,omitempty"`
+	// InputClosed reports, for a running pipe child, whether an eof closed
+	// its stdin. A holder that predates it sends none (nil): unknown.
+	InputClosed *bool `json:"input_closed,omitempty"`
 }
 
 // Event is one line the holder sends that answers no request: a record of
@@ -76,12 +80,22 @@ type Event struct {
 	Stream  string `json:"stream,omitempty"`
 	Data    []byte `json:"data,omitempty"`
 	Partial bool   `json:"partial,omitempty"`
+	// Offset and CombinedOffset are an output record's absolute byte
+	// offsets: of Data in its own stream, and in all of the child's output
+	// in arrival order. A holder that predates them sends neither.
+	Offset         *int64 `json:"offset,omitempty"`
+	CombinedOffset *int64 `json:"combined_offset,omitempty"`
 	// ExitCode and Signal are an exit record's status.
-	ExitCode *int   `json:"exit_code,omitempty"`
-	Signal   *int   `json:"signal,omitempty"`
-	From     uint64 `json:"from,omitempty"`
-	To       uint64 `json:"to,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	ExitCode *int `json:"exit_code,omitempty"`
+	Signal   *int `json:"signal,omitempty"`
+	// StreamBytes and OutputBytes are an exit record's output totals, by
+	// stream name and in all, so a replay with no output record left still
+	// knows them. A holder that predates them sends neither.
+	StreamBytes map[string]int64 `json:"stream_bytes,omitempty"`
+	OutputBytes *int64           `json:"output_bytes,omitempty"`
+	From        uint64           `json:"from,omitempty"`
+	To          uint64           `json:"to,omitempty"`
+	Reason      string           `json:"reason,omitempty"`
 
 	// The audit channel's fields (holder.py's docstring): an "audit" line's
 	// At (UTC nanoseconds at read), Anchor and Index, with the line in Data;
@@ -408,8 +422,8 @@ func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 		fields["rows"], fields["cols"] = spec.Rows, spec.Cols
 	}
 	first, rest := spec.Input, []byte(nil)
-	if len(first) > inputChunk {
-		first, rest = first[:inputChunk], first[inputChunk:]
+	if n := chunkEnd(first, utf8.Valid(first)); n < len(first) {
+		first, rest = first[:n], first[n:]
 	}
 	if len(first) > 0 {
 		fields["input"] = first
@@ -435,22 +449,71 @@ func (c *Client) Spawn(spec SpawnSpec) (ChildStatus, error) {
 // request line limit once encoded.
 const inputChunk = 256 << 10
 
+// chunkEnd is the length of data's first input chunk: all of it within
+// inputChunk, else inputChunk bytes, moved back to the start of a rune
+// when text is set, so every chunk boundary (and an InputError's Accepted)
+// splits valid UTF-8 between runes and the rest stays expressible as text.
+func chunkEnd(data []byte, text bool) int {
+	if len(data) <= inputChunk {
+		return len(data)
+	}
+	n := inputChunk
+	if text {
+		for n > inputChunk-utf8.UTFMax && !utf8.RuneStart(data[n]) {
+			n--
+		}
+	}
+	return n
+}
+
+// InputError is an Input call that did not complete. The holder queued
+// the first Accepted bytes of its data, in chunks it acknowledged. Refused
+// reports that the holder refused the next chunk (Err is its *OpError), so
+// nothing after Accepted was queued and the eof was not; otherwise that
+// chunk's delivery, and the eof's, is unknown: the call failed after the
+// chunk may have been sent.
+type InputError struct {
+	Accepted int
+	Refused  bool
+	Err      error
+}
+
+func (e *InputError) Error() string {
+	if e.Refused {
+		return fmt.Sprintf("the holder took the first %d bytes and refused the rest: %v", e.Accepted, e.Err)
+	}
+	return fmt.Sprintf("the holder took the first %d bytes; whether the rest arrived is unknown: %v", e.Accepted, e.Err)
+}
+
+func (e *InputError) Unwrap() error { return e.Err }
+
 // Input writes data to the child's standard input or PTY. With eof the
 // child's input closes after it (a pipe child's stdin; an end-of-file key
-// on a PTY).
+// on a PTY). Data longer than one chunk travels in several operations; a
+// failure answers an *InputError that says how much the holder took.
 func (c *Client) Input(data []byte, eof bool) error {
+	accepted := 0
+	fail := func(err error) error {
+		var opErr *OpError
+		return &InputError{Accepted: accepted, Refused: errors.As(err, &opErr), Err: err}
+	}
+	text := utf8.Valid(data)
 	for len(data) > inputChunk {
-		if _, err := c.call("input", map[string]any{"data": data[:inputChunk]}); err != nil {
-			return err
+		n := chunkEnd(data, text)
+		if _, err := c.call("input", map[string]any{"data": data[:n]}); err != nil {
+			return fail(err)
 		}
-		data = data[inputChunk:]
+		data = data[n:]
+		accepted += n
 	}
 	fields := map[string]any{"data": data}
 	if eof {
 		fields["eof"] = true
 	}
-	_, err := c.call("input", fields)
-	return err
+	if _, err := c.call("input", fields); err != nil {
+		return fail(err)
+	}
+	return nil
 }
 
 // Resize sets a PTY child's size.

@@ -184,6 +184,71 @@ func TestOutputRingsAggregateEvictionAndRelease(t *testing.T) {
 	}
 }
 
+// TestOutputRingsAppendAtKeepsAbsoluteOffsets: records placed at a
+// holder's offsets keep absolute offsets after a replay that starts past
+// evicted bytes; a gap in one stream leaves the other's retained bytes,
+// and a later gap drops only what came before it.
+func TestOutputRingsAppendAtKeepsAbsoluteOffsets(t *testing.T) {
+	r := NewOutputRings(1<<20, 1<<20)
+	j := r.NewJob()
+	// The replay's first record: 100 stdout bytes and 50 stderr bytes left
+	// the holder's ring before it.
+	r.AppendAt(j, StreamStdout, []byte("out-a\n"), 100, 150)
+	r.AppendAt(j, StreamStderr, []byte("err-a\n"), 50, 156)
+	r.AppendAt(j, StreamStdout, []byte("out-b\n"), 106, 162)
+	if got := j.Read(StreamStdout, 0, 100); got.Start != 100 || got.Evicted != 100 || got.Written != 112 || string(got.Data) != "out-a\nout-b\n" {
+		t.Fatalf("stdout after the replay = %+v (%q)", got, got.Data)
+	}
+	if got := j.Read(StreamStdout, 106, 100); got.Start != 106 || string(got.Data) != "out-b\n" {
+		t.Fatalf("stdout from a saved cursor = %+v (%q)", got, got.Data)
+	}
+	if got := j.Read(StreamStderr, 0, 100); got.Start != 50 || got.Written != 56 || string(got.Data) != "err-a\n" {
+		t.Fatalf("stderr after the replay = %+v (%q)", got, got.Data)
+	}
+	if got := j.Read(StreamCombined, 0, 100); got.Start != 150 || got.Written != 168 || string(got.Data) != "out-a\nerr-a\nout-b\n" {
+		t.Fatalf("combined after the replay = %+v (%q)", got, got.Data)
+	}
+	// A reader that fell behind missed stdout and combined bytes: what came
+	// before the gap goes, the offsets stay absolute.
+	r.AppendAt(j, StreamStdout, []byte("out-c\n"), 200, 300)
+	if got := j.Read(StreamStdout, 0, 100); got.Start != 200 || got.Evicted != 200 || string(got.Data) != "out-c\n" {
+		t.Fatalf("stdout after a gap = %+v (%q)", got, got.Data)
+	}
+	if got := j.Read(StreamCombined, 0, 100); got.Start != 300 || got.Written != 306 || string(got.Data) != "out-c\n" {
+		t.Fatalf("combined after a gap = %+v (%q)", got, got.Data)
+	}
+	// Offsets already written append as Append does.
+	r.AppendAt(j, StreamStdout, []byte("out-d\n"), 206, 306)
+	if got := j.Read(StreamStdout, 200, 100); string(got.Data) != "out-c\nout-d\n" || got.Written != 212 {
+		t.Fatalf("stdout after contiguous records = %+v (%q)", got, got.Data)
+	}
+}
+
+// TestOutputRingsAppendAtSetsTheSilentStream: a replay of one stream sets
+// the other stream's offset from the combined one, so a saved cursor of a
+// stream whose bytes all left the holder's ring reports the gap.
+func TestOutputRingsAppendAtSetsTheSilentStream(t *testing.T) {
+	r := NewOutputRings(1<<20, 1<<20)
+	j := r.NewJob()
+	// 40 stderr and 100 stdout bytes left the holder's ring; the replay
+	// holds stdout only.
+	r.AppendAt(j, StreamStdout, []byte("out-a\n"), 100, 140)
+	if got := j.Read(StreamStderr, 30, 100); got.Start != 40 || got.Evicted != 40 || got.Written != 40 || len(got.Data) != 0 {
+		t.Fatalf("stderr after a stdout-only replay = %+v (%q)", got, got.Data)
+	}
+	if got := j.Read(StreamStdout, 0, 100); got.Start != 100 || got.Written != 106 || string(got.Data) != "out-a\n" {
+		t.Fatalf("stdout after the replay = %+v (%q)", got, got.Data)
+	}
+	// stderr resumes at its absolute offset; stdout keeps its bytes.
+	r.AppendAt(j, StreamStderr, []byte("err-a\n"), 40, 146)
+	if got := j.Read(StreamStderr, 40, 100); got.Start != 40 || got.Written != 46 || string(got.Data) != "err-a\n" {
+		t.Fatalf("stderr after it resumed = %+v (%q)", got, got.Data)
+	}
+	if got := j.Read(StreamCombined, 0, 100); got.Start != 140 || got.Written != 152 || string(got.Data) != "out-a\nerr-a\n" {
+		t.Fatalf("combined = %+v (%q)", got, got.Data)
+	}
+}
+
 func TestOutputRingsReadBounds(t *testing.T) {
 	r := NewOutputRings(8, 0)
 	j := r.NewJob()

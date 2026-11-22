@@ -5,12 +5,13 @@ blocked-by: 261119-feat-ws-audit-policy-event-envelope
 related:
   261119-feat-ws-audit-ring-store: "sink: persists what this child captures; may proceed in parallel"
   261119-feat-ws-dashboard-audit-view: "consumer of the ring call ID (601), Phase 1"
+  261119-feat-ws-audit-query-api: "consumer: derives request_id, ctx_before and ctx_after from meta.request (Decision 7)"
   261117-feat-ws-harness-capability-catalog: "per-harness@version fixture policy; compaction capability sources"
   261114-feat-ws-conversation-audit-event-store: "superseded source of (598) boundary sources, (601), and the non-blocking writer constraint"
 sage-review-design: completed
 sage-review-completeness: completed
-sage-review-design-reviewed: 93ccf5b316752589
-sage-review-completeness-reviewed: 93ccf5b316752589
+sage-review-design-reviewed: c545dd031fe981a0
+sage-review-completeness-reviewed: c545dd031fe981a0
 ---
 
 # Audit capture point and per-harness adapters
@@ -174,6 +175,32 @@ Verified findings (codex.large read-only research, 2026-11-19):
      agy reports its own automatic compaction explicitly stays unverified and
      is confirmed from a recorded fixture in Phase 3; a qualifying usage drop
      can infer a cut even without an explicit report.
+7. **Request usage ((610) source, auto-confirmed 2026-11-22).** Every
+   captured event that came from one model request (thinking and tool_call,
+   and any other kind the harness attributes to a request) carries
+   `meta.request = {id, prev_id, ctx}`: `id` is the harness's request or
+   message ID, `ctx` is input + cache_read + cache_creation from that
+   request's usage, and `prev_id` is the ID of the request the adapter saw
+   immediately before it in the same model conversation, whether or not that
+   request produced a captured event. A model conversation is the lead's own
+   request chain or one native subagent's chain within the session; Claude
+   keys a native subagent's chain by its `parent_tool_use_id`, so a subagent
+   request interleaved between a lead call and the lead's next request never
+   becomes the lead's `prev_id`. The chain advances once per distinct request
+   ID: several stream lines of one assistant message share it. Both `id` and
+   `prev_id` pass through the store's shared identifier helper (ring-store
+   Decision 3) for every raw value, so long IDs take the digest form and a
+   short literal beginning with `sha256:` keeps a disjoint key. `meta.request`
+   is reader-required metadata under the ring's 64 KiB non-body bound, whose
+   overflow handling collapses only redaction entries and never drops it. The adapter reads usage from every assistant
+   message, including text-only ones it does not store (`assistant_text`
+   stays outside the capture scope). A harness whose stream carries no
+   usage omits `ctx`; one without a request ID omits `meta.request`. The
+   query API derives `request_id`, `ctx_before` and `ctx_after` only from
+   this object. Rejected: storing `assistant_text` to recover usage, which
+   widens the capture scope the policy child settled; and a precomputed
+   delta written later, which an append-only store cannot attach to an
+   event already written.
 
 ## Constraints
 
@@ -227,8 +254,8 @@ After the envelope child has landed: implement the holder-side tee and its
 versioned audit channel (Decision 5), the daemon-side capture on that
 channel, the Claude stream-json adapter for every kind the policy
 admits (thinking, hooks, reminders, the compaction summary and subagent lines
-included), the Claude `compact_boundary` cut, and the ring call ID (601) for
-Claude. Write into the envelope child's sink interface. Phase 1 closes on
+included), the Claude `compact_boundary` cut, the ring call ID (601) for
+Claude, and Claude's `meta.request` (Decision 7). Write into the envelope child's sink interface. Phase 1 closes on
 in-memory sink tests; the store-integrated check is gated in Phase 5.
 
 Verification: unit tests over recorded Claude stream-json fixtures, one per
@@ -238,7 +265,13 @@ protocol test that an old holder (no audit channel) still works against the
 new daemon and a new holder sends no audit lines to an old daemon; a test
 that lines skipped while no daemon is attached are dropped without stalling
 the holder; ordering of assembled events against the sequenced lines of one
-turn; a ring test that a Claude tools row's calls carry the same IDs as
+turn; `meta.request` on parallel calls from one assistant message (shared
+`id` and `ctx`), on the call after a text-only assistant message (its
+`prev_id` names the text-only message), with usage absent (`ctx`
+omitted), a native subagent request interleaved between a lead call and the
+lead's next request (each chain keeps its own `prev_id`; the recorded
+subagent-turn fixture), and repeated lines of one assistant message
+(the chain advances once); a ring test that a Claude tools row's calls carry the same IDs as
 the captured `tool_call` events, and an older ring entry without IDs still
 reads; a slow or failing sink never delays line delivery. Verify a late tee
 after the next kept record and a final dropped tee with a fence while display
@@ -446,7 +479,9 @@ Pre-merge review fixes, one commit each:
 
 Depends on Phase 1. Map the Codex app-server stream onto the envelope,
 including its compaction boundary if the stream carries one (confirm from a
-recorded fixture), and fill the ring call ID.
+recorded fixture), fill the ring call ID, and write `meta.request`
+(Decision 7) where the stream carries a request ID, with `ctx` where it
+carries usage.
 
 Verification: per-kind fixtures for the supported Codex version range; ring
 call ID parity as in Phase 1.
@@ -507,7 +542,9 @@ The ring call ID stays `NormalizeID(item.id)`.
 Depends on Phase 2. Map the agy ACP stream onto the envelope, including
 thought chunks per (1730)=b and the Decision 5 tee, the inferred compaction as
 the cut with `meta.estimated: true` (Decision 6),
-and the ring call ID where agy carries a tool-call ID.
+the ring call ID where agy carries a tool-call ID, and `meta.request`
+(Decision 7) where the stream carries a request ID, with `ctx` where it
+carries usage.
 
 Verification: per-kind fixtures, including a thought chunk and a
 `/compact` completion that yields the estimated cut (`meta.estimated: true`,
@@ -516,8 +553,9 @@ earlier events `model_seen: false`); ring call ID parity.
 ### Phase 4: Pi adapter
 
 Depends on Phase 3. Map Pi's events onto the envelope, including
-`compaction_start`/`compaction_end` as the cut, and fill the ring call ID
-where Pi's events carry one.
+`compaction_start`/`compaction_end` as the cut, fill the ring call ID
+where Pi's events carry one, and write `meta.request` (Decision 7) where
+its events carry a request ID, with `ctx` where they carry usage.
 
 Verification: per-kind fixtures, including a compaction pair; ring call ID
 parity.
