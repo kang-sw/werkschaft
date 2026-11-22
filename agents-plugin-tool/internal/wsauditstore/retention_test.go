@@ -1,8 +1,10 @@
 package wsauditstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -555,5 +557,86 @@ func TestEvictedUnloadedRingKeepsItsFinalizedState(t *testing.T) {
 	flush(t, s3)
 	if got := len(events(t, s3, "old")); got != 0 || lossCount(t, s3, "old") != 1 {
 		t.Fatalf("late replay after eviction: %d events, loss %d", got, lossCount(t, s3, "old"))
+	}
+}
+
+// TestSweepRecordsHeartbeatsBeforeAnUnwitnessedPrune pins last-seen
+// durability across a registry prune the daemon never saw: the periodic
+// sweep records a quiet session's newer heartbeat while it is registered, so
+// after the registry drops it and the daemon restarts, the ring still ages
+// from that heartbeat.
+func TestSweepRecordsHeartbeatsBeforeAnUnwitnessedPrune(t *testing.T) {
+	root := t.TempDir()
+	t0 := time.Now()
+	clock := &fakeClock{now: t0}
+	heartbeat, registered := t0, true
+	lastSeen := func(session string) (time.Time, bool) { return heartbeat, registered && session == "quiet" }
+	lim := DefaultLimits()
+	s, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now; o.LastSeen = lastSeen })
+	mustAppend(t, s, sourced("quiet", 1, wsaudit.KindToolCall))
+	flush(t, s)
+	heartbeat = t0.Add(5 * 24 * time.Hour) // heartbeats only, no events
+	clock.now = heartbeat
+	if err := s.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	registered = false // pruned by a ws-mcp process; no OnRemove reaches the store
+	_ = s.Close()
+	clock.now = t0.Add(10 * 24 * time.Hour)
+	s2, _ := openTest(t, root, func(o *Options) { o.Limits = lim; o.Now = clock.Now; o.LastSeen = lastSeen })
+	if len(events(t, s2, "quiet")) != 1 {
+		t.Fatal("the ring aged from its last event, not its last recorded heartbeat")
+	}
+	clock.now = t0.Add(13 * 24 * time.Hour)
+	if err := s2.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "quiet")); !os.IsNotExist(err) {
+		t.Fatal("ring outlived the retention after the last recorded heartbeat")
+	}
+}
+
+// TestIndexRecoveryKeepsOlderFilesUntilASnapshotLands pins the index's
+// two-file ring: an interrupted rotation (newest file empty) recovers the
+// older file's entries and replaces both with a fresh snapshot, and a
+// snapshot write that fails leaves the old file and no torn new one.
+func TestIndexRecoveryKeepsOlderFilesUntilASnapshotLands(t *testing.T) {
+	root := t.TempDir()
+	seen := formatTime(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	good := `{"dir":"a","session":"a","seen":"` + seen + `"}` + "\n"
+	if err := os.WriteFile(filepath.Join(root, indexName(1)), []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, indexName(2)), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log, rec, err := openIndex(root)
+	if err != nil || rec["a"].Seen != seen {
+		t.Fatalf("recovered %+v %v", rec, err)
+	}
+	log.close()
+	if names := segSeqs(t, root); fmt.Sprint(names) != fmt.Sprint([]string{indexName(3)}) {
+		t.Fatalf("index files after recovery: %v", names)
+	}
+	log2, rec2, err := openIndex(root)
+	if err != nil || rec2["a"].Seen != seen {
+		t.Fatalf("snapshot lost the entry: %+v %v", rec2, err)
+	}
+
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		if bytes.Contains(b, []byte(`"snap"`)) {
+			n, _ := orig(f, b[:len(b)/2])
+			return n, errors.New("disk full")
+		}
+		return orig(f, b)
+	}
+	if err := log2.rotate([]indexEntry{rec2["a"]}); err == nil {
+		t.Fatal("rotation reported success")
+	}
+	log2.close()
+	if names := segSeqs(t, root); fmt.Sprint(names) != fmt.Sprint([]string{indexName(3)}) {
+		t.Fatalf("a failed snapshot left %v", names)
 	}
 }

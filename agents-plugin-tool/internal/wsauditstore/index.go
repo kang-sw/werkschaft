@@ -44,7 +44,11 @@ type indexLog struct {
 	size int64
 }
 
-// openIndex reads the newest index file once and opens it for appends.
+// openIndex reads the index files once, oldest first, keeping each ring's
+// latest recorded time. One file is the steady state; more mean a rotation
+// was interrupted (its new file may be torn or empty), so the merged entries
+// are written to a fresh snapshot file and the older files are deleted only
+// once that snapshot is on disk.
 func openIndex(root string) (*indexLog, map[string]indexEntry, error) {
 	entries, err := readDir(root)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -64,41 +68,72 @@ func openIndex(root string) (*indexLog, map[string]indexEntry, error) {
 	if len(seqs) == 0 {
 		return log, recorded, nil
 	}
+	keep := func(e indexEntry) {
+		if old, ok := recorded[e.Dir]; ok && parseSeen(old.Seen).After(parseSeen(e.Seen)) {
+			return
+		}
+		recorded[e.Dir] = e
+	}
+	var newestGood, newestLen int64
+	for i, seq := range seqs {
+		raw, err := readFile(filepath.Join(root, indexName(seq)))
+		if err != nil {
+			if i == len(seqs)-1 {
+				return nil, nil, err
+			}
+			continue
+		}
+		pos := 0
+		for pos < len(raw) {
+			nl := bytes.IndexByte(raw[pos:], '\n')
+			if nl < 0 {
+				break
+			}
+			var ln indexLine
+			if json.Unmarshal(raw[pos:pos+nl], &ln) == nil {
+				for _, e := range ln.Snap {
+					keep(e)
+				}
+				if ln.Dir != "" {
+					keep(ln.indexEntry)
+				}
+			}
+			pos += nl + 1
+		}
+		newestGood, newestLen = int64(pos), int64(len(raw))
+	}
 	newest := seqs[len(seqs)-1]
+	if len(seqs) > 1 {
+		log.seq = newest
+		snap := make([]indexEntry, 0, len(recorded))
+		for _, e := range recorded {
+			snap = append(snap, e)
+		}
+		sort.Slice(snap, func(i, j int) bool { return snap[i].Dir < snap[j].Dir })
+		if log.rotate(snap) != nil {
+			// Keep every file; the next record retries the snapshot.
+			return log, recorded, nil
+		}
+		for _, old := range seqs {
+			_ = removeFile(filepath.Join(root, indexName(old)))
+		}
+		return log, recorded, nil
+	}
 	path := filepath.Join(root, indexName(newest))
-	raw, err := readFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	pos := 0
-	for pos < len(raw) {
-		nl := bytes.IndexByte(raw[pos:], '\n')
-		if nl < 0 {
-			break
-		}
-		var ln indexLine
-		if json.Unmarshal(raw[pos:pos+nl], &ln) == nil {
-			for _, e := range ln.Snap {
-				recorded[e.Dir] = e
-			}
-			if ln.Dir != "" {
-				recorded[ln.Dir] = ln.indexEntry
-			}
-		}
-		pos += nl + 1
-	}
-	if pos < len(raw) {
-		_ = truncateFile(path, int64(pos))
-	}
-	for _, old := range seqs[:len(seqs)-1] {
-		_ = removeFile(filepath.Join(root, indexName(old)))
+	if newestGood < newestLen {
+		_ = truncateFile(path, newestGood)
 	}
 	f, err := openAppend(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	log.file, log.seq, log.size = f, newest, int64(pos)
+	log.file, log.seq, log.size = f, newest, newestGood
 	return log, recorded, nil
+}
+
+func parseSeen(s string) time.Time {
+	t, _ := time.Parse(time.RFC3339Nano, s)
+	return t
 }
 
 // record appends one entry, rotating to a snapshot file first when the log
@@ -132,7 +167,9 @@ func (l *indexLog) rotate(snap []indexEntry) error {
 	}
 	n, err := writeFile(f, raw)
 	if err != nil {
+		// A torn snapshot must not outrank the file it replaces.
 		_ = closeFile(f)
+		_ = removeFile(filepath.Join(l.root, indexName(l.seq+1)))
 		return err
 	}
 	if l.file != nil {

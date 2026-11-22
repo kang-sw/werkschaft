@@ -51,9 +51,10 @@ type Options struct {
 	Log io.Writer
 	// QueueDepth bounds the envelopes waiting for the writer (default 4096).
 	QueueDepth int
-	// LastSeen reports a session's registry last-seen time. The retention
-	// sweep asks it before removing a ring and records a newer answer, so a
-	// quiet session that still heartbeats keeps its ring. It receives the
+	// LastSeen reports a session's registry last-seen time. Every sweep and
+	// Close ask it for each ring and record a newer answer, so a quiet
+	// session that still heartbeats keeps its ring, even after the registry
+	// pruned it while the daemon was not watching. It receives the
 	// normalized session ID, which is the raw ID for every ID NormalizeID
 	// keeps verbatim (registry reply IDs are). Nil skips it.
 	LastSeen func(session string) (time.Time, bool)
@@ -480,6 +481,7 @@ func (s *Store) flushPending() {
 }
 
 func (s *Store) shutdown() {
+	s.refreshLastSeen()
 	s.mu.Lock()
 	infos := make([]*sessionInfo, 0, len(s.sessions))
 	for _, info := range s.sessions {
@@ -960,9 +962,11 @@ func (s *Store) snapshot() []indexEntry {
 	return out
 }
 
-// sweep removes every ring last seen longer than the retention period ago,
-// first asking the registry for a newer last-seen time.
+// sweep first carries every registered session's registry last-seen time
+// into the store index (refreshLastSeen), then removes every ring last seen
+// longer than the retention period ago, then enforces the byte caps.
 func (s *Store) sweep() {
+	s.refreshLastSeen()
 	now := s.opts.Now()
 	s.mu.Lock()
 	var expired []*sessionInfo
@@ -974,14 +978,6 @@ func (s *Store) sweep() {
 	s.mu.Unlock()
 	sort.Slice(expired, func(i, j int) bool { return expired[i].dir < expired[j].dir })
 	for _, info := range expired {
-		if s.opts.LastSeen != nil && info.session != "" {
-			if t, ok := s.opts.LastSeen(info.session); ok && t.After(info.lastSeen) {
-				s.touchNormalized(info.session, t)
-				if now.Sub(info.lastSeen) <= s.limits.Retention {
-					continue
-				}
-			}
-		}
 		if s.foreign(info) {
 			s.logf("retention: keep audit ring of session %s: it holds a newer format", info.dir)
 			continue
@@ -992,6 +988,30 @@ func (s *Store) sweep() {
 		}
 	}
 	s.enforceCaps()
+}
+
+// refreshLastSeen records each ring's registry last-seen time when it moved
+// past the recorded one. It runs at the periodic sweep and at Close — never
+// per heartbeat — so a quiet session's latest heartbeat survives a registry
+// prune the daemon did not witness, at most one sweep interval stale.
+func (s *Store) refreshLastSeen() {
+	if s.opts.LastSeen == nil {
+		return
+	}
+	s.mu.Lock()
+	infos := make([]*sessionInfo, 0, len(s.sessions))
+	for _, info := range s.sessions {
+		if info.session != "" {
+			infos = append(infos, info)
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(infos, func(i, j int) bool { return infos[i].dir < infos[j].dir })
+	for _, info := range infos {
+		if t, ok := s.opts.LastSeen(info.session); ok && t.After(info.recorded) {
+			s.touchNormalized(info.session, t)
+		}
+	}
 }
 
 // foreign reports whether info's ring holds a newer format: a loaded ring
