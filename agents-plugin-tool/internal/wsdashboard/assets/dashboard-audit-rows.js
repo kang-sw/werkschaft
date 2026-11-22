@@ -168,6 +168,8 @@
     var auLatestAfter = "";
     var auReset410Done = false;
     var auFetchQueue = Promise.resolve();
+    var auEpoch = 0;
+    var auFailedJobs = [];
     var auFocusedAuditEl = null;
 
     function auConvo() { return $("convo"); }
@@ -400,13 +402,16 @@
       var before = "";
       var restarted = false;
       var anyAdded = false;
+      var epoch = auEpoch, candidateAfter = "";
       function step() {
+        if (epoch !== auEpoch) return Promise.resolve({ ok: false });
         var url = auBuildEventsURL({ since: since, until: until, before: before });
         return fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+          if (epoch !== auEpoch) return null;
           if (r.status === 410 && before && !restarted) {
             restarted = true;
             before = "";
-            return step();
+            return { restart: true };
           }
           if (!r.ok) {
             var err = new Error("HTTP " + r.status);
@@ -415,11 +420,14 @@
           }
           return r.json();
         }).then(function (page) {
+          if (epoch !== auEpoch) return { ok: false };
+          if (page && page.restart) return step();
           if (page && Array.isArray(page.events) && auStoreEvents(page.events)) anyAdded = true;
-          if (updateLatestAfter && !before && page && page.after) auLatestAfter = page.after;
+          if (updateLatestAfter && !before && page && page.after) candidateAfter = page.after;
           if (!page || page.end || !page.before) {
+            if (candidateAfter) auLatestAfter = candidateAfter;
             if (anyAdded) auReconcileRows();
-            return { ok: true, page: page };
+            return { ok: true, page: page, epoch: epoch };
           }
           before = page.before;
           return step();
@@ -430,33 +438,35 @@
 
     function auRefreshLatestAfter() {
       if (!auRowsRid || !window.fetch || !auLatestAfter) return Promise.resolve({ ok: false, skipped: true });
-      var url = auBuildEventsURL({ after: auLatestAfter });
-      return fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
-        if (r.status === 410) {
-          auLatestAfter = "";
-          if (auReset410Done) return { ok: false, status: 410 };
-          auReset410Done = true;
-          return auFetchInterval(auCoveredSince || "", "", true).then(function (res) {
-            if (res && res.ok) auReset410Done = false;
-            return res;
-          });
-        }
-        if (!r.ok) {
-          // 503 or transient HTTP error: preserve auLatestAfter for clean retry.
-          return { ok: false, status: r.status };
-        }
-        return r.json().then(function (page) {
-          auReset410Done = false;
-          if (page && page.after) auLatestAfter = page.after;
-          if (page && Array.isArray(page.events) && auStoreEvents(page.events)) {
-            auReconcileRows();
+      var epoch = auEpoch;
+      function step() {
+        if (epoch !== auEpoch) return Promise.resolve({ ok: false });
+        var cursor = auLatestAfter;
+        var url = auBuildEventsURL({ after: cursor });
+        return fetch(url, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+          if (epoch !== auEpoch) return { ok: false };
+          if (r.status === 410) {
+            auLatestAfter = "";
+            if (auReset410Done) return { ok: false, status: 410 };
+            auReset410Done = true;
+            return auFetchInterval(auCoveredSince || "", "", true).then(function (res) {
+              if (res && res.ok && res.epoch === auEpoch) auReset410Done = false;
+              return res;
+            });
           }
-          return { ok: true };
-        });
-      }).catch(function () {
-        // Network failure: preserve auLatestAfter without poisoning state.
-        return { ok: false };
-      });
+          if (!r.ok) return { ok: false, status: r.status };
+          return r.json().then(function (page) {
+            if (epoch !== auEpoch) return { ok: false };
+            auReset410Done = false;
+            var nextAfter = page && page.after;
+            if (nextAfter) auLatestAfter = nextAfter;
+            if (page && Array.isArray(page.events) && auStoreEvents(page.events)) auReconcileRows();
+            if (page && page.events && page.events.length && nextAfter && nextAfter !== cursor) return step();
+            return { ok: true };
+          });
+        }).catch(function () { return { ok: false }; });
+      }
+      return step();
     }
 
     function auPruneBeforeFloor(floorAt) {
@@ -473,7 +483,21 @@
     }
 
     function auEnqueue(fn) {
-      auFetchQueue = auFetchQueue.then(fn, fn).catch(function () {});
+      var epoch = auEpoch;
+      function run(job) {
+        if (epoch !== auEpoch) return Promise.resolve();
+        return Promise.resolve().then(job).catch(function () {
+          if (epoch === auEpoch) auFailedJobs.push(job);
+        });
+      }
+      function work() {
+        if (epoch !== auEpoch) return;
+        var failed = auFailedJobs;
+        auFailedJobs = [];
+        return failed.reduce(function (p, job) { return p.then(function () { return run(job); }); }, Promise.resolve())
+          .then(function () { return run(fn); });
+      }
+      auFetchQueue = auFetchQueue.then(work, work);
       return auFetchQueue;
     }
 
@@ -484,7 +508,7 @@
       if (oldest) {
         auEnqueue(function () {
           return auFetchInterval(oldest, "", true).then(function (res) {
-            if (res && res.ok) {
+            if (res && res.ok && res.epoch === auEpoch) {
               if (!auCoveredSince || auCmpStrNs(oldest, auCoveredSince) < 0) auCoveredSince = oldest;
             }
           });
@@ -493,7 +517,7 @@
         auEnqueue(function () {
           if (auUnboundedDone) return Promise.resolve();
           return auFetchInterval("", "", true).then(function (res) {
-            if (res && res.ok) auUnboundedDone = true;
+            if (res && res.ok && res.epoch === auEpoch) auUnboundedDone = true;
           });
         });
       }
@@ -508,7 +532,7 @@
         if (d.empty && d.end && !oldest) {
           if (!auUnboundedDone) {
             p = auFetchInterval("", "", true).then(function (res) {
-              if (res && res.ok) auUnboundedDone = true;
+              if (res && res.ok && res.epoch === auEpoch) auUnboundedDone = true;
             });
           }
           return p;
@@ -516,17 +540,17 @@
         if (oldest && auCoveredSince && auCmpStrNs(oldest, auCoveredSince) < 0) {
           var prevUpper = auCoveredSince;
           p = auFetchInterval(oldest, prevUpper, false).then(function (res) {
-            if (res && res.ok) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = oldest;
           });
         } else if (oldest && !auCoveredSince) {
           p = auFetchInterval(oldest, "", true).then(function (res) {
-            if (res && res.ok) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch) auCoveredSince = oldest;
           });
         }
         if (d.end && oldest && !auOpenBelowDone) {
           p = p.then(function () {
             return auFetchInterval("", oldest, false).then(function (res) {
-              if (res && res.ok) auOpenBelowDone = true;
+              if (res && res.ok && res.epoch === auEpoch) auOpenBelowDone = true;
             });
           });
         }
@@ -547,12 +571,12 @@
         if (auLatestAfter) return auRefreshLatestAfter();
         if (!d.empty && oldest) {
           return auFetchInterval(auCoveredSince || oldest, "", true).then(function (res) {
-            if (res && res.ok && (!auCoveredSince || auCmpStrNs(oldest, auCoveredSince) < 0)) auCoveredSince = oldest;
+            if (res && res.ok && res.epoch === auEpoch && (!auCoveredSince || auCmpStrNs(oldest, auCoveredSince) < 0)) auCoveredSince = oldest;
           });
         }
         if (d.empty && !oldest) {
           return auFetchInterval("", "", true).then(function (res) {
-            if (res && res.ok) auUnboundedDone = true;
+            if (res && res.ok && res.epoch === auEpoch) auUnboundedDone = true;
           });
         }
         return Promise.resolve();
@@ -562,17 +586,17 @@
     doc.addEventListener("ws-history-reset", function () {
       var box = auEntriesContainer();
       var oldest = auFirstDataEntryAt(box);
+      auEpoch++;
+      auLatestAfter = "";
+      auCoveredSince = "";
       auOpenBelowDone = false;
       auUnboundedDone = false;
-      if (!oldest) {
-        auEventsById = Object.create(null);
-        auCoveredSince = "";
-        auReconcileRows();
-      } else {
-        auPruneBeforeFloor(oldest);
-        auCoveredSince = oldest;
-        auReconcileRows();
-      }
+      auReset410Done = false;
+      auFailedJobs = [];
+      auFetchQueue = Promise.resolve();
+      auEventsById = Object.create(null);
+      auReconcileRows();
+      if (oldest) auInitialSync();
     });
 
     // Click and keyboard handling inside conversation pane.

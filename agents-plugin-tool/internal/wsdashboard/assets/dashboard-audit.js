@@ -312,6 +312,7 @@
   }
 
   function auFetchEnvelope(win, eventId) {
+    var reqToken = ++win.reqToken;
     if (!eventId) {
       win.loading = false;
       win.activeEnvelope = null;
@@ -327,7 +328,8 @@
       auRenderWindowBody(win);
       return;
     }
-    var reqToken = ++win.reqToken;
+    win.activeEnvelope = null;
+    win.resultLoading = false; win.resultEnvelope = null; win.resultError = null;
     win.loading = true;
     win.errorState = null;
     auRenderWindowBody(win);
@@ -768,6 +770,7 @@
   }
 
   function auLoadEventIntoWindow(win, eventId, opts) {
+    ++win.reqToken;
     opts = opts || {};
     win.callId = opts.callId || ""; win.eventId = eventId; win.inspectEventId = null;
     win.activeSummary = opts.summary || null; win.callSummary = null;

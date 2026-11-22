@@ -402,6 +402,7 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
             }
           };
         }
+        if (url.includes('after=cur2')) return { ok: true, status: 200, async json() { return { events: [], after: 'cur2' }; } };
         if (url.includes('after=cur1')) {
           return {
             ok: true, status: 200,
@@ -512,4 +513,87 @@ test('controller executes (607)/(681) paging, open-below oldest, 410 reset, 503 
   assert.equal(otherEl.focused, true);
   dom.doc.dispatchEvent({ type: 'keydown', key: 'Enter', target: otherEl, preventDefault() {} });
   assert.deepEqual(opened[opened.length - 1], ['event', 'ev-other', 'raw']);
+});
+
+
+function raceRowsHarness(fetchFn) {
+  const dom = makeFakeDOM();
+  const ctx = {
+    Date, Math, Number, String, Array, Object, JSON, Promise, isFinite, encodeURIComponent,
+    fetch: fetchFn, root: dom.rootEl, rid: 's1', doc: dom.doc,
+    $(id) { return dom.doc.getElementById(id); },
+    region() { return dom.rEntries; }, wsT(k) { return k; },
+    window: { fetch: fetchFn, localStorage: { getItem() { return null; }, setItem() {} },
+      WsAudit: { syncSelection() {}, fmtBytes(n) { return String(n); } } }
+  };
+  vm.createContext(ctx);
+  vm.runInContext(rowsSrc.replace('    auInitialSync();', ''), ctx);
+  return { ctx, dom };
+}
+const auditPage = (page) => ({ ok: true, status: 200, async json() { return page; } });
+
+test('gap reset invalidates pending interval and refetches displayed coverage', async () => {
+  let finish;
+  const urls = [];
+  const { ctx, dom } = raceRowsHarness((url) => {
+    urls.push(url);
+    if (urls.length === 1) return new Promise((resolve) => { finish = resolve; });
+    return Promise.resolve(auditPage({ events: [], after: 'fresh', end: true }));
+  });
+  ctx.auLatestAfter = 'stale'; ctx.auCoveredSince = 'old';
+  ctx.auOpenBelowDone = ctx.auUnboundedDone = ctx.auReset410Done = true;
+  const pending = ctx.auFetchInterval('old', '', true);
+  dom.doc.dispatchEvent({ type: 'ws-history-reset' });
+  assert.equal(ctx.auLatestAfter, '');
+  assert.equal(ctx.auCoveredSince, '');
+  assert.equal(ctx.auOpenBelowDone, false);
+  assert.equal(ctx.auUnboundedDone, false);
+  assert.equal(ctx.auReset410Done, false);
+  finish(auditPage({ events: [{ id: 'stale', kind: 'thinking' }], after: 'stale', end: true }));
+  assert.equal((await pending).ok, false);
+  assert.equal(ctx.auEventsById.stale, undefined);
+  dom.doc.dispatchEvent({ type: 'ws-entries-merged', detail: { oldestAt: '2026-11-20T10:00:02Z' } });
+  await ctx.auFetchQueue;
+  assert.match(urls[1], /since=/);
+  assert.doesNotMatch(urls[1], /after=/);
+  assert.equal(ctx.auLatestAfter, 'fresh');
+});
+
+test('page two 503 leaves interval uncommitted and next merge retries full interval', async () => {
+  const urls = [];
+  let fail = true;
+  const { ctx, dom } = raceRowsHarness(async (url) => {
+    urls.push(url);
+    if (url.includes('before=older')) {
+      if (fail) return { ok: false, status: 503 };
+      return auditPage({ events: [], end: true });
+    }
+    if (url.includes('after=')) return auditPage({ events: [], after: 'latest' });
+    return auditPage({ events: [], before: 'older', after: 'latest', end: false });
+  });
+  const merge = () => dom.doc.dispatchEvent({ type: 'ws-entries-merged', detail: { oldestAt: '2026-11-20T10:00:02Z' } });
+  merge(); await ctx.auFetchQueue;
+  assert.equal(ctx.auLatestAfter, '');
+  assert.equal(ctx.auCoveredSince, '');
+  fail = false;
+  merge(); await ctx.auFetchQueue;
+  assert.match(urls[2], /since=/);
+  assert.doesNotMatch(urls[2], /after=|before=/);
+  assert.equal(ctx.auLatestAfter, 'latest');
+  assert.equal(ctx.auCoveredSince, '2026-11-20T10:00:02Z');
+});
+
+test('live refresh drains reconnect backlog beyond 200 events', async () => {
+  const cursors = [];
+  const { ctx } = raceRowsHarness(async (url) => {
+    const cursor = new URL(url, 'http://fixture').searchParams.get('after');
+    cursors.push(cursor);
+    const n = Number(cursor);
+    return auditPage({ events: n < 2 ? Array.from({ length: 200 }, (_, i) => ({ id: n + '-' + i, kind: 'tool_call' })) : [],
+      after: String(n < 2 ? n + 1 : n) });
+  });
+  ctx.auLatestAfter = '0';
+  await ctx.auRefreshLatestAfter();
+  assert.deepEqual(cursors, ['0', '1', '2']);
+  assert.equal(ctx.auLatestAfter, '2');
 });

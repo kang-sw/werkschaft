@@ -465,3 +465,32 @@ test('openEvent auto-selects out for non-tool_call out-only envelopes unless opt
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(h.ctx.WsAudit.windows()[0].tab, 'in');
 });
+
+
+test('cached hidden event invalidates pending tool lookup and envelope responses', async () => {
+  const pending = [];
+  const h = loadAuditControllerHarness((url) => new Promise((resolve) => pending.push({ url, resolve })));
+  h.ctx.WsAudit.openEvent('hidden');
+  pending.shift().resolve({ ok: true, async json() { return { id: 'hidden', kind: 'thinking', out: 'cached' }; } });
+  await new Promise((r) => setTimeout(r, 0));
+  const win = h.ctx.WsAudit.windows()[0];
+  const row = makeCallRow(h.makeEl, 'late');
+  h.convo.appendChild(row);
+  h.ctx.WsAudit.openCall('late', row);
+  const token = win.reqToken;
+  h.ctx.WsAudit.openEvent('hidden');
+  assert.ok(win.reqToken > token);
+  for (const req of pending.splice(0)) req.resolve({ ok: true, async json() {
+    return { call: { id: 'tool', kind: 'tool_call', call_id: 'late' }, events: [] };
+  } });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(win.activeEnvelope.id, 'hidden');
+  h.ctx.WsAudit.openEvent('uncached');
+  assert.equal(win.activeEnvelope, null);
+  assert.equal(win.resultLoading, false);
+  assert.equal(win.resultEnvelope, null);
+  h.ctx.WsAudit.openEvent('hidden');
+  for (const req of pending.splice(0)) req.resolve({ ok: true, async json() { return { id: 'uncached', kind: 'other' }; } });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(win.activeEnvelope.id, 'hidden');
+});
