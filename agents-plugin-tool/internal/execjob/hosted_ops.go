@@ -17,12 +17,22 @@ import (
 // error means the holder did not go and the job may still run. byUser marks
 // the stop as the user's own (the HUD's): the first stop to set stopping
 // decides it, and the job is marked stopped-by-user only where this stop's
-// intent ends it as stopped (endLocked).
+// intent ends it as stopped (endLocked). Only one stop at a time asks the
+// holder: one that finds a stop's holder stop in flight joins it and gets its
+// outcome, so a failed attempt clears stopping and the intent once and a stop
+// after it decides afresh.
 func (h *Hosted) stop(j *hostedJob, byUser bool) error {
 	h.mu.Lock()
 	if j.row.Terminal() {
 		h.mu.Unlock()
 		return nil
+	}
+	if a := j.stopAttempt; a != nil {
+		// A stop is already asking the holder: this one joins it, and sees
+		// its outcome, rather than asking again.
+		h.mu.Unlock()
+		<-a.done
+		return a.err
 	}
 	if !j.stopping {
 		j.stopIntent = byUser
@@ -52,6 +62,29 @@ func (h *Hosted) stop(j *hostedJob, byUser bool) error {
 		}
 		return nil
 	}
+	a := &stopAttempt{done: make(chan struct{})}
+	j.stopAttempt = a
+	h.mu.Unlock()
+	err := h.stopHolderOf(j)
+	h.mu.Lock()
+	if err != nil && !j.row.Terminal() {
+		// The holder did not go: the job may still run, and nothing marks
+		// it as stopped. Cleared here, once, with the attempt, so a stop
+		// that follows starts afresh and its own intent stands.
+		j.stopping, j.stopIntent = false, false
+	}
+	a.err = err
+	j.stopAttempt = nil
+	h.mu.Unlock()
+	close(a.done)
+	return err
+}
+
+// stopHolderOf is the owning stop's holder stop and end: it waits for a
+// hand-over in progress, stops j's holder, and ends the job itself when the
+// holder went without its exit record. An error means the holder did not go.
+func (h *Hosted) stopHolderOf(j *hostedJob) error {
+	h.mu.Lock()
 	if wait := j.spawned; wait != nil {
 		h.mu.Unlock()
 		<-wait
@@ -74,7 +107,6 @@ func (h *Hosted) stop(j *hostedJob, byUser bool) error {
 	}
 	if err != nil && !errors.Is(err, wsholder.ErrUnknownHolder) {
 		// The holder did not go: the job may still run.
-		j.stopping, j.stopIntent = false, false
 		h.mu.Unlock()
 		return fmt.Errorf("stop exec job %s: %w", j.row.ID, err)
 	}

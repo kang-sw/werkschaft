@@ -42,15 +42,21 @@ func (h *Hosted) deliver(j *hostedJob) {
 // deliverPending tries every pending notice.
 func (h *Hosted) deliverPending() {
 	h.mu.Lock()
-	var pending []*hostedJob
+	var pending, stopPending []*hostedJob
 	for _, j := range h.jobs {
 		if j.row.Notice == NoticePending {
 			pending = append(pending, j)
+		}
+		if j.userStopped && j.stopNotice == StopNoticePending {
+			stopPending = append(stopPending, j)
 		}
 	}
 	h.mu.Unlock()
 	for _, j := range pending {
 		h.deliver(j)
+	}
+	for _, j := range stopPending {
+		h.retryStopNotice(j)
 	}
 }
 

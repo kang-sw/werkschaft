@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kang-sw/devenv/internal/execjob"
 )
@@ -181,12 +182,61 @@ func execJobOutput(w http.ResponseWriter, r *http.Request, svc ExecJobsService, 
 		return
 	}
 	view := execOutputView{Job: execJobViewOf(out.Job), From: out.From, Next: out.Next, Written: out.Written, Evicted: out.Evicted, Gap: out.Gap, Segments: make([]execSegmentView, 0, len(out.Segments))}
-	for _, seg := range out.Segments {
-		text, _ := execjob.DecodeText(seg.Data)
-		view.Segments = append(view.Segments, execSegmentView{Stream: seg.Stream.String(), Text: text})
-	}
+	view.Segments = decodeExecSegments(out.Segments)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, view)
+}
+
+// decodeExecSegments decodes the runs as text. Where stdout and stderr
+// interleave inside one character, its first bytes end one run and its
+// rest begins a later run of the same stream: the incomplete trailing bytes of
+// a run are carried to that stream's next run, so the character decodes whole
+// (a little after its place in the merged order). Bytes still incomplete at
+// the window's end decode as replacement characters, as an invalid byte does.
+func decodeExecSegments(segs []execjob.Segment) []execSegmentView {
+	out := make([]execSegmentView, 0, len(segs))
+	carry := map[execjob.Stream][]byte{}
+	for _, seg := range segs {
+		data := seg.Data
+		if c := carry[seg.Stream]; len(c) > 0 {
+			data = append(append([]byte(nil), c...), data...)
+			delete(carry, seg.Stream)
+		}
+		if n := incompleteTail(data); n > 0 {
+			carry[seg.Stream] = append([]byte(nil), data[len(data)-n:]...)
+			data = data[:len(data)-n]
+		}
+		if len(data) == 0 {
+			continue
+		}
+		text, _ := execjob.DecodeText(data)
+		out = append(out, execSegmentView{Stream: seg.Stream.String(), Text: text})
+	}
+	for _, seg := range segs {
+		if c := carry[seg.Stream]; len(c) > 0 {
+			text, _ := execjob.DecodeText(c)
+			out = append(out, execSegmentView{Stream: seg.Stream.String(), Text: text})
+			delete(carry, seg.Stream)
+		}
+	}
+	return out
+}
+
+// incompleteTail is the length of an incomplete, otherwise valid UTF-8
+// sequence at the end of b (0 when b ends on a whole character or an invalid
+// byte).
+func incompleteTail(b []byte) int {
+	for n := 1; n <= utf8.UTFMax-1 && n <= len(b); n++ {
+		c := b[len(b)-n]
+		if !utf8.RuneStart(c) {
+			continue
+		}
+		if !utf8.FullRune(b[len(b)-n:]) && c >= 0xC2 {
+			return n
+		}
+		return 0
+	}
+	return 0
 }
 
 // execJobStop stops the job (or retries a failed notice of a job the user

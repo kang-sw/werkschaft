@@ -87,6 +87,14 @@ type HostedOptions struct {
 	OnRunning func()
 }
 
+// stopAttempt is one in-flight stop of a job: its owner asks the holder and
+// every other stop of the job waits on done and reads err, which the owner
+// wrote before closing done.
+type stopAttempt struct {
+	done chan struct{}
+	err  error
+}
+
 type hostedJob struct {
 	row  HostedJobRow
 	out  *JobOutput
@@ -122,7 +130,11 @@ type hostedJob struct {
 	// outcome (StopNotice*), written under noticeMu (which orders its
 	// admission) and h.mu, read under h.mu. None of these is stored: a
 	// restart loses them.
-	stopIntent  bool
+	stopIntent bool
+	// stopAttempt is the stop whose holder stop is in flight; it is the
+	// only caller that asks the holder, and a stop that finds it joins it
+	// (stop). Set and cleared under h.mu.
+	stopAttempt *stopAttempt
 	userStopped bool
 	stopOwed    bool
 	stopNotice  string

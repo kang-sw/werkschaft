@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -339,5 +340,26 @@ func TestExecJobsEventRidesTheWebSocketFraming(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("no execjobs event %s (connect revision %s); saw %v", next, want, seen)
 		}
+	}
+}
+
+// TestExecHUDOutputKeepsACharacterSplitAcrossInterleavedStreams: the euro
+// sign's bytes arrive on stdout around a stderr write; each stream's own
+// bytes join, so it decodes whole instead of as replacement characters.
+func TestExecHUDOutputKeepsACharacterSplitAcrossInterleavedStreams(t *testing.T) {
+	segs := []execjob.Segment{
+		{Stream: execjob.StreamStdout, Data: []byte("a\xe2\x82")},
+		{Stream: execjob.StreamStderr, Data: []byte("warn\n")},
+		{Stream: execjob.StreamStdout, Data: []byte("\xacb")},
+	}
+	got := decodeExecSegments(segs)
+	want := []execSegmentView{{Stream: "stdout", Text: "a"}, {Stream: "stderr", Text: "warn\n"}, {Stream: "stdout", Text: "€b"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("segments = %+v, want %+v", got, want)
+	}
+	// Incomplete at the window's end, or invalid, is replaced as before.
+	tail := decodeExecSegments([]execjob.Segment{{Stream: execjob.StreamStdout, Data: []byte("x\xe2\x82")}, {Stream: execjob.StreamStderr, Data: []byte("\xff")}})
+	if len(tail) != 3 || tail[0].Text != "x" || tail[1].Text != "�" || tail[2].Text != "��" {
+		t.Fatalf("tail = %+v", tail)
 	}
 }

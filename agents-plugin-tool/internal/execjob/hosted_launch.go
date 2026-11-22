@@ -212,6 +212,9 @@ func (h *Hosted) Launch(ctx context.Context, drain <-chan struct{}, req HostedLa
 	} else {
 		h.mu.Unlock()
 	}
+	// The row now has its start time and process: a list read since the
+	// admission holds neither, so the revision moves once more.
+	h.runningChanged()
 	if req.Async {
 		return h.view(j, OutcomeAsync), nil
 	}

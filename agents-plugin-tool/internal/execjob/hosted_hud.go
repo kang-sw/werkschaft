@@ -25,6 +25,11 @@ const (
 	StopNoticeClosed = "closed"
 	// StopNoticeFailed: admission failed; a repeated stop of the job retries.
 	StopNoticeFailed = "failed"
+	// StopNoticePending: the owner's session was handed over at that moment
+	// and held nothing yet (a deferred admission). It is tried again on its
+	// own with the completion notices' retry, and a repeated stop tries it
+	// at once.
+	StopNoticePending = "pending"
 )
 
 // HostedOutputLimit bounds one output read: below textreader.MaxReadLimit,
@@ -191,12 +196,12 @@ func (h *Hosted) noticeStopped(j *hostedJob) {
 	h.admitStopNoticeLocked(j)
 }
 
-// retryStopNotice admits a failed user-stop notice again.
+// retryStopNotice admits a failed or deferred user-stop notice again.
 func (h *Hosted) retryStopNotice(j *hostedJob) {
 	j.noticeMu.Lock()
 	defer j.noticeMu.Unlock()
 	h.mu.Lock()
-	if j.stopNotice != StopNoticeFailed {
+	if j.stopNotice != StopNoticeFailed && j.stopNotice != StopNoticePending {
 		h.mu.Unlock()
 		return
 	}
@@ -233,14 +238,20 @@ func (h *Hosted) admitStopNoticeLocked(j *hostedJob) {
 			outcome = StopNoticeFailed
 		case out == NoticeDropped:
 			outcome = StopNoticeClosed
+		case out == NoticeDeferred:
+			// Nothing was queued: the session was between owners. Tried
+			// again on the completion notices' timer, not recorded as sent.
+			outcome = StopNoticePending
 		default:
-			// Accepted, a duplicate of one that landed, or held for a
-			// session a takeover may bring back: the agent will have it.
+			// Accepted, or a duplicate of one that landed: the agent has it.
 			outcome = StopNoticeSent
 		}
 	}
 	h.mu.Lock()
 	j.stopNotice = outcome
+	if outcome == StopNoticePending {
+		h.scheduleRetryLocked()
+	}
 	h.mu.Unlock()
 	// What the list shows changed; the revision moves once it is recorded.
 	h.runningChanged()

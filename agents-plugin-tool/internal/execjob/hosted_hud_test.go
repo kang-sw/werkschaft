@@ -229,8 +229,9 @@ func TestUserStopRacingNaturalExitEndsOnceAndMarksConsistently(t *testing.T) {
 }
 
 // TestUserStopSettingStoppingFirstMarksTheJobAnAgentStopJoins: the user's stop
-// sets stopping and is still in the holder; the agent's own stop joins and is
-// the one that ends the job. The user's stop decided it: marked, one notice.
+// sets stopping and is still in the holder; the agent's own stop joins that
+// attempt, asks the holder no second time, and returns with it. The user's
+// stop decided it: marked, one notice, and no completion notice.
 func TestUserStopSettingStoppingFirstMarksTheJobAnAgentStopJoins(t *testing.T) {
 	fx := newHostedFixture(t, time.Second)
 	v := fx.asyncJob(HostedLaunch{})
@@ -239,7 +240,7 @@ func TestUserStopSettingStoppingFirstMarksTheJobAnAgentStopJoins(t *testing.T) {
 	var calls atomic.Int32
 	fx.holders.mu.Lock()
 	fx.holders.beforeStop = func(string) {
-		if calls.Add(1) == 1 { // the user's stop, in flight
+		if calls.Add(1) == 1 { // later calls are the holder's own retiring
 			close(inUser)
 			<-release
 		}
@@ -250,16 +251,83 @@ func TestUserStopSettingStoppingFirstMarksTheJobAnAgentStopJoins(t *testing.T) {
 	<-inUser
 	agentDone := make(chan error, 1)
 	go func() { _, err := fx.h.Stop("lead", v.ID); agentDone <- err }()
-	if err := <-agentDone; err != nil { // the agent's stop ends the job while the user's is held
-		t.Fatal(err)
+	select {
+	case err := <-agentDone:
+		t.Fatalf("the agent's stop returned before the attempt it joined: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the holder was asked %d times while the first attempt ran, want 1", got)
 	}
 	close(release)
 	if err := <-userDone; err != nil {
 		t.Fatal(err)
 	}
+	if err := <-agentDone; err != nil {
+		t.Fatal(err)
+	}
 	sum := fx.h.Jobs("lead")[0]
-	if sum.State != HostedStopped || !sum.StoppedByUser || sum.StopNotice != StopNoticeSent || len(stopNotices(fx)) != 1 {
+	if sum.State != HostedStopped || !sum.StoppedByUser || sum.StopNotice != StopNoticeSent || len(stopNotices(fx)) != 1 || len(fx.sessions.noticeList()) != 1 {
 		t.Fatalf("job = %+v, notices %+v", sum, fx.sessions.noticeList())
+	}
+}
+
+// TestFailedStopAttemptFailsItsJoinersAndTheNextUserStopStillMarks: a stop's
+// holder stop fails while another stop has joined it: both see the failure,
+// stopping and the intent are cleared once, and a user stop that follows
+// ends the job marked, with its notice and no completion notice.
+func TestFailedStopAttemptFailsItsJoinersAndTheNextUserStopStillMarks(t *testing.T) {
+	fx := newHostedFixture(t, time.Second)
+	v := fx.asyncJob(HostedLaunch{})
+	inFirst := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	fx.holders.mu.Lock()
+	fx.holders.stopErr = errors.New("holder unreachable")
+	fx.holders.beforeStop = func(string) {
+		if calls.Add(1) == 1 {
+			close(inFirst)
+			<-release
+		}
+	}
+	fx.holders.mu.Unlock()
+	first := make(chan error, 1)
+	go func() { _, err := fx.h.StopByUser("lead", v.ID); first <- err }()
+	<-inFirst
+	joiner := make(chan error, 1)
+	go func() { _, err := fx.h.StopByUser("lead", v.ID); joiner <- err }()
+	time.Sleep(50 * time.Millisecond) // the joiner waits on the attempt
+	close(release)
+	if err := <-first; err == nil {
+		t.Fatal("the first stop must fail")
+	}
+	if err := <-joiner; err == nil {
+		t.Fatal("a stop that joined the failed attempt must see its failure")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the holder was asked %d times by the failed attempt and its joiner, want 1", got)
+	}
+	fx.h.mu.Lock()
+	j := fx.h.jobs[v.ID]
+	intent, stopping, attempt := j.stopIntent, j.stopping, j.stopAttempt
+	fx.h.mu.Unlock()
+	if intent || stopping || attempt != nil {
+		t.Fatalf("intent %v stopping %v attempt %v after the failed attempt", intent, stopping, attempt != nil)
+	}
+	fx.holders.mu.Lock()
+	fx.holders.stopErr = nil
+	fx.holders.mu.Unlock()
+	sum, err := fx.h.StopByUser("lead", v.ID)
+	if err != nil || sum.State != HostedStopped || !sum.StoppedByUser || sum.StopNotice != StopNoticeSent {
+		t.Fatalf("the next stop = %+v, %v", sum, err)
+	}
+	for _, n := range fx.sessions.noticeList() {
+		if strings.HasSuffix(n.event, ":exit") {
+			t.Fatalf("a completion notice went for a user-stopped job: %+v", n)
+		}
+	}
+	if len(stopNotices(fx)) != 1 {
+		t.Fatalf("stop notices = %+v", stopNotices(fx))
 	}
 }
 
@@ -337,11 +405,21 @@ func TestUserStopNoticeOutcomesAndRetry(t *testing.T) {
 	fx.sessions.outcome = NoticeDeferred
 	fx.sessions.mu.Unlock()
 	deferred := fx.asyncJob(HostedLaunch{})
-	if s, _ := fx.h.StopByUser("lead", deferred.ID); s.StopNotice != StopNoticeSent {
-		t.Fatalf("a deferred notice reads as sent: %+v", s)
+	if s, _ := fx.h.StopByUser("lead", deferred.ID); s.StopNotice != StopNoticePending {
+		t.Fatalf("a deferred notice must not read as sent: %+v", s)
 	}
 	fx.sessions.mu.Lock()
 	fx.sessions.outcome = 0
+	fx.sessions.mu.Unlock()
+	// The completion notices' retry pass admits it, with the same event id.
+	fx.h.deliverPending()
+	if got := fx.h.Jobs("lead"); len(stopNotices(fx)) != 1 || stopNotices(fx)[0].event != "exec:"+deferred.ID+":stopped-by-user" {
+		t.Fatalf("the retry pass: jobs %+v, notices %+v", got, stopNotices(fx))
+	}
+	if s, _ := fx.h.StopByUser("lead", deferred.ID); s.StopNotice != StopNoticeSent {
+		t.Fatalf("a deferred notice that landed = %+v", s)
+	}
+	fx.sessions.mu.Lock()
 	fx.sessions.notifyErr = errors.New("inbox write failed")
 	fx.sessions.mu.Unlock()
 	failed := fx.asyncJob(HostedLaunch{})
@@ -363,8 +441,9 @@ func TestUserStopNoticeOutcomesAndRetry(t *testing.T) {
 	if len(mine) != 1 {
 		t.Fatalf("the retry admitted %d notices, want 1", len(mine))
 	}
-	// (the closed and deferred jobs' notices were not recorded by the fake.)
-	if _, err := fx.h.StopByUser("lead", failed.ID); err != nil || len(stopNotices(fx)) != 1 {
+	// (the closed job's notice was not recorded by the fake; the deferred
+	// job's and the failed job's were, once each.)
+	if _, err := fx.h.StopByUser("lead", failed.ID); err != nil || len(stopNotices(fx)) != 2 {
 		t.Fatalf("a further stop re-sent: %+v", stopNotices(fx))
 	}
 }
@@ -698,4 +777,29 @@ func TestHUDDaemonPathsAreMemoryOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("StopByUser: %v, store rows written %d (an agent's stop writes the same)", time.Since(start), storeOps()-puts)
+}
+
+// TestRevisionMovesOnceTheStartTimeIsSet: the revision fires at admission,
+// before the job has its start time, and again once it is spawned and saved,
+// so a list read in between is never the last the page holds.
+func TestRevisionMovesOnceTheStartTimeIsSet(t *testing.T) {
+	var mu sync.Mutex
+	var starts []int64
+	fx := &hostedFixture{t: t, holders: newFakeExecHolders(), sessions: newFakeExecSessions(), store: newMemHostedStore(), exitDir: t.TempDir()}
+	fx.onRunning = func() {
+		var at int64 = -1
+		if jobs := fx.h.Jobs("lead"); len(jobs) == 1 {
+			at = jobs[0].StartedAt
+		}
+		mu.Lock()
+		starts = append(starts, at)
+		mu.Unlock()
+	}
+	fx.open(time.Second)
+	fx.asyncJob(HostedLaunch{})
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) == 0 || starts[len(starts)-1] <= 0 {
+		t.Fatalf("the start times each revision saw = %v: the last must carry one", starts)
+	}
 }
