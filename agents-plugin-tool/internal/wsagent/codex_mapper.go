@@ -101,7 +101,7 @@ type codexMapper struct {
 func newCodexMapper(session string) *codexMapper {
 	return &codexMapper{
 		sessionID: session,
-		batches:   newBatchTracker("codex"),
+		batches:   batchTracker{epoch: newBatchTracker("codex").epoch, callIDs: true},
 		texts:     map[string]string{},
 		started:   map[string]bool{},
 		finished:  map[string]bool{},

@@ -134,13 +134,16 @@ func startChild(spec StartSpec, cmd *exec.Cmd, mapper lineMapper, proto lineProt
 }
 
 // prepareAudit readies capture for spec's process when the runner gave it a
-// tap and the backend has an audit adapter (Claude in Phase 1).
+// tap and the backend has an audit adapter (Claude, Codex).
 func (p *streamProcess) prepareAudit(spec StartSpec, mapper lineMapper) {
 	if spec.audit == nil {
 		return
 	}
-	if _, ok := mapper.(*claudeMapper); ok {
+	switch mapper.(type) {
+	case *claudeMapper:
 		p.auditTap, p.auditHarness, p.auditAdapter = spec.audit, BackendClaude, newClaudeAudit(spec.audit.Session.ID)
+	case *codexMapper:
+		p.auditTap, p.auditHarness, p.auditAdapter = spec.audit, BackendCodex, newCodexAudit(spec.audit.Session.ID)
 	}
 }
 

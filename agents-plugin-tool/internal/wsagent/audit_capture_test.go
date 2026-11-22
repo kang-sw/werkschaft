@@ -138,8 +138,12 @@ type auditRig struct {
 
 func newAuditRig(t *testing.T, sink wsaudit.Sink, holderID string) *auditRig {
 	t.Helper()
-	m := newClaudeMapper(leadSpec())
-	p := newStreamProcess(m, claudeProtocol{})
+	return newAuditRigWith(t, sink, holderID, newClaudeMapper(leadSpec()), claudeProtocol{})
+}
+
+func newAuditRigWith(t *testing.T, sink wsaudit.Sink, holderID string, m lineMapper, proto lineProtocol) *auditRig {
+	t.Helper()
+	p := newStreamProcess(m, proto)
 	h := &holderChild{proc: p, id: holderID, host: auditNopHost{}, table: &holderTable{}}
 	p.child, p.holder = h, h
 	p.prepareAudit(StartSpec{audit: &auditTap{Session: wsaudit.Session{ID: "s1", Class: wsaudit.SessionHostedLead}, Sink: sink}}, m)
