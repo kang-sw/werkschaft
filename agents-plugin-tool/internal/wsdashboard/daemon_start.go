@@ -75,6 +75,11 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 	if opts.Pprof {
 		enableContentionProfiles()
 	}
+	// A nil *wscred.Store must stay a nil interface: the routes test it.
+	var credentials credentialStore = opts.credentialSource
+	if credentials == nil && opts.Credentials != nil {
+		credentials = opts.Credentials
+	}
 	stats := &streamStats{}
 	d := &Daemon{
 		dir:             opts.Dir,
@@ -82,6 +87,7 @@ func StartDaemon(opts DaemonOptions) (*Daemon, error) {
 		listener:        listener,
 		log:             logw,
 		agents:          opts.Agents,
+		credentials:     credentials,
 		config:          opts.Config,
 		cardBound:       opts.CardBound,
 		execJobs:        opts.ExecJobs,

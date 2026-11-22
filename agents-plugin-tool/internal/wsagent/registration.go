@@ -89,6 +89,12 @@ type BackendRegistration struct {
 	// OneShot is the backend's isolated single-prompt mode (oneshot.go);
 	// nil means the harness has none and a one-shot call is refused.
 	OneShot *OneShotSupport
+	// ProviderCredentials admits this backend's hosted sessions to the
+	// daemon's provider token route (Runner.ResolveCredentialToken): a
+	// session may obtain a provider credential with its per-session token.
+	// Only a harness that makes model requests itself, for the signed-in
+	// user, sets it; a harness that brings its own login never does.
+	ProviderCredentials bool
 }
 
 // PlaybookTerminology holds static native-tool idioms. Model, effort, and

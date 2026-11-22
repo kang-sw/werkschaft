@@ -59,7 +59,7 @@ python3 <plugin>/bin/ws-mcp-launcher.py serve --stdio --root <repo-root>
 
 Stdin/stdout remains newline-delimited JSON-RPC (MCP protocol `2025-03-26`).
 The same launcher accepts `version`, `doctor`, `runtime`, `tools`, `call`,
-`config`, `path`, `git`, `tickets`, and `mailbox` commands. Only a necessary
+`config`, `path`, `git`, `tickets`, `mailbox`, and `credential` commands. Only a necessary
 `daemon-start`/replacement executes the staged ws binary; there are no
 executable version/capability probes or direct server/CLI fallbacks.
 
@@ -140,6 +140,49 @@ requires explicit `daemon-start --replace`, or `POST /shutdown` then startup).
 An older ws-mcp knows only `keys/`, so once a newer one has moved a session, the older one reports that key unknown. Downgrading loses
 sight of moved sessions the same way; session keys are cache state, so a
 fresh key is the recovery.
+
+### Provider credential store
+
+Provider credentials (an OpenRouter API key today; `internal/wscred`) live
+in one owner-only file, `<cache root>/auth/credentials.json`: POSIX mode
+0600 in a 0700 directory, on Windows a protected DACL granting the current
+user alone; never in a project tree. It is a plain file (storage type 5),
+not a SQLite row, so the offline CLI can write it and nothing that copies
+the state databases copies a secret. The daemon reads it once, at the first
+credential use, serves every later read from memory, and rewrites it by
+atomic replace only when a credential changes; while it runs it is the
+file's only writer. A writer keeps members it does not know, and a file
+whose `schema_version` is newer is read but never rewritten. There is no
+environment-variable source: the daemon's environment reaches every hosted
+session and exec subprocess.
+
+`credential set <provider>` (the key on stdin, never in argv),
+`credential show [<provider>]` (masked), and `credential remove <provider>`
+manage it (`--format json` for structured output). The command reads only
+the first stdin line, and the launcher forwards only that line; on a
+terminal both the launcher and a directly run binary prompt for it without
+echo. An unrecognized argument is never echoed back, since it may be a
+misplaced key. Through the launcher the daemon applies the change itself. A
+directly run ws binary sends it to the running daemon's
+`POST /auth/provider/change` (authenticated by the endpoint file's token);
+with no daemon running it writes the file while holding the daemon's
+single-instance lock, so no daemon starts mid-write. A stopping daemon
+closes its store to changes, and lets a change already in flight finish,
+before it releases the lock; a change that arrives later is answered as a
+drain, so the sender retries against the successor.
+
+A hosted harness obtains a credential from `POST /auth/provider/token` with
+its per-session bearer (`WS_MCP_SESSION_TOKEN`); the route is not an MCP
+tool. Only a session whose backend registration sets `ProviderCredentials`
+passes, and no current backend does: the external harnesses bring their own
+logins. The dashboard's file browser denies the credential directory. Keys
+and tokens are never logged.
+
+Trust boundary: the token route's answer to an admitted session is the only
+response that carries a secret; no ws tool output returns one. Processes
+running as the same OS user are trusted. The file's owner-only mode or DACL
+keeps other users out, but not a same-user process such as a hosted exec
+job, which can read the file directly; OS permissions cannot prevent that.
 
 ### Dashboard daemon
 

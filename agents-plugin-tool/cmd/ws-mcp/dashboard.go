@@ -17,6 +17,7 @@ import (
 	"github.com/kang-sw/devenv/internal/mcp"
 	"github.com/kang-sw/devenv/internal/wsagent"
 	"github.com/kang-sw/devenv/internal/wsconfig"
+	"github.com/kang-sw/devenv/internal/wscred"
 	"github.com/kang-sw/devenv/internal/wsdashboard"
 	"github.com/kang-sw/devenv/internal/wsholder"
 	"github.com/kang-sw/devenv/internal/wsmailbox"
@@ -117,7 +118,15 @@ func dashboardCommand(args []string) {
 	agents.ExpectExecJobs()
 	labels.agents.Store(agents)
 	nudges := mcp.NewWhiteboardNudges(dir, agents, logw, boards)
-	host := &proxyHost{notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
+	// The one provider credential store: the daemon's token route and its
+	// change route serve it, and hosted `credential` commands apply to it.
+	var credentials *wscred.Store
+	if credPath, err := wscred.DefaultPath(""); err != nil {
+		fmt.Fprintf(logw, "dashboard: credential store unavailable: %v\n", err)
+	} else {
+		credentials = wscred.NewStore(credPath)
+	}
+	host := &proxyHost{credentials: credentials, notes: sessions.Notes, dir: dir, port: *port, lan: *lan, buildTime: *buildTime, contentHash: contentHash, logw: logw, configPath: filepath.Clean(configPath), agents: agents, boards: boards, mailLabels: labels.label}
 	boards.SetChanged(func(root, key string) {
 		if d := host.live.Load(); d != nil {
 			d.Index().Reread(wsmailbox.ReplyID(key))
@@ -160,6 +169,7 @@ func dashboardCommand(args []string) {
 		MailWake:       wswake.Mailbox,
 		AgyCommand:     wsagent.AgyBackend{}.ResolveCommand,
 		Agents:         agents,
+		Credentials:    credentials,
 		LeadNudges:     nudges,
 		Tracker:        &dashboardTracker{h: tracker, err: trackerErr, unregistered: func() { support.CloseUnregistered() }},
 		Holders:        holders,
