@@ -103,3 +103,79 @@ func TestSettingsLegacyTierSeedHasProvenanceWithoutASelectedHarnessOverride(t *t
 		t.Errorf("no-op reset changed the legacy file: %s, %v", out, err)
 	}
 }
+
+// TestSettingsConfigWriteFoldsDifferentlyCasedKnownMembers: the reader
+// matches member names case-insensitively, so a hand-edited "Overrides" (or
+// "Model_Aliases", "Backend") is the known field. A write replaces it with
+// the canonical spelling instead of keeping it as an unknown member that the
+// next load would merge back.
+func TestSettingsConfigWriteFoldsDifferentlyCasedKnownMembers(t *testing.T) {
+	opts := Options{ConfigHome: t.TempDir(), CacheHome: t.TempDir()}
+	path, err := GlobalPath(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "ſchema_version" (U+017F long s) folds to schema_version as the decoder
+	// reads it.
+	raw := `{"ſchema_version":1,"Future":{"flag":true},"Overrides":{"workflow.lang":"Korean","other.setting":"kept"},"Agents":{"Model_Aliases":{"small":{"codex":{"Backend":"codex","Model":"before","future_leaf":{"flag":true}}}}}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver := NewResolver(opts, nil, nil, nil)
+	if err := resolver.Unset("workflow.lang", SetOptions{ExplicitScope: ScopeGlobal}); err != nil {
+		t.Fatal(err)
+	}
+	files, err := FileLayers(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := files[ScopeGlobal].Overrides["workflow.lang"]; ok {
+		t.Errorf("reset value came back on load: %q", value)
+	}
+	if files[ScopeGlobal].Overrides["other.setting"] != "kept" {
+		t.Errorf("reset lost a sibling override: %#v", files[ScopeGlobal].Overrides)
+	}
+	if _, err := SetGlobalAgentsTierForHarness(opts, "small", "codex", "after", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := os.ReadFile(path); err != nil || strings.Contains(string(out), `"Model"`) || strings.Contains(string(out), `"Backend"`) || !strings.Contains(string(out), `"future_leaf"`) {
+		t.Errorf("leaf write kept a differently cased known leaf field or lost an unknown one: %s, %v", out, err)
+	}
+	if _, removed, err := UnsetGlobalAgentsTierForHarness(opts, "small", "codex"); err != nil || !removed {
+		t.Fatalf("remove leaf: removed=%t, err=%v", removed, err)
+	}
+	files, err = FileLayers(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf, ok := files[ScopeGlobal].Agents.ModelAliases["small"]["codex"]; ok {
+		t.Errorf("reset tier leaf came back on load: %#v", leaf)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{`"Overrides"`, `"Agents"`, `"Model_Aliases"`, `"ſchema_version"`} {
+		if strings.Contains(string(out), gone) {
+			t.Errorf("write kept differently cased known member %s: %s", gone, out)
+		}
+	}
+	if !strings.Contains(string(out), `"Future"`) {
+		t.Errorf("write dropped an unknown member: %s", out)
+	}
+}
+
+func TestJSONFoldNameMatchesDecoder(t *testing.T) {
+	type probe struct {
+		Field string `json:"schema_version"`
+	}
+	for _, key := range []string{"schema_version", "SCHEMA_VERSION", "Schema_Version", "ſchema_version", "schema_versioN", "schemaversion", "schema-version", "schema_versio"} {
+		var p probe
+		if err := json.Unmarshal([]byte(`{"`+key+`":"x"}`), &p); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := jsonNameIs(key, "schema_version"), p.Field == "x"; got != want {
+			t.Errorf("jsonNameIs(%q) = %t, decoder matched %t", key, got, want)
+		}
+	}
+}

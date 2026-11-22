@@ -2,6 +2,8 @@ package wsconfig
 
 import (
 	"encoding/json"
+	"unicode"
+	"unicode/utf8"
 )
 
 // preserveConfigMembers projects the edited known fields onto the original
@@ -25,13 +27,15 @@ func preserveConfigMembers(original []byte, cfg Config) ([]byte, error) {
 	if err := json.Unmarshal(known, &edited); err != nil {
 		return nil, err
 	}
-	agents, err := preserveAgentMembers(members["agents"], edited["agents"])
+	agents, err := preserveAgentMembers(foldedMember(members, "agents"), edited["agents"])
 	if err != nil {
 		return nil, err
 	}
 	edited["agents"] = agents
-	for _, key := range []string{"schema_version", "agents", "overrides", "structured_overrides"} {
-		delete(members, key)
+	for key := range members {
+		if jsonNameIs(key, "schema_version", "agents", "overrides", "structured_overrides") {
+			delete(members, key)
+		}
 	}
 	for key, value := range edited {
 		members[key] = value
@@ -56,7 +60,7 @@ func preserveObject(original, edited json.RawMessage, depth int) (json.RawMessag
 	switch depth {
 	case 0:
 		for key, value := range before {
-			if key != "tiers" && key != "model_aliases" {
+			if !jsonNameIs(key, "tiers", "model_aliases") {
 				after[key] = value
 			}
 		}
@@ -68,7 +72,7 @@ func preserveObject(original, edited json.RawMessage, depth int) (json.RawMessag
 			if key == "model_aliases" {
 				next = 1
 			}
-			merged, err := preserveObject(before[key], value, next)
+			merged, err := preserveObject(foldedMember(before, key), value, next)
 			if err != nil {
 				return nil, err
 			}
@@ -84,10 +88,68 @@ func preserveObject(original, edited json.RawMessage, depth int) (json.RawMessag
 		}
 	case 3:
 		for key, value := range before {
-			if key != "backend" && key != "model" && key != "effort" {
+			if !jsonNameIs(key, "backend", "model", "effort") {
 				after[key] = value
 			}
 		}
 	}
 	return json.Marshal(after)
+}
+
+// jsonNameIs reports whether the object member key decodes into a struct
+// field named one of names. encoding/json matches member names to field
+// names case-insensitively (jsonFoldName), so a differently cased spelling of
+// a known field is that field, not an unknown member to keep beside the
+// canonical one: kept, the next load would merge it back.
+func jsonNameIs(key string, names ...string) bool {
+	folded := jsonFoldName(key)
+	for _, name := range names {
+		if folded == jsonFoldName(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// foldedMember is the member the decoder reads for the field name: the exact
+// spelling when present, else a differently cased one.
+func foldedMember(members map[string]json.RawMessage, name string) json.RawMessage {
+	if value, ok := members[name]; ok {
+		return value
+	}
+	for key, value := range members {
+		if jsonNameIs(key, name) {
+			return value
+		}
+	}
+	return nil
+}
+
+// jsonFoldName folds name as encoding/json's appendFoldedName does: ASCII
+// letters upper-cased, other runes to the smallest rune of their simple
+// fold set (so U+017F long s matches s, U+212A Kelvin sign matches k).
+func jsonFoldName(name string) string {
+	out := make([]byte, 0, len(name))
+	for i := 0; i < len(name); {
+		if c := name[i]; c < utf8.RuneSelf {
+			if 'a' <= c && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			out = append(out, c)
+			i++
+			continue
+		}
+		r, n := utf8.DecodeRuneInString(name[i:])
+		for {
+			r2 := unicode.SimpleFold(r)
+			if r2 <= r {
+				r = r2
+				break
+			}
+			r = r2
+		}
+		out = utf8.AppendRune(out, r)
+		i += n
+	}
+	return string(out)
 }
