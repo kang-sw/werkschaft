@@ -3,6 +3,7 @@ package execjob
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -209,5 +210,47 @@ func TestHostedStopOwnerReportsAHolderThatDidNotGo(t *testing.T) {
 	}
 	if got, _ := fx.h.Get("lead", v.ID); got.State != HostedRunning {
 		t.Fatalf("job state %s", got.State)
+	}
+}
+
+// A legacy launch is counted from its admission: a worktree release that
+// lands after the process started and before the job entered the active
+// set is refused, and a fenced worktree refuses new legacy launches.
+func TestLegacyLaunchCountsBeforeItsActiveEntry(t *testing.T) {
+	t.Setenv("WS_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	root := gitRoot(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	beforeLegacyActive = func() {
+		close(entered)
+		<-release
+	}
+	t.Cleanup(func() { beforeLegacyActive = nil })
+	done := make(chan error, 1)
+	go func() {
+		_, err := Launch(LaunchOptions{Root: root, Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}})
+		done <- err
+	}()
+	<-entered
+	if got := ActiveRoots()[filepath.Clean(root)]; got != 0 {
+		t.Fatalf("the job is active already (%d): the window under test is gone", got)
+	}
+	if _, err := FenceLegacyRoot(root); err == nil || !strings.Contains(err.Error(), "1 exec job(s) still run") {
+		t.Fatalf("a release between the start and the active entry: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	beforeLegacyActive = nil
+	unfence, err := FenceLegacyRoot(root)
+	if err != nil {
+		t.Fatalf("fence after the job ended: %v", err)
+	}
+	if _, err := Launch(LaunchOptions{Root: root, Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}}); err == nil || !strings.Contains(err.Error(), "being released or removed") {
+		t.Fatalf("a legacy launch into a fenced worktree: %v", err)
+	}
+	unfence()
+	if _, err := Launch(LaunchOptions{Root: root, Cmd: os.Args[0], Args: []string{"-test.run=TestHelperProcess", "--", "ok"}, Env: map[string]string{"GO_WANT_HELPER_PROCESS": "1"}}); err != nil {
+		t.Fatalf("a legacy launch after the fence lifted: %v", err)
 	}
 }

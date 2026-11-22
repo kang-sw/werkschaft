@@ -191,6 +191,13 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
+	// Admitted against a worktree release before anything starts; the
+	// reservation counts the job until it is active (legacy_fence.go).
+	release, err := reserveLegacy(opts.Root, wd)
+	if err != nil {
+		return Response{}, err
+	}
+	defer release()
 	key, err := st.newKey(opts.Root)
 	if err != nil {
 		return Response{}, err
@@ -292,7 +299,11 @@ func (st Store) Launch(opts LaunchOptions) (Response, error) {
 	rec.PID = cmd.Process.Pid
 	rec.UpdatedAt = ts()
 	_ = st.writeRecord(opts.Root, rec)
+	if beforeLegacyActive != nil {
+		beforeLegacyActive()
+	}
 	active.Store(activeKey(opts.Root, key), &activeJob{root: opts.Root, key: key, cmd: cmd})
+	release()
 	notifyActive()
 	done := make(chan struct{})
 	go func() {

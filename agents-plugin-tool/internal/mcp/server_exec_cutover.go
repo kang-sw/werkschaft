@@ -2,8 +2,6 @@ package mcp
 
 import (
 	"errors"
-	"fmt"
-	"path/filepath"
 	"slices"
 
 	"github.com/kang-sw/devenv/internal/execjob"
@@ -56,17 +54,21 @@ func (s *Server) cutoverListed(name string) bool {
 }
 
 // worktreeExecFence reserves worktree target for a release or removal
-// against exec jobs: the daemon's hosted jobs under one lock with their
-// admission (execjob.Hosted.FenceRoot), and this process's file-backed
-// legacy jobs by count.
+// against exec jobs: the daemon's hosted jobs (execjob.Hosted.FenceRoot)
+// and this process's file-backed legacy jobs (execjob.FenceLegacyRoot),
+// each under one lock with its own admission.
 func (s *Server) worktreeExecFence(target string) (func(), error) {
-	legacy := execjob.ActiveRoots()
-	n := legacy[filepath.Clean(target)]
-	if real, err := filepath.EvalSymlinks(target); err == nil && filepath.Clean(real) != filepath.Clean(target) {
-		n += legacy[filepath.Clean(real)]
+	unfenceLegacy, err := execjob.FenceLegacyRoot(target)
+	if err != nil {
+		return nil, err
 	}
-	if n > 0 {
-		return nil, fmt.Errorf("%d exec job(s) still run in it; abort them with exec.abort, or let them finish, first", n)
+	unfenceHosted, err := s.execJobs().FenceRoot(target)
+	if err != nil {
+		unfenceLegacy()
+		return nil, err
 	}
-	return s.execJobs().FenceRoot(target)
+	return func() {
+		unfenceHosted()
+		unfenceLegacy()
+	}, nil
 }
