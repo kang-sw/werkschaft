@@ -584,7 +584,17 @@
       "registered_at": "2026-11-22T00:23:58Z"
     },
     "261122-feat-ws-mailbox-group-recipients": {
-      "registered_at": "2026-11-22T02:05:13Z"
+      "registered_at": "2026-11-22T02:05:13Z",
+      "lease": {
+        "email": "ki6080@gmail.com",
+        "clone_id": "6b8c3f740994ed3b",
+        "track": "develop",
+        "phase": "active",
+        "touched_at": "2026-11-22T02:32:45Z",
+        "impl": {
+          "branch": "impl/develop/yoyo-curry-elk"
+        }
+      }
     }
   }
 }
